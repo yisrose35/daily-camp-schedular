@@ -374,6 +374,14 @@
 
     if (!games.length) return null;
 
+    // Flag each game that's currently marked "did not play" (tag lives on the
+    // leagueAssignments slot record and/or the per-bunk entry) so the editor
+    // shows Undo instead of Mark and the picker can badge it.
+    games.forEach(function (g) {
+      g._didNotPlay = (laEntry && PEFC.isDidNotPlay(laEntry, g)) ||
+        (entryHint && PEFC.isDidNotPlay(entryHint, g)) || false;
+    });
+
     // Specialty fallback: when the league flag wasn't carried on the hint/entry,
     // the matchup STRING format reveals it — specialty uses "A vs B — Field"
     // (dash), regular uses "A vs B @ Field (Sport)" (at). This keeps the gameLog
@@ -635,122 +643,136 @@
     }
   }
 
-  // ── DID NOT PLAY (remove a game) ──────────────────────────────────────────
-  // Deletes ctx.game from every schedule store AND rolls back the rotation /
-  // matchup / sport history so the variety logic knows it never happened:
-  //   • regular league  → SchedulerCoreLeagues.editGameRecord(..., null) —
-  //                       subtracts gameLog/matchupHistory/teamSports and
-  //                       re-syncs the Leagues-page results.
-  //   • specialty league → removeSpecialtyGameLog splices its gameLog entry.
-  // The field lock is released ONLY when no other game at this slot still uses
-  // the field (a shared field must stay locked for the remaining game).
-  PEFC.markDidNotPlay = function (ctx) {
-    if (!ctx || !ctx.game) return { ok: false, message: 'Nothing to remove.' };
-    var oldField = ctx.game.field;
-    var oldA = ctx.game.teamA, oldB = ctx.game.teamB, oldSport = ctx.game.sport;
-    var removedTeams = ctx.game.teams;
+  function addSpecialtyGameLog(ctx) {
+    if (typeof window.loadGlobalSettings !== 'function' || typeof window.saveGlobalSettings !== 'function') return;
+    var gs = window.loadGlobalSettings() || {};
+    var history = gs.specialtyLeagueHistory;
+    if (!history || !history.gameLog) return;
+    var raw = gs.specialtyLeagues || [];
+    var list = Array.isArray(raw) ? raw : Object.keys(raw).map(function (k) { return raw[k]; });
+    var league = list.filter(function (l) { return l && norm(l.name) === norm(ctx.leagueName); })[0];
+    var id = league ? league.id : null;
+    var date = window._scheduleAssignmentsDate || window.currentScheduleDate;
+    if (!id || !date) return;
+    history.gameLog[id] = history.gameLog[id] || {};
+    history.gameLog[id][date] = history.gameLog[id][date] || [];
+    var entries = history.gameLog[id][date];
+    var g = ctx.game;
+    var exists = entries.some(function (e) { return sameTeams({ teamA: e.tA, teamB: e.tB }, g) && norm(e.field) === norm(g.field); });
+    if (!exists) {
+      entries.push({ tA: g.teamA, tB: g.teamB, field: g.field, sport: g.sport || null, g: 'Game' });
+      window.saveGlobalSettings('specialtyLeagueHistory', history);
+    }
+  }
+
+  // ── DID NOT PLAY (mark a game as cancelled — keep it visible) ──────────────
+  // A "did not play" game STAYS ON EVERY SURFACE (grid / print / live view) but
+  // is drawn struck-through with a red ✗ — it was supposed to happen and didn't.
+  // We tag the game with a stable key on every store record that holds it AND
+  // roll back the rotation / matchup / sport history so the variety logic knows
+  // it never happened. Toggle: opts.undo restores it (untag + re-add history).
+  // The field lock is deliberately left as-is — the game still visually sits on
+  // its field.
+
+  // Stable, order-independent identifier for a matchup within a slot.
+  PEFC.dnpKey = function (teamA, teamB, field) {
+    var a = norm(teamA), b = norm(teamB);
+    var pair = (a < b) ? (a + '~' + b) : (b + '~' + a);
+    return pair + '@' + norm(field == null ? '' : field);
+  };
+
+  // Renderer hook: is this matchup (string OR object) flagged did-not-play on
+  // the store entry that holds it? Every render site calls this per drawn game.
+  PEFC.isDidNotPlay = function (entry, matchup) {
+    if (!entry || !Array.isArray(entry._didNotPlay) || !entry._didNotPlay.length) return false;
+    var g = (matchup && typeof matchup === 'object') ? PEFC.normalizeGame(matchup) : PEFC.parseMatchup(matchup);
+    if (!g || (!g.teamA && !g.teamB)) return false;
+    return entry._didNotPlay.indexOf(PEFC.dnpKey(g.teamA, g.teamB, g.field)) !== -1;
+  };
+
+  PEFC.markDidNotPlay = function (ctx, opts) {
+    if (!ctx || !ctx.game) return { ok: false, message: 'Nothing to change.' };
+    var undo = !!(opts && opts.undo);
+    var g = ctx.game;
+    var field = g.field, A = g.teamA, B = g.teamB, sport = g.sport;
+    var key = PEFC.dnpKey(A, B, field);
 
     // Match ONLY this specific game: same unordered team pair AND on the field it
-    // currently sits on (so a double-header doesn't lose both legs).
-    function isTarget(p) {
-      return PEFC.isEditableMatchup(p) && sameTeams(p, ctx.game) && norm(p.field) === norm(oldField);
+    // sits on (so a double-header — same teams twice on two fields — is precise).
+    function isTarget(p) { return PEFC.isEditableMatchup(p) && sameTeams(p, g) && norm(p.field) === norm(field); }
+    function isTargetObj(o) { var t = { teamA: o.teamA || o.team1, teamB: o.teamB || o.team2 }; return sameTeams(t, g) && norm(o.field) === norm(field); }
+    function entryHasGame(entry) {
+      if (Array.isArray(entry._allMatchups) && entry._allMatchups.some(function (it) { return isTarget(PEFC.parseMatchup(it)); })) return true;
+      if (Array.isArray(entry.matchups) && entry.matchups.some(function (it) {
+        return (typeof it === 'string') ? isTarget(PEFC.parseMatchup(it)) : (it && (it.teamA || it.team1) && isTargetObj(it));
+      })) return true;
+      if (Array.isArray(entry._assignments) && entry._assignments.some(function (a) { return a && isTargetObj(a); })) return true;
+      return false;
     }
-    function isTargetObj(o) {
-      var t = { teamA: o.teamA || o.team1, teamB: o.teamB || o.team2 };
-      return sameTeams(t, ctx.game) && norm(o.field) === norm(oldField);
+    // Add / remove the key on an entry's _didNotPlay tag list. Returns true when
+    // the entry actually changed.
+    function tag(entry) {
+      if (!entry) return false;
+      var arr = Array.isArray(entry._didNotPlay) ? entry._didNotPlay : (entry._didNotPlay = []);
+      var at = arr.indexOf(key);
+      if (undo) { if (at !== -1) { arr.splice(at, 1); if (!arr.length) delete entry._didNotPlay; return true; } return false; }
+      if (at === -1) { arr.push(key); return true; }
+      return false;
     }
 
     var touchedBunks = [];
-    var removedAny = false;
+    var changedAny = false, foundAny = false;
 
-    // (1) Per-bunk scheduleAssignments — drop the matchup string / assignment obj.
+    // (1) Per-bunk scheduleAssignments — tag every entry that holds this game.
     var sa = window.scheduleAssignments || {};
     for (var bunk in sa) {
       if (!Object.prototype.hasOwnProperty.call(sa, bunk)) continue;
       var row = sa[bunk]; if (!Array.isArray(row)) continue;
       var changed = false;
       for (var si = 0; si < row.length; si++) {
-        var entry = row[si];
-        if (!entry) continue;
-        if (Array.isArray(entry._allMatchups)) {
-          var before = entry._allMatchups.length;
-          entry._allMatchups = entry._allMatchups.filter(function (item) { return !isTarget(PEFC.parseMatchup(item)); });
-          if (entry._allMatchups.length !== before) changed = true;
-        }
-        if (Array.isArray(entry._assignments)) {
-          var before2 = entry._assignments.length;
-          entry._assignments = entry._assignments.filter(function (a) { return !(a && isTargetObj(a)); });
-          if (entry._assignments.length !== before2) changed = true;
-        }
+        var entry = row[si]; if (!entry) continue;
+        if (entryHasGame(entry)) { foundAny = true; if (tag(entry)) changed = true; }
       }
-      if (changed) { touchedBunks.push(bunk); removedAny = true; }
+      if (changed) { touchedBunks.push(bunk); changedAny = true; }
     }
 
-    // (2) leagueAssignments — scan EVERY division (connected grades each hold a
-    //     copy of the same game), removing the matchup string / object.
+    // (2) leagueAssignments — every division (connected grades share the game).
     var laAll = window.leagueAssignments || {};
     Object.keys(laAll).forEach(function (dn) {
       var la = laAll[dn]; if (!la) return;
       Object.keys(la).forEach(function (slotKey) {
-        var laEntry = la[slotKey];
-        if (!laEntry) return;
-        ['_allMatchups', 'matchups'].forEach(function (key) {
-          if (!Array.isArray(laEntry[key])) return;
-          var before = laEntry[key].length;
-          laEntry[key] = laEntry[key].filter(function (item) {
-            if (typeof item === 'string') return !isTarget(PEFC.parseMatchup(item));
-            if (item && typeof item === 'object' && (item.teamA || item.team1)) return !isTargetObj(item);
-            return true; // keep bye/chinuch/unknown entries
-          });
-          if (laEntry[key].length !== before) removedAny = true;
-        });
+        var laEntry = la[slotKey]; if (!laEntry) return;
+        if (entryHasGame(laEntry)) { foundAny = true; if (tag(laEntry)) changedAny = true; }
       });
     });
 
-    // (3) Rotation / variety history rollback.
+    if (!foundAny) return { ok: false, message: 'Game not found.' };
+    if (!changedAny) return { ok: true, noop: true, message: undo ? 'Already marked as played.' : 'Already marked as did not play.' };
+
+    // (3) Rotation / variety history: mark → subtract, undo → re-add. Date is the
+    //     schedule actually loaded/edited (see note in applyFieldChange).
+    var dateKey = window._scheduleAssignmentsDate || window.currentScheduleDate;
     if (ctx.kind === 'specialty') {
-      try { removeSpecialtyGameLog(ctx); }
-      catch (e) { console.warn('[PEFC] specialty gameLog remove skipped:', e); }
+      try { if (undo) addSpecialtyGameLog(ctx); else removeSpecialtyGameLog(ctx); }
+      catch (e) { console.warn('[PEFC] specialty gameLog toggle skipped:', e); }
     } else {
       try {
         if (window.SchedulerCoreLeagues && typeof window.SchedulerCoreLeagues.editGameRecord === 'function') {
-          // newGame = null → subtract the old game's contribution. Date is the
-          // schedule actually loaded/edited, not the global picker (see note in
-          // applyFieldChange).
-          window.SchedulerCoreLeagues.editGameRecord(
-            ctx.leagueName, (window._scheduleAssignmentsDate || window.currentScheduleDate),
-            { teamA: oldA, teamB: oldB, sport: oldSport }, null
-          );
+          if (undo) window.SchedulerCoreLeagues.editGameRecord(ctx.leagueName, dateKey, null, { teamA: A, teamB: B, sport: sport });
+          else window.SchedulerCoreLeagues.editGameRecord(ctx.leagueName, dateKey, { teamA: A, teamB: B, sport: sport }, null);
         }
-      } catch (e) { console.warn('[PEFC] league rotation rollback skipped:', e); }
+      } catch (e) { console.warn('[PEFC] league rotation toggle skipped:', e); }
     }
 
-    // (4) Release the field lock — but only if no other game at this div/slot
-    //     still uses the field.
-    var GFL = window.GlobalFieldLocks;
-    if (GFL && typeof GFL.unlockField === 'function' && oldField) {
-      var stillUsed = false;
-      var laDiv = (window.leagueAssignments && window.leagueAssignments[ctx.divName]) || {};
-      var laSlot = laDiv[ctx.slotIdx] || laDiv[String(ctx.slotIdx)];
-      if (laSlot) {
-        ['_allMatchups', 'matchups'].forEach(function (key) {
-          (Array.isArray(laSlot[key]) ? laSlot[key] : []).forEach(function (item) {
-            var f = (typeof item === 'string') ? PEFC.parseMatchup(item).field : (item && item.field);
-            if (f && norm(f) === norm(oldField)) stillUsed = true;
-          });
-        });
-      }
-      if (!stillUsed) { try { GFL.unlockField(oldField, ctx.slots); } catch (e) { console.warn('[PEFC] unlock skipped:', e); } }
-    }
+    // Reflect on the in-session game so the modal + picker show the new state.
+    g._didNotPlay = !undo;
 
-    if (!removedAny) return { ok: false, message: 'Game not found — nothing removed.' };
-
-    // Keep the modal context consistent (drop the game from the picker list).
-    ctx.games = (ctx.games || []).filter(function (g) { return g !== ctx.game; });
-    ctx.game = null;
-
-    // (5) Persist + re-render.
-    var dateKey = window._scheduleAssignmentsDate || window.currentScheduleDate;
+    // (4) Persist + re-render. Same channels as applyFieldChange, PLUS a
+    //     whole-object ScheduleDB save so the DIVISION-keyed _didNotPlay flag
+    //     lands in the cloud record — the per-bunk bypass overlay is a no-op for
+    //     division keys, so without this the mark could be lost on reload (the
+    //     grid reads leagueAssignments). scheduleAssignments is filtered to my
+    //     bunks (multi-scheduler safe); leagueAssignments is saved wholesale.
     try {
       if (typeof window.saveCurrentDailyData === 'function') {
         window.saveCurrentDailyData('scheduleAssignments', window.scheduleAssignments);
@@ -759,14 +781,6 @@
       if (typeof window.bypassSaveAllBunks === 'function' && touchedBunks.length) {
         Promise.resolve(window.bypassSaveAllBunks(touchedBunks)).catch(function (e) { console.warn('[PEFC] cloud save:', e); });
       }
-      // ★ A DELETION must actually STICK in the cloud. bypassSaveAllBunks updates
-      //   leagueAssignments in the daily_schedules record PER BUNK, but our
-      //   leagueAssignments is DIVISION-keyed — so that overlay is a no-op and the
-      //   removed matchup could survive in the cloud record and resurrect on reload
-      //   (the grid reads leagueAssignments). Write the whole pruned schedule via
-      //   the same trusted path fallbackBypassSave uses: scheduleAssignments is
-      //   filtered to my bunks (multi-scheduler safe), leagueAssignments saved
-      //   wholesale — so the game is gone from Supabase, not just locally.
       if (window.ScheduleDB && typeof window.ScheduleDB.saveSchedule === 'function' && dateKey) {
         Promise.resolve(window.ScheduleDB.saveSchedule(dateKey, {
           scheduleAssignments: window.scheduleAssignments,
@@ -778,7 +792,7 @@
     } catch (e) { console.warn('[PEFC] persist:', e); }
     if (typeof window.updateTable === 'function') { try { window.updateTable(); } catch (e) {} }
 
-    return { ok: true, message: removedTeams + ' — removed (marked as did not play)' };
+    return { ok: true, message: g.teams + (undo ? ' — restored (played)' : ' — marked as did not play') };
   };
 
   // ── MODAL UI ─────────────────────────────────────────────────────────────
@@ -838,8 +852,9 @@
         var n = LPR.pairNoteHtml(null, ctx.kind, g.teamA, g.teamB, lprData);
         if (n) histNote = '<div style="font-size:0.72rem;margin-top:2px;">' + n + '</div>';
       }
+      var dnpBadge = g._didNotPlay ? ' <span style="color:#b91c1c;font-weight:700;font-size:0.78rem;">✗ did not play</span>' : '';
       return '<button class="pefc-game" data-i="' + i + '" style="display:block;width:100%;text-align:left;padding:11px 13px;margin-bottom:8px;border:1.5px solid #e5e7eb;border-radius:9px;background:#f9fafb;cursor:pointer;font-size:0.92rem;">' +
-        '<div style="font-weight:600;color:#1f2937;">' + esc(g.teams) + '</div>' +
+        '<div style="font-weight:600;color:#1f2937;">' + esc(g.teams) + dnpBadge + '</div>' +
         '<div style="font-size:0.8rem;color:#6b7280;margin-top:2px;">' +
         (g.sport ? esc(g.sport) + ' · ' : '') + 'Currently: <strong>' + esc(g.field || '—') + '</strong></div>' +
         histNote + '</button>';
@@ -1051,13 +1066,19 @@
     var keepFieldHtml =
       '<button id="pefc-keep-field" style="width:100%;margin-top:14px;padding:9px;border:1.5px solid ' + (pendingChange ? '#6366f1' : '#d1d5db') + ';border-radius:8px;background:' + (pendingChange ? '#eef2ff' : '#fff') + ';color:' + (pendingChange ? '#4338ca' : '#6b7280') + ';font-size:0.85rem;font-weight:600;cursor:pointer;">Save changes — keep ' + esc(ctx.game.field || 'current field') + '</button>';
 
-    // "Did not play" — remove this game entirely (it was rained out / cancelled).
-    // Rolls back the rotation, matchup and sport history so future scheduling
-    // knows these teams never met and never played this sport that day.
+    // "Did not play" — the game STAYS on the schedule but is drawn struck-through
+    // with a red ✗ (it was supposed to happen and didn't). Rolls back the
+    // rotation / matchup / sport history so it doesn't count. Toggles to Undo
+    // when already marked.
+    var isDnp = !!(ctx.game && ctx.game._didNotPlay);
     var dnpHtml =
       '<div style="margin-top:16px;padding-top:14px;border-top:1px solid #f0f0f2;">' +
-      '<button id="pefc-dnp" style="width:100%;padding:9px;border:1.5px solid #fca5a5;border-radius:8px;background:#fef2f2;color:#b91c1c;font-size:0.85rem;font-weight:600;cursor:pointer;">❌ Did not play — remove this game</button>' +
-      '<div style="font-size:0.72rem;color:#9ca3af;margin-top:5px;text-align:center;">Deletes the game and tells the program it didn’t happen (won’t count toward rotation or variety).</div></div>';
+      '<button id="pefc-dnp" style="width:100%;padding:9px;border:1.5px solid ' + (isDnp ? '#86efac' : '#fca5a5') + ';border-radius:8px;background:' + (isDnp ? '#f0fdf4' : '#fef2f2') + ';color:' + (isDnp ? '#166534' : '#b91c1c') + ';font-size:0.85rem;font-weight:600;cursor:pointer;">' + (isDnp ? '↩ Undo — this game DID play' : '❌ Did not play') + '</button>' +
+      '<div style="font-size:0.72rem;color:#9ca3af;margin-top:5px;text-align:center;">' +
+      (isDnp
+        ? 'Currently marked did-not-play (shown with a red ✗). Restores it and re-counts it toward rotation.'
+        : 'Keeps the game visible with a red ✗ and tells the program it didn’t happen (won’t count toward rotation or variety).') +
+      '</div></div>';
 
     var box = shell(header('Edit league game') +
       '<div style="background:#f3f4f6;padding:9px 12px;border-radius:8px;margin-bottom:14px;font-size:0.85rem;">' +
@@ -1141,15 +1162,17 @@
 
     var dnpBtn = box.querySelector('#pefc-dnp');
     if (dnpBtn) dnpBtn.onclick = function () {
-      var msg = 'Mark "' + (ctx.game.teams || 'this game') + '" as DID NOT PLAY?\n\n' +
-        'It will be removed from the schedule, and the program will treat it as never having happened — ' +
-        'this matchup and sport won’t count toward rotation or variety.';
+      var undo = !!(ctx.game && ctx.game._didNotPlay);
+      var teams = (ctx.game && ctx.game.teams) || 'this game';
+      var msg = undo
+        ? 'Mark "' + teams + '" as PLAYED again?\n\nThe red ✗ is removed and it counts toward rotation / variety again.'
+        : 'Mark "' + teams + '" as DID NOT PLAY?\n\nThe game stays on the schedule with a red ✗, and the program treats it as never having happened (won’t count toward rotation or variety).';
       var ok = (typeof window.confirm === 'function') ? window.confirm(msg) : true;
       if (!ok) return;
-      var res = PEFC.markDidNotPlay(ctx);
+      var res = PEFC.markDidNotPlay(ctx, { undo: undo });
       if (!res.ok) { toast(res.message, 'warning'); return; }
       closeModal();
-      toast('Removed: ' + res.message, 'success');
+      toast(res.message, res.noop ? 'info' : 'success');
     };
 
     var keepBtn = box.querySelector('#pefc-keep-field');

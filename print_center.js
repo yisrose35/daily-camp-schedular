@@ -1342,17 +1342,22 @@ function pcLeagueInfoAt(divName, startMin) {
     var label = entry.gameLabel || entry.leagueName || 'League Game';
     var matchups = [];
     (entry.matchups || []).forEach(function (m) {
-        if (typeof m === 'string') matchups.push(m);
-        else if (m.display) matchups.push(m.display);
+        var s = null;
+        if (typeof m === 'string') s = m;
+        else if (m.display) s = m.display;
         else {
             var tA = m.teamA || m.team1 || '', tB = m.teamB || m.team2 || '';
             if (tA && tB) {
-                var s = tA + ' vs ' + tB;
+                s = tA + ' vs ' + tB;
                 if (m.sport) s += ' - ' + (m.sport.charAt(0).toUpperCase() + m.sport.slice(1));
                 if (m.field) s += ' - ' + m.field;
-                matchups.push(s);
             }
         }
+        if (s == null) return;
+        // "Did not play" → prefix a red ✗ marker that pcCellHtml strikes through.
+        if (window.PostEditFieldChange && typeof window.PostEditFieldChange.isDidNotPlay === 'function'
+            && window.PostEditFieldChange.isDidNotPlay(entry, m)) s = '✗ ' + s;
+        matchups.push(s);
     });
     // Post-edit custom text (league note) rides along as an extra line so every
     // consumer (slot print, live view) shows it under the matchups.
@@ -1381,9 +1386,10 @@ function buildLeagueMatchups(eventBlock, divName, bunk) {
     });
     allSlotEntries.sort(function (a, b) { return a.dist - b.dist; });
 
-    var slotSport = '', slotField = '', slotNote = '';
+    var slotSport = '', slotField = '', slotNote = '', slotEntry = null;
     if (allSlotEntries.length > 0 && allSlotEntries[0].data) {
         var best = allSlotEntries[0].data;
+        slotEntry = best;
         if (best.matchups) raw = best.matchups;
         slotSport = (best.sport || '').toString().trim();
         slotField = (best.field || '').toString().trim();
@@ -1425,7 +1431,13 @@ function buildLeagueMatchups(eventBlock, divName, bunk) {
 
     // Post-edit custom text (league note) — an extra line under the matchups,
     // for every bunk (it's a note on the whole game block, not one team).
-    return parsed.map(pcFormatMatchupLine).concat(infoLines).concat(slotNote ? [slotNote] : []);
+    return parsed.map(function (p) {
+        var line = pcFormatMatchupLine(p);
+        // "Did not play" → prefix a red ✗ marker that pcCellHtml strikes through.
+        if (slotEntry && window.PostEditFieldChange && typeof window.PostEditFieldChange.isDidNotPlay === 'function'
+            && window.PostEditFieldChange.isDidNotPlay(slotEntry, { teamA: p.a, teamB: p.b, field: p.field })) line = '✗ ' + line;
+        return line;
+    }).concat(infoLines).concat(slotNote ? [slotNote] : []);
 }
 
 // Parse one matchup (object or string) into { a, b, sport, field }.
@@ -1519,10 +1531,22 @@ function pcLeagueCellText(label, matchups) {
 // matchup is clearly separated. Single-line cells render as plain escaped text.
 function pcCellHtml(text) {
     text = text == null ? '' : String(text);
-    if (text.indexOf('\n') === -1) return escHtml(text);
-    return text.split('\n').map(function (l, i) {
-        return '<div class="pc3-mu' + (i === 0 ? ' pc3-mu-head' : '') + '">' + escHtml(l) + '</div>';
-    }).join('');
+    if (text.indexOf('\n') === -1) {
+        // A lone "did not play" line still gets the struck-through treatment.
+        return (text.indexOf('✗ ') === 0) ? _pcMuHtml(text, false) : escHtml(text);
+    }
+    return text.split('\n').map(function (l, i) { return _pcMuHtml(l, i === 0); }).join('');
+}
+
+// Render one matchup line. A line prefixed with "✗ " was marked did-not-play →
+// keep it visible but strike it through in red (the ✗ itself stays un-struck).
+function _pcMuHtml(l, isHead) {
+    var cls = 'pc3-mu' + (isHead ? ' pc3-mu-head' : '');
+    if (!isHead && typeof l === 'string' && l.indexOf('✗ ') === 0) {
+        return '<div class="' + cls + '" style="color:#b91c1c;"><span style="font-weight:700;">✗</span> ' +
+            '<span style="text-decoration:line-through;text-decoration-color:#dc2626;">' + escHtml(l.slice(2)) + '</span></div>';
+    }
+    return '<div class="' + cls + '">' + escHtml(l) + '</div>';
 }
 
 // Pull the raw leagueAssignments slot record for a division/time (sport, field, matchups).

@@ -2955,7 +2955,7 @@ if (window.showToast) window.showToast(`-> ${bunk}: Moved to ${bestPick.activity
         const leagues = window.leagueAssignments || {};
         if (leagues[divName]?.[slotIdx]) {
             const data = leagues[divName][slotIdx];
-            return { matchups: data.matchups || [], gameLabel: data.gameLabel || '', sport: data.sport || '', leagueName: data.leagueName || '', customText: data.customText || '' };
+            return { matchups: data.matchups || [], gameLabel: data.gameLabel || '', sport: data.sport || '', leagueName: data.leagueName || '', customText: data.customText || '', _didNotPlay: data._didNotPlay || [] };
         }
         if (leagues[divName]) {
             // ★ Fuzzy ±2-slot lookup lets a league game that spans a few grid
@@ -2981,7 +2981,7 @@ if (window.showToast) window.showToast(`-> ${bunk}: Moved to ${bestPick.activity
                                : (_dt && _dt[storedSlot] && _dt[storedSlot].endMin != null ? _dt[storedSlot].endMin : null);
                     // Times known on both sides and disjoint → different period, skip.
                     if (qStart != null && qEnd != null && gStart != null && gEnd != null && !(gStart < qEnd && gEnd > qStart)) continue;
-                    return { matchups: data.matchups || [], gameLabel: data.gameLabel || '', sport: data.sport || '', leagueName: data.leagueName || '', customText: data.customText || '' };
+                    return { matchups: data.matchups || [], gameLabel: data.gameLabel || '', sport: data.sport || '', leagueName: data.leagueName || '', customText: data.customText || '', _didNotPlay: data._didNotPlay || [] };
                 }
             }
         }
@@ -3341,7 +3341,14 @@ if (window.showToast) window.showToast(`-> ${bunk}: Moved to ${bestPick.activity
                 var _tf = (m && typeof m === 'object' && m.field) ? m.field
                         : _usFieldFromLine(typeof m === 'string' ? m : line);
                 if (_tf) _tFields.push(_tf);
-                html += '<div style="background: #fff; padding: 3px 7px; border-radius: 4px; font-size: 0.74rem; color: #1e3a5f; box-shadow: 0 1px 1px rgba(0,0,0,0.04); white-space: nowrap; overflow: hidden; text-overflow: ellipsis;">' + escapeHtml(line) + '</div>';
+                // "Did not play" — keep the matchup visible but struck-through with a red ✗.
+                var _dnp = (window.PostEditFieldChange && typeof window.PostEditFieldChange.isDidNotPlay === 'function')
+                    ? window.PostEditFieldChange.isDidNotPlay({ _didNotPlay: leagueInfo._didNotPlay }, m) : false;
+                if (_dnp) {
+                    html += '<div title="Did not play" style="background: #fef2f2; padding: 3px 7px; border-radius: 4px; font-size: 0.74rem; color: #b91c1c; box-shadow: 0 1px 1px rgba(0,0,0,0.04); white-space: nowrap; overflow: hidden; text-overflow: ellipsis;"><span style="font-weight:700;">✗</span> <span style="text-decoration: line-through; text-decoration-color:#dc2626;">' + escapeHtml(line) + '</span></div>';
+                } else {
+                    html += '<div style="background: #fff; padding: 3px 7px; border-radius: 4px; font-size: 0.74rem; color: #1e3a5f; box-shadow: 0 1px 1px rgba(0,0,0,0.04); white-space: nowrap; overflow: hidden; text-overflow: ellipsis;">' + escapeHtml(line) + '</div>';
+                }
             });
             html += '</div>';
         } else {
@@ -4141,7 +4148,14 @@ divBlocks.forEach((block, blockIdx) => {
                 const _tf = (m && typeof m === 'object' && m.field) ? m.field
                           : _usFieldFromLine(typeof m === 'string' ? m : matchText);
                 if (_tf) _tFields.push(_tf);
-                html += `<div style="background: #fff; padding: 6px 12px; border-radius: 6px; font-size: 0.875rem; color: #1e3a5f; box-shadow: 0 1px 2px rgba(0,0,0,0.05);">${escapeHtml(matchText)}</div>`;
+                // "Did not play" — keep the matchup visible but struck-through with a red ✗.
+                const _dnp = (window.PostEditFieldChange && typeof window.PostEditFieldChange.isDidNotPlay === 'function')
+                    ? window.PostEditFieldChange.isDidNotPlay({ _didNotPlay: leagueInfo._didNotPlay }, m) : false;
+                if (_dnp) {
+                    html += `<div title="Did not play" style="background: #fef2f2; padding: 6px 12px; border-radius: 6px; font-size: 0.875rem; color: #b91c1c; box-shadow: 0 1px 2px rgba(0,0,0,0.05);"><span style="font-weight:700;">✗</span> <span style="text-decoration: line-through; text-decoration-color:#dc2626;">${escapeHtml(matchText)}</span></div>`;
+                } else {
+                    html += `<div style="background: #fff; padding: 6px 12px; border-radius: 6px; font-size: 0.875rem; color: #1e3a5f; box-shadow: 0 1px 2px rgba(0,0,0,0.05);">${escapeHtml(matchText)}</div>`;
+                }
             });
             html += '</div>';
         } else {
