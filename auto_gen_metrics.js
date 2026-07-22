@@ -461,6 +461,25 @@
                             'color:#a30; font-weight:bold;');
                     }
                 }
+                // Impossible floors (engine side-channel): a subcat whose per-day floor
+                // exceeds its DISTINCT activities can never be met with repeats off —
+                // that's a config contradiction, not a seat shortage, so call it out
+                // separately from the +seats advice.
+                var floorWarns = (typeof window !== 'undefined' && window.__genFloorWarnings) || [];
+                if (floorWarns.length) {
+                    var seenFW = {}, fwParts = [];
+                    floorWarns.forEach(function (w) {
+                        if (!w || !w.subcat) return;
+                        var k = w.subcat + '|' + w.floor + '|' + w.avail;
+                        if (seenFW[k]) return; seenFW[k] = 1;
+                        fwParts.push('"' + w.subcat + '" floor ' + w.floor + ' vs ' + w.avail + ' distinct activit' + (w.avail === 1 ? 'y' : 'ies'));
+                    });
+                    if (fwParts.length) {
+                        console.log('%c[GenMetrics] impossible floors (config, not capacity): ' + fwParts.join(' · ')
+                            + '  — with same-day repeats off these floors can NEVER be met; add activities or lower the floors.',
+                            'color:#a30; font-weight:bold;');
+                    }
+                }
             }
 
             if (typeof window !== 'undefined' && window.dispatchEvent && typeof CustomEvent !== 'undefined') {

@@ -682,10 +682,10 @@
         log('AUTO SCHEDULER v' + VERSION + ' — WHAT→WHEN→WHERE Engine');
         log('═══════════════════════════════════════════════════════════');
 
-        // ★ Reset the honest-open side-channel every run: the GENERIC-HONEST emit
-        //   (GL path) repopulates it; a legacy-path run must not leave GenMetrics
-        //   reading a PRIOR run's dropped-tile list.
-        try { window.__genOpenSlots = []; } catch (_eOpenReset) {}
+        // ★ Reset the honest-open + impossible-floor side-channels every run: the
+        //   GL passes repopulate them; a legacy-path run must not leave GenMetrics
+        //   reading a PRIOR run's data.
+        try { window.__genOpenSlots = []; window.__genFloorWarnings = []; } catch (_eOpenReset) {}
 
         // ★ Pull authoritative league history from the cloud before generating, so
         //   today's matchups + sports come from the true cross-session record. Best-
@@ -18171,15 +18171,22 @@
                                 if (!(_mf > 0) && _ap.minFrequencyPerGrade) { Object.keys(_ap.minFrequencyPerGrade).forEach(function (g) { var v = parseInt(_ap.minFrequencyPerGrade[g], 10); if (v > 0) _mf = Math.max(_mf, v); }); }
                                 if (!(_mf > 0)) return;                                  // no weekly min → not a quota seat
                                 var _perR = ((_ap.minFrequencyPeriod || 'week') === 'week') ? '1week' : (_ap.minFrequencyPeriod || '1week');
-                                // period camp-day count D (same for all bunks; depends only on the period + today)
+                                // period camp-day count D (same for all bunks; depends only on the period + today).
+                                // TRUE period end via getPeriodCampDayGeometry ('half' = the configured half
+                                // boundary, not start+7d); legacy hand-roll kept only as a stale-cache fallback.
                                 var _Dr = 5;
                                 try {
-                                    var _psr = (typeof _rrU.getPeriodStartDate === 'function') ? _rrU.getPeriodStartDate(_perR, _rrToday) : null;
-                                    if (_psr && typeof _rrU.countCampDays === 'function') {
-                                        var _nWr = (_ap.minFrequencyPeriod === '2weeks') ? 2 : (_ap.minFrequencyPeriod === '3weeks') ? 3 : (_ap.minFrequencyPeriod === '4weeks') ? 4 : 1;
-                                        var _per = new Date(_psr + 'T00:00:00'); _per.setDate(_per.getDate() + _nWr * 7 - 1);
-                                        var _peSr = _per.getFullYear() + '-' + String(_per.getMonth() + 1).padStart(2, '0') + '-' + String(_per.getDate()).padStart(2, '0');
-                                        _Dr = Math.max(1, _rrU.countCampDays(_psr, _peSr) || 5);
+                                    var _geomR = (typeof _rrU.getPeriodCampDayGeometry === 'function') ? _rrU.getPeriodCampDayGeometry(_perR, _rrToday) : null;
+                                    if (_geomR) {
+                                        _Dr = _geomR.D;
+                                    } else {
+                                        var _psr = (typeof _rrU.getPeriodStartDate === 'function') ? _rrU.getPeriodStartDate(_perR, _rrToday) : null;
+                                        if (_psr && typeof _rrU.countCampDays === 'function') {
+                                            var _nWr = (_ap.minFrequencyPeriod === '2weeks') ? 2 : (_ap.minFrequencyPeriod === '3weeks') ? 3 : (_ap.minFrequencyPeriod === '4weeks') ? 4 : 1;
+                                            var _per = new Date(_psr + 'T00:00:00'); _per.setDate(_per.getDate() + _nWr * 7 - 1);
+                                            var _peSr = _per.getFullYear() + '-' + String(_per.getMonth() + 1).padStart(2, '0') + '-' + String(_per.getDate()).padStart(2, '0');
+                                            _Dr = Math.max(1, _rrU.countCampDays(_psr, _peSr) || 5);
+                                        }
                                     }
                                 } catch (_e) {}
                                 // contention group = camp-wide bunks that can access THIS physical activity
@@ -18375,16 +18382,27 @@
                                             }
                                         } catch (_e) {}
                                         if (need <= 0) { subFloor[key] = 0; return; } // weekly min already met → optional (cap-only); aim-up still drives the climb via _scarce
-                                        // period camp-day geometry: D = camp-days in period, e = 1-based camp-day of today
+                                        // period camp-day geometry: D = camp-days in period, e = 1-based camp-day of
+                                        // today — via the TRUE period end (getPeriodCampDayGeometry: 'half' = the
+                                        // configured half boundary). The old hand-roll treated 'half' as ONE WEEK,
+                                        // so D≈6 while e counted the real half (15-20+) → remaining collapsed to 1 →
+                                        // every under bunk fired its floor EVERY day in permanent "deadline" mode
+                                        // (11 bunks × daily tiles vs 3 seats = the chronic placeholder pileup) and
+                                        // pacing/base-days never engaged. Legacy math kept as stale-cache fallback.
                                         var D = 5, e = 1;
                                         try {
-                                            var _ps = (typeof _U.getPeriodStartDate === 'function') ? _U.getPeriodStartDate(_per, _wqToday) : null;
-                                            if (_ps && typeof _U.countCampDays === 'function') {
-                                                var _nW = (period === '2weeks') ? 2 : (period === '3weeks') ? 3 : (period === '4weeks') ? 4 : 1;
-                                                var _peD = new Date(_ps + 'T00:00:00'); _peD.setDate(_peD.getDate() + _nW * 7 - 1);
-                                                var _peStr = _peD.getFullYear() + '-' + String(_peD.getMonth() + 1).padStart(2, '0') + '-' + String(_peD.getDate()).padStart(2, '0');
-                                                D = Math.max(1, _U.countCampDays(_ps, _peStr) || 5);
-                                                e = Math.max(1, _U.countCampDays(_ps, _wqToday) || 1);
+                                            var _geomQ = (typeof _U.getPeriodCampDayGeometry === 'function') ? _U.getPeriodCampDayGeometry(_per, _wqToday) : null;
+                                            if (_geomQ) {
+                                                D = _geomQ.D; e = _geomQ.e;
+                                            } else {
+                                                var _ps = (typeof _U.getPeriodStartDate === 'function') ? _U.getPeriodStartDate(_per, _wqToday) : null;
+                                                if (_ps && typeof _U.countCampDays === 'function') {
+                                                    var _nW = (period === '2weeks') ? 2 : (period === '3weeks') ? 3 : (period === '4weeks') ? 4 : 1;
+                                                    var _peD = new Date(_ps + 'T00:00:00'); _peD.setDate(_peD.getDate() + _nW * 7 - 1);
+                                                    var _peStr = _peD.getFullYear() + '-' + String(_peD.getMonth() + 1).padStart(2, '0') + '-' + String(_peD.getDate()).padStart(2, '0');
+                                                    D = Math.max(1, _U.countCampDays(_ps, _peStr) || 5);
+                                                    e = Math.max(1, _U.countCampDays(_ps, _wqToday) || 1);
+                                                }
                                             }
                                         } catch (_e) {}
                                         var remaining = Math.max(1, D - e + 1);
@@ -18456,6 +18474,7 @@
                                 }
                             } catch (_glBandErr) {}
                             var _glCapParts = [];
+                            var _glImpossible = [];
                             Object.keys(subFloor).forEach(function (key) {
                                 // offer only lengths THIS bunk can FILL (rotation-thinned priorityList); fall
                                 // back to the access-union when the thinned list has nothing for the subcat
@@ -18487,11 +18506,27 @@
                                 var _cap = _hasFiniteCfg ? Math.max(subCap[key], subFloor[key]) : Math.max(_avail, subFloor[key]);
                                 // score 1 (was 0): an over-floor special outranks the generic placeholder
                                 // filler below, so the day fills with REAL specials, not "Activity" tiles.
+                                // ★ IMPOSSIBLE FLOOR: the demand asks for more of this subcat per day than
+                                // DISTINCT activities exist — with same-day repeats off, the extra tile(s)
+                                // can NEVER fill, on any day, at any time. That is a CONFIG contradiction
+                                // (e.g. sports floor 2 with one 20-min "Sports" activity = 1 guaranteed-dead
+                                // tile per bunk per day), not a capacity problem — collect it so the warning
+                                // names the real fix instead of the advice suggesting "+N seats".
+                                if (_avail > 0 && (subFloor[key] || 0) > _avail) {
+                                    _glImpossible.push({ subcat: key, floor: subFloor[key], avail: _avail });
+                                }
                                 floating.push({ kind: 'special', subcat: key, durations: durs, window: (_glBand || [gStart, gEnd]), qty: subFloor[key], cap: _cap, score: 1, _scarce: (_wqScarce[key] || 0) });
                                 _glCapParts.push(key + ' (avail=' + _avail + ', floor=' + subFloor[key] + ' → cap=' + (_cap === Infinity ? '∞' : _cap) + (_wqScarce[key] ? ', AIM-UP scarce+' + _wqScarce[key] : '') + ', durs=[' + durs.join(',') + '])');
                             });
                             // One cap-diagnostic line per grade (first bunk) so a throttled subcat is visible.
-                            if (!_glCapLogged[grade]) { _glCapLogged[grade] = 1; log('[GENERIC-LAYOUT] ' + grade + ' special caps: ' + (_glCapParts.join(' | ') || '(none)') + ' | special band=' + _glBandWhy); }
+                            if (!_glCapLogged[grade]) {
+                                _glCapLogged[grade] = 1;
+                                log('[GENERIC-LAYOUT] ' + grade + ' special caps: ' + (_glCapParts.join(' | ') || '(none)') + ' | special band=' + _glBandWhy);
+                                _glImpossible.forEach(function (w) {
+                                    warn('[GENERIC-LAYOUT] ⚠ IMPOSSIBLE FLOOR — ' + grade + ' "' + w.subcat + '": floor ' + w.floor + ' but only ' + w.avail + ' distinct activit' + (w.avail === 1 ? 'y' : 'ies') + ' (same-day repeats are off) → ' + (w.floor - w.avail) + ' tile(s)/bunk/day can NEVER fill and will show as open time. Add another "' + w.subcat + '" activity or lower the floor to ' + w.avail + '.');
+                                    try { if (typeof window !== 'undefined') (window.__genFloorWarnings = window.__genFloorWarnings || []).push({ grade: grade, subcat: w.subcat, floor: w.floor, avail: w.avail }); } catch (_e) {}
+                                });
+                            }
                             // Generic FILLER — fills whatever the layer demands leave open. A sport filler
                             // (real content) keeps score 1; the abstract "activity" placeholder (sports-free
                             // camps) drops to score 0 so it is a LAST resort and real specials are used first
@@ -19616,15 +19651,23 @@
                                         var wtd = 0; names.forEach(function (nm) { try { wtd += _rwU.getPeriodActivityCount(bunk, nm, per, _rwToday) || 0; } catch (_e) {} });
                                         var need = M - wtd;
                                         if (need <= 0) return true;                              // weekly min already met → releasable
+                                        // TRUE period end via getPeriodCampDayGeometry — the old hand-roll turned
+                                        // 'half' into one week, so releasable() saw remaining=1 and declared every
+                                        // reservation now-or-never (the 34-kept pileup). Legacy math = fallback.
                                         var D = 5, e = 1;
                                         try {
-                                            var ps = (typeof _rwU.getPeriodStartDate === 'function') ? _rwU.getPeriodStartDate(per, _rwToday) : null;
-                                            if (ps && typeof _rwU.countCampDays === 'function') {
-                                                var nW = (period === '2weeks') ? 2 : (period === '3weeks') ? 3 : (period === '4weeks') ? 4 : 1;
-                                                var peD = new Date(ps + 'T00:00:00'); peD.setDate(peD.getDate() + nW * 7 - 1);
-                                                var peStr = peD.getFullYear() + '-' + String(peD.getMonth() + 1).padStart(2, '0') + '-' + String(peD.getDate()).padStart(2, '0');
-                                                D = Math.max(1, _rwU.countCampDays(ps, peStr) || 5);
-                                                e = Math.max(1, _rwU.countCampDays(ps, _rwToday) || 1);
+                                            var _geomW = (typeof _rwU.getPeriodCampDayGeometry === 'function') ? _rwU.getPeriodCampDayGeometry(per, _rwToday) : null;
+                                            if (_geomW) {
+                                                D = _geomW.D; e = _geomW.e;
+                                            } else {
+                                                var ps = (typeof _rwU.getPeriodStartDate === 'function') ? _rwU.getPeriodStartDate(per, _rwToday) : null;
+                                                if (ps && typeof _rwU.countCampDays === 'function') {
+                                                    var nW = (period === '2weeks') ? 2 : (period === '3weeks') ? 3 : (period === '4weeks') ? 4 : 1;
+                                                    var peD = new Date(ps + 'T00:00:00'); peD.setDate(peD.getDate() + nW * 7 - 1);
+                                                    var peStr = peD.getFullYear() + '-' + String(peD.getMonth() + 1).padStart(2, '0') + '-' + String(peD.getDate()).padStart(2, '0');
+                                                    D = Math.max(1, _rwU.countCampDays(ps, peStr) || 5);
+                                                    e = Math.max(1, _rwU.countCampDays(ps, _rwToday) || 1);
+                                                }
                                             }
                                         } catch (_e) {}
                                         // boundary decision = the tested GLStagger.weeklyReleasable (faithful inline fallback)
@@ -20078,15 +20121,23 @@
                                 Object.keys(_wmSub).forEach(function (_sc) {
                                     var _info = _wmSub[_sc];
                                     var _perW = (_info.period === 'week') ? '1week' : _info.period;
+                                    // TRUE period end via getPeriodCampDayGeometry ('half' = the configured half
+                                    // boundary) so the shortfall projection uses the real remaining days; the
+                                    // legacy start+N*7 hand-roll stays only as a stale-cache fallback.
                                     var _Dw = 5, _ew = 1;
                                     try {
-                                        var _psw = (typeof _wmU.getPeriodStartDate === 'function') ? _wmU.getPeriodStartDate(_perW, _wmToday) : null;
-                                        if (_psw && typeof _wmU.countCampDays === 'function') {
-                                            var _nWw = (_info.period === '2weeks') ? 2 : (_info.period === '3weeks') ? 3 : (_info.period === '4weeks') ? 4 : 1;
-                                            var _pew = new Date(_psw + 'T00:00:00'); _pew.setDate(_pew.getDate() + _nWw * 7 - 1);
-                                            var _peSw = _pew.getFullYear() + '-' + String(_pew.getMonth() + 1).padStart(2, '0') + '-' + String(_pew.getDate()).padStart(2, '0');
-                                            _Dw = Math.max(1, _wmU.countCampDays(_psw, _peSw) || 5);
-                                            _ew = Math.max(1, _wmU.countCampDays(_psw, _wmToday) || 1);
+                                        var _geomM = (typeof _wmU.getPeriodCampDayGeometry === 'function') ? _wmU.getPeriodCampDayGeometry(_perW, _wmToday) : null;
+                                        if (_geomM) {
+                                            _Dw = _geomM.D; _ew = _geomM.e;
+                                        } else {
+                                            var _psw = (typeof _wmU.getPeriodStartDate === 'function') ? _wmU.getPeriodStartDate(_perW, _wmToday) : null;
+                                            if (_psw && typeof _wmU.countCampDays === 'function') {
+                                                var _nWw = (_info.period === '2weeks') ? 2 : (_info.period === '3weeks') ? 3 : (_info.period === '4weeks') ? 4 : 1;
+                                                var _pew = new Date(_psw + 'T00:00:00'); _pew.setDate(_pew.getDate() + _nWw * 7 - 1);
+                                                var _peSw = _pew.getFullYear() + '-' + String(_pew.getMonth() + 1).padStart(2, '0') + '-' + String(_pew.getDate()).padStart(2, '0');
+                                                _Dw = Math.max(1, _wmU.countCampDays(_psw, _peSw) || 5);
+                                                _ew = Math.max(1, _wmU.countCampDays(_psw, _wmToday) || 1);
+                                            }
                                         }
                                     } catch (_e) {}
                                     // Escalate on the last GENERATED camp-day. A Sun-Fri camp whose Monday-anchored

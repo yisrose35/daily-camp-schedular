@@ -2868,6 +2868,38 @@
     };
 
     /**
+     * Camp-day geometry of the period containing refDate:
+     *   D = total camp-days in the period, e = 1-based camp-day index of refDate.
+     * Uses the TRUE period end (getPeriodEndDate knows 'half' = the configured
+     * half boundary; week periods are clamped to the camp end date) — the same
+     * pattern getEscalationBonus uses. This exists because several generator
+     * sites hand-rolled the period end as start + N*7 - 1 days, where any
+     * period that isn't '2/3/4weeks' (notably 'half') fell through to ONE WEEK:
+     * for a "2 per half" minimum that made D≈6 while e kept counting the real
+     * half (15-20+), so remaining = max(1, D-e+1) collapsed to 1 and every
+     * under-quota bunk sat in permanent now-or-never deadline mode after the
+     * half's first week — daily placeholder floors, no pacing, and a last-day
+     * reservation pileup. Returns null when the boundaries can't be resolved
+     * (no camp dates configured) — callers keep their legacy fallback.
+     * @param {string} period - 'week','1week','2weeks','3weeks','4weeks','half'
+     * @param {string} [refDate]
+     * @returns {{D:number, e:number, start:string, end:string}|null}
+     */
+    Utils.getPeriodCampDayGeometry = function(period, refDate) {
+        var today = refDate || (window.currentScheduleDate
+            ? (typeof window.currentScheduleDate === 'string' ? window.currentScheduleDate : window.currentScheduleDate.toISOString().slice(0, 10))
+            : new Date().toISOString().slice(0, 10));
+        var pk = (period === 'week') ? '1week' : (period || 'half');
+        var start = Utils.getPeriodStartDate(pk, today);
+        var end = Utils.getPeriodEndDate(pk, today);
+        if (!start || !end) return null;
+        var D = Utils.countCampDays(start, end);
+        if (D <= 0) return null;
+        var e = Math.max(1, Utils.countCampDays(start, today) || 1);
+        return { D: D, e: Math.min(e, D), start: start, end: end };
+    };
+
+    /**
      * Compute the escalating bonus for min/exact frequency enforcement.
      * Accounts for cooldown: if the activity can't be scheduled until a
      * future date, the effective remaining window shrinks and urgency rises.
