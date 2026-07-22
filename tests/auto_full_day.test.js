@@ -1332,6 +1332,9 @@ async function runScenario(label, opts) {
   const cfg = campConfig(opts);
   const sandbox = buildSandbox(opts);
   loadModules(sandbox);
+  // windowFlags: scenario-supplied window.* toggles (sandbox IS window) — lets a
+  // test pin behavior with an engine toggle ON/OFF (e.g. __actMatchGate).
+  if (opts.windowFlags) Object.assign(sandbox, opts.windowFlags);
 
   assert.equal(typeof sandbox.runAutoScheduler, 'function',
     'window.runAutoScheduler must be defined after loading modules');
@@ -2207,4 +2210,90 @@ test('maxUsage "per week" counts THIS week only — last week\'s visits must not
   }
   assert.deepEqual(missing, [], 'every bunk must get Shiur today (this week count=0 < max=3): ' + missing.join(', '));
   assert.deepEqual(repeated, [], 'no same-day repeat: ' + repeated.join(', '));
+});
+
+test('placer knows per-bunk concrete availability — a grade\'s only shiur is never stranded by a multi-option grade (matching gate + fill dodge)', async (t) => {
+  // REGRESSION (live, Camp Neranina): seat CAPS count chairs, but grades don't all
+  //   reach the same chairs. Chair's ONLY shiur ('Aleph Shiur') is also one of
+  //   Auto's two. Two ledger holes made the placer blind to that:
+  //     1. Chair is SOLO on the subcat → its tiles reserve only 'specialact:Aleph
+  //        Shiur', while Auto's tiles reserve only the 'special:shiur' keys — the
+  //        two ledgers never see each other, so 3 tiles could stack on 2 activities.
+  //     2. The fill's first-fit gave Aleph (first in pool) to an Auto bunk even
+  //        while a concurrent Chair tile could take NOTHING else → Chair went
+  //        [capacity-stuck] (live: Quartets ז 10:50 shiur).
+  //   Now the resourceGate requires a perfect MATCHING of overlapping tiles to
+  //   distinct accessible activities, and the fill DODGES an activity that is a
+  //   concurrent peer's sole option.
+  const XDIV = { type: 'cross_division', divisions: [],
+    capacity: 20, allowedPairs: { 'Auto|Auto': true, 'Chair|Chair': true, 'Auto|Chair': true } };
+  const CAP1 = { type: 'not_sharable', divisions: [], capacity: 1, allowedPairs: {} };
+  const mk = (name, dur, subcat, extra) => Object.assign({
+    name, location: name + ' Rm', type: 'Special', subcategory: subcat,
+    duration: dur, durationMin: dur,
+    sharableWith: XDIV, timeRules: [], availableDays: null,
+  }, extra || {});
+  const specialsOverride = [
+    // BOTH grades reach Aleph; listed FIRST so a naive first-fit grabs it for Auto.
+    mk('Aleph Shiur', 20, 'shiur', { sharableWith: CAP1 }),
+    // Auto-ONLY (access restriction): Chair can never take this one.
+    mk('Bais Shiur', 20, 'shiur', { sharableWith: CAP1,
+      accessRestrictions: { enabled: true, divisions: { Auto: [] } } }),
+    // rest of the day's pool (durations mirror SMOOTH_SPECIALS)
+    mk('Drama', 40, 'theme'), mk('Art Shoppes', 40, 'theme'), mk('Accessorize', 40, 'theme'),
+    mk('Pioneering', 40, 'theme'), mk('Gymnastics', 40, 'theme'), mk('Woodworking', 40, 'theme'),
+    mk('Neranitas', 20, 'theme'), mk('Arts & Crafts', 20, 'theme'), mk('Foam Pit', 20, 'theme'),
+    mk('Ice Cream', 20, 'theme'), mk('Baking', 40, 'theme'),
+    mk('Slush', 10, 'theme'), mk('Popcorn', 10, 'theme'),
+  ];
+  const { sandbox } = await runScenario('AVAILABILITY (Chair solo on Aleph Shiur; Auto has two)', {
+    smooth: true, requireNoSports: true, skipGapCheck: true, specialsOverride,
+    subQuantities: { shiur: 1 }, subOps: { shiur: '=' },
+  });
+  const logs = (sandbox.__logs || []).map(String);
+  const SHIURS = new Set(['Aleph Shiur', 'Bais Shiur']);
+  // collect every shiur interval from the emitted schedule
+  const ivals = [];   // { bunk, name, s, e }
+  const byBunk = {};  // bunk -> [names]
+  for (const [bunk, slots] of Object.entries(sandbox.scheduleAssignments || {})) {
+    (slots || []).forEach(s => {
+      if (!s || !SHIURS.has(s._activity)) return;
+      if (s._startMin != null && s._endMin != null) ivals.push({ bunk, name: s._activity, s: s._startMin, e: s._endMin });
+      if (!s.continuation) (byBunk[bunk] ||= []).push(s._activity);
+    });
+  }
+  // 1) ACCESS: Chair bunks may only ever hold 'Aleph Shiur'
+  const badAccess = ivals.filter(v => v.bunk.startsWith('Chair') && v.name !== 'Aleph Shiur')
+    .map(v => `${v.bunk}: ${v.name}`);
+  assert.deepEqual(badAccess, [], 'Chair can only access Aleph Shiur:\n  ' + badAccess.join('\n  '));
+  // 2) CAP-1: no two bunks may overlap on the SAME physical shiur
+  const sameNameOverlaps = [];
+  for (let i = 0; i < ivals.length; i++) for (let j = i + 1; j < ivals.length; j++) {
+    const a = ivals[i], b = ivals[j];
+    if (a.bunk === b.bunk || a.name !== b.name) continue;
+    if (a.s < b.e && a.e > b.s) sameNameOverlaps.push(`${a.name}: ${a.bunk} ${fmt(a.s)}-${fmt(a.e)} vs ${b.bunk} ${fmt(b.s)}-${fmt(b.e)}`);
+  }
+  assert.deepEqual(sameNameOverlaps, [], 'cap-1 shiur shared by two bunks at once:\n  ' + sameNameOverlaps.join('\n  '));
+  // 3) NO STRANDING: no shiur tile may die [capacity-stuck/-recoverable] — the
+  //    matching gate must refuse infeasible stacks BEFORE the fill meets them.
+  const stuck = logs.filter(l => /shiur \d+min \[capacity-(stuck|recoverable)\]/.test(l));
+  assert.deepEqual(stuck, [], 'no shiur tile may be stranded at fill:\n  ' + stuck.join('\n  '));
+  // 4) COVERAGE: every Auto bunk gets its shiur exactly once, and the Chair
+  //    bunks SERIALIZE onto Aleph — at least 3 disjoint Aleph sessions (with
+  //    the gates OFF, first-fit strands Chair with [capacity-stuck] instead).
+  //    Not asserted at 6/6: Chair's smooth-scenario frame is under-planned by
+  //    ~100 min in EVERY smooth test (a harness artifact, see test 2035's note),
+  //    so 3 of the 6 Chair bunks run out of plannable morning-band slots —
+  //    that ceiling is the packer's floor-retry, not the availability ledger.
+  const missing = [], repeated = [];
+  AUTO_BUNKS.forEach(b => {
+    const n = (byBunk[b] || []).length;
+    if (n === 0) missing.push(b);
+    if (n > 1) repeated.push(b + ':' + n);
+  });
+  assert.deepEqual(missing, [], 'every Auto bunk must get a shiur: ' + missing.join(', '));
+  assert.deepEqual(repeated, [], 'no same-day repeat: ' + repeated.join(', '));
+  const chairWith = CHAIR_BUNKS.filter(b => (byBunk[b] || []).length >= 1);
+  assert.ok(chairWith.length >= 3,
+    `at least 3 Chair bunks must serialize onto the cap-1 Aleph Shiur (got ${chairWith.length}: ${chairWith.join(', ')})`);
 });

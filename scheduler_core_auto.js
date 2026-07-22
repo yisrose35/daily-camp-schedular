@@ -18748,6 +18748,7 @@
                     var _glSeatBySubDur = {}; // subcat -> { dur -> seats }   (for the visible breakdown)
                     var _glSpecActsBySub = {};// subcat -> # of DISTINCT available activities
                     var _glNamesBySub = {};   // subcat -> [activity names]
+                    var _glActInfo = {};      // activity name -> { seat, durs }  (per-bunk availability matching)
                     var _glDurList = function (s) {   // an activity's permitted durations (numbers)
                         var ds = [];
                         try { var gd = (typeof getSpecialDurations === 'function') ? getSpecialDurations(s.name, window.activityProperties, globalSettings) : null; ds = (gd && gd.durations) || gd; } catch (_e) {}
@@ -18782,6 +18783,7 @@
                             _glSeats['special:' + _sub] = (_glSeats['special:' + _sub] || 0) + _seat;
                             _glSpecActsBySub[_sub] = (_glSpecActsBySub[_sub] || 0) + 1;
                             (_glNamesBySub[_sub] = _glNamesBySub[_sub] || []).push(s.name);
+                            _glActInfo[s.name] = { seat: _seat, durs: _glDurList(s) };
                         });
                         var _fldsSeat = (globalSettings && globalSettings.app1 && globalSettings.app1.fields) || (globalSettings && globalSettings.fields) || [];
                         var _disF = (window.currentDisabledFields && window.currentDisabledFields.length) ? window.currentDisabledFields : ((globalSettings && globalSettings.app1 && globalSettings.app1.disabledFields) || []);
@@ -18811,6 +18813,8 @@
                     // Minors-only) only count for the grades that can use them.
                     var _glSeatsByGrade = {};   // grade -> { 'special:<subcat>@<dur>' -> accessible seats }
                     var _glSoloAct = {};        // grade -> { '<subcat>' -> physical activity NAME }  (only when the grade reaches EXACTLY ONE activity in the subcat)
+                    var _glAccBySubGrade = {};  // grade -> { '<subcat>' -> [accessible activity NAMES] }  (per-bunk availability matching)
+                    var _glSubRestricted = {};  // subcat -> true iff some grade reaches FEWER activities than exist (matching can bind)
                     try {
                         (allGrades || []).forEach(function (g) {
                             var _rep = (typeof getBunksForGrade === 'function') ? (getBunksForGrade(g, divisions) || [])[0] : null;
@@ -18831,6 +18835,10 @@
                                 _gm['special:' + _sub] = (_gm['special:' + _sub] || 0) + _seat;   // length-independent pool cap (see camp-wide build)
                                 (_bySub[_sub] = _bySub[_sub] || []).push(s);
                             });
+                            // record WHICH concrete activities this grade reaches per subcat — the
+                            // matching gate + fill-awareness below need names, not just counts.
+                            var _accG = _glAccBySubGrade[g] = {};
+                            Object.keys(_bySub).forEach(function (_s2) { _accG[_s2] = _bySub[_s2].map(function (x) { return x.name; }); });
                             // PER-PHYSICAL-ACTIVITY seat (window.__physActSeat, default ON): when a grade reaches
                             // EXACTLY ONE activity in a subcat (e.g. each grade → one Shiur), the subcat seat count
                             // (= Σ DISTINCT activities camp-wide) OVER-states what THIS grade's generic tile can
@@ -18859,6 +18867,15 @@
                                 });
                             }
                         });
+                        // a subcat where every grade reaches EVERY activity is unrestricted — tiles are
+                        // interchangeable there, so the count-based seat caps are already exact and the
+                        // matching gate can skip it (fast path).
+                        Object.keys(_glNamesBySub).forEach(function (_sr) {
+                            var _n = (_glNamesBySub[_sr] || []).length;
+                            _glSubRestricted[_sr] = (allGrades || []).some(function (g) {
+                                return (((_glAccBySubGrade[g] || {})[_sr]) || []).length < _n;
+                            });
+                        });
                     } catch (_glSeatGErr) {}
                     // ── VISIBLE COUNT: print exactly what the engine counted (per length), auditable.
                     try {
@@ -18882,6 +18899,44 @@
                             if (_anyR) log('[SEAT COUNT]    ↳ ' + k.slice(8) + ' is grade-restricted → per-grade seats: ' + (allGrades || []).map(function (g) { return g + '=' + ((_glSeatsByGrade[g] && _glSeatsByGrade[g][k]) || 0); }).join(', '));
                         });
                     } catch (_glSeatLogErr) {}
+                    // ── CONSTRAINED-ACCESS-FIRST pack order (window.__constrainedFirst, default ON) ──
+                    // The layout packs bunks sequentially against the shared seat ledger, so EARLIER
+                    // bunks get first pick of the contended windows. A grade pinned to ONE activity
+                    // in a restricted subcat (Chair → only 'Aleph Shiur') has zero routing freedom:
+                    // if flexible grades pack first they blanket the band and the matching gate can
+                    // then only STARVE the pinned grade (correctly refusing infeasible stacks, but
+                    // the flexibility is already spent). Pack the least-flexible grades first —
+                    // the bunk-level twin of the fill's most-constrained-first tile ordering.
+                    try {
+                        if (((typeof window === 'undefined') || (window.__constrainedFirst !== false))
+                            && Object.keys(_glSubRestricted).some(function (s) { return _glSubRestricted[s]; })) {
+                            var _cfKey = {};   // grade -> { solo, acc }
+                            var _cfOf = function (g) {
+                                if (_cfKey[g]) return _cfKey[g];
+                                var solo = 0, acc = 0;
+                                Object.keys(_glSubRestricted).forEach(function (sub) {
+                                    if (!_glSubRestricted[sub]) return;
+                                    var n = (((_glAccBySubGrade[g] || {})[sub]) || []).length;
+                                    if (n <= 0) return;              // no access ⇒ this subcat never routes through g
+                                    if (n === 1) solo++;
+                                    acc += n;
+                                });
+                                return (_cfKey[g] = { solo: solo, acc: acc });
+                            };
+                            var _cfBefore = _glOrder.join(',');
+                            var _cfIdx = {};
+                            _glOrder.forEach(function (b, i) { _cfIdx[b] = i; });
+                            _glOrder.sort(function (a, b) {
+                                var ga = _cfOf((_glPerBunk[a] && _glPerBunk[a].grade) || ''), gb = _cfOf((_glPerBunk[b] && _glPerBunk[b].grade) || '');
+                                return (gb.solo - ga.solo) || (ga.acc - gb.acc) || (_cfIdx[a] - _cfIdx[b]);
+                            });
+                            if (_glOrder.join(',') !== _cfBefore) {
+                                var _cfSeen = {}, _cfGl = [];
+                                _glOrder.forEach(function (b) { var g = (_glPerBunk[b] && _glPerBunk[b].grade) || '?'; if (!_cfSeen[g]) { _cfSeen[g] = 1; _cfGl.push(g + ' (solo×' + _cfOf(g).solo + ')'); } });
+                                log('[GENERIC-LAYOUT] pack order: constrained-access grades first → ' + _cfGl.join(' → '));
+                            }
+                        }
+                    } catch (_cfErr) {}
                     // category key for a generic tile — DURATION-AWARE for specials (seats are per length).
                     // swim handled by its own pool gate, not here.
                     var _glCatOf = function (kind, ref, sMin, eMin, grade) {
@@ -18925,6 +18980,86 @@
                         var list = byG[cat] || [], n = 0;
                         for (var i = 0; i < list.length; i++) { if (list[i].s < eMin && list[i].e > sMin) n++; }
                         return (n + 1) <= seats;
+                    };
+                    // ── PER-BUNK CONCRETE-AVAILABILITY MATCHING (window.__actMatchGate, default ON) ──
+                    // The seat caps above COUNT chairs, but grades don't all reach the same chairs:
+                    // when accessible sets OVERLAP on the same physical activities (Quartets' only
+                    // Shiur is also one of Quintets' two), pure counting passes co-placements that NO
+                    // concrete assignment can satisfy — the fill then strands a bunk on a tile whose
+                    // one activity another grade took ([capacity-stuck]). Worse, a solo-grade tile
+                    // reserves ONLY its 'specialact:' key while a multi-access grade's tile reserves
+                    // ONLY the subcat keys, so the two ledgers never see each other and 3 tiles can
+                    // stack on 2 activities. This gate closes both holes: collect every committed
+                    // tile of the subcat overlapping [sMin,eMin) with the activities its grade can
+                    // actually receive (access ∩ duration; solo tiles pinned to their one activity),
+                    // add the candidate, and require a perfect matching to distinct activity seats.
+                    // Capacities are OPTIMISTIC (sharable cap counts fully; type rules stay with the
+                    // fill's _glCapFits) so the gate can only refuse truly infeasible stacks.
+                    var _glActMatchFeasible = function (sub, grade, sMin, eMin, dur) {
+                        var names = _glNamesBySub[sub] || [];
+                        if (!names.length) return true;              // unknown subcat ⇒ other gates decide
+                        if (!_glSubRestricted[sub]) return true;     // unrestricted ⇒ counting is already exact
+                        var actOk = {};
+                        for (var ai = 0; ai < names.length; ai++) actOk[names[ai]] = 1;
+                        var eligOf = function (g, d) {
+                            var acc = (_glAccBySubGrade[g] && _glAccBySubGrade[g][sub]) || null;
+                            var src = acc || names;                  // unknown grade ⇒ optimistic: all
+                            var out = [];
+                            for (var i = 0; i < src.length; i++) {
+                                var inf = _glActInfo[src[i]];
+                                if (d != null && inf && inf.durs && inf.durs.length && inf.durs.indexOf(d) < 0) continue;
+                                out.push(src[i]);
+                            }
+                            return out;
+                        };
+                        // every committed tile of this subcat overlapping the window, as its eligible-set
+                        var tiles = [];
+                        var subPfx = 'special:' + sub + '@';
+                        var grades = Object.keys(_glCatResvByGrade);
+                        for (var gi = 0; gi < grades.length; gi++) {
+                            var g = grades[gi], byCat = _glCatResvByGrade[g];
+                            for (var k in byCat) {
+                                var pinned = null, kd = null;
+                                if (k.indexOf(subPfx) === 0) {
+                                    kd = Number(k.slice(subPfx.length));
+                                    if (!(kd > 0)) continue;         // the length-independent pool key mirrors the @dur entries — skip (no double count)
+                                } else if (k.indexOf('specialact:') === 0) {
+                                    var nm = k.slice(11);
+                                    if (!actOk[nm]) continue;        // a different subcat's solo activity
+                                    pinned = [nm];
+                                } else continue;
+                                var list2 = byCat[k] || [];
+                                for (var li = 0; li < list2.length; li++) {
+                                    var iv = list2[li];
+                                    if (iv.s < eMin && iv.e > sMin) tiles.push(pinned || eligOf(g, kd));
+                                }
+                            }
+                        }
+                        var candElig = (_glSoloAct[grade] && _glSoloAct[grade][sub]) ? [_glSoloAct[grade][sub]] : eligOf(grade, dur);
+                        if (!candElig.length) return false;          // this grade can NEVER fill the tile
+                        if (!tiles.length) return true;              // nothing to contend with
+                        tiles.push(candElig);
+                        // bipartite matching with per-activity capacities (augmenting paths, hardest-first)
+                        var capOf = function (n2) { var inf = _glActInfo[n2]; return (inf && inf.seat > 0) ? inf.seat : 1; };
+                        var assigned = {};                           // activity name -> [tile indices]
+                        var aug = function (ti, seen) {
+                            var el = tiles[ti];
+                            for (var i = 0; i < el.length; i++) {
+                                var a = el[i];
+                                if (seen[a]) continue; seen[a] = 1;
+                                var lst = assigned[a] || (assigned[a] = []);
+                                if (lst.length < capOf(a)) { lst.push(ti); return true; }
+                                for (var j = 0; j < lst.length; j++) {
+                                    if (aug(lst[j], seen)) { lst[j] = ti; return true; }
+                                }
+                            }
+                            return false;
+                        };
+                        var order = tiles.map(function (_x, i) { return i; }).sort(function (a, b) { return tiles[a].length - tiles[b].length; });
+                        for (var oi = 0; oi < order.length; oi++) {
+                            if (!aug(order[oi], {})) return false;
+                        }
+                        return true;
                     };
 
                     var _glResv = {};   // facilityKey -> [{ grade, bunk, s, e }]  (this-run reservations)
@@ -18997,6 +19132,13 @@
                                         if (!_glSeatFreeAtGrade(_poolG, grade, sMin, eMin)) return false;
                                     }
                                 }
+                            }
+                            // PER-BUNK CONCRETE AVAILABILITY (window.__actMatchGate, default ON): beyond
+                            // counting, verify SOME assignment of concrete activities to every overlapping
+                            // tile (including this one) exists — see _glActMatchFeasible above.
+                            if ((typeof window === 'undefined' || window.__actMatchGate !== false) && String(kind || '').toLowerCase() === 'special') {
+                                var _mSub = _glCanon(ref && ref.subcat);
+                                if (_mSub && !_glActMatchFeasible(_mSub, grade, sMin, eMin, (sMin != null && eMin != null) ? (eMin - sMin) : null)) return false;
                             }
                         } catch (_e) {}
                         return true;
@@ -19401,6 +19543,51 @@
                                     }
                                 }
                             } catch (_alErr) { try { warn('[GENERIC-ALIGN] error — left as-is: ' + (_alErr && _alErr.message)); } catch (_e) {} }
+                            // ── PER-BUNK AVAILABILITY AWARENESS (window.__fillAware, default ON) ──
+                            // The fill walks bunks in order; a first-fit pick can hand an activity to a
+                            // bunk that has ALTERNATIVES when it is the ONLY activity a later bunk's
+                            // overlapping tile can take (grades share physical activities: Quartets'
+                            // one Shiur is also one of Quintets' two; food = Popcorn+Slush for all).
+                            // Register every generic special tile up-front so each pick can see the
+                            // concurrent still-unfilled demand and dodge a peer's sole option. Rotation
+                            // order bends ONLY when the first fit would strand a peer.
+                            var _glFillAware = (typeof window === 'undefined') || (window.__fillAware !== false);
+                            var _glUsedByBunk = {};   // bunk -> { activity name (lc): 1 }  same-day no-repeat, shared with the sole-need probe
+                            var _glPend = [];         // { bunk, grade, sub, s, e, dur, done, t }
+                            _glOrder.forEach(function (_b2) {
+                                var _r2 = _glOut.layoutByBunk[_b2]; if (!_r2 || !_r2.tiles) return;
+                                var _g2 = (_glPerBunk[_b2] && _glPerBunk[_b2].grade);
+                                var _u2 = _glUsedByBunk[_b2] = {};
+                                _r2.tiles.forEach(function (_t2) {
+                                    if (!_t2) return;
+                                    if (!_t2.generic && _t2.name) _u2[String(_t2.name).toLowerCase()] = 1;
+                                    if (_glFillAware && _t2.generic && _t2.kind === 'special') _glPend.push({ bunk: _b2, grade: _g2, sub: _glCanon(_t2.subcat), s: _t2.startMin, e: _t2.endMin, dur: _t2.durationMin, done: false, t: _t2 });
+                                });
+                            });
+                            // true iff `cand` is the SOLE remaining fillable option (access ∩ duration ∩
+                            // unused ∩ capacity) of some OTHER bunk's concurrent unfilled tile of the
+                            // same subcat — taking it would strand that tile.
+                            var _glSoleNeed = function (cand, sub, bunk, s, e) {
+                                if (!_glFillAware) return false;
+                                var cKey = String(cand.name).toLowerCase();
+                                for (var pi = 0; pi < _glPend.length; pi++) {
+                                    var p = _glPend[pi];
+                                    if (p.done || p.sub !== sub || String(p.bunk) === String(bunk)) continue;
+                                    if (!(p.s < e && p.e > s)) continue;
+                                    var acc = (_glAccBySubGrade[p.grade] && _glAccBySubGrade[p.grade][sub]) || _glNamesBySub[sub] || [];
+                                    var only = null, multi = false;
+                                    for (var ni = 0; ni < acc.length; ni++) {
+                                        var nm = acc[ni];
+                                        var inf = _glActInfo[nm];
+                                        if (inf && inf.durs && inf.durs.length && inf.durs.indexOf(p.dur) < 0) continue;
+                                        if (_glUsedByBunk[p.bunk] && _glUsedByBunk[p.bunk][String(nm).toLowerCase()]) continue;
+                                        if (!_glCapFits({ name: nm }, p.grade, p.s, p.e)) continue;
+                                        if (only == null) only = nm; else { multi = true; break; }
+                                    }
+                                    if (!multi && only != null && String(only).toLowerCase() === cKey) return true;
+                                }
+                                return false;
+                            };
                             _glOrder.forEach(function (bunk) {
                                 var res = _glOut.layoutByBunk[bunk]; if (!res || !res.tiles) return;
                                 var grade = (_glPerBunk[bunk] && _glPerBunk[bunk].grade);
@@ -19410,9 +19597,9 @@
                                 // rules, unused today, seat-gated — tried ONLY when the primary pool
                                 // leaves a tile that would otherwise go OPEN. Ordered least-ahead first.
                                 var _deferredPool = (sl && sl.specials && sl.specials.cohortDeferred) || [];
-                                // seed "used" with any concrete (already-named) special on this bunk's tiles
-                                var used = {};
-                                res.tiles.forEach(function (t) { if (t && !t.generic && t.name) used[String(t.name).toLowerCase()] = 1; });
+                                // "used" (same-day no-repeat) — the SHARED per-bunk map seeded in the
+                                // prepass above, so the sole-need probe sees fills as they happen.
+                                var used = _glUsedByBunk[bunk] || (_glUsedByBunk[bunk] = {});
                                 var sTiles = res.tiles.filter(function (t) { return t && t.generic && t.kind === 'special'; });
                                 // MOST-CONSTRAINED-FIRST: count how many pool activities could EVER fill each
                                 // tile (same subcat + a configured duration covering the tile length, before
@@ -19436,6 +19623,7 @@
                                     var sub = _glCanon(t.subcat);
                                     var dur = t.durationMin;
                                     var pick = null, anySub = false, anyDur = false, anyFree = false;
+                                    var pickFallback = null;   // first capacity-OK candidate, kept in case every one is a peer's sole option
                                     for (var i = 0; i < pool.length; i++) {
                                         var c = pool[i];
                                         if (!c || !c.name) continue;
@@ -19449,8 +19637,16 @@
                                         anyFree = true;
                                         // capacity / sharing per the special's own config — a HARD rule, kept strict.
                                         if (!_glCapFits(c, grade, t.startMin, t.endMin)) { _glFill.capSkips++; continue; }
+                                        // AVAILABILITY DODGE: skip an activity that a concurrent peer tile
+                                        // uniquely needs (this bunk has other options in the pool; the peer
+                                        // does not). Fill-if-possible still wins: if EVERY candidate is
+                                        // sole-needed elsewhere, the first one fills this tile anyway.
+                                        if (!pickFallback) pickFallback = c;
+                                        if (_glFillAware && _glSoleNeed(c, sub, bunk, t.startMin, t.endMin)) continue;
                                         pick = c; break;
                                     }
+                                    if (!pick && pickFallback) pick = pickFallback;
+                                    else if (pick && pickFallback && pick !== pickFallback) _glFill.awareDodged = (_glFill.awareDodged || 0) + 1;
                                     // ★ FILL-IF-POSSIBLE (cohort last resort; default ON — kill:
                                     //   window.__cohortRelax=false): the primary rotation pool has nothing
                                     //   for this tile, so it would go OPEN. Before that, try the bunk's
@@ -19497,6 +19693,8 @@
                                         _glFill.causes[cause] = (_glFill.causes[cause] || 0) + 1;
                                         if (_glFill.missDetail.length < 25) _glFill.missDetail.push(bunk + ' ' + minutesToTimeLabel(t.startMin) + ' ' + (t.subcat || '?') + ' ' + dur + 'min [' + cause + ']');
                                     }
+                                    // this tile is decided — the sole-need probe must stop counting it as pending demand
+                                    if (_glFillAware) { for (var _pd = 0; _pd < _glPend.length; _pd++) { if (_glPend[_pd].t === t) { _glPend[_pd].done = true; break; } } }
                                 });
                             });
                             // ── RESTRUCTURE (stagger): recover capacity misses by within-bunk swaps ──
@@ -20253,6 +20451,7 @@
                             log('[GENERIC-FILL] specials: ' + _glFill.filled + '/' + _glFill.tiles + ' generic tile(s) filled with a concrete activity'
                                 + (_glFill.capSkips ? (' (' + _glFill.capSkips + ' capacity-redirects → variety)') : '')
                                 + (_glFill.cohortRelaxed ? (' (' + _glFill.cohortRelaxed + ' cohort-relaxed last-resort fill(s) — would otherwise be OPEN)') : '')
+                                + (_glFill.awareDodged ? (' (' + _glFill.awareDodged + ' availability-aware dodge(s) — left a peer\'s only activity for them)') : '')
                                 + (_glFill.staggered ? (' (' + _glFill.staggered + ' recovered by stagger-restructure)') : '')
                                 + (_anyAbsorb ? (' — open time → ' + (_glFill.absorbed || 0) + ' Sport block(s)'
                                        + (_glFill.absorbFilled ? (' + ' + _glFill.absorbFilled + ' filled w/ a real special (sport blocked → used a free special)') : '')
