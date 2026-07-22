@@ -79,6 +79,14 @@
         opts = opts || {};
         var sched = scheduleAssignments || {};
         var divTimes = divisionTimes || {};
+        // Uncovered gaps at or below this length are STRUCTURAL slivers — the
+        // bell schedule's own inter-period transition breaks (e.g. 12:10-12:15).
+        // Nothing can ever be scheduled in them (every activity is longer), so
+        // counting them as "dead" makes the headline overstate failure ~3× on a
+        // camp whose frame has 5-min breaks. They stay inside uncoveredMinutes/
+        // deadMinutes (back-compat) but are ALSO totaled separately so the
+        // report can split structural from actionable.
+        var sliverMax = (typeof opts.sliverMax === 'number') ? opts.sliverMax : 5;
         // Per-division configured day window { divName: { startMin, endMin } }.
         // When present, a bunk's span is measured against this window (the same
         // [dayStart,dayEnd] auto_schedule_grid.js uses to draw "+ Add" cells) so
@@ -99,6 +107,7 @@
             freeMinutes: 0,
             placeholderMinutes: 0,
             uncoveredMinutes: 0,
+            sliverMinutes: 0,
             spanMinutes: 0
         };
         var freeBySource = {};        // source -> { count, minutes }
@@ -173,7 +182,8 @@
             var dv = byDivision[divName] = {
                 bunks: 0, freeSlots: 0, freeMinutes: 0,
                 placeholderSlots: 0, placeholderMinutes: 0,
-                uncoveredMinutes: 0, filledMinutes: 0, spanMinutes: 0, fillRate: 0,
+                uncoveredMinutes: 0, sliverMinutes: 0,
+                filledMinutes: 0, spanMinutes: 0, fillRate: 0,
                 // The window this division's fill was measured against, so a
                 // surprising gap can be checked against the configured day start.
                 dayWindow: (winStart != null && winEnd != null)
@@ -241,23 +251,32 @@
                 var span = (spanEnd > spanStart) ? (spanEnd - spanStart) : 0;
                 var uncovered = Math.max(0, span - bCovered);
 
+                // Locate the gaps, then split off structural slivers (≤ sliverMax,
+                // e.g. the frame's 5-min transition breaks) from actionable holes.
+                var emptyIntervals = (uncovered > 0)
+                    ? gapsIn(spanStart, spanEnd, covIvals)
+                    : [];
+                var bSliver = 0;
+                emptyIntervals.forEach(function (g) {
+                    var gDur = g.endMin - g.startMin;
+                    if (gDur > 0 && gDur <= sliverMax) bSliver += gDur;
+                });
+
                 total.spanMinutes += span;
                 total.uncoveredMinutes += uncovered;
+                total.sliverMinutes += bSliver;
                 dv.filledMinutes += bFilled;
                 dv.uncoveredMinutes += uncovered;
+                dv.sliverMinutes += bSliver;
                 dv.spanMinutes += span;
 
                 var dead = bFree + bPlaceholder + uncovered;
                 if (dead > 0) {
-                    // WHERE the empty time is — the uncovered gaps against the day
-                    // window (this is what surfaces "Leebi empty 9:20-10:20").
-                    var emptyIntervals = (uncovered > 0)
-                        ? gapsIn(spanStart, spanEnd, covIvals)
-                        : [];
                     worstBunks.push({
                         division: divName, bunk: bunk,
                         deadMinutes: dead, freeMinutes: bFree,
                         placeholderMinutes: bPlaceholder, uncoveredMinutes: uncovered,
+                        sliverMinutes: bSliver,
                         emptyIntervals: emptyIntervals,
                         fillRate: span > 0 ? (bFilled / span) : 1
                     });
@@ -269,8 +288,15 @@
 
         var deadTotal = total.freeMinutes + total.placeholderMinutes + total.uncoveredMinutes;
         total.deadMinutes = deadTotal;
+        // Actionable dead = dead minus the structural frame slivers nothing can fill.
+        total.actionableDeadMinutes = Math.max(0, deadTotal - total.sliverMinutes);
         total.fillRate = total.spanMinutes > 0
             ? (total.filledMinutes / total.spanMinutes) : 1;
+        // Fill measured against SCHEDULABLE time (span minus structural slivers) —
+        // the number that should read 100% when every fillable minute is filled.
+        var schedulableSpan = total.spanMinutes - total.sliverMinutes;
+        total.fillRateSchedulable = schedulableSpan > 0
+            ? (total.filledMinutes / schedulableSpan) : 1;
 
         worstBunks.sort(function (a, b) { return b.deadMinutes - a.deadMinutes; });
 
@@ -324,6 +350,7 @@
         return {
             total: total,
             fillRatePct: Math.round(total.fillRate * 1000) / 10,
+            fillRateSchedulablePct: Math.round(total.fillRateSchedulable * 1000) / 10,
             freeBySource: freeBySource,
             placeholderBySubcat: placeholderBySubcat,
             openBySubcat: openBySubcat,
@@ -399,11 +426,13 @@
             }
 
             var t = result.total;
-            var head = '[GenMetrics] real-fill ' + result.fillRatePct + '%  |  '
-                + 'free ' + t.freeMinutes + 'min/' + t.freeSlots + '  |  '
+            var head = '[GenMetrics] real-fill ' + result.fillRatePct + '%'
+                + (t.sliverMinutes > 0 ? ' (' + result.fillRateSchedulablePct + '% of schedulable time)' : '')
+                + '  |  free ' + t.freeMinutes + 'min/' + t.freeSlots + '  |  '
                 + 'placeholder ' + t.placeholderMinutes + 'min/' + t.placeholderSlots + '  |  '
-                + 'empty ' + t.uncoveredMinutes + 'min  |  '
-                + 'dead ' + t.deadMinutes + 'min across ' + t.bunks + ' bunks'
+                + 'empty ' + t.uncoveredMinutes + 'min'
+                + (t.sliverMinutes > 0 ? ' (' + t.sliverMinutes + 'min = bell-schedule transition slivers, unfillable by design)' : '')
+                + '  |  actionable dead ' + t.actionableDeadMinutes + 'min across ' + t.bunks + ' bunks'
                 + (reason ? '  (' + reason + ')' : '');
             if (typeof console !== 'undefined') {
                 console.log('%c' + head, 'color:#0a7; font-weight:bold;');
@@ -426,20 +455,27 @@
                 // WHERE the empty "+ Add" time is — the surprising kind (a bunk
                 // sitting empty before its first activity). Shows the worst few so
                 // "why did 1st Grade get dead time?" is answered at a glance.
+                // Only bunks with ACTIONABLE empty time (more than the frame's own
+                // transition slivers) — otherwise every bunk lists its 5-min breaks
+                // and the real holes drown in structural noise.
                 var emptyBunks = (result.worstBunks || []).filter(function (b) {
-                    return b.uncoveredMinutes > 0 && b.emptyIntervals && b.emptyIntervals.length;
+                    return (b.uncoveredMinutes - (b.sliverMinutes || 0)) > 0
+                        && b.emptyIntervals && b.emptyIntervals.length;
                 });
                 if (emptyBunks.length) {
-                    console.log('%c[GenMetrics] empty (uncovered) time — no tile at all, measured vs each division\'s day window:',
+                    console.log('%c[GenMetrics] empty (uncovered) time — no tile at all, measured vs each division\'s day window (transition slivers excluded):',
                         'color:#a30;');
                     emptyBunks.slice(0, 8).forEach(function (b) {
                         var win = result.byDivision[b.division] && result.byDivision[b.division].dayWindow;
                         var winStr = (win && win.startMin != null)
                             ? (' [' + b.division + ' day ' + fmtTime(win.startMin) + '–' + fmtTime(win.endMin) + ']') : '';
-                        var where = b.emptyIntervals.map(function (g) {
+                        var real = b.emptyIntervals.filter(function (g) { return (g.endMin - g.startMin) > 5; });
+                        var where = real.map(function (g) {
                             return fmtTime(g.startMin) + '–' + fmtTime(g.endMin);
                         }).join(', ');
-                        console.log('   • ' + b.bunk + winStr + ': ' + b.uncoveredMinutes + 'min empty @ ' + where);
+                        var actionable = b.uncoveredMinutes - (b.sliverMinutes || 0);
+                        console.log('   • ' + b.bunk + winStr + ': ' + actionable + 'min empty @ ' + where
+                            + ((b.sliverMinutes || 0) > 0 ? ' (+' + b.sliverMinutes + 'min transition slivers)' : ''));
                     });
                 }
                 // Capacity advice: unfillable slots are a CONFIG lever, not a solver

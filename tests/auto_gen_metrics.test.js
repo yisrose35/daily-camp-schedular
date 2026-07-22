@@ -407,3 +407,53 @@ describe('computeAutoGenMetrics — open slots (honest open time)', () => {
         assert.strictEqual(m.capacityAdvice[0].placeholderSlots, 1);
     });
 });
+
+// ---------------------------------------------------------------------------
+describe('computeAutoGenMetrics — structural transition slivers', () => {
+    // Camp Neranina live: every bunk shows 12:10-12:15, 12:55-1:00, 2:10-2:15 —
+    // the bell schedule's own 5-min inter-period breaks. Nothing can ever be
+    // scheduled there, so the report must split them from actionable dead time
+    // (they inflated "dead" ~3× and buried the real holes).
+    it('splits ≤5-min frame gaps out of dead time; back-compat totals unchanged', () => {
+        // day window 600-780; covered 600-640, 645-685, 690-730 → slivers
+        // 640-645 and 685-690 (10min) + a REAL 50-min hole 730-780.
+        const divisionTimes = { A: { _perBunkSlots: { b1: [slot(600, 640), slot(645, 685), slot(690, 730)] } } };
+        const sched = { b1: [act('Basketball'), act('Baking'), act('Shiur')] };
+        const m = computeAutoGenMetrics(sched, divisionTimes,
+            { dayWindows: { A: { startMin: 600, endMin: 780 } } });
+        // back-compat: uncovered/dead still count EVERYTHING
+        assert.strictEqual(m.total.uncoveredMinutes, 60);
+        assert.strictEqual(m.total.deadMinutes, 60);
+        // new split: 10min structural, 50min actionable
+        assert.strictEqual(m.total.sliverMinutes, 10);
+        assert.strictEqual(m.total.actionableDeadMinutes, 50);
+        // fill vs full span (120/180) unchanged; vs schedulable span 120/170
+        assert.strictEqual(m.fillRatePct, Math.round((120 / 180) * 1000) / 10);
+        assert.strictEqual(m.fillRateSchedulablePct, Math.round((120 / 170) * 1000) / 10);
+        // per-bunk carries the split too
+        assert.strictEqual(m.worstBunks[0].sliverMinutes, 10);
+    });
+
+    it('a gap longer than 5min is never a sliver; a day with only slivers is 100% schedulable-filled', () => {
+        const divisionTimes = { A: { _perBunkSlots: {
+            b1: [slot(600, 640), slot(645, 685)]
+        } } };
+        const sched = { b1: [act('Basketball'), act('Baking')] };
+        const m = computeAutoGenMetrics(sched, divisionTimes,
+            { dayWindows: { A: { startMin: 600, endMin: 685 } } });
+        assert.strictEqual(m.total.sliverMinutes, 5);
+        assert.strictEqual(m.total.actionableDeadMinutes, 0);
+        assert.strictEqual(m.fillRateSchedulablePct, 100);
+        // the 5-min sliver still shows in the honest raw numbers
+        assert.strictEqual(m.total.uncoveredMinutes, 5);
+    });
+
+    it('sliverMax is configurable (0 disables the split)', () => {
+        const divisionTimes = { A: { _perBunkSlots: { b1: [slot(600, 640), slot(645, 685)] } } };
+        const sched = { b1: [act('Basketball'), act('Baking')] };
+        const m = computeAutoGenMetrics(sched, divisionTimes,
+            { dayWindows: { A: { startMin: 600, endMin: 685 } }, sliverMax: 0 });
+        assert.strictEqual(m.total.sliverMinutes, 0);
+        assert.strictEqual(m.total.actionableDeadMinutes, 5);
+    });
+});
