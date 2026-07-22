@@ -753,7 +753,31 @@ function shouldHighlightBunk(bunkName) {
         
         if (dateData.manualSkeleton?.length > 0) window.manualSkeleton = dateData.manualSkeleton;
         else if (dateData.skeleton?.length > 0) window.manualSkeleton = dateData.skeleton;
-        
+
+        // ★ HONEST-OPEN MIGRATION (default ON — kill: window.__honestOpenMigrate=false):
+        //   days generated BEFORE the honest-open engine change were saved with their
+        //   unfilled generic tiles as real-looking entries ("Special: Uncategorized",
+        //   marked _generic:true by the solver itself). The engine no longer emits
+        //   those, but every already-saved day still carries them — so convert them
+        //   to genuinely OPEN cells at load time (entry → null, the same empty-cell
+        //   path the grid and editor already handle). Manual edits never set _generic,
+        //   so the marker is unambiguous. Rotation/counting never credited _generic
+        //   entries, so nothing is lost; the next save persists the cleaned shape.
+        try {
+            if (typeof window === 'undefined' || window.__honestOpenMigrate !== false) {
+                let _homN = 0;
+                Object.keys(window.scheduleAssignments || {}).forEach(bunk => {
+                    const arr = window.scheduleAssignments[bunk];
+                    if (!Array.isArray(arr)) return;
+                    for (let i = 0; i < arr.length; i++) {
+                        const e = arr[i];
+                        if (e && e._generic === true && !e.continuation) { arr[i] = null; _homN++; }
+                    }
+                });
+                if (_homN) console.log('[UnifiedSchedule] honest-open migration: ' + _homN + ' stale generic placeholder entr' + (_homN === 1 ? 'y' : 'ies') + ' from a pre-fix save → open cell(s)');
+            }
+        } catch (_eHom) {}
+
         return {
             scheduleAssignments: window.scheduleAssignments || {},
             leagueAssignments: window.leagueAssignments || {},
@@ -4293,8 +4317,15 @@ divBlocks.forEach((block, blockIdx) => {
         
         // *** v4.1.0: Use division-specific slot index ***
         const slotIdx = block.slotIndex !== undefined ? block.slotIndex : findFirstSlotForTime(block.startMin, divName);
-        const entry = getEntry(bunk, slotIdx);
-        
+        const _entryRaw = getEntry(bunk, slotIdx);
+        // ★ HONEST-OPEN render guard: an unfilled generic placeholder entry
+        //   (_generic:true — "Special: Uncategorized" etc., saved by PRE-fix
+        //   generations) is not real content. The engine no longer emits these,
+        //   but already-saved days still carry them — render them as OPEN cells,
+        //   never as fake tiles. (The date loader also migrates them away; this
+        //   guard covers any load path that bypasses it.)
+        const entry = (_entryRaw && _entryRaw._generic === true) ? null : _entryRaw;
+
         let isBlocked = false, blockedReason = '';
         if (window.MultiSchedulerAutonomous?.isBunkSlotBlocked) { 
             const blockCheck = window.MultiSchedulerAutonomous.isBunkSlotBlocked(bunk, slotIdx); 
