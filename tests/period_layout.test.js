@@ -1000,3 +1000,50 @@ describe('PeriodLayout — gap probe classifies why a gap survived', () => {
             'probe must classify the sport as spacing-gated, got: ' + g.probe);
     });
 });
+
+// ── FINAL SWAP-CHAIN REPAIR: executes the probe's "swap-chain-possible" move ──
+describe('PeriodLayout — swap-chain repair moves an own tile into a stuck gap', () => {
+    it('partial move the exact-sum passes cannot do: 20-min special → 40-min gap, sport → its old slot', () => {
+        // Live Neranina shape: a gap survives BOTH run-swap (needs a contiguous run
+        // summing EXACTLY to the gap) and inverse-elastic (needs the re-pack to
+        // consume exactly the freed donors) because the only movable donor is
+        // SHORTER than the gap. The swap-chain repair moves it anyway (partial
+        // fill beats dead time) and drops a sport in its old slot.
+        // Gate: a sport is legal ONLY at exactly [20,40] — nowhere else.
+        const sportOnlyAt2040 = (block) =>
+            block.type !== 'sport' || (block.startMin === 20 && block.endMin === 40);
+        const res = Layout.planBunkLayout({
+            bunk: 'B1', grade: 'G',
+            periods: [P(0, 40, 'P1'), P(50, 90, 'P2')], pinned: [],
+            floating: [
+                { kind: 'special', subcat: 'shiur', durations: [20], window: [0, 945], qty: 1, cap: 1, score: 1 },
+                { kind: 'special', subcat: 'food', durations: [20], window: [0, 945], qty: 1, cap: 1, score: 1 },
+                { kind: 'sport', dMin: 20, dMax: 20, window: [0, 945], score: 1 }
+            ],
+            gate: sportOnlyAt2040, packer: PeriodPacker
+        });
+        // both specials pack P1 (floors win); P2 could not fill (sport illegal
+        // there, specials spent) — the swap-chain must move the [20,40] special
+        // into P2 and back-fill its slot with the sport.
+        assert.ok((res.stats.swapChainRepaired || 0) >= 1,
+            'the swap-chain repair must fire (repaired=' + res.stats.swapChainRepaired + ')');
+        assert.strictEqual(res.stats.residualMin, 20,
+            'gap shrinks 40 → 20 (the 20-min donor moved in; nothing else is legal)');
+        const inP2 = res.tiles.filter(t => t.generic && t.startMin >= 50 && t.endMin <= 90);
+        assert.ok(inP2.some(t => t.kind === 'special' && t.durationMin === 20),
+            'a 20-min special now sits in the stuck window: ' + JSON.stringify(inP2.map(t => t.kind + '@' + t.startMin)));
+        const sportAt = res.tiles.find(t => t.kind === 'sport' && t.startMin === 20 && t.endMin === 40);
+        assert.ok(sportAt, 'the sport back-fills the donor\'s old [20,40] slot');
+    });
+
+    it('no sport in the pool → repair never fires (sportless day unchanged)', () => {
+        const res = Layout.planBunkLayout({
+            bunk: 'B1', grade: 'G',
+            periods: [P(0, 160, 'P')], pinned: [],
+            floating: [{ kind: 'special', subcat: 'regular', durations: [40], window: [0, 945], qty: 1, cap: 2, score: 1 }],
+            packer: PeriodPacker
+        });
+        assert.strictEqual(res.stats.swapChainRepaired || 0, 0);
+        assert.strictEqual(res.stats.residualMin, 80, 'honest gap untouched');
+    });
+});

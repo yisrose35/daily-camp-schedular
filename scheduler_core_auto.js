@@ -20119,7 +20119,7 @@
                     // with the bunk + time + the packer's original reason — so a genuinely unclosable
                     // window is visible instead of inferred. Capped so a pathological run can't flood.
                     try {
-                        var _glOpen = [], _glOpenMin = 0, _glGcTiles = 0, _glGcGrew = 0;
+                        var _glOpen = [], _glOpenMin = 0, _glGcTiles = 0, _glGcGrew = 0, _glScRep = 0, _glScMin = 0;
                         // Probe classification totals: does a DIFFERENT ARRANGEMENT fill it,
                         // or only a config change? (see period_layout _probeGap)
                         var _glProbeMin = { placement: 0, crossBunk: 0, config: 0, other: 0 };
@@ -20127,6 +20127,8 @@
                             var res = _glOut.layoutByBunk[bunk]; if (!res) return;
                             _glGcTiles += (res.stats && res.stats.gapCloseTilesPlaced) || 0;
                             _glGcGrew += (res.stats && res.stats.gapCloseGrew) || 0;
+                            _glScRep += (res.stats && res.stats.swapChainRepaired) || 0;
+                            _glScMin += (res.stats && res.stats.swapChainMinutes) || 0;
                             (res.gaps || []).forEach(function (g) {
                                 if (g.len >= 5) {
                                     _glOpenMin += g.len;
@@ -20139,7 +20141,8 @@
                                 }
                             });
                         });
-                        log('[GENERIC-LAYOUT] GAP-CLOSE: filled gaps with ' + _glGcTiles + ' layer tile(s) + grew ' + _glGcGrew + ' neighbor(s)');
+                        log('[GENERIC-LAYOUT] GAP-CLOSE: filled gaps with ' + _glGcTiles + ' layer tile(s) + grew ' + _glGcGrew + ' neighbor(s)'
+                            + (_glScRep ? ' + SWAP-CHAIN repaired ' + _glScRep + ' gap-stuck tile move(s)/' + _glScMin + 'min (own tile → gap, sport → its old slot)' : ''));
                         if (_glOpen.length) {
                             log('[GENERIC-LAYOUT] ⚠ ' + _glOpen.length + ' gap(s) STILL open (' + _glOpenMin + ' min) — no layer item fits without breaking a rule/cap:');
                             _glOpen.slice(0, 25).forEach(function (s) { log('[GENERIC-LAYOUT]     ' + s); });

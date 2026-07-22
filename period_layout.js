@@ -953,8 +953,91 @@
             }
         }
 
+        // ── FINAL SWAP-CHAIN REPAIR ────────────────────────────────────────────────
+        // Executes exactly the relocation the gap probe reports as
+        // "swap-chain-possible": move one of this bunk's own movable tiles INTO a
+        // surviving gap, and drop a SPORT into its old slot (legal there — the tile
+        // held that slot, and the sport passes the spacing + seat gates at it).
+        // Runs AFTER gap-close/grow/absorb because these gaps often only EMERGE
+        // from those passes — the earlier inverse-elastic worked off the
+        // pre-gap-close window list and never saw them (live: 8 gaps / 230 min, all
+        // probe-classified placement-recoverable). Every move is gate- and
+        // seat-checked; seat-bearing tiles only move when the caller wired
+        // resourceRelease (the run-swap pass's guard, via _relocateSeatTile).
+        var _scRepaired = 0, _scMinutes = 0;
+        (function _swapChainRepair() {
+            var sportD = null;
+            for (var i = 0; i < floating.length; i++) { if (floating[i].kind === 'sport') { sportD = floating[i]; break; } }
+            if (!sportD) return;                       // sportless day — nothing to backfill old slots with
+            var sDurs = _demandDurs(sportD);
+            var sWin = sportD.window;
+            var guard = 0, progress = true;
+            while (progress && guard++ < 24) {
+                progress = false;
+                for (var gpi2 = 0; gpi2 < periods.length && !progress; gpi2++) {
+                    var per2 = periods[gpi2];
+                    var gw2 = freeSubWindows(per2.startMin, per2.endMin, tiles);
+                    for (var gi2 = 0; gi2 < gw2.length && !progress; gi2++) {
+                        var gs = gw2[gi2].start, ge = gw2[gi2].end, gLen = ge - gs;
+                        if (gLen < minSeg) continue;
+                        for (var ti3 = 0; ti3 < tiles.length; ti3++) {
+                            var mt = tiles[ti3];
+                            if (!mt || !mt.generic || mt.pinned || mt.kind === 'swim' || mt.kind === 'sport') continue;
+                            if (mt._ref && mt._ref.share) continue;
+                            if (mt.durationMin > gLen || sDurs.indexOf(mt.durationMin) < 0) continue;
+                            if (sWin && (sWin[0] > mt.startMin || sWin[1] < mt.endMin)) continue; // sport can't live in the old slot
+                            var mw = mt._ref && mt._ref.window;
+                            if (mw && (mw[0] > gs || mw[1] < gs + mt.durationMin)) continue;      // tile would leave its window
+                            var others = [];
+                            for (var ob2 = 0; ob2 < tiles.length; ob2++) { if (tiles[ob2] !== mt) others.push(_toBlock(tiles[ob2])); }
+                            // the moved tile at the gap position
+                            var mb = { type: mt.kind, event: mt.name, startMin: gs, endMin: gs + mt.durationMin };
+                            if (mt.kind === 'special') { mb._assignedSpecial = mt.name; mb._specialLocation = mt.name; }
+                            var mOk = true;
+                            if (gate) { try { mOk = gate(mb, others); } catch (eS1) { mOk = true; } }
+                            if (!mOk) continue;
+                            // the sport backfill at the tile's OLD slot
+                            var sb = { type: 'sport', event: _label(sportD), startMin: mt.startMin, endMin: mt.endMin };
+                            var sOk = true;
+                            if (gate) { try { sOk = gate(sb, others.concat([mb])); } catch (eS2) { sOk = true; } }
+                            if (sOk && resourceGate) { try { sOk = resourceGate('sport', _ctxGrade, _ctxBunk, mt.startMin, mt.endMin, sportD); } catch (eS3) {} }
+                            if (!sOk) continue;
+                            var oldS = mt.startMin, oldE = mt.endMin;
+                            // seat-exact move (release old / gate new / commit new; refuses when unsafe)
+                            if (!_relocateSeatTile(mt, gs, gs + mt.durationMin)) continue;
+                            _applyLaid([{ kind: 'sport', subcat: null, name: _label(sportD), _key: 'sport', _ref: sportD,
+                                          startMin: oldS, endMin: oldE, durationMin: oldE - oldS, _origin: 'swap-chain' }], null);
+                            _scRepaired++; _scMinutes += mt.durationMin;
+                            progress = true;
+                            break;
+                        }
+                    }
+                }
+            }
+            // A move can leave a shorter remainder in the gap (a 20-min food into a
+            // 40-min gap) or unlock spacing elsewhere — one more greedy sweep mops up.
+            if (_scRepaired) {
+                for (var gpi3 = 0; gpi3 < periods.length; gpi3++) {
+                    var per3 = periods[gpi3];
+                    var gw3 = freeSubWindows(per3.startMin, per3.endMin, tiles);
+                    for (var gg3 = 0; gg3 < gw3.length; gg3++) {
+                        var cur3 = gw3[gg3].start, gend3 = gw3[gg3].end;
+                        while (gend3 - cur3 >= minSeg) {
+                            var pk3 = _pickFill(cur3, gend3 - cur3, tiles);
+                            if (!pk3) break;
+                            _applyLaid([pk3.seg], null);
+                            cur3 = pk3.seg.endMin; _gcTiles++;
+                        }
+                        if (cur3 < gend3 && _growInto(cur3, gend3)) _gcGrew++;
+                    }
+                }
+            }
+        })();
+
         stats.gapCloseTilesPlaced = _gcTiles;
         stats.gapCloseGrew = _gcGrew;
+        stats.swapChainRepaired = _scRepaired;
+        stats.swapChainMinutes = _scMinutes;
 
         // ── GAP PROBE: classify WHY each surviving gap is open ──────────────────────
         // "all-packings-gated" collapses very different situations, and they answer
