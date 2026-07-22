@@ -19938,6 +19938,7 @@
                             // generic specials/swim key on activity name (not physical courts), and
                             // nothing downstream of the generic block reads fieldLedger. Non-sport field
                             // claims (e.g. league/trip courts) are left intact.
+                            var _glSportRescued = 0;
                             var _glSportFieldSet = Object.create(null);
                             _glOrder.forEach(function (bunk) {
                                 var _sl = (typeof shoppingLists !== 'undefined' && shoppingLists && shoppingLists[bunk]) ? shoppingLists[bunk] : null;
@@ -20004,10 +20005,44 @@
                                                 break;
                                             }
                                         }
-                                        if (!placed) _glSportMiss++;
+                                        if (!placed) {
+                                            // FILL-IF-POSSIBLE RESCUE: no field can host a sport here (per-sport
+                                            // fields + same-day rotation bind, not the aggregate seat gate — live:
+                                            // 13 tiles/470min stranded as field-less "Sport" cells in the midday
+                                            // crunch). Before leaving a fake "Sport", try a REAL special from the
+                                            // bunk's own pool — a sport tile carries no subcat commitment, so
+                                            // repurposing is allowed (same doctrine as the open-time absorb).
+                                            // Duration, same-day no-repeat, and sharing caps stay strict.
+                                            var _rescued = false;
+                                            try {
+                                                var _spl = (sl0 && sl0.specials && sl0.specials.priorityList) || [];
+                                                var _usedSpec = Object.create(null);
+                                                res0.tiles.forEach(function (o) { if (o && o.kind === 'special' && o._concrete) _usedSpec[String(o._concrete).toLowerCase()] = 1; });
+                                                var _tDur = t.endMin - t.startMin;
+                                                for (var _ri = 0; _ri < _spl.length && !_rescued; _ri++) {
+                                                    var _rc = _spl[_ri]; if (!_rc || !_rc.name) continue;
+                                                    if (_usedSpec[String(_rc.name).toLowerCase()]) continue;
+                                                    var _rDurs = _glSpecialDurs(_rc.name);
+                                                    if (_rDurs.length && _rDurs.indexOf(_tDur) < 0) continue;
+                                                    if (!_glCapFits(_rc, grd, t.startMin, t.endMin)) continue;
+                                                    t.kind = 'special'; t.subcat = _glCanon(_rc.subcategory);
+                                                    t.name = _rc.name; t._concrete = _rc.name; t._fillLoc = _rc.location || null;
+                                                    t._origin = 'sportfill-rescue';
+                                                    _glRecordUse(_rc, grd, t.startMin, t.endMin);
+                                                    _glSportRescued++; _rescued = true;
+                                                }
+                                            } catch (_eRes) {}
+                                            // still nothing → mark it so the honest-open emit drops the fake
+                                            // "Sport" cell into GENUINE open time (attributed to 'sport' in the
+                                            // capacity advice) instead of rendering a field-less tile.
+                                            if (!_rescued) { t._noField = true; _glSportMiss++; }
+                                        }
                                     });
                             });
-                            log('[GENERIC-SPORT-FILL] ' + _glSportFilled + ' generic Sport tile(s) → concrete sport on a real field' + (_glSportMiss ? (' · ' + _glSportMiss + ' left generic "Sport" (no free field at that time — over field capacity)') : '') + ' · reset stale claims on ' + _glSportFieldsReset + ' sport field(s)');
+                            log('[GENERIC-SPORT-FILL] ' + _glSportFilled + ' generic Sport tile(s) → concrete sport on a real field'
+                                + (_glSportRescued ? (' · ' + _glSportRescued + ' field-less tile(s) RESCUED with a real special (fill-if-possible)') : '')
+                                + (_glSportMiss ? (' · ' + _glSportMiss + ' had no field AND no free special → honest OPEN time at emit') : '')
+                                + ' · reset stale claims on ' + _glSportFieldsReset + ' sport field(s)');
                         } catch (_glSpErr) { try { warn('[GENERIC-SPORT-FILL] error — sports left generic: ' + (_glSpErr && _glSpErr.message)); } catch (_e) {} }
                     }
 
