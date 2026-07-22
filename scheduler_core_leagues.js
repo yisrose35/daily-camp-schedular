@@ -3822,6 +3822,16 @@
                     // that's caught up on football contributes 0. So a whole league that has
                     // caught up on a sport has need 0 → cap 0 → it surrenders all of that
                     // sport's fields to the league that still needs it. Date-correct history.
+                    // ★ SAME-DAY ROTATION (multi-game days): the cap is recomputed each
+                    // period, but getTeamSportHistoryByDate stops at YESTERDAY — so on a
+                    // day with many league periods every period saw the identical need and
+                    // handed the SAME scarce sports to the SAME senior league every period,
+                    // leaving the junior league jammed onto the one abundant sport (e.g.
+                    // basketball) all day. Fold in the games ALREADY played earlier TODAY
+                    // (history.gameLog[league][dayId], written after each period below) so a
+                    // league that already got hockey/newcomb this morning shows lower need
+                    // for it now, and the next period's apportionment rotates it to a league
+                    // that hasn't — spreading every sport across all grades over the day.
                     const _teamCounts = {};   // leagueName → team → {sport: count}
                     const _sportNeed = (l, sport) => {
                         const lc = _teamCounts[l.name] || (_teamCounts[l.name] = {});
@@ -3832,6 +3842,10 @@
                                 counts = {};
                                 getTeamSportHistoryByDate(l.name, t, history, dayId)
                                     .forEach(s => { counts[s] = (counts[s] || 0) + 1; });
+                                const _todayGames = (history.gameLog && history.gameLog[l.name] && history.gameLog[l.name][dayId]) || [];
+                                _todayGames.forEach(e => {
+                                    if (e && e.sport && (e.t1 === t || e.t2 === t)) counts[e.sport] = (counts[e.sport] || 0) + 1;
+                                });
                                 lc[t] = counts;
                             }
                             let mostPlayed = 0;
