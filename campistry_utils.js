@@ -80,8 +80,14 @@
         //     afternoon heuristic) so no ambiguous time ever reaches the parsers;
         //   • DROP tiles whose times are unparseable or end <= start (e.g. a typo'd
         //     "5:10pm-4:50pm" that can't render but still gets scheduled);
-        //   • DROP exact-duplicate tiles (same division + activity + start), keeping
-        //     the better-formed one.
+        //   • DROP exact-duplicate tiles (same division + BUNK + activity + start),
+        //     keeping the better-formed one. The bunk is part of the identity: an
+        //     AUTO-mode skeleton carries one entry PER BUNK (_bunk), so a grade's
+        //     shared walls (Davening/Swim/Lunch/Main…) legitimately repeat once per
+        //     bunk at the same division+time — those are NOT duplicates. (A dedup
+        //     that ignored _bunk silently dropped every bunk's wall but one at save
+        //     time — 64 tiles/run live.) Manual tiles carry no _bunk, so their
+        //     division-level dedup is byte-identical to before.
         // Already-am/pm times are left byte-identical. Returns
         // { tiles, dropped:[{division,event,startTime,endTime,reason}], normalized }.
         // Pure and defensive — never throws on bad input.
@@ -125,7 +131,7 @@
                     normalized++;
                 }
                 if (!b.division) { tiles.push(nb); continue; }
-                var key = b.division + '|' + norm(b.event) + '|' + sM;
+                var key = b.division + '|' + (b._bunk != null ? String(b._bunk) + '|' : '') + norm(b.event) + '|' + sM;
                 if (!Object.prototype.hasOwnProperty.call(seen, key)) {
                     seen[key] = { pos: tiles.length, well: wasWell };
                     tiles.push(nb);
