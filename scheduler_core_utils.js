@@ -2359,6 +2359,73 @@
         return dt[grade] || dt[String(grade)] || null;
     };
 
+    // =========================================================================
+    // ★★★ KEEP-IN-USE FACILITIES ★★★
+    // A facility flagged "Keep in use" (Facilities → the field → Keep In Use)
+    // must never sit idle while the camp has activities running: as long as
+    // SOMEONE is in there the camp is happy — it does not matter who. This is
+    // the single source of truth both consumers read:
+    //   • scheduler_core_leagues.js — forces one league matchup onto a sport the
+    //     facility hosts when the day's rotation didn't hand that sport out.
+    //   • scheduler_core_main.js (STEP 7.96) — fills any remaining idle period
+    //     from a regular (non-league) bunk.
+    // Returns [] unless a facility opts in → exact no-op for every other camp.
+    // Fields that are globally unavailable, closed for TODAY in Daily
+    // Adjustments, or host no activities are dropped (nothing could fill them).
+    // =========================================================================
+    Utils.getKeepInUseFields = function () {
+        try {
+            const gs = (typeof window.loadGlobalSettings === 'function')
+                ? window.loadGlobalSettings() : (window.globalSettings || {});
+            const all = (gs && gs.app1 && gs.app1.fields) || (gs && gs.fields) || window.fields || [];
+            if (!Array.isArray(all) || all.length === 0) return [];
+
+            // Per-date closures (Daily Adjustments) — a field turned off for today
+            // can't be kept in use, and forcing it would be a real double-book.
+            let _dailyOff = {}, _disabled = [];
+            try {
+                const dd = (typeof window.loadCurrentDailyData === 'function') ? window.loadCurrentDailyData() : null;
+                if (dd) {
+                    _dailyOff = dd.dailyFieldAvailability || {};
+                    _disabled = (dd.overrides && dd.overrides.fields) || [];
+                }
+            } catch (_eDd) {}
+
+            const out = [];
+            all.forEach(f => {
+                if (!f || !f.name) return;
+                const cfg = f.keepInUse;
+                if (!cfg || cfg.enabled !== true) return;
+                if (f.available === false) return;
+                if (_dailyOff[f.name] === false) return;
+                if (Array.isArray(_disabled) && _disabled.includes(f.name)) return;
+                const acts = (f.activities || []).filter(Boolean);
+                if (acts.length === 0) return;
+                out.push({
+                    name: f.name,
+                    activities: acts,
+                    // Optional window — blank means "the whole camp day".
+                    startMin: (cfg.startMin != null && !isNaN(Number(cfg.startMin))) ? Number(cfg.startMin) : null,
+                    endMin: (cfg.endMin != null && !isNaN(Number(cfg.endMin))) ? Number(cfg.endMin) : null,
+                    fieldObj: f
+                });
+            });
+            return out;
+        } catch (_e) {
+            return [];
+        }
+    };
+
+    // True when [startMin,endMin) falls inside the keep-in-use entry's own
+    // required window (no window configured → always true).
+    Utils.keepInUseCoversWindow = function (entry, startMin, endMin) {
+        if (!entry) return false;
+        if (startMin == null || endMin == null) return false;
+        if (entry.startMin != null && endMin <= entry.startMin) return false;
+        if (entry.endMin != null && startMin >= entry.endMin) return false;
+        return true;
+    };
+
     // =================================================================
     // 16. LEGACY COMPATIBILITY LAYER
     // =================================================================

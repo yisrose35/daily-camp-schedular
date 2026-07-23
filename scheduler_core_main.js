@@ -3042,6 +3042,345 @@
     window._healCrossDayRepeats = healCrossDayRepeats;
 
     // =========================================================================
+    // ★ KEEP-IN-USE FACILITY SWEEP (STEP 7.96 body — exposed for tests)
+    // A facility flagged "Keep in use" in Facilities must never sit idle while
+    // the camp has activities running: as long as SOMEBODY is in there the camp
+    // is happy — it does not matter who. Rotation alone can't promise that, and
+    // neither can leagues: the league engine covers a period only when a league
+    // running then plays a sport the facility hosts (see _keepInUsePass in
+    // scheduler_core_leagues.js). This is the backstop for every OTHER period —
+    // and for league periods no league could cover.
+    //
+    // For each required facility we walk the day's activity windows; a window is
+    // already covered when any bunk is on the facility then, or when it's locked
+    // (pinned reservation / league game / specialty league — all of which mean
+    // somebody is in there). An uncovered window is filled by moving ONE bunk
+    // onto it: a Free slot first, else a plain sport slot. Never a special, a
+    // league game, a trip, a pinned/overridden/post-edited cell, or lunch —
+    // those are commitments, not spare capacity. All the normal field gates
+    // still apply (access, time rules, today's Resource shut-offs, global
+    // locks) and the bunk never gets an activity it already has today.
+    //
+    // Runs AFTER STEP 7.95 so the repeat-heal can't undo the placement, and
+    // BEFORE STEP 8 so rotation history records what actually happened.
+    // No-op unless a facility opts in. Killswitch: window.__keepInUseSweep = false.
+    // =========================================================================
+    function keepFacilitiesInUse() {
+        if (window.__keepInUseSweep === false) return null;
+        const Utils = window.SchedulerCoreUtils;
+        const KIU = (Utils && typeof Utils.getKeepInUseFields === 'function') ? Utils.getKeepInUseFields() : [];
+        if (!KIU || !KIU.length) return null;
+
+        const sa = window.scheduleAssignments || {};
+        if (!Object.keys(sa).length) return null;
+        const _divs = window.divisions || {};
+        const _dt = window.divisionTimes || {};
+        const _b2g = {};
+        Object.keys(_divs).forEach(g => ((_divs[g] && _divs[g].bunks) || []).forEach(b => { _b2g[String(b)] = g; }));
+
+        // Same per-bunk → entry → division time resolution as STEP 7.6's _stime76.
+        const _stime = (bunk, grade, idx, e) => {
+            const pbs = (window._perBunkSlots && window._perBunkSlots[grade] && window._perBunkSlots[grade][bunk])
+                || (_dt[grade] && _dt[grade]._perBunkSlots && _dt[grade]._perBunkSlots[bunk]);
+            if (pbs && pbs[idx] && pbs[idx].startMin != null) return { s: pbs[idx].startMin, e: pbs[idx].endMin };
+            if (e && e._startMin != null && e._endMin != null) return { s: e._startMin, e: e._endMin };
+            const ds = _dt[grade]; if (ds && ds[idx] && ds[idx].startMin != null) return { s: ds[idx].startMin, e: ds[idx].endMin };
+            return null;
+        };
+        const _slotEvent = (bunk, grade, idx, e) => {
+            const pbs = (window._perBunkSlots && window._perBunkSlots[grade] && window._perBunkSlots[grade][bunk])
+                || (_dt[grade] && _dt[grade]._perBunkSlots && _dt[grade]._perBunkSlots[bunk]);
+            if (pbs && pbs[idx] && pbs[idx].event != null) return pbs[idx].event;
+            const ds = _dt[grade]; if (ds && ds[idx] && ds[idx].event != null) return ds[idx].event;
+            return (e && e.event) || '';
+        };
+
+        const _skip = { 'free': 1, 'free play': 1, 'free (timeout)': 1, 'no field': 1, 'lunch': 1, 'snacks': 1,
+            'dismissal': 1, 'swim': 1, 'pool': 1, 'change': 1, 'cleanup': 1, 'main activity': 1, 'lineup': 1,
+            'transition': 1, 'buffer': 1, 'davening': 1, 'mincha': 1 };
+        const _isFreeAct = (e) => {
+            const a = String((e && (e._activity || e.field || e.sport)) || '').toLowerCase().trim();
+            return a === '' || a === 'free' || a === 'free play' || a === 'free (timeout)';
+        };
+
+        // Today's Resource shut-offs (same sources STEP 7.6 uses).
+        const _curDaily = (typeof window.loadCurrentDailyData === 'function' && window.loadCurrentDailyData()) || {};
+        const _disabledLc = new Set([
+            ...(window.currentDisabledFields || []),
+            ...(((_curDaily.overrides || {}).disabledFields) || [])
+        ].map(n => String(n).toLowerCase().trim()));
+        const _disSportsByField = _curDaily.dailyDisabledSportsByField || {};
+
+        // Occupancy of every field (with WHO, so a same-activity redirect can tell
+        // a lone bunk from a shared game) + each bunk's activities today.
+        const _occ = {}, _done = {};
+        Object.keys(sa).forEach(b => {
+            const g = _b2g[String(b)] || '?'; _done[b] = {};
+            (sa[b] || []).forEach((e, idx) => {
+                if (!e || e.continuation) return;
+                const a = e._activity || e.sport;
+                if (a && String(a).toLowerCase() !== 'free') _done[b][String(a).toLowerCase().trim()] = 1;
+                const fl = String(e.field || e._specialLocation || '').toLowerCase().trim();
+                if (!fl || _skip[fl]) return;
+                const t = _stime(b, g, idx, e); if (!t) return;
+                (_occ[fl] = _occ[fl] || []).push({ s: t.s, e: t.e, bunk: String(b), idx: idx });
+            });
+        });
+        const _fieldBusy = (fl, s, e) => {
+            const arr = _occ[fl] || [];
+            for (let i = 0; i < arr.length; i++) if (arr[i].s < e && arr[i].e > s) return true;
+            return false;
+        };
+        const _occupantCount = (fl, s, e) => {
+            const arr = _occ[fl] || [];
+            let n = 0;
+            for (let i = 0; i < arr.length; i++) if (arr[i].s < e && arr[i].e > s) n++;
+            return n;
+        };
+        // Every keep-in-use facility, so a redirect never empties one to fill another.
+        const _allTargetsLc = new Set(KIU.map(k => String(k.name).toLowerCase().trim()));
+        // Can this facility hold the whole group we want to move into it? Mirrors
+        // the sharing gate STEP 7.64 uses: capacity, and for a real share the
+        // facility must be sharable, the bunks same-grade, and (for a
+        // cross_division facility) same-grade sharing explicitly allowed.
+        const _groupFits = (f, group) => {
+            if (group.length === 1) return true;
+            // No sharing config at all = the app's default, not-sharable.
+            const sw = (f && f.sharableWith) || null;
+            if (!sw) return false;
+            const cap = (sw.type === 'not_sharable') ? 1 : (parseInt(sw.capacity, 10) || 2);
+            if (group.length > cap) return false;
+            {
+                if (sw.type === 'not_sharable') return false;
+                const grades = new Set(group.map(c => c.grade));
+                if (grades.size > 1) return false;
+                if (sw.type === 'cross_division') {
+                    const g = group[0].grade;
+                    if (((sw.allowedPairs || {})[[g, g].sort().join('|')]) !== true) return false;
+                }
+            }
+            return true;
+        };
+        // A global lock means a league game / pinned reservation / specialty
+        // league owns the facility right then — somebody IS in there, and we
+        // must not place a second thing on top of it either way.
+        const _fieldLocked = (name, s, e, g) => {
+            try {
+                return !!(window.GlobalFieldLocks && window.GlobalFieldLocks.isFieldLockedByTime
+                    && window.GlobalFieldLocks.isFieldLockedByTime(name, s, e, g));
+            } catch (_) { return false; }
+        };
+        const _accessOk = (f, grade) => {
+            const ar = f && f.accessRestrictions;
+            if (!ar || !ar.enabled) return true;
+            const dvs = ar.divisions || {};
+            if (Object.keys(dvs).length === 0) return true;
+            return !!dvs[grade];
+        };
+        // Mirrors STEP 7.6's _fieldTimeOk76 (CB-39 gate).
+        const _timeOk = (f, s, e) => {
+            const rules = Array.isArray(f && f.timeRules) ? f.timeRules : null;
+            if (!rules || rules.length === 0) return true;
+            let hasAvail = false, insideAvail = false;
+            for (let i = 0; i < rules.length; i++) {
+                const r = rules[i]; if (!r) continue;
+                const rs = (r.startMin != null) ? r.startMin : null;
+                const re = (r.endMin != null) ? r.endMin : null;
+                const isUnavail = String(r.type).toLowerCase() === 'unavailable' || r.available === false;
+                if (isUnavail) { if (rs != null && re != null && rs < e && re > s) return false; }
+                else { hasAvail = true; if (rs != null && re != null && s >= rs && e <= re) insideAvail = true; }
+            }
+            return !(hasAvail && !insideAvail);
+        };
+        // Same rotation gate the free-fills use — a hard engine block (fair-share
+        // cap, cooldown, cohort, availableDays) or a yesterday repeat is a
+        // TIER-2 candidate: taken only if nothing clean can cover the window.
+        const _rotOk = (bunk, act, slotIdx) => {
+            if (window.__freeFillRotationGate === false) return true;
+            const RE = window.RotationEngine;
+            if (!RE) return true;
+            try {
+                if (typeof RE.calculateRotationScore === 'function') {
+                    const rot = RE.calculateRotationScore({
+                        bunkName: bunk, activityName: act,
+                        divisionName: _b2g[String(bunk)] || null,
+                        beforeSlotIndex: (typeof slotIdx === 'number' ? slotIdx : 0),
+                        allActivities: null,
+                        activityProperties: window.activityProperties || {}
+                    });
+                    if (rot === Infinity) return false;
+                }
+                if (typeof RE.calculateRecencyScore === 'function') {
+                    const yp = (RE.CONFIG && RE.CONFIG.YESTERDAY_PENALTY) || 50000;
+                    if (RE.calculateRecencyScore(bunk, act, (typeof slotIdx === 'number' ? slotIdx : 0)) >= yp) return false;
+                }
+            } catch (_) { /* fail-open */ }
+            return true;
+        };
+        const _daysSince = (b, name) => {
+            try {
+                const d = (window.RotationEngine && typeof window.RotationEngine.getDaysSinceActivity === 'function')
+                    ? window.RotationEngine.getDaysSinceActivity(b, name) : null;
+                return (typeof d === 'number') ? d : 9999;
+            } catch (_) { return 9999; }
+        };
+
+        const _usedCell = {};   // bunk|idx already consumed by this sweep
+        let filled = 0, covered = 0, unfillable = 0;
+
+        KIU.forEach(function (K) {
+            const fl = String(K.name).toLowerCase().trim();
+            if (_disabledLc.has(fl)) return;                     // closed today
+            const blockedSports = _disSportsByField[K.name] || null;
+            const playable = K.activities.filter(a =>
+                !(blockedSports && blockedSports.indexOf(a) !== -1));
+            if (!playable.length) return;
+
+            // Every distinct activity window in the day that COULD host something
+            // here — i.e. at least one bunk has a slot the sweep is allowed to use.
+            const _cands = {};   // "s-e" → [{bunk, idx, grade, free}]
+            Object.keys(sa).forEach(b => {
+                const g = _b2g[String(b)] || '?';
+                (sa[b] || []).forEach((e, idx) => {
+                    if (!e || e.continuation || e._isTransition || e._isTrip) return;
+                    if (e._league || e._h2h || e._leagueName || e._leagueMatchups || e.matchups || e._isSpecialtyLeague) return;
+                    if (e._pinned || e._bunkOverride || e._postEdit) return;
+                    if (e._assignedSpecial || e._partLabel || e._prepDuration) return;   // a special is a commitment
+                    if (sa[b][idx + 1] && sa[b][idx + 1].continuation) return;           // don't orphan a span
+                    const free = _isFreeAct(e);
+                    if (!free) {
+                        // Only a plain sport may be displaced.
+                        if (!e.sport || String(e.sport).toLowerCase() === 'free') return;
+                        if (_skip[String(e.field || '').toLowerCase().trim()]) return;
+                    }
+                    if (slotKindOf(_slotEvent(b, g, idx, e)) === 'special') return;
+                    const t = _stime(b, g, idx, e);
+                    if (!t || t.s == null || t.e == null) return;
+                    if (!Utils.keepInUseCoversWindow(K, t.s, t.e)) return;
+                    (_cands[t.s + '-' + t.e] = _cands[t.s + '-' + t.e] || []).push({
+                        bunk: b, idx: idx, grade: g, s: t.s, e: t.e, free: free,
+                        act: String((e._activity || e.sport) || '').trim(),
+                        fieldLc: String(e.field || '').toLowerCase().trim()
+                    });
+                });
+            });
+
+            const windows = Object.keys(_cands)
+                .map(k => ({ key: k, s: Number(k.split('-')[0]), e: Number(k.split('-')[1]) }))
+                .sort((a, b) => a.s - b.s || a.e - b.e);
+
+            windows.forEach(function (W) {
+                // Covered already? (a bunk on it, a lock, or a placement this sweep
+                // just made whose window overlaps this one — divisions' grids differ,
+                // so two windows can overlap without being identical.)
+                if (_fieldBusy(fl, W.s, W.e)) { covered++; return; }
+                if (_fieldLocked(K.name, W.s, W.e, null)) { covered++; return; }
+
+                // ── FIRST: is somebody ALREADY doing one of this facility's
+                //    activities on a different court right now? Then just switch
+                //    their court. Same activity, different room — the rotation is
+                //    untouched and nobody loses the activity they were given.
+                //    A SHARED game moves as a whole (never split): every bunk on
+                //    that court in this window has to be movable and the facility
+                //    has to be able to hold them all under its own sharing rules.
+                const _groupsByCourt = {};
+                (_cands[W.key] || []).forEach(function (c) {
+                    if (!c.act || playable.indexOf(c.act) === -1) return;
+                    if (!c.fieldLc || c.fieldLc === fl || _allTargetsLc.has(c.fieldLc)) return;
+                    (_groupsByCourt[c.fieldLc] = _groupsByCourt[c.fieldLc] || []).push(c);
+                });
+                let redirect = null;
+                Object.keys(_groupsByCourt).forEach(function (court) {
+                    if (redirect) return;
+                    const group = _groupsByCourt[court];
+                    // Everybody on that court in this window must be in the group —
+                    // otherwise moving it would break up a game (or strand a bunk
+                    // whose slot the sweep isn't allowed to touch).
+                    if (_occupantCount(court, W.s, W.e) !== group.length) return;
+                    if (group.some(c => _usedCell[c.bunk + '|' + c.idx])) return;
+                    if (group.some(c => c.act !== group[0].act)) return;
+                    if (!_groupFits(K.fieldObj, group)) return;
+                    if (group.some(c => !_accessOk(K.fieldObj, c.grade) || !_timeOk(K.fieldObj, c.s, c.e)
+                        || _fieldLocked(K.name, c.s, c.e, c.grade))) return;
+                    redirect = { court: court, group: group };
+                });
+                if (redirect) {
+                    const from = sa[redirect.group[0].bunk][redirect.group[0].idx].field;
+                    redirect.group.forEach(function (c) {
+                        sa[c.bunk][c.idx].field = K.name;
+                        sa[c.bunk][c.idx]._keepInUseRedirected = true;
+                        _usedCell[c.bunk + '|' + c.idx] = 1;
+                        (_occ[fl] = _occ[fl] || []).push({ s: c.s, e: c.e, bunk: c.bunk, idx: c.idx });
+                    });
+                    filled++;
+                    const who = redirect.group.map(c => c.bunk).join(' + ');
+                    console.log('[STEP 7.96] keep-in-use: "' + K.name + '" was idle at ' + W.s + '-' + W.e +
+                        ' → ' + who + ' already had "' + redirect.group[0].act + '", moved ' + from + ' → ' + K.name +
+                        ' (same activity, nothing else changes)');
+                    if (window.GenTrace && window.GenTrace.active) {
+                        window.GenTrace.decision({
+                            kind: 'keep-in-use-redirect', bunk: who, division: redirect.group[0].grade,
+                            window: W.s + '-' + W.e,
+                            chosen: { name: redirect.group[0].act, field: K.name }, from: from
+                        });
+                    }
+                    return;
+                }
+
+                // ── ELSE: give the facility's activity to somebody new. Free
+                //    slots cost nothing, then the bunk most overdue for it.
+                let best = null;
+                (_cands[W.key] || []).forEach(function (c) {
+                    if (_usedCell[c.bunk + '|' + c.idx]) return;
+                    if (!_accessOk(K.fieldObj, c.grade)) return;
+                    if (!_timeOk(K.fieldObj, c.s, c.e)) return;
+                    if (_fieldLocked(K.name, c.s, c.e, c.grade)) return;
+                    playable.forEach(function (act) {
+                        if (_done[c.bunk][String(act).toLowerCase().trim()]) return;   // already has it today
+                        const clean = _rotOk(c.bunk, act, c.idx);
+                        const score = (clean ? 1000000 : 0) + (c.free ? 100000 : 0) + _daysSince(c.bunk, act);
+                        if (!best || score > best.score) best = { c: c, act: act, clean: clean, score: score };
+                    });
+                });
+
+                if (!best) {
+                    unfillable++;
+                    console.warn('[STEP 7.96] keep-in-use: "' + K.name + '" idle at ' +
+                        W.s + '-' + W.e + ' — no bunk could be moved onto it (access / time rules / already did it today)');
+                    return;
+                }
+
+                const c = best.c;
+                const prev = sa[c.bunk][c.idx];
+                const prevLabel = (prev && (prev._activity || prev.sport)) || 'Free';
+                sa[c.bunk][c.idx] = {
+                    field: K.name, sport: best.act, _activity: best.act,
+                    _startMin: c.s, _endMin: c.e, _fixed: true,
+                    _freeFilled: c.free || undefined,
+                    _keepInUseForced: true, continuation: false
+                };
+                _usedCell[c.bunk + '|' + c.idx] = 1;
+                _done[c.bunk][String(best.act).toLowerCase().trim()] = 1;
+                (_occ[fl] = _occ[fl] || []).push({ s: c.s, e: c.e });
+                filled++;
+                console.log('[STEP 7.96] keep-in-use: "' + K.name + '" was idle at ' + c.s + '-' + c.e +
+                    ' → ' + c.bunk + ' "' + prevLabel + '" → "' + best.act + '" @ ' + K.name +
+                    (best.clean ? '' : ' (last resort — rotation gate relaxed)'));
+                if (window.GenTrace && window.GenTrace.active) {
+                    window.GenTrace.decision({
+                        kind: 'keep-in-use', bunk: c.bunk, division: c.grade,
+                        window: c.s + '-' + c.e,
+                        chosen: { name: best.act, field: K.name }, from: prevLabel
+                    });
+                }
+            });
+        });
+
+        return { filled: filled, covered: covered, unfillable: unfillable };
+    }
+    window._keepFacilitiesInUse = keepFacilitiesInUse;
+
+    // =========================================================================
     // ★★★ MAIN ENTRY POINT ★★★
     // =========================================================================
 
@@ -7598,6 +7937,31 @@ console.log(`[Generation] Rainy Day Mode: ${window.isRainyDay ? 'ACTIVE 🌧️'
             }
         } catch (_e95) {
             console.warn('[STEP 7.95] cross-day repeat heal failed:', _e95);
+        }
+
+        // =========================================================================
+        // STEP 7.96: KEEP-IN-USE FACILITY SWEEP
+        // A facility flagged "Keep in use" in Facilities must never sit idle
+        // while activities are running — whoever fills it is fine. Leagues cover
+        // the periods they can (scheduler_core_leagues _keepInUsePass); this
+        // sweep covers every remaining period from a regular bunk. See
+        // keepFacilitiesInUse above. Runs AFTER the repeat heal (so it can't be
+        // undone) and BEFORE STEP 8 (so history records what really happened).
+        // Killswitch: window.__keepInUseSweep = false.
+        // =========================================================================
+        try {
+            const _res96 = (typeof window._keepFacilitiesInUse === 'function') ? window._keepFacilitiesInUse() : null;
+            if (_res96) {
+                if (_res96.filled === 0 && _res96.unfillable === 0) {
+                    console.log('[STEP 7.96] keep-in-use: ✅ all required facilities already busy every period (' + _res96.covered + ' window(s))');
+                } else {
+                    console.log('[STEP 7.96] keep-in-use: filled ' + _res96.filled + ' idle period(s), ' +
+                        _res96.covered + ' already covered' +
+                        (_res96.unfillable ? ', ' + _res96.unfillable + ' could not be covered' : ''));
+                }
+            }
+        } catch (_e96) {
+            console.warn('[STEP 7.96] keep-in-use sweep failed:', _e96);
         }
 
         // =========================================================================

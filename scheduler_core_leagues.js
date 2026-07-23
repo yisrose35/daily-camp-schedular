@@ -2761,10 +2761,180 @@
         // could hand an indoor field away from a team still below its floor.
         // Instead, run the INDOOR RESCUE pass: lift below-floor teams onto indoor
         // courts (free same-sport court, else trade with a met-floor matchup).
-        if (leagueRules && leagueRules.indoorRequirement && leagueRules.indoorRequirement.enabled) {
-            return _indoorRescuePass(assignments, availablePool, leagueRules);
+        const _afterIndoor = (leagueRules && leagueRules.indoorRequirement && leagueRules.indoorRequirement.enabled)
+            ? _indoorRescuePass(assignments, availablePool, leagueRules)
+            : _swapReoptimizeAssignments(assignments, leagueName, history, dayId);
+
+        // ★ KEEP-IN-USE: runs LAST so neither the swap re-opt nor the indoor
+        //   rescue can hand the facility back. No-op unless this league was
+        //   designated the owner of a keep-in-use facility for this period.
+        return _keepInUsePass(_afterIndoor, availablePool, leagueRules, leagueName, history, dayId);
+    }
+
+    // =========================================================================
+    // ★★★ KEEP-IN-USE PASS (post-assignment, within one game) ★★★
+    // A facility flagged "Keep in use" in Facilities must never sit idle. Two
+    // phases, cheapest first — the whole point is that FORCING a sport is the
+    // last resort, not the mechanism:
+    //
+    //   PHASE 1 — SAME-SPORT REDIRECT (free). If a matchup is ALREADY playing a
+    //     sport the facility hosts, just give THAT matchup the facility: same
+    //     sport, different court. Nothing about the rotation changes, no team
+    //     plays anything it wasn't already playing. This is what covers the gym
+    //     on any day somebody is due for basketball anyway, and it runs for
+    //     EVERY league in the period (keepInUseFields), so whichever league is
+    //     playing the sport gets the court.
+    //
+    //   PHASE 2 — FORCED SPORT CHANGE (last resort). Only when the facility is
+    //     still idle after every league had its phase-1 chance. Runs for ONE
+    //     designated league per facility (keepInUseForce = the LAST league in
+    //     the period's processing order that could play there — see the owner
+    //     block in processRegularLeagues), so no earlier league is disturbed
+    //     while a later one might have covered it naturally.
+    //
+    // Either way the move is a RELOCATION, never a drop: the moved matchup gives
+    // up its old field, so the field count is unchanged and no game is lost. The
+    // phase-2 victim is the least disruptive one: never a matchup already on
+    // another keep-in-use facility, never one below its indoor floor when the
+    // target is outdoor, preferring teams FRESH on the facility's sport (a free
+    // rotation win) and, among those, the pair whose current sport has the most
+    // other fields (giving that one back costs the least).
+    // Killswitch: window.__leagueKeepInUse = false.
+    // =========================================================================
+    function _keepInUsePass(assignments, availablePool, leagueRules, leagueName, history, dayId) {
+        try {
+            if (window.__leagueKeepInUse === false) return assignments;
+            const redirectTargets = (leagueRules && leagueRules.keepInUseFields) || [];
+            const forceTargets = (leagueRules && leagueRules.keepInUseForce) || [];
+            if (!redirectTargets.length && !forceTargets.length) return assignments;
+            if (!assignments || assignments.length === 0) return assignments;
+
+            const _norm = (s) => String(s || '').toLowerCase().trim();
+            const _targetSet = new Set(redirectTargets.concat(forceTargets).map(_norm));
+            const _win = (leagueRules && leagueRules.keepInUseWindow) || null;
+
+            // Combined fields: taking Gym 1 while its "Full Gym" partner is in
+            // use is a physical double-book, so the free/used test has to be
+            // combo-aware exactly like the assigners' own bookkeeping.
+            const _usedWithCombos = () => {
+                const s = new Set();
+                assignments.forEach(a => { if (a && a.field) _markFieldUsedWithCombos(s, a.field); });
+                return s;
+            };
+            // Somebody OUTSIDE this league (an earlier league this period, a
+            // pinned reservation, a specialty league) already holds it → the
+            // facility is in use, which is all the camp asked for.
+            const _heldByOthers = (fieldName) => {
+                try {
+                    if (!_win || !window.GlobalFieldLocks || !window.GlobalFieldLocks.isFieldLockedByTime) return false;
+                    return !!window.GlobalFieldLocks.isFieldLockedByTime(fieldName, _win.s, _win.e, null);
+                } catch (_) { return false; }
+            };
+
+            const _fqRankKiu = _buildFieldQualityRankMap();
+
+            // ── PHASE 1 — same-sport redirect ────────────────────────────────
+            redirectTargets.forEach(function (fieldName) {
+                const used = _usedWithCombos();
+                if (_isFieldUsedConsideringCombos(used, fieldName)) return;   // already in use ✅
+                const opts = availablePool.filter(o => _norm(o.field) === _norm(fieldName));
+                if (!opts.length) return;                                     // not reachable for this league
+                const sportsHere = new Set(opts.map(o => o.sport));
+
+                // Whoever is already on one of this facility's sports. Prefer the
+                // one sitting on the WORST-ranked court — moving that game costs
+                // the least field-quality-wise, and it frees the better court.
+                let pick = null;
+                assignments.forEach(function (a) {
+                    if (!a || !a.field || !sportsHere.has(a.sport)) return;
+                    if (_targetSet.has(_norm(a.field))) return;   // don't idle another required facility
+                    const q = _fieldQualityBonus(_fqRankKiu, a.field);
+                    if (!pick || q < pick.q) pick = { a: a, q: q };
+                });
+                if (!pick) return;
+                const _from = pick.a.field;
+                pick.a.field = fieldName;
+                pick.a._keepInUseRedirected = true;
+                console.log('   🏟️ [KeepInUse] "' + fieldName + '" must stay in use → ' +
+                    pick.a.team1 + ' vs ' + pick.a.team2 + ' already had ' + pick.a.sport +
+                    ', moved ' + _from + ' → ' + fieldName + ' (same sport, nothing else changes)');
+            });
+
+            // ── PHASE 2 — forced sport change (last resort) ──────────────────
+            if (!forceTargets.length) return assignments;
+
+            const _fieldsBySport = (function () {
+                const m = {}, seen = {};
+                availablePool.forEach(o => {
+                    seen[o.sport] = seen[o.sport] || new Set();
+                    if (!seen[o.sport].has(o.field)) { seen[o.sport].add(o.field); m[o.sport] = (m[o.sport] || 0) + 1; }
+                });
+                return m;
+            })();
+            const _hist = (t) => getTeamSportHistoryByDate(leagueName, t, history, dayId);
+            const _plays = (t, sport) => _hist(t).filter(s => s === sport).length;
+
+            const _indoorReq = leagueRules && leagueRules.indoorRequirement;
+            const _indoorCounts = (leagueRules && leagueRules.indoorCounts) || {};
+            const _indoorTarget = (_indoorReq && Number.isFinite(_indoorReq.count)) ? _indoorReq.count : 1;
+            const _belowIndoorFloor = (a) => {
+                if (!_indoorReq || !_indoorReq.enabled) return false;
+                if ((_indoorReq.op || '>=') === '<=') return false;
+                return Math.min(_indoorCounts[a.team1] || 0, _indoorCounts[a.team2] || 0) < _indoorTarget;
+            };
+
+            forceTargets.forEach(function (fieldName) {
+                const used = _usedWithCombos();
+                if (_isFieldUsedConsideringCombos(used, fieldName)) return;   // phase 1 or a natural pick got it ✅
+
+                const opts = availablePool.filter(o => _norm(o.field) === _norm(fieldName));
+                if (opts.length === 0) {
+                    // Not in this league's pool. Usually that means an earlier
+                    // league at this period already locked it — which is exactly
+                    // the outcome we want, so say nothing.
+                    if (_heldByOthers(fieldName)) {
+                        console.log('   🏟️ [KeepInUse] "' + fieldName + '" already taken by another league this period ✅');
+                        return;
+                    }
+                    console.warn('   🏟️ [KeepInUse] "' + fieldName + '" has no playable option for "' + leagueName +
+                        '" this period — cannot force a game there');
+                    return;
+                }
+                const _optIsIndoorTarget = opts.some(_optIsIndoor);
+
+                let best = null;
+                assignments.forEach(function (a) {
+                    if (!a || !a.field || !a.team1 || !a.team2) return;
+                    if (_targetSet.has(_norm(a.field))) return;       // don't idle another keep-in-use facility
+                    if (!_optIsIndoorTarget && _belowIndoorFloor(a)) return;  // would break its indoor floor
+                    opts.forEach(function (o) {
+                        // Freshness: how far the pair is from having played this sport.
+                        const p1 = _plays(a.team1, o.sport), p2 = _plays(a.team2, o.sport);
+                        // Lower is better. Repeat cost dominates; abundance breaks ties.
+                        const cost = (p1 + p2) * 100
+                            - (_fieldsBySport[a.sport] || 1) * 5
+                            + ((a.sport === o.sport) ? 1000 : 0);   // phase 1 would have done this for free
+                        if (!best || cost < best.cost) best = { a: a, o: o, cost: cost };
+                    });
+                });
+
+                if (!best) {
+                    console.warn('   🏟️ [KeepInUse] "' + fieldName + '" left idle — no matchup could be moved onto it without breaking another rule');
+                    return;
+                }
+                const _from = best.a.field, _fromSport = best.a.sport;
+                best.a.field = best.o.field;
+                best.a.sport = best.o.sport;
+                best.a._keepInUseForced = true;
+                console.log('   🏟️ [KeepInUse] "' + fieldName + '" still idle and nobody was playing ' +
+                    [...new Set(opts.map(o => o.sport))].join('/') + ' → forced ' +
+                    best.a.team1 + ' vs ' + best.a.team2 + ': ' + _fromSport + ' @ ' + _from +
+                    ' → ' + best.o.sport + ' @ ' + best.o.field);
+            });
+        } catch (_eKiu) {
+            console.warn('[RegularLeagues] keep-in-use pass failed (continuing):', _eKiu);
         }
-        return _swapReoptimizeAssignments(assignments, leagueName, history, dayId);
+        return assignments;
     }
 
     // =========================================================================
@@ -3941,6 +4111,119 @@
                 }
             })();
 
+            // ★★★ KEEP-IN-USE FACILITIES — who covers each one this period ★★★
+            // A facility flagged "Keep in use" in Facilities (e.g. the New Gym,
+            // which only hosts Basketball) must never sit idle. League sports are
+            // handed out by team NEED, so on a day when nobody is due for
+            // basketball the gym gets no game — the camp wants somebody in there
+            // every period regardless of who. Leagues process senior→junior and
+            // LOCK their fields as they go, so the decision has to be made HERE,
+            // before any league claims anything. Two lists come out of it:
+            //
+            //   redirect — EVERY league at this period that could play there. If
+            //     one of them is already playing a sport the facility hosts, its
+            //     assigner simply hands that matchup this court instead of the one
+            //     it drew (same sport, nothing else changes). This is the normal
+            //     path and it costs nothing.
+            //
+            //   force — exactly ONE league: the LAST of the eligible ones in
+            //     processing order. Only it may CHANGE a matchup's sport to fill
+            //     the facility, and only if the facility is still idle by its
+            //     turn. Putting the force last means every other league gets its
+            //     free redirect chance first, so we never push a senior league
+            //     onto basketball when the junior league was going to play it
+            //     anyway.
+            //
+            // A facility already locked at this period (pinned reservation,
+            // specialty league, a spanning game) is ALREADY in use → nobody is
+            // assigned. No-op unless a facility opts in.
+            // Killswitch: window.__leagueKeepInUse = false.
+            const _keepInUse = (function () {
+                const EMPTY = { redirect: {}, force: {}, window: null };
+                try {
+                    if (window.__leagueKeepInUse === false) return EMPTY;
+                    const _KIU = window.SchedulerCoreUtils?.getKeepInUseFields?.() || [];
+                    if (!_KIU.length) return EMPTY;
+                    const _here = applicableLeagues.filter(l => !(offCampusScheduled[l.name] && offCampusScheduled[l.name].handled));
+                    if (!_here.length) return EMPTY;
+
+                    // blocksByTime keys are STRINGS of minutes ("600") — feeding
+                    // those to parseTimeToMinutes returns null (it wants "10:00am"),
+                    // which would silently switch the whole rule off. Take a plain
+                    // numeric value first, clock text only as a fallback.
+                    const _kParse = window.SchedulerCoreUtils?.parseTimeToMinutes;
+                    const _kNum = (v) => {
+                        if (v == null || v === '') return null;
+                        if (typeof v === 'number') return isNaN(v) ? null : v;
+                        if (!isNaN(Number(v))) return Number(v);
+                        const n = _kParse ? _kParse(v) : null;
+                        return (n == null || isNaN(Number(n))) ? null : Number(n);
+                    };
+                    const _kDivSlots = window.divisionTimes?.[divisionsAtTime[0]] || [];
+                    let _kStart = _kNum(timeKey);
+                    let _kEnd = _kNum(sampleBlock && sampleBlock.endTime);
+                    if (_kStart == null && slots && slots.length > 0) _kStart = _kDivSlots[slots[0]]?.startMin;
+                    if (_kEnd == null && slots && slots.length > 0) _kEnd = _kDivSlots[slots[slots.length - 1]]?.endMin;
+                    if (_kStart == null) return EMPTY;   // can't reason about a period with no clock time
+                    if (_kEnd == null || _kEnd <= _kStart) _kEnd = _kStart + 40;
+
+                    const redirect = {}, force = {};
+
+                    _KIU.forEach(function (K) {
+                        // Outside the facility's own required window → nothing to do.
+                        if (!window.SchedulerCoreUtils.keepInUseCoversWindow(K, _kStart, _kEnd)) return;
+
+                        // Already spoken for at this time → somebody IS using it. ✅
+                        try {
+                            if (window.GlobalFieldLocks &&
+                                window.GlobalFieldLocks.isFieldLockedByTime(K.name, _kStart, _kEnd, divisionsAtTime[0])) {
+                                console.log('   🏟️ [KeepInUse] "' + K.name + '" already reserved at ' + timeKey + ' — no league needed');
+                                return;
+                            }
+                        } catch (_eLk) {}
+
+                        // Which leagues here could actually play there? Build each
+                        // league's own pool restricted to the facility's sports — that
+                        // applies every real gate (access, time rules, rainy, per-date
+                        // shut-offs, away zones) for THAT league's divisions.
+                        const eligible = [];
+                        _here.forEach(function (l) {
+                            const shared = (l.sports || []).filter(s => K.activities.includes(s));
+                            if (!shared.length) return;
+                            const lDivs = (l.divisions || []).filter(d => divisionsAtTime.includes(d));
+                            if (!lDivs.length) return;
+                            let opts = [];
+                            try {
+                                opts = buildAvailableFieldSportPool(shared, context, lDivs, timeKey, slots, sampleBlock && sampleBlock.endTime)
+                                    .filter(o => String(o.field).toLowerCase().trim() === String(K.name).toLowerCase().trim());
+                            } catch (_ePool) { return; }
+                            if (!opts.length) return;
+                            if (Math.floor((l.teams || []).length / 2) < 1) return;   // can't seat a game
+                            eligible.push(l);
+                        });
+
+                        if (!eligible.length) {
+                            console.warn('   🏟️ [KeepInUse] "' + K.name + '" @' + timeKey +
+                                ' — no league at this period plays a sport it hosts (' + K.activities.join(', ') +
+                                '); a regular activity will have to cover it');
+                            return;
+                        }
+
+                        // Everyone may redirect for free; only the last one may force.
+                        eligible.forEach(l => { (redirect[l.name] = redirect[l.name] || []).push(K.name); });
+                        const last = eligible[eligible.length - 1];
+                        (force[last.name] = force[last.name] || []).push(K.name);
+                        console.log('   🏟️ [KeepInUse] "' + K.name + '" @' + timeKey + ' → [' +
+                            eligible.map(l => l.name).join(', ') + '] can cover it for free; "' +
+                            last.name + '" forces a sport only if it is still idle by its turn');
+                    });
+                    return { redirect: redirect, force: force, window: { s: _kStart, e: _kEnd } };
+                } catch (_eK) {
+                    console.warn('[RegularLeagues] keep-in-use assignment failed (continuing):', _eK);
+                    return EMPTY;
+                }
+            })();
+
             for (const league of applicableLeagues) {
                 if (processedLeagues.has(league.name)) continue;
                 processedLeagues.add(league.name);
@@ -4539,7 +4822,10 @@
                         league.schedulingPriority || 'sport_variety',
                         {
                             indoorRequirement: league.indoorRequirement,
-                            indoorCounts: indoorCountsByLeague[league.name]
+                            indoorCounts: indoorCountsByLeague[league.name],
+                            keepInUseFields: _keepInUse.redirect[league.name] || null,
+                            keepInUseForce: _keepInUse.force[league.name] || null,
+                            keepInUseWindow: _keepInUse.window
                         },
                         _sportCapsByLeague[league.name] || null,
                         dayId

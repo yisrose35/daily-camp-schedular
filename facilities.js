@@ -932,6 +932,9 @@ function renderSportsConfig(container, fac) {
     container.appendChild(section("Usage Limits", summaryFieldLimits(fieldData),
         () => renderFieldLimits(fieldData)));
 
+    container.appendChild(section("Keep In Use", summaryKeepInUse(fieldData),
+        () => renderKeepInUse(fieldData)));
+
     container.appendChild(section("Access & Restrictions", summaryAccess(fieldData),
         () => renderAccess(fieldData)));
 
@@ -2125,6 +2128,131 @@ function sportHasAnyLimit(sport) {
     const l = getSportLimit(sport);
     return l.maxUsage > 0 || l.frequencyDays > 0 || _sportPerGradeCount(sport) > 0;
 }
+// =========================================================================
+// KEEP IN USE — "this facility must never sit idle"
+// Some camps have a facility they always want busy: the New Gym should have
+// somebody in it every period, and it does not matter who. Rotation can't
+// promise that (it hands out sports by who's due), and neither can leagues on
+// their own (if nobody is due for basketball the gym gets no game). Turning
+// this on makes the generator cover every period:
+//   • during leagues → one matchup is forced onto a sport this facility hosts
+//   • every other period → a bunk is moved onto it (Free slots first)
+// Stored as fieldData.keepInUse = { enabled, startMin, endMin }. Read by
+// SchedulerCoreUtils.getKeepInUseFields (the single source of truth for both
+// the league engine and the manual solver's STEP 7.96 sweep).
+// =========================================================================
+// min → "9:00am" (scheduler_core_utils owns the canonical formatter; the
+// fallback keeps this panel usable if it hasn't loaded yet).
+function _kiuTimeLabel(mins) {
+    if (mins == null || isNaN(Number(mins))) return "";
+    if (typeof window.minutesToTimeString === 'function') return window.minutesToTimeString(Number(mins));
+    const m = Number(mins), h = Math.floor(m / 60), mm = String(m % 60).padStart(2, '0');
+    const ap = h >= 12 ? 'pm' : 'am', h12 = (h % 12) || 12;
+    return `${h12}:${mm}${ap}`;
+}
+
+function summaryKeepInUse(f) {
+    const k = f.keepInUse;
+    if (!k || k.enabled !== true) return "Off (may sit idle)";
+    const acts = (f.activities || []).filter(Boolean);
+    const when = (k.startMin != null || k.endMin != null)
+        ? `${_kiuTimeLabel(k.startMin != null ? k.startMin : 0)}–${_kiuTimeLabel(k.endMin != null ? k.endMin : 1439)}`
+        : "all day";
+    return `Always in use, ${when}` + (acts.length ? ` (${acts.slice(0, 2).join(', ')}${acts.length > 2 ? '…' : ''})` : ' — no sports set!');
+}
+
+function renderKeepInUse(f) {
+    const box = document.createElement("div");
+    const cfg = f.keepInUse || {};
+
+    const desc = document.createElement("p");
+    desc.style.cssText = "font-size:0.85rem; color:#6B7280; margin:0 0 12px 0;";
+    desc.textContent = "Never leave this facility empty. Every period, the generator makes sure somebody is using it — during leagues it forces one matchup onto a sport played here, and outside leagues it moves a bunk in. It doesn't matter who's in there, only that it isn't sitting idle.";
+    box.appendChild(desc);
+
+    const acts = (f.activities || []).filter(Boolean);
+    if (!acts.length) {
+        const warn = document.createElement("div");
+        warn.style.cssText = "font-size:0.85rem; color:#991B1B; background:#FEF2F2; border:1px solid #FECACA; border-radius:6px; padding:8px; margin-bottom:12px;";
+        warn.textContent = "This facility has no sports yet — add them in the Activities section first, otherwise there's nothing to schedule here.";
+        box.appendChild(warn);
+    }
+
+    const updateSummary = () => {
+        const el = box.closest('.detail-section')?.querySelector('.detail-section-summary');
+        if (el) el.textContent = summaryKeepInUse(f);
+    };
+    const commit = () => {
+        f.keepInUse = {
+            enabled: !!cb.checked,
+            startMin: cfg.startMin != null ? cfg.startMin : null,
+            endMin: cfg.endMin != null ? cfg.endMin : null
+        };
+        saveFieldData();
+        updateSummary();
+    };
+
+    const tog = document.createElement("label");
+    tog.style.cssText = "display:inline-flex; align-items:center; gap:10px; cursor:pointer; margin-bottom:12px;";
+    const cb = document.createElement("input");
+    cb.type = "checkbox";
+    cb.checked = cfg.enabled === true;
+    const lbl = document.createElement("span");
+    lbl.style.cssText = "font-size:0.9rem; color:#374151; font-weight:600;";
+    lbl.textContent = "Keep this facility in use every period";
+    tog.appendChild(cb); tog.appendChild(lbl);
+    box.appendChild(tog);
+
+    // Optional window — blank means the whole camp day.
+    const winWrap = document.createElement("div");
+    winWrap.style.cssText = "display:flex; align-items:center; gap:8px; flex-wrap:wrap; margin-left:4px;";
+    winWrap.style.display = cb.checked ? "flex" : "none";
+
+    const winLbl = document.createElement("span");
+    winLbl.style.cssText = "font-size:0.8rem; color:#6B7280;";
+    winLbl.textContent = "Only between (optional):";
+    winWrap.appendChild(winLbl);
+
+    const inStyle = "width:80px; padding:5px 8px; border:1px solid #D1D5DB; border-radius:6px; text-align:center; font-size:0.85rem;";
+    const fromIn = document.createElement("input");
+    fromIn.placeholder = "9:00am"; fromIn.style.cssText = inStyle;
+    if (cfg.startMin != null) fromIn.value = _kiuTimeLabel(cfg.startMin);
+    const toIn = document.createElement("input");
+    toIn.placeholder = "4:00pm"; toIn.style.cssText = inStyle;
+    if (cfg.endMin != null) toIn.value = _kiuTimeLabel(cfg.endMin);
+
+    const commitWindow = () => {
+        const s = fromIn.value.trim() ? parseTimeToMinutes(fromIn.value) : null;
+        const e = toIn.value.trim() ? parseTimeToMinutes(toIn.value) : null;
+        cfg.startMin = (s == null || isNaN(s)) ? null : s;
+        cfg.endMin = (e == null || isNaN(e)) ? null : e;
+        // An inverted window would silently disable the rule — drop it instead.
+        if (cfg.startMin != null && cfg.endMin != null && cfg.endMin <= cfg.startMin) {
+            alert("The end time has to be after the start time — leaving the window open (all day).");
+            cfg.startMin = null; cfg.endMin = null;
+        }
+        fromIn.value = cfg.startMin != null ? _kiuTimeLabel(cfg.startMin) : "";
+        toIn.value = cfg.endMin != null ? _kiuTimeLabel(cfg.endMin) : "";
+        commit();
+    };
+    fromIn.onchange = commitWindow;
+    toIn.onchange = commitWindow;
+
+    winWrap.appendChild(fromIn);
+    winWrap.appendChild(document.createTextNode("to"));
+    winWrap.appendChild(toIn);
+    box.appendChild(winWrap);
+
+    cb.onchange = () => { winWrap.style.display = cb.checked ? "flex" : "none"; commit(); };
+
+    const note = document.createElement("div");
+    note.style.cssText = "font-size:0.78rem; color:#9CA3AF; margin-top:12px; line-height:1.5;";
+    note.textContent = "Only periods that actually have activities running count — lunch, dismissal and trips are left alone. A bunk is never pulled out of a special, a league game or anything you pinned by hand.";
+    box.appendChild(note);
+
+    return box;
+}
+
 function summaryFieldLimits(f) {
     const sports = (f.activities || []).filter(Boolean);
     if (!sports.length) return "No sports selected";
