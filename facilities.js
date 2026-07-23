@@ -2186,7 +2186,8 @@ function renderKeepInUse(f) {
         f.keepInUse = {
             enabled: !!cb.checked,
             startMin: cfg.startMin != null ? cfg.startMin : null,
-            endMin: cfg.endMin != null ? cfg.endMin : null
+            endMin: cfg.endMin != null ? cfg.endMin : null,
+            rotateGrades: !!rotCb.checked
         };
         saveFieldData();
         updateSummary();
@@ -2243,7 +2244,37 @@ function renderKeepInUse(f) {
     winWrap.appendChild(toIn);
     box.appendChild(winWrap);
 
-    cb.onchange = () => { winWrap.style.display = cb.checked ? "flex" : "none"; commit(); };
+    // Grade rotation. Only matters when grades run on STAGGERED clocks — then
+    // the earliest-starting grade would otherwise hold this facility all day
+    // (every period after the first overlaps it), so handing it over costs a
+    // short gap. Same clock for everyone → this changes nothing.
+    const rotWrap = document.createElement("div");
+    rotWrap.style.cssText = "margin-top:12px; margin-left:4px;";
+    rotWrap.style.display = cb.checked ? "block" : "none";
+    const rotTog = document.createElement("label");
+    rotTog.style.cssText = "display:inline-flex; align-items:flex-start; gap:8px; cursor:pointer;";
+    const rotCb = document.createElement("input");
+    rotCb.type = "checkbox";
+    rotCb.checked = cfg.rotateGrades !== false;   // default on
+    rotCb.style.marginTop = "3px";
+    const rotLbl = document.createElement("span");
+    rotLbl.style.cssText = "font-size:0.85rem; color:#374151;";
+    rotLbl.innerHTML = "Share it around between grades" +
+        "<div style='font-size:0.78rem; color:#9CA3AF; margin-top:2px; line-height:1.45;'>" +
+        "Only matters if your grades run on different clocks (e.g. one starts 10:00, the next 10:15). " +
+        "Without this the earliest grade keeps the facility all day, because every later period overlaps theirs. " +
+        "With it, grades take turns — but each handover leaves a short gap while the next grade's period starts." +
+        "</div>";
+    rotTog.appendChild(rotCb); rotTog.appendChild(rotLbl);
+    rotWrap.appendChild(rotTog);
+    box.appendChild(rotWrap);
+    rotCb.onchange = commit;
+
+    cb.onchange = () => {
+        winWrap.style.display = cb.checked ? "flex" : "none";
+        rotWrap.style.display = cb.checked ? "block" : "none";
+        commit();
+    };
 
     const note = document.createElement("div");
     note.style.cssText = "font-size:0.78rem; color:#9CA3AF; margin-top:12px; line-height:1.5;";

@@ -222,6 +222,9 @@
             const sportRules = checkSportPlayerRules(timedUsages);
             sportRules.errors.forEach(e => errors.push(e));
             sportRules.warnings.forEach(w => warnings.push(w));
+            // ★ CHECK 18: a "Keep in use" facility left sitting empty
+            checkKeepInUseIdle(timedUsages, assignments, bunkDivMap, divisionTimes)
+                .forEach(w => warnings.push(w));
         } catch (e) { console.warn('🛡️ v3.1/v3.2 timeline checks failed:', e); }
 
         // =====================================================================
@@ -2050,6 +2053,115 @@
     }
 
     // =========================================================================
+    // ★ CHECK 18: KEEP-IN-USE FACILITY LEFT IDLE
+    // A facility flagged "Keep in use" in Facilities is meant to have somebody
+    // in it whenever the camp is running activities — the camp does not care
+    // who, only that it is not sitting empty. The generator covers what it can
+    // (leagues + STEP 7.96), but with STAGGERED grade periods it cannot always
+    // reach every minute: if Grade 1 runs 10-11/11-12 and Grade 2 runs
+    // 10:15-11:15/11:15-12:15, no bunk's period starts at 12:00, so 12:00-12:30
+    // is unreachable. That is not a bug, but the user should SEE it rather than
+    // assume the facility is busy all day.
+    //
+    // "Idle" is only reported inside time the camp could actually have used:
+    // windows where at least one bunk has a real activity or a Free slot.
+    // Lunch / dismissal / davening and the facility's own Unavailable windows
+    // are excluded, so a legitimately empty gym at lunchtime never warns.
+    // No-op unless a facility opts in.
+    // =========================================================================
+    const KIU_STRUCTURAL = [
+        'lunch', 'snacks', 'snack', 'dismissal', 'davening', 'mincha', 'cleanup',
+        'change', 'lineup', 'regroup', 'rest', 'rest period', 'transition',
+        'buffer', 'travel', 'trip', 'bus'
+    ];
+    const KIU_MIN_GAP_MIN = 5;   // ignore rounding slivers
+
+    function checkKeepInUseIdle(usages, assignments, bunkDivMap, divisionTimes) {
+        const warnings = [];
+        const KIU = window.SchedulerCoreUtils?.getKeepInUseFields?.() || [];
+        if (!KIU.length) return warnings;
+
+        // Time the camp is actually running activities (a facility can only be
+        // "wasted" while somebody could have been sent there).
+        const coverable = [];
+        Object.entries(assignments || {}).forEach(([bunk, slots]) => {
+            const divName = bunkDivMap[String(bunk)];
+            if (!divName || !Array.isArray(slots)) return;
+            const divSlots = divisionTimes[divName] || [];
+            slots.forEach((entry, idx) => {
+                if (!entry || entry.continuation) return;
+                const act = _lc(entry._activity || entry.sport || entry.field);
+                if (KIU_STRUCTURAL.indexOf(act) >= 0) return;
+                if (isTransitionEntry(entry)) return;
+                if (entry._isTrip) return;
+                let s = entry._startMin, e = entry._endMin;
+                const si = divSlots[idx];
+                if (s == null && si) s = si.startMin;
+                if (e == null && si) e = si.endMin;
+                if (s == null || e == null || isNaN(s) || isNaN(e) || e <= s) return;
+                coverable.push([s, e]);
+            });
+        });
+        if (!coverable.length) return warnings;
+
+        const merge = (list) => {
+            const sorted = list.slice().sort((a, b) => a[0] - b[0]);
+            const out = [];
+            sorted.forEach(iv => {
+                const last = out[out.length - 1];
+                if (last && iv[0] <= last[1]) last[1] = Math.max(last[1], iv[1]);
+                else out.push([iv[0], iv[1]]);
+            });
+            return out;
+        };
+        const coverableSpans = merge(coverable);
+
+        KIU.forEach(K => {
+            const key = _lc(K.name);
+            const busy = merge((usages || [])
+                .filter(u => u && u.fkey === key)
+                .map(u => [u.startMin, u.endMin]));
+
+            // The facility's own closed windows are not "idle" — it's shut.
+            const closed = [];
+            (Array.isArray(K.fieldObj && K.fieldObj.timeRules) ? K.fieldObj.timeRules : []).forEach(r => {
+                if (!r) return;
+                const isUnavail = _lc(r.type) === 'unavailable' || r.available === false;
+                if (!isUnavail) return;
+                if (r.startMin == null || r.endMin == null) return;
+                closed.push([r.startMin, r.endMin]);
+            });
+            const blocked = merge(busy.concat(closed));
+
+            coverableSpans.forEach(span => {
+                // Clip the span to the facility's own required window.
+                let s = span[0], e = span[1];
+                if (K.startMin != null) s = Math.max(s, K.startMin);
+                if (K.endMin != null) e = Math.min(e, K.endMin);
+                if (e - s < KIU_MIN_GAP_MIN) return;
+
+                let cursor = s;
+                blocked.forEach(b => {
+                    if (b[1] <= cursor || b[0] >= e) return;
+                    if (b[0] - cursor >= KIU_MIN_GAP_MIN) {
+                        warnings.push(
+                            `[[Idle facility]] <strong>${K.name}</strong> ${_ctr(cursor, b[0])} - set to stay in use, but nobody is in it`
+                        );
+                    }
+                    cursor = Math.max(cursor, b[1]);
+                });
+                if (e - cursor >= KIU_MIN_GAP_MIN) {
+                    warnings.push(
+                        `[[Idle facility]] <strong>${K.name}</strong> ${_ctr(cursor, e)} - set to stay in use, but nobody is in it`
+                    );
+                }
+            });
+        });
+
+        return warnings;
+    }
+
+    // =========================================================================
     // v3.2 — SPORTS RULES CHECKS
     // =========================================================================
 
@@ -2406,7 +2518,9 @@
             checkSportPlayerRules,
             // CHECK 17: span-aware pin-vs-pin facility conflicts
             annotatePinSpans,
-            checkPinnedTileConflicts
+            checkPinnedTileConflicts,
+            // CHECK 18: a "Keep in use" facility left sitting empty
+            checkKeepInUseIdle
         }
     };
 

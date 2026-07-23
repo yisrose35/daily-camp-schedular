@@ -3269,6 +3269,28 @@
                 .map(k => ({ key: k, s: Number(k.split('-')[0]), e: Number(k.split('-')[1]) }))
                 .sort((a, b) => a.s - b.s || a.e - b.e);
 
+            // ★ GRADE ROTATION. Grade grids are often STAGGERED (Grade 1 10-11,
+            //   Grade 2 10:15-11:15, …). Once the earliest grade's period is
+            //   covered, every later grade's period overlaps it and is therefore
+            //   "already busy" — so left alone, the earliest-starting grade takes
+            //   the facility for the WHOLE day, every day (measured: 7/7 slots).
+            //   Fix: when several overlapping periods compete for the same idle
+            //   stretch, weigh a grade DOWN for each slot it already holds here
+            //   today, and weigh a later start down by the idle minutes it would
+            //   leave in front. So a 15-minute stagger is traded for rotation
+            //   after one slot, a 30-minute one only after two, and an hour-long
+            //   hole is never traded — coverage still wins when the cost is real.
+            const KIU_GRADE_PENALTY = 20000;   // per slot this grade already holds here
+            const KIU_IDLE_PER_MIN = 1000;     // per minute of front idle introduced
+            const _gradeUse = {};
+            (_occ[fl] || []).forEach(function (o) {
+                const g = _b2g[String(o.bunk)] || '?';
+                _gradeUse[g] = (_gradeUse[g] || 0) + 1;
+            });
+            const _rotScore = (grade, idleMin) =>
+                -((_gradeUse[grade] || 0) * KIU_GRADE_PENALTY) - (idleMin * KIU_IDLE_PER_MIN);
+            const _noteUse = (grade) => { _gradeUse[grade] = (_gradeUse[grade] || 0) + 1; };
+
             windows.forEach(function (W) {
                 // Covered already? (a bunk on it, a lock, or a placement this sweep
                 // just made whose window overlaps this one — divisions' grids differ,
@@ -3276,33 +3298,48 @@
                 if (_fieldBusy(fl, W.s, W.e)) { covered++; return; }
                 if (_fieldLocked(K.name, W.s, W.e, null)) { covered++; return; }
 
+                // Every period that could cover this idle stretch — W itself plus
+                // any later-starting period that overlaps it. Only one of them can
+                // have the facility (they overlap), so they compete. With grade
+                // rotation off we only ever consider W, which always covers the
+                // stretch from its very start — seamless, but the earliest grade
+                // keeps the facility.
+                const cluster = (K.rotateGrades === false)
+                    ? [W]
+                    : windows.filter(W2 => W2.s >= W.s && W2.s < W.e);
+
                 // ── FIRST: is somebody ALREADY doing one of this facility's
                 //    activities on a different court right now? Then just switch
                 //    their court. Same activity, different room — the rotation is
                 //    untouched and nobody loses the activity they were given.
                 //    A SHARED game moves as a whole (never split): every bunk on
-                //    that court in this window has to be movable and the facility
+                //    that court in that window has to be movable and the facility
                 //    has to be able to hold them all under its own sharing rules.
-                const _groupsByCourt = {};
-                (_cands[W.key] || []).forEach(function (c) {
-                    if (!c.act || playable.indexOf(c.act) === -1) return;
-                    if (!c.fieldLc || c.fieldLc === fl || _allTargetsLc.has(c.fieldLc)) return;
-                    (_groupsByCourt[c.fieldLc] = _groupsByCourt[c.fieldLc] || []).push(c);
-                });
                 let redirect = null;
-                Object.keys(_groupsByCourt).forEach(function (court) {
-                    if (redirect) return;
-                    const group = _groupsByCourt[court];
-                    // Everybody on that court in this window must be in the group —
-                    // otherwise moving it would break up a game (or strand a bunk
-                    // whose slot the sweep isn't allowed to touch).
-                    if (_occupantCount(court, W.s, W.e) !== group.length) return;
-                    if (group.some(c => _usedCell[c.bunk + '|' + c.idx])) return;
-                    if (group.some(c => c.act !== group[0].act)) return;
-                    if (!_groupFits(K.fieldObj, group)) return;
-                    if (group.some(c => !_accessOk(K.fieldObj, c.grade) || !_timeOk(K.fieldObj, c.s, c.e)
-                        || _fieldLocked(K.name, c.s, c.e, c.grade))) return;
-                    redirect = { court: court, group: group };
+                cluster.forEach(function (W2) {
+                    const idle = W2.s - W.s;
+                    const groupsByCourt = {};
+                    (_cands[W2.key] || []).forEach(function (c) {
+                        if (!c.act || playable.indexOf(c.act) === -1) return;
+                        if (!c.fieldLc || c.fieldLc === fl || _allTargetsLc.has(c.fieldLc)) return;
+                        (groupsByCourt[c.fieldLc] = groupsByCourt[c.fieldLc] || []).push(c);
+                    });
+                    Object.keys(groupsByCourt).forEach(function (court) {
+                        const group = groupsByCourt[court];
+                        // Everybody on that court in that window must be in the group —
+                        // otherwise moving it would break up a game (or strand a bunk
+                        // whose slot the sweep isn't allowed to touch).
+                        if (_occupantCount(court, W2.s, W2.e) !== group.length) return;
+                        if (group.some(c => _usedCell[c.bunk + '|' + c.idx])) return;
+                        if (group.some(c => c.act !== group[0].act)) return;
+                        if (!_groupFits(K.fieldObj, group)) return;
+                        if (group.some(c => !_accessOk(K.fieldObj, c.grade) || !_timeOk(K.fieldObj, c.s, c.e)
+                            || _fieldLocked(K.name, c.s, c.e, c.grade))) return;
+                        const score = _rotScore(group[0].grade, idle);
+                        if (!redirect || score > redirect.score) {
+                            redirect = { court: court, group: group, score: score, idle: idle, win: W2 };
+                        }
+                    });
                 });
                 if (redirect) {
                     const from = sa[redirect.group[0].bunk][redirect.group[0].idx].field;
@@ -3312,15 +3349,17 @@
                         _usedCell[c.bunk + '|' + c.idx] = 1;
                         (_occ[fl] = _occ[fl] || []).push({ s: c.s, e: c.e, bunk: c.bunk, idx: c.idx });
                     });
+                    _noteUse(redirect.group[0].grade);
                     filled++;
                     const who = redirect.group.map(c => c.bunk).join(' + ');
                     console.log('[STEP 7.96] keep-in-use: "' + K.name + '" was idle at ' + W.s + '-' + W.e +
                         ' → ' + who + ' already had "' + redirect.group[0].act + '", moved ' + from + ' → ' + K.name +
-                        ' (same activity, nothing else changes)');
+                        ' (same activity, nothing else changes)' +
+                        (redirect.idle ? ' — starts ' + redirect.idle + ' min later (grade rotation)' : ''));
                     if (window.GenTrace && window.GenTrace.active) {
                         window.GenTrace.decision({
                             kind: 'keep-in-use-redirect', bunk: who, division: redirect.group[0].grade,
-                            window: W.s + '-' + W.e,
+                            window: redirect.win.s + '-' + redirect.win.e,
                             chosen: { name: redirect.group[0].act, field: K.name }, from: from
                         });
                     }
@@ -3328,18 +3367,23 @@
                 }
 
                 // ── ELSE: give the facility's activity to somebody new. Free
-                //    slots cost nothing, then the bunk most overdue for it.
+                //    slots cost nothing, then the least-represented grade, then
+                //    the bunk most overdue for it.
                 let best = null;
-                (_cands[W.key] || []).forEach(function (c) {
-                    if (_usedCell[c.bunk + '|' + c.idx]) return;
-                    if (!_accessOk(K.fieldObj, c.grade)) return;
-                    if (!_timeOk(K.fieldObj, c.s, c.e)) return;
-                    if (_fieldLocked(K.name, c.s, c.e, c.grade)) return;
-                    playable.forEach(function (act) {
-                        if (_done[c.bunk][String(act).toLowerCase().trim()]) return;   // already has it today
-                        const clean = _rotOk(c.bunk, act, c.idx);
-                        const score = (clean ? 1000000 : 0) + (c.free ? 100000 : 0) + _daysSince(c.bunk, act);
-                        if (!best || score > best.score) best = { c: c, act: act, clean: clean, score: score };
+                cluster.forEach(function (W2) {
+                    const idle = W2.s - W.s;
+                    (_cands[W2.key] || []).forEach(function (c) {
+                        if (_usedCell[c.bunk + '|' + c.idx]) return;
+                        if (!_accessOk(K.fieldObj, c.grade)) return;
+                        if (!_timeOk(K.fieldObj, c.s, c.e)) return;
+                        if (_fieldLocked(K.name, c.s, c.e, c.grade)) return;
+                        playable.forEach(function (act) {
+                            if (_done[c.bunk][String(act).toLowerCase().trim()]) return;   // already has it today
+                            const clean = _rotOk(c.bunk, act, c.idx);
+                            const score = (clean ? 100000000 : 0) + (c.free ? 10000000 : 0)
+                                + _rotScore(c.grade, idle) + _daysSince(c.bunk, act);
+                            if (!best || score > best.score) best = { c: c, act: act, clean: clean, score: score, idle: idle };
+                        });
                     });
                 });
 
@@ -3349,6 +3393,7 @@
                         W.s + '-' + W.e + ' — no bunk could be moved onto it (access / time rules / already did it today)');
                     return;
                 }
+                _noteUse(best.c.grade);
 
                 const c = best.c;
                 const prev = sa[c.bunk][c.idx];
@@ -3361,11 +3406,12 @@
                 };
                 _usedCell[c.bunk + '|' + c.idx] = 1;
                 _done[c.bunk][String(best.act).toLowerCase().trim()] = 1;
-                (_occ[fl] = _occ[fl] || []).push({ s: c.s, e: c.e });
+                (_occ[fl] = _occ[fl] || []).push({ s: c.s, e: c.e, bunk: c.bunk, idx: c.idx });
                 filled++;
                 console.log('[STEP 7.96] keep-in-use: "' + K.name + '" was idle at ' + c.s + '-' + c.e +
                     ' → ' + c.bunk + ' "' + prevLabel + '" → "' + best.act + '" @ ' + K.name +
-                    (best.clean ? '' : ' (last resort — rotation gate relaxed)'));
+                    (best.clean ? '' : ' (last resort — rotation gate relaxed)') +
+                    (best.idle ? ' — starts ' + best.idle + ' min later (grade rotation)' : ''));
                 if (window.GenTrace && window.GenTrace.active) {
                     window.GenTrace.decision({
                         kind: 'keep-in-use', bunk: c.bunk, division: c.grade,

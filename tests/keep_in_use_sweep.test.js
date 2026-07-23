@@ -304,6 +304,99 @@ describe('STEP 7.96 — keep-in-use facility sweep', () => {
         assert.equal(sa.A[0].field, 'New Gym');
     });
 
+    // ---------------------------------------------------------------------
+    // GRADE ROTATION (staggered grade clocks)
+    // ---------------------------------------------------------------------
+    // Grade 1 10:00-11:00 / 11:00-12:00, Grade 2 10:15-11:15 / 11:15-12:15.
+    // Once Grade 1's first period is covered, EVERY Grade 2 period overlaps it,
+    // so without rotation Grade 1 keeps the gym all day. With rotation on, the
+    // grades take turns at the cost of a short gap at each handover.
+    const STAG = {
+        'Grade 1': [{ startMin: 600, endMin: 660 }, { startMin: 660, endMin: 720 }],
+        'Grade 2': [{ startMin: 615, endMin: 675 }, { startMin: 675, endMin: 735 }],
+    };
+    const STAG_BUNKS = { 'Grade 1': ['1A', '1B'], 'Grade 2': ['2A', '2B'] };
+
+    function setupStaggered(rotateGrades) {
+        fakeStorage = {};
+        FIELDS = [gymField({ keepInUse: { enabled: true, rotateGrades: rotateGrades } })];
+        global.__keepInUseSweep = undefined;
+        global.__freeFillRotationGate = undefined;
+        global.GenTrace = { active: false };
+        global.GlobalFieldLocks = undefined;
+        global.currentDisabledFields = [];
+        global.loadCurrentDailyData = () => ({});
+        global.RotationEngine = { getDaysSinceActivity: () => 5 };
+        global.divisions = { 'Grade 1': { bunks: STAG_BUNKS['Grade 1'] }, 'Grade 2': { bunks: STAG_BUNKS['Grade 2'] } };
+        global.divisionTimes = STAG;
+        global._perBunkSlots = null;
+        const sa = {};
+        Object.keys(STAG_BUNKS).forEach(g => STAG_BUNKS[g].forEach(b => {
+            sa[b] = STAG[g].map(p => ({ field: 'Free', sport: null, _activity: 'Free', _startMin: p.startMin, _endMin: p.endMin }));
+        }));
+        global.scheduleAssignments = sa;
+        return sa;
+    }
+    const gradesInGym = (sa) => {
+        const out = {};
+        Object.keys(sa).forEach(b => (sa[b] || []).forEach(e => {
+            if (e && e.field === 'New Gym') { const g = b[0]; out[g] = (out[g] || 0) + 1; }
+        }));
+        return out;
+    };
+
+    it('staggered grades: rotation OFF keeps coverage seamless but one grade owns it', () => {
+        const sa = setupStaggered(false);
+        sweep();
+        assert.deepEqual(gradesInGym(sa), { '1': 2 }, 'both slots went to the earliest grade');
+        assert.equal(sa['1A'].concat(sa['1B']).filter(e => e.field === 'New Gym').length, 2);
+        // seamless: 10:00-11:00 then 11:00-12:00, no gap between them
+        const slots = [];
+        Object.keys(sa).forEach(b => sa[b].forEach(e => { if (e.field === 'New Gym') slots.push(e); }));
+        slots.sort((a, b) => a._startMin - b._startMin);
+        assert.equal(slots[0]._endMin, slots[1]._startMin, 'no gap between the two gym slots');
+    });
+
+    it('staggered grades: rotation ON hands the facility to the other grade', () => {
+        const sa = setupStaggered(true);
+        sweep();
+        const byGrade = gradesInGym(sa);
+        assert.equal(byGrade['1'], 1, 'Grade 1 gets the first slot, got ' + JSON.stringify(byGrade));
+        assert.equal(byGrade['2'], 1, 'Grade 2 gets the second, got ' + JSON.stringify(byGrade));
+        const slots = [];
+        Object.keys(sa).forEach(b => sa[b].forEach(e => { if (e.field === 'New Gym') slots.push(e); }));
+        slots.sort((a, b) => a._startMin - b._startMin);
+        assert.equal(slots[0]._startMin, 600, 'first slot still starts at the top of the day');
+        assert.equal(slots[1]._startMin, 675, 'the handover starts on Grade 2\'s clock');
+        assert.equal(slots[1]._startMin - slots[0]._endMin, 15, 'the handover costs exactly the 15-min stagger');
+    });
+
+    it('rotation is a no-op when every grade runs on the same clock', () => {
+        // Same grid for both grades → no later-starting window to hand over to,
+        // so rotation on/off must produce identical, gapless coverage.
+        const same = { 'Grade 1': STAG['Grade 1'], 'Grade 2': STAG['Grade 1'] };
+        const build = (rot) => {
+            fakeStorage = {};
+            FIELDS = [gymField({ keepInUse: { enabled: true, rotateGrades: rot } })];
+            global.GenTrace = { active: false }; global.GlobalFieldLocks = undefined;
+            global.currentDisabledFields = []; global.loadCurrentDailyData = () => ({});
+            global.RotationEngine = { getDaysSinceActivity: () => 5 };
+            global.divisions = { 'Grade 1': { bunks: ['1A', '1B'] }, 'Grade 2': { bunks: ['2A', '2B'] } };
+            global.divisionTimes = same; global._perBunkSlots = null;
+            const sa = {};
+            ['1A', '1B', '2A', '2B'].forEach(b => {
+                sa[b] = same['Grade 1'].map(p => ({ field: 'Free', sport: null, _activity: 'Free', _startMin: p.startMin, _endMin: p.endMin }));
+            });
+            global.scheduleAssignments = sa;
+            sweep();
+            const slots = [];
+            Object.keys(sa).forEach(x => sa[x].forEach(e => { if (e.field === 'New Gym') slots.push(e._startMin + '-' + e._endMin); }));
+            return slots.sort().join(',');
+        };
+        assert.equal(build(true), build(false), 'same clock → rotation changes nothing');
+        assert.equal(build(true), '600-660,660-720', 'and the day is fully covered');
+    });
+
     it('prefers a bunk the rotation gate allows over one it blocks', () => {
         const sa = setup({
             A: [free(0)],

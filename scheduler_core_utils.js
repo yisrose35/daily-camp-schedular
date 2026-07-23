@@ -2407,6 +2407,11 @@
                     // Optional window — blank means "the whole camp day".
                     startMin: (cfg.startMin != null && !isNaN(Number(cfg.startMin))) ? Number(cfg.startMin) : null,
                     endMin: (cfg.endMin != null && !isNaN(Number(cfg.endMin))) ? Number(cfg.endMin) : null,
+                    // Spread the facility around between grades instead of letting
+                    // the earliest-starting grade hold it all day. Only bites when
+                    // grade periods are STAGGERED, where handing over costs a short
+                    // gap. Default ON; turn it off to keep coverage seamless.
+                    rotateGrades: cfg.rotateGrades !== false,
                     fieldObj: f
                 });
             });
