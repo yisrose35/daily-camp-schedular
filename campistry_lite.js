@@ -1372,19 +1372,21 @@
             rows = entries.map(e => {
                 const isNow = isToday && e.startMin != null && e.endMin != null
                     && nowMin >= e.startMin && nowMin < e.endMin;
-                let bodyHtml = `<div class="lite-slot-activity">${esc(e.title)}</div>`;
-                if (e.location && e.location !== e.title) {
+                const badge = KIND_BADGE[e.kind] || '';
+                let bodyHtml = `<div class="lite-slot-activity">${badge}${esc(e.title)}</div>`;
+                if (e.location) {
                     bodyHtml += `<div class="lite-slot-loc">📍 ${esc(e.location)}</div>`;
                 }
                 if (e.league) {
                     const team = bunkTeamForLeague(bunk, e.league);
-                    bodyHtml = `<span class="lite-league-badge">League · ${esc(e.league)}</span>` + bodyHtml;
+                    bodyHtml = `<span class="lite-league-badge">League · ${esc(e.league)}</span>`
+                        + `<div class="lite-slot-activity">${esc(e.title)}</div>`;
                     (e.matchups || []).forEach(m => {
                         const mine = team && m.toLowerCase().includes(team.toLowerCase());
                         bodyHtml += `<div class="lite-matchup${mine ? ' mine' : ''}">${mine ? '⭐ ' : ''}${esc(m)}</div>`;
                     });
                 }
-                return `<div class="lite-slot${isNow ? ' now' : ''}">
+                return `<div class="lite-slot${isNow ? ' now' : ''} kind-${e.kind}">
                     <div class="lite-slot-time">
                         <div class="t1">${e.startMin != null ? esc(fmtMin(e.startMin)) : '—'}</div>
                         <div class="t2">${e.endMin != null ? esc(fmtMin(e.endMin)) : ''}</div>
@@ -1400,6 +1402,25 @@
             </div>
             ${rows}
         </div>`;
+    }
+
+    // Classify a schedule entry the way the desktop grid does.
+    function entryKind(e) {
+        const name = String(e._activity || e.sport || e.event || (typeof e.field === 'string' ? e.field : '') || '').toLowerCase();
+        const fieldStr = (typeof e.field === 'string' ? e.field : '').toLowerCase();
+        if (e._h2h || e._league || e._leagueName || name.includes('league') || fieldStr.includes('league')) return 'league';
+        if (e._isTrip || String(e.type || '').toLowerCase() === 'trip') return 'trip';
+        if (e._reserved || e.isReserved || e._classification === 'reserved') return 'reserved';
+        if (e._pinned || e._fixed || e.isPinned || e._classification === 'pinned') return 'pinned';
+        return 'regular';
+    }
+    // Mirror window.getActivityDisplayName (+ custom-pin fields), which Lite can't
+    // call directly (scheduler_core_utils isn't loaded here).
+    function entryDisplayName(e) {
+        if (e._displayName) return e._displayName;
+        if (e._partLabel) return e._partLabel;
+        if (e._partNumber && e._totalParts && e._activity) return e._activity + ' ' + e._partNumber + '/' + e._totalParts;
+        return e._customActivity || e._assignedSport || e.sport || e._activity || e.event || fieldLabel(e.field) || 'Activity';
     }
 
     // Turn scheduleAssignments[bunk] into clean, sorted display rows
@@ -1426,26 +1447,34 @@
                 if (ce != null && (endMin == null || ce > endMin)) endMin = ce;
             }
 
-            const isLeague = !!(e._h2h || e._leagueName ||
-                (typeof e.field === 'string' && e.field.startsWith('League: ')));
+            const kind = entryKind(e);
             const location = fieldLabel(e.field);
             let title;
-            if (isLeague) {
-                title = e._gameLabel || e.sport || e._leagueName || 'League Game';
+            if (kind === 'league') {
+                title = e._gameLabel || e.sport || e._leagueName || String(e.field || '').replace(/^League:\s*/i, '') || 'League Game';
             } else {
-                title = e.sport || e._activity || location || 'Activity';
+                title = entryDisplayName(e);
             }
+            // Show the location only when it differs from the title (a reserved
+            // location whose "activity" IS the field just shows the field + badge).
+            const locDistinct = kind !== 'league' && location && location !== title;
             out.push({
-                title,
-                location: isLeague ? null : location,
+                title, kind,
+                location: locDistinct ? location : null,
                 startMin, endMin,
-                league: isLeague ? (e._leagueName || String(e.field || '').replace(/^League:\s*/, '')) : null,
-                matchups: isLeague ? (e._allMatchups || []) : null
+                league: kind === 'league' ? (e._leagueName || String(e.field || '').replace(/^League:\s*/i, '')) : null,
+                matchups: kind === 'league' ? (e._allMatchups || []) : null
             });
         });
         out.sort((a, b) => (a.startMin ?? 99999) - (b.startMin ?? 99999));
         return out;
     }
+
+    const KIND_BADGE = {
+        pinned:   '<span class="lite-kind-badge pinned">📌 Pinned</span>',
+        reserved: '<span class="lite-kind-badge reserved">🔒 Reserved</span>',
+        trip:     '<span class="lite-kind-badge trip">🚌 Trip</span>'
+    };
 
     // ════════════════════════════════════════════════════════════════════
     // VIEW: ROSTER

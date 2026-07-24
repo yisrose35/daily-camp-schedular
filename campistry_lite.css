@@ -363,6 +363,16 @@ button { cursor: pointer; border: none; background: none; }
 .lite-matchup { font-size: 0.8rem; color: var(--ink-2); padding: 3px 0 0; }
 .lite-matchup.mine { color: var(--accent-dark); font-weight: 700; }
 
+/* Pinned / reserved / trip markers on a schedule slot */
+.lite-kind-badge { display: inline-block; font-size: 0.6rem; font-weight: 800; text-transform: uppercase; letter-spacing: 0.04em; padding: 2px 7px; border-radius: 999px; margin-right: 7px; vertical-align: middle; }
+.lite-kind-badge.pinned { background: #EEF2FF; color: #3730A3; }
+.lite-kind-badge.reserved { background: #FEF3F2; color: #B42318; }
+.lite-kind-badge.trip { background: #ECFDF5; color: #065F46; }
+.lite-slot.kind-pinned { border-left: 3px solid #818CF8; }
+.lite-slot.kind-reserved { border-left: 3px solid #F87171; }
+.lite-slot.kind-trip { border-left: 3px solid #34D399; }
+.lite-slot.kind-league { border-left: 3px solid #60A5FA; }
+
 /* ─── Roster / camper ─────────────────────────────────────────────────── */
 .lite-camper { padding: 0; overflow: hidden; }
 .lite-camper-row { display: flex; align-items: center; justify-content: space-between; gap: 10px; width: 100%; padding: 14px 15px; text-align: left; }
