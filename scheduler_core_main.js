@@ -3162,14 +3162,35 @@
             return true;
         };
         // A global lock means a league game / pinned reservation / specialty
-        // league owns the facility right then — somebody IS in there, and we
-        // must not place a second thing on top of it either way.
+        // league / a placed special's room (STEP 6.95) owns the facility right
+        // then — somebody IS in there, and we must not place a second thing on
+        // top of it either way. isFieldLockedByTime also covers combined-field
+        // mutual exclusion, so claiming Gym 1 while "Full Gym" is in use is
+        // blocked too. Passing division `null` deliberately: a DIVISION-scoped
+        // lock (elective) exempts its own grade, and we do NOT want that
+        // exemption here — the reserving tile is already using the facility.
         const _fieldLocked = (name, s, e, g) => {
             try {
                 return !!(window.GlobalFieldLocks && window.GlobalFieldLocks.isFieldLockedByTime
                     && window.GlobalFieldLocks.isFieldLockedByTime(name, s, e, g));
             } catch (_) { return false; }
         };
+        // ★ Skeleton field RESERVATIONS (Daily-Adjustments reservation tiles,
+        //   electives) are a SEPARATE store from GlobalFieldLocks — the solver's
+        //   sport path gates on them via canBlockFit, but the free-fill passes
+        //   only ever consulted the lock table. That is exactly the blind spot
+        //   that once handed a league a reserved court (see the same guard in
+        //   scheduler_core_leagues buildAvailableFieldSportPool). Block on ANY
+        //   overlapping reservation regardless of whose it is: leaving a period
+        //   uncovered is now visible in the validator, a double-book is not.
+        const _fieldReserved = (name, s, e) => {
+            try {
+                const list = window.fieldReservations && window.fieldReservations[name];
+                if (!Array.isArray(list) || !list.length) return false;
+                return list.some(r => r && r.startMin < e && r.endMin > s);
+            } catch (_) { return false; }
+        };
+        const _fieldTaken = (name, s, e, g) => _fieldLocked(name, s, e, g) || _fieldReserved(name, s, e);
         const _accessOk = (f, grade) => {
             const ar = f && f.accessRestrictions;
             if (!ar || !ar.enabled) return true;
@@ -3296,7 +3317,7 @@
                 // just made whose window overlaps this one — divisions' grids differ,
                 // so two windows can overlap without being identical.)
                 if (_fieldBusy(fl, W.s, W.e)) { covered++; return; }
-                if (_fieldLocked(K.name, W.s, W.e, null)) { covered++; return; }
+                if (_fieldTaken(K.name, W.s, W.e, null)) { covered++; return; }
 
                 // Every period that could cover this idle stretch — W itself plus
                 // any later-starting period that overlaps it. Only one of them can
@@ -3334,7 +3355,7 @@
                         if (group.some(c => c.act !== group[0].act)) return;
                         if (!_groupFits(K.fieldObj, group)) return;
                         if (group.some(c => !_accessOk(K.fieldObj, c.grade) || !_timeOk(K.fieldObj, c.s, c.e)
-                            || _fieldLocked(K.name, c.s, c.e, c.grade))) return;
+                            || _fieldTaken(K.name, c.s, c.e, null))) return;
                         const score = _rotScore(group[0].grade, idle);
                         if (!redirect || score > redirect.score) {
                             redirect = { court: court, group: group, score: score, idle: idle, win: W2 };
@@ -3376,7 +3397,7 @@
                         if (_usedCell[c.bunk + '|' + c.idx]) return;
                         if (!_accessOk(K.fieldObj, c.grade)) return;
                         if (!_timeOk(K.fieldObj, c.s, c.e)) return;
-                        if (_fieldLocked(K.name, c.s, c.e, c.grade)) return;
+                        if (_fieldTaken(K.name, c.s, c.e, null)) return;
                         playable.forEach(function (act) {
                             if (_done[c.bunk][String(act).toLowerCase().trim()]) return;   // already has it today
                             const clean = _rotOk(c.bunk, act, c.idx);
