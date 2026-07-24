@@ -48,6 +48,7 @@
         roster: {},           // app1.camperRoster ({ "First Last": {...} })
         leagues: {},          // leaguesByName
         specialty: {},        // specialtyLeagues (id-keyed)
+        specialActivities: [],// app1.specialActivities ([{ name, ... }])
         staff: {},            // liteStaffAssignments
         sms: { enabled: false, audience: 'counselors', footer: '' },
         stateLoaded: false,
@@ -284,6 +285,8 @@
             camp.structure = byKey.campStructure || {};
             camp.leagues = byKey.leaguesByName || {};
             camp.specialty = byKey.specialtyLeagues || {};
+            camp.specialActivities = app1.specialActivities || [];
+            _specialNames = null;   // reset lazy cache when config reloads
             camp.staff = byKey.liteStaffAssignments || {};
             camp.fields = byKey.fields || app1.fields || [];
             camp.campName = (typeof byKey.camp_name === 'string') ? byKey.camp_name
@@ -1468,13 +1471,43 @@
         };
     }
 
-    // Classify a non-league entry the way the desktop grid does. (League slots
-    // are detected upstream via slotIsLeagueBlock / _h2h, so they never reach
-    // here — a pinned tile titled "League" correctly falls through to pinned.)
+    // Names configured as special activities (app1.specialActivities), lowercased.
+    let _specialNames = null;
+    function specialNames() {
+        if (_specialNames) return _specialNames;
+        _specialNames = new Set();
+        const arr = Array.isArray(camp.specialActivities) ? camp.specialActivities : Object.values(camp.specialActivities || {});
+        arr.forEach(s => { const n = s && s.name; if (n) _specialNames.add(String(n).toLowerCase().trim()); });
+        return _specialNames;
+    }
+    // Is this entry one of the camp's configured special activities? Specials get
+    // solver-pinned to fixed times (_fixed / _classification:'pinned'), so we must
+    // identify them by NAME — otherwise they'd all be mislabeled as pinned tiles.
+    function isSpecialEntry(e) {
+        const set = specialNames();
+        if (!set.size) return false;
+        return [e._activity, e._customActivity, e._assignedSport, e.sport, e.event]
+            .some(c => c && set.has(String(c).toLowerCase().trim()));
+    }
+    // Everyday fixed "walls" (lunch, swim, change…) carry _fixed too, but aren't
+    // user-pinned custom tiles — don't badge them as Pinned.
+    const WALL_RE = /\b(lunch|snack|swim|dismissal|rest|free|change|line ?up|wake|davening|shower)\b/i;
+    function isWallEntry(e) {
+        const name = String(e._activity || e.event || e.sport || fieldLabel(e.field) || '');
+        return WALL_RE.test(name);
+    }
+
+    // Classify a non-league entry. (League slots are detected upstream via
+    // slotIsLeagueBlock / _league / _h2h.) Order matters: a special activity is
+    // identified by name BEFORE the pinned/reserved solver flags, so specials
+    // render as ordinary activities instead of "Pinned".
     function entryKind(e) {
         if (e._isTrip || String(e.type || '').toLowerCase() === 'trip') return 'trip';
-        if (e._reserved || e.isReserved || e._classification === 'reserved') return 'reserved';
-        if (e._pinned || e._fixed || e.isPinned || e._classification === 'pinned') return 'pinned';
+        if (isSpecialEntry(e)) return 'regular';
+        if (e._reserved || e.isReserved || e.reservedLocation || e._classification === 'reserved') return 'reserved';
+        const pinnedish = e._pinned === true || e.isPinned === true || e._custom === true
+            || e._classification === 'pinned' || e._fixed === true;
+        if (pinnedish && !isWallEntry(e)) return 'pinned';
         return 'regular';
     }
     // Mirror window.getActivityDisplayName (+ custom-pin fields), which Lite can't
@@ -1492,28 +1525,41 @@
     function normalizeBunkEntries(bunk, sched) {
         const raw = (sched.scheduleAssignments || {})[bunk];
         const divKey = divKeyForBunk(bunk);
-        const divSlots = (sched.divisionTimes || {})[divKey] || [];
+        const allDivSlots = (sched.divisionTimes || {})[divKey] || [];
+        // divisionTimes can hold a per-bunk slot grid; prefer it when present.
+        const divSlots = (allDivSlots && allDivSlots._perBunkSlots && allDivSlots._perBunkSlots[bunk])
+            ? allDivSlots._perBunkSlots[bunk] : allDivSlots;
+        const slotLen = Array.isArray(divSlots) ? divSlots.length : 0;
         const hasRaw = Array.isArray(raw);
-        const n = Math.max(hasRaw ? raw.length : 0, divSlots.length);
+        const n = Math.max(hasRaw ? raw.length : 0, slotLen);
         if (!n) return [];
 
         const out = [];
         const seenLeague = new Set();
         for (let idx = 0; idx < n; idx++) {
             const e = hasRaw ? raw[idx] : null;
-            const slot = divSlots[idx];
-            const entryIsLeague = !!(e && (e._h2h || (Array.isArray(e._allMatchups) && e._allMatchups.length > 0)));
+            const slot = Array.isArray(divSlots) ? divSlots[idx] : null;
+            // A real league game: entry carries _league/_h2h/matchups (auto + manual),
+            // or the division slot itself is a league block.
+            const entryIsLeague = !!(e && (e._league || e._h2h
+                || (Array.isArray(e._allMatchups) && e._allMatchups.length > 0)
+                || (Array.isArray(e.matchups) && e.matchups.length > 0)));
             const isLeague = entryIsLeague || slotIsLeagueBlock(slot);
 
             if (isLeague) {
                 if (e && e.continuation) continue;
-                let startMin = numOrNull(e && e._startMin);
-                let endMin = numOrNull(e && e._endMin);
+                // NOTE: numOrNull(null) === 0, so guard on `e` before reading — a
+                // league slot with no per-bunk cell must fall back to slot times,
+                // not silently become 0 (which rendered as "12:00 AM").
+                let startMin = e ? numOrNull(e._startMin) : null;
+                let endMin = e ? numOrNull(e._endMin) : null;
                 if (startMin == null && slot) { startMin = numOrNull(slot.startMin); endMin = numOrNull(slot.endMin); }
                 const li = getLeagueMatchupsLite(sched, divKey, idx);
                 const defSport = (li && li.sport) || (e && e.sport) || '';
+                const entryMatchups = (e && Array.isArray(e._allMatchups) && e._allMatchups.length) ? e._allMatchups
+                    : (e && Array.isArray(e.matchups) && e.matchups.length) ? e.matchups : [];
                 const matchups = (li && li.matchups.length) ? li.matchups
-                    : (e && Array.isArray(e._allMatchups)) ? e._allMatchups.map(m => normalizeMatchup(m, defSport)) : [];
+                    : entryMatchups.map(m => normalizeMatchup(m, defSport));
                 const leagueName = (li && li.leagueName) || (e && e._leagueName)
                     || (slot && slot.event) || String((e && e.field) || '').replace(/^League:\s*/i, '') || 'League';
                 const title = (li && li.gameLabel) || (e && e._gameLabel) || (e && e.sport) || 'League Game';
