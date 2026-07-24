@@ -1284,6 +1284,16 @@
             b.addEventListener('click', () => { schedMode = b.dataset.val; renderToday(); }));
         const inp = view.querySelector('#liteBunkSearch');
         inp.addEventListener('input', () => { bunkQuery = inp.value; renderSchedChips(view); renderSchedBody(view); });
+        const schedBody = view.querySelector('#liteSchedBody');
+        if (schedBody && !schedBody.dataset.gamesWired) {
+            schedBody.dataset.gamesWired = '1';
+            schedBody.addEventListener('click', (ev) => {
+                const link = ev.target.closest('.lite-league-link');
+                if (!link) return;
+                let data; try { data = JSON.parse(link.dataset.games || '{}'); } catch { return; }
+                openLeagueGamesSheet(data);
+            });
+        }
 
         renderSchedChips(view);
         await renderSchedBody(view);
@@ -1354,7 +1364,7 @@
                 ${byGroup[g].map(r => `<div class="lite-slot">
                     <div class="lite-slot-time"><div class="t1">${esc(r.bunk)}</div></div>
                     <div class="lite-slot-body">${r.entry
-                        ? `<div class="lite-slot-activity">${esc(r.entry.title)}</div>${r.entry.location && r.entry.location !== r.entry.title ? `<div class="lite-slot-loc">📍 ${esc(r.entry.location)}</div>` : ''}`
+                        ? `<div class="lite-slot-activity">${esc(r.entry.title)}</div>${r.entry.location && r.entry.location !== r.entry.title ? `<div class="lite-slot-loc">${esc(r.entry.location)}</div>` : ''}`
                         : `<div class="lite-slot-activity" style="color:var(--muted);">${r.upcoming ? `Free · next ${esc(r.upcoming.title)} ${esc(fmtMin(r.upcoming.startMin))}` : 'Nothing scheduled'}</div>`}</div>
                 </div>`).join('')}
             </div>`).join('');
@@ -1375,16 +1385,16 @@
                 const badge = KIND_BADGE[e.kind] || '';
                 let bodyHtml = `<div class="lite-slot-activity">${badge}${esc(e.title)}</div>`;
                 if (e.location) {
-                    bodyHtml += `<div class="lite-slot-loc">📍 ${esc(e.location)}</div>`;
+                    bodyHtml += `<div class="lite-slot-loc">${esc(e.location)}</div>`;
                 }
                 if (e.league) {
                     const team = bunkTeamForLeague(bunk, e.league);
+                    const payload = esc(JSON.stringify({
+                        league: e.league, label: e.title,
+                        matchups: e.matchups || [], team: team || ''
+                    }));
                     bodyHtml = `<span class="lite-league-badge">League · ${esc(e.league)}</span>`
-                        + `<div class="lite-slot-activity">${esc(e.title)}</div>`;
-                    (e.matchups || []).forEach(m => {
-                        const mine = team && m.toLowerCase().includes(team.toLowerCase());
-                        bodyHtml += `<div class="lite-matchup${mine ? ' mine' : ''}">${mine ? '⭐ ' : ''}${esc(m)}</div>`;
-                    });
+                        + `<button type="button" class="lite-league-link" data-games="${payload}">View matchups &amp; games ›</button>`;
                 }
                 return `<div class="lite-slot${isNow ? ' now' : ''} kind-${e.kind}">
                     <div class="lite-slot-time">
@@ -1471,10 +1481,39 @@
     }
 
     const KIND_BADGE = {
-        pinned:   '<span class="lite-kind-badge pinned">📌 Pinned</span>',
-        reserved: '<span class="lite-kind-badge reserved">🔒 Reserved</span>',
-        trip:     '<span class="lite-kind-badge trip">🚌 Trip</span>'
+        pinned:   '<span class="lite-kind-badge pinned">Pinned</span>',
+        reserved: '<span class="lite-kind-badge reserved">Reserved</span>',
+        trip:     '<span class="lite-kind-badge trip">Trip</span>'
     };
+
+    // "Team A vs Team B @ Field (Sport)" → parts. Bye/Chinuch lines lack "@".
+    function parseMatchup(s) {
+        const str = String(s || '').trim();
+        const at = str.match(/^(.+?)\s*@\s*(.+?)\s*(?:\(([^)]*)\))?\s*$/);
+        if (at && at[2]) return { teams: at[1].trim(), field: at[2].trim(), sport: (at[3] || '').trim() };
+        return { teams: str, field: '', sport: '' };
+    }
+
+    function openLeagueGamesSheet(data) {
+        const rows = (data.matchups || []).map(s => {
+            const g = parseMatchup(s);
+            const mine = data.team && g.teams.toLowerCase().includes(String(data.team).toLowerCase());
+            const meta = [g.field, g.sport].filter(Boolean).map(esc).join(' · ');
+            return `<div class="lite-game-row${mine ? ' mine' : ''}">
+                <div class="lite-game-teams">${esc(g.teams)}${mine ? '<span class="lite-game-you">Your game</span>' : ''}</div>
+                ${meta ? `<div class="lite-game-meta">${meta}</div>` : ''}
+            </div>`;
+        }).join('') || `<div class="lite-empty" style="padding:16px;">No matchups listed yet.</div>`;
+        const subtitle = data.label && data.label !== data.league ? ' · ' + esc(data.label) : '';
+        openSheet(`
+            <div class="lite-sheet-head">
+                <div class="lite-sheet-title" style="margin:0;">${esc(data.league || 'League')}${subtitle}</div>
+                <button class="lite-sheet-close" id="liteGamesClose" aria-label="Close"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg></button>
+            </div>
+            <div class="lite-games-list">${rows}</div>`);
+        const c = document.getElementById('liteGamesClose');
+        if (c) c.addEventListener('click', closeSheet);
+    }
 
     // ════════════════════════════════════════════════════════════════════
     // VIEW: ROSTER

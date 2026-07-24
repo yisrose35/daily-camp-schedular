@@ -373,6 +373,16 @@ button { cursor: pointer; border: none; background: none; }
 .lite-slot.kind-trip { border-left: 3px solid #34D399; }
 .lite-slot.kind-league { border-left: 3px solid #60A5FA; }
 
+/* League "view matchups & games" link + sheet */
+.lite-league-link { display: inline-flex; align-items: center; gap: 4px; margin-top: 6px; padding: 6px 12px; font-size: 0.8rem; font-weight: 700; color: var(--accent-dark); background: var(--accent-tint); border: none; border-radius: 999px; cursor: pointer; }
+.lite-league-link:active { opacity: 0.7; }
+.lite-games-list { display: flex; flex-direction: column; gap: 8px; margin-top: 6px; }
+.lite-game-row { padding: 12px 14px; border-radius: 12px; background: var(--card-2, #F8FAFC); border: 1px solid var(--line, #E5E7EB); }
+.lite-game-row.mine { background: var(--accent-tint); border-color: var(--accent); }
+.lite-game-teams { font-size: 0.92rem; font-weight: 700; color: var(--ink); display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.lite-game-you { font-size: 0.6rem; font-weight: 800; text-transform: uppercase; letter-spacing: 0.04em; color: #fff; background: var(--accent-dark); padding: 2px 7px; border-radius: 999px; }
+.lite-game-meta { font-size: 0.8rem; color: var(--ink-2); margin-top: 3px; }
+
 /* ─── Roster / camper ─────────────────────────────────────────────────── */
 .lite-camper { padding: 0; overflow: hidden; }
 .lite-camper-row { display: flex; align-items: center; justify-content: space-between; gap: 10px; width: 100%; padding: 14px 15px; text-align: left; }
