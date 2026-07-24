@@ -854,6 +854,40 @@
         // ★★★ FILTER OUT DISABLED AND ALREADY-LOCKED FIELDS ★★★
         const _disabledSet = new Set(window.currentDisabledFields || []);
         let availableFields = fields.filter(f => !_disabledSet.has(f));
+
+        // ★ SPECIAL-ACTIVITY ROOMS ARE SPECIAL-ONLY (parity with RegularLeagues'
+        //   _leagueSpecialRooms in buildAvailableFieldSportPool).
+        //   A court that is a special's physical room (e.g. "Gym 1" is the
+        //   "Basketball Clinic" room) must not be handed to a league game.
+        //   Specialty leagues run at STEP 4, BEFORE Smart Tiles at STEP 6, and
+        //   they lock what they take — but the Smart Tile gate
+        //   (smart_logic_adapter canDivisionUseSpecial) tests GlobalFieldLocks
+        //   under the SPECIAL'S NAME, never its host facility. So a specialty
+        //   league sitting on "Gym 1" is invisible to the special that lives
+        //   there, and both end up in the same room at the same time — a
+        //   physical double-book neither engine can see. Regular leagues have
+        //   been excluding special rooms for exactly this reason; specialty
+        //   leagues never did.
+        //   Self-named specials (location == own name) aren't sport courts, so
+        //   excluding them is a harmless no-op.
+        //   Killswitch: window.__specLeagueSpecialRoomGuard = false.
+        if (window.__specLeagueSpecialRoomGuard !== false) {
+            try {
+                const _gsRooms = (window.loadGlobalSettings && window.loadGlobalSettings()) || window.globalSettings || {};
+                const _roomSet = new Set();
+                (((_gsRooms.app1 && _gsRooms.app1.specialActivities) || _gsRooms.specialActivities || []) || [])
+                    .forEach(sp => { if (sp && sp.location) _roomSet.add(String(sp.location).toLowerCase().trim()); });
+                if (_roomSet.size) {
+                    const _beforeRooms = availableFields;
+                    availableFields = availableFields.filter(f => !_roomSet.has(String(f).toLowerCase().trim()));
+                    const _dropped = _beforeRooms.filter(f => !availableFields.includes(f));
+                    if (_dropped.length) {
+                        console.log('[SpecialtyLeagues] ⚠️ Court(s) reserved for special activities — not available to "' +
+                            league.name + '": ' + _dropped.join(', '));
+                    }
+                }
+            } catch (_eRooms) { /* fail open — never drop every court on a read error */ }
+        }
         // ★ FN-29: field-config map so specialty leagues honor the same facility configs
         //   sports do — access restrictions, weather availability, and canonical
         //   field.timeRules (fallback when the merged activityProperties copy is empty).
@@ -2280,6 +2314,8 @@ if (_playoffRoundNum) {
             return false;
         }
     };
+
+    SpecialtyLeagues._assignMatchupsToFieldsAndSlots = assignMatchupsToFieldsAndSlots; // diagnostics + tests
 
     window.SchedulerCoreSpecialtyLeagues = SpecialtyLeagues;
 
