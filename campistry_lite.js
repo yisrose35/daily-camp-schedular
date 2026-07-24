@@ -94,6 +94,7 @@
     let notesQuery = '';
     let notesEditorId = null;         // null = list view; else editing this note id
     let notesSaveTimer = null;
+    let campUsers = null;             // camp_users (for the note-share picker)
     let nowTargetMin = null;          // Locate time selection; null = live "now"
     let locateQuery = '';
     let rotationData = null;          // cached RotationCloud.load() result
@@ -530,6 +531,18 @@
 
     const NOTE_COLORS = ['yellow', 'peach', 'pink', 'blue', 'green', 'purple', 'slate'];
     function noteById(id) { return (notesArr || []).find(n => n.id === id); }
+
+    // Camp members (from camp_users) — the pool for the note-share picker.
+    async function loadCampUsers() {
+        if (campUsers) return campUsers;
+        try {
+            const { data, error } = await window.supabase
+                .from('camp_users').select('email,name,role').eq('camp_id', campId);
+            if (error) throw error;
+            campUsers = (data || []).filter(u => u && u.email);
+        } catch (e) { console.warn('[Lite] loadCampUsers failed:', e?.message || e); campUsers = campUsers || []; }
+        return campUsers;
+    }
 
     // Update a link_messages flag column (read/important/archived), cloud + local.
     async function updateLinkFlag(id, field, value) {
@@ -2839,7 +2852,7 @@
 
     async function renderNotes() {
         const view = document.getElementById('view-notesList');
-        if (notesArr === null) { view.innerHTML = loadingHTML(); await loadNotes(); }
+        if (notesArr === null || campUsers === null) { view.innerHTML = loadingHTML(); await Promise.all([loadNotes(), loadCampUsers()]); }
         if (activeTab !== 'notesList') return;
         if (notesEditorId) { renderNoteEditor(); return; }
         paintNotesList();
@@ -2969,10 +2982,7 @@
                 <div class="lite-note-section">
                     <div class="lite-note-sec-label">Shared with</div>
                     ${shareChips ? `<div class="lite-attach-row">${shareChips}</div>` : '<div class="lite-note" style="margin:0 0 6px;">Not shared yet</div>'}
-                    <div class="lite-reply-row">
-                        <input class="lite-input" id="liteNoteShareEmail" type="email" placeholder="Add someone by email…">
-                        <button class="lite-btn" id="liteNoteShareAdd">Share</button>
-                    </div>
+                    ${shareOptionsHTML(n)}
                 </div>` : (shareChips ? `<div class="lite-note-section"><div class="lite-note-sec-label">Shared with</div><div class="lite-attach-row">${shareChips}</div></div>` : '')}
 
                 <div class="lite-note-meta">${inTrash ? 'In Trash · ' : ''}${n.reminder ? '⏰ ' + fmtDate(n.reminder) + ' · ' : ''}Edited ${n.updatedAt ? new Date(n.updatedAt).toLocaleString(undefined, { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' }) : ''}</div>
@@ -3005,12 +3015,11 @@
         });
         const remClear = view.querySelector('#liteNoteReminderClear');
         if (remClear) remClear.addEventListener('click', () => { const nn = noteById(notesEditorId); if (!nn) return; nn.reminder = null; upsertNote(nn); renderNoteEditor(); });
-        const shareAdd = view.querySelector('#liteNoteShareAdd');
-        const shareInp = view.querySelector('#liteNoteShareEmail');
-        if (shareAdd) shareAdd.addEventListener('click', () => {
+        const shareSel = view.querySelector('#liteNoteShareSelect');
+        if (shareSel) shareSel.addEventListener('change', () => {
+            const email = (shareSel.value || '').trim().toLowerCase();
+            if (!email) return;
             const nn = noteById(notesEditorId); if (!nn) return;
-            const email = (shareInp.value || '').trim().toLowerCase();
-            if (!email || !email.includes('@')) { toast('Enter a valid email'); return; }
             nn.sharedWith = Array.from(new Set([...(nn.sharedWith || []), email]));
             nn.isShared = nn.sharedWith.length > 0; upsertNote(nn); renderNoteEditor();
             toast('Shared with ' + email);
@@ -3032,6 +3041,22 @@
         const d = new Date(iso); if (isNaN(d.getTime())) return '';
         const pad = x => String(x).padStart(2, '0');
         return d.getFullYear() + '-' + pad(d.getMonth() + 1) + '-' + pad(d.getDate()) + 'T' + pad(d.getHours()) + ':' + pad(d.getMinutes());
+    }
+    // Dropdown of camp members not already shared with (and not yourself).
+    function shareOptionsHTML(n) {
+        const shared = new Set((n.sharedWith || []).map(e => String(e).toLowerCase()));
+        const me = (userEmail || '').toLowerCase();
+        const eligible = (campUsers || []).filter(u => {
+            const e = String(u.email || '').toLowerCase();
+            return e && e !== me && !shared.has(e);
+        }).sort((a, b) => String(a.name || a.email).localeCompare(String(b.name || b.email)));
+        if (!eligible.length) {
+            return `<div class="lite-note" style="margin:0;">${(campUsers || []).length ? 'Everyone in the camp is already added.' : 'No other camp members to share with.'}</div>`;
+        }
+        return `<select class="lite-input lite-select" id="liteNoteShareSelect">
+            <option value="">Add a camp member…</option>
+            ${eligible.map(u => `<option value="${esc(u.email)}">${esc(u.name || u.email)}${u.role ? ' · ' + esc(cap(u.role)) : ''}</option>`).join('')}
+        </select>`;
     }
 
     // ════════════════════════════════════════════════════════════════════

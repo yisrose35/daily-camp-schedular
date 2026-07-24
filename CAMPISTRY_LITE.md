@@ -120,8 +120,10 @@ features, phone-friendly.
   **autosaving** body (debounced ~700ms), the **7 note colors** (yellow, peach,
   pink, blue, green, purple, slate), a **pin** toggle, **trash** (with **restore**
   and **delete-forever** from the Trash filter), a **reminder** (datetime), and a
-  **Shared with** section — add/remove people by email. A note **shared with you**
-  opens **read-only** ("Shared with you") since only the owner can edit.
+  **Shared with** section — a **dropdown of camp members** (from `camp_users`,
+  yourself and already-added people excluded) to share with, and chips to
+  remove them. A note **shared with you** opens **read-only** ("Shared with you")
+  since only the owner can edit.
 
 **Notes are per-user, private unless shared.** They live in their own
 **`campistry_notes` table** (migration `045`) with **row-level security**: you see
