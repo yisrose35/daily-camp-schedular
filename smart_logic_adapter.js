@@ -127,6 +127,69 @@
     }
 
     // =========================================================================
+    // HOST-FACILITY LOCK HELPERS (see the host-facility block in
+    // canDivisionUseSpecial for why these exist)
+    // =========================================================================
+
+    const _lcName = (v) => String(v == null ? '' : v).toLowerCase().trim();
+
+    // The room a special physically occupies. '' when it can't be resolved, in
+    // which case the host-facility check is skipped (fail open — a special that
+    // can't be located has no room to double-book).
+    function _resolveSpecialHost(specialName, props) {
+        try {
+            if (props && props.location) return props.location;
+            // Case-duplicated specials: the copy carrying the location may not be
+            // the one `props` came from, so fall back to the canonical lookups.
+            if (typeof window.getSpecialActivityByName === 'function') {
+                const s = window.getSpecialActivityByName(specialName);
+                if (s && s.location) return s.location;
+            }
+            if (typeof window.getLocationForActivity === 'function') {
+                const l = window.getLocationForActivity(specialName);
+                if (l) return (typeof l === 'object' ? l.name : l) || '';
+            }
+        } catch (_e) { /* fail open */ }
+        return '';
+    }
+
+    // Slot indices mean different clock times in each division's grid, so ask by
+    // TIME whenever this division's grid can give us one (the same correction the
+    // league and specialty-league pools use). Slot-index lookup is the fallback.
+    function _lockOnHostFacility(hostLoc, slots, divisionName) {
+        const GFL = window.GlobalFieldLocks;
+        if (!GFL) return null;
+        try {
+            const grid = (divisionName && window.divisionTimes && window.divisionTimes[divisionName]) || null;
+            if (grid && typeof GFL.isFieldLockedByTime === 'function') {
+                const s = grid[slots[0]] && grid[slots[0]].startMin;
+                const e = grid[slots[slots.length - 1]] && grid[slots[slots.length - 1]].endMin;
+                if (s != null && e != null) return GFL.isFieldLockedByTime(hostLoc, s, e, divisionName) || null;
+            }
+            return GFL.isFieldLocked(hostLoc, slots, divisionName) || null;
+        } catch (_e) { return null; }
+    }
+
+    // Is this lock the special's OWN placement holding its own room? Every path
+    // that seats a special stamps the special's name into `activity`:
+    //   "Basketball Clinic (smart tile @ Gym 1)"   smart_tile_special_location
+    //   "Basketball Clinic (multi-guarantee)"      smart_tile_multi_guarantee
+    //   "Basketball Clinic (special @ Gym 1)"      special_activity_location
+    //   "Special: Basketball Clinic"               placed_special_facility (6.95)
+    // Matched exactly rather than by substring so "Swim" can't be mistaken for a
+    // lock belonging to "Swimming". A DIFFERENT special's lock is a real conflict
+    // (one room, one special) and is deliberately NOT exempted.
+    function _lockIsSameSpecial(lock, specialName) {
+        const a = _lcName(lock && lock.activity);
+        const n = _lcName(specialName);
+        if (!a || !n) return false;
+        if (a === n) return true;
+        if (a === 'special: ' + n) return true;
+        if (a.startsWith(n + ' (')) return true;
+        return false;
+    }
+
+    // =========================================================================
     // CORE: CHECK IF DIVISION CAN USE A SPECIAL (WITH LOCK CHECK)
     // =========================================================================
     
@@ -144,12 +207,12 @@
      */
     function canDivisionUseSpecial(divisionName, props, specialName, slots) {
         if (!props) return true; // No props = no restrictions
-        
+
         // CHECK GLOBAL FIELD LOCKS (Elective locks) - CRITICAL!
         if (window.GlobalFieldLocks && slots && slots.length > 0) {
             // Check the activity name
             let lockInfo = window.GlobalFieldLocks.isFieldLocked(specialName, slots, divisionName);
-            
+
             // Also check swim/pool aliases
             if (!lockInfo && isSwimOrPool(specialName)) {
                 for (const alias of SWIM_POOL_ALIASES) {
@@ -157,10 +220,38 @@
                     if (lockInfo) break;
                 }
             }
-            
+
             if (lockInfo) {
                 log(`    [LOCK] ${specialName} is locked for ${divisionName}: ${lockInfo.reason || lockInfo.lockedBy}`);
                 return false;
+            }
+
+            // ★★★ HOST-FACILITY LOCK ★★★
+            // The checks above ask "is anything locked under this special's NAME?".
+            // But a special is PHYSICALLY in a room — "Basketball Clinic" runs in
+            // "Gym 1" — and everything that competes for that room locks it under
+            // the ROOM's name: leagues, specialty leagues, pinned tiles, preserved
+            // multi-scheduler placements. None of those are visible to a name-only
+            // check, so the clinic could be dropped into a room a league was
+            // already sitting in — a physical double-book neither engine sees.
+            //
+            // The room's OWN special must still be able to fill it: several paths
+            // lock the room the moment the first bunk is seated there
+            // (smart_tile_special_location / smart_tile_multi_guarantee /
+            // special_activity_location / placed_special_facility), and blocking on
+            // those would stop the second bunk joining and silently shrink every
+            // shared special. So a lock is only a conflict when it belongs to
+            // SOMETHING ELSE — see _lockIsSameSpecial.
+            // Killswitch: window.__specialHostLockCheck = false.
+            if (window.__specialHostLockCheck !== false) {
+                const hostLoc = _resolveSpecialHost(specialName, props);
+                if (hostLoc && _lcName(hostLoc) !== _lcName(specialName)) {
+                    const hostLock = _lockOnHostFacility(hostLoc, slots, divisionName);
+                    if (hostLock && !_lockIsSameSpecial(hostLock, specialName)) {
+                        log(`    [LOCK] ${specialName}: its room "${hostLoc}" is taken by ${hostLock.activity || hostLock.leagueName || hostLock.lockedBy}`);
+                        return false;
+                    }
+                }
             }
         }
 
@@ -1452,7 +1543,11 @@
         isSwimOrPool: isSwimOrPool,
         getCanonicalSwimName: getCanonicalSwimName,
         // ★ V44.3: Exposed for camp-wide budget calculation
-        getAvailableSpecialsForTimeBlock: getAvailableSpecialsForTimeBlock
+        getAvailableSpecialsForTimeBlock: getAvailableSpecialsForTimeBlock,
+        // Access gate + host-facility lock helpers — diagnostics + tests
+        canDivisionUseSpecial: canDivisionUseSpecial,
+        _resolveSpecialHost: _resolveSpecialHost,
+        _lockIsSameSpecial: _lockIsSameSpecial
     };
 
     // =========================================================================
