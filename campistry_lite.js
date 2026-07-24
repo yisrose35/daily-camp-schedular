@@ -667,10 +667,51 @@
         return out;
     }
 
+    // Loose name matching. Config and the saved schedule don't always spell a
+    // bunk/division identically ("Bunk לב" vs "לב", stray spaces, case), and an
+    // exact-only lookup silently yields an empty day. Normalize before comparing.
+    function normKey(s) {
+        return String(s ?? '').trim().toLowerCase()
+            .replace(/\s+/g, ' ')
+            .replace(/^(?:bunk|shiur|kita)\s+/i, '');
+    }
+    // Exact key first, then a normalized match. Returns the object's real key.
+    function matchKey(obj, name) {
+        if (!obj || name == null) return null;
+        if (Object.prototype.hasOwnProperty.call(obj, name)) return name;
+        const want = normKey(name);
+        if (!want) return null;
+        return Object.keys(obj).find(k => normKey(k) === want) || null;
+    }
+    function sameName(a, b) { return normKey(a) === normKey(b); }
+
     // The grade-level division key (matches divisionTimes/leagueAssignments keys)
     function divKeyForBunk(bunk) {
-        for (const [key, d] of Object.entries(camp.divisions || {})) {
+        const divs = camp.divisions || {};
+        for (const [key, d] of Object.entries(divs)) {
             if (Array.isArray(d?.bunks) && d.bunks.includes(bunk)) return key;
+        }
+        for (const [key, d] of Object.entries(divs)) {
+            if (Array.isArray(d?.bunks) && d.bunks.some(b => sameName(b, bunk))) return key;
+        }
+        return null;
+    }
+
+    // Resolve which key of a schedule sub-map (divisionTimes / leagueAssignments)
+    // holds this bunk's division. Tries the grade key, the parent division, and a
+    // normalized match, so a naming mismatch never blanks out the day.
+    function divKeyIn(map, bunk) {
+        if (!map) return null;
+        const grade = divKeyForBunk(bunk);
+        const parent = parentForBunk(bunk);
+        for (const cand of [grade, parent]) {
+            const k = matchKey(map, cand);
+            if (k) return k;
+        }
+        // Last resort: a division key whose configured bunks include this bunk.
+        for (const key of Object.keys(map)) {
+            const d = camp.divisions?.[key] || camp.divisions?.[matchKey(camp.divisions || {}, key)];
+            if (d && Array.isArray(d.bunks) && d.bunks.some(b => sameName(b, bunk))) return key;
         }
         return null;
     }
@@ -1523,15 +1564,24 @@
     // (not just per-bunk entries) so real league games — whose matchups live in
     // leagueAssignments and whose per-bunk cell may be empty — always render.
     function normalizeBunkEntries(bunk, sched) {
-        const raw = (sched.scheduleAssignments || {})[bunk];
-        const divKey = divKeyForBunk(bunk);
-        const allDivSlots = (sched.divisionTimes || {})[divKey] || [];
+        const assignMap = sched.scheduleAssignments || {};
+        const raw = assignMap[matchKey(assignMap, bunk)];
+        const dtMap = sched.divisionTimes || {};
+        const divKey = divKeyIn(dtMap, bunk);
+        // League matchups may sit under a differently-spelled division key.
+        const leagueKey = divKeyIn(sched.leagueAssignments || {}, bunk) || divKey;
+        const leagueDiv = (sched.leagueAssignments || {})[leagueKey] || {};
+        const allDivSlots = (divKey != null ? dtMap[divKey] : null) || [];
         // divisionTimes can hold a per-bunk slot grid; prefer it when present.
-        const divSlots = (allDivSlots && allDivSlots._perBunkSlots && allDivSlots._perBunkSlots[bunk])
-            ? allDivSlots._perBunkSlots[bunk] : allDivSlots;
+        const perBunk = allDivSlots && allDivSlots._perBunkSlots;
+        const perBunkSlots = perBunk ? perBunk[matchKey(perBunk, bunk)] : null;
+        const divSlots = Array.isArray(perBunkSlots) ? perBunkSlots : allDivSlots;
         const slotLen = Array.isArray(divSlots) ? divSlots.length : 0;
         const hasRaw = Array.isArray(raw);
-        const n = Math.max(hasRaw ? raw.length : 0, slotLen);
+        // Cover league games parked at a slot index beyond the grids we have.
+        const leagueMax = Object.keys(leagueDiv)
+            .map(Number).filter(k => !isNaN(k)).reduce((a, b) => Math.max(a, b), -1) + 1;
+        const n = Math.max(hasRaw ? raw.length : 0, slotLen, leagueMax);
         if (!n) return [];
 
         const out = [];
@@ -1540,11 +1590,14 @@
             const e = hasRaw ? raw[idx] : null;
             const slot = Array.isArray(divSlots) ? divSlots[idx] : null;
             // A real league game: entry carries _league/_h2h/matchups (auto + manual),
-            // or the division slot itself is a league block.
+            // the division slot is a league block, or leagueAssignments has a game
+            // stored at this slot (authoritative — survives odd slot typing).
             const entryIsLeague = !!(e && (e._league || e._h2h
                 || (Array.isArray(e._allMatchups) && e._allMatchups.length > 0)
                 || (Array.isArray(e.matchups) && e.matchups.length > 0)));
-            const isLeague = entryIsLeague || slotIsLeagueBlock(slot);
+            const la = leagueDiv[idx];
+            const laIsLeague = !!(la && ((la.matchups && la.matchups.length) || la.gameLabel || la.leagueName));
+            const isLeague = entryIsLeague || laIsLeague || slotIsLeagueBlock(slot);
 
             if (isLeague) {
                 if (e && e.continuation) continue;
@@ -1554,7 +1607,7 @@
                 let startMin = e ? numOrNull(e._startMin) : null;
                 let endMin = e ? numOrNull(e._endMin) : null;
                 if (startMin == null && slot) { startMin = numOrNull(slot.startMin); endMin = numOrNull(slot.endMin); }
-                const li = getLeagueMatchupsLite(sched, divKey, idx);
+                const li = getLeagueMatchupsLite(sched, leagueKey, idx);
                 const defSport = (li && li.sport) || (e && e.sport) || '';
                 const entryMatchups = (e && Array.isArray(e._allMatchups) && e._allMatchups.length) ? e._allMatchups
                     : (e && Array.isArray(e.matchups) && e.matchups.length) ? e.matchups : [];
@@ -3703,11 +3756,15 @@
         const out = [];
         const parents = parentDivisions();
         const seen = new Set();
+        // Dedupe on the normalized name so a bunk the schedule spells differently
+        // ("Bunk לב" vs "לב") doesn't produce a second, duplicate row.
         parents.forEach(p => bunksForParent(p).forEach(b => {
-            if (!seen.has(b)) { seen.add(b); out.push({ parent: p, bunk: b }); }
+            const k = normKey(b);
+            if (!seen.has(k)) { seen.add(k); out.push({ parent: p, bunk: b }); }
         }));
         Object.keys((sched && sched.scheduleAssignments) || {}).forEach(b => {
-            if (!seen.has(b)) { seen.add(b); out.push({ parent: parentForBunk(b) || 'Other', bunk: b }); }
+            const k = normKey(b);
+            if (!seen.has(k)) { seen.add(k); out.push({ parent: parentForBunk(b) || 'Other', bunk: b }); }
         });
         return out;
     }
@@ -3787,7 +3844,7 @@
             const uses = byFac[f].slice().sort((a, b) => (a.startMin ?? 0) - (b.startMin ?? 0));
             return `<div class="lite-card lite-bunk-card">
                 <div class="lite-bunk-head">
-                    <span class="lite-bunk-name">📍 ${esc(f)}</span>
+                    <span class="lite-bunk-name">${esc(f)}</span>
                     <span class="lite-bunk-div">${uses.length} booking${uses.length === 1 ? '' : 's'}</span>
                 </div>
                 ${uses.map(u => {
