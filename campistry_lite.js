@@ -1414,11 +1414,64 @@
         </div>`;
     }
 
-    // Classify a schedule entry the way the desktop grid does.
+    // True iff `name` exactly matches a configured league (regular or specialty).
+    // Mirrors window.isConfiguredLeagueName — lets us tell a REAL league slot from
+    // a custom pin whose title merely contains the word "league".
+    function isConfiguredLeagueNameLite(name) {
+        if (!name) return false;
+        const n = String(name).toLowerCase().trim();
+        if (Object.keys(camp.leagues || {}).some(k => String(k).toLowerCase().trim() === n)) return true;
+        const sp = camp.specialty || {};
+        const arr = Array.isArray(sp) ? sp : Object.values(sp || {});
+        return arr.some(l => l && l.name && String(l.name).toLowerCase().trim() === n);
+    }
+    // A real league slot is one whose DIVISION block is typed 'league'
+    // (or 'specialty_league'), or whose event name is a configured league.
+    // NOT a per-bunk entry whose title happens to contain "league".
+    function slotIsLeagueBlock(slot) {
+        if (!slot) return false;
+        const t = String(slot.type || '').toLowerCase();
+        if (t === 'league' || t === 'specialty_league') return true;
+        return isConfiguredLeagueNameLite(slot.event);
+    }
+    // Normalize a matchup (string "A vs B @ Field (Sport)" or an object) into
+    // { teams, field, sport } for the games sheet.
+    function normalizeMatchup(m, defSport) {
+        if (typeof m === 'string') return parseMatchup(m);
+        if (m && typeof m === 'object') {
+            const teams = (m.teamA && m.teamB) ? `${m.teamA} vs ${m.teamB}`
+                        : (m.team1 && m.team2) ? `${m.team1} vs ${m.team2}`
+                        : (m.display || m.matchup || '');
+            return { teams: teams || '', field: m.field || '', sport: m.sport || defSport || '' };
+        }
+        return { teams: String(m ?? ''), field: '', sport: '' };
+    }
+    // Matchup data for a league slot lives in leagueAssignments[div][slotIdx]
+    // (division-keyed, with a fuzzy ±2 slot lookup) — NOT in the per-bunk entry.
+    function getLeagueMatchupsLite(sched, divKey, slotIdx) {
+        const div = (sched.leagueAssignments || {})[divKey];
+        if (!div) return null;
+        let data = div[slotIdx];
+        if (!data) {
+            const keys = Object.keys(div).map(Number).filter(k => !isNaN(k)).sort((a, b) => a - b);
+            for (const k of keys) {
+                if (Math.abs(k - slotIdx) <= 2 && div[k] && ((div[k].matchups && div[k].matchups.length) || div[k].gameLabel)) {
+                    data = div[k]; break;
+                }
+            }
+        }
+        if (!data) return null;
+        const sport = data.sport || '';
+        return {
+            gameLabel: data.gameLabel || '', leagueName: data.leagueName || '', sport,
+            matchups: (data.matchups || []).map(m => normalizeMatchup(m, sport))
+        };
+    }
+
+    // Classify a non-league entry the way the desktop grid does. (League slots
+    // are detected upstream via slotIsLeagueBlock / _h2h, so they never reach
+    // here — a pinned tile titled "League" correctly falls through to pinned.)
     function entryKind(e) {
-        const name = String(e._activity || e.sport || e.event || (typeof e.field === 'string' ? e.field : '') || '').toLowerCase();
-        const fieldStr = (typeof e.field === 'string' ? e.field : '').toLowerCase();
-        if (e._h2h || e._league || e._leagueName || name.includes('league') || fieldStr.includes('league')) return 'league';
         if (e._isTrip || String(e.type || '').toLowerCase() === 'trip') return 'trip';
         if (e._reserved || e.isReserved || e._classification === 'reserved') return 'reserved';
         if (e._pinned || e._fixed || e.isPinned || e._classification === 'pinned') return 'pinned';
@@ -1433,49 +1486,68 @@
         return e._customActivity || e._assignedSport || e.sport || e._activity || e.event || fieldLabel(e.field) || 'Activity';
     }
 
-    // Turn scheduleAssignments[bunk] into clean, sorted display rows
+    // Turn a bunk's day into clean, sorted display rows. Iterates DIVISION slots
+    // (not just per-bunk entries) so real league games — whose matchups live in
+    // leagueAssignments and whose per-bunk cell may be empty — always render.
     function normalizeBunkEntries(bunk, sched) {
         const raw = (sched.scheduleAssignments || {})[bunk];
-        if (!Array.isArray(raw)) return [];
         const divKey = divKeyForBunk(bunk);
         const divSlots = (sched.divisionTimes || {})[divKey] || [];
+        const hasRaw = Array.isArray(raw);
+        const n = Math.max(hasRaw ? raw.length : 0, divSlots.length);
+        if (!n) return [];
 
         const out = [];
-        raw.forEach((e, idx) => {
-            if (!e || e.continuation) return;
+        const seenLeague = new Set();
+        for (let idx = 0; idx < n; idx++) {
+            const e = hasRaw ? raw[idx] : null;
+            const slot = divSlots[idx];
+            const entryIsLeague = !!(e && (e._h2h || (Array.isArray(e._allMatchups) && e._allMatchups.length > 0)));
+            const isLeague = entryIsLeague || slotIsLeagueBlock(slot);
+
+            if (isLeague) {
+                if (e && e.continuation) continue;
+                let startMin = numOrNull(e && e._startMin);
+                let endMin = numOrNull(e && e._endMin);
+                if (startMin == null && slot) { startMin = numOrNull(slot.startMin); endMin = numOrNull(slot.endMin); }
+                const li = getLeagueMatchupsLite(sched, divKey, idx);
+                const defSport = (li && li.sport) || (e && e.sport) || '';
+                const matchups = (li && li.matchups.length) ? li.matchups
+                    : (e && Array.isArray(e._allMatchups)) ? e._allMatchups.map(m => normalizeMatchup(m, defSport)) : [];
+                const leagueName = (li && li.leagueName) || (e && e._leagueName)
+                    || (slot && slot.event) || String((e && e.field) || '').replace(/^League:\s*/i, '') || 'League';
+                const title = (li && li.gameLabel) || (e && e._gameLabel) || (e && e.sport) || 'League Game';
+                // Guard against emitting the same game twice across merged/continuation slots.
+                const key = leagueName + '|' + title + '|' + (startMin ?? '');
+                if (seenLeague.has(key)) continue;
+                seenLeague.add(key);
+                out.push({ title, kind: 'league', location: null, startMin, endMin, league: leagueName, matchups });
+                continue;
+            }
+
+            if (!e || e.continuation) continue;
             let startMin = numOrNull(e._startMin);
             let endMin = numOrNull(e._endMin);
-            if (startMin == null && divSlots[idx]) {
-                startMin = numOrNull(divSlots[idx].startMin);
-                endMin = numOrNull(divSlots[idx].endMin);
-            }
+            if (startMin == null && slot) { startMin = numOrNull(slot.startMin); endMin = numOrNull(slot.endMin); }
             // Extend end time across continuation slots that carry their own times
-            for (let j = idx + 1; j < raw.length; j++) {
+            if (hasRaw) for (let j = idx + 1; j < raw.length; j++) {
                 const c = raw[j];
                 if (!c || !c.continuation) break;
                 const ce = numOrNull(c._endMin);
                 if (ce != null && (endMin == null || ce > endMin)) endMin = ce;
             }
-
             const kind = entryKind(e);
             const location = fieldLabel(e.field);
-            let title;
-            if (kind === 'league') {
-                title = e._gameLabel || e.sport || e._leagueName || String(e.field || '').replace(/^League:\s*/i, '') || 'League Game';
-            } else {
-                title = entryDisplayName(e);
-            }
+            const title = entryDisplayName(e);
             // Show the location only when it differs from the title (a reserved
             // location whose "activity" IS the field just shows the field + badge).
-            const locDistinct = kind !== 'league' && location && location !== title;
+            const locDistinct = location && location !== title;
             out.push({
                 title, kind,
                 location: locDistinct ? location : null,
-                startMin, endMin,
-                league: kind === 'league' ? (e._leagueName || String(e.field || '').replace(/^League:\s*/i, '')) : null,
-                matchups: kind === 'league' ? (e._allMatchups || []) : null
+                startMin, endMin, league: null, matchups: null
             });
-        });
+        }
         out.sort((a, b) => (a.startMin ?? 99999) - (b.startMin ?? 99999));
         return out;
     }
@@ -1495,9 +1567,9 @@
     }
 
     function openLeagueGamesSheet(data) {
-        const rows = (data.matchups || []).map(s => {
-            const g = parseMatchup(s);
-            const mine = data.team && g.teams.toLowerCase().includes(String(data.team).toLowerCase());
+        const rows = (data.matchups || []).map(m => {
+            const g = (m && typeof m === 'object' && 'teams' in m) ? m : parseMatchup(m);
+            const mine = data.team && String(g.teams || '').toLowerCase().includes(String(data.team).toLowerCase());
             const meta = [g.field, g.sport].filter(Boolean).map(esc).join(' · ');
             return `<div class="lite-game-row${mine ? ' mine' : ''}">
                 <div class="lite-game-teams">${esc(g.teams)}${mine ? '<span class="lite-game-you">Your game</span>' : ''}</div>
