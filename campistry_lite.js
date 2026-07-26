@@ -1516,9 +1516,38 @@
     // Football/Hockey as "Pinned". The solver only fills _customActivity /
     // _customField when the source layer's type is 'custom', so that — and an
     // explicitly custom-typed entry — is the honest signal.
+    // Standard skeleton tiles (lunch, swim, dismissal…) are pinned too, but they
+    // aren't the *custom* tiles the user wants surfaced.
+    const STANDARD_TILE_RE = /^(lunch|snacks?|dismissal|regroup|rest|swim|davening|breakfast|supper|dinner|line ?up|change|wake ?up|shower)\b/i;
     function isCustomPin(e) {
+        // Auto builder: only a 'custom'-type layer fills these.
         if (e._customActivity || e._customField) return true;
-        return String(e.type || e._layerType || '').toLowerCase() === 'custom';
+        // Manual builder: a pinned tile that reserves facilities.
+        if (Array.isArray(e._reservedFields) && e._reservedFields.length) return true;
+        if (e._location) return true;
+        if (String(e.type || e._layerType || '').toLowerCase() === 'custom') return true;
+        // Manual builder, no facilities: the tile fills field = _activity = the
+        // event name with no sport, whereas a generated activity always carries a
+        // sport and a field distinct from the activity.
+        if ((e._pinned === true || e._fixed === true) && !e.sport) {
+            const act = String(e._activity || e.event || '').trim();
+            if (act && sameName(fieldLabel(e.field), act) && !STANDARD_TILE_RE.test(act)) return true;
+        }
+        return false;
+    }
+
+    // Where an entry happens. A pinned tile names itself in `field`, so its real
+    // facilities come from _reservedFields / _location (a tile can reserve
+    // several, e.g. "Field 1, Field 2"). Returns '' when there's nothing to add
+    // beyond the title.
+    function entryLocation(e, title) {
+        const rf = Array.isArray(e._reservedFields) ? e._reservedFields.filter(Boolean) : [];
+        if (rf.length) return rf.map(f => fieldLabel(f)).filter(Boolean).join(', ');
+        if (e._location) return fieldLabel(e._location);
+        if (e.swimLocation || e._swimLocation) return fieldLabel(e.swimLocation || e._swimLocation);
+        if (e._customField) return fieldLabel(e._customField);
+        const f = fieldLabel(e.field);
+        return (f && !sameName(f, title)) ? f : '';
     }
 
     // Classify a non-league entry. (League slots are detected upstream via
@@ -1703,14 +1732,11 @@
                 if (ce != null && (endMin == null || ce > endMin)) endMin = ce;
             }
             const kind = entryKind(e);
-            const location = fieldLabel(e.field);
             const title = entryDisplayName(e);
-            // Show the location only when it differs from the title (a reserved
-            // location whose "activity" IS the field just shows the field + badge).
-            const locDistinct = location && location !== title;
+            const location = entryLocation(e, title);
             out.push({
                 title, kind,
-                location: locDistinct ? location : null,
+                location: location || null,
                 startMin, endMin, league: null, matchups: null
             });
         }
