@@ -20501,7 +20501,18 @@
                         });
                         log('[GENERIC-LAYOUT] GAP-CLOSE: filled gaps with ' + _glGcTiles + ' layer tile(s) + grew ' + _glGcGrew + ' neighbor(s)'
                             + (_glScRep ? ' + SWAP-CHAIN repaired ' + _glScRep + ' gap-stuck tile move(s)/' + _glScMin + 'min (own tile → gap, sport → its old slot)' : '')
-                            + ((_glOut.stats && _glOut.stats.crossBunkRepaired) ? ' + CROSS-BUNK repaired ' + _glOut.stats.crossBunkRepaired + ' seat-busy gap(s)/' + _glOut.stats.crossBunkMinutes + 'min (a holder bunk\'s tile vacated the seat, the gapped bunk filled it)' : ''));
+                            + (function () {
+                                // ALWAYS say what the cross-bunk pass did — a silent zero is
+                                // indistinguishable from a stale cached period_layout.js (live:
+                                // a run showed no CROSS-BUNK line and we couldn't tell which).
+                                var _st = _glOut.stats || {};
+                                var _on = (typeof window === 'undefined') || (window.__crossBunkRepair !== false);
+                                if (_st.crossBunkRepaired) return ' + CROSS-BUNK repaired ' + _st.crossBunkRepaired + ' seat-busy gap(s)/' + _st.crossBunkMinutes + 'min (a holder bunk\'s tile vacated the seat, the gapped bunk filled it)';
+                                if (!_on) return ' + CROSS-BUNK disabled (window.__crossBunkRepair=false)';
+                                if (_st.crossBunkExamined > 0) return ' + CROSS-BUNK examined ' + _st.crossBunkExamined + ' seat-busy gap(s), 0 repairable (no holder had a legal relocation)';
+                                if (_st.crossBunkExamined === 0) return ' + CROSS-BUNK active, no seat-busy gaps to examine';
+                                return ' + ⚠ CROSS-BUNK unavailable — the loaded period_layout.js is STALE (predates v0.3.0); hard-refresh (Ctrl/Cmd+Shift+R)';
+                            })());
                         if (_glOpen.length) {
                             log('[GENERIC-LAYOUT] ⚠ ' + _glOpen.length + ' gap(s) STILL open (' + _glOpenMin + ' min) — no layer item fits without breaking a rule/cap:');
                             _glOpen.slice(0, 25).forEach(function (s) { log('[GENERIC-LAYOUT]     ' + s); });

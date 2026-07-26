@@ -35,7 +35,7 @@
 (function () {
     'use strict';
 
-    var VERSION = '0.2.2';
+    var VERSION = '0.3.0';   // 0.3.0: cross-bunk gap repair (repair hooks + planAllBunksLayout pass)
 
     function _getPacker(opts) {
         if (opts && opts.packer) return opts.packer;
@@ -1235,6 +1235,33 @@
                     if (String(T.subcat || '').toLowerCase().trim() !== subLc) continue;
                     if (T.durationMin !== dur) continue;
                     if (!(T.startMin < e && T.endMin > s)) continue;                      // holds the contended window
+                    // (A) relocate T into one of THIS bunk's own free sub-windows — no
+                    //     partner needed (live shape: the holder is itself a gapped bunk,
+                    //     e.g. a stuck shiur tile blocking a sibling bunk's shiur window;
+                    //     its gap just moves to T's old span, its residual is unchanged,
+                    //     and the contended seat frees for the gapped bunk).
+                    for (var pi2 = 0; pi2 < periods.length; pi2++) {
+                        var fw2 = freeSubWindows(periods[pi2].startMin, periods[pi2].endMin, tiles);
+                        for (var fi2 = 0; fi2 < fw2.length; fi2++) {
+                            var ns = fw2[fi2].start, ne = ns + T.durationMin;
+                            if (ne > fw2[fi2].end) continue;
+                            if (ns < e && ne > s) continue;                              // must leave the contended window
+                            var tw2 = T._ref && T._ref.window;
+                            if (tw2 && (tw2[0] > ns || tw2[1] < ne)) continue;
+                            var oth2 = [];
+                            for (var o2 = 0; o2 < tiles.length; o2++) { if (tiles[o2] !== T) oth2.push(_toBlock(tiles[o2])); }
+                            var tb2 = { type: T.kind, event: T.name, startMin: ns, endMin: ne, _assignedSpecial: T.name, _specialLocation: T.name };
+                            var okG2 = true;
+                            if (gate) { try { okG2 = gate(tb2, oth2); } catch (_eV1) { okG2 = true; } }
+                            if (!okG2) continue;
+                            if (_relocateSeatTile(T, ns, ne)) {                          // seat-exact (release/gate/commit)
+                                T._origin = 'xbunk-vacate';
+                                tiles.sort(function (a, b) { return a.startMin - b.startMin; });
+                                return true;
+                            }
+                        }
+                    }
+                    // (B) equal-duration swap with a movable partner OUTSIDE the window
                     for (var j = 0; j < tiles.length; j++) {
                         var U = tiles[j];
                         if (!U || U === T || !U.generic || U.pinned || U.kind === 'swim') continue;
@@ -1303,7 +1330,7 @@
         var order = o.order || Object.keys(o.perBunk || {});
         var opts = o.opts || {};
         var layoutByBunk = {};
-        var totals = { bunks: 0, periodsConsidered: 0, windowsConsidered: 0, windowsTiled: 0, residualMin: 0, tilesPlaced: 0, bunksFullyTiled: 0, unmetSpecialFloors: 0, unmetFloors: 0, gapCloseTilesPlaced: 0, gapCloseGrew: 0, crossBunkRepaired: 0, crossBunkMinutes: 0 };
+        var totals = { bunks: 0, periodsConsidered: 0, windowsConsidered: 0, windowsTiled: 0, residualMin: 0, tilesPlaced: 0, bunksFullyTiled: 0, unmetSpecialFloors: 0, unmetFloors: 0, gapCloseTilesPlaced: 0, gapCloseGrew: 0, crossBunkExamined: 0, crossBunkRepaired: 0, crossBunkMinutes: 0 };
         for (var i = 0; i < order.length; i++) {
             var bunk = order[i];
             var b = (o.perBunk || {})[bunk];
@@ -1331,6 +1358,7 @@
                 for (var gi = 0; gi < resA.gaps.length; gi++) {
                     var g = resA.gaps[gi];
                     if (!g || !g.probe || String(g.probe).indexOf('seat-busy') < 0) continue;
+                    totals.crossBunkExamined++;
                     var blocked = resA.repair.seatBlockedAt(g.startMin, g.endMin);
                     var freed = false;
                     for (var bi2 = 0; bi2 < blocked.length && !freed; bi2++) {

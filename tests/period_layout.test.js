@@ -1210,3 +1210,43 @@ describe('PeriodLayout — cross-bunk repair frees a seat-busy gap', () => {
         assert.strictEqual(out.layoutByBunk.A.stats.residualMin, 20, 'gap honestly remains');
     });
 });
+
+    it('vacate option A: a holder with NO swap partner relocates into its OWN free window (stuck-shiur shape)', () => {
+        // B's day is [0,60] with only ONE demand: the cap-1 food special. It packs
+        // food@[0,20] and keeps a 40-min residual — there is no partner tile to swap
+        // with, so the old equal-duration swap could never vacate it. Option A moves
+        // the food into B's own free space at [20,40] (its residual is unchanged),
+        // freeing the [0,20] seat for A.
+        const resv = {};
+        const catOf = (kind, ref) => kind === 'sport' ? 'sport' : 'special:' + String((ref && ref.subcat) || '').toLowerCase();
+        const led = {
+            resourceGate: (kind, grade, bunk, s, e, ref) => {
+                const cat = catOf(kind, ref); if (cat !== 'special:food') return true;
+                return (resv[cat] || []).filter(iv => iv.s < e && iv.e > s).length + 1 <= 1;
+            },
+            resourceCommit: (kind, grade, bunk, s, e, ref) => { const c = catOf(kind, ref); (resv[c] = resv[c] || []).push({ s, e }); },
+            resourceRelease: (kind, grade, bunk, s, e, ref) => {
+                const l = resv[catOf(kind, ref)]; if (!l) return;
+                for (let i = 0; i < l.length; i++) { if (l[i].s === s && l[i].e === e) { l.splice(i, 1); return; } }
+            },
+        };
+        const out = Layout.planAllBunksLayout({
+            order: ['B', 'A'],
+            perBunk: {
+                B: { grade: 'G', periods: [P(0, 60, 'P1')], pinned: [], floating: [{ kind: 'special', subcat: 'food', durations: [20], window: [0, 945], qty: 1, cap: 1, score: 1 }] },
+                A: { grade: 'G', periods: [P(0, 20, 'PA')], pinned: [], floating: [{ kind: 'special', subcat: 'food', durations: [20], window: [0, 945], qty: 1, cap: 1, score: 1 }] },
+            },
+            packer: PeriodPacker,
+            resourceGate: led.resourceGate, resourceCommit: led.resourceCommit, resourceRelease: led.resourceRelease,
+        });
+        const A = out.layoutByBunk.A, B = out.layoutByBunk.B;
+        assert.strictEqual(out.stats.crossBunkExamined, 1, 'the seat-busy gap was examined');
+        assert.strictEqual(out.stats.crossBunkRepaired, 1, 'repaired via relocate-into-own-free-window');
+        assert.strictEqual(A.stats.residualMin, 0, 'A is wall-to-wall');
+        assert.ok(A.tiles.some(t => t.generic && t.kind === 'special' && t.startMin === 0 && t.endMin === 20), 'A holds food at [0,20]');
+        assert.strictEqual(B.stats.residualMin, 40, 'B residual unchanged — its gap just moved');
+        const bFood = B.tiles.find(t => t.generic && t.kind === 'special');
+        assert.ok(bFood && bFood.startMin >= 20, 'B food relocated out of the contended window: @' + (bFood && bFood.startMin));
+        const food = (resv['special:food'] || []).slice().sort((x, y) => x.s - y.s);
+        for (let i = 0; i + 1 < food.length; i++) assert.ok(food[i].e <= food[i + 1].s, 'food seats stay serialized: ' + JSON.stringify(food));
+    });
