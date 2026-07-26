@@ -48,6 +48,7 @@
         roster: {},           // app1.camperRoster ({ "First Last": {...} })
         leagues: {},          // leaguesByName
         specialty: {},        // specialtyLeagues (id-keyed)
+        specialActivities: [],// app1.specialActivities ([{ name, ... }])
         staff: {},            // liteStaffAssignments
         sms: { enabled: false, audience: 'counselors', footer: '' },
         stateLoaded: false,
@@ -284,6 +285,8 @@
             camp.structure = byKey.campStructure || {};
             camp.leagues = byKey.leaguesByName || {};
             camp.specialty = byKey.specialtyLeagues || {};
+            camp.specialActivities = app1.specialActivities || [];
+            _specialNames = null;   // reset lazy cache when config reloads
             camp.staff = byKey.liteStaffAssignments || {};
             camp.fields = byKey.fields || app1.fields || [];
             camp.campName = (typeof byKey.camp_name === 'string') ? byKey.camp_name
@@ -1516,6 +1519,28 @@
     // Football/Hockey as "Pinned". The solver only fills _customActivity /
     // _customField when the source layer's type is 'custom', so that — and an
     // explicitly custom-typed entry — is the honest signal.
+    // Names configured as special activities (app1.specialActivities), lowercased.
+    let _specialNames = null;
+    function specialNames() {
+        if (_specialNames) return _specialNames;
+        _specialNames = new Set();
+        const arr = Array.isArray(camp.specialActivities) ? camp.specialActivities : Object.values(camp.specialActivities || {});
+        arr.forEach(s => { const n = s && s.name; if (n) _specialNames.add(normKey(n)); });
+        return _specialNames;
+    }
+    // A special activity placed by the solver. The engine writes these as
+    // { field: <location>, sport: null, _activity: <name>, _assignedSpecial: <name>,
+    //   _specialLocation: <location>, _fixed: true } — so they look a lot like a
+    // pinned tile (no sport, _fixed) and, when a camp names a special's location
+    // after the special itself, field === the activity name too. These markers,
+    // plus the configured specials list, are what actually tell them apart.
+    function isSpecialEntry(e) {
+        if (e._assignedSpecial || e._specialLocation) return true;
+        const set = specialNames();
+        if (!set.size) return false;
+        return [e._activity, e._assignedSport, e.event].some(c => c && set.has(normKey(c)));
+    }
+
     // Standard skeleton tiles (lunch, swim, dismissal…) are pinned too, but they
     // aren't the *custom* tiles the user wants surfaced.
     const STANDARD_TILE_RE = /^(lunch|snacks?|dismissal|regroup|rest|swim|davening|breakfast|supper|dinner|line ?up|change|wake ?up|shower)\b/i;
@@ -1527,8 +1552,8 @@
         if (e._location) return true;
         if (String(e.type || e._layerType || '').toLowerCase() === 'custom') return true;
         // Manual builder, no facilities: the tile fills field = _activity = the
-        // event name with no sport, whereas a generated activity always carries a
-        // sport and a field distinct from the activity.
+        // event name with no sport. A generated activity carries a sport; a
+        // special carries its own markers and is ruled out before we get here.
         if ((e._pinned === true || e._fixed === true) && !e.sport) {
             const act = String(e._activity || e.event || '').trim();
             if (act && sameName(fieldLabel(e.field), act) && !STANDARD_TILE_RE.test(act)) return true;
@@ -1555,6 +1580,12 @@
     function entryKind(e) {
         if (e._isTrip || String(e.type || '').toLowerCase() === 'trip') return 'trip';
         if (e._reserved || e.isReserved || e.reservedLocation || e._classification === 'reserved') return 'reserved';
+        // Explicit custom-pin markers win — a user who pins a tile for a special
+        // still meant to pin it. Otherwise a special is never a pinned tile, so
+        // rule it out before the name/shape heuristic below can misread it.
+        if (e._customActivity || e._customField
+            || (Array.isArray(e._reservedFields) && e._reservedFields.length) || e._location) return 'pinned';
+        if (isSpecialEntry(e)) return 'regular';
         if (isCustomPin(e)) return 'pinned';
         return 'regular';
     }
