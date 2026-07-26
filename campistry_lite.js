@@ -31,7 +31,11 @@
 
     const HEAD_ROLES = ['owner', 'admin', 'scheduler'];
     const KV_KEYS = ['app1', 'campStructure', 'leaguesByName', 'specialtyLeagues',
-                     'liteStaffAssignments', 'liteSmsSettings', 'camp_name', 'fields'];
+                     'liteStaffAssignments', 'liteSmsSettings', 'camp_name', 'fields',
+                     'liteAppAccess'];
+    // Lite is installed as its own app, so it signs in on its own page rather
+    // than bouncing to the marketing site.
+    const LOGIN_PAGE = 'campistry_lite_login.html';
     const SMS_BATCH_SIZE = 100;
 
     // ─── State ──────────────────────────────────────────────────────────
@@ -51,6 +55,7 @@
         specialty: {},        // specialtyLeagues (id-keyed)
         specialActivities: [],// app1.specialActivities ([{ name, ... }])
         staff: {},            // liteStaffAssignments
+        appAccess: {},        // liteAppAccess { email: ['flow','me'] } — per-user app allow-list
         sms: { enabled: false, audience: 'counselors', footer: '' },
         stateLoaded: false,
         stateError: null
@@ -154,13 +159,13 @@
             }
             if (!session) {
                 localStorage.removeItem('campistry_auth_user_id');
-                window.location.href = 'index.html';
+                window.location.href = LOGIN_PAGE;
                 return;
             }
             userEmail = (session.user?.email || '').toLowerCase();
 
             window.supabase.auth.onAuthStateChange((event) => {
-                if (event === 'SIGNED_OUT') window.location.href = 'index.html';
+                if (event === 'SIGNED_OUT') window.location.href = LOGIN_PAGE;
             });
 
             // Camp + role resolution
@@ -296,6 +301,7 @@
             camp.specialActivities = app1.specialActivities || [];
             _specialNames = null;   // reset lazy cache when config reloads
             camp.staff = byKey.liteStaffAssignments || {};
+            camp.appAccess = byKey.liteAppAccess || {};
             camp.fields = byKey.fields || app1.fields || [];
             camp.campName = (typeof byKey.camp_name === 'string') ? byKey.camp_name
                           : (byKey.camp_name && byKey.camp_name.value) || '';
@@ -915,7 +921,114 @@
         }
     }
 
-    function appsForRole() { return LITE_APPS.filter(a => a.roles.includes(role)); }
+    // Per-user app access. An owner always has everything; anyone else can be
+    // restricted to a subset via the liteAppAccess map (email → app ids). No
+    // entry means "no restriction", so existing camps are unaffected.
+    function allowedAppIds() {
+        if (role === 'owner') return null;
+        const map = camp.appAccess || {};
+        const key = Object.keys(map).find(k => String(k).toLowerCase().trim() === String(userEmail || '').toLowerCase().trim());
+        const list = key ? map[key] : null;
+        return Array.isArray(list) ? list : null;   // null = unrestricted
+    }
+    function canOpenApp(id) {
+        const app = LITE_APPS.find(a => a.id === id);
+        if (!app || !app.roles.includes(role)) return false;
+        const allow = allowedAppIds();
+        return !allow || allow.includes(id);
+    }
+    function appsForRole() {
+        return LITE_APPS.filter(a => a.roles.includes(role) && canOpenApp(a.id));
+    }
+
+    // Owner-only: choose which apps each team member sees. Stored as
+    // liteAppAccess { email: [appId] } in camp_state_kv; an email with no entry
+    // keeps full role-based access, so this is opt-in per person.
+    let accessDraft = null, accessEmail = null;
+    async function openAccessSheet() {
+        const users = (await loadCampUsers()).filter(u => String(u.role || '').toLowerCase() !== 'owner');
+        if (!users.length) {
+            openSheet(`<div class="lite-sheet-title">App access</div>
+                <div class="lite-note" style="margin-top:8px;">No team members yet. Invite people from the Campistry website first.</div>`);
+            return;
+        }
+        openSheet(`
+            <div class="lite-sheet-head">
+                <div class="lite-sheet-title" style="margin:0;">App access</div>
+                <button class="lite-sheet-close" id="liteAccClose" aria-label="Close"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg></button>
+            </div>
+            <div class="lite-picklist lite-picklist-scroll">
+                ${users.map(u => {
+                    const list = camp.appAccess?.[u.email];
+                    const sub = Array.isArray(list)
+                        ? (list.length ? list.map(id => (LITE_APPS.find(a => a.id === id) || {}).name || id).join(', ') : 'No apps')
+                        : 'All apps for their role';
+                    return `<button type="button" class="lite-pick" data-acc="${esc(u.email)}">
+                        <span class="lite-pick-main">${esc(u.name || u.email)}<span class="lite-pick-hint">${esc(sub)}</span></span>
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><polyline points="9 18 15 12 9 6"/></svg>
+                    </button>`;
+                }).join('')}
+            </div>`);
+        document.getElementById('liteAccClose').addEventListener('click', closeSheet);
+        document.querySelectorAll('[data-acc]').forEach(b =>
+            b.addEventListener('click', () => openAccessEditor(b.dataset.acc)));
+    }
+
+    function openAccessEditor(email) {
+        accessEmail = email;
+        const cur = camp.appAccess?.[email];
+        // Start from the full role-appropriate set when nothing is set yet.
+        const pool = LITE_APPS.filter(a => a.status === 'available' && !a.roles.includes('counselor'));
+        accessDraft = Array.isArray(cur) ? cur.slice() : pool.map(a => a.id);
+        renderAccessEditor(email, pool);
+    }
+
+    function renderAccessEditor(email, pool) {
+        const rows = pool.map(a => {
+            const on = accessDraft.includes(a.id);
+            return `<button type="button" class="lite-pick${on ? ' on' : ''}" data-accapp="${esc(a.id)}">
+                <span class="lite-pick-main">${esc(a.name)}</span>
+                ${on ? ICO.check : ''}
+            </button>`;
+        }).join('');
+        openSheet(`
+            <div class="lite-sheet-head">
+                <div>
+                    <div class="lite-sheet-title" style="margin:0;">${esc(email)}</div>
+                    <div class="lite-slot-loc">Tap to allow or block an app</div>
+                </div>
+                <button class="lite-sheet-close" id="liteAccEdClose" aria-label="Close"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg></button>
+            </div>
+            <div class="lite-picklist lite-picklist-scroll">${rows}</div>
+            <button class="lite-btn block" id="liteAccSave" style="margin-top:12px;">Save access</button>
+            <button class="lite-btn secondary block" id="liteAccReset" style="margin-top:8px;">Give them everything</button>`);
+        document.getElementById('liteAccEdClose').addEventListener('click', closeSheet);
+        document.querySelectorAll('[data-accapp]').forEach(b =>
+            b.addEventListener('click', () => {
+                const id = b.dataset.accapp;
+                const i = accessDraft.indexOf(id);
+                if (i >= 0) accessDraft.splice(i, 1); else accessDraft.push(id);
+                renderAccessEditor(email, pool);
+            }));
+        document.getElementById('liteAccSave').addEventListener('click', () => saveAccess(accessDraft));
+        document.getElementById('liteAccReset').addEventListener('click', () => saveAccess(null));
+    }
+
+    async function saveAccess(list) {
+        const map = Object.assign({}, camp.appAccess || {});
+        if (list === null) delete map[accessEmail]; else map[accessEmail] = list;
+        const btn = document.getElementById('liteAccSave');
+        if (btn) { btn.disabled = true; btn.textContent = 'Saving…'; }
+        try {
+            await saveKV('liteAppAccess', map);
+            camp.appAccess = map;
+            closeSheet();
+            toast('Access updated');
+        } catch (e) {
+            if (btn) { btn.disabled = false; btn.textContent = 'Save access'; }
+            toast('Could not save: ' + (e?.message || e));
+        }
+    }
 
     // ─── Home launcher ──────────────────────────────────────────────────
     function greeting() {
@@ -1051,6 +1164,9 @@
     function openApp(id) {
         const app = LITE_APPS.find(a => a.id === id);
         if (!app || app.status !== 'available') return;
+        // Also gate here, not just in the launcher — a restored history entry or
+        // a hand-typed state must not open an app the user can't have.
+        if (!canOpenApp(id)) { goHome(); toast('You don’t have access to ' + app.name); return; }
         currentApp = id;
         applyTheme(app);
         // Push a history entry so the phone's back gesture returns to the
@@ -1197,6 +1313,15 @@
             </div>
             ${bioOn ? `<button class="lite-link-row" id="liteBioTest">Test unlock now</button>` : ''}
 
+            ${role === 'owner' ? `<div class="lite-set-section-label">App access</div>
+            <button class="lite-card lite-set-row" id="liteAccessRow" style="width:100%;text-align:left;">
+                <div class="lite-set-row-main">
+                    <div class="lite-set-row-title">Who can use which apps</div>
+                    <div class="lite-set-row-sub">Limit a team member to just the apps they need</div>
+                </div>
+                <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" style="color:var(--muted);flex:none;"><polyline points="9 18 15 12 9 6"/></svg>
+            </button>` : ''}
+
             <div class="lite-set-section-label">Messages</div>
             <div class="lite-card lite-set-row" id="liteConfirmRow">
                 <div class="lite-set-row-main">
@@ -1219,6 +1344,7 @@
         v.querySelector('#liteSettingsBack').addEventListener('click', () => { if (history.state && history.state.liteSettings) history.back(); else { settingsOpen = false; goHome(); } });
         v.querySelector('#liteConfirmToggle').addEventListener('click', () => { setLitePref('confirmDelete', !litePref('confirmDelete', true)); renderSettings(); });
         v.querySelector('#liteSettingsSignout').addEventListener('click', () => document.getElementById('liteSignOut').click());
+        v.querySelector('#liteAccessRow')?.addEventListener('click', openAccessSheet);
         const bioToggle = v.querySelector('#liteBioToggle');
         if (bioAvail) bioToggle.addEventListener('click', () => toggleBiometric(!bioOn));
         const bioTest = v.querySelector('#liteBioTest');
@@ -1341,7 +1467,7 @@
              'campistry_user_id', 'campistry_is_team_member'].forEach(k => {
                 try { localStorage.removeItem(k); } catch (_) {}
             });
-            window.location.href = 'index.html';
+            window.location.href = LOGIN_PAGE;
         });
     }
 
@@ -1485,12 +1611,19 @@
             }));
     }
 
+    // Each picker is captioned, so it says what it controls as well as what's
+    // currently chosen — a bare "Day Camp" pill doesn't explain itself.
+    function ctrlHTML(id, caption, value) {
+        return `<button type="button" class="lite-ctrl grow" id="${id}">
+            <span class="lite-ctrl-txt">
+                <span class="lite-ctrl-cap">${esc(caption)}</span>
+                <span class="lite-ctrl-val">${esc(value)}</span>
+            </span>${ICO.caret}</button>`;
+    }
     function toolbarHTML(isFac) {
         return `<div class="lite-ctrlbar">
-            <button type="button" class="lite-ctrl grow" id="liteWhoBtn">
-                <span>${esc(whoLabel())}</span>${ICO.caret}</button>
-            ${isFac ? '' : `<button type="button" class="lite-ctrl" id="liteModeBtn">
-                <span>${esc(MODE_LABEL[schedMode] || 'By bunk')}</span>${ICO.caret}</button>`}
+            ${ctrlHTML('liteWhoBtn', 'Show', whoLabel())}
+            ${isFac ? '' : ctrlHTML('liteModeBtn', 'View', MODE_LABEL[schedMode] || 'By bunk')}
             <button type="button" class="lite-ctrl icon${searchOpen || bunkQuery.trim() ? ' on' : ''}" id="liteSearchBtn" aria-label="Search">${ICO.search}</button>
             <button type="button" class="lite-ctrl icon${rainyOn ? ' alert' : ''}" id="liteMoreBtn" aria-label="More">${ICO.more}</button>
         </div>`;
