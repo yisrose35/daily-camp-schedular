@@ -3506,6 +3506,52 @@
         // period per day. Teams are shuffled daily for variety.
         window.chinuchSchedule = {};
         (function () {
+            // ★★★ PARITY-AWARE CHINUCH PLAN (pure-auto mode only) ★★★
+            // A team sits out a bye whenever the teams left to PLAY are odd:
+            // active = teams - chinuchThisPeriod. The old auto split just did
+            // ceil(teams/periods) and never looked at that parity, so e.g. 8
+            // teams over 3 periods gave [3,3,2] → active [5,5,6] → a wasted team
+            // in two of the three periods. Choosing counts that share the team
+            // count's PARITY makes active even everywhere: [4,2,2] → [4,6,6] →
+            // same total playing time, one more game, nobody idle.
+            //
+            // Rules honored here:
+            //  - every team still gets exactly one chinuch slot per day (counts
+            //    sum to the roster) — the camp's "everyone learns daily" rule;
+            //  - at least 2 teams are always left to play, so a period is never
+            //    emptied out (that would be worse than a bye);
+            //  - load is spread round-robin so no period is overloaded.
+            //
+            // Some shapes are mathematically impossible: an ODD roster over an
+            // EVEN number of periods can't have every period even-active while
+            // each team learns exactly once (odd counts summing to an odd total
+            // needs an odd number of them). Those periods keep one bye, and we
+            // place as many even-active periods as the arithmetic allows.
+            function _planChinuchCounts(N, P) {
+                if (P <= 0 || N <= 0) return new Array(Math.max(0, P)).fill(0);
+                const par = N % 2;                  // each count must match N's parity
+                const maxPer = Math.max(0, N - 2);  // always leave 2 teams to play
+                const counts = new Array(P).fill(0);
+                let k = P;
+                if (par === 1) {
+                    k = Math.min(P, N);
+                    if (k % 2 === 0) k--;           // odd terms must be odd in number
+                    if (k < 1) k = 1;
+                }
+                for (let i = 0; i < k; i++) counts[i] = Math.min(par, maxPer);
+                // Distribute the remainder in PAIRS — adding 2 preserves parity.
+                let remaining = N - counts.reduce(function (a, b) { return a + b; }, 0);
+                let guard = 0;
+                while (remaining >= 2 && guard++ < 10000) {
+                    let placed = false;
+                    for (let i = 0; i < P && remaining >= 2; i++) {
+                        if (counts[i] + 2 <= maxPer) { counts[i] += 2; remaining -= 2; placed = true; }
+                    }
+                    if (!placed) break;             // every period capped — rare, degenerate
+                }
+                return counts;
+            }
+
             function _seededShuffle(arr, seed) {
                 const a = arr.slice();
                 let s = 0;
@@ -3599,39 +3645,63 @@
                     const manualTeams = (league.chinuch.teamsPerRound > 0) ? league.chinuch.teamsPerRound : null;
                     const manualTimes = (league.chinuch.timesPerDay > 0) ? Math.min(league.chinuch.timesPerDay, numPeriods) : null;
 
-                    let teamsPerSession;
-                    let periodsNeeded;
-                    if (manualTeams && manualTimes) {
-                        teamsPerSession = manualTeams;
-                        periodsNeeded = manualTimes;
-                    } else if (manualTeams) {
-                        teamsPerSession = manualTeams;
-                        periodsNeeded = Math.min(Math.ceil(teams.length / teamsPerSession), numPeriods);
-                    } else if (manualTimes) {
-                        periodsNeeded = manualTimes;
-                        teamsPerSession = Math.ceil(teams.length / periodsNeeded);
+                    // ★★★ PURE AUTO → PARITY-BALANCED PLAN ★★★
+                    // Only when the camp has NOT set teams-per-round or times-per-day.
+                    // A hand-entered number is a capacity decision (rooms, rebbeim) and
+                    // is honored exactly — even when it forces a bye. See _planChinuchCounts.
+                    if (!manualTeams && !manualTimes) {
+                        // Parity-balanced: counts sum to the roster (everyone still
+                        // learns daily) but each period's count matches the roster's
+                        // parity, so the teams left to play pair up with nobody idle.
+                        const _counts = _planChinuchCounts(teams.length, numPeriods);
+                        let _ti = 0;
+                        for (let p = 0; p < _counts.length; p++) {
+                            for (let c = 0; c < _counts[p] && _ti < shuffled.length; c++, _ti++) {
+                                bunkSchedule[shuffled[_ti]] = Number(allPeriodKeys[p]);
+                            }
+                        }
+                        const _act = _counts.map(function (c) { return teams.length - c; });
+                        const _byes = _act.filter(function (a) { return a % 2 === 1; }).length;
+                        _mode = 'auto';
+                        _summary = '[' + _counts.join(',') + '] parity-balanced → active [' +
+                            _act.join(',') + '], ' + _ti + '/' + teams.length + ' team(s), ' +
+                            (_byes === 0
+                                ? 'no structural byes'
+                                : _byes + ' unavoidable bye-period(s): a roster of ' +
+                                  teams.length + ' over ' + numPeriods +
+                                  ' period(s) cannot pair evenly everywhere while each team learns once');
                     } else {
-                        teamsPerSession = Math.ceil(teams.length / numPeriods);
-                        periodsNeeded = Math.ceil(teams.length / teamsPerSession);
-                    }
-                    const activePeriodKeys = allPeriodKeys.slice(0, periodsNeeded);
+                        let teamsPerSession;
+                        let periodsNeeded;
+                        if (manualTeams && manualTimes) {
+                            teamsPerSession = manualTeams;
+                            periodsNeeded = manualTimes;
+                        } else if (manualTeams) {
+                            teamsPerSession = manualTeams;
+                            periodsNeeded = Math.min(Math.ceil(teams.length / teamsPerSession), numPeriods);
+                        } else {
+                            periodsNeeded = manualTimes;
+                            teamsPerSession = Math.ceil(teams.length / periodsNeeded);
+                        }
+                        const activePeriodKeys = allPeriodKeys.slice(0, periodsNeeded);
 
-                    // ★★★ CHINUCH FIX: cap chinuch attendance to teamsPerSession ×
-                    // periodsNeeded teams. The old forEach gave EVERY team a chinuch
-                    // slot — so "1 team/session" on a single league period actually
-                    // pulled ALL teams to chinuch, leaving nobody to play (then the
-                    // activeTeams<2 guard skipped the whole league). Only the first
-                    // `cap` shuffled teams attend chinuch today; the rest play their
-                    // league game. The daily date-seeded shuffle rotates which teams
-                    // attend so it evens out over the week.
-                    const _cap = teamsPerSession * periodsNeeded;
-                    shuffled.forEach((team, idx) => {
-                        if (idx >= _cap) return; // remaining teams play (no chinuch today)
-                        const periodIdx = Math.min(Math.floor(idx / teamsPerSession), periodsNeeded - 1);
-                        bunkSchedule[team] = Number(activePeriodKeys[periodIdx]);
-                    });
-                    _mode = (manualTeams || manualTimes) ? 'manual' : 'auto';
-                    _summary = teamsPerSession + '/session, ' + periodsNeeded + '/' + numPeriods + ' period(s), cap ' + Math.min(_cap, teams.length) + '/' + teams.length + ' team(s)';
+                        // ★★★ CHINUCH FIX: cap chinuch attendance to teamsPerSession ×
+                        // periodsNeeded teams. The old forEach gave EVERY team a chinuch
+                        // slot — so "1 team/session" on a single league period actually
+                        // pulled ALL teams to chinuch, leaving nobody to play (then the
+                        // activeTeams<2 guard skipped the whole league). Only the first
+                        // `cap` shuffled teams attend chinuch today; the rest play their
+                        // league game. The daily date-seeded shuffle rotates which teams
+                        // attend so it evens out over the week.
+                        const _cap = teamsPerSession * periodsNeeded;
+                        shuffled.forEach((team, idx) => {
+                            if (idx >= _cap) return; // remaining teams play (no chinuch today)
+                            const periodIdx = Math.min(Math.floor(idx / teamsPerSession), periodsNeeded - 1);
+                            bunkSchedule[team] = Number(activePeriodKeys[periodIdx]);
+                        });
+                        _mode = 'manual';
+                        _summary = teamsPerSession + '/session, ' + periodsNeeded + '/' + numPeriods + ' period(s), cap ' + Math.min(_cap, teams.length) + '/' + teams.length + ' team(s)';
+                    }
                 }
 
                 window.chinuchSchedule[league.name] = bunkSchedule;
