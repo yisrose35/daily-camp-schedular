@@ -1118,3 +1118,95 @@ describe('PeriodLayout — window pressure flips the over-floor filler from spor
             'a window at the field ceiling must NOT take another sport: ' + JSON.stringify(kinds));
     });
 });
+
+// ── CROSS-BUNK GAP REPAIR: vacate another bunk's seat-holder, fill the gap ──
+describe('PeriodLayout — cross-bunk repair frees a seat-busy gap', () => {
+    // mini seat ledger mirroring the auto-core resource fns: cap-1 'food' seat,
+    // everything else unlimited. Half-open overlap; splice-one release.
+    function mkLedger(seats) {
+        const resv = {};
+        const catOf = (kind, ref) => kind === 'sport' ? 'sport' : 'special:' + String((ref && ref.subcat) || '').toLowerCase();
+        return {
+            resv,
+            resourceGate: (kind, grade, bunk, s, e, ref) => {
+                const cat = catOf(kind, ref), cap = seats[cat];
+                if (!(cap > 0)) return true;
+                const n = (resv[cat] || []).filter(iv => iv.s < e && iv.e > s).length;
+                return n + 1 <= cap;
+            },
+            resourceCommit: (kind, grade, bunk, s, e, ref) => { const cat = catOf(kind, ref); (resv[cat] = resv[cat] || []).push({ s, e }); },
+            resourceRelease: (kind, grade, bunk, s, e, ref) => {
+                const l = resv[catOf(kind, ref)]; if (!l) return;
+                for (let i = 0; i < l.length; i++) { if (l[i].s === s && l[i].e === e) { l.splice(i, 1); return; } }
+            },
+        };
+    }
+    const mkPerBunk = () => ({
+        // B packs FIRST and takes the one food seat somewhere in [0,40].
+        B: {
+            grade: 'G', periods: [P(0, 40, 'P1')], pinned: [],
+            floating: [
+                { kind: 'special', subcat: 'food', durations: [20], window: [0, 945], qty: 1, cap: 1, score: 1 },
+                { kind: 'sport', dMin: 20, dMax: 20, window: [0, 945], score: 1 },
+            ],
+        },
+        // A's whole day is ONE 20-min window and its only demand is food — if B's
+        // food overlaps it, A is seat-blocked with no in-bunk repair possible.
+        A: {
+            grade: 'G', periods: [P(0, 20, 'PA')], pinned: [],
+            floating: [{ kind: 'special', subcat: 'food', durations: [20], window: [0, 945], qty: 1, cap: 1, score: 1 }],
+        },
+    });
+    it('vacates the holder via an in-day swap and fills the gap (both bunks stay wall-to-wall)', () => {
+        const led = mkLedger({ 'special:food': 1 });
+        const out = Layout.planAllBunksLayout({
+            order: ['B', 'A'], perBunk: mkPerBunk(), packer: PeriodPacker,
+            resourceGate: led.resourceGate, resourceCommit: led.resourceCommit, resourceRelease: led.resourceRelease,
+        });
+        const A = out.layoutByBunk.A, B = out.layoutByBunk.B;
+        // deterministic: floors pack earliest, so B's food takes [0,20] and A is
+        // seat-blocked — the repair MUST fire (verified: vacate → B food@[20,40]).
+        assert.strictEqual(out.stats.crossBunkRepaired, 1, 'one seat-busy gap repaired cross-bunk');
+        assert.strictEqual(out.stats.crossBunkMinutes, 20);
+        assert.strictEqual(A.stats.residualMin, 0, 'A is now wall-to-wall');
+        assert.ok(A.tiles.some(t => t.generic && t.kind === 'special' && t.startMin === 0 && t.endMin === 20),
+            'A holds the food slot at [0,20]');
+        assert.strictEqual(B.stats.residualMin, 0, 'B stays wall-to-wall after the vacate swap');
+        assert.ok(B.tiles.some(t => t.generic && t.kind === 'special' && t.startMin === 20 && t.endMin === 40),
+            'B\'s food moved to [20,40]: ' + JSON.stringify(B.tiles.filter(t => t.generic).map(t => t.kind + '@' + t.startMin)));
+        // ledger consistency: the two food reservations never overlap
+        const food = (led.resv['special:food'] || []).slice().sort((x, y) => x.s - y.s);
+        for (let i = 0; i + 1 < food.length; i++) assert.ok(food[i].e <= food[i + 1].s, 'food seats stay serialized: ' + JSON.stringify(food));
+        assert.strictEqual(A.gaps.length, 0, 'A\'s gap list refreshed after the repair');
+    });
+    it('opts.crossBunk=false leaves the seat-busy gap (toggle honored)', () => {
+        const led = mkLedger({ 'special:food': 1 });
+        const out = Layout.planAllBunksLayout({
+            order: ['B', 'A'], perBunk: mkPerBunk(), packer: PeriodPacker,
+            resourceGate: led.resourceGate, resourceCommit: led.resourceCommit, resourceRelease: led.resourceRelease,
+            opts: { crossBunk: false },
+        });
+        const A = out.layoutByBunk.A, B = out.layoutByBunk.B;
+        assert.ok(B.tiles.some(t => t.generic && t.kind === 'special' && t.startMin === 0),
+            'without the repair, B\'s food stays at [0,20] (the contended slot)');
+        assert.strictEqual(out.stats.crossBunkRepaired || 0, 0);
+        assert.strictEqual(A.stats.residualMin, 20, 'gap remains without the cross-bunk pass');
+        assert.ok(A.gaps.some(g => String(g.probe || '').includes('seat-busy')), 'probe still says seat-busy: ' + JSON.stringify(A.gaps.map(g => g.probe)));
+    });
+    it('holder with no legal partner → no move, no corruption', () => {
+        // B's day is ALSO a single 20-min window: its food has nowhere to go.
+        const led = mkLedger({ 'special:food': 1 });
+        const out = Layout.planAllBunksLayout({
+            order: ['B', 'A'],
+            perBunk: {
+                B: { grade: 'G', periods: [P(0, 20, 'P1')], pinned: [], floating: [{ kind: 'special', subcat: 'food', durations: [20], window: [0, 945], qty: 1, cap: 1, score: 1 }] },
+                A: { grade: 'G', periods: [P(0, 20, 'PA')], pinned: [], floating: [{ kind: 'special', subcat: 'food', durations: [20], window: [0, 945], qty: 1, cap: 1, score: 1 }] },
+            },
+            packer: PeriodPacker,
+            resourceGate: led.resourceGate, resourceCommit: led.resourceCommit, resourceRelease: led.resourceRelease,
+        });
+        assert.strictEqual(out.stats.crossBunkRepaired || 0, 0, 'nothing repaired (no partner exists)');
+        assert.strictEqual(out.layoutByBunk.B.stats.residualMin, 0, 'holder untouched');
+        assert.strictEqual(out.layoutByBunk.A.stats.residualMin, 20, 'gap honestly remains');
+    });
+});

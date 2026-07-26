@@ -1159,26 +1159,142 @@
         // Recompute final coverage from the committed tiles (post GAP-CLOSE): mark each
         // window tiled iff no free time remains, sum the true residual, and expose the
         // remaining gaps for the caller's "scan the schedule for gaps" diagnostic.
-        var gaps = [], _fResid = 0, _fTiled = 0;
-        for (var fpi = 0; fpi < periodPlans.length; fpi++) {
-            var _pp = periodPlans[fpi];
-            for (var fwi = 0; fwi < _pp.windows.length; fwi++) {
-                var _rec = _pp.windows[fwi];
-                var _free = freeSubWindows(_rec.start, _rec.end, tiles), _freeMin = 0;
-                for (var fri = 0; fri < _free.length; fri++) {
-                    var _g = _free[fri];
-                    _freeMin += (_g.end - _g.start);
-                    gaps.push({ startMin: _g.start, endMin: _g.end, len: _g.end - _g.start, period: (_pp.period && _pp.period.name) || null, reason: _rec.reason || 'unfillable', probe: _probeGap(_g.start, _g.end) });
+        // RE-RUNNABLE: the cross-bunk repair (planAllBunksLayout) fills gaps after this
+        // first scan and calls it again so gaps/stats reflect the repaired state.
+        function _recomputeCoverage() {
+            var gaps2 = [], _fResid = 0, _fTiled = 0;
+            for (var fpi = 0; fpi < periodPlans.length; fpi++) {
+                var _pp = periodPlans[fpi];
+                for (var fwi = 0; fwi < _pp.windows.length; fwi++) {
+                    var _rec = _pp.windows[fwi];
+                    var _free = freeSubWindows(_rec.start, _rec.end, tiles), _freeMin = 0;
+                    for (var fri = 0; fri < _free.length; fri++) {
+                        var _g = _free[fri];
+                        _freeMin += (_g.end - _g.start);
+                        gaps2.push({ startMin: _g.start, endMin: _g.end, len: _g.end - _g.start, period: (_pp.period && _pp.period.name) || null, reason: _rec.reason || 'unfillable', probe: _probeGap(_g.start, _g.end) });
+                    }
+                    _rec.tiled = (_freeMin === 0);
+                    _rec.residualMin = _freeMin;
+                    if (_freeMin === 0) _fTiled++;
+                    _fResid += _freeMin;
                 }
-                if (_freeMin === 0) { _rec.tiled = true; _rec.residualMin = 0; _fTiled++; } else { _rec.residualMin = _freeMin; }
-                _fResid += _freeMin;
             }
+            stats.windowsTiled = _fTiled;
+            stats.residualMin = _fResid;
+            return gaps2;
         }
-        stats.windowsTiled = _fTiled;
-        stats.residualMin = _fResid;
+        var gaps = _recomputeCoverage();
 
         tiles.sort(function (a, b) { return a.startMin - b.startMin; });
-        return { tiles: tiles, periodPlans: periodPlans, stats: stats, remaining: remaining, gaps: gaps };
+        var res = { tiles: tiles, periodPlans: periodPlans, stats: stats, remaining: remaining, gaps: gaps };
+        // ── CROSS-BUNK REPAIR HOOKS ─────────────────────────────────────────────────
+        // The pack is per-bunk, so a gap probed "seat-busy(cross-bunk)" can only be
+        // fixed by a pass that sees EVERY bunk (planAllBunksLayout). These closures
+        // give that pass safe entry points into THIS bunk's live state — every move
+        // runs through the same content gate + seat ledger as the original pack.
+        res.repair = {
+            // which special demands would fill [gs,ge) if only a SEAT were free?
+            // (duration fits + quota left + window covers + content gate passes +
+            // resourceGate REFUSES). Read-only.
+            seatBlockedAt: function (gs, ge) {
+                var out = [], len = ge - gs;
+                try {
+                    var tileBlocks = tiles.map(_toBlock);
+                    for (var pi = 0; pi < floating.length; pi++) {
+                        var d = floating[pi];
+                        if (!d || d.share || d.kind !== 'special') continue;
+                        var durs = _demandDurs(d).filter(function (x) { return _num(x) != null && x >= minSeg && x <= len; });
+                        if (!durs.length) continue;
+                        if (d.window && (d.window[0] > gs || d.window[1] < gs + Math.min.apply(null, durs))) continue;
+                        var key = _demandKey(d);
+                        if (!(capRem[key] > 0)) continue;
+                        for (var di = 0; di < durs.length; di++) {
+                            var dur = durs[di];
+                            var seg = { type: 'special', event: _label(d), startMin: gs, endMin: gs + dur, _assignedSpecial: _label(d), _specialLocation: _label(d) };
+                            var okC = true;
+                            if (gate) { try { okC = gate(seg, tileBlocks); } catch (_e1) { okC = true; } }
+                            if (!okC) continue;
+                            var okR = true;
+                            if (resourceGate) { try { okR = resourceGate('special', _ctxGrade, _ctxBunk, gs, gs + dur, d); } catch (_e2) { okR = true; } }
+                            if (!okR) out.push({ kind: 'special', subcat: d.subcat || null, dur: dur });
+                        }
+                    }
+                } catch (_eSB) {}
+                return out;
+            },
+            // vacate a SEAT-HOLDING tile of (subcat, dur) overlapping [s,e): swap it with
+            // an equal-duration movable partner OUTSIDE that window, content-gated at both
+            // new slots and seat-exact (release both old / gate+commit both new / rollback).
+            vacateSwap: function (subcat, dur, s, e) {
+                if (!resourceRelease || !resourceGate || !resourceCommit) return false;   // can't move seat tiles safely
+                var subLc = String(subcat || '').toLowerCase().trim();
+                for (var i = 0; i < tiles.length; i++) {
+                    var T = tiles[i];
+                    if (!T || !T.generic || T.pinned || T.kind !== 'special') continue;
+                    if (T._ref && T._ref.share) continue;
+                    if (String(T.subcat || '').toLowerCase().trim() !== subLc) continue;
+                    if (T.durationMin !== dur) continue;
+                    if (!(T.startMin < e && T.endMin > s)) continue;                      // holds the contended window
+                    for (var j = 0; j < tiles.length; j++) {
+                        var U = tiles[j];
+                        if (!U || U === T || !U.generic || U.pinned || U.kind === 'swim') continue;
+                        if (U._ref && U._ref.share) continue;
+                        if (U.durationMin !== T.durationMin) continue;
+                        if (U.startMin < e && U.endMin > s) continue;                     // partner must sit OUTSIDE the freed window
+                        var tw = T._ref && T._ref.window, uw = U._ref && U._ref.window;
+                        if (tw && (tw[0] > U.startMin || tw[1] < U.endMin)) continue;     // both stay in their windows
+                        if (uw && (uw[0] > T.startMin || uw[1] < T.endMin)) continue;
+                        var others = [];
+                        for (var k2 = 0; k2 < tiles.length; k2++) { if (tiles[k2] !== T && tiles[k2] !== U) others.push(_toBlock(tiles[k2])); }
+                        var tb = { type: T.kind, event: T.name, startMin: U.startMin, endMin: U.endMin, _assignedSpecial: T.name, _specialLocation: T.name };
+                        var ub = { type: U.kind, event: U.name, startMin: T.startMin, endMin: T.endMin };
+                        if (U.kind === 'special') { ub._assignedSpecial = U.name; ub._specialLocation = U.name; }
+                        var okG = true;
+                        if (gate) { try { okG = gate(tb, others) && gate(ub, others.concat([tb])); } catch (_e3) { okG = true; } }
+                        if (!okG) continue;
+                        var Ts = T.startMin, Te = T.endMin, Us = U.startMin, Ue = U.endMin;
+                        try {
+                            if (T._ref) resourceRelease(T.kind, _ctxGrade, _ctxBunk, Ts, Te, T._ref);
+                            if (U._ref) resourceRelease(U.kind, _ctxGrade, _ctxBunk, Us, Ue, U._ref);
+                            var g1 = !T._ref || resourceGate(T.kind, _ctxGrade, _ctxBunk, Us, Ue, T._ref);
+                            if (g1 && T._ref) resourceCommit(T.kind, _ctxGrade, _ctxBunk, Us, Ue, T._ref);
+                            var g2 = g1 && (!U._ref || resourceGate(U.kind, _ctxGrade, _ctxBunk, Ts, Te, U._ref));
+                            if (g1 && g2) {
+                                if (U._ref) resourceCommit(U.kind, _ctxGrade, _ctxBunk, Ts, Te, U._ref);
+                                T.startMin = Us; T.endMin = Ue;
+                                U.startMin = Ts; U.endMin = Te;
+                                T._origin = 'xbunk-vacate'; if (!U._origin) U._origin = 'xbunk-partner';
+                                tiles.sort(function (a, b) { return a.startMin - b.startMin; });
+                                return true;
+                            }
+                            // rollback to the pre-call ledger + times
+                            if (g1 && T._ref) resourceRelease(T.kind, _ctxGrade, _ctxBunk, Us, Ue, T._ref);
+                            if (T._ref) resourceCommit(T.kind, _ctxGrade, _ctxBunk, Ts, Te, T._ref);
+                            if (U._ref) resourceCommit(U.kind, _ctxGrade, _ctxBunk, Us, Ue, U._ref);
+                        } catch (_e4) { return false; }
+                    }
+                }
+                return false;
+            },
+            // greedy fill of [gs,ge) NOW (used right after a seat was freed elsewhere).
+            // Returns minutes placed. Same _pickFill/_applyLaid as gap-close (fully gated).
+            fillGapNow: function (gs, ge) {
+                var minutes = 0, cur = gs, guard = 0;
+                try {
+                    while (ge - cur >= minSeg && guard++ < 12) {
+                        var pk = _pickFill(cur, ge - cur, tiles);
+                        if (!pk) break;
+                        _applyLaid([pk.seg], null);
+                        minutes += (pk.seg.endMin - pk.seg.startMin);
+                        cur = pk.seg.endMin;
+                    }
+                } catch (_eFG) {}
+                return minutes;
+            },
+            // refresh res.gaps + stats after repair fills
+            recompute: function () { res.gaps = _recomputeCoverage(); return res.gaps; }
+        };
+        return res;
     }
 
     // Lay out all bunks (independent per bunk — no cross-bunk competition at the
@@ -1187,16 +1303,56 @@
         var order = o.order || Object.keys(o.perBunk || {});
         var opts = o.opts || {};
         var layoutByBunk = {};
-        var totals = { bunks: 0, periodsConsidered: 0, windowsConsidered: 0, windowsTiled: 0, residualMin: 0, tilesPlaced: 0, bunksFullyTiled: 0, unmetSpecialFloors: 0, unmetFloors: 0, gapCloseTilesPlaced: 0, gapCloseGrew: 0 };
+        var totals = { bunks: 0, periodsConsidered: 0, windowsConsidered: 0, windowsTiled: 0, residualMin: 0, tilesPlaced: 0, bunksFullyTiled: 0, unmetSpecialFloors: 0, unmetFloors: 0, gapCloseTilesPlaced: 0, gapCloseGrew: 0, crossBunkRepaired: 0, crossBunkMinutes: 0 };
         for (var i = 0; i < order.length; i++) {
             var bunk = order[i];
             var b = (o.perBunk || {})[bunk];
             if (!b) continue;
-            var res = planBunkLayout({
+            layoutByBunk[bunk] = planBunkLayout({
                 bunk: bunk, grade: b.grade, periods: b.periods, pinned: b.pinned,
                 floating: b.floating, opts: opts, packer: o.packer, gate: o.gate, resourceGate: o.resourceGate, resourceCommit: o.resourceCommit, resourceRelease: o.resourceRelease, pressure: o.pressure
             });
-            layoutByBunk[bunk] = res;
+        }
+        // ── CROSS-BUNK GAP REPAIR (opts.crossBunk !== false; needs the seat ledger) ──
+        // A gap probed "seat-busy(cross-bunk)" is fillable EXCEPT that another bunk's
+        // tile holds the seat at that time — and that holder could often run at a
+        // different time in its OWN day. Per gap: ask the gapped bunk which special
+        // demands are seat-blocked (repair.seatBlockedAt), find a holder bunk whose
+        // matching tile can vacate via an equal-duration in-day swap
+        // (repair.vacateSwap — content-gated + seat-exact), then fill the gap
+        // (repair.fillGapNow) and refresh that bunk's gap list. Bounded and safe:
+        // every move goes through the same gates as the original pack; a vacate that
+        // frees nothing just leaves both days wall-to-wall as before.
+        if (o.resourceGate && opts.crossBunk !== false) {
+            for (var xi = 0; xi < order.length; xi++) {
+                var bA = order[xi], resA = layoutByBunk[bA];
+                if (!resA || !resA.gaps || !resA.gaps.length || !resA.repair) continue;
+                var anyFilled = false;
+                for (var gi = 0; gi < resA.gaps.length; gi++) {
+                    var g = resA.gaps[gi];
+                    if (!g || !g.probe || String(g.probe).indexOf('seat-busy') < 0) continue;
+                    var blocked = resA.repair.seatBlockedAt(g.startMin, g.endMin);
+                    var freed = false;
+                    for (var bi2 = 0; bi2 < blocked.length && !freed; bi2++) {
+                        var bd = blocked[bi2];
+                        for (var hj = 0; hj < order.length && !freed; hj++) {
+                            if (order[hj] === bA) continue;
+                            var resB = layoutByBunk[order[hj]];
+                            if (!resB || !resB.repair) continue;
+                            if (resB.repair.vacateSwap(bd.subcat, bd.dur, g.startMin, g.endMin)) freed = true;
+                        }
+                    }
+                    if (freed) {
+                        var got = resA.repair.fillGapNow(g.startMin, g.endMin);
+                        if (got > 0) { totals.crossBunkRepaired++; totals.crossBunkMinutes += got; anyFilled = true; }
+                    }
+                }
+                if (anyFilled) resA.repair.recompute();
+            }
+        }
+        for (var ii = 0; ii < order.length; ii++) {
+            var res = layoutByBunk[order[ii]];
+            if (!res) continue;
             totals.bunks++;
             totals.periodsConsidered += res.stats.periodsConsidered;
             totals.windowsConsidered += res.stats.windowsConsidered;

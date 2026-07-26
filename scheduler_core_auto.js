@@ -19342,7 +19342,7 @@
 
                     // 2) Lay generic tiles wall-to-wall (pure; per-bunk independent — except the
                     //    cross-bunk resourceGate, which enforces shared-facility limits).
-                    var _glOut = window.PeriodLayout.planAllBunksLayout({ order: _glOrder, perBunk: _glPerBunk, packer: window.PeriodPacker, gate: _glGate, resourceGate: _glResourceGate, resourceCommit: _glResourceCommit, resourceRelease: _glResourceRelease, pressure: _glPressure, opts: { granularityMin: 5, minSegmentMin: 10, topN: 8, maxSegments: 4 } });
+                    var _glOut = window.PeriodLayout.planAllBunksLayout({ order: _glOrder, perBunk: _glPerBunk, packer: window.PeriodPacker, gate: _glGate, resourceGate: _glResourceGate, resourceCommit: _glResourceCommit, resourceRelease: _glResourceRelease, pressure: _glPressure, opts: { granularityMin: 5, minSegmentMin: 10, topN: 8, maxSegments: 4, crossBunk: ((typeof window === 'undefined') || (window.__crossBunkRepair !== false)) } });
 
                     // 2.5) FILL — assign a CONCRETE special activity to each generic special tile.
                     // STEP 1 (specials, per-bunk): for each generic "Special: <subcat>" tile, pick the
@@ -20500,7 +20500,8 @@
                             });
                         });
                         log('[GENERIC-LAYOUT] GAP-CLOSE: filled gaps with ' + _glGcTiles + ' layer tile(s) + grew ' + _glGcGrew + ' neighbor(s)'
-                            + (_glScRep ? ' + SWAP-CHAIN repaired ' + _glScRep + ' gap-stuck tile move(s)/' + _glScMin + 'min (own tile → gap, sport → its old slot)' : ''));
+                            + (_glScRep ? ' + SWAP-CHAIN repaired ' + _glScRep + ' gap-stuck tile move(s)/' + _glScMin + 'min (own tile → gap, sport → its old slot)' : '')
+                            + ((_glOut.stats && _glOut.stats.crossBunkRepaired) ? ' + CROSS-BUNK repaired ' + _glOut.stats.crossBunkRepaired + ' seat-busy gap(s)/' + _glOut.stats.crossBunkMinutes + 'min (a holder bunk\'s tile vacated the seat, the gapped bunk filled it)' : ''));
                         if (_glOpen.length) {
                             log('[GENERIC-LAYOUT] ⚠ ' + _glOpen.length + ' gap(s) STILL open (' + _glOpenMin + ' min) — no layer item fits without breaking a rule/cap:');
                             _glOpen.slice(0, 25).forEach(function (s) { log('[GENERIC-LAYOUT]     ' + s); });
