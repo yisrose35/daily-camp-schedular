@@ -392,7 +392,9 @@ button { cursor: pointer; border: none; background: none; }
 .lite-ctrl { display: inline-flex; align-items: center; justify-content: center; gap: 3px; height: 38px; padding: 0 10px 0 13px; border: 1px solid var(--line, #E5E7EB); border-radius: 999px; background: var(--card, #fff); font-size: 0.83rem; font-weight: 700; color: var(--ink); cursor: pointer; white-space: nowrap; }
 .lite-ctrl svg { width: 15px; height: 15px; flex: none; }
 .lite-ctrl:active { background: var(--accent-tint); border-color: var(--accent); }
-.lite-ctrl.icon { width: 38px; padding: 0; margin-left: auto; color: var(--ink-2); }
+.lite-ctrl.grow { flex: 1 1 auto; min-width: 0; justify-content: space-between; }
+.lite-ctrl.grow > span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.lite-ctrl.icon { width: 38px; flex: none; padding: 0; color: var(--ink-2); }
 .lite-ctrl.icon + .lite-ctrl.icon { margin-left: 0; }
 .lite-ctrl.icon svg { width: 18px; height: 18px; }
 .lite-ctrl.icon.on { background: var(--accent-tint); border-color: var(--accent); color: var(--accent-dark); }
@@ -404,6 +406,9 @@ button { cursor: pointer; border: none; background: none; }
 .lite-picklist { display: flex; flex-direction: column; margin-top: 4px; }
 .lite-pick { display: flex; align-items: center; justify-content: space-between; gap: 10px; width: 100%; padding: 13px 4px; border-top: 1px solid var(--line, #EEF0F3); background: none; text-align: left; cursor: pointer; }
 .lite-pick:first-child { border-top: none; }
+.lite-pick-group { padding: 12px 4px 5px; font-size: 0.66rem; font-weight: 800; text-transform: uppercase; letter-spacing: 0.07em; color: var(--muted); }
+.lite-pick-group + .lite-pick { border-top: none; }
+.lite-picklist-scroll { max-height: 58vh; overflow-y: auto; -webkit-overflow-scrolling: touch; }
 .lite-pick svg { width: 19px; height: 19px; flex: none; color: var(--accent-dark); }
 .lite-pick-main { display: flex; flex-direction: column; gap: 2px; font-size: 0.95rem; font-weight: 600; color: var(--ink); }
 .lite-pick.on .lite-pick-main { color: var(--accent-dark); font-weight: 800; }

@@ -1313,25 +1313,21 @@
         // controls collapse to ONE row: two labelled pickers plus search and
         // overflow as icons. Everything else opens in a sheet on demand.
         const isFac = schedScope === 'facility';
+        ensureSchedSel();
         view.innerHTML = dateStripHTML()
             + toolbarHTML(isFac)
             + (searchOpen ? `<div class="lite-searchrow">
                  <input class="lite-input" id="liteBunkSearch" type="search" placeholder="${isFac ? 'Search a facility…' : 'Search a bunk…'}" value="${esc(bunkQuery)}" autocomplete="off">
                </div>` : '')
-            + `<div id="liteSchedChips"></div><div id="liteSchedBody">${loadingHTML()}</div>`;
+            + `<div id="liteSchedBody">${loadingHTML()}</div>`;
         wireDateStrip(view, () => renderToday());
-        const onScope = () => openPicker('Group by', [
-            { val: 'division', label: 'Divisions' },
-            { val: 'grade', label: 'Grades' },
-            { val: 'facility', label: 'Facilities' }
-        ], schedScope, v => { schedScope = v; schedSel = null; bunkQuery = ''; searchOpen = false; renderToday(); });
         const onMode = () => openPicker('View', [
             { val: 'schedule', label: 'By bunk', hint: 'Each bunk’s full day' },
             { val: 'time', label: 'By time', hint: 'One card per period' },
             { val: 'grid', label: 'Grid', hint: 'Everything at once' },
             { val: 'now', label: 'Now', hint: 'What’s happening this minute' }
         ], schedMode, v => { schedMode = v; renderToday(); });
-        view.querySelector('#liteScopeBtn')?.addEventListener('click', onScope);
+        view.querySelector('#liteWhoBtn')?.addEventListener('click', openWhoPicker);
         view.querySelector('#liteModeBtn')?.addEventListener('click', onMode);
         view.querySelector('#liteSearchBtn')?.addEventListener('click', () => {
             searchOpen = !searchOpen;
@@ -1341,7 +1337,7 @@
         view.querySelector('#liteMoreBtn')?.addEventListener('click', openMoreSheet);
         const inp = view.querySelector('#liteBunkSearch');
         if (inp) {
-            inp.addEventListener('input', () => { bunkQuery = inp.value; renderSchedChips(view); renderSchedBody(view); });
+            inp.addEventListener('input', () => { bunkQuery = inp.value; renderSchedBody(view); });
             inp.focus();
         }
         const schedBody = view.querySelector('#liteSchedBody');
@@ -1364,7 +1360,6 @@
             });
         }
 
-        renderSchedChips(view);
         await renderSchedBody(view);
     }
 
@@ -1377,10 +1372,61 @@
         check: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.6"><polyline points="20 6 9 17 4 12"/></svg>'
     };
 
+    // Default the selection to the first available group for the scope.
+    function ensureSchedSel() {
+        if (schedScope === 'facility') return;
+        const chips = scopeChips(schedScope);
+        if (!chips.length) { schedSel = null; return; }
+        if (!schedSel || !chips.includes(schedSel)) schedSel = chips[0];
+    }
+    function whoLabel() {
+        if (schedScope === 'facility') return 'Facilities';
+        return schedSel || SCOPE_LABEL[schedScope] || 'Divisions';
+    }
+
+    // One dropdown for WHO you're looking at. Divisions, grades and facilities
+    // used to be a scope picker plus a horizontal chip row — two rows and two
+    // interactions for one decision. Grouped sections do the same job in a
+    // sheet, and pick the scope implicitly from whatever you tap.
+    function openWhoPicker() {
+        const divisions = parentDivisions();
+        const grades = gradeKeys();
+        const section = (label, items, scope) => items.length
+            ? `<div class="lite-pick-group">${esc(label)}</div>` + items.map(v => `
+                <button type="button" class="lite-pick${schedScope === scope && schedSel === v ? ' on' : ''}" data-scope="${scope}" data-val="${esc(v)}">
+                    <span class="lite-pick-main">${esc(v)}</span>
+                    ${schedScope === scope && schedSel === v ? ICO.check : ''}
+                </button>`).join('')
+            : '';
+        openSheet(`
+            <div class="lite-sheet-head">
+                <div class="lite-sheet-title" style="margin:0;">Show</div>
+                <button class="lite-sheet-close" id="litePickClose" aria-label="Close"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg></button>
+            </div>
+            <div class="lite-picklist lite-picklist-scroll">
+                ${section('Divisions', divisions, 'division')}
+                ${section('Grades', grades, 'grade')}
+                <div class="lite-pick-group">Facilities</div>
+                <button type="button" class="lite-pick${schedScope === 'facility' ? ' on' : ''}" data-scope="facility" data-val="">
+                    <span class="lite-pick-main">All facilities<span class="lite-pick-hint">Who's using what, and when</span></span>
+                    ${schedScope === 'facility' ? ICO.check : ''}
+                </button>
+            </div>`);
+        document.getElementById('litePickClose').addEventListener('click', closeSheet);
+        document.querySelectorAll('.lite-pick[data-scope]').forEach(b =>
+            b.addEventListener('click', () => {
+                closeSheet();
+                schedScope = b.dataset.scope;
+                schedSel = b.dataset.val || null;
+                bunkQuery = ''; searchOpen = false;
+                renderToday();
+            }));
+    }
+
     function toolbarHTML(isFac) {
         return `<div class="lite-ctrlbar">
-            <button type="button" class="lite-ctrl" id="liteScopeBtn">
-                <span>${esc(SCOPE_LABEL[schedScope] || 'Divisions')}</span>${ICO.caret}</button>
+            <button type="button" class="lite-ctrl grow" id="liteWhoBtn">
+                <span>${esc(whoLabel())}</span>${ICO.caret}</button>
             ${isFac ? '' : `<button type="button" class="lite-ctrl" id="liteModeBtn">
                 <span>${esc(MODE_LABEL[schedMode] || 'By bunk')}</span>${ICO.caret}</button>`}
             <button type="button" class="lite-ctrl icon${searchOpen || bunkQuery.trim() ? ' on' : ''}" id="liteSearchBtn" aria-label="Search">${ICO.search}</button>
@@ -1421,19 +1467,6 @@
             </div>`);
         document.getElementById('liteMoreClose').addEventListener('click', closeSheet);
         document.getElementById('liteRainBtn')?.addEventListener('click', openRainySheet);
-    }
-
-    function renderSchedChips(view) {
-        const el = view.querySelector('#liteSchedChips');
-        if (!el) return;
-        // Facility scope / search / Now mode all show everything → no chips
-        if (schedScope === 'facility' || bunkQuery.trim() || schedMode === 'now') { el.innerHTML = ''; return; }
-        const chips = scopeChips(schedScope);
-        if (!chips.length) { el.innerHTML = ''; return; }
-        if (!schedSel || !chips.includes(schedSel)) schedSel = chips[0];
-        el.innerHTML = chipRowHTML(chips, schedSel);
-        el.querySelectorAll('.lite-chip').forEach(ch =>
-            ch.addEventListener('click', () => { schedSel = ch.dataset.val; renderSchedChips(view); renderSchedBody(view); }));
     }
 
     async function renderSchedBody(view) {
