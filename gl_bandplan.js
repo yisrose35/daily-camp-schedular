@@ -144,6 +144,15 @@
         // rejects (e.g. subcat-strict: a subcategory-tagged tile is that subcat or NOTHING)
         // is left in place and counted `left` — genuine over-capacity, not relabeled.
         var canRelabel = (ctx && typeof ctx.canRelabel === 'function') ? ctx.canRelabel : null;
+        // canFill(tile, grade, targetCatKey, bunkTiles) -> bool (optional): PER-BUNK
+        // availability check for a relabel target. Seat counts alone said "theme has
+        // 15 seats, room!" — but theme is ONE physical activity and the bunk already
+        // did it today, so every such relabel died unfillable at fill time (live: 7
+        // enforce-relabel theme slivers / 80 min dead). When provided, a special-subcat
+        // target is only chosen if the bunk can actually still RECEIVE a concrete
+        // activity of that subcat at this time; otherwise the tile is left (honest
+        // over-capacity under its own subcat — better attribution too).
+        var canFill = (ctx && typeof ctx.canFill === 'function') ? ctx.canFill : null;
         var byDur = !!(ctx && ctx.byDuration);
         var ents = [];
         bunks.forEach(function (b) { (b.tiles || []).forEach(function (t) { var c = categoryOf(t, canon, byDur); if (c) ents.push({ grade: b.grade, t: t, cat: c, tiles: b.tiles }); }); });
@@ -196,7 +205,9 @@
                     if (ck === en.cat || ck.indexOf('special:') !== 0 || !(gm[ck] > 0)) continue;
                     if (durSfx && ck.slice(-durSfx.length) !== durSfx) continue;   // must run this length
                     var cc = conc(ck, t.startMin, t.endMin, en.grade);
-                    if (cc.camp + 1 <= cap(ck) && cc.grade + 1 <= gcap(ck, en.grade)) { target = ck; break; }
+                    if (!(cc.camp + 1 <= cap(ck) && cc.grade + 1 <= gcap(ck, en.grade))) continue;
+                    if (canFill && !canFill(t, en.grade, ck, en.tiles)) continue;  // the bunk must be able to actually FILL it there
+                    target = ck; break;
                 }
             }
             if (!target) { left++; continue; }

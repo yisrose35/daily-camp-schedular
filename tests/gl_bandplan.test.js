@@ -231,3 +231,34 @@ test('enforce: a REAL 4-at-once over-cap is still caught and relabeled/reported'
     });
     assert.ok(r.toSport + r.toOtherSpecial + r.left >= 1, 'a real over-cap is acted on: ' + JSON.stringify(r));
 });
+
+test('enforce canFill: a relabel target the BUNK cannot actually fill is skipped (theme once/day → dead sliver bug)', () => {
+    // 2 G-bunks on uncat at once, uncat seats=1 → one must move. Sport is full (cap 0-ish via
+    // seats) so the only counted target is 'special:theme' (cap 15 — plenty of SEATS). But the
+    // bunk already DID the one theme activity today: canFill says no → the tile must be LEFT
+    // under its own subcat, never relabeled into a guaranteed-dead theme sliver.
+    const bunks = [0, 1].map(() => gbunk('G', [{ k: 'special', sub: 'Regular', s: 0, e: 40 }]));
+    const ctxBase = {
+        bunks, canon,
+        seats: { 'special:uncategorized': 1, 'special:theme': 15, sport: 0 },
+        seatsByGrade: { G: { 'special:uncategorized': 1, 'special:theme': 15 } },
+    };
+    // (a) WITHOUT canFill (old behavior): seat counting happily relabels to theme
+    const rOld = GLBandPlan.enforce(Object.assign({}, ctxBase));
+    assert.strictEqual(rOld.toOtherSpecial, 1, 'without canFill the excess tile is relabeled to theme');
+    // (b) WITH canFill rejecting theme: the tile stays, honestly, under its own subcat
+    const bunks2 = [0, 1].map(() => gbunk('G', [{ k: 'special', sub: 'Regular', s: 0, e: 40 }]));
+    const calls = [];
+    const r = GLBandPlan.enforce(Object.assign({}, ctxBase, {
+        bunks: bunks2,
+        canFill: (t, grade, catKey, bunkTiles) => { calls.push(catKey); return false; },
+    }));
+    assert.ok(calls.some(k => k === 'special:theme'), 'canFill consulted for the theme target');
+    assert.strictEqual(r.toOtherSpecial, 0, 'unfillable target skipped — no relabel');
+    assert.strictEqual(r.left, 2, 'both over-cap tiles left in place as honest over-capacity (nothing relabels, so the peak never drops)');
+    assert.ok(bunks2.every(b => b.tiles.every(t => canon(t.subcat) === 'uncategorized')), 'subcat unchanged (honest attribution)');
+    // (c) WITH canFill accepting: relabel proceeds exactly as before
+    const bunks3 = [0, 1].map(() => gbunk('G', [{ k: 'special', sub: 'Regular', s: 0, e: 40 }]));
+    const r3 = GLBandPlan.enforce(Object.assign({}, ctxBase, { bunks: bunks3, canFill: () => true }));
+    assert.strictEqual(r3.toOtherSpecial, 1, 'fillable target still relabels');
+});

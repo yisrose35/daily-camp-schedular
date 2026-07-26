@@ -19938,7 +19938,31 @@
                                     // sportless grades (no sport layer) → enforce must never pull an over-cap special down to Sport
                                     var _enfSportless = {};
                                     try { if ((typeof window === 'undefined') || (window.__sportlessNoSport !== false)) { allGrades.forEach(function (g) { if (typeof gradeHasSportLayer === 'function' && !gradeHasSportLayer(g)) _enfSportless[String(g)] = 1; }); } } catch (_e) {}
-                                    var _enf = window.GLBandPlan.enforce({ bunks: _enfBunks, seats: _glSeats, seatsByGrade: _glSeatsByGrade, canon: _glCanon, gate: _glGate, sportLabel: 'Sport', byDuration: true, sportlessGrades: _enfSportless, canRelabel: _glMayRepurpose });
+                                    // PER-BUNK relabel-target availability (see gl_bandplan canFill): a pull-down
+                                    // may only land on a subcat with a concrete activity this BUNK can still take
+                                    // at that time — unused today, grade-accessible, duration-matching, seat-free.
+                                    // Without this, "room in the theme category" relabeled tiles the bunk could
+                                    // never fill (Theme Activity is once/day) → guaranteed dead slivers.
+                                    var _enfCanFill = function (t, grade, catKey, bunkTiles) {
+                                        try {
+                                            var _body = catKey.slice(8), _atF = _body.indexOf('@');
+                                            var _subF = _atF >= 0 ? _body.slice(0, _atF) : _body;
+                                            var _durF = (t.durationMin != null) ? t.durationMin : (t.endMin - t.startMin);
+                                            var _usedF = {};
+                                            (bunkTiles || []).forEach(function (o) { if (o && o.kind === 'special' && o._concrete) _usedF[String(o._concrete).toLowerCase()] = 1; });
+                                            var _acc = (_glAccBySubGrade[grade] && _glAccBySubGrade[grade][_subF]) || _glNamesBySub[_subF] || [];
+                                            for (var _fi = 0; _fi < _acc.length; _fi++) {
+                                                var _nm = _acc[_fi];
+                                                var _inf = _glActInfo[_nm];
+                                                if (_inf && _inf.durs && _inf.durs.length && _inf.durs.indexOf(_durF) < 0) continue;
+                                                if (_usedF[String(_nm).toLowerCase()]) continue;
+                                                if (!_glCapFits({ name: _nm }, grade, t.startMin, t.endMin)) continue;
+                                                return true;
+                                            }
+                                            return false;
+                                        } catch (_eCF) { return true; }   // fail-open: behave like before
+                                    };
+                                    var _enf = window.GLBandPlan.enforce({ bunks: _enfBunks, seats: _glSeats, seatsByGrade: _glSeatsByGrade, canon: _glCanon, gate: _glGate, sportLabel: 'Sport', byDuration: true, sportlessGrades: _enfSportless, canRelabel: _glMayRepurpose, canFill: _enfCanFill });
                                     if (_enf) {
                                         var _fmtA = (typeof minutesToTimeLabel === 'function') ? minutesToTimeLabel : function (m) { return String(m); };
                                         log('[SEAT AUDIT] over-cap leftovers pulled down: ' + (_enf.toSport || 0) + ' → Sport, ' + (_enf.toOtherSpecial || 0) + ' → another subcat'
