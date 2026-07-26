@@ -230,6 +230,13 @@
         const validated = {
             name: league.name || leagueName,
             teams: Array.isArray(league.teams) ? league.teams.filter(t => typeof t === 'string') : [],
+            // ★ TEAM RENAME: { "<former name>": "<current name>" }. Must survive
+            //   validation — it is what lets the engine recognize records written
+            //   under a team's old name (see league_team_rename.js). Dropping it
+            //   here would silently re-fork the phantom team on the next save.
+            teamAliases: (league.teamAliases && typeof league.teamAliases === 'object' && !Array.isArray(league.teamAliases))
+                ? league.teamAliases
+                : undefined,
             sports: Array.isArray(league.sports) ? league.sports.filter(s => typeof s === 'string') : [],
             divisions: Array.isArray(league.divisions) ? league.divisions.filter(d => typeof d === 'string') : [],
             standings: (league.standings && typeof league.standings === 'object') ? league.standings : {},
@@ -988,6 +995,138 @@
     }
 
     // =========================================================================
+    // ★ TEAM RENAME (see league_team_rename.js for the identity model)
+    // =========================================================================
+    // A camp starts its league with placeholder names ("Team 1" … "Team 18") and
+    // by game 2 the campers have picked real ones ("The Pancakes", "The
+    // Waffles"). Team identity in this app IS the name string, so deleting and
+    // re-adding lost everything that made the scheduler fair: the standings, the
+    // entered scores, and — worst — the record that Team 1 already played Team 2
+    // at basketball. Renaming carries all of it across.
+
+    /** current team name → [former names], for the "(was …)" chip hint. */
+    function _formerNamesByTeam(league) {
+        const out = {};
+        try {
+            const LTR = window.LeagueTeamRename;
+            if (!LTR) return out;
+            LTR.aliasMap(league).forEach(function (current, formerKey) {
+                const raw = Object.keys(league.teamAliases || {}).find(function (k) {
+                    return LTR.normKey(k) === formerKey;
+                }) || formerKey;
+                (out[current] = out[current] || []).push(raw);
+            });
+        } catch (_) {}
+        return out;
+    }
+
+    /**
+     * Rename a team everywhere it is stored. Returns
+     * { ok, reason, newName, config, history, schedules }.
+     */
+    function renameTeam(league, oldName, rawNewName) {
+        const LTR = window.LeagueTeamRename;
+        if (!LTR) return { ok: false, reason: 'Rename support is not loaded — reload the page and try again.' };
+        if (window.AccessControl?.canEditSetup && !window.AccessControl.canEditSetup()) {
+            return { ok: false, reason: 'You do not have permission to edit league setup.' };
+        }
+
+        const v = LTR.validateRename(league, oldName, rawNewName);
+        if (!v.ok) return v;
+        const newName = v.newName;
+
+        // (1) League config: roster, standings, entered results, playoff bracket,
+        //     chinuch facilities. Then record the alias and persist — the alias
+        //     must be saved BEFORE the history migration, because the engine's
+        //     load-time fold reads it.
+        const config = LTR.applyToLeagueConfig(league, oldName, newName);
+        LTR.recordAlias(league, oldName, newName);
+        recalcStandings(league);                 // rebuilds the _h2h table under the new name
+        saveLeaguesData();
+
+        // (2) League history — matchup counts, sport cycles, away-trip counters,
+        //     chinuch attendance and the date-keyed gameLog every variety
+        //     decision reads.
+        let history = { ok: false, changed: 0 };
+        try {
+            history = window.SchedulerCoreLeagues?.renameTeamInHistory?.(league.name, oldName, newName) || history;
+        } catch (e) {
+            console.error('[LEAGUES] history rename failed:', e);
+        }
+
+        // (3) Saved daily schedules for every date — what the grid, print center
+        //     and the LG-9 reconcile read.
+        let schedules = { ok: false, dates: [], entries: 0 };
+        try {
+            schedules = LTR.applyToDailySchedules(league.name, oldName, newName) || schedules;
+        } catch (e) {
+            console.error('[LEAGUES] schedule rename failed:', e);
+        }
+
+        console.log('[LEAGUES] ✏️ Renamed "' + oldName + '" → "' + newName + '" in league "' + league.name + '"', {
+            config: config, historyRecords: history.changed, scheduleEntries: schedules.entries,
+            datesTouched: (schedules.dates || []).length
+        });
+
+        try {
+            window.dispatchEvent(new CustomEvent('campistry-league-team-renamed', {
+                detail: { league: league.name, oldName: oldName, newName: newName, scope: 'regular' }
+            }));
+        } catch (_) {}
+        try { _refreshGamesUIIfShowing(league.name); } catch (_) {}
+
+        return { ok: true, newName: newName, config: config, history: history, schedules: schedules };
+    }
+
+    /** Swap a team chip for an inline text input. Enter/blur commits, Esc cancels. */
+    function _startTeamRenameEditor(league, container, chip, team) {
+        if (!chip || chip.dataset.editing === '1') return;
+        chip.dataset.editing = '1';
+        const prior = Array.from(chip.childNodes);
+        prior.forEach(function (n) { n.remove(); });
+
+        const input = document.createElement('input');
+        input.type = 'text';
+        input.value = team;
+        input.setAttribute('aria-label', 'Rename team ' + team);
+        input.style.cssText = 'width:' + Math.max(90, team.length * 9 + 24) + 'px; padding:2px 6px; border:1px solid #94A3B8; '
+            + 'border-radius:5px; font-size:inherit; font-family:inherit; background:#fff; color:#0F172A;';
+        chip.appendChild(input);
+
+        let done = false, busy = false;
+        const restore = function () {
+            if (done) return;
+            done = true;
+            renderConfigSections(league, container);
+        };
+        const commit = function () {
+            // `busy` guards re-entry: alert() can itself blur the input in some
+            // browsers, and blur is one of the two commit triggers.
+            if (done || busy) return;
+            busy = true;
+            try {
+                const res = renameTeam(league, team, input.value);
+                if (res.ok || res.unchanged) { done = true; renderConfigSections(league, container); return; }
+                // Invalid (empty / duplicate / reserved): tell the user and keep
+                // the editor open so the typed value isn't lost.
+                alert(res.reason || 'That name cannot be used.');
+                input.focus();
+                input.select();
+            } finally {
+                busy = false;
+            }
+        };
+
+        input.onkeydown = function (e) {
+            if (e.key === 'Enter') { e.preventDefault(); commit(); }
+            else if (e.key === 'Escape') { e.preventDefault(); restore(); }
+        };
+        input.onblur = function () { commit(); };
+        input.focus();
+        input.select();
+    }
+
+    // =========================================================================
     // CONFIG SECTIONS (Cards)
     // =========================================================================
     function renderConfigSections(league, container) {
@@ -1116,17 +1255,47 @@
 
         const teamList = document.createElement('div');
         teamList.className = 'chips';
+        // ★ TEAM RENAME: clicking the NAME renames the team (keeping its record);
+        //   only the × removes it. Previously the whole chip was the delete
+        //   button, so the only way to fix a placeholder name was to delete the
+        //   team and re-add it — which is exactly what lost the season's record.
+        const _formerNames = _formerNamesByTeam(league);
         league.teams.forEach(function (team) {
             const chip = document.createElement('span');
             chip.className = 'chip active';
-            // ★ FIX: Use DOM methods instead of innerHTML with user content
-            const teamText = document.createTextNode(team + ' ');
+            chip.style.cursor = 'default';
+
+            const nameBtn = document.createElement('span');
+            nameBtn.textContent = team;   // Safe: textContent auto-escapes
+            nameBtn.title = 'Click to rename — the team keeps its games, standings and matchup history';
+            nameBtn.style.cssText = 'cursor:text; border-bottom:1px dashed rgba(0,0,0,0.28);';
+            chip.appendChild(nameBtn);
+
+            // Show what this team used to be called, so the user can see the
+            // record followed the rename instead of guessing.
+            const former = _formerNames[team];
+            if (former && former.length) {
+                const wasTag = document.createElement('span');
+                wasTag.textContent = ' (was ' + former.join(', ') + ')';
+                wasTag.title = 'Games recorded under ' + (former.length === 1 ? 'this name' : 'these names')
+                    + ' still count for this team';
+                wasTag.style.cssText = 'margin-left:4px; font-size:0.72rem; opacity:0.7; font-weight:400;';
+                chip.appendChild(wasTag);
+            }
+
             const removeSpan = document.createElement('span');
             removeSpan.className = 'league-chip-remove';
             removeSpan.textContent = '×';
-            chip.appendChild(teamText);
+            removeSpan.title = 'Remove this team';
+            removeSpan.style.cssText = 'margin-left:6px; cursor:pointer;';
             chip.appendChild(removeSpan);
-            chip.onclick = function () {
+
+            nameBtn.onclick = function (ev) {
+                ev.stopPropagation();
+                _startTeamRenameEditor(league, container, chip, team);
+            };
+            removeSpan.onclick = function (ev) {
+                ev.stopPropagation();
                 league.teams = league.teams.filter(t => t !== team);
                 delete league.standings[team];
                 saveLeaguesData();
@@ -1145,6 +1314,10 @@
                 if (!league.teams.includes(t)) {
                     league.teams.push(t);
                     league.standings[t] = { w: 0, l: 0, t: 0 };
+                    // A team CREATED with a previously-retired name is a genuinely
+                    // new team — drop the stale alias so it doesn't inherit the
+                    // renamed team's record.
+                    try { window.LeagueTeamRename?.dropAliasFor(league, t); } catch (_) {}
                     saveLeaguesData();
                     renderConfigSections(league, container);
                     const newInput = container.querySelectorAll('input');
@@ -1153,6 +1326,13 @@
             }
         };
       teamCard.appendChild(teamInput);
+
+        const renameHint = document.createElement('div');
+        renameHint.textContent = 'Tip: click a team’s name to rename it. Renaming keeps its standings, '
+            + 'results and who-played-who history — so "Team 1" becoming "The Pancakes" is still the same team.';
+        renameHint.style.cssText = 'margin-top:8px; font-size:0.72rem; color:#6B7280; line-height:1.45;';
+        teamCard.appendChild(renameHint);
+
         container.appendChild(teamCard);
 
         // \u2500\u2500\u2500 Advanced Settings Collapsible \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500
@@ -2359,6 +2539,16 @@
                 return;
             }
 
+            // ★ TEAM RENAME: a saved schedule may still spell a team by its FORMER
+            //   name (written before the rename, or by a device that hadn't synced
+            //   it). Resolve every imported name through the alias map, or the
+            //   games would import under a name that has no standings row and
+            //   recalcStandings would silently drop them.
+            const _resolveTeam = (function () {
+                try { return window.LeagueTeamRename?.resolverFor(league) || null; } catch (_) { return null; }
+            })();
+            const _canon = function (t) { return (_resolveTeam && t) ? _resolveTeam(t) : t; };
+
             console.log('[LEAGUES] Import: Looking for games for league "' + league.name + '"');
             console.log('[LEAGUES] Import: League divisions:', league.divisions);
             console.log('[LEAGUES] Import: Available leagueAssignments keys:', Object.keys(leagueAssignments));
@@ -2399,13 +2589,13 @@
                         const matchupTeams = new Set();
                         matchups.forEach(m => {
                             if (typeof m === 'object') {
-                                if (m.teamA) matchupTeams.add(m.teamA);
-                                if (m.teamB) matchupTeams.add(m.teamB);
+                                if (m.teamA) matchupTeams.add(_canon(m.teamA));
+                                if (m.teamB) matchupTeams.add(_canon(m.teamB));
                             } else if (typeof m === 'string') {
                                 const vsMatch = m.match(/^(.+?)\s+vs\s+(.+?)(?:\s+@|\s*—|$)/i);
                                 if (vsMatch) {
-                                    matchupTeams.add(vsMatch[1].trim());
-                                    matchupTeams.add(vsMatch[2].trim());
+                                    matchupTeams.add(_canon(vsMatch[1].trim()));
+                                    matchupTeams.add(_canon(vsMatch[2].trim()));
                                 }
                             }
                         });
@@ -2462,6 +2652,9 @@
                                 teamB = vsMatch[2].trim();
                             }
                         }
+
+                        teamA = _canon(teamA);
+                        teamB = _canon(teamB);
 
                         if (teamA && teamB && teamA !== 'BYE' && teamB !== 'BYE') {
                             const key = [teamA, teamB].sort().join('|');
@@ -2833,6 +3026,35 @@
     // guards that silently no-op'd because it was never assigned — league
     // standings/playoff resets never persisted (audit finding F3).
     window.saveLeaguesData = saveLeaguesData;
+
+    // ★ TEAM RENAME: rename a team while keeping its record. Exposed for the
+    // Playoff Hub, other modules, and console repair
+    // (LeaguesAPI.renameTeam('Majors', 'Team 1', 'The Pancakes')).
+    window.LeaguesAPI.renameTeam = function (leagueName, oldName, newName) {
+        const league = leaguesByName[leagueName];
+        if (!league) return { ok: false, reason: 'No league named "' + leagueName + '".' };
+        const res = renameTeam(league, oldName, newName);
+        if (res.ok) {
+            try {
+                const c = detailPaneEl?.querySelector('.league-config-container');
+                if (c && selectedLeagueName === leagueName) renderConfigSections(league, c);
+            } catch (_) {}
+        }
+        return res;
+    };
+
+    /** Former name → current name for a league, or null when never renamed. */
+    window.LeaguesAPI.getTeamAliases = function (leagueName) {
+        const league = leaguesByName[leagueName];
+        if (!league || !league.teamAliases) return null;
+        const out = {};
+        try {
+            window.LeagueTeamRename?.aliasMap(league).forEach(function (current, formerKey) {
+                out[formerKey] = current;
+            });
+        } catch (_) { return null; }
+        return Object.keys(out).length ? out : null;
+    };
 
     // ★ HR-64: standings + playoff reset for the non-deleting half reset.
     // league.games is KEPT (results archive) — recalcStandings is epoch-

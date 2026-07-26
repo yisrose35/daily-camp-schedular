@@ -271,6 +271,9 @@
             history.gamesPerDate = history.gamesPerDate || {};
             history.gameLog = history.gameLog || {};
             history._tombstones = history._tombstones || {};
+            // ★ TEAM RENAME: fold records written under a former team name into
+            //   the team's current name (see _foldSpecialtyHistoryAliases).
+            _foldSpecialtyHistoryAliases(history);
             return history;
         } catch (e) {
             console.error("[SpecialtyLeagues] Failed to load history:", e);
@@ -1292,6 +1295,143 @@
     }
 
     // =========================================================================
+    // ★ TEAM RENAME — specialty analog (see league_team_rename.js)
+    // =========================================================================
+    // Same identity problem as the regular engine, different stores. Everything
+    // here is keyed by the league's ID (not its name) plus the team NAME:
+    //   teamFieldRotation["<id>|<team>"] → [field, …]   (field variety)
+    //   lastSlotOrder["<id>|<team>"]     → slot order   (wait fairness)
+    //   slotDebt["<id>|<team>"]          → cumulative late-slot wait
+    //   matchupHistory["<id>|<a>|<b>"]   → [date, …]    (meeting recency)
+    //   gameLog[id][date]                → [{tA, tB, field, g, s}, …]
+
+    function _spRemapPairKey(pair, mapFn) {
+        for (let i = pair.indexOf('|'); i !== -1; i = pair.indexOf('|', i + 1)) {
+            const a = pair.slice(0, i), b = pair.slice(i + 1);
+            const na = mapFn(a), nb = mapFn(b);
+            if (na !== a || nb !== b) return [na, nb].sort().join('|');
+        }
+        return null;
+    }
+
+    function _mapSpecialtyHistoryTeams(history, leagueId, mapFn) {
+        if (!history || !leagueId || typeof mapFn !== 'function') return 0;
+        let changed = 0;
+        const prefix = leagueId + '|';
+
+        // Per-team stores. teamFieldRotation concatenates (both are play
+        // records), lastSlotOrder takes the existing value when present (it is
+        // overwrite-only), slotDebt sums (it is cumulative).
+        [
+            ['teamFieldRotation', function (dst, src) {
+                return Array.isArray(dst) ? dst.concat(Array.isArray(src) ? src : []) : src;
+            }],
+            ['lastSlotOrder', function (dst) { return dst; }],
+            ['slotDebt', function (dst, src) { return (Number(dst) || 0) + (Number(src) || 0); }]
+        ].forEach(function (pair) {
+            const store = history[pair[0]], merge = pair[1];
+            if (!store || typeof store !== 'object') return;
+            Object.keys(store).forEach(function (k) {
+                if (k.indexOf(prefix) !== 0) return;
+                const team = k.slice(prefix.length);
+                const next = mapFn(team);
+                if (next === team) return;
+                const nk = prefix + next;
+                const src = store[k];
+                delete store[k];
+                store[nk] = (store[nk] !== undefined) ? merge(store[nk], src) : src;
+                changed++;
+            });
+        });
+
+        // matchupHistory — "<id>|<a>|<b>" → array of dates. The pair is sorted,
+        // so the key can flip order on rename. On collision the date lists are
+        // concatenated and re-sorted, NOT deduped: a repeated date is a real
+        // second meeting that day, and recency reads count entries.
+        if (history.matchupHistory && typeof history.matchupHistory === 'object') {
+            Object.keys(history.matchupHistory).forEach(function (k) {
+                if (k.indexOf(prefix) !== 0) return;
+                const nextPair = _spRemapPairKey(k.slice(prefix.length), mapFn);
+                if (nextPair === null) return;
+                const nk = prefix + nextPair;
+                if (nk === k) return;
+                const src = Array.isArray(history.matchupHistory[k]) ? history.matchupHistory[k] : [];
+                delete history.matchupHistory[k];
+                const dst = Array.isArray(history.matchupHistory[nk]) ? history.matchupHistory[nk] : [];
+                history.matchupHistory[nk] = dst.concat(src).sort();
+                changed++;
+            });
+        }
+
+        // gameLog
+        const gl = history.gameLog && history.gameLog[leagueId];
+        if (gl && typeof gl === 'object') {
+            Object.keys(gl).forEach(function (d) {
+                (Array.isArray(gl[d]) ? gl[d] : []).forEach(function (e) {
+                    if (!e) return;
+                    ['tA', 'tB'].forEach(function (f) {
+                        if (typeof e[f] !== 'string') return;
+                        const next = mapFn(e[f]);
+                        if (next !== e[f]) { e[f] = next; changed++; }
+                    });
+                });
+            });
+        }
+
+        return changed;
+    }
+
+    // Fold former-name records into the current team on every history load —
+    // covers old-name data that arrives after the rename (a stale device's
+    // lineage unioned in by mergeSpecialtyHistories, or a day reconciled from an
+    // un-migrated saved schedule).
+    function _foldSpecialtyHistoryAliases(history) {
+        try {
+            const LTR = (typeof window !== 'undefined') && window.LeagueTeamRename;
+            if (!LTR || !history) return 0;
+            let total = 0;
+            Object.values(loadSpecialtyLeagues() || {}).forEach(function (league) {
+                if (!league || !league.id) return;
+                const resolve = LTR.resolverFor(league);
+                if (!resolve) return;
+                total += _mapSpecialtyHistoryTeams(history, league.id, resolve);
+            });
+            if (total > 0) {
+                console.log('[SpecialtyLeagues] 🔗 Folded ' + total + ' record(s) written under a former team name '
+                    + 'into the current team (rename aliases)');
+            }
+            return total;
+        } catch (e) {
+            console.warn('[SpecialtyLeagues] alias fold skipped:', e);
+            return 0;
+        }
+    }
+
+    SpecialtyLeagues.renameTeamInHistory = function (leagueId, oldName, newName) {
+        if (!leagueId || !oldName || !newName || oldName === newName) {
+            return { ok: false, changed: 0, reason: 'missing/identical names' };
+        }
+        try {
+            const history = loadSpecialtyHistory();
+            const norm = function (s) { return String(s == null ? '' : s).trim().toLowerCase(); };
+            const target = norm(oldName);
+            const changed = _mapSpecialtyHistoryTeams(history, leagueId, function (name) {
+                return norm(name) === target ? newName : name;
+            });
+            // Save unconditionally — see the regular engine's renameTeamInHistory:
+            // when the alias is recorded first, the load-time fold already did the
+            // remap in memory and `changed` is 0.
+            saveSpecialtyHistory(history);
+            console.log('[SpecialtyLeagues] ✏️ Team rename "' + oldName + '" → "' + newName + '" in league ' + leagueId
+                + ': ' + changed + ' history record(s) migrated');
+            return { ok: true, changed: changed };
+        } catch (e) {
+            console.error('[SpecialtyLeagues] renameTeamInHistory error:', e);
+            return { ok: false, changed: 0, reason: String((e && e.message) || e) };
+        }
+    };
+
+    // =========================================================================
     // ★ LG-9: HISTORY ⇄ SAVED-SCHEDULE RECONCILIATION (specialty)
     // =========================================================================
     // Mirror of the regular engine's reconcileHistoryFromSchedules: rebuild
@@ -1307,6 +1447,18 @@
             const all = (typeof window !== 'undefined' && window.loadAllDailyData) ? window.loadAllDailyData() : null;
             const la = all && all[date] && all[date].leagueAssignments;
             if (!la) return [];
+            // ★ TEAM RENAME: a saved schedule that was never migrated must not
+            //   reconstruct a phantom team here (see the regular engine's
+            //   _teamResolverFor for the full rationale).
+            let _resolve = null;
+            try {
+                const LTR = (typeof window !== 'undefined') && window.LeagueTeamRename;
+                if (LTR) {
+                    const cfg = Object.values(loadSpecialtyLeagues() || {})
+                        .find(function (l) { return l && l.name === leagueName; });
+                    if (cfg) _resolve = LTR.resolverFor(cfg);
+                }
+            } catch (_) {}
             const out = [];
             const seen = new Set();
             Object.keys(la).forEach(function (dv) {
@@ -1316,9 +1468,10 @@
                     if (!g || (g.leagueName || '') !== leagueName) return;
                     (g.matchups || []).forEach(function (m) {
                         if (!m || typeof m !== 'object') return;
-                        const a = m.teamA != null ? m.teamA : m.team1;
-                        const b = m.teamB != null ? m.teamB : m.team2;
+                        let a = m.teamA != null ? m.teamA : m.team1;
+                        let b = m.teamB != null ? m.teamB : m.team2;
                         if (!a || !b || a === 'BYE' || b === 'BYE' || a === 'TBD' || b === 'TBD') return;
+                        if (_resolve) { a = _resolve(String(a)); b = _resolve(String(b)); }
                         const key = (g.gameLabel || '') + '::' + [String(a), String(b)].sort().join('|');
                         if (seen.has(key)) return;
                         seen.add(key);
@@ -2261,6 +2414,11 @@ if (_playoffRoundNum) {
     SpecialtyLeagues.getHistorySnapshot = function () {
         return loadSpecialtyHistory();
     };
+
+    // Mirrors Leagues.loadHistory / Leagues.saveHistory on the regular engine —
+    // the merged cloud+local copy with the rename alias fold applied.
+    SpecialtyLeagues.loadHistory = loadSpecialtyHistory;
+    SpecialtyLeagues.saveHistory = saveSpecialtyHistory;
 
     // ★ HR-60a: EPOCH STAMP — specialty mirror of the regular engine's HR-54.
     // Called by startNewHalf (calendar.js). Stamps the merge-surviving

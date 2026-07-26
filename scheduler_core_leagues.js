@@ -366,6 +366,14 @@
             history.chinuchByDate = history.chinuchByDate || {};
             history.gameLog = history.gameLog || {};
             history._tombstones = history._tombstones || {};
+            // ★ TEAM RENAME: fold records written under a FORMER team name into
+            //   the team's current name. The rename itself migrates the blob
+            //   eagerly, but old-name data can still arrive afterwards — the
+            //   LG-8 merge above unions in a lineage from a device that hadn't
+            //   received the rename yet. Without this the engine would see two
+            //   teams (the renamed one, and a phantom under the old name) and
+            //   generate blind to half the record.
+            _foldHistoryAliases(history);
             return history;
         } catch (e) {
             console.error("Failed to load league history:", e);
@@ -858,11 +866,28 @@
         return null;
     }
 
+    // ★ TEAM RENAME: resolve a former team name read out of a SAVED schedule to
+    // the team's current name. Saved schedules are migrated at rename time, but
+    // this is the read path the LG-9 reconcile rebuilds lost history from — so a
+    // date that was never migrated (written by another device after the rename,
+    // restored from a backup, or saved while the rename's per-date push failed)
+    // must not reconstruct a phantom team. Resolver is rebuilt per call; it is
+    // null (zero cost) for leagues that have never been renamed.
+    function _teamResolverFor(leagueName) {
+        try {
+            const LTR = (typeof window !== 'undefined') && window.LeagueTeamRename;
+            if (!LTR) return null;
+            const cfg = _leagueConfigs().find(function (l) { return l && l.name === leagueName; });
+            return cfg ? LTR.resolverFor(cfg) : null;
+        } catch (_) { return null; }
+    }
+
     function dailyDataLeagueGames(leagueName, date) {
         try {
             const all = (typeof window !== 'undefined' && window.loadAllDailyData) ? window.loadAllDailyData() : null;
             const la = all && all[date] && all[date].leagueAssignments;
             if (!la) return [];
+            const _resolve = _teamResolverFor(leagueName);
             const out = [];
             const seen = new Set();   // a game spanning divisions is stored once per division — dedupe
             Object.keys(la).forEach(function (dv) {
@@ -874,6 +899,7 @@
                         const p = _parseDailyMatchup(m, g.sport || null);
                         if (!p || !p.t1 || !p.t2) return;
                         if (p.t1 === 'BYE' || p.t2 === 'BYE' || p.t1 === 'TBD' || p.t2 === 'TBD') return;
+                        if (_resolve) { p.t1 = _resolve(p.t1); p.t2 = _resolve(p.t2); }
                         const key = (g.gameLabel || '') + '::' + getMatchupKey(p.t1, p.t2);
                         if (seen.has(key)) return;
                         seen.add(key);
@@ -1115,6 +1141,197 @@
             (_keep.length ? ` (kept ${_keep.length} preserved record(s))` : ''));
         return n;
     }
+
+    // =========================================================================
+    // ★ TEAM RENAME — KEEP A RENAMED TEAM'S RECORD (see league_team_rename.js)
+    // =========================================================================
+    // Every store in this blob keys off the team's NAME:
+    //   teamSports["<league>|<team>"]        → sports played (variety)
+    //   matchupHistory["<league>:<a>|<b>"]   → meeting count (who-played-who)
+    //   offCampusCounts["<league>|<team>"]   → away-trip fairness
+    //   ocTripsByDate / chinuchByDate[lg][d] → [team, …]
+    //   gameLog[lg][d]                       → [{t1, t2, sport, g}, …]
+    //
+    // So "Team 1" becoming "The Pancakes" used to strand the entire record on a
+    // team that no longer existed: the engine saw a brand-new team with no
+    // meetings and no sports, re-staged matchups it had already played, and
+    // restarted its sport cycle. _mapHistoryTeams rewrites all five stores
+    // through one name-mapping function, which the two callers below share:
+    //   • renameTeamInHistory — the eager migration at rename time,
+    //   • _foldHistoryAliases — the safety net on every load, for old-name data
+    //     that arrives AFTER the rename (a stale device's lineage unioned in by
+    //     mergeLeagueHistories, or a day the LG-9 reconcile rebuilt from a saved
+    //     schedule that predates the migration).
+
+    // Split a "<a>|<b>" pair key at whichever '|' yields a mapped change, so a
+    // team name that itself contains '|' can't silently break the remap.
+    function _remapPairKey(pair, mapFn) {
+        for (let i = pair.indexOf('|'); i !== -1; i = pair.indexOf('|', i + 1)) {
+            const a = pair.slice(0, i), b = pair.slice(i + 1);
+            const na = mapFn(a), nb = mapFn(b);
+            if (na !== a || nb !== b) return getMatchupKey(na, nb);
+        }
+        return null;
+    }
+
+    // Rewrite team names for ONE league across every store. mapFn is
+    // (name) => name; it must be FLAT — every target must map to itself, with no
+    // A→B→C chains — because keys are rewritten during a snapshot iteration and a
+    // chain could re-map a key that had just absorbed another's data. Both callers
+    // satisfy this: a single rename's new name maps to itself, and the alias map
+    // is chain-collapsed by construction (see recordAlias). Returns edit count.
+    function _mapHistoryTeams(history, leagueName, mapFn) {
+        if (!history || !leagueName || typeof mapFn !== 'function') return 0;
+        let changed = 0;
+        const teamPrefix = leagueName + '|';
+
+        // teamSports — concat when both names carry an array (two lineages).
+        if (history.teamSports && typeof history.teamSports === 'object') {
+            Object.keys(history.teamSports).forEach(function (k) {
+                if (k.indexOf(teamPrefix) !== 0) return;
+                const team = k.slice(teamPrefix.length);
+                const next = mapFn(team);
+                if (next === team) return;
+                const nk = teamPrefix + next;
+                const src = history.teamSports[k];
+                delete history.teamSports[k];
+                if (Array.isArray(history.teamSports[nk])) {
+                    history.teamSports[nk] = history.teamSports[nk].concat(Array.isArray(src) ? src : []);
+                } else {
+                    history.teamSports[nk] = src;
+                }
+                changed++;
+            });
+        }
+
+        // offCampusCounts — sum when both names carry a counter.
+        if (history.offCampusCounts && typeof history.offCampusCounts === 'object') {
+            Object.keys(history.offCampusCounts).forEach(function (k) {
+                if (k.indexOf(teamPrefix) !== 0) return;
+                const team = k.slice(teamPrefix.length);
+                const next = mapFn(team);
+                if (next === team) return;
+                const nk = teamPrefix + next;
+                const src = Number(history.offCampusCounts[k]) || 0;
+                delete history.offCampusCounts[k];
+                history.offCampusCounts[nk] = (Number(history.offCampusCounts[nk]) || 0) + src;
+                changed++;
+            });
+        }
+
+        // matchupHistory — the pair key is SORTED, so a rename can flip the
+        // order ("Team 1|Team 2" → "The Pancakes|Team 2" sorts the other way).
+        // Re-derive the key through getMatchupKey and sum on collision.
+        if (history.matchupHistory && typeof history.matchupHistory === 'object') {
+            const mhPrefix = leagueName + ':';
+            Object.keys(history.matchupHistory).forEach(function (k) {
+                if (k.indexOf(mhPrefix) !== 0) return;
+                const nextPair = _remapPairKey(k.slice(mhPrefix.length), mapFn);
+                if (nextPair === null) return;
+                const nk = mhPrefix + nextPair;
+                if (nk === k) return;
+                const src = Number(history.matchupHistory[k]) || 0;
+                delete history.matchupHistory[k];
+                history.matchupHistory[nk] = (Number(history.matchupHistory[nk]) || 0) + src;
+                changed++;
+            });
+        }
+
+        // Per-date team lists (away trips, chinuch attendance).
+        ['ocTripsByDate', 'chinuchByDate'].forEach(function (store) {
+            const byDate = history[store] && history[store][leagueName];
+            if (!byDate || typeof byDate !== 'object') return;
+            Object.keys(byDate).forEach(function (d) {
+                const arr = byDate[d];
+                if (!Array.isArray(arr)) return;
+                for (let i = 0; i < arr.length; i++) {
+                    if (typeof arr[i] !== 'string') continue;
+                    const next = mapFn(arr[i]);
+                    if (next !== arr[i]) { arr[i] = next; changed++; }
+                }
+            });
+        });
+
+        // gameLog — the date-keyed record every variety decision reads.
+        const gl = history.gameLog && history.gameLog[leagueName];
+        if (gl && typeof gl === 'object') {
+            Object.keys(gl).forEach(function (d) {
+                (Array.isArray(gl[d]) ? gl[d] : []).forEach(function (e) {
+                    if (!e) return;
+                    ['t1', 't2'].forEach(function (f) {
+                        if (typeof e[f] !== 'string') return;
+                        const next = mapFn(e[f]);
+                        if (next !== e[f]) { e[f] = next; changed++; }
+                    });
+                });
+            });
+        }
+
+        return changed;
+    }
+
+    // League configs, for alias lookup. Mirrors the resolution order used by
+    // reconcileHistoryFromSchedules / resetDayRecords.
+    function _leagueConfigs() {
+        try {
+            const gs = (typeof window !== 'undefined' && window.loadGlobalSettings) ? window.loadGlobalSettings() : {};
+            const raw = (gs && gs.app1 && gs.app1.leagues) || (gs && gs.leaguesByName) || {};
+            return Array.isArray(raw) ? raw : Object.values(raw || {});
+        } catch (_) { return []; }
+    }
+
+    // Fold any former-name records into the team's current name. Runs on every
+    // history load; a no-op (and effectively free) for leagues with no renames.
+    function _foldHistoryAliases(history) {
+        try {
+            const LTR = (typeof window !== 'undefined') && window.LeagueTeamRename;
+            if (!LTR || !history) return 0;
+            let total = 0;
+            _leagueConfigs().forEach(function (league) {
+                if (!league || !league.name) return;
+                const resolve = LTR.resolverFor(league);
+                if (!resolve) return;                      // no aliases → nothing to fold
+                total += _mapHistoryTeams(history, league.name, resolve);
+            });
+            if (total > 0) {
+                console.log('[RegularLeagues] 🔗 Folded ' + total + ' record(s) written under a former team name '
+                    + 'into the current team (rename aliases)');
+            }
+            return total;
+        } catch (e) {
+            console.warn('[RegularLeagues] alias fold skipped:', e);
+            return 0;
+        }
+    }
+
+    /**
+     * Migrate a team rename through the league history and persist it.
+     * Called by LeaguesAPI.renameTeam; also usable from the console for repair.
+     */
+    Leagues.renameTeamInHistory = function (leagueName, oldName, newName) {
+        if (!leagueName || !oldName || !newName || oldName === newName) {
+            return { ok: false, changed: 0, reason: 'missing/identical names' };
+        }
+        try {
+            const history = loadLeagueHistory();
+            const norm = function (s) { return String(s == null ? '' : s).trim().toLowerCase(); };
+            const target = norm(oldName);
+            const changed = _mapHistoryTeams(history, leagueName, function (name) {
+                return norm(name) === target ? newName : name;
+            });
+            // Save unconditionally: when the caller records the alias BEFORE
+            // calling this (the normal order), loadLeagueHistory's alias fold has
+            // already done the remap on the in-memory copy and `changed` is 0 —
+            // but that fold only lives in memory until something persists it.
+            saveLeagueHistory(history);
+            console.log('[RegularLeagues] ✏️ Team rename "' + oldName + '" → "' + newName + '" in "' + leagueName
+                + '": ' + changed + ' history record(s) migrated');
+            return { ok: true, changed: changed };
+        } catch (e) {
+            console.error('[RegularLeagues] renameTeamInHistory error:', e);
+            return { ok: false, changed: 0, reason: String((e && e.message) || e) };
+        }
+    };
 
     // =========================================================================
     // ROUND-ROBIN MATCHUP GENERATION
