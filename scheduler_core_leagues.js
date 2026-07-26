@@ -1705,6 +1705,18 @@
         const _toPoolMin = (v) => {
             if (v == null) return null;
             if (typeof v === 'number') return isNaN(v) ? null : v;
+            // ★ NUMERIC-STRING TRAP: blocksByTime keys come from Object.keys(), so
+            //   timeKey is the STRING "900" — and parseTimeToMinutes only accepts
+            //   clock text ("3:00pm"), returning null for a bare number. That null
+            //   sent us to the fallback below, which indexes THIS league's grid with
+            //   a slot index taken from ANOTHER division's block (sampleBlock). When
+            //   grades run staggered or coarser grids the same index is a DIFFERENT
+            //   wall-clock time, so the pool queried a window starting hours early,
+            //   swept in still-valid locks from earlier periods, and reported phantom
+            //   field shortages (field-shortage byes / "PERIOD SKIPPED"). Coerce
+            //   numerics FIRST — mirrors the lock-creation path (_lockStartMin).
+            const _s = String(v).trim();
+            if (_s !== '' && !isNaN(Number(_s))) return Number(_s);
             const n = _parsePoolMin ? _parsePoolMin(v) : Number(v);
             return (n == null || isNaN(Number(n))) ? null : Number(n);
         };
