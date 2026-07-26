@@ -566,7 +566,9 @@
                                 { key: 'health', label: 'Health — nurse station' },
                                 { key: 'snacks', label: 'Snacks — canteen / POS' },
                                 { key: 'live', label: 'Live — attendance / ops' },
-                                { key: 'link', label: 'Link — parent communication' }
+                                { key: 'link', label: 'Link — parent communication' },
+                                { key: 'notes', label: 'Notes — shared notes' },
+                                { key: 'guard', label: 'Guard — safety' }
                             ].map(p => `<label class="checkbox-item"><input type="checkbox" name="product" value="${p.key}" ${(member.product_access || []).includes(p.key) ? 'checked' : ''}> <span>${p.label}</span></label>`).join('')}
                         </div>
                     </div>

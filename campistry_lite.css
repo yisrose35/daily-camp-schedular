@@ -206,6 +206,28 @@ button { cursor: pointer; border: none; background: none; }
 
 /* Product tiles — square app-icon style: logo + uppercase name, product-color
    base accent. 3-up grid. */
+/* Ring launcher: a centre app with the rest orbiting it. The container is
+   square and every tile is positioned in %, so the whole hub scales. */
+.lite-launch-ring { position: relative; width: 100%; max-width: 380px; margin: 4px auto 0; aspect-ratio: 1 / 1; }
+.lite-launch-tile.round {
+    flex-direction: column; justify-content: center; gap: 5px;
+    aspect-ratio: 1 / 1; min-height: 0; padding: 8px 6px; text-align: center;
+    border-radius: 50%; border: 1px solid var(--line);
+    border-left: 1px solid var(--line); border-bottom: 3px solid var(--ql, var(--line-2));
+}
+.lite-launch-tile.round .lite-launch-logo { height: 26px; width: 26px; }
+.lite-launch-tile.round .lite-launch-name {
+    font-size: 0.68rem; font-weight: 700; letter-spacing: 0.01em; color: var(--ink-2);
+    max-width: 100%; overflow: hidden; text-overflow: ellipsis;
+}
+.lite-launch-tile.centre { box-shadow: var(--shadow-lg); border-bottom-width: 4px; z-index: 2; }
+.lite-launch-tile.centre .lite-launch-logo { height: 34px; width: 34px; }
+.lite-launch-tile.centre .lite-launch-name { font-size: 0.76rem; color: var(--ink); }
+.lite-launch-tile.round .lite-launch-soon {
+    top: auto; bottom: 7px; right: 50%; transform: translateX(50%);
+    font-size: 0.5rem; padding: 1px 6px;
+}
+
 .lite-launch-grid { display: grid; grid-template-columns: repeat(2, 1fr); gap: 11px; }
 .lite-launch-grid.single { grid-template-columns: 1fr; }
 /* Compact horizontal tiles: eight land in a clean 2x4 without scrolling. */
@@ -744,3 +766,7 @@ button { cursor: pointer; border: none; background: none; }
     font-size: 0.85rem; font-weight: 700; color: var(--accent-dark);
 }
 .lite-login-foot { margin-top: 26px; font-size: 0.76rem; line-height: 1.5; color: var(--muted); }
+
+/* Apps without a wordmark file (e.g. Guard) draw an inline glyph instead. */
+.lite-launch-icon { display: flex; align-items: center; justify-content: center; color: var(--ql, var(--ink-2)); }
+.lite-launch-icon svg { width: 100%; height: 100%; }
