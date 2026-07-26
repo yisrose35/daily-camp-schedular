@@ -1324,8 +1324,9 @@
             + `<div class="lite-field" style="margin-bottom:10px;">
                  <input class="lite-input" id="liteBunkSearch" type="search" placeholder="${isFac ? 'Search a facility…' : 'Search a bunk…'}" value="${esc(bunkQuery)}" autocomplete="off">
                </div>`
-            + `<div id="liteSchedChips"></div><div id="liteSchedBody">${loadingHTML()}</div>`;
+            + `<div id="liteRainBar"></div><div id="liteSchedChips"></div><div id="liteSchedBody">${loadingHTML()}</div>`;
         wireDateStrip(view, () => renderToday());
+        renderRainBar(view);
         view.querySelectorAll('#liteSchedScope .lite-seg-btn').forEach(b =>
             b.addEventListener('click', () => { schedScope = b.dataset.val; schedSel = null; bunkQuery = ''; renderToday(); }));
         const modeSeg = view.querySelector('#liteSchedMode');
@@ -1344,12 +1345,31 @@
                     return;
                 }
                 const cell = ev.target.closest('.lite-grid-cell[data-p]');
-                if (cell) openGridCellSheet(Number(cell.dataset.p), Number(cell.dataset.b));
+                if (cell) { openGridCellSheet(Number(cell.dataset.p), Number(cell.dataset.b)); return; }
+                const slot = ev.target.closest('.lite-slot[data-slot]');
+                if (slot) {
+                    const r = slotRefs[Number(slot.dataset.slot)];
+                    if (r) openSlotSheet(r.bunk, r.entry);
+                }
             });
         }
 
         renderSchedChips(view);
         await renderSchedBody(view);
+    }
+
+    async function renderRainBar(view) {
+        const el = view.querySelector('#liteRainBar');
+        if (!el) return;
+        if (!canEditSchedule()) { el.innerHTML = ''; return; }
+        const sched = await getSchedule(currentDate);
+        const on = isRainyDay(sched);
+        el.innerHTML = `<button type="button" class="lite-rain-bar${on ? ' on' : ''}" id="liteRainBtn">
+            <span>${on ? 'Rainy day is on for this day' : 'Rainy day'}</span>
+            <span class="lite-rain-cta">${on ? 'Review moves ›' : 'Turn on ›'}</span>
+        </button>`;
+        const b = el.querySelector('#liteRainBtn');
+        if (b) b.addEventListener('click', openRainySheet);
     }
 
     function renderSchedChips(view) {
@@ -1376,6 +1396,7 @@
         }
 
         const q = bunkQuery.trim().toLowerCase();
+        slotRefs = [];   // rebuilt as the cards render
 
         // By facility → who's using what facility, when, and by whom
         if (schedScope === 'facility') {
@@ -1508,11 +1529,333 @@
         <div class="lite-note" style="margin:8px 2px 0;">Scroll sideways for more bunks · tap a cell for detail</div>`;
     }
 
+    // ─── Rainy day (Lite) ───────────────────────────────────────────────
+    // Lite can't run the solver, so it does the two things that matter without
+    // one: flag the day (the office app reads the same isRainyDay/rainyDayMode
+    // in the schedule payload) and walk the user through moving whatever is
+    // stuck outdoors. A field is rainy-safe only if rainyDayAvailable === true,
+    // matching rainy_day_manager.getRainyDayUnavailableFields.
+    function isRainyDay(sched) { return !!(sched && (sched.isRainyDay || sched.rainyDayMode)); }
+    function fieldIsIndoor(name) {
+        if (!name) return false;
+        const f = fieldList().find(x => sameName(x.name, name));
+        return !!(f && f.rainyDayAvailable === true);
+    }
+    function indoorFields() { return fieldList().filter(f => f.rainyDayAvailable === true); }
+
+    // Everything currently sitting on a field that isn't rainy-safe.
+    function outdoorEntries(sched, bunks) {
+        const out = [];
+        bunks.forEach(bunk => {
+            normalizeBunkEntries(bunk, sched).forEach(e => {
+                if (e.kind === 'league' || !e.location) return;
+                // A location we don't know at all isn't evidence of outdoors.
+                if (!fieldList().some(f => sameName(f.name, e.location))) return;
+                if (!fieldIsIndoor(e.location)) out.push({ bunk, entry: e });
+            });
+        });
+        return out.sort((a, b) => (a.entry.startMin ?? 0) - (b.entry.startMin ?? 0));
+    }
+
+    // First indoor field that hosts this activity and is free then; otherwise
+    // any free indoor field. null when everything indoors is taken.
+    function suggestIndoor(sched, item, taken) {
+        const busyKey = loc => `${normKey(loc)}|${item.entry.startMin}`;
+        const free = f => {
+            if (taken.has(busyKey(f.name))) return false;
+            return locationBusyAt(sched, f.name, item.entry.startMin, item.entry.endMin, item.bunk).length === 0;
+        };
+        const hosts = indoorFields().filter(f => (f.activities || []).some(a => sameName(a, item.entry.title)));
+        return hosts.find(free) || indoorFields().find(free) || null;
+    }
+
+    let rainyPlan = [];
+    async function openRainySheet() {
+        const sched = await getSchedule(currentDate);
+        const on = isRainyDay(sched);
+        const bunks = bunksForScope(schedScope, schedSel);
+        const stuck = on ? outdoorEntries(sched, bunks) : [];
+        const taken = new Set();
+        rainyPlan = stuck.map(item => {
+            const pick = suggestIndoor(sched, item, taken);
+            if (pick) taken.add(`${normKey(pick.name)}|${item.entry.startMin}`);
+            return { ...item, to: pick ? pick.name : '' };
+        });
+        renderRainySheet(sched, on);
+    }
+
+    function renderRainySheet(sched, on) {
+        const indoor = indoorFields();
+        const rows = rainyPlan.map((r, i) => {
+            const opts = [`<option value="">Leave as is</option>`].concat(indoor.map(f =>
+                `<option value="${esc(f.name)}"${sameName(f.name, r.to) ? ' selected' : ''}>${esc(f.name)}</option>`)).join('');
+            return `<div class="lite-rain-row">
+                <div class="lite-rain-what"><b>${esc(r.bunk)}</b> · ${esc(r.entry.title)}</div>
+                <div class="lite-rain-meta">${esc(fmtMin(r.entry.startMin))} · now at ${esc(r.entry.location)}</div>
+                <select class="lite-input" data-rain="${i}">${opts}</select>
+            </div>`;
+        }).join('');
+        const canMove = rainyPlan.some(r => r.to);
+        openSheet(`
+            <div class="lite-sheet-head">
+                <div class="lite-sheet-title" style="margin:0;">Rainy day</div>
+                <button class="lite-sheet-close" id="liteRainClose" aria-label="Close"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg></button>
+            </div>
+            <button class="lite-btn ${on ? 'secondary' : ''} block" id="liteRainToggle" style="margin-top:4px;">
+                ${on ? 'Turn rainy day off' : 'Turn rainy day on for this day'}
+            </button>
+            <div class="lite-note" style="margin-top:8px;">${on
+                ? 'The office app sees this day as rainy.'
+                : 'Marks the day rainy everywhere, then helps you move activities indoors.'}</div>
+            ${!on ? '' : (!indoor.length
+                ? `<div class="lite-conflict" style="margin-top:12px;">No fields are marked available on rainy days, so there's nowhere to move to. Set that up in the office app under facilities.</div>`
+                : !rainyPlan.length
+                    ? `<div class="lite-note" style="margin-top:12px;">Nothing is scheduled outdoors right now.</div>`
+                    : `<div class="lite-sheet-title" style="margin:16px 0 2px;">Move indoors (${rainyPlan.length})</div>
+                       <div class="lite-note" style="margin-bottom:8px;">Suggested indoor spots that are free at that time.</div>
+                       ${rows}
+                       <button class="lite-btn block" id="liteRainApply" style="margin-top:12px;" ${canMove ? '' : 'disabled'}>Move them indoors</button>`)}`);
+        const q = id => document.getElementById(id);
+        q('liteRainClose').addEventListener('click', closeSheet);
+        q('liteRainToggle').addEventListener('click', () => toggleRainy(!on));
+        document.querySelectorAll('[data-rain]').forEach(sel =>
+            sel.addEventListener('change', e => { rainyPlan[Number(sel.dataset.rain)].to = e.target.value; renderRainySheet(sched, on); }));
+        const ap = q('liteRainApply');
+        if (ap) ap.addEventListener('click', applyRainyPlan);
+    }
+
+    async function toggleRainy(on) {
+        const sched = await getSchedule(currentDate);
+        if (!sched) { toast('No schedule for this day yet'); return; }
+        sched.isRainyDay = on;
+        sched.rainyDayMode = on;          // the office app reads both
+        const btn = document.getElementById('liteRainToggle');
+        if (btn) { btn.disabled = true; btn.textContent = 'Saving…'; }
+        const res = await saveLiteSchedule(sched);
+        if (!res.ok) { delete scheduleCache[currentDate]; closeSheet(); toast(res.error || 'Could not save'); return; }
+        toast(on ? 'Rainy day on' : 'Rainy day off');
+        const view = document.getElementById('view-today');
+        if (view) await renderToday();
+        if (on) openRainySheet(); else closeSheet();
+    }
+
+    async function applyRainyPlan() {
+        const moves = rainyPlan.filter(r => r.to);
+        if (!moves.length) return;
+        const btn = document.getElementById('liteRainApply');
+        if (btn) { btn.disabled = true; btn.textContent = 'Moving…'; }
+        const sched = await getSchedule(currentDate);
+        moves.forEach(r => {
+            const assigns = sched.scheduleAssignments || (sched.scheduleAssignments = {});
+            const key = matchKey(assigns, r.bunk) || r.bunk;
+            let arr = assigns[key];
+            if (!Array.isArray(arr)) arr = assigns[key] = [];
+            let ti = arr.findIndex(e => e && !e.continuation && numOrNull(e._startMin) === r.entry.startMin);
+            if (ti < 0) ti = (r.entry.idx != null ? r.entry.idx : arr.length);
+            while (arr.length <= ti) arr.push(null);
+            arr[ti] = buildEditEntry(r.entry.title, r.to, r.entry.startMin, r.entry.endMin, false);
+        });
+        const res = await saveLiteSchedule(sched);
+        closeSheet();
+        if (!res.ok) { delete scheduleCache[currentDate]; toast(res.error || 'Could not save'); }
+        else toast(`Moved ${moves.length} activit${moves.length === 1 ? 'y' : 'ies'} indoors`);
+        const view = document.getElementById('view-today');
+        if (view) await renderSchedBody(view);
+    }
+
+    // ─── Post-edit (change an activity on the fly) ──────────────────────
+    function canEditSchedule() { return isHeadStaff(); }
+
+    function fieldList() {
+        const arr = Array.isArray(camp.fields) ? camp.fields : Object.values(camp.fields || {});
+        return arr.filter(f => f && f.name);
+    }
+    // Everything that can be scheduled: sports offered by fields + specials.
+    function activityOptions() {
+        const set = new Set();
+        fieldList().forEach(f => (f.activities || []).forEach(a => { if (a) set.add(String(a)); }));
+        const sp = Array.isArray(camp.specialActivities) ? camp.specialActivities : Object.values(camp.specialActivities || {});
+        sp.forEach(s => { if (s && s.name) set.add(String(s.name)); });
+        return Array.from(set).sort((a, b) => a.localeCompare(b));
+    }
+    // Fields that host an activity (all of them when the activity is unknown).
+    function locationOptions(activity) {
+        const all = fieldList();
+        if (!activity) return all;
+        const hosts = all.filter(f => (f.activities || []).some(a => sameName(a, activity)));
+        return hosts.length ? hosts : all;
+    }
+
+    // Who else is already using this location at this time.
+    function locationBusyAt(sched, location, startMin, endMin, exceptBunk) {
+        if (!location || startMin == null) return [];
+        const hits = [];
+        allBunkRows(sched).forEach(({ bunk }) => {
+            if (sameName(bunk, exceptBunk)) return;
+            normalizeBunkEntries(bunk, sched).forEach(e => {
+                if (!e.location || e.startMin == null) return;
+                if (!sameName(e.location, location)) return;
+                const aEnd = endMin ?? (startMin + 1), bEnd = e.endMin ?? (e.startMin + 1);
+                if (startMin < bEnd && e.startMin < aEnd) hits.push(bunk);
+            });
+        });
+        return Array.from(new Set(hits));
+    }
+
+    // Write one slot back to the cloud, in the shape the desktop post-edit uses
+    // so the office app reads it as an ordinary manual edit.
+    function buildEditEntry(activity, location, startMin, endMin, isClear) {
+        if (isClear) {
+            return { field: 'Free', sport: null, _activity: 'Free', continuation: false,
+                     _postEdit: true, _liteEdit: true, _editedAt: Date.now(),
+                     _startMin: startMin, _endMin: endMin };
+        }
+        return {
+            field: location ? `${location} – ${activity}` : activity,
+            sport: activity, _activity: activity, _location: location || null,
+            continuation: false, _fixed: true,
+            _postEdit: true, _liteEdit: true, _editedAt: Date.now(),
+            _startMin: startMin, _endMin: endMin
+        };
+    }
+
+    async function applyLiteEdit(bunk, entry, activity, location, isClear) {
+        const sched = await getSchedule(currentDate);
+        if (!sched) return { ok: false, error: 'No schedule loaded.' };
+        if (!sched.scheduleAssignments) sched.scheduleAssignments = {};
+        const assigns = sched.scheduleAssignments;
+        const key = matchKey(assigns, bunk) || bunk;
+        let arr = assigns[key];
+        if (!Array.isArray(arr)) arr = assigns[key] = [];
+
+        // Target the slot holding this activity; fall back to its grid index.
+        let ti = arr.findIndex(e => e && !e.continuation && numOrNull(e._startMin) === entry.startMin);
+        if (ti < 0) ti = (entry.idx != null ? entry.idx : arr.length);
+        while (arr.length <= ti) arr.push(null);
+        arr[ti] = buildEditEntry(activity, location, entry.startMin, entry.endMin, isClear);
+        // Drop continuation slots that belonged to the replaced activity.
+        for (let j = ti + 1; j < arr.length; j++) {
+            if (arr[j] && arr[j].continuation) arr[j] = null; else break;
+        }
+
+        const res = await saveLiteSchedule(sched);
+        if (!res.ok) {
+            // Re-read from cloud so the UI never shows an edit that didn't land.
+            delete scheduleCache[currentDate];
+        }
+        return res;
+    }
+
+    // A slot with no start/end comes back from deserialize as new Date(undefined)
+    // — an Invalid Date. ScheduleDB.saveSchedule re-serializes on the way out and
+    // calls .toISOString() on it, which throws and loses the whole edit. Strip
+    // those before saving so serialize falls back to the plain startMin/endMin.
+    function stripInvalidDates(sched) {
+        const bad = d => d instanceof Date && isNaN(d.getTime());
+        const fix = s => { if (s && typeof s === 'object') { if (bad(s.start)) delete s.start; if (bad(s.end)) delete s.end; } };
+        Object.values(sched.divisionTimes || {}).forEach(slots => {
+            if (Array.isArray(slots)) slots.forEach(fix);
+            const pb = slots && slots._perBunkSlots;
+            if (pb) Object.values(pb).forEach(a => { if (Array.isArray(a)) a.forEach(fix); });
+        });
+        if (Array.isArray(sched.unifiedTimes)) sched.unifiedTimes.forEach(fix);
+    }
+
+    // Shared cloud write for post-edits and rainy-day changes.
+    async function saveLiteSchedule(sched) {
+        if (!window.ScheduleDB?.saveSchedule) return { ok: false, error: 'Saving is unavailable here.' };
+        try { stripInvalidDates(sched); } catch (_) { /* non-fatal */ }
+        try {
+            const res = await window.ScheduleDB.saveSchedule(currentDate, sched);
+            if (res && (res.success === false || res.error)) {
+                return { ok: false, error: (res.error && res.error.message) || 'Save was rejected.' };
+            }
+            scheduleCache[currentDate] = sched;
+            return { ok: true };
+        } catch (e) {
+            return { ok: false, error: e && e.message ? e.message : 'Save failed.' };
+        }
+    }
+
+    // The edit sheet: pick an activity, then a location, with live conflicts.
+    let editDraft = null;
+    async function openEditSheet(bunk, entry) {
+        const sched = await getSchedule(currentDate);
+        editDraft = {
+            bunk, entry,
+            activity: entry.kind === 'league' ? '' : (entry.title || ''),
+            location: entry.location || ''
+        };
+        renderEditSheet(sched);
+    }
+
+    function renderEditSheet(sched) {
+        const d = editDraft; if (!d) return;
+        const acts = activityOptions();
+        const locs = locationOptions(d.activity);
+        const busy = locationBusyAt(sched, d.location, d.entry.startMin, d.entry.endMin, d.bunk);
+        const when = `${fmtMin(d.entry.startMin)}${d.entry.endMin != null ? ' – ' + fmtMin(d.entry.endMin) : ''}`;
+        const actOpts = [`<option value="">Choose an activity…</option>`]
+            .concat(acts.map(a => `<option value="${esc(a)}"${sameName(a, d.activity) ? ' selected' : ''}>${esc(a)}</option>`))
+            .join('');
+        const locOpts = [`<option value="">No specific location</option>`]
+            .concat(locs.map(f => {
+                const inUse = locationBusyAt(sched, f.name, d.entry.startMin, d.entry.endMin, d.bunk);
+                const tag = inUse.length ? ` — in use by ${inUse.join(', ')}` : '';
+                return `<option value="${esc(f.name)}"${sameName(f.name, d.location) ? ' selected' : ''}>${esc(f.name)}${esc(tag)}</option>`;
+            })).join('');
+        openSheet(`
+            <div class="lite-sheet-head">
+                <div>
+                    <div class="lite-sheet-title" style="margin:0;">Edit ${esc(d.bunk)}</div>
+                    <div class="lite-slot-loc">${esc(when)}</div>
+                </div>
+                <button class="lite-sheet-close" id="liteEditClose" aria-label="Close"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg></button>
+            </div>
+            <div class="lite-field"><label>Activity</label>
+                <select class="lite-input" id="liteEditAct">${actOpts}</select></div>
+            <div class="lite-field"><label>Location</label>
+                <select class="lite-input" id="liteEditLoc">${locOpts}</select></div>
+            ${busy.length ? `<div class="lite-conflict">Double-booked: ${esc(busy.join(', '))} ${busy.length === 1 ? 'is' : 'are'} already at ${esc(d.location)} then.</div>` : ''}
+            <button class="lite-btn block" id="liteEditSave" style="margin-top:12px;">Save change</button>
+            <button class="lite-btn secondary block" id="liteEditClear" style="margin-top:8px;">Clear this slot</button>
+            <div class="lite-note" style="margin-top:10px;">Saves to the same schedule the office app uses.</div>`);
+        const q = id => document.getElementById(id);
+        q('liteEditClose').addEventListener('click', closeSheet);
+        q('liteEditAct').addEventListener('change', e => {
+            d.activity = e.target.value;
+            const still = locationOptions(d.activity).some(f => sameName(f.name, d.location));
+            if (!still) d.location = '';
+            renderEditSheet(sched);
+        });
+        q('liteEditLoc').addEventListener('change', e => { d.location = e.target.value; renderEditSheet(sched); });
+        q('liteEditSave').addEventListener('click', () => commitEdit(false));
+        q('liteEditClear').addEventListener('click', () => commitEdit(true));
+    }
+
+    async function commitEdit(isClear) {
+        const d = editDraft; if (!d) return;
+        if (!isClear && !d.activity) { toast('Choose an activity first'); return; }
+        const btn = document.getElementById(isClear ? 'liteEditClear' : 'liteEditSave');
+        if (btn) { btn.disabled = true; btn.textContent = 'Saving…'; }
+        const res = await applyLiteEdit(d.bunk, d.entry, d.activity, d.location, isClear);
+        closeSheet();
+        toast(res.ok ? (isClear ? 'Slot cleared' : 'Schedule updated') : (res.error || 'Could not save'));
+        editDraft = null;
+        const view = document.getElementById('view-today');
+        if (view) await renderSchedBody(view);
+    }
+
     function openGridCellSheet(pi, bi) {
         const p = gridCache.periods[pi], bunk = gridCache.bunks[bi];
         const e = p && bunk ? p.byBunk[bunk] : null;
+        if (e) openSlotSheet(bunk, e);
+    }
+
+    // Detail for one bunk's slot, with the edit entry point for staff who can.
+    function openSlotSheet(bunk, e) {
         if (!e) return;
-        const when = `${fmtMin(p.startMin)}${p.endMin != null ? ' – ' + fmtMin(p.endMin) : ''}`;
+        const when = `${fmtMin(e.startMin)}${e.endMin != null ? ' – ' + fmtMin(e.endMin) : ''}`;
         let body = '';
         if (e.league) {
             body += `<span class="lite-league-badge">League · ${esc(e.league)}</span>`;
@@ -1535,9 +1878,14 @@
                 </div>
                 <button class="lite-sheet-close" id="liteCellClose" aria-label="Close"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg></button>
             </div>
-            <div style="margin-top:10px;">${body}</div>`);
+            <div style="margin-top:10px;">${body}</div>
+            ${canEditSchedule() && !e.league
+                ? `<button class="lite-btn block" id="liteCellEdit" style="margin-top:14px;">Change this activity</button>`
+                : ''}`);
         const c = document.getElementById('liteCellClose');
         if (c) c.addEventListener('click', closeSheet);
+        const ed = document.getElementById('liteCellEdit');
+        if (ed) ed.addEventListener('click', () => openEditSheet(bunk, e));
     }
 
     // The folded-in "Now" view — every bunk's current activity, grouped by scope.
@@ -1567,6 +1915,15 @@
             </div>`).join('');
     }
 
+    // Slot rows in the bunk view carry a reference so a tap can reopen the same
+    // detail/edit sheet the grid uses. Leagues keep their matchups link instead.
+    let slotRefs = [];
+    function slotRef(bunk, e) {
+        if (e.league) return '';
+        const i = slotRefs.push({ bunk, entry: e }) - 1;
+        return ` data-slot="${i}"`;
+    }
+
     function bunkCardHTML(bunk, sched) {
         const entries = normalizeBunkEntries(bunk, sched);
         const parent = parentForBunk(bunk);
@@ -1593,7 +1950,8 @@
                     bodyHtml = `<span class="lite-league-badge">League · ${esc(e.league)}</span>`
                         + `<button type="button" class="lite-league-link" data-games="${payload}">View matchups &amp; games ›</button>`;
                 }
-                return `<div class="lite-slot${isNow ? ' now' : ''} kind-${e.kind}">
+                const ref = slotRef(bunk, e);
+                return `<div class="lite-slot${isNow ? ' now' : ''} kind-${e.kind}${ref ? ' tappable' : ''}"${ref}>
                     <div class="lite-slot-time">
                         <div class="t1">${e.startMin != null ? esc(fmtMin(e.startMin)) : '—'}</div>
                         <div class="t2">${e.endMin != null ? esc(fmtMin(e.endMin)) : ''}</div>
@@ -1698,6 +2056,9 @@
     // aren't the *custom* tiles the user wants surfaced.
     const STANDARD_TILE_RE = /^(lunch|snacks?|dismissal|regroup|rest|swim|davening|breakfast|supper|dinner|line ?up|change|wake ?up|shower)\b/i;
     function isCustomPin(e) {
+        // A post-edit (desktop or Lite) also carries _location and _fixed, but
+        // it's a hand-placed activity, not a pinned tile.
+        if (e._postEdit) return false;
         // Auto builder: only a 'custom'-type layer fills these.
         if (e._customActivity || e._customField) return true;
         // Manual builder: a pinned tile that reserves facilities.
@@ -1736,8 +2097,9 @@
         // Explicit custom-pin markers win — a user who pins a tile for a special
         // still meant to pin it. Otherwise a special is never a pinned tile, so
         // rule it out before the name/shape heuristic below can misread it.
-        if (e._customActivity || e._customField
-            || (Array.isArray(e._reservedFields) && e._reservedFields.length) || e._location) return 'pinned';
+        // A post-edit also carries _location, but it's a hand-placed activity.
+        if (!e._postEdit && (e._customActivity || e._customField
+            || (Array.isArray(e._reservedFields) && e._reservedFields.length) || e._location)) return 'pinned';
         if (isSpecialEntry(e)) return 'regular';
         if (isCustomPin(e)) return 'pinned';
         return 'regular';
@@ -1896,11 +2258,13 @@
                 const key = leagueName + '|' + title + '|' + (startMin ?? '');
                 if (seenLeague.has(key)) continue;
                 seenLeague.add(key);
-                out.push({ title, kind: 'league', location: null, startMin, endMin, league: leagueName, matchups });
+                out.push({ title, kind: 'league', location: null, startMin, endMin, league: leagueName, matchups, idx });
                 continue;
             }
 
             if (!e || e.continuation) continue;
+            // A cleared slot is empty, not an activity called "Free".
+            if (['free', 'free play'].includes(normKey(e._activity || e.field || e.event))) continue;
             let startMin = numOrNull(e._startMin);
             let endMin = numOrNull(e._endMin);
             if (startMin == null && slot) { startMin = numOrNull(slot.startMin); endMin = numOrNull(slot.endMin); }
@@ -1921,7 +2285,7 @@
             out.push({
                 title, kind,
                 location: location || null,
-                startMin, endMin, league: null, matchups: null
+                startMin, endMin, league: null, matchups: null, idx
             });
         }
         out.sort((a, b) => (a.startMin ?? 99999) - (b.startMin ?? 99999));

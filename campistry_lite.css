@@ -383,6 +383,18 @@ button { cursor: pointer; border: none; background: none; }
 .lite-game-you { font-size: 0.6rem; font-weight: 800; text-transform: uppercase; letter-spacing: 0.04em; color: #fff; background: var(--accent-dark); padding: 2px 7px; border-radius: 999px; }
 .lite-game-meta { font-size: 0.8rem; color: var(--ink-2); margin-top: 3px; }
 
+/* ─── Post-edit + rainy day ───────────────────────────────────────────── */
+.lite-slot.tappable { cursor: pointer; }
+.lite-slot.tappable:active { background: var(--accent-tint); }
+.lite-conflict { margin-top: 10px; padding: 10px 12px; border-radius: 10px; background: #FEF3F2; color: #B42318; font-size: 0.8rem; font-weight: 600; }
+.lite-rain-bar { display: flex; align-items: center; justify-content: space-between; gap: 10px; width: 100%; padding: 11px 14px; margin-bottom: 10px; border: 1px solid var(--line, #E5E7EB); border-radius: 12px; background: var(--card, #fff); font-size: 0.84rem; font-weight: 700; color: var(--ink-2); cursor: pointer; }
+.lite-rain-bar.on { background: #EFF6FF; border-color: #93C5FD; color: #1E40AF; }
+.lite-rain-cta { font-size: 0.78rem; font-weight: 800; color: var(--accent-dark); white-space: nowrap; }
+.lite-rain-bar.on .lite-rain-cta { color: #1D4ED8; }
+.lite-rain-row { padding: 10px 0; border-top: 1px solid var(--line, #EEF0F3); }
+.lite-rain-what { font-size: 0.88rem; font-weight: 700; color: var(--ink); }
+.lite-rain-meta { font-size: 0.76rem; color: var(--ink-2); margin: 2px 0 6px; }
+
 /* ─── Period-first (Time) view ────────────────────────────────────────── */
 .lite-bunk-card.now .lite-bunk-head { background: var(--accent-tint); }
 .lite-tl-row { padding: 11px 15px; border-top: 1px solid var(--line, #EEF0F3); }
