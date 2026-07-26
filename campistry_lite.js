@@ -44,6 +44,7 @@
 
     const camp = {
         divisions: {},        // app1.divisions (grade-keyed: {parentDivision, bunks[]})
+        divisionOrder: [],    // app1.divisionOrder — parent order set on the Me page
         structure: {},        // campStructure (parent-division-keyed)
         roster: {},           // app1.camperRoster ({ "First Last": {...} })
         leagues: {},          // leaguesByName
@@ -283,6 +284,11 @@
 
             const app1 = byKey.app1 || {};
             camp.divisions = app1.divisions || {};
+            // Authoritative parent-division order from Me; manualColumnOrder is
+            // the legacy key for camps that never saved a division reorder.
+            camp.divisionOrder = (Array.isArray(app1.divisionOrder) && app1.divisionOrder.length)
+                ? app1.divisionOrder
+                : (Array.isArray(app1.manualColumnOrder) ? app1.manualColumnOrder : []);
             camp.roster = app1.camperRoster || {};
             camp.structure = byKey.campStructure || {};
             camp.leagues = byKey.leaguesByName || {};
@@ -624,14 +630,60 @@
 
     // ─── Camp-structure helpers ─────────────────────────────────────────
 
-    // Grade-level keys (app1.divisions is grade-keyed: each is a grade with bunks)
-    function gradeKeys() { return Object.keys(camp.divisions || {}); }
+    // ── Display order ───────────────────────────────────────────────────
+    // Mirrors the Me page's _sortedDivisions / _sortedGrades so every list here
+    // reads in the order the camp arranged: divisions by app1.divisionOrder
+    // (manualColumnOrder for legacy camps), grades by their division's
+    // gradeOrder, bunks by the order stored on the grade.
+    function orderBy(names, order) {
+        const pos = {};
+        (order || []).forEach((k, i) => { pos[k] = i; });
+        return names.slice().sort((a, b) => {
+            const ai = pos[a] == null ? 9999 : pos[a];
+            const bi = pos[b] == null ? 9999 : pos[b];
+            if (ai !== bi) return ai - bi;
+            return String(a).localeCompare(String(b));
+        });
+    }
+    // Me's fallback when no explicit order was ever saved: numeric-aware.
+    function naturalSort(names) {
+        return names.slice().sort((a, b) => {
+            const na = parseInt(a, 10), nb = parseInt(b, 10);
+            if (!isNaN(na) && !isNaN(nb)) return na - nb;
+            return String(a).localeCompare(String(b));
+        });
+    }
+
+    // Grade-level keys (app1.divisions is grade-keyed: each is a grade with
+    // bunks), walked division by division so grades come out in Me's order.
+    function gradeKeys() {
+        const out = [];
+        parentDivisions().forEach(p => {
+            const s = camp.structure?.[p];
+            if (!s || !s.grades) return;
+            const keys = Object.keys(s.grades);
+            const ord = Array.isArray(s.gradeOrder) ? s.gradeOrder : [];
+            (ord.length ? orderBy(keys, ord) : keys).forEach(g => { if (!out.includes(g)) out.push(g); });
+        });
+        // Grades that only exist in app1.divisions trail the structured ones.
+        Object.keys(camp.divisions || {}).forEach(g => { if (!out.includes(g)) out.push(g); });
+        return out;
+    }
+
+    // The bunks of one grade, preferring campStructure's order (what Me writes).
+    function bunksForGrade(grade) {
+        for (const p of Object.keys(camp.structure || {})) {
+            const g = camp.structure[p]?.grades?.[grade];
+            if (g && Array.isArray(g.bunks) && g.bunks.length) return g.bunks;
+        }
+        return (camp.divisions?.[grade] && camp.divisions[grade].bunks) || [];
+    }
 
     // Chips + bunks for a scope ('division' → parent divisions, 'grade' → grades)
     function scopeChips(scope) { return scope === 'grade' ? gradeKeys() : parentDivisions(); }
     function bunksForScope(scope, sel) {
         if (!sel) return [];
-        return scope === 'grade' ? ((camp.divisions[sel] && camp.divisions[sel].bunks) || []) : bunksForParent(sel);
+        return scope === 'grade' ? bunksForGrade(sel) : bunksForParent(sel);
     }
 
     // Segmented control (mode / scope toggles)
@@ -640,26 +692,33 @@
             `<button type="button" class="lite-seg-btn${o.val === active ? ' active' : ''}" data-val="${o.val}">${esc(o.label)}</button>`).join('')}</div>`;
     }
 
-    // Parent divisions in display order (campStructure preferred)
+    // Parent divisions in the order set on the Me page.
     function parentDivisions() {
-        const fromStructure = Object.keys(camp.structure || {});
-        if (fromStructure.length) return fromStructure;
-        // Fallback: derive from grade-keyed app1.divisions
-        const set = [];
-        Object.entries(camp.divisions || {}).forEach(([gradeKey, d]) => {
-            const p = d?.parentDivision || gradeKey;
-            if (!set.includes(p)) set.push(p);
-        });
-        return set;
+        let names = Object.keys(camp.structure || {});
+        if (!names.length) {
+            // Fallback: derive from grade-keyed app1.divisions
+            names = [];
+            Object.entries(camp.divisions || {}).forEach(([gradeKey, d]) => {
+                const p = d?.parentDivision || gradeKey;
+                if (!names.includes(p)) names.push(p);
+            });
+        }
+        const ord = Array.isArray(camp.divisionOrder) ? camp.divisionOrder : [];
+        return ord.length ? orderBy(names, ord) : naturalSort(names);
     }
 
-    // All bunks under a parent division (union across its grades)
+    // All bunks under a parent division (union across its grades, in Me's order)
     function bunksForParent(parent) {
         const out = [];
         const s = camp.structure?.[parent];
         if (s && s.grades) {
-            const order = s.gradeOrder || Object.keys(s.grades);
-            order.forEach(g => (s.grades[g]?.bunks || []).forEach(b => { if (!out.includes(b)) out.push(b); }));
+            // orderBy over ALL grade keys, not gradeOrder alone — a grade added
+            // after the last reorder is missing from gradeOrder and would
+            // otherwise drop its bunks entirely.
+            const keys = Object.keys(s.grades);
+            const ord = Array.isArray(s.gradeOrder) ? s.gradeOrder : [];
+            (ord.length ? orderBy(keys, ord) : keys)
+                .forEach(g => (s.grades[g]?.bunks || []).forEach(b => { if (!out.includes(b)) out.push(b); }));
             if (out.length) return out;
         }
         Object.entries(camp.divisions || {}).forEach(([gradeKey, d]) => {
@@ -727,6 +786,9 @@
 
     function allBunks() {
         const out = [];
+        // Division → grade → bunk, so the camp's own order carries through.
+        parentDivisions().forEach(p =>
+            bunksForParent(p).forEach(b => { if (!out.includes(b)) out.push(b); }));
         Object.values(camp.divisions || {}).forEach(d =>
             (d?.bunks || []).forEach(b => { if (!out.includes(b)) out.push(b); }));
         return out;
