@@ -18583,6 +18583,31 @@
                             if (!_glCapLogged[grade]) {
                                 _glCapLogged[grade] = 1;
                                 log('[GENERIC-LAYOUT] ' + grade + ' special caps: ' + (_glCapParts.join(' | ') || '(none)') + ' | special band=' + _glBandWhy);
+                                // ★ THROTTLED-SUBCAT ADVISORY (honest reporting): when the layer sets an
+                                //   EXPLICIT per-subcat ceiling ("=N" / "<=N") far below the activities the
+                                //   grade can actually reach, that ceiling — not capacity — is what ends the
+                                //   day early. Live: "uncategorized (avail=11, floor=1 → cap=1)" means each
+                                //   bunk may hold ONE of eleven available activities, so once its single
+                                //   uncategorized/food/theme tiles are placed, every surviving gap reports
+                                //   "| others capped" and goes OPEN with ten activities sitting unused. The
+                                //   cap is the user's stated intent, so honor it — but say so plainly, since
+                                //   the capacity advice would otherwise read as "add more activities".
+                                try {
+                                    var _thr = _glCapParts.length ? Object.keys(subFloor).filter(function (k) {
+                                        var _a = subAvail[k] ? Object.keys(subAvail[k]).length : 0;
+                                        var _c = (subCap[k] != null && subCap[k] !== Infinity) ? Math.max(subCap[k], subFloor[k] || 0) : Infinity;
+                                        return _a >= 2 && _c !== Infinity && _c < _a;
+                                    }) : [];
+                                    if (_thr.length) {
+                                        warn('[GENERIC-LAYOUT] ⓘ ' + grade + ' — per-bunk subcategory ceiling is the binding limit, not capacity: '
+                                            + _thr.map(function (k) {
+                                                var _a = Object.keys(subAvail[k]).length;
+                                                var _c = Math.max(subCap[k], subFloor[k] || 0);
+                                                return '"' + k + '" cap ' + _c + ' of ' + _a + ' available';
+                                            }).join(', ')
+                                            + '. Each bunk may hold at most that many per day, so once placed, later gaps go OPEN even though unused activities remain. If you meant "at least N", set that subcategory\'s operator to ">=" in the special layer — the cap then rises to the number of distinct activities and the day fills itself.');
+                                    }
+                                } catch (_eThr) {}
                                 _glImpossible.forEach(function (w) {
                                     warn('[GENERIC-LAYOUT] ⚠ IMPOSSIBLE FLOOR — ' + grade + ' "' + w.subcat + '": floor ' + w.floor + ' but only ' + w.avail + ' distinct activit' + (w.avail === 1 ? 'y' : 'ies') + ' (same-day repeats are off) → ' + (w.floor - w.avail) + ' tile(s)/bunk/day can NEVER fill and will show as open time. Add another "' + w.subcat + '" activity or lower the floor to ' + w.avail + '.');
                                     try { if (typeof window !== 'undefined') (window.__genFloorWarnings = window.__genFloorWarnings || []).push({ grade: grade, subcat: w.subcat, floor: w.floor, avail: w.avail }); } catch (_e) {}
@@ -19811,6 +19836,7 @@
                                     // the cross-bunk usage so two bunks never over-share one activity.
                                     var _absRes = window.GLStagger.absorbUnfilledToSport({ bunks: _absBunks, gate: _glGate, sportLabel: 'Sport', specialLabel: 'Special: Uncategorized', maxMergeMin: 40, capFits: _glCapFits, recordUse: _glRecordUse, specialDurs: _glSpecialDurs, canon: _glCanon, canAbsorb: _glMayRepurpose, probeReorder: (window.__reorderProbe !== false), splitFill: (window.__absorbSplit !== false), allowRepeatFill: (typeof window !== 'undefined' && window.__sportlessRepeatFill === true) });
                                     if (_absRes) { _glFill.absorbed = _absRes.toSport || 0; _glFill.absorbBlocked = _absRes.blockedBySpacing || 0; _glFill.absorbFilled = _absRes.toFilledSpecial || 0; _glFill.absorbSplit = _absRes.toSplitFilled || 0; _glFill.absorbRepeat = _absRes.toRepeatFilled || 0; _glFill.filled = (_glFill.filled || 0) + (_absRes.toFilledSpecial || 0) + (_absRes.toSplitFilled || 0) + (_absRes.toRepeatFilled || 0); }
+                                    if (_absRes && (_absRes.bornDeadSkipped || 0) > 0) { log('[GENERIC-ABSORB] ' + _absRes.bornDeadSkipped + ' stuck block(s) left as honest OPEN time instead of a born-dead "Special: Uncategorized" — no uncategorized activity runs that length (the placeholder could never have filled; the capacity advice now names the real shortage)'); }
                                     if (_absRes && (_absRes.toRepeatFilled || 0) > 0) { log('[GENERIC-ABSORB-REPEAT] ' + _absRes.toRepeatFilled + ' open block(s) filled with a REPEAT special (sportless camp, window.__sportlessRepeatFill on) — same-day repeats expected'); }
                                     if (_absRes && (_absRes.toSplitFilled || 0) > 0) { log('[GENERIC-ABSORB-SPLIT] ' + _absRes.toSplitFilled + ' short special tile(s) placed by splitting stuck 40-min windows (theme/food/shiur combos) that would otherwise be dead'); }
                                     // REORDER PROBE: tell the user, per dead window, whether a reorder could ever
@@ -20396,7 +20422,10 @@
                         res.tiles.forEach(function (t) {
                             if (_glHonestOpen && t.kind === 'special' && t.generic !== false && !t._concrete && !t._weeklyKeep) {
                                 _glOpenMin += Math.max(0, t.endMin - t.startMin);
-                                _glOpenSlots.push({ bunk: bunk, division: grade, startMin: t.startMin, endMin: t.endMin, subcat: t.subcat || 'uncategorized', kind: t.kind });
+                                // _bornDead (set by absorb): this placeholder's subcat has NO activity at
+                                // this LENGTH, so "+N seats of <subcat>" is the wrong advice — carry the
+                                // flag through so GenMetrics reports a DURATION shortage instead.
+                                _glOpenSlots.push({ bunk: bunk, division: grade, startMin: t.startMin, endMin: t.endMin, subcat: t.subcat || 'uncategorized', kind: t.kind, bornDead: !!t._bornDead });
                                 return;   // honest open time — nothing manufactured
                             }
                             // a FILLED special tile carries a concrete activity (_concrete) → emit that as

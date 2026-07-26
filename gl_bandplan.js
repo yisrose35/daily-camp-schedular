@@ -220,6 +220,11 @@
         for (var j = 0; j < ents.length; j++) {
             var e2 = ents[j];
             if (e2.cat.indexOf('special:') !== 0 && e2.cat !== 'sport') continue;
+            // _bornDead tiles (absorb placeholders at a length their subcat cannot serve)
+            // are not competing for a seat — there IS no seat at that length, so a "1 > 0
+            // seats" line is a phantom that buries the real violations. The duration
+            // shortage is reported by GenMetrics instead.
+            if (e2.t && e2.t._bornDead) continue;
             var c2 = conc(e2.cat, e2.t.startMin, e2.t.endMin, e2.grade);
             var campKey = e2.cat + '|camp';
             if (c2.camp > cap(e2.cat) && !seen[campKey]) { seen[campKey] = 1; violations.push({ cat: e2.cat, grade: null, peak: c2.camp, cap: cap(e2.cat), at: [e2.t.startMin, e2.t.endMin] }); }

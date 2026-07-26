@@ -345,7 +345,7 @@
         // (honest-open drop). Omitted → every open tile participates (legacy behavior).
         var canAbsorb = (ctx && typeof ctx.canAbsorb === 'function') ? ctx.canAbsorb : null;
         var mayAbsorb = function (t) { return _isOpen(t) && (!canAbsorb || canAbsorb(t)); };
-        var toSport = 0, toSpecial = 0, blockedBySpacing = 0, toFilledSpecial = 0;
+        var toSport = 0, toSpecial = 0, blockedBySpacing = 0, toFilledSpecial = 0, bornDeadSkipped = 0;
         for (var bi = 0; bi < bunks.length; bi++) {
             var bunk = bunks[bi] || {};
             var tiles = bunk.tiles || [];
@@ -446,6 +446,28 @@
                         // genuinely stuck: no sport (spacing) AND no free special here → the "blind"
                         // dead placeholder the user flagged. Tagged so the provenance log names it.
                         tile = { kind: 'special', subcat: 'uncategorized', name: spLabel, generic: true, startMin: cur, endMin: blkEnd, durationMin: dur, _ref: null, _origin: 'absorb-kept' };
+                        // ★ BORN-DEAD MARK (honest reporting): this placeholder is tagged 'uncategorized'
+                        //   at THIS BLOCK'S length — but a subcat whose activities run fixed durations
+                        //   cannot serve every length. Live: uncategorized runs [30,40] (12 of 13
+                        //   activities are 40-min only), yet absorb minted 10- and 20-min "Special:
+                        //   Uncategorized" tiles. Those can NEVER fill, on any day, at any time. The tile
+                        //   is still emitted — reorderDeadToSport can rescue it into a Sport, which is a
+                        //   real win — but it is MARKED so the seat audit does not report it as a phantom
+                        //   over-capacity ("uncategorized@10: 1 > 0 seats") and the capacity advice does
+                        //   not tell the user to "+N seats of uncategorized" when no 40-min activity could
+                        //   ever fill a 10-min hole. The honest fix is a shorter activity, and the
+                        //   advice must say so.
+                        if (canFill && bunk.pool && ctx.specialDurs) {
+                            var _fitAny = false;
+                            for (var _bd = 0; _bd < bunk.pool.length; _bd++) {
+                                var _bc = bunk.pool[_bd];
+                                if (!_bc || !_bc.name) continue;
+                                if (canon(_bc.subcategory) !== 'uncategorized') continue;
+                                var _bds = ctx.specialDurs(_bc.name) || [];
+                                if (!_bds.length || _bds.indexOf(dur) >= 0) { _fitAny = true; break; }
+                            }
+                            if (!_fitAny) { tile._bornDead = true; bornDeadSkipped++; }
+                        }
                         toSpecial++; blockedBySpacing++;
                     }
                     out.push(tile);
@@ -459,7 +481,7 @@
             tiles.length = 0;
             Array.prototype.push.apply(tiles, out);
         }
-        return { toSport: toSport, toSpecial: toSpecial, blockedBySpacing: blockedBySpacing, toFilledSpecial: toFilledSpecial, toSplitFilled: toSplitFilled, toRepeatFilled: toRepeatFilled, reorderProbe: { feasible: probeFeasible, wallStuck: probeWallStuck, detail: probeDetail } };
+        return { toSport: toSport, toSpecial: toSpecial, blockedBySpacing: blockedBySpacing, toFilledSpecial: toFilledSpecial, toSplitFilled: toSplitFilled, toRepeatFilled: toRepeatFilled, bornDeadSkipped: bornDeadSkipped, reorderProbe: { feasible: probeFeasible, wallStuck: probeWallStuck, detail: probeDetail } };
     }
 
     // reorderDeadWindows(ctx) — EXECUTE the swap the absorb probe only measured. After absorb,

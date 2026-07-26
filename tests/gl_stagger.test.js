@@ -570,3 +570,35 @@ test('trySeatSwap: refusal restores times AND ledger exactly; absence of hooks d
     assert.strictEqual(ok2, true);
     assert.strictEqual(a.startMin, 50); assert.strictEqual(b.startMin, 0);
 });
+
+test('absorb BORN-DEAD mark: a placeholder at a length its subcat cannot serve is flagged, not silently counted as a seat shortage', () => {
+    // Live Neranina shape: uncategorized activities run 30/40 min ONLY. A stuck 10-min
+    // block still becomes a "Special: Uncategorized" placeholder (so reorderDeadToSport
+    // can still rescue it into a Sport) — but it is MARKED _bornDead, because no
+    // uncategorized activity can EVER fill 10 minutes. The mark drives honest reporting:
+    // the seat audit ignores it and the capacity advice reports a DURATION shortage.
+    var pool = [{ name: 'Baking', subcategory: 'Regular' }, { name: 'Art Shoppes', subcategory: 'Regular' }];
+    var durs = { baking: [30, 40], 'art shoppes': [40] };
+    var common = {
+        gate: function (b) { return b.type !== 'sport'; },           // sport always spacing-blocked
+        maxMergeMin: 40,
+        canon: function (v) { var s = String(v || '').toLowerCase().trim(); return (!s || s === 'regular') ? 'uncategorized' : s; },
+        specialDurs: function (n) { return durs[String(n).toLowerCase()] || []; },
+        capFits: function () { return true; },
+        recordUse: function () {},
+    };
+    // a 10-min open block — no uncategorized activity runs 10 min
+    var tiles10 = [abTile({ k: 'special', sub: 'Regular', d: 10, s: 0, e: 10 })];
+    var r10 = GLStagger.absorbUnfilledToSport(Object.assign({ bunks: [{ tiles: tiles10, grade: 'G', pool: pool }] }, common));
+    assert.strictEqual(r10.bornDeadSkipped, 1, 'the 10-min placeholder is marked born-dead');
+    assert.strictEqual(tiles10.length, 1, 'the tile still exists (reorder-to-sport can rescue it)');
+    assert.strictEqual(tiles10[0]._bornDead, true, 'and carries the mark');
+    // a 30-min open block — Baking runs 30, so this one is legitimately seat-blocked, NOT born-dead
+    var tiles30 = [abTile({ k: 'special', sub: 'Regular', d: 30, s: 0, e: 30 })];
+    var r30 = GLStagger.absorbUnfilledToSport(Object.assign({}, common, {
+        bunks: [{ tiles: tiles30, grade: 'G', pool: pool }],
+        capFits: function () { return false; },                      // every seat taken -> stuck, but fillable in principle
+    }));
+    assert.strictEqual(r30.bornDeadSkipped || 0, 0, '30-min is a real seat shortage, not a duration one');
+    assert.ok(!tiles30[0]._bornDead, 'and is NOT marked born-dead');
+});

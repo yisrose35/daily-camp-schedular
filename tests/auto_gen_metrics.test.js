@@ -457,3 +457,45 @@ describe('computeAutoGenMetrics — structural transition slivers', () => {
         assert.strictEqual(m.total.actionableDeadMinutes, 5);
     });
 });
+
+// ---------------------------------------------------------------------------
+// Born-dead open slots — the absorb pass marks a placeholder whose subcategory
+// has NO activity at that LENGTH (live: a 10-min hole tagged 'uncategorized' in
+// a camp whose uncategorized activities all run 30/40 min). "+N seats" is the
+// wrong advice for those; they are a DURATION shortage.
+// ---------------------------------------------------------------------------
+describe('computeAutoGenMetrics — born-dead slots are a duration shortage, not a seat shortage', () => {
+    it('excludes bornDead slots from capacityAdvice and reports them separately', () => {
+        const divisionTimes = { A: { _perBunkSlots: { b1: [slot(540, 580)] } } };
+        const sched = { b1: [act('Basketball')] };
+        const openSlots = [
+            // born-dead: no uncategorized activity runs 10 min
+            { bunk: 'b1', division: 'A', startMin: 580, endMin: 590, subcat: 'uncategorized', kind: 'special', bornDead: true },
+            // a genuine seat shortage — still advised normally
+            { bunk: 'b2', division: 'A', startMin: 580, endMin: 620, subcat: 'food', kind: 'special' }
+        ];
+        const m = computeAutoGenMetrics(sched, divisionTimes, { openSlots });
+        const uncat = m.capacityAdvice.find(a => a.subcat === 'uncategorized');
+        assert.ok(!uncat, 'born-dead slot must not appear in the seat advice: ' + JSON.stringify(m.capacityAdvice));
+        const food = m.capacityAdvice.find(a => a.subcat === 'food');
+        assert.ok(food && food.placeholderSlots === 1, 'a normal open slot still yields seat advice');
+        assert.ok(m.durationShort && m.durationShort.uncategorized, 'durationShort names the subcat');
+        assert.strictEqual(m.durationShort.uncategorized.count, 1);
+        assert.strictEqual(m.durationShort.uncategorized.minutes, 10);
+        assert.deepStrictEqual(Object.keys(m.durationShort.uncategorized.lengths), ['10']);
+        // openBySubcat (the seat-side tally) excludes it too
+        assert.ok(!m.openBySubcat.uncategorized, 'born-dead is not counted as a seat-blocked open slot');
+    });
+
+    it('a same-subcat slot at a SERVABLE length still counts as a seat shortage', () => {
+        const divisionTimes = { A: { _perBunkSlots: { b1: [slot(540, 580)] } } };
+        const sched = { b1: [act('Basketball')] };
+        const openSlots = [
+            { bunk: 'b1', division: 'A', startMin: 580, endMin: 620, subcat: 'uncategorized', kind: 'special' }
+        ];
+        const m = computeAutoGenMetrics(sched, divisionTimes, { openSlots });
+        const uncat = m.capacityAdvice.find(a => a.subcat === 'uncategorized');
+        assert.ok(uncat && uncat.seatsShort === 1, 'unmarked slots keep the seat advice');
+        assert.ok(!m.durationShort || !m.durationShort.uncategorized, 'and are not a duration shortage');
+    });
+});

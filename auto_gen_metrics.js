@@ -310,9 +310,23 @@
         var openSlots = Array.isArray(opts.openSlots) ? opts.openSlots : [];
         var openBySubcat = {};  // subcat -> { count, minutes }
         var openIvals = {};     // subcat -> [[s,e], ...]
+        // BORN-DEAD (o.bornDead, set by the absorb pass): the slot's subcategory has NO
+        // activity at that LENGTH — a 10-min hole tagged 'uncategorized' in a camp whose
+        // uncategorized activities all run 30/40 min. "+N seats of uncategorized" is the
+        // WRONG advice for these: another 40-min activity fills nothing. They are tallied
+        // separately as a DURATION shortage so the owner is pointed at the real fix.
+        var durationShort = {};   // subcat -> { count, minutes, lengths:{dur:1} }
         openSlots.forEach(function (o) {
             if (!o || typeof o.startMin !== 'number' || typeof o.endMin !== 'number' || o.endMin <= o.startMin) return;
             var key = o.subcat || '(uncategorized)';
+            if (o.bornDead) {
+                var d = o.endMin - o.startMin;
+                if (!durationShort[key]) durationShort[key] = { count: 0, minutes: 0, lengths: {} };
+                durationShort[key].count += 1;
+                durationShort[key].minutes += d;
+                durationShort[key].lengths[d] = 1;
+                return;   // excluded from the seat advice — seats are not the shortage
+            }
             if (!openBySubcat[key]) openBySubcat[key] = { count: 0, minutes: 0 };
             openBySubcat[key].count += 1;
             openBySubcat[key].minutes += (o.endMin - o.startMin);
@@ -354,6 +368,7 @@
             freeBySource: freeBySource,
             placeholderBySubcat: placeholderBySubcat,
             openBySubcat: openBySubcat,
+            durationShort: durationShort,
             capacityAdvice: capacityAdvice,
             byDivision: byDivision,
             worstBunks: worstBunks.slice(0, opts.worstLimit || 10)
@@ -496,6 +511,23 @@
                             + '  — no reshuffle can fill these; they need more distinct activities or capacity.',
                             'color:#a30; font-weight:bold;');
                     }
+                }
+                // DURATION shortage — distinct from a seat shortage. These holes are the wrong
+                // LENGTH for every activity in their subcategory, so adding another activity of
+                // the usual length changes nothing; the camp needs a SHORTER one.
+                var durShort = result.durationShort || {};
+                var durKeys = Object.keys(durShort);
+                if (durKeys.length) {
+                    console.log('%c[GenMetrics] duration shortage (adding more seats will NOT fill these): '
+                        + durKeys.map(function (k) {
+                            var d = durShort[k];
+                            var lens = Object.keys(d.lengths).map(Number).sort(function (a, b) { return a - b; });
+                            return d.count + ' slot(s)/' + d.minutes + 'min of "' + k + '" at '
+                                 + lens.join('/') + 'min — no "' + k + '" activity runs th'
+                                 + (lens.length > 1 ? 'ose lengths' : 'at length');
+                        }).join(' · ')
+                        + '  — add a SHORTER activity in that subcategory (or allow an existing one to run short).',
+                        'color:#a30; font-weight:bold;');
                 }
                 // Impossible floors (engine side-channel): a subcat whose per-day floor
                 // exceeds its DISTINCT activities can never be met with repeats off —
