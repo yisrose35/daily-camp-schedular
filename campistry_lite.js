@@ -102,7 +102,9 @@
 
     // Schedule tab
     let schedScope = 'division';      // 'division' | 'grade'
-    let schedMode = 'schedule';       // 'schedule' | 'now'
+    let schedMode = 'schedule';       // 'schedule' | 'time' | 'grid' | 'now'
+    let searchOpen = false;           // search field is collapsed until asked for
+    let rainyOn = false;              // mirrors the loaded day's rainy flag
     let schedSel = null;              // selected division/grade chip
     let bunkQuery = '';               // Schedule bunk / facility search
     // Reports tab
@@ -1307,33 +1309,41 @@
             return;
         }
 
-        // Head staff / viewer: date + scope + (mode) + search + chips + body
+        // Head staff / viewer. Phone real estate is the scarce resource, so the
+        // controls collapse to ONE row: two labelled pickers plus search and
+        // overflow as icons. Everything else opens in a sheet on demand.
         const isFac = schedScope === 'facility';
         view.innerHTML = dateStripHTML()
-            + segHTML('liteSchedScope', [
-                { val: 'division', label: 'By division' },
-                { val: 'grade', label: 'By grade' },
-                { val: 'facility', label: 'By facility' }
-              ], schedScope)
-            + (isFac ? '' : segHTML('liteSchedMode', [
-                { val: 'schedule', label: 'Bunks' },
-                { val: 'time', label: 'Time' },
-                { val: 'grid', label: 'Grid' },
-                { val: 'now', label: 'Now' }
-              ], schedMode))
-            + `<div class="lite-field" style="margin-bottom:10px;">
+            + toolbarHTML(isFac)
+            + (searchOpen ? `<div class="lite-searchrow">
                  <input class="lite-input" id="liteBunkSearch" type="search" placeholder="${isFac ? 'Search a facility…' : 'Search a bunk…'}" value="${esc(bunkQuery)}" autocomplete="off">
-               </div>`
-            + `<div id="liteRainBar"></div><div id="liteSchedChips"></div><div id="liteSchedBody">${loadingHTML()}</div>`;
+               </div>` : '')
+            + `<div id="liteSchedChips"></div><div id="liteSchedBody">${loadingHTML()}</div>`;
         wireDateStrip(view, () => renderToday());
-        renderRainBar(view);
-        view.querySelectorAll('#liteSchedScope .lite-seg-btn').forEach(b =>
-            b.addEventListener('click', () => { schedScope = b.dataset.val; schedSel = null; bunkQuery = ''; renderToday(); }));
-        const modeSeg = view.querySelector('#liteSchedMode');
-        if (modeSeg) modeSeg.querySelectorAll('.lite-seg-btn').forEach(b =>
-            b.addEventListener('click', () => { schedMode = b.dataset.val; renderToday(); }));
+        const onScope = () => openPicker('Group by', [
+            { val: 'division', label: 'Divisions' },
+            { val: 'grade', label: 'Grades' },
+            { val: 'facility', label: 'Facilities' }
+        ], schedScope, v => { schedScope = v; schedSel = null; bunkQuery = ''; searchOpen = false; renderToday(); });
+        const onMode = () => openPicker('View', [
+            { val: 'schedule', label: 'By bunk', hint: 'Each bunk’s full day' },
+            { val: 'time', label: 'By time', hint: 'One card per period' },
+            { val: 'grid', label: 'Grid', hint: 'Everything at once' },
+            { val: 'now', label: 'Now', hint: 'What’s happening this minute' }
+        ], schedMode, v => { schedMode = v; renderToday(); });
+        view.querySelector('#liteScopeBtn')?.addEventListener('click', onScope);
+        view.querySelector('#liteModeBtn')?.addEventListener('click', onMode);
+        view.querySelector('#liteSearchBtn')?.addEventListener('click', () => {
+            searchOpen = !searchOpen;
+            if (!searchOpen && bunkQuery) bunkQuery = '';
+            renderToday();
+        });
+        view.querySelector('#liteMoreBtn')?.addEventListener('click', openMoreSheet);
         const inp = view.querySelector('#liteBunkSearch');
-        inp.addEventListener('input', () => { bunkQuery = inp.value; renderSchedChips(view); renderSchedBody(view); });
+        if (inp) {
+            inp.addEventListener('input', () => { bunkQuery = inp.value; renderSchedChips(view); renderSchedBody(view); });
+            inp.focus();
+        }
         const schedBody = view.querySelector('#liteSchedBody');
         if (schedBody && !schedBody.dataset.gamesWired) {
             schedBody.dataset.gamesWired = '1';
@@ -1358,18 +1368,59 @@
         await renderSchedBody(view);
     }
 
-    async function renderRainBar(view) {
-        const el = view.querySelector('#liteRainBar');
-        if (!el) return;
-        if (!canEditSchedule()) { el.innerHTML = ''; return; }
-        const sched = await getSchedule(currentDate);
-        const on = isRainyDay(sched);
-        el.innerHTML = `<button type="button" class="lite-rain-bar${on ? ' on' : ''}" id="liteRainBtn">
-            <span>${on ? 'Rainy day is on for this day' : 'Rainy day'}</span>
-            <span class="lite-rain-cta">${on ? 'Review moves ›' : 'Turn on ›'}</span>
-        </button>`;
-        const b = el.querySelector('#liteRainBtn');
-        if (b) b.addEventListener('click', openRainySheet);
+    const SCOPE_LABEL = { division: 'Divisions', grade: 'Grades', facility: 'Facilities' };
+    const MODE_LABEL = { schedule: 'By bunk', time: 'By time', grid: 'Grid', now: 'Now' };
+    const ICO = {
+        caret: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4"><polyline points="6 9 12 15 18 9"/></svg>',
+        search: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><circle cx="11" cy="11" r="7"/><line x1="21" y1="21" x2="16.7" y2="16.7"/></svg>',
+        more: '<svg viewBox="0 0 24 24" fill="currentColor"><circle cx="5" cy="12" r="1.9"/><circle cx="12" cy="12" r="1.9"/><circle cx="19" cy="12" r="1.9"/></svg>',
+        check: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.6"><polyline points="20 6 9 17 4 12"/></svg>'
+    };
+
+    function toolbarHTML(isFac) {
+        return `<div class="lite-ctrlbar">
+            <button type="button" class="lite-ctrl" id="liteScopeBtn">
+                <span>${esc(SCOPE_LABEL[schedScope] || 'Divisions')}</span>${ICO.caret}</button>
+            ${isFac ? '' : `<button type="button" class="lite-ctrl" id="liteModeBtn">
+                <span>${esc(MODE_LABEL[schedMode] || 'By bunk')}</span>${ICO.caret}</button>`}
+            <button type="button" class="lite-ctrl icon${searchOpen || bunkQuery.trim() ? ' on' : ''}" id="liteSearchBtn" aria-label="Search">${ICO.search}</button>
+            <button type="button" class="lite-ctrl icon${rainyOn ? ' alert' : ''}" id="liteMoreBtn" aria-label="More">${ICO.more}</button>
+        </div>`;
+    }
+
+    // One-choice list in a sheet — reads better on a phone than a cramped
+    // segmented control, and has room to explain what each option does.
+    function openPicker(title, options, current, onPick) {
+        openSheet(`
+            <div class="lite-sheet-head">
+                <div class="lite-sheet-title" style="margin:0;">${esc(title)}</div>
+                <button class="lite-sheet-close" id="litePickClose" aria-label="Close"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg></button>
+            </div>
+            <div class="lite-picklist">${options.map(o => `
+                <button type="button" class="lite-pick${o.val === current ? ' on' : ''}" data-val="${esc(o.val)}">
+                    <span class="lite-pick-main">${esc(o.label)}${o.hint ? `<span class="lite-pick-hint">${esc(o.hint)}</span>` : ''}</span>
+                    ${o.val === current ? ICO.check : ''}
+                </button>`).join('')}</div>`);
+        document.getElementById('litePickClose').addEventListener('click', closeSheet);
+        document.querySelectorAll('.lite-pick').forEach(b =>
+            b.addEventListener('click', () => { closeSheet(); onPick(b.dataset.val); }));
+    }
+
+    function openMoreSheet() {
+        const canRain = canEditSchedule();
+        openSheet(`
+            <div class="lite-sheet-head">
+                <div class="lite-sheet-title" style="margin:0;">More</div>
+                <button class="lite-sheet-close" id="liteMoreClose" aria-label="Close"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg></button>
+            </div>
+            <div class="lite-picklist">
+                ${canRain ? `<button type="button" class="lite-pick${rainyOn ? ' on' : ''}" id="liteRainBtn">
+                    <span class="lite-pick-main">Rainy day<span class="lite-pick-hint">${rainyOn ? 'On — review indoor moves' : 'Mark the day and move activities indoors'}</span></span>
+                    ${rainyOn ? ICO.check : ''}
+                </button>` : `<div class="lite-note" style="padding:6px 2px;">Nothing else here yet.</div>`}
+            </div>`);
+        document.getElementById('liteMoreClose').addEventListener('click', closeSheet);
+        document.getElementById('liteRainBtn')?.addEventListener('click', openRainySheet);
     }
 
     function renderSchedChips(view) {
@@ -1397,6 +1448,9 @@
 
         const q = bunkQuery.trim().toLowerCase();
         slotRefs = [];   // rebuilt as the cards render
+        // Keep the overflow icon's rainy marker in step with the loaded day.
+        rainyOn = isRainyDay(sched);
+        document.getElementById('liteMoreBtn')?.classList.toggle('alert', rainyOn);
 
         // By facility → who's using what facility, when, and by whom
         if (schedScope === 'facility') {

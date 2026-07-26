@@ -282,7 +282,7 @@ button { cursor: pointer; border: none; background: none; }
 .lite-switch input:checked + .slider::before { transform: translateX(20px); }
 
 /* ─── Date bar (modern: chevrons flank a centered date pill) ──────────── */
-.lite-datebar { display: flex; align-items: stretch; gap: 10px; margin-bottom: 16px; }
+.lite-datebar { display: flex; align-items: stretch; gap: 8px; margin-bottom: 10px; }
 .lite-date-arrow {
     width: 48px; flex: none; border-radius: 15px;
     border: 1px solid var(--line-2); background: var(--card); color: var(--ink-2);
@@ -298,8 +298,8 @@ button { cursor: pointer; border: none; background: none; }
     background: var(--card); border: 1px solid var(--line-2); box-shadow: var(--shadow-sm);
 }
 .lite-date-pill:active { background: var(--accent-tint); }
-.lite-date-day { font-family: var(--font-body); font-size: 1.15rem; font-weight: 700; letter-spacing: -0.01em; line-height: 1.1; }
-.lite-date-tag { font-size: 0.62rem; font-weight: 800; text-transform: uppercase; letter-spacing: 0.06em; color: var(--muted); }
+.lite-date-day { font-family: var(--font-body); font-size: 1rem; font-weight: 700; letter-spacing: -0.01em; line-height: 1.1; }
+.lite-date-tag { font-size: 0.58rem; font-weight: 800; text-transform: uppercase; letter-spacing: 0.06em; color: var(--muted); }
 .lite-date-tag.today { color: var(--accent-dark); background: var(--accent-tint); padding: 2px 9px; border-radius: 999px; }
 .lite-date-pill input[type="date"] { position: absolute; inset: 0; opacity: 0; width: 100%; height: 100%; }
 
@@ -387,10 +387,27 @@ button { cursor: pointer; border: none; background: none; }
 .lite-slot.tappable { cursor: pointer; }
 .lite-slot.tappable:active { background: var(--accent-tint); }
 .lite-conflict { margin-top: 10px; padding: 10px 12px; border-radius: 10px; background: #FEF3F2; color: #B42318; font-size: 0.8rem; font-weight: 600; }
-.lite-rain-bar { display: flex; align-items: center; justify-content: space-between; gap: 10px; width: 100%; padding: 11px 14px; margin-bottom: 10px; border: 1px solid var(--line, #E5E7EB); border-radius: 12px; background: var(--card, #fff); font-size: 0.84rem; font-weight: 700; color: var(--ink-2); cursor: pointer; }
-.lite-rain-bar.on { background: #EFF6FF; border-color: #93C5FD; color: #1E40AF; }
-.lite-rain-cta { font-size: 0.78rem; font-weight: 800; color: var(--accent-dark); white-space: nowrap; }
-.lite-rain-bar.on .lite-rain-cta { color: #1D4ED8; }
+/* Compact control bar: two labelled pickers + search/overflow icons, one row. */
+.lite-ctrlbar { display: flex; align-items: center; gap: 7px; margin-bottom: 10px; }
+.lite-ctrl { display: inline-flex; align-items: center; justify-content: center; gap: 3px; height: 38px; padding: 0 10px 0 13px; border: 1px solid var(--line, #E5E7EB); border-radius: 999px; background: var(--card, #fff); font-size: 0.83rem; font-weight: 700; color: var(--ink); cursor: pointer; white-space: nowrap; }
+.lite-ctrl svg { width: 15px; height: 15px; flex: none; }
+.lite-ctrl:active { background: var(--accent-tint); border-color: var(--accent); }
+.lite-ctrl.icon { width: 38px; padding: 0; margin-left: auto; color: var(--ink-2); }
+.lite-ctrl.icon + .lite-ctrl.icon { margin-left: 0; }
+.lite-ctrl.icon svg { width: 18px; height: 18px; }
+.lite-ctrl.icon.on { background: var(--accent-tint); border-color: var(--accent); color: var(--accent-dark); }
+.lite-ctrl.icon.alert { position: relative; }
+.lite-ctrl.icon.alert::after { content: ''; position: absolute; top: 6px; right: 7px; width: 7px; height: 7px; border-radius: 50%; background: #3B82F6; border: 1.5px solid var(--card, #fff); }
+.lite-searchrow { margin-bottom: 10px; }
+
+/* Sheet pickers (view / group by / more) */
+.lite-picklist { display: flex; flex-direction: column; margin-top: 4px; }
+.lite-pick { display: flex; align-items: center; justify-content: space-between; gap: 10px; width: 100%; padding: 13px 4px; border-top: 1px solid var(--line, #EEF0F3); background: none; text-align: left; cursor: pointer; }
+.lite-pick:first-child { border-top: none; }
+.lite-pick svg { width: 19px; height: 19px; flex: none; color: var(--accent-dark); }
+.lite-pick-main { display: flex; flex-direction: column; gap: 2px; font-size: 0.95rem; font-weight: 600; color: var(--ink); }
+.lite-pick.on .lite-pick-main { color: var(--accent-dark); font-weight: 800; }
+.lite-pick-hint { font-size: 0.76rem; font-weight: 500; color: var(--ink-2); }
 .lite-rain-row { padding: 10px 0; border-top: 1px solid var(--line, #EEF0F3); }
 .lite-rain-what { font-size: 0.88rem; font-weight: 700; color: var(--ink); }
 .lite-rain-meta { font-size: 0.76rem; color: var(--ink-2); margin: 2px 0 6px; }
