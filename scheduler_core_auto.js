@@ -1608,6 +1608,25 @@
 
         const scarceSpecials = todaysSpecials.filter(s => isScarce(s.name, dayName, globalSettings));
         log('[STEP 1] Specials: ' + todaysSpecials.length + ' (' + scarceSpecials.length + ' scarce)' + (dailyDisabledSpecials.length ? ' | disabled: ' + dailyDisabledSpecials.join(', ') : ''));
+        // ★ CONFIG WARNING (honest reporting, up front): when MOST of the enabled catalog
+        //   is excluded for THIS weekday by "Available Days", the day will necessarily lean
+        //   on sports and open special slots — say so at the top, loudly, instead of letting
+        //   the collapse surface 400 lines later as dozens of unfillable tiles (live: a
+        //   Sunday ran with 1 of 21 specials available and the poor fill read as an engine
+        //   regression). Pure log; placement is unchanged.
+        try {
+            const _dayExcluded = allSpecials.filter(s =>
+                s && s.name && s.available !== false && !dailyDisabledSpecials.includes(s.name)
+                && !isSpecialAvailableOnDay(s.name, dayName, isRainy, globalSettings));
+            if (_dayExcluded.length > todaysSpecials.length) {
+                warn('[STEP 1] ⚠ CONFIG: only ' + todaysSpecials.length + ' of ' + (todaysSpecials.length + _dayExcluded.length)
+                    + ' enabled special(s) can run on ' + dayName + ' — ' + _dayExcluded.length
+                    + ' excluded by their "Available Days" setting ('
+                    + _dayExcluded.slice(0, 8).map(s => s.name).join(', ') + (_dayExcluded.length > 8 ? ', …' : '')
+                    + '). Expect a sport-heavy day with open special slots; if ' + dayName
+                    + ' should run these specials, add it to their Available Days in the Me page.');
+            }
+        } catch (_eDayWarn) {}
 
         // ★ pickFillActivity — choose the longest real special that fits inside a gap.
         // Used everywhere "General Activity Slot" was previously hard-coded.
