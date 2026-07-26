@@ -48,7 +48,6 @@
         roster: {},           // app1.camperRoster ({ "First Last": {...} })
         leagues: {},          // leaguesByName
         specialty: {},        // specialtyLeagues (id-keyed)
-        specialActivities: [],// app1.specialActivities ([{ name, ... }])
         staff: {},            // liteStaffAssignments
         sms: { enabled: false, audience: 'counselors', footer: '' },
         stateLoaded: false,
@@ -285,8 +284,6 @@
             camp.structure = byKey.campStructure || {};
             camp.leagues = byKey.leaguesByName || {};
             camp.specialty = byKey.specialtyLeagues || {};
-            camp.specialActivities = app1.specialActivities || [];
-            _specialNames = null;   // reset lazy cache when config reloads
             camp.staff = byKey.liteStaffAssignments || {};
             camp.fields = byKey.fields || app1.fields || [];
             camp.campName = (typeof byKey.camp_name === 'string') ? byKey.camp_name
@@ -1512,43 +1509,24 @@
         };
     }
 
-    // Names configured as special activities (app1.specialActivities), lowercased.
-    let _specialNames = null;
-    function specialNames() {
-        if (_specialNames) return _specialNames;
-        _specialNames = new Set();
-        const arr = Array.isArray(camp.specialActivities) ? camp.specialActivities : Object.values(camp.specialActivities || {});
-        arr.forEach(s => { const n = s && s.name; if (n) _specialNames.add(String(n).toLowerCase().trim()); });
-        return _specialNames;
-    }
-    // Is this entry one of the camp's configured special activities? Specials get
-    // solver-pinned to fixed times (_fixed / _classification:'pinned'), so we must
-    // identify them by NAME — otherwise they'd all be mislabeled as pinned tiles.
-    function isSpecialEntry(e) {
-        const set = specialNames();
-        if (!set.size) return false;
-        return [e._activity, e._customActivity, e._assignedSport, e.sport, e.event]
-            .some(c => c && set.has(String(c).toLowerCase().trim()));
-    }
-    // Everyday fixed "walls" (lunch, swim, change…) carry _fixed too, but aren't
-    // user-pinned custom tiles — don't badge them as Pinned.
-    const WALL_RE = /\b(lunch|snack|swim|dismissal|rest|free|change|line ?up|wake|davening|shower)\b/i;
-    function isWallEntry(e) {
-        const name = String(e._activity || e.event || e.sport || fieldLabel(e.field) || '');
-        return WALL_RE.test(name);
+    // A tile the USER pinned via a custom layer. Deliberately narrow: _pinned,
+    // _fixed and _classification:'pinned' are solver bookkeeping (pair locks,
+    // regen preservation, post-edits, specials snapped to a fixed time) and land
+    // on ordinary generated activities too — keying off them badged plain
+    // Football/Hockey as "Pinned". The solver only fills _customActivity /
+    // _customField when the source layer's type is 'custom', so that — and an
+    // explicitly custom-typed entry — is the honest signal.
+    function isCustomPin(e) {
+        if (e._customActivity || e._customField) return true;
+        return String(e.type || e._layerType || '').toLowerCase() === 'custom';
     }
 
     // Classify a non-league entry. (League slots are detected upstream via
-    // slotIsLeagueBlock / _league / _h2h.) Order matters: a special activity is
-    // identified by name BEFORE the pinned/reserved solver flags, so specials
-    // render as ordinary activities instead of "Pinned".
+    // slotIsLeagueBlock / _league / _h2h.)
     function entryKind(e) {
         if (e._isTrip || String(e.type || '').toLowerCase() === 'trip') return 'trip';
-        if (isSpecialEntry(e)) return 'regular';
         if (e._reserved || e.isReserved || e.reservedLocation || e._classification === 'reserved') return 'reserved';
-        const pinnedish = e._pinned === true || e.isPinned === true || e._custom === true
-            || e._classification === 'pinned' || e._fixed === true;
-        if (pinnedish && !isWallEntry(e)) return 'pinned';
+        if (isCustomPin(e)) return 'pinned';
         return 'regular';
     }
     // Mirror window.getActivityDisplayName (+ custom-pin fields), which Lite can't
@@ -1558,6 +1536,40 @@
         if (e._partLabel) return e._partLabel;
         if (e._partNumber && e._totalParts && e._activity) return e._activity + ' ' + e._partNumber + '/' + e._totalParts;
         return e._customActivity || e._assignedSport || e.sport || e._activity || e.event || fieldLabel(e.field) || 'Activity';
+    }
+
+    // Re-index a bunk's entries onto the division slot grid by matching each
+    // entry's own _startMin to a slot's startMin. Mirrors the desktop grid's
+    // realignment: the two arrays are supposed to be index-aligned, but a slot
+    // with no per-bunk cell (e.g. a division-wide league period) shifts every
+    // later entry, so entry i ends up read against the wrong period. Returns the
+    // input untouched when the indices already agree.
+    function realignToSlots(raw, divSlots) {
+        if (!Array.isArray(raw)) return raw;
+        if (!Array.isArray(divSlots) || !divSlots.length) return raw;
+        let drift = false;
+        for (let i = 0; i < Math.min(raw.length, divSlots.length); i++) {
+            const a = raw[i], s = divSlots[i];
+            if (a && s && numOrNull(a._startMin) != null && numOrNull(s.startMin) != null
+                && a._startMin !== s.startMin) { drift = true; break; }
+        }
+        if (!drift) return raw;
+        const out = new Array(Math.max(divSlots.length, raw.length)).fill(null);
+        const leftover = [];
+        raw.forEach((e, i) => {
+            if (!e) return;
+            const t = numOrNull(e._startMin);
+            let placed = false;
+            if (t != null) {
+                for (let j = 0; j < divSlots.length; j++) {
+                    if (divSlots[j] && divSlots[j].startMin === t && !out[j]) { out[j] = e; placed = true; break; }
+                }
+            }
+            if (!placed) leftover.push([i, e]);
+        });
+        // Anything without a matching slot keeps its original index when free.
+        leftover.forEach(([i, e]) => { if (i < out.length && !out[i]) out[i] = e; });
+        return out;
     }
 
     // Times for a slot when neither the entry nor this division's slot grid
@@ -1616,17 +1628,22 @@
         const perBunkSlots = perBunk ? perBunk[matchKey(perBunk, bunk)] : null;
         const divSlots = Array.isArray(perBunkSlots) ? perBunkSlots : allDivSlots;
         const slotLen = Array.isArray(divSlots) ? divSlots.length : 0;
-        const hasRaw = Array.isArray(raw);
+        // Entry i and slot i drift apart whenever a slot has no per-bunk cell (a
+        // league period, say). Re-index entries onto the slot whose start time
+        // they actually match — same realignment the desktop grid does — so an
+        // activity isn't read against the wrong period.
+        const aligned = realignToSlots(raw, divSlots);
+        const hasRaw = Array.isArray(aligned);
         // Cover league games parked at a slot index beyond the grids we have.
         const leagueMax = Object.keys(leagueDiv)
             .map(Number).filter(k => !isNaN(k)).reduce((a, b) => Math.max(a, b), -1) + 1;
-        const n = Math.max(hasRaw ? raw.length : 0, slotLen, leagueMax);
+        const n = Math.max(hasRaw ? aligned.length : 0, slotLen, leagueMax);
         if (!n) return [];
 
         const out = [];
         const seenLeague = new Set();
         for (let idx = 0; idx < n; idx++) {
-            const e = hasRaw ? raw[idx] : null;
+            const e = hasRaw ? aligned[idx] : null;
             const slot = Array.isArray(divSlots) ? divSlots[idx] : null;
             // A real league game: entry carries _league/_h2h/matchups (auto + manual),
             // the division slot is a league block, or leagueAssignments has a game
@@ -1679,8 +1696,8 @@
                 startMin = ft.startMin; endMin = ft.endMin;
             }
             // Extend end time across continuation slots that carry their own times
-            if (hasRaw) for (let j = idx + 1; j < raw.length; j++) {
-                const c = raw[j];
+            if (hasRaw) for (let j = idx + 1; j < aligned.length; j++) {
+                const c = aligned[j];
                 if (!c || !c.continuation) break;
                 const ce = numOrNull(c._endMin);
                 if (ce != null && (endMin == null || ce > endMin)) endMin = ce;
