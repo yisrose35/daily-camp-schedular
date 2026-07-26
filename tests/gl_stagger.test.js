@@ -496,3 +496,77 @@ test('reorder + canConvert: a rejected dead subcat tile is never rescued (its fi
     assert.ok(!W._concrete); assert.strictEqual(W.startMin, 0);          // untouched → honest-open drop
     assert.strictEqual(B.startMin, 50);                                  // sport not relocated
 });
+
+// ── SEAT-LEDGER-AWARE swaps (trySeatSwap + hooks) ──────────────────────────────
+// A repair-pass time-move must keep both tiles' seat categories legal at their NEW
+// spans. Regression for the live "food@10: 3 > 2 seats" audit over-cap: the
+// both-empty restructure branch relocated a generic food tile onto a window whose
+// 2 food seats were already taken by other bunks.
+function makeSeatLedger(seats) {
+    const resv = {};                                     // cat -> [{s,e}]
+    const catOf = t => t.kind === 'sport' ? 'sport' : 'special:' + String(t.subcat || '').toLowerCase();
+    const count = (cat, s, e) => (resv[cat] || []).filter(iv => iv.s < e && iv.e > s).length;
+    return {
+        resv, catOf,
+        seatRelease: (t, g, s, e) => { const l = resv[catOf(t)]; if (!l) return; for (let i = 0; i < l.length; i++) { if (l[i].s === s && l[i].e === e) { l.splice(i, 1); return; } } },
+        seatGate: (t, g, s, e) => { const cat = catOf(t); const cap = seats[cat]; if (!(cap > 0)) return true; return count(cat, s, e) + 1 <= cap; },
+        seatCommit: (t, g, s, e) => { (resv[catOf(t)] = resv[catOf(t)] || []).push({ s: s, e: e }); },
+    };
+}
+
+test('seat-gated restructure: a generic partner may NOT relocate onto a full seat window (the food@10 3>2 bug)', () => {
+    const miss = { kind: 'special', generic: true, subcat: 'shiur', durationMin: 20, startMin: 0, endMin: 20, _ref: { window: [0, 200] } };
+    const part = { kind: 'special', generic: true, subcat: 'food', durationMin: 20, startMin: 100, endMin: 120, _ref: { window: [0, 200] } };
+    const bunks = [{ grade: 'G', tiles: [miss, part], pool: [{ name: 'S', subcategory: 'shiur' }] }];
+    const ctx = makeCtx(bunks, { durs: { S: [20] } });
+    seed(ctx, 'S', 'other', 0, 20);                              // S busy at the miss's CURRENT slot (why it missed)
+    const led = makeSeatLedger({ 'special:food': 2 });
+    // ledger state: this bunk's own tiles + TWO other bunks' food tiles already on [0,20]
+    led.seatCommit(miss, 'G', 0, 20); led.seatCommit(part, 'G', 100, 120);
+    led.resv['special:food'].push({ s: 0, e: 20 }, { s: 0, e: 20 });
+    Object.assign(ctx, led);
+    const r = GLStagger.restructure(ctx);
+    assert.strictEqual(r.recovered, 0, 'swap must be refused — food has no 3rd seat at [0,20]');
+    assert.strictEqual(part.startMin, 100, 'partner must not move');
+    assert.strictEqual(miss.startMin, 0, 'miss must not move');
+    const foodAt0 = led.resv['special:food'].filter(iv => iv.s < 20 && iv.e > 0).length;
+    assert.strictEqual(foodAt0, 2, 'refusal must leave the ledger exactly as it was');
+});
+
+test('seat-gated restructure: the same swap commits when a seat IS free, and the ledger follows the tiles', () => {
+    const miss = { kind: 'special', generic: true, subcat: 'shiur', durationMin: 20, startMin: 0, endMin: 20, _ref: { window: [0, 200] } };
+    const part = { kind: 'special', generic: true, subcat: 'food', durationMin: 20, startMin: 100, endMin: 120, _ref: { window: [0, 200] } };
+    const bunks = [{ grade: 'G', tiles: [miss, part], pool: [{ name: 'S', subcategory: 'shiur' }] }];
+    const ctx = makeCtx(bunks, { durs: { S: [20] } });
+    seed(ctx, 'S', 'other', 0, 20);                              // S busy at [0,20] but free at [100,120]
+    const led = makeSeatLedger({ 'special:food': 2 });
+    led.seatCommit(miss, 'G', 0, 20); led.seatCommit(part, 'G', 100, 120);
+    led.resv['special:food'].push({ s: 0, e: 20 });              // only ONE other food tile at [0,20] → a 2nd seat is free
+    Object.assign(ctx, led);
+    const r = GLStagger.restructure(ctx);
+    assert.strictEqual(r.recovered, 1);
+    assert.strictEqual(miss.startMin, 100, 'miss relocated to the free-capacity slot');
+    assert.strictEqual(miss._concrete, 'S');
+    assert.strictEqual(part.startMin, 0, 'partner took the vacated slot');
+    const foodAt0 = led.resv['special:food'].filter(iv => iv.s < 20 && iv.e > 0).length;
+    const shiurAt100 = (led.resv['special:shiur'] || []).filter(iv => iv.s < 120 && iv.e > 100).length;
+    assert.strictEqual(foodAt0, 2, 'food ledger followed the partner to [0,20] (1 other + 1 moved)');
+    assert.strictEqual(shiurAt100, 1, 'shiur ledger followed the miss to [100,120]');
+});
+
+test('trySeatSwap: refusal restores times AND ledger exactly; absence of hooks degrades to a plain swap', () => {
+    const a = { kind: 'special', subcat: 'food', startMin: 0, endMin: 20 };
+    const b = { kind: 'sport', startMin: 50, endMin: 70 };
+    const led = makeSeatLedger({ 'special:food': 1, sport: 1 });
+    led.seatCommit(a, 'G', 0, 20); led.seatCommit(b, 'G', 50, 70);
+    led.resv['special:food'].push({ s: 50, e: 70 });             // another bunk's food occupies a's DESTINATION
+    const ok = GLStagger.trySeatSwap(led, 'G', a, b);
+    assert.strictEqual(ok, false);
+    assert.strictEqual(a.startMin, 0); assert.strictEqual(b.startMin, 50);
+    assert.deepStrictEqual(led.resv['special:food'].map(iv => iv.s).sort((x, y) => x - y), [0, 50]);
+    assert.deepStrictEqual(led.resv['sport'].map(iv => iv.s), [50]);
+    // no hooks → plain swap, always true
+    const ok2 = GLStagger.trySeatSwap({}, 'G', a, b);
+    assert.strictEqual(ok2, true);
+    assert.strictEqual(a.startMin, 50); assert.strictEqual(b.startMin, 0);
+});

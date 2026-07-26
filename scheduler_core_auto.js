@@ -19697,6 +19697,18 @@
                                     if (_glFillAware) { for (var _pd = 0; _pd < _glPend.length; _pd++) { if (_glPend[_pd].t === t) { _glPend[_pd].done = true; break; } } }
                                 });
                             });
+                            // ── TILE-LEVEL SEAT HOOKS for the repair passes (window.__seatLedgerMoves, default ON):
+                            // stagger/reorder swaps move laid tiles in TIME, but until now they never consulted or
+                            // updated the seat reservation ledger — an ungated move could land a third 'food@10'
+                            // tile on a 2-seat window (the deterministic audit-time "3 > 2" over-cap: the SPREAD
+                            // shadow saw peak 2 BEFORE the repairs, the SEAT AUDIT saw 3 AFTER). These wrappers
+                            // re-apply the layout's own placement gate (counts + pool + per-grade + matching) to
+                            // every repair-pass move and keep the ledger following the tiles.
+                            var _glSeatHooksOn = (typeof window === 'undefined') || (window.__seatLedgerMoves !== false);
+                            var _glTileRef = function (t) { return { subcat: t && t.subcat }; };
+                            var _glSeatRelease = !_glSeatHooksOn ? null : function (t, grade, s, e) { try { _glResourceRelease(t.kind, grade, null, s, e, _glTileRef(t)); } catch (_e) {} };
+                            var _glSeatGateTile = !_glSeatHooksOn ? null : function (t, grade, s, e) { try { return _glResourceGate(t.kind, grade, null, s, e, _glTileRef(t)); } catch (_e) { return true; } };
+                            var _glSeatCommitTile = !_glSeatHooksOn ? null : function (t, grade, s, e) { try { _glResourceCommit(t.kind, grade, null, s, e, _glTileRef(t)); } catch (_e) {} };
                             // ── RESTRUCTURE (stagger): recover capacity misses by within-bunk swaps ──
                             // Shuffle equal-duration tiles so an empty special lands on a free-capacity time
                             // (a generic SPORT just moves; a filled SPECIAL keeps/re-picks its activity).
@@ -19720,6 +19732,7 @@
                                         capFits: _glCapFits,
                                         recordUse: _glRecordUse,
                                         removeUse: _glRemoveUse,
+                                        seatRelease: _glSeatRelease, seatGate: _glSeatGateTile, seatCommit: _glSeatCommitTile,
                                         onRecover: function () {
                                             _glFill.filled++; _glFill.miss--;
                                             _glFill.staggered = (_glFill.staggered || 0) + 1;
@@ -19821,7 +19834,7 @@
                                         var _noSport = _reoNoSportOn && (typeof gradeHasSportLayer === 'function') && !gradeHasSportLayer(grade);
                                         _reoBunks.push({ name: bunk, tiles: res.tiles, grade: grade, pool: pool, noSport: _noSport });
                                     });
-                                    var _reoRes = window.GLStagger.reorderDeadWindows({ bunks: _reoBunks, gate: _glGate, capFits: _glCapFits, recordUse: _glRecordUse, specialDurs: _glSpecialDurs, canon: _glCanon, sportLabel: 'Sport', canConvert: _glMayRepurpose, onReorder: function () { _glFill.filled = (_glFill.filled || 0) + 1; } });
+                                    var _reoRes = window.GLStagger.reorderDeadWindows({ bunks: _reoBunks, gate: _glGate, capFits: _glCapFits, recordUse: _glRecordUse, specialDurs: _glSpecialDurs, canon: _glCanon, sportLabel: 'Sport', canConvert: _glMayRepurpose, seatRelease: _glSeatRelease, seatGate: _glSeatGateTile, seatCommit: _glSeatCommitTile, onReorder: function () { _glFill.filled = (_glFill.filled || 0) + 1; } });
                                     if (_reoRes && _reoRes.reordered) {
                                         _glFill.reordered = _reoRes.reordered;
                                         log('[GENERIC-REORDER] rescued ' + _reoRes.reordered + ' dead window(s): swapped a blocking movable sport out → the freed window becomes a properly-spaced Sport and the displaced special is filled concretely (' + _reoRes.attempts + ' swap attempt(s))');
@@ -19864,7 +19877,7 @@
                                         _rcBunks.push({ name: bunk, tiles: res.tiles, grade: grade, noSport: _noSport });
                                     });
                                     var _rcMaxBlk = (typeof window !== 'undefined' && +window.__reorderMaxBlockers > 1) ? +window.__reorderMaxBlockers : 3;
-                                    var _rcRes = window.GLStagger.reorderDeadToSport({ bunks: _rcBunks, gate: _glGate, canon: _glCanon, sportLabel: 'Sport', capFits: _glCapFits, recordUse: _glRecordUse, removeUse: _glRemoveUse, maxBlockers: _rcMaxBlk, canConvert: function (t) { return !_reoProtect[_glCanon(t.subcat)] && _glMayRepurpose(t); } });
+                                    var _rcRes = window.GLStagger.reorderDeadToSport({ bunks: _rcBunks, gate: _glGate, canon: _glCanon, sportLabel: 'Sport', capFits: _glCapFits, recordUse: _glRecordUse, removeUse: _glRemoveUse, maxBlockers: _rcMaxBlk, seatRelease: _glSeatRelease, seatGate: _glSeatGateTile, seatCommit: _glSeatCommitTile, canConvert: function (t) { return !_reoProtect[_glCanon(t.subcat)] && _glMayRepurpose(t); } });
                                     if (_rcRes && _rcRes.converted) {
                                         _glFill.reorderConverted = _rcRes.converted;
                                         log('[GENERIC-REORDER-CONVERT] rescued ' + _rcRes.converted + ' dead special(s) → Sport by relocating an unequal-duration blocker (' + (_rcRes.relocations || 0) + ' relocation(s)' + ((_rcRes.multiHops || 0) ? ', ' + _rcRes.multiHops + ' via multi-blocker reorder' : '') + ((_rcRes.filledMoves || 0) ? ', ' + _rcRes.filledMoves + ' by moving a filled special into the freed slot' : '') + ', ' + (_rcRes.attempts || 0) + ' attempt(s)) — GENERIC-SPORT-FILL concretizes them on a field');
@@ -19873,6 +19886,27 @@
                                     }
                                 }
                             } catch (_glRcErr) { try { warn('[GENERIC-REORDER-CONVERT] error — left as-is: ' + (_glRcErr && _glRcErr.message)); } catch (_e) {} }
+                            // ── SEAT-LEDGER REBUILD (window.__seatRebuild, default ON): every repair-pass
+                            // MOVE above is now seat-gated, but absorb still CREATES/REPLACES tiles and the
+                            // convert passes flip a tile's kind/subcat — drift the incremental reservation
+                            // ledger can't follow. Rebuild it from the tiles themselves so seat-enforce,
+                            // GAP-CLOSE and the swap-chain repair read the truth (the audit already reads
+                            // tiles directly; this aligns the gate with it).
+                            try {
+                                if ((typeof window === 'undefined') || (window.__seatRebuild !== false)) {
+                                    _glCatResv = {}; _glCatResvByGrade = {};
+                                    _glOrder.forEach(function (_b3) {
+                                        var _r3 = _glOut.layoutByBunk[_b3]; if (!_r3 || !_r3.tiles) return;
+                                        var _g3 = (_glPerBunk[_b3] && _glPerBunk[_b3].grade);
+                                        _r3.tiles.forEach(function (_t3) {
+                                            if (!_t3 || _t3.startMin == null || _t3.endMin == null) return;
+                                            var _k3 = String(_t3.kind || '').toLowerCase();
+                                            if (_k3 !== 'special' && _k3 !== 'sport') return;
+                                            _glResourceCommit(_k3, _g3, _b3, _t3.startMin, _t3.endMin, { subcat: _t3.subcat });
+                                        });
+                                    });
+                                }
+                            } catch (_glRebErr) {}
                             // ── SEAT ENFORCE + AUDIT: keep the FINAL schedule within the counted seats,
                             // no matter which pass laid a tile. Any UNFILLED generic special over its
                             // seats (camp-wide OR per-grade) is pulled down to a category with room (sport

@@ -62,6 +62,45 @@
         b.startMin = as; b.endMin = ae;
     }
 
+    // SEAT-LEDGER-AWARE swap. The caller may inject (all three or none):
+    //   seatRelease(tile, grade, s, e)         — free the tile's category reservation at [s,e)
+    //   seatGate(tile, grade, s, e) -> bool    — may the tile's category take a seat at [s,e)?
+    //   seatCommit(tile, grade, s, e)          — reserve the tile's category seat at [s,e)
+    // mirroring the auto-core resource ledger. When present, a time-swap only commits if
+    // BOTH tiles still have a free seat at their NEW spans — the layout's placement gate,
+    // re-applied to repair-pass moves (an ungated swap is how a third 2-seat 'food@10'
+    // tile landed on one window: the audit-time "3 > 2 seats" over-caps). Refusal leaves
+    // times AND ledger exactly as they were. When the hooks are absent this is swapTimes.
+    function trySeatSwap(ctx, grade, a, b) {
+        if (!ctx || !ctx.seatRelease || !ctx.seatGate || !ctx.seatCommit) { swapTimes(a, b); return true; }
+        const as = a.startMin, ae = a.endMin, bs = b.startMin, be = b.endMin;
+        ctx.seatRelease(a, grade, as, ae);
+        ctx.seatRelease(b, grade, bs, be);
+        if (ctx.seatGate(a, grade, bs, be)) {
+            ctx.seatCommit(a, grade, bs, be);
+            if (ctx.seatGate(b, grade, as, ae)) {
+                ctx.seatCommit(b, grade, as, ae);
+                swapTimes(a, b);
+                return true;
+            }
+            ctx.seatRelease(a, grade, bs, be);
+        }
+        ctx.seatCommit(a, grade, as, ae);   // rollback to the pre-call ledger
+        ctx.seatCommit(b, grade, bs, be);
+        return false;
+    }
+
+    // UNCONDITIONAL seat-aware swap-back — used only to restore a previously-legal
+    // arrangement (transactional rollback), so it never re-gates.
+    function seatSwapBack(ctx, grade, a, b) {
+        if (!ctx || !ctx.seatRelease || !ctx.seatCommit) { swapTimes(a, b); return; }
+        ctx.seatRelease(a, grade, a.startMin, a.endMin);
+        ctx.seatRelease(b, grade, b.startMin, b.endMin);
+        swapTimes(a, b);
+        ctx.seatCommit(a, grade, a.startMin, a.endMin);
+        ctx.seatCommit(b, grade, b.startMin, b.endMin);
+    }
+
     // restructure(ctx) — ctx:
     //   bunks: [{ grade, tiles:[{kind,generic,_concrete,_fillLoc,subcat,durationMin,startMin,endMin,_ref}], pool:[cand] }]
     //   capFits(cand, grade, s, e) -> bool
@@ -116,7 +155,7 @@
 
                     if (pt.kind === 'sport') {
                         // generic placeholder → just move it; fill the empty tile at the freed time
-                        swapTimes(miss, pt);
+                        if (!trySeatSwap(ctx, grade, miss, pt)) continue;   // no free seat at a new span → try next partner
                         miss._concrete = a1.name; miss._fillLoc = a1.location || null;
                         used[a1key] = 1;
                         ctx.recordUse(a1, grade, miss.startMin, miss.endMin);
@@ -134,8 +173,8 @@
                             if (!alt) { ctx.recordUse(a2, grade, s2, e2); continue; } // restore; try next partner
                             keepCand = alt; keepName = alt.name; keepLoc = alt.location || null; replaced = true;
                         }
+                        if (!trySeatSwap(ctx, grade, miss, pt)) { ctx.recordUse(a2, grade, s2, e2); continue; }   // restore the partner's usage; try next partner
                         if (replaced) delete used[String(pt._concrete).toLowerCase()];
-                        swapTimes(miss, pt);
                         miss._concrete = a1.name; miss._fillLoc = a1.location || null; used[a1key] = 1;
                         pt._concrete = keepName; pt._fillLoc = keepLoc; if (replaced) used[String(keepName).toLowerCase()] = 1;
                         ctx.recordUse(a1, grade, miss.startMin, miss.endMin);
@@ -143,8 +182,11 @@
                         recovered++; if (ctx.onRecover) ctx.onRecover();
                         break;
                     } else {
-                        // both empty: move miss onto the free slot + opportunistically fill the partner
-                        swapTimes(miss, pt);
+                        // both empty: move miss onto the free slot + opportunistically fill the partner.
+                        // The partner is a GENERIC special relocating to the miss's old slot — its
+                        // subcat may differ, so the seat gate is what stops it landing on a full window
+                        // (the live "third food@10 tile at 11:30" over-cap came from exactly this move).
+                        if (!trySeatSwap(ctx, grade, miss, pt)) continue;
                         miss._concrete = a1.name; miss._fillLoc = a1.location || null; used[a1key] = 1;
                         ctx.recordUse(a1, grade, miss.startMin, miss.endMin);
                         recovered++; if (ctx.onRecover) ctx.onRecover();
@@ -496,8 +538,9 @@
                         if (!ok) continue;
                         // COMMIT: swap time slots, fill the (formerly dead) special, leave B a generic
                         // sport in the freed window for GENERIC-SPORT-FILL to concretize on a field.
+                        // Seat-gated: both tiles must have a free category seat at their new spans.
                         var wKey = String(fillPick.name).toLowerCase();
-                        swapTimes(W, B);
+                        if (!trySeatSwap(ctx, grade, W, B)) continue;
                         W._concrete = fillPick.name; W.name = fillPick.name; W.generic = false;
                         W.subcat = canon(fillPick.subcategory); W._fillLoc = fillPick.location || null; W._origin = 'reorder-fill';
                         used[wKey] = 1;
@@ -625,17 +668,17 @@
                                 var okCap = false; try { okCap = capFits(pCand, bunk.grade, B.startMin, B.endMin); } catch (_e) { okCap = false; }
                                 if (!okCap) { try { recordUse(pCand, bunk.grade, pOldS, pOldE); } catch (_e) {} continue; }  // can't re-seat → restore + skip
                             }
-                            swapTimes(B, P);                                                            // simulate B↔P (P now at B's old slot)
+                            swapTimes(B, P);                                                            // simulate B↔P (times only)
                             var okBnew = sportLegalAt(tiles, B.startMin, B.endMin, B, null);            // blocker legal at its new slot
                             var okW = sportLegalAt(tiles, W.startMin, W.endMin, W, null);               // a Sport now legal at W
-                            if (okBnew && okW) {
+                            swapTimes(B, P);                                                            // end simulation — restore times
+                            if (okBnew && okW && trySeatSwap(ctx, bunk.grade, B, P)) {                  // seat-gated REAL swap
                                 if (pFilled) { try { recordUse(pCand, bunk.grade, P.startMin, P.endMin); } catch (_e) {} filledMoves++; }  // P's seat at its NEW slot
                                 B._origin = 'reorder-relocate'; P._origin = pFilled ? 'reorder-partner-filled' : 'reorder-partner';
                                 toSport(W);
                                 converted++; relocations++; passConverts++; doneW = true;
                                 break;
                             }
-                            swapTimes(B, P);                                                            // restore times
                             if (pFilled) { try { recordUse(pCand, bunk.grade, pOldS, pOldE); } catch (_e) {} }              // restore P's seat at its old slot
                         }
                     }
@@ -674,7 +717,11 @@
                                         var okc = false; try { okc = capFits(cand, bunk.grade, Bx.startMin, Bx.endMin); } catch (_e) { okc = false; }
                                         if (!okc) { try { recordUse(cand, bunk.grade, oS, oE); } catch (_e) {} continue; }
                                     }
-                                    swapTimes(Bx, Pc);                                                  // Pc → Bx's old slot, Bx → Pc's old slot
+                                    // Pc → Bx's old slot, Bx → Pc's old slot — seat-gated like every move
+                                    if (!trySeatSwap(ctx, bunk.grade, Bx, Pc)) {
+                                        if (f) { try { recordUse(cand, bunk.grade, oS, oE); } catch (_e) {} }
+                                        continue;                                                       // no seat at a new span → try another partner
+                                    }
                                     if (f) { try { recordUse(cand, bunk.grade, Pc.startMin, Pc.endMin); } catch (_e) {} }
                                     chosen.push({ B: Bx, P: Pc, f: f, cand: cand, oS: oS, oE: oE });
                                     usedP.push(Pc); gotP = true; break;
@@ -700,7 +747,7 @@
                                 for (var uk = chosen.length - 1; uk >= 0; uk--) {
                                     var cc = chosen[uk];
                                     if (cc.f) { try { removeUse(cc.cand, bunk.grade, cc.P.startMin, cc.P.endMin); } catch (_e) {} }
-                                    swapTimes(cc.B, cc.P);
+                                    seatSwapBack(ctx, bunk.grade, cc.B, cc.P);                          // unconditional: restores a previously-legal state
                                     if (cc.f) { try { recordUse(cc.cand, bunk.grade, cc.oS, cc.oE); } catch (_e) {} }
                                 }
                             }
@@ -734,7 +781,7 @@
         return need < remaining;
     }
 
-    const api = { VERSION: VERSION, restructure: restructure, inWindow: inWindow, absorbUnfilledToSport: absorbUnfilledToSport, reorderDeadWindows: reorderDeadWindows, reorderDeadToSport: reorderDeadToSport, weeklyReleasable: weeklyReleasable };
+    const api = { VERSION: VERSION, restructure: restructure, inWindow: inWindow, absorbUnfilledToSport: absorbUnfilledToSport, reorderDeadWindows: reorderDeadWindows, reorderDeadToSport: reorderDeadToSport, weeklyReleasable: weeklyReleasable, trySeatSwap: trySeatSwap };
 
     if (typeof window !== 'undefined') {
         window.GLStagger = api;
