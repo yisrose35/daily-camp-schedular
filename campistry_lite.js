@@ -1560,6 +1560,45 @@
         return e._customActivity || e._assignedSport || e.sport || e._activity || e.event || fieldLabel(e.field) || 'Activity';
     }
 
+    // Times for a slot when neither the entry nor this division's slot grid
+    // supplies them (a league-only division whose grid wasn't saved, or a game
+    // parked past the end of the grid). Every source here is time-exact — we
+    // never borrow another division's period grid, since a wrong time is worse
+    // than no time. Returns nulls when nothing trustworthy is found.
+    function fallbackTimes(sched, divKey, bunk, idx, leagueName, gameLabel) {
+        const assigns = sched.scheduleAssignments || {};
+        const pick = pe => ({ startMin: numOrNull(pe._startMin), endMin: numOrNull(pe._endMin) });
+
+        // 1) A sibling bunk in the SAME division sitting at the same slot index.
+        const sibs = (camp.divisions?.[divKey]?.bunks) || (divKey ? bunksForParent(divKey) : []);
+        for (const s of sibs) {
+            if (sameName(s, bunk)) continue;
+            const arr = assigns[matchKey(assigns, s)];
+            const pe = Array.isArray(arr) ? arr[idx] : null;
+            if (pe && numOrNull(pe._startMin) != null) return pick(pe);
+        }
+        // 2) Any bunk anywhere playing this exact league game (leagues span
+        //    divisions, so a peer division usually carries the real times).
+        const ln = normKey(leagueName), gl = normKey(gameLabel);
+        if (ln || gl) {
+            for (const k of Object.keys(assigns)) {
+                const arr = assigns[k];
+                if (!Array.isArray(arr)) continue;
+                for (const pe of arr) {
+                    if (!pe || numOrNull(pe._startMin) == null) continue;
+                    const peL = normKey(pe._leagueName), peG = normKey(pe._gameLabel);
+                    if ((ln && peL && peL === ln) || (gl && peG && peG === gl)) return pick(pe);
+                }
+            }
+        }
+        // 3) The camp-wide unified period grid.
+        const ut = Array.isArray(sched.unifiedTimes) ? sched.unifiedTimes[idx] : null;
+        if (ut && numOrNull(ut.startMin) != null) {
+            return { startMin: numOrNull(ut.startMin), endMin: numOrNull(ut.endMin) };
+        }
+        return { startMin: null, endMin: null };
+    }
+
     // Turn a bunk's day into clean, sorted display rows. Iterates DIVISION slots
     // (not just per-bunk entries) so real league games — whose matchups live in
     // leagueAssignments and whose per-bunk cell may be empty — always render.
@@ -1616,6 +1655,13 @@
                 const leagueName = (li && li.leagueName) || (e && e._leagueName)
                     || (slot && slot.event) || String((e && e.field) || '').replace(/^League:\s*/i, '') || 'League';
                 const title = (li && li.gameLabel) || (e && e._gameLabel) || (e && e.sport) || 'League Game';
+                // A league-only division may have no slot grid saved at all — recover
+                // the time from a sibling bunk, a peer division playing the same game,
+                // or the camp-wide period grid, so the row isn't stuck showing "—".
+                if (startMin == null) {
+                    const ft = fallbackTimes(sched, divKey, bunk, idx, leagueName, title);
+                    startMin = ft.startMin; endMin = ft.endMin;
+                }
                 // Guard against emitting the same game twice across merged/continuation slots.
                 const key = leagueName + '|' + title + '|' + (startMin ?? '');
                 if (seenLeague.has(key)) continue;
@@ -1628,6 +1674,10 @@
             let startMin = numOrNull(e._startMin);
             let endMin = numOrNull(e._endMin);
             if (startMin == null && slot) { startMin = numOrNull(slot.startMin); endMin = numOrNull(slot.endMin); }
+            if (startMin == null) {
+                const ft = fallbackTimes(sched, divKey, bunk, idx, '', '');
+                startMin = ft.startMin; endMin = ft.endMin;
+            }
             // Extend end time across continuation slots that carry their own times
             if (hasRaw) for (let j = idx + 1; j < raw.length; j++) {
                 const c = raw[j];
