@@ -383,6 +383,40 @@ button { cursor: pointer; border: none; background: none; }
 .lite-game-you { font-size: 0.6rem; font-weight: 800; text-transform: uppercase; letter-spacing: 0.04em; color: #fff; background: var(--accent-dark); padding: 2px 7px; border-radius: 999px; }
 .lite-game-meta { font-size: 0.8rem; color: var(--ink-2); margin-top: 3px; }
 
+/* ─── Period-first (Time) view ────────────────────────────────────────── */
+.lite-bunk-card.now .lite-bunk-head { background: var(--accent-tint); }
+.lite-tl-row { padding: 11px 15px; border-top: 1px solid var(--line, #EEF0F3); }
+.lite-tl-row:first-of-type { border-top: none; }
+.lite-tl-row.kind-pinned { border-left: 3px solid #818CF8; }
+.lite-tl-row.kind-reserved { border-left: 3px solid #F87171; }
+.lite-tl-row.kind-trip { border-left: 3px solid #34D399; }
+.lite-tl-row.kind-league { border-left: 3px solid #60A5FA; }
+.lite-who-row { display: flex; flex-wrap: wrap; gap: 5px; margin-top: 7px; }
+.lite-who { font-size: 0.72rem; font-weight: 600; color: var(--ink-2); background: var(--card-2, #F1F5F9); border-radius: 999px; padding: 3px 9px; }
+.lite-who.all { color: var(--accent-dark); background: var(--accent-tint); font-weight: 800; }
+
+/* ─── Grid view (periods × bunks) ─────────────────────────────────────── */
+.lite-grid-wrap { overflow: auto; max-height: 66vh; border: 1px solid var(--line, #E5E7EB); border-radius: 14px; background: var(--card, #fff); -webkit-overflow-scrolling: touch; }
+.lite-grid { border-collapse: separate; border-spacing: 0; font-size: 0.78rem; }
+.lite-grid th, .lite-grid td { border-bottom: 1px solid var(--line, #EEF0F3); border-right: 1px solid var(--line, #EEF0F3); }
+.lite-grid thead th { position: sticky; top: 0; z-index: 2; background: var(--card, #fff); padding: 9px 10px; font-size: 0.72rem; font-weight: 800; color: var(--ink-2); text-align: left; white-space: nowrap; }
+.lite-grid-corner { left: 0; z-index: 3 !important; min-width: 62px; }
+.lite-grid-bunk { min-width: 116px; max-width: 116px; }
+.lite-grid-time { position: sticky; left: 0; z-index: 1; background: var(--card, #fff); padding: 8px 10px; text-align: left; white-space: nowrap; min-width: 62px; }
+.lite-grid-time .t1 { display: block; font-size: 0.74rem; font-weight: 800; color: var(--ink); }
+.lite-grid-time .t2 { display: block; font-size: 0.66rem; color: var(--muted, #9AA3AF); }
+.lite-grid-cell { padding: 8px 10px; vertical-align: top; min-width: 116px; max-width: 116px; cursor: pointer; }
+.lite-grid-cell .g1 { display: block; font-weight: 700; color: var(--ink); line-height: 1.25; overflow: hidden; text-overflow: ellipsis; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; }
+.lite-grid-cell .g2 { display: block; font-size: 0.7rem; color: var(--ink-2); margin-top: 2px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.lite-grid-cell.empty { background: repeating-linear-gradient(45deg, transparent, transparent 5px, rgba(0,0,0,0.025) 5px, rgba(0,0,0,0.025) 10px); cursor: default; }
+.lite-grid-cell:active:not(.empty) { background: var(--accent-tint); }
+.lite-grid-cell.kind-league { background: #EFF6FF; }
+.lite-grid-cell.kind-pinned { background: #EEF2FF; }
+.lite-grid-cell.kind-reserved { background: #FEF3F2; }
+.lite-grid-cell.kind-trip { background: #ECFDF5; }
+.lite-grid tr.now .lite-grid-time { box-shadow: inset 3px 0 0 var(--accent); }
+.lite-grid tr.now .lite-grid-time .t1 { color: var(--accent-dark); }
+
 /* ─── Roster / camper ─────────────────────────────────────────────────── */
 .lite-camper { padding: 0; overflow: hidden; }
 .lite-camper-row { display: flex; align-items: center; justify-content: space-between; gap: 10px; width: 100%; padding: 14px 15px; text-align: left; }

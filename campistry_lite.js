@@ -1315,7 +1315,12 @@
                 { val: 'grade', label: 'By grade' },
                 { val: 'facility', label: 'By facility' }
               ], schedScope)
-            + (isFac ? '' : segHTML('liteSchedMode', [{ val: 'schedule', label: 'Schedule' }, { val: 'now', label: 'Now' }], schedMode))
+            + (isFac ? '' : segHTML('liteSchedMode', [
+                { val: 'schedule', label: 'Bunks' },
+                { val: 'time', label: 'Time' },
+                { val: 'grid', label: 'Grid' },
+                { val: 'now', label: 'Now' }
+              ], schedMode))
             + `<div class="lite-field" style="margin-bottom:10px;">
                  <input class="lite-input" id="liteBunkSearch" type="search" placeholder="${isFac ? 'Search a facility…' : 'Search a bunk…'}" value="${esc(bunkQuery)}" autocomplete="off">
                </div>`
@@ -1333,9 +1338,13 @@
             schedBody.dataset.gamesWired = '1';
             schedBody.addEventListener('click', (ev) => {
                 const link = ev.target.closest('.lite-league-link');
-                if (!link) return;
-                let data; try { data = JSON.parse(link.dataset.games || '{}'); } catch { return; }
-                openLeagueGamesSheet(data);
+                if (link) {
+                    let data; try { data = JSON.parse(link.dataset.games || '{}'); } catch { return; }
+                    openLeagueGamesSheet(data);
+                    return;
+                }
+                const cell = ev.target.closest('.lite-grid-cell[data-p]');
+                if (cell) openGridCellSheet(Number(cell.dataset.p), Number(cell.dataset.b));
             });
         }
 
@@ -1383,8 +1392,152 @@
         if (schedMode === 'now') { body.innerHTML = nowSnapshotHTML(sched, schedScope); return; }
 
         const bunks = bunksForScope(schedScope, schedSel);
-        body.innerHTML = bunks.length ? bunks.map(b => bunkCardHTML(b, sched)).join('')
-                                      : emptyHTML('📭', 'No bunks here.');
+        if (!bunks.length) { body.innerHTML = emptyHTML('📭', 'No bunks here.'); return; }
+        if (schedMode === 'time') { body.innerHTML = timelineHTML(sched, bunks); return; }
+        if (schedMode === 'grid') { body.innerHTML = gridHTML(sched, bunks); return; }
+        body.innerHTML = bunks.map(b => bunkCardHTML(b, sched)).join('');
+    }
+
+    // ─── Period-first + grid views ──────────────────────────────────────
+    // Both read the same structure: the day's distinct start times, and what
+    // each bunk is doing at each one. Bunks in a division can run slightly
+    // different period lengths, so periods are keyed on START time (the shared
+    // boundary) and the end shown is the longest any bunk runs.
+    function buildPeriods(bunks, sched) {
+        const map = new Map();
+        bunks.forEach(b => {
+            normalizeBunkEntries(b, sched).forEach(e => {
+                if (e.startMin == null) return;
+                let p = map.get(e.startMin);
+                if (!p) { p = { startMin: e.startMin, endMin: e.endMin, byBunk: {} }; map.set(e.startMin, p); }
+                if (e.endMin != null && (p.endMin == null || e.endMin > p.endMin)) p.endMin = e.endMin;
+                p.byBunk[b] = e;
+            });
+        });
+        return Array.from(map.values()).sort((a, b) => a.startMin - b.startMin);
+    }
+
+    function periodIsNow(p) {
+        if (currentDate !== todayKey() || p.startMin == null) return false;
+        const m = nowMinutes();
+        return m >= p.startMin && (p.endMin == null || m < p.endMin);
+    }
+
+    function timeCellHTML(p) {
+        return `<div class="lite-slot-time">
+            <div class="t1">${esc(fmtMin(p.startMin))}</div>
+            <div class="t2">${p.endMin != null ? esc(fmtMin(p.endMin)) : ''}</div>
+        </div>`;
+    }
+
+    // View 1 — period-first. One section per time slot; bunks doing the same
+    // thing collapse onto a single row, which is most of a division on a
+    // league/lunch period.
+    function timelineHTML(sched, bunks) {
+        const periods = buildPeriods(bunks, sched);
+        if (!periods.length) return emptyHTML('📭', 'No activities scheduled.');
+        return periods.map(p => {
+            const groups = new Map();
+            Object.keys(p.byBunk).forEach(b => {
+                const e = p.byBunk[b];
+                const key = [e.kind, e.title, e.location || '', e.league || ''].join('|');
+                let g = groups.get(key);
+                if (!g) { g = { e, bunks: [] }; groups.set(key, g); }
+                g.bunks.push(b);
+            });
+            const covered = Object.keys(p.byBunk).length;
+            const rows = Array.from(groups.values()).map(g => {
+                const e = g.e;
+                const all = g.bunks.length === bunks.length && bunks.length > 1;
+                const who = all
+                    ? `<span class="lite-who all">All bunks</span>`
+                    : g.bunks.map(b => `<span class="lite-who">${esc(b)}</span>`).join('');
+                let body = `<div class="lite-slot-activity">${KIND_BADGE[e.kind] || ''}${esc(e.title)}</div>`;
+                if (e.location) body += `<div class="lite-slot-loc">${esc(e.location)}</div>`;
+                if (e.league) {
+                    const payload = esc(JSON.stringify({ league: e.league, label: e.title, matchups: e.matchups || [], team: '' }));
+                    body = `<span class="lite-league-badge">League · ${esc(e.league)}</span>`
+                        + `<button type="button" class="lite-league-link" data-games="${payload}">View matchups &amp; games ›</button>`;
+                }
+                return `<div class="lite-tl-row kind-${e.kind}">
+                    ${body}<div class="lite-who-row">${who}</div>
+                </div>`;
+            }).join('');
+            return `<div class="lite-card lite-bunk-card${periodIsNow(p) ? ' now' : ''}">
+                <div class="lite-bunk-head">
+                    <span class="lite-bunk-name">${esc(fmtMin(p.startMin))}${p.endMin != null ? ` – ${esc(fmtMin(p.endMin))}` : ''}</span>
+                    <span class="lite-bunk-div">${covered} bunk${covered === 1 ? '' : 's'}</span>
+                </div>
+                ${rows}
+            </div>`;
+        }).join('');
+    }
+
+    // View 2 — the whole division at once: periods down, bunks across. The time
+    // column and bunk header stay pinned while the body scrolls both ways; tap a
+    // cell for the full detail.
+    let gridCache = { periods: [], bunks: [] };
+    function gridHTML(sched, bunks) {
+        const periods = buildPeriods(bunks, sched);
+        if (!periods.length) return emptyHTML('📭', 'No activities scheduled.');
+        gridCache = { periods, bunks };
+        const head = bunks.map(b => `<th class="lite-grid-bunk">${esc(b)}</th>`).join('');
+        const rows = periods.map((p, pi) => {
+            const cells = bunks.map((b, bi) => {
+                const e = p.byBunk[b];
+                if (!e) return `<td class="lite-grid-cell empty"></td>`;
+                const label = e.league ? e.league : e.title;
+                const sub = e.league ? e.title : (e.location || '');
+                return `<td class="lite-grid-cell kind-${e.kind}" data-p="${pi}" data-b="${bi}">
+                    <span class="g1">${esc(label)}</span>${sub ? `<span class="g2">${esc(sub)}</span>` : ''}
+                </td>`;
+            }).join('');
+            return `<tr class="${periodIsNow(p) ? 'now' : ''}">
+                <th class="lite-grid-time">
+                    <span class="t1">${esc(fmtMin(p.startMin))}</span>
+                    ${p.endMin != null ? `<span class="t2">${esc(fmtMin(p.endMin))}</span>` : ''}
+                </th>${cells}
+            </tr>`;
+        }).join('');
+        return `<div class="lite-grid-wrap">
+            <table class="lite-grid">
+                <thead><tr><th class="lite-grid-corner">Time</th>${head}</tr></thead>
+                <tbody>${rows}</tbody>
+            </table>
+        </div>
+        <div class="lite-note" style="margin:8px 2px 0;">Scroll sideways for more bunks · tap a cell for detail</div>`;
+    }
+
+    function openGridCellSheet(pi, bi) {
+        const p = gridCache.periods[pi], bunk = gridCache.bunks[bi];
+        const e = p && bunk ? p.byBunk[bunk] : null;
+        if (!e) return;
+        const when = `${fmtMin(p.startMin)}${p.endMin != null ? ' – ' + fmtMin(p.endMin) : ''}`;
+        let body = '';
+        if (e.league) {
+            body += `<span class="lite-league-badge">League · ${esc(e.league)}</span>`;
+            body += `<div class="lite-sheet-title" style="margin:2px 0 8px;">${esc(e.title)}</div>`;
+            const rows = (e.matchups || []).map(m => {
+                const g = (m && typeof m === 'object' && 'teams' in m) ? m : parseMatchup(m);
+                const meta = [g.field, g.sport].filter(Boolean).map(esc).join(' · ');
+                return `<div class="lite-game-row"><div class="lite-game-teams">${esc(g.teams)}</div>${meta ? `<div class="lite-game-meta">${meta}</div>` : ''}</div>`;
+            }).join('');
+            body += `<div class="lite-games-list">${rows || '<div class="lite-empty" style="padding:14px;">No matchups listed yet.</div>'}</div>`;
+        } else {
+            body += `<div class="lite-sheet-title" style="margin:2px 0 4px;">${KIND_BADGE[e.kind] || ''}${esc(e.title)}</div>`;
+            if (e.location) body += `<div class="lite-slot-loc" style="margin-bottom:6px;">${esc(e.location)}</div>`;
+        }
+        openSheet(`
+            <div class="lite-sheet-head">
+                <div>
+                    <div class="lite-sheet-title" style="margin:0;">${esc(bunk)}</div>
+                    <div class="lite-slot-loc">${esc(when)}</div>
+                </div>
+                <button class="lite-sheet-close" id="liteCellClose" aria-label="Close"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg></button>
+            </div>
+            <div style="margin-top:10px;">${body}</div>`);
+        const c = document.getElementById('liteCellClose');
+        if (c) c.addEventListener('click', closeSheet);
     }
 
     // The folded-in "Now" view — every bunk's current activity, grouped by scope.
