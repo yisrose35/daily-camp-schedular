@@ -1,0 +1,93 @@
+<!DOCTYPE html>
+<html lang="en" data-product="shop">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Campistry Shop — Camp Store</title>
+<link rel="icon" type="image/png" href="Campistry_logo.png">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=DM+Sans:opsz,wght@9..40,400;9..40,500;9..40,600;9..40,700;9..40,800&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="campistry-unified.css">
+<link rel="stylesheet" href="campistry_ops.css">
+</head>
+<body data-ops="shop">
+
+<!-- HEADER -->
+<header class="app-header">
+    <div class="header-left">
+        <a href="dashboard.html" class="header-back">&larr; Dashboard</a>
+        <a href="campistry_me.html" class="header-app-switch" title="Campistry Me"><img src="Me_clean.png" alt="Me" style="height:36px;width:auto;object-fit:contain;"></a>
+        <a href="campistry_snacks.html" class="header-app-switch" title="Campistry Snacks"><img src="Snacks_clean.png" alt="Snacks" style="height:34px;width:auto;object-fit:contain;"></a>
+        <a href="campistry_luggage.html" class="header-app-switch" title="Campistry Luggage">🧳</a>
+    </div>
+    <div class="header-right">
+        <div class="sync-badge"><div class="sync-dot"></div><span>Synced</span></div>
+    </div>
+</header>
+
+<main class="ops-main">
+    <div class="ops-hero">
+        <div class="ops-hero-icon">
+            <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M6 2L3 6v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2V6l-3-4z"/><line x1="3" y1="6" x2="21" y2="6"/><path d="M16 10a4 4 0 0 1-8 0"/></svg>
+        </div>
+        <div>
+            <h1>Camp Shop</h1>
+            <p>Swag, tees and camp gear — catalogue, orders and fulfilment</p>
+        </div>
+        <div class="ops-hero-actions">
+            <button class="ops-btn" onclick="shopExportCSV()">↓ Export orders</button>
+            <button class="ops-btn ops-btn--pri" onclick="shopNewOrder()">+ New Order</button>
+        </div>
+    </div>
+
+    <div class="ops-tabs" id="shopTabs"></div>
+    <div id="shopBody"></div>
+</main>
+
+<!-- PRODUCT EDITOR -->
+<div class="ops-overlay" id="m-product"><div class="ops-modal">
+    <div class="ops-modal-head"><h2 id="prodTitle">Add Product</h2><button class="ops-x" onclick="shopClose('product')">&times;</button></div>
+    <div class="ops-modal-body" id="prodBody"></div>
+    <div class="ops-modal-foot">
+        <button class="ops-btn" onclick="shopClose('product')">Cancel</button>
+        <button class="ops-btn ops-btn--pri" onclick="shopSaveProduct()">Save Product</button>
+    </div>
+</div></div>
+
+<!-- ORDER EDITOR -->
+<div class="ops-overlay" id="m-order"><div class="ops-modal ops-modal--lg">
+    <div class="ops-modal-head"><h2 id="ordTitle">New Order</h2><button class="ops-x" onclick="shopClose('order')">&times;</button></div>
+    <div class="ops-modal-body" id="ordBody"></div>
+    <div class="ops-modal-foot">
+        <button class="ops-btn" onclick="shopClose('order')">Cancel</button>
+        <button class="ops-btn ops-btn--pri" onclick="shopSaveOrder()">Save Order</button>
+    </div>
+</div></div>
+
+<!-- RESTOCK -->
+<div class="ops-overlay" id="m-restock"><div class="ops-modal">
+    <div class="ops-modal-head"><h2>Restock</h2><button class="ops-x" onclick="shopClose('restock')">&times;</button></div>
+    <div class="ops-modal-body" id="restockBody"></div>
+    <div class="ops-modal-foot">
+        <button class="ops-btn" onclick="shopClose('restock')">Cancel</button>
+        <button class="ops-btn ops-btn--pri" onclick="shopSaveRestock()">Save Stock</button>
+    </div>
+</div></div>
+
+<div class="ops-toast" id="shopToast"></div>
+
+<script src="demo_mode.js"></script>
+<script src="config.js"></script>
+<script src="supabase-js@2.js"></script>
+<script src="supabase_client.js"></script>
+<script src="campistry_security.js"></script>
+<script src="local_cache_idb.js"></script>
+<script src="integration_hooks.js"></script>
+<script src="campistry_shop_core.js"></script>
+<script src="campistry_shop.js"></script>
+<script>window.__CAMPISTRY_PRODUCT__='shop';</script>
+<script src="parent_lockout_guard.js"></script>
+<script src="product_access_guard.js"></script>
+</body>
+</html>

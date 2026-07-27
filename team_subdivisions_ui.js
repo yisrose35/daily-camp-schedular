@@ -568,7 +568,9 @@
                                 { key: 'live', label: 'Live — attendance / ops' },
                                 { key: 'link', label: 'Link — parent communication' },
                                 { key: 'notes', label: 'Notes — shared notes' },
-                                { key: 'guard', label: 'Guard — safety' }
+                                { key: 'guard', label: 'Guard — safety' },
+                                { key: 'shop', label: 'Shop — camp store / swag' },
+                                { key: 'luggage', label: 'Luggage — bags to camp' }
                             ].map(p => `<label class="checkbox-item"><input type="checkbox" name="product" value="${p.key}" ${(member.product_access || []).includes(p.key) ? 'checked' : ''}> <span>${p.label}</span></label>`).join('')}
                         </div>
                     </div>
