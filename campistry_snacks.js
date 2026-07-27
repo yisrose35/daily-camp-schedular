@@ -24,27 +24,42 @@ const SNACKS_LOCAL_KEY = 'campistry_snacks_data'; // fallback
 // ==========================================================================
 // PAYMENT METHODS
 //
-// A canteen balance is prepaid money the camper can later draw back out as
-// physical cash (see cashOut below). That makes funding it a cash-equivalent
-// transaction, which is exactly what card networks prohibit on debit — so
-// DEBIT IS NOT AN OPTION HERE, by design, not by omission. Anyone reaching
-// for it gets told why rather than finding a gap.
+// The catalogue and the debit stance are camp-wide policy, owned by
+// campistry_payments.js — the canteen doesn't get its own opinion, or the
+// office ends up with four screens disagreeing about what they take.
+//
+// The camp refuses debit on TUITION (chargeback/NSF exposure, no installment
+// support), and the canteen inherits it. There's a second reason here on top:
+// a canteen balance is prepaid money a camper can draw back out as cash (see
+// cashOut below), which makes funding it from debit a cash-equivalent
+// transaction.
 //
 // `on` is the out-of-the-box default; the office toggles these in Settings.
 // ==========================================================================
-const PAY_METHODS = [
-    { id: 'cash',   label: 'Cash',            on: true  },
-    { id: 'credit', label: 'Credit card',     on: true  },
-    { id: 'check',  label: 'Check',           on: true  },
-    { id: 'ach',    label: 'Bank transfer / ACH', on: false },
-    { id: 'zelle',  label: 'Zelle',           on: false },
-    { id: 'office', label: 'Charged to camp bill', on: false }
-];
-// Surfaced in Settings as a disabled row with the reason, so the absence reads
-// as a decision. Never accepted by addDep().
-const BLOCKED_PAY_METHODS = [
-    { id: 'debit', label: 'Debit card', reason: 'Not accepted — cash-equivalent' }
-];
+function _payAPI() { return (typeof window !== 'undefined' && window.CampistryPayments) || null; }
+
+function payMethodCatalogue() {
+    const P = _payAPI();
+    if (P) {
+        // Everything valid in the canteen, with the camp's defaults applied.
+        const enabled = P.forContext('canteen').map(m => m.id);
+        return P.METHODS
+            .filter(m => m.contexts.includes('canteen'))
+            .map(m => ({ id: m.id, label: m.label, on: enabled.includes(m.id) }));
+    }
+    // Policy module missing — a minimal, safe fallback rather than no options.
+    return [
+        { id: 'cash', label: 'Cash', on: true },
+        { id: 'credit', label: 'Credit card', on: true },
+        { id: 'check', label: 'Check', on: true }
+    ];
+}
+function blockedPayMethods() {
+    const P = _payAPI();
+    return P ? P.blockedFor('canteen') : [];
+}
+const PAY_METHODS = payMethodCatalogue();
+const BLOCKED_PAY_METHODS = blockedPayMethods();
 
 const DEFAULT_SNACKS_SETTINGS = {
     payMethods: PAY_METHODS.filter(m => m.on).map(m => m.id),

@@ -357,6 +357,35 @@ function getLeagues(){
     }catch(e){return{}}
 }
 
+// ── Payment methods ──────────────────────────────────────────────
+// The catalogue and the debit policy live in campistry_payments.js so
+// registration, Billing, the canteen and the shop can't drift apart.
+function _payAPI(){ return window.CampistryPayments||null }
+function _payOptions(ctx,selected){
+    var P=_payAPI();
+    if(!P) return '<option value="credit">Credit card</option><option value="check">Check</option><option value="cash">Cash</option>';
+    return P.optionsHtml(ctx,selected);
+}
+/** A struck-through row for anything refused, so the gap reads as a decision. */
+function _payBlockedNote(ctx){
+    var P=_payAPI(); if(!P) return '';
+    var blocked=P.blockedFor(ctx);
+    if(!blocked.length) return '';
+    return blocked.map(function(b){
+        return '<p style="font-size:.68rem;color:var(--s400);margin:4px 0 0;line-height:1.5">'+
+            '<span style="text-decoration:line-through">'+esc(b.label)+'</span> — '+esc(b.reason)+'. '+esc(b.detail)+'</p>';
+    }).join('');
+}
+function _payAllowed(id,ctx){
+    var P=_payAPI();
+    return P?P.isAllowed(id,ctx):true;
+}
+function _payLabel(id){
+    var P=_payAPI();
+    if(!P) return id||'—';
+    return P.label(P.normalizeLegacy(id));
+}
+
 function ff(label,id,val,type,opts){
     var h='<div class="fg"><label class="fl">'+esc(label)+'</label>';
     if(type==='select'&&opts)h+='<select id="'+id+'" class="fs">'+opts.map(function(o){return'<option value="'+esc(o)+'"'+(o===val?' selected':'')+'>'+( o||'—')+'</option>'}).join('')+'</select>';
@@ -2814,7 +2843,7 @@ function viewApplication(id){
     b+=sec('Payment');
     b+=row('Session',e.session);
     b+=row('Tuition',e.sessionTuition?fm(e.sessionTuition):'—');
-    b+=row('Payment Method',e.paymentMethod||'Not selected');
+    b+=row('Payment Method',e.paymentMethod?_payLabel(e.paymentMethod):'Not selected');
     b+=row('Payment Status',e.paymentStatus||'pending');
     if(e.discount&&e.discount.active!==false&&e.discount.code)b+=row('Discount',(e.discount.label||'')+' ('+e.discount.code+')');
 
@@ -2934,7 +2963,7 @@ function printApplication(id){
 
     h+=sec('Payment');
     h+=row('Session',e.session);h+=row('Tuition',e.sessionTuition?'$'+Number(e.sessionTuition).toLocaleString():'—');
-    h+=row('Method',e.paymentMethod);h+=row('Status',e.paymentStatus);
+    h+=row('Method',_payLabel(e.paymentMethod));h+=row('Status',e.paymentStatus);
     if(e.discount&&e.discount.code)h+=row('Discount',e.discount.label);h+=end();
 
     if(e.customAnswers&&Object.keys(e.customAnswers).length){
@@ -3913,7 +3942,7 @@ function renderAnalytics(){
             h+='<div class="me-card" style="margin-top:14px"><div class="me-card-head"><h3>Payment Log</h3></div><div class="me-tw"><table class="me-t"><thead><tr><th>Date</th><th>Family/Camper</th><th>Amount</th><th>Method</th><th></th></tr></thead><tbody>';
             finPayments.slice().sort(function(a,b){return(b.date||'').localeCompare(a.date||'')}).forEach(function(p,i){
                 if(p.id==null)p.id='pay_'+i+'_'+(p.date||'')+'_'+(p.amount||0);  // backfill a stable id for legacy rows
-                h+='<tr><td style="font-size:.75rem;color:var(--s400)">'+esc(p.date||'—')+'</td><td class="bold">'+esc(p.family)+'</td><td style="font-weight:700;color:var(--ok)">'+fm(p.amount)+'</td><td>'+esc(p.method||'—')+'</td><td style="text-align:right"><button class="me-btn me-btn--ghost me-btn--sm" style="color:var(--err)" onclick="CampistryMe.finRemovePayment(\''+je(String(p.id))+'\')">✕</button></td></tr>';
+                h+='<tr><td style="font-size:.75rem;color:var(--s400)">'+esc(p.date||'—')+'</td><td class="bold">'+esc(p.family)+'</td><td style="font-weight:700;color:var(--ok)">'+fm(p.amount)+'</td><td>'+esc(_payLabel(p.method)||'—')+'</td><td style="text-align:right"><button class="me-btn me-btn--ghost me-btn--sm" style="color:var(--err)" onclick="CampistryMe.finRemovePayment(\''+je(String(p.id))+'\')">✕</button></td></tr>';
             });
             h+='</tbody></table></div></div>';
         }
@@ -4167,12 +4196,29 @@ function finAddExpense(){
 }
 function finRemoveExpense(i){finExpenses.splice(i,1);save();renderAnalytics();toast('Removed')}
 function finAddPayment(){
-    var family=prompt('Family name:');if(!family)return;
-    var amount=prompt('Amount ($):','');if(!amount)return;
-    var method=prompt('Method (Credit Card, ACH, Zelle, Check, Payment Plan):','Credit Card');
-    var date=prompt('Date (YYYY-MM-DD):',new Date().toISOString().split('T')[0]);
-    finPayments.push({id:Date.now(),family:family.trim(),amount:parseFloat(amount)||0,method:(method||'Credit Card').trim(),date:(date||'').trim(),status:'paid'});
-    save();renderAnalytics();toast('Payment recorded');
+    // A modal rather than a prompt chain, so the method comes from the camp's
+    // payment policy instead of whatever the user types into a text box.
+    var today=new Date().toISOString().split('T')[0];
+    var h='<div class="me-modal-form">';
+    h+='<div class="me-field"><label>Family</label><input type="text" id="fapFamily" class="me-input" placeholder="Family name"></div>';
+    h+='<div style="display:grid;grid-template-columns:1fr 1fr;gap:10px">';
+    h+='<div class="me-field"><label>Amount ($)</label><input type="number" id="fapAmount" class="me-input" step="0.01" min="0" placeholder="0.00"></div>';
+    h+='<div class="me-field"><label>Date</label><input type="date" id="fapDate" class="me-input" value="'+today+'"></div>';
+    h+='</div>';
+    h+='<div class="me-field"><label>Method</label><select id="fapMethod" class="me-input">'+_payOptions('tuition')+'</select>'+_payBlockedNote('tuition')+'</div>';
+    h+='</div>';
+    showModal('Record Payment',h,function(){
+        var family=(document.getElementById('fapFamily').value||'').trim();
+        if(!family){alert('Family name is required');return}
+        var amount=parseFloat(document.getElementById('fapAmount').value)||0;
+        if(!amount){alert('Enter an amount');return}
+        var method=document.getElementById('fapMethod').value;
+        if(!_payAllowed(method,'tuition')){alert('That payment method isn\'t accepted for tuition.');return}
+        finPayments.push({id:Date.now(),family:family,amount:amount,method:method,
+                          date:document.getElementById('fapDate').value||today,status:'paid'});
+        closeModal('dynModal');
+        save();renderAnalytics();toast('Payment recorded');
+    });
 }
 function finRemovePayment(id){
     // ★ remove by stable id, not by render-index (the list is sorted before display, so an
@@ -4413,7 +4459,7 @@ function buildFamilyLedgers(){
         });
         if(!fk) return;
         if(!ledgers[fk]) return;
-        ledgers[fk].entries.push({type:'payment',category:p.method||'Payment',desc:p.notes||'Payment received',amount:Number(p.amount)||0,date:p.date||'',ref:p.id||''});
+        ledgers[fk].entries.push({type:'payment',category:_payLabel(p.method)||'Payment',desc:p.notes||'Payment received',amount:Number(p.amount)||0,date:p.date||'',ref:p.id||''});
         ledgers[fk].totalPayments+=Number(p.amount)||0;
     });
 
@@ -5217,7 +5263,7 @@ function openPaymentForFamily(famKey){
     h+='<div class="me-field"><label>Date</label><input type="date" id="payDate" class="me-input" value="'+today+'"></div>';
     h+='</div>';
     h+='<div style="display:grid;grid-template-columns:1fr 1fr;gap:10px">';
-    h+='<div class="me-field"><label>Method</label><select id="payMethod" class="me-input"><option>Credit Card</option><option>Check</option><option>Cash</option><option>ACH / Bank Transfer</option><option>PayPal</option><option>Zelle</option><option>Other</option></select></div>';
+    h+='<div class="me-field"><label>Method</label><select id="payMethod" class="me-input">'+_payOptions('tuition')+'</select>'+_payBlockedNote('tuition')+'</div>';
     h+='<div class="me-field"><label>Reference #</label><input type="text" id="payRef" class="me-input" placeholder="Check #, confirmation, etc."></div>';
     h+='</div>';
     h+='<div class="me-field"><label>Notes (optional)</label><input type="text" id="payNotes" class="me-input" placeholder="e.g., June installment"></div>';
@@ -5230,6 +5276,9 @@ function openPaymentForFamily(famKey){
         if(!amt){alert('Enter an amount');return}
         var date=document.getElementById('payDate').value;
         var method=document.getElementById('payMethod').value;
+        // Guard the save path too — a stale tab or an edited DOM must not slip
+        // a refused method (debit) past the picker.
+        if(!_payAllowed(method,'tuition')){alert('That payment method isn\'t accepted for tuition.');return}
         var ref=document.getElementById('payRef').value.trim();
         var notes=document.getElementById('payNotes').value.trim();
         finPayments.push({id:'pay_'+Date.now(),family:f.name,familyKey:fk,amount:amt,date:date,method:method,reference:ref,notes:notes,timestamp:Date.now()});
@@ -7151,6 +7200,17 @@ function psFields(){
         {key:'emergencyName',label:'Emergency Contact'},
         {key:'emergencyPhone',label:'Emergency Phone'},
         {key:'emergencyRel',label:'Emergency Relation'},
+        // Bus routes, pulled live from Campistry Go. Dismissal and arrival are
+        // separate fields because a camper routinely rides a different bus
+        // each way — one "Bus" column would be quietly wrong half the time.
+        {key:'busRoute',label:'Bus — Dismissal (PM)'},
+        {key:'busStop',label:'Bus Stop # — Dismissal'},
+        {key:'busStopAddress',label:'Bus Stop Address — Dismissal'},
+        {key:'busShift',label:'Bus Shift — Dismissal'},
+        {key:'busMonitor',label:'Bus Monitor — Dismissal'},
+        {key:'busAmRoute',label:'Bus — Arrival (AM)'},
+        {key:'busAmStop',label:'Bus Stop # — Arrival'},
+        {key:'busAmStopAddress',label:'Bus Stop Address — Arrival'},
         {key:'__blank',label:'Blank / write-in column'}
     ];
     (customFields||[]).forEach(function(cf){f.push({key:'cf_'+cf.id,label:cf.label})});
@@ -7180,8 +7240,67 @@ function psValue(field,name,c){
             return[c.street,line2].filter(Boolean).join(', ');
         }
         case'team':return c.team||Object.values(c.teams||{})[0]||'';
+        case'busRoute':        return _busVal(name,'dismissal','busName');
+        case'busStop':         return _busVal(name,'dismissal','stopNum');
+        case'busStopAddress':  return _busVal(name,'dismissal','address');
+        case'busShift':        return _busVal(name,'dismissal','shift');
+        case'busMonitor':      return _busVal(name,'dismissal','monitor');
+        case'busAmRoute':      return _busVal(name,'arrival','busName');
+        case'busAmStop':       return _busVal(name,'arrival','stopNum');
+        case'busAmStopAddress':return _busVal(name,'arrival','address');
         default:return c[field]!=null?String(c[field]):'';
     }
+}
+
+// ── Bus routes (from Campistry Go) ───────────────────────────────
+// Go strips savedRoutes out of campGlobalSettings_v1 (road geometry blows the
+// localStorage quota), so they can't be read the way every other field is.
+// campistry_bus_routes.js knows the real locations; we cache the built index
+// here because psValue is called once per camper per column and rebuilding it
+// each time would walk every route on every cell.
+var _busIndex=null, _busLoading=false;
+
+function _busVal(name,mode,attr){
+    var idx=_busIdx();
+    if(!idx)return'';
+    var API=window.CampistryBusRoutes;
+    var row=API?API.forCamper(idx,name,mode):null;
+    if(!row)return'';
+    var v=row[attr];
+    return v==null?'':String(v);
+}
+
+function _busIdx(){
+    var API=window.CampistryBusRoutes;
+    if(!API)return null;
+    if(_busIndex)return _busIndex;
+    _busIndex=API.index(API.loadLocal());
+    // Nothing local means Go hasn't been opened on this device. Pull the
+    // durable copy and re-render once — without this, print sheets on a fresh
+    // browser would silently show blank bus columns.
+    if(!Object.keys(_busIndex).length&&!_busLoading){
+        _busLoading=true;
+        try{
+            var db=window.CampistryDB;
+            var client=db&&db.getClient&&db.getClient();
+            var campId=db&&db.getCampId&&db.getCampId();
+            API.loadCloud(client,campId).then(function(blob){
+                _busLoading=false;
+                if(!blob)return;
+                var next=API.index(blob);
+                if(!Object.keys(next).length)return;
+                _busIndex=next;
+                if(curPage==='printsheets')render('printsheets');
+            });
+        }catch(e){_busLoading=false}
+    }
+    return _busIndex;
+}
+
+/** True when we have any route data — used to warn before printing a blank column. */
+function _busHasData(){
+    var idx=_busIdx();
+    return !!(idx&&Object.keys(idx).length);
 }
 
 // ── template + column model ──
@@ -7504,6 +7623,13 @@ function psEditorHtml(s){
     });
     h+='</div>';
     h+='<button class="me-btn me-btn--sec me-btn--sm" style="margin-top:8px" onclick="CampistryMe.psAddColumn(\''+je(s.id)+'\')">+ Add Column</button>';
+    // A bus column with no route data behind it prints blank and looks like a
+    // bug. Say so here rather than letting them find out at the printer.
+    var _usesBus=(s.columns||[]).some(function(col){return col.field&&col.field.indexOf('bus')===0});
+    if(_usesBus&&!_busHasData()){
+        h+='<div style="margin-top:10px;padding:9px 11px;background:var(--warn-bg,#fff8e1);border:1px solid var(--warn-border,#ffe082);border-radius:var(--r);font-size:.72rem;color:var(--s600);line-height:1.55">'
+            +'<strong>No bus routes found yet.</strong> Bus columns fill in from <a href="campistry_go.html" style="color:var(--me);font-weight:600">Campistry Go</a> once routes have been generated and saved there. They\'ll print blank until then.</div>';
+    }
     h+='</div>'; // ps-config
 
     // ── live preview ──

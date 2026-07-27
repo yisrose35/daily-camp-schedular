@@ -156,8 +156,9 @@ body{font-family:var(--font);background:var(--s50);color:var(--s800);-webkit-fon
 <div id="promoMsg" class="promo-msg" style="display:none"></div></div>
 <p style="font-size:.8rem;color:var(--s500);margin-bottom:8px">Select how you'd like to pay:</p>
 <div id="payOpts">
-<!-- Credit only. Debit is not offered anywhere in Campistry — see the note in
-     campistry_snacks.js (PAY_METHODS) for the reasoning. -->
+<!-- Credit only. The camp's payment policy — and the reasoning for refusing
+     debit on tuition — lives in campistry_payments.js; a camp that re-enables
+     it there gets a Debit option added here at runtime by _regApplyPayPolicy(). -->
 <label class="po" onclick="selPay(this,'credit_card')"><input type="radio" name="pm" value="credit_card"><div><div class="po-l">Credit Card</div><div class="po-d">Visa, Mastercard, Amex — credit cards only</div></div></label>
 <label class="po" onclick="selPay(this,'ach')"><input type="radio" name="pm" value="ach"><div><div class="po-l">ACH / Bank Transfer</div><div class="po-d">Direct from bank account</div></div></label>
 <label class="po" onclick="selPay(this,'zelle')"><input type="radio" name="pm" value="zelle"><div><div class="po-l">Zelle</div><div class="po-d">Send directly via Zelle</div></div></label>
@@ -216,6 +217,35 @@ body{font-family:var(--font);background:var(--s50);color:var(--s800);-webkit-fon
 <script src="supabase_client.js" onerror="console.log('[Register] Supabase config not loaded — local only')"></script>
 <script src="local_cache_idb.js" onerror="console.log('[Register] LocalCacheIDB not loaded — falling back to localStorage')"></script>
 <script src="integration_hooks.js" onerror="console.log('[Register] Integration hooks not loaded — local only')"></script>
+<script src="campistry_payments.js" onerror="console.log('[Register] Payment policy not loaded — showing the built-in options')"></script>
+<script>
+// Keep the payment options on this form in step with the camp's policy. The
+// markup above is the default (credit yes, debit no); this only has to do
+// anything when a camp has explicitly turned debit back on.
+(function () {
+    function _regApplyPayPolicy() {
+        var P = window.CampistryPayments;
+        var box = document.getElementById('payOpts');
+        if (!P || !box) return;
+        var allowsDebit = P.forContext('tuition').some(function (m) { return m.id === 'debit'; });
+        var existing = box.querySelector('input[value="debit"]');
+        if (allowsDebit && !existing) {
+            var l = document.createElement('label');
+            l.className = 'po';
+            l.setAttribute('onclick', "selPay(this,'debit')");
+            l.innerHTML = '<input type="radio" name="pm" value="debit"><div><div class="po-l">Debit Card</div>' +
+                          '<div class="po-d">Drawn directly from your bank account</div></div>';
+            box.appendChild(l);
+        } else if (!allowsDebit && existing) {
+            var row = existing.closest('.po');
+            if (row) row.remove();
+        }
+    }
+    if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', _regApplyPayPolicy);
+    else _regApplyPayPolicy();
+    window.addEventListener('campistry-cloud-hydrated', _regApplyPayPolicy);
+})();
+</script>
 
 <script>
 (function(){
