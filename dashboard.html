@@ -148,6 +148,30 @@
             </div>
         </section>
 
+        <!-- ===== BIRTHDAYS ===== -->
+        <section class="dash-birthdays" id="dashBirthdays" style="display:none;">
+            <div class="dash-notif-header">
+                <h2>
+                    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M20 21v-8a2 2 0 0 0-2-2H6a2 2 0 0 0-2 2v8"/><path d="M4 16s1-1 3-1 3 1 5 1 3-1 5-1 3 1 3 1"/><path d="M2 21h20"/><path d="M7 8v3M12 8v3M17 8v3"/><path d="M7 5.5a1 1 0 1 0-2 0M13 5.5a1 1 0 1 0-2 0M19 5.5a1 1 0 1 0-2 0"/></svg>
+                    Birthdays
+                </h2>
+                <div class="dash-bday-tools">
+                    <select id="dashBdayWindow" onchange="renderBirthdays()" title="How far ahead to look">
+                        <option value="0">Today</option>
+                        <option value="7">Next 7 days</option>
+                        <option value="14">Next 14 days</option>
+                        <option value="30" selected>Next 30 days</option>
+                    </select>
+                    <select id="dashBdayWho" onchange="renderBirthdays()" title="Who to include">
+                        <option value="all" selected>Everyone</option>
+                        <option value="camper">Campers</option>
+                        <option value="staff">Staff</option>
+                    </select>
+                </div>
+            </div>
+            <div class="dash-bday-list" id="dashBdayList"></div>
+        </section>
+
         <!-- ===== NOTIFICATIONS & REMINDERS ===== -->
         <section class="dash-notifications" id="dashNotifications">
             <div class="dash-notif-header">
@@ -428,6 +452,7 @@ if (window.location.protocol === 'file:') {
     <script src="campistry_utils.js"></script>
     <script src="campistry_security.js"></script>
     <script src="dashboard.js"></script>
+    <script src="campistry_birthdays.js"></script>
     <script src="badges.js"></script>
     <script src="access_control.js"></script>
     <script src="team_subdivisions_ui.js"></script>
@@ -534,6 +559,91 @@ if (window.location.protocol === 'file:') {
 
         loadWeather();
 
+        // ── BIRTHDAYS ──
+        // Reads campers out of app1.camperRoster and staff out of the payroll /
+        // finance lists (see CampistryBirthdays.collectFromSettings). Local
+        // state is enough — the dashboard already hydrates from cloud into
+        // campGlobalSettings_v1, and we re-render on that event below.
+        var _bdayPeople = null;
+
+        function _bdayReadPeople() {
+            var B = window.CampistryBirthdays;
+            if (!B) return [];
+            var s = null;
+            try {
+                if (typeof window.loadGlobalSettings === 'function') s = window.loadGlobalSettings();
+            } catch (e) { s = null; }
+            if (!s || typeof s !== 'object') {
+                try { s = JSON.parse(localStorage.getItem('campGlobalSettings_v1') || '{}'); }
+                catch (e) { s = {}; }
+            }
+            return B.collectFromSettings(s);
+        }
+
+        function _bdayInitials(name) {
+            var p = String(name || '?').trim().split(/\s+/);
+            return ((p[0] || '?')[0] + (p.length > 1 ? (p[p.length - 1] || '')[0] : '')).toUpperCase();
+        }
+        var _BDAY_COLORS = ['#147D91', '#6366F1', '#0EA5E9', '#10B981', '#F43F5E', '#8B5CF6', '#D97706'];
+        function _bdayColor(name) {
+            var h = 0, s = String(name || '');
+            for (var i = 0; i < s.length; i++) h += s.charCodeAt(i);
+            return _BDAY_COLORS[h % _BDAY_COLORS.length];
+        }
+        function _bdayEsc(s) {
+            return String(s == null ? '' : s)
+                .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+        }
+
+        window.renderBirthdays = function() {
+            var B = window.CampistryBirthdays;
+            var section = document.getElementById('dashBirthdays');
+            var list = document.getElementById('dashBdayList');
+            if (!B || !section || !list) return;
+
+            if (_bdayPeople === null) _bdayPeople = _bdayReadPeople();
+            // Nobody has a date of birth on file — an empty card would just be
+            // noise, so the whole section stays hidden.
+            if (!_bdayPeople.length) { section.style.display = 'none'; return; }
+            section.style.display = '';
+
+            var windowDays = parseInt((document.getElementById('dashBdayWindow') || {}).value, 10);
+            if (!isFinite(windowDays)) windowDays = 30;
+            var who = (document.getElementById('dashBdayWho') || {}).value || 'all';
+            var pool = who === 'all' ? _bdayPeople : _bdayPeople.filter(function(p) { return p.kind === who; });
+
+            var items = B.upcoming(pool, { windowDays: windowDays });
+            if (!items.length) {
+                list.innerHTML = '<div class="dash-bday-empty">No birthdays ' +
+                    (windowDays === 0 ? 'today' : 'in the next ' + windowDays + ' days') + '.</div>';
+                return;
+            }
+            list.innerHTML = items.map(function(e) {
+                var where = e.kind === 'staff'
+                    ? (e.role || 'Staff')
+                    : [e.division, e.bunk].filter(Boolean).join(' · ') || 'Camper';
+                var age = e.turningAge != null
+                    ? '<span class="dash-bday-age">turns ' + e.turningAge + '</span>' : '';
+                return '<div class="dash-bday-card' + (e.isToday ? ' is-today' : '') + '">' +
+                    '<div class="dash-bday-avatar" style="background:' + _bdayColor(e.name) + '">' +
+                        _bdayEsc(_bdayInitials(e.name)) + '</div>' +
+                    '<div class="dash-bday-main">' +
+                        '<div class="dash-bday-name">' + _bdayEsc(e.name) +
+                            (e.kind === 'staff' ? '<span class="dash-bday-kind">Staff</span>' : '') + '</div>' +
+                        '<div class="dash-bday-sub">' + _bdayEsc(where) + '</div>' +
+                    '</div>' +
+                    '<div class="dash-bday-when">' + _bdayEsc(B.relativeLabel(e)) + age + '</div>' +
+                '</div>';
+            }).join('');
+        };
+
+        renderBirthdays();
+        // The roster arrives after cloud hydration, so re-read then.
+        window.addEventListener('campistry-cloud-hydrated', function() {
+            _bdayPeople = null;
+            renderBirthdays();
+        });
+
         // ── NOTIFICATIONS ──
         function buildNotifications() {
             var list = document.getElementById('dashNotifList');
@@ -541,6 +651,26 @@ if (window.location.protocol === 'file:') {
 
             var role = localStorage.getItem('campistry_role') || 'viewer';
             var items = [];
+
+            // Today's and tomorrow's birthdays lead the list — the one
+            // reminder here that's actually time-critical.
+            var B = window.CampistryBirthdays;
+            if (B) {
+                if (_bdayPeople === null) _bdayPeople = _bdayReadPeople();
+                var soon = B.upcoming(_bdayPeople, { windowDays: 1 });
+                var todayNames = soon.filter(function(e) { return e.isToday; }).map(function(e) { return e.name; });
+                var tomorrowNames = soon.filter(function(e) { return !e.isToday; }).map(function(e) { return e.name; });
+                if (todayNames.length) {
+                    items.push({ type: 'action', icon: 'cake', time: 'Today',
+                        text: '🎂 <strong>' + _bdayEsc(todayNames.join(', ')) + '</strong> ' +
+                              (todayNames.length === 1 ? 'has a birthday' : 'have birthdays') + ' today.' });
+                }
+                if (tomorrowNames.length) {
+                    items.push({ type: 'tip', icon: 'cake', time: 'Tomorrow',
+                        text: '<strong>' + _bdayEsc(tomorrowNames.join(', ')) + '</strong> ' +
+                              (tomorrowNames.length === 1 ? 'has a birthday' : 'have birthdays') + ' tomorrow.' });
+                }
+            }
 
             // Universal notifications
             items.push({ type: 'info', icon: 'calendar', text: 'Summer 2026 is approaching — make sure your camp structure is set up in <a href="campistry_me.html">Campistry Me</a>.', time: 'Reminder' });
@@ -580,7 +710,8 @@ if (window.location.protocol === 'file:') {
                 zap: '<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"/></svg>',
                 grid: '<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="7" height="7"/><rect x="14" y="3" width="7" height="7"/><rect x="14" y="14" width="7" height="7"/><rect x="3" y="14" width="7" height="7"/></svg>',
                 eye: '<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg>',
-                sparkle: '<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2"/></svg>'
+                sparkle: '<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2"/></svg>',
+                cake: '<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M20 21v-8a2 2 0 0 0-2-2H6a2 2 0 0 0-2 2v8"/><path d="M4 16s1-1 3-1 3 1 5 1 3-1 5-1 3 1 3 1"/><path d="M2 21h20"/><path d="M7 8v3M12 8v3M17 8v3"/></svg>'
             };
             return icons[name] || icons.zap;
         }
