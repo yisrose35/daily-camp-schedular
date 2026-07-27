@@ -206,44 +206,24 @@ button { cursor: pointer; border: none; background: none; }
 
 /* Product tiles — square app-icon style: logo + uppercase name, product-color
    base accent. 3-up grid. */
-/* Ring launcher: a centre app with the rest orbiting it. The container is
-   square and every tile is positioned in %, so the whole hub scales. */
-.lite-launch-ring { position: relative; width: 100%; max-width: 380px; margin: 4px auto 0; aspect-ratio: 1 / 1; }
-.lite-launch-tile.round {
-    flex-direction: column; justify-content: center; gap: 5px;
-    aspect-ratio: 1 / 1; min-height: 0; padding: 8px 6px; text-align: center;
-    border-radius: 50%; border: 1px solid var(--line);
-    border-left: 1px solid var(--line); border-bottom: 3px solid var(--ql, var(--line-2));
-}
-.lite-launch-tile.round .lite-launch-logo { height: 26px; width: 26px; }
-.lite-launch-tile.round .lite-launch-name {
-    font-size: 0.68rem; font-weight: 700; letter-spacing: 0.01em; color: var(--ink-2);
-    max-width: 100%; overflow: hidden; text-overflow: ellipsis;
-}
-.lite-launch-tile.centre { box-shadow: var(--shadow-lg); border-bottom-width: 4px; z-index: 2; }
-.lite-launch-tile.centre .lite-launch-logo { height: 34px; width: 34px; }
-.lite-launch-tile.centre .lite-launch-name { font-size: 0.76rem; color: var(--ink); }
-.lite-launch-tile.round .lite-launch-soon {
-    top: auto; bottom: 7px; right: 50%; transform: translateX(50%);
-    font-size: 0.5rem; padding: 1px 6px;
-}
-
 .lite-launch-grid { display: grid; grid-template-columns: repeat(2, 1fr); gap: 11px; }
 .lite-launch-grid.single { grid-template-columns: 1fr; }
-/* Compact horizontal tiles: eight land in a clean 2x4 without scrolling. */
+/* Two across, four down — eight apps in a clean 2x4 with room for the logos. */
 .lite-launch-tile {
-    position: relative; display: flex; flex-direction: row; align-items: center; justify-content: flex-start; gap: 10px;
-    min-height: 74px; padding: 12px 12px 12px 13px;
-    background: var(--card); border: 1px solid var(--line); border-radius: 16px;
-    border-left: 4px solid var(--ql, var(--line-2)); box-shadow: var(--shadow);
-    transition: transform 0.12s ease, box-shadow 0.12s ease; text-align: left;
+    position: relative; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 9px;
+    min-height: 104px; padding: 16px 10px;
+    background: var(--card); border: 1px solid var(--line); border-radius: 18px;
+    border-bottom: 4px solid var(--ql, var(--line-2)); box-shadow: var(--shadow);
+    transition: transform 0.12s ease, box-shadow 0.12s ease;
 }
 .lite-launch-grid.single .lite-launch-tile { min-height: 96px; }
-.lite-launch-tile:active { transform: scale(0.95); box-shadow: var(--shadow-sm); }
+.lite-launch-tile:active { transform: scale(0.96); box-shadow: var(--shadow-sm); }
 .lite-launch-tile.soon { opacity: 0.5; background: var(--bg); box-shadow: var(--shadow-sm); border-bottom-color: var(--line-2); }
-.lite-launch-logo { height: 30px; width: 30px; flex: none; object-fit: contain; }
-.lite-launch-grid.single .lite-launch-logo { height: 42px; }
-.lite-launch-name { font-size: 0.86rem; font-weight: 700; letter-spacing: -0.01em; color: var(--ink); min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.lite-launch-icon-box { display: flex; align-items: center; justify-content: center; height: 34px; }
+.lite-launch-logo { height: 34px; width: auto; max-width: 130px; object-fit: contain; }
+.lite-launch-icon { width: 32px; height: 32px; color: var(--ql, var(--ink-2)); }
+.lite-launch-icon svg { width: 100%; height: 100%; }
+.lite-launch-name { font-size: 0.7rem; font-weight: 700; text-transform: uppercase; letter-spacing: 0.05em; color: var(--ink-2); }
 .lite-launch-tile.soon .lite-launch-name { color: var(--muted); }
 .lite-launch-soon {
     position: absolute; top: 8px; right: 8px;

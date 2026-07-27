@@ -976,14 +976,8 @@
         const campName = campDisplayName;
         const single = apps.length === 1;
 
-        // With a full roster the tiles sit in a ring around a centre app —
-        // reachable with one thumb and it reads as a hub rather than a list.
-        // A short roster (restricted access, counselor) keeps the plain grid,
-        // where a ring of two or three would just look broken.
         view.innerHTML = heroCardHTML(campName)
-            + (apps.length >= 5
-                ? ringHTML(apps)
-                : `<div class="lite-launch-grid${single ? ' single' : ''}">${apps.map(tileHTML).join('')}</div>`);
+            + `<div class="lite-launch-grid${single ? ' single' : ''}">${apps.map(a => tileHTML(a)).join('')}</div>`;
 
         view.querySelectorAll('.lite-launch-tile[data-app]').forEach(t =>
             t.addEventListener('click', () => openApp(t.dataset.app)));
@@ -1014,36 +1008,16 @@
         </div>`;
     }
 
-    // Flow anchors the middle when it's available; otherwise the first app does.
-    function ringHTML(apps) {
-        const centreIdx = Math.max(0, apps.findIndex(a => a.id === 'flow'));
-        const centre = apps[centreIdx];
-        const around = apps.filter((_, i) => i !== centreIdx);
-        const n = around.length;
-        // Radius and tile size are percentages of the square container, so the
-        // whole arrangement scales with the screen instead of being pinned to px.
-        const R = 36, SIZE = 25.5;
-        const tiles = around.map((app, i) => {
-            const angle = (-90 + (360 / n) * i) * Math.PI / 180;
-            const left = 50 + R * Math.cos(angle);
-            const top = 50 + R * Math.sin(angle);
-            return tileHTML(app, `position:absolute;left:${left.toFixed(2)}%;top:${top.toFixed(2)}%;width:${SIZE}%;transform:translate(-50%,-50%);`);
-        }).join('');
-        return `<div class="lite-launch-ring">${tiles}
-            ${tileHTML(centre, `position:absolute;left:50%;top:50%;width:${(SIZE * 1.14).toFixed(2)}%;transform:translate(-50%,-50%);`, true)}
-        </div>`;
-    }
-
-    function tileHTML(app, style, isCentre) {
+    function tileHTML(app) {
         const soon = app.status !== 'available';
-        const cls = ['lite-launch-tile', soon ? 'soon' : '', style ? 'round' : '', isCentre ? 'centre' : '']
-            .filter(Boolean).join(' ');
-        return `<button class="${cls}" ${soon ? 'disabled' : `data-app="${app.id}"`} style="--ql:${app.color}${style ? ';' + style : ''}">
-            ${soon ? '<span class="lite-launch-soon">Soon</span>' : ''}
-            ${app.icon
-                ? `<span class="lite-launch-logo lite-launch-icon">${app.icon}</span>`
-                : `<img src="${app.logo}" class="lite-launch-logo" alt="">`}
+        return `<button class="lite-launch-tile${soon ? ' soon' : ''}" ${soon ? 'disabled' : `data-app="${app.id}"`} style="--ql:${app.color}">
+            <span class="lite-launch-icon-box">
+                ${app.icon
+                    ? `<span class="lite-launch-logo lite-launch-icon">${app.icon}</span>`
+                    : `<img src="${app.logo}" class="lite-launch-logo" alt="">`}
+            </span>
             <span class="lite-launch-name">${esc(app.name)}</span>
+            ${soon ? '<span class="lite-launch-soon">Soon</span>' : ''}
         </button>`;
     }
 
