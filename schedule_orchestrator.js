@@ -452,6 +452,18 @@
             log('No data to hydrate, clearing globals');
             window.scheduleAssignments = {};
             window.leagueAssignments = {};
+            // ★ Clear the rest of the per-day globals too. Leaving segments,
+            //   per-bunk geometry and the skeleton behind meant an empty date
+            //   still drew the previous day's grid, and a save on it inherited
+            //   that day's skeleton (the save side reads _autoSkeleton).
+            window.scheduleSegments = {};
+            window._autoSkeleton = null;
+            try {
+                const _dt = window.divisionTimes || {};
+                Object.keys(_dt).forEach(g => {
+                    if (_dt[g]) { delete _dt[g]._perBunkSlots; delete _dt[g]._isPerBunk; }
+                });
+            } catch (_e) { /* non-fatal */ }
             return;
         }
 
@@ -469,6 +481,21 @@
             log('Hydrated leagueAssignments');
         } else {
             window.leagueAssignments = {};
+        }
+
+        // ★ Hydrate scheduleSegments. This was the one per-day global the
+        //   orchestrator never touched, so it kept the PREVIOUS date's cells
+        //   after a date change — the lag analytics.js documents and works
+        //   around ("scheduleSegments is a SEPARATE global that can LAG — it
+        //   isn't cleared when navigating to a date with no schedule"). Rebuild
+        //   from the assignments when the row predates the segment store, so
+        //   segment-aware readers are always coherent with what's displayed.
+        if (data.scheduleSegments && Object.keys(data.scheduleSegments).length > 0) {
+            window.scheduleSegments = JSON.parse(JSON.stringify(data.scheduleSegments));
+            log('Hydrated scheduleSegments:', Object.keys(window.scheduleSegments).length, 'bunks');
+        } else {
+            window.scheduleSegments = {};
+            try { window.AutoSegmentModel?.rebuildFromAssignments?.(); } catch (_e) { /* non-fatal */ }
         }
 
         // ★★★ FIX: Hydrate unifiedTimes if present ★★★

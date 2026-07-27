@@ -2444,47 +2444,29 @@
             // Load schedule for this date
             if (window.ScheduleDB?.loadSchedule) {
                 const result = await window.ScheduleDB.loadSchedule(newDateKey);
-                
+                const hasBunks = (d) => d && Object.keys(d.scheduleAssignments || {}).length > 0;
+
                 if (result?.success && result.data) {
-                    window.scheduleAssignments = result.data.scheduleAssignments || {};
-                    window.leagueAssignments = result.data.leagueAssignments || {};
-                    // ★★★ CROSS-DATE GUARD: in-memory schedule now belongs to newDateKey.
-                    // Keeps the date stamp coherent so the save guard never false-blocks a
-                    // later edit/save on this date, and a racing save-old can detect drift.
-                    window._scheduleAssignmentsDate = newDateKey;
-
-                    // ★★★ FIX: Properly hydrate unifiedTimes ★★★
-                    if (result.data.unifiedTimes?.length > 0) {
-                        window.unifiedTimes = result.data.unifiedTimes;
-                    }
-                    if (result.data.divisionTimes) {
-                        window.divisionTimes = result.data.divisionTimes;
-                    }
-
-                    // ★★★ FIX v6.5: Hydrate rainy day state ★★★
-                    if (result.data.isRainyDay === true || result.data.rainyDayMode === true) {
-                        window.isRainyDay = true;
-                    } else if (result.data.isRainyDay === false) {
-                        window.isRainyDay = false;
-                    }
-                    
-                    if (result.data.rainyDayStartTime !== null && result.data.rainyDayStartTime !== undefined) {
-                        window.rainyDayStartTime = result.data.rainyDayStartTime;
+                    applyLoadedDay(newDateKey, result.data, result.source);
+                } else if (result && !result.success) {
+                    // ★ TRANSIENT LOAD FAILURE. Previously there was no branch here at
+                    //   all: memory kept the PREVIOUS date's schedule while
+                    //   currentScheduleDate had already advanced, so the user was shown
+                    //   yesterday's day under today's label. (The save guards then
+                    //   correctly refused to persist it — the data was safe, but what
+                    //   was on screen was a lie.)
+                    //   ScheduleDB returns the local cache for this date as
+                    //   result.data on failure (source: 'local-fallback'). Use it when
+                    //   it has content; otherwise clear, so we never display another
+                    //   day's schedule as this one.
+                    if (hasBunks(result.data)) {
+                        applyLoadedDay(newDateKey, result.data, 'local-fallback');
+                        showNotification('Showing the local copy of ' + newDateKey + ' — cloud unavailable', 'warning');
                     } else {
-                        window.rainyDayStartTime = null;
+                        clearDayInMemory(newDateKey);
+                        showNotification('Could not load ' + newDateKey + ' from the cloud', 'error');
                     }
-
-                    if (window.updateTable) {
-                        window.updateTable();
-                    }
-
-                    console.log('🔗 Loaded schedule for', newDateKey, {
-                        bunks: Object.keys(window.scheduleAssignments).length,
-                        slots: window.unifiedTimes?.length || 0,
-                        isRainyDay: window.isRainyDay,
-                        rainyDayStartTime: window.rainyDayStartTime,
-                        source: result.source
-                    });
+                    console.warn('🔗 Cloud load failed for', newDateKey, '—', result.error || 'unknown');
                 } else if (result && result.success) {
                     // ★ FN-14 FIX: the load SUCCEEDED but this date has NO saved schedule
                     //   (a fresh/empty date). The old code had no else branch, so
@@ -2495,10 +2477,7 @@
                     //   the selected date. Gated on result.success so it ONLY fires on a
                     //   confirmed-empty result, never a transient load error → it can never
                     //   blank a date that actually has data.
-                    window.scheduleAssignments = {};
-                    window.leagueAssignments = {};
-                    window._scheduleAssignmentsDate = newDateKey;
-                    if (window.updateTable) { try { window.updateTable(); } catch (_e) {} }
+                    clearDayInMemory(newDateKey);
                     console.log('🔗 No saved schedule for', newDateKey, '— cleared in-memory (fresh/empty date, FN-14 guard)');
                 }
             }
@@ -2517,6 +2496,131 @@
         });
 
         console.log('🔗 Date picker hook installed');
+    }
+
+    // =========================================================================
+    // DAY REBUILD — applying a loaded day to memory
+    // =========================================================================
+    // ScheduleDB.loadSchedule's merge returns the COMPLETE day: assignments,
+    // scheduleSegments, leagueAssignments, unifiedTimes, deserialized
+    // divisionTimes, _perBunkSlotsData, _autoGenerated and manualSkeleton.
+    // The date-change handler used to apply only assignments / leagues /
+    // unifiedTimes / divisionTimes / rain, which is why revisiting an older day
+    // came back subtly wrong:
+    //
+    //   • scheduleSegments was never touched, so the segment store kept the
+    //     PREVIOUS date's cells (the staleness analytics.js has a guard for).
+    //   • _perBunkSlotsData was dropped, so an auto-built day lost its per-bunk
+    //     grid geometry and rendered with "+ Add" gaps where activities were.
+    //   • divisionTimes was assigned RAW rather than through
+    //     DivisionTimesSystem.deserialize — _perBunkSlots is a custom array
+    //     property that JSON drops, so the geometry was gone even when present.
+    //   • _autoGenerated / manualSkeleton were dropped, so downstream code
+    //     couldn't tell an auto build from a manual one for that day.
+    //
+    // Rather than grow a second, divergent restore, apply the payload and then
+    // hand off to unified_schedule_system's loadScheduleForDate — the one
+    // function that already knows how to reattach per-bunk slots with mode
+    // isolation, realign assignments to slot windows, and fall back to the
+    // skeleton. ScheduleDB.loadSchedule has already written the merged payload
+    // to localStorage (setLocalSchedule), which is what that function reads.
+    function applyLoadedDay(dateKey, data, source) {
+        window.scheduleAssignments = data.scheduleAssignments || {};
+        window.leagueAssignments = data.leagueAssignments || {};
+        // ★★★ CROSS-DATE GUARD: in-memory schedule now belongs to dateKey.
+        // Keeps the date stamp coherent so the save guard never false-blocks a
+        // later edit/save on this date, and a racing save-old can detect drift.
+        window._scheduleAssignmentsDate = dateKey;
+
+        // Segments must track the assignments they describe. When the day has
+        // none saved (older rows predate the segment store), rebuild from the
+        // assignments so segment-aware readers never see the prior date's cells.
+        if (data.scheduleSegments && Object.keys(data.scheduleSegments).length > 0) {
+            window.scheduleSegments = data.scheduleSegments;
+        } else {
+            window.scheduleSegments = {};
+            try { window.AutoSegmentModel?.rebuildFromAssignments?.(); } catch (_e) {}
+        }
+
+        if (data.unifiedTimes?.length > 0) {
+            window.unifiedTimes = data.unifiedTimes;
+        }
+        if (data.divisionTimes && Object.keys(data.divisionTimes).length > 0) {
+            // mergeSchedules already deserializes; re-run defensively for the
+            // local-fallback path, whose payload comes straight from JSON.
+            window.divisionTimes = window.DivisionTimesSystem?.deserialize?.(data.divisionTimes) || data.divisionTimes;
+            window._divisionTimesFromCloud = true;
+        }
+
+        // Auto-mode signals — needed before the restore below picks its branch.
+        if (data._autoGenerated === true) window._autoGenerated = true;
+        else if (data._autoGenerated === false) window._autoGenerated = false;
+
+        // BOTH skeleton globals. `manualSkeleton` is the render-side copy;
+        // `_autoSkeleton` is what the SAVE side reads back (verifiedScheduleSave,
+        // the beforeunload payload, and ScheduleDB's window fallback all use it).
+        // Leaving _autoSkeleton untouched on a date change meant that after
+        // navigating from an auto-built day A to day B, the next lazily-built
+        // save of B attached day A's skeleton to B's cloud row.
+        if (Array.isArray(data.manualSkeleton) && data.manualSkeleton.length > 0) {
+            window.manualSkeleton = data.manualSkeleton;
+            window._autoSkeleton = data.manualSkeleton;
+        } else {
+            window._autoSkeleton = null;
+        }
+
+        // ★★★ FIX v6.5: Hydrate rainy day state ★★★
+        if (data.isRainyDay === true || data.rainyDayMode === true) {
+            window.isRainyDay = true;
+        } else if (data.isRainyDay === false) {
+            window.isRainyDay = false;
+        }
+        window.rainyDayStartTime = (data.rainyDayStartTime !== null && data.rainyDayStartTime !== undefined)
+            ? data.rainyDayStartTime : null;
+
+        // Full geometry restore: reattaches _perBunkSlots for this date (clearing
+        // grades this date doesn't have), strips per-bunk geometry in manual mode,
+        // and realigns each bunk's assignments onto the slot windows so a day
+        // saved at an older grid shape doesn't render one position off.
+        try {
+            if (typeof window.loadScheduleForDate === 'function') {
+                window.loadScheduleForDate(dateKey);
+            }
+        } catch (eRestore) {
+            console.warn('🔗 Full day restore failed (payload already applied):', eRestore?.message || eRestore);
+        }
+
+        if (window.updateTable) { try { window.updateTable(); } catch (_e) {} }
+
+        console.log('🔗 Loaded schedule for', dateKey, {
+            bunks: Object.keys(window.scheduleAssignments).length,
+            slots: window.unifiedTimes?.length || 0,
+            segments: Object.keys(window.scheduleSegments || {}).length,
+            perBunkGrades: Object.keys(window.divisionTimes || {}).filter(g => window.divisionTimes[g]?._perBunkSlots).length,
+            autoGenerated: !!window._autoGenerated,
+            isRainyDay: window.isRainyDay,
+            source: source
+        });
+    }
+
+    // Clearing a day has to clear EVERY per-day global, not just assignments.
+    // Leaving segments and per-bunk geometry behind meant navigating to an empty
+    // date still drew the previous day's grid.
+    function clearDayInMemory(dateKey) {
+        window.scheduleAssignments = {};
+        window.leagueAssignments = {};
+        window.scheduleSegments = {};
+        window._scheduleAssignmentsDate = dateKey;
+        // Drop the previous day's skeleton so a generate/save on this empty date
+        // can't inherit it (the save side reads _autoSkeleton).
+        window._autoSkeleton = null;
+        try {
+            const dt = window.divisionTimes || {};
+            Object.keys(dt).forEach(g => {
+                if (dt[g]) { delete dt[g]._perBunkSlots; delete dt[g]._isPerBunk; }
+            });
+        } catch (_e) {}
+        if (window.updateTable) { try { window.updateTable(); } catch (_e) {} }
     }
 
     // =========================================================================
