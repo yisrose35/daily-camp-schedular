@@ -612,6 +612,10 @@
                 </button>
             </div>
             <div style="display:flex;gap:8px;flex-wrap:wrap;">
+                <button class="btn btn-secondary btn-sm" onclick="openComposePreview()" title="See exactly what lands in the inbox / app">
+                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg>
+                    Preview
+                </button>
                 <button class="btn btn-secondary btn-sm" id="cPreviewAllBtn" style="display:none;" onclick="showComposePreviewAll()">Preview All</button>
                 <button class="btn btn-ghost btn-sm" style="border:1px solid var(--border-light);" onclick="sendTestToMe()" title="Send yourself a real copy with merge tags filled in">
                     <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 20h9"/><path d="M16.5 3.5a2.12 2.12 0 0 1 3 3L7 19l-4 1 1-4Z"/></svg>
@@ -1199,6 +1203,9 @@
 <script src="integration_hooks.js"></script>
 <script src="campistry_cloud_bootstrap.js"></script>
 <script src="campistry_broadcast_core.js"></script>
+<!-- Branding/watermark renderer — must load BEFORE link_data, which seeds and
+     normalizes settings.branding through it on store load. -->
+<script src="campistry_link_branding.js"></script>
 <script src="campistry_link_data.js"></script>
 <script src="face_match_core.js"></script>
 <script src="campistry_face_shared.js"></script>
@@ -1922,27 +1929,35 @@ function _linkCampName() {
 }
 // Only accept raster data URLs — an SVG data URL can carry <script>.
 function _isSafeImg(s) { return typeof s === 'string' && /^data:image\/(png|jpeg|jpg|gif|webp);base64,[A-Za-z0-9+\/=]+$/.test(s); }
+function _LB() { return window.LinkBranding || null; }
 function _linkBranding() {
     var st = _linkStore();
     var b = (st && st.settings && st.settings.branding) || {};
-    return { logo: b.logo || '', brandColor: b.brandColor || '#2A7A35', footer: (b.footer != null ? b.footer : '') };
+    var LB = _LB();
+    if (LB) return LB.normalize(b);
+    return { logo: b.logo || '', brandColor: b.brandColor || '#2A7A35', footer: (b.footer != null ? b.footer : ''), header: 'bar', watermark: { enabled: false } };
 }
 function _linkSaveBranding(b) {
     var cl = CL(); if (!cl) { toast('Not ready — try again in a moment'); return false; }
+    var LB = _LB();
     var st = cl.getStore(); if (!st.settings) st.settings = {};
-    st.settings.branding = b; cl.save(); return true;
+    st.settings.branding = LB ? LB.normalize(b) : b; cl.save(); return true;
 }
 
-// Branded preview markup — logo/color header, escaped subject + body, footer.
-function _brandedPreviewHtml(subj, body) {
+// Branded preview markup — the SAME renderer the outgoing email uses, so what
+// the office sees here is what the parent gets. `variant` is 'email' | 'app'
+// | 'sms'.
+function _brandedPreviewHtml(subj, body, variant) {
+    var LB = _LB();
     var b = _linkBranding();
-    var brand = /^#[0-9a-fA-F]{3,8}$/.test(b.brandColor) ? b.brandColor : '#2A7A35';
-    var logo = _isSafeImg(b.logo) ? '<img src="' + b.logo + '" alt="" style="max-height:40px;max-width:160px;object-fit:contain;display:block;margin:0 auto 6px;">' : '';
-    var head = '<div style="background:' + brand + ';color:#fff;padding:9px 12px;margin:-11px -13px 10px;text-align:center;">' + logo + '<div style="font-weight:700;font-size:.82rem;">' + esc(_linkCampName()) + '</div></div>';
-    var subjH = subj ? '<div style="font-weight:700;margin:0 0 6px;color:var(--slate-800);">' + esc(subj) + '</div>' : '';
-    var bodyH = '<div style="white-space:pre-wrap;color:var(--slate-700);">' + esc(body) + '</div>';
-    var foot = b.footer ? '<div style="margin-top:10px;padding-top:8px;border-top:1px solid var(--border-light);font-size:.75rem;color:var(--text-muted);white-space:pre-wrap;">' + esc(b.footer) + '</div>' : '';
-    return head + subjH + bodyH + foot;
+    if (LB) {
+        return LB.buildPreviewHtml({
+            variant: variant || 'email', subject: subj, body: body,
+            branding: b, campName: _linkCampName()
+        });
+    }
+    // LinkBranding failed to load — plain fallback rather than a blank preview.
+    return '<div style="white-space:pre-wrap;color:var(--slate-700);">' + esc(body) + '</div>';
 }
 
 // ── saved (custom) templates ──
@@ -1992,8 +2007,16 @@ function deleteSavedTemplate(id, ev) {
 }
 
 // ── branding editor (modal) ──
+// Working copy while the modal is open. Everything edits this, the live sample
+// re-renders off it, and only "Save branding" commits it to the store — so
+// abandoning the modal can't leave half-applied branding behind. (The logo
+// upload is the one exception: it writes straight through, as it did before,
+// because a file input has nothing to roll back to.)
+var _lbDraft = null;
+
 function openLinkBranding() {
-    var b = _linkBranding();
+    _lbDraft = _linkBranding();
+    var b = _lbDraft;
     var prev = document.getElementById('linkBrandModal'); if (prev) prev.remove();
     var ov = document.createElement('div');
     ov.id = 'linkBrandModal';
@@ -2001,31 +2024,152 @@ function openLinkBranding() {
     var logoPrev = _isSafeImg(b.logo)
         ? '<img id="lbLogoImg" src="' + b.logo + '" alt="logo" style="max-height:70px;max-width:200px;object-fit:contain;border:1px solid var(--border-light);border-radius:8px;padding:6px;background:#fff;">'
         : '<div id="lbLogoImg" style="font-size:.8rem;color:var(--text-muted);">No logo uploaded</div>';
+    var w = b.watermark || {};
+    function opt(v, label, cur) { return '<option value="' + v + '"' + (cur === v ? ' selected' : '') + '>' + label + '</option>'; }
+
     ov.innerHTML =
-        '<div style="background:#fff;border-radius:14px;width:min(460px,100%);max-height:90vh;overflow:auto;box-shadow:0 24px 70px rgba(0,0,0,.3);">' +
-            '<div style="display:flex;justify-content:space-between;align-items:center;padding:16px 20px;border-bottom:1px solid var(--border-light);">' +
+        '<div style="background:#fff;border-radius:14px;width:min(760px,100%);max-height:92vh;overflow:auto;box-shadow:0 24px 70px rgba(0,0,0,.3);">' +
+            '<div style="display:flex;justify-content:space-between;align-items:center;padding:16px 20px;border-bottom:1px solid var(--border-light);position:sticky;top:0;background:#fff;z-index:2;">' +
                 '<h2 style="margin:0;font-size:1.05rem;font-weight:700;">Message Branding</h2>' +
                 '<button class="btn btn-ghost btn-sm" onclick="closeLinkBranding()" style="padding:4px 10px;">✕</button>' +
             '</div>' +
-            '<div style="padding:18px 20px;">' +
+            '<div style="display:flex;gap:0;flex-wrap:wrap;">' +
+
+            // ── left: controls ──
+            '<div style="flex:1 1 380px;min-width:300px;padding:18px 20px;">' +
                 '<div class="lk-field"><label>Logo</label><div style="margin-bottom:8px;">' + logoPrev + '</div>' +
                     '<input type="file" id="lbLogoFile" accept="image/png,image/jpeg,image/gif,image/webp" onchange="_lbUploadLogo(this)" style="font-size:.82rem;">' +
                     (_isSafeImg(b.logo) ? ' <button class="btn btn-ghost btn-sm" style="color:#EF4444;" onclick="_lbRemoveLogo()">Remove</button>' : '') +
-                    '<div style="font-size:.7rem;color:var(--text-muted);margin-top:4px;">PNG, JPG, GIF or WebP · shown at the top of the message.</div></div>' +
-                '<div style="display:flex;gap:12px;margin-top:6px;">' +
-                    '<div class="lk-field" style="flex:0 0 120px;"><label>Brand color</label><input type="color" id="lbColor" value="' + (/^#[0-9a-fA-F]{3,8}$/.test(b.brandColor) ? b.brandColor : '#2A7A35') + '" style="width:100%;height:38px;border:1px solid var(--border-light);border-radius:8px;background:#fff;cursor:pointer;"></div>' +
-                    '<div class="lk-field" style="flex:1;"><label>Footer / signature</label><textarea id="lbFooter" class="lk-textarea" rows="3" style="min-height:auto;" placeholder="e.g. Warm regards, The Camp Office · (555) 123-4567">' + esc(b.footer) + '</textarea></div>' +
+                    '<div style="font-size:.7rem;color:var(--text-muted);margin-top:4px;">PNG, JPG, GIF or WebP, under 500&nbsp;KB.</div></div>' +
+
+                '<div style="display:flex;gap:12px;margin-top:6px;flex-wrap:wrap;">' +
+                    '<div class="lk-field" style="flex:0 0 110px;"><label>Brand color</label><input type="color" id="lbColor" value="' + esc(b.brandColor) + '" oninput="_lbTouch()" style="width:100%;height:38px;border:1px solid var(--border-light);border-radius:8px;background:#fff;cursor:pointer;"></div>' +
+                    '<div class="lk-field" style="flex:1;min-width:150px;"><label>Header style</label><select class="lk-input" id="lbHeader" onchange="_lbTouch()">' +
+                        opt('bar', 'Colour bar with logo', b.header) +
+                        opt('plain', 'White with logo', b.header) +
+                        opt('none', 'No header', b.header) +
+                    '</select></div>' +
+                '</div>' +
+
+                '<div class="lk-field"><label>Footer / signature</label>' +
+                    '<textarea id="lbFooter" class="lk-textarea" rows="2" style="min-height:auto;" oninput="_lbTouch()" placeholder="e.g. Warm regards, The Camp Office · (555) 123-4567">' + esc(b.footer) + '</textarea></div>' +
+
+                // ── watermark ──
+                '<div style="margin-top:16px;padding-top:14px;border-top:1px solid var(--border-light);">' +
+                    '<label class="checkbox-row" style="display:flex;align-items:center;gap:8px;cursor:pointer;font-weight:600;font-size:.88rem;">' +
+                        '<input type="checkbox" id="lbWmOn"' + (w.enabled ? ' checked' : '') + ' onchange="_lbTouch()"> Watermark the message' +
+                    '</label>' +
+                    '<div style="font-size:.72rem;color:var(--text-muted);margin:4px 0 10px;">A faint mark behind the text — your logo, a different image, or a word like DRAFT.</div>' +
+                    '<div id="lbWmFields">' +
+                        '<div style="display:flex;gap:10px;flex-wrap:wrap;">' +
+                            '<div class="lk-field" style="flex:1;min-width:140px;"><label>Use</label><select class="lk-input" id="lbWmSource" onchange="_lbTouch()">' +
+                                opt('logo', 'My logo', w.source) +
+                                opt('custom', 'A different image', w.source) +
+                                opt('text', 'Text', w.source) +
+                            '</select></div>' +
+                            '<div class="lk-field" style="flex:1;min-width:140px;"><label>Placement</label><select class="lk-input" id="lbWmPos" onchange="_lbTouch()">' +
+                                opt('center', 'Centred', w.position) +
+                                opt('tile', 'Tiled', w.position) +
+                                opt('corner', 'Bottom corner', w.position) +
+                            '</select></div>' +
+                        '</div>' +
+                        '<div class="lk-field" id="lbWmImgRow" style="display:none;"><label>Watermark image</label>' +
+                            '<input type="file" id="lbWmFile" accept="image/png,image/jpeg,image/gif,image/webp" onchange="_lbUploadWatermark(this)" style="font-size:.82rem;">' +
+                            '<span id="lbWmImgState" style="font-size:.72rem;color:var(--text-muted);margin-left:6px;"></span></div>' +
+                        '<div class="lk-field" id="lbWmTextRow" style="display:none;"><label>Watermark text</label>' +
+                            '<input type="text" class="lk-input" id="lbWmText" maxlength="60" value="' + esc(w.text || '') + '" oninput="_lbTouch()" placeholder="e.g. DRAFT"></div>' +
+                        '<div style="display:flex;gap:12px;flex-wrap:wrap;">' +
+                            '<div class="lk-field" style="flex:1;min-width:120px;"><label>Strength <span id="lbWmOpVal" style="font-weight:400;color:var(--text-muted);"></span></label>' +
+                                '<input type="range" id="lbWmOpacity" min="2" max="45" step="1" value="' + Math.round((w.opacity || 0.08) * 100) + '" oninput="_lbTouch()" style="width:100%;"></div>' +
+                            '<div class="lk-field" style="flex:1;min-width:120px;"><label>Size <span id="lbWmSzVal" style="font-weight:400;color:var(--text-muted);"></span></label>' +
+                                '<input type="range" id="lbWmSize" min="15" max="100" step="5" value="' + (w.size || 55) + '" oninput="_lbTouch()" style="width:100%;"></div>' +
+                            '<div class="lk-field" style="flex:1;min-width:120px;"><label>Tilt <span id="lbWmRotVal" style="font-weight:400;color:var(--text-muted);"></span></label>' +
+                                '<input type="range" id="lbWmRotate" min="-90" max="90" step="5" value="' + (w.rotate || 0) + '" oninput="_lbTouch()" style="width:100%;"></div>' +
+                        '</div>' +
+                        '<div style="font-size:.7rem;color:var(--text-muted);line-height:1.5;">Watermarks show in the parent app, in the preview, and in email on Apple Mail, Gmail, Yahoo and Thunderbird. Outlook for Windows ignores them and shows a clean message instead.</div>' +
+                    '</div>' +
                 '</div>' +
             '</div>' +
-            '<div style="display:flex;justify-content:flex-end;gap:8px;padding:14px 20px;border-top:1px solid var(--border-light);">' +
+
+            // ── right: live sample ──
+            '<div style="flex:1 1 300px;min-width:280px;padding:18px 20px;background:var(--slate-50);border-left:1px solid var(--border-light);">' +
+                '<div style="font-size:.71rem;font-weight:700;color:var(--text-muted);text-transform:uppercase;letter-spacing:.05em;margin-bottom:8px;">Live sample</div>' +
+                '<div id="lbSample"></div>' +
+            '</div>' +
+
+            '</div>' +
+            '<div style="display:flex;justify-content:flex-end;gap:8px;padding:14px 20px;border-top:1px solid var(--border-light);position:sticky;bottom:0;background:#fff;">' +
                 '<button class="btn btn-secondary btn-sm" onclick="closeLinkBranding()">Cancel</button>' +
                 '<button class="btn btn-primary btn-sm" onclick="_lbSave()">Save branding</button>' +
             '</div>' +
         '</div>';
     ov.addEventListener('mousedown', function (e) { if (e.target === ov) closeLinkBranding(); });
     document.body.appendChild(ov);
+    _lbTouch();
 }
-function closeLinkBranding() { var e = document.getElementById('linkBrandModal'); if (e) e.remove(); }
+function closeLinkBranding() { _lbDraft = null; var e = document.getElementById('linkBrandModal'); if (e) e.remove(); }
+
+/** Read every control into _lbDraft, re-composite the watermark, redraw. */
+function _lbTouch() {
+    if (!_lbDraft) return;
+    function val(id) { var e = document.getElementById(id); return e ? e.value : ''; }
+    function on(id) { var e = document.getElementById(id); return !!(e && e.checked); }
+    var d = _lbDraft;
+    d.brandColor = val('lbColor') || '#2A7A35';
+    d.header = val('lbHeader') || 'bar';
+    d.footer = val('lbFooter') || '';
+    var w = d.watermark || (d.watermark = {});
+    w.enabled = on('lbWmOn');
+    w.source = val('lbWmSource') || 'logo';
+    w.position = val('lbWmPos') || 'center';
+    w.text = val('lbWmText') || '';
+    w.opacity = (parseFloat(val('lbWmOpacity')) || 8) / 100;
+    w.size = parseInt(val('lbWmSize'), 10) || 55;
+    w.rotate = parseInt(val('lbWmRotate'), 10) || 0;
+
+    // Show only the field the chosen source needs.
+    var fields = document.getElementById('lbWmFields');
+    if (fields) fields.style.opacity = w.enabled ? '1' : '.45';
+    if (fields) fields.style.pointerEvents = w.enabled ? '' : 'none';
+    var imgRow = document.getElementById('lbWmImgRow');
+    var txtRow = document.getElementById('lbWmTextRow');
+    if (imgRow) imgRow.style.display = (w.source === 'custom') ? '' : 'none';
+    if (txtRow) txtRow.style.display = (w.source === 'text') ? '' : 'none';
+    var imgState = document.getElementById('lbWmImgState');
+    if (imgState) imgState.textContent = _isSafeImg(w.image) ? 'Image set' : 'No image yet';
+    var o = document.getElementById('lbWmOpVal'); if (o) o.textContent = Math.round(w.opacity * 100) + '%';
+    var s = document.getElementById('lbWmSzVal'); if (s) s.textContent = w.size + '%';
+    var r = document.getElementById('lbWmRotVal'); if (r) r.textContent = w.rotate + '°';
+
+    _lbRecomposite().then(_lbDrawSample);
+}
+
+/**
+ * Re-flatten the watermark at the current opacity. Email clients can't apply
+ * opacity to a background image, so the faded PNG has to be baked here.
+ */
+function _lbRecomposite() {
+    var LB = _LB();
+    if (!LB || !_lbDraft) return Promise.resolve();
+    if (!_lbDraft.watermark.enabled) { _lbDraft.watermark.rendered = ''; return Promise.resolve(); }
+    var draft = _lbDraft;
+    return LB.renderWatermark(draft).then(function (url) {
+        if (_lbDraft === draft) draft.watermark.rendered = url || '';
+    }, function () { /* leave the previous render in place */ });
+}
+
+function _lbDrawSample() {
+    var el = document.getElementById('lbSample'); if (!el || !_lbDraft) return;
+    var LB = _LB(); if (!LB) return;
+    el.innerHTML = LB.buildPreviewHtml({
+        variant: 'email',
+        subject: 'Visiting Day — Sunday',
+        body: 'Hi Mrs. Klein,\n\nVisiting Day is this Sunday. Gates open at 10:00 AM and lunch is served at 12:30 in the dining room.\n\nSee you there!',
+        branding: _lbDraft,
+        campName: _linkCampName()
+    });
+}
+
 function _lbUploadLogo(input) {
     var file = input && input.files && input.files[0]; if (!file) return;
     if (file.size > 500 * 1024) { toast('Logo must be under 500 KB'); input.value = ''; return; }
@@ -2035,11 +2179,26 @@ function _lbUploadLogo(input) {
         if (!_isSafeImg(url)) { toast('Unsupported image — use PNG, JPG, GIF or WebP'); return; }
         var b = _linkBranding(); b.logo = url;
         if (_linkSaveBranding(b)) {
+            if (_lbDraft) _lbDraft.logo = url;
             var img = document.getElementById('lbLogoImg');
             if (img) { var n = document.createElement('img'); n.id = 'lbLogoImg'; n.src = url; n.alt = 'logo'; n.style.cssText = 'max-height:70px;max-width:200px;object-fit:contain;border:1px solid var(--border-light);border-radius:8px;padding:6px;background:#fff;'; img.replaceWith(n); }
+            _lbTouch();
             updateComposePreview();
             toast('Logo uploaded');
         }
+    };
+    reader.onerror = function () { toast('Could not read that file'); };
+    reader.readAsDataURL(file);
+}
+function _lbUploadWatermark(input) {
+    var file = input && input.files && input.files[0]; if (!file) return;
+    if (file.size > 500 * 1024) { toast('Watermark image must be under 500 KB'); input.value = ''; return; }
+    var reader = new FileReader();
+    reader.onload = function (e) {
+        var url = e.target.result;
+        if (!_isSafeImg(url)) { toast('Unsupported image — use PNG, JPG, GIF or WebP'); return; }
+        if (_lbDraft) { _lbDraft.watermark.image = url; _lbTouch(); }
+        toast('Watermark image set');
     };
     reader.onerror = function () { toast('Could not read that file'); };
     reader.readAsDataURL(file);
@@ -2049,10 +2208,12 @@ function _lbRemoveLogo() {
     if (_linkSaveBranding(b)) { closeLinkBranding(); openLinkBranding(); updateComposePreview(); toast('Logo removed'); }
 }
 function _lbSave() {
-    var color = (document.getElementById('lbColor') || {}).value || '#2A7A35';
-    var footer = (document.getElementById('lbFooter') || {}).value || '';
-    var b = _linkBranding(); b.brandColor = color; b.footer = footer;
-    if (_linkSaveBranding(b)) { closeLinkBranding(); updateComposePreview(); toast('Branding saved'); }
+    if (!_lbDraft) { closeLinkBranding(); return; }
+    // Make sure the flattened watermark matches the final slider values before
+    // it's committed — the sliders fire fast and the canvas pass is async.
+    _lbRecomposite().then(function () {
+        if (_linkSaveBranding(_lbDraft)) { closeLinkBranding(); updateComposePreview(); toast('Branding saved'); }
+    });
 }
 
 // Scope change — show/hide the secondary filter (as toggle pills) or the search
@@ -2347,11 +2508,123 @@ function updateComposePreview() {
     if (!targets.length || !body.trim()) { wrap.style.display = 'none'; return; }
     var busMap = _buildBusRouteMap();
     var t = targets[0];
-    // Branded preview: logo/color header + escaped subject & body + footer.
-    pre.innerHTML = _brandedPreviewHtml(_applyMergeTags(subj, t, busMap), _applyMergeTags(body, t, busMap));
+    // Preview the surface they're actually sending on: email if email is one of
+    // the selected channels, otherwise the in-app card.
+    var variant = (compChannels.indexOf('email') >= 0) ? 'email' : 'app';
+    pre.innerHTML = _brandedPreviewHtml(_applyMergeTags(subj, t, busMap), _applyMergeTags(body, t, busMap), variant);
     if (lbl) lbl.textContent = '— ' + t.parentName + (t.camperName ? ' (' + t.camperName + ')' : '');
     wrap.style.display = '';
     _updateScopeCount();
+    if (_cpvOpen) _cpvRender();
+}
+
+// ── full-size preview (every channel, step through every recipient) ─────────
+// The inline strip is a thumbnail; this is the "show me exactly what lands"
+// view, including the real HTML email rather than an approximation of it.
+var _cpvOpen = false, _cpvIdx = 0, _cpvVariant = 'email';
+
+function openComposePreview() {
+    var targets = _getComposeTargets();
+    var body = ((document.getElementById('cBody') || {}).value || '').trim();
+    if (!targets.length) { toast('Pick a recipient or group first'); return; }
+    if (!body) { toast('Write a message first'); return; }
+    _cpvOpen = true;
+    _cpvIdx = 0;
+    _cpvVariant = (compChannels.indexOf('email') >= 0) ? 'email'
+                : (compChannels.indexOf('sms') >= 0) ? 'sms' : 'app';
+    var prev = document.getElementById('cpvModal'); if (prev) prev.remove();
+    var ov = document.createElement('div');
+    ov.id = 'cpvModal';
+    ov.style.cssText = 'position:fixed;inset:0;z-index:1300;background:rgba(15,23,42,.55);display:flex;align-items:center;justify-content:center;padding:16px;';
+    ov.innerHTML =
+        '<div style="background:#fff;border-radius:14px;width:min(720px,100%);max-height:92vh;display:flex;flex-direction:column;box-shadow:0 24px 70px rgba(0,0,0,.3);">' +
+            '<div style="display:flex;justify-content:space-between;align-items:center;gap:10px;padding:14px 18px;border-bottom:1px solid var(--border-light);flex-wrap:wrap;">' +
+                '<h2 style="margin:0;font-size:1.02rem;font-weight:700;">Preview</h2>' +
+                '<div class="channel-btns" id="cpvTabs">' +
+                    '<button class="channel-btn" data-v="email" onclick="_cpvSetVariant(\'email\')">Email</button>' +
+                    '<button class="channel-btn" data-v="app" onclick="_cpvSetVariant(\'app\')">In-App</button>' +
+                    '<button class="channel-btn" data-v="sms" onclick="_cpvSetVariant(\'sms\')">SMS</button>' +
+                '</div>' +
+                '<button class="btn btn-ghost btn-sm" onclick="closeComposePreview()" style="padding:4px 10px;">✕</button>' +
+            '</div>' +
+            '<div style="display:flex;align-items:center;justify-content:space-between;gap:8px;padding:9px 18px;background:var(--slate-50);border-bottom:1px solid var(--border-light);flex-wrap:wrap;">' +
+                '<button class="btn btn-secondary btn-sm" onclick="_cpvStep(-1)">‹ Prev</button>' +
+                '<div id="cpvWho" style="font-size:.8rem;font-weight:600;color:var(--slate-700);text-align:center;flex:1;min-width:150px;"></div>' +
+                '<button class="btn btn-secondary btn-sm" onclick="_cpvStep(1)">Next ›</button>' +
+            '</div>' +
+            '<div id="cpvBody" style="padding:18px;overflow:auto;background:var(--slate-50);flex:1;"></div>' +
+            '<div style="display:flex;justify-content:space-between;align-items:center;gap:8px;padding:12px 18px;border-top:1px solid var(--border-light);flex-wrap:wrap;">' +
+                '<span id="cpvNote" style="font-size:.72rem;color:var(--text-muted);"></span>' +
+                '<div style="display:flex;gap:8px;">' +
+                    '<button class="btn btn-ghost btn-sm" style="border:1px solid var(--border-light);" onclick="_cpvCopyHtml()">Copy email HTML</button>' +
+                    '<button class="btn btn-secondary btn-sm" onclick="closeComposePreview()">Close</button>' +
+                '</div>' +
+            '</div>' +
+        '</div>';
+    ov.addEventListener('mousedown', function (e) { if (e.target === ov) closeComposePreview(); });
+    document.body.appendChild(ov);
+    _cpvRender();
+}
+function closeComposePreview() { _cpvOpen = false; var e = document.getElementById('cpvModal'); if (e) e.remove(); }
+function _cpvSetVariant(v) { _cpvVariant = v; _cpvRender(); }
+function _cpvStep(d) {
+    var n = _getComposeTargets().length; if (!n) return;
+    _cpvIdx = ((_cpvIdx + d) % n + n) % n;
+    _cpvRender();
+}
+function _cpvCurrent() {
+    var targets = _getComposeTargets();
+    if (!targets.length) return null;
+    if (_cpvIdx >= targets.length) _cpvIdx = 0;
+    var t = targets[_cpvIdx];
+    var busMap = _buildBusRouteMap();
+    return {
+        target: t, total: targets.length,
+        subject: _applyMergeTags(((document.getElementById('cSubj') || {}).value || ''), t, busMap),
+        body: _applyMergeTags(((document.getElementById('cBody') || {}).value || ''), t, busMap)
+    };
+}
+function _cpvRender() {
+    var host = document.getElementById('cpvBody'); if (!host) return;
+    var cur = _cpvCurrent();
+    if (!cur) { host.innerHTML = '<div style="text-align:center;color:var(--text-muted);font-size:.85rem;">No recipients selected.</div>'; return; }
+    document.querySelectorAll('#cpvTabs .channel-btn').forEach(function (b) {
+        b.classList.toggle('selected', b.dataset.v === _cpvVariant);
+    });
+    var who = document.getElementById('cpvWho');
+    if (who) who.textContent = (_cpvIdx + 1) + ' of ' + cur.total + ' · ' + cur.target.parentName +
+        (cur.target.camperName ? ' (' + cur.target.camperName + ')' : '');
+    var note = document.getElementById('cpvNote');
+    if (note) {
+        note.textContent = _cpvVariant === 'email'
+            ? (cur.target.parentEmail || 'No email on file for this parent')
+            : _cpvVariant === 'sms'
+                ? (cur.target.parentPhone || 'No phone on file for this parent')
+                : 'Shown in the parent app';
+    }
+
+    if (_cpvVariant === 'email') {
+        // Render the real email document in an iframe so its own styles apply
+        // exactly as a mail client would resolve them — no bleed either way.
+        var cl = CL();
+        var html = cl && cl.buildEmailHtml ? cl.buildEmailHtml(cur.subject, cur.body) : '';
+        if (!html) { host.innerHTML = _brandedPreviewHtml(cur.subject, cur.body, 'email'); return; }
+        host.innerHTML = '<iframe id="cpvFrame" sandbox="allow-same-origin" style="width:100%;height:min(58vh,620px);border:1px solid var(--border-light);border-radius:10px;background:#fff;"></iframe>';
+        var f = document.getElementById('cpvFrame');
+        try { f.srcdoc = html; } catch (e) { host.innerHTML = _brandedPreviewHtml(cur.subject, cur.body, 'email'); }
+        return;
+    }
+    host.innerHTML = _brandedPreviewHtml(cur.subject, cur.body, _cpvVariant);
+}
+function _cpvCopyHtml() {
+    var cur = _cpvCurrent(); if (!cur) return;
+    var cl = CL();
+    var html = cl && cl.buildEmailHtml ? cl.buildEmailHtml(cur.subject, cur.body) : '';
+    if (!html) { toast('Nothing to copy'); return; }
+    if (navigator.clipboard && navigator.clipboard.writeText) {
+        navigator.clipboard.writeText(html).then(function () { toast('Email HTML copied'); },
+                                                 function () { toast('Could not copy'); });
+    } else { toast('Clipboard unavailable in this browser'); }
 }
 
 function insertTag(tag) {
@@ -2369,6 +2642,8 @@ function toggleCompCh(btn) {
     compChannels = [];
     document.querySelectorAll('#cChannelBtns .channel-btn.selected').forEach(function(b) { compChannels.push(b.dataset.ch); });
     if (!compChannels.length) { btn.classList.add('selected'); compChannels = [btn.dataset.ch]; }
+    // The preview mirrors the selected channel, so it has to follow this.
+    updateComposePreview();
 }
 
 function showComposePreviewAll() {

@@ -54,9 +54,17 @@
             autoNotifyScheduleChanges: false,
             // Message/email branding — shown in the admin compose preview and
             // synced to camp_state_kv so the email/portal layer can render it.
-            branding: { logo: '', brandColor: '#2A7A35', footer: '' }
+            // Shape is owned by LinkBranding.normalize(); the literal below is
+            // only the cold-start seed.
+            branding: _defaultBranding()
         }
     };
+
+    /** Branding seed. Uses LinkBranding when it's loaded, else a minimal stub. */
+    function _defaultBranding() {
+        var LB = (typeof window !== 'undefined' && window.LinkBranding) || null;
+        return LB ? LB.defaults() : { logo: '', brandColor: '#2A7A35', footer: '' };
+    }
 
     // =========================================================================
     // SUPABASE HELPERS
@@ -87,11 +95,15 @@
                     smsApiKey: '', smsFromNumber: '', smsPrefixCampName: true,
                     defaultChannels: ['app'],
                     autoNotifyBusRoutes: false, autoNotifyScheduleChanges: false,
-                    branding: { logo: '', brandColor: '#2A7A35', footer: '' }
+                    branding: _defaultBranding()
                 }, parsed.settings || {});
                 if (!Array.isArray(_store.scheduled)) _store.scheduled = [];
-                if (!_store.settings.branding || typeof _store.settings.branding !== 'object') {
-                    _store.settings.branding = { logo: '', brandColor: '#2A7A35', footer: '' };
+                // Normalize through LinkBranding so a store written before the
+                // watermark fields existed comes back with them filled in.
+                var _LB = (typeof window !== 'undefined' && window.LinkBranding) || null;
+                if (_LB) _store.settings.branding = _LB.normalize(_store.settings.branding);
+                else if (!_store.settings.branding || typeof _store.settings.branding !== 'object') {
+                    _store.settings.branding = _defaultBranding();
                 }
             }
         } catch(e) { console.warn('[Link] Store load error:', e); }
@@ -1414,7 +1426,34 @@
         });
     }
 
+    /**
+     * Attach the branded HTML + plain-text parts to an outgoing record.
+     *
+     * Email used to go out as the bare `body` string, so the logo, brand
+     * colour, footer and watermark the office set up in Branding never reached
+     * the inbox — the admin preview was showing something the parent would
+     * never see. Both parts are stamped onto the record here so whatever
+     * eventually talks to SendGrid/Mailgun/SMTP has them ready, and so the
+     * "no provider configured" path can hand the office real HTML to paste.
+     */
+    function _decorateEmail(record) {
+        var LB = (typeof window !== 'undefined' && window.LinkBranding) || null;
+        if (!LB) return record;
+        var opts = {
+            subject: record.subject || '',
+            body: record.body || '',
+            branding: (_store.settings && _store.settings.branding) || null,
+            campName: (data.getCampName && data.getCampName()) || ''
+        };
+        try {
+            record.emailHtml = LB.buildEmailHtml(opts);
+            record.emailText = LB.buildEmailText(opts);
+        } catch (e) { console.warn('[Link] Branded email build failed:', e); }
+        return record;
+    }
+
     function _sendEmail(record) {
+        _decorateEmail(record);
         var provider = _store.settings.emailProvider;
         if (provider === 'none' || !_store.settings.emailApiKey) {
             console.log('[Link] Email dispatch — no provider configured. Would send to:', record.parentEmail);
@@ -1604,6 +1643,29 @@
 
         // Convenience
         getStore: function() { return _store; },
+        /** Branding, always normalized — the one read every surface should use. */
+        getBranding: function() {
+            var LB = window.LinkBranding;
+            var raw = (_store.settings && _store.settings.branding) || null;
+            return LB ? LB.normalize(raw) : (raw || {});
+        },
+        saveBranding: function(b) {
+            var LB = window.LinkBranding;
+            if (!_store.settings) _store.settings = {};
+            _store.settings.branding = LB ? LB.normalize(b) : b;
+            saveStore();
+            return _store.settings.branding;
+        },
+        /** The exact HTML that would land in a parent's inbox for this message. */
+        buildEmailHtml: function(subject, body, opts) {
+            var LB = window.LinkBranding;
+            if (!LB) return '';
+            return LB.buildEmailHtml(Object.assign({
+                subject: subject, body: body,
+                branding: (_store.settings && _store.settings.branding) || null,
+                campName: (data.getCampName && data.getCampName()) || ''
+            }, opts || {}));
+        },
         refresh: function() { loadStore(); },
         save: saveStore,
         loadCloudHistory: loadCloudHistory,
