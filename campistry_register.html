@@ -156,7 +156,9 @@ body{font-family:var(--font);background:var(--s50);color:var(--s800);-webkit-fon
 <div id="promoMsg" class="promo-msg" style="display:none"></div></div>
 <p style="font-size:.8rem;color:var(--s500);margin-bottom:8px">Select how you'd like to pay:</p>
 <div id="payOpts">
-<label class="po" onclick="selPay(this,'credit_card')"><input type="radio" name="pm" value="credit_card"><div><div class="po-l">Credit / Debit Card</div><div class="po-d">Visa, Mastercard, Amex</div></div></label>
+<!-- Credit only. Debit is not offered anywhere in Campistry — see the note in
+     campistry_snacks.js (PAY_METHODS) for the reasoning. -->
+<label class="po" onclick="selPay(this,'credit_card')"><input type="radio" name="pm" value="credit_card"><div><div class="po-l">Credit Card</div><div class="po-d">Visa, Mastercard, Amex — credit cards only</div></div></label>
 <label class="po" onclick="selPay(this,'ach')"><input type="radio" name="pm" value="ach"><div><div class="po-l">ACH / Bank Transfer</div><div class="po-d">Direct from bank account</div></div></label>
 <label class="po" onclick="selPay(this,'zelle')"><input type="radio" name="pm" value="zelle"><div><div class="po-l">Zelle</div><div class="po-d">Send directly via Zelle</div></div></label>
 <label class="po" onclick="selPay(this,'check')"><input type="radio" name="pm" value="check"><div><div class="po-l">Check</div><div class="po-d">Mail or drop off</div></div></label>

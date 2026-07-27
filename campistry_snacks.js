@@ -22,6 +22,39 @@ const STORE_KEY = 'campGlobalSettings_v1';
 const SNACKS_LOCAL_KEY = 'campistry_snacks_data'; // fallback
 
 // ==========================================================================
+// PAYMENT METHODS
+//
+// A canteen balance is prepaid money the camper can later draw back out as
+// physical cash (see cashOut below). That makes funding it a cash-equivalent
+// transaction, which is exactly what card networks prohibit on debit — so
+// DEBIT IS NOT AN OPTION HERE, by design, not by omission. Anyone reaching
+// for it gets told why rather than finding a gap.
+//
+// `on` is the out-of-the-box default; the office toggles these in Settings.
+// ==========================================================================
+const PAY_METHODS = [
+    { id: 'cash',   label: 'Cash',            on: true  },
+    { id: 'credit', label: 'Credit card',     on: true  },
+    { id: 'check',  label: 'Check',           on: true  },
+    { id: 'ach',    label: 'Bank transfer / ACH', on: false },
+    { id: 'zelle',  label: 'Zelle',           on: false },
+    { id: 'office', label: 'Charged to camp bill', on: false }
+];
+// Surfaced in Settings as a disabled row with the reason, so the absence reads
+// as a decision. Never accepted by addDep().
+const BLOCKED_PAY_METHODS = [
+    { id: 'debit', label: 'Debit card', reason: 'Not accepted — cash-equivalent' }
+];
+
+const DEFAULT_SNACKS_SETTINGS = {
+    payMethods: PAY_METHODS.filter(m => m.on).map(m => m.id),
+    defaultDailyLimit: 10,
+    cashDailyMax: 20,           // per camper, per day; 0 = uncapped
+    cashReasonRequired: true,
+    cashAllowNegative: false    // off = a camper can't withdraw money they don't have
+};
+
+// ==========================================================================
 // DATA LAYER — Read from Campistry Me, persist Snacks-specific data
 // ==========================================================================
 
@@ -198,9 +231,10 @@ function ensureAccountsForRoster() {
     camperList = getCamperList();
     if (!snacks.accounts) snacks.accounts = {};
     let changed = false;
+    const _dflt = getSettings().defaultDailyLimit;
     camperList.forEach(c => {
         if (!snacks.accounts[c.name]) {
-            snacks.accounts[c.name] = { balance: 0, dailyLimit: 10, spentToday: 0 };
+            snacks.accounts[c.name] = { balance: 0, dailyLimit: _dflt, spentToday: 0 };
             changed = true;
         }
     });
@@ -213,12 +247,51 @@ function ensureAccountsForRoster() {
 }
 
 function getAccount(name) {
-    const a = snacks.accounts[name] || { balance: 0, dailyLimit: 10, spentToday: 0 };
+    const a = snacks.accounts[name] || { balance: 0, dailyLimit: getSettings().defaultDailyLimit, spentToday: 0 };
     // Daily spend resets at midnight
     const t = new Date();
     const today = t.getFullYear() + '-' + String(t.getMonth() + 1).padStart(2, '0') + '-' + String(t.getDate()).padStart(2, '0');
     if (a.lastSpendDate !== today) { a.spentToday = 0; a.lastSpendDate = today; }
     return a;
+}
+
+// ==========================================================================
+// SETTINGS
+// ==========================================================================
+
+function getSettings() {
+    const s = (snacks && snacks.settings) || {};
+    const out = Object.assign({}, DEFAULT_SNACKS_SETTINGS, s);
+    // A stored list could name a method we've since retired — or `debit`, if an
+    // older build ever wrote one. Filter against the live catalogue.
+    const valid = PAY_METHODS.map(m => m.id);
+    out.payMethods = (Array.isArray(out.payMethods) ? out.payMethods : []).filter(id => valid.includes(id));
+    if (!out.payMethods.length) out.payMethods = ['cash', 'credit'];
+    return out;
+}
+
+function payMethodLabel(id) {
+    const m = PAY_METHODS.find(x => x.id === id);
+    return m ? m.label : (id || '—');
+}
+
+// The cash-out arithmetic lives in campistry_snacks_cash.js (pure + unit
+// tested). These are thin adapters that feed it this page's state.
+
+/** Cash paid out across the whole camp on a given date (defaults to today). */
+function cashOutTotal(date) {
+    return window.SnacksCash.paidOutOn(snacks.transactions, date || todayStr());
+}
+
+/** How much cash this camper may take out right now, and why not more. */
+function cashOutLimit(name) {
+    const cfg = getSettings();
+    const lim = window.SnacksCash.limit({
+        account: getAccount(name), transactions: snacks.transactions,
+        camper: name, date: todayStr(), settings: cfg
+    });
+    lim.cfg = cfg;
+    return lim;
 }
 
 // ==========================================================================
@@ -231,11 +304,13 @@ function init() {
     if (!snacks.transactions) snacks.transactions = [];
     if (!snacks.hourlyActivity) snacks.hourlyActivity = {};
     if (!snacks.weeklyRevenue) snacks.weeklyRevenue = [];
+    if (!snacks.settings) snacks.settings = Object.assign({}, DEFAULT_SNACKS_SETTINGS);
 
     renderStats();
     rAccounts();
     rInventory();
     rAnalytics();
+    rSettings();
     initTabs();
     popSelects();
     console.log('[Snacks Manager] Ready —', camperList.length, 'campers,', snacks.inventory.length, 'items');
@@ -259,8 +334,15 @@ function renderStats() {
     const totalBal = Object.values(snacks.accounts).reduce((s, a) => s + (a.balance || 0), 0);
     document.getElementById('sB').textContent = '$' + totalBal.toFixed(0);
     document.getElementById('sI').textContent = snacks.inventory.filter(i => i.stock > 0).length;
-    const salesToday = (snacks.transactions || []).filter(t => t.date === todayStr()).reduce((s, t) => s + t.amount, 0);
+    // Sales = purchases only. A cash withdrawal moves money out of the account
+    // without selling anything, so counting it as revenue would overstate the
+    // day's take.
+    const salesToday = (snacks.transactions || [])
+        .filter(t => t.date === todayStr() && t.type !== 'credit' && t.kind !== 'cash_out')
+        .reduce((s, t) => s + (parseFloat(t.amount) || 0), 0);
     document.getElementById('sS').textContent = '$' + salesToday.toFixed(0);
+    const cashEl = document.getElementById('sC');
+    if (cashEl) cashEl.textContent = '$' + cashOutTotal().toFixed(0);
 }
 
 function todayStr() {
@@ -282,12 +364,23 @@ window.rAccounts = function(filter) {
         if (a.balance <= 0) st = '<span class="badge badge-red">No Funds</span>';
         else if (rem <= 0) st = '<span class="badge badge-amber">Limit Hit</span>';
         else st = '<span class="badge badge-green">Active</span>';
+        const jsName = esc(c.name).replace(/'/g, '&#39;');
         return '<tr><td style="font-weight:600">' + esc(c.name) + '</td><td>' + esc(c.division) + '</td><td>' + esc(c.bunk) +
             '</td><td style="font-weight:700;color:' + (a.balance <= 5 ? 'var(--red-600)' : 'var(--text-primary)') + '">$' + a.balance.toFixed(2) +
             '</td><td>$' + a.dailyLimit.toFixed(2) + '</td><td>$' + a.spentToday.toFixed(2) +
-            '</td><td>' + st + '</td><td><button class="btn btn-sm btn-primary" onclick="openM(\'dep\');document.getElementById(\'depCamper\').value=\'' +
-            esc(c.name) + '\'">+ Deposit</button></td></tr>';
+            '</td><td>' + st + '</td><td style="white-space:nowrap">' +
+            '<button class="btn btn-sm btn-primary" onclick="openMFor(\'dep\',\'depCamper\',\'' + jsName + '\')">+ Deposit</button> ' +
+            '<button class="btn btn-sm btn-secondary" onclick="openMFor(\'cash\',\'cashCamper\',\'' + jsName + '\')">Cash Out</button>' +
+            '</td></tr>';
     }).join('');
+};
+
+/** Open a modal with its camper select pre-filled (and its dependent UI refreshed). */
+window.openMFor = function(modal, selectId, name) {
+    openM(modal);
+    const el = document.getElementById(selectId);
+    if (el) el.value = name;
+    if (modal === 'cash') cashPickCamper();
 };
 
 // ==========================================================================
@@ -316,8 +409,12 @@ function rInventory() {
 
 function rAnalytics() {
     const todayTx = (snacks.transactions || []).filter(t => t.date === todayStr());
-    const sal = todayTx.reduce((s, t) => s + t.amount, 0);
-    const tc = todayTx.length;
+    // Revenue and the "avg transaction" metric are about SALES. Deposits
+    // (credits) and cash withdrawals both move money but sell nothing, so they
+    // are excluded from both the total and the count that divides it.
+    const saleTx = todayTx.filter(t => t.type !== 'credit' && t.kind !== 'cash_out');
+    const sal = saleTx.reduce((s, t) => s + (parseFloat(t.amount) || 0), 0);
+    const tc = saleTx.length;
     const I = snacks.inventory;
     const units = I.reduce((s, i) => s + (i.soldToday || 0), 0);
     const openStock = I.reduce((s, i) => s + i.stock + (i.soldToday || 0), 0);
@@ -396,53 +493,256 @@ function rAnalytics() {
 
     // Transactions
     document.getElementById('txC').textContent = todayTx.length;
-    document.getElementById('txBody').innerHTML = todayTx.length ? todayTx.slice(0, 15).map(t =>
-        '<tr><td style="white-space:nowrap">' + esc(t.time) + '</td><td style="font-weight:600">' + esc(t.camper) +
-        '</td><td>' + esc(t.items) + '</td><td style="font-weight:700">$' + t.amount.toFixed(2) + '</td></tr>'
-    ).join('') : '<tr><td colspan="4" style="text-align:center;padding:2rem;color:var(--text-muted)">No transactions today</td></tr>';
+    document.getElementById('txBody').innerHTML = todayTx.length ? todayTx.slice(0, 25).map(t => {
+        const amt = Math.abs(parseFloat(t.amount) || 0);
+        const credit = t.type === 'credit';
+        const cashOut = t.kind === 'cash_out';
+        const kind = cashOut ? '<span class="badge badge-amber">Cash out</span>'
+                   : credit  ? '<span class="badge badge-green">Deposit</span>'
+                             : '<span class="badge badge-neutral">Purchase</span>';
+        const color = credit ? 'var(--green-600)' : cashOut ? 'var(--amber-600)' : 'var(--text-primary)';
+        return '<tr><td style="white-space:nowrap">' + esc(t.time || '') + '</td><td style="font-weight:600">' + esc(t.camper || '') +
+            '</td><td>' + esc(t.items || '') + '</td><td>' + kind +
+            '</td><td style="font-weight:700;color:' + color + '">' + (credit ? '+' : '−') + '$' + amt.toFixed(2) + '</td></tr>';
+    }).join('') : '<tr><td colspan="5" style="text-align:center;padding:2rem;color:var(--text-muted)">No transactions today</td></tr>';
 }
+
+// ==========================================================================
+// SETTINGS TAB
+// ==========================================================================
+
+function rSettings() {
+    const cfg = getSettings();
+    const set = (id, v) => { const e = document.getElementById(id); if (e) e.value = v; };
+    set('setDefaultLimit', cfg.defaultDailyLimit);
+    set('setCashDailyMax', cfg.cashDailyMax);
+    set('setCashReasonRequired', cfg.cashReasonRequired ? 'yes' : 'no');
+    set('setCashAllowNegative', cfg.cashAllowNegative ? 'yes' : 'no');
+
+    const box = document.getElementById('setPayMethods');
+    if (box) {
+        box.innerHTML = PAY_METHODS.map(m =>
+            '<label class="pay-row"><input type="checkbox" data-pay="' + m.id + '"' +
+            (cfg.payMethods.includes(m.id) ? ' checked' : '') + '><span>' + esc(m.label) + '</span></label>'
+        ).join('') + BLOCKED_PAY_METHODS.map(m =>
+            '<label class="pay-row blocked" title="' + esc(m.reason) + '"><input type="checkbox" disabled>' +
+            '<span style="text-decoration:line-through">' + esc(m.label) + '</span>' +
+            '<span class="pay-row-note">' + esc(m.reason) + '</span></label>'
+        ).join('');
+    }
+
+    const drawer = document.getElementById('cashDrawerBox');
+    if (drawer) {
+        const today = todayStr();
+        const outs = (snacks.transactions || []).filter(t => t.kind === 'cash_out' && t.date === today);
+        const cashIn = (snacks.transactions || [])
+            .filter(t => t.type === 'credit' && t.method === 'cash' && t.date === today)
+            .reduce((s, t) => s + Math.abs(parseFloat(t.amount) || 0), 0);
+        const cashOut = outs.reduce((s, t) => s + Math.abs(parseFloat(t.amount) || 0), 0);
+        drawer.innerHTML =
+            '<div style="display:flex;gap:1.5rem;flex-wrap:wrap;margin-bottom:.85rem">' +
+                '<div><div style="font-size:.72rem;color:var(--text-muted);font-weight:600;text-transform:uppercase;letter-spacing:.04em">Cash deposits in</div>' +
+                    '<div style="font-size:1.15rem;font-weight:700;color:var(--green-600)">+$' + cashIn.toFixed(2) + '</div></div>' +
+                '<div><div style="font-size:.72rem;color:var(--text-muted);font-weight:600;text-transform:uppercase;letter-spacing:.04em">Cash paid out</div>' +
+                    '<div style="font-size:1.15rem;font-weight:700;color:var(--amber-600)">−$' + cashOut.toFixed(2) + '</div></div>' +
+                '<div><div style="font-size:.72rem;color:var(--text-muted);font-weight:600;text-transform:uppercase;letter-spacing:.04em">Net in drawer</div>' +
+                    '<div style="font-size:1.15rem;font-weight:700">$' + (cashIn - cashOut).toFixed(2) + '</div></div>' +
+            '</div>' +
+            (outs.length
+                ? '<div class="table-wrapper"><table class="data-table"><thead><tr><th>Time</th><th>Camper</th><th>Reason</th><th>By</th><th>Amount</th></tr></thead><tbody>' +
+                  outs.map(t => '<tr><td style="white-space:nowrap">' + esc(t.time || '') + '</td><td style="font-weight:600">' + esc(t.camper || '') +
+                      '</td><td>' + esc(t.note || '—') + '</td><td>' + esc(t.by || '—') +
+                      '</td><td style="font-weight:700;color:var(--amber-600)">$' + Math.abs(parseFloat(t.amount) || 0).toFixed(2) + '</td></tr>').join('') +
+                  '</tbody></table></div>'
+                : '<div style="font-size:.82rem;color:var(--text-muted)">No cash paid out today.</div>');
+    }
+}
+
+window.saveSettingsForm = function() {
+    const num = (id, dflt) => {
+        const e = document.getElementById(id);
+        const v = e ? parseFloat(e.value) : NaN;
+        return isFinite(v) && v >= 0 ? v : dflt;
+    };
+    const picked = Array.from(document.querySelectorAll('#setPayMethods input[data-pay]'))
+        .filter(cb => cb.checked).map(cb => cb.dataset.pay);
+    if (!picked.length) { toast('Keep at least one payment method', 1); return; }
+    snacks.settings = Object.assign({}, getSettings(), {
+        payMethods: picked,
+        defaultDailyLimit: num('setDefaultLimit', DEFAULT_SNACKS_SETTINGS.defaultDailyLimit),
+        cashDailyMax: num('setCashDailyMax', DEFAULT_SNACKS_SETTINGS.cashDailyMax),
+        cashReasonRequired: (document.getElementById('setCashReasonRequired') || {}).value !== 'no',
+        cashAllowNegative: (document.getElementById('setCashAllowNegative') || {}).value === 'yes'
+    });
+    saveSnacksData(snacks);
+    rSettings(); popSelects();
+    toast('Settings saved');
+};
 
 // ==========================================================================
 // MODALS & ACTIONS
 // ==========================================================================
 
-window.openM = function(n) { document.getElementById('m-' + n).classList.add('open'); if (n === 'dep' || n === 'limit') popSelects(); };
+window.openM = function(n) {
+    document.getElementById('m-' + n).classList.add('open');
+    if (n === 'dep' || n === 'limit' || n === 'cash') popSelects();
+    if (n === 'cash') cashPickCamper();
+};
 window.closeM = function(n) { document.getElementById('m-' + n).classList.remove('open'); };
 
 function popSelects() {
     const opts = '<option value="">— Select —</option>' + camperList.map(c =>
         '<option value="' + esc(c.name) + '">' + esc(c.name) + ' (' + esc(c.division) + ')</option>'
     ).join('');
-    const s1 = document.getElementById('depCamper');
-    const s2 = document.getElementById('limCamper');
-    if (s1) s1.innerHTML = opts;
-    if (s2) s2.innerHTML = opts;
+    ['depCamper', 'limCamper', 'cashCamper'].forEach(id => {
+        const el = document.getElementById(id);
+        if (!el) return;
+        const keep = el.value;                 // don't lose a selection on re-populate
+        el.innerHTML = opts;
+        if (keep) el.value = keep;
+    });
 
     const s3 = document.getElementById('rItem');
     if (s3) s3.innerHTML = '<option value="">— Select —</option>' + snacks.inventory.map(i =>
         '<option value="' + i.id + '">' + i.emoji + ' ' + esc(i.name) + ' (' + i.stock + ' in stock)</option>'
     ).join('');
+
+    // Deposit methods come from Settings — debit is never in this list.
+    const pm = document.getElementById('depMethod');
+    if (pm) {
+        const cfg = getSettings();
+        const keep = pm.value;
+        pm.innerHTML = cfg.payMethods.map(id =>
+            '<option value="' + esc(id) + '">' + esc(payMethodLabel(id)) + '</option>'
+        ).join('');
+        if (keep && cfg.payMethods.includes(keep)) pm.value = keep;
+    }
 }
 
 window.addDep = function() {
     const name = document.getElementById('depCamper').value;
     const amt = parseFloat(document.getElementById('depAmt').value);
+    const noteEl = document.getElementById('depNote');
+    const methodEl = document.getElementById('depMethod');
+    const note = noteEl ? (noteEl.value || '').trim() : '';
+    const cfg = getSettings();
+    let method = methodEl ? methodEl.value : 'cash';
     if (!name || !amt || amt <= 0) { toast('Enter valid camper and amount', 1); return; }
-    if (!snacks.accounts[name]) snacks.accounts[name] = { balance: 0, dailyLimit: 10, spentToday: 0 };
-    snacks.accounts[name].balance += amt;
+    // Belt and braces: a stale DOM (or a hand-edited option) can't smuggle in a
+    // method the camp doesn't accept — debit included.
+    if (!cfg.payMethods.includes(method)) { toast('That payment method isn\'t accepted', 1); return; }
+
+    if (!snacks.accounts[name]) snacks.accounts[name] = { balance: 0, dailyLimit: cfg.defaultDailyLimit, spentToday: 0 };
+    const rounded = Math.round(amt * 100) / 100;
+    snacks.accounts[name].balance = Math.round((snacks.accounts[name].balance + rounded) * 100) / 100;
+    // The ledger is the durable record — _reconcileBalances() rebuilds every
+    // balance from it, so a deposit that isn't written here gets erased by the
+    // next cloud merge.
+    if (!snacks.transactions) snacks.transactions = [];
+    snacks.transactions.unshift({
+        time: new Date().toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' }),
+        camper: name, items: 'Deposit' + (note ? ' — ' + note : ''), amount: rounded,
+        type: 'credit', kind: 'deposit', method: method, note: note, date: todayStr()
+    });
     saveSnacksData(snacks);
     closeM('dep');
-    renderStats(); rAccounts();
-    toast('Added $' + amt.toFixed(2) + ' to ' + name);
+    renderStats(); rAccounts(); rAnalytics(); rSettings();
+    toast('Added $' + rounded.toFixed(2) + ' to ' + name + ' (' + payMethodLabel(method) + ')');
     document.getElementById('depAmt').value = '';
-    document.getElementById('depNote').value = '';
+    if (noteEl) noteEl.value = '';
+};
+
+// ==========================================================================
+// CASH OUT — camper draws part of their canteen balance back as physical cash
+// ==========================================================================
+
+/** Refresh the balance box, quick-amount chips, warning and button state. */
+window.cashPickCamper = function() {
+    const name = (document.getElementById('cashCamper') || {}).value || '';
+    const box = document.getElementById('cashBalBox');
+    const warn = document.getElementById('cashWarn');
+    const btn = document.getElementById('cashBtn');
+    const quick = document.getElementById('cashQuick');
+    const reqMark = document.getElementById('cashReasonReq');
+    const cfg = getSettings();
+    if (reqMark) reqMark.textContent = cfg.cashReasonRequired ? '*' : '';
+
+    if (!name) {
+        if (box) box.style.display = 'none';
+        if (warn) warn.style.display = 'none';
+        if (quick) quick.innerHTML = '';
+        if (btn) btn.disabled = true;
+        return;
+    }
+    const lim = cashOutLimit(name);
+    if (box) {
+        box.style.display = '';
+        box.innerHTML =
+            '<div>Balance: <strong>$' + lim.balance.toFixed(2) + '</strong></div>' +
+            '<div>Available to take out: <strong>' + (lim.max === Infinity ? 'no limit' : '$' + lim.max.toFixed(2)) + '</strong></div>' +
+            (lim.takenToday > 0 ? '<div style="color:var(--text-muted)">Already taken today: $' + lim.takenToday.toFixed(2) + '</div>' : '');
+    }
+    if (quick) {
+        const caps = [5, 10, 20, 50].filter(v => lim.max === Infinity || v <= lim.max);
+        quick.innerHTML = caps.map(v =>
+            '<button type="button" class="btn btn-secondary btn-sm" onclick="cashQuickAmt(' + v + ')">$' + v + '</button>'
+        ).join('') + (lim.max !== Infinity && lim.max > 0
+            ? '<button type="button" class="btn btn-secondary btn-sm" onclick="cashQuickAmt(' + lim.max + ')">All ($' + lim.max.toFixed(2) + ')</button>'
+            : '');
+    }
+
+    const amt = parseFloat((document.getElementById('cashAmt') || {}).value) || 0;
+    let problem = '';
+    if (lim.reason) problem = lim.reason;
+    else if (amt > 0 && lim.max !== Infinity && amt > lim.max + 1e-9) {
+        problem = 'Over the available $' + lim.max.toFixed(2);
+    }
+    if (warn) { warn.style.display = problem ? '' : 'none'; warn.textContent = problem; }
+    if (btn) btn.disabled = !!problem || amt <= 0;
+};
+
+window.cashQuickAmt = function(v) {
+    const el = document.getElementById('cashAmt');
+    if (el) { el.value = Number(v).toFixed(2); cashPickCamper(); }
+};
+
+window.cashOut = function() {
+    const name = (document.getElementById('cashCamper') || {}).value || '';
+    const amt = parseFloat((document.getElementById('cashAmt') || {}).value);
+    const note = ((document.getElementById('cashNote') || {}).value || '').trim();
+    const by = ((document.getElementById('cashBy') || {}).value || '').trim();
+    const cfg = getSettings();
+    // Re-validate at write time. The modal can sit open while a POS charge
+    // lands from another device, so the number the office saw may be stale.
+    const check = window.SnacksCash.validate({
+        account: getAccount(name), transactions: snacks.transactions,
+        camper: name, date: todayStr(), settings: cfg,
+        amount: amt, note: note
+    });
+    if (!check.ok) { toast(check.error, 1); cashPickCamper(); return; }
+    const rounded = check.amount;
+
+    if (!snacks.accounts[name]) snacks.accounts[name] = { balance: 0, dailyLimit: cfg.defaultDailyLimit, spentToday: 0 };
+    snacks.accounts[name].balance = Math.round((snacks.accounts[name].balance - rounded) * 100) / 100;
+    if (!snacks.transactions) snacks.transactions = [];
+    // spentToday is deliberately untouched: dailyLimit caps canteen SPENDING,
+    // and cash out has its own cap (cashDailyMax).
+    snacks.transactions.unshift(window.SnacksCash.buildTransaction({
+        time: new Date().toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' }),
+        camper: name, amount: rounded, note: note, by: by, date: todayStr()
+    }));
+    saveSnacksData(snacks);
+    closeM('cash');
+    renderStats(); rAccounts(); rAnalytics(); rSettings();
+    toast('Paid out $' + rounded.toFixed(2) + ' cash to ' + name);
+    ['cashAmt', 'cashNote'].forEach(id => { const e = document.getElementById(id); if (e) e.value = ''; });
 };
 
 window.setLimit = function() {
     const name = document.getElementById('limCamper').value;
     const amt = parseFloat(document.getElementById('limAmt').value);
     if (!name || !amt) { toast('Enter valid info', 1); return; }
-    if (!snacks.accounts[name]) snacks.accounts[name] = { balance: 0, dailyLimit: 10, spentToday: 0 };
+    if (!snacks.accounts[name]) snacks.accounts[name] = { balance: 0, dailyLimit: getSettings().defaultDailyLimit, spentToday: 0 };
     snacks.accounts[name].dailyLimit = amt;
     saveSnacksData(snacks);
     closeM('limit');
@@ -499,6 +799,13 @@ window.CampistrySnacks = {
     getCamperList,
     getAccount,
     loadSnacksData,
+    // Settings + cash-drawer helpers, shared with the POS terminal.
+    getSettings,
+    payMethodLabel,
+    PAY_METHODS,
+    BLOCKED_PAY_METHODS,
+    cashOutLimit,
+    cashOutTotal,
     refresh: () => { snacks = loadSnacksData(); ensureAccountsForRoster(); }
 };
 

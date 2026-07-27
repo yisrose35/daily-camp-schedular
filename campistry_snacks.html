@@ -139,6 +139,7 @@
         <div class="stat-card"><div class="stat-icon"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="2" y="5" width="20" height="14" rx="2"/><line x1="2" y1="10" x2="22" y2="10"/></svg></div><div><div class="stat-value" id="sB">$0</div><div class="stat-label">Total Balance</div></div></div>
         <div class="stat-card"><div class="stat-icon"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M6 2L3 6v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2V6l-3-4z"/><line x1="3" y1="6" x2="21" y2="6"/><path d="M16 10a4 4 0 0 1-8 0"/></svg></div><div><div class="stat-value" id="sI">0</div><div class="stat-label">Items in Stock</div></div></div>
         <div class="stat-card"><div class="stat-icon"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="12" y1="1" x2="12" y2="23"/><path d="M17 5H9.5a3.5 3.5 0 0 0 0 7h5a3.5 3.5 0 0 1 0 7H6"/></svg></div><div><div class="stat-value" id="sS">$0</div><div class="stat-label">Sales Today</div></div></div>
+        <div class="stat-card"><div class="stat-icon"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="2" y="6" width="20" height="12" rx="2"/><circle cx="12" cy="12" r="2.5"/><path d="M6 12h.01M18 12h.01"/></svg></div><div><div class="stat-value" id="sC">$0</div><div class="stat-label">Cash Out Today</div></div></div>
     </div>
 
     <div class="metric-row">
@@ -177,7 +178,7 @@
     <div class="analytics-grid">
         <div class="card"><div class="card-header"><h2>Hourly Heatmap</h2></div><div class="card-body" id="heatmap"></div></div>
         <div class="card"><div class="card-header"><h2>Recent Transactions</h2><span class="card-count" id="txC">0</span></div>
-            <div class="table-wrapper"><table class="data-table"><thead><tr><th>Time</th><th>Camper</th><th>Items</th><th>Amount</th></tr></thead><tbody id="txBody"></tbody></table></div>
+            <div class="table-wrapper"><table class="data-table"><thead><tr><th>Time</th><th>Camper</th><th>Detail</th><th>Kind</th><th>Amount</th></tr></thead><tbody id="txBody"></tbody></table></div>
         </div>
     </div>
 </div>
@@ -205,6 +206,7 @@
                     <input type="text" placeholder="Search…" id="aSearch" oninput="rAccounts()">
                 </div>
                 <button class="btn btn-primary btn-sm" onclick="openM('dep')">+ Add Deposit</button>
+                <button class="btn btn-secondary btn-sm" onclick="openM('cash')">Take Out Cash</button>
                 <button class="btn btn-secondary btn-sm" onclick="openM('limit')">Set Limits</button>
             </div>
         </div>
@@ -264,10 +266,59 @@
     </div>
 
     <div class="card">
-        <div class="card-header"><h2>Canteen Settings</h2></div>
-        <div class="card-body" style="color:var(--text-muted);font-size:.875rem;text-align:center;padding:2.5rem 1rem;">
-            Settings configuration coming soon.
+        <div class="card-header"><h2>Deposits &amp; Cash</h2></div>
+        <div class="card-body">
+            <div class="form-grid" style="grid-template-columns:repeat(auto-fit,minmax(200px,1fr))">
+                <div class="form-group">
+                    <label class="form-label">Default daily spending limit ($)</label>
+                    <input type="number" class="form-input" id="setDefaultLimit" min="0" step="1">
+                    <span class="form-hint">Applied to every new camper account.</span>
+                </div>
+                <div class="form-group">
+                    <label class="form-label">Max cash out per camper, per day ($)</label>
+                    <input type="number" class="form-input" id="setCashDailyMax" min="0" step="1">
+                    <span class="form-hint">0 = no cap.</span>
+                </div>
+                <div class="form-group">
+                    <label class="form-label">Cash out needs a reason</label>
+                    <select class="form-select" id="setCashReasonRequired">
+                        <option value="yes">Yes — require a note</option>
+                        <option value="no">No — note optional</option>
+                    </select>
+                </div>
+                <div class="form-group">
+                    <label class="form-label">Allow cash out below zero</label>
+                    <select class="form-select" id="setCashAllowNegative">
+                        <option value="no">No — balance only</option>
+                        <option value="yes">Yes — camper may go negative</option>
+                    </select>
+                    <span class="form-hint">Off means a camper can never take out more cash than they hold.</span>
+                </div>
+            </div>
         </div>
+    </div>
+
+    <div class="card">
+        <div class="card-header"><h2>Accepted Payment Methods</h2></div>
+        <div class="card-body">
+            <p style="font-size:.82rem;color:var(--text-muted);margin:0 0 .9rem;line-height:1.6">
+                Which methods the office can record against a deposit.
+                <strong>Debit cards are deliberately not offered</strong> — a canteen
+                deposit is a prepaid balance a camper can later draw back out as cash,
+                and card networks treat funding a cash-withdrawable balance from a
+                debit card as a cash-equivalent transaction. Credit cards are fine.
+            </p>
+            <div id="setPayMethods" style="display:flex;flex-direction:column;gap:.55rem"></div>
+        </div>
+    </div>
+
+    <div class="card">
+        <div class="card-header"><h2>Cash Drawer — Today</h2></div>
+        <div class="card-body" id="cashDrawerBox"></div>
+    </div>
+
+    <div style="display:flex;justify-content:flex-end;gap:.5rem;margin-bottom:2rem">
+        <button class="btn btn-primary" onclick="saveSettingsForm()">Save Settings</button>
     </div>
 </div>
 
@@ -300,7 +351,21 @@
 </div>
 
 <!-- MODALS -->
-<div class="modal-overlay" id="m-dep"><div class="modal"><div class="modal-header"><h2>Add Deposit</h2><button class="modal-close" onclick="closeM('dep')"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg></button></div><div class="modal-body"><div class="form-grid" style="grid-template-columns:1fr"><div class="form-group"><label class="form-label">Camper</label><select class="form-select" id="depCamper"></select></div><div class="form-group"><label class="form-label">Amount ($)</label><input type="number" class="form-input" id="depAmt" min="1" step="0.01" placeholder="25.00"></div><div class="form-group"><label class="form-label">Note</label><input type="text" class="form-input" id="depNote" placeholder="e.g. Week 3 deposit"></div></div></div><div class="modal-footer"><button class="btn btn-secondary" onclick="closeM('dep')">Cancel</button><button class="btn btn-primary" onclick="addDep()">Add Deposit</button></div></div></div>
+<div class="modal-overlay" id="m-dep"><div class="modal"><div class="modal-header"><h2>Add Deposit</h2><button class="modal-close" onclick="closeM('dep')"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg></button></div><div class="modal-body"><div class="form-grid" style="grid-template-columns:1fr"><div class="form-group"><label class="form-label">Camper</label><select class="form-select" id="depCamper"></select></div><div class="form-group"><label class="form-label">Amount ($)</label><input type="number" class="form-input" id="depAmt" min="1" step="0.01" placeholder="25.00"></div><div class="form-group"><label class="form-label">Paid by</label><select class="form-select" id="depMethod"></select></div><div class="form-group"><label class="form-label">Note</label><input type="text" class="form-input" id="depNote" placeholder="e.g. Week 3 deposit"></div></div></div><div class="modal-footer"><button class="btn btn-secondary" onclick="closeM('dep')">Cancel</button><button class="btn btn-primary" onclick="addDep()">Add Deposit</button></div></div></div>
+
+<!-- CASH OUT — a camper draws part of their canteen balance back as physical cash -->
+<div class="modal-overlay" id="m-cash"><div class="modal"><div class="modal-header"><h2>Take Out Cash</h2><button class="modal-close" onclick="closeM('cash')"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg></button></div><div class="modal-body">
+    <div class="form-grid" style="grid-template-columns:1fr">
+        <div class="form-group"><label class="form-label">Camper</label><select class="form-select" id="cashCamper" onchange="cashPickCamper()"></select></div>
+        <div id="cashBalBox" style="display:none;background:var(--bg-tertiary);border-radius:8px;padding:.7rem .85rem;font-size:.82rem;line-height:1.6"></div>
+        <div class="form-group"><label class="form-label">Amount ($)</label><input type="number" class="form-input" id="cashAmt" min="0.01" step="0.01" placeholder="20.00" oninput="cashPickCamper()">
+            <div style="display:flex;gap:.4rem;margin-top:.45rem;flex-wrap:wrap" id="cashQuick"></div>
+        </div>
+        <div class="form-group"><label class="form-label">Reason / note <span id="cashReasonReq" style="color:var(--red-600)"></span></label><input type="text" class="form-input" id="cashNote" placeholder="e.g. Spending money for the trip"></div>
+        <div class="form-group"><label class="form-label">Handed out by</label><input type="text" class="form-input" id="cashBy" placeholder="Staff name"></div>
+    </div>
+    <div id="cashWarn" style="display:none;font-size:.8rem;color:var(--red-600);margin-top:.6rem"></div>
+</div><div class="modal-footer"><button class="btn btn-secondary" onclick="closeM('cash')">Cancel</button><button class="btn btn-primary" id="cashBtn" onclick="cashOut()">Pay Out Cash</button></div></div></div>
 <div class="modal-overlay" id="m-item"><div class="modal"><div class="modal-header"><h2>Add Item</h2><button class="modal-close" onclick="closeM('item')"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg></button></div><div class="modal-body"><div class="form-grid" style="grid-template-columns:1fr 1fr"><div class="form-group" style="grid-column:1/-1"><label class="form-label">Name</label><input type="text" class="form-input" id="niName" placeholder="e.g. Gatorade"></div><div class="form-group"><label class="form-label">Category</label><select class="form-select" id="niCat"><option value="drink">Drink</option><option value="snack">Snack</option><option value="treat">Treat</option></select></div><div class="form-group"><label class="form-label">Emoji</label><input type="text" class="form-input" id="niEmoji" placeholder="🥤" maxlength="4" style="font-size:1.5rem;text-align:center"></div><div class="form-group"><label class="form-label">Price ($)</label><input type="number" class="form-input" id="niPrice" min=".25" step=".25" placeholder="2.00"></div><div class="form-group"><label class="form-label">Stock</label><input type="number" class="form-input" id="niStock" min="0" placeholder="100"></div></div></div><div class="modal-footer"><button class="btn btn-secondary" onclick="closeM('item')">Cancel</button><button class="btn btn-primary" onclick="addItem()">Add Item</button></div></div></div>
 <div class="modal-overlay" id="m-limit"><div class="modal"><div class="modal-header"><h2>Set Daily Limits</h2><button class="modal-close" onclick="closeM('limit')"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg></button></div><div class="modal-body"><div class="form-grid" style="grid-template-columns:1fr"><div class="form-group"><label class="form-label">Camper</label><select class="form-select" id="limCamper"></select></div><div class="form-group"><label class="form-label">New Daily Limit ($)</label><input type="number" class="form-input" id="limAmt" min="1" step="1" placeholder="10"></div></div></div><div class="modal-footer"><button class="btn btn-secondary" onclick="closeM('limit')">Cancel</button><button class="btn btn-primary" onclick="setLimit()">Save</button></div></div></div>
 <div class="modal-overlay" id="m-restock"><div class="modal"><div class="modal-header"><h2>Restock Item</h2><button class="modal-close" onclick="closeM('restock')"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg></button></div><div class="modal-body"><div class="form-grid" style="grid-template-columns:1fr"><div class="form-group"><label class="form-label">Item</label><select class="form-select" id="rItem"></select></div><div class="form-group"><label class="form-label">Add Quantity</label><input type="number" class="form-input" id="rQty" min="1" placeholder="50"></div></div></div><div class="modal-footer"><button class="btn btn-secondary" onclick="closeM('restock')">Cancel</button><button class="btn btn-primary" onclick="restock()">Restock</button></div></div></div>
@@ -348,6 +413,7 @@ function snacksNav(page, btn) {
 <script src="supabase-js@2.js"></script>
 <script src="supabase_client.js"></script>
 <script src="campistry_cloud_bootstrap.js"></script>
+<script src="campistry_snacks_cash.js"></script>
 <script src="campistry_snacks.js"></script>
 <script>
 // Re-render Snacks when cloud data arrives

@@ -307,6 +307,18 @@ body.sidebar-open .sidebar { transform: translateX(0); }
     outline: none; border-color: var(--snacks);
     box-shadow: 0 0 0 3px rgba(234,88,12,.1);
 }
+.form-hint { font-size: .72rem; color: var(--text-muted); line-height: 1.45; }
+/* Payment-method toggles (Settings) */
+.pay-row {
+    display: flex; align-items: center; gap: .6rem;
+    padding: .55rem .75rem;
+    border: 1px solid var(--border-light); border-radius: var(--radius-sm);
+    background: var(--bg-secondary); font-size: .85rem;
+    cursor: pointer;
+}
+.pay-row input { width: 16px; height: 16px; accent-color: var(--snacks); cursor: pointer; }
+.pay-row.blocked { cursor: not-allowed; opacity: .72; background: var(--bg-tertiary); }
+.pay-row-note { margin-left: auto; font-size: .72rem; color: var(--text-muted); }
 .search-bar {
     display: flex; align-items: center; gap: 8px;
     padding: .5rem .875rem;
