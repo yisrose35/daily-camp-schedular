@@ -70,14 +70,34 @@
     async function getMeDivisions(forceRefresh) {
         if (_meDivisionsCache && !forceRefresh) return _meDivisionsCache;
         try {
-            const campId = localStorage.getItem('campistry_camp_id') || localStorage.getItem('campistry_user_id');
+            // ★ Canonical camp id — not the unverified localStorage chain that
+            //   CampistryDB.getCampId deliberately dropped. The campistry_user_id
+            //   fallback in particular would query camp_state_kv with a USER id,
+            //   match nothing, and silently render every division grey.
+            const campId = window.CampistryDB?.getCampId?.() ||
+                           localStorage.getItem('campistry_camp_id');
             if (campId && window.supabase) {
-                const { data: kvRow } = await window.supabase.from('camp_state_kv').select('value').eq('camp_id', campId).eq('key', 'campStructure').maybeSingle();
+                const { data: kvRow, error: kvErr } = await window.supabase
+                    .from('camp_state_kv').select('value')
+                    .eq('camp_id', campId).eq('key', 'campStructure').maybeSingle();
+                if (kvErr) {
+                    // ★ Don't cache {} on a read error — that pins every division
+                    //   to the grey default for the rest of the session, and
+                    //   forceRefresh is the only way back. Return the last known
+                    //   value (or an uncached empty) so the next call retries.
+                    console.warn('[TeamUI] campStructure read failed — not caching:', kvErr.message);
+                    return _meDivisionsCache || {};
+                }
                 if (kvRow?.value) { _meDivisionsCache = kvRow.value; return _meDivisionsCache; }
+                // Legacy blob — only for a camp that has never opened Flow (the
+                // hydration path migrates camp_state → camp_state_kv on first sight).
                 const { data } = await window.supabase.from('camp_state').select('state').eq('camp_id', campId).maybeSingle();
                 if (data?.state?.campStructure) { _meDivisionsCache = data.state.campStructure; return _meDivisionsCache; }
             }
-        } catch (e) { console.warn('[TeamUI] Could not load campStructure:', e); }
+        } catch (e) {
+            console.warn('[TeamUI] Could not load campStructure:', e);
+            return _meDivisionsCache || {};
+        }
         _meDivisionsCache = {};
         return _meDivisionsCache;
     }

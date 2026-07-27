@@ -15,10 +15,18 @@
     // HELPERS
     // =========================================================================
 
+    // ★ Never invent a camp id here. The old chain fell back to
+    //   campistry_user_id (a USER id — matches no camp, so versions were written
+    //   under a bogus key and never found again) and then to the literal
+    //   'demo_camp_001', which is SHARED: every camp that reached that fallback
+    //   wrote its schedule versions into the same demo bucket and could read each
+    //   other's. Prefer the verified id, then the id-shaped cache key, then give
+    //   up — callers below already no-op on a null camp id.
     function getCampId() {
-        return (window.getCampId && window.getCampId()) || 
-               localStorage.getItem('campistry_user_id') || 
-               'demo_camp_001';
+        return window.CampistryDB?.getCampId?.() ||
+               (window.getCampId && window.getCampId()) ||
+               localStorage.getItem('campistry_camp_id') ||
+               null;
     }
 
     function deepClone(obj) {
@@ -40,7 +48,11 @@
         if (!supabase) return [];
 
         const campId = getCampId();
-        
+        if (!campId) {
+            console.warn("📋 [DB] No verified camp id — cannot list versions");
+            return [];
+        }
+
         const { data, error } = await supabase
             .from(VERSIONS_TABLE)
             .select('*')
@@ -85,7 +97,11 @@
         if (!supabase) return { success: false, error: 'Supabase not initialized' };
 
         const campId = getCampId();
-        
+        if (!campId) {
+            console.warn("📋 [DB] No verified camp id — refusing to save a version");
+            return { success: false, error: 'No verified camp id' };
+        }
+
         try {
             const { data: { user } } = await supabase.auth.getUser();
             const userId = user?.id || 'anon';

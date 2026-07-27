@@ -38,6 +38,21 @@
 
     console.log('⏱️ [Trial Guard] v1.2 loading...');
 
+    // ★ Canonical camp id. This file resolved it as
+    //     campistry_camp_id || campistry_user_id || session.user.id
+    //   in two places — the unverified localStorage chain that
+    //   CampistryDB.getCampId deliberately dropped (anyone with DOM access
+    //   could point plan/quota lookups at another camp). The user-id fallback
+    //   is also just wrong: querying camps/daily_schedules by a USER id matches
+    //   nothing, so the trial banner silently reported 0 days used and 0
+    //   campers — i.e. it under-reported quota against the wrong identity.
+    //   Prefer the verified id; fall back only to the id-shaped cache key.
+    function _tgCampId() {
+        return window.CampistryDB?.getCampId?.() ||
+               localStorage.getItem('campistry_camp_id') ||
+               null;
+    }
+
     // =========================================================================
     // STATE
     // =========================================================================
@@ -144,9 +159,8 @@
             const { data: { session } } = await window.supabase.auth.getSession();
             if (!session?.user) return;
 
-            const campId = localStorage.getItem('campistry_camp_id') ||
-                           localStorage.getItem('campistry_user_id') ||
-                           session.user.id;
+            const campId = _tgCampId();
+            if (!campId) return; // no verified camp yet — fail open, re-checked on the interval
 
             const { data: camp, error } = await window.supabase
                 .from('camps')
@@ -480,8 +494,7 @@
         if (camperCount === undefined) {
             try {
                 var client = window.supabase || window.CampistryDB?.getClient?.();
-                var campId = localStorage.getItem('campistry_camp_id') ||
-                             localStorage.getItem('campistry_user_id');
+                var campId = _tgCampId();
                 if (client && campId) {
                     var gotDays = false;
                     try {

@@ -180,7 +180,13 @@
             if (cachedRole !== 'owner' && cachedRole !== 'admin') return false;
             
             _currentRole = cachedRole;
-            _campId = localStorage.getItem('campistry_user_id') || currentUserId;
+            // ★ Prefer the id-shaped cache key over campistry_user_id. This
+            //   fast-path is owner/admin-only, where camp_id == the owner's user
+            //   id on LEGACY camps — but on a camp with a distinct id, taking the
+            //   user id here seeded _campId wrong for every consumer that reads
+            //   AccessControl until verified detection replaced it.
+            _campId = localStorage.getItem('campistry_camp_id') ||
+                      localStorage.getItem('campistry_user_id') || currentUserId;
             _isTeamMember = localStorage.getItem('campistry_is_team_member') === 'true';
             
             debugLog("Restored owner/admin role from localStorage fallback:", cachedRole);

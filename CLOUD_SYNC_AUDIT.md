@@ -182,6 +182,80 @@ phantom-empty set, and `saveLocks` re-reads immediately before merging.
   window, but real.
 - **`_lastSeenUpdatedAt` grows unbounded** — one entry per record id per session. Memory,
   not correctness.
-- **Legacy `camp_state` table** is still read by `dashboard.js`, `team_subdivisions_ui.js`
-  and `trial_guard.js` while everything else writes `camp_state_kv`. Those three read a
-  store nothing maintains any more.
+*(The legacy `camp_state` item that was here is now section 8 below — investigating it
+turned up a bigger problem than the one I'd noted.)*
+
+---
+
+## 8. Legacy `camp_state`, and the camp-id resolution behind it
+
+**Correction to my earlier note:** those three files don't read a dead store blindly — all
+three read `camp_state_kv` **first** and fall back to `camp_state` only when it returns
+nothing. The fallback wasn't the bug. Two real ones were underneath it.
+
+### 8a. The legacy blob never migrated, so it stayed a divergent shadow store
+
+`integration_hooks.js` hydration sets `usedFallback = true` when it reads the legacy blob —
+and that variable **was never read anywhere**. So a camp still on `camp_state` re-read it on
+every single load and never moved to `camp_state_kv`. That is why three unrelated consumers
+each had to carry their own fallback.
+
+It was also a data cliff: the hydration branch prefers KV whenever it has *any* rows, so the
+moment one key got written (a single edit anywhere), every un-migrated key stopped being read
+from cloud at all.
+
+**Fixed:** on legacy fallback the whole blob is now upserted into `camp_state_kv` once,
+preserving the blob's own `updated_at` so the migration can't look newer than edits another
+device already wrote. Idempotent — once the rows exist the fallback branch never runs again.
+
+### 8b. Camp id was resolved from an unverified localStorage chain, differently per call site
+
+`CampistryDB.getCampId()` deliberately dropped the
+`currentCampId || campistry_user_id || camp_id` localStorage chain — its own comment says
+why: *"Anyone with DOM access could write any camp_id and the client would honor it without
+verifying membership."* Seven call sites still did exactly that chain by hand, and they
+**did not agree with each other**:
+
+```
+dashboard loadStats       campistry_camp_id || campistry_user_id || currentUser.id
+dashboard loadCampDates   campistry_camp_id || campistry_user_id || membership.camp_id || currentUser.id
+dashboard saveCampDates   campistry_camp_id || campistry_user_id || currentUser.id
+```
+
+With `campistry_camp_id` unset but a membership present, camp dates were **read from
+`membership.camp_id` and written to `currentUser.id`** — different rows. That is the
+"camp dates don't persist" symptom, still live after the earlier `9d03c205` fix.
+
+Every one of these also passes a **user** id as a camp id when `campistry_camp_id` is
+missing, which matches no camp: `trial_guard` then reported 0 days used / 0 campers (quota
+under-counted against the wrong identity), and `team_subdivisions_ui` rendered every
+division grey.
+
+Worst of the set, `schedule_versions_db.js`:
+
+```js
+return (window.getCampId && window.getCampId()) ||
+       localStorage.getItem('campistry_user_id') ||
+       'demo_camp_001';          // ← shared literal
+```
+
+Any camp reaching that last fallback wrote its schedule versions into a **shared** bucket
+that every other such camp could read.
+
+**Fixed:** one resolver per file, all preferring `CampistryDB.getCampId()` then the
+id-shaped cache key, never a user id and never a shared literal. `dashboard.js` uses a
+single `dashCampId()` across stats and all three camp-dates paths, so read and write can no
+longer target different rows. `schedule_versions_db` returns null instead of inventing an
+id, and both its callers now refuse to run without one. `access_control.js`'s owner/admin
+cache fast-path prefers `campistry_camp_id` before falling back.
+
+### 8c. Read errors presented as empty data
+
+`dashboard.js` fell through to the legacy table whenever the KV read returned no rows —
+including when it **errored**. The legacy read then failed too, `state` stayed null, and the
+dashboard rendered 0 divisions / 0 bunks / 0 campers, indistinguishable from a new camp.
+`team_subdivisions_ui` cached `{}` on a failed read, pinning every division to the grey
+default for the rest of the session.
+
+**Fixed:** both distinguish error from empty and keep what they already had. Same class as
+CB-2 on `daily_schedules` and the `field_locks` fix in section 7.

@@ -833,26 +833,68 @@
     // LOAD STATS (from Campistry Me data)
     // ========================================
     
+    // ★ ONE canonical camp-id resolver for this page.
+    //   Every site here used its own hand-rolled chain, and they did not agree:
+    //     loadStats      campistry_camp_id || campistry_user_id || currentUser.id
+    //     loadCampDates  campistry_camp_id || campistry_user_id || membership.camp_id || currentUser.id
+    //     saveCampDates  campistry_camp_id || campistry_user_id || currentUser.id
+    //   So with campistry_camp_id unset but a membership present, camp dates were
+    //   READ from membership.camp_id and WRITTEN to currentUser.id — different
+    //   rows, which is exactly the "camp dates don't persist" symptom.
+    //
+    //   Beyond the mismatch, this is the unverified-localStorage chain that
+    //   CampistryDB.getCampId deliberately dropped (its Slice 2 note: anyone with
+    //   DOM access could set any camp_id and the client would honour it). Ask the
+    //   client for its verified id; fall back only to the id-shaped cache key, and
+    //   never to a USER id.
+    function dashCampId() {
+        return window.CampistryDB?.getCampId?.() ||
+               localStorage.getItem('campistry_camp_id') ||
+               (typeof membership !== 'undefined' && membership ? membership.camp_id : null) ||
+               null;
+    }
+
     async function loadStats() {
         try {
-            const campId = localStorage.getItem('campistry_camp_id') || localStorage.getItem('campistry_user_id') || currentUser.id;
+            const campId = dashCampId();
+            if (!campId) {
+                console.warn('[Dashboard] No verified camp id yet — leaving stats as-is');
+                return;
+            }
 
-            // Read per-key rows from camp_state_kv, fall back to legacy blob
+            // Read per-key rows from camp_state_kv, falling back to the legacy
+            // camp_state blob ONLY when the KV read genuinely returned nothing.
+            // (integration_hooks migrates the legacy blob into KV on first
+            // hydrate, so this fallback is for a camp that has never opened Flow.)
             let state = null;
             const { data: kvRows, error: kvErr } = await window.supabase
                 .from('camp_state_kv')
                 .select('key, value')
                 .eq('camp_id', campId);
 
-            if (!kvErr && kvRows && kvRows.length > 0) {
+            if (kvErr) {
+                // ★ A read ERROR is not an empty camp. Falling through to the
+                //   legacy table on an RLS denial or a transient failure fetched
+                //   nothing either, left `state` null, and rendered the dashboard
+                //   as 0 divisions / 0 bunks / 0 campers — indistinguishable from
+                //   a brand-new camp. Leave the existing figures alone instead.
+                console.warn('[Dashboard] camp_state_kv read failed — keeping current stats:', kvErr.message);
+                return;
+            }
+
+            if (kvRows && kvRows.length > 0) {
                 state = {};
                 kvRows.forEach(r => { state[r.key] = r.value; });
             } else {
-                const { data } = await window.supabase
+                const { data, error: legacyErr } = await window.supabase
                     .from('camp_state')
                     .select('state')
                     .eq('camp_id', campId)
                     .maybeSingle();
+                if (legacyErr) {
+                    console.warn('[Dashboard] legacy camp_state read failed — keeping current stats:', legacyErr.message);
+                    return;
+                }
                 if (data?.state) state = data.state;
             }
 
@@ -1127,7 +1169,8 @@
 
     async function loadCampDates(readOnly) {
         try {
-            var campId = localStorage.getItem('campistry_camp_id') || localStorage.getItem('campistry_user_id') || (membership ? membership.camp_id : null) || currentUser.id;
+            var campId = dashCampId();
+            if (!campId) { console.warn('[Dashboard] No verified camp id — skipping camp-dates load'); return; }
             var campDates = null;
 
             var { data: kvRows, error: kvErr } = await window.supabase
@@ -1265,7 +1308,8 @@
         };
 
         try {
-            var campId = localStorage.getItem('campistry_camp_id') || localStorage.getItem('campistry_user_id') || currentUser.id;
+            var campId = dashCampId();
+            if (!campId) { console.warn('[Dashboard] No verified camp id — refusing camp-dates write'); return; }
             var { error } = await window.supabase
                 .from('camp_state_kv')
                 .upsert({ camp_id: campId, key: 'campDates', value: campDates, updated_at: new Date().toISOString() },
@@ -1296,7 +1340,8 @@
         document.getElementById('campDatesWeekPreview').style.display = 'none';
 
         try {
-            var campId = localStorage.getItem('campistry_camp_id') || localStorage.getItem('campistry_user_id') || currentUser.id;
+            var campId = dashCampId();
+            if (!campId) { console.warn('[Dashboard] No verified camp id — refusing camp-dates write'); return; }
             await window.supabase
                 .from('camp_state_kv')
                 .upsert({ camp_id: campId, key: 'campDates', value: null, updated_at: new Date().toISOString() },

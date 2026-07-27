@@ -1857,6 +1857,50 @@
                 }
             }
 
+            // ★ ONE-TIME LEGACY MIGRATION.
+            //   `usedFallback` was set here and never read — so a camp still on the
+            //   legacy blob re-read it on every single load and NEVER moved to
+            //   camp_state_kv. That left camp_state as a permanently divergent
+            //   shadow store, which is why three unrelated consumers (dashboard,
+            //   team_subdivisions_ui, trial_guard) each carry their own fallback
+            //   read of it.
+            //
+            //   Worse, it was a data cliff: the branch above prefers KV whenever it
+            //   has ANY rows, so the moment one key got written (a single edit),
+            //   every un-migrated key stopped being read from cloud entirely.
+            //
+            //   Copy the whole blob across on first sight. Idempotent — once the KV
+            //   rows exist the fallback branch never runs again. Best-effort: a
+            //   failure just means we retry on the next load, and the legacy read
+            //   above still served this session correctly.
+            if (usedFallback && cloudState && _canWriteCampState()) {
+                try {
+                    const migrateRows = Object.keys(cloudState)
+                        .filter(k => k !== 'updated_at')
+                        .map(k => ({
+                            camp_id: campId,
+                            key: k,
+                            value: cloudState[k] ?? null,
+                            // Preserve the blob's own timestamp so this migration
+                            // doesn't look newer than edits another device has
+                            // already written to KV.
+                            updated_at: cloudUpdatedAt || new Date().toISOString()
+                        }));
+                    if (migrateRows.length > 0) {
+                        const { error: migErr } = await client
+                            .from('camp_state_kv')
+                            .upsert(migrateRows, { onConflict: 'camp_id,key' });
+                        if (migErr) {
+                            log('Legacy camp_state → camp_state_kv migration deferred:', migErr.message);
+                        } else {
+                            console.log('☁️ Migrated ' + migrateRows.length + ' key(s) from legacy camp_state → camp_state_kv');
+                        }
+                    }
+                } catch (eMig) {
+                    log('Legacy migration failed (will retry next load):', eMig?.message || eMig);
+                }
+            }
+
             if (cloudState) {
                 let localState = getLocalSettings();
 
