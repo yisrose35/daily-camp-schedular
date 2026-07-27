@@ -34,6 +34,7 @@ var editingProduct = null;     // id or null
 var editingOrder = null;       // id or null
 var draftLines = [];           // lines being edited in the order modal
 var restockProduct = null;
+var _photoBuf = null;          // photo being edited, before Save commits it
 
 // ── storage ─────────────────────────────────────────────────────────────────
 function readGlobal() {
@@ -51,7 +52,7 @@ function load() {
     shop = {
         products: Array.isArray(s.products) ? s.products : [],
         orders: Array.isArray(s.orders) ? s.orders : [],
-        settings: Object.assign({ taxRate: 0, lowStockThreshold: 5 }, s.settings || {})
+        settings: Object.assign({ taxRate: 0, lowStockThreshold: 5, parentAllowBackorder: false }, s.settings || {})
     };
     // Stable ids — orders reference products by id, so a product without one
     // silently detaches every order that points at it.
@@ -238,8 +239,11 @@ function renderCatalogue() {
         var total = SC.totalStock(p);
         var low = SC.lowStockVariants(p, shop.settings.lowStockThreshold);
         var cat = SC.CATEGORIES.filter(function (c) { return c.id === p.category; })[0];
+        var photo = SC.productImage(p);
         h += '<div class="ops-prod" onclick="shopEditProduct(' + p.id + ')">' +
-            '<div class="ops-prod-emoji">' + esc(p.emoji || '👕') + '</div>' +
+            (photo
+                ? '<div class="ops-prod-photo"><img src="' + photo + '" alt=""></div>'
+                : '<div class="ops-prod-emoji">' + esc(p.emoji || '👕') + '</div>') +
             '<div class="ops-prod-name">' + esc(p.name || 'Untitled') + '</div>' +
             '<div class="ops-prod-meta">' + esc(cat ? cat.label : (p.category || '')) +
                 ' · ' + (p.sizes || []).length + ' size' + ((p.sizes || []).length === 1 ? '' : 's') +
@@ -280,7 +284,8 @@ function renderOrders() {
                       : o.status === 'delivered' ? 'ops-badge--ok'
                       : o.status === 'packed' ? 'ops-badge--info' : '';
             h += '<tr class="click" onclick="shopEditOrder(\'' + esc(o.id) + '\')">' +
-                '<td class="bold">' + esc(o.camperName || '—') + '</td>' +
+                '<td class="bold">' + esc(o.camperName || '—') +
+                    (o.source === 'parent' ? ' <span class="ops-badge ops-badge--info">From parent</span>' : '') + '</td>' +
                 '<td>' + esc(o.bunk || '—') + '</td>' +
                 '<td>' + t.itemCount + '</td>' +
                 '<td class="num">' + money(t.total) + '</td>' +
@@ -342,6 +347,14 @@ function renderInventory() {
         '<div style="display:flex;gap:8px;align-items:center"><label class="ops-hint">Low-stock at</label>' +
         '<input class="ops-input" style="width:70px" type="number" min="0" value="' + threshold + '" onchange="shopSetThreshold(this.value)"></div></div>';
 
+    // Parents order through Campistry Link against these same counts, so this
+    // belongs next to the numbers it governs.
+    h += '<div class="ops-card"><div class="ops-card-body">' +
+        '<label class="ops-check"><input type="checkbox"' + (shop.settings.parentAllowBackorder ? ' checked' : '') +
+            ' onchange="shopSetBackorder(this.checked)"> Let parents order items that are out of stock</label>' +
+        '<p class="ops-hint" style="margin-top:5px">Off (recommended): a size showing zero is greyed out in the parent shop and the server refuses the order. ' +
+        'On: parents can order anything and you fill it from the next print run.</p></div></div>';
+
     shop.products.forEach(function (p) {
         var vs = SC.variants(p);
         h += '<div class="ops-card"><div class="ops-card-head"><h3>' + esc(p.emoji || '👕') + ' ' + esc(p.name) + '</h3>' +
@@ -359,6 +372,11 @@ function renderInventory() {
     });
     return h;
 }
+window.shopSetBackorder = function (on) {
+    shop.settings.parentAllowBackorder = !!on;
+    save(); render();
+    shopToast(on ? 'Parents can now order out-of-stock items' : 'Out-of-stock items hidden from parents');
+};
 window.shopSetThreshold = function (v) {
     shop.settings.lowStockThreshold = Math.max(0, parseInt(v, 10) || 0);
     save(); render();
@@ -412,7 +430,21 @@ window.shopEditProduct = function (id) {
     var sizes = p.sizes || ['YM', 'YL', 'AS', 'AM', 'AL', 'AXL'];
     var deltas = p.priceDeltas || {};
 
-    var h = '<div class="ops-fsec">Product</div>' +
+    var photo = SC.productImage(p);
+    _photoBuf = photo || null;
+    var h = '<div class="ops-fsec">Photo</div>' +
+        '<div style="display:flex;gap:14px;align-items:flex-start;margin-bottom:12px">' +
+            '<div id="pPhotoPrev" class="ops-photo-prev">' +
+                (photo ? '<img src="' + photo + '" alt="">' : '<span>No photo</span>') + '</div>' +
+            '<div style="flex:1">' +
+                '<label class="ops-btn" style="cursor:pointer">Upload photo' +
+                    '<input type="file" accept="image/*" style="display:none" onchange="shopPickPhoto(this)"></label> ' +
+                '<button type="button" class="ops-btn ops-btn--danger" id="pPhotoClear"' +
+                    (photo ? '' : ' style="display:none"') + ' onclick="shopClearPhoto()">Remove</button>' +
+                '<p class="ops-hint" style="margin-top:6px">Parents see this in the shop. Photos are shrunk automatically — shoot the item on a plain background.</p>' +
+            '</div>' +
+        '</div>' +
+        '<div class="ops-fsec">Product</div>' +
         '<div class="ops-row"><div class="ops-field"><label>Name</label><input class="ops-input" id="pName" value="' + esc(p.name || '') + '" placeholder="Camp Tee"></div>' +
         '<div class="ops-field"><label>Emoji</label><input class="ops-input" id="pEmoji" maxlength="4" style="text-align:center;font-size:1.3rem" value="' + esc(p.emoji || '👕') + '"></div></div>' +
         '<div class="ops-row"><div class="ops-field"><label>Category</label><select class="ops-select" id="pCat">' +
@@ -460,6 +492,29 @@ window.shopSyncDeltas = function (existing) {
     '<p class="ops-hint">Added to the base price for that size — e.g. 3 for a 2XL.</p>';
 };
 
+// Photo upload. The downscale happens in shop core so the size policy lives
+// with the storage format rather than in the click handler.
+window.shopPickPhoto = function (input) {
+    var f = input && input.files && input.files[0];
+    if (!f) return;
+    SC.downscaleImage(f).then(function (url) {
+        if (!url) { shopToast('Could not use that image — try a smaller one', 1); return; }
+        _photoBuf = url;
+        var prev = el('pPhotoPrev');
+        if (prev) prev.innerHTML = '<img src="' + url + '" alt="">';
+        var clr = el('pPhotoClear');
+        if (clr) clr.style.display = '';
+        shopToast('Photo added');
+    });
+};
+window.shopClearPhoto = function () {
+    _photoBuf = null;
+    var prev = el('pPhotoPrev');
+    if (prev) prev.innerHTML = '<span>No photo</span>';
+    var clr = el('pPhotoClear');
+    if (clr) clr.style.display = 'none';
+};
+
 window.shopSaveProduct = function () {
     var name = val('pName');
     if (!name) { shopToast('Name is required', 1); return; }
@@ -484,6 +539,7 @@ window.shopSaveProduct = function () {
         sizes: sizes,
         colors: colors,
         priceDeltas: deltas,
+        image: _photoBuf || '',
         // Stock is keyed by variant id and carried over untouched — editing a
         // product must never wipe the counts already recorded against it.
         stock: existing ? (existing.stock || {}) : {},

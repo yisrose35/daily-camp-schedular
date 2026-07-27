@@ -1097,3 +1097,96 @@ body {
     .lk-home-grid { grid-template-columns: repeat(2, 1fr); gap: 10px; }
     .lk-home-tile { min-height: 130px; }
 }
+
+/* ============================================================
+   CAMP SHOP (parent side)
+   Photo-led, because a parent buying a t-shirt is choosing by
+   sight — the admin grid can be text, this can't.
+   ============================================================ */
+.shop-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(180px, 1fr));
+    gap: 12px;
+    margin-bottom: 16px;
+}
+.shop-item {
+    background: #fff;
+    border: 1px solid var(--slate-200);
+    border-radius: var(--radius-md, 12px);
+    overflow: hidden;
+    display: flex;
+    flex-direction: column;
+    transition: box-shadow 0.15s, border-color 0.15s;
+}
+.shop-item:hover { border-color: var(--link-color); box-shadow: 0 4px 14px rgba(0,0,0,0.07); }
+.shop-item.sold-out { opacity: 0.6; }
+.shop-item-photo {
+    width: 100%;
+    aspect-ratio: 1 / 1;
+    background: var(--slate-100);
+    overflow: hidden;
+}
+.shop-item-photo img { width: 100%; height: 100%; object-fit: cover; display: block; }
+.shop-item-noimg {
+    display: flex; align-items: center; justify-content: center;
+    font-size: 2.6rem; line-height: 1;
+}
+.shop-item-body { padding: 11px 12px 13px; display: flex; flex-direction: column; gap: 4px; flex: 1; }
+.shop-item-name { font-size: 0.88rem; font-weight: 700; color: var(--slate-800); line-height: 1.3; }
+.shop-item-price { font-size: 0.95rem; font-weight: 800; color: var(--link-color); }
+.shop-item-from { font-size: 0.68rem; font-weight: 500; color: var(--slate-400); }
+.shop-item-out {
+    font-size: 0.75rem; font-weight: 700; color: var(--slate-400);
+    text-transform: uppercase; letter-spacing: 0.05em; margin-top: 4px;
+}
+.shop-opt-label {
+    font-size: 0.65rem; font-weight: 700; color: var(--slate-400);
+    text-transform: uppercase; letter-spacing: 0.05em; margin-top: 6px;
+}
+.shop-opts { display: flex; flex-wrap: wrap; gap: 4px; }
+.shop-opt {
+    font: inherit; font-size: 0.7rem; font-weight: 600;
+    padding: 3px 9px; border-radius: 999px;
+    border: 1px solid var(--slate-200); background: #fff; color: var(--slate-500);
+    cursor: pointer;
+}
+.shop-opt:hover { border-color: var(--link-color); color: var(--link-color); }
+.shop-opt.sel { background: var(--link-color); border-color: var(--link-color); color: #fff; }
+.shop-opt.out { opacity: 0.35; cursor: not-allowed; text-decoration: line-through; }
+.shop-opt.out:hover { border-color: var(--slate-200); color: var(--slate-500); }
+.shop-add { margin-top: 9px; width: 100%; justify-content: center; }
+
+/* ---- cart ---- */
+.shop-cart-row {
+    display: flex; align-items: center; gap: 10px;
+    padding: 9px 0; border-bottom: 1px solid var(--slate-100);
+}
+.shop-cart-row:last-child { border-bottom: none; }
+.shop-cart-info { flex: 1; min-width: 0; }
+.shop-cart-name { font-size: 0.85rem; font-weight: 600; color: var(--slate-800); }
+.shop-cart-opts { font-size: 0.72rem; color: var(--slate-500); }
+.shop-cart-qty { display: flex; align-items: center; gap: 6px; flex-shrink: 0; }
+.shop-cart-qty button {
+    width: 26px; height: 26px; border-radius: 7px;
+    border: 1px solid var(--slate-200); background: #fff;
+    font-size: 0.95rem; line-height: 1; color: var(--slate-600); cursor: pointer;
+}
+.shop-cart-qty button:hover { border-color: var(--link-color); color: var(--link-color); }
+.shop-cart-qty span { min-width: 18px; text-align: center; font-size: 0.85rem; font-weight: 700; }
+.shop-cart-amt { min-width: 62px; text-align: right; font-size: 0.85rem; font-weight: 700; color: var(--slate-800); }
+.shop-cart-total {
+    display: flex; justify-content: space-between; align-items: baseline;
+    padding-top: 11px; margin-top: 4px; border-top: 2px solid var(--slate-200);
+    font-size: 0.88rem; color: var(--slate-600);
+}
+.shop-cart-total strong { font-size: 1.15rem; color: var(--slate-900); }
+
+/* ---- past orders ---- */
+.shop-order { padding: 11px 0; border-bottom: 1px solid var(--slate-100); }
+.shop-order:last-child { border-bottom: none; }
+.shop-order-head { display: flex; justify-content: space-between; align-items: center; gap: 8px; }
+.shop-order-lines { font-size: 0.78rem; color: var(--slate-600); line-height: 1.55; margin-top: 4px; }
+.shop-order-foot {
+    display: flex; justify-content: space-between;
+    font-size: 0.72rem; color: var(--slate-400); margin-top: 5px;
+}

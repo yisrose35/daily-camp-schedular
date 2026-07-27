@@ -218,3 +218,42 @@ test('revenue splits collected from outstanding and skips cancellations', () => 
     assert.strictEqual(r.outstanding, 72);
     assert.strictEqual(r.total, 129);
 });
+
+// ── product photos ──────────────────────────────────────────────────────────
+
+const JPG = 'data:image/jpeg;base64,/9j/4AAQSkZJRgABAQAAAQABAAD/2wBDAAgGBgcGBQgHBwcJCQgKDBQNDAsLDBkSEw8UHRofHh0aHBwgJC4nICIsIxwcKDcpLDAxNDQ0Hyc5PTgyPC4zNDL/wAALCAABAAEBAREA/8QAFAABAAAAAAAAAAAAAAAAAAAACf/EABQQAQAAAAAAAAAAAAAAAAAAAAD/2gAIAQEAAD8AKp//2Q==';
+
+test('isSafeImage accepts raster data URLs and rejects SVG / remote', () => {
+    assert.ok(S.isSafeImage(JPG));
+    assert.ok(!S.isSafeImage('data:image/svg+xml;base64,PHN2Zz48c2NyaXB0Lz48L3N2Zz4='));
+    assert.ok(!S.isSafeImage('https://example.com/tee.jpg'));
+    assert.ok(!S.isSafeImage('javascript:alert(1)'));
+    assert.ok(!S.isSafeImage(undefined));
+});
+
+test('productImage returns the photo only when it is safe', () => {
+    assert.strictEqual(S.productImage({ image: JPG }), JPG);
+    assert.strictEqual(S.productImage({ image: 'https://evil.example/x.png' }), '');
+    assert.strictEqual(S.productImage({}), '');
+    assert.strictEqual(S.productImage(null), '');
+});
+
+test('imageBytes approximates the decoded size and handles padding', () => {
+    // 4 base64 chars -> 3 bytes, minus one per '=' of padding.
+    assert.strictEqual(S.imageBytes('data:image/jpeg;base64,AAAA'), 3);
+    assert.strictEqual(S.imageBytes('data:image/jpeg;base64,AAA='), 2);
+    assert.strictEqual(S.imageBytes('data:image/jpeg;base64,AA=='), 1);
+    assert.strictEqual(S.imageBytes('not a data url'), 0);
+    assert.strictEqual(S.imageBytes(null), 0);
+});
+
+test('downscaleImage resolves to empty string outside a browser', async () => {
+    assert.strictEqual(await S.downscaleImage({}), '');
+});
+
+test('a product photo does not disturb variants or pricing', () => {
+    // Guard against the image field leaking into variant ids or totals.
+    const withPhoto = Object.assign({}, TEE, { image: JPG });
+    assert.deepStrictEqual(S.variants(withPhoto).map(v => v.id), S.variants(TEE).map(v => v.id));
+    assert.strictEqual(S.unitPrice(withPhoto, 'AXXL'), 21);
+});

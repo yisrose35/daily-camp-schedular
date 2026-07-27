@@ -66,6 +66,86 @@
     }
     S.slug = slug;
 
+    // ── product photos ───────────────────────────────────────────────────────
+    // Photos are stored as raster data URLs on the product. Only raster: an
+    // SVG data URL can carry <script>, and these strings are interpolated into
+    // markup on both the admin page and the parent portal.
+    //
+    // They live in the same camp_state_kv blob as the rest of the catalogue, so
+    // size matters — every page that reads the shop pays for them. Uploads are
+    // downscaled hard before storage (see downscaleImage) and MAX_IMAGE_BYTES
+    // is the backstop.
+    S.MAX_IMAGE_BYTES = 160 * 1024;
+
+    S.isSafeImage = function (s) {
+        return typeof s === 'string' &&
+            /^data:image\/(png|jpeg|jpg|gif|webp);base64,[A-Za-z0-9+/=]+$/.test(s);
+    };
+
+    /** Approximate decoded byte size of a data URL. */
+    S.imageBytes = function (dataUrl) {
+        if (typeof dataUrl !== 'string') return 0;
+        var i = dataUrl.indexOf(',');
+        if (i < 0) return 0;
+        var b64 = dataUrl.slice(i + 1);
+        var pad = b64.endsWith('==') ? 2 : b64.endsWith('=') ? 1 : 0;
+        return Math.max(0, Math.floor(b64.length * 3 / 4) - pad);
+    };
+
+    /** The product's photo, or '' when there isn't a usable one. */
+    S.productImage = function (product) {
+        var img = product && product.image;
+        return S.isSafeImage(img) ? img : '';
+    };
+
+    /**
+     * Downscale + re-encode an uploaded file to a small JPEG data URL.
+     * Browser only; resolves to '' anywhere else.
+     *
+     * Quality steps down until the result fits MAX_IMAGE_BYTES, rather than
+     * rejecting the upload — a camp photographing a t-shirt on a phone will
+     * hand us a 4MB image every time, and refusing it just means no photos.
+     */
+    S.downscaleImage = function (file, opts) {
+        opts = opts || {};
+        var maxDim = opts.maxDim || 700;
+        var limit = opts.maxBytes || S.MAX_IMAGE_BYTES;
+        if (typeof FileReader === 'undefined' || typeof document === 'undefined') {
+            return Promise.resolve('');
+        }
+        return new Promise(function (resolve) {
+            var reader = new FileReader();
+            reader.onload = function (e) {
+                var img = new Image();
+                img.onload = function () {
+                    var w = img.naturalWidth || img.width;
+                    var h = img.naturalHeight || img.height;
+                    var scale = Math.min(1, maxDim / Math.max(w, h));
+                    var c = document.createElement('canvas');
+                    c.width = Math.max(1, Math.round(w * scale));
+                    c.height = Math.max(1, Math.round(h * scale));
+                    var ctx = c.getContext('2d');
+                    if (!ctx) { resolve(''); return; }
+                    // Photos of merchandise are usually shot on white; filling
+                    // first keeps a transparent PNG from going black as JPEG.
+                    ctx.fillStyle = '#ffffff';
+                    ctx.fillRect(0, 0, c.width, c.height);
+                    ctx.drawImage(img, 0, 0, c.width, c.height);
+                    var q = 0.82, url = c.toDataURL('image/jpeg', q);
+                    while (S.imageBytes(url) > limit && q > 0.3) {
+                        q -= 0.12;
+                        url = c.toDataURL('image/jpeg', q);
+                    }
+                    resolve(S.imageBytes(url) <= limit ? url : '');
+                };
+                img.onerror = function () { resolve(''); };
+                img.src = e.target.result;
+            };
+            reader.onerror = function () { resolve(''); };
+            reader.readAsDataURL(file);
+        });
+    };
+
     /** Stable variant id. Derived, never generated — see the header note. */
     S.variantId = function (product, size, color) {
         var base = (product && (product.sku || product.id)) || 'item';

@@ -109,6 +109,7 @@
         <div class="lk-nav-label">Financial</div>
         <button class="lk-nav-item" data-page="payments" onclick="nav('payments')"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="1" y="4" width="22" height="16" rx="2"/><line x1="1" y1="10" x2="23" y2="10"/></svg> Payments</button>
         <button class="lk-nav-item" data-page="canteen" onclick="nav('canteen')"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M18 8h1a4 4 0 0 1 0 8h-1"/><path d="M2 8h16v9a4 4 0 0 1-4 4H6a4 4 0 0 1-4-4V8z"/></svg> Canteen</button>
+        <button class="lk-nav-item" data-page="shop" onclick="nav('shop')"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M6 2L3 6v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2V6l-3-4z"/><line x1="3" y1="6" x2="21" y2="6"/><path d="M16 10a4 4 0 0 1-8 0"/></svg> Camp Shop</button>
         <button class="lk-nav-item" data-page="tips" onclick="nav('tips')"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><path d="M16 8h-6a2 2 0 1 0 0 4h4a2 2 0 1 1 0 4H8"/><line x1="12" y1="6" x2="12" y2="8"/><line x1="12" y1="16" x2="12" y2="18"/></svg> Tips</button>
         <div class="lk-nav-divider"></div>
         <div class="lk-nav-label">Communication</div>
@@ -316,6 +317,22 @@
         <button class="btn btn-primary btn-sm" style="margin-top:6px;" onclick="saveSpendingControls()">Save Controls</button>
     </div>
     <div class="lk-card"><div class="lk-card-head"><h2>Recent Transactions</h2></div><div id="txList"></div></div>
+</div>
+
+<!-- CAMP SHOP -->
+<div class="lk-page" id="page-shop">
+    <div class="lk-page-hero">
+        <div class="lk-page-hero-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M6 2L3 6v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2V6l-3-4z"/><line x1="3" y1="6" x2="21" y2="6"/><path d="M16 10a4 4 0 0 1-8 0"/></svg></div>
+        <div><h1>Camp Shop</h1><p>Camp t-shirts, sweatshirts and gear — delivered to the bunk</p></div>
+    </div>
+    <div class="lk-tabs" id="shopChildTabs"></div>
+    <div id="shopCatalogue"></div>
+    <div class="lk-card" id="shopCartCard" style="display:none;">
+        <div class="lk-card-head"><h2>Your Order</h2></div>
+        <div id="shopCart"></div>
+        <div id="shopCartFoot"></div>
+    </div>
+    <div class="lk-card"><div class="lk-card-head"><h2>Past Orders</h2></div><div id="shopOrders"></div></div>
 </div>
 
 <!-- MESSAGES -->
@@ -763,6 +780,7 @@ function nav(p){
     if(p==='tips')renderTipsPage();
     if(p==='lists')renderCampLists();
     if(p==='mail')renderCamperMail();
+    if(p==='shop')renderShopPage();
     if(_navHistory[_navHistory.length-1]!==p)_navHistory.push(p);
     window.scrollTo(0,0);
 }
@@ -794,6 +812,313 @@ function selAmt(v,b){_selAmt=v;document.querySelectorAll('.canteen-quick-btn').f
 function selCustomAmt(input){
     var v=parseFloat(input.value);
     if(!isNaN(v)&&v>0){_selAmt=v;document.querySelectorAll('.canteen-quick-btn').forEach(function(e){e.classList.remove('sel')});}
+}
+
+// ═══════════════════════════════════════════════════════════════
+// CAMP SHOP (parent side)
+//
+// The catalogue and the order both go through SECURITY DEFINER RPCs
+// (migration 047). Notably the cart NEVER sends a price — the server prices
+// every line from the stored catalogue, so an edited price in devtools buys
+// nothing. All this code sends is product id, size, colour and quantity.
+// ═══════════════════════════════════════════════════════════════
+var _shopCatalogue=null;      // products from get_shop_catalogue
+var _shopSettings={};
+var _shopCart=[];             // [{productId,size,color,qty}]
+var _shopOrders=[];
+var _shopLoading=false;
+
+function _shopChild(){
+    var t=document.querySelector('#shopChildTabs .lk-tab.active');
+    var id=t?t.dataset.childId:'';
+    return children.find(function(c){return c.id===id;})||children[0]||null;
+}
+function _shopEsc(s){var d=document.createElement('div');d.textContent=s==null?'':s;return d.innerHTML.replace(/"/g,'&quot;');}
+function _shopMoney(n){return '$'+(Math.round((parseFloat(n)||0)*100)/100).toFixed(2);}
+function _shopProduct(id){return (_shopCatalogue||[]).filter(function(p){return String(p.id)===String(id)})[0]||null;}
+
+// Mirrors ShopCore.variantId() and the SQL in migration 047 — all three have to
+// agree or stock lookups silently miss.
+function _shopSlug(s){return String(s||'').toLowerCase().replace(/[^a-z0-9]+/g,'-').replace(/^-|-$/g,'');}
+function _shopVariantId(p,size,color){
+    return [_shopSlug(p.sku||p.id),_shopSlug(size||'onesize'),_shopSlug(color||'default')].join(':');
+}
+function _shopStock(p,size,color){
+    var st=p.stock||{};
+    return parseInt(st[_shopVariantId(p,size,color)],10)||0;
+}
+function _shopUnit(p,size){
+    var d=(p.priceDeltas||{})[size];
+    return Math.round(((parseFloat(p.price)||0)+(parseFloat(d)||0))*100)/100;
+}
+var _SHOP_SIZE_LABELS={YXS:'Youth XS',YS:'Youth S',YM:'Youth M',YL:'Youth L',YXL:'Youth XL',
+    AS:'Adult S',AM:'Adult M',AL:'Adult L',AXL:'Adult XL',AXXL:'Adult 2XL',A3XL:'Adult 3XL'};
+function _shopSizeLabel(s){return _SHOP_SIZE_LABELS[s]||s;}
+
+function renderShopPage(){
+    // Child tabs — an order is placed for one camper, so this picks who.
+    var ct=document.getElementById('shopChildTabs');
+    if(ct){
+        ct.innerHTML='';
+        // One camper needs no picker, but the hidden tab still carries the id
+        // _shopChild() reads. display is always set, never just toggled off, so
+        // a second camper appearing later brings the picker back.
+        ct.style.display=(children.length>1)?'':'none';
+        children.forEach(function(c,i){
+            ct.innerHTML+='<button class="lk-tab '+(i===0?'active':'')+'" data-child-id="'+_shopEsc(c.id)+'" onclick="switchShopChild(\''+_shopEsc(c.id)+'\',this)">'+_shopEsc(c.name.split(' ')[0])+'</button>';
+        });
+    }
+    if(_shopCatalogue===null&&!_shopLoading) loadShopCatalogue();
+    renderShopCatalogue();
+    renderShopCart();
+    renderShopOrders();
+}
+
+function switchShopChild(id,btn){
+    document.querySelectorAll('#shopChildTabs .lk-tab').forEach(function(b){b.classList.remove('active')});
+    if(btn)btn.classList.add('active');
+    // The cart belongs to a camper — sizes differ per child, so switching
+    // clears it rather than silently re-attributing what's in it.
+    if(_shopCart.length){_shopCart=[];toast('Cart cleared — switched camper');}
+    renderShopCatalogue();renderShopCart();
+}
+
+function loadShopCatalogue(){
+    var db=window._parentDB;
+    var c=_shopChild();
+    var campId=(c&&c.campId)||(parent&&parent.campId);
+    if(!db||!campId){renderShopCatalogue();return;}
+    _shopLoading=true;
+    db.rpc('get_shop_catalogue',{p_camp_id:campId}).then(function(res){
+        _shopLoading=false;
+        if(res.error||!res.data||!res.data.success){
+            console.warn('[Parent] get_shop_catalogue:',res.error&&res.error.message);
+            _shopCatalogue=[];
+        }else{
+            _shopCatalogue=res.data.products||[];
+            _shopSettings=res.data.settings||{};
+        }
+        renderShopCatalogue();
+    },function(){_shopLoading=false;_shopCatalogue=[];renderShopCatalogue();});
+    loadShopOrders();
+}
+
+function loadShopOrders(){
+    var db=window._parentDB;if(!db)return;
+    db.rpc('get_my_shop_orders',{}).then(function(res){
+        if(res.error||!res.data||!res.data.success)return;
+        _shopOrders=res.data.orders||[];
+        renderShopOrders();
+    },function(){});
+}
+
+function renderShopCatalogue(){
+    var host=document.getElementById('shopCatalogue');if(!host)return;
+    if(_shopCatalogue===null){
+        host.innerHTML='<div class="lk-card"><div style="padding:22px;text-align:center;color:var(--text-muted);font-size:.85rem;">Loading the shop…</div></div>';
+        return;
+    }
+    if(!_shopCatalogue.length){
+        host.innerHTML='<div class="lk-empty"><div class="lk-empty-icon"><svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M6 2L3 6v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2V6l-3-4z"/><line x1="3" y1="6" x2="21" y2="6"/></svg></div><h3>The shop isn\'t open yet</h3><p>Camp hasn\'t put anything on sale. Check back soon.</p></div>';
+        return;
+    }
+    var allowBackorder=!!_shopSettings.parentAllowBackorder;
+    var h='<div class="shop-grid">';
+    _shopCatalogue.forEach(function(p){
+        var sizes=(p.sizes||[]);
+        var colors=(p.colors||[]);
+        var img=(typeof p.image==='string'&&/^data:image\/(png|jpeg|jpg|gif|webp);base64,/.test(p.image))?p.image:'';
+        // Sold out = every variant at zero. Sizes/colours may be empty, in
+        // which case the single '' variant is the whole product.
+        var szList=sizes.length?sizes:[''], clList=colors.length?colors:[''];
+        var onHand=0;
+        szList.forEach(function(sz){clList.forEach(function(cl){onHand+=_shopStock(p,sz,cl)})});
+        var soldOut=!allowBackorder&&onHand<=0;
+        h+='<div class="shop-item'+(soldOut?' sold-out':'')+'">'
+            +(img?'<div class="shop-item-photo"><img src="'+img+'" alt="'+_shopEsc(p.name)+'"></div>'
+                 :'<div class="shop-item-photo shop-item-noimg">'+_shopEsc(p.emoji||'👕')+'</div>')
+            +'<div class="shop-item-body">'
+            +'<div class="shop-item-name">'+_shopEsc(p.name)+'</div>'
+            +'<div class="shop-item-price">'+_shopMoney(p.price)+(Object.keys(p.priceDeltas||{}).length?' <span class="shop-item-from">+ size</span>':'')+'</div>';
+        if(soldOut){
+            h+='<div class="shop-item-out">Sold out</div>';
+        }else{
+            if(sizes.length){
+                h+='<div class="shop-opt-label">Size</div><div class="shop-opts">';
+                sizes.forEach(function(sz){
+                    var any=colors.length?colors.some(function(cl){return _shopStock(p,sz,cl)>0}):_shopStock(p,sz,'')>0;
+                    var out=!allowBackorder&&!any;
+                    h+='<button class="shop-opt'+(out?' out':'')+'" data-pid="'+_shopEsc(p.id)+'" data-kind="size" data-val="'+_shopEsc(sz)+'"'
+                        +(out?' disabled title="Out of stock"':' onclick="shopPickOpt(this)"')+'>'+_shopEsc(_shopSizeLabel(sz))+'</button>';
+                });
+                h+='</div>';
+            }
+            if(colors.length){
+                h+='<div class="shop-opt-label">Colour</div><div class="shop-opts">';
+                colors.forEach(function(cl){
+                    h+='<button class="shop-opt" data-pid="'+_shopEsc(p.id)+'" data-kind="color" data-val="'+_shopEsc(cl)+'" onclick="shopPickOpt(this)">'+_shopEsc(cl)+'</button>';
+                });
+                h+='</div>';
+            }
+            h+='<button class="btn btn-primary btn-sm shop-add" onclick="shopAddToCart(\''+_shopEsc(String(p.id))+'\')">Add to order</button>';
+        }
+        h+='</div></div>';
+    });
+    h+='</div>';
+    host.innerHTML=h;
+}
+
+/** Toggle a size/colour chip; only one of each kind can be picked per product. */
+function shopPickOpt(btn){
+    var pid=btn.dataset.pid,kind=btn.dataset.kind;
+    document.querySelectorAll('.shop-opt[data-pid="'+CSS.escape(pid)+'"][data-kind="'+kind+'"]').forEach(function(b){b.classList.remove('sel')});
+    btn.classList.add('sel');
+}
+function _shopPicked(pid,kind){
+    var b=document.querySelector('.shop-opt[data-pid="'+CSS.escape(String(pid))+'"][data-kind="'+kind+'"].sel');
+    return b?b.dataset.val:'';
+}
+
+function shopAddToCart(pid){
+    var p=_shopProduct(pid);if(!p)return;
+    var size=_shopPicked(pid,'size'), color=_shopPicked(pid,'color');
+    if((p.sizes||[]).length&&!size){toast('Pick a size first');return;}
+    if((p.colors||[]).length&&!color){toast('Pick a colour first');return;}
+    if(!_shopSettings.parentAllowBackorder&&_shopStock(p,size,color)<1){toast('That option is out of stock');return;}
+    var line=_shopCart.filter(function(l){return String(l.productId)===String(pid)&&l.size===size&&l.color===color})[0];
+    if(line)line.qty+=1;
+    else _shopCart.push({productId:p.id,size:size,color:color,qty:1});
+    renderShopCart();
+    toast(p.name+' added');
+}
+function shopCartQty(i,delta){
+    var l=_shopCart[i];if(!l)return;
+    l.qty+=delta;
+    if(l.qty<1)_shopCart.splice(i,1);
+    renderShopCart();
+}
+
+function renderShopCart(){
+    var card=document.getElementById('shopCartCard');
+    var body=document.getElementById('shopCart');
+    var foot=document.getElementById('shopCartFoot');
+    if(!card||!body||!foot)return;
+    if(!_shopCart.length){card.style.display='none';return;}
+    card.style.display='';
+
+    var total=0,h='';
+    _shopCart.forEach(function(l,i){
+        var p=_shopProduct(l.productId);
+        var unit=p?_shopUnit(p,l.size):0;
+        var lineTotal=Math.round(unit*l.qty*100)/100;
+        total+=lineTotal;
+        var opts=[l.size?_shopSizeLabel(l.size):'',l.color||''].filter(Boolean).join(' · ');
+        h+='<div class="shop-cart-row">'
+            +'<div class="shop-cart-info"><div class="shop-cart-name">'+_shopEsc(p?p.name:'Item')+'</div>'
+            +(opts?'<div class="shop-cart-opts">'+_shopEsc(opts)+'</div>':'')+'</div>'
+            +'<div class="shop-cart-qty"><button onclick="shopCartQty('+i+',-1)">−</button><span>'+l.qty+'</span><button onclick="shopCartQty('+i+',1)">+</button></div>'
+            +'<div class="shop-cart-amt">'+_shopMoney(lineTotal)+'</div></div>';
+    });
+    body.innerHTML=h;
+
+    var c=_shopChild();
+    var bal=c&&c.canteenBalance!=null?c.canteenBalance:null;
+    total=Math.round(total*100)/100;
+    foot.innerHTML=
+        '<div class="shop-cart-total"><span>Total</span><strong>'+_shopMoney(total)+'</strong></div>'
+        +'<div class="lk-field" style="margin-top:10px;"><label>How would you like to pay?</label>'
+        +'<select class="lk-input" id="shopPayMethod">'
+        +'<option value="bill">Add it to my camp bill</option>'
+        +'<option value="canteen"'+(bal!=null&&bal>=total?'':' disabled')+'>Take it from the canteen balance'
+        +(bal!=null?' ('+_shopMoney(bal)+' available)':'')+'</option>'
+        +'</select></div>'
+        +'<div class="lk-field"><label>Note for camp <span style="font-weight:400;color:var(--text-muted);">— optional</span></label>'
+        +'<input type="text" class="lk-input" id="shopOrderNote" placeholder="e.g. please deliver before visiting day"></div>'
+        +'<div style="display:flex;gap:8px;justify-content:flex-end;margin-top:10px;">'
+        +'<button class="btn btn-secondary btn-sm" onclick="shopClearCart()">Clear</button>'
+        +'<button class="btn btn-primary" id="shopPlaceBtn" onclick="shopPlaceOrder()">Place order for '+_shopEsc(c?c.name.split(' ')[0]:'my camper')+'</button></div>'
+        +'<p style="font-size:.72rem;color:var(--text-muted);margin:8px 0 0;">Camp confirms the price and delivers to the bunk. You\'ll see the order below once it\'s in.</p>';
+}
+function shopClearCart(){_shopCart=[];renderShopCart();}
+
+function shopPlaceOrder(){
+    var c=_shopChild();
+    if(!c){toast('No camper selected');return;}
+    if(!_shopCart.length)return;
+    var db=window._parentDB;
+    if(!db){toast('Connection not ready — try again in a moment.');return;}
+    var method=(document.getElementById('shopPayMethod')||{}).value||'bill';
+    var note=((document.getElementById('shopOrderNote')||{}).value||'').trim();
+    var btn=document.getElementById('shopPlaceBtn');
+    if(btn){btn.disabled=true;btn.textContent='Placing…';}
+
+    // Price-free payload — the server prices it. See migration 047.
+    var lines=_shopCart.map(function(l){
+        return {productId:l.productId,size:l.size||'',color:l.color||'',qty:l.qty};
+    });
+
+    db.rpc('submit_shop_order',{p_camper_name:c.name,p_lines:lines,p_pay_method:method,p_notes:note})
+      .then(function(res){
+        if(btn){btn.disabled=false;btn.textContent='Place order';}
+        if(res.error){
+            console.error('[Parent] submit_shop_order:',res.error.message);
+            toast('Could not place the order — please try again.');
+            return;
+        }
+        var d=res.data;
+        if(!d||!d.success){
+            var e=d&&d.error;
+            var msg=e==='out_of_stock'
+                    ? (d.product||'That item')+(d.size?' ('+_shopSizeLabel(d.size)+')':'')+' just sold out — only '+(d.available||0)+' left.'
+                  : e==='insufficient_balance'
+                    ? 'Not enough in the canteen balance ('+_shopMoney(d.balance)+' of '+_shopMoney(d.total)+').'
+                  : e==='camper_not_on_invite' ? 'That camper isn\'t on your account.'
+                  : e==='product_unavailable' ? 'One of those items is no longer on sale.'
+                  : 'Could not place the order.';
+            toast(msg);
+            // The catalogue we priced against is stale — refresh it.
+            if(e==='out_of_stock'||e==='product_unavailable')loadShopCatalogue();
+            return;
+        }
+        _shopCart=[];
+        renderShopCart();
+        if(d.paid&&d.balance!=null){
+            c.canteenBalance=d.balance;
+            if(typeof switchCanteen==='function'&&document.querySelector('#canteenTabs .lk-tab'))switchCanteen(c.id);
+        }
+        loadShopCatalogue();
+        toast('Order placed — '+_shopMoney(d.total)+' for '+c.name.split(' ')[0]);
+    },function(){
+        if(btn){btn.disabled=false;btn.textContent='Place order';}
+        toast('Could not place the order — please try again.');
+    });
+}
+
+function renderShopOrders(){
+    var host=document.getElementById('shopOrders');if(!host)return;
+    if(!_shopOrders.length){
+        host.innerHTML='<div style="padding:18px;text-align:center;color:var(--text-muted);font-size:.82rem;">No orders yet.</div>';
+        return;
+    }
+    var LBL={placed:'Placed',paid:'Paid',packed:'Packed',delivered:'Delivered',cancelled:'Cancelled'};
+    var h='';
+    _shopOrders.slice().sort(function(a,b){return String(b.placedAt||'').localeCompare(String(a.placedAt||''))}).forEach(function(o){
+        var total=(o.lines||[]).reduce(function(s,l){return s+(parseFloat(l.unitPrice)||0)*(parseInt(l.qty,10)||0)},0);
+        var when=(o.placedAt||'').slice(0,10);
+        h+='<div class="shop-order">'
+            +'<div class="shop-order-head"><strong>'+_shopEsc(o.camperName||'')+'</strong>'
+            +'<span class="lk-badge">'+_shopEsc(LBL[o.status]||o.status||'')+'</span></div>'
+            +'<div class="shop-order-lines">'
+            +(o.lines||[]).map(function(l){
+                var opts=[l.size?_shopSizeLabel(l.size):'',l.color||''].filter(Boolean).join(' · ');
+                return _shopEsc(l.name||'Item')+(opts?' · '+_shopEsc(opts):'')+' ×'+(parseInt(l.qty,10)||0);
+              }).join('<br>')
+            +'</div>'
+            +'<div class="shop-order-foot"><span>'+_shopEsc(when)+'</span>'
+            +'<span>'+_shopMoney(total)+(o.paid?' · paid':' · on your bill')+'</span></div>'
+            +'</div>';
+    });
+    host.innerHTML=h;
 }
 
 function _activeCanteenChild(){

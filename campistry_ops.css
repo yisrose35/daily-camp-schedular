@@ -259,3 +259,19 @@
     .ops-card { border: none; box-shadow: none; margin-bottom: 8px; }
     .ops-t th { background: #fff; border-bottom: 1px solid #000; }
 }
+
+/* ---- product photos ---- */
+.ops-prod-photo {
+    width: 100%; aspect-ratio: 4 / 3;
+    border-radius: var(--ops-r-sm); overflow: hidden;
+    background: var(--ops-line-soft); margin-bottom: 8px;
+}
+.ops-prod-photo img { width: 100%; height: 100%; object-fit: cover; display: block; }
+.ops-photo-prev {
+    width: 108px; height: 108px; flex-shrink: 0;
+    border: 1px solid var(--ops-line); border-radius: var(--ops-r-sm);
+    background: var(--ops-line-soft); overflow: hidden;
+    display: flex; align-items: center; justify-content: center;
+    font-size: 0.72rem; color: var(--ops-faint); text-align: center;
+}
+.ops-photo-prev img { width: 100%; height: 100%; object-fit: cover; display: block; }
