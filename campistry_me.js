@@ -10,6 +10,14 @@ var structure={}, roster={}, families={}, payments=[], broadcasts=[], bunkAsgn={
 var bunkCapacity={}; // max campers per bunk (capacity), keyed by bunk name — distinct from bunkManualCounts (headcount override)
 var enrollments={}, sessions=[], enrollSettings={}, formConfig=null;
 var finStaff=[], finExpenses=[], finPayments=[], finBudget={revenue:0,payroll:0,expenses:0}, finIntegrations={};
+// Payroll — its own store, separate from the finance-tab staff list.
+//   staff:      full payroll records (pay, addresses, documents, youthCorps)
+//   timesheets: one row per person per week
+//   youthCorps: the program-level worksite setup (see campistry_payroll_core.js)
+//   payRuns:    committed pay periods
+var payroll={staff:[],timesheets:[],youthCorps:{},payRuns:[],nextStaffId:1};
+var _prTab='overview';   // overview | staff | timesheets | youth | runs
+var _prWeek='';          // the week currently open on the Timesheets tab
 var printSheets=[]; // custom printable-sheet templates (columns + grouping)
 var savedReports=[]; // custom/saved reports: { id, name, source, fields, filters, groupBy, format, mode, snapshotRows, ... }
 var curPage='campers', editingCamper=null, editingDiv=null, editingFam=null;
@@ -113,6 +121,20 @@ function loadData(){
         formConfig=me.formConfig||null;
         printSheets=Array.isArray(me.printSheets)?me.printSheets:[];
         savedReports=Array.isArray(me.savedReports)?me.savedReports:[];
+        var pr=me.payroll||{};
+        payroll={
+            staff:Array.isArray(pr.staff)?pr.staff:[],
+            timesheets:Array.isArray(pr.timesheets)?pr.timesheets:[],
+            youthCorps:(pr.youthCorps&&typeof pr.youthCorps==='object')?pr.youthCorps:{},
+            payRuns:Array.isArray(pr.payRuns)?pr.payRuns:[],
+            nextStaffId:pr.nextStaffId||1
+        };
+        // Every payroll record needs a stable id — timesheets and pay runs key
+        // off it, so a record without one silently loses its hours.
+        var maxSid=0;
+        payroll.staff.forEach(function(s){if(s&&s.id>maxSid)maxSid=s.id});
+        if(maxSid>=payroll.nextStaffId)payroll.nextStaffId=maxSid+1;
+        payroll.staff.forEach(function(s){if(s&&!s.id){s.id=payroll.nextStaffId++}});
         // Ensure promoCodes live inside enrollSettings
         if(me.promoCodes&&!enrollSettings.promoCodes)enrollSettings.promoCodes=me.promoCodes;
         // Analytics & Finance
@@ -190,6 +212,7 @@ function save(){
             printSheets:printSheets,
             savedReports:savedReports,
             promoCodes:enrollSettings.promoCodes||(g.campistryMe?.promoCodes)||{},
+            payroll:payroll,
             finance:{staff:finStaff,expenses:finExpenses,payments:finPayments,budget:finBudget,integrations:finIntegrations}
         });
         g.updated_at=new Date().toISOString();
@@ -344,7 +367,7 @@ function ff(label,id,val,type,opts){
 
 // ═══ RENDERERS ═══════════════════════════════════════════════════
 function render(p){
-    var m={campers:renderCampers,structure:renderStructure,bunkbuilder:renderBB,enrollment:renderEnrollment,billing:renderBilling,analytics:renderAnalytics,reports:renderReports,printsheets:renderPrintSheets,settings:renderSettings};
+    var m={campers:renderCampers,structure:renderStructure,bunkbuilder:renderBB,enrollment:renderEnrollment,billing:renderBilling,payroll:renderPayroll,analytics:renderAnalytics,reports:renderReports,printsheets:renderPrintSheets,settings:renderSettings};
     if(m[p])m[p]();else renderSoon(p);
 }
 
@@ -747,7 +770,7 @@ function viewCamper(n){
     }
 
     // Address
-    b+='<div class="cv-sec">Address</div>';
+    b+='<div class="cv-sec">Home Address</div>';
     if(d.street){
         b+=cvR('Street',d.street);
         b+=cvR('City',d.city);
@@ -757,6 +780,22 @@ function viewCamper(n){
         b+='<a href="https://maps.google.com/?q='+encodeURIComponent(fullAddr)+'" target="_blank" style="display:inline-flex;align-items:center;gap:4px;font-size:.75rem;font-weight:600;color:var(--me);margin-top:4px;text-decoration:none">Open in Maps →</a>';
     }else{
         b+='<div style="font-size:.8rem;color:var(--s400);font-style:italic;padding:2px 0">No address on file</div>';
+    }
+
+    // Summer address — only worth its own block when it differs from home.
+    b+='<div class="cv-sec">Summer Address</div>';
+    if(d.summerSameAsHome!==false){
+        b+='<div style="font-size:.8rem;color:var(--s400);padding:2px 0">Same as home</div>';
+    }else if(d.summerStreet){
+        b+=cvR('Street',d.summerStreet);
+        b+=cvR('City',d.summerCity);
+        b+=cvR('State',d.summerState);
+        b+=cvR('ZIP',d.summerZip);
+        b+=cvR('Phone',d.summerPhone);
+        var summerAddr=[d.summerStreet,d.summerCity,d.summerState,d.summerZip].filter(Boolean).join(', ');
+        b+='<a href="https://maps.google.com/?q='+encodeURIComponent(summerAddr)+'" target="_blank" style="display:inline-flex;align-items:center;gap:4px;font-size:.75rem;font-weight:600;color:var(--me);margin-top:4px;text-decoration:none">Open in Maps →</a>';
+    }else{
+        b+='<div style="font-size:.8rem;color:var(--s400);font-style:italic;padding:2px 0">No summer address on file</div>';
     }
 
     // Emergency Contact
@@ -870,9 +909,22 @@ function editCamper(n){
     h+='<div class="fr">'+ff('Parent 1 Name','ceP1',d.parent1Name||'')+ff('Phone','ceP1Ph',d.parent1Phone||'')+'</div>';
     h+=ff('Email','ceP1Em',d.parent1Email||'','email');
 
-    h+='<div class="fsec">Address</div>';
+    // Home vs summer address. Plenty of camp families spend the season at a
+    // bungalow or a rental, so mail, transport and emergency contact all need
+    // the summer address — while billing and records still key off home.
+    h+='<div class="fsec">Home Address</div>';
     h+=ff('Street Address','ceStreet',d.street||'');
     h+='<div class="fr">'+ff('City','ceCity',d.city||'')+ff('State','ceState',d.state||'')+ff('ZIP','ceZip',d.zip||'')+'</div>';
+
+    h+='<div class="fsec">Summer Address</div>';
+    h+='<div class="fg"><label class="fl" style="display:flex;align-items:center;gap:7px;cursor:pointer">'+
+        '<input type="checkbox" id="ceSummerSame"'+(d.summerSameAsHome!==false?' checked':'')+' onchange="CampistryMe.ceToggleSummer()"> Same as home address</label>'+
+        '<p style="font-size:.68rem;color:var(--s400);margin:2px 0 0">Where the family is during the season — a bungalow, a rental, or with relatives.</p></div>';
+    h+='<div id="ceSummerBlock" style="'+(d.summerSameAsHome!==false?'display:none':'')+'">';
+    h+=ff('Street Address','ceSummerStreet',d.summerStreet||'');
+    h+='<div class="fr">'+ff('City','ceSummerCity',d.summerCity||'')+ff('State','ceSummerState',d.summerState||'')+ff('ZIP','ceSummerZip',d.summerZip||'')+'</div>';
+    h+=ff('Summer phone','ceSummerPhone',d.summerPhone||'','tel');
+    h+='</div>';
 
     h+='<div class="fsec">Emergency Contact</div>';
     h+='<div class="fr">'+ff('Name','ceEmN',d.emergencyName||'')+ff('Phone','ceEmPh',d.emergencyPhone||'')+'</div>';
@@ -899,6 +951,10 @@ function editCamper(n){
     var saveBtn=document.getElementById('ceSave');
     if(saveBtn)saveBtn.onclick=saveCamper;
     openModal('camperEditModal');
+}
+function ceToggleSummer(){
+    var on=document.getElementById('ceSummerSame'), b=document.getElementById('ceSummerBlock');
+    if(b)b.style.display=(on&&on.checked)?'none':'';
 }
 function addCamper(){editingCamper=null;editCamper('')}
 function saveCamper(){
@@ -927,6 +983,8 @@ function saveCamper(){
     var teams={};document.querySelectorAll('.ceTeamSel').forEach(function(sel){var lg=sel.dataset.league,v=sel.value;if(lg&&v)teams[lg]=v});
     if(!existingId){existingId=nextCamperId;nextCamperId++}
     function _v(id){var el=document.getElementById(id);return el?(el.value||''):'';}
+    var _summerSameEl=document.getElementById('ceSummerSame');
+    var _summerSame=_summerSameEl?!!_summerSameEl.checked:true;
     var _core={
         camperId:existingId,
         altFirstName:_v('ceAltFirst').trim(),
@@ -939,6 +997,15 @@ function saveCamper(){
         teams:teams,team:Object.values(teams)[0]||_v('ceTeamLegacy'),
         street:_v('ceStreet'),city:_v('ceCity'),
         state:_v('ceState'),zip:_v('ceZip'),
+        // "Same as home" is stored as the flag AND a copy of the home values,
+        // so anything reading summerStreet directly (print sheets, Go, Link)
+        // gets a real address without having to know about the flag.
+        summerSameAsHome:_summerSame,
+        summerStreet:_summerSame?_v('ceStreet'):_v('ceSummerStreet'),
+        summerCity:_summerSame?_v('ceCity'):_v('ceSummerCity'),
+        summerState:_summerSame?_v('ceState'):_v('ceSummerState'),
+        summerZip:_summerSame?_v('ceZip'):_v('ceSummerZip'),
+        summerPhone:_v('ceSummerPhone'),
         parent1Name:_v('ceP1'),parent1Phone:_v('ceP1Ph'),
         parent1Email:_v('ceP1Em'),
         emergencyName:_v('ceEmN'),emergencyPhone:_v('ceEmPh'),
@@ -4367,6 +4434,627 @@ function buildFamilyLedgers(){
     return ledgers;
 }
 
+// ═══ PAYROLL ════════════════════════════════════════════════════
+// The Payroll page. Pay math and every youth-employment rule live in
+// campistry_payroll_core.js (pure + unit tested); this file is only the UI on
+// top of it, so a rule is never restated here where it could drift.
+function PC(){ return window.PayrollCore||null }
+function _prToday(){ var d=new Date(); return d.getFullYear()+'-'+String(d.getMonth()+1).padStart(2,'0')+'-'+String(d.getDate()).padStart(2,'0') }
+/** Sunday of the week containing `iso` (or today) — timesheets are Sun–Sat. */
+function _prWeekStart(iso){
+    var s=iso||_prToday(), p=s.split('-');
+    var d=new Date(+p[0],+p[1]-1,+p[2]);
+    d.setDate(d.getDate()-d.getDay());
+    return d.getFullYear()+'-'+String(d.getMonth()+1).padStart(2,'0')+'-'+String(d.getDate()).padStart(2,'0');
+}
+function _prShiftWeek(iso,weeks){
+    var p=iso.split('-'), d=new Date(+p[0],+p[1]-1,+p[2]);
+    d.setDate(d.getDate()+weeks*7);
+    return d.getFullYear()+'-'+String(d.getMonth()+1).padStart(2,'0')+'-'+String(d.getDate()).padStart(2,'0');
+}
+function _prStaffById(id){ return payroll.staff.filter(function(s){return String(s.id)===String(id)})[0]||null }
+function _prCorpsStaff(){ return payroll.staff.filter(function(s){return s.youthCorps&&s.youthCorps.enrolled}) }
+function _prSheet(staffId,weekOf){
+    return payroll.timesheets.filter(function(t){return String(t.staffId)===String(staffId)&&t.weekOf===weekOf})[0]||null;
+}
+function prSetTab(t){ _prTab=t; renderPayroll() }
+
+function renderPayroll(){
+    var c=document.getElementById('page-payroll');
+    if(!c) return;
+    var core=PC();
+    if(!core){
+        c.innerHTML='<div class="sec-hd"><div><h2 class="sec-title">Payroll</h2></div></div>'+
+            '<div class="me-card" style="padding:18px"><p style="font-size:.85rem;color:var(--err)">Payroll rules module didn\'t load — reload the page.</p></div>';
+        return;
+    }
+    if(!_prWeek) _prWeek=_prWeekStart();
+
+    var tabs=[{k:'overview',l:'Overview'},{k:'staff',l:'Staff'},{k:'timesheets',l:'Timesheets'},{k:'youth',l:'Youth Corps'},{k:'runs',l:'Pay Runs'}];
+    var h='<div class="sec-hd"><div><h2 class="sec-title">Payroll</h2><p class="sec-desc">Staff pay, timesheets, and Youth Corps compliance</p></div>';
+    h+='<div class="sec-actions">';
+    h+='<button class="me-btn me-btn--sec me-btn--sm" onclick="CampistryMe.prExportCSV()">↓ Export CSV</button>';
+    h+='<button class="me-btn me-btn--pri me-btn--sm" onclick="CampistryMe.prEditStaff()">+ Add Staff</button>';
+    h+='</div></div>';
+
+    h+='<div style="display:flex;gap:0;border-bottom:1px solid var(--s200);margin-bottom:14px;flex-wrap:wrap">';
+    tabs.forEach(function(t){
+        h+='<button class="me-btn me-btn--ghost" style="padding:8px 16px;font-size:.8rem;font-weight:600;border-bottom:2px solid '+(_prTab===t.k?'var(--me)':'transparent')+';color:'+(_prTab===t.k?'var(--me)':'var(--s400)')+';border-radius:0" onclick="CampistryMe.prSetTab(\''+t.k+'\')">'+t.l+'</button>';
+    });
+    h+='</div>';
+
+    if(_prTab==='overview') h+=_prOverview();
+    else if(_prTab==='staff') h+=_prStaffTab();
+    else if(_prTab==='timesheets') h+=_prTimesheetsTab();
+    else if(_prTab==='youth') h+=_prYouthTab();
+    else h+=_prRunsTab();
+
+    c.innerHTML=h;
+}
+
+function _prStat(label,value,sub,color){
+    return'<div style="flex:1;min-width:150px;background:#fff;border-radius:var(--r);padding:12px 14px;border:1px solid var(--s200);border-left:3px solid '+color+'">'+
+        '<div style="font-size:.65rem;font-weight:700;color:var(--s400);text-transform:uppercase;letter-spacing:.04em">'+esc(label)+'</div>'+
+        '<div style="font-size:1.2rem;font-weight:800;color:var(--s800);margin-top:2px">'+value+'</div>'+
+        (sub?'<div style="font-size:.72rem;color:var(--s400);margin-top:1px">'+sub+'</div>':'')+'</div>';
+}
+function _prEmpty(msg,cta){
+    return'<div class="me-card" style="padding:28px 20px;text-align:center"><p style="font-size:.86rem;color:var(--s400);margin:0 0 10px">'+esc(msg)+'</p>'+(cta||'')+'</div>';
+}
+
+// ── Overview ─────────────────────────────────────────────────────
+function _prOverview(){
+    var core=PC(),today=_prToday();
+    var seasonCost=core.seasonCost(payroll.staff,{weeks:7});
+    var corps=_prCorpsStaff();
+    var programPaid=payroll.staff.filter(function(s){return s.payType==='program'}).length;
+
+    // Anything outstanding across every Youth Corps participant.
+    var blockers=0,warnings=0;
+    corps.forEach(function(s){
+        var r=core.participantChecklist(s,payroll.youthCorps,today);
+        blockers+=r.blockers.length; warnings+=r.warnings.length;
+    });
+
+    var h='<div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:12px">';
+    h+=_prStat('On Payroll',payroll.staff.length+'',programPaid?programPaid+' paid by a program':'','var(--me)');
+    h+=_prStat('Camp Season Cost',fm(seasonCost),'Excludes program-paid staff','#3B82F6');
+    h+=_prStat('Youth Corps',corps.length+'','Participants enrolled','#8B5CF6');
+    h+=_prStat('Compliance',blockers?blockers+' blocking':(warnings?warnings+' to chase':'All clear'),
+        blockers?'Cannot start work':(warnings?'Missing paperwork':''),
+        blockers?'var(--err)':(warnings?'var(--me)':'var(--ok)'));
+    h+='</div>';
+
+    if(!payroll.staff.length){
+        return h+_prEmpty('No one on payroll yet. Add your staff to track pay, hours and Youth Corps paperwork.',
+            '<button class="me-btn me-btn--pri me-btn--sm" onclick="CampistryMe.prEditStaff()">+ Add Staff</button>');
+    }
+
+    // Whatever is actually blocking someone from starting.
+    var rows=[];
+    corps.forEach(function(s){
+        var r=core.participantChecklist(s,payroll.youthCorps,today);
+        r.blockers.concat(r.warnings).forEach(function(i){
+            rows.push({name:s.name,label:i.label,detail:i.detail,sev:i.severity,id:s.id});
+        });
+    });
+    if(rows.length){
+        h+='<div class="me-card" style="margin-bottom:14px"><div class="me-card-head"><h3>Needs attention</h3></div>';
+        h+='<div class="me-tw"><table class="me-t"><thead><tr><th>Who</th><th>Item</th><th>Detail</th><th></th></tr></thead><tbody>';
+        rows.slice(0,20).forEach(function(r){
+            h+='<tr><td class="bold">'+esc(r.name)+'</td><td>'+esc(r.label)+'</td>'+
+               '<td style="font-size:.78rem;color:var(--s500)">'+esc(r.detail)+'</td>'+
+               '<td style="text-align:right">'+(r.sev==='blocker'?bdg('Blocking','err'):bdg('Chase','warn'))+'</td></tr>';
+        });
+        h+='</tbody></table></div>';
+        if(rows.length>20) h+='<div style="padding:8px 14px;font-size:.76rem;color:var(--s400)">+ '+(rows.length-20)+' more</div>';
+        h+='</div>';
+    }
+
+    // Cost by pay type, so a camp can see where the money goes.
+    var byType={};
+    payroll.staff.forEach(function(s){
+        var t=(s.payType||'hourly');
+        byType[t]=(byType[t]||0)+core.seasonCost([s],{weeks:7});
+    });
+    var items=Object.keys(byType).map(function(k){
+        var m=core.PAY_TYPES.filter(function(p){return p.id===k})[0];
+        return{name:m?m.label:k,value:byType[k]};
+    }).sort(function(a,b){return b.value-a.value});
+    if(items.length){
+        h+='<div class="me-card" style="padding:16px"><h4 style="font-size:.85rem;font-weight:700;color:var(--s700);margin:0 0 10px">Season Cost by Pay Type</h4>';
+        var mx=items[0].value||1;
+        items.forEach(function(it,i){
+            var pct=mx>0?Math.round(it.value/mx*100):0;
+            var col=BAR_COLORS[i%BAR_COLORS.length];
+            h+='<div style="display:flex;align-items:center;gap:8px;margin-bottom:4px"><div style="width:110px;font-size:.75rem;font-weight:600;color:var(--s500);text-align:right">'+esc(it.name)+'</div>'+
+               '<div style="flex:1;height:20px;background:var(--s100);border-radius:4px;overflow:hidden"><div style="width:'+pct+'%;height:100%;background:'+col+';border-radius:4px"></div></div>'+
+               '<div style="width:70px;font-size:.75rem;font-weight:700;color:var(--s700);text-align:right">'+fm(it.value)+'</div></div>';
+        });
+        h+='</div>';
+    }
+    return h;
+}
+
+// ── Staff tab ────────────────────────────────────────────────────
+function _prStaffTab(){
+    var core=PC(),today=_prToday();
+    if(!payroll.staff.length){
+        return _prEmpty('No payroll records yet.',
+            '<button class="me-btn me-btn--pri me-btn--sm" onclick="CampistryMe.prEditStaff()">+ Add Staff</button>');
+    }
+    var h='<div class="me-card"><div class="me-card-head"><h3>Payroll Roster</h3><span style="font-size:.75rem;color:var(--s400)">'+payroll.staff.length+' people</span></div>';
+    h+='<div class="me-tw"><table class="me-t"><thead><tr><th>Name</th><th>Role</th><th>Age</th><th>Pay</th><th>Paid by</th><th>Youth Corps</th><th>Docs</th><th></th></tr></thead><tbody>';
+    payroll.staff.slice().sort(function(a,b){return String(a.name||'').localeCompare(String(b.name||''))}).forEach(function(s){
+        var age=core.ageOn(s.dob,today);
+        var pt=core.PAY_TYPES.filter(function(p){return p.id===(s.payType||'hourly')})[0];
+        var pay=pt?pt.label:'Hourly';
+        var rate=parseFloat(s.payRate)||0;
+        var payStr=s.payType==='hourly'||s.payType==='program'?fm(rate)+'/hr':fm(rate);
+        var corps='';
+        if(s.youthCorps&&s.youthCorps.enrolled){
+            var r=core.participantChecklist(s,payroll.youthCorps,today);
+            corps=r.blockers.length?bdg(r.blockers.length+' blocking','err')
+                 :r.warnings.length?bdg(r.warnings.length+' to chase','warn')
+                 :bdg('Cleared','ok');
+        }else corps='<span style="color:var(--s300)">—</span>';
+        var docs=[];
+        if(s.i9OnFile)docs.push('I-9'); if(s.w4OnFile)docs.push('W-4');
+        if(s.youthCorps&&s.youthCorps.workingPapers)docs.push('Papers');
+        h+='<tr class="click" onclick="CampistryMe.prEditStaff('+s.id+')">'+
+            '<td class="bold">'+esc(s.name||'')+'</td>'+
+            '<td>'+esc(s.role||'')+'</td>'+
+            '<td>'+(age==null?'<span style="color:var(--s300)">—</span>':(age<18?'<span style="color:var(--me);font-weight:600">'+age+'</span>':age))+'</td>'+
+            '<td>'+esc(pay)+'<div style="font-size:.72rem;color:var(--s400)">'+payStr+'</div></td>'+
+            '<td style="font-size:.78rem">'+esc(core.payMethodLabel(s.paymentMethod))+'</td>'+
+            '<td>'+corps+'</td>'+
+            '<td style="font-size:.74rem;color:var(--s500)">'+(docs.length?esc(docs.join(' · ')):'—')+'</td>'+
+            '<td style="text-align:right" onclick="event.stopPropagation()"><button class="me-btn me-btn--ghost me-btn--sm" style="color:var(--err)" onclick="CampistryMe.prRemoveStaff('+s.id+')">✕</button></td></tr>';
+    });
+    h+='</tbody></table></div></div>';
+    return h;
+}
+
+/** One address block (home or summer). */
+function _prAddrFields(prefix,addr,label){
+    addr=addr||{};
+    var h='<div class="fsec">'+esc(label)+'</div>';
+    h+=ff('Street Address',prefix+'Street',addr.street||'');
+    h+='<div class="fr">'+ff('City',prefix+'City',addr.city||'')+ff('State',prefix+'State',addr.state||'')+ff('ZIP',prefix+'Zip',addr.zip||'')+'</div>';
+    return h;
+}
+function _prReadAddr(prefix){
+    function v(id){var e=document.getElementById(id);return e?(e.value||'').trim():''}
+    return{street:v(prefix+'Street'),city:v(prefix+'City'),state:v(prefix+'State'),zip:v(prefix+'Zip')};
+}
+
+function prEditStaff(id){
+    var core=PC(); if(!core) return;
+    var editing=(id!=null);
+    var s=editing?(_prStaffById(id)||{}):{};
+    var yc=s.youthCorps||{};
+    var today=_prToday();
+
+    var h='<div class="fsec">Person</div>';
+    h+='<div class="fr">'+ff('Full Name','prName',s.name||'')+ff('Role / Title','prRole',s.role||'')+'</div>';
+    h+='<div class="fr">'+ff('Date of Birth','prDob',s.dob||'','date')+ff('Department','prDept',s.department||'')+'</div>';
+    h+='<div class="fr">'+ff('Phone','prPhone',s.phone||'','tel')+ff('Email','prEmail',s.email||'','email')+'</div>';
+    h+='<div class="fr">'+ff('Bunk / Assignment','prBunk',s.bunk||'','select',[''].concat(_allBunkNames()))+
+        ff('Employment','prType',s.employmentType||'seasonal','select',['seasonal','annual'])+'</div>';
+    h+='<div class="fr">'+ff('Start Date','prStart',s.startDate||'','date')+ff('End Date','prEnd',s.endDate||'','date')+'</div>';
+    h+='<div class="fg"><label class="fl" style="display:flex;align-items:center;gap:7px;cursor:pointer">'+
+        '<input type="checkbox" id="prCounselor"'+(s.isCampCounselor!==false?' checked':'')+'> '+
+        'Works as a counselor / junior counselor / CIT</label>'+
+        '<p style="font-size:.68rem;color:var(--s400);margin:2px 0 0">New York exempts a 17-year-old in this role from hour limits during June, July and August.</p></div>';
+
+    // Addresses — home is the payroll address of record; summer is where they
+    // actually are during the season. They are almost never the same.
+    h+=_prAddrFields('prHome',s.homeAddress,'Home Address');
+    var same=!!s.summerAddressSameAsHome;
+    h+='<div class="fsec">Summer Address</div>';
+    h+='<div class="fg"><label class="fl" style="display:flex;align-items:center;gap:7px;cursor:pointer">'+
+        '<input type="checkbox" id="prSummerSame"'+(same?' checked':'')+' onchange="CampistryMe.prToggleSummer()"> Same as home address</label></div>';
+    h+='<div id="prSummerBlock" style="'+(same?'display:none':'')+'">';
+    h+=ff('Street Address','prSummerStreet',(s.summerAddress||{}).street||'');
+    h+='<div class="fr">'+ff('City','prSummerCity',(s.summerAddress||{}).city||'')+ff('State','prSummerState',(s.summerAddress||{}).state||'')+ff('ZIP','prSummerZip',(s.summerAddress||{}).zip||'')+'</div>';
+    h+='</div>';
+
+    h+='<div class="fsec">Pay</div>';
+    h+='<div class="fr"><div class="fg"><label class="fl">Pay Type</label><select id="prPayType" class="fs" onchange="CampistryMe.prPayTypeHint()">'+
+        core.PAY_TYPES.map(function(p){return'<option value="'+esc(p.id)+'"'+((s.payType||'hourly')===p.id?' selected':'')+'>'+esc(p.label)+'</option>'}).join('')+
+        '</select></div>'+
+        '<div class="fg"><label class="fl" id="prRateLbl">Rate</label><input type="number" min="0" step="0.01" id="prRate" class="fi" value="'+(s.payRate||'')+'"></div></div>';
+    h+='<div class="fr">'+ff('Expected hours / week','prHours',s.expectedWeeklyHours||'','number')+ff('Weeks in season','prWeeks',s.seasonWeeks||'','number')+'</div>';
+    h+='<div class="fg"><label class="fl">Paid by</label><select id="prMethod" class="fs">'+
+        core.PAY_METHODS.map(function(m){return'<option value="'+esc(m.id)+'"'+(s.paymentMethod===m.id?' selected':'')+'>'+esc(m.label)+'</option>'}).join('')+
+        '</select><p style="font-size:.68rem;color:var(--s400);margin:2px 0 0">Direct deposit, check, or a payroll card — the same card the program issues.</p></div>';
+
+    h+='<div class="fsec">Documents on File</div>';
+    h+='<div style="display:flex;gap:16px;flex-wrap:wrap;margin-bottom:8px">'+
+        '<label class="fl" style="display:flex;align-items:center;gap:6px;cursor:pointer"><input type="checkbox" id="prI9"'+(s.i9OnFile?' checked':'')+'> I-9</label>'+
+        '<label class="fl" style="display:flex;align-items:center;gap:6px;cursor:pointer"><input type="checkbox" id="prW4"'+(s.w4OnFile?' checked':'')+'> W-4</label>'+
+        '<label class="fl" style="display:flex;align-items:center;gap:6px;cursor:pointer"><input type="checkbox" id="prBg"'+(s.backgroundCheck?' checked':'')+'> Background check</label>'+
+        '</div>';
+
+    // ── Youth Corps ──
+    h+='<div class="fsec">Youth Corps</div>';
+    h+='<div class="fg"><label class="fl" style="display:flex;align-items:center;gap:7px;cursor:pointer">'+
+        '<input type="checkbox" id="prYcOn"'+(yc.enrolled?' checked':'')+' onchange="CampistryMe.prToggleYc()"> Enrolled in a Youth Corps / summer youth employment program</label></div>';
+    h+='<div id="prYcBlock" style="'+(yc.enrolled?'':'display:none')+'">';
+    h+='<div class="fr">'+ff('Participant ID','prYcId',yc.participantId||'')+ff('Site supervisor','prYcSup',yc.supervisorName||'')+'</div>';
+    h+='<div class="fr">'+ff('Orientation completed','prYcOrient',yc.orientationDate||'','date')+
+        '<div class="fg"><label class="fl">Paid by</label><select id="prYcPay" class="fs">'+
+        ['']. concat(core.PAY_METHODS.map(function(m){return m.id})).map(function(id){
+            var lbl=id?core.payMethodLabel(id):'—';
+            return'<option value="'+esc(id)+'"'+(yc.paymentMethod===id?' selected':'')+'>'+esc(lbl)+'</option>';
+        }).join('')+'</select></div></div>';
+    h+='<div style="display:flex;gap:16px;flex-wrap:wrap;margin-bottom:8px">'+
+        '<label class="fl" style="display:flex;align-items:center;gap:6px;cursor:pointer"><input type="checkbox" id="prYcPapers"'+(yc.workingPapers?' checked':'')+'> Working papers on file</label>'+
+        '<label class="fl" style="display:flex;align-items:center;gap:6px;cursor:pointer"><input type="checkbox" id="prYcPhys"'+(yc.physicalOnFile?' checked':'')+'> Physical certificate on file</label>'+
+        '</div>';
+    h+=ff('Working papers expire','prYcExp',yc.workingPapersExpiry||'','date');
+    h+='</div>';
+
+    // Live compliance readout for an existing record.
+    if(editing&&yc.enrolled){
+        h+='<div class="fsec">Compliance</div>'+_prChecklistHtml(core.participantChecklist(s,payroll.youthCorps,today));
+    }
+
+    showModal(editing?'Edit Payroll Record':'Add to Payroll',h,function(){
+        function v(id){var e=document.getElementById(id);return e?(e.value||'').trim():''}
+        function chk(id){var e=document.getElementById(id);return !!(e&&e.checked)}
+        var name=v('prName');
+        if(!name){toast('Name is required','error');return}
+        var summerSame=chk('prSummerSame');
+        var rec={
+            id:editing?s.id:payroll.nextStaffId++,
+            name:name, role:v('prRole'), department:v('prDept'),
+            dob:v('prDob'), phone:v('prPhone'), email:v('prEmail'),
+            bunk:v('prBunk'), employmentType:v('prType')||'seasonal',
+            startDate:v('prStart'), endDate:v('prEnd'),
+            isCampCounselor:chk('prCounselor'),
+            homeAddress:_prReadAddr('prHome'),
+            summerAddressSameAsHome:summerSame,
+            summerAddress:summerSame?_prReadAddr('prHome'):_prReadAddr('prSummer'),
+            payType:v('prPayType')||'hourly',
+            payRate:parseFloat(v('prRate'))||0,
+            expectedWeeklyHours:parseFloat(v('prHours'))||0,
+            seasonWeeks:parseFloat(v('prWeeks'))||0,
+            paymentMethod:v('prMethod'),
+            i9OnFile:chk('prI9'), w4OnFile:chk('prW4'), backgroundCheck:chk('prBg'),
+            youthCorps:{
+                enrolled:chk('prYcOn'),
+                participantId:v('prYcId'),
+                supervisorName:v('prYcSup'),
+                orientationDate:v('prYcOrient'),
+                paymentMethod:v('prYcPay'),
+                workingPapers:chk('prYcPapers'),
+                physicalOnFile:chk('prYcPhys'),
+                workingPapersExpiry:v('prYcExp')
+            }
+        };
+        if(editing){
+            var idx=payroll.staff.findIndex(function(x){return String(x.id)===String(s.id)});
+            if(idx>=0)payroll.staff[idx]=Object.assign({},s,rec);
+        }else payroll.staff.push(rec);
+        closeModal('dynModal');
+        save(); renderPayroll();
+        toast(editing?'Payroll record updated':'Added to payroll');
+    });
+    prPayTypeHint();
+}
+function prToggleSummer(){
+    var on=document.getElementById('prSummerSame'), b=document.getElementById('prSummerBlock');
+    if(b)b.style.display=(on&&on.checked)?'none':'';
+}
+function prToggleYc(){
+    var on=document.getElementById('prYcOn'), b=document.getElementById('prYcBlock');
+    if(b)b.style.display=(on&&on.checked)?'':'none';
+}
+function prPayTypeHint(){
+    var core=PC(); if(!core)return;
+    var sel=document.getElementById('prPayType'), lbl=document.getElementById('prRateLbl');
+    if(!sel||!lbl)return;
+    var t=core.PAY_TYPES.filter(function(p){return p.id===sel.value})[0];
+    lbl.textContent=t?t.rateLabel:'Rate';
+}
+function prRemoveStaff(id){
+    var s=_prStaffById(id); if(!s)return;
+    if(!confirm('Remove '+(s.name||'this person')+' from payroll? Their timesheets are removed too.'))return;
+    payroll.staff=payroll.staff.filter(function(x){return String(x.id)!==String(id)});
+    payroll.timesheets=payroll.timesheets.filter(function(t){return String(t.staffId)!==String(id)});
+    save(); renderPayroll(); toast('Removed from payroll');
+}
+
+function _prChecklistHtml(res){
+    var h='<div style="border:1px solid var(--s200);border-radius:var(--r);overflow:hidden">';
+    res.items.forEach(function(i){
+        var icon=i.ok===true?'<span style="color:var(--ok)">✓</span>'
+                :i.ok===false?'<span style="color:'+(i.severity==='blocker'?'var(--err)':'var(--me)')+'">'+(i.severity==='blocker'?'✕':'!')+'</span>'
+                :'<span style="color:var(--s300)">?</span>';
+        h+='<div style="display:flex;align-items:flex-start;gap:9px;padding:7px 12px;border-bottom:1px solid var(--s100)">'+
+            '<div style="width:14px;flex-shrink:0;font-weight:700">'+icon+'</div>'+
+            '<div style="flex:1;min-width:0"><div style="font-size:.8rem;font-weight:600;color:var(--s700)">'+esc(i.label)+'</div>'+
+            (i.detail?'<div style="font-size:.72rem;color:var(--s400)">'+esc(i.detail)+'</div>':'')+'</div></div>';
+    });
+    h+='</div>';
+    return h;
+}
+
+// ── Timesheets ───────────────────────────────────────────────────
+function prWeekStep(n){ _prWeek=_prShiftWeek(_prWeek||_prWeekStart(),n); renderPayroll() }
+function prWeekToday(){ _prWeek=_prWeekStart(); renderPayroll() }
+
+function _prTimesheetsTab(){
+    var core=PC(),today=_prToday();
+    if(!payroll.staff.length) return _prEmpty('Add staff before logging hours.');
+
+    var weekEnd=_prShiftWeek(_prWeek,0);
+    var p=weekEnd.split('-'); var endD=new Date(+p[0],+p[1]-1,+p[2]); endD.setDate(endD.getDate()+6);
+    var endStr=endD.toLocaleDateString('en-US',{month:'short',day:'numeric'});
+    var startStr=new Date(+p[0],+p[1]-1,+p[2]).toLocaleDateString('en-US',{month:'short',day:'numeric'});
+
+    var h='<div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-bottom:12px">'+
+        '<button class="me-btn me-btn--sec me-btn--sm" onclick="CampistryMe.prWeekStep(-1)">‹ Prev week</button>'+
+        '<div style="font-weight:700;font-size:.9rem;color:var(--s700)">'+esc(startStr)+' – '+esc(endStr)+'</div>'+
+        '<button class="me-btn me-btn--sec me-btn--sm" onclick="CampistryMe.prWeekStep(1)">Next week ›</button>'+
+        '<button class="me-btn me-btn--ghost me-btn--sm" onclick="CampistryMe.prWeekToday()">This week</button>'+
+        '</div>';
+
+    h+='<div class="me-card"><div class="me-card-head"><h3>Hours — week of '+esc(_prWeek)+'</h3></div>';
+    h+='<div class="me-tw"><table class="me-t"><thead><tr><th>Name</th>'+
+        core.DAY_KEYS.map(function(k){return'<th style="text-align:center">'+core.DAY_LABELS[k]+'</th>'}).join('')+
+        '<th style="text-align:center">Total</th><th>Signed</th><th>Status</th><th>Flags</th></tr></thead><tbody>';
+
+    payroll.staff.slice().sort(function(a,b){return String(a.name||'').localeCompare(String(b.name||''))}).forEach(function(s){
+        var sheet=_prSheet(s.id,_prWeek)||{staffId:s.id,weekOf:_prWeek,days:{},status:'draft',supervisorSigned:false};
+        var chk=core.checkTimesheet(sheet,s,{program:payroll.youthCorps,today:today});
+        h+='<tr><td class="bold">'+esc(s.name||'')+(s.youthCorps&&s.youthCorps.enrolled?' <span style="font-size:.65rem;color:#8B5CF6;font-weight:700">YC</span>':'')+'</td>';
+        core.DAY_KEYS.forEach(function(k){
+            var v=(sheet.days&&sheet.days[k]!=null)?sheet.days[k]:'';
+            h+='<td style="text-align:center;padding:2px"><input type="number" min="0" max="24" step="0.25" value="'+esc(String(v))+'" '+
+               'style="width:52px;padding:4px;text-align:center;border:1px solid var(--s200);border-radius:5px;font-size:.78rem" '+
+               'onchange="CampistryMe.prSetHours('+s.id+',\''+k+'\',this.value)"></td>';
+        });
+        h+='<td style="text-align:center;font-weight:700">'+chk.total+'</td>';
+        h+='<td><label style="cursor:pointer"><input type="checkbox"'+(sheet.supervisorSigned?' checked':'')+' onchange="CampistryMe.prSetSigned('+s.id+',this.checked)"></label></td>';
+        h+='<td><select class="fs" style="font-size:.74rem;padding:3px 6px" onchange="CampistryMe.prSetSheetStatus('+s.id+',this.value)">'+
+            ['draft','submitted','approved'].map(function(st){return'<option value="'+st+'"'+((sheet.status||'draft')===st?' selected':'')+'>'+st.charAt(0).toUpperCase()+st.slice(1)+'</option>'}).join('')+
+            '</select></td>';
+        h+='<td style="font-size:.72rem">'+(chk.issues.length
+            ? chk.issues.map(function(i){return'<div style="color:'+(i.severity==='blocker'?'var(--err)':'var(--me)')+'">'+esc(i.message)+'</div>'}).join('')
+            : '<span style="color:var(--ok)">✓</span>')+'</td>';
+        h+='</tr>';
+    });
+    h+='</tbody></table></div></div>';
+    h+='<p style="font-size:.72rem;color:var(--s400);margin-top:8px">Hour limits are New York\'s, and the program cap comes from the Youth Corps tab. A 17-year-old counselor is exempt from hour limits in June, July and August.</p>';
+    return h;
+}
+
+/** Get (creating if needed) the sheet for a person + the open week. */
+function _prEnsureSheet(staffId){
+    var sh=_prSheet(staffId,_prWeek);
+    if(!sh){
+        sh={staffId:staffId,weekOf:_prWeek,days:{},status:'draft',supervisorSigned:false};
+        payroll.timesheets.push(sh);
+    }
+    if(!sh.days)sh.days={};
+    return sh;
+}
+function prSetHours(staffId,day,val){
+    var n=parseFloat(val);
+    var sh=_prEnsureSheet(staffId);
+    if(!isFinite(n)||n<=0) delete sh.days[day];
+    else sh.days[day]=Math.min(24,n);
+    save(); renderPayroll();
+}
+function prSetSigned(staffId,on){ _prEnsureSheet(staffId).supervisorSigned=!!on; save(); renderPayroll() }
+function prSetSheetStatus(staffId,st){ _prEnsureSheet(staffId).status=st; save(); renderPayroll() }
+
+// ── Youth Corps ──────────────────────────────────────────────────
+function _prYouthTab(){
+    var core=PC(),today=_prToday();
+    var prog=core.youthCorpsSettings(payroll.youthCorps);
+    var corps=_prCorpsStaff();
+    var progRes=core.programChecklist(prog,corps);
+
+    var h='<div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:12px">';
+    h+=_prStat('Participants',corps.length+'','','#8B5CF6');
+    h+=_prStat('Weekly Cap',prog.maxWeeklyHours+' h','Per participant','var(--me)');
+    h+=_prStat('Supervisors',progRes.supervisorCount+' / '+Math.max(1,progRes.supervisorsNeeded),'1 per '+prog.supervisorRatioMax+' youth',
+        progRes.supervisorCount>=progRes.supervisorsNeeded?'var(--ok)':'var(--err)');
+    h+=_prStat('Program Weeks',prog.programWeeks+'','','#0EA5E9');
+    h+='</div>';
+
+    // What Youth Corps actually is, in the app, once — so the office isn't
+    // guessing what the fields below are for.
+    h+='<div class="me-card" style="padding:14px 16px;margin-bottom:14px;background:#F8FAFC">'+
+        '<h4 style="font-size:.85rem;font-weight:700;color:var(--s700);margin:0 0 6px">How this works</h4>'+
+        '<p style="font-size:.78rem;color:var(--s500);line-height:1.6;margin:0">'+
+        'When teenage staff come through a Youth Corps or summer youth employment program, the camp is a <strong>worksite</strong> — the program employs and pays them, and you host and supervise. '+
+        'That means their pay may not appear in your payroll total at all, their hours are capped by the program on top of state limits, and weekly timesheets have to be signed by the site supervisor and submitted by the program\'s cutoff or the week goes unpaid. '+
+        'Fill in the program details below and Campistry will check each participant\'s paperwork and hours against them.</p></div>';
+
+    h+='<div class="me-card" style="margin-bottom:14px"><div class="me-card-head"><h3>Program Setup</h3>'+
+        '<button class="me-btn me-btn--pri me-btn--sm" onclick="CampistryMe.prEditProgram()">Edit</button></div>';
+    h+='<div style="padding:14px 16px;display:grid;grid-template-columns:repeat(auto-fit,minmax(190px,1fr));gap:12px">';
+    function fld(l,v){return'<div><div style="font-size:.66rem;font-weight:700;color:var(--s400);text-transform:uppercase;letter-spacing:.04em">'+esc(l)+'</div>'+
+        '<div style="font-size:.85rem;color:var(--s700);font-weight:600;margin-top:2px">'+(v?esc(v):'<span style="color:var(--s300);font-weight:400">Not set</span>')+'</div></div>'}
+    h+=fld('Program',prog.programName);
+    h+=fld('Worksite',prog.worksiteName);
+    h+=fld('Worksite ID',prog.worksiteId);
+    h+=fld('Coordinator',prog.coordinatorName);
+    h+=fld('Coordinator contact',prog.coordinatorPhone||prog.coordinatorEmail);
+    h+=fld('Default supervisor',prog.supervisorName);
+    h+=fld('Dates',prog.startDate&&prog.endDate?prog.startDate+' → '+prog.endDate:'');
+    h+=fld('Eligible ages',prog.minAge+'–'+prog.maxAge);
+    h+=fld('Timesheet due',_prDayName(prog.timesheetDueDay));
+    h+=fld('Payroll commits',_prDayName(prog.payrollCommitDay));
+    h+='</div></div>';
+
+    h+='<div class="me-card" style="margin-bottom:14px"><div class="me-card-head"><h3>Program Checklist</h3></div>'+
+        '<div style="padding:0">'+_prChecklistHtml(progRes)+'</div></div>';
+
+    if(!corps.length){
+        h+=_prEmpty('No participants enrolled yet. Open a payroll record and tick "Enrolled in a Youth Corps" to add one.',
+            '<button class="me-btn me-btn--pri me-btn--sm" onclick="CampistryMe.prEditStaff()">+ Add Staff</button>');
+        return h;
+    }
+
+    h+='<div class="me-card"><div class="me-card-head"><h3>Participants</h3></div>';
+    h+='<div class="me-tw"><table class="me-t"><thead><tr><th>Name</th><th>Age</th><th>Participant ID</th><th>Supervisor</th><th>Papers</th><th>Orientation</th><th>Status</th></tr></thead><tbody>';
+    corps.slice().sort(function(a,b){return String(a.name||'').localeCompare(String(b.name||''))}).forEach(function(s){
+        var r=core.participantChecklist(s,prog,today);
+        var yc=s.youthCorps||{};
+        var status=r.blockers.length?bdg('Not cleared','err'):(r.warnings.length?bdg('Missing docs','warn'):bdg('Cleared','ok'));
+        h+='<tr class="click" onclick="CampistryMe.prEditStaff('+s.id+')">'+
+            '<td class="bold">'+esc(s.name||'')+'</td>'+
+            '<td>'+(r.age==null?'—':r.age)+'</td>'+
+            '<td style="font-family:monospace;font-size:.78rem">'+esc(yc.participantId||'—')+'</td>'+
+            '<td>'+esc(yc.supervisorName||prog.supervisorName||'—')+'</td>'+
+            '<td>'+(yc.workingPapers?'<span style="color:var(--ok)">✓</span>'+(yc.workingPapersExpiry?' <span style="font-size:.7rem;color:var(--s400)">to '+esc(yc.workingPapersExpiry)+'</span>':''):'<span style="color:var(--err)">✕</span>')+'</td>'+
+            '<td>'+(yc.orientationDate?esc(yc.orientationDate):'<span style="color:var(--err)">✕</span>')+'</td>'+
+            '<td>'+status+'</td></tr>';
+    });
+    h+='</tbody></table></div></div>';
+    return h;
+}
+function _prDayName(n){ return['Sunday','Monday','Tuesday','Wednesday','Thursday','Friday','Saturday'][n]||'—' }
+
+function prEditProgram(){
+    var core=PC(); if(!core)return;
+    var p=core.youthCorpsSettings(payroll.youthCorps);
+    var days=['Sunday','Monday','Tuesday','Wednesday','Thursday','Friday','Saturday'];
+    var h='<div class="fsec">Program</div>';
+    h+='<div class="fr">'+ff('Program name','pgName',p.programName)+ff('Worksite name','pgSite',p.worksiteName)+'</div>';
+    h+='<div class="fr">'+ff('Worksite ID','pgSiteId',p.worksiteId)+ff('Default site supervisor','pgSup',p.supervisorName)+'</div>';
+    h+='<div class="fsec">Program Coordinator</div>';
+    h+='<div class="fr">'+ff('Name','pgCoord',p.coordinatorName)+ff('Phone','pgCoordPh',p.coordinatorPhone,'tel')+'</div>';
+    h+=ff('Email','pgCoordEm',p.coordinatorEmail,'email');
+    h+='<div class="fsec">Dates &amp; Hours</div>';
+    h+='<div class="fr">'+ff('Start date','pgStart',p.startDate,'date')+ff('End date','pgEnd',p.endDate,'date')+'</div>';
+    h+='<div class="fr">'+ff('Max hours / week','pgMaxHrs',p.maxWeeklyHours,'number')+ff('Program weeks','pgWeeks',p.programWeeks,'number')+'</div>';
+    h+='<div class="fr"><div class="fg"><label class="fl">Timesheets due</label><select id="pgDue" class="fs">'+
+        days.map(function(d,i){return'<option value="'+i+'"'+(p.timesheetDueDay===i?' selected':'')+'>'+d+'</option>'}).join('')+'</select></div>'+
+        '<div class="fg"><label class="fl">Payroll commits</label><select id="pgCommit" class="fs">'+
+        days.map(function(d,i){return'<option value="'+i+'"'+(p.payrollCommitDay===i?' selected':'')+'>'+d+'</option>'}).join('')+'</select></div></div>';
+    h+='<div class="fsec">Eligibility &amp; Supervision</div>';
+    h+='<div class="fr">'+ff('Minimum age','pgMinAge',p.minAge,'number')+ff('Maximum age','pgMaxAge',p.maxAge,'number')+'</div>';
+    h+='<div class="fr">'+ff('Max youth per supervisor','pgRatio',p.supervisorRatioMax,'number')+ff('Orientation hours','pgOrient',p.orientationHours,'number')+'</div>';
+    h+='<p style="font-size:.68rem;color:var(--s400);margin:4px 0 0">Defaults follow the common summer-youth-employment shape: 25 hours a week for six weeks, one supervisor per fifteen youth, and an eight-hour orientation before placement. Change them to match your program\'s agreement.</p>';
+
+    showModal('Youth Corps Program',h,function(){
+        function v(id){var e=document.getElementById(id);return e?(e.value||'').trim():''}
+        function n(id,d){var x=parseFloat(v(id));return isFinite(x)?x:d}
+        payroll.youthCorps=core.youthCorpsSettings({
+            programName:v('pgName'), worksiteName:v('pgSite'), worksiteId:v('pgSiteId'),
+            supervisorName:v('pgSup'),
+            coordinatorName:v('pgCoord'), coordinatorPhone:v('pgCoordPh'), coordinatorEmail:v('pgCoordEm'),
+            startDate:v('pgStart'), endDate:v('pgEnd'),
+            maxWeeklyHours:n('pgMaxHrs',25), programWeeks:n('pgWeeks',6),
+            timesheetDueDay:n('pgDue',4), payrollCommitDay:n('pgCommit',2),
+            minAge:n('pgMinAge',14), maxAge:n('pgMaxAge',24),
+            supervisorRatioMax:n('pgRatio',15), orientationHours:n('pgOrient',8)
+        });
+        closeModal('dynModal');
+        save(); renderPayroll(); toast('Program saved');
+    });
+}
+
+// ── Pay runs ─────────────────────────────────────────────────────
+function _prRunsTab(){
+    var core=PC();
+    var h='<div style="display:flex;justify-content:flex-end;margin-bottom:10px">'+
+        '<button class="me-btn me-btn--pri me-btn--sm" onclick="CampistryMe.prNewRun()">+ New Pay Run</button></div>';
+    if(!payroll.payRuns.length){
+        return h+_prEmpty('No pay runs yet. A pay run rolls up the timesheets in a date range into what each person is owed.');
+    }
+    payroll.payRuns.slice().sort(function(a,b){return String(b.to||'').localeCompare(String(a.to||''))}).forEach(function(run){
+        h+='<div class="me-card" style="margin-bottom:12px"><div class="me-card-head">'+
+            '<h3>'+esc(run.from||'')+' → '+esc(run.to||'')+'</h3>'+
+            '<div style="display:flex;gap:8px;align-items:center">'+
+            '<span style="font-size:.8rem;font-weight:700;color:var(--s700)">'+fm(run.campTotal||0)+'</span>'+
+            (run.programPeople?'<span style="font-size:.72rem;color:var(--s400)">+ '+run.programHours+' h paid by program</span>':'')+
+            '<button class="me-btn me-btn--ghost me-btn--sm" style="color:var(--err)" onclick="CampistryMe.prDeleteRun(\''+esc(run.id)+'\')">✕</button>'+
+            '</div></div>';
+        h+='<div class="me-tw"><table class="me-t"><thead><tr><th>Name</th><th>Pay type</th><th>Hours</th><th>Gross</th><th>Method</th><th>Flags</th></tr></thead><tbody>';
+        (run.lines||[]).forEach(function(l){
+            var flags=[];
+            if(l.unsigned)flags.push(l.unsigned+' unsigned');
+            if(l.unsubmitted)flags.push(l.unsubmitted+' not submitted');
+            h+='<tr><td class="bold">'+esc(l.name)+'</td>'+
+               '<td style="font-size:.78rem">'+esc((core.PAY_TYPES.filter(function(p){return p.id===l.payType})[0]||{}).label||l.payType)+'</td>'+
+               '<td>'+l.hours+'</td>'+
+               '<td style="font-weight:700">'+(l.paidByProgram?'<span style="color:var(--s400);font-weight:500">Paid by program</span>':fm(l.gross))+'</td>'+
+               '<td style="font-size:.78rem">'+esc(core.payMethodLabel(l.method))+'</td>'+
+               '<td style="font-size:.72rem;color:var(--me)">'+esc(flags.join(' · '))+'</td></tr>';
+        });
+        h+='</tbody></table></div></div>';
+    });
+    return h;
+}
+
+function prNewRun(){
+    var core=PC(); if(!core)return;
+    if(!payroll.staff.length){toast('Add staff first','error');return}
+    var to=_prToday(), from=_prShiftWeek(_prWeekStart(to),-1);
+    var h=ff('From','runFrom',from,'date')+ff('To','runTo',to,'date');
+    h+='<div class="fg"><label class="fl" style="display:flex;align-items:center;gap:7px;cursor:pointer"><input type="checkbox" id="runFinal"> Final period of the season</label>'+
+        '<p style="font-size:.68rem;color:var(--s400);margin:2px 0 0">Flat stipends pay out on the final period only, so they don\'t repeat every run.</p></div>';
+    h+='<p style="font-size:.72rem;color:var(--s400);margin:8px 0 0">Season salaries are divided across the number of runs you expect — set that below.</p>';
+    h+=ff('Runs in the season','runPeriods','7','number');
+    showModal('New Pay Run',h,function(){
+        function v(id){var e=document.getElementById(id);return e?(e.value||'').trim():''}
+        var f=v('runFrom'), t=v('runTo');
+        if(!f||!t){toast('Pick both dates','error');return}
+        if(f>t){toast('The end date is before the start date','error');return}
+        var run=core.buildPayRun(payroll.staff,payroll.timesheets,{
+            from:f, to:t,
+            periodsInSeason:parseFloat(v('runPeriods'))||7,
+            finalPeriod:!!(document.getElementById('runFinal')||{}).checked
+        });
+        run.id='run_'+Date.now();
+        run.createdAt=new Date().toISOString();
+        payroll.payRuns.push(run);
+        closeModal('dynModal');
+        _prTab='runs';
+        save(); renderPayroll(); toast('Pay run created');
+    });
+}
+function prDeleteRun(id){
+    if(!confirm('Delete this pay run? The timesheets it was built from are kept.'))return;
+    payroll.payRuns=payroll.payRuns.filter(function(r){return r.id!==id});
+    save(); renderPayroll(); toast('Pay run deleted');
+}
+
+function prExportCSV(){
+    var core=PC(); if(!core)return;
+    var today=_prToday();
+    var rows=[['Name','Role','Date of Birth','Age','Pay Type','Rate','Paid By','Home Address','Summer Address',
+               'Youth Corps','Participant ID','Working Papers','Orientation','Supervisor','Cleared']];
+    payroll.staff.forEach(function(s){
+        var yc=s.youthCorps||{};
+        var res=yc.enrolled?core.participantChecklist(s,payroll.youthCorps,today):null;
+        function addr(a){a=a||{};return [a.street,a.city,a.state,a.zip].filter(Boolean).join(', ')}
+        rows.push([
+            s.name||'', s.role||'', s.dob||'', core.ageOn(s.dob,today)==null?'':core.ageOn(s.dob,today),
+            s.payType||'', s.payRate||0, core.payMethodLabel(s.paymentMethod),
+            addr(s.homeAddress), s.summerAddressSameAsHome?'Same as home':addr(s.summerAddress),
+            yc.enrolled?'Yes':'No', yc.participantId||'', yc.workingPapers?'Yes':'No',
+            yc.orientationDate||'', yc.supervisorName||'',
+            res?(res.clearedToWork?'Yes':'No'):''
+        ]);
+    });
+    var csv='﻿'+rows.map(function(r){return r.map(function(v){return'"'+String(v==null?'':v).replace(/"/g,'""')+'"'}).join(',')}).join('\n');
+    var blob=new Blob([csv],{type:'text/csv;charset=utf-8;'});
+    var a=document.createElement('a');
+    a.href=URL.createObjectURL(blob);
+    a.download='payroll_'+today+'.csv';
+    document.body.appendChild(a); a.click(); a.remove();
+    setTimeout(function(){URL.revokeObjectURL(a.href)},1000);
+    toast('Payroll exported');
+}
+
 function renderBilling(){
     var c=document.getElementById('page-billing');
     var ledgers=buildFamilyLedgers();
@@ -6826,7 +7514,7 @@ function psEditorHtml(s){
 
 window.CampistryMe={
     nav:nav,closeModal:closeModal,
-    viewCamper:viewCamper,editCamper:editCamper,addCamper:addCamper,deleteCamper:deleteCamper,
+    viewCamper:viewCamper,editCamper:editCamper,addCamper:addCamper,deleteCamper:deleteCamper,ceToggleSummer:ceToggleSummer,
     addFamily:function(){openFamilyForm(null)},editFamily:function(id){openFamilyForm(id)},deleteFamily:deleteFamily,removeCamperFromFamily:removeCamperFromFamily,
     switchCampersView:switchCampersView,viewFamilyFromCamper:viewFamilyFromCamper,
     acceptFamilySuggestion:acceptFamilySuggestion,dismissFamilySuggestion:dismissFamilySuggestion,acceptAddToFamily:acceptAddToFamily,
@@ -6838,6 +7526,12 @@ window.CampistryMe={
     viewApplication:viewApplication,updateEnrollStatus:updateEnrollStatus,bulkEnrollStatus:bulkEnrollStatus,toggleAllEnroll:toggleAllEnroll,_updateRegBulkBar:_updateRegBulkBar,enrollCamper:enrollCamper,generateParentInvite:generateParentInvite,setRegFilter:setRegFilter,rescindEnrollment:rescindEnrollment,syncAllParentPortals:syncAllParentPortals,auditParentEmails:auditParentEmails,
     saveAppNote:saveAppNote,printApplication:printApplication,
     openFormConfig:openFormConfig,saveFormConfig:saveFormConfig,addCustomQ:addCustomQ,addPromoRow:addPromoRow,
+    // Payroll
+    prSetTab:prSetTab,prEditStaff:prEditStaff,prRemoveStaff:prRemoveStaff,
+    prToggleSummer:prToggleSummer,prToggleYc:prToggleYc,prPayTypeHint:prPayTypeHint,
+    prWeekStep:prWeekStep,prWeekToday:prWeekToday,
+    prSetHours:prSetHours,prSetSigned:prSetSigned,prSetSheetStatus:prSetSheetStatus,
+    prEditProgram:prEditProgram,prNewRun:prNewRun,prDeleteRun:prDeleteRun,prExportCSV:prExportCSV,
     finSetTab:finSetTab,finAddStaff:finAddStaff,finEditStaff:finEditStaff,finStaffModal:finStaffModal,_staffPhotoPick:_staffPhotoPick,_staffPhotoClear:_staffPhotoClear,finRemoveStaff:finRemoveStaff,
     finAddExpense:finAddExpense,finRemoveExpense:finRemoveExpense,
     finAddPayment:finAddPayment,finRemovePayment:finRemovePayment,
