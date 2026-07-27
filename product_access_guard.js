@@ -24,7 +24,7 @@
     var LABELS = {
         me: 'Campistry Me', flow: 'Flow', go: 'Go', health: 'Health',
         snacks: 'Snacks', live: 'Live', link: 'Campistry Link',
-        notes: 'Notes', guard: 'Guard', shop: 'the Camp Shop', luggage: 'Luggage'
+        notes: 'Notes', guard: 'Guard'
     };
 
     function ready(cb) {

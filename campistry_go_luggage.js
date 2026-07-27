@@ -1,19 +1,27 @@
 // =============================================================================
-// campistry_luggage.js — Campistry Luggage page
+// campistry_go_luggage.js — Luggage, inside Campistry Go
 //
-// Storage and rendering only. Tag codes, pricing, the status machine and the
-// manifests all come from campistry_luggage_core.js, which is pure and unit
-// tested.
+// Bags to camp and home. This lives in Go rather than as its own app because
+// Go IS the camp's transport system: it already models neighbourhoods, stops,
+// addresses, vehicles and routes. Luggage drop-off points are stops in
+// neighbourhoods, trucks are vehicles, and a manifest is a route sheet — the
+// same problem shape, and the same camper addresses.
 //
-// DATA — campGlobalSettings_v1 → campistryLuggage
+// Tag codes, pricing, the status machine and the manifests are in
+// campistry_luggage_core.js (pure + unit tested). This file is storage and
+// rendering only.
+//
+// DATA — campGlobalSettings_v1 -> campistryLuggage
 //   settings:  { campPrefix, campName, pricing{...} }
 //   locations: [ { id, name, address, date, windowStart, windowEnd, capacityBags } ]
 //   bookings:  [ { id, ref, camperName, bunk, division, serviceType, pickupMode,
 //                  locationId, address, counts{type:qty}, bags[], quotedTotal,
 //                  paid, notes, status } ]
 //
-// Campers come from app1.camperRoster (Campistry Me) — picking one fills in the
-// bunk and division, which is what the bunk delivery sheet is grouped by.
+// Campers come from app1.camperRoster (Campistry Me) — picking one fills in
+// bunk and division, which is what the bunk delivery sheet groups by.
+//
+// Mounts itself into #tab-luggage when Go shows that tab.
 // =============================================================================
 (function () {
 'use strict';
@@ -89,15 +97,40 @@ function num(id) { var v = parseFloat(val(id)); return isFinite(v) ? v : 0; }
 function checked(id) { var e = el(id); return !!(e && e.checked); }
 function today() { var d = new Date(); return d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0') + '-' + String(d.getDate()).padStart(2, '0'); }
 
+// Go already has a toast; use it rather than stacking a second one.
 window.lugToast = function (msg, isErr) {
-    var t = el('lugToast'); if (!t) return;
-    t.textContent = msg;
-    t.className = 'ops-toast show' + (isErr ? ' err' : '');
-    clearTimeout(t._t);
-    t._t = setTimeout(function () { t.className = 'ops-toast'; }, 2600);
+    var fn = window.toast || (window.CampistryGo && window.CampistryGo.toast);
+    if (typeof fn === 'function') { try { fn(msg, isErr ? 'error' : ''); return; } catch (e) {} }
+    console.log('[Luggage]', msg);
 };
-window.lugOpen = function (n) { el('m-' + n).classList.add('open'); };
-window.lugClose = function (n) { el('m-' + n).classList.remove('open'); };
+// Modals are built on demand and removed on close, so Go's page doesn't have
+// to carry four hidden overlays it never uses.
+function modal(id, title, bodyHtml, saveLabel, onSave, wide) {
+    lugClose(id);
+    var ov = document.createElement('div');
+    ov.className = 'ops-overlay open';
+    ov.id = 'm-' + id;
+    ov.setAttribute('data-ops', 'luggage');
+    ov.innerHTML =
+        '<div class="ops-modal' + (wide ? ' ops-modal--lg' : '') + '">' +
+            '<div class="ops-modal-head"><h2>' + esc(title) + '</h2>' +
+                '<button class="ops-x" data-close="1">&times;</button></div>' +
+            '<div class="ops-modal-body" id="' + id + 'Body"></div>' +
+            '<div class="ops-modal-foot">' +
+                '<button class="ops-btn" data-close="1">' + (onSave ? 'Cancel' : 'Close') + '</button>' +
+                (onSave ? '<button class="ops-btn ops-btn--pri" id="' + id + 'Save">' + esc(saveLabel) + '</button>' : '') +
+            '</div>' +
+        '</div>';
+    document.body.appendChild(ov);
+    el(id + 'Body').innerHTML = bodyHtml;
+    ov.querySelectorAll('[data-close]').forEach(function (b) {
+        b.addEventListener('click', function () { lugClose(id); });
+    });
+    ov.addEventListener('mousedown', function (e) { if (e.target === ov) lugClose(id); });
+    if (onSave) el(id + 'Save').addEventListener('click', onSave);
+    return ov;
+}
+window.lugClose = function (n) { var e = el('m-' + n); if (e) e.remove(); };
 
 function stat(label, value, sub) {
     return '<div class="ops-stat"><div class="ops-stat-label">' + esc(label) + '</div>' +
@@ -121,7 +154,32 @@ var TABS = [
 ];
 window.lugTab = function (t) { tab = t; render(); };
 
+/** Build the section shell inside Go's #tab-luggage, once. */
+function mount() {
+    var host = el('tab-luggage');
+    if (!host) return false;
+    if (!el('lugBody')) {
+        host.innerHTML =
+            '<div data-ops="luggage">' +
+                '<div class="ops-hero">' +
+                    '<div class="ops-hero-icon">' +
+                        '<svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="7" width="18" height="13" rx="2"/><path d="M8 7V5a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/><line x1="3" y1="13" x2="21" y2="13"/></svg>' +
+                    '</div>' +
+                    '<div><h1>Luggage</h1><p>Bags to camp and home — bookings, tags, trucks and bunk delivery</p></div>' +
+                    '<div class="ops-hero-actions">' +
+                        '<button class="ops-btn" onclick="lugExportCSV()">&darr; Export</button>' +
+                        '<button class="ops-btn ops-btn--pri" onclick="lugNewBooking()">+ New Booking</button>' +
+                    '</div>' +
+                '</div>' +
+                '<div class="ops-tabs" id="lugTabs"></div>' +
+                '<div id="lugBody"></div>' +
+            '</div>';
+    }
+    return true;
+}
+
 function render() {
+    if (!mount()) return;
     var tabsEl = el('lugTabs');
     if (tabsEl) {
         tabsEl.innerHTML = TABS.map(function (t) {
@@ -361,7 +419,7 @@ window.lugMove = function (bookingId, tagCode, to) {
 };
 
 window.lugOpenScan = function () {
-    el('scanBody').innerHTML =
+    var h =
         '<div class="ops-field"><label>Move to</label><select class="ops-select" id="scanTo">' +
         LC.STATUS_IDS.map(function (id) {
             var m = LC.statusMeta(id);
@@ -371,7 +429,7 @@ window.lugOpenScan = function () {
         '<textarea class="ops-textarea" id="scanTags" style="min-height:150px;font-family:ui-monospace,monospace" placeholder="One per line, or scan straight into this box"></textarea>' +
         '<span class="ops-hint">Case doesn\'t matter. A bag that can\'t legally make this move is reported rather than forced — that\'s usually a missed scan earlier in the chain.</span></div>' +
         '<div id="scanResult"></div>';
-    lugOpen('scan');
+    modal('scan', 'Scan Bags', h, 'Apply', lugRunScan);
 };
 
 window.lugRunScan = function () {
@@ -437,7 +495,6 @@ window.lugEditBooking = function (id) {
     editingBooking = id || null;
     var b = editingBooking ? (bookingById(editingBooking) || {}) : {};
     var counts = b.counts || {};
-    el('bkTitle').textContent = editingBooking ? 'Edit Booking' : 'New Booking';
 
     var campers = camperList();
     var h = '<div class="ops-fsec">Camper</div>' +
@@ -487,9 +544,8 @@ window.lugEditBooking = function (id) {
         '</select></div></div>' +
         '<div class="ops-field"><label>Notes</label><textarea class="ops-textarea" id="bkNotes">' + esc(b.notes || '') + '</textarea></div>';
 
-    el('bkBody').innerHTML = h;
+    modal('bk', editingBooking ? 'Edit Booking' : 'New Booking', h, 'Save Booking', lugSaveBooking, true);
     lugModeChanged();
-    lugOpen('booking');
 };
 
 window.lugCamperPicked = function () {
@@ -570,7 +626,7 @@ window.lugSaveBooking = function () {
         lug.bookings[i] = rec;
     } else lug.bookings.push(rec);
 
-    save(); lugClose('booking'); render();
+    save(); lugClose('bk'); render();
     lugToast(existing ? 'Booking updated' : 'Booking created — ' + rec.ref);
 };
 
@@ -586,8 +642,7 @@ window.lugDeleteBooking = function (id) {
 window.lugEditLocation = function (id) {
     editingLocation = id || null;
     var l = editingLocation ? (locationById(editingLocation) || {}) : {};
-    el('locTitle').textContent = editingLocation ? 'Edit Location' : 'Add Drop-off Location';
-    el('locBody').innerHTML =
+    var h =
         '<div class="ops-field"><label>Name</label><input class="ops-input" id="locName" value="' + esc(l.name || '') + '" placeholder="Brooklyn"></div>' +
         '<div class="ops-field"><label>Address</label><input class="ops-input" id="locAddress" value="' + esc(l.address || '') + '" placeholder="Corner of 13th Ave & 45th St"></div>' +
         '<div class="ops-row">' +
@@ -596,7 +651,7 @@ window.lugEditLocation = function (id) {
         '<div class="ops-field"><label>To</label><input class="ops-input" id="locEnd" type="time" value="' + esc(l.windowEnd || '') + '"></div></div>' +
         '<div class="ops-field"><label>Capacity (bags)</label><input class="ops-input" id="locCap" type="number" min="0" value="' + (l.capacityBags || '') + '" placeholder="Leave blank for no cap">' +
         '<span class="ops-hint">Bags, not bookings — one family can bring six.</span></div>';
-    lugOpen('location');
+    modal('loc', editingLocation ? 'Edit Location' : 'Add Drop-off Location', h, 'Save Location', lugSaveLocation);
 };
 
 window.lugSaveLocation = function () {
@@ -613,7 +668,7 @@ window.lugSaveLocation = function () {
         var i = lug.locations.findIndex(function (x) { return x.id === existing.id; });
         lug.locations[i] = rec;
     } else lug.locations.push(rec);
-    save(); lugClose('location'); render();
+    save(); lugClose('loc'); render();
     lugToast(existing ? 'Location updated' : 'Location added');
 };
 
@@ -634,7 +689,7 @@ window.lugDeleteLocation = function (id) {
 // ── pricing ─────────────────────────────────────────────────────────────────
 window.lugEditPricing = function () {
     var p = LC.pricing(lug.settings.pricing);
-    el('pricingBody').innerHTML =
+    var h =
         '<div class="ops-fsec">Camp</div>' +
         '<div class="ops-row">' +
         '<div class="ops-field"><label>Camp name</label><input class="ops-input" id="pcName" value="' + esc(lug.settings.campName || '') + '"></div>' +
@@ -651,7 +706,7 @@ window.lugEditPricing = function () {
         '<div class="ops-field"><label>Return leg</label><input class="ops-input" id="pcReturn" type="number" min="0" step="0.1" value="' + p.returnLegMultiplier + '">' +
         '<span class="ops-hint">1 = same price both ways. 0.5 = half price home.</span></div>' +
         '<div class="ops-field"><label>Oversize fee ($)</label><input class="ops-input" id="pcOversize" type="number" min="0" step="1" value="' + p.oversizeFee + '"></div></div>';
-    lugOpen('pricing');
+    modal('pricing', 'Pricing & Camp Details', h, 'Save', lugSavePricing);
 };
 
 window.lugSavePricing = function () {
@@ -700,6 +755,13 @@ function init() {
     render();
     console.log('[Luggage] Ready —', lug.bookings.length, 'bookings,', lug.locations.length, 'locations');
 }
+
+// Luggage shares Go's page, so it renders when its tab is shown.
+window.CampistryGoLuggage = {
+    show: function () { if (!LC) init(); else { load(); render(); } },
+    refresh: function () { load(); render(); }
+};
+
 document.addEventListener('DOMContentLoaded', init);
 window.addEventListener('campistry-cloud-hydrated', function () { load(); render(); });
 })();

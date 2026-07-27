@@ -46,6 +46,7 @@
     </style>
     <link rel="stylesheet" href="campistry-unified.css">
     <link rel="stylesheet" href="campistry_go.css" onload="document.documentElement.classList.add('css-ready')">
+    <link rel="stylesheet" href="campistry_ops.css">
     <link rel="stylesheet" href="mobile-responsive.css">
     <noscript><style>html body { opacity: 1 !important; }</style></noscript>
 </head>
@@ -168,7 +169,8 @@
             <button class="tab-btn" data-tab="addresses">Addresses</button>
             <button class="tab-btn" data-tab="fleet">Bus Fleet</button>
             <button class="tab-btn" data-tab="staff">Staff</button>
-            <button class="tab-btn" data-tab="routes">Routes & Map</button>
+            <button class="tab-btn" data-tab="routes">Routes &amp; Map</button>
+            <button class="tab-btn" data-tab="luggage">Luggage</button>
         </div>
 
         <!-- SETUP -->
@@ -436,6 +438,15 @@
             </div>
         </div>
 
+<!-- ═══════════════════════════════════════════════════════ -->
+<!--  LUGGAGE — bags to camp and home.                       -->
+<!--  Rendered by campistry_go_luggage.js. It lives in Go     -->
+<!--  because drop-off points are stops, trucks are vehicles, -->
+<!--  and it reads the same camper addresses.                 -->
+<!-- ═══════════════════════════════════════════════════════ -->
+<div id="tab-luggage" class="tab-content"></div>
+
+
     </main>
 </div>
 </div><!-- /main-app-container -->
@@ -565,6 +576,8 @@
 <script src="campistry_go_persistence.js"></script>
 <script src="campistry_go_stop_master.js"></script>
 <script src="campistry_go.js"></script>
+<script src="campistry_luggage_core.js"></script>
+<script src="campistry_go_luggage.js"></script>
     <script src="campistry_go_map_editor.js"></script>
 <script>
 // Show ORS key card only if no platform key is configured

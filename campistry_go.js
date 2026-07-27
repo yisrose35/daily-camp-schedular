@@ -7641,9 +7641,20 @@ function findAnchorStop(campers, intersections, walkMi = 0.2) {
                 runPreflight();
                 if (_pendingMapInit) { setTimeout(function() { initMap(_pendingMapInit); _pendingMapInit = null; }, 150); }
                 else { setTimeout(function() { if (_map) _map.invalidateSize(); }, 150); }
+            } else if (t === 'luggage') {
+                // Luggage builds its own shell into #tab-luggage the first
+                // time it's shown (campistry_go_luggage.js).
+                try { window.CampistryGoLuggage && window.CampistryGoLuggage.show(); }
+                catch (e) { console.warn('[Luggage]', e); }
             }
         }));
         document.getElementById('addressSearch')?.addEventListener('input', () => { clearTimeout(_addrSearchTimer); _addrSearchTimer = setTimeout(renderAddresses, 200); });
+        // Deep link: the dashboard links to campistry_go.html#luggage.
+        const hash = (location.hash || '').replace('#', '');
+        if (hash) {
+            const target = document.querySelector('.tab-btn[data-tab="' + hash + '"]');
+            if (target) target.click();
+        }
     }
     let _addrSearchTimer;
 

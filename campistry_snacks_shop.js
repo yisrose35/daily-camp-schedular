@@ -1,21 +1,27 @@
 // =============================================================================
-// campistry_shop.js — Camp Shop page (catalogue, orders, fulfilment)
+// campistry_snacks_shop.js — the Camp Shop, inside Campistry Snacks
 //
-// Storage and rendering only. Every price, stock check and roll-up comes from
-// campistry_shop_core.js, which is pure and unit tested — nothing in this file
-// re-derives a number that module already knows how to produce.
+// Swag, tees and camp gear. This lives in Snacks rather than as its own app
+// because Snacks IS already the camp's store: it has inventory, camper
+// accounts, a POS terminal, a transaction ledger and a payment policy. A
+// separate shop would have duplicated every one of those and given the office
+// two places to look for "what did this camper buy".
 //
-// DATA
-//   campGlobalSettings_v1 → campistryShop
-//     products: [ { id, sku, name, category, emoji, price, sizes[], colors[],
-//                   priceDeltas{size:delta}, stock{variantId:qty}, active } ]
-//     orders:   [ { id, camperName, bunk, division, lines[], status, paid,
-//                   payMethod, discountPct, discountAmt, taxRate, notes,
-//                   placedAt } ]
-//     settings: { taxRate, lowStockThreshold, currency }
-//   Campers come from app1.camperRoster (Campistry Me), which is also where
-//   the shirt size on a camper record comes from — so an order for a camper
-//   with a size on file pre-selects it.
+// Pricing, variants and stock rules are in campistry_shop_core.js (pure +
+// unit tested). This file is storage and rendering only.
+//
+// DATA — campGlobalSettings_v1 -> campistryShop
+//   products: [ { id, sku, name, category, emoji, price, sizes[], colors[],
+//                 priceDeltas{size:delta}, stock{variantId:qty}, active } ]
+//   orders:   [ { id, camperName, bunk, division, lines[], status, paid,
+//                 payMethod, discountPct, discountAmt, taxRate, notes,
+//                 placedAt } ]
+//   settings: { taxRate, lowStockThreshold }
+//
+// Campers come from app1.camperRoster (Campistry Me) — which is also where a
+// camper's shirt size comes from, so an order pre-selects it.
+//
+// Mounts itself into #page-shop when Snacks renders that page.
 // =============================================================================
 (function () {
 'use strict';
@@ -94,16 +100,48 @@ function num(id) { var v = parseFloat(val(id)); return isFinite(v) ? v : 0; }
 function checked(id) { var e = el(id); return !!(e && e.checked); }
 function today() { var d = new Date(); return d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0') + '-' + String(d.getDate()).padStart(2, '0'); }
 
+// Snacks already has a toast; use it so the Shop doesn't stack a second one
+// in a different corner. Falls back to its own if the host's isn't there.
 window.shopToast = function (msg, isErr) {
-    var t = el('shopToast');
-    if (!t) return;
-    t.textContent = msg;
-    t.className = 'ops-toast show' + (isErr ? ' err' : '');
-    clearTimeout(t._t);
-    t._t = setTimeout(function () { t.className = 'ops-toast'; }, 2600);
+    var host = document.getElementById('toast');
+    if (host) {
+        host.textContent = msg;
+        host.className = 'toast show' + (isErr ? ' err' : '');
+        clearTimeout(host._t);
+        host._t = setTimeout(function () { host.className = 'toast'; }, 2600);
+        return;
+    }
+    console.log('[Shop]', msg);
 };
-window.shopOpen = function (n) { el('m-' + n).classList.add('open'); };
-window.shopClose = function (n) { el('m-' + n).classList.remove('open'); };
+// Modals are created on demand and removed on close. The standalone page used
+// to carry them as static markup; injecting three overlays into the Snacks
+// page just so they can sit hidden isn't worth it.
+function modal(id, title, bodyHtml, saveLabel, onSave, wide) {
+    shopClose(id);
+    var ov = document.createElement('div');
+    ov.className = 'ops-overlay open';
+    ov.id = 'm-' + id;
+    ov.setAttribute('data-ops', 'shop');
+    ov.innerHTML =
+        '<div class="ops-modal' + (wide ? ' ops-modal--lg' : '') + '">' +
+            '<div class="ops-modal-head"><h2>' + esc(title) + '</h2>' +
+                '<button class="ops-x" data-close="1">&times;</button></div>' +
+            '<div class="ops-modal-body" id="' + id + 'Body"></div>' +
+            '<div class="ops-modal-foot">' +
+                '<button class="ops-btn" data-close="1">Cancel</button>' +
+                '<button class="ops-btn ops-btn--pri" id="' + id + 'Save">' + esc(saveLabel) + '</button>' +
+            '</div>' +
+        '</div>';
+    document.body.appendChild(ov);
+    el(id + 'Body').innerHTML = bodyHtml;
+    ov.querySelectorAll('[data-close]').forEach(function (b) {
+        b.addEventListener('click', function () { shopClose(id); });
+    });
+    ov.addEventListener('mousedown', function (e) { if (e.target === ov) shopClose(id); });
+    el(id + 'Save').addEventListener('click', onSave);
+    return ov;
+}
+window.shopClose = function (n) { var e = el('m-' + n); if (e) e.remove(); };
 
 function stat(label, value, sub) {
     return '<div class="ops-stat"><div class="ops-stat-label">' + esc(label) + '</div>' +
@@ -131,7 +169,35 @@ var TABS = [
 
 window.shopTab = function (t) { tab = t; render(); };
 
+/**
+ * Build the section shell inside the host page, once. Snacks renders
+ * #page-shop; everything below hangs off the nodes created here.
+ */
+function mount() {
+    var host = el('page-shop');
+    if (!host) return false;
+    if (!el('shopBody')) {
+        host.innerHTML =
+            '<div data-ops="shop">' +
+                '<div class="ops-hero">' +
+                    '<div class="ops-hero-icon">' +
+                        '<svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M6 2L3 6v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2V6l-3-4z"/><line x1="3" y1="6" x2="21" y2="6"/><path d="M16 10a4 4 0 0 1-8 0"/></svg>' +
+                    '</div>' +
+                    '<div><h1>Camp Shop</h1><p>Swag, tees and camp gear — catalogue, orders and fulfilment</p></div>' +
+                    '<div class="ops-hero-actions">' +
+                        '<button class="ops-btn" onclick="shopExportCSV()">&darr; Export orders</button>' +
+                        '<button class="ops-btn ops-btn--pri" onclick="shopNewOrder()">+ New Order</button>' +
+                    '</div>' +
+                '</div>' +
+                '<div class="ops-tabs" id="shopTabs"></div>' +
+                '<div id="shopBody"></div>' +
+            '</div>';
+    }
+    return true;
+}
+
 function render() {
+    if (!mount()) return;
     var tabsEl = el('shopTabs');
     if (tabsEl) {
         tabsEl.innerHTML = TABS.map(function (t) {
@@ -342,7 +408,6 @@ function renderReports() {
 window.shopEditProduct = function (id) {
     editingProduct = (id == null) ? null : id;
     var p = editingProduct != null ? (productById(editingProduct) || {}) : {};
-    el('prodTitle').textContent = editingProduct != null ? 'Edit Product' : 'Add Product';
 
     var sizes = p.sizes || ['YM', 'YL', 'AS', 'AM', 'AL', 'AXL'];
     var deltas = p.priceDeltas || {};
@@ -372,9 +437,9 @@ window.shopEditProduct = function (id) {
         '<div class="ops-field"><input class="ops-input" id="pColors" value="' + esc((p.colors || []).join(', ')) + '" placeholder="Navy, White, Grey">' +
         '<span class="ops-hint">Comma separated. Leave blank for a single colour.</span></div>';
 
-    el('prodBody').innerHTML = h;
+    modal('prod', editingProduct != null ? 'Edit Product' : 'Add Product',
+          h, 'Save Product', shopSaveProduct);
     shopSyncDeltas(deltas);
-    shopOpen('product');
 };
 
 window.shopSyncDeltas = function (existing) {
@@ -429,7 +494,7 @@ window.shopSaveProduct = function () {
         shop.products[i] = Object.assign({}, existing, rec);
     } else shop.products.push(rec);
 
-    save(); shopClose('product'); render();
+    save(); shopClose('prod'); render();
     shopToast(existing ? 'Product updated' : 'Product added');
 };
 
@@ -438,23 +503,23 @@ window.shopRestock = function (id) {
     restockProduct = id;
     var p = productById(id); if (!p) return;
     var vs = SC.variants(p);
-    el('restockBody').innerHTML = '<p class="ops-note" style="margin:0 0 12px">Set the count you have on hand for ' +
+    var h = '<p class="ops-note" style="margin:0 0 12px">Set the count you have on hand for ' +
         esc(p.name) + '.</p>' +
         vs.map(function (v) {
             return '<div class="ops-field" style="flex-direction:row;align-items:center;gap:10px">' +
                 '<label style="flex:1;margin:0">' + esc(v.label) + '</label>' +
                 '<input class="ops-input" style="width:100px" type="number" min="0" data-vid="' + esc(v.id) + '" value="' + v.stock + '"></div>';
         }).join('');
-    shopOpen('restock');
+    modal('shopRestock', 'Restock', h, 'Save Stock', shopSaveRestock);
 };
 window.shopSaveRestock = function () {
     var p = productById(restockProduct); if (!p) return;
     var stock = Object.assign({}, p.stock || {});
-    document.querySelectorAll('#restockBody input[data-vid]').forEach(function (i) {
+    document.querySelectorAll('#shopRestockBody input[data-vid]').forEach(function (i) {
         stock[i.dataset.vid] = Math.max(0, parseInt(i.value, 10) || 0);
     });
     p.stock = stock;
-    save(); shopClose('restock'); render();
+    save(); shopClose('shopRestock'); render();
     shopToast('Stock updated');
 };
 
@@ -466,7 +531,6 @@ window.shopEditOrder = function (id) {
     editingOrder = id || null;
     var o = editingOrder ? (orderById(editingOrder) || {}) : {};
     draftLines = (o.lines || []).map(function (l) { return Object.assign({}, l); });
-    el('ordTitle').textContent = editingOrder ? 'Edit Order' : 'New Order';
 
     var campers = camperList();
     var h = '<div class="ops-fsec">Who</div>' +
@@ -502,10 +566,9 @@ window.shopEditOrder = function (id) {
     h += '<div id="oTotals" style="margin-top:14px;padding:12px 14px;background:var(--ops-line-soft);border-radius:var(--ops-r-sm)"></div>';
     h += '<div id="oStockWarn"></div>';
 
-    el('ordBody').innerHTML = h;
+    modal('ord', editingOrder ? 'Edit Order' : 'New Order', h, 'Save Order', shopSaveOrder, true);
     if (!draftLines.length) shopAddLine();
     else drawLines();
-    shopOpen('order');
 };
 
 window.shopCamperPicked = function () {
@@ -648,7 +711,7 @@ window.shopSaveOrder = function () {
         shop.orders[i] = rec;
     } else shop.orders.push(rec);
 
-    save(); shopClose('order'); render();
+    save(); shopClose('ord'); render();
     shopToast(existing ? 'Order updated' : 'Order saved');
 };
 
@@ -698,7 +761,19 @@ function init() {
     render();
     console.log('[Shop] Ready —', shop.products.length, 'products,', shop.orders.length, 'orders');
 }
-document.addEventListener('DOMContentLoaded', init);
+
+// The Shop shares the Snacks page, so it renders when that page shows it
+// rather than on load. snacksNav calls this; init() is idempotent.
+window.CampistryShop = {
+    show: function () { if (!SC) init(); else { load(); render(); } },
+    refresh: function () { load(); render(); }
+};
+
+document.addEventListener('DOMContentLoaded', function () {
+    // Populate quietly so the tab is instant when the user gets to it. If
+    // #page-shop isn't in the DOM yet, mount() no-ops and show() covers it.
+    init();
+});
 // The roster and our own blob both land after DOMContentLoaded.
 window.addEventListener('campistry-cloud-hydrated', function () { load(); render(); });
 })();

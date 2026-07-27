@@ -66,6 +66,14 @@ When the user says **"day X"** or **"let's do day X"**:
 | Special Activities | `special_activities.js` |
 | Integration Hub | `integration_hooks.js` |
 | Campistry Lite (mobile companion) | `campistry_lite.html/.js/.css`, `manifest_lite.webmanifest`, `supabase/functions/send-sms/`, `migrations/018_*.sql` — docs in `CAMPISTRY_LITE.md` |
+| Payroll & Youth Corps | `campistry_payroll_core.js` (rules + pay math), Payroll page in `campistry_me.js` |
+| Payment policy (one catalogue, camp-wide) | `campistry_payments.js` — used by registration, Billing, Snacks, Shop |
+| Camp Shop (swag) — lives **inside Snacks** | `campistry_shop_core.js`, `campistry_snacks_shop.js`, `#page-shop` in `campistry_snacks.html` |
+| Luggage — lives **inside Go** | `campistry_luggage_core.js`, `campistry_go_luggage.js`, `#tab-luggage` in `campistry_go.html` |
+| Shop/Luggage shared UI kit | `campistry_ops.css` (`.ops-*` namespace only — safe inside a host page) |
+| Bus routes outside Go | `campistry_bus_routes.js` — reads Go's saved routes for Me's print sheets |
+| Message/email branding + watermark | `campistry_link_branding.js` |
+| Birthday reminders | `campistry_birthdays.js` (dashboard card + notifications) |
 
 ---
 

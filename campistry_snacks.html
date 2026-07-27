@@ -10,6 +10,7 @@
 <link href="https://fonts.googleapis.com/css2?family=DM+Sans:opsz,wght@9..40,400;9..40,500;9..40,600;9..40,700&family=Fraunces:opsz,wght@9..144,400;9..144,500;9..144,600;9..144,700&display=swap" rel="stylesheet">
 <link rel="stylesheet" href="campistry-unified.css">
 <link rel="stylesheet" href="campistry_snacks.css">
+<link rel="stylesheet" href="campistry_ops.css">
 <!-- Splash screen — inline so it appears before any external CSS -->
 <style>
     #snacks-splash {
@@ -109,6 +110,7 @@
     <button class="sidebar-item" data-page="accounts"><span class="sidebar-dot"></span> Accounts</button>
     <div class="sidebar-label">Management</div>
     <button class="sidebar-item" data-page="menu"><span class="sidebar-dot"></span> Menu Items</button>
+    <button class="sidebar-item" data-page="shop"><span class="sidebar-dot"></span> Camp Shop</button>
     <button class="sidebar-item" data-page="settings"><span class="sidebar-dot"></span> Settings</button>
     <div class="sidebar-label">Operations</div>
     <a href="campistry_snacks_pos.html" class="sidebar-item sidebar-item-link">
@@ -322,6 +324,14 @@
     </div>
 </div>
 
+<!-- ═══════════════════════════════════════════════════ -->
+<!--  CAMP SHOP — swag, tees and camp gear.                -->
+<!--  Rendered by campistry_snacks_shop.js; the Shop lives -->
+<!--  here because Snacks already IS the camp's store —    -->
+<!--  inventory, camper accounts, POS and a ledger.        -->
+<!-- ═══════════════════════════════════════════════════ -->
+<div id="page-shop" class="snacks-page"></div>
+
 </div><!-- /app-content -->
 
 <!-- BOTTOM NAV (mobile) -->
@@ -342,6 +352,10 @@
         <button class="snacks-bnav-item" data-page="menu" onclick="snacksNav('menu',this)">
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="20" height="20"><path d="M6 2L3 6v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2V6l-3-4z"/><line x1="3" y1="6" x2="21" y2="6"/></svg>
             Menu
+        </button>
+        <button class="snacks-bnav-item" data-page="shop" onclick="snacksNav('shop',this)">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="20" height="20"><path d="M6 2L3 6v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2V6l-3-4z"/><line x1="3" y1="6" x2="21" y2="6"/><path d="M16 10a4 4 0 0 1-8 0"/></svg>
+            Shop
         </button>
         <a href="campistry_snacks_pos.html" class="snacks-bnav-item">
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="20" height="20"><rect x="2" y="3" width="20" height="14" rx="2"/><line x1="8" y1="21" x2="16" y2="21"/><line x1="12" y1="17" x2="12" y2="21"/></svg>
@@ -387,15 +401,35 @@
             b.classList.add('active');
             document.querySelectorAll('.snacks-page').forEach(function(x){x.classList.remove('active');});
             var t=document.getElementById('page-'+p);if(t)t.classList.add('active');
+            _snacksOnShow(p);
             close();
         });
     });}
 })();
 
+// Sections that render lazily get a nudge when their page is shown. The Camp
+// Shop builds its own shell into #page-shop, so it needs to know it's visible.
+function _snacksOnShow(page) {
+    if (page === 'shop' && window.CampistryShop) {
+        try { window.CampistryShop.show(); } catch (e) { console.warn('[Shop]', e); }
+    }
+}
+
+// Deep link: dashboard.html links to campistry_snacks.html#shop, so honour a
+// hash on load. Runs after the page scripts so CampistryShop exists.
+window.addEventListener('load', function () {
+    var page = (location.hash || '').replace('#', '');
+    if (!page) return;
+    var target = document.getElementById('page-' + page);
+    if (!target) return;
+    snacksNav(page, document.querySelector('.snacks-bnav-item[data-page="' + page + '"]'));
+});
+
 function snacksNav(page, btn) {
     document.querySelectorAll('.snacks-page').forEach(function(x){x.classList.remove('active');});
     var t = document.getElementById('page-' + page);
     if (t) t.classList.add('active');
+    _snacksOnShow(page);
     document.querySelectorAll('.snacks-bnav-item').forEach(function(x){x.classList.remove('active');});
     if (btn) btn.classList.add('active');
     // sync sidebar
@@ -416,6 +450,8 @@ function snacksNav(page, btn) {
 <script src="campistry_payments.js"></script>
 <script src="campistry_snacks_cash.js"></script>
 <script src="campistry_snacks.js"></script>
+<script src="campistry_shop_core.js"></script>
+<script src="campistry_snacks_shop.js"></script>
 <script>
 // Re-render Snacks when cloud data arrives
 window.addEventListener('campistry-cloud-hydrated', function(){
