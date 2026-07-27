@@ -236,24 +236,79 @@ breakdown inline, so a head counselor can answer "which day was this?" without t
 
 ---
 
-## 4. Recommended fixes, in order
+## 4. Fixes applied
 
-1. **Guard the two unguarded `RotationCloud.save` calls** (`unified_schedule_system.js:4625`,
-   `scheduler_core_utils.js:3563`) with the same `_pendingDateTransition` +
-   `_scheduleAssignmentsDate` checks `verifiedScheduleSave` already uses. Small, contained,
-   removes finding **B**.
-2. **Scope the `rotation_counts` delete to the bunks being written**, instead of the whole
-   camp-date, and refuse the write when the caller's bunk set is empty — mirroring the
-   `daily_schedules` empty-save guard. Removes finding **C** and de-fangs the daily
-   auto-reconcile.
-3. **Make `analytics.js`'s today-count call `RotationCloud.deriveCounts`** rather than
-   reimplementing it, and drop the `max(mem, cloud)` merge in favour of cloud-authoritative-
-   plus-in-session-edits. Removes **D** and **F**.
-4. **Give `rebuildHistoricalCounts` and `deriveCounts` one shared per-entry rule function.**
-   Removes **E**, and stops the two stores from silently disagreeing again.
-5. **Product:** an explicit "this didn't happen" action on a schedule block that clears the
-   day's credit. Without it, finding **A** will keep generating these reports no matter how
-   clean the sync is.
+**1. Cross-date guard on the rotation write** — removes **B**.
+`RotationCloud.saveGuarded(dateKey, grid, label)` (`rotation_cloud.js`) refuses the write
+when `window._pendingDateTransition` is set or when `window._scheduleAssignmentsDate`
+disagrees with `dateKey` — the same two checks `verifiedScheduleSave` and the autosave hook
+already apply to the `daily_schedules` write. Both live-globals callers now use it:
+`unified_schedule_system.js` (`saveSchedule`) and `scheduler_core_utils.js`
+(`applyPostEditCounts`, which additionally captures the date at edit time rather than
+re-reading it 500 ms later). Solver callers already passed a gen-start date and are unchanged.
 
-Items 1–4 are mechanical and low-risk. None of them are done yet — this pass was
-investigation plus the diagnostic needed to confirm which one is actually biting.
+**2. Bunk-scoped pre-delete** — removes **C**.
+`saveRotationCounts` now deletes `.in('bunk', Object.keys(scheduleAssignments))` instead of
+the whole camp-date, and refuses a payload with zero bunks (an empty grid is what an
+un-hydrated page looks like, not a cleared day — clearing goes through `deleteDate`). Bunks
+the caller owns are still fully re-derived; bunks it can't see are untouched. This also
+de-fangs the daily auto-reconcile, which replayed that delete across up to 90 dates.
+
+**3. Report counts today by the canonical rule** — removes **D** and **F**.
+`analytics.js` now derives today's contribution through `RotationCloud.deriveCounts` (via a
+`deriveTodayCounts` normalizer that flattens `scheduleSegments`, preferring each segment's
+`_source` entry). The `max(mem, cloud)` merge is gone: cloud is authoritative for what's
+saved, and memory supersedes it only when the coherence stamp says memory belongs to the
+viewed date — which is exactly when it carries in-session edits.
+
+**4. One shared per-entry rule** — removes **E**.
+`SchedulerCoreUtils.rotationActivityForEntry(entry, validActivities)` is now the single
+decision, called by both `RotationCloud.deriveCounts` and `Utils.rebuildHistoricalCounts`.
+*Behavior change:* the local rebuild gains the `sport` fallback it was missing, so entries
+carrying only `sport` now count for solver fairness as they always did for the report.
+
+**5. Product — not done.** An explicit "this didn't happen" action on a schedule block that
+clears the day's credit. Finding **A** will keep producing these reports until it exists;
+no amount of sync hardening addresses it.
+
+Not changed: the raise-only floor (**G**) is deliberate — it stops a partial local scan from
+wiping shared totals — and the report only falls back to local counts for a bunk with zero
+cloud rows.
+
+---
+
+## 5. Leagues not returning on older dates
+
+Same investigation, different store. `window.leagueAssignments` is **division-keyed**:
+
+```js
+leagueAssignments[divisionName][slotKey] = { matchups, gameLabel, sport, leagueName }
+```
+
+Eight call sites indexed it by **bunk**. Those reads are always `undefined` and those deletes
+are always no-ops, so nothing crashed — league data just silently failed to travel:
+
+| Site | Effect |
+|---|---|
+| `unified_schedule_system.js` bypass save | `leagues[bunk] = leagueAssignments[bunk]` never matched, so every post-edit wrote the record's **stale stored** fixtures back with a fresh `updated_at` — which then **won** the per-division newest-wins merge on the next load. Primary cause of older dates showing the wrong games or none. |
+| `scheduler_core_auto.js` STEP 0 partial wipe | `delete leagueAssignments[bunk]` no-op, so the pre-gen snapshot captured stale fixtures for the divisions about to be regenerated |
+| `scheduler_core_auto.js` STEP 5 restore | restored **every** division from that snapshot, reverting the fixtures the run had just built |
+| `scheduler_core_auto.js` STEP 5 localStorage merge | same bunk-keyed lookup, so the persisted copy also kept pre-generation fixtures |
+| `calendar.js` ×2, `access_control.js`, `schedule_orchestrator.js` | cleared bunks kept their division's league games |
+
+Two further gaps in the save payload (`supabase_schedules.js`):
+
+- `leagueAssignments` was the **only** field with no window fallback on a same-date save, so
+  any caller building a payload without it wrote `{}`.
+- It was written **whole-camp and unfiltered**, while `scheduleAssignments` is filtered to the
+  user's own bunks. `_divStamps` only covers divisions in the user's *filtered* assignments,
+  so foreign league entries fell back to the row's `updated_at` — always fresh — letting a
+  scheduler's stale realtime-merged copy shadow the real one.
+
+**Fixed:** `SchedulerCoreUtils.divisionsFullyCovered(bunks)` (destructive ops — never drop a
+division's block on a partial clear) and `divisionsTouchedBy(bunks)` (this division's block
+was regenerated / edited) translate bunk sets into the map's real keys; all eight sites now
+use them. `_partialGenDivs` tracks league scope through a partial regen. The save payload
+gains the window fallback and `filterLeaguesToMyDivisions`, which fails closed like the bunk
+filter. This extends the pattern `CB-42` already established in `deleteMyScheduleOnly` —
+that fix caught one site; these were the rest.

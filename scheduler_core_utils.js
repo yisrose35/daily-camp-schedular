@@ -3026,6 +3026,88 @@
      * @param {boolean} saveToCloud - Whether to save to globalSettings
      * @returns {Object} - The rebuilt counts { bunk: { activity: count } }
      */
+    // =================================================================
+    // LEAGUE ASSIGNMENT KEYING — leagueAssignments is DIVISION-keyed
+    // =================================================================
+    // window.leagueAssignments[divisionName][slotKey] = { matchups, gameLabel,
+    // sport, leagueName }. It is NOT bunk-keyed — a league block belongs to a
+    // whole division, not to one bunk.
+    //
+    // Several paths indexed it by bunk anyway (`delete leagueAssignments[bunk]`,
+    // `leagues[bunk] = leagueAssignments[bunk]`). Those reads are always
+    // undefined and those deletes are always no-ops, so the symptom wasn't a
+    // crash — it was league data silently failing to travel: a post-edit save
+    // wrote the record's STALE stored fixtures back with a fresh updated_at,
+    // which then won the per-division newest-wins merge on the next load, and a
+    // partial regen restored every division's PRE-generation fixtures over the
+    // ones it had just built. Revisiting an old date showed the wrong games, or
+    // none.
+    //
+    // These two helpers translate a bunk set into division names so those call
+    // sites can operate on the map's real keys.
+
+    // Divisions where EVERY bunk is in `bunks`. Use for destructive ops — a
+    // partial clear must not drop a division's whole league block.
+    Utils.divisionsFullyCovered = function(bunks) {
+        const want = new Set(Array.from(bunks || [], String));
+        const out = new Set();
+        const divisions = window.divisions || {};
+        Object.keys(divisions).forEach(divName => {
+            const dBunks = (divisions[divName] && divisions[divName].bunks) || [];
+            if (dBunks.length === 0) return;
+            if (dBunks.every(b => want.has(String(b)))) out.add(divName);
+        });
+        return out;
+    };
+
+    // Divisions with AT LEAST ONE bunk in `bunks`. Use for "this division's
+    // league block was (re)generated, keep the fresh copy".
+    Utils.divisionsTouchedBy = function(bunks) {
+        const want = new Set(Array.from(bunks || [], String));
+        const out = new Set();
+        const divisions = window.divisions || {};
+        Object.keys(divisions).forEach(divName => {
+            const dBunks = (divisions[divName] && divisions[divName].bunks) || [];
+            if (dBunks.some(b => want.has(String(b)))) out.add(divName);
+        });
+        return out;
+    };
+
+    // =================================================================
+    // CANONICAL ROTATION-COUNT RULE — the single per-entry decision
+    // =================================================================
+    // Both rotation stores must answer "does this slot earn a rotation
+    // credit, and under what name?" identically, or the report (cloud
+    // rotation_counts) and the solver's fairness (local historicalCounts)
+    // silently disagree about the same schedule.
+    //
+    // They used to disagree in two ways:
+    //   • rebuildHistoricalCounts read `_activity` ONLY — an entry carrying
+    //     just `sport` counted in the cloud but not locally.
+    //   • only the cloud skipped league entries explicitly.
+    // Both stores now call this. Do not inline the rule anywhere else.
+    //
+    // @returns {string|null} the activity name to credit, or null to skip.
+    Utils.rotationActivityForEntry = function(entry, validActivities) {
+        if (!entry || entry.continuation || entry._isTransition) return null;
+        // League play is tracked via standings, not rotation variety. A league
+        // entry's _activity ("League: X") isn't a valid activity but it also
+        // carries a real `sport`, so without this the sport fallback below
+        // would credit a phantom Basketball rotation.
+        if (entry._h2h || entry._leagueName || entry._isSpecialtyLeague || entry._league) return null;
+
+        const valid = validActivities || Utils.getValidActivityNames();
+        let actName = entry._activity || entry.sport || '';
+        if (!actName) return null;
+        if (!valid.has(actName) && entry.sport && valid.has(entry.sport)) {
+            actName = entry.sport;
+        }
+        const lower = String(actName).toLowerCase();
+        if (lower === 'free' || lower === 'free play' || lower.includes('transition')) return null;
+        if (!valid.has(actName)) return null;
+        return actName;
+    };
+
     Utils.rebuildHistoricalCounts = function(saveToCloud = true) {
         console.log('📊 [SchedulerCoreUtils] Rebuilding historical counts from all schedules...');
         const validActivities = Utils.getValidActivityNames();
@@ -3048,23 +3130,17 @@
                 const bunkSchedule = sched[bunk] || [];
 
                 bunkSchedule.forEach(entry => {
-                    // Only count valid activities, skip continuations and transitions
-                    if (entry && entry._activity && !entry.continuation && !entry._isTransition) {
-                        const actName = entry._activity;
-
-                        // Skip "Free" and transition types
-                        const actLower = actName.toLowerCase();
-                        if (actLower === 'free' || actLower === 'free play' || actLower.includes('transition')) {
-                            return;
-                        }
-
-                        if (!validActivities.has(actName)) return;
-                        counts[bunk] = counts[bunk] || {};
-                        counts[bunk][actName] = (counts[bunk][actName] || 0) + 1;
-                        dayCounts[bunk] = dayCounts[bunk] || {};
-                        dayCounts[bunk][actName] = (dayCounts[bunk][actName] || 0) + 1;
-                        totalActivities++;
-                    }
+                    // ★ Shared rule with RotationCloud.deriveCounts — see
+                    //   Utils.rotationActivityForEntry. Previously this scan read
+                    //   `_activity` only (no `sport` fallback), so the local store
+                    //   and the cloud store disagreed on the same schedule.
+                    const actName = Utils.rotationActivityForEntry(entry, validActivities);
+                    if (!actName) return;
+                    counts[bunk] = counts[bunk] || {};
+                    counts[bunk][actName] = (counts[bunk][actName] || 0) + 1;
+                    dayCounts[bunk] = dayCounts[bunk] || {};
+                    dayCounts[bunk][actName] = (dayCounts[bunk][actName] || 0) + 1;
+                    totalActivities++;
                 });
             });
         });
@@ -3559,13 +3635,23 @@ const validActivities = Utils.getValidActivityNames();
         // ── Sync rotation counts to cloud (debounced) ────────────────
         //    Multiple bunks may be edited in quick succession (proposals,
         //    conflict resolution).  Debounce so only one cloud save fires.
+        //    ★ The 500 ms gap is long enough for the user to change dates between
+        //      the edit and the write — at which point window.currentScheduleDate
+        //      and window.scheduleAssignments no longer describe the same day.
+        //      saveGuarded refuses that pair instead of writing it (a mis-dated
+        //      rotation save credits the wrong day AND, because it pre-deletes,
+        //      erases the right one). Capture the date at edit time too, so the
+        //      guard compares against the day the edit actually happened on.
+        const _peDateKey = window.currentScheduleDate || new Date().toISOString().split('T')[0];
         clearTimeout(Utils._postEditCloudTimer);
         Utils._postEditCloudTimer = setTimeout(() => {
             try {
-                const _dateKey = window.currentScheduleDate || new Date().toISOString().split('T')[0];
-                if (_dateKey && window.RotationCloud?.save) {
-                    window.RotationCloud.save(_dateKey, window.scheduleAssignments || {});
+                if (!_peDateKey) return;
+                if (window.RotationCloud?.saveGuarded) {
+                    window.RotationCloud.saveGuarded(_peDateKey, window.scheduleAssignments || {}, 'applyPostEditCounts');
                     console.log('[PostEditCounts] ☁️ Synced rotation counts to cloud');
+                } else if (window.RotationCloud?.save) {
+                    window.RotationCloud.save(_peDateKey, window.scheduleAssignments || {});
                 }
             } catch (e) { console.error('[PostEditCounts] RotationCloud sync failed:', e); }
         }, 500);

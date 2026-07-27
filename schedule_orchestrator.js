@@ -1550,10 +1550,13 @@
             });
         }
 
+        // ★ leagueAssignments is DIVISION-keyed — deleting by bunk name was a
+        //   no-op. Only clear divisions whose bunks are ALL being cleared.
         if (window.leagueAssignments) {
-            myBunks.forEach(bunk => {
-                delete window.leagueAssignments[bunk];
-            });
+            const _lgDivs = window.SchedulerCoreUtils?.divisionsFullyCovered
+                ? window.SchedulerCoreUtils.divisionsFullyCovered(myBunks)
+                : new Set();
+            _lgDivs.forEach(div => { delete window.leagueAssignments[div]; });
         }
 
         log('Cleared', myBunks.size, 'bunks from window globals');

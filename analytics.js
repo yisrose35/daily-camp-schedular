@@ -176,6 +176,68 @@
         return (act && parseInt(act.max)) || 0;
     }
 
+    // ── Today's rotation contribution, by the CANONICAL rule ─────────────
+    // The report must count today the same way the cloud will store it, or the
+    // number changes overnight for no visible reason. Both sides go through
+    // RotationCloud.deriveCounts (→ SchedulerCoreUtils.rotationActivityForEntry).
+    //
+    // The only wrinkle is shape: the live grid may be window.scheduleSegments,
+    // where each cell is an ARRAY of segments carrying `activity` rather than
+    // `_activity`. Flatten to the assignments shape first — preferring each
+    // segment's `_source` (the original entry, with all its league/prep flags
+    // intact) so the rule sees everything it needs to decide.
+    // Returns { bunk: { activity: count } }.
+    function deriveTodayCounts(sched) {
+        const flat = {};
+        Object.keys(sched || {}).forEach(bunk => {
+            const row = sched[bunk] || [];
+            const entries = [];
+            row.forEach(cell => {
+                if (Array.isArray(cell)) {
+                    cell.forEach(seg => {
+                        if (!seg) return;
+                        entries.push(seg._source || {
+                            _activity: seg.activity,
+                            sport: seg.activity,
+                            continuation: !!seg.continuation
+                        });
+                    });
+                } else if (cell) {
+                    entries.push(cell);
+                }
+            });
+            flat[bunk] = entries;
+        });
+
+        const out = {};
+        if (window.RotationCloud?.deriveCounts) {
+            const counts = window.RotationCloud.deriveCounts(flat);
+            Object.keys(counts).forEach(key => {
+                const i = key.indexOf('|');
+                if (i < 0) return;
+                const b = key.slice(0, i), a = key.slice(i + 1);
+                out[b] = out[b] || {};
+                out[b][a] = (out[b][a] || 0) + counts[key];
+            });
+            return out;
+        }
+
+        // RotationCloud not loaded (report opened outside flow.html) — fall back
+        // to the shared per-entry rule directly.
+        const rule = window.SchedulerCoreUtils?.rotationActivityForEntry;
+        const valid = window.SchedulerCoreUtils?.getValidActivityNames?.();
+        if (!rule || !valid) return out;
+        Object.keys(flat).forEach(bunk => {
+            flat[bunk].forEach(entry => {
+                const act = rule(entry, valid);
+                if (!act) return;
+                out[bunk] = out[bunk] || {};
+                out[bunk][act] = (out[bunk][act] || 0) + 1;
+            });
+        });
+        return out;
+    }
+
     function getDivisionForBunk(bunkName) {
         if (window.SchedulerCoreUtils?.getDivisionForBunk) return window.SchedulerCoreUtils.getDivisionForBunk(bunkName);
         for (const [divName, divData] of Object.entries(divisionsDat)) {
@@ -1581,54 +1643,35 @@
         const shouldAddToday = hasCloud ? !!liveDate : (!todayCounted && !!liveDate);
 
         if (shouldAddToday) {
-            // Track today's per-bunk per-activity counts from memory so we can
-            // detect undercount vs cloud and restore cloud values if memory is
-            // partial (e.g., page-reload null-slot drift).
-            const memTodayCounts = {};
-            bunks.forEach(bunk => {
-                const slots = todaySched[bunk] || [];
-                // Both scheduleSegments (array of arrays) and scheduleAssignments
-                // (flat array) share the same per-entry shape. For segments, each
-                // outer slot is an array of inner entries; flatten to iterate.
-                const flatEntries = [];
-                slots.forEach(s => {
-                    if (Array.isArray(s)) s.forEach(e => flatEntries.push(e));
-                    else if (s) flatEntries.push(s);
-                });
-                flatEntries.forEach(entry => {
-                    if (!entry || entry.continuation || entry._isTransition) return;
-                    let rawAct = entry._activity || entry.activity || entry.sport || '';
-                    if (!rawAct) return;
-                    if (!masterNames.has(rawAct) && entry.sport && masterNames.has(entry.sport)) {
-                        rawAct = entry.sport;
-                    }
-                    const trimmed = (typeof rawAct === 'string' ? rawAct : '').trim();
-                    if (!trimmed || trimmed === 'Free' || trimmed.toLowerCase().includes('transition')) return;
-                    const act = _canonName(trimmed);
-                    usedActivityNames.add(act);
-                    memTodayCounts[bunk] = memTodayCounts[bunk] || {};
-                    memTodayCounts[bunk][act] = (memTodayCounts[bunk][act] || 0) + 1;
-                });
-            });
-            // Add memTodayCounts to liveCounts, but if cloudToday has a higher
-            // value for an activity, restore cloud's value (memory is partial).
+            // ★ Today's contribution is derived with the SAME rule the cloud uses
+            //   to store it (RotationCloud.deriveCounts → the shared
+            //   SchedulerCoreUtils.rotationActivityForEntry). This block used to
+            //   reimplement the rule and diverged four ways: no valid-activity
+            //   gate, no league skip (so a league game's `sport` became a rotation
+            //   credit), an extra `entry.activity` field, and it counted every
+            //   segment in a multi-segment cell. Today's number was therefore
+            //   higher than anything that would ever be persisted, and silently
+            //   dropped the next day.
+            const memTodayCounts = deriveTodayCounts(todaySched);
+
+            // ★ Cloud is authoritative for what's already saved; memory only
+            //   supersedes it when memory demonstrably belongs to this date
+            //   (_assignHasToday), which is exactly when it carries in-session
+            //   edits the cloud hasn't caught up with. The old rule took
+            //   max(memory, cloud) per activity, which could only ever inflate:
+            //   a stale local copy still holding an activity the cloud had
+            //   correctly dropped kept showing it forever.
             const cloudTodayCounts = cloudToday || {};
+            const useMemory = !!_assignHasToday;
             bunks.forEach(bunk => {
-                const memBunk = memTodayCounts[bunk] || {};
-                const cloudBunk = cloudTodayCounts[bunk] || {};
-                const allActs = new Set([...Object.keys(memBunk), ...Object.keys(cloudBunk)]);
-                allActs.forEach(rawAct => {
+                const src = useMemory ? (memTodayCounts[bunk] || {}) : (cloudTodayCounts[bunk] || {});
+                Object.keys(src).forEach(rawAct => {
+                    const n = src[rawAct] || 0;
+                    if (n <= 0) return;
                     const act = _canonName(rawAct);
-                    const memCount = memBunk[rawAct] || 0;
-                    const cloudCount = cloudBunk[rawAct] || 0;
-                    // Use cloud's count if memory's count is lower (memory is partial).
-                    // Use memory's count otherwise (captures in-session edits).
-                    const finalCount = memCount >= cloudCount ? memCount : cloudCount;
-                    if (finalCount > 0) {
-                        usedActivityNames.add(act);
-                        liveCounts[bunk] = liveCounts[bunk] || {};
-                        liveCounts[bunk][act] = (liveCounts[bunk][act] || 0) + finalCount;
-                    }
+                    usedActivityNames.add(act);
+                    liveCounts[bunk] = liveCounts[bunk] || {};
+                    liveCounts[bunk][act] = (liveCounts[bunk][act] || 0) + n;
                 });
             });
         }

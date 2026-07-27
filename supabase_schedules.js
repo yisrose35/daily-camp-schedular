@@ -372,6 +372,44 @@
     }
 
     /**
+     * Filter leagueAssignments (DIVISION-keyed) to divisions the user owns.
+     *
+     * Mirrors filterScheduleToMyBunks, but on the map's real key: a league block
+     * belongs to a division, not a bunk. Without this a scheduler's row carried
+     * every division's league map — including stale realtime-merged copies of
+     * other schedulers' work — with a fresh updated_at, which then won the
+     * per-division newest-wins merge on load and made older dates come back with
+     * the wrong games.
+     *
+     * Fails CLOSED like the bunk filter: an unresolvable division set returns {}
+     * rather than the whole camp, so an init race can't shadow the owner.
+     */
+    function filterLeaguesToMyDivisions(leagueAssignments) {
+        const role = window.CampistryDB?.getRole?.() ||
+                     window.AccessControl?.getCurrentRole?.() || 'viewer';
+        if (role === 'owner' || role === 'admin') return leagueAssignments || {};
+
+        // Derive the division set from the same source the bunk filter uses, so
+        // the two can never disagree about what this user owns.
+        const myBunks = new Set(getMyEditableBunks());
+        if (myBunks.size === 0) {
+            logError('WARNING: No editable bunks — dropping leagueAssignments from this save');
+            return {};
+        }
+        const myDivs = window.SchedulerCoreUtils?.divisionsTouchedBy
+            ? window.SchedulerCoreUtils.divisionsTouchedBy(myBunks)
+            : null;
+        if (!myDivs) return leagueAssignments || {}; // utils not loaded — prior behavior
+
+        const filtered = {};
+        Object.entries(leagueAssignments || {}).forEach(([divName, slots]) => {
+            if (myDivs.has(divName)) filtered[divName] = slots;
+        });
+        log(`Filtered leagues to my divisions: ${Object.keys(filtered).length} of ${Object.keys(leagueAssignments || {}).length}`);
+        return filtered;
+    }
+
+    /**
      * Filter schedule data to only include bunks the user can edit.
      * FIXED: Uses AccessControl instead of PermissionsDB.
      */
@@ -1172,11 +1210,30 @@
             const rawSegments = data.scheduleSegments || (_allowWindowFallback ? window.scheduleSegments : null) || {};
             const filteredSegments = options.skipFilter ? rawSegments : filterScheduleToMyBunks(rawSegments);
 
+            // ★ LEAGUES — two fixes, both about old dates coming back wrong.
+            //
+            //   1. Window fallback. Every other field here falls back to the live
+            //      global on a same-date save; leagueAssignments did not, so any
+            //      caller that built a payload without it wrote `{}` and the
+            //      division's fixtures stopped travelling with the row.
+            //
+            //   2. Division scoping. scheduleAssignments is filtered to the user's
+            //      own bunks (so a scheduler's row never claims another division's
+            //      work) but leagueAssignments was written whole-camp from memory.
+            //      _divStamps only covers the divisions present in the user's
+            //      filtered assignments, so on load those foreign league entries
+            //      fell back to the row's updated_at — always fresh — and a
+            //      scheduler's stale realtime-merged copy of someone else's league
+            //      block shadowed the real one. Scope it the same way. skipFilter
+            //      callers (bypass saves, league-history fanout) still write all.
+            const rawLeagues = data.leagueAssignments || (_allowWindowFallback ? window.leagueAssignments : null) || {};
+            const filteredLeagues = options.skipFilter ? rawLeagues : filterLeaguesToMyDivisions(rawLeagues);
+
             // Prepare payload
             const payload = {
                 scheduleAssignments: filteredAssignments,
                 scheduleSegments: filteredSegments,
-                leagueAssignments: data.leagueAssignments || {},
+                leagueAssignments: filteredLeagues,
                 unifiedTimes: serializeUnifiedTimes(data.unifiedTimes || (_allowWindowFallback ? window.unifiedTimes : null) || []),
                 slotCount: data.unifiedTimes?.length || (_allowWindowFallback ? (window.unifiedTimes?.length || 0) : 0),
                 // Include division-specific times — prefer the passed payload's

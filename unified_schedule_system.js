@@ -4623,7 +4623,14 @@ if (bypassStatus.highlight) {
         //   "old" snapshot (= the new schedule) and silently shifted counts
         //   by (newToday − oldToday) on every save. Removed.
         const dateKey = window.currentScheduleDate;
-        if (dateKey && window.RotationCloud?.save) {
+        // ★ saveGuarded, not save: this reads the date and the grid from two
+        //   separate live globals, which are NOT coherent during a date change
+        //   (currentScheduleDate advances before the new date's data loads).
+        //   Writing that pair mis-dated both credits the wrong day and, because
+        //   the rotation save pre-deletes, erases the right one.
+        if (dateKey && window.RotationCloud?.saveGuarded) {
+            window.RotationCloud.saveGuarded(dateKey, window.scheduleAssignments || {}, 'saveSchedule');
+        } else if (dateKey && window.RotationCloud?.save) {
             window.RotationCloud.save(dateKey, window.scheduleAssignments || {});
         }
     }
@@ -4813,8 +4820,22 @@ if (bypassStatus.highlight) {
                     if (window.scheduleAssignments[bunk]) {
                         assignments[bunk] = window.scheduleAssignments[bunk];
                     }
-                    if (window.leagueAssignments?.[bunk]) {
-                        leagues[bunk] = window.leagueAssignments[bunk];
+                });
+
+                // ★ leagueAssignments is DIVISION-keyed. `leagues[bunk] =
+                //   window.leagueAssignments[bunk]` never matched, so this write
+                //   put the record's STALE stored fixtures back — with a fresh
+                //   updated_at, which then WON the per-division newest-wins merge
+                //   in ScheduleDB.loadSchedule. That is why revisiting an older
+                //   date could show the wrong league games, or none: every
+                //   post-edit re-blessed an out-of-date copy. Graft the live
+                //   fixtures for the divisions the edited bunks belong to.
+                const _lgDivs = window.SchedulerCoreUtils?.divisionsTouchedBy
+                    ? window.SchedulerCoreUtils.divisionsTouchedBy(bunksToUpdate)
+                    : new Set();
+                _lgDivs.forEach(divName => {
+                    if (window.leagueAssignments?.[divName] !== undefined) {
+                        leagues[divName] = window.leagueAssignments[divName];
                     }
                 });
                 

@@ -1850,10 +1850,14 @@
                 console.log('🗑️ [AccessControl] Cleared', bunksToRemove.size, 'bunks from window.scheduleAssignments');
             }
             
+            // ★ leagueAssignments is DIVISION-keyed — deleting by bunk name was a
+            //   no-op, so a removed division kept its league games in memory.
+            //   Only clear divisions whose bunks are ALL being removed.
             if (window.leagueAssignments) {
-                bunksToRemove.forEach(bunk => {
-                    delete window.leagueAssignments[bunk];
-                });
+                const _lgDivs = window.SchedulerCoreUtils?.divisionsFullyCovered
+                    ? window.SchedulerCoreUtils.divisionsFullyCovered(bunksToRemove)
+                    : new Set();
+                _lgDivs.forEach(div => { delete window.leagueAssignments[div]; });
             }
             
             if (window.ScheduleDB?.loadSchedule) {

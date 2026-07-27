@@ -955,6 +955,9 @@
 
         // ★ Track which bunks belong to the partial-gen scope (used in Step 0 & Step 5)
         let _partialGenBunks = null;
+        // ★ Divisions whose LEAGUE block is in scope for this run. leagueAssignments
+        //   is division-keyed, so the bunk set can't be used to arbitrate it.
+        let _partialGenDivs = null;
         // ★ v4.3: Snapshot of non-scoped bunk data BEFORE the solver runs.
         // The solver's intermediate phases (Total Solver, perfection pass, safety net)
         // iterate over ALL bunks and can corrupt non-scoped entries in memory.
@@ -1013,10 +1016,22 @@
                 }
             }
 
+            // ★ leagueAssignments is DIVISION-keyed — `delete leagueAssignments[bunk]`
+            //   was always a no-op, so the pre-gen snapshot below captured stale
+            //   fixtures for the divisions being regenerated and STEP 5 then restored
+            //   them over the freshly-built ones. Resolve the in-scope divisions and
+            //   clear those; every other division's block is left untouched.
+            _partialGenDivs = window.SchedulerCoreUtils?.divisionsTouchedBy
+                ? window.SchedulerCoreUtils.divisionsTouchedBy(myBunks)
+                : new Set(_step0AllowedDivs || []);
             myBunks.forEach(bunk => {
                 delete window.scheduleAssignments?.[bunk];
-                delete window.leagueAssignments?.[bunk];
             });
+            _partialGenDivs.forEach(divName => {
+                delete window.leagueAssignments?.[divName];
+            });
+            log('[STEP 0] League scope: clearing ' + _partialGenDivs.size + ' division block(s) [' +
+                [..._partialGenDivs].join(', ') + ']');
             // ★ Rebuild field usage from the PRESERVED (non-selected) divisions
             // so the solver knows which fields are already occupied.
             const excludeArr = [...myBunks];
@@ -28319,12 +28334,17 @@
                     restored++;
                 }
             }
-            // Also restore league data for non-scoped bunks
+            // Also restore league data for non-scoped DIVISIONS. leagueAssignments
+            // is division-keyed, so the old `_partialGenBunks.has(bunk)` test never
+            // matched — every division was restored from the pre-solver snapshot,
+            // including the ones this run had just generated fixtures for, silently
+            // reverting them.
             if (_preservedLeagueData) {
-                for (const [bunk, data] of Object.entries(_preservedLeagueData)) {
-                    if (!_partialGenBunks.has(bunk)) {
+                const _lgScope = _partialGenDivs || new Set();
+                for (const [divName, data] of Object.entries(_preservedLeagueData)) {
+                    if (!_lgScope.has(divName)) {
                         if (!window.leagueAssignments) window.leagueAssignments = {};
-                        window.leagueAssignments[bunk] = data;
+                        window.leagueAssignments[divName] = data;
                     }
                 }
             }
@@ -28384,9 +28404,17 @@
                     _partialGenBunks.forEach(bunk => {
                         if (clean[bunk] !== undefined) mergedSchedule[bunk] = clean[bunk];
                         else delete mergedSchedule[bunk];
-                        if ((window.leagueAssignments || {})[bunk] !== undefined)
-                            mergedLeagues[bunk] = window.leagueAssignments[bunk];
-                        else delete mergedLeagues[bunk];
+                    });
+                    // ★ Leagues are DIVISION-keyed — the same bunk-keyed lookup that
+                    //   broke the in-memory restore above also ran here, so the copy
+                    //   persisted to localStorage kept the PRE-generation fixtures for
+                    //   every division. Overwrite the in-scope divisions with the fresh
+                    //   solver output; leave the rest as preserved.
+                    const _lgScope5 = _partialGenDivs || new Set();
+                    _lgScope5.forEach(divName => {
+                        if ((window.leagueAssignments || {})[divName] !== undefined)
+                            mergedLeagues[divName] = window.leagueAssignments[divName];
+                        else delete mergedLeagues[divName];
                     });
                     log('[5] Partial merge: updated ' + _partialGenBunks.size + ' bunks, preserved ' +
                         (Object.keys(mergedSchedule).length - _partialGenBunks.size) + ' existing (from snapshot)');

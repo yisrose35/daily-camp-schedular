@@ -1143,13 +1143,23 @@ all[date].updated_at = new Date().toISOString();
         }
     }
 
+    // ★ leagueAssignments is DIVISION-keyed, so deleting by bunk name was always
+    //   a no-op and a cleared division kept its league games. Clear only the
+    //   divisions whose bunks are ALL being deleted — a partial clear must not
+    //   drop fixtures for bunks that are staying.
+    function leagueDivisionsToClear(bunksToDelete) {
+        return window.SchedulerCoreUtils?.divisionsFullyCovered
+            ? window.SchedulerCoreUtils.divisionsFullyCovered(bunksToDelete)
+            : new Set();
+    }
+
     function clearBunksFromGlobals(bunksToDelete) {
         const bunkSet = new Set(bunksToDelete);
         if (window.scheduleAssignments) {
             bunkSet.forEach(bunk => { delete window.scheduleAssignments[bunk]; });
         }
         if (window.leagueAssignments) {
-            bunkSet.forEach(bunk => { delete window.leagueAssignments[bunk]; });
+            leagueDivisionsToClear(bunksToDelete).forEach(div => { delete window.leagueAssignments[div]; });
         }
     }
 
@@ -1160,7 +1170,9 @@ all[date].updated_at = new Date().toISOString();
             if (!dateData) return;
             const bunkSet = new Set(bunksToDelete);
             if (dateData.scheduleAssignments) { bunkSet.forEach(bunk => { delete dateData.scheduleAssignments[bunk]; }); }
-            if (dateData.leagueAssignments) { bunkSet.forEach(bunk => { delete dateData.leagueAssignments[bunk]; }); }
+            if (dateData.leagueAssignments) {
+                leagueDivisionsToClear(bunksToDelete).forEach(div => { delete dateData.leagueAssignments[div]; });
+            }
             safeLocalStorageSet(DAILY_DATA_KEY, JSON.stringify(all));
         } catch (e) {
             console.error('🗑️ Failed to clear bunks from localStorage:', e);

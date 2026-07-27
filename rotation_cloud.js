@@ -64,6 +64,27 @@
     // comparison between derived and stored counts can never drift.
     // Returns { 'bunk|activity': count }.
     // =====================================================================
+    // ★ The per-entry decision now lives in ONE place —
+    //   SchedulerCoreUtils.rotationActivityForEntry — so this store and the
+    //   local historicalCounts rebuild can never drift apart again. The inline
+    //   fallback below only runs if scheduler_core_utils.js failed to load.
+    function rotationActivityForEntry(entry, validActivities) {
+        if (window.SchedulerCoreUtils && typeof window.SchedulerCoreUtils.rotationActivityForEntry === 'function') {
+            return window.SchedulerCoreUtils.rotationActivityForEntry(entry, validActivities);
+        }
+        if (!entry || entry.continuation || entry._isTransition) return null;
+        if (entry._h2h || entry._leagueName || entry._isSpecialtyLeague || entry._league) return null;
+        var actName = entry._activity || entry.sport || '';
+        if (!actName) return null;
+        if (!validActivities.has(actName) && entry.sport && validActivities.has(entry.sport)) {
+            actName = entry.sport;
+        }
+        var actLower = String(actName).toLowerCase();
+        if (actLower === 'free' || actLower === 'free play' || actLower.indexOf('transition') !== -1) return null;
+        if (!validActivities.has(actName)) return null;
+        return actName;
+    }
+
     function deriveCounts(scheduleAssignments) {
         var sched = scheduleAssignments || {};
         var validActivities = getValidActivityNames();
@@ -71,26 +92,8 @@
 
         Object.keys(sched).forEach(function(bunk) {
             (sched[bunk] || []).forEach(function(entry) {
-                if (!entry || entry.continuation || entry._isTransition) return;
-                // ★ Don't count LEAGUE games as rotation activities. A league entry
-                //   has _activity "League: X"/"League Game" (not a valid activity)
-                //   but also carries a real `sport` (e.g. "Basketball"); the
-                //   entry.sport fallback below would otherwise count a phantom
-                //   Basketball rotation — diverging from the LOCAL rebuild
-                //   (scheduler_core_utils.rebuildHistoricalCounts reads _activity
-                //   only, no sport fallback, so it skips league entries). League
-                //   play is tracked via standings, not rotation variety. Skipping
-                //   here keeps cloud rotation_counts == local historicalCounts.
-                if (entry._h2h || entry._leagueName || entry._isSpecialtyLeague || entry._league) return;
-                var actName = entry._activity || entry.sport || '';
+                var actName = rotationActivityForEntry(entry, validActivities);
                 if (!actName) return;
-                if (!validActivities.has(actName) && entry.sport && validActivities.has(entry.sport)) {
-                    actName = entry.sport;
-                }
-                var actLower = actName.toLowerCase();
-                if (actLower === 'free' || actLower.includes('transition')) return;
-                if (!validActivities.has(actName)) return;
-
                 var key = bunk + '|' + actName;
                 counts[key] = (counts[key] || 0) + 1;
             });
@@ -112,6 +115,36 @@
 
         var counts = deriveCounts(scheduleAssignments);
 
+        // ★★★ BUNK-SCOPED PRE-DELETE ★★★
+        // The pre-delete below exists so a regenerate can't leave stale rows for
+        // activities the new schedule dropped (UPSERT only replaces the exact
+        // (camp_id, date_key, bunk, activity) tuple, so gen 1's "Soccer" would
+        // otherwise outlive gen 2's "Basketball" forever).
+        //
+        // It used to delete the WHOLE camp-date and re-insert only whatever bunks
+        // were in the caller's memory. Every other write to a day's data is
+        // carefully division-scoped (daily_schedules filters to the user's own
+        // bunks and merges per-bunk newest-wins) — this one was not, so any client
+        // holding a partial grid (init race, scheduler whose cross-division merge
+        // hadn't landed, offline session) silently erased other divisions' rotation
+        // history for that date. rotation_backfill's daily auto-reconcile then
+        // replayed that same delete across up to 90 past dates.
+        //
+        // Scope the delete to the bunks this payload actually carries. Bunks the
+        // caller owns still get fully re-derived (a bunk present with zero credited
+        // activities correctly ends up with no rows); bunks the caller can't see are
+        // left alone. Callers that genuinely mean "clear the whole day" use
+        // deleteDate() / clearAll(), which are unchanged.
+        var payloadBunks = Object.keys(scheduleAssignments || {});
+
+        // Refuse a no-op write rather than deleting on the way to inserting
+        // nothing — mirrors the empty-save guard on daily_schedules. An empty
+        // grid is what an un-hydrated page looks like, not a cleared day.
+        if (payloadBunks.length === 0) {
+            console.warn('[RotationCloud] Empty schedule payload for ' + dateKey + ' — refusing to touch rotation rows (use deleteDate to clear a day)');
+            return Promise.resolve(false);
+        }
+
         var rows = [];
         Object.keys(counts).forEach(function(key) {
             var parts = key.split('|');
@@ -125,40 +158,26 @@
             });
         });
 
-        if (rows.length === 0) {
-            console.log('[RotationCloud] No valid activities to save for', dateKey);
-            return Promise.resolve(true);
-        }
-
-        // ★★★ FIX: delete-then-upsert atomically for this date ★★★
-        // Without the pre-delete, regenerating a date accumulates stale rows
-        // for activities the new schedule doesn't use. UPSERT only replaces
-        // rows for the exact same (camp_id, date_key, bunk, activity) tuple,
-        // so if today's gen 1 had "Soccer" for Bunk A and gen 2 has
-        // "Basketball" instead, both rows persist forever. Real-world impact:
-        // ~2x bloat after the second gen, accelerating with each regen,
-        // poisoning the rotation engine's recency/distribution scoring with
-        // activities that aren't actually scheduled.
-        //
-        // The original comment claimed "deleteDate() before regen" was the
-        // caller's responsibility, but no caller actually does it (verified
-        // via grep). Moving the delete inside save() makes the contract
-        // self-enforcing.
-        //
-        // The race concern (concurrent save calls deleting each other's
-        // rows) is mitigated by sequencing: delete + upsert run in series
-        // for one call, and two concurrent calls just serialize naturally.
+        // The race concern (concurrent save calls deleting each other's rows) is
+        // mitigated twice over: delete + upsert run in series for one call, and
+        // the delete now only covers bunks this caller owns, so two schedulers
+        // saving the same date no longer intersect at all.
         return client
             .from(TABLE)
             .delete()
             .eq('camp_id', campId)
             .eq('date_key', dateKey)
+            .in('bunk', payloadBunks)
             .then(function(delResult) {
                 if (delResult.error) {
                     console.error('[RotationCloud] Pre-save delete error:', delResult.error.message);
                     // Continue to upsert anyway — partial cleanup is still
                     // better than no cleanup
                 }
+                // A day where the caller's bunks earn no rotation credit at all
+                // (all Free / all league) is legitimate — the scoped delete above
+                // already cleared them, so there is simply nothing to insert.
+                if (rows.length === 0) return { error: null };
                 return client
                     .from(TABLE)
                     .upsert(rows, { onConflict: 'camp_id,date_key,bunk,activity' });
@@ -168,7 +187,8 @@
                     console.error('[RotationCloud] Upsert error:', result.error.message);
                     return false;
                 }
-                console.log('[RotationCloud] Saved', rows.length, 'rotation rows for', dateKey, '(pre-cleared stale)');
+                console.log('[RotationCloud] Saved', rows.length, 'rotation rows for', dateKey,
+                            '(' + payloadBunks.length + ' bunks re-derived)');
                 _cache = null;
                 _loadGen++;
                 return true;
@@ -521,6 +541,45 @@
         _loadGen++;
     }
 
+    // =====================================================================
+    // COHERENCE-GUARDED SAVE — use this from any path that reads the date
+    // and the grid from live globals rather than from a captured payload.
+    // =====================================================================
+    // saveRotationCounts(dateKey, grid) trusts its caller that the two belong
+    // together. Every write to daily_schedules already refuses a mismatched
+    // pair (integration_hooks' autosave hook, verifiedScheduleSave, and
+    // ScheduleDB.saveSchedule all check _pendingDateTransition /
+    // _scheduleAssignmentsDate) — the rotation write sitting next to them did
+    // not, so it could still fire during the window where
+    // window.currentScheduleDate has already advanced to the new date but
+    // window.scheduleAssignments still holds the old one. Because save
+    // pre-deletes, that wrote yesterday's activities under today's date_key
+    // AND erased today's real rows: the bunk gets credited twice for
+    // yesterday and loses credit for today.
+    //
+    // Returns false (and writes nothing) when the pair is incoherent. The next
+    // coherent save on the real owner date persists normally. Inert when the
+    // owner stamp is unset, so it can never block a legitimate save.
+    function saveRotationCountsGuarded(dateKey, scheduleAssignments, label) {
+        if (!dateKey) return Promise.resolve(false);
+
+        if (window._pendingDateTransition) {
+            console.warn('[RotationCloud] SKIP save' + (label ? ' (' + label + ')' : '') +
+                         ': a date transition is in flight — memory and dateKey are mid-swap');
+            return Promise.resolve(false);
+        }
+
+        var owner = window._scheduleAssignmentsDate;
+        if (owner && owner !== dateKey) {
+            console.warn('[RotationCloud] SKIP save' + (label ? ' (' + label + ')' : '') +
+                         ': in-memory schedule belongs to ' + owner + ', not ' + dateKey +
+                         ' — refusing to write one day\'s activities under another day\'s key');
+            return Promise.resolve(false);
+        }
+
+        return saveRotationCounts(dateKey, scheduleAssignments);
+    }
+
     // ★★★ CB-66: synchronous read of the already-loaded per-date counts (no fetch,
     // no promise). Lets the solver's period-cap enforcement consult cloud
     // rotation_counts without becoming async. Returns null if nothing is cached.
@@ -541,6 +600,7 @@
     // =====================================================================
     window.RotationCloud = {
         save: saveRotationCounts,
+        saveGuarded: saveRotationCountsGuarded, // ★ for live-globals callers (see above)
         load: loadRotationCounts,
         deleteDate: deleteRotationCounts,
         deleteActivity: deleteActivityCounts,
