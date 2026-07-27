@@ -2232,17 +2232,35 @@
     // FIELD LOCKS
     // =========================================================================
 
-    async function saveFieldLocks(date, locks) {
+    // ★ SIGNATURE MISMATCH (fixed). division_selector.js calls
+    //     saveFieldLocks(date, mergedLocks, allGenerated)   — 3 args
+    //     const { locks, generatedDivisions } = await loadFieldLocks(date)
+    //   but save took only (date, locks) and load selected only 'locks'. So
+    //   `allGenerated` was dropped on the floor and `generatedDivisions` was
+    //   ALWAYS undefined — the "which divisions has someone already generated
+    //   today" state never persisted, and each scheduler saw an empty set.
+    //
+    //   NOTE: no migration in migrations/ defines `field_locks` or a
+    //   `generated_divisions` column. If the table isn't provisioned, every call
+    //   here throws and is swallowed into an empty result — see the _queryErrored
+    //   flag added below, which at least lets callers tell "no locks" apart from
+    //   "couldn't read the locks". Provision the table or retire this path.
+    async function saveFieldLocks(date, locks, generatedDivisions) {
         const campId = getCampId();
-        
+
         try {
+            const row = {
+                camp_id: campId,
+                schedule_date: date,
+                locks: locks
+            };
+            if (generatedDivisions !== undefined) {
+                row.generated_divisions = Array.isArray(generatedDivisions)
+                    ? generatedDivisions : [...(generatedDivisions || [])];
+            }
             const { data, error } = await window.supabase
                 .from('field_locks')
-                .upsert({
-                    camp_id: campId,
-                    schedule_date: date,
-                    locks: locks
-                }, { onConflict: 'camp_id,schedule_date' });
+                .upsert(row, { onConflict: 'camp_id,schedule_date' });
 
             if (error) throw error;
 
@@ -2256,22 +2274,31 @@
 
     async function loadFieldLocks(date) {
         const campId = getCampId();
-        
+
         try {
             const { data, error } = await window.supabase
                 .from('field_locks')
-                .select('locks')
+                .select('locks, generated_divisions')
                 .eq('camp_id', campId)
                 .eq('schedule_date', date)
                 .maybeSingle();
 
             if (error) throw error;
 
-            return { locks: data?.locks || {} };
+            return {
+                locks: data?.locks || {},
+                generatedDivisions: data?.generated_divisions || []
+            };
 
         } catch (e) {
+            // ★ Distinguish "read failed" from "no locks exist". Returning a bare
+            //   empty result on a transient error (or a missing table) tells the
+            //   caller every field is free, which is the unsafe direction — it lets
+            //   a second scheduler generate over fields the first one locked. Same
+            //   class as CB-2 on daily_schedules. Callers that care should check
+            //   _queryErrored before trusting the empty set.
             console.error("🔐 Error loading field locks:", e);
-            return { locks: {} };
+            return { locks: {}, generatedDivisions: [], _queryErrored: true, error: e.message };
         }
     }
 

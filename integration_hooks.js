@@ -75,6 +75,7 @@
     let _idbPreloadSucceeded = false;
     let _cloudHydrationDone = false;
     let _roleCheckRetries = 0;
+    let _syncFailures = 0; // consecutive batch-sync failures → retry backoff
     let _lastSyncTime = 0;
     let _datePickerHooked = false;
     let _datePickerRetries = 0;
@@ -877,6 +878,7 @@
             _lastSelfWriteAt = Date.now();
 
             _lastSyncTime = Date.now();
+            _syncFailures = 0; // clean write — reset the retry backoff
 
             console.log('☁️ Cloud sync complete:', {
                 keys,
@@ -897,8 +899,24 @@
                 if (!(k in _pendingChanges)) _pendingChanges[k] = changesToSync[k];
             }
 
+            // ★ RE-ARM THE RETRY. Restoring the keys is only half the job — the
+            //   sibling bail-out branches above both schedule another attempt
+            //   (offline registers an 'online' listener; client-not-ready sets a
+            //   2 s timer) but this one did not. So a settings edit whose sync hit
+            //   a transient 5xx/timeout sat in _pendingChanges until some UNRELATED
+            //   later edit happened to trigger scheduleBatchSync. Make one edit,
+            //   have it fail, reload — the edit was gone, with only a console line.
+            //   Backoff doubles per consecutive failure (2s → 60s cap) so a hard
+            //   outage doesn't become a hot loop; any success resets it.
+            _syncFailures = (_syncFailures || 0) + 1;
+            const _backoff = Math.min(2000 * Math.pow(2, _syncFailures - 1), 60000);
+            log('Batch sync retry in ' + _backoff + 'ms (failure #' + _syncFailures + ')');
+            setTimeout(() => {
+                if (Object.keys(_pendingChanges).length > 0) scheduleBatchSync();
+            }, _backoff);
+
             window.dispatchEvent(new CustomEvent('campistry-sync-error', {
-                detail: { error: e.message, keys: Object.keys(changesToSync) }
+                detail: { error: e.message, keys: Object.keys(changesToSync), retryInMs: _backoff }
             }));
         } finally {
             _isSyncing = false;

@@ -38,9 +38,17 @@
         
         // Load existing field locks for this date
         if (window.AccessControl) {
-            const { locks, generatedDivisions } = await window.AccessControl.loadFieldLocks(_currentDate);
-            _existingLocks = locks || {};
-            _generatedDivisions = new Set(generatedDivisions || []);
+            const res = await window.AccessControl.loadFieldLocks(_currentDate);
+            // ★ A failed read returns an empty set, which reads as "every field is
+            //   free" — the unsafe direction, since it lets this generation run
+            //   over fields another scheduler locked. Keep whatever we already had
+            //   rather than adopting a phantom-empty state.
+            if (res && res._queryErrored) {
+                console.warn('☑️ Field-lock read failed — keeping previously known locks:', res.error);
+            } else {
+                _existingLocks = (res && res.locks) || {};
+                _generatedDivisions = new Set((res && res.generatedDivisions) || []);
+            }
         }
 
         console.log("☑️ Division selector initialized:", {
@@ -252,10 +260,31 @@
      * Save locks after generation
      */
     async function saveLocks(newLocks, newGeneratedDivisions) {
+        // ★ Re-read before merging. field_locks is ONE whole row per
+        //   (camp, date), so the upsert is last-writer-wins over the entire
+        //   lock map. Merging against `_existingLocks` — a snapshot taken when
+        //   this page opened — meant that if another scheduler locked fields in
+        //   the meantime, this save wrote our stale base plus our additions and
+        //   their locks vanished. Re-reading immediately before the merge
+        //   narrows the lost-update window to the write itself.
+        let baseLocks = _existingLocks;
+        let baseGenerated = [..._generatedDivisions];
+        if (window.AccessControl?.loadFieldLocks) {
+            try {
+                const fresh = await window.AccessControl.loadFieldLocks(_currentDate);
+                if (fresh && !fresh._queryErrored) {
+                    baseLocks = mergeLocks(_existingLocks, fresh.locks || {});
+                    baseGenerated = [...new Set([...baseGenerated, ...(fresh.generatedDivisions || [])])];
+                }
+            } catch (e) {
+                console.warn('☑️ Pre-save lock re-read failed, merging on local snapshot:', e);
+            }
+        }
+
         // Merge with existing
-        const mergedLocks = mergeLocks(_existingLocks, newLocks);
-        const allGenerated = [...new Set([..._generatedDivisions, ...newGeneratedDivisions])];
-        
+        const mergedLocks = mergeLocks(baseLocks, newLocks);
+        const allGenerated = [...new Set([...baseGenerated, ...newGeneratedDivisions])];
+
         // Save to database
         if (window.AccessControl) {
             await window.AccessControl.saveFieldLocks(_currentDate, mergedLocks, allGenerated);

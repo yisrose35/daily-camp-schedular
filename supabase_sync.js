@@ -80,7 +80,7 @@
     let _syncStatus = 'idle';
     let _lastSyncTime = 0;
     let _saveTimeout = null;
-    let _pendingSave = null;
+    let _pendingSaves = {};  // dateKey → { dateKey, data, timestamp } (per-date, see queueSave)
     let _offlineQueue = [];
     let _remoteChangeCallbacks = [];
     let _statusChangeCallbacks = [];
@@ -387,11 +387,32 @@
     // MULTI-SCHEDULER SYNC: REFRESH VIEW
     // =========================================================================
 
-   async function refreshMultiSchedulerView(dateKey, forceOverwrite = false) {
+   async function refreshMultiSchedulerView(dateKey, forceOverwrite = false, _deferCount = 0) {
         if (!dateKey) dateKey = getCurrentDateKey();
-        
+
+        // ★ POST-EDIT / GENERATION GUARD.
+        //   With forceOverwrite this function REPLACES window.scheduleAssignments
+        //   outright (the smart merge below only protects bunks when the user is a
+        //   scheduler or has a live _isPerBunk generation — for an owner/admin in
+        //   manual mode myBunks is empty, so it is a full replace). It is fired
+        //   from the realtime handler 500 ms after any remote change, which is the
+        //   same window a local post-edit is still writing in — so a teammate's
+        //   edit landing mid-edit wiped the local user's unsaved work.
+        //   Every other realtime consumer already defers on these flags
+        //   (integration_hooks' merge, unified_schedule_system's loadScheduleForDate,
+        //   post_edit_system's loader patch); this one did not. Defer and retry
+        //   rather than drop, so the remote update still arrives once the edit
+        //   settles. Bounded so a stuck flag can't retry forever.
+        if ((window._postEditInProgress || window._generationInProgress) && _deferCount < 20) {
+            log('Deferring multi-scheduler refresh — local edit/generation in progress');
+            setTimeout(function () {
+                refreshMultiSchedulerView(dateKey, forceOverwrite, _deferCount + 1);
+            }, 500);
+            return;
+        }
+
         log('Refreshing Multi-Scheduler view for:', dateKey);
-        
+
         // ★★★ v6.2 FIX: Load from CLOUD first so we get all schedulers' data ★★★
         var _cloudEmpty = false;
         try {
@@ -443,12 +464,28 @@
             log('Cloud refresh failed, using localStorage:', e.message);
         }
 
+        // ★ CROSS-DATE RECHECK. The cloud load above is an await — the user can
+        //   navigate to another date across it. Writing allData[dateKey] is still
+        //   correct (that date's own row), but hydrating window.scheduleAssignments
+        //   from it would load the OLD date's schedule into memory while
+        //   currentScheduleDate points at the NEW one, and stamp
+        //   _scheduleAssignmentsDate to match — which is exactly the cross-date
+        //   corruption every save guard downstream is trying to prevent, arriving
+        //   pre-blessed. The localStorage write has already happened, so nothing
+        //   is lost by skipping the in-memory half.
+        const _liveDateKey = _currentDateKey || getCurrentDateKey();
+        if (_liveDateKey && dateKey !== _liveDateKey) {
+            log('Date changed during refresh (' + dateKey + ' → ' + _liveDateKey +
+                ') — localStorage updated, skipping in-memory hydrate');
+            return;
+        }
+
         // Step 1: Force hydrate from localStorage (now contains cloud data)
         // Skip if cloud was empty — we already cleared everything above.
         if (!_cloudEmpty) {
             forceHydrateFromLocalStorage(dateKey, forceOverwrite);
         }
-        
+
         // Step 2: Ensure empty state for unscheduled divisions
         ensureEmptyStateForUnscheduledDivisions();
         
@@ -988,8 +1025,19 @@
     // ★★★ FIXED: SAVE QUEUE WITH PERSISTENT OFFLINE QUEUE ★★★
     // =========================================================================
 
+    // ★ PER-DATE debounce slots. _pendingSave used to be a SINGLE slot, so a
+    //   save queued for date A was silently discarded the moment a save for
+    //   date B was queued inside the 500 ms window — the clearTimeout cancelled
+    //   A's flush and the overwrite dropped A's payload. Nothing ever retried
+    //   it: A was in neither the pending slot nor the offline queue, so the
+    //   edit simply never reached the cloud. Reachable on quick date navigation
+    //   with unsaved edits and on any multi-date fanout. Keyed by date, the
+    //   newest payload for a given date still supersedes the older one (correct
+    //   — same day, fresher data) while a different date can no longer
+    //   cannibalise it.
     function queueSave(dateKey, data) {
-        _pendingSave = { dateKey, data, timestamp: Date.now() };
+        if (!dateKey) return;
+        _pendingSaves[dateKey] = { dateKey, data, timestamp: Date.now() };
 
         if (_saveTimeout) {
             clearTimeout(_saveTimeout);
@@ -1003,11 +1051,19 @@
     }
 
     async function executeSave() {
-        if (!_pendingSave) return;
+        const pending = Object.keys(_pendingSaves);
+        if (pending.length === 0) return;
 
-        const { dateKey, data } = _pendingSave;
-        _pendingSave = null;
+        // Drain every queued date, not just the most recent one.
+        const batch = pending.map(k => _pendingSaves[k]);
+        _pendingSaves = {};
 
+        for (const item of batch) {
+            await executeOneSave(item.dateKey, item.data, batch.length > 1);
+        }
+    }
+
+    async function executeOneSave(dateKey, data, isFanout) {
         if (!_isOnline) {
             log('Offline - queueing for later');
             _offlineQueue.push({ dateKey, data, timestamp: Date.now() });
@@ -1020,7 +1076,12 @@
         try {
             updateStatus('syncing');
 
-            const result = await window.ScheduleDB?.saveSchedule?.(dateKey, data);
+            // A batched drain covers more than one date, so the in-memory grid
+            // can only belong to one of them — let each payload carry its own
+            // date past ScheduleDB's cross-date guard, exactly like the
+            // offline-queue replay does.
+            const opts = isFanout ? { allowCrossDate: true } : undefined;
+            const result = await window.ScheduleDB?.saveSchedule?.(dateKey, data, opts);
 
             if (result?.success) {
                 _lastSyncTime = Date.now();
@@ -1047,6 +1108,40 @@
             _saveTimeout = null;
         }
         await executeSave();
+    }
+
+    // ★ Tab-close rescue for debounced saves.
+    //   A save sits in _pendingSaves for SAVE_DEBOUNCE_MS before it is attempted.
+    //   Close the tab inside that window and the payload was gone — integration_hooks'
+    //   beforeunload handler only writes the CURRENTLY VIEWED date, so any other
+    //   date still queued (now possible per-date, and previously the single slot
+    //   whenever the viewed date had moved on) was never persisted anywhere.
+    //   Move whatever is still pending into the PERSISTED offline queue: that is a
+    //   synchronous localStorage write, which survives unload, and the normal drain
+    //   on next load pushes it to the cloud.
+    function flushPendingToOfflineQueue() {
+        const keys = Object.keys(_pendingSaves);
+        if (keys.length === 0) return;
+        try {
+            loadOfflineQueue(); // pick up anything already persisted
+            keys.forEach(function (dk) {
+                const item = _pendingSaves[dk];
+                if (item) _offlineQueue.push({ dateKey: item.dateKey, data: item.data, timestamp: Date.now(), retries: 0 });
+            });
+            _pendingSaves = {};
+            saveOfflineQueue();
+            log('Flushed ' + keys.length + ' pending save(s) to the offline queue on unload');
+        } catch (e) {
+            logError('Unload flush failed:', e);
+        }
+    }
+
+    // pagehide fires on tab close AND on mobile background/navigation, where
+    // beforeunload is unreliable. Both are registered; the flush is idempotent
+    // (it empties _pendingSaves).
+    if (typeof window !== 'undefined') {
+        window.addEventListener('pagehide', flushPendingToOfflineQueue);
+        window.addEventListener('beforeunload', flushPendingToOfflineQueue);
     }
 
     // =========================================================================
@@ -1100,6 +1195,33 @@
 
         let successCount = 0;
         let failCount = 0;
+        const abandoned = [];
+
+        // ★ A queued item that exhausts MAX_RETRY_ATTEMPTS is DROPPED — those
+        //   edits are then gone for good. Previously that happened with a single
+        //   console line, indistinguishable in the UI from "will retry". Record
+        //   the abandoned payloads to localStorage (same pattern as
+        //   __campistry_empty_save_blocks) and call it out separately in the
+        //   toast, so a permanent loss is visible and recoverable rather than
+        //   silent.
+        function abandon(item, reason) {
+            abandoned.push({ dateKey: item.dateKey, retries: item.retries, reason: reason });
+            logError('Gave up on save for', item.dateKey, 'after', item.retries, 'retries —', reason);
+            try {
+                const key = '__campistry_abandoned_saves';
+                const existing = JSON.parse(localStorage.getItem(key) || '[]');
+                existing.push({
+                    ts: new Date().toISOString(),
+                    dateKey: item.dateKey,
+                    retries: item.retries,
+                    reason: reason,
+                    bunks: Object.keys(item.data?.scheduleAssignments || {}).length,
+                    data: item.data
+                });
+                while (existing.length > 10) existing.shift(); // bounded — payloads are large
+                localStorage.setItem(key, JSON.stringify(existing));
+            } catch (_) { /* quota — the console line is the fallback record */ }
+        }
 
         for (const item of queue) {
             try {
@@ -1107,14 +1229,14 @@
                 //   own captured payload under THAT date, even though the user may now be
                 //   viewing a different date — exempt it from the cross-date save guard.
                 const result = await window.ScheduleDB?.saveSchedule?.(item.dateKey, item.data, { allowCrossDate: true });
-                
+
                 if (!result?.success) {
                     item.retries = (item.retries || 0) + 1;
                     if (item.retries < CONFIG.MAX_RETRY_ATTEMPTS) {
                         _offlineQueue.push(item);
                         failCount++;
                     } else {
-                        logError('Gave up on save after', item.retries, 'retries');
+                        abandon(item, result?.error?.message || result?.skipped || 'save reported failure');
                         failCount++;
                     }
                 } else {
@@ -1124,6 +1246,8 @@
                 item.retries = (item.retries || 0) + 1;
                 if (item.retries < CONFIG.MAX_RETRY_ATTEMPTS) {
                     _offlineQueue.push(item);
+                } else {
+                    abandon(item, e?.message || 'exception');
                 }
                 failCount++;
             }
@@ -1141,8 +1265,17 @@
         if (successCount > 0) {
             showSyncToast(`✅ Synced ${successCount} change(s)`);
         }
-        if (failCount > 0) {
-            showSyncToast(`⚠️ ${failCount} change(s) failed to sync`, true);
+        if (abandoned.length > 0) {
+            // Distinct from "failed" — these will NOT be retried.
+            showSyncToast(
+                `❌ ${abandoned.length} change(s) could not be saved and were dropped ` +
+                `(${abandoned.map(a => a.dateKey).join(', ')}). See localStorage["__campistry_abandoned_saves"].`,
+                true
+            );
+        }
+        const retrying = failCount - abandoned.length;
+        if (retrying > 0) {
+            showSyncToast(`⚠️ ${retrying} change(s) failed to sync — will retry`, true);
         }
         } finally {
             _draining = false;
