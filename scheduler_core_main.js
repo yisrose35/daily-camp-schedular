@@ -1274,6 +1274,110 @@
         } catch (_e) { /* fail-open: an unreadable schedule just means no pre-seed */ }
         const _todayCount = b => (_bunkSpecialsToday[b] ? _bunkSpecialsToday[b].size : 0);
 
+        // =====================================================================
+        // ★ SPECIAL-AGNOSTIC NEED — the one metric every "who gets a special today"
+        //   decision ranks on.
+        //   POLICY (user, camp-owner's rule): the specials themselves are all different,
+        //   but the QUESTION "whose turn is it to get one today" treats them as ONE
+        //   interchangeable prize. If bunk 1 had a special yesterday and bunk 2 didn't,
+        //   bunk 2 goes first today — even though today's open room is a DIFFERENT
+        //   special than the one bunk 1 had. So need is always summed across ALL
+        //   specials (_allSpecialNames) and never scoped to the special on offer.
+        //   (Which special a bunk then receives is still per-special: least-used first,
+        //   gated by access / cooldown / maxUsage — that part is intentionally not equal.)
+        //   Defined HERE, above the guarantee pre-pass, so the guarantee / reservation /
+        //   budget passes all share it (it used to live below the guarantee pass, which
+        //   therefore ranked on lifetime counts alone and could re-hand a special to a
+        //   bunk that already had one yesterday).
+        // ★ NEED-FIRST allocation (shared-window specials) — kill switch
+        //   window.__smartTileNeedFirst = false restores pure seniority. When ON, a deprived
+        //   bunk in a YOUNGER grade can win a scarce special over a well-served bunk in an
+        //   OLDER grade: rank by need (fewest specials so far, then longest since any special)
+        //   with SENIORITY as the TIEBREAK — so oldest still goes first when need is equal, and
+        //   the deprived catch up over the week. Applies WITHIN the guarantee pre-pass, the
+        //   rotation reservation (cross rotation-division) and the budget pre-allocation.
+        // =====================================================================
+        const _needFirst = (window.__smartTileNeedFirst !== false);
+        const _scCache = {};
+        // ★ "Need" = how many specials the bunk has had THIS PERIOD (default this week), NOT
+        //   lifetime — so each period everyone starts ~even and a bunk that's gone days without
+        //   a special rises to the top and catches up. (A lifetime count let a bunk that was
+        //   well-served earlier sit at 0 for a whole week despite being eligible.) Falls back to
+        //   lifetime counts only if the period-count helper isn't loaded. Tunable:
+        //   window.__smartTileNeedPeriod ('1week' | 'half' | …); default '1week'. The unreliable
+        //   getDaysSinceActivity tiebreak was dropped (it reported "1 day ago" for never-done
+        //   specials, which mis-ranked need).
+        const _gpc = window.SchedulerCoreUtils && window.SchedulerCoreUtils.getPeriodActivityCount;
+        const _needPeriod = window.__smartTileNeedPeriod || '1week';
+        const _bunkSpecialCount = (bunk) => {
+            if (bunk in _scCache) return _scCache[bunk];
+            let c = 0;
+            if (typeof _gpc === 'function') {
+                for (const n of _allSpecialNames) { try { c += _gpc(bunk, n, _needPeriod) || 0; } catch (_) {} }
+            } else {
+                const h = historicalCounts[bunk] || {};
+                for (const n of _allSpecialNames) c += (h[n] || 0);
+            }
+            return (_scCache[bunk] = c);
+        };
+        // ★ PERF: expose the MEMOIZED period count so the adapter (a separate module) reuses ONE
+        //   computed value per bunk. The adapter's getSpecialUsageCount runs inside sort
+        //   comparators; calling getPeriodActivityCount there per-comparator re-scanned history
+        //   tens of thousands of times and blew generation up to ~45s (the call is cheap when the
+        //   rotation cache is warm but costly mid-generation while it's rebuilding). Sharing this
+        //   memo caps it to one compute per bunk (~bunks×specials total).
+        // ★ INCLUDE TODAY. getPeriodActivityCount only scans dates BEFORE today, so a bunk
+        //   that already picked up a special earlier in THIS generation (elective tile,
+        //   pinned special, an earlier smart-tile window) still read as "0 so far". Adding
+        //   the live today-count makes the metric "specials this period INCLUDING today",
+        //   so the same rule holds within a day: a bunk that already has one today yields
+        //   the next window to a bunk that doesn't. _bunkSpecialsToday is updated as rooms
+        //   are claimed, so later windows see the earlier ones.
+        const _needOf = (bunk) => _bunkSpecialCount(bunk) + _todayCount(bunk);
+        // Shared with the adapter's within-division fairness sort so BOTH modules rank on
+        // the identical special-agnostic score (the memo above keeps it one compute/bunk).
+        window.__smartTileNeedCount = _needOf;
+        // ★ RECENCY TIEBREAK (kill switch window.__smartTileRecencyTiebreak = false):
+        //   days since the bunk's LAST special of any kind — with equal week-counts the
+        //   bunk that's gone longest without a special wins the room. Without this,
+        //   seniority decided every tie, and with few rooms shared by many bunks the
+        //   counts tie CONSTANTLY — so the senior division won a room nearly every day
+        //   (9th grade got specials daily, never Swim/Pickleball; 8th got squeezed out).
+        //   Recency makes bunks CYCLE through special → pickleball/swim across days,
+        //   like a head counselor would rotate them. Safe against the old phantom-
+        //   daysSince bug: a special only counts toward recency when the bunk has
+        //   ACTUALLY done it (schedule-derived getActivityCount > 0); a bunk that has
+        //   never had any special ranks neediest (gap 99999).
+        //   ALSO the Monday guard: the period count resets at the week boundary, so on the
+        //   first day of a period every bunk ties at 0 and this gap is the ONLY thing that
+        //   remembers who had one yesterday.
+        const _dsCache = {};
+        const _bunkLastSpecialGap = (bunk) => {
+            if (bunk in _dsCache) return _dsCache[bunk];
+            const RE = window.RotationEngine;
+            let gap = 99999;
+            if (RE && typeof RE.getDaysSinceActivity === 'function' && typeof RE.getActivityCount === 'function') {
+                for (const n of _allSpecialNames) {
+                    try {
+                        if ((RE.getActivityCount(bunk, n) || 0) <= 0) continue;
+                        const d = RE.getDaysSinceActivity(bunk, n);
+                        if (typeof d === 'number' && d >= 0 && d < gap) gap = d;
+                    } catch (_) {}
+                }
+            }
+            return (_dsCache[bunk] = gap);
+        };
+        const _recencyTiebreak = (window.__smartTileRecencyTiebreak !== false);
+        // ★ The shared bunk-vs-bunk order for every special hand-out: neediest first
+        //   (fewest specials THIS PERIOD including today), then longest-since-ANY-special,
+        //   then seniority. Used as-is cross-division; the within-division passes reuse
+        //   the same two keys.
+        const _needSenCmp = (bunkA, divA, bunkB, divB) =>
+            (_needOf(bunkA) - _needOf(bunkB)) ||
+            (_recencyTiebreak ? (_bunkLastSpecialGap(bunkB) - _bunkLastSpecialGap(bunkA)) : 0) ||
+            (_senOf(divA) - _senOf(divB)) ||
+            (Math.random() - 0.5);
+
         // ★ GUARANTEED SWAP (kill-switch: window.__smartTileGuaranteeSwap = false).
         //   For a TWO-period Smart pair the user ticked "Guarantee each bunk gets
         //   both" on (smartData.guaranteeSwap) — Main 1 = the limited/special side,
@@ -1337,7 +1441,12 @@
             const bunks = (divisions[div] && divisions[div].bunks) || [];
             if (!bunks.length) return Infinity;
             let tot = 0;
-            bunks.forEach(b => { const h = historicalCounts[b] || {}; tot += _allSpecialNames.reduce((s, n) => s + (h[n] || 0), 0); });
+            // ★ Same special-agnostic need as every other pass (specials of ANY kind this
+            //   period, including today) rather than the lifetime tally this used to sum —
+            //   a division served yesterday drops behind one that wasn't, regardless of
+            //   which specials each got. Lifetime remains the fallback inside _needOf when
+            //   the period helper isn't loaded.
+            bunks.forEach(b => { tot += _needFirst ? _needOf(b) : _allSpecialNames.reduce((s, n) => s + ((historicalCounts[b] || {})[n] || 0), 0); });
             return tot / bunks.length;
         };
         const _guaranteeUnits = [];
@@ -1360,11 +1469,20 @@
             if (N === 0) return;
             // Rank bunks by fairness (least special usage first); the configured
             // per-division priority only BREAKS TIES, not overrides fairness.
+            // ★ Fairness = the SPECIAL-AGNOSTIC need above (specials of any kind this
+            //   period incl. today, then longest-since-any-special). This pass used to
+            //   sort on the LIFETIME tally alone, which ignores yesterday: two bunks with
+            //   equal lifetime totals tied and were ordered at RANDOM, so the bunk that
+            //   had a special yesterday could win today's — the exact case the rule
+            //   forbids. Lifetime stays as a late tiebreak.
             const divPriority = _globalPriority[divName] || [];
             const ordered = [...bunkList].map(b => {
                 const h = historicalCounts[b] || {};
                 return { b, usage: _allSpecialNames.reduce((s, n) => s + (h[n] || 0), 0), prioRank: divPriority.includes(b) ? 0 : 1 };
-            }).sort((x, y) => (x.usage - y.usage) || (x.prioRank - y.prioRank) || (Math.random() - 0.5)).map(r => r.b);
+            }).sort((x, y) =>
+                (_needFirst ? (_needOf(x.b) - _needOf(y.b)) : 0) ||
+                (_needFirst && _recencyTiebreak ? (_bunkLastSpecialGap(y.b) - _bunkLastSpecialGap(x.b)) : 0) ||
+                (x.usage - y.usage) || (x.prioRank - y.prioRank) || (Math.random() - 0.5)).map(r => r.b);
 
             if (unit.kind === 'pair') {
                 const job = unit.job;
@@ -1507,78 +1625,9 @@
         //   quota) reserve — uncontended is a strict no-op. The rotation placement loop
         //   later CONSUMES these reservations (they are already claimed for the division).
         const _rotReserved = {}; // `${div}|${start}|${end}` -> [specialName,...] pre-claimed rooms
-        // ★ NEED-FIRST allocation (shared-window specials) — kill switch
-        //   window.__smartTileNeedFirst = false restores pure seniority. When ON, a deprived
-        //   bunk in a YOUNGER grade can win a scarce special over a well-served bunk in an
-        //   OLDER grade: rank by need (fewest specials so far, then longest since any special)
-        //   with SENIORITY as the TIEBREAK — so oldest still goes first when need is equal, and
-        //   the deprived catch up over the week. Applies WITHIN the rotation reservation (cross
-        //   rotation-division) and WITHIN the budget pre-allocation (cross budget-division).
-        const _needFirst = (window.__smartTileNeedFirst !== false);
-        const _scCache = {};
-        // ★ "Need" = how many specials the bunk has had THIS PERIOD (default this week), NOT
-        //   lifetime — so each period everyone starts ~even and a bunk that's gone days without
-        //   a special rises to the top and catches up. (A lifetime count let a bunk that was
-        //   well-served earlier sit at 0 for a whole week despite being eligible.) Falls back to
-        //   lifetime counts only if the period-count helper isn't loaded. Tunable:
-        //   window.__smartTileNeedPeriod ('1week' | 'half' | …); default '1week'. The unreliable
-        //   getDaysSinceActivity tiebreak was dropped (it reported "1 day ago" for never-done
-        //   specials, which mis-ranked need).
-        const _gpc = window.SchedulerCoreUtils && window.SchedulerCoreUtils.getPeriodActivityCount;
-        const _needPeriod = window.__smartTileNeedPeriod || '1week';
-        const _bunkSpecialCount = (bunk) => {
-            if (bunk in _scCache) return _scCache[bunk];
-            let c = 0;
-            if (typeof _gpc === 'function') {
-                for (const n of _allSpecialNames) { try { c += _gpc(bunk, n, _needPeriod) || 0; } catch (_) {} }
-            } else {
-                const h = historicalCounts[bunk] || {};
-                for (const n of _allSpecialNames) c += (h[n] || 0);
-            }
-            return (_scCache[bunk] = c);
-        };
-        // ★ PERF: expose the MEMOIZED period count so the adapter (a separate module) reuses ONE
-        //   computed value per bunk. The adapter's getSpecialUsageCount runs inside sort
-        //   comparators; calling getPeriodActivityCount there per-comparator re-scanned history
-        //   tens of thousands of times and blew generation up to ~45s (the call is cheap when the
-        //   rotation cache is warm but costly mid-generation while it's rebuilding). Sharing this
-        //   memo caps it to one compute per bunk (~bunks×specials total).
-        window.__smartTileNeedCount = _bunkSpecialCount;
-        // ★ RECENCY TIEBREAK (kill switch window.__smartTileRecencyTiebreak = false):
-        //   days since the bunk's LAST special of any kind — with equal week-counts the
-        //   bunk that's gone longest without a special wins the room. Without this,
-        //   seniority decided every tie, and with few rooms shared by many bunks the
-        //   counts tie CONSTANTLY — so the senior division won a room nearly every day
-        //   (9th grade got specials daily, never Swim/Pickleball; 8th got squeezed out).
-        //   Recency makes bunks CYCLE through special → pickleball/swim across days,
-        //   like a head counselor would rotate them. Safe against the old phantom-
-        //   daysSince bug: a special only counts toward recency when the bunk has
-        //   ACTUALLY done it (schedule-derived getActivityCount > 0); a bunk that has
-        //   never had any special ranks neediest (gap 99999).
-        const _dsCache = {};
-        const _bunkLastSpecialGap = (bunk) => {
-            if (bunk in _dsCache) return _dsCache[bunk];
-            const RE = window.RotationEngine;
-            let gap = 99999;
-            if (RE && typeof RE.getDaysSinceActivity === 'function' && typeof RE.getActivityCount === 'function') {
-                for (const n of _allSpecialNames) {
-                    try {
-                        if ((RE.getActivityCount(bunk, n) || 0) <= 0) continue;
-                        const d = RE.getDaysSinceActivity(bunk, n);
-                        if (typeof d === 'number' && d >= 0 && d < gap) gap = d;
-                    } catch (_) {}
-                }
-            }
-            return (_dsCache[bunk] = gap);
-        };
-        const _recencyTiebreak = (window.__smartTileRecencyTiebreak !== false);
-        // neediest first (fewest specials THIS PERIOD), then longest-since-any-special,
-        // then seniority.
-        const _needSenCmp = (bunkA, divA, bunkB, divB) =>
-            (_bunkSpecialCount(bunkA) - _bunkSpecialCount(bunkB)) ||
-            (_recencyTiebreak ? (_bunkLastSpecialGap(bunkB) - _bunkLastSpecialGap(bunkA)) : 0) ||
-            (_senOf(divA) - _senOf(divB)) ||
-            (Math.random() - 0.5);
+        // (The need-first metric — _needOf / _bunkLastSpecialGap / _needSenCmp — is defined
+        //  ABOVE the guarantee pre-pass so EVERY pass that decides "who gets a special today"
+        //  ranks on the same special-agnostic score. See "SPECIAL-AGNOSTIC NEED" there.)
 
         (function _reserveRotationSpecials() {
             if (_needFirst) {
@@ -1734,7 +1783,7 @@
             // decides the cross-division order; fairness still rotates specials
             // among bunks of the SAME division across the week.
             _bunkRankings.sort((a, b) =>
-                (_needFirst ? (_bunkSpecialCount(a.bunk) - _bunkSpecialCount(b.bunk)) : 0) ||  // ★ need first across grades (this-period special count)
+                (_needFirst ? (_needOf(a.bunk) - _needOf(b.bunk)) : 0) ||  // ★ need first across grades (specials of ANY kind this period, incl. today)
                 (_needFirst && _recencyTiebreak ? (_bunkLastSpecialGap(b.bunk) - _bunkLastSpecialGap(a.bunk)) : 0) ||  // ★ longest-since-any-special next (cycles bunks day to day)
                 (_senOf(a.divName) - _senOf(b.divName)) ||     //   seniority is the tiebreak
                 (_todayCount(a.bunk) - _todayCount(b.bunk)) ||
@@ -1860,7 +1909,7 @@
             // priority list as a final tiebreak. Seniority decides the cross-division
             // order; fairness rotates specials among same-division bunks over the week.
             allBunkEntries.sort((a, b) =>
-                (_needFirst ? (_bunkSpecialCount(a.bunk) - _bunkSpecialCount(b.bunk)) : 0) ||  // ★ need first across grades (this-period special count)
+                (_needFirst ? (_needOf(a.bunk) - _needOf(b.bunk)) : 0) ||  // ★ need first across grades (specials of ANY kind this period, incl. today)
                 (_needFirst && _recencyTiebreak ? (_bunkLastSpecialGap(b.bunk) - _bunkLastSpecialGap(a.bunk)) : 0) ||  // ★ longest-since-any-special next (cycles bunks day to day)
                 (_senOf(a.divName) - _senOf(b.divName)) ||     //   seniority is the tiebreak
                 (a.usage - b.usage) ||

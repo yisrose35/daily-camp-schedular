@@ -19,7 +19,9 @@ const end = src.indexOf(endMarker, start);
 const cmpSrc = src.slice(start + 'const _needSenCmp = '.length, end + endMarker.length - 1);
 
 function makeCmp({ counts, gaps, sen, recency = true }) {
-    return new Function('_bunkSpecialCount', '_recencyTiebreak', '_bunkLastSpecialGap', '_senOf',
+    // _needOf = the special-agnostic need score (specials of ANY kind this period,
+    // including any already placed today) — the comparator's primary key.
+    return new Function('_needOf', '_recencyTiebreak', '_bunkLastSpecialGap', '_senOf',
         `return (${cmpSrc});`)(
         (b) => counts[b] || 0,
         recency,

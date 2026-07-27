@@ -1193,8 +1193,10 @@
 
             function getSpecialUsageCount(bunk) {
                 // ★ Within-division fairness = specials this bunk has had THIS PERIOD (default
-                //   this week), not lifetime — matches the cross-division need-first ordering so
-                //   a bunk well-served earlier doesn't stay deprioritized all week. Kill switch
+                //   this week) counting EVERY special alike — not lifetime, and never scoped to
+                //   the special on offer. Matches the cross-division need-first ordering so a
+                //   bunk that had a DIFFERENT special yesterday still ranks behind one that had
+                //   none. (Shared helper also folds in specials already placed today.) Kill switch
                 //   window.__smartTileNeedFirst = false → lifetime (legacy). Period tunable via
                 //   window.__smartTileNeedPeriod (default '1week').
                 // ★ PERF: reuse the ONE memoized period count exposed by scheduler_core_main
