@@ -1803,7 +1803,13 @@
                         <td style="padding:8px 10px;border:1px solid #e5e7eb;position:sticky;left:0;background:${rowBg};font-weight:${isFirstRow ? '600' : '400'};color:#111827;">${isFirstRow ? escapeHtml(bunk) : ''}</td>
                         <td style="padding:8px 10px;border:1px solid #e5e7eb;color:#374151;">${escapeHtml(act.name)}</td>
                         <td style="padding:8px 10px;border:1px solid #e5e7eb;text-align:center;">${typeLabel}</td>
-                        <td style="padding:8px 10px;border:1px solid #e5e7eb;text-align:center;color:#6b7280;">${hist}</td>
+                        <td style="padding:8px 10px;border:1px solid #e5e7eb;text-align:center;color:#6b7280;">${
+                            hist > 0
+                                ? `<button type="button" class="rotation-explain-btn" data-bunk="${escapeHtml(bunk)}" data-act="${escapeHtml(act.name)}"
+                                        title="Show which dates produced this count, and whether each one is actually on the saved schedule"
+                                        style="background:none;border:none;padding:0;font:inherit;color:#2563eb;text-decoration:underline dotted;cursor:pointer;">${hist}</button>`
+                                : hist
+                        }</td>
                         <td style="padding:4px 6px;border:1px solid #e5e7eb;text-align:center;">
                             <input type="number" class="rotation-adj-input" data-bunk="${escapeHtml(bunk)}" data-act="${escapeHtml(act.name)}" value="${offset}"
                                 style="width:45px;text-align:center;padding:4px;border:1px solid #d1d5db;border-radius:999px;font-size:0.8rem;" />
@@ -1817,8 +1823,11 @@
         });
 
         html += `</tbody></table></div></div>`;
+        html += `<div id="rotation-explain-panel"></div>`;
         html += buildRotationSummary(filteredBunks, filteredActivities, liveCounts, manualOffsets);
         cont.innerHTML = html;
+
+        bindRotationExplain(cont);
 
         cont.querySelectorAll('.rotation-adj-input').forEach(inp => {
             inp.onchange = (e) => {
@@ -1849,6 +1858,107 @@
                 renderRotationTable(divName);
             };
         });
+    }
+
+    // ── Count drill-down ──────────────────────────────────────────────────
+    // The Count column is a cumulative number with no date attribution, so a
+    // camp disputing it ("we never had Pizza Making") had no way to check.
+    // Clicking a count reconciles it against the SAVED SCHEDULES date by date
+    // and flags any credit with no schedule behind it. Read-only.
+    function bindRotationExplain(cont) {
+        const panel = cont.querySelector('#rotation-explain-panel');
+        if (!panel) return;
+        cont.querySelectorAll('.rotation-explain-btn').forEach(btn => {
+            btn.onclick = async () => {
+                const b = btn.dataset.bunk, a = btn.dataset.act;
+                if (!window.RotationReconcile?.datesFor) {
+                    panel.innerHTML = `<div style="margin-top:16px;padding:12px;background:#fef3c7;border:1px solid #f59e0b;border-radius:12px;color:#92400e;font-size:0.85rem;">
+                        Count breakdown is unavailable on this page (rotation_reconcile.js not loaded).</div>`;
+                    return;
+                }
+                panel.innerHTML = `<div style="margin-top:16px;padding:12px;background:#f9fafb;border:1px dashed #d1d5db;border-radius:12px;color:#6b7280;font-size:0.85rem;">
+                    Checking every saved schedule for ${escapeHtml(b)} → ${escapeHtml(a)}…</div>`;
+                panel.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+                let rows;
+                try { rows = await window.RotationReconcile.datesFor(b, a); }
+                catch (e) {
+                    panel.innerHTML = `<div style="margin-top:16px;padding:12px;background:#fee2e2;border:1px solid #ef4444;border-radius:12px;color:#b91c1c;font-size:0.85rem;">
+                        Breakdown failed: ${escapeHtml(e?.message || String(e))}</div>`;
+                    return;
+                }
+                panel.innerHTML = renderExplainPanel(b, a, rows || []);
+                const close = panel.querySelector('#rotation-explain-close');
+                if (close) close.onclick = () => { panel.innerHTML = ''; };
+            };
+        });
+    }
+
+    const _EXPLAIN_STYLE = {
+        'OK':            { bg: '#d1fae5', fg: '#047857', note: 'matches the saved schedule' },
+        'PHANTOM':       { bg: '#fee2e2', fg: '#b91c1c', note: 'credited, but NOT on that day\'s saved schedule' },
+        'MISSING':       { bg: '#fef3c7', fg: '#92400e', note: 'on the schedule but not credited' },
+        'MISMATCH':      { bg: '#fee2e2', fg: '#b91c1c', note: 'credited a different number of times than scheduled' },
+        'NO LOCAL COPY': { bg: '#e5e7eb', fg: '#374151', note: 'that day\'s schedule could not be loaded' }
+    };
+
+    function renderExplainPanel(bunk, activity, rows) {
+        const bad = rows.filter(r => r.verdict !== 'OK' && r.verdict !== 'NO LOCAL COPY');
+        const credited = rows.reduce((n, r) => n + (r.countedInReport || 0), 0);
+        const scheduled = rows.reduce((n, r) => n + (typeof r.onSavedSchedule === 'number' ? r.onSavedSchedule : 0), 0);
+
+        let head = bad.length
+            ? `<div style="padding:10px 12px;background:#fee2e2;border:1px solid #ef4444;border-radius:10px;color:#7f1d1d;font-size:0.85rem;margin-bottom:10px;">
+                 <strong>${bad.length} date${bad.length > 1 ? 's' : ''} out of sync.</strong>
+                 The report credits <strong>${credited}</strong>; the saved schedules contain <strong>${scheduled}</strong>.
+                 Use <strong>🔧 Verify Memory</strong> above to re-derive the counts from the schedules.
+               </div>`
+            : `<div style="padding:10px 12px;background:#d1fae5;border:1px solid #10b981;border-radius:10px;color:#065f46;font-size:0.85rem;margin-bottom:10px;">
+                 Every credited date matches the saved schedule (<strong>${credited}</strong> total). If the camp says it
+                 never happened, the schedule <em>did</em> list it and the change happened on the ground — edit that
+                 day's schedule and the credit clears.
+               </div>`;
+
+        let body = rows.length
+            ? rows.map(r => {
+                const st = _EXPLAIN_STYLE[r.verdict] || _EXPLAIN_STYLE['OK'];
+                return `<tr>
+                    <td style="padding:7px 10px;border:1px solid #e5e7eb;white-space:nowrap;">${escapeHtml(formatDateDisplay(r.date))}</td>
+                    <td style="padding:7px 10px;border:1px solid #e5e7eb;text-align:center;">
+                        <span style="background:${st.bg};color:${st.fg};padding:2px 8px;border-radius:999px;font-size:0.7rem;font-weight:600;"
+                              title="${escapeHtml(st.note)}">${escapeHtml(r.verdict)}</span></td>
+                    <td style="padding:7px 10px;border:1px solid #e5e7eb;text-align:center;">${escapeHtml(String(r.countedInReport))}</td>
+                    <td style="padding:7px 10px;border:1px solid #e5e7eb;text-align:center;">${escapeHtml(String(r.onSavedSchedule))}</td>
+                    <td style="padding:7px 10px;border:1px solid #e5e7eb;color:#6b7280;font-size:0.78rem;">${escapeHtml(r.where || '—')}${
+                        r.nameVariants && r.nameVariants.includes('/')
+                            ? `<div style="color:#b45309;margin-top:2px;">stored under several spellings: ${escapeHtml(r.nameVariants)}</div>` : ''
+                    }</td>
+                </tr>`;
+            }).join('')
+            : `<tr><td colspan="5" style="padding:14px;text-align:center;color:#6b7280;">No dates credit this activity to this bunk.</td></tr>`;
+
+        return `
+        <div class="setup-card" style="margin-top:16px;">
+            <div class="setup-card-header" style="display:flex;align-items:center;justify-content:space-between;gap:10px;">
+                <div class="setup-card-text">
+                    <h3 style="margin:0;font-size:0.95rem;">${escapeHtml(bunk)} → ${escapeHtml(activity)}</h3>
+                    <p style="margin:2px 0 0;font-size:0.78rem;color:#6b7280;">Where this count comes from, and whether each date is really on the saved schedule</p>
+                </div>
+                <button id="rotation-explain-close" style="padding:5px 12px;border:1px solid #d1d5db;border-radius:999px;background:#fff;color:#374151;font-size:0.78rem;font-weight:600;cursor:pointer;">Close</button>
+            </div>
+            ${head}
+            <div style="overflow-x:auto;border-radius:10px;border:1px solid #e5e7eb;">
+                <table style="border-collapse:collapse;width:100%;font-size:0.8rem;">
+                    <thead><tr style="background:#f3f4f6;">
+                        <th style="padding:8px 10px;border:1px solid #d1d5db;text-align:left;font-weight:600;color:#374151;">Date</th>
+                        <th style="padding:8px 10px;border:1px solid #d1d5db;text-align:center;font-weight:600;color:#374151;">Status</th>
+                        <th style="padding:8px 10px;border:1px solid #d1d5db;text-align:center;font-weight:600;color:#374151;">Counted</th>
+                        <th style="padding:8px 10px;border:1px solid #d1d5db;text-align:center;font-weight:600;color:#374151;">Scheduled</th>
+                        <th style="padding:8px 10px;border:1px solid #d1d5db;text-align:left;font-weight:600;color:#374151;">Where on that day</th>
+                    </tr></thead>
+                    <tbody>${body}</tbody>
+                </table>
+            </div>
+        </div>`;
     }
 
     function buildRotationSummary(bunks, activities, rawCounts, manualOffsets) {
