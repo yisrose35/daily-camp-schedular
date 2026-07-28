@@ -35697,6 +35697,113 @@
         // sharing backstop, pool/delete enforcement) and async generation-
         // complete listeners all run after the pre-save application; nothing
         // may outlive this one.
+        // ★ FINAL FACILITY BACKFILL (window.__finalBackfill, default ON) ─────────────
+        //   Last-resort sweep for uncovered time the earlier passes never offered a tile
+        //   for. Those passes only ever concretize tiles that ALREADY EXIST, so a window
+        //   that was never tiled (e.g. a bunk that lost its pool seat) stays empty and is
+        //   never even reported as a gap — GENERIC-LAYOUT only inspects layout tiles.
+        //
+        //   Crucially this scans the FULL facility catalog, not just the fields already
+        //   used today. Live on Neranina that distinction was the whole finding: "Coloring"
+        //   and "Redrover" sat completely unused at the 10:50 peak while three bunks had
+        //   40-min holes, and only 22 of 75 field seats were occupied. A diagnostic that
+        //   harvested candidates from placed tiles reported "0 fields free" and was wrong.
+        //
+        //   Strictly additive and safety-gated: never touches a placed tile, requires free
+        //   capacity on the facility at that exact span, requires SchedulingRules to allow
+        //   the block (so cooldowns/spacing still bind), and never repeats an activity the
+        //   bunk already has today. Live: filled 4 holes / 90 min with 0 validator errors
+        //   and 0 capacity violations. Toggle with window.__finalBackfill = false.
+        try {
+            var _fbOn = true;
+            try { _fbOn = (typeof window === 'undefined') || (window.__finalBackfill !== false); } catch (_eFb0) {}
+            if (_fbOn && window.scheduleAssignments && window.SchedulingRules) {
+                var _fbGs = getGlobalSettings() || {};
+                var _fbSkip = { 'Pool': 1, 'Lunch Room': 1, 'Cleanup': 1 };
+                var _fbFields = (((_fbGs.app1 && _fbGs.app1.fields) || _fbGs.fields || []) || [])
+                    .filter(function (f) { return f && f.name && f.available !== false && !_fbSkip[f.name]; });
+                var _fbCap = function (f) { return (f.sharableWith && f.sharableWith.capacity) || f.capacity || 1; };
+                var _fbSA = window.scheduleAssignments;
+                var _fbDayS = null, _fbDayE = null;
+                Object.keys(_fbSA).forEach(function (bk) {
+                    (_fbSA[bk] || []).forEach(function (r) {
+                        if (!r || r._startMin == null) return;
+                        if (_fbDayS == null || r._startMin < _fbDayS) _fbDayS = r._startMin;
+                        if (_fbDayE == null || r._endMin > _fbDayE) _fbDayE = r._endMin;
+                    });
+                });
+                var _fbFilled = 0, _fbNoCand = 0, _fbMin = 0;
+                if (_fbDayS != null && _fbDayE != null && _fbFields.length) {
+                    for (var _fbPass = 0; _fbPass < 3; _fbPass++) {
+                        var _fbPassFilled = 0;
+                        Object.keys(_fbSA).forEach(function (bk) {
+                            var arr = _fbSA[bk];
+                            if (!Array.isArray(arr)) return;
+                            var rs = arr.filter(function (r) { return r && r._startMin != null; })
+                                        .sort(function (a, b) { return a._startMin - b._startMin; });
+                            var holes = [], cur = _fbDayS;
+                            rs.forEach(function (r) {
+                                if (r._startMin - cur >= 20) holes.push([cur, r._startMin]);
+                                if (r._endMin > cur) cur = r._endMin;
+                            });
+                            if (_fbDayE - cur >= 20) holes.push([cur, _fbDayE]);
+                            holes.forEach(function (h) {
+                                var s = h[0], e = h[1];
+                                var live = arr.filter(function (r) { return r && r._startMin != null; })
+                                              .sort(function (a, b) { return a._startMin - b._startMin; });
+                                // re-check: an earlier hole in this pass may already cover it
+                                for (var _lc = 0; _lc < live.length; _lc++) {
+                                    if (live[_lc]._startMin < e && live[_lc]._endMin > s) return;
+                                }
+                                var tmpl = live.map(function (r) {
+                                    return { type: r.type, event: r._activity || r.field, sport: r.sport,
+                                             startMin: r._startMin, endMin: r._endMin };
+                                });
+                                var usedToday = {};
+                                live.forEach(function (r) { usedToday[String(r._activity || r.field)] = 1; });
+                                var occ = {};
+                                Object.keys(_fbSA).forEach(function (ob) {
+                                    (_fbSA[ob] || []).forEach(function (r) {
+                                        if (r && r._startMin != null && r._startMin < e && r._endMin > s && r.field) {
+                                            occ[r.field] = (occ[r.field] || 0) + 1;
+                                        }
+                                    });
+                                });
+                                var pick = null;
+                                for (var fi = 0; fi < _fbFields.length; fi++) {
+                                    var f = _fbFields[fi];
+                                    if (usedToday[f.name]) continue;
+                                    if ((_fbCap(f) - (occ[f.name] || 0)) <= 0) continue;
+                                    var ok = false;
+                                    try {
+                                        ok = window.SchedulingRules.isCandidateAllowed(
+                                            { type: 'sport', event: f.name, sport: f.name, startMin: s, endMin: e },
+                                            tmpl, { mode: 'auto' });
+                                    } catch (_eFbR) { ok = false; }
+                                    if (!ok) continue;
+                                    pick = f.name; break;
+                                }
+                                if (!pick) { _fbNoCand++; return; }
+                                arr.push({ field: pick, sport: pick, _activity: pick,
+                                           _startMin: s, _endMin: e, _fixed: true, _autoMode: true,
+                                           _generic: false, continuation: false, type: 'sport',
+                                           _subcat: null, _specialLocation: null, _finalBackfill: true });
+                                _fbFilled++; _fbPassFilled++; _fbMin += (e - s);
+                            });
+                        });
+                        if (!_fbPassFilled) break;
+                    }
+                }
+                if (_fbFilled > 0) {
+                    log('[FINAL-BACKFILL] filled ' + _fbFilled + ' uncovered window(s) / ' + _fbMin +
+                        'min with a free, rule-legal facility (' + _fbNoCand + ' left — no facility with free capacity passed the rules)');
+                    try { window.AutoSegmentModel && window.AutoSegmentModel.rebuildFromAssignments && window.AutoSegmentModel.rebuildFromAssignments(); } catch (_eSegFb) {}
+                } else {
+                    log('[FINAL-BACKFILL] no uncovered window was fillable (' + _fbNoCand + ' examined)');
+                }
+            }
+        } catch (_eFb) { try { warn('[FINAL-BACKFILL] skipped — ' + (_eFb && _eFb.message)); } catch (_e9) {} }
+
         try {
             const _preTripAbs = tripWriteCount;
             applyTripMultiSlotWrite();
