@@ -14776,9 +14776,15 @@
                             (_blbPos[g] = _blbPos[g] || {})[type] = best;
                         });
                     });
-                    log('[STAGGER] band load-balance (bunks per band position): ' +
-                        Object.keys(_blbLoad).map(function (t) { return t + '=[' + _blbLoad[t].join(',') + ']'; }).join(' · '));
-                } catch (_eBlb) { _blbPos = {}; }
+                    try {
+                        console.log('[STAGGER] band load-balance (bunks per band position): ' +
+                            Object.keys(_blbLoad).map(function (t) { return t + '=[' + _blbLoad[t].join(',') + ']'; }).join(' · ') +
+                            ' | sizes: ' + _blbHeavyFirst.map(function (g) { return g + ':' + _blbSize[g]; }).join(','));
+                    } catch (_eLog) {}
+                } catch (_eBlb) {
+                    _blbPos = {};
+                    try { console.warn('[STAGGER] band load-balance DISABLED — ' + (_eBlb && _eBlb.message)); } catch (_e2) {}
+                }
             }
 
             const plan = {};
