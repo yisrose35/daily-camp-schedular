@@ -15706,7 +15706,18 @@
                 // mirror image automatically — no hardcoded times. STATIC pre-swim snapshot
                 // (taken once, before any swim is placed) so every bunk steers to the same
                 // base-contention peaks; pool cap 8 + same-grade cap 2 then bound the pile-up.
-                var _p23ContentionOn = true; try { _p23ContentionOn = (typeof window === 'undefined') || (window.__swimContention !== false); } catch (_eC0) {}
+                // ★ DEFAULT OFF (2026-07-28). Contention steering is the PRIMARY sort key
+                //   below, which demotes actual pool load to a mere tiebreak — so swim
+                //   clustered into the early starts and starved the last pool slot
+                //   (live: 7,7,7,7,7,2 across six slots, one bunk left with NO swim).
+                //   With contention (and field-balance) off, _ilKey is 0 for every
+                //   candidate and the least-pool-loaded tiebreak becomes the effective
+                //   primary — i.e. the spread the interleave was written to produce.
+                //   Measured on Neranina (38 bunks, 3 identical runs, 0 validator errors):
+                //     both on  → 440min dead · 30/38 wall-to-wall · 7,7,7,7,7,2 · 1 no-swim
+                //     both off → 340min dead · 34/38 wall-to-wall · 6,6,7,7,7,5 · 0 no-swim
+                //   Opt back in per-session with window.__swimContention = true.
+                var _p23ContentionOn = false; try { _p23ContentionOn = (typeof window !== 'undefined') && (window.__swimContention === true); } catch (_eC0) {}
                 var _p23ConSnap = [];   // per swimming bunk: { s:dayStart, e:dayEnd, walls:[[ws,we]...] } from pinned/_fixed walls (excl pre/post-change)
                 if (_p23ContentionOn) {
                     try {
@@ -15941,7 +15952,12 @@
                                 //  • else pure pool-spread (both terms 0).
                                 // Tiebreak: least pool-loaded (cross-grade spread) → wet-bundle score → earliest.
                                 var _ilContention = _p23ContentionOn && _p23ConSnap.length > 0;
-                                var _ilFieldBal = !_ilContention && ((typeof window === 'undefined') || (window.__swimFieldBalance !== false));
+                                // ★ DEFAULT OFF (2026-07-28) — same priority-inversion as contention
+                                //   above: land-pressure as the PRIMARY key demotes pool load to a
+                                //   tiebreak. It does yield a flatter swim spread (6,6,7,7,6,6) but
+                                //   PACKS WORSE overall (425min dead / 32-38) than pure pool-spread
+                                //   (340min / 34-38). Opt in with window.__swimFieldBalance = true.
+                                var _ilFieldBal = !_ilContention && ((typeof window !== 'undefined') && (window.__swimFieldBalance === true));
                                 var _ilBest = -1, _ilBestKey = -Infinity, _ilBestLoad = Infinity, _ilBestScore = -Infinity;
                                 for (var _ilk = 0; _ilk < _p23AllFree.length; _ilk++) {
                                     var _ilC = _p23AllFree[_ilk];

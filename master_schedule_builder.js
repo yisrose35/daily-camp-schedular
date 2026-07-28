@@ -2394,7 +2394,26 @@ function renderDAWGrid(externalEl, externalLayers, externalCallbacks) {
       const top = (layer.startMin - globalStart) * DAW_PIXELS_PER_MINUTE;
       const height = (layer.endMin - layer.startMin) * DAW_PIXELS_PER_MINUTE;
       const left = BAND_PAD + idx * (BAND_WIDTH + BAND_GAP);
-      const opSymbol = layer.op === '=' ? '=' : layer.op === '<=' ? '≤' : '≥';
+      // ★ A special layer with a per-subcategory grid has its LAYER-level op forced
+      //   to '=' (it is unused once subQuantities exist — see the save path), so
+      //   reading layer.op here printed "=N" even for a "≥" subcategory, hiding the
+      //   real ceiling from the grid. Live: a grade whose uncategorized row was "≥1"
+      //   still read "=1", which is exactly the ceiling that ends a day early.
+      //   Derive the symbol from subOps instead; a mixed grid shows "~" rather than
+      //   claiming one operator it does not have.
+      const _symOf = (o) => (o === '=' ? '=' : o === '<=' ? '≤' : '≥');
+      let opSymbol = _symOf(layer.op);
+      if (layer.subQuantities && typeof layer.subQuantities === 'object') {
+        const _subOps = (layer.subOps && typeof layer.subOps === 'object') ? layer.subOps : {};
+        const _ops = [...new Set(Object.keys(layer.subQuantities)
+          .filter(k => (parseInt(layer.subQuantities[k], 10) || 0) > 0)
+          .map(k => {
+            const _k = Object.keys(_subOps).find(x => x.toLowerCase() === k.toLowerCase());
+            return _k ? _subOps[_k] : '=';
+          }))];
+        if (_ops.length === 1) opSymbol = _symOf(_ops[0]);
+        else if (_ops.length > 1) opSymbol = '~';
+      }
       const _dMin = Math.min(layer.durationMin || 0, layer.durationMax || 0) || layer.durationMin;
       const _dMax = Math.max(layer.durationMin || 0, layer.durationMax || 0) || layer.durationMax;
       let durLabel = _dMin && _dMax && _dMin !== _dMax
