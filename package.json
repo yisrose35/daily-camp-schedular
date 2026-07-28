@@ -5,5 +5,8 @@
   "description": "Browser-based camp scheduler (no build step).",
   "scripts": {
     "test": "node --test tests/"
+  },
+  "devDependencies": {
+    "playwright-core": "^1.62.0"
   }
 }

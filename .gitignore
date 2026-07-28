@@ -5,3 +5,9 @@ SECURITY_AUDIT.md
 # Dependencies (local test tooling only — the app itself has no build step)
 node_modules/
 
+# Camp data snapshots fed to the local headless-browser harness. These are real
+# exports (camper/bunk names, division structure, schedule history) — they stay
+# on the machine running the harness and must never reach the remote.
+campistry_backup*.json
+camp_snapshot*.json
+
