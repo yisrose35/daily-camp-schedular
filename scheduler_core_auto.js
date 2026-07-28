@@ -14742,6 +14742,45 @@
 
             const bandCount = Math.max(3, maxOffField);
 
+            // ★ LOAD-BALANCED BANDS (window.__bandLoadBalance, default ON).
+            //   The Latin-square below rotates band positions by the grade's INDEX, so
+            //   it balances GRADES — never BUNKS. Live on Neranina the special bands came
+            //   out morning 16 / midday 14 / afternoon 8 bunks, because Minors(2) and
+            //   Quints(8) each counted as "one grade". That is the land-pressure skew:
+            //   at 10:50 land=32 with 0 fields free, while at 14:10 only land=14 and 17
+            //   bunks need no facility at all.
+            //   So assign each grade's band by LPT bin-packing: heaviest grade first,
+            //   into whichever band position currently carries the fewest bunks. Swim is
+            //   excluded — it already has its own round-robin override below.
+            var _blbOn = true; try { _blbOn = (typeof window === 'undefined') || (window.__bandLoadBalance !== false); } catch (_eB0) {}
+            var _blbPos = {};   // grade -> { type -> bandPos }
+            if (_blbOn) {
+                try {
+                    var _blbSize = {};
+                    shuffled.forEach(function (g) {
+                        var n = 0;
+                        try { n = (getBunksForGrade(g, divisions) || []).length; } catch (_e) { n = 0; }
+                        _blbSize[g] = n || 1;
+                    });
+                    var _blbHeavyFirst = shuffled.slice().sort(function (a, b) {
+                        return (_blbSize[b] - _blbSize[a]) || String(a).localeCompare(String(b));
+                    });
+                    var _blbLoad = {};  // type -> [bunks per band position]
+                    _blbHeavyFirst.forEach(function (g) {
+                        (gradeInfo[g].offField || []).forEach(function (type) {
+                            if (type === 'swim') return;               // has its own spread rule
+                            if (!_blbLoad[type]) { _blbLoad[type] = []; for (var i = 0; i < bandCount; i++) _blbLoad[type].push(0); }
+                            var best = 0;
+                            for (var p = 1; p < bandCount; p++) if (_blbLoad[type][p] < _blbLoad[type][best]) best = p;
+                            _blbLoad[type][best] += _blbSize[g];
+                            (_blbPos[g] = _blbPos[g] || {})[type] = best;
+                        });
+                    });
+                    log('[STAGGER] band load-balance (bunks per band position): ' +
+                        Object.keys(_blbLoad).map(function (t) { return t + '=[' + _blbLoad[t].join(',') + ']'; }).join(' · '));
+                } catch (_eBlb) { _blbPos = {}; }
+            }
+
             const plan = {};
             shuffled.forEach((grade, idx) => {
                 const info = gradeInfo[grade];
@@ -14802,7 +14841,11 @@
                 const typeBands = {};
                 const sequence = [];
                 permutedOffField.forEach((type, typeIdx) => {
-                    const bandPos = (typeIdx + idx) % bandCount;
+                    // Load-balanced position when available (see LPT block above), else
+                    // the original Latin-square rotation by grade index.
+                    const bandPos = (_blbPos[grade] && _blbPos[grade][type] != null)
+                        ? _blbPos[grade][type]
+                        : ((typeIdx + idx) % bandCount);
                     var bandStart = bandStarts[bandPos];
                     var bandEnd = bandPos === bandCount - 1 ? info.end : bandStarts[bandPos + 1];
 
