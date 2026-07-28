@@ -736,3 +736,44 @@ test('removeGame — specialty: structured assignments and the gameLog both drop
   assert.deepStrictEqual(saved.specialtyLeagueHistory.gameLog.L9['2026-07-01'], [],
     'the bracket must not think this game happened');
 });
+
+test('removeGame — pushes schedule + league stores to the cloud immediately', () => {
+  const cloudSaves = [];
+  const bunkSaves = [];
+  const dailySaves = {};
+  global.window.scheduleAssignments = {
+    BunkA: [{ _h2h: true, _allMatchups: ['Lions vs Tigers @ Field A (Soccer)', 'Bears vs Wolves @ Field C (Soccer)'] }],
+  };
+  global.window.leagueAssignments = { Majors: { 0: { _allMatchups: ['Lions vs Tigers @ Field A (Soccer)'] } } };
+  global.window.GlobalFieldLocks = { unlockField: () => {}, lockField: () => true, isFieldLockedByTime: () => null };
+  global.window._scheduleAssignmentsDate = '2026-07-03';
+  global.window.saveCurrentDailyData = (k, v) => { dailySaves[k] = v; };
+  global.window.bypassSaveAllBunks = (bunks) => { bunkSaves.push(bunks); return Promise.resolve(); };
+  global.window.ScheduleDB = { saveSchedule: (dk, data, opts) => { cloudSaves.push({ dk, data, opts }); return Promise.resolve({ success: true }); } };
+  delete global.window.SchedulerCoreLeagues;
+
+  const ctx = {
+    kind: 'regular', divName: 'Majors', slotIdx: 0, slots: [0], leagueName: 'Majors League',
+    game: { teamA: 'Lions', teamB: 'Tigers', teams: 'Lions vs Tigers', field: 'Field A', sport: 'Soccer' },
+  };
+  assert.strictEqual(PEFC.removeGame(ctx).ok, true);
+
+  // Whole-object cloud save for the edited date, forced through the debounce —
+  // the division-keyed leagueAssignments change is invisible to the per-bunk
+  // overlay, so without this the erase could be lost on reload.
+  assert.strictEqual(cloudSaves.length, 1);
+  assert.strictEqual(cloudSaves[0].dk, '2026-07-03');
+  assert.strictEqual(cloudSaves[0].opts.immediate, true);
+  assert.strictEqual(cloudSaves[0].opts.forceSync, true);
+  assert.strictEqual(cloudSaves[0].data.leagueAssignments.Majors[0], undefined, 'erased game is absent from the payload');
+  // Per-bunk surgical save still fires, for multi-scheduler correctness.
+  assert.deepStrictEqual(bunkSaves, [['BunkA']]);
+  // And the local daily record is updated so a reload before the sync lands is safe.
+  assert.ok(dailySaves.scheduleAssignments);
+  assert.ok(dailySaves.leagueAssignments);
+
+  delete global.window.ScheduleDB;
+  delete global.window.bypassSaveAllBunks;
+  delete global.window.saveCurrentDailyData;
+  delete global.window._scheduleAssignmentsDate;
+});

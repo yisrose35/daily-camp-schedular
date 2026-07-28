@@ -74,10 +74,19 @@ function memStore() {
 global.localStorage = memStore();
 global.sessionStorage = memStore();
 
-// Timers are inert: the module schedules re-render / undo-restore callbacks we
-// don't want firing mid-assertion.
-global.setTimeout = () => 0;
-global.clearTimeout = noop;
+// Controllable timers. The module schedules re-render / undo-restore callbacks
+// we don't want firing mid-assertion, but some real behaviour is debounced
+// (applyPostEditCounts pushes rotation_counts on a 500ms timer), so a test that
+// cares has to be able to run the queue on demand via flushTimers().
+let _timerSeq = 0;
+let _timers = new Map();
+global.setTimeout = (fn) => { _timers.set(++_timerSeq, fn); return _timerSeq; };
+global.clearTimeout = (id) => { _timers.delete(id); };
+function flushTimers() {
+    const due = Array.from(_timers.values());
+    _timers.clear();
+    due.forEach(fn => { if (typeof fn === 'function') { try { fn(); } catch (_) { /* stubbed DOM */ } } });
+}
 
 // Owner role so canEditBunk() allows every write.
 window.AccessControl = { isInitialized: true, getCurrentRole: () => 'owner' };
@@ -116,6 +125,7 @@ let savedCounts;
 beforeEach(() => {
     localStorage.clear();
     sessionStorage.clear();
+    _timers.clear();
     PEI.undoStack.length = 0;
 
     window.divisions = { [DIV]: { startTime: '09:00', endTime: '12:00', bunks: [BUNK] } };
@@ -380,5 +390,102 @@ describe('slot-index guards', () => {
         assert.equal(res.ok, false);
         assert.equal(row()[0]._endMin, 585, 'unchanged');
         assert.equal(row()[3]._endMin, 720, 'the tail never moved');
+    });
+});
+
+// =====================================================================
+// CLOUD WRITES
+// =====================================================================
+// Both savers used to LEAD with a function that does not exist anywhere in
+// the codebase (window.resolveAndSaveSchedule, ScheduleDB.saveBunkSchedule).
+// They reached the cloud only because the dead branch was skipped. These
+// tests pin the real destination so a same-named helper added later can't
+// silently divert every post-edit into a no-op.
+
+describe('erase — cloud write', () => {
+    it('pushes the whole schedule immediately via ScheduleDB.saveSchedule', () => {
+        const saves = [];
+        window.ScheduleDB = {
+            saveSchedule: (dk, data, opts) => { saves.push({ dk, data, opts }); return Promise.resolve({ success: true }); }
+        };
+        window.currentScheduleDate = '2026-07-02';
+
+        PEI.deleteBlock(BUNK, 1, DIV, 'Soccer');
+
+        assert.equal(saves.length, 1, 'exactly one cloud write');
+        assert.equal(saves[0].dk, '2026-07-02');
+        assert.equal(saves[0].opts.immediate, true, 'an erase is deliberate — do not sit in a debounce');
+        // The erased slot is in the payload, not just in memory.
+        assert.equal(saves[0].data.scheduleAssignments[BUNK][1], null);
+        assert.ok(saves[0].data.leagueAssignments, 'league store rides along');
+    });
+
+    it('writes the corrected rotation counts to the cloud too', () => {
+        const rotSaves = [];
+        window.ScheduleDB = { saveSchedule: () => Promise.resolve({ success: true }) };
+        window.RotationCloud = { save: (dk, sa) => { rotSaves.push({ dk, sa }); } };
+        window.currentScheduleDate = '2026-07-02';
+
+        PEI.deleteBlock(BUNK, 1, DIV, 'Soccer');
+
+        // historicalCounts is the local ledger and is synced by applyPostEditCounts...
+        assert.equal(savedCounts[BUNK].Soccer, 0);
+        // ...and rotation_counts is re-derived from the schedule we just changed,
+        // on applyPostEditCounts' 500ms debounce.
+        assert.equal(rotSaves.length, 0, 'debounced, not fired inline');
+        flushTimers();
+        assert.equal(rotSaves.length, 1);
+        assert.equal(rotSaves[0].dk, '2026-07-02');
+        assert.equal(rotSaves[0].sa[BUNK][1], null, 'derived from the post-erase schedule');
+        delete window.RotationCloud;
+    });
+});
+
+describe('stretch — cloud write', () => {
+    it('routes through saveSchedule so the write is debounced, not per-frame', () => {
+        let saveScheduleCalls = 0;
+        const immediateSaves = [];
+        window.saveSchedule = () => { saveScheduleCalls++; };
+        window.ScheduleDB = { saveSchedule: (dk, d, o) => { immediateSaves.push(o); return Promise.resolve({ success: true }); } };
+
+        PEI.applyStretch(BUNK, DIV, 0, 540, 585, 540, 600);
+
+        assert.equal(saveScheduleCalls, 1, 'the debounced sync path ran');
+        assert.equal(immediateSaves.length, 0, 'a drag must not fire an immediate cloud write per frame');
+        delete window.saveSchedule;
+    });
+
+    it('falls back to an immediate write when no unified system is loaded', () => {
+        const saves = [];
+        delete window.saveSchedule;
+        window.ScheduleDB = { saveSchedule: (dk, data) => { saves.push(data); return Promise.resolve({ success: true }); } };
+
+        PEI.applyStretch(BUNK, DIV, 0, 540, 585, 540, 600);
+
+        assert.equal(saves.length, 1, 'the edit still reaches the cloud, not just localStorage');
+    });
+
+    it('the pushed-back neighbours are in the saved payload, not only in memory', () => {
+        let saved = null;
+        delete window.saveSchedule;
+        window.ScheduleDB = { saveSchedule: (dk, data) => { saved = data; return Promise.resolve({ success: true }); } };
+
+        PEI.applyStretch(BUNK, DIV, 0, 540, 585, 540, 600);
+
+        assert.ok(saved, 'a save fired');
+        assert.equal(saved.scheduleAssignments[BUNK][1]._startMin, 600, 'Soccer\'s new time is persisted');
+        assert.equal(saved.scheduleAssignments[BUNK][3]._startMin, 690, 'and Lunch\'s');
+    });
+
+    it('persists the stretch to localStorage under the schedule date', () => {
+        window.currentScheduleDate = '2026-07-02';
+        delete window.saveSchedule;
+        window.ScheduleDB = { saveSchedule: () => Promise.resolve({ success: true }) };
+
+        PEI.applyStretch(BUNK, DIV, 3, 675, 720, 675, 750);
+
+        const daily = JSON.parse(localStorage.getItem('campDailyData_v1') || '{}');
+        assert.ok(daily['2026-07-02'], 'written under the edited date');
+        assert.equal(daily['2026-07-02'].scheduleAssignments[BUNK][3]._endMin, 750);
     });
 });

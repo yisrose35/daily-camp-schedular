@@ -3474,12 +3474,15 @@
         } else {
             window._postEditInProgress = true;
         }
-        if (typeof window.resolveAndSaveSchedule === 'function') window.resolveAndSaveSchedule(bunk);
-        else if (typeof bypassSaveAllBunks === 'function') bypassSaveAllBunks([bunk]);
-        else if (window.ScheduleDB?.saveBunkSchedule) {
-            const dateKey = window.currentScheduleDate || new Date().toISOString().split('T')[0];
-            window.ScheduleDB.saveBunkSchedule(dateKey, bunk, window.scheduleAssignments[bunk]);
-        }
+        // ★ This used to lead with window.resolveAndSaveSchedule and fall back to
+        //   window.ScheduleDB.saveBunkSchedule. NEITHER FUNCTION EXISTS anywhere
+        //   in the codebase — the erase/undo/add path reached the cloud only
+        //   because both dead branches were skipped and the middle one ran. Call
+        //   the real saver directly so it can't be broken by someone later
+        //   defining a same-named helper.
+        //   bypassSaveAllBunks → ScheduleDB.saveSchedule(..., { immediate: true }),
+        //   i.e. an immediate write of scheduleAssignments + leagueAssignments.
+        bypassSaveAllBunks([bunk]);
         peiUpdateRotationHistory(bunk);
     }
 
@@ -3510,11 +3513,26 @@
             allDaily[dateKey]._postEditAt = Date.now();
             localStorage.setItem('campDailyData_v1', JSON.stringify(allDaily));
         } catch (e) { debugLog('peiSaveQuiet localStorage error:', e); }
-        // Cloud save (fire and forget — no re-render)
-        if (window.ScheduleDB?.saveBunkSchedule) {
-            window.ScheduleDB.saveBunkSchedule(dateKey, bunk, window.scheduleAssignments[bunk]);
+        // Cloud save (fire and forget — no re-render).
+        //
+        // ★ This used to try window.ScheduleDB.saveBunkSchedule first, which DOES
+        //   NOT EXIST (ScheduleDB only exposes saveSchedule) — so every drag-edit
+        //   silently fell through to the else branch. It happened to be the right
+        //   destination, but only by accident. Call it directly.
+        //
+        //   saveSchedule() → saveCurrentDailyData → ScheduleSync.queueSave, which
+        //   debounces 500ms and owns the offline queue. That debounce is what we
+        //   want here: a drag can fire this several times a second, and unlike
+        //   peiSave (one deliberate erase) it must not push an immediate write per
+        //   frame. saveSchedule also re-derives rotation counts via
+        //   RotationCloud.save, so a ripple that reshuffles the day keeps
+        //   rotation_counts in step with the schedule.
+        if (typeof window.saveSchedule === 'function') {
+            window.saveSchedule();
         } else {
-            window.saveSchedule?.();
+            // No unified system loaded — fall back to the immediate writer rather
+            // than leaving the edit in localStorage only.
+            bypassSaveAllBunks([bunk]);
         }
         peiUpdateRotationHistory(bunk);
         // No setTimeout needed — markPostEditInProgress's cancelable timer
