@@ -14752,7 +14752,16 @@
             //   So assign each grade's band by LPT bin-packing: heaviest grade first,
             //   into whichever band position currently carries the fewest bunks. Swim is
             //   excluded — it already has its own round-robin override below.
-            var _blbOn = true; try { _blbOn = (typeof window === 'undefined') || (window.__bandLoadBalance !== false); } catch (_eB0) {}
+            //   ⚠ DEFAULT OFF — the balance itself works (live: special=[13,13,12] bunks
+            //   per band, vs 16/14/8 before) but it did NOT pay off in fill. Same build,
+            //   one run each: ON → 440min dead / 31-38, OFF → 390min / 31-38. That sits
+            //   inside this build's observed 390-440 run-to-run swing, so it is NOT
+            //   evidence either way — just no evidence it helps. Peak land only moved
+            //   32 → 30, because specials are a minority of land demand: the afternoon is
+            //   cheap mainly thanks to Main Activity/Cleanup/lunch parking ~15 bunks off
+            //   facilities entirely, which no band rotation can replicate in the morning.
+            //   Kept opt-in for a proper multi-run study: window.__bandLoadBalance = true.
+            var _blbOn = false; try { _blbOn = (typeof window !== 'undefined') && (window.__bandLoadBalance === true); } catch (_eB0) {}
             var _blbPos = {};   // grade -> { type -> bandPos }
             if (_blbOn) {
                 try {
