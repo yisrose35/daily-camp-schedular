@@ -35721,19 +35721,44 @@
         //   this function, which is where an inline version silently did nothing.
         function _runFinalBackfill() {
           try {
-            // ⚠ DEFAULT OFF — this pass VIOLATES subcat-strict as written. Turning it on
-            //   broke 8 previously-passing suites in tests/auto_full_day.test.js, notably
-            //   #24 "leaves a GENUINE OPEN slot when a subcategory pool is exhausted
-            //   (subcat-strict: no cross-subcat fill, no placeholder, NO SPORT)". Not all
-            //   uncovered time is a miss: some of it is deliberately open, and dropping a
-            //   sport into it is exactly the filler behaviour the product forbids.
-            //   The underlying finding still stands — on the live camp it placed 4 windows
-            //   / 90min on facilities that were free and rule-legal all day (Coloring and
-            //   Redrover were never used once), with 0 validator errors. To ship it on by
-            //   default it must first distinguish "never tiled" from "deliberately OPEN".
-            //   Opt in for measurement: window.__finalBackfill = true.
-            var _fbOn = false;
-            try { _fbOn = (typeof window !== 'undefined') && (window.__finalBackfill === true); } catch (_eFb0) {}
+            //   SUBCAT-STRICT: not all uncovered time is a miss. When a subcategory's own
+            //   pool is exhausted the endgame deliberately leaves GENUINE OPEN time rather
+            //   than cross-filling it — and a sport dropped in there is exactly the filler
+            //   the product forbids (tests/auto_full_day.test.js #24). The engine already
+            //   publishes those windows in __genOpenSlots {bunk,startMin,endMin,subcat},
+            //   so honour them: any window overlapping a genuine-open record is skipped.
+            //   Without this guard the pass broke 8 suites; with it, it only touches time
+            //   that was never tiled by anything.
+            var _fbOn = true;
+            try { _fbOn = (typeof window === 'undefined') || (window.__finalBackfill !== false); } catch (_eFb0) {}
+            var _fbOpen = [];
+            try {
+                var _fbSrc = (typeof _genOpenSlots !== 'undefined' && Array.isArray(_genOpenSlots)) ? _genOpenSlots
+                           : ((typeof window !== 'undefined' && Array.isArray(window.__genOpenSlots)) ? window.__genOpenSlots : []);
+                _fbOpen = _fbSrc || [];
+            } catch (_eFbO) { _fbOpen = []; }
+            //   ★ SPORTLESS GUARD: this pass fills from the FIELD catalog, i.e. with
+            //   sports. A grade with no sport layer must never receive one — several
+            //   scenarios exist precisely to assert that (e.g. "injects NO field-catalog
+            //   sports when the camp has no sport layer", "builds a fully GAPLESS
+            //   SPORTLESS day"). Map bunk → grade once and skip any bunk whose grade has
+            //   no sport layer.
+            var _fbGradeOf = {};
+            try {
+                Object.keys(divisions || {}).forEach(function (g) {
+                    (getBunksForGrade(g, divisions) || []).forEach(function (bk) { _fbGradeOf[String(bk)] = g; });
+                });
+            } catch (_eFbG) {}
+            var _fbGradeOkCache = {};
+            var _fbGradeAllowsSport = function (bk) {
+                var g = _fbGradeOf[String(bk)];
+                if (g == null) return false;                       // unknown grade → don't guess
+                if (_fbGradeOkCache[g] != null) return _fbGradeOkCache[g];
+                var ok = true;
+                try { if (typeof gradeHasSportLayer === 'function') ok = !!gradeHasSportLayer(g); } catch (_eFbS) { ok = false; }
+                _fbGradeOkCache[g] = ok;
+                return ok;
+            };
             if (_fbOn && window.scheduleAssignments && window.SchedulingRules) {
                 var _fbGs = getGlobalSettings() || {};
                 var _fbSkip = { 'Pool': 1, 'Lunch Room': 1, 'Cleanup': 1 };
@@ -35756,6 +35781,7 @@
                         Object.keys(_fbSA).forEach(function (bk) {
                             var arr = _fbSA[bk];
                             if (!Array.isArray(arr)) return;
+                            if (!_fbGradeAllowsSport(bk)) return;   // sportless grade — never inject a sport
                             var rs = arr.filter(function (r) { return r && r._startMin != null; })
                                         .sort(function (a, b) { return a._startMin - b._startMin; });
                             var holes = [], cur = _fbDayS;
@@ -35771,6 +35797,14 @@
                                 // re-check: an earlier hole in this pass may already cover it
                                 for (var _lc = 0; _lc < live.length; _lc++) {
                                     if (live[_lc]._startMin < e && live[_lc]._endMin > s) return;
+                                }
+                                // ★ SUBCAT-STRICT GUARD: never touch time the endgame left
+                                //   deliberately OPEN because a subcategory pool ran dry.
+                                for (var _go = 0; _go < _fbOpen.length; _go++) {
+                                    var _g = _fbOpen[_go];
+                                    if (!_g) continue;
+                                    if (String(_g.bunk) !== String(bk)) continue;
+                                    if (_g.startMin < e && _g.endMin > s) { _fbNoCand++; return; }
                                 }
                                 var tmpl = live.map(function (r) {
                                     return { type: r.type, event: r._activity || r.field, sport: r.sport,
