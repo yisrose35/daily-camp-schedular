@@ -20756,6 +20756,8 @@
 
                     var _glElapsed = ((Date.now() - startTime) / 1000).toFixed(2);
                     log('[GENERIC-LAYOUT] ✅ COMPLETE in ' + _glElapsed + 's — ' + _glOut.stats.windowsTiled + '/' + _glOut.stats.windowsConsidered + ' free windows tiled, ' + _glOut.stats.tilesPlaced + ' generic tiles placed, ' + _glOut.stats.bunksFullyTiled + '/' + _glOut.stats.bunks + ' bunks fully wall-to-wall, ' + _glOut.stats.unmetSpecialFloors + ' unmet special floor(s), ' + (_glOut.stats.unmetFloors || 0) + ' unmet floor(s) total, ' + _glInjectedSwim + ' swim + ' + _glInjectedLayer + ' other deferred layer(s) re-floated, sharing watched on ' + _glShareFacs + ' facility(ies)/' + _glShareResv + ' placement(s)');
+                    // ★ Last chance to cover leftover time before this path returns.
+                    try { _runFinalBackfill(); } catch (_eFbGl) {}
                     try { window.dispatchEvent(new CustomEvent('campistry-generation-complete', { detail: { mode: 'auto', version: VERSION, elapsed: _glElapsed, warnings: warnings, dateKey: (currentDate || window.currentScheduleDate || ''), genericLayout: true } })); } catch (_glEv) {}
                     return true; // ← early return: skip ALL activity-assignment phases
                 }
@@ -35714,9 +35716,24 @@
         //   the block (so cooldowns/spacing still bind), and never repeats an activity the
         //   bunk already has today. Live: filled 4 holes / 90 min with 0 validator errors
         //   and 0 capacity violations. Toggle with window.__finalBackfill = false.
-        try {
-            var _fbOn = true;
-            try { _fbOn = (typeof window === 'undefined') || (window.__finalBackfill !== false); } catch (_eFb0) {}
+        //   Declared as a hoisted function so it can be invoked from EVERY exit path —
+        //   the generic-layout path returns early (:20760) and never reaches the tail of
+        //   this function, which is where an inline version silently did nothing.
+        function _runFinalBackfill() {
+          try {
+            // ⚠ DEFAULT OFF — this pass VIOLATES subcat-strict as written. Turning it on
+            //   broke 8 previously-passing suites in tests/auto_full_day.test.js, notably
+            //   #24 "leaves a GENUINE OPEN slot when a subcategory pool is exhausted
+            //   (subcat-strict: no cross-subcat fill, no placeholder, NO SPORT)". Not all
+            //   uncovered time is a miss: some of it is deliberately open, and dropping a
+            //   sport into it is exactly the filler behaviour the product forbids.
+            //   The underlying finding still stands — on the live camp it placed 4 windows
+            //   / 90min on facilities that were free and rule-legal all day (Coloring and
+            //   Redrover were never used once), with 0 validator errors. To ship it on by
+            //   default it must first distinguish "never tiled" from "deliberately OPEN".
+            //   Opt in for measurement: window.__finalBackfill = true.
+            var _fbOn = false;
+            try { _fbOn = (typeof window !== 'undefined') && (window.__finalBackfill === true); } catch (_eFb0) {}
             if (_fbOn && window.scheduleAssignments && window.SchedulingRules) {
                 var _fbGs = getGlobalSettings() || {};
                 var _fbSkip = { 'Pool': 1, 'Lunch Room': 1, 'Cleanup': 1 };
@@ -35802,7 +35819,9 @@
                     log('[FINAL-BACKFILL] no uncovered window was fillable (' + _fbNoCand + ' examined)');
                 }
             }
-        } catch (_eFb) { try { warn('[FINAL-BACKFILL] skipped — ' + (_eFb && _eFb.message)); } catch (_e9) {} }
+          } catch (_eFb) { try { warn('[FINAL-BACKFILL] skipped — ' + (_eFb && _eFb.message)); } catch (_e9) {} }
+        }
+        _runFinalBackfill();   // tail path (non generic-layout runs)
 
         try {
             const _preTripAbs = tripWriteCount;
