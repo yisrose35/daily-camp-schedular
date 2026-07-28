@@ -5919,10 +5919,25 @@ if (bypassStatus.highlight) {
                     <button id="post-edit-cancel" style="flex:1;padding:11px;border:1px solid #d1d5db;border-radius:8px;background:white;color:#374151;font-size:0.95rem;cursor:pointer;font-weight:500;">Cancel</button>
                     <button id="post-edit-save" style="flex:1;padding:11px;border:none;border-radius:8px;background:#2563eb;color:white;font-size:0.95rem;cursor:pointer;font-weight:600;">Save Changes</button>
                 </div>
+                ${slots.length > 0 && window.scheduleAssignments?.[bunk]?.[slots[0]]
+                    ? `<button id="post-edit-erase" style="width:100%;margin-top:10px;padding:9px;border:1px solid #fecaca;border-radius:8px;background:#fff;color:#b91c1c;font-size:0.88rem;cursor:pointer;font-weight:600;">🗑 Erase this activity</button>
+                       <div style="font-size:0.72rem;color:#9ca3af;margin-top:5px;text-align:center;">Clears the slot and stops it counting toward rotation. Ctrl+Z undoes it.</div>`
+                    : ''}
             </div>`;
 
         document.getElementById('post-edit-close').onclick = closeModal;
         document.getElementById('post-edit-cancel').onclick = closeModal;
+
+        // Erase — "it isn't happening". Distinct from choosing "Leave empty
+        // (Free)", which writes a Free entry into the slot; this clears it
+        // outright and hands the activity's rotation credit back.
+        const _eraseBtn = document.getElementById('post-edit-erase');
+        if (_eraseBtn) _eraseBtn.onclick = () => {
+            const _entry = window.scheduleAssignments?.[bunk]?.[slots[0]];
+            const _name = (_entry && (_entry._activity || _entry.field)) || 'this activity';
+            closeModal();
+            window.PostEditInteractions?.deleteBlock?.(bunk, slots[0], divName, _name);
+        };
 
         document.getElementById('post-edit-autochange').onclick = () => {
             const pick = computeAutoChangeCandidate(bunk, startMin, endMin);

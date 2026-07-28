@@ -795,6 +795,136 @@
     return { ok: true, message: g.teams + (undo ? ' — restored (played)' : ' — marked as did not play') };
   };
 
+  // ── ERASE (the game is off — take it off the schedule entirely) ────────────
+  // "Did not play" keeps the game visible with a red ✗. ERASE is the Excel
+  // move: the game isn't happening, so rub it out. We splice the matchup from
+  // every store that holds it; when a slot loses its LAST matchup the whole
+  // league block is cleared so the time reads as free and can be re-filled.
+  // History is rolled back exactly like a did-not-play mark, and the field lock
+  // is released (unlike did-not-play, nothing is sitting on that field anymore).
+  PEFC.removeGame = function (ctx) {
+    if (!ctx || !ctx.game) return { ok: false, message: 'Nothing to erase.' };
+    var g = ctx.game;
+    var field = g.field, A = g.teamA, B = g.teamB, sport = g.sport;
+    var key = PEFC.dnpKey(A, B, field);
+
+    // Match ONLY this game: same unordered team pair AND on the field it sits on,
+    // so a double-header (same teams twice on two fields) loses just one leg.
+    function isTarget(p) { return PEFC.isEditableMatchup(p) && sameTeams(p, g) && norm(p.field) === norm(field); }
+    function isTargetObj(o) { var t = { teamA: o.teamA || o.team1, teamB: o.teamB || o.team2 }; return sameTeams(t, g) && norm(o.field) === norm(field); }
+    function matchesItem(it) {
+      if (typeof it === 'string') return isTarget(PEFC.parseMatchup(it));
+      return !!(it && (it.teamA || it.team1) && isTargetObj(it));
+    }
+
+    // Splice the game out of one store entry. Returns true when it changed.
+    function strip(entry) {
+      var changed = false;
+      ['_allMatchups', 'matchups'].forEach(function (k) {
+        if (!Array.isArray(entry[k])) return;
+        var kept = entry[k].filter(function (it) { return !matchesItem(it); });
+        if (kept.length !== entry[k].length) { entry[k] = kept; changed = true; }
+      });
+      if (Array.isArray(entry._assignments)) {
+        var keptA = entry._assignments.filter(function (a) { return !(a && isTargetObj(a)); });
+        if (keptA.length !== entry._assignments.length) { entry._assignments = keptA; changed = true; }
+      }
+      // Drop any did-not-play tag for the erased game so re-adding it starts clean.
+      if (changed && Array.isArray(entry._didNotPlay)) {
+        var at = entry._didNotPlay.indexOf(key);
+        if (at !== -1) { entry._didNotPlay.splice(at, 1); if (!entry._didNotPlay.length) delete entry._didNotPlay; }
+      }
+      return changed;
+    }
+    // An entry that held ONLY this game is now an empty league shell — the block
+    // must disappear, not render as a header with no matchups under it.
+    function isEmptyNow(entry) {
+      return !(Array.isArray(entry._allMatchups) && entry._allMatchups.length) &&
+             !(Array.isArray(entry.matchups) && entry.matchups.length) &&
+             !(Array.isArray(entry._assignments) && entry._assignments.length);
+    }
+
+    var touchedBunks = [], foundAny = false, changedAny = false;
+
+    // (1) Per-bunk scheduleAssignments. In AUTO mode the same game can sit at a
+    //     different slot index per bunk, so scan the whole row.
+    var sa = window.scheduleAssignments || {};
+    for (var bunk in sa) {
+      if (!Object.prototype.hasOwnProperty.call(sa, bunk)) continue;
+      var row = sa[bunk]; if (!Array.isArray(row)) continue;
+      var changed = false;
+      for (var si = 0; si < row.length; si++) {
+        var entry = row[si]; if (!entry) continue;
+        if (!strip(entry)) continue;
+        foundAny = true; changed = true;
+        if (isEmptyNow(entry)) {
+          // Clear the primary slot and every continuation that trails it.
+          row[si] = null;
+          for (var c = si + 1; c < row.length; c++) {
+            if (row[c] && row[c].continuation) row[c] = null; else break;
+          }
+        }
+      }
+      if (changed) { touchedBunks.push(bunk); changedAny = true; }
+    }
+
+    // (2) leagueAssignments — every division (connected grades share the game).
+    var laAll = window.leagueAssignments || {};
+    Object.keys(laAll).forEach(function (dn) {
+      var la = laAll[dn]; if (!la) return;
+      Object.keys(la).forEach(function (slotKey) {
+        var laEntry = la[slotKey]; if (!laEntry) return;
+        if (!strip(laEntry)) return;
+        foundAny = true; changedAny = true;
+        if (isEmptyNow(laEntry)) delete la[slotKey];
+      });
+    });
+
+    if (!foundAny) return { ok: false, message: 'Game not found.' };
+
+    // (3) Rotation / variety history — the game never happened.
+    var dateKey = window._scheduleAssignmentsDate || window.currentScheduleDate;
+    if (ctx.kind === 'specialty') {
+      try { removeSpecialtyGameLog(ctx); }
+      catch (e) { console.warn('[PEFC] specialty gameLog erase skipped:', e); }
+    } else {
+      try {
+        if (window.SchedulerCoreLeagues && typeof window.SchedulerCoreLeagues.editGameRecord === 'function') {
+          window.SchedulerCoreLeagues.editGameRecord(ctx.leagueName, dateKey, { teamA: A, teamB: B, sport: sport }, null);
+        }
+      } catch (e) { console.warn('[PEFC] league rotation erase skipped:', e); }
+    }
+
+    // (4) Release the field — nothing is on it any more, so a later edit or
+    //     regen is free to use it.
+    try {
+      var GFL = window.GlobalFieldLocks;
+      if (GFL && typeof GFL.unlockField === 'function' && field) GFL.unlockField(field, ctx.slots);
+    } catch (e) { console.warn('[PEFC] lock release skipped:', e); }
+
+    // (5) Persist + re-render — same channels as markDidNotPlay.
+    try {
+      if (typeof window.saveCurrentDailyData === 'function') {
+        window.saveCurrentDailyData('scheduleAssignments', window.scheduleAssignments);
+        window.saveCurrentDailyData('leagueAssignments', window.leagueAssignments || {});
+      }
+      if (typeof window.bypassSaveAllBunks === 'function' && touchedBunks.length) {
+        Promise.resolve(window.bypassSaveAllBunks(touchedBunks)).catch(function (e) { console.warn('[PEFC] cloud save:', e); });
+      }
+      if (window.ScheduleDB && typeof window.ScheduleDB.saveSchedule === 'function' && dateKey) {
+        Promise.resolve(window.ScheduleDB.saveSchedule(dateKey, {
+          scheduleAssignments: window.scheduleAssignments,
+          leagueAssignments: window.leagueAssignments || {},
+          divisionTimes: (window.DivisionTimesSystem && typeof window.DivisionTimesSystem.serialize === 'function')
+            ? window.DivisionTimesSystem.serialize(window.divisionTimes) : window.divisionTimes
+        }, { immediate: true, forceSync: true })).catch(function (e) { console.warn('[PEFC] league cloud save:', e); });
+      }
+    } catch (e) { console.warn('[PEFC] persist:', e); }
+    if (typeof window.updateTable === 'function') { try { window.updateTable(); } catch (e) {} }
+
+    return { ok: true, changed: changedAny, message: g.teams + ' — erased' };
+  };
+
   // ── MODAL UI ─────────────────────────────────────────────────────────────
   var OVERLAY_ID = 'pefc-overlay';
   function closeModal() { var el = document.getElementById(OVERLAY_ID); if (el) el.remove(); }
@@ -1078,6 +1208,12 @@
       (isDnp
         ? 'Currently marked did-not-play (shown with a red ✗). Restores it and re-counts it toward rotation.'
         : 'Keeps the game visible with a red ✗ and tells the program it didn’t happen (won’t count toward rotation or variety).') +
+      '</div>' +
+      // Erase — the Excel move. The game comes off the schedule completely and
+      // the time frees up, instead of staying visible with a ✗.
+      '<button id="pefc-erase" style="width:100%;margin-top:10px;padding:9px;border:1.5px solid #e5e7eb;border-radius:8px;background:#fff;color:#6b7280;font-size:0.85rem;font-weight:600;cursor:pointer;">🗑 Erase this game</button>' +
+      '<div style="font-size:0.72rem;color:#9ca3af;margin-top:5px;text-align:center;">' +
+      'Removes it from the schedule entirely and frees up ' + esc(ctx.game.field || 'the field') + '. Use this when the game is off, not just unplayed.' +
       '</div></div>';
 
     var box = shell(header('Edit league game') +
@@ -1175,6 +1311,15 @@
       toast(res.message, res.noop ? 'info' : 'success');
     };
 
+    var eraseBtn = box.querySelector('#pefc-erase');
+    if (eraseBtn) eraseBtn.onclick = function () {
+      if (!confirmErase(ctx.game)) return;
+      var res = PEFC.removeGame(ctx);
+      if (!res.ok) { toast(res.message, 'warning'); return; }
+      closeModal();
+      toast(res.message, 'success');
+    };
+
     var keepBtn = box.querySelector('#pefc-keep-field');
     if (keepBtn) keepBtn.onclick = function () {
       // The note saves independently — a note-only edit must commit even though
@@ -1237,6 +1382,30 @@
     } else if (ctx.games.length === 1) { ctx.game = ctx.games[0]; showFieldPicker(ctx); }
     else showGamePicker(ctx);
     return true;
+  };
+
+  // One shared confirm so the modal button and the grid's hover ✕ read the same.
+  function confirmErase(game) {
+    var teams = (game && game.teams) || 'this game';
+    var msg = 'Erase "' + teams + '" from the schedule?\n\n' +
+      'It comes off every schedule and print-out, the field frees up, and it stops counting ' +
+      'toward rotation and variety.\n\n' +
+      'If it was supposed to happen and simply didn’t, use "Did not play" instead — that keeps it visible with a red ✗.';
+    return (typeof window.confirm === 'function') ? window.confirm(msg) : true;
+  }
+
+  // One-click erase straight off a grid matchup card — no modal round-trip.
+  // gameSeed = { teamA, teamB, field, sport } parsed from the clicked card.
+  PEFC.eraseGame = function (divName, slotIdx, gameSeed, entryHint, opts) {
+    var ctx = buildSlotContext(divName, slotIdx, entryHint);
+    if (!ctx) { toast('No editable game found in this slot.', 'warning'); return false; }
+    var match = gameSeed ? ctx.games.filter(function (g) { return sameTeams(g, gameSeed); })[0] : null;
+    ctx.game = match || ctx.games[0];
+    if (!ctx.game) { toast('No editable game found in this slot.', 'warning'); return false; }
+    if (!(opts && opts.skipConfirm) && !confirmErase(ctx.game)) return false;
+    var res = PEFC.removeGame(ctx);
+    toast(res.message, res.ok ? 'success' : 'warning');
+    return !!res.ok;
   };
 
   // Is this entry one the field-change modal handles? (used by the edit router)

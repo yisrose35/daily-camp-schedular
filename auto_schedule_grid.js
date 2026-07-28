@@ -448,14 +448,32 @@
         if (!isEditable || !PEFC || ls.slotIdx == null) return;
         var seed = PEFC.normalizeGame(raw, ls.sport, ls.isSpecialty);
         if (!PEFC.isEditableMatchup(seed)) return; // skip bye / chinuch / unknown
+        var hint = {
+            _startMin: ls.startMin, _endMin: ls.endMin, _allMatchups: ls.matchups,
+            sport: ls.sport, _leagueName: ls.leagueName, _isSpecialtyLeague: ls.isSpecialty
+        };
         card.style.cursor = 'pointer';
         card.title = 'Click to change this game\'s field';
         card.addEventListener('click', function (e) {
             e.stopPropagation();
-            PEFC.openGame(divName, ls.slotIdx, seed, {
-                _startMin: ls.startMin, _endMin: ls.endMin, _allMatchups: ls.matchups,
-                sport: ls.sport, _leagueName: ls.leagueName, _isSpecialtyLeague: ls.isSpecialty
-            });
+            PEFC.openGame(divName, ls.slotIdx, seed, hint);
+        });
+
+        // Hover ✕ — a game that's off gets rubbed out in one click, the same way
+        // it would on a paper or Excel schedule. The modal still carries the
+        // slower "did not play" option for games that were meant to happen.
+        if (typeof PEFC.eraseGame !== 'function') return;
+        card.style.position = 'relative';
+        var x = document.createElement('button');
+        x.className = 'asg-game-erase';
+        x.type = 'button';
+        x.innerHTML = '&times;';
+        x.title = 'Erase this game';
+        x.setAttribute('aria-label', 'Erase this game');
+        card.appendChild(x);
+        x.addEventListener('click', function (e) {
+            e.stopPropagation();
+            PEFC.eraseGame(divName, ls.slotIdx, seed, hint);
         });
     }
 
@@ -488,6 +506,64 @@
 
         // Only return gaps large enough to be meaningful (≥10 min)
         return gaps.filter(function (g) { return g.endMin - g.startMin >= 10; });
+    }
+
+    // ─────────────────────────────────────────────
+    // DAY BOUNDS — the window the grid draws
+    // ─────────────────────────────────────────────
+    // The configured start/end time is the FLOOR, not a ceiling. Blocks carry
+    // their own _startMin/_endMin and a post-edit is allowed to stretch one past
+    // the configured end of day ("swim ran long, push everything back 20") — so
+    // the drawn window grows to cover whatever is actually scheduled instead of
+    // clipping it off the right-hand edge. Grown edges round out to a clean
+    // 15-minute mark so the ruler still reads sensibly.
+    function parseTimeValue(v) {
+        if (typeof v === 'number') return v;
+        return window.SchedulerCoreUtils?.parseTimeToMinutes?.(v) ||
+               window.AutoBuildEngine?.parseTime?.(v) || null;
+    }
+
+    function computeDayBounds(divName, divInfo) {
+        var divConfig = (window.divisions || {})[divName] || divInfo || {};
+        var cfgStart = parseTimeValue(divConfig.startTime) || 540;
+        var cfgEnd = parseTimeValue(divConfig.endTime) || 960;
+        var start = cfgStart, end = cfgEnd;
+        try {
+            (divConfig.bunks || []).forEach(function (b) {
+                getBunkActivities(String(b), divName).forEach(function (a) {
+                    if (typeof a.startMin === 'number' && a.startMin < start) start = a.startMin;
+                    if (typeof a.endMin === 'number' && a.endMin > end) end = a.endMin;
+                });
+            });
+        } catch (e) { /* bounds are best-effort — never block a render */ }
+        if (start < cfgStart) start = Math.floor(start / 15) * 15;
+        if (end > cfgEnd) end = Math.ceil(end / 15) * 15;
+        if (end <= start) end = start + 60;
+        return { start: start, end: end, cfgStart: cfgStart, cfgEnd: cfgEnd };
+    }
+
+    // Shared with post_edit_system.js so a drag and the render agree on where
+    // the day currently ends.
+    window.ScheduleDayBounds = { get: computeDayBounds };
+
+    // ─────────────────────────────────────────────
+    // BLOCK IDENTITY STAMP
+    // ─────────────────────────────────────────────
+    // post_edit_system.js used to match a rendered block back to its schedule
+    // entry POSITIONALLY (nth block ↔ nth activity), rebuilding its own activity
+    // list with slightly different filters than the ones used here. Any Free /
+    // transition / multi-segment slot drifted the two lists apart, and an erase
+    // or resize then landed on the neighbouring activity. Stamping the identity
+    // at render time removes the guesswork — the editor reads what was drawn.
+    function stampBlockIdentity(blk, bunk, divName, act) {
+        blk.dataset.asgBunk = String(bunk);
+        blk.dataset.asgDivision = String(divName);
+        blk.dataset.asgSlotIdx = String(act.slotIdx);
+        blk.dataset.asgStartMin = String(act.startMin);
+        blk.dataset.asgEndMin = String(act.endMin);
+        blk.dataset.asgActivity = String(act.entry?._activity || act.entry?.field || '');
+        blk.dataset.asgField = String(act.entry?.field || '');
+        if (act.segIdx != null) blk.dataset.asgSegIdx = String(act.segIdx);
     }
 
     // ─────────────────────────────────────────────
@@ -746,6 +822,24 @@
     padding: 3px 8px;
     flex-shrink: 0;
 }
+/* Hover ✕ on a matchup card — one-click erase for a game that's off. */
+.asg-game-erase {
+    /* Sits INSIDE the card — .asg-matchup-card clips overflow for its sport pill. */
+    position: absolute; top: 1px; right: 1px;
+    width: 15px; height: 15px; padding: 0;
+    border: 1px solid #fecaca; border-radius: 50%;
+    background: #fff; color: #dc2626;
+    font-size: 13px; font-weight: 700; line-height: 1;
+    display: flex; align-items: center; justify-content: center;
+    cursor: pointer; opacity: 0; pointer-events: none;
+    transition: opacity .15s, background .15s, transform .12s;
+    box-shadow: 0 1px 4px rgba(0,0,0,.18); z-index: 6;
+}
+.asg-matchup-card:hover .asg-game-erase,
+.asg-tx-matchup-card:hover .asg-game-erase,
+.asg-game-erase:focus-visible { opacity: 1; pointer-events: auto; }
+.asg-game-erase:hover { background: #fee2e2; transform: scale(1.12); }
+@media (pointer: coarse) { .asg-game-erase { opacity: 1; pointer-events: auto; } }
 .asg-matchup-sport-pill {
     display: flex; align-items: center; justify-content: center;
     background: #e0f2fe;
@@ -810,8 +904,9 @@
             return window.SchedulerCoreUtils?.parseTimeToMinutes?.(v) ||
                    window.AutoBuildEngine?.parseTime?.(v) || null;
         }
-        var dayStart = parseTime(divConfig.startTime) || 540;
-        var dayEnd   = parseTime(divConfig.endTime)   || 960;
+        var _bounds  = computeDayBounds(divName, divInfo);
+        var dayStart = _bounds.start;
+        var dayEnd   = _bounds.end;
         var totalMin = dayEnd - dayStart;
         var totalW   = totalMin * PX_PER_MIN; // legacy — used as a min-width floor only
         // Percentage helpers — make the grid stretch to fill the container so
@@ -947,6 +1042,7 @@
 
                 var blk = document.createElement('div');
                 blk.className = 'asg-tx-block' + (isEditable ? ' asg-editable' : '');
+                stampBlockIdentity(blk, bunk, divName, act);
                 blk.style.cssText = [
                     'left:' + pctL(act.startMin) + '%',
                     'width:calc(' + pctW(act.duration) + '% - 2px)',
@@ -1166,8 +1262,9 @@
             return window.SchedulerCoreUtils?.parseTimeToMinutes?.(v) ||
                    window.AutoBuildEngine?.parseTime?.(v) || null;
         }
-        var dayStart = parseTime(divConfig.startTime) || 540;
-        var dayEnd   = parseTime(divConfig.endTime)   || 960;
+        var _bounds  = computeDayBounds(divName, divInfo);
+        var dayStart = _bounds.start;
+        var dayEnd   = _bounds.end;
         var totalMin = dayEnd - dayStart;
         var totalH   = totalMin * PX_PER_MIN;
 
@@ -1413,6 +1510,7 @@
 
                 var blk = document.createElement('div');
                 blk.className = 'asg-block' + (isEditable ? ' asg-editable' : '');
+                stampBlockIdentity(blk, bunk, divName, act);
                 blk.style.cssText = [
                     'position:absolute',
                     'top:' + (blockTop + 2) + 'px',

@@ -595,3 +595,144 @@ test('markDidNotPlay — no matching game leaves stores untouched and reports no
   assert.strictEqual(res.ok, false);
   assert.ok(!window.leagueAssignments.Majors[1]._didNotPlay);
 });
+
+// ── removeGame — the game is off, rub it out ────────────────────────────────
+// "Did not play" keeps the game visible with a red ✗ for a game that was meant
+// to happen. removeGame is the other case: it isn't happening at all, so it
+// comes off every store, the field frees up, and the history stops counting it.
+
+test('removeGame — splices only the target game and leaves the rest of the slot', () => {
+  global.window.scheduleAssignments = {
+    BunkA: [null, { _h2h: true, _allMatchups: ['Lions vs Tigers @ Field A (Soccer)', 'Bears vs Wolves @ Field C (Soccer)'] }],
+    BunkB: [null, { _h2h: true, _allMatchups: ['Lions vs Tigers @ Field A (Soccer)', 'Bears vs Wolves @ Field C (Soccer)'] }],
+  };
+  global.window.leagueAssignments = {
+    Majors: { 1: { _allMatchups: ['Lions vs Tigers @ Field A (Soccer)', 'Bears vs Wolves @ Field C (Soccer)'] } },
+  };
+  const unlocked = [];
+  global.window.GlobalFieldLocks = { unlockField: (f) => unlocked.push(f), lockField: () => true, isFieldLockedByTime: () => null };
+  delete global.window.SchedulerCoreLeagues;
+
+  const ctx = {
+    kind: 'regular', divName: 'Majors', slotIdx: 1, slots: [1], leagueName: 'Majors League',
+    game: { teamA: 'Lions', teamB: 'Tigers', teams: 'Lions vs Tigers', field: 'Field A', sport: 'Soccer' },
+  };
+  const res = PEFC.removeGame(ctx);
+
+  assert.strictEqual(res.ok, true);
+  // Gone from every store that held it — both bunks and the division record.
+  assert.deepStrictEqual(window.scheduleAssignments.BunkA[1]._allMatchups, ['Bears vs Wolves @ Field C (Soccer)']);
+  assert.deepStrictEqual(window.scheduleAssignments.BunkB[1]._allMatchups, ['Bears vs Wolves @ Field C (Soccer)']);
+  assert.deepStrictEqual(window.leagueAssignments.Majors[1]._allMatchups, ['Bears vs Wolves @ Field C (Soccer)']);
+  // The slot still holds another game, so the block stays.
+  assert.ok(window.scheduleAssignments.BunkA[1]);
+  // The field it was on is released.
+  assert.deepStrictEqual(unlocked, ['Field A']);
+});
+
+test('removeGame — clearing the last matchup empties the slot so the time reads free', () => {
+  global.window.scheduleAssignments = {
+    BunkA: [
+      null,
+      { _h2h: true, _allMatchups: ['Lions vs Tigers @ Field A (Soccer)'] },
+      { _h2h: true, continuation: true },
+      { _activity: 'Art' },
+    ],
+  };
+  global.window.leagueAssignments = { Majors: { 1: { _allMatchups: ['Lions vs Tigers @ Field A (Soccer)'] } } };
+  global.window.GlobalFieldLocks = { unlockField: () => {}, lockField: () => true, isFieldLockedByTime: () => null };
+  delete global.window.SchedulerCoreLeagues;
+
+  const ctx = {
+    kind: 'regular', divName: 'Majors', slotIdx: 1, slots: [1], leagueName: 'Majors League',
+    game: { teamA: 'Lions', teamB: 'Tigers', teams: 'Lions vs Tigers', field: 'Field A', sport: 'Soccer' },
+  };
+  assert.strictEqual(PEFC.removeGame(ctx).ok, true);
+
+  assert.strictEqual(window.scheduleAssignments.BunkA[1], null, 'empty league shell cleared');
+  assert.strictEqual(window.scheduleAssignments.BunkA[2], null, 'its continuation cleared too');
+  assert.ok(window.scheduleAssignments.BunkA[3], 'the next activity is untouched');
+  assert.strictEqual(window.leagueAssignments.Majors[1], undefined, 'division key dropped');
+});
+
+test('removeGame — rolls the game back out of league history', () => {
+  const edits = [];
+  global.window.scheduleAssignments = { BunkA: [{ _h2h: true, _allMatchups: ['Lions vs Tigers @ Field A (Soccer)'] }] };
+  global.window.leagueAssignments = {};
+  global.window.GlobalFieldLocks = { unlockField: () => {}, lockField: () => true, isFieldLockedByTime: () => null };
+  global.window.currentScheduleDate = '2026-07-02';
+  global.window.SchedulerCoreLeagues = {
+    editGameRecord: (league, date, oldG, newG) => edits.push({ league, date, oldG, newG }),
+  };
+
+  const ctx = {
+    kind: 'regular', divName: 'Majors', slotIdx: 0, slots: [0], leagueName: 'Majors League',
+    game: { teamA: 'Lions', teamB: 'Tigers', teams: 'Lions vs Tigers', field: 'Field A', sport: 'Soccer' },
+  };
+  assert.strictEqual(PEFC.removeGame(ctx).ok, true);
+
+  assert.strictEqual(edits.length, 1);
+  assert.strictEqual(edits[0].date, '2026-07-02');
+  assert.deepStrictEqual(edits[0].oldG, { teamA: 'Lions', teamB: 'Tigers', sport: 'Soccer' });
+  assert.strictEqual(edits[0].newG, null, 'subtracted, not replaced');
+  delete global.window.SchedulerCoreLeagues;
+});
+
+test('removeGame — a double-header loses only the leg on the named field', () => {
+  global.window.scheduleAssignments = {
+    BunkA: [{ _h2h: true, _allMatchups: ['Lions vs Tigers @ Field A (Soccer)', 'Lions vs Tigers @ Field B (Soccer)'] }],
+  };
+  global.window.leagueAssignments = {};
+  global.window.GlobalFieldLocks = { unlockField: () => {}, lockField: () => true, isFieldLockedByTime: () => null };
+  delete global.window.SchedulerCoreLeagues;
+
+  const ctx = {
+    kind: 'regular', divName: 'Majors', slotIdx: 0, slots: [0], leagueName: 'L',
+    game: { teamA: 'Lions', teamB: 'Tigers', teams: 'Lions vs Tigers', field: 'Field A', sport: 'Soccer' },
+  };
+  assert.strictEqual(PEFC.removeGame(ctx).ok, true);
+  assert.deepStrictEqual(window.scheduleAssignments.BunkA[0]._allMatchups, ['Lions vs Tigers @ Field B (Soccer)']);
+});
+
+test('removeGame — no matching game leaves stores untouched and reports not-found', () => {
+  global.window.scheduleAssignments = { BunkA: [{ _h2h: true, _allMatchups: ['Bears vs Wolves @ Field C (Soccer)'] }] };
+  global.window.leagueAssignments = {};
+  global.window.GlobalFieldLocks = { unlockField: () => {}, lockField: () => true, isFieldLockedByTime: () => null };
+  delete global.window.SchedulerCoreLeagues;
+
+  const ctx = {
+    kind: 'regular', divName: 'Majors', slotIdx: 0, slots: [0], leagueName: 'L',
+    game: { teamA: 'Lions', teamB: 'Tigers', teams: 'Lions vs Tigers', field: 'Field A', sport: 'Soccer' },
+  };
+  const res = PEFC.removeGame(ctx);
+  assert.strictEqual(res.ok, false);
+  assert.deepStrictEqual(window.scheduleAssignments.BunkA[0]._allMatchups, ['Bears vs Wolves @ Field C (Soccer)']);
+});
+
+test('removeGame — specialty: structured assignments and the gameLog both drop it', () => {
+  const saved = {};
+  global.window.scheduleAssignments = {
+    BunkA: [{ _isSpecialtyLeague: true, _allMatchups: ['Red vs Blue — Court 1'], _assignments: [{ teamA: 'Red', teamB: 'Blue', field: 'Court 1' }] }],
+  };
+  global.window.leagueAssignments = {
+    DivX: { 0: { isSpecialtyLeague: true, matchups: [{ teamA: 'Red', teamB: 'Blue', field: 'Court 1' }] } },
+  };
+  global.window.GlobalFieldLocks = { unlockField: () => {}, lockField: () => true, isFieldLockedByTime: () => null };
+  global.window.currentScheduleDate = '2026-07-01';
+  global.window.loadGlobalSettings = () => ({
+    specialtyLeagues: [{ id: 'L9', name: 'Hoops League' }],
+    specialtyLeagueHistory: { gameLog: { L9: { '2026-07-01': [{ tA: 'Red', tB: 'Blue', field: 'Court 1', g: 'Game 1' }] } } },
+  });
+  global.window.saveGlobalSettings = (k, v) => { saved[k] = v; };
+
+  const ctx = {
+    kind: 'specialty', divName: 'DivX', slotIdx: 0, slots: [0], leagueName: 'Hoops League',
+    game: { teamA: 'Red', teamB: 'Blue', teams: 'Red vs Blue', field: 'Court 1', sport: 'Basketball' },
+  };
+  assert.strictEqual(PEFC.removeGame(ctx).ok, true);
+
+  assert.strictEqual(window.scheduleAssignments.BunkA[0], null, 'nothing left in the slot');
+  assert.strictEqual(window.leagueAssignments.DivX[0], undefined);
+  assert.deepStrictEqual(saved.specialtyLeagueHistory.gameLog.L9['2026-07-01'], [],
+    'the bracket must not think this game happened');
+});

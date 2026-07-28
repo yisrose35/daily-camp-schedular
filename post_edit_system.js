@@ -1712,12 +1712,45 @@
 
     function peiParseTime(v) {
         if (typeof v === 'number') return v;
-        return window.SchedulerCoreUtils?.parseTimeToMinutes?.(v) || null;
+        // ★ Fall back to this file's own parser. Delegating ONLY to
+        //   SchedulerCoreUtils meant that if it hadn't loaded (or its parse
+        //   missed), every caller silently took the `|| 540 / || 960` default —
+        //   so a division configured 8:00–17:00 got dragged and clamped against
+        //   a phantom 9:00–16:00 day.
+        return window.SchedulerCoreUtils?.parseTimeToMinutes?.(v) ?? parseTimeToMinutes(v);
     }
 
     function peiGetDivForBunk(bunk) {
         return window.SchedulerCoreUtils?.getDivisionForBunk?.(bunk) ||
                window.AccessControl?.getDivisionForBunk?.(bunk) || null;
+    }
+
+    /**
+     * The window the grid is currently DRAWING for a division — which is the
+     * configured day widened to cover anything a post-edit pushed past it.
+     * Shared with auto_schedule_grid.js so a drag and the render never disagree
+     * about where the day ends. Falls back to the raw config if the grid module
+     * hasn't loaded yet.
+     */
+    function peiDayBounds(divName) {
+        const shared = window.ScheduleDayBounds?.get;
+        if (typeof shared === 'function') {
+            try {
+                const b = shared(divName);
+                if (b && typeof b.start === 'number' && typeof b.end === 'number') return b;
+            } catch (_) { /* fall through to config */ }
+        }
+        const dc = peiGetDivConfig(divName);
+        const start = peiParseTime(dc.startTime) || 540;
+        const end = peiParseTime(dc.endTime) || 960;
+        return { start, end, cfgStart: start, cfgEnd: end };
+    }
+
+    // How far past the drawn day a drag may reach. The grid grows to fit on the
+    // next render, so this only needs to stop a runaway drag — 23:55 is the wall.
+    const PEI_DAY_HARD_END = 23 * 60 + 55;
+    function peiDragLimit(bounds) {
+        return Math.min(PEI_DAY_HARD_END, Math.max(bounds.end, bounds.cfgEnd) + 240);
     }
 
     /**
@@ -1764,14 +1797,51 @@
                 if (assignments[j] && assignments[j].continuation) endIdx = j;
                 else break;
             }
+            // ★ Prefer the entry's OWN times over the period grid — that's what the
+            //   renderer draws from (auto_schedule_grid.getBunkActivities), so a
+            //   post-edit stretch stays in sync between the DOM block, its
+            //   data-pei-* attributes and the hover toolbar. Reading slot
+            //   boundaries here made every stretched block report its pre-edit
+            //   size back to the editor.
+            const startMin = (typeof entry._startMin === 'number') ? entry._startMin : slot.startMin;
+            const endMin = (typeof entry._endMin === 'number')
+                ? entry._endMin
+                : (divSlots[endIdx] ? divSlots[endIdx].endMin : slot.endMin);
             acts.push({
                 entry, slotIdx: i, endSlotIdx: endIdx,
-                startMin: slot.startMin,
-                endMin: divSlots[endIdx] ? divSlots[endIdx].endMin : slot.endMin,
-                duration: (divSlots[endIdx] ? divSlots[endIdx].endMin : slot.endMin) - slot.startMin
+                startMin, endMin,
+                duration: endMin - startMin
             });
         }
         return acts;
+    }
+
+    /**
+     * Resolve which schedule entry a rendered block belongs to.
+     *
+     * The renderer stamps data-asg-* onto every block it draws (see
+     * stampBlockIdentity in auto_schedule_grid.js) — trust that first. The
+     * positional fallback is only for blocks drawn by an older render pass; it
+     * is what used to mis-target an erase whenever the two activity lists were
+     * filtered differently (Free slots, transitions, multi-segment periods).
+     */
+    function peiResolveBlock(blk, bunkActs, bi) {
+        const stampedIdx = blk.dataset ? blk.dataset.asgSlotIdx : undefined;
+        if (stampedIdx !== undefined && stampedIdx !== '') {
+            const slotIdx = parseInt(stampedIdx, 10);
+            const start = parseInt(blk.dataset.asgStartMin, 10);
+            const end = parseInt(blk.dataset.asgEndMin, 10);
+            const hit = bunkActs.find(a => a.slotIdx === slotIdx);
+            if (hit) return hit;
+            // Stamped but not in our list (segment block) — synthesize from the stamp
+            // so the block is still editable rather than silently inert.
+            const assignments = window.scheduleAssignments?.[blk.dataset.asgBunk] || [];
+            if (assignments[slotIdx] && !isNaN(start) && !isNaN(end)) {
+                return { entry: assignments[slotIdx], slotIdx, endSlotIdx: slotIdx, startMin: start, endMin: end, duration: end - start };
+            }
+            return null;
+        }
+        return bunkActs[bi];
     }
 
     function peiMinutesToTimeString(mins) {
@@ -1869,33 +1939,253 @@
         setTimeout(() => b.remove(), showUndoHint ? 5000 : 3500);
     }
 
-    // ── Helper: mouse Y → time (position-based, not delta) ──
+    // =========================================================================
+    // HOVER TOOLBAR — erase / lengthen / shorten without opening anything
+    // =========================================================================
+    // Every edit used to cost a modal round-trip: click the block, wait for the
+    // editor, pick "Leave empty (Free)", save. The two things people actually do
+    // last-minute — rub an activity out, and give one another quarter hour — are
+    // now one click on a toolbar that follows the pointer.
+    //
+    // It floats on document.body rather than living inside the block because a
+    // block in the (default) transposed grid can be ~35px wide; nothing useful
+    // fits inside one.
+
+    let _peiToolbar = null;
+    let _peiToolbarBlock = null;
+    let _peiHoverBlock = null;
+    let _peiToolbarHideTimer = null;
+    const PEI_STEP_MINS = 15;
+
+    function peiBuildToolbar() {
+        if (_peiToolbar) return _peiToolbar;
+        const bar = document.createElement('div');
+        bar.id = 'pei-block-toolbar';
+        bar.style.cssText = 'position:fixed;z-index:100000;display:none;align-items:center;gap:2px;padding:3px;' +
+            'background:#111827;border-radius:9px;box-shadow:0 6px 22px rgba(0,0,0,0.35);' +
+            'font-family:-apple-system,BlinkMacSystemFont,sans-serif;user-select:none;';
+        bar.innerHTML =
+            '<button type="button" data-pei-act="shorter" title="15 minutes shorter" aria-label="15 minutes shorter" ' +
+            'style="border:none;background:transparent;color:#e5e7eb;font-size:15px;font-weight:700;line-height:1;' +
+            'width:24px;height:24px;border-radius:6px;cursor:pointer;">&minus;</button>' +
+            '<span data-pei-dur style="color:#9ca3af;font-size:11px;font-weight:600;min-width:38px;text-align:center;"></span>' +
+            '<button type="button" data-pei-act="longer" title="15 minutes longer (pushes the rest of the day back)" aria-label="15 minutes longer" ' +
+            'style="border:none;background:transparent;color:#e5e7eb;font-size:15px;font-weight:700;line-height:1;' +
+            'width:24px;height:24px;border-radius:6px;cursor:pointer;">+</button>' +
+            '<span style="width:1px;height:16px;background:#374151;margin:0 2px;"></span>' +
+            '<button type="button" data-pei-act="erase" title="Erase (Delete)" aria-label="Erase this activity" ' +
+            'style="border:none;background:transparent;color:#fca5a5;font-size:15px;font-weight:700;line-height:1;' +
+            'width:24px;height:24px;border-radius:6px;cursor:pointer;">&times;</button>';
+
+        // Clicks must never reach the block underneath — that would open the
+        // full edit modal on top of the action the user just took.
+        bar.addEventListener('mousedown', e => { e.preventDefault(); e.stopPropagation(); });
+        bar.addEventListener('click', e => {
+            e.preventDefault(); e.stopPropagation();
+            const btn = e.target.closest('button[data-pei-act]');
+            if (!btn || !_peiToolbarBlock) return;
+            const blk = _peiToolbarBlock;
+            const act = btn.dataset.peiAct;
+            if (act === 'erase') peiEraseFromBlock(blk);
+            else peiStretchBlockBy(blk, act === 'longer' ? PEI_STEP_MINS : -PEI_STEP_MINS);
+        });
+        // Keep it alive while the pointer is on it — it sits outside the block.
+        bar.addEventListener('mouseenter', () => { clearTimeout(_peiToolbarHideTimer); });
+        bar.addEventListener('mouseleave', () => { peiScheduleHideToolbar(); });
+        document.body.appendChild(bar);
+        _peiToolbar = bar;
+        return bar;
+    }
+
+    function peiShowToolbarFor(blk) {
+        if (_peiResizing || _peiMoving) return;
+        if (!blk || !blk.dataset.peiBunk || !canEditBunk(blk.dataset.peiBunk)) return;
+        clearTimeout(_peiToolbarHideTimer);
+        const bar = peiBuildToolbar();
+        _peiToolbarBlock = blk;
+
+        const start = parseInt(blk.dataset.peiStartMin, 10);
+        const end = parseInt(blk.dataset.peiEndMin, 10);
+        const durEl = bar.querySelector('[data-pei-dur]');
+        if (durEl) durEl.textContent = (isNaN(start) || isNaN(end)) ? '' : (end - start) + 'm';
+        const shorter = bar.querySelector('[data-pei-act="shorter"]');
+        if (shorter) {
+            const canShrink = !isNaN(start) && !isNaN(end) && (end - start - PEI_STEP_MINS) >= PEI_MIN_BLOCK_DURATION;
+            shorter.disabled = !canShrink;
+            shorter.style.opacity = canShrink ? '1' : '0.3';
+            shorter.style.cursor = canShrink ? 'pointer' : 'default';
+        }
+
+        bar.style.display = 'flex';
+        const r = blk.getBoundingClientRect();
+        const bw = bar.offsetWidth, bh = bar.offsetHeight;
+        let left = r.left + (r.width / 2) - (bw / 2);
+        let top = r.top - bh - 6;
+        if (top < 6) top = r.bottom + 6;                                 // no room above → below
+        if (left < 6) left = 6;
+        if (left + bw > window.innerWidth - 6) left = window.innerWidth - bw - 6;
+        bar.style.left = left + 'px';
+        bar.style.top = top + 'px';
+    }
+
+    function peiScheduleHideToolbar() {
+        clearTimeout(_peiToolbarHideTimer);
+        // Long enough for the pointer to cross the 6px gap to the toolbar.
+        _peiToolbarHideTimer = setTimeout(peiHideToolbar, 220);
+    }
+
+    function peiHideToolbar() {
+        clearTimeout(_peiToolbarHideTimer);
+        if (_peiToolbar) _peiToolbar.style.display = 'none';
+        _peiToolbarBlock = null;
+    }
+
+    /**
+     * Lengthen / shorten by a fixed step. Growing over the next block pushes the
+     * rest of the day back; growing past the configured end of day makes the day
+     * longer. Both are handled inside peiApplyStretch.
+     */
+    function peiStretchBlockBy(blk, deltaMin) {
+        const bunk = blk.dataset.peiBunk;
+        const divName = blk.dataset.peiDivision;
+        const slotIdx = parseInt(blk.dataset.peiSlotIdx, 10);
+        const start = parseInt(blk.dataset.peiStartMin, 10);
+        const end = parseInt(blk.dataset.peiEndMin, 10);
+        if (!bunk || !(slotIdx >= 0) || isNaN(start) || isNaN(end)) return;
+
+        const newEnd = Math.min(PEI_DAY_HARD_END, Math.max(start + PEI_MIN_BLOCK_DURATION, end + deltaMin));
+        if (newEnd === end) return;
+
+        const res = peiApplyStretch(bunk, divName, slotIdx, start, end, start, newEnd);
+        if (!res.ok) return;
+
+        peiHideToolbar();
+        peiTriggerReRender();
+        const label = blk.dataset.peiActivity || 'Block';
+        if (res.ripple > 0) {
+            peiShowBanner(`${label} → ${newEnd - start}min — pushed the rest of the day back ${res.ripple}min`, 'success', true);
+        } else {
+            peiShowBanner(`${label} → ${newEnd - start}min (ends ${peiToLabel(newEnd)})`, 'success', true);
+        }
+    }
+
+    /**
+     * Wire hover + keyboard erase onto one rendered block. Called from
+     * peiAugmentGrid for both grid layouts.
+     */
+    function peiWireBlockToolbar(blk) {
+        blk.addEventListener('mouseenter', () => {
+            _peiHoverBlock = blk;
+            peiShowToolbarFor(blk);
+        });
+        blk.addEventListener('mouseleave', () => {
+            if (_peiHoverBlock === blk) _peiHoverBlock = null;
+            peiScheduleHideToolbar();
+        });
+    }
+
+    // ── Helper: pointer → time (position-based, not delta) ──
+    //
+    // The two grid layouts run their time axis differently and drag has to
+    // follow: the legacy column is vertical at a fixed px/min, while the
+    // transposed strip (the DEFAULT view) is horizontal and sized as a
+    // percentage of its own width. Resizing used to read clientY and write
+    // top/height regardless — so in the transposed view a drag on the right-hand
+    // edge computed a time from the pointer's vertical position and then painted
+    // the block down the page. Lengthening an activity by dragging simply did
+    // not work in the view nearly everyone uses.
+    function peiIsTxBlock(block) {
+        return !!(block && block.classList && block.classList.contains('asg-tx-block'));
+    }
+
     function peiMouseYToTime(mouseY, col, dayStart) {
         const colRect = col.getBoundingClientRect();
         return peiSnap(dayStart + ((mouseY - colRect.top) / PEI_PX_PER_MIN));
+    }
+
+    function peiPointerToTime(e, s) {
+        if (!s.isTransposed) return peiMouseYToTime(e.clientY, s.col, s.dayStart);
+        const r = s.col.getBoundingClientRect();
+        if (!r.width) return s.dayStart;
+        const total = Math.max(1, s.dayEnd - s.dayStart);
+        return peiSnap(s.dayStart + ((e.clientX - r.left) / r.width) * total);
+    }
+
+    // Grab offset along the time axis, so a move keeps the point the user
+    // actually took hold of under the pointer.
+    function peiGrabOffset(e, block, isTransposed) {
+        const r = block.getBoundingClientRect();
+        return isTransposed ? (e.clientX - r.left) : (e.clientY - r.top);
+    }
+
+    function peiPointerToTimeOffset(e, s) {
+        const shifted = s.isTransposed
+            ? { clientX: e.clientX - s.grabOffsetPx, clientY: e.clientY }
+            : { clientX: e.clientX, clientY: e.clientY - s.grabOffsetPx };
+        return peiPointerToTime(shifted, s);
+    }
+
+    // Paint a block at an absolute time span, in whichever axis it lives on.
+    function peiPaintBlock(s, startMin, endMin) {
+        if (s.isTransposed) {
+            const total = Math.max(1, s.dayEnd - s.dayStart);
+            s.block.style.left = (((startMin - s.dayStart) / total) * 100) + '%';
+            s.block.style.width = 'calc(' + (((endMin - startMin) / total) * 100) + '% - 2px)';
+        } else {
+            s.block.style.top = ((startMin - s.dayStart) * PEI_PX_PER_MIN + 2) + 'px';
+            s.block.style.height = ((endMin - startMin) * PEI_PX_PER_MIN - 4) + 'px';
+        }
+    }
+
+    // Refresh the "45min" line inside a block while it is being dragged.
+    function peiPaintDuration(block, dur) {
+        const subs = block.querySelectorAll('.asg-block-sub, .asg-tx-block-sub');
+        for (const sub of subs) {
+            if (/\d+min/.test(sub.textContent)) { sub.textContent = dur + 'min'; break; }
+        }
     }
 
     // ── RESIZE (position-based — smooth, no jump) ──
     function peiStartResize(block, direction, e) {
         if (_peiMoving || _peiResizing) return;
         const divName = block.dataset.peiDivision;
-        const dc = peiGetDivConfig(divName);
+        const bunk = block.dataset.peiBunk;
+        const slotIdx = parseInt(block.dataset.peiSlotIdx, 10);
+        const origStart = parseInt(block.dataset.peiStartMin, 10);
+        const origEnd = parseInt(block.dataset.peiEndMin, 10);
+        const bounds = peiDayBounds(divName);
         const col = block.parentElement;
+
+        // The top edge stops at the previous block (dragging a start time
+        // backwards over a neighbour has no sensible meaning); the bottom edge is
+        // free to run past the end of the day — the grid grows to meet it.
+        let prevEnd = null;
+        peiBunkActivities(bunk, divName).forEach(a => {
+            if (a.slotIdx === slotIdx) return;
+            if (a.endMin <= origStart && (prevEnd === null || a.endMin > prevEnd)) prevEnd = a.endMin;
+        });
+
+        const isTransposed = peiIsTxBlock(block);
         _peiResizing = true;
         _peiState = {
-            type: 'resize', direction, block, col,
-            bunk: block.dataset.peiBunk,
-            slotIdx: parseInt(block.dataset.peiSlotIdx, 10),
-            origStartMin: parseInt(block.dataset.peiStartMin, 10),
-            origEndMin: parseInt(block.dataset.peiEndMin, 10),
-            currentStartMin: parseInt(block.dataset.peiStartMin, 10),
-            currentEndMin: parseInt(block.dataset.peiEndMin, 10),
+            type: 'resize', direction, block, col, isTransposed,
+            bunk,
+            slotIdx,
+            origStartMin: origStart,
+            origEndMin: origEnd,
+            currentStartMin: origStart,
+            currentEndMin: origEnd,
             fieldName: block.dataset.peiField || '', divName,
-            dayStart: peiParseTime(dc.startTime) || 540,
-            dayEnd: peiParseTime(dc.endTime) || 960
+            dayStart: bounds.start,
+            dayEnd: bounds.end,
+            floorMin: (prevEnd !== null) ? prevEnd : 0,
+            limitMin: peiDragLimit(bounds)
         };
+        peiHideToolbar();
         block.style.transition = 'none'; block.style.zIndex = '20';
-        document.body.style.cursor = direction === 'top' ? 'n-resize' : 's-resize';
+        document.body.style.cursor = isTransposed
+            ? (direction === 'top' ? 'w-resize' : 'e-resize')
+            : (direction === 'top' ? 'n-resize' : 's-resize');
         document.body.style.userSelect = 'none';
         document.addEventListener('mousemove', peiOnResizeMove);
         document.addEventListener('mouseup', peiOnResizeEnd);
@@ -1904,20 +2194,25 @@
     function peiOnResizeMove(e) {
         if (!_peiResizing || !_peiState) return;
         const s = _peiState;
-        const mouseTime = peiMouseYToTime(e.clientY, s.col, s.dayStart);
+        const mouseTime = peiPointerToTime(e, s);
         let newStart = s.origStartMin, newEnd = s.origEndMin;
-        if (s.direction === 'top') newStart = Math.max(s.dayStart, Math.min(s.origEndMin - PEI_MIN_BLOCK_DURATION, mouseTime));
-        else newEnd = Math.min(s.dayEnd, Math.max(s.origStartMin + PEI_MIN_BLOCK_DURATION, mouseTime));
+        if (s.direction === 'top') newStart = Math.max(s.floorMin, Math.min(s.origEndMin - PEI_MIN_BLOCK_DURATION, mouseTime));
+        else newEnd = Math.min(s.limitMin, Math.max(s.origStartMin + PEI_MIN_BLOCK_DURATION, mouseTime));
         s.currentStartMin = newStart; s.currentEndMin = newEnd;
-        s.block.style.top = ((newStart - s.dayStart) * PEI_PX_PER_MIN + 2) + 'px';
-        s.block.style.height = ((newEnd - newStart) * PEI_PX_PER_MIN - 4) + 'px';
-        // Update duration label — find by content since resize handles are appended after
+        peiPaintBlock(s, newStart, newEnd);
         const dur = newEnd - newStart;
-        const allSubs = s.block.querySelectorAll('.asg-block-sub');
-        for (const sub of allSubs) { if (/\d+min/.test(sub.textContent)) { sub.textContent = dur + 'min'; break; } }
+        peiPaintDuration(s.block, dur);
         // Tooltip at block edge
         const br = s.block.getBoundingClientRect();
         let tip = peiToLabel(newStart) + ' – ' + peiToLabel(newEnd) + ` <span style="opacity:0.6">(${dur}min)</span>`;
+        // Tell the user up front what a long drag is about to do to the rest of
+        // the day — pushing five blocks back is not something to discover after.
+        const ripple = peiRippleDeltaFor(s.bunk, s.divName, s.slotIdx, s.origEndMin, newEnd);
+        if (ripple > 0) {
+            const n = peiCountAfter(s.bunk, s.divName, s.origEndMin) - 1;
+            tip += `<br><span style="color:#93c5fd;">⤓ pushes ${n > 0 ? n : 'the rest'} later by ${ripple}min</span>`;
+        }
+        if (newEnd > s.dayEnd) tip += `<br><span style="color:#93c5fd;">⏱ day runs to ${peiToLabel(newEnd)}</span>`;
         const c = PEI_ConflictEngine.check(s.bunk, newStart, newEnd, s.fieldName, s.slotIdx);
         if (c.fieldConflicts.length > 0) tip += `<br><span style="color:#fcd34d;">⚡ Field: ${c.fieldConflicts.map(x => escHtml(x.bunk)).join(', ')}</span>`;
         peiShowTooltip(br.right + 8, s.direction === 'bottom' ? br.bottom : br.top, tip);
@@ -1938,12 +2233,35 @@
         s.block.dataset.peiStartMin = s.currentStartMin;
         s.block.dataset.peiEndMin = s.currentEndMin;
         // Ensure duration label is final
-        const finalDur = s.currentEndMin - s.currentStartMin;
-        const allSubsEnd = s.block.querySelectorAll('.asg-block-sub');
-        for (const sub of allSubsEnd) { if (/\d+min/.test(sub.textContent)) { sub.textContent = finalDur + 'min'; break; } }
+        peiPaintDuration(s.block, s.currentEndMin - s.currentStartMin);
         const c = PEI_ConflictEngine.check(s.bunk, s.currentStartMin, s.currentEndMin, s.fieldName, s.slotIdx);
-        peiApplyTimeChange(s.bunk, s.slotIdx, s.origStartMin, s.origEndMin, s.currentStartMin, s.currentEndMin, s.divName);
-        // Directly inject free gap from what we know
+        const res = peiApplyStretch(s.bunk, s.divName, s.slotIdx,
+            s.origStartMin, s.origEndMin, s.currentStartMin, s.currentEndMin);
+        if (!res.ok) {
+            // Refused (illegal placement / too short) — put the block back where it was.
+            _peiResizing = false; _peiState = null;
+            peiTriggerReRender();
+            return;
+        }
+        // A ripple moved OTHER blocks, or the day itself got longer — the drag
+        // only repainted the one block, so the grid has to be redrawn.
+        if (res.ripple > 0 || res.dayGrew) {
+            _peiResizing = false; _peiState = null;
+            peiTriggerReRender();
+            if (res.ripple > 0) peiShowBanner(`Stretched — pushed the rest of the day back ${res.ripple}min`, 'success', true);
+            else peiShowBanner('Resized to ' + peiToLabel(s.currentStartMin) + ' – ' + peiToLabel(s.currentEndMin), 'success', true);
+            return;
+        }
+        // A shortened block leaves free time behind it. In the legacy column we
+        // can splice the "+ / ⚡" gap straight in without a full redraw; the
+        // transposed strip lays out in percentages that this injector doesn't
+        // speak, so there we just redraw and let the renderer paint the gap.
+        if (s.isTransposed) {
+            _peiResizing = false; _peiState = null;
+            peiTriggerReRender();
+            peiShowBanner('Resized to ' + peiToLabel(s.currentStartMin) + ' – ' + peiToLabel(s.currentEndMin), 'success', true);
+            return;
+        }
         const _col = s.col, _bunk = s.bunk, _divName = s.divName, _dayStart = s.dayStart;
         let gapStart = -1, gapEnd = -1;
         if (s.currentEndMin < s.origEndMin) { gapStart = s.currentEndMin; gapEnd = s.origEndMin; }     // shortened bottom
@@ -2079,21 +2397,23 @@
         if (_peiMoving || _peiResizing) return;
         const startMin = parseInt(block.dataset.peiStartMin, 10), endMin = parseInt(block.dataset.peiEndMin, 10);
         const divName = block.dataset.peiDivision;
-        const dc = peiGetDivConfig(divName);
+        const bounds = peiDayBounds(divName);
         const col = block.parentElement;
-        const grabOffsetPx = e.clientY - block.getBoundingClientRect().top;
+        const isTransposed = peiIsTxBlock(block);
+        const grabOffsetPx = peiGrabOffset(e, block, isTransposed);
         _peiMoving = true;
         _peiState = {
-            type: 'move', block, col,
+            type: 'move', block, col, isTransposed,
             bunk: block.dataset.peiBunk,
             slotIdx: parseInt(block.dataset.peiSlotIdx, 10),
             origStartMin: startMin, origEndMin: endMin,
             currentStartMin: startMin, currentEndMin: endMin,
             duration: endMin - startMin,
             fieldName: block.dataset.peiField || '',
-            divName, dayStart: peiParseTime(dc.startTime) || 540, dayEnd: peiParseTime(dc.endTime) || 960,
+            divName, dayStart: bounds.start, dayEnd: bounds.end,
             grabOffsetPx
         };
+        peiHideToolbar();
         block.style.transition = 'none'; block.style.zIndex = '20'; block.style.opacity = '0.85'; block.style.cursor = 'grabbing';
         document.body.style.cursor = 'grabbing'; document.body.style.userSelect = 'none';
         document.addEventListener('mousemove', peiOnMoveMove);
@@ -2103,10 +2423,10 @@
     function peiOnMoveMove(e) {
         if (!_peiMoving || !_peiState) return;
         const s = _peiState;
-        const topTime = peiMouseYToTime(e.clientY - s.grabOffsetPx, s.col, s.dayStart);
+        const topTime = peiPointerToTimeOffset(e, s);
         let newStart = Math.max(s.dayStart, Math.min(s.dayEnd - s.duration, topTime));
         s.currentStartMin = newStart; s.currentEndMin = newStart + s.duration;
-        s.block.style.top = ((newStart - s.dayStart) * PEI_PX_PER_MIN + 2) + 'px';
+        peiPaintBlock(s, newStart, newStart + s.duration);
         const br = s.block.getBoundingClientRect();
         let tip = '↕ ' + peiToLabel(newStart) + ' – ' + peiToLabel(newStart + s.duration);
         const c = PEI_ConflictEngine.check(s.bunk, newStart, newStart + s.duration, s.fieldName, s.slotIdx);
@@ -2135,16 +2455,52 @@
         _peiMoving = false; _peiState = null;
     }
 
-    // ── DELETE ──
+    // ── ERASE ──
+    // The Excel move: it isn't happening, so rub it out. One click, no modal, no
+    // confirm — the undo banner (and Ctrl+Z) is the safety net.
     function peiDeleteBlock(bunk, slotIdx, divName, activityName) {
         const assignments = window.scheduleAssignments?.[bunk];
         if (!assignments) return;
-        peiSnapshotBunk(bunk, `Delete ${activityName}`);
+        // Freshly injected sub-entry blocks carry slotIdx -1 (no slot of their
+        // own). Writing at -1 would stamp a junk property onto the array, so
+        // redraw and let the user erase the real block instead.
+        if (!(slotIdx >= 0)) { peiTriggerReRender(); return; }
+        if (!canEditBunk(bunk)) { peiShowBanner('You don\'t have permission to edit ' + bunk, 'error'); return; }
         const slots = peiFindEntrySlots(assignments, slotIdx);
+
+        // An erased activity never happened, so rotation has to stop counting it.
+        // Without this the bunk kept "credit" for a swim it never took and slid
+        // to the back of the queue for the rest of the week.
+        const oldActs = [];
+        slots.forEach(idx => {
+            const e = assignments[idx];
+            const a = e && (e._activity || e.sport);
+            if (a && String(a).toLowerCase() !== 'free') oldActs.push(a);
+        });
+
+        // Snapshot carries the counts inverse so Ctrl+Z restores them too.
+        peiSnapshotTransaction([bunk], `Erase ${activityName}`, {
+            counts: [{ bunk: bunk, newAct: null, oldActs: oldActs, slots: slots }]
+        });
+
         slots.forEach(idx => { assignments[idx] = null; });
+        try { window.SchedulerCoreUtils?.applyPostEditCounts?.(bunk, oldActs, null, slots); }
+        catch (e) { console.warn('[PostEdit] erase counts delta failed:', e?.message || e); }
+
+        peiHideToolbar();
         peiTriggerReRender();
         peiSave(bunk);
-        peiShowBanner('Deleted: ' + activityName, 'success', true);
+        peiShowBanner('Erased: ' + activityName, 'success', true);
+    }
+
+    // Erase straight off a DOM block (hover ✕ / Delete key).
+    function peiEraseFromBlock(blk) {
+        if (!blk) return;
+        const bunk = blk.dataset.peiBunk;
+        const divName = blk.dataset.peiDivision;
+        const slotIdx = parseInt(blk.dataset.peiSlotIdx, 10);
+        if (!bunk || !(slotIdx >= 0)) return;
+        peiDeleteBlock(bunk, slotIdx, divName, blk.dataset.peiActivity || 'activity');
     }
 
     // ── Pending move: threshold ──
@@ -2554,6 +2910,143 @@
         return slots;
     }
 
+    // ── STRETCH (lengthen / shorten in place, with ripple) ───────────────────
+    //
+    // Resizing is NOT the same operation as moving. A move genuinely relocates a
+    // block, so it has to be re-mapped onto the fixed period grid. A resize keeps
+    // the block exactly where it is and only changes how long it runs — so it
+    // writes the entry's own _startMin/_endMin and leaves slot indices alone.
+    // The grid renders blocks from those times, so this is all it takes, and it
+    // sidesteps the "those slots are occupied" refusal that used to make
+    // lengthening an activity the hardest edit in the app.
+
+    /**
+     * Push everything that starts at or after `pivotMin` later by `deltaMin`.
+     * This is what a head counselor means by "swim ran long" — the rest of that
+     * bunk's day slides, it doesn't get overwritten. Returns the number of real
+     * (non-continuation) blocks that moved.
+     */
+    function peiShiftEntriesFrom(bunk, divName, pivotMin, deltaMin, skipSlots) {
+        const assignments = window.scheduleAssignments?.[bunk] || [];
+        const divSlots = window.divisionTimes?.[divName] || [];
+        const skip = skipSlots || [];
+        let moved = 0;
+        for (let i = 0; i < assignments.length; i++) {
+            if (skip.indexOf(i) !== -1) continue;
+            const e = assignments[i];
+            if (!e) continue;
+            const s = (typeof e._startMin === 'number') ? e._startMin
+                : (divSlots[i] ? divSlots[i].startMin : null);
+            const en = (typeof e._endMin === 'number') ? e._endMin
+                : (divSlots[i] ? divSlots[i].endMin : null);
+            if (s == null || en == null || s < pivotMin) continue;
+            e._startMin = s + deltaMin;
+            e._endMin = en + deltaMin;
+            if (typeof e._blockStart === 'number') e._blockStart = e._startMin;
+            e._postEdited = true;
+            if (!e.continuation) moved++;
+        }
+        return moved;
+    }
+
+    /**
+     * How far the rest of the day has to move for this block to end at `newEnd`.
+     * Zero when the block grows into free time (or shrinks) — we only push when
+     * the growth would actually land on top of the next block.
+     */
+    function peiRippleDeltaFor(bunk, divName, slotIdx, origEnd, newEnd) {
+        if (newEnd <= origEnd) return 0;
+        const acts = peiBunkActivities(bunk, divName);
+        let nextStart = null;
+        for (const a of acts) {
+            if (a.slotIdx === slotIdx) continue;
+            if (a.startMin < origEnd) continue;
+            if (nextStart === null || a.startMin < nextStart) nextStart = a.startMin;
+        }
+        if (nextStart === null || newEnd <= nextStart) return 0;
+        return newEnd - nextStart;
+    }
+
+    /**
+     * Apply a resize. Returns { ok, ripple, dayGrew } — the caller decides
+     * whether to re-render (a drag has already painted the block itself, but a
+     * ripple or a longer day means the rest of the grid is now stale).
+     */
+    function peiApplyStretch(bunk, divName, slotIdx, origStart, origEnd, newStart, newEnd, opts) {
+        opts = opts || {};
+        const assignments = window.scheduleAssignments?.[bunk];
+        if (!assignments) return { ok: false };
+        const entry = assignments[slotIdx];
+        if (!entry) return { ok: false };
+        if (newEnd - newStart < PEI_MIN_BLOCK_DURATION) return { ok: false };
+        if (newStart === origStart && newEnd === origEnd) return { ok: true, ripple: 0, dayGrew: false };
+
+        // Same manual gate every other post-edit write goes through — a longer
+        // block can run past a field's allowed window just as easily as a moved one.
+        const actName = entry._activity || entry.field || '';
+        const location = entry._location || entry.field || null;
+        if (actName && actName !== 'Free' && typeof window.commitManualWriteIfLegal === 'function') {
+            const check = window.commitManualWriteIfLegal(
+                bunk, slotIdx, actName, location, divName, newStart, newEnd, { allowSoftOverride: false }
+            );
+            if (!check.ok) {
+                if (check.soft && typeof window.confirm === 'function') {
+                    if (!window.confirm('Heads up: ' + check.reason + '.\n\nApply anyway?')) return { ok: false, cancelled: true };
+                } else if (!check.soft) {
+                    peiShowBanner('Cannot resize: ' + check.reason, 'error');
+                    return { ok: false };
+                }
+            }
+        }
+
+        const slots = peiFindEntrySlots(assignments, slotIdx);
+        const ripple = (opts.ripple === false) ? 0 : peiRippleDeltaFor(bunk, divName, slotIdx, origEnd, newEnd);
+
+        // A big stretch plus a ripple could in principle shove the tail of the day
+        // past midnight, where times stop meaning anything. Refuse rather than
+        // silently wrap.
+        if (ripple > 0) {
+            const lastEnd = peiBunkActivities(bunk, divName)
+                .reduce((max, a) => Math.max(max, a.endMin), 0);
+            if (lastEnd + ripple > PEI_DAY_HARD_END) {
+                peiShowBanner('That would push the day past midnight', 'error');
+                return { ok: false };
+            }
+        }
+
+        const label = actName || 'block';
+        peiSnapshotBunk(bunk, `Resize ${label} (${origEnd - origStart}m → ${newEnd - newStart}m)`);
+
+        if (typeof window.markPostEditInProgress === 'function') window.markPostEditInProgress();
+        else { window._postEditInProgress = true; window._postEditTimestamp = Date.now(); }
+
+        // Ripple FIRST — the pivot is the block's old end, so the block being
+        // stretched (and its continuations) are excluded by slot index.
+        if (ripple > 0) peiShiftEntriesFrom(bunk, divName, origEnd, ripple, slots);
+
+        // Then write the new span onto the block itself + its continuations.
+        slots.forEach((idx, i) => {
+            const e = assignments[idx];
+            if (!e) return;
+            e._startMin = newStart;
+            e._endMin = newEnd;
+            if (i === 0) e._blockStart = newStart;
+            e._postEdited = true;
+        });
+
+        const bounds = peiDayBounds(divName);
+        const dayGrew = newEnd > bounds.cfgEnd || ripple > 0 || newStart < bounds.cfgStart;
+
+        peiSaveQuiet(bunk);
+        return { ok: true, ripple, dayGrew };
+    }
+
+    // How many real blocks now sit after `min` — used only for the "pushes N
+    // later" wording, so an approximate count is fine.
+    function peiCountAfter(bunk, divName, min) {
+        return peiBunkActivities(bunk, divName).filter(a => a.startMin >= min).length;
+    }
+
     function peiApplyTimeChange(bunk, origSlotIdx, origStart, origEnd, newStart, newEnd, divName) {
         const divSlots = window.divisionTimes?.[divName] || [];
         const assignments = window.scheduleAssignments?.[bunk];
@@ -2879,6 +3372,9 @@
     }
 
     function peiTriggerReRender() {
+        // The toolbar points at a block that's about to be replaced.
+        peiHideToolbar();
+        _peiHoverBlock = null;
         // Clean up injected elements (re-render creates proper ones)
         document.querySelectorAll('.pei-injected-free, .pei-injected-block').forEach(el => el.remove());
         // Clear augmented flags so observer re-augments after render
@@ -2921,7 +3417,7 @@
                 const blocks = found.blockContainer.querySelectorAll(blockSel);
 
                 blocks.forEach((blk, bi) => {
-                    const matched = bunkActs[bi];
+                    const matched = peiResolveBlock(blk, bunkActs, bi);
                     if (!matched) return;
                     const entry = matched.entry;
                     if (!entry._postEdited || entry._startMin === undefined || entry._endMin === undefined) return;
@@ -3102,7 +3598,7 @@
                     const bunkActs = peiBunkActivities(bunk, divName);
                     const blocks = strip.querySelectorAll('.asg-tx-block');
                     blocks.forEach((blk, bi) => {
-                        const matched = bunkActs[bi];
+                        const matched = peiResolveBlock(blk, bunkActs, bi);
                         if (!matched) return;
                         blk.dataset.peiBunk = bunk; blk.dataset.peiStartMin = matched.startMin; blk.dataset.peiEndMin = matched.endMin;
                         blk.dataset.peiSlotIdx = matched.slotIdx; blk.dataset.peiDivision = divName;
@@ -3121,6 +3617,7 @@
                         blk.addEventListener('mouseleave', () => { if (!_peiResizing && !_peiMoving) { leftH.style.opacity = '0'; rightH.style.opacity = '0'; } });
                         leftH.addEventListener('mousedown', e => { e.preventDefault(); e.stopPropagation(); peiStartResize(blk, 'top', e); });
                         rightH.addEventListener('mousedown', e => { e.preventDefault(); e.stopPropagation(); peiStartResize(blk, 'bottom', e); });
+                        peiWireBlockToolbar(blk);
                         blk.addEventListener('mousedown', e => {
                             if (e.target.classList.contains('pei-resize-handle') || e.target.classList.contains('pei-resize-top') || e.target.classList.contains('pei-resize-bottom')) return;
                             if (e.button !== 0) return;
@@ -3166,7 +3663,7 @@
                     const bunkActs = peiBunkActivities(bunk, divName);
                     const blocks = col.querySelectorAll('.asg-block');
                     blocks.forEach((blk, bi) => {
-                        const matched = bunkActs[bi];
+                        const matched = peiResolveBlock(blk, bunkActs, bi);
                         if (!matched) return;
                         blk.dataset.peiBunk = bunk; blk.dataset.peiStartMin = matched.startMin; blk.dataset.peiEndMin = matched.endMin;
                         blk.dataset.peiSlotIdx = matched.slotIdx; blk.dataset.peiDivision = divName;
@@ -3185,6 +3682,7 @@
                         blk.addEventListener('mouseleave', () => { if (!_peiResizing && !_peiMoving) { topH.style.opacity = '0'; botH.style.opacity = '0'; } });
                         topH.addEventListener('mousedown', e => { e.preventDefault(); e.stopPropagation(); peiStartResize(blk, 'top', e); });
                         botH.addEventListener('mousedown', e => { e.preventDefault(); e.stopPropagation(); peiStartResize(blk, 'bottom', e); });
+                        peiWireBlockToolbar(blk);
                         blk.addEventListener('mousedown', e => {
                             if (e.target.classList.contains('pei-resize-handle') || e.target.classList.contains('pei-resize-top') || e.target.classList.contains('pei-resize-bottom')) return;
                             if (e.button !== 0) return;
@@ -3232,7 +3730,10 @@
     function peiInjectStyles() {
         if (document.getElementById('pei-styles')) return;
         const s = document.createElement('style'); s.id = 'pei-styles';
-        s.textContent = `.pei-resize-handle{touch-action:none;background:transparent;}.pei-resize-handle:hover{background:rgba(59,130,246,0.4)!important;}@media(pointer:coarse){.pei-resize-handle{height:12px!important;width:12px!important;opacity:.5!important}}.asg-block[data-pei-bunk],.asg-tx-block[data-pei-bunk]{touch-action:none;overflow:visible!important;transition:box-shadow 0.2s}.asg-block[data-pei-bunk]:active,.asg-tx-block[data-pei-bunk]:active{cursor:grabbing!important}.pei-conflict-overlay{pointer-events:none;animation:pei-pulse 1s ease-in-out infinite}@keyframes pei-pulse{0%,100%{opacity:.3}50%{opacity:.6}}@keyframes pei-slide-up{from{transform:translate(-50%,20px);opacity:0}to{transform:translate(-50%,0);opacity:1}}@keyframes pei-fade-in{from{opacity:0}to{opacity:1}}.asg-free,.asg-tx-free{cursor:default;position:relative;transition:border-color 0.2s}.asg-free:hover,.asg-tx-free:hover{border-color:#93c5fd!important;background:repeating-linear-gradient(45deg,#eff6ff,#eff6ff 4px,#dbeafe 4px,#dbeafe 8px)!important}.pei-add-btn{font-family:-apple-system,BlinkMacSystemFont,sans-serif;user-select:none;line-height:1;transition:transform 0.15s,opacity 0.2s,background 0.2s;}.pei-add-btn:hover{transform:scale(1.15)!important;box-shadow:0 2px 8px rgba(37,99,235,0.3);}[data-pei-bunk]:hover{background:rgba(59,130,246,.01)}`;
+        s.textContent = `.pei-resize-handle{touch-action:none;background:transparent;}.pei-resize-handle:hover{background:rgba(59,130,246,0.4)!important;}@media(pointer:coarse){.pei-resize-handle{height:12px!important;width:12px!important;opacity:.5!important}}.asg-block[data-pei-bunk],.asg-tx-block[data-pei-bunk]{touch-action:none;overflow:visible!important;transition:box-shadow 0.2s}.asg-block[data-pei-bunk]:active,.asg-tx-block[data-pei-bunk]:active{cursor:grabbing!important}.pei-conflict-overlay{pointer-events:none;animation:pei-pulse 1s ease-in-out infinite}@keyframes pei-pulse{0%,100%{opacity:.3}50%{opacity:.6}}@keyframes pei-slide-up{from{transform:translate(-50%,20px);opacity:0}to{transform:translate(-50%,0);opacity:1}}@keyframes pei-fade-in{from{opacity:0}to{opacity:1}}.asg-free,.asg-tx-free{cursor:default;position:relative;transition:border-color 0.2s}.asg-free:hover,.asg-tx-free:hover{border-color:#93c5fd!important;background:repeating-linear-gradient(45deg,#eff6ff,#eff6ff 4px,#dbeafe 4px,#dbeafe 8px)!important}.pei-add-btn{font-family:-apple-system,BlinkMacSystemFont,sans-serif;user-select:none;line-height:1;transition:transform 0.15s,opacity 0.2s,background 0.2s;}.pei-add-btn:hover{transform:scale(1.15)!important;box-shadow:0 2px 8px rgba(37,99,235,0.3);}[data-pei-bunk]:hover{background:rgba(59,130,246,.01)}` +
+            `#pei-block-toolbar button:hover:not(:disabled){background:rgba(255,255,255,0.14)!important;}` +
+            `#pei-block-toolbar button[data-pei-act="erase"]:hover{background:rgba(248,113,113,0.22)!important;}` +
+            `#pei-block-toolbar{animation:pei-fade-in .12s ease-out}`;
         document.head.appendChild(s);
     }
 
@@ -3246,15 +3747,30 @@
         peiSetupObserver();
         peiSetupTouch();
 
-        // Ctrl+Z / Cmd+Z undo handler
+        // Keyboard: Ctrl+Z / Cmd+Z undo, Delete / Backspace erases the hovered
+        // block. Both bail out when the user is typing or a modal is up.
+        function peiKeyboardBusy() {
+            const active = document.activeElement;
+            if (active && (active.tagName === 'INPUT' || active.tagName === 'TEXTAREA' ||
+                           active.tagName === 'SELECT' || active.isContentEditable)) return true;
+            return !!(document.getElementById('pei-add-overlay') ||
+                      document.getElementById(OVERLAY_ID) ||
+                      document.getElementById('pefc-overlay'));
+        }
+
         document.addEventListener('keydown', (e) => {
             if ((e.ctrlKey || e.metaKey) && e.key === 'z' && !e.shiftKey) {
-                // Only handle if no modal/input is focused
-                const active = document.activeElement;
-                if (active && (active.tagName === 'INPUT' || active.tagName === 'TEXTAREA' || active.tagName === 'SELECT')) return;
-                if (document.getElementById('pei-add-overlay') || document.getElementById(OVERLAY_ID)) return;
+                if (peiKeyboardBusy()) return;
                 e.preventDefault();
                 peiUndo();
+                return;
+            }
+            if ((e.key === 'Delete' || e.key === 'Backspace') && !e.ctrlKey && !e.metaKey && !e.altKey) {
+                if (peiKeyboardBusy()) return;
+                const blk = _peiToolbarBlock || _peiHoverBlock;
+                if (!blk || !document.body.contains(blk)) return;
+                e.preventDefault();
+                peiEraseFromBlock(blk);
             }
         });
 
@@ -3359,6 +3875,11 @@
         init: initPostEditInteractions,
         undo: peiUndo,
         deleteBlock: peiDeleteBlock,
+        eraseBlock: peiEraseFromBlock,
+        applyStretch: peiApplyStretch,
+        rippleDeltaFor: peiRippleDeltaFor,
+        shiftEntriesFrom: peiShiftEntriesFrom,
+        dayBounds: peiDayBounds,
         undoStack: _peiUndoStack
     };
 
