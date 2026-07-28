@@ -15718,8 +15718,24 @@
                 //     both off → 340min dead · 34/38 wall-to-wall · 6,6,7,7,7,5 · 0 no-swim
                 //   Opt back in per-session with window.__swimContention = true.
                 var _p23ContentionOn = false; try { _p23ContentionOn = (typeof window !== 'undefined') && (window.__swimContention === true); } catch (_eC0) {}
+                // ★ PACING (window.__swimPacing, default ON) — the objective the release
+                //   valve was reaching for, without the clustering. Rank a start by the
+                //   demand it carries (how many bunks are free and competing for a
+                //   facility then) MINUS a penalty for the swim already parked there:
+                //       key = contention(start) − W · poolLoad(start)
+                //   The penalty makes a slot less attractive as it fills, so demand paces
+                //   itself across the window instead of piling onto the single hottest
+                //   start. Pure contention had no such term, which is exactly how it
+                //   produced 7,7,7,7,7,2 with one bunk left dry.
+                //   Rationale (measured): the pool ran 6/7 at 10:50 while 32 bunks fought
+                //   for land, and 7/7 at 14:10 when only 14 did — backwards. Swim should
+                //   absorb demand when land is scarce and step back when land is quiet.
+                //   W is live-tunable via window.__swimSpreadWeight (0 = pure contention).
+                var _p23Pacing = true; try { _p23Pacing = (typeof window === 'undefined') || (window.__swimPacing !== false); } catch (_eP0) {}
+                var _p23SpreadW = 8;
+                try { if (typeof window !== 'undefined' && window.__swimSpreadWeight != null && +window.__swimSpreadWeight >= 0) _p23SpreadW = +window.__swimSpreadWeight; } catch (_eP1) {}
                 var _p23ConSnap = [];   // per swimming bunk: { s:dayStart, e:dayEnd, walls:[[ws,we]...] } from pinned/_fixed walls (excl pre/post-change)
-                if (_p23ContentionOn) {
+                if (_p23ContentionOn || _p23Pacing) {   // pacing needs the same demand snapshot
                     try {
                         allGrades.forEach(function (g) {
                             var today = todaysSwimmers[g];
@@ -15964,8 +15980,12 @@
                                     var _ilGL = (_p23SlotGradeLoad[_ilC.start] && _p23SlotGradeLoad[_ilC.start][grade]) || 0;
                                     if (_ilGL >= _p23SameGradeSoftCap) continue;       // ≤~2 same-grade per start
                                     var _ilLoad = _p23SlotLoad[_ilC.start] || 0;       // camp-wide pool load → cross-grade spread (tiebreak)
-                                    var _ilKey = _ilContention ? _p23ContentionAt(_ilC.start, _ilC.start + _p23SwimDur)
-                                               : (_ilFieldBal ? (_p23LandLoad[_ilC.start] || 0) : 0);
+                                    // PACING wins when on: demand minus a fill-penalty, so the
+                                    // hottest start is preferred only until it has taken its share.
+                                    var _ilKey = (_p23Pacing && _p23ConSnap.length > 0)
+                                               ? (_p23ContentionAt(_ilC.start, _ilC.start + _p23SwimDur) - _p23SpreadW * _ilLoad)
+                                               : (_ilContention ? _p23ContentionAt(_ilC.start, _ilC.start + _p23SwimDur)
+                                               : (_ilFieldBal ? (_p23LandLoad[_ilC.start] || 0) : 0));
                                     if (_ilKey > _ilBestKey
                                         || (_ilKey === _ilBestKey && _ilLoad < _ilBestLoad)
                                         || (_ilKey === _ilBestKey && _ilLoad === _ilBestLoad && _ilC.score > _ilBestScore)) {
