@@ -856,7 +856,7 @@
             return false;
         }
 
-        var rescued = 0, attempts = 0;
+        var rescued = 0, attempts = 0, rescuedPairs = 0;
         for (var bi = 0; bi < bunks.length; bi++) {
             var bunk = bunks[bi] || {};
             if (bunk.noSport) continue;                       // sportless grade → never inject a sport
@@ -931,10 +931,93 @@
                     if (ctx.onReorder) { try { ctx.onReorder(); } catch (_eU7) {} }
                     break;   // this dead window is resolved
                 }
+
+                // ── PAIR PHASE ────────────────────────────────────────────────────────
+                // Some dead windows have TWO sports inside the cooldown radius, so
+                // relocating one still leaves the Sport mis-spaced (live: 4 of 9
+                // candidates failed the gate for exactly this reason). Relocate both:
+                // W becomes the Sport, and BOTH donors become filled Specials. Net sport
+                // count drops by one, which is safe here because a donor is by definition
+                // a spare movable generic sport and at least one sport always remains
+                // (two donors in, one Sport out). Distinct fills only — no same-day repeat.
+                if (!W._concrete && W.kind === 'special') {
+                    var mov = [];
+                    for (var qi = 0; qi < tiles.length; qi++) {
+                        var Q = tiles[qi];
+                        if (!Q || Q === W) continue;
+                        if (!(Q.kind === 'sport' && Q.generic === true && !Q._concrete)) continue;
+                        if (Q.pinned || (Q._ref && Q._ref.share)) continue;
+                        mov.push(Q);
+                    }
+                    var done2 = false;
+                    for (var a1 = 0; a1 < mov.length && !done2; a1++) {
+                        for (var a2 = a1 + 1; a2 < mov.length && !done2; a2++) {
+                            var B1 = mov[a1], B2 = mov[a2];
+                            if (!_sportLenOk(B1, W.durationMin, tiles)) continue;
+                            attempts++;
+                            // (1) Sport legal at W with BOTH donors discounted.
+                            var tmpl2 = [];
+                            for (var t2 = 0; t2 < tiles.length; t2++) {
+                                var T2 = tiles[t2];
+                                if (!T2 || T2 === W || T2 === B1 || T2 === B2) continue;
+                                tmpl2.push(_toBlk(T2));
+                            }
+                            var ok2 = true;
+                            try { ok2 = gate({ type: 'sport', event: label, startMin: W.startMin, endMin: W.endMin }, tmpl2); } catch (_eP1) { ok2 = true; }
+                            if (!ok2) continue;
+                            // (2) a DISTINCT fillable special for each donor, at its own length.
+                            var used2 = Object.create(null);
+                            for (var uk in used) { if (Object.prototype.hasOwnProperty.call(used, uk)) used2[uk] = 1; }
+                            var p1 = pickAnyFillable(ctx, bunk, B1.durationMin, B1.startMin, B1.endMin, used2, false);
+                            if (!p1) continue;
+                            used2[String(p1.name).toLowerCase()] = 1;
+                            var p2 = pickAnyFillable(ctx, bunk, B2.durationMin, B2.startMin, B2.endMin, used2, false);
+                            if (!p2) continue;
+                            // (3) COMMIT all three, with rollback if any seat gate refuses.
+                            var snaps = [];
+                            var trio = [W, B1, B2];
+                            for (var si = 0; si < trio.length; si++) {
+                                var X = trio[si];
+                                snaps.push({ t: X, kind: X.kind, name: X.name, generic: X.generic, subcat: X.subcat, _ref: X._ref, _concrete: X._concrete, _origin: X._origin });
+                            }
+                            try { if (ctx.seatRelease) { for (var ri = 0; ri < trio.length; ri++) ctx.seatRelease(trio[ri], grade, trio[ri].startMin, trio[ri].endMin); } } catch (_eP2) {}
+                            W.kind = 'sport'; W.name = label; W.generic = true; W.subcat = null;
+                            W._ref = snaps[1]._ref; W._origin = 'unequal-sport2';
+                            B1.kind = 'special'; B1.name = p1.name; B1._concrete = p1.name; B1.generic = false;
+                            B1.subcat = canon(p1.subcategory); B1._ref = snaps[0]._ref; B1._fillLoc = p1.location || null; B1._origin = 'unequal-fill2';
+                            B2.kind = 'special'; B2.name = p2.name; B2._concrete = p2.name; B2.generic = false;
+                            B2.subcat = canon(p2.subcategory); B2._ref = snaps[0]._ref; B2._fillLoc = p2.location || null; B2._origin = 'unequal-fill2';
+                            var seatOk2 = true;
+                            try {
+                                if (ctx.seatGate) {
+                                    for (var gi = 0; gi < trio.length && seatOk2; gi++) {
+                                        if (!ctx.seatGate(trio[gi], grade, trio[gi].startMin, trio[gi].endMin)) seatOk2 = false;
+                                    }
+                                }
+                            } catch (_eP3) { seatOk2 = false; }
+                            if (!seatOk2) {
+                                for (var vi = 0; vi < snaps.length; vi++) {
+                                    var S2 = snaps[vi];
+                                    S2.t.kind = S2.kind; S2.t.name = S2.name; S2.t.generic = S2.generic;
+                                    S2.t.subcat = S2.subcat; S2.t._ref = S2._ref; S2.t._concrete = S2._concrete; S2.t._origin = S2._origin;
+                                }
+                                try { if (ctx.seatCommit) { for (var ci = 0; ci < trio.length; ci++) ctx.seatCommit(trio[ci], grade, trio[ci].startMin, trio[ci].endMin); } } catch (_eP4) {}
+                                continue;
+                            }
+                            try { if (ctx.seatCommit) { for (var mi2 = 0; mi2 < trio.length; mi2++) ctx.seatCommit(trio[mi2], grade, trio[mi2].startMin, trio[mi2].endMin); } } catch (_eP5) {}
+                            try { ctx.recordUse(p1, grade, B1.startMin, B1.endMin); ctx.recordUse(p2, grade, B2.startMin, B2.endMin); } catch (_eP6) {}
+                            used[String(p1.name).toLowerCase()] = 1;
+                            used[String(p2.name).toLowerCase()] = 1;
+                            rescued++; rescuedPairs++;
+                            if (ctx.onReorder) { try { ctx.onReorder(); ctx.onReorder(); } catch (_eP7) {} }
+                            done2 = true;
+                        }
+                    }
+                }
             }
             tiles.sort(function (a, b) { return a.startMin - b.startMin; });
         }
-        return { rescued: rescued, attempts: attempts, bunks: bunks.length };
+        return { rescued: rescued, attempts: attempts, pairs: rescuedPairs, bunks: bunks.length };
     }
 
     const api = { VERSION: VERSION, restructure: restructure, inWindow: inWindow, absorbUnfilledToSport: absorbUnfilledToSport, reorderDeadWindows: reorderDeadWindows, reorderDeadUnequal: reorderDeadUnequal, reorderDeadToSport: reorderDeadToSport, weeklyReleasable: weeklyReleasable, trySeatSwap: trySeatSwap };

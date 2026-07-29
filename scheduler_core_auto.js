@@ -20150,7 +20150,7 @@
                                             var _reoUn = window.GLStagger.reorderDeadUnequal({ bunks: _reoBunks, gate: _glGate, capFits: _glCapFits, recordUse: _glRecordUse, specialDurs: _glSpecialDurs, canon: _glCanon, sportLabel: 'Sport', canConvert: _glMayRepurpose, seatRelease: _glSeatRelease, seatGate: _glSeatGateTile, seatCommit: _glSeatCommitTile, onReorder: function () { _glFill.filled = (_glFill.filled || 0) + 1; } });
                                             if (_reoUn && _reoUn.rescued) {
                                                 _glFill.reorderedUnequal = _reoUn.rescued;
-                                                log('[GENERIC-REORDER-UNEQUAL] rescued ' + _reoUn.rescued + ' dead window(s) the equal-duration swap cannot reach — kinds exchanged in place, spans untouched (' + _reoUn.attempts + ' attempt(s))');
+                                                log('[GENERIC-REORDER-UNEQUAL] rescued ' + _reoUn.rescued + ' dead window(s) the equal-duration swap cannot reach — kinds exchanged in place, spans untouched (' + _reoUn.attempts + ' attempt(s)' + (_reoUn.pairs ? ', ' + _reoUn.pairs + ' needed TWO blockers relocated' : '') + ')');
                                             } else if (_reoUn && _reoUn.attempts) {
                                                 log('[GENERIC-REORDER-UNEQUAL] 0 of ' + _reoUn.attempts + ' unequal-duration candidate(s) worked (a Sport stayed mis-spaced at the dead window, or the sport slot had no fillable special)');
                                             }
