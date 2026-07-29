@@ -832,17 +832,28 @@
         var canConvert = (ctx && typeof ctx.canConvert === 'function') ? ctx.canConvert : null;
         if (!gate || !canFill) return { rescued: 0, attempts: 0, bunks: bunks.length };
 
-        // A sport tile may only be re-sized to a length its own demand permits.
-        function _sportLenOk(B, len) {
+        // A sport tile may only take a length this pipeline already treats as legal.
+        // Prefer the demand's own range when it carries one. In practice the layout's
+        // sport tiles arrive with _ref.dMin/dMax NULL (measured live: 94 movable sport
+        // tiles, every one null) while the layout itself has already emitted sport tiles
+        // at 10/20/30/40min — so "no range" means "not recorded here", NOT "no sports".
+        // Falling back to a flat refusal made this pass reject all 9 real candidates.
+        // Instead, accept a length the layout has ALREADY chosen for a sport on this same
+        // bunk: that is observed engine behaviour rather than an invented duration.
+        function _sportLenOk(B, len, tiles) {
             var r = (B && B._ref) || {};
             var lo = (r.dMin != null) ? r.dMin : null;
             var hi = (r.dMax != null) ? r.dMax : null;
-            if (lo == null && hi == null) {
-                var durs = (typeof r.durations !== 'undefined' && r.durations && r.durations.length) ? r.durations : null;
-                if (durs) return durs.indexOf(len) >= 0;
-                return false;   // unknown range → refuse rather than invent a duration
+            if (lo != null || hi != null) {
+                return (lo == null || len >= lo) && (hi == null || len <= hi);
             }
-            return (lo == null || len >= lo) && (hi == null || len <= hi);
+            var durs = (r.durations && r.durations.length) ? r.durations : null;
+            if (durs) return durs.indexOf(len) >= 0;
+            for (var i = 0; i < (tiles || []).length; i++) {
+                var t = tiles[i];
+                if (t && t.kind === 'sport' && t.durationMin === len) return true;
+            }
+            return false;
         }
 
         var rescued = 0, attempts = 0;
@@ -871,7 +882,7 @@
                     if (!(B.kind === 'sport' && B.generic === true && !B._concrete)) continue;
                     if (B.durationMin === W.durationMin) continue;     // equal case belongs to the strict pass
                     if (B.pinned || (B._ref && B._ref.share)) continue;
-                    if (!_sportLenOk(B, W.durationMin)) continue;
+                    if (!_sportLenOk(B, W.durationMin, tiles)) continue;
                     attempts++;
 
                     // (1) Sport spacing-legal at W, with B no longer counting as a sport.
