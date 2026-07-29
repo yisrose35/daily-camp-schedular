@@ -1187,9 +1187,11 @@ function init(targetElement = null){
   renderGrid();
   
   // Force UI to match current universal mode immediately on load
+  // ★ Helper Mode reuses the manual skeleton editor (single blank tile) — so it
+  //   shows the same manual container; only the palette differs (see renderPalette).
   const manualEl = document.getElementById('ms-manual-container');
   const autoEl = document.getElementById('ms-auto-container');
-  if (currentBuilderMode === 'manual') {
+  if (currentBuilderMode === 'manual' || currentBuilderMode === 'helper') {
     if (manualEl) manualEl.style.display = 'flex';
     if (autoEl) autoEl.style.display = 'none';
   } else {
@@ -4072,7 +4074,47 @@ function renderExpandSection() {
 // --- Render Palette ---
 function renderPalette() {
   palette.innerHTML = '';
-  
+
+  // ★ HELPER MODE: the user places blank time-boxes only — a single generic
+  //   "Activity Block" tile. Everything (activity / sport / special / league,
+  //   field, opponent) is filled in later, per bunk, in the Helper spreadsheet.
+  //   The tile reuses the existing 'activity' slot drop path (asks for times
+  //   only, no activity picker), so no drop-handler changes are needed.
+  const _mode = (window.getCampBuilderMode ? window.getCampBuilderMode() : builderMode) || 'manual';
+  if (_mode === 'helper') {
+    const cat = { label: 'Helper', tiles: [{
+      type: 'activity',
+      name: 'Activity Block',
+      style: 'background:#93c5fd;color:#1e3a5f;',
+      description: 'A blank time-box. Place one per grade for each activity window; fill in the details per bunk in the Helper spreadsheet after you press Generate.'
+    }] };
+    const label = document.createElement('div');
+    label.className = 'ms-tile-label';
+    label.textContent = cat.label;
+    palette.appendChild(label);
+    cat.tiles.forEach(tile => {
+      const el = document.createElement('div');
+      el.className = 'ms-tile';
+      el.draggable = true;
+      el.title = tile.description || '';
+      const dot = document.createElement('span');
+      dot.className = 'ms-tile-dot';
+      dot.style.background = '#93c5fd';
+      el.appendChild(dot);
+      const name = document.createElement('span');
+      name.className = 'ms-tile-name';
+      name.textContent = tile.name;
+      el.appendChild(name);
+      el.onclick = (e) => { if (e.detail === 1) { setTimeout(() => { if (!el.dragging) showTileInfo(tile); }, 200); } };
+      el.ondragstart = (e) => { el.dragging = true; e.dataTransfer.setData('application/json', JSON.stringify(tile)); };
+      el.ondragend = () => { el.dragging = false; };
+      el.addEventListener('touchstart', (e) => { el.dataset.tileData = JSON.stringify(tile); if (!window.MobileTouchDrag) el.style.opacity = '0.6'; }, { passive: true });
+      el.addEventListener('touchend', () => { el.style.opacity = '1'; });
+      palette.appendChild(el);
+    });
+    return;
+  }
+
   const categories = [
     { label: 'Slots', types: ['activity', 'sports', 'special'] },
     { label: 'Advanced', types: ['smart', 'split', 'elective', 'swim_elective'] },
@@ -5854,7 +5896,9 @@ window.MasterSchedulerInternal = {
       builderMode = newMode;
       const manualEl = document.getElementById('ms-manual-container');
       const autoEl = document.getElementById('ms-auto-container');
-      if (newMode === 'manual') {
+      if (newMode === 'manual' || newMode === 'helper') {
+        // ★ Helper Mode uses the same manual skeleton editor; renderPalette
+        //   restricts the palette to a single blank Activity Block tile.
         if (manualEl) manualEl.style.display = 'flex';
         if (autoEl) autoEl.style.display = 'none';
         // ★ Reset template lock so loadDailySkeleton re-evaluates from scratch
