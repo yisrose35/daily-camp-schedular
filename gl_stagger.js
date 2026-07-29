@@ -803,7 +803,130 @@
         return need < remaining;
     }
 
-    const api = { VERSION: VERSION, restructure: restructure, inWindow: inWindow, absorbUnfilledToSport: absorbUnfilledToSport, reorderDeadWindows: reorderDeadWindows, reorderDeadToSport: reorderDeadToSport, weeklyReleasable: weeklyReleasable, trySeatSwap: trySeatSwap };
+    // reorderDeadUnequal(ctx) — the case the strict swap structurally cannot reach.
+    //
+    // reorderDeadWindows requires B.durationMin === W.durationMin because it SWAPS THE
+    // TIME SLOTS of the two tiles: exchanging spans of unequal length would leave a
+    // residue and break wall-to-wall. Live that guard is why the rescue never fires here:
+    // the blocking sport is 40 min and the dead window is 30, so 40 !== 30 and the pass
+    // skips — even though moving that sport is exactly what would free the window.
+    // (Verified against the live rule engine: a sport at the dead window is rejected with
+    // the neighbouring sport present and ACCEPTED without it.)
+    //
+    // This pass never moves a span. It exchanges the two tiles' KINDS in place:
+    //     W (dead special, stays at its own span)  ->  becomes a generic Sport
+    //     B (movable sport, stays at its own span) ->  becomes a filled Special
+    // Each tile keeps its own start/end, so coverage is preserved by construction and
+    // duration equality is irrelevant. Requirements, all pre-checked:
+    //   1. a Sport is spacing-legal at W's span once B is no longer a sport,
+    //   2. W's length is a legal sport duration for B's demand (a 30-min sport is fine
+    //      when the layer says 30-50; never invent a length the config forbids),
+    //   3. a special of B's OWN length is fillable at B's span (cap + no same-day repeat),
+    //   4. both tiles pass the seat gate at their unchanged spans — else full rollback.
+    function reorderDeadUnequal(ctx) {
+        var bunks = (ctx && ctx.bunks) || [];
+        var gate = (ctx && typeof ctx.gate === 'function') ? ctx.gate : null;
+        var label = (ctx && ctx.sportLabel) || 'Sport';
+        var canon = (ctx && typeof ctx.canon === 'function') ? ctx.canon : function (v) { return String(v || '').toLowerCase().trim(); };
+        var canFill = !!(ctx && typeof ctx.capFits === 'function' && typeof ctx.recordUse === 'function');
+        var canConvert = (ctx && typeof ctx.canConvert === 'function') ? ctx.canConvert : null;
+        if (!gate || !canFill) return { rescued: 0, attempts: 0, bunks: bunks.length };
+
+        // A sport tile may only be re-sized to a length its own demand permits.
+        function _sportLenOk(B, len) {
+            var r = (B && B._ref) || {};
+            var lo = (r.dMin != null) ? r.dMin : null;
+            var hi = (r.dMax != null) ? r.dMax : null;
+            if (lo == null && hi == null) {
+                var durs = (typeof r.durations !== 'undefined' && r.durations && r.durations.length) ? r.durations : null;
+                if (durs) return durs.indexOf(len) >= 0;
+                return false;   // unknown range → refuse rather than invent a duration
+            }
+            return (lo == null || len >= lo) && (hi == null || len <= hi);
+        }
+
+        var rescued = 0, attempts = 0;
+        for (var bi = 0; bi < bunks.length; bi++) {
+            var bunk = bunks[bi] || {};
+            if (bunk.noSport) continue;                       // sportless grade → never inject a sport
+            var tiles = bunk.tiles || [];
+            if (!tiles.length) continue;
+            var grade = bunk.grade;
+            var used = Object.create(null);
+            for (var u = 0; u < tiles.length; u++) {
+                var ut = tiles[u];
+                if (ut && ut.kind === 'special' && ut._concrete) used[String(ut._concrete).toLowerCase()] = 1;
+            }
+            var dead = [];
+            for (var di = 0; di < tiles.length; di++) {
+                var dt = tiles[di];
+                if (dt && dt.kind === 'special' && dt.generic === true && !dt._concrete && (!canConvert || canConvert(dt))) dead.push(dt);
+            }
+            for (var mi = 0; mi < dead.length; mi++) {
+                var W = dead[mi];
+                if (W._concrete || W.kind !== 'special') continue;
+                for (var pj = 0; pj < tiles.length; pj++) {
+                    var B = tiles[pj];
+                    if (!B || B === W) continue;
+                    if (!(B.kind === 'sport' && B.generic === true && !B._concrete)) continue;
+                    if (B.durationMin === W.durationMin) continue;     // equal case belongs to the strict pass
+                    if (B.pinned || (B._ref && B._ref.share)) continue;
+                    if (!_sportLenOk(B, W.durationMin)) continue;
+                    attempts++;
+
+                    // (1) Sport spacing-legal at W, with B no longer counting as a sport.
+                    var tmpl = [];
+                    for (var ti = 0; ti < tiles.length; ti++) {
+                        var T = tiles[ti];
+                        if (!T || T === B || T === W) continue;
+                        tmpl.push(_toBlk(T));
+                    }
+                    var okSport = true;
+                    try { okSport = gate({ type: 'sport', event: label, startMin: W.startMin, endMin: W.endMin }, tmpl); } catch (_eU1) { okSport = true; }
+                    if (!okSport) continue;
+
+                    // (2) a special of B's own length must be fillable at B's span.
+                    var pick = pickAnyFillable(ctx, bunk, B.durationMin, B.startMin, B.endMin, used, false);
+                    if (!pick) continue;
+
+                    // (3) COMMIT — kinds exchange, spans untouched. Snapshot for rollback.
+                    var snapW = { kind: W.kind, name: W.name, generic: W.generic, subcat: W.subcat, _ref: W._ref, _concrete: W._concrete, _origin: W._origin };
+                    var snapB = { kind: B.kind, name: B.name, generic: B.generic, subcat: B.subcat, _ref: B._ref, _concrete: B._concrete, _origin: B._origin };
+                    try { if (ctx.seatRelease) { ctx.seatRelease(W, grade, W.startMin, W.endMin); ctx.seatRelease(B, grade, B.startMin, B.endMin); } } catch (_eU2) {}
+
+                    W.kind = 'sport'; W.name = label; W.generic = true; W.subcat = null;
+                    W._ref = snapB._ref; W._origin = 'unequal-sport';
+                    B.kind = 'special'; B.name = pick.name; B._concrete = pick.name; B.generic = false;
+                    B.subcat = canon(pick.subcategory); B._ref = snapW._ref;
+                    B._fillLoc = pick.location || null; B._origin = 'unequal-fill';
+
+                    var seatOk = true;
+                    try {
+                        if (ctx.seatGate) {
+                            seatOk = ctx.seatGate(B, grade, B.startMin, B.endMin) && ctx.seatGate(W, grade, W.startMin, W.endMin);
+                        }
+                    } catch (_eU3) { seatOk = false; }
+
+                    if (!seatOk) {
+                        for (var k in snapW) { if (Object.prototype.hasOwnProperty.call(snapW, k)) W[k] = snapW[k]; }
+                        for (var k2 in snapB) { if (Object.prototype.hasOwnProperty.call(snapB, k2)) B[k2] = snapB[k2]; }
+                        try { if (ctx.seatCommit) { ctx.seatCommit(W, grade, W.startMin, W.endMin); ctx.seatCommit(B, grade, B.startMin, B.endMin); } } catch (_eU4) {}
+                        continue;
+                    }
+                    try { if (ctx.seatCommit) { ctx.seatCommit(B, grade, B.startMin, B.endMin); ctx.seatCommit(W, grade, W.startMin, W.endMin); } } catch (_eU5) {}
+                    try { ctx.recordUse(pick, grade, B.startMin, B.endMin); } catch (_eU6) {}
+                    used[String(pick.name).toLowerCase()] = 1;
+                    rescued++;
+                    if (ctx.onReorder) { try { ctx.onReorder(); } catch (_eU7) {} }
+                    break;   // this dead window is resolved
+                }
+            }
+            tiles.sort(function (a, b) { return a.startMin - b.startMin; });
+        }
+        return { rescued: rescued, attempts: attempts, bunks: bunks.length };
+    }
+
+    const api = { VERSION: VERSION, restructure: restructure, inWindow: inWindow, absorbUnfilledToSport: absorbUnfilledToSport, reorderDeadWindows: reorderDeadWindows, reorderDeadUnequal: reorderDeadUnequal, reorderDeadToSport: reorderDeadToSport, weeklyReleasable: weeklyReleasable, trySeatSwap: trySeatSwap };
 
     if (typeof window !== 'undefined') {
         window.GLStagger = api;

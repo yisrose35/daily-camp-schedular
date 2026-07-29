@@ -20136,6 +20136,26 @@
                                     } else if (_reoRes && _reoRes.attempts) {
                                         log('[GENERIC-REORDER] no strict-win swaps among ' + _reoRes.attempts + ' candidate(s) — dead windows left as-is (the displaced special found no free seat, or a Sport would be mis-spaced in the freed window)');
                                     }
+                                    // ★ UNEQUAL-DURATION rescue (window.__reorderUnequal, default ON).
+                                    //   The strict pass above swaps TIME SLOTS, so it demands equal
+                                    //   durations — live that is exactly why it never fires here: the
+                                    //   blocking sport is 40min and the dead window 30min. This pass
+                                    //   exchanges the tiles' KINDS in place instead (spans never move,
+                                    //   so coverage is preserved and duration equality is irrelevant):
+                                    //   the dead window becomes a Sport, the sport's slot becomes a
+                                    //   filled Special. Same gate, same seat ledger, full rollback.
+                                    try {
+                                        var _reoUnOn = (typeof window === 'undefined') || (window.__reorderUnequal !== false);
+                                        if (_reoUnOn && typeof window.GLStagger.reorderDeadUnequal === 'function') {
+                                            var _reoUn = window.GLStagger.reorderDeadUnequal({ bunks: _reoBunks, gate: _glGate, capFits: _glCapFits, recordUse: _glRecordUse, specialDurs: _glSpecialDurs, canon: _glCanon, sportLabel: 'Sport', canConvert: _glMayRepurpose, seatRelease: _glSeatRelease, seatGate: _glSeatGateTile, seatCommit: _glSeatCommitTile, onReorder: function () { _glFill.filled = (_glFill.filled || 0) + 1; } });
+                                            if (_reoUn && _reoUn.rescued) {
+                                                _glFill.reorderedUnequal = _reoUn.rescued;
+                                                log('[GENERIC-REORDER-UNEQUAL] rescued ' + _reoUn.rescued + ' dead window(s) the equal-duration swap cannot reach — kinds exchanged in place, spans untouched (' + _reoUn.attempts + ' attempt(s))');
+                                            } else if (_reoUn && _reoUn.attempts) {
+                                                log('[GENERIC-REORDER-UNEQUAL] 0 of ' + _reoUn.attempts + ' unequal-duration candidate(s) worked (a Sport stayed mis-spaced at the dead window, or the sport slot had no fillable special)');
+                                            }
+                                        }
+                                    } catch (_eReoUn) { try { warn('[GENERIC-REORDER-UNEQUAL] error — left as-is: ' + (_eReoUn && _eReoUn.message)); } catch (_e) {} }
                                 }
                             } catch (_glReoErr) { try { warn('[GENERIC-REORDER] error — left as-is: ' + (_glReoErr && _glReoErr.message)); } catch (_e) {} }
                             // ── REORDER → SPORT (engine, default ON — kill: window.__reorderSportConvert=false):
