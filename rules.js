@@ -1604,6 +1604,35 @@ function enforceSpacingSweep(scheduleAssignments, opts) {
     // Sharing capacity of a room/field from its sharableWith config — mirrors the
     // solvers' normalization: not_sharable→1, explicit capacity wins, 'all'→∞,
     // anything else defaults to 2 (same_division-style).
+    // ★ Order a field list by what a grade prefers (rules.js "Field Preferences").
+    //   Stable: fields the grade has no opinion about keep their catalog order, and
+    //   the list is returned untouched when nothing matches. Scores each field by its
+    //   best bias across the activities it hosts, so an activity-scoped preference
+    //   pulls its field forward too. Cached per grade for the length of this sweep.
+    const _prefOrderCache = {};
+    function _prefOrderFields(grade, fields) {
+        if (!grade || !Array.isArray(fields) || fields.length < 2) return fields || [];
+        if (_prefOrderCache[grade]) return _prefOrderCache[grade];
+        const bias = window.SchedulerCoreUtils?.getFieldPreferenceBias;
+        let out = fields;
+        if (typeof bias === 'function') {
+            const scored = fields.map((f, i) => {
+                let b = (f && f.name) ? (bias(grade, f.name, null, 1) || 0) : 0;
+                ((f && f.activities) || []).forEach(a => {
+                    const ab = bias(grade, f.name, a, 1) || 0;
+                    if (ab < b) b = ab;
+                });
+                return { f: f, i: i, b: b };
+            });
+            if (scored.some(x => x.b !== 0)) {
+                scored.sort((x, y) => (x.b - y.b) || (x.i - y.i));
+                out = scored.map(x => x.f);
+            }
+        }
+        _prefOrderCache[grade] = out;
+        return out;
+    }
+
     function _capOfSW(sw) {
         if (!sw) return 1;
         const t = String(sw.type || sw.shareType || 'not_sharable').toLowerCase();
@@ -1624,8 +1653,13 @@ function enforceSpacingSweep(scheduleAssignments, opts) {
             return occ.count < _capOfSW(sw);
         };
         const trySport = function (includeAvoided) {
-            for (let fi = 0; fi < _fieldsR.length; fi++) {
-                const f = _fieldsR[fi]; if (!f || !f.name) continue;
+            // ★ FIELD PREFERENCES BY GRADE: this refill is first-fit over the field
+            //   catalog, so without ordering it would hand the replacement slot to
+            //   whichever field is listed first. Walk the grade's preferred fields
+            //   first (stable, and a no-op when the grade has no preference).
+            const _fieldsPref = _prefOrderFields(grade, _fieldsR);
+            for (let fi = 0; fi < _fieldsPref.length; fi++) {
+                const f = _fieldsPref[fi]; if (!f || !f.name) continue;
                 if (_specialRoomR[_nmR(f.name)]) continue;                       // not a special room
                 if (f.available === false) continue;
                 if (f.timeRules && f.timeRules.enabled) continue;                // skip time-restricted (conservative)

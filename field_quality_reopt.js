@@ -219,6 +219,31 @@
         });
     }
 
+    // Re-point window.fieldUsageBySlot from one field to another for a moved block
+    // (lead slot + its continuation slots). Mirrors the bookkeeping in
+    // total_solver_engine applyPickToSchedule / undoPickFromSchedule. No-op when the
+    // ledger isn't built (auto mode keeps its own time index instead).
+    function _moveSlotUsage(arr, idx, bunk, fromField, toField, act) {
+        var fub = window.fieldUsageBySlot;
+        if (!fub || !fromField || !toField || fromField === toField) return;
+        var last = idx;
+        if (Array.isArray(arr)) {
+            for (var k = idx + 1; k < arr.length; k++) { if (arr[k] && arr[k].continuation) last = k; else break; }
+        }
+        for (var i = idx; i <= last; i++) {
+            var fu = fub[i];
+            if (!fu) continue;
+            var oldU = fu[fromField];
+            if (oldU) {
+                if (oldU.bunks) delete oldU.bunks[bunk];
+                if (oldU.count > 0) oldU.count--;
+            }
+            if (!fu[toField]) fu[toField] = { count: 0, bunks: {} };
+            fu[toField].count++;
+            fu[toField].bunks[bunk] = act;
+        }
+    }
+
     // =========================================================================
     // PREFERENCE PULL — rules.js "Field Preferences" (per-grade field ranking)
     // =========================================================================
@@ -265,13 +290,37 @@
             ((divisions[g] && divisions[g].bunks) || []).forEach(function (b) { bunkGrade[String(b)] = g; });
         });
 
-        var occ = {};
+        // ★ MANUAL-MODE GEOMETRY: manual entries do not all carry _startMin/_endMin —
+        //   block-A entries keep their geometry in _perBunkSlots / divisionTimes by
+        //   slot index (the same reason rules.js enforceSpacingSweep resolves times
+        //   this way). Reading only the entry stamp made this pass blind to them in
+        //   the manual builder: no times → no occupancy ledger and no movable blocks.
+        //   Entry stamp first (it is the ACTUAL placement time), then per-bunk
+        //   geometry, then the division's period times.
+        var _pbsAll = window._perBunkSlots || {};
+        var _dtAll = window.divisionTimes || {};
+        function entryTime(bunk, grade, idx, e) {
+            if (e && e._startMin != null && e._endMin != null) return { s: e._startMin, e: e._endMin };
+            if (e && e.startMin != null && e.endMin != null) return { s: e.startMin, e: e.endMin };
+            var pbs = (_pbsAll[grade] && _pbsAll[grade][bunk])
+                || (_dtAll[grade] && _dtAll[grade]._perBunkSlots && _dtAll[grade]._perBunkSlots[bunk]);
+            if (pbs && pbs[idx] && pbs[idx].startMin != null) return { s: pbs[idx].startMin, e: pbs[idx].endMin };
+            var ds = _dtAll[grade];
+            if (ds && ds[idx] && ds[idx].startMin != null) return { s: ds[idx].startMin, e: ds[idx].endMin };
+            return null;
+        }
+
+        // Occupancy ledger. A placement whose time cannot be resolved at all makes
+        // its field OPAQUE: we can't tell when that field is busy, so it is barred
+        // as a move target rather than risking a double-book on it.
+        var occ = {}, opaque = {};
         Object.keys(sa).forEach(function (b) {
-            (sa[b] || []).forEach(function (s) {
+            var bs = String(b), grade = bunkGrade[bs];
+            (sa[b] || []).forEach(function (s, idx) {
                 if (!s || s.continuation || !s.field || s.field === 'Free') return;
-                var st = (s._startMin != null ? s._startMin : s.startMin), en = (s._endMin != null ? s._endMin : s.endMin);
-                if (st == null || en == null) return;
-                (occ[s.field] = occ[s.field] || []).push({ s: st, e: en, bunk: String(b), act: s._activity });
+                var t = entryTime(bs, grade, idx, s);
+                if (!t || t.s == null || t.e == null) { opaque[s.field] = 1; return; }
+                (occ[s.field] = occ[s.field] || []).push({ s: t.s, e: t.e, bunk: bs, act: s._activity });
             });
         });
         // Same admission rule as the quality phases: empty field, or a same-grade
@@ -310,25 +359,27 @@
             Object.keys(sa).forEach(function (b) {
                 var bs = String(b), grade = bunkGrade[bs];
                 if (!grade) return;
-                (sa[b] || []).forEach(function (s) {
+                (sa[b] || []).forEach(function (s, idx) {
                     if (!s || s.continuation || !s.field || s.field === 'Free') return;
                     if (s._pairLock || s._league || s._postEdit || s._pinned) return;   // locked placements stay put
                     var act = s._activity; if (!act) return;
                     var hosts = hostsBySport[act]; if (!hosts || hosts.length < 2) return;
-                    var st = (s._startMin != null ? s._startMin : s.startMin), en = (s._endMin != null ? s._endMin : s.endMin);
-                    if (st == null || en == null) return;
+                    var t = entryTime(bs, grade, idx, s);
+                    if (!t || t.s == null || t.e == null) return;
+                    var st = t.s, en = t.e;
                     var curB = bias(grade, s.field, act);
                     var best = null, bestB = curB;
                     for (var i = 0; i < hosts.length; i++) {
                         var cand = hosts[i];
                         if (cand === s.field) continue;
+                        if (opaque[cand]) continue;                      // unknown occupancy → never a target
                         var cb = bias(grade, cand, act);
                         if (cb >= bestB) continue;                       // not an improvement
                         // Tie-break equal preference by camp-wide field quality.
                         if (best && cb === bestB && (rankOf[cand] || 999) >= (rankOf[best] || 999)) continue;
                         best = cand; bestB = cb;
                     }
-                    if (best) wants.push({ s: s, bunk: bs, grade: grade, act: act, st: st, en: en, to: best, gain: curB - bestB });
+                    if (best) wants.push({ s: s, bunk: bs, idx: idx, grade: grade, act: act, st: st, en: en, to: best, gain: curB - bestB });
                 });
             });
             if (!wants.length) break;
@@ -347,6 +398,11 @@
                 var fl = occ[from];
                 if (fl) { for (var k = 0; k < fl.length; k++) { if (fl[k].bunk === m.bunk && fl[k].s === m.st && fl[k].e === m.en) { fl.splice(k, 1); break; } } }
                 (occ[m.to] = occ[m.to] || []).push({ s: m.st, e: m.en, bunk: m.bunk, act: m.act });
+                // ★ MANUAL: fieldUsageBySlot is the live per-slot capacity ledger the
+                //   manual builder's later sweeps and the post-edit grid read. Moving a
+                //   field without re-pointing it there would leave the old field looking
+                //   occupied and the new one looking free. Lead slot + its continuations.
+                _moveSlotUsage(sa[m.bunk], m.idx, m.bunk, from, m.to, m.act);
                 moved++; movedThisRound++;
             }
             if (!movedThisRound) break;

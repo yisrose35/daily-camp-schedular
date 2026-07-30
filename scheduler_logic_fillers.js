@@ -413,10 +413,25 @@
             return rankedActivities
                 .filter(r => r.allowed)
                 .map(r => {
-                    const originalPick = picks.find(p => {
+                    // The ranking is per ACTIVITY, but an activity usually has several
+                    // host fields. Picking the first match handed the slot to whichever
+                    // field happened to come first in the catalog — so rules.js FIELD
+                    // PREFERENCES BY GRADE never reached this filler. Among the picks for
+                    // this activity, take the one this grade prefers (bias 0 for all =
+                    // unchanged first-match behavior).
+                    const _matches = picks.filter(p => {
                         const actName = p._activity || p.sport || fieldLabel(p.field);
                         return actName === r.activityName;
                     });
+                    const _bias = window.SchedulerCoreUtils?.getFieldPreferenceBias;
+                    let originalPick = _matches[0];
+                    if (originalPick && _matches.length > 1 && typeof _bias === 'function' && divName) {
+                        let bestB = _bias(divName, fieldLabel(originalPick.field), r.activityName, 1) || 0;
+                        for (let mi = 1; mi < _matches.length; mi++) {
+                            const b = _bias(divName, fieldLabel(_matches[mi].field), r.activityName, 1) || 0;
+                            if (b < bestB) { bestB = b; originalPick = _matches[mi]; }
+                        }
+                    }
                     return {
                         ...originalPick,
                         _rotationScore: r.score,
@@ -440,8 +455,13 @@
             const fieldProps = activityProperties[fieldName] || activityProperties[actName] || {};
             const preferenceScore = calculatePreferenceScore(fieldProps, divName);
             const sharingBonus = calculateSharingBonus(fieldName, block, activityProperties);
+            // ★ rules.js FIELD PREFERENCES BY GRADE (soft): lean toward the field this
+            //   grade should get for the activity. Step 600 breaks ties between host
+            //   fields without outweighing rotation fairness (thousands).
+            const gradeFieldBias = (divName && window.SchedulerCoreUtils?.getFieldPreferenceBias)
+                ? (window.SchedulerCoreUtils.getFieldPreferenceBias(divName, fieldName, actName, 600) || 0) : 0;
 
-            const totalScore = rotationScore - preferenceScore - sharingBonus;
+            const totalScore = rotationScore - preferenceScore - sharingBonus + gradeFieldBias;
 
             return { 
                 ...pick, 

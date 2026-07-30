@@ -7064,6 +7064,37 @@ console.log(`[Generation] Rainy Day Mode: ${window.isRainyDay ? 'ACTIVE 🌧️'
                 if (Object.keys(dvs).length === 0) return true;
                 return !!dvs[grade];
             };
+            // ★ rules.js FIELD PREFERENCES BY GRADE: the free-fill passes below walk
+            //   _sportFields76 FIRST-FIT, so whichever field happens to sit earliest in
+            //   the Facilities list wins — the user's per-grade preference never got a
+            //   say in the manual builder's leftover fills. Walk a per-grade ORDER
+            //   instead: the grade's preferred fields first, everything else in its
+            //   original order (stable). A field is scored by the best bias across the
+            //   activities it hosts, so an activity-scoped preference pulls it forward
+            //   too. Cached per grade; identical to _sportFields76 when no rule matches.
+            const _prefOrderCache76 = {};
+            const _prefFields76 = (grade) => {
+                if (!grade) return _sportFields76;
+                if (_prefOrderCache76[grade]) return _prefOrderCache76[grade];
+                const _bias = window.SchedulerCoreUtils?.getFieldPreferenceBias;
+                let list = _sportFields76;
+                if (typeof _bias === 'function') {
+                    const scored = _sportFields76.map((f, i) => {
+                        let b = _bias(grade, f.name, null, 1) || 0;
+                        (f.activities || []).forEach(a => {
+                            const ab = _bias(grade, f.name, a, 1) || 0;
+                            if (ab < b) b = ab;
+                        });
+                        return { f, i, b };
+                    });
+                    if (scored.some(x => x.b !== 0)) {
+                        scored.sort((x, y) => (x.b - y.b) || (x.i - y.i));
+                        list = scored.map(x => x.f);
+                    }
+                }
+                _prefOrderCache76[grade] = list;
+                return list;
+            };
             // occupancy index + per-bunk today's activities (from the FINAL schedule)
             const _occ76 = {}, _done76 = {};
             const _sa76 = window.scheduleAssignments || {};
@@ -7174,8 +7205,9 @@ console.log(`[Generation] Rainy Day Mode: ${window.isRainyDay ? 'ACTIVE 🌧️'
                     const _ck76 = _kindByCell76[String(b) + '|' + idx];
                     if (_ck76 === 'special' || (!_ck76 && slotKindOf(_slotEvent76(b, g, idx, e)) === 'special')) return;
                     const t = _stime76(b, g, idx, e); if (!t || t.s == null || t.e == null) return;
-                    for (let fi = 0; fi < _sportFields76.length; fi++) {
-                        const f = _sportFields76[fi]; const fl = String(f.name).toLowerCase().trim();
+                    const _pf76 = _prefFields76(g);   // ★ grade's preferred fields first
+                    for (let fi = 0; fi < _pf76.length; fi++) {
+                        const f = _pf76[fi]; const fl = String(f.name).toLowerCase().trim();
                         if (_skip76[fl] || !_fieldFree76(fl, t.s, t.e) || !_access76(f, g) || !_fieldTimeOk76(f, t.s, t.e) || _fieldPinLocked76(f.name, t.s, t.e, g)) continue;
                         let act = null;
                         const _blockedOnField76 = _disSportsByField76[f.name] || null;
@@ -7240,8 +7272,9 @@ console.log(`[Generation] Rainy Day Mode: ${window.isRainyDay ? 'ACTIVE 🌧️'
                     let pool = _grp62[key].slice();
                     if (pool.length < 2) return; // need ≥2 free bunks to form a share
                     const g = pool[0].grade, s = pool[0].s, en = pool[0].e;
-                    for (let fi = 0; fi < _sportFields76.length && pool.length >= 2; fi++) {
-                        const f = _sportFields76[fi]; const fl = String(f.name).toLowerCase().trim();
+                    const _pf62 = _prefFields76(g);   // ★ grade's preferred fields first
+                    for (let fi = 0; fi < _pf62.length && pool.length >= 2; fi++) {
+                        const f = _pf62[fi]; const fl = String(f.name).toLowerCase().trim();
                         if (!_fieldFree76(fl, s, en) || !_access76(f, g) || !_fieldTimeOk76(f, s, en) || _fieldPinLocked76(f.name, s, en, g)) continue;
                         const cap = _capOf62(f); if (cap < 2) continue; // a 1-bunk field can't host a forced pair
                         const blocked = _disSportsByField76[f.name] || null;
@@ -7807,8 +7840,9 @@ console.log(`[Generation] Rainy Day Mode: ${window.isRainyDay ? 'ACTIVE 🌧️'
                         const _ck = _kindByCell76[String(b) + '|' + idx];
                         if (_ck === 'special' || (!_ck && slotKindOf(_slotEvent76(b, g, idx, e)) === 'special')) return; // special-only tile → leave for specials
                         const t = _stime76(b, g, idx, e); if (!t || t.s == null || t.e == null) return;
-                        for (let fi = 0; fi < _sportFields76.length; fi++) {
-                            const f = _sportFields76[fi]; const fl = String(f.name).toLowerCase().trim();
+                        const _pf67 = _prefFields76(g);   // ★ grade's preferred fields first
+                        for (let fi = 0; fi < _pf67.length; fi++) {
+                            const f = _pf67[fi]; const fl = String(f.name).toLowerCase().trim();
                             if (_skip76[fl] || !_free67(fl, t.s, t.e) || !_access76(f, g) || !_fieldTimeOk76(f, t.s, t.e) || _fieldPinLocked76(f.name, t.s, t.e, g)) continue;
                             const blocked = _disSportsByField76[f.name] || null;
                             let act = null;

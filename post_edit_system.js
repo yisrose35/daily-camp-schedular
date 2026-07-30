@@ -1257,11 +1257,24 @@
                 : empty('Every accessible activity has been done');
 
             // --- Open fields now ---
-            const openHtml = openF.length
-                ? openF.map(({ l, av }) => {
+            // ★ rules.js FIELD PREFERENCES BY GRADE: when the user is editing a cell by
+            //   hand, show which open field this grade is supposed to get first — the
+            //   grade's top choice is starred and sorted to the front. Purely
+            //   informational: every open field stays clickable/usable.
+            const _prefBiasOf = (name) => {
+                const b = window.SchedulerCoreUtils?.getFieldPreferenceBias;
+                return (b && divName) ? (b(divName, name, selectedActivity || null, 1) || 0) : 0;
+            };
+            const openSorted = openF.slice()
+                .map((o, i) => ({ o, i, b: _prefBiasOf(o.l.name) }))
+                .sort((x, y) => (x.b - y.b) || (x.i - y.i))
+                .map(x => x.o);
+            const openHtml = openSorted.length
+                ? openSorted.map(({ l, av }) => {
                     const partial = av.status === 'partial';
                     const ex = partial ? `<span style="opacity:0.7;font-weight:400;margin-left:5px;">${av.usage}/${av.max}</span>` : '';
-                    return chip(escHtml(l.name), partial ? '#fef9c3' : '#dcfce7', partial ? '#854d0e' : '#166534', ex);
+                    const star = _prefBiasOf(l.name) < 0 ? '⭐ ' : '';
+                    return chip(star + escHtml(l.name), partial ? '#fef9c3' : '#dcfce7', partial ? '#854d0e' : '#166534', ex);
                 }).join('')
                 : empty('No open fields at this time');
 
