@@ -1995,6 +1995,13 @@ const editBunks = _conflictOwnScope || (editBunksResult instanceof Set ? editBun
             else if (props.preferences.exclusive) return Infinity;
             else penalty += 500;
         }
+        // ★ rules.js FIELD PREFERENCES BY GRADE (soft): rank step costs a little so
+        //   the grade's preferred field wins when it's free, without ever blocking the
+        //   others. Step 600 sits above the field's own division-preference terms
+        //   (±50 / +500) and below the frequency guards (2000) in this scorer's range.
+        if (fName && fName !== 'Free' && divName) {
+            penalty += window.SchedulerCoreUtils?.getFieldPreferencePenalty?.(divName, fName, activityName, 600) || 0;
+        }
         const myNum = parseInt((bunk.match(/\d+/) || [])[0]) || 0;
         for (const slotIdx of slots) {
             const slotUsage = fieldUsageBySlot[slotIdx]?.[fName];

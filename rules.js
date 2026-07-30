@@ -6,6 +6,8 @@
 //   1. Sports Rules (min/max players per sport)   — moved from facilities.js
 //   2. Field Quality Groups                        — moved from facilities.js
 //   3. Cooldown / Spacing Rules (new)             — keep X away from Y
+//   4. Avoid Unless Needed                        — soft: keep sport X off grade Y
+//   5. Field Preferences (per grade)              — soft: grade Y gets field X first
 //
 // NOTE: Cooldown rules apply ONLY to the auto-builder. In manual mode the
 // user decides placement, so a "don't place sport after lunch" rule would
@@ -16,11 +18,16 @@
 //   - sportMetaData, fieldCombos : settings.app1.sportMetaData / app1.fieldCombos
 //   - fieldGroup / qualityRank   : settings.app1.fields[i]
 //   - cooldowns                  : settings.schedulingRules.cooldowns[]
+//   - avoidUnlessNeeded          : settings.schedulingRules.avoidUnlessNeeded[]
+//   - fieldPreferences           : settings.schedulingRules.fieldPreferences[]
 //
 // Public API (window.SchedulingRules):
 //   - getCooldownRules()
 //   - isCandidateAllowed(candidate, template, opts)
 //   - findForbiddenRanges(targetDescriptor, template, opts) -> [{start,end}]
+//   - getFieldPreferenceRules() / saveFieldPreferenceRules(rules)
+//     (the solvers read these through SchedulerCoreUtils.getGradeFieldPreference /
+//      getFieldPreferencePenalty, which cache for their scoring hot loops)
 // ============================================================================
 (function () {
 'use strict';
@@ -120,6 +127,30 @@ function saveAvoidRules(rules) {
     // the very next generation sees this edit.
     window.SchedulerCoreUtils?.invalidateAvoidRulesCache?.();
 }
+// ──────────────────────────────────────────────────────────────────────────
+// FIELD PREFERENCE RULES ("Field Preferences") — data access
+// ──────────────────────────────────────────────────────────────────────────
+// SOFT rule: pick a grade and rank the fields it should get first. Both fields
+// stay open to every grade — the scheduler just prefers the higher-ranked one
+// when it's available. Shape:
+//   settings.schedulingRules.fieldPreferences =
+//     [{ id, grade, activity: '' | 'Basketball', fields: ['Court 1','Court 2'] }]
+// `fields` is ordered, most-preferred first. Empty `activity` = every activity.
+function getFieldPrefRules() {
+    const s = loadSettings();
+    const sr = s.schedulingRules || {};
+    return Array.isArray(sr.fieldPreferences) ? sr.fieldPreferences : [];
+}
+function saveFieldPrefRules(rules) {
+    const s = loadSettings();
+    const sr = s.schedulingRules || {};
+    sr.fieldPreferences = rules || [];
+    saveKey('schedulingRules', sr);
+    // The engine helper caches rules for its scoring hot loops — drop it now so
+    // the very next generation sees this edit.
+    window.SchedulerCoreUtils?.invalidateFieldPreferenceCache?.();
+}
+
 function getGradeNames() {
     const divs = window.divisions || (window.getGlobalDivisions && window.getGlobalDivisions()) || {};
     const names = Object.keys(divs);
@@ -508,6 +539,26 @@ function injectRulesStyles() {
         }
         .fq-check-label:has(input:checked) { background: #DBEAFE; border-color: #93C5FD; }
         .fq-check-label input { cursor: pointer; accent-color: #0F6A7A; }
+
+        /* Field preference rows */
+        .fp-order-list { display: flex; flex-direction: column; gap: 4px; }
+        .fp-item {
+            display: flex; align-items: center; gap: 8px; padding: 6px 10px;
+            background: #F8FAFC; border: 1px solid #F1F5F9; border-radius: 8px;
+        }
+        .fp-item-name { flex: 1; font-size: 0.88rem; font-weight: 500; color: #0F172A; }
+        .fp-item-tag { font-size: 0.72rem; color: #64748B; }
+        .fp-move {
+            background: #fff; border: 1px solid #E2E8F0; color: #475569;
+            width: 26px; height: 24px; border-radius: 6px; cursor: pointer;
+            font-size: 0.75rem; line-height: 1; padding: 0;
+        }
+        .fp-move:hover:not(:disabled) { background: #F1F5F9; }
+        .fp-move:disabled { opacity: 0.35; cursor: default; }
+        .fp-remove {
+            background: transparent; border: none; color: #B91C1C;
+            cursor: pointer; font-size: 1rem; line-height: 1; padding: 0 4px;
+        }
     `;
     const style = document.createElement('style');
     style.id = 'rules-tab-styles';
@@ -1168,6 +1219,203 @@ function renderAvoidList() {
 }
 
 // ──────────────────────────────────────────────────────────────────────────
+// FIELD PREFERENCE CARD ("Field Preferences")
+// ──────────────────────────────────────────────────────────────────────────
+// "1st Grade should get Court 1 over Court 2; 2nd Grade the other way round."
+// Both fields stay open to both grades — this only ranks them.
+function countFieldPrefRules() {
+    return getFieldPrefRules().filter(r => r && r.grade && Array.isArray(r.fields) && r.fields.length).length;
+}
+function updateFieldPrefBadge() {
+    const badgeEl = document.getElementById('rules-fp-badge');
+    if (!badgeEl) return;
+    const count = countFieldPrefRules();
+    badgeEl.innerHTML = count
+        ? `<span class="rules-badge">${count} rule${count !== 1 ? 's' : ''}</span>`
+        : '';
+}
+
+// Every activity a field could host — sports, specials and general activities.
+function fieldPrefActivityOptionsHTML(current) {
+    const cur = String(current || '');
+    const group = (label, names) => {
+        const opts = names.filter(Boolean).map(n =>
+            `<option value="${escapeHtml(n)}"${cur === n ? ' selected' : ''}>${escapeHtml(n)}</option>`).join('');
+        return opts ? `<optgroup label="${escapeHtml(label)}">${opts}</optgroup>` : '';
+    };
+    return `<option value=""${cur === '' ? ' selected' : ''}>Any activity</option>`
+        + group('Sports', getSportNames())
+        + group('Specials', getSpecialActivityNames())
+        + group('Other', getGeneralActivityNames());
+}
+
+function renderFieldPrefCard(container) {
+    if (!container) return;
+    const count = countFieldPrefRules();
+    container.innerHTML = `
+        <div class="rules-card">
+            <div class="rules-card-header" id="rules-fp-toggle">
+                <div>
+                    <div class="rules-card-title">
+                        Field Preferences
+                        <span id="rules-fp-badge">${count ? `<span class="rules-badge">${count} rule${count !== 1 ? 's' : ''}</span>` : ''}</span>
+                    </div>
+                    <div class="rules-card-subtitle">Rank which fields a grade should get first. Nothing is blocked &mdash; the grade still uses the other fields when its favorite is taken.</div>
+                </div>
+                <span class="rules-caret" id="rules-fp-caret">
+                    <svg width="22" height="22" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M6 9l6 6 6-6"/></svg>
+                </span>
+            </div>
+            <div class="rules-card-body" id="rules-fp-body" style="display:none;">
+                <div class="rules-helper">
+                    Example: both courts are open to everyone, but you'd rather
+                    <em>1st Grade</em> play on <em>Court 1</em> and <em>2nd Grade</em> on <em>Court 2</em>.
+                    Add a rule per grade and list its fields best-first.
+                    <strong>Soft rule:</strong> when the preferred field is busy the grade still gets the other one &mdash;
+                    a preference never leaves a bunk with a Free period.
+                    Naming a field for one grade also nudges the <em>other</em> grades off it, so
+                    ranking a single field is enough.
+                </div>
+                <div id="rules-fp-list" style="margin-top:14px;"></div>
+                <div style="margin-top:12px; display:flex; justify-content:flex-end;">
+                    <button class="rules-btn-dark" id="rules-fp-add">+ Add Rule</button>
+                </div>
+            </div>
+        </div>`;
+
+    document.getElementById('rules-fp-toggle').onclick = () => {
+        const body = document.getElementById('rules-fp-body');
+        const caret = document.getElementById('rules-fp-caret');
+        const hidden = body.style.display === 'none';
+        body.style.display = hidden ? 'block' : 'none';
+        caret.classList.toggle('open', hidden);
+    };
+
+    document.getElementById('rules-fp-add').onclick = () => {
+        const current = getFieldPrefRules();
+        const grades = getGradeNames();
+        current.push({ id: uid('fp_'), grade: grades[0] || '', activity: '', fields: [] });
+        saveFieldPrefRules(current);
+        renderFieldPrefList();
+    };
+
+    renderFieldPrefList();
+}
+
+function renderFieldPrefList() {
+    const listEl = document.getElementById('rules-fp-list');
+    if (!listEl) return;
+    listEl.innerHTML = '';
+    updateFieldPrefBadge();
+    const rules = getFieldPrefRules();
+    if (rules.length === 0) {
+        listEl.innerHTML = '<div class="rules-empty">No preferences yet. Click <strong>+ Add Rule</strong> to rank fields for a grade.</div>';
+        return;
+    }
+
+    const grades = getGradeNames();
+    const allFields = getFacilityNames();
+
+    rules.forEach((rule, idx) => {
+        const card = document.createElement('div');
+        card.className = 'cd-row';
+        const gradeOpts = grades.map(g =>
+            `<option value="${escapeHtml(g)}"${String(rule.grade) === g ? ' selected' : ''}>${escapeHtml(g)}</option>`).join('');
+        const ordered = (rule.fields || []).map(f => String(f)).filter(Boolean);
+        const orderedSet = new Set(ordered);
+        const items = ordered.map((f, i) => `
+            <div class="fp-item">
+                <span class="fq-rank-badge">${i + 1}</span>
+                <span class="fp-item-name">${escapeHtml(f)}</span>
+                <span class="fp-item-tag">${i === 0 ? 'first choice' : (i === ordered.length - 1 ? 'last choice' : '')}</span>
+                <button class="fp-move" data-fp-up="${i}" title="Move up"${i === 0 ? ' disabled' : ''}>&#9650;</button>
+                <button class="fp-move" data-fp-down="${i}" title="Move down"${i === ordered.length - 1 ? ' disabled' : ''}>&#9660;</button>
+                <button class="fp-remove" data-fp-rm="${i}" title="Remove field">&times;</button>
+            </div>`).join('');
+        const availFields = allFields.filter(f => !orderedSet.has(f));
+        const fieldChecks = availFields.map(f => `
+            <label class="fq-check-label">
+                <input type="checkbox" class="fp-field-check" value="${escapeHtml(f)}">
+                <span>${escapeHtml(f)}</span>
+            </label>`).join('');
+
+        card.innerHTML = `
+            <div class="cd-fields" style="flex-direction:column; align-items:stretch; gap:10px;">
+                <div style="display:flex; align-items:center; gap:8px; flex-wrap:wrap;">
+                    <span class="cd-label">Prefer for</span>
+                    <select class="rules-select" id="fp-grade-${idx}">${gradeOpts || '<option value="">No grades configured</option>'}</select>
+                    <span class="cd-label">when scheduling</span>
+                    <select class="rules-select" id="fp-act-${idx}">${fieldPrefActivityOptionsHTML(rule.activity)}</select>
+                </div>
+                <div class="fp-order-list" id="fp-order-${idx}">
+                    ${items || '<div class="rules-empty" style="padding:10px;">No fields ranked yet &mdash; add one below.</div>'}
+                </div>
+                <div class="fq-add-section">
+                    <div class="fq-add-section-label">Add fields (they land at the bottom of the list &mdash; reorder with the arrows)</div>
+                    <div class="fq-fields-grid">${fieldChecks || '<div class="rules-empty" style="padding:4px 0;">Every field is already ranked.</div>'}</div>
+                    <button class="rules-btn-dark" id="fp-addfield-${idx}" style="font-size:0.8rem; padding:6px 14px;">+ Add Selected</button>
+                </div>
+            </div>
+            <div class="cd-delete-wrap">
+                <button class="rules-btn-ghost-danger" id="fp-del-${idx}" title="Remove this rule">Remove</button>
+            </div>`;
+        listEl.appendChild(card);
+
+        const gradeEl = document.getElementById('fp-grade-' + idx);
+        const actEl = document.getElementById('fp-act-' + idx);
+        function persistMeta() {
+            const all = getFieldPrefRules();
+            const r = all[idx];
+            if (!r) return;
+            if (gradeEl) r.grade = gradeEl.value;
+            if (actEl) r.activity = actEl.value;
+            saveFieldPrefRules(all);
+            updateFieldPrefBadge();
+        }
+        if (gradeEl) gradeEl.addEventListener('change', persistMeta);
+        if (actEl) actEl.addEventListener('change', persistMeta);
+
+        // Order edits mutate the saved list, then re-render (badges/arrow
+        // disabled-state/available-fields all shift with every change).
+        function mutateFields(fn) {
+            const all = getFieldPrefRules();
+            const r = all[idx];
+            if (!r) return;
+            r.fields = fn((r.fields || []).map(f => String(f)).filter(Boolean)) || [];
+            saveFieldPrefRules(all);
+            renderFieldPrefList();
+        }
+        card.querySelectorAll('[data-fp-up]').forEach(btn => btn.onclick = () => {
+            const i = parseInt(btn.dataset.fpUp);
+            mutateFields(list => { if (i > 0) { const t = list[i - 1]; list[i - 1] = list[i]; list[i] = t; } return list; });
+        });
+        card.querySelectorAll('[data-fp-down]').forEach(btn => btn.onclick = () => {
+            const i = parseInt(btn.dataset.fpDown);
+            mutateFields(list => { if (i < list.length - 1) { const t = list[i + 1]; list[i + 1] = list[i]; list[i] = t; } return list; });
+        });
+        card.querySelectorAll('[data-fp-rm]').forEach(btn => btn.onclick = () => {
+            const i = parseInt(btn.dataset.fpRm);
+            mutateFields(list => { list.splice(i, 1); return list; });
+        });
+
+        const addBtn = document.getElementById('fp-addfield-' + idx);
+        if (addBtn) addBtn.onclick = () => {
+            const checked = [...card.querySelectorAll('.fp-field-check:checked')].map(c => c.value);
+            if (!checked.length) return;
+            mutateFields(list => list.concat(checked.filter(f => list.indexOf(f) === -1)));
+        };
+
+        const delBtn = document.getElementById('fp-del-' + idx);
+        if (delBtn) delBtn.onclick = () => {
+            const all = getFieldPrefRules();
+            all.splice(idx, 1);
+            saveFieldPrefRules(all);
+            renderFieldPrefList();
+        };
+    });
+}
+
+// ──────────────────────────────────────────────────────────────────────────
 // TAB INIT
 // ──────────────────────────────────────────────────────────────────────────
 function initRulesTab() {
@@ -1187,6 +1435,7 @@ function initRulesTab() {
 
             <div id="rules-cd-section"></div>
             <div id="rules-aun-section"></div>
+            <div id="rules-fp-section"></div>
             <div id="rules-sport-section"></div>
             <div id="rules-fq-section"></div>
           </section>
@@ -1194,6 +1443,7 @@ function initRulesTab() {
 
     renderCooldownCard(document.getElementById('rules-cd-section'));
     renderAvoidCard(document.getElementById('rules-aun-section'));
+    renderFieldPrefCard(document.getElementById('rules-fp-section'));
     renderSportsRulesCard(document.getElementById('rules-sport-section'));
     renderFieldQualityCard(document.getElementById('rules-fq-section'));
 
@@ -1482,6 +1732,9 @@ window.renderFieldQualityCard = renderFieldQualityCard;
 window.SchedulingRules = {
     getCooldownRules: getCooldownRules,
     saveCooldownRules: saveCooldownRules,
+    getAvoidRules: getAvoidRules,
+    getFieldPreferenceRules: getFieldPrefRules,
+    saveFieldPreferenceRules: saveFieldPrefRules,
     isCandidateAllowed: isCandidateAllowed,
     checkCandidateDetailed: checkCandidateDetailed,
     findForbiddenRanges: findForbiddenRanges,

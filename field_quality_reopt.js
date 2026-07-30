@@ -35,6 +35,16 @@
         catch (_e) { return {}; }
     }
 
+    // ★ rules.js FIELD PREFERENCES BY GRADE (Rules tab): a per-grade field ranking
+    //   the user set by hand. Quality rank orders fields for the whole camp; this
+    //   orders them for ONE grade, so it wins here — every phase below refuses a
+    //   move/swap that would put a grade on a field it prefers less. Rank cost only
+    //   (0 = the grade's top choice / no rule at all).
+    function _prefPenalty(grade, fieldName, activityName) {
+        if (!grade || !fieldName) return 0;
+        return window.SchedulerCoreUtils?.getFieldPreferencePenalty?.(grade, fieldName, activityName, 1) || 0;
+    }
+
     // Self-contained access/time validator — mirrors the field-level checks in
     // scheduler_core_auto.js `_validateWritePlacement` (disabled fields, daily
     // sport disables, field access restrictions, exclusive field preferences,
@@ -288,6 +298,11 @@
                     if (m.rank >= cur.rank) break;                       // only strictly better-ranked
                     if (m.name === s.field) continue;
                     if ((hostsBySport[sport] || []).indexOf(m.name) < 0) continue;   // field must host the sport
+                    // ★ rules.js FIELD PREFERENCES BY GRADE: quality rank is the camp-wide
+                    //   "which field is nicer" order; a per-grade preference is the user
+                    //   overriding it for this grade ("2nd Grade plays on Court 2"). Never
+                    //   pull a bunk onto a field its grade likes LESS than the current one.
+                    if (_prefPenalty(grade, m.name, sport) > _prefPenalty(grade, s.field, sport)) continue;
                     if (!canUse(m.name, st, en, bs, grade, sport)) continue;          // capacity/sharing OK
                     if (validate(m.name, sport, grade, bs, st, en)) continue;          // access/time problem → skip
                     var from = s.field;
@@ -351,6 +366,14 @@
                 });
             }
             if (!anyChange || !ok) return;
+            // ★ Per-grade field preferences outrank camp-wide quality: reject a
+            //   re-pair that leaves the grades collectively on less-preferred fields.
+            var _prefBefore = 0, _prefAfter = 0;
+            for (var pb = 0; pb < bySen.length; pb++) {
+                _prefBefore += _prefPenalty(bySen[pb].grade, bySen[pb].s.field, bySen[pb].s._activity);
+                _prefAfter += _prefPenalty(bySen[pb].grade, fieldsByRank[pb], bySen[pb].s._activity);
+            }
+            if (_prefAfter > _prefBefore) return;
             for (var j = 0; j < bySen.length; j++) { bySen[j].s.field = fieldsByRank[j]; bySen[j].s._fqMoved = true; }
             moved++;
         });
@@ -397,6 +420,12 @@
                         A.blocks.forEach(function (x) { if ((hostsBySport[x.s._activity] || []).indexOf(fb) < 0) hostsOk = false; });
                         B.blocks.forEach(function (x) { if ((hostsBySport[x.s._activity] || []).indexOf(fa) < 0) hostsOk = false; });
                         if (!hostsOk) continue;
+                        // ★ Per-grade field preferences outrank camp-wide quality —
+                        //   don't swap two units onto fields their grades like less.
+                        var _pfBefore = 0, _pfAfter = 0;
+                        A.blocks.forEach(function (x) { _pfBefore += _prefPenalty(A.grade, fa, x.s._activity); _pfAfter += _prefPenalty(A.grade, fb, x.s._activity); });
+                        B.blocks.forEach(function (x) { _pfBefore += _prefPenalty(B.grade, fb, x.s._activity); _pfAfter += _prefPenalty(B.grade, fa, x.s._activity); });
+                        if (_pfAfter > _pfBefore) continue;
                         var removed = [], temp = [];
                         A.blocks.forEach(function (x) { var e = occRemove(fa, x.bunk, A.st, A.en); if (e) removed.push({ f: fa, e: e }); });
                         B.blocks.forEach(function (x) { var e = occRemove(fb, x.bunk, B.st, B.en); if (e) removed.push({ f: fb, e: e }); });
@@ -491,6 +520,12 @@
                 }
                 if (maxConcurrent(ba) > (capMap[fb] || 2)) return false;   // peak on fa must fit fb
                 if (maxConcurrent(bb2) > (capMap[fa] || 2)) return false;  // peak on fb must fit fa
+                // ★ Per-grade field preferences outrank camp-wide quality — never
+                //   swap the two field rosters onto less-preferred fields overall.
+                var _pBefore = 0, _pAfter = 0;
+                ba.forEach(function (x) { _pBefore += _prefPenalty(x.grade, fa, x.act); _pAfter += _prefPenalty(x.grade, fb, x.act); });
+                bb2.forEach(function (x) { _pBefore += _prefPenalty(x.grade, fb, x.act); _pAfter += _prefPenalty(x.grade, fa, x.act); });
+                if (_pAfter > _pBefore) return false;
                 return true;
             };
             var doSwap = function (fa, fb) {

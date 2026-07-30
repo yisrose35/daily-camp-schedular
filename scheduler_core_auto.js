@@ -28931,6 +28931,16 @@
         //   pass rebuilds its ledger from scheduleAssignments each run, so
         //   re-running is safe and idempotent.
         const _runFieldQualityReopt = function _fieldQualityReopt() {
+                // ★ rules.js FIELD PREFERENCES BY GRADE (Rules tab): quality rank orders
+                //   fields for the whole camp; a per-grade preference is the user
+                //   overriding that order for ONE grade ("2nd Grade plays on Court 2"),
+                //   so it wins here — every phase below refuses a move/swap that would
+                //   put a grade on a field it prefers LESS. Rank cost only (0 = the
+                //   grade's top choice, or no preference rule at all).
+                const _fqPref = function (grade, fieldName, activityName) {
+                    if (!grade || !fieldName) return 0;
+                    return window.SchedulerCoreUtils?.getFieldPreferencePenalty?.(grade, fieldName, activityName, 1) || 0;
+                };
                 const _gs = getGlobalSettings();
                 const _flds = (_gs.app1 && _gs.app1.fields) || _gs.fields || [];
                 const fgMap = {}, fgGroups = {}, hostsBySport = {}, capMap = {};
@@ -29028,6 +29038,7 @@
                             if (m.rank >= cur.rank) break;                                       // only strictly better-ranked
                             if (m.name === s.field) continue;
                             if ((hostsBySport[sport] || []).indexOf(m.name) < 0) continue;        // field must host the sport
+                            if (_fqPref(grade, m.name, sport) > _fqPref(grade, s.field, sport)) continue; // grade prefers where it is
                             if (!canUse(m.name, st, en, bs, grade, sport)) continue;               // capacity/sharing OK
                             if (_validateWritePlacement(m.name, sport, grade, bs, st, en)) continue; // access/time problem → skip
                             const from = s.field;
@@ -29089,6 +29100,14 @@
                         });
                     }
                     if (!anyChange || !ok) return;
+                    // ★ Per-grade field preferences outrank camp-wide quality: reject a
+                    //   re-pair that leaves the grades on collectively less-preferred fields.
+                    let _prefBefore = 0, _prefAfter = 0;
+                    for (let pb = 0; pb < bySen.length; pb++) {
+                        _prefBefore += _fqPref(bySen[pb].grade, bySen[pb].s.field, bySen[pb].s._activity);
+                        _prefAfter += _fqPref(bySen[pb].grade, fieldsByRank[pb], bySen[pb].s._activity);
+                    }
+                    if (_prefAfter > _prefBefore) return;
                     for (let j = 0; j < bySen.length; j++) { bySen[j].s.field = fieldsByRank[j]; bySen[j].s._fqMoved = true; }
                     moved++;
                 });
@@ -29148,6 +29167,12 @@
                                 A.blocks.forEach(function (x) { if ((hostsBySport[x.s._activity] || []).indexOf(fb) < 0) hostsOk = false; });
                                 B.blocks.forEach(function (x) { if ((hostsBySport[x.s._activity] || []).indexOf(fa) < 0) hostsOk = false; });
                                 if (!hostsOk) continue;
+                                // ★ Per-grade field preferences outrank camp-wide quality —
+                                //   don't swap two units onto fields their grades like less.
+                                let _pfBefore = 0, _pfAfter = 0;
+                                A.blocks.forEach(function (x) { _pfBefore += _fqPref(A.grade, fa, x.s._activity); _pfAfter += _fqPref(A.grade, fb, x.s._activity); });
+                                B.blocks.forEach(function (x) { _pfBefore += _fqPref(B.grade, fb, x.s._activity); _pfAfter += _fqPref(B.grade, fa, x.s._activity); });
+                                if (_pfAfter > _pfBefore) continue;
                                 // pull every involved ledger entry, then validate the
                                 // cross placements block-by-block (each pass inserts a
                                 // temp entry so the pair's second half sees the first)

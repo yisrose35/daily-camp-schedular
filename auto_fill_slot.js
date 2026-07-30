@@ -649,6 +649,14 @@
                 score += 1000000;
             }
 
+            // ★ Field preferences by grade (Rules tab soft rule): among otherwise
+            //   equal candidates, favor the field this grade is supposed to get
+            //   first. Step 300 only breaks near-ties in this scorer's ±9000 range —
+            //   a preference must never keep a slot Free or beat rotation fairness.
+            if (c.field) {
+                score += window.SchedulerCoreUtils?.getFieldPreferencePenalty?.(divName, c.field, act, 300) || 0;
+            }
+
             // Small random tie-breaker so repeated calls vary
             score += Math.random() * 50;
 

@@ -774,6 +774,100 @@
     Utils.invalidateAvoidRulesCache = function () { _aunCache = { t: 0, rules: null }; };
 
     /**
+     * ★ FIELD PREFERENCE BY GRADE (Rules tab → "Field Preferences") — SOFT rule:
+     * both fields are open to both grades, but the user has a preference —
+     * "1st Grade should get Court 1 over Court 2, 2nd Grade the other way round".
+     * Nothing is blocked: the consumers apply a modest score penalty per rank
+     * step, so the preferred field wins whenever it's actually available and the
+     * less-preferred one is still used freely when it isn't.
+     *
+     * Rules live in settings.schedulingRules.fieldPreferences:
+     *   [{ id, grade, activity: '' | 'Basketball', fields: ['Court 1','Court 2'] }]
+     *   - `fields` is ORDERED, most-preferred first.
+     *   - `activity` empty = the preference applies to every activity on those
+     *     fields; otherwise it only applies to that one activity.
+     *
+     * Ranking semantics (see getGradeFieldPreference):
+     *   - a field the grade listed  → its index (0 = top choice, no penalty)
+     *   - a field the grade did NOT list but another preference rule DOES
+     *     mention (the "managed" set) → ranked last, so "1st Grade prefers
+     *     Court 1" alone is enough to steer it off Court 2
+     *   - any other field → null (untouched — the rule never steers a grade
+     *     away from fields nobody expressed a preference about)
+     *
+     * Cached for 3s like the avoid rules — this runs inside scoring hot loops.
+     * Fail-open on any read error.
+     */
+    let _fpCache = { t: 0, rules: null };
+    function _fieldPrefRules() {
+        const now = Date.now();
+        if (!_fpCache.rules || (now - _fpCache.t) > 3000) {
+            let rules = [];
+            try {
+                const sr = (window.loadGlobalSettings?.() || {}).schedulingRules || {};
+                if (Array.isArray(sr.fieldPreferences)) rules = sr.fieldPreferences;
+            } catch (e) { /* fail open */ }
+            _fpCache = { t: now, rules: rules };
+        }
+        return _fpCache.rules;
+    }
+    Utils.invalidateFieldPreferenceCache = function () { _fpCache = { t: 0, rules: null }; };
+
+    /**
+     * Rule lookup: how does `fieldName` rank for `divName` (optionally for a
+     * specific activity)? → { rank, of } with rank 0 = most preferred, or null
+     * when no preference applies. An activity-scoped rule beats an
+     * any-activity rule for the same grade.
+     */
+    Utils.getGradeFieldPreference = function (divName, fieldName, activityName) {
+        if (!divName || !fieldName) return null;
+        const rules = _fieldPrefRules();
+        if (!rules.length) return null;
+        const _lc = (v) => String(v == null ? '' : v).toLowerCase().trim();
+        const div = _lc(divName), fld = _lc(fieldName), act = _lc(activityName);
+        if (!div || !fld) return null;
+
+        let best = null, bestSpecific = false, managed = null;
+        for (let i = 0; i < rules.length; i++) {
+            const r = rules[i];
+            if (!r || !r.grade || !Array.isArray(r.fields) || !r.fields.length) continue;
+            const rAct = _lc(r.activity);
+            // Activity scoping: an activity-scoped rule is in play only when the
+            // caller named that same activity (a caller that names no activity
+            // gets the any-activity rules only — never a guessed match).
+            if (rAct && rAct !== act) continue;
+            // In-scope rule → its fields are part of the managed set.
+            if (!managed) managed = new Set();
+            for (let f = 0; f < r.fields.length; f++) { const n = _lc(r.fields[f]); if (n) managed.add(n); }
+            if (_lc(r.grade) !== div) continue;
+            const specific = !!rAct;
+            if (!best || (specific && !bestSpecific)) { best = r; bestSpecific = specific; }
+        }
+        if (!best) return null;
+
+        const list = best.fields.map(_lc).filter(Boolean);
+        const idx = list.indexOf(fld);
+        if (idx !== -1) return { rank: idx, of: list.length };
+        // Not listed by this grade, but somebody expressed a preference about it
+        // → treat as the grade's last choice.
+        if (managed && managed.has(fld)) return { rank: list.length, of: list.length + 1 };
+        return null;
+    };
+
+    /**
+     * Scoring convenience for the solvers: the penalty to ADD for putting
+     * `divName` on `fieldName` (0 = top choice / no rule). `step` is the
+     * per-rank cost in the caller's own score units — each consumer passes a
+     * value scaled to its local range so the preference nudges without ever
+     * overriding a hard constraint.
+     */
+    Utils.getFieldPreferencePenalty = function (divName, fieldName, activityName, step) {
+        const p = Utils.getGradeFieldPreference(divName, fieldName, activityName);
+        if (!p || !p.rank) return 0;
+        return p.rank * (step > 0 ? step : 100);
+    };
+
+    /**
      * =========================================================================
      * MAIN FIT CHECK - DIVISION-AWARE LOCK CHECKING FOR ELECTIVES
      * =========================================================================

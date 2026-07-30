@@ -2368,6 +2368,11 @@
                 // ★ Avoid-unless-needed (soft rule): keep it available but rank it
                 //   dead last so auto-fill only reaches for it when nothing else fits.
                 if (window.SchedulerCoreUtils?.isSportAvoidedUnlessNeeded?.(divName, sn)) score -= 100000;
+                // ★ Field preferences by grade (soft rule): surface the field this grade
+                //   is meant to get first. Higher score = better here, so a rank step
+                //   subtracts — small enough (8 in a ~100-point range) to break ties
+                //   without burying an otherwise-better activity.
+                score -= (window.SchedulerCoreUtils?.getFieldPreferencePenalty?.(divName, f.name, sn, 8) || 0);
                 candidates.push({ activity: sn, field: f.name, score });
             });
         });
@@ -2404,6 +2409,7 @@
             else if (daysSince >= 3) score += 5;
             // ★ Avoid-unless-needed parity for a special sharing a rule-listed name.
             if (window.SchedulerCoreUtils?.isSportAvoidedUnlessNeeded?.(divName, s.name)) score -= 100000;
+            score -= (window.SchedulerCoreUtils?.getFieldPreferencePenalty?.(divName, s.location || s.name, s.name, 8) || 0);
             candidates.push({ activity: s.name, field: s.name, score });
         });
 

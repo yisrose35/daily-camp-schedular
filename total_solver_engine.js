@@ -1251,6 +1251,17 @@
             }
         }
 
+        // ★★★ FIELD PREFERENCES BY GRADE (rules.js, soft) ★★★
+        // The user ranked which fields a grade should get first ("1st Grade prefers
+        // Court 1 over Court 2"). Nothing is blocked — each rank step just costs, so
+        // the favorite wins when free and the runner-up is still preferred over a Free
+        // slot. Step 2500 deliberately outweighs the field-group quality step (1500/rank
+        // above): an explicit per-grade preference beats the generic "best field first"
+        // steering, while staying far below the 900000 infeasibility threshold.
+        if (fieldName && fieldName !== 'Free' && blockDivName) {
+            penalty += window.SchedulerCoreUtils?.getFieldPreferencePenalty?.(blockDivName, fieldName, act, 2500) || 0;
+        }
+
         // Sharing incentive — uses occupancy data computed above
         if (_wantOccupancy && slots.length > 0) {
             if (occSameAct) penalty -= 1500;
