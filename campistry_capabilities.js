@@ -130,6 +130,7 @@
                 { key: 'transactions', label: 'Transactions', desc: 'Purchase and deposit history' },
                 { key: 'accounts',     label: 'Accounts',     desc: 'Camper balances, deposits, cash out', sensitive: true },
                 { key: 'menu',         label: 'Menu Items',   desc: 'Canteen stock and pricing' },
+                { key: 'pos',          label: 'POS Terminal', desc: 'Ringing up canteen sales at the window' },
                 { key: 'shop',         label: 'Camp Shop',    desc: 'Swag catalogue, orders and fulfilment' },
                 { key: 'settings',     label: 'Settings',     desc: 'Canteen settings and payment methods', sensitive: true }
             ]
@@ -248,7 +249,7 @@
             grants: {
                 'me.billing': 'edit', 'me.payroll': 'edit', 'me.analytics': 'view',
                 'me.campers': 'view', 'me.reports': 'view',
-                'snacks.transactions': 'view', 'snacks.accounts': 'view'
+                'snacks.transactions': 'view', 'snacks.accounts': 'view', 'snacks.pos': 'none'
             }
         },
         {

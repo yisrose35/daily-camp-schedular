@@ -250,12 +250,60 @@
         })[0] || null;
     }
 
-    /**
-     * Put a read-only banner on 'view' sections and disable their write
-     * controls. This is a broad sweep by design — it is better to disable a
-     * button that didn't need disabling than to leave a save enabled in a
-     * section someone can only read.
-     */
+    // ── read-only enforcement ────────────────────────────────────────────────
+    //
+    // A 'view' section has to stay READABLE while refusing every write. That
+    // rules out a blanket click blocker: clicking a table row to look at a
+    // camper is exactly what view access is for.
+    //
+    // So the rule is deny-by-default on form controls, with a safe list for the
+    // things that only read. Over-disabling a filter is a small annoyance;
+    // leaving a Save button live in a read-only section is the bug this exists
+    // to prevent, so the balance leans to disabling.
+    var SAFE_RE = /search|filter|find|print|export|download|csv|pdf|close|cancel|back|refresh|reload|copy|sort|toggle|expand|collapse|tab|next|prev|page|zoom|logout|sign out/i;
+
+    function isSafeControl(el) {
+        if (el.hasAttribute('data-access-safe')) return true;
+        if (el.hasAttribute('data-page') || el.hasAttribute('data-tab')) return true;
+        if (el.type === 'search') return true;
+        if (el.closest('.access-ro-banner')) return true;
+        // Nav and chrome outside the section body.
+        if (el.closest('.sidebar, .app-header, .lk-nav, .snacks-bnav, .lk-bnav, .ops-tabs, .lk-tabs, .tabs')) return true;
+        var hay = [
+            el.id, el.className, el.name,
+            el.getAttribute('placeholder'), el.getAttribute('aria-label'),
+            el.getAttribute('title'), (el.textContent || '').slice(0, 40)
+        ].join(' ');
+        return SAFE_RE.test(hay);
+    }
+
+    var RO_TITLE = 'View only — you don\'t have edit access to this section.';
+
+    function disableWithin(root) {
+        root.querySelectorAll('button, input, select, textarea, [contenteditable="true"]').forEach(function (el) {
+            if (el.hasAttribute('data-access-locked')) return;
+            if (isSafeControl(el)) return;
+            el.setAttribute('data-access-locked', '1');
+            if (el.getAttribute('contenteditable') === 'true') {
+                el.setAttribute('contenteditable', 'false');
+            } else {
+                el.disabled = true;
+            }
+            el.style.opacity = '0.5';
+            el.style.cursor = 'not-allowed';
+            if (!el.title) el.title = RO_TITLE;
+        });
+    }
+
+    /** The section currently on screen, or '' if none is. */
+    function activeSection() {
+        for (var i = 0; i < PANE_SELECTORS.length; i++) {
+            var pane = document.querySelector(PANE_SELECTORS[i] + '.active');
+            if (pane && pane.id) return pane.id.replace(/^(page|tab)-/, '');
+        }
+        return '';
+    }
+
     function markViewOnlyPanes() {
         PANE_SELECTORS.forEach(function (sel) {
             document.querySelectorAll(sel).forEach(function (pane) {
@@ -273,8 +321,24 @@
                         '<circle cx="12" cy="12" r="3"/></svg><span>View only — you can read this section but not change it.</span>';
                     pane.insertBefore(b, pane.firstChild);
                 }
+                disableWithin(pane);
             });
         });
+
+        // Modals are appended to <body>, not into the pane, so a pane-scoped
+        // sweep misses them entirely — and a row click in a view-only list
+        // opens exactly such a modal with a live Save button. Lock any open
+        // overlay while the section on screen is view-only.
+        var sec = activeSection();
+        if (sec && S.level(sec) === 'view') {
+            document.querySelectorAll(
+                '.modal-overlay, .ops-overlay, .me-overlay, .lk-overlay, [role="dialog"]'
+            ).forEach(function (ov) {
+                var shown = ov.classList.contains('open') || ov.classList.contains('active') ||
+                            (ov.style.display && ov.style.display !== 'none');
+                if (shown) disableWithin(ov);
+            });
+        }
     }
 
     /**
@@ -303,6 +367,44 @@
             mo.observe(document.body, { childList: true, subtree: true });
         } catch (e) {}
     }
+
+    /**
+     * Whole-page guard, for a section that lives on its own page rather than as
+     * a pane — the POS terminal is one. Blocks the page at 'none' and locks its
+     * controls at 'view'.
+     *
+     * Declared on the page as:
+     *   <script src="campistry_access_sections.js" data-guard-section="pos"></script>
+     */
+    S.guardPage = function (section) {
+        S.onReady(function () {
+            var lvl = S.level(section);
+            if (lvl === 'edit') return;
+            var C = CAPS();
+            var cap = C && C.get(PRODUCT + '.' + section);
+            if (lvl === 'none') {
+                document.documentElement.style.overflow = 'hidden';
+                var o = document.createElement('div');
+                o.style.cssText = 'position:fixed;inset:0;z-index:2147483646;background:#F8FAFC;' +
+                    'display:flex;align-items:center;justify-content:center;padding:24px;' +
+                    'font-family:system-ui,-apple-system,Segoe UI,Roboto,sans-serif;';
+                o.innerHTML = blockedHtml(cap) +
+                    '<style>.access-page-home{display:block;margin-top:16px;color:#4F46E5;font-weight:600;}</style>';
+                (document.body || document.documentElement).appendChild(o);
+            } else {
+                // view: lock every write control on the page.
+                disableWithin(document.body);
+                var b = document.createElement('div');
+                b.className = 'access-ro-banner';
+                b.style.cssText = 'position:sticky;top:0;z-index:9999;display:flex;align-items:center;gap:8px;' +
+                    'padding:9px 14px;background:#FFFBEB;border-bottom:1px solid #FDE68A;' +
+                    'font-size:.8rem;color:#92400E;';
+                b.textContent = 'View only — you can read ' +
+                    ((cap && cap.label) || 'this page') + ' but not change it.';
+                if (document.body.firstChild) document.body.insertBefore(b, document.body.firstChild);
+            }
+        });
+    };
 
     // ── data scrub + save preservation ───────────────────────────────────────
     //
@@ -373,8 +475,13 @@
         })();
     }
 
+    // A page can declare the single section it IS, rather than hosting panes.
+    var GUARD = document.currentScript && document.currentScript.getAttribute('data-guard-section');
+
     if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', boot);
     else boot();
+
+    if (GUARD) S.guardPage(GUARD);
 
     window.CampistrySections = S;
 })();

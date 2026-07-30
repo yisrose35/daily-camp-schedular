@@ -225,3 +225,106 @@ test('no preset except full/read-only reaches into billing or payroll', () => {
             assert.strictEqual(exp['me.billing'], 'none', p.key + ' reaches billing');
         });
 });
+
+// ── Snacks / Go / Live: the view-vs-edit distinction ────────────────────────
+// These three are where "view" carries real weight — a canteen worker who can
+// read balances but not move money, a bus coordinator who can read routes but
+// not regenerate them, a counselor who can see roll call but not mark it.
+
+test('Snacks: the POS is separable from the rest of the canteen', () => {
+    // Someone auditing the canteen should read balances without a live till.
+    const auditor = staff({ overrides: {
+        'snacks.dashboard': 'view', 'snacks.transactions': 'view',
+        'snacks.accounts': 'view', 'snacks.pos': 'none'
+    } });
+    assert.strictEqual(C.resolve('snacks.accounts', auditor), 'view');
+    assert.ok(!C.canEdit('snacks.accounts', auditor));   // no deposits, no cash out
+    assert.strictEqual(C.resolve('snacks.pos', auditor), 'none');
+    assert.strictEqual(C.resolve('snacks.menu', auditor), 'none');
+});
+
+test('Snacks: canteen staff get the till, the bookkeeper does not', () => {
+    assert.strictEqual(C.expandPreset('canteen')['snacks.pos'], 'edit');
+    assert.strictEqual(C.expandPreset('bookkeeper')['snacks.pos'], 'none');
+    // The bookkeeper still reads the ledger.
+    assert.strictEqual(C.expandPreset('bookkeeper')['snacks.transactions'], 'view');
+});
+
+test('Snacks: the Camp Shop is separable from the canteen', () => {
+    // The shop is a section of Snacks, so it gates independently of the canteen.
+    const shopOnly = staff({ overrides: { 'snacks.shop': 'edit', 'snacks.accounts': 'none' } });
+    assert.ok(C.canEdit('snacks.shop', shopOnly));
+    assert.strictEqual(C.resolve('snacks.accounts', shopOnly), 'none');
+
+    const canteenOnly = staff({ overrides: { 'snacks.menu': 'edit', 'snacks.shop': 'view' } });
+    assert.ok(!C.canEdit('snacks.shop', canteenOnly));
+    assert.ok(C.can('snacks.shop', canteenOnly));
+});
+
+test('Go: routes can be readable without being regenerable', () => {
+    // Regenerating routes is destructive, so read-vs-write matters here.
+    const dispatcher = staff({ overrides: {
+        'go.routes': 'view', 'go.addresses': 'view', 'go.fleet': 'view',
+        'go.setup': 'none', 'go.luggage': 'edit'
+    } });
+    assert.ok(C.can('go.routes', dispatcher));
+    assert.ok(!C.canEdit('go.routes', dispatcher));
+    assert.strictEqual(C.resolve('go.setup', dispatcher), 'none');   // API keys
+    assert.ok(C.canEdit('go.luggage', dispatcher));
+});
+
+test('Go: Luggage is separable from bussing, in both directions', () => {
+    const bagsOnly = staff({ overrides: { 'go.luggage': 'edit' } });
+    assert.ok(C.canEdit('go.luggage', bagsOnly));
+    assert.strictEqual(C.resolve('go.routes', bagsOnly), 'none');
+
+    const busOnly = staff({ preset: 'bus-coordinator', overrides: { 'go.luggage': 'none' } });
+    assert.ok(C.canEdit('go.routes', busOnly));
+    assert.strictEqual(C.resolve('go.luggage', busOnly), 'none');
+});
+
+test('Go: setup is sensitive because it holds the API keys', () => {
+    assert.ok(C.get('go.setup').sensitive);
+});
+
+test('Live: roll call can be watched without being marked', () => {
+    const watcher = staff({ overrides: {
+        'live.dashboard': 'view', 'live.roll-call': 'view',
+        'live.bunk-tracker': 'view', 'live.absences': 'none'
+    } });
+    assert.ok(C.can('live.roll-call', watcher));
+    assert.ok(!C.canEdit('live.roll-call', watcher));    // cannot mark attendance
+    assert.strictEqual(C.resolve('live.absences', watcher), 'none');
+});
+
+test('Live: a counselor role is clamped to view even on an edit grant', () => {
+    // Campistry Lite staff are read-only by role; a preset must not lift that.
+    const c = staff({ role: 'counselor', overrides: { 'live.roll-call': 'edit' } });
+    assert.strictEqual(C.resolve('live.roll-call', c), 'view');
+});
+
+test('Division Head gets Live but still no money anywhere', () => {
+    const dh = staff({ preset: 'division-head' });
+    assert.ok(C.canEdit('live.roll-call', dh));
+    assert.ok(C.canEdit('live.absences', dh));
+    assert.strictEqual(C.resolve('snacks.accounts', dh), 'none');
+    assert.strictEqual(C.resolve('snacks.pos', dh), 'none');
+    assert.strictEqual(C.resolve('go.setup', dh), 'none');
+});
+
+test('every section of Snacks, Go and Live is individually addressable', () => {
+    // Turning exactly one section on must leave every sibling off — that's what
+    // makes "fully customizable" true rather than aspirational.
+    ['snacks', 'go', 'live'].forEach(app => {
+        const secs = C.forApp(app);
+        assert.ok(secs.length >= 6, app + ' has too few sections to be useful');
+        secs.forEach(target => {
+            const u = staff({ overrides: { [target.key]: target.viewOnly ? 'view' : 'edit' } });
+            assert.ok(C.can(target.key, u), target.key + ' should be on');
+            secs.filter(s => s.key !== target.key).forEach(other => {
+                assert.strictEqual(C.resolve(other.key, u), 'none',
+                    other.key + ' leaked when only ' + target.key + ' was granted');
+            });
+        });
+    });
+});

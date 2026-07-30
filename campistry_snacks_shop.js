@@ -117,6 +117,13 @@ window.shopToast = function (msg, isErr) {
 // Modals are created on demand and removed on close. The standalone page used
 // to carry them as static markup; injecting three overlays into the Snacks
 // page just so they can sit hidden isn't worth it.
+// Section access. The Shop is a section of Snacks, so its capability is
+// snacks.shop — a canteen worker can be given the shop read-only.
+function _secEdit(whatFor) {
+    var S = window.CampistrySections;
+    return S ? S.requireEdit('shop', whatFor) : true;
+}
+
 function modal(id, title, bodyHtml, saveLabel, onSave, wide) {
     shopClose(id);
     var ov = document.createElement('div');
@@ -373,11 +380,13 @@ function renderInventory() {
     return h;
 }
 window.shopSetBackorder = function (on) {
+    if (!_secEdit('Changing shop settings')) return;
     shop.settings.parentAllowBackorder = !!on;
     save(); render();
     shopToast(on ? 'Parents can now order out-of-stock items' : 'Out-of-stock items hidden from parents');
 };
 window.shopSetThreshold = function (v) {
+    if (!_secEdit('Changing shop settings')) return;
     shop.settings.lowStockThreshold = Math.max(0, parseInt(v, 10) || 0);
     save(); render();
 };
@@ -424,6 +433,7 @@ function renderReports() {
 
 // ── product editor ──────────────────────────────────────────────────────────
 window.shopEditProduct = function (id) {
+    if (!_secEdit('Editing a product')) return;
     editingProduct = (id == null) ? null : id;
     var p = editingProduct != null ? (productById(editingProduct) || {}) : {};
 
@@ -516,6 +526,7 @@ window.shopClearPhoto = function () {
 };
 
 window.shopSaveProduct = function () {
+    if (!_secEdit('Saving a product')) return;
     var name = val('pName');
     if (!name) { shopToast('Name is required', 1); return; }
     var price = num('pPrice');
@@ -556,6 +567,7 @@ window.shopSaveProduct = function () {
 
 // ── restock ─────────────────────────────────────────────────────────────────
 window.shopRestock = function (id) {
+    if (!_secEdit('Restocking')) return;
     restockProduct = id;
     var p = productById(id); if (!p) return;
     var vs = SC.variants(p);
@@ -569,6 +581,7 @@ window.shopRestock = function (id) {
     modal('shopRestock', 'Restock', h, 'Save Stock', shopSaveRestock);
 };
 window.shopSaveRestock = function () {
+    if (!_secEdit('Saving stock')) return;
     var p = productById(restockProduct); if (!p) return;
     var stock = Object.assign({}, p.stock || {});
     document.querySelectorAll('#shopRestockBody input[data-vid]').forEach(function (i) {
@@ -580,7 +593,8 @@ window.shopSaveRestock = function () {
 };
 
 // ── order editor ────────────────────────────────────────────────────────────
-window.shopNewOrder = function () { shopEditOrder(null); };
+window.shopNewOrder = function () {
+    if (!_secEdit('Creating an order')) return; shopEditOrder(null); };
 
 window.shopEditOrder = function (id) {
     if (!shop.products.length) { shopToast('Add a product first', 1); return; }
@@ -743,6 +757,7 @@ window.shopRecalc = function () {
 };
 
 window.shopSaveOrder = function () {
+    if (!_secEdit('Saving an order')) return;
     var o = draftOrder();
     if (!o.camperName) { shopToast('Pick a camper', 1); return; }
     if (!o.lines.length) { shopToast('Add at least one item', 1); return; }

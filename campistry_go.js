@@ -1172,6 +1172,14 @@ let _toastTimer = null;
         }
     }
 
+// ── Section access gates ─────────────────────────────────────────
+    // campistry_access_sections.js disables controls inside a view-only tab, but a
+    // stale DOM or an inline handler can still reach these. Each write checks.
+    function _secEdit(section, whatFor) {
+        var S = window.CampistrySections;
+        return S ? S.requireEdit(section, whatFor) : true;
+    }
+
     function merge(d) {
         const def = { setup: { campAddress:'',campName:'',avgSpeed:25,reserveSeats:2,dropoffMode:'door-to-door',avgStopTime:2,maxWalkDistance:375,googleMapsKey:'',googleProjectId:'',geoapifyKey:'',campLat:null,campLng:null,standaloneMode:false }, activeMode:'dismissal', buses:[], shifts:[], monitors:[], counselors:[], addresses:{}, savedRoutes:null, dismissal:null, arrival:null };
         const result = { setup: { ...def.setup, ...(d.setup || {}) }, activeMode: d.activeMode || 'dismissal', buses: d.buses || [], shifts: d.shifts || [], monitors: d.monitors || [], counselors: d.counselors || [], addresses: d.addresses || {}, savedRoutes: d.savedRoutes || null, dismissal: d.dismissal || null, arrival: d.arrival || null };
@@ -1436,6 +1444,7 @@ let _toastTimer = null;
         console.log('[Go] Standalone mode: ' + (on ? 'ON — using Go data only' : 'OFF — connected to Campistry Me'));
     }
     function saveSetup() {
+        if (!_secEdit('setup', 'Saving setup')) return;
         const el = id => document.getElementById(id);
         const newAddr = el('campAddress')?.value.trim() || '';
         // If camp address changed, clear cached coordinates so they get re-geocoded
@@ -1580,6 +1589,7 @@ let _toastTimer = null;
     }
     function _pickColor(el) { el.parentElement.querySelectorAll('.color-swatch').forEach(s => s.classList.remove('selected')); el.classList.add('selected'); }
     function saveBus() {
+        if (!_secEdit('fleet', 'Saving a bus')) return;
         const name = document.getElementById('busName')?.value.trim(), cap = parseInt(document.getElementById('busCapacity')?.value);
         const color = document.querySelector('#busColorPicker .color-swatch.selected')?.dataset.color || BUS_COLORS[0];
         const notes = document.getElementById('busNotes')?.value.trim();
@@ -1698,7 +1708,8 @@ let _toastTimer = null;
         D.counselors.forEach(c => { if (c.assignedBus === _editBusId) c.assignedBus = ''; });
         save(); closeModal('busModal'); renderFleet(); renderStaff(); updateStats(); updateBusSelects(); toast('Deleted');
     }
-    function deleteBus(id) { const b = D.buses.find(x => x.id === id); if (!b || !confirm('Delete "' + b.name + '"?')) return; D.buses = D.buses.filter(x => x.id !== id); D.monitors.forEach(m => { if (m.assignedBus === id) m.assignedBus = ''; }); D.counselors.forEach(c => { if (c.assignedBus === id) c.assignedBus = ''; }); save(); renderFleet(); renderStaff(); updateStats(); updateBusSelects(); toast('Deleted'); }
+    function deleteBus(id) {
+        if (!_secEdit('fleet', 'Deleting a bus')) return; const b = D.buses.find(x => x.id === id); if (!b || !confirm('Delete "' + b.name + '"?')) return; D.buses = D.buses.filter(x => x.id !== id); D.monitors.forEach(m => { if (m.assignedBus === id) m.assignedBus = ''; }); D.counselors.forEach(c => { if (c.assignedBus === id) c.assignedBus = ''; }); save(); renderFleet(); renderStaff(); updateStats(); updateBusSelects(); toast('Deleted'); }
     function updateBusSelects() { ['monitorBusAssign', 'counselorBusAssign'].forEach(sid => { const s = document.getElementById(sid); if (!s) return; const cur = s.value; s.innerHTML = '<option value="">— Later —</option>' + D.buses.map(b => '<option value="' + esc(b.id) + '"' + (b.id === cur ? ' selected' : '') + '>' + esc(b.name) + '</option>').join(''); }); }
 
     // =========================================================================
@@ -2076,6 +2087,7 @@ let _toastTimer = null;
     }
     function openMonitorModal(eId) { _editMonitorId = eId || null; document.getElementById('monitorModalTitle').textContent = eId ? 'Edit Monitor' : 'Add Monitor'; updateBusSelects(); const m = eId ? D.monitors.find(x => x.id === eId) : null; document.getElementById('monitorName').value = m?.name || ''; document.getElementById('monitorAddress').value = m?.address || ''; document.getElementById('monitorPhone').value = m?.phone || ''; document.getElementById('monitorBusAssign').value = m?.assignedBus || ''; openModal('monitorModal'); document.getElementById('monitorName').focus(); }
     function saveMonitor() {
+        if (!_secEdit('staff', 'Saving a monitor')) return;
         const n = document.getElementById('monitorName')?.value.trim();
         if (!n) { toast('Enter name', 'error'); return; }
         const a = document.getElementById('monitorAddress')?.value.trim();
@@ -2115,6 +2127,7 @@ let _toastTimer = null;
         openModal('counselorModal'); document.getElementById('counselorName').focus();
     }
     function saveCounselor() {
+        if (!_secEdit('staff', 'Saving a counselor')) return;
         const n = document.getElementById('counselorName')?.value.trim();
         if (!n) { toast('Enter name', 'error'); return; }
         const a = document.getElementById('counselorAddress')?.value.trim();
@@ -2322,6 +2335,7 @@ let _toastTimer = null;
         openModal('addressModal'); document.getElementById('addrStreet').focus();
     }
     async function saveAddress() {
+        if (!_secEdit('addresses', 'Saving an address')) return;
         if (!_editCamper) return;
         const st = document.getElementById('addrStreet')?.value.trim(), ci = document.getElementById('addrCity')?.value.trim(), sa = document.getElementById('addrState')?.value.trim().toUpperCase(), z = document.getElementById('addrZip')?.value.trim();
         const camperId = parseInt(document.getElementById('addrCamperId')?.value) || 0;
@@ -2357,6 +2371,7 @@ let _toastTimer = null;
         }
     }
     function deleteAddress() {
+        if (!_secEdit('addresses', 'Deleting an address')) return;
         if (!_editCamper) return;
         if (!confirm('Delete all address data for ' + _editCamper + '?\n\nThis cannot be undone.')) return;
         delete D.addresses[_editCamper];
@@ -3426,6 +3441,7 @@ let _toastTimer = null;
     let _zonePreviewLayers = []; // Leaflet layers for zone preview
 
 async function generateRoutes() {
+        if (!_secEdit('routes', 'Generating routes')) return;
     // -------------------------------------------------------------------------
     // PRE-FLIGHT
     // -------------------------------------------------------------------------

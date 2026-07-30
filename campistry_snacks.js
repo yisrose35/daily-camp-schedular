@@ -574,6 +574,7 @@ function rSettings() {
 }
 
 window.saveSettingsForm = function() {
+    if (!_secEdit('settings', 'Saving settings')) return;
     const num = (id, dflt) => {
         const e = document.getElementById(id);
         const v = e ? parseFloat(e.value) : NaN;
@@ -635,6 +636,7 @@ function popSelects() {
 }
 
 window.addDep = function() {
+    if (!_secEdit('accounts', 'Adding funds')) return;
     const name = document.getElementById('depCamper').value;
     const amt = parseFloat(document.getElementById('depAmt').value);
     const noteEl = document.getElementById('depNote');
@@ -722,6 +724,7 @@ window.cashQuickAmt = function(v) {
 };
 
 window.cashOut = function() {
+    if (!_secEdit('accounts', 'Paying out cash')) return;
     const name = (document.getElementById('cashCamper') || {}).value || '';
     const amt = parseFloat((document.getElementById('cashAmt') || {}).value);
     const note = ((document.getElementById('cashNote') || {}).value || '').trim();
@@ -754,6 +757,7 @@ window.cashOut = function() {
 };
 
 window.setLimit = function() {
+    if (!_secEdit('accounts', 'Changing a spending limit')) return;
     const name = document.getElementById('limCamper').value;
     const amt = parseFloat(document.getElementById('limAmt').value);
     if (!name || !amt) { toast('Enter valid info', 1); return; }
@@ -766,6 +770,7 @@ window.setLimit = function() {
 };
 
 window.addItem = function() {
+    if (!_secEdit('menu', 'Adding an item')) return;
     const name = document.getElementById('niName').value.trim();
     const cat = document.getElementById('niCat').value;
     const emoji = document.getElementById('niEmoji').value.trim() || '📦';
@@ -782,6 +787,7 @@ window.addItem = function() {
 };
 
 window.restock = function() {
+    if (!_secEdit('menu', 'Restocking')) return;
     const iid = +document.getElementById('rItem').value;
     const qty = parseInt(document.getElementById('rQty').value);
     if (!iid || !qty) { toast('Select item and quantity', 1); return; }
@@ -797,6 +803,19 @@ window.restock = function() {
 // ==========================================================================
 // UTILS
 // ==========================================================================
+
+// ── Section access gates ─────────────────────────────────────────
+// campistry_access_sections.js disables controls inside a view-only section,
+// but a stale DOM or an inline handler on a non-control element can still
+// reach these. Each write path checks explicitly.
+function _secEdit(section, whatFor) {
+    var S = window.CampistrySections;
+    return S ? S.requireEdit(section, whatFor) : true;
+}
+function _secCan(section) {
+    var S = window.CampistrySections;
+    return S ? S.can(section) : true;
+}
 
 function esc(s) { const d = document.createElement('div'); d.textContent = s; return d.innerHTML; }
 function toast(m, e) {

@@ -105,6 +105,13 @@ window.lugToast = function (msg, isErr) {
 };
 // Modals are built on demand and removed on close, so Go's page doesn't have
 // to carry four hidden overlays it never uses.
+// Section access. Luggage is a section of Go, so its capability is go.luggage —
+// a bus coordinator can be given luggage read-only, or vice versa.
+function _secEdit(whatFor) {
+    var S = window.CampistrySections;
+    return S ? S.requireEdit('luggage', whatFor) : true;
+}
+
 function modal(id, title, bodyHtml, saveLabel, onSave, wide) {
     lugClose(id);
     var ov = document.createElement('div');
@@ -433,6 +440,7 @@ window.lugOpenScan = function () {
 };
 
 window.lugRunScan = function () {
+    if (!_secEdit('Scanning bags')) return;
     var to = val('scanTo');
     var tags = val('scanTags').split(/[\s,]+/).filter(Boolean);
     if (!tags.length) { lugToast('Paste or scan some tag codes', 1); return; }
@@ -489,9 +497,11 @@ function renderDelivery() {
 }
 
 // ── booking editor ──────────────────────────────────────────────────────────
-window.lugNewBooking = function () { lugEditBooking(null); };
+window.lugNewBooking = function () {
+    if (!_secEdit('Creating a booking')) return; lugEditBooking(null); };
 
 window.lugEditBooking = function (id) {
+    if (!_secEdit('Editing a booking')) return;
     editingBooking = id || null;
     var b = editingBooking ? (bookingById(editingBooking) || {}) : {};
     var counts = b.counts || {};
@@ -602,6 +612,7 @@ window.lugQuote = function () {
 };
 
 window.lugSaveBooking = function () {
+    if (!_secEdit('Saving a booking')) return;
     var d = draftBooking();
     if (!d.camperName) { lugToast('Pick a camper', 1); return; }
     if (!LC.bagCount(d)) { lugToast('Add at least one bag', 1); return; }
@@ -640,6 +651,7 @@ window.lugDeleteBooking = function (id) {
 
 // ── locations ───────────────────────────────────────────────────────────────
 window.lugEditLocation = function (id) {
+    if (!_secEdit('Editing a location')) return;
     editingLocation = id || null;
     var l = editingLocation ? (locationById(editingLocation) || {}) : {};
     var h =
@@ -655,6 +667,7 @@ window.lugEditLocation = function (id) {
 };
 
 window.lugSaveLocation = function () {
+    if (!_secEdit('Saving a location')) return;
     var name = val('locName');
     if (!name) { lugToast('Name is required', 1); return; }
     var existing = editingLocation ? locationById(editingLocation) : null;
@@ -710,6 +723,7 @@ window.lugEditPricing = function () {
 };
 
 window.lugSavePricing = function () {
+    if (!_secEdit('Saving pricing')) return;
     lug.settings.campName = val('pcName');
     lug.settings.campPrefix = val('pcPrefix').toUpperCase();
     lug.settings.pricing = LC.pricing({

@@ -36,7 +36,20 @@
     function saveTodayData(t) { var d = getLive(); d[getTodayKey()] = t; saveLive(d); }
 
     // Shared UI helpers (each product defines its own, matching Health/Go).
-    function esc(s) { if (s == null) return ''; var d = document.createElement('div'); d.textContent = s; return d.innerHTML; }
+    // ── Section access gates ─────────────────────────────────────────
+// campistry_access_sections.js disables controls inside a view-only section,
+// but a stale DOM or an inline handler on a non-control element can still
+// reach these. Each write path checks explicitly.
+function _secEdit(section, whatFor) {
+    var S = window.CampistrySections;
+    return S ? S.requireEdit(section, whatFor) : true;
+}
+function _secCan(section) {
+    var S = window.CampistrySections;
+    return S ? S.can(section) : true;
+}
+
+function esc(s) { if (s == null) return ''; var d = document.createElement('div'); d.textContent = s; return d.innerHTML; }
     function toast(msg) {
         var el = document.getElementById('toastEl'); if (!el) return;
         el.textContent = msg; el.className = 'toast';
@@ -161,6 +174,7 @@
     }
 
     function toggleAttendance(name) {
+    if (!_secEdit('roll-call', 'Marking attendance')) return;
         const today = getTodayData();
         today.absences = today.absences.filter(a => a.name !== name);
         if (today.attendance[name] === false) {
@@ -175,6 +189,7 @@
     }
 
     function markAllPresent() {
+    if (!_secEdit('roll-call', 'Marking attendance')) return;
         const today = getTodayData();
         today.attendance = {};
         today.absences = [];
@@ -185,6 +200,7 @@
     }
 
     function markBunkPresent(bunkName) {
+    if (!_secEdit('roll-call', 'Marking attendance')) return;
         const roster = getRoster();
         const today = getTodayData();
         let count = 0;
@@ -533,6 +549,7 @@
     function filterAbsenceSearch(val) { filterCamperSelect(val, 'absenceCamper'); }
 
     function saveAbsence() {
+    if (!_secEdit('absences', 'Logging an absence')) return;
         const name = document.getElementById('absenceCamper')?.value;
         if (!name) { toast('Select a camper', 'error'); return; }
         const reason = document.getElementById('absenceReason')?.value || 'absent';
@@ -549,6 +566,7 @@
     }
 
     function removeAbsence(idx) {
+    if (!_secEdit('absences', 'Removing an absence')) return;
         const today = getTodayData();
         const removed = today.absences.splice(idx, 1)[0];
         if (removed) delete today.attendance[removed.name];
@@ -584,6 +602,7 @@
     function filterPickupSearch(val) { filterCamperSelect(val, 'pickupCamper'); }
 
     function savePickup() {
+    if (!_secEdit('early-pickup', 'Saving a pickup')) return;
         const name = document.getElementById('pickupCamper')?.value;
         if (!name) { toast('Select a camper', 'error'); return; }
         const pickupTime = document.getElementById('pickupTime')?.value || formatTimeNow();
@@ -599,6 +618,7 @@
     }
 
     function removePickup(idx) {
+    if (!_secEdit('early-pickup', 'Removing a pickup')) return;
         const today = getTodayData();
         const removed = today.earlyPickups.splice(idx, 1)[0];
         saveTodayData(today);
