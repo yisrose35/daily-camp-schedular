@@ -20117,6 +20117,50 @@
                                             }
                                         }
                                     } catch (_eReStag) { try { warn('[GENERIC-RESTAGGER] error — left as-is: ' + (_eReStag && _eReStag.message)); } catch (_e) {} }
+                                    // ★ FLOOR-FROM-SPORT (window.__floorFromSport, default ON).
+                                    //   Every pass above starts from a dead tile. But a bunk can finish
+                                    //   WALL-TO-WALL and still be missing a subcategory its layer requires —
+                                    //   the time that should have held it went to a sport instead, so there is
+                                    //   no hole for anything to notice. Live (Quartets א): a gapless day, no
+                                    //   open slot at all, yet zero `uncategorized` — while its own 40-min sport
+                                    //   slots at 13:30 and 15:05 each had 8-9 uncategorized activities free.
+                                    //   Convert ONE movable generic sport into the missing subcategory, in
+                                    //   place (span unchanged, so the day stays wall-to-wall). Sports are the
+                                    //   right donor: their demand is a FLOOR ("at least 1"), not a fixed count.
+                                    //   Never takes a bunk's last sport. All hard rules still apply.
+                                    try {
+                                        var _ffsOn = (typeof window === 'undefined') || (window.__floorFromSport !== false);
+                                        if (_ffsOn && typeof _stagCtx !== 'undefined' && _stagCtx && window.GLStagger && typeof window.GLStagger.fillFloorFromSport === 'function') {
+                                            // required subcat floors per grade, straight off the layers ('<=' is a ceiling)
+                                            var _ffsNeed = {};
+                                            (layers || []).forEach(function (l) {
+                                                if (!l || String(l.type || '').toLowerCase() !== 'special') return;
+                                                if (!l.subQuantities || typeof l.subQuantities !== 'object') return;
+                                                var g = l.grade || l.division || '_all';
+                                                var ops = (l.subOps && typeof l.subOps === 'object') ? l.subOps : {};
+                                                Object.keys(l.subQuantities).forEach(function (sn) {
+                                                    var q = parseInt(l.subQuantities[sn], 10) || 0;
+                                                    if (q <= 0) return;
+                                                    var mk = Object.keys(ops).filter(function (x) { return x.toLowerCase() === String(sn).toLowerCase(); })[0];
+                                                    if ((mk ? ops[mk] : '=') === '<=') return;
+                                                    var kk = _glCanon(sn);
+                                                    _ffsNeed[g] = _ffsNeed[g] || {};
+                                                    _ffsNeed[g][kk] = Math.max(_ffsNeed[g][kk] || 0, q);
+                                                });
+                                            });
+                                            var _ffsCtx = {};
+                                            Object.keys(_stagCtx).forEach(function (k) { _ffsCtx[k] = _stagCtx[k]; });
+                                            _ffsCtx.need = _ffsNeed;
+                                            _ffsCtx.gate = _glGate;
+                                            _ffsCtx.onConvert = function () { _glFill.floorFromSport = (_glFill.floorFromSport || 0) + 1; };
+                                            var _ffsRes = window.GLStagger.fillFloorFromSport(_ffsCtx);
+                                            if (_ffsRes && _ffsRes.converted) {
+                                                log('[GENERIC-FLOOR-FROM-SPORT] converted ' + _ffsRes.converted + ' movable sport(s) into a REQUIRED subcategory the bunk was missing (' + _ffsRes.attempts + ' attempt(s)) — the day was already full, so nothing else would have noticed');
+                                            } else if (_ffsRes && _ffsRes.attempts) {
+                                                log('[GENERIC-FLOOR-FROM-SPORT] 0 of ' + _ffsRes.attempts + ' attempt(s) worked — no free seat of the missing subcategory at a movable sport slot' + (_ffsRes.blockedLastSport ? ' (' + _ffsRes.blockedLastSport + ' bunk(s) had only one sport, left alone)' : ''));
+                                            }
+                                        }
+                                    } catch (_eFfs) { try { warn('[GENERIC-FLOOR-FROM-SPORT] error — left as-is: ' + (_eFfs && _eFfs.message)); } catch (_e) {} }
                                     // REORDER PROBE: tell the user, per dead window, whether a reorder could ever
                                     // help. RELOCATABLE = a movable sport blocks it (the reorder the user asked for
                                     // is worth building); WALL-STUCK = blocked by lunch/swim/anchor (reorder can't

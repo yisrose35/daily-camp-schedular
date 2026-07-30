@@ -1036,7 +1036,106 @@
         return { rescued: rescued, attempts: attempts, pairs: rescuedPairs, bunks: bunks.length };
     }
 
-    const api = { VERSION: VERSION, restructure: restructure, inWindow: inWindow, absorbUnfilledToSport: absorbUnfilledToSport, reorderDeadWindows: reorderDeadWindows, reorderDeadUnequal: reorderDeadUnequal, reorderDeadToSport: reorderDeadToSport, weeklyReleasable: weeklyReleasable, trySeatSwap: trySeatSwap };
+    // fillFloorFromSport(ctx) — the case with NO dead tile to rescue.
+    //
+    // Every other pass here starts from a dead/empty tile. But a bunk can end the day
+    // wall-to-wall and STILL be missing a subcategory its layer requires: the time that
+    // should have held it was filled with a sport instead. Live (Quartets א): a completely
+    // gapless day, no open slot at all, yet no `uncategorized` special anywhere — while
+    // its own 40-min sport slots at 13:30 and 15:05 each had 8-9 uncategorized activities
+    // sitting free. Nothing targets that, because there is no hole to notice.
+    //
+    // So: when a bunk is short of a required subcategory, convert ONE movable generic
+    // sport into that subcategory, in place — the span never changes, so the day stays
+    // wall-to-wall. Sports are the right donor because the sport demand is a floor
+    // ("at least 1"), not a fixed count; we still refuse to take the bunk's last sport.
+    //   ctx: { bunks:[{grade,tiles,pool,deferred,noSport}], need:{grade:{subcat:qty}},
+    //          canon, specialDurs, capFits, recordUse, gate?, seatRelease/seatGate/seatCommit?,
+    //          sportLabel?, onConvert?() }
+    function fillFloorFromSport(ctx) {
+        var bunks = (ctx && ctx.bunks) || [];
+        var need = (ctx && ctx.need) || {};
+        var canon = (ctx && typeof ctx.canon === 'function') ? ctx.canon : function (v) { return String(v || '').toLowerCase().trim(); };
+        var gate = (ctx && typeof ctx.gate === 'function') ? ctx.gate : null;
+        if (!ctx || typeof ctx.capFits !== 'function' || typeof ctx.recordUse !== 'function') return { converted: 0, attempts: 0 };
+        var converted = 0, attempts = 0, blockedLastSport = 0;
+
+        for (var bi = 0; bi < bunks.length; bi++) {
+            var bunk = bunks[bi] || {};
+            var tiles = bunk.tiles || [];
+            if (!tiles.length) continue;
+            var grade = bunk.grade;
+            var want = need[grade];
+            if (!want) continue;
+
+            var have = Object.create(null), used = Object.create(null), sportCount = 0;
+            for (var i = 0; i < tiles.length; i++) {
+                var t = tiles[i];
+                if (!t) continue;
+                if (t.kind === 'special' && t._concrete) {
+                    var k = canon(t.subcat);
+                    have[k] = (have[k] || 0) + 1;
+                    used[String(t._concrete).toLowerCase()] = 1;
+                }
+                if (t.kind === 'sport') sportCount++;
+            }
+
+            var subs = Object.keys(want);
+            for (var si = 0; si < subs.length; si++) {
+                var sc = subs[si];
+                if ((have[sc] || 0) >= want[sc]) continue;
+
+                for (var mi = 0; mi < tiles.length; mi++) {
+                    var S = tiles[mi];
+                    if (!S || S.kind !== 'sport') continue;
+                    if (S.generic !== true || S._concrete) continue;        // only a movable placeholder
+                    if (S.pinned || (S._ref && S._ref.share)) continue;
+                    if (sportCount <= 1) { blockedLastSport++; break; }     // never take the last sport
+                    attempts++;
+                    var pick = pickActivity(ctx, bunk, sc, S.durationMin, S.startMin, S.endMin, used, null);
+                    if (!pick) continue;
+                    // the special must be legal at that span (spacing/content rules)
+                    if (gate) {
+                        var tmpl = [];
+                        for (var ti = 0; ti < tiles.length; ti++) {
+                            var T = tiles[ti];
+                            if (!T || T === S) continue;
+                            tmpl.push(_toBlk(T));
+                        }
+                        var okG = true;
+                        try {
+                            okG = gate({ type: 'special', event: pick.name, _assignedSpecial: pick.name, _specialLocation: pick.name, startMin: S.startMin, endMin: S.endMin }, tmpl);
+                        } catch (_eG) { okG = true; }
+                        if (!okG) continue;
+                    }
+                    var snap = { kind: S.kind, name: S.name, generic: S.generic, subcat: S.subcat, _ref: S._ref, _concrete: S._concrete, _origin: S._origin };
+                    try { if (ctx.seatRelease) ctx.seatRelease(S, grade, S.startMin, S.endMin); } catch (_e1) {}
+                    S.kind = 'special'; S.name = pick.name; S._concrete = pick.name; S.generic = false;
+                    S.subcat = canon(pick.subcategory); S._fillLoc = pick.location || null; S._origin = 'floor-from-sport';
+                    var seatOk = true;
+                    try { if (ctx.seatGate) seatOk = ctx.seatGate(S, grade, S.startMin, S.endMin); } catch (_e2) { seatOk = false; }
+                    if (!seatOk) {
+                        S.kind = snap.kind; S.name = snap.name; S.generic = snap.generic;
+                        S.subcat = snap.subcat; S._ref = snap._ref; S._concrete = snap._concrete; S._origin = snap._origin;
+                        try { if (ctx.seatCommit) ctx.seatCommit(S, grade, S.startMin, S.endMin); } catch (_e3) {}
+                        continue;
+                    }
+                    try { if (ctx.seatCommit) ctx.seatCommit(S, grade, S.startMin, S.endMin); } catch (_e4) {}
+                    try { ctx.recordUse(pick, grade, S.startMin, S.endMin); } catch (_e5) {}
+                    used[String(pick.name).toLowerCase()] = 1;
+                    have[sc] = (have[sc] || 0) + 1;
+                    sportCount--;
+                    converted++;
+                    if (ctx.onConvert) { try { ctx.onConvert(); } catch (_e6) {} }
+                    break;   // this subcat is satisfied for this bunk
+                }
+            }
+            tiles.sort(function (a, b) { return a.startMin - b.startMin; });
+        }
+        return { converted: converted, attempts: attempts, blockedLastSport: blockedLastSport };
+    }
+
+    const api = { VERSION: VERSION, restructure: restructure, inWindow: inWindow, absorbUnfilledToSport: absorbUnfilledToSport, reorderDeadWindows: reorderDeadWindows, reorderDeadUnequal: reorderDeadUnequal, reorderDeadToSport: reorderDeadToSport, fillFloorFromSport: fillFloorFromSport, weeklyReleasable: weeklyReleasable, trySeatSwap: trySeatSwap };
 
     if (typeof window !== 'undefined') {
         window.GLStagger = api;
