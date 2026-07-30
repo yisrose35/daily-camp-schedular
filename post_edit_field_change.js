@@ -44,7 +44,8 @@
   PEFC.parseMatchup = function (raw) {
     var text = String(raw == null ? '' : raw).trim();
     if (!text) return { kind: 'unknown', raw: text };
-    if (/[—-]\s*bye\s*$/i.test(text)) return { kind: 'bye', raw: text };
+    // "T — Bye" and "T — Bye: <activity>" (the league's Bye Activity setting).
+    if (/[—-]\s*bye\b/i.test(text)) return { kind: 'bye', raw: text };
     if (/[—-]\s*chinuch/i.test(text)) return { kind: 'chinuch', raw: text };
 
     // "A vs B @ Field (Sport)"

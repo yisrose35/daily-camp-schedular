@@ -275,7 +275,25 @@
                         : null,
                     bunkFacilities: (league.chinuch.bunkFacilities && typeof league.chinuch.bunkFacilities === 'object') ? league.chinuch.bunkFacilities : {}
                   }
-                : { enabled: false, timesPerDay: null, teamsPerRound: null, perSessionCounts: null, bunkFacilities: {} }
+                : { enabled: false, timesPerDay: null, teamsPerRound: null, perSessionCounts: null, bunkFacilities: {} },
+            // ★ BYE ACTIVITY: what a team DOES when it sits out a game. With an
+            //   odd number of teams (or fewer fields than pairings) somebody is
+            //   always benched; instead of a bare "Team — Bye" the user names
+            //   the activities those teams get. `activities` is the shared pool
+            //   (rotated so a benched team doesn't get the same thing twice in
+            //   a row and two benched teams never collide on one facility);
+            //   `teamActivities` pins one team to one activity, always.
+            byeActivity: (league.byeActivity && typeof league.byeActivity === 'object')
+                ? {
+                    enabled: league.byeActivity.enabled === true,
+                    activities: Array.isArray(league.byeActivity.activities)
+                        ? league.byeActivity.activities.filter(function (a) { return typeof a === 'string' && a.trim(); })
+                        : [],
+                    teamActivities: (league.byeActivity.teamActivities && typeof league.byeActivity.teamActivities === 'object' && !Array.isArray(league.byeActivity.teamActivities))
+                        ? league.byeActivity.teamActivities
+                        : {}
+                  }
+                : { enabled: false, activities: [], teamActivities: {} }
         };
 
         // ★ ORPHAN CLEANUP: Remove references to deleted divisions
@@ -1355,6 +1373,7 @@
         const _summaryBits = [];
         if (league.offCampus?.enabled) _summaryBits.push('Away Games');
         if (league.chinuch?.enabled) _summaryBits.push('Chinuch');
+        if (league.byeActivity?.enabled) _summaryBits.push('Bye Activity');
         if (league.indoorRequirement?.enabled) _summaryBits.push('Indoor Rule');
         if (_summaryBits.length > 0) {
             const summary = document.createElement('span');
@@ -1714,6 +1733,153 @@
         }
 
         advancedBody.appendChild(chinuchCard);
+
+        // ─── CARD: BYE ACTIVITY ─────────────────────────────────────────────
+        // With 5 teams and 2 games somebody sits out every round. Instead of a
+        // bare "Team — Bye" the user names what the benched team does instead.
+        if (!league.byeActivity) league.byeActivity = { enabled: false, activities: [], teamActivities: {} };
+        if (!Array.isArray(league.byeActivity.activities)) league.byeActivity.activities = [];
+        if (!league.byeActivity.teamActivities || typeof league.byeActivity.teamActivities !== 'object') league.byeActivity.teamActivities = {};
+
+        const byeCard = document.createElement('div');
+        byeCard.style.cssText = 'border:1px solid #E2E8F0; border-radius:12px; overflow:hidden; margin-top:8px;';
+
+        const byeHeader = document.createElement('label');
+        byeHeader.style.cssText = 'display:flex; align-items:center; gap:10px; padding:12px 14px; cursor:pointer; background:' + (league.byeActivity.enabled ? '#F0FDF4' : '#F9FAFB') + '; border-bottom:' + (league.byeActivity.enabled ? '1px solid #BBF7D0' : 'none') + ';';
+        const byeCb = document.createElement('input');
+        byeCb.type = 'checkbox';
+        byeCb.checked = league.byeActivity.enabled === true;
+        byeCb.style.cssText = 'width:16px; height:16px; accent-color:#16A34A;';
+        byeCb.onchange = function () {
+            league.byeActivity.enabled = byeCb.checked;
+            saveLeaguesData();
+            renderConfigSections(league, container);
+        };
+        byeHeader.appendChild(byeCb);
+        const byeTitle = document.createElement('div');
+        byeTitle.innerHTML = '<div style="font-size:0.85rem; font-weight:600; color:#1E293B;">Bye Activity</div>'
+            + '<div style="font-size:0.75rem; color:#64748B;">A team with no game gets a real activity instead of a bye</div>';
+        byeHeader.appendChild(byeTitle);
+        byeCard.appendChild(byeHeader);
+
+        if (league.byeActivity.enabled) {
+            const byeBody = document.createElement('div');
+            byeBody.style.cssText = 'padding:14px;';
+
+            const byeInfo = document.createElement('div');
+            byeInfo.style.cssText = 'font-size:0.78rem; color:#374151; background:#F0F9FF; border:1px solid #BAE6FD; border-radius:8px; padding:8px 10px; margin-bottom:12px;';
+            byeInfo.textContent = 'Whenever a team sits out a round — odd team count, or more pairings than open fields — it gets one of these instead of a bye. '
+                + 'The facility is reserved for the league\'s grades during that period, and it rotates so the same team does not get the same thing every time.';
+            byeBody.appendChild(byeInfo);
+
+            const byeFacilities = (typeof window.getFacilities === 'function') ? window.getFacilities() : [];
+
+            if (byeFacilities.length === 0) {
+                const noFac = document.createElement('div');
+                noFac.style.cssText = 'font-size:0.8rem; color:#F59E0B; background:#FFFBEB; border:1px solid #FDE68A; border-radius:8px; padding:8px 10px;';
+                noFac.textContent = 'No facilities found — add fields or rooms in the Facilities tab first, then come back here.';
+                byeBody.appendChild(noFac);
+            } else {
+                // ── Shared pool (chips, multi-select) ───────────────────────
+                const poolHeader = document.createElement('div');
+                poolHeader.style.cssText = 'font-size:0.78rem; font-weight:600; text-transform:uppercase; letter-spacing:0.05em; color:#6B7280; margin-bottom:6px;';
+                poolHeader.textContent = 'Activities for teams on a bye';
+                byeBody.appendChild(poolHeader);
+
+                const poolHint = document.createElement('div');
+                poolHint.style.cssText = 'font-size:0.72rem; color:#6B7280; margin-bottom:8px;';
+                poolHint.textContent = 'Pick one or more. With more than one, benched teams rotate through them and never double-book the same facility.';
+                byeBody.appendChild(poolHint);
+
+                const chipWrap = document.createElement('div');
+                chipWrap.style.cssText = 'display:flex; flex-wrap:wrap; gap:6px; margin-bottom:14px;';
+                byeFacilities.forEach(function (fac) {
+                    const on = league.byeActivity.activities.indexOf(fac.name) >= 0;
+                    const chip = document.createElement('button');
+                    chip.type = 'button';
+                    chip.textContent = fac.name;
+                    chip.style.cssText = 'padding:5px 10px; border-radius:999px; font-size:0.78rem; cursor:pointer; border:1px solid '
+                        + (on ? '#16A34A' : '#D1D5DB') + '; background:' + (on ? '#DCFCE7' : 'white') + '; color:' + (on ? '#166534' : '#374151') + ';';
+                    chip.onclick = function () {
+                        if (on) {
+                            league.byeActivity.activities = league.byeActivity.activities.filter(function (x) { return x !== fac.name; });
+                        } else {
+                            league.byeActivity.activities.push(fac.name);
+                        }
+                        saveLeaguesData();
+                        renderConfigSections(league, container);
+                    };
+                    chipWrap.appendChild(chip);
+                });
+                byeBody.appendChild(chipWrap);
+
+                // ── Per-team pin ────────────────────────────────────────────
+                const perTeamHeader = document.createElement('div');
+                perTeamHeader.style.cssText = 'font-size:0.78rem; font-weight:600; text-transform:uppercase; letter-spacing:0.05em; color:#6B7280; margin-bottom:8px;';
+                perTeamHeader.textContent = 'Always give this team';
+                byeBody.appendChild(perTeamHeader);
+
+                const perTeamHint = document.createElement('div');
+                perTeamHint.style.cssText = 'font-size:0.72rem; color:#6B7280; margin-bottom:8px;';
+                perTeamHint.textContent = 'Optional — pin one team to one activity for every bye it gets. Everyone else draws from the list above.';
+                byeBody.appendChild(perTeamHint);
+
+                (league.teams || []).forEach(function (team) {
+                    const row = document.createElement('div');
+                    row.style.cssText = 'display:flex; align-items:center; gap:10px; margin-bottom:8px;';
+
+                    const label = document.createElement('span');
+                    label.style.cssText = 'font-size:0.83rem; font-weight:500; color:#374151; min-width:110px; flex:1;';
+                    label.textContent = team;
+
+                    const sel = document.createElement('select');
+                    sel.style.cssText = 'flex:2; padding:5px 8px; border:1px solid #D1D5DB; border-radius:6px; font-size:0.83rem; background:white; max-width:220px;';
+
+                    const blankOpt = document.createElement('option');
+                    blankOpt.value = '';
+                    blankOpt.textContent = '— rotate through the list —';
+                    sel.appendChild(blankOpt);
+
+                    const cur = league.byeActivity.teamActivities[team] || '';
+                    byeFacilities.forEach(function (fac) {
+                        const opt = document.createElement('option');
+                        opt.value = fac.name;
+                        opt.textContent = fac.name;
+                        if (fac.name === cur) opt.selected = true;
+                        sel.appendChild(opt);
+                    });
+
+                    sel.onchange = function () {
+                        if (sel.value) league.byeActivity.teamActivities[team] = sel.value;
+                        else delete league.byeActivity.teamActivities[team];
+                        saveLeaguesData();
+                    };
+
+                    row.appendChild(label);
+                    row.appendChild(sel);
+                    byeBody.appendChild(row);
+                });
+
+                if ((league.teams || []).length === 0) {
+                    const empty = document.createElement('div');
+                    empty.style.cssText = 'font-size:0.8rem; color:#9CA3AF; text-align:center; padding:8px;';
+                    empty.textContent = 'Add teams above to pin a team to its own bye activity.';
+                    byeBody.appendChild(empty);
+                }
+
+                if (league.byeActivity.activities.length === 0
+                    && Object.keys(league.byeActivity.teamActivities).length === 0) {
+                    const warn = document.createElement('div');
+                    warn.style.cssText = 'font-size:0.78rem; color:#B45309; background:#FFFBEB; border:1px solid #FDE68A; border-radius:8px; padding:8px 10px; margin-top:6px;';
+                    warn.textContent = 'Nothing picked yet — benched teams will still show a plain bye until you choose at least one activity.';
+                    byeBody.appendChild(warn);
+                }
+            }
+
+            byeCard.appendChild(byeBody);
+        }
+
+        advancedBody.appendChild(byeCard);
 
         // ─── CARD: INDOOR REQUIREMENT ───────────────────────────────────────
         if (!league.indoorRequirement) league.indoorRequirement = { enabled: false, op: '>=', count: 1 };

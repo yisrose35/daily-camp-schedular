@@ -280,7 +280,7 @@
      * Returns a summary of what moved (used for the console/UI report).
      */
     function applyToLeagueConfig(league, oldName, newName) {
-        const out = { teams: 0, standings: false, h2h: false, games: 0, playoff: 0, chinuch: false, conferences: 0 };
+        const out = { teams: 0, standings: false, h2h: false, games: 0, playoff: 0, chinuch: false, byeActivity: false, conferences: 0 };
         if (!league) return out;
 
         // teams — rewritten IN PLACE so roster order (and therefore the
@@ -334,6 +334,11 @@
         // Chinuch facility assignment is keyed by team.
         if (league.chinuch && league.chinuch.bunkFacilities) {
             out.chinuch = renameObjectKey(league.chinuch.bunkFacilities, oldName, newName);
+        }
+
+        // Bye-activity pins are keyed by team too, so a rename must carry them.
+        if (league.byeActivity && league.byeActivity.teamActivities) {
+            out.byeActivity = renameObjectKey(league.byeActivity.teamActivities, oldName, newName);
         }
 
         // Conferences: written as {name: [teams]} by the scheduler and as an

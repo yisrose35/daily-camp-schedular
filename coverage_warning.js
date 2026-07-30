@@ -523,9 +523,14 @@
             var t = Number(w.time);
             var timeStr = isNaN(t) ? (w.time != null ? String(w.time) : '') : fmtTime(t);
             var where = (w.league || '?') + (w.game != null ? '  ·  Game ' + w.game : '') + (timeStr ? '  ·  ' + timeStr : '');
+            // A one-team entry is a structural bye (odd team count), not a
+            // dropped matchup — don't render it as "Team 5 vs ?". When the
+            // league's Bye Activity gave that team something to do, name it.
             var what = (w.kind === 'skipped')
                 ? 'League period skipped — no games ran'
-                : ((w.team1 || '?') + ' vs ' + (w.team2 || '?') + ' — bye');
+                : (w.team2
+                    ? (w.team1 || '?') + ' vs ' + w.team2 + ' — bye'
+                    : (w.team1 || '?') + (w.activity ? ' — bye → ' + w.activity : ' — bye'));
             rows += '<div class="lb-row"><div class="lb-where">' + esc(where) + '</div>' +
                     '<div class="lb-what">' + esc(what) + '</div>' +
                     '<div class="lb-why">' + esc(w.reason || 'not enough fields') + '</div></div>';

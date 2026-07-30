@@ -2172,7 +2172,7 @@
     // whose matchup WAS chosen but lost its field are already reported pairwise
     // by _recordForcedBye (they're in `matchups`), so this only covers the
     // never-paired ones — the two sets are disjoint, no double count.
-    function _recordUnpairedByes(leagueName, activeTeams, matchups) {
+    function _recordUnpairedByes(leagueName, activeTeams, matchups, byePlan) {
         try {
             const teams = activeTeams || [];
             const paired = new Set();
@@ -2185,13 +2185,197 @@
             const odd = teams.length % 2 === 1;
             teams.forEach(function (t) {
                 if (!t || paired.has(t)) return;
+                // A bye the user PLANNED for (Bye Activity) is not a warning —
+                // say what the team is doing instead of implying a shortage.
+                const planned = byePlan && byePlan[t];
                 _recordByeEvent({
-                    league: leagueName, kind: 'bye', team1: t, team2: null,
-                    reason: odd
-                        ? ('This league has an odd number of teams playing this period (' + teams.length
-                            + '), so one team rotates to a bye each round — this is not a field shortage. '
-                            + 'Add or remove a team for full pairings.')
-                        : 'This team was not paired into a game this period, so it is on a bye.'
+                    league: leagueName, kind: 'bye', team1: t, team2: null, activity: planned || null,
+                    reason: planned
+                        ? (t + ' has no game this period and is scheduled for ' + planned
+                            + ' instead — this is the league\'s Bye Activity setting working as configured, not a field shortage.')
+                        : (odd
+                            ? ('This league has an odd number of teams playing this period (' + teams.length
+                                + '), so one team rotates to a bye each round — this is not a field shortage. '
+                                + 'Add or remove a team for full pairings, or set a Bye Activity so the benched team gets something to do.')
+                            : 'This team was not paired into a game this period, so it is on a bye.')
+                });
+            });
+        } catch (_) {}
+    }
+
+    // =========================================================================
+    // ★ BYE ACTIVITY — what a benched team DOES instead of nothing
+    // =========================================================================
+    // A league with an odd number of teams (or more pairings than open fields)
+    // always benches somebody. `league.byeActivity` lets the user say what those
+    // teams get instead of a bare "Team — Bye": a shared pool of activities that
+    // rotates, plus optional per-team pins.
+    //
+    //   league.byeActivity = {
+    //       enabled: true,
+    //       activities: ['Pool', 'Canteen'],          // shared, rotated
+    //       teamActivities: { 'Team 5': 'Beis Medrash' }   // pinned, always
+    //   }
+    //
+    // Exposed on the namespace so the auto engine, the manual engine and the
+    // tests all resolve byes the same way.
+
+    /** Normalized config, or null when the feature is off / has nothing set. */
+    function getByeActivityConfig(league) {
+        const c = league && league.byeActivity;
+        if (!c || typeof c !== 'object' || c.enabled !== true) return null;
+        const activities = (Array.isArray(c.activities) ? c.activities : [])
+            .map(function (a) { return (typeof a === 'string') ? a.trim() : ''; })
+            .filter(Boolean);
+        const teamActivities = {};
+        if (c.teamActivities && typeof c.teamActivities === 'object' && !Array.isArray(c.teamActivities)) {
+            Object.keys(c.teamActivities).forEach(function (t) {
+                const v = c.teamActivities[t];
+                if (typeof v === 'string' && v.trim()) teamActivities[t] = v.trim();
+            });
+        }
+        if (!activities.length && !Object.keys(teamActivities).length) return null;
+        return { activities: activities, teamActivities: teamActivities };
+    }
+    Leagues.getByeActivityConfig = getByeActivityConfig;
+
+    /** How many EARLIER days this team sat out entirely — its position in the
+     *  activity rotation. Read straight off the date-keyed gameLog the engine
+     *  already persists, so no new ledger has to be stored, merged or rolled
+     *  back: a team that has been benched twice before is two steps further
+     *  along the list than one that has never been benched.
+     *
+     *  Today's own records are excluded so re-generating a day re-plans it
+     *  identically. Days with no logged games at all (the league didn't run)
+     *  are not byes and don't advance anybody. */
+    function _byeDaysBefore(leagueName, team, history, dayId) {
+        try {
+            const log = history && history.gameLog && history.gameLog[leagueName];
+            if (!log || !dayId) return 0;
+            let n = 0;
+            Object.keys(log).forEach(function (d) {
+                if (d >= dayId) return;
+                const recs = log[d] || [];
+                if (!recs.length) return;
+                const played = recs.some(function (e) { return e && (e.t1 === team || e.t2 === team); });
+                if (!played) n++;
+            });
+            return n;
+        } catch (_) { return 0; }
+    }
+
+    /**
+     * Decide what each benched team does this period.
+     *
+     * @param {object} league     the league (reads league.byeActivity, league.teams)
+     * @param {string[]} byeTeams teams with no game this period
+     * @param {object} seedCtx    { dayId, periodIndex, history } — where each team
+     *                            sits in the rotation. Deterministic: regenerating
+     *                            the same day yields the same plan.
+     * @returns {Object<string,string>} team → activity name (teams with nothing
+     *          configured are simply absent, and keep a plain bye)
+     */
+    function planByeActivities(league, byeTeams, seedCtx) {
+        const out = {};
+        const cfg = getByeActivityConfig(league);
+        if (!cfg) return out;
+        const teams = Array.isArray(byeTeams) ? byeTeams.filter(Boolean) : [];
+        if (!teams.length) return out;
+
+        const roster = Array.isArray(league && league.teams) ? league.teams : [];
+        const ctx = seedCtx || {};
+        // periodIndex separates two byes on the SAME day (a league can run more
+        // than one period); the bye count separates them across days. It is the
+        // index WITHIN the day on purpose — the cumulative game number also grows
+        // one per day and would cancel the bye count out.
+        const gameSeed = Number(ctx.periodIndex) || 0;
+
+        // Pinned teams first, so the rotating pool can steer around the
+        // facilities they already occupy this period.
+        const taken = new Set();
+        teams.forEach(function (t) {
+            const pinned = cfg.teamActivities[t];
+            if (pinned) { out[t] = pinned; taken.add(pinned); }
+        });
+
+        if (cfg.activities.length === 0) return out;
+
+        // Stable order so the plan doesn't depend on how the caller collected
+        // the benched teams (roster order, then anything unknown alphabetically).
+        const ordered = teams.slice().sort(function (a, b) {
+            const ia = roster.indexOf(a), ib = roster.indexOf(b);
+            if (ia !== ib) return (ia < 0 ? Infinity : ia) - (ib < 0 ? Infinity : ib);
+            return String(a).localeCompare(String(b));
+        });
+
+        ordered.forEach(function (t) {
+            if (out[t]) return;                       // pinned above
+            const idx = roster.indexOf(t);
+            const seat = (idx < 0 ? ordered.indexOf(t) : idx);
+            const seed = gameSeed + seat + _byeDaysBefore(league && league.name, t, ctx.history, ctx.dayId);
+            const start = ((seed % cfg.activities.length) + cfg.activities.length) % cfg.activities.length;
+            let choice = null;
+            for (let k = 0; k < cfg.activities.length; k++) {
+                const cand = cfg.activities[(start + k) % cfg.activities.length];
+                if (!taken.has(cand)) { choice = cand; break; }
+            }
+            // Every activity already spoken for this period — more benched teams
+            // than activities. Reuse the rotation pick rather than drop the team
+            // (two teams sharing the canteen beats one team with nothing).
+            if (!choice) choice = cfg.activities[start];
+            out[t] = choice;
+            taken.add(choice);
+        });
+
+        return out;
+    }
+    Leagues.planByeActivities = planByeActivities;
+
+    /** The display line for one benched team: the planned activity when there is
+     *  one, a plain bye otherwise. Keeps the word "Bye" either way — print and
+     *  the grid key on it to route the line to the right bunk's cell. */
+    function byeLineFor(team, plan) {
+        const act = plan && plan[team];
+        return act ? (team + ' — Bye: ' + act) : (team + ' — Bye');
+    }
+    Leagues.byeLineFor = byeLineFor;
+
+    /** Reserve every planned bye activity for the league's divisions during the
+     *  period, so the rest of the solver cannot hand the facility to anybody
+     *  else. Mirrors the playoff reserved-activity lock. */
+    function _lockByeActivities(plan, slots, divisionsCsv, leagueName, startMin, endMin) {
+        try {
+            if (!window.GlobalFieldLocks || !plan) return;
+            const acts = Array.from(new Set(Object.keys(plan).map(function (t) { return plan[t]; }).filter(Boolean)));
+            if (!acts.length || !slots || !slots.length) return;
+            const win = (startMin != null)
+                ? { startMin: startMin, endMin: (endMin != null && endMin > startMin) ? endMin : (startMin + 40) }
+                : undefined;
+            acts.forEach(function (act) {
+                try {
+                    window.GlobalFieldLocks.lockFieldForDivision(act, slots, divisionsCsv,
+                        'Bye activity (' + leagueName + ')', win);
+                } catch (e) {
+                    console.warn('[BYE ACTIVITY] failed to reserve "' + act + '" for ' + divisionsCsv + ':', e);
+                }
+            });
+            console.log('   🎯 Bye activity: reserved [' + acts.join(', ') + '] for [' + divisionsCsv + ']');
+        } catch (_) {}
+    }
+
+    /** Record the plan so the auto engine can replace the benched team's league
+     *  tile with the real activity on that bunk's row. Keyed team → period start,
+     *  exactly like window.chinuchSchedule. */
+    function _publishByePlan(leagueName, plan, timeKey) {
+        try {
+            if (!plan || !Object.keys(plan).length) return;
+            if (!window.leagueByeSchedule) window.leagueByeSchedule = {};
+            const forLeague = window.leagueByeSchedule[leagueName] = window.leagueByeSchedule[leagueName] || {};
+            const sm = Number(timeKey);
+            Object.keys(plan).forEach(function (t) {
+                (forLeague[t] = forLeague[t] || []).push({
+                    startMin: Number.isFinite(sm) ? sm : timeKey,
+                    activity: plan[t]
                 });
             });
         } catch (_) {}
@@ -3722,6 +3906,9 @@
         // rest are normal league periods. Each team is assigned exactly one chinuch
         // period per day. Teams are shuffled daily for variety.
         window.chinuchSchedule = {};
+        // ★ BYE ACTIVITY: rebuilt from scratch every run, same as chinuchSchedule —
+        //   a stale plan from the previous generation must never bleed through.
+        window.leagueByeSchedule = {};
         (function () {
             // ★★★ PARITY-AWARE CHINUCH PLAN (pure-auto mode only) ★★★
             // A team sits out a bye whenever the teams left to PLAY are odd:
@@ -4032,14 +4219,21 @@
                     var fac = (league.chinuch && league.chinuch.bunkFacilities && league.chinuch.bunkFacilities[t]) || 'Chinuch';
                     return t + ' — Chinuch (' + fac + ')';
                 };
-                var _ocExtraLines = function (gAll, chHere) {
+                var _ocExtraLines = function (gAll, chHere, periodIdx, tKey, ocSlots, ocDivsCsv) {
                     var playing = new Set();
                     gAll.forEach(function (a) { if (a.team1) playing.add(a.team1); if (a.team2) playing.add(a.team2); });
                     var lines = chHere.map(_ocChLine);
                     var chSet = new Set(chHere);
-                    leagueTeams.forEach(function (t) {
-                        if (!playing.has(t) && !chSet.has(t)) lines.push(t + ' — Bye');
-                    });
+                    var benched = leagueTeams.filter(function (t) { return !playing.has(t) && !chSet.has(t); });
+                    // ★ BYE ACTIVITY: the away double-header benches teams too —
+                    //   give them the same planned activity the on-campus path does.
+                    var plan = planByeActivities(league, benched, { dayId: dayId, periodIndex: periodIdx, history: history });
+                    if (Object.keys(plan).length > 0) {
+                        _publishByePlan(league.name, plan, tKey);
+                        _lockByeActivities(plan, ocSlots, ocDivsCsv, league.name,
+                            (tKey != null && !isNaN(Number(tKey))) ? Number(tKey) : null, null);
+                    }
+                    benched.forEach(function (t) { lines.push(byeLineFor(t, plan)); });
                     return lines;
                 };
 
@@ -4098,7 +4292,7 @@
                     _recordUnpairedByes(league.name,
                         leagueTeams.filter(function (t) { return chT1.indexOf(t) < 0; }),
                         dh.offCampus.game1.concat(dh.onCampus.game1));
-                    var _g1Extra = _ocExtraLines(g1All, chT1);
+                    var _g1Extra = _ocExtraLines(g1All, chT1, 0, timeKey1, s1, ocDivs.join(', '));
                     ocDivs.forEach(function(d) {
                         var blocksForDiv = (blocksByTime[timeKey1]?.byDivision[d]) || [];
                         blocksForDiv.forEach(function(block) {
@@ -4125,7 +4319,7 @@
                     _recordUnpairedByes(league.name,
                         leagueTeams.filter(function (t) { return chT2.indexOf(t) < 0; }),
                         dh.offCampus.game2.concat(dh.onCampus.game2));
-                    var _g2Extra = _ocExtraLines(g2All, chT2);
+                    var _g2Extra = _ocExtraLines(g2All, chT2, 1, timeKey2, s2, ocDivs.join(', '));
                     ocDivs.forEach(function(d) {
                         var blocksForDiv = (blocksByTime[timeKey2]?.byDivision[d]) || [];
                         blocksForDiv.forEach(function(block) {
@@ -4591,6 +4785,20 @@
                             const fac = league.chinuch?.bunkFacilities?.[t] || 'Chinuch';
                             return `${t} — Chinuch (${fac})`;
                         });
+                        // ★ BYE ACTIVITY: with everyone else at chinuch there is
+                        //   nobody left to play, so the one or two teams still
+                        //   "active" are benched. Give them their planned activity
+                        //   instead of leaving them off the tile entirely.
+                        if ((activeTeams || []).length > 0) {
+                            const _chByePlan = planByeActivities(league, activeTeams,
+                                { dayId: dayId, periodIndex: (leagueGameCounters[league.name] || 0), history: history });
+                            if (Object.keys(_chByePlan).length > 0) {
+                                _publishByePlan(league.name, _chByePlan, timeKey);
+                                _lockByeActivities(_chByePlan, slots, leagueDivisions.join(', '), league.name,
+                                    (timeKey != null && !isNaN(Number(timeKey))) ? Number(timeKey) : null, null);
+                            }
+                            activeTeams.forEach(function (t) { _chOnlyLines.push(byeLineFor(t, _chByePlan)); });
+                        }
                         const _UtilsCh = window.SchedulerCoreUtils;
                         let _chWrote = 0;
                         filteredLeagueDivisions.forEach(divName => {
@@ -5145,7 +5353,17 @@
                 //   shown on the grid is accounted for. Regular rounds only —
                 //   playoff byes are bracket structure, not what this warns about.
                 if (!playoffMatchupSports && !playoffIsTBD) {
-                    _recordUnpairedByes(league.name, activeTeams, matchups);
+                    // planByeActivities is pure + deterministic, so the plan the
+                    // report quotes is exactly the one the tiles get below.
+                    const _playingNow = new Set();
+                    assignments.forEach(function (a) {
+                        if (a.team1) _playingNow.add(a.team1);
+                        if (a.team2) _playingNow.add(a.team2);
+                    });
+                    _recordUnpairedByes(league.name, activeTeams, matchups,
+                        planByeActivities(league,
+                            (activeTeams || []).filter(function (t) { return !_playingNow.has(t); }),
+                            { dayId: dayId, periodIndex: todayGameIndex, history: history }));
                 }
 
                 // ★ INDOOR: increment per-team count for matchups that landed indoor
@@ -5256,6 +5474,44 @@ if (playoffRoundNum) {
                     logGameRecord(league.name, dayId, a.team1, a.team2, a.sport, history, _recLabel);
                 });
 window._debugLeagueTimeData = timeData;
+                // ★★★ BYE ACTIVITY ★★★
+                // Who sat out this period, and what they do instead. Computed
+                // ONCE here (not per division block) so every division's tile
+                // shows the same plan, the facilities are reserved once, and the
+                // auto engine can swap the benched bunk's league tile for the
+                // real activity.
+                const _byeTeamsHere = (function () {
+                    const playing = new Set();
+                    assignments.forEach(function (a) {
+                        if (a.team1) playing.add(a.team1);
+                        if (a.team2) playing.add(a.team2);
+                    });
+                    if (playoffRoundNum) {
+                        const _r = _PM && _PM.getRoundByNumber ? _PM.getRoundByNumber(league, playoffRoundNum) : null;
+                        return ((_r && _r.byes) || []).filter(function (t) { return !playing.has(t); });
+                    }
+                    return (activeTeams || []).filter(function (t) { return !playing.has(t); });
+                })();
+                const _byePlanHere = planByeActivities(league, _byeTeamsHere, { dayId: dayId, periodIndex: todayGameIndex, history: history });
+                if (Object.keys(_byePlanHere).length > 0) {
+                    console.log('   🪑 Bye activity for "' + league.name + '": '
+                        + Object.keys(_byePlanHere).map(function (t) { return t + ' → ' + _byePlanHere[t]; }).join(', '));
+                    _publishByePlan(league.name, _byePlanHere, timeKey);
+                    // Same window derivation as the game-field lock above: the
+                    // period start is authoritative, the end best-effort from
+                    // this league's own slot grid.
+                    const _byeDivSlots = window.divisionTimes?.[leagueDivisions[0]] || [];
+                    const _byeParse = window.SchedulerCoreUtils?.parseTimeToMinutes;
+                    let _byeStart = (timeKey != null && !isNaN(Number(timeKey))) ? Number(timeKey)
+                        : (_byeParse ? (_byeParse(timeKey) ?? null) : null);
+                    let _byeEnd = null;
+                    if (slots.length > 0 && _byeDivSlots[slots[0]]) {
+                        if (_byeStart == null) _byeStart = _byeDivSlots[slots[0]].startMin;
+                        _byeEnd = _byeDivSlots[slots[slots.length - 1]]?.endMin;
+                    }
+                    _lockByeActivities(_byePlanHere, slots, leagueDivisions.join(', '), league.name,
+                        _byeStart, _byeEnd);
+                }
                 // ★ Day 20 fix #1: iterate filteredLeagueDivisions, not
                 // leagueDivisions. The filter at line ~1071 already determined
                 // which divisions' blocks named THIS league (or had no hint).
@@ -5302,31 +5558,21 @@ window._debugLeagueTimeData = timeData;
         });
         // ★ BYE: any active team not in a matchup is on a bye — show it explicitly so
         // every team appears on the schedule every period (no silently-dropped teams).
-        const _playingTeams = new Set();
-        assignments.forEach(function (a) {
-            if (a.team1) _playingTeams.add(a.team1);
-            if (a.team2) _playingTeams.add(a.team2);
-        });
+        // The benched teams (and what they do instead — see _byePlanHere) were
+        // resolved once above, before this per-division loop.
         // ★ PLAYOFF tiles: teams that are OUT are not listed as byes anymore —
         //   only the round's explicitly-marked byes (sitting out, still in)
         //   show. Underneath the matchups the tile lists the round's reserved
         //   fields under "Electives" — that's where the not-playing kids go.
-        let _byeLines, _electiveLines = [];
+        const _byeLines = _byeTeamsHere.map(function (t) { return byeLineFor(t, _byePlanHere); });
+        let _electiveLines = [];
         if (playoffRoundNum) {
-            const _round = _PM && _PM.getRoundByNumber ? _PM.getRoundByNumber(league, playoffRoundNum) : null;
-            _byeLines = ((_round && _round.byes) || [])
-                .filter(function (t) { return !_playingTeams.has(t); })
-                .map(function (t) { return `${t} — Bye`; });
             const _resFields = (_PM && _PM.getReservedForRound)
                 ? _PM.getReservedForRound(league, playoffRoundNum)
                 : ((league.playoff && league.playoff.reservedActivities) || []);
             if (_resFields.length > 0) {
                 _electiveLines = ['Electives:'].concat(_resFields.map(function (f) { return `  • ${f}`; }));
             }
-        } else {
-            _byeLines = (activeTeams || [])
-                .filter(function (t) { return !_playingTeams.has(t); })
-                .map(function (t) { return `${t} — Bye`; });
         }
         const pick = {
                             field: `League: ${league.name}`,

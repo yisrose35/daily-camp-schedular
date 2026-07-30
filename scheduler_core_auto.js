@@ -25465,6 +25465,18 @@
             // it wants (e.g. Trios block says "Day20 Test"); only honor matchups
             // that came from that league. If block has no hint, accept any.
             let leagueWriteCount = 0;
+            // ★ BYE ACTIVITY: window.leagueByeSchedule[league][team] is a list of
+            //   { startMin, activity } — one entry per period that team sat out
+            //   (a league can run more than one game a day). In auto mode a team
+            //   IS a bunk, so a hit here means this bunk's row should show the
+            //   activity instead of the league tile. Published by
+            //   scheduler_core_leagues.js; absent when the feature is off.
+            const _byeActivityFor = function (leagueName, bunkKey, startMin) {
+                const entries = window.leagueByeSchedule?.[leagueName]?.[bunkKey];
+                if (!Array.isArray(entries) || entries.length === 0) return null;
+                const hit = entries.find(e => e && Number(e.startMin) === Number(startMin));
+                return (hit && hit.activity) ? hit.activity : null;
+            };
             leagueBlocks.forEach(lb => {
                 const matchups = lb._allMatchups || [];
                 const sport = lb._sport || lb.sport || '';
@@ -25531,6 +25543,26 @@
                         return;
                     }
 
+                    // ★ BYE ACTIVITY: this bunk's team has no game this period and
+                    //   the user picked something for it to do instead. Same model
+                    //   as chinuch — the bunk gets the real activity on its row
+                    //   rather than a league tile whose only news is "you're out".
+                    const _byeAct = _byeActivityFor(leagueName, bk, lb.startMin);
+                    if (_byeAct) {
+                        window.scheduleAssignments[bk][fi] = {
+                            field: _byeAct,
+                            _activity: _byeAct,
+                            _isByeActivity: true,
+                            _leagueName: leagueName,
+                            sport: null,
+                            _startMin: slotMeta?.startMin ?? lb.startMin,
+                            _endMin: slotMeta?.endMin ?? lb.endMin,
+                            _fixed: true, continuation: false
+                        };
+                        leagueWriteCount++;
+                        return;
+                    }
+
                     window.scheduleAssignments[bk][fi] = {
                         // ★ Day 20 fix #5: don't put gameLabel in `field`.
                         // sport here is often the gameLabel (e.g. "Game 1"); use
@@ -25566,6 +25598,21 @@
                         // ★ CHINUCH: also honor chinuch in fallback writeback path
                         const _lnFb = asgn.leagueName || '';
                         const _smFb = parseInt(startMinStr);
+                        // ★ BYE ACTIVITY: same, in the fallback path
+                        const _byeActFb = _byeActivityFor(_lnFb, bk, _smFb);
+                        if (_byeActFb) {
+                            window.scheduleAssignments[bk][fi] = {
+                                field: _byeActFb,
+                                _activity: _byeActFb,
+                                _isByeActivity: true,
+                                _leagueName: _lnFb,
+                                sport: null,
+                                _startMin: _smFb,
+                                _fixed: true, continuation: false
+                            };
+                            leagueWriteCount++;
+                            return;
+                        }
                         if (window.chinuchSchedule?.[_lnFb]?.[bk] != null &&
                             Number(window.chinuchSchedule[_lnFb][bk]) === _smFb) {
                             const _leagueObjFb = (Array.isArray(mla) ? mla : Object.values(mla || {})).find(l => l.name === _lnFb);
