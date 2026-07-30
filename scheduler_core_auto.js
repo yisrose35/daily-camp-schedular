@@ -28935,12 +28935,23 @@
                 //   fields for the whole camp; a per-grade preference is the user
                 //   overriding that order for ONE grade ("2nd Grade plays on Court 2"),
                 //   so it wins here — every phase below refuses a move/swap that would
-                //   put a grade on a field it prefers LESS. Rank cost only (0 = the
-                //   grade's top choice, or no preference rule at all).
+                //   put a grade on a field it prefers LESS. Signed: lower is more
+                //   preferred (negative = top choice, 0 = no opinion).
                 const _fqPref = function (grade, fieldName, activityName) {
                     if (!grade || !fieldName) return 0;
-                    return window.SchedulerCoreUtils?.getFieldPreferencePenalty?.(grade, fieldName, activityName, 1) || 0;
+                    return window.SchedulerCoreUtils?.getFieldPreferenceBias?.(grade, fieldName, activityName, 1) || 0;
                 };
+                // ★ PREFERENCE PULL (shared module, Phase P): a block placed early can
+                //   land on the runner-up court just because the grade's favorite was
+                //   still busy — the scorer's lean can't fix that after the fact. Pull
+                //   those back BEFORE the quality phases (which then can't undo it).
+                //   Field-only, fully validated, no-op when no preference is configured.
+                try {
+                    window.FieldQualityReopt?.pullToPreferred?.({
+                        validate: _validateWritePlacement,
+                        log: function (m) { log(m); }
+                    });
+                } catch (_ePP) { try { warn('[FQ-REOPT PREF] ' + (_ePP && _ePP.message)); } catch (_e0) {} }
                 const _gs = getGlobalSettings();
                 const _flds = (_gs.app1 && _gs.app1.fields) || _gs.fields || [];
                 const fgMap = {}, fgGroups = {}, hostsBySport = {}, capMap = {};

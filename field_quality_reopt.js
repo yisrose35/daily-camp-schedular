@@ -11,6 +11,10 @@
 // that operates purely on `window.scheduleAssignments` (time-based, not slot-
 // index based), so the manual path can run the exact same three phases:
 //
+//   Phase P  (preference pull, `pullToPreferred`) move each block onto the field
+//            its GRADE prefers for that activity when that field is usable —
+//            rules.js "Field Preferences". Runs first and independently of field
+//            groups; every phase below refuses to undo it.
 //   Phase A  pull each grouped-field block to a strictly better-ranked field in
 //            its group when that field is free (or same-grade / same-activity
 //            shareable within capacity) and the move passes validation.
@@ -21,7 +25,8 @@
 //            rank and both sides re-validate.
 //
 // It rebuilds its ledger from scheduleAssignments on every run, so it is safe
-// and idempotent. No-op when no field groups are configured.
+// and idempotent. Phases A-D no-op when no field groups are configured; Phase P
+// no-ops when no field preference is configured.
 //
 // Seniority comes from window.getDivisionAgeOrder (oldest first) — the same
 // source the auto pass and the FQ audit use, so all three stay in lock-step.
@@ -38,11 +43,11 @@
     // ★ rules.js FIELD PREFERENCES BY GRADE (Rules tab): a per-grade field ranking
     //   the user set by hand. Quality rank orders fields for the whole camp; this
     //   orders them for ONE grade, so it wins here — every phase below refuses a
-    //   move/swap that would put a grade on a field it prefers less. Rank cost only
-    //   (0 = the grade's top choice / no rule at all).
-    function _prefPenalty(grade, fieldName, activityName) {
+    //   move/swap that would put a grade on a field it prefers less. Signed: lower
+    //   is more preferred (negative = the grade's top choice, 0 = no opinion).
+    function _prefBias(grade, fieldName, activityName) {
         if (!grade || !fieldName) return 0;
-        return window.SchedulerCoreUtils?.getFieldPreferencePenalty?.(grade, fieldName, activityName, 1) || 0;
+        return window.SchedulerCoreUtils?.getFieldPreferenceBias?.(grade, fieldName, activityName, 1) || 0;
     }
 
     // Self-contained access/time validator — mirrors the field-level checks in
@@ -188,6 +193,173 @@
         return null;
     }
 
+    // A field move rewrites entry.field but NOT the display label, and a spanned
+    // block keeps its field on every continuation slot. Sync both for every entry
+    // a pass moved. Shared by run() and pullToPreferred() (either can be the only
+    // pass that moved anything).
+    function _syncMovedLabels(sa) {
+        var _fqSyncLoc = function (s, fld) {
+            if (!s || !fld) return;
+            if (typeof s._location === 'string' && s._location && s._location !== fld) s._location = fld;
+            if (typeof s.location === 'string' && s.location && s.location !== fld) s.location = fld;
+        };
+        Object.keys(sa || {}).forEach(function (b) {
+            var arr = sa[b]; if (!Array.isArray(arr)) return;
+            var lead = null;
+            for (var i = 0; i < arr.length; i++) {
+                var s = arr[i];
+                if (!s) { lead = null; continue; }
+                if (s.continuation) {
+                    if (lead && lead._fqMoved && s.field && s.field !== 'Free') { s.field = lead.field; _fqSyncLoc(s, lead.field); }
+                } else {
+                    lead = s;
+                    if (s._fqMoved && s.field && s.field !== 'Free') _fqSyncLoc(s, s.field);
+                }
+            }
+        });
+    }
+
+    // =========================================================================
+    // PREFERENCE PULL — rules.js "Field Preferences" (per-grade field ranking)
+    // =========================================================================
+    // The scorers already lean toward a grade's preferred field while placing, but
+    // a block placed EARLY can land on the runner-up court simply because the
+    // favorite was still busy at the time — and nothing later brings it back. This
+    // pass closes that gap: for every placement whose grade would rather be on a
+    // different field for that activity, move it there when the field hosts the
+    // activity, is free (or same-grade/same-activity shareable within capacity)
+    // and the move validates. Strongest improvement first, so a grade whose FIRST
+    // choice a field is claims it ahead of a grade that merely ranks it second.
+    //
+    // Independent of Field Quality Groups — it runs even when no group is
+    // configured, and it runs BEFORE the quality phases so their own preference
+    // guards can only make moves that don't undo it.
+    // Field-only: never changes an activity or a time, so rotation/frequency state
+    // is untouched. Skips league / post-edit / pinned / pair-locked blocks.
+    function pullToPreferred(opts) {
+        opts = opts || {};
+        var log = (typeof opts.log === 'function') ? opts.log : function () {};
+        var validate = (typeof opts.validate === 'function') ? opts.validate : _defaultValidate;
+
+        var U = window.SchedulerCoreUtils;
+        if (!U || typeof U.getFieldPreferenceBias !== 'function') return 0;
+        var settings = _loadSettings();
+        var prefRules = (settings.schedulingRules && settings.schedulingRules.fieldPreferences) || [];
+        if (!Array.isArray(prefRules) || !prefRules.length) return 0;   // nothing configured → no-op
+
+        var flds = (settings.app1 && settings.app1.fields) || settings.fields || [];
+        var hostsBySport = {}, capMap = {}, rankOf = {};
+        flds.forEach(function (f) {
+            if (!f || !f.name) return;
+            if (f.available === false) return;                          // Facilities toggle off
+            (f.activities || []).forEach(function (sp) { (hostsBySport[sp] = hostsBySport[sp] || []).push(f.name); });
+            capMap[f.name] = parseInt(f.sharableWith && f.sharableWith.capacity) || parseInt(f.capacity)
+                || ((f.sharableWith && f.sharableWith.type === 'not_sharable') ? 1 : 2);
+            rankOf[f.name] = parseInt(f.qualityRank) || 999;
+        });
+
+        var sa = window.scheduleAssignments || {};
+        var divisions = window.divisions || {};
+        var bunkGrade = {};
+        Object.keys(divisions).forEach(function (g) {
+            ((divisions[g] && divisions[g].bunks) || []).forEach(function (b) { bunkGrade[String(b)] = g; });
+        });
+
+        var occ = {};
+        Object.keys(sa).forEach(function (b) {
+            (sa[b] || []).forEach(function (s) {
+                if (!s || s.continuation || !s.field || s.field === 'Free') return;
+                var st = (s._startMin != null ? s._startMin : s.startMin), en = (s._endMin != null ? s._endMin : s.endMin);
+                if (st == null || en == null) return;
+                (occ[s.field] = occ[s.field] || []).push({ s: st, e: en, bunk: String(b), act: s._activity });
+            });
+        });
+        // Same admission rule as the quality phases: empty field, or a same-grade
+        // same-activity share still under capacity (a field hosts one activity for
+        // one grade at a time), plus the sport's combined-headcount ceiling.
+        function canUse(field, s, e, exclBunk, myGrade, myAct) {
+            var list = occ[field] || [], n = 0, ok = true, coBunks = [];
+            for (var i = 0; i < list.length; i++) {
+                var iv = list[i];
+                if (iv.bunk === exclBunk) continue;
+                if (iv.s >= e || iv.e <= s) continue;
+                n++; coBunks.push(iv.bunk);
+                if (bunkGrade[iv.bunk] !== myGrade || iv.act !== myAct) ok = false;
+            }
+            if (n === 0) return true;
+            if (!(ok && n < (capMap[field] || 2))) return false;
+            var sm = (window.getSportMetaData?.() || window.sportMetaData || {})[myAct];
+            if (sm && sm.maxPlayers) {
+                var bm = window.getBunkMetaData?.() || window.bunkMetaData || {};
+                var tot = (bm[exclBunk] && bm[exclBunk].size) || 0;
+                for (var j = 0; j < coBunks.length; j++) tot += (bm[coBunks[j]] && bm[coBunks[j]].size) || 0;
+                if (tot > sm.maxPlayers + 2) return false;
+            }
+            return true;
+        }
+        var bias = function (grade, field, act) {
+            if (!grade || !field) return 0;
+            return U.getFieldPreferenceBias(grade, field, act, 1) || 0;
+        };
+
+        var moved = 0;
+        for (var round = 0; round < 3; round++) {                       // a freed field can enable another pull
+            // Collect every placement's best improving target, then apply the
+            // biggest improvements first so the strongest preference wins the field.
+            var wants = [];
+            Object.keys(sa).forEach(function (b) {
+                var bs = String(b), grade = bunkGrade[bs];
+                if (!grade) return;
+                (sa[b] || []).forEach(function (s) {
+                    if (!s || s.continuation || !s.field || s.field === 'Free') return;
+                    if (s._pairLock || s._league || s._postEdit || s._pinned) return;   // locked placements stay put
+                    var act = s._activity; if (!act) return;
+                    var hosts = hostsBySport[act]; if (!hosts || hosts.length < 2) return;
+                    var st = (s._startMin != null ? s._startMin : s.startMin), en = (s._endMin != null ? s._endMin : s.endMin);
+                    if (st == null || en == null) return;
+                    var curB = bias(grade, s.field, act);
+                    var best = null, bestB = curB;
+                    for (var i = 0; i < hosts.length; i++) {
+                        var cand = hosts[i];
+                        if (cand === s.field) continue;
+                        var cb = bias(grade, cand, act);
+                        if (cb >= bestB) continue;                       // not an improvement
+                        // Tie-break equal preference by camp-wide field quality.
+                        if (best && cb === bestB && (rankOf[cand] || 999) >= (rankOf[best] || 999)) continue;
+                        best = cand; bestB = cb;
+                    }
+                    if (best) wants.push({ s: s, bunk: bs, grade: grade, act: act, st: st, en: en, to: best, gain: curB - bestB });
+                });
+            });
+            if (!wants.length) break;
+            wants.sort(function (a, b) { return b.gain - a.gain; });
+
+            var movedThisRound = 0;
+            for (var w = 0; w < wants.length; w++) {
+                var m = wants[w];
+                // Re-check against the live ledger — an earlier move this round may
+                // have taken the field, or made this one unnecessary.
+                if (bias(m.grade, m.to, m.act) >= bias(m.grade, m.s.field, m.act)) continue;
+                if (!canUse(m.to, m.st, m.en, m.bunk, m.grade, m.act)) continue;
+                if (validate(m.to, m.act, m.grade, m.bunk, m.st, m.en)) continue;
+                var from = m.s.field;
+                m.s.field = m.to; m.s._fqMoved = true; m.s._prefMoved = true;
+                var fl = occ[from];
+                if (fl) { for (var k = 0; k < fl.length; k++) { if (fl[k].bunk === m.bunk && fl[k].s === m.st && fl[k].e === m.en) { fl.splice(k, 1); break; } } }
+                (occ[m.to] = occ[m.to] || []).push({ s: m.st, e: m.en, bunk: m.bunk, act: m.act });
+                moved++; movedThisRound++;
+            }
+            if (!movedThisRound) break;
+        }
+
+        if (moved > 0) {
+            _syncMovedLabels(sa);
+            try { console.log('[FQ-REOPT] preference pull: ' + moved + ' block(s) moved to a grade-preferred field'); } catch (_e) {}
+            log('  ⭐ Field preferences: ' + moved + ' block(s) pulled to the grade\'s preferred field.');
+        }
+        return moved;
+    }
+
     // Main entry. opts.validate (optional) overrides the default validator with
     // the caller's own (the auto engine can inject _validateWritePlacement to get
     // byte-for-byte parity). opts.log (optional) receives progress strings.
@@ -195,6 +367,13 @@
         opts = opts || {};
         var log = (typeof opts.log === 'function') ? opts.log : function () {};
         var validate = (typeof opts.validate === 'function') ? opts.validate : _defaultValidate;
+
+        // ★ Per-grade field preferences first: they outrank camp-wide quality, and
+        //   the quality phases below all carry a guard that refuses to undo them.
+        //   Runs even when no field group is configured (hence before the guard).
+        var prefMoves = 0;
+        try { prefMoves = pullToPreferred(opts); }
+        catch (_eP) { try { console.warn('[FQ-REOPT PREF] ' + (_eP && _eP.message)); } catch (_e0) {} }
 
         var settings = _loadSettings();
         var flds = (settings.app1 && settings.app1.fields) || settings.fields || [];
@@ -216,7 +395,8 @@
                 (fgGroups[f.fieldGroup] = fgGroups[f.fieldGroup] || []).push({ name: f.name, rank: parseInt(f.qualityRank) || 999 });
             }
         });
-        if (Object.keys(fgGroups).length === 0) return { groups: 0, moved: 0, overlapSwaps: 0 }; // nothing to do
+        // No quality groups → the preference pull above was the whole pass.
+        if (Object.keys(fgGroups).length === 0) return { groups: 0, moved: 0, overlapSwaps: 0, prefMoves: prefMoves };
         Object.keys(fgGroups).forEach(function (gn) { fgGroups[gn].sort(function (a, b) { return a.rank - b.rank; }); });
 
         var sa = window.scheduleAssignments || {};
@@ -302,7 +482,7 @@
                     //   "which field is nicer" order; a per-grade preference is the user
                     //   overriding it for this grade ("2nd Grade plays on Court 2"). Never
                     //   pull a bunk onto a field its grade likes LESS than the current one.
-                    if (_prefPenalty(grade, m.name, sport) > _prefPenalty(grade, s.field, sport)) continue;
+                    if (_prefBias(grade, m.name, sport) > _prefBias(grade, s.field, sport)) continue;
                     if (!canUse(m.name, st, en, bs, grade, sport)) continue;          // capacity/sharing OK
                     if (validate(m.name, sport, grade, bs, st, en)) continue;          // access/time problem → skip
                     var from = s.field;
@@ -370,8 +550,8 @@
             //   re-pair that leaves the grades collectively on less-preferred fields.
             var _prefBefore = 0, _prefAfter = 0;
             for (var pb = 0; pb < bySen.length; pb++) {
-                _prefBefore += _prefPenalty(bySen[pb].grade, bySen[pb].s.field, bySen[pb].s._activity);
-                _prefAfter += _prefPenalty(bySen[pb].grade, fieldsByRank[pb], bySen[pb].s._activity);
+                _prefBefore += _prefBias(bySen[pb].grade, bySen[pb].s.field, bySen[pb].s._activity);
+                _prefAfter += _prefBias(bySen[pb].grade, fieldsByRank[pb], bySen[pb].s._activity);
             }
             if (_prefAfter > _prefBefore) return;
             for (var j = 0; j < bySen.length; j++) { bySen[j].s.field = fieldsByRank[j]; bySen[j].s._fqMoved = true; }
@@ -423,8 +603,8 @@
                         // ★ Per-grade field preferences outrank camp-wide quality —
                         //   don't swap two units onto fields their grades like less.
                         var _pfBefore = 0, _pfAfter = 0;
-                        A.blocks.forEach(function (x) { _pfBefore += _prefPenalty(A.grade, fa, x.s._activity); _pfAfter += _prefPenalty(A.grade, fb, x.s._activity); });
-                        B.blocks.forEach(function (x) { _pfBefore += _prefPenalty(B.grade, fb, x.s._activity); _pfAfter += _prefPenalty(B.grade, fa, x.s._activity); });
+                        A.blocks.forEach(function (x) { _pfBefore += _prefBias(A.grade, fa, x.s._activity); _pfAfter += _prefBias(A.grade, fb, x.s._activity); });
+                        B.blocks.forEach(function (x) { _pfBefore += _prefBias(B.grade, fb, x.s._activity); _pfAfter += _prefBias(B.grade, fa, x.s._activity); });
                         if (_pfAfter > _pfBefore) continue;
                         var removed = [], temp = [];
                         A.blocks.forEach(function (x) { var e = occRemove(fa, x.bunk, A.st, A.en); if (e) removed.push({ f: fa, e: e }); });
@@ -523,8 +703,8 @@
                 // ★ Per-grade field preferences outrank camp-wide quality — never
                 //   swap the two field rosters onto less-preferred fields overall.
                 var _pBefore = 0, _pAfter = 0;
-                ba.forEach(function (x) { _pBefore += _prefPenalty(x.grade, fa, x.act); _pAfter += _prefPenalty(x.grade, fb, x.act); });
-                bb2.forEach(function (x) { _pBefore += _prefPenalty(x.grade, fb, x.act); _pAfter += _prefPenalty(x.grade, fa, x.act); });
+                ba.forEach(function (x) { _pBefore += _prefBias(x.grade, fa, x.act); _pAfter += _prefBias(x.grade, fb, x.act); });
+                bb2.forEach(function (x) { _pBefore += _prefBias(x.grade, fb, x.act); _pAfter += _prefBias(x.grade, fa, x.act); });
                 if (_pAfter > _pBefore) return false;
                 return true;
             };
@@ -559,39 +739,16 @@
         // prefer _location / location (resolveEntryLocation, print, camper locator)
         // would then show the PRE-move field — which surfaces as "two bunks on
         // different fields" when a moved bunk is really sharing its new field with
-        // another. Sync the label to the new field on every moved sport entry.
+        // another. Sync labels + spanned-block continuations to every moved field.
         // (FQ-reopt only moves real sport fields, never a special whose field holds
         // the activity name, so this leaves the special room convention alone.)
-        var _fqSyncLoc = function (s, fld) {
-            if (!s || !fld) return;
-            if (typeof s._location === 'string' && s._location && s._location !== fld) s._location = fld;
-            if (typeof s.location === 'string' && s.location && s.location !== fld) s.location = fld;
-        };
+        _syncMovedLabels(sa);
 
-        // Continuation sync: a multi-period block stores its field on EVERY slot
-        // (lead + continuations). The phases above move only the lead slot, so
-        // propagate any moved lead's new field to its trailing continuation slots
-        // — otherwise a spanned block would split across two fields.
-        Object.keys(sa).forEach(function (b) {
-            var arr = sa[b]; if (!Array.isArray(arr)) return;
-            var lead = null;
-            for (var i = 0; i < arr.length; i++) {
-                var s = arr[i];
-                if (!s) { lead = null; continue; }
-                if (s.continuation) {
-                    if (lead && lead._fqMoved && s.field && s.field !== 'Free') { s.field = lead.field; _fqSyncLoc(s, lead.field); }
-                } else {
-                    lead = s;
-                    if (s._fqMoved && s.field && s.field !== 'Free') _fqSyncLoc(s, s.field);
-                }
-            }
-        });
-
-        try { console.log('[FQ-REOPT] ran: groups=' + Object.keys(fgGroups).length + ', moved=' + moved + ', overlapSwaps=' + movedC + ', fieldSwaps=' + movedD); } catch (_eL) {}
+        try { console.log('[FQ-REOPT] ran: groups=' + Object.keys(fgGroups).length + ', prefMoves=' + prefMoves + ', moved=' + moved + ', overlapSwaps=' + movedC + ', fieldSwaps=' + movedD); } catch (_eL) {}
         if (moved > 0 || movedC > 0 || movedD > 0) log('  🏟️ Field-quality re-opt: ' + moved + ' move(s), ' + movedC + ' staggered-overlap swap(s), ' + movedD + ' whole-field swap(s).');
-        return { groups: Object.keys(fgGroups).length, moved: moved, overlapSwaps: movedC, fieldSwaps: movedD };
+        return { groups: Object.keys(fgGroups).length, moved: moved, overlapSwaps: movedC, fieldSwaps: movedD, prefMoves: prefMoves };
     }
 
-    window.FieldQualityReopt = { run: run };
+    window.FieldQualityReopt = { run: run, pullToPreferred: pullToPreferred };
     try { console.log('[FieldQualityReopt] loaded'); } catch (_e) {}
 })();

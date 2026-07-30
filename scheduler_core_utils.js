@@ -787,13 +787,18 @@
      *   - `activity` empty = the preference applies to every activity on those
      *     fields; otherwise it only applies to that one activity.
      *
-     * Ranking semantics (see getGradeFieldPreference):
-     *   - a field the grade listed  → its index (0 = top choice, no penalty)
-     *   - a field the grade did NOT list but another preference rule DOES
-     *     mention (the "managed" set) → ranked last, so "1st Grade prefers
-     *     Court 1" alone is enough to steer it off Court 2
-     *   - any other field → null (untouched — the rule never steers a grade
-     *     away from fields nobody expressed a preference about)
+     * Ranking semantics (see getGradeFieldPreference) — `kind`:
+     *   - 'top'      the grade's first choice (rank 0) → gets an active PULL
+     *                bonus, so the solver leans toward actually giving it
+     *   - 'listed'   further down the grade's list (rank 1+) → rank cost
+     *   - 'managed'  a field the grade did NOT list but another preference rule
+     *                DOES mention → ranked last, so "1st Grade prefers Court 1"
+     *                alone is enough to steer it off Court 2
+     *   - 'reserved' this grade expressed no preference here, but the field is
+     *                another grade's first choice → a mild push away, so the
+     *                grade that wants it has a real chance of getting it
+     *   - null       any other field (untouched — the rule never steers a grade
+     *                away from fields nobody expressed a preference about)
      *
      * Cached for 3s like the avoid rules — this runs inside scoring hot loops.
      * Fail-open on any read error.
@@ -815,9 +820,9 @@
 
     /**
      * Rule lookup: how does `fieldName` rank for `divName` (optionally for a
-     * specific activity)? → { rank, of } with rank 0 = most preferred, or null
-     * when no preference applies. An activity-scoped rule beats an
-     * any-activity rule for the same grade.
+     * specific activity)? → { rank, of, kind } (see kinds above) or null when no
+     * preference applies. An activity-scoped rule beats an any-activity rule for
+     * the same grade.
      */
     Utils.getGradeFieldPreference = function (divName, fieldName, activityName) {
         if (!divName || !fieldName) return null;
@@ -827,7 +832,7 @@
         const div = _lc(divName), fld = _lc(fieldName), act = _lc(activityName);
         if (!div || !fld) return null;
 
-        let best = null, bestSpecific = false, managed = null;
+        let best = null, bestSpecific = false, managed = null, wantedByOther = false;
         for (let i = 0; i < rules.length; i++) {
             const r = rules[i];
             if (!r || !r.grade || !Array.isArray(r.fields) || !r.fields.length) continue;
@@ -839,32 +844,50 @@
             // In-scope rule → its fields are part of the managed set.
             if (!managed) managed = new Set();
             for (let f = 0; f < r.fields.length; f++) { const n = _lc(r.fields[f]); if (n) managed.add(n); }
-            if (_lc(r.grade) !== div) continue;
+            const mine = _lc(r.grade) === div;
+            // Somebody ELSE calls this field their first choice → we should lean
+            // out of their way (only matters if we end up with no rule of our own).
+            if (!mine && _lc(r.fields[0]) === fld) wantedByOther = true;
+            if (!mine) continue;
             const specific = !!rAct;
             if (!best || (specific && !bestSpecific)) { best = r; bestSpecific = specific; }
         }
-        if (!best) return null;
+
+        if (!best) {
+            // No preference of our own — but make room for the grade that has one.
+            if (wantedByOther) return { rank: null, of: 0, kind: 'reserved' };
+            return null;
+        }
 
         const list = best.fields.map(_lc).filter(Boolean);
         const idx = list.indexOf(fld);
-        if (idx !== -1) return { rank: idx, of: list.length };
+        if (idx === 0) return { rank: 0, of: list.length, kind: 'top' };
+        if (idx > 0) return { rank: idx, of: list.length, kind: 'listed' };
         // Not listed by this grade, but somebody expressed a preference about it
         // → treat as the grade's last choice.
-        if (managed && managed.has(fld)) return { rank: list.length, of: list.length + 1 };
+        if (managed && managed.has(fld)) return { rank: list.length, of: list.length + 1, kind: 'managed' };
         return null;
     };
 
     /**
-     * Scoring convenience for the solvers: the penalty to ADD for putting
-     * `divName` on `fieldName` (0 = top choice / no rule). `step` is the
-     * per-rank cost in the caller's own score units — each consumer passes a
-     * value scaled to its local range so the preference nudges without ever
-     * overriding a hard constraint.
+     * Scoring convenience for the solvers: the score adjustment for putting
+     * `divName` on `fieldName`. NEGATIVE = lean toward this pairing, POSITIVE =
+     * lean away, 0 = no opinion. `step` is one rank's worth of cost in the
+     * caller's own score units — each consumer passes a value scaled to its local
+     * range so the preference steers without ever overriding a hard constraint.
+     *
+     *   top choice   → -2 × step   (active pull: "try to give this grade this field")
+     *   rank 1, 2, … → +rank × step
+     *   not listed but managed by another rule → +listLength × step
+     *   another grade's first choice → +1 × step (leave it for them if we can)
      */
-    Utils.getFieldPreferencePenalty = function (divName, fieldName, activityName, step) {
+    Utils.getFieldPreferenceBias = function (divName, fieldName, activityName, step) {
         const p = Utils.getGradeFieldPreference(divName, fieldName, activityName);
-        if (!p || !p.rank) return 0;
-        return p.rank * (step > 0 ? step : 100);
+        if (!p) return 0;
+        const st = (step > 0 ? step : 100);
+        if (p.kind === 'top') return -2 * st;
+        if (p.kind === 'reserved') return st;
+        return (p.rank || 0) * st;
     };
 
     /**

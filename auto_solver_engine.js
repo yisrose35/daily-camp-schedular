@@ -1013,12 +1013,15 @@
                 }
                 // ★ rules.js FIELD PREFERENCES BY GRADE (soft): the user ranked which
                 //   fields this grade should get first ("1st Grade prefers Court 1 over
-                //   Court 2"). Every field stays legal — a rank step just costs a little,
-                //   so the favorite wins when it's free and the runner-up is still taken
-                //   over leaving the block Free. Step 400: above the quality-rank nudge
-                //   (80/rank) and the scarcity/diversity terms (~200-300), below the
-                //   co-location incentive (-1500) and the max-players guards (3000+).
-                score += window.SchedulerCoreUtils?.getFieldPreferencePenalty?.(grade, cand.field, cand.sport, 400) || 0;
+                //   Court 2"). Signed bias — the grade's top choice gets a real PULL
+                //   (-800) so the solver leans toward actually giving it, lower ranks
+                //   cost, and a grade with no preference is nudged (+400) off a field
+                //   another grade calls its first choice so that grade can get it.
+                //   Every field stays legal: the runner-up is still taken over leaving
+                //   the block Free. Step 400 sits above the quality-rank nudge (80/rank)
+                //   and the scarcity/diversity terms (~200-300), below the co-location
+                //   incentive (-1500) and the max-players guards (3000+).
+                score += window.SchedulerCoreUtils?.getFieldPreferenceBias?.(grade, cand.field, cand.sport, 400) || 0;
                 // ★ rules.js FIELD PREFERENCES (soft, non-exclusive): steer the listed
                 //   divisions toward the field; non-listed divisions get a strong penalty
                 //   but are still allowed. Exclusive prefs are hard-gated in canPlace.

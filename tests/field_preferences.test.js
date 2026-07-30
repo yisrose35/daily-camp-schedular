@@ -5,13 +5,18 @@
  *       [{ id, grade, activity: '' | 'Basketball', fields: ['Court 1','Court 2'] }]
  *     `fields` is ORDERED, most-preferred first; empty `activity` = every activity.
  *   - Utils.getGradeFieldPreference(div, field, activity) is the lookup
- *     → { rank, of } | null   (case-insensitive, 3s cache,
+ *     → { rank, of, kind } | null   (case-insensitive, 3s cache,
  *       invalidateFieldPreferenceCache to drop it)
- *   - Utils.getFieldPreferencePenalty(div, field, activity, step) is what the
- *     solvers add to a candidate's score: 0 for the top choice, rank*step below.
+ *   - Utils.getFieldPreferenceBias(div, field, activity, step) is what the solvers
+ *     add to a candidate's score. It LEANS, it doesn't merely avoid:
+ *       top choice → -2*step (pull), rank i → +i*step,
+ *       another grade's first choice → +step (leave it for them), else 0.
+ *   - FieldQualityReopt.pullToPreferred() is the post-pass (Phase P) that moves an
+ *     already-placed block onto its grade's preferred field when that field is
+ *     usable — for blocks placed while the favorite was still busy.
  *   - SOFT semantics: canBlockFit must NOT reject a less-preferred field — the
- *     rule works purely through a finite score penalty, so a bunk still lands on
- *     the runner-up field rather than getting a Free period.
+ *     rule works purely through finite score bias, so a bunk still lands on the
+ *     runner-up field rather than getting a Free period.
  *
  * Run with: node --test tests/field_preferences.test.js
  */
@@ -73,10 +78,10 @@ function boot(rules) {
 
 // The lookup returns an object built inside the VM realm, so deepStrictEqual
 // would fail on prototype identity — compare the fields.
-function assertRank(actual, rank, of, msg) {
-    assert.ok(actual, (msg || 'preference') + ': expected a rank, got ' + actual);
-    assert.strictEqual(actual.rank, rank, msg);
-    assert.strictEqual(actual.of, of, msg);
+function assertPref(actual, rank, kind, msg) {
+    assert.ok(actual, (msg || 'preference') + ': expected a preference, got ' + actual);
+    assert.strictEqual(actual.rank, rank, msg + ' (rank)');
+    assert.strictEqual(actual.kind, kind, msg + ' (kind)');
 }
 
 describe('getGradeFieldPreference (rule lookup)', () => {
@@ -86,31 +91,41 @@ describe('getGradeFieldPreference (rule lookup)', () => {
     it('no rules configured → no preference anywhere', () => {
         const U0 = boot(null).SchedulerCoreUtils;
         assert.strictEqual(U0.getGradeFieldPreference('1st Grade', 'Court 1'), null);
-        assert.strictEqual(U0.getFieldPreferencePenalty('1st Grade', 'Court 2', 'Basketball', 400), 0);
+        assert.strictEqual(U0.getFieldPreferenceBias('1st Grade', 'Court 2', 'Basketball', 400), 0);
     });
 
     it('ranks each grade\'s fields in the order the user listed them', () => {
-        assertRank(U.getGradeFieldPreference('1st Grade', 'Court 1'), 0, 2, '1st/Court 1');
-        assertRank(U.getGradeFieldPreference('1st Grade', 'Court 2'), 1, 2, '1st/Court 2');
-        assertRank(U.getGradeFieldPreference('2nd Grade', 'Court 2'), 0, 2, '2nd/Court 2');
-        assertRank(U.getGradeFieldPreference('2nd Grade', 'Court 1'), 1, 2, '2nd/Court 1');
+        assertPref(U.getGradeFieldPreference('1st Grade', 'Court 1'), 0, 'top', '1st/Court 1');
+        assertPref(U.getGradeFieldPreference('1st Grade', 'Court 2'), 1, 'listed', '1st/Court 2');
+        assertPref(U.getGradeFieldPreference('2nd Grade', 'Court 2'), 0, 'top', '2nd/Court 2');
+        assertPref(U.getGradeFieldPreference('2nd Grade', 'Court 1'), 1, 'listed', '2nd/Court 1');
+        assert.strictEqual(U.getGradeFieldPreference('1st Grade', 'Court 1').of, 2);
     });
 
-    it('top choice costs nothing; each rank step costs one step', () => {
-        assert.strictEqual(U.getFieldPreferencePenalty('1st Grade', 'Court 1', 'Basketball', 400), 0);
-        assert.strictEqual(U.getFieldPreferencePenalty('1st Grade', 'Court 2', 'Basketball', 400), 400);
-        assert.strictEqual(U.getFieldPreferencePenalty('2nd Grade', 'Court 1', 'Basketball', 2500), 2500);
-        assert.strictEqual(U.getFieldPreferencePenalty('2nd Grade', 'Court 2', 'Basketball', 2500), 0);
+    it('leans toward the top choice (pull) and away from lower ranks', () => {
+        assert.strictEqual(U.getFieldPreferenceBias('1st Grade', 'Court 1', 'Basketball', 400), -800);
+        assert.strictEqual(U.getFieldPreferenceBias('1st Grade', 'Court 2', 'Basketball', 400), 400);
+        assert.strictEqual(U.getFieldPreferenceBias('2nd Grade', 'Court 2', 'Basketball', 2500), -5000);
+        assert.strictEqual(U.getFieldPreferenceBias('2nd Grade', 'Court 1', 'Basketball', 2500), 2500);
+        // the pull must be strong enough to beat the field-quality steering it
+        // competes with in the manual scorer (1500 per quality rank)
+        assert.ok(Math.abs(U.getFieldPreferenceBias('2nd Grade', 'Court 2', 'Basketball', 2500)) > 1500);
+    });
+
+    it('nudges a grade with no preference off another grade\'s first choice', () => {
+        // 3rd Grade has no rule: Court 1 is 1st Grade's first choice, so leave it
+        // for them when there's an alternative — a mild push, never a block.
+        assertPref(U.getGradeFieldPreference('3rd Grade', 'Court 1'), null, 'reserved', '3rd/Court 1');
+        assert.strictEqual(U.getFieldPreferenceBias('3rd Grade', 'Court 1', 'Basketball', 400), 400);
+        // …and the push is milder than the pull the preferring grade gets
+        assert.ok(U.getFieldPreferenceBias('3rd Grade', 'Court 1', 'Basketball', 400)
+            < Math.abs(U.getFieldPreferenceBias('1st Grade', 'Court 1', 'Basketball', 400)));
     });
 
     it('leaves fields nobody expressed a preference about alone', () => {
         assert.strictEqual(U.getGradeFieldPreference('1st Grade', 'Baseball Field'), null);
-        assert.strictEqual(U.getFieldPreferencePenalty('1st Grade', 'Baseball Field', 'Baseball', 400), 0);
-    });
-
-    it('grades with no rule of their own are never steered', () => {
-        assert.strictEqual(U.getGradeFieldPreference('3rd Grade', 'Court 1'), null);
-        assert.strictEqual(U.getFieldPreferencePenalty('3rd Grade', 'Court 2', 'Basketball', 400), 0);
+        assert.strictEqual(U.getFieldPreferenceBias('1st Grade', 'Baseball Field', 'Baseball', 400), 0);
+        assert.strictEqual(U.getFieldPreferenceBias('3rd Grade', 'Baseball Field', 'Baseball', 400), 0);
     });
 
     it('a one-field list still steers the grade off the other listed courts', () => {
@@ -120,26 +135,27 @@ describe('getGradeFieldPreference (rule lookup)', () => {
             { id: 'a', grade: '1st Grade', activity: '', fields: ['Court 1'] },
             { id: 'b', grade: '2nd Grade', activity: '', fields: ['Court 2'] }
         ] }).SchedulerCoreUtils;
-        assert.strictEqual(U1.getFieldPreferencePenalty('1st Grade', 'Court 1', 'Basketball', 400), 0);
-        assert.strictEqual(U1.getFieldPreferencePenalty('1st Grade', 'Court 2', 'Basketball', 400), 400);
-        assert.strictEqual(U1.getFieldPreferencePenalty('2nd Grade', 'Court 2', 'Basketball', 400), 0);
-        assert.strictEqual(U1.getFieldPreferencePenalty('2nd Grade', 'Court 1', 'Basketball', 400), 400);
+        assert.strictEqual(U1.getFieldPreferenceBias('1st Grade', 'Court 1', 'Basketball', 400), -800);
+        assert.strictEqual(U1.getFieldPreferenceBias('1st Grade', 'Court 2', 'Basketball', 400), 400);
+        assert.strictEqual(U1.getFieldPreferenceBias('2nd Grade', 'Court 2', 'Basketball', 400), -800);
+        assert.strictEqual(U1.getFieldPreferenceBias('2nd Grade', 'Court 1', 'Basketball', 400), 400);
         // …but an unmentioned field is still untouched
-        assert.strictEqual(U1.getFieldPreferencePenalty('1st Grade', 'Court 3', 'Basketball', 400), 0);
+        assert.strictEqual(U1.getFieldPreferenceBias('1st Grade', 'Court 3', 'Basketball', 400), 0);
     });
 
     it('matching is case/whitespace-insensitive', () => {
-        assertRank(U.getGradeFieldPreference(' 1ST GRADE ', 'court 2 '), 1, 2, 'messy casing');
+        assertPref(U.getGradeFieldPreference(' 1ST GRADE ', 'court 2 '), 1, 'listed', 'messy casing');
     });
 
     it('an activity-scoped rule only applies to that activity', () => {
         const U2 = boot({ fieldPreferences: [
             { id: 'a', grade: '1st Grade', activity: 'Basketball', fields: ['Court 1', 'Court 2'] }
         ] }).SchedulerCoreUtils;
-        assert.strictEqual(U2.getFieldPreferencePenalty('1st Grade', 'Court 2', 'Basketball', 400), 400);
-        assert.strictEqual(U2.getFieldPreferencePenalty('1st Grade', 'Court 2', 'Volleyball', 400), 0);
+        assert.strictEqual(U2.getFieldPreferenceBias('1st Grade', 'Court 1', 'Basketball', 400), -800);
+        assert.strictEqual(U2.getFieldPreferenceBias('1st Grade', 'Court 2', 'Basketball', 400), 400);
+        assert.strictEqual(U2.getFieldPreferenceBias('1st Grade', 'Court 2', 'Volleyball', 400), 0);
         // a caller that names no activity gets any-activity rules only
-        assert.strictEqual(U2.getFieldPreferencePenalty('1st Grade', 'Court 2', null, 400), 0);
+        assert.strictEqual(U2.getFieldPreferenceBias('1st Grade', 'Court 2', null, 400), 0);
     });
 
     it('an activity-scoped rule wins over the same grade\'s any-activity rule', () => {
@@ -147,21 +163,21 @@ describe('getGradeFieldPreference (rule lookup)', () => {
             { id: 'any', grade: '1st Grade', activity: '', fields: ['Court 1', 'Court 2'] },
             { id: 'vb', grade: '1st Grade', activity: 'Volleyball', fields: ['Court 2', 'Court 1'] }
         ] }).SchedulerCoreUtils;
-        assert.strictEqual(U3.getFieldPreferencePenalty('1st Grade', 'Court 1', 'Basketball', 400), 0);
-        assert.strictEqual(U3.getFieldPreferencePenalty('1st Grade', 'Court 1', 'Volleyball', 400), 400);
-        assert.strictEqual(U3.getFieldPreferencePenalty('1st Grade', 'Court 2', 'Volleyball', 400), 0);
+        assert.strictEqual(U3.getFieldPreferenceBias('1st Grade', 'Court 1', 'Basketball', 400), -800);
+        assert.strictEqual(U3.getFieldPreferenceBias('1st Grade', 'Court 1', 'Volleyball', 400), 400);
+        assert.strictEqual(U3.getFieldPreferenceBias('1st Grade', 'Court 2', 'Volleyball', 400), -800);
     });
 
     it('cache serves stale rules until invalidated', () => {
         const win = boot(RULES);
         const UC = win.SchedulerCoreUtils;
-        assert.strictEqual(UC.getFieldPreferencePenalty('1st Grade', 'Court 2', 'Basketball', 400), 400);
+        assert.strictEqual(UC.getFieldPreferenceBias('1st Grade', 'Court 2', 'Basketball', 400), 400);
         win.loadGlobalSettings = () => ({ schedulingRules: { fieldPreferences: [] } });
         // within the 3s TTL the old answer persists…
-        assert.strictEqual(UC.getFieldPreferencePenalty('1st Grade', 'Court 2', 'Basketball', 400), 400);
+        assert.strictEqual(UC.getFieldPreferenceBias('1st Grade', 'Court 2', 'Basketball', 400), 400);
         // …until the Rules tab save invalidates it
         UC.invalidateFieldPreferenceCache();
-        assert.strictEqual(UC.getFieldPreferencePenalty('1st Grade', 'Court 2', 'Basketball', 400), 0);
+        assert.strictEqual(UC.getFieldPreferenceBias('1st Grade', 'Court 2', 'Basketball', 400), 0);
     });
 
     it('fail-open on malformed rules and missing args', () => {
@@ -171,17 +187,17 @@ describe('getGradeFieldPreference (rule lookup)', () => {
         assert.strictEqual(UM.getGradeFieldPreference('1st Grade', 'Court 1'), null);
         assert.strictEqual(UM.getGradeFieldPreference(null, 'Court 1'), null);
         assert.strictEqual(UM.getGradeFieldPreference('1st Grade', null), null);
-        assert.strictEqual(UM.getFieldPreferencePenalty('1st Grade', 'Court 1', 'Basketball', 400), 0);
+        assert.strictEqual(UM.getFieldPreferenceBias('1st Grade', 'Court 1', 'Basketball', 400), 0);
     });
 
     it('a bad/absent step falls back to a sane default, never NaN', () => {
-        assert.strictEqual(U.getFieldPreferencePenalty('1st Grade', 'Court 2', 'Basketball'), 100);
-        assert.strictEqual(U.getFieldPreferencePenalty('1st Grade', 'Court 2', 'Basketball', 0), 100);
+        assert.strictEqual(U.getFieldPreferenceBias('1st Grade', 'Court 2', 'Basketball'), 100);
+        assert.strictEqual(U.getFieldPreferenceBias('1st Grade', 'Court 1', 'Basketball', 0), -200);
     });
 });
 
 describe('soft semantics: a less-preferred field is never hard-blocked', () => {
-    it('canBlockFit still accepts the runner-up field (penalty, not veto)', () => {
+    it('canBlockFit still accepts the runner-up field (bias, not veto)', () => {
         const win = boot(RULES);
         const U = win.SchedulerCoreUtils;
         const activityProperties = { 'Court 2': {
@@ -192,5 +208,116 @@ describe('soft semantics: a less-preferred field is never hard-blocked', () => {
         win.fieldUsageBySlot = {};
         const blk = { bunk: 'Bunk 1A', divName: '1st Grade', startTime: 600, endTime: 660, slots: [600] };
         assert.strictEqual(U.canBlockFit(blk, 'Court 2', activityProperties, {}, 'Basketball'), true);
+    });
+});
+
+// ============================================================================
+// PHASE P — preference pull post-pass (FieldQualityReopt.pullToPreferred)
+// ============================================================================
+const COURTS = [
+    { name: 'Court 1', activities: ['Basketball'], sharableWith: { type: 'not_sharable', capacity: 1 } },
+    { name: 'Court 2', activities: ['Basketball'], sharableWith: { type: 'not_sharable', capacity: 1 } }
+];
+
+function bootPull(rules, fields, divisions, scheduleAssignments) {
+    const win = bootSandbox(['scheduler_core_utils.js', 'field_quality_reopt.js']);
+    win.loadGlobalSettings = () => ({ app1: { fields: fields }, schedulingRules: rules || {} });
+    win.SchedulerCoreUtils.invalidateFieldPreferenceCache();
+    win.divisions = divisions;
+    win.scheduleAssignments = scheduleAssignments;
+    return win;
+}
+
+const block = (field, extra) => Object.assign({
+    field: field, sport: 'Basketball', _activity: 'Basketball',
+    _startMin: 600, _endMin: 660, continuation: false
+}, extra || {});
+
+describe('preference pull (Phase P)', () => {
+    it('moves a grade off the runner-up court when its first choice is free', () => {
+        const win = bootPull(RULES, COURTS,
+            { '1st Grade': { bunks: ['Bunk 1A'] } },
+            { 'Bunk 1A': [block('Court 2')] });
+        const moved = win.FieldQualityReopt.pullToPreferred({});
+        assert.strictEqual(moved, 1, 'one block pulled');
+        assert.strictEqual(win.scheduleAssignments['Bunk 1A'][0].field, 'Court 1');
+        assert.strictEqual(win.scheduleAssignments['Bunk 1A'][0]._prefMoved, true);
+    });
+
+    it('leaves the block alone when the preferred court is genuinely busy', () => {
+        const win = bootPull(RULES, COURTS,
+            { '1st Grade': { bunks: ['Bunk 1A'] }, '2nd Grade': { bunks: ['Bunk 2A'] } },
+            { 'Bunk 1A': [block('Court 2')], 'Bunk 2A': [block('Court 1')] });
+        // Court 1 is taken by 2nd Grade at the same time and can't be shared, so
+        // 1st Grade keeps Court 2 rather than losing the period.
+        assert.strictEqual(win.FieldQualityReopt.pullToPreferred({}), 0);
+        assert.strictEqual(win.scheduleAssignments['Bunk 1A'][0].field, 'Court 2');
+        assert.strictEqual(win.scheduleAssignments['Bunk 2A'][0].field, 'Court 1');
+    });
+
+    it('pulls the strongest preference first when two bunks want one court', () => {
+        const win = bootPull(RULES, COURTS,
+            { '1st Grade': { bunks: ['Bunk 1A', 'Bunk 1B'] } },
+            { 'Bunk 1A': [block('Court 2')], 'Bunk 1B': [block('Court 2')] });
+        // Court 1 holds one bunk (not sharable) → exactly one of them moves,
+        // and the other keeps its slot instead of being dropped.
+        assert.strictEqual(win.FieldQualityReopt.pullToPreferred({}), 1);
+        const fields = ['Bunk 1A', 'Bunk 1B'].map(b => win.scheduleAssignments[b][0].field).sort();
+        assert.deepStrictEqual(fields, ['Court 1', 'Court 2']);
+    });
+
+    it('never moves league / post-edit / pinned / pair-locked blocks', () => {
+        const locks = [{ _league: true }, { _postEdit: true }, { _pinned: true }, { _pairLock: true }];
+        locks.forEach(lock => {
+            const win = bootPull(RULES, COURTS,
+                { '1st Grade': { bunks: ['Bunk 1A'] } },
+                { 'Bunk 1A': [block('Court 2', lock)] });
+            assert.strictEqual(win.FieldQualityReopt.pullToPreferred({}), 0, Object.keys(lock)[0]);
+            assert.strictEqual(win.scheduleAssignments['Bunk 1A'][0].field, 'Court 2');
+        });
+    });
+
+    it('respects the caller\'s validator (access / time rules)', () => {
+        const win = bootPull(RULES, COURTS,
+            { '1st Grade': { bunks: ['Bunk 1A'] } },
+            { 'Bunk 1A': [block('Court 2')] });
+        const moved = win.FieldQualityReopt.pullToPreferred({
+            validate: (field) => field === 'Court 1' ? 'field access: grade not allowed' : null
+        });
+        assert.strictEqual(moved, 0);
+        assert.strictEqual(win.scheduleAssignments['Bunk 1A'][0].field, 'Court 2');
+    });
+
+    it('no-ops when no preference is configured', () => {
+        const win = bootPull({}, COURTS,
+            { '1st Grade': { bunks: ['Bunk 1A'] } },
+            { 'Bunk 1A': [block('Court 2')] });
+        assert.strictEqual(win.FieldQualityReopt.pullToPreferred({}), 0);
+        assert.strictEqual(win.scheduleAssignments['Bunk 1A'][0].field, 'Court 2');
+    });
+
+    it('carries a moved field onto the block\'s continuation slots and labels', () => {
+        const lead = block('Court 2', { _location: 'Court 2' });
+        const cont = block('Court 2', { continuation: true, _location: 'Court 2' });
+        const win = bootPull(RULES, COURTS,
+            { '1st Grade': { bunks: ['Bunk 1A'] } },
+            { 'Bunk 1A': [lead, cont] });
+        assert.strictEqual(win.FieldQualityReopt.pullToPreferred({}), 1);
+        assert.strictEqual(win.scheduleAssignments['Bunk 1A'][0].field, 'Court 1');
+        assert.strictEqual(win.scheduleAssignments['Bunk 1A'][0]._location, 'Court 1');
+        assert.strictEqual(win.scheduleAssignments['Bunk 1A'][1].field, 'Court 1');
+        assert.strictEqual(win.scheduleAssignments['Bunk 1A'][1]._location, 'Court 1');
+    });
+
+    it('does not move a block onto a field that cannot host the activity', () => {
+        const fields = [
+            { name: 'Court 1', activities: ['Volleyball'], sharableWith: { type: 'not_sharable', capacity: 1 } },
+            { name: 'Court 2', activities: ['Basketball'], sharableWith: { type: 'not_sharable', capacity: 1 } }
+        ];
+        const win = bootPull(RULES, fields,
+            { '1st Grade': { bunks: ['Bunk 1A'] } },
+            { 'Bunk 1A': [block('Court 2')] });
+        assert.strictEqual(win.FieldQualityReopt.pullToPreferred({}), 0);
+        assert.strictEqual(win.scheduleAssignments['Bunk 1A'][0].field, 'Court 2');
     });
 });

@@ -654,7 +654,7 @@
             //   first. Step 300 only breaks near-ties in this scorer's ±9000 range —
             //   a preference must never keep a slot Free or beat rotation fairness.
             if (c.field) {
-                score += window.SchedulerCoreUtils?.getFieldPreferencePenalty?.(divName, c.field, act, 300) || 0;
+                score += window.SchedulerCoreUtils?.getFieldPreferenceBias?.(divName, c.field, act, 300) || 0;
             }
 
             // Small random tie-breaker so repeated calls vary

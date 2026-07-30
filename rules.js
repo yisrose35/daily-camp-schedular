@@ -27,7 +27,7 @@
 //   - findForbiddenRanges(targetDescriptor, template, opts) -> [{start,end}]
 //   - getFieldPreferenceRules() / saveFieldPreferenceRules(rules)
 //     (the solvers read these through SchedulerCoreUtils.getGradeFieldPreference /
-//      getFieldPreferencePenalty, which cache for their scoring hot loops)
+//      getFieldPreferenceBias, which cache for their scoring hot loops)
 // ============================================================================
 (function () {
 'use strict';
@@ -131,8 +131,9 @@ function saveAvoidRules(rules) {
 // FIELD PREFERENCE RULES ("Field Preferences") — data access
 // ──────────────────────────────────────────────────────────────────────────
 // SOFT rule: pick a grade and rank the fields it should get first. Both fields
-// stay open to every grade — the scheduler just prefers the higher-ranked one
-// when it's available. Shape:
+// stay open to every grade — the scheduler leans toward handing each grade its
+// top choice (pull for that grade, mild push for the others) and falls back to
+// the next field rather than leaving a Free period. Shape:
 //   settings.schedulingRules.fieldPreferences =
 //     [{ id, grade, activity: '' | 'Basketball', fields: ['Court 1','Court 2'] }]
 // `fields` is ordered, most-preferred first. Empty `activity` = every activity.
@@ -1271,10 +1272,11 @@ function renderFieldPrefCard(container) {
                     Example: both courts are open to everyone, but you'd rather
                     <em>1st Grade</em> play on <em>Court 1</em> and <em>2nd Grade</em> on <em>Court 2</em>.
                     Add a rule per grade and list its fields best-first.
-                    <strong>Soft rule:</strong> when the preferred field is busy the grade still gets the other one &mdash;
+                    The scheduler <strong>leans toward</strong> giving each grade its first choice: it pulls the grade
+                    onto that field when it can, and steers the other grades off it so it's there to be had
+                    (so ranking a single field per grade is enough).
+                    <strong>Soft rule:</strong> when the preferred field really is busy the grade still gets the other one &mdash;
                     a preference never leaves a bunk with a Free period.
-                    Naming a field for one grade also nudges the <em>other</em> grades off it, so
-                    ranking a single field is enough.
                 </div>
                 <div id="rules-fp-list" style="margin-top:14px;"></div>
                 <div style="margin-top:12px; display:flex; justify-content:flex-end;">

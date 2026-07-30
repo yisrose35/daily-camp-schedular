@@ -2000,7 +2000,7 @@ const editBunks = _conflictOwnScope || (editBunksResult instanceof Set ? editBun
         //   others. Step 600 sits above the field's own division-preference terms
         //   (±50 / +500) and below the frequency guards (2000) in this scorer's range.
         if (fName && fName !== 'Free' && divName) {
-            penalty += window.SchedulerCoreUtils?.getFieldPreferencePenalty?.(divName, fName, activityName, 600) || 0;
+            penalty += window.SchedulerCoreUtils?.getFieldPreferenceBias?.(divName, fName, activityName, 600) || 0;
         }
         const myNum = parseInt((bunk.match(/\d+/) || [])[0]) || 0;
         for (const slotIdx of slots) {
