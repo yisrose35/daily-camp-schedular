@@ -20934,6 +20934,7 @@
                     log('[GENERIC-LAYOUT] ✅ COMPLETE in ' + _glElapsed + 's — ' + _glOut.stats.windowsTiled + '/' + _glOut.stats.windowsConsidered + ' free windows tiled, ' + _glOut.stats.tilesPlaced + ' generic tiles placed, ' + _glOut.stats.bunksFullyTiled + '/' + _glOut.stats.bunks + ' bunks fully wall-to-wall, ' + _glOut.stats.unmetSpecialFloors + ' unmet special floor(s), ' + (_glOut.stats.unmetFloors || 0) + ' unmet floor(s) total, ' + _glInjectedSwim + ' swim + ' + _glInjectedLayer + ' other deferred layer(s) re-floated, sharing watched on ' + _glShareFacs + ' facility(ies)/' + _glShareResv + ' placement(s)');
                     // ★ Last chance to cover leftover time before this path returns.
                     try { _runFinalBackfill(); } catch (_eFbGl) {}
+                    try { _auditSubcatFloors(); } catch (_eFaGl) {}
                     try { window.dispatchEvent(new CustomEvent('campistry-generation-complete', { detail: { mode: 'auto', version: VERSION, elapsed: _glElapsed, warnings: warnings, dateKey: (currentDate || window.currentScheduleDate || ''), genericLayout: true } })); } catch (_glEv) {}
                     return true; // ← early return: skip ALL activity-assignment phases
                 }
@@ -35875,7 +35876,74 @@
         // sharing backstop, pool/delete enforcement) and async generation-
         // complete listeners all run after the pre-save application; nothing
         // may outlive this one.
+        // ★ FLOOR AUDIT — did every bunk actually GET its required subcategories?
+        //   __genFloorWarnings only ever held IMPOSSIBLE-floor warnings, which are a
+        //   CONFIG pre-check (floor > distinct activities). Nothing verified the floor was
+        //   MET in the finished grid, so a bunk could silently end the day without a
+        //   subcategory its layer marks "=1" and no line anywhere said so. Live: 3 bunks
+        //   (Quartets א, Quints ג, Majors ה) had NO uncategorized special at all while
+        //   "Silent Headphones" went unused for the entire day, throttled out by an
+        //   exact-frequency rule — a distribution shortfall, invisible in the log.
+        //   Honest reporting is a stated product rule; an unmet floor must be said out loud.
+        //   '<=' subcategories are ceilings, not floors, so they are exempt.
+        function _auditSubcatFloors() {
+            try {
+                if (typeof window === 'undefined' || !window.scheduleAssignments) return;
+                var need = {};                                  // grade -> { subcat -> qty }
+                (layers || []).forEach(function (l) {
+                    if (!l || String(l.type || '').toLowerCase() !== 'special') return;
+                    if (!l.subQuantities || typeof l.subQuantities !== 'object') return;
+                    var g = l.grade || l.division || '_all';
+                    var ops = (l.subOps && typeof l.subOps === 'object') ? l.subOps : {};
+                    Object.keys(l.subQuantities).forEach(function (sn) {
+                        var q = parseInt(l.subQuantities[sn], 10) || 0;
+                        if (q <= 0) return;
+                        var mk = Object.keys(ops).filter(function (x) { return x.toLowerCase() === String(sn).toLowerCase(); })[0];
+                        if ((mk ? ops[mk] : '=') === '<=') return;   // ceiling, not a floor
+                        var key = String(sn).toLowerCase().trim();
+                        need[g] = need[g] || {};
+                        need[g][key] = Math.max(need[g][key] || 0, q);
+                    });
+                });
+                if (!Object.keys(need).length) return;
+                var gradeOf = {};
+                Object.keys(divisions || {}).forEach(function (g) {
+                    (getBunksForGrade(g, divisions) || []).forEach(function (bk) { gradeOf[String(bk)] = g; });
+                });
+                var short = {};
+                Object.keys(window.scheduleAssignments).forEach(function (bk) {
+                    var g = gradeOf[String(bk)];
+                    if (!g || !need[g]) return;
+                    var got = {};
+                    (window.scheduleAssignments[bk] || []).forEach(function (r) {
+                        if (r && String(r.type) === 'special' && r._subcat) {
+                            var k2 = String(r._subcat).toLowerCase().trim();
+                            got[k2] = (got[k2] || 0) + 1;
+                        }
+                    });
+                    Object.keys(need[g]).forEach(function (sc) {
+                        var have = got[sc] || 0, want = need[g][sc];
+                        if (have < want) {
+                            short[sc] = short[sc] || [];
+                            short[sc].push(bk + (want > 1 ? ' (' + have + '/' + want + ')' : ''));
+                        }
+                    });
+                });
+                var keys = Object.keys(short);
+                if (!keys.length) { log('[FLOOR-AUDIT] every bunk met its required subcategory floor(s)'); return; }
+                keys.forEach(function (sc) {
+                    var list = short[sc];
+                    warn('[FLOOR-AUDIT] ⚠ ' + list.length + ' bunk(s) did NOT get a required "' + sc +
+                        '" special: ' + list.slice(0, 10).join(', ') + (list.length > 10 ? ' …+' + (list.length - 10) + ' more' : '') +
+                        '. The layer asks for it but the pool ran dry today — add another "' + sc +
+                        '" activity, raise a capacity, or relax an exact-frequency/cohort rule that is holding one back.');
+                    try { (window.__genFloorWarnings = window.__genFloorWarnings || []).push({ subcat: sc, unmetBunks: list.length, bunks: list.slice(0, 20), kind: 'output-shortfall' }); } catch (_eFa1) {}
+                });
+            } catch (_eFa) { try { warn('[FLOOR-AUDIT] skipped — ' + (_eFa && _eFa.message)); } catch (_eFa2) {} }
+        }
+
         _runFinalBackfill();   // tail path (non generic-layout runs)
+        _auditSubcatFloors();
 
         try {
             const _preTripAbs = tripWriteCount;
