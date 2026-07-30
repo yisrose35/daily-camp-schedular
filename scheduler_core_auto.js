@@ -14968,7 +14968,12 @@
                 // a random one, saving many wasted iterations exploring dominated orderings.
                 // Subsequent iterations use seeded permutation for diversity as normal.
                 var permutedOffField;
-                if (totalIters === 0 && _oracleTypeOrders && _oracleTypeOrders[grade] && _oracleTypeOrders[grade].length > 0) {
+                // A caller-driven arrangement search must NOT be pinned to the oracle
+                // ordering: it is keyed to totalIters === 0, which is permanently true on
+                // the generic-layout path, so every attempt would get the same structure.
+                var _arrSeedOracleSkip = false;
+                try { _arrSeedOracleSkip = (typeof window !== 'undefined') && (+window.__arrangementSeed > 0); } catch (_eOS) {}
+                if (!_arrSeedOracleSkip && totalIters === 0 && _oracleTypeOrders && _oracleTypeOrders[grade] && _oracleTypeOrders[grade].length > 0) {
                     // Use oracle-optimal ordering for the first iteration
                     permutedOffField = _oracleTypeOrders[grade];
                 } else {
@@ -15175,8 +15180,22 @@
             // explores a structurally different day layout each time — not just a reshuffled
             // grade assignment within the same ordering.  Using a large prime stride ensures
             // no two iterations within 35 repeats accidentally pick the same permutation.
-            const _typeOrderSeed = totalIters * 7919 + 1;
-            staggerPlan = buildRotationMatrix(allGrades, _iterSeed, _typeOrderSeed);
+            // ★ ARRANGEMENT SEED (window.__arrangementSeed, default 0 = today's behaviour).
+            //   This loop is designed to explore up to MAX_ITERATIONS structurally different
+            //   days: each iteration derives a new _typeOrderSeed and rebuilds the whole
+            //   stagger matrix. But the generic-layout pipeline RETURNS at :20760, inside
+            //   this loop and before totalIters++ at :22450 — so on a GL camp totalIters is
+            //   permanently 0, _typeOrderSeed is permanently 1, and exactly ONE arrangement
+            //   is ever tried out of the eight budgeted. Verified live: the log announces
+            //   "cap: 8" and "[GENERIC-LAYOUT] ✅ COMPLETE" appears exactly once.
+            //   Exposing the seed lets a caller drive the search from outside (generate,
+            //   score, bump the seed, keep the best) without restructuring the pipeline.
+            //   A non-zero seed also skips the oracle-guided ordering, which is hard-wired
+            //   to totalIters === 0 and would otherwise pin every attempt to one structure.
+            var _arrSeed = 0;
+            try { if (typeof window !== 'undefined' && +window.__arrangementSeed > 0) _arrSeed = +window.__arrangementSeed; } catch (_eArr) {}
+            const _typeOrderSeed = (totalIters + _arrSeed) * 7919 + 1;
+            staggerPlan = buildRotationMatrix(allGrades, _iterSeed + _arrSeed, _typeOrderSeed);
             allGrades.forEach(grade => getBunksForGrade(grade, divisions).forEach(bunk => { bunkTimelines[bunk] = []; }));
 
             // Init field ledger for this iteration
