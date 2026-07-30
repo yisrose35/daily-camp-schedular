@@ -40,18 +40,34 @@
     // Best free activity of subcat `sub` at duration `dur` that fits (cap-aware) at [s,e],
     // not already used by this bunk and not the excluded name. Returns the candidate or null.
     function pickActivity(ctx, bunk, sub, dur, s, e, used, excludeKey) {
-        const pool = bunk.pool || [];
-        for (let i = 0; i < pool.length; i++) {
-            const c = pool[i];
-            if (!c || !c.name) continue;
-            if (ctx.canon(c.subcategory) !== sub) continue;
-            const durs = ctx.specialDurs(c.name);
-            if (durs && durs.length && durs.indexOf(dur) < 0) continue;
-            const key = String(c.name).toLowerCase();
-            if (used[key]) continue;
-            if (excludeKey && key === excludeKey) continue;
-            if (!ctx.capFits(c, bunk.grade, s, e)) continue;
-            return c;
+        // Primary pool first, then the cohort-DEFERRED pool as a last resort.
+        //
+        // The deferred pool is not a restriction — it is explicitly "fill-if-possible
+        // last resort (fills before OPEN time)": this bunk is merely AHEAD of its cohort
+        // on that activity, a fairness preference, not a rule. GENERIC-FILL already
+        // borrows from it when a tile would otherwise go OPEN; restructure did not, so a
+        // relocation could fail with the tile left dead while a perfectly legal borrow sat
+        // one list away. Live (Majors ה): every uncategorized option was either
+        // exact-frequency exhausted (removed from priorityList outright) or
+        // cohort-deferred, so scanning only bunk.pool found nothing and all 14 relocation
+        // attempts came back empty. Every hard rule still applies below — subcat, a
+        // configured duration, no same-day repeat, and capFits.
+        var lists = [bunk.pool || []];
+        if (bunk.deferred && bunk.deferred.length) lists.push(bunk.deferred);
+        for (let li = 0; li < lists.length; li++) {
+            const pool = lists[li];
+            for (let i = 0; i < pool.length; i++) {
+                const c = pool[i];
+                if (!c || !c.name) continue;
+                if (ctx.canon(c.subcategory) !== sub) continue;
+                const durs = ctx.specialDurs(c.name);
+                if (durs && durs.length && durs.indexOf(dur) < 0) continue;
+                const key = String(c.name).toLowerCase();
+                if (used[key]) continue;
+                if (excludeKey && key === excludeKey) continue;
+                if (!ctx.capFits(c, bunk.grade, s, e)) continue;
+                return c;
+            }
         }
         return null;
     }

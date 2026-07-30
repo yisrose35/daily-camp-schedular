@@ -20017,7 +20017,10 @@
                                         var grade = (_glPerBunk[bunk] && _glPerBunk[bunk].grade);
                                         var sl = (typeof shoppingLists !== 'undefined' && shoppingLists && shoppingLists[bunk]) ? shoppingLists[bunk] : (typeof buildBunkShoppingList === 'function' ? buildBunkShoppingList(bunk, grade) : null);
                                         var pool = (sl && sl.specials && sl.specials.priorityList) || [];
-                                        _stagBunks.push({ grade: grade, tiles: res.tiles, pool: pool });
+                                        // `deferred` = cohort-deferred candidates (fill-if-possible last resort).
+                                        //   restructure borrows from these only when the primary pool cannot fill
+                                        //   a relocated tile — same contract GENERIC-FILL already uses.
+                                        _stagBunks.push({ grade: grade, tiles: res.tiles, pool: pool, deferred: (sl && sl.specials && sl.specials.cohortDeferred) || [] });
                                     });
                                     var _stagCtx = {
                                         bunks: _stagBunks,
