@@ -20089,6 +20089,31 @@
                                     if (_absRes && (_absRes.bornDeadSkipped || 0) > 0) { log('[GENERIC-ABSORB] ' + _absRes.bornDeadSkipped + ' stuck block(s) left as honest OPEN time instead of a born-dead "Special: Uncategorized" — no uncategorized activity runs that length (the placeholder could never have filled; the capacity advice now names the real shortage)'); }
                                     if (_absRes && (_absRes.toRepeatFilled || 0) > 0) { log('[GENERIC-ABSORB-REPEAT] ' + _absRes.toRepeatFilled + ' open block(s) filled with a REPEAT special (sportless camp, window.__sportlessRepeatFill on) — same-day repeats expected'); }
                                     if (_absRes && (_absRes.toSplitFilled || 0) > 0) { log('[GENERIC-ABSORB-SPLIT] ' + _absRes.toSplitFilled + ' short special tile(s) placed by splitting stuck 40-min windows (theme/food/shiur combos) that would otherwise be dead'); }
+                                    // ★ RE-STAGGER AFTER ABSORB (window.__reStaggerAfterAbsorb, default ON).
+                                    //   GENERIC-STAGGER (restructure) ran ~50 lines ABOVE, before absorb existed.
+                                    //   Absorb then MINTS new generic special tiles ([absorb-kept]) — and nothing
+                                    //   ever offered those the relocation restructure exists to provide, so a tile
+                                    //   born at a seat-starved minute stayed dead for the rest of the run.
+                                    //   Live (Majors ה, 40min uncategorized @12:15): every uncategorized activity
+                                    //   with a free seat at THAT minute was exact-frequency exhausted for the bunk,
+                                    //   while 11:30-12:10 — where its own 40-min sport sat — had EIGHT free. An
+                                    //   equal-duration special↔sport swap fills it; restructure just never saw the
+                                    //   tile. Re-run it now that the absorb tiles exist. Same pass, same gates,
+                                    //   same seat ledger: purely a second look at newly-created misses.
+                                    try {
+                                        var _reStagOn = (typeof window === 'undefined') || (window.__reStaggerAfterAbsorb !== false);
+                                        if (_reStagOn && typeof _stagCtx !== 'undefined' && _stagCtx && window.GLStagger && typeof window.GLStagger.restructure === 'function') {
+                                            var _reStagTotal = 0;
+                                            for (var _rsPass = 0; _rsPass < 6; _rsPass++) {
+                                                var _rsRes = window.GLStagger.restructure(_stagCtx);
+                                                if (!_rsRes || !_rsRes.recovered) break;
+                                                _reStagTotal += _rsRes.recovered;
+                                            }
+                                            if (_reStagTotal > 0) {
+                                                log('[GENERIC-RESTAGGER] recovered ' + _reStagTotal + ' absorb-created dead tile(s) by relocating them to a free-seat time (restructure had already run before absorb minted them)');
+                                            }
+                                        }
+                                    } catch (_eReStag) { try { warn('[GENERIC-RESTAGGER] error — left as-is: ' + (_eReStag && _eReStag.message)); } catch (_e) {} }
                                     // REORDER PROBE: tell the user, per dead window, whether a reorder could ever
                                     // help. RELOCATABLE = a movable sport blocks it (the reorder the user asked for
                                     // is worth building); WALL-STUCK = blocked by lunch/swim/anchor (reorder can't
