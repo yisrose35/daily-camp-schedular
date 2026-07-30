@@ -72,6 +72,10 @@ function init(){
     window.addEventListener('campistry-cloud-hydrated',function(){
         var saveLockActive = Date.now() < _saveLockUntil;
         console.log('[Me] Cloud hydration — reloading data' + (saveLockActive ? ' (save lock active — also resaving)' : ''));
+        // Section access: drop branches this user has no access to BEFORE
+        // loadData() reads them, so restricted data never reaches the UI or the
+        // on-device cache. preserveOnSave() puts them back at save time.
+        _scrubRestrictedBranches();
         loadData();
         render(curPage);
         if (saveLockActive) {
@@ -79,6 +83,24 @@ function init(){
         }
         // Data is now real — fade the overlay out.
         hideMeLoadingOverlay();
+    });
+
+    // Restricted branches are scrubbed from the shared settings blob in place.
+    // Access resolution and cloud hydration race, so this runs on both events —
+    // whichever lands second is the one that actually removes anything.
+    function _scrubRestrictedBranches(){
+        try{
+            var S=window.CampistrySections;
+            if(!S||!S.isReady()||S.isUnrestricted())return;
+            var g=(typeof window.loadGlobalSettings==='function')?window.loadGlobalSettings():null;
+            if(!g)return;
+            S.scrubSettings(g);
+        }catch(_){}
+    }
+    window.addEventListener('campistry-access-ready',function(){
+        _scrubRestrictedBranches();
+        loadData();
+        render(curPage);
     });
 
     // Safety net: if hydration never fires (offline, no cloud config, etc.)
@@ -196,6 +218,10 @@ function save(){
         // every sub-key NOT listed here — forms, customFields, locale,
         // campSettings, stripePublishableKey, etc. (each written by a sibling
         // saver) — so an unrelated save() silently wiped them from cache + cloud.
+        // Section access: a user without Billing never had families/payments
+        // hydrated (they were scrubbed after load). Writing g back as-is would
+        // blank them in the cloud, so put the untouched branches back first.
+        try{ if(window.CampistrySections)window.CampistrySections.preserveOnSave(g); }catch(_){}
         g.campistryMe=Object.assign({},(g.campistryMe&&typeof g.campistryMe==='object')?g.campistryMe:{},{
             families:families,
             payments:payments,
@@ -355,6 +381,20 @@ function getLeagues(){
         Object.values(spec).forEach(function(l){if(l&&l.name&&l.teams)leagues[l.name]=l.teams});
         return leagues;
     }catch(e){return{}}
+}
+
+// ── Section access gates ─────────────────────────────────────────
+// A 'view' section renders but must refuse writes. campistry_access_sections.js
+// disables controls broadly; these are the explicit checks on the handlers that
+// actually move money, so a stale DOM can't get through.
+function _secEdit(section,whatFor){
+    var S=window.CampistrySections;
+    if(!S)return true;
+    return S.requireEdit(section,whatFor);
+}
+function _secCan(section){
+    var S=window.CampistrySections;
+    return S?S.can(section):true;
 }
 
 // ── Payment methods ──────────────────────────────────────────────
@@ -4196,6 +4236,8 @@ function finAddExpense(){
 }
 function finRemoveExpense(i){finExpenses.splice(i,1);save();renderAnalytics();toast('Removed')}
 function finAddPayment(){
+    if(!_secEdit('analytics','Recording a payment'))return;
+
     // A modal rather than a prompt chain, so the method comes from the camp's
     // payment policy instead of whatever the user types into a text box.
     var today=new Date().toISOString().split('T')[0];
@@ -5244,6 +5286,8 @@ function setBillFilter(f){_billFilter=f;renderBilling()}
 function openPaymentModal(){openPaymentForFamily(null)}
 
 function openPaymentForFamily(famKey){
+    if(!_secEdit('billing','Recording a payment'))return;
+
     var famOpts='';
     if(famKey){
         var f=families[famKey];
@@ -5288,7 +5332,9 @@ function openPaymentForFamily(famKey){
     });
 }
 
-function addCharge(){addChargeForFamily(null)}
+function addCharge(){
+    if(!_secEdit('billing','Adding a charge'))return;
+addChargeForFamily(null)}
 function addChargeForFamily(famKey){
     var famOpts='';
     if(famKey){

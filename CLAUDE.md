@@ -68,6 +68,9 @@ When the user says **"day X"** or **"let's do day X"**:
 | Campistry Lite (mobile companion) | `campistry_lite.html/.js/.css`, `manifest_lite.webmanifest`, `supabase/functions/send-sms/`, `migrations/018_*.sql` — docs in `CAMPISTRY_LITE.md` |
 | Payroll & Youth Corps | `campistry_payroll_core.js` (rules + pay math), Payroll page in `campistry_me.js` |
 | Payment policy (one catalogue, camp-wide) | `campistry_payments.js` — used by registration, Billing, Snacks, Shop |
+| Per-section access (registry + rules) | `campistry_capabilities.js` — apps → sections, presets, `resolve()` |
+| Per-section access (runtime gate) | `campistry_access_sections.js` — hides nav, blocks panes, scrubs/preserves data |
+| Per-section access (owner settings UI) | `campistry_access_settings.js` — presets + full matrix, opened from Staff & Access |
 | Camp Shop (swag) — lives **inside Snacks** | `campistry_shop_core.js`, `campistry_snacks_shop.js`, `#page-shop` in `campistry_snacks.html` |
 | Luggage — lives **inside Go** | `campistry_luggage_core.js`, `campistry_go_luggage.js`, `#tab-luggage` in `campistry_go.html` |
 | Shop/Luggage shared UI kit | `campistry_ops.css` (`.ops-*` namespace only — safe inside a host page) |

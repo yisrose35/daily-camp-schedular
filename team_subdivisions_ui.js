@@ -20,6 +20,22 @@
             .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
             .replace(/"/g, '&quot;').replace(/'/g, '&#39;');
 
+    /**
+     * One line describing a member's section access, for the staff list and the
+     * edit modal. Delegates to the capability registry so the wording stays in
+     * step with what the resolver actually does.
+     */
+    function _accessSummary(member) {
+        const C = window.CampistryCapabilities;
+        if (!C) return 'Full access to their apps';
+        return C.summarize({
+            role: member.role,
+            products: (member.product_access && member.product_access.length) ? member.product_access : null,
+            preset: member.access_preset || null,
+            overrides: member.section_access || {}
+        });
+    }
+
     console.log("[TeamUI] Team & Divisions UI v2.1 loading...");
 
     const SUBDIVISION_COLORS = [
@@ -382,6 +398,7 @@
                     ${(member.department || (member.product_access && member.product_access.length) || member.parent_contactable) ? `<div style="margin-top:4px;display:flex;gap:6px;flex-wrap:wrap;align-items:center;font-size:0.72rem;">
                         ${member.department ? `<span style="background:var(--slate-100);color:var(--slate-600);border-radius:999px;padding:2px 9px;font-weight:600;">${_tsuEsc(member.department)}</span>` : ''}
                         ${(member.product_access || []).map(p => `<span style="background:#EEF2FF;color:#4F46E5;border-radius:999px;padding:2px 8px;text-transform:uppercase;letter-spacing:.03em;">${_tsuEsc(p)}</span>`).join('')}
+                        ${(member.access_preset || (member.section_access && Object.keys(member.section_access).length)) ? `<span style="background:#FFFBEB;color:#B45309;border-radius:999px;padding:2px 8px;">${_tsuEsc(_accessSummary(member))}</span>` : ''}
                         ${member.parent_contactable ? `<span style="background:#F0FDF4;color:#16A34A;border-radius:999px;padding:2px 8px;font-weight:600;">Parents ✓</span>` : ''}
                     </div>` : ''}
                     ${memberSubsHtml ? `<div class="member-subdivisions" style="margin-top: 4px;">${memberSubsHtml}</div>` : ''}
@@ -572,12 +589,30 @@
                             ].map(p => `<label class="checkbox-item"><input type="checkbox" name="product" value="${p.key}" ${(member.product_access || []).includes(p.key) ? 'checked' : ''}> <span>${p.label}</span></label>`).join('')}
                         </div>
                     </div>
+                    <div class="form-group">
+                        <label>Sections within those apps</label>
+                        <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;padding:9px 12px;background:var(--slate-50,#F8FAFC);border:1px solid var(--slate-200,#E2E8F0);border-radius:9px;">
+                            <div style="flex:1;min-width:180px;">
+                                <div style="font-size:.8rem;color:var(--slate-700);font-weight:500;" id="edit-access-summary">${_tsuEsc(_accessSummary(member))}</div>
+                                <div style="font-size:.71rem;color:var(--slate-400);margin-top:1px;">Limit them to parts of an app — e.g. the roster but not billing.</div>
+                            </div>
+                            <button type="button" class="btn-edit" id="edit-open-access">Configure</button>
+                        </div>
+                    </div>
                     <div id="edit-member-error" class="form-error"></div>
                     <div class="form-actions"><button type="button" class="btn-secondary" id="cancel-edit">Cancel</button><button type="submit" class="btn-primary">Save Changes</button></div>
                 </form>
             </div>`;
 
         document.body.appendChild(modal);
+        const _accessBtn = document.getElementById('edit-open-access');
+        if (_accessBtn) _accessBtn.addEventListener('click', () => {
+            if (!window.CampistryAccessSettings) { alert('Access settings not loaded'); return; }
+            window.CampistryAccessSettings.open(member, (updated) => {
+                const sum = document.getElementById('edit-access-summary');
+                if (sum) sum.textContent = _accessSummary(updated);
+            });
+        });
         document.getElementById('edit-role').addEventListener('change', () => { document.getElementById('edit-subdivisions-group').style.display = document.getElementById('edit-role').value === 'scheduler' ? 'block' : 'none'; });
         const closeModal = () => modal.remove();
         document.getElementById('modal-close').addEventListener('click', closeModal);

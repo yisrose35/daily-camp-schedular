@@ -5245,5 +5245,9 @@ if (document.readyState === 'loading') document.addEventListener('DOMContentLoad
 <script>window.__CAMPISTRY_PRODUCT__='link';</script>
 <script src="parent_lockout_guard.js"></script>
 <script src="product_access_guard.js"></script>
+<!-- Per-SECTION access: limits which parts of THIS app the user can open.
+     Loads after the product gate, which decides whether they get in at all. -->
+<script src="campistry_capabilities.js"></script>
+<script src="campistry_access_sections.js"></script>
 </body>
 </html>
