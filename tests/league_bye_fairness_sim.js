@@ -31,6 +31,9 @@
 //            cannot say who was benched, so it is skipped rather than guessed.
 //            Guessing invented byes for every learning team, which is what
 //            convinced the engine to stop sitting a team altogether.
+//   TEST 11 — that skip depends on knowing the league runs chinuch, and the
+//            config lookup was returning NOTHING for a camp whose app1.leagues
+//            is present but empty — so the skip never fired in the field.
 // =============================================================================
 
 'use strict';
@@ -435,6 +438,44 @@ function spread(tally) {
     global.window.loadAllDailyData = prevLoad;
     delete settings.leaguesByName;
     console.log('✅ TEST 10 — a day that cannot say who sat out is skipped, not guessed');
+}
+
+// ---- TEST 11: an empty app1.leagues must not hide the real league list ------
+{
+    // Observed live: a camp boots with `fromApp1: 0, fromGlobal: 5` — app1.leagues
+    // is PRESENT and EMPTY while the real leagues live in leaguesByName. The old
+    // `app1.leagues || leaguesByName` short-circuited on the empty-but-truthy
+    // object and resolved to zero leagues, so every "does this league run
+    // chinuch?" answered no. The ledger then stopped skipping days it cannot
+    // read and counted each learning team as benched — 19 phantom byes across
+    // days the grid showed 6, which kept the bye off the same team for a week.
+    const prevLoad = global.window.loadAllDailyData;
+    global.window.loadAllDailyData = () => ({});
+    settings.app1 = { leagues: {} };                       // present, empty
+    settings.leaguesByName = { [LG]: { name: LG, teams: TEAMS.slice(), chinuch: { enabled: true } } };
+    try {
+        assert.strictEqual(Leagues._leagueConfigs().length, 1,
+            'an empty app1.leagues must fall through to leaguesByName');
+
+        const history = { chinuchByDate: {}, gameLog: { [LG]: {
+            '2026-06-01': [{ t1: 'T1', t2: 'T2', sport: 'Basketball', g: 'Game 1' }],
+            '2026-06-02': [{ t1: 'T3', t2: 'T4', sport: 'Basketball', g: 'Game 2' }],
+        } } };
+        const led = Leagues.makeByeLedger(LG, TEAMS, history, '2026-06-03');
+        assert.strictEqual(led.unmeasurable.length, 2,
+            'chinuch is on, so unreadable days are skipped: ' + JSON.stringify(led.unmeasurable));
+        TEAMS.forEach(t => assert.strictEqual(led.count(t), 0,
+            'no phantom byes: ' + JSON.stringify(led.counts)));
+
+        // A non-empty app1.leagues still wins, as it always did.
+        settings.app1 = { leagues: { [LG]: { name: LG, teams: TEAMS.slice() } } };
+        assert.strictEqual(Leagues._leagueConfigs()[0].chinuch, undefined,
+            'a populated app1.leagues is still the primary source');
+    } finally {
+        global.window.loadAllDailyData = prevLoad;
+        delete settings.app1; delete settings.leaguesByName;
+    }
+    console.log('✅ TEST 11 — an empty app1.leagues no longer hides the camp\'s leagues');
 }
 
 console.log('\n🎉 league_bye_fairness_sim: ALL TESTS PASSED');

@@ -1332,10 +1332,24 @@
     function _leagueConfigs() {
         try {
             const gs = (typeof window !== 'undefined' && window.loadGlobalSettings) ? window.loadGlobalSettings() : {};
-            const raw = (gs && gs.app1 && gs.app1.leagues) || (gs && gs.leaguesByName) || {};
-            return Array.isArray(raw) ? raw : Object.values(raw || {});
+            // ★ Take the first source that actually HAS leagues, not the first
+            //   that merely exists. app1.leagues is routinely present and empty
+            //   (leagues.js boots with fromApp1: 0, fromGlobal: 5), and an empty
+            //   object is truthy — so the old `a || b` returned zero leagues for
+            //   a camp whose leagues live in leaguesByName. Everything that asks
+            //   this "is chinuch on for league X?" then got a silent no: the bye
+            //   ledger stopped skipping days it cannot read and counted every
+            //   learning team as benched, which is what made a team look
+            //   over-benched and kept it off the bye for a week.
+            const list = function (raw) {
+                if (!raw) return [];
+                return Array.isArray(raw) ? raw.filter(Boolean) : Object.values(raw).filter(Boolean);
+            };
+            const fromApp1 = list(gs && gs.app1 && gs.app1.leagues);
+            return fromApp1.length ? fromApp1 : list(gs && gs.leaguesByName);
         } catch (_) { return []; }
     }
+    Leagues._leagueConfigs = _leagueConfigs;   // tests
 
     // Fold any former-name records into the team's current name. Runs on every
     // history load; a no-op (and effectively free) for leagues with no renames.
