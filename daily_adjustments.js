@@ -2825,7 +2825,10 @@ function renderPalette() {
     });
     html += '<div class="da-tile-divider"></div>';
     html += '<div class="da-tile-label">Anchors</div>';
-    DAW_TYPES.filter(t => t.anchor && !t.hidden).forEach(t => {
+    // ★ A built-in anchor steps aside once a General Activity of the same kind
+    //   is configured — that one is listed under General Activities below.
+    const _dawCovered = (window.getGeneralActivityCoveredFixedTypes?.() || {});
+    DAW_TYPES.filter(t => t.anchor && !t.hidden && !_dawCovered[t.type]).forEach(t => {
       const dotColor = getDotColor(t.style);
       html += `<div class="da-tile ms-daw-tile" draggable="true" data-type="${t.type}"><span class="da-tile-dot ms-daw-tile-dot" style="background:${dotColor};"></span><span class="da-tile-name ms-daw-tile-name">${_escHtml(t.name)}</span></div>`;
     });
@@ -2862,11 +2865,18 @@ function renderPalette() {
   
   paletteEl.innerHTML = '';
   
+  // ★ Same rule as the Master Scheduler palette: a built-in Fixed tile is
+  //   suppressed once a General Activity of that kind exists, so the camp sees
+  //   exactly one Lunch / Swim / Snacks / Dismissal tile — the configured one.
+  const _gaCovered = (window.getGeneralActivityCoveredFixedTypes?.() || {});
+  const _fixedTypes = ['swim', 'lunch', 'snacks', 'dismissal', 'custom']
+    .filter(t => t === 'custom' || !_gaCovered[t]);
+
   const categories = [
     { label: 'Slots', types: ['activity', 'sports', 'special'] },
     { label: 'Advanced', types: ['smart', 'split', 'elective', 'swim_elective'] },
     { label: 'Leagues', types: ['league', 'specialty_league'] },
-    { label: 'Fixed', types: ['swim', 'lunch', 'snacks', 'dismissal', 'custom'] }
+    { label: 'Fixed', types: _fixedTypes }
   ];
 
   // ★ FN-48: custom general activities (facilities registry) as pinned tiles

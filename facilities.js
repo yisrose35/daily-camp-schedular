@@ -276,32 +276,65 @@ function saveFacilitiesMetadata() {
 //   bound to the activity + its facility (customActivity/customField), the
 //   same lane hand-made Custom Pinned layers use. Each item carries its
 //   `quickType` so the drop can tag the layer (swim/lunch/snacks/dinner →
-//   the solver applies that behavior). Only `dismissal` is excluded — it
-//   keeps its native hard-coded tile.
+//   the solver applies that behavior). Nothing is excluded — a configured
+//   Dismissal is a general activity like any other, and the built-in
+//   Dismissal tile steps aside for it (see getGeneralActivityCoveredFixedTypes).
 window.getGeneralActivityPaletteItems = function () {
     try {
         const out = [], seen = {};
-        const _exclude = { dismissal: 1 };
-        // The module-local `facilities` array only populates when the
-        // Facilities tab initializes — fall back to the persisted registry so
-        // the palettes work on a fresh page load too.
-        let _src = facilities;
-        if (!Array.isArray(_src) || _src.length === 0) {
-            const _gs = window.loadGlobalSettings?.() || {};
-            _src = _gs.facilities || [];
-        }
-        (_src || []).forEach(f => {
+        (_gaFacilitySource() || []).forEach(f => {
             if (!f || !f.name) return;
             (f.generalActivities || []).forEach(ga => {
                 if (!ga || !ga.name) return;
                 const qt = String(ga.quickType || '').toLowerCase();
-                if (_exclude[qt]) return;
                 const k = String(ga.name).toLowerCase() + '|' + String(f.name).toLowerCase();
                 if (!seen[k]) { seen[k] = 1; out.push({ name: ga.name, facility: f.name, quickType: qt || 'custom' }); }
             });
         });
         return out;
     } catch (e) { return []; }
+};
+
+// The module-local `facilities` array only populates when the Facilities tab
+// initializes — fall back to the persisted registry so the palettes work on a
+// fresh page load too.
+function _gaFacilitySource() {
+    let _src = facilities;
+    if (!Array.isArray(_src) || _src.length === 0) {
+        const _gs = window.loadGlobalSettings?.() || {};
+        _src = _gs.facilities || [];
+    }
+    return _src || [];
+}
+
+// ★ Which built-in "Fixed" pinned tiles are already covered by a configured
+//   General Activity. A camp that creates its own Lunch general activity should
+//   see exactly ONE Lunch tile — the configured one, wired to its facility — so
+//   the palettes drop the hard-coded Lunch from the Fixed row. A camp that never
+//   configured Lunch keeps the built-in tile, so nothing is lost.
+const _GA_FIXED_ALIASES = {
+    swim: 'swim',
+    lunch: 'lunch',
+    snacks: 'snacks', snack: 'snacks',
+    dismissal: 'dismissal'
+};
+window.getGeneralActivityCoveredFixedTypes = function () {
+    const covered = {};
+    try {
+        _gaFacilitySource().forEach(f => {
+            ((f && f.generalActivities) || []).forEach(ga => {
+                if (!ga || !ga.name) return;
+                // Match on the stored quickType AND on the literal name: a GA
+                //   renamed after creation keeps its original quickType, and
+                //   "Dismissal" never gets one (it isn't in the add-time name map).
+                const byType = _GA_FIXED_ALIASES[String(ga.quickType || '').toLowerCase()];
+                const byName = _GA_FIXED_ALIASES[String(ga.name).trim().toLowerCase()];
+                if (byType) covered[byType] = true;
+                if (byName) covered[byName] = true;
+            });
+        });
+    } catch (e) { /* no facilities yet — nothing is covered */ }
+    return covered;
 };
 
 function saveData() {
