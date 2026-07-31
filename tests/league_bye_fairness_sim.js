@@ -34,6 +34,10 @@
 //   TEST 11 — that skip depends on knowing the league runs chinuch, and the
 //            config lookup was returning NOTHING for a camp whose app1.leagues
 //            is present but empty — so the skip never fired in the field.
+//   TEST 12 — so the question is now answered from RECORDED ATTENDANCE first:
+//            a league with any chinuch on record runs chinuch, no config needed.
+//   TEST 13 — and the config lookup itself merges both sources instead of
+//            picking one, so junk in app1.leagues cannot mask leaguesByName.
 // =============================================================================
 
 'use strict';
@@ -476,6 +480,62 @@ function spread(tally) {
         delete settings.app1; delete settings.leaguesByName;
     }
     console.log('✅ TEST 11 — an empty app1.leagues no longer hides the camp\'s leagues');
+}
+
+// ---- TEST 12: chinuch is detected from the DATA, not just the config -------
+{
+    // The skip has to fire even when the config lookup comes back empty — which
+    // it did in the field twice over, first because app1.leagues was present and
+    // empty, then in a profile whose league list had not hydrated yet. A league
+    // with ANY recorded chinuch attendance demonstrably runs chinuch, so ask the
+    // history before asking the config.
+    const prevLoad = global.window.loadAllDailyData;
+    global.window.loadAllDailyData = () => ({});
+    delete settings.app1; delete settings.leaguesByName;      // no config at all
+    try {
+        const history = {
+            // One earlier day proves chinuch runs here…
+            chinuchByDate: { [LG]: { '2026-05-01': ['T1', 'T2'] } },
+            gameLog: { [LG]: {
+                '2026-05-01': [{ t1: 'T3', t2: 'T4', sport: 'Basketball', g: 'Game 0' }],
+                // …so these two, which have no attendance record, are unreadable.
+                '2026-06-01': [{ t1: 'T1', t2: 'T2', sport: 'Basketball', g: 'Game 1' }],
+                '2026-06-02': [{ t1: 'T3', t2: 'T4', sport: 'Basketball', g: 'Game 2' }],
+            } },
+        };
+        const led = Leagues.makeByeLedger(LG, TEAMS, history, '2026-06-03');
+        assert.strictEqual(led.unmeasurable.length, 2,
+            'the two record-less days are skipped with no config present: ' + JSON.stringify(led.unmeasurable));
+        assert.strictEqual(led.count('T5'), 1,
+            'only the readable day counts — T5 sat out 2026-05-01: ' + JSON.stringify(led.counts));
+
+        // A league that has never recorded chinuch still reads as chinuch-free,
+        // so its days stay measurable by the arithmetic.
+        const plain = { chinuchByDate: {}, gameLog: history.gameLog };
+        const led2 = Leagues.makeByeLedger(LG, TEAMS, plain, '2026-06-03');
+        assert.strictEqual(led2.unmeasurable.length, 0, 'no chinuch anywhere → nothing ambiguous');
+        assert.strictEqual(led2.count('T5'), 3,
+            'all three days are readable, and T5 played in none of them: ' + JSON.stringify(led2.counts));
+    } finally { global.window.loadAllDailyData = prevLoad; }
+    console.log('✅ TEST 12 — chinuch is detected from recorded attendance, config optional');
+}
+
+// ---- TEST 13: the config lookup merges both sources ------------------------
+{
+    // app1.leagues holding entries that are not league objects used to win the
+    // `||` and mask leaguesByName entirely.
+    settings.app1 = { leagues: ['Some League Name', null, 42] };   // junk, not configs
+    settings.leaguesByName = { [LG]: { name: LG, teams: TEAMS.slice(), chinuch: { enabled: true } } };
+    try {
+        const found = Leagues._leagueConfigs().find(function (l) { return l.name === LG; });
+        assert.ok(found, 'the real league must still be found: ' + JSON.stringify(Leagues._leagueConfigs()));
+        assert.strictEqual(found.chinuch.enabled, true);
+
+        // A real app1 entry still takes precedence over the same name elsewhere.
+        settings.app1 = { leagues: { [LG]: { name: LG, teams: [], marker: 'app1' } } };
+        assert.strictEqual(Leagues._leagueConfigs().find(function (l) { return l.name === LG; }).marker, 'app1');
+    } finally { delete settings.app1; delete settings.leaguesByName; }
+    console.log('✅ TEST 13 — the league lookup merges app1 and leaguesByName');
 }
 
 console.log('\n🎉 league_bye_fairness_sim: ALL TESTS PASSED');

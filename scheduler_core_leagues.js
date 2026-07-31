@@ -1341,12 +1341,25 @@
             //   ledger stopped skipping days it cannot read and counted every
             //   learning team as benched, which is what made a team look
             //   over-benched and kept it off the bye for a week.
+            //   Both sources are merged rather than one being chosen: either can
+            //   be present and useless (an empty object, or entries that aren't
+            //   league objects at all), and picking the wrong one means every
+            //   caller silently gets "no such league". First occurrence of a
+            //   name wins, so app1 keeps its precedence where it has real data.
             const list = function (raw) {
                 if (!raw) return [];
-                return Array.isArray(raw) ? raw.filter(Boolean) : Object.values(raw).filter(Boolean);
+                const arr = Array.isArray(raw) ? raw : Object.values(raw);
+                return arr.filter(function (l) { return l && typeof l === 'object' && l.name; });
             };
-            const fromApp1 = list(gs && gs.app1 && gs.app1.leagues);
-            return fromApp1.length ? fromApp1 : list(gs && gs.leaguesByName);
+            const out = [], seen = {};
+            list(gs && gs.app1 && gs.app1.leagues).concat(list(gs && gs.leaguesByName))
+                .forEach(function (l) {
+                    const k = String(l.name).toLowerCase().trim();
+                    if (seen[k]) return;
+                    seen[k] = 1;
+                    out.push(l);
+                });
+            return out;
         } catch (_) { return []; }
     }
     Leagues._leagueConfigs = _leagueConfigs;   // tests
@@ -1561,8 +1574,18 @@
             const gl = (history && history.gameLog && history.gameLog[leagueName]) || {};
             const cbd = (history && history.chinuchByDate && history.chinuchByDate[leagueName]) || {};
             const ep = _effectiveEpoch(history);
+            // ★ Does this league run chinuch? Answered from the DATA first, and
+            //   only then from config. A config lookup is the fragile way to ask:
+            //   the league list lives under two different keys, either can be
+            //   present-but-useless, and when the lookup came back empty the
+            //   ledger silently treated a chinuch league as if it had none —
+            //   counting every learning team as benched. But the history itself
+            //   already proves it: a league with ANY recorded chinuch attendance
+            //   runs chinuch, full stop. Config only has to answer for a league
+            //   whose chinuch is switched on but has not run yet.
             const _cfg = _leagueConfigs().find(function (l) { return l && l.name === leagueName; });
-            const chinuchOn = !!(_cfg && _cfg.chinuch && _cfg.chinuch.enabled);
+            const chinuchOn = Object.keys(cbd).length > 0
+                || !!(_cfg && _cfg.chinuch && _cfg.chinuch.enabled);
             // Every date either store knows about — a day saved to the grid but
             // missing from the gameLog still counts, and vice versa.
             const dates = new Set(Object.keys(gl));

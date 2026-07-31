@@ -42,7 +42,7 @@
     // measures or shows — two rounds of this investigation were spent deciding
     // whether the browser was running the new code or a cached copy, which the
     // header now answers on sight. Keep in step with the ?v= on the script tag.
-    A.VERSION = '2026-07-31.3';
+    A.VERSION = '2026-07-31.4';
 
     // ── utils ────────────────────────────────────────────────────────────────
     function norm(s) { return String(s == null ? '' : s).toLowerCase().trim(); }
