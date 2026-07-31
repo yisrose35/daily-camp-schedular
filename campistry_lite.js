@@ -217,6 +217,7 @@
             // Always land on the home launcher — the user picks a Lite app there.
             document.getElementById('liteSplash').style.display = 'none';
             document.getElementById('liteApp').style.display = '';
+            wirePullToRefresh();
             goHome();
             maybeLockOnBoot();   // biometric app lock, if enabled
         } catch (e) {
@@ -1112,8 +1113,9 @@
         document.getElementById('view-home').style.display = 'none';
         setHeader('', '');   // no title bar in-app — just back + avatar
         document.getElementById('liteApp').setAttribute('data-screen', 'app');
+        haptic();
         buildTabs(app.tabs);
-        switchTab(app.tabs[0].id);
+        switchTab(app.tabs[0].id, 'push');
     }
 
     function goHome() {
@@ -1126,7 +1128,7 @@
         document.getElementById('liteApp').setAttribute('data-screen', 'home');
         setHeaderHome();
         renderHome();
-        animateIn(document.getElementById('view-home'));
+        animateIn(document.getElementById('view-home'), 'pop');
         try { window.scrollTo({ top: 0 }); } catch (_) {}
     }
 
@@ -1139,9 +1141,69 @@
         document.getElementById('liteHeaderSub').textContent = campDisplayName;
     }
 
-    function animateIn(el) {
+    // Pull-to-refresh. A standalone app has no browser reload, so without this
+    // the only way to get fresh data is to kill and reopen it.
+    function wirePullToRefresh() {
+        const main = document.getElementById('liteMain') || document.querySelector('.lite-main');
+        if (!main || main.dataset.ptr) return;
+        main.dataset.ptr = '1';
+        const ind = document.createElement('div');
+        ind.className = 'lite-ptr';
+        ind.innerHTML = '<span class="lite-ptr-spin"></span>';
+        main.parentNode.insertBefore(ind, main);
+        let y0 = null, dy = 0, armed = false, busy = false;
+        const THRESHOLD = 72;
+        document.addEventListener('touchstart', e => {
+            if (busy || e.touches.length !== 1) return;
+            armed = window.scrollY <= 0 && !document.querySelector('.lite-sheet-backdrop');
+            y0 = armed ? e.touches[0].clientY : null; dy = 0;
+        }, { passive: true });
+        document.addEventListener('touchmove', e => {
+            if (y0 == null || busy) return;
+            dy = e.touches[0].clientY - y0;
+            if (dy <= 0) { ind.style.height = '0px'; return; }
+            ind.style.height = Math.min(dy * 0.45, THRESHOLD) + 'px';
+            ind.classList.toggle('ready', dy * 0.45 >= THRESHOLD - 4);
+        }, { passive: true });
+        document.addEventListener('touchend', async () => {
+            if (y0 == null || busy) { y0 = null; return; }
+            const go = dy * 0.45 >= THRESHOLD - 4;
+            y0 = null;
+            if (!go) { ind.style.height = '0px'; ind.classList.remove('ready'); return; }
+            busy = true; haptic(10);
+            ind.style.height = THRESHOLD + 'px';
+            ind.classList.add('busy');
+            try { await refreshCurrent(); } catch (_) {}
+            ind.style.height = '0px';
+            ind.classList.remove('ready', 'busy');
+            busy = false;
+        });
+    }
+
+    // Drop cached data for what's on screen and re-render it.
+    async function refreshCurrent() {
+        Object.keys(scheduleCache).forEach(k => delete scheduleCache[k]);
+        campUsers = null;
+        try { await loadCampState(); } catch (_) {}
+        if (currentApp) renderView(activeTab); else renderHome();
+        // Give the repaint a beat so the gesture doesn't snap back instantly.
+        await new Promise(r => setTimeout(r, 320));
+    }
+
+    // A short tick on tap. Real apps confirm a press physically; on the web
+    // that's the Vibration API, which iOS Safari ignores — so it's a bonus on
+    // Android, never a dependency.
+    function haptic(ms) {
+        try { if (navigator.vibrate) navigator.vibrate(ms || 8); } catch (_) {}
+    }
+
+    // Screens push in from the right and pop back to the right, the way a
+    // native stack behaves, instead of every view doing the same fade.
+    function animateIn(el, dir) {
         if (!el) return;
-        el.classList.remove('anim'); void el.offsetWidth; el.classList.add('anim');
+        el.classList.remove('anim', 'anim-push', 'anim-pop');
+        void el.offsetWidth;
+        el.classList.add(dir === 'pop' ? 'anim-pop' : dir === 'push' ? 'anim-push' : 'anim');
     }
 
     function buildTabs(tabs) {
@@ -1152,19 +1214,19 @@
             btn.className = 'lite-tab';
             btn.dataset.tab = t.id;
             btn.innerHTML = `<span class="lite-tab-ic">${TAB_ICONS[t.id] || ''}</span><span>${esc(t.label)}</span>`;
-            btn.addEventListener('click', () => switchTab(t.id));
+            btn.addEventListener('click', () => { haptic(); switchTab(t.id); });
             bar.appendChild(btn);
         });
     }
 
-    function switchTab(id) {
+    function switchTab(id, dir) {
         activeTab = id;
         if (id !== 'notesList') { notesEditorId = null; showNotesFab(false); }
         document.querySelectorAll('.lite-tab').forEach(b =>
             b.classList.toggle('active', b.dataset.tab === id));
         document.querySelectorAll('.lite-view').forEach(v => { v.style.display = 'none'; });
         const view = document.getElementById('view-' + id);
-        if (view) { view.style.display = ''; animateIn(view); }
+        if (view) { view.style.display = ''; animateIn(view, dir); }
         renderView(id);
         try { window.scrollTo({ top: 0 }); } catch (_) {}
     }
@@ -4999,8 +5061,20 @@
             `<button type="button" class="lite-chip${i === active ? ' active' : ''}" data-val="${esc(i)}">${esc(i)}</button>`).join('')}</div>`;
     }
 
-    function loadingHTML() {
-        return `<div class="lite-empty"><div class="lite-splash-spinner" style="margin:0 auto 10px;"></div>Loading…</div>`;
+    // Content-shaped placeholders rather than a spinner: the page keeps its
+    // layout while data arrives, so nothing jumps when it lands.
+    function loadingHTML(rows) {
+        const card = `<div class="lite-card lite-bunk-card lite-skel-card">
+            <div class="lite-bunk-head"><span class="lite-skel lite-skel-line w40"></span><span class="lite-skel lite-skel-line w20"></span></div>
+            ${Array.from({ length: 3 }, () => `<div class="lite-slot">
+                <div class="lite-slot-time"><span class="lite-skel lite-skel-line w80"></span></div>
+                <div class="lite-slot-body">
+                    <span class="lite-skel lite-skel-line w60"></span>
+                    <span class="lite-skel lite-skel-line w35"></span>
+                </div>
+            </div>`).join('')}
+        </div>`;
+        return `<div class="lite-skel-wrap" aria-busy="true" aria-label="Loading">${card.repeat(rows || 2)}</div>`;
     }
 
     function emptyHTML(icon, msg) {
@@ -5014,11 +5088,42 @@
         closeSheet();
         sheetEl = document.createElement('div');
         sheetEl.className = 'lite-sheet-backdrop';
-        sheetEl.innerHTML = `<div class="lite-sheet">${innerHTML}</div>`;
+        sheetEl.innerHTML = `<div class="lite-sheet"><span class="lite-sheet-grip" aria-hidden="true"></span>${innerHTML}</div>`;
         sheetEl.addEventListener('click', (e) => { if (e.target === sheetEl) closeSheet(); });
         document.body.appendChild(sheetEl);
+        wireSheetDrag(sheetEl.querySelector('.lite-sheet'));
+        haptic(6);
         return sheetEl;
     }
+
+    // Drag the sheet down to dismiss — it tracks your finger and either snaps
+    // back or flies out, which is the single gesture people expect from a
+    // bottom sheet and its absence is what makes one feel like a web modal.
+    function wireSheetDrag(sheet) {
+        if (!sheet) return;
+        let y0 = null, dy = 0, scrolled = 0;
+        sheet.addEventListener('touchstart', e => {
+            if (e.touches.length !== 1) return;
+            scrolled = sheet.scrollTop;
+            y0 = e.touches[0].clientY; dy = 0;
+            sheet.style.transition = 'none';
+        }, { passive: true });
+        sheet.addEventListener('touchmove', e => {
+            if (y0 == null) return;
+            dy = e.touches[0].clientY - y0;
+            // Only drag when already at the top, so inner scrolling still works.
+            if (scrolled > 0 || dy < 0) return;
+            sheet.style.transform = `translateY(${dy}px)`;
+        }, { passive: true });
+        sheet.addEventListener('touchend', () => {
+            if (y0 == null) return;
+            sheet.style.transition = '';
+            sheet.style.transform = '';
+            if (scrolled === 0 && dy > 90) { haptic(6); closeSheet(); }
+            y0 = null;
+        });
+    }
+
     function closeSheet() {
         if (sheetEl) { sheetEl.remove(); sheetEl = null; }
     }

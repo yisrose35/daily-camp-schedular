@@ -64,7 +64,24 @@ button, input, select, textarea { font-family: inherit; font-size: 16px; color: 
 button { cursor: pointer; border: none; background: none; }
 
 @keyframes liteIn { from { opacity: 0; transform: translateY(6px); } to { opacity: 1; transform: none; } }
+@keyframes litePush { from { opacity: 0; transform: translateX(24px); } to { opacity: 1; transform: none; } }
+@keyframes litePop  { from { opacity: 0; transform: translateX(-20px); } to { opacity: 1; transform: none; } }
 .lite-view.anim { animation: liteIn 0.22s cubic-bezier(0.16,1,0.3,1) both; }
+/* Screens push in from the right and pop back from the left, like a native stack. */
+.lite-view.anim-push { animation: litePush 0.26s cubic-bezier(0.22,1,0.36,1) both; }
+.lite-view.anim-pop  { animation: litePop  0.24s cubic-bezier(0.22,1,0.36,1) both; }
+@media (prefers-reduced-motion: reduce) {
+    .lite-view.anim, .lite-view.anim-push, .lite-view.anim-pop { animation: none; }
+    .lite-sheet { animation: none; }
+}
+
+/* Chrome shouldn't behave like a web page: no text selection on controls, no
+   rubber-band chaining to the document, no long-press callout. */
+.lite-app, .lite-tabbar, .lite-header, .lite-launch-tile, .lite-ctrl, .lite-seg,
+.lite-pick, .lite-chip, .lite-btn, .lite-slot-time, .lite-bunk-head, .lite-sheet-grip {
+    -webkit-user-select: none; user-select: none; -webkit-touch-callout: none;
+}
+.lite-main, .lite-sheet, .lite-grid-wrap, .lite-picklist-scroll { overscroll-behavior: contain; }
 
 /* ─── Splash ──────────────────────────────────────────────────────────── */
 .lite-splash {
@@ -505,6 +522,8 @@ button { cursor: pointer; border: none; background: none; }
 @keyframes liteFade { from { opacity: 0; } to { opacity: 1; } }
 .lite-sheet { background: var(--card); width: 100%; max-width: 680px; border-radius: 24px 24px 0 0; padding: 20px 16px calc(20px + env(safe-area-inset-bottom)); max-height: 88dvh; overflow-y: auto; -webkit-overflow-scrolling: touch; animation: liteSheetUp 0.24s cubic-bezier(0.16,1,0.3,1); }
 @keyframes liteSheetUp { from { transform: translateY(100%); } to { transform: none; } }
+.lite-sheet-grip { display: block; width: 38px; height: 4px; border-radius: 999px; background: var(--line-2); margin: -8px auto 12px; }
+.lite-sheet { transition: transform 0.24s cubic-bezier(0.22,1,0.36,1); }
 .lite-sheet-title { font-family: var(--font-display); font-size: 1.15rem; font-weight: 700; letter-spacing: -0.01em; margin: 0 0 14px; }
 
 /* ─── Camper detail sheet ─────────────────────────────────────────────── */
@@ -750,3 +769,32 @@ button { cursor: pointer; border: none; background: none; }
 /* Apps without a wordmark file (e.g. Guard) draw an inline glyph instead. */
 .lite-launch-icon { display: flex; align-items: center; justify-content: center; color: var(--ql, var(--ink-2)); }
 .lite-launch-icon svg { width: 100%; height: 100%; }
+
+
+/* ─── Skeleton loading ────────────────────────────────────────────────── */
+.lite-skel-wrap { pointer-events: none; }
+.lite-skel-card { opacity: 0.75; }
+.lite-skel {
+    display: block; border-radius: 6px;
+    background: linear-gradient(90deg, var(--line) 25%, #F7F8FA 37%, var(--line) 63%);
+    background-size: 400% 100%; animation: liteShimmer 1.3s ease infinite;
+}
+.lite-skel-line { height: 11px; margin: 3px 0; }
+.lite-skel-line.w20 { width: 20%; } .lite-skel-line.w35 { width: 35%; }
+.lite-skel-line.w40 { width: 40%; } .lite-skel-line.w60 { width: 60%; }
+.lite-skel-line.w80 { width: 80%; }
+@keyframes liteShimmer { from { background-position: 100% 0; } to { background-position: 0 0; } }
+@media (prefers-reduced-motion: reduce) { .lite-skel { animation: none; } }
+
+/* ─── Pull to refresh ─────────────────────────────────────────────────── */
+.lite-ptr {
+    height: 0; overflow: hidden; display: flex; align-items: center; justify-content: center;
+    transition: height 0.22s cubic-bezier(0.22,1,0.36,1);
+}
+.lite-ptr-spin {
+    width: 20px; height: 20px; border-radius: 50%;
+    border: 2.5px solid var(--line-2); border-top-color: var(--accent);
+    opacity: 0.6; transition: opacity 0.15s ease, transform 0.2s ease;
+}
+.lite-ptr.ready .lite-ptr-spin { opacity: 1; transform: scale(1.1); }
+.lite-ptr.busy .lite-ptr-spin { opacity: 1; animation: lite-spin 0.7s linear infinite; }
