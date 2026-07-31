@@ -23,6 +23,14 @@
 //            showed 6, and the bye went to the wrong team for a week).
 //   TEST 8 — the day being regenerated ignores its own stale tiles, so a regen
 //            does not simply repeat the bye it is replacing.
+//   TEST 9 — teams level on bye COUNT are ordered by who has waited longest.
+//            Without it the tie fell to the matchup/sport weights, which are
+//            blind to byes: observed live, a team in the draw six days running
+//            was never once picked while tied at the league minimum.
+//   TEST 10 — a history-only day for a chinuch league with no attendance record
+//            cannot say who was benched, so it is skipped rather than guessed.
+//            Guessing invented byes for every learning team, which is what
+//            convinced the engine to stop sitting a team altogether.
 // =============================================================================
 
 'use strict';
@@ -357,6 +365,76 @@ function spread(tally) {
     assert.strictEqual(led.count('T5'), 0,
         "today's stale tile must not count against T5 on a regen: " + JSON.stringify(led.counts));
     console.log('✅ TEST 8 — the day being regenerated ignores its own stale tiles');
+}
+
+// ---- TEST 9: teams level on byes are split by who waited longest ------------
+{
+    // Observed live: five teams all level at the league minimum, one of them in
+    // the draw six days running and never picked. With the count tied, the
+    // choice fell through to the matchup/sport weights — which know nothing
+    // about byes and happily favored the same teams every day. The ledger now
+    // breaks that tie on how long each team has gone without sitting.
+    const savedDays = {};
+    const put = function (date, lines) {
+        savedDays[date] = { leagueAssignments: { Juniors: { '780':
+            { leagueName: LG, gameLabel: 'Game', sport: 'Basketball', matchups: lines } } } };
+    };
+    // T1..T4 each sat out once, recently. T5 also sat once — but long ago.
+    put('2026-06-01', ['T1 vs T2 @ Court 1 (Basketball)', 'T3 vs T4 @ Court 2 (Soccer)', 'T5 — Bye']);
+    put('2026-06-08', ['T2 vs T3 @ Court 1 (Basketball)', 'T4 vs T5 @ Court 2 (Soccer)', 'T1 — Bye']);
+    put('2026-06-09', ['T1 vs T3 @ Court 1 (Basketball)', 'T4 vs T5 @ Court 2 (Soccer)', 'T2 — Bye']);
+    put('2026-06-10', ['T1 vs T2 @ Court 1 (Basketball)', 'T4 vs T5 @ Court 2 (Soccer)', 'T3 — Bye']);
+    put('2026-06-11', ['T1 vs T2 @ Court 1 (Basketball)', 'T3 vs T5 @ Court 2 (Soccer)', 'T4 — Bye']);
+    const prevLoad = global.window.loadAllDailyData;
+    global.window.loadAllDailyData = () => savedDays;
+    const led = Leagues.makeByeLedger(LG, TEAMS, { gameLog: { [LG]: {} }, chinuchByDate: {} }, '2026-06-12');
+    global.window.loadAllDailyData = prevLoad;
+
+    TEAMS.forEach(t => assert.strictEqual(led.count(t), 1, t + ' sat out exactly once: ' + JSON.stringify(led.counts)));
+    TEAMS.forEach(t => assert.strictEqual(led.excess(t), 0, 'nobody is ahead on count'));
+    // …so the count alone cannot choose. Staleness can: T5 has waited longest.
+    const stale = TEAMS.map(t => led.staleness(t));
+    assert.strictEqual(Math.max.apply(null, stale), led.staleness('T5'),
+        'T5 waited longest and must be first in line: ' + JSON.stringify(stale));
+    assert.ok(led.staleness('T5') > led.staleness('T4'), JSON.stringify(stale));
+    assert.strictEqual(led.staleness('T4'), 0, 'T4 sat out on the most recent league day');
+    console.log('✅ TEST 9 — teams tied on byes are ordered by who has waited longest');
+}
+
+// ---- TEST 10: a day that cannot say who sat out is ignored, not guessed -----
+{
+    // A history-only day (no saved schedule) for a league that runs chinuch,
+    // with no attendance record: the arithmetic would count every LEARNING team
+    // as benched. Those phantom byes are what convinced the engine a team was
+    // over-benched and stopped it ever sitting again — worse than no data.
+    const prevLoad = global.window.loadAllDailyData;
+    global.window.loadAllDailyData = () => ({});          // nothing saved locally
+    settings.leaguesByName = { [LG]: { name: LG, teams: TEAMS.slice(), chinuch: { enabled: true } } };
+    const history = { chinuchByDate: {}, gameLog: { [LG]: {
+        '2026-06-01': [{ t1: 'T1', t2: 'T2', sport: 'Basketball', g: 'Game 1' }],
+        '2026-06-02': [{ t1: 'T3', t2: 'T4', sport: 'Basketball', g: 'Game 2' }],
+    } } };
+    const led = Leagues.makeByeLedger(LG, TEAMS, history, '2026-06-03');
+    TEAMS.forEach(t => assert.strictEqual(led.count(t), 0,
+        'an unreadable day must contribute nothing: ' + JSON.stringify(led.counts)));
+    assert.strictEqual(led.unmeasurable.length, 2, 'and it is recorded as skipped');
+
+    // The same days WITH an attendance record are readable, so they count.
+    // Day 1: T1 vs T2 played, T3 and T4 learned → T5 sat out. Day 2 mirrors it.
+    history.chinuchByDate = { [LG]: { '2026-06-01': ['T3', 'T4'], '2026-06-02': ['T1', 'T2'] } };
+    const led2 = Leagues.makeByeLedger(LG, TEAMS, history, '2026-06-03');
+    assert.strictEqual(led2.unmeasurable.length, 0);
+    assert.strictEqual(led2.count('T5'), 2, 'T5 neither played nor learned: ' + JSON.stringify(led2.counts));
+    assert.strictEqual(led2.count('T1'), 0, 'T1 played day 1 and learned day 2');
+
+    // A league with chinuch OFF has nothing to confuse, so the arithmetic stands.
+    settings.leaguesByName = { [LG]: { name: LG, teams: TEAMS.slice() } };
+    const led3 = Leagues.makeByeLedger(LG, TEAMS, { chinuchByDate: {}, gameLog: history.gameLog }, '2026-06-03');
+    assert.strictEqual(led3.unmeasurable.length, 0, 'no chinuch → nothing ambiguous');
+    assert.strictEqual(led3.count('T5'), 2, 'T5 sat out both days: ' + JSON.stringify(led3.counts));
+    global.window.loadAllDailyData = prevLoad;
+    delete settings.leaguesByName;
+    console.log('✅ TEST 10 — a day that cannot say who sat out is skipped, not guessed');
 }
 
 console.log('\n🎉 league_bye_fairness_sim: ALL TESTS PASSED');

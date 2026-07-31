@@ -921,13 +921,19 @@
     // and the bye ledger sends the next bye to the wrong team.
     // Returns { hasTiles, byes:Set, chinuch:Set } — hasTiles false when the day
     // has no saved league tile, which is the caller's cue to fall back.
+    // Cached per (league, date) — the ledger asks for the same days once per
+    // league period. Keyed on the daily-data OBJECT itself: loadAllDailyData
+    // hands back the same reference while localStorage is unchanged and a fresh
+    // one after any save, so the cache expires exactly when the data does.
     var _sittersCache = {};
+    var _sittersSrc = null;
     function dailyDataLeagueSitters(leagueName, date) {
+        const all = (typeof window !== 'undefined' && window.loadAllDailyData) ? window.loadAllDailyData() : null;
+        if (all !== _sittersSrc) { _sittersCache = {}; _sittersSrc = all; }
         const ck = leagueName + '|' + date;
         if (_sittersCache[ck]) return _sittersCache[ck];
         const out = { hasTiles: false, byes: new Set(), chinuch: new Set() };
         try {
-            const all = (typeof window !== 'undefined' && window.loadAllDailyData) ? window.loadAllDailyData() : null;
             const la = all && all[date] && all[date].leagueAssignments;
             if (!la) return (_sittersCache[ck] = out);
             const _resolve = _teamResolverFor(leagueName);
@@ -1530,13 +1536,19 @@
     // storage, survives multi-device merges, and rolls back with a deleted day
     // for free. Today's earlier periods count too (each period is logged before
     // the next is paired), so byes rotate WITHIN a multi-game day as well.
+    const STALE_CAP = 20;
     function makeByeLedger(leagueName, teams, history, dayId) {
         const counts = {};
+        const lastBye = {};          // team → the most recent date it sat out
+        const measured = [];         // league dates this ledger could actually read
+        const unmeasurable = [];     // …and the ones it had to ignore, for the log
         (teams || []).forEach(function (t) { counts[t] = 0; });
         try {
             const gl = (history && history.gameLog && history.gameLog[leagueName]) || {};
             const cbd = (history && history.chinuchByDate && history.chinuchByDate[leagueName]) || {};
             const ep = _effectiveEpoch(history);
+            const _cfg = _leagueConfigs().find(function (l) { return l && l.name === leagueName; });
+            const chinuchOn = !!(_cfg && _cfg.chinuch && _cfg.chinuch.enabled);
             // Every date either store knows about — a day saved to the grid but
             // missing from the gameLog still counts, and vice versa.
             const dates = new Set(Object.keys(gl));
@@ -1559,7 +1571,12 @@
                 if (d !== dayId) {
                     const saved = dailyDataLeagueSitters(leagueName, d);
                     if (saved.hasTiles) {
-                        saved.byes.forEach(function (t) { if (counts[t] != null) counts[t]++; });
+                        measured.push(d);
+                        saved.byes.forEach(function (t) {
+                            if (counts[t] == null) return;
+                            counts[t]++;
+                            if (!lastBye[t] || d > lastBye[t]) lastBye[t] = d;
+                        });
                         return;
                     }
                 }
@@ -1569,28 +1586,65 @@
                 // session — which is not a bye.
                 const entries = gl[d] || [];
                 if (!entries.length) return;
+                // ★ UNMEASURABLE DAY: with chinuch running, this arithmetic can
+                //   only tell a benched team from a learning one if the day's
+                //   attendance was recorded. When it wasn't — and no saved tile
+                //   exists to read instead — every learning team would be
+                //   counted as benched, and those phantom byes are worse than
+                //   no data at all: they made the engine treat the team with the
+                //   most phantom byes as over-benched and never sit it again
+                //   (observed live: a team eligible six days running that never
+                //   once got the bye). Skipping the day is neutral; guessing is
+                //   not.
+                if (chinuchOn && !(cbd[d] || []).length) {
+                    unmeasurable.push(d);
+                    return;
+                }
                 const labels = new Set();
                 entries.forEach(function (e) { if (e && e.g) labels.add(e.g); });
                 const periods = Math.max(labels.size, 1);
                 const atChinuch = new Set(cbd[d] || []);
+                measured.push(d);
                 Object.keys(counts).forEach(function (t) {
                     let played = 0;
                     entries.forEach(function (e) { if (e && (e.t1 === t || e.t2 === t)) played++; });
                     const sat = periods - played - (atChinuch.has(t) ? 1 : 0);
-                    if (sat > 0) counts[t] += sat;
+                    if (sat > 0) { counts[t] += sat; if (!lastBye[t] || d > lastBye[t]) lastBye[t] = d; }
                 });
             });
+            if (unmeasurable.length) {
+                console.log('   ⚖️ [ByeFairness] "' + leagueName + '": ignoring ' + unmeasurable.length
+                    + ' day(s) with chinuch but no attendance record and no saved schedule ('
+                    + unmeasurable.sort().slice(0, 4).join(', ') + (unmeasurable.length > 4 ? ', …' : '')
+                    + ') — they cannot say who was benched.');
+            }
         } catch (_) {}
         let min = Infinity;
         Object.keys(counts).forEach(function (t) { if (counts[t] < min) min = counts[t]; });
         if (!Number.isFinite(min)) min = 0;
+        const ordered = measured.sort();
         return {
             count: function (t) { return counts[t] || 0; },
             // How far ahead of the least-benched team this one is. 0 for the
             // team(s) whose turn it is. Clamped so a long-idle team can never
             // outweigh the same-day / adjacent-day rematch guards.
             excess: function (t) { return Math.min(Math.max((counts[t] || 0) - min, 0), 4); },
-            counts: counts
+            // ★ How many league days since this team last sat out — the
+            //   TIE-BREAK among teams level on count. Without it the tie fell to
+            //   the matching weights, which are blind to byes and can favor the
+            //   same teams every day: a team tied at the league minimum went six
+            //   days in the draw without ever being picked. A team that has
+            //   never sat out reads as maximally stale, so it goes first.
+            staleness: function (t) {
+                const last = lastBye[t];
+                if (!last) return STALE_CAP;
+                let n = 0;
+                for (let i = ordered.length - 1; i >= 0 && ordered[i] > last; i--) n++;
+                return Math.min(n, STALE_CAP);
+            },
+            counts: counts,
+            lastBye: lastBye,
+            unmeasurable: unmeasurable
         };
     }
     Leagues.makeByeLedger = makeByeLedger;   // tests
@@ -1704,6 +1758,13 @@
     function _byeFairnessWeight() {
         return (typeof window !== 'undefined' && window.__leagueByeFairness === false) ? 0 : 50000;
     }
+    // Tie-break weight per league day since a team last sat out. Capped
+    // contribution (20 × 2000 = 40000) stays BELOW one step of bye imbalance
+    // (50000), so "fewest byes" still decides first and "longest since its last
+    // bye" only settles teams that are level — but it comfortably outweighs the
+    // matchup/sport weights, which is the point: those are blind to byes and
+    // were leaving a tied team un-benched for a week at a time.
+    const W_BYE_STALE = 2000;
 
     // Pair recency in [0,1): 0 = never met, higher = met more recently. Shared
     // by the pairing optimizers — once meeting counts tie (unavoidable in a
@@ -1773,15 +1834,20 @@
             // option: new-to-both = 2, new-to-one = 1). Maximize fresh; tie-break
             // on fewest prior meetings (prefer fresh opponents). Cross-pair field
             // contention is ignored here — the assigner resolves it.
-            let best = null, bestFresh = -1, bestMeet = Infinity, bestBye = Infinity;
+            let best = null, bestFresh = -1, bestMeet = Infinity, bestBye = Infinity, bestStale = -1;
             for (const m of matchings) {
-                let fresh = 0, meet = 0, byeExcess = 0;
+                let fresh = 0, meet = 0, byeExcess = 0, byeStale = 0;
                 for (const pair of m) {
                     if (pair[0] === '__BYE__' || pair[1] === '__BYE__') {
                         // ★ LG-14: benching a team that has already sat out more
                         //   than the others is the worst thing this matching can
-                        //   do — it outranks sport coverage below.
-                        if (svByeOn) byeExcess += byeLedger.excess(pair[0] === '__BYE__' ? pair[1] : pair[0]);
+                        //   do — it outranks sport coverage below. Among teams
+                        //   level on count, the one longest without a bye wins.
+                        if (svByeOn) {
+                            const sat = (pair[0] === '__BYE__') ? pair[1] : pair[0];
+                            byeExcess += byeLedger.excess(sat);
+                            byeStale += byeLedger.staleness(sat);
+                        }
                         continue;
                     }
                     meet += getMatchupCount(leagueName, pair[0], pair[1], history);
@@ -1793,8 +1859,10 @@
                     fresh += bestPair;
                 }
                 if (byeExcess < bestBye
-                    || (byeExcess === bestBye && (fresh > bestFresh || (fresh === bestFresh && meet < bestMeet)))) {
-                    best = m; bestFresh = fresh; bestMeet = meet; bestBye = byeExcess;
+                    || (byeExcess === bestBye && byeStale > bestStale)
+                    || (byeExcess === bestBye && byeStale === bestStale
+                        && (fresh > bestFresh || (fresh === bestFresh && meet < bestMeet)))) {
+                    best = m; bestFresh = fresh; bestMeet = meet; bestBye = byeExcess; bestStale = byeStale;
                 }
             }
             if (!best) return fallbackMatchups;
@@ -2050,7 +2118,13 @@
                             // ★ LG-14: the bye pair is no longer free — it costs
                             //   the benched team's distance from whoever has sat
                             //   out least, so the bye moves around the league.
-                            totalW -= byeLedger.excess(p[0] === '__BYE__' ? p[1] : p[0]) * W_BYE;
+                            //   Among teams level on count, the one that has gone
+                            //   longest without a bye is preferred; otherwise the
+                            //   tie fell to the game weights, which are blind to
+                            //   byes and kept picking the same teams.
+                            const _sat = (p[0] === '__BYE__') ? p[1] : p[0];
+                            totalW -= byeLedger.excess(_sat) * W_BYE;
+                            if (W_BYE > 0) totalW += byeLedger.staleness(_sat) * W_BYE_STALE;
                             continue;
                         }
                         totalW += w(p[0], p[1]);
@@ -2077,6 +2151,7 @@
                 if (W_BYE > 0 && teams.length % 2 === 1) {
                     const sitter = teams.slice().sort(function (a, b) {
                         return (byeLedger.count(a) - byeLedger.count(b))
+                            || (byeLedger.staleness(b) - byeLedger.staleness(a))
                             || (teams.indexOf(a) - teams.indexOf(b));
                     })[0];
                     pool = teams.filter(function (t) { return t !== sitter; });
@@ -4190,7 +4265,7 @@
         // rest are normal league periods. Each team is assigned exactly one chinuch
         // period per day. Teams are shuffled daily for variety.
         window.chinuchSchedule = {};
-        _sittersCache = {};   // saved-tile reads are per run — a regen must re-read
+        _sittersCache = {}; _sittersSrc = null;   // saved-tile reads are per run — a regen must re-read
         // ★ BYE ACTIVITY: rebuilt from scratch every run, same as chinuchSchedule —
         //   a stale plan from the previous generation must never bleed through.
         window.leagueByeSchedule = {};
