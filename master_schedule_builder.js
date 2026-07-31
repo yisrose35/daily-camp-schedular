@@ -1889,8 +1889,11 @@ function renderDAWPalette() {
   if (_gaItems.length) {
     html += '<div class="ms-daw-tile-divider"></div><div class="ms-daw-tile-label">General Activities</div>';
     _gaItems.forEach(ga => {
+      // ★ Each general activity carries its own colour (facilities.js) so a long
+      //   list reads apart instead of being a wall of identical amber dots.
+      const _gc = window.getGeneralActivityColor?.(ga.name);
       html += `<div class="ms-daw-tile" draggable="true" data-type="custom" data-ga-name="${_esc(ga.name)}" data-ga-facility="${_esc(ga.facility)}" data-ga-quicktype="${_esc(ga.quickType || 'custom')}" title="${_esc(ga.name + ' @ ' + ga.facility)}">
-        <span class="ms-daw-tile-dot" style="background:#d97706;"></span>
+        <span class="ms-daw-tile-dot" style="background:${_gc ? _gc.dot : '#d97706'};"></span>
         <span class="ms-daw-tile-name">${_esc(ga.name)}</span>
         <span class="ms-daw-tile-badge">PIN</span>
       </div>`;
@@ -2434,6 +2437,15 @@ function renderDAWGrid(externalEl, externalLayers, externalCallbacks) {
       // ★ Grade connection glow: linked custom activities (shared connectionId)
       //   get a colored inner ring + 🔗 marker so the cross-grade "same time"
       //   link is visible. Hue is derived from the group id so groups read apart.
+      // ★ A general-activity band wears that activity's colour instead of the
+      //   generic grey every custom layer used to share. Inline, so it beats the
+      //   .ms-daw-band[data-type="custom"] rule in styles.css.
+      const _gaBandColor = layer.customActivity
+        ? window.getGeneralActivityColor?.(layer.customActivity) : null;
+      const _gaBandStyle = _gaBandColor
+        ? ` background:linear-gradient(180deg,${_gaBandColor.bg},${_gaBandColor.bg2}); color:${_gaBandColor.text};`
+        : '';
+
       let _connRing = '', _connClass = '', _connVar = '';
       if (layer.connectionId) {
         _connClass = ' ms-daw-band-connected';
@@ -2443,7 +2455,7 @@ function renderDAWGrid(externalEl, externalLayers, externalCallbacks) {
 
       html += `<div class="ms-daw-band${_connClass} ${dawSelectedBand === layer.id ? 'selected' : ''}"
         data-id="${layer.id}" data-type="${layer.type}" data-grade="${_mbEsc(gradeKey)}"${layer.connectionId ? ' data-conn="' + _mbEsc(layer.connectionId) + '"' : ''}
-        style="top:${top}px; height:${height}px; left:${left}px; width:${BAND_WIDTH}px;${clipStyle}${_connVar}"
+        style="top:${top}px; height:${height}px; left:${left}px; width:${BAND_WIDTH}px;${clipStyle}${_connVar}${_gaBandStyle}"
         draggable="true">
         <div class="band-resize band-resize-top"></div>
         ${_connRing}
@@ -4100,14 +4112,20 @@ function renderPalette() {
   if (_gaItems.length) {
     categories.push({
       label: 'General Activities',
-      tiles: _gaItems.map(ga => ({
-        type: 'custom',
-        name: ga.name,
-        style: 'background:#fef3c7;color:#92400e;',
-        description: 'Pinned general activity at ' + ga.facility + '. Drop on a division and set the times.',
-        gaName: ga.name,
-        gaFacility: ga.facility
-      }))
+      // ★ Each general activity carries its own colour (facilities.js). The
+      //   palette derives the tile's dot from `background:`, so setting the
+      //   style here colours both the swatch and the tile.
+      tiles: _gaItems.map(ga => {
+        const _gc = window.getGeneralActivityColor?.(ga.name);
+        return {
+          type: 'custom',
+          name: ga.name,
+          style: _gc ? `background:${_gc.bg};color:${_gc.text};` : 'background:#fef3c7;color:#92400e;',
+          description: 'Pinned general activity at ' + ga.facility + '. Drop on a division and set the times.',
+          gaName: ga.name,
+          gaFacility: ga.facility
+        };
+      })
     });
   }
 
@@ -4572,6 +4590,12 @@ function renderEventTile(ev, top, height, spanInfo) {
     else tile = TILES.find(t => t.type === 'custom');
   }
   let style = tile ? tile.style : 'background:#d1d5db;color:#374151;';
+  // ★ A placed general activity keeps the colour of the tile it was dragged
+  //   from, instead of falling through to the generic Custom Pinned grey.
+  if (ev.type === 'pinned' || ev.type === 'custom') {
+    const _gc = window.getGeneralActivityColor?.(ev.customActivity || ev.event);
+    if (_gc) style = `background:${_gc.bg};color:${_gc.text};`;
+  }
   // ★ Guaranteed-swap Smart tiles get a distinct teal (unused by any other tile)
   //   so the mode is obvious and doesn't clash with the Split tile's purple (#c4b5fd).
   if (ev.type === 'smart' && ev.smartData && ev.smartData.guaranteeSwap) {
