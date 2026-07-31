@@ -98,6 +98,22 @@
         return t;
     };
 
+    // ★ THE ENGINE'S OWN LEDGER — what the NEXT generation will act on.
+    // Everything else here is the auditor's re-derivation from saved data; this
+    // is the actual object the pairing code consults. When it disagrees with
+    // the grid, the next day's bye is decided on numbers that do not match what
+    // was scheduled, which is the failure that is otherwise invisible.
+    // Returns null when the engine isn't on the page (tests, other pages).
+    function engineLedger(league, teams, history) {
+        try {
+            var SCL = (typeof window !== 'undefined') && window.SchedulerCoreLeagues;
+            if (!SCL || typeof SCL.makeByeLedger !== 'function') return null;
+            // No dayId: nothing is "today", so every recorded day counts —
+            // exactly the state a fresh generation would start from.
+            return SCL.makeByeLedger(league.name, teams, history, null);
+        } catch (e) { return null; }
+    }
+
     function roomCapacity(league, room) {
         try {
             var SCL = (typeof window !== 'undefined') && window.SchedulerCoreLeagues;
@@ -299,6 +315,7 @@
                 });
             });
 
+            var ledger = engineLedger(league, teams, history);
             var hist = byesFromHistory(history, name, teams, opts.from, opts.to);
             var histByes = hist.counts;
             // Byes seen on the grid, per date — for the drift breakdown below.
@@ -494,9 +511,34 @@
                 : findings.some(function (f) { return f.level === 'warn'; }) ? 'WARN'
                 : findings.some(function (f) { return f.level === 'info'; }) ? 'NO DATA' : 'PASS';
 
+            // ── what the engine will do NEXT ────────────────────────────────
+            // The auditor's numbers are hindsight; the ledger is the input to
+            // the next generation. If they disagree, the next bye is chosen on
+            // figures that don't match the schedule — and no amount of
+            // regenerating fixes it until the ledger is right.
+            if (ledger && periods.length && !opts.from && !opts.to) {
+                var ledgerOff = teams.filter(function (t) { return ledger.count(t) !== byTeam[t].byes; });
+                if (ledgerOff.length) {
+                    findings.push({ level: 'warn', code: 'ledger-mismatch',
+                        message: 'The engine\'s bye ledger — the numbers the NEXT generation will use — does not match '
+                            + 'the schedules: '
+                            + ledgerOff.slice(0, 6).map(function (t) { return t + ' (ledger ' + ledger.count(t) + ', grid ' + byTeam[t].byes + ')'; }).join(', ')
+                            + (ledgerOff.length > 6 ? ', …' : '')
+                            + (ledger.unmeasurable && ledger.unmeasurable.length
+                                ? '. It is ignoring ' + ledger.unmeasurable.length + ' day(s) it cannot read ('
+                                  + ledger.unmeasurable.slice(0, 4).join(', ') + ')'
+                                : '')
+                            + '. Regenerate the affected days IN ORDER, letting each one save before starting the next.' });
+                } else {
+                    findings.push({ level: 'ok', code: 'ledger-match',
+                        message: 'The engine\'s bye ledger agrees with the schedules — the next generation starts from the right numbers.' });
+                }
+            }
+
             out.leagues.push({
                 name: name,
                 league: league,          // the config, so the renderer can resolve rooms
+                ledger: ledger,
                 teams: teams,
                 dates: Object.keys(dates).sort(),
                 periodCount: periods.length,
@@ -556,7 +598,12 @@
                         'Could sit': r.eligible,
                         'Fair share': Math.round(r.expected * 10) / 10,
                         'On the bye': acts || (r.noActivity ? '(nothing)' : ''),
-                        'History says': L.historyByes[t] != null ? L.historyByes[t] : ''
+                        // What the ENGINE currently believes, and how many league
+                        // days since it thinks this team last sat. These two drive
+                        // the next generation's pick — everything left of here is
+                        // hindsight.
+                        'Ledger': L.ledger ? L.ledger.count(t) : '',
+                        'Waited': L.ledger ? L.ledger.staleness(t) : ''
                     };
                 });
                 if (console.table) console.table(rows);

@@ -464,3 +464,61 @@ test('real drift on a shared day is still caught alongside uncached days', () =>
     assert.match(d.message, /T3 \(0 on the grid, 1 in history\)/, d.message);
     assert.ok(codes(L).includes('chinuch-ledger-missing'), 'and the cause is named');
 });
+
+// ── the engine's own ledger, surfaced ────────────────────────────────────────
+
+test('flags when the engine ledger disagrees with the schedules', () => {
+    const spec = {};
+    ['2026-07-01', '2026-07-02'].forEach((d, i) => {
+        spec[d] = [period('Game ' + (i + 1), [['T1', 'T2'], ['T3', 'T4']], [['T5', 'Pool']])];
+    });
+    // Stand in for the engine: a ledger that has not seen the second day.
+    const prev = global.window;
+    global.window = { SchedulerCoreLeagues: { makeByeLedger: function () {
+        return { count: function (t) { return t === 'T5' ? 1 : 0; }, staleness: function () { return 0; },
+                 counts: { T5: 1 }, unmeasurable: ['2026-06-30'] };
+    } } };
+    try {
+        const L = A.build({ history: historyFor(spec), dailyData: dailyData(spec),
+            leagues: [{ name: LG, teams: TEAMS.slice() }] }).leagues[0];
+        const f = find(L, 'ledger-mismatch');
+        assert.ok(f, 'expected the ledger warning: ' + JSON.stringify(L.findings));
+        assert.match(f.message, /T5 \(ledger 1, grid 2\)/, f.message);
+        assert.match(f.message, /ignoring 1 day\(s\) it cannot read \(2026-06-30\)/, f.message);
+        assert.match(f.message, /Regenerate the affected days IN ORDER/);
+    } finally { global.window = prev; }
+});
+
+test('confirms when the engine ledger agrees', () => {
+    const spec = { '2026-07-01': [period('Game 1', [['T1', 'T2'], ['T3', 'T4']], [['T5', 'Pool']])] };
+    const prev = global.window;
+    global.window = { SchedulerCoreLeagues: { makeByeLedger: function () {
+        return { count: function (t) { return t === 'T5' ? 1 : 0; }, staleness: function () { return 0; },
+                 counts: { T5: 1 }, unmeasurable: [] };
+    } } };
+    try {
+        const L = A.build({ history: historyFor(spec), dailyData: dailyData(spec),
+            leagues: [{ name: LG, teams: TEAMS.slice() }] }).leagues[0];
+        assert.ok(find(L, 'ledger-match'), JSON.stringify(L.findings));
+        assert.ok(!codes(L).includes('ledger-mismatch'));
+    } finally { global.window = prev; }
+});
+
+test('the ledger check is skipped for a date range it cannot be compared against', () => {
+    const spec = {};
+    ['2026-07-01', '2026-07-02'].forEach((d, i) => {
+        spec[d] = [period('Game ' + (i + 1), [['T1', 'T2'], ['T3', 'T4']], [['T5', 'Pool']])];
+    });
+    const prev = global.window;
+    global.window = { SchedulerCoreLeagues: { makeByeLedger: function () {
+        return { count: function () { return 0; }, staleness: function () { return 0; }, counts: {}, unmeasurable: [] };
+    } } };
+    try {
+        // The ledger spans every date on record, so comparing it against a
+        // narrowed window would report a mismatch that isn't one.
+        const L = A.build({ history: historyFor(spec), dailyData: dailyData(spec), from: '2026-07-02',
+            leagues: [{ name: LG, teams: TEAMS.slice() }] }).leagues[0];
+        assert.ok(!codes(L).includes('ledger-mismatch'), JSON.stringify(L.findings));
+        assert.ok(!codes(L).includes('ledger-match'));
+    } finally { global.window = prev; }
+});
