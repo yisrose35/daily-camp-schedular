@@ -38,6 +38,12 @@
 
     var A = {};
 
+    // Printed in the report header. Bump it with any change to what the report
+    // measures or shows — two rounds of this investigation were spent deciding
+    // whether the browser was running the new code or a cached copy, which the
+    // header now answers on sight. Keep in step with the ?v= on the script tag.
+    A.VERSION = '2026-07-31.2';
+
     // ── utils ────────────────────────────────────────────────────────────────
     function norm(s) { return String(s == null ? '' : s).toLowerCase().trim(); }
     function isDate(d) { return /^\d{4}-\d{2}-\d{2}$/.test(String(d || '')); }
@@ -563,7 +569,8 @@
         opts = opts || {};
         var range = (data.range && (data.range.from || data.range.to))
             ? ('  [' + (data.range.from || '…') + ' → ' + (data.range.to || '…') + ']') : '';
-        console.log('%c🏳️ LEAGUE BYE AUDIT' + range, 'font-weight:bold;font-size:14px;');
+        console.log('%c🏳️ LEAGUE BYE AUDIT' + range + '%c  v' + A.VERSION,
+            'font-weight:bold;font-size:14px;', 'font-weight:normal;font-size:11px;color:#94A3B8;');
 
         if (!data.leagues.length) {
             console.log('   No leagues configured.');
