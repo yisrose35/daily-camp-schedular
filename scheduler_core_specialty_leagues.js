@@ -2409,6 +2409,25 @@ if (_playoffRoundNum) {
         }
     };
 
+    // Wipe every specialty-league record, unprompted. The mirror of
+    // Leagues.resetAllHistory: erasing every schedule used to clear only the
+    // game counters here too, leaving a gameLog that referenced days which no
+    // longer exist to drive the next generation's matchups and fields.
+    SpecialtyLeagues.resetAllHistory = function () {
+        try {
+            const reset = {
+                gamesPerDate: {}, gameLog: {}, matchupHistory: {}, teamFields: {},
+                _tombstones: {}, _resetAt: Date.now(), _countersResetAt: Date.now(),
+                _savedAt: Date.now()
+            };
+            saveSpecialtyHistory(reset);
+            console.log('[SpecialtyLeagues] 🗑️ History reset (reset marker synced)');
+            return reset;
+        } catch (e) {
+            console.error('[SpecialtyLeagues] resetAllHistory error:', e);
+        }
+    };
+
     // Read-only history snapshot for UI consumers (league_play_report.js) so
     // they get the same cloud-first resolution the engine uses.
     SpecialtyLeagues.getHistorySnapshot = function () {

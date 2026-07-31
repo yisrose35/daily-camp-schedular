@@ -42,6 +42,9 @@
 //            ledger reads that list back verbatim.
 //   TEST 15 — the record merges per (league, date) and dies with a deleted day,
 //            like every other per-date store.
+//   TEST 16 — "delete all schedules" clears the league history outright. It used
+//            to clear only the game counters, leaving a gameLog / chinuch / bye
+//            record pointing at days that no longer existed.
 // =============================================================================
 
 'use strict';
@@ -601,6 +604,48 @@ function spread(tally) {
         'deleting the day removes its bye record');
     delete settings.leaguesByName;
     console.log('✅ TEST 15 — the bye record merges per (league, date) and rolls back with the day');
+}
+
+// ---- TEST 16: erasing every schedule must erase the league history too -----
+{
+    // Deleting ONE date rolls back that date's league records. Deleting EVERY
+    // date cleared only the game counters, so the gameLog, chinuch attendance
+    // and bye record survived — all still referencing days that no longer
+    // exist, and all still feeding the next generation. Observed live.
+    delete settings.leagueHistory; global.localStorage._m = {};
+    settings.leaguesByName = { [LG]: { name: LG, divisions: ['Juniors'], teams: TEAMS.slice() } };
+    gen('2026-07-01', { schedulingPriority: 'matchup_variety' });
+    const before = settings.leagueHistory;
+    assert.ok(Object.keys(before.gameLog[LG] || {}).length, 'seeded a game log');
+    assert.ok(before.byesByDate[LG]['2026-07-01'], 'seeded a bye record');
+
+    assert.strictEqual(typeof Leagues.resetAllHistory, 'function', 'exposed for the erase-all path');
+    Leagues.resetAllHistory();
+    const after = settings.leagueHistory;
+    assert.deepStrictEqual(after.gameLog, {}, 'the game log goes');
+    assert.deepStrictEqual(after.byesByDate, {}, 'the bye record goes');
+    assert.deepStrictEqual(after.chinuchByDate, {}, 'chinuch attendance goes');
+    assert.deepStrictEqual(after.teamSports, {}, 'sport fairness goes');
+    assert.deepStrictEqual(after.matchupHistory, {}, 'opponent fairness goes');
+    assert.deepStrictEqual(after.gamesPerDate, {}, 'the counters go');
+    assert.ok(after._resetAt > 0, 'a merge-surviving reset marker is written, not a bare {}');
+
+    // …and the ledger reads clean afterwards, which is the whole point.
+    const led = Leagues.makeByeLedger(LG, TEAMS, after, '2026-07-02');
+    TEAMS.forEach(t => assert.strictEqual(led.count(t), 0,
+        'nothing survives the reset: ' + JSON.stringify(led.counts)));
+
+    // A stale copy from before the reset cannot bring the deleted days back.
+    const stale = { teamSports: {}, matchupHistory: {}, gamesPerDate: {}, offCampusCounts: {},
+        ocTripsByDate: {}, chinuchByDate: {}, byesByDate: { [LG]: { '2026-07-01': ['T5'] } },
+        gameLog: { [LG]: { '2026-07-01': [{ t1: 'T1', t2: 'T2', sport: 'x', g: 'Game 1' }] } },
+        _tombstones: {}, _savedAt: after._resetAt - 1000 };
+    const merged = Leagues.mergeLeagueHistories(after, stale);
+    assert.ok(!merged.byesByDate[LG] || !merged.byesByDate[LG]['2026-07-01'],
+        'the reset marker beats a stale device: ' + JSON.stringify(merged.byesByDate));
+    assert.ok(!merged.gameLog[LG] || !merged.gameLog[LG]['2026-07-01'], JSON.stringify(merged.gameLog));
+    delete settings.leaguesByName;
+    console.log('✅ TEST 16 — resetAllHistory wipes every store and survives a stale merge');
 }
 
 console.log('\n🎉 league_bye_fairness_sim: ALL TESTS PASSED');

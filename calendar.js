@@ -1751,9 +1751,19 @@ all[date].updated_at = new Date().toISOString();
             window.scheduleAssignments = {};
             window.leagueAssignments = {};
 
-            // Clear league gamesPerDate — all schedule-derived game counts are now stale
-            window.SchedulerCoreLeagues?.clearAllGamesPerDate?.();
-            window.SchedulerCoreSpecialtyLeagues?.clearAllGamesPerDate?.();
+            // ★ Clear the league history OUTRIGHT, not just the game counters.
+            //   Deleting ONE date rolls back that date's league records
+            //   (cleanupDateFromHistory, above). Deleting EVERY date used to
+            //   clear only gamesPerDate, so the gameLog, sport/matchup fairness,
+            //   chinuch attendance and bye record all survived — every one of
+            //   them still referencing days that no longer exist, and every one
+            //   of them an input to the next generation. Observed live: a camp
+            //   that erased all schedules still had a team credited with byes on
+            //   deleted days, which sent the next day's bye to the wrong team.
+            //   resetAllHistory writes a merge-surviving reset marker, so a stale
+            //   copy on another device cannot bring the deleted days back.
+            window.SchedulerCoreLeagues?.resetAllHistory?.();
+            window.SchedulerCoreSpecialtyLeagues?.resetAllHistory?.();
 
             // Clear cloud rotation counts
             window.RotationCloud?.clearAll?.();

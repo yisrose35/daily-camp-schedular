@@ -6280,24 +6280,36 @@ window._debugLeagueTimeData = timeData;
     Leagues.loadHistory = loadLeagueHistory;
     Leagues.saveHistory = saveLeagueHistory;
 
+    // Wipe every league record, unprompted. Exposed so the "delete all
+    // schedules" path can call it: a per-DATE delete already rolls that date's
+    // records back (cleanupDateFromHistory), but erasing every date only
+    // cleared the game COUNTERS — the gameLog, sport/matchup fairness, chinuch
+    // attendance and bye record all survived, still referencing days that no
+    // longer exist. That is phantom history by construction, and it is what
+    // decides the next generation's byes, matchups and sports.
+    Leagues.resetAllHistory = function () {
+        // ★ LG-8: a bare {} would be resurrected by any stale copy in the
+        // (league,date) merge — write a RESET MARKER instead. _resetAt makes
+        // every (league,date) saved before this instant lose in merges, on
+        // every device that syncs it.
+        const resetHistory = {
+            teamSports: {}, matchupHistory: {}, gamesPerDate: {},
+            offCampusCounts: {}, ocTripsByDate: {}, chinuchByDate: {}, byesByDate: {}, gameLog: {}, _tombstones: {},
+            _ocResetAt: { '*': Date.now() },
+            _resetAt: Date.now(), _savedAt: Date.now()
+        };
+        try { localStorage.setItem(LEAGUE_HISTORY_KEY, JSON.stringify(resetHistory)); } catch (_) {}
+        if (typeof window.saveGlobalSettings === 'function') {
+            window.saveGlobalSettings('leagueHistory', resetHistory);
+        }
+        _pushLeagueHistoryToCloud(resetHistory);
+        console.log("League history reset (reset marker synced).");
+        return resetHistory;
+    };
+
     window.resetLeagueHistory = function() {
         if (confirm("Reset ALL league history? This will start fresh.")) {
-            // ★ LG-8: a bare {} would be resurrected by any stale copy in the
-            // (league,date) merge — write a RESET MARKER instead. _resetAt makes
-            // every (league,date) saved before this instant lose in merges, on
-            // every device that syncs it.
-            const resetHistory = {
-                teamSports: {}, matchupHistory: {}, gamesPerDate: {},
-                offCampusCounts: {}, ocTripsByDate: {}, chinuchByDate: {}, byesByDate: {}, gameLog: {}, _tombstones: {},
-                _ocResetAt: { '*': Date.now() },
-                _resetAt: Date.now(), _savedAt: Date.now()
-            };
-            try { localStorage.setItem(LEAGUE_HISTORY_KEY, JSON.stringify(resetHistory)); } catch (_) {}
-            if (typeof window.saveGlobalSettings === 'function') {
-                window.saveGlobalSettings('leagueHistory', resetHistory);
-            }
-            _pushLeagueHistoryToCloud(resetHistory);
-            console.log("League history reset (reset marker synced).");
+            Leagues.resetAllHistory();
         }
     };
 
