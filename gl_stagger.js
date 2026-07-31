@@ -229,27 +229,39 @@
     //   distinct specials still fills the day with REAL specials instead of a dead
     //   placeholder. Pass 1 (prefer unused) keeps variety; pass 2 only repeats as needed.
     function pickAnyFillable(ctx, bunk, dur, s, e, used, allowRepeat) {
-        const pool = (bunk && bunk.pool) || [];
+        // Primary pool first, then the cohort-DEFERRED pool — the same fallback
+        // pickActivity gained (the deferred list is a fairness preference, not a
+        // rule: "fill-if-possible last resort, fills before OPEN time"). Every
+        // rescue that calls this (reorder swaps, absorb real-fill) was otherwise
+        // blind to legal candidates that sat one list away.
+        const _lists = [(bunk && bunk.pool) || []];
+        if (bunk && bunk.deferred && bunk.deferred.length) _lists.push(bunk.deferred);
         // pass 1 — prefer a special this bunk has NOT done today (variety)
-        for (let i = 0; i < pool.length; i++) {
-            const c = pool[i];
-            if (!c || !c.name) continue;
-            const durs = ctx.specialDurs ? ctx.specialDurs(c.name) : null;
-            if (durs && durs.length && durs.indexOf(dur) < 0) continue;
-            const key = String(c.name).toLowerCase();
-            if (used[key]) continue;
-            if (ctx.capFits && !ctx.capFits(c, bunk.grade, s, e)) continue;
-            return c;
-        }
-        // pass 2 — repeat allowed: accept an already-used special that still has a seat
-        if (allowRepeat) {
+        for (let li = 0; li < _lists.length; li++) {
+            const pool = _lists[li];
             for (let i = 0; i < pool.length; i++) {
                 const c = pool[i];
                 if (!c || !c.name) continue;
                 const durs = ctx.specialDurs ? ctx.specialDurs(c.name) : null;
                 if (durs && durs.length && durs.indexOf(dur) < 0) continue;
+                const key = String(c.name).toLowerCase();
+                if (used[key]) continue;
                 if (ctx.capFits && !ctx.capFits(c, bunk.grade, s, e)) continue;
                 return c;
+            }
+        }
+        // pass 2 — repeat allowed: accept an already-used special that still has a seat
+        if (allowRepeat) {
+            for (let li2 = 0; li2 < _lists.length; li2++) {
+                const pool2 = _lists[li2];
+                for (let i = 0; i < pool2.length; i++) {
+                    const c = pool2[i];
+                    if (!c || !c.name) continue;
+                    const durs = ctx.specialDurs ? ctx.specialDurs(c.name) : null;
+                    if (durs && durs.length && durs.indexOf(dur) < 0) continue;
+                    if (ctx.capFits && !ctx.capFits(c, bunk.grade, s, e)) continue;
+                    return c;
+                }
             }
         }
         return null;

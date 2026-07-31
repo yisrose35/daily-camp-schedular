@@ -2700,7 +2700,27 @@
                 const newSched = window.scheduleAssignments || {};
                 const history = window.loadRotationHistory?.() || { bunks: {}, leagues: {} };
                 history.bunks = history.bunks || {};
-                const timestamp = Date.now();
+                // ★ DATE-FAITHFUL STAMP (regen feedback-loop fix). Date.now() here keyed the
+                //   stamp to WALL CLOCK, not to the schedule date being generated. On the
+                //   very next regen of the SAME date, getDaysSinceActivity computed
+                //   max(1, floor((now - stamp)/day)) = 1 for every activity the previous
+                //   draft placed — so the whole prior draft scored "done yesterday", every
+                //   (bunk, activity) pair it placed took a recency penalty, the priority
+                //   lists reshuffled, and each regen produced a different (usually worse)
+                //   day: live, the same config decayed 8 holes/230min → 14/485min and
+                //   weekly shiur on-track fell 35/38 → 24/38 purely by regenerating.
+                //   Stamp with NOON OF THE SCHEDULE DATE instead: re-running the same date
+                //   overwrites the same stamp (idempotent), and a stamp can never make the
+                //   date's own draft look like history. (Belt-and-braces read-side guard
+                //   lives in getDaysSinceActivity: stamps >= the gen date's midnight are
+                //   ignored as drafts, not history.)
+                let timestamp = Date.now();
+                try {
+                    if (/^\d{4}-\d{2}-\d{2}$/.test(dateKey || '')) {
+                        const _t = new Date(dateKey + 'T12:00:00').getTime();
+                        if (!isNaN(_t)) timestamp = _t;
+                    }
+                } catch (_eStamp) {}
                 const SKIP = new Set(['free', 'free play', 'free (timeout)', 'transition/buffer', 'regroup', 'lineup', 'bus', 'buffer']);
                 Object.keys(newSched).forEach(bunk => {
                     history.bunks[bunk] = history.bunks[bunk] || {};

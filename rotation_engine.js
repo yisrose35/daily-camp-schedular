@@ -595,6 +595,16 @@ window.invalidateBunkRotationCache = RotationEngine.invalidateBunkTodayCache;
                 lastTimestamp = null;
             }
         } catch (_) {}
+        // ★ DRAFT-STAMP GUARD (regen feedback-loop fix — see the twin guard in
+        //   scheduler_core_utils.getDaysSinceActivity): a stamp >= the generated
+        //   date's midnight is a draft of this date (or a later day), not history.
+        try {
+            var _genDk9 = window._activeGenDate || window.currentScheduleDate || '';
+            if (lastTimestamp && /^\d{4}-\d{2}-\d{2}$/.test(_genDk9) &&
+                lastTimestamp >= new Date(_genDk9 + 'T00:00:00').getTime()) {
+                lastTimestamp = null;
+            }
+        } catch (_) {}
         if (lastTimestamp) {
             var now = Date.now();
             var daysSince = Math.floor((now - lastTimestamp) / (1000 * 60 * 60 * 24));
@@ -660,6 +670,16 @@ window.invalidateBunkRotationCache = RotationEngine.invalidateBunkTodayCache;
         var rotationHistory = window.loadRotationHistory ? window.loadRotationHistory() : { bunks: {} };
         var bunkHistory = rotationHistory.bunks && rotationHistory.bunks[bunkName];
         var lastTimestamp = bunkHistory && (bunkHistory[activityName] || bunkHistory[actLower]);
+        // ★ DRAFT-STAMP GUARD (regen feedback-loop fix): a stamp >= the generated
+        //   date's midnight is a draft of this date (or a later day), not history —
+        //   it must never trigger a cooldown against its own regeneration.
+        try {
+            var _genDkCd = window._activeGenDate || window.currentScheduleDate || '';
+            if (lastTimestamp && /^\d{4}-\d{2}-\d{2}$/.test(_genDkCd) &&
+                lastTimestamp >= new Date(_genDkCd + 'T00:00:00').getTime()) {
+                lastTimestamp = null;
+            }
+        } catch (_) {}
         if (lastTimestamp && lastTimestamp >= new Date(epoch + 'T00:00:00').getTime()) {
             return Math.max(1, Math.floor((Date.now() - lastTimestamp) / (1000 * 60 * 60 * 24)));
         }
@@ -1746,11 +1766,29 @@ window.invalidateBunkRotationCache = RotationEngine.invalidateBunkTodayCache;
         if (cloudData.counts) Object.keys(cloudData.counts).forEach(function(b) { allBunks.add(b); });
         if (cloudData.lastDone) Object.keys(cloudData.lastDone).forEach(function(b) { allBunks.add(b); });
 
-        // Today's per-bunk cloud contribution. The local 14-day scan
-        // (buildBunkActivityHistory) deliberately excludes today, so cloud
-        // counts must do the same — otherwise a regenerate sees today's stale
-        // draft as "history" and biases scoring against it.
-        var todayCloud = (cloudData.countsByDate && cloudData.countsByDate[today]) || {};
+        // Per-bunk cloud contribution from the generated date AND every later
+        // date. The local 14-day scan (buildBunkActivityHistory) deliberately
+        // excludes today, so cloud counts must exclude it too — otherwise a
+        // regenerate sees today's stale draft as "history" and biases scoring
+        // against it. And when regenerating a pinned EARLIER day while later
+        // days' rows exist (07-27 while 07-28..07-31 are saved), the future
+        // days must be excluded as well: as of the day being generated they
+        // have not happened. The hard caps already scan with dateKey >= date
+        // excluded; this makes the soft recency/novelty inputs agree.
+        var todayCloud = {};
+        if (cloudData.countsByDate) {
+            Object.keys(cloudData.countsByDate).forEach(function (dk) {
+                if (dk < today) return;
+                var dayRows = cloudData.countsByDate[dk] || {};
+                Object.keys(dayRows).forEach(function (bk) {
+                    var acts = dayRows[bk] || {};
+                    if (!todayCloud[bk]) todayCloud[bk] = {};
+                    Object.keys(acts).forEach(function (an) {
+                        todayCloud[bk][an] = (todayCloud[bk][an] || 0) + (acts[an] || 0);
+                    });
+                });
+            });
+        }
 
         allBunks.forEach(function(bunk) {
             // Get or build the history for this bunk

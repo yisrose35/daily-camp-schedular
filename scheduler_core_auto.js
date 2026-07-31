@@ -1272,7 +1272,28 @@
                     const gs = getGlobalSettings();
                     if (!gs.historicalCounts) gs.historicalCounts = {};
                     const _today = window.currentScheduleDate || new Date().toISOString().split('T')[0];
-                    const _todayCloud = (rotData.countsByDate && rotData.countsByDate[_today]) || {};
+                    // ★ Subtract EVERY dateKey >= the generated date, not just the date
+                    //   itself. When regenerating a pinned earlier day (07-27 while
+                    //   07-28..07-31 rows exist), the future days' placements stayed in
+                    //   historicalCounts and biased soft scoring against activities that —
+                    //   as of the day being generated — had not happened yet. The solver's
+                    //   own HARD gates (getLifetimeSpecialCount / getPeriodCount) already
+                    //   exclude dateKey >= currentDate, so this aligns the soft-scoring
+                    //   counts with the enforcement semantics that were always intended.
+                    const _todayCloud = {};
+                    if (rotData.countsByDate) {
+                        for (const _dk of Object.keys(rotData.countsByDate)) {
+                            if (_dk < _today) continue;
+                            const _dayRows = rotData.countsByDate[_dk] || {};
+                            for (const _bk of Object.keys(_dayRows)) {
+                                const _acts = _dayRows[_bk] || {};
+                                if (!_todayCloud[_bk]) _todayCloud[_bk] = {};
+                                for (const _an of Object.keys(_acts)) {
+                                    _todayCloud[_bk][_an] = (_todayCloud[_bk][_an] || 0) + (_acts[_an] || 0);
+                                }
+                            }
+                        }
+                    }
                     for (const [bunk, activities] of Object.entries(rotData.counts)) {
                         if (!gs.historicalCounts[bunk]) gs.historicalCounts[bunk] = {};
                         const _todayBunk = _todayCloud[bunk] || {};
@@ -20100,7 +20121,10 @@
                                         var sl = (typeof shoppingLists !== 'undefined' && shoppingLists && shoppingLists[bunk]) ? shoppingLists[bunk] : (typeof buildBunkShoppingList === 'function' ? buildBunkShoppingList(bunk, grade) : null);
                                         var pool = (sl && sl.specials && sl.specials.priorityList) || [];
                                         var _noSport = _slNoSportOn && (typeof gradeHasSportLayer === 'function') && !gradeHasSportLayer(grade);
-                                        _absBunks.push({ name: bunk, tiles: res.tiles, grade: grade, pool: pool, noSport: _noSport });
+                                        // `deferred` = cohort-deferred candidates: pickAnyFillable scans them
+                                        //   AFTER the primary pool (fill-if-possible last resort), same as
+                                        //   restructure/GENERIC-FILL already do.
+                                        _absBunks.push({ name: bunk, tiles: res.tiles, grade: grade, pool: pool, deferred: (sl && sl.specials && sl.specials.cohortDeferred) || [], noSport: _noSport });
                                     });
                                     // STEP 3 — pass the fill context so a Sport-spacing-blocked block is filled with a
                                     // REAL special that still has a seat (aware of what fill already took) before any
@@ -20218,7 +20242,7 @@
                                         var sl = (typeof shoppingLists !== 'undefined' && shoppingLists && shoppingLists[bunk]) ? shoppingLists[bunk] : (typeof buildBunkShoppingList === 'function' ? buildBunkShoppingList(bunk, grade) : null);
                                         var pool = (sl && sl.specials && sl.specials.priorityList) || [];
                                         var _noSport = _reoNoSportOn && (typeof gradeHasSportLayer === 'function') && !gradeHasSportLayer(grade);
-                                        _reoBunks.push({ name: bunk, tiles: res.tiles, grade: grade, pool: pool, noSport: _noSport });
+                                        _reoBunks.push({ name: bunk, tiles: res.tiles, grade: grade, pool: pool, deferred: (sl && sl.specials && sl.specials.cohortDeferred) || [], noSport: _noSport });
                                     });
                                     var _reoRes = window.GLStagger.reorderDeadWindows({ bunks: _reoBunks, gate: _glGate, capFits: _glCapFits, recordUse: _glRecordUse, specialDurs: _glSpecialDurs, canon: _glCanon, sportLabel: 'Sport', canConvert: _glMayRepurpose, seatRelease: _glSeatRelease, seatGate: _glSeatGateTile, seatCommit: _glSeatCommitTile, onReorder: function () { _glFill.filled = (_glFill.filled || 0) + 1; } });
                                     if (_reoRes && _reoRes.reordered) {
@@ -20280,7 +20304,10 @@
                                         var res = _glOut.layoutByBunk[bunk]; if (!res || !res.tiles) return;
                                         var grade = (_glPerBunk[bunk] && _glPerBunk[bunk].grade);
                                         var _noSport = _rcNoSportOn && (typeof gradeHasSportLayer === 'function') && !gradeHasSportLayer(grade);
-                                        _rcBunks.push({ name: bunk, tiles: res.tiles, grade: grade, noSport: _noSport });
+                                        // pool + deferred so reorderDeadToSport's displaced-special re-pick
+                                        //   (pickAnyFillable) sees the same candidates the fill passes see.
+                                        var _rcSl = (typeof shoppingLists !== 'undefined' && shoppingLists && shoppingLists[bunk]) ? shoppingLists[bunk] : (typeof buildBunkShoppingList === 'function' ? buildBunkShoppingList(bunk, grade) : null);
+                                        _rcBunks.push({ name: bunk, tiles: res.tiles, grade: grade, pool: (_rcSl && _rcSl.specials && _rcSl.specials.priorityList) || [], deferred: (_rcSl && _rcSl.specials && _rcSl.specials.cohortDeferred) || [], noSport: _noSport });
                                     });
                                     var _rcMaxBlk = (typeof window !== 'undefined' && +window.__reorderMaxBlockers > 1) ? +window.__reorderMaxBlockers : 3;
                                     var _rcRes = window.GLStagger.reorderDeadToSport({ bunks: _rcBunks, gate: _glGate, canon: _glCanon, sportLabel: 'Sport', capFits: _glCapFits, recordUse: _glRecordUse, removeUse: _glRemoveUse, maxBlockers: _rcMaxBlk, seatRelease: _glSeatRelease, seatGate: _glSeatGateTile, seatCommit: _glSeatCommitTile, canConvert: function (t) { return !_reoProtect[_glCanon(t.subcat)] && _glMayRepurpose(t); } });
@@ -20616,6 +20643,23 @@
                     // next sport). A tile with no free field stays generic "Sport" (e.g. the >15-
                     // concurrent overflow). Kill: window.__fillSports=false.
                     if ((typeof window === 'undefined') || (window.__fillSports !== false)) {
+                        // ★ FLOOR-FROM-SPORT, SECOND LOOK (same RESTAGGER pattern). The first
+                        //   invocation runs right after absorb — but movable generic sports are
+                        //   also MINTED by the passes after it (reorder-sport, unequal-sport,
+                        //   reorder-tosport, seat-enforce pull-downs). A bunk whose only donor
+                        //   sport at a free-seat minute materializes in those later passes was
+                        //   never converted, and FLOOR-AUDIT could only warn. Re-run against the
+                        //   final tile set just before sports are concretized on fields.
+                        try {
+                            var _ffs2On = (typeof window === 'undefined') || (window.__floorFromSport !== false);
+                            if (_ffs2On && typeof _ffsCtx !== 'undefined' && _ffsCtx && window.GLStagger && typeof window.GLStagger.fillFloorFromSport === 'function') {
+                                var _ffs2 = window.GLStagger.fillFloorFromSport(_ffsCtx);
+                                if (_ffs2 && _ffs2.converted) {
+                                    log('[GENERIC-FLOOR-FROM-SPORT] second look: converted ' + _ffs2.converted + ' more movable sport(s) into a required subcategory (donors minted by the reorder passes after the first look)');
+                                }
+                            }
+                        } catch (_eFfs2) { try { warn('[GENERIC-FLOOR-FROM-SPORT] second look error — left as-is: ' + (_eFfs2 && _eFfs2.message)); } catch (_e) {} }
+
                         var _glSportFilled = 0, _glSportMiss = 0, _glSportFieldsReset = 0;
                         try {
                             // STALE-CLAIM RESET. The draft planner (runGlobalPlanner @15190) already
@@ -20774,6 +20818,74 @@
                     //     plan, e.g. field-less camps). Sportless grades can't hit this: the
                     //     GENERIC-SPORTLESS pass above converts their residual sport tiles to
                     //     specials, which then drop here — so no phantom "Sport" AND no fake special.
+                    // ★ LATE SAME-SUBCAT RETRY (window.__lateSubcatRetry, default ON) ────────
+                    //   A subcat tile's LAST real fill attempt happens early (Step-1 fill /
+                    //   stagger / absorb split-fill). Every pass after that — reorder
+                    //   relocations calling removeUse, seat-enforce relabels, release-weekly
+                    //   frees — can FREE a seat of the very subcategory an earlier tile failed
+                    //   on, but nothing ever retried: the tile dropped into __genOpenSlots,
+                    //   whose only consumer is the backfill's do-not-touch guard. Live: 3
+                    //   shiur placeholders (60 min) died this way while the shiur seat was
+                    //   free at those exact minutes by the end of the run.
+                    //   Filling a shiur-tagged window WITH shiur is not a cross-fill — it is
+                    //   the subcat-strict contract fulfilled — so this runs regardless of
+                    //   __subcatStrict. Gates are exactly Step-1's: same subcat only, a
+                    //   configured duration, no same-day repeat on the bunk, _glCapFits
+                    //   against the FINAL seat ledger. Pool order: priorityList first, then
+                    //   cohortDeferred (least-ahead first), matching the fill-if-possible
+                    //   doctrine. Runs BEFORE the honest-open drop so a rescued tile is
+                    //   never published as open time.
+                    try {
+                        var _lsrOn = (typeof window === 'undefined') || (window.__lateSubcatRetry !== false);
+                        if (_lsrOn) {
+                            var _lsrFilled = 0, _lsrTried = 0;
+                            _glOrder.forEach(function (bunk) {
+                                var res = _glOut.layoutByBunk[bunk];
+                                if (!res || !res.tiles) return;
+                                var grade = _bunkToGrade[String(bunk)];
+                                var sl = (typeof shoppingLists !== 'undefined' && shoppingLists && shoppingLists[bunk]) ? shoppingLists[bunk] : null;
+                                var _pools = [
+                                    (sl && sl.specials && sl.specials.priorityList) || [],
+                                    (sl && sl.specials && sl.specials.cohortDeferred) || []
+                                ];
+                                if (!_pools[0].length && !_pools[1].length) return;
+                                var used = Object.create(null);
+                                res.tiles.forEach(function (t) { if (t && t.kind === 'special' && t._concrete) used[String(t._concrete).toLowerCase()] = 1; });
+                                res.tiles.forEach(function (t) {
+                                    if (!(t && t.kind === 'special' && t.generic !== false && !t._concrete && !t._weeklyKeep)) return;
+                                    _lsrTried++;
+                                    var sub = _glCanon(t.subcat);
+                                    var dur = t.endMin - t.startMin;
+                                    for (var pi = 0; pi < _pools.length && !t._concrete; pi++) {
+                                        var pool = _pools[pi];
+                                        for (var ci = 0; ci < pool.length; ci++) {
+                                            var c = pool[ci];
+                                            if (!c || !c.name) continue;
+                                            if (_glCanon(c.subcategory) !== sub) continue;
+                                            var durs = _glSpecialDurs(c.name);
+                                            if (durs.length && durs.indexOf(dur) < 0) continue;
+                                            if (used[String(c.name).toLowerCase()]) continue;
+                                            if (!_glCapFits(c, grade, t.startMin, t.endMin)) continue;
+                                            t._concrete = c.name;
+                                            t._fillLoc = c.location || null;
+                                            t._origin = 'late-subcat-retry';
+                                            used[String(c.name).toLowerCase()] = 1;
+                                            _glRecordUse(c, grade, t.startMin, t.endMin);
+                                            _lsrFilled++;
+                                            break;
+                                        }
+                                    }
+                                });
+                            });
+                            if (_lsrFilled > 0) {
+                                _glFill.filled = (_glFill.filled || 0) + _lsrFilled;
+                                log('[GENERIC-LATE-RETRY] ' + _lsrFilled + ' of ' + _lsrTried + ' unfilled subcat tile(s) filled with their OWN subcategory against the FINAL seat ledger — the seat freed after the last fill pass ran');
+                            } else if (_lsrTried > 0) {
+                                log('[GENERIC-LATE-RETRY] 0 of ' + _lsrTried + ' unfilled subcat tile(s) recoverable against the final ledger (pool genuinely dry at those spans)');
+                            }
+                        }
+                    } catch (_eLsr) { try { warn('[GENERIC-LATE-RETRY] error — left as-is: ' + (_eLsr && _eLsr.message)); } catch (_e) {} }
+
                     var _glOpenSlots = [], _glOpenMin = 0;
                     var _glHonestOpen = (typeof window === 'undefined') || (window.__honestOpenTime !== false);
                     _glOrder.forEach(function (bunk) {

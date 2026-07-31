@@ -2509,6 +2509,24 @@
             }
         } catch (_) {}
 
+        // ★ DRAFT-STAMP GUARD (regen feedback-loop fix, read side). A stamp at or
+        //   after the generated date's midnight can only describe a DRAFT of the
+        //   date being (re)generated — or a later day — never genuine pre-date
+        //   history. Before this guard, regenerating a date made the previous
+        //   draft's stamps read as "done 1 day ago" (max(1, floor((now-ts)/day)))
+        //   so every pair the prior draft placed took a recency penalty and each
+        //   regen of the SAME config produced a different, usually worse day
+        //   (live: 8 holes/230min decayed to 14/485min purely by regenerating).
+        //   Ignoring the stamp falls through to the count fallback, which is
+        //   already date-scoped.
+        try {
+            const _genDk = window._activeGenDate || window.currentScheduleDate || '';
+            if (lastTimestamp && /^\d{4}-\d{2}-\d{2}$/.test(_genDk) &&
+                lastTimestamp >= new Date(_genDk + 'T00:00:00').getTime()) {
+                lastTimestamp = null;
+            }
+        } catch (_) {}
+
         if (lastTimestamp) {
             const now = Date.now();
             const daysSince = Math.floor((now - lastTimestamp) / (1000 * 60 * 60 * 24));
