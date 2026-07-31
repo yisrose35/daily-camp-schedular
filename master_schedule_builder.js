@@ -1869,7 +1869,10 @@ function renderDAWPalette() {
     </div>`;
   });
 
-  DAW_LAYER_TYPES.filter(t => t.anchor && !t.hidden).forEach(t => {
+  // ★ A built-in anchor steps aside once a General Activity of the same kind is
+  //   configured — that one is listed below, bound to its facility.
+  const _dawCovered = (window.getGeneralActivityCoveredFixedTypes?.() || {});
+  DAW_LAYER_TYPES.filter(t => t.anchor && !t.hidden && !_dawCovered[t.type]).forEach(t => {
     html += `<div class="ms-daw-tile" draggable="true" data-type="${t.type}">
       <span class="ms-daw-tile-dot" style="background:${DAW_DOTS[t.type] || '#64748b'};"></span>
       <span class="ms-daw-tile-name">${t.name}</span>
@@ -4073,11 +4076,20 @@ function renderExpandSection() {
 function renderPalette() {
   palette.innerHTML = '';
   
+  // ★ A built-in Fixed tile steps aside once the camp configures a General
+  //   Activity of the same kind — the configured one carries the facility and
+  //   sharing rules, so showing both would offer two Lunch tiles that behave
+  //   differently. With no matching general activity the built-in tile stays.
+  //   'custom' (Custom Pinned) is never a general activity, so it always shows.
+  const _gaCovered = (window.getGeneralActivityCoveredFixedTypes?.() || {});
+  const _fixedTypes = ['swim', 'lunch', 'snacks', 'dismissal', 'custom']
+    .filter(t => t === 'custom' || !_gaCovered[t]);
+
   const categories = [
     { label: 'Slots', types: ['activity', 'sports', 'special'] },
     { label: 'Advanced', types: ['smart', 'split', 'elective', 'swim_elective'] },
     { label: 'Leagues', types: ['league', 'specialty_league'] },
-    { label: 'Fixed', types: ['swim', 'lunch', 'snacks', 'dismissal', 'custom'] }
+    { label: 'Fixed', types: _fixedTypes }
   ];
 
   // ★ FN-48: every custom general activity (facilities registry) gets its own
