@@ -273,9 +273,16 @@
                             .map(function (n) { return Number.isFinite(Number(n)) ? Math.max(0, Math.floor(Number(n))) : null; })
                             .filter(function (n) { return n !== null; })
                         : null,
-                    bunkFacilities: (league.chinuch.bunkFacilities && typeof league.chinuch.bunkFacilities === 'object') ? league.chinuch.bunkFacilities : {}
+                    bunkFacilities: (league.chinuch.bunkFacilities && typeof league.chinuch.bunkFacilities === 'object') ? league.chinuch.bunkFacilities : {},
+                    // ★ How many teams each chinuch room holds AT ONCE. Teams
+                    //   sharing a room are spread across separate sessions when
+                    //   it can't take them together. Blank per room = fall back
+                    //   to the room's capacity from the Facilities tab.
+                    roomCapacity: (league.chinuch.roomCapacity && typeof league.chinuch.roomCapacity === 'object' && !Array.isArray(league.chinuch.roomCapacity))
+                        ? league.chinuch.roomCapacity
+                        : {}
                   }
-                : { enabled: false, timesPerDay: null, teamsPerRound: null, perSessionCounts: null, bunkFacilities: {} },
+                : { enabled: false, timesPerDay: null, teamsPerRound: null, perSessionCounts: null, bunkFacilities: {}, roomCapacity: {} },
             // ★ BYE ACTIVITY: what a team DOES when it sits out a game. With an
             //   odd number of teams (or fewer fields than pairings) somebody is
             //   always benched; instead of a bare "Team — Bye" the user names
@@ -1505,7 +1512,7 @@
         advancedBody.appendChild(awayCard);
 
         // ─── CARD: CHINUCH ──────────────────────────────────────────────────
-        if (!league.chinuch) league.chinuch = { enabled: false, timesPerDay: null, teamsPerRound: null, perSessionCounts: null, bunkFacilities: {} };
+        if (!league.chinuch) league.chinuch = { enabled: false, timesPerDay: null, teamsPerRound: null, perSessionCounts: null, bunkFacilities: {}, roomCapacity: {} };
 
         const chinuchCard = document.createElement('div');
         chinuchCard.style.cssText = 'border:1px solid #E2E8F0; border-radius:12px; overflow:hidden; margin-top:8px;';
@@ -1715,6 +1722,7 @@
                     if (!league.chinuch.bunkFacilities) league.chinuch.bunkFacilities = {};
                     league.chinuch.bunkFacilities[team] = facSelect.value;
                     saveLeaguesData();
+                    renderConfigSections(league, container);   // refresh the room-capacity list
                 };
 
                 row.appendChild(label);
@@ -1727,6 +1735,87 @@
                 empty.style.cssText = 'font-size:0.8rem; color:#9CA3AF; text-align:center; padding:8px;';
                 empty.textContent = 'Add teams above to assign chinuch facilities.';
                 chinuchBody.appendChild(empty);
+            }
+
+            // ── Room capacity: how many teams fit in each room AT ONCE ──────
+            // Several teams usually name the same room. The scheduler will not
+            // send more of them there in one period than it holds, so this is
+            // where the user says how big a shiur that room can take.
+            if (!league.chinuch.roomCapacity || typeof league.chinuch.roomCapacity !== 'object') league.chinuch.roomCapacity = {};
+            const teamsByRoom = {};
+            (league.teams || []).forEach(function (team) {
+                const r = (league.chinuch.bunkFacilities && league.chinuch.bunkFacilities[team]) || '';
+                if (r) (teamsByRoom[r] = teamsByRoom[r] || []).push(team);
+            });
+            const roomNames = Object.keys(teamsByRoom);
+
+            if (roomNames.length > 0) {
+                const capHeader = document.createElement('div');
+                capHeader.style.cssText = 'font-size:0.78rem; font-weight:600; text-transform:uppercase; letter-spacing:0.05em; color:#6B7280; margin:16px 0 6px;';
+                capHeader.textContent = 'Teams per Room at Once';
+                chinuchBody.appendChild(capHeader);
+
+                const capHint = document.createElement('div');
+                capHint.style.cssText = 'font-size:0.72rem; color:#6B7280; margin-bottom:8px;';
+                capHint.textContent = 'Teams sharing a room are spread across separate sessions when it can\'t hold them all together. '
+                    + 'Blank uses the room\'s capacity from the Facilities tab.';
+                chinuchBody.appendChild(capHint);
+
+                roomNames.forEach(function (room) {
+                    const members = teamsByRoom[room];
+                    // What the scheduler will actually use — same resolution order.
+                    const resolved = (window.SchedulerCoreLeagues && window.SchedulerCoreLeagues.chinuchRoomCapacity)
+                        ? window.SchedulerCoreLeagues.chinuchRoomCapacity(league, room, null)
+                        : (Number(league.chinuch.roomCapacity[room]) || 1);
+                    const sessions = (Number.isFinite(resolved) && resolved > 0)
+                        ? Math.ceil(members.length / resolved) : 1;
+
+                    const row = document.createElement('div');
+                    row.style.cssText = 'display:flex; align-items:center; gap:10px; margin-bottom:6px;';
+
+                    const nameEl = document.createElement('span');
+                    nameEl.style.cssText = 'font-size:0.83rem; font-weight:500; color:#374151; min-width:110px; flex:1;';
+                    nameEl.textContent = room;
+
+                    const capIn = document.createElement('input');
+                    capIn.type = 'number'; capIn.min = '1'; capIn.max = '50';
+                    capIn.value = league.chinuch.roomCapacity[room] || '';
+                    capIn.placeholder = String(Number.isFinite(resolved) ? resolved : 1);
+                    capIn.style.cssText = 'width:64px; padding:5px 8px; border:1px solid #D1D5DB; border-radius:6px; font-size:0.83rem; text-align:center; background:white;';
+                    capIn.title = 'How many teams can learn in "' + room + '" at the same time';
+                    capIn.onchange = function () {
+                        const v = parseInt(capIn.value, 10);
+                        if (v > 0) league.chinuch.roomCapacity[room] = Math.min(50, v);
+                        else delete league.chinuch.roomCapacity[room];
+                        saveLeaguesData();
+                        renderConfigSections(league, container);
+                    };
+
+                    const note = document.createElement('span');
+                    note.style.cssText = 'font-size:0.75rem; flex:2; color:' + (sessions > 1 ? '#B45309' : '#6B7280') + ';';
+                    note.textContent = members.length + ' team' + (members.length === 1 ? '' : 's')
+                        + (sessions > 1 ? ' · needs ' + sessions + ' separate sessions' : ' · fits in one session');
+
+                    row.appendChild(nameEl);
+                    row.appendChild(capIn);
+                    row.appendChild(note);
+                    chinuchBody.appendChild(row);
+                });
+
+                const worst = roomNames.reduce(function (m, room) {
+                    const resolved = (window.SchedulerCoreLeagues && window.SchedulerCoreLeagues.chinuchRoomCapacity)
+                        ? window.SchedulerCoreLeagues.chinuchRoomCapacity(league, room, null)
+                        : (Number(league.chinuch.roomCapacity[room]) || 1);
+                    const s = (Number.isFinite(resolved) && resolved > 0) ? Math.ceil(teamsByRoom[room].length / resolved) : 1;
+                    return Math.max(m, s);
+                }, 1);
+                if (worst > 1) {
+                    const warn = document.createElement('div');
+                    warn.style.cssText = 'font-size:0.75rem; color:#B45309; background:#FFFBEB; border:1px solid #FDE68A; border-radius:8px; padding:8px 10px; margin-top:8px;';
+                    warn.textContent = 'This league needs at least ' + worst + ' league periods a day for everyone to learn. '
+                        + 'With fewer, the teams that don\'t fit play their game instead — and rotate in on other days.';
+                    chinuchBody.appendChild(warn);
+                }
             }
 
             chinuchCard.appendChild(chinuchBody);

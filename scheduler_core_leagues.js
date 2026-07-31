@@ -1516,6 +1516,106 @@
     }
     Leagues.makeByeLedger = makeByeLedger;   // tests
 
+    // =========================================================================
+    // ★ CHINUCH ROOM CAPACITY — teams that share a room can't all learn at once
+    // =========================================================================
+    // Teams are assigned a chinuch location per team, and several teams often
+    // name the SAME room. The period plan used to pour teams into periods by
+    // shuffled order alone, so three teams sharing one Beis Medrash could all
+    // be sent there in the same period — a physical double-book nothing else
+    // in the engine would catch (chinuch never enters the field-lock system).
+    //
+    // How many teams a room holds AT ONCE comes from, in order:
+    //   1. league.chinuch.roomCapacity[<room>] — the per-league override the
+    //      user sets right next to the room assignments (a chinuch group size
+    //      is a rebbi/shiur decision, not the same as how many bunks can play
+    //      ball on a field), then
+    //   2. the room's capacity from the Facilities tab (the camp's existing
+    //      single source of truth for how many groups fit in a space), then
+    //   3. 1 — a room holds one group unless something says otherwise.
+    function chinuchRoomCapacity(league, room, activityProperties) {
+        const name = String(room == null ? '' : room).trim();
+        if (!name) return Infinity;                 // no room named → unconstrained
+        const ov = league && league.chinuch && league.chinuch.roomCapacity;
+        if (ov && typeof ov === 'object') {
+            const v = Number(ov[name]);
+            if (Number.isFinite(v) && v > 0) return Math.floor(v);
+        }
+        // Canonical resolver when the utils bundle is loaded (handles the
+        // shared-room most-restrictive rules, rainy-day overrides, …).
+        try {
+            const U = (typeof window !== 'undefined') && window.SchedulerCoreUtils;
+            if (U && typeof U.getFieldCapacity === 'function') {
+                const c = Number(U.getFieldCapacity(name, activityProperties));
+                if (Number.isFinite(c) && c > 0) return c;
+            }
+        } catch (_) {}
+        // Standalone fallback: read the room's own sharing rule.
+        try {
+            const key = name.toLowerCase();
+            const lists = [];
+            if (typeof window !== 'undefined' && typeof window.getFacilities === 'function') lists.push(window.getFacilities() || []);
+            const gs = (typeof window !== 'undefined' && window.loadGlobalSettings) ? (window.loadGlobalSettings() || {}) : {};
+            lists.push((gs.app1 && gs.app1.fields) || gs.fields || []);
+            for (const list of lists) {
+                const f = (list || []).find(function (x) { return x && String(x.name || '').toLowerCase().trim() === key; });
+                const sw = f && f.sharableWith;
+                if (!sw) continue;
+                if (sw.type === 'all') return parseInt(sw.capacity) || 999;
+                if (sw.type === 'not_sharable') return 1;
+                const c = parseInt(sw.capacity);
+                if (Number.isFinite(c) && c > 0) return c;
+            }
+        } catch (_) {}
+        return 1;
+    }
+    Leagues.chinuchRoomCapacity = chinuchRoomCapacity;
+
+    /** Bookkeeping for one day's chinuch plan: which rooms are how full in each
+     *  period, so a team is only placed where its room still has space. */
+    function makeChinuchRoomTracker(league, activityProperties) {
+        const rooms = (league && league.chinuch && league.chinuch.bunkFacilities) || {};
+        const capCache = {};
+        const load = {};                                 // periodIdx → { roomKey: count }
+        function roomOf(team) { return String(rooms[team] || '').trim(); }
+        function capOf(room) {
+            const k = room.toLowerCase();
+            if (capCache[k] == null) capCache[k] = chinuchRoomCapacity(league, room, activityProperties);
+            return capCache[k];
+        }
+        return {
+            roomOf: roomOf,
+            capacityOf: capOf,
+            fits: function (team, periodIdx) {
+                const room = roomOf(team);
+                if (!room) return true;                  // no room named → unconstrained
+                const cap = capOf(room);
+                if (!Number.isFinite(cap)) return true;
+                return ((load[periodIdx] || {})[room.toLowerCase()] || 0) < cap;
+            },
+            take: function (team, periodIdx) {
+                const room = roomOf(team);
+                if (!room) return;
+                const k = room.toLowerCase();
+                (load[periodIdx] = load[periodIdx] || {});
+                load[periodIdx][k] = (load[periodIdx][k] || 0) + 1;
+            },
+            // Rooms that more teams name than they can hold in one sitting —
+            // the reason a team may end up without a session today.
+            oversubscribed: function (teams) {
+                const byRoom = {};
+                (teams || []).forEach(function (t) {
+                    const r = roomOf(t);
+                    if (r) (byRoom[r] = byRoom[r] || []).push(t);
+                });
+                return Object.keys(byRoom)
+                    .map(function (r) { return { room: r, teams: byRoom[r], capacity: capOf(r) }; })
+                    .filter(function (o) { return Number.isFinite(o.capacity) && o.teams.length > o.capacity; });
+            }
+        };
+    }
+    Leagues.makeChinuchRoomTracker = makeChinuchRoomTracker;
+
     // Weight of one step of bye imbalance. Sits ABOVE opponent freshness
     // (1000/meeting in matchup mode) and sport freshness (300/team-slot) — a
     // team that has already sat out plays even if that means a rematch, because
@@ -4135,18 +4235,38 @@
                 let _mode;
                 let _summary;
 
+                // ★★★ ROOM CAPACITY ★★★
+                // Teams that share a chinuch room can't all be sent there in the
+                // same period. Every pour below goes through _fillPeriod, which
+                // skips a team whose room is already full at that period — the
+                // team is simply picked up by a later period instead. Only when
+                // NO period has space does a team go without a session today
+                // (it plays, or takes a bye); that's reported at the end.
+                const _rooms = makeChinuchRoomTracker(league, activityProperties);
+                const _placed = new Set();
+                function _fillPeriod(periodIdx, take, periodKey, capTotal) {
+                    let n = 0;
+                    for (let i = 0; i < shuffled.length && n < take; i++) {
+                        const t = shuffled[i];
+                        if (_placed.has(t)) continue;
+                        if (capTotal != null && _placed.size >= capTotal) break;
+                        if (!_rooms.fits(t, periodIdx)) continue;
+                        _rooms.take(t, periodIdx);
+                        bunkSchedule[t] = Number(periodKey);
+                        _placed.add(t);
+                        n++;
+                    }
+                    return n;
+                }
+
                 if (customCounts && customCounts.length > 0) {
-                    // Honor exact per-session counts. Walk shuffled teams sequentially
-                    // and pour into period buckets. If the array totals more than the
-                    // team count, later periods simply get fewer (or zero) teams. If
-                    // it totals less, leftover teams have no chinuch slot today (they
+                    // Honor exact per-session counts. Walk shuffled teams and pour
+                    // into period buckets. If the array totals more than the team
+                    // count, later periods simply get fewer (or zero) teams. If it
+                    // totals less, leftover teams have no chinuch slot today (they
                     // will appear in matchups or as byes).
-                    let teamIdx = 0;
                     for (let p = 0; p < customCounts.length; p++) {
-                        const take = customCounts[p];
-                        for (let k = 0; k < take && teamIdx < shuffled.length; k++, teamIdx++) {
-                            bunkSchedule[shuffled[teamIdx]] = Number(allPeriodKeys[p]);
-                        }
+                        _fillPeriod(p, customCounts[p], allPeriodKeys[p], null);
                     }
                     _mode = 'custom';
                     _summary = '[' + customCounts.join(',') + ']';
@@ -4163,12 +4283,10 @@
                         // learns daily) but each period's count matches the roster's
                         // parity, so the teams left to play pair up with nobody idle.
                         const _counts = _planChinuchCounts(teams.length, numPeriods);
-                        let _ti = 0;
                         for (let p = 0; p < _counts.length; p++) {
-                            for (let c = 0; c < _counts[p] && _ti < shuffled.length; c++, _ti++) {
-                                bunkSchedule[shuffled[_ti]] = Number(allPeriodKeys[p]);
-                            }
+                            _fillPeriod(p, _counts[p], allPeriodKeys[p], null);
                         }
+                        const _ti = _placed.size;
                         const _act = _counts.map(function (c) { return teams.length - c; });
                         const _byes = _act.filter(function (a) { return a % 2 === 1; }).length;
                         _mode = 'auto';
@@ -4203,15 +4321,37 @@
                         // league game. The daily date-seeded shuffle rotates which teams
                         // attend so it evens out over the week.
                         const _cap = teamsPerSession * periodsNeeded;
-                        shuffled.forEach((team, idx) => {
-                            if (idx >= _cap) return; // remaining teams play (no chinuch today)
-                            const periodIdx = Math.min(Math.floor(idx / teamsPerSession), periodsNeeded - 1);
-                            bunkSchedule[team] = Number(activePeriodKeys[periodIdx]);
-                        });
+                        for (let p = 0; p < periodsNeeded; p++) {
+                            _fillPeriod(p, teamsPerSession, activePeriodKeys[p], _cap);
+                        }
                         _mode = 'manual';
                         _summary = teamsPerSession + '/session, ' + periodsNeeded + '/' + numPeriods + ' period(s), cap ' + Math.min(_cap, teams.length) + '/' + teams.length + ' team(s)';
                     }
                 }
+
+                // ★ ROOM CAPACITY REPORT: a team the plan wanted to seat but no
+                //   period could hold. Always a config problem — more teams name
+                //   a room than it holds, across more sessions than the day has —
+                //   so name the rooms and the teams that lost out.
+                (function () {
+                    const over = _rooms.oversubscribed(teams);
+                    if (!over.length) return;
+                    const missed = teams.filter(function (t) {
+                        return !_placed.has(t) && _rooms.roomOf(t);
+                    });
+                    over.forEach(function (o) {
+                        console.log('   🚪 [Chinuch] "' + o.room + '" holds ' + o.capacity
+                            + ' team(s) at once but ' + o.teams.length + ' are assigned there ('
+                            + o.teams.join(', ') + ') — they are spread across '
+                            + Math.ceil(o.teams.length / o.capacity) + ' session(s).');
+                    });
+                    if (missed.length) {
+                        console.warn('   ⚠️ [Chinuch] "' + league.name + '": no session left today for ['
+                            + missed.join(', ') + '] — their room(s) were full in every league period. '
+                            + 'Raise the room capacity next to the chinuch locations, spread the teams '
+                            + 'across more rooms, or add a league period.');
+                    }
+                })();
 
                 window.chinuchSchedule[league.name] = bunkSchedule;
                 // ★ Record today's attendance into the cloud-synced history
