@@ -5075,8 +5075,11 @@ function addDropListeners(selector) {
             { name: 'postChangeMin', label: 'Post-Change (minutes, optional)', type: 'text', placeholder: 'e.g., 10' }
           );
         }
-        // Grade Mode toggle for swim / lunch / snacks
-        if (['swim', 'lunch', 'snacks'].includes(tileData.type)) {
+        // Grade Mode toggle — swim only.
+        // NOT lunch / snacks: a manual meal tile is pinned to one fixed start/end
+        // for the whole grade, so "Staggered" has nothing to stagger. The flag it
+        // wrote (fullGrade) was never read back by the manual generator anyway.
+        if (['swim'].includes(tileData.type)) {
           swimModalFields.push({
             name: 'gradeMode',
             label: 'Grade Mode',
