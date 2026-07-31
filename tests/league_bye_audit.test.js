@@ -372,3 +372,95 @@ test('no drift means no per-day noise', () => {
     assert.ok(!codes(L).includes('history-drift-day'));
     assert.ok(!codes(L).includes('chinuch-ledger-missing'));
 });
+
+// ── structural imbalance vs an unfair picker ─────────────────────────────────
+
+test('a lopsided pool is a WARN about chinuch grouping, not a picker failure', () => {
+    // Two periods a day. Period 1 has an even active set (no bye). Period 2
+    // always has the SAME five teams active, so T1 and T2 — at chinuch during
+    // period 2 every day — can never be picked for a bye. Their 0 is structural.
+    const days = ['2026-07-01', '2026-07-02', '2026-07-03', '2026-07-06'];
+    const spec = {}, chinuchByDate = {};
+    days.forEach((d, i) => {
+        const pool = ['T3', 'T4', 'T5'];
+        const sitter = pool[i % pool.length];
+        const rest = pool.filter(t => t !== sitter);
+        spec[d] = [
+            period('Game ' + (2 * i + 1), [['T1', 'T2']], [], []),
+            period('Game ' + (2 * i + 2), [[rest[0], rest[1]]], [[sitter, 'Pool']],
+                [['T1', 'Beis Medrash'], ['T2', 'Beis Medrash']]),
+        ];
+        chinuchByDate[d] = ['T1', 'T2'];
+    });
+    const L = run(spec, { chinuch: { enabled: true, roomCapacity: { 'Beis Medrash': 2 } } }, chinuchByDate);
+
+    assert.equal(L.byTeam.T1.eligible, 0, 'T1 was never in the draw');
+    assert.equal(L.byTeam.T2.eligible, 0);
+    assert.equal(L.byTeam.T3.eligible, 4, 'T3 was in the draw every bye period');
+
+    const f = find(L, 'bye-spread-structural');
+    assert.ok(f, 'expected the structural verdict: ' + JSON.stringify(L.findings));
+    assert.equal(f.level, 'warn');
+    assert.match(f.message, /never entered the draw/);
+    assert.match(f.message, /T1, T2/);
+    assert.ok(!codes(L).includes('bye-spread'), 'must not also blame the picker');
+    assert.equal(L.verdict, 'WARN', 'a lopsided pool is not a FAIL');
+});
+
+test('an unfair picker among equally-eligible teams is still a FAIL', () => {
+    // All five teams are in the draw every period, and T5 takes every bye.
+    const spec = {};
+    ['2026-07-01', '2026-07-02', '2026-07-03', '2026-07-06'].forEach((d, i) => {
+        spec[d] = [period('Game ' + (i + 1), [['T1', 'T2'], ['T3', 'T4']], [['T5', 'Pool']])];
+    });
+    const L = run(spec);
+    TEAMS.forEach(t => assert.equal(L.byTeam[t].eligible, 4, t + ' was eligible every period'));
+    assert.equal(Math.round(L.byTeam.T5.expected * 10) / 10, 0.8, 'fair share is 4/5 of a bye');
+
+    const f = find(L, 'bye-spread');
+    assert.ok(f, JSON.stringify(L.findings));
+    assert.equal(f.level, 'error');
+    assert.match(f.message, /this is the picker/);
+    assert.equal(L.verdict, 'FAIL');
+});
+
+// ── history reaching further back than the saved schedules ───────────────────
+
+test('history days with no saved schedule are reported, not miscalled drift', () => {
+    const spec = { '2026-07-06': [period('Game 3', [['T1', 'T2'], ['T3', 'T4']], [['T5', 'Pool']])] };
+    // History also remembers two earlier days this browser has no schedules for.
+    const history = historyFor(spec);
+    history.gameLog[LG]['2026-07-01'] = [{ t1: 'T1', t2: 'T2', sport: 'Basketball', g: 'Game 1' }];
+    history.gameLog[LG]['2026-07-02'] = [{ t1: 'T3', t2: 'T4', sport: 'Basketball', g: 'Game 2' }];
+    const L = A.build({
+        history: history, dailyData: dailyData(spec),
+        leagues: [{ name: LG, teams: TEAMS.slice() }],
+    }).leagues[0];
+
+    // The extra days are called out on their own…
+    const info = find(L, 'history-only-days');
+    assert.ok(info, JSON.stringify(L.findings));
+    assert.equal(info.level, 'info');
+    assert.match(info.message, /2026-07-01, 2026-07-02/);
+    // …and they do NOT masquerade as a grid/history disagreement.
+    assert.ok(!codes(L).includes('history-drift'),
+        'uncached days are not drift: ' + JSON.stringify(L.findings));
+});
+
+test('real drift on a shared day is still caught alongside uncached days', () => {
+    const spec = {
+        '2026-07-06': [period('Game 3', [['T1', 'T2'], ['T4', 'T5']], [], [['T3', 'Beis Medrash']])],
+    };
+    const history = historyFor(spec);                       // no chinuch record
+    history.gameLog[LG]['2026-07-01'] = [{ t1: 'T1', t2: 'T2', sport: 'Basketball', g: 'Game 1' }];
+    const L = A.build({
+        history: history, dailyData: dailyData(spec),
+        leagues: [{ name: LG, teams: TEAMS.slice(), chinuch: { enabled: true } }],
+    }).leagues[0];
+
+    assert.ok(codes(L).includes('history-only-days'), 'the uncached day is noted');
+    const d = find(L, 'history-drift');
+    assert.ok(d, 'the shared day still drifts: ' + JSON.stringify(L.findings));
+    assert.match(d.message, /T3 \(0 on the grid, 1 in history\)/, d.message);
+    assert.ok(codes(L).includes('chinuch-ledger-missing'), 'and the cause is named');
+});

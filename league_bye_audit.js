@@ -208,13 +208,13 @@
             var day = byDate[d] = {
                 periods: periods,
                 chinuchRecorded: (cbd[d] || []).length,
-                byes: 0, teams: []
+                byes: 0, teams: [], perTeam: {}
             };
             teams.forEach(function (t) {
                 var played = 0;
                 entries.forEach(function (e) { if (e && (e.t1 === t || e.t2 === t)) played++; });
                 var sat = periods - played - (chinuch[t] ? 1 : 0);
-                if (sat > 0) { counts[t] += sat; day.byes += sat; day.teams.push(t); }
+                if (sat > 0) { counts[t] += sat; day.byes += sat; day.teams.push(t); day.perTeam[t] = sat; }
             });
         });
         return { counts: counts, byDate: byDate };
@@ -254,11 +254,13 @@
             });
 
             var byTeam = {};
-            teams.forEach(function (t) {
-                byTeam[t] = { team: t, played: 0, chinuch: 0, byes: 0, activities: {}, byeDates: [], noActivity: 0 };
-            });
+            function blank(t) {
+                return { team: t, played: 0, chinuch: 0, byes: 0, activities: {}, byeDates: [],
+                    noActivity: 0, eligible: 0, expected: 0 };
+            }
+            teams.forEach(function (t) { byTeam[t] = blank(t); });
             function rec(t) {
-                if (!byTeam[t]) byTeam[t] = { team: t, played: 0, chinuch: 0, byes: 0, activities: {}, byeDates: [], noActivity: 0 };
+                if (!byTeam[t]) byTeam[t] = blank(t);
                 return byTeam[t];
             }
 
@@ -273,6 +275,27 @@
                     r.byeDates.push(p.date);
                     if (b.activity) r.activities[b.activity] = (r.activities[b.activity] || 0) + 1;
                     else r.noActivity++;
+                });
+            });
+
+            // ★ WHO COULD EVEN HAVE SAT OUT.
+            // A team only enters the draw for a bye in a period that HAD a bye
+            // and that the team was active in — a team at chinuch that period
+            // was never a candidate. Without this, a team at chinuch during the
+            // one period that produces the bye shows 0 byes and looks favored,
+            // when in truth it was never in the running. `expected` is the fair
+            // share: each bye in a period is split evenly among its candidates.
+            periods.forEach(function (p) {
+                if (!p.byes.length) return;
+                var candidates = [];
+                p.games.forEach(function (g) { candidates.push(g.teamA); candidates.push(g.teamB); });
+                p.byes.forEach(function (b) { candidates.push(b.team); });
+                var uniq = [], s = {};
+                candidates.forEach(function (t) { if (!s[norm(t)]) { s[norm(t)] = 1; uniq.push(t); } });
+                uniq.forEach(function (t) {
+                    var r = rec(t);
+                    r.eligible++;
+                    r.expected += p.byes.length / uniq.length;
                 });
             });
 
@@ -308,10 +331,37 @@
                 } else {
                     var hogs = teams.filter(function (t) { return byTeam[t].byes === maxB; });
                     var spared = teams.filter(function (t) { return byTeam[t].byes === minB; });
-                    findings.push({ level: 'error', code: 'bye-spread',
-                        message: 'Byes are UNEVEN — spread of ' + spread + '. '
-                            + hogs.join(', ') + ' sat out ' + maxB + '× while '
-                            + spared.join(', ') + ' sat out ' + minB + '×.' });
+                    // Is this the PICKER being unfair, or was the pool itself
+                    // lopsided? A team at chinuch during the one period that
+                    // produces the bye is never in the running, so it shows 0
+                    // and looks favored. Compare each team against its fair
+                    // share of the periods it was actually eligible for.
+                    var worstDev = 0, devTeam = null;
+                    teams.forEach(function (t) {
+                        var dev = byTeam[t].byes - byTeam[t].expected;
+                        if (Math.abs(dev) > Math.abs(worstDev)) { worstDev = dev; devTeam = t; }
+                    });
+                    var neverEligible = teams.filter(function (t) { return byTeam[t].eligible === 0; });
+                    if (Math.abs(worstDev) <= 1) {
+                        findings.push({ level: 'warn', code: 'bye-spread-structural',
+                            message: 'Byes look uneven (spread of ' + spread + ': ' + hogs.join(', ') + ' at ' + maxB
+                                + '×, ' + spared.join(', ') + ' at ' + minB + '×) — but each team is within one of its '
+                                + 'FAIR SHARE of the periods it could actually have sat out. The picker is behaving; the '
+                                + 'pool is lopsided. '
+                                + (neverEligible.length
+                                    ? neverEligible.join(', ') + ' never entered the draw at all — they were at chinuch, '
+                                      + 'or playing, during every period that produced a bye. Even out the chinuch grouping '
+                                      + 'so the same teams are not always out of the running.'
+                                    : 'Check which teams are active in the period that produces the bye.') });
+                    } else {
+                        findings.push({ level: 'error', code: 'bye-spread',
+                            message: 'Byes are UNEVEN — spread of ' + spread + '. '
+                                + hogs.join(', ') + ' sat out ' + maxB + '× while '
+                                + spared.join(', ') + ' sat out ' + minB + '×. '
+                                + devTeam + ' is ' + (worstDev > 0 ? '+' : '') + worstDev.toFixed(1)
+                                + ' against its fair share of the periods it was eligible for, so this is the picker, '
+                                + 'not the chinuch grouping.' });
+                    }
                 }
 
                 // A team benched on consecutive league days: the totals can even
@@ -358,11 +408,31 @@
             // shows byes: "grid says 0, history says 2" is the dangerous shape,
             // because the fairness ledger is the side that decides the next bye.
             if (periods.length) {
-                var drift = teams.filter(function (t) { return (histByes[t] || 0) !== byTeam[t].byes; });
+                // Only dates the grid actually covers are comparable. History
+                // routinely reaches further back than the schedules cached in
+                // this browser, and counting those extra days as "drift"
+                // produced a warning with no day behind it to explain it.
+                var histShared = {};
+                teams.forEach(function (t) { histShared[t] = 0; });
+                var histOnly = [];
+                Object.keys(hist.byDate).sort().forEach(function (d) {
+                    if (!gridByDate[d]) { if (hist.byDate[d].byes) histOnly.push(d); return; }
+                    var pt = hist.byDate[d].perTeam || {};
+                    Object.keys(pt).forEach(function (t) { if (histShared[t] != null) histShared[t] += pt[t]; });
+                });
+                if (histOnly.length) {
+                    findings.push({ level: 'info', code: 'history-only-days',
+                        message: 'History has ' + histOnly.length + ' more league day(s) than this browser has schedules for ('
+                            + histOnly.slice(0, 6).join(', ') + (histOnly.length > 6 ? ', …' : '')
+                            + '). Those days are counted by the fairness ledger but cannot be checked here — open them, or run '
+                            + 'byeAudit with a date range that matches what you have.' });
+                }
+
+                var drift = teams.filter(function (t) { return (histShared[t] || 0) !== byTeam[t].byes; });
                 if (drift.length) {
                     findings.push({ level: 'warn', code: 'history-drift',
                         message: 'Saved schedules and the league history disagree on byes for '
-                            + drift.map(function (t) { return t + ' (' + byTeam[t].byes + ' on the grid, ' + (histByes[t] || 0) + ' in history)'; }).join(', ')
+                            + drift.map(function (t) { return t + ' (' + byTeam[t].byes + ' on the grid, ' + (histShared[t] || 0) + ' in history)'; }).join(', ')
                             + '. The fairness ledger reads history, so a day generated on a device that never synced can skew the next run.' });
 
                     // WHICH days, and why. The usual cause is a date whose
@@ -426,6 +496,7 @@
 
             out.leagues.push({
                 name: name,
+                league: league,          // the config, so the renderer can resolve rooms
                 teams: teams,
                 dates: Object.keys(dates).sort(),
                 periodCount: periods.length,
@@ -478,7 +549,12 @@
                         Played: r.played,
                         Chinuch: r.chinuch,
                         Byes: r.byes,
-                        'Bye %': pct(r.byes, L.periodCount) + '%',
+                        // How many bye-producing periods this team was actually
+                        // in the running for, and its even split of them. A 0
+                        // in "Could sit" means the team was never a candidate —
+                        // not that the picker favored it.
+                        'Could sit': r.eligible,
+                        'Fair share': Math.round(r.expected * 10) / 10,
                         'On the bye': acts || (r.noActivity ? '(nothing)' : ''),
                         'History says': L.historyByes[t] != null ? L.historyByes[t] : ''
                     };
@@ -487,17 +563,34 @@
                 else rows.forEach(function (r) { console.log('   ', r); });
 
                 if (opts.verbose) {
-                    console.groupCollapsed('Day by day');
+                    // Open, not collapsed — asking for verbose means you want to
+                    // read it, and a collapsed group hides it from a pasted log.
+                    console.group('Day by day');
                     var perDate = {};
                     L.periods.forEach(function (p) { (perDate[p.date] = perDate[p.date] || []).push(p); });
                     Object.keys(perDate).sort().forEach(function (d) {
                         var lines = perDate[d].map(function (p) {
                             var bye = p.byes.map(function (b) { return b.team + (b.activity ? ' → ' + b.activity : ' (nothing)'); }).join(', ');
-                            var ch = p.chinuch.map(function (c) { return c.team + (c.room ? ' @ ' + c.room : ''); }).join(', ');
+                            // Only name a REAL room — "@ Chinuch" is the
+                            // placeholder for "no room configured".
+                            var ch = p.chinuch.map(function (c) {
+                                var room = A.resolveRoom(L.league, c.team, c.room);
+                                return c.team + (room ? ' @ ' + room : '');
+                            }).join(', ');
+                            // On a period that produced a bye, list who was in
+                            // the running — that is where a lopsided pool shows.
+                            var pool = '';
+                            if (p.byes.length) {
+                                var cand = [], cs = {};
+                                p.games.forEach(function (g) { [g.teamA, g.teamB].forEach(function (t) { if (!cs[norm(t)]) { cs[norm(t)] = 1; cand.push(t); } }); });
+                                p.byes.forEach(function (b) { if (!cs[norm(b.team)]) { cs[norm(b.team)] = 1; cand.push(b.team); } });
+                                pool = '  ·  in the draw: ' + cand.join(', ');
+                            }
                             return '   ' + (p.label || 'period') + ': '
                                 + p.games.length + ' game(s)'
                                 + (bye ? '  ·  bye: ' + bye : '')
-                                + (ch ? '  ·  chinuch: ' + ch : '');
+                                + (ch ? '  ·  chinuch: ' + ch : '')
+                                + pool;
                         });
                         console.log(d + '\n' + lines.join('\n'));
                     });
