@@ -1128,7 +1128,21 @@
             var tiles = bunk.tiles || [];
             if (!tiles.length) continue;
             var grade = bunk.grade;
-            var want = need[grade];
+            // Per-grade static floors, PLUS this bunk's own weekly-due floors
+            // (ctx.needByBunk, keyed by bunk name — e.g. shiur '<=1' is a de-facto
+            // floor of 1 on the bunk's due day; per-bunk so a not-due bunk never
+            // drains the scarce weekly seat through this pass).
+            var want = need[grade] || null;
+            var wantB = (ctx.needByBunk && bunk.name != null && ctx.needByBunk[bunk.name]) || null;
+            if (wantB) {
+                var mergedWant = {};
+                if (want) { for (var wk in want) { if (Object.prototype.hasOwnProperty.call(want, wk)) mergedWant[wk] = want[wk]; } }
+                for (var wk2 in wantB) {
+                    if (!Object.prototype.hasOwnProperty.call(wantB, wk2)) continue;
+                    mergedWant[wk2] = Math.max(mergedWant[wk2] || 0, wantB[wk2] || 0);
+                }
+                want = mergedWant;
+            }
             if (!want) continue;
 
             var have = Object.create(null), used = Object.create(null), sportCount = 0;
@@ -1153,11 +1167,45 @@
                     if (!S || S.kind !== 'sport') continue;
                     if (S.generic !== true || S._concrete) continue;        // only a movable placeholder
                     if (S.pinned || (S._ref && S._ref.share)) continue;
-                    if (sportCount <= 1) { blockedLastSport++; break; }     // never take the last sport
                     attempts++;
                     var pick = pickActivity(ctx, bunk, sc, S.durationMin, S.startMin, S.endMin, used, null);
+                    var splitDur = 0;
+                    if (!pick) {
+                        // ★ DONOR SPLIT: the subcat's activities may ALL run shorter than
+                        //   this sport (shiur runs 20; sports 30-50) — an exact-duration
+                        //   pick can never succeed, which made weekly-due shiur structurally
+                        //   unreachable here. Try each distinct shorter configured length,
+                        //   largest first; the sport SURVIVES as a residual tile on the
+                        //   remainder of its own span (spans preserved, wall-to-wall kept),
+                        //   so this path is legal even on the bunk's last sport.
+                        var _dset = {}, _dlist = [];
+                        var _cands = [bunk.pool || [], bunk.deferred || []];
+                        for (var _ca = 0; _ca < _cands.length; _ca++) {
+                            for (var _cb = 0; _cb < _cands[_ca].length; _cb++) {
+                                var _cc = _cands[_ca][_cb];
+                                if (!_cc || !_cc.name || canon(_cc.subcategory) !== sc) continue;
+                                var _cds = (ctx.specialDurs && ctx.specialDurs(_cc.name)) || [];
+                                for (var _cd = 0; _cd < _cds.length; _cd++) {
+                                    var _dv = _cds[_cd];
+                                    if (!(_dv > 0) || _dv >= S.durationMin) continue;   // shorter only
+                                    if (S.durationMin - _dv < 10) continue;             // residual ≥ grid step
+                                    if (!_dset[_dv]) { _dset[_dv] = 1; _dlist.push(_dv); }
+                                }
+                            }
+                        }
+                        _dlist.sort(function (a, b) { return b - a; });
+                        for (var _dl = 0; _dl < _dlist.length && !pick; _dl++) {
+                            pick = pickActivity(ctx, bunk, sc, _dlist[_dl], S.startMin, S.startMin + _dlist[_dl], used, null);
+                            if (pick) splitDur = _dlist[_dl];
+                        }
+                    }
                     if (!pick) continue;
-                    // the special must be legal at that span (spacing/content rules)
+                    // A FULL conversion consumes the sport — never take the bunk's last one.
+                    // A SPLIT leaves the residual sport in place, so the guard doesn't apply.
+                    if (!splitDur && sportCount <= 1) { blockedLastSport++; continue; }
+                    var effEnd = splitDur ? (S.startMin + splitDur) : S.endMin;
+                    // the special must be legal at its span (spacing/content rules) — and for a
+                    // split, the residual sport must be legal at ITS span too.
                     if (gate) {
                         var tmpl = [];
                         for (var ti = 0; ti < tiles.length; ti++) {
@@ -1167,27 +1215,49 @@
                         }
                         var okG = true;
                         try {
-                            okG = gate({ type: 'special', event: pick.name, _assignedSpecial: pick.name, _specialLocation: pick.name, startMin: S.startMin, endMin: S.endMin }, tmpl);
+                            okG = gate({ type: 'special', event: pick.name, _assignedSpecial: pick.name, _specialLocation: pick.name, startMin: S.startMin, endMin: effEnd }, tmpl);
                         } catch (_eG) { okG = true; }
+                        if (okG && splitDur) {
+                            var _tmplR = tmpl.concat([{ type: 'special', event: pick.name, _assignedSpecial: pick.name, _specialLocation: pick.name, startMin: S.startMin, endMin: effEnd }]);
+                            try { okG = gate({ type: 'sport', event: S.name || 'Sport', startMin: effEnd, endMin: S.endMin }, _tmplR); } catch (_eG2) { okG = true; }
+                        }
                         if (!okG) continue;
                     }
-                    var snap = { kind: S.kind, name: S.name, generic: S.generic, subcat: S.subcat, _ref: S._ref, _concrete: S._concrete, _origin: S._origin };
+                    var snap = { kind: S.kind, name: S.name, generic: S.generic, subcat: S.subcat, _ref: S._ref, _concrete: S._concrete, _origin: S._origin, startMin: S.startMin, endMin: S.endMin, durationMin: S.durationMin };
                     try { if (ctx.seatRelease) ctx.seatRelease(S, grade, S.startMin, S.endMin); } catch (_e1) {}
+                    var resid = null;
+                    if (splitDur) {
+                        resid = { kind: 'sport', subcat: null, name: snap.name, generic: true, _concrete: null, startMin: effEnd, endMin: snap.endMin, durationMin: snap.endMin - effEnd, _ref: snap._ref, _origin: 'floor-split-residual' };
+                    }
                     S.kind = 'special'; S.name = pick.name; S._concrete = pick.name; S.generic = false;
-                    S.subcat = canon(pick.subcategory); S._fillLoc = pick.location || null; S._origin = 'floor-from-sport';
+                    S.subcat = canon(pick.subcategory); S._fillLoc = pick.location || null;
+                    S._origin = splitDur ? 'floor-from-sport-split' : 'floor-from-sport';
+                    if (splitDur) { S.endMin = effEnd; S.durationMin = splitDur; }
                     var seatOk = true;
-                    try { if (ctx.seatGate) seatOk = ctx.seatGate(S, grade, S.startMin, S.endMin); } catch (_e2) { seatOk = false; }
+                    try {
+                        if (ctx.seatGate) {
+                            seatOk = ctx.seatGate(S, grade, S.startMin, S.endMin);
+                            if (seatOk && resid) seatOk = ctx.seatGate(resid, grade, resid.startMin, resid.endMin);
+                        }
+                    } catch (_e2) { seatOk = false; }
                     if (!seatOk) {
                         S.kind = snap.kind; S.name = snap.name; S.generic = snap.generic;
                         S.subcat = snap.subcat; S._ref = snap._ref; S._concrete = snap._concrete; S._origin = snap._origin;
+                        S.startMin = snap.startMin; S.endMin = snap.endMin; S.durationMin = snap.durationMin;
                         try { if (ctx.seatCommit) ctx.seatCommit(S, grade, S.startMin, S.endMin); } catch (_e3) {}
                         continue;
                     }
-                    try { if (ctx.seatCommit) ctx.seatCommit(S, grade, S.startMin, S.endMin); } catch (_e4) {}
+                    try {
+                        if (ctx.seatCommit) {
+                            ctx.seatCommit(S, grade, S.startMin, S.endMin);
+                            if (resid) ctx.seatCommit(resid, grade, resid.startMin, resid.endMin);
+                        }
+                    } catch (_e4) {}
                     try { ctx.recordUse(pick, grade, S.startMin, S.endMin); } catch (_e5) {}
+                    if (resid) tiles.push(resid);
                     used[String(pick.name).toLowerCase()] = 1;
                     have[sc] = (have[sc] || 0) + 1;
-                    sportCount--;
+                    if (!splitDur) sportCount--;                            // a split keeps the sport alive
                     converted++;
                     if (ctx.onConvert) { try { ctx.onConvert(); } catch (_e6) {} }
                     break;   // this subcat is satisfied for this bunk

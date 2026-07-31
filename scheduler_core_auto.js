@@ -18510,6 +18510,11 @@
                     // a bunk→base-day map only for specials with a per-week minFrequency; the floor block falls
                     // back to the hash when a bunk has no entry. Byte-identical when no weekly-quota special.
                     var _wqDueDay = Object.create(null);   // subcatKey -> { bunkName -> baseDayIndex (0..D-1) }
+                    // bunkName -> { subcatKey: 1 } — the PER-BUNK weekly-due floors the demand build
+                    // discovers (a weekly-due '<=' subcat is a de-facto floor of 1 for that bunk on
+                    // its due day, invisible to the static per-grade need map). Consumed by
+                    // fillFloorFromSport; keyed per bunk so NOT-due bunks never drain the scarce seat.
+                    var _glWeeklyDueByBunk = null;
                     try {
                         var _rrOn = (typeof window === 'undefined') || (window.__seatRoundRobin !== false);
                         var _rrU = (typeof window !== 'undefined') && window.SchedulerCoreUtils;
@@ -18789,6 +18794,15 @@
                                         var forceNow = need >= remaining; // now-or-never hard guarantee (redundant safety w/ persist)
                                         if (dueToday || forceNow) {
                                             subFloor[key] = Math.max(subFloor[key] || 0, 1);
+                                            // ★ Stash the PER-BUNK weekly-due floor for fillFloorFromSport.
+                                            //   The static _ffsNeed map is per-GRADE and skips '<=' subcats
+                                            //   entirely — but a weekly-must subcat (shiur, ceiling <=1) is a
+                                            //   de-facto floor of 1 for THIS bunk on its due day. Keyed per
+                                            //   bunk, never per grade: a grade-wide entry would let NOT-due
+                                            //   bunks drain the scarce seat ahead of due ones and distort the
+                                            //   seat round-robin pacing.
+                                            if (!_glWeeklyDueByBunk) _glWeeklyDueByBunk = {};
+                                            (_glWeeklyDueByBunk[bunk] = _glWeeklyDueByBunk[bunk] || {})[key] = 1;
                                             try { log('[GENERIC-WEEKLY] ' + grade + ' ' + bunk + ' → ' + key + ' floor=1 (wk ' + wtd + '/' + M + (X !== Infinity ? ' max' + X : '') + ', day ' + e + '/' + D + ', ' + (forceNow ? 'deadline' : 'paced') + ')'); } catch (_e) {}
                                         }
                                     });
@@ -20060,7 +20074,7 @@
                                         // `deferred` = cohort-deferred candidates (fill-if-possible last resort).
                                         //   restructure borrows from these only when the primary pool cannot fill
                                         //   a relocated tile — same contract GENERIC-FILL already uses.
-                                        _stagBunks.push({ grade: grade, tiles: res.tiles, pool: pool, deferred: (sl && sl.specials && sl.specials.cohortDeferred) || [] });
+                                        _stagBunks.push({ name: bunk, grade: grade, tiles: res.tiles, pool: pool, deferred: (sl && sl.specials && sl.specials.cohortDeferred) || [] });
                                     });
                                     var _stagCtx = {
                                         bunks: _stagBunks,
@@ -20208,6 +20222,10 @@
                                             var _ffsCtx = {};
                                             Object.keys(_stagCtx).forEach(function (k) { _ffsCtx[k] = _stagCtx[k]; });
                                             _ffsCtx.need = _ffsNeed;
+                                            // PER-BUNK weekly-due floors (e.g. shiur '<=1' on its due day) —
+                                            //   the demand build stashed them; keyed by bunk so only DUE bunks
+                                            //   may convert a sport into the scarce weekly subcat.
+                                            _ffsCtx.needByBunk = (typeof _glWeeklyDueByBunk !== 'undefined' && _glWeeklyDueByBunk) || null;
                                             _ffsCtx.gate = _glGate;
                                             _ffsCtx.onConvert = function () { _glFill.floorFromSport = (_glFill.floorFromSport || 0) + 1; };
                                             var _ffsRes = window.GLStagger.fillFloorFromSport(_ffsCtx);
