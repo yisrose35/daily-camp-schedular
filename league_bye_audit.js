@@ -42,7 +42,7 @@
     // measures or shows — two rounds of this investigation were spent deciding
     // whether the browser was running the new code or a cached copy, which the
     // header now answers on sight. Keep in step with the ?v= on the script tag.
-    A.VERSION = '2026-07-31.5';
+    A.VERSION = '2026-07-31.6';
 
     // ── utils ────────────────────────────────────────────────────────────────
     function norm(s) { return String(s == null ? '' : s).toLowerCase().trim(); }
@@ -414,14 +414,23 @@
                     }
                 });
 
-                // Benched with nothing to do — only worth saying when the league
-                // has the Bye Activity feature switched on.
-                if (league.byeActivity && league.byeActivity.enabled) {
-                    var bare = teams.filter(function (t) { return byTeam[t].noActivity > 0; });
-                    if (bare.length) {
+                // Benched with nothing to do. Two different situations, and the
+                // report used to stay silent on the second — which reads as "all
+                // fine" when the truth is "the feature is off". Say both.
+                var bare = teams.filter(function (t) { return byTeam[t].noActivity > 0; });
+                if (bare.length) {
+                    var cfg = league.byeActivity || {};
+                    var pool = (cfg.activities || []).length + Object.keys(cfg.teamActivities || {}).length;
+                    if (cfg.enabled && pool) {
                         findings.push({ level: 'warn', code: 'bye-no-activity',
                             message: 'Bye Activity is on, but ' + bare.join(', ')
                                 + ' got a plain bye with nothing scheduled — check the activity list and any per-team pin.' });
+                    } else {
+                        findings.push({ level: 'info', code: 'bye-activity-off',
+                            message: bare.join(', ') + ' got a bare bye with nothing to do, because Bye Activity is '
+                                + (cfg.enabled ? 'on but has no activities picked' : 'switched off')
+                                + ' for this league. Turn it on under the league\'s Advanced Settings and pick an activity, '
+                                + 'then re-generate those days.' });
                     }
                 }
             }

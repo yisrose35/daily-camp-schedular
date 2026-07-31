@@ -177,10 +177,30 @@ test('warns when Bye Activity is on but a benched team got nothing', () => {
     const spec = { '2026-07-01': [period('Game 1', [['T1', 'T2'], ['T3', 'T4']], ['T5'])] };
     const on = run(spec, { byeActivity: { enabled: true, activities: ['Pool'] } });
     assert.ok(codes(on).includes('bye-no-activity'), JSON.stringify(on.findings));
+    assert.ok(!codes(on).includes('bye-activity-off'), 'not both at once');
+});
 
-    // With the feature off, a plain bye is simply how it works — no noise.
-    const off = run(spec, {});
-    assert.ok(!codes(off).includes('bye-no-activity'), JSON.stringify(off.findings));
+test('says so plainly when a bare bye is because the feature is off', () => {
+    // Silence here cost a debugging round: the tiles said "Team 29 — Bye", the
+    // report said nothing, and the config being off looked like a regression.
+    const spec = { '2026-07-01': [period('Game 1', [['T1', 'T2'], ['T3', 'T4']], ['T5'])] };
+
+    const off = run(spec, {});                       // no byeActivity block at all
+    var f = find(off, 'bye-activity-off');
+    assert.ok(f, JSON.stringify(off.findings));
+    assert.equal(f.level, 'info');
+    assert.match(f.message, /T5 got a bare bye/);
+    assert.match(f.message, /switched off/);
+    assert.ok(!codes(off).includes('bye-no-activity'), 'that warning is for a DIFFERENT problem');
+
+    // Enabled but with nothing picked reads differently, and just as plainly.
+    const empty = run(spec, { byeActivity: { enabled: true, activities: [], teamActivities: {} } });
+    assert.match(find(empty, 'bye-activity-off').message, /on but has no activities picked/);
+
+    // A bye that DID get an activity says nothing at all.
+    const good = { '2026-07-01': [period('Game 1', [['T1', 'T2'], ['T3', 'T4']], [['T5', 'Pool']])] };
+    const okRun = run(good, { byeActivity: { enabled: true, activities: ['Pool'] } });
+    assert.ok(!codes(okRun).includes('bye-activity-off'), JSON.stringify(okRun.findings));
 });
 
 // ── chinuch rooms ────────────────────────────────────────────────────────────
