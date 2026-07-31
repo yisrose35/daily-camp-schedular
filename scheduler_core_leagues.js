@@ -1457,6 +1457,75 @@
         };
     }
 
+    // =========================================================================
+    // ★ BYE FAIRNESS LEDGER (LG-14) — who has already sat out, and how often
+    // =========================================================================
+    // An odd team count (or fewer fields than pairings) benches somebody every
+    // round, and NOTHING used to track who. Both pairing choosers score a bye
+    // pair as zero, so at every score tie the deterministic enumeration handed
+    // the bye to the same team — the last one in the roster — day after day.
+    // The old "self-correcting" claim (a benched team's meeting counts stay low,
+    // which lifts its pair weights) only bites once the counts actually diverge;
+    // at season start, and any time the alternatives tie, it never fires.
+    //
+    // This counts, per team, how many league PERIODS it has sat out:
+    //   periods on a date = that date's distinct game labels ("Game 3");
+    //   a team appearing in none of a period's games sat that period out.
+    // Chinuch sessions are subtracted — a team pulled for chinuch was not
+    // benched, and chinuch has its own rotation ledger. Pre-epoch (last half)
+    // days are archive and never count, matching every other fairness ledger.
+    //
+    // Derived from the gameLog the engine already persists, so it needs no new
+    // storage, survives multi-device merges, and rolls back with a deleted day
+    // for free. Today's earlier periods count too (each period is logged before
+    // the next is paired), so byes rotate WITHIN a multi-game day as well.
+    function makeByeLedger(leagueName, teams, history) {
+        const counts = {};
+        (teams || []).forEach(function (t) { counts[t] = 0; });
+        try {
+            const gl = (history && history.gameLog && history.gameLog[leagueName]) || {};
+            const cbd = (history && history.chinuchByDate && history.chinuchByDate[leagueName]) || {};
+            const ep = _effectiveEpoch(history);
+            Object.keys(gl).forEach(function (d) {
+                if (ep && d < ep) return;                    // last half is archive
+                const entries = gl[d] || [];
+                if (!entries.length) return;
+                const labels = new Set();
+                entries.forEach(function (e) { if (e && e.g) labels.add(e.g); });
+                const periods = Math.max(labels.size, 1);
+                const atChinuch = new Set(cbd[d] || []);
+                Object.keys(counts).forEach(function (t) {
+                    let played = 0;
+                    entries.forEach(function (e) { if (e && (e.t1 === t || e.t2 === t)) played++; });
+                    const sat = periods - played - (atChinuch.has(t) ? 1 : 0);
+                    if (sat > 0) counts[t] += sat;
+                });
+            });
+        } catch (_) {}
+        let min = Infinity;
+        Object.keys(counts).forEach(function (t) { if (counts[t] < min) min = counts[t]; });
+        if (!Number.isFinite(min)) min = 0;
+        return {
+            count: function (t) { return counts[t] || 0; },
+            // How far ahead of the least-benched team this one is. 0 for the
+            // team(s) whose turn it is. Clamped so a long-idle team can never
+            // outweigh the same-day / adjacent-day rematch guards.
+            excess: function (t) { return Math.min(Math.max((counts[t] || 0) - min, 0), 4); },
+            counts: counts
+        };
+    }
+    Leagues.makeByeLedger = makeByeLedger;   // tests
+
+    // Weight of one step of bye imbalance. Sits ABOVE opponent freshness
+    // (1000/meeting in matchup mode) and sport freshness (300/team-slot) — a
+    // team that has already sat out plays even if that means a rematch, because
+    // playing at all matters more than who you play — and BELOW the adjacent-day
+    // (400000) and same-day (10000000) rematch guards, which stay absolute.
+    // Killswitch: window.__leagueByeFairness = false.
+    function _byeFairnessWeight() {
+        return (typeof window !== 'undefined' && window.__leagueByeFairness === false) ? 0 : 50000;
+    }
+
     // Pair recency in [0,1): 0 = never met, higher = met more recently. Shared
     // by the pairing optimizers — once meeting counts tie (unavoidable in a
     // small league), the pair that met LONGEST ago should meet again first, so
@@ -1516,17 +1585,26 @@
             //   so needs RESET once a team has played everything.
             const _svAvailSports = Array.from(new Set(availablePool.map(function (o) { return o.sport; })));
             const cycles = makeSportCycles(leagueName, activeTeams, _svAvailSports, history, dayId);
+            // ★ LG-14: whose turn it is to sit out (see makeByeLedger).
+            const byeLedger = makeByeLedger(leagueName, activeTeams, history);
+            const svByeOn = _byeFairnessWeight() > 0;
 
             // Score each matching: fresh = how many team-slots can receive a
             // sport that team still needs this cycle (per pair, the best single
             // option: new-to-both = 2, new-to-one = 1). Maximize fresh; tie-break
             // on fewest prior meetings (prefer fresh opponents). Cross-pair field
             // contention is ignored here — the assigner resolves it.
-            let best = null, bestFresh = -1, bestMeet = Infinity;
+            let best = null, bestFresh = -1, bestMeet = Infinity, bestBye = Infinity;
             for (const m of matchings) {
-                let fresh = 0, meet = 0;
+                let fresh = 0, meet = 0, byeExcess = 0;
                 for (const pair of m) {
-                    if (pair[0] === '__BYE__' || pair[1] === '__BYE__') continue;
+                    if (pair[0] === '__BYE__' || pair[1] === '__BYE__') {
+                        // ★ LG-14: benching a team that has already sat out more
+                        //   than the others is the worst thing this matching can
+                        //   do — it outranks sport coverage below.
+                        if (svByeOn) byeExcess += byeLedger.excess(pair[0] === '__BYE__' ? pair[1] : pair[0]);
+                        continue;
+                    }
                     meet += getMatchupCount(leagueName, pair[0], pair[1], history);
                     let bestPair = 0;
                     for (const o of availablePool) {
@@ -1535,8 +1613,9 @@
                     }
                     fresh += bestPair;
                 }
-                if (fresh > bestFresh || (fresh === bestFresh && meet < bestMeet)) {
-                    best = m; bestFresh = fresh; bestMeet = meet;
+                if (byeExcess < bestBye
+                    || (byeExcess === bestBye && (fresh > bestFresh || (fresh === bestFresh && meet < bestMeet)))) {
+                    best = m; bestFresh = fresh; bestMeet = meet; bestBye = byeExcess;
                 }
             }
             if (!best) return fallbackMatchups;
@@ -1608,6 +1687,11 @@
             //   and the next cycle begins, instead of the sport term going dead.
             const cycles = makeSportCycles(leagueName, teams, availSports, history, dayId);
             const recency = makePairRecency(leagueName, history, dayId);
+            // ★ LG-14 BYE FAIRNESS: with an odd team count somebody is benched
+            //   every round. Without this the bye pair scored zero, so at any
+            //   score tie the enumeration handed it to the same team forever.
+            const byeLedger = makeByeLedger(leagueName, teams, history);
+            const W_BYE = _byeFairnessWeight();
 
             function sportFresh(a, b) {   // 0,1,2 — best fresh-sport count for the pair today
                 let best = 0;
@@ -1783,7 +1867,13 @@
                 for (const m of matchings) {
                     let totalW = 0, totalMet = 0;
                     for (const p of m) {
-                        if (p[0] === '__BYE__' || p[1] === '__BYE__') continue;
+                        if (p[0] === '__BYE__' || p[1] === '__BYE__') {
+                            // ★ LG-14: the bye pair is no longer free — it costs
+                            //   the benched team's distance from whoever has sat
+                            //   out least, so the bye moves around the league.
+                            totalW -= byeLedger.excess(p[0] === '__BYE__' ? p[1] : p[0]) * W_BYE;
+                            continue;
+                        }
                         totalW += w(p[0], p[1]);
                         totalMet += met(p[0], p[1]);
                     }
@@ -1800,10 +1890,24 @@
             } else {
                 // ★ LARGE LEAGUES (>12 teams): greedy max-weight matching + 2-opt
                 //   refinement — near-optimal in O(n²), scales to any size.
+                // ★ LG-14: greedy leaves whoever is left over on a bye, which was
+                //   effectively "the worst-weighted team, every round". Pick the
+                //   bye up front instead — the team that has sat out LEAST, so the
+                //   count evens out — and pair the rest.
+                let pool = teams;
+                if (W_BYE > 0 && teams.length % 2 === 1) {
+                    const sitter = teams.slice().sort(function (a, b) {
+                        return (byeLedger.count(a) - byeLedger.count(b))
+                            || (teams.indexOf(a) - teams.indexOf(b));
+                    })[0];
+                    pool = teams.filter(function (t) { return t !== sitter; });
+                    console.log('   🪑 [ByeFairness] "' + leagueName + '": ' + sitter
+                        + ' sits this period (byes so far: ' + byeLedger.count(sitter) + ')');
+                }
                 const pairs = [];
-                for (let i = 0; i < teams.length; i++) {
-                    for (let j = i + 1; j < teams.length; j++) {
-                        const a = teams[i], b = teams[j];
+                for (let i = 0; i < pool.length; i++) {
+                    for (let j = i + 1; j < pool.length; j++) {
+                        const a = pool[i], b = pool[j];
                         pairs.push({ a, b, met: met(a, b), w: pairWeight(a, b) });
                     }
                 }
@@ -2195,7 +2299,8 @@
                             + ' instead — this is the league\'s Bye Activity setting working as configured, not a field shortage.')
                         : (odd
                             ? ('This league has an odd number of teams playing this period (' + teams.length
-                                + '), so one team rotates to a bye each round — this is not a field shortage. '
+                                + '), so one team sits out each round — this is not a field shortage. The bye goes to '
+                                + 'whichever team has sat out least, so it moves around the league. '
                                 + 'Add or remove a team for full pairings, or set a Bye Activity so the benched team gets something to do.')
                             : 'This team was not paired into a game this period, so it is on a bye.')
                 });
