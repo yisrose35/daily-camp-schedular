@@ -20130,7 +20130,21 @@
                                     // REAL special that still has a seat (aware of what fill already took) before any
                                     // dead generic placeholder. capFits keeps sharing/cap strict; recordUse threads
                                     // the cross-bunk usage so two bunks never over-share one activity.
-                                    var _absRes = window.GLStagger.absorbUnfilledToSport({ bunks: _absBunks, gate: _glGate, sportLabel: 'Sport', specialLabel: 'Special: Uncategorized', maxMergeMin: 40, capFits: _glCapFits, recordUse: _glRecordUse, specialDurs: _glSpecialDurs, canon: _glCanon, canAbsorb: _glMayRepurpose, probeReorder: (window.__reorderProbe !== false), splitFill: (window.__absorbSplit !== false), allowRepeatFill: (typeof window !== 'undefined' && window.__sportlessRepeatFill === true) });
+                                    // Per-grade legal sport MAXIMUM from the real layer config — lets absorb
+                                    //   try one full-length sport (e.g. 50min) on a 41-50min run instead of
+                                    //   chopping it into 40 + an unfillable tail. Never invents a length: a
+                                    //   grade with no sport layer (or max 40) keeps today's behavior exactly.
+                                    var _absSportMax = {};
+                                    try {
+                                        Object.keys(layersByGrade || {}).forEach(function (_smG) {
+                                            (layersByGrade[_smG] || []).forEach(function (_smL) {
+                                                if (!_smL || String(_smL.type || '').toLowerCase() !== 'sport') return;
+                                                var _smMx = Math.max(_smL.durationMax || 0, _smL.durationMin || 0);
+                                                if (_smMx > (_absSportMax[_smG] || 0)) _absSportMax[_smG] = _smMx;
+                                            });
+                                        });
+                                    } catch (_eSm) { _absSportMax = {}; }
+                                    var _absRes = window.GLStagger.absorbUnfilledToSport({ bunks: _absBunks, gate: _glGate, sportLabel: 'Sport', specialLabel: 'Special: Uncategorized', maxMergeMin: 40, sportMaxByGrade: _absSportMax, capFits: _glCapFits, recordUse: _glRecordUse, specialDurs: _glSpecialDurs, canon: _glCanon, canAbsorb: _glMayRepurpose, probeReorder: (window.__reorderProbe !== false), splitFill: (window.__absorbSplit !== false), allowRepeatFill: (typeof window !== 'undefined' && window.__sportlessRepeatFill === true) });
                                     if (_absRes) { _glFill.absorbed = _absRes.toSport || 0; _glFill.absorbBlocked = _absRes.blockedBySpacing || 0; _glFill.absorbFilled = _absRes.toFilledSpecial || 0; _glFill.absorbSplit = _absRes.toSplitFilled || 0; _glFill.absorbRepeat = _absRes.toRepeatFilled || 0; _glFill.filled = (_glFill.filled || 0) + (_absRes.toFilledSpecial || 0) + (_absRes.toSplitFilled || 0) + (_absRes.toRepeatFilled || 0); }
                                     if (_absRes && (_absRes.bornDeadSkipped || 0) > 0) { log('[GENERIC-ABSORB] ' + _absRes.bornDeadSkipped + ' stuck block(s) left as honest OPEN time instead of a born-dead "Special: Uncategorized" — no uncategorized activity runs that length (the placeholder could never have filled; the capacity advice now names the real shortage)'); }
                                     if (_absRes && (_absRes.toRepeatFilled || 0) > 0) { log('[GENERIC-ABSORB-REPEAT] ' + _absRes.toRepeatFilled + ' open block(s) filled with a REPEAT special (sportless camp, window.__sportlessRepeatFill on) — same-day repeats expected'); }

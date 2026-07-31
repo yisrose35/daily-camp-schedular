@@ -276,7 +276,7 @@
     // first (fewer/bigger tiles, human-like). Returns the committed sub-tiles (recordUse done +
     // `used` marked) or null if it can't FULLY cover the block (then it stays dead — never worse).
     // Pieces are strictly SHORTER than the block (the full length already failed), so ≥2 pieces.
-    function _absSplitFill(ctx, bunk, s, end, used, canon) {
+    function _absSplitFill(ctx, bunk, s, end, used, canon, allowPartial) {
         var MENU = [30, 20, 10];          // sub-tile lengths (standard 10-min grid; pickAnyFillable filters by what exists)
         var span = end - s;
         var picks = [];
@@ -297,7 +297,29 @@
             return false;
         }
         var ok = rec(s);
-        if (!ok || picks.length < 2) {
+        // ★ PARTIAL PREFIX (allowPartial): full cover failed, but a lone piece is
+        //   still strictly better than the whole block dead — shiur@20 + 20-min-dead
+        //   beats 40-min-dead ("never worse" is this pass's own doctrine, and the
+        //   old all-or-nothing rule violated it). Greedy from the block START,
+        //   largest piece first at each position, so runs are deterministic. The
+        //   caller advances `cur` to the last piece's end; the residue re-enters
+        //   the block loop and, if it dies, gets its born-dead marking at its own
+        //   (true, shorter) length — the seat audit stays honest.
+        if (!ok && allowPartial) {
+            var _pos = s, _mi2 = 0;
+            while (_pos < end && _mi2 < MENU.length) {
+                var _d2 = MENU[_mi2];
+                if (_d2 >= span || _pos + _d2 > end) { _mi2++; continue; }
+                var _pk2 = pickAnyFillable(ctx, bunk, _d2, _pos, _pos + _d2, used);
+                if (_pk2) {
+                    used[String(_pk2.name).toLowerCase()] = 1;
+                    picks.push({ pick: _pk2, s: _pos, e: _pos + _d2, dur: _d2 });
+                    _pos += _d2; _mi2 = 0;
+                } else { _mi2++; }
+            }
+            ok = picks.length >= 1;
+        }
+        if (!ok || picks.length < (allowPartial ? 1 : 2)) {
             for (var p = 0; p < picks.length; p++) delete used[String(picks[p].pick.name).toLowerCase()];
             return null;
         }
@@ -397,6 +419,23 @@
                 // fill already took); else a generic placeholder (genuine last resort).
                 for (var cur = runStart; cur < runEnd; ) {
                     var blkEnd = Math.min(cur + maxMerge, runEnd);
+                    // ★ FULL-LENGTH SPORT FIRST: the fixed ≤maxMerge chop meant a 50-min run
+                    //   was always tried as 40+10 — and the 10-min tail was unfillable BY
+                    //   CONSTRUCTION (the just-placed 40-min sport enters the template, so the
+                    //   tail's own sport test always fails the after-sport cooldown at gap 0).
+                    //   When the whole remaining run fits the grade's LEGAL sport range
+                    //   (ctx.sportMaxByGrade, from the real layer config — never invented),
+                    //   gate-test one sport at full length first; fall back to the chop only
+                    //   if the gate refuses. Live: two 50-min holes existed where a single
+                    //   50-min sport was config-legal (sports 30-50) and spacing-legal.
+                    var _rem = runEnd - cur;
+                    var _sportMax = (ctx && ctx.sportMaxByGrade && bunk.grade != null && ctx.sportMaxByGrade[bunk.grade]) || 0;
+                    if (!bunkNoSport && gate && _rem > maxMerge && _sportMax > maxMerge && _rem <= _sportMax) {
+                        var _fullBlk = { type: 'sport', event: label, startMin: cur, endMin: runEnd };
+                        var _fullOk = false;
+                        try { _fullOk = gate(_fullBlk, tmpl); } catch (_eFl) { _fullOk = false; }
+                        if (_fullOk) blkEnd = runEnd;
+                    }
                     var dur = blkEnd - cur;
                     var sportBlk = { type: 'sport', event: label, startMin: cur, endMin: blkEnd };
                     var allow = true;
@@ -443,7 +482,17 @@
                         // smaller specials for some bunks" fix). If it fully covers, emit those tiles
                         // and skip the dead drop entirely.
                         if (canSplit) {
+                            // Cascade, strongest cover first:
+                            //   1. exact cover of THIS block (original behavior);
+                            //   2. cover of the WHOLE remaining run — pieces may cross the
+                            //      maxMerge boundary the chop imposed (a 50-min run as 30+20
+                            //      was structurally impossible before: splits were per-block);
+                            //   3. PARTIAL prefix of this block — one piece placed beats the
+                            //      whole block dead; the residue re-enters the loop and keeps
+                            //      its own honest born-dead marking if nothing fits it.
                             var _splitTiles = _absSplitFill(ctx, bunk, cur, blkEnd, used, canon);
+                            if (!_splitTiles && runEnd > blkEnd) _splitTiles = _absSplitFill(ctx, bunk, cur, runEnd, used, canon);
+                            if (!_splitTiles) _splitTiles = _absSplitFill(ctx, bunk, cur, blkEnd, used, canon, true);
                             if (_splitTiles && _splitTiles.length) {
                                 for (var _si = 0; _si < _splitTiles.length; _si++) {
                                     var _stl = _splitTiles[_si];
@@ -452,8 +501,10 @@
                                     tmplMeta.push(false);
                                 }
                                 toSplitFilled += _splitTiles.length;
-                                cur = blkEnd;
-                                continue;   // covered by splits → no dead tile for this block
+                                // advance to the last piece's end — beyond blkEnd for a
+                                // whole-run cover, short of it for a partial prefix.
+                                cur = _splitTiles[_splitTiles.length - 1].endMin;
+                                continue;   // covered (fully or partially) → no dead tile HERE
                             }
                         }
                         // SPORTLESS REPEAT-FILL: a sports-free camp with few distinct specials
