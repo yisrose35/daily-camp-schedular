@@ -2840,7 +2840,10 @@ function renderPalette() {
       html += '<div class="da-tile-divider"></div>';
       html += '<div class="da-tile-label">General Activities</div>';
       _gaItems.forEach(ga => {
-        html += `<div class="da-tile ms-daw-tile" draggable="true" data-type="custom" data-ga-name="${_escHtml(ga.name)}" data-ga-facility="${_escHtml(ga.facility)}" data-ga-quicktype="${_escHtml(ga.quickType || 'custom')}" title="${_escHtml(ga.name + ' @ ' + ga.facility)}"><span class="da-tile-dot ms-daw-tile-dot" style="background:#d97706;"></span><span class="da-tile-name ms-daw-tile-name">${_escHtml(ga.name)}</span></div>`;
+        // ★ Each general activity carries its own colour (facilities.js), so the
+        //   list reads apart instead of being a wall of identical amber dots.
+        const _gc = window.getGeneralActivityColor?.(ga.name);
+        html += `<div class="da-tile ms-daw-tile" draggable="true" data-type="custom" data-ga-name="${_escHtml(ga.name)}" data-ga-facility="${_escHtml(ga.facility)}" data-ga-quicktype="${_escHtml(ga.quickType || 'custom')}" title="${_escHtml(ga.name + ' @ ' + ga.facility)}"><span class="da-tile-dot ms-daw-tile-dot" style="background:${_gc ? _gc.dot : '#d97706'};"></span><span class="da-tile-name ms-daw-tile-name">${_escHtml(ga.name)}</span></div>`;
       });
     }
 
@@ -2886,14 +2889,20 @@ function renderPalette() {
   if (_gaItemsM.length) {
     categories.push({
       label: 'General Activities',
-      tiles: _gaItemsM.map(ga => ({
-        type: 'custom',
-        name: ga.name,
-        style: 'background:#fef3c7;color:#92400e;',
-        description: 'Pinned general activity at ' + ga.facility + '. Drop on a division and set the times.',
-        gaName: ga.name,
-        gaFacility: ga.facility
-      }))
+      // ★ Each general activity carries its own colour (facilities.js). The
+      //   palette derives the tile's dot from `background:`, so setting the
+      //   style here colours both the swatch and the tile.
+      tiles: _gaItemsM.map(ga => {
+        const _gc = window.getGeneralActivityColor?.(ga.name);
+        return {
+          type: 'custom',
+          name: ga.name,
+          style: _gc ? `background:${_gc.bg};color:${_gc.text};` : 'background:#fef3c7;color:#92400e;',
+          description: 'Pinned general activity at ' + ga.facility + '. Drop on a division and set the times.',
+          gaName: ga.name,
+          gaFacility: ga.facility
+        };
+      })
     });
   }
 
@@ -3483,6 +3492,12 @@ function renderEventTile(ev, top, height, spanInfo) {
   }
   
   let style = tile ? tile.style : 'background:#d1d5db;color:#374151;';
+  // ★ A placed general activity keeps the colour of the tile it was dragged
+  //   from, instead of falling through to the generic Custom Pinned grey.
+  if (ev.type === 'pinned' || ev.type === 'custom') {
+    const _gc = window.getGeneralActivityColor?.(ev.customActivity || ev.event);
+    if (_gc) style = `background:${_gc.bg};color:${_gc.text};`;
+  }
   // ★ Guaranteed-swap Smart tiles get a distinct teal (unused by any other tile)
   //   so the mode is obvious and doesn't clash with the Split tile's purple (#c4b5fd).
   if (ev.type === 'smart' && ev.smartData && ev.smartData.guaranteeSwap) {
@@ -7288,6 +7303,11 @@ function _boGetTileStyle(ev) {
     else if (ev.event === 'Sports Slot') tile = TILES.find(t => t.type === 'sports');
     else if (ev.event === 'Special Activity') tile = TILES.find(t => t.type === 'special');
     else tile = TILES.find(t => t.type === 'custom');
+  }
+  // ★ Bunk-override rows show general activities in their own colour too.
+  if (ev.type === 'pinned' || ev.type === 'custom') {
+    const _gc = window.getGeneralActivityColor?.(ev.customActivity || ev.event);
+    if (_gc) return `background:${_gc.bg};color:${_gc.text};`;
   }
   return tile ? tile.style : 'background:#d1d5db;color:#374151;';
 }
