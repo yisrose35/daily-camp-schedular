@@ -17,6 +17,12 @@
 //            behavior, so the fix can be turned off in the field.
 //   TEST 6 — a team pulled for chinuch is not treated as having been benched,
 //            so chinuch rotation and bye rotation don't fight each other.
+//   TEST 7 — the ledger reads the SAVED TILES first, so a day whose chinuch
+//            attendance never reached history cannot make learning teams look
+//            benched (observed live: history claimed 19 byes where the grid
+//            showed 6, and the bye went to the wrong team for a week).
+//   TEST 8 — the day being regenerated ignores its own stale tiles, so a regen
+//            does not simply repeat the bye it is replacing.
 // =============================================================================
 
 'use strict';
@@ -290,6 +296,67 @@ function spread(tally) {
     assert.ok(benched.length >= 3,
         'the bye moved around even with chinuch running: ' + JSON.stringify(tally));
     console.log('✅ TEST 6 — chinuch running: the bye still rotates ' + JSON.stringify(tally));
+}
+
+// ---- TEST 7: the ledger reads the saved tiles, not just the arithmetic ------
+{
+    // Observed live: a 7-team league where history claimed 19 byes across days
+    // the grid showed 6. Cause — the day's chinuch attendance was missing from
+    // history, so "periods − games played − chinuch" read every LEARNING team
+    // as benched, and the bye went to the wrong team for a week. The saved tile
+    // says who sat out outright, so it is now the ledger's first source.
+    const savedDays = {};
+    const put = function (date, label, lines) {
+        savedDays[date] = savedDays[date] || { leagueAssignments: { Juniors: {} } };
+        savedDays[date].leagueAssignments.Juniors[String(780 + Object.keys(savedDays[date].leagueAssignments.Juniors).length * 60)] =
+            { leagueName: LG, gameLabel: label, sport: 'Basketball', matchups: lines };
+    };
+    // T1 learned (no bye); T5 actually sat out. Two days of it.
+    put('2026-06-01', 'Game 1', ['T2 vs T3 @ Court 1 (Basketball)', 'T1 — Chinuch (Beis Medrash)', 'T4 — Chinuch (Beis Medrash)', 'T5 — Bye']);
+    put('2026-06-02', 'Game 2', ['T2 vs T4 @ Court 1 (Basketball)', 'T1 — Chinuch (Beis Medrash)', 'T3 — Chinuch (Beis Medrash)', 'T5 — Bye']);
+    const prevLoad = global.window.loadAllDailyData;
+    global.window.loadAllDailyData = () => savedDays;
+
+    // History for the same days with the chinuch attendance MISSING — the
+    // corruption. The arithmetic fallback would read T1 as benched twice.
+    const history = {
+        teamSports: {}, matchupHistory: {}, gamesPerDate: {}, offCampusCounts: {},
+        ocTripsByDate: {}, chinuchByDate: {}, _tombstones: {}, _savedAt: 1,
+        gameLog: { [LG]: {
+            '2026-06-01': [{ t1: 'T2', t2: 'T3', sport: 'Basketball', g: 'Game 1' }],
+            '2026-06-02': [{ t1: 'T2', t2: 'T4', sport: 'Basketball', g: 'Game 2' }],
+        } },
+    };
+
+    const led = Leagues.makeByeLedger(LG, TEAMS, history, '2026-06-03');
+    global.window.loadAllDailyData = prevLoad;
+
+    assert.strictEqual(led.count('T5'), 2, 'the tiles say T5 sat out twice: ' + JSON.stringify(led.counts));
+    assert.strictEqual(led.count('T1'), 0, 'T1 was LEARNING, not benched — the old arithmetic scored it 2: ' + JSON.stringify(led.counts));
+    assert.strictEqual(led.count('T3'), 0, 'T3 learned once and played once: ' + JSON.stringify(led.counts));
+    assert.strictEqual(led.excess('T5'), 2, 'T5 is two steps ahead and must play next');
+    console.log('✅ TEST 7 — the ledger reads the saved tiles, so a missing chinuch record cannot skew it');
+}
+
+// ---- TEST 8: today's own stale tiles never bias its regeneration ------------
+{
+    // The day being regenerated still has LAST run's tiles on disk. Reading
+    // them would push the engine to repeat the same bye. Today must come from
+    // the (already rolled-back) gameLog instead.
+    const today = '2026-06-05';
+    const savedDays = { [today]: { leagueAssignments: { Juniors: { '780': {
+        leagueName: LG, gameLabel: 'Game 1', sport: 'Basketball',
+        matchups: ['T1 vs T2 @ Court 1 (Basketball)', 'T3 vs T4 @ Court 2 (Soccer)', 'T5 — Bye'],
+    } } } } };
+    const prevLoad = global.window.loadAllDailyData;
+    global.window.loadAllDailyData = () => savedDays;
+    const history = { gameLog: { [LG]: {} }, chinuchByDate: {} };   // day-reset already rolled it back
+    const led = Leagues.makeByeLedger(LG, TEAMS, history, today);
+    global.window.loadAllDailyData = prevLoad;
+
+    assert.strictEqual(led.count('T5'), 0,
+        "today's stale tile must not count against T5 on a regen: " + JSON.stringify(led.counts));
+    console.log('✅ TEST 8 — the day being regenerated ignores its own stale tiles');
 }
 
 console.log('\n🎉 league_bye_fairness_sim: ALL TESTS PASSED');

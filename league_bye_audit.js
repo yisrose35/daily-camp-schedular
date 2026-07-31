@@ -82,6 +82,22 @@
             return Object.keys(byName).map(function (k) { return byName[k]; }).filter(Boolean);
         } catch (e) { return []; }
     }
+    // The tile prints "T — Chinuch (<room>)", but when a team has NO room
+    // configured the engine fills that slot with the bare word "Chinuch" as a
+    // label — see the `|| 'Chinuch'` fallbacks in scheduler_core_leagues.js.
+    // Those teams are deliberately unconstrained, so counting the placeholder
+    // as a one-seat room reported every one of them as an overflow.
+    // The league config is what the engine actually planned against, so trust
+    // it first; fall back to the tile only when it names something real.
+    A.resolveRoom = function (league, team, tileRoom) {
+        var cfg = (league && league.chinuch && league.chinuch.bunkFacilities
+            && league.chinuch.bunkFacilities[team]) || '';
+        if (cfg) return String(cfg).trim();
+        var t = String(tileRoom || '').trim();
+        if (!t || norm(t) === 'chinuch') return '';     // placeholder → no room
+        return t;
+    };
+
     function roomCapacity(league, room) {
         try {
             var SCL = (typeof window !== 'undefined') && window.SchedulerCoreLeagues;
@@ -174,7 +190,7 @@
     // are its distinct game labels, and a team in none of a period's games sat
     // it out (minus its chinuch session, which is not a bye).
     function byesFromHistory(history, leagueName, teams, from, to) {
-        var counts = {};
+        var counts = {}, byDate = {};
         teams.forEach(function (t) { counts[t] = 0; });
         var gl = (history && history.gameLog && history.gameLog[leagueName]) || {};
         var cbd = (history && history.chinuchByDate && history.chinuchByDate[leagueName]) || {};
@@ -189,14 +205,19 @@
             var periods = Math.max(Object.keys(labels).length, 1);
             var chinuch = {};
             (cbd[d] || []).forEach(function (t) { chinuch[t] = 1; });
+            var day = byDate[d] = {
+                periods: periods,
+                chinuchRecorded: (cbd[d] || []).length,
+                byes: 0, teams: []
+            };
             teams.forEach(function (t) {
                 var played = 0;
                 entries.forEach(function (e) { if (e && (e.t1 === t || e.t2 === t)) played++; });
                 var sat = periods - played - (chinuch[t] ? 1 : 0);
-                if (sat > 0) counts[t] += sat;
+                if (sat > 0) { counts[t] += sat; day.byes += sat; day.teams.push(t); }
             });
         });
-        return counts;
+        return { counts: counts, byDate: byDate };
     }
 
     // ── BUILD ────────────────────────────────────────────────────────────────
@@ -255,7 +276,16 @@
                 });
             });
 
-            var histByes = byesFromHistory(history, name, teams, opts.from, opts.to);
+            var hist = byesFromHistory(history, name, teams, opts.from, opts.to);
+            var histByes = hist.counts;
+            // Byes seen on the grid, per date — for the drift breakdown below.
+            var gridByDate = {};
+            periods.forEach(function (p) {
+                var g = gridByDate[p.date] = gridByDate[p.date] || { byes: 0, chinuch: 0, teams: [] };
+                g.byes += p.byes.length;
+                g.chinuch += p.chinuch.length;
+                p.byes.forEach(function (b) { g.teams.push(b.team); });
+            });
             var totalByes = teams.reduce(function (n, t) { return n + byTeam[t].byes; }, 0);
             var counts = teams.map(function (t) { return byTeam[t].byes; });
             var maxB = counts.length ? Math.max.apply(null, counts) : 0;
@@ -321,15 +351,49 @@
                                 + ' got a plain bye with nothing scheduled — check the activity list and any per-team pin.' });
                     }
                 }
+            }
 
-                // Saved schedules vs the engine's ledger. They drive different
-                // things (tiles vs fairness), so a mismatch is worth knowing.
+            // ── saved schedules vs the engine's ledger ──────────────────────
+            // Checked whenever the league ran at all, NOT only when the grid
+            // shows byes: "grid says 0, history says 2" is the dangerous shape,
+            // because the fairness ledger is the side that decides the next bye.
+            if (periods.length) {
                 var drift = teams.filter(function (t) { return (histByes[t] || 0) !== byTeam[t].byes; });
                 if (drift.length) {
                     findings.push({ level: 'warn', code: 'history-drift',
                         message: 'Saved schedules and the league history disagree on byes for '
                             + drift.map(function (t) { return t + ' (' + byTeam[t].byes + ' on the grid, ' + (histByes[t] || 0) + ' in history)'; }).join(', ')
                             + '. The fairness ledger reads history, so a day generated on a device that never synced can skew the next run.' });
+
+                    // WHICH days, and why. The usual cause is a date whose
+                    // chinuch attendance was never recorded: history then reads
+                    // every learning team as having sat out, inflating its bye
+                    // count and sending the next day's bye to the wrong team.
+                    var driftDays = [];
+                    Object.keys(gridByDate).sort().forEach(function (d) {
+                        var h = hist.byDate[d];
+                        var g = gridByDate[d];
+                        if (!h) { driftDays.push({ date: d, why: 'no games logged in history at all', grid: g.byes, history: null }); return; }
+                        if (h.byes === g.byes) return;
+                        driftDays.push({
+                            date: d, grid: g.byes, history: h.byes,
+                            why: (g.chinuch > 0 && !h.chinuchRecorded)
+                                ? 'chinuch attendance was not recorded for this day, so history counts all ' + g.chinuch + ' learning team(s) as byes'
+                                : 'period/game records differ'
+                        });
+                    });
+                    driftDays.forEach(function (dd) {
+                        findings.push({ level: 'warn', code: 'history-drift-day',
+                            message: '   ' + dd.date + ': grid ' + dd.grid + ' bye(s), history '
+                                + (dd.history == null ? 'none' : dd.history) + ' — ' + dd.why + '.' });
+                    });
+                    var noChinuch = driftDays.filter(function (dd) { return /chinuch attendance was not recorded/.test(dd.why); });
+                    if (noChinuch.length) {
+                        findings.push({ level: 'error', code: 'chinuch-ledger-missing',
+                            message: 'Bye fairness is running on bad numbers: ' + noChinuch.length
+                                + ' day(s) have chinuch on the grid but no chinuch record in history, so the ledger '
+                                + 'treats those learning teams as benched. Re-generate those days to rewrite the record.' });
+                    }
                 }
             }
 
@@ -338,8 +402,9 @@
             periods.forEach(function (p) {
                 var byRoom = {};
                 p.chinuch.forEach(function (c) {
-                    if (!c.room) return;
-                    (byRoom[c.room] = byRoom[c.room] || []).push(c.team);
+                    var room = A.resolveRoom(league, c.team, c.room);
+                    if (!room) return;                   // no room named → unconstrained
+                    (byRoom[room] = byRoom[room] || []).push(c.team);
                 });
                 Object.keys(byRoom).forEach(function (room) {
                     var cap = roomCapacity(league, room);

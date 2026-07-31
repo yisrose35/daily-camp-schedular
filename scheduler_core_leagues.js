@@ -911,6 +911,57 @@
         } catch (_e) { return []; }
     }
 
+    // ★ GROUND TRUTH for who sat out: the saved tiles say it outright.
+    // A day's league tile carries "T — Bye" / "T — Bye: <activity>" and
+    // "T — Chinuch (<room>)" lines verbatim, so the benched teams can be READ
+    // rather than inferred from (periods − games played − chinuch record).
+    // That inference needs gameLog and chinuchByDate to agree; when a day's
+    // chinuch attendance is missing (a device that never synced, a day written
+    // by an older build, a partial regen) every learning team reads as benched
+    // and the bye ledger sends the next bye to the wrong team.
+    // Returns { hasTiles, byes:Set, chinuch:Set } — hasTiles false when the day
+    // has no saved league tile, which is the caller's cue to fall back.
+    var _sittersCache = {};
+    function dailyDataLeagueSitters(leagueName, date) {
+        const ck = leagueName + '|' + date;
+        if (_sittersCache[ck]) return _sittersCache[ck];
+        const out = { hasTiles: false, byes: new Set(), chinuch: new Set() };
+        try {
+            const all = (typeof window !== 'undefined' && window.loadAllDailyData) ? window.loadAllDailyData() : null;
+            const la = all && all[date] && all[date].leagueAssignments;
+            if (!la) return (_sittersCache[ck] = out);
+            const _resolve = _teamResolverFor(leagueName);
+            const seen = new Set();   // a tile is stored per division — count once
+            Object.keys(la).forEach(function (dv) {
+                const map = la[dv] || {};
+                Object.keys(map).forEach(function (k) {
+                    const g = map[k];
+                    if (!g || (g.leagueName || '') !== leagueName) return;
+                    if (!Array.isArray(g.matchups)) return;
+                    out.hasTiles = true;
+                    const label = g.gameLabel || k;
+                    g.matchups.forEach(function (m) {
+                        const line = (m && typeof m === 'object')
+                            ? String(m.display || m.matchup || m.text || '')
+                            : String(m == null ? '' : m);
+                        if (/\s+vs\.?\s+/i.test(line)) return;         // a game, not a sitter
+                        const ch = line.match(/^(.+?)\s+[—–-]\s*Chinuch\b/i);
+                        const by = ch ? null : line.match(/^(.+?)\s+[—–-]\s*Bye\b/i);
+                        const hit = ch || by;
+                        if (!hit) return;
+                        let team = hit[1].trim();
+                        if (_resolve) team = _resolve(team);
+                        const key = label + '|' + (ch ? 'c' : 'b') + '|' + team;
+                        if (seen.has(key)) return;
+                        seen.add(key);
+                        (ch ? out.chinuch : out.byes).add(team);
+                    });
+                });
+            });
+        } catch (_e) {}
+        return (_sittersCache[ck] = out);
+    }
+
     function dailyDataDates() {
         try {
             const all = (typeof window !== 'undefined' && window.loadAllDailyData) ? window.loadAllDailyData() : null;
@@ -1479,15 +1530,43 @@
     // storage, survives multi-device merges, and rolls back with a deleted day
     // for free. Today's earlier periods count too (each period is logged before
     // the next is paired), so byes rotate WITHIN a multi-game day as well.
-    function makeByeLedger(leagueName, teams, history) {
+    function makeByeLedger(leagueName, teams, history, dayId) {
         const counts = {};
         (teams || []).forEach(function (t) { counts[t] = 0; });
         try {
             const gl = (history && history.gameLog && history.gameLog[leagueName]) || {};
             const cbd = (history && history.chinuchByDate && history.chinuchByDate[leagueName]) || {};
             const ep = _effectiveEpoch(history);
-            Object.keys(gl).forEach(function (d) {
+            // Every date either store knows about — a day saved to the grid but
+            // missing from the gameLog still counts, and vice versa.
+            const dates = new Set(Object.keys(gl));
+            dailyDataDates().forEach(function (d) { dates.add(d); });
+            dates.forEach(function (d) {
                 if (ep && d < ep) return;                    // last half is archive
+                // ★ GROUND TRUTH: the saved tile says who sat out. Preferred over
+                //   the arithmetic below, which silently miscounts whenever the
+                //   day's chinuch attendance is missing from history — every
+                //   learning team then reads as benched (observed live: a 7-team
+                //   league whose ledger claimed 19 byes across days the grid
+                //   showed 6, which sent the bye to the wrong team for a week).
+                // ★ NEVER the saved tiles for the day being generated: those are
+                //   the PREVIOUS run's byes, still on disk until this schedule is
+                //   saved, and reading them would bias the regen toward repeating
+                //   itself. Today goes through the arithmetic below instead, over
+                //   a gameLog the day-reset already rolled back — so an earlier
+                //   period generated in THIS run still counts, and the bye moves
+                //   within a multi-game day.
+                if (d !== dayId) {
+                    const saved = dailyDataLeagueSitters(leagueName, d);
+                    if (saved.hasTiles) {
+                        saved.byes.forEach(function (t) { if (counts[t] != null) counts[t]++; });
+                        return;
+                    }
+                }
+                // Fallback for a day with no saved tile (history-only record):
+                // periods on the date are its distinct game labels, and a team
+                // in none of a period's games sat it out, minus its chinuch
+                // session — which is not a bye.
                 const entries = gl[d] || [];
                 if (!entries.length) return;
                 const labels = new Set();
@@ -1686,7 +1765,7 @@
             const _svAvailSports = Array.from(new Set(availablePool.map(function (o) { return o.sport; })));
             const cycles = makeSportCycles(leagueName, activeTeams, _svAvailSports, history, dayId);
             // ★ LG-14: whose turn it is to sit out (see makeByeLedger).
-            const byeLedger = makeByeLedger(leagueName, activeTeams, history);
+            const byeLedger = makeByeLedger(leagueName, activeTeams, history, dayId);
             const svByeOn = _byeFairnessWeight() > 0;
 
             // Score each matching: fresh = how many team-slots can receive a
@@ -1790,7 +1869,7 @@
             // ★ LG-14 BYE FAIRNESS: with an odd team count somebody is benched
             //   every round. Without this the bye pair scored zero, so at any
             //   score tie the enumeration handed it to the same team forever.
-            const byeLedger = makeByeLedger(leagueName, teams, history);
+            const byeLedger = makeByeLedger(leagueName, teams, history, dayId);
             const W_BYE = _byeFairnessWeight();
 
             function sportFresh(a, b) {   // 0,1,2 — best fresh-sport count for the pair today
@@ -4111,6 +4190,7 @@
         // rest are normal league periods. Each team is assigned exactly one chinuch
         // period per day. Teams are shuffled daily for variety.
         window.chinuchSchedule = {};
+        _sittersCache = {};   // saved-tile reads are per run — a regen must re-read
         // ★ BYE ACTIVITY: rebuilt from scratch every run, same as chinuchSchedule —
         //   a stale plan from the previous generation must never bleed through.
         window.leagueByeSchedule = {};

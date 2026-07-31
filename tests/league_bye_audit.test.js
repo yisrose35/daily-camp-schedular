@@ -296,3 +296,79 @@ test('a team that only appears in the saved tiles is still audited', () => {
     assert.ok(L.teams.includes('Ghost'));
     assert.equal(L.byTeam.Ghost.played, 1);
 });
+
+// ── the "(Chinuch)" placeholder is not a room ────────────────────────────────
+
+test('the bare "Chinuch" label is a placeholder, not a one-seat room', () => {
+    // The engine writes "T — Chinuch (Chinuch)" when a team has NO room
+    // configured; those teams are deliberately unconstrained. Reading the
+    // placeholder as a room reported every one of them as an overflow.
+    const spec = {
+        '2026-07-01': [period('Game 1', [['T1', 'T2']], [['T5', 'Pool']],
+            [['T3', 'Chinuch'], ['T4', 'Chinuch']])],
+    };
+    const L = run(spec, { chinuch: { enabled: true, bunkFacilities: {} } });
+    assert.equal(L.roomIssues.length, 0, 'placeholder must not be capacity-checked: ' + JSON.stringify(L.roomIssues));
+    assert.ok(!codes(L).includes('room-overflow'), JSON.stringify(L.findings));
+    assert.equal(L.byTeam.T3.chinuch, 1, 'the session itself still counts');
+});
+
+test('a room the league really configured is still checked', () => {
+    const spec = {
+        '2026-07-01': [period('Game 1', [['T1', 'T2']], [['T5', 'Pool']],
+            [['T3', 'Chinuch'], ['T4', 'Chinuch']])],
+    };
+    // Same tiles, but the config says both teams belong in one real room — the
+    // config is what the engine planned against, so it wins over the label.
+    const L = run(spec, { chinuch: { enabled: true,
+        bunkFacilities: { T3: 'Beis Medrash', T4: 'Beis Medrash' },
+        roomCapacity: { 'Beis Medrash': 1 } } });
+    assert.equal(L.roomIssues.length, 1, JSON.stringify(L.roomIssues));
+    assert.equal(L.roomIssues[0].room, 'Beis Medrash');
+});
+
+test('a camp that literally names a facility "Chinuch" is still checked', () => {
+    const spec = {
+        '2026-07-01': [period('Game 1', [['T1', 'T2']], [['T5', 'Pool']],
+            [['T3', 'Chinuch'], ['T4', 'Chinuch']])],
+    };
+    const L = run(spec, { chinuch: { enabled: true,
+        bunkFacilities: { T3: 'Chinuch', T4: 'Chinuch' },
+        roomCapacity: { 'Chinuch': 1 } } });
+    assert.equal(L.roomIssues.length, 1, 'a configured room named "Chinuch" is a real room');
+});
+
+// ── drift is diagnosable, not just reported ─────────────────────────────────
+
+test('drift names the days and points at the missing chinuch record', () => {
+    // Two days. Day 1 has its chinuch attendance recorded, day 2 does not — so
+    // history reads day 2's learning teams as benched.
+    const spec = {
+        '2026-07-01': [period('Game 1', [['T1', 'T2'], ['T4', 'T5']], [], [['T3', 'Beis Medrash']])],
+        '2026-07-02': [period('Game 2', [['T1', 'T3'], ['T4', 'T5']], [], [['T2', 'Beis Medrash']])],
+    };
+    const L = run(spec, { chinuch: { enabled: true, bunkFacilities: { T2: 'Beis Medrash', T3: 'Beis Medrash' } } },
+        { '2026-07-01': ['T3'] });   // day 2 missing on purpose
+
+    assert.ok(codes(L).includes('history-drift'), JSON.stringify(L.findings));
+    const days = L.findings.filter(f => f.code === 'history-drift-day');
+    assert.equal(days.length, 1, 'only the bad day is named: ' + JSON.stringify(days));
+    assert.match(days[0].message, /2026-07-02/);
+    assert.match(days[0].message, /chinuch attendance was not recorded/);
+
+    // …and it is escalated, because the fairness ledger is reading those numbers.
+    const esc = find(L, 'chinuch-ledger-missing');
+    assert.ok(esc, JSON.stringify(L.findings));
+    assert.equal(esc.level, 'error');
+    assert.equal(L.verdict, 'FAIL');
+});
+
+test('no drift means no per-day noise', () => {
+    const spec = {
+        '2026-07-01': [period('Game 1', [['T1', 'T2'], ['T4', 'T5']], [], [['T3', 'Beis Medrash']])],
+    };
+    const L = run(spec, { chinuch: { enabled: true } }, { '2026-07-01': ['T3'] });
+    assert.ok(!codes(L).includes('history-drift'), JSON.stringify(L.findings));
+    assert.ok(!codes(L).includes('history-drift-day'));
+    assert.ok(!codes(L).includes('chinuch-ledger-missing'));
+});
