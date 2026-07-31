@@ -1169,7 +1169,7 @@
                     if (S.pinned || (S._ref && S._ref.share)) continue;
                     attempts++;
                     var pick = pickActivity(ctx, bunk, sc, S.durationMin, S.startMin, S.endMin, used, null);
-                    var splitDur = 0;
+                    var splitDur = 0, splitAtEnd = false;
                     if (!pick) {
                         // ★ DONOR SPLIT: the subcat's activities may ALL run shorter than
                         //   this sport (shiur runs 20; sports 30-50) — an exact-duration
@@ -1194,16 +1194,28 @@
                             }
                         }
                         _dlist.sort(function (a, b) { return b - a; });
+                        // Two anchor positions per length: START-anchored (residual sport
+                        // after) and END-anchored (residual sport before). The scarce seat
+                        // (shiur: one activity, cap-1) is often busy at one minute but free
+                        // at the other end of the same sport span.
                         for (var _dl = 0; _dl < _dlist.length && !pick; _dl++) {
                             pick = pickActivity(ctx, bunk, sc, _dlist[_dl], S.startMin, S.startMin + _dlist[_dl], used, null);
-                            if (pick) splitDur = _dlist[_dl];
+                            if (pick) { splitDur = _dlist[_dl]; splitAtEnd = false; }
+                            if (!pick) {
+                                pick = pickActivity(ctx, bunk, sc, _dlist[_dl], S.endMin - _dlist[_dl], S.endMin, used, null);
+                                if (pick) { splitDur = _dlist[_dl]; splitAtEnd = true; }
+                            }
                         }
                     }
                     if (!pick) continue;
                     // A FULL conversion consumes the sport — never take the bunk's last one.
                     // A SPLIT leaves the residual sport in place, so the guard doesn't apply.
                     if (!splitDur && sportCount <= 1) { blockedLastSport++; continue; }
-                    var effEnd = splitDur ? (S.startMin + splitDur) : S.endMin;
+                    // special span + residual-sport span (split only)
+                    var spS = splitDur ? (splitAtEnd ? S.endMin - splitDur : S.startMin) : S.startMin;
+                    var spE = splitDur ? (splitAtEnd ? S.endMin : S.startMin + splitDur) : S.endMin;
+                    var rsS = splitAtEnd ? S.startMin : spE;
+                    var rsE = splitAtEnd ? spS : S.endMin;
                     // the special must be legal at its span (spacing/content rules) — and for a
                     // split, the residual sport must be legal at ITS span too.
                     if (gate) {
@@ -1215,11 +1227,11 @@
                         }
                         var okG = true;
                         try {
-                            okG = gate({ type: 'special', event: pick.name, _assignedSpecial: pick.name, _specialLocation: pick.name, startMin: S.startMin, endMin: effEnd }, tmpl);
+                            okG = gate({ type: 'special', event: pick.name, _assignedSpecial: pick.name, _specialLocation: pick.name, startMin: spS, endMin: spE }, tmpl);
                         } catch (_eG) { okG = true; }
                         if (okG && splitDur) {
-                            var _tmplR = tmpl.concat([{ type: 'special', event: pick.name, _assignedSpecial: pick.name, _specialLocation: pick.name, startMin: S.startMin, endMin: effEnd }]);
-                            try { okG = gate({ type: 'sport', event: S.name || 'Sport', startMin: effEnd, endMin: S.endMin }, _tmplR); } catch (_eG2) { okG = true; }
+                            var _tmplR = tmpl.concat([{ type: 'special', event: pick.name, _assignedSpecial: pick.name, _specialLocation: pick.name, startMin: spS, endMin: spE }]);
+                            try { okG = gate({ type: 'sport', event: S.name || 'Sport', startMin: rsS, endMin: rsE }, _tmplR); } catch (_eG2) { okG = true; }
                         }
                         if (!okG) continue;
                     }
@@ -1227,12 +1239,12 @@
                     try { if (ctx.seatRelease) ctx.seatRelease(S, grade, S.startMin, S.endMin); } catch (_e1) {}
                     var resid = null;
                     if (splitDur) {
-                        resid = { kind: 'sport', subcat: null, name: snap.name, generic: true, _concrete: null, startMin: effEnd, endMin: snap.endMin, durationMin: snap.endMin - effEnd, _ref: snap._ref, _origin: 'floor-split-residual' };
+                        resid = { kind: 'sport', subcat: null, name: snap.name, generic: true, _concrete: null, startMin: rsS, endMin: rsE, durationMin: rsE - rsS, _ref: snap._ref, _origin: 'floor-split-residual' };
                     }
                     S.kind = 'special'; S.name = pick.name; S._concrete = pick.name; S.generic = false;
                     S.subcat = canon(pick.subcategory); S._fillLoc = pick.location || null;
                     S._origin = splitDur ? 'floor-from-sport-split' : 'floor-from-sport';
-                    if (splitDur) { S.endMin = effEnd; S.durationMin = splitDur; }
+                    if (splitDur) { S.startMin = spS; S.endMin = spE; S.durationMin = splitDur; }
                     var seatOk = true;
                     try {
                         if (ctx.seatGate) {
