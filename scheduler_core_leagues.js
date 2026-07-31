@@ -108,6 +108,7 @@
                 offCampusCounts: (h && h.offCampusCounts) || {},
                 ocTripsByDate: (h && h.ocTripsByDate) || {},
                 chinuchByDate: (h && h.chinuchByDate) || {},
+                byesByDate: (h && h.byesByDate) || {},
                 _ocResetAt: (h && h._ocResetAt) || {},
                 gameLog: (h && h.gameLog) || {},
                 _tombstones: (h && h._tombstones) || {},
@@ -135,6 +136,7 @@
             offCampusCounts: {},
             ocTripsByDate: {},
             chinuchByDate: {},
+            byesByDate: {},
             _ocResetAt: {},
             gameLog: {},
             _tombstones: {},
@@ -219,6 +221,18 @@
                     if (!(src.chinuchByDate[lg][d] || []).length) return;
                     if (tombTs(lg, d) > src._savedAt) return;
                     (merged.chinuchByDate[lg] = merged.chinuchByDate[lg] || {})[d] = src.chinuchByDate[lg][d];
+                });
+            });
+            // Byes: who actually sat out each date, recorded at generation
+            // time. Adopted per (league, date) exactly like chinuch attendance —
+            // it is the bye ledger's authoritative source, so losing it in a
+            // merge would put the ledger back on guesswork.
+            Object.keys(src.byesByDate).forEach(function (lg) {
+                Object.keys(src.byesByDate[lg] || {}).forEach(function (d) {
+                    if (merged.byesByDate[lg] && merged.byesByDate[lg][d]) return;
+                    if (!(src.byesByDate[lg][d] || []).length) return;
+                    if (tombTs(lg, d) > src._savedAt) return;
+                    (merged.byesByDate[lg] = merged.byesByDate[lg] || {})[d] = src.byesByDate[lg][d];
                 });
             });
             // Off-campus trips: same per-(league,date) adoption as gamesPerDate.
@@ -318,7 +332,7 @@
     function loadLeagueHistory() {
         const EMPTY = () => ({
             teamSports: {}, matchupHistory: {}, gamesPerDate: {},
-            offCampusCounts: {}, ocTripsByDate: {}, chinuchByDate: {}, gameLog: {}, _tombstones: {}
+            offCampusCounts: {}, ocTripsByDate: {}, chinuchByDate: {}, byesByDate: {}, gameLog: {}, _tombstones: {}
         });
         try {
             // Cloud-synced copy (hydrated into global settings)
@@ -364,6 +378,7 @@
             history.offCampusCounts = history.offCampusCounts || {};
             history.ocTripsByDate = history.ocTripsByDate || {};
             history.chinuchByDate = history.chinuchByDate || {};
+            history.byesByDate = history.byesByDate || {};
             history.gameLog = history.gameLog || {};
             history._tombstones = history._tombstones || {};
             // ★ TEAM RENAME: fold records written under a FORMER team name into
@@ -1206,7 +1221,7 @@
     //   teamSports["<league>|<team>"]        → sports played (variety)
     //   matchupHistory["<league>:<a>|<b>"]   → meeting count (who-played-who)
     //   offCampusCounts["<league>|<team>"]   → away-trip fairness
-    //   ocTripsByDate / chinuchByDate[lg][d] → [team, …]
+    //   ocTripsByDate / chinuchByDate / byesByDate[lg][d] → [team, …]
     //   gameLog[lg][d]                       → [{t1, t2, sport, g}, …]
     //
     // So "Team 1" becoming "The Pancakes" used to strand the entire record on a
@@ -1295,7 +1310,7 @@
         }
 
         // Per-date team lists (away trips, chinuch attendance).
-        ['ocTripsByDate', 'chinuchByDate'].forEach(function (store) {
+        ['ocTripsByDate', 'chinuchByDate', 'byesByDate'].forEach(function (store) {
             const byDate = history[store] && history[store][leagueName];
             if (!byDate || typeof byDate !== 'object') return;
             Object.keys(byDate).forEach(function (d) {
@@ -1573,6 +1588,7 @@
         try {
             const gl = (history && history.gameLog && history.gameLog[leagueName]) || {};
             const cbd = (history && history.chinuchByDate && history.chinuchByDate[leagueName]) || {};
+            const bbd = (history && history.byesByDate && history.byesByDate[leagueName]) || {};
             const ep = _effectiveEpoch(history);
             // ★ Does this league run chinuch? Answered from the DATA first, and
             //   only then from config. A config lookup is the fragile way to ask:
@@ -1589,6 +1605,7 @@
             // Every date either store knows about — a day saved to the grid but
             // missing from the gameLog still counts, and vice versa.
             const dates = new Set(Object.keys(gl));
+            Object.keys(bbd).forEach(function (d) { dates.add(d); });
             dailyDataDates().forEach(function (d) { dates.add(d); });
             dates.forEach(function (d) {
                 if (ep && d < ep) return;                    // last half is archive
@@ -1606,6 +1623,20 @@
                 //   period generated in THIS run still counts, and the bye moves
                 //   within a multi-game day.
                 if (d !== dayId) {
+                    // ★ RECORDED — the day's own list of who sat out, written as
+                    //   the byes were decided. No inference, no second store to
+                    //   agree with. Days generated before this existed fall
+                    //   through to the tiles and then the arithmetic.
+                    const rec = bbd[d];
+                    if (Array.isArray(rec) && rec.length) {
+                        measured.push(d);
+                        rec.forEach(function (t) {
+                            if (counts[t] == null) return;
+                            counts[t]++;
+                            if (!lastBye[t] || d > lastBye[t]) lastBye[t] = d;
+                        });
+                        return;
+                    }
                     const saved = dailyDataLeagueSitters(leagueName, d);
                     if (saved.hasTiles) {
                         measured.push(d);
@@ -4248,6 +4279,9 @@
         //   (their records survived the rollback). Feeds game numbering + the
         //   games-per-date total so a preserved game still counts as played.
         const _preservedTodayCounts = {};
+        // First bye-record write per league this run clears the day's old list;
+        // later periods append, so a multi-game day accumulates correctly.
+        const _byeDayStamped = {};
         (function () {
             const _genDivs = new Set(context.generatedDivisions || []);
             const _allLeagues = Array.isArray(masterLeagues) ? masterLeagues : Object.values(masterLeagues || {});
@@ -5930,6 +5964,23 @@ window._debugLeagueTimeData = timeData;
                     return (activeTeams || []).filter(function (t) { return !playing.has(t); });
                 })();
                 const _byePlanHere = planByeActivities(league, _byeTeamsHere, { dayId: dayId, periodIndex: todayGameIndex, history: history });
+                // ★ RECORD THE BYES. The ledger used to INFER who sat out
+                //   (periods − games played − chinuch), which needs two stores to
+                //   agree and silently invents byes when they don't: a roster team
+                //   that has never played reads as benched in every period of every
+                //   day. Recording them removes the inference for every day
+                //   generated from here on. Date-keyed like chinuch attendance, so
+                //   a regen overwrites it, a day delete rolls it back, and the LG-8
+                //   merge adopts it per (league, date).
+                try {
+                    history.byesByDate = history.byesByDate || {};
+                    const _bl = (history.byesByDate[league.name] = history.byesByDate[league.name] || {});
+                    if (!_byeDayStamped[league.name]) { delete _bl[dayId]; _byeDayStamped[league.name] = true; }
+                    if (_byeTeamsHere.length) {
+                        _bl[dayId] = (_bl[dayId] || []).concat(_byeTeamsHere);
+                    }
+                } catch (_eByeRec) {}
+
                 if (Object.keys(_byePlanHere).length > 0) {
                     console.log('   🪑 Bye activity for "' + league.name + '": '
                         + Object.keys(_byePlanHere).map(function (t) { return t + ' → ' + _byePlanHere[t]; }).join(', '));
@@ -6237,7 +6288,7 @@ window._debugLeagueTimeData = timeData;
             // every device that syncs it.
             const resetHistory = {
                 teamSports: {}, matchupHistory: {}, gamesPerDate: {},
-                offCampusCounts: {}, ocTripsByDate: {}, chinuchByDate: {}, gameLog: {}, _tombstones: {},
+                offCampusCounts: {}, ocTripsByDate: {}, chinuchByDate: {}, byesByDate: {}, gameLog: {}, _tombstones: {},
                 _ocResetAt: { '*': Date.now() },
                 _resetAt: Date.now(), _savedAt: Date.now()
             };
@@ -6406,6 +6457,9 @@ window._debugLeagueTimeData = timeData;
                 affected.push(league.name);
                 if (rollbackDayRecords(league.name, dateKey, history) > 0) changed = true;
                 if (rollbackOcTrips(history, league.name, dateKey) > 0) changed = true;
+                if (history.byesByDate?.[league.name]?.[dateKey] !== undefined) {
+                    delete history.byesByDate[league.name][dateKey];
+                }
                 if (history.chinuchByDate?.[league.name]?.[dateKey] !== undefined) {
                     delete history.chinuchByDate[league.name][dateKey];
                     changed = true;
@@ -6485,6 +6539,7 @@ window._debugLeagueTimeData = timeData;
                     // Whole league day gone → its away-trip / chinuch charges go too.
                     rollbackOcTrips(history, league.name, dateKey);
                     if (history.chinuchByDate?.[league.name]) delete history.chinuchByDate[league.name][dateKey];
+                    if (history.byesByDate?.[league.name]) delete history.byesByDate[league.name][dateKey];
                 }
                 // Keep the Leagues results page in sync with the surviving games.
                 try {
@@ -6541,6 +6596,11 @@ window._debugLeagueTimeData = timeData;
             }
 
             // ★ Chinuch attendance: the deleted date's record goes with it.
+            for (const leagueName of Object.keys(history.byesByDate || {})) {
+                if (history.byesByDate[leagueName][dateKey] !== undefined) {
+                    delete history.byesByDate[leagueName][dateKey];
+                }
+            }
             for (const leagueName of Object.keys(history.chinuchByDate || {})) {
                 if (history.chinuchByDate[leagueName][dateKey] !== undefined) {
                     delete history.chinuchByDate[leagueName][dateKey];

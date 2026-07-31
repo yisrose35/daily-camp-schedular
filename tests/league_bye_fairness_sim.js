@@ -38,6 +38,10 @@
 //            a league with any chinuch on record runs chinuch, no config needed.
 //   TEST 13 — and the config lookup itself merges both sources instead of
 //            picking one, so junk in app1.leagues cannot mask leaguesByName.
+//   TEST 14 — the end of the guessing: each day RECORDS who sat out, and the
+//            ledger reads that list back verbatim.
+//   TEST 15 — the record merges per (league, date) and dies with a deleted day,
+//            like every other per-date store.
 // =============================================================================
 
 'use strict';
@@ -536,6 +540,67 @@ function spread(tally) {
         assert.strictEqual(Leagues._leagueConfigs().find(function (l) { return l.name === LG; }).marker, 'app1');
     } finally { delete settings.app1; delete settings.leaguesByName; }
     console.log('✅ TEST 13 — the league lookup merges app1 and leaguesByName');
+}
+
+// ---- TEST 14: the engine RECORDS who sat out, and the ledger reads it ------
+{
+    // The end of the inference. Every earlier attempt derived byes from
+    // (periods − games played − chinuch), which needs two stores to agree and
+    // invents byes when they don't — a roster team that has never played reads
+    // as benched in every period of every day. The day now writes its own list.
+    delete settings.leagueHistory; global.localStorage._m = {};
+    const cfg = { schedulingPriority: 'matchup_variety' };
+    const day1 = '2026-07-01', day2 = '2026-07-02';
+
+    const sat1 = byeTeams(gen(day1, cfg));
+    const rec1 = settings.leagueHistory.byesByDate?.[LG]?.[day1];
+    assert.deepStrictEqual(rec1, sat1, 'the day records exactly the teams the tiles benched: '
+        + JSON.stringify(rec1) + ' vs ' + JSON.stringify(sat1));
+
+    // The ledger reads the record rather than re-deriving anything.
+    const led = Leagues.makeByeLedger(LG, TEAMS, settings.leagueHistory, day2);
+    assert.strictEqual(led.count(sat1[0]), 1, 'the benched team is credited once: ' + JSON.stringify(led.counts));
+    TEAMS.filter(t => t !== sat1[0]).forEach(t => assert.strictEqual(led.count(t), 0,
+        t + ' played and must not be credited a bye: ' + JSON.stringify(led.counts)));
+    assert.strictEqual(led.unmeasurable.length, 0, 'a recorded day is never unreadable');
+
+    // A second day appends; it does not replace.
+    const sat2 = byeTeams(gen(day2, cfg));
+    assert.deepStrictEqual(settings.leagueHistory.byesByDate[LG][day1], sat1, 'day 1 survives day 2');
+    assert.deepStrictEqual(settings.leagueHistory.byesByDate[LG][day2], sat2);
+
+    // Re-generating a day REPLACES its record instead of doubling it.
+    const again = byeTeams(gen(day1, cfg));
+    const rec1b = settings.leagueHistory.byesByDate[LG][day1];
+    assert.strictEqual(rec1b.length, again.length,
+        'a regen rewrites the day, never appends to it: ' + JSON.stringify(rec1b));
+    assert.deepStrictEqual(rec1b, again);
+    console.log('✅ TEST 14 — byes are recorded per day and read back verbatim');
+}
+
+// ---- TEST 15: the record survives a merge and dies with a deleted day ------
+{
+    const mk = (savedAt, byes) => ({
+        teamSports: {}, matchupHistory: {}, gamesPerDate: {}, offCampusCounts: {},
+        ocTripsByDate: {}, chinuchByDate: {}, byesByDate: { [LG]: byes },
+        gameLog: {}, _tombstones: {}, _savedAt: savedAt,
+    });
+    const A = mk(2000, { '2026-07-01': ['T1'] });
+    const B = mk(1000, { '2026-07-01': ['T9'], '2026-07-02': ['T2'] });
+    const m = Leagues.mergeLeagueHistories(A, B);
+    assert.deepStrictEqual(m.byesByDate[LG]['2026-07-01'], ['T1'], 'fresher copy wins the conflict day');
+    assert.deepStrictEqual(m.byesByDate[LG]['2026-07-02'], ['T2'], 'the older lineage day is adopted');
+
+    // And a deleted day takes its bye record with it.
+    delete settings.leagueHistory; global.localStorage._m = {};
+    settings.leaguesByName = { [LG]: { name: LG, divisions: ['Juniors'], teams: TEAMS.slice() } };
+    gen('2026-07-01', { schedulingPriority: 'matchup_variety' });
+    assert.ok(settings.leagueHistory.byesByDate[LG]['2026-07-01'], 'seeded');
+    Leagues.cleanupDateFromHistory('2026-07-01');
+    assert.ok(!settings.leagueHistory.byesByDate?.[LG]?.['2026-07-01'],
+        'deleting the day removes its bye record');
+    delete settings.leaguesByName;
+    console.log('✅ TEST 15 — the bye record merges per (league, date) and rolls back with the day');
 }
 
 console.log('\n🎉 league_bye_fairness_sim: ALL TESTS PASSED');
