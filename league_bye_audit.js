@@ -1,0 +1,478 @@
+/* =============================================================================
+ * LEAGUE BYE AUDIT  (window.LeagueByeAudit / window.byeAudit)
+ * -----------------------------------------------------------------------------
+ * A console report that answers one question after you generate a run of days:
+ * "is the bye landing on a different team each time, or is one team eating all
+ * of them?" — plus the two things that ride along with a bye: what the benched
+ * team was given to do, and whether the chinuch rooms held.
+ *
+ * USAGE (browser console, Flow page):
+ *
+ *   byeAudit()                          every league, every date on record
+ *   byeAudit('Soloists')                one league
+ *   byeAudit({ from: '2026-07-01', to: '2026-07-10' })
+ *   byeAudit({ league: 'Soloists', verbose: true })    per-date breakdown too
+ *
+ * It reads what was actually SAVED, not what the engine intended:
+ *
+ *   • the saved daily schedules (campDailyData_v1 → leagueAssignments) are the
+ *     source of truth — those are the tiles that printed, and they carry the
+ *     "Team — Bye: Pool" / "Team — Chinuch (Beis Medrash)" lines verbatim;
+ *   • the engine's own date-keyed gameLog is read alongside as a cross-check,
+ *     because the two drifting apart is itself a finding (a day generated on a
+ *     device whose history never synced looks fine on the grid and wrong to the
+ *     fairness ledgers, which is what LG-9 was about).
+ *
+ * VERDICTS
+ *   PASS  byes are within one of each other across the teams
+ *   WARN  evenly spread overall, but something worth a look (a team benched on
+ *         consecutive days, a benched team always getting the same activity,
+ *         schedule/history drift)
+ *   FAIL  the spread is 2 or more, or a chinuch room was over-filled
+ *
+ * build() takes injected history/dailyData so the aggregation is unit-testable
+ * without a DOM — see tests/league_bye_audit.test.js.
+ * ========================================================================== */
+(function () {
+    'use strict';
+
+    var A = {};
+
+    // ── utils ────────────────────────────────────────────────────────────────
+    function norm(s) { return String(s == null ? '' : s).toLowerCase().trim(); }
+    function isDate(d) { return /^\d{4}-\d{2}-\d{2}$/.test(String(d || '')); }
+    function pct(n, d) { return d > 0 ? Math.round((n / d) * 100) : 0; }
+
+    // ── data access ──────────────────────────────────────────────────────────
+    // Same precedence as league_play_report.js: the engine's loader knows the
+    // cloud/local fresher-wins rules, so prefer it and fall back to a plain read.
+    function loadHistory() {
+        try {
+            var SCL = (typeof window !== 'undefined') && window.SchedulerCoreLeagues;
+            if (SCL && typeof SCL.getHistorySnapshot === 'function') return SCL.getHistorySnapshot() || {};
+        } catch (e) { /* fall through */ }
+        try {
+            var gs = (typeof window !== 'undefined' && window.loadGlobalSettings) ? (window.loadGlobalSettings() || {}) : {};
+            var cloud = (gs.leagueHistory && Object.keys(gs.leagueHistory).length > 0) ? gs.leagueHistory : null;
+            var local = null;
+            try {
+                var raw = localStorage.getItem('campLeagueHistory_v2');
+                if (raw) local = JSON.parse(raw);
+            } catch (e2) { /* ignore */ }
+            if (cloud && local) return ((Number(local._savedAt) || 0) > (Number(cloud._savedAt) || 0)) ? local : cloud;
+            return cloud || local || {};
+        } catch (e3) { return {}; }
+    }
+    function loadDailyData() {
+        try {
+            if (typeof window !== 'undefined' && typeof window.loadAllDailyData === 'function') {
+                return window.loadAllDailyData() || {};
+            }
+        } catch (e) { /* fall through */ }
+        try {
+            var raw = localStorage.getItem('campDailyData_v1');
+            return raw ? (JSON.parse(raw) || {}) : {};
+        } catch (e2) { return {}; }
+    }
+    function leagueConfigs() {
+        try {
+            if (typeof window === 'undefined') return [];
+            var byName = window.leaguesByName ||
+                (window.loadGlobalSettings ? (window.loadGlobalSettings() || {}).leaguesByName : null) || {};
+            return Object.keys(byName).map(function (k) { return byName[k]; }).filter(Boolean);
+        } catch (e) { return []; }
+    }
+    function roomCapacity(league, room) {
+        try {
+            var SCL = (typeof window !== 'undefined') && window.SchedulerCoreLeagues;
+            if (SCL && typeof SCL.chinuchRoomCapacity === 'function') {
+                return SCL.chinuchRoomCapacity(league, room, null);
+            }
+        } catch (e) { /* fall through */ }
+        var ov = league && league.chinuch && league.chinuch.roomCapacity;
+        var v = ov && Number(ov[room]);
+        return (Number.isFinite(v) && v > 0) ? v : 1;
+    }
+
+    // ── tile-line parsing ────────────────────────────────────────────────────
+    // The three shapes the league engine writes into a tile's matchups array:
+    //   "A vs B @ Field (Sport)"        a game
+    //   "T — Bye"  /  "T — Bye: Pool"   a benched team (and what it got instead)
+    //   "T — Chinuch (Beis Medrash)"    a team learning, and where
+    // Section rows ("Electives:", "  • Field") are ignored.
+    var RE_BYE = /^(.+?)\s+[—–-]\s*Bye(?:\s*:\s*(.+?))?\s*$/i;
+    var RE_CHINUCH = /^(.+?)\s+[—–-]\s*Chinuch\s*(?:\(([^)]*)\))?\s*$/i;
+
+    A.parseLine = function (raw) {
+        var s = String(raw == null ? '' : raw).trim();
+        if (!s) return null;
+        if (/^\s*•/.test(s) || /^(electives|open fields):?\s*$/i.test(s)) return null;
+        var ch = s.match(RE_CHINUCH);
+        if (ch) return { kind: 'chinuch', team: ch[1].trim(), room: (ch[2] || '').trim() };
+        var by = s.match(RE_BYE);
+        if (by) return { kind: 'bye', team: by[1].trim(), activity: (by[2] || '').trim() };
+        if (/\s+vs\.?\s+/i.test(s)) {
+            var g = s.match(/^(.+?)\s+vs\.?\s+(.+?)(?:\s*@.*)?$/i);
+            if (g) return { kind: 'game', teamA: g[1].trim(), teamB: g[2].trim() };
+        }
+        return null;
+    };
+
+    // One row per (date, period) for a league, collapsed across divisions — a
+    // game that spans divisions is stored once per division and must count once.
+    function periodsFromDailyData(dailyData, leagueName, from, to) {
+        var out = [];
+        Object.keys(dailyData || {}).forEach(function (date) {
+            if (!isDate(date)) return;
+            if (from && date < from) return;
+            if (to && date > to) return;
+            var la = dailyData[date] && dailyData[date].leagueAssignments;
+            if (!la) return;
+            var byPeriod = {};
+            Object.keys(la).forEach(function (div) {
+                var map = la[div] || {};
+                Object.keys(map).forEach(function (slotKey) {
+                    var entry = map[slotKey];
+                    if (!entry || norm(entry.leagueName) !== norm(leagueName)) return;
+                    // Group by the game label when there is one — it identifies the
+                    // period even if two divisions key the same game differently.
+                    var pk = entry.gameLabel || ('slot ' + slotKey);
+                    var rec = byPeriod[pk];
+                    if (!rec) {
+                        rec = byPeriod[pk] = {
+                            date: date, label: entry.gameLabel || '', slot: slotKey,
+                            games: [], byes: [], chinuch: [], _seen: {}
+                        };
+                    }
+                    (entry.matchups || []).forEach(function (m) {
+                        var line = (m && typeof m === 'object')
+                            ? String(m.display || m.matchup || m.text || '')
+                            : String(m == null ? '' : m);
+                        var p = A.parseLine(line);
+                        if (!p) return;
+                        var key = p.kind + '|' + (p.team || (p.teamA + 'v' + p.teamB));
+                        if (rec._seen[key]) return;
+                        rec._seen[key] = 1;
+                        if (p.kind === 'game') rec.games.push(p);
+                        else if (p.kind === 'bye') rec.byes.push(p);
+                        else rec.chinuch.push(p);
+                    });
+                });
+            });
+            Object.keys(byPeriod).forEach(function (pk) {
+                var r = byPeriod[pk];
+                delete r._seen;
+                out.push(r);
+            });
+        });
+        return out.sort(function (a, b) {
+            return (a.date < b.date ? -1 : a.date > b.date ? 1 : 0) || String(a.label).localeCompare(String(b.label));
+        });
+    }
+
+    // The same quantity, computed from the engine's ledger — periods on a date
+    // are its distinct game labels, and a team in none of a period's games sat
+    // it out (minus its chinuch session, which is not a bye).
+    function byesFromHistory(history, leagueName, teams, from, to) {
+        var counts = {};
+        teams.forEach(function (t) { counts[t] = 0; });
+        var gl = (history && history.gameLog && history.gameLog[leagueName]) || {};
+        var cbd = (history && history.chinuchByDate && history.chinuchByDate[leagueName]) || {};
+        Object.keys(gl).forEach(function (d) {
+            if (!isDate(d)) return;
+            if (from && d < from) return;
+            if (to && d > to) return;
+            var entries = gl[d] || [];
+            if (!entries.length) return;
+            var labels = {};
+            entries.forEach(function (e) { if (e && e.g) labels[e.g] = 1; });
+            var periods = Math.max(Object.keys(labels).length, 1);
+            var chinuch = {};
+            (cbd[d] || []).forEach(function (t) { chinuch[t] = 1; });
+            teams.forEach(function (t) {
+                var played = 0;
+                entries.forEach(function (e) { if (e && (e.t1 === t || e.t2 === t)) played++; });
+                var sat = periods - played - (chinuch[t] ? 1 : 0);
+                if (sat > 0) counts[t] += sat;
+            });
+        });
+        return counts;
+    }
+
+    // ── BUILD ────────────────────────────────────────────────────────────────
+    // opts: { league, from, to, history, dailyData, leagues }
+    A.build = function (opts) {
+        opts = opts || {};
+        var history = opts.history || loadHistory();
+        var dailyData = opts.dailyData || loadDailyData();
+        var configs = opts.leagues || leagueConfigs();
+        if (opts.league) {
+            configs = configs.filter(function (l) { return l && norm(l.name) === norm(opts.league); });
+            if (!configs.length) configs = [{ name: opts.league, teams: [] }];
+        }
+
+        var out = { range: { from: opts.from || null, to: opts.to || null }, leagues: [] };
+
+        configs.forEach(function (league) {
+            var name = league.name;
+            var periods = periodsFromDailyData(dailyData, name, opts.from, opts.to);
+
+            // Roster first (keeps configured order), then any name only seen in
+            // the saved tiles — a removed or renamed team stays visible.
+            var teams = [], seen = {};
+            (league.teams || []).forEach(function (t) {
+                if (t == null) return;
+                if (!seen[norm(t)]) { seen[norm(t)] = 1; teams.push(String(t)); }
+            });
+            periods.forEach(function (p) {
+                p.byes.forEach(function (b) { if (!seen[norm(b.team)]) { seen[norm(b.team)] = 1; teams.push(b.team); } });
+                p.chinuch.forEach(function (c) { if (!seen[norm(c.team)]) { seen[norm(c.team)] = 1; teams.push(c.team); } });
+                p.games.forEach(function (g) {
+                    [g.teamA, g.teamB].forEach(function (t) { if (!seen[norm(t)]) { seen[norm(t)] = 1; teams.push(t); } });
+                });
+            });
+
+            var byTeam = {};
+            teams.forEach(function (t) {
+                byTeam[t] = { team: t, played: 0, chinuch: 0, byes: 0, activities: {}, byeDates: [], noActivity: 0 };
+            });
+            function rec(t) {
+                if (!byTeam[t]) byTeam[t] = { team: t, played: 0, chinuch: 0, byes: 0, activities: {}, byeDates: [], noActivity: 0 };
+                return byTeam[t];
+            }
+
+            var dates = {};
+            periods.forEach(function (p) {
+                dates[p.date] = 1;
+                p.games.forEach(function (g) { rec(g.teamA).played++; rec(g.teamB).played++; });
+                p.chinuch.forEach(function (c) { rec(c.team).chinuch++; });
+                p.byes.forEach(function (b) {
+                    var r = rec(b.team);
+                    r.byes++;
+                    r.byeDates.push(p.date);
+                    if (b.activity) r.activities[b.activity] = (r.activities[b.activity] || 0) + 1;
+                    else r.noActivity++;
+                });
+            });
+
+            var histByes = byesFromHistory(history, name, teams, opts.from, opts.to);
+            var totalByes = teams.reduce(function (n, t) { return n + byTeam[t].byes; }, 0);
+            var counts = teams.map(function (t) { return byTeam[t].byes; });
+            var maxB = counts.length ? Math.max.apply(null, counts) : 0;
+            var minB = counts.length ? Math.min.apply(null, counts) : 0;
+            var spread = maxB - minB;
+
+            // ── findings ─────────────────────────────────────────────────────
+            var findings = [];
+            if (!periods.length) {
+                findings.push({ level: 'info', code: 'no-data',
+                    message: 'No saved league periods found for "' + name + '"'
+                        + (opts.from || opts.to ? ' in this date range' : '') + '.' });
+            } else if (!totalByes) {
+                findings.push({ level: 'ok', code: 'no-byes',
+                    message: 'No byes at all — every team played every period.' });
+            } else {
+                if (spread <= 1) {
+                    findings.push({ level: 'ok', code: 'bye-spread',
+                        message: 'Byes are even: every team is within one of every other (' + minB + '–' + maxB + ').' });
+                } else {
+                    var hogs = teams.filter(function (t) { return byTeam[t].byes === maxB; });
+                    var spared = teams.filter(function (t) { return byTeam[t].byes === minB; });
+                    findings.push({ level: 'error', code: 'bye-spread',
+                        message: 'Byes are UNEVEN — spread of ' + spread + '. '
+                            + hogs.join(', ') + ' sat out ' + maxB + '× while '
+                            + spared.join(', ') + ' sat out ' + minB + '×.' });
+                }
+
+                // A team benched on consecutive league days: the totals can even
+                // out over a season and still feel unfair in the moment.
+                var dayList = Object.keys(dates).sort();
+                teams.forEach(function (t) {
+                    var mine = {}; byTeam[t].byeDates.forEach(function (d) { mine[d] = 1; });
+                    for (var i = 1; i < dayList.length; i++) {
+                        if (mine[dayList[i]] && mine[dayList[i - 1]]) {
+                            findings.push({ level: 'warn', code: 'bye-streak',
+                                message: t + ' sat out on back-to-back league days (' + dayList[i - 1] + ' → ' + dayList[i] + ').' });
+                            break;
+                        }
+                    }
+                });
+
+                // A team benched more than once that always drew the same thing,
+                // while the league offers more than one bye activity.
+                var poolSize = ((league.byeActivity && league.byeActivity.activities) || []).length;
+                teams.forEach(function (t) {
+                    var r = byTeam[t];
+                    var kinds = Object.keys(r.activities);
+                    if (r.byes >= 2 && poolSize > 1 && kinds.length === 1 && !r.noActivity) {
+                        findings.push({ level: 'warn', code: 'activity-monotony',
+                            message: t + ' got "' + kinds[0] + '" on all ' + r.byes + ' of its byes, though the league offers '
+                                + poolSize + ' bye activities.' });
+                    }
+                });
+
+                // Benched with nothing to do — only worth saying when the league
+                // has the Bye Activity feature switched on.
+                if (league.byeActivity && league.byeActivity.enabled) {
+                    var bare = teams.filter(function (t) { return byTeam[t].noActivity > 0; });
+                    if (bare.length) {
+                        findings.push({ level: 'warn', code: 'bye-no-activity',
+                            message: 'Bye Activity is on, but ' + bare.join(', ')
+                                + ' got a plain bye with nothing scheduled — check the activity list and any per-team pin.' });
+                    }
+                }
+
+                // Saved schedules vs the engine's ledger. They drive different
+                // things (tiles vs fairness), so a mismatch is worth knowing.
+                var drift = teams.filter(function (t) { return (histByes[t] || 0) !== byTeam[t].byes; });
+                if (drift.length) {
+                    findings.push({ level: 'warn', code: 'history-drift',
+                        message: 'Saved schedules and the league history disagree on byes for '
+                            + drift.map(function (t) { return t + ' (' + byTeam[t].byes + ' on the grid, ' + (histByes[t] || 0) + ' in history)'; }).join(', ')
+                            + '. The fairness ledger reads history, so a day generated on a device that never synced can skew the next run.' });
+                }
+            }
+
+            // ── chinuch rooms: nobody double-booked ─────────────────────────
+            var roomIssues = [];
+            periods.forEach(function (p) {
+                var byRoom = {};
+                p.chinuch.forEach(function (c) {
+                    if (!c.room) return;
+                    (byRoom[c.room] = byRoom[c.room] || []).push(c.team);
+                });
+                Object.keys(byRoom).forEach(function (room) {
+                    var cap = roomCapacity(league, room);
+                    if (Number.isFinite(cap) && byRoom[room].length > cap) {
+                        roomIssues.push({ date: p.date, label: p.label, room: room,
+                            capacity: cap, teams: byRoom[room].slice() });
+                    }
+                });
+            });
+            roomIssues.forEach(function (r) {
+                findings.push({ level: 'error', code: 'room-overflow',
+                    message: r.date + ' ' + (r.label || '') + ': "' + r.room + '" holds ' + r.capacity
+                        + ' but ' + r.teams.length + ' teams were sent there (' + r.teams.join(', ') + ').' });
+            });
+
+            var verdict = findings.some(function (f) { return f.level === 'error'; }) ? 'FAIL'
+                : findings.some(function (f) { return f.level === 'warn'; }) ? 'WARN'
+                : findings.some(function (f) { return f.level === 'info'; }) ? 'NO DATA' : 'PASS';
+
+            out.leagues.push({
+                name: name,
+                teams: teams,
+                dates: Object.keys(dates).sort(),
+                periodCount: periods.length,
+                totalByes: totalByes,
+                spread: spread,
+                byTeam: byTeam,
+                periods: periods,
+                historyByes: histByes,
+                roomIssues: roomIssues,
+                findings: findings,
+                verdict: verdict
+            });
+        });
+
+        return out;
+    };
+
+    // ── RENDER ───────────────────────────────────────────────────────────────
+    var ICON = { ok: '✅', warn: '⚠️', error: '❌', info: 'ℹ️' };
+
+    A.print = function (data, opts) {
+        opts = opts || {};
+        var range = (data.range && (data.range.from || data.range.to))
+            ? ('  [' + (data.range.from || '…') + ' → ' + (data.range.to || '…') + ']') : '';
+        console.log('%c🏳️ LEAGUE BYE AUDIT' + range, 'font-weight:bold;font-size:14px;');
+
+        if (!data.leagues.length) {
+            console.log('   No leagues configured.');
+            return data;
+        }
+
+        data.leagues.forEach(function (L) {
+            var color = L.verdict === 'PASS' ? 'background:#DCFCE7;color:#166534'
+                : L.verdict === 'WARN' ? 'background:#FEF3C7;color:#92400E'
+                : L.verdict === 'FAIL' ? 'background:#FEE2E2;color:#991B1B'
+                : 'background:#F1F5F9;color:#475569';
+            console.group('%c ' + L.verdict + ' %c  ' + L.name
+                + '   ·   ' + L.dates.length + ' day(s), ' + L.periodCount + ' league period(s), '
+                + L.totalByes + ' bye(s)',
+                color + ';font-weight:bold;border-radius:4px;', 'font-weight:bold;');
+
+            if (L.periodCount > 0) {
+                var rows = L.teams.map(function (t) {
+                    var r = L.byTeam[t];
+                    var acts = Object.keys(r.activities)
+                        .map(function (a) { return a + (r.activities[a] > 1 ? ' ×' + r.activities[a] : ''); })
+                        .join(', ');
+                    return {
+                        Team: t,
+                        Played: r.played,
+                        Chinuch: r.chinuch,
+                        Byes: r.byes,
+                        'Bye %': pct(r.byes, L.periodCount) + '%',
+                        'On the bye': acts || (r.noActivity ? '(nothing)' : ''),
+                        'History says': L.historyByes[t] != null ? L.historyByes[t] : ''
+                    };
+                });
+                if (console.table) console.table(rows);
+                else rows.forEach(function (r) { console.log('   ', r); });
+
+                if (opts.verbose) {
+                    console.groupCollapsed('Day by day');
+                    var perDate = {};
+                    L.periods.forEach(function (p) { (perDate[p.date] = perDate[p.date] || []).push(p); });
+                    Object.keys(perDate).sort().forEach(function (d) {
+                        var lines = perDate[d].map(function (p) {
+                            var bye = p.byes.map(function (b) { return b.team + (b.activity ? ' → ' + b.activity : ' (nothing)'); }).join(', ');
+                            var ch = p.chinuch.map(function (c) { return c.team + (c.room ? ' @ ' + c.room : ''); }).join(', ');
+                            return '   ' + (p.label || 'period') + ': '
+                                + p.games.length + ' game(s)'
+                                + (bye ? '  ·  bye: ' + bye : '')
+                                + (ch ? '  ·  chinuch: ' + ch : '');
+                        });
+                        console.log(d + '\n' + lines.join('\n'));
+                    });
+                    console.groupEnd();
+                }
+            }
+
+            L.findings.forEach(function (f) {
+                console.log((ICON[f.level] || '•') + ' ' + f.message);
+            });
+            console.groupEnd();
+        });
+
+        var worst = data.leagues.some(function (L) { return L.verdict === 'FAIL'; }) ? 'FAIL'
+            : data.leagues.some(function (L) { return L.verdict === 'WARN'; }) ? 'WARN' : 'PASS';
+        console.log('%c' + (worst === 'PASS' ? '✅ Byes are evenly distributed.'
+            : worst === 'WARN' ? '⚠️ Byes are even, but see the notes above.'
+            : '❌ Byes are NOT evenly distributed — see the ❌ lines above.'),
+            'font-weight:bold;');
+        console.log('%cTip: byeAudit({ verbose: true }) for a day-by-day breakdown; the returned object has everything.',
+            'color:#64748B;');
+        return data;
+    };
+
+    // Accepts a league name string, an options object, or nothing.
+    A.run = function (arg) {
+        var opts = (typeof arg === 'string') ? { league: arg } : (arg || {});
+        var data;
+        try {
+            data = A.build(opts);
+        } catch (e) {
+            console.error('[ByeAudit] failed to build the report:', e);
+            return null;
+        }
+        return A.print(data, opts);
+    };
+
+    if (typeof window !== 'undefined') {
+        window.LeagueByeAudit = A;
+        window.byeAudit = A.run;
+    }
+    if (typeof module !== 'undefined' && module.exports) module.exports = A;
+})();
