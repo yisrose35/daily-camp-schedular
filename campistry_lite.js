@@ -216,6 +216,7 @@
 
             // Always land on the home launcher — the user picks a Lite app there.
             document.getElementById('liteSplash').style.display = 'none';
+            applyColorScheme();
             document.getElementById('liteApp').style.display = '';
             wirePullToRefresh();
             goHome();
@@ -938,9 +939,28 @@
     // lift the accent toward white, and rebuild the tint by mixing the accent
     // INTO the dark surface rather than into white.
     let _themeApp = null;
-    function prefersDark() {
+    // 'auto' follows the phone; 'light'/'dark' override it. Stamped on <html>
+    // so the CSS can resolve it before anything renders.
+    function colorSchemePref() { return litePref('colorScheme', 'auto'); }
+    function systemPrefersDark() {
         try { return window.matchMedia('(prefers-color-scheme: dark)').matches; } catch (_) { return false; }
     }
+    function prefersDark() {
+        const c = colorSchemePref();
+        return c === 'dark' || (c === 'auto' && systemPrefersDark());
+    }
+    function applyColorScheme() {
+        const c = colorSchemePref();
+        const root = document.documentElement;
+        if (c === 'auto') root.removeAttribute('data-theme');
+        else root.setAttribute('data-theme', c);
+        // Keep the OS chrome (status bar tint, form controls) in step.
+        root.style.colorScheme = c === 'auto' ? 'light dark' : c;
+        const meta = document.querySelector('meta[name="theme-color"]');
+        if (meta) meta.setAttribute('content', prefersDark() ? '#171211' : '#EE6A53');
+        applyTheme(_themeApp);
+    }
+    function setColorScheme(c) { setLitePref('colorScheme', c); applyColorScheme(); }
     function applyTheme(app) {
         _themeApp = app || null;
         const root = document.getElementById('liteApp');
@@ -965,7 +985,7 @@
     // Re-derive if the phone flips appearance while the app is open.
     try {
         window.matchMedia('(prefers-color-scheme: dark)')
-            .addEventListener('change', () => applyTheme(_themeApp));
+            .addEventListener('change', () => { if (colorSchemePref() === 'auto') applyColorScheme(); });
     } catch (_) {}
 
     // Per-user app access, read from the SAME place the desktop uses
@@ -1346,6 +1366,19 @@
                 <span class="lite-toggle${confirmDel ? ' on' : ''}" id="liteConfirmToggle"></span>
             </div>
 
+            <div class="lite-set-section-label">Appearance</div>
+            <div class="lite-card lite-set-row" style="display:block;">
+                <div class="lite-set-row-title" style="margin-bottom:9px;">Theme</div>
+                ${segHTML('liteThemeSeg', [
+                    { val: 'light', label: 'Light' },
+                    { val: 'dark', label: 'Dark' },
+                    { val: 'auto', label: 'Match phone' }
+                ], colorSchemePref())}
+                <div class="lite-set-row-sub" style="margin-top:2px;">${colorSchemePref() === 'auto'
+                    ? 'Follows your phone’s appearance setting.'
+                    : 'Always ' + colorSchemePref() + ', whatever your phone is set to.'}</div>
+            </div>
+
             <div class="lite-set-section-label">This app</div>
             <div class="lite-set-guide">
                 <p><b>Campistry Lite is your camp, on your phone.</b> It's a standalone app — add it to your home screen (Share → <i>Add to Home Screen</i>) and it opens full-screen like any native app.</p>
@@ -1359,6 +1392,8 @@
         v.querySelector('#liteSettingsBack').addEventListener('click', () => { if (history.state && history.state.liteSettings) history.back(); else { settingsOpen = false; goHome(); } });
         v.querySelector('#liteConfirmToggle').addEventListener('click', () => { setLitePref('confirmDelete', !litePref('confirmDelete', true)); renderSettings(); });
         v.querySelector('#liteSettingsSignout').addEventListener('click', () => document.getElementById('liteSignOut').click());
+        v.querySelectorAll('#liteThemeSeg .lite-seg-btn').forEach(b =>
+            b.addEventListener('click', () => { haptic(); setColorScheme(b.dataset.val); renderSettings(); }));
         const bioToggle = v.querySelector('#liteBioToggle');
         if (bioAvail) bioToggle.addEventListener('click', () => toggleBiometric(!bioOn));
         const bioTest = v.querySelector('#liteBioTest');

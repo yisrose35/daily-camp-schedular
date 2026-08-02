@@ -72,8 +72,10 @@
    makes shadows useless), they step up in tone as they come forward, and
    the accent is lifted because a mid-tone coral loses contrast against a
    dark canvas. */
+/* Dark applies when the phone asks for it — unless the user explicitly
+   chose Light — and always when they explicitly chose Dark. */
 @media (prefers-color-scheme: dark) {
-    :root {
+    :root:not([data-theme="light"]) {
         --accent:      #F58367;
         --accent-dark: #FA9A82;
         --accent-tint: #2E1C17;
@@ -96,8 +98,34 @@
     }
     /* Product logos are drawn for light backgrounds; lift them slightly so
        they don't sit in a hole on a dark tile. */
-    .lite-launch-logo { filter: brightness(1.12); }
+    :root:not([data-theme="light"]) .lite-launch-logo { filter: brightness(1.12); }
 }
+
+:root[data-theme="dark"] {
+    --accent:      #F58367;
+    --accent-dark: #FA9A82;
+    --accent-tint: #2E1C17;
+
+    --ink:    #F7EFEC;
+    --ink-2:  #C3B2AB;
+    --muted:  #8E7C75;
+    --line:   #2E2521;
+    --line-2: #3C312C;
+
+    --surface-sunk: #120E0D;
+    --bg:           #171211;
+    --card:         #201917;
+    --card-2:       #292120;
+    --surface-over: #2E2523;
+
+    --shadow-sm: 0 1px 2px rgba(0,0,0,0.4);
+    --shadow:    0 2px 4px rgba(0,0,0,0.35), 0 12px 30px -10px rgba(0,0,0,0.6);
+    --shadow-lg: 0 18px 46px -12px rgba(0,0,0,0.7);
+}
+/* Product logos are drawn for light backgrounds; lift them slightly so
+   they don't sit in a hole on a dark tile. */
+:root[data-theme="dark"] .lite-launch-logo { filter: brightness(1.12); }
+
 
 * { box-sizing: border-box; }
 
@@ -882,13 +910,22 @@ button { cursor: pointer; border: none; background: none; }
     --glass-bg:   color-mix(in srgb, var(--card) 78%, transparent);
     --glass-blur: saturate(180%) blur(20px);
 }
+/* Dark applies when the phone asks for it — unless the user explicitly
+   chose Light — and always when they explicitly chose Dark. */
 @media (prefers-color-scheme: dark) {
-    :root {
+    :root:not([data-theme="light"]) {
         --glass-rim:  inset 0 1px 0 rgba(255,255,255,0.10), inset 0 0 0 1px rgba(255,255,255,0.05);
         --glass-cast: 0 1px 2px rgba(0,0,0,0.5), 0 10px 24px -8px rgba(0,0,0,0.55), 0 28px 56px -24px rgba(0,0,0,0.6);
         --glass-bg:   color-mix(in srgb, var(--card) 82%, transparent);
     }
 }
+
+:root[data-theme="dark"] {
+    --glass-rim:  inset 0 1px 0 rgba(255,255,255,0.10), inset 0 0 0 1px rgba(255,255,255,0.05);
+    --glass-cast: 0 1px 2px rgba(0,0,0,0.5), 0 10px 24px -8px rgba(0,0,0,0.55), 0 28px 56px -24px rgba(0,0,0,0.6);
+    --glass-bg:   color-mix(in srgb, var(--card) 82%, transparent);
+}
+
 
 /* Panels: cards, tiles, sheets, controls — all cut from the same material. */
 .lite-card,

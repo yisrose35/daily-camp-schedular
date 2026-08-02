@@ -17,6 +17,9 @@
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link href="https://fonts.googleapis.com/css2?family=DM+Sans:opsz,wght@9..40,400;9..40,500;9..40,600;9..40,700&family=Fraunces:opsz,wght@9..144,600;9..144,700&display=swap" rel="stylesheet">
 
+    <!-- Resolve the theme before first paint so the app never flashes the wrong
+         one. Mirrors colorSchemePref() in campistry_lite.js. -->
+    <script>(function(){try{var p=JSON.parse(localStorage.getItem('campistry_lite_prefs')||'{}');var c=p.colorScheme||'auto';var r=document.documentElement;if(c!=='auto')r.setAttribute('data-theme',c);r.style.colorScheme=c==='auto'?'light dark':c;}catch(e){}})();</script>
     <style>html:not(.css-ready) body { opacity: 0; } html.css-ready body { transition: opacity 0.15s ease; }</style>
     <link rel="stylesheet" href="campistry-unified.css">
     <link rel="stylesheet" href="campistry_lite.css" onload="document.documentElement.classList.add('css-ready')">
