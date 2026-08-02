@@ -33,6 +33,9 @@
     let listEl = null;
     let detailPaneEl = null;
     const _advancedOpenLeagues = new Set();
+    // Which Advanced Settings cards are expanded, as "<league name>|<card key>".
+    // Enabling a rule opens its card; disabling closes it.
+    const _advOpenCards = new Set();
     const _chinuchOverrideOpenLeagues = new Set();
     let _isInitialized = false;
     let _refreshTimeout = null;
@@ -1178,6 +1181,110 @@
     }
 
     // =========================================================================
+    // ADVANCED SETTINGS — SHARED CARD CHROME
+    // =========================================================================
+    // Every Advanced card used to render its body in full the moment its rule
+    // was switched on, so a league using three of them was one long wall with
+    // nothing foldable and no way to see what the other rules were set to
+    // without scrolling through the one you weren't editing.
+    //
+    // This makes each card an accordion with a one-line STATUS of its current
+    // configuration in the header ("4 teams → Lakeside", "≥ 1 indoor
+    // game/day"). All five rules are readable at a glance and only the card
+    // being edited is open. The body is built by the caller and only when the
+    // card is actually open — collapsing re-renders, same as every other
+    // interaction in this file.
+    //
+    // opts: { key, title, subtitle, accent, tint, tintBorder,
+    //         enabled?  — omit for a card with no on/off switch,
+    //         onToggle? — (checked) => void, called before save + re-render,
+    //         status?   — string shown as the header pill }
+    // Returns { card, body, open }: append content to `body` only when `open`,
+    // then append `card` to the advanced container.
+    function makeAdvancedCard(league, container, opts) {
+        const hasSwitch = typeof opts.enabled === 'boolean';
+        const isOn = hasSwitch ? opts.enabled : true;
+        const openKey = league.name + '|' + opts.key;
+        // A switched-off rule has nothing to configure, so its card is a header
+        // only — no chevron, nothing to expand into.
+        const expandable = isOn;
+        const open = expandable && _advOpenCards.has(openKey);
+        const accent = opts.accent || '#16A34A';
+        const tint = opts.tint || '#F0FDF4';
+        const tintBorder = opts.tintBorder || '#BBF7D0';
+
+        const card = document.createElement('div');
+        card.style.cssText = 'border:1px solid ' + (isOn ? tintBorder : '#E2E8F0') + '; border-radius:12px; overflow:hidden; margin-top:8px;';
+
+        const header = document.createElement('div');
+        header.style.cssText = 'display:flex; align-items:center; gap:10px; padding:12px 14px; background:'
+            + (isOn ? tint : '#F9FAFB') + '; border-bottom:' + (open ? '1px solid ' + tintBorder : 'none') + ';';
+
+        if (hasSwitch) {
+            const cb = document.createElement('input');
+            cb.type = 'checkbox';
+            cb.checked = isOn;
+            cb.style.cssText = 'width:16px; height:16px; accent-color:' + accent + '; cursor:pointer; flex:none;';
+            // The checkbox is inside the header but must not also expand it.
+            cb.onclick = function (ev) { ev.stopPropagation(); };
+            cb.onchange = function () {
+                if (opts.onToggle) opts.onToggle(cb.checked);
+                // Turning a rule on drops you straight into its settings;
+                // turning it off folds it away.
+                if (cb.checked) _advOpenCards.add(openKey); else _advOpenCards.delete(openKey);
+                saveLeaguesData();
+                renderConfigSections(league, container);
+            };
+            header.appendChild(cb);
+        }
+
+        const titleWrap = document.createElement('div');
+        titleWrap.style.cssText = 'flex:1; min-width:0;' + (expandable ? ' cursor:pointer;' : '');
+        const titleEl = document.createElement('div');
+        titleEl.style.cssText = 'font-size:0.85rem; font-weight:600; color:#1E293B;';
+        titleEl.textContent = opts.title;          // Safe: textContent auto-escapes
+        titleWrap.appendChild(titleEl);
+        if (opts.subtitle) {
+            const subEl = document.createElement('div');
+            subEl.style.cssText = 'font-size:0.75rem; color:#64748B;';
+            subEl.textContent = opts.subtitle;     // Safe: textContent auto-escapes
+            titleWrap.appendChild(subEl);
+        }
+        header.appendChild(titleWrap);
+
+        if (opts.status) {
+            const pill = document.createElement('span');
+            pill.textContent = opts.status;        // Safe: textContent auto-escapes
+            pill.style.cssText = 'flex:none; font-size:0.7rem; font-weight:600; color:' + accent
+                + '; background:white; border:1px solid ' + tintBorder + '; border-radius:10px; padding:2px 8px; white-space:nowrap;';
+            header.appendChild(pill);
+        }
+
+        if (expandable) {
+            const chevron = document.createElement('span');
+            chevron.textContent = open ? '▾' : '▸';
+            chevron.style.cssText = 'flex:none; width:12px; color:#9CA3AF; font-size:0.85rem; cursor:pointer;';
+            header.appendChild(chevron);
+
+            const toggleOpen = function () {
+                if (_advOpenCards.has(openKey)) _advOpenCards.delete(openKey);
+                else _advOpenCards.add(openKey);
+                renderConfigSections(league, container);
+            };
+            titleWrap.onclick = toggleOpen;
+            chevron.onclick = toggleOpen;
+        }
+
+        card.appendChild(header);
+
+        const body = document.createElement('div');
+        body.style.cssText = 'padding:14px;';
+        if (open) card.appendChild(body);
+
+        return { card: card, body: body, open: open };
+    }
+
+    // =========================================================================
     // CONFIG SECTIONS (Cards)
     // =========================================================================
     function renderConfigSections(league, container) {
@@ -1450,26 +1557,24 @@
         const locationZones = settings.locationZones || settings.global?.locationZones || {};
         const totalTeams = (league.teams || []).length;
 
-        const awayCard = document.createElement('div');
-        awayCard.style.cssText = 'border:1px solid #E2E8F0; border-radius:12px; overflow:hidden; margin-top:8px;';
+        const _awayStatus = !league.offCampus.enabled ? null
+            : (league.offCampus.teamsPerDay > 0 && league.offCampus.zone)
+                ? league.offCampus.teamsPerDay + ' teams \u2192 ' + league.offCampus.zone
+                : 'Not set up yet';
 
-        // Header bar \u2014 toggle lives here
-        const awayHeader = document.createElement('label');
-        awayHeader.style.cssText = 'display:flex; align-items:center; gap:10px; padding:12px 14px; cursor:pointer; background:' + (league.offCampus.enabled ? '#EFF6FF' : '#F9FAFB') + '; border-bottom:' + (league.offCampus.enabled ? '1px solid #BFDBFE' : 'none') + ';';
-        const awayCb = document.createElement('input');
-        awayCb.type = 'checkbox';
-        awayCb.checked = league.offCampus.enabled === true;
-        awayCb.style.cssText = 'width:16px; height:16px; accent-color:#2563EB;';
-        awayCb.onchange = function () { league.offCampus.enabled = awayCb.checked; saveLeaguesData(); renderConfigSections(league, container); };
-        awayHeader.appendChild(awayCb);
-        const awayTitle = document.createElement('div');
-        awayTitle.innerHTML = '<div style="font-size:0.85rem; font-weight:600; color:#1E293B;">Away Games</div><div style="font-size:0.75rem; color:#64748B;">Some teams travel off-campus for back-to-back games</div>';
-        awayHeader.appendChild(awayTitle);
-        awayCard.appendChild(awayHeader);
+        const _away = makeAdvancedCard(league, container, {
+            key: 'away',
+            title: 'Away Games',
+            subtitle: 'Some teams travel off-campus for back-to-back games',
+            accent: '#2563EB', tint: '#EFF6FF', tintBorder: '#BFDBFE',
+            enabled: league.offCampus.enabled === true,
+            onToggle: function (checked) { league.offCampus.enabled = checked; },
+            status: _awayStatus
+        });
+        const awayCard = _away.card;
 
-        if (league.offCampus.enabled) {
-            const awayBody = document.createElement('div');
-            awayBody.style.cssText = 'padding:14px;';
+        if (_away.open) {
+            const awayBody = _away.body;
 
             // Inline sentence: "[X] teams go to [Zone \u25BC] each game day"
             const sentenceRow = document.createElement('div');
@@ -1545,8 +1650,6 @@
                 awayBody.appendChild(tripsLabel);
                 awayBody.appendChild(tripsRow);
             }
-
-            awayCard.appendChild(awayBody);
         }
 
         advancedBody.appendChild(awayCard);
@@ -1554,29 +1657,31 @@
         // ─── CARD: CHINUCH ──────────────────────────────────────────────────
         if (!league.chinuch) league.chinuch = { enabled: false, timesPerDay: null, teamsPerRound: null, perSessionCounts: null, bunkFacilities: {}, roomCapacity: {} };
 
-        const chinuchCard = document.createElement('div');
-        chinuchCard.style.cssText = 'border:1px solid #E2E8F0; border-radius:12px; overflow:hidden; margin-top:8px;';
+        const _chinuchStatus = (function () {
+            if (!league.chinuch.enabled) return null;
+            const arr = Array.isArray(league.chinuch.perSessionCounts)
+                ? league.chinuch.perSessionCounts.filter(function (n) { return Number.isFinite(n) && n >= 0; })
+                : [];
+            if (arr.length) return 'Per session: ' + arr.join('/');
+            const bits = [];
+            if (league.chinuch.timesPerDay > 0) bits.push(league.chinuch.timesPerDay + '×/day');
+            if (league.chinuch.teamsPerRound > 0) bits.push(league.chinuch.teamsPerRound + ' teams/session');
+            return bits.length ? bits.join(' · ') : 'Auto distribution';
+        })();
 
-        const chinuchHeader = document.createElement('label');
-        chinuchHeader.style.cssText = 'display:flex; align-items:center; gap:10px; padding:12px 14px; cursor:pointer; background:' + (league.chinuch.enabled ? '#F0FDF4' : '#F9FAFB') + '; border-bottom:' + (league.chinuch.enabled ? '1px solid #BBF7D0' : 'none') + ';';
-        const chinuchCb = document.createElement('input');
-        chinuchCb.type = 'checkbox';
-        chinuchCb.checked = league.chinuch.enabled === true;
-        chinuchCb.style.cssText = 'width:16px; height:16px; accent-color:#16A34A;';
-        chinuchCb.onchange = function () {
-            league.chinuch.enabled = chinuchCb.checked;
-            saveLeaguesData();
-            renderConfigSections(league, container);
-        };
-        chinuchHeader.appendChild(chinuchCb);
-        const chinuchTitle = document.createElement('div');
-        chinuchTitle.innerHTML = '<div style="font-size:0.85rem; font-weight:600; color:#1E293B;">Chinuch</div><div style="font-size:0.75rem; color:#64748B;">Teams rotate through chinuch class during league time</div>';
-        chinuchHeader.appendChild(chinuchTitle);
-        chinuchCard.appendChild(chinuchHeader);
+        const _chinuch = makeAdvancedCard(league, container, {
+            key: 'chinuch',
+            title: 'Chinuch',
+            subtitle: 'Teams rotate through chinuch class during league time',
+            accent: '#16A34A', tint: '#F0FDF4', tintBorder: '#BBF7D0',
+            enabled: league.chinuch.enabled === true,
+            onToggle: function (checked) { league.chinuch.enabled = checked; },
+            status: _chinuchStatus
+        });
+        const chinuchCard = _chinuch.card;
 
-        if (league.chinuch.enabled) {
-            const chinuchBody = document.createElement('div');
-            chinuchBody.style.cssText = 'padding:14px;';
+        if (_chinuch.open) {
+            const chinuchBody = _chinuch.body;
 
             // ── Auto-distribution info chip ─────────────────────────────────
             const customArr = Array.isArray(league.chinuch.perSessionCounts) ? league.chinuch.perSessionCounts.filter(function (n) { return Number.isFinite(n) && n >= 0; }) : [];
@@ -1858,7 +1963,6 @@
                 }
             }
 
-            chinuchCard.appendChild(chinuchBody);
         }
 
         advancedBody.appendChild(chinuchCard);
@@ -1870,30 +1974,30 @@
         if (!Array.isArray(league.byeActivity.activities)) league.byeActivity.activities = [];
         if (!league.byeActivity.teamActivities || typeof league.byeActivity.teamActivities !== 'object') league.byeActivity.teamActivities = {};
 
-        const byeCard = document.createElement('div');
-        byeCard.style.cssText = 'border:1px solid #E2E8F0; border-radius:12px; overflow:hidden; margin-top:8px;';
+        const _byeStatus = (function () {
+            if (!league.byeActivity.enabled) return null;
+            const nAct = league.byeActivity.activities.length;
+            const nPin = Object.keys(league.byeActivity.teamActivities).length;
+            if (!nAct && !nPin) return 'Nothing picked';
+            const bits = [];
+            if (nAct) bits.push(nAct + ' activit' + (nAct === 1 ? 'y' : 'ies'));
+            if (nPin) bits.push(nPin + ' pinned');
+            return bits.join(' \u00b7 ');
+        })();
 
-        const byeHeader = document.createElement('label');
-        byeHeader.style.cssText = 'display:flex; align-items:center; gap:10px; padding:12px 14px; cursor:pointer; background:' + (league.byeActivity.enabled ? '#F0FDF4' : '#F9FAFB') + '; border-bottom:' + (league.byeActivity.enabled ? '1px solid #BBF7D0' : 'none') + ';';
-        const byeCb = document.createElement('input');
-        byeCb.type = 'checkbox';
-        byeCb.checked = league.byeActivity.enabled === true;
-        byeCb.style.cssText = 'width:16px; height:16px; accent-color:#16A34A;';
-        byeCb.onchange = function () {
-            league.byeActivity.enabled = byeCb.checked;
-            saveLeaguesData();
-            renderConfigSections(league, container);
-        };
-        byeHeader.appendChild(byeCb);
-        const byeTitle = document.createElement('div');
-        byeTitle.innerHTML = '<div style="font-size:0.85rem; font-weight:600; color:#1E293B;">Bye Activity</div>'
-            + '<div style="font-size:0.75rem; color:#64748B;">A team with no game gets a real activity instead of a bye</div>';
-        byeHeader.appendChild(byeTitle);
-        byeCard.appendChild(byeHeader);
+        const _bye = makeAdvancedCard(league, container, {
+            key: 'bye',
+            title: 'Bye Activity',
+            subtitle: 'A team with no game gets a real activity instead of a bye',
+            accent: '#16A34A', tint: '#F0FDF4', tintBorder: '#BBF7D0',
+            enabled: league.byeActivity.enabled === true,
+            onToggle: function (checked) { league.byeActivity.enabled = checked; },
+            status: _byeStatus
+        });
+        const byeCard = _bye.card;
 
-        if (league.byeActivity.enabled) {
-            const byeBody = document.createElement('div');
-            byeBody.style.cssText = 'padding:14px;';
+        if (_bye.open) {
+            const byeBody = _bye.body;
 
             const byeInfo = document.createElement('div');
             byeInfo.style.cssText = 'font-size:0.78rem; color:#374151; background:#F0F9FF; border:1px solid #BAE6FD; border-radius:8px; padding:8px 10px; margin-bottom:12px;';
@@ -2004,8 +2108,6 @@
                     byeBody.appendChild(warn);
                 }
             }
-
-            byeCard.appendChild(byeBody);
         }
 
         advancedBody.appendChild(byeCard);
@@ -2013,29 +2115,25 @@
         // ─── CARD: INDOOR REQUIREMENT ───────────────────────────────────────
         if (!league.indoorRequirement) league.indoorRequirement = { enabled: false, op: '>=', count: 1 };
 
-        const indoorCard = document.createElement('div');
-        indoorCard.style.cssText = 'border:1px solid #E2E8F0; border-radius:12px; overflow:hidden; margin-top:8px;';
+        const _indoorOpSym = { '>=': '\u2265', '=': '=', '<=': '\u2264' };
+        const _indoorStatus = league.indoorRequirement.enabled
+            ? (_indoorOpSym[league.indoorRequirement.op] || '\u2265') + ' ' + league.indoorRequirement.count
+                + ' indoor game' + (league.indoorRequirement.count === 1 ? '' : 's') + '/day'
+            : null;
 
-        const indoorHeader = document.createElement('label');
-        indoorHeader.style.cssText = 'display:flex; align-items:center; gap:10px; padding:12px 14px; cursor:pointer; background:' + (league.indoorRequirement.enabled ? '#F0FDF4' : '#F9FAFB') + '; border-bottom:' + (league.indoorRequirement.enabled ? '1px solid #BBF7D0' : 'none') + ';';
-        const indoorCb = document.createElement('input');
-        indoorCb.type = 'checkbox';
-        indoorCb.checked = league.indoorRequirement.enabled === true;
-        indoorCb.style.cssText = 'width:16px; height:16px; accent-color:#16A34A;';
-        indoorCb.onchange = function () {
-            league.indoorRequirement.enabled = indoorCb.checked;
-            saveLeaguesData();
-            renderConfigSections(league, container);
-        };
-        indoorHeader.appendChild(indoorCb);
-        const indoorTitle = document.createElement('div');
-        indoorTitle.innerHTML = '<div style="font-size:0.85rem; font-weight:600; color:#1E293B;">Indoor Court Requirement</div><div style="font-size:0.75rem; color:#64748B;">Steer each team toward a target number of indoor games per day</div>';
-        indoorHeader.appendChild(indoorTitle);
-        indoorCard.appendChild(indoorHeader);
+        const _indoor = makeAdvancedCard(league, container, {
+            key: 'indoor',
+            title: 'Indoor Court Requirement',
+            subtitle: 'Steer each team toward a target number of indoor games per day',
+            accent: '#16A34A', tint: '#F0FDF4', tintBorder: '#BBF7D0',
+            enabled: league.indoorRequirement.enabled === true,
+            onToggle: function (checked) { league.indoorRequirement.enabled = checked; },
+            status: _indoorStatus
+        });
+        const indoorCard = _indoor.card;
 
-        if (league.indoorRequirement.enabled) {
-            const indoorBody = document.createElement('div');
-            indoorBody.style.cssText = 'padding:14px;';
+        if (_indoor.open) {
+            const indoorBody = _indoor.body;
 
             const ruleRow = document.createElement('div');
             ruleRow.style.cssText = 'display:flex; align-items:center; gap:8px; font-size:0.88rem; color:#374151; flex-wrap:wrap;';
@@ -2080,85 +2178,88 @@
             hint.style.cssText = 'font-size:0.72rem; color:#6B7280; margin-top:10px; line-height:1.4;';
             hint.textContent = 'Indoor courts come from facilities marked Indoor in the Facilities tab. The solver biases assignments to meet the rule and runs a post-pass that swaps outdoor matchups for free indoor ones when teams are short.';
             indoorBody.appendChild(hint);
-
-            indoorCard.appendChild(indoorBody);
         }
 
         advancedBody.appendChild(indoorCard);
 
         // ─── CARD: SPORT DAILY LIMITS ───────────────────────────────────────
         // Per-sport hard cap on how many times ONE TEAM may play that sport in
-        // a single day. No enable checkbox like the cards above: "No limit" is
-        // already every sport's default and the dropdown says so, so a separate
-        // on/off flag would only add a way to have limits configured and
-        // silently inactive.
+        // a single day. No enable checkbox like the cards above: a blank box
+        // already means "no limit" for every sport, so a separate on/off flag
+        // would only add a way to have limits configured and silently inactive.
         if (!league.sportDailyLimits || typeof league.sportDailyLimits !== 'object') league.sportDailyLimits = {};
 
-        const limitCard = document.createElement('div');
-        limitCard.style.cssText = 'border:1px solid #E2E8F0; border-radius:12px; overflow:hidden; margin-top:8px;';
+        const _cappedSports = league.sports.filter(function (s) { return league.sportDailyLimits[s]; });
+        const _limitStatus = _cappedSports.length === 0 ? null
+            : _cappedSports.length === 1
+                ? _cappedSports[0] + ' max ' + league.sportDailyLimits[_cappedSports[0]] + '/day'
+                : _cappedSports.length + ' sports capped';
 
-        const _anyLimit = Object.keys(league.sportDailyLimits).length > 0;
-        const limitHeader = document.createElement('div');
-        limitHeader.style.cssText = 'padding:12px 14px; background:' + (_anyLimit ? '#F0FDF4' : '#F9FAFB')
-            + '; border-bottom:' + (_anyLimit ? '1px solid #BBF7D0' : 'none') + ';';
-        limitHeader.innerHTML = '<div style="font-size:0.85rem; font-weight:600; color:#1E293B;">Sport Daily Limits</div>'
-            + '<div style="font-size:0.75rem; color:#64748B;">Cap how many times one team can play a sport in a single day</div>';
-        limitCard.appendChild(limitHeader);
+        const _limit = makeAdvancedCard(league, container, {
+            key: 'sportlimits',
+            title: 'Sport Daily Limits',
+            subtitle: 'Cap how many times one team can play a sport in a single day',
+            accent: '#16A34A', tint: '#F0FDF4', tintBorder: '#BBF7D0',
+            status: _limitStatus
+        });
 
-        const limitBody = document.createElement('div');
-        limitBody.style.cssText = 'padding:14px;';
+        if (_limit.open) {
+            const limitBody = _limit.body;
 
-        if (league.sports.length === 0) {
-            const empty = document.createElement('div');
-            empty.style.cssText = 'font-size:0.8rem; color:#9CA3AF; text-align:center; padding:8px;';
-            empty.textContent = 'Pick this league’s sports above to set a daily limit on one.';
-            limitBody.appendChild(empty);
-        } else {
-            league.sports.forEach(function (sport) {
-                const row = document.createElement('div');
-                row.style.cssText = 'display:flex; align-items:center; gap:10px; padding:5px 0;';
+            if (league.sports.length === 0) {
+                const empty = document.createElement('div');
+                empty.style.cssText = 'font-size:0.8rem; color:#9CA3AF; text-align:center; padding:8px;';
+                empty.textContent = 'Pick this league\u2019s sports above to set a daily limit on one.';
+                limitBody.appendChild(empty);
+            } else {
+                league.sports.forEach(function (sport) {
+                    const row = document.createElement('div');
+                    row.style.cssText = 'display:flex; align-items:center; gap:8px; padding:5px 0;';
 
-                const label = document.createElement('span');
-                label.textContent = sport;   // Safe: textContent auto-escapes
-                label.style.cssText = 'flex:1; font-size:0.85rem; color:#374151;';
-                row.appendChild(label);
+                    const label = document.createElement('span');
+                    label.textContent = sport;   // Safe: textContent auto-escapes
+                    label.style.cssText = 'flex:1; min-width:0; font-size:0.85rem; color:#374151;';
+                    row.appendChild(label);
 
-                const sel = document.createElement('select');
-                sel.style.cssText = 'padding:5px 8px; border:1px solid #D1D5DB; border-radius:6px; font-size:0.82rem; background:white;';
-                [
-                    { v: '', label: 'No limit' },
-                    { v: '1', label: 'Max 1 game/day' },
-                    { v: '2', label: 'Max 2 games/day' },
-                    { v: '3', label: 'Max 3 games/day' }
-                ].forEach(function (o) {
-                    const opt = document.createElement('option');
-                    opt.value = o.v;
-                    opt.textContent = o.label;
-                    if (String(league.sportDailyLimits[sport] || '') === o.v) opt.selected = true;
-                    sel.appendChild(opt);
+                    // Free-form number rather than a fixed list of choices: a
+                    // camp running five league periods a day may well want a cap
+                    // of 4. Blank IS the "no limit" state, so clearing the box is
+                    // how you remove a cap.
+                    const numInput = document.createElement('input');
+                    numInput.type = 'number';
+                    numInput.min = '1';
+                    numInput.step = '1';
+                    numInput.value = league.sportDailyLimits[sport] || '';
+                    numInput.placeholder = '\u2014';
+                    numInput.title = 'Max games of ' + sport + ' one team can play in a day. Leave blank for no limit.';
+                    numInput.style.cssText = 'width:60px; padding:5px 8px; border:1px solid #D1D5DB; border-radius:6px; font-size:0.82rem; text-align:center; background:white;';
+                    numInput.onchange = function () {
+                        const v = parseInt(numInput.value, 10);
+                        if (Number.isFinite(v) && v >= 1) league.sportDailyLimits[sport] = v;
+                        else delete league.sportDailyLimits[sport];
+                        saveLeaguesData();
+                        renderConfigSections(league, container);
+                    };
+                    row.appendChild(numInput);
+
+                    const unit = document.createElement('span');
+                    unit.style.cssText = 'font-size:0.78rem; color:' + (league.sportDailyLimits[sport] ? '#374151' : '#9CA3AF') + '; white-space:nowrap;';
+                    unit.textContent = league.sportDailyLimits[sport] ? 'per team per day' : 'no limit';
+                    row.appendChild(unit);
+
+                    limitBody.appendChild(row);
                 });
-                sel.onchange = function () {
-                    const v = parseInt(sel.value, 10);
-                    if (Number.isFinite(v) && v >= 1) league.sportDailyLimits[sport] = v;
-                    else delete league.sportDailyLimits[sport];
-                    saveLeaguesData();
-                    renderConfigSections(league, container);
-                };
-                row.appendChild(sel);
 
-                limitBody.appendChild(row);
-            });
-
-            const limitHint = document.createElement('div');
-            limitHint.style.cssText = 'font-size:0.72rem; color:#6B7280; margin-top:10px; line-height:1.4;';
-            limitHint.textContent = 'Only bites on days with more than one league game. This is a hard rule: the scheduler '
-                + 'picks another sport instead, and if the cap leaves a matchup nothing else to play, that matchup gets a bye '
-                + '(with the reason spelled out) rather than breaking it.';
-            limitBody.appendChild(limitHint);
+                const limitHint = document.createElement('div');
+                limitHint.style.cssText = 'font-size:0.72rem; color:#6B7280; margin-top:10px; line-height:1.4;';
+                limitHint.textContent = 'Leave blank for no limit. Only bites on days with more than one league game. '
+                    + 'This is a hard rule: the scheduler picks another sport instead, and if the cap leaves a matchup '
+                    + 'nothing else to play, that matchup gets a bye (with the reason spelled out) rather than breaking it.';
+                limitBody.appendChild(limitHint);
+            }
         }
 
-        limitCard.appendChild(limitBody);
-        advancedBody.appendChild(limitCard);
+        advancedBody.appendChild(_limit.card);
     }
 
     // =========================================================================
