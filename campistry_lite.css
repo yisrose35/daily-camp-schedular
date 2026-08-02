@@ -110,6 +110,23 @@ html, body {
     overscroll-behavior-y: none;
     -webkit-font-smoothing: antialiased;
 }
+
+/* ── Ambient backdrop ────────────────────────────────────────────────────
+   Glass only reads against something with variation in it — over a flat fill
+   a translucent surface is indistinguishable from an opaque one, which is
+   why frosted panels on a plain canvas just look like grey boxes. This is a
+   soft, fixed wash of the brand hues sitting behind everything, giving the
+   surfaces above something to pick up and refract. */
+body::before {
+    content: ''; position: fixed; inset: -20%; z-index: -1; pointer-events: none;
+    background:
+        radial-gradient(46% 34% at 12% 4%,  color-mix(in srgb, var(--coral-300) 46%, transparent) 0%, transparent 62%),
+        radial-gradient(40% 30% at 92% 12%, color-mix(in srgb, var(--c-me) 26%, transparent) 0%, transparent 64%),
+        radial-gradient(52% 40% at 74% 88%, color-mix(in srgb, var(--c-flow) 20%, transparent) 0%, transparent 66%),
+        var(--bg);
+    filter: saturate(120%);
+}
+
 button, input, select, textarea { font-family: inherit; font-size: 16px; color: inherit; }
 button { cursor: pointer; border: none; background: none; }
 
@@ -848,3 +865,97 @@ button { cursor: pointer; border: none; background: none; }
 }
 .lite-ptr.ready .lite-ptr-spin { opacity: 1; transform: scale(1.1); }
 .lite-ptr.busy .lite-ptr-spin { opacity: 1; animation: lite-spin 0.7s linear infinite; }
+
+/* ════════════════════════════════════════════════════════════════════════
+   MATERIAL — the glass layer
+   ------------------------------------------------------------------------
+   Three things make a surface read as real glass rather than a coloured
+   rectangle: something with variation behind it (body::before), enough
+   backdrop blur to actually frost it, and a defined edge. The edge does most
+   of the work: a hairline of near-white INSET along the top mimics light
+   catching the rim, and paired with a tight contact shadow plus a wide
+   ambient one it gives a surface thickness instead of just outline.
+   ════════════════════════════════════════════════════════════════════════ */
+:root {
+    --glass-rim:  inset 0 1px 0 rgba(255,255,255,0.85), inset 0 0 0 1px rgba(255,255,255,0.32);
+    --glass-cast: 0 1px 2px rgba(74,38,26,0.06), 0 8px 20px -8px rgba(74,38,26,0.16), 0 24px 48px -24px rgba(74,38,26,0.20);
+    --glass-bg:   color-mix(in srgb, var(--card) 78%, transparent);
+    --glass-blur: saturate(180%) blur(20px);
+}
+@media (prefers-color-scheme: dark) {
+    :root {
+        --glass-rim:  inset 0 1px 0 rgba(255,255,255,0.10), inset 0 0 0 1px rgba(255,255,255,0.05);
+        --glass-cast: 0 1px 2px rgba(0,0,0,0.5), 0 10px 24px -8px rgba(0,0,0,0.55), 0 28px 56px -24px rgba(0,0,0,0.6);
+        --glass-bg:   color-mix(in srgb, var(--card) 82%, transparent);
+    }
+}
+
+/* Panels: cards, tiles, sheets, controls — all cut from the same material. */
+.lite-card,
+.lite-launch-tile,
+.lite-bunk-card,
+.lite-grid-wrap,
+.lite-ctrl,
+.lite-date-pill,
+.lite-date-arrow,
+.lite-searchrow .lite-input,
+.lite-note-card {
+    background: var(--glass-bg);
+    backdrop-filter: var(--glass-blur);
+    -webkit-backdrop-filter: var(--glass-blur);
+    border: 1px solid color-mix(in srgb, var(--line) 70%, transparent);
+    box-shadow: var(--glass-rim), var(--glass-cast);
+}
+
+/* Floating chrome sits closer to the eye, so it frosts harder. */
+.lite-header, .lite-tabbar {
+    background: color-mix(in srgb, var(--card) 66%, transparent);
+    backdrop-filter: saturate(200%) blur(26px);
+    -webkit-backdrop-filter: saturate(200%) blur(26px);
+    border-top-color: color-mix(in srgb, var(--line) 60%, transparent);
+}
+.lite-tabbar { box-shadow: inset 0 1px 0 rgba(255,255,255,0.6); }
+
+.lite-sheet {
+    background: color-mix(in srgb, var(--surface-over) 88%, transparent);
+    backdrop-filter: saturate(190%) blur(30px);
+    -webkit-backdrop-filter: saturate(190%) blur(30px);
+    box-shadow: var(--glass-rim), 0 -12px 48px -12px rgba(74,38,26,0.28);
+}
+.lite-sheet-backdrop { background: rgba(31,23,20,0.42); backdrop-filter: blur(2px); -webkit-backdrop-filter: blur(2px); }
+
+/* The launcher tiles keep their product-colour edge, now as a lit rim rather
+   than a flat bar, and gain a faint wash of their own colour so each tile
+   feels tinted by the product it opens. */
+.lite-launch-tile {
+    background:
+        linear-gradient(180deg, color-mix(in srgb, var(--ql) 7%, transparent) 0%, transparent 58%),
+        var(--glass-bg);
+    border-bottom: 3px solid color-mix(in srgb, var(--ql) 72%, transparent);
+}
+.lite-launch-tile:active { box-shadow: var(--glass-rim), 0 1px 2px rgba(74,38,26,0.10); }
+
+/* Solid, high-contrast things stay solid — glass on a primary button reads as
+   indecision, not depth. They get a sheen and a lit top edge instead. */
+.lite-btn:not(.secondary):not(.danger) {
+    background: linear-gradient(180deg, color-mix(in srgb, var(--accent) 88%, #fff) 0%, var(--accent) 46%, var(--accent-dark) 100%);
+    box-shadow: inset 0 1px 0 rgba(255,255,255,0.42), 0 1px 2px rgba(74,38,26,0.16), 0 10px 22px -10px color-mix(in srgb, var(--accent) 70%, transparent);
+}
+.lite-btn:not(.secondary):not(.danger):active { box-shadow: inset 0 1px 0 rgba(255,255,255,0.3), 0 1px 2px rgba(74,38,26,0.18); }
+
+/* The hero is the app's one big brand moment: give it a real sheen — a soft
+   specular sweep across the top and a lit rim, so it reads as a lacquered
+   panel rather than a flat colour fill. */
+.lite-hero-card { position: relative; overflow: hidden; box-shadow: inset 0 1px 0 rgba(255,255,255,0.34), var(--glass-cast); }
+.lite-hero-card::after {
+    content: ''; position: absolute; inset: 0; pointer-events: none; border-radius: inherit; z-index: 0;
+    background:
+        radial-gradient(72% 46% at 18% -12%, rgba(255,255,255,0.34) 0%, transparent 60%),
+        linear-gradient(198deg, rgba(255,255,255,0.16) 0%, transparent 34%);
+}
+
+@media (prefers-reduced-transparency: reduce) {
+    .lite-card, .lite-launch-tile, .lite-bunk-card, .lite-sheet, .lite-header, .lite-tabbar, .lite-ctrl {
+        background: var(--card); backdrop-filter: none; -webkit-backdrop-filter: none;
+    }
+}
