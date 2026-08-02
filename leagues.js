@@ -1284,11 +1284,14 @@
             const chip = document.createElement('span');
             chip.className = 'chip' + (isActive ? ' active' : '');
             chip.textContent = act; // Safe: textContent auto-escapes
-            // Show the cap right on the chip so it's visible without opening the
-            // limits list below.
+            // The daily cap is set in Advanced Settings → Sport Daily Limits, but
+            // it's a rule ABOUT this sport — showing it on the chip means a user
+            // reading the sport list can't miss that one of them is capped.
             if (isActive && league.sportDailyLimits && league.sportDailyLimits[act]) {
                 const capTag = document.createElement('span');
                 capTag.textContent = ' ' + league.sportDailyLimits[act] + '×/day';
+                capTag.title = 'Max ' + league.sportDailyLimits[act] + ' game(s) of ' + act
+                    + ' per team per day — change it in Advanced Settings → Sport Daily Limits';
                 capTag.style.cssText = 'margin-left:4px; font-size:0.7rem; opacity:0.75; font-weight:600;';
                 chip.appendChild(capTag);
             }
@@ -1303,68 +1306,6 @@
             sportChips.appendChild(chip);
         });
         sportCard.appendChild(sportChips);
-
-        // ─── DAILY LIMIT PER TEAM ────────────────────────────────────────────
-        // Per-sport hard cap on how many times ONE TEAM may play that sport in a
-        // single day. Default "No limit" for every sport, so nothing changes
-        // until a camp asks for it. Lives here, next to the sport that owns the
-        // rule, rather than in Advanced — it reads as part of picking the sport.
-        if (league.sports.length > 0) {
-            if (!league.sportDailyLimits || typeof league.sportDailyLimits !== 'object') league.sportDailyLimits = {};
-
-            const limitWrap = document.createElement('div');
-            limitWrap.style.cssText = 'margin-top:12px; padding-top:12px; border-top:1px dashed #E2E8F0;';
-
-            const limitTitle = document.createElement('div');
-            limitTitle.style.cssText = 'font-size:0.78rem; font-weight:600; color:#334155; margin-bottom:2px;';
-            limitTitle.textContent = 'Daily limit per team';
-            limitWrap.appendChild(limitTitle);
-
-            const limitHint = document.createElement('div');
-            limitHint.style.cssText = 'font-size:0.72rem; color:#6B7280; margin-bottom:8px; line-height:1.4;';
-            limitHint.textContent = 'On days with more than one game, cap how many times a single team can play a sport. '
-                + 'This is a hard rule — the scheduler will pick another sport instead, and if the cap leaves a matchup with '
-                + 'nothing else to play, that matchup gets a bye rather than breaking it.';
-            limitWrap.appendChild(limitHint);
-
-            league.sports.forEach(function (sport) {
-                const row = document.createElement('div');
-                row.style.cssText = 'display:flex; align-items:center; gap:10px; padding:5px 0;';
-
-                const label = document.createElement('span');
-                label.textContent = sport;   // Safe: textContent auto-escapes
-                label.style.cssText = 'flex:1; font-size:0.85rem; color:#374151;';
-                row.appendChild(label);
-
-                const sel = document.createElement('select');
-                sel.style.cssText = 'padding:5px 8px; border:1px solid #D1D5DB; border-radius:6px; font-size:0.82rem; background:white;';
-                [
-                    { v: '', label: 'No limit' },
-                    { v: '1', label: 'Max 1 game/day' },
-                    { v: '2', label: 'Max 2 games/day' },
-                    { v: '3', label: 'Max 3 games/day' }
-                ].forEach(function (o) {
-                    const opt = document.createElement('option');
-                    opt.value = o.v;
-                    opt.textContent = o.label;
-                    if (String(league.sportDailyLimits[sport] || '') === o.v) opt.selected = true;
-                    sel.appendChild(opt);
-                });
-                sel.onchange = function () {
-                    const v = parseInt(sel.value, 10);
-                    if (Number.isFinite(v) && v >= 1) league.sportDailyLimits[sport] = v;
-                    else delete league.sportDailyLimits[sport];
-                    saveLeaguesData();
-                    renderConfigSections(league, container);
-                };
-                row.appendChild(sel);
-
-                limitWrap.appendChild(row);
-            });
-
-            sportCard.appendChild(limitWrap);
-        }
-
         container.appendChild(sportCard);
 
         // CARD 3: TEAMS
@@ -1480,6 +1421,7 @@
         if (league.chinuch?.enabled) _summaryBits.push('Chinuch');
         if (league.byeActivity?.enabled) _summaryBits.push('Bye Activity');
         if (league.indoorRequirement?.enabled) _summaryBits.push('Indoor Rule');
+        if (Object.keys(league.sportDailyLimits || {}).length > 0) _summaryBits.push('Sport Daily Limits');
         if (_summaryBits.length > 0) {
             const summary = document.createElement('span');
             summary.textContent = _summaryBits.join(' \u00b7 ');
@@ -2143,6 +2085,80 @@
         }
 
         advancedBody.appendChild(indoorCard);
+
+        // ─── CARD: SPORT DAILY LIMITS ───────────────────────────────────────
+        // Per-sport hard cap on how many times ONE TEAM may play that sport in
+        // a single day. No enable checkbox like the cards above: "No limit" is
+        // already every sport's default and the dropdown says so, so a separate
+        // on/off flag would only add a way to have limits configured and
+        // silently inactive.
+        if (!league.sportDailyLimits || typeof league.sportDailyLimits !== 'object') league.sportDailyLimits = {};
+
+        const limitCard = document.createElement('div');
+        limitCard.style.cssText = 'border:1px solid #E2E8F0; border-radius:12px; overflow:hidden; margin-top:8px;';
+
+        const _anyLimit = Object.keys(league.sportDailyLimits).length > 0;
+        const limitHeader = document.createElement('div');
+        limitHeader.style.cssText = 'padding:12px 14px; background:' + (_anyLimit ? '#F0FDF4' : '#F9FAFB')
+            + '; border-bottom:' + (_anyLimit ? '1px solid #BBF7D0' : 'none') + ';';
+        limitHeader.innerHTML = '<div style="font-size:0.85rem; font-weight:600; color:#1E293B;">Sport Daily Limits</div>'
+            + '<div style="font-size:0.75rem; color:#64748B;">Cap how many times one team can play a sport in a single day</div>';
+        limitCard.appendChild(limitHeader);
+
+        const limitBody = document.createElement('div');
+        limitBody.style.cssText = 'padding:14px;';
+
+        if (league.sports.length === 0) {
+            const empty = document.createElement('div');
+            empty.style.cssText = 'font-size:0.8rem; color:#9CA3AF; text-align:center; padding:8px;';
+            empty.textContent = 'Pick this league’s sports above to set a daily limit on one.';
+            limitBody.appendChild(empty);
+        } else {
+            league.sports.forEach(function (sport) {
+                const row = document.createElement('div');
+                row.style.cssText = 'display:flex; align-items:center; gap:10px; padding:5px 0;';
+
+                const label = document.createElement('span');
+                label.textContent = sport;   // Safe: textContent auto-escapes
+                label.style.cssText = 'flex:1; font-size:0.85rem; color:#374151;';
+                row.appendChild(label);
+
+                const sel = document.createElement('select');
+                sel.style.cssText = 'padding:5px 8px; border:1px solid #D1D5DB; border-radius:6px; font-size:0.82rem; background:white;';
+                [
+                    { v: '', label: 'No limit' },
+                    { v: '1', label: 'Max 1 game/day' },
+                    { v: '2', label: 'Max 2 games/day' },
+                    { v: '3', label: 'Max 3 games/day' }
+                ].forEach(function (o) {
+                    const opt = document.createElement('option');
+                    opt.value = o.v;
+                    opt.textContent = o.label;
+                    if (String(league.sportDailyLimits[sport] || '') === o.v) opt.selected = true;
+                    sel.appendChild(opt);
+                });
+                sel.onchange = function () {
+                    const v = parseInt(sel.value, 10);
+                    if (Number.isFinite(v) && v >= 1) league.sportDailyLimits[sport] = v;
+                    else delete league.sportDailyLimits[sport];
+                    saveLeaguesData();
+                    renderConfigSections(league, container);
+                };
+                row.appendChild(sel);
+
+                limitBody.appendChild(row);
+            });
+
+            const limitHint = document.createElement('div');
+            limitHint.style.cssText = 'font-size:0.72rem; color:#6B7280; margin-top:10px; line-height:1.4;';
+            limitHint.textContent = 'Only bites on days with more than one league game. This is a hard rule: the scheduler '
+                + 'picks another sport instead, and if the cap leaves a matchup nothing else to play, that matchup gets a bye '
+                + '(with the reason spelled out) rather than breaking it.';
+            limitBody.appendChild(limitHint);
+        }
+
+        limitCard.appendChild(limitBody);
+        advancedBody.appendChild(limitCard);
     }
 
     // =========================================================================
