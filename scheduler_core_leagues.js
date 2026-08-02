@@ -2569,10 +2569,12 @@
     }
 
     // Matchup-level forced bye. Every filter between the pool and the pick has
-    // a non-empty fallback, so a null pick means the pool itself ran dry:
-    // either the league had NO field options at this time, or every open field
-    // was already claimed by this period's earlier matchups (incl. combined-
-    // field counterparts). Say which, with the numbers.
+    // a non-empty fallback — except the opt-in per-sport daily limit, which
+    // reports its own bye (_recordSportDailyLimitBye) before reaching here — so
+    // a null pick means the pool itself ran dry: either the league had NO field
+    // options at this time, or every open field was already claimed by this
+    // period's earlier matchups (incl. combined-field counterparts). Say which,
+    // with the numbers.
     function _recordForcedBye(leagueName, t1, t2, availablePool, gamesWanted, gamesPlaced) {
         const fields = new Set();
         (availablePool || []).forEach(function (o) { if (o && o.field) fields.add(o.field); });
@@ -2944,6 +2946,127 @@
         });
         return out;
     }
+    // =========================================================================
+    // ★★★ PER-SPORT DAILY LIMIT (HARD) ★★★
+    // Leagues → Sports → "Daily limit per team" sets league.sportDailyLimits =
+    // { "<sport>": <max games of it per TEAM per day> }. A camp can happily
+    // offer a sport in the league yet need it capped at once a day per team —
+    // a long/heavy game, or a facility they only want each team at once.
+    //
+    // This is NOT the same as the same-day repeat guard above. That guard is a
+    // preference for EVERY sport and deliberately yields ("unless absolutely
+    // needed") so a matchup is never dropped. This one is opt-in per sport and
+    // HARD: it never falls back to the full pool, no later filter can widen
+    // past it (it runs FIRST, so every downstream soft fallback stays inside
+    // the legal set), the swap/keep-in-use post-passes respect it, and if it
+    // leaves a matchup with no playable option that matchup takes a bye with a
+    // reason naming the rule. Killswitch: window.__leagueSportDailyLimit=false.
+    // =========================================================================
+    let _sdlCache = null;         // { "<league>": {sport: limit} } — per generation
+
+    function _normalizeSportDailyLimits(raw) {
+        if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return null;
+        const out = {};
+        let any = false;
+        Object.keys(raw).forEach(function (sport) {
+            const n = parseInt(raw[sport], 10);
+            if (sport && Number.isFinite(n) && n >= 1) { out[sport] = n; any = true; }
+        });
+        return any ? out : null;
+    }
+
+    // Prefer what the caller threaded through leagueRules; fall back to the
+    // saved league config by name so paths that don't pass leagueRules (the
+    // off-campus double-header) still honor the rule instead of silently
+    // dropping it — the exact gap that made indoorRequirement a no-op on
+    // away-game days.
+    function _sportDailyLimitsFor(leagueName, leagueRules) {
+        if (leagueRules && leagueRules.sportDailyLimits) {
+            return _normalizeSportDailyLimits(leagueRules.sportDailyLimits);
+        }
+        if (!leagueName) return null;
+        if (!_sdlCache) _sdlCache = {};
+        if (Object.prototype.hasOwnProperty.call(_sdlCache, leagueName)) return _sdlCache[leagueName];
+        let found = null;
+        try {
+            const key = String(leagueName).toLowerCase().trim();
+            const cfg = _leagueConfigs().find(function (l) {
+                return String(l.name).toLowerCase().trim() === key;
+            });
+            found = cfg ? _normalizeSportDailyLimits(cfg.sportDailyLimits) : null;
+        } catch (_) { found = null; }
+        _sdlCache[leagueName] = found;
+        return found;
+    }
+
+    // How many times a team has ALREADY played each sport today (earlier
+    // periods, already written to the date-keyed gameLog). The per-day history
+    // helpers are strictly-before-today by design, so this is the only source
+    // that sees this morning's game.
+    function _getTeamSportCountsToday(leagueName, team, history, dayId) {
+        const out = {};
+        if (!dayId) return out;
+        const todays = (history && history.gameLog && history.gameLog[leagueName] && history.gameLog[leagueName][dayId]) || [];
+        todays.forEach(function (e) {
+            if (e && e.sport && (e.t1 === team || e.t2 === team)) out[e.sport] = (out[e.sport] || 0) + 1;
+        });
+        return out;
+    }
+
+    // Hard filter. Returns a (possibly EMPTY) pool — an empty result means the
+    // rule left this matchup nothing to play, which the callers turn into an
+    // explanatory bye rather than a silent violation.
+    function _applySportDailyLimitFilter(pool, t1, t2, leagueName, history, dayId, leagueRules) {
+        if (window.__leagueSportDailyLimit === false) return pool;
+        if (!pool.length) return pool;
+        const limits = _sportDailyLimitsFor(leagueName, leagueRules);
+        if (!limits) return pool;
+        const c1 = _getTeamSportCountsToday(leagueName, t1, history, dayId);
+        const c2 = _getTeamSportCountsToday(leagueName, t2, history, dayId);
+        const ok = pool.filter(function (o) {
+            const lim = limits[o.sport];
+            if (lim == null) return true;
+            return (c1[o.sport] || 0) < lim && (c2[o.sport] || 0) < lim;
+        });
+        if (ok.length === pool.length) return ok;
+        const blocked = Array.from(new Set(pool.filter(function (o) { return limits[o.sport] != null; }).map(function (o) { return o.sport; })));
+        console.log('   🚫 ' + t1 + ' vs ' + t2 + ': daily limit removed ' + blocked.join('/')
+            + ' from this matchup\'s options (already at its per-team cap today)'
+            + (ok.length ? '' : ' — nothing else is open'));
+        return ok;
+    }
+
+    // Would giving `team` one more game of `sport` today break its cap? Used by
+    // the post-passes, which move sports AFTER the per-matchup filter ran.
+    function _wouldExceedSportDailyLimit(leagueName, team, sport, history, dayId, leagueRules) {
+        if (window.__leagueSportDailyLimit === false) return false;
+        const limits = _sportDailyLimitsFor(leagueName, leagueRules);
+        if (!limits) return false;
+        const lim = limits[sport];
+        if (lim == null) return false;
+        const counts = _getTeamSportCountsToday(leagueName, team, history, dayId);
+        return (counts[sport] || 0) >= lim;   // +1 for the game being placed
+    }
+
+    // The one bye this rule can cause, spelled out: which sports were open,
+    // what the cap is, and the two ways to fix it. Without this the matchup
+    // would fall through to _recordForcedBye and be reported as a field
+    // shortage, which it isn't.
+    function _recordSportDailyLimitBye(leagueName, t1, t2, eligible, leagueRules) {
+        const limits = _sportDailyLimitsFor(leagueName, leagueRules) || {};
+        const sports = Array.from(new Set((eligible || []).map(function (o) { return o.sport; })));
+        const capped = sports.filter(function (s) { return limits[s] != null; });
+        _recordByeEvent({
+            league: leagueName, kind: 'bye', team1: t1, team2: t2,
+            reason: 'Daily limit: the only sport' + (sports.length === 1 ? '' : 's') + ' open for this league at this time '
+                + '(' + sports.join(', ') + ') ' + (sports.length === 1 ? 'is' : 'are') + ' capped at '
+                + capped.map(function (s) { return s + ' ' + limits[s] + '× per team per day'; }).join(', ')
+                + ', and a team in this matchup already hit that cap earlier today — so ' + t1 + ' vs ' + t2
+                + ' got a bye instead of playing it again. Raise or clear the limit in Leagues → Sports → Daily limit per team, '
+                + 'or free up a field for another of this league\'s sports at this time.'
+        });
+    }
+
     function _applySameDayRepeatFilter(pool, t1, t2, leagueName, history, dayId) {
         if (window.__leagueSameDayRepeatGuard === false) return pool;
         if (!pool.length) return pool;
@@ -3112,11 +3235,23 @@
             const _next1 = _getTeamNextDaySports(leagueName, t1, history, dayId);
             const _next2 = _getTeamNextDaySports(leagueName, t2, history, dayId);
 
+            const _eligible = availablePool.filter(function (o) { return !_isFieldUsedConsideringCombos(usedFields, o.field); });
+
+            // ★ PER-SPORT DAILY LIMIT (HARD): runs FIRST so every filter below —
+            // and every "fall back to the whole pool" escape they have — works
+            // inside an already-legal set. The only filter here that can leave a
+            // matchup with nothing, by design.
+            const _dayCapped = _applySportDailyLimitFilter(_eligible, t1, t2, leagueName, history, dayId, leagueRules);
+            if (!_dayCapped.length && _eligible.length) {
+                console.log(`   ⛔ [SportVariety] ${t1} vs ${t2}: every open sport is at its per-team daily limit — bye`);
+                _recordSportDailyLimitBye(leagueName, t1, t2, _eligible, leagueRules);
+                continue;
+            }
+
             // ★ INDOOR HARD CONSTRAINT: restrict to indoor (or non-indoor) when
             // the rule requires it AND such a field is available; otherwise use
             // the full eligible set so the matchup always gets a sport.
-            const _eligible = availablePool.filter(function (o) { return !_isFieldUsedConsideringCombos(usedFields, o.field); });
-            let _pool = _applyIndoorHardFilter(_eligible, t1, t2, leagueRules);
+            let _pool = _applyIndoorHardFilter(_dayCapped, t1, t2, leagueRules);
 
             // ★ HARD STREAK CAP: same sport never more than 2 game days in a row
             // — including a 3-run straddling a middle-day regen (LG-9).
@@ -3316,9 +3451,19 @@
             const _next1 = _getTeamNextDaySports(leagueName, t1, history, dayId);
             const _next2 = _getTeamNextDaySports(leagueName, t2, history, dayId);
 
-            // ★ INDOOR HARD CONSTRAINT (non-blocking) — same as SportVariety
             const _eligible = availablePool.filter(function (o) { return !_isFieldUsedConsideringCombos(usedFields, o.field); });
-            let _pool = _applyIndoorHardFilter(_eligible, t1, t2, leagueRules);
+
+            // ★ PER-SPORT DAILY LIMIT (HARD) — same as SportVariety: first in the
+            // chain, and the one filter allowed to leave a matchup with nothing.
+            const _dayCapped = _applySportDailyLimitFilter(_eligible, t1, t2, leagueName, history, dayId, leagueRules);
+            if (!_dayCapped.length && _eligible.length) {
+                console.log(`   ⛔ [MatchupVariety] ${t1} vs ${t2}: every open sport is at its per-team daily limit — bye`);
+                _recordSportDailyLimitBye(leagueName, t1, t2, _eligible, leagueRules);
+                continue;
+            }
+
+            // ★ INDOOR HARD CONSTRAINT (non-blocking) — same as SportVariety
+            let _pool = _applyIndoorHardFilter(_dayCapped, t1, t2, leagueRules);
 
             // ★ HARD STREAK CAP: same sport never more than 2 game days in a row
             // — including a 3-run straddling a middle-day regen (LG-9).
@@ -3448,7 +3593,7 @@
     // when the summed cycle-need score improves and no team lands a
     // 3-days-in-a-row streak. A swap moves whole options between matchups, so
     // per-slot sport usage, field locks, and fair-share caps all stay valid.
-    function _swapReoptimizeAssignments(assignments, leagueName, history, dayId) {
+    function _swapReoptimizeAssignments(assignments, leagueName, history, dayId, leagueRules) {
         try {
             if (!Array.isArray(assignments) || assignments.length < 2) return assignments;
             const sportsInPlay = Array.from(new Set(assignments.map(function (a) { return a.sport; })));
@@ -3479,6 +3624,10 @@
                 if (h.length >= 2 && h[h.length - 1] === s && h[h.length - 2] === s) return true;
                 if (h.length >= 1 && h[h.length - 1] === s && _nextSports[t] && _nextSports[t].has(s)) return true;
                 if (window.__leagueSameDayRepeatGuard !== false && _todaySports[t] && _todaySports[t].has(s)) return true;
+                // ★ PER-SPORT DAILY LIMIT: a swap must never hand a team a sport
+                // it has already hit its cap on today. Stricter than the line
+                // above only when the guard is off or the cap is above 1.
+                if (_wouldExceedSportDailyLimit(leagueName, t, s, history, dayId, leagueRules)) return true;
                 return false;
             }
             function assnScore(a, s) {
@@ -3603,7 +3752,7 @@
         // courts (free same-sport court, else trade with a met-floor matchup).
         const _afterIndoor = (leagueRules && leagueRules.indoorRequirement && leagueRules.indoorRequirement.enabled)
             ? _indoorRescuePass(assignments, availablePool, leagueRules)
-            : _swapReoptimizeAssignments(assignments, leagueName, history, dayId);
+            : _swapReoptimizeAssignments(assignments, leagueName, history, dayId, leagueRules);
 
         // ★ KEEP-IN-USE: runs LAST so neither the swap re-opt nor the indoor
         //   rescue can hand the facility back. No-op unless this league was
@@ -3748,6 +3897,10 @@
                     if (_targetSet.has(_norm(a.field))) return;       // don't idle another keep-in-use facility
                     if (!_optIsIndoorTarget && _belowIndoorFloor(a)) return;  // would break its indoor floor
                     opts.forEach(function (o) {
+                        // ★ PER-SPORT DAILY LIMIT: keeping a facility busy is never
+                        // worth pushing a team past its cap for the day.
+                        if (_wouldExceedSportDailyLimit(leagueName, a.team1, o.sport, history, dayId, leagueRules)
+                            || _wouldExceedSportDailyLimit(leagueName, a.team2, o.sport, history, dayId, leagueRules)) return;
                         // Freshness: how far the pair is from having played this sport.
                         const p1 = _plays(a.team1, o.sport), p2 = _plays(a.team2, o.sport);
                         // Lower is better. Repeat cost dominates; abundance breaks ties.
@@ -4120,6 +4273,7 @@
         // return so a stale banner from a prior gen clears.
         _byeReport = [];
         _byeCtx = null;
+        _sdlCache = null;   // per-sport daily limits: re-read the league configs each run
 
         if (!masterLeagues || Object.keys(masterLeagues).length === 0) {
             console.log("[RegularLeagues] No regular leagues configured.");
@@ -4736,9 +4890,14 @@
                 // ★ Pass dayId so the assigners read date-correct history (without it
                 //   they fell back to the full teamSports/gameLog including future
                 //   dates — wrong needs when regenerating a middle date).
+                // ★ An away day is a DOUBLE-HEADER — the one shape where a per-sport
+                //   daily cap actually bites — so this path must carry the rule too
+                //   (it used to pass no leagueRules at all, which is how
+                //   indoorRequirement ended up a silent no-op here).
+                var _ocRules = { sportDailyLimits: league.sportDailyLimits };
                 _byeCtx = { time: timeKey1, game: gameNum };       // stamp bye records with this period
-                var g1Off = assignMatchupsToFieldsAndSports(dh.offCampus.game1, fp1.filter(function(p){return zoneF.includes(p.field);}), league.name, history, s1, priority, null, null, dayId);
-                var g1On = assignMatchupsToFieldsAndSports(dh.onCampus.game1, fp1.filter(function(p){return !zoneF.includes(p.field);}), league.name, history, s1, priority, null, null, dayId);
+                var g1Off = assignMatchupsToFieldsAndSports(dh.offCampus.game1, fp1.filter(function(p){return zoneF.includes(p.field);}), league.name, history, s1, priority, _ocRules, null, dayId);
+                var g1On = assignMatchupsToFieldsAndSports(dh.onCampus.game1, fp1.filter(function(p){return !zoneF.includes(p.field);}), league.name, history, s1, priority, _ocRules, null, dayId);
                 var g1All = g1Off.concat(g1On);
                 var lbl1 = league.name + ' Game ' + gameNum, lbl2 = league.name + ' Game ' + (gameNum + 1);
                 // ★ Record game 1 BEFORE assigning game 2 (mirrors the main path,
@@ -4752,8 +4911,8 @@
                     logGameRecord(league.name, dayId, a.team1||a.teamA, a.team2||a.teamB, a.sport, history, lbl1);
                 });
                 _byeCtx = { time: timeKey2, game: gameNum + 1 };
-                var g2Off = assignMatchupsToFieldsAndSports(dh.offCampus.game2, fp2.filter(function(p){return zoneF.includes(p.field);}), league.name, history, s2, priority, null, null, dayId);
-                var g2On = assignMatchupsToFieldsAndSports(dh.onCampus.game2, fp2.filter(function(p){return !zoneF.includes(p.field);}), league.name, history, s2, priority, null, null, dayId);
+                var g2Off = assignMatchupsToFieldsAndSports(dh.offCampus.game2, fp2.filter(function(p){return zoneF.includes(p.field);}), league.name, history, s2, priority, _ocRules, null, dayId);
+                var g2On = assignMatchupsToFieldsAndSports(dh.onCampus.game2, fp2.filter(function(p){return !zoneF.includes(p.field);}), league.name, history, s2, priority, _ocRules, null, dayId);
                 _byeCtx = null;
                 var g2All = g2Off.concat(g2On);
 
@@ -5803,7 +5962,9 @@
                             indoorCounts: indoorCountsByLeague[league.name],
                             keepInUseFields: _keepInUse.redirect[league.name] || null,
                             keepInUseForce: _keepInUse.force[league.name] || null,
-                            keepInUseWindow: _keepInUse.window
+                            keepInUseWindow: _keepInUse.window,
+                            // ★ PER-SPORT DAILY LIMIT (Leagues → Sports)
+                            sportDailyLimits: league.sportDailyLimits
                         },
                         _sportCapsByLeague[league.name] || null,
                         dayId
