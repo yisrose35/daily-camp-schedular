@@ -907,7 +907,9 @@
         { id: 'me',     name: 'Me',     title: 'Me Lite', logo: 'Me_clean.png', color: '#F59E0B',
           theme: { accent: '#F59E0B', dark: '#B45309', tint: '#FEF3C7' }, roles: HEAD, status: 'available',
           tabs: [{ id: 'meRoster', label: 'Roster' }, { id: 'meMedical', label: 'Medical' }, { id: 'meStaff', label: 'Staff' }] },
-        { id: 'go',     name: 'Go',     logo: 'Go_clean.png',     color: '#0EA5E9', theme: { accent: '#0EA5E9', dark: '#0369A1', tint: '#E0F2FE' }, roles: HEAD, status: 'soon' },
+        // Go's tile colour was sky blue while its wordmark is green; harmless
+        // when the logo was a bitmap, wrong once the logo is painted with it.
+        { id: 'go',     name: 'Go',     logo: 'Go_clean.png',     color: '#12A36E', theme: { accent: '#12A36E', dark: '#0B7A52', tint: '#E3F6EE' }, roles: HEAD, status: 'soon' },
         { id: 'health', name: 'Health', title: 'Health Lite', logo: 'Health_clean.png', color: '#6B21A8',
           theme: { accent: '#6B21A8', dark: '#581C87', tint: '#F3E8FF' }, roles: HEAD, status: 'available',
           tabs: [{ id: 'healthMeds', label: 'Meds' }, { id: 'healthRoster', label: 'Roster' }, { id: 'healthTrip', label: 'Trip' }] },
@@ -1056,12 +1058,20 @@
 
     function tileHTML(app) {
         const soon = app.status !== 'available';
+        // The logo is drawn as a MASK, not an <img>. These wordmarks were
+        // exported anti-aliased against white, so their edge pixels carry a
+        // near-white RGB — invisible on a white page, a bright fringe on a dark
+        // tile. Un-matting can't fully recover it (the edges still measured
+        // ~0.5 lighter than the stroke cores), but the ALPHA channel is clean.
+        // Masking uses only that and fills with the product colour, so the
+        // fringe cannot exist and each theme gets the contrast it needs. Safe
+        // here because every wordmark is a single hue — measured spread is
+        // under 11 degrees — so nothing is lost by flattening it.
+        const art = app.icon
+            ? `<span class="lite-launch-logo lite-launch-icon">${app.icon}</span>`
+            : `<span class="lite-launch-logo lite-launch-mask" style="--logo:url('${app.logo}')" role="img" aria-label="${esc(app.name)}"></span>`;
         return `<button class="lite-launch-tile${soon ? ' soon' : ''}" ${soon ? 'disabled' : `data-app="${app.id}"`} style="--ql:${app.color}">
-            <span class="lite-launch-icon-box">
-                ${app.icon
-                    ? `<span class="lite-launch-logo lite-launch-icon">${app.icon}</span>`
-                    : `<img src="${app.logo}" class="lite-launch-logo" alt="">`}
-            </span>
+            <span class="lite-launch-icon-box">${art}</span>
             <span class="lite-launch-name">${esc(app.name)}</span>
             ${soon ? '<span class="lite-launch-soon">Soon</span>' : ''}
         </button>`;

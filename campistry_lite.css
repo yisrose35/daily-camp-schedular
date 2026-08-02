@@ -326,7 +326,18 @@ button { cursor: pointer; border: none; background: none; }
 .lite-launch-tile:active { transform: scale(0.96); box-shadow: var(--shadow-sm); }
 .lite-launch-tile.soon { opacity: 0.5; background: var(--bg); box-shadow: var(--shadow-sm); border-bottom-color: var(--line-2); }
 .lite-launch-icon-box { display: flex; align-items: center; justify-content: center; height: 34px; }
+/* Wordmarks render as a mask filled with the product colour — see tileHTML.
+   contain keeps each logo's own aspect ratio inside a shared box. */
 .lite-launch-logo { height: 34px; width: auto; max-width: 130px; object-fit: contain; }
+.lite-launch-mask {
+    display: block; width: 130px; height: 34px;
+    background-color: var(--ql, var(--ink-2));
+    -webkit-mask: var(--logo) center / contain no-repeat;
+    mask: var(--logo) center / contain no-repeat;
+}
+/* On dark the raw product colours sit too close to the surface, so lift them
+   toward white — the same reasoning as the per-app accent. */
+:root[data-theme="dark"] .lite-launch-mask { background-color: color-mix(in srgb, var(--ql) 72%, #FFFFFF); }
 .lite-launch-icon { width: 32px; height: 32px; color: var(--ql, var(--ink-2)); }
 .lite-launch-icon svg { width: 100%; height: 100%; }
 .lite-launch-name { font-size: 0.7rem; font-weight: 700; text-transform: uppercase; letter-spacing: 0.05em; color: var(--ink-2); }
@@ -907,6 +918,7 @@ button { cursor: pointer; border: none; background: none; }
 /* Dark applies when the phone asks for it — unless the user explicitly
    chose Light — and always when they explicitly chose Dark. */
 @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) .lite-launch-mask { background-color: color-mix(in srgb, var(--ql) 72%, #FFFFFF); }
     :root:not([data-theme="light"]) {
         --glass-rim:  inset 0 1px 0 rgba(255,255,255,0.10), inset 0 0 0 1px rgba(255,255,255,0.05);
         --glass-cast: 0 1px 2px rgba(0,0,0,0.5), 0 10px 24px -8px rgba(0,0,0,0.55), 0 28px 56px -24px rgba(0,0,0,0.6);
