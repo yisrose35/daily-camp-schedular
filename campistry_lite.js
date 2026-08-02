@@ -136,7 +136,7 @@
                 tries++;
             }
             if (!window.supabase || !window.supabase.auth) {
-                setSplash('Could not start. Check your connection and reload.');
+                setSplash('Could not start. Check your connection and reload.', true);
                 return;
             }
 
@@ -188,7 +188,7 @@
             userId = window.CampistryDB?.getUserId?.() || localStorage.getItem('campistry_auth_user_id') || null;
 
             if (!campId) {
-                setSplash('No camp found for this account. Ask your camp owner for an invite.');
+                setSplash('No camp found for this account. Ask your camp owner for an invite.', true);
                 return;
             }
 
@@ -215,15 +215,15 @@
             wireChrome();
 
             // Always land on the home launcher — the user picks a Lite app there.
-            document.getElementById('liteSplash').style.display = 'none';
             applyColorScheme();
             document.getElementById('liteApp').style.display = '';
             wirePullToRefresh();
             goHome();
+            dismissSplash();
             maybeLockOnBoot();   // biometric app lock, if enabled
         } catch (e) {
             console.error('[Lite] Boot failed:', e);
-            setSplash('Something went wrong loading Campistry Lite. Pull to refresh or reload.');
+            setSplash('Something went wrong loading Campistry Lite. Reload to try again.', true);
         }
     }
 
@@ -5207,9 +5207,47 @@
         toastTimer = setTimeout(() => { el.style.display = 'none'; }, 3200);
     }
 
-    function setSplash(msg) {
+    // The launch screen holds a minimum beat so a warm start doesn't flash it
+    // for 80ms — a blink of branding reads as jank, not polish — then hands off
+    // to the app rather than being switched off.
+    const _splashAt = Date.now();
+    const SPLASH_MIN_MS = 520;     // hold long enough that it reads as a launch
+    const SPLASH_TALK_MS = 900;    // ...and stay quiet until the wait is real
+    let _splashMsg = '', _splashTalk = false;
+    const _splashTimer = setTimeout(() => { _splashTalk = true; paintSplash(); }, SPLASH_TALK_MS);
+
+    function paintSplash() {
         const el = document.getElementById('liteSplashStatus');
-        if (el) el.textContent = msg;
+        if (!el) return;
+        // Kept out of the DOM entirely until it's due — not merely transparent —
+        // so a screen reader doesn't announce a message the user never sees.
+        const show = !!_splashMsg && _splashTalk;
+        el.textContent = show ? _splashMsg : '';
+        el.classList.toggle('show', show);
+    }
+
+    // Progress messages are STAGED, not shown on arrival: a warm start blows
+    // through every step in under a second, and flashing "Signing you in…" for
+    // 80ms reads as jank. Errors are different — those surface immediately,
+    // because then the user really is stuck.
+    function setSplash(msg, isError) {
+        _splashMsg = msg || '';
+        if (isError) { _splashTalk = true; clearTimeout(_splashTimer); }
+        const el = document.getElementById('liteSplashStatus');
+        if (el) el.classList.toggle('error', !!isError);
+        paintSplash();
+    }
+
+    function dismissSplash() {
+        clearTimeout(_splashTimer);
+        const el = document.getElementById('liteSplash');
+        if (!el) return;
+        const wait = Math.max(0, SPLASH_MIN_MS - (Date.now() - _splashAt));
+        setTimeout(() => {
+            el.classList.add('done');
+            // Remove only after the transition, so it can't swallow taps.
+            setTimeout(() => { el.style.display = 'none'; }, 460);
+        }, wait);
     }
 
     // ════════════════════════════════════════════════════════════════════

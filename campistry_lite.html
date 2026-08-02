@@ -31,12 +31,14 @@
 
     <!-- Boot / auth splash -->
     <div id="liteSplash" class="lite-splash">
-        <div class="lite-splash-mark">
-            <img src="Campistry_clean.png" alt="Campistry">
+        <div class="lite-splash-inner">
+            <div class="lite-splash-mark"><img src="Campistry_logo.png" alt=""></div>
+            <div class="lite-splash-title">Campistry <span>Lite</span></div>
+            <div class="lite-splash-bar" role="progressbar" aria-label="Loading"><span></span></div>
+            <!-- Left empty on purpose: filled only if the launch runs long, so a
+                 fast open never flashes a message at you. -->
+            <div class="lite-splash-status" id="liteSplashStatus"></div>
         </div>
-        <div class="lite-splash-title">Campistry <span>Lite</span></div>
-        <div class="lite-splash-spinner"></div>
-        <div class="lite-splash-status" id="liteSplashStatus">Signing you in&hellip;</div>
     </div>
 
     <!-- App shell (hidden until authenticated + hydrated) -->
