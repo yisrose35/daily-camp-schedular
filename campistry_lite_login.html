@@ -28,39 +28,50 @@
 <body>
 
 <div class="lite-login" id="liteLogin" style="display:none;">
-    <div class="lite-login-inner">
-        <div class="lite-login-mark"><img src="Campistry_logo.png" alt=""></div>
-        <h1 class="lite-login-title">Campistry<span>Lite</span></h1>
-        <p class="lite-login-sub">Sign in with your Campistry account.</p>
 
-        <form id="liteLoginForm" novalidate>
-            <div class="lite-field">
-                <label for="liteEmail">Email</label>
-                <input class="lite-input" type="email" id="liteEmail" inputmode="email"
-                       autocomplete="username" autocapitalize="none" spellcheck="false"
-                       placeholder="you@camp.com" required>
+    <!-- Brand lockup sits at the top edge like a native app's title, rather
+         than floating a logo above a boxed form. Monochrome on purpose — a
+         sign-in screen is the wrong place for a full-colour badge. -->
+    <div class="lite-login-brand">
+        <span class="lite-login-mark" role="img" aria-label="Campistry"></span>
+        <span class="lite-login-brandname">Campistry <b>Lite</b></span>
+    </div>
+
+    <div class="lite-login-body">
+        <h1 class="lite-login-h1">Sign in</h1>
+        <p class="lite-login-sub">Use your Campistry account.</p>
+
+        <form id="liteLoginForm" novalidate autocomplete="on">
+            <div class="lite-lf">
+                <label for="liteEmail">Email address</label>
+                <input class="lite-lf-input" type="email" id="liteEmail" inputmode="email"
+                       autocomplete="username" autocapitalize="none" autocorrect="off"
+                       spellcheck="false" required>
             </div>
-            <div class="lite-field">
-                <label for="litePassword">Password</label>
-                <div class="lite-pw-wrap">
-                    <input class="lite-input" type="password" id="litePassword"
-                           autocomplete="current-password" placeholder="••••••••" required>
-                    <button type="button" class="lite-pw-toggle" id="litePwToggle" aria-label="Show password">Show</button>
+
+            <div class="lite-lf">
+                <div class="lite-lf-head">
+                    <label for="litePassword">Password</label>
+                    <button type="button" class="lite-lf-aux" id="liteForgot">Forgot?</button>
+                </div>
+                <div class="lite-lf-wrap">
+                    <input class="lite-lf-input" type="password" id="litePassword"
+                           autocomplete="current-password" required>
+                    <button type="button" class="lite-lf-eye" id="litePwToggle" aria-label="Show password" aria-pressed="false">
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M2 12s3.6-7 10-7 10 7 10 7-3.6 7-10 7-10-7-10-7z"/><circle cx="12" cy="12" r="3"/></svg>
+                    </button>
                 </div>
             </div>
 
-            <div class="lite-login-err" id="liteLoginErr" style="display:none;"></div>
+            <div class="lite-login-err" id="liteLoginErr" role="alert" hidden></div>
 
-            <button class="lite-btn block" type="submit" id="liteLoginBtn">Sign in</button>
+            <button class="lite-btn block lite-login-go" type="submit" id="liteLoginBtn">Sign in</button>
         </form>
-
-        <button type="button" class="lite-login-link" id="liteForgot">Forgot your password?</button>
-
-        <p class="lite-login-foot">
-            Campistry Lite uses your existing Campistry login. New accounts are
-            created by your camp owner on the main Campistry site.
-        </p>
     </div>
+
+    <p class="lite-login-foot">
+        Accounts are created by your camp on <a href="index.html">campistry.app</a>
+    </p>
 </div>
 
 <div id="liteToast" class="lite-toast" style="display:none;"></div>

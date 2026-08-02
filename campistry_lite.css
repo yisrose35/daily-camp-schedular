@@ -879,173 +879,84 @@ button { cursor: pointer; border: none; background: none; }
     .lite-app { border-left: 1px solid var(--line); border-right: 1px solid var(--line); }
 }
 
-/* ─── Standalone sign-in (campistry_lite_login.html) ──────────────────── */
+/* ─── Standalone sign-in ──────────────────────────────────────────────────
+   Restrained on purpose. A sign-in screen is the one place a product should
+   look like it belongs to a company rather than a campaign: quiet brand mark,
+   one clear heading, generous field targets, a single primary action, and
+   secondary options that stay out of the way until wanted. */
+/* Full-bleed, not a boxed form on a backdrop. A card floating in the middle of
+   a phone screen reads as a web page someone opened; edge-to-edge with the
+   brand pinned top and the fine print pinned bottom reads as the app itself.
+   The ambient wash on body::before supplies the depth the card used to. */
 .lite-login {
-    min-height: 100dvh; display: flex; align-items: center; justify-content: center;
-    padding: calc(28px + env(safe-area-inset-top)) 20px calc(28px + env(safe-area-inset-bottom));
-    background: radial-gradient(120% 80% at 50% -10%, var(--coral-50) 0%, var(--bg) 55%);
+    min-height: 100dvh; display: flex; flex-direction: column;
+    width: 100%; max-width: 440px; margin: 0 auto;
+    padding: calc(22px + env(safe-area-inset-top)) 24px calc(18px + env(safe-area-inset-bottom));
 }
-.lite-login-inner { width: 100%; max-width: 380px; text-align: center; }
+/* Heading + form ride the optical centre; brand and footer hold the edges. */
+.lite-login-body { flex: 1; display: flex; flex-direction: column; justify-content: center; padding-bottom: 6vh; }
+
+.lite-login-brand { display: flex; align-items: center; gap: 8px; flex: none; }
+/* Masked rather than an <img>: the source PNG is matted, and a mask also lets
+   the mark take the text colour so it never goes dim against a dark surface. */
 .lite-login-mark {
-    width: 68px; height: 68px; margin: 0 auto 14px; border-radius: 20px;
-    background: var(--card); box-shadow: var(--shadow);
-    display: flex; align-items: center; justify-content: center;
+    width: 22px; height: 22px; flex: none; background: var(--ink);
+    -webkit-mask: url('Campistry_logo.png') center / contain no-repeat;
+    mask: url('Campistry_logo.png') center / contain no-repeat;
 }
-.lite-login-mark img { width: 42px; height: 42px; object-fit: contain; }
-.lite-login-title { font-family: var(--font-display); font-size: 1.65rem; font-weight: 700; letter-spacing: -0.01em; margin: 0; }
-.lite-login-title span { color: var(--accent); }
-.lite-login-sub { font-size: 0.9rem; color: var(--ink-2); margin: 6px 0 22px; }
-.lite-login form { text-align: left; }
-.lite-pw-wrap { position: relative; }
-.lite-pw-wrap .lite-input { padding-right: 66px; }
-.lite-pw-toggle {
-    position: absolute; top: 50%; right: 8px; transform: translateY(-50%);
-    padding: 7px 10px; border-radius: 9px; font-size: 0.76rem; font-weight: 700;
-    color: var(--accent-dark); background: var(--accent-tint);
+.lite-login-brandname { font-size: 0.84rem; font-weight: 600; letter-spacing: 0.01em; color: var(--ink-2); }
+.lite-login-brandname b { font-weight: 800; color: var(--ink); }
+
+.lite-login-h1 { font-family: var(--font-display); font-size: 1.85rem; font-weight: 700; letter-spacing: -0.025em; margin: 0; color: var(--ink); }
+.lite-login-sub { font-size: 0.92rem; color: var(--ink-2); margin: 6px 0 26px; }
+
+/* Fields: label above, comfortable target, a focus ring that is obvious
+   without shouting. Placeholders are omitted — a label plus a real focus state
+   is clearer than grey text people mistake for a filled value. */
+.lite-lf { margin-bottom: 15px; }
+.lite-lf label { display: block; font-size: 0.79rem; font-weight: 600; color: var(--ink-2); margin: 0 0 6px 2px; }
+.lite-lf-head { display: flex; align-items: baseline; justify-content: space-between; }
+.lite-lf-aux {
+    font-size: 0.76rem; font-weight: 600; color: var(--ink-2);
+    padding: 2px 4px; margin: 0 0 6px; border-radius: 6px;
 }
+.lite-lf-aux:active { color: var(--accent-dark); }
+.lite-lf-wrap { position: relative; }
+.lite-lf-input {
+    width: 100%; height: 50px; padding: 0 14px;
+    font-size: 16px; color: var(--ink);
+    background: var(--card); border: 1px solid var(--line-2); border-radius: 12px;
+    transition: border-color 0.14s ease, box-shadow 0.14s ease;
+}
+.lite-lf-wrap .lite-lf-input { padding-right: 48px; }
+.lite-lf-input:focus {
+    outline: none; border-color: var(--accent);
+    box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 22%, transparent);
+}
+.lite-lf-eye {
+    position: absolute; top: 50%; right: 6px; transform: translateY(-50%);
+    width: 38px; height: 38px; border-radius: 9px;
+    display: flex; align-items: center; justify-content: center; color: var(--muted);
+}
+.lite-lf-eye svg { width: 19px; height: 19px; }
+.lite-lf-eye[aria-pressed="true"] { color: var(--accent-dark); }
+
 .lite-login-err {
-    margin: 2px 0 12px; padding: 11px 13px; border-radius: 11px;
-    background: #FEF3F2; color: #B42318; font-size: 0.83rem; font-weight: 600; text-align: left;
+    margin: 0 0 14px; padding: 10px 12px; border-radius: 10px;
+    background: color-mix(in srgb, #B42318 12%, transparent);
+    border: 1px solid color-mix(in srgb, #B42318 28%, transparent);
+    color: #B42318; font-size: 0.82rem; font-weight: 600;
 }
-.lite-login-link {
-    display: block; width: 100%; margin-top: 14px;
-    font-size: 0.85rem; font-weight: 700; color: var(--accent-dark);
-}
-.lite-login-foot { margin-top: 26px; font-size: 0.76rem; line-height: 1.5; color: var(--muted); }
-
-/* Apps without a wordmark file (e.g. Guard) draw an inline glyph instead. */
-.lite-launch-icon { display: flex; align-items: center; justify-content: center; color: var(--ql, var(--ink-2)); }
-.lite-launch-icon svg { width: 100%; height: 100%; }
-
-
-/* ─── Skeleton loading ────────────────────────────────────────────────── */
-.lite-skel-wrap { pointer-events: none; }
-.lite-skel-card { opacity: 0.75; }
-.lite-skel {
-    display: block; border-radius: 6px;
-    background: linear-gradient(90deg, var(--line) 25%, var(--card-2) 37%, var(--line) 63%);
-    background-size: 400% 100%; animation: liteShimmer 1.3s ease infinite;
-}
-.lite-skel-line { height: 11px; margin: 3px 0; }
-.lite-skel-line.w20 { width: 20%; } .lite-skel-line.w35 { width: 35%; }
-.lite-skel-line.w40 { width: 40%; } .lite-skel-line.w60 { width: 60%; }
-.lite-skel-line.w80 { width: 80%; }
-@keyframes liteShimmer { from { background-position: 100% 0; } to { background-position: 0 0; } }
-@media (prefers-reduced-motion: reduce) { .lite-skel { animation: none; } }
-
-/* ─── Pull to refresh ─────────────────────────────────────────────────── */
-.lite-ptr {
-    height: 0; overflow: hidden; display: flex; align-items: center; justify-content: center;
-    transition: height 0.22s cubic-bezier(0.22,1,0.36,1);
-}
-.lite-ptr-spin {
-    width: 20px; height: 20px; border-radius: 50%;
-    border: 2.5px solid var(--line-2); border-top-color: var(--accent);
-    opacity: 0.6; transition: opacity 0.15s ease, transform 0.2s ease;
-}
-.lite-ptr.ready .lite-ptr-spin { opacity: 1; transform: scale(1.1); }
-.lite-ptr.busy .lite-ptr-spin { opacity: 1; animation: lite-spin 0.7s linear infinite; }
-
-/* ════════════════════════════════════════════════════════════════════════
-   MATERIAL — the glass layer
-   ------------------------------------------------------------------------
-   Three things make a surface read as real glass rather than a coloured
-   rectangle: something with variation behind it (body::before), enough
-   backdrop blur to actually frost it, and a defined edge. The edge does most
-   of the work: a hairline of near-white INSET along the top mimics light
-   catching the rim, and paired with a tight contact shadow plus a wide
-   ambient one it gives a surface thickness instead of just outline.
-   ════════════════════════════════════════════════════════════════════════ */
-:root {
-    --glass-rim:  inset 0 1px 0 rgba(255,255,255,0.85), inset 0 0 0 1px rgba(255,255,255,0.32);
-    --glass-cast: 0 1px 2px rgba(74,38,26,0.06), 0 8px 20px -8px rgba(74,38,26,0.16), 0 24px 48px -24px rgba(74,38,26,0.20);
-    --glass-bg:   color-mix(in srgb, var(--card) 78%, transparent);
-    --glass-blur: saturate(180%) blur(20px);
-}
-/* Dark applies when the phone asks for it — unless the user explicitly
-   chose Light — and always when they explicitly chose Dark. */
+/* #B42318 fails contrast on a near-black surface, so lift it in both routes to
+   dark: the phone setting and the explicit override. */
 @media (prefers-color-scheme: dark) {
-    :root:not([data-theme="light"]) .lite-launch-mask { background-color: color-mix(in srgb, var(--ql) 72%, #FFFFFF); }
-    :root:not([data-theme="light"]) {
-        --glass-rim:  inset 0 1px 0 rgba(255,255,255,0.10), inset 0 0 0 1px rgba(255,255,255,0.05);
-        --glass-cast: 0 1px 2px rgba(0,0,0,0.5), 0 10px 24px -8px rgba(0,0,0,0.55), 0 28px 56px -24px rgba(0,0,0,0.6);
-        --glass-bg:   color-mix(in srgb, var(--card) 82%, transparent);
-    }
+    :root:not([data-theme="light"]) .lite-login-err { color: #FDA29B; }
 }
+:root[data-theme="dark"] .lite-login-err { color: #FDA29B; }
 
-:root[data-theme="dark"] {
-    --glass-rim:  inset 0 1px 0 rgba(255,255,255,0.10), inset 0 0 0 1px rgba(255,255,255,0.05);
-    --glass-cast: 0 1px 2px rgba(0,0,0,0.5), 0 10px 24px -8px rgba(0,0,0,0.55), 0 28px 56px -24px rgba(0,0,0,0.6);
-    --glass-bg:   color-mix(in srgb, var(--card) 82%, transparent);
+.lite-login-go { margin-top: 8px; height: 52px; font-size: 0.98rem; }
+.lite-login-foot {
+    flex: none; margin: 0; padding-top: 14px;
+    font-size: 0.76rem; line-height: 1.55; color: var(--muted); text-align: center;
 }
-
-
-/* Panels: cards, tiles, sheets, controls — all cut from the same material. */
-.lite-card,
-.lite-launch-tile,
-.lite-bunk-card,
-.lite-grid-wrap,
-.lite-ctrl,
-.lite-date-pill,
-.lite-date-arrow,
-.lite-searchrow .lite-input,
-.lite-note-card {
-    background: var(--glass-bg);
-    backdrop-filter: var(--glass-blur);
-    -webkit-backdrop-filter: var(--glass-blur);
-    border: 1px solid color-mix(in srgb, var(--line) 70%, transparent);
-    box-shadow: var(--glass-rim), var(--glass-cast);
-}
-
-/* Floating chrome sits closer to the eye, so it frosts harder. */
-.lite-header, .lite-tabbar {
-    background: color-mix(in srgb, var(--card) 66%, transparent);
-    backdrop-filter: saturate(200%) blur(26px);
-    -webkit-backdrop-filter: saturate(200%) blur(26px);
-    border-top-color: color-mix(in srgb, var(--line) 60%, transparent);
-}
-.lite-tabbar { box-shadow: inset 0 1px 0 rgba(255,255,255,0.6); }
-
-.lite-sheet {
-    background: color-mix(in srgb, var(--surface-over) 88%, transparent);
-    backdrop-filter: saturate(190%) blur(30px);
-    -webkit-backdrop-filter: saturate(190%) blur(30px);
-    box-shadow: var(--glass-rim), 0 -12px 48px -12px rgba(74,38,26,0.28);
-}
-.lite-sheet-backdrop { background: rgba(31,23,20,0.42); backdrop-filter: blur(2px); -webkit-backdrop-filter: blur(2px); }
-
-/* The launcher tiles keep their product-colour edge, now as a lit rim rather
-   than a flat bar, and gain a faint wash of their own colour so each tile
-   feels tinted by the product it opens. */
-.lite-launch-tile {
-    background:
-        linear-gradient(180deg, color-mix(in srgb, var(--ql) 7%, transparent) 0%, transparent 58%),
-        var(--glass-bg);
-    border-bottom: 3px solid color-mix(in srgb, var(--ql) 72%, transparent);
-}
-.lite-launch-tile:active { box-shadow: var(--glass-rim), 0 1px 2px rgba(74,38,26,0.10); }
-
-/* Solid, high-contrast things stay solid — glass on a primary button reads as
-   indecision, not depth. They get a sheen and a lit top edge instead. */
-.lite-btn:not(.secondary):not(.danger) {
-    background: linear-gradient(180deg, color-mix(in srgb, var(--accent) 88%, #fff) 0%, var(--accent) 46%, var(--accent-dark) 100%);
-    box-shadow: inset 0 1px 0 rgba(255,255,255,0.42), 0 1px 2px rgba(74,38,26,0.16), 0 10px 22px -10px color-mix(in srgb, var(--accent) 70%, transparent);
-}
-.lite-btn:not(.secondary):not(.danger):active { box-shadow: inset 0 1px 0 rgba(255,255,255,0.3), 0 1px 2px rgba(74,38,26,0.18); }
-
-/* The hero is the app's one big brand moment: give it a real sheen — a soft
-   specular sweep across the top and a lit rim, so it reads as a lacquered
-   panel rather than a flat colour fill. */
-.lite-hero-card { position: relative; overflow: hidden; box-shadow: inset 0 1px 0 rgba(255,255,255,0.34), var(--glass-cast); }
-.lite-hero-card::after {
-    content: ''; position: absolute; inset: 0; pointer-events: none; border-radius: inherit; z-index: 0;
-    background:
-        radial-gradient(72% 46% at 18% -12%, rgba(255,255,255,0.34) 0%, transparent 60%),
-        linear-gradient(198deg, rgba(255,255,255,0.16) 0%, transparent 34%);
-}
-
-@media (prefers-reduced-transparency: reduce) {
-    .lite-card, .lite-launch-tile, .lite-bunk-card, .lite-sheet, .lite-header, .lite-tabbar, .lite-ctrl {
-        background: var(--card); backdrop-filter: none; -webkit-backdrop-filter: none;
-    }
-}
+.lite-login-foot a { color: var(--ink-2); font-weight: 600; text-decoration: none; }

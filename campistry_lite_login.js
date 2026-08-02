@@ -27,7 +27,7 @@
         const el = $('liteLoginErr');
         if (!el) return;
         el.textContent = msg || '';
-        el.style.display = msg ? '' : 'none';
+        el.hidden = !msg;
     }
 
     function busy(on, label) {
@@ -71,18 +71,24 @@
 
         localStorage.removeItem('campistry_auth_user_id');
         $('liteLogin').style.display = '';
-        $('liteEmail').focus();
+        // Deliberately no autofocus: it opens the keyboard over half the screen
+        // before anyone has decided to type, and the accent focus ring on an
+        // empty field reads as a validation error.
     }
 
     document.addEventListener('DOMContentLoaded', () => {
         boot();
 
         $('litePwToggle').addEventListener('click', () => {
-            const pw = $('litePassword');
+            const pw = $('litePassword'), btn = $('litePwToggle');
             const show = pw.type === 'password';
             pw.type = show ? 'text' : 'password';
-            $('litePwToggle').textContent = show ? 'Hide' : 'Show';
-            $('litePwToggle').setAttribute('aria-label', show ? 'Hide password' : 'Show password');
+            btn.setAttribute('aria-pressed', show ? 'true' : 'false');
+            btn.setAttribute('aria-label', show ? 'Hide password' : 'Show password');
+            // Keep the caret where it was rather than dumping it at the end.
+            const n = pw.value.length;
+            try { pw.setSelectionRange(n, n); } catch (_) {}
+            pw.focus();
         });
 
         $('liteLoginForm').addEventListener('submit', async (e) => {
