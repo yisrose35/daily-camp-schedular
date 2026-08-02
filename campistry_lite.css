@@ -96,9 +96,6 @@
         --shadow:    0 2px 4px rgba(0,0,0,0.35), 0 12px 30px -10px rgba(0,0,0,0.6);
         --shadow-lg: 0 18px 46px -12px rgba(0,0,0,0.7);
     }
-    /* Product logos are drawn for light backgrounds; lift them slightly so
-       they don't sit in a hole on a dark tile. */
-    :root:not([data-theme="light"]) .lite-launch-logo { filter: brightness(1.12); }
 }
 
 :root[data-theme="dark"] {
@@ -122,9 +119,6 @@
     --shadow:    0 2px 4px rgba(0,0,0,0.35), 0 12px 30px -10px rgba(0,0,0,0.6);
     --shadow-lg: 0 18px 46px -12px rgba(0,0,0,0.7);
 }
-/* Product logos are drawn for light backgrounds; lift them slightly so
-   they don't sit in a hole on a dark tile. */
-:root[data-theme="dark"] .lite-launch-logo { filter: brightness(1.12); }
 
 
 * { box-sizing: border-box; }
