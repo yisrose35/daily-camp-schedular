@@ -24,7 +24,17 @@
 //   TEST 4 — NUMERIC CAP: Basketball capped at 2/day over 3 periods. Games 1
 //            and 2 place; game 3 is blocked.
 //
-//   TEST 5 — KILLSWITCH: window.__leagueSportDailyLimit=false → the cap-1
+//   TEST 5 — PER TEAM, NOT PER LEAGUE (one period): 4 teams, 2 Football
+//            fields, Football capped 1/day. BOTH games place — four teams
+//            each playing it once. A league-wide "1 game/day" reading would
+//            block the second.
+//
+//   TEST 6 — PER TEAM, NOT PER LEAGUE (across periods): 8 teams, 2 Football
+//            fields, 2 periods, Football capped 1/day. All 8 teams get their
+//            Football game — period 2 runs for the teams still under their
+//            cap. A league-wide cap would leave period 2 empty. Repeated 4×.
+//
+//   TEST 7 — KILLSWITCH: window.__leagueSportDailyLimit=false → the cap-1
 //            single-sport league places all 4 games again.
 // =============================================================================
 
@@ -64,7 +74,7 @@ const DAY = '2026-07-09';
 const LG = 'Test League';
 
 // --- Scenario builder ---------------------------------------------------------
-function makeContext(fields, periods, sportDailyLimits) {
+function makeContext(fields, periods, sportDailyLimits, teams) {
     const blocks = [];
     for (let i = 0; i < periods; i++) {
         blocks.push({
@@ -81,7 +91,7 @@ function makeContext(fields, periods, sportDailyLimits) {
         masterLeagues: {
             [LG]: {
                 name: LG, enabled: true, divisions: ['Juniors'],
-                teams: ['T1', 'T2', 'T3', 'T4'], sports: sports,
+                teams: teams || ['T1', 'T2', 'T3', 'T4'], sports: sports,
                 schedulingPriority: 'sport_variety',
                 sportDailyLimits: sportDailyLimits || {},
             },
@@ -97,11 +107,11 @@ function makeContext(fields, periods, sportDailyLimits) {
     };
 }
 
-function run(fields, periods, sportDailyLimits) {
+function run(fields, periods, sportDailyLimits, teams) {
     cloud.leagueHistory = undefined;           // fresh history each run
     global.localStorage._m = {};
     global.window.__leagueByeReport = [];
-    Leagues.processRegularLeagues(makeContext(fields, periods, sportDailyLimits));
+    Leagues.processRegularLeagues(makeContext(fields, periods, sportDailyLimits, teams));
     const hist = cloud.leagueHistory || {};
     const dayGames = (hist.gameLog && hist.gameLog[LG] && hist.gameLog[LG][DAY]) || [];
     return {
@@ -185,15 +195,54 @@ const countFor = (sports, sport) => sports.filter(s => s === sport).length;
 }
 
 // =============================================================================
-// TEST 5 — killswitch: cap fully bypassed
+// TEST 5 — PER TEAM, NOT PER LEAGUE (same period). Football capped at 1/day,
+// two Football fields, four teams, ONE period. Both games are Football: four
+// different teams each play it once, which the cap must allow. If the cap were
+// per LEAGUE rather than per TEAM, the second game would be blocked here.
+// =============================================================================
+{
+    const r = run(fieldsFor({ Football: 2 }), 1, { Football: 1 });
+    assert.strictEqual(r.games.length, 2,
+        'TEST5: both simultaneous Football games place — the cap is per team, not a league-wide "1 Football game/day", got '
+        + JSON.stringify(r.games));
+    assert.strictEqual(r.byes.length, 0, 'TEST5: no byes, got ' + JSON.stringify(r.byes));
+    assert.strictEqual(Object.keys(r.sportsByTeam).length, 4, 'TEST5: all 4 teams played');
+    for (const [team, sports] of Object.entries(r.sportsByTeam)) {
+        assert.deepStrictEqual(sports, ['Football'], `TEST5: ${team} played Football exactly once`);
+    }
+    console.log('✅ TEST 5 — per TEAM: 4 teams all play the capped sport in one period, 2 games at once');
+}
+
+// =============================================================================
+// TEST 6 — PER TEAM, NOT PER LEAGUE (across periods). Eight teams, Football
+// capped at 1/day, two Football fields, TWO periods. Period 1 gives four teams
+// their Football game; period 2 must still run for the four teams that haven't
+// had theirs. A league-wide cap would leave period 2 empty.
+// =============================================================================
+for (let iter = 1; iter <= 4; iter++) {
+    const TEAMS = ['T1', 'T2', 'T3', 'T4', 'T5', 'T6', 'T7', 'T8'];
+    const r = run(fieldsFor({ Football: 2 }), 2, { Football: 1 }, TEAMS);
+    assert.strictEqual(r.games.length, 4,
+        `TEST6[${iter}]: period 2 still plays Football for the teams under their cap, got ${JSON.stringify(r.games)}`);
+    const played = Object.keys(r.sportsByTeam);
+    assert.strictEqual(played.length, 8, `TEST6[${iter}]: all 8 teams got their Football game, got ${played.join(', ')}`);
+    for (const [team, sports] of Object.entries(r.sportsByTeam)) {
+        assert.strictEqual(countFor(sports, 'Football'), 1,
+            `TEST6[${iter}]: ${team} played Football ${countFor(sports, 'Football')}× on a 1×/day cap`);
+    }
+}
+console.log('✅ TEST 6 — per TEAM: 4/4 runs, 8 teams each get the capped sport once across 2 periods');
+
+// =============================================================================
+// TEST 7 — killswitch: cap fully bypassed
 // =============================================================================
 {
     global.window.__leagueSportDailyLimit = false;
     const r = run(fieldsFor({ Basketball: 2 }), 2, { Basketball: 1 });
-    assert.strictEqual(r.games.length, 4, 'TEST5: all 4 games place with the cap disabled, got ' + JSON.stringify(r.games));
-    assert.strictEqual(r.byes.length, 0, 'TEST5: no byes with the cap disabled');
+    assert.strictEqual(r.games.length, 4, 'TEST7: all 4 games place with the cap disabled, got ' + JSON.stringify(r.games));
+    assert.strictEqual(r.byes.length, 0, 'TEST7: no byes with the cap disabled');
     delete global.window.__leagueSportDailyLimit;
-    console.log('✅ TEST 5 — killswitch bypasses the cap cleanly');
+    console.log('✅ TEST 7 — killswitch bypasses the cap cleanly');
 }
 
 console.log('\n🎉 league_sport_daily_limit_sim: ALL TESTS PASSED');
