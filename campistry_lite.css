@@ -6,7 +6,8 @@
    ============================================================================ */
 
 :root {
-    /* Coral ramp — Lite brand */
+    /* ── Coral ramp — Lite brand ─────────────────────────────────────────
+       Base hue ~9deg. Everything else in the system is derived from it. */
     --coral-50:  #FEF2EF;
     --coral-100: #FCDFD8;
     --coral-200: #F9C2B5;
@@ -25,28 +26,77 @@
     --accent-dark: var(--coral-600);
     --accent-tint: var(--coral-50);
 
-    /* Neutrals */
-    --bg:     #F4F5F7;
-    --card:   #FFFFFF;
-    --ink:    #131A26;
-    --ink-2:  #475467;
-    --muted:  #98A2B3;
-    --line:   #EDEFF3;
-    --line-2: #E3E7EC;
+    /* ── Tinted neutrals ─────────────────────────────────────────────────
+       These used to be cool blue-greys (hue ~220deg) under a warm coral
+       brand — two palettes that shared nothing, which is what reads as
+       "white with some colour on top". They're now built at the brand's own
+       hue with a trace of saturation, so every surface carries the same
+       undertone and coral looks native to the app instead of applied to it. */
+    --ink:    #1F1714;   /* warm near-black, not blue-black */
+    --ink-2:  #5F4F49;
+    --muted:  #9A8B85;
+    --line:   #EDE5E1;
+    --line-2: #DFD4CE;
+
+    /* ── Tonal elevation ────────────────────────────────────────────────
+       Material 3's idea: height is expressed as TONE first and shadow
+       second, so the hierarchy survives even where shadows are invisible.
+       Sunken sits below the canvas; raised surfaces get brighter as they
+       come forward. */
+    --surface-sunk: #F1EAE6;
+    --bg:           #F7F2EF;
+    --card:         #FFFDFC;
+    --card-2:       #F6F0EC;
+    --surface-over: #FFFFFF;   /* sheets/menus — the top of the stack */
 
     --r-sm: 12px;
     --r:    16px;
     --r-lg: 22px;
 
-    --shadow-sm: 0 1px 2px rgba(16,24,40,0.05);
-    --shadow:    0 1px 2px rgba(16,24,40,0.04), 0 10px 26px -10px rgba(16,24,40,0.16);
-    --shadow-lg: 0 16px 40px -12px rgba(16,24,40,0.24);
+    /* Warm shadows. Neutral-black shadows over warm surfaces go muddy grey;
+       tinting them with the brand's dark keeps depth in the same family. */
+    --shadow-sm: 0 1px 2px rgba(74,38,26,0.055);
+    --shadow:    0 1px 2px rgba(74,38,26,0.045), 0 10px 26px -10px rgba(74,38,26,0.18);
+    --shadow-lg: 0 16px 40px -12px rgba(74,38,26,0.26);
 
     --header-h: 58px;
     --tabbar-h: 64px;
 
     --font-display: 'Fraunces', Georgia, serif;
     --font-body: 'DM Sans', system-ui, -apple-system, BlinkMacSystemFont, sans-serif;
+}
+
+/* ── Dark context ────────────────────────────────────────────────────────
+   Not an inversion of the light theme: dark UI has its own logic. Surfaces
+   are warm charcoals rather than pure black (pure black crushes depth and
+   makes shadows useless), they step up in tone as they come forward, and
+   the accent is lifted because a mid-tone coral loses contrast against a
+   dark canvas. */
+@media (prefers-color-scheme: dark) {
+    :root {
+        --accent:      #F58367;
+        --accent-dark: #FA9A82;
+        --accent-tint: #2E1C17;
+
+        --ink:    #F7EFEC;
+        --ink-2:  #C3B2AB;
+        --muted:  #8E7C75;
+        --line:   #2E2521;
+        --line-2: #3C312C;
+
+        --surface-sunk: #120E0D;
+        --bg:           #171211;
+        --card:         #201917;
+        --card-2:       #292120;
+        --surface-over: #2E2523;
+
+        --shadow-sm: 0 1px 2px rgba(0,0,0,0.4);
+        --shadow:    0 2px 4px rgba(0,0,0,0.35), 0 12px 30px -10px rgba(0,0,0,0.6);
+        --shadow-lg: 0 18px 46px -12px rgba(0,0,0,0.7);
+    }
+    /* Product logos are drawn for light backgrounds; lift them slightly so
+       they don't sit in a hole on a dark tile. */
+    .lite-launch-logo { filter: brightness(1.12); }
 }
 
 * { box-sizing: border-box; }
@@ -115,7 +165,7 @@ button { cursor: pointer; border: none; background: none; }
     display: flex; align-items: center; justify-content: space-between; gap: 10px;
     height: calc(var(--header-h) + env(safe-area-inset-top));
     padding: env(safe-area-inset-top) 14px 0;
-    background: rgba(255,255,255,0.82);
+    background: color-mix(in srgb, var(--card) 82%, transparent);
     backdrop-filter: saturate(180%) blur(14px);
     -webkit-backdrop-filter: saturate(180%) blur(14px);
     border-bottom: 1px solid var(--line);
@@ -151,7 +201,7 @@ button { cursor: pointer; border: none; background: none; }
 /* ─── Account menu ────────────────────────────────────────────────────── */
 .lite-menu {
     position: fixed; top: calc(var(--header-h) + env(safe-area-inset-top) - 4px); right: 12px; z-index: 60;
-    background: var(--card); border: 1px solid var(--line-2); border-radius: var(--r);
+    background: var(--surface-over); border: 1px solid var(--line-2); border-radius: var(--r);
     box-shadow: var(--shadow-lg); min-width: 240px; overflow: hidden;
     animation: liteIn 0.16s ease both;
 }
@@ -255,7 +305,7 @@ button { cursor: pointer; border: none; background: none; }
     display: none; justify-content: space-around; align-items: stretch;
     height: calc(var(--tabbar-h) + env(safe-area-inset-bottom));
     padding-bottom: env(safe-area-inset-bottom);
-    background: rgba(255,255,255,0.9);
+    background: color-mix(in srgb, var(--card) 90%, transparent);
     backdrop-filter: saturate(180%) blur(14px); -webkit-backdrop-filter: saturate(180%) blur(14px);
     border-top: 1px solid var(--line); max-width: 680px; margin: 0 auto;
 }
@@ -282,7 +332,7 @@ button { cursor: pointer; border: none; background: none; }
 .lite-btn:active { transform: scale(0.98); background: var(--accent-dark); }
 .lite-btn:disabled { opacity: 0.5; }
 .lite-btn.secondary { background: var(--card); color: var(--accent-dark); border-color: var(--line-2); }
-.lite-btn.danger { background: #fff; color: #C0392B; border-color: #F3C2BA; }
+.lite-btn.danger { background: var(--card); color: #C0392B; border-color: #F3C2BA; }
 .lite-btn.block { display: flex; width: 100%; }
 
 .lite-input, .lite-select, .lite-textarea {
@@ -397,7 +447,7 @@ button { cursor: pointer; border: none; background: none; }
 .lite-league-link { display: inline-flex; align-items: center; gap: 4px; margin-top: 6px; padding: 6px 12px; font-size: 0.8rem; font-weight: 700; color: var(--accent-dark); background: var(--accent-tint); border: none; border-radius: 999px; cursor: pointer; }
 .lite-league-link:active { opacity: 0.7; }
 .lite-games-list { display: flex; flex-direction: column; gap: 8px; margin-top: 6px; }
-.lite-game-row { padding: 12px 14px; border-radius: 12px; background: var(--card-2, #F8FAFC); border: 1px solid var(--line, #E5E7EB); }
+.lite-game-row { padding: 12px 14px; border-radius: 12px; background: var(--card-2); border: 1px solid var(--line); }
 .lite-game-row.mine { background: var(--accent-tint); border-color: var(--accent); }
 .lite-game-teams { font-size: 0.92rem; font-weight: 700; color: var(--ink); display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
 .lite-game-you { font-size: 0.6rem; font-weight: 800; text-transform: uppercase; letter-spacing: 0.04em; color: #fff; background: var(--accent-dark); padding: 2px 7px; border-radius: 999px; }
@@ -409,7 +459,7 @@ button { cursor: pointer; border: none; background: none; }
 .lite-conflict { margin-top: 10px; padding: 10px 12px; border-radius: 10px; background: #FEF3F2; color: #B42318; font-size: 0.8rem; font-weight: 600; }
 /* Compact control bar: two labelled pickers + search/overflow icons, one row. */
 .lite-ctrlbar { display: flex; align-items: center; gap: 7px; margin-bottom: 10px; }
-.lite-ctrl { display: inline-flex; align-items: center; justify-content: center; gap: 3px; min-height: 42px; padding: 4px 9px 4px 13px; border: 1px solid var(--line, #E5E7EB); border-radius: 14px; background: var(--card, #fff); font-size: 0.83rem; font-weight: 700; color: var(--ink); cursor: pointer; white-space: nowrap; }
+.lite-ctrl { display: inline-flex; align-items: center; justify-content: center; gap: 3px; min-height: 42px; padding: 4px 9px 4px 13px; border: 1px solid var(--line); border-radius: 14px; background: var(--card); font-size: 0.83rem; font-weight: 700; color: var(--ink); cursor: pointer; white-space: nowrap; }
 .lite-ctrl-txt { display: flex; flex-direction: column; align-items: flex-start; gap: 1px; min-width: 0; }
 .lite-ctrl-cap { font-size: 0.56rem; font-weight: 800; text-transform: uppercase; letter-spacing: 0.07em; color: var(--muted); line-height: 1; }
 .lite-ctrl-val { font-size: 0.84rem; font-weight: 700; color: var(--ink); line-height: 1.15; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 100%; }
@@ -422,12 +472,12 @@ button { cursor: pointer; border: none; background: none; }
 .lite-ctrl.icon svg { width: 18px; height: 18px; }
 .lite-ctrl.icon.on { background: var(--accent-tint); border-color: var(--accent); color: var(--accent-dark); }
 .lite-ctrl.icon.alert { position: relative; }
-.lite-ctrl.icon.alert::after { content: ''; position: absolute; top: 6px; right: 7px; width: 7px; height: 7px; border-radius: 50%; background: #3B82F6; border: 1.5px solid var(--card, #fff); }
+.lite-ctrl.icon.alert::after { content: ''; position: absolute; top: 6px; right: 7px; width: 7px; height: 7px; border-radius: 50%; background: #3B82F6; border: 1.5px solid var(--card); }
 .lite-searchrow { margin-bottom: 10px; }
 
 /* Sheet pickers (view / group by / more) */
 .lite-picklist { display: flex; flex-direction: column; margin-top: 4px; }
-.lite-pick { display: flex; align-items: center; justify-content: space-between; gap: 10px; width: 100%; padding: 13px 4px; border-top: 1px solid var(--line, #EEF0F3); background: none; text-align: left; cursor: pointer; }
+.lite-pick { display: flex; align-items: center; justify-content: space-between; gap: 10px; width: 100%; padding: 13px 4px; border-top: 1px solid var(--line); background: none; text-align: left; cursor: pointer; }
 .lite-pick:first-child { border-top: none; }
 .lite-pick-group { padding: 12px 4px 5px; font-size: 0.66rem; font-weight: 800; text-transform: uppercase; letter-spacing: 0.07em; color: var(--muted); }
 .lite-pick-group + .lite-pick { border-top: none; }
@@ -436,32 +486,32 @@ button { cursor: pointer; border: none; background: none; }
 .lite-pick-main { display: flex; flex-direction: column; gap: 2px; font-size: 0.95rem; font-weight: 600; color: var(--ink); }
 .lite-pick.on .lite-pick-main { color: var(--accent-dark); font-weight: 800; }
 .lite-pick-hint { font-size: 0.76rem; font-weight: 500; color: var(--ink-2); }
-.lite-rain-row { padding: 10px 0; border-top: 1px solid var(--line, #EEF0F3); }
+.lite-rain-row { padding: 10px 0; border-top: 1px solid var(--line); }
 .lite-rain-what { font-size: 0.88rem; font-weight: 700; color: var(--ink); }
 .lite-rain-meta { font-size: 0.76rem; color: var(--ink-2); margin: 2px 0 6px; }
 
 /* ─── Period-first (Time) view ────────────────────────────────────────── */
 .lite-bunk-card.now .lite-bunk-head { background: var(--accent-tint); }
-.lite-tl-row { padding: 11px 15px; border-top: 1px solid var(--line, #EEF0F3); }
+.lite-tl-row { padding: 11px 15px; border-top: 1px solid var(--line); }
 .lite-tl-row:first-of-type { border-top: none; }
 .lite-tl-row.kind-pinned { border-left: 3px solid #818CF8; }
 .lite-tl-row.kind-reserved { border-left: 3px solid #F87171; }
 .lite-tl-row.kind-trip { border-left: 3px solid #34D399; }
 .lite-tl-row.kind-league { border-left: 3px solid #60A5FA; }
 .lite-who-row { display: flex; flex-wrap: wrap; gap: 5px; margin-top: 7px; }
-.lite-who { font-size: 0.72rem; font-weight: 600; color: var(--ink-2); background: var(--card-2, #F1F5F9); border-radius: 999px; padding: 3px 9px; }
+.lite-who { font-size: 0.72rem; font-weight: 600; color: var(--ink-2); background: var(--card-2); border-radius: 999px; padding: 3px 9px; }
 .lite-who.all { color: var(--accent-dark); background: var(--accent-tint); font-weight: 800; }
 
 /* ─── Grid view (periods × bunks) ─────────────────────────────────────── */
-.lite-grid-wrap { overflow: auto; max-height: 66vh; border: 1px solid var(--line, #E5E7EB); border-radius: 14px; background: var(--card, #fff); -webkit-overflow-scrolling: touch; }
+.lite-grid-wrap { overflow: auto; max-height: 66vh; border: 1px solid var(--line); border-radius: 14px; background: var(--card); -webkit-overflow-scrolling: touch; }
 .lite-grid { border-collapse: separate; border-spacing: 0; font-size: 0.78rem; }
-.lite-grid th, .lite-grid td { border-bottom: 1px solid var(--line, #EEF0F3); border-right: 1px solid var(--line, #EEF0F3); }
-.lite-grid thead th { position: sticky; top: 0; z-index: 2; background: var(--card, #fff); padding: 9px 10px; font-size: 0.72rem; font-weight: 800; color: var(--ink-2); text-align: left; white-space: nowrap; }
+.lite-grid th, .lite-grid td { border-bottom: 1px solid var(--line); border-right: 1px solid var(--line); }
+.lite-grid thead th { position: sticky; top: 0; z-index: 2; background: var(--card); padding: 9px 10px; font-size: 0.72rem; font-weight: 800; color: var(--ink-2); text-align: left; white-space: nowrap; }
 .lite-grid-corner { left: 0; z-index: 3 !important; min-width: 62px; }
 .lite-grid-bunk { min-width: 116px; max-width: 116px; }
-.lite-grid-time { position: sticky; left: 0; z-index: 1; background: var(--card, #fff); padding: 8px 10px; text-align: left; white-space: nowrap; min-width: 62px; }
+.lite-grid-time { position: sticky; left: 0; z-index: 1; background: var(--card); padding: 8px 10px; text-align: left; white-space: nowrap; min-width: 62px; }
 .lite-grid-time .t1 { display: block; font-size: 0.74rem; font-weight: 800; color: var(--ink); }
-.lite-grid-time .t2 { display: block; font-size: 0.66rem; color: var(--muted, #9AA3AF); }
+.lite-grid-time .t2 { display: block; font-size: 0.66rem; color: var(--muted); }
 .lite-grid-cell { padding: 8px 10px; vertical-align: top; min-width: 116px; max-width: 116px; cursor: pointer; }
 .lite-grid-cell .g1 { display: block; font-weight: 700; color: var(--ink); line-height: 1.25; overflow: hidden; text-overflow: ellipsis; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; }
 .lite-grid-cell .g2 { display: block; font-size: 0.7rem; color: var(--ink-2); margin-top: 2px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
@@ -520,7 +570,7 @@ button { cursor: pointer; border: none; background: none; }
 /* ─── Bottom sheet ────────────────────────────────────────────────────── */
 .lite-sheet-backdrop { position: fixed; inset: 0; z-index: 150; background: rgba(19,26,38,0.5); display: flex; align-items: flex-end; justify-content: center; animation: liteFade 0.2s ease; }
 @keyframes liteFade { from { opacity: 0; } to { opacity: 1; } }
-.lite-sheet { background: var(--card); width: 100%; max-width: 680px; border-radius: 24px 24px 0 0; padding: 20px 16px calc(20px + env(safe-area-inset-bottom)); max-height: 88dvh; overflow-y: auto; -webkit-overflow-scrolling: touch; animation: liteSheetUp 0.24s cubic-bezier(0.16,1,0.3,1); }
+.lite-sheet { background: var(--surface-over); width: 100%; max-width: 680px; border-radius: 24px 24px 0 0; padding: 20px 16px calc(20px + env(safe-area-inset-bottom)); max-height: 88dvh; overflow-y: auto; -webkit-overflow-scrolling: touch; animation: liteSheetUp 0.24s cubic-bezier(0.16,1,0.3,1); }
 @keyframes liteSheetUp { from { transform: translateY(100%); } to { transform: none; } }
 .lite-sheet-grip { display: block; width: 38px; height: 4px; border-radius: 999px; background: var(--line-2); margin: -8px auto 12px; }
 .lite-sheet { transition: transform 0.24s cubic-bezier(0.22,1,0.36,1); }
@@ -696,7 +746,7 @@ button { cursor: pointer; border: none; background: none; }
 .lite-note-card[data-color="blue"]   { background: #EFF6FF; border-color: #BFDBFE; }
 .lite-note-card[data-color="green"]  { background: #F0FDF4; border-color: #BBF7D0; }
 .lite-note-card[data-color="purple"] { background: #FAF5FF; border-color: #E9D5FF; }
-.lite-note-card[data-color="slate"]  { background: #F8FAFC; border-color: #E2E8F0; }
+.lite-note-card[data-color="slate"]  { background: var(--card-2); border-color: var(--line-2); }
 .lite-note-pin { position: absolute; top: 8px; right: 9px; font-size: 0.8rem; }
 .lite-note-title { font-weight: 700; font-size: 0.92rem; color: #1A2231; margin-bottom: 3px; padding-right: 16px; word-break: break-word; }
 .lite-note-body { font-size: 0.83rem; color: #3A4353; line-height: 1.4; white-space: pre-wrap; word-break: break-word; max-height: 200px; overflow: hidden; }
@@ -776,7 +826,7 @@ button { cursor: pointer; border: none; background: none; }
 .lite-skel-card { opacity: 0.75; }
 .lite-skel {
     display: block; border-radius: 6px;
-    background: linear-gradient(90deg, var(--line) 25%, #F7F8FA 37%, var(--line) 63%);
+    background: linear-gradient(90deg, var(--line) 25%, var(--card-2) 37%, var(--line) 63%);
     background-size: 400% 100%; animation: liteShimmer 1.3s ease infinite;
 }
 .lite-skel-line { height: 11px; margin: 3px 0; }

@@ -930,19 +930,43 @@
 
     // Per-app internal theming: each app runs in its product color; the Lite
     // shell (home launcher) reverts to coral.
+    // Each app runs in its product colour; the Lite shell reverts to coral.
+    // The per-app palette in LITE_APPS is authored for a light background, so
+    // in a dark context we can't apply it literally: a mid-tone teal or purple
+    // loses contrast on charcoal, and the pale tints become bright blocks that
+    // swallow the text on top of them. Derive dark-appropriate values instead —
+    // lift the accent toward white, and rebuild the tint by mixing the accent
+    // INTO the dark surface rather than into white.
+    let _themeApp = null;
+    function prefersDark() {
+        try { return window.matchMedia('(prefers-color-scheme: dark)').matches; } catch (_) { return false; }
+    }
     function applyTheme(app) {
+        _themeApp = app || null;
         const root = document.getElementById('liteApp');
+        if (!root) return;
         const t = app && app.theme;
-        if (t) {
-            root.style.setProperty('--accent', t.accent);
-            root.style.setProperty('--accent-dark', t.dark);
-            root.style.setProperty('--accent-tint', t.tint);
-        } else {
+        if (!t) {
             root.style.removeProperty('--accent');
             root.style.removeProperty('--accent-dark');
             root.style.removeProperty('--accent-tint');
+            return;
+        }
+        if (prefersDark()) {
+            root.style.setProperty('--accent', `color-mix(in srgb, ${t.accent} 76%, #FFFFFF)`);
+            root.style.setProperty('--accent-dark', `color-mix(in srgb, ${t.accent} 55%, #FFFFFF)`);
+            root.style.setProperty('--accent-tint', `color-mix(in srgb, ${t.accent} 20%, #17110F)`);
+        } else {
+            root.style.setProperty('--accent', t.accent);
+            root.style.setProperty('--accent-dark', t.dark);
+            root.style.setProperty('--accent-tint', t.tint);
         }
     }
+    // Re-derive if the phone flips appearance while the app is open.
+    try {
+        window.matchMedia('(prefers-color-scheme: dark)')
+            .addEventListener('change', () => applyTheme(_themeApp));
+    } catch (_) {}
 
     // Per-user app access, read from the SAME place the desktop uses
     // (camp_users.product_access, managed by the owner in the Team screen) so
@@ -960,6 +984,7 @@
         if (!allow || id === 'counselor') return true;
         return allow.includes(id);
     }
+
     function appsForRole() {
         return LITE_APPS.filter(a => a.roles.includes(role) && canOpenApp(a.id));
     }
