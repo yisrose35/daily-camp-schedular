@@ -25,21 +25,22 @@
     <link rel="stylesheet" href="campistry_lite.css" onload="document.documentElement.classList.add('css-ready')">
     <noscript><style>html body { opacity: 1 !important; }</style></noscript>
 </head>
-<body>
+<body class="lite-login-page">
 
+<!-- Deliberately built on the same brand canvas as the biometric lock screen
+     (.lite-lock): coral gradient, badged mark, display wordmark, one white
+     primary action. The two are the app's only gates, so they should read as
+     the same door. This screen does NOT follow the light/dark theme — the
+     brand colour IS the surface here, exactly as on the lock screen. -->
 <div class="lite-login" id="liteLogin" style="display:none;">
+    <div class="lite-login-inner">
 
-    <!-- Brand lockup sits at the top edge like a native app's title, rather
-         than floating a logo above a boxed form. Monochrome on purpose — a
-         sign-in screen is the wrong place for a full-colour badge. -->
-    <div class="lite-login-brand">
-        <span class="lite-login-mark" role="img" aria-label="Campistry"></span>
-        <span class="lite-login-brandname">Campistry <b>Lite</b></span>
-    </div>
+        <div class="lite-login-badge">
+            <span class="lite-login-mark" role="img" aria-label="Campistry"></span>
+        </div>
 
-    <div class="lite-login-body">
-        <h1 class="lite-login-h1">Sign in</h1>
-        <p class="lite-login-sub">Use your Campistry account.</p>
+        <h1 class="lite-login-title">Campistry <span>Lite</span></h1>
+        <p class="lite-login-sub">Sign in to your camp</p>
 
         <form id="liteLoginForm" novalidate autocomplete="on">
             <div class="lite-lf">
@@ -50,10 +51,7 @@
             </div>
 
             <div class="lite-lf">
-                <div class="lite-lf-head">
-                    <label for="litePassword">Password</label>
-                    <button type="button" class="lite-lf-aux" id="liteForgot">Forgot?</button>
-                </div>
+                <label for="litePassword">Password</label>
                 <div class="lite-lf-wrap">
                     <input class="lite-lf-input" type="password" id="litePassword"
                            autocomplete="current-password" required>
@@ -66,12 +64,13 @@
             <div class="lite-login-err" id="liteLoginErr" role="alert" hidden></div>
 
             <button class="lite-btn block lite-login-go" type="submit" id="liteLoginBtn">Sign in</button>
+            <button type="button" class="lite-login-alt" id="liteForgot">Forgot your password?</button>
         </form>
-    </div>
 
-    <p class="lite-login-foot">
-        Accounts are created by your camp on <a href="index.html">campistry.app</a>
-    </p>
+        <p class="lite-login-foot">
+            Accounts are created by your camp on <a href="index.html">campistry.app</a>
+        </p>
+    </div>
 </div>
 
 <div id="liteToast" class="lite-toast" style="display:none;"></div>

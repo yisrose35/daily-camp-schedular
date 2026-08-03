@@ -884,79 +884,99 @@ button { cursor: pointer; border: none; background: none; }
    look like it belongs to a company rather than a campaign: quiet brand mark,
    one clear heading, generous field targets, a single primary action, and
    secondary options that stay out of the way until wanted. */
-/* Full-bleed, not a boxed form on a backdrop. A card floating in the middle of
-   a phone screen reads as a web page someone opened; edge-to-edge with the
-   brand pinned top and the fine print pinned bottom reads as the app itself.
-   The ambient wash on body::before supplies the depth the card used to. */
-.lite-login {
-    min-height: 100dvh; display: flex; flex-direction: column;
-    width: 100%; max-width: 440px; margin: 0 auto;
-    padding: calc(22px + env(safe-area-inset-top)) 24px calc(18px + env(safe-area-inset-bottom));
+/* Same canvas as .lite-lock above, on purpose. Sign-in and the biometric lock
+   are the app's only two gates, so they get one identity: coral gradient, a
+   badged mark, the display wordmark, and a single white primary action. Note
+   this screen is intentionally theme-independent — the brand colour IS the
+   surface, so there is no light/dark variant to keep in sync. */
+.lite-login-page {
+    background: linear-gradient(160deg, var(--coral-500, #EE6A53), var(--coral-700, #B23A28));
+    background-attachment: fixed;
 }
-/* Heading + form ride the optical centre; brand and footer hold the edges. */
-.lite-login-body { flex: 1; display: flex; flex-direction: column; justify-content: center; padding-bottom: 6vh; }
+/* The app's ambient wash is tuned for the neutral surfaces; it only muddies
+   the gradient here. */
+.lite-login-page::before { display: none; }
 
-.lite-login-brand { display: flex; align-items: center; gap: 8px; flex: none; }
-/* Masked rather than an <img>: the source PNG is matted, and a mask also lets
-   the mark take the text colour so it never goes dim against a dark surface. */
+.lite-login {
+    min-height: 100dvh; display: flex; align-items: center; justify-content: center;
+    padding: calc(28px + env(safe-area-inset-top)) 24px calc(24px + env(safe-area-inset-bottom));
+}
+.lite-login-inner { width: 100%; max-width: 340px; text-align: center; color: #fff; }
+
+.lite-login-badge {
+    width: 84px; height: 84px; border-radius: 50%; margin: 0 auto 18px;
+    background: rgba(255, 255, 255, 0.18);
+    display: flex; align-items: center; justify-content: center;
+}
+/* Masked rather than an <img>: the source PNG is matted, so it haloes on a
+   saturated surface. A mask also lets the mark simply be white. */
 .lite-login-mark {
-    width: 22px; height: 22px; flex: none; background: var(--ink);
+    width: 40px; height: 40px; background: #fff;
     -webkit-mask: url('Campistry_logo.png') center / contain no-repeat;
     mask: url('Campistry_logo.png') center / contain no-repeat;
 }
-.lite-login-brandname { font-size: 0.84rem; font-weight: 600; letter-spacing: 0.01em; color: var(--ink-2); }
-.lite-login-brandname b { font-weight: 800; color: var(--ink); }
 
-.lite-login-h1 { font-family: var(--font-display); font-size: 1.85rem; font-weight: 700; letter-spacing: -0.025em; margin: 0; color: var(--ink); }
-.lite-login-sub { font-size: 0.92rem; color: var(--ink-2); margin: 6px 0 26px; }
+.lite-login-title { font-family: var(--font-display); font-size: 1.6rem; font-weight: 700; margin: 0; color: #fff; }
+.lite-login-title span { opacity: 0.85; }
+.lite-login-sub { font-size: 0.9rem; opacity: 0.9; margin: 4px 0 26px; }
 
-/* Fields: label above, comfortable target, a focus ring that is obvious
-   without shouting. Placeholders are omitted — a label plus a real focus state
+/* Fields are translucent white rather than solid: on this canvas a solid white
+   input competes with the white button, and the button has to stay the single
+   obvious action. Placeholders are omitted — a label plus a real focus state
    is clearer than grey text people mistake for a filled value. */
-.lite-lf { margin-bottom: 15px; }
-.lite-lf label { display: block; font-size: 0.79rem; font-weight: 600; color: var(--ink-2); margin: 0 0 6px 2px; }
-.lite-lf-head { display: flex; align-items: baseline; justify-content: space-between; }
-.lite-lf-aux {
-    font-size: 0.76rem; font-weight: 600; color: var(--ink-2);
-    padding: 2px 4px; margin: 0 0 6px; border-radius: 6px;
+.lite-lf { margin-bottom: 14px; text-align: left; }
+.lite-lf label {
+    display: block; font-size: 0.78rem; font-weight: 600;
+    color: rgba(255, 255, 255, 0.92); margin: 0 0 6px 2px;
 }
-.lite-lf-aux:active { color: var(--accent-dark); }
 .lite-lf-wrap { position: relative; }
 .lite-lf-input {
     width: 100%; height: 50px; padding: 0 14px;
-    font-size: 16px; color: var(--ink);
-    background: var(--card); border: 1px solid var(--line-2); border-radius: 12px;
-    transition: border-color 0.14s ease, box-shadow 0.14s ease;
+    font-size: 16px; color: #fff; caret-color: #fff;
+    background: rgba(255, 255, 255, 0.16);
+    border: 1px solid rgba(255, 255, 255, 0.28); border-radius: 12px;
+    transition: background 0.14s ease, border-color 0.14s ease, box-shadow 0.14s ease;
 }
 .lite-lf-wrap .lite-lf-input { padding-right: 48px; }
 .lite-lf-input:focus {
-    outline: none; border-color: var(--accent);
-    box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 22%, transparent);
+    outline: none; background: rgba(255, 255, 255, 0.22);
+    border-color: rgba(255, 255, 255, 0.85);
+    box-shadow: 0 0 0 3px rgba(255, 255, 255, 0.18);
+}
+/* Chrome's autofill paints its own opaque background and near-black text,
+   which would be unreadable here; the inset shadow trick is the only way to
+   override it. */
+.lite-lf-input:-webkit-autofill,
+.lite-lf-input:-webkit-autofill:focus {
+    -webkit-text-fill-color: #fff;
+    -webkit-box-shadow: 0 0 0 1000px rgba(210, 74, 52, 0.92) inset;
+    caret-color: #fff;
 }
 .lite-lf-eye {
     position: absolute; top: 50%; right: 6px; transform: translateY(-50%);
     width: 38px; height: 38px; border-radius: 9px;
-    display: flex; align-items: center; justify-content: center; color: var(--muted);
+    display: flex; align-items: center; justify-content: center;
+    background: none; color: rgba(255, 255, 255, 0.75);
 }
 .lite-lf-eye svg { width: 19px; height: 19px; }
-.lite-lf-eye[aria-pressed="true"] { color: var(--accent-dark); }
+.lite-lf-eye[aria-pressed="true"] { color: #fff; }
 
 .lite-login-err {
-    margin: 0 0 14px; padding: 10px 12px; border-radius: 10px;
-    background: color-mix(in srgb, #B42318 12%, transparent);
-    border: 1px solid color-mix(in srgb, #B42318 28%, transparent);
-    color: #B42318; font-size: 0.82rem; font-weight: 600;
+    margin: 2px 0 14px; padding: 10px 12px; border-radius: 10px; text-align: left;
+    background: rgba(0, 0, 0, 0.22);
+    border: 1px solid rgba(255, 255, 255, 0.30);
+    color: #fff; font-size: 0.82rem; font-weight: 600;
 }
-/* #B42318 fails contrast on a near-black surface, so lift it in both routes to
-   dark: the phone setting and the explicit override. */
-@media (prefers-color-scheme: dark) {
-    :root:not([data-theme="light"]) .lite-login-err { color: #FDA29B; }
-}
-:root[data-theme="dark"] .lite-login-err { color: #FDA29B; }
 
+.lite-login .lite-btn { background: #fff; color: var(--coral-700, #B23A28); }
+.lite-login .lite-btn:active { background: rgba(255, 255, 255, 0.88); }
 .lite-login-go { margin-top: 8px; height: 52px; font-size: 0.98rem; }
-.lite-login-foot {
-    flex: none; margin: 0; padding-top: 14px;
-    font-size: 0.76rem; line-height: 1.55; color: var(--muted); text-align: center;
+.lite-login-alt {
+    display: block; width: 100%; margin-top: 14px; background: none;
+    color: #fff; opacity: 0.85; font-size: 0.86rem; font-weight: 600;
 }
-.lite-login-foot a { color: var(--ink-2); font-weight: 600; text-decoration: none; }
+.lite-login-foot {
+    margin: 26px 0 0; font-size: 0.75rem; line-height: 1.55;
+    color: rgba(255, 255, 255, 0.72);
+}
+.lite-login-foot a { color: #fff; font-weight: 600; text-decoration: none; opacity: 0.9; }
