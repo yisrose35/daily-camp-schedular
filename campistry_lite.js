@@ -64,7 +64,6 @@
     let activeTab = 'today';
     let currentApp = null;            // null = home launcher; else a LITE_APPS id
     let settingsOpen = false;         // Settings screen visible
-    let appUnlocked = false;          // biometric lock cleared this session
     let selectedDivision = null;      // head-staff Roster division chip
     let rosterQuery = '';
     let meRosterQuery = '';           // Me Lite roster search
@@ -128,6 +127,7 @@
     async function boot() {
         try {
             setSplash('Signing you in…');
+            splashProgress(6);
 
             // Wait for the Supabase client (loaded just before this script)
             let tries = 0;
@@ -162,6 +162,7 @@
                 return;
             }
             userEmail = (session.user?.email || '').toLowerCase();
+            splashProgress(28);
 
             window.supabase.auth.onAuthStateChange((event) => {
                 if (event === 'SIGNED_OUT') window.location.href = LOGIN_PAGE;
@@ -171,6 +172,7 @@
             setSplash('Loading your camp…');
             try { if (window.CampistryDB?.ready) await window.CampistryDB.ready; } catch (_) {}
             try { await window.AccessControl?.initialize?.(); } catch (e) { console.warn('[Lite] AccessControl init:', e); }
+            splashProgress(50);
 
             // Resolve camp_id the SAME way the desktop does — CampistryDB first
             // (the DB-verified `campistry_camp_id`). AccessControl.getCampId()
@@ -193,13 +195,16 @@
             }
 
             await loadProductAccess();
+            splashProgress(64);
 
             // Camp state (structure, roster, leagues, Lite settings)
             await loadCampState();
+            splashProgress(86);
 
             // Resolve the real camp name (getCampName often falls back to a
             // placeholder when Lite is opened directly, not via the dashboard).
             campDisplayName = await resolveCampName();
+            splashProgress(94);
 
             // Chrome: avatar, menu identity, role badge
             const ini = avatarInitials();
@@ -220,7 +225,6 @@
             wirePullToRefresh();
             goHome();
             dismissSplash();
-            maybeLockOnBoot();   // biometric app lock, if enabled
         } catch (e) {
             console.error('[Lite] Boot failed:', e);
             setSplash('Something went wrong loading Campistry Lite. Reload to try again.', true);
@@ -1328,10 +1332,8 @@
         try { window.scrollTo({ top: 0 }); } catch (_) {}
     }
 
-    async function renderSettings() {
+    function renderSettings() {
         const v = document.getElementById('view-settings');
-        const bioAvail = await biometricAvailable();
-        const bioOn = !!litePref('biometricLock', false);
         const roleLabel = cap(role || 'viewer');
         const camp = campDisplayName ? esc(campDisplayName) : '';
 
@@ -1350,17 +1352,6 @@
                     <div class="lite-set-sub">${esc(userEmail || '')}</div>
                     <div class="lite-set-tags"><span class="lite-pill">${esc(roleLabel)}</span>${camp ? `<span class="lite-pill gray">${camp}</span>` : ''}</div>
                 </div>
-            </div>
-
-            <div class="lite-set-section-label">Security</div>
-            <div class="lite-card lite-set-row" id="liteBioRow">
-                <div class="lite-set-row-main">
-                    <div class="lite-set-row-title">Biometric app lock</div>
-                    <div class="lite-set-row-sub" id="liteBioSub">${bioAvail
-                        ? 'Require Face ID / fingerprint to open Campistry Lite'
-                        : 'Not available on this device or browser'}</div>
-                </div>
-                <span class="lite-toggle${bioOn ? ' on' : ''}${bioAvail ? '' : ' disabled'}" id="liteBioToggle"></span>
             </div>
 
             <div class="lite-set-section-label">Appearance</div>
@@ -1384,87 +1375,6 @@
         v.querySelector('#liteSettingsSignout').addEventListener('click', () => document.getElementById('liteSignOut').click());
         v.querySelectorAll('#liteThemeSeg .lite-seg-btn').forEach(b =>
             b.addEventListener('click', () => { haptic(); setColorScheme(b.dataset.val); renderSettings(); }));
-        const bioToggle = v.querySelector('#liteBioToggle');
-        if (bioAvail) bioToggle.addEventListener('click', () => toggleBiometric(!bioOn));
-    }
-
-    // ─── Biometric app lock (WebAuthn platform authenticator) ────────────
-    function biometricAvailable() {
-        try {
-            if (!window.PublicKeyCredential || !window.isSecureContext) return Promise.resolve(false);
-            return PublicKeyCredential.isUserVerifyingPlatformAuthenticatorAvailable().catch(() => false);
-        } catch (e) { return Promise.resolve(false); }
-    }
-    function randomBytes(n) { const a = new Uint8Array(n); (window.crypto || {}).getRandomValues?.(a); return a; }
-    function b64(buf) { return btoa(String.fromCharCode(...new Uint8Array(buf))); }
-    function unb64(s) { const bin = atob(s); const a = new Uint8Array(bin.length); for (let i = 0; i < bin.length; i++) a[i] = bin.charCodeAt(i); return a; }
-
-    async function toggleBiometric(on) {
-        if (on) {
-            try {
-                const cred = await navigator.credentials.create({ publicKey: {
-                    challenge: randomBytes(32),
-                    rp: { name: 'Campistry Lite' },
-                    user: { id: randomBytes(16), name: userEmail || 'campistry', displayName: userName || 'Campistry user' },
-                    pubKeyCredParams: [{ type: 'public-key', alg: -7 }, { type: 'public-key', alg: -257 }],
-                    authenticatorSelection: { authenticatorAttachment: 'platform', userVerification: 'required', residentKey: 'preferred' },
-                    timeout: 60000
-                } });
-                if (!cred) throw new Error('no credential');
-                localStorage.setItem('lite_biometric_cred', b64(cred.rawId));
-                setLitePref('biometricLock', true);
-                appUnlocked = true;
-                toast('Biometric lock on');
-            } catch (e) { toast('Could not set up biometrics'); }
-        } else {
-            localStorage.removeItem('lite_biometric_cred');
-            setLitePref('biometricLock', false);
-            toast('Biometric lock off');
-        }
-        renderSettings();
-    }
-
-    async function verifyBiometric() {
-        try {
-            const idB64 = localStorage.getItem('lite_biometric_cred');
-            const allow = idB64 ? [{ type: 'public-key', id: unb64(idB64) }] : [];
-            const assertion = await navigator.credentials.get({ publicKey: {
-                challenge: randomBytes(32),
-                allowCredentials: allow,
-                userVerification: 'required',
-                timeout: 60000
-            } });
-            return !!assertion;
-        } catch (e) { return false; }
-    }
-
-    // Show the lock screen on boot / resume when enabled; returns true if locked.
-    function biometricLockEnabled() {
-        return !!litePref('biometricLock', false) && !!localStorage.getItem('lite_biometric_cred');
-    }
-    function showLock() {
-        appUnlocked = false;
-        const el = document.getElementById('liteLock');
-        const sub = document.getElementById('liteLockSub');
-        if (sub) sub.textContent = campDisplayName ? campDisplayName : 'Locked';
-        if (el) el.style.display = '';
-    }
-    function hideLock() {
-        appUnlocked = true;
-        const el = document.getElementById('liteLock');
-        if (el) el.style.display = 'none';
-    }
-    async function attemptUnlock() {
-        const ok = await verifyBiometric();
-        if (ok) hideLock();
-        else toast('Could not verify — try again');
-    }
-    function maybeLockOnBoot() {
-        if (!biometricLockEnabled()) { appUnlocked = true; return; }
-        showLock();
-        // Prompt immediately (some platforms require a user gesture; the Unlock
-        // button is the fallback if the auto-prompt is blocked).
-        attemptUnlock();
     }
 
     function wireChrome() {
@@ -1486,16 +1396,6 @@
             e.stopPropagation();
             document.getElementById('liteMenu').style.display = 'none';
             openSettings();
-        });
-
-        // Biometric lock screen buttons.
-        const lockBtn = document.getElementById('liteLockUnlock');
-        if (lockBtn) lockBtn.addEventListener('click', () => attemptUnlock());
-        const lockOut = document.getElementById('liteLockSignout');
-        if (lockOut) lockOut.addEventListener('click', () => document.getElementById('liteSignOut').click());
-        // Re-lock when the app returns to the foreground.
-        document.addEventListener('visibilitychange', () => {
-            if (!document.hidden && appUnlocked && biometricLockEnabled()) { showLock(); attemptUnlock(); }
         });
 
         document.getElementById('liteSignOut').addEventListener('click', async () => {
@@ -5192,10 +5092,23 @@
     // for 80ms — a blink of branding reads as jank, not polish — then hands off
     // to the app rather than being switched off.
     const _splashAt = Date.now();
-    const SPLASH_MIN_MS = 520;     // hold long enough that it reads as a launch
+    const SPLASH_MIN_MS = 700;     // hold long enough for the fill to read
     const SPLASH_TALK_MS = 900;    // ...and stay quiet until the wait is real
-    let _splashMsg = '', _splashTalk = false;
+    let _splashMsg = '', _splashTalk = false, _splashPct = 0;
     const _splashTimer = setTimeout(() => { _splashTalk = true; paintSplash(); }, SPLASH_TALK_MS);
+
+    // Raises the fill line inside the logo. Driven by real boot stages rather
+    // than a timer, so the mark stalls where the app actually stalls — a fake
+    // progress bar that glides to 100% while the network hangs is a lie.
+    // Monotonic: a later stage can never pull the line back down.
+    function splashProgress(pct) {
+        const p = Math.max(_splashPct, Math.min(100, pct));
+        _splashPct = p;
+        const el = document.getElementById('liteSplashLogo');
+        if (!el) return;
+        el.style.setProperty('--fill', p + '%');
+        el.setAttribute('aria-valuenow', String(Math.round(p)));
+    }
 
     function paintSplash() {
         const el = document.getElementById('liteSplashStatus');
@@ -5223,6 +5136,8 @@
         clearTimeout(_splashTimer);
         const el = document.getElementById('liteSplash');
         if (!el) return;
+        // Top the mark up before leaving, so it never fades out half-empty.
+        splashProgress(100);
         const wait = Math.max(0, SPLASH_MIN_MS - (Date.now() - _splashAt));
         setTimeout(() => {
             el.classList.add('done');

@@ -174,10 +174,11 @@ button { cursor: pointer; border: none; background: none; }
 
 /* ─── Launch screen ───────────────────────────────────────────────────────
    An installed app's launch should read as one continuous moment: the OS shows
-   the manifest's background_color and icon, then this takes over. They now
-   share a background, so there's no flash of a different colour at the handoff.
-   The mark springs in, the wordmark follows, and a determinate-looking bar
-   sweeps underneath — a spinner says "waiting", a bar says "working". */
+   the manifest's background_color and icon, then this takes over. They share a
+   background, so there's no flash of a different colour at the handoff.
+   Deliberately bare — the Lite wordmark is the only thing on screen, and it
+   doubles as the progress indicator by filling from the bottom as the camp
+   loads. A spinner says "waiting"; a mark that fills says "working". */
 .lite-splash {
     position: fixed; inset: 0; z-index: 1000;
     display: flex; align-items: center; justify-content: center;
@@ -191,42 +192,38 @@ button { cursor: pointer; border: none; background: none; }
 /* Hand-off: the launch screen lifts away as the app settles in underneath. */
 .lite-splash.done { opacity: 0; transform: scale(1.06); pointer-events: none; }
 
-.lite-splash-inner { display: flex; flex-direction: column; align-items: center; gap: 14px; width: 100%; max-width: 260px; }
+.lite-splash-inner { display: flex; flex-direction: column; align-items: center; gap: 20px; width: 100%; max-width: 260px; }
 
-.lite-splash-mark {
-    width: 84px; height: 84px; border-radius: 24px;
-    background: var(--card);
-    box-shadow: inset 0 1px 0 rgba(255,255,255,0.9), 0 2px 6px rgba(74,38,26,0.10), 0 18px 40px -14px rgba(74,38,26,0.34);
-    display: flex; align-items: center; justify-content: center;
-    animation: liteMarkIn 0.62s cubic-bezier(0.22,1.15,0.36,1) both;
+/* Registering --fill makes it a real animatable percentage; without this the
+   gradient stop would jump between boot stages instead of rising. Browsers
+   that don't support @property still fill, just in steps. */
+@property --fill {
+    syntax: '<percentage>';
+    inherits: false;
+    initial-value: 0%;
 }
-.lite-splash-mark img { width: 50px; height: 50px; object-fit: contain; }
+
+/* The Lite wordmark IS the progress bar. The PNG becomes a mask, so the
+   gradient underneath shows only through the letterforms: everything below
+   --fill is solid brand colour, everything above is a faint ghost of the same
+   shape. As boot stages land the line rises and the outline fills in.
+   Box is 2.1:1 to match Lite_clean.png, so `contain` doesn't letterbox it. */
+.lite-splash-logo {
+    --fill: 0%;
+    width: 184px; height: 88px;
+    background: linear-gradient(to top,
+        var(--accent) 0%,
+        var(--accent) var(--fill),
+        color-mix(in srgb, var(--ink) 20%, transparent) var(--fill),
+        color-mix(in srgb, var(--ink) 20%, transparent) 100%);
+    -webkit-mask: url('Lite_clean.png') center / contain no-repeat;
+    mask: url('Lite_clean.png') center / contain no-repeat;
+    transition: --fill 0.55s cubic-bezier(0.4, 0, 0.2, 1);
+    animation: liteMarkIn 0.5s cubic-bezier(0.22, 1.15, 0.36, 1) both;
+}
 @keyframes liteMarkIn {
-    from { opacity: 0; transform: scale(0.72) translateY(10px); }
+    from { opacity: 0; transform: scale(0.86); }
     to   { opacity: 1; transform: none; }
-}
-
-.lite-splash-title {
-    font-family: var(--font-display); font-size: 1.6rem; font-weight: 700; letter-spacing: -0.015em;
-    color: var(--ink);
-    animation: liteRise 0.5s cubic-bezier(0.22,1,0.36,1) 0.13s both;
-}
-.lite-splash-title span { color: var(--accent); }
-@keyframes liteRise { from { opacity: 0; transform: translateY(9px); } to { opacity: 1; transform: none; } }
-
-.lite-splash-bar {
-    position: relative; width: 132px; height: 3px; border-radius: 999px; overflow: hidden;
-    background: color-mix(in srgb, var(--ink) 10%, transparent);
-    animation: liteRise 0.5s cubic-bezier(0.22,1,0.36,1) 0.22s both;
-}
-.lite-splash-bar span {
-    position: absolute; inset: 0 auto 0 0; width: 42%; border-radius: 999px;
-    background: linear-gradient(90deg, transparent, var(--accent) 22%, var(--accent) 78%, transparent);
-    animation: liteBarSweep 1.15s cubic-bezier(0.55,0,0.35,1) infinite;
-}
-@keyframes liteBarSweep {
-    from { transform: translateX(-105%); }
-    to   { transform: translateX(275%); }
 }
 
 .lite-splash-status {
@@ -235,10 +232,13 @@ button { cursor: pointer; border: none; background: none; }
 }
 .lite-splash-status.show { opacity: 1; }
 .lite-splash-status.error { color: #B42318; font-weight: 600; }
+@media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) .lite-splash-status.error { color: #FDA29B; }
+}
+:root[data-theme="dark"] .lite-splash-status.error { color: #FDA29B; }
 
 @media (prefers-reduced-motion: reduce) {
-    .lite-splash-mark, .lite-splash-title, .lite-splash-bar { animation: none; }
-    .lite-splash-bar span { animation: liteBarSweep 2.4s linear infinite; }
+    .lite-splash-logo { animation: none; transition: none; }
     .lite-splash { transition: opacity 0.2s linear; }
     .lite-splash.done { transform: none; }
 }
@@ -818,16 +818,6 @@ button { cursor: pointer; border: none; background: none; }
 .lite-link-row.danger { color: #C0392B; }
 .lite-set-version { text-align: center; font-size: 0.74rem; color: var(--muted); margin: 20px 0 8px; }
 
-/* ─── Biometric lock overlay ──────────────────────────────────────────── */
-.lite-lock { position: fixed; inset: 0; z-index: 300; background: linear-gradient(160deg, var(--coral-500, #EE6A53), var(--coral-700, #DA4B32)); display: flex; align-items: center; justify-content: center; padding: 24px; }
-.lite-lock-inner { text-align: center; color: #fff; max-width: 320px; width: 100%; }
-.lite-lock-icon { width: 84px; height: 84px; border-radius: 50%; background: rgba(255,255,255,0.18); display: flex; align-items: center; justify-content: center; margin: 0 auto 18px; color: #fff; }
-.lite-lock-title { font-family: var(--font-display); font-size: 1.6rem; font-weight: 700; }
-.lite-lock-title span { opacity: 0.85; }
-.lite-lock-sub { font-size: 0.9rem; opacity: 0.9; margin: 4px 0 26px; }
-.lite-lock .lite-btn { background: #fff; color: var(--coral-700, #DA4B32); }
-.lite-lock-signout { display: block; width: 100%; margin-top: 14px; color: #fff; opacity: 0.85; font-size: 0.86rem; font-weight: 600; background: none; }
-
 /* ─── Notes Lite ──────────────────────────────────────────────────────── */
 .lite-notes-grid { columns: 2; column-gap: 10px; }
 .lite-note-card { display: block; width: 100%; text-align: left; break-inside: avoid; margin-bottom: 10px; padding: 12px 13px; border-radius: 14px; border: 1px solid var(--line-2); background: var(--card); position: relative; }
@@ -878,11 +868,9 @@ button { cursor: pointer; border: none; background: none; }
    look like it belongs to a company rather than a campaign: quiet brand mark,
    one clear heading, generous field targets, a single primary action, and
    secondary options that stay out of the way until wanted. */
-/* Same canvas as .lite-lock above, on purpose. Sign-in and the biometric lock
-   are the app's only two gates, so they get one identity: coral gradient, a
-   badged mark, the display wordmark, and a single white primary action. Note
-   this screen is intentionally theme-independent — the brand colour IS the
-   surface, so there is no light/dark variant to keep in sync. */
+/* The app's single gate. Coral gradient canvas, badged mark, display wordmark,
+   one white primary action. Intentionally theme-independent — the brand colour
+   IS the surface here, so there is no light/dark variant to keep in sync. */
 .lite-login-page {
     background: linear-gradient(160deg, var(--coral-500, #EE6A53), var(--coral-700, #B23A28));
     background-attachment: fixed;

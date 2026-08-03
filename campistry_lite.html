@@ -29,12 +29,13 @@
 </head>
 <body>
 
-    <!-- Boot / auth splash -->
+    <!-- Boot / auth splash. Bare on purpose: the logo sits as a faint outline
+         and fills in as each boot stage lands, so the mark itself IS the
+         progress indicator. Nothing else on the screen. -->
     <div id="liteSplash" class="lite-splash">
         <div class="lite-splash-inner">
-            <div class="lite-splash-mark"><img src="Campistry_logo.png" alt=""></div>
-            <div class="lite-splash-title">Campistry <span>Lite</span></div>
-            <div class="lite-splash-bar" role="progressbar" aria-label="Loading"><span></span></div>
+            <span class="lite-splash-logo" id="liteSplashLogo" role="progressbar"
+                  aria-label="Loading Campistry Lite" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0"></span>
             <!-- Left empty on purpose: filled only if the launch runs long, so a
                  fast open never flashes a message at you. -->
             <div class="lite-splash-status" id="liteSplashStatus"></div>
@@ -113,19 +114,6 @@
         <button class="lite-fab" id="liteNoteNew" aria-label="New note" style="display:none;">
             <svg width="26" height="26" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
         </button>
-    </div>
-
-    <!-- Biometric app lock (shown on boot / resume when enabled) -->
-    <div id="liteLock" class="lite-lock" style="display:none;">
-        <div class="lite-lock-inner">
-            <div class="lite-lock-icon">
-                <svg width="40" height="40" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><rect x="3" y="11" width="18" height="11" rx="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg>
-            </div>
-            <div class="lite-lock-title">Campistry <span>Lite</span></div>
-            <div class="lite-lock-sub" id="liteLockSub">Locked</div>
-            <button class="lite-btn block" id="liteLockUnlock">Unlock</button>
-            <button class="lite-lock-signout" id="liteLockSignout">Sign out instead</button>
-        </div>
     </div>
 
     <!-- Toast -->
