@@ -169,6 +169,135 @@ function _daSmartSwapPostRender(overlay, defaultOn) {
   _gsSync();
 }
 
+// ═════════════════════════════════════════════════════════════════════════
+// ★ REMOVE A TILE FROM AN ALREADY-GENERATED DAY
+// ═════════════════════════════════════════════════════════════════════════
+// Deleting a tile only ever edited the skeleton. The generated day renders
+// from window.divisionTimes + scheduleAssignments — both saved per date and
+// both rebuilt only by a generation — so a removed period kept showing its
+// activity, and a removed LEAGUE period kept its matchups on the books
+// (counting as played, feeding sport variety, holding its game number and its
+// bye/away-trip charges), until someone regenerated the day. "Delete the tile
+// and put nothing in its place" was therefore not actually expressible.
+//
+// This applies the removal: the day's geometry is rebuilt from the post-delete
+// skeleton, every surviving entry is re-keyed onto it by its own _startMin
+// (nothing is re-rolled, nothing shifts by index), and whatever lived in the
+// removed window is dropped. The freed time is simply unscheduled.
+//
+// Then the records that described the removed content are brought back in
+// line: league history is reconciled against the new grid (releasing the
+// matchups, sport variety, game count, byes, away trips and chinuch, and
+// renumbering later days' game labels), and rotation counts + last-done
+// timestamps are re-derived.
+//
+// Call with the tiles as they were BEFORE the skeleton was filtered; returns
+// true when the generated day was changed. A day that was never generated, or
+// a plan the re-key can't apply cleanly, leaves the schedule untouched — the
+// skeleton edit still stands, and the caller is told to regenerate.
+// ═════════════════════════════════════════════════════════════════════════
+async function _daApplyTileRemovalToGeneratedDay(removedTiles) {
+  try {
+    if (window._daBuilderMode === 'auto') return false;
+    if (!Array.isArray(removedTiles) || !removedTiles.length) return false;
+
+    const DTS = window.DivisionTimesSystem;
+    if (!DTS || !DTS.buildTimeRemovalPlan) return false;
+
+    const divisions = window.divisions || masterSettings.app1?.divisions || {};
+    const sa = window.scheduleAssignments || {};
+
+    // Only meaningful on a day that has actually been generated: at least one
+    // bunk of an affected division holds a real entry.
+    const tiles = removedTiles
+      .map(t => ({
+        division: t && t.division,
+        startMin: parseTimeToMinutes(t && t.startTime),
+        endMin: parseTimeToMinutes(t && t.endTime)
+      }))
+      .filter(t => t.division && t.startMin != null);
+    if (!tiles.length) return false;
+
+    const divSet = new Set(tiles.map(t => String(t.division)));
+    const anyGenerated = [...divSet].some(dn =>
+      ((divisions[dn] || {}).bunks || []).some(b => {
+        const arr = sa[String(b)];
+        return Array.isArray(arr) && arr.some(e => e && (e._activity || e.field));
+      }));
+    if (!anyGenerated) return false;   // nothing generated yet — the skeleton edit is all there is
+
+    const plan = DTS.buildTimeRemovalPlan({
+      removedTiles: tiles,
+      skeleton: dailyOverrideSkeleton,
+      divisions,
+      scheduleAssignments: sa,
+      leagueAssignments: window.leagueAssignments || {}
+    });
+
+    if (!plan.ok) {
+      // Never half-apply. The tile is gone from the skeleton either way; the
+      // generated day is left exactly as it was.
+      const why = plan.reason === 'no-geometry'
+        ? (plan.emptyDivs || []).join(', ') + ' would have no periods left'
+        : plan.reason === 'unsafe-bunks'
+          ? (plan.unsafeBunks || []).join(', ') + ' could not be matched to the new period structure'
+          : 'the day could not be remapped';
+      console.warn('[DA-Remove] plan refused (' + plan.reason + ') — schedule left untouched');
+      await daShowAlert('The tile was removed from the day\'s layout, but the already-generated ' +
+        'schedule was left as it is — ' + why + '.<br><br>Regenerate to bring the schedule in line.');
+      return false;
+    }
+
+    // ── Commit ────────────────────────────────────────────────────────────
+    window.divisionTimes = plan.newDT;
+    Object.keys(plan.assignments).forEach(b => { window.scheduleAssignments[b] = plan.assignments[b]; });
+    window.leagueAssignments = plan.leagueAssignments;
+
+    window.saveCurrentDailyData?.('unifiedTimes', window.unifiedTimes);
+    window.saveSchedule?.();          // scheduleAssignments + leagueAssignments + divisionTimes
+    window.updateTable?.();
+
+    // ── League history follows the grid ───────────────────────────────────
+    try {
+      const dateKey = window.currentScheduleDate;
+      const surv = window.SchedulerCoreUtils?.survivingLeagueLabels?.(window.leagueAssignments || {});
+      if (dateKey && surv) {
+        window.SchedulerCoreLeagues?.reconcileDayWithSchedule?.(plan.affectedDivs, dateKey, surv.regular);
+        window.SchedulerCoreSpecialtyLeagues?.reconcileDayWithSchedule?.(plan.affectedDivs, dateKey, surv.specialty);
+      }
+    } catch (e) { console.warn('[DA-Remove] league reconcile failed:', e); }
+
+    // ── Rotation counts + last-done follow the grid ───────────────────────
+    // Deferred so the daily store already holds the trimmed schedule (the
+    // rebuild scans it), mirroring the post-generation pass.
+    setTimeout(() => {
+      try {
+        window.SchedulerCoreUtils?.rebuildHistoricalCounts?.(true);
+        const dk = window.currentScheduleDate;
+        if (dk && window.RotationCloud?.save) window.RotationCloud.save(dk, window.scheduleAssignments || {});
+        window.SchedulerCoreUtils?.rebuildRotationHistoryForBunks?.(plan.affectedBunks);
+      } catch (e) { console.warn('[DA-Remove] rotation rebuild failed:', e); }
+    }, 0);
+
+    console.log('[DA-Remove] applied to the generated day: dropped ' + plan.droppedEntries +
+      ' entry(ies) and ' + plan.droppedLeagueGames + ' league game(s) across ' +
+      plan.affectedBunks.length + ' bunk(s)');
+    return true;
+  } catch (e) {
+    console.error('[DA-Remove] failed:', e);
+    return false;
+  }
+}
+
+// Snapshot the tiles a delete is about to remove (id set → time windows), so
+// the removal can be applied to the generated day after the skeleton is cut.
+function _daSnapshotRemovedTiles(ids) {
+  const want = (ids instanceof Set) ? ids : new Set(ids || []);
+  return (dailyOverrideSkeleton || [])
+    .filter(x => x && want.has(x.id))
+    .map(x => ({ division: x.division, startTime: x.startTime, endTime: x.endTime }));
+}
+
 // ★ Delete button for the Smart Tile EDIT dialog in Daily Adjustments (matches the
 //   skeleton builder). Removes the tile from the daily override skeleton, saves,
 //   re-renders, and closes the dialog.
@@ -185,12 +314,15 @@ function _daInjectDeleteButton(overlay, tileId) {
     const _ev = dailyOverrideSkeleton.find(function (x) { return x.id === tileId; });
     const _ids = new Set((_ev ? _daSpanMembers(_ev) : []).map(function (m) { return m.id; }));
     _ids.add(tileId);
+    const _snap = _daSnapshotRemovedTiles(_ids);
     dailyOverrideSkeleton = dailyOverrideSkeleton.filter(function (x) { return !_ids.has(x.id); });
     selectedTileId = null;
     saveDailySkeleton();
     renderGrid();
     const c = overlay.querySelector('.da-modal-cancel-x');
     if (c) c.click(); else overlay.remove();
+    // ★ Apply the removal to an already-generated day (see the function).
+    _daApplyTileRemovalToGeneratedDay(_snap);
   };
   footer.insertBefore(btn, footer.firstChild);
 }
@@ -4944,11 +5076,14 @@ function _showTileActionBar(tileEl) {
     const _ev = dailyOverrideSkeleton.find(x => x.id === id);
     const _ids = new Set((_ev ? _daSpanMembers(_ev) : []).map(m => m.id));
     _ids.add(id);
+    const _snap = _daSnapshotRemovedTiles(_ids);
     dailyOverrideSkeleton = dailyOverrideSkeleton.filter(x => !_ids.has(x.id));
     selectedTileId = null;
     bar.remove();
     saveDailySkeleton();
     renderGrid();
+    // ★ Apply the removal to an already-generated day (see the function).
+    _daApplyTileRemovalToGeneratedDay(_snap);
   };
 
   bar.appendChild(editBtn);
@@ -10220,10 +10355,18 @@ function setupKeyboardHandler() {
       (async () => {
         const ok = await daShowConfirm("Delete this block?", { danger: true, confirmText: 'Delete' });
         if (ok) {
-          dailyOverrideSkeleton = dailyOverrideSkeleton.filter(x => x.id !== selectedTileId);
+          // ★ Multi-grade span: deleting any member removes the whole span
+          //   (matches the Delete button and the edit dialog).
+          const _ev = dailyOverrideSkeleton.find(x => x.id === selectedTileId);
+          const _ids = new Set((_ev ? _daSpanMembers(_ev) : []).map(m => m.id));
+          _ids.add(selectedTileId);
+          const _snap = _daSnapshotRemovedTiles(_ids);
+          dailyOverrideSkeleton = dailyOverrideSkeleton.filter(x => !_ids.has(x.id));
           selectedTileId = null;
           saveDailySkeleton();
           renderGrid();
+          // ★ Apply the removal to an already-generated day (see the function).
+          await _daApplyTileRemovalToGeneratedDay(_snap);
         }
       })();
     }
