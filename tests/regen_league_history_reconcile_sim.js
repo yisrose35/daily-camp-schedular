@@ -173,6 +173,44 @@ test('A: league tile deleted → its day-record is rolled back by the reconcile'
 });
 
 // =========================================================================
+test('league tile REPLACED in place → the engine day-reset already releases it', () => {
+    // The commonest shape of A: the league tile is swapped for a Sports tile at
+    // the same time and that tile is regenerated. The replacement occupies the
+    // old game's start time, so the period IS in the regen set and the game is
+    // never listed as preserved — no reconcile needed.
+    const divisions = { A: { bunks: ['A1'] } };
+    const skeleton = [
+        { division: 'A', startTime: '9:00am', endTime: '10:00am', event: 'Sports Slot', type: 'slot' },
+        { division: 'A', startTime: '10:00am', endTime: '11:00am', event: 'Sports Slot', type: 'slot' }
+    ];
+    const scheduleAssignments = { A1: [{ _activity: 'Soccer', _startMin: 540, _endMin: 600 }, null] };
+    const leagueAssignments = {
+        A: { 1: { leagueName: 'Camp League', gameLabel: 'Game 1', sport: 'Basketball', _startMin: 600, matchups: ['T1 vs T2'] } }
+    };
+
+    const scope = DTS.buildTimeRegenScope({
+        selections: [{ bunk: 'A1', startMin: 600, endMin: 660 }],
+        skeleton, divisions, scheduleAssignments, leagueAssignments
+    });
+    assert.ok(scope.ok);
+    assert.equal(scope.preservedLeagueLabels['Camp League'], undefined,
+        'the replaced period is being re-rolled → never preserved');
+
+    const h = freshHistory();
+    logGame(h, 'Camp League', DAY, 'T1', 'T2', 'Basketball', 'Game 1');
+    h.gamesPerDate['Camp League'] = { [DAY]: 1 };
+    const plbl = scope.preservedLeagueLabels['Camp League'];
+    rollbackDayRecords('Camp League', DAY, h, plbl ? new Set(plbl) : null);
+
+    assert.equal(h.matchupHistory['Camp League:T1|T2'], undefined, 'matchup released');
+    assert.equal(h.gameLog['Camp League'][DAY], undefined, 'day-record gone');
+
+    // …and the reconcile then finds nothing left to do.
+    reconcileDayWithSchedule(LEAGUES, DAY, survivingLeagueLabels({}).regular, h);
+    assert.equal(h.matchupHistory['Camp League:T1|T2'], undefined);
+});
+
+// =========================================================================
 test('B: whole-day re-roll no longer preserves the league periods it re-rolls', () => {
     const divisions = { A: { bunks: ['A1'] } };
     const skeleton = [
