@@ -4475,6 +4475,19 @@
                 if ((!_plbl || !_plbl.size) && history.chinuchByDate && history.chinuchByDate[league.name]) {
                     delete history.chinuchByDate[league.name][dayId];
                 }
+                // ★ Bye ledger: same rule, and it needs its own clear. byesByDate
+                // is otherwise only reset by the first bye WRITE of a run
+                // (_byeDayStamped) — so a day whose league tile was REMOVED or
+                // replaced never clears it: no games run, no bye is written, and
+                // the day's old list survives. makeByeLedger prefers that recorded
+                // list for past days, so it kept charging teams a bye they never
+                // took on a day the league never happened, and sent the next bye
+                // to the wrong team. A league that still plays today re-records
+                // its byes right after this, so the clear is idempotent — and a
+                // day that legitimately ends with no byes now says so.
+                if ((!_plbl || !_plbl.size) && history.byesByDate && history.byesByDate[league.name]) {
+                    delete history.byesByDate[league.name][dayId];
+                }
                 // ★ LG-8 tombstone: this generation REPLACES the league's day —
                 // in any later merge, a stale copy's version of this (league,
                 // date) must lose to this run's result (the end-of-gen save is

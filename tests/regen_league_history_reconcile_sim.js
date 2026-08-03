@@ -23,6 +23,10 @@
 //   • Leagues.reconcileDayWithSchedule rolls back every day-record whose game
 //     label is no longer on the grid (kills A), mirrored from
 //     scheduler_core_leagues.js rollbackDayRecords + _rollbackToSurvivors.
+//   • The day's BYE record is released with its games. byesByDate is otherwise
+//     only reset by the first bye WRITE of a run, so a day whose league tile
+//     was removed or replaced never cleared it — no games run, no bye written —
+//     and makeByeLedger kept charging teams a bye they never took.
 //
 // Run: node --test tests/regen_league_history_reconcile_sim.js
 // =========================================================================
@@ -106,10 +110,28 @@ function reconcileDayWithSchedule(leagues, dateKey, surv, history) {
         if (keptGames > 0) {
             history.gamesPerDate[league.name] = history.gamesPerDate[league.name] || {};
             history.gamesPerDate[league.name][dateKey] = keptGames;
-        } else if (history.gamesPerDate?.[league.name]?.[dateKey] !== undefined) {
-            delete history.gamesPerDate[league.name][dateKey];
+        } else {
+            if (history.gamesPerDate?.[league.name]?.[dateKey] !== undefined) {
+                delete history.gamesPerDate[league.name][dateKey];
+            }
+            // whole league day gone → its trip / chinuch / bye charges go too
+            if (history.ocTripsByDate?.[league.name]) delete history.ocTripsByDate[league.name][dateKey];
+            if (history.chinuchByDate?.[league.name]) delete history.chinuchByDate[league.name][dateKey];
+            if (history.byesByDate?.[league.name]) delete history.byesByDate[league.name][dateKey];
         }
     });
+}
+
+// ── mirror: the FN-54 day-reset cleanup guard in processRegularLeagues ─────
+// (rollbackDayRecords + the ocTrips / chinuch / byes clears that hang off it)
+function dayReset(leagueName, dateKey, history, preservedLabels) {
+    const plbl = (preservedLabels && preservedLabels.length) ? new Set(preservedLabels) : null;
+    rollbackDayRecords(leagueName, dateKey, history, plbl);
+    if (!plbl || !plbl.size) {
+        if (history.ocTripsByDate?.[leagueName]) delete history.ocTripsByDate[leagueName][dateKey];
+        if (history.chinuchByDate?.[leagueName]) delete history.chinuchByDate[leagueName][dateKey];
+        if (history.byesByDate?.[leagueName]) delete history.byesByDate[leagueName][dateKey];
+    }
 }
 
 // ── mirror: scheduler_core_leagues.js logGameRecord + recordMatchup ────────
@@ -123,7 +145,8 @@ function logGame(h, lg, date, t1, t2, sport, label) {
         (h.teamSports[k] = h.teamSports[k] || []).push(sport);
     });
 }
-const freshHistory = () => ({ gameLog: {}, matchupHistory: {}, teamSports: {}, gamesPerDate: {} });
+const freshHistory = () => ({ gameLog: {}, matchupHistory: {}, teamSports: {}, gamesPerDate: {},
+    ocTripsByDate: {}, chinuchByDate: {}, byesByDate: {} });
 
 const LEAGUES = [{ name: 'Camp League', divisions: ['A'], teams: ['T1', 'T2', 'T3', 'T4'] }];
 const DAY = '2026-07-14';
@@ -314,4 +337,59 @@ test('reconcile after a FULL generation is a no-op', () => {
     const before = JSON.stringify(h);
     reconcileDayWithSchedule(LEAGUES, DAY, survivingLeagueLabels(grid).regular, h);
     assert.strictEqual(JSON.stringify(h), before, 'history unchanged');
+});
+
+// =========================================================================
+// The day's BYE record must not outlive the day's games. byesByDate is only
+// otherwise reset by the first bye WRITE of a run, so a day whose league tile
+// was removed or replaced never cleared it — no games run, no bye written, and
+// the ledger kept charging teams a bye they never took.
+// =========================================================================
+test('bye/trip/chinuch records go with a fully released league day (day-reset path)', () => {
+    const h = freshHistory();
+    logGame(h, 'Camp League', DAY, 'T1', 'T2', 'Basketball', 'Game 7');
+    h.gamesPerDate['Camp League'] = { [DAY]: 1 };
+    h.byesByDate['Camp League'] = { [DAY]: ['T7'] };
+    h.chinuchByDate['Camp League'] = { [DAY]: ['T5'] };
+    h.ocTripsByDate['Camp League'] = { [DAY]: ['T1'] };
+
+    // Tile replaced in place → nothing preserved → the day-reset releases it all.
+    dayReset('Camp League', DAY, h, []);
+
+    assert.strictEqual(h.byesByDate['Camp League'][DAY], undefined, 'bye record cleared');
+    assert.strictEqual(h.chinuchByDate['Camp League'][DAY], undefined, 'chinuch cleared');
+    assert.strictEqual(h.ocTripsByDate['Camp League'][DAY], undefined, 'away trip cleared');
+});
+
+test('bye record survives a day that still has a preserved game', () => {
+    const h = freshHistory();
+    logGame(h, 'Camp League', DAY, 'T1', 'T2', 'Basketball', 'Game 7');
+    logGame(h, 'Camp League', DAY, 'T3', 'T4', 'Hockey', 'Game 8');
+    h.byesByDate['Camp League'] = { [DAY]: ['T7'] };
+
+    dayReset('Camp League', DAY, h, ['Game 8']);   // Game 8 not re-rolled
+
+    assert.deepStrictEqual(h.byesByDate['Camp League'][DAY], ['T7'],
+        'a day that still plays keeps its bye record');
+    assert.strictEqual(h.gameLog['Camp League'][DAY].length, 1, 'only Game 7 rolled back');
+});
+
+test('bye record is cleared by the reconcile when the preserved game turns out to be gone', () => {
+    // Cases (b)/(c): the league period moved/vanished, so the prediction
+    // preserved the game and the day-reset left the byes alone. The grid then
+    // shows no league at all → the reconcile takes the game AND the byes.
+    const h = freshHistory();
+    logGame(h, 'Camp League', DAY, 'T1', 'T2', 'Basketball', 'Game 7');
+    h.gamesPerDate['Camp League'] = { [DAY]: 1 };
+    h.byesByDate['Camp League'] = { [DAY]: ['T7'] };
+    h.ocTripsByDate['Camp League'] = { [DAY]: ['T1'] };
+
+    dayReset('Camp League', DAY, h, ['Game 7']);           // wrongly preserved
+    assert.deepStrictEqual(h.byesByDate['Camp League'][DAY], ['T7'], 'still there after the reset');
+
+    reconcileDayWithSchedule(LEAGUES, DAY, survivingLeagueLabels({}).regular, h);
+
+    assert.strictEqual(h.matchupHistory['Camp League:T1|T2'], undefined, 'matchup released');
+    assert.strictEqual(h.byesByDate['Camp League'][DAY], undefined, 'bye record released');
+    assert.strictEqual(h.ocTripsByDate['Camp League'][DAY], undefined, 'away trip released');
 });
