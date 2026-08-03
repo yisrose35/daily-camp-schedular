@@ -40,9 +40,27 @@
         </div>
 
         <h1 class="lite-login-title">Campistry <span>Lite</span></h1>
-        <p class="lite-login-sub">Sign in to your camp</p>
+        <p class="lite-login-sub" id="liteLoginSub">Sign in to your camp</p>
 
-        <form id="liteLoginForm" novalidate autocomplete="on">
+        <!-- Biometric mode. Same screen, same branding — just the other way
+             through the one door. Shown instead of the password form when a
+             credential is enrolled and the session is still good. -->
+        <div id="liteBioPane" hidden>
+            <button type="button" class="lite-bio-btn" id="liteBioGo">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round">
+                    <path d="M12 2.5a9.5 9.5 0 0 0-6.7 2.8"/><path d="M18.7 5.3A9.5 9.5 0 0 0 12 2.5"/>
+                    <path d="M3.5 9.5A9.5 9.5 0 0 1 12 6a9.5 9.5 0 0 1 8.5 3.5"/>
+                    <path d="M7 12a5 5 0 0 1 10 0v2a8 8 0 0 1-.7 3.3"/>
+                    <path d="M12 12v3a11 11 0 0 0 1.2 5"/>
+                    <path d="M9.6 20.5A9 9 0 0 1 8 15v-3"/>
+                    <path d="M4.6 18A9 9 0 0 0 5 13.5"/>
+                </svg>
+                <span id="liteBioLabel">Sign in with Face ID</span>
+            </button>
+            <button type="button" class="lite-login-alt" id="liteBioPassword">Use password instead</button>
+        </div>
+
+        <form id="liteLoginForm" novalidate autocomplete="on" hidden>
             <div class="lite-lf">
                 <label for="liteEmail">Email address</label>
                 <input class="lite-lf-input" type="email" id="liteEmail" inputmode="email"
@@ -67,6 +85,15 @@
             <button type="button" class="lite-login-alt" id="liteForgot">Forgot your password?</button>
         </form>
 
+        <!-- Offered once, straight after a successful password sign-in, while
+             the benefit is obvious. Asking before anyone has signed in would be
+             meaningless; burying it in Settings means nobody finds it. -->
+        <div id="liteBioOffer" hidden>
+            <p class="lite-login-offer">Skip the password next time — unlock Campistry Lite with <span id="liteBioKind">Face ID</span>.</p>
+            <button type="button" class="lite-btn block lite-login-go" id="liteBioEnable">Turn it on</button>
+            <button type="button" class="lite-login-alt" id="liteBioSkip">Not now</button>
+        </div>
+
         <p class="lite-login-foot">
             Accounts are created by your camp on <a href="index.html">campistry.org</a>
         </p>
@@ -78,6 +105,7 @@
 <script src="config.js"></script>
 <script src="supabase-js@2.js"></script>
 <script src="supabase_client.js"></script>
+<script src="campistry_lite_biometric.js"></script>
 <script src="campistry_lite_login.js"></script>
 </body>
 </html>

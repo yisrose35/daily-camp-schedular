@@ -161,6 +161,16 @@
                 window.location.href = LOGIN_PAGE;
                 return;
             }
+            // Biometric gate. Enrolled but not yet cleared this launch → back to
+            // the sign-in page, which owns BOTH ways in. Deliberately not an
+            // overlay here: a second full-screen gate with its own branding is
+            // what made Lite feel like two different apps.
+            const Bio = window.CampistryLiteBio;
+            if (Bio && Bio.isEnabled() && !Bio.isVerified()) {
+                window.location.replace(LOGIN_PAGE);
+                return;
+            }
+
             userEmail = (session.user?.email || '').toLowerCase();
             splashProgress(28);
 
@@ -1332,8 +1342,12 @@
         try { window.scrollTo({ top: 0 }); } catch (_) {}
     }
 
-    function renderSettings() {
+    async function renderSettings() {
         const v = document.getElementById('view-settings');
+        const Bio = window.CampistryLiteBio;
+        const bioAvail = Bio ? await Bio.available() : false;
+        const bioOn = !!(Bio && Bio.isEnabled());
+        const bioName = /iPad|iPhone|iPod|Macintosh/.test(navigator.platform || '') ? 'Face ID' : 'Fingerprint';
         const roleLabel = cap(role || 'viewer');
         const camp = campDisplayName ? esc(campDisplayName) : '';
 
@@ -1352,6 +1366,17 @@
                     <div class="lite-set-sub">${esc(userEmail || '')}</div>
                     <div class="lite-set-tags"><span class="lite-pill">${esc(roleLabel)}</span>${camp ? `<span class="lite-pill gray">${camp}</span>` : ''}</div>
                 </div>
+            </div>
+
+            <div class="lite-set-section-label">Security</div>
+            <div class="lite-card lite-set-row" id="liteBioRow">
+                <div class="lite-set-row-main">
+                    <div class="lite-set-row-title">${bioName} sign-in</div>
+                    <div class="lite-set-row-sub">${bioAvail
+                        ? 'Unlock Campistry Lite without typing your password'
+                        : 'Not available on this device or browser'}</div>
+                </div>
+                <span class="lite-toggle${bioOn ? ' on' : ''}${bioAvail ? '' : ' disabled'}" id="liteBioToggle"></span>
             </div>
 
             <div class="lite-set-section-label">Appearance</div>
@@ -1375,6 +1400,17 @@
         v.querySelector('#liteSettingsSignout').addEventListener('click', () => document.getElementById('liteSignOut').click());
         v.querySelectorAll('#liteThemeSeg .lite-seg-btn').forEach(b =>
             b.addEventListener('click', () => { haptic(); setColorScheme(b.dataset.val); renderSettings(); }));
+
+        const bioToggle = v.querySelector('#liteBioToggle');
+        if (bioAvail && bioToggle) bioToggle.addEventListener('click', async () => {
+            haptic();
+            if (bioOn) { Bio.disable(); toast(bioName + ' sign-in off'); }
+            else {
+                const ok = await Bio.enroll(userEmail, userName);
+                toast(ok ? bioName + ' sign-in on' : 'Could not set up ' + bioName);
+            }
+            renderSettings();
+        });
     }
 
     function wireChrome() {
@@ -1400,6 +1436,11 @@
 
         document.getElementById('liteSignOut').addEventListener('click', async () => {
             try { await window.supabase.auth.signOut(); } catch (_) {}
+            // Drop the biometric enrolment too. It is bound to the device, not
+            // to an account — leaving it would let the person who signed out
+            // unlock whoever signs in next on a shared phone. The next sign-in
+            // re-offers it.
+            try { window.CampistryLiteBio?.disable(); } catch (_) {}
             ['campistry_auth_user_id', 'campistry_camp_id', 'campistry_role',
              'campistry_user_id', 'campistry_is_team_member'].forEach(k => {
                 try { localStorage.removeItem(k); } catch (_) {}
@@ -5091,24 +5132,40 @@
     // The launch screen holds a minimum beat so a warm start doesn't flash it
     // for 80ms — a blink of branding reads as jank, not polish — then hands off
     // to the app rather than being switched off.
-    const _splashAt = Date.now();
-    const SPLASH_MIN_MS = 700;     // hold long enough for the fill to read
-    const SPLASH_TALK_MS = 900;    // ...and stay quiet until the wait is real
+    // Measured from navigation start, NOT from when this script happens to
+    // evaluate. The launch the user experiences begins when they tap the icon,
+    // so a slow script chain has to eat into the hold rather than be added to
+    // it — otherwise a 3s cold load becomes a 6s stare.
+    const sinceLaunch = () => performance.now();
+    const SPLASH_MIN_MS = 2750;    // hold long enough for the fill to read as a launch
+    const SPLASH_TALK_MS = 2400;   // ...and stay quiet unless the wait outlasts it
     let _splashMsg = '', _splashTalk = false, _splashPct = 0;
-    const _splashTimer = setTimeout(() => { _splashTalk = true; paintSplash(); }, SPLASH_TALK_MS);
+    const _splashTimer = setTimeout(() => { _splashTalk = true; paintSplash(); },
+                                    Math.max(0, SPLASH_TALK_MS - sinceLaunch()));
 
-    // Raises the fill line inside the logo. Driven by real boot stages rather
-    // than a timer, so the mark stalls where the app actually stalls — a fake
-    // progress bar that glides to 100% while the network hangs is a lie.
-    // Monotonic: a later stage can never pull the line back down.
+    // Records how far boot actually is. Monotonic: a later stage can never pull
+    // the line back down.
     function splashProgress(pct) {
-        const p = Math.max(_splashPct, Math.min(100, pct));
-        _splashPct = p;
+        _splashPct = Math.max(_splashPct, Math.min(100, pct));
+    }
+
+    // What's drawn is the LOWER of two things: how far boot really is, and how
+    // far the clock has got through the hold. The clock stops the mark filling
+    // in 200ms and then sitting at full for two seconds; real progress stops it
+    // gliding to 100% while the network hangs, which is the lie every fake
+    // progress bar tells. Past the hold, only real progress is left.
+    function paintSplashFill() {
         const el = document.getElementById('liteSplashLogo');
         if (!el) return;
-        el.style.setProperty('--fill', p + '%');
-        el.setAttribute('aria-valuenow', String(Math.round(p)));
+        const timePct = sinceLaunch() / SPLASH_MIN_MS * 100;
+        const shown = Math.min(_splashPct, timePct);
+        el.style.setProperty('--fill', shown.toFixed(2) + '%');
+        el.setAttribute('aria-valuenow', String(Math.round(shown)));
     }
+    let _splashRaf = requestAnimationFrame(function tick() {
+        paintSplashFill();
+        _splashRaf = requestAnimationFrame(tick);
+    });
 
     function paintSplash() {
         const el = document.getElementById('liteSplashStatus');
@@ -5136,10 +5193,13 @@
         clearTimeout(_splashTimer);
         const el = document.getElementById('liteSplash');
         if (!el) return;
-        // Top the mark up before leaving, so it never fades out half-empty.
+        // Top the mark up before leaving, so it never fades out half-empty. The
+        // clock still governs how fast it gets there.
         splashProgress(100);
-        const wait = Math.max(0, SPLASH_MIN_MS - (Date.now() - _splashAt));
+        const wait = Math.max(0, SPLASH_MIN_MS - sinceLaunch());
         setTimeout(() => {
+            paintSplashFill();               // land exactly on 100 before fading
+            cancelAnimationFrame(_splashRaf);
             el.classList.add('done');
             // Remove only after the transition, so it can't swallow taps.
             setTimeout(() => { el.style.display = 'none'; }, 460);

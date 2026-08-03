@@ -13,6 +13,30 @@
 
     const HOME = 'campistry_lite.html';
     const $ = id => document.getElementById(id);
+    const Bio = window.CampistryLiteBio;
+
+    // Apple calls it Face ID / Touch ID; everyone else says fingerprint. Naming
+    // the wrong one makes the button feel like it belongs to a different phone.
+    const isApple = /iPad|iPhone|iPod|Macintosh/.test(navigator.platform || '') ||
+                    (/Mac/.test(navigator.platform || '') && navigator.maxTouchPoints > 1);
+    const BIO_NAME = isApple ? 'Face ID' : 'your fingerprint';
+    const BIO_SHORT = isApple ? 'Face ID' : 'Fingerprint';
+
+    let bioAvailable = false;
+
+    // Exactly one of these panes is on screen at a time — the screen never
+    // shows a password form and a biometric button competing for the tap.
+    function showPane(name) {
+        const panes = { bio: $('liteBioPane'), form: $('liteLoginForm'), offer: $('liteBioOffer') };
+        Object.keys(panes).forEach(k => { if (panes[k]) panes[k].hidden = k !== name; });
+        const sub = $('liteLoginSub');
+        if (sub) {
+            sub.textContent = name === 'offer' ? 'You’re signed in'
+                            : name === 'bio'   ? 'Unlock to continue'
+                            :                    'Sign in to your camp';
+        }
+        $('liteLogin').style.display = '';
+    }
 
     function toast(msg) {
         const el = $('liteToast');
@@ -54,26 +78,64 @@
     async function boot() {
         const sb = client();
         if (!sb) {
-            document.getElementById('liteLogin').style.display = '';
+            showPane('form');
             showErr('Authentication service unavailable. Please reload.');
             return;
         }
-        // Already signed in (or a refreshable session on disk) → straight in, so
-        // reopening the installed app doesn't ask again.
+        bioAvailable = Bio ? await Bio.available() : false;
+        $('liteBioLabel').textContent = 'Sign in with ' + BIO_NAME;
+        $('liteBioKind').textContent = BIO_NAME;
+
+        let session = null;
         try {
             let { data } = await sb.auth.getSession();
             if (!data?.session && localStorage.getItem('campistry_auth_user_id')) {
                 const r = await sb.auth.refreshSession();
                 data = r?.data;
             }
-            if (data?.session) { location.replace(HOME); return; }
-        } catch (_) { /* show the form */ }
+            session = data?.session || null;
+        } catch (_) { /* fall through to the form */ }
+
+        if (session) {
+            // A live session still has to clear biometrics if it's enrolled —
+            // that check is the whole point, and the app shell bounces back
+            // here until it passes.
+            if (Bio && Bio.isEnabled() && !Bio.isVerified()) {
+                showPane('bio');
+                // Some platforms only allow the prompt from a user gesture; the
+                // button is the fallback when this auto-attempt is refused.
+                runBio();
+                return;
+            }
+            location.replace(HOME);
+            return;
+        }
 
         localStorage.removeItem('campistry_auth_user_id');
-        $('liteLogin').style.display = '';
+        // A stale enrolment can't unlock a session that no longer exists.
+        if (Bio && Bio.isEnabled()) Bio.clearVerified();
+        showPane('form');
         // Deliberately no autofocus: it opens the keyboard over half the screen
         // before anyone has decided to type, and the accent focus ring on an
         // empty field reads as a validation error.
+    }
+
+    async function runBio() {
+        const btn = $('liteBioGo');
+        btn.disabled = true;
+        const ok = await Bio.verify();
+        btn.disabled = false;
+        if (ok) { location.replace(HOME); return; }
+        showErr('Could not verify. Try again, or use your password.');
+    }
+
+    // Called after a successful password sign-in. Returns true if we're showing
+    // the offer (so the caller must not navigate away).
+    function maybeOfferBio() {
+        if (!bioAvailable || !Bio || Bio.isEnabled() || Bio.isDeclined()) return false;
+        showErr('');
+        showPane('offer');
+        return true;
     }
 
     document.addEventListener('DOMContentLoaded', () => {
@@ -109,11 +171,42 @@
                 // Same cache key the rest of Campistry reads, so Lite's auth gate
                 // can refresh a session instead of bouncing back here.
                 if (data.user?.id) localStorage.setItem('campistry_auth_user_id', data.user.id);
+                // Typing the password IS the check for this launch, so the app
+                // must not bounce straight back here asking for a face.
+                if (Bio) Bio.markVerified();
+                busy(false);
+                if (maybeOfferBio()) return;
                 location.replace(HOME);
             } catch (err) {
                 showErr(friendlyAuthError(err));
                 busy(false);
             }
+        });
+
+        $('liteBioGo').addEventListener('click', () => { showErr(''); runBio(); });
+
+        // Escape hatch: biometrics can fail for reasons the user can't fix
+        // (re-enrolled face, sensor wet, credential wiped by the OS). Never
+        // leave the only way in behind a sensor.
+        $('liteBioPassword').addEventListener('click', () => {
+            showErr('');
+            showPane('form');
+        });
+
+        $('liteBioEnable').addEventListener('click', async () => {
+            const btn = $('liteBioEnable');
+            btn.disabled = true;
+            btn.textContent = 'Setting up…';
+            const ok = await Bio.enroll(($('liteEmail').value || '').trim(), null);
+            btn.disabled = false;
+            btn.textContent = 'Turn it on';
+            if (!ok) { showErr('Could not set up ' + BIO_NAME + '. You can turn it on later in Settings.'); return; }
+            location.replace(HOME);
+        });
+
+        $('liteBioSkip').addEventListener('click', () => {
+            if (Bio) Bio.decline();
+            location.replace(HOME);
         });
 
         $('liteForgot').addEventListener('click', async () => {

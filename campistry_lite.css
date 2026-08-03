@@ -218,7 +218,8 @@ button { cursor: pointer; border: none; background: none; }
         color-mix(in srgb, var(--ink) 20%, transparent) 100%);
     -webkit-mask: url('Lite_clean.png') center / contain no-repeat;
     mask: url('Lite_clean.png') center / contain no-repeat;
-    transition: --fill 0.55s cubic-bezier(0.4, 0, 0.2, 1);
+    /* No transition: the fill is driven per animation frame, and a transition
+       would lag a frame behind every update instead of smoothing anything. */
     animation: liteMarkIn 0.5s cubic-bezier(0.22, 1.15, 0.36, 1) both;
 }
 @keyframes liteMarkIn {
@@ -949,6 +950,25 @@ button { cursor: pointer; border: none; background: none; }
     border: 1px solid rgba(255, 255, 255, 0.30);
     color: #fff; font-size: 0.82rem; font-weight: 600;
 }
+
+/* Biometric entry. Given the same weight as the password button because it is
+   the same action, not a shortcut tucked underneath one. */
+.lite-bio-btn {
+    display: flex; width: 100%; align-items: center; justify-content: center; gap: 10px;
+    min-height: 56px; padding: 0 18px; border-radius: 14px;
+    background: #fff; color: var(--coral-700, #B23A28);
+    font-size: 0.98rem; font-weight: 700;
+    transition: transform 0.1s ease, background 0.15s ease;
+}
+.lite-bio-btn:active { transform: scale(0.98); background: rgba(255, 255, 255, 0.88); }
+.lite-bio-btn:disabled { opacity: 0.6; }
+.lite-bio-btn svg { width: 24px; height: 24px; flex: none; }
+
+.lite-login-offer {
+    font-size: 0.92rem; line-height: 1.5; color: rgba(255, 255, 255, 0.94);
+    margin: 0 0 18px;
+}
+.lite-login-offer span { font-weight: 700; }
 
 .lite-login .lite-btn { background: #fff; color: var(--coral-700, #B23A28); }
 .lite-login .lite-btn:active { background: rgba(255, 255, 255, 0.88); }
