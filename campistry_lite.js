@@ -604,7 +604,7 @@
     }
 
     function canDeleteMessages() { return ['owner', 'admin'].includes(role); }
-    // Per-user Lite preferences (localStorage). `confirmDelete` defaults on.
+    // Per-user Lite preferences (localStorage).
     function litePref(key, def) {
         try { const p = JSON.parse(localStorage.getItem('campistry_lite_prefs') || '{}'); return key in p ? p[key] : def; }
         catch (e) { return def; }
@@ -630,7 +630,6 @@
         if (!t) return;
         openSheet(`<div class="lite-sheet-title">Delete conversation?</div>
             <div class="lite-note" style="margin-top:-6px;">This removes the conversation with <b>${esc(t.parentName || 'this parent')}</b> from your inbox. The parent keeps their copy.</div>
-            <label class="lite-check-row"><input type="checkbox" id="liteDontAsk"><span>Don't ask again</span></label>
             <div class="lite-compose-actions">
                 <button class="lite-btn secondary" id="liteDelCancel">Cancel</button>
                 <button class="lite-btn danger" id="liteDelConfirm">Delete</button>
@@ -638,7 +637,6 @@
         if (!sheetEl) return;
         sheetEl.querySelector('#liteDelCancel').addEventListener('click', closeSheet);
         sheetEl.querySelector('#liteDelConfirm').addEventListener('click', () => {
-            if (sheetEl.querySelector('#liteDontAsk')?.checked) setLitePref('confirmDelete', false);
             closeSheet();
             deleteThread(t);
         });
@@ -1334,7 +1332,6 @@
         const v = document.getElementById('view-settings');
         const bioAvail = await biometricAvailable();
         const bioOn = !!litePref('biometricLock', false);
-        const confirmDel = !!litePref('confirmDelete', true);
         const roleLabel = cap(role || 'viewer');
         const camp = campDisplayName ? esc(campDisplayName) : '';
 
@@ -1365,16 +1362,6 @@
                 </div>
                 <span class="lite-toggle${bioOn ? ' on' : ''}${bioAvail ? '' : ' disabled'}" id="liteBioToggle"></span>
             </div>
-            ${bioOn ? `<button class="lite-link-row" id="liteBioTest">Test unlock now</button>` : ''}
-
-            <div class="lite-set-section-label">Messages</div>
-            <div class="lite-card lite-set-row" id="liteConfirmRow">
-                <div class="lite-set-row-main">
-                    <div class="lite-set-row-title">Confirm before deleting</div>
-                    <div class="lite-set-row-sub">Ask for confirmation on a delete swipe</div>
-                </div>
-                <span class="lite-toggle${confirmDel ? ' on' : ''}" id="liteConfirmToggle"></span>
-            </div>
 
             <div class="lite-set-section-label">Appearance</div>
             <div class="lite-card lite-set-row" style="display:block;">
@@ -1389,25 +1376,16 @@
                     : 'Always ' + colorSchemePref() + ', whatever your phone is set to.'}</div>
             </div>
 
-            <div class="lite-set-section-label">This app</div>
-            <div class="lite-set-guide">
-                <p><b>Campistry Lite is your camp, on your phone.</b> It's a standalone app — add it to your home screen (Share → <i>Add to Home Screen</i>) and it opens full-screen like any native app.</p>
-                <p><b>Signing in.</b> You stay signed in on this device; use <i>Sign out</i> below to switch accounts. For a shared or lost phone, turn on <b>Biometric app lock</b> above so only you can open it.</p>
-                <p><b>What you can do here</b> depends on your role (<b>${esc(roleLabel)}</b>): head staff get Flow, Me, Live, Health and Link; counselors get their bunk. Everything reads from the same cloud as the desktop Campistry.</p>
-            </div>
             <a href="dashboard.html" class="lite-link-row">Open full Campistry ↗</a>
             <button class="lite-link-row danger" id="liteSettingsSignout">Sign out</button>
             <div class="lite-set-version">Campistry Lite${camp ? ' · ' + camp : ''}</div>`;
 
         v.querySelector('#liteSettingsBack').addEventListener('click', () => { if (history.state && history.state.liteSettings) history.back(); else { settingsOpen = false; goHome(); } });
-        v.querySelector('#liteConfirmToggle').addEventListener('click', () => { setLitePref('confirmDelete', !litePref('confirmDelete', true)); renderSettings(); });
         v.querySelector('#liteSettingsSignout').addEventListener('click', () => document.getElementById('liteSignOut').click());
         v.querySelectorAll('#liteThemeSeg .lite-seg-btn').forEach(b =>
             b.addEventListener('click', () => { haptic(); setColorScheme(b.dataset.val); renderSettings(); }));
         const bioToggle = v.querySelector('#liteBioToggle');
         if (bioAvail) bioToggle.addEventListener('click', () => toggleBiometric(!bioOn));
-        const bioTest = v.querySelector('#liteBioTest');
-        if (bioTest) bioTest.addEventListener('click', async () => { const ok = await verifyBiometric(); toast(ok ? 'Unlocked ✓' : 'Could not verify'); });
     }
 
     // ─── Biometric app lock (WebAuthn platform authenticator) ────────────
@@ -3821,9 +3799,12 @@
                 sw.classList.remove('reveal-del', 'reveal-arch');
                 const key = fg.dataset.key;
                 if (horiz && dx < -THRESH) {
+                    // Always confirm. The opt-out used to live in Settings, and
+                    // without that screen a stored "don't ask" would be a
+                    // one-way door — a swipe is far too easy to trigger by
+                    // accident to lose the confirmation permanently.
                     if (!canDeleteMessages()) toast('Only an owner or admin can delete');
-                    else if (litePref('confirmDelete', true)) confirmDeleteThread(key);
-                    else { const t = linkThreads().find(x => x.key === key); if (t) deleteThread(t); }
+                    else confirmDeleteThread(key);
                 } else if (horiz && dx > THRESH) {
                     const t = linkThreads().find(x => x.key === key);
                     if (t) setThreadFlag(t, 'archived', !t.archived).then(() => { toast(t.archived ? 'Unarchived' : 'Archived'); paintLinkThreads(); });
