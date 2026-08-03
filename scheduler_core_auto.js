@@ -35113,6 +35113,17 @@
                     try { window.SchedulerCoreUtils.rebuildHistoricalCounts(true); log('[6.95] 🧮 Rebuilt historicalCounts from TRUE final grid (post-gate)'); }
                     catch (_e695c) { warn('[6.95] historicalCounts rebuild: ' + (_e695c && _e695c.message)); }
                 }
+                // ★ Last-done timestamps: RE-DERIVE, never merge. Stamping only
+                //   what is on the fresh grid leaves the previous run's activity
+                //   dated today forever, so a regenerated slot keeps reading as
+                //   "did that activity today" in scoring and in analytics.
+                if (window.SchedulerCoreUtils?.rebuildRotationHistoryForBunks) {
+                    try {
+                        const _rhBunks = Object.keys(window.scheduleAssignments || {});
+                        const _n = window.SchedulerCoreUtils.rebuildRotationHistoryForBunks(_rhBunks);
+                        log('[6.95] 🕒 Rebuilt rotation last-done timestamps for ' + _n + ' bunk(s)');
+                    } catch (_e695d) { warn('[6.95] rotationHistory rebuild: ' + (_e695d && _e695d.message)); }
+                }
             }
         } catch (_e695) { try { warn('[6.95] final rotation-count error: ' + (_e695 && _e695.message)); } catch (_x) {} }
 

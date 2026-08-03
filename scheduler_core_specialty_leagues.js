@@ -1242,13 +1242,21 @@
     // slotDebt is cumulative, so it IS rolled back here (FN-55) using the
     // per-game slotOrder now stored on each gameLog entry.
 
-    function rollbackDayRecords(leagueId, date, history, preservedLabels) {
+    function rollbackDayRecords(leagueId, date, history, preservedLabels, keepUnlabeled) {
         const all = history.gameLog?.[leagueId]?.[date];
         if (!all || !all.length) return 0;
         // ★ Mid-day cut: keep the games whose label survived the cut, roll back
         //   only the rest (mirrors the regular engine's preservedLabels path).
-        const keep = (preservedLabels && preservedLabels.size)
-            ? all.filter(function (e) { return e && e.g && preservedLabels.has(e.g); })
+        // ★ keepUnlabeled: the post-generation schedule reconcile matches records
+        //   to saved tiles BY LABEL, so an unlabelled record can't be matched and
+        //   is left alone rather than guessed at.
+        const _keepFn = function (e) {
+            if (!e) return false;
+            if (!e.g) return keepUnlabeled === true;
+            return !!(preservedLabels && preservedLabels.has(e.g));
+        };
+        const keep = (keepUnlabeled === true || (preservedLabels && preservedLabels.size))
+            ? all.filter(_keepFn)
             : [];
         const entries = (keep.length) ? all.filter(function (e) { return keep.indexOf(e) < 0; }) : all;
         entries.forEach(function (e) {
@@ -2345,6 +2353,23 @@ if (_playoffRoundNum) {
     //   league ID, so resolve via config. A league absent from the surviving map
     //   lost ALL its games that day (full rollback). divisionNames null/[] → all.
     SpecialtyLeagues.rollbackCutGames = function (divisionNames, dateKey, survivingLabelsByLeagueName) {
+        return _rollbackToSurvivors(divisionNames, dateKey, survivingLabelsByLeagueName,
+            { keepUnlabeled: false, logTag: '[SpecialtyLeagues] 🌧️ Mid-day cut:' });
+    };
+
+    // ★ Post-generation reconcile — history must match the final grid. See the
+    //   long note on Leagues.reconcileDayWithSchedule in scheduler_core_leagues.js:
+    //   a per-tile regen predicts which day-records to preserve from the selected
+    //   tiles' geometry, and that prediction breaks whenever the edit moved the
+    //   league period out from under the selection. Reconciling after the grid is
+    //   final can't be fooled. Idempotent on a full generation.
+    SpecialtyLeagues.reconcileDayWithSchedule = function (divisionNames, dateKey, survivingLabelsByLeagueName) {
+        return _rollbackToSurvivors(divisionNames, dateKey, survivingLabelsByLeagueName,
+            { keepUnlabeled: true, logTag: '[SpecialtyLeagues] 🔄 Schedule reconcile:' });
+    };
+
+    function _rollbackToSurvivors(divisionNames, dateKey, survivingLabelsByLeagueName, opts) {
+        opts = opts || {};
         try {
             if (!dateKey) return;
             const cfg = loadSpecialtyLeagues();
@@ -2360,7 +2385,7 @@ if (_playoffRoundNum) {
                 const rawSurv = surv[l.name];
                 const preserved = (rawSurv instanceof Set) ? (rawSurv.size ? rawSurv : null)
                                 : (Array.isArray(rawSurv) && rawSurv.length) ? new Set(rawSurv) : null;
-                const removed = rollbackDayRecords(l.id, dateKey, history, preserved);
+                const removed = rollbackDayRecords(l.id, dateKey, history, preserved, opts.keepUnlabeled === true);
                 if (removed <= 0) return;
                 changed = true;
                 const keptRecs = history.gameLog?.[l.id]?.[dateKey] || [];
@@ -2378,11 +2403,11 @@ if (_playoffRoundNum) {
             if (!changed) return;
             saveSpecialtyHistory(history);
             updateFutureSchedules(dateKey, history);
-            console.log('[SpecialtyLeagues] 🌧️ Mid-day cut: rolled back removed games for', dateKey);
+            console.log((opts.logTag || '[SpecialtyLeagues] ↩️') + ' rolled back games no longer on the schedule for', dateKey);
         } catch (e) {
-            console.error('[SpecialtyLeagues] rollbackCutGames error:', e);
+            console.error('[SpecialtyLeagues] survivor rollback error:', e);
         }
-    };
+    }
 
     /**
      * Wipe all gamesPerDate entries across every specialty league.

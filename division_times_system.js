@@ -1153,7 +1153,6 @@ function buildUnifiedTimesFromDivisionTimes(divisionTimes) {
 
         // ---- 1. Map selections → NEW slot indices by time --------------------
         var regenByBunk = {};          // bunk -> Set(newIdx)
-        var selectedTimesByDiv = {};   // div  -> Set(slotStartMin)
         var affectedDivs = new Set();
         var unmapped = 0;
         var _selMapped = new Set();    // "bunk#idx" — one entry per mapped selection (stable count)
@@ -1179,8 +1178,6 @@ function buildUnifiedTimesFromDivisionTimes(divisionTimes) {
             regenByBunk[bunk].add(idx);
             _selMapped.add(bunk + '#' + idx);
             affectedDivs.add(dn);
-            if (!selectedTimesByDiv[dn]) selectedTimesByDiv[dn] = new Set();
-            selectedTimesByDiv[dn].add(_trSlotStart(slots[idx]));
 
             // ★ Whole-tile window: a selected skeleton tile can cover SEVERAL
             //   boundary-union slots (overlapping tiles — e.g. a pinned trip over
@@ -1195,7 +1192,6 @@ function buildUnifiedTimesFromDivisionTimes(divisionTimes) {
                     var ws = _trSlotStart(slots[w]), we = _trSlotEnd(slots[w]);
                     if (ws != null && we != null && ws >= sel.startMin - 2 && we <= sel.endMin + 2) {
                         regenByBunk[bunk].add(w);
-                        selectedTimesByDiv[dn].add(ws);
                     }
                 }
             }
@@ -1217,7 +1213,6 @@ function buildUnifiedTimesFromDivisionTimes(divisionTimes) {
                         var j2 = _trFindByTime(slots, e2._startMin, 2);
                         if (j2 >= 0) {
                             regenByBunk[bunk].add(j2);
-                            selectedTimesByDiv[dn].add(_trSlotStart(slots[j2]));
                         }
                     }
                 });
@@ -1417,14 +1412,38 @@ function buildUnifiedTimesFromDivisionTimes(divisionTimes) {
             });
         });
 
-        // ---- 4. League games in affected divisions that are NOT selected -----
+        // ---- 4. League games in affected divisions that are NOT re-rolled ----
         // Their log records must survive the engine's day-rollback (else the game
         // counter drops and the Leagues results page loses the game).
+        //
+        // Keyed off the FINAL regen sets, not the user's raw selection. Step 3
+        // can widen `regen` after the fact — a fill straddling the selection
+        // pulls its whole window in, and a bunk whose entries can't be safely
+        // re-keyed re-rolls its ENTIRE day (fullRerollBunks). scheduler_core_main
+        // STEP 3 decides whether to re-roll a league period from exactly these
+        // sets (`_leagueTargeted`), so preserving off the raw selection let a
+        // whole-day re-roll log a fresh game for a period whose OLD record had
+        // been preserved — the day ended up with both, and the old matchup kept
+        // counting as played.
+        var regenTimesByDiv = {};
+        affectedDivs.forEach(function (dn) {
+            var dSlots = newDT[dn] || [];
+            var times = new Set();
+            ((divisions[dn] && divisions[dn].bunks) || []).forEach(function (b) {
+                var rs = regenScope[String(b)];
+                if (!rs || !rs.regen) return;
+                rs.regen.forEach(function (i) {
+                    var st = _trSlotStart(dSlots[i]);
+                    if (st != null) times.add(st);
+                });
+            });
+            regenTimesByDiv[dn] = times;
+        });
         var preservedLeagueLabels = {};
         affectedDivs.forEach(function (dn) {
             var map = la[dn];
             if (!map || typeof map !== 'object') return;
-            var selT2 = selectedTimesByDiv[dn] || new Set();
+            var selT2 = regenTimesByDiv[dn] || new Set();
             Object.keys(map).forEach(function (k) {
                 var g = map[k];
                 if (!g || !g.leagueName || !g.gameLabel) return;
