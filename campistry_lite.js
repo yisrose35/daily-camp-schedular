@@ -161,12 +161,14 @@
                 window.location.href = LOGIN_PAGE;
                 return;
             }
-            // Biometric gate. Enrolled but not yet cleared this launch → back to
-            // the sign-in page, which owns BOTH ways in. Deliberately not an
-            // overlay here: a second full-screen gate with its own branding is
-            // what made Lite feel like two different apps.
+            // Biometric gate. Enrolled for this user, without a fresh pass from
+            // the sign-in page → back there, since it owns BOTH ways in.
+            // Deliberately not an overlay: a second full-screen gate with its
+            // own branding is what made Lite feel like two different apps.
+            // consumePass() is one-shot, so a reload re-asks rather than riding
+            // a flag that lives as long as the tab does.
             const Bio = window.CampistryLiteBio;
-            if (Bio && Bio.isEnabled() && !Bio.isVerified()) {
+            if (Bio && Bio.isEnabledFor(session.user?.id) && !Bio.consumePass()) {
                 window.location.replace(LOGIN_PAGE);
                 return;
             }
@@ -1346,7 +1348,7 @@
         const v = document.getElementById('view-settings');
         const Bio = window.CampistryLiteBio;
         const bioAvail = Bio ? await Bio.available() : false;
-        const bioOn = !!(Bio && Bio.isEnabled());
+        const bioOn = !!(Bio && Bio.isEnabledFor(userId));
         const bioName = /iPad|iPhone|iPod|Macintosh/.test(navigator.platform || '') ? 'Face ID' : 'Fingerprint';
         const roleLabel = cap(role || 'viewer');
         const camp = campDisplayName ? esc(campDisplayName) : '';
@@ -1406,7 +1408,7 @@
             haptic();
             if (bioOn) { Bio.disable(); toast(bioName + ' sign-in off'); }
             else {
-                const ok = await Bio.enroll(userEmail, userName);
+                const ok = await Bio.enroll(userEmail, userName, userId);
                 toast(ok ? bioName + ' sign-in on' : 'Could not set up ' + bioName);
             }
             renderSettings();
@@ -1436,11 +1438,11 @@
 
         document.getElementById('liteSignOut').addEventListener('click', async () => {
             try { await window.supabase.auth.signOut(); } catch (_) {}
-            // Drop the biometric enrolment too. It is bound to the device, not
-            // to an account — leaving it would let the person who signed out
-            // unlock whoever signs in next on a shared phone. The next sign-in
-            // re-offers it.
-            try { window.CampistryLiteBio?.disable(); } catch (_) {}
+            // Keep the biometric enrolment: signing out and back in as yourself
+            // should not mean setting it up again. It's stored against your
+            // user id, so someone else signing in on this phone doesn't inherit
+            // it — isEnabledFor() sees the mismatch and drops it.
+            try { window.CampistryLiteBio?.clearPass(); } catch (_) {}
             ['campistry_auth_user_id', 'campistry_camp_id', 'campistry_role',
              'campistry_user_id', 'campistry_is_team_member'].forEach(k => {
                 try { localStorage.removeItem(k); } catch (_) {}

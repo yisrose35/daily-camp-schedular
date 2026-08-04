@@ -23,6 +23,7 @@
     const BIO_SHORT = isApple ? 'Face ID' : 'Fingerprint';
 
     let bioAvailable = false;
+    let signedInUserId = null;   // who we just signed in, to bind an enrolment to
 
     // Exactly one of these panes is on screen at a time — the screen never
     // shows a password form and a biometric button competing for the tap.
@@ -97,10 +98,12 @@
         } catch (_) { /* fall through to the form */ }
 
         if (session) {
-            // A live session still has to clear biometrics if it's enrolled —
-            // that check is the whole point, and the app shell bounces back
-            // here until it passes.
-            if (Bio && Bio.isEnabled() && !Bio.isVerified()) {
+            // A live session still has to clear biometrics if it's enrolled for
+            // this user — that check is the whole point, and the app shell
+            // bounces back here until it passes. hasPass() only PEEKS: the app
+            // is the one that consumes it, so we don't eat the handoff we just
+            // wrote and send the user round again.
+            if (Bio && Bio.isEnabledFor(session.user?.id) && !Bio.hasPass()) {
                 showPane('bio');
                 // Some platforms only allow the prompt from a user gesture; the
                 // button is the fallback when this auto-attempt is refused.
@@ -112,8 +115,8 @@
         }
 
         localStorage.removeItem('campistry_auth_user_id');
-        // A stale enrolment can't unlock a session that no longer exists.
-        if (Bio && Bio.isEnabled()) Bio.clearVerified();
+        // A stale pass can't unlock a session that no longer exists.
+        if (Bio) Bio.clearPass();
         showPane('form');
         // Deliberately no autofocus: it opens the keyboard over half the screen
         // before anyone has decided to type, and the accent focus ring on an
@@ -131,8 +134,8 @@
 
     // Called after a successful password sign-in. Returns true if we're showing
     // the offer (so the caller must not navigate away).
-    function maybeOfferBio() {
-        if (!bioAvailable || !Bio || Bio.isEnabled() || Bio.isDeclined()) return false;
+    function maybeOfferBio(userId) {
+        if (!bioAvailable || !Bio || Bio.isEnabledFor(userId) || Bio.isDeclined()) return false;
         showErr('');
         showPane('offer');
         return true;
@@ -175,7 +178,8 @@
                 // must not bounce straight back here asking for a face.
                 if (Bio) Bio.markVerified();
                 busy(false);
-                if (maybeOfferBio()) return;
+                signedInUserId = data.user?.id || null;
+                if (maybeOfferBio(signedInUserId)) return;
                 location.replace(HOME);
             } catch (err) {
                 showErr(friendlyAuthError(err));
@@ -197,7 +201,7 @@
             const btn = $('liteBioEnable');
             btn.disabled = true;
             btn.textContent = 'Setting up…';
-            const ok = await Bio.enroll(($('liteEmail').value || '').trim(), null);
+            const ok = await Bio.enroll(($('liteEmail').value || '').trim(), null, signedInUserId);
             btn.disabled = false;
             btn.textContent = 'Turn it on';
             if (!ok) { showErr('Could not set up ' + BIO_NAME + '. You can turn it on later in Settings.'); return; }
