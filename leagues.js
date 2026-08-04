@@ -33,6 +33,10 @@
     let listEl = null;
     let detailPaneEl = null;
     const _advancedOpenLeagues = new Set();
+    // Which team captain pickers are expanded, keyed "<league>||<team>".
+    // Held outside the render so re-rendering on each checkbox doesn't collapse
+    // the list the user is still working through.
+    const _captainOpen = new Set();
     const _chinuchOverrideOpenLeagues = new Set();
     let _isInitialized = false;
     let _refreshTimeout = null;
@@ -207,6 +211,66 @@
     }
 
     // =========================================================================
+    // TEAM CAPTAINS — staff who run a team, drawn from the Me staff directory
+    // -------------------------------------------------------------------------
+    // Flow doesn't load campistry_me.js, so we read the same blob Me writes
+    // rather than depending on window.CampistryMe existing. Same shape, same
+    // source of truth: campistryMe.bunkStaff, keyed by bunk name.
+    // =========================================================================
+    function _settings() {
+        try { return window.loadGlobalSettings?.() || {}; } catch (e) { return {}; }
+    }
+    // A league's `divisions` may name a parent division or a grade inside one,
+    // so accept both — mirrors CampistryMe.getBunksForDivision.
+    function bunksForDivisionName(divName, s) {
+        const structure = s.campStructure || {};
+        let out = [];
+        Object.keys(structure).forEach(parent => {
+            const grades = (structure[parent] || {}).grades || {};
+            if (parent === divName) {
+                Object.keys(grades).forEach(g => { out = out.concat(grades[g].bunks || []); });
+                return;
+            }
+            if (grades[divName]) out = out.concat(grades[divName].bunks || []);
+        });
+        if (!out.length) {
+            const d = (s.app1?.divisions || window.divisions || {})[divName];
+            if (d && d.bunks) out = d.bunks.slice();
+        }
+        return out.filter((b, i, a) => b && a.indexOf(b) === i);
+    }
+    // Everyone working with the bunks this league covers. One person on two
+    // bunks is one candidate, not two.
+    function eligibleCaptains(league) {
+        const s = _settings();
+        const bunkStaff = (s.campistryMe || {}).bunkStaff || {};
+        const divs = (league.divisions || []);
+        // No divisions picked yet → offer the whole camp rather than an empty
+        // list, which reads as "this is broken".
+        const bunks = divs.length
+            ? divs.reduce((acc, d) => acc.concat(bunksForDivisionName(d, s)), [])
+            : Object.keys(bunkStaff);
+        const seen = {}, out = [];
+        bunks.filter((b, i, a) => a.indexOf(b) === i).forEach(bunk => {
+            (bunkStaff[bunk] || []).forEach(st => {
+                const email = String(st.email || '').trim().toLowerCase();
+                const key = email || (st.name + '|' + (st.role || '')).toLowerCase();
+                if (seen[key]) { if (seen[key].bunks.indexOf(bunk) < 0) seen[key].bunks.push(bunk); return; }
+                seen[key] = { name: st.name, role: st.role || 'Staff', email, bunks: [bunk] };
+                out.push(seen[key]);
+            });
+        });
+        return out.sort((a, b) => (a.name || '').localeCompare(b.name || ''));
+    }
+    function captainLabel(league, team) {
+        const ids = (league.teamCaptains || {})[team] || [];
+        if (!ids.length) return null;
+        const byId = {};
+        eligibleCaptains(league).forEach(c => { byId[c.email || c.name.toLowerCase()] = c; });
+        return ids.map(id => (byId[id] || {}).name || id).join(', ');
+    }
+
+    // =========================================================================
     // ★ DATA VALIDATION - Ensure league structure is valid
     // =========================================================================
     function validateLeague(league, leagueName) {
@@ -233,6 +297,10 @@
             sports: Array.isArray(league.sports) ? league.sports.filter(s => typeof s === 'string') : [],
             divisions: Array.isArray(league.divisions) ? league.divisions.filter(d => typeof d === 'string') : [],
             standings: (league.standings && typeof league.standings === 'object') ? league.standings : {},
+            // { teamName: [staffId] } — staffId is a lowercased email where the
+            // person has a login, else name|role. Pruned below alongside
+            // standings when a team is removed.
+            teamCaptains: (league.teamCaptains && typeof league.teamCaptains === 'object') ? league.teamCaptains : {},
             games: Array.isArray(league.games) ? league.games : [],
             enabled: league.enabled !== false,
           schedulingPriority: ['sport_variety', 'matchup_variety'].includes(league.schedulingPriority)
@@ -295,11 +363,15 @@
         });
 
         // Clean up standings for teams that no longer exist
-        // Clean up standings for teams that no longer exist
         Object.keys(validated.standings).forEach(team => {
             if (!validated.teams.includes(team)) {
                 delete validated.standings[team];
             }
+        });
+        // Same for captains — a deleted team must not leave staff attached to
+        // it, or a pickup notification would later route to a team nobody is on.
+        Object.keys(validated.teamCaptains).forEach(team => {
+            if (!validated.teams.includes(team)) delete validated.teamCaptains[team];
         });
 
         // ★ v2.6: Validate teams against actual bunks in assigned divisions
@@ -1114,25 +1186,101 @@
             '<span>Roster</span>' +
             '</div>';
 
+        // Teams are rows rather than bare chips now: each one carries its
+        // captains, and the remove affordance has to stay separate from the
+        // captain control or one would trigger the other.
         const teamList = document.createElement('div');
-        teamList.className = 'chips';
+        const eligible = eligibleCaptains(league);
         league.teams.forEach(function (team) {
-            const chip = document.createElement('span');
-            chip.className = 'chip active';
-            // ★ FIX: Use DOM methods instead of innerHTML with user content
-            const teamText = document.createTextNode(team + ' ');
-            const removeSpan = document.createElement('span');
-            removeSpan.className = 'league-chip-remove';
-            removeSpan.textContent = '×';
-            chip.appendChild(teamText);
-            chip.appendChild(removeSpan);
-            chip.onclick = function () {
+            const row = document.createElement('div');
+            row.style.cssText = 'padding:8px 0;border-bottom:1px solid #F1F1F1;';
+
+            const head = document.createElement('div');
+            head.style.cssText = 'display:flex;align-items:center;gap:8px;';
+            const nameEl = document.createElement('span');
+            nameEl.style.cssText = 'font-weight:600;font-size:0.9rem;flex:1;min-width:0;';
+            nameEl.textContent = team;
+
+            const capBtn = document.createElement('button');
+            capBtn.type = 'button';
+            capBtn.style.cssText = 'font-size:0.72rem;font-weight:600;padding:4px 10px;border:1px solid #E5E7EB;border-radius:999px;background:#fff;cursor:pointer;';
+            const openKey = league.name + '||' + team;
+            const isOpen = _captainOpen.has(openKey);
+            capBtn.textContent = isOpen ? 'Done' : 'Captains';
+            capBtn.onclick = function () {
+                if (isOpen) _captainOpen.delete(openKey); else _captainOpen.add(openKey);
+                renderConfigSections(league, container);
+            };
+
+            const removeBtn = document.createElement('button');
+            removeBtn.type = 'button';
+            removeBtn.className = 'league-chip-remove';
+            removeBtn.textContent = '×';
+            removeBtn.title = 'Remove team';
+            removeBtn.style.cssText = 'border:none;background:none;cursor:pointer;font-size:1.1rem;line-height:1;padding:0 4px;';
+            removeBtn.onclick = function () {
                 league.teams = league.teams.filter(t => t !== team);
                 delete league.standings[team];
+                if (league.teamCaptains) delete league.teamCaptains[team];
+                _captainOpen.delete(openKey);
                 saveLeaguesData();
                 renderConfigSections(league, container);
             };
-            teamList.appendChild(chip);
+
+            head.appendChild(nameEl);
+            head.appendChild(capBtn);
+            head.appendChild(removeBtn);
+            row.appendChild(head);
+
+            const who = document.createElement('div');
+            who.style.cssText = 'font-size:0.72rem;color:#6B7280;margin-top:2px;';
+            const label = captainLabel(league, team);
+            who.textContent = label ? 'Captain: ' + label : 'No captain yet';
+            row.appendChild(who);
+
+            if (isOpen) {
+                const picker = document.createElement('div');
+                picker.style.cssText = 'margin:8px 0 4px;padding:8px 10px;background:#FAFAFA;border:1px solid #EEE;border-radius:8px;';
+                if (!eligible.length) {
+                    const none = document.createElement('div');
+                    none.style.cssText = 'font-size:0.75rem;color:#6B7280;';
+                    none.textContent = (league.divisions || []).length
+                        ? 'No staff are assigned to bunks in this league’s divisions yet. Add them in Me → Bunks → Staff.'
+                        : 'No staff on file yet. Add them in Me → Bunks → Staff.';
+                    picker.appendChild(none);
+                } else {
+                    const chosen = (league.teamCaptains[team] || []);
+                    eligible.forEach(function (c) {
+                        const id = c.email || (c.name + '|' + c.role).toLowerCase();
+                        const lab = document.createElement('label');
+                        lab.style.cssText = 'display:flex;align-items:center;gap:8px;padding:4px 0;font-size:0.78rem;cursor:pointer;';
+                        const cb = document.createElement('input');
+                        cb.type = 'checkbox';
+                        cb.checked = chosen.indexOf(id) >= 0;
+                        cb.onchange = function () {
+                            const list = league.teamCaptains[team] || [];
+                            const at = list.indexOf(id);
+                            if (cb.checked && at < 0) list.push(id);
+                            else if (!cb.checked && at >= 0) list.splice(at, 1);
+                            if (list.length) league.teamCaptains[team] = list;
+                            else delete league.teamCaptains[team];
+                            saveLeaguesData();
+                            renderConfigSections(league, container);
+                        };
+                        const txt = document.createElement('span');
+                        // Say who can't be reached, rather than letting someone
+                        // be made captain and silently never notified.
+                        txt.textContent = c.name + ' · ' + c.role + ' · ' + c.bunks.join(', ')
+                            + (c.email ? '' : '  (no login — can’t be notified)');
+                        if (!c.email) txt.style.color = '#9CA3AF';
+                        lab.appendChild(cb);
+                        lab.appendChild(txt);
+                        picker.appendChild(lab);
+                    });
+                }
+                row.appendChild(picker);
+            }
+            teamList.appendChild(row);
         });
         teamCard.appendChild(teamList);
 
@@ -2779,6 +2927,46 @@
     }
 
     window.LeaguesAPI = window.LeaguesAPI || {};
+
+    // Who runs a team. The pickup chain needs this: when a camper is mid-game
+    // at pickup time, the message has to reach whoever is actually standing on
+    // that field, not only the bunk counselor who isn't.
+    //   captainsForTeam('Machne League', 'Lions') -> [{name, role, email, bunks}]
+    // Staff without a login are returned too, flagged, so the caller can tell
+    // the office "this person can't be reached" rather than dropping them.
+    window.LeaguesAPI.captainsForTeam = function (leagueName, teamName) {
+        try {
+            // loadLeaguesData() populates the module-level `leaguesByName` and
+            // returns nothing, so read the state rather than its return value.
+            if (!Object.keys(leaguesByName || {}).length) loadLeaguesData();
+            const league = (leaguesByName || {})[leagueName];
+            if (!league) return [];
+            const ids = (league.teamCaptains || {})[teamName] || [];
+            if (!ids.length) return [];
+            const byId = {};
+            eligibleCaptains(league).forEach(c => {
+                byId[c.email || (c.name + '|' + c.role).toLowerCase()] = c;
+            });
+            return ids.map(id => {
+                const c = byId[id];
+                if (!c) return { name: id, role: '', email: /@/.test(id) ? id : '', bunks: [], stale: true };
+                return { name: c.name, role: c.role, email: c.email, bunks: c.bunks, stale: false };
+            });
+        } catch (e) { return []; }
+    };
+    // All captains in a league, keyed by team — for the office's overview.
+    window.LeaguesAPI.captainsForLeague = function (leagueName) {
+        try {
+            if (!Object.keys(leaguesByName || {}).length) loadLeaguesData();
+            const league = (leaguesByName || {})[leagueName];
+            if (!league) return {};
+            const out = {};
+            Object.keys(league.teamCaptains || {}).forEach(team => {
+                out[team] = window.LeaguesAPI.captainsForTeam(leagueName, team);
+            });
+            return out;
+        } catch (e) { return {}; }
+    };
 
     window.LeaguesAPI.syncGamesFromGeneration = function (leagueName, dateKey, gameEntries) {
         try {
