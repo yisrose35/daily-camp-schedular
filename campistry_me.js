@@ -25,6 +25,8 @@ var campersView='list'; // 'list' | 'family' — Families now lives inside the C
 var regFilter='all';    // Registration section filter: all | applied | waitlisted | accepted | enrolled | withdrawn | declined
 var staffApplications={};   // Staff hiring: applicant id → application record
 var staffFilter='all';      // Staffing pipeline filter
+var leads={};               // Inquiry CRM: lead id → prospective-family record
+var leadFilter='all';       // Leads pipeline filter
 var nextCamperId=1;
 var _saveLockUntil=0; // timestamp — block cloud overwrites for 5s after local save
 
@@ -143,6 +145,7 @@ function loadData(){
         bunkStaff=me.bunkStaff||{};
         enrollments=me.enrollments||{}; sessions=me.sessions||[]; enrollSettings=me.enrollSettings||{};
         staffApplications=me.staffApplications||{};
+        leads=me.leads||{};
         formConfig=me.formConfig||null;
         printSheets=Array.isArray(me.printSheets)?me.printSheets:[];
         savedReports=Array.isArray(me.savedReports)?me.savedReports:[];
@@ -236,6 +239,7 @@ function save(){
             nextCamperId:nextCamperId,
             enrollments:enrollments,
             staffApplications:staffApplications,
+            leads:leads,
             sessions:sessions,
             enrollSettings:enrollSettings,
             formConfig:formConfig,
@@ -440,7 +444,7 @@ function ff(label,id,val,type,opts){
 
 // ═══ RENDERERS ═══════════════════════════════════════════════════
 function render(p){
-    var m={campers:renderCampers,structure:renderStructure,bunkbuilder:renderBB,enrollment:renderEnrollment,staffing:renderStaffing,billing:renderBilling,payroll:renderPayroll,analytics:renderAnalytics,reports:renderReports,printsheets:renderPrintSheets,settings:renderSettings};
+    var m={campers:renderCampers,structure:renderStructure,bunkbuilder:renderBB,leads:renderLeads,enrollment:renderEnrollment,staffing:renderStaffing,billing:renderBilling,payroll:renderPayroll,analytics:renderAnalytics,reports:renderReports,printsheets:renderPrintSheets,settings:renderSettings};
     if(m[p])m[p]();else renderSoon(p);
 }
 
@@ -2681,6 +2685,146 @@ function setBunkCapacityPrompt(bunk){
 
 // ── BILLING / BROADCASTS / SOON ──────────────────────────────────
 // ── REGISTRATION & ENROLLMENT ─────────────────────────────────────
+// ═══════════════════════════════════════════════════════════════
+// LEADS / INQUIRY CRM — prospective families before they apply.
+// Families inquire at campistry_inquiry.html → campistryMe.leads; the office
+// works them through New → Contacted → Tour → Applied → Enrolled (or Lost),
+// logging follow-ups and next-contact dates. This is the top of the funnel that
+// feeds Registration.
+// ═══════════════════════════════════════════════════════════════
+var LEAD_STAGES=[
+    {key:'all',label:'All',color:'var(--s700)'},
+    {key:'new',label:'New',color:'#3B82F6'},
+    {key:'contacted',label:'Contacted',color:'#8B5CF6'},
+    {key:'tour',label:'Tour',color:'var(--me)'},
+    {key:'applied',label:'Applied',color:'#0EA5E9'},
+    {key:'enrolled',label:'Enrolled',color:'var(--ok)'},
+    {key:'lost',label:'Lost',color:'var(--err)'}
+];
+function _leadType(s){return s==='enrolled'?'ok':s==='lost'?'err':s==='applied'?'info':s==='tour'?'warn':'gray';}
+function _leadLabel(s){var x=LEAD_STAGES.find(function(g){return g.key===s;});return x?x.label:(s||'New');}
+
+function renderLeads(){
+    var c=document.getElementById('page-leads');
+    var arr=Object.entries(leads);
+    var total=arr.length;
+    var by={}; LEAD_STAGES.forEach(function(g){if(g.key!=='all')by[g.key]=0;});
+    arr.forEach(function([,l]){var st=l.status||'new'; by[st]=(by[st]||0)+1;});
+    var open=total-((by.enrolled||0)+(by.lost||0));
+    var todayStr=new Date().toISOString().split('T')[0];
+    var overdue=arr.filter(function([,l]){return l.nextFollowUp&&l.nextFollowUp<todayStr&&(l.status!=='enrolled'&&l.status!=='lost');}).length;
+
+    var h='<div class="sec-hd"><div><h2 class="sec-title">Leads &amp; Inquiries</h2><p class="sec-desc">'+total+' lead'+(total!==1?'s':'')+' · '+open+' open'+(overdue?' · <span style="color:var(--err)">'+overdue+' follow-up'+(overdue!==1?'s':'')+' due</span>':'')+'</p></div>';
+    h+='<div class="sec-actions"><button class="me-btn me-btn--sec me-btn--sm" onclick="CampistryMe.exportLeadsCSV()">↓ Export CSV</button><button class="me-btn me-btn--sec me-btn--sm" onclick="CampistryMe.copyInquiryLink()">🔗 Copy Inquiry Link</button><button class="me-btn me-btn--pri" onclick="CampistryMe.addLead()">+ Add Lead</button></div></div>';
+
+    // Inquiry link banner
+    h+='<div style="background:#fff;border:1px solid var(--s200);border-radius:var(--r);padding:12px 16px;margin-bottom:14px;display:flex;align-items:center;gap:12px;flex-wrap:wrap">';
+    h+='<div style="flex:1;min-width:200px"><div style="font-size:.8rem;font-weight:600;color:var(--s500)">INQUIRY / REQUEST-INFO LINK</div>';
+    h+='<div style="font-size:.85rem;color:var(--me);font-weight:600;word-break:break-all;margin-top:2px">'+esc(window.location.origin+'/campistry_inquiry.html')+'</div></div>';
+    h+='<button class="me-btn me-btn--pri me-btn--sm" onclick="CampistryMe.copyInquiryLink()">Copy Link</button>';
+    h+='<a href="campistry_inquiry.html" target="_blank" class="me-btn me-btn--sec me-btn--sm" style="text-decoration:none">Preview Form</a></div>';
+
+    // Pipeline cards
+    h+='<div style="display:flex;gap:8px;margin-bottom:16px;flex-wrap:wrap">';
+    LEAD_STAGES.forEach(function(s){
+        var count=s.key==='all'?total:(by[s.key]||0);
+        var active=leadFilter===s.key;
+        h+='<div class="click" onclick="CampistryMe.setLeadFilter(\''+s.key+'\')" style="flex:1;min-width:82px;background:'+(active?'var(--s50)':'#fff')+';border-radius:var(--r);padding:10px 12px;border:2px solid '+(active?s.color:'var(--s200)')+';text-align:center;cursor:pointer">';
+        h+='<div style="font-size:1.2rem;font-weight:700;color:'+s.color+'">'+count+'</div>';
+        h+='<div style="font-size:.62rem;font-weight:600;color:var(--s400);text-transform:uppercase;letter-spacing:.04em">'+s.label+'</div></div>';
+    });
+    h+='</div>';
+
+    var list=arr.map(function([id,l]){l._id=id;return l;});
+    if(leadFilter!=='all') list=list.filter(function(l){return (l.status||'new')===leadFilter;});
+    list.sort(function(a,b){return(b.createdAt||'').localeCompare(a.createdAt||'');});
+
+    if(!total){
+        h+='<div class="me-empty"><h3>No leads yet</h3><p>Share your inquiry link on your website or socials — every "request info" lands here.</p><button class="me-btn me-btn--pri" onclick="CampistryMe.copyInquiryLink()">🔗 Copy Inquiry Link</button></div>';
+    } else if(!list.length){
+        h+='<div class="me-empty"><h3>No leads in this stage</h3></div>';
+    } else {
+        h+='<div class="me-card"><div class="me-tw"><table class="me-t"><thead><tr><th>Family</th><th>Camper interest</th><th>Received</th><th>Follow-up</th><th>Source</th><th>Status</th><th></th></tr></thead><tbody>';
+        list.forEach(function(l){
+            var fu=l.nextFollowUp?(l.nextFollowUp<todayStr?'<span style="color:var(--err);font-weight:600">'+esc(l.nextFollowUp)+' ⚠</span>':esc(l.nextFollowUp)):'—';
+            var camp=[l.camperName,l.camperGrade?('Grade '+l.camperGrade):(l.camperAge?('Age '+l.camperAge):'')].filter(Boolean).join(' · ');
+            h+='<tr class="click" onclick="CampistryMe.viewLead(\''+je(l._id)+'\')">';
+            h+='<td class="bold">'+esc(l.parentName||'—')+'</td>';
+            h+='<td style="font-size:.8rem">'+esc(camp||'—')+'</td>';
+            h+='<td style="font-size:.78rem;color:var(--s500)">'+esc(l.createdDate||'')+'</td>';
+            h+='<td style="font-size:.78rem">'+fu+'</td>';
+            h+='<td style="font-size:.78rem;color:var(--s500)">'+esc(l.source||'—')+'</td>';
+            h+='<td>'+bdg(_leadLabel(l.status||'new'),_leadType(l.status||'new'))+'</td>';
+            h+='<td style="text-align:right;color:var(--s300)">›</td></tr>';
+        });
+        h+='</tbody></table></div></div>';
+    }
+    c.innerHTML=h;
+}
+function setLeadFilter(f){leadFilter=f;renderLeads();}
+function viewLead(id){
+    var l=leads[id]; if(!l)return; var st=l.status||'new';
+    var opts=LEAD_STAGES.filter(function(g){return g.key!=='all';}).map(function(g){return '<option value="'+g.key+'"'+(st===g.key?' selected':'')+'>'+g.label+'</option>';}).join('');
+    var h='<div style="max-height:70vh;overflow:auto">';
+    h+='<div style="display:flex;justify-content:space-between;align-items:flex-start;gap:10px;margin-bottom:12px">';
+    h+='<div><div style="font-size:1.05rem;font-weight:800">'+esc(l.parentName||'Lead')+'</div><div style="font-size:.8rem;color:var(--s500)">'+esc([l.camperName,l.camperGrade?('Grade '+l.camperGrade):(l.camperAge?('Age '+l.camperAge):'')].filter(Boolean).join(' · ')||'—')+'</div></div>';
+    h+='<select class="me-input" style="width:auto" onchange="CampistryMe.setLeadStatus(\''+je(id)+'\',this.value)">'+opts+'</select>';
+    h+='</div>';
+    h+='<div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;font-size:.82rem;margin-bottom:12px">';
+    if(l.email)h+='<div><span style="color:var(--s400)">Email</span><br><a href="mailto:'+esc(l.email)+'" style="color:var(--me)">'+esc(l.email)+'</a></div>';
+    if(l.phone)h+='<div><span style="color:var(--s400)">Phone</span><br><a href="tel:'+esc(l.phone)+'" style="color:var(--me)">'+esc(l.phone)+'</a></div>';
+    if(l.interests)h+='<div style="grid-column:1/-1"><span style="color:var(--s400)">Interested in</span><br>'+esc(l.interests)+'</div>';
+    if(l.source)h+='<div><span style="color:var(--s400)">Source</span><br>'+esc(l.source)+'</div>';
+    h+='<div><span style="color:var(--s400)">Received</span><br>'+esc(l.createdDate||'')+'</div>';
+    h+='</div>';
+    if(l.message)h+='<div style="margin-bottom:12px;background:var(--s50);border-radius:var(--r);padding:10px 12px;font-size:.82rem"><span style="color:var(--s400)">Their message</span><div style="margin-top:2px;white-space:pre-wrap;color:var(--s700)">'+esc(l.message)+'</div></div>';
+    // Follow-up date
+    h+='<div class="fr" style="display:flex;gap:8px;align-items:end;margin-bottom:12px"><div class="me-field" style="flex:1;margin:0"><label>Next follow-up</label><input type="date" class="me-input" id="leadFU" value="'+esc(l.nextFollowUp||'')+'"></div><button class="me-btn me-btn--sec me-btn--sm" onclick="CampistryMe.setLeadFollowUp(\''+je(id)+'\')">Set</button></div>';
+    // Activity log
+    h+='<div style="margin-bottom:10px"><div style="font-size:.7rem;font-weight:700;color:var(--s400);text-transform:uppercase;margin-bottom:6px">Activity</div>';
+    if((l.activity||[]).length){
+        l.activity.slice().reverse().forEach(function(ac){h+='<div style="font-size:.8rem;padding:5px 0;border-bottom:1px solid var(--s100)"><span style="color:var(--s400)">'+esc(ac.date||'')+'</span> — '+esc(ac.text||'')+'</div>';});
+    } else h+='<div style="font-size:.8rem;color:var(--s400)">No activity logged yet.</div>';
+    h+='<div style="display:flex;gap:6px;margin-top:8px"><input class="me-input" id="leadAct" placeholder="Log a call, email, tour…" style="flex:1"><button class="me-btn me-btn--sec me-btn--sm" onclick="CampistryMe.addLeadActivity(\''+je(id)+'\')">Add</button></div></div>';
+    // Notes
+    h+='<div class="me-field"><label>Internal notes</label><textarea class="me-input" id="leadNote" rows="2">'+esc(l.notes||'')+'</textarea></div>';
+    h+='<div style="display:flex;gap:6px;margin-top:8px;flex-wrap:wrap">';
+    h+='<button class="me-btn me-btn--pri me-btn--sm" onclick="CampistryMe.saveLeadNotes(\''+je(id)+'\')">Save notes</button>';
+    h+='<button class="me-btn me-btn--sec me-btn--sm" onclick="CampistryMe.copyRegLink()">🔗 Send registration link</button>';
+    h+='<button class="me-btn me-btn--ghost me-btn--sm" style="color:var(--err);margin-left:auto" onclick="CampistryMe.deleteLead(\''+je(id)+'\')">Delete</button>';
+    h+='</div></div>';
+    showModal(esc(l.parentName||'Lead'),h);
+}
+function setLeadStatus(id,status){var l=leads[id];if(!l)return;l.status=status;if(!l.activity)l.activity=[];l.activity.push({date:today(),text:'Status → '+_leadLabel(status)});save();renderLeads();viewLead(id);toast('Moved to '+_leadLabel(status));}
+function saveLeadNotes(id){var l=leads[id];if(!l)return;var el=document.getElementById('leadNote');if(el)l.notes=el.value;save();toast('Notes saved');}
+function setLeadFollowUp(id){var l=leads[id];if(!l)return;var el=document.getElementById('leadFU');if(el)l.nextFollowUp=el.value;save();renderLeads();viewLead(id);toast('Follow-up set');}
+function addLeadActivity(id){var l=leads[id];if(!l)return;var el=document.getElementById('leadAct');var t=el&&el.value.trim();if(!t)return;if(!l.activity)l.activity=[];l.activity.push({date:today(),text:t});save();viewLead(id);}
+function deleteLead(id){if(!leads[id])return;if(!confirm('Delete this lead?'))return;delete leads[id];save();closeModal('dynModal');renderLeads();toast('Lead deleted');}
+function addLead(){
+    var h='<div class="me-modal-form">';
+    h+='<div class="me-field"><label>Parent / guardian name</label><input class="me-input" id="ldN"></div>';
+    h+='<div style="display:grid;grid-template-columns:1fr 1fr;gap:10px"><div class="me-field"><label>Email</label><input class="me-input" id="ldE"></div><div class="me-field"><label>Phone</label><input class="me-input" id="ldP"></div></div>';
+    h+='<div style="display:grid;grid-template-columns:2fr 1fr;gap:10px"><div class="me-field"><label>Camper name</label><input class="me-input" id="ldC"></div><div class="me-field"><label>Grade / age</label><input class="me-input" id="ldG"></div></div>';
+    h+='<div class="me-field"><label>Interested in</label><input class="me-input" id="ldI" placeholder="Session / program"></div>';
+    h+='<div class="me-field"><label>Source</label><input class="me-input" id="ldS" placeholder="Referral, website, social…"></div></div>';
+    showModal('Add Lead',h,function(){
+        var name=document.getElementById('ldN').value.trim();
+        if(!name){alert('Enter a parent name');return;}
+        var id='lead_'+Date.now()+'_'+Math.random().toString(36).slice(2,6);
+        leads[id]={parentName:name,email:document.getElementById('ldE').value.trim(),phone:document.getElementById('ldP').value.trim(),camperName:document.getElementById('ldC').value.trim(),camperGrade:document.getElementById('ldG').value.trim(),interests:document.getElementById('ldI').value.trim(),source:document.getElementById('ldS').value.trim()||'Manual',status:'new',createdDate:today(),createdAt:new Date().toISOString(),notes:'',activity:[]};
+        save();closeModal('dynModal');renderLeads();toast('Lead added');
+    });
+}
+function copyInquiryLink(){var url=window.location.origin+'/campistry_inquiry.html';try{navigator.clipboard&&navigator.clipboard.writeText(url);}catch(e){}toast('Inquiry link copied');}
+function exportLeadsCSV(){
+    var rows=[['Parent','Email','Phone','Camper','Grade/Age','Interested in','Source','Status','Received','Next follow-up','Notes']];
+    Object.values(leads).forEach(function(l){
+        rows.push([l.parentName||'',l.email||'',l.phone||'',l.camperName||'',l.camperGrade||l.camperAge||'',l.interests||'',l.source||'',_leadLabel(l.status||'new'),l.createdDate||'',l.nextFollowUp||'',(l.notes||'').replace(/\n/g,' ')]);
+    });
+    var csv='﻿'+rows.map(function(r){return r.map(function(x){return '"'+String(x==null?'':x).replace(/"/g,'""')+'"';}).join(',');}).join('\n');
+    dlFile(csv,'leads.csv','text/csv');
+}
+
 // ═══════════════════════════════════════════════════════════════
 // STAFFING — hiring pipeline / applicant tracking (mirrors Registration).
 // Staff apply at campistry_staff_apply.html → campistryMe.staffApplications;
@@ -8355,6 +8499,9 @@ window.CampistryMe={
     setStaffFilter:setStaffFilter,viewStaffApp:viewStaffApp,setStaffStatus:setStaffStatus,saveStaffNotes:saveStaffNotes,
     toggleOnboard:toggleOnboard,cycleRef:cycleRef,deleteStaffApp:deleteStaffApp,addStaffApp:addStaffApp,
     copyStaffLink:copyStaffLink,exportStaffCSV:exportStaffCSV,
+    setLeadFilter:setLeadFilter,viewLead:viewLead,setLeadStatus:setLeadStatus,saveLeadNotes:saveLeadNotes,
+    setLeadFollowUp:setLeadFollowUp,addLeadActivity:addLeadActivity,deleteLead:deleteLead,addLead:addLead,
+    copyInquiryLink:copyInquiryLink,exportLeadsCSV:exportLeadsCSV,
     finSetBudget:finSetBudget,finSetOverdue:finSetOverdue,
     finExportCSV:finExportCSV,finExportQB:finExportQB,finExportIIF:finExportIIF,
     finExportXero:finExportXero,finExportJournal:finExportJournal,finImportCSV:finImportCSV,
