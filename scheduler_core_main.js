@@ -8086,27 +8086,17 @@ console.log(`[Generation] Rainy Day Mode: ${window.isRainyDay ? 'ACTIVE 🌧️'
 
         // ★★★ UPDATE ROTATION HISTORY (timestamps) AND HISTORICAL COUNTS ★★★
         try {
-            const newHistory = window.loadRotationHistory?.() || { bunks: {}, leagues: {} };
-            newHistory.bunks = newHistory.bunks || {};
-            newHistory.leagues = newHistory.leagues || {};
-
-            const timestamp = Date.now();
-
+            // ★ Scope for the rotation-history rebuild: the bunks THIS run
+            //   generated. A scheduler's local daily cache only holds their own
+            //   bunks, so re-deriving timestamps for someone else's bunks would
+            //   truncate their history (CB-72).
+            const _rotScopeBunks = [];
             Object.keys(window.scheduleAssignments || {}).forEach(bunk => {
-                (window.scheduleAssignments[bunk] || []).forEach(entry => {
-                    if (!entry || entry.continuation || entry._isTransition) return;
-                    const actName = entry._activity || entry.sport || '';
-                    if (!actName) return;
-
-                    const actLower = actName.toLowerCase();
-                    if (actLower === 'free' || actLower.includes('transition')) return;
-
-                    newHistory.bunks[bunk] = newHistory.bunks[bunk] || {};
-                    newHistory.bunks[bunk][actName] = timestamp;
-                });
+                if (!allowedDivisionsSet) { _rotScopeBunks.push(bunk); return; }
+                const dn = Object.keys(divisions || {}).find(d =>
+                    ((divisions[d] || {}).bunks || []).some(b => String(b) === String(bunk)));
+                if (dn && allowedDivisionsSet.has(String(dn))) _rotScopeBunks.push(bunk);
             });
-
-            window.saveRotationHistory?.(newHistory);
 
             // ★★★ REBUILD HISTORICAL COUNTS FROM ALL SCHEDULES ★★★
             // saveSchedule (below) writes localStorage synchronously, so a rebuild
@@ -8124,15 +8114,55 @@ console.log(`[Generation] Rainy Day Mode: ${window.isRainyDay ? 'ACTIVE 🌧️'
                     if (window.RotationCloud?.save) {
                         window.RotationCloud.save(schedDateKey, window.scheduleAssignments || {});
                     }
+                    // ★ Last-done timestamps: RE-DERIVE, never merge. The old
+                    //   code stamped every activity on the fresh grid and left
+                    //   everything else alone, so an activity a partial regen (or
+                    //   a tile edit) replaced kept today's timestamp forever —
+                    //   the engine and the analytics last-done column both went
+                    //   on treating it as done today. Re-deriving from the saved
+                    //   days drops it back to the last day it really happened.
+                    if (window.SchedulerCoreUtils?.rebuildRotationHistoryForBunks) {
+                        window.SchedulerCoreUtils.rebuildRotationHistoryForBunks(_rotScopeBunks);
+                    }
                 } catch (e) { console.warn('[Optimizer] post-gen counts rebuild failed:', e); }
             };
             // Defer just past saveSchedule (called below) so allDaily has today.
             setTimeout(_runCountsRebuild, 0);
 
-            console.log('📊 Rotation history updated, historical counts rebuild scheduled');
+            console.log('📊 Rotation history rebuild + historical counts rebuild scheduled for ' + _rotScopeBunks.length + ' bunk(s)');
 
         } catch (e) {
             console.error("History update failed:", e);
+        }
+
+        // =========================================================================
+        // STEP 8.5: LEAGUE HISTORY ↔ SCHEDULE RECONCILE (per-tile regen only)
+        // =========================================================================
+        // A per-tile regen decides which league day-records to preserve BEFORE the
+        // run, from the geometry of the selected tiles (buildTimeRegenScope's
+        // preservedLeagueLabels). When the edit moved the league period out from
+        // under that selection — the league tile was deleted and a neighbour was
+        // regenerated, the replacement tile starts at a different time, or a bunk
+        // fell back to a whole-day re-roll — the prediction and the schedule
+        // disagree, and the old matchup keeps counting as played even though the
+        // grid no longer shows it. The grid is final here, so reconcile against it.
+        //
+        // Scoped to the per-tile regen: a full or division-scoped generation rolls
+        // the day back and re-records exactly what it schedules, so it is already
+        // consistent (and this would be a no-op). Skipped under rain, where the
+        // league engines never ran and the mid-day cut path owns the rollback.
+        try {
+            const _regenActive = !!window.__regenSlotScope;
+            const _leaguesRan = !(isRainyDayModeActive() || window.isRainyDay === true);
+            if (_regenActive && _leaguesRan && window.SchedulerCoreUtils?.survivingLeagueLabels) {
+                const _rcDate = window._activeGenDate || window.currentScheduleDate;
+                const _rcDivs = allowedDivisionsSet ? Array.from(allowedDivisionsSet) : null;
+                const _surv = window.SchedulerCoreUtils.survivingLeagueLabels(window.leagueAssignments || {});
+                window.SchedulerCoreLeagues?.reconcileDayWithSchedule?.(_rcDivs, _rcDate, _surv.regular);
+                window.SchedulerCoreSpecialtyLeagues?.reconcileDayWithSchedule?.(_rcDivs, _rcDate, _surv.specialty);
+            }
+        } catch (e) {
+            console.warn('[STEP 8.5] league history reconcile failed:', e);
         }
 
         window.saveCurrentDailyData?.("unifiedTimes", window.unifiedTimes);

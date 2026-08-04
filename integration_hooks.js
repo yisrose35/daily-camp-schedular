@@ -2692,27 +2692,17 @@
                 }
             }, 2000);
 
-            // ★★★ Update rotation history for ALL bunks ★★★
+            // ★★★ Rebuild rotation history ("last done") for ALL bunks ★★★
             // Manual edits call peiUpdateRotationHistory per bunk, but auto-gen never did.
-            // This stamps every scheduled activity with the current timestamp so next-day
-            // variety scoring knows what was done today.
+            // RE-DERIVE from the saved days rather than stamping what's on the grid:
+            // the old stamp-only pass could never REMOVE the timestamp of an activity
+            // this run replaced, so a regenerated (or partially regenerated) slot left
+            // the dropped activity reading as "done today" forever — in next-day
+            // variety scoring and in the analytics last-done column alike.
             try {
                 const newSched = window.scheduleAssignments || {};
-                const history = window.loadRotationHistory?.() || { bunks: {}, leagues: {} };
-                history.bunks = history.bunks || {};
-                const timestamp = Date.now();
-                const SKIP = new Set(['free', 'free play', 'free (timeout)', 'transition/buffer', 'regroup', 'lineup', 'bus', 'buffer']);
-                Object.keys(newSched).forEach(bunk => {
-                    history.bunks[bunk] = history.bunks[bunk] || {};
-                    (newSched[bunk] || []).forEach(entry => {
-                        if (!entry || entry.continuation || entry._isTransition) return;
-                        const actName = entry._activity || '';
-                        if (!actName || SKIP.has(actName.toLowerCase())) return;
-                        history.bunks[bunk][actName] = timestamp;
-                    });
-                });
-                window.saveRotationHistory?.(history);
-                console.log('🔗 ✅ Rotation history updated for', Object.keys(newSched).length, 'bunks');
+                const n = window.SchedulerCoreUtils?.rebuildRotationHistoryForBunks?.(Object.keys(newSched)) || 0;
+                console.log('🔗 ✅ Rotation history rebuilt for', n, 'of', Object.keys(newSched).length, 'bunks');
             } catch (rhErr) {
                 console.error('🔗 Rotation history update failed:', rhErr);
             }

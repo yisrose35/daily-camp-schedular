@@ -25,7 +25,9 @@
 //   TEST 6 — EVEN COUNT UNTOUCHED: 4 teams → 2 normal games, no group.
 //   TEST 7 — BIGGER LEAGUE: 5 teams → one 3-group + one normal game, no bye.
 //   TEST 8 — SIZE 5: 5 teams, size 5 → a single 5-team group (10 games).
-//   TEST 9 — KILLSWITCH: window.__leagueRoundRobinGroups=false → back to a bye.
+//   TEST 9 — TILE LINES are marked, so a history rebuild from a saved
+//            schedule can never turn a group back into three matchups.
+//   TEST 10 — KILLSWITCH: window.__leagueRoundRobinGroups=false → back to a bye.
 // =============================================================================
 
 'use strict';
@@ -130,6 +132,9 @@ const fieldsFor = (sportCounts) => Object.entries(sportCounts).flatMap(([sport, 
 
 const T3 = ['T1', 'T2', 'T3'];
 const gameLines = (r) => r.lines.filter(l => / vs .+ @ /.test(l));
+// "A vs B @ Field (Sport)" with an optional " — round robin" tag on group games
+const sportOf = (l) => /\(([^)]+)\)(?:\s*—.*)?\s*$/.exec(l)[1];
+const fieldOf = (l) => /@\s*(.+?)\s*\(/.exec(l)[1];
 const matchupCount = (h, a, b) => h.matchupHistory[LG + ':' + [a, b].sort().join('|')] || 0;
 
 // =============================================================================
@@ -151,7 +156,7 @@ const matchupCount = (h, a, b) => h.matchupHistory[LG + ':' + [a, b].sort().join
     assert.strictEqual(games.length, 3, 'TEST2: 3 pairings for a 3-team group, got ' + JSON.stringify(games));
     assert.ok(!r.lines.some(l => /Bye/i.test(l)), 'TEST2: nobody is benched, lines=' + JSON.stringify(r.lines));
     // every game on ONE field, ONE sport
-    const fieldsUsed = new Set(games.map(l => /@\s*(.+?)\s*\(/.exec(l)[1]));
+    const fieldsUsed = new Set(games.map(fieldOf));
     assert.strictEqual(fieldsUsed.size, 1, 'TEST2: the whole group shares one field, got ' + [...fieldsUsed]);
     const pairs = new Set(games.map(l => l.split(' @ ')[0].split(' vs ').sort().join('|')));
     assert.deepStrictEqual([...pairs].sort(), ['T1|T2', 'T1|T3', 'T2|T3'], 'TEST2: every pair in the group meets');
@@ -206,7 +211,7 @@ const matchupCount = (h, a, b) => h.matchupHistory[LG + ':' + [a, b].sort().join
     run(F, 1, T3, { enabled: true, size: 3 }, { day: '2026-07-09' });
     const r2 = run(F, 1, T3, { enabled: true, size: 3 }, { day: '2026-07-10', keepHistory: true });
     const day1Sport = 'Basketball';
-    const sports2 = new Set(gameLines(r2).map(l => /\(([^)]+)\)\s*$/.exec(l)[1]));
+    const sports2 = new Set(gameLines(r2).map(sportOf));
     assert.strictEqual(sports2.size, 1, 'TEST5: day 2 group is on one sport, got ' + [...sports2]);
     const got = [...sports2][0];
     const day1 = new Set((cloud.leagueHistory.gameLog[LG]['2026-07-09'] || []).map(e => e.sport));
@@ -248,7 +253,7 @@ const matchupCount = (h, a, b) => h.matchupHistory[LG + ':' + [a, b].sort().join
     const r = run(fieldsFor({ Basketball: 2, Soccer: 2 }), 1, ['T1', 'T2', 'T3', 'T4', 'T5'], { enabled: true, size: 5 });
     const games = gameLines(r);
     assert.strictEqual(games.length, 10, 'TEST8: a group of 5 plays 10 pairings, got ' + games.length);
-    const fieldsUsed = new Set(games.map(l => /@\s*(.+?)\s*\(/.exec(l)[1]));
+    const fieldsUsed = new Set(games.map(fieldOf));
     assert.strictEqual(fieldsUsed.size, 1, 'TEST8: all on one field, got ' + [...fieldsUsed]);
     ['T1', 'T2', 'T3', 'T4', 'T5'].forEach(t => {
         const sports = r.history.teamSports[LG + '|' + t] || [];
@@ -258,15 +263,37 @@ const matchupCount = (h, a, b) => h.matchupHistory[LG + ':' + [a, b].sort().join
 }
 
 // =============================================================================
-// TEST 9 — killswitch
+// TEST 9 — the saved tile can never resurrect the group as matchups.
+// A group's games are written to the tile in the ordinary "A vs B @ Field
+// (Sport)" shape (so print / validators / rename all keep working), and that
+// same shape is what the engine rebuilds a LOST gameLog from. Unmarked, a
+// 3-team group would come back as three real matchups and undo the feature.
+// =============================================================================
+{
+    const r = run(fieldsFor({ Basketball: 2 }), 1, T3, { enabled: true, size: 3 });
+    const games = gameLines(r);
+    assert.ok(games.every(l => Leagues._isRoundRobinLine(l)),
+        'TEST9: every group line is marked as a round robin, got ' + JSON.stringify(games));
+    // …and the parser the rebuild path uses refuses to read them as a matchup
+    assert.ok(games.every(l => Leagues._parseDailyMatchup
+        ? Leagues._parseDailyMatchup(l) === null : true), 'TEST9: group lines parse to no matchup');
+    // a normal game's line is NOT marked, so ordinary rebuilds still work
+    const plain = run(fieldsFor({ Basketball: 2 }), 1, ['T1', 'T2'], { enabled: true, size: 3 });
+    assert.ok(gameLines(plain).length === 1 && !Leagues._isRoundRobinLine(gameLines(plain)[0]),
+        'TEST9: an ordinary head-to-head line is untagged, got ' + JSON.stringify(gameLines(plain)));
+    console.log('✅ TEST 9 — group lines are marked so a history rebuild can\'t recreate matchups');
+}
+
+// =============================================================================
+// TEST 10 — killswitch
 // =============================================================================
 {
     global.window.__leagueRoundRobinGroups = false;
     const r = run(fieldsFor({ Basketball: 2 }), 1, T3, { enabled: true, size: 3 });
-    assert.strictEqual(gameLines(r).length, 1, 'TEST9: back to one game with the killswitch on');
-    assert.ok(r.lines.some(l => /Bye/i.test(l)), 'TEST9: and the bye is back');
+    assert.strictEqual(gameLines(r).length, 1, 'TEST10: back to one game with the killswitch on');
+    assert.ok(r.lines.some(l => /Bye/i.test(l)), 'TEST10: and the bye is back');
     delete global.window.__leagueRoundRobinGroups;
-    console.log('✅ TEST 9 — killswitch restores the old behavior');
+    console.log('✅ TEST 10 — killswitch restores the old behavior');
 }
 
 console.log('\n🎉 league_round_robin_group_sim: ALL TESTS PASSED');

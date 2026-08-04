@@ -864,8 +864,24 @@
     // Regular-league entries store matchups as display strings
     // ("Team 1 vs Team 2 @ BB Field (Basketball)"); parse defensively and
     // accept structured {teamA/team1, teamB/team2, sport} objects too.
+    // ★ ROUND-ROBIN MARKER. A group's games are written to the tile in the
+    // ordinary "A vs B @ Field (Sport)" shape so print, the reserved-field
+    // validator and the rename rewriter all keep working — but that shape is
+    // ALSO the ground-truth backstop the engine rebuilds a stale gameLog from
+    // (dailyDataLeagueGames → _parseDailyMatchup). Read back unmarked, a
+    // 3-team group would resurrect as three real matchups and undo the whole
+    // point of not recording them. The suffix sits AFTER the sport parens, so
+    // the field regex and the "A vs B" rewriter are unaffected, and it reads
+    // as a label to a human looking at the schedule.
+    const RR_LINE_TAG = ' — round robin';
+    function _isRoundRobinLine(s) { return /—\s*round robin\s*$/i.test(String(s || '')); }
+    Leagues._isRoundRobinLine = _isRoundRobinLine;   // tests
+
     function _parseDailyMatchup(m, fallbackSport) {
         if (!m) return null;
+        // A round-robin group's games are a scheduling device, never a
+        // recorded matchup — the saved tile must not re-create one.
+        if (typeof m === 'string' && _isRoundRobinLine(m)) return null;
         if (typeof m === 'object') {
             const a = m.teamA != null ? m.teamA : m.team1;
             const b = m.teamB != null ? m.teamB : m.team2;
@@ -880,6 +896,7 @@
         if (noSport) return { t1: noSport[1].trim(), t2: noSport[2].trim(), sport: fallbackSport || null };
         return null;
     }
+    Leagues._parseDailyMatchup = _parseDailyMatchup;   // tests
 
     // ★ TEAM RENAME: resolve a former team name read out of a SAVED schedule to
     // the team's current name. Saved schedules are migrated at rename time, but
@@ -1240,14 +1257,23 @@
     }
     Leagues._expandLogForResults = _expandLogForResults;   // tests
 
-    function rollbackDayRecords(leagueName, date, history, preservedLabels) {
+    function rollbackDayRecords(leagueName, date, history, preservedLabels, keepUnlabeled) {
         const entries = history.gameLog?.[leagueName]?.[date];
         if (!entries || !entries.length) return 0;
         // ★ Per-tile regen: games whose period is NOT being re-rolled keep their
         //   log records (else the day's game count drops and the Leagues results
         //   page loses the game). preservedLabels = Set of gameLabels to keep.
-        const _keep = (preservedLabels && preservedLabels.size)
-            ? entries.filter(function (e) { return e && e.g && preservedLabels.has(e.g); })
+        // ★ keepUnlabeled: the post-generation schedule reconcile matches records
+        //   to saved tiles BY LABEL, so a record with no label can't be matched.
+        //   It keeps those rather than guessing; the rainy cut (which knows
+        //   exactly which games it removed) still drops them.
+        const _keepFn = function (e) {
+            if (!e) return false;
+            if (!e.g) return keepUnlabeled === true;
+            return !!(preservedLabels && preservedLabels.has(e.g));
+        };
+        const _keep = (keepUnlabeled === true || (preservedLabels && preservedLabels.size))
+            ? entries.filter(_keepFn)
             : [];
         const _roll = (_keep.length) ? entries.filter(function (e) { return _keep.indexOf(e) < 0; }) : entries;
         _roll.forEach(function (e) {
@@ -3308,7 +3334,7 @@
         const out = [];
         for (let i = 0; i < mem.length; i++) {
             for (let j = i + 1; j < mem.length; j++) {
-                out.push(`${mem[i]} vs ${mem[j]} @ ${a.field} (${a.sport})`);
+                out.push(`${mem[i]} vs ${mem[j]} @ ${a.field} (${a.sport})${RR_LINE_TAG}`);
             }
         }
         return out;
@@ -4673,6 +4699,19 @@
                 // disabled must not keep a stale attendance entry.
                 if ((!_plbl || !_plbl.size) && history.chinuchByDate && history.chinuchByDate[league.name]) {
                     delete history.chinuchByDate[league.name][dayId];
+                }
+                // ★ Bye ledger: same rule, and it needs its own clear. byesByDate
+                // is otherwise only reset by the first bye WRITE of a run
+                // (_byeDayStamped) — so a day whose league tile was REMOVED or
+                // replaced never clears it: no games run, no bye is written, and
+                // the day's old list survives. makeByeLedger prefers that recorded
+                // list for past days, so it kept charging teams a bye they never
+                // took on a day the league never happened, and sent the next bye
+                // to the wrong team. A league that still plays today re-records
+                // its byes right after this, so the clear is idempotent — and a
+                // day that legitimately ends with no byes now says so.
+                if ((!_plbl || !_plbl.size) && history.byesByDate && history.byesByDate[league.name]) {
+                    delete history.byesByDate[league.name][dayId];
                 }
                 // ★ LG-8 tombstone: this generation REPLACES the league's day —
                 // in any later merge, a stale copy's version of this (league,
@@ -6909,7 +6948,9 @@ window._debugLeagueTimeData = timeData;
     // league (matches the schedule split, which drops matchups across divisions).
     // Idempotent: a league whose surviving set already equals its logged set has
     // nothing rolled back and is skipped.
-    Leagues.rollbackCutGames = function (divisionNames, dateKey, survivingLabelsByLeagueName) {
+    // opts.keepUnlabeled — see rollbackDayRecords. opts.logTag — console prefix.
+    function _rollbackToSurvivors(divisionNames, dateKey, survivingLabelsByLeagueName, opts) {
+        opts = opts || {};
         try {
             if (!dateKey) return;
             const history = loadLeagueHistory();
@@ -6927,8 +6968,8 @@ window._debugLeagueTimeData = timeData;
                 const rawSurv = surv[league.name];
                 const preserved = (rawSurv instanceof Set) ? (rawSurv.size ? rawSurv : null)
                                 : (Array.isArray(rawSurv) && rawSurv.length) ? new Set(rawSurv) : null;
-                const removed = rollbackDayRecords(league.name, dateKey, history, preserved);
-                if (removed <= 0) return; // nothing the cut dropped for this league
+                const removed = rollbackDayRecords(league.name, dateKey, history, preserved, opts.keepUnlabeled === true);
+                if (removed <= 0) return; // nothing dropped for this league
                 changed = true;
                 // Recompute the day's game count from what survived.
                 const keptRecs = history.gameLog?.[league.name]?.[dateKey] || [];
@@ -6950,9 +6991,9 @@ window._debugLeagueTimeData = timeData;
                             window.LeaguesAPI.removeAutoGamesForDate?.(dateKey, [league.name]);
                         } else if (typeof window.LeaguesAPI.syncGamesFromGeneration === 'function') {
                             const byLabel = {};
-                            keptRecs.forEach(function (e) {
-                                const lbl = e.g || 'Game';
-                                (byLabel[lbl] = byLabel[lbl] || []).push({ teamA: e.t1, teamB: e.t2, sport: e.sport || null });
+                            _expandLogForResults(keptRecs).forEach(function (m) {
+                                const lbl = m.g || 'Game';
+                                (byLabel[lbl] = byLabel[lbl] || []).push({ teamA: m.teamA, teamB: m.teamB, sport: m.sport });
                             });
                             const entries = Object.keys(byLabel).map(function (lbl) {
                                 const m = String(lbl).match(/Game\s*(\d+)/i);
@@ -6961,16 +7002,51 @@ window._debugLeagueTimeData = timeData;
                             window.LeaguesAPI.syncGamesFromGeneration(league.name, dateKey, entries);
                         }
                     }
-                } catch (e) { console.warn('[RegularLeagues] rollbackCutGames results-sync skipped:', e); }
+                } catch (e) { console.warn('[RegularLeagues] survivor rollback results-sync skipped:', e); }
             });
             if (!changed) return;
             saveLeagueHistory(history);
             // Game numbers on later dates shift down when a day loses games.
             updateFutureSchedules(dateKey, history);
-            console.log('[RegularLeagues] 🌧️ Mid-day cut: rolled back removed league games for', dateKey);
+            console.log((opts.logTag || '[RegularLeagues] ↩️') + ' rolled back league games no longer on the schedule for', dateKey);
         } catch (e) {
-            console.error('[RegularLeagues] rollbackCutGames error:', e);
+            console.error('[RegularLeagues] survivor rollback error:', e);
         }
+    }
+
+    Leagues.rollbackCutGames = function (divisionNames, dateKey, survivingLabelsByLeagueName) {
+        return _rollbackToSurvivors(divisionNames, dateKey, survivingLabelsByLeagueName,
+            { keepUnlabeled: false, logTag: '[RegularLeagues] 🌧️ Mid-day cut:' });
+    };
+
+    // =========================================================================
+    // ★ POST-GENERATION SCHEDULE RECONCILE — history must match the grid
+    // =========================================================================
+    // The per-tile regen decides which league day-records to PRESERVE *before*
+    // the run, from the geometry of the tiles the user selected (see
+    // buildTimeRegenScope's preservedLeagueLabels). That prediction breaks
+    // whenever the edit moved the league period out from under the selection:
+    //   • the league tile is deleted and the neighbouring tile is regenerated —
+    //     no selection lands on the old game's start time, so its record is
+    //     "preserved" while the game itself is gone from the schedule;
+    //   • the replacement tile starts at a different time than the league did;
+    //   • a bunk whose entries can't be safely re-keyed re-rolls its WHOLE day
+    //     (fullRerollBunks) — every league period is then re-rolled, but only
+    //     the selected one was excluded from the preserved set, so the old
+    //     record survives *alongside* the freshly logged one (double count).
+    // In all three the schedule was right and the persistent record was wrong:
+    // the matchup kept counting as played, the sport kept counting toward
+    // variety, and the Leagues results page kept showing the game.
+    //
+    // Rather than predict, reconcile: after the grid is final, the games that
+    // ACTUALLY exist are exactly the labelled entries in leagueAssignments, so
+    // roll back every day-record that no longer has one. Records with no game
+    // label can't be matched and are left alone (see rollbackDayRecords).
+    // Idempotent — a full generation re-records exactly what it schedules, so
+    // this finds nothing to roll back.
+    Leagues.reconcileDayWithSchedule = function (divisionNames, dateKey, survivingLabelsByLeagueName) {
+        return _rollbackToSurvivors(divisionNames, dateKey, survivingLabelsByLeagueName,
+            { keepUnlabeled: true, logTag: '[RegularLeagues] 🔄 Schedule reconcile:' });
     };
 
     Leagues.cleanupDateFromHistory = function(dateKey) {

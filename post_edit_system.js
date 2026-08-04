@@ -3027,19 +3027,12 @@
 
     function peiUpdateRotationHistory(bunk) {
         try {
-            const history = window.loadRotationHistory?.() || { bunks: {}, leagues: {} };
-            history.bunks = history.bunks || {};
-            history.bunks[bunk] = history.bunks[bunk] || {};
-            const assignments = window.scheduleAssignments?.[bunk] || [];
-            const timestamp = Date.now();
-            const SKIP = new Set(['free', 'free play', 'free (timeout)', 'transition/buffer', 'regroup', 'lineup', 'bus', 'buffer']);
-            for (const entry of assignments) {
-                if (!entry || entry.continuation || entry._isTransition) continue;
-                const actName = entry._activity || '';
-                if (!actName || SKIP.has(actName.toLowerCase())) continue;
-                history.bunks[bunk][actName] = timestamp;
-            }
-            window.saveRotationHistory?.(history);
+            // RE-DERIVE the bunk's last-done timestamps from the saved days plus
+            // the live grid. The old pass only ever STAMPED what the grid holds
+            // now, so the activity an edit just replaced kept today's timestamp
+            // forever and went on reading as "done today" in rotation scoring
+            // and in the analytics last-done column.
+            window.SchedulerCoreUtils?.rebuildRotationHistoryForBunks?.([bunk]);
             // historicalCounts are already updated synchronously by
             // SchedulerCoreUtils.applyPostEditCounts (called from submitEdit).
             // The previous setTimeout(reIncrement) here ran on top of that delta

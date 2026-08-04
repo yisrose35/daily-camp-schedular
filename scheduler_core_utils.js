@@ -3479,6 +3479,120 @@ const validActivities = Utils.getValidActivityNames();
     window.rebuildHistoricalCountsFromCloud = Utils.rebuildHistoricalCountsFromCloud;
 
     // =================================================================
+    // SURVIVING LEAGUE GAME LABELS — ground truth from the saved grid
+    // =================================================================
+    // Every stored league block carries leagueName + gameLabel; specialty
+    // blocks additionally carry isSpecialtyLeague:true (regular blocks don't).
+    // The league engines' rollbackCutGames / reconcileDayWithSchedule subtract
+    // exactly the day-records whose label is NOT in these sets, so the
+    // persistent gameLog / matchup + sport variety / game count always follow
+    // what the schedule actually shows.
+    // Returns { regular: { leagueName: Set<label> }, specialty: { … } }.
+    Utils.survivingLeagueLabels = function (leagueAssignments) {
+        const regular = {}, specialty = {};
+        Object.keys(leagueAssignments || {}).forEach(function (dv) {
+            const map = leagueAssignments[dv];
+            if (!map || typeof map !== 'object') return;
+            Object.keys(map).forEach(function (k) {
+                const e = map[k];
+                if (!e || !e.leagueName || !e.gameLabel) return;
+                const bucket = e.isSpecialtyLeague ? specialty : regular;
+                (bucket[e.leagueName] = bucket[e.leagueName] || new Set()).add(e.gameLabel);
+            });
+        });
+        return { regular: regular, specialty: specialty };
+    };
+
+    // =================================================================
+    // ROTATION HISTORY REBUILD — last-done timestamps from saved days
+    // =================================================================
+    // rotationHistory.bunks[bunk][activity] = timestamp of the last day the
+    // bunk did it. Every writer (generation STEP 8, applyPostEditCounts) only
+    // ever STAMPS what is on the grid now — nothing ever removes the stamp for
+    // an activity that was replaced. Regenerate a tile (or edit it) and the
+    // activity that was dropped keeps today's timestamp forever, so the
+    // rotation engine and the analytics "last done" column both keep believing
+    // the bunk did an activity it never did.
+    //
+    // Rebuild instead: for the given bunks, re-derive every timestamp from the
+    // saved daily schedules (ground truth), so a replaced activity falls back
+    // to the last day it REALLY happened — or disappears if it never did.
+    // Scoped to `bunks` on purpose (CB-72): a scheduler's local daily cache
+    // holds only their own bunks, so an unscoped rebuild would truncate every
+    // other scheduler's history and then save the truncated map globally.
+    Utils.rebuildRotationHistoryForBunks = function (bunks) {
+        try {
+            const list = Array.from(bunks || []).map(String).filter(Boolean);
+            if (!list.length) return 0;
+            const scope = new Set(list);
+            const rotHist = window.loadRotationHistory?.() || { bunks: {}, leagues: {} };
+            rotHist.bunks = rotHist.bunks || {};
+
+            // ★ HR: pre-epoch days are archive — invisible to recency, the same
+            //   fence rebuildHistoricalCounts applies.
+            const epoch = Utils.getRotationEpoch ? Utils.getRotationEpoch() : null;
+            const fresh = {};   // bunk -> { activity: latest ts } built from scratch
+
+            // Union of every skip list the writers this replaces used, so no
+            // filler name that was previously excluded starts showing up.
+            const SKIP = new Set(['free', 'free play', 'free (timeout)',
+                'transition/buffer', 'regroup', 'lineup', 'bus', 'buffer']);
+            const stamp = function (bunk, sched, ts) {
+                (sched[bunk] || []).forEach(function (entry) {
+                    if (!entry || !entry._activity || entry.continuation || entry._isTransition) return;
+                    const a = String(entry._activity);
+                    const aLower = a.toLowerCase();
+                    if (SKIP.has(aLower) || aLower.includes('transition')) return;
+                    if (!fresh[bunk]) fresh[bunk] = {};
+                    if (!fresh[bunk][a] || fresh[bunk][a] < ts) fresh[bunk][a] = ts;
+                });
+            };
+
+            const allDaily = window.loadAllDailyData?.() || {};
+            Object.keys(allDaily).forEach(function (dk) {
+                if (!/^\d{4}-\d{2}-\d{2}$/.test(dk)) return;
+                if (epoch && dk < epoch) return;
+                const ts = new Date(dk + 'T12:00:00').getTime() || 0;
+                if (!ts) return;
+                const sched = (allDaily[dk] && allDaily[dk].scheduleAssignments) || {};
+                scope.forEach(function (b) { stamp(b, sched, ts); });
+            });
+
+            // The live grid is the truth for the date being worked on — a
+            // post-edit calls this before its save lands in the daily store.
+            const liveDate = window.currentScheduleDate;
+            if (liveDate && /^\d{4}-\d{2}-\d{2}$/.test(liveDate) && !(epoch && liveDate < epoch)) {
+                const liveTs = new Date(liveDate + 'T12:00:00').getTime() || 0;
+                const live = window.scheduleAssignments || {};
+                if (liveTs) scope.forEach(function (b) { stamp(b, live, liveTs); });
+            }
+
+            // Replace, but never truncate what we simply couldn't see: a bunk
+            // that scanned to NOTHING while it already had timestamps means the
+            // local daily cache doesn't hold that bunk's days (a scheduler's
+            // cache holds only their own bunks — CB-72). Leave those alone.
+            let rebuilt = 0;
+            scope.forEach(function (b) {
+                const had = rotHist.bunks[b] && Object.keys(rotHist.bunks[b]).length > 0;
+                if (!fresh[b]) {
+                    if (had) return;               // nothing scanned + had data → not ours to clear
+                    delete rotHist.bunks[b];
+                    return;
+                }
+                rotHist.bunks[b] = fresh[b];
+                rebuilt++;
+            });
+
+            window.saveRotationHistory?.(rotHist);
+            return rebuilt;
+        } catch (e) {
+            console.warn('[SchedulerCoreUtils] rotationHistory rebuild failed:', e);
+            return 0;
+        }
+    };
+    window.rebuildRotationHistoryForBunks = Utils.rebuildRotationHistoryForBunks;
+
+    // =================================================================
     // POST-EDIT COUNTS + ROTATION HISTORY — shared by all edit paths
     // =================================================================
     // Single source of truth for the delta update that must run after ANY
@@ -3534,26 +3648,13 @@ const validActivities = Utils.getValidActivityNames();
         } catch (e) { console.error('[PostEditCounts] historicalCounts delta failed:', e); }
 
         // ── rotationHistory rebuild for this bunk ─────────────────────
+        // Full re-derive from the saved days + the live grid, NOT a merge of
+        // today's activities on top of whatever was there. The old merge could
+        // only ever ADD stamps, so an activity this edit just replaced kept
+        // today's "last done" timestamp forever — the rotation engine and the
+        // analytics last-done column both went on believing the bunk did it.
         try {
-            const _rotHist = window.loadRotationHistory?.() || { bunks: {}, leagues: {} };
-            _rotHist.bunks = _rotHist.bunks || {};
-            const _bunkSlots = window.scheduleAssignments?.[bunk] || [];
-            const _schedDate = window.currentScheduleDate ? new Date(window.currentScheduleDate + 'T12:00:00').getTime() : Date.now();
-            const _now = _schedDate || Date.now();
-            // Merge today's activities into existing timestamps instead of
-            // wiping the bunk — preserves previous-day recency data.
-            if (!_rotHist.bunks[bunk]) _rotHist.bunks[bunk] = {};
-            const _todayActs = new Set();
-            _bunkSlots.forEach(entry => {
-                if (entry?._activity && !entry.continuation && !entry._isTransition) {
-                    const _aLower = entry._activity.toLowerCase();
-                    if (_aLower !== 'free' && !_aLower.includes('transition')) {
-                        _rotHist.bunks[bunk][entry._activity] = _now;
-                        _todayActs.add(entry._activity);
-                    }
-                }
-            });
-            window.saveRotationHistory?.(_rotHist);
+            Utils.rebuildRotationHistoryForBunks([bunk]);
         } catch (e) { console.error('[PostEditCounts] rotationHistory rebuild failed:', e); }
 
         // ── Sync rotation counts to cloud (debounced) ────────────────
