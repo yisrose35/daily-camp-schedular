@@ -37,6 +37,11 @@
     // Enabling a rule opens its card; disabling closes it.
     const _advOpenCards = new Set();
     const _chinuchOverrideOpenLeagues = new Set();
+    // Whether the Game Results "History (N)" disclosure is open, per league.
+    // Held across re-renders: editing a past game (a score, a game number)
+    // re-renders the list, and collapsing the section the user was working in
+    // hides the very row they just changed.
+    const _gameHistoryOpenLeagues = new Set();
     let _isInitialized = false;
     let _refreshTimeout = null;
     let _saveInProgress = 0;  // ★ Counter: >0 means save in flight (prevents refresh)
@@ -2638,6 +2643,87 @@
     /**
      * Render the main game entry UI with professional styling
      */
+    // =========================================================================
+    // ★ RENUMBER A GAME (in place on its card)
+    // =========================================================================
+    // Auto-numbering is chronological across dates, so this is for the cases it
+    // can't know about — a camp that skipped a day, or a sequence that drifted.
+    // The number is pushed through SchedulerCoreLeagues.renumberGame so the
+    // schedule, the grid and this list all agree; if the number is already used
+    // on the same date the two games swap rather than collide.
+    function _startGameRenumberEditor(league, card, game, titleEl) {
+        const current = parseInt(String(game.gameLabel || '').replace(/[^0-9]/g, ''), 10);
+        const input = document.createElement('input');
+        input.type = 'number';
+        input.min = '1';
+        input.value = Number.isFinite(current) ? current : '';
+        // Distinct from the score boxes, which are also number inputs.
+        input.setAttribute('data-game-renumber', '1');
+        input.setAttribute('aria-label', 'Game number');
+        input.style.cssText = 'width:72px; font:inherit; padding:2px 6px; border:1px solid #93C5FD; border-radius:6px;';
+
+        const wrap = document.createElement('span');
+        wrap.style.cssText = 'display:inline-flex; align-items:center; gap:6px;';
+        const lbl = document.createElement('span');
+        lbl.textContent = 'Game';
+        wrap.appendChild(lbl);
+        wrap.appendChild(input);
+
+        // ONE-SHOT. Escape pulls the input out of the DOM, which fires blur —
+        // and blur commits. Without this guard, cancelling saved whatever had
+        // been typed, which is the exact opposite of cancelling.
+        let done = false;
+        const finish = function (commit) {
+            if (done) return;
+            done = true;
+            const n = parseInt(input.value, 10);
+            wrap.replaceWith(titleEl);
+            if (!commit || !Number.isFinite(n) || n < 1 || n === current) return;
+            _applyGameRenumber(league, card, game, 'Game ' + n);
+        };
+        input.onkeydown = function (ev) {
+            if (ev.key === 'Enter') { ev.preventDefault(); finish(true); }
+            else if (ev.key === 'Escape') { ev.preventDefault(); finish(false); }
+        };
+        input.onblur = function () { finish(true); };
+
+        titleEl.replaceWith(wrap);
+        input.focus();
+        input.select();
+    }
+
+    function _applyGameRenumber(league, card, game, newLabel) {
+        const oldLabel = game.gameLabel;
+        const core = window.SchedulerCoreLeagues;
+        // Games imported from a generated schedule live in the engine's history
+        // too; hand-added ones exist only here, so only the former need the
+        // cross-store move.
+        if (game.date && core && typeof core.renumberGame === 'function' && _isAutoGame(game)) {
+            const res = core.renumberGame(league.name, game.date, oldLabel, newLabel);
+            if (!res || !res.ok) {
+                alert('Could not renumber this game: ' + ((res && res.reason) || 'unknown error'));
+                return;
+            }
+            // renumberGame re-pushes the results list, which rewrites
+            // league.games for that date — so re-render from the fresh data.
+            if (res.swappedWith) {
+                console.log('[LEAGUES] ' + oldLabel + ' \u21c4 ' + newLabel + ' (numbers swapped on ' + game.date + ')');
+            }
+        } else {
+            // Manually added game: it is only in this list.
+            const clash = (league.games || []).find(function (g) {
+                return g !== game && g.date === game.date && g.gameLabel === newLabel;
+            });
+            if (clash) clash.gameLabel = oldLabel;      // swap, never duplicate
+            game.gameLabel = newLabel;
+        }
+        const m = String(newLabel).match(/Game\s*(\d+)/i);
+        if (m) game.gameNumber = parseInt(m[1], 10);
+        saveLeaguesData();
+        const gamesContainer = card.closest('[data-section="games"]') || card.parentElement;
+        renderGameEntryUI(league, gamesContainer);
+    }
+
     function renderGameEntryUI(league, container) {
         renderGameEntryUIWithSelection(league, container, null);
     }
@@ -2715,17 +2801,22 @@
             const pastSection = document.createElement('div');
             pastSection.style.marginBottom = '24px';
             
+            const pastOpen = _gameHistoryOpenLeagues.has(league.name);
+
             const pastHeader = document.createElement('div');
             pastHeader.className = 'league-past-header';
-            pastHeader.innerHTML = '<span id="past-arrow" style="font-size:0.65rem;">▶</span> History (' + pastGames.length + ')';
-            
+            pastHeader.innerHTML = '<span id="past-arrow" style="font-size:0.65rem;">' + (pastOpen ? '▼' : '▶')
+                + '</span> History (' + pastGames.length + ')';
+
             const pastContent = document.createElement('div');
-            pastContent.style.display = 'none';
-            
+            pastContent.style.display = pastOpen ? 'block' : 'none';
+
             pastHeader.onclick = () => {
                 const isHidden = pastContent.style.display === 'none';
                 pastContent.style.display = isHidden ? 'block' : 'none';
                 pastHeader.querySelector('#past-arrow').textContent = isHidden ? '▼' : '▶';
+                if (isHidden) _gameHistoryOpenLeagues.add(league.name);
+                else _gameHistoryOpenLeagues.delete(league.name);
             };
             
             pastGames.forEach(game => {
@@ -2783,6 +2874,18 @@
         const gameTitle = document.createElement('div');
         gameTitle.className = 'league-card-title';
         gameTitle.textContent = game.gameLabel || ('Game ' + (league.games.indexOf(game) + 1));
+        // ★ RENUMBER: the number is editable in place. It has to move in four
+        //   stores at once (game log, league tiles, the per-bunk copy, the
+        //   results list) — SchedulerCoreLeagues.renumberGame does all of them,
+        //   so a change here survives a reload and shows on the grid too.
+        if (/^Game\s+\d+$/i.test(game.gameLabel || '')) {
+            gameTitle.title = 'Click to change this game\u2019s number — updates the schedule, the grid and this list';
+            gameTitle.style.cssText = 'cursor:text; border-bottom:1px dashed rgba(0,0,0,0.25);';
+            gameTitle.onclick = function (ev) {
+                ev.stopPropagation();
+                _startGameRenumberEditor(league, card, game, gameTitle);
+            };
+        }
         
         const headerRight = document.createElement('div');
         headerRight.style.cssText = 'display:flex; align-items:center; gap:12px;';

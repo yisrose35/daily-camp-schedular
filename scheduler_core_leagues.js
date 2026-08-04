@@ -617,6 +617,7 @@
         console.log(`[RegularLeagues] Found ${futureDates.length} future date(s) to check: ${futureDates.join(', ')}`);
         
         let updatedAny = false;
+        let _historyRelabelled = false;   // ★ LG-15: gameLog labels moved → must be saved
         const modifiedDates = new Set(); // ★ Track which dates actually changed
 
         for (const futureDate of futureDates) {
@@ -646,6 +647,9 @@
                 // Track slots we've already processed to avoid double-counting
                 const processedSlots = new Set();
                 let gameIndexWithinDay = 0;
+                // ★ LG-15: old label → new label for this (league, date). The
+                //   gameLog has to move WITH the schedule — see the note below.
+                const _logRelabel = {};
                 
                 // Get all division names and sort slots numerically
                 const divNames = Object.keys(leagueAssignments).sort();
@@ -683,6 +687,7 @@
                             
                             if (currentNum !== correctNum) {
                                 console.log(`[RegularLeagues] 📝 Updating ${leagueName} on ${futureDate} slot ${slotIdx}: Game ${currentNum} → Game ${correctNum}`);
+                                _logRelabel['Game ' + currentNum] = 'Game ' + correctNum;
                                 
                                // ★★★ FIX: Update ALL divisions that have this league at the SAME TIME ★★★
                                 for (const d of divNames) {
@@ -707,6 +712,52 @@
                     }
                 }
                 
+                // ★★★ LG-15: THE GAME LOG MOVES WITH THE SCHEDULE ★★★
+                // This function renumbered the SAVED SCHEDULES only. The
+                // Leagues page's game list is built from the GAME LOG's labels
+                // (see the FN-58 sync), so once an earlier day gained or lost a
+                // game the two stores disagreed forever: the grid said Game 9
+                // and the results page still said Game 10. On the results page
+                // that reads as a number that never happened — the reported
+                // "8, then 10, no 9". Nothing re-derived it afterwards either,
+                // because this pass only ever looks at dates AFTER the one just
+                // generated, so a date that drifted stayed drifted.
+                //
+                // Relabel in ONE pass off the original entries, so a pair of
+                // labels swapping (8→9 and 9→8) can't collapse into one.
+                if (Object.keys(_logRelabel).length) {
+                    const _recs = history.gameLog?.[leagueName]?.[futureDate];
+                    if (Array.isArray(_recs) && _recs.length) {
+                        let _hit = 0;
+                        history.gameLog[leagueName][futureDate] = _recs.map(function (r) {
+                            if (r && r.g && _logRelabel[r.g]) { _hit++; return Object.assign({}, r, { g: _logRelabel[r.g] }); }
+                            return r;
+                        });
+                        if (_hit) {
+                            console.log('[RegularLeagues] 🔢 Game log for "' + leagueName + '" on ' + futureDate
+                                + ' relabelled with the schedule: '
+                                + Object.keys(_logRelabel).map(function (k) { return k + ' → ' + _logRelabel[k]; }).join(', '));
+                            // The results page is rebuilt from those labels, so it
+                            // has to be re-pushed or it keeps the old numbers.
+                            try {
+                                if (window.LeaguesAPI?.syncGamesFromGeneration) {
+                                    const _byLabel = {};
+                                    _expandLogForResults(history.gameLog[leagueName][futureDate]).forEach(function (m) {
+                                        const lbl = m.g || 'Game';
+                                        (_byLabel[lbl] = _byLabel[lbl] || []).push({ teamA: m.teamA, teamB: m.teamB, sport: m.sport });
+                                    });
+                                    const _entries = Object.keys(_byLabel).map(function (lbl) {
+                                        const mm = String(lbl).match(/Game\s*(\d+)/i);
+                                        return { gameLabel: lbl, gameNumber: mm ? parseInt(mm[1], 10) : null, matches: _byLabel[lbl] };
+                                    });
+                                    window.LeaguesAPI.syncGamesFromGeneration(leagueName, futureDate, _entries);
+                                }
+                            } catch (e) { console.warn('[RegularLeagues] renumber results-sync skipped:', e); }
+                            _historyRelabelled = true;
+                        }
+                    }
+                }
+
                 // Also update scheduleAssignments entries
                 const processedBunkSlots = new Set();
                 // ★ FN-10: per-day sequential game counter for the per-bunk copy.
@@ -805,7 +856,17 @@
                 console.error("[RegularLeagues] Failed to save updated future schedules:", e);
             }
         }
+        // ★ LG-15: the caller may or may not save after this (the rollback paths
+        //   save BEFORE calling), so a relabelled log persists itself. Cheap and
+        //   idempotent — only fires on a run that actually moved a label.
+        if (_historyRelabelled) {
+            try { saveLeagueHistory(history); } catch (e) {
+                console.warn('[RegularLeagues] could not persist relabelled game log:', e);
+            }
+        }
     }
+
+    Leagues.updateFutureSchedules = updateFutureSchedules;   // tests / console repair
 
     function getTeamSportHistory(leagueName, team, history) {
         const key = `${leagueName}|${team}`;
@@ -7278,6 +7339,119 @@ window._debugLeagueTimeData = timeData;
     Leagues.reconcileDayWithSchedule = function (divisionNames, dateKey, survivingLabelsByLeagueName) {
         return _rollbackToSurvivors(divisionNames, dateKey, survivingLabelsByLeagueName,
             { keepUnlabeled: true, logTag: '[RegularLeagues] 🔄 Schedule reconcile:' });
+    };
+
+    // =========================================================================
+    // ★★★ RENUMBER ONE LEAGUE GAME — EVERYWHERE ★★★
+    // =========================================================================
+    // A game's number lives in four places that all have to agree, and none of
+    // them derives from another at read time:
+    //   • history.gameLog[lg][date][].g       — what the Leagues results page is built from
+    //   • dailyData[date].leagueAssignments   — the grid's league tiles
+    //   • dailyData[date].scheduleAssignments — the per-bunk copy (_gameLabel / sport / matchup strings)
+    //   • window.leagueAssignments            — the same, live, for the loaded day
+    // Editing any one of them alone is what makes a number look "stuck" or
+    // reappear after a reload, so this moves all four together and re-pushes the
+    // results page.
+    //
+    // Swapping is explicit: if the target number is already used on that date,
+    // the two games trade numbers rather than collapsing into one.
+    // Returns { ok, swappedWith } — or { ok:false, reason } for the caller to show.
+    Leagues.renumberGame = function (leagueName, date, oldLabel, newLabel) {
+        try {
+            if (!leagueName || !date || !oldLabel || !newLabel) {
+                return { ok: false, reason: 'missing league, date, or game number' };
+            }
+            if (oldLabel === newLabel) return { ok: true, swappedWith: null, changed: 0 };
+
+            const history = loadLeagueHistory();
+            const recs = history.gameLog?.[leagueName]?.[date];
+            if (!Array.isArray(recs) || !recs.length) {
+                return { ok: false, reason: 'no games recorded for "' + leagueName + '" on ' + date };
+            }
+            const labels = new Set(recs.map(function (r) { return r && r.g; }).filter(Boolean));
+            if (!labels.has(oldLabel)) {
+                return { ok: false, reason: '"' + oldLabel + '" is not on ' + date };
+            }
+            // Target already taken → swap, so a number is never used twice.
+            const swap = labels.has(newLabel);
+            const map = {};
+            map[oldLabel] = newLabel;
+            if (swap) map[newLabel] = oldLabel;
+            const remap = function (l) { return (l && map[l]) ? map[l] : l; };
+
+            // (1) the game log — one pass off the originals so a swap is safe
+            let changed = 0;
+            history.gameLog[leagueName][date] = recs.map(function (r) {
+                if (r && r.g && map[r.g]) { changed++; return Object.assign({}, r, { g: map[r.g] }); }
+                return r;
+            });
+
+            // (2)+(3) the saved day: league tiles and the per-bunk copy
+            const all = (typeof window !== 'undefined' && window.loadAllDailyData) ? window.loadAllDailyData() : null;
+            const day = all && all[date];
+            if (day) {
+                Object.keys(day.leagueAssignments || {}).forEach(function (dv) {
+                    const m = day.leagueAssignments[dv] || {};
+                    Object.keys(m).forEach(function (k) {
+                        const g = m[k];
+                        if (g && g.leagueName === leagueName && g.gameLabel && map[g.gameLabel]) {
+                            g.gameLabel = map[g.gameLabel];
+                        }
+                    });
+                });
+                Object.keys(day.scheduleAssignments || {}).forEach(function (bk) {
+                    const arr = day.scheduleAssignments[bk];
+                    if (!Array.isArray(arr)) return;
+                    arr.forEach(function (e) {
+                        if (!e || e._leagueName !== leagueName) return;
+                        if (e._gameLabel && map[e._gameLabel]) e._gameLabel = map[e._gameLabel];
+                        // `sport` doubles as the tile's caption on league blocks.
+                        if (typeof e.sport === 'string' && map[e.sport]) e.sport = map[e.sport];
+                    });
+                });
+                try {
+                    localStorage.setItem('campDailyData_v1', JSON.stringify(all));
+                    window.ScheduleDB?.saveSchedule?.(date, all[date], { skipFilter: true });
+                } catch (e) { console.warn('[RegularLeagues] renumber: saving the day failed:', e); }
+            }
+
+            // (4) the live copy, when this is the day on screen
+            Object.keys((typeof window !== 'undefined' && window.leagueAssignments) || {}).forEach(function (dv) {
+                const m = window.leagueAssignments[dv] || {};
+                Object.keys(m).forEach(function (k) {
+                    const g = m[k];
+                    if (g && g.leagueName === leagueName && g.gameLabel && map[g.gameLabel]) {
+                        g.gameLabel = map[g.gameLabel];
+                    }
+                });
+            });
+
+            saveLeagueHistory(history);
+
+            // The results page is rebuilt from the log's labels.
+            try {
+                if (window.LeaguesAPI?.syncGamesFromGeneration) {
+                    const byLabel = {};
+                    _expandLogForResults(history.gameLog[leagueName][date]).forEach(function (m) {
+                        const lbl = m.g || 'Game';
+                        (byLabel[lbl] = byLabel[lbl] || []).push({ teamA: m.teamA, teamB: m.teamB, sport: m.sport });
+                    });
+                    const entries = Object.keys(byLabel).map(function (lbl) {
+                        const mm = String(lbl).match(/Game\s*(\d+)/i);
+                        return { gameLabel: lbl, gameNumber: mm ? parseInt(mm[1], 10) : null, matches: byLabel[lbl] };
+                    });
+                    window.LeaguesAPI.syncGamesFromGeneration(leagueName, date, entries);
+                }
+            } catch (e) { console.warn('[RegularLeagues] renumber results-sync skipped:', e); }
+
+            console.log('[RegularLeagues] 🔢 "' + leagueName + '" ' + date + ': ' + oldLabel + ' → ' + newLabel
+                + (swap ? ' (swapped with ' + newLabel + ')' : '') + ' — ' + changed + ' record(s), grid + results updated');
+            return { ok: true, swappedWith: swap ? oldLabel : null, changed: changed, remap: remap };
+        } catch (e) {
+            console.error('[RegularLeagues] renumberGame error:', e);
+            return { ok: false, reason: String((e && e.message) || e) };
+        }
     };
 
     Leagues.cleanupDateFromHistory = function(dateKey) {
