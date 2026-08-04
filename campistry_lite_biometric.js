@@ -29,12 +29,22 @@
    Anyone who can read localStorage can still read the persisted session, the
    same as any other browser app. It stops a person holding your unlocked phone
    from opening Campistry, which is the threat counselors actually have.
+
+   The sign-out trade-off, stated plainly: while biometrics is on, signing out
+   is LOCAL — the refresh token is kept on this device so a fingerprint can get
+   you back in, instead of forcing the password every time. That is how banking
+   apps behave, and it is the only way "sign in with your fingerprint" can mean
+   anything on the sign-in screen. It does mean a signed-out phone still holds a
+   usable token until biometrics is turned off, which revokes the session for
+   real and wipes it. Turning it off is therefore the "forget this device"
+   action, and the UI says so.
    ============================================================================ */
 (function () {
     'use strict';
 
     var CRED_KEY     = 'lite_bio_cred';      // credential id (base64)
     var USER_KEY     = 'lite_bio_user';      // whose credential it is
+    var SESS_KEY     = 'lite_bio_session';   // tokens to restore after sign-out
     var DECLINED_KEY = 'lite_bio_declined';  // don't nag after "Not now"
     var PASS_KEY     = 'lite_bio_pass';      // sessionStorage — one-shot handoff
     var PASS_TTL_MS  = 60000;                // generous for a slow cold boot
@@ -95,11 +105,33 @@
         return true;
     }
 
+    // Tokens kept ONLY while biometrics is on, so signing out can still leave a
+    // fingerprint route back in — which is what "sign in with your fingerprint"
+    // means to anyone who has used a banking app. Turning biometrics off wipes
+    // them again. See the header note on what this does and does not protect.
+    function saveSession(session) {
+        if (!session || !session.refresh_token || !isEnabled()) return;
+        ls(function () {
+            localStorage.setItem(SESS_KEY, JSON.stringify({
+                access_token: session.access_token || '',
+                refresh_token: session.refresh_token
+            }));
+        });
+    }
+    function storedSession() {
+        var raw = ls(function () { return localStorage.getItem(SESS_KEY); }, null);
+        if (!raw) return null;
+        try { var s = JSON.parse(raw); return s && s.refresh_token ? s : null; }
+        catch (e) { return null; }
+    }
+    function clearSession() { ls(function () { localStorage.removeItem(SESS_KEY); }); }
+
     function disable() {
         ls(function () {
             localStorage.removeItem(CRED_KEY);
             localStorage.removeItem(USER_KEY);
         });
+        clearSession();
         clearPass();
     }
 
@@ -182,6 +214,9 @@
         lastError: function () { return lastError; },
         isEnabled: isEnabled,
         isEnabledFor: isEnabledFor,
+        saveSession: saveSession,
+        storedSession: storedSession,
+        clearSession: clearSession,
         isDeclined: isDeclined,
         decline: decline,
         enroll: enroll,

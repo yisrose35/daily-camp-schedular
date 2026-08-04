@@ -98,6 +98,9 @@
         } catch (_) { /* fall through to the form */ }
 
         if (session) {
+            // Keep the stored copy fresh — refresh tokens rotate, and a stale
+            // one would fail exactly when the user needs it after signing out.
+            if (Bio) Bio.saveSession(session);
             // A live session still has to clear biometrics if it's enrolled for
             // this user — that check is the whole point, and the app shell
             // bounces back here until it passes. hasPass() only PEEKS: the app
@@ -115,7 +118,14 @@
         }
 
         localStorage.removeItem('campistry_auth_user_id');
-        // A stale pass can't unlock a session that no longer exists.
+        // No live session, but an enrolled device with tokens kept for exactly
+        // this case: signed out, and wanting back in with a fingerprint rather
+        // than a password. Show the same biometric screen and restore on pass.
+        if (Bio && Bio.isEnabled() && Bio.storedSession()) {
+            showPane('bio');
+            runBio();
+            return;
+        }
         if (Bio) Bio.clearPass();
         showPane('form');
         // Deliberately no autofocus: it opens the keyboard over half the screen
@@ -127,12 +137,42 @@
         const btn = $('liteBioGo');
         btn.disabled = true;
         const ok = await Bio.verify();
-        btn.disabled = false;
-        if (ok) { location.replace(HOME); return; }
-        const e = Bio.lastError() || '';
-        showErr(/NotAllowed/.test(e)
-            ? 'Not verified. Tap to try again, or use your password.'
-            : 'Could not verify' + (e ? ' (' + e.split(':')[0] + ')' : '') + '. Use your password.');
+        if (!ok) {
+            btn.disabled = false;
+            const e = Bio.lastError() || '';
+            showErr(/NotAllowed/.test(e)
+                ? 'Not verified. Tap to try again, or use your password.'
+                : 'Could not verify' + (e ? ' (' + e.split(':')[0] + ')' : '') + '. Use your password.');
+            return;
+        }
+
+        // Verified. If we're only gating a live session there's nothing to
+        // restore; if the user had signed out, put the session back first.
+        const sb = client();
+        let live = null;
+        try { live = (await sb.auth.getSession())?.data?.session || null; } catch (_) {}
+        if (!live) {
+            const stored = Bio.storedSession();
+            try {
+                const { data, error } = await sb.auth.setSession({
+                    access_token: stored.access_token || '',
+                    refresh_token: stored.refresh_token
+                });
+                if (error) throw error;
+                if (!data?.session) throw new Error('no session');
+                Bio.saveSession(data.session);          // rotated token
+                if (data.session.user?.id) localStorage.setItem('campistry_auth_user_id', data.session.user.id);
+            } catch (err) {
+                // The stored token is dead (revoked, expired, password changed).
+                // Drop it and fall back to the password rather than looping.
+                Bio.clearSession();
+                btn.disabled = false;
+                showErr('Your saved sign-in expired. Please use your password once.');
+                showPane('form');
+                return;
+            }
+        }
+        location.replace(HOME);
     }
 
     // Called after a successful password sign-in. Returns true if we're showing
@@ -214,6 +254,11 @@
                     : 'Could not set up ' + BIO_NAME + (e ? ' (' + e.split(':')[0] + ')' : '') + '.');
                 return;
             }
+            // Capture the session so the fingerprint has something to restore.
+            try {
+                const sb = client();
+                Bio.saveSession((await sb.auth.getSession())?.data?.session);
+            } catch (_) {}
             location.replace(HOME);
         });
 

@@ -173,6 +173,10 @@
                 return;
             }
 
+            // Refresh tokens rotate, so keep the biometric copy current — a
+            // stale one fails exactly when it's needed, after a sign-out.
+            if (Bio) Bio.saveSession(session);
+
             userEmail = (session.user?.email || '').toLowerCase();
             splashProgress(28);
 
@@ -1463,12 +1467,18 @@
             document.getElementById('liteMenu').style.display = 'none';
             if (!Bio) return;
             if (Bio.isEnabledFor(userId)) {
+                // This is the "forget this device" action: it drops the kept
+                // token, so the phone no longer holds a way back in.
                 Bio.disable();
                 toast(cap(bioName) + ' unlock off');
             } else {
                 const ok = await Bio.enroll(userEmail, userName, userId);
-                if (ok) toast(cap(bioName) + ' unlock on');
-                else {
+                if (ok) {
+                    // Capture the session now; without it the fingerprint has
+                    // nothing to restore after a sign-out.
+                    try { Bio.saveSession((await window.supabase.auth.getSession())?.data?.session); } catch (_) {}
+                    toast(cap(bioName) + ' unlock on');
+                } else {
                     const err = Bio.lastError() || '';
                     toast(/NotAllowed/.test(err) ? 'Cancelled — nothing changed'
                         : err ? 'Could not set up: ' + err.split(':')[0]
@@ -1494,11 +1504,16 @@
         });
 
         document.getElementById('liteSignOut').addEventListener('click', async () => {
-            try { await window.supabase.auth.signOut(); } catch (_) {}
-            // Keep the biometric enrolment: signing out and back in as yourself
-            // should not mean setting it up again. It's stored against your
-            // user id, so someone else signing in on this phone doesn't inherit
-            // it — isEnabledFor() sees the mismatch and drops it.
+            // With biometrics on, sign out LOCALLY so the kept refresh token
+            // stays valid and a fingerprint can get you back in — otherwise
+            // "sign in with your fingerprint" is a button that can never work.
+            // Turning biometrics off is the full revoke; see the note in
+            // campistry_lite_biometric.js.
+            const bioOn = !!window.CampistryLiteBio?.isEnabled();
+            try { await window.supabase.auth.signOut(bioOn ? { scope: 'local' } : undefined); } catch (_) {}
+            // The enrolment itself is kept and bound to your user id, so signing
+            // back in as yourself doesn't mean setting it up again, and someone
+            // else signing in here doesn't inherit it.
             try { window.CampistryLiteBio?.clearPass(); } catch (_) {}
             ['campistry_auth_user_id', 'campistry_camp_id', 'campistry_role',
              'campistry_user_id', 'campistry_is_team_member'].forEach(k => {
