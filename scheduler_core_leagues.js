@@ -4202,6 +4202,190 @@
     // UNIFIED ASSIGNMENT FUNCTION (Delegates based on priority mode)
     // =========================================================================
 
+    // =========================================================================
+    // ★ GLOBAL PERIOD ASSIGNMENT
+    // =========================================================================
+    // The engine assigns one league at a time in seniority order and LOCKS its
+    // fields before the next league is even considered. Every fairness rule in
+    // this file — sport caps, participation floor, sport reservation, cap
+    // release, repeat spacing, cycle rescue — exists to undo damage that
+    // ordering already did, and each one is overrun the moment an upstream
+    // filter empties a league's options. Live 2026-08-04 @2:55, 6th Grade held
+    // Football:0, had both rinks taken before its turn so its cap pointed at
+    // nothing, fell back to "take anything", and swallowed the football that
+    // had been reserved for 3rd Grade one step earlier. 3rd Grade then had one
+    // field left: a basketball court. Same court, five periods out of six.
+    //
+    // So decide the whole period AT ONCE instead: every matchup in the camp
+    // against every open field, scored and matched in one pass. Seniority stops
+    // deciding WHICH SPORT a grade gets and goes back to deciding only which
+    // FIELD of a sport it gets — the user's rule, stated exactly:
+    //   "going oldest to youngest is for the fields, not for the sports."
+    //
+    // Killswitch / opt-in: window.__leagueGlobalAssign = true.
+    // =========================================================================
+
+    // Season + today play counts for one team, by sport.
+    function _gaCounts(leagueName, team, history, dayId) {
+        const c = {};
+        try {
+            getTeamSportHistoryByDate(leagueName, team, history, dayId)
+                .forEach(function (s) { c[s] = (c[s] || 0) + 1; });
+            const today = (history.gameLog && history.gameLog[leagueName] && history.gameLog[leagueName][dayId]) || [];
+            today.forEach(function (e) {
+                if (e && e.sport && (e.t1 === team || e.t2 === team)) c[e.sport] = (c[e.sport] || 0) + 1;
+            });
+        } catch (_) {}
+        return c;
+    }
+
+    function _gaPlanPeriod(here, ctx) {
+        const history = ctx.history, dayId = ctx.dayId;
+        // ---- 1. every open field in the period, before anybody locks ---------
+        const allSports = new Set();
+        here.forEach(l => (l.sports || ['General Sport']).forEach(s => allSports.add(s)));
+        const pool = buildAvailableFieldSportPool([...allSports], ctx.context,
+            ctx.divisionsAtTime, ctx.timeKey, ctx.slots, ctx.endTime);
+        if (!pool.length) return null;
+
+        // ---- 2. every matchup in the camp this period ------------------------
+        const items = [];
+        here.forEach(l => {
+            let active = (l.teams || []).slice();
+            try {
+                if (l.chinuch && l.chinuch.enabled && window.chinuchSchedule && window.chinuchSchedule[l.name]) {
+                    const out = Object.entries(window.chinuchSchedule[l.name])
+                        .filter(function (e) { return Number(e[1]) === Number(ctx.timeKey); })
+                        .map(function (e) { return e[0]; });
+                    if (out.length) active = active.filter(function (t) { return out.indexOf(t) < 0; });
+                }
+            } catch (_) {}
+            if (active.length < 2) return;
+            const base = calculateStartingGameNumber(l.name, dayId, history);
+            const gameNumber = base + (ctx.preserved[l.name] || 0) + (ctx.counters[l.name] || 0) + 1;
+            const rrAll = generateRoundRobinSchedule(active);
+            const rr = rrAll[(gameNumber - 1) % rrAll.length] || [];
+            const lPool = pool.filter(o => (l.sports || []).indexOf(o.sport) >= 0);
+            let ms = chooseDailyMatchups(active, lPool, l.name, history, rr, dayId,
+                l.schedulingPriority || 'sport_variety');
+            ms = _formRoundRobinGroup(ms, active, l, l.name, history, dayId);
+            items.push({ league: l, matchups: ms, active: active });
+        });
+        if (!items.length) return null;
+
+        // ---- 3. score every legal (matchup, field) pair ----------------------
+        // Priority, top down — this ordering IS the product rule:
+        //   1. never the same sport two periods running   (dominant penalty)
+        //   2. how far behind these teams are on the sport
+        //   3. not a repeat at all today
+        //   4. teams that have sat out most get seated first
+        //   5. better field to the older grade — WITHIN a sport only
+        const senIdx = {};
+        here.forEach((l, i) => { senIdx[l.name] = i; });      // here is senior→junior
+        const fq = _buildFieldQualityRankMap();
+        const cand = [];
+        items.forEach((it, li) => {
+            const L = it.league;
+            const limits = L.sportDailyLimits || {};
+            it.matchups.forEach((m, mi) => {
+                const members = _isRRGroup(m) ? m.slice() : [m[0], m[1]].filter(Boolean);
+                const counts = members.map(t => _gaCounts(L.name, t, history, dayId));
+                const ranks = members.map(t => _lastSportRankToday(L.name, t, history, dayId));
+                const justPlayed = ranks.map(function (r) {
+                    let top = -1, sp = null;
+                    Object.keys(r).forEach(function (s) { if (r[s] > top) { top = r[s]; sp = s; } });
+                    return sp;
+                });
+                const led = makeByeLedger(L.name, it.active, history, dayId);
+                const satOut = members.reduce((a, t) => a + led.count(t), 0);
+
+                pool.forEach((o, fi) => {
+                    if ((L.sports || []).indexOf(o.sport) < 0) return;          // league doesn't play it
+                    // per-team daily limit
+                    const cap = limits[o.sport];
+                    if (cap != null && members.some((t, k) => (counts[k][o.sport] || 0) >= cap
+                        && (_getTeamSportsToday(L.name, t, history, dayId) || new Set()).has(o.sport))) return;
+
+                    let score = 0;
+                    // 1. back-to-back — dominant
+                    const b2b = justPlayed.filter(s => s === o.sport).length;
+                    score -= b2b * 6000;
+                    // 2. need: how far behind on this sport, per member
+                    let need = 0;
+                    counts.forEach(c => {
+                        let most = 0;
+                        (L.sports || []).forEach(s => { if ((c[s] || 0) > most) most = c[s] || 0; });
+                        need += Math.max(0, most - (c[o.sport] || 0));
+                    });
+                    score += (need / Math.max(1, members.length)) * 1200;
+                    // 3. any repeat today at all
+                    const rep = members.filter((t, k) => (ranks[k][o.sport] != null)).length;
+                    score -= rep * 700;
+                    // 4. bye fairness — seat the teams that have sat out most
+                    score += satOut * 250;
+                    // 5. field quality to seniority, WITHIN a sport only
+                    score += _fieldQualityBonus(fq, o.field) * (here.length - senIdx[L.name]) / here.length;
+
+                    cand.push({ li: li, mi: mi, fi: fi, score: score, sport: o.sport, field: o.field });
+                });
+            });
+        });
+        if (!cand.length) return null;
+
+        // ---- 4. match: greedy on score, then 2-opt to clear inversions -------
+        cand.sort((a, b) => b.score - a.score);
+        const takenField = {}, takenMatch = {}, chosen = [];
+        cand.forEach(c => {
+            const mk = c.li + ':' + c.mi;
+            if (takenField[c.fi] || takenMatch[mk]) return;
+            takenField[c.fi] = true; takenMatch[mk] = true;
+            chosen.push(c);
+        });
+        const scoreOf = (li, mi, fi) => {
+            const hit = cand.find(c => c.li === li && c.mi === mi && c.fi === fi);
+            return hit ? hit.score : null;
+        };
+        for (let pass = 0; pass < 4; pass++) {
+            let moved = false;
+            for (let a = 0; a < chosen.length; a++) {
+                for (let b = a + 1; b < chosen.length; b++) {
+                    const A = chosen[a], B = chosen[b];
+                    const sA = scoreOf(A.li, A.mi, B.fi), sB = scoreOf(B.li, B.mi, A.fi);
+                    if (sA == null || sB == null) continue;
+                    if (sA + sB > A.score + B.score + 1e-9) {
+                        const fa = A.fi;
+                        A.fi = B.fi; A.score = sA;
+                        B.fi = fa;   B.score = sB;
+                        const oa = pool[A.fi], ob = pool[B.fi];
+                        A.sport = oa.sport; A.field = oa.field;
+                        B.sport = ob.sport; B.field = ob.field;
+                        moved = true;
+                    }
+                }
+            }
+            if (!moved) break;
+        }
+
+        // ---- 5. hand back per-league assignments in the existing shape -------
+        const out = {};
+        items.forEach((it, li) => { out[it.league.name] = { matchups: it.matchups, assignments: [] }; });
+        chosen.forEach(c => {
+            const it = items[c.li];
+            const m = it.matchups[c.mi];
+            const grp = _isRRGroup(m) ? m.slice() : null;
+            out[it.league.name].assignments.push({
+                team1: grp ? grp[0] : m[0], team2: grp ? grp[1] : m[1],
+                teams: grp || undefined, group: grp || undefined,
+                field: c.field, sport: c.sport
+            });
+        });
+        const placed = chosen.length, wanted = items.reduce((a, i) => a + i.matchups.length, 0);
+        console.log('   🌐 [GlobalAssign] one decision for the whole period — '
+            + wanted + ' matchup(s) across ' + items.length + ' league(s), '
+            + pool.length + ' field/sport option(s), ' + placed + ' seated');
+        return out;
+    }
+
     function assignMatchupsToFieldsAndSports(matchups, availablePool, leagueName, history, slots, schedulingPriority, leagueRules, sportCaps, dayId) {
         const mode = schedulingPriority || 'sport_variety';
 
@@ -5990,6 +6174,30 @@
                 }
             })();
 
+            // ★ GLOBAL PERIOD ASSIGNMENT (opt-in). Decide every matchup in the
+            //   camp against every field ONCE, before any league locks anything.
+            //   Falls back to the per-league path on any problem, and leaves
+            //   playoff / off-campus leagues on the old path entirely.
+            let _globalPlan = null;
+            if (window.__leagueGlobalAssign === true) {
+                try {
+                    const _gaHere = applicableLeagues.filter(l =>
+                        !(offCampusScheduled[l.name] && offCampusScheduled[l.name].handled)
+                        && !(window.PlayoffMode && window.PlayoffMode.isLeagueInPlayoff && window.PlayoffMode.isLeagueInPlayoff(l)));
+                    if (_gaHere.length) {
+                        _globalPlan = _gaPlanPeriod(_gaHere, {
+                            context: context, divisionsAtTime: divisionsAtTime, timeKey: timeKey,
+                            slots: slots, endTime: sampleBlock && sampleBlock.endTime,
+                            history: history, dayId: dayId,
+                            counters: leagueGameCounters, preserved: _preservedTodayCounts
+                        });
+                    }
+                } catch (_gaErr) {
+                    console.warn('[GlobalAssign] planner failed, falling back to per-league:', _gaErr);
+                    _globalPlan = null;
+                }
+            }
+
             for (const league of applicableLeagues) {
                 if (processedLeagues.has(league.name)) continue;
                 processedLeagues.add(league.name);
@@ -6388,6 +6596,10 @@
                     //   benched into a group that shares one field, if the
                     //   league asked for that instead of a bye.
                     matchups = _formRoundRobinGroup(matchups, activeTeams, league, league.name, history, dayId);
+                    // ★ The global planner paired this league already; take its
+                    //   matchups verbatim so the bye record and the assignment
+                    //   below can never disagree about who was playing.
+                    if (_globalPlan && _globalPlan[league.name]) matchups = _globalPlan[league.name].matchups;
                 }
 
                console.log(`   Game #${gameNumber} (Today's Game: ${todayGameIndex + 1})`);
@@ -6596,6 +6808,12 @@
                         _poolUsed.add(pick.field);
                         assignments.push({ team1: teamA, team2: teamB, field: pick.field, sport: pick.sport });
                     });
+                } else if (_globalPlan && _globalPlan[league.name]) {
+                    // ★ Already decided for the whole period. No caps, no floor,
+                    //   no reservation, no seniority scramble — the field this
+                    //   league gets was chosen against every other league's needs
+                    //   at the same time.
+                    assignments = _globalPlan[league.name].assignments;
                 } else {
                     if (!indoorCountsByLeague[league.name]) indoorCountsByLeague[league.name] = {};
                     assignments = assignMatchupsToFieldsAndSports(
