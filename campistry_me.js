@@ -2346,36 +2346,147 @@ function _clearBunkCount(bunkName){delete bunkManualCounts[bunkName];save();rend
 function openBunkStaffModal(bunkName){
     _renderBunkStaffModalBody(bunkName);
 }
+// A staff record is {name, role, email, phone, smsOptIn}. Email is the join key
+// to a Campistry login (camp_users.email) — it is what lets Lite show a
+// counselor their own bunk, and what league captains and pickup notifications
+// are addressed to. Records without an email still work as a paper roster, but
+// nothing can be sent to them, so the UI says so rather than failing silently.
+var STAFF_ROLES=['Counselor','Co-Counselor','Junior Counselor','Head Counselor','Division Head','Waiter','Learning Specialist'];
+function staffKey(s){ return String((s&&s.email)||'').trim().toLowerCase(); }
 function _renderBunkStaffModalBody(bunkName){
     var staff=bunkStaff[bunkName]||[];
     var listHtml=staff.length
         ?staff.map(function(s,i){
+            var reach=staffKey(s)
+                ?'<span style="font-size:.66rem;font-weight:700;color:var(--ok)">Can sign in</span>'
+                :'<span style="font-size:.66rem;font-weight:700;color:var(--s400)" title="Without an email this person cannot sign in to Campistry Lite or receive notifications">No login</span>';
             return '<div style="display:flex;align-items:center;gap:10px;padding:8px 0;border-bottom:1px solid var(--s100)">'
-                +'<div style="flex:1;min-width:0"><div style="font-weight:600;font-size:.85rem">'+esc(s.name)+'</div><div style="font-size:.72rem;color:var(--s400)">'+esc(s.role||'Staff')+'</div></div>'
+                +'<div style="flex:1;min-width:0">'
+                  +'<div style="font-weight:600;font-size:.85rem">'+esc(s.name)+'</div>'
+                  +'<div style="font-size:.72rem;color:var(--s400)">'+esc(s.role||'Staff')
+                    +(s.email?' · '+esc(s.email):'')+(s.phone?' · '+esc(s.phone):'')+'</div>'
+                  +'<div style="margin-top:2px">'+reach+(s.smsOptIn?' <span style="font-size:.66rem;font-weight:700;color:var(--ok)">SMS ok</span>':'')+'</div>'
+                +'</div>'
+                +'<button class="me-btn me-btn--ghost me-btn--sm" onclick="CampistryMe.editBunkStaff(\''+je(bunkName)+'\','+i+')">Edit</button>'
                 +'<button class="me-btn me-btn--ghost me-btn--sm" onclick="CampistryMe.removeBunkStaff(\''+je(bunkName)+'\','+i+')">Remove</button>'
                 +'</div>';
         }).join('')
         :'<p style="font-size:.8rem;color:var(--s400);margin:0 0 4px">No staff assigned yet.</p>';
     var body=listHtml
-        +'<div style="display:flex;gap:8px;margin-top:14px;align-items:flex-start">'
-        +'<input type="text" id="bsName" placeholder="Name" class="fi" style="flex:1.3" onkeydown="if(event.key===\'Enter\'){event.preventDefault();CampistryMe.addBunkStaff(\''+je(bunkName)+'\')}">'
-        +'<input type="text" id="bsRole" placeholder="Role" class="fi" list="bsRoleOpts" style="flex:1" onkeydown="if(event.key===\'Enter\'){event.preventDefault();CampistryMe.addBunkStaff(\''+je(bunkName)+'\')}">'
-        +'<button class="me-btn me-btn--pri me-btn--sm" onclick="CampistryMe.addBunkStaff(\''+je(bunkName)+'\')">Add</button>'
+        +'<div id="bsForm" style="margin-top:14px;padding-top:12px;border-top:1px solid var(--s100)">'
+        +'<input type="hidden" id="bsIdx" value="-1">'
+        +'<div style="display:flex;gap:8px;margin-bottom:8px">'
+        +'<input type="text" id="bsName" placeholder="Name" class="fi" style="flex:1.3">'
+        +'<input type="text" id="bsRole" placeholder="Role" class="fi" list="bsRoleOpts" style="flex:1">'
         +'</div>'
-        +'<datalist id="bsRoleOpts"><option value="Counselor"><option value="Co-Counselor"><option value="Junior Counselor"><option value="Head Counselor"><option value="Waiter"><option value="Learning Specialist"></datalist>';
+        +'<div style="display:flex;gap:8px;margin-bottom:8px">'
+        +'<input type="email" id="bsEmail" placeholder="Email (for their login)" class="fi" style="flex:1.3" autocapitalize="none" spellcheck="false">'
+        +'<input type="tel" id="bsPhone" placeholder="Mobile (optional)" class="fi" style="flex:1">'
+        +'</div>'
+        +'<label style="display:flex;align-items:center;gap:8px;font-size:.76rem;color:var(--s500);margin-bottom:10px">'
+        +'<input type="checkbox" id="bsSms"> Okay to text this person</label>'
+        +'<div style="display:flex;gap:8px;justify-content:flex-end">'
+        +'<button class="me-btn me-btn--ghost me-btn--sm" id="bsCancel" style="display:none" onclick="CampistryMe._resetBunkStaffForm(\''+je(bunkName)+'\')">Cancel</button>'
+        +'<button class="me-btn me-btn--pri me-btn--sm" id="bsSave" onclick="CampistryMe.addBunkStaff(\''+je(bunkName)+'\')">Add</button>'
+        +'</div>'
+        +'<p style="font-size:.72rem;color:var(--s400);margin:10px 0 0">The email is how this person signs in to Campistry Lite and how the office reaches them. Without one they still appear on the roster, but they cannot be sent anything.</p>'
+        +'</div>'
+        +'<datalist id="bsRoleOpts">'+STAFF_ROLES.map(function(r){return '<option value="'+esc(r)+'">'}).join('')+'</datalist>';
     showModal('Staff — '+bunkName,body);
 }
+function _resetBunkStaffForm(bunkName){ _renderBunkStaffModalBody(bunkName); }
+function editBunkStaff(bunkName,idx){
+    var s=(bunkStaff[bunkName]||[])[idx]; if(!s)return;
+    _renderBunkStaffModalBody(bunkName);
+    setTimeout(function(){
+        var g=function(id){return document.getElementById(id)};
+        if(g('bsIdx'))g('bsIdx').value=String(idx);
+        if(g('bsName'))g('bsName').value=s.name||'';
+        if(g('bsRole'))g('bsRole').value=s.role||'';
+        if(g('bsEmail'))g('bsEmail').value=s.email||'';
+        if(g('bsPhone'))g('bsPhone').value=s.phone||'';
+        if(g('bsSms'))g('bsSms').checked=!!s.smsOptIn;
+        if(g('bsSave'))g('bsSave').textContent='Save';
+        if(g('bsCancel'))g('bsCancel').style.display='';
+        if(g('bsName'))g('bsName').focus();
+    },40);
+}
 function addBunkStaff(bunkName){
-    var nameEl=document.getElementById('bsName'),roleEl=document.getElementById('bsRole');
-    var name=((nameEl&&nameEl.value)||'').trim(), role=((roleEl&&roleEl.value)||'').trim();
+    var g=function(id){return document.getElementById(id)};
+    var name=((g('bsName')||{}).value||'').trim(),
+        role=((g('bsRole')||{}).value||'').trim(),
+        email=((g('bsEmail')||{}).value||'').trim().toLowerCase(),
+        phone=((g('bsPhone')||{}).value||'').trim(),
+        sms=!!((g('bsSms')||{}).checked),
+        idx=parseInt(((g('bsIdx')||{}).value||'-1'),10);
     if(!name){toast('Enter a name','error');return}
+    if(email&&!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(email)){toast('That email doesn’t look right','error');return}
     if(!bunkStaff[bunkName])bunkStaff[bunkName]=[];
-    bunkStaff[bunkName].push({name:name,role:role||'Staff'});
+    // One login per person per bunk: re-adding the same email edits that record
+    // rather than creating a duplicate the notifications would then double-send.
+    if(email){
+        var clash=bunkStaff[bunkName].findIndex(function(s,i){return i!==idx&&staffKey(s)===email});
+        if(clash>=0){toast('Someone with that email is already on this bunk','error');return}
+    }
+    var rec={name:name,role:role||'Staff',email:email,phone:phone,smsOptIn:sms};
+    if(idx>=0&&bunkStaff[bunkName][idx])bunkStaff[bunkName][idx]=rec;
+    else bunkStaff[bunkName].push(rec);
     save();
     _syncInvitesForBunk(bunkName);
     renderBB();
     _renderBunkStaffModalBody(bunkName);
-    toast('Added '+name);
+    toast((idx>=0?'Saved ':'Added ')+name);
+}
+// ── Staff directory lookups ───────────────────────────────────────────
+// Everything downstream (league captains, Lite's counselor view, pickup
+// notifications) needs the same answer to "who works with this bunk", so it
+// gets asked here rather than each app re-deriving it from bunkStaff.
+function getStaffForBunk(bunkName){
+    return (bunkStaff[bunkName]||[]).map(function(s){
+        return {name:s.name,role:s.role||'Staff',email:staffKey(s),phone:s.phone||'',
+                smsOptIn:!!s.smsOptIn,bunk:bunkName};
+    });
+}
+function getStaffForBunks(bunks){
+    var seen={},out=[];
+    (bunks||[]).forEach(function(b){
+        getStaffForBunk(b).forEach(function(s){
+            // Someone on two bunks is one person. Key on their login where they
+            // have one; fall back to name+role so paper-only staff still merge.
+            var k=s.email||(s.name+'|'+s.role).toLowerCase();
+            if(seen[k]){ if(seen[k].bunks.indexOf(b)<0)seen[k].bunks.push(b); return; }
+            seen[k]=Object.assign({},s,{bunks:[b]});
+            out.push(seen[k]);
+        });
+    });
+    return out;
+}
+// Divisions in Me are grades inside a parent division; a league's "divisions"
+// may name either, so accept both and fall back to app1's flat division map.
+function getBunksForDivision(divName){
+    var out=[];
+    Object.keys(structure||{}).forEach(function(parent){
+        var s=structure[parent]||{},grades=s.grades||{};
+        if(parent===divName){
+            Object.keys(grades).forEach(function(g){out=out.concat(grades[g].bunks||[])});
+            return;
+        }
+        if(grades[divName])out=out.concat(grades[divName].bunks||[]);
+    });
+    if(!out.length){
+        try{
+            var d=(window.divisions||window.getGlobalDivisions&&window.getGlobalDivisions()||{})[divName];
+            if(d&&d.bunks)out=d.bunks.slice();
+        }catch(e){}
+    }
+    return out.filter(function(b,i,a){return b&&a.indexOf(b)===i});
+}
+function getStaffForDivision(divName){ return getStaffForBunks(getBunksForDivision(divName)); }
+function getAllStaff(){ return getStaffForBunks(Object.keys(bunkStaff||{})); }
+function findStaffByEmail(email){
+    var k=String(email||'').trim().toLowerCase();
+    if(!k)return null;
+    return getAllStaff().filter(function(s){return s.email===k})[0]||null;
 }
 function removeBunkStaff(bunkName,idx){
     if(!bunkStaff[bunkName]||!bunkStaff[bunkName][idx])return;
@@ -7694,6 +7805,14 @@ window.CampistryMe={
     openCsv:function(){openModal('csvModal')},exportCsv:exportCsv,downloadTemplate:downloadTemplate,
     bbDrop:bbDrop,autoAssign:autoAssign,clearBunks:clearBunks,setBunkCount:setBunkCount,openBunkCountModal:openBunkCountModal,_clearBunkCount:_clearBunkCount,
     openBunkStaffModal:openBunkStaffModal,addBunkStaff:addBunkStaff,removeBunkStaff:removeBunkStaff,
+    editBunkStaff:editBunkStaff,_resetBunkStaffForm:_resetBunkStaffForm,
+    // Staff directory — the single source of truth for who works with which
+    // bunk. Flow (league captains), Lite (a counselor's own bunk) and the
+    // office (pickup notifications) all resolve people through these, so the
+    // answer can't drift between apps.
+    getStaffForBunk:getStaffForBunk,getStaffForBunks:getStaffForBunks,
+    getStaffForDivision:getStaffForDivision,getBunksForDivision:getBunksForDivision,
+    findStaffByEmail:findStaffByEmail,getAllStaff:getAllStaff,
     addSession:addSession,deleteSession:deleteSession,editSession:editSession,toggleSessionReg:toggleSessionReg,copyRegLink:copyRegLink,previewBlankForm:previewBlankForm,addDocRow:addDocRow,setBunkCapacityPrompt:setBunkCapacityPrompt,addApplication:addApplication,autoPromoteWaitlist:autoPromoteWaitlist,
     viewApplication:viewApplication,updateEnrollStatus:updateEnrollStatus,bulkEnrollStatus:bulkEnrollStatus,toggleAllEnroll:toggleAllEnroll,_updateRegBulkBar:_updateRegBulkBar,enrollCamper:enrollCamper,generateParentInvite:generateParentInvite,setRegFilter:setRegFilter,rescindEnrollment:rescindEnrollment,syncAllParentPortals:syncAllParentPortals,auditParentEmails:auditParentEmails,
     saveAppNote:saveAppNote,printApplication:printApplication,
