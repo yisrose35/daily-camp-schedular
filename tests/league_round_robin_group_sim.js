@@ -28,6 +28,8 @@
 //   TEST 9 — TILE LINES are marked, so a history rebuild from a saved
 //            schedule can never turn a group back into three matchups.
 //   TEST 10 — KILLSWITCH: window.__leagueRoundRobinGroups=false → back to a bye.
+//   TEST 11 — FIELD SHORTAGE (LG-14b): with fewer fields than entries, a group
+//             is seated whole or benched whole — never half-placed.
 // =============================================================================
 
 'use strict';
@@ -295,5 +297,44 @@ const matchupCount = (h, a, b) => h.matchupHistory[LG + ':' + [a, b].sort().join
     delete global.window.__leagueRoundRobinGroups;
     console.log('✅ TEST 10 — killswitch restores the old behavior');
 }
+
+// =============================================================================
+// TEST 11 — a group under a FIELD SHORTAGE (LG-14b interaction).
+// The field-shortage bye rotation ranks entries by how much play their teams
+// have lost, and a group holds 3+ teams on one field — so stranding it benches
+// all of them. 5 teams with size 3 gives a group of 3 plus a pair, and only ONE
+// field to seat them: whichever is seated must be seated WHOLE. A group that
+// half-lands (some members playing, some benched) is the failure this guards.
+// =============================================================================
+for (let iter = 1; iter <= 5; iter++) {
+    const r = run([{ name: 'Court 1', activities: ['Basketball'] }], 1,
+        ['T1', 'T2', 'T3', 'T4', 'T5'], { enabled: true, size: 3 });
+    const games = gameLines(r);
+    const rrGames = games.filter(l => Leagues._isRoundRobinLine(l));
+    const playing = new Set();
+    games.forEach(l => { const p = l.split(' @ ')[0].split(' vs '); playing.add(p[0]); playing.add(p[1]); });
+
+    if (rrGames.length) {
+        // the group was seated → all 3 of its games, on the one field
+        assert.strictEqual(rrGames.length, 3,
+            `TEST11[${iter}]: a seated group plays all 3 of its games, got ${JSON.stringify(rrGames)}`);
+        assert.strictEqual(new Set(rrGames.map(fieldOf)).size, 1,
+            `TEST11[${iter}]: the group is on one field`);
+        assert.strictEqual(playing.size, 3,
+            `TEST11[${iter}]: exactly the group's 3 teams play, got ${[...playing]}`);
+    } else {
+        // the pair was seated → one ordinary game, and no partial group
+        assert.strictEqual(games.length, 1,
+            `TEST11[${iter}]: one ordinary game when the pair wins the field, got ${JSON.stringify(games)}`);
+        assert.strictEqual(playing.size, 2, `TEST11[${iter}]: exactly 2 teams play, got ${[...playing]}`);
+    }
+    // whoever sat out, the sport ledger must match who actually played
+    ['T1', 'T2', 'T3', 'T4', 'T5'].forEach(t => {
+        const n = (r.history.teamSports[LG + '|' + t] || []).length;
+        assert.strictEqual(n, playing.has(t) ? 1 : 0,
+            `TEST11[${iter}]: ${t} recorded ${n} sport(s) but ${playing.has(t) ? 'played' : 'sat out'}`);
+    });
+}
+console.log('✅ TEST 11 — under a field shortage a group is seated whole or not at all');
 
 console.log('\n🎉 league_round_robin_group_sim: ALL TESTS PASSED');
