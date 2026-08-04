@@ -5602,6 +5602,10 @@
                     // senior leagues off the scarce field rather than forcing anyone
                     // into a bye. One reservation per league per period.
                     // Killswitch: window.__leagueSportReservation = false.
+                    //
+                    // ★ league name → the sport reserved for it. The participation
+                    //   floor below MUST NOT hand this back out (see the note there).
+                    const _reserved = {};
                     if (window.__leagueSportReservation !== false) {
                         const _perTeamNeed = (l, sp) => _sportNeed(l, sp) / ((l.teams || []).length || 1);
                         // Who is owed what: a sport that has a field, that this
@@ -5632,7 +5636,6 @@
                         // all reads need 0 everywhere and waits its turn — this is
                         // for the league that plays plenty and is missing a sport.
                         _owed.sort((a, b) => b.need - a.need);
-                        const _reserved = {};
                         _owed.forEach(({ l, sp, need }) => {
                             if (_reserved[l.name]) return;
                             if ((_caps[l.name][sp] || 0) > 0) return;        // an earlier pass seated it
@@ -5693,6 +5696,18 @@
                                 for (const d of _here) {
                                     if (d === l || !(d.sports || []).includes(sp)) continue;
                                     if ((_caps[d.name][sp] || 0) <= 0) continue;
+                                    // ★ NEVER take back a cap the reservation above just
+                                    //   held for this league. A small league is exactly
+                                    //   the shape that reads as "surplus" here — 3 teams
+                                    //   want 1 game, so its 2 caps look like one spare —
+                                    //   and the floor confiscated the reserved sport in
+                                    //   the very next step. Observed live 2026-08-04:
+                                    //     🎁 1 Hockey held for "3rd Grade" (3.0 behind)
+                                    //     ⚖️ 1 Hockey cap 3rd Grade → 6th Grade
+                                    //   three periods running, which is why the
+                                    //   reservation fired all day and delivered nothing.
+                                    //   The floor can still take the league's OTHER caps.
+                                    if (_reserved[d.name] === sp) continue;
                                     const _surplus = _capTotal(d) - _games[d.name];
                                     if (_surplus <= 0) continue;
                                     if (!best || _lcap < best.lcap || (_lcap === best.lcap && _surplus > best.surplus)) {

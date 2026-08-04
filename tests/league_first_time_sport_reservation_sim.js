@@ -147,7 +147,7 @@ const TODAY = '2026-07-14';
 // Nine days of history. Every team of both leagues plays plenty of basketball;
 // only the SENIOR teams ever see the rink. So JUNIOR's per-team hockey deficit
 // is the largest in the camp, and its summed weight is still the smallest.
-function buildHistory(juniorHockeyDays, youngestHockeyDays) {
+function buildHistory(juniorHockeyDays, youngestHockeyDays, juniorFootballDays) {
     const gameLog = { [SENIOR]: {}, [JUNIOR]: {}, [YOUNGEST]: {} };
     PAST.forEach((d, i) => {
         gameLog[SENIOR][d] = [];
@@ -167,7 +167,12 @@ function buildHistory(juniorHockeyDays, youngestHockeyDays) {
                 g: 'Game ' + (i + 1),
             });
         }
-        const jSport = (juniorHockeyDays || []).indexOf(d) >= 0 ? 'Hockey' : 'Basketball';
+        // Football has no field today, so it never enters the pool — it exists
+        // only to raise this league's BASKETBALL deficit, so the apportionment
+        // hands it a basketball cap alongside the reserved one. Two caps against
+        // one wanted game is what makes the floor see surplus.
+        const jSport = (juniorHockeyDays || []).indexOf(d) >= 0 ? 'Hockey'
+            : ((juniorFootballDays || []).indexOf(d) >= 0 ? 'Football' : 'Basketball');
         for (let k = 0; k < JUNIOR_TEAMS.length; k += 2) {
             gameLog[JUNIOR][d].push({
                 t1: JUNIOR_TEAMS[k], t2: JUNIOR_TEAMS[k + 1],
@@ -186,7 +191,7 @@ function buildHistory(juniorHockeyDays, youngestHockeyDays) {
     };
 }
 
-function makeContext() {
+function makeContext(juniorTeams) {
     return {
         schedulableSlotBlocks: [
             { type: 'league', event: 'League Time', divName: 'Seniors', leagueName: SENIOR, startTime: 780, endTime: 840, slots: [0] },
@@ -195,7 +200,7 @@ function makeContext() {
         ],
         masterLeagues: {
             [SENIOR]: { name: SENIOR, enabled: true, divisions: ['Seniors'], teams: SENIOR_TEAMS.slice(), sports: ['Basketball', 'Hockey'], schedulingPriority: 'sport_variety' },
-            [JUNIOR]: { name: JUNIOR, enabled: true, divisions: ['Juniors'], teams: JUNIOR_TEAMS.slice(), sports: ['Basketball', 'Hockey'], schedulingPriority: 'sport_variety' },
+            [JUNIOR]: { name: JUNIOR, enabled: true, divisions: ['Juniors'], teams: (juniorTeams || JUNIOR_TEAMS).slice(), sports: ['Basketball', 'Hockey'], schedulingPriority: 'sport_variety' },
             [YOUNGEST]: { name: YOUNGEST, enabled: true, divisions: ['Youngest'], teams: YOUNGEST_TEAMS.slice(), sports: ['Basketball', 'Hockey'], schedulingPriority: 'sport_variety' },
         },
         disabledLeagues: [],
@@ -210,7 +215,7 @@ function makeContext() {
 function run(opts) {
     opts = opts || {};
     global.localStorage._m = {};
-    settings.leagueHistory = buildHistory(opts.juniorHockeyDays, opts.youngestHockeyDays);
+    settings.leagueHistory = buildHistory(opts.juniorHockeyDays, opts.youngestHockeyDays, opts.juniorFootballDays);
     global.window.currentScheduleDate = TODAY;
     global.window._activeGenDate = TODAY;
     global.window.divisionTimes = { Seniors: [{ startMin: 780, endMin: 840 }], Juniors: [{ startMin: 780, endMin: 840 }], Youngest: [{ startMin: 780, endMin: 840 }] };
@@ -218,7 +223,7 @@ function run(opts) {
     if (opts.reservationOff) global.window.__leagueSportReservation = false;
 
     const lines = [];
-    const ctx = makeContext();
+    const ctx = makeContext(opts.juniorTeams);
     console.log = (...a) => { lines.push(a.join(' ')); };
     console.warn = () => {};
     try { Leagues.processRegularLeagues(ctx); }
@@ -241,6 +246,7 @@ function run(opts) {
     return {
         caps: caps,
         reservations: lines.filter(l => l.indexOf('Sport reservation') >= 0),
+        floors: lines.filter(l => l.indexOf('Participation floor') >= 0),
         sports: sports,
         assigned: lines.filter(l => l.indexOf('[SportVariety]') >= 0),
     };
@@ -370,6 +376,37 @@ function run(opts) {
         'released a cap that later leagues still need: ' + JSON.stringify(on.caps));
     console.log('✅ TEST 7 — last league\'s caps released ' + JSON.stringify(on.caps[YOUNGEST])
         + ', restored by killswitch ' + JSON.stringify(off.caps[YOUNGEST]));
+}
+
+// ---- TEST 8: the floor must not confiscate the reserved cap ----------------
+// A SMALL league is exactly the shape the participation floor reads as having
+// surplus: 3 teams want 1 game, so its two caps look like one spare — and the
+// floor promptly donated the reserved sport to somebody else. Live 2026-08-04,
+// three periods running:
+//   🎁 1 Hockey held for "3rd Grade" (3.0 game(s)/team behind) — from "5th Grade"
+//   ⚖️ 1 Hockey cap 3rd Grade → 6th Grade (seat its games)
+// The reservation fired all day and delivered one game out of six.
+{
+    const SMALL = ['J1', 'J2', 'J3'];   // 3 teams → 1 game wanted → reads as surplus
+    // Youngest is caught up on hockey so it does not out-starve the small
+    // league for the single rink — this test is about the FLOOR, not the race.
+    const r = run({ juniorTeams: SMALL, juniorFootballDays: PAST.slice(0, 7),
+                    youngestHockeyDays: PAST.slice(0, 5) });
+    const mine = r.reservations.filter(l => l.indexOf(JUNIOR) >= 0);
+    assert.ok(mine.length > 0,
+        'fixture did not reserve for the small league: ' + JSON.stringify(r.reservations));
+    const sport = (mine[0].match(/1 (\w+) held/) || [])[1];
+    assert.ok(sport, 'could not read the reserved sport from: ' + mine[0]);
+
+    // The floor may still take this league's OTHER caps — just not the held one.
+    const stolen = r.floors.filter(l =>
+        l.indexOf(sport) >= 0 && l.indexOf(JUNIOR + ' →') >= 0);
+    assert.strictEqual(stolen.length, 0,
+        'the floor took the reserved ' + sport + ' straight back: ' + JSON.stringify(r.floors));
+    assert.ok((r.caps[JUNIOR] || {})[sport] > 0 || Object.keys(r.caps[JUNIOR] || {}).length === 0,
+        'the reserved ' + sport + ' did not survive to the final caps: ' + JSON.stringify(r.caps));
+    console.log('✅ TEST 8 — reserved ' + sport + ' survives the participation floor '
+        + JSON.stringify(r.caps[JUNIOR]));
 }
 
 console.log('\n🎉 league_first_time_sport_reservation_sim: all tests passed');
