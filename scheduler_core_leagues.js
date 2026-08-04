@@ -5552,6 +5552,90 @@
                         rows.forEach(r => { _caps[r.name][sport] = r.base; });
                     });
 
+                    // ★ FIRST-TIME SPORT RESERVATION — hold one field of a scarce
+                    // sport for a league that has NEVER played it.
+                    //
+                    // The apportionment above weights a league by _sportNeed, which
+                    // SUMS every team's deficit — so the weight scales with ROSTER
+                    // SIZE, not with how starved the league actually is. A 4-team
+                    // league that has never touched hockey (deficit 9/team → 36)
+                    // loses the rink to a 10-team league only mildly behind
+                    // (4/team → 40). Under largest-remainder apportionment of 2
+                    // hockey fields across 6 leagues, the small leagues are
+                    // arithmetically incapable of winning a scarce sport at all.
+                    // They land on whatever is abundant — and the participation
+                    // floor below can only donate from SURPLUS, which is only ever
+                    // the abundant sport too. So the youngest, smallest grades get
+                    // basketball, every period, all season. (Live 2026-08-03,
+                    // 3rd Grade: {Basketball:1, Football:0, Hockey:0, Newcomb:0}
+                    // in every period of the day, always the same leftover court.)
+                    //
+                    // So rank by PER-TEAM starvation instead of the summed weight,
+                    // and move one unit of the scarce sport to the league that has
+                    // played it ZERO times, taken from whichever league needs it
+                    // least per team.
+                    //
+                    // ★ RUNS BEFORE THE PARTICIPATION FLOOR, deliberately. The
+                    //   receiving league is usually the one holding nothing at all,
+                    //   so it has nothing to trade back — an exchange would simply
+                    //   never fire for the leagues this exists to help. Handing the
+                    //   unit over first and letting the floor re-seat the donor
+                    //   afterwards is what keeps everyone able to field their games.
+                    //
+                    // A cap is a PREFERENCE, not a wall — the assigner falls back to
+                    // the full pool once everything is at cap — so this steers the
+                    // senior leagues off the scarce field rather than forcing anyone
+                    // into a bye. One reservation per league per period.
+                    // Killswitch: window.__leagueSportReservation = false.
+                    if (window.__leagueSportReservation !== false) {
+                        const _perTeamNeed = (l, sp) => _sportNeed(l, sp) / ((l.teams || []).length || 1);
+                        const _plays = (l, sp) => {
+                            _sportNeed(l, sp);                      // force the per-team counts to build
+                            const lc = _teamCounts[l.name] || {};
+                            let n = 0;
+                            (l.teams || []).forEach(t => { n += ((lc[t] || {})[sp] || 0); });
+                            return n;
+                        };
+                        // Who is owed what: a sport that has a field, that this
+                        // league is allowed, holds no cap on, and has NEVER played.
+                        const _owed = [];
+                        _here.forEach(l => {
+                            (l.sports || []).forEach(sp => {
+                                if ((_fieldsBySport[sp] || 0) <= 0) return;
+                                if ((_caps[l.name][sp] || 0) > 0) return;    // already seated on it
+                                if (_plays(l, sp) > 0) return;               // not a first-timer
+                                _owed.push({ l: l, sp: sp, need: _perTeamNeed(l, sp) });
+                            });
+                        });
+                        // Most starved per team first. A league with no history at
+                        // all has need 0 everywhere and waits its turn — this is for
+                        // the league that plays plenty and is missing ONE sport.
+                        _owed.sort((a, b) => b.need - a.need);
+                        const _reserved = {};
+                        _owed.forEach(({ l, sp, need }) => {
+                            if (need <= 0 || _reserved[l.name]) return;
+                            if ((_caps[l.name][sp] || 0) > 0) return;        // an earlier pass seated it
+                            let donor = null, donorNeed = Infinity;
+                            _here.forEach(d => {
+                                if (d === l) return;
+                                if ((_caps[d.name][sp] || 0) <= 0) return;
+                                // Never strip a donor to nothing — it still has its
+                                // own games to field, and the floor below can only
+                                // rescue it from a league that has surplus.
+                                const dTotal = (d.sports || []).reduce((s, x) => s + (_caps[d.name][x] || 0), 0);
+                                if (dTotal <= 1) return;
+                                const dn = _perTeamNeed(d, sp);
+                                if (dn < donorNeed) { donorNeed = dn; donor = d; }
+                            });
+                            if (!donor) return;
+                            _caps[donor.name][sp]--;
+                            _caps[l.name][sp] = (_caps[l.name][sp] || 0) + 1;
+                            _reserved[l.name] = sp;
+                            console.log('   🎁 First-time reservation: 1 ' + sp + ' held for "' + l.name
+                                + '" (never played it) — from "' + donor.name + '"');
+                        });
+                    }
+
                     // ★ PARTICIPATION FLOOR — every league must be able to SEAT its
                     // games. Need-weighted apportionment can hand a league ZERO caps
                     // on every one of its sports: a perfectly caught-up league has
