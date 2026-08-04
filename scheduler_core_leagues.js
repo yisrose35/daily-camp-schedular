@@ -4248,9 +4248,9 @@
             ctx.divisionsAtTime, ctx.timeKey, ctx.slots, ctx.endTime);
         if (!pool.length) return null;
 
-        // ---- 2. every matchup in the camp this period ------------------------
-        const items = [];
-        here.forEach(l => {
+        // ---- 2. what each league needs from this period ----------------------
+        const info = [];
+        here.forEach((l, idx) => {
             let active = (l.teams || []).slice();
             try {
                 if (l.chinuch && l.chinuch.enabled && window.chinuchSchedule && window.chinuchSchedule[l.name]) {
@@ -4261,128 +4261,119 @@
                 }
             } catch (_) {}
             if (active.length < 2) return;
-            const base = calculateStartingGameNumber(l.name, dayId, history);
-            const gameNumber = base + (ctx.preserved[l.name] || 0) + (ctx.counters[l.name] || 0) + 1;
-            const rrAll = generateRoundRobinSchedule(active);
-            const rr = rrAll[(gameNumber - 1) % rrAll.length] || [];
-            const lPool = pool.filter(o => (l.sports || []).indexOf(o.sport) >= 0);
-            let ms = chooseDailyMatchups(active, lPool, l.name, history, rr, dayId,
-                l.schedulingPriority || 'sport_variety');
-            ms = _formRoundRobinGroup(ms, active, l, l.name, history, dayId);
-            items.push({ league: l, matchups: ms, active: active });
-        });
-        if (!items.length) return null;
-
-        // ---- 3. score every legal (matchup, field) pair ----------------------
-        // Priority, top down — this ordering IS the product rule:
-        //   1. never the same sport two periods running   (dominant penalty)
-        //   2. how far behind these teams are on the sport
-        //   3. not a repeat at all today
-        //   4. teams that have sat out most get seated first
-        //   5. better field to the older grade — WITHIN a sport only
-        const senIdx = {};
-        here.forEach((l, i) => { senIdx[l.name] = i; });      // here is senior→junior
-        const fq = _buildFieldQualityRankMap();
-        const cand = [];
-        items.forEach((it, li) => {
-            const L = it.league;
-            const limits = L.sportDailyLimits || {};
-            it.matchups.forEach((m, mi) => {
-                const members = _isRRGroup(m) ? m.slice() : [m[0], m[1]].filter(Boolean);
-                const counts = members.map(t => _gaCounts(L.name, t, history, dayId));
-                const ranks = members.map(t => _lastSportRankToday(L.name, t, history, dayId));
-                const justPlayed = ranks.map(function (r) {
-                    let top = -1, sp = null;
-                    Object.keys(r).forEach(function (s) { if (r[s] > top) { top = r[s]; sp = s; } });
-                    return sp;
-                });
-                const led = makeByeLedger(L.name, it.active, history, dayId);
-                const satOut = members.reduce((a, t) => a + led.count(t), 0);
-
-                pool.forEach((o, fi) => {
-                    if ((L.sports || []).indexOf(o.sport) < 0) return;          // league doesn't play it
-                    // per-team daily limit
-                    const cap = limits[o.sport];
-                    if (cap != null && members.some((t, k) => (counts[k][o.sport] || 0) >= cap
-                        && (_getTeamSportsToday(L.name, t, history, dayId) || new Set()).has(o.sport))) return;
-
-                    let score = 0;
-                    // 1. back-to-back — dominant
-                    const b2b = justPlayed.filter(s => s === o.sport).length;
-                    score -= b2b * 6000;
-                    // 2. need: how far behind on this sport, per member
-                    let need = 0;
-                    counts.forEach(c => {
+            const counts = {}, justPlayed = {};
+            active.forEach(t => {
+                counts[t] = _gaCounts(l.name, t, history, dayId);
+                const r = _lastSportRankToday(l.name, t, history, dayId);
+                let top = -1, sp = null;
+                Object.keys(r || {}).forEach(function (s) { if (r[s] > top) { top = r[s]; sp = s; } });
+                justPlayed[t] = sp;
+            });
+            info.push({
+                league: l, seniority: idx, active: active,
+                want: Math.max(1, Math.floor(active.length / 2)),
+                got: 0, sports: {},
+                // per-team deficit on a sport, averaged — "how far behind is this league"
+                need: function (sp) {
+                    let n = 0;
+                    active.forEach(t => {
+                        const c = counts[t];
                         let most = 0;
-                        (L.sports || []).forEach(s => { if ((c[s] || 0) > most) most = c[s] || 0; });
-                        need += Math.max(0, most - (c[o.sport] || 0));
+                        (l.sports || []).forEach(s => { if ((c[s] || 0) > most) most = c[s] || 0; });
+                        n += Math.max(0, most - (c[sp] || 0));
                     });
-                    score += (need / Math.max(1, members.length)) * 1200;
-                    // 3. any repeat today at all
-                    const rep = members.filter((t, k) => (ranks[k][o.sport] != null)).length;
-                    score -= rep * 700;
-                    // 4. bye fairness — seat the teams that have sat out most
-                    score += satOut * 250;
-                    // 5. field quality to seniority, WITHIN a sport only
-                    score += _fieldQualityBonus(fq, o.field) * (here.length - senIdx[L.name]) / here.length;
+                    return n / active.length;
+                },
+                // share of the league that played this sport in the period that just ended
+                b2b: function (sp) {
+                    let n = 0;
+                    active.forEach(t => { if (justPlayed[t] === sp) n++; });
+                    return n / active.length;
+                }
+            });
+        });
+        if (!info.length) return null;
 
-                    cand.push({ li: li, mi: mi, fi: fi, score: score, sport: o.sport, field: o.field });
+        // ---- 3. hand out the fields, one at a time, camp-wide ----------------
+        // Priority, top down — this ordering IS the product rule:
+        //   1. no league is left with nothing        (every league gets a 1st seat
+        //      before any league gets a 2nd — this is what stops PERIOD SKIPPED)
+        //   2. never the same sport two periods running
+        //   3. how far behind this league is on the sport
+        //   4. don't stack one league on three courts of the same sport
+        //   5. leagues furthest below a full slate get topped up first
+        // Seniority is deliberately absent — it decides only WHICH FIELD of a
+        // sport, in step 4 below, never which sport.
+        const freeFields = {};
+        pool.forEach(o => { if (o && o.field) (freeFields[o.field] = freeFields[o.field] || []).push(o.sport); });
+        const claims = [];                                    // { info, sport, field }
+        let guard = pool.length + 8;
+        while (guard-- > 0) {
+            // WHO gets the next field is decided ONLY by who is furthest below a
+            // full slate. Sport need must never decide this — a league already
+            // balanced across its sports scores ~0 on every sport and would starve
+            // (that is exactly how 5th Grade lost 10 games in the first attempt).
+            const hungry = info.filter(i => i.got < i.want)
+                .filter(i => Object.keys(freeFields).some(f =>
+                    freeFields[f].some(sp => (i.league.sports || []).indexOf(sp) >= 0)));
+            if (!hungry.length) break;
+            hungry.sort((a, b) =>
+                ((b.want - b.got) / b.want) - ((a.want - a.got) / a.want)   // fair share first
+                || (a.got - b.got)                                          // then who has least
+                || (b.want - a.want)                                        // then the bigger league
+                || (a.seniority - b.seniority));
+            const take = hungry[0];
+
+            // WHICH sport that league gets is decided by need and spacing.
+            let best = null;
+            const allowed = take.league.sports || [];
+            Object.keys(freeFields).forEach(f => {
+                freeFields[f].forEach(sp => {
+                    if (allowed.indexOf(sp) < 0) return;
+                    let sc = 0;
+                    sc -= take.b2b(sp) * 4000;                    // 2 never two periods running
+                    sc += take.need(sp) * 1200;                   // 3 furthest behind wins
+                    sc -= (take.sports[sp] || 0) * 900;           // 4 don't stack one sport
+                    if (!best || sc > best.score) best = { info: take, sport: sp, field: f, score: sc };
                 });
             });
-        });
-        if (!cand.length) return null;
-
-        // ---- 4. match: greedy on score, then 2-opt to clear inversions -------
-        cand.sort((a, b) => b.score - a.score);
-        const takenField = {}, takenMatch = {}, chosen = [];
-        cand.forEach(c => {
-            const mk = c.li + ':' + c.mi;
-            if (takenField[c.fi] || takenMatch[mk]) return;
-            takenField[c.fi] = true; takenMatch[mk] = true;
-            chosen.push(c);
-        });
-        const scoreOf = (li, mi, fi) => {
-            const hit = cand.find(c => c.li === li && c.mi === mi && c.fi === fi);
-            return hit ? hit.score : null;
-        };
-        for (let pass = 0; pass < 4; pass++) {
-            let moved = false;
-            for (let a = 0; a < chosen.length; a++) {
-                for (let b = a + 1; b < chosen.length; b++) {
-                    const A = chosen[a], B = chosen[b];
-                    const sA = scoreOf(A.li, A.mi, B.fi), sB = scoreOf(B.li, B.mi, A.fi);
-                    if (sA == null || sB == null) continue;
-                    if (sA + sB > A.score + B.score + 1e-9) {
-                        const fa = A.fi;
-                        A.fi = B.fi; A.score = sA;
-                        B.fi = fa;   B.score = sB;
-                        const oa = pool[A.fi], ob = pool[B.fi];
-                        A.sport = oa.sport; A.field = oa.field;
-                        B.sport = ob.sport; B.field = ob.field;
-                        moved = true;
-                    }
-                }
-            }
-            if (!moved) break;
+            if (!best) break;
+            delete freeFields[best.field];
+            best.info.got++;
+            best.info.sports[best.sport] = (best.info.sports[best.sport] || 0) + 1;
+            claims.push(best);
         }
+        if (!claims.length) return null;
 
-        // ---- 5. hand back per-league assignments in the existing shape -------
-        const out = {};
-        items.forEach((it, li) => { out[it.league.name] = { matchups: it.matchups, assignments: [] }; });
-        chosen.forEach(c => {
-            const it = items[c.li];
-            const m = it.matchups[c.mi];
-            const grp = _isRRGroup(m) ? m.slice() : null;
-            out[it.league.name].assignments.push({
-                team1: grp ? grp[0] : m[0], team2: grp ? grp[1] : m[1],
-                teams: grp || undefined, group: grp || undefined,
-                field: c.field, sport: c.sport
-            });
+        // ---- 4. now seniority: best field of each sport to the oldest grade ---
+        const fq = _buildFieldQualityRankMap();
+        const bySport = {};
+        claims.forEach(c => { (bySport[c.sport] = bySport[c.sport] || []).push(c); });
+        Object.keys(bySport).forEach(sp => {
+            const group = bySport[sp];
+            const fields = group.map(c => c.field)
+                .sort((a, b) => _fieldQualityBonus(fq, b) - _fieldQualityBonus(fq, a));
+            group.slice().sort((a, b) => a.info.seniority - b.info.seniority)
+                .forEach((c, i) => { c.field = fields[i]; });
         });
-        const placed = chosen.length, wanted = items.reduce((a, i) => a + i.matchups.length, 0);
-        console.log('   🌐 [GlobalAssign] one decision for the whole period — '
-            + wanted + ' matchup(s) across ' + items.length + ' league(s), '
-            + pool.length + ' field/sport option(s), ' + placed + ' seated');
+
+        // ---- 5. hand each league its own pool; the engine does the rest -------
+        // Deliberately NOT deciding matchups here. Handing back a pool lets
+        // chooseDailyMatchups size the matchups to the seats this league actually
+        // has — which is what collapses 3 teams onto one field as a round-robin
+        // instead of benching one of them.
+        const out = {};
+        claims.forEach(c => {
+            const src = pool.find(o => o.field === c.field && o.sport === c.sport)
+                || pool.find(o => o.field === c.field);
+            (out[c.info.league.name] = out[c.info.league.name] || []).push(
+                Object.assign({}, src, { field: c.field, sport: c.sport }));
+        });
+        const short = info.filter(i => i.got < i.want).length;
+        console.log('   🌐 [GlobalAssign] fields dealt for the whole period at once — '
+            + pool.length + ' field(s) across ' + info.length + ' league(s): '
+            + info.map(i => i.league.name.replace(/ Grade$/, '') + ' ' + i.got + '/' + i.want).join(', ')
+            + (short ? '  (' + short + ' league(s) short)' : '  (every league fully seated)'));
         return out;
     }
 
@@ -6461,6 +6452,21 @@
                 // each team's most-recent sport. So a fresh pair can reuse a
                 // sport another pair played, keeping variety without the byes.
 
+                // ★ GlobalAssign: this league's share of the period was dealt before
+                //   any league locked anything. Narrow the pool to it and let every
+                //   downstream rule — matchup sizing, round-robin collapse, caps,
+                //   repeat spacing, cycle rescue — run exactly as it always has.
+                if (_globalPlan && _globalPlan[league.name]) {
+                    const _mine = _globalPlan[league.name];
+                    const _keep = availablePool.filter(o => _mine.some(m =>
+                        m.field === o.field && m.sport === o.sport));
+                    if (_keep.length) {
+                        console.log('   🌐 [GlobalAssign] dealt ' + _keep.length + ' of '
+                            + availablePool.length + ' open field(s): '
+                            + _keep.map(o => o.sport + ' @ ' + o.field).join(', '));
+                        availablePool = _keep;
+                    }
+                }
                 console.log(`   Available Field/Sport Combinations: ${availablePool.length}`);
                 availablePool.slice(0, 10).forEach(p =>
                     console.log(`      • ${p.sport} @ ${p.field}`)
@@ -6596,10 +6602,6 @@
                     //   benched into a group that shares one field, if the
                     //   league asked for that instead of a bye.
                     matchups = _formRoundRobinGroup(matchups, activeTeams, league, league.name, history, dayId);
-                    // ★ The global planner paired this league already; take its
-                    //   matchups verbatim so the bye record and the assignment
-                    //   below can never disagree about who was playing.
-                    if (_globalPlan && _globalPlan[league.name]) matchups = _globalPlan[league.name].matchups;
                 }
 
                console.log(`   Game #${gameNumber} (Today's Game: ${todayGameIndex + 1})`);
@@ -6808,12 +6810,6 @@
                         _poolUsed.add(pick.field);
                         assignments.push({ team1: teamA, team2: teamB, field: pick.field, sport: pick.sport });
                     });
-                } else if (_globalPlan && _globalPlan[league.name]) {
-                    // ★ Already decided for the whole period. No caps, no floor,
-                    //   no reservation, no seniority scramble — the field this
-                    //   league gets was chosen against every other league's needs
-                    //   at the same time.
-                    assignments = _globalPlan[league.name].assignments;
                 } else {
                     if (!indoorCountsByLeague[league.name]) indoorCountsByLeague[league.name] = {};
                     assignments = assignMatchupsToFieldsAndSports(
