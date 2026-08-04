@@ -3175,6 +3175,27 @@
         });
     }
 
+    // ★ WHEN today a team last played each sport. Higher = more recent; absent
+    // means not yet today. The repeat guard below only knew WHICH sports had
+    // been played, never WHEN, so once a repeat became unavoidable it was blind
+    // to whether the repeat was from this morning or from the period that just
+    // finished — and cheerfully handed out basketball, then basketball again.
+    // Ranked by the per-league game label so every matchup in a period shares a
+    // rank; the array index is the fallback for older records with no label.
+    function _lastSportRankToday(leagueName, team, history, dayId) {
+        const out = {};
+        if (!dayId) return out;
+        const todays = (history.gameLog && history.gameLog[leagueName] && history.gameLog[leagueName][dayId]) || [];
+        todays.forEach(function (e, i) {
+            if (!e || !e.sport) return;
+            if (e.t1 !== team && e.t2 !== team) return;
+            const m = String(e.g == null ? '' : e.g).match(/(\d+)/);
+            const rank = m ? parseInt(m[1], 10) : i;
+            if (out[e.sport] == null || rank > out[e.sport]) out[e.sport] = rank;
+        });
+        return out;
+    }
+
     function _applySameDayRepeatFilter(pool, t1, t2, leagueName, history, dayId, groupTeams) {
         if (window.__leagueSameDayRepeatGuard === false) return pool;
         if (!pool.length) return pool;
@@ -3189,14 +3210,67 @@
         // Lesser evil: the option that repeats for the FEWEST members.
         let fewest = Infinity;
         pool.forEach(function (o) { const n = repeats(o); if (n < fewest) fewest = n; });
+        // ★ A repeat is now unavoidable — but WHICH repeat still matters, and
+        // "fewest teams repeating" is the WRONG first question. It ranks a sport
+        // both teams played two periods ago BELOW one a single team played in
+        // the period that just finished, so it throws away the option that
+        // avoids a back-to-back entirely. Observed: a pair that had played all
+        // three sports got Newcomb→Newcomb because Basketball "repeated for
+        // both", even though both those basketball games were an hour earlier.
+        //
+        // Rank instead by what people actually notice, in order:
+        //   1. does this put a team on the same sport TWO PERIODS RUNNING
+        //   2. how many teams it repeats for at all
+        //   3. how long ago it was last played
+        // Killswitch: window.__leagueRepeatSpacing = false → old behaviour.
         const oneRepeat = pool.filter(function (o) { return repeats(o) === fewest; });
-        if (oneRepeat.length && oneRepeat.length < pool.length) {
-            console.log(`   ⚠️ ${t1} vs ${t2}: every open sport is a same-day repeat for a team — allowing the least-bad option`);
-            return oneRepeat;
+        if (window.__leagueRepeatSpacing === false) {
+            if (oneRepeat.length && oneRepeat.length < pool.length) {
+                console.log(`   ⚠️ ${t1} vs ${t2}: every open sport is a same-day repeat for a team — allowing the least-bad option`);
+                return oneRepeat;
+            }
+            console.log(`   ⚠️ ${t1} vs ${t2}: same-day sport repeat unavoidable (no alternative open) — allowing`);
+            return pool;
+        }
+
+        const ranks = members.map(function (t) { return _lastSportRankToday(leagueName, t, history, dayId); });
+        // The sport each member played in its OWN most recent period today.
+        const justPlayed = ranks.map(function (m) {
+            let top = -1, sp = null;
+            Object.keys(m).forEach(function (s) { if (m[s] > top) { top = m[s]; sp = s; } });
+            return sp;
+        });
+        const backToBack = function (o) {
+            return justPlayed.filter(function (s) { return s === o.sport; }).length;
+        };
+        const mostRecent = function (o) {
+            let r = -1;
+            ranks.forEach(function (m) { const v = m[o.sport]; if (v != null && v > r) r = v; });
+            return r;
+        };
+        const key = function (o) { return [backToBack(o), repeats(o), mostRecent(o)]; };
+        let bestKey = null;
+        pool.forEach(function (o) {
+            const k = key(o);
+            if (!bestKey || k[0] < bestKey[0]
+                || (k[0] === bestKey[0] && k[1] < bestKey[1])
+                || (k[0] === bestKey[0] && k[1] === bestKey[1] && k[2] < bestKey[2])) bestKey = k;
+        });
+        const picked = pool.filter(function (o) {
+            const k = key(o);
+            return k[0] === bestKey[0] && k[1] === bestKey[1] && k[2] === bestKey[2];
+        });
+        if (picked.length && picked.length < pool.length) {
+            const note = bestKey[0] === 0
+                ? `every open sport is a same-day repeat — taking one that is NOT back-to-back`
+                : `every open sport is a same-day repeat and back-to-back is unavoidable — taking the least-bad`;
+            console.log(`   ↔️ ${t1} vs ${t2}: ${note}`);
+            return picked;
         }
         console.log(`   ⚠️ ${t1} vs ${t2}: same-day sport repeat unavoidable (no alternative open) — allowing`);
         return pool;
     }
+    Leagues._testApplySameDayRepeatFilter = _applySameDayRepeatFilter;   // tests
 
     // ★ CYCLE RESCUE: a team stuck ≥2 plays behind on a sport (its count for
     // that sport trails its most-played available sport by ≥2) gets that
@@ -3219,7 +3293,7 @@
     // different opponent. Without this, a rescue could pin the pair's exact
     // prior sport AND flag it _rescued so the swap pass couldn't repair it
     // (observed live: a rematch replayed its previous sport).
-    function _applyCycleRescueFilter(pool, t1, t2, hist1, hist2, leagueName, history) {
+    function _applyCycleRescueFilter(pool, t1, t2, hist1, hist2, leagueName, history, dayId) {
         if (pool.length < 2) return { pool: pool, rescued: false };
         const poolSports = Array.from(new Set(pool.map(function (o) { return o.sport; })));
         if (poolSports.length < 2) return { pool: pool, rescued: false };
@@ -3251,6 +3325,26 @@
                     console.log(`   🆘 ${t1} vs ${t2}: cycle rescue for ${best} skipped — this pair already played it together (rescue defers to a later matchup)`);
                     return { pool: pool, rescued: false };
                 }
+            }
+        }
+        // ★ …and defer when it would put the sport BACK-TO-BACK. The rescue is a
+        // hard preference applied AFTER the same-day spacing filter, so it can
+        // undo it: a team one period removed from hockey gets handed hockey
+        // again because its partner is behind on it. Being behind on a sport is
+        // a season-long problem and waits a period happily; playing the same
+        // thing twice in a row is what people actually notice on the sheet.
+        // Only defers while some other sport is open, so nobody is starved —
+        // the rescue simply fires at the next matchup instead.
+        if (dayId && history && poolSports.length > 1 && window.__leagueRepeatSpacing !== false) {
+            const _r1 = _lastSportRankToday(leagueName, t1, history, dayId);
+            const _r2 = _lastSportRankToday(leagueName, t2, history, dayId);
+            let _last = -1;
+            [_r1, _r2].forEach(function (m) {
+                Object.keys(m).forEach(function (s) { if (m[s] > _last) _last = m[s]; });
+            });
+            if (_last >= 0 && (_r1[best] === _last || _r2[best] === _last)) {
+                console.log(`   🆘 ${t1} vs ${t2}: cycle rescue for ${best} deferred — a team played it in the period that just finished`);
+                return { pool: pool, rescued: false };
             }
         }
         const rescuedPool = pool.filter(function (o) { return o.sport === best; });
@@ -3631,7 +3725,7 @@
             // purely from what its members still need.
             const _rescue = group
                 ? { pool: _pool, rescued: false }
-                : _applyCycleRescueFilter(_pool, t1, t2, _teamHist(t1), _teamHist(t2), leagueName, history);
+                : _applyCycleRescueFilter(_pool, t1, t2, _teamHist(t1), _teamHist(t2), leagueName, history, dayId);
             _pool = _rescue.pool;
             if (!group) _pool = _filterPoolByPairSportCycle(_pool, leagueName, t1, t2, history);
 
@@ -3855,7 +3949,7 @@
             // purely from what its members still need.
             const _rescue = group
                 ? { pool: _pool, rescued: false }
-                : _applyCycleRescueFilter(_pool, t1, t2, _teamHist(t1), _teamHist(t2), leagueName, history);
+                : _applyCycleRescueFilter(_pool, t1, t2, _teamHist(t1), _teamHist(t2), leagueName, history, dayId);
             _pool = _rescue.pool;
             if (!group) _pool = _filterPoolByPairSportCycle(_pool, leagueName, t1, t2, history);
 
