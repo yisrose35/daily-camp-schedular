@@ -5567,7 +5567,7 @@
                         rows.forEach(r => { _caps[r.name][sport] = r.base; });
                     });
 
-                    // ★ FIRST-TIME SPORT RESERVATION — hold one field of a scarce
+                    // ★ SPORT-NEED RESERVATION — hold one field of a scarce
                     // sport for a league that has NEVER played it.
                     //
                     // The apportionment above weights a league by _sportNeed, which
@@ -5604,31 +5604,37 @@
                     // Killswitch: window.__leagueSportReservation = false.
                     if (window.__leagueSportReservation !== false) {
                         const _perTeamNeed = (l, sp) => _sportNeed(l, sp) / ((l.teams || []).length || 1);
-                        const _plays = (l, sp) => {
-                            _sportNeed(l, sp);                      // force the per-team counts to build
-                            const lc = _teamCounts[l.name] || {};
-                            let n = 0;
-                            (l.teams || []).forEach(t => { n += ((lc[t] || {})[sp] || 0); });
-                            return n;
-                        };
                         // Who is owed what: a sport that has a field, that this
-                        // league is allowed, holds no cap on, and has NEVER played.
+                        // league is allowed, holds no cap on, and whose teams are at
+                        // least a game behind on ON AVERAGE.
+                        //
+                        // ★ NOT "has never played it". That was the first cut and it
+                        //   is far too narrow to help anybody in a running season:
+                        //   one football game back in week one disqualifies football
+                        //   forever, however lopsided the league gets afterwards.
+                        //   Live 2026-08-04, 3rd Grade had played exactly one
+                        //   football game on 08-03 and basketball every other period
+                        //   of every other day — and got Football:0 Hockey:0
+                        //   Newcomb:0 in all six periods, with Hockey(Rink) sitting
+                        //   OPEN in front of it at 12:10. "Hasn't had it" means
+                        //   behind, not virgin.
                         const _owed = [];
                         _here.forEach(l => {
                             (l.sports || []).forEach(sp => {
                                 if ((_fieldsBySport[sp] || 0) <= 0) return;
                                 if ((_caps[l.name][sp] || 0) > 0) return;    // already seated on it
-                                if (_plays(l, sp) > 0) return;               // not a first-timer
-                                _owed.push({ l: l, sp: sp, need: _perTeamNeed(l, sp) });
+                                const need = _perTeamNeed(l, sp);
+                                if (need < 1) return;                        // less than a game behind per team
+                                _owed.push({ l: l, sp: sp, need: need });
                             });
                         });
                         // Most starved per team first. A league with no history at
-                        // all has need 0 everywhere and waits its turn — this is for
-                        // the league that plays plenty and is missing ONE sport.
+                        // all reads need 0 everywhere and waits its turn — this is
+                        // for the league that plays plenty and is missing a sport.
                         _owed.sort((a, b) => b.need - a.need);
                         const _reserved = {};
                         _owed.forEach(({ l, sp, need }) => {
-                            if (need <= 0 || _reserved[l.name]) return;
+                            if (_reserved[l.name]) return;
                             if ((_caps[l.name][sp] || 0) > 0) return;        // an earlier pass seated it
                             let donor = null, donorNeed = Infinity;
                             _here.forEach(d => {
@@ -5639,15 +5645,22 @@
                                 // rescue it from a league that has surplus.
                                 const dTotal = (d.sports || []).reduce((s, x) => s + (_caps[d.name][x] || 0), 0);
                                 if (dTotal <= 1) return;
+                                // ★ Only take from a league that is CLEARLY less
+                                //   starved — a full game per team clearer. Without
+                                //   this the reservation just moves the problem onto
+                                //   whichever league happens to hold the cap, and two
+                                //   equally-behind leagues would trade it back and
+                                //   forth period after period.
                                 const dn = _perTeamNeed(d, sp);
+                                if (dn > need - 1) return;
                                 if (dn < donorNeed) { donorNeed = dn; donor = d; }
                             });
                             if (!donor) return;
                             _caps[donor.name][sp]--;
                             _caps[l.name][sp] = (_caps[l.name][sp] || 0) + 1;
                             _reserved[l.name] = sp;
-                            console.log('   🎁 First-time reservation: 1 ' + sp + ' held for "' + l.name
-                                + '" (never played it) — from "' + donor.name + '"');
+                            console.log('   🎁 Sport reservation: 1 ' + sp + ' held for "' + l.name
+                                + '" (' + need.toFixed(1) + ' game(s)/team behind) — from "' + donor.name + '"');
                         });
                     }
 
@@ -5694,6 +5707,30 @@
                             _moved = true;
                         }
                         if (!_moved) break;
+                    }
+
+                    // ★ DON'T CAP WHAT NOBODY IS WAITING FOR. A cap exists to make a
+                    // league leave a scarce field for the grades that come AFTER it
+                    // (leagues run senior→junior and lock as they go). For a sport
+                    // that no later league even plays, the cap protects nobody and
+                    // only stops this league taking a field that will otherwise sit
+                    // empty — worst of all for the most junior league, which has no
+                    // one after it at all.
+                    //
+                    // Live 2026-08-04 @12:10, 3rd Grade was last in the order with
+                    // Hockey(Rink) OPEN in front of it, held Hockey:0, and took a
+                    // basketball court instead. Deleting the key (rather than raising
+                    // it) restores the "no cap" reading the assigner already has.
+                    // Killswitch: window.__leagueUnprotectedCapRelease = false.
+                    if (window.__leagueUnprotectedCapRelease !== false)
+                    for (let _i = 0; _i < _here.length; _i++) {
+                        const _l = _here[_i];
+                        (_l.sports || []).forEach(sp => {
+                            for (let _j = _i + 1; _j < _here.length; _j++) {
+                                if ((_here[_j].sports || []).includes(sp)) return;   // someone later wants it
+                            }
+                            delete _caps[_l.name][sp];
+                        });
                     }
 
                     console.log('   ⚖️ Need-first sport caps' + (_byNeedSports.length ? ' (need-weighted: ' + _byNeedSports.join(', ') + ')' : ' (no specific need → by size)') + ': ' + _here.map(l => l.name + '=' + JSON.stringify(_caps[l.name])).join('  '));
