@@ -129,7 +129,10 @@
         const ok = await Bio.verify();
         btn.disabled = false;
         if (ok) { location.replace(HOME); return; }
-        showErr('Could not verify. Try again, or use your password.');
+        const e = Bio.lastError() || '';
+        showErr(/NotAllowed/.test(e)
+            ? 'Not verified. Tap to try again, or use your password.'
+            : 'Could not verify' + (e ? ' (' + e.split(':')[0] + ')' : '') + '. Use your password.');
     }
 
     // Called after a successful password sign-in. Returns true if we're showing
@@ -204,7 +207,13 @@
             const ok = await Bio.enroll(($('liteEmail').value || '').trim(), null, signedInUserId);
             btn.disabled = false;
             btn.textContent = 'Turn it on';
-            if (!ok) { showErr('Could not set up ' + BIO_NAME + '. You can turn it on later in Settings.'); return; }
+            if (!ok) {
+                const e = Bio.lastError() || '';
+                showErr(/NotAllowed/.test(e)
+                    ? 'Cancelled. You can turn it on later in Settings.'
+                    : 'Could not set up ' + BIO_NAME + (e ? ' (' + e.split(':')[0] + ')' : '') + '.');
+                return;
+            }
             location.replace(HOME);
         });
 

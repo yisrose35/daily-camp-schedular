@@ -39,6 +39,8 @@
     var PASS_KEY     = 'lite_bio_pass';      // sessionStorage — one-shot handoff
     var PASS_TTL_MS  = 60000;                // generous for a slow cold boot
 
+    var lastError = null;   // real cause of the last failed enrol/verify
+
     function ls(fn, def) { try { return fn(); } catch (e) { return def; } }
 
     function b64(buf) {
@@ -59,20 +61,28 @@
 
     // Platform authenticator only — a roaming USB key is not what "Face ID"
     // means to a counselor, and WebAuthn needs a secure context regardless.
-    function available() {
+    // Returns the REASON when unavailable: "it doesn't work" with no cause is
+    // impossible to act on, for the user or for us.
+    function why() {
         try {
-            if (!window.PublicKeyCredential || !window.isSecureContext) return Promise.resolve(false);
-            if (!PublicKeyCredential.isUserVerifyingPlatformAuthenticatorAvailable) return Promise.resolve(false);
+            if (!window.PublicKeyCredential) return Promise.resolve('This browser has no biometric support');
+            if (!window.isSecureContext) return Promise.resolve('Needs a secure (https) connection');
+            if (!PublicKeyCredential.isUserVerifyingPlatformAuthenticatorAvailable)
+                return Promise.resolve('This browser has no biometric support');
             return PublicKeyCredential.isUserVerifyingPlatformAuthenticatorAvailable()
-                .then(function (ok) { return !!ok; })
-                .catch(function () { return false; });
-        } catch (e) { return Promise.resolve(false); }
+                .then(function (ok) { return ok ? null : 'No screen lock set up on this device'; })
+                .catch(function (e) { return 'Could not check: ' + (e && e.name ? e.name : 'unknown'); });
+        } catch (e) { return Promise.resolve('Could not check: ' + (e && e.name ? e.name : 'unknown')); }
     }
+    function available() { return why().then(function (r) { return !r; }); }
 
     function isEnabled()  { return !!ls(function () { return localStorage.getItem(CRED_KEY); }, null); }
     function credUser()   { return ls(function () { return localStorage.getItem(USER_KEY); }, null); }
-    function isDeclined() { return ls(function () { return localStorage.getItem(DECLINED_KEY); }, null) === '1'; }
-    function decline()    { ls(function () { localStorage.setItem(DECLINED_KEY, '1'); }); }
+    // "Not now" means not now, not never. Kept in sessionStorage so the offer
+    // comes back on the next sign-in — a permanent suppression left people with
+    // no route to biometrics at all unless they went hunting in Settings.
+    function isDeclined() { return ls(function () { return sessionStorage.getItem(DECLINED_KEY); }, null) === '1'; }
+    function decline()    { ls(function () { sessionStorage.setItem(DECLINED_KEY, '1'); }); }
 
     // Enrolled AND enrolled for THIS person. A credential left behind by the
     // previous user must not gate — or unlock — the new one's session, so a
@@ -135,7 +145,13 @@
             });
             markVerified();
             return true;
-        }).catch(function () { return false; });
+        }).catch(function (e) {
+            // Keep the real cause. A silent false here is exactly why this
+            // looked like "nothing happens when I turn it on".
+            lastError = (e && e.name) ? e.name : 'unknown';
+            if (e && e.message) lastError += ': ' + e.message;
+            return false;
+        });
     }
 
     function verify() {
@@ -153,11 +169,17 @@
             if (!assertion) return false;
             markVerified();
             return true;
-        }).catch(function () { return false; });
+        }).catch(function (e) {
+            lastError = (e && e.name) ? e.name : 'unknown';
+            if (e && e.message) lastError += ': ' + e.message;
+            return false;
+        });
     }
 
     window.CampistryLiteBio = {
         available: available,
+        why: why,
+        lastError: function () { return lastError; },
         isEnabled: isEnabled,
         isEnabledFor: isEnabledFor,
         isDeclined: isDeclined,

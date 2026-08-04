@@ -1347,7 +1347,8 @@
     async function renderSettings() {
         const v = document.getElementById('view-settings');
         const Bio = window.CampistryLiteBio;
-        const bioAvail = Bio ? await Bio.available() : false;
+        const bioWhy = Bio ? await Bio.why() : 'Biometric module failed to load';
+        const bioAvail = !bioWhy;
         const bioOn = !!(Bio && Bio.isEnabledFor(userId));
         const bioName = /iPad|iPhone|iPod|Macintosh/.test(navigator.platform || '') ? 'Face ID' : 'Fingerprint';
         const roleLabel = cap(role || 'viewer');
@@ -1374,9 +1375,10 @@
             <div class="lite-card lite-set-row" id="liteBioRow">
                 <div class="lite-set-row-main">
                     <div class="lite-set-row-title">${bioName} sign-in</div>
-                    <div class="lite-set-row-sub">${bioAvail
-                        ? 'Unlock Campistry Lite without typing your password'
-                        : 'Not available on this device or browser'}</div>
+                    <div class="lite-set-row-sub" id="liteBioSub">${bioAvail
+                        ? (bioOn ? 'On — asked each time you open Campistry Lite'
+                                 : 'Unlock Campistry Lite without typing your password')
+                        : esc(bioWhy)}</div>
                 </div>
                 <span class="lite-toggle${bioOn ? ' on' : ''}${bioAvail ? '' : ' disabled'}" id="liteBioToggle"></span>
             </div>
@@ -1409,7 +1411,15 @@
             if (bioOn) { Bio.disable(); toast(bioName + ' sign-in off'); }
             else {
                 const ok = await Bio.enroll(userEmail, userName, userId);
-                toast(ok ? bioName + ' sign-in on' : 'Could not set up ' + bioName);
+                if (ok) toast(bioName + ' sign-in on');
+                else {
+                    // Say what actually went wrong. "Could not set up" told the
+                    // user nothing and told us nothing either.
+                    const e = Bio.lastError() || '';
+                    toast(/NotAllowed/.test(e) ? 'Cancelled — nothing changed'
+                        : e ? 'Could not set up: ' + e.split(':')[0]
+                        : 'Could not set up ' + bioName);
+                }
             }
             renderSettings();
         });
