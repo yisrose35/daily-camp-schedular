@@ -3062,6 +3062,78 @@ function daPruneOrphanDivisionTiles() {
   }
 }
 
+// =================================================================
+// ★ LAYOUT GEOMETRY (see schedule_layout_model.js)
+// The grid's shape is a camp preference, not a constant. These helpers are
+// the single bridge between that preference and every render/interaction
+// path below — handlers read `_daGridGeo` rather than doing their own
+// top/height math, which is what keeps a transposed grid fully editable.
+// =================================================================
+const DA_LANE_GAP = 4;          // .da-grid / .ms-grid column-gap
+const DA_TIME_TIER_PX = 70;     // width of one ruler tier in the vertical gutter
+const DA_LANE_HEADER_PX = 132;  // width of the lane-name gutter when time runs across
+
+let _daGridGeo = null;          // geometry adapter for the grid currently painted
+let _daGridLanes = [];          // lane descriptors matching that paint
+
+/**
+ * Build the geometry adapter + lane list for the active layout. Returns null
+ * only if the layout module failed to load, which renderGrid surfaces rather
+ * than silently drawing a wrong grid.
+ */
+function _daBuildGeometry(earliestMin, latestMin, availableDivisions, divisions) {
+  const SL = window.ScheduleLayout;
+  if (!SL) { console.error('[DA] schedule_layout_model.js is not loaded — cannot render the grid.'); return null; }
+  const layout = SL.active();
+  const lanes = SL.lanesFor(layout, divisions, availableDivisions);
+  const geo = SL.geometry(layout, { startMin: earliestMin, endMin: latestMin },
+                          { laneCount: lanes.length, laneGap: DA_LANE_GAP });
+  geo.lanes = lanes;
+  return geo;
+}
+
+/**
+ * How many lanes a tile covers, and where its block starts relative to the
+ * lane it's drawn in. In grade mode this is just the span-group's column
+ * count; in bunk mode it also swallows every bunk lane of every covered grade.
+ */
+function _daLaneSpan(ev, plan, laneOf, availableDivisions) {
+  const covered = (plan && plan.cols > 1 && Array.isArray(plan.divs)) ? plan.divs : [ev.division];
+  const ranges = covered.map(d => laneOf[d]).filter(Boolean);
+  if (ranges.length === 0) return { lanes: 1, laneOffset: 0 };
+  const first = Math.min(...ranges.map(r => r.first));
+  const last = Math.max(...ranges.map(r => r.last));
+  const anchor = laneOf[ev.division] ? laneOf[ev.division].first : first;
+  return { lanes: (last - first + 1), laneOffset: first - anchor };
+}
+
+/**
+ * Lane-axis extent of each division in the painted grid, read back from the
+ * DOM. The grade-span resize uses this instead of a single stride so it stays
+ * correct when divisions hold different numbers of bunk lanes.
+ */
+function _daDivisionBounds(gridEl, columns) {
+  const geo = _daGridGeo;
+  if (!geo) return [];
+  // Nulls are preserved so an entry's index always matches `columns`.
+  return columns.map(divName => {
+    const cells = gridEl.querySelectorAll(`.da-grid-cell[data-div="${CSS.escape(divName)}"]`);
+    if (!cells.length) return null;
+    const firstR = cells[0].getBoundingClientRect();
+    const lastR = cells[cells.length - 1].getBoundingClientRect();
+    return geo.horizontal
+      ? { div: divName, start: firstR.top, end: lastR.bottom, mid: (firstR.top + lastR.bottom) / 2 }
+      : { div: divName, start: firstR.left, end: lastR.right, mid: (firstR.left + lastR.right) / 2 };
+  });
+}
+
+/** Lane index range a division occupies in the grid currently painted. */
+function _daLaneRange(divName) {
+  const SL = window.ScheduleLayout;
+  const r = SL && SL.laneRangeForDivision(_daGridLanes || [], divName);
+  return r || { first: 0, last: 0, count: 1 };
+}
+
 function renderGrid() {
   const gridEl = document.getElementById('da-skeleton-grid');
   if (!gridEl) return;
@@ -3119,7 +3191,6 @@ function renderGrid() {
   if (latestPinned > -Infinity) latestMin = Math.max(latestMin, latestPinned);
   if (latestMin <= earliestMin) latestMin = earliestMin + 60;
   
-  const totalHeight = (latestMin - earliestMin) * PIXELS_PER_MINUTE;
   gridEl.dataset.earliestMin = earliestMin;
   gridEl.dataset.columns = JSON.stringify(availableDivisions);
 
@@ -3151,15 +3222,59 @@ function renderGrid() {
 
  const gridEl_isMS = gridEl.closest('.ms-container') !== null;
   const G = gridEl_isMS ? 'ms' : 'da';
-  let html = `<div class="${G}-grid" style="grid-template-columns:70px repeat(${availableDivisions.length}, 1fr); column-gap:4px;">`;
 
-  // Header row
-  html += `<div class="da-grid-header da-time-header">Time</div>`;
-  availableDivisions.forEach((divName) => {
-    const color = divisions[divName]?.color || '#444';
-    html += `<div data-col-header="${divName}" draggable="true" class="da-grid-header" style="background:${color};color:#fff;border-radius:6px 6px 0 0; cursor:grab; user-select:none;">${divName}</div>`;
+  // ★ Custom layouts: the grid's SHAPE — which way time runs, whether the other
+  //   axis lists grades or bunks, and what the time ruler looks like — comes
+  //   from the camp's active layout instead of being hardcoded. Every bit of
+  //   min↔px math below (and in each interaction handler) goes through the
+  //   geometry adapter, which is what lets a transposed grid stay fully
+  //   editable: no handler knows which orientation it's in.
+  const geo = _daBuildGeometry(earliestMin, latestMin, availableDivisions, divisions);
+  if (!geo) {
+    gridEl.innerHTML = `<div class="da-empty-state">Schedule layouts failed to load. Reload the page — if it persists, schedule_layout_model.js is missing.</div>`;
+    return;
+  }
+  const lanes = geo.lanes;
+  const isH = geo.horizontal;
+
+  // Lane index range each division occupies. In grade mode that's one lane; in
+  // bunk mode it's the division's whole block of bunk lanes, so a division-wide
+  // tile paints across all of them.
+  const laneOf = {};
+  availableDivisions.forEach(d => {
+    laneOf[d] = window.ScheduleLayout.laneRangeForDivision(lanes, d) || { first: 0, last: 0, count: 1 };
   });
-  
+
+  _daGridGeo = geo;
+  _daGridLanes = lanes;
+
+  const tierCount = geo.rulerTiers().length;
+  const gutterPx = isH ? DA_LANE_HEADER_PX : (DA_TIME_TIER_PX * Math.max(tierCount, 1));
+  const gridStyle = isH
+    ? `grid-template-columns:${gutterPx}px max-content; column-gap:0;`
+    : `grid-template-columns:${gutterPx}px repeat(${lanes.length}, 1fr); column-gap:${DA_LANE_GAP}px;`;
+  let html = `<div class="${G}-grid${isH ? ' da-horizontal' : ''}" style="${gridStyle}">`;
+
+  // --- Corner + headers ---------------------------------------------------
+  // Vertical: corner then one header per lane across the top (classic).
+  // Horizontal: corner then the ruler; each lane's header comes with its row.
+  html += `<div class="da-grid-header da-time-header${isH ? ' da-corner' : ''}">Time</div>`;
+
+  const laneHeaderHtml = (lane) => {
+    // Grade headers stay draggable for column reordering; bunk lanes reorder
+    // with their grade, so only the grade's first lane carries the handle.
+    const isDragHandle = lane.groupStart;
+    const sub = lane.bunk ? `<div class="da-lane-sub">${_escHtml(lane.division)}</div>` : '';
+    const base = `background:${lane.color};color:#fff;cursor:${isDragHandle ? 'grab' : 'default'};user-select:none;`;
+    const radius = isH ? '' : 'border-radius:6px 6px 0 0;';
+    const sizing = isH ? `height:${geo.laneSize}px;` : '';
+    return `<div ${isDragHandle ? `data-col-header="${_escHtml(lane.division)}" draggable="true"` : ''} `
+         + `class="da-grid-header${isH ? ' da-lane-header' : ''}${lane.groupStart ? ' da-lane-group-start' : ''}" `
+         + `data-lane="${_escHtml(lane.key)}" style="${base}${radius}${sizing}">${_escHtml(lane.label)}${sub}</div>`;
+  };
+
+  if (!isH) lanes.forEach(lane => { html += laneHeaderHtml(lane); });
+
   // ★ Weather timeline: draw a line across the whole grid at every cut.
   //   🌧️ rain cut (blue) — rainy from here; ☀️ sun cut (amber) — regular from
   //   here. Above the LAST cut is kept history; below it is the wiped,
@@ -3174,66 +3289,92 @@ function renderGrid() {
   const _cutColor = t => (t === 'sun' ? '#d97706' : '#2563eb');
   const _cutIcon = t => (t === 'sun' ? '☀️' : '🌧️');
 
-  // Time column
-  html += `<div class="da-time-column" style="height:${totalHeight}px;">`;
-  for (let m = earliestMin; m < latestMin; m += INCREMENT_MINS) {
-    const top = (m - earliestMin) * PIXELS_PER_MINUTE;
-    html += `<div class="da-time-marker" style="top:${top}px;">${minutesToTime(m)}</div>`;
-  }
+  // --- Time ruler ---------------------------------------------------------
+  // One strip per tier: an hourly band over a 15-minute band over a named bell
+  // schedule, in whatever combination the camp configured. A single uniform
+  // tier renders exactly like the old .da-time-marker column.
+  const rulerSizing = isH ? `width:${geo.timeSpanPx}px;` : `height:${geo.timeSpanPx}px;`;
+  html += `<div class="da-time-column da-ruler" style="${rulerSizing}">`;
+  geo.rulerTiers().forEach(tier => {
+    html += `<div class="da-ruler-tier" data-kind="${tier.kind}">`;
+    tier.ticks.forEach(tick => {
+      const body = tier.kind === 'periods'
+        ? `<div>${_escHtml(tick.label)}</div><div class="da-ruler-tick-sub">${_escHtml(tick.rangeLabel)}</div>`
+        : _escHtml(tick.timeLabel);
+      html += `<div class="da-ruler-tick" title="${_escHtml(tick.label + ' · ' + tick.rangeLabel)}" style="${geo.tickStyle(tick)}">${body}</div>`;
+    });
+    html += `</div>`;
+  });
   _weatherCuts.forEach(c => {
-    const _rcTop = (c.min - earliestMin) * PIXELS_PER_MINUTE;
     const _rcTitle = c.type === 'sun'
-      ? `Sun's out at ${minutesToTime(c.min)} — regular schedule resumes below this line`
-      : `Mid-day rain started at ${minutesToTime(c.min)} — the schedule below this line was cleared`;
+      ? `Sun's out at ${minutesToTime(c.min)} — regular schedule resumes after this line`
+      : `Mid-day rain started at ${minutesToTime(c.min)} — the schedule after this line was cleared`;
+    const _rcPos = isH
+      ? `left:${geo.timePx(c.min) - 18}px;top:1px;`
+      : `top:${geo.timePx(c.min) - 9}px;left:1px;right:1px;`;
     html += `<div title="${_rcTitle}" ` +
-            `style="position:absolute;top:${_rcTop - 9}px;left:1px;right:1px;background:${_cutColor(c.type)};color:#fff;font-size:9px;font-weight:700;text-align:center;border-radius:4px;padding:1px 2px;z-index:7;pointer-events:auto;">${_cutIcon(c.type)} ${minutesToTime(c.min)}</div>`;
+            `style="position:absolute;${_rcPos}background:${_cutColor(c.type)};color:#fff;font-size:9px;font-weight:700;text-align:center;border-radius:4px;padding:1px 2px;z-index:7;pointer-events:auto;">${_cutIcon(c.type)} ${minutesToTime(c.min)}</div>`;
   });
   html += `</div>`;
-  
-  // Division columns
-  availableDivisions.forEach((divName) => {
+
+  // --- Lane strips --------------------------------------------------------
+  // One per grade (or per bunk). A division's tiles are drawn in its FIRST
+  // lane and stretched across the rest of its block, so in bunk mode a
+  // grade-wide activity visibly covers every bunk in that grade.
+  lanes.forEach((lane, laneIdx) => {
+    const divName = lane.division;
     const div = divisions[divName];
     const s = parseTimeToMinutes(div?.startTime);
     const e = parseTimeToMinutes(div?.endTime);
-    
-    html += `<div class="da-grid-cell" data-div="${divName}" data-start-min="${earliestMin}" style="height:${totalHeight}px;">`;
-    
+
+    if (isH) html += laneHeaderHtml(lane);
+
+    html += `<div class="da-grid-cell" data-div="${_escHtml(divName)}"${lane.bunk ? ` data-bunk="${_escHtml(lane.bunk)}"` : ''} `
+          + `data-lane-index="${laneIdx}" data-start-min="${earliestMin}" style="${geo.laneExtentStyle()}">`;
+
     if (s !== null && s > earliestMin) {
-      html += `<div class="da-grid-disabled" style="top:0;height:${(s - earliestMin) * PIXELS_PER_MINUTE}px;"></div>`;
+      html += `<div class="da-grid-disabled" style="${geo.bandStyle(earliestMin, s)}"></div>`;
     }
     if (e !== null && e < latestMin) {
-      html += `<div class="da-grid-disabled da-grid-night-zone" style="top:${(e - earliestMin) * PIXELS_PER_MINUTE}px;height:${(latestMin - e) * PIXELS_PER_MINUTE}px;"></div>`;
+      html += `<div class="da-grid-disabled da-grid-night-zone" style="${geo.bandStyle(e, latestMin)}"></div>`;
     }
 
     _weatherCuts.forEach(c => {
-      html += `<div class="da-rain-cut-line" style="position:absolute;left:0;right:0;top:${(c.min - earliestMin) * PIXELS_PER_MINUTE}px;border-top:3px dashed ${_cutColor(c.type)};z-index:6;pointer-events:none;"></div>`;
+      html += `<div class="da-rain-cut-line" style="${geo.lineStyle(c.min, `3px dashed ${_cutColor(c.type)}`)}z-index:6;pointer-events:none;"></div>`;
     });
 
-    dailyOverrideSkeleton.filter(ev => ev.division === divName).forEach(ev => {
-      const start = parseTimeToMinutes(ev.startTime);
-      const end = parseTimeToMinutes(ev.endTime);
-      if (start != null && end != null && end > start) {
-        const top = (start - earliestMin) * PIXELS_PER_MINUTE;
-        const height = (end - start) * PIXELS_PER_MINUTE;
+    // Only the division's anchor lane paints tiles — the rest of its block is
+    // covered by the stretched tile itself.
+    if (lane.groupStart) {
+      dailyOverrideSkeleton.filter(ev => ev.division === divName).forEach(ev => {
+        const start = parseTimeToMinutes(ev.startTime);
+        const end = parseTimeToMinutes(ev.endTime);
+        if (start == null || end == null || end <= start) return;
+
         const _plan = _daSpanPlan[ev.id];
         // Span mirrors are drawn by their anchor (leftmost member) — but the
-        // override badge below still applies to this column.
-        if (!_plan || !_plan.skip) html += renderEventTile(ev, top, height, _plan);
-        // Override indicator: show a subtle badge if any bunk in this division has an override at this time
+        // override badge below still applies to this lane.
+        if (!_plan || !_plan.skip) {
+          html += renderEventTile(ev, start, end, _plan, geo, _daLaneSpan(ev, _plan, laneOf, availableDivisions));
+        }
+        // Override indicator: a subtle badge when any bunk in this division has an override at this time
         const _ovForSlot = (currentOverrides.bunkActivityOverrides || []).filter(o => {
           const bunkDiv = Object.keys(divisions).find(d => divisions[d]?.bunks?.includes(o.bunk));
           return bunkDiv === divName && o.startMin === start && o.endMin === end;
         });
         if (_ovForSlot.length > 0) {
-          html += `<div title="${_ovForSlot.length} bunk override(s)" style="position:absolute;top:${top + 2}px;right:6px;background:#f59e0b;color:#fff;border-radius:99px;padding:1px 5px;font-size:9px;font-weight:700;z-index:2;pointer-events:none;">${_ovForSlot.length}</div>`;
+          const badgePos = isH
+            ? `left:${geo.timePx(start) + 4}px;top:4px;`
+            : `top:${geo.timePx(start) + 2}px;right:6px;`;
+          html += `<div title="${_ovForSlot.length} bunk override(s)" style="position:absolute;${badgePos}background:#f59e0b;color:#fff;border-radius:99px;padding:1px 5px;font-size:9px;font-weight:700;z-index:2;pointer-events:none;">${_ovForSlot.length}</div>`;
         }
-      }
-    });
+      });
+    }
 
     html += `<div class="da-drop-preview"></div>`;
     html += `</div>`;
   });
-  
+
   html += `</div>`;
   gridEl.innerHTML = html;
 
@@ -3481,7 +3622,15 @@ function daConvertSkeletonToLayers(skeleton) {
 //                      across `cols` adjacent columns (grid column-gap: 4px).
 //   { linked, divs } → span members whose columns aren't adjacent right now;
 //                      draw individually with a link badge.
-function renderEventTile(ev, top, height, spanInfo) {
+/**
+ * @param {object} ev        the skeleton tile
+ * @param {number} startMin  tile start, in minutes past midnight
+ * @param {number} endMin    tile end
+ * @param {object} spanInfo  multi-grade span plan for this tile (may be null)
+ * @param {object} geo       layout geometry adapter (see schedule_layout_model.js)
+ * @param {object} laneSpan  {lanes, laneOffset} — how many lanes it covers
+ */
+function renderEventTile(ev, startMin, endMin, spanInfo, geo, laneSpan) {
   let tile = TILES.find(t => t.name === ev.event);
   if (!tile && ev.type) tile = TILES.find(t => t.type === ev.type);
   if (!tile) {
@@ -3509,7 +3658,15 @@ function renderEventTile(ev, top, height, spanInfo) {
     const _gc = { '1': '#f59e0b', '2': '#3b82f6', '3': '#10b981', '4': '#a855f7' }[String(ev.smartData.pairGroup)] || '#f59e0b';
     style += ';box-shadow:0 0 0 3px ' + _gc + ', 0 0 9px ' + _gc + ';';
   }
-  const adjustedHeight = Math.max(height - 2, 24); // ★ v14.0: raised minimum from 18→24
+  // ★ The dimension that constrains how much text fits — which is NOT always
+  //   the duration. When time runs across the top, a two-hour activity is very
+  //   wide but still only as thick as its lane, so text sizing keys off the
+  //   lane thickness there and off the duration in the classic orientation.
+  const _laneCount = (laneSpan && laneSpan.lanes) || 1;
+  const _durPx = Math.max(geo.durPx(endMin - startMin) - 2, 24); // ★ v14.0: raised minimum from 18→24
+  const adjustedHeight = geo.horizontal
+    ? Math.max(_laneCount * geo.laneSize + (_laneCount - 1) * geo.laneGap - 4, 18)
+    : _durPx;
   
   // Night activity styling
   const isNight = !!ev.isNightActivity;
@@ -3623,21 +3780,35 @@ function renderEventTile(ev, top, height, spanInfo) {
     }
     let html = '';
     const stripH = adjustedHeight >= 28 ? 8 : 6;
+    const showLabel = adjustedHeight >= 28;
+    // Travel bands hug the LEADING and TRAILING edges along the time axis —
+    // top/bottom when time runs down, left/right when it runs across.
+    const hatch = 'repeating-linear-gradient(45deg,#F59E0B,#F59E0B 4px,#FCD34D 4px,#FCD34D 8px)';
+    const leadBox = geo.horizontal
+      ? `top:0;bottom:0;left:0;width:${stripH}px;border-right:1px solid #B45309;writing-mode:vertical-rl;`
+      : `top:0;left:0;right:0;height:${stripH}px;border-bottom:1px solid #B45309;`;
+    const tailBox = geo.horizontal
+      ? `top:0;bottom:0;right:0;width:${stripH}px;border-left:1px solid #B45309;writing-mode:vertical-rl;`
+      : `bottom:0;left:0;right:0;height:${stripH}px;border-top:1px solid #B45309;`;
     if (pre > 0) {
-      html += `<div title="Travel to ${_escHtml(zone)}: ${pre} min" style="position:absolute;top:0;left:0;right:0;height:${stripH}px;background:repeating-linear-gradient(45deg,#F59E0B,#F59E0B 4px,#FCD34D 4px,#FCD34D 8px);border-bottom:1px solid #B45309;pointer-events:none;text-align:center;font-size:0.55rem;line-height:8px;color:#78350F;font-weight:700;">${adjustedHeight>=28?('🚐 '+pre+'m'):''}</div>`;
+      html += `<div title="Travel to ${_escHtml(zone)}: ${pre} min" style="position:absolute;${leadBox}background:${hatch};pointer-events:none;text-align:center;font-size:0.55rem;line-height:8px;color:#78350F;font-weight:700;">${showLabel?('🚐 '+pre+'m'):''}</div>`;
     }
     if (post > 0) {
-      html += `<div title="Travel from ${_escHtml(zone)}: ${post} min" style="position:absolute;bottom:0;left:0;right:0;height:${stripH}px;background:repeating-linear-gradient(45deg,#F59E0B,#F59E0B 4px,#FCD34D 4px,#FCD34D 8px);border-top:1px solid #B45309;pointer-events:none;text-align:center;font-size:0.55rem;line-height:8px;color:#78350F;font-weight:700;">${adjustedHeight>=28?('🚐 '+post+'m'):''}</div>`;
+      html += `<div title="Travel from ${_escHtml(zone)}: ${post} min" style="position:absolute;${tailBox}background:${hatch};pointer-events:none;text-align:center;font-size:0.55rem;line-height:8px;color:#78350F;font-weight:700;">${showLabel?('🚐 '+post+'m'):''}</div>`;
     }
     return html;
   })();
 
-  // ★ Multi-grade span geometry: the anchor stretches across N adjacent
-  //   equal-width columns; the grid uses column-gap:4px so add the gaps too.
-  //   (.da-event default is width:94%; left:3% from the stylesheet.)
+  // ★ Multi-grade span geometry: the anchor stretches across every lane it
+  //   covers. The adapter owns the arithmetic (and the column gaps), so this
+  //   is identical whether lanes are grade columns or bunk rows.
   const _spanCols = (spanInfo && spanInfo.cols > 1) ? spanInfo.cols : 1;
-  const _spanWidthStyle = _spanCols > 1 ? `width:calc(${_spanCols * 100}% + ${(_spanCols - 1) * 4}px - 6%);` : '';
-  const _spanClass = _spanCols > 1 ? ' da-span-multi' : '';
+  const _geoStyle = geo.tileStyle(startMin, endMin, {
+    lanes: _laneCount,
+    laneOffset: (laneSpan && laneSpan.laneOffset) || 0,
+    minSizePx: 24
+  });
+  const _spanClass = (_spanCols > 1 || _laneCount > 1) ? ' da-span-multi' : '';
 
   // Horizontal grips: drag left/right to stretch across neighboring grades.
   // Hidden for non-adjacent linked tiles — their geometry is ambiguous until
@@ -3647,7 +3818,7 @@ function renderEventTile(ev, top, height, spanInfo) {
 
   return `<div class="da-event${_spanClass}${selectedClass}${nightClass}" data-id="${ev.id}" draggable="true"
           title="${_escHtml(eventName)} (${_escHtml(timeStr)})${isNight ? ' - Night Activity' : ''} - Double-click to remove"
-          style="${style}top:${top}px;height:${adjustedHeight}px;font-size:${fontSize};line-height:${lineHeight};padding:${padding};${_spanWidthStyle}">
+          style="${style}${_geoStyle}font-size:${fontSize};line-height:${lineHeight};padding:${padding};">
           <div class="da-resize-handle da-resize-top"></div>
           ${content}
           ${_travelStrips}
@@ -3696,69 +3867,79 @@ function applyConflictHighlighting(gridEl) {
 // =================================================================
 function addResizeListeners(gridEl) {
   const earliestMin = parseInt(gridEl.dataset.earliestMin, 10) || 540;
-  
+  const geo = _daGridGeo;
+  if (!geo) return;
+
+  // ★ The two grips resize along the TIME axis, whichever axis that is: the
+  //   tile's top/bottom edges when time runs down, its left/right edges when
+  //   time runs across. Naming them leading/trailing keeps this one code path.
+  const EDGE = geo.startEdgeProp;   // 'top'  | 'left'
+  const SIZE = geo.sizeProp;        // 'height' | 'width'
+  const minSizePx = geo.durPx(geo.snapMins);
+
   let tooltip = document.getElementById('da-resize-tooltip');
   if (!tooltip) {
     tooltip = document.createElement('div');
     tooltip.id = 'da-resize-tooltip';
     document.body.appendChild(tooltip);
   }
-  
+
   gridEl.querySelectorAll('.da-event').forEach(tile => {
     const topHandle = tile.querySelector('.da-resize-top');
     const bottomHandle = tile.querySelector('.da-resize-bottom');
-    
+
     [topHandle, bottomHandle].forEach(handle => {
       if (!handle) return;
-      const direction = handle.classList.contains('da-resize-top') ? 'top' : 'bottom';
-      let isResizing = false, startY = 0, startTop = 0, startHeight = 0, eventId = null;
-      
+      const isLeading = handle.classList.contains('da-resize-top');
+      let isResizing = false, origin = null, startPos = 0, startSize = 0, eventId = null;
+
       handle.onmousedown = (e) => {
         e.preventDefault();
         e.stopPropagation();
         isResizing = true;
-        startY = e.clientY;
-        startTop = parseInt(tile.style.top, 10);
-        startHeight = tile.offsetHeight;
+        origin = { x: e.clientX, y: e.clientY };
+        startPos = parseFloat(tile.style[EDGE]) || 0;
+        startSize = geo.horizontal ? tile.offsetWidth : tile.offsetHeight;
         eventId = tile.dataset.id;
         tile.classList.add('da-resizing');
         document.addEventListener('mousemove', onMouseMove);
         document.addEventListener('mouseup', onMouseUp);
       };
-      
+
       function onMouseMove(e) {
         if (!isResizing) return;
         const event = dailyOverrideSkeleton.find(ev => ev.id === eventId);
         if (!event) return;
-        
-        const deltaY = e.clientY - startY;
-        let newTop = startTop, newHeight = startHeight;
-        
-        if (direction === 'bottom') {
-          newHeight = Math.max(SNAP_MINS * PIXELS_PER_MINUTE, startHeight + deltaY);
-          newHeight = Math.round(newHeight / (SNAP_MINS * PIXELS_PER_MINUTE)) * (SNAP_MINS * PIXELS_PER_MINUTE);
+
+        const delta = geo.deltaTimePx(e, origin);
+        let newPos = startPos, newSize = startSize;
+
+        // Snap in MINUTES, not pixels — that lets a bell-schedule layout pull
+        // the edge straight onto the next bell instead of onto a 5-minute grid.
+        if (!isLeading) {
+          const rawEnd = earliestMin + (startPos + Math.max(minSizePx, startSize + delta)) / geo.pxPerMinute;
+          newSize = Math.max(minSizePx, geo.timePx(geo.snap(rawEnd)) - startPos);
         } else {
-          const maxDelta = startHeight - (SNAP_MINS * PIXELS_PER_MINUTE);
-          const constrainedDelta = Math.min(deltaY, maxDelta);
-          const snappedDelta = Math.round(constrainedDelta / (SNAP_MINS * PIXELS_PER_MINUTE)) * (SNAP_MINS * PIXELS_PER_MINUTE);
-          newTop = startTop + snappedDelta;
-          newHeight = startHeight - snappedDelta;
+          const endPx = startPos + startSize;
+          const rawStart = earliestMin + Math.min(startPos + delta, endPx - minSizePx) / geo.pxPerMinute;
+          newPos = Math.min(geo.timePx(geo.snap(rawStart)), endPx - minSizePx);
+          newSize = endPx - newPos;
         }
-        
-        tile.style.top = newTop + 'px';
-        tile.style.height = newHeight + 'px';
-        
-        const newStartMin = earliestMin + (newTop / PIXELS_PER_MINUTE);
-        const newEndMin = newStartMin + (newHeight / PIXELS_PER_MINUTE);
-        const duration = newEndMin - newStartMin;
+
+        tile.style[EDGE] = newPos + 'px';
+        tile.style[SIZE] = newSize + 'px';
+
+        const newStartMin = earliestMin + (newPos / geo.pxPerMinute);
+        const newEndMin = newStartMin + (newSize / geo.pxPerMinute);
+        const duration = Math.round(newEndMin - newStartMin);
         const durationStr = duration < 60 ? `${duration}m` : `${Math.floor(duration/60)}h${duration%60 > 0 ? duration%60+'m' : ''}`;
-        
+
         tooltip.innerHTML = `${minutesToTime(newStartMin)} - ${minutesToTime(newEndMin)}<br><span>${durationStr}</span>`;
         tooltip.style.display = 'block';
         tooltip.style.left = (e.clientX + 15) + 'px';
         tooltip.style.top = (e.clientY - 40) + 'px';
       }
-      
+
       function onMouseUp() {
         if (!isResizing) return;
         isResizing = false;
@@ -3766,25 +3947,25 @@ function addResizeListeners(gridEl) {
         document.removeEventListener('mouseup', onMouseUp);
         tile.classList.remove('da-resizing');
         tooltip.style.display = 'none';
-        
+
         const event = dailyOverrideSkeleton.find(ev => ev.id === eventId);
         if (!event) return;
-        
-        const newTop = parseInt(tile.style.top, 10);
-        const newHeightPx = parseInt(tile.style.height, 10);
-        const newStartMin = earliestMin + (newTop / PIXELS_PER_MINUTE);
-        const newEndMin = newStartMin + (newHeightPx / PIXELS_PER_MINUTE);
-        
+
+        const newPos = parseFloat(tile.style[EDGE]) || 0;
+        const newSizePx = parseFloat(tile.style[SIZE]) || 0;
+        const newStartMin = earliestMin + (newPos / geo.pxPerMinute);
+        const newEndMin = newStartMin + (newSizePx / geo.pxPerMinute);
+
         const div = window.divisions?.[event.division] || {};
         const divStartMin = parseTimeToMinutes(div.startTime) || 540;
         const divEndMin = parseTimeToMinutes(div.endTime) || 960;
-        
+
         if (event.isNightActivity) {
-          event.startTime = minutesToTime(Math.max(divStartMin, Math.round(newStartMin / SNAP_MINS) * SNAP_MINS));
-          event.endTime = minutesToTime(Math.round(newEndMin / SNAP_MINS) * SNAP_MINS);
+          event.startTime = minutesToTime(Math.max(divStartMin, geo.snap(newStartMin)));
+          event.endTime = minutesToTime(geo.snap(newEndMin));
         } else {
-          event.startTime = minutesToTime(Math.max(divStartMin, Math.round(newStartMin / SNAP_MINS) * SNAP_MINS));
-          event.endTime = minutesToTime(Math.min(divEndMin, Math.round(newEndMin / SNAP_MINS) * SNAP_MINS));
+          event.startTime = minutesToTime(Math.max(divStartMin, geo.snap(newStartMin)));
+          event.endTime = minutesToTime(Math.min(divEndMin, geo.snap(newEndMin)));
         }
 
         // ★ Multi-grade span: every grade's copy keeps the same times, and
@@ -3822,7 +4003,8 @@ function addHorizontalResizeListeners(gridEl) {
   let columns = [];
   try { columns = JSON.parse(gridEl.dataset.columns || '[]'); } catch (_) { columns = []; }
   if (!Array.isArray(columns) || columns.length === 0) return;
-  const COL_GAP = 4; // .da-grid / .ms-grid column-gap
+  const geo = _daGridGeo;
+  if (!geo) return;
 
   let tooltip = document.getElementById('da-resize-tooltip');
   if (!tooltip) {
@@ -3844,13 +4026,24 @@ function addHorizontalResizeListeners(gridEl) {
 
         const ev = dailyOverrideSkeleton.find(x => x.id === tile.dataset.id);
         if (!ev) return;
-        const cell = tile.closest('.da-grid-cell');
-        const colWidth = cell ? cell.offsetWidth : 0;
-        if (!colWidth) return;
-        const colStride = colWidth + COL_GAP;
+
+        // ★ Grade extents are measured from the DOM rather than assumed to be a
+        //   uniform stride. In bunk mode each grade is as wide as its bunk
+        //   count, so grades genuinely differ in size and a single stride would
+        //   drift further off with every grade crossed.
+        const bounds = _daDivisionBounds(gridEl, columns);
+        const nearestIdx = (coord) => {
+          let best = -1, bestD = Infinity;
+          bounds.forEach((b, i) => {
+            if (!b) return;
+            const d = Math.abs(b.mid - coord);
+            if (d < bestD) { bestD = d; best = i; }
+          });
+          return best;
+        };
 
         // Current span geometry. The rendered tile is the anchor — the span's
-        // leftmost member in display order (or a plain single-grade tile).
+        // leading member in display order (or a plain single-grade tile).
         const members = _daSpanMembers(ev);
         const spanDivs = members.map(m => m.division)
           .sort((a, b) => columns.indexOf(a) - columns.indexOf(b));
@@ -3859,23 +4052,35 @@ function addHorizontalResizeListeners(gridEl) {
         const anchorIdx = columns.indexOf(ev.division);
         if (leftIdx === -1 || rightIdx === -1 || anchorIdx === -1) return;
 
-        const startX = e.clientX;
         let newLeftIdx = leftIdx, newRightIdx = rightIdx;
         tile.classList.add('da-resizing-h');
 
-        const onMove = (e2) => {
-          const deltaCols = Math.round((e2.clientX - startX) / colStride);
-          if (isLeft) {
-            newLeftIdx = Math.min(Math.max(0, leftIdx + deltaCols), rightIdx);
-            newRightIdx = rightIdx;
+        // Paint the preview across whole lanes. In grade mode a lane is a
+        // grade; in bunk mode a grade covers all of its bunks' lanes.
+        const applyLanePreview = (fromIdx, toIdx) => {
+          const first = _daLaneRange(columns[fromIdx]).first;
+          const last = _daLaneRange(columns[toIdx]).last;
+          const anchor = _daLaneRange(ev.division).first;
+          const lanes = Math.max(1, last - first + 1);
+          const off = first - anchor;
+          if (geo.horizontal) {
+            const extent = lanes * geo.laneSize + (lanes - 1) * geo.laneGap;
+            tile.style.top = (off * (geo.laneSize + geo.laneGap) + 2) + 'px';
+            tile.style.height = Math.max(extent - 4, 18) + 'px';
           } else {
-            newRightIdx = Math.max(Math.min(columns.length - 1, rightIdx + deltaCols), leftIdx);
-            newLeftIdx = leftIdx;
+            tile.style.left = `calc(${off * 100}% + ${off * geo.laneGap}px + 3%)`;
+            tile.style.width = `calc(${lanes * 100}% + ${(lanes - 1) * geo.laneGap}px - 6%)`;
           }
-          const cols = newRightIdx - newLeftIdx + 1;
-          const dcol = newLeftIdx - anchorIdx;
-          tile.style.left = `calc(${dcol * 100}% + ${dcol * COL_GAP}px + 3%)`;
-          tile.style.width = `calc(${cols * 100}% + ${(cols - 1) * COL_GAP}px - 6%)`;
+        };
+
+        const onMove = (e2) => {
+          const coord = geo.horizontal ? e2.clientY : e2.clientX;
+          const hit = nearestIdx(coord);
+          if (hit !== -1) {
+            if (isLeft) { newLeftIdx = Math.min(hit, rightIdx); newRightIdx = rightIdx; }
+            else { newRightIdx = Math.max(hit, leftIdx); newLeftIdx = leftIdx; }
+          }
+          applyLanePreview(newLeftIdx, newRightIdx);
 
           const covered = columns.slice(newLeftIdx, newRightIdx + 1);
           tooltip.innerHTML = covered.length > 1
@@ -3954,7 +4159,8 @@ function _daCommitSpanResize(ev, newDivs) {
 // =================================================================
 function addDragToRepositionListeners(gridEl) {
   const earliestMin = parseInt(gridEl.dataset.earliestMin, 10) || 540;
-  
+  const geo = _daGridGeo;
+
   let ghost = document.getElementById('da-drag-ghost');
   if (!ghost) {
     ghost = document.createElement('div');
@@ -4015,18 +4221,20 @@ function addDragToRepositionListeners(gridEl) {
       e.dataTransfer.dropEffect = isEventMove ? 'move' : 'copy';
       cell.style.background = 'rgba(59,130,246,0.1)';
       
-      if (isEventMove && dragData && preview) {
+      if (isEventMove && dragData && preview && geo) {
         const rect = cell.getBoundingClientRect();
-        const y = e.clientY - rect.top;
-        const snapMin = Math.round(y / PIXELS_PER_MINUTE / SNAP_MINS) * SNAP_MINS;
         const cellStartMin = parseInt(cell.dataset.startMin, 10);
-        const previewStartTime = minutesToTime(cellStartMin + snapMin);
-        const previewEndTime = minutesToTime(cellStartMin + snapMin + dragData.duration);
-        
+        const startMin = geo.snap(cellStartMin + geo.pointerMinuteOffset(e, rect));
+
         preview.style.display = 'block';
-        preview.style.top = (snapMin * PIXELS_PER_MINUTE) + 'px';
-        preview.style.height = (dragData.duration * PIXELS_PER_MINUTE) + 'px';
-        preview.innerHTML = `<div class="da-preview-time">${previewStartTime} - ${previewEndTime}</div>`;
+        if (geo.horizontal) {
+          preview.style.left = geo.timePx(startMin) + 'px';
+          preview.style.width = geo.durPx(dragData.duration) + 'px';
+        } else {
+          preview.style.top = geo.timePx(startMin) + 'px';
+          preview.style.height = geo.durPx(dragData.duration) + 'px';
+        }
+        preview.innerHTML = `<div class="da-preview-time">${minutesToTime(startMin)} - ${minutesToTime(startMin + dragData.duration)}</div>`;
       }
     });
     
@@ -4050,11 +4258,11 @@ function addDragToRepositionListeners(gridEl) {
         const divName = cell.dataset.div;
         const cellStartMin = parseInt(cell.dataset.startMin, 10);
         const rect = cell.getBoundingClientRect();
-        const y = e.clientY - rect.top;
-        const snapMin = Math.round(y / PIXELS_PER_MINUTE / SNAP_MINS) * SNAP_MINS;
 
         const duration = parseTimeToMinutes(event.endTime) - parseTimeToMinutes(event.startTime);
-        const newStartMin = cellStartMin + snapMin;
+        const newStartMin = geo
+          ? geo.snap(cellStartMin + geo.pointerMinuteOffset(e, rect))
+          : cellStartMin + Math.round((e.clientY - rect.top) / PIXELS_PER_MINUTE / SNAP_MINS) * SNAP_MINS;
         const newStart = minutesToTime(newStartMin);
         const newEnd = minutesToTime(newStartMin + duration);
 
@@ -4138,10 +4346,15 @@ function addDropListeners(gridEl) {
       const divEndMin = parseTimeToMinutes(div.endTime);
       
       const rect = cell.getBoundingClientRect();
-      const offsetY = e.clientY - rect.top;
-      let minOffset = Math.round(offsetY / PIXELS_PER_MINUTE / 15) * 15;
-      let startMin = earliestMin + minOffset;
-      let endMin = startMin + INCREMENT_MINS;
+      // ★ A new tile lands on the layout's own grid: on a bell boundary when the
+      //   camp runs a bell schedule, and it defaults to the LENGTH of the period
+      //   it landed in — so dropping into "Period 3" fills Period 3 exactly,
+      //   rather than always laying down a fixed 30-minute block.
+      const _dropGeo = _daGridGeo;
+      let startMin = _dropGeo
+        ? _dropGeo.snap(earliestMin + _dropGeo.pointerMinuteOffset(e, rect))
+        : earliestMin + Math.round((e.clientY - rect.top) / PIXELS_PER_MINUTE / 15) * 15;
+      let endMin = startMin + (_dropGeo ? _dropGeo.defaultDurationAt(startMin) : INCREMENT_MINS);
       const startStr = minutesToTime(startMin);
       const endStr = minutesToTime(endMin);
       let newEvent = null;
@@ -9771,6 +9984,63 @@ function getStyles() {
     /* Drop Preview */
     .da-drop-preview { display:none; position:absolute; left:3%; width:94%; background:rgba(59,130,246,0.15); border:2px dashed var(--da-accent); border-radius:6px; pointer-events:none; z-index:5; }
     .da-preview-time { text-align:center; padding:8px; color:var(--da-accent); font-weight:600; font-size:12px; background:rgba(255,255,255,0.9); border-radius:3px; margin:4px; }
+
+    /* =====================================================================
+       CUSTOM SCHEDULE LAYOUTS  (see schedule_layout_model.js)
+       The time gutter is now a stack of ruler TIERS rather than one column of
+       markers, so a camp can read an hourly band over a 15-minute band, or a
+       named bell schedule over either. Tier styling below is deliberately
+       identical to the old .da-time-marker for a single uniform tier, so the
+       classic layout is pixel-unchanged.
+       ===================================================================== */
+    .da-ruler { position:relative; display:flex; background:var(--da-surface); }
+    .da-ruler-tier { position:relative; flex:1 0 auto; }
+    .da-ruler-tick { position:absolute; box-sizing:border-box; font-size:11px; color:var(--da-text3); font-weight:500; overflow:hidden; }
+    /* Uniform tier = a boundary mark with the time hanging off it (classic look) */
+    .da-ruler-tier[data-kind="uniform"] .da-ruler-tick { left:0; width:100%; padding:3px 6px; border-top:1px dashed #e2e8f0; }
+    /* Bell-schedule tier = a labelled band you can see the shape of */
+    .da-ruler-tier[data-kind="periods"] .da-ruler-tick {
+      left:2px; right:2px; width:auto; display:flex; flex-direction:column; align-items:center; justify-content:center;
+      text-align:center; padding:2px 4px; background:#eef2ff; border:1px solid #c7d2fe; border-radius:5px;
+      color:#3730a3; font-weight:600; line-height:1.15;
+    }
+    .da-ruler-tick-sub { font-size:9px; font-weight:500; opacity:0.75; }
+    .da-ruler-tier + .da-ruler-tier { border-left:1px solid var(--da-border); }
+    .da-ruler-label { position:sticky; font-size:9px; text-transform:uppercase; letter-spacing:0.4px; color:var(--da-text3); padding:2px 4px; }
+
+    /* --- Time-across-the-top orientation --------------------------------- */
+    .da-grid.da-horizontal { min-width:0; }
+    /* Tiers stack top→bottom, each tick laid out along the horizontal time axis */
+    .da-grid.da-horizontal .da-ruler { flex-direction:column; position:sticky; top:0; z-index:9; border-bottom:2px solid var(--da-border); }
+    .da-grid.da-horizontal .da-ruler-tier { flex:0 0 auto; }
+    .da-grid.da-horizontal .da-ruler-tier + .da-ruler-tier { border-left:none; border-top:1px solid var(--da-border); }
+    .da-grid.da-horizontal .da-ruler-tier[data-kind="uniform"] { height:24px; }
+    .da-grid.da-horizontal .da-ruler-tier[data-kind="periods"] { height:34px; }
+    .da-grid.da-horizontal .da-ruler-tier[data-kind="uniform"] .da-ruler-tick {
+      left:auto; width:auto; top:0; height:100%; padding:4px 5px; border-top:none; border-left:1px dashed #e2e8f0; white-space:nowrap;
+    }
+    .da-grid.da-horizontal .da-ruler-tier[data-kind="periods"] .da-ruler-tick { top:2px; bottom:2px; height:auto; left:auto; right:auto; }
+    /* Lane header (grade or bunk) runs down the left and stays put on scroll */
+    .da-grid.da-horizontal .da-lane-header {
+      position:sticky; left:0; z-index:8; top:auto; display:flex; align-items:center; justify-content:flex-start;
+      padding:6px 10px; text-align:left; border-bottom:1px solid var(--da-border); border-radius:0;
+    }
+    .da-grid.da-horizontal .da-corner { position:sticky; left:0; top:0; z-index:11; }
+    .da-grid.da-horizontal .da-grid-cell { border-radius:0; border-bottom:1px solid #eef0f3; }
+    .da-grid.da-horizontal .da-grid-disabled { width:auto; height:100%; }
+    /* In this orientation the time edges are left/right and the lane edges top/bottom,
+       so the two resize grips swap roles and cursors. */
+    .da-grid.da-horizontal .da-resize-handle { left:auto; right:auto; top:0; bottom:0; width:8px; height:auto; cursor:ew-resize; }
+    .da-grid.da-horizontal .da-resize-top { left:-2px; }
+    .da-grid.da-horizontal .da-resize-bottom { right:-2px; }
+    .da-grid.da-horizontal .da-resize-h { top:auto; bottom:auto; left:0; right:0; width:auto; height:10px; cursor:ns-resize; }
+    .da-grid.da-horizontal .da-resize-h-left { top:0; border-radius:6px 6px 0 0; }
+    .da-grid.da-horizontal .da-resize-h-right { bottom:0; border-radius:0 0 6px 6px; }
+    .da-grid.da-horizontal .da-resize-h::after { width:26px; max-width:55%; height:3px; }
+    .da-grid.da-horizontal .da-drop-preview { left:auto; width:auto; top:2px; bottom:2px; height:auto; }
+    /* A bunk lane sits under its grade's banner, so tint the grade's first lane */
+    .da-lane-group-start { box-shadow:inset 0 2px 0 rgba(15,23,42,0.12); }
+    .da-lane-sub { font-size:9px; opacity:0.7; font-weight:500; }
     
     /* Tooltips & Ghosts */
     #da-resize-tooltip { position:fixed; padding:8px 12px; background:#111827; color:#fff; border-radius:6px; font-size:12px; font-weight:600; pointer-events:none; z-index:10002; display:none; box-shadow:0 4px 12px rgba(0,0,0,0.3); text-align:center; }
