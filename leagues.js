@@ -219,6 +219,7 @@
                 teams: [],
                 sports: [],
                 sportDailyLimits: {},
+                roundRobin: { enabled: false, size: 3, rounds: 1 },
                 divisions: [],
                 standings: {},
                 games: [],
@@ -313,6 +314,24 @@
             //   when nothing else is open); this is a HARD cap the engine never
             //   trades away. Absent key = no limit, which is the default for
             //   every sport, so existing leagues are unaffected.
+            // ★ ROUND-ROBIN GROUPS: with an odd number of teams playing, one
+            //   team is benched every period. Instead, `size` teams share one
+            //   field and play a round robin (every pair in the group meets).
+            //   Only ODD sizes absorb the odd team out — an even group would
+            //   leave the remainder odd again — so the size is snapped to the
+            //   next odd number, minimum 3.
+            //   `rounds` is how many times the group plays through its pairings
+            //   — one round of 3 teams is only 3 short games, which rarely
+            //   fills a league period.
+            roundRobin: (function (raw) {
+                const on = !!(raw && raw.enabled === true);
+                let size = parseInt(raw && raw.size, 10);
+                if (!Number.isFinite(size) || size < 3) size = 3;
+                if (size % 2 === 0) size += 1;
+                let rounds = parseInt(raw && raw.rounds, 10);
+                if (!Number.isFinite(rounds) || rounds < 1) rounds = 1;
+                return { enabled: on, size: size, rounds: rounds };
+            })(league.roundRobin),
             sportDailyLimits: (function (raw) {
                 const out = {};
                 if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return out;
@@ -832,6 +851,7 @@
                 teams: [],
                 sports: [],
                 sportDailyLimits: {},
+                roundRobin: { enabled: false, size: 3, rounds: 1 },
                 divisions: [],
                 standings: {},
                 games: [],
@@ -1529,6 +1549,7 @@
         if (league.byeActivity?.enabled) _summaryBits.push('Bye Activity');
         if (league.indoorRequirement?.enabled) _summaryBits.push('Indoor Rule');
         if (Object.keys(league.sportDailyLimits || {}).length > 0) _summaryBits.push('Sport Daily Limits');
+        if (league.roundRobin?.enabled) _summaryBits.push('Round-Robin Groups');
         if (_summaryBits.length > 0) {
             const summary = document.createElement('span');
             summary.textContent = _summaryBits.join(' \u00b7 ');
@@ -2181,6 +2202,88 @@
         }
 
         advancedBody.appendChild(indoorCard);
+
+        // ─── CARD: ROUND-ROBIN GROUPS ───────────────────────────────────────
+        // An odd number of teams means somebody is benched every period. This
+        // puts `size` teams on ONE field for a round robin instead — every pair
+        // in the group plays, so nobody sits out.
+        if (!league.roundRobin) league.roundRobin = { enabled: false, size: 3, rounds: 1 };
+        if (!(league.roundRobin.rounds >= 1)) league.roundRobin.rounds = 1;
+
+        const _rrPairings = (function (n) { return n * (n - 1) / 2; })(league.roundRobin.size);
+        const _rrRounds = league.roundRobin.rounds;
+        const _rrGames = _rrPairings * _rrRounds;
+        const _rr = makeAdvancedCard(league, container, {
+            key: 'roundrobin',
+            title: 'Round-Robin Groups',
+            subtitle: 'Odd team out plays a round robin instead of sitting on a bye',
+            accent: '#16A34A', tint: '#F0FDF4', tintBorder: '#BBF7D0',
+            enabled: league.roundRobin.enabled === true,
+            onToggle: function (checked) { league.roundRobin.enabled = checked; },
+            status: league.roundRobin.enabled
+                ? ('Groups of ' + league.roundRobin.size + (_rrRounds > 1 ? ' \u00b7 ' + _rrRounds + ' rounds' : ''))
+                : null
+        });
+
+        if (_rr.open) {
+            const rrBody = _rr.body;
+
+            const rrRow = document.createElement('div');
+            rrRow.style.cssText = 'display:flex; align-items:center; gap:8px; font-size:0.88rem; color:#374151; flex-wrap:wrap;';
+            rrRow.appendChild(document.createTextNode('Group'));
+
+            const rrSize = document.createElement('input');
+            rrSize.type = 'number'; rrSize.min = '3'; rrSize.step = '2';
+            rrSize.value = league.roundRobin.size;
+            rrSize.style.cssText = 'width:64px; padding:6px 8px; border:1px solid #D1D5DB; border-radius:6px; font-size:0.88rem; text-align:center; background:white;';
+            rrSize.onchange = function () {
+                let v = parseInt(rrSize.value, 10);
+                if (!Number.isFinite(v) || v < 3) v = 3;
+                if (v % 2 === 0) v += 1;          // only an odd group absorbs the odd team out
+                league.roundRobin.size = v;
+                saveLeaguesData();
+                renderConfigSections(league, container);
+            };
+            rrRow.appendChild(rrSize);
+            rrRow.appendChild(document.createTextNode('teams together on one field, playing'));
+
+            // One round of 3 teams is 3 short games — usually not enough to fill
+            // a league period, so the camp says how many times through.
+            const rrRoundsInput = document.createElement('input');
+            rrRoundsInput.type = 'number'; rrRoundsInput.min = '1'; rrRoundsInput.step = '1';
+            rrRoundsInput.value = _rrRounds;
+            rrRoundsInput.style.cssText = 'width:64px; padding:6px 8px; border:1px solid #D1D5DB; border-radius:6px; font-size:0.88rem; text-align:center; background:white;';
+            rrRoundsInput.onchange = function () {
+                let v = parseInt(rrRoundsInput.value, 10);
+                if (!Number.isFinite(v) || v < 1) v = 1;
+                league.roundRobin.rounds = v;
+                saveLeaguesData();
+                renderConfigSections(league, container);
+            };
+            rrRow.appendChild(rrRoundsInput);
+            rrRow.appendChild(document.createTextNode(_rrRounds === 1 ? 'round' : 'rounds'));
+            rrBody.appendChild(rrRow);
+
+            const rrCount = document.createElement('div');
+            rrCount.style.cssText = 'font-size:0.78rem; color:#374151; background:#F0F9FF; border:1px solid #BAE6FD; border-radius:8px; padding:8px 10px; margin-top:10px;';
+            rrCount.textContent = 'A group of ' + league.roundRobin.size + ' plays ' + _rrGames + ' short game'
+                + (_rrGames === 1 ? '' : 's') + ' — every pair in the group meets'
+                + (_rrRounds > 1 ? ' ' + _rrRounds + ' times (' + _rrRounds + ' \u00d7 ' + _rrPairings + ')' : '')
+                + ', all on the same field and sport. Make sure that fits the period.';
+            rrBody.appendChild(rrCount);
+
+            const rrHint = document.createElement('div');
+            rrHint.style.cssText = 'font-size:0.72rem; color:#6B7280; margin-top:10px; line-height:1.4;';
+            rrHint.textContent = 'Only kicks in when the teams playing this period can’t pair up evenly — with '
+                + 'an even number (including days chinuch takes one team out) everyone pairs off normally and nothing changes. '
+                + 'Group size must be odd, so it’s rounded up. The schedule lists each game in the group, and all of them '
+                + 'show on the Leagues page for scores. Sport rotation counts the group once per team — they played that '
+                + 'sport today, so tomorrow they get a different one — but the games do NOT count as matchups, so a group '
+                + 'never uses up who-played-who variety.';
+            rrBody.appendChild(rrHint);
+        }
+
+        advancedBody.appendChild(_rr.card);
 
         // ─── CARD: SPORT DAILY LIMITS ───────────────────────────────────────
         // Per-sport hard cap on how many times ONE TEAM may play that sport in

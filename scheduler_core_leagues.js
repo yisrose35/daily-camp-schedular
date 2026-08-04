@@ -864,8 +864,24 @@
     // Regular-league entries store matchups as display strings
     // ("Team 1 vs Team 2 @ BB Field (Basketball)"); parse defensively and
     // accept structured {teamA/team1, teamB/team2, sport} objects too.
+    // ★ ROUND-ROBIN MARKER. A group's games are written to the tile in the
+    // ordinary "A vs B @ Field (Sport)" shape so print, the reserved-field
+    // validator and the rename rewriter all keep working — but that shape is
+    // ALSO the ground-truth backstop the engine rebuilds a stale gameLog from
+    // (dailyDataLeagueGames → _parseDailyMatchup). Read back unmarked, a
+    // 3-team group would resurrect as three real matchups and undo the whole
+    // point of not recording them. The suffix sits AFTER the sport parens, so
+    // the field regex and the "A vs B" rewriter are unaffected, and it reads
+    // as a label to a human looking at the schedule.
+    const RR_LINE_TAG = ' — round robin';
+    function _isRoundRobinLine(s) { return /—\s*round robin(\s+R\d+)?\s*$/i.test(String(s || '')); }
+    Leagues._isRoundRobinLine = _isRoundRobinLine;   // tests
+
     function _parseDailyMatchup(m, fallbackSport) {
         if (!m) return null;
+        // A round-robin group's games are a scheduling device, never a
+        // recorded matchup — the saved tile must not re-create one.
+        if (typeof m === 'string' && _isRoundRobinLine(m)) return null;
         if (typeof m === 'object') {
             const a = m.teamA != null ? m.teamA : m.team1;
             const b = m.teamB != null ? m.teamB : m.team2;
@@ -880,6 +896,7 @@
         if (noSport) return { t1: noSport[1].trim(), t2: noSport[2].trim(), sport: fallbackSport || null };
         return null;
     }
+    Leagues._parseDailyMatchup = _parseDailyMatchup;   // tests
 
     // ★ TEAM RENAME: resolve a former team name read out of a SAVED schedule to
     // the team's current name. Saved schedules are migrated at rename time, but
@@ -1149,7 +1166,9 @@
             if (_hrEp && d < _hrEp) return;                // ★ HR-48
             if (asOfDate && d > asOfDate) return;          // ignore strictly-future dates
             (gl[d] || []).forEach(function (e) {
-                if (e && getMatchupKey(e.t1, e.t2) === key) n++;
+                // Both sides required: a round-robin group logs one-sided
+                // entries (t2 = null) that must never count as a meeting.
+                if (e && e.t1 && e.t2 && getMatchupKey(e.t1, e.t2) === key) n++;
             });
         });
         return n;
@@ -1179,6 +1198,73 @@
         // date's records into result-entry games for the Leagues page.
         history.gameLog[leagueName][date].push({ t1: team1, t2: team2, sport: sport || null, g: gameLabel || null });
     }
+
+    // ★★★ ROUND-ROBIN GROUP RECORD ★★★
+    // A group of N teams sharing one field plays every pair in the group. The
+    // camp wants that to count as "these teams played basketball today" for
+    // sport rotation, but NOT as who-played-who: a group is a scheduling
+    // device, not a fixture, and letting it burn matchup variety would starve
+    // the real head-to-heads.
+    //
+    // So the group is logged as ONE entry PER TEAM with t2 = null:
+    //   • sport readers count `e.t1 === team || e.t2 === team` → each team gets
+    //     the sport exactly once, however many games it played in the group;
+    //   • matchup readers are all guarded on `e.t1 && e.t2` → a null t2 is
+    //     invisible to them, so no pair count moves.
+    // Nothing else in the history layer needed teaching — rollback, the
+    // (league,date) merge, the epoch rebuild and the team-rename mapper all
+    // already handle a one-sided entry.
+    //
+    // `rr` is a per-day group id and `rrTeams` the roster, carried so the
+    // Leagues results page can expand the group back into its real games for
+    // score entry (see _expandLogForResults). rrTeams is remapped on rename.
+    function logRoundRobinRecord(leagueName, date, teams, sport, history, gameLabel, groupId, rounds) {
+        if (!history.gameLog) history.gameLog = {};
+        if (!history.gameLog[leagueName]) history.gameLog[leagueName] = {};
+        if (!history.gameLog[leagueName][date]) history.gameLog[leagueName][date] = [];
+        const roster = (teams || []).slice();
+        const nr = (Number.isFinite(rounds) && rounds >= 1) ? Math.floor(rounds) : 1;
+        roster.forEach(function (t) {
+            history.gameLog[leagueName][date].push({
+                t1: t, t2: null, sport: sport || null, g: gameLabel || null,
+                rr: groupId, rrTeams: roster.slice(),
+                // Rounds change how many GAMES the group played, never how many
+                // times its sport counts — still one entry per team either way.
+                rrRounds: nr > 1 ? nr : undefined
+            });
+        });
+    }
+
+    // Turn a day's log into the pair-level games the Leagues page shows for
+    // score entry: normal entries pass through; each round-robin group
+    // contributes its pairings ONCE (the per-team entries collapse into it).
+    function _expandLogForResults(entries) {
+        const out = [];
+        const seenGroups = new Set();
+        (entries || []).forEach(function (e) {
+            if (!e) return;
+            if (!e.rr) {
+                if (e.t1 && e.t2) out.push({ teamA: e.t1, teamB: e.t2, sport: e.sport || null, g: e.g || null });
+                return;
+            }
+            const gid = String(e.g || '') + '#' + e.rr;
+            if (seenGroups.has(gid)) return;
+            seenGroups.add(gid);
+            const roster = Array.isArray(e.rrTeams) ? e.rrTeams : [];
+            const rounds = (Number.isFinite(e.rrRounds) && e.rrRounds >= 1) ? e.rrRounds : 1;
+            // Multiple rounds means the pair really did play more than once, so
+            // each meeting gets its own scoreable row.
+            for (let rd = 0; rd < rounds; rd++) {
+                for (let i = 0; i < roster.length; i++) {
+                    for (let j = i + 1; j < roster.length; j++) {
+                        out.push({ teamA: roster[i], teamB: roster[j], sport: e.sport || null, g: e.g || null });
+                    }
+                }
+            }
+        });
+        return out;
+    }
+    Leagues._expandLogForResults = _expandLogForResults;   // tests
 
     function rollbackDayRecords(leagueName, date, history, preservedLabels, keepUnlabeled) {
         const entries = history.gameLog?.[leagueName]?.[date];
@@ -1344,6 +1430,15 @@
                         const next = mapFn(e[f]);
                         if (next !== e[f]) { e[f] = next; changed++; }
                     });
+                    // Round-robin roster — what the results page expands into
+                    // games, so a rename has to reach it too.
+                    if (Array.isArray(e.rrTeams)) {
+                        for (let i = 0; i < e.rrTeams.length; i++) {
+                            if (typeof e.rrTeams[i] !== 'string') continue;
+                            const nx = mapFn(e.rrTeams[i]);
+                            if (nx !== e.rrTeams[i]) { e.rrTeams[i] = nx; changed++; }
+                        }
+                    }
                 });
             });
         }
@@ -2914,10 +3009,12 @@
     // Soft fallback: if every remaining option is streak-blocked (pathological
     // — e.g. a single-sport league), keep the pool so the matchup still gets
     // a game rather than being dropped.
-    function _applyStreakCapFilter(pool, t1, t2, hist1, hist2, next1, next2) {
+    function _applyStreakCapFilter(pool, t1, t2, hist1, hist2, next1, next2, extraHistNext) {
         if (!pool.length) return pool;
         const blocked = new Set();
-        [[hist1, next1], [hist2, next2]].forEach(function (pair) {
+        // extraHistNext = [[hist, nextSet], …] for the 3rd+ member of a
+        // round-robin group; empty for an ordinary two-team matchup.
+        [[hist1, next1], [hist2, next2]].concat(extraHistNext || []).forEach(function (pair) {
             const hist = pair[0], next = pair[1];
             const n = hist.length;
             if (n >= 2 && hist[n - 1] === hist[n - 2]) blocked.add(hist[n - 1]);
@@ -3025,17 +3122,19 @@
     // Hard filter. Returns a (possibly EMPTY) pool — an empty result means the
     // rule left this matchup nothing to play, which the callers turn into an
     // explanatory bye rather than a silent violation.
-    function _applySportDailyLimitFilter(pool, t1, t2, leagueName, history, dayId, leagueRules) {
+    function _applySportDailyLimitFilter(pool, t1, t2, leagueName, history, dayId, leagueRules, groupTeams) {
         if (window.__leagueSportDailyLimit === false) return pool;
         if (!pool.length) return pool;
         const limits = _sportDailyLimitsFor(leagueName, leagueRules);
         if (!limits) return pool;
-        const c1 = _getTeamSportCountsToday(leagueName, t1, history, dayId);
-        const c2 = _getTeamSportCountsToday(leagueName, t2, history, dayId);
+        // Every member of a round-robin group has to be under the cap — the
+        // whole group plays the one sport the group is given.
+        const members = (groupTeams && groupTeams.length) ? groupTeams : [t1, t2];
+        const counts = members.map(function (t) { return _getTeamSportCountsToday(leagueName, t, history, dayId); });
         const ok = pool.filter(function (o) {
             const lim = limits[o.sport];
             if (lim == null) return true;
-            return (c1[o.sport] || 0) < lim && (c2[o.sport] || 0) < lim;
+            return counts.every(function (c) { return (c[o.sport] || 0) < lim; });
         });
         if (ok.length === pool.length) return ok;
         const blocked = Array.from(new Set(pool.filter(function (o) { return limits[o.sport] != null; }).map(function (o) { return o.sport; })));
@@ -3076,22 +3175,102 @@
         });
     }
 
-    function _applySameDayRepeatFilter(pool, t1, t2, leagueName, history, dayId) {
+    // ★ WHEN today a team last played each sport. Higher = more recent; absent
+    // means not yet today. The repeat guard below only knew WHICH sports had
+    // been played, never WHEN, so once a repeat became unavoidable it was blind
+    // to whether the repeat was from this morning or from the period that just
+    // finished — and cheerfully handed out basketball, then basketball again.
+    // Ranked by the per-league game label so every matchup in a period shares a
+    // rank; the array index is the fallback for older records with no label.
+    function _lastSportRankToday(leagueName, team, history, dayId) {
+        const out = {};
+        if (!dayId) return out;
+        const todays = (history.gameLog && history.gameLog[leagueName] && history.gameLog[leagueName][dayId]) || [];
+        todays.forEach(function (e, i) {
+            if (!e || !e.sport) return;
+            if (e.t1 !== team && e.t2 !== team) return;
+            const m = String(e.g == null ? '' : e.g).match(/(\d+)/);
+            const rank = m ? parseInt(m[1], 10) : i;
+            if (out[e.sport] == null || rank > out[e.sport]) out[e.sport] = rank;
+        });
+        return out;
+    }
+
+    function _applySameDayRepeatFilter(pool, t1, t2, leagueName, history, dayId, groupTeams) {
         if (window.__leagueSameDayRepeatGuard === false) return pool;
         if (!pool.length) return pool;
-        const today1 = _getTeamSportsToday(leagueName, t1, history, dayId);
-        const today2 = _getTeamSportsToday(leagueName, t2, history, dayId);
-        if (!today1.size && !today2.size) return pool;
-        const clean = pool.filter(function (o) { return !today1.has(o.sport) && !today2.has(o.sport); });
+        // A round-robin group passes its full roster; an ordinary matchup is
+        // just its two teams.
+        const members = (groupTeams && groupTeams.length) ? groupTeams : [t1, t2];
+        const todaySets = members.map(function (t) { return _getTeamSportsToday(leagueName, t, history, dayId); });
+        if (!todaySets.some(function (s) { return s.size; })) return pool;
+        const repeats = function (o) { return todaySets.filter(function (s) { return s.has(o.sport); }).length; };
+        const clean = pool.filter(function (o) { return repeats(o) === 0; });
         if (clean.length) return clean;
-        const oneRepeat = pool.filter(function (o) { return !(today1.has(o.sport) && today2.has(o.sport)); });
-        if (oneRepeat.length) {
-            console.log(`   ⚠️ ${t1} vs ${t2}: every open sport is a same-day repeat for a team — allowing the least-bad option`);
-            return oneRepeat;
+        // Lesser evil: the option that repeats for the FEWEST members.
+        let fewest = Infinity;
+        pool.forEach(function (o) { const n = repeats(o); if (n < fewest) fewest = n; });
+        // ★ A repeat is now unavoidable — but WHICH repeat still matters, and
+        // "fewest teams repeating" is the WRONG first question. It ranks a sport
+        // both teams played two periods ago BELOW one a single team played in
+        // the period that just finished, so it throws away the option that
+        // avoids a back-to-back entirely. Observed: a pair that had played all
+        // three sports got Newcomb→Newcomb because Basketball "repeated for
+        // both", even though both those basketball games were an hour earlier.
+        //
+        // Rank instead by what people actually notice, in order:
+        //   1. does this put a team on the same sport TWO PERIODS RUNNING
+        //   2. how many teams it repeats for at all
+        //   3. how long ago it was last played
+        // Killswitch: window.__leagueRepeatSpacing = false → old behaviour.
+        const oneRepeat = pool.filter(function (o) { return repeats(o) === fewest; });
+        if (window.__leagueRepeatSpacing === false) {
+            if (oneRepeat.length && oneRepeat.length < pool.length) {
+                console.log(`   ⚠️ ${t1} vs ${t2}: every open sport is a same-day repeat for a team — allowing the least-bad option`);
+                return oneRepeat;
+            }
+            console.log(`   ⚠️ ${t1} vs ${t2}: same-day sport repeat unavoidable (no alternative open) — allowing`);
+            return pool;
+        }
+
+        const ranks = members.map(function (t) { return _lastSportRankToday(leagueName, t, history, dayId); });
+        // The sport each member played in its OWN most recent period today.
+        const justPlayed = ranks.map(function (m) {
+            let top = -1, sp = null;
+            Object.keys(m).forEach(function (s) { if (m[s] > top) { top = m[s]; sp = s; } });
+            return sp;
+        });
+        const backToBack = function (o) {
+            return justPlayed.filter(function (s) { return s === o.sport; }).length;
+        };
+        const mostRecent = function (o) {
+            let r = -1;
+            ranks.forEach(function (m) { const v = m[o.sport]; if (v != null && v > r) r = v; });
+            return r;
+        };
+        const key = function (o) { return [backToBack(o), repeats(o), mostRecent(o)]; };
+        let bestKey = null;
+        pool.forEach(function (o) {
+            const k = key(o);
+            if (!bestKey || k[0] < bestKey[0]
+                || (k[0] === bestKey[0] && k[1] < bestKey[1])
+                || (k[0] === bestKey[0] && k[1] === bestKey[1] && k[2] < bestKey[2])) bestKey = k;
+        });
+        const picked = pool.filter(function (o) {
+            const k = key(o);
+            return k[0] === bestKey[0] && k[1] === bestKey[1] && k[2] === bestKey[2];
+        });
+        if (picked.length && picked.length < pool.length) {
+            const note = bestKey[0] === 0
+                ? `every open sport is a same-day repeat — taking one that is NOT back-to-back`
+                : `every open sport is a same-day repeat and back-to-back is unavoidable — taking the least-bad`;
+            console.log(`   ↔️ ${t1} vs ${t2}: ${note}`);
+            return picked;
         }
         console.log(`   ⚠️ ${t1} vs ${t2}: same-day sport repeat unavoidable (no alternative open) — allowing`);
         return pool;
     }
+    Leagues._testApplySameDayRepeatFilter = _applySameDayRepeatFilter;   // tests
 
     // ★ CYCLE RESCUE: a team stuck ≥2 plays behind on a sport (its count for
     // that sport trails its most-played available sport by ≥2) gets that
@@ -3114,7 +3293,7 @@
     // different opponent. Without this, a rescue could pin the pair's exact
     // prior sport AND flag it _rescued so the swap pass couldn't repair it
     // (observed live: a rematch replayed its previous sport).
-    function _applyCycleRescueFilter(pool, t1, t2, hist1, hist2, leagueName, history) {
+    function _applyCycleRescueFilter(pool, t1, t2, hist1, hist2, leagueName, history, dayId) {
         if (pool.length < 2) return { pool: pool, rescued: false };
         const poolSports = Array.from(new Set(pool.map(function (o) { return o.sport; })));
         if (poolSports.length < 2) return { pool: pool, rescued: false };
@@ -3148,10 +3327,239 @@
                 }
             }
         }
+        // ★ …and defer when it would put the sport BACK-TO-BACK. The rescue is a
+        // hard preference applied AFTER the same-day spacing filter, so it can
+        // undo it: a team one period removed from hockey gets handed hockey
+        // again because its partner is behind on it. Being behind on a sport is
+        // a season-long problem and waits a period happily; playing the same
+        // thing twice in a row is what people actually notice on the sheet.
+        // Only defers while some other sport is open, so nobody is starved —
+        // the rescue simply fires at the next matchup instead.
+        if (dayId && history && poolSports.length > 1 && window.__leagueRepeatSpacing !== false) {
+            const _r1 = _lastSportRankToday(leagueName, t1, history, dayId);
+            const _r2 = _lastSportRankToday(leagueName, t2, history, dayId);
+            let _last = -1;
+            [_r1, _r2].forEach(function (m) {
+                Object.keys(m).forEach(function (s) { if (m[s] > _last) _last = m[s]; });
+            });
+            if (_last >= 0 && (_r1[best] === _last || _r2[best] === _last)) {
+                console.log(`   🆘 ${t1} vs ${t2}: cycle rescue for ${best} deferred — a team played it in the period that just finished`);
+                return { pool: pool, rescued: false };
+            }
+        }
         const rescuedPool = pool.filter(function (o) { return o.sport === best; });
         if (!rescuedPool.length) return { pool: pool, rescued: false };
         console.log(`   🆘 ${t1} vs ${t2}: cycle rescue → ${best} (a team is ${bestD} play(s) behind on it)`);
         return { pool: rescuedPool, rescued: true };
+    }
+
+    // =========================================================================
+    // ★★★ ROUND-ROBIN GROUP FORMATION ★★★
+    // With an odd number of teams playing, chooseDailyMatchups pairs everyone
+    // it can and the leftover team is benched. A camp with 3 teams hits this
+    // every period chinuch isn't running, and a bye out of three is a third of
+    // the league sitting down.
+    //
+    // When the league opts in, the leftover team instead joins whole PAIRS to
+    // form ONE group of `size` teams that share a field and play every pairing
+    // in the group. Whole pairs, because the group has to be ODD to absorb the
+    // odd team — taking half a pair would just bench that pair's partner.
+    // (size-1)/2 pairs + the leftover = size.
+    //
+    // The pairs absorbed are the ones that have MET THE MOST: their rematch was
+    // the least valuable game on the board, so breaking it up costs the least
+    // matchup variety. Nothing is dropped — every team that was going to play
+    // still plays, plus the one that wasn't.
+    // Killswitch: window.__leagueRoundRobinGroups = false.
+    // =========================================================================
+    function _formRoundRobinGroup(matchups, activeTeams, league, leagueName, history, dayId) {
+        try {
+            if (window.__leagueRoundRobinGroups === false) return matchups;
+            const cfg = league && league.roundRobin;
+            if (!cfg || cfg.enabled !== true) return matchups;
+            if (!Array.isArray(matchups) || !matchups.length) return matchups;
+
+            const paired = new Set();
+            matchups.forEach(function (m) { (Array.isArray(m) ? m : [m]).forEach(function (t) { paired.add(t); }); });
+            const leftover = (activeTeams || []).filter(function (t) { return !paired.has(t); });
+            // Exactly one team benched is the case this rule exists for. Zero
+            // means everyone paired off (an even count — including the days
+            // chinuch takes a team out), and there is nothing to fix.
+            if (leftover.length !== 1) return matchups;
+
+            let size = parseInt(cfg.size, 10);
+            if (!Number.isFinite(size) || size < 3) size = 3;
+            if (size % 2 === 0) size += 1;
+
+            const pairs = matchups.filter(function (m) { return Array.isArray(m) && m.length === 2; });
+            let want = (size - 1) / 2;
+            if (pairs.length < want) {
+                // Fewer pairs on the board than the configured size needs (a
+                // small league, or chinuch thinned it out). Field the biggest
+                // group this period can actually make rather than giving up and
+                // benching somebody.
+                want = pairs.length;
+            }
+            if (want < 1) return matchups;
+
+            // Most-met pairs first — the least costly rematches to dissolve.
+            const ranked = pairs.slice().sort(function (a, b) {
+                return getMatchupCountByDate(leagueName, b[0], b[1], history, null)
+                     - getMatchupCountByDate(leagueName, a[0], a[1], history, null);
+            });
+            const absorb = ranked.slice(0, want);
+            const absorbSet = new Set(absorb);
+            const group = leftover.concat(absorb.reduce(function (acc, m) { return acc.concat(m); }, []));
+
+            const out = matchups.filter(function (m) { return !absorbSet.has(m); });
+            out.push(group);
+            console.log('   \u25CE Round-robin group of ' + group.length + ': ' + group.join(', ')
+                + ' \u2014 ' + leftover[0] + ' would have been benched, so '
+                + absorb.map(function (m) { return m[0] + '/' + m[1]; }).join(' + ')
+                + ' joined it on one field instead');
+            return out;
+        } catch (e) {
+            console.warn('[RegularLeagues] round-robin grouping skipped:', e);
+            return matchups;
+        }
+    }
+    Leagues._formRoundRobinGroup = _formRoundRobinGroup;   // tests
+
+    // A matchup entry is [a, b] normally, [a, b, c, …] for a round-robin group.
+    function _isRRGroup(m) { return Array.isArray(m) && m.length > 2; }
+
+    // Display lines for one assignment: a head-to-head is a single line; a
+    // round-robin group is one line per pairing in the group.
+    function _matchupLinesFor(a) {
+        if (!a) return [];
+        const mem = _assignedTeams(a);
+        if (!a._rr || mem.length < 3) return [`${a.team1} vs ${a.team2} @ ${a.field} (${a.sport})`];
+        const rounds = (Number.isFinite(a._rrRounds) && a._rrRounds >= 1) ? a._rrRounds : 1;
+        const out = [];
+        for (let rd = 1; rd <= rounds; rd++) {
+            // The round number keeps repeat meetings from rendering as identical
+            // lines (and being read as one game by anything that dedupes).
+            const tag = RR_LINE_TAG + (rounds > 1 ? ' R' + rd : '');
+            for (let i = 0; i < mem.length; i++) {
+                for (let j = i + 1; j < mem.length; j++) {
+                    out.push(`${mem[i]} vs ${mem[j]} @ ${a.field} (${a.sport})${tag}`);
+                }
+            }
+        }
+        return out;
+    }
+
+    // Every team an assignment puts on the field. `teams` carries the full
+    // round-robin roster; the pair fallback keeps older/foreign assignment
+    // objects (playoffs, the off-campus path) working unchanged.
+    function _assignedTeams(a) {
+        if (!a) return [];
+        if (a.teams && a.teams.length) return a.teams.filter(Boolean);
+        return [a.team1, a.team2].filter(Boolean);
+    }
+
+    // =========================================================================
+    // ★ LG-14b — FIELD-SHORTAGE BYE ORDER
+    // =========================================================================
+    // LG-14 rotates the bye decided at PAIRING time: an odd roster benches
+    // somebody before any field is looked at, and makeByeLedger says whose turn
+    // it is. It cannot see the OTHER way a team sits out. With an EVEN roster
+    // every team gets paired — the pairing chooser sees no bye at all — and it
+    // is the FIELD stage, one step later, that strands whichever matchup it
+    // reaches after the pool runs dry.
+    //
+    // That order was sport-starvation only, with no bye term in it. So on a tie
+    // it walked the same enumeration every period and benched the same teams:
+    // observed live (2026-08-03, a 4-team league down to its one remaining
+    // court after the senior leagues locked theirs) one team sat out every
+    // period of the day while another played every one.
+    //
+    // The data was already there — a stranded team lands in the period's
+    // recorded byes exactly like a structural one, so byesByDate already counts
+    // it. Only the consumer was missing.
+    //
+    // ENGAGES ONLY ON A REAL SHORTAGE. When the pool can seat every matchup
+    // nobody byes, so the order is left exactly as the sport/indoor logic wants
+    // it and this is a strict no-op. (Combined fields can cut real capacity
+    // below the distinct-field count; that under-detects a shortage rather than
+    // inventing one, so the ambiguous case keeps the existing order.)
+    // Killswitch: window.__leagueByeFairness = false, same flag as LG-14.
+    function _byeShortageOrder(matchups, availablePool, leagueName, history, dayId) {
+        try {
+            if (_byeFairnessWeight() <= 0) return null;
+            const pairs = matchups || [];
+            const seats = new Set();
+            (availablePool || []).forEach(function (o) { if (o && o.field) seats.add(o.field); });
+            if (seats.size >= pairs.length) return null;      // everyone plays → nothing to rotate
+            const teams = Array.from(new Set([].concat.apply([], pairs)));
+            if (teams.length < 3) return null;                // nobody to rotate the bye to
+            const led = makeByeLedger(leagueName, teams, history, dayId);
+            return {
+                // A bye benches BOTH teams of the matchup, so the pair's claim
+                // on a field is the SUM of its teams' byes — the pair that has
+                // lost the most play gets seated first, and the leftover bye
+                // falls on the pair that has lost the least.
+                //
+                // ★ NOT max(): the whole point is the team that never sits out.
+                //   Ranking a pair by its neediest team lets a never-benched
+                //   team ride along on a heavily-benched partner and play every
+                //   single period — which is the exact live symptom (Team 1
+                //   played all six periods while its opponents rotated).
+                //
+                // Summed over MEMBERS, not a fixed pair: a round-robin group
+                // (see _formRoundRobinGroup) holds 3+ teams on one field, and
+                // stranding it benches all of them — so it should outrank a
+                // two-team matchup with the same average.
+                claim: function (members) {
+                    return members.reduce(function (s, t) { return s + led.count(t); }, 0);
+                },
+                // Sums tie constantly in a small league (a 4-team league has
+                // only three possible pairings), so the tie-break carries real
+                // weight. Settle it by RELIEVING THE MOST-BENCHED TEAM: the
+                // pair holding it plays, and the bye falls on the pair whose
+                // worst-off team is better off.
+                //
+                // ★ This is the reported bug, stated exactly. With counts
+                //   0,1,1,2 and the pairs (T1,T4)/(T2,T3), both sum to 2 — but
+                //   benching (T1,T4) to get T1 off zero hands T4 a THIRD
+                //   straight bye, while benching (T2,T3) costs nobody a repeat.
+                //   Chasing the zero looks fairer per-period and is worse in
+                //   practice; the sum key above already pulls a never-benched
+                //   team in within a day or two. Sum and peak between them pin
+                //   down a two-team pair's counts exactly, so anything reaching
+                //   past this key is a genuine tie.
+                peak: function (members) {
+                    return members.reduce(function (m, t) { return Math.max(m, led.count(t)); }, 0);
+                },
+                // Then the entry benched most RECENTLY plays first, so a bye
+                // cannot repeat period after period while counts are level.
+                // AVERAGED, unlike claim: this is a "how long has it been" read,
+                // and summing it would push a 3-team group down the order for no
+                // reason other than having more members.
+                recency: function (members) {
+                    if (!members.length) return 0;
+                    return members.reduce(function (s, t) { return s + led.staleness(t); }, 0) / members.length;
+                },
+                counts: led.counts
+            };
+        } catch (_) { return null; }
+    }
+    // Primary comparator when a shortage is on; a flat 0 (so a complete
+    // fall-through to the existing keys) when it is not.
+    function _byeOrderCmp(a, b) {
+        return (b.byeClaim - a.byeClaim) || (b.byePeak - a.byePeak) || (a.byeRecency - b.byeRecency);
+    }
+    function _logByeOrder(leagueName, order, ranked) {
+        try {
+            if (!order) return;
+            const benched = Object.keys(order.counts).filter(function (t) { return order.counts[t] > 0; });
+            if (!benched.length) return;
+            console.log('   ⚖️ [ByeFairness] "' + leagueName + '": fewer fields than matchups — '
+                + 'field order by who has sat out most ('
+                + benched.sort(function (x, y) { return order.counts[y] - order.counts[x]; })
+                    .slice(0, 6).map(function (t) { return t + '×' + order.counts[t]; }).join(', ')
+                + ') → ' + ranked.map(function (m) { return m.t1 + '/' + m.t2; }).join(' then '));
+        } catch (_) {}
     }
 
     // =========================================================================
@@ -3205,19 +3613,27 @@
         // indoor count) goes first so it gets first pick at any indoor option.
         const _indoorReq = leagueRules && leagueRules.indoorRequirement;
         const _indoorCounts = (leagueRules && leagueRules.indoorCounts) || {};
-        const matchupsWithPriority = matchups.map(([t1, t2]) => {
-            const h1 = _teamHist(t1);
-            const h2 = _teamHist(t2);
-            const starve1 = _cycles.starve(t1);
-            const starve2 = _cycles.starve(t2);
-            const ic1 = _indoorCounts[t1] || 0;
-            const ic2 = _indoorCounts[t2] || 0;
+        // ★ LG-14b: null unless this pool is short of fields (see _byeShortageOrder).
+        const _byeOrder = _byeShortageOrder(matchups, availablePool, leagueName, history, dayId);
+        const matchupsWithPriority = matchups.map((m) => {
+            // A round-robin group carries >2 teams; `group` is null for a normal
+            // head-to-head, so every per-team rule below keeps its two-team
+            // behavior untouched.
+            const group = _isRRGroup(m) ? m.slice() : null;
+            const members = group || [m[0], m[1]];
+            const t1 = m[0], t2 = m[1];
+            const hs = members.map(_teamHist);
+            const starves = members.map(function (t) { return _cycles.starve(t); });
+            const ics = members.map(function (t) { return _indoorCounts[t] || 0; });
             return {
-                t1, t2,
-                varietyScore: starve1 + starve2,
-                coverMin: Math.min(starve1, starve2),
-                stuck: _trailingSportStreak(h1) + _trailingSportStreak(h2),
-                indoorMin: Math.min(ic1, ic2)
+                t1, t2, group,
+                varietyScore: starves.reduce(function (a, b) { return a + b; }, 0),
+                coverMin: Math.min.apply(null, starves),
+                stuck: hs.reduce(function (n, h) { return n + _trailingSportStreak(h); }, 0),
+                indoorMin: Math.min.apply(null, ics),
+                byeClaim: _byeOrder ? _byeOrder.claim(members) : 0,
+                byePeak: _byeOrder ? _byeOrder.peak(members) : 0,
+                byeRecency: _byeOrder ? _byeOrder.recency(members) : 0
             };
         });
 
@@ -3229,20 +3645,28 @@
         // that already played it, so each sport spreads across all teams before any
         // repeats. SECONDARY: break active same-sport STREAKS. Then total starvation.
         // Indoor need stays primary when an indoor requirement is set.
+        // ★ LG-14b: when the pool is SHORT, who has been benched most outranks
+        // all of it — a team that does not play at all loses more than a team
+        // that plays the wrong sport, or plays it outdoors. Flat 0 (and so a
+        // complete fall-through to the keys below) whenever every matchup can
+        // be seated, which is the normal case.
         if (_indoorReq && _indoorReq.enabled) {
-            matchupsWithPriority.sort((a, b) => a.indoorMin - b.indoorMin || a.coverMin - b.coverMin || b.stuck - a.stuck || a.varietyScore - b.varietyScore);
+            matchupsWithPriority.sort((a, b) => _byeOrderCmp(a, b) || a.indoorMin - b.indoorMin || a.coverMin - b.coverMin || b.stuck - a.stuck || a.varietyScore - b.varietyScore);
         } else {
-            matchupsWithPriority.sort((a, b) => a.coverMin - b.coverMin || b.stuck - a.stuck || a.varietyScore - b.varietyScore);
+            matchupsWithPriority.sort((a, b) => _byeOrderCmp(a, b) || a.coverMin - b.coverMin || b.stuck - a.stuck || a.varietyScore - b.varietyScore);
         }
+        _logByeOrder(leagueName, _byeOrder, matchupsWithPriority);
 
-        for (const { t1, t2 } of matchupsWithPriority) {
+        for (const { t1, t2, group } of matchupsWithPriority) {
             let bestOption = null;
             let bestScore = -Infinity;
+            const _members = group || [t1, t2];
+            const _label = group ? ('round robin ' + group.join('/')) : (t1 + ' vs ' + t2);
 
             // ★ LG-9: the sports each team plays on its NEXT game day (empty
             // when today is the latest day — the common case).
-            const _next1 = _getTeamNextDaySports(leagueName, t1, history, dayId);
-            const _next2 = _getTeamNextDaySports(leagueName, t2, history, dayId);
+            const _nexts = _members.map(function (t) { return _getTeamNextDaySports(leagueName, t, history, dayId); });
+            const _next1 = _nexts[0], _next2 = _nexts[1];
 
             const _eligible = availablePool.filter(function (o) { return !_isFieldUsedConsideringCombos(usedFields, o.field); });
 
@@ -3250,9 +3674,9 @@
             // and every "fall back to the whole pool" escape they have — works
             // inside an already-legal set. The only filter here that can leave a
             // matchup with nothing, by design.
-            const _dayCapped = _applySportDailyLimitFilter(_eligible, t1, t2, leagueName, history, dayId, leagueRules);
+            const _dayCapped = _applySportDailyLimitFilter(_eligible, t1, t2, leagueName, history, dayId, leagueRules, group);
             if (!_dayCapped.length && _eligible.length) {
-                console.log(`   ⛔ [SportVariety] ${t1} vs ${t2}: every open sport is at its per-team daily limit — bye`);
+                console.log(`   ⛔ [SportVariety] ${_label}: every open sport is at its per-team daily limit — bye`);
                 _recordSportDailyLimitBye(leagueName, t1, t2, _eligible, leagueRules);
                 continue;
             }
@@ -3260,11 +3684,12 @@
             // ★ INDOOR HARD CONSTRAINT: restrict to indoor (or non-indoor) when
             // the rule requires it AND such a field is available; otherwise use
             // the full eligible set so the matchup always gets a sport.
-            let _pool = _applyIndoorHardFilter(_dayCapped, t1, t2, leagueRules);
+            let _pool = _applyIndoorHardFilter(_dayCapped, t1, t2, leagueRules, group);
 
             // ★ HARD STREAK CAP: same sport never more than 2 game days in a row
             // — including a 3-run straddling a middle-day regen (LG-9).
-            _pool = _applyStreakCapFilter(_pool, t1, t2, _teamHist(t1), _teamHist(t2), _next1, _next2);
+            _pool = _applyStreakCapFilter(_pool, t1, t2, _teamHist(t1), _teamHist(t2), _next1, _next2,
+                _members.slice(2).map(function (t, i) { return [_teamHist(t), _nexts[i + 2]]; }));
 
             // ★ FAIR-SHARE CAP: prefer sports this league hasn't used up its per-slot
             // share of, so it leaves scarce fields for the other grades playing at the
@@ -3292,50 +3717,47 @@
             // After the fair-share cap (another league's dropped game costs more
             // than a repeat), before cycle rescue (a rescue must not resurrect
             // a same-day repeat).
-            _pool = _applySameDayRepeatFilter(_pool, t1, t2, leagueName, history, dayId);
+            _pool = _applySameDayRepeatFilter(_pool, t1, t2, leagueName, history, dayId, group);
 
-            // ★ CYCLE RESCUE: a team ≥2 plays behind on an available sport gets it
-            // as a hard preference (see _applyCycleRescueFilter).
-            const _rescue = _applyCycleRescueFilter(_pool, t1, t2, _teamHist(t1), _teamHist(t2), leagueName, history);
+            // ★ CYCLE RESCUE + ★ FN-57 pair caveat: both reason about what THIS
+            // PAIR has played together. A round-robin group is not a pair and
+            // records no matchup, so neither applies — the group's sport comes
+            // purely from what its members still need.
+            const _rescue = group
+                ? { pool: _pool, rescued: false }
+                : _applyCycleRescueFilter(_pool, t1, t2, _teamHist(t1), _teamHist(t2), leagueName, history, dayId);
             _pool = _rescue.pool;
-
-            // ★ FN-57 caveat (cycle-aware): a rematch prefers the sport(s) this
-            // pair has played together the FEWEST times — never a replay while an
-            // unplayed one exists, least-replayed once the pair exhausted them all.
-            _pool = _filterPoolByPairSportCycle(_pool, leagueName, t1, t2, history);
+            if (!group) _pool = _filterPoolByPairSportCycle(_pool, leagueName, t1, t2, history);
 
             for (const option of _pool) {
                 let score = 0;
 
-                // Heavy weight on sport need (main priority in this mode)
-                const need1 = getTeamSportNeed(t1, option.sport);
-                const need2 = getTeamSportNeed(t2, option.sport);
-                score += need1 + need2;
+                // Heavy weight on sport need (main priority in this mode).
+                // Summed over every member — a round-robin group's sport has to
+                // serve all of them, not just the first two.
+                score += _members.reduce(function (n, t) { return n + getTeamSportNeed(t, option.sport); }, 0);
 
                 // ★ SCARCITY: when a team still NEEDS this sport this cycle, boost it
                 // by how scarce the sport is so a scarce fresh sport (football) is
                 // taken before an abundant fresh one (basketball) on a nicer field.
                 // Only for needed sports → a team that's ahead on football is never
                 // pushed onto it. Cycle-aware: fresh again after a completed cycle.
-                const _svFresh1 = _cycles.isFresh(t1, option.sport) ? 1 : 0;
-                const _svFresh2 = _cycles.isFresh(t2, option.sport) ? 1 : 0;
-                score += (_svFresh1 + _svFresh2) * _scarcityBonus(option.sport);
+                const _svFresh = _members.reduce(function (n, t) { return n + (_cycles.isFresh(t, option.sport) ? 1 : 0); }, 0);
+                score += _svFresh * _scarcityBonus(option.sport);
 
                 // ★ Even with cycle-aware need, the start of a new cycle makes every
                 // sport max-need at once and the field-quality bonus (up to +188)
                 // could otherwise pin a team to the best field's sport. Explicitly
                 // forbid repeating a team's most-recent sport.
-                const _svH1 = _teamHist(t1);
-                const _svH2 = _teamHist(t2);
-                const _svR1 = _svH1.length && _svH1[_svH1.length - 1] === option.sport ? 1 : 0;
-                const _svR2 = _svH2.length && _svH2[_svH2.length - 1] === option.sport ? 1 : 0;
-                score -= (_svR1 + _svR2) * 1500;
+                const _svRepeat = _members.reduce(function (n, t) {
+                    const h = _teamHist(t);
+                    return n + (h.length && h[h.length - 1] === option.sport ? 1 : 0);
+                }, 0);
+                score -= _svRepeat * 1500;
 
                 // ★ LG-9: forward mirror of the recent-sport penalty — the team
                 // already plays this sport on its NEXT game day (middle regen).
-                const _fw1 = _next1.has(option.sport) ? 1 : 0;
-                const _fw2 = _next2.has(option.sport) ? 1 : 0;
-                score -= (_fw1 + _fw2) * 1500;
+                score -= _nexts.reduce(function (n, nx) { return n + (nx.has(option.sport) ? 1 : 0); }, 0) * 1500;
 
                 // Prefer sports not yet used this slot
                 const sportUsageThisSlot = usedSportsThisSlot[option.sport] || 0;
@@ -3346,7 +3768,7 @@
                 }
 
                 // ★ INDOOR REQUIREMENT: bias toward/away from indoor based on rule + running counts
-                score += _scoreIndoorBias(option, t1, t2, leagueRules);
+                score += _scoreIndoorBias(option, t1, t2, leagueRules, group);
 
                 // ★ FIELD QUALITY: prefer the better-ranked field in its group
                 score += _fieldQualityBonus(_fqRank, option.field);
@@ -3363,7 +3785,13 @@
                 assignments.push({
                     team1: t1,
                     team2: t2,
-                    matchup: `${t1} vs ${t2}`,
+                    // `teams` is the full roster: [t1, t2] for a head-to-head,
+                    // every member for a round-robin group. Downstream (field
+                    // locks, indoor counts, bye detection, recording, tiles)
+                    // reads this so nobody in a group is treated as benched.
+                    teams: (group || [t1, t2]).slice(),
+                    _rr: !!group,
+                    matchup: group ? ('Round robin: ' + group.join(', ')) : `${t1} vs ${t2}`,
                     field: bestOption.field,
                     sport: bestOption.sport
                 });
@@ -3372,9 +3800,9 @@
                 _markFieldUsedWithCombos(usedFields, bestOption.field);
                 usedSportsThisSlot[bestOption.sport] = (usedSportsThisSlot[bestOption.sport] || 0) + 1;
 
-                console.log(`   ✅ [SportVariety] ${t1} vs ${t2} → ${bestOption.sport} @ ${bestOption.field}`);
+                console.log(`   ✅ [SportVariety] ${_label} → ${bestOption.sport} @ ${bestOption.field}`);
             } else {
-                console.log(`   ❌ No field available for ${t1} vs ${t2}`);
+                console.log(`   ❌ No field available for ${_label}`);
                 _recordForcedBye(leagueName, t1, t2, availablePool, matchups.length, assignments.length);
             }
         }
@@ -3416,18 +3844,28 @@
         // Sort matchups by how many times they've played (least played first)
         const _indoorReqMV = leagueRules && leagueRules.indoorRequirement;
         const _indoorCountsMV = (leagueRules && leagueRules.indoorCounts) || {};
-        const matchupsWithPriority = matchups.map(([t1, t2]) => {
-            const h1 = _teamHist(t1);
-            const h2 = _teamHist(t2);
-            const matchupCount = getMatchupCountByDate(leagueName, t1, t2, history, dayId);
-            const indoorMin = Math.min(_indoorCountsMV[t1] || 0, _indoorCountsMV[t2] || 0);
-            const starve1 = _cycles.starve(t1);
-            const starve2 = _cycles.starve(t2);
+        // ★ LG-14b: null unless this pool is short of fields (see _byeShortageOrder).
+        const _byeOrder = _byeShortageOrder(matchups, availablePool, leagueName, history, dayId);
+        const matchupsWithPriority = matchups.map((m) => {
+            // >2 teams = a round-robin group (see _formRoundRobinGroup); null
+            // for an ordinary head-to-head.
+            const group = _isRRGroup(m) ? m.slice() : null;
+            const members = group || [m[0], m[1]];
+            const t1 = m[0], t2 = m[1];
+            const hs = members.map(_teamHist);
+            const starves = members.map(function (t) { return _cycles.starve(t); });
+            const ics = members.map(function (t) { return _indoorCountsMV[t] || 0; });
+            // A group records no matchup, so it has no meeting count to sort on.
+            const matchupCount = group ? 0 : getMatchupCountByDate(leagueName, t1, t2, history, dayId);
             return {
-                t1, t2, matchupCount, indoorMin,
-                coverMin: Math.min(starve1, starve2),
-                stuck: _trailingSportStreak(h1) + _trailingSportStreak(h2),
-                variety: starve1 + starve2
+                t1, t2, group, matchupCount,
+                indoorMin: Math.min.apply(null, ics),
+                coverMin: Math.min.apply(null, starves),
+                stuck: hs.reduce(function (n, h) { return n + _trailingSportStreak(h); }, 0),
+                variety: starves.reduce(function (a, b) { return a + b; }, 0),
+                byeClaim: _byeOrder ? _byeOrder.claim(members) : 0,
+                byePeak: _byeOrder ? _byeOrder.peak(members) : 0,
+                byeRecency: _byeOrder ? _byeOrder.recency(members) : 0
             };
         });
 
@@ -3440,43 +3878,50 @@
         // spreading each sport across all teams. SECONDARY: break active same-sport
         // STREAKS; then total starvation; then fewest prior meetings (the original
         // order). Indoor need stays primary when required.
+        // ★ LG-14b: a field shortage puts bye fairness above all of it — see the
+        // matching note in the sport_variety assigner. No-op when every matchup
+        // can be seated.
         if (_indoorReqMV && _indoorReqMV.enabled) {
-            matchupsWithPriority.sort((a, b) => a.indoorMin - b.indoorMin || a.coverMin - b.coverMin || b.stuck - a.stuck || a.variety - b.variety || a.matchupCount - b.matchupCount);
+            matchupsWithPriority.sort((a, b) => _byeOrderCmp(a, b) || a.indoorMin - b.indoorMin || a.coverMin - b.coverMin || b.stuck - a.stuck || a.variety - b.variety || a.matchupCount - b.matchupCount);
         } else {
-            matchupsWithPriority.sort((a, b) => a.coverMin - b.coverMin || b.stuck - a.stuck || a.variety - b.variety || a.matchupCount - b.matchupCount);
+            matchupsWithPriority.sort((a, b) => _byeOrderCmp(a, b) || a.coverMin - b.coverMin || b.stuck - a.stuck || a.variety - b.variety || a.matchupCount - b.matchupCount);
         }
+        _logByeOrder(leagueName, _byeOrder, matchupsWithPriority);
 
         console.log(`   📊 [MatchupVariety] Matchup priorities:`);
         matchupsWithPriority.forEach(m => {
             console.log(`      • ${m.t1} vs ${m.t2}: ${m.matchupCount} prior games`);
         });
 
-        for (const { t1, t2 } of matchupsWithPriority) {
+        for (const { t1, t2, group } of matchupsWithPriority) {
             let bestOption = null;
             let bestScore = -Infinity;
+            const _members = group || [t1, t2];
+            const _label = group ? ('round robin ' + group.join('/')) : (t1 + ' vs ' + t2);
 
             // ★ LG-9: the sports each team plays on its NEXT game day (empty
             // when today is the latest day — the common case).
-            const _next1 = _getTeamNextDaySports(leagueName, t1, history, dayId);
-            const _next2 = _getTeamNextDaySports(leagueName, t2, history, dayId);
+            const _nexts = _members.map(function (t) { return _getTeamNextDaySports(leagueName, t, history, dayId); });
+            const _next1 = _nexts[0], _next2 = _nexts[1];
 
             const _eligible = availablePool.filter(function (o) { return !_isFieldUsedConsideringCombos(usedFields, o.field); });
 
             // ★ PER-SPORT DAILY LIMIT (HARD) — same as SportVariety: first in the
             // chain, and the one filter allowed to leave a matchup with nothing.
-            const _dayCapped = _applySportDailyLimitFilter(_eligible, t1, t2, leagueName, history, dayId, leagueRules);
+            const _dayCapped = _applySportDailyLimitFilter(_eligible, t1, t2, leagueName, history, dayId, leagueRules, group);
             if (!_dayCapped.length && _eligible.length) {
-                console.log(`   ⛔ [MatchupVariety] ${t1} vs ${t2}: every open sport is at its per-team daily limit — bye`);
+                console.log(`   ⛔ [MatchupVariety] ${_label}: every open sport is at its per-team daily limit — bye`);
                 _recordSportDailyLimitBye(leagueName, t1, t2, _eligible, leagueRules);
                 continue;
             }
 
             // ★ INDOOR HARD CONSTRAINT (non-blocking) — same as SportVariety
-            let _pool = _applyIndoorHardFilter(_dayCapped, t1, t2, leagueRules);
+            let _pool = _applyIndoorHardFilter(_dayCapped, t1, t2, leagueRules, group);
 
             // ★ HARD STREAK CAP: same sport never more than 2 game days in a row
             // — including a 3-run straddling a middle-day regen (LG-9).
-            _pool = _applyStreakCapFilter(_pool, t1, t2, _teamHist(t1), _teamHist(t2), _next1, _next2);
+            _pool = _applyStreakCapFilter(_pool, t1, t2, _teamHist(t1), _teamHist(t2), _next1, _next2,
+                _members.slice(2).map(function (t, i) { return [_teamHist(t), _nexts[i + 2]]; }));
 
             // ★ FAIR-SHARE CAP: same as SportVariety — don't let this league claim
             // more than its share of a scarce sport's fields, leaving the rest for the
@@ -3496,17 +3941,17 @@
             // After the fair-share cap (another league's dropped game costs more
             // than a repeat), before cycle rescue (a rescue must not resurrect
             // a same-day repeat).
-            _pool = _applySameDayRepeatFilter(_pool, t1, t2, leagueName, history, dayId);
+            _pool = _applySameDayRepeatFilter(_pool, t1, t2, leagueName, history, dayId, group);
 
-            // ★ CYCLE RESCUE: a team ≥2 plays behind on an available sport gets it
-            // as a hard preference (see _applyCycleRescueFilter).
-            const _rescue = _applyCycleRescueFilter(_pool, t1, t2, _teamHist(t1), _teamHist(t2), leagueName, history);
+            // ★ CYCLE RESCUE + ★ FN-57 pair caveat: both reason about what THIS
+            // PAIR has played together. A round-robin group is not a pair and
+            // records no matchup, so neither applies — the group's sport comes
+            // purely from what its members still need.
+            const _rescue = group
+                ? { pool: _pool, rescued: false }
+                : _applyCycleRescueFilter(_pool, t1, t2, _teamHist(t1), _teamHist(t2), leagueName, history, dayId);
             _pool = _rescue.pool;
-
-            // ★ FN-57 caveat (cycle-aware): a rematch prefers the sport(s) this
-            // pair has played together the FEWEST times — never a replay while an
-            // unplayed one exists, least-replayed once the pair exhausted them all.
-            _pool = _filterPoolByPairSportCycle(_pool, leagueName, t1, t2, history);
+            if (!group) _pool = _filterPoolByPairSportCycle(_pool, leagueName, t1, t2, history);
 
             for (const option of _pool) {
                 let score = 0;
@@ -3521,39 +3966,34 @@
                 // whatever sport sat on the best-ranked field (observed live:
                 // hockey 3 days in a row). Use the same magnitudes as
                 // sport_variety so per-team rotation actually wins.
-                const h1 = _teamHist(t1);
-                const h2 = _teamHist(t2);
-
                 // Strong per-team CYCLE need: a still-needed-this-cycle sport
                 // hugely outweighs a repeat; field quality / randomness act only
                 // as tie-breakers among sports of equal freshness. Needs reset
-                // when a team completes a cycle (see makeSportCycles).
-                const gap1 = _cycles.gap(t1, option.sport);
-                const gap2 = _cycles.gap(t2, option.sport);
-                const need1 = gap1 <= 0 ? 1000 : Math.max(0, 100 - gap1 * 20);
-                const need2 = gap2 <= 0 ? 1000 : Math.max(0, 100 - gap2 * 20);
-                score += need1 + need2;
+                // when a team completes a cycle (see makeSportCycles). Summed
+                // over every member so a round-robin group's sport serves the
+                // whole group.
+                const gaps = _members.map(function (t) { return _cycles.gap(t, option.sport); });
+                score += gaps.reduce(function (n, g) { return n + (g <= 0 ? 1000 : Math.max(0, 100 - g * 20)); }, 0);
 
                 // ★ SCARCITY: when a team still needs this sport this cycle, boost it
                 // by how scarce the sport is so a scarce fresh sport (football) is
                 // claimed before an abundant fresh one (basketball) on a nicer field.
-                score += ((gap1 <= 0 ? 1 : 0) + (gap2 <= 0 ? 1 : 0)) * _scarcityBonus(option.sport);
+                score += gaps.filter(function (g) { return g <= 0; }).length * _scarcityBonus(option.sport);
 
                 // ★ Hard guard against repeating a team's MOST-RECENT sport —
                 // directly kills the "same sport N days in a row" case. Big
                 // enough to dominate the field-quality bonus.
-                const recent1 = h1.length && h1[h1.length - 1] === option.sport ? 1 : 0;
-                const recent2 = h2.length && h2[h2.length - 1] === option.sport ? 1 : 0;
-                score -= (recent1 + recent2) * 1500;
+                score -= _members.reduce(function (n, t) {
+                    const h = _teamHist(t);
+                    return n + (h.length && h[h.length - 1] === option.sport ? 1 : 0);
+                }, 0) * 1500;
 
                 // ★ LG-9: forward mirror — the team already plays this sport on
                 // its NEXT game day (middle regen).
-                const _fw1 = _next1.has(option.sport) ? 1 : 0;
-                const _fw2 = _next2.has(option.sport) ? 1 : 0;
-                score -= (_fw1 + _fw2) * 1500;
+                score -= _nexts.reduce(function (n, nx) { return n + (nx.has(option.sport) ? 1 : 0); }, 0) * 1500;
 
                 // ★ INDOOR REQUIREMENT: bias toward/away from indoor based on rule + running counts
-                score += _scoreIndoorBias(option, t1, t2, leagueRules);
+                score += _scoreIndoorBias(option, t1, t2, leagueRules, group);
 
                 // ★ FIELD QUALITY: prefer the better-ranked field in its group
                 score += _fieldQualityBonus(_fqRank, option.field);
@@ -3571,7 +4011,13 @@
                 assignments.push({
                     team1: t1,
                     team2: t2,
-                    matchup: `${t1} vs ${t2}`,
+                    // `teams` is the full roster: [t1, t2] for a head-to-head,
+                    // every member for a round-robin group. Downstream (field
+                    // locks, indoor counts, bye detection, recording, tiles)
+                    // reads this so nobody in a group is treated as benched.
+                    teams: (group || [t1, t2]).slice(),
+                    _rr: !!group,
+                    matchup: group ? ('Round robin: ' + group.join(', ')) : `${t1} vs ${t2}`,
                     field: bestOption.field,
                     sport: bestOption.sport
                 });
@@ -3580,9 +4026,9 @@
                 _markFieldUsedWithCombos(usedFields, bestOption.field);
                 usedSportsThisSlot[bestOption.sport] = (usedSportsThisSlot[bestOption.sport] || 0) + 1;
 
-                console.log(`   ✅ [MatchupVariety] ${t1} vs ${t2} → ${bestOption.sport} @ ${bestOption.field}`);
+                console.log(`   ✅ [MatchupVariety] ${_label} → ${bestOption.sport} @ ${bestOption.field}`);
             } else {
-                console.log(`   ❌ No field available for ${t1} vs ${t2}`);
+                console.log(`   ❌ No field available for ${_label}`);
                 _recordForcedBye(leagueName, t1, t2, availablePool, matchups.length, assignments.length);
             }
         }
@@ -3606,7 +4052,12 @@
         try {
             if (!Array.isArray(assignments) || assignments.length < 2) return assignments;
             const sportsInPlay = Array.from(new Set(assignments.map(function (a) { return a.sport; })));
-            const teams = Array.from(new Set(assignments.reduce(function (acc, a) { acc.push(a.team1, a.team2); return acc; }, [])));
+            // a.teams covers round-robin groups (3+ members); it falls back to
+            // the pair for anything that predates it.
+            const _membersOf = function (a) { return (a && a.teams && a.teams.length) ? a.teams : [a.team1, a.team2]; };
+            const teams = Array.from(new Set(assignments.reduce(function (acc, a) {
+                return acc.concat(_membersOf(a).filter(Boolean));
+            }, [])));
             const cycles = makeSportCycles(leagueName, teams, sportsInPlay, history, dayId);
             const hists = {};
             teams.forEach(function (t) { hists[t] = getTeamSportHistoryByDate(leagueName, t, history, dayId); });
@@ -3640,9 +4091,12 @@
                 return false;
             }
             function assnScore(a, s) {
-                const pairC = getPairSports(leagueName, a.team1, a.team2, history)
+                const mem = _membersOf(a).filter(Boolean);
+                // A round-robin group has no pair record to protect (it never
+                // logs a matchup), so only the per-team scores apply.
+                const pairC = a._rr ? 0 : getPairSports(leagueName, a.team1, a.team2, history)
                     .filter(function (x) { return x === s; }).length;
-                return teamScore(a.team1, s) + teamScore(a.team2, s) - pairC * 400;
+                return mem.reduce(function (n, t) { return n + teamScore(t, s); }, 0) - pairC * 400;
             }
             // ★ PAIR-REPLAY REPAIR IS LEXICOGRAPHICALLY FIRST. The FN-57 caveat
             // says a rematch NEVER replays a sport the pair already played
@@ -3663,10 +4117,13 @@
             // on later days. Terminates: each swap either lowers total replay
             // count or raises total score at equal replay count.
             function pairReplays(a, s) {
+                if (a._rr) return 0;   // a group records no matchup — no replay to repair
                 return getPairSports(leagueName, a.team1, a.team2, history)
                     .filter(function (x) { return x === s; }).length;
             }
-            function legalFor(a, s) { return !illegal(a.team1, s) && !illegal(a.team2, s); }
+            function legalFor(a, s) {
+                return _membersOf(a).filter(Boolean).every(function (t) { return !illegal(t, s); });
+            }
             let improved = true, guard = 0;
             while (improved && guard++ < 100) {
                 improved = false;
@@ -4007,14 +4464,15 @@
     //   +1 → this game MUST be indoor (a team is still below its floor)
     //   -1 → this game MUST avoid indoor (a team would exceed its ceiling)
     //    0 → no constraint
-    function _indoorConstraintDir(t1, t2, leagueRules) {
+    function _indoorConstraintDir(t1, t2, leagueRules, groupTeams) {
         const req = leagueRules && leagueRules.indoorRequirement;
         if (!req || !req.enabled) return 0;
         const counts = (leagueRules && leagueRules.indoorCounts) || {};
         const op = req.op || '>=';
         const target = Number.isFinite(req.count) ? req.count : 1;
-        const c1 = counts[t1] || 0, c2 = counts[t2] || 0;
-        const lo = Math.min(c1, c2), hi = Math.max(c1, c2);
+        const members = (groupTeams && groupTeams.length) ? groupTeams : [t1, t2];
+        const vals = members.map(function (t) { return counts[t] || 0; });
+        const lo = Math.min.apply(null, vals), hi = Math.max.apply(null, vals);
         if (op === '>=') return lo < target ? 1 : 0;       // below floor → require indoor
         if (op === '<=') return hi >= target ? -1 : 0;      // at/over ceiling → forbid indoor
         if (op === '=')  { if (lo < target) return 1; if (hi >= target) return -1; return 0; }
@@ -4025,8 +4483,8 @@
     // matchup, WITH FALLBACK: if the required field type has no available
     // option, return the eligible set unchanged so the matchup still receives a
     // sport. The indoor rule never causes a game to go unscheduled.
-    function _applyIndoorHardFilter(eligible, t1, t2, leagueRules) {
-        const dir = _indoorConstraintDir(t1, t2, leagueRules);
+    function _applyIndoorHardFilter(eligible, t1, t2, leagueRules, groupTeams) {
+        const dir = _indoorConstraintDir(t1, t2, leagueRules, groupTeams);
         if (dir === 1) { const ind = eligible.filter(_optIsIndoor); return ind.length ? ind : eligible; }
         if (dir === -1) { const out = eligible.filter(function (o) { return !_optIsIndoor(o); }); return out.length ? out : eligible; }
         return eligible;
@@ -5124,7 +5582,34 @@
                         if (!_seen[p.sport].has(p.field)) { _seen[p.sport].add(p.field); _fieldsBySport[p.sport] = (_fieldsBySport[p.sport] || 0) + 1; }
                     });
                     const _games = {};
-                    _here.forEach(l => { _games[l.name] = Math.max(1, Math.floor((l.teams || []).length / 2)); });
+                    // ★ DEMAND IS THE ACTIVE ROSTER, NOT THE FULL ONE. Chinuch pulls
+                    // teams out of THIS period, so a 10-team league with 2 learning
+                    // wants 4 games, not 5. Counting the full roster overstates every
+                    // chinuch league's demand, and since the apportionment shares the
+                    // fields out in proportion to it, the seats land in the wrong
+                    // place — leagues get seats they cannot use while another comes up
+                    // short and takes a scarce field it was never allocated.
+                    //
+                    // Live 2026-08-04 @9:45, where it cost 3rd Grade its hockey game:
+                    // true demand was 2+1+2+4+2+1 = 12 against exactly 12 fields, a
+                    // perfect fit. The old count said 2+2+3+5+3+1 = 16, and handed
+                    // 6th Grade 3 seats for 2 games and 4th Grade 3 for 2, while 5th
+                    // Grade got 3 for 4 — so 5th broke its Hockey:0 cap on its last
+                    // matchup and took the rink 3rd Grade had been given.
+                    //
+                    // Same derivation as the per-period chinuch filter further down
+                    // (activeTeams), keyed off the same timeKey.
+                    _here.forEach(l => {
+                        let _active = (l.teams || []).length;
+                        try {
+                            if (l.chinuch && l.chinuch.enabled && window.chinuchSchedule && window.chinuchSchedule[l.name]) {
+                                const _out = Object.entries(window.chinuchSchedule[l.name])
+                                    .filter(function (e) { return Number(e[1]) === Number(timeKey); }).length;
+                                _active = Math.max(0, _active - _out);
+                            }
+                        } catch (_e) {}
+                        _games[l.name] = Math.max(1, Math.floor(_active / 2));
+                    });
                     // Date seed → rotates who wins a tie for the "extra" scarce field, so no
                     // league is permanently the one that loses out on an odd leftover field.
                     let _seed = 0; const _ds = String(dayId || '');
@@ -5203,6 +5688,106 @@
                         rows.forEach(r => { _caps[r.name][sport] = r.base; });
                     });
 
+                    // ★ SPORT-NEED RESERVATION — hold one field of a scarce
+                    // sport for a league that has NEVER played it.
+                    //
+                    // The apportionment above weights a league by _sportNeed, which
+                    // SUMS every team's deficit — so the weight scales with ROSTER
+                    // SIZE, not with how starved the league actually is. A 4-team
+                    // league that has never touched hockey (deficit 9/team → 36)
+                    // loses the rink to a 10-team league only mildly behind
+                    // (4/team → 40). Under largest-remainder apportionment of 2
+                    // hockey fields across 6 leagues, the small leagues are
+                    // arithmetically incapable of winning a scarce sport at all.
+                    // They land on whatever is abundant — and the participation
+                    // floor below can only donate from SURPLUS, which is only ever
+                    // the abundant sport too. So the youngest, smallest grades get
+                    // basketball, every period, all season. (Live 2026-08-03,
+                    // 3rd Grade: {Basketball:1, Football:0, Hockey:0, Newcomb:0}
+                    // in every period of the day, always the same leftover court.)
+                    //
+                    // So rank by PER-TEAM starvation instead of the summed weight,
+                    // and move one unit of the scarce sport to the league that has
+                    // played it ZERO times, taken from whichever league needs it
+                    // least per team.
+                    //
+                    // ★ RUNS BEFORE THE PARTICIPATION FLOOR, deliberately. The
+                    //   receiving league is usually the one holding nothing at all,
+                    //   so it has nothing to trade back — an exchange would simply
+                    //   never fire for the leagues this exists to help. Handing the
+                    //   unit over first and letting the floor re-seat the donor
+                    //   afterwards is what keeps everyone able to field their games.
+                    //
+                    // A cap is a PREFERENCE, not a wall — the assigner falls back to
+                    // the full pool once everything is at cap — so this steers the
+                    // senior leagues off the scarce field rather than forcing anyone
+                    // into a bye. One reservation per league per period.
+                    // Killswitch: window.__leagueSportReservation = false.
+                    //
+                    // ★ league name → the sport reserved for it. The participation
+                    //   floor below MUST NOT hand this back out (see the note there).
+                    const _reserved = {};
+                    if (window.__leagueSportReservation !== false) {
+                        const _perTeamNeed = (l, sp) => _sportNeed(l, sp) / ((l.teams || []).length || 1);
+                        // Who is owed what: a sport that has a field, that this
+                        // league is allowed, holds no cap on, and whose teams are at
+                        // least a game behind on ON AVERAGE.
+                        //
+                        // ★ NOT "has never played it". That was the first cut and it
+                        //   is far too narrow to help anybody in a running season:
+                        //   one football game back in week one disqualifies football
+                        //   forever, however lopsided the league gets afterwards.
+                        //   Live 2026-08-04, 3rd Grade had played exactly one
+                        //   football game on 08-03 and basketball every other period
+                        //   of every other day — and got Football:0 Hockey:0
+                        //   Newcomb:0 in all six periods, with Hockey(Rink) sitting
+                        //   OPEN in front of it at 12:10. "Hasn't had it" means
+                        //   behind, not virgin.
+                        const _owed = [];
+                        _here.forEach(l => {
+                            (l.sports || []).forEach(sp => {
+                                if ((_fieldsBySport[sp] || 0) <= 0) return;
+                                if ((_caps[l.name][sp] || 0) > 0) return;    // already seated on it
+                                const need = _perTeamNeed(l, sp);
+                                if (need < 1) return;                        // less than a game behind per team
+                                _owed.push({ l: l, sp: sp, need: need });
+                            });
+                        });
+                        // Most starved per team first. A league with no history at
+                        // all reads need 0 everywhere and waits its turn — this is
+                        // for the league that plays plenty and is missing a sport.
+                        _owed.sort((a, b) => b.need - a.need);
+                        _owed.forEach(({ l, sp, need }) => {
+                            if (_reserved[l.name]) return;
+                            if ((_caps[l.name][sp] || 0) > 0) return;        // an earlier pass seated it
+                            let donor = null, donorNeed = Infinity;
+                            _here.forEach(d => {
+                                if (d === l) return;
+                                if ((_caps[d.name][sp] || 0) <= 0) return;
+                                // Never strip a donor to nothing — it still has its
+                                // own games to field, and the floor below can only
+                                // rescue it from a league that has surplus.
+                                const dTotal = (d.sports || []).reduce((s, x) => s + (_caps[d.name][x] || 0), 0);
+                                if (dTotal <= 1) return;
+                                // ★ Only take from a league that is CLEARLY less
+                                //   starved — a full game per team clearer. Without
+                                //   this the reservation just moves the problem onto
+                                //   whichever league happens to hold the cap, and two
+                                //   equally-behind leagues would trade it back and
+                                //   forth period after period.
+                                const dn = _perTeamNeed(d, sp);
+                                if (dn > need - 1) return;
+                                if (dn < donorNeed) { donorNeed = dn; donor = d; }
+                            });
+                            if (!donor) return;
+                            _caps[donor.name][sp]--;
+                            _caps[l.name][sp] = (_caps[l.name][sp] || 0) + 1;
+                            _reserved[l.name] = sp;
+                            console.log('   🎁 Sport reservation: 1 ' + sp + ' held for "' + l.name
+                                + '" (' + need.toFixed(1) + ' game(s)/team behind) — from "' + donor.name + '"');
+                        });
+                    }
+
                     // ★ PARTICIPATION FLOOR — every league must be able to SEAT its
                     // games. Need-weighted apportionment can hand a league ZERO caps
                     // on every one of its sports: a perfectly caught-up league has
@@ -5232,6 +5817,18 @@
                                 for (const d of _here) {
                                     if (d === l || !(d.sports || []).includes(sp)) continue;
                                     if ((_caps[d.name][sp] || 0) <= 0) continue;
+                                    // ★ NEVER take back a cap the reservation above just
+                                    //   held for this league. A small league is exactly
+                                    //   the shape that reads as "surplus" here — 3 teams
+                                    //   want 1 game, so its 2 caps look like one spare —
+                                    //   and the floor confiscated the reserved sport in
+                                    //   the very next step. Observed live 2026-08-04:
+                                    //     🎁 1 Hockey held for "3rd Grade" (3.0 behind)
+                                    //     ⚖️ 1 Hockey cap 3rd Grade → 6th Grade
+                                    //   three periods running, which is why the
+                                    //   reservation fired all day and delivered nothing.
+                                    //   The floor can still take the league's OTHER caps.
+                                    if (_reserved[d.name] === sp) continue;
                                     const _surplus = _capTotal(d) - _games[d.name];
                                     if (_surplus <= 0) continue;
                                     if (!best || _lcap < best.lcap || (_lcap === best.lcap && _surplus > best.surplus)) {
@@ -5246,6 +5843,30 @@
                             _moved = true;
                         }
                         if (!_moved) break;
+                    }
+
+                    // ★ DON'T CAP WHAT NOBODY IS WAITING FOR. A cap exists to make a
+                    // league leave a scarce field for the grades that come AFTER it
+                    // (leagues run senior→junior and lock as they go). For a sport
+                    // that no later league even plays, the cap protects nobody and
+                    // only stops this league taking a field that will otherwise sit
+                    // empty — worst of all for the most junior league, which has no
+                    // one after it at all.
+                    //
+                    // Live 2026-08-04 @12:10, 3rd Grade was last in the order with
+                    // Hockey(Rink) OPEN in front of it, held Hockey:0, and took a
+                    // basketball court instead. Deleting the key (rather than raising
+                    // it) restores the "no cap" reading the assigner already has.
+                    // Killswitch: window.__leagueUnprotectedCapRelease = false.
+                    if (window.__leagueUnprotectedCapRelease !== false)
+                    for (let _i = 0; _i < _here.length; _i++) {
+                        const _l = _here[_i];
+                        (_l.sports || []).forEach(sp => {
+                            for (let _j = _i + 1; _j < _here.length; _j++) {
+                                if ((_here[_j].sports || []).includes(sp)) return;   // someone later wants it
+                            }
+                            delete _caps[_l.name][sp];
+                        });
                     }
 
                     console.log('   ⚖️ Need-first sport caps' + (_byNeedSports.length ? ' (need-weighted: ' + _byNeedSports.join(', ') + ')' : ' (no specific need → by size)') + ': ' + _here.map(l => l.name + '=' + JSON.stringify(_caps[l.name])).join('  '));
@@ -5763,11 +6384,16 @@
                     const _rrMatchups = fullSchedule[roundIndex] || [];
                     const _prioMode = league.schedulingPriority || 'sport_variety';
                     matchups = chooseDailyMatchups(activeTeams, availablePool, league.name, history, _rrMatchups, dayId, _prioMode);
+                    // ★ ROUND-ROBIN GROUPS: fold the team that would have been
+                    //   benched into a group that shares one field, if the
+                    //   league asked for that instead of a bye.
+                    matchups = _formRoundRobinGroup(matchups, activeTeams, league, league.name, history, dayId);
                 }
 
                console.log(`   Game #${gameNumber} (Today's Game: ${todayGameIndex + 1})`);
                 console.log(`   Matchups: ${matchups.length}`);
                 matchups.forEach(m => {
+                    if (_isRRGroup(m)) { console.log(`      • round robin: ${m.join(', ')}`); return; }
                     var t1 = Array.isArray(m) ? m[0] : m;
                     var t2 = Array.isArray(m) ? m[1] : m;
                     console.log(`      • ${t1} vs ${t2}`);
@@ -6011,8 +6637,7 @@
                     // report quotes is exactly the one the tiles get below.
                     const _playingNow = new Set();
                     assignments.forEach(function (a) {
-                        if (a.team1) _playingNow.add(a.team1);
-                        if (a.team2) _playingNow.add(a.team2);
+                        _assignedTeams(a).forEach(function (t) { _playingNow.add(t); });
                     });
                     _recordUnpairedByes(league.name, activeTeams, matchups,
                         planByeActivities(league,
@@ -6030,8 +6655,7 @@
                         // (rainyDayAvailable), with isIndoor as a fallback.
                         const _f = fObj && fObj.fieldObj;
                         if (_f && (_f.rainyDayAvailable === true || _f.isIndoor === true)) {
-                            if (a.team1) ic[a.team1] = (ic[a.team1] || 0) + 1;
-                            if (a.team2) ic[a.team2] = (ic[a.team2] || 0) + 1;
+                            _assignedTeams(a).forEach(function (t) { ic[t] = (ic[t] || 0) + 1; });
                         }
                     });
                 }
@@ -6117,7 +6741,29 @@ if (playoffRoundNum) {
 
                 console.log(`\n   📝 Final Assignments for Game #${gameNumber}:`);
                 const _recLabel = playoffRoundNum ? ('Playoff R' + playoffRoundNum) : ('Game ' + gameNumber);
+                // How many times a group plays through its pairings. Stamped
+                // here rather than inside the assigners: it is pure presentation
+                // + scoring (the group holds its one field for the period either
+                // way), so nothing in the sport/field logic needs to know.
+                const _rrRoundsCfg = (league.roundRobin && league.roundRobin.rounds >= 1)
+                    ? Math.floor(league.roundRobin.rounds) : 1;
+                assignments.forEach(a => { if (a._rr) a._rrRounds = _rrRoundsCfg; });
+
+                let _rrGroupSeq = 0;
                 assignments.forEach(a => {
+                    if (a._rr) {
+                        // ★ ROUND-ROBIN GROUP: every member played this sport, so
+                        //   the sport rotation moves on for all of them — but the
+                        //   group is NOT a fixture, so no matchup is recorded and
+                        //   who-played-who variety is untouched. See
+                        //   logRoundRobinRecord for how one keeps working without
+                        //   the other.
+                        const _mem = _assignedTeams(a);
+                        console.log(`      ✅ round robin (${_mem.join(', ')}) → ${a.sport} @ ${a.field}`);
+                        _mem.forEach(function (t) { recordTeamSport(league.name, t, a.sport, history); });
+                        logRoundRobinRecord(league.name, dayId, _mem, a.sport, history, _recLabel, ++_rrGroupSeq, a._rrRounds);
+                        return;
+                    }
                     console.log(`      ✅ ${a.team1} vs ${a.team2} → ${a.sport} @ ${a.field}`);
                     recordTeamSport(league.name, a.team1, a.sport, history);
                     recordTeamSport(league.name, a.team2, a.sport, history);
@@ -6137,8 +6783,7 @@ window._debugLeagueTimeData = timeData;
                 const _byeTeamsHere = (function () {
                     const playing = new Set();
                     assignments.forEach(function (a) {
-                        if (a.team1) playing.add(a.team1);
-                        if (a.team2) playing.add(a.team2);
+                        _assignedTeams(a).forEach(function (t) { playing.add(t); });
                     });
                     if (playoffRoundNum) {
                         const _r = _PM && _PM.getRoundByNumber ? _PM.getRoundByNumber(league, playoffRoundNum) : null;
@@ -6252,9 +6897,14 @@ window._debugLeagueTimeData = timeData;
                             _leagueName: league.name,
                             _h2h: true,
                             _fixed: true,
-                            _allMatchups: assignments.map(a =>
-                                `${a.team1} vs ${a.team2} @ ${a.field} (${a.sport})`
-                            ).concat(_byeLines).concat(_chinuchLines).concat(_electiveLines),
+                            // A round-robin group expands into its real games, in the
+                            // SAME "A vs B @ Field (Sport)" shape everything downstream
+                            // parses (print center, the reserved-field validator, the
+                            // team-rename rewriter) — same field and sport on each line
+                            // is what tells the counselor they rotate on one court.
+                            _allMatchups: assignments.reduce(function (lines, a) {
+                                return lines.concat(_matchupLinesFor(a));
+                            }, []).concat(_byeLines).concat(_chinuchLines).concat(_electiveLines),
                             _gameLabel: _gameLbl,
                             _playoffRound: playoffRoundNum || null
                         };
@@ -6351,9 +7001,9 @@ window._debugLeagueTimeData = timeData;
             _dayResetLeagues.forEach(function (lgName) {
                 try {
                     const byLabel = {};
-                    (history.gameLog?.[lgName]?.[dayId] || []).forEach(function (e) {
-                        const lbl = e.g || 'Game';
-                        (byLabel[lbl] = byLabel[lbl] || []).push({ teamA: e.t1, teamB: e.t2, sport: e.sport || null });
+                    _expandLogForResults(history.gameLog?.[lgName]?.[dayId] || []).forEach(function (m) {
+                        const lbl = m.g || 'Game';
+                        (byLabel[lbl] = byLabel[lbl] || []).push({ teamA: m.teamA, teamB: m.teamB, sport: m.sport });
                     });
                     const entries = Object.keys(byLabel).map(function (lbl) {
                         const m = String(lbl).match(/Game\s*(\d+)/i);
@@ -6745,9 +7395,9 @@ window._debugLeagueTimeData = timeData;
                             window.LeaguesAPI.removeAutoGamesForDate?.(dateKey, [league.name]);
                         } else if (typeof window.LeaguesAPI.syncGamesFromGeneration === 'function') {
                             const byLabel = {};
-                            keptRecs.forEach(function (e) {
-                                const lbl = e.g || 'Game';
-                                (byLabel[lbl] = byLabel[lbl] || []).push({ teamA: e.t1, teamB: e.t2, sport: e.sport || null });
+                            _expandLogForResults(keptRecs).forEach(function (m) {
+                                const lbl = m.g || 'Game';
+                                (byLabel[lbl] = byLabel[lbl] || []).push({ teamA: m.teamA, teamB: m.teamB, sport: m.sport });
                             });
                             const entries = Object.keys(byLabel).map(function (lbl) {
                                 const m = String(lbl).match(/Game\s*(\d+)/i);
@@ -6973,9 +7623,9 @@ window._debugLeagueTimeData = timeData;
             try {
                 if (window.LeaguesAPI && typeof window.LeaguesAPI.syncGamesFromGeneration === 'function') {
                     const byLabel = {};
-                    (history.gameLog[leagueName][date] || []).forEach(function (e) {
-                        const lbl = e.g || 'Game';
-                        (byLabel[lbl] = byLabel[lbl] || []).push({ teamA: e.t1, teamB: e.t2, sport: e.sport || null });
+                    _expandLogForResults(history.gameLog[leagueName][date] || []).forEach(function (m) {
+                        const lbl = m.g || 'Game';
+                        (byLabel[lbl] = byLabel[lbl] || []).push({ teamA: m.teamA, teamB: m.teamB, sport: m.sport });
                     });
                     const entries = Object.keys(byLabel).map(function (lbl) {
                         const m = String(lbl).match(/Game\s*(\d+)/i);
