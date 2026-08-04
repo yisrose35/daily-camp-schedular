@@ -666,6 +666,57 @@ function el(id) { return document.getElementById(id); }
 function escHtml(s) { return window.CampUtils.escapeHtml(s); }  // → campistry_utils.js (canonical; now also escapes quotes → closes attr-context gap)
 function parseTimeToMinutes(t) { return window.CampUtils.parseTimeToMinutes(t); }  // → campistry_utils.js (canonical superset; handles num/Date/am-pm, harness-proven)
 function minutesToTimeLabel(mins) { return window.CampUtils.minutesToTimeLabel(mins); }  // → campistry_utils.js (canonical; identical for valid input)
+
+// =========================================================================
+// ★ CUSTOM SCHEDULE LAYOUTS (see schedule_layout_model.js)
+// The printout is the artifact a camp actually tapes to the office wall, so
+// it follows the same layout the on-screen grids use: their orientation, and
+// their period names where they run a bell schedule.
+// =========================================================================
+
+/** The camp's active layout, or null when the module isn't present. */
+function pcActiveLayout() {
+    try { return window.ScheduleLayout ? window.ScheduleLayout.active() : null; } catch (e) { return null; }
+}
+
+/**
+ * The bell-schedule name covering [startMin, endMin), e.g. "Period 3" or
+ * "Lunch". Empty when the camp doesn't run named periods, or when the block
+ * straddles two of them — a half-truth on a printout is worse than no label.
+ */
+function pcPeriodName(startMin, endMin) {
+    var layout = pcActiveLayout();
+    if (!layout) return '';
+    var hit = '';
+    (layout.rulers || []).forEach(function (tier) {
+        if (tier.kind !== 'periods' || hit) return;
+        tier.slots.forEach(function (s) {
+            if (!hit && s.label && startMin >= s.start && endMin <= s.end) hit = s.label;
+        });
+    });
+    return hit;
+}
+
+/** Time-column label: the period's name where there is one, then the clock. */
+function pcTimeLabel(startMin, endMin) {
+    var clock = minutesToTimeLabel(startMin) + ' – ' + minutesToTimeLabel(endMin);
+    var name = pcPeriodName(startMin, endMin);
+    // Plain text with a separator rather than markup — this label also feeds
+    // data-cell-text, the Excel export and the live view.
+    return name ? (name + ' · ' + clock) : clock;
+}
+
+/**
+ * Orientation a fresh print template should start in. A camp that reads its
+ * day with time across the top wants its printout that way too, so the saved
+ * schedule layout supplies the default. Print packs and the transpose control
+ * still override it — this only decides where an unset template begins.
+ */
+function pcDefaultTableOrientation() {
+    var layout = pcActiveLayout();
+    if (!layout) return 'time-top';
+    return layout.orientation === 'horizontal' ? 'time-top' : 'bunks-top';
+}
 function naturalSort(a, b) {
     return String(a).localeCompare(String(b), undefined, { numeric: true, sensitivity: 'base' });
 }
@@ -1187,7 +1238,7 @@ function getPerBunkSchedule(bunk, divName) {
         // Fallback to division-level slots
         var divSlots = window.divisionTimes && window.divisionTimes[divName] ? window.divisionTimes[divName] : [];
         return divSlots.map(function (s, i) {
-            return { startMin: s.startMin, endMin: s.endMin, event: s.event, type: s.type, slotIndex: i, label: minutesToTimeLabel(s.startMin) + ' \u2013 ' + minutesToTimeLabel(s.endMin) };
+            return { startMin: s.startMin, endMin: s.endMin, event: s.event, type: s.type, slotIndex: i, label: pcTimeLabel(s.startMin, s.endMin) };
         });
     }
 
@@ -1196,7 +1247,7 @@ function getPerBunkSchedule(bunk, divName) {
             startMin: s.startMin, endMin: s.endMin,
             event: s.event || 'GA', type: s.type || 'slot',
             slotIndex: i,
-            label: minutesToTimeLabel(s.startMin) + ' \u2013 ' + minutesToTimeLabel(s.endMin)
+            label: pcTimeLabel(s.startMin, s.endMin)
         };
     });
 }
@@ -1275,7 +1326,7 @@ function buildDivisionBlocks(divName) {
         if (bl.item.type === 'split') {
             var midMin = Math.floor((bl.startMin + bl.endMin) / 2);
             blocks.push({
-                label: minutesToTimeLabel(bl.startMin) + ' \u2013 ' + minutesToTimeLabel(midMin),
+                label: pcTimeLabel(bl.startMin, midMin),
                 startMin: bl.startMin, endMin: midMin,
                 event: ev, type: 'split_half', isLeague: false,
                 _splitHalf: 1, _splitParent: ev,
@@ -1283,7 +1334,7 @@ function buildDivisionBlocks(divName) {
                 _postChangeMin: bl.item._postChangeMin || 0
             });
             blocks.push({
-                label: minutesToTimeLabel(midMin) + ' \u2013 ' + minutesToTimeLabel(bl.endMin),
+                label: pcTimeLabel(midMin, bl.endMin),
                 startMin: midMin, endMin: bl.endMin,
                 event: ev, type: 'split_half', isLeague: false,
                 _splitHalf: 2, _splitParent: ev,
@@ -1292,7 +1343,7 @@ function buildDivisionBlocks(divName) {
             });
         } else {
             blocks.push({
-                label: minutesToTimeLabel(bl.startMin) + ' \u2013 ' + minutesToTimeLabel(bl.endMin),
+                label: pcTimeLabel(bl.startMin, bl.endMin),
                 startMin: bl.startMin, endMin: bl.endMin,
                 event: ev, type: bl.item.type, isLeague: isLeagueBlock
             });
@@ -4157,7 +4208,7 @@ function renderCombinedAutoTable(divBunks) {
             for (ri = 0; ri < activityRanges.length; ri++) {
                 if (t >= activityRanges[ri].startMin && t < activityRanges[ri].endMin) { pIdx = ri; break; }
             }
-            timeCols.push({ startMin: t, endMin: tEnd, label: minutesToTimeLabel(t), periodIdx: pIdx });
+            timeCols.push({ startMin: t, endMin: tEnd, label: (pcPeriodName(t, tEnd) || minutesToTimeLabel(t)), periodIdx: pIdx });
         }
     } else {
         for (t = dayStart; t < dayEnd; t += inc) {
@@ -4165,7 +4216,7 @@ function renderCombinedAutoTable(divBunks) {
             for (ri = 0; ri < activityRanges.length; ri++) {
                 if (t >= activityRanges[ri].startMin && t < activityRanges[ri].endMin) { pIdx = ri; break; }
             }
-            timeCols.push({ startMin: t, endMin: Math.min(t + inc, dayEnd), label: minutesToTimeLabel(t), periodIdx: pIdx });
+            timeCols.push({ startMin: t, endMin: Math.min(t + inc, dayEnd), label: (pcPeriodName(t, Math.min(t + inc, dayEnd)) || minutesToTimeLabel(t)), periodIdx: pIdx });
         }
     }
     var numCols = timeCols.length;
@@ -5022,7 +5073,7 @@ function buildLiveSectionHTML(divName, bunks, nowMin) {
 
         var lTimeCols = [];
         for (var lt = lDayStart; lt < lDayEnd; lt += inc) {
-            lTimeCols.push({ startMin: lt, endMin: lt + inc, label: minutesToTimeLabel(lt) });
+            lTimeCols.push({ startMin: lt, endMin: lt + inc, label: (pcPeriodName(lt, lt + inc) || minutesToTimeLabel(lt)) });
         }
 
         html += '<div style="overflow-x:hidden;"><table class="pc3-live-tbl" style="table-layout:fixed;width:100%;">';
@@ -7505,6 +7556,17 @@ function initPrintCenter() {
                 _activePreset = matched.id;
                 _currentTemplate = Object.assign({}, DEFAULT_TEMPLATE, matched.overlay);
             }
+        }
+    } catch (e) {}
+
+    // ★ Custom schedule layouts: start the printout in the same orientation the
+    //   camp reads its day on screen. Only when no pack has been applied and the
+    //   restored preset didn't state one — a pack or the transpose control is an
+    //   explicit choice and always wins over this default.
+    try {
+        var _presetOverlay = (STYLE_PRESETS.filter(function (p) { return p.id === _activePreset; })[0] || {}).overlay || {};
+        if (!_activePack && _presetOverlay.tableOrientation == null) {
+            _currentTemplate.tableOrientation = pcDefaultTableOrientation();
         }
     } catch (e) {}
 
