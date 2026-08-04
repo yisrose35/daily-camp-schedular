@@ -3300,7 +3300,7 @@ function renderGrid() {
     tier.ticks.forEach(tick => {
       const body = tier.kind === 'periods'
         ? `<div>${_escHtml(tick.label)}</div><div class="da-ruler-tick-sub">${_escHtml(tick.rangeLabel)}</div>`
-        : _escHtml(tick.timeLabel);
+        : _escHtml(geo.tickLabel(tick));
       html += `<div class="da-ruler-tick" title="${_escHtml(tick.label + ' · ' + tick.rangeLabel)}" style="${geo.tickStyle(tick)}">${body}</div>`;
     });
     html += `</div>`;
@@ -3664,9 +3664,10 @@ function renderEventTile(ev, startMin, endMin, spanInfo, geo, laneSpan) {
   //   lane thickness there and off the duration in the classic orientation.
   const _laneCount = (laneSpan && laneSpan.lanes) || 1;
   const _durPx = Math.max(geo.durPx(endMin - startMin) - 2, 24); // ★ v14.0: raised minimum from 18→24
-  const adjustedHeight = geo.horizontal
-    ? Math.max(_laneCount * geo.laneSize + (_laneCount - 1) * geo.laneGap - 4, 18)
-    : _durPx;
+  const _lanePx = Math.max(_laneCount * geo.laneSize + (_laneCount - 1) * geo.laneGap - 4, 18);
+  // Sideways, a tile is bounded by BOTH its duration and its lane thickness —
+  // whichever is tighter decides how much text can reasonably fit.
+  const adjustedHeight = geo.horizontal ? Math.min(_lanePx, _durPx) : _durPx;
   
   // Night activity styling
   const isNight = !!ev.isNightActivity;
@@ -10017,13 +10018,14 @@ function getStyles() {
     .da-grid.da-horizontal .da-ruler-tier[data-kind="uniform"] { height:24px; }
     .da-grid.da-horizontal .da-ruler-tier[data-kind="periods"] { height:34px; }
     .da-grid.da-horizontal .da-ruler-tier[data-kind="uniform"] .da-ruler-tick {
-      left:auto; width:auto; top:0; height:100%; padding:4px 5px; border-top:none; border-left:1px dashed #e2e8f0; white-space:nowrap;
+      left:auto; width:auto; top:0; height:100%; padding:4px 2px; border-top:none; border-left:1px dashed #e2e8f0;
+      white-space:nowrap; font-size:9px; text-align:center;
     }
     .da-grid.da-horizontal .da-ruler-tier[data-kind="periods"] .da-ruler-tick { top:2px; bottom:2px; height:auto; left:auto; right:auto; }
     /* Lane header (grade or bunk) runs down the left and stays put on scroll */
     .da-grid.da-horizontal .da-lane-header {
-      position:sticky; left:0; z-index:8; top:auto; display:flex; align-items:center; justify-content:flex-start;
-      padding:6px 10px; text-align:left; border-bottom:1px solid var(--da-border); border-radius:0;
+      position:sticky; left:0; z-index:8; top:auto; display:flex; flex-direction:column; align-items:flex-start; justify-content:center;
+      padding:6px 10px; text-align:left; border-bottom:1px solid var(--da-border); border-radius:0; line-height:1.2;
     }
     .da-grid.da-horizontal .da-corner { position:sticky; left:0; top:0; z-index:11; }
     .da-grid.da-horizontal .da-grid-cell { border-radius:0; border-bottom:1px solid #eef0f3; }

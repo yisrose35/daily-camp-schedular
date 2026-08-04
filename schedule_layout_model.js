@@ -422,10 +422,28 @@
         endMin: b,
         label: label != null ? label : fmtTime(a),
         timeLabel: fmtTime(a),
+        // Meridiem-less form for tight tiers — a 15-minute band at a normal
+        // zoom is far too narrow for "10:15am" and would clip mid-word.
+        shortLabel: fmtTime(a).replace(/(am|pm)$/, ''),
         rangeLabel: fmtRange(a, b),
         pos: timePx(a),
         size: durPx(b - a)
       };
+    }
+
+    /**
+     * The most informative label that actually FITS this tick. Space along the
+     * time axis is what varies (a tick's other dimension is the tier's own
+     * thickness), so both orientations key off `tick.size`.
+     */
+    function tickLabel(tick) {
+      // Horizontal ticks are limited by their width; vertical ones by height,
+      // where a single line of 11px text needs far less room.
+      var full = horizontal ? 46 : 14;
+      var short = horizontal ? 27 : 10;
+      if (tick.size >= full) return tick.timeLabel;
+      if (tick.size >= short) return tick.shortLabel;
+      return '';
     }
 
     /** CSS placing a ruler tick along the time axis inside its tier strip. */
@@ -466,6 +484,7 @@
 
       rulerTiers: rulerTiers,
       tickStyle: tickStyle,
+      tickLabel: tickLabel,
 
       snap: function (min) { return snap(L, min); },
       defaultDurationAt: function (min) { return defaultDurationAt(L, min); },
