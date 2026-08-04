@@ -595,3 +595,66 @@ test('markDidNotPlay — no matching game leaves stores untouched and reports no
   assert.strictEqual(res.ok, false);
   assert.ok(!window.leagueAssignments.Majors[1]._didNotPlay);
 });
+
+// ── GAME NUMBER (post edit) ─────────────────────────────────────────────────
+// The number belongs to the whole league period and lives in four stores that
+// don't derive from each other, so the post-edit control hands off to
+// SchedulerCoreLeagues.renumberGame rather than writing any of them itself.
+// These tests pin the hand-off and the guards around it.
+
+function ctxFor(over) {
+  return Object.assign({
+    kind: 'regular', divName: 'Juniors', slotIdx: 0,
+    leagueName: 'Majors', gameLabel: 'Game 10',
+  }, over || {});
+}
+
+test('applyGameNumber — hands the change to the engine and reports the new number', () => {
+  const calls = [];
+  window.SchedulerCoreLeagues = {
+    renumberGame: (lg, date, oldL, newL) => { calls.push([lg, date, oldL, newL]); return { ok: true, swappedWith: null }; },
+  };
+  window.currentScheduleDate = '2026-08-02';
+  window.leagueAssignments = {};
+  const ctx = ctxFor();
+  const res = PEFC.applyGameNumber(ctx, '9');
+  assert.strictEqual(res.ok, true, res.message);
+  assert.deepStrictEqual(calls, [['Majors', '2026-08-02', 'Game 10', 'Game 9']]);
+  assert.strictEqual(ctx.gameLabel, 'Game 9', 'ctx follows so a re-render shows the new number');
+  assert.match(res.message, /Game 9/);
+});
+
+test('applyGameNumber — a swap is reported as one', () => {
+  window.SchedulerCoreLeagues = { renumberGame: () => ({ ok: true, swappedWith: 'Game 10' }) };
+  window.currentScheduleDate = '2026-08-02';
+  const res = PEFC.applyGameNumber(ctxFor(), '11');
+  assert.strictEqual(res.ok, true);
+  assert.match(res.message, /swapped/i, 'the user is told the other game moved, got: ' + res.message);
+});
+
+test('applyGameNumber — engine refusal is surfaced, not swallowed', () => {
+  window.SchedulerCoreLeagues = { renumberGame: () => ({ ok: false, reason: 'no games recorded' }) };
+  window.currentScheduleDate = '2026-08-02';
+  const ctx = ctxFor();
+  const res = PEFC.applyGameNumber(ctx, '9');
+  assert.strictEqual(res.ok, false);
+  assert.strictEqual(res.message, 'no games recorded');
+  assert.strictEqual(ctx.gameLabel, 'Game 10', 'ctx is untouched when the engine refused');
+});
+
+test('applyGameNumber — guards: bad number, specialty, unlabelled period, no engine', () => {
+  window.SchedulerCoreLeagues = { renumberGame: () => ({ ok: true, swappedWith: null }) };
+  window.currentScheduleDate = '2026-08-02';
+  assert.strictEqual(PEFC.applyGameNumber(ctxFor(), '0').ok, false, '0 is not a game number');
+  assert.strictEqual(PEFC.applyGameNumber(ctxFor(), 'abc').ok, false, 'junk is refused');
+  assert.strictEqual(PEFC.applyGameNumber(ctxFor({ kind: 'specialty' }), '9').ok, false,
+    'specialty leagues are not numbered this way');
+  assert.strictEqual(PEFC.applyGameNumber(ctxFor({ gameLabel: 'Chinuch' }), '9').ok, false,
+    'a period with no Game N label has nothing to renumber');
+  assert.strictEqual(PEFC.applyGameNumber(ctxFor(), '10').ok, false, 'renumbering to the same number is a no-op');
+
+  window.SchedulerCoreLeagues = null;
+  const res = PEFC.applyGameNumber(ctxFor(), '9');
+  assert.strictEqual(res.ok, false);
+  assert.match(res.message, /engine is not loaded/i, 'a missing engine says so rather than silently failing');
+});

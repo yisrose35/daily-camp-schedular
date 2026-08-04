@@ -399,7 +399,90 @@
       game: null, // chosen later
       // Post-edit CUSTOM TEXT (a free note shown under the game on the schedule,
       // print & live view). Lives on the leagueAssignments slot record.
-      customText: (laEntry && laEntry.customText) || ''
+      customText: (laEntry && laEntry.customText) || '',
+      // "Game N" for this league PERIOD (not this one matchup) — what the
+      // schedule, the print header and the Leagues results page all call it.
+      gameLabel: (laEntry && laEntry.gameLabel) || (entryHint && entryHint._gameLabel) || ''
+    };
+  }
+
+  // ── GAME NUMBER ───────────────────────────────────────────────────────────
+  // The number belongs to the whole league period. It lives in four stores that
+  // don't derive from each other — the engine's gameLog (which the Leagues
+  // results page is built from), the day's leagueAssignments, the per-bunk
+  // copy, and the live in-memory assignments — so editing it here hands off to
+  // SchedulerCoreLeagues.renumberGame, which moves all four together and
+  // re-pushes the results list. Anything less and the number reverts on reload
+  // or disagrees with the Leagues page.
+  // Returns { ok, message }.
+  PEFC.applyGameNumber = function (ctx, newNumber) {
+    if (!ctx || ctx.kind !== 'regular') return { ok: false, message: 'Only regular league games are numbered.' };
+    var n = parseInt(newNumber, 10);
+    if (!isFinite(n) || n < 1) return { ok: false, message: 'Enter a game number of 1 or more.' };
+    var oldLabel = ctx.gameLabel || '';
+    var newLabel = 'Game ' + n;
+    if (!/^Game\s+\d+$/i.test(oldLabel)) return { ok: false, message: 'This period has no game number to change.' };
+    if (oldLabel === newLabel) return { ok: false, message: 'Nothing changed.' };
+
+    var core = window.SchedulerCoreLeagues;
+    if (!core || typeof core.renumberGame !== 'function') {
+      return { ok: false, message: 'The league engine is not loaded — reload the page and try again.' };
+    }
+    var date = window._scheduleAssignmentsDate || window.currentScheduleDate;
+    if (!date) return { ok: false, message: 'No schedule date — reload the page and try again.' };
+
+    var res = core.renumberGame(ctx.leagueName, date, oldLabel, newLabel);
+    if (!res || !res.ok) return { ok: false, message: (res && res.reason) || 'Could not renumber this game.' };
+    ctx.gameLabel = newLabel;
+
+    // renumberGame already wrote the stored day; push it through THIS page's
+    // save path too so the live view and other sessions pick it up the same way
+    // a custom-text edit does. Both are idempotent.
+    try {
+      if (typeof window.saveCurrentDailyData === 'function') {
+        window.saveCurrentDailyData('leagueAssignments', window.leagueAssignments || {});
+      }
+      var divBunks = ((window.divisions || {})[ctx.divName] || {}).bunks || [];
+      if (typeof window.bypassSaveAllBunks === 'function' && divBunks.length) {
+        Promise.resolve(window.bypassSaveAllBunks(divBunks.map(String))).catch(function (e) { console.warn('[PEFC] renumber cloud save:', e); });
+      }
+    } catch (e) { console.warn('[PEFC] renumber persist:', e); }
+    if (typeof window.updateTable === 'function') { try { window.updateTable(); } catch (e) {} }
+
+    return {
+      ok: true,
+      message: res.swappedWith
+        ? ('Renumbered to ' + newLabel + ' — swapped with the other game on this date.')
+        : ('Renumbered to ' + newLabel + '.')
+    };
+  };
+
+  // The shared markup + wiring for the game-number row, used by both modals.
+  function gameNumberHtml(ctx) {
+    if (ctx.kind !== 'regular' || !/^Game\s+\d+$/i.test(ctx.gameLabel || '')) return '';
+    var cur = String(ctx.gameLabel).replace(/[^0-9]/g, '');
+    return '<div style="margin-top:14px;padding-top:14px;border-top:1px solid #f0f0f2;">' +
+      '<label style="display:block;font-weight:600;font-size:0.82rem;color:#374151;margin-bottom:6px;">Game number ' +
+      '<span style="font-weight:400;color:#9ca3af;">(this whole league period)</span></label>' +
+      '<div style="display:flex;gap:8px;align-items:center;">' +
+      '<span style="font-size:0.9rem;color:#374151;">Game</span>' +
+      '<input id="pefc-game-number" type="number" min="1" value="' + esc(cur) + '"' +
+      ' style="width:90px;padding:9px 11px;border:1.5px solid #d1d5db;border-radius:8px;font-size:0.9rem;box-sizing:border-box;background:#fff;">' +
+      '<button id="pefc-save-game-number" style="flex:1;padding:9px;border:none;border-radius:8px;background:#2563eb;color:#fff;font-size:0.85rem;font-weight:600;cursor:pointer;">Save game number</button>' +
+      '</div>' +
+      '<div style="font-size:0.72rem;color:#9ca3af;margin-top:3px;">Updates the schedule, the printout and the Leagues results page. ' +
+      'If another game on this date already has that number, the two swap.</div></div>';
+  }
+
+  function wireGameNumber(box, ctx) {
+    var btn = box.querySelector('#pefc-save-game-number');
+    if (!btn) return;
+    btn.onclick = function () {
+      var el = box.querySelector('#pefc-game-number');
+      var res = PEFC.applyGameNumber(ctx, el ? el.value : '');
+      if (!res.ok) { toast(res.message, res.message === 'Nothing changed.' ? 'info' : 'warning'); return; }
+      closeModal();
+      toast(res.message, 'success');
     };
   }
 
@@ -873,8 +956,9 @@
 
     var box = shell(header('Edit a league game') +
       '<div style="font-size:0.85rem;color:#6b7280;margin-bottom:12px;">' + esc(ctx.leagueName || 'League') + ' — pick the game to edit:</div>' +
-      rows + pickerNoteHtml);
+      rows + pickerNoteHtml + gameNumberHtml(ctx));
     box.querySelector('#pefc-close').onclick = closeModal;
+    wireGameNumber(box, ctx);
     function readPickerNote() {
       var el = box.querySelector('#pefc-picker-custom-text');
       return el ? String(el.value || '') : '';
@@ -1091,12 +1175,16 @@
       sportHtml +
       noteHtml +
       openSection + noFreeNote + overrideHtml + busyHtml + keepFieldHtml + dnpHtml +
+      // Period-level, same as the note above it — and it has to live here too,
+      // because a period holding a single game skips the picker entirely.
+      gameNumberHtml(ctx) +
       '<div style="display:flex;gap:10px;margin-top:18px;">' +
       (ctx.games.length > 1 ? '<button id="pefc-back" style="flex:1;padding:10px;border:1px solid #d1d5db;border-radius:8px;background:#fff;color:#374151;cursor:pointer;font-weight:500;">← Back</button>' : '') +
       '<button id="pefc-cancel" style="flex:1;padding:10px;border:1px solid #d1d5db;border-radius:8px;background:#fff;color:#374151;cursor:pointer;font-weight:500;">Cancel</button></div>');
 
     box.querySelector('#pefc-close').onclick = closeModal;
     box.querySelector('#pefc-cancel').onclick = closeModal;
+    wireGameNumber(box, ctx);
     var back = box.querySelector('#pefc-back');
     if (back) back.onclick = function () { showGamePicker(ctx); };
 
