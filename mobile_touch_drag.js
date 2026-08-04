@@ -40,9 +40,29 @@ let resizeState = null;
 let isRepositioning = false;
 let repositionState = null;
 
-// Constants (must match both MS and DA)
+// Constants (fallback only — real geometry comes from the active layout below)
 const PIXELS_PER_MINUTE = 2.5;
 const SNAP_MINS = 5;
+
+// =================================================================
+// ★ LAYOUT GEOMETRY (see schedule_layout_model.js)
+// The grid can run time down the side or across the top, so touch editing
+// can't assume clientY means "time". Each module publishes the geometry of
+// the grid it just painted; these helpers read it so a finger drags along
+// the time axis whichever way that axis points.
+// =================================================================
+
+/** Geometry of the grid this module currently has on screen, or null. */
+function touchGeo(module) {
+  const internal = module === 'ms' ? window.MasterSchedulerInternal : window.DailyAdjustmentsInternal;
+  return (internal && internal.gridGeometry) || null;
+}
+
+/** Snap a minute value the way the active layout wants (bells, or N minutes). */
+function touchSnap(module, min) {
+  const geo = touchGeo(module);
+  return geo ? geo.snap(min) : Math.round(min / SNAP_MINS) * SNAP_MINS;
+}
 
 // =================================================================
 // INITIALIZATION
@@ -112,7 +132,9 @@ function ensureStyles() {
       border: none; border-radius: 4px; padding: 3px 8px;
       font-size: 11px; cursor: pointer;
     }
-    /* Touch-friendly resize handles */
+    /* Touch-friendly resize handles. The grips sit on the tile's TIME edges,
+       which are top/bottom normally but left/right when the active layout runs
+       time across the top — so fatten the correct pair in each orientation. */
     @media (pointer: coarse) {
       .resize-handle, .da-resize-handle {
         height: 16px !important;
@@ -121,6 +143,17 @@ function ensureStyles() {
       }
       .resize-handle-top, .da-resize-top { top: -4px !important; }
       .resize-handle-bottom, .da-resize-bottom { bottom: -4px !important; }
+
+      .da-grid.da-horizontal .da-resize-handle,
+      .ms-skeleton-grid.ms-horizontal .resize-handle {
+        height: auto !important;
+        width: 16px !important;
+      }
+      .da-grid.da-horizontal .da-resize-top,
+      .ms-skeleton-grid.ms-horizontal .resize-handle-top { top: 0 !important; left: -4px !important; }
+      .da-grid.da-horizontal .da-resize-bottom,
+      .ms-skeleton-grid.ms-horizontal .resize-handle-bottom { bottom: 0 !important; right: -4px !important; }
+
       .grid-event, .da-event {
         touch-action: none;
       }
@@ -610,21 +643,29 @@ function startTouchResize(handle, touch, module, wrapper) {
   if (!tile || !tile.dataset.id) return;
 
   const handleTopClass = module === 'ms' ? 'resize-handle-top' : 'da-resize-top';
-  const direction = handle.classList.contains(handleTopClass) ? 'top' : 'bottom';
+  // The grip that leads in time — the tile's top edge normally, its left edge
+  // when the layout runs time across the top.
+  const isLeading = handle.classList.contains(handleTopClass);
 
-  const grid = module === 'ms' 
-    ? document.getElementById('scheduler-grid') 
+  const grid = module === 'ms'
+    ? document.getElementById('scheduler-grid')
     : document.getElementById('da-skeleton-grid');
   const earliestMin = parseInt(grid?.dataset.earliestMin, 10) || 540;
+
+  const geo = touchGeo(module);
+  const horizontal = !!(geo && geo.horizontal);
 
   isResizing = true;
   resizeState = {
     tileEl: tile,
     tileId: tile.dataset.id,
-    direction: direction,
-    startY: touch.clientY,
-    startTop: parseInt(tile.style.top, 10),
-    startHeight: tile.offsetHeight,
+    isLeading: isLeading,
+    horizontal: horizontal,
+    edgeProp: horizontal ? 'left' : 'top',
+    sizeProp: horizontal ? 'width' : 'height',
+    origin: { x: touch.clientX, y: touch.clientY },
+    startPos: parseFloat(tile.style[horizontal ? 'left' : 'top']) || 0,
+    startSize: horizontal ? tile.offsetWidth : tile.offsetHeight,
     earliestMin: earliestMin,
     module: module
   };
@@ -644,30 +685,36 @@ function startTouchResize(handle, touch, module, wrapper) {
 function onTouchResizeMove(touch, module, wrapper) {
   if (!resizeState) return;
 
-  const { tileEl, direction, startY, startTop, startHeight } = resizeState;
-  const deltaY = touch.clientY - startY;
+  const { tileEl, isLeading, origin, startPos, startSize, edgeProp, sizeProp, earliestMin } = resizeState;
+  const geo = touchGeo(module);
+  const ppm = geo ? geo.pxPerMinute : PIXELS_PER_MINUTE;
+  const minSizePx = (geo ? geo.snapMins : SNAP_MINS) * ppm;
 
-  let newTop = startTop, newHeight = startHeight;
+  // Delta along the TIME axis, whichever axis that is.
+  const delta = geo ? geo.deltaTimePx(touch, origin)
+                    : (touch.clientY - origin.y);
+  const timePx = (min) => (geo ? geo.timePx(min) : (min - earliestMin) * ppm);
 
-  if (direction === 'bottom') {
-    newHeight = Math.max(SNAP_MINS * PIXELS_PER_MINUTE, startHeight + deltaY);
-    newHeight = Math.round(newHeight / (SNAP_MINS * PIXELS_PER_MINUTE)) * (SNAP_MINS * PIXELS_PER_MINUTE);
+  let newPos = startPos, newSize = startSize;
+
+  // Snap in MINUTES so a bell-schedule layout pulls the edge onto the next bell.
+  if (!isLeading) {
+    const rawEnd = earliestMin + (startPos + Math.max(minSizePx, startSize + delta)) / ppm;
+    newSize = Math.max(minSizePx, timePx(touchSnap(module, rawEnd)) - startPos);
   } else {
-    const maxDelta = startHeight - (SNAP_MINS * PIXELS_PER_MINUTE);
-    const constrainedDelta = Math.min(deltaY, maxDelta);
-    const snappedDelta = Math.round(constrainedDelta / (SNAP_MINS * PIXELS_PER_MINUTE)) * (SNAP_MINS * PIXELS_PER_MINUTE);
-    newTop = startTop + snappedDelta;
-    newHeight = startHeight - snappedDelta;
+    const endPx = startPos + startSize;
+    const rawStart = earliestMin + Math.min(startPos + delta, endPx - minSizePx) / ppm;
+    newPos = Math.min(timePx(touchSnap(module, rawStart)), endPx - minSizePx);
+    newSize = endPx - newPos;
   }
 
-  tileEl.style.top = newTop + 'px';
-  tileEl.style.height = newHeight + 'px';
+  tileEl.style[edgeProp] = newPos + 'px';
+  tileEl.style[sizeProp] = newSize + 'px';
 
   // Update tooltip
-  const { earliestMin } = resizeState;
-  const newStartMin = earliestMin + (newTop / PIXELS_PER_MINUTE);
-  const newEndMin = newStartMin + (newHeight / PIXELS_PER_MINUTE);
-  const duration = newEndMin - newStartMin;
+  const newStartMin = earliestMin + (newPos / ppm);
+  const newEndMin = newStartMin + (newSize / ppm);
+  const duration = Math.round(newEndMin - newStartMin);
   const durationStr = duration < 60 ? `${duration}m` : `${Math.floor(duration/60)}h${duration%60 > 0 ? duration%60+'m' : ''}`;
 
   const tooltip = document.getElementById('mobile-resize-tooltip');
@@ -702,12 +749,14 @@ function _touchSyncSpanTimes(event, module) {
 function finishTouchResize(module, wrapper) {
   if (!resizeState) { isResizing = false; return; }
 
-  const { tileEl, tileId, earliestMin } = resizeState;
-  
-  const newTop = parseInt(tileEl.style.top, 10);
-  const newHeightPx = parseInt(tileEl.style.height, 10);
-  const newStartMin = earliestMin + (newTop / PIXELS_PER_MINUTE);
-  const newEndMin = newStartMin + (newHeightPx / PIXELS_PER_MINUTE);
+  const { tileEl, tileId, earliestMin, edgeProp, sizeProp } = resizeState;
+
+  const _geo = touchGeo(module);
+  const _ppm = _geo ? _geo.pxPerMinute : PIXELS_PER_MINUTE;
+  const newPos = parseFloat(tileEl.style[edgeProp]) || 0;
+  const newSizePx = parseFloat(tileEl.style[sizeProp]) || 0;
+  const newStartMin = earliestMin + (newPos / _ppm);
+  const newEndMin = newStartMin + (newSizePx / _ppm);
 
   if (module === 'ms') {
     // Master Scheduler: update dailySkeleton (it's a local var in the IIFE, 
@@ -719,8 +768,8 @@ function finishTouchResize(module, wrapper) {
       const divStartMin = parseTimeToMinutes(div.startTime) || 540;
       const divEndMin = parseTimeToMinutes(div.endTime) || 960;
       
-      event.startTime = minutesToTime(Math.max(divStartMin, Math.round(newStartMin / SNAP_MINS) * SNAP_MINS));
-      event.endTime = minutesToTime(Math.min(divEndMin, Math.round(newEndMin / SNAP_MINS) * SNAP_MINS));
+      event.startTime = minutesToTime(Math.max(divStartMin, touchSnap(module, newStartMin)));
+      event.endTime = minutesToTime(Math.min(divEndMin, touchSnap(module, newEndMin)));
 
       // ★ Multi-grade span: every grade's copy keeps the same times (mirrors
       //   the desktop resize handlers).
@@ -751,11 +800,11 @@ function finishTouchResize(module, wrapper) {
       const divEndMin = parseTimeToMinutes(div.endTime) || 960;
       
       if (event.isNightActivity) {
-        event.startTime = minutesToTime(Math.max(divStartMin, Math.round(newStartMin / SNAP_MINS) * SNAP_MINS));
-        event.endTime = minutesToTime(Math.round(newEndMin / SNAP_MINS) * SNAP_MINS);
+        event.startTime = minutesToTime(Math.max(divStartMin, touchSnap(module, newStartMin)));
+        event.endTime = minutesToTime(touchSnap(module, newEndMin));
       } else {
-        event.startTime = minutesToTime(Math.max(divStartMin, Math.round(newStartMin / SNAP_MINS) * SNAP_MINS));
-        event.endTime = minutesToTime(Math.min(divEndMin, Math.round(newEndMin / SNAP_MINS) * SNAP_MINS));
+        event.startTime = minutesToTime(Math.max(divStartMin, touchSnap(module, newStartMin)));
+        event.endTime = minutesToTime(Math.min(divEndMin, touchSnap(module, newEndMin)));
       }
 
       // ★ Multi-grade span: every grade's copy keeps the same times.
@@ -867,16 +916,22 @@ function onTouchRepositionMove(touch, module, wrapper) {
     const preview = cell.querySelector('.drop-preview, .da-drop-preview');
     if (preview && repositionState) {
       const rect = cell.getBoundingClientRect();
-      const y = touch.clientY - rect.top;
-      const snapMin = Math.round(y / PIXELS_PER_MINUTE / SNAP_MINS) * SNAP_MINS;
       const cellStartMin = parseInt(cell.dataset.startMin, 10);
-      const previewStartTime = minutesToTime(cellStartMin + snapMin);
-      const previewEndTime = minutesToTime(cellStartMin + snapMin + repositionState.duration);
+      const geo = touchGeo(module);
+      const duration = repositionState.duration;
+      const startMin = geo
+        ? geo.snap(cellStartMin + geo.pointerMinuteOffset(touch, rect))
+        : cellStartMin + Math.round((touch.clientY - rect.top) / PIXELS_PER_MINUTE / SNAP_MINS) * SNAP_MINS;
 
       preview.style.display = 'block';
-      preview.style.top = (snapMin * PIXELS_PER_MINUTE) + 'px';
-      preview.style.height = (repositionState.duration * PIXELS_PER_MINUTE) + 'px';
-      preview.innerHTML = `<div style="text-align:center;padding:4px;color:#3b82f6;font-weight:600;font-size:11px;">${previewStartTime} - ${previewEndTime}</div>`;
+      if (geo && geo.horizontal) {
+        preview.style.left = geo.timePx(startMin) + 'px';
+        preview.style.width = geo.durPx(duration) + 'px';
+      } else {
+        preview.style.top = (geo ? geo.timePx(startMin) : (startMin - cellStartMin) * PIXELS_PER_MINUTE) + 'px';
+        preview.style.height = (geo ? geo.durPx(duration) : duration * PIXELS_PER_MINUTE) + 'px';
+      }
+      preview.innerHTML = `<div style="text-align:center;padding:4px;color:#3b82f6;font-weight:600;font-size:11px;">${minutesToTime(startMin)} - ${minutesToTime(startMin + duration)}</div>`;
     }
   }
 }
@@ -902,11 +957,12 @@ async function finishTouchReposition(touch, module, wrapper) {
     const divName = cell.dataset.div;
     const cellStartMin = parseInt(cell.dataset.startMin, 10);
     const rect = cell.getBoundingClientRect();
-    const y = touch.clientY - rect.top;
-    const snapMin = Math.round(y / PIXELS_PER_MINUTE / SNAP_MINS) * SNAP_MINS;
+    const _repoGeo = touchGeo(module);
 
     const _prevDiv121 = event.division;
-    const _newStartMin121 = cellStartMin + snapMin;
+    const _newStartMin121 = _repoGeo
+      ? _repoGeo.snap(cellStartMin + _repoGeo.pointerMinuteOffset(touch, rect))
+      : cellStartMin + Math.round((touch.clientY - rect.top) / PIXELS_PER_MINUTE / SNAP_MINS) * SNAP_MINS;
 
     // ★ NIGHT ACTIVITY on touch MOVE (DA only): mirror the desktop move handler.
     //   If the tile lands at/after the target division's end time, ask whether it's a

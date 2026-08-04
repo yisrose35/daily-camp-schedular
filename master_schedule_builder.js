@@ -5999,6 +5999,9 @@ window.addEventListener('campistry:layout-changed', function () {
 // Expose internals for mobile touch support + auto build integration
 window.MasterSchedulerInternal = {
   get dailySkeleton() { return dailySkeleton; },
+  // ★ Geometry of the grid as currently painted, so the touch layer edits in
+  //   the same shape the mouse does instead of assuming time runs downward.
+  get gridGeometry() { return _msGridGeo; },
   setSkeleton: function(newSkeleton) { dailySkeleton = newSkeleton; },
   markUnsavedChanges: typeof markUnsavedChanges === 'function' ? markUnsavedChanges : function(){},
   saveDraftToLocalStorage: typeof saveDraftToLocalStorage === 'function' ? saveDraftToLocalStorage : function(){},

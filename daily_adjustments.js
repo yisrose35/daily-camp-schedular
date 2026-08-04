@@ -11129,6 +11129,9 @@ window.daShowAlert = daShowAlert;
 // Expose internals for mobile touch support
 window.DailyAdjustmentsInternal = {
   get dailyOverrideSkeleton() { return dailyOverrideSkeleton; },
+  // ★ Geometry of the grid as currently painted, so the touch layer edits in
+  //   the same shape the mouse does instead of assuming time runs downward.
+  get gridGeometry() { return _daGridGeo; },
   saveDailySkeleton: typeof saveDailySkeleton === 'function' ? saveDailySkeleton : function(){},
   renderGrid: typeof renderGrid === 'function' ? renderGrid : function(){},
   bumpOverlappingTiles: typeof bumpOverlappingTiles === 'function' ? bumpOverlappingTiles : function(){},
