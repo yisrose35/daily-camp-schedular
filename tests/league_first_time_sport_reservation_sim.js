@@ -191,7 +191,7 @@ function buildHistory(juniorHockeyDays, youngestHockeyDays, juniorFootballDays) 
     };
 }
 
-function makeContext(juniorTeams) {
+function makeContext(juniorTeams, seniorCfg) {
     return {
         schedulableSlotBlocks: [
             { type: 'league', event: 'League Time', divName: 'Seniors', leagueName: SENIOR, startTime: 780, endTime: 840, slots: [0] },
@@ -199,7 +199,7 @@ function makeContext(juniorTeams) {
             { type: 'league', event: 'League Time', divName: 'Youngest', leagueName: YOUNGEST, startTime: 780, endTime: 840, slots: [0] },
         ],
         masterLeagues: {
-            [SENIOR]: { name: SENIOR, enabled: true, divisions: ['Seniors'], teams: SENIOR_TEAMS.slice(), sports: ['Basketball', 'Hockey'], schedulingPriority: 'sport_variety' },
+            [SENIOR]: Object.assign({ name: SENIOR, enabled: true, divisions: ['Seniors'], teams: SENIOR_TEAMS.slice(), sports: ['Basketball', 'Hockey'], schedulingPriority: 'sport_variety' }, seniorCfg || {}),
             [JUNIOR]: { name: JUNIOR, enabled: true, divisions: ['Juniors'], teams: (juniorTeams || JUNIOR_TEAMS).slice(), sports: ['Basketball', 'Hockey'], schedulingPriority: 'sport_variety' },
             [YOUNGEST]: { name: YOUNGEST, enabled: true, divisions: ['Youngest'], teams: YOUNGEST_TEAMS.slice(), sports: ['Basketball', 'Hockey'], schedulingPriority: 'sport_variety' },
         },
@@ -223,7 +223,7 @@ function run(opts) {
     if (opts.reservationOff) global.window.__leagueSportReservation = false;
 
     const lines = [];
-    const ctx = makeContext(opts.juniorTeams);
+    const ctx = makeContext(opts.juniorTeams, opts.leagueCfgSenior);
     console.log = (...a) => { lines.push(a.join(' ')); };
     console.warn = () => {};
     try { Leagues.processRegularLeagues(ctx); }
@@ -407,6 +407,32 @@ function run(opts) {
         'the reserved ' + sport + ' did not survive to the final caps: ' + JSON.stringify(r.caps));
     console.log('✅ TEST 8 — reserved ' + sport + ' survives the participation floor '
         + JSON.stringify(r.caps[JUNIOR]));
+}
+
+// ---- TEST 9: seats are allocated to the ACTIVE roster, not the full one ----
+// Chinuch pulls teams out of a period, so a league with teams learning wants
+// fewer games than its roster implies. The allocator counted the full roster,
+// which overstates every chinuch league's demand and lands the seats in the
+// wrong place. Live 2026-08-04 @9:45 the true demand was 12 games against
+// exactly 12 fields — a perfect fit — but the old count said 16, handed two
+// leagues a spare seat each, and left 5th Grade one short, so it broke its
+// Hockey:0 cap and took the rink 3rd Grade had been reserved.
+{
+    // SENIOR has 10 teams; put 4 of them in chinuch → 6 active → 3 games, not 5.
+    const CH_DAY = { Seniors: {} };
+    ['S1', 'S2', 'S3', 'S4'].forEach(t => { CH_DAY.Seniors[t] = 780; });   // 780 = the slot
+    global.window.chinuchSchedule = { [SENIOR]: CH_DAY.Seniors };
+    let r;
+    try {
+        r = run({ leagueCfgSenior: { chinuch: { enabled: true } } });
+    } finally { delete global.window.chinuchSchedule; }
+
+    const seniorSeats = Object.values(r.caps[SENIOR] || {}).reduce((a, b) => a + b, 0);
+    assert.ok(seniorSeats <= 3,
+        'a league with 4 of 10 teams in chinuch was allocated ' + seniorSeats
+        + ' seats for 3 games: ' + JSON.stringify(r.caps));
+    console.log('✅ TEST 9 — chinuch league seated for its ACTIVE roster ('
+        + seniorSeats + ' seats for 3 games) ' + JSON.stringify(r.caps));
 }
 
 console.log('\n🎉 league_first_time_sport_reservation_sim: all tests passed');

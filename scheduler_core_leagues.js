@@ -5488,7 +5488,34 @@
                         if (!_seen[p.sport].has(p.field)) { _seen[p.sport].add(p.field); _fieldsBySport[p.sport] = (_fieldsBySport[p.sport] || 0) + 1; }
                     });
                     const _games = {};
-                    _here.forEach(l => { _games[l.name] = Math.max(1, Math.floor((l.teams || []).length / 2)); });
+                    // ★ DEMAND IS THE ACTIVE ROSTER, NOT THE FULL ONE. Chinuch pulls
+                    // teams out of THIS period, so a 10-team league with 2 learning
+                    // wants 4 games, not 5. Counting the full roster overstates every
+                    // chinuch league's demand, and since the apportionment shares the
+                    // fields out in proportion to it, the seats land in the wrong
+                    // place — leagues get seats they cannot use while another comes up
+                    // short and takes a scarce field it was never allocated.
+                    //
+                    // Live 2026-08-04 @9:45, where it cost 3rd Grade its hockey game:
+                    // true demand was 2+1+2+4+2+1 = 12 against exactly 12 fields, a
+                    // perfect fit. The old count said 2+2+3+5+3+1 = 16, and handed
+                    // 6th Grade 3 seats for 2 games and 4th Grade 3 for 2, while 5th
+                    // Grade got 3 for 4 — so 5th broke its Hockey:0 cap on its last
+                    // matchup and took the rink 3rd Grade had been given.
+                    //
+                    // Same derivation as the per-period chinuch filter further down
+                    // (activeTeams), keyed off the same timeKey.
+                    _here.forEach(l => {
+                        let _active = (l.teams || []).length;
+                        try {
+                            if (l.chinuch && l.chinuch.enabled && window.chinuchSchedule && window.chinuchSchedule[l.name]) {
+                                const _out = Object.entries(window.chinuchSchedule[l.name])
+                                    .filter(function (e) { return Number(e[1]) === Number(timeKey); }).length;
+                                _active = Math.max(0, _active - _out);
+                            }
+                        } catch (_e) {}
+                        _games[l.name] = Math.max(1, Math.floor(_active / 2));
+                    });
                     // Date seed → rotates who wins a tie for the "extra" scarce field, so no
                     // league is permanently the one that loses out on an odd leftover field.
                     let _seed = 0; const _ds = String(dayId || '');
