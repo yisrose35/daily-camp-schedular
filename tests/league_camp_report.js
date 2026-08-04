@@ -90,13 +90,28 @@ const FIELDS = [
         { name: 'Small Turf', activities: ['Newcomb', 'Volleyball'] },
     ]);
 
-const PERIODS = 6;
-const SLOT_START = i => 585 + i * 50;
+// ★ PULLED LIVE from the camp (2026-08-04). Four periods run all six grades —
+// that is where 17 wanted games meet 12 fields. Three are already staggered to
+// four grades, and those are the periods where the juniors actually get a
+// scarce sport.
+const PERIOD_DIVS = [
+    ['8th','7th','6th','5th','4th','3rd'],   //  9:45
+    ['8th','7th','6th','5th','4th','3rd'],   // 10:35
+    ['8th','7th','6th','5th'],               // 11:25
+    ['8th','7th','4th','3rd'],               // 12:10
+    ['6th','5th','4th','3rd'],               //  1:00
+    ['8th','7th','6th','5th','4th','3rd'],   //  2:00
+    ['8th','7th','6th','5th','4th','3rd'],   //  2:55
+];
+const PERIODS = PERIOD_DIVS.length;
+const SLOT_MIN = [585, 635, 685, 730, 780, 840, 895];
+const SLOT_START = i => SLOT_MIN[i];
 const DAYS = ['2026-08-01', '2026-08-02', '2026-08-03', '2026-08-04'];
 
 function blocksFor(l) {
     const out = [];
     for (let i = 0; i < PERIODS; i++) {
+        if (PERIOD_DIVS[i].indexOf(l.div) < 0) continue;   // this grade is off this period
         out.push({
             type: 'league', event: 'League Time', divName: l.div, leagueName: l.name,
             startTime: SLOT_START(i), endTime: SLOT_START(i) + 45, slots: [i],
@@ -112,7 +127,8 @@ function makeContext() {
         masterLeagues[l.name] = {
             name: l.name, enabled: true, divisions: [l.div], teams: l.roster.slice(),
             sports: l.sports.slice(), schedulingPriority: 'sport_variety',
-            chinuch: { enabled: true, timesPerDay: 1 },
+            chinuch: { enabled: true },
+            sportDailyLimits: l.sports.indexOf('Volleyball') >= 0 ? { Volleyball: 1 } : { Newcomb: 1 },
         };
     });
     const divisions = {};
