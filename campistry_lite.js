@@ -1438,6 +1438,53 @@
         document.addEventListener('click', () => { menu.style.display = 'none'; });
         menu.addEventListener('click', (e) => e.stopPropagation());
 
+        // Biometrics, straight in the account menu. It only appears when the
+        // device can actually do it, so it never advertises something that
+        // would then fail.
+        const bioItem = document.getElementById('liteMenuBio');
+        const lockItem = document.getElementById('liteMenuLock');
+        const Bio = window.CampistryLiteBio;
+        const bioName = /iPad|iPhone|iPod|Macintosh/.test(navigator.platform || '') ? 'Face ID' : 'fingerprint';
+        async function paintBioMenu() {
+            if (!bioItem || !Bio) return;
+            const canDo = await Bio.available();
+            const on = Bio.isEnabledFor(userId);
+            bioItem.style.display = canDo ? '' : 'none';
+            document.getElementById('liteMenuBioLabel').textContent =
+                on ? `Turn off ${bioName} unlock` : `Turn on ${bioName} unlock`;
+            // "Lock now" is the whole point of having it on: hand straight back
+            // to the sign-in screen without signing out.
+            lockItem.style.display = (canDo && on) ? '' : 'none';
+        }
+        paintBioMenu();
+
+        if (bioItem) bioItem.addEventListener('click', async (e) => {
+            e.stopPropagation();
+            document.getElementById('liteMenu').style.display = 'none';
+            if (!Bio) return;
+            if (Bio.isEnabledFor(userId)) {
+                Bio.disable();
+                toast(cap(bioName) + ' unlock off');
+            } else {
+                const ok = await Bio.enroll(userEmail, userName, userId);
+                if (ok) toast(cap(bioName) + ' unlock on');
+                else {
+                    const err = Bio.lastError() || '';
+                    toast(/NotAllowed/.test(err) ? 'Cancelled — nothing changed'
+                        : err ? 'Could not set up: ' + err.split(':')[0]
+                        : 'Could not set up ' + bioName);
+                }
+            }
+            paintBioMenu();
+        });
+
+        if (lockItem) lockItem.addEventListener('click', (e) => {
+            e.stopPropagation();
+            document.getElementById('liteMenu').style.display = 'none';
+            try { Bio?.clearPass(); } catch (_) {}
+            window.location.replace(LOGIN_PAGE);
+        });
+
         // Settings screen entry point.
         const settingsBtn = document.getElementById('liteMenuSettings');
         if (settingsBtn) settingsBtn.addEventListener('click', (e) => {
