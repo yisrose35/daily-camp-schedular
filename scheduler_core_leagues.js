@@ -874,7 +874,7 @@
     // the field regex and the "A vs B" rewriter are unaffected, and it reads
     // as a label to a human looking at the schedule.
     const RR_LINE_TAG = ' — round robin';
-    function _isRoundRobinLine(s) { return /—\s*round robin\s*$/i.test(String(s || '')); }
+    function _isRoundRobinLine(s) { return /—\s*round robin(\s+R\d+)?\s*$/i.test(String(s || '')); }
     Leagues._isRoundRobinLine = _isRoundRobinLine;   // tests
 
     function _parseDailyMatchup(m, fallbackSport) {
@@ -1218,15 +1218,19 @@
     // `rr` is a per-day group id and `rrTeams` the roster, carried so the
     // Leagues results page can expand the group back into its real games for
     // score entry (see _expandLogForResults). rrTeams is remapped on rename.
-    function logRoundRobinRecord(leagueName, date, teams, sport, history, gameLabel, groupId) {
+    function logRoundRobinRecord(leagueName, date, teams, sport, history, gameLabel, groupId, rounds) {
         if (!history.gameLog) history.gameLog = {};
         if (!history.gameLog[leagueName]) history.gameLog[leagueName] = {};
         if (!history.gameLog[leagueName][date]) history.gameLog[leagueName][date] = [];
         const roster = (teams || []).slice();
+        const nr = (Number.isFinite(rounds) && rounds >= 1) ? Math.floor(rounds) : 1;
         roster.forEach(function (t) {
             history.gameLog[leagueName][date].push({
                 t1: t, t2: null, sport: sport || null, g: gameLabel || null,
-                rr: groupId, rrTeams: roster.slice()
+                rr: groupId, rrTeams: roster.slice(),
+                // Rounds change how many GAMES the group played, never how many
+                // times its sport counts — still one entry per team either way.
+                rrRounds: nr > 1 ? nr : undefined
             });
         });
     }
@@ -1247,9 +1251,14 @@
             if (seenGroups.has(gid)) return;
             seenGroups.add(gid);
             const roster = Array.isArray(e.rrTeams) ? e.rrTeams : [];
-            for (let i = 0; i < roster.length; i++) {
-                for (let j = i + 1; j < roster.length; j++) {
-                    out.push({ teamA: roster[i], teamB: roster[j], sport: e.sport || null, g: e.g || null });
+            const rounds = (Number.isFinite(e.rrRounds) && e.rrRounds >= 1) ? e.rrRounds : 1;
+            // Multiple rounds means the pair really did play more than once, so
+            // each meeting gets its own scoreable row.
+            for (let rd = 0; rd < rounds; rd++) {
+                for (let i = 0; i < roster.length; i++) {
+                    for (let j = i + 1; j < roster.length; j++) {
+                        out.push({ teamA: roster[i], teamB: roster[j], sport: e.sport || null, g: e.g || null });
+                    }
                 }
             }
         });
@@ -3331,10 +3340,16 @@
         if (!a) return [];
         const mem = _assignedTeams(a);
         if (!a._rr || mem.length < 3) return [`${a.team1} vs ${a.team2} @ ${a.field} (${a.sport})`];
+        const rounds = (Number.isFinite(a._rrRounds) && a._rrRounds >= 1) ? a._rrRounds : 1;
         const out = [];
-        for (let i = 0; i < mem.length; i++) {
-            for (let j = i + 1; j < mem.length; j++) {
-                out.push(`${mem[i]} vs ${mem[j]} @ ${a.field} (${a.sport})${RR_LINE_TAG}`);
+        for (let rd = 1; rd <= rounds; rd++) {
+            // The round number keeps repeat meetings from rendering as identical
+            // lines (and being read as one game by anything that dedupes).
+            const tag = RR_LINE_TAG + (rounds > 1 ? ' R' + rd : '');
+            for (let i = 0; i < mem.length; i++) {
+                for (let j = i + 1; j < mem.length; j++) {
+                    out.push(`${mem[i]} vs ${mem[j]} @ ${a.field} (${a.sport})${tag}`);
+                }
             }
         }
         return out;
@@ -6553,6 +6568,14 @@ if (playoffRoundNum) {
 
                 console.log(`\n   📝 Final Assignments for Game #${gameNumber}:`);
                 const _recLabel = playoffRoundNum ? ('Playoff R' + playoffRoundNum) : ('Game ' + gameNumber);
+                // How many times a group plays through its pairings. Stamped
+                // here rather than inside the assigners: it is pure presentation
+                // + scoring (the group holds its one field for the period either
+                // way), so nothing in the sport/field logic needs to know.
+                const _rrRoundsCfg = (league.roundRobin && league.roundRobin.rounds >= 1)
+                    ? Math.floor(league.roundRobin.rounds) : 1;
+                assignments.forEach(a => { if (a._rr) a._rrRounds = _rrRoundsCfg; });
+
                 let _rrGroupSeq = 0;
                 assignments.forEach(a => {
                     if (a._rr) {
@@ -6565,7 +6588,7 @@ if (playoffRoundNum) {
                         const _mem = _assignedTeams(a);
                         console.log(`      ✅ round robin (${_mem.join(', ')}) → ${a.sport} @ ${a.field}`);
                         _mem.forEach(function (t) { recordTeamSport(league.name, t, a.sport, history); });
-                        logRoundRobinRecord(league.name, dayId, _mem, a.sport, history, _recLabel, ++_rrGroupSeq);
+                        logRoundRobinRecord(league.name, dayId, _mem, a.sport, history, _recLabel, ++_rrGroupSeq, a._rrRounds);
                         return;
                     }
                     console.log(`      ✅ ${a.team1} vs ${a.team2} → ${a.sport} @ ${a.field}`);

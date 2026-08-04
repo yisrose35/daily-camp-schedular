@@ -30,6 +30,9 @@
 //   TEST 10 — KILLSWITCH: window.__leagueRoundRobinGroups=false → back to a bye.
 //   TEST 11 — FIELD SHORTAGE (LG-14b): with fewer fields than entries, a group
 //             is seated whole or benched whole — never half-placed.
+//   TEST 12 — ROUNDS: 3 rounds = 9 games and 9 score rows, still one sport
+//             count per team and still no matchups.
+//   TEST 13 — rounds default to 1 and reject nonsense.
 // =============================================================================
 
 'use strict';
@@ -336,5 +339,53 @@ for (let iter = 1; iter <= 5; iter++) {
     });
 }
 console.log('✅ TEST 11 — under a field shortage a group is seated whole or not at all');
+
+// =============================================================================
+// TEST 12 — ROUNDS. One round of 3 teams is only 3 short games, which rarely
+// fills a league period, so the camp says how many times through. Rounds change
+// how many GAMES are played and scored — never how many times the sport counts,
+// and never the field the group holds.
+// =============================================================================
+{
+    const r = run(fieldsFor({ Basketball: 2 }), 1, T3, { enabled: true, size: 3, rounds: 3 });
+    const games = gameLines(r);
+    assert.strictEqual(games.length, 9, 'TEST12: 3 rounds × 3 pairings = 9 games, got ' + JSON.stringify(games));
+    assert.strictEqual(new Set(games.map(fieldOf)).size, 1, 'TEST12: still one field for the whole group');
+    assert.strictEqual(new Set(games).size, 9,
+        'TEST12: repeat meetings render as distinct lines (round-numbered), got ' + JSON.stringify(games));
+    assert.ok(games.every(l => Leagues._isRoundRobinLine(l)),
+        'TEST12: round-numbered lines are still recognised as round robin, got ' + JSON.stringify(games));
+    assert.ok(games.every(l => Leagues._parseDailyMatchup(l) === null),
+        'TEST12: …and still refuse to parse back into matchups');
+
+    // sport: still ONCE per team, however many games they played
+    T3.forEach(t => {
+        assert.deepStrictEqual(r.history.teamSports[LG + '|' + t], ['Basketball'],
+            `TEST12: ${t} counted Basketball once across 3 rounds`);
+    });
+    // matchups: still none
+    assert.strictEqual(matchupCount(r.history, 'T1', 'T2'), 0, 'TEST12: rounds record no matchups either');
+    // results: every meeting is separately scoreable
+    const matches = r.sync.find(c => c.lg === LG).entries.reduce((acc, e) => acc.concat(e.matches), []);
+    assert.strictEqual(matches.length, 9, 'TEST12: 9 scoreable games, got ' + matches.length);
+    const perPair = {};
+    matches.forEach(m => { const k = [m.teamA, m.teamB].sort().join('|'); perPair[k] = (perPair[k] || 0) + 1; });
+    assert.deepStrictEqual(perPair, { 'T1|T2': 3, 'T1|T3': 3, 'T2|T3': 3 },
+        'TEST12: each pair is scoreable once per round, got ' + JSON.stringify(perPair));
+    console.log('✅ TEST 12 — rounds multiply the games and the score rows, not the sport count');
+}
+
+// =============================================================================
+// TEST 13 — rounds default to 1, and a junk value falls back to 1
+// =============================================================================
+{
+    const one = run(fieldsFor({ Basketball: 2 }), 1, T3, { enabled: true, size: 3 });
+    assert.strictEqual(gameLines(one).length, 3, 'TEST13: no rounds set = a single round');
+    assert.ok(gameLines(one).every(l => !/\sR\d+\s*$/.test(l)),
+        'TEST13: a single round carries no round number, got ' + JSON.stringify(gameLines(one)));
+    const junk = run(fieldsFor({ Basketball: 2 }), 1, T3, { enabled: true, size: 3, rounds: 0 });
+    assert.strictEqual(gameLines(junk).length, 3, 'TEST13: rounds:0 falls back to 1');
+    console.log('✅ TEST 13 — rounds default to 1 and reject nonsense');
+}
 
 console.log('\n🎉 league_round_robin_group_sim: ALL TESTS PASSED');
