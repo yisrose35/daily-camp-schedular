@@ -1,0 +1,210 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>Staff Application</title>
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<link rel="icon" type="image/png" href="Campistry_logo.png">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+<style>
+:root{--me:#D97706;--me2:#B45309;--ok:#10B981;--err:#EF4444;--s50:#F8FAFC;--s100:#F1F5F9;--s200:#E2E8F0;--s300:#CBD5E1;--s400:#94A3B8;--s500:#64748B;--s600:#475569;--s700:#334155;--s800:#1E293B;--s900:#0F172A;--r:8px;--font:'DM Sans',system-ui,sans-serif}
+*,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
+body{font-family:var(--font);background:var(--s50);color:var(--s800);-webkit-font-smoothing:antialiased}
+.wrap{max-width:700px;margin:0 auto;padding:24px 20px 60px}
+.hdr{text-align:center;margin-bottom:24px;padding:20px 0}
+.hdr h1{font-size:1.5rem;font-weight:800;color:var(--s900)}
+.hdr .cn{color:var(--me);font-size:1.2rem;font-weight:700}
+.hdr p{font-size:.88rem;color:var(--s500);margin:4px 0 0}
+.cd{background:#fff;border-radius:12px;border:1px solid var(--s200);padding:22px;margin-bottom:14px}
+.ct{font-size:.92rem;font-weight:700;color:var(--s800);margin:0 0 12px}
+.fg{margin-bottom:10px}
+.fl{display:block;font-size:.78rem;font-weight:600;color:var(--s600);margin-bottom:3px}
+.rq{color:var(--err);margin-left:2px}
+.fi,.fs,.fta{width:100%;padding:9px 12px;border:1.5px solid var(--s200);border-radius:var(--r);font-size:.88rem;color:var(--s800);outline:none;font-family:var(--font);background:#fff}
+.fi:focus,.fs:focus,.fta:focus{border-color:var(--me);box-shadow:0 0 0 3px rgba(217,119,6,.08)}
+.fta{resize:vertical;min-height:70px}
+.fr{display:flex;gap:10px;flex-wrap:wrap}.fr>*{flex:1;min-width:120px}
+.chips{display:flex;flex-wrap:wrap;gap:8px}
+.chip{display:inline-flex;align-items:center;gap:6px;padding:7px 12px;border:1.5px solid var(--s200);border-radius:999px;font-size:.82rem;cursor:pointer;user-select:none}
+.chip input{accent-color:var(--me)}
+.chip.sel{border-color:var(--me);background:rgba(217,119,6,.05)}
+.btn{width:100%;padding:13px;background:var(--me);color:#fff;border:none;border-radius:var(--r);font-size:1rem;font-weight:700;cursor:pointer;font-family:var(--font)}
+.btn:hover{background:var(--me2)}
+.err{display:none;background:#FEF2F2;border:1px solid #FECACA;color:#991B1B;padding:10px 14px;border-radius:var(--r);font-size:.85rem;margin-bottom:14px}
+#sigWrap{border:1.5px solid var(--s200);border-radius:var(--r);background:#fff;touch-action:none}
+.mut{font-size:.75rem;color:var(--s400);margin-top:4px}
+.ok-wrap{display:none;text-align:center;background:#fff;border-radius:12px;border:1px solid var(--s200);padding:40px 24px}
+.ok-wrap .ic{font-size:48px;margin-bottom:8px}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <div class="hdr"><h1 id="campTitle">Staff Application</h1><div class="cn" id="campNm"></div><p>Join our team — tell us about yourself.</p></div>
+
+  <div id="formWrap">
+    <div class="err" id="formErr"></div>
+
+    <div class="cd"><div class="ct">👤 About You</div>
+      <div class="fr"><div class="fg"><label class="fl">First name<span class="rq">*</span></label><input class="fi" id="aF"></div><div class="fg"><label class="fl">Last name<span class="rq">*</span></label><input class="fi" id="aL"></div></div>
+      <div class="fr"><div class="fg"><label class="fl">Email<span class="rq">*</span></label><input class="fi" id="aE" type="email"></div><div class="fg"><label class="fl">Phone<span class="rq">*</span></label><input class="fi" id="aP" type="tel"></div></div>
+      <div class="fr"><div class="fg"><label class="fl">Date of birth</label><input class="fi" id="aDob" type="date"></div></div>
+      <div class="fg"><label class="fl">Street address</label><input class="fi" id="aSt"></div>
+      <div class="fr"><div class="fg"><label class="fl">City</label><input class="fi" id="aCi"></div><div class="fg"><label class="fl">State</label><input class="fi" id="aSa"></div><div class="fg"><label class="fl">ZIP</label><input class="fi" id="aZp"></div></div>
+    </div>
+
+    <div class="cd"><div class="ct">💼 Role &amp; Availability</div>
+      <div class="fg"><label class="fl">Position(s) you're applying for<span class="rq">*</span></label><div class="chips" id="posChips"></div></div>
+      <div class="fr"><div class="fg"><label class="fl">Available from</label><input class="fi" id="aAvS" type="date"></div><div class="fg"><label class="fl">Available until</label><input class="fi" id="aAvE" type="date"></div></div>
+    </div>
+
+    <div class="cd"><div class="ct">🎓 Experience &amp; Certifications</div>
+      <div class="fg"><label class="fl">Education</label><input class="fi" id="aEdu" placeholder="School, degree, year"></div>
+      <div class="fg"><label class="fl">Relevant experience</label><textarea class="fta" id="aExp" placeholder="Past camp / childcare / coaching roles, skills…"></textarea></div>
+      <div class="fg"><label class="fl">Certifications</label><div class="chips" id="certChips"></div></div>
+      <div class="fg"><label class="fl">Resume (PDF / DOC, optional)</label><input class="fi" id="aResume" type="file" accept=".pdf,.doc,.docx"><div class="mut">Max 5MB.</div></div>
+    </div>
+
+    <div class="cd"><div class="ct">📇 References</div>
+      <div class="mut" style="margin-bottom:10px">Please provide two references (former employers, teachers, coaches).</div>
+      <div class="fr"><div class="fg"><label class="fl">Reference 1 name</label><input class="fi" id="r1n"></div><div class="fg"><label class="fl">Relationship</label><input class="fi" id="r1r"></div></div>
+      <div class="fr"><div class="fg"><label class="fl">Email</label><input class="fi" id="r1e"></div><div class="fg"><label class="fl">Phone</label><input class="fi" id="r1p"></div></div>
+      <div class="fr" style="margin-top:8px"><div class="fg"><label class="fl">Reference 2 name</label><input class="fi" id="r2n"></div><div class="fg"><label class="fl">Relationship</label><input class="fi" id="r2r"></div></div>
+      <div class="fr"><div class="fg"><label class="fl">Email</label><input class="fi" id="r2e"></div><div class="fg"><label class="fl">Phone</label><input class="fi" id="r2p"></div></div>
+    </div>
+
+    <div class="cd"><div class="ct">✍️ Consent &amp; Signature</div>
+      <div class="fg"><label class="fl">How did you hear about us?</label><input class="fi" id="aSrc"></div>
+      <label class="chip" style="width:100%;border-radius:var(--r);margin-bottom:8px"><input type="checkbox" id="agBg"> I consent to a background check as part of the hiring process.</label>
+      <label class="chip" style="width:100%;border-radius:var(--r);margin-bottom:12px"><input type="checkbox" id="agTerms"> The information I've provided is accurate and complete.</label>
+      <label class="fl">Signature<span class="rq">*</span></label>
+      <div id="sigWrap"><canvas id="sigCanvas" style="display:block;width:100%;height:120px"></canvas></div>
+      <button type="button" onclick="clearSig()" style="background:none;border:none;color:var(--me);font-size:.8rem;cursor:pointer;margin-top:4px">Clear signature</button>
+    </div>
+
+    <button class="btn" onclick="submitApp()">Submit Application</button>
+    <p id="cloudSyncNote" class="mut" style="text-align:center;margin-top:10px"></p>
+  </div>
+
+  <div class="ok-wrap" id="okWrap">
+    <div class="ic">✅</div>
+    <h2 style="color:var(--ok)">Application received!</h2>
+    <p style="color:var(--s600);margin-top:8px" id="okMsg"></p>
+  </div>
+</div>
+
+<script src="config.js" onerror="console.log('[StaffApply] config not loaded — local only')"></script>
+<script src="supabase-js@2.js" onerror="console.log('[StaffApply] supabase-js not loaded')"></script>
+<script src="supabase_client.js" onerror="console.log('[StaffApply] supabase_client not loaded')"></script>
+<script>
+(function(){
+var POSITIONS=['Counselor','Head Counselor','Junior Counselor','Specialist','Lifeguard','Nurse / Medical','Kitchen Staff','Maintenance','Office Staff','Bus Driver','Division Head'];
+var CERTS=['CPR','First Aid','Lifeguard (WSI)','Food Handler','Wilderness First Responder','EMT','Teaching license'];
+var sigCtx=null,sigDrawing=false,sigHasData=false,resumeData=null;
+function esc(s){if(s==null)return'';return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&#34;').replace(/'/g,'&#39;');}
+function v(id){return(document.getElementById(id)?.value||'').trim();}
+
+// Chips
+document.getElementById('posChips').innerHTML=POSITIONS.map(function(p,i){return '<label class="chip"><input type="checkbox" class="posCb" value="'+esc(p)+'"> '+esc(p)+'</label>';}).join('');
+document.getElementById('certChips').innerHTML=CERTS.map(function(cc){return '<label class="chip"><input type="checkbox" class="certCb" value="'+esc(cc)+'"> '+esc(cc)+'</label>';}).join('');
+document.querySelectorAll('.chip input').forEach(function(cb){cb.addEventListener('change',function(){cb.closest('.chip').classList.toggle('sel',cb.checked);});});
+
+// Camp name
+try{var g=JSON.parse(localStorage.getItem('campGlobalSettings_v1')||'{}');var cn=g.campName||g.camp_name||(g.campistryMe&&g.campistryMe.campName)||'';if(cn){document.getElementById('campTitle').textContent=cn+' — Staff Application';document.getElementById('campNm').textContent=cn;}}catch(e){}
+
+// Resume
+document.getElementById('aResume').addEventListener('change',function(e){
+    var f=e.target.files[0]; if(!f)return;
+    if(f.size>5*1024*1024){alert('Resume is over 5MB');e.target.value='';return;}
+    var rd=new FileReader();rd.onload=function(ev){resumeData={name:f.name,data:ev.target.result};};rd.readAsDataURL(f);
+});
+
+// Signature
+(function initSig(){
+    var canvas=document.getElementById('sigCanvas'),wrap=document.getElementById('sigWrap');
+    sigCtx=canvas.getContext('2d');
+    function resize(){canvas.width=wrap.clientWidth;canvas.height=120;sigCtx.strokeStyle='#1E293B';sigCtx.lineWidth=2;sigCtx.lineCap='round';}
+    resize();window.addEventListener('resize',resize);
+    function pos(e){var r=canvas.getBoundingClientRect();var t=e.touches?e.touches[0]:e;return{x:t.clientX-r.left,y:t.clientY-r.top};}
+    canvas.onmousedown=canvas.ontouchstart=function(e){e.preventDefault();sigDrawing=true;sigHasData=true;var p=pos(e);sigCtx.beginPath();sigCtx.moveTo(p.x,p.y);};
+    canvas.onmousemove=canvas.ontouchmove=function(e){if(!sigDrawing)return;e.preventDefault();var p=pos(e);sigCtx.lineTo(p.x,p.y);sigCtx.stroke();};
+    canvas.onmouseup=canvas.ontouchend=canvas.onmouseleave=function(){sigDrawing=false;};
+})();
+window.clearSig=function(){sigCtx.clearRect(0,0,sigCtx.canvas.width,sigCtx.canvas.height);sigHasData=false;};
+
+function showErr(m){var el=document.getElementById('formErr');el.textContent=m;el.style.display='block';el.scrollIntoView({behavior:'smooth',block:'center'});}
+
+window.submitApp=function(){
+    document.getElementById('formErr').style.display='none';
+    var first=v('aF'),last=v('aL'),email=v('aE'),phone=v('aP');
+    var positions=[].map.call(document.querySelectorAll('.posCb:checked'),function(c){return c.value;});
+    if(!first||!last)return showErr('Enter your first and last name.');
+    if(!email)return showErr('Enter your email.');
+    if(!phone)return showErr('Enter your phone number.');
+    if(!positions.length)return showErr('Select at least one position.');
+    if(!document.getElementById('agTerms').checked)return showErr('Please confirm your information is accurate.');
+    if(!sigHasData)return showErr('Please sign the form.');
+
+    var certs=[].map.call(document.querySelectorAll('.certCb:checked'),function(c){return c.value;});
+    var refs=[];
+    if(v('r1n'))refs.push({name:v('r1n'),relationship:v('r1r'),email:v('r1e'),phone:v('r1p'),status:'pending'});
+    if(v('r2n'))refs.push({name:v('r2n'),relationship:v('r2r'),email:v('r2e'),phone:v('r2p'),status:'pending'});
+
+    var id='staff_'+Date.now()+'_'+Math.random().toString(36).slice(2,6);
+    var rec={
+        first:first,last:last,name:first+' '+last,email:email,phone:phone,dob:v('aDob'),
+        street:v('aSt'),city:v('aCi'),state:v('aSa'),zip:v('aZp'),
+        positions:positions,availStart:v('aAvS'),availEnd:v('aAvE'),
+        education:v('aEdu'),experience:v('aExp'),certifications:certs,
+        resume:resumeData,references:refs,source:v('aSrc'),
+        bgCheckConsent:document.getElementById('agBg').checked,
+        signature:document.getElementById('sigCanvas').toDataURL(),
+        status:'applied',appliedDate:new Date().toISOString().split('T')[0],appliedTime:new Date().toISOString(),
+        adminNotes:'',onboarding:{}
+    };
+
+    try{
+        var g=JSON.parse(localStorage.getItem('campGlobalSettings_v1')||'{}');
+        if(!g.campistryMe)g.campistryMe={};
+        if(!g.campistryMe.staffApplications)g.campistryMe.staffApplications={};
+        g.campistryMe.staffApplications[id]=rec;
+        g.updated_at=new Date().toISOString();
+        localStorage.setItem('campGlobalSettings_v1',JSON.stringify(g));
+        _flushToCloud(g.campistryMe.staffApplications).then(function(res){
+            var el=document.getElementById('cloudSyncNote');if(!el)return;
+            if(res&&res.ok){el.textContent='✓ Received by the camp';el.style.color='var(--ok)';}
+            else{el.textContent='⚠ Saved on this device — reconnect to finish sending your application';el.style.color='var(--me)';}
+        });
+    }catch(e){console.error('[StaffApply] save error',e);return showErr('Error submitting. Please try again.');}
+
+    document.getElementById('formWrap').style.display='none';
+    document.getElementById('okWrap').style.display='block';
+    document.getElementById('okMsg').textContent='Thanks, '+first+'! We\'ve received your application for '+positions.join(', ')+' and will be in touch.';
+    window.scrollTo(0,0);
+};
+
+// Fetch-merge the new application into the camp's staffApplications so we never
+// clobber other applicants that came in on other devices.
+async function _flushToCloud(staffApps){
+    try{
+        var client=null,campId=null;
+        for(var i=0;i<48;i++){
+            client=(window.CampistryDB&&window.CampistryDB.getClient&&window.CampistryDB.getClient())||(window.supabase&&typeof window.supabase.from==='function'?window.supabase:null);
+            campId=(window.CampistryDB&&window.CampistryDB.getCampId&&window.CampistryDB.getCampId())||localStorage.getItem('campistry_camp_id');
+            if(client&&typeof client.from==='function'&&campId)break;
+            await new Promise(function(r){setTimeout(r,250);});
+        }
+        if(!client||!campId)return{ok:false,reason:'no-client'};
+        var cur=await client.from('camp_state_kv').select('value').eq('camp_id',campId).eq('key','campistryMe').maybeSingle();
+        var cloudMe=(cur&&cur.data&&cur.data.value&&typeof cur.data.value==='object')?cur.data.value:{};
+        var merged=Object.assign({},cloudMe);
+        merged.staffApplications=Object.assign({},cloudMe.staffApplications||{},staffApps||{});
+        var up=await client.from('camp_state_kv').upsert({camp_id:campId,key:'campistryMe',value:merged,updated_at:new Date().toISOString()},{onConflict:'camp_id,key'});
+        if(up&&up.error)return{ok:false,reason:up.error.message};
+        return{ok:true};
+    }catch(e){return{ok:false,reason:e&&e.message};}
+}
+})();
+</script>
+</body>
+</html>

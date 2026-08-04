@@ -23,6 +23,8 @@ var savedReports=[]; // custom/saved reports: { id, name, source, fields, filter
 var curPage='campers', editingCamper=null, editingDiv=null, editingFam=null;
 var campersView='list'; // 'list' | 'family' — Families now lives inside the Campers page
 var regFilter='all';    // Registration section filter: all | applied | waitlisted | accepted | enrolled | withdrawn | declined
+var staffApplications={};   // Staff hiring: applicant id → application record
+var staffFilter='all';      // Staffing pipeline filter
 var nextCamperId=1;
 var _saveLockUntil=0; // timestamp — block cloud overwrites for 5s after local save
 
@@ -140,6 +142,7 @@ function loadData(){
         bunkCapacity=me.bunkCapacity||{};
         bunkStaff=me.bunkStaff||{};
         enrollments=me.enrollments||{}; sessions=me.sessions||[]; enrollSettings=me.enrollSettings||{};
+        staffApplications=me.staffApplications||{};
         formConfig=me.formConfig||null;
         printSheets=Array.isArray(me.printSheets)?me.printSheets:[];
         savedReports=Array.isArray(me.savedReports)?me.savedReports:[];
@@ -232,6 +235,7 @@ function save(){
             bunkStaff:bunkStaff,
             nextCamperId:nextCamperId,
             enrollments:enrollments,
+            staffApplications:staffApplications,
             sessions:sessions,
             enrollSettings:enrollSettings,
             formConfig:formConfig,
@@ -436,7 +440,7 @@ function ff(label,id,val,type,opts){
 
 // ═══ RENDERERS ═══════════════════════════════════════════════════
 function render(p){
-    var m={campers:renderCampers,structure:renderStructure,bunkbuilder:renderBB,enrollment:renderEnrollment,billing:renderBilling,payroll:renderPayroll,analytics:renderAnalytics,reports:renderReports,printsheets:renderPrintSheets,settings:renderSettings};
+    var m={campers:renderCampers,structure:renderStructure,bunkbuilder:renderBB,enrollment:renderEnrollment,staffing:renderStaffing,billing:renderBilling,payroll:renderPayroll,analytics:renderAnalytics,reports:renderReports,printsheets:renderPrintSheets,settings:renderSettings};
     if(m[p])m[p]();else renderSoon(p);
 }
 
@@ -2589,6 +2593,171 @@ function setBunkCapacityPrompt(bunk){
 
 // ── BILLING / BROADCASTS / SOON ──────────────────────────────────
 // ── REGISTRATION & ENROLLMENT ─────────────────────────────────────
+// ═══════════════════════════════════════════════════════════════
+// STAFFING — hiring pipeline / applicant tracking (mirrors Registration).
+// Staff apply at campistry_staff_apply.html → campistryMe.staffApplications;
+// the office moves them through Applied → Screening → Interview → Reference →
+// Offered → Hired, requests references, and runs an onboarding checklist.
+// ═══════════════════════════════════════════════════════════════
+var STAFF_POSITIONS=['Counselor','Head Counselor','Junior Counselor','Specialist','Lifeguard','Nurse / Medical','Kitchen Staff','Maintenance','Office Staff','Bus Driver','Division Head'];
+var STAFF_STAGES=[
+    {key:'all',label:'All',color:'var(--s700)'},
+    {key:'applied',label:'Applied',color:'var(--s500)'},
+    {key:'screening',label:'Screening',color:'#3B82F6'},
+    {key:'interview',label:'Interview',color:'#8B5CF6'},
+    {key:'reference',label:'Reference',color:'var(--me)'},
+    {key:'offered',label:'Offered',color:'#0EA5E9'},
+    {key:'hired',label:'Hired',color:'var(--ok)'},
+    {key:'declined',label:'Declined',color:'var(--err)'}
+];
+var STAFF_ONBOARD=[['contract','Signed offer / contract'],['i9','I-9 verified'],['w4','W-4 / tax forms'],['bgcheck','Background check cleared'],['orientation','Orientation complete']];
+function _staffStatusType(s){return s==='hired'?'ok':s==='declined'?'err':s==='offered'?'info':s==='reference'?'warn':'gray';}
+function _staffLabel(s){var x=STAFF_STAGES.find(function(g){return g.key===s;});return x?x.label:(s||'Applied');}
+
+function renderStaffing(){
+    var c=document.getElementById('page-staffing');
+    var arr=Object.entries(staffApplications);
+    var total=arr.length;
+    var by={}; STAFF_STAGES.forEach(function(g){if(g.key!=='all')by[g.key]=0;});
+    arr.forEach(function([,a]){var st=a.status||'applied'; by[st]=(by[st]||0)+1;});
+    var hired=by.hired||0;
+
+    var h='<div class="sec-hd"><div><h2 class="sec-title">Staffing &amp; Hiring</h2><p class="sec-desc">'+total+' applicant'+(total!==1?'s':'')+' · '+hired+' hired</p></div>';
+    h+='<div class="sec-actions"><button class="me-btn me-btn--sec me-btn--sm" onclick="CampistryMe.exportStaffCSV()">↓ Export CSV</button><button class="me-btn me-btn--sec me-btn--sm" onclick="CampistryMe.copyStaffLink()">🔗 Copy Application Link</button><button class="me-btn me-btn--pri" onclick="CampistryMe.addStaffApp()">+ Add Applicant</button></div></div>';
+
+    // Application link banner
+    h+='<div style="background:#fff;border:1px solid var(--s200);border-radius:var(--r);padding:12px 16px;margin-bottom:14px;display:flex;align-items:center;gap:12px;flex-wrap:wrap">';
+    h+='<div style="flex:1;min-width:200px"><div style="font-size:.8rem;font-weight:600;color:var(--s500)">STAFF APPLICATION LINK</div>';
+    h+='<div style="font-size:.85rem;color:var(--me);font-weight:600;word-break:break-all;margin-top:2px">'+esc(window.location.origin+'/campistry_staff_apply.html')+'</div></div>';
+    h+='<button class="me-btn me-btn--pri me-btn--sm" onclick="CampistryMe.copyStaffLink()">Copy Link</button>';
+    h+='<a href="campistry_staff_apply.html" target="_blank" class="me-btn me-btn--sec me-btn--sm" style="text-decoration:none">Preview Form</a></div>';
+
+    // Pipeline cards
+    h+='<div style="display:flex;gap:8px;margin-bottom:16px;flex-wrap:wrap">';
+    STAFF_STAGES.forEach(function(s){
+        var count=s.key==='all'?total:(by[s.key]||0);
+        var active=staffFilter===s.key;
+        h+='<div class="click" onclick="CampistryMe.setStaffFilter(\''+s.key+'\')" style="flex:1;min-width:82px;background:'+(active?'var(--s50)':'#fff')+';border-radius:var(--r);padding:10px 12px;border:2px solid '+(active?s.color:'var(--s200)')+';text-align:center;cursor:pointer">';
+        h+='<div style="font-size:1.2rem;font-weight:700;color:'+s.color+'">'+count+'</div>';
+        h+='<div style="font-size:.62rem;font-weight:600;color:var(--s400);text-transform:uppercase;letter-spacing:.04em">'+s.label+'</div></div>';
+    });
+    h+='</div>';
+
+    // Applicant list
+    var list=arr.map(function([id,a]){a._id=id;return a;});
+    if(staffFilter!=='all') list=list.filter(function(a){return (a.status||'applied')===staffFilter;});
+    list.sort(function(a,b){return(b.appliedTime||'').localeCompare(a.appliedTime||'');});
+
+    if(!total){
+        h+='<div class="me-empty"><h3>No applicants yet</h3><p>Share your staff application link and applications will appear here.</p><button class="me-btn me-btn--pri" onclick="CampistryMe.copyStaffLink()">🔗 Copy Application Link</button></div>';
+    } else if(!list.length){
+        h+='<div class="me-empty"><h3>No applicants in this stage</h3></div>';
+    } else {
+        h+='<div class="me-card"><div class="me-tw"><table class="me-t"><thead><tr><th>Name</th><th>Position(s)</th><th>Applied</th><th>References</th><th>Status</th><th></th></tr></thead><tbody>';
+        list.forEach(function(a){
+            var refs=(a.references||[]); var refDone=refs.filter(function(r){return r.status==='received';}).length;
+            var refTxt=refs.length?refDone+'/'+refs.length:'—';
+            h+='<tr class="click" onclick="CampistryMe.viewStaffApp(\''+je(a._id)+'\')">';
+            h+='<td class="bold">'+esc(a.name||((a.first||'')+' '+(a.last||'')))+'</td>';
+            h+='<td style="font-size:.8rem">'+esc((a.positions||[]).join(', ')||'—')+'</td>';
+            h+='<td style="font-size:.78rem;color:var(--s500)">'+esc(a.appliedDate||'')+'</td>';
+            h+='<td style="font-size:.8rem;color:'+(refs.length&&refDone===refs.length?'var(--ok)':'var(--s500)')+'">'+refTxt+'</td>';
+            h+='<td>'+bdg(_staffLabel(a.status||'applied'),_staffStatusType(a.status||'applied'))+'</td>';
+            h+='<td style="text-align:right;color:var(--s300)">›</td></tr>';
+        });
+        h+='</tbody></table></div></div>';
+    }
+    c.innerHTML=h;
+}
+
+function setStaffFilter(f){staffFilter=f;renderStaffing();}
+
+function viewStaffApp(id){
+    var a=staffApplications[id]; if(!a)return;
+    var st=a.status||'applied';
+    var opts=STAFF_STAGES.filter(function(g){return g.key!=='all';}).map(function(g){return '<option value="'+g.key+'"'+(st===g.key?' selected':'')+'>'+g.label+'</option>';}).join('');
+    var h='<div style="max-height:70vh;overflow:auto">';
+    // Header
+    h+='<div style="display:flex;justify-content:space-between;align-items:flex-start;gap:10px;margin-bottom:12px">';
+    h+='<div><div style="font-size:1.05rem;font-weight:800">'+esc(a.name||((a.first||'')+' '+(a.last||'')))+'</div><div style="font-size:.8rem;color:var(--s500)">'+esc((a.positions||[]).join(', ')||'—')+'</div></div>';
+    h+='<select class="me-input" style="width:auto" onchange="CampistryMe.setStaffStatus(\''+je(id)+'\',this.value)">'+opts+'</select>';
+    h+='</div>';
+    // Contact
+    h+='<div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;font-size:.82rem;margin-bottom:12px">';
+    if(a.email)h+='<div><span style="color:var(--s400)">Email</span><br><a href="mailto:'+esc(a.email)+'" style="color:var(--me)">'+esc(a.email)+'</a></div>';
+    if(a.phone)h+='<div><span style="color:var(--s400)">Phone</span><br><a href="tel:'+esc(a.phone)+'" style="color:var(--me)">'+esc(a.phone)+'</a></div>';
+    if(a.dob)h+='<div><span style="color:var(--s400)">DOB</span><br>'+esc(a.dob)+'</div>';
+    if(a.availStart||a.availEnd)h+='<div><span style="color:var(--s400)">Availability</span><br>'+esc((a.availStart||'?')+' – '+(a.availEnd||'?'))+'</div>';
+    if(a.street)h+='<div style="grid-column:1/-1"><span style="color:var(--s400)">Address</span><br>'+esc([a.street,a.city,a.state,a.zip].filter(Boolean).join(', '))+'</div>';
+    h+='</div>';
+    // Certifications
+    if((a.certifications||[]).length)h+='<div style="margin-bottom:10px"><span style="font-size:.7rem;font-weight:700;color:var(--s400);text-transform:uppercase">Certifications</span><div style="margin-top:4px;display:flex;flex-wrap:wrap;gap:4px">'+a.certifications.map(function(c){return '<span style="font-size:.72rem;padding:2px 8px;border-radius:999px;background:var(--s100);color:var(--s600)">'+esc(c)+'</span>';}).join('')+'</div></div>';
+    // Experience / education
+    if(a.education)h+='<div style="margin-bottom:8px;font-size:.82rem"><span style="color:var(--s400)">Education:</span> '+esc(a.education)+'</div>';
+    if(a.experience)h+='<div style="margin-bottom:12px;font-size:.82rem"><span style="color:var(--s400)">Experience</span><div style="margin-top:2px;white-space:pre-wrap;color:var(--s700)">'+esc(a.experience)+'</div></div>';
+    if(a.resume&&a.resume.data)h+='<div style="margin-bottom:12px"><a href="'+esc(a.resume.data)+'" download="'+esc(a.resume.name||'resume')+'" class="me-btn me-btn--sec me-btn--sm">📎 '+esc(a.resume.name||'Resume')+'</a></div>';
+    // References
+    h+='<div style="margin-bottom:12px"><div style="font-size:.7rem;font-weight:700;color:var(--s400);text-transform:uppercase;margin-bottom:6px">References</div>';
+    if((a.references||[]).length){
+        a.references.forEach(function(r,ri){
+            var rst=r.status||'pending';
+            var rc=rst==='received'?'ok':rst==='requested'?'warn':'gray';
+            h+='<div style="display:flex;align-items:center;gap:8px;padding:7px 0;border-bottom:1px solid var(--s100);font-size:.82rem">';
+            h+='<div style="flex:1"><strong>'+esc(r.name||'—')+'</strong>'+(r.relationship?' <span style="color:var(--s400)">('+esc(r.relationship)+')</span>':'')+'<br><span style="color:var(--s500);font-size:.76rem">'+esc([r.email,r.phone].filter(Boolean).join(' · '))+'</span></div>';
+            h+=bdg(rst,rc);
+            h+='<button class="me-btn me-btn--ghost me-btn--sm" onclick="CampistryMe.cycleRef(\''+je(id)+'\','+ri+')">'+(rst==='received'?'Reset':rst==='requested'?'Mark received':'Request')+'</button>';
+            h+='</div>';
+        });
+    } else h+='<div style="font-size:.8rem;color:var(--s400)">No references provided.</div>';
+    h+='</div>';
+    // Onboarding (once offered/hired)
+    if(st==='offered'||st==='hired'){
+        var ob=a.onboarding||{};
+        h+='<div style="margin-bottom:12px;background:var(--s50);border-radius:var(--r);padding:12px"><div style="font-size:.7rem;font-weight:700;color:var(--s400);text-transform:uppercase;margin-bottom:6px">Onboarding checklist</div>';
+        STAFF_ONBOARD.forEach(function(row){
+            h+='<label style="display:flex;align-items:center;gap:8px;font-size:.83rem;padding:3px 0;cursor:pointer"><input type="checkbox" '+(ob[row[0]]?'checked':'')+' onchange="CampistryMe.toggleOnboard(\''+je(id)+'\',\''+row[0]+'\')"> '+esc(row[1])+'</label>';
+        });
+        h+='</div>';
+    }
+    // Admin notes
+    h+='<div class="me-field"><label>Internal notes</label><textarea class="me-input" id="staffNote" rows="2" placeholder="Interview notes, impressions…">'+esc(a.adminNotes||'')+'</textarea></div>';
+    h+='<div style="display:flex;gap:6px;margin-top:8px">';
+    h+='<button class="me-btn me-btn--pri me-btn--sm" onclick="CampistryMe.saveStaffNotes(\''+je(id)+'\')">Save notes</button>';
+    h+='<button class="me-btn me-btn--ghost me-btn--sm" style="color:var(--err);margin-left:auto" onclick="CampistryMe.deleteStaffApp(\''+je(id)+'\')">Delete applicant</button>';
+    h+='</div></div>';
+    showModal(esc(a.name||'Applicant'),h);
+}
+function setStaffStatus(id,status){var a=staffApplications[id];if(!a)return;a.status=status;save();renderStaffing();viewStaffApp(id);toast('Moved to '+_staffLabel(status));}
+function saveStaffNotes(id){var a=staffApplications[id];if(!a)return;var el=document.getElementById('staffNote');if(el)a.adminNotes=el.value;save();toast('Notes saved');}
+function toggleOnboard(id,key){var a=staffApplications[id];if(!a)return;if(!a.onboarding)a.onboarding={};a.onboarding[key]=!a.onboarding[key];save();}
+function cycleRef(id,ri){var a=staffApplications[id];if(!a||!a.references||!a.references[ri])return;var r=a.references[ri];r.status=r.status==='received'?'pending':r.status==='requested'?'received':'requested';save();viewStaffApp(id);}
+function deleteStaffApp(id){var a=staffApplications[id];if(!a)return;if(!confirm('Delete this applicant? This cannot be undone.'))return;delete staffApplications[id];save();closeModal('dynModal');renderStaffing();toast('Applicant deleted');}
+function addStaffApp(){
+    var h='<div class="me-modal-form">';
+    h+='<div style="display:grid;grid-template-columns:1fr 1fr;gap:10px">';
+    h+='<div class="me-field"><label>First name</label><input class="me-input" id="saF"></div><div class="me-field"><label>Last name</label><input class="me-input" id="saL"></div>';
+    h+='</div><div style="display:grid;grid-template-columns:1fr 1fr;gap:10px">';
+    h+='<div class="me-field"><label>Email</label><input class="me-input" id="saE"></div><div class="me-field"><label>Phone</label><input class="me-input" id="saP"></div>';
+    h+='</div><div class="me-field"><label>Position</label><select class="me-input" id="saPos">'+STAFF_POSITIONS.map(function(p){return '<option>'+esc(p)+'</option>';}).join('')+'</select></div></div>';
+    showModal('Add Applicant',h,function(){
+        var first=document.getElementById('saF').value.trim(),last=document.getElementById('saL').value.trim();
+        if(!first&&!last){alert('Enter a name');return;}
+        var id='staff_'+Date.now()+'_'+Math.random().toString(36).slice(2,6);
+        staffApplications[id]={first:first,last:last,name:(first+' '+last).trim(),email:document.getElementById('saE').value.trim(),phone:document.getElementById('saP').value.trim(),positions:[document.getElementById('saPos').value],references:[],status:'applied',appliedDate:today(),appliedTime:new Date().toISOString(),onboarding:{}};
+        save();closeModal('dynModal');renderStaffing();toast('Applicant added');
+    });
+}
+function copyStaffLink(){var url=window.location.origin+'/campistry_staff_apply.html';try{navigator.clipboard&&navigator.clipboard.writeText(url);}catch(e){}toast('Staff application link copied');}
+function exportStaffCSV(){
+    var rows=[['Name','Email','Phone','Positions','Status','Applied','References received','Notes']];
+    Object.values(staffApplications).forEach(function(a){
+        var refs=(a.references||[]); var rd=refs.filter(function(r){return r.status==='received';}).length;
+        rows.push([a.name||((a.first||'')+' '+(a.last||'')),a.email||'',a.phone||'',(a.positions||[]).join('; '),_staffLabel(a.status||'applied'),a.appliedDate||'',rd+'/'+refs.length,(a.adminNotes||'').replace(/\n/g,' ')]);
+    });
+    var csv='﻿'+rows.map(function(r){return r.map(function(x){return '"'+String(x==null?'':x).replace(/"/g,'""')+'"';}).join(',');}).join('\n');
+    dlFile(csv,'staff-applicants.csv','text/csv');
+}
+
 function renderEnrollment(){
     var c=document.getElementById('page-enrollment');
     var eArr=Object.entries(enrollments);
@@ -3944,7 +4113,9 @@ function renderAnalytics(){
         if(!tuition)return;
         // Check if manual payment exists for this camper
         var manualPay=finPayments.filter(function(p){return p.family===e.camperName||p.family===(e.camperLast||'')+' Family'||p.enrollmentId===id});
-        var paidAmount=manualPay.reduce(function(s,p){return s+p.amount},0);
+        // Pending (e.g. ACH still settling) and failed online payments are shown
+        // in the log but do NOT count as collected until they succeed.
+        var paidAmount=manualPay.reduce(function(s,p){return s+((p.status==='pending'||p.status==='failed')?0:(p.amount||0))},0);
         var payStatus='pending';
         if(paidAmount>=tuition)payStatus='paid';
         else if(paidAmount>0)payStatus='partial';
@@ -4025,6 +4196,21 @@ function renderAnalytics(){
         h+=stat('Profit Margin',projected>0?Math.round(netIncome/projected*100)+'%':'—','Net / Revenue','#0EA5E9');
         h+='</div>';
 
+        // ═══ A/R AGING — outstanding balance bucketed by age of the invoice ═══
+        var aging=[{l:'Current (0–30 days)',v:0,c:'var(--ok)'},{l:'31–60 days',v:0,c:'var(--me)'},{l:'61–90 days',v:0,c:'#F97316'},{l:'90+ days',v:0,c:'var(--err)'}];
+        autoInvoices.forEach(function(inv){
+            if(inv.balance<=0)return;
+            var days=Math.floor((todayMs-new Date(inv.enrollDate||todayStr).getTime())/86400000);
+            if(days<=30)aging[0].v+=inv.balance; else if(days<=60)aging[1].v+=inv.balance; else if(days<=90)aging[2].v+=inv.balance; else aging[3].v+=inv.balance;
+        });
+        var agingTotal=aging.reduce(function(s,b){return s+b.v},0);
+        h+='<div class="me-card" style="margin-bottom:14px;padding:16px"><div style="display:flex;justify-content:space-between;align-items:baseline;margin-bottom:10px"><h4 style="font-size:.85rem;font-weight:700;color:var(--s700);margin:0">Accounts Receivable — Aging</h4><span style="font-size:.72rem;color:var(--s400)">Total outstanding '+fm(agingTotal)+'</span></div>';
+        h+='<div style="display:flex;height:10px;border-radius:5px;overflow:hidden;background:var(--s100);margin-bottom:12px">';
+        aging.forEach(function(b){var pct=agingTotal>0?b.v/agingTotal*100:0;if(pct>0)h+='<div style="width:'+pct+'%;background:'+b.c+'" title="'+esc(b.l)+': '+fm(b.v)+'"></div>';});
+        h+='</div><div style="display:grid;grid-template-columns:repeat(4,1fr);gap:8px">';
+        aging.forEach(function(b){h+='<div style="text-align:center;padding:8px 6px;border:1px solid var(--s200);border-radius:var(--r);border-top:3px solid '+b.c+'"><div style="font-size:1.05rem;font-weight:800;color:var(--s800)">'+fm(b.v)+'</div><div style="font-size:.68rem;color:var(--s400);font-weight:600;margin-top:2px">'+esc(b.l)+'</div></div>';});
+        h+='</div></div>';
+
         // Enrollment funnel
         var eArr=Object.entries(enrollments);
         var funnel=[{name:'Applied',count:eArr.length,color:'var(--s400)'},{name:'Accepted',count:eArr.filter(function([,e]){return e.status==='accepted'||e.status==='enrolled'}).length,color:'#3B82F6'},{name:'Enrolled',count:eArr.filter(function([,e]){return e.status==='enrolled'}).length,color:'var(--ok)'},{name:'Waitlisted',count:eArr.filter(function([,e]){return e.status==='waitlisted'}).length,color:'var(--me)'},{name:'Declined',count:eArr.filter(function([,e]){return e.status==='declined'}).length,color:'var(--err)'}];
@@ -4093,7 +4279,15 @@ function renderAnalytics(){
             h+='<div class="me-card" style="margin-top:14px"><div class="me-card-head"><h3>Payment Log</h3></div><div class="me-tw"><table class="me-t"><thead><tr><th>Date</th><th>Family/Camper</th><th>Amount</th><th>Method</th><th></th></tr></thead><tbody>';
             finPayments.slice().sort(function(a,b){return(b.date||'').localeCompare(a.date||'')}).forEach(function(p,i){
                 if(p.id==null)p.id='pay_'+i+'_'+(p.date||'')+'_'+(p.amount||0);  // backfill a stable id for legacy rows
-                h+='<tr><td style="font-size:.75rem;color:var(--s400)">'+esc(p.date||'—')+'</td><td class="bold">'+esc(p.family)+'</td><td style="font-weight:700;color:var(--ok)">'+fm(p.amount)+'</td><td>'+esc(_payLabel(p.method)||'—')+'</td><td style="text-align:right"><button class="me-btn me-btn--ghost me-btn--sm" style="color:var(--err)" onclick="CampistryMe.finRemovePayment(\''+je(String(p.id))+'\')">✕</button></td></tr>';
+                var _isRef=(p.amount||0)<0;
+                var _st=p.status||'';
+                var _pend=(_st==='pending'||_st==='failed');
+                var _amtTxt=_isRef?'−'+fm(Math.abs(p.amount)):fm(p.amount);
+                var _amtCol=_isRef?'var(--err)':_pend?'var(--s400)':'var(--ok)';
+                var _stBadge=_st==='pending'?' '+bdg('pending','warn'):_st==='failed'?' '+bdg('failed','err'):'';
+                var _canRefund=!_isRef&&!_pend&&(p.amount||0)>0;
+                var _acts=(_canRefund?'<button class="me-btn me-btn--ghost me-btn--sm" onclick="CampistryMe.finRefund(\''+je(String(p.id))+'\')">↩ Refund</button>':'')+'<button class="me-btn me-btn--ghost me-btn--sm" style="color:var(--err)" onclick="CampistryMe.finRemovePayment(\''+je(String(p.id))+'\')">✕</button>';
+                h+='<tr><td style="font-size:.75rem;color:var(--s400)">'+esc(p.date||'—')+'</td><td class="bold">'+esc(p.family)+(_isRef&&p.notes?' <span style="font-size:.7rem;font-weight:400;color:var(--s400)">'+esc(p.notes)+'</span>':'')+'</td><td style="font-weight:700;color:'+_amtCol+'">'+_amtTxt+'</td><td>'+bdg((_payLabel(p.method)||p.method||'—'),_isRef?'err':_st==='failed'?'err':_st==='pending'?'warn':'ok')+_stBadge+'</td><td style="text-align:right;white-space:nowrap">'+_acts+'</td></tr>';
             });
             h+='</tbody></table></div></div>';
         }
@@ -4380,6 +4574,70 @@ function finRemovePayment(id){
     if(idx<0){toast('Payment not found','error');return}
     finPayments.splice(idx,1);save();renderAnalytics();toast('Removed');
 }
+
+// ═══════════════════════════════════════════════════════════════
+// REFUNDS — record a refund (and optionally return money via Stripe)
+// A refund is stored as a NEGATIVE payment, so every total that sums
+// finPayments (both the Billing ledger and the Analytics invoices)
+// reflects it automatically. If the original payment carries a Stripe
+// PaymentIntent, the money can be returned to the card via stripe-refund.
+// ═══════════════════════════════════════════════════════════════
+function finRefund(id){
+    var p=finPayments.find(function(x){return String(x.id)===String(id)});
+    if(!p){toast('Payment not found','error');return}
+    if((p.amount||0)<=0){toast('That entry is already a refund','error');return}
+    var priorRefunded=finPayments.filter(function(x){return x.refundOf!=null&&String(x.refundOf)===String(p.id)})
+        .reduce(function(s,x){return s+Math.abs(x.amount||0)},0);
+    var maxRefund=Math.round((p.amount-priorRefunded)*100)/100;
+    if(maxRefund<=0){toast('This payment is already fully refunded','error');return}
+    var canStripe=!!p.stripePaymentIntentId;
+    var h='<div class="me-modal-form">';
+    h+='<div style="background:var(--s50);padding:10px 14px;border-radius:var(--r);margin-bottom:14px;font-size:.82rem">Refunding payment to <strong>'+esc(p.family||'')+'</strong><br>Original: <strong>'+fm(p.amount)+'</strong> · '+esc(p.method||'')+(p.date?' · '+esc(p.date):'')+(priorRefunded>0?'<br>Already refunded: <strong>'+fm(priorRefunded)+'</strong>':'')+'</div>';
+    h+='<div style="display:grid;grid-template-columns:2fr 1fr;gap:10px">';
+    h+='<div class="me-field"><label>Reason</label><select id="rfReason" class="me-input"><option value="requested_by_customer">Requested by customer</option><option value="cancellation">Cancellation / withdrawal</option><option value="adjustment">Billing adjustment</option><option value="duplicate">Duplicate charge</option><option value="fraudulent">Fraudulent</option></select></div>';
+    h+='<div class="me-field"><label>Amount ($)</label><input type="number" id="rfAmount" class="me-input" value="'+maxRefund.toFixed(2)+'" step="0.01" min="0.01" max="'+maxRefund+'"></div>';
+    h+='</div>';
+    if(canStripe){
+        h+='<label style="display:flex;align-items:center;gap:8px;font-size:.85rem;margin-top:4px"><input type="checkbox" id="rfStripe" checked> Return the money to the card through Stripe</label>';
+        h+='<div style="font-size:.72rem;color:var(--s400);margin-top:4px">Leave unchecked to record the refund only (e.g. you refunded by cash or check).</div>';
+    } else {
+        h+='<div style="font-size:.75rem;color:var(--s400);margin-top:6px">No Stripe charge is on record for this payment, so this records the refund in the ledger only.</div>';
+    }
+    h+='</div>';
+    showModal('Refund Payment',h,async function(){
+        var amt=parseFloat(document.getElementById('rfAmount').value)||0;
+        if(amt<=0||amt>maxRefund+0.001){alert('Enter an amount up to '+fm(maxRefund));return}
+        var reasonSel=document.getElementById('rfReason').value;
+        var doStripe=canStripe&&document.getElementById('rfStripe')&&document.getElementById('rfStripe').checked;
+        var stripeRefundId=null;
+        if(doStripe){
+            var stripeReason=(reasonSel==='requested_by_customer'||reasonSel==='duplicate'||reasonSel==='fraudulent')?reasonSel:'requested_by_customer';
+            toast('Processing Stripe refund…');
+            try{
+                var res=await callEdgeFunction('stripe-refund',{paymentIntentId:p.stripePaymentIntentId,amount:amt,reason:stripeReason,metadata:{campId:getCampId(),family:p.family||''}});
+                stripeRefundId=res.refundId;
+            }catch(err){
+                console.error('[Me] Stripe refund error:',err);
+                toast('Stripe refund failed: '+err.message,'error');
+                return;
+            }
+        }
+        var reasonLabel={requested_by_customer:'Requested by customer',cancellation:'Cancellation / withdrawal',adjustment:'Billing adjustment',duplicate:'Duplicate charge',fraudulent:'Fraudulent'}[reasonSel]||reasonSel;
+        finPayments.push({
+            id:'ref_'+Date.now(),
+            family:p.family,familyKey:p.familyKey||null,enrollmentId:p.enrollmentId||null,
+            amount:-amt,date:today(),method:'Refund',
+            reference:stripeRefundId||'',notes:'Refund — '+reasonLabel+(doStripe?' (Stripe)':''),
+            reason:reasonSel,refundOf:p.id,stripeRefundId:stripeRefundId,timestamp:Date.now()
+        });
+        var f=(p.familyKey&&families[p.familyKey])||Object.values(families).find(function(x){return x.name===p.family});
+        if(f){f.totalPaid=Math.max(0,(f.totalPaid||0)-amt);f.balance=(f.balance||0)+amt;}
+        save();closeModal('dynModal');
+        try{renderAnalytics()}catch(e){}
+        try{renderBilling()}catch(e){}
+        toast('Refunded '+fm(amt)+(doStripe?' to card':'')+' for '+(p.family||'family'));
+    });
+}
 function finSetBudget(){
     var rev=prompt('Revenue target ($):',finBudget.revenue||'');
     var pay=prompt('Payroll budget ($):',finBudget.payroll||'');
@@ -4612,8 +4870,9 @@ function buildFamilyLedgers(){
         });
         if(!fk) return;
         if(!ledgers[fk]) return;
-        ledgers[fk].entries.push({type:'payment',category:_payLabel(p.method)||'Payment',desc:p.notes||'Payment received',amount:Number(p.amount)||0,date:p.date||'',ref:p.id||''});
-        ledgers[fk].totalPayments+=Number(p.amount)||0;
+        var _notCollected=(p.status==='pending'||p.status==='failed');
+        ledgers[fk].entries.push({type:'payment',category:_payLabel(p.method)||'Payment',desc:p.notes||'Payment received',amount:Number(p.amount)||0,date:p.date||'',ref:p.id||'',status:p.status||''});
+        if(!_notCollected) ledgers[fk].totalPayments+=Number(p.amount)||0;
     });
 
     // 4. Compute balances and sort entries
@@ -5341,14 +5600,17 @@ function renderBilling(){
                     var isCharge=e.type==='charge';
                     var isPayment=e.type==='payment';
                     var isCredit=e.type==='credit';
+                    var isRefund=isPayment&&e.amount<0;
                     if(isCharge) runBal+=e.amount;
                     if(isPayment||isCredit) runBal-=e.amount;
+                    var payTxt=(isPayment||isCredit)?(isRefund?'−'+fm(Math.abs(e.amount)):fm(e.amount)):'';
+                    var refBtn=(isPayment&&e.amount>0&&e.ref)?'<button class="me-btn me-btn--ghost me-btn--sm" title="Refund this payment" onclick="CampistryMe.finRefund(\''+je(String(e.ref))+'\')">↩</button>':'';
                     h+='<tr><td style="font-size:.75rem;color:var(--s500)">'+esc(e.date||'')+'</td>';
-                    h+='<td>'+bdg(e.category||e.type,isCharge?'err':isPayment?'ok':'warn')+'</td>';
+                    h+='<td>'+bdg(e.category||e.type,isCharge?'err':isRefund?'err':isPayment?'ok':'warn')+'</td>';
                     h+='<td style="font-size:.8rem">'+esc(e.desc||'')+'</td>';
                     h+='<td style="text-align:right;font-weight:600;color:var(--s800)">'+(isCharge?fm(e.amount):'')+'</td>';
-                    h+='<td style="text-align:right;font-weight:600;color:var(--ok)">'+((isPayment||isCredit)?fm(e.amount):'')+'</td>';
-                    h+='<td></td></tr>';
+                    h+='<td style="text-align:right;font-weight:600;color:'+(isRefund?'var(--err)':'var(--ok)')+'">'+payTxt+'</td>';
+                    h+='<td style="text-align:right">'+refBtn+'</td></tr>';
                 });
                 h+='</tbody></table>';
             }
@@ -5373,10 +5635,16 @@ function renderBilling(){
                 h+='</div></div>';
             }
 
+            // Monthly plan / autopay
+            h+=_planCardHtml(l);
+
             // Quick actions
             var hasCard=families[l.famKey]?.cardOnFile;
             h+='<div style="display:flex;gap:6px;padding:10px 16px;border-top:1px solid var(--s100);flex-wrap:wrap">';
             h+='<button class="me-btn me-btn--pri me-btn--sm" onclick="CampistryMe.openPaymentForFamily(\''+je(l.famKey)+'\')">Record Payment</button>';
+            h+='<button class="me-btn me-btn--sec me-btn--sm" onclick="CampistryMe.sendPayLink(\''+je(l.famKey)+'\')">💳 Pay Link</button>';
+            var _fam=families[l.famKey];
+            if(!(_fam&&_fam.plan&&_fam.plan.installments&&_fam.plan.installments.length)) h+='<button class="me-btn me-btn--sec me-btn--sm" onclick="CampistryMe.monthlyPlan(\''+je(l.famKey)+'\')">📆 Monthly Plan</button>';
             if(hasCard&&l.balance>0) h+='<button class="me-btn me-btn--pri me-btn--sm" style="background:var(--purple)" onclick="CampistryMe.chargeStoredCard(\''+je(l.famKey)+'\')">⚡ Charge Card</button>';
             if(!hasCard) h+='<button class="me-btn me-btn--sec me-btn--sm" onclick="CampistryMe.requestCardSetup(\''+je(l.famKey)+'\')">💳 Save Card</button>';
             else h+='<span style="font-size:.7rem;color:var(--ok);font-weight:600;padding:4px 8px;align-self:center">💳 Card on file</span>';
@@ -5786,6 +6054,128 @@ async function batchCharge(){
         toast('Batch complete: '+success+' charged, '+failed+' failed');
         renderBilling();
     });
+}
+
+// ═══════════════════════════════════════════════════════════════
+// ONLINE PAYMENT LINK — a hosted Stripe Checkout the parent pays on.
+// Offers every method the camp enabled in Stripe (card, ACH bank debit,
+// Cash App, PayPal, Link, …). The payment records itself into the ledger
+// via stripe-webhook — no manual entry. (Venmo/Zelle can't be processed
+// by Stripe; those stay manual-entry methods.)
+// ═══════════════════════════════════════════════════════════════
+async function sendPayLink(famKey){
+    var f=families[famKey]; if(!f){toast('Family not found','error');return}
+    var bal=buildFamilyLedgers()[famKey]?.balance||0;
+    var email='';(f.households||[]).forEach(function(hh){(hh.parents||[]).forEach(function(p){if(p.email&&!email)email=p.email})});
+    var h='<div class="me-modal-form">';
+    h+='<p style="font-size:.85rem;color:var(--s600);margin-bottom:10px">Create a secure online payment link for <strong>'+esc(f.name)+'</strong>. Send it to the parent — they can pay by card, bank transfer (ACH), Cash App, PayPal or any other method you\'ve enabled in Stripe, and it records itself here automatically.</p>';
+    h+='<div style="background:var(--s50);padding:10px 14px;border-radius:var(--r);margin-bottom:14px;font-size:.85rem">Balance due: <strong style="color:var(--err)">'+fm(bal)+'</strong>'+(email?' · '+esc(email):' · <span style="color:var(--err)">no parent email on file</span>')+'</div>';
+    h+='<div class="me-field"><label>Amount ($)</label><input type="number" id="plAmt" class="me-input" value="'+(bal>0?bal.toFixed(2):'')+'" step="0.01" min="0.50"></div>';
+    h+='<div class="me-field"><label>What\'s this for?</label><input type="text" id="plDesc" class="me-input" value="Camp tuition — '+esc(f.name)+'"></div>';
+    h+='</div>';
+    showModal('Online Payment Link',h,async function(){
+        var amt=parseFloat(document.getElementById('plAmt').value)||0;
+        if(amt<0.50){alert('Enter an amount of at least $0.50');return}
+        var desc=document.getElementById('plDesc').value.trim();
+        var btn=document.getElementById('dynModalSave'); if(btn){btn.disabled=true;btn.textContent='Creating…';}
+        try{
+            var res=await callEdgeFunction('stripe-checkout',{campId:getCampId(),familyKey:famKey,familyName:f.name,email:email,amount:amt,description:desc});
+            if(!res.url) throw new Error('No link returned');
+            _showPayLinkResult(f,res.url);
+        }catch(err){
+            console.error('[Me] pay link error:',err);
+            toast('Could not create link: '+err.message,'error');
+            if(btn){btn.disabled=false;btn.textContent='Save';}
+        }
+    });
+}
+function _showPayLinkResult(f,url){
+    var h='<div class="me-modal-form">';
+    h+='<p style="font-size:.85rem;color:var(--s600);margin-bottom:10px">Payment link for <strong>'+esc(f.name)+'</strong> is ready. Copy it into a text or email — it opens a secure Stripe checkout with every payment method you offer, and the payment lands in Billing automatically.</p>';
+    h+='<div class="me-field"><label>Payment link</label><input type="text" id="plUrl" class="me-input" readonly value="'+esc(url)+'" onclick="this.select()"></div>';
+    h+='<div style="display:flex;gap:8px;margin-top:6px">';
+    h+='<button class="me-btn me-btn--pri me-btn--sm" onclick="CampistryMe.copyPayLink()">Copy link</button>';
+    h+='<a class="me-btn me-btn--sec me-btn--sm" href="'+esc(url)+'" target="_blank" rel="noopener">Open</a>';
+    h+='</div></div>';
+    showModal('Send this link to the parent',h);
+}
+function copyPayLink(){var el=document.getElementById('plUrl');if(!el)return;el.select();try{navigator.clipboard&&navigator.clipboard.writeText(el.value)}catch(e){try{document.execCommand('copy')}catch(_){}}toast('Link copied')}
+
+// ═══════════════════════════════════════════════════════════════
+// MONTHLY BILLING (AUTOPAY) — split a balance into monthly payments and
+// auto-charge the saved card on each due date. The schedule lives on the
+// family (f.plan); a scheduled edge function (charge-due-installments) runs
+// daily and charges whatever is due for families with autopay + a card on
+// file, recording each payment into the ledger.
+// ═══════════════════════════════════════════════════════════════
+function monthlyPlan(famKey){
+    var f=families[famKey]; if(!f){toast('Family not found','error');return}
+    var bal=buildFamilyLedgers()[famKey]?.balance||0;
+    var hasCard=!!f.cardOnFile;
+    var existing=f.plan&&f.plan.installments&&f.plan.installments.length;
+    var d=new Date(); var defStart=new Date(d.getFullYear(),d.getMonth()+1,1).toISOString().split('T')[0];
+    var h='<div class="me-modal-form">';
+    if(existing) h+='<div style="background:#FFFBEB;border:1px solid #FDE68A;padding:9px 12px;border-radius:var(--r);margin-bottom:12px;font-size:.8rem;color:#92400E">This family already has a monthly plan ('+f.plan.installments.length+' payments). Saving replaces it.</div>';
+    h+='<div style="background:var(--s50);padding:10px 14px;border-radius:var(--r);margin-bottom:14px;font-size:.85rem">Balance to schedule: <strong style="color:var(--err)">'+fm(bal)+'</strong>'+(hasCard?' · <span style="color:var(--ok)">card on file ✓</span>':'')+'</div>';
+    h+='<div style="display:grid;grid-template-columns:1fr 1fr;gap:10px">';
+    h+='<div class="me-field"><label>Total to schedule ($)</label><input type="number" id="mpTotal" class="me-input" value="'+(bal>0?bal.toFixed(2):'')+'" step="0.01" min="0.50"></div>';
+    h+='<div class="me-field"><label># Monthly payments</label><input type="number" id="mpMonths" class="me-input" value="3" min="1" max="24"></div>';
+    h+='</div>';
+    h+='<div class="me-field"><label>First payment date</label><input type="date" id="mpStart" class="me-input" value="'+defStart+'"></div>';
+    if(hasCard) h+='<label style="display:flex;align-items:center;gap:8px;font-size:.85rem;margin-top:4px"><input type="checkbox" id="mpAuto" checked> Auto-charge the card on file on each due date</label>';
+    else h+='<div style="font-size:.75rem;color:var(--me);margin-top:6px">No card on file — save a card to enable auto-charge. You can still create the schedule; the parent can pay each month from their portal.</div>';
+    h+='</div>';
+    showModal(existing?'Edit Monthly Plan':'Set Up Monthly Plan',h,function(){
+        var total=parseFloat(document.getElementById('mpTotal').value)||0;
+        var months=parseInt(document.getElementById('mpMonths').value,10)||1;
+        if(total<0.5){alert('Enter a total of at least $0.50');return}
+        if(months<1)months=1; if(months>24)months=24;
+        var start=document.getElementById('mpStart').value||defStart;
+        var auto=hasCard&&document.getElementById('mpAuto')&&document.getElementById('mpAuto').checked;
+        var each=Math.round(total/months*100)/100;
+        var insts=[]; var sd=new Date(start+'T12:00:00');
+        for(var i=0;i<months;i++){
+            var due=new Date(sd.getFullYear(),sd.getMonth()+i,sd.getDate());
+            var amt=(i===months-1)?Math.round((total-each*(months-1))*100)/100:each;
+            insts.push({n:i+1,amount:amt,dueDate:due.toISOString().split('T')[0],status:'pending',paymentId:null});
+        }
+        f.plan={installments:insts,autopay:!!auto,total:total,createdAt:new Date().toISOString()};
+        save();closeModal('dynModal');renderBilling();
+        toast('Monthly plan created — '+months+' payment'+(months>1?'s':'')+(auto?', autopay on':''));
+    });
+}
+function toggleFamilyAutopay(famKey){
+    var f=families[famKey]; if(!f||!f.plan)return;
+    if(!f.cardOnFile&&!f.plan.autopay){toast('Save a card on file first','error');return}
+    f.plan.autopay=!f.plan.autopay; save();renderBilling();
+    toast('Autopay '+(f.plan.autopay?'ON':'off')+' for '+f.name);
+}
+function cancelMonthlyPlan(famKey){
+    var f=families[famKey]; if(!f||!f.plan)return;
+    if(!confirm('Cancel the monthly plan for '+f.name+'? Payments already made stay on the ledger.'))return;
+    delete f.plan; save();renderBilling();toast('Monthly plan cancelled');
+}
+function _planCardHtml(l){
+    var f=families[l.famKey]; if(!f||!f.plan||!f.plan.installments||!f.plan.installments.length) return '';
+    var today=new Date().toISOString().split('T')[0];
+    var pend=f.plan.installments.filter(function(i){return i.status!=='paid'}).sort(function(a,b){return(a.dueDate||'').localeCompare(b.dueDate||'')});
+    var next=pend[0];
+    var chips=f.plan.installments.map(function(i){
+        var overdue=i.status!=='paid'&&i.dueDate&&i.dueDate<today;
+        var bg=i.status==='paid'?'background:#ECFDF5;border-color:#A7F3D0;color:#0E7C4A':i.status==='failed'?'background:#FEF2F2;border-color:#FECACA;color:#DC2626':overdue?'background:#FEF2F2;border-color:#FECACA;color:#DC2626':'background:var(--s50);border-color:var(--s200);color:var(--s600)';
+        var lbl=i.status==='paid'?'✓ ':(i.status==='failed'?'⚠ ':(overdue?'⚠ ':''));
+        return '<span style="display:inline-block;padding:3px 10px;border-radius:999px;font-size:.72rem;font-weight:600;margin:2px;border:1px solid;'+bg+'">'+lbl+fm(i.amount)+' · '+esc(i.dueDate||'TBD')+'</span>';
+    }).join('');
+    var autoBadge=f.plan.autopay?'<span style="color:var(--ok);font-weight:700">● Autopay ON</span>':'<span style="color:var(--s400);font-weight:700">○ Autopay off</span>';
+    return '<div style="padding:12px 16px;border-top:1px solid var(--s100);background:#FFFEFB">'+
+        '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px"><div style="font-size:.75rem;font-weight:700;color:var(--s500);text-transform:uppercase;letter-spacing:.04em">📆 Monthly Plan</div><div style="font-size:.75rem">'+autoBadge+'</div></div>'+
+        '<div style="margin-bottom:6px">'+chips+'</div>'+
+        (next?'<div style="font-size:.73rem;color:var(--s500)">Next: <strong>'+fm(next.amount)+'</strong> due '+esc(next.dueDate)+(f.plan.autopay&&f.cardOnFile?' — auto-charges the card on file':(f.plan.autopay?' — autopay on, but no card on file':''))+'</div>':'<div style="font-size:.73rem;color:var(--ok);font-weight:600">All installments paid ✓</div>')+
+        '<div style="display:flex;gap:6px;margin-top:8px;flex-wrap:wrap">'+
+        '<button class="me-btn me-btn--ghost me-btn--sm" onclick="CampistryMe.toggleFamilyAutopay(\''+je(l.famKey)+'\')">'+(f.plan.autopay?'Turn autopay off':'Turn autopay on')+'</button>'+
+        '<button class="me-btn me-btn--ghost me-btn--sm" onclick="CampistryMe.monthlyPlan(\''+je(l.famKey)+'\')">Edit plan</button>'+
+        '<button class="me-btn me-btn--ghost me-btn--sm" style="color:var(--err)" onclick="CampistryMe.cancelMonthlyPlan(\''+je(l.famKey)+'\')">Cancel plan</button>'+
+        '</div></div>';
 }
 
 // ═══════════════════════════════════════════════════════════════
@@ -7825,7 +8215,12 @@ window.CampistryMe={
     prEditProgram:prEditProgram,prNewRun:prNewRun,prDeleteRun:prDeleteRun,prExportCSV:prExportCSV,
     finSetTab:finSetTab,finAddStaff:finAddStaff,finEditStaff:finEditStaff,finStaffModal:finStaffModal,_staffPhotoPick:_staffPhotoPick,_staffPhotoClear:_staffPhotoClear,finRemoveStaff:finRemoveStaff,
     finAddExpense:finAddExpense,finRemoveExpense:finRemoveExpense,
-    finAddPayment:finAddPayment,finRemovePayment:finRemovePayment,
+    finAddPayment:finAddPayment,finRemovePayment:finRemovePayment,finRefund:finRefund,
+    sendPayLink:sendPayLink,copyPayLink:copyPayLink,
+    monthlyPlan:monthlyPlan,toggleFamilyAutopay:toggleFamilyAutopay,cancelMonthlyPlan:cancelMonthlyPlan,
+    setStaffFilter:setStaffFilter,viewStaffApp:viewStaffApp,setStaffStatus:setStaffStatus,saveStaffNotes:saveStaffNotes,
+    toggleOnboard:toggleOnboard,cycleRef:cycleRef,deleteStaffApp:deleteStaffApp,addStaffApp:addStaffApp,
+    copyStaffLink:copyStaffLink,exportStaffCSV:exportStaffCSV,
     finSetBudget:finSetBudget,finSetOverdue:finSetOverdue,
     finExportCSV:finExportCSV,finExportQB:finExportQB,finExportIIF:finExportIIF,
     finExportXero:finExportXero,finExportJournal:finExportJournal,finImportCSV:finImportCSV,
