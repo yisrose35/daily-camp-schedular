@@ -316,10 +316,28 @@
       ? 'Found times running ACROSS a row, so time is set to run across the top.'
       : 'Found times running DOWN a column, so time is set to run down the side.');
 
-    // Every line at least half as time-dense as the best becomes its own ruler
-    // tier — that's how a camp writing hours on one row and quarter-hours on
-    // the next keeps both.
-    var lines = (horizontal ? bestRows : bestCols).filter(function (x) { return x.n >= Math.max(3, topRow && horizontal ? topRow / 2 : topCol / 2); });
+    // Each time line becomes its own ruler tier — that's how a camp writing
+    // hours on one row and quarter-hours on the next keeps both.
+    //
+    // Lines are kept by the SPAN of day they cover, not by how many entries
+    // they have. A coarse period row legitimately has far fewer cells than the
+    // quarter-hour row beneath it, so a count-based threshold would throw away
+    // exactly the row the camp reads first.
+    var candidates = (horizontal ? bestRows : bestCols);
+    var spanOfLine = function (x) {
+      var hits = x.hits;
+      var first = hits[0].t.start;
+      var last = hits[hits.length - 1];
+      if (last.t.end != null) return last.t.end - first;
+      // A row of bare boundary times ("9:00, 9:15, 9:30, …") only marks where
+      // each slot BEGINS, so its last entry still runs one step further. Without
+      // that step the row measures short and can lose to a row of explicit
+      // ranges covering the same day.
+      var step = hits.length > 1 ? (last.t.start - hits[hits.length - 2].t.start) : 0;
+      return (last.t.start + step) - first;
+    };
+    var widest = candidates.reduce(function (m, x) { return Math.max(m, spanOfLine(x)); }, 0);
+    var lines = candidates.filter(function (x) { return spanOfLine(x) >= widest * 0.5; });
     lines = lines.slice(0, 3).sort(function (a, b) { return a.i - b.i; });
 
     var timeLineIdx = lines.map(function (l) { return l.i; });
