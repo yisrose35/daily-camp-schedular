@@ -4330,6 +4330,20 @@ a:hover {
 .drop-preview{display:none;position:absolute;left:2%;width:96%;background:rgba(99,102,241,0.06);border:2px dashed #a5b4fc;border-radius:4px;pointer-events:none;z-index:5;}
 .preview-time-label{text-align:center;padding:6px;color:#4f46e5;font-weight:600;font-size:11px;background:rgba(255,255,255,0.95);border-radius:3px;margin:3px;}
 
+/* ── Custom schedule layouts: time across the top (schedule_layout_model.js) ──
+   In this orientation the tile's time edges are left/right and its lane edges
+   are top/bottom, so the two pairs of resize grips swap roles and cursors. */
+.ms-skeleton-grid.ms-horizontal .grid-cell{border-right:none;border-bottom:1px solid #eef0f3;}
+.ms-skeleton-grid.ms-horizontal .grid-disabled{width:auto;height:100%;}
+.ms-skeleton-grid.ms-horizontal .resize-handle{left:auto;right:auto;top:0;bottom:0;width:8px;height:auto;cursor:ew-resize;}
+.ms-skeleton-grid.ms-horizontal .resize-handle-top{left:-2px;}
+.ms-skeleton-grid.ms-horizontal .resize-handle-bottom{right:-2px;}
+.ms-skeleton-grid.ms-horizontal .resize-handle-h{top:auto;bottom:auto;left:0;right:0;width:auto;height:10px;cursor:ns-resize;}
+.ms-skeleton-grid.ms-horizontal .resize-handle-h-left{top:0;border-radius:5px 5px 0 0;}
+.ms-skeleton-grid.ms-horizontal .resize-handle-h-right{bottom:0;border-radius:0 0 5px 5px;}
+.ms-skeleton-grid.ms-horizontal .resize-handle-h::after{width:26px;max-width:55%;height:3px;}
+.ms-skeleton-grid.ms-horizontal .drop-preview{left:auto;width:auto;top:2px;bottom:2px;height:auto;}
+
 /* ── Modal Styles ── */
 #ms-modal-overlay{position:fixed;top:0;left:0;right:0;bottom:0;background:rgba(15,23,42,0.3);backdrop-filter:blur(3px);display:flex;align-items:center;justify-content:center;z-index:10000;}
 .ms-modal{background:#fff;border-radius:14px;box-shadow:0 8px 40px rgba(0,0,0,0.12);min-width:280px;max-width:500px;width:95%;max-height:80vh;overflow:hidden;}

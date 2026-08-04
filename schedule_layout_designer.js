@@ -528,11 +528,8 @@
     var saved = M.save(draft);
     if (makeActive) M.setActive(saved.id);
     close();
-    // Repaint whatever grid is on screen with the new shape.
-    if (typeof window.refreshSkeletonConflicts === 'function') window.refreshSkeletonConflicts();
-    if (window.MasterScheduleBuilder && typeof window.MasterScheduleBuilder.renderGrid === 'function') {
-      try { window.MasterScheduleBuilder.renderGrid(); } catch (e) {}
-    }
+    // Saving already fired campistry:layout-changed; each surface repaints
+    // itself from that. Nothing to reach into from here.
   }
 
   function open() {

@@ -277,9 +277,16 @@
     if (!(endMin > startMin)) endMin = startMin + 60;
 
     var horizontal = L.orientation === 'horizontal';
-    var ppm = L.pxPerMinute;
+    // The built-in layout carries no user-chosen density, and the two builders
+    // have always drawn at slightly different scales (2.5 px/min in Daily
+    // Adjustments, 2 in the Master Schedule Builder). Let each caller keep its
+    // own classic scale so adopting this module changes neither of them; a
+    // custom layout uses the density the camp actually picked, everywhere.
+    var ppm = (L.builtIn && opts.classicPxPerMinute > 0) ? opts.classicPxPerMinute : L.pxPerMinute;
     var laneGap = opts.laneGap != null ? opts.laneGap : 4;
     var laneCount = opts.laneCount || 1;
+    // Horizontal inset of a tile inside its lane, as a percentage of lane width.
+    var inset = opts.laneInsetPct != null ? opts.laneInsetPct : 3;
 
     var timeSpanPx = (endMin - startMin) * ppm;
 
@@ -303,17 +310,20 @@
       var lanes = cfg.lanes || 1;
       var laneOffset = cfg.laneOffset || 0;
       var minSizePx = cfg.minSizePx != null ? cfg.minSizePx : 0;
+      // Breathing room so consecutive tiles don't visually merge. The two
+      // builders have always used slightly different gaps; each keeps its own.
+      var gapPx = cfg.gapPx != null ? cfg.gapPx : 2;
 
       var pos = timePx(a);
-      var size = Math.max(durPx(b - a) - 2, minSizePx);
+      var size = Math.max(durPx(b - a) - gapPx, minSizePx);
 
       if (!horizontal) {
         var css = 'top:' + pos + 'px;height:' + size + 'px;';
         if (lanes > 1) {
-          css += 'width:calc(' + (lanes * 100) + '% + ' + ((lanes - 1) * laneGap) + 'px - 6%);';
+          css += 'width:calc(' + (lanes * 100) + '% + ' + ((lanes - 1) * laneGap) + 'px - ' + (inset * 2) + '%);';
         }
         if (laneOffset) {
-          css += 'left:calc(' + (laneOffset * 100) + '% + ' + (laneOffset * laneGap) + 'px + 3%);';
+          css += 'left:calc(' + (laneOffset * 100) + '% + ' + (laneOffset * laneGap) + 'px + ' + inset + '%);';
         }
         return css;
       }
@@ -462,6 +472,7 @@
       laneSize: L.laneSize,
       laneGap: laneGap,
       laneCount: laneCount,
+      laneInsetPct: inset,
       timeSpanPx: timeSpanPx,
       timeHeaderPx: horizontal ? DEFAULT_LANE_HEADER : DEFAULT_TIME_HEADER,
 

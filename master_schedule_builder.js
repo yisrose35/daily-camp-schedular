@@ -4323,6 +4323,65 @@ function msbCleanupOrphanChangeTiles() {
   }
 }
 
+// =================================================================
+// ★ LAYOUT GEOMETRY (see schedule_layout_model.js)
+// The skeleton grid draws in whatever shape the camp configured — time down
+// the side or across the top, grade lanes or bunk lanes, any time ruler.
+// These mirror the Daily Adjustments helpers so both builders share one
+// geometry contract and one saved layout.
+// =================================================================
+const MS_LANE_GAP = 0;          // the .grid-cell columns sit flush, unlike DA's
+const MS_TIME_TIER_PX = 50;     // width of one ruler tier in the vertical gutter
+const MS_LANE_HEADER_PX = 132;  // width of the lane-name gutter when time runs across
+const MS_LANE_INSET_PCT = 2;    // .grid-event has always been inset left:2%
+
+let _msGridGeo = null;
+let _msGridLanes = [];
+
+function _msBuildGeometry(earliestMin, latestMin, availableDivisions, divisions) {
+  const SL = window.ScheduleLayout;
+  if (!SL) { console.error('[MSB] schedule_layout_model.js is not loaded — cannot render the grid.'); return null; }
+  const layout = SL.active();
+  const lanes = SL.lanesFor(layout, divisions, availableDivisions);
+  const geo = SL.geometry(layout, { startMin: earliestMin, endMin: latestMin }, {
+    laneCount: lanes.length,
+    laneGap: MS_LANE_GAP,
+    laneInsetPct: MS_LANE_INSET_PCT,
+    classicPxPerMinute: PIXELS_PER_MINUTE
+  });
+  geo.lanes = lanes;
+  return geo;
+}
+
+function _msLaneRange(divName) {
+  const SL = window.ScheduleLayout;
+  return (SL && SL.laneRangeForDivision(_msGridLanes || [], divName)) || { first: 0, last: 0, count: 1 };
+}
+
+function _msLaneSpan(ev, plan, availableDivisions) {
+  const covered = (plan && plan.cols > 1 && Array.isArray(plan.divs)) ? plan.divs : [ev.division];
+  const ranges = covered.map(_msLaneRange);
+  const first = Math.min(...ranges.map(r => r.first));
+  const last = Math.max(...ranges.map(r => r.last));
+  const anchor = _msLaneRange(ev.division).first;
+  return { lanes: (last - first + 1), laneOffset: first - anchor };
+}
+
+/** Lane-axis extent of each grade, measured from the DOM (see the DA twin). */
+function _msDivisionBounds(gridEl, columns) {
+  const geo = _msGridGeo;
+  if (!geo) return [];
+  return columns.map(divName => {
+    const cells = gridEl.querySelectorAll(`.grid-cell[data-div="${CSS.escape(divName)}"]`);
+    if (!cells.length) return null;
+    const a = cells[0].getBoundingClientRect();
+    const b = cells[cells.length - 1].getBoundingClientRect();
+    return geo.horizontal
+      ? { div: divName, mid: (a.top + b.bottom) / 2 }
+      : { div: divName, mid: (a.left + b.right) / 2 };
+  });
+}
+
 function renderGrid() {
   if (!grid) return;
 
@@ -4365,8 +4424,6 @@ function renderGrid() {
   if (latestPinned > -Infinity) latestMin = Math.max(latestMin, latestPinned);
   if (latestMin <= earliestMin) latestMin = earliestMin + 60;
 
-  const totalHeight = (latestMin - earliestMin) * PIXELS_PER_MINUTE;
-
   // ★ Multi-grade spans: render each span group as ONE merged tile when its
   //   grades sit in adjacent columns and share times; otherwise fall back to
   //   individual tiles with a link badge (e.g. after a column reorder).
@@ -4393,51 +4450,97 @@ function renderGrid() {
     });
   }
 
-  let html = `<div style="display:grid; grid-template-columns:50px repeat(${availableDivisions.length}, 1fr); position:relative; min-width:700px;">`;
-    
-  // Header
-  html += `<div style="grid-row:1; position:sticky; top:0; background:#f8fafc; z-index:10; border-bottom:1px solid #e2e8f0; padding:10px 6px; font-weight:600; font-size:11px; color:#64748b;">Time</div>`;
-  availableDivisions.forEach((divName, i) => {
-    const rawColor = divisions[divName]?.color || '#475569';
-    const color = softenColor(rawColor);
-    html += `<div data-col-header="${divName}" draggable="true" style="grid-row:1; grid-column:${i+2}; position:sticky; top:0; background:${color}; color:#1e293b; z-index:10; border-bottom:1px solid ${color}; padding:10px 6px; text-align:center; font-weight:600; font-size:12px; cursor:grab; user-select:none;">${divName}</div>`;
-  });
-
-  // Time Column
-  html += `<div style="grid-row:2; grid-column:1; height:${totalHeight}px; position:relative; background:#f8fafc; border-right:1px solid #e2e8f0;">`;
-  for (let m = earliestMin; m < latestMin; m += INCREMENT_MINS) {
-    const top = (m - earliestMin) * PIXELS_PER_MINUTE;
-    html += `<div style="position:absolute; top:${top}px; left:0; width:100%; border-top:1px dashed #e2e8f0; font-size:10px; padding:2px 4px; color:#64748b;">${minutesToTime(m)}</div>`;
+  // ★ Custom layouts: shape comes from the camp's active layout, and all
+  //   min↔px math goes through the geometry adapter — same contract as Daily
+  //   Adjustments, same saved layout, so both builders always agree.
+  const geo = _msBuildGeometry(earliestMin, latestMin, availableDivisions, divisions);
+  if (!geo) {
+    grid.innerHTML = `<div style="padding:40px;text-align:center;color:#b91c1c;font-size:13px;">Schedule layouts failed to load. Reload the page — if it persists, schedule_layout_model.js is missing.</div>`;
+    return;
   }
+  _msGridGeo = geo;
+  _msGridLanes = geo.lanes;
+  const lanes = geo.lanes;
+  const isH = geo.horizontal;
+  const tiers = geo.rulerTiers();
+  const gutterPx = isH ? MS_LANE_HEADER_PX : (MS_TIME_TIER_PX * Math.max(tiers.length, 1));
+
+  let html = `<div class="ms-skeleton-grid${isH ? ' ms-horizontal' : ''}" style="display:grid; `
+           + (isH ? `grid-template-columns:${gutterPx}px max-content;`
+                  : `grid-template-columns:${gutterPx}px repeat(${lanes.length}, 1fr); min-width:700px;`)
+           + ` position:relative;">`;
+
+  // Header / corner
+  html += `<div class="ms-corner" style="position:sticky; top:0; left:0; background:#f8fafc; z-index:${isH ? 12 : 10}; border-bottom:1px solid #e2e8f0; padding:10px 6px; font-weight:600; font-size:11px; color:#64748b;">Time</div>`;
+
+  const laneHeader = (lane) => {
+    const color = softenColor(lane.color || '#475569');
+    const sub = lane.bunk ? `<div style="font-size:9px;opacity:0.72;font-weight:500;">${lane.division}</div>` : '';
+    const common = `background:${color}; color:#1e293b; font-weight:600; font-size:12px; user-select:none;`;
+    return isH
+      ? `<div ${lane.groupStart ? `data-col-header="${lane.division}" draggable="true"` : ''} class="ms-lane-header" `
+        + `style="position:sticky; left:0; z-index:9; ${common} height:${geo.laneSize}px; display:flex; flex-direction:column; justify-content:center; `
+        + `padding:4px 10px; border-bottom:1px solid #e2e8f0; cursor:${lane.groupStart ? 'grab' : 'default'};">${lane.label}${sub}</div>`
+      : `<div ${lane.groupStart ? `data-col-header="${lane.division}" draggable="true"` : ''} `
+        + `style="position:sticky; top:0; z-index:10; ${common} border-bottom:1px solid ${color}; padding:10px 6px; `
+        + `text-align:center; cursor:${lane.groupStart ? 'grab' : 'default'};">${lane.label}${sub}</div>`;
+  };
+  if (!isH) lanes.forEach(lane => { html += laneHeader(lane); });
+
+  // Time ruler — one strip per tier
+  html += `<div class="ms-ruler${isH ? ' ms-ruler-h' : ''}" style="display:flex; position:relative; background:#f8fafc; `
+        + (isH ? `flex-direction:column; width:${geo.timeSpanPx}px; position:sticky; top:0; z-index:8; border-bottom:1px solid #e2e8f0;`
+               : `height:${geo.timeSpanPx}px; border-right:1px solid #e2e8f0;`) + `">`;
+  tiers.forEach(tier => {
+    html += `<div class="ms-ruler-tier" data-kind="${tier.kind}" style="position:relative; flex:${isH ? '0 0 auto' : '1 0 auto'};${isH ? (tier.kind === 'periods' ? 'height:30px;' : 'height:20px;') : ''}">`;
+    tier.ticks.forEach(tick => {
+      const base = tier.kind === 'periods'
+        ? `box-sizing:border-box;background:#eef2ff;border:1px solid #c7d2fe;border-radius:4px;color:#3730a3;font-weight:700;display:flex;flex-direction:column;align-items:center;justify-content:center;text-align:center;font-size:9px;overflow:hidden;`
+        : `box-sizing:border-box;font-size:10px;color:#64748b;overflow:hidden;white-space:nowrap;${isH ? 'border-left:1px dashed #e2e8f0;padding:3px 2px;text-align:center;font-size:8.5px;' : 'border-top:1px dashed #e2e8f0;padding:2px 4px;'}`;
+      const body = tier.kind === 'periods'
+        ? `<div>${tick.label}</div><div style="font-size:8px;font-weight:500;opacity:.75;">${tick.rangeLabel}</div>`
+        : geo.tickLabel(tick);
+      const inset = tier.kind === 'periods'
+        ? (isH ? 'left:auto;right:auto;top:2px;bottom:2px;height:auto;' : 'left:2px;right:2px;width:auto;')
+        : (isH ? 'top:0;height:100%;' : 'left:0;width:100%;');
+      html += `<div style="position:absolute;${inset}${base}${geo.tickStyle(tick)}">${body}</div>`;
+    });
+    html += `</div>`;
+  });
   html += `</div>`;
 
-  // Division Columns
-  availableDivisions.forEach((divName, i) => {
+  // Lane strips — one per grade, or per bunk when the layout says so. Tiles are
+  // drawn in a grade's FIRST lane and stretched across the rest of its block.
+  lanes.forEach((lane) => {
+    const divName = lane.division;
     const div = divisions[divName];
     const s = parseTimeToMinutes(div?.startTime);
     const e = parseTimeToMinutes(div?.endTime);
-      
-    html += `<div class="grid-cell" data-div="${divName}" data-start-min="${earliestMin}" style="grid-row:2; grid-column:${i+2}; height:${totalHeight}px;">`;
-      
+
+    if (isH) html += laneHeader(lane);
+
+    html += `<div class="grid-cell" data-div="${divName}"${lane.bunk ? ` data-bunk="${lane.bunk}"` : ''} `
+          + `data-start-min="${earliestMin}" style="${geo.laneExtentStyle()}">`;
+
     if (s !== null && s > earliestMin) {
-      html += `<div class="grid-disabled" style="top:0; height:${(s - earliestMin) * PIXELS_PER_MINUTE}px;"></div>`;
+      html += `<div class="grid-disabled" style="${geo.bandStyle(earliestMin, s)}"></div>`;
     }
     if (e !== null && e < latestMin) {
-      html += `<div class="grid-disabled" style="top:${(e - earliestMin) * PIXELS_PER_MINUTE}px; height:${(latestMin - e) * PIXELS_PER_MINUTE}px;"></div>`;
+      html += `<div class="grid-disabled" style="${geo.bandStyle(e, latestMin)}"></div>`;
     }
 
-    dailySkeleton.filter(ev => ev.division === divName).forEach(ev => {
-      const _plan = _spanPlan[ev.id];
-      if (_plan && _plan.skip) return; // drawn by its span anchor (leftmost member)
-      const start = parseTimeToMinutes(ev.startTime);
-      const end = parseTimeToMinutes(ev.endTime);
-      if (start != null && end != null && end > start) {
-        const top = (start - earliestMin) * PIXELS_PER_MINUTE;
-        const height = (end - start) * PIXELS_PER_MINUTE;
-        html += renderEventTile(ev, top, height, _plan);
-      }
-    });
-    
+    if (lane.groupStart) {
+      dailySkeleton.filter(ev => ev.division === divName).forEach(ev => {
+        const _plan = _spanPlan[ev.id];
+        if (_plan && _plan.skip) return; // drawn by its span anchor (leading member)
+        const start = parseTimeToMinutes(ev.startTime);
+        const end = parseTimeToMinutes(ev.endTime);
+        if (start != null && end != null && end > start) {
+          html += renderEventTile(ev, start, end, _plan, geo, _msLaneSpan(ev, _plan, availableDivisions));
+        }
+      });
+    }
+
     html += `<div class="drop-preview"></div>`;
     html += `</div>`;
   });
@@ -4579,7 +4682,12 @@ function addColumnReorderListeners(containerEl) {
 //   { linked, divs } → span members whose columns aren't adjacent right now
 //                      (e.g. after a column reorder); draw individually with
 //                      a link badge.
-function renderEventTile(ev, top, height, spanInfo) {
+/**
+ * @param {number} startMin/endMin  the tile's times, in minutes past midnight
+ * @param {object} geo              layout geometry (see schedule_layout_model.js)
+ * @param {object} laneSpan         {lanes, laneOffset} — how many lanes it covers
+ */
+function renderEventTile(ev, startMin, endMin, spanInfo, geo, laneSpan) {
   let tile = TILES.find(t => t.name === ev.event);
   if (!tile && ev.type) tile = TILES.find(t => t.type === ev.type);
   // ★ v2.5: Match DA's fallback logic for slot-type events that don't match by name/type
@@ -4608,14 +4716,24 @@ function renderEventTile(ev, top, height, spanInfo) {
     style += ';box-shadow:0 0 0 3px ' + _gc + ', 0 0 9px ' + _gc + ';';
   }
   
-  // Add 1px gap at bottom to prevent overlap with next tile
-  const adjustedHeight = Math.max(height - 1, 10);
+  // ★ The dimension that constrains how much text fits: the duration when time
+  //   runs down the side, but the lane thickness when it runs across the top,
+  //   where a long activity is wide and still only one lane thick.
+  const _laneCount = (laneSpan && laneSpan.lanes) || 1;
+  const _durPx = Math.max(geo.durPx(endMin - startMin) - 1, 10);   // 1px gap at the trailing edge
+  const _lanePx = Math.max(_laneCount * geo.laneSize + (_laneCount - 1) * geo.laneGap - 4, 14);
+  const adjustedHeight = geo.horizontal ? Math.min(_lanePx, _durPx) : _durPx;
 
-  // ★ Multi-grade span geometry: the anchor tile stretches across N adjacent
-  //   equal-width columns (columns are 1fr each, so 100% per column).
+  // ★ Multi-grade span geometry: the anchor tile stretches across every lane it
+  //   covers — grade columns or bunk rows, the adapter handles both.
   const _spanCols = (spanInfo && spanInfo.cols > 1) ? spanInfo.cols : 1;
-  const _spanWidthStyle = _spanCols > 1 ? `width:calc(${_spanCols * 100}% - 4%)` : 'width:96%';
-  const _spanClass = _spanCols > 1 ? ' span-multi' : '';
+  const _geoStyle = geo.tileStyle(startMin, endMin, {
+    lanes: _laneCount,
+    laneOffset: (laneSpan && laneSpan.laneOffset) || 0,
+    minSizePx: 10,
+    gapPx: 1
+  });
+  const _spanClass = (_spanCols > 1 || _laneCount > 1) ? ' span-multi' : '';
 
   let innerHtml = `
     <div class="tile-header">
@@ -4724,7 +4842,7 @@ function renderEventTile(ev, top, height, spanInfo) {
     `<div class="resize-handle-h resize-handle-h-left"></div><div class="resize-handle-h resize-handle-h-right"></div>`;
 
   return `<div class="grid-event${_spanClass}${selectedClass}" data-id="${ev.id}" draggable="true" title="Click to select, Delete key to remove"
-          style="${style}; position:absolute; top:${top}px; height:${adjustedHeight}px; ${_spanWidthStyle}; left:2%; padding:5px 7px; font-size:11px; overflow:hidden; border-radius:5px; cursor:pointer; display:flex; flex-direction:column; box-sizing:border-box;">
+          style="${style}; position:absolute; left:2%; width:96%; ${_geoStyle} padding:5px 7px; font-size:11px; overflow:hidden; border-radius:5px; cursor:pointer; display:flex; flex-direction:column; box-sizing:border-box;">
           <div class="resize-handle resize-handle-top"></div>
           ${innerHtml}
           ${_travelStrips}
@@ -4751,12 +4869,14 @@ function addDropListeners(selector) {
         const divName = cell.dataset.div;
         const cellStartMin = parseInt(cell.dataset.startMin, 10);
         const rect = cell.getBoundingClientRect();
-        const y = e.clientY - rect.top;
-        const snapMin = Math.round(y / PIXELS_PER_MINUTE / SNAP_MINS) * SNAP_MINS;
-        
+        const _g = _msGridGeo;
+
         const duration = parseTimeToMinutes(event.endTime) - parseTimeToMinutes(event.startTime);
-        const newStart = minutesToTime(cellStartMin + snapMin);
-        const newEnd = minutesToTime(cellStartMin + snapMin + duration);
+        const _newStartMin = _g
+          ? _g.snap(cellStartMin + _g.pointerMinuteOffset(e, rect))
+          : cellStartMin + Math.round((e.clientY - rect.top) / PIXELS_PER_MINUTE / SNAP_MINS) * SNAP_MINS;
+        const newStart = minutesToTime(_newStartMin);
+        const newEnd = minutesToTime(_newStartMin + duration);
 
         const _spanMembers = event.spanGroup ? _mbSpanMembers(event) : null;
         if (_spanMembers && _spanMembers.length > 1 && _spanMembers.some(m => m.division === divName)) {
@@ -4788,11 +4908,14 @@ function addDropListeners(selector) {
       const earliestMin = parseInt(cell.dataset.startMin);
       
       const rect = cell.getBoundingClientRect();
-      const offsetY = e.clientY - rect.top;
-      
-      let minOffset = Math.round(offsetY / PIXELS_PER_MINUTE / 15) * 15;
-      let startMin = earliestMin + minOffset;
-      let endMin = startMin + INCREMENT_MINS;
+      // ★ A new tile lands on the layout's own grid — on a bell boundary when
+      //   the camp runs a bell schedule — and takes the LENGTH of the period it
+      //   landed in, so dropping into "Period 3" fills Period 3 exactly.
+      const _dropGeo = _msGridGeo;
+      let startMin = _dropGeo
+        ? _dropGeo.snap(earliestMin + _dropGeo.pointerMinuteOffset(e, rect))
+        : earliestMin + Math.round((e.clientY - rect.top) / PIXELS_PER_MINUTE / 15) * 15;
+      let endMin = startMin + (_dropGeo ? _dropGeo.defaultDurationAt(startMin) : INCREMENT_MINS);
       
       const startStr = minutesToTime(startMin);
       const endStr = minutesToTime(endMin);
@@ -5453,69 +5576,79 @@ function addDropListeners(selector) {
 // =================================================================
 function addResizeListeners(gridEl) {
   const earliestMin = parseInt(gridEl.dataset.earliestMin, 10) || 540;
-  
+  const geo = _msGridGeo;
+  if (!geo) return;
+
+  // ★ Both grips resize along the TIME axis, whichever axis that is — the
+  //   tile's top/bottom edges when time runs down, its left/right edges when
+  //   it runs across. See the Daily Adjustments twin.
+  const EDGE = geo.startEdgeProp;   // 'top'  | 'left'
+  const SIZE = geo.sizeProp;        // 'height' | 'width'
+  const minSizePx = geo.durPx(geo.snapMins);
+
   let tooltip = document.getElementById('resize-tooltip');
   if (!tooltip) {
     tooltip = document.createElement('div');
     tooltip.id = 'resize-tooltip';
     document.body.appendChild(tooltip);
   }
-  
+
   gridEl.querySelectorAll('.grid-event').forEach(tile => {
     const topHandle = tile.querySelector('.resize-handle-top');
     const bottomHandle = tile.querySelector('.resize-handle-bottom');
-    
+
     [topHandle, bottomHandle].forEach(handle => {
       if (!handle) return;
-      const direction = handle.classList.contains('resize-handle-top') ? 'top' : 'bottom';
-      let isResizing = false, startY = 0, startTop = 0, startHeight = 0, eventId = null;
-      
+      const isLeading = handle.classList.contains('resize-handle-top');
+      let isResizing = false, origin = null, startPos = 0, startSize = 0, eventId = null;
+
       handle.addEventListener('mousedown', (e) => {
         e.preventDefault();
         e.stopPropagation();
         isResizing = true;
-        startY = e.clientY;
-        startTop = parseInt(tile.style.top, 10);
-        startHeight = tile.offsetHeight;
+        origin = { x: e.clientX, y: e.clientY };
+        startPos = parseFloat(tile.style[EDGE]) || 0;
+        startSize = geo.horizontal ? tile.offsetWidth : tile.offsetHeight;
         eventId = tile.dataset.id;
         tile.classList.add('resizing');
         document.addEventListener('mousemove', onMouseMove);
         document.addEventListener('mouseup', onMouseUp);
       });
-      
+
       function onMouseMove(e) {
         if (!isResizing) return;
         const event = dailySkeleton.find(ev => ev.id === eventId);
         if (!event) return;
-        
-        const deltaY = e.clientY - startY;
-        let newTop = startTop, newHeight = startHeight;
-        
-        if (direction === 'bottom') {
-          newHeight = Math.max(SNAP_MINS * PIXELS_PER_MINUTE, startHeight + deltaY);
-          newHeight = Math.round(newHeight / (SNAP_MINS * PIXELS_PER_MINUTE)) * (SNAP_MINS * PIXELS_PER_MINUTE);
+
+        const delta = geo.deltaTimePx(e, origin);
+        let newPos = startPos, newSize = startSize;
+
+        // Snap in MINUTES so a bell-schedule layout pulls the edge onto the
+        // next bell rather than onto a fixed 5-minute pixel grid.
+        if (!isLeading) {
+          const rawEnd = earliestMin + (startPos + Math.max(minSizePx, startSize + delta)) / geo.pxPerMinute;
+          newSize = Math.max(minSizePx, geo.timePx(geo.snap(rawEnd)) - startPos);
         } else {
-          const maxDelta = startHeight - (SNAP_MINS * PIXELS_PER_MINUTE);
-          const constrainedDelta = Math.min(deltaY, maxDelta);
-          const snappedDelta = Math.round(constrainedDelta / (SNAP_MINS * PIXELS_PER_MINUTE)) * (SNAP_MINS * PIXELS_PER_MINUTE);
-          newTop = startTop + snappedDelta;
-          newHeight = startHeight - snappedDelta;
+          const endPx = startPos + startSize;
+          const rawStart = earliestMin + Math.min(startPos + delta, endPx - minSizePx) / geo.pxPerMinute;
+          newPos = Math.min(geo.timePx(geo.snap(rawStart)), endPx - minSizePx);
+          newSize = endPx - newPos;
         }
-        
-        tile.style.top = newTop + 'px';
-        tile.style.height = newHeight + 'px';
-        
-        const newStartMin = earliestMin + (newTop / PIXELS_PER_MINUTE);
-        const newEndMin = newStartMin + (newHeight / PIXELS_PER_MINUTE);
-        const duration = newEndMin - newStartMin;
+
+        tile.style[EDGE] = newPos + 'px';
+        tile.style[SIZE] = newSize + 'px';
+
+        const newStartMin = earliestMin + (newPos / geo.pxPerMinute);
+        const newEndMin = newStartMin + (newSize / geo.pxPerMinute);
+        const duration = Math.round(newEndMin - newStartMin);
         const durationStr = duration < 60 ? `${duration}m` : `${Math.floor(duration/60)}h${duration%60 > 0 ? duration%60+'m' : ''}`;
-        
+
         tooltip.innerHTML = `${minutesToTime(newStartMin)} - ${minutesToTime(newEndMin)} (${durationStr})`;
         tooltip.style.display = 'block';
         tooltip.style.left = (e.clientX + 12) + 'px';
         tooltip.style.top = (e.clientY - 30) + 'px';
       }
-      
+
       function onMouseUp() {
         if (!isResizing) return;
         isResizing = false;
@@ -5523,22 +5656,22 @@ function addResizeListeners(gridEl) {
         document.removeEventListener('mouseup', onMouseUp);
         tile.classList.remove('resizing');
         tooltip.style.display = 'none';
-        
+
         const event = dailySkeleton.find(ev => ev.id === eventId);
         if (!event) return;
-        
+
         const divisions = window.divisions || {};
         const div = divisions[event.division] || {};
         const divStartMin = parseTimeToMinutes(div.startTime) || 540;
         const divEndMin = parseTimeToMinutes(div.endTime) || 960;
-        
-        const newTop = parseInt(tile.style.top, 10);
-        const newHeightPx = parseInt(tile.style.height, 10);
-        const newStartMin = earliestMin + (newTop / PIXELS_PER_MINUTE);
-        const newEndMin = newStartMin + (newHeightPx / PIXELS_PER_MINUTE);
-        
-        event.startTime = minutesToTime(Math.max(divStartMin, Math.round(newStartMin / SNAP_MINS) * SNAP_MINS));
-        event.endTime = minutesToTime(Math.min(divEndMin, Math.round(newEndMin / SNAP_MINS) * SNAP_MINS));
+
+        const newPos = parseFloat(tile.style[EDGE]) || 0;
+        const newSizePx = parseFloat(tile.style[SIZE]) || 0;
+        const newStartMin = earliestMin + (newPos / geo.pxPerMinute);
+        const newEndMin = newStartMin + (newSizePx / geo.pxPerMinute);
+
+        event.startTime = minutesToTime(Math.max(divStartMin, geo.snap(newStartMin)));
+        event.endTime = minutesToTime(Math.min(divEndMin, geo.snap(newEndMin)));
 
         // ★ Multi-grade span: every grade's copy keeps the same times.
         if (event.spanGroup) {
@@ -5590,12 +5723,25 @@ function addHorizontalResizeListeners(gridEl) {
 
         const ev = dailySkeleton.find(x => x.id === tile.dataset.id);
         if (!ev) return;
-        const cell = tile.closest('.grid-cell');
-        const colWidth = cell ? cell.offsetWidth : 0;
-        if (!colWidth) return;
+        const geo = _msGridGeo;
+        if (!geo) return;
+
+        // ★ Grade extents are measured from the DOM rather than assumed to be a
+        //   uniform stride — in bunk mode a grade is as wide as its bunk count,
+        //   so a single stride would drift with every grade crossed.
+        const bounds = _msDivisionBounds(gridEl, columns);
+        const nearestIdx = (coord) => {
+          let best = -1, bestD = Infinity;
+          bounds.forEach((b, i) => {
+            if (!b) return;
+            const d = Math.abs(b.mid - coord);
+            if (d < bestD) { bestD = d; best = i; }
+          });
+          return best;
+        };
 
         // Current span geometry. The rendered tile is the anchor — the span's
-        // leftmost member in display order (or a plain single-grade tile).
+        // leading member in display order (or a plain single-grade tile).
         const members = _mbSpanMembers(ev);
         const spanDivs = members.map(m => m.division)
           .sort((a, b) => columns.indexOf(a) - columns.indexOf(b));
@@ -5604,22 +5750,33 @@ function addHorizontalResizeListeners(gridEl) {
         const anchorIdx = columns.indexOf(ev.division);
         if (leftIdx === -1 || rightIdx === -1 || anchorIdx === -1) return;
 
-        const startX = e.clientX;
         let newLeftIdx = leftIdx, newRightIdx = rightIdx;
         tile.classList.add('resizing-h');
 
-        const onMove = (e2) => {
-          const deltaCols = Math.round((e2.clientX - startX) / colWidth);
-          if (isLeft) {
-            newLeftIdx = Math.min(Math.max(0, leftIdx + deltaCols), rightIdx);
-            newRightIdx = rightIdx;
+        const applyLanePreview = (fromIdx, toIdx) => {
+          const first = _msLaneRange(columns[fromIdx]).first;
+          const last = _msLaneRange(columns[toIdx]).last;
+          const anchor = _msLaneRange(ev.division).first;
+          const laneCount = Math.max(1, last - first + 1);
+          const off = first - anchor;
+          if (geo.horizontal) {
+            const extent = laneCount * geo.laneSize + (laneCount - 1) * geo.laneGap;
+            tile.style.top = (off * (geo.laneSize + geo.laneGap) + 2) + 'px';
+            tile.style.height = Math.max(extent - 4, 16) + 'px';
           } else {
-            newRightIdx = Math.max(Math.min(columns.length - 1, rightIdx + deltaCols), leftIdx);
-            newLeftIdx = leftIdx;
+            tile.style.left = `calc(${off * 100}% + ${off * geo.laneGap}px + 2%)`;
+            tile.style.width = `calc(${laneCount * 100}% + ${(laneCount - 1) * geo.laneGap}px - 4%)`;
           }
-          const cols = newRightIdx - newLeftIdx + 1;
-          tile.style.left = `calc(${(newLeftIdx - anchorIdx) * 100}% + 2%)`;
-          tile.style.width = `calc(${cols * 100}% - 4%)`;
+        };
+
+        const onMove = (e2) => {
+          const coord = geo.horizontal ? e2.clientY : e2.clientX;
+          const hit = nearestIdx(coord);
+          if (hit !== -1) {
+            if (isLeft) { newLeftIdx = Math.min(hit, rightIdx); newRightIdx = rightIdx; }
+            else { newRightIdx = Math.max(hit, leftIdx); newLeftIdx = leftIdx; }
+          }
+          applyLanePreview(newLeftIdx, newRightIdx);
 
           const covered = columns.slice(newLeftIdx, newRightIdx + 1);
           tooltip.innerHTML = covered.length > 1
@@ -5755,18 +5912,21 @@ function addDragToRepositionListeners(gridEl) {
       e.dataTransfer.dropEffect = isEventMove ? 'move' : 'copy';
       cell.style.background = '#ecfdf5';
       
-      if (isEventMove && dragData && preview) {
+      if (isEventMove && dragData && preview && _msGridGeo) {
+        const geo = _msGridGeo;
         const rect = cell.getBoundingClientRect();
-        const y = e.clientY - rect.top;
-        const snapMin = Math.round(y / PIXELS_PER_MINUTE / SNAP_MINS) * SNAP_MINS;
         const cellStartMin = parseInt(cell.dataset.startMin, 10);
-        const previewStartTime = minutesToTime(cellStartMin + snapMin);
-        const previewEndTime = minutesToTime(cellStartMin + snapMin + dragData.duration);
-        
+        const startMin = geo.snap(cellStartMin + geo.pointerMinuteOffset(e, rect));
+
         preview.style.display = 'block';
-        preview.style.top = (snapMin * PIXELS_PER_MINUTE) + 'px';
-        preview.style.height = (dragData.duration * PIXELS_PER_MINUTE) + 'px';
-        preview.innerHTML = `<div class="preview-time-label">${previewStartTime} - ${previewEndTime}</div>`;
+        if (geo.horizontal) {
+          preview.style.left = geo.timePx(startMin) + 'px';
+          preview.style.width = geo.durPx(dragData.duration) + 'px';
+        } else {
+          preview.style.top = geo.timePx(startMin) + 'px';
+          preview.style.height = geo.durPx(dragData.duration) + 'px';
+        }
+        preview.innerHTML = `<div class="preview-time-label">${minutesToTime(startMin)} - ${minutesToTime(startMin + dragData.duration)}</div>`;
       }
     });
     
@@ -5828,6 +5988,13 @@ function parseTimeToMinutes(str) {
 function minutesToTime(min) { return window.CampUtils.minutesToTime(min); }  // → campistry_utils.js (canonical; byte-identical)
 
 window.initMasterScheduler = init;
+
+// ★ A layout change reshapes this grid too — the designer saves without
+//   knowing who is listening, so each surface repaints itself.
+window.addEventListener('campistry:layout-changed', function () {
+  if (!grid) return;
+  try { renderGrid(); } catch (e) {}
+});
 
 // Expose internals for mobile touch support + auto build integration
 window.MasterSchedulerInternal = {

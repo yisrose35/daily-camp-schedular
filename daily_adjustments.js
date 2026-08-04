@@ -3087,7 +3087,8 @@ function _daBuildGeometry(earliestMin, latestMin, availableDivisions, divisions)
   const layout = SL.active();
   const lanes = SL.lanesFor(layout, divisions, availableDivisions);
   const geo = SL.geometry(layout, { startMin: earliestMin, endMin: latestMin },
-                          { laneCount: lanes.length, laneGap: DA_LANE_GAP });
+                          { laneCount: lanes.length, laneGap: DA_LANE_GAP,
+                            classicPxPerMinute: PIXELS_PER_MINUTE, laneInsetPct: 3 });
   geo.lanes = lanes;
   return geo;
 }
