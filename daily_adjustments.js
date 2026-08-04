@@ -6166,6 +6166,11 @@ function renderToolbar() {
         return '<button id="da-bunk-view-btn" class="da-btn da-btn-ghost' + (_boBunkViewActive ? ' active' : '') + '" style="' + (_boBunkViewActive ? 'background:#f59e0b;color:#fff;border-color:#f59e0b;' : '') + '">Bunk Overrides' + badge + '</button>';
       })()}
       <button id="da-trips-btn" class="da-btn da-btn-ghost">Trips${(() => { const dateKey = window.currentScheduleDate || new Date().toISOString().split('T')[0]; const tc = loadDailyTrips(dateKey).length; return tc > 0 ? ' <span style="background:#ef4444;color:#fff;border-radius:99px;padding:1px 6px;font-size:10px;font-weight:700;margin-left:4px;">' + tc + '</span>' : ''; })()}</button>
+      <button id="da-layout-btn" class="da-btn da-btn-ghost" title="Set up the grid the way your camp reads its day">${(() => {
+        const active = window.ScheduleLayout?.active?.();
+        const custom = active && active.id !== 'builtin_classic';
+        return 'Layout' + (custom ? ' <span style="background:#3b82f6;color:#fff;border-radius:99px;padding:1px 6px;font-size:10px;font-weight:700;margin-left:4px;">' + _escHtml(active.name) + '</span>' : '');
+      })()}</button>
       <button id="da-gen-scope-btn" class="da-btn da-btn-ghost" title="Choose which divisions to generate">${_getGenScopeBtnLabel()}</button>
       <button id="da-generate-btn" class="da-btn da-btn-success">▶ Generate Schedule</button>
     </div>
@@ -6287,6 +6292,15 @@ function renderToolbar() {
         bunkViewBtn.classList.remove('active');
         bunkViewBtn.style.cssText = '';
       }
+    };
+  }
+
+  // Schedule layout designer
+  const layoutBtn = document.getElementById('da-layout-btn');
+  if (layoutBtn) {
+    layoutBtn.onclick = () => {
+      if (window.ScheduleLayoutDesigner?.open) window.ScheduleLayoutDesigner.open();
+      else daShowAlert('The layout designer failed to load. Reload the page and try again.');
     };
   }
 
@@ -11080,6 +11094,14 @@ window.addEventListener('campistry-periods-changed', function() {
     if (panel.contains(document.activeElement)) return;
     window.PeriodEditor.renderEditor(panel);
   }
+});
+
+// ★ A layout change reshapes the grid AND the toolbar's layout badge, so both
+//   get repainted — the designer saves without knowing who is listening.
+window.addEventListener('campistry:layout-changed', function () {
+  if (!document.getElementById('da-skeleton-grid')) return;
+  try { renderToolbar(); } catch (e) {}
+  try { renderGrid(); } catch (e) {}
 });
 
 window.initDailyAdjustments = init;
