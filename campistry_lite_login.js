@@ -15,12 +15,11 @@
     const $ = id => document.getElementById(id);
     const Bio = window.CampistryLiteBio;
 
-    // Apple calls it Face ID / Touch ID; everyone else says fingerprint. Naming
-    // the wrong one makes the button feel like it belongs to a different phone.
-    const isApple = /iPad|iPhone|iPod|Macintosh/.test(navigator.platform || '') ||
-                    (/Mac/.test(navigator.platform || '') && navigator.maxTouchPoints > 1);
-    const BIO_NAME = isApple ? 'Face ID' : 'your fingerprint';
-    const BIO_SHORT = isApple ? 'Face ID' : 'Fingerprint';
+    // "Biometrics" rather than naming a sensor: the same phone may use a face,
+    // a fingerprint or an iris, and WebAuthn never tells us which the platform
+    // authenticator will actually ask for. Promising the wrong one is worse
+    // than saying nothing.
+    const BIO_NAME = 'biometrics';
 
     let bioAvailable = false;
     let signedInUserId = null;   // who we just signed in, to bind an enrolment to
@@ -84,7 +83,7 @@
             return;
         }
         bioAvailable = Bio ? await Bio.available() : false;
-        $('liteBioLabel').textContent = 'Sign in with ' + BIO_NAME;
+        $('liteBioLabel').textContent = 'Sign in using biometrics';
         $('liteBioKind').textContent = BIO_NAME;
 
         let session = null;
@@ -119,7 +118,7 @@
 
         localStorage.removeItem('campistry_auth_user_id');
         // No live session, but an enrolled device with tokens kept for exactly
-        // this case: signed out, and wanting back in with a fingerprint rather
+        // this case: signed out, and wanting back in with biometrics rather
         // than a password. Show the same biometric screen and restore on pass.
         if (Bio && Bio.isEnabled() && Bio.storedSession()) {
             showPane('bio');
@@ -254,7 +253,7 @@
                     : 'Could not set up ' + BIO_NAME + (e ? ' (' + e.split(':')[0] + ')' : '') + '.');
                 return;
             }
-            // Capture the session so the fingerprint has something to restore.
+            // Capture the session so biometrics has something to restore.
             try {
                 const sb = client();
                 Bio.saveSession((await sb.auth.getSession())?.data?.session);

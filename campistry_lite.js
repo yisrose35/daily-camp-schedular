@@ -1354,7 +1354,6 @@
         const bioWhy = Bio ? await Bio.why() : 'Biometric module failed to load';
         const bioAvail = !bioWhy;
         const bioOn = !!(Bio && Bio.isEnabledFor(userId));
-        const bioName = /iPad|iPhone|iPod|Macintosh/.test(navigator.platform || '') ? 'Face ID' : 'Fingerprint';
         const roleLabel = cap(role || 'viewer');
         const camp = campDisplayName ? esc(campDisplayName) : '';
 
@@ -1378,7 +1377,7 @@
             <div class="lite-set-section-label">Security</div>
             <div class="lite-card lite-set-row" id="liteBioRow">
                 <div class="lite-set-row-main">
-                    <div class="lite-set-row-title">${bioName} sign-in</div>
+                    <div class="lite-set-row-title">Biometric sign-in</div>
                     <div class="lite-set-row-sub" id="liteBioSub">${bioAvail
                         ? (bioOn ? 'On — asked each time you open Campistry Lite'
                                  : 'Unlock Campistry Lite without typing your password')
@@ -1412,17 +1411,26 @@
         const bioToggle = v.querySelector('#liteBioToggle');
         if (bioAvail && bioToggle) bioToggle.addEventListener('click', async () => {
             haptic();
-            if (bioOn) { Bio.disable(); toast(bioName + ' sign-in off'); }
-            else {
+            if (bioOn) {
+                // The "forget this device" action: drops the kept token too, so
+                // the phone no longer holds a way back in.
+                Bio.disable();
+                toast('Biometric sign-in off');
+            } else {
                 const ok = await Bio.enroll(userEmail, userName, userId);
-                if (ok) toast(bioName + ' sign-in on');
-                else {
+                if (ok) {
+                    // Capture the session now. Without it, biometrics has
+                    // nothing to restore after a sign-out and the button on the
+                    // sign-in screen would be dead.
+                    try { Bio.saveSession((await window.supabase.auth.getSession())?.data?.session); } catch (_) {}
+                    toast('Biometric sign-in on');
+                } else {
                     // Say what actually went wrong. "Could not set up" told the
                     // user nothing and told us nothing either.
                     const e = Bio.lastError() || '';
                     toast(/NotAllowed/.test(e) ? 'Cancelled — nothing changed'
                         : e ? 'Could not set up: ' + e.split(':')[0]
-                        : 'Could not set up ' + bioName);
+                        : 'Could not set up biometric sign-in');
                 }
             }
             renderSettings();
@@ -1442,59 +1450,6 @@
         document.addEventListener('click', () => { menu.style.display = 'none'; });
         menu.addEventListener('click', (e) => e.stopPropagation());
 
-        // Biometrics, straight in the account menu. It only appears when the
-        // device can actually do it, so it never advertises something that
-        // would then fail.
-        const bioItem = document.getElementById('liteMenuBio');
-        const lockItem = document.getElementById('liteMenuLock');
-        const Bio = window.CampistryLiteBio;
-        const bioName = /iPad|iPhone|iPod|Macintosh/.test(navigator.platform || '') ? 'Face ID' : 'fingerprint';
-        async function paintBioMenu() {
-            if (!bioItem || !Bio) return;
-            const canDo = await Bio.available();
-            const on = Bio.isEnabledFor(userId);
-            bioItem.style.display = canDo ? '' : 'none';
-            document.getElementById('liteMenuBioLabel').textContent =
-                on ? `Turn off ${bioName} unlock` : `Turn on ${bioName} unlock`;
-            // "Lock now" is the whole point of having it on: hand straight back
-            // to the sign-in screen without signing out.
-            lockItem.style.display = (canDo && on) ? '' : 'none';
-        }
-        paintBioMenu();
-
-        if (bioItem) bioItem.addEventListener('click', async (e) => {
-            e.stopPropagation();
-            document.getElementById('liteMenu').style.display = 'none';
-            if (!Bio) return;
-            if (Bio.isEnabledFor(userId)) {
-                // This is the "forget this device" action: it drops the kept
-                // token, so the phone no longer holds a way back in.
-                Bio.disable();
-                toast(cap(bioName) + ' unlock off');
-            } else {
-                const ok = await Bio.enroll(userEmail, userName, userId);
-                if (ok) {
-                    // Capture the session now; without it the fingerprint has
-                    // nothing to restore after a sign-out.
-                    try { Bio.saveSession((await window.supabase.auth.getSession())?.data?.session); } catch (_) {}
-                    toast(cap(bioName) + ' unlock on');
-                } else {
-                    const err = Bio.lastError() || '';
-                    toast(/NotAllowed/.test(err) ? 'Cancelled — nothing changed'
-                        : err ? 'Could not set up: ' + err.split(':')[0]
-                        : 'Could not set up ' + bioName);
-                }
-            }
-            paintBioMenu();
-        });
-
-        if (lockItem) lockItem.addEventListener('click', (e) => {
-            e.stopPropagation();
-            document.getElementById('liteMenu').style.display = 'none';
-            try { Bio?.clearPass(); } catch (_) {}
-            window.location.replace(LOGIN_PAGE);
-        });
-
         // Settings screen entry point.
         const settingsBtn = document.getElementById('liteMenuSettings');
         if (settingsBtn) settingsBtn.addEventListener('click', (e) => {
@@ -1505,8 +1460,8 @@
 
         document.getElementById('liteSignOut').addEventListener('click', async () => {
             // With biometrics on, sign out LOCALLY so the kept refresh token
-            // stays valid and a fingerprint can get you back in — otherwise
-            // "sign in with your fingerprint" is a button that can never work.
+            // stays valid and biometrics can get you back in — otherwise
+            // "sign in using biometrics" is a button that can never work.
             // Turning biometrics off is the full revoke; see the note in
             // campistry_lite_biometric.js.
             const bioOn = !!window.CampistryLiteBio?.isEnabled();

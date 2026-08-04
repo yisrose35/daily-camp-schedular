@@ -8,7 +8,7 @@
 
    How it hangs together:
 
-     • Enrolment registers a platform authenticator (Face ID / fingerprint) via
+     • Enrolment registers a platform authenticator (face, fingerprint, …) via
        WebAuthn and stores the credential id, plus the id of the user it was
        enrolled for. No secret of ours is kept — the private key lives in the
        device's secure hardware.
@@ -31,9 +31,9 @@
    from opening Campistry, which is the threat counselors actually have.
 
    The sign-out trade-off, stated plainly: while biometrics is on, signing out
-   is LOCAL — the refresh token is kept on this device so a fingerprint can get
+   is LOCAL — the refresh token is kept on this device so biometrics can get
    you back in, instead of forcing the password every time. That is how banking
-   apps behave, and it is the only way "sign in with your fingerprint" can mean
+   apps behave, and it is the only way "sign in using biometrics" can mean
    anything on the sign-in screen. It does mean a signed-out phone still holds a
    usable token until biometrics is turned off, which revokes the session for
    real and wipes it. Turning it off is therefore the "forget this device"
@@ -69,8 +69,8 @@
         return a;
     }
 
-    // Platform authenticator only — a roaming USB key is not what "Face ID"
-    // means to a counselor, and WebAuthn needs a secure context regardless.
+    // Platform authenticator only — a roaming USB key is not what "unlock with
+    // biometrics" means to a counselor, and WebAuthn needs a secure context anyway.
     // Returns the REASON when unavailable: "it doesn't work" with no cause is
     // impossible to act on, for the user or for us.
     function why() {
@@ -106,7 +106,7 @@
     }
 
     // Tokens kept ONLY while biometrics is on, so signing out can still leave a
-    // fingerprint route back in — which is what "sign in with your fingerprint"
+    // biometric route back in — which is what "sign in using biometrics"
     // means to anyone who has used a banking app. Turning biometrics off wipes
     // them again. See the header note on what this does and does not protect.
     function saveSession(session) {
