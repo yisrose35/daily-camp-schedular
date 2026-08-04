@@ -2376,7 +2376,25 @@ function _renderBunkStaffModalBody(bunkName){
                 +'</div>';
         }).join('')
         :'<p style="font-size:.8rem;color:var(--s400);margin:0 0 4px">No staff assigned yet.</p>';
+    // Anyone already hired can be dropped in without retyping — hiring has
+    // their email, and that is the field that must not be mistyped.
+    var hired=hiredStaff().filter(function(a){
+        return bunksForStaffEmail(a.email).indexOf(bunkName)<0;
+    });
+    var hiredPick=hired.length
+        ?'<div style="margin-top:14px;padding-top:12px;border-top:1px solid var(--s100)">'
+          +'<label class="fl" style="display:block;margin-bottom:4px">Add someone you\'ve hired</label>'
+          +'<select class="fs" id="bsHired" onchange="CampistryMe.fillBunkStaffFromHired(this.value)">'
+          +'<option value="">— Pick from hired staff —</option>'
+          +hired.map(function(a){
+              return '<option value="'+esc(a.id)+'">'+esc(a.name||'Unnamed')
+                  +((a.positions&&a.positions[0])?' · '+esc(a.positions[0]):'')
+                  +(a.email?'':' (no email)')+'</option>';
+          }).join('')
+          +'</select></div>'
+        :'';
     var body=listHtml
+        +hiredPick
         +'<div id="bsForm" style="margin-top:14px;padding-top:12px;border-top:1px solid var(--s100)">'
         +'<input type="hidden" id="bsIdx" value="-1">'
         +'<div style="display:flex;gap:8px;margin-bottom:8px">'
@@ -2491,6 +2509,76 @@ function findStaffByEmail(email){
     var k=String(email||'').trim().toLowerCase();
     if(!k)return null;
     return getAllStaff().filter(function(s){return s.email===k})[0]||null;
+}
+// ── Staffing → bunk directory bridge ──────────────────────────────────
+// Hiring already collected the name, email and phone. Retyping them to put
+// someone on a bunk is both a waste and a chance to mistype the email, which
+// is the join key to their login — get that wrong and they can't sign in to
+// Lite and never receive a notification.
+function hiredStaff(){
+    return Object.keys(staffApplications||{})
+        .map(function(id){ return Object.assign({id:id},staffApplications[id]||{}); })
+        .filter(function(a){ return a.status==='hired'; })
+        .sort(function(a,b){ return String(a.name||'').localeCompare(String(b.name||'')); });
+}
+function allBunkNames(){
+    var out=[];
+    Object.keys(structure||{}).forEach(function(parent){
+        var grades=(structure[parent]||{}).grades||{};
+        Object.keys(grades).forEach(function(g){ out=out.concat(grades[g].bunks||[]); });
+    });
+    return out.filter(function(b,i,a){ return b&&a.indexOf(b)===i; });
+}
+// Which bunks this person is already on — so hiring can show it, and so we
+// never add the same person to the same bunk twice.
+function bunksForStaffEmail(email){
+    var k=String(email||'').trim().toLowerCase();
+    if(!k)return [];
+    return Object.keys(bunkStaff||{}).filter(function(b){
+        return (bunkStaff[b]||[]).some(function(s){ return staffKey(s)===k; });
+    });
+}
+function assignHiredToBunk(appId,bunkName){
+    var a=staffApplications[appId];
+    if(!a||!bunkName)return;
+    var email=String(a.email||'').trim().toLowerCase();
+    if(!bunkStaff[bunkName])bunkStaff[bunkName]=[];
+    if(email&&bunkStaff[bunkName].some(function(s){return staffKey(s)===email})){
+        toast(a.name+' is already on '+bunkName,'error');
+        return;
+    }
+    bunkStaff[bunkName].push({
+        name:a.name||[a.first,a.last].filter(Boolean).join(' '),
+        role:(a.positions&&a.positions[0])||'Counselor',
+        email:email, phone:a.phone||'', smsOptIn:false
+    });
+    save();
+    _syncInvitesForBunk(bunkName);
+    renderBB();
+    viewStaffApp(appId);
+    toast('Added to '+bunkName);
+}
+function unassignHiredFromBunk(appId,bunkName){
+    var a=staffApplications[appId]; if(!a)return;
+    var k=String(a.email||'').trim().toLowerCase(); if(!k)return;
+    bunkStaff[bunkName]=(bunkStaff[bunkName]||[]).filter(function(s){return staffKey(s)!==k});
+    if(!bunkStaff[bunkName].length)delete bunkStaff[bunkName];
+    save();
+    _syncInvitesForBunk(bunkName);
+    renderBB();
+    viewStaffApp(appId);
+    toast('Removed from '+bunkName);
+}
+// Prefill the bunk-staff form from a hired applicant rather than making the
+// user retype what hiring already knows.
+function fillBunkStaffFromHired(appId){
+    var a=staffApplications[appId]; if(!a)return;
+    var g=function(id){return document.getElementById(id)};
+    if(g('bsName'))g('bsName').value=a.name||[a.first,a.last].filter(Boolean).join(' ');
+    if(g('bsRole'))g('bsRole').value=(a.positions&&a.positions[0])||'Counselor';
+    if(g('bsEmail'))g('bsEmail').value=a.email||'';
+    if(g('bsPhone'))g('bsPhone').value=a.phone||'';
+    if(g('bsName'))g('bsName').focus();
 }
 function removeBunkStaff(bunkName,idx){
     if(!bunkStaff[bunkName]||!bunkStaff[bunkName][idx])return;
@@ -2621,9 +2709,23 @@ function renderStaffing(){
     var by={}; STAFF_STAGES.forEach(function(g){if(g.key!=='all')by[g.key]=0;});
     arr.forEach(function([,a]){var st=a.status||'applied'; by[st]=(by[st]||0)+1;});
     var hired=by.hired||0;
+    // Hiring isn't finished at "Hired" — someone with no bunk has no schedule
+    // in Lite and can't be reached by a pickup notification. Surface that here
+    // rather than making anyone open each applicant to discover it.
+    var unplaced=hiredStaff().filter(function(a){
+        return !String(a.email||'').trim()||!bunksForStaffEmail(a.email).length;
+    });
 
     var h='<div class="sec-hd"><div><h2 class="sec-title">Staffing &amp; Hiring</h2><p class="sec-desc">'+total+' applicant'+(total!==1?'s':'')+' · '+hired+' hired</p></div>';
     h+='<div class="sec-actions"><button class="me-btn me-btn--sec me-btn--sm" onclick="CampistryMe.exportStaffCSV()">↓ Export CSV</button><button class="me-btn me-btn--sec me-btn--sm" onclick="CampistryMe.copyStaffLink()">🔗 Copy Application Link</button><button class="me-btn me-btn--pri" onclick="CampistryMe.addStaffApp()">+ Add Applicant</button></div></div>';
+
+    if(unplaced.length){
+        h+='<div style="background:#FFF7ED;border:1px solid #FED7AA;border-radius:var(--r);padding:10px 14px;margin-bottom:14px;font-size:.83rem;color:#9A3412">'
+          +'<strong>'+unplaced.length+' hired '+(unplaced.length===1?'person is':'people are')+' not set up yet.</strong> '
+          +'Open them to add an email and put them on a bunk — until then they can\'t sign in to Campistry Lite or receive notifications.'
+          +'<div style="margin-top:4px;font-size:.78rem">'+unplaced.slice(0,6).map(function(a){return esc(a.name||'Unnamed')}).join(' · ')
+          +(unplaced.length>6?' · +'+(unplaced.length-6)+' more':'')+'</div></div>';
+    }
 
     // Application link banner
     h+='<div style="background:#fff;border:1px solid var(--s200);border-radius:var(--r);padding:12px 16px;margin-bottom:14px;display:flex;align-items:center;gap:12px;flex-wrap:wrap">';
@@ -2710,6 +2812,33 @@ function viewStaffApp(id){
         });
     } else h+='<div style="font-size:.8rem;color:var(--s400)">No references provided.</div>';
     h+='</div>';
+    // Bunk placement (once hired). Hiring someone isn't finished until they're
+    // on a bunk — that's what gives them a schedule in Lite and what makes
+    // pickup notifications reach them.
+    if(st==='hired'){
+        var mine=bunksForStaffEmail(a.email);
+        var free=allBunkNames().filter(function(b){return mine.indexOf(b)<0});
+        h+='<div style="margin-bottom:12px;background:var(--s50);border-radius:var(--r);padding:12px">';
+        h+='<div style="font-size:.7rem;font-weight:700;color:var(--s400);text-transform:uppercase;margin-bottom:6px">Bunk placement</div>';
+        if(!String(a.email||'').trim()){
+            h+='<div style="font-size:.8rem;color:var(--err)">No email on this application, so they can\'t sign in to Campistry Lite or be notified. Add one before placing them.</div>';
+        }else if(mine.length){
+            h+=mine.map(function(b){
+                return '<div style="display:flex;align-items:center;gap:8px;padding:4px 0;font-size:.83rem">'
+                    +'<span style="flex:1">'+esc(b)+'</span>'
+                    +'<button class="me-btn me-btn--ghost me-btn--sm" onclick="CampistryMe.unassignHiredFromBunk(\''+je(id)+'\',\''+je(b)+'\')">Remove</button></div>';
+            }).join('');
+        }else{
+            h+='<div style="font-size:.8rem;color:var(--s500);margin-bottom:6px">Not on a bunk yet — they won\'t see a schedule in Campistry Lite.</div>';
+        }
+        if(String(a.email||'').trim()&&free.length){
+            h+='<select class="fs" style="margin-top:6px" onchange="if(this.value)CampistryMe.assignHiredToBunk(\''+je(id)+'\',this.value)">'
+              +'<option value="">— Add to a bunk —</option>'
+              +free.map(function(b){return '<option value="'+esc(b)+'">'+esc(b)+'</option>'}).join('')
+              +'</select>';
+        }
+        h+='</div>';
+    }
     // Onboarding (once offered/hired)
     if(st==='offered'||st==='hired'){
         var ob=a.onboarding||{};
@@ -8200,6 +8329,11 @@ window.CampistryMe={
     // bunk. Flow (league captains), Lite (a counselor's own bunk) and the
     // office (pickup notifications) all resolve people through these, so the
     // answer can't drift between apps.
+    // Hiring → bunk placement, so a hired applicant becomes a reachable
+    // counselor without anyone retyping their email.
+    hiredStaff:hiredStaff,allBunkNames:allBunkNames,bunksForStaffEmail:bunksForStaffEmail,
+    assignHiredToBunk:assignHiredToBunk,unassignHiredFromBunk:unassignHiredFromBunk,
+    fillBunkStaffFromHired:fillBunkStaffFromHired,
     getStaffForBunk:getStaffForBunk,getStaffForBunks:getStaffForBunks,
     getStaffForDivision:getStaffForDivision,getBunksForDivision:getBunksForDivision,
     findStaffByEmail:findStaffByEmail,getAllStaff:getAllStaff,
