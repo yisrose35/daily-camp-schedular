@@ -3236,6 +3236,27 @@
         });
     }
 
+    // ★ WHEN today a team last played each sport. Higher = more recent; absent
+    // means not yet today. The repeat guard below only knew WHICH sports had
+    // been played, never WHEN, so once a repeat became unavoidable it was blind
+    // to whether the repeat was from this morning or from the period that just
+    // finished — and cheerfully handed out basketball, then basketball again.
+    // Ranked by the per-league game label so every matchup in a period shares a
+    // rank; the array index is the fallback for older records with no label.
+    function _lastSportRankToday(leagueName, team, history, dayId) {
+        const out = {};
+        if (!dayId) return out;
+        const todays = (history.gameLog && history.gameLog[leagueName] && history.gameLog[leagueName][dayId]) || [];
+        todays.forEach(function (e, i) {
+            if (!e || !e.sport) return;
+            if (e.t1 !== team && e.t2 !== team) return;
+            const m = String(e.g == null ? '' : e.g).match(/(\d+)/);
+            const rank = m ? parseInt(m[1], 10) : i;
+            if (out[e.sport] == null || rank > out[e.sport]) out[e.sport] = rank;
+        });
+        return out;
+    }
+
     function _applySameDayRepeatFilter(pool, t1, t2, leagueName, history, dayId, groupTeams) {
         if (window.__leagueSameDayRepeatGuard === false) return pool;
         if (!pool.length) return pool;
@@ -3250,14 +3271,67 @@
         // Lesser evil: the option that repeats for the FEWEST members.
         let fewest = Infinity;
         pool.forEach(function (o) { const n = repeats(o); if (n < fewest) fewest = n; });
+        // ★ A repeat is now unavoidable — but WHICH repeat still matters, and
+        // "fewest teams repeating" is the WRONG first question. It ranks a sport
+        // both teams played two periods ago BELOW one a single team played in
+        // the period that just finished, so it throws away the option that
+        // avoids a back-to-back entirely. Observed: a pair that had played all
+        // three sports got Newcomb→Newcomb because Basketball "repeated for
+        // both", even though both those basketball games were an hour earlier.
+        //
+        // Rank instead by what people actually notice, in order:
+        //   1. does this put a team on the same sport TWO PERIODS RUNNING
+        //   2. how many teams it repeats for at all
+        //   3. how long ago it was last played
+        // Killswitch: window.__leagueRepeatSpacing = false → old behaviour.
         const oneRepeat = pool.filter(function (o) { return repeats(o) === fewest; });
-        if (oneRepeat.length && oneRepeat.length < pool.length) {
-            console.log(`   ⚠️ ${t1} vs ${t2}: every open sport is a same-day repeat for a team — allowing the least-bad option`);
-            return oneRepeat;
+        if (window.__leagueRepeatSpacing === false) {
+            if (oneRepeat.length && oneRepeat.length < pool.length) {
+                console.log(`   ⚠️ ${t1} vs ${t2}: every open sport is a same-day repeat for a team — allowing the least-bad option`);
+                return oneRepeat;
+            }
+            console.log(`   ⚠️ ${t1} vs ${t2}: same-day sport repeat unavoidable (no alternative open) — allowing`);
+            return pool;
+        }
+
+        const ranks = members.map(function (t) { return _lastSportRankToday(leagueName, t, history, dayId); });
+        // The sport each member played in its OWN most recent period today.
+        const justPlayed = ranks.map(function (m) {
+            let top = -1, sp = null;
+            Object.keys(m).forEach(function (s) { if (m[s] > top) { top = m[s]; sp = s; } });
+            return sp;
+        });
+        const backToBack = function (o) {
+            return justPlayed.filter(function (s) { return s === o.sport; }).length;
+        };
+        const mostRecent = function (o) {
+            let r = -1;
+            ranks.forEach(function (m) { const v = m[o.sport]; if (v != null && v > r) r = v; });
+            return r;
+        };
+        const key = function (o) { return [backToBack(o), repeats(o), mostRecent(o)]; };
+        let bestKey = null;
+        pool.forEach(function (o) {
+            const k = key(o);
+            if (!bestKey || k[0] < bestKey[0]
+                || (k[0] === bestKey[0] && k[1] < bestKey[1])
+                || (k[0] === bestKey[0] && k[1] === bestKey[1] && k[2] < bestKey[2])) bestKey = k;
+        });
+        const picked = pool.filter(function (o) {
+            const k = key(o);
+            return k[0] === bestKey[0] && k[1] === bestKey[1] && k[2] === bestKey[2];
+        });
+        if (picked.length && picked.length < pool.length) {
+            const note = bestKey[0] === 0
+                ? `every open sport is a same-day repeat — taking one that is NOT back-to-back`
+                : `every open sport is a same-day repeat and back-to-back is unavoidable — taking the least-bad`;
+            console.log(`   ↔️ ${t1} vs ${t2}: ${note}`);
+            return picked;
         }
         console.log(`   ⚠️ ${t1} vs ${t2}: same-day sport repeat unavoidable (no alternative open) — allowing`);
         return pool;
     }
+    Leagues._testApplySameDayRepeatFilter = _applySameDayRepeatFilter;   // tests
 
     // ★ CYCLE RESCUE: a team stuck ≥2 plays behind on a sport (its count for
     // that sport trails its most-played available sport by ≥2) gets that
@@ -3280,7 +3354,7 @@
     // different opponent. Without this, a rescue could pin the pair's exact
     // prior sport AND flag it _rescued so the swap pass couldn't repair it
     // (observed live: a rematch replayed its previous sport).
-    function _applyCycleRescueFilter(pool, t1, t2, hist1, hist2, leagueName, history) {
+    function _applyCycleRescueFilter(pool, t1, t2, hist1, hist2, leagueName, history, dayId) {
         if (pool.length < 2) return { pool: pool, rescued: false };
         const poolSports = Array.from(new Set(pool.map(function (o) { return o.sport; })));
         if (poolSports.length < 2) return { pool: pool, rescued: false };
@@ -3312,6 +3386,26 @@
                     console.log(`   🆘 ${t1} vs ${t2}: cycle rescue for ${best} skipped — this pair already played it together (rescue defers to a later matchup)`);
                     return { pool: pool, rescued: false };
                 }
+            }
+        }
+        // ★ …and defer when it would put the sport BACK-TO-BACK. The rescue is a
+        // hard preference applied AFTER the same-day spacing filter, so it can
+        // undo it: a team one period removed from hockey gets handed hockey
+        // again because its partner is behind on it. Being behind on a sport is
+        // a season-long problem and waits a period happily; playing the same
+        // thing twice in a row is what people actually notice on the sheet.
+        // Only defers while some other sport is open, so nobody is starved —
+        // the rescue simply fires at the next matchup instead.
+        if (dayId && history && poolSports.length > 1 && window.__leagueRepeatSpacing !== false) {
+            const _r1 = _lastSportRankToday(leagueName, t1, history, dayId);
+            const _r2 = _lastSportRankToday(leagueName, t2, history, dayId);
+            let _last = -1;
+            [_r1, _r2].forEach(function (m) {
+                Object.keys(m).forEach(function (s) { if (m[s] > _last) _last = m[s]; });
+            });
+            if (_last >= 0 && (_r1[best] === _last || _r2[best] === _last)) {
+                console.log(`   🆘 ${t1} vs ${t2}: cycle rescue for ${best} deferred — a team played it in the period that just finished`);
+                return { pool: pool, rescued: false };
             }
         }
         const rescuedPool = pool.filter(function (o) { return o.sport === best; });
@@ -3692,7 +3786,7 @@
             // purely from what its members still need.
             const _rescue = group
                 ? { pool: _pool, rescued: false }
-                : _applyCycleRescueFilter(_pool, t1, t2, _teamHist(t1), _teamHist(t2), leagueName, history);
+                : _applyCycleRescueFilter(_pool, t1, t2, _teamHist(t1), _teamHist(t2), leagueName, history, dayId);
             _pool = _rescue.pool;
             if (!group) _pool = _filterPoolByPairSportCycle(_pool, leagueName, t1, t2, history);
 
@@ -3916,7 +4010,7 @@
             // purely from what its members still need.
             const _rescue = group
                 ? { pool: _pool, rescued: false }
-                : _applyCycleRescueFilter(_pool, t1, t2, _teamHist(t1), _teamHist(t2), leagueName, history);
+                : _applyCycleRescueFilter(_pool, t1, t2, _teamHist(t1), _teamHist(t2), leagueName, history, dayId);
             _pool = _rescue.pool;
             if (!group) _pool = _filterPoolByPairSportCycle(_pool, leagueName, t1, t2, history);
 
@@ -5549,7 +5643,34 @@
                         if (!_seen[p.sport].has(p.field)) { _seen[p.sport].add(p.field); _fieldsBySport[p.sport] = (_fieldsBySport[p.sport] || 0) + 1; }
                     });
                     const _games = {};
-                    _here.forEach(l => { _games[l.name] = Math.max(1, Math.floor((l.teams || []).length / 2)); });
+                    // ★ DEMAND IS THE ACTIVE ROSTER, NOT THE FULL ONE. Chinuch pulls
+                    // teams out of THIS period, so a 10-team league with 2 learning
+                    // wants 4 games, not 5. Counting the full roster overstates every
+                    // chinuch league's demand, and since the apportionment shares the
+                    // fields out in proportion to it, the seats land in the wrong
+                    // place — leagues get seats they cannot use while another comes up
+                    // short and takes a scarce field it was never allocated.
+                    //
+                    // Live 2026-08-04 @9:45, where it cost 3rd Grade its hockey game:
+                    // true demand was 2+1+2+4+2+1 = 12 against exactly 12 fields, a
+                    // perfect fit. The old count said 2+2+3+5+3+1 = 16, and handed
+                    // 6th Grade 3 seats for 2 games and 4th Grade 3 for 2, while 5th
+                    // Grade got 3 for 4 — so 5th broke its Hockey:0 cap on its last
+                    // matchup and took the rink 3rd Grade had been given.
+                    //
+                    // Same derivation as the per-period chinuch filter further down
+                    // (activeTeams), keyed off the same timeKey.
+                    _here.forEach(l => {
+                        let _active = (l.teams || []).length;
+                        try {
+                            if (l.chinuch && l.chinuch.enabled && window.chinuchSchedule && window.chinuchSchedule[l.name]) {
+                                const _out = Object.entries(window.chinuchSchedule[l.name])
+                                    .filter(function (e) { return Number(e[1]) === Number(timeKey); }).length;
+                                _active = Math.max(0, _active - _out);
+                            }
+                        } catch (_e) {}
+                        _games[l.name] = Math.max(1, Math.floor(_active / 2));
+                    });
                     // Date seed → rotates who wins a tie for the "extra" scarce field, so no
                     // league is permanently the one that loses out on an odd leftover field.
                     let _seed = 0; const _ds = String(dayId || '');
@@ -5628,7 +5749,7 @@
                         rows.forEach(r => { _caps[r.name][sport] = r.base; });
                     });
 
-                    // ★ FIRST-TIME SPORT RESERVATION — hold one field of a scarce
+                    // ★ SPORT-NEED RESERVATION — hold one field of a scarce
                     // sport for a league that has NEVER played it.
                     //
                     // The apportionment above weights a league by _sportNeed, which
@@ -5663,33 +5784,42 @@
                     // senior leagues off the scarce field rather than forcing anyone
                     // into a bye. One reservation per league per period.
                     // Killswitch: window.__leagueSportReservation = false.
+                    //
+                    // ★ league name → the sport reserved for it. The participation
+                    //   floor below MUST NOT hand this back out (see the note there).
+                    const _reserved = {};
                     if (window.__leagueSportReservation !== false) {
                         const _perTeamNeed = (l, sp) => _sportNeed(l, sp) / ((l.teams || []).length || 1);
-                        const _plays = (l, sp) => {
-                            _sportNeed(l, sp);                      // force the per-team counts to build
-                            const lc = _teamCounts[l.name] || {};
-                            let n = 0;
-                            (l.teams || []).forEach(t => { n += ((lc[t] || {})[sp] || 0); });
-                            return n;
-                        };
                         // Who is owed what: a sport that has a field, that this
-                        // league is allowed, holds no cap on, and has NEVER played.
+                        // league is allowed, holds no cap on, and whose teams are at
+                        // least a game behind on ON AVERAGE.
+                        //
+                        // ★ NOT "has never played it". That was the first cut and it
+                        //   is far too narrow to help anybody in a running season:
+                        //   one football game back in week one disqualifies football
+                        //   forever, however lopsided the league gets afterwards.
+                        //   Live 2026-08-04, 3rd Grade had played exactly one
+                        //   football game on 08-03 and basketball every other period
+                        //   of every other day — and got Football:0 Hockey:0
+                        //   Newcomb:0 in all six periods, with Hockey(Rink) sitting
+                        //   OPEN in front of it at 12:10. "Hasn't had it" means
+                        //   behind, not virgin.
                         const _owed = [];
                         _here.forEach(l => {
                             (l.sports || []).forEach(sp => {
                                 if ((_fieldsBySport[sp] || 0) <= 0) return;
                                 if ((_caps[l.name][sp] || 0) > 0) return;    // already seated on it
-                                if (_plays(l, sp) > 0) return;               // not a first-timer
-                                _owed.push({ l: l, sp: sp, need: _perTeamNeed(l, sp) });
+                                const need = _perTeamNeed(l, sp);
+                                if (need < 1) return;                        // less than a game behind per team
+                                _owed.push({ l: l, sp: sp, need: need });
                             });
                         });
                         // Most starved per team first. A league with no history at
-                        // all has need 0 everywhere and waits its turn — this is for
-                        // the league that plays plenty and is missing ONE sport.
+                        // all reads need 0 everywhere and waits its turn — this is
+                        // for the league that plays plenty and is missing a sport.
                         _owed.sort((a, b) => b.need - a.need);
-                        const _reserved = {};
                         _owed.forEach(({ l, sp, need }) => {
-                            if (need <= 0 || _reserved[l.name]) return;
+                            if (_reserved[l.name]) return;
                             if ((_caps[l.name][sp] || 0) > 0) return;        // an earlier pass seated it
                             let donor = null, donorNeed = Infinity;
                             _here.forEach(d => {
@@ -5700,15 +5830,22 @@
                                 // rescue it from a league that has surplus.
                                 const dTotal = (d.sports || []).reduce((s, x) => s + (_caps[d.name][x] || 0), 0);
                                 if (dTotal <= 1) return;
+                                // ★ Only take from a league that is CLEARLY less
+                                //   starved — a full game per team clearer. Without
+                                //   this the reservation just moves the problem onto
+                                //   whichever league happens to hold the cap, and two
+                                //   equally-behind leagues would trade it back and
+                                //   forth period after period.
                                 const dn = _perTeamNeed(d, sp);
+                                if (dn > need - 1) return;
                                 if (dn < donorNeed) { donorNeed = dn; donor = d; }
                             });
                             if (!donor) return;
                             _caps[donor.name][sp]--;
                             _caps[l.name][sp] = (_caps[l.name][sp] || 0) + 1;
                             _reserved[l.name] = sp;
-                            console.log('   🎁 First-time reservation: 1 ' + sp + ' held for "' + l.name
-                                + '" (never played it) — from "' + donor.name + '"');
+                            console.log('   🎁 Sport reservation: 1 ' + sp + ' held for "' + l.name
+                                + '" (' + need.toFixed(1) + ' game(s)/team behind) — from "' + donor.name + '"');
                         });
                     }
 
@@ -5741,6 +5878,18 @@
                                 for (const d of _here) {
                                     if (d === l || !(d.sports || []).includes(sp)) continue;
                                     if ((_caps[d.name][sp] || 0) <= 0) continue;
+                                    // ★ NEVER take back a cap the reservation above just
+                                    //   held for this league. A small league is exactly
+                                    //   the shape that reads as "surplus" here — 3 teams
+                                    //   want 1 game, so its 2 caps look like one spare —
+                                    //   and the floor confiscated the reserved sport in
+                                    //   the very next step. Observed live 2026-08-04:
+                                    //     🎁 1 Hockey held for "3rd Grade" (3.0 behind)
+                                    //     ⚖️ 1 Hockey cap 3rd Grade → 6th Grade
+                                    //   three periods running, which is why the
+                                    //   reservation fired all day and delivered nothing.
+                                    //   The floor can still take the league's OTHER caps.
+                                    if (_reserved[d.name] === sp) continue;
                                     const _surplus = _capTotal(d) - _games[d.name];
                                     if (_surplus <= 0) continue;
                                     if (!best || _lcap < best.lcap || (_lcap === best.lcap && _surplus > best.surplus)) {
@@ -5755,6 +5904,30 @@
                             _moved = true;
                         }
                         if (!_moved) break;
+                    }
+
+                    // ★ DON'T CAP WHAT NOBODY IS WAITING FOR. A cap exists to make a
+                    // league leave a scarce field for the grades that come AFTER it
+                    // (leagues run senior→junior and lock as they go). For a sport
+                    // that no later league even plays, the cap protects nobody and
+                    // only stops this league taking a field that will otherwise sit
+                    // empty — worst of all for the most junior league, which has no
+                    // one after it at all.
+                    //
+                    // Live 2026-08-04 @12:10, 3rd Grade was last in the order with
+                    // Hockey(Rink) OPEN in front of it, held Hockey:0, and took a
+                    // basketball court instead. Deleting the key (rather than raising
+                    // it) restores the "no cap" reading the assigner already has.
+                    // Killswitch: window.__leagueUnprotectedCapRelease = false.
+                    if (window.__leagueUnprotectedCapRelease !== false)
+                    for (let _i = 0; _i < _here.length; _i++) {
+                        const _l = _here[_i];
+                        (_l.sports || []).forEach(sp => {
+                            for (let _j = _i + 1; _j < _here.length; _j++) {
+                                if ((_here[_j].sports || []).includes(sp)) return;   // someone later wants it
+                            }
+                            delete _caps[_l.name][sp];
+                        });
                     }
 
                     console.log('   ⚖️ Need-first sport caps' + (_byNeedSports.length ? ' (need-weighted: ' + _byNeedSports.join(', ') + ')' : ' (no specific need → by size)') + ': ' + _here.map(l => l.name + '=' + JSON.stringify(_caps[l.name])).join('  '));

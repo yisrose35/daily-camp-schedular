@@ -6,25 +6,35 @@
 //
 // The need-first apportionment weights a league by _sportNeed, which SUMS every
 // team's deficit. That scales with ROSTER SIZE, not with starvation: a 4-team
-// league that has NEVER played hockey (9/team → weight 36) still loses both
-// hockey fields to a 10-team league that is only mildly behind (4/team → 40).
-// Over largest-remainder apportionment of 2 fields across 6 leagues, the small
-// leagues cannot win a scarce sport at all — and the participation floor can
-// only donate from SURPLUS, which is only ever the abundant sport. So the
-// junior grades get basketball, every period, all season.
+// league 9 games/team behind on hockey (weight 36) loses the rink to a 10-team
+// league only 4/team behind (weight 40). Under largest-remainder apportionment
+// of a scarce sport across many leagues, the small leagues cannot win one at
+// all — and the participation floor can only donate from SURPLUS, which is only
+// ever the abundant sport. So the junior grades get basketball, every period.
 //
-// Live 2026-08-03, 3rd Grade: {Basketball:1, Football:0, Hockey:0, Newcomb:0}
-// in every period of the day, always on the same leftover court.
+// Live 2026-08-03 AND again on 08-04 after the first cut of this fix, 3rd Grade
+// ran {Basketball:1, Football:0, Hockey:0, Newcomb:0} in every period of the
+// day — at 12:10 with Hockey(Rink) OPEN in front of it.
 //
-//   TEST 1 — the inequity itself: with the reservation OFF, the small starved
-//            league gets ZERO cap on the scarce sport it has never played.
+// Two separate rules come out of that, tested separately here:
+//   RESERVATION      — rank by PER-TEAM starvation and move one unit of a
+//                      scarce sport to the league furthest behind on it.
+//   CAP RELEASE      — a cap exists to leave a field for the leagues processed
+//                      AFTER this one; for a sport nobody later plays it
+//                      protects no one, so it is dropped.
+//
+//   TEST 1 — the inequity: with the reservation OFF, the starved mid-order
+//            league gets ZERO cap on the scarce sport.
 //   TEST 2 — with it ON, that league is seated on the scarce sport.
 //   TEST 3 — the transfer invents no capacity: each sport's total is unchanged
 //            and never exceeds the fields that exist, and the donor keeps seats.
-//   TEST 4 — it does NOT fire for a league that has already played the sport.
+//   TEST 4 — the gate is BEING BEHIND, not never having played: a caught-up
+//            league gets nothing, a league still behind is reserved for.
 //   TEST 5 — one reservation per league per period (no cap churn).
 //   TEST 6 — end to end through the real engine: the junior league actually
-//            gets a non-basketball game on the day.
+//            moves off the basketball court and onto the rink.
+//   TEST 7 — the last league's caps are released, and the killswitch restores
+//            them. A senior league keeps its caps — later leagues want those.
 // =============================================================================
 
 'use strict';
@@ -84,7 +94,7 @@ global.document = { readyState: 'complete', addEventListener: () => {} };
 (0, eval)(fs.readFileSync(path.join(__dirname, '..', 'global_field_locks.js'), 'utf8'));
 assert.ok(global.window.GlobalFieldLocks, 'GlobalFieldLocks loaded');
 global.window.getDivisionAgeOrder = (names) =>
-    ['Seniors', 'Juniors'].filter(n => (names || []).indexOf(n) >= 0);
+    ['Seniors', 'Juniors', 'Youngest'].filter(n => (names || []).indexOf(n) >= 0);
 
 const origLog = console.log;
 const origWarn = console.warn;
@@ -102,9 +112,17 @@ assert.ok(Leagues && typeof Leagues.processRegularLeagues === 'function', 'engin
 // ---------------------------------------------------------------------------
 const SENIOR = 'Senior League';
 const JUNIOR = 'Junior League';
+// ★ A third, youngest league sits BELOW Junior in the order. It is here so that
+//   Junior is mid-order and its caps still mean something: the separate
+//   "release what nobody is waiting for" rule (TEST 7) deletes the caps of the
+//   LAST league outright, which would otherwise fix this fixture on its own and
+//   leave the reservation untested. It also plays Hockey — a sport no later
+//   league wants is exactly what that rule releases.
+const YOUNGEST = 'Youngest League';
 const SENIOR_TEAMS = ['S1', 'S2', 'S3', 'S4', 'S5', 'S6', 'S7', 'S8', 'S9', 'S10'];
 const JUNIOR_TEAMS = ['J1', 'J2', 'J3', 'J4'];
-const DIVS = { Seniors: { bunks: ['SB1'] }, Juniors: { bunks: ['JB1'] } };
+const YOUNGEST_TEAMS = ['Y1', 'Y2'];
+const DIVS = { Seniors: { bunks: ['SB1'] }, Juniors: { bunks: ['JB1'] }, Youngest: { bunks: ['YB1'] } };
 // ★ Five courts and one rink against 7 wanted games — the camp is SHORT, which
 //   is the regime this bug lives in. Two calibration notes, both learned the
 //   hard way while writing this:
@@ -129,8 +147,8 @@ const TODAY = '2026-07-14';
 // Nine days of history. Every team of both leagues plays plenty of basketball;
 // only the SENIOR teams ever see the rink. So JUNIOR's per-team hockey deficit
 // is the largest in the camp, and its summed weight is still the smallest.
-function buildHistory(juniorHockeyDays) {
-    const gameLog = { [SENIOR]: {}, [JUNIOR]: {} };
+function buildHistory(juniorHockeyDays, youngestHockeyDays, juniorFootballDays) {
+    const gameLog = { [SENIOR]: {}, [JUNIOR]: {}, [YOUNGEST]: {} };
     PAST.forEach((d, i) => {
         gameLog[SENIOR][d] = [];
         gameLog[JUNIOR][d] = [];
@@ -149,13 +167,23 @@ function buildHistory(juniorHockeyDays) {
                 g: 'Game ' + (i + 1),
             });
         }
-        const jSport = (juniorHockeyDays || []).indexOf(d) >= 0 ? 'Hockey' : 'Basketball';
+        // Football has no field today, so it never enters the pool — it exists
+        // only to raise this league's BASKETBALL deficit, so the apportionment
+        // hands it a basketball cap alongside the reserved one. Two caps against
+        // one wanted game is what makes the floor see surplus.
+        const jSport = (juniorHockeyDays || []).indexOf(d) >= 0 ? 'Hockey'
+            : ((juniorFootballDays || []).indexOf(d) >= 0 ? 'Football' : 'Basketball');
         for (let k = 0; k < JUNIOR_TEAMS.length; k += 2) {
             gameLog[JUNIOR][d].push({
                 t1: JUNIOR_TEAMS[k], t2: JUNIOR_TEAMS[k + 1],
                 sport: jSport, g: 'Game ' + (i + 1),
             });
         }
+        gameLog[YOUNGEST][d] = [{
+            t1: YOUNGEST_TEAMS[0], t2: YOUNGEST_TEAMS[1],
+            sport: (youngestHockeyDays || []).indexOf(d) >= 0 ? 'Hockey' : 'Basketball',
+            g: 'Game ' + (i + 1),
+        }];
     });
     return {
         gamesPerDate: {}, gameLog: gameLog, chinuchByDate: {}, byesByDate: {},
@@ -163,15 +191,17 @@ function buildHistory(juniorHockeyDays) {
     };
 }
 
-function makeContext() {
+function makeContext(juniorTeams, seniorCfg) {
     return {
         schedulableSlotBlocks: [
             { type: 'league', event: 'League Time', divName: 'Seniors', leagueName: SENIOR, startTime: 780, endTime: 840, slots: [0] },
             { type: 'league', event: 'League Time', divName: 'Juniors', leagueName: JUNIOR, startTime: 780, endTime: 840, slots: [0] },
+            { type: 'league', event: 'League Time', divName: 'Youngest', leagueName: YOUNGEST, startTime: 780, endTime: 840, slots: [0] },
         ],
         masterLeagues: {
-            [SENIOR]: { name: SENIOR, enabled: true, divisions: ['Seniors'], teams: SENIOR_TEAMS.slice(), sports: ['Basketball', 'Hockey'], schedulingPriority: 'sport_variety' },
-            [JUNIOR]: { name: JUNIOR, enabled: true, divisions: ['Juniors'], teams: JUNIOR_TEAMS.slice(), sports: ['Basketball', 'Hockey'], schedulingPriority: 'sport_variety' },
+            [SENIOR]: Object.assign({ name: SENIOR, enabled: true, divisions: ['Seniors'], teams: SENIOR_TEAMS.slice(), sports: ['Basketball', 'Hockey'], schedulingPriority: 'sport_variety' }, seniorCfg || {}),
+            [JUNIOR]: { name: JUNIOR, enabled: true, divisions: ['Juniors'], teams: (juniorTeams || JUNIOR_TEAMS).slice(), sports: ['Basketball', 'Hockey'], schedulingPriority: 'sport_variety' },
+            [YOUNGEST]: { name: YOUNGEST, enabled: true, divisions: ['Youngest'], teams: YOUNGEST_TEAMS.slice(), sports: ['Basketball', 'Hockey'], schedulingPriority: 'sport_variety' },
         },
         disabledLeagues: [],
         divisions: DIVS,
@@ -185,15 +215,15 @@ function makeContext() {
 function run(opts) {
     opts = opts || {};
     global.localStorage._m = {};
-    settings.leagueHistory = buildHistory(opts.juniorHockeyDays);
+    settings.leagueHistory = buildHistory(opts.juniorHockeyDays, opts.youngestHockeyDays, opts.juniorFootballDays);
     global.window.currentScheduleDate = TODAY;
     global.window._activeGenDate = TODAY;
-    global.window.divisionTimes = { Seniors: [{ startMin: 780, endMin: 840 }], Juniors: [{ startMin: 780, endMin: 840 }] };
+    global.window.divisionTimes = { Seniors: [{ startMin: 780, endMin: 840 }], Juniors: [{ startMin: 780, endMin: 840 }], Youngest: [{ startMin: 780, endMin: 840 }] };
     global.window.GlobalFieldLocks.reset();   // locks are per-run
     if (opts.reservationOff) global.window.__leagueSportReservation = false;
 
     const lines = [];
-    const ctx = makeContext();
+    const ctx = makeContext(opts.juniorTeams, opts.leagueCfgSenior);
     console.log = (...a) => { lines.push(a.join(' ')); };
     console.warn = () => {};
     try { Leagues.processRegularLeagues(ctx); }
@@ -204,7 +234,7 @@ function run(opts) {
 
     const capLine = lines.filter(l => l.indexOf('Need-first sport caps') >= 0).pop() || '';
     const caps = {};
-    [SENIOR, JUNIOR].forEach(name => {
+    [SENIOR, JUNIOR, YOUNGEST].forEach(name => {
         const m = capLine.match(new RegExp(name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + '=(\\{[^}]*\\})'));
         caps[name] = m ? JSON.parse(m[1]) : null;
     });
@@ -215,7 +245,8 @@ function run(opts) {
     });
     return {
         caps: caps,
-        reservations: lines.filter(l => l.indexOf('First-time reservation') >= 0),
+        reservations: lines.filter(l => l.indexOf('Sport reservation') >= 0),
+        floors: lines.filter(l => l.indexOf('Participation floor') >= 0),
         sports: sports,
         assigned: lines.filter(l => l.indexOf('[SportVariety]') >= 0),
     };
@@ -255,7 +286,7 @@ function run(opts) {
     const off = run({ reservationOff: true });
     const on = run();
     const FIELDS_BY_SPORT = { Basketball: N_COURTS, Hockey: 1 };
-    const totalForSport = (caps, sp) => [SENIOR, JUNIOR].reduce((a, n) => a + (caps[n][sp] || 0), 0);
+    const totalForSport = (caps, sp) => [SENIOR, JUNIOR, YOUNGEST].reduce((a, n) => a + (caps[n][sp] || 0), 0);
     ['Basketball', 'Hockey'].forEach(sp => {
         assert.strictEqual(totalForSport(on.caps, sp), totalForSport(off.caps, sp),
             sp + ' total changed: ' + JSON.stringify(on.caps) + ' vs ' + JSON.stringify(off.caps));
@@ -268,12 +299,34 @@ function run(opts) {
     console.log('✅ TEST 3 — transfer conserves each sport, donor keeps ' + donorTotal + ' seats ' + JSON.stringify(on.caps));
 }
 
-// ---- TEST 4: not a first-timer → no reservation ----------------------------
+// ---- TEST 4: a league that is CAUGHT UP gets no reservation -----------------
+// The gate is "at least a game behind per team", not "has never played it".
+// Hockey on 5 of 9 days makes hockey this league's MOST-played sport, so its
+// hockey deficit is 0 and it is owed nothing. (Two days out of nine would NOT
+// qualify it as caught up — that is still 5 games per team behind, and it
+// should still be reserved for. That distinction is the whole fix.)
 {
-    const r = run({ juniorHockeyDays: ['2026-07-01', '2026-07-02'] });
-    assert.strictEqual(r.reservations.length, 0,
-        'reserved a sport the league has already played: ' + JSON.stringify(r.reservations));
-    console.log('✅ TEST 4 — a league that has had the sport gets no reservation');
+    // Youngest is caught up too, so JUNIOR is the only candidate for the rink
+    // and the assertion is about Junior alone rather than about who out-starves
+    // whom for a single field.
+    const CAUGHT_UP = { youngestHockeyDays: PAST.slice(0, 5) };
+    const r = run(Object.assign({ juniorHockeyDays: PAST.slice(0, 5) }, CAUGHT_UP));
+    const forJunior = r.reservations.filter(l => l.indexOf(JUNIOR) >= 0);
+    assert.strictEqual(forJunior.length, 0,
+        'reserved for a league that is already caught up: ' + JSON.stringify(r.reservations));
+    // …and the SAME fixture with one hockey day on record still reserves. That
+    // is the fix in one comparison: having played it is not the question, being
+    // behind is.
+    //
+    // ★ One day, not two. At two the league sits 5 games/team behind while the
+    //   senior league it would take from sits 5.6 behind — and the donor guard
+    //   correctly refuses to rob a hungrier league, so nothing moves. Which is
+    //   right, and worth knowing: this reserves for the WORST-off league, it
+    //   does not simply hand the scarce sport down the age order.
+    const behind = run(Object.assign({ juniorHockeyDays: PAST.slice(0, 1) }, CAUGHT_UP));
+    assert.ok(behind.reservations.some(l => l.indexOf(JUNIOR) >= 0),
+        'a league 7 games/team behind was treated as caught up: ' + JSON.stringify(behind.reservations));
+    console.log('✅ TEST 4 — caught up → no reservation; still behind → reserved');
 }
 
 // ---- TEST 5: one reservation per league per period -------------------------
@@ -299,6 +352,87 @@ function run(opts) {
         'the juniors still did not get on the rink: ' + JSON.stringify(on.sports));
     console.log('✅ TEST 6 — juniors on the day: "' + (on.sports.Juniors || '').trim()
         + '" (pre-fix: "' + (off.sports.Juniors || '').trim() + '")');
+}
+
+// ---- TEST 7: a cap that protects nobody is released ------------------------
+// Leagues run senior→junior and lock as they go, so a cap exists to make a
+// league leave a field for the grades AFTER it. The LAST league has none, and
+// capping it only stops it taking a field that will otherwise sit empty. Live
+// 2026-08-04 @12:10 the youngest league was last in the order, held Hockey:0,
+// and took a basketball court with the rink open in front of it.
+{
+    const on = run();
+    assert.deepStrictEqual(on.caps[YOUNGEST], {},
+        'the last league still carries caps nobody is waiting on: ' + JSON.stringify(on.caps));
+
+    global.window.__leagueUnprotectedCapRelease = false;
+    let off;
+    try { off = run(); } finally { delete global.window.__leagueUnprotectedCapRelease; }
+    assert.ok(Object.keys(off.caps[YOUNGEST] || {}).length > 0,
+        'killswitch did not restore the caps: ' + JSON.stringify(off.caps));
+    // The rule is about who comes AFTER, not about being junior: the senior
+    // league keeps its caps because two leagues below it still want those sports.
+    assert.ok(Object.keys(on.caps[SENIOR]).length > 0,
+        'released a cap that later leagues still need: ' + JSON.stringify(on.caps));
+    console.log('✅ TEST 7 — last league\'s caps released ' + JSON.stringify(on.caps[YOUNGEST])
+        + ', restored by killswitch ' + JSON.stringify(off.caps[YOUNGEST]));
+}
+
+// ---- TEST 8: the floor must not confiscate the reserved cap ----------------
+// A SMALL league is exactly the shape the participation floor reads as having
+// surplus: 3 teams want 1 game, so its two caps look like one spare — and the
+// floor promptly donated the reserved sport to somebody else. Live 2026-08-04,
+// three periods running:
+//   🎁 1 Hockey held for "3rd Grade" (3.0 game(s)/team behind) — from "5th Grade"
+//   ⚖️ 1 Hockey cap 3rd Grade → 6th Grade (seat its games)
+// The reservation fired all day and delivered one game out of six.
+{
+    const SMALL = ['J1', 'J2', 'J3'];   // 3 teams → 1 game wanted → reads as surplus
+    // Youngest is caught up on hockey so it does not out-starve the small
+    // league for the single rink — this test is about the FLOOR, not the race.
+    const r = run({ juniorTeams: SMALL, juniorFootballDays: PAST.slice(0, 7),
+                    youngestHockeyDays: PAST.slice(0, 5) });
+    const mine = r.reservations.filter(l => l.indexOf(JUNIOR) >= 0);
+    assert.ok(mine.length > 0,
+        'fixture did not reserve for the small league: ' + JSON.stringify(r.reservations));
+    const sport = (mine[0].match(/1 (\w+) held/) || [])[1];
+    assert.ok(sport, 'could not read the reserved sport from: ' + mine[0]);
+
+    // The floor may still take this league's OTHER caps — just not the held one.
+    const stolen = r.floors.filter(l =>
+        l.indexOf(sport) >= 0 && l.indexOf(JUNIOR + ' →') >= 0);
+    assert.strictEqual(stolen.length, 0,
+        'the floor took the reserved ' + sport + ' straight back: ' + JSON.stringify(r.floors));
+    assert.ok((r.caps[JUNIOR] || {})[sport] > 0 || Object.keys(r.caps[JUNIOR] || {}).length === 0,
+        'the reserved ' + sport + ' did not survive to the final caps: ' + JSON.stringify(r.caps));
+    console.log('✅ TEST 8 — reserved ' + sport + ' survives the participation floor '
+        + JSON.stringify(r.caps[JUNIOR]));
+}
+
+// ---- TEST 9: seats are allocated to the ACTIVE roster, not the full one ----
+// Chinuch pulls teams out of a period, so a league with teams learning wants
+// fewer games than its roster implies. The allocator counted the full roster,
+// which overstates every chinuch league's demand and lands the seats in the
+// wrong place. Live 2026-08-04 @9:45 the true demand was 12 games against
+// exactly 12 fields — a perfect fit — but the old count said 16, handed two
+// leagues a spare seat each, and left 5th Grade one short, so it broke its
+// Hockey:0 cap and took the rink 3rd Grade had been reserved.
+{
+    // SENIOR has 10 teams; put 4 of them in chinuch → 6 active → 3 games, not 5.
+    const CH_DAY = { Seniors: {} };
+    ['S1', 'S2', 'S3', 'S4'].forEach(t => { CH_DAY.Seniors[t] = 780; });   // 780 = the slot
+    global.window.chinuchSchedule = { [SENIOR]: CH_DAY.Seniors };
+    let r;
+    try {
+        r = run({ leagueCfgSenior: { chinuch: { enabled: true } } });
+    } finally { delete global.window.chinuchSchedule; }
+
+    const seniorSeats = Object.values(r.caps[SENIOR] || {}).reduce((a, b) => a + b, 0);
+    assert.ok(seniorSeats <= 3,
+        'a league with 4 of 10 teams in chinuch was allocated ' + seniorSeats
+        + ' seats for 3 games: ' + JSON.stringify(r.caps));
+    console.log('✅ TEST 9 — chinuch league seated for its ACTIVE roster ('
+        + seniorSeats + ' seats for 3 games) ' + JSON.stringify(r.caps));
 }
 
 console.log('\n🎉 league_first_time_sport_reservation_sim: all tests passed');

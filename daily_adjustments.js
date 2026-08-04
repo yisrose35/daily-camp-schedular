@@ -169,6 +169,269 @@ function _daSmartSwapPostRender(overlay, defaultOn) {
   _gsSync();
 }
 
+// ═════════════════════════════════════════════════════════════════════════
+// ★ REMOVE A TILE FROM AN ALREADY-GENERATED DAY
+// ═════════════════════════════════════════════════════════════════════════
+// Deleting a tile only ever edited the skeleton. The generated day renders
+// from window.divisionTimes + scheduleAssignments — both saved per date and
+// both rebuilt only by a generation — so a removed period kept showing its
+// activity, and a removed LEAGUE period kept its matchups on the books
+// (counting as played, feeding sport variety, holding its game number and its
+// bye/away-trip charges), until someone regenerated the day. "Delete the tile
+// and put nothing in its place" was therefore not actually expressible.
+//
+// This applies the removal: the day's geometry is rebuilt from the post-delete
+// skeleton, every surviving entry is re-keyed onto it by its own _startMin
+// (nothing is re-rolled, nothing shifts by index), and whatever lived in the
+// removed window is dropped. The freed time is simply unscheduled.
+//
+// Then the records that described the removed content are brought back in
+// line: league history is reconciled against the new grid (releasing the
+// matchups, sport variety, game count, byes, away trips and chinuch, and
+// renumbering later days' game labels), and rotation counts + last-done
+// timestamps are re-derived.
+//
+// Call with the tiles as they were BEFORE the skeleton was filtered; returns
+// true when the generated day was changed. A day that was never generated, or
+// a plan the re-key can't apply cleanly, leaves the schedule untouched — the
+// skeleton edit still stands, and the caller is told to regenerate.
+// ═════════════════════════════════════════════════════════════════════════
+async function _daApplyTileRemovalToGeneratedDay(removedTiles) {
+  try {
+    if (window._daBuilderMode === 'auto') return false;
+    if (!Array.isArray(removedTiles) || !removedTiles.length) return false;
+
+    const DTS = window.DivisionTimesSystem;
+    if (!DTS || !DTS.buildTimeRemovalPlan) return false;
+
+    const divisions = window.divisions || masterSettings.app1?.divisions || {};
+    const sa = window.scheduleAssignments || {};
+
+    // Only meaningful on a day that has actually been generated: at least one
+    // bunk of an affected division holds a real entry.
+    const tiles = removedTiles
+      .map(t => ({
+        division: t && t.division,
+        startMin: parseTimeToMinutes(t && t.startTime),
+        endMin: parseTimeToMinutes(t && t.endTime)
+      }))
+      .filter(t => t.division && t.startMin != null);
+    if (!tiles.length) return false;
+
+    const divSet = new Set(tiles.map(t => String(t.division)));
+    const anyGenerated = [...divSet].some(dn =>
+      ((divisions[dn] || {}).bunks || []).some(b => {
+        const arr = sa[String(b)];
+        return Array.isArray(arr) && arr.some(e => e && (e._activity || e.field));
+      }));
+    if (!anyGenerated) return false;   // nothing generated yet — the skeleton edit is all there is
+
+    const plan = DTS.buildTimeRemovalPlan({
+      removedTiles: tiles,
+      skeleton: dailyOverrideSkeleton,
+      divisions,
+      scheduleAssignments: sa,
+      leagueAssignments: window.leagueAssignments || {}
+    });
+
+    if (!plan.ok) {
+      // Never half-apply. The tile is gone from the skeleton either way; the
+      // generated day is left exactly as it was.
+      const why = plan.reason === 'no-geometry'
+        ? (plan.emptyDivs || []).join(', ') + ' would have no periods left'
+        : plan.reason === 'unsafe-bunks'
+          ? (plan.unsafeBunks || []).join(', ') + ' could not be matched to the new period structure'
+          : 'the day could not be remapped';
+      console.warn('[DA-Remove] plan refused (' + plan.reason + ') — schedule left untouched');
+      await daShowAlert('The tile was removed from the day\'s layout, but the already-generated ' +
+        'schedule was left as it is — ' + why + '.<br><br>Regenerate to bring the schedule in line.');
+      return false;
+    }
+
+    // ── Commit ────────────────────────────────────────────────────────────
+    window.divisionTimes = plan.newDT;
+    Object.keys(plan.assignments).forEach(b => { window.scheduleAssignments[b] = plan.assignments[b]; });
+    window.leagueAssignments = plan.leagueAssignments;
+
+    window.saveCurrentDailyData?.('unifiedTimes', window.unifiedTimes);
+    window.saveSchedule?.();          // scheduleAssignments + leagueAssignments + divisionTimes
+    window.updateTable?.();
+
+    // ── League history follows the grid ───────────────────────────────────
+    try {
+      const dateKey = window.currentScheduleDate;
+      const surv = window.SchedulerCoreUtils?.survivingLeagueLabels?.(window.leagueAssignments || {});
+      if (dateKey && surv) {
+        window.SchedulerCoreLeagues?.reconcileDayWithSchedule?.(plan.affectedDivs, dateKey, surv.regular);
+        window.SchedulerCoreSpecialtyLeagues?.reconcileDayWithSchedule?.(plan.affectedDivs, dateKey, surv.specialty);
+      }
+    } catch (e) { console.warn('[DA-Remove] league reconcile failed:', e); }
+
+    // ── Rotation counts + last-done follow the grid ───────────────────────
+    // Deferred so the daily store already holds the trimmed schedule (the
+    // rebuild scans it), mirroring the post-generation pass.
+    setTimeout(() => {
+      try {
+        window.SchedulerCoreUtils?.rebuildHistoricalCounts?.(true);
+        const dk = window.currentScheduleDate;
+        if (dk && window.RotationCloud?.save) window.RotationCloud.save(dk, window.scheduleAssignments || {});
+        window.SchedulerCoreUtils?.rebuildRotationHistoryForBunks?.(plan.affectedBunks);
+      } catch (e) { console.warn('[DA-Remove] rotation rebuild failed:', e); }
+    }, 0);
+
+    console.log('[DA-Remove] applied to the generated day: dropped ' + plan.droppedEntries +
+      ' entry(ies) and ' + plan.droppedLeagueGames + ' league game(s) across ' +
+      plan.affectedBunks.length + ' bunk(s)');
+    return true;
+  } catch (e) {
+    console.error('[DA-Remove] failed:', e);
+    return false;
+  }
+}
+
+// ── "Don't ask again" preference (per device, not camp-wide) ──────────────
+const DA_SKIP_REMOVE_CONFIRM = 'campistry_da_skipRemoveConfirm';
+function daConfirmSuppressed(key) {
+  try { return localStorage.getItem(key) === '1'; } catch (_e) { return false; }
+}
+// Escape hatch — a hidden preference with no way back is a trap. Exposed on
+// window so it can be cleared from the console, and called by the Daily
+// Adjustments reset paths.
+window.daResetRemoveConfirm = function () {
+  try { localStorage.removeItem(DA_SKIP_REMOVE_CONFIRM); } catch (_e) {}
+  console.log('[DailyAdj] Tile-removal confirmation re-enabled on this device.');
+  return true;
+};
+
+// What will actually be lost if these tiles are deleted from the GENERATED day.
+// Returns { generated, bunkCount, activities:[…], leagueGames:[{label, league,
+// matchupCount}] } — `generated` false means the day has nothing there yet and
+// the delete is a pure layout edit (no confirmation warranted).
+//
+// Pure — mirrored verbatim in tests/tile_removal_confirm_sim.js; keep in sync.
+// `tiles` carry ALREADY-PARSED minutes: [{ division, startMin, endMin }].
+function _daRemovalImpact(tiles, divisions, sa, la) {
+  const out = { generated: false, bunkCount: 0, activities: [], leagueGames: [] };
+  const acts = new Set();
+  const seenGames = new Set();
+  const isGameLine = (m) => {
+    const line = (m && typeof m === 'object') ? String(m.display || m.matchup || m.text || '') : String(m == null ? '' : m);
+    return /\s+vs\.?\s+/i.test(line);
+  };
+
+  (tiles || []).forEach(t => {
+    const dn = t && t.division != null ? String(t.division) : null;
+    const s = t && t.startMin;
+    if (!dn || s == null) return;
+    // Entries are addressed by their own start time. A tile with no end time
+    // (or a zero-length one) still matches whatever starts at its own start —
+    // deriving the upper bound from `s` rather than a bogus end keeps that
+    // from collapsing into an empty window that matches nothing.
+    const lo = s - 2;
+    const hi = (t.endMin != null && t.endMin > s) ? t.endMin - 2 : s + 2;
+    const inWindow = (v) => v != null && v >= lo && v < hi;
+
+    ((divisions[dn] || {}).bunks || []).forEach(b => {
+      const arr = sa[String(b)];
+      if (!Array.isArray(arr)) return;
+      let hit = false;
+      arr.forEach(en => {
+        if (!en || en.continuation || en._isTransition) return;
+        if (!inWindow(en._startMin)) return;
+        const name = en._activity || en.field;
+        if (!name) return;
+        acts.add(String(name));
+        hit = true;
+      });
+      if (hit) out.bunkCount++;
+    });
+
+    const map = la[dn];
+    if (map && typeof map === 'object') {
+      Object.keys(map).forEach(k => {
+        const g = map[k];
+        if (!g || !g.leagueName || !inWindow(g._startMin)) return;
+        const key = g.leagueName + '|' + (g.gameLabel || k);
+        if (seenGames.has(key)) return;
+        seenGames.add(key);
+        out.leagueGames.push({
+          label: g.gameLabel || 'League game',
+          league: g.leagueName,
+          matchupCount: (g.matchups || []).filter(isGameLine).length
+        });
+      });
+    }
+  });
+
+  out.activities = [...acts];
+  out.generated = out.bunkCount > 0 || out.leagueGames.length > 0;
+  return out;
+}
+
+// Production wrapper: parse the snapshot's times and read the live day.
+function _daDescribeRemovalImpact(tiles) {
+  try {
+    const parsed = (tiles || []).map(t => ({
+      division: t && t.division,
+      startMin: parseTimeToMinutes(t && t.startTime),
+      endMin: parseTimeToMinutes(t && t.endTime)
+    }));
+    return _daRemovalImpact(
+      parsed,
+      window.divisions || masterSettings.app1?.divisions || {},
+      window.scheduleAssignments || {},
+      window.leagueAssignments || {}
+    );
+  } catch (e) {
+    console.warn('[DA-Remove] impact scan failed:', e);
+    return { generated: false, bunkCount: 0, activities: [], leagueGames: [] };
+  }
+}
+
+// Gate a delete that would drop already-generated content. Returns true to go
+// ahead. A tile with nothing generated under it needs no prompt — this only
+// speaks up when something real is about to be dropped, which is also what
+// keeps "don't ask again" from being a foot-gun: the prompt was never noise.
+async function _daConfirmTileRemoval(tiles) {
+  const impact = _daDescribeRemovalImpact(tiles);
+  if (!impact.generated) return true;                       // pure layout edit
+  if (daConfirmSuppressed(DA_SKIP_REMOVE_CONFIRM)) return true;
+
+  const esc = (s) => _escHtml(String(s == null ? '' : s));
+  const lines = [];
+  impact.leagueGames.forEach(g => {
+    lines.push('<li style="margin:2px 0;"><strong>' + esc(g.league) + ' — ' + esc(g.label) + '</strong>' +
+      (g.matchupCount ? ' (' + g.matchupCount + ' matchup' + (g.matchupCount === 1 ? '' : 's') + ')' : '') +
+      ' — the games stop counting as played</li>');
+  });
+  if (impact.bunkCount > 0) {
+    const shown = impact.activities.slice(0, 3).map(esc).join(', ');
+    lines.push('<li style="margin:2px 0;">' + impact.bunkCount + ' bunk' + (impact.bunkCount === 1 ? "'s" : "s'") +
+      ' scheduled activity' + (shown ? ' <span style="color:#64748b;">(' + shown +
+      (impact.activities.length > 3 ? ', …' : '') + ')</span>' : '') + '</li>');
+  }
+
+  const msg = 'This period is already scheduled. Removing it will drop:' +
+    '<ul style="margin:10px 0 0;padding-left:20px;">' + lines.join('') + '</ul>' +
+    '<div style="margin-top:12px;color:#64748b;font-size:13px;">The time will be left unscheduled — nothing takes its place.</div>';
+
+  return daShowConfirm(msg, {
+    danger: true,
+    confirmText: 'Remove',
+    cancelText: 'Keep it',
+    dontAskKey: DA_SKIP_REMOVE_CONFIRM
+  });
+}
+
+// Snapshot the tiles a delete is about to remove (id set → time windows), so
+// the removal can be applied to the generated day after the skeleton is cut.
+function _daSnapshotRemovedTiles(ids) {
+  const want = (ids instanceof Set) ? ids : new Set(ids || []);
+  return (dailyOverrideSkeleton || [])
+    .filter(x => x && want.has(x.id))
+    .map(x => ({ division: x.division, startTime: x.startTime, endTime: x.endTime }));
+}
+
 // ★ Delete button for the Smart Tile EDIT dialog in Daily Adjustments (matches the
 //   skeleton builder). Removes the tile from the daily override skeleton, saves,
 //   re-renders, and closes the dialog.
@@ -180,17 +443,23 @@ function _daInjectDeleteButton(overlay, tileId) {
   btn.className = 'da-btn da-modal-delete';
   btn.textContent = '🗑 Delete';
   btn.style.cssText = 'background:#fef2f2;color:#dc2626;border:1px solid #fecaca;margin-right:auto;';
-  btn.onclick = function () {
+  btn.onclick = async function () {
     // ★ Multi-grade span: deleting any member removes the whole span.
     const _ev = dailyOverrideSkeleton.find(function (x) { return x.id === tileId; });
     const _ids = new Set((_ev ? _daSpanMembers(_ev) : []).map(function (m) { return m.id; }));
     _ids.add(tileId);
+    const _snap = _daSnapshotRemovedTiles(_ids);
+    // ★ Gate on what the delete would drop from the GENERATED day (no prompt
+    //   when there is nothing generated under the tile).
+    if (!(await _daConfirmTileRemoval(_snap))) return;
     dailyOverrideSkeleton = dailyOverrideSkeleton.filter(function (x) { return !_ids.has(x.id); });
     selectedTileId = null;
     saveDailySkeleton();
     renderGrid();
     const c = overlay.querySelector('.da-modal-cancel-x');
     if (c) c.click(); else overlay.remove();
+    // ★ Apply the removal to an already-generated day (see the function).
+    await _daApplyTileRemovalToGeneratedDay(_snap);
   };
   footer.insertBefore(btn, footer.firstChild);
 }
@@ -463,6 +732,13 @@ function daShowConfirm(message, opts) {
     var existing = document.getElementById('da-modal-input-overlay--confirm');
     if (existing) existing.remove();
 
+    // ★ opts.dontAskKey — render a "Don't ask again" checkbox and, when it is
+    //   ticked at the moment the user confirms, remember the choice under that
+    //   localStorage key (per device, never camp-wide: one head counselor
+    //   silencing a prompt must not silence it for everyone). Callers gate on
+    //   daConfirmSuppressed(key) themselves; this only records the choice.
+    var _dontAskKey = opts.dontAskKey || null;
+
     var overlay = document.createElement('div');
     overlay.id = 'da-modal-input-overlay--confirm';
     overlay.className = 'da-modal-overlay';
@@ -473,6 +749,12 @@ function daShowConfirm(message, opts) {
           // is rendered raw; callers MUST escape any user-data they interpolate (see #V2-26).
           '<p style="margin:0;font-size:14px;color:#334155;line-height:1.6;">' + message + '</p>' +
         '</div>' +
+        (_dontAskKey
+          ? '<label class="da-confirm-dontask-row" style="display:flex;align-items:center;gap:8px;margin:0 24px 4px;padding:10px 12px;background:#f8fafc;border:1px solid #e2e8f0;border-radius:8px;font-size:12px;color:#475569;cursor:pointer;user-select:none;">' +
+              '<input type="checkbox" class="da-confirm-dontask" style="cursor:pointer;margin:0;">' +
+              'Don\'t ask again on this device' +
+            '</label>'
+          : '') +
         '<div class="da-modal-footer">' +
           '<button class="da-btn da-btn-ghost da-confirm-no">' + (opts.cancelText || 'Cancel') + '</button>' +
           '<button class="da-btn ' + (opts.danger ? 'da-btn-danger' : 'da-btn-primary') + ' da-confirm-yes">' + (opts.confirmText || 'Confirm') + '</button>' +
@@ -480,13 +762,26 @@ function daShowConfirm(message, opts) {
       '</div>';
 
     document.body.appendChild(overlay);
+    // One accept path for the button AND the Enter key, so confirming with the
+    // keyboard honors the checkbox exactly like clicking does.
+    var _accept = function() {
+      if (_dontAskKey) {
+        try {
+          var _cb = overlay.querySelector('.da-confirm-dontask');
+          if (_cb && _cb.checked) localStorage.setItem(_dontAskKey, '1');
+        } catch (_e) { /* private mode / quota — just don't remember it */ }
+      }
+      overlay.remove();
+      resolve(true);
+    };
     overlay.querySelector('.da-confirm-no').onclick = function() { overlay.remove(); resolve(false); };
-    overlay.querySelector('.da-confirm-yes').onclick = function() { overlay.remove(); resolve(true); };
+    overlay.querySelector('.da-confirm-yes').onclick = _accept;
     let _mdOverlayB = false;
     overlay.addEventListener('mousedown', function(e) { _mdOverlayB = (e.target === overlay); });
     overlay.onclick = function(e) { if (e.target === overlay && _mdOverlayB) { overlay.remove(); resolve(false); } };
     overlay.addEventListener('keydown', function(e) {
-      if (e.key === 'Enter') { overlay.remove(); resolve(true); }
+      // Space/Enter on the checkbox itself must toggle it, not accept the dialog.
+      if (e.key === 'Enter' && !(e.target && e.target.classList && e.target.classList.contains('da-confirm-dontask'))) { _accept(); }
       if (e.key === 'Escape') { overlay.remove(); resolve(false); }
     });
     setTimeout(function() { overlay.querySelector('.da-confirm-yes').focus(); }, 50);
@@ -4939,16 +5234,22 @@ function _showTileActionBar(tileEl) {
   delBtn.style.cssText = btnStyle + 'background:#fef2f2;color:#dc2626;';
   delBtn.onmouseenter = () => { delBtn.style.background = '#fee2e2'; };
   delBtn.onmouseleave = () => { delBtn.style.background = '#fef2f2'; };
-  delBtn.onclick = () => {
+  delBtn.onclick = async () => {
     // ★ Multi-grade span: deleting any member removes the whole span.
     const _ev = dailyOverrideSkeleton.find(x => x.id === id);
     const _ids = new Set((_ev ? _daSpanMembers(_ev) : []).map(m => m.id));
     _ids.add(id);
+    const _snap = _daSnapshotRemovedTiles(_ids);
+    // ★ Gate on what the delete would drop from the GENERATED day (no prompt
+    //   when there is nothing generated under the tile).
+    if (!(await _daConfirmTileRemoval(_snap))) return;
     dailyOverrideSkeleton = dailyOverrideSkeleton.filter(x => !_ids.has(x.id));
     selectedTileId = null;
     bar.remove();
     saveDailySkeleton();
     renderGrid();
+    // ★ Apply the removal to an already-generated day (see the function).
+    await _daApplyTileRemovalToGeneratedDay(_snap);
   };
 
   bar.appendChild(editBtn);
@@ -10218,12 +10519,26 @@ function setupKeyboardHandler() {
     if ((e.key === 'Delete' || e.key === 'Backspace') && selectedTileId) {
       e.preventDefault();      e.preventDefault();
       (async () => {
-        const ok = await daShowConfirm("Delete this block?", { danger: true, confirmText: 'Delete' });
+        // ★ Multi-grade span: deleting any member removes the whole span
+        //   (matches the Delete button and the edit dialog).
+        const _ev = dailyOverrideSkeleton.find(x => x.id === selectedTileId);
+        const _ids = new Set((_ev ? _daSpanMembers(_ev) : []).map(m => m.id));
+        _ids.add(selectedTileId);
+        const _snap = _daSnapshotRemovedTiles(_ids);
+        // ★ When the tile has generated content under it, the removal-impact
+        //   confirm REPLACES the plain one — it says strictly more, and two
+        //   stacked dialogs for one keypress is worse than either alone.
+        const _impact = _daDescribeRemovalImpact(_snap);
+        const ok = _impact.generated
+          ? await _daConfirmTileRemoval(_snap)
+          : await daShowConfirm("Delete this block?", { danger: true, confirmText: 'Delete' });
         if (ok) {
-          dailyOverrideSkeleton = dailyOverrideSkeleton.filter(x => x.id !== selectedTileId);
+          dailyOverrideSkeleton = dailyOverrideSkeleton.filter(x => !_ids.has(x.id));
           selectedTileId = null;
           saveDailySkeleton();
           renderGrid();
+          // ★ Apply the removal to an already-generated day (see the function).
+          await _daApplyTileRemovalToGeneratedDay(_snap);
         }
       })();
     }
