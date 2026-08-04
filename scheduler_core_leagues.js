@@ -3350,6 +3350,110 @@
     }
 
     // =========================================================================
+    // ★ LG-14b — FIELD-SHORTAGE BYE ORDER
+    // =========================================================================
+    // LG-14 rotates the bye decided at PAIRING time: an odd roster benches
+    // somebody before any field is looked at, and makeByeLedger says whose turn
+    // it is. It cannot see the OTHER way a team sits out. With an EVEN roster
+    // every team gets paired — the pairing chooser sees no bye at all — and it
+    // is the FIELD stage, one step later, that strands whichever matchup it
+    // reaches after the pool runs dry.
+    //
+    // That order was sport-starvation only, with no bye term in it. So on a tie
+    // it walked the same enumeration every period and benched the same teams:
+    // observed live (2026-08-03, a 4-team league down to its one remaining
+    // court after the senior leagues locked theirs) one team sat out every
+    // period of the day while another played every one.
+    //
+    // The data was already there — a stranded team lands in the period's
+    // recorded byes exactly like a structural one, so byesByDate already counts
+    // it. Only the consumer was missing.
+    //
+    // ENGAGES ONLY ON A REAL SHORTAGE. When the pool can seat every matchup
+    // nobody byes, so the order is left exactly as the sport/indoor logic wants
+    // it and this is a strict no-op. (Combined fields can cut real capacity
+    // below the distinct-field count; that under-detects a shortage rather than
+    // inventing one, so the ambiguous case keeps the existing order.)
+    // Killswitch: window.__leagueByeFairness = false, same flag as LG-14.
+    function _byeShortageOrder(matchups, availablePool, leagueName, history, dayId) {
+        try {
+            if (_byeFairnessWeight() <= 0) return null;
+            const pairs = matchups || [];
+            const seats = new Set();
+            (availablePool || []).forEach(function (o) { if (o && o.field) seats.add(o.field); });
+            if (seats.size >= pairs.length) return null;      // everyone plays → nothing to rotate
+            const teams = Array.from(new Set([].concat.apply([], pairs)));
+            if (teams.length < 3) return null;                // nobody to rotate the bye to
+            const led = makeByeLedger(leagueName, teams, history, dayId);
+            return {
+                // A bye benches BOTH teams of the matchup, so the pair's claim
+                // on a field is the SUM of its teams' byes — the pair that has
+                // lost the most play gets seated first, and the leftover bye
+                // falls on the pair that has lost the least.
+                //
+                // ★ NOT max(): the whole point is the team that never sits out.
+                //   Ranking a pair by its neediest team lets a never-benched
+                //   team ride along on a heavily-benched partner and play every
+                //   single period — which is the exact live symptom (Team 1
+                //   played all six periods while its opponents rotated).
+                //
+                // Summed over MEMBERS, not a fixed pair: a round-robin group
+                // (see _formRoundRobinGroup) holds 3+ teams on one field, and
+                // stranding it benches all of them — so it should outrank a
+                // two-team matchup with the same average.
+                claim: function (members) {
+                    return members.reduce(function (s, t) { return s + led.count(t); }, 0);
+                },
+                // Sums tie constantly in a small league (a 4-team league has
+                // only three possible pairings), so the tie-break carries real
+                // weight. Settle it by RELIEVING THE MOST-BENCHED TEAM: the
+                // pair holding it plays, and the bye falls on the pair whose
+                // worst-off team is better off.
+                //
+                // ★ This is the reported bug, stated exactly. With counts
+                //   0,1,1,2 and the pairs (T1,T4)/(T2,T3), both sum to 2 — but
+                //   benching (T1,T4) to get T1 off zero hands T4 a THIRD
+                //   straight bye, while benching (T2,T3) costs nobody a repeat.
+                //   Chasing the zero looks fairer per-period and is worse in
+                //   practice; the sum key above already pulls a never-benched
+                //   team in within a day or two. Sum and peak between them pin
+                //   down a two-team pair's counts exactly, so anything reaching
+                //   past this key is a genuine tie.
+                peak: function (members) {
+                    return members.reduce(function (m, t) { return Math.max(m, led.count(t)); }, 0);
+                },
+                // Then the entry benched most RECENTLY plays first, so a bye
+                // cannot repeat period after period while counts are level.
+                // AVERAGED, unlike claim: this is a "how long has it been" read,
+                // and summing it would push a 3-team group down the order for no
+                // reason other than having more members.
+                recency: function (members) {
+                    if (!members.length) return 0;
+                    return members.reduce(function (s, t) { return s + led.staleness(t); }, 0) / members.length;
+                },
+                counts: led.counts
+            };
+        } catch (_) { return null; }
+    }
+    // Primary comparator when a shortage is on; a flat 0 (so a complete
+    // fall-through to the existing keys) when it is not.
+    function _byeOrderCmp(a, b) {
+        return (b.byeClaim - a.byeClaim) || (b.byePeak - a.byePeak) || (a.byeRecency - b.byeRecency);
+    }
+    function _logByeOrder(leagueName, order, ranked) {
+        try {
+            if (!order) return;
+            const benched = Object.keys(order.counts).filter(function (t) { return order.counts[t] > 0; });
+            if (!benched.length) return;
+            console.log('   ⚖️ [ByeFairness] "' + leagueName + '": fewer fields than matchups — '
+                + 'field order by who has sat out most ('
+                + benched.sort(function (x, y) { return order.counts[y] - order.counts[x]; })
+                    .slice(0, 6).map(function (t) { return t + '×' + order.counts[t]; }).join(', ')
+                + ') → ' + ranked.map(function (m) { return m.t1 + '/' + m.t2; }).join(' then '));
+        } catch (_) {}
+    }
+
+    // =========================================================================
     // SMART ASSIGNMENT ALGORITHM - SPORT VARIETY MODE (Default)
     // =========================================================================
 
@@ -3400,6 +3504,8 @@
         // indoor count) goes first so it gets first pick at any indoor option.
         const _indoorReq = leagueRules && leagueRules.indoorRequirement;
         const _indoorCounts = (leagueRules && leagueRules.indoorCounts) || {};
+        // ★ LG-14b: null unless this pool is short of fields (see _byeShortageOrder).
+        const _byeOrder = _byeShortageOrder(matchups, availablePool, leagueName, history, dayId);
         const matchupsWithPriority = matchups.map((m) => {
             // A round-robin group carries >2 teams; `group` is null for a normal
             // head-to-head, so every per-team rule below keeps its two-team
@@ -3415,7 +3521,10 @@
                 varietyScore: starves.reduce(function (a, b) { return a + b; }, 0),
                 coverMin: Math.min.apply(null, starves),
                 stuck: hs.reduce(function (n, h) { return n + _trailingSportStreak(h); }, 0),
-                indoorMin: Math.min.apply(null, ics)
+                indoorMin: Math.min.apply(null, ics),
+                byeClaim: _byeOrder ? _byeOrder.claim(members) : 0,
+                byePeak: _byeOrder ? _byeOrder.peak(members) : 0,
+                byeRecency: _byeOrder ? _byeOrder.recency(members) : 0
             };
         });
 
@@ -3427,11 +3536,17 @@
         // that already played it, so each sport spreads across all teams before any
         // repeats. SECONDARY: break active same-sport STREAKS. Then total starvation.
         // Indoor need stays primary when an indoor requirement is set.
+        // ★ LG-14b: when the pool is SHORT, who has been benched most outranks
+        // all of it — a team that does not play at all loses more than a team
+        // that plays the wrong sport, or plays it outdoors. Flat 0 (and so a
+        // complete fall-through to the keys below) whenever every matchup can
+        // be seated, which is the normal case.
         if (_indoorReq && _indoorReq.enabled) {
-            matchupsWithPriority.sort((a, b) => a.indoorMin - b.indoorMin || a.coverMin - b.coverMin || b.stuck - a.stuck || a.varietyScore - b.varietyScore);
+            matchupsWithPriority.sort((a, b) => _byeOrderCmp(a, b) || a.indoorMin - b.indoorMin || a.coverMin - b.coverMin || b.stuck - a.stuck || a.varietyScore - b.varietyScore);
         } else {
-            matchupsWithPriority.sort((a, b) => a.coverMin - b.coverMin || b.stuck - a.stuck || a.varietyScore - b.varietyScore);
+            matchupsWithPriority.sort((a, b) => _byeOrderCmp(a, b) || a.coverMin - b.coverMin || b.stuck - a.stuck || a.varietyScore - b.varietyScore);
         }
+        _logByeOrder(leagueName, _byeOrder, matchupsWithPriority);
 
         for (const { t1, t2, group } of matchupsWithPriority) {
             let bestOption = null;
@@ -3620,6 +3735,8 @@
         // Sort matchups by how many times they've played (least played first)
         const _indoorReqMV = leagueRules && leagueRules.indoorRequirement;
         const _indoorCountsMV = (leagueRules && leagueRules.indoorCounts) || {};
+        // ★ LG-14b: null unless this pool is short of fields (see _byeShortageOrder).
+        const _byeOrder = _byeShortageOrder(matchups, availablePool, leagueName, history, dayId);
         const matchupsWithPriority = matchups.map((m) => {
             // >2 teams = a round-robin group (see _formRoundRobinGroup); null
             // for an ordinary head-to-head.
@@ -3636,7 +3753,10 @@
                 indoorMin: Math.min.apply(null, ics),
                 coverMin: Math.min.apply(null, starves),
                 stuck: hs.reduce(function (n, h) { return n + _trailingSportStreak(h); }, 0),
-                variety: starves.reduce(function (a, b) { return a + b; }, 0)
+                variety: starves.reduce(function (a, b) { return a + b; }, 0),
+                byeClaim: _byeOrder ? _byeOrder.claim(members) : 0,
+                byePeak: _byeOrder ? _byeOrder.peak(members) : 0,
+                byeRecency: _byeOrder ? _byeOrder.recency(members) : 0
             };
         });
 
@@ -3649,11 +3769,15 @@
         // spreading each sport across all teams. SECONDARY: break active same-sport
         // STREAKS; then total starvation; then fewest prior meetings (the original
         // order). Indoor need stays primary when required.
+        // ★ LG-14b: a field shortage puts bye fairness above all of it — see the
+        // matching note in the sport_variety assigner. No-op when every matchup
+        // can be seated.
         if (_indoorReqMV && _indoorReqMV.enabled) {
-            matchupsWithPriority.sort((a, b) => a.indoorMin - b.indoorMin || a.coverMin - b.coverMin || b.stuck - a.stuck || a.variety - b.variety || a.matchupCount - b.matchupCount);
+            matchupsWithPriority.sort((a, b) => _byeOrderCmp(a, b) || a.indoorMin - b.indoorMin || a.coverMin - b.coverMin || b.stuck - a.stuck || a.variety - b.variety || a.matchupCount - b.matchupCount);
         } else {
-            matchupsWithPriority.sort((a, b) => a.coverMin - b.coverMin || b.stuck - a.stuck || a.variety - b.variety || a.matchupCount - b.matchupCount);
+            matchupsWithPriority.sort((a, b) => _byeOrderCmp(a, b) || a.coverMin - b.coverMin || b.stuck - a.stuck || a.variety - b.variety || a.matchupCount - b.matchupCount);
         }
+        _logByeOrder(leagueName, _byeOrder, matchupsWithPriority);
 
         console.log(`   📊 [MatchupVariety] Matchup priorities:`);
         matchupsWithPriority.forEach(m => {
