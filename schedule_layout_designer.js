@@ -137,6 +137,14 @@
     { div: 2, label: 'Lunch', start: 780, end: 840, bg: '#fca5a5', fg: '#7f1d1d' }
   ];
 
+  /** True when the camp builds schedules with the layer-based Auto builder. */
+  function isAutoMode() {
+    try {
+      if (window._daBuilderMode) return window._daBuilderMode === 'auto';
+      return typeof window.getCampBuilderMode === 'function' && window.getCampBuilderMode() === 'auto';
+    } catch (e) { return false; }
+  }
+
   /** Real camp structure when there is one, otherwise a representative stand-in. */
   function previewDivisions() {
     var real = window.divisions || {};
@@ -253,6 +261,13 @@
 
     if (draft.builtIn) {
       h += '<div class="sld-note">This is the built-in layout, so it can\'t be edited directly. Any change you make here starts a copy of it — the original stays put.</div>';
+    }
+
+    // Auto mode edits LAYERS on their own timeline rather than the tile grid,
+    // and that editor still draws its own way. Say so here instead of letting an
+    // auto-mode camp save a layout and wonder why their editor looks unchanged.
+    if (isAutoMode()) {
+      h += '<div class="sld-warn" style="margin-top:0;margin-bottom:16px;">You\'re in <strong>Auto</strong> mode, where the builder edits activity <em>layers</em> on their own timeline — that editor keeps its current look. This layout still applies to your printouts and to the manual skeleton grid.</div>';
     }
 
     h += '<div class="sld-field"><label>Name</label>' +
