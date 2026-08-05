@@ -4956,7 +4956,10 @@ function renderAnalytics(){
             h+=bar(expItems2,expItems2[0].value);
             h+='</div>';
         }
-        h+='<div style="display:flex;justify-content:flex-end;margin-bottom:8px"><button class="me-btn me-btn--pri me-btn--sm" onclick="CampistryMe.finAddExpense()">+ Add Expense</button></div>';
+        h+='<div style="display:flex;justify-content:flex-end;gap:8px;margin-bottom:8px">'
+            +'<label class="me-btn me-btn--sec me-btn--sm" style="cursor:pointer">📄 Upload a receipt'
+            +'<input type="file" accept="image/*,application/pdf" style="display:none" onchange="CampistryMe.readReceipt(this)"></label>'
+            +'<button class="me-btn me-btn--pri me-btn--sm" onclick="CampistryMe.finAddExpense()">+ Add Expense</button></div>';
         h+='<div class="me-card"><div class="me-card-head"><h3>Expense Ledger</h3></div><div class="me-tw"><table class="me-t"><thead><tr><th>Date</th><th>Description</th><th>Category</th><th>Amount</th><th></th></tr></thead><tbody>';
         finExpenses.sort(function(a,b){return(b.date||'').localeCompare(a.date||'')}).forEach(function(e,i){
             h+='<tr><td style="font-size:.75rem;color:var(--s400)">'+esc(e.date||'—')+'</td><td class="bold">'+esc(e.desc)+'</td><td>'+bdg(e.cat,'gray')+'</td><td style="font-weight:700;color:var(--err)">'+fm(e.amount)+'</td><td style="text-align:right"><button class="me-btn me-btn--ghost me-btn--sm" style="color:var(--err)" onclick="CampistryMe.finRemoveExpense('+i+')">✕</button></td></tr>';
@@ -5149,6 +5152,160 @@ function _staffPhotoClear(){
     var prev=document.getElementById('staffPhotoPrev');
     if(prev) prev.innerHTML=_staffAvatar({},64);
 }
+// ═══════════════════════════════════════════════════════════════
+// RECEIPT READING — upload a receipt, review what was read, save it
+//
+// Logging an expense meant squinting at a crumpled receipt and typing the date,
+// vendor, amount and category by hand. The read-receipt edge function extracts
+// them; this is the review screen around it.
+//
+// NOTHING is written to the ledger without the office confirming it. Every row
+// is editable, every row carries the confidence it was read with, and a low
+// confidence row is visibly a guess rather than quietly wrong.
+// ═══════════════════════════════════════════════════════════════
+var _receiptRows=[];      // the pending, editable extraction
+var _receiptMeta=null;
+
+/** The categories this camp actually uses, so the model reuses them. */
+function _expenseCategories(){
+    var used={};
+    (finExpenses||[]).forEach(function(e){ if(e&&e.cat) used[String(e.cat).trim()]=1; });
+    var out=Object.keys(used);
+    FIN_CATS.forEach(function(c){ if(out.indexOf(c)<0) out.push(c); });
+    return out;
+}
+
+function _fileToBase64(file){
+    return new Promise(function(resolve,reject){
+        var r=new FileReader();
+        r.onload=function(){
+            var s=String(r.result||'');
+            var comma=s.indexOf(',');
+            resolve(comma>=0?s.slice(comma+1):s);   // strip the data: prefix
+        };
+        r.onerror=function(){reject(new Error('Could not read that file'))};
+        r.readAsDataURL(file);
+    });
+}
+
+async function readReceipt(input){
+    var file=input&&input.files&&input.files[0];
+    if(input)input.value='';       // let the same file be picked again after a cancel
+    if(!file)return;
+    if(!_secEdit('billing','Reading a receipt'))return;
+    if(file.size>10*1024*1024){toast('That file is over 10MB — take the photo again at a smaller size','error');return}
+
+    toast('Reading the receipt…');
+    try{
+        var b64=await _fileToBase64(file);
+        var res=await callEdgeFunction('read-receipt',{
+            file:{data:b64,mediaType:file.type||'image/jpeg'},
+            knownCategories:_expenseCategories()
+        });
+        var rows=(res&&res.transactions)||[];
+        if(!rows.length){
+            showModal('Nothing to import',
+                '<div class="me-modal-form"><p style="font-size:.86rem;line-height:1.6">No transactions could be read from <strong>'+esc(file.name||'that file')+'</strong>.'
+                +(res&&res.notes?'<br><br><span style="color:var(--s500)">'+esc(res.notes)+'</span>':'')
+                +'</p><p style="font-size:.82rem;color:var(--s500)">Add it by hand with <strong>+ Add Expense</strong>.</p></div>');
+            return;
+        }
+        _receiptRows=rows.map(function(r,i){
+            return {i:i,date:r.date||today(),vendor:r.vendor||'',description:r.description||'',
+                    amount:Number(r.amount)||0,cat:r.category||'Miscellaneous',
+                    confidence:r.confidence||'medium',include:true};
+        });
+        _receiptMeta={fileName:file.name||'',documentType:res.documentType||'',currency:res.currency||'',notes:res.notes||''};
+        _openReceiptReview();
+    }catch(err){
+        console.error('[Me] read-receipt:',err);
+        toast(err.message||'Could not read that receipt','error');
+    }
+}
+
+function _openReceiptReview(){
+    var many=_receiptRows.length>1;
+    var h='<div class="me-modal-form">';
+    h+='<div style="background:var(--s50);padding:10px 14px;border-radius:var(--r);margin-bottom:12px;font-size:.82rem">'
+        +'Read <strong>'+_receiptRows.length+' transaction'+(many?'s':'')+'</strong> from '+esc(_receiptMeta.fileName||'the upload')
+        +(_receiptMeta.currency&&_receiptMeta.currency!=='USD'?' · <strong style="color:var(--err)">'+esc(_receiptMeta.currency)+'</strong>':'')
+        +'<br><span style="color:var(--s500)">Check the details before saving — nothing is added to the ledger until you do.</span></div>';
+    if(_receiptMeta.notes){
+        h+='<div style="background:#FFFBEB;border:1px solid #FDE68A;padding:9px 12px;border-radius:var(--r);margin-bottom:12px;font-size:.78rem;color:#92400E;line-height:1.5">'
+            +esc(_receiptMeta.notes)+'</div>';
+    }
+    h+='<div id="rcpRows">'+_receiptRowsHtml()+'</div>';
+    h+='<div style="text-align:right;font-size:.85rem;font-weight:700;margin-top:10px;padding-top:8px;border-top:1px solid var(--s200)">'
+        +'Total: <span id="rcpTotal">'+fm(_receiptTotal())+'</span></div>';
+    h+='</div>';
+    showModal(many?'Review '+_receiptRows.length+' transactions':'Review this expense',h,function(){
+        var keep=_receiptRows.filter(function(r){return r.include});
+        if(!keep.length){alert('Tick at least one transaction, or cancel.');return}
+        keep.forEach(function(r,n){
+            finExpenses.push({
+                id:Date.now()+n,
+                desc:[r.vendor,r.description].filter(Boolean).join(' — ')||'Expense',
+                cat:(r.cat||'Miscellaneous').trim(),
+                amount:Number(r.amount)||0,
+                date:(r.date||'').trim(),
+                // Kept so a figure queried months later can be traced back to
+                // the document it came from, and to whether it was a guess.
+                source:'receipt',
+                sourceFile:_receiptMeta.fileName||'',
+                readConfidence:r.confidence||''
+            });
+        });
+        save();closeModal('dynModal');renderAnalytics();
+        toast('Added '+keep.length+' expense'+(keep.length>1?'s':'')+' — '+fm(keep.reduce(function(s,r){return s+(Number(r.amount)||0)},0)));
+        _receiptRows=[];_receiptMeta=null;
+    });
+}
+
+function _receiptRowsHtml(){
+    var cats=_expenseCategories();
+    return _receiptRows.map(function(r){
+        var conf=r.confidence==='low'?['#DC2626','#FEF2F2','low confidence']
+                :r.confidence==='medium'?['#B45309','#FFFBEB','check this']
+                :['#16A34A','#ECFDF5','clear'];
+        return '<div style="border:1px solid var(--s200);border-radius:var(--r);padding:11px;margin-bottom:9px;'+(r.include?'':'opacity:.45;')+'">'
+            +'<div style="display:flex;align-items:center;gap:8px;margin-bottom:8px">'
+            +'<label style="display:flex;align-items:center;gap:6px;font-size:.78rem;font-weight:600;cursor:pointer;flex:1">'
+            +'<input type="checkbox"'+(r.include?' checked':'')+' onchange="CampistryMe._rcpSet('+r.i+',\'include\',this.checked)"> Include</label>'
+            +'<span style="font-size:.62rem;font-weight:700;color:'+conf[0]+';background:'+conf[1]+';padding:2px 7px;border-radius:4px">'+conf[2]+'</span></div>'
+            +'<div style="display:grid;grid-template-columns:1fr 1fr;gap:8px">'
+            +'<div class="me-field" style="margin:0"><label>Vendor</label><input type="text" class="me-input me-input--sm" value="'+esc(r.vendor)+'" oninput="CampistryMe._rcpSet('+r.i+',\'vendor\',this.value)"></div>'
+            +'<div class="me-field" style="margin:0"><label>Amount ($)</label><input type="number" step="0.01" class="me-input me-input--sm" value="'+(Number(r.amount)||0).toFixed(2)+'" oninput="CampistryMe._rcpSet('+r.i+',\'amount\',this.value)"></div>'
+            +'</div>'
+            +'<div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-top:8px">'
+            +'<div class="me-field" style="margin:0"><label>Date</label><input type="date" class="me-input me-input--sm" value="'+esc(r.date)+'" oninput="CampistryMe._rcpSet('+r.i+',\'date\',this.value)"></div>'
+            +'<div class="me-field" style="margin:0"><label>Category</label><select class="me-input me-input--sm" onchange="CampistryMe._rcpSet('+r.i+',\'cat\',this.value)">'
+            +cats.map(function(c){return'<option value="'+esc(c)+'"'+(c===r.cat?' selected':'')+'>'+esc(c)+'</option>'}).join('')
+            +(cats.indexOf(r.cat)<0?'<option value="'+esc(r.cat)+'" selected>'+esc(r.cat)+'</option>':'')
+            +'</select></div>'
+            +'</div>'
+            +'<div class="me-field" style="margin:8px 0 0"><label>Description</label><input type="text" class="me-input me-input--sm" value="'+esc(r.description)+'" oninput="CampistryMe._rcpSet('+r.i+',\'description\',this.value)"></div>'
+            +'</div>';
+    }).join('');
+}
+
+function _receiptTotal(){
+    return _receiptRows.filter(function(r){return r.include})
+        .reduce(function(s,r){return s+(Number(r.amount)||0)},0);
+}
+
+function _rcpSet(i,key,val){
+    var r=_receiptRows.filter(function(x){return x.i===i})[0];
+    if(!r)return;
+    r[key]=(key==='amount')?(parseFloat(val)||0):val;
+    var t=document.getElementById('rcpTotal'); if(t)t.textContent=fm(_receiptTotal());
+    // Only the include toggle changes the layout; re-rendering on every
+    // keystroke would fight the caret in the field being typed into.
+    if(key==='include'){
+        var box=document.getElementById('rcpRows');
+        if(box)box.innerHTML=_receiptRowsHtml();
+    }
+}
+
 function finRemoveStaff(i){finStaff.splice(i,1);save();renderAnalytics();toast('Removed')}
 function finAddExpense(){
     var desc=prompt('Description:');if(!desc)return;
@@ -6631,11 +6788,25 @@ function getStripePublishableKey(){
 }
 function getCampId(){return localStorage.getItem('campistry_camp_id')||''}
 
+/** The signed-in user's access token, so a function can tell WHO is calling. */
+async function _userAccessToken(){
+    try{
+        var client=window.CampistryDB&&window.CampistryDB.getClient&&window.CampistryDB.getClient();
+        if(!client||!client.auth)return null;
+        var res=await client.auth.getSession();
+        return res&&res.data&&res.data.session&&res.data.session.access_token||null;
+    }catch(e){return null}
+}
+
 async function callEdgeFunction(fnName,body){
     var url=getSupabaseUrl()+'/functions/v1/'+fnName;
+    // Prefer the user's token over the anon key. Functions that spend money per
+    // call need to know a real, signed-in user is behind the request — the anon
+    // key is in the page source and identifies nobody.
+    var token=await _userAccessToken();
     var resp=await fetch(url,{
         method:'POST',
-        headers:{'Content-Type':'application/json','Authorization':'Bearer '+getSupabaseKey(),'apikey':getSupabaseKey()},
+        headers:{'Content-Type':'application/json','Authorization':'Bearer '+(token||getSupabaseKey()),'apikey':getSupabaseKey()},
         body:JSON.stringify(body)
     });
     var data=await resp.json();
@@ -9294,6 +9465,7 @@ window.CampistryMe={
     prEditProgram:prEditProgram,prNewRun:prNewRun,prDeleteRun:prDeleteRun,prExportCSV:prExportCSV,
     finSetTab:finSetTab,finAddStaff:finAddStaff,finEditStaff:finEditStaff,finStaffModal:finStaffModal,_staffPhotoPick:_staffPhotoPick,_staffPhotoClear:_staffPhotoClear,finRemoveStaff:finRemoveStaff,
     finAddExpense:finAddExpense,finRemoveExpense:finRemoveExpense,
+    readReceipt:readReceipt,_rcpSet:_rcpSet,
     finAddPayment:finAddPayment,finRemovePayment:finRemovePayment,finRefund:finRefund,
     _rfMethodChanged:_rfMethodChanged,
     sendPayLink:sendPayLink,copyPayLink:copyPayLink,
