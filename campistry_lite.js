@@ -31,7 +31,10 @@
 
     const HEAD_ROLES = ['owner', 'admin', 'scheduler'];
     const KV_KEYS = ['app1', 'campStructure', 'leaguesByName', 'specialtyLeagues',
-                     'liteStaffAssignments', 'liteSmsSettings', 'camp_name', 'fields'];
+                     'liteStaffAssignments', 'liteSmsSettings', 'camp_name', 'fields',
+                     // Me owns the staff directory and the counselor visibility
+                     // policy; Lite reads both rather than keeping its own copy.
+                     'campistryMe'];
     // Lite is installed as its own app, so it signs in on its own page rather
     // than bouncing to the marketing site.
     const LOGIN_PAGE = 'campistry_lite_login.html';
@@ -53,7 +56,10 @@
         leagues: {},          // leaguesByName
         specialty: {},        // specialtyLeagues (id-keyed)
         specialActivities: [],// app1.specialActivities ([{ name, ... }])
-        staff: {},            // liteStaffAssignments
+        staff: {},            // liteStaffAssignments (legacy fallback)
+        me: {},               // campistryMe blob
+        bunkStaff: {},        // campistryMe.bunkStaff — the staff directory
+        visibility: null,     // campistryMe.counselorVisibility (null = defaults)
         productAccess: null,  // camp_users.product_access — null = unrestricted
         sms: { enabled: false, audience: 'counselors', footer: '' },
         stateLoaded: false,
@@ -324,6 +330,10 @@
             camp.specialActivities = app1.specialActivities || [];
             _specialNames = null;   // reset lazy cache when config reloads
             camp.staff = byKey.liteStaffAssignments || {};
+            camp.me = byKey.campistryMe || {};
+            camp.bunkStaff = camp.me.bunkStaff || {};
+            camp.visibility = (camp.me.counselorVisibility && typeof camp.me.counselorVisibility === 'object')
+                ? camp.me.counselorVisibility : null;
             camp.fields = byKey.fields || app1.fields || [];
             camp.campName = (typeof byKey.camp_name === 'string') ? byKey.camp_name
                           : (byKey.camp_name && byKey.camp_name.value) || '';
@@ -838,16 +848,44 @@
         return out;
     }
 
-    // Counselor's assigned bunks (from liteStaffAssignments, matched by email)
+    // Counselor's assigned bunks. Me's bunk directory is the source of truth —
+    // it's where hiring places people — with the older liteStaffAssignments
+    // kept as a fallback so camps that set it up there don't lose access.
     function myBunks() {
+        const email = String(userEmail || '').trim().toLowerCase();
+        const out = [];
+        Object.keys(camp.bunkStaff || {}).forEach(bunk => {
+            (camp.bunkStaff[bunk] || []).forEach(st => {
+                if (String(st?.email || '').trim().toLowerCase() === email && out.indexOf(bunk) < 0) out.push(bunk);
+            });
+        });
+        if (out.length) return out;
         const rec = camp.staff?.[userEmail];
         return (rec && Array.isArray(rec.bunks)) ? rec.bunks.filter(Boolean) : [];
+    }
+
+    // The head counselor's policy, resolved through the shared catalogue.
+    function visibilityPolicy() {
+        const V = window.CampistryVisibility;
+        if (!V) return null;
+        return camp.visibility || V.defaults();
+    }
+    // Counselors see only what the policy permits. Head staff are unaffected —
+    // the policy governs what a counselor may see, not what an admin may.
+    // Scrubbing here (not at render) means a hidden field is absent from the
+    // object entirely, so it can't be dug out of the DOM or the console.
+    function scrubForViewer(camper) {
+        const V = window.CampistryVisibility;
+        if (!V || !isCounselor()) return camper;
+        const clean = V.filterCamper(camper, visibilityPolicy());
+        clean.name = camper.name;   // identity is always-on; keep the key we sort by
+        return clean;
     }
 
     function campersInBunk(bunk) {
         return Object.entries(camp.roster || {})
             .filter(([, c]) => c && c.bunk === bunk)
-            .map(([name, c]) => ({ name, ...c }))
+            .map(([name, c]) => scrubForViewer({ name, ...c }))
             .sort((a, b) => a.name.localeCompare(b.name));
     }
 

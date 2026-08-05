@@ -24,6 +24,7 @@ var curPage='campers', editingCamper=null, editingDiv=null, editingFam=null;
 var campersView='list'; // 'list' | 'family' — Families now lives inside the Campers page
 var regFilter='all';    // Registration section filter: all | applied | waitlisted | accepted | enrolled | withdrawn | declined
 var staffApplications={};   // Staff hiring: applicant id → application record
+var counselorVisibility=null; // What counselors see in Lite; null = catalogue defaults
 var staffFilter='all';      // Staffing pipeline filter
 var leads={};               // Inquiry CRM: lead id → prospective-family record
 var leadFilter='all';       // Leads pipeline filter
@@ -146,6 +147,7 @@ function loadData(){
         enrollments=me.enrollments||{}; sessions=me.sessions||[]; enrollSettings=me.enrollSettings||{};
         staffApplications=me.staffApplications||{};
         leads=me.leads||{};
+        counselorVisibility=(me.counselorVisibility&&typeof me.counselorVisibility==='object')?me.counselorVisibility:null;
         formConfig=me.formConfig||null;
         printSheets=Array.isArray(me.printSheets)?me.printSheets:[];
         savedReports=Array.isArray(me.savedReports)?me.savedReports:[];
@@ -240,6 +242,7 @@ function save(){
             enrollments:enrollments,
             staffApplications:staffApplications,
             leads:leads,
+            counselorVisibility:counselorVisibility,
             sessions:sessions,
             enrollSettings:enrollSettings,
             formConfig:formConfig,
@@ -2846,6 +2849,57 @@ var STAFF_ONBOARD=[['contract','Signed offer / contract'],['i9','I-9 verified'],
 function _staffStatusType(s){return s==='hired'?'ok':s==='declined'?'err':s==='offered'?'info':s==='reference'?'warn':'gray';}
 function _staffLabel(s){var x=STAFF_STAGES.find(function(g){return g.key===s;});return x?x.label:(s||'Applied');}
 
+// ── What counselors can see in Campistry Lite ─────────────────────────
+// The head counselor's call, per camp. Catalogue lives in
+// campistry_visibility.js so Lite enforces exactly this list.
+var _visOpen=false;
+function _vis(){ return (window.CampistryVisibility||null); }
+function visibilityPolicy(){
+    var V=_vis(); if(!V)return {};
+    return counselorVisibility||V.defaults();
+}
+function toggleVisibilityPanel(){ _visOpen=!_visOpen; renderStaffing(); }
+function setCounselorVisibility(key,on){
+    var V=_vis(); if(!V)return;
+    if(!counselorVisibility)counselorVisibility=V.defaults();
+    counselorVisibility[key]=!!on;
+    save();
+    renderStaffing();
+}
+function resetCounselorVisibility(){
+    var V=_vis(); if(!V)return;
+    counselorVisibility=V.defaults();
+    save(); renderStaffing();
+    toast('Reset to defaults');
+}
+function _visibilityPanelHTML(){
+    var V=_vis();
+    if(!V)return '';
+    var pol=visibilityPolicy();
+    var items=V.toggleable();
+    var onCount=items.filter(function(f){return V.isVisible(pol,f.key)}).length;
+    var h='<div style="background:#fff;border:1px solid var(--s200);border-radius:var(--r);margin-bottom:14px;overflow:hidden">';
+    h+='<button style="width:100%;display:flex;align-items:center;gap:10px;padding:12px 16px;background:none;border:none;cursor:pointer;text-align:left" onclick="CampistryMe.toggleVisibilityPanel()">';
+    h+='<div style="flex:1"><div style="font-size:.85rem;font-weight:700;color:var(--s700)">What counselors can see in Campistry Lite</div>';
+    h+='<div style="font-size:.76rem;color:var(--s500);margin-top:2px">'+onCount+' of '+items.length+' details shared · applies to every counselor</div></div>';
+    h+='<span style="font-size:.8rem;color:var(--s400)">'+(_visOpen?'Hide':'Change')+'</span></button>';
+    if(_visOpen){
+        h+='<div style="padding:0 16px 14px">';
+        h+='<p style="font-size:.76rem;color:var(--s500);margin:0 0 10px">Counselors always see a camper\'s name, bunk, grade and division — they can\'t do the job without it. Everything below is your call. Anything switched off is never sent to their phone, not just hidden.</p>';
+        items.forEach(function(f){
+            var on=V.isVisible(pol,f.key);
+            h+='<label style="display:flex;align-items:center;gap:10px;padding:7px 0;border-bottom:1px solid var(--s100);font-size:.84rem;cursor:pointer">'
+              +'<input type="checkbox" '+(on?'checked':'')+' onchange="CampistryMe.setCounselorVisibility(\''+je(f.key)+'\',this.checked)">'
+              +'<span style="flex:1">'+esc(f.label)+'</span>'
+              +'<span style="font-size:.7rem;font-weight:700;color:'+(on?'var(--ok)':'var(--s400)')+'">'+(on?'Shared':'Hidden')+'</span>'
+              +'</label>';
+        });
+        h+='<button class="me-btn me-btn--ghost me-btn--sm" style="margin-top:10px" onclick="CampistryMe.resetCounselorVisibility()">Reset to defaults</button>';
+        h+='</div>';
+    }
+    h+='</div>';
+    return h;
+}
 function renderStaffing(){
     var c=document.getElementById('page-staffing');
     var arr=Object.entries(staffApplications);
@@ -2870,6 +2924,8 @@ function renderStaffing(){
           +'<div style="margin-top:4px;font-size:.78rem">'+unplaced.slice(0,6).map(function(a){return esc(a.name||'Unnamed')}).join(' · ')
           +(unplaced.length>6?' · +'+(unplaced.length-6)+' more':'')+'</div></div>';
     }
+
+    h+=_visibilityPanelHTML();
 
     // Application link banner
     h+='<div style="background:#fff;border:1px solid var(--s200);border-radius:var(--r);padding:12px 16px;margin-bottom:14px;display:flex;align-items:center;gap:12px;flex-wrap:wrap">';
@@ -8475,6 +8531,9 @@ window.CampistryMe={
     // answer can't drift between apps.
     // Hiring → bunk placement, so a hired applicant becomes a reachable
     // counselor without anyone retyping their email.
+    // What counselors may see in Lite — set here, enforced there.
+    visibilityPolicy:visibilityPolicy,toggleVisibilityPanel:toggleVisibilityPanel,
+    setCounselorVisibility:setCounselorVisibility,resetCounselorVisibility:resetCounselorVisibility,
     hiredStaff:hiredStaff,allBunkNames:allBunkNames,bunksForStaffEmail:bunksForStaffEmail,
     assignHiredToBunk:assignHiredToBunk,unassignHiredFromBunk:unassignHiredFromBunk,
     fillBunkStaffFromHired:fillBunkStaffFromHired,
