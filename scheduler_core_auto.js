@@ -852,7 +852,17 @@
         //   Never bails silently: logs a counter line whenever records were examined.
         function _runCrossBunkExchange() {
           try {
-            var _cxOn = (typeof window === 'undefined') || (window.__crossBunkExchange !== false);
+            // ⚠ DEFAULT OFF — live it DID resolve all 3 shiur windows (7 holes/195min →
+            //   4/125, shiur bunks 24→27) but introduced 3 cross-division validator
+            //   conflicts, the first validator regression of the project. Mechanism:
+            //   the seat check is correct AT THIS SEAM, but passes running AFTER it
+            //   (the generation-complete listener chain — FQ re-opt etc.) relocate
+            //   OTHER bunks' tiles without knowing about these fills, and the fills'
+            //   _fixed flag makes them survive regens where they collide with fresh
+            //   placements. 0 validator errors is the hard invariant; the pass stays
+            //   opt-in (window.__crossBunkExchange = true) until it either runs after
+            //   the last tile-moving pass or re-validates at completion.
+            var _cxOn = (typeof window !== 'undefined') && (window.__crossBunkExchange === true);
             if (!_cxOn || !window.scheduleAssignments || !window.SchedulingRules) return;
             var _cxOpen = (typeof window !== 'undefined' && Array.isArray(window.__genOpenSlots)) ? window.__genOpenSlots : [];
             if (!_cxOpen.length) return;
