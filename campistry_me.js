@@ -7069,13 +7069,91 @@ function renderBroadcasts(){
     c.innerHTML=h;
 }
 
+// ── Broadcast composer toolbar ───────────────────────────────────
+// The composer stores MARKUP, not HTML — one message goes to email, the parent
+// portal and SMS, which render nothing alike. campistry_broadcast_core.js turns
+// it into each. The toolbar just wraps the selection in the right marks, so a
+// camp that prefers to type "**like this**" gets the same result.
+function _bcCore(){ return window.CampistryBroadcastCore||null }
+
+function _bcToolbarHtml(){
+    var C=_bcCore();
+    var opts=C?C.richTextOptions():{sizes:[],colors:[]};
+    var btn=function(title,label,action,style){
+        return '<button type="button" title="'+esc(title)+'" onclick="CampistryMe._bcWrap(\''+action+'\')" '
+            +'style="border:1px solid var(--s200);background:#fff;border-radius:5px;min-width:28px;height:26px;padding:0 7px;cursor:pointer;font-size:.8rem;'+(style||'')+'">'+label+'</button>';
+    };
+    var h='<div style="display:flex;flex-wrap:wrap;gap:5px;align-items:center;padding:7px 8px;border:1px solid var(--s200);border-bottom:none;border-radius:var(--r) var(--r) 0 0;background:var(--s50)">';
+    h+=btn('Bold','B','bold','font-weight:800');
+    h+=btn('Italic','I','italic','font-style:italic;font-family:Georgia,serif');
+    h+=btn('Strikethrough','S','strike','text-decoration:line-through');
+    h+=btn('Divider','—','divider','');
+    h+='<span style="width:1px;height:18px;background:var(--s200);margin:0 2px"></span>';
+    h+='<select onchange="CampistryMe._bcWrap(\'size:\'+this.value);this.selectedIndex=0" style="border:1px solid var(--s200);border-radius:5px;height:26px;font-size:.75rem;background:#fff;cursor:pointer">'
+        +'<option value="">Size</option>'+opts.sizes.map(function(s){return'<option value="'+esc(s)+'">'+esc(s.charAt(0).toUpperCase()+s.slice(1))+'</option>'}).join('')+'</select>';
+    h+='<select onchange="CampistryMe._bcWrap(\'color:\'+this.value);this.selectedIndex=0" style="border:1px solid var(--s200);border-radius:5px;height:26px;font-size:.75rem;background:#fff;cursor:pointer">'
+        +'<option value="">Colour</option>'+opts.colors.map(function(c){return'<option value="'+esc(c)+'">'+esc(c.charAt(0).toUpperCase()+c.slice(1))+'</option>'}).join('')+'</select>';
+    h+='</div>';
+    return h;
+}
+
+/** Wrap the current selection (or the caret) in the chosen marks. */
+function _bcWrap(action){
+    var ta=document.getElementById('bcBody'); if(!ta||!action)return;
+    var start=ta.selectionStart,end=ta.selectionEnd;
+    var sel=ta.value.slice(start,end);
+    var before='',after='';
+    if(action==='bold'){before=after='**'}
+    else if(action==='italic'){before=after='_'}
+    else if(action==='strike'){before=after='~~'}
+    else if(action.indexOf('size:')===0){var s=action.slice(5);if(!s)return;before='[size='+s+']';after='[/size]'}
+    else if(action.indexOf('color:')===0){var c=action.slice(6);if(!c)return;before='[color='+c+']';after='[/color]'}
+    else if(action==='divider'){
+        // A divider owns its line, so it needs the surrounding newlines the
+        // renderer looks for.
+        var pre=ta.value.slice(0,start), post=ta.value.slice(end);
+        var ins=(pre&&!/\n$/.test(pre)?'\n':'')+'---\n';
+        ta.value=pre+ins+post;
+        ta.focus(); ta.selectionStart=ta.selectionEnd=pre.length+ins.length;
+        _bcPreview(); return;
+    } else return;
+
+    ta.value=ta.value.slice(0,start)+before+sel+after+ta.value.slice(end);
+    ta.focus();
+    // With text selected, keep it selected; with none, park the caret between
+    // the marks so typing lands inside them.
+    ta.selectionStart=start+before.length;
+    ta.selectionEnd=start+before.length+sel.length;
+    _bcPreview();
+}
+
+function _bcPreview(){
+    var C=_bcCore(), ta=document.getElementById('bcBody'), out=document.getElementById('bcPreview');
+    if(!ta||!out)return;
+    var raw=ta.value||'';
+    out.innerHTML=C?C.renderBroadcastBody(raw):esc(raw).replace(/\n/g,'<br>');
+    var note=document.getElementById('bcSmsNote');
+    if(note){
+        var m=document.getElementById('bcMethod');
+        var isSms=m&&/sms|all channels/i.test(m.value);
+        var plain=C?C.broadcastPlainText(raw):raw;
+        note.textContent=isSms
+            ? 'SMS drops the formatting and sends '+plain.length+' character'+(plain.length===1?'':'s')+' of plain text.'
+            : '';
+    }
+}
+
 function openBroadcastModal(){
     var divOpts=Object.keys(structure).map(function(d){return'<option value="'+esc(d)+'">'+esc(d)+'</option>'}).join('');
     var h='<div class="me-modal-form"><div class="me-field"><label>To</label><select id="bcTo" class="me-input" onchange="document.getElementById(\'bcDivWrap\').style.display=this.value===\'division\'?\'block\':\'none\'"><option value="all">All Families</option><option value="division">Specific Division</option><option value="enrolled">Enrolled Families Only</option><option value="staff">Staff Only</option></select></div>';
     h+='<div id="bcDivWrap" style="display:none"><div class="me-field"><label>Division</label><select id="bcDiv" class="me-input">'+divOpts+'</select></div></div>';
-    h+='<div class="me-field"><label>Method</label><select id="bcMethod" class="me-input"><option value="In-App">In-App (Parent Portal)</option><option value="Email">Email</option><option value="SMS">SMS</option><option value="All Channels">All Channels</option></select></div>';
+    h+='<div class="me-field"><label>Method</label><select id="bcMethod" class="me-input" onchange="CampistryMe._bcPreview()"><option value="In-App">In-App (Parent Portal)</option><option value="Email">Email</option><option value="SMS">SMS</option><option value="All Channels">All Channels</option></select></div>';
     h+='<div class="me-field"><label>Subject</label><input type="text" id="bcSubject" class="me-input" placeholder="Message subject..."></div>';
-    h+='<div class="me-field"><label>Message</label><textarea id="bcBody" class="me-input" rows="6" placeholder="Type your message here..." style="resize:vertical"></textarea></div></div>';
+    h+='<div class="me-field"><label>Message</label>'+_bcToolbarHtml()
+        +'<textarea id="bcBody" class="me-input" rows="6" placeholder="Type your message here..." style="resize:vertical;border-top-left-radius:0;border-top-right-radius:0" oninput="CampistryMe._bcPreview()"></textarea></div>';
+    h+='<div class="me-field"><label>Preview</label><div id="bcPreview" style="border:1px solid var(--s200);border-radius:var(--r);padding:12px;min-height:44px;font-size:.88rem;line-height:1.6;background:#fff;color:var(--s700)"></div>';
+    h+='<div id="bcSmsNote" style="font-size:.7rem;color:var(--s400);margin-top:4px"></div></div>';
+    h+='</div>';
     showModal('New Broadcast',h,function(){
         var to=document.getElementById('bcTo').value;
         var div=document.getElementById('bcDiv')?.value||'';
@@ -7113,7 +7191,11 @@ function viewBroadcast(idx){
     var h='<div style="margin-bottom:12px"><div style="font-size:.7rem;color:var(--s400);text-transform:uppercase;font-weight:600">Sent</div><div>'+esc(d)+'</div></div>';
     h+='<div style="margin-bottom:12px"><div style="font-size:.7rem;color:var(--s400);text-transform:uppercase;font-weight:600">To</div><div>'+esc(b.to||'All')+' · '+esc(b.method||'In-App')+' · '+(b.recipientCount||'?')+' recipients</div></div>';
     h+='<div style="margin-bottom:12px"><div style="font-size:.7rem;color:var(--s400);text-transform:uppercase;font-weight:600">Subject</div><div style="font-weight:600;font-size:1rem">'+esc(b.subject||'')+'</div></div>';
-    h+='<div style="background:var(--s50);padding:14px;border-radius:var(--r);font-size:.85rem;line-height:1.6;white-space:pre-wrap">'+esc(b.body||'(no body)')+'</div>';
+    // Render the stored markup, so history shows what the parent saw rather
+    // than the asterisks and brackets the composer wrote.
+    var C=_bcCore();
+    var bodyHtml=b.body?(C?C.renderBroadcastBody(b.body):esc(b.body).replace(/\n/g,'<br>')):'<span style="color:var(--s400)">(no body)</span>';
+    h+='<div style="background:var(--s50);padding:14px;border-radius:var(--r);font-size:.85rem;line-height:1.6">'+bodyHtml+'</div>';
     showModal('Broadcast',h);
 }
 function removeBroadcast(idx){
@@ -7985,7 +8067,16 @@ async function sendBroadcastNow(broadcast){
         }
     }
     if(!recipients.length){toast('No recipients with email','error');return{sent:0,failed:0}}
-    try{return await callEdgeFunction('send-broadcast',{to:recipients,subject:broadcast.subject||'',body:broadcast.body||'',method:broadcast.method||'Email',campName:campName})}
+    // The body is stored as markup; each channel gets its own rendering. `body`
+    // stays plain text so an older send-broadcast deployment keeps working, and
+    // bodyHtml is what an HTML-capable client should prefer.
+    var C=_bcCore();
+    var raw=broadcast.body||'';
+    var plain=C?C.broadcastPlainText(raw):raw;
+    var rich=C?C.wrapBroadcastEmail(C.renderBroadcastBody(raw),{subject:broadcast.subject||''}):'';
+    try{return await callEdgeFunction('send-broadcast',{to:recipients,subject:broadcast.subject||'',
+        body:plain,bodyHtml:rich,bodyMarkup:raw,
+        method:broadcast.method||'Email',campName:campName})}
     catch(err){toast('Send failed: '+err.message,'error');return{sent:0,failed:0}}
 }
 
@@ -9110,7 +9201,7 @@ window.CampistryMe={
     setBillFilter:setBillFilter,printStatement:printStatement,
     requestCardSetup:requestCardSetup,chargeStoredCard:chargeStoredCard,batchCharge:batchCharge,
     // Broadcasts
-    openBroadcastModal:openBroadcastModal,viewBroadcast:viewBroadcast,removeBroadcast:removeBroadcast,
+    openBroadcastModal:openBroadcastModal,_bcWrap:_bcWrap,_bcPreview:_bcPreview,viewBroadcast:viewBroadcast,removeBroadcast:removeBroadcast,
     // Forms & Docs
     addForm:addForm,deleteForm:deleteForm,viewFormResponses:viewFormResponses,
     switchFormsTab:switchFormsTab,

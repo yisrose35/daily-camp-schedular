@@ -44,7 +44,10 @@ serve(async (req) => {
   }
 
   try {
-    const { to, subject, body, method, campName } = await req.json();
+    // bodyHtml is the composer's markup already rendered and escaped by
+    // campistry_broadcast_core.js. body stays the plain-text form — it is what
+    // SMS sends, and the fallback when an older caller sends no bodyHtml.
+    const { to, subject, body, bodyHtml, method, campName } = await req.json();
     if (!to?.length || !body) {
       return new Response(JSON.stringify({ error: "to and body required" }), {
         status: 400, headers: { ...corsHeaders, "Content-Type": "application/json" },
@@ -52,17 +55,33 @@ serve(async (req) => {
     }
 
     const results = { emailSent: 0, emailFailed: 0, smsSent: 0, smsFailed: 0 };
-    const sendEmail = method === "email" || method === "all" || method === "All Channels";
-    const sendSms = method === "sms" || method === "SMS" || method === "all" || method === "All Channels";
+    // ★ The UI sends "Email" / "SMS" / "All Channels"; this compared against
+    //   lowercase literals, so an Email-only broadcast matched nothing and was
+    //   silently delivered to no one. Compare case-insensitively.
+    const m = String(method || "").toLowerCase();
+    const sendEmail = m === "email" || m === "all" || m === "all channels";
+    const sendSms = m === "sms" || m === "all" || m === "all channels";
+
+    // Anything interpolated into the email HTML must be escaped. bodyHtml is
+    // the one exception — it is produced by the renderer, which escapes first
+    // and only then emits its own closed tag set.
+    const esc = (s: unknown) =>
+      String(s ?? "")
+        .replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;")
+        .replace(/"/g, "&quot;").replace(/'/g, "&#39;");
+
+    const renderedBody = bodyHtml
+      ? String(bodyHtml)
+      : `<div style="white-space:pre-wrap;">${esc(body)}</div>`;
 
     const htmlBody = `
       <div style="font-family:sans-serif;max-width:600px;margin:0 auto;">
         <div style="background:#2563EB;color:#fff;padding:16px 24px;border-radius:8px 8px 0 0;">
-          <strong>${campName || "Camp"}</strong>
+          <strong>${esc(campName || "Camp")}</strong>
         </div>
         <div style="padding:24px;border:1px solid #e2e8f0;border-top:none;border-radius:0 0 8px 8px;">
-          ${subject ? `<h2 style="margin:0 0 12px;font-size:18px;">${subject}</h2>` : ""}
-          <div style="font-size:15px;line-height:1.6;color:#334155;white-space:pre-wrap;">${body}</div>
+          ${subject ? `<h2 style="margin:0 0 12px;font-size:18px;">${esc(subject)}</h2>` : ""}
+          <div style="font-size:15px;line-height:1.6;color:#334155;">${renderedBody}</div>
           <hr style="border:none;border-top:1px solid #e2e8f0;margin:24px 0;">
           <p style="font-size:12px;color:#94a3b8;">Sent via Campistry</p>
         </div>

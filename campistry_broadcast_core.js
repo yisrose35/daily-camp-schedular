@@ -165,6 +165,113 @@
         }
     }
 
+    // ─────────────────────────────────────────────────────────────────────────
+    // RICH TEXT
+    //
+    // One broadcast goes out over three channels that render nothing alike:
+    // email (HTML), the parent portal (HTML), and SMS (plain text, and billed
+    // by the character). So the composer stores MARKUP, not HTML, and each
+    // channel renders it its own way. A divider is a styled rule in an email
+    // and a row of dashes in a text message; a colour is meaningless in SMS and
+    // simply drops away.
+    //
+    // Storing markup rather than contentEditable's HTML also means nothing the
+    // office pastes in can inject markup into a parent's inbox: the renderer
+    // escapes first and only then applies its own small, closed tag set.
+    //
+    //   **bold**   _italic_   ~~strikethrough~~
+    //   ---                        (alone on a line: a divider)
+    //   [size=small|large|huge]…[/size]
+    //   [color=red|orange|green|blue|purple|grey]…[/color]
+    //
+    // Colours are a fixed palette rather than free-form CSS — an arbitrary
+    // value would be a style-injection hole, and half of them are unreadable
+    // against an email client's background anyway.
+    // ─────────────────────────────────────────────────────────────────────────
+
+    var SIZES = { small: '0.85em', large: '1.25em', huge: '1.6em' };
+    var COLORS = {
+        red: '#DC2626', orange: '#EA580C', green: '#16A34A',
+        blue: '#2563EB', purple: '#7C3AED', grey: '#6B7280', gray: '#6B7280'
+    };
+
+    function escapeHtml(s) {
+        return String(s == null ? '' : s)
+            .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+            .replace(/"/g, '&quot;').replace(/'/g, '&#39;');
+    }
+
+    /** The palette the composer offers. Exposed so the toolbar can't drift. */
+    function richTextOptions() {
+        return {
+            sizes: Object.keys(SIZES),
+            colors: ['red', 'orange', 'green', 'blue', 'purple', 'grey']
+        };
+    }
+
+    function renderInline(escaped, asHtml) {
+        // Order matters: ** before _ so bold isn't eaten by the italic rule.
+        var out = escaped
+            .replace(/\*\*([\s\S]+?)\*\*/g, asHtml ? '<strong>$1</strong>' : '$1')
+            .replace(/~~([\s\S]+?)~~/g, asHtml ? '<s>$1</s>' : '$1')
+            .replace(/(^|[\s(])_([^_\n]+)_(?=[\s).,!?]|$)/g, asHtml ? '$1<em>$2</em>' : '$1$2');
+
+        out = out.replace(/\[size=(small|large|huge)\]([\s\S]*?)\[\/size\]/gi, function (m, size, inner) {
+            return asHtml ? '<span style="font-size:' + SIZES[size.toLowerCase()] + '">' + inner + '</span>' : inner;
+        });
+        out = out.replace(/\[color=([a-z]+)\]([\s\S]*?)\[\/color\]/gi, function (m, name, inner) {
+            var hex = COLORS[name.toLowerCase()];
+            if (!hex) return inner;                       // unknown colour: keep the text, drop the tag
+            return asHtml ? '<span style="color:' + hex + '">' + inner + '</span>' : inner;
+        });
+        return out;
+    }
+
+    /**
+     * Render composer markup for one channel.
+     * @param {string} markup
+     * @param {object} [opts] { format: 'html' | 'text' }  default 'html'
+     * @returns {string}
+     */
+    function renderBroadcastBody(markup, opts) {
+        var asHtml = !opts || opts.format !== 'text';
+        var src = String(markup == null ? '' : markup);
+        // Escape BEFORE the tag pass in HTML mode, so pasted angle brackets are
+        // text and only our own markup can produce elements.
+        var body = asHtml ? escapeHtml(src) : src;
+
+        var lines = body.split(/\r?\n/);
+        var out = [];
+        for (var i = 0; i < lines.length; i++) {
+            // A divider is the whole line — three or more dashes, nothing else.
+            if (/^\s*-{3,}\s*$/.test(lines[i])) {
+                out.push(asHtml
+                    ? '<hr style="border:none;border-top:1px solid #D1D5DB;margin:16px 0">'
+                    : '------------------------');
+                continue;
+            }
+            out.push(renderInline(lines[i], asHtml));
+        }
+        return asHtml ? out.join('<br>') : out.join('\n');
+    }
+
+    /** Convenience: the plain-text form, for SMS and for previews. */
+    function broadcastPlainText(markup) {
+        return renderBroadcastBody(markup, { format: 'text' });
+    }
+
+    /**
+     * Wrap a rendered body in the styles an email client needs inline. Email
+     * clients strip <style> blocks, so the container carries its own.
+     */
+    function wrapBroadcastEmail(bodyHtml, opts) {
+        var subject = (opts && opts.subject) || '';
+        return '<div style="font-family:-apple-system,BlinkMacSystemFont,\'Segoe UI\',sans-serif;'
+            + 'font-size:15px;line-height:1.6;color:#1F2937;max-width:600px">'
+            + (subject ? '<h2 style="font-size:18px;font-weight:700;margin:0 0 12px">' + escapeHtml(subject) + '</h2>' : '')
+            + bodyHtml + '</div>';
+    }
+
     return {
         validateScheduleTime: validateScheduleTime,
         selectDue: selectDue,
@@ -172,6 +279,11 @@
         applyMergeTags: applyMergeTags,
         summarizeRecipients: summarizeRecipients,
         classifyEnrollmentStatus: classifyEnrollmentStatus,
-        matchesAudience: matchesAudience
+        matchesAudience: matchesAudience,
+        renderBroadcastBody: renderBroadcastBody,
+        broadcastPlainText: broadcastPlainText,
+        wrapBroadcastEmail: wrapBroadcastEmail,
+        richTextOptions: richTextOptions,
+        escapeHtml: escapeHtml
     };
 });

@@ -191,6 +191,9 @@
 <!-- Merge rules for duplicate family records — pure functions, loaded before
      campistry_me.js so the Families view can flag duplicates on first render. -->
 <script src="campistry_family_merge.js"></script>
+<!-- Broadcast markup renderer. Shared with Campistry Link's compose UI and the
+     scheduled-send function so email, SMS and the portal agree on formatting. -->
+<script src="campistry_broadcast_core.js"></script>
 <script src="campistry_payroll_core.js"></script>
 <!-- Shared catalogue of what counselors may see. Loaded by Me (where the
      policy is set) and by Lite (where it's enforced) — one list, so a field
