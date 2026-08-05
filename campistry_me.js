@@ -436,6 +436,16 @@ function _payLabel(id){
     if(!P) return id||'—';
     return P.label(P.normalizeLegacy(id));
 }
+/** How a refund went back out — a separate catalogue from the inbound methods. */
+function _refundOptions(selected,opts){
+    var P=_payAPI();
+    if(!P) return '<option value="check">Check</option><option value="zelle">Zelle</option><option value="cash">Cash</option><option value="other">Other</option>';
+    return P.refundOptionsHtml(selected,opts);
+}
+function _refundLabel(id){
+    var P=_payAPI();
+    return P?P.refundLabel(id):(id||'—');
+}
 
 function ff(label,id,val,type,opts){
     var h='<div class="fg"><label class="fl">'+esc(label)+'</label>';
@@ -3840,9 +3850,88 @@ function addApplication(){
     });
 }
 
+// ── Autopay guard on rejection ───────────────────────────────────
+// Declining a camper does not stop the nightly installment runner. A family on
+// autopay would keep being charged for a camper the camp has just turned away,
+// and the first anyone hears of it is the refund request. So the office is
+// warned before the decline lands, and can pause the plan in the same step.
+
+/** The family record behind an enrollment, matched the way the ledger matches. */
+function _familyKeyForEnrollment(id){
+    var e=enrollments[id]; if(!e)return null;
+    var found=Object.entries(families).find(function(entry){
+        return (entry[1].camperIds||[]).indexOf(e.camperName)>=0;
+    });
+    if(found) return found[0];
+    var lastName=(e.camperName||'').split(' ').pop().toLowerCase().replace(/[^a-z0-9]/g,'');
+    var guess='fam_'+lastName;
+    return families[guess]?guess:null;
+}
+
+/**
+ * Families among these enrollments that will keep being charged. Autopay alone
+ * isn't enough — without a card on file the runner has nothing to charge, so
+ * warning about it would be noise.
+ */
+function _autopayFamiliesFor(ids){
+    var seen={},out=[];
+    (ids||[]).forEach(function(id){
+        var fk=_familyKeyForEnrollment(id); if(!fk||seen[fk])return;
+        var f=families[fk];
+        if(!f||!f.plan||!f.plan.autopay||!f.cardOnFile)return;
+        var due=(f.plan.installments||[]).filter(function(i){return i.status!=='paid'});
+        seen[fk]=1;
+        out.push({famKey:fk,family:f,remaining:due.length,
+            next:due.slice().sort(function(a,b){return(a.dueDate||'').localeCompare(b.dueDate||'')})[0]||null});
+    });
+    return out;
+}
+
+/**
+ * Warn about autopay, then run `proceed`. Returns true when it took over (the
+ * caller must stop); false when there is nothing to warn about.
+ */
+function _warnAutopayThen(ids,verb,proceed){
+    var hits=_autopayFamiliesFor(ids);
+    if(!hits.length) return false;
+    var rows=hits.map(function(x){
+        return '<div style="display:flex;justify-content:space-between;gap:12px;padding:5px 0;border-bottom:1px solid var(--s100)">'
+            +'<span style="font-weight:600">'+esc(x.family.name||'')+'</span>'
+            +'<span style="color:var(--s500)">'+(x.next?fm(x.next.amount)+' due '+esc(x.next.dueDate||''):x.remaining+' payment'+(x.remaining===1?'':'s')+' left')+'</span></div>';
+    }).join('');
+    var h='<div class="me-modal-form">';
+    h+='<div style="background:#FFFBEB;border:1px solid #FDE68A;padding:11px 14px;border-radius:var(--r);margin-bottom:14px;font-size:.84rem;color:#92400E;line-height:1.55">'
+        +'<strong>'+hits.length+' famil'+(hits.length===1?'y is':'ies are')+' on autopay with a card on file.</strong><br>'
+        +'Autopay keeps charging after a '+esc(verb)+' — the card will be charged again on the next due date unless the plan is paused.</div>';
+    h+='<div style="font-size:.8rem;margin-bottom:12px">'+rows+'</div>';
+    h+='<label style="display:flex;align-items:center;gap:8px;font-size:.85rem;font-weight:600"><input type="checkbox" id="apPause" checked> Pause autopay for '+(hits.length===1?'this family':'these families')+'</label>';
+    h+='<div style="font-size:.72rem;color:var(--s400);margin-top:4px">The schedule is kept, so you can turn autopay back on if the camper returns.</div>';
+    h+='</div>';
+    showModal('Autopay is still running',h,function(){
+        var pause=document.getElementById('apPause');
+        if(pause&&pause.checked){
+            hits.forEach(function(x){ x.family.plan.autopay=false; });
+        }
+        closeModal('dynModal');
+        proceed(pause&&pause.checked?hits.length:0);
+    });
+    return true;
+}
+
 function updateEnrollStatus(id,status,opts){
     opts=opts||{};
     if(!enrollments[id])return;
+
+    // Warn before the status changes, not after — once it lands the office has
+    // already moved on and the next charge is still coming.
+    if(!opts.silent&&!opts.autopayChecked&&(status==='declined'||status==='withdrawn')){
+        var handled=_warnAutopayThen([id],status==='declined'?'decline':'withdrawal',function(paused){
+            updateEnrollStatus(id,status,Object.assign({},opts,{autopayChecked:true}));
+            if(paused) toast('Autopay paused for '+paused+' famil'+(paused===1?'y':'ies'));
+        });
+        if(handled) return;
+    }
+
     var prev=enrollments[id].status;
     enrollments[id].status=status;
     enrollments[id].statusHistory=enrollments[id].statusHistory||[];
@@ -3881,8 +3970,18 @@ function bulkEnrollStatus(status){
     if(!ids.length){ toast('Select at least one application'); return; }
     var verb=status==='accepted'?'Accepted':status==='declined'?'Declined':status==='waitlisted'?'Waitlisted':(status+'d');
     if(status==='declined' && !confirm('Decline '+ids.length+' application'+(ids.length>1?'s':'')+'?')) return;
-    ids.forEach(function(id){ updateEnrollStatus(id,status,{silent:true}); });
-    save(); renderEnrollment(); toast(verb+' '+ids.length+' application'+(ids.length>1?'s':''));
+
+    function apply(pausedCount){
+        // silent:true skips the per-row autopay check — the batch was warned
+        // about once above, listing every affected family together.
+        ids.forEach(function(id){ updateEnrollStatus(id,status,{silent:true,autopayChecked:true}); });
+        save(); renderEnrollment();
+        toast(verb+' '+ids.length+' application'+(ids.length>1?'s':'')
+            +(pausedCount?' · autopay paused for '+pausedCount+' famil'+(pausedCount===1?'y':'ies'):''));
+    }
+    if((status==='declined'||status==='withdrawn')
+        && _warnAutopayThen(ids,status==='declined'?'decline':'withdrawal',apply)) return;
+    apply(0);
 }
 
 // ─── PARENT PORTAL INVITE ────────────────────────────────────────────────────
@@ -4616,7 +4715,12 @@ function renderAnalytics(){
                 var _stBadge=_st==='pending'?' '+bdg('pending','warn'):_st==='failed'?' '+bdg('failed','err'):'';
                 var _canRefund=!_isRef&&!_pend&&(p.amount||0)>0;
                 var _acts=(_canRefund?'<button class="me-btn me-btn--ghost me-btn--sm" onclick="CampistryMe.finRefund(\''+je(String(p.id))+'\')">↩ Refund</button>':'')+'<button class="me-btn me-btn--ghost me-btn--sm" style="color:var(--err)" onclick="CampistryMe.finRemovePayment(\''+je(String(p.id))+'\')">✕</button>';
-                h+='<tr><td style="font-size:.75rem;color:var(--s400)">'+esc(p.date||'—')+'</td><td class="bold">'+esc(p.family)+(_isRef&&p.notes?' <span style="font-size:.7rem;font-weight:400;color:var(--s400)">'+esc(p.notes)+'</span>':'')+'</td><td style="font-weight:700;color:'+_amtCol+'">'+_amtTxt+'</td><td>'+bdg((_payLabel(p.method)||p.method||'—'),_isRef?'err':_st==='failed'?'err':_st==='pending'?'warn':'ok')+_stBadge+'</td><td style="text-align:right;white-space:nowrap">'+_acts+'</td></tr>';
+                // A refund's Method column says how the money went BACK. Older
+                // refunds carry no refundMethod, so they keep reading "Refund".
+                var _methodTxt=_isRef
+                    ? (p.refundMethod?'Refund · '+_refundLabel(p.refundMethod):'Refund')
+                    : (_payLabel(p.method)||p.method||'—');
+                h+='<tr><td style="font-size:.75rem;color:var(--s400)">'+esc(p.date||'—')+'</td><td class="bold">'+esc(p.family)+(_isRef&&p.notes?' <span style="font-size:.7rem;font-weight:400;color:var(--s400)">'+esc(p.notes)+'</span>':'')+'</td><td style="font-weight:700;color:'+_amtCol+'">'+_amtTxt+'</td><td>'+bdg(_methodTxt,_isRef?'err':_st==='failed'?'err':_st==='pending'?'warn':'ok')+_stBadge+'</td><td style="text-align:right;white-space:nowrap">'+_acts+'</td></tr>';
             });
             h+='</tbody></table></div></div>';
         }
@@ -4924,20 +5028,37 @@ function finRefund(id){
     h+='<div style="background:var(--s50);padding:10px 14px;border-radius:var(--r);margin-bottom:14px;font-size:.82rem">Refunding payment to <strong>'+esc(p.family||'')+'</strong><br>Original: <strong>'+fm(p.amount)+'</strong> · '+esc(p.method||'')+(p.date?' · '+esc(p.date):'')+(priorRefunded>0?'<br>Already refunded: <strong>'+fm(priorRefunded)+'</strong>':'')+'</div>';
     h+='<div style="display:grid;grid-template-columns:2fr 1fr;gap:10px">';
     h+='<div class="me-field"><label>Reason</label><select id="rfReason" class="me-input"><option value="requested_by_customer">Requested by customer</option><option value="cancellation">Cancellation / withdrawal</option><option value="adjustment">Billing adjustment</option><option value="duplicate">Duplicate charge</option><option value="fraudulent">Fraudulent</option></select></div>';
-    h+='<div class="me-field"><label>Amount ($)</label><input type="number" id="rfAmount" class="me-input" value="'+maxRefund.toFixed(2)+'" step="0.01" min="0.01" max="'+maxRefund+'"></div>';
+    h+='<div class="me-field"><label>Amount ($)</label><input type="number" id="rfAmount" class="me-input" value="'+maxRefund.toFixed(2)+'" step="0.01" min="0.01" oninput="CampistryMe._rfMethodChanged()"></div>';
     h+='</div>';
-    if(canStripe){
-        h+='<label style="display:flex;align-items:center;gap:8px;font-size:.85rem;margin-top:4px"><input type="checkbox" id="rfStripe" checked> Return the money to the card through Stripe</label>';
-        h+='<div style="font-size:.72rem;color:var(--s400);margin-top:4px">Leave unchecked to record the refund only (e.g. you refunded by cash or check).</div>';
-    } else {
-        h+='<div style="font-size:.75rem;color:var(--s400);margin-top:6px">No Stripe charge is on record for this payment, so this records the refund in the ledger only.</div>';
-    }
+    // ★ How the money actually went back. The old modal assumed the refund
+    //   matched the original method, which was wrong the moment a card payment
+    //   was refunded by check — the ledger then read "Refund" with no way to
+    //   reconcile it against the bank.
+    h+='<div class="me-field"><label>Returned via</label><select id="rfMethod" class="me-input" onchange="CampistryMe._rfMethodChanged()">'+_refundOptions(canStripe?'card':'check',{canStripe:canStripe})+'</select>';
+    h+='<div id="rfMethodNote" style="font-size:.72rem;color:var(--s400);margin-top:4px"></div></div>';
+    h+='<div class="me-field"><label>Reference # <span style="font-weight:400;color:var(--s400)">(optional)</span></label><input type="text" id="rfRef" class="me-input" placeholder="Check #, Zelle confirmation, etc."></div>';
+    // ★ A manual refund may exceed the original payment — one refund often
+    //   covers several charges. It asks for a note instead of refusing. Stripe
+    //   can only return what it took, so that path stays capped.
+    h+='<div class="me-field"><label>Note <span id="rfNoteReq" style="font-weight:400;color:var(--s400)">(optional)</span></label><input type="text" id="rfNote" class="me-input" placeholder="Why this refund, or what it covers"></div>';
+    h+='<div id="rfOverWarn" style="display:none;background:#FFFBEB;border:1px solid #FDE68A;padding:9px 12px;border-radius:var(--r);font-size:.76rem;color:#92400E;line-height:1.5"></div>';
     h+='</div>';
+    _rfMaxRefund=maxRefund;
+    setTimeout(_rfMethodChanged,0);   // after showModal writes the markup
     showModal('Refund Payment',h,async function(){
         var amt=parseFloat(document.getElementById('rfAmount').value)||0;
-        if(amt<=0||amt>maxRefund+0.001){alert('Enter an amount up to '+fm(maxRefund));return}
+        if(amt<=0){alert('Enter a refund amount');return}
         var reasonSel=document.getElementById('rfReason').value;
-        var doStripe=canStripe&&document.getElementById('rfStripe')&&document.getElementById('rfStripe').checked;
+        var methodSel=document.getElementById('rfMethod').value;
+        var refNo=(document.getElementById('rfRef').value||'').trim();
+        var note=(document.getElementById('rfNote').value||'').trim();
+        var doStripe=canStripe&&_payAPI()&&_payAPI().refundIsStripe(methodSel);
+        var over=Math.round((amt-maxRefund)*100)/100;
+        if(over>0.001){
+            if(doStripe){alert('Stripe can only return up to '+fm(maxRefund)+' — the amount of this charge. Pick another method to record a larger refund.');return}
+            if(!note){alert('A refund larger than the original payment needs a note explaining what it covers.');return}
+            if(!confirm('This refund is '+fm(over)+' more than the '+fm(maxRefund)+' left on this payment. Record it anyway?'))return;
+        }
         var stripeRefundId=null;
         if(doStripe){
             var stripeReason=(reasonSel==='requested_by_customer'||reasonSel==='duplicate'||reasonSel==='fraudulent')?reasonSel:'requested_by_customer';
@@ -4952,11 +5073,18 @@ function finRefund(id){
             }
         }
         var reasonLabel={requested_by_customer:'Requested by customer',cancellation:'Cancellation / withdrawal',adjustment:'Billing adjustment',duplicate:'Duplicate charge',fraudulent:'Fraudulent'}[reasonSel]||reasonSel;
+        var methodLabel=_refundLabel(methodSel);
         finPayments.push({
             id:'ref_'+Date.now(),
             family:p.family,familyKey:p.familyKey||null,enrollmentId:p.enrollmentId||null,
             amount:-amt,date:today(),method:'Refund',
-            reference:stripeRefundId||'',notes:'Refund — '+reasonLabel+(doStripe?' (Stripe)':''),
+            // How the money went back, kept separately from the "Refund" ledger
+            // type so reconciliation can filter on it.
+            refundMethod:methodSel,
+            reference:stripeRefundId||refNo,
+            notes:'Refund — '+reasonLabel+' · via '+methodLabel+(note?' — '+note:''),
+            refundNote:note,
+            exceedsOriginal:over>0.001?over:0,
             reason:reasonSel,refundOf:p.id,stripeRefundId:stripeRefundId,timestamp:Date.now()
         });
         var f=(p.familyKey&&families[p.familyKey])||Object.values(families).find(function(x){return x.name===p.family});
@@ -4964,9 +5092,41 @@ function finRefund(id){
         save();closeModal('dynModal');
         try{renderAnalytics()}catch(e){}
         try{renderBilling()}catch(e){}
-        toast('Refunded '+fm(amt)+(doStripe?' to card':'')+' for '+(p.family||'family'));
+        toast('Refunded '+fm(amt)+' by '+methodLabel.toLowerCase()+' for '+(p.family||'family'));
     });
 }
+// Keeps the refund modal honest as the operator types: says what the chosen
+// method will actually do, and warns the moment the amount passes what is left
+// on the payment — rather than rejecting the whole form on save.
+var _rfMaxRefund=0;
+function _rfMethodChanged(){
+    var mSel=document.getElementById('rfMethod'), aInp=document.getElementById('rfAmount');
+    if(!mSel||!aInp)return;
+    var P=_payAPI();
+    var isStripe=P?P.refundIsStripe(mSel.value):false;
+    var note=document.getElementById('rfMethodNote');
+    if(note) note.textContent=isStripe
+        ? 'Stripe returns the money to the card it was charged on. Capped at the amount of that charge.'
+        : 'Records the refund in the ledger. Send the money by '+_refundLabel(mSel.value).toLowerCase()+' yourself.';
+
+    var amt=parseFloat(aInp.value)||0;
+    var over=Math.round((amt-_rfMaxRefund)*100)/100;
+    var warn=document.getElementById('rfOverWarn');
+    var req=document.getElementById('rfNoteReq');
+    if(warn){
+        if(over>0.001&&isStripe){
+            warn.style.display='block';
+            warn.innerHTML='Stripe can only return the '+fm(_rfMaxRefund)+' it took. Lower the amount, or pick a manual method to record a larger refund.';
+        }else if(over>0.001){
+            warn.style.display='block';
+            warn.innerHTML='<strong>'+fm(over)+' more than this payment.</strong> That is allowed when one refund covers more than one payment — add a note saying what it covers.';
+        }else{
+            warn.style.display='none';
+        }
+    }
+    if(req) req.textContent=(over>0.001&&!isStripe)?'(required)':'(optional)';
+}
+
 function finSetBudget(){
     var rev=prompt('Revenue target ($):',finBudget.revenue||'');
     var pay=prompt('Payroll budget ($):',finBudget.payroll||'');
@@ -6451,6 +6611,21 @@ function monthlyPlan(famKey){
     h+='<div class="me-field"><label># Monthly payments</label><input type="number" id="mpMonths" class="me-input" value="3" min="1" max="24"></div>';
     h+='</div>';
     h+='<div class="me-field"><label>First payment date</label><input type="date" id="mpStart" class="me-input" value="'+defStart+'"></div>';
+
+    // ★ Deposit up front, charged PER CAMPER. A family holding three seats owes
+    //   three deposits; capped per camper so nobody is charged past what they
+    //   owe. The deposit comes out of the total before it is split monthly.
+    var camperCount=_planCampers(famKey).length;
+    h+='<div style="border-top:1px solid var(--s200);margin:14px 0 10px;padding-top:12px">';
+    h+='<label style="display:flex;align-items:center;gap:8px;font-size:.85rem;font-weight:600"><input type="checkbox" id="mpDepOn" onchange="CampistryMe._mpDepositChanged(\''+je(famKey)+'\')"> Take a deposit up front</label>';
+    h+='<div id="mpDepWrap" style="display:none;margin-top:10px">';
+    h+='<div style="display:grid;grid-template-columns:1fr 1fr;gap:10px">';
+    h+='<div class="me-field"><label>Deposit amount ($)</label><input type="number" id="mpDepEach" class="me-input" value="500.00" step="0.01" min="0.01" oninput="CampistryMe._mpDepositChanged(\''+je(famKey)+'\')"></div>';
+    h+='<div class="me-field"><label>Charged</label><select id="mpDepScope" class="me-input" onchange="CampistryMe._mpDepositChanged(\''+je(famKey)+'\')"><option value="camper" selected>Per camper ('+camperCount+')</option><option value="family">Once for the family</option></select></div>';
+    h+='</div>';
+    h+='<div id="mpDepBreakdown" style="font-size:.75rem;color:var(--s500);line-height:1.6"></div>';
+    h+='</div></div>';
+
     if(hasCard) h+='<label style="display:flex;align-items:center;gap:8px;font-size:.85rem;margin-top:4px"><input type="checkbox" id="mpAuto" checked> Auto-charge the card on file on each due date</label>';
     else h+='<div style="font-size:.75rem;color:var(--me);margin-top:6px">No card on file — save a card to enable auto-charge. You can still create the schedule; the parent can pay each month from their portal.</div>';
     h+='</div>';
@@ -6461,17 +6636,96 @@ function monthlyPlan(famKey){
         if(months<1)months=1; if(months>24)months=24;
         var start=document.getElementById('mpStart').value||defStart;
         var auto=hasCard&&document.getElementById('mpAuto')&&document.getElementById('mpAuto').checked;
-        var each=Math.round(total/months*100)/100;
+
+        var dep=_mpDepositFor(famKey,total);
+        if(dep.total>=total){alert('The deposit ('+fm(dep.total)+') covers the whole '+fm(total)+'. Lower the deposit, or record it as a single payment instead of a plan.');return}
+
+        var rest=Math.round((total-dep.total)*100)/100;
+        var each=Math.round(rest/months*100)/100;
         var insts=[]; var sd=new Date(start+'T12:00:00');
+        if(dep.total>0){
+            // Due today — a deposit that waits until the first monthly date is
+            // not holding anything.
+            insts.push({n:0,amount:dep.total,dueDate:new Date().toISOString().split('T')[0],status:'pending',paymentId:null,
+                label:'Deposit',deposit:true,depositScope:dep.scope,depositPerCamper:dep.perCamper,depositLines:dep.lines});
+        }
         for(var i=0;i<months;i++){
             var due=new Date(sd.getFullYear(),sd.getMonth()+i,sd.getDate());
-            var amt=(i===months-1)?Math.round((total-each*(months-1))*100)/100:each;
+            var amt=(i===months-1)?Math.round((rest-each*(months-1))*100)/100:each;
             insts.push({n:i+1,amount:amt,dueDate:due.toISOString().split('T')[0],status:'pending',paymentId:null});
         }
-        f.plan={installments:insts,autopay:!!auto,total:total,createdAt:new Date().toISOString()};
+        f.plan={installments:insts,autopay:!!auto,total:total,deposit:dep.total>0?dep:null,createdAt:new Date().toISOString()};
         save();closeModal('dynModal');renderBilling();
-        toast('Monthly plan created — '+months+' payment'+(months>1?'s':'')+(auto?', autopay on':''));
+        toast('Monthly plan created — '+(dep.total>0?fm(dep.total)+' deposit + ':'')+months+' payment'+(months>1?'s':'')+(auto?', autopay on':''));
     });
+}
+
+// The campers a deposit is charged against, each with what they still owe.
+// Tuition is charged per camper on the ledger; payments arrive against the
+// family, so they are applied across campers in ledger order.
+function _planCampers(famKey){
+    var l=buildFamilyLedgers()[famKey];
+    if(!l) return [];
+    var P=_payAPI();
+    var charges=l.entries.filter(function(e){return e.type==='charge'&&e.category==='Tuition'})
+        .map(function(e){return{name:String(e.desc||'').split(' — ')[0],amount:e.amount||0}});
+    if(!charges.length){
+        // No tuition rows yet (a brand-new family, or charges added by hand):
+        // fall back to the roster so a deposit can still be taken per camper,
+        // splitting the family balance evenly across them.
+        var f=families[famKey]; var ids=(f&&f.camperIds)||[];
+        if(!ids.length) return [];
+        var share=Math.max(0,l.balance||0)/ids.length;
+        return ids.map(function(n){return{name:n,owed:Math.round(share*100)/100}});
+    }
+    if(!P) return charges.map(function(c){return{name:c.name,owed:c.amount}});
+    return P.allocateFamilyPayments(charges,l.totalPayments+l.totalCredits);
+}
+
+/** The deposit the modal's current inputs describe. Shared by preview and save. */
+function _mpDepositFor(famKey,total){
+    var on=document.getElementById('mpDepOn');
+    if(!on||!on.checked) return {total:0,scope:'none',perCamper:0,lines:[]};
+    var each=parseFloat(document.getElementById('mpDepEach').value)||0;
+    var scope=document.getElementById('mpDepScope').value;
+    if(each<=0) return {total:0,scope:scope,perCamper:0,lines:[]};
+    if(scope==='family'){
+        var cap=Math.round(Math.min(each,Math.max(0,total||0))*100)/100;
+        return {total:cap,scope:'family',perCamper:each,lines:[]};
+    }
+    var P=_payAPI();
+    var campers=_planCampers(famKey);
+    if(!P||!campers.length){
+        var flat=Math.round(Math.min(each,Math.max(0,total||0))*100)/100;
+        return {total:flat,scope:'family',perCamper:each,lines:[]};
+    }
+    var split=P.perCamperDeposit(campers,each);
+    return {total:split.total,scope:'camper',perCamper:each,lines:split.lines,cappedCount:split.cappedCount};
+}
+
+function _mpDepositChanged(famKey){
+    var on=document.getElementById('mpDepOn'), wrap=document.getElementById('mpDepWrap');
+    if(!on||!wrap)return;
+    wrap.style.display=on.checked?'block':'none';
+    var out=document.getElementById('mpDepBreakdown');
+    if(!out)return;
+    if(!on.checked){out.innerHTML='';return}
+    var total=parseFloat((document.getElementById('mpTotal')||{}).value)||0;
+    var dep=_mpDepositFor(famKey,total);
+    if(dep.scope==='family'){
+        out.innerHTML='<strong>'+fm(dep.total)+'</strong> due today, then '+fm(Math.max(0,total-dep.total))+' split monthly.';
+        return;
+    }
+    var rows=dep.lines.map(function(l){
+        return '<div style="display:flex;justify-content:space-between;gap:12px">'
+            +'<span>'+esc(l.name)+'</span>'
+            +'<span>'+fm(l.deposit)+(l.capped?' <span style="color:var(--s400)">(owes '+fm(l.owed)+')</span>':'')+'</span></div>';
+    }).join('');
+    out.innerHTML=rows
+        +'<div style="display:flex;justify-content:space-between;gap:12px;border-top:1px solid var(--s200);margin-top:6px;padding-top:6px;font-weight:700;color:var(--s700)">'
+        +'<span>Deposit due today</span><span>'+fm(dep.total)+'</span></div>'
+        +'<div style="margin-top:4px">Then '+fm(Math.max(0,total-dep.total))+' split monthly.</div>'
+        +(dep.cappedCount?'<div style="margin-top:4px;color:var(--s400)">'+dep.cappedCount+' camper'+(dep.cappedCount>1?'s were':' was')+' capped at what they owe.</div>':'');
 }
 function toggleFamilyAutopay(famKey){
     var f=families[famKey]; if(!f||!f.plan)return;
@@ -6493,11 +6747,19 @@ function _planCardHtml(l){
         var overdue=i.status!=='paid'&&i.dueDate&&i.dueDate<today;
         var bg=i.status==='paid'?'background:#ECFDF5;border-color:#A7F3D0;color:#0E7C4A':i.status==='failed'?'background:#FEF2F2;border-color:#FECACA;color:#DC2626':overdue?'background:#FEF2F2;border-color:#FECACA;color:#DC2626':'background:var(--s50);border-color:var(--s200);color:var(--s600)';
         var lbl=i.status==='paid'?'✓ ':(i.status==='failed'?'⚠ ':(overdue?'⚠ ':''));
-        return '<span style="display:inline-block;padding:3px 10px;border-radius:999px;font-size:.72rem;font-weight:600;margin:2px;border:1px solid;'+bg+'">'+lbl+fm(i.amount)+' · '+esc(i.dueDate||'TBD')+'</span>';
+        // The deposit is not payment 1 of N — say so, or the schedule reads as
+        // one payment larger than the rest for no visible reason.
+        var pre=i.deposit?'Deposit · ':'';
+        return '<span style="display:inline-block;padding:3px 10px;border-radius:999px;font-size:.72rem;font-weight:600;margin:2px;border:1px solid;'+bg+'">'+lbl+pre+fm(i.amount)+' · '+esc(i.dueDate||'TBD')+'</span>';
     }).join('');
+    var dep=f.plan.deposit;
+    var depNote=(dep&&dep.total>0&&dep.scope==='camper')
+        ? '<div style="font-size:.72rem;color:var(--s400);margin-bottom:4px">Deposit of '+fm(dep.perCamper)+' per camper × '+dep.lines.length+(dep.cappedCount?' ('+dep.cappedCount+' capped at what they owe)':'')+'</div>'
+        : '';
     var autoBadge=f.plan.autopay?'<span style="color:var(--ok);font-weight:700">● Autopay ON</span>':'<span style="color:var(--s400);font-weight:700">○ Autopay off</span>';
     return '<div style="padding:12px 16px;border-top:1px solid var(--s100);background:#FFFEFB">'+
         '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px"><div style="font-size:.75rem;font-weight:700;color:var(--s500);text-transform:uppercase;letter-spacing:.04em">📆 Monthly Plan</div><div style="font-size:.75rem">'+autoBadge+'</div></div>'+
+        depNote+
         '<div style="margin-bottom:6px">'+chips+'</div>'+
         (next?'<div style="font-size:.73rem;color:var(--s500)">Next: <strong>'+fm(next.amount)+'</strong> due '+esc(next.dueDate)+(f.plan.autopay&&f.cardOnFile?' — auto-charges the card on file':(f.plan.autopay?' — autopay on, but no card on file':''))+'</div>':'<div style="font-size:.73rem;color:var(--ok);font-weight:600">All installments paid ✓</div>')+
         '<div style="display:flex;gap:6px;margin-top:8px;flex-wrap:wrap">'+
@@ -8553,8 +8815,10 @@ window.CampistryMe={
     finSetTab:finSetTab,finAddStaff:finAddStaff,finEditStaff:finEditStaff,finStaffModal:finStaffModal,_staffPhotoPick:_staffPhotoPick,_staffPhotoClear:_staffPhotoClear,finRemoveStaff:finRemoveStaff,
     finAddExpense:finAddExpense,finRemoveExpense:finRemoveExpense,
     finAddPayment:finAddPayment,finRemovePayment:finRemovePayment,finRefund:finRefund,
+    _rfMethodChanged:_rfMethodChanged,
     sendPayLink:sendPayLink,copyPayLink:copyPayLink,
     monthlyPlan:monthlyPlan,toggleFamilyAutopay:toggleFamilyAutopay,cancelMonthlyPlan:cancelMonthlyPlan,
+    _mpDepositChanged:_mpDepositChanged,
     setStaffFilter:setStaffFilter,viewStaffApp:viewStaffApp,setStaffStatus:setStaffStatus,saveStaffNotes:saveStaffNotes,
     toggleOnboard:toggleOnboard,cycleRef:cycleRef,deleteStaffApp:deleteStaffApp,addStaffApp:addStaffApp,
     copyStaffLink:copyStaffLink,exportStaffCSV:exportStaffCSV,
