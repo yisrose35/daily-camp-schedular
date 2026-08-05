@@ -316,6 +316,25 @@
             const byKey = {};
             (data || []).forEach(r => { byKey[r.key] = r.value; });
 
+            // Counselors are denied app1 and campistryMe at the database (see
+            // migration 049) — those blobs carry every camper in the camp plus
+            // families and payroll. They get a bunk-scoped, visibility-filtered
+            // version built server-side instead, so the unfiltered data never
+            // reaches the device rather than being hidden once it arrives.
+            if (!byKey.app1 || !byKey.campistryMe) {
+                try {
+                    const { data: scoped } = await window.supabase.rpc('lite_counselor_state');
+                    if (scoped && typeof scoped === 'object') {
+                        if (!byKey.app1 && scoped.app1) byKey.app1 = scoped.app1;
+                        if (!byKey.campistryMe && scoped.campistryMe) byKey.campistryMe = scoped.campistryMe;
+                    }
+                } catch (e) {
+                    // Older database without 049 applied: the direct read above
+                    // already succeeded or legitimately returned nothing.
+                    console.warn('[Lite] scoped state unavailable:', e?.message || e);
+                }
+            }
+
             const app1 = byKey.app1 || {};
             camp.divisions = app1.divisions || {};
             // Authoritative parent-division order from Me; manualColumnOrder is
