@@ -834,6 +834,173 @@
           } catch (_eFe) { try { warn('[FINAL-EXCHANGE] skipped — ' + (_eFe && _eFe.message)); } catch (_eFe2) {} }
         }
 
+        // ★ CROSS-BUNK EXCHANGE (window.__crossBunkExchange, default ON) ─────────────
+        //   The deepest exchange the endgame attempts. A subcat-tagged open window in
+        //   bunk A is often open because ANOTHER bunk holds the scarce seat at that very
+        //   minute (shiur: one activity per grade, cap 1). Within-bunk moves cannot fix
+        //   that. Choreography, all gates verified READ-ONLY before any write:
+        //     1. Find the HOLDER: bunk B whose tile Y (the same activity A needs)
+        //        overlaps A's window.
+        //     2. Inside B, find a movable tile Z with |Z| == |Y| such that Y is legal +
+        //        seat-free at Z's span and Z is legal + resource-free at Y's span
+        //        (a sport Z may re-identify to a sport whose field is free — identity
+        //        is fluid, as in FINAL-EXCHANGE). B swaps Y↔Z and stays wall-to-wall.
+        //     3. The seat at A's window is now free → fill A's window in place with
+        //        that activity. A's subcat commitment is fulfilled with its OWN subcat.
+        //   Also takes the free win first: if some same-subcat activity's seat is
+        //   ALREADY free at A's window at this final seam, fill directly — no exchange.
+        //   Never bails silently: logs a counter line whenever records were examined.
+        function _runCrossBunkExchange() {
+          try {
+            var _cxOn = (typeof window === 'undefined') || (window.__crossBunkExchange !== false);
+            if (!_cxOn || !window.scheduleAssignments || !window.SchedulingRules) return;
+            var _cxOpen = (typeof window !== 'undefined' && Array.isArray(window.__genOpenSlots)) ? window.__genOpenSlots : [];
+            if (!_cxOpen.length) return;
+            var _cxGs = getGlobalSettings() || {};
+            var _cxSpecials = ((_cxGs.app1 && _cxGs.app1.specialActivities) || []).filter(function (s) { return s && s.name && s.available !== false; });
+            if (!_cxSpecials.length) return;
+            var _cxCanon = function (v) { var s = String(v == null ? '' : v).toLowerCase().trim(); return (!s || s === 'regular' || s === 'uncategorized') ? 'uncategorized' : s; };
+            var _cxCapOf = function (s) { return (s.sharableWith && s.sharableWith.capacity) || s.capacity || 1; };
+            var _cxDurOf = function (s) { return s.defaultDuration || s.duration || s.durationMin || 0; };
+            var _cxSA = window.scheduleAssignments;
+            var _cxGradeOf = {};
+            try {
+                Object.keys(divisions || {}).forEach(function (g) {
+                    (getBunksForGrade(g, divisions) || []).forEach(function (bk) { _cxGradeOf[String(bk)] = g; });
+                });
+            } catch (_eCxG) {}
+            var _cxBusy = function (name, s, e, exclBunk, exclStart) {
+                var n = 0;
+                Object.keys(_cxSA).forEach(function (b) {
+                    (_cxSA[b] || []).forEach(function (r) {
+                        if (!r || r._activity !== name) return;
+                        if (b === exclBunk && r._startMin === exclStart) return;
+                        if (r._startMin < e && r._endMin > s) n++;
+                    });
+                });
+                return n;
+            };
+            var _cxTmplOf = function (bk, excl) {
+                return (_cxSA[bk] || []).filter(function (r) { return r && r._startMin != null && r !== excl; })
+                    .map(function (r) { return { type: r.type, event: r._activity || r.field, sport: r.sport, startMin: r._startMin, endMin: r._endMin, _assignedSpecial: r.type === 'special' ? r._activity : undefined }; });
+            };
+            var _cxLegal = function (blk, tmpl) { try { return window.SchedulingRules.isCandidateAllowed(blk, tmpl, { mode: 'auto' }); } catch (_e) { return false; } };
+            var _cxC = { records: 0, directFill: 0, exchanged: 0, noHolder: 0, holderStuck: 0 };
+            var WALLT = { lunch: 1, swim: 1, 'pre-change': 1, 'post-change': 1, custom: 1, league: 1, trip: 1 };
+            _cxOpen.slice().forEach(function (rec) {
+                if (!rec || !rec.bunk || rec._exchanged) return;
+                var A = String(rec.bunk);
+                var arrA = _cxSA[A];
+                if (!Array.isArray(arrA)) return;
+                var sub = _cxCanon(rec.subcat);
+                var liveA = arrA.filter(function (r) { return r && r._startMin != null; });
+                for (var _c1 = 0; _c1 < liveA.length; _c1++) { if (liveA[_c1]._startMin < rec.endMin && liveA[_c1]._endMin > rec.startMin) return; }
+                for (var _c2 = 0; _c2 < liveA.length; _c2++) { if (liveA[_c2].type === 'special' && _cxCanon(liveA[_c2]._subcat) === sub) return; }
+                _cxC.records++;
+                var holeDur = rec.endMin - rec.startMin;
+                var mineA = {};
+                liveA.forEach(function (r) { mineA[String(r._activity || r.field)] = 1; });
+                var xs = _cxSpecials.filter(function (x) { return _cxCanon(x.subcategory) === sub && !mineA[x.name] && _cxDurOf(x) === holeDur; });
+                if (!xs.length) return;
+                var tmplA = _cxTmplOf(A, null);
+                var fillA = function (X) {
+                    arrA.push({ field: X.name, sport: null, _activity: X.name, _startMin: rec.startMin, _endMin: rec.endMin, _fixed: true, _autoMode: true, _generic: false, continuation: false, type: 'special', _subcat: sub, _specialLocation: X.name, _crossExchange: true });
+                    rec._exchanged = true;
+                };
+                // 0) FREE WIN: a seat may already be free at this final seam
+                for (var _fw = 0; _fw < xs.length; _fw++) {
+                    var XF = xs[_fw];
+                    if (_cxCapOf(XF) - _cxBusy(XF.name, rec.startMin, rec.endMin, null, null) <= 0) continue;
+                    if (!_cxLegal({ type: 'special', event: XF.name, _assignedSpecial: XF.name, _specialLocation: XF.name, startMin: rec.startMin, endMin: rec.endMin }, tmplA)) continue;
+                    fillA(XF);
+                    _cxC.directFill++;
+                    log('[CROSS-EXCHANGE] ' + A + ': ' + XF.name + ' seat was free at the open "' + sub + '" window by the final seam — filled directly (' + minutesToTimeLabel(rec.startMin) + '-' + minutesToTimeLabel(rec.endMin) + ')');
+                    return;
+                }
+                // 1) find a HOLDER whose same-activity tile overlaps A's window
+                var done = false;
+                xs.forEach(function (X) {
+                    if (done) return;
+                    if (!_cxLegal({ type: 'special', event: X.name, _assignedSpecial: X.name, _specialLocation: X.name, startMin: rec.startMin, endMin: rec.endMin }, tmplA)) return;
+                    Object.keys(_cxSA).forEach(function (B) {
+                        if (done || B === A) return;
+                        var arrB = _cxSA[B];
+                        if (!Array.isArray(arrB)) return;
+                        var Y = null;
+                        for (var _y = 0; _y < arrB.length; _y++) {
+                            var r = arrB[_y];
+                            if (r && r._activity === X.name && !r.continuation && r._startMin < rec.endMin && r._endMin > rec.startMin) { Y = r; break; }
+                        }
+                        if (!Y) return;
+                        var liveB = arrB.filter(function (r) { return r && r._startMin != null; });
+                        var mineB = {};
+                        liveB.forEach(function (r) { mineB[String(r._activity || r.field)] = 1; });
+                        var yDur = Y._endMin - Y._startMin;
+                        for (var _z = 0; _z < liveB.length && !done; _z++) {
+                            var Z = liveB[_z];
+                            if (Z === Y) continue;
+                            var zt = String(Z.type || '').toLowerCase();
+                            if (zt !== 'sport' && zt !== 'special') continue;
+                            if (WALLT[zt] || Z._league || Z._isTrip || Z.continuation) continue;
+                            if ((Z._endMin - Z._startMin) !== yDur) continue;
+                            var tmplB = liveB.filter(function (r) { return r !== Y && r !== Z; })
+                                .map(function (r) { return { type: r.type, event: r._activity || r.field, sport: r.sport, startMin: r._startMin, endMin: r._endMin, _assignedSpecial: r.type === 'special' ? r._activity : undefined }; });
+                            // Y at Z's span: rules + its own seat free there (excluding Y itself)
+                            if (!_cxLegal({ type: 'special', event: X.name, _assignedSpecial: X.name, _specialLocation: X.name, startMin: Z._startMin, endMin: Z._endMin }, tmplB.concat([{ type: Z.type, event: Z._activity || Z.field, sport: Z.sport, startMin: Y._startMin, endMin: Y._endMin }]))) continue;
+                            // NOTE: A's incoming fill also overlaps — but A's window equals Y's freed
+                            // minute range only partially; count both prospective uses:
+                            // Y itself needs one seat at Z's span, and A's incoming fill
+                            // consumes another if the window overlaps that span.
+                            var _ySeatUse = _cxBusy(X.name, Z._startMin, Z._endMin, B, Y._startMin) + ((rec.startMin < Z._endMin && rec.endMin > Z._startMin) ? 1 : 0);
+                            if (_cxCapOf(X) - _ySeatUse < 1) continue;
+                            // Z at Y's span: rules + resource free (sport may re-identify)
+                            var zRe = null;
+                            if (!_cxLegal({ type: Z.type, event: Z._activity || Z.field, sport: Z.sport, startMin: Y._startMin, endMin: Y._endMin, _assignedSpecial: Z.type === 'special' ? Z._activity : undefined }, tmplB.concat([{ type: 'special', event: X.name, _assignedSpecial: X.name, startMin: Z._startMin, endMin: Z._endMin }]))) continue;
+                            if (zt === 'sport' && Z.field) {
+                                var zOk = false;
+                                try { zOk = isFieldAvailable(Z.field, Y._startMin, Y._endMin, B, _cxGradeOf[B], Z.sport || Z._activity); } catch (_eZ) {}
+                                if (!zOk) {
+                                    var _fAll = ((_cxGs.app1 && _cxGs.app1.fields) || []).filter(function (f) { return f && f.name && f.available !== false && f.name !== 'Pool' && f.name !== 'Lunch Room' && f.name !== 'Cleanup'; });
+                                    for (var _f3 = 0; _f3 < _fAll.length && !zRe; _f3++) {
+                                        var fN = _fAll[_f3];
+                                        if (mineB[fN.name]) continue;
+                                        var fAv = false;
+                                        try { fAv = isFieldAvailable(fN.name, Y._startMin, Y._endMin, B, _cxGradeOf[B], fN.name); } catch (_eZ2) {}
+                                        if (!fAv) continue;
+                                        if (_cxLegal({ type: 'sport', event: fN.name, sport: fN.name, startMin: Y._startMin, endMin: Y._endMin }, tmplB)) zRe = fN.name;
+                                    }
+                                    if (!zRe) continue;
+                                }
+                            } else if (zt === 'special' && Z._activity) {
+                                var zDef = null;
+                                for (var _zd = 0; _zd < _cxSpecials.length; _zd++) { if (_cxSpecials[_zd].name === Z._activity) { zDef = _cxSpecials[_zd]; break; } }
+                                if (zDef && _cxCapOf(zDef) - _cxBusy(Z._activity, Y._startMin, Y._endMin, B, Z._startMin) <= 0) continue;
+                            }
+                            // COMMIT — swap Y↔Z spans in B, then fill A's window
+                            var yS = Y._startMin, yE = Y._endMin;
+                            Y._startMin = Z._startMin; Y._endMin = Z._endMin; Y._crossExchange = true;
+                            Z._startMin = yS; Z._endMin = yE; Z._crossExchange = true;
+                            if (zRe) { Z.field = zRe; Z.sport = zRe; Z._activity = zRe; }
+                            fillA(X);
+                            _cxC.exchanged++;
+                            done = true;
+                            log('[CROSS-EXCHANGE] ' + A + ' gets ' + X.name + ' at its open "' + sub + '" window ' + minutesToTimeLabel(rec.startMin) + '-' + minutesToTimeLabel(rec.endMin) + ' — holder ' + B + ' moved its ' + X.name + ' ' + minutesToTimeLabel(yS) + '→' + minutesToTimeLabel(Y._startMin) + ' (swapped with ' + (Z._activity || Z.field) + (zRe ? ', re-sported to ' + zRe : '') + '); both bunks stay wall-to-wall');
+                        }
+                        if (!done && Y) _cxC.holderStuck++;
+                    });
+                    if (!done) _cxC.noHolder++;
+                });
+            });
+            if (_cxC.records > 0) {
+                log('[CROSS-EXCHANGE] ' + (_cxC.directFill + _cxC.exchanged) + ' of ' + _cxC.records + ' open subcat window(s) resolved (' + _cxC.directFill + ' direct fill, ' + _cxC.exchanged + ' cross-bunk exchange' + (_cxC.exchanged === 1 ? '' : 's') + '; holders examined but stuck: ' + _cxC.holderStuck + ')');
+            }
+            if (_cxC.directFill + _cxC.exchanged > 0) {
+                try { window.__genOpenSlots = _cxOpen.filter(function (r) { return !(r && r._exchanged); }); } catch (_eCxP) {}
+                try { window.AutoSegmentModel && window.AutoSegmentModel.rebuildFromAssignments && window.AutoSegmentModel.rebuildFromAssignments(); } catch (_eCxS) {}
+            }
+          } catch (_eCx) { try { warn('[CROSS-EXCHANGE] skipped — ' + (_eCx && _eCx.message)); } catch (_eCx2) {} }
+        }
+
         // ★ FINAL FACILITY BACKFILL (window.__finalBackfill, default ON) ─────────────
         //   Last-resort sweep for uncovered time the earlier passes never offered a tile
         //   for. Those passes only ever concretize tiles that ALREADY EXIST, so a window
@@ -21317,6 +21484,7 @@
                     log('[GENERIC-LAYOUT] ✅ COMPLETE in ' + _glElapsed + 's — ' + _glOut.stats.windowsTiled + '/' + _glOut.stats.windowsConsidered + ' free windows tiled, ' + _glOut.stats.tilesPlaced + ' generic tiles placed, ' + _glOut.stats.bunksFullyTiled + '/' + _glOut.stats.bunks + ' bunks fully wall-to-wall, ' + _glOut.stats.unmetSpecialFloors + ' unmet special floor(s), ' + (_glOut.stats.unmetFloors || 0) + ' unmet floor(s) total, ' + _glInjectedSwim + ' swim + ' + _glInjectedLayer + ' other deferred layer(s) re-floated, sharing watched on ' + _glShareFacs + ' facility(ies)/' + _glShareResv + ' placement(s)');
                     // ★ Last chance to cover leftover time before this path returns.
                     try { _runFinalExchange(); } catch (_eFeGl) {}
+                    try { _runCrossBunkExchange(); } catch (_eCxGl) {}
                     try { _runFinalBackfill(); } catch (_eFbGl) {}
                     try { _auditSubcatFloors(); } catch (_eFaGl) {}
                     try { window.dispatchEvent(new CustomEvent('campistry-generation-complete', { detail: { mode: 'auto', version: VERSION, elapsed: _glElapsed, warnings: warnings, dateKey: (currentDate || window.currentScheduleDate || ''), genericLayout: true } })); } catch (_glEv) {}
@@ -36327,6 +36495,7 @@
         }
 
         _runFinalExchange();   // tail path (non generic-layout runs)
+        _runCrossBunkExchange();
         _runFinalBackfill();
         _auditSubcatFloors();
 
