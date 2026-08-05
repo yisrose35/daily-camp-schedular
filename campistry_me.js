@@ -925,6 +925,114 @@ function removeCamperFromFamily(familyId,camperName){
     toast((camperName.split(' ')[0])+' removed from '+(f.name||'family'));
 }
 
+// ── GUIDED SETUP ─────────────────────────────────────────────────
+// A new camp lands on a page of empty tables with no indication of what to do
+// first, in what order, or when it is finished. The steps are derived from the
+// camp's real data (campistry_setup_checklist.js), so a camp that imported its
+// roster before ever seeing this finds that step already ticked, and a camp
+// that empties a table sees it untick. It removes itself once the required
+// steps are done.
+function _setupAPI(){ return window.CampistrySetup||null }
+
+function _setupState(){
+    var s={};
+    try{ s=JSON.parse(localStorage.getItem('campGlobalSettings_v1')||'{}'); }catch(e){}
+    var me=s.campistryMe||{};
+    var divs=Object.keys(structure||{});
+    var bunkCount=0;
+    divs.forEach(function(d){
+        var grades=(structure[d]&&structure[d].grades)||{};
+        Object.keys(grades).forEach(function(g){ bunkCount+=((grades[g]||{}).bunks||[]).length; });
+    });
+    return {
+        campName:s.campName||s.camp_name||(s.app1&&s.app1.campName)||(me.campSettings&&me.campSettings.campName)||'',
+        campStart:(me.campDates&&me.campDates.start)||s.campStart||'',
+        campEnd:(me.campDates&&me.campDates.end)||s.campEnd||'',
+        divisionCount:divs.length,
+        bunkCount:bunkCount,
+        sessionCount:((me.sessions)||[]).length,
+        camperCount:Object.keys(roster||{}).length,
+        enrollmentCount:Object.keys(enrollments||{}).length,
+        campersInBunks:Object.values(roster||{}).filter(function(c){return c&&c.bunk}).length,
+        staffCount:(finStaff||[]).length,
+        stripeKey:me.stripePublishableKey||''
+    };
+}
+
+function _setupDismissed(){
+    try{
+        var s=JSON.parse(localStorage.getItem('campGlobalSettings_v1')||'{}');
+        return !!(s.campistryMe&&s.campistryMe.setupChecklistDismissed);
+    }catch(e){return false}
+}
+
+function dismissSetupChecklist(){
+    var s={};
+    try{ s=JSON.parse(localStorage.getItem('campGlobalSettings_v1')||'{}'); }catch(e){}
+    if(!s.campistryMe)s.campistryMe={};
+    s.campistryMe.setupChecklistDismissed=true;
+    localStorage.setItem('campGlobalSettings_v1',JSON.stringify(s));
+    if(typeof window.saveGlobalSettings==='function') window.saveGlobalSettings('campistryMe',s.campistryMe);
+    renderCampers();
+    toast('Setup checklist hidden');
+}
+
+function _setupChecklistHtml(){
+    var API=_setupAPI(); if(!API)return'';
+    var state=_setupState();
+    // A camp with a roster AND bunks filled is running, whatever else is blank.
+    var established=state.campersInBunks>0&&state.camperCount>20;
+    if(!API.shouldShow(state,{dismissed:_setupDismissed(),establishedCamp:established}))return'';
+
+    var r=API.evaluate(state);
+    // trial_guard.js already runs a countdown banner on every page; this repeats
+    // it here only because "3 days left" next to "6 of 6 essentials done" is the
+    // pairing that actually tells a new camp where it stands.
+    var trialTxt='';
+    try{
+        var T=window.CampistryTrial;
+        var end=T&&T.getTrialEnd&&T.getTrialEnd();
+        var days=end?API.trialDaysLeft(end.getTime(),Date.now()):null;
+        if(days!=null) trialTxt='<span style="font-size:.72rem;font-weight:700;color:#92400E;background:#FFFBEB;border:1px solid #FDE68A;padding:3px 9px;border-radius:999px">'
+            +(days===0?'Trial ends today':days+' day'+(days===1?'':'s')+' left in your trial')+'</span>';
+    }catch(e){}
+
+    var h='<div style="background:linear-gradient(135deg,#F5F3FF,#EDE9FE);border:1px solid #DDD6FE;border-radius:var(--r2);padding:18px;margin-bottom:18px">';
+    h+='<div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin-bottom:4px">';
+    h+='<span style="font-size:1.15rem">🚀</span>';
+    h+='<span style="font-weight:800;font-size:1rem;color:var(--s800)">Get your camp set up</span>';
+    h+=trialTxt;
+    h+='<span style="flex:1"></span>';
+    h+='<button class="me-btn me-btn--ghost me-btn--sm" style="color:var(--s400)" onclick="CampistryMe.dismissSetupChecklist()">Hide</button>';
+    h+='</div>';
+    h+='<div style="font-size:.8rem;color:var(--s500);margin-bottom:12px">'+r.requiredDone+' of '+r.requiredTotal+' essentials done — this disappears on its own when you finish.</div>';
+
+    h+='<div style="height:6px;background:#fff;border-radius:999px;overflow:hidden;margin-bottom:14px">'
+        +'<div style="height:100%;width:'+r.percent+'%;background:linear-gradient(90deg,#8B5CF6,#6366F1);transition:width .3s"></div></div>';
+
+    h+='<div style="display:grid;gap:6px">';
+    r.steps.forEach(function(step){
+        var mark=step.done
+            ? '<span style="color:var(--ok);font-weight:800;font-size:.95rem;width:18px;flex-shrink:0">✓</span>'
+            : '<span style="width:18px;flex-shrink:0;display:inline-flex;justify-content:center"><span style="width:11px;height:11px;border:2px solid var(--s300);border-radius:50%"></span></span>';
+        h+='<div style="display:flex;align-items:flex-start;gap:9px;padding:8px 11px;background:#fff;border-radius:var(--r);border:1px solid '+(step.done?'#D1FAE5':'var(--s200)')+';'+(step.done?'opacity:.66':'')+'">';
+        h+=mark;
+        h+='<div style="flex:1;min-width:0"><div style="font-size:.84rem;font-weight:600;color:var(--s800)">'+esc(step.label)
+            +(step.required?'':' <span style="font-weight:400;font-size:.7rem;color:var(--s400)">optional</span>')+'</div>';
+        if(!step.done) h+='<div style="font-size:.74rem;color:var(--s500);line-height:1.5;margin-top:1px">'+esc(step.detail)+'</div>';
+        h+='</div>';
+        if(!step.done) h+='<button class="me-btn me-btn--sec me-btn--sm" style="flex-shrink:0" onclick="CampistryMe.nav(\''+je(step.page)+'\')">Go</button>';
+        h+='</div>';
+    });
+    h+='</div>';
+
+    if(r.nextStep){
+        h+='<button class="me-btn me-btn--pri" style="margin-top:12px" onclick="CampistryMe.nav(\''+je(r.nextStep.page)+'\')">Continue setup → '+esc(r.nextStep.label)+'</button>';
+    }
+    h+='</div>';
+    return h;
+}
+
 // ── CAMPERS ──────────────────────────────────────────────────────
 function switchCampersView(v){campersView=v;renderCampers()}
 function _campersTabsHtml(){
@@ -937,7 +1045,8 @@ function renderCampers(filter){
     var c=document.getElementById('page-campers'),entries=Object.entries(roster),total=entries.length;
     if(filter){var q=filter.toLowerCase();entries=entries.filter(function([n,d]){var altN=[d.altFirstName,d.altLastName].filter(Boolean).join(' ').toLowerCase();return n.toLowerCase().includes(q)||altN.includes(q)||(d.division||'').toLowerCase().includes(q)||(d.bunk||'').toLowerCase().includes(q)||(d.school||'').toLowerCase().includes(q)})}
     entries.sort(function(a,b){return a[0].localeCompare(b[0])});
-    var tabs=_campersTabsHtml();
+    // Campers is the landing page, so a new camp meets the checklist first.
+    var tabs=_setupChecklistHtml()+_campersTabsHtml();
 
     if(campersView==='family'){
         c.innerHTML=tabs+_familyBundlesHtml();
@@ -9431,6 +9540,7 @@ window.CampistryMe={
     _camperPhotoPick:_camperPhotoPick,_camperPhotoClear:_camperPhotoClear,
     addFamily:function(){openFamilyForm(null)},editFamily:function(id){openFamilyForm(id)},deleteFamily:deleteFamily,removeCamperFromFamily:removeCamperFromFamily,
     switchCampersView:switchCampersView,viewFamilyFromCamper:viewFamilyFromCamper,
+    dismissSetupChecklist:dismissSetupChecklist,
     acceptFamilySuggestion:acceptFamilySuggestion,dismissFamilySuggestion:dismissFamilySuggestion,acceptAddToFamily:acceptAddToFamily,
     openFamilyMerge:openFamilyMerge,_mergePreview:_mergePreview,dismissFamilyMerge:dismissFamilyMerge,
     addDiv:function(){openDivForm(null)},editDiv:function(n){openDivForm(n)},deleteDiv:deleteDiv,moveDivision:moveDivision,

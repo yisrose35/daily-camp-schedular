@@ -194,6 +194,9 @@
 <!-- Broadcast markup renderer. Shared with Campistry Link's compose UI and the
      scheduled-send function so email, SMS and the portal agree on formatting. -->
 <script src="campistry_broadcast_core.js"></script>
+<!-- Guided setup for a new camp. Derives its steps from the camp's real data,
+     so there is no separate progress record to drift out of step with it. -->
+<script src="campistry_setup_checklist.js"></script>
 <script src="campistry_payroll_core.js"></script>
 <!-- Shared catalogue of what counselors may see. Loaded by Me (where the
      policy is set) and by Lite (where it's enforced) — one list, so a field
