@@ -617,6 +617,138 @@ function acceptAddToFamily(famKey,camperName){
     save();renderCampers();toast(camperName+' added to '+families[famKey].name);
 }
 
+// ═══════════════════════════════════════════════════════════════
+// FAMILY MERGE — absorb one duplicate family record into another.
+//
+// Duplicates arrive constantly: a camper registers online while a sibling was
+// added by hand, a CSV import spells the street differently, two parents fill
+// the form separately. The office ends up with the same household twice, each
+// holding half the campers and half the money.
+//
+// The rules live in campistry_family_merge.js as pure functions; this is the
+// modal around them plus the writes they can't do (re-pointing payments,
+// reconciling duplicate camper records, deleting the absorbed key).
+// ═══════════════════════════════════════════════════════════════
+function _mergeAPI(){ return window.CampistryFamilyMerge||null }
+
+function openFamilyMerge(targetKey){
+    if(!_secEdit('campers','Merging families'))return;
+    var M=_mergeAPI(); if(!M){toast('Merge module not loaded','error');return}
+    var t=families[targetKey]; if(!t){toast('Family not found','error');return}
+
+    // Likely duplicates first, then everything else — the office usually wants
+    // the one the app already spotted.
+    var dupes=M.findDuplicates(families).filter(function(d){return d.keys.indexOf(targetKey)>=0});
+    var suggested={}; dupes.forEach(function(d){ suggested[d.keys[0]===targetKey?d.keys[1]:d.keys[0]]=d; });
+
+    var opts='<option value="">— Select the duplicate to absorb —</option>';
+    Object.keys(suggested).forEach(function(k){
+        if(!families[k])return;
+        opts+='<option value="'+esc(k)+'">'+esc(families[k].name||k)+' — likely duplicate ('+suggested[k].confidence+')</option>';
+    });
+    Object.entries(families).sort(function(a,b){return(a[1].name||'').localeCompare(b[1].name||'')}).forEach(function(entry){
+        if(entry[0]===targetKey||suggested[entry[0]])return;
+        opts+='<option value="'+esc(entry[0])+'">'+esc(entry[1].name||entry[0])+'</option>';
+    });
+
+    var h='<div class="me-modal-form">';
+    h+='<div style="background:var(--s50);padding:10px 14px;border-radius:var(--r);margin-bottom:14px;font-size:.82rem">'
+        +'Keeping <strong>'+esc(t.name||'')+'</strong> · '+((t.camperIds||[]).length)+' camper'+((t.camperIds||[]).length===1?'':'s')+'</div>';
+    h+='<div class="me-field"><label>Absorb this family</label><select id="fmgSource" class="me-input" onchange="CampistryMe._mergePreview(\''+je(targetKey)+'\')">'+opts+'</select></div>';
+    h+='<div id="fmgPreview"></div></div>';
+    showModal('Merge Families',h,function(){
+        var sk=document.getElementById('fmgSource').value;
+        if(!sk||!families[sk]){alert('Pick the family to absorb');return}
+        if(sk===targetKey){alert('Pick a different family');return}
+        var plan=M.planMerge(families[targetKey],families[sk],{targetKey:targetKey,sourceKey:sk});
+        if(!confirm('Merge "'+(families[sk].name||sk)+'" into "'+(families[targetKey].name||targetKey)+'"?\n\nThis cannot be undone.'))return;
+        _applyFamilyMerge(targetKey,sk,plan);
+    });
+    setTimeout(function(){_mergePreview(targetKey)},0);
+}
+
+function _mergePreview(targetKey){
+    var M=_mergeAPI(), out=document.getElementById('fmgPreview');
+    if(!M||!out)return;
+    var sel=document.getElementById('fmgSource');
+    var sk=sel?sel.value:'';
+    if(!sk||!families[sk]||!families[targetKey]){out.innerHTML='';return}
+    var plan=M.planMerge(families[targetKey],families[sk],{targetKey:targetKey,sourceKey:sk});
+    var f=plan.family;
+    var h='<div style="border:1px solid var(--s200);border-radius:var(--r);padding:12px;font-size:.8rem;line-height:1.7">';
+    h+='<div style="font-weight:700;margin-bottom:6px">After the merge</div>';
+    h+='<div>Campers: <strong>'+(f.camperIds||[]).length+'</strong>'
+        +(plan.movedCampers.length?' <span style="color:var(--s400)">('+plan.movedCampers.length+' moved over)</span>':'')+'</div>';
+    h+='<div>Balance: <strong>'+fm(f.balance||0)+'</strong> · Paid: <strong>'+fm(f.totalPaid||0)+'</strong></div>';
+    if((f.charges||[]).length) h+='<div>Fees: <strong>'+f.charges.length+'</strong></div>';
+    if(plan.recovered.length) h+='<div style="color:var(--ok)">Filled '+plan.recovered.length+' blank field'+(plan.recovered.length===1?'':'s')+' from the absorbed record.</div>';
+    plan.warnings.forEach(function(w){
+        h+='<div style="color:#92400E;background:#FFFBEB;border:1px solid #FDE68A;border-radius:var(--r);padding:6px 9px;margin-top:6px">'+esc(w)+'</div>';
+    });
+    if(plan.conflicts.length){
+        h+='<div style="margin-top:8px;color:var(--s500)"><strong>Kept the current value for:</strong> '
+            +plan.conflicts.map(function(c){return esc(_fieldLabelFor(c.key))}).join(', ')+'</div>';
+    }
+    h+='</div>';
+    out.innerHTML=h;
+}
+
+function dismissFamilyMerge(a,b){
+    var key=[a,b].sort().join('|');
+    var d=JSON.parse(localStorage.getItem('campistry_dismissed_fam_merges')||'[]');
+    if(d.indexOf(key)<0) d.push(key);
+    localStorage.setItem('campistry_dismissed_fam_merges',JSON.stringify(d));
+    renderCampers();toast('Suggestion dismissed');
+}
+
+/** A readable name for a merge-conflict key, including custom fields. */
+function _fieldLabelFor(key){
+    if(String(key).indexOf('cf_')===0){
+        loadCustomFields();
+        var m=(customFields||[]).filter(function(cf){return 'cf_'+cf.id===key})[0];
+        if(m) return m.label;
+    }
+    return String(key).replace(/([A-Z])/g,' $1').replace(/^./,function(c){return c.toUpperCase()});
+}
+
+/** The writes planMerge can't do: roster records, payments, and the delete. */
+function _applyFamilyMerge(targetKey,sourceKey,plan){
+    var M=_mergeAPI(); if(!M)return;
+    var srcName=(families[sourceKey]&&families[sourceKey].name)||sourceKey;
+    var tgtName=(families[targetKey]&&families[targetKey].name)||targetKey;
+
+    // A camper filed under both families is one child with two records. Combine
+    // them field-by-field so custom fields, medical notes and documents from
+    // either side survive.
+    plan.duplicateCampers.forEach(function(dupName){
+        var canonical=(plan.family.camperIds||[]).filter(function(n){
+            return String(n).trim().toLowerCase()===String(dupName).trim().toLowerCase();
+        })[0]||dupName;
+        if(canonical===dupName||!roster[dupName])return;
+        var merged=M.mergeCamperRecords(roster[canonical]||{},roster[dupName]);
+        roster[canonical]=merged.merged;
+        delete roster[dupName];
+    });
+
+    families[targetKey]=plan.family;
+
+    // Payments are matched to a family by NAME as well as key, so both have to
+    // be re-pointed or the absorbed family's money falls off the ledger.
+    finPayments.forEach(function(p){
+        if(String(p.familyKey||'')===String(sourceKey)) p.familyKey=targetKey;
+        if(String(p.family||'')===String(srcName)) p.family=tgtName;
+    });
+
+    _logFeeChange(targetKey,{action:'merged',label:'Merged in '+srcName,
+        from:null,to:null,note:(plan.movedCampers.length?plan.movedCampers.length+' camper(s) moved. ':'')
+            +(plan.conflicts.length?plan.conflicts.length+' field conflict(s) kept the current value.':'')});
+
+    delete families[sourceKey];
+    save();closeModal('dynModal');renderCampers();
+    try{renderBilling()}catch(e){}
+    toast('Merged '+srcName+' into '+tgtName);
+}
+
 // Body-only family bundles view — rendered INSIDE the Campers page (see
 // renderCampers) as the "Families" tab, rather than as its own sidebar
 // section. optHighlight is an optional camper name whose family card should
@@ -666,11 +798,31 @@ function _familyBundlesHtml(optHighlight){
         h+='</div>';
     }
 
+    // Duplicate FAMILY records — two households that are the same one. Distinct
+    // from the suggestions above, which are about campers with no family yet.
+    var _mAPI=_mergeAPI();
+    var famDupes=_mAPI?_mAPI.findDuplicates(families):[];
+    var dismissedMerges=JSON.parse(localStorage.getItem('campistry_dismissed_fam_merges')||'[]');
+    famDupes=famDupes.filter(function(d){return dismissedMerges.indexOf(d.keys.slice().sort().join('|'))<0});
+    if(famDupes.length){
+        h+='<div style="background:linear-gradient(135deg,#EFF6FF,#DBEAFE);border:1px solid #BFDBFE;border-radius:var(--r2);padding:16px;margin-bottom:18px">';
+        h+='<div style="display:flex;align-items:center;gap:8px;margin-bottom:10px"><span style="font-size:1.1rem">🔗</span><span style="font-weight:700;font-size:.9rem;color:var(--s800)">Possible duplicate families</span><span style="font-size:.75rem;color:var(--s500)">Merging keeps every camper, fee and custom field from both records</span></div>';
+        famDupes.slice(0,6).forEach(function(d){
+            h+='<div style="display:flex;align-items:center;gap:12px;padding:10px 14px;background:#fff;border-radius:var(--r);margin-bottom:6px;border:1px solid var(--s200)">';
+            h+='<div style="flex:1;font-size:.8rem"><strong>'+esc(d.names[0]||d.keys[0])+'</strong> and <strong>'+esc(d.names[1]||d.keys[1])+'</strong> look like the same household</div>';
+            h+='<span style="font-size:.65rem;font-weight:600;color:'+(d.confidence==='high'?'var(--ok)':'var(--warn)')+';background:'+(d.confidence==='high'?'var(--ok)':'var(--warn)')+'15;padding:2px 8px;border-radius:4px">'+esc(d.confidence)+'</span>';
+            h+='<button class="me-btn me-btn--pri me-btn--sm" onclick="CampistryMe.openFamilyMerge(\''+je(d.keys[0])+'\')">Review merge</button>';
+            h+='<button class="me-btn me-btn--ghost me-btn--sm" style="color:var(--s400)" onclick="CampistryMe.dismissFamilyMerge(\''+je(d.keys[0])+'\',\''+je(d.keys[1])+'\')">Dismiss</button>';
+            h+='</div>';
+        });
+        h+='</div>';
+    }
+
     if(!e.length&&!totalSuggestions){h+='<div class="me-empty"><h3>No families yet</h3><p>Add a family to get started, or import campers and we\'ll detect families automatically.</p><button class="me-btn me-btn--pri" onclick="CampistryMe.addFamily()">+ Add Family</button></div>'}
     else e.forEach(function([id,f]){
         var sb=f.balance>0?bdg(fm(f.balance)+' due','err'):f.totalPaid>0?bdg('Paid','ok'):bdg('Pending','warn');
         var isHighlight=optHighlight&&(f.camperIds||[]).indexOf(optHighlight)>=0;
-        h+='<div class="fam-card" id="famcard-'+je(id)+'"'+(isHighlight?' style="box-shadow:0 0 0 2px var(--me)"':'')+'><div style="display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:10px"><div><div style="font-size:.95rem;font-weight:600;color:var(--s800)">'+esc(f.name)+'</div><div style="font-size:.75rem;color:var(--s400)">'+(f.camperIds||[]).length+' camper'+((f.camperIds||[]).length!==1?'s':'')+'</div></div><div style="display:flex;gap:6px;align-items:center">'+sb+'<button class="me-btn me-btn--ghost me-btn--sm" onclick="CampistryMe.editFamily(\''+je(id)+'\')">Edit</button><button class="me-btn me-btn--ghost me-btn--sm" onclick="CampistryMe.deleteFamily(\''+je(id)+'\')" style="color:var(--err)">Delete</button></div></div>';
+        h+='<div class="fam-card" id="famcard-'+je(id)+'"'+(isHighlight?' style="box-shadow:0 0 0 2px var(--me)"':'')+'><div style="display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:10px"><div><div style="font-size:.95rem;font-weight:600;color:var(--s800)">'+esc(f.name)+'</div><div style="font-size:.75rem;color:var(--s400)">'+(f.camperIds||[]).length+' camper'+((f.camperIds||[]).length!==1?'s':'')+'</div></div><div style="display:flex;gap:6px;align-items:center">'+sb+'<button class="me-btn me-btn--ghost me-btn--sm" onclick="CampistryMe.editFamily(\''+je(id)+'\')">Edit</button><button class="me-btn me-btn--ghost me-btn--sm" onclick="CampistryMe.openFamilyMerge(\''+je(id)+'\')" title="Absorb a duplicate family into this one">Merge</button><button class="me-btn me-btn--ghost me-btn--sm" onclick="CampistryMe.deleteFamily(\''+je(id)+'\')" style="color:var(--err)">Delete</button></div></div>';
         (f.households||[]).forEach(function(hh){
             h+='<div class="hh"><div style="font-size:.65rem;font-weight:600;color:var(--s400);text-transform:uppercase;letter-spacing:.06em;margin-bottom:3px">'+esc(hh.label||'Primary')+(hh.billingContact?' · Billing':'')+'</div>';
             (hh.parents||[]).forEach(function(p){h+='<div style="font-size:.8rem;margin-bottom:2px"><strong>'+esc(p.name)+'</strong>'+(p.phone?' — <a href="tel:'+esc(p.phone)+'" style="color:var(--me)">'+esc(p.phone)+'</a>':'')+'</div>'});
@@ -6094,6 +6246,10 @@ function renderBilling(){
                     if(isPayment||isCredit) runBal-=e.amount;
                     var payTxt=(isPayment||isCredit)?(isRefund?'−'+fm(Math.abs(e.amount)):fm(e.amount)):'';
                     var refBtn=(isPayment&&e.amount>0&&e.ref)?'<button class="me-btn me-btn--ghost me-btn--sm" title="Refund this payment" onclick="CampistryMe.finRefund(\''+je(String(e.ref))+'\')">↩</button>':'';
+                    // Add-on fees are editable; tuition rows come from the
+                    // enrollment and are changed there, so they get no pencil.
+                    var _isAddOn=isCharge&&e.ref&&String(e.ref).indexOf('chg_')===0;
+                    if(_isAddOn) refBtn+='<button class="me-btn me-btn--ghost me-btn--sm" title="Edit this fee" onclick="CampistryMe.editChargeForFamily(\''+je(l.famKey)+'\',\''+je(String(e.ref))+'\')">✎</button>';
                     h+='<tr><td style="font-size:.75rem;color:var(--s500)">'+esc(e.date||'')+'</td>';
                     h+='<td>'+bdg(e.category||e.type,isCharge?'err':isRefund?'err':isPayment?'ok':'warn')+'</td>';
                     h+='<td style="font-size:.8rem">'+esc(e.desc||'')+'</td>';
@@ -6126,6 +6282,9 @@ function renderBilling(){
 
             // Monthly plan / autopay
             h+=_planCardHtml(l);
+
+            // Fee change history — how the balance got to where it is
+            h+=_feeHistoryHtml(l.famKey);
 
             // Quick actions
             var hasCard=families[l.famKey]?.cardOnFile;
@@ -6203,6 +6362,115 @@ function openPaymentForFamily(famKey){
 function addCharge(){
     if(!_secEdit('billing','Adding a charge'))return;
 addChargeForFamily(null)}
+// ═══════════════════════════════════════════════════════════════
+// FEE CHANGE HISTORY — who changed which fee, when, and by how much.
+//
+// Charges could be added but never edited or removed, so a wrong amount was
+// "fixed" by adding a second, offsetting charge. The ledger then showed two
+// entries and no explanation. Fees are editable now, and every change is
+// recorded on the family so the balance can always be accounted for.
+// ═══════════════════════════════════════════════════════════════
+function _whoAmI(){
+    try{
+        var u=window.AccessControl&&window.AccessControl.getCurrentUserInfo&&window.AccessControl.getCurrentUserInfo();
+        if(u&&(u.name||u.email)) return u.name||u.email;
+    }catch(e){}
+    return 'Office';
+}
+
+/**
+ * Record one fee change against a family.
+ * `from`/`to` are amounts; either may be null for an add or a removal.
+ */
+function _logFeeChange(famKey,entry){
+    var f=families[famKey]; if(!f)return;
+    if(!f.feeHistory) f.feeHistory=[];
+    f.feeHistory.push(Object.assign({
+        at:new Date().toISOString(),
+        by:_whoAmI()
+    },entry));
+    // The timeline is an audit trail, not a data store — keep it bounded so a
+    // long-running camp can't grow the family record without limit.
+    if(f.feeHistory.length>200) f.feeHistory=f.feeHistory.slice(-200);
+}
+
+function _feeHistoryHtml(famKey){
+    var f=families[famKey];
+    var hist=(f&&f.feeHistory)||[];
+    if(!hist.length) return '';
+    var rows=hist.slice().reverse().map(function(x){
+        var when=x.at?new Date(x.at):null;
+        var delta=(x.to==null?-(x.from||0):(x.to||0)-(x.from||0));
+        var deltaTxt=delta===0?'—':(delta>0?'+':'−')+fm(Math.abs(delta));
+        var deltaCol=delta>0?'var(--err)':delta<0?'var(--ok)':'var(--s400)';
+        var what=x.action==='added'?'Added'
+            :x.action==='removed'?'Removed'
+            :x.action==='edited'?'Changed'
+            :esc(x.action||'Changed');
+        var detail=(x.from!=null&&x.to!=null&&x.from!==x.to)
+            ? fm(x.from)+' → '+fm(x.to)
+            : (x.to!=null?fm(x.to):fm(x.from||0));
+        return '<div style="display:grid;grid-template-columns:auto 1fr auto;gap:10px;align-items:baseline;padding:6px 0;border-bottom:1px solid var(--s100);font-size:.78rem">'
+            +'<span style="color:var(--s400);white-space:nowrap">'+esc(when?when.toLocaleDateString():'')+'</span>'
+            +'<span><strong>'+what+'</strong> '+esc(x.label||x.category||'fee')+' · '+detail
+            +(x.note?' <span style="color:var(--s400)">— '+esc(x.note)+'</span>':'')
+            +'<br><span style="color:var(--s400);font-size:.72rem">'+esc(x.by||'Office')
+            +(when?' · '+when.toLocaleTimeString([], {hour:'numeric',minute:'2-digit'}):'')+'</span></span>'
+            +'<span style="font-weight:700;color:'+deltaCol+';white-space:nowrap">'+deltaTxt+'</span>'
+            +'</div>';
+    }).join('');
+    return '<div style="padding:10px 16px;border-top:1px solid var(--s100)">'
+        +'<div style="font-size:.75rem;font-weight:700;color:var(--s500);text-transform:uppercase;margin-bottom:6px">Fee History · '+hist.length+' change'+(hist.length===1?'':'s')+'</div>'
+        +'<div>'+rows+'</div></div>';
+}
+
+/** Edit or remove an add-on charge, logging the change either way. */
+function editChargeForFamily(famKey,chargeId){
+    if(!_secEdit('billing','Editing a fee'))return;
+    var f=families[famKey]; if(!f)return;
+    var ch=(f.charges||[]).filter(function(c){return String(c.id)===String(chargeId)})[0];
+    if(!ch){toast('Fee not found','error');return}
+    var h='<div class="me-modal-form">';
+    h+='<div style="background:var(--s50);padding:10px 14px;border-radius:var(--r);margin-bottom:14px;font-size:.82rem">'
+        +esc(f.name||'')+' · added '+esc(ch.date||'')+' · currently <strong>'+fm(ch.amount||0)+'</strong></div>';
+    h+='<div style="display:grid;grid-template-columns:2fr 1fr;gap:10px">';
+    h+='<div class="me-field"><label>Description</label><input type="text" id="efDesc" class="me-input" value="'+esc(ch.description||'')+'"></div>';
+    h+='<div class="me-field"><label>Amount ($)</label><input type="number" id="efAmount" class="me-input" value="'+(Number(ch.amount)||0).toFixed(2)+'" step="0.01" min="0"></div>';
+    h+='</div>';
+    h+='<div class="me-field"><label>Why is this changing?</label><input type="text" id="efNote" class="me-input" placeholder="e.g., quoted the wrong trip price"></div>';
+    h+='<div style="margin-top:10px"><button class="me-btn me-btn--ghost me-btn--sm" style="color:var(--err)" onclick="CampistryMe.removeChargeForFamily(\''+je(famKey)+'\',\''+je(String(chargeId))+'\')">Remove this fee</button></div>';
+    h+='</div>';
+    showModal('Edit Fee',h,function(){
+        var amt=parseFloat(document.getElementById('efAmount').value);
+        if(!(amt>=0)){alert('Enter an amount');return}
+        var desc=document.getElementById('efDesc').value.trim();
+        var note=document.getElementById('efNote').value.trim();
+        var was=Number(ch.amount)||0;
+        if(amt===was&&desc===(ch.description||'')){closeModal('dynModal');return}
+        ch.amount=amt; ch.description=desc;
+        f.balance=(f.balance||0)+(amt-was);
+        _logFeeChange(famKey,{action:'edited',label:desc||ch.category||'Fee',category:ch.category||'',
+            chargeId:ch.id,from:was,to:amt,note:note});
+        save();closeModal('dynModal');renderBilling();
+        toast('Fee updated'+(amt!==was?' — '+(amt>was?'up ':'down ')+fm(Math.abs(amt-was)):''));
+    });
+}
+
+function removeChargeForFamily(famKey,chargeId){
+    if(!_secEdit('billing','Removing a fee'))return;
+    var f=families[famKey]; if(!f)return;
+    var i=(f.charges||[]).findIndex(function(c){return String(c.id)===String(chargeId)});
+    if(i<0)return;
+    var ch=f.charges[i];
+    if(!confirm('Remove "'+(ch.description||ch.category||'this fee')+'" ('+fm(ch.amount||0)+')? It stays in the fee history.'))return;
+    var note=prompt('Why is it being removed? (optional)','')||'';
+    f.charges.splice(i,1);
+    f.balance=Math.max(0,(f.balance||0)-(Number(ch.amount)||0));
+    _logFeeChange(famKey,{action:'removed',label:ch.description||ch.category||'Fee',category:ch.category||'',
+        chargeId:ch.id,from:Number(ch.amount)||0,to:null,note:note.trim()});
+    save();closeModal('dynModal');renderBilling();toast('Fee removed');
+}
+
 function addChargeForFamily(famKey){
     var famOpts='';
     if(famKey){
@@ -6231,8 +6499,12 @@ function addChargeForFamily(famKey){
         var amt=parseFloat(document.getElementById('chgAmount').value)||0;
         if(!amt){alert('Enter an amount');return}
         if(!f.charges) f.charges=[];
-        f.charges.push({id:'chg_'+Date.now(),category:document.getElementById('chgCategory').value,description:document.getElementById('chgDesc').value.trim(),amount:amt,date:document.getElementById('chgDate').value,timestamp:Date.now()});
+        var chgId='chg_'+Date.now();
+        var chgCat=document.getElementById('chgCategory').value;
+        var chgDesc=document.getElementById('chgDesc').value.trim();
+        f.charges.push({id:chgId,category:chgCat,description:chgDesc,amount:amt,date:document.getElementById('chgDate').value,timestamp:Date.now()});
         f.balance=(f.balance||0)+amt;
+        _logFeeChange(fk,{action:'added',label:chgDesc||chgCat,category:chgCat,chargeId:chgId,from:null,to:amt});
         save();closeModal('dynModal');renderBilling();toast('Charge of '+fm(amt)+' added to '+f.name);
     });
 }
@@ -8782,6 +9054,7 @@ window.CampistryMe={
     addFamily:function(){openFamilyForm(null)},editFamily:function(id){openFamilyForm(id)},deleteFamily:deleteFamily,removeCamperFromFamily:removeCamperFromFamily,
     switchCampersView:switchCampersView,viewFamilyFromCamper:viewFamilyFromCamper,
     acceptFamilySuggestion:acceptFamilySuggestion,dismissFamilySuggestion:dismissFamilySuggestion,acceptAddToFamily:acceptAddToFamily,
+    openFamilyMerge:openFamilyMerge,_mergePreview:_mergePreview,dismissFamilyMerge:dismissFamilyMerge,
     addDiv:function(){openDivForm(null)},editDiv:function(n){openDivForm(n)},deleteDiv:deleteDiv,moveDivision:moveDivision,
     openCsv:function(){openModal('csvModal')},exportCsv:exportCsv,downloadTemplate:downloadTemplate,
     bbDrop:bbDrop,autoAssign:autoAssign,clearBunks:clearBunks,setBunkCount:setBunkCount,openBunkCountModal:openBunkCountModal,_clearBunkCount:_clearBunkCount,
@@ -8832,6 +9105,7 @@ window.CampistryMe={
     // Billing — family ledger system
     openPaymentModal:openPaymentModal,openPaymentForFamily:openPaymentForFamily,removePayment:removePayment,
     addCharge:addCharge,addChargeForFamily:addChargeForFamily,
+    editChargeForFamily:editChargeForFamily,removeChargeForFamily:removeChargeForFamily,
     issueCredit:issueCredit,issueCreditForFamily:issueCreditForFamily,
     setBillFilter:setBillFilter,printStatement:printStatement,
     requestCardSetup:requestCardSetup,chargeStoredCard:chargeStoredCard,batchCharge:batchCharge,

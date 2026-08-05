@@ -188,6 +188,9 @@
 <!-- Reads Campistry Go's saved bus routes for the print-sheet bus columns. -->
 <script src="campistry_bus_routes.js"></script>
 <script src="campistry_payments.js"></script>
+<!-- Merge rules for duplicate family records — pure functions, loaded before
+     campistry_me.js so the Families view can flag duplicates on first render. -->
+<script src="campistry_family_merge.js"></script>
 <script src="campistry_payroll_core.js"></script>
 <!-- Shared catalogue of what counselors may see. Loaded by Me (where the
      policy is set) and by Lite (where it's enforced) — one list, so a field
