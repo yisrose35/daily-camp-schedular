@@ -686,6 +686,131 @@
         //   GL passes repopulate them; a legacy-path run must not leave GenMetrics
         //   reading a PRIOR run's data.
         try { window.__genOpenSlots = []; window.__genFloorWarnings = []; } catch (_eOpenReset) {}
+        // ★ FINAL EXCHANGE (window.__finalExchange, default ON) ──────────────────────
+        //   The one move class NO other pass attempts: relocate a PLACED tile into a
+        //   hole and give its vacated span to the very activity the hole was reserved
+        //   for. Every repair either fills a hole in place (backfill) or swaps DEAD
+        //   tiles (restructure/reorder) — none moves live content. Live proof this
+        //   matters: the shiur seat was busy at the shiur window's own minute but FREE
+        //   at the minute of the bunk's movable sport, and a single exchange fills the
+        //   hole AND fulfils the weekly-due shiur:
+        //     jumprope 11:50→13:30 (the hole) · Shiur 1 → 11:50 (the vacated span).
+        //   STRICTLY scoped to the unambiguous case: the hole must be a subcat-tagged
+        //   genuine-open window (__genOpenSlots) and the incoming activity MUST BE that
+        //   subcategory — the commitment is fulfilled, just at the minute where its
+        //   seat is actually free. Cross-subcat incoming is refused (subcat-strict).
+        //   All gates re-checked: mover rule-legal + field free at the hole span,
+        //   incoming rule-legal + seat free at the vacated span, no same-day repeat,
+        //   bunk must not already hold that subcategory.
+        function _runFinalExchange() {
+          try {
+            var _feOn = (typeof window === 'undefined') || (window.__finalExchange !== false);
+            if (!_feOn || !window.scheduleAssignments || !window.SchedulingRules) return;
+            var _feOpen = (typeof window !== 'undefined' && Array.isArray(window.__genOpenSlots)) ? window.__genOpenSlots : [];
+            if (!_feOpen.length) return;
+            var _feGs = getGlobalSettings() || {};
+            var _feSpecials = ((_feGs.app1 && _feGs.app1.specialActivities) || []).filter(function (s) { return s && s.name && s.available !== false; });
+            if (!_feSpecials.length) return;
+            var _feCanon = function (v) { var s = String(v == null ? '' : v).toLowerCase().trim(); return (!s || s === 'regular' || s === 'uncategorized') ? 'uncategorized' : s; };
+            var _feCapOf = function (s) { return (s.sharableWith && s.sharableWith.capacity) || s.capacity || 1; };
+            var _feDurOf = function (s) { return s.defaultDuration || s.duration || s.durationMin || 0; };
+            var _feSA = window.scheduleAssignments;
+            var _feGradeOf = {};
+            try {
+                Object.keys(divisions || {}).forEach(function (g) {
+                    (getBunksForGrade(g, divisions) || []).forEach(function (bk) { _feGradeOf[String(bk)] = g; });
+                });
+            } catch (_eFeG) {}
+            var _feBusy = function (name, s, e, exclBunk, exclStart) {
+                var n = 0;
+                Object.keys(_feSA).forEach(function (b) {
+                    (_feSA[b] || []).forEach(function (r) {
+                        if (!r || r._activity !== name) return;
+                        if (b === exclBunk && r._startMin === exclStart) return;
+                        if (r._startMin < e && r._endMin > s) n++;
+                    });
+                });
+                return n;
+            };
+            var _feDone = 0;
+            _feOpen.slice().forEach(function (rec) {
+                if (!rec || !rec.bunk || rec._exchanged) return;
+                var bk = String(rec.bunk);
+                var arr = _feSA[bk];
+                if (!Array.isArray(arr)) return;
+                var sub = _feCanon(rec.subcat);
+                // the hole must still be uncovered
+                var live = arr.filter(function (r) { return r && r._startMin != null; });
+                for (var _lc = 0; _lc < live.length; _lc++) {
+                    if (live[_lc]._startMin < rec.endMin && live[_lc]._endMin > rec.startMin) return;
+                }
+                // bunk must not already hold this subcategory (the hole exists because it doesn't)
+                for (var _sc2 = 0; _sc2 < live.length; _sc2++) {
+                    if (live[_sc2].type === 'special' && _feCanon(live[_sc2]._subcat) === sub) return;
+                }
+                var holeDur = rec.endMin - rec.startMin;
+                var mine = {};
+                live.forEach(function (r) { mine[String(r._activity || r.field)] = 1; });
+                // incoming candidates: THE hole's own subcategory, free seat somewhere
+                var xs = _feSpecials.filter(function (x) { return _feCanon(x.subcategory) === sub && !mine[x.name]; });
+                if (!xs.length) return;
+                for (var ti2 = 0; ti2 < live.length && !rec._exchanged; ti2++) {
+                    var T = live[ti2];
+                    var tt = String(T.type || '').toLowerCase();
+                    if (tt !== 'sport' && tt !== 'special') continue;
+                    if (T._league || T._isTrip || T.continuation) continue;
+                    var tDur = T._endMin - T._startMin;
+                    if (tDur > holeDur || tDur < 10) continue;
+                    var tmpl = live.filter(function (r) { return r !== T; }).map(function (r) {
+                        return { type: r.type, event: r._activity || r.field, sport: r.sport, startMin: r._startMin, endMin: r._endMin, _assignedSpecial: r.type === 'special' ? r._activity : undefined };
+                    });
+                    // mover legal at the hole span?
+                    var tOk = false;
+                    try { tOk = window.SchedulingRules.isCandidateAllowed({ type: T.type, event: T._activity || T.field, sport: T.sport, startMin: rec.startMin, endMin: rec.startMin + tDur, _assignedSpecial: T.type === 'special' ? T._activity : undefined }, tmpl, { mode: 'auto' }); } catch (_eT) {}
+                    if (!tOk) continue;
+                    // mover's own resource free at the hole span?
+                    if (tt === 'sport' && T.field) {
+                        var fOk = false;
+                        try { fOk = isFieldAvailable(T.field, rec.startMin, rec.startMin + tDur, bk, _feGradeOf[bk], T.sport || T._activity); } catch (_eF) { fOk = false; }
+                        if (!fOk) continue;
+                    } else if (tt === 'special' && T._activity) {
+                        var ownDef = null;
+                        for (var _od = 0; _od < _feSpecials.length; _od++) { if (_feSpecials[_od].name === T._activity) { ownDef = _feSpecials[_od]; break; } }
+                        if (ownDef && _feCapOf(ownDef) - _feBusy(T._activity, rec.startMin, rec.startMin + tDur, bk, T._startMin) <= 0) continue;
+                    }
+                    // incoming activity of the hole's subcat, exactly T's length, seat free at T's old span
+                    for (var xi = 0; xi < xs.length; xi++) {
+                        var X = xs[xi];
+                        if (_feDurOf(X) !== tDur) continue;
+                        if (_feCapOf(X) - _feBusy(X.name, T._startMin, T._endMin, null, null) <= 0) continue;
+                        var xOk = false;
+                        try {
+                            xOk = window.SchedulingRules.isCandidateAllowed(
+                                { type: 'special', event: X.name, _assignedSpecial: X.name, _specialLocation: X.name, startMin: T._startMin, endMin: T._endMin },
+                                tmpl.concat([{ type: T.type, event: T._activity || T.field, sport: T.sport, startMin: rec.startMin, endMin: rec.startMin + tDur }]),
+                                { mode: 'auto' });
+                        } catch (_eX) {}
+                        if (!xOk) continue;
+                        // COMMIT: mover takes the hole; the vacated span gets the subcat's activity
+                        var oldS = T._startMin, oldE = T._endMin;
+                        T._startMin = rec.startMin; T._endMin = rec.startMin + tDur; T._finalExchange = true;
+                        arr.push({ field: X.name, sport: null, _activity: X.name, _startMin: oldS, _endMin: oldE, _fixed: true, _autoMode: true, _generic: false, continuation: false, type: 'special', _subcat: sub, _specialLocation: X.name, _finalExchange: true });
+                        rec._exchanged = true;
+                        _feDone++;
+                        log('[FINAL-EXCHANGE] ' + bk + ': ' + (T._activity || T.field) + ' ' + minutesToTimeLabel(oldS) + '→' + minutesToTimeLabel(T._startMin) + ' fills the open "' + sub + '" window; ' + X.name + ' takes the vacated ' + minutesToTimeLabel(oldS) + ' slot (its seat was free THERE, not at the window) — the commitment is fulfilled, just at the seat\'s free minute');
+                        break;
+                    }
+                }
+            });
+            if (_feDone > 0) {
+                // fulfilled records must not linger in the open-slot list (capacity advice
+                // and the backfill's do-not-touch guard both read it)
+                try { window.__genOpenSlots = _feOpen.filter(function (r) { return !(r && r._exchanged); }); } catch (_eFeP) {}
+                try { window.AutoSegmentModel && window.AutoSegmentModel.rebuildFromAssignments && window.AutoSegmentModel.rebuildFromAssignments(); } catch (_eFeS) {}
+            }
+          } catch (_eFe) { try { warn('[FINAL-EXCHANGE] skipped — ' + (_eFe && _eFe.message)); } catch (_eFe2) {} }
+        }
+
         // ★ FINAL FACILITY BACKFILL (window.__finalBackfill, default ON) ─────────────
         //   Last-resort sweep for uncovered time the earlier passes never offered a tile
         //   for. Those passes only ever concretize tiles that ALREADY EXIST, so a window
@@ -21168,6 +21293,7 @@
                     var _glElapsed = ((Date.now() - startTime) / 1000).toFixed(2);
                     log('[GENERIC-LAYOUT] ✅ COMPLETE in ' + _glElapsed + 's — ' + _glOut.stats.windowsTiled + '/' + _glOut.stats.windowsConsidered + ' free windows tiled, ' + _glOut.stats.tilesPlaced + ' generic tiles placed, ' + _glOut.stats.bunksFullyTiled + '/' + _glOut.stats.bunks + ' bunks fully wall-to-wall, ' + _glOut.stats.unmetSpecialFloors + ' unmet special floor(s), ' + (_glOut.stats.unmetFloors || 0) + ' unmet floor(s) total, ' + _glInjectedSwim + ' swim + ' + _glInjectedLayer + ' other deferred layer(s) re-floated, sharing watched on ' + _glShareFacs + ' facility(ies)/' + _glShareResv + ' placement(s)');
                     // ★ Last chance to cover leftover time before this path returns.
+                    try { _runFinalExchange(); } catch (_eFeGl) {}
                     try { _runFinalBackfill(); } catch (_eFbGl) {}
                     try { _auditSubcatFloors(); } catch (_eFaGl) {}
                     try { window.dispatchEvent(new CustomEvent('campistry-generation-complete', { detail: { mode: 'auto', version: VERSION, elapsed: _glElapsed, warnings: warnings, dateKey: (currentDate || window.currentScheduleDate || ''), genericLayout: true } })); } catch (_glEv) {}
@@ -36177,7 +36303,8 @@
             } catch (_eFa) { try { warn('[FLOOR-AUDIT] skipped — ' + (_eFa && _eFa.message)); } catch (_eFa2) {} }
         }
 
-        _runFinalBackfill();   // tail path (non generic-layout runs)
+        _runFinalExchange();   // tail path (non generic-layout runs)
+        _runFinalBackfill();
         _auditSubcatFloors();
 
         try {
