@@ -1111,6 +1111,23 @@ function viewCamper(n){
 }
 function cvR(l,v,w){if(!v)return'';return'<div class="cv-row"><span class="cv-lbl">'+esc(l)+'</span><span class="cv-val'+(w?' cv-warn':'')+'">'+v+'</span></div>'}
 
+// Holds the pending camper photo while the edit form is open, so an upload
+// isn't written to the roster until the form is actually saved.
+var _camperPhotoBuf=null;
+function _camperPhotoPick(input){
+    var f=input&&input.files&&input.files[0]; if(!f)return;
+    _downscaleImage(f,320,function(url){
+        _camperPhotoBuf=url;
+        var prev=document.getElementById('cePhotoPrev');
+        if(prev)prev.innerHTML=psPhotoCell('',{photo:url},56);
+    });
+}
+function _camperPhotoClear(){
+    _camperPhotoBuf=null;
+    var prev=document.getElementById('cePhotoPrev');
+    if(prev)prev.innerHTML=psPhotoCell('',{},56);
+}
+
 // Camper edit
 function editCamper(n){
     editingCamper=n;
@@ -1119,6 +1136,15 @@ function editCamper(n){
     if(titleEl)titleEl.textContent=n?'Edit Camper':'Add Camper';
     var idStr=d.camperId?String(d.camperId).padStart(4,'0'):'Will be assigned on save';
     var h='<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px"><div class="fsec" style="margin:0">Identity</div><span style="font-family:monospace;font-size:.8rem;color:var(--s400);background:var(--s100);padding:3px 10px;border-radius:var(--r)">Camper ID: #'+esc(idStr)+'</span></div>';
+    // Photo, so rosters and labels can carry a face. Downscaled on upload —
+    // full-size images would blow the saved-state size budget.
+    _camperPhotoBuf=d.photo||null;
+    h+='<div style="display:flex;align-items:center;gap:12px;margin-bottom:10px">';
+    h+='<div id="cePhotoPrev">'+psPhotoCell(n||'',{photo:_camperPhotoBuf},56)+'</div>';
+    h+='<div><label class="me-btn me-btn--sec me-btn--sm" style="cursor:pointer">Upload photo<input type="file" accept="image/*" style="display:none" onchange="CampistryMe._camperPhotoPick(this)"></label>'
+        +' <button type="button" class="me-btn me-btn--ghost me-btn--sm" style="color:var(--err)" onclick="CampistryMe._camperPhotoClear()">Remove</button>'
+        +'<div style="font-size:.65rem;color:var(--s400);margin-top:3px">Shown on rosters and labels when photos are turned on for a print sheet.</div></div>';
+    h+='</div>';
     h+='<div class="fr">'+ff('First Name','ceFirst',parts[0]||'')+ff('Last Name','ceLast',parts.slice(1).join(' ')||'')+'</div>';
     h+='<div class="fr">'+ff('Alternate First Name','ceAltFirst',d.altFirstName||'')+ff('Alternate Last Name','ceAltLast',d.altLastName||'')+'</div>';
     h+='<p style="font-size:.65rem;color:var(--s400);margin:-4px 0 8px;padding-left:2px">Hebrew, Spanish, Chinese, or any other name used at camp</p>';
@@ -1257,7 +1283,8 @@ function saveCamper(){
         physician:_v('cePhys'),physicianPhone:_v('cePhysPh'),
         insuranceProvider:_v('ceInsProv'),insurancePolicy:_v('ceInsPol'),
         camperType:_v('ceType'),swimLevel:_v('ceSwim'),shirtSize:_v('ceShirt'),
-        bunkmateRequest:_v('ceBunkmate'),separateFrom:_v('ceSeparate')
+        bunkmateRequest:_v('ceBunkmate'),separateFrom:_v('ceSeparate'),
+        photo:_camperPhotoBuf||''
     };
     // Merge onto the old record so notes, documents, custom fields, scholarships,
     // and history are preserved through an edit (they aren't on this form).
@@ -7565,7 +7592,10 @@ function _reportSources(){
                 {key:'bunkmateRequest',label:'Bunkmate Request'},{key:'separateFrom',label:'Do Not Bunk With'},
                 {key:'emergencyName',label:'Emergency Contact'},{key:'emergencyPhone',label:'Emergency Phone'},
                 {key:'parent1Name',label:'Parent'},{key:'parent1Phone',label:'Parent Phone'},{key:'parent1Email',label:'Parent Email'},
-                {key:'city',label:'City'},{key:'state',label:'State'},{key:'zip',label:'ZIP'}
+                {key:'city',label:'City'},{key:'state',label:'State'},{key:'zip',label:'ZIP'},
+                // Office notes, flattened newest-first. Excluding them meant an
+                // export could never answer "what do we know about this camper".
+                {key:'notes',label:'Notes'},{key:'notesLatest',label:'Notes — most recent'}
             ].concat(cfFields),
             rows:function(){
                 return Object.keys(roster).map(function(n){
@@ -7579,7 +7609,8 @@ function _reportSources(){
                         bunkmateRequest:c.bunkmateRequest||'',separateFrom:c.separateFrom||'',
                         emergencyName:c.emergencyName||'',emergencyPhone:c.emergencyPhone||'',
                         parent1Name:c.parent1Name||'',parent1Phone:c.parent1Phone||'',parent1Email:c.parent1Email||'',
-                        city:c.city||'',state:c.state||'',zip:c.zip||''};
+                        city:c.city||'',state:c.state||'',zip:c.zip||'',
+                        notes:_camperNotesText(c),notesLatest:_camperNotesText(c,1)};
                     cf.forEach(function(f){ row['cf_'+f.id]=c['cf_'+f.id]||''; });
                     return row;
                 });
@@ -7837,10 +7868,10 @@ function dlCsv(name,csv){
     var a=document.createElement('a');a.href=URL.createObjectURL(blob);a.download=name;a.click();toast('Downloaded '+name);
 }
 function exportRosterReport(){
-    var csv='Name,Alternate Name,Camper ID,Division,Grade,Bunk,DOB,Gender,School,Parent 1,Parent 1 Phone,Parent 1 Email,Street,City,State,ZIP,Allergies,Medications,Dietary\n';
+    var csv='Name,Alternate Name,Camper ID,Division,Grade,Bunk,School,School Grade,Teacher,DOB,Gender,Parent 1,Parent 1 Phone,Parent 1 Email,Street,City,State,ZIP,Allergies,Medications,Dietary,Notes\n';
     Object.entries(roster).sort(function(a,b){return a[0].localeCompare(b[0])}).forEach(function([n,c]){
         var altN=[c.altFirstName,c.altLastName].filter(Boolean).join(' ');
-        csv+=[n,altN,c.camperId||'',c.division||'',c.grade||'',c.bunk||'',c.dob||'',c.gender||'',c.school||'',c.parent1Name||'',c.parent1Phone||'',c.parent1Email||'',c.street||'',c.city||'',c.state||'',c.zip||'',c.allergies||'',c.medications||'',c.dietary||''].map(function(v){return'"'+String(v).replace(/"/g,'""')+'"'}).join(',')+'\n';
+        csv+=[n,altN,c.camperId||'',c.division||'',c.grade||'',c.bunk||'',c.school||'',c.schoolGrade||'',c.teacher||'',c.dob||'',c.gender||'',c.parent1Name||'',c.parent1Phone||'',c.parent1Email||'',c.street||'',c.city||'',c.state||'',c.zip||'',c.allergies||'',c.medications||'',c.dietary||'',_camperNotesText(c)].map(function(v){return'"'+String(v).replace(/"/g,'""')+'"'}).join(',')+'\n';
     });
     dlCsv('campistry_roster_'+new Date().toISOString().split('T')[0]+'.csv',csv);
 }
@@ -8701,6 +8732,11 @@ function psFields(){
         {key:'emergencyName',label:'Emergency Contact'},
         {key:'emergencyPhone',label:'Emergency Phone'},
         {key:'emergencyRel',label:'Emergency Relation'},
+        {key:'medicalNotes',label:'Medical Notes'},
+        // Office notes, newest first. The timeline is a list of entries, so it
+        // is flattened to one cell rather than left out of exports entirely.
+        {key:'notes',label:'Notes'},
+        {key:'notesLatest',label:'Notes — most recent only'},
         // Bus routes, pulled live from Campistry Go. Dismissal and arrival are
         // separate fields because a camper routinely rides a different bus
         // each way — one "Bus" column would be quietly wrong half the time.
@@ -8723,6 +8759,28 @@ function psFieldLabel(key){
     return m?m.label:key;
 }
 // Resolve a field's value for one camper. name is the roster key.
+/**
+ * A camper's office notes as one line, newest first.
+ * `limit` caps how many entries are included (1 = the latest only).
+ */
+function _camperNotesText(c,limit){
+    var notes=(c&&c.notes)||[];
+    if(!Array.isArray(notes)){
+        // A legacy record may hold a plain string rather than a timeline.
+        return notes?String(notes):'';
+    }
+    var sorted=notes.slice().sort(function(a,b){
+        return String((b&&b.date)||'').localeCompare(String((a&&a.date)||''));
+    });
+    if(limit>0) sorted=sorted.slice(0,limit);
+    return sorted.map(function(n){
+        var body=String((n&&n.body)||'').replace(/\s+/g,' ').trim();
+        if(!body)return'';
+        var type=(n&&n.type)?String(n.type).trim():'';
+        return type&&type.toLowerCase()!=='note'?type+': '+body:body;
+    }).filter(Boolean).join(' · ');
+}
+
 function psValue(field,name,c){
     if(!field||field==='__blank')return'';
     c=c||{};
@@ -8741,6 +8799,10 @@ function psValue(field,name,c){
             return[c.street,line2].filter(Boolean).join(', ');
         }
         case'team':return c.team||Object.values(c.teams||{})[0]||'';
+        // Notes are a timeline of {type, body, date}; flatten newest-first so
+        // the column reads like a note rather than a data structure.
+        case'notes':return _camperNotesText(c);
+        case'notesLatest':return _camperNotesText(c,1);
         case'busRoute':        return _busVal(name,'dismissal','busName');
         case'busStop':         return _busVal(name,'dismissal','stopNum');
         case'busStopAddress':  return _busVal(name,'dismissal','address');
@@ -8833,13 +8895,27 @@ function psFilteredCampers(sheet){
     if(sheet.scopeDiv)rows=rows.filter(function(r){return r[1].division===sheet.scopeDiv});
     var sortKey=sheet.sortBy||'lastName';
     rows.sort(function(a,b){
-        var va,vb;
-        if(sortKey==='camperId'){va=a[1].camperId||0;vb=b[1].camperId||0;return va-vb}
-        if(sortKey==='firstName'){va=(a[0].split(' ')[0]||'');vb=(b[0].split(' ')[0]||'')}
-        else if(sortKey==='bunk'){va=a[1].bunk||'';vb=b[1].bunk||''}
-        else if(sortKey==='grade'){va=a[1].grade||'';vb=b[1].grade||''}
-        else{va=(a[0].split(' ').slice(1).join(' ')||a[0]);vb=(b[0].split(' ').slice(1).join(' ')||b[0])}
-        return String(va).localeCompare(String(vb),undefined,{numeric:true});
+        var va,vb,cmp;
+        if(sortKey==='camperId'){cmp=(a[1].camperId||0)-(b[1].camperId||0)}
+        else{
+            if(sortKey==='firstName'){va=(a[0].split(' ')[0]||'');vb=(b[0].split(' ')[0]||'')}
+            else if(sortKey==='bunk'){va=a[1].bunk||'';vb=b[1].bunk||''}
+            else if(sortKey==='grade'){va=a[1].grade||'';vb=b[1].grade||''}
+            // School and teacher: a roster sorted by classroom is what a school
+            // pickup or a bus manifest is actually read against.
+            else if(sortKey==='school'){va=a[1].school||'';vb=b[1].school||''}
+            else if(sortKey==='schoolGrade'){va=a[1].schoolGrade||'';vb=b[1].schoolGrade||''}
+            else if(sortKey==='teacher'){va=a[1].teacher||'';vb=b[1].teacher||''}
+            else{va=(a[0].split(' ').slice(1).join(' ')||a[0]);vb=(b[0].split(' ').slice(1).join(' ')||b[0])}
+            cmp=String(va).localeCompare(String(vb),undefined,{numeric:true});
+            // Ties fall back to the camper's name, so a school- or teacher-sorted
+            // sheet is still alphabetical inside each classroom rather than in
+            // whatever order the roster object happened to enumerate.
+            if(cmp===0&&sortKey!=='lastName'&&sortKey!=='firstName'){
+                cmp=String(a[0]).localeCompare(String(b[0]),undefined,{numeric:true});
+            }
+        }
+        return sheet.sortDesc?-cmp:cmp;
     });
     return rows;
 }
@@ -8872,14 +8948,34 @@ function psGroups(sheet){
     return result;
 }
 
+// ── camper photos on a sheet ─────────────────────────────────────
+// Sized in px so print output is predictable; a face has to be big enough to
+// recognise a child by, and small enough that the roster still fits a page.
+var PS_PHOTO_PX={small:28,medium:44,large:68};
+
+function psPhotoPx(size){ return PS_PHOTO_PX[size]||0 }
+
+/** A camper's photo, or an initials badge when there is none on file. */
+function psPhotoCell(name,c,px){
+    if(c&&c.photo){
+        return '<img src="'+esc(c.photo)+'" alt="" style="width:'+px+'px;height:'+px+'px;border-radius:4px;object-fit:cover;border:1px solid #ccc">';
+    }
+    var initials=String(name||'?').split(' ').map(function(p){return p[0]||''}).slice(0,2).join('').toUpperCase();
+    return '<div style="width:'+px+'px;height:'+px+'px;border-radius:4px;border:1px solid #ddd;display:flex;align-items:center;justify-content:center;'
+        +'font-size:'+Math.max(8,Math.round(px*0.34))+'px;font-weight:700;color:#888">'+esc(initials)+'</div>';
+}
+
 // ── shared table renderer (preview + print use the same output) ──
-function psTableHtml(cols,rows){
+function psTableHtml(cols,rows,sheet){
+    var px=psPhotoPx(sheet&&sheet.photoSize);
     var h='<table class="ps-tbl"><thead><tr>';
+    if(px)h+='<th style="width:'+(px+10)+'px"></th>';
     cols.forEach(function(col){h+='<th>'+esc(psColHeader(col))+'</th>'});
     h+='</tr></thead><tbody>';
-    if(!rows.length){h+='<tr><td colspan="'+(cols.length||1)+'" class="ps-empty">No campers</td></tr>'}
+    if(!rows.length){h+='<tr><td colspan="'+((cols.length||1)+(px?1:0))+'" class="ps-empty">No campers</td></tr>'}
     rows.forEach(function(r){
         h+='<tr>';
+        if(px)h+='<td style="padding:3px 4px">'+psPhotoCell(r[0],r[1],px)+'</td>';
         cols.forEach(function(col){
             var v=col.field==='__blank'?'':psValue(col.field,r[0],r[1]);
             h+='<td'+(col.field==='__blank'?' class="ps-write"':'')+'>'+esc(v)+'</td>';
@@ -8920,6 +9016,8 @@ function psDuplicate(id){
 function psRename(id,v){var s=psGet(id);if(!s)return;s.name=v;psSaveSoon()}
 function psSetProp(id,prop,v){var s=psGet(id);if(!s)return;s[prop]=v;psSave();renderPrintSheets()}
 function psToggleHideEmpty(id,checked){var s=psGet(id);if(!s)return;s.hideEmptyCols=!!checked;psSave();renderPrintSheets()}
+/** Reverse the row order — one click, no second dropdown to hunt through. */
+function psToggleSortDir(id){var s=psGet(id);if(!s)return;s.sortDesc=!s.sortDesc;psSave();renderPrintSheets()}
 function psAddColumn(id){
     var s=psGet(id);if(!s)return;
     (s.columns=s.columns||[]).push({id:'c'+Date.now(),field:'',header:''});
@@ -9010,7 +9108,7 @@ function psPreviewHtml(sheet){
         if(!gcols.length)gcols=cols;
         h+='<div class="ps-sheet">';
         if(sheet.groupBy)h+='<div class="ps-sheet-title">'+esc(g.label||'(Unassigned)')+' <span class="ps-count">'+g.rows.length+'</span></div>';
-        h+=psTableHtml(gcols,g.rows);
+        h+=psTableHtml(gcols,g.rows,sheet);
         h+='</div>';
     });
     return h;
@@ -9041,7 +9139,7 @@ function psPrint(id){
         h+='<div class="ps-sheet">';
         h+='<div class="ps-hd"><h1>'+esc(sheet.name||'Print Sheet')+(sheet.groupBy?' — '+esc(g.label||'(Unassigned)'):'')+'</h1>'
             +'<div class="sub">'+esc(campName)+(campName?' · ':'')+esc(new Date().toLocaleDateString())+' · '+g.rows.length+' campers</div></div>';
-        h+=psTableHtml(gcols,g.rows);
+        h+=psTableHtml(gcols,g.rows,sheet);
         h+='</div>';
     });
     h+='</body></html>';
@@ -9098,8 +9196,18 @@ function psEditorHtml(s){
     var groupOpts=[['','One combined sheet (no split)'],['division','A separate sheet per division'],['grade','A separate sheet per grade'],['bunk','A separate sheet per bunk'],['team','A separate sheet per league team']];
     h+='<div class="me-field"><label>Print</label><select class="me-input" onchange="CampistryMe.psSetProp(\''+je(s.id)+'\',\'groupBy\',this.value)">'+groupOpts.map(function(g){return'<option value="'+g[0]+'"'+(g[0]===(s.groupBy||'')?' selected':'')+'>'+g[1]+'</option>'}).join('')+'</select></div>';
 
-    var sortOpts=[['lastName','Last name'],['firstName','First name'],['bunk','Bunk'],['grade','Grade'],['camperId','Camper ID']];
-    h+='<div class="me-field"><label>Sort rows by</label><select class="me-input" onchange="CampistryMe.psSetProp(\''+je(s.id)+'\',\'sortBy\',this.value)">'+sortOpts.map(function(o){return'<option value="'+o[0]+'"'+(o[0]===(s.sortBy||'lastName')?' selected':'')+'>'+o[1]+'</option>'}).join('')+'</select></div>';
+    var sortOpts=[['lastName','Last name'],['firstName','First name'],['bunk','Bunk'],['grade','Grade'],
+                  ['school','School'],['schoolGrade','School grade'],['teacher','Teacher'],['camperId','Camper ID']];
+    h+='<div class="me-field"><label>Sort rows by</label><div style="display:flex;gap:6px">';
+    h+='<select class="me-input" style="flex:1" onchange="CampistryMe.psSetProp(\''+je(s.id)+'\',\'sortBy\',this.value)">'+sortOpts.map(function(o){return'<option value="'+o[0]+'"'+(o[0]===(s.sortBy||'lastName')?' selected':'')+'>'+o[1]+'</option>'}).join('')+'</select>';
+    h+='<button class="me-btn me-btn--sec me-btn--sm" title="Reverse the order" style="white-space:nowrap" onclick="CampistryMe.psToggleSortDir(\''+je(s.id)+'\')">'+(s.sortDesc?'↓ Z–A':'↑ A–Z')+'</button>';
+    h+='</div></div>';
+
+    // Photo size — a roster of faces for a new counselor, or a sheet of labels.
+    var photoOpts=[['','No photos'],['small','Small'],['medium','Medium'],['large','Large']];
+    h+='<div class="me-field"><label>Camper photos</label><select class="me-input" onchange="CampistryMe.psSetProp(\''+je(s.id)+'\',\'photoSize\',this.value)">'
+        +photoOpts.map(function(o){return'<option value="'+o[0]+'"'+(o[0]===(s.photoSize||'')?' selected':'')+'>'+o[1]+'</option>'}).join('')+'</select>'
+        +'<p style="font-size:.68rem;color:var(--s400);margin:4px 0 0">Adds a photo column. Campers with no photo on file print an initials badge.</p></div>';
 
     h+='<label style="display:flex;align-items:center;gap:8px;font-size:.78rem;color:var(--s600);margin-top:4px;cursor:pointer"><input type="checkbox"'+(s.hideEmptyCols!==false?' checked':'')+' onchange="CampistryMe.psToggleHideEmpty(\''+je(s.id)+'\',this.checked)"> Hide columns that are empty for everyone</label>';
 
@@ -9142,6 +9250,7 @@ function psEditorHtml(s){
 window.CampistryMe={
     nav:nav,closeModal:closeModal,
     viewCamper:viewCamper,editCamper:editCamper,addCamper:addCamper,deleteCamper:deleteCamper,ceToggleSummer:ceToggleSummer,
+    _camperPhotoPick:_camperPhotoPick,_camperPhotoClear:_camperPhotoClear,
     addFamily:function(){openFamilyForm(null)},editFamily:function(id){openFamilyForm(id)},deleteFamily:deleteFamily,removeCamperFromFamily:removeCamperFromFamily,
     switchCampersView:switchCampersView,viewFamilyFromCamper:viewFamilyFromCamper,
     acceptFamilySuggestion:acceptFamilySuggestion,dismissFamilySuggestion:dismissFamilySuggestion,acceptAddToFamily:acceptAddToFamily,
@@ -9230,7 +9339,7 @@ window.CampistryMe={
     detectDuplicates:detectDuplicates,mergeCampers:mergeCampers,
     // Print Sheets
     psNew:psNew,psEdit:psEdit,psBack:psBack,psDelete:psDelete,psDuplicate:psDuplicate,
-    psPrint:psPrint,psRename:psRename,psSetProp:psSetProp,psToggleHideEmpty:psToggleHideEmpty,
+    psPrint:psPrint,psRename:psRename,psSetProp:psSetProp,psToggleHideEmpty:psToggleHideEmpty,psToggleSortDir:psToggleSortDir,
     psAddColumn:psAddColumn,psRemoveColumn:psRemoveColumn,psMoveColumn:psMoveColumn,
     psColDragHandle:psColDragHandle,psColDragStart:psColDragStart,psColDragEnd:psColDragEnd,
     psColDragOver:psColDragOver,psColDragLeave:psColDragLeave,psColDrop:psColDrop,
