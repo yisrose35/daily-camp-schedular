@@ -86,6 +86,16 @@ body{font-family:var(--font);background:var(--s50);color:var(--s800);-webkit-fon
 <div class="wrap" id="formWrap">
 <div class="hdr"><h1 id="campTitle">Camp Registration</h1><div class="cn" id="campNm"></div><p>Complete the form below to apply for enrollment</p></div>
 
+<!-- Returning family — add a camper without filling the whole form again.
+     Registering a second child used to mean re-entering the parent, address,
+     emergency contact and everything else the camp already had on file. -->
+<div class="cd" id="returnCard"><div class="ct"><svg viewBox="0 0 24 24"><path d="M3 12a9 9 0 1 0 3-6.7"/><polyline points="3 4 3 9 8 9"/></svg>Already registered with us?</div>
+<p style="font-size:.82rem;color:var(--s500);margin:0 0 10px">Adding another camper? Enter the email or phone you registered with and we'll fill in your details.</p>
+<div class="fr"><div class="fg"><label class="fl">Email or phone</label><input class="fi" id="rLookup" placeholder="you@example.com" autocomplete="email"></div>
+<div class="fg" style="display:flex;align-items:flex-end"><button type="button" id="rLookupBtn" style="padding:10px 16px;border:1px solid var(--me);border-radius:var(--r);background:var(--me);color:#fff;font-weight:600;font-size:.85rem;cursor:pointer;font-family:var(--font);width:100%" onclick="lookupFamily()">Find my family</button></div></div>
+<div id="rLookupOut" style="margin-top:8px"></div>
+</div>
+
 <!-- Session -->
 <div class="cd"><div class="ct"><svg viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="18" rx="2"/><line x1="16" y1="2" x2="16" y2="6"/><line x1="8" y1="2" x2="8" y2="6"/><line x1="3" y1="10" x2="21" y2="10"/></svg>Select Session</div>
 <div id="sessList"></div></div>
@@ -336,6 +346,119 @@ async function showStatus(id){
         }
         renderStatus(enrollments&&enrollments[id]);
     }catch(ex){document.getElementById('statusContent').innerHTML='<h2 style="color:var(--err)">Error</h2><p>Unable to load status.</p>'}
+}
+
+// ─── RETURNING FAMILY ────────────────────────────────────────
+// A family that already registered a camper should not have to retype the
+// parent, address and emergency contact the camp already holds. They enter the
+// email or phone they registered with, we match it against existing
+// applications, and the form fills itself in — leaving only the new camper.
+var returningInfo=null;   // { enrollmentIds, campers, parentEmail }
+
+/** Every enrollment the camp holds, through the same cascade showStatus uses. */
+async function _allEnrollments(){
+    var enrollments=null;
+    try{
+        var ls=JSON.parse(localStorage.getItem('campGlobalSettings_v1')||'{}');
+        enrollments=ls.campistryMe?.enrollments;
+    }catch(_){}
+    if(!enrollments||!Object.keys(enrollments).length){
+        try{
+            if(typeof window.loadGlobalSettings==='function'){
+                var full=window.loadGlobalSettings();
+                if(full?.campistryMe?.enrollments) enrollments=full.campistryMe.enrollments;
+            }
+        }catch(_){}
+    }
+    if(!enrollments||!Object.keys(enrollments).length){
+        try{
+            var client=window.CampistryDB?.getClient?.();
+            var campId=window.CampistryDB?.getCampId?.();
+            if(client&&campId){
+                var res=await client.from('camp_state_kv').select('value')
+                    .eq('camp_id',campId).eq('key','campistryMe').maybeSingle();
+                if(!res?.error&&res?.data?.value?.enrollments) enrollments=res.data.value.enrollments;
+            }
+        }catch(_){}
+    }
+    return enrollments||{};
+}
+
+function _digits(s){ return String(s||'').replace(/\D/g,'') }
+
+window.lookupFamily=async function(){
+    var q=v('rLookup');
+    var out=document.getElementById('rLookupOut');
+    var btn=document.getElementById('rLookupBtn');
+    if(!q){out.innerHTML='<p style="font-size:.8rem;color:var(--err)">Enter the email or phone you registered with.</p>';return}
+
+    btn.disabled=true; btn.textContent='Looking…';
+    var enrollments={};
+    try{ enrollments=await _allEnrollments(); }catch(_){}
+    btn.disabled=false; btn.textContent='Find my family';
+
+    var isEmail=q.indexOf('@')>0;
+    var needle=isEmail?q.toLowerCase():_digits(q);
+    // A phone needs enough digits to identify a household — matching on three
+    // digits would hand one family another family's details.
+    if(!isEmail&&needle.length<7){
+        out.innerHTML='<p style="font-size:.8rem;color:var(--err)">Enter the full phone number, or use your email instead.</p>';
+        return;
+    }
+
+    var matches=Object.entries(enrollments).filter(function(entry){
+        var e=entry[1]||{};
+        if(isEmail) return String(e.parentEmail||'').trim().toLowerCase()===needle;
+        return _digits(e.parentPhone)===needle||_digits(e.parent2Phone)===needle;
+    });
+
+    if(!matches.length){
+        out.innerHTML='<p style="font-size:.82rem;color:var(--s500);background:var(--s50);padding:10px 12px;border-radius:var(--r)">'
+            +'We couldn\'t find a registration under that '+(isEmail?'email':'number')+'. '
+            +'Fill in the form below and we\'ll set your family up — nothing is lost.</p>';
+        returningInfo=null;
+        return;
+    }
+
+    // Newest application wins for the household details: an address or phone
+    // entered last summer may well have changed since.
+    matches.sort(function(a,b){
+        return String(b[1].appliedTime||b[1].appliedDate||'').localeCompare(String(a[1].appliedTime||a[1].appliedDate||''));
+    });
+    var latest=matches[0][1];
+    var camperNames=[];
+    matches.forEach(function(m){ if(m[1].camperName&&camperNames.indexOf(m[1].camperName)<0)camperNames.push(m[1].camperName) });
+
+    _fill('rPar',latest.parentName); _fill('rPh',latest.parentPhone); _fill('rEm',latest.parentEmail);
+    _fill('rP2',latest.parent2Name); _fill('rP2Ph',latest.parent2Phone);
+    _fill('rSt',latest.street); _fill('rCi',latest.city); _fill('rSa',latest.state); _fill('rZp',latest.zip);
+    _fill('rEmN',latest.emergencyName); _fill('rEmPh',latest.emergencyPhone); _fill('rEmR',latest.emergencyRel);
+    var rel=document.getElementById('rRel'); if(rel&&latest.parentRelation) rel.value=latest.parentRelation;
+    var src=document.getElementById('rSrc'); if(src&&!src.value) src.value='Returning family';
+
+    returningInfo={
+        enrollmentIds:matches.map(function(m){return m[0]}),
+        campers:camperNames,
+        parentEmail:String(latest.parentEmail||'').trim().toLowerCase()
+    };
+
+    out.innerHTML='<div style="background:#ECFDF5;border:1px solid #A7F3D0;border-radius:var(--r);padding:11px 13px;font-size:.82rem;color:#065F46;line-height:1.55">'
+        +'<strong>Welcome back'+(latest.parentName?', '+esc(String(latest.parentName).split(' ')[0]):'')+'.</strong><br>'
+        +'We filled in your contact, address and emergency details'
+        +(camperNames.length?' — already registered: <strong>'+camperNames.map(esc).join(', ')+'</strong>':'')+'.<br>'
+        +'Just add the new camper below. Check the filled-in details in case anything has changed.'
+        +'</div>';
+
+    // Send them straight to the part that still needs filling in.
+    var el=document.getElementById('rF'); if(el){ el.focus(); el.scrollIntoView({behavior:'smooth',block:'center'}); }
+};
+
+/** Set a field only when it is still empty, so a typed value is never clobbered. */
+function _fill(id,val){
+    var el=document.getElementById(id);
+    if(!el||!val)return;
+    if(el.value&&el.value.trim()&&el.value.trim()!=='NY')return;   // NY is the State default
+    el.value=val;
 }
 
 // ─── LOAD DATA ───────────────────────────────────────────────
@@ -633,6 +756,12 @@ window.submitApp=function(){
                 status:'applied',appliedDate:new Date().toISOString().split('T')[0],appliedTime:new Date().toISOString(),
                 formsRequired:3,formsCompleted:uploads.length>0?1:0,
                 siblingGroup:appIds.length>1?appIds[0]:null,
+                // Flags an addition to a family the camp already has, so the
+                // office can attach it to the existing record instead of
+                // creating a second household for the same parents.
+                isReturning:!!returningInfo,
+                returningFrom:returningInfo?returningInfo.enrollmentIds[0]:null,
+                returningSiblings:returningInfo?returningInfo.campers:null,
                 adminNotes:'',
                 customAnswers:customAnswers,
                 customQuestionLabels:cqLabels

@@ -3377,7 +3377,14 @@ function renderEnrollment(){
             h+='<td onclick="event.stopPropagation()"><input type="checkbox" class="reg-check" data-id="'+esc(id)+'" onclick="CampistryMe._updateRegBulkBar()"></td>';
             h+='<td style="font-size:.75rem;color:var(--s400)">'+esc(e.appliedDate||'—')+'</td>';
             h+='<td class="bold" style="color:var(--me)">'+esc(e.camperName||'—')+'</td>';
-            h+='<td>'+esc(e.parentName||'—')+'</td>';
+            // An addition to a family already on file — the office should
+            // attach it to the existing household, not start a second one.
+            var _retTitle=e.returningSiblings&&e.returningSiblings.length
+                ? 'Already registered: '+e.returningSiblings.join(', ')
+                : 'Added by a family already on file';
+            h+='<td>'+esc(e.parentName||'—')
+                +(e.isReturning?' <span title="'+esc(_retTitle)+'" style="font-size:.62rem;font-weight:700;color:#065F46;background:#ECFDF5;border:1px solid #A7F3D0;padding:1px 6px;border-radius:4px;white-space:nowrap">RETURNING</span>':'')
+                +'</td>';
             h+='<td>'+esc(e.session||'—')+'</td>';
             h+='<td>'+bdg(e.status||'applied',sc)+'</td>';
             h+='<td><span style="font-size:.75rem;font-weight:600;color:'+formsColor+'">'+formsDone+'/'+formsTotal+'</span></td>';
