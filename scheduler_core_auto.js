@@ -852,17 +852,21 @@
         //   Never bails silently: logs a counter line whenever records were examined.
         function _runCrossBunkExchange() {
           try {
-            //   Default ON again — guarded by the VALIDATE-AND-ROLLBACK wrapper below.
-            //   First enablement resolved all 3 shiur windows (195→125min) but caused
-            //   3 cross-division conflicts: the seat check is correct AT THIS SEAM, but
-            //   the generation-complete listener chain (FQ re-opt etc.) relocates OTHER
-            //   bunks' tiles afterwards with no knowledge of these fills. So every
-            //   commit is journaled, and a settle-check ~3s after generation (past the
-            //   listener chain, the same horizon the FN-59 watchdog uses) re-verifies
-            //   seat exclusivity against the SETTLED grid, rolls back any conflicted
-            //   fill (restoring its open record), re-saves, and re-runs the validator.
-            //   0 validator errors stays the invariant — now enforced, not assumed.
-            var _cxOn = (typeof window === 'undefined') || (window.__crossBunkExchange !== false);
+            // ⚠ DEFAULT OFF — ROOT CAUSE FOUND AND IT IS STRUCTURAL: this pass writes by
+            //   APPENDING slots to scheduleAssignments, but that array is SLOT-INDEX
+            //   ALIGNED to divisionTimes. Every slot-aligned consumer (the validator
+            //   included) derives a tile's time from its INDEX, not its _startMin — so
+            //   an appended fill "lands" at whatever period row sits at that index. The
+            //   phantom validator conflicts were exactly that: the in-memory grid was
+            //   conflict-free (verified tile-by-tile) while the validator saw the fills
+            //   at index-mapped 10-min rows. The settle-check wrapper below is sound
+            //   but guards the wrong layer. The FIX shipped instead: the pre-emit
+            //   LATE-RETRY gained a catalog fallback (gated by _glCapFits + access +
+            //   exact-ceiling), which fills these windows as real layout tiles that
+            //   enter the skeleton and align correctly. This pass stays opt-in for
+            //   study (window.__crossBunkExchange = true) until it writes at the
+            //   correct slot index instead of appending.
+            var _cxOn = (typeof window !== 'undefined') && (window.__crossBunkExchange === true);
             if (!_cxOn || !window.scheduleAssignments || !window.SchedulingRules) return;
             var _cxOpen = (typeof window !== 'undefined' && Array.isArray(window.__genOpenSlots)) ? window.__genOpenSlots : [];
             if (!_cxOpen.length) return;
@@ -21325,6 +21329,44 @@
                                             _lsrFilled++;
                                             break;
                                         }
+                                    }
+                                    // ★ CATALOG FALLBACK. The pools are rotation-THINNED: an activity a
+                                    //   bunk is merely paced away from (exact-frequency skip, cohort defer)
+                                    //   is absent from BOTH lists — for shiur that meant its windows could
+                                    //   never late-fill even when the seat was demonstrably free. Live
+                                    //   proof: a post-generation catalog check filled all 3 open shiur
+                                    //   windows instantly. Doing it HERE (pre-emit) keeps the tile in the
+                                    //   skeleton so divisionTimes aligns — an appended post-emit slot is
+                                    //   mis-indexed by every slot-aligned consumer, incl. the validator.
+                                    //   Gates: same subcat only, weekly-owed OR below-exact only (never
+                                    //   exceed a met exact ceiling), access-checked, duration match, no
+                                    //   same-day repeat, and _glCapFits — the engine's own seat oracle.
+                                    if (!t._concrete && sub && sub !== 'uncategorized') {
+                                        try {
+                                            var _cfList = (typeof todaysSpecials !== 'undefined' && todaysSpecials) ? todaysSpecials : [];
+                                            for (var _cf = 0; _cf < _cfList.length && !t._concrete; _cf++) {
+                                                var C2 = _cfList[_cf];
+                                                if (!C2 || !C2.name) continue;
+                                                if (_glCanon(C2.subcategory) !== sub) continue;
+                                                if (used[String(C2.name).toLowerCase()]) continue;
+                                                var _cfDurs = _glSpecialDurs(C2.name);
+                                                if (_cfDurs.length && _cfDurs.indexOf(dur) < 0) continue;
+                                                try { if (typeof isSpecialAvailableForBunk === 'function' && !isSpecialAvailableForBunk(C2.name, grade, bunk, globalSettings)) continue; } catch (_eCfA) {}
+                                                // never exceed a MET exact-frequency ceiling
+                                                try {
+                                                    var _cfProps = (window.activityProperties && window.activityProperties[C2.name]) || C2;
+                                                    var _cfExact = parseInt((_cfProps.exactFrequencyPerGrade || {})[grade]) || parseInt(_cfProps.exactFrequency) || 0;
+                                                    if (_cfExact > 0 && getPeriodCount(bunk, C2.name, _cfProps.exactFrequencyPeriod || 'half') >= _cfExact) continue;
+                                                } catch (_eCfE) {}
+                                                if (!_glCapFits(C2, grade, t.startMin, t.endMin)) continue;
+                                                t._concrete = C2.name;
+                                                t._fillLoc = C2.location || null;
+                                                t._origin = 'late-catalog-retry';
+                                                used[String(C2.name).toLowerCase()] = 1;
+                                                _glRecordUse(C2, grade, t.startMin, t.endMin);
+                                                _lsrFilled++;
+                                            }
+                                        } catch (_eCf) {}
                                     }
                                 });
                             });
