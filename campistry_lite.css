@@ -631,6 +631,10 @@ button { cursor: pointer; border: none; background: none; }
 .lite-flag { font-size: 0.66rem; font-weight: 800; padding: 3px 7px; border-radius: 999px; background: #FDE4E1; color: #B42318; }
 .lite-flag.diet { background: #FEF0C7; color: #9A6700; }
 .lite-flag.med { background: #E0EAFF; color: #3538CD; }
+/* Medication status. "Due" has to read as an outstanding task, "given" as
+   settled — same shape, opposite urgency, so a counselor can scan a bunk. */
+.lite-flag.meds { background: #E0EAFF; color: #3538CD; }
+.lite-flag.given { background: #D3F8E0; color: #067647; }
 .lite-camper-chev { color: var(--muted); flex: none; }
 .lite-camper-details { padding: 0 15px 14px; font-size: 0.84rem; color: var(--ink-2); border-top: 1px dashed var(--line-2); }
 .lite-camper-details dt { font-size: 0.68rem; font-weight: 800; text-transform: uppercase; letter-spacing: 0.05em; color: var(--muted); margin-top: 11px; }

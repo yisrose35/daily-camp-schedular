@@ -2757,9 +2757,22 @@
         const flags = [];
         if (c.allergies) flags.push('<span class="lite-flag">Allergy</span>');
         if (c.dietary) flags.push('<span class="lite-flag diet">Dietary</span>');
+        // Medication STATUS, which is a separate permission from the drug
+        // names. Whether today's dose has been given is the thing a counselor
+        // actually acts on, so it earns a flag rather than a buried line.
+        if (c._needsMeds) {
+            flags.push(c._medsGivenToday
+                ? '<span class="lite-flag given">Meds given</span>'
+                : '<span class="lite-flag meds">Meds due</span>');
+        }
         const details = [];
         if (c.allergies) details.push(dtdd('Allergies', c.allergies));
         if (c.medications) details.push(dtdd('Medications', c.medications));
+        else if (c._needsMeds) {
+            details.push(dtdd('Medication', c._medsGivenToday
+                ? 'Given today'
+                : 'Not given yet today — the nurse dispenses it', true));
+        }
         if (c.dietary) details.push(dtdd('Dietary', c.dietary));
         if (c.parent1Name || c.parent1Phone) {
             details.push(dtdd('Parent', `${esc(c.parent1Name || '')}${c.parent1Phone
