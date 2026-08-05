@@ -852,17 +852,17 @@
         //   Never bails silently: logs a counter line whenever records were examined.
         function _runCrossBunkExchange() {
           try {
-            // ⚠ DEFAULT OFF — live it DID resolve all 3 shiur windows (7 holes/195min →
-            //   4/125, shiur bunks 24→27) but introduced 3 cross-division validator
-            //   conflicts, the first validator regression of the project. Mechanism:
-            //   the seat check is correct AT THIS SEAM, but passes running AFTER it
-            //   (the generation-complete listener chain — FQ re-opt etc.) relocate
-            //   OTHER bunks' tiles without knowing about these fills, and the fills'
-            //   _fixed flag makes them survive regens where they collide with fresh
-            //   placements. 0 validator errors is the hard invariant; the pass stays
-            //   opt-in (window.__crossBunkExchange = true) until it either runs after
-            //   the last tile-moving pass or re-validates at completion.
-            var _cxOn = (typeof window !== 'undefined') && (window.__crossBunkExchange === true);
+            //   Default ON again — guarded by the VALIDATE-AND-ROLLBACK wrapper below.
+            //   First enablement resolved all 3 shiur windows (195→125min) but caused
+            //   3 cross-division conflicts: the seat check is correct AT THIS SEAM, but
+            //   the generation-complete listener chain (FQ re-opt etc.) relocates OTHER
+            //   bunks' tiles afterwards with no knowledge of these fills. So every
+            //   commit is journaled, and a settle-check ~3s after generation (past the
+            //   listener chain, the same horizon the FN-59 watchdog uses) re-verifies
+            //   seat exclusivity against the SETTLED grid, rolls back any conflicted
+            //   fill (restoring its open record), re-saves, and re-runs the validator.
+            //   0 validator errors stays the invariant — now enforced, not assumed.
+            var _cxOn = (typeof window === 'undefined') || (window.__crossBunkExchange !== false);
             if (!_cxOn || !window.scheduleAssignments || !window.SchedulingRules) return;
             var _cxOpen = (typeof window !== 'undefined' && Array.isArray(window.__genOpenSlots)) ? window.__genOpenSlots : [];
             if (!_cxOpen.length) return;
@@ -897,6 +897,9 @@
             var _cxLegal = function (blk, tmpl) { try { return window.SchedulingRules.isCandidateAllowed(blk, tmpl, { mode: 'auto' }); } catch (_e) { return false; } };
             var _cxC = { records: 0, directFill: 0, exchanged: 0, noHolder: 0, holderStuck: 0 };
             var WALLT = { lunch: 1, swim: 1, 'pre-change': 1, 'post-change': 1, custom: 1, league: 1, trip: 1 };
+            // undo journal for the validate-and-rollback settle check
+            var _cxJournal = [];
+            var _cxDateKey = (typeof window !== 'undefined' && (window._activeGenDate || window.currentScheduleDate)) || '';
             _cxOpen.slice().forEach(function (rec) {
                 if (!rec || !rec.bunk || rec._exchanged) return;
                 var A = String(rec.bunk);
@@ -913,9 +916,12 @@
                 var xs = _cxSpecials.filter(function (x) { return _cxCanon(x.subcategory) === sub && !mineA[x.name] && _cxDurOf(x) === holeDur; });
                 if (!xs.length) return;
                 var tmplA = _cxTmplOf(A, null);
-                var fillA = function (X) {
+                var fillA = function (X, journalExtra) {
                     arrA.push({ field: X.name, sport: null, _activity: X.name, _startMin: rec.startMin, _endMin: rec.endMin, _fixed: true, _autoMode: true, _generic: false, continuation: false, type: 'special', _subcat: sub, _specialLocation: X.name, _crossExchange: true });
                     rec._exchanged = true;
+                    var _je = { kind: 'fill', bunk: A, name: X.name, startMin: rec.startMin, endMin: rec.endMin, cap: _cxCapOf(X), recCopy: { bunk: rec.bunk, division: rec.division, startMin: rec.startMin, endMin: rec.endMin, subcat: rec.subcat, kind: rec.kind } };
+                    if (journalExtra) { for (var _jk in journalExtra) { if (Object.prototype.hasOwnProperty.call(journalExtra, _jk)) _je[_jk] = journalExtra[_jk]; } _je.kind = 'exchange'; }
+                    _cxJournal.push(_je);
                 };
                 // 0) FREE WIN: a seat may already be free at this final seam
                 for (var _fw = 0; _fw < xs.length; _fw++) {
@@ -988,10 +994,11 @@
                             }
                             // COMMIT — swap Y↔Z spans in B, then fill A's window
                             var yS = Y._startMin, yE = Y._endMin;
+                            var _zOrig = { field: Z.field, sport: Z.sport, activity: Z._activity, s: Z._startMin, e: Z._endMin };
                             Y._startMin = Z._startMin; Y._endMin = Z._endMin; Y._crossExchange = true;
                             Z._startMin = yS; Z._endMin = yE; Z._crossExchange = true;
                             if (zRe) { Z.field = zRe; Z.sport = zRe; Z._activity = zRe; }
-                            fillA(X);
+                            fillA(X, { holder: B, yFrom: [yS, yE], yTo: [Y._startMin, Y._endMin], zOrig: _zOrig, zRe: zRe || null });
                             _cxC.exchanged++;
                             done = true;
                             log('[CROSS-EXCHANGE] ' + A + ' gets ' + X.name + ' at its open "' + sub + '" window ' + minutesToTimeLabel(rec.startMin) + '-' + minutesToTimeLabel(rec.endMin) + ' — holder ' + B + ' moved its ' + X.name + ' ' + minutesToTimeLabel(yS) + '→' + minutesToTimeLabel(Y._startMin) + ' (swapped with ' + (Z._activity || Z.field) + (zRe ? ', re-sported to ' + zRe : '') + '); both bunks stay wall-to-wall');
@@ -1007,6 +1014,93 @@
             if (_cxC.directFill + _cxC.exchanged > 0) {
                 try { window.__genOpenSlots = _cxOpen.filter(function (r) { return !(r && r._exchanged); }); } catch (_eCxP) {}
                 try { window.AutoSegmentModel && window.AutoSegmentModel.rebuildFromAssignments && window.AutoSegmentModel.rebuildFromAssignments(); } catch (_eCxS) {}
+                // ★ VALIDATE-AND-ROLLBACK. The seat checks above are correct at THIS
+                //   seam, but the generation-complete listener chain (FQ re-opt etc.)
+                //   relocates OTHER bunks' tiles afterwards. ~3s later — past that
+                //   chain, the same horizon the FN-59 watchdog trusts — re-verify every
+                //   journaled fill's seat exclusivity against the SETTLED grid. A
+                //   conflicted fill is rolled back exactly (the exchange's holder swap
+                //   too), its open record restored, the schedule re-saved local+cloud
+                //   (FN-59 authoritative-save pattern), and the validator re-run so the
+                //   printed summary describes the data that was actually saved.
+                try {
+                    setTimeout(function () {
+                        try {
+                            var sa2 = window.scheduleAssignments || {};
+                            var kept = 0, rolled = 0;
+                            var busy2 = function (name, s, e, exclBunk, exclStart) {
+                                var n = 0;
+                                Object.keys(sa2).forEach(function (b) {
+                                    (sa2[b] || []).forEach(function (r) {
+                                        if (!r || r._activity !== name) return;
+                                        if (b === exclBunk && r._startMin === exclStart) return;
+                                        if (r._startMin < e && r._endMin > s) n++;
+                                    });
+                                });
+                                return n;
+                            };
+                            _cxJournal.forEach(function (J) {
+                                var arr2 = sa2[J.bunk];
+                                if (!Array.isArray(arr2)) return;
+                                var idx = -1;
+                                for (var i2 = 0; i2 < arr2.length; i2++) {
+                                    var r2 = arr2[i2];
+                                    if (r2 && r2._crossExchange && r2._activity === J.name && r2._startMin === J.startMin) { idx = i2; break; }
+                                }
+                                if (idx < 0) return;   // a later pass already removed it
+                                var conflicted = busy2(J.name, J.startMin, J.endMin, J.bunk, J.startMin) >= (J.cap || 1);
+                                // an exchange also re-checks the holder's relocated tile
+                                if (!conflicted && J.kind === 'exchange' && J.holder) {
+                                    conflicted = busy2(J.name, J.yTo[0], J.yTo[1], J.holder, J.yTo[0]) >= (J.cap || 1);
+                                }
+                                if (!conflicted) { kept++; return; }
+                                // ROLLBACK: remove A's fill, restore its open record
+                                arr2.splice(idx, 1);
+                                try { (window.__genOpenSlots = window.__genOpenSlots || []).push(J.recCopy); } catch (_eRb1) {}
+                                // and un-swap the holder if this was a full exchange
+                                if (J.kind === 'exchange' && J.holder && Array.isArray(sa2[J.holder])) {
+                                    var arrB2 = sa2[J.holder];
+                                    for (var i3 = 0; i3 < arrB2.length; i3++) {
+                                        var rb = arrB2[i3];
+                                        if (!rb || !rb._crossExchange) continue;
+                                        if (rb._activity === J.name && rb._startMin === J.yTo[0]) { rb._startMin = J.yFrom[0]; rb._endMin = J.yFrom[1]; delete rb._crossExchange; }
+                                        else if (rb._startMin === J.yFrom[0] && rb._endMin === J.yFrom[1]) {
+                                            rb._startMin = J.zOrig.s; rb._endMin = J.zOrig.e;
+                                            if (J.zRe) { rb.field = J.zOrig.field; rb.sport = J.zOrig.sport; rb._activity = J.zOrig.activity; }
+                                            delete rb._crossExchange;
+                                        }
+                                    }
+                                }
+                                rolled++;
+                                console.warn('[CROSS-EXCHANGE-ROLLBACK] ' + J.bunk + ' ' + J.name + ' @' + J.startMin + ' — a later pass moved another bunk onto this seat; fill rolled back, open record restored');
+                            });
+                            if (_cxJournal.length) {
+                                console.log('[CROSS-EXCHANGE-SETTLE] ' + kept + ' fill(s) verified against the settled grid, ' + rolled + ' rolled back');
+                            }
+                            if (rolled > 0) {
+                                // authoritative re-save (FN-59 pattern) so the saved day matches the data
+                                try {
+                                    var _allD = JSON.parse(localStorage.getItem('campDailyData_v1') || '{}');
+                                    if (_cxDateKey) {
+                                        if (!_allD[_cxDateKey]) _allD[_cxDateKey] = {};
+                                        _allD[_cxDateKey].scheduleAssignments = window.scheduleAssignments || {};
+                                        _allD[_cxDateKey].leagueAssignments = window.leagueAssignments || {};
+                                        _allD[_cxDateKey]._savedAt = Date.now();
+                                        localStorage.setItem('campDailyData_v1', JSON.stringify(_allD));
+                                    }
+                                } catch (_eRs1) {}
+                                try {
+                                    Promise.resolve(window.ScheduleDB && window.ScheduleDB.saveSchedule && window.ScheduleDB.saveSchedule(_cxDateKey, {
+                                        scheduleAssignments: window.scheduleAssignments || {},
+                                        leagueAssignments: window.leagueAssignments || {}
+                                    }, { skipFilter: true })).catch(function () {});
+                                } catch (_eRs2) {}
+                                // re-run the validator so the printed result describes the SAVED data
+                                try { if (typeof window.validateAutoSchedule === 'function') window.validateAutoSchedule(); } catch (_eRv) {}
+                            }
+                        } catch (_eSet) { try { console.warn('[CROSS-EXCHANGE-SETTLE] check failed — ' + (_eSet && _eSet.message)); } catch (_e) {} }
+                    }, 3000);
+                } catch (_eSch) {}
             }
           } catch (_eCx) { try { warn('[CROSS-EXCHANGE] skipped — ' + (_eCx && _eCx.message)); } catch (_eCx2) {} }
         }
