@@ -769,10 +769,31 @@
                     try { tOk = window.SchedulingRules.isCandidateAllowed({ type: T.type, event: T._activity || T.field, sport: T.sport, startMin: rec.startMin, endMin: rec.startMin + tDur, _assignedSpecial: T.type === 'special' ? T._activity : undefined }, tmpl, { mode: 'auto' }); } catch (_eT) {}
                     if (!tOk) continue;
                     // mover's own resource free at the hole span?
+                    var _feReSport = null;
                     if (tt === 'sport' && T.field) {
                         var fOk = false;
                         try { fOk = isFieldAvailable(T.field, rec.startMin, rec.startMin + tDur, bk, _feGradeOf[bk], T.sport || T._activity); } catch (_eF) { fOk = false; }
-                        if (!fOk) continue;
+                        if (!fOk) {
+                            // ★ RE-IDENTIFY: a sport's identity is fluid (sport-fill picks
+                            //   one per slot anyway). This tile's own field is busy at the
+                            //   hole — scan the catalog for another sport whose field IS
+                            //   free there (isFieldAvailable = capacity + access + locks),
+                            //   not done today by the bunk, rule-legal at the hole span.
+                            //   Live: jumprope was full at 13:30 while ELEVEN other sports
+                            //   sat free and legal at that exact window.
+                            var _feFieldsAll = ((_feGs.app1 && _feGs.app1.fields) || []).filter(function (f) { return f && f.name && f.available !== false && f.name !== 'Pool' && f.name !== 'Lunch Room' && f.name !== 'Cleanup'; });
+                            for (var _fi2 = 0; _fi2 < _feFieldsAll.length && !_feReSport; _fi2++) {
+                                var _fN = _feFieldsAll[_fi2];
+                                if (mine[_fN.name]) continue;
+                                var _fAv = false;
+                                try { _fAv = isFieldAvailable(_fN.name, rec.startMin, rec.startMin + tDur, bk, _feGradeOf[bk], _fN.name); } catch (_eF2) {}
+                                if (!_fAv) continue;
+                                var _rOk2 = false;
+                                try { _rOk2 = window.SchedulingRules.isCandidateAllowed({ type: 'sport', event: _fN.name, sport: _fN.name, startMin: rec.startMin, endMin: rec.startMin + tDur }, tmpl, { mode: 'auto' }); } catch (_eR2) {}
+                                if (_rOk2) _feReSport = _fN.name;
+                            }
+                            if (!_feReSport) continue;
+                        }
                     } else if (tt === 'special' && T._activity) {
                         var ownDef = null;
                         for (var _od = 0; _od < _feSpecials.length; _od++) { if (_feSpecials[_od].name === T._activity) { ownDef = _feSpecials[_od]; break; } }
@@ -793,11 +814,13 @@
                         if (!xOk) continue;
                         // COMMIT: mover takes the hole; the vacated span gets the subcat's activity
                         var oldS = T._startMin, oldE = T._endMin;
+                        var oldName = T._activity || T.field;
                         T._startMin = rec.startMin; T._endMin = rec.startMin + tDur; T._finalExchange = true;
+                        if (_feReSport) { T.field = _feReSport; T.sport = _feReSport; T._activity = _feReSport; mine[_feReSport] = 1; }
                         arr.push({ field: X.name, sport: null, _activity: X.name, _startMin: oldS, _endMin: oldE, _fixed: true, _autoMode: true, _generic: false, continuation: false, type: 'special', _subcat: sub, _specialLocation: X.name, _finalExchange: true });
                         rec._exchanged = true;
                         _feDone++;
-                        log('[FINAL-EXCHANGE] ' + bk + ': ' + (T._activity || T.field) + ' ' + minutesToTimeLabel(oldS) + '→' + minutesToTimeLabel(T._startMin) + ' fills the open "' + sub + '" window; ' + X.name + ' takes the vacated ' + minutesToTimeLabel(oldS) + ' slot (its seat was free THERE, not at the window) — the commitment is fulfilled, just at the seat\'s free minute');
+                        log('[FINAL-EXCHANGE] ' + bk + ': ' + oldName + ' ' + minutesToTimeLabel(oldS) + '→' + minutesToTimeLabel(T._startMin) + (_feReSport ? ' (re-sported to ' + _feReSport + ' — its own field was busy at the window)' : '') + ' fills the open "' + sub + '" window; ' + X.name + ' takes the vacated ' + minutesToTimeLabel(oldS) + ' slot (its seat was free THERE, not at the window) — the commitment is fulfilled, just at the seat\'s free minute');
                         break;
                     }
                 }
