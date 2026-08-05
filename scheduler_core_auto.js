@@ -1163,8 +1163,17 @@
                                         if (!_allD[_cxDateKey]) _allD[_cxDateKey] = {};
                                         _allD[_cxDateKey].scheduleAssignments = window.scheduleAssignments || {};
                                         _allD[_cxDateKey].leagueAssignments = window.leagueAssignments || {};
+                                        // the rollback spliced/re-timed per-bunk slot rows too — persist
+                                        // them, or a reload re-times every later tile off stale rows
+                                        try {
+                                            var _rbPbs = {};
+                                            Object.keys(window.divisionTimes || {}).forEach(function (g) { if (window.divisionTimes[g] && window.divisionTimes[g]._perBunkSlots) _rbPbs[g] = window.divisionTimes[g]._perBunkSlots; });
+                                            _allD[_cxDateKey]._perBunkSlotsData = _rbPbs;
+                                            _allD[_cxDateKey].divisionTimes = (window.DivisionTimesSystem && window.DivisionTimesSystem.serialize && window.DivisionTimesSystem.serialize(window.divisionTimes)) || window.divisionTimes || {};
+                                        } catch (_eRsP) {}
                                         _allD[_cxDateKey]._savedAt = Date.now();
                                         localStorage.setItem('campDailyData_v1', JSON.stringify(_allD));
+                                        try { if (typeof window.saveGlobalSettings === 'function') window.saveGlobalSettings('daily_schedules', _allD); } catch (_eRsG) {}
                                     }
                                 } catch (_eRs1) {}
                                 try {
@@ -21520,6 +21529,18 @@
                         });
                     });
 
+                    // ★ Endgame passes BEFORE the persist — their fills must enter the saved
+                    //   payload atomically. They used to run at the return (after this save):
+                    //   the fills lived only in RAM, the cloud echo of the fill-less save
+                    //   merged back minutes later and silently wiped them (live: 3 verified
+                    //   shiur fills present at the settle check, gone from memory, local AND
+                    //   cloud by the next probe). Grid + _perBunkSlots are fully built here,
+                    //   so the passes see exactly the state they saw at the return.
+                    try { _runFinalExchange(); } catch (_eFeGl) {}
+                    try { _runCrossBunkExchange(); } catch (_eCxGl) {}
+                    try { _runFinalBackfill(); } catch (_eFbGl) {}
+                    try { _auditSubcatFloors(); } catch (_eFaGl) {}
+
                     // 5) Persist (mirrors STEP 5 :25589) so the generic skeleton survives reload.
                     try {
                         var _glDate = window._activeGenDate || currentDate || window.currentScheduleDate || new Date().toISOString().split('T')[0];
@@ -21702,11 +21723,7 @@
 
                     var _glElapsed = ((Date.now() - startTime) / 1000).toFixed(2);
                     log('[GENERIC-LAYOUT] ✅ COMPLETE in ' + _glElapsed + 's — ' + _glOut.stats.windowsTiled + '/' + _glOut.stats.windowsConsidered + ' free windows tiled, ' + _glOut.stats.tilesPlaced + ' generic tiles placed, ' + _glOut.stats.bunksFullyTiled + '/' + _glOut.stats.bunks + ' bunks fully wall-to-wall, ' + _glOut.stats.unmetSpecialFloors + ' unmet special floor(s), ' + (_glOut.stats.unmetFloors || 0) + ' unmet floor(s) total, ' + _glInjectedSwim + ' swim + ' + _glInjectedLayer + ' other deferred layer(s) re-floated, sharing watched on ' + _glShareFacs + ' facility(ies)/' + _glShareResv + ' placement(s)');
-                    // ★ Last chance to cover leftover time before this path returns.
-                    try { _runFinalExchange(); } catch (_eFeGl) {}
-                    try { _runCrossBunkExchange(); } catch (_eCxGl) {}
-                    try { _runFinalBackfill(); } catch (_eFbGl) {}
-                    try { _auditSubcatFloors(); } catch (_eFaGl) {}
+                    // (endgame passes ran BEFORE the persist above, so their fills are in the save)
                     try { window.dispatchEvent(new CustomEvent('campistry-generation-complete', { detail: { mode: 'auto', version: VERSION, elapsed: _glElapsed, warnings: warnings, dateKey: (currentDate || window.currentScheduleDate || ''), genericLayout: true } })); } catch (_glEv) {}
                     return true; // ← early return: skip ALL activity-assignment phases
                 }
