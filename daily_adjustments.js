@@ -8836,12 +8836,16 @@ function _inputTimeToMinutes(s) {
 //     'override' — a per-bunk replacement activity
 //     'deleted'  — a per-bunk "nothing here" (overrideMode:'delete')
 //   Grips: top/bottom resize, left/right extend across bunks, body moves.
+//   These carry the SKELETON GRID's own handle classes (.da-resize-handle /
+//   .da-resize-h) so they inherit that styling verbatim — the pale blue edge
+//   band with the darker grip pill — instead of a look-alike that would drift.
+//   `.bo-h` is only a hook for this grid's drag binding.
 function _boTileActionsHTML(draggable) {
   if (!draggable) return '';
-  return '<div class="bo-h bo-h-top" data-edge="top"></div>' +
-         '<div class="bo-h bo-h-bot" data-edge="bottom"></div>' +
-         '<div class="bo-h bo-h-left" data-edge="left"></div>' +
-         '<div class="bo-h bo-h-right" data-edge="right"></div>';
+  return '<div class="bo-h da-resize-handle da-resize-top" data-edge="top"></div>' +
+         '<div class="bo-h da-resize-handle da-resize-bottom" data-edge="bottom"></div>' +
+         '<div class="bo-h da-resize-h da-resize-h-left" data-edge="left"></div>' +
+         '<div class="bo-h da-resize-h da-resize-h-right" data-edge="right"></div>';
 }
 
 // ─────────────────────────────────────────────────────────────────────────
@@ -11438,19 +11442,15 @@ function getStyles() {
     .ms-container #da-resources-container { padding:16px; }
    
     /* === Bunk-override tile selection + drag handles === */
-    /* Same feel as the skeleton grid: click a tile to select it (blue ring +
-       grips), act on it from the Edit/Delete bar that pops up underneath. */
-    .bo-block.bo-selected { box-shadow:0 0 0 3px #2563eb, 0 4px 12px rgba(37,99,235,0.25) !important; z-index:12; }
-    .bo-h { position:absolute; opacity:0; transition:opacity 0.12s; z-index:8; }
-    .bo-block:hover .bo-h, .bo-block.bo-selected .bo-h { opacity:1; }
-    .bo-h-top, .bo-h-bot { left:14%; right:14%; height:7px; cursor:ns-resize; border-radius:3px; background:rgba(37,99,235,0.55); }
-    .bo-h-top { top:1px; }
-    .bo-h-bot { bottom:1px; }
-    .bo-h-left, .bo-h-right { top:26%; bottom:26%; width:6px; cursor:ew-resize; border-radius:3px; background:rgba(37,99,235,0.55); }
-    .bo-h-left { left:1px; }
-    .bo-h-right { right:1px; }
-    /* A short tile can't fit edge grips without swallowing the label. */
-    .bo-block.bo-short .bo-h-top, .bo-block.bo-short .bo-h-bot { height:5px; left:26%; right:26%; }
+    /* The grips themselves are the skeleton grid's .da-resize-handle /
+       .da-resize-h, which these tiles already inherit through .da-event — so
+       the pale-blue edge band and its darker grip pill are literally the same
+       rules, not a copy. All that's added here is revealing them while a tile
+       is SELECTED (the base rules only reveal on :hover) and matching the
+       selected ring to .da-event.selected. */
+    .bo-block.bo-selected { box-shadow:0 0 0 2px var(--da-accent), 0 4px 12px rgba(59,130,246,0.3) !important; z-index:12; }
+    .bo-block.bo-selected .da-resize-handle,
+    .bo-block.bo-selected .da-resize-h { opacity:1; background:rgba(59,130,246,0.3); }
     .bo-block[data-span-group]:not([data-span-group=""]) { border-style:dashed !important; }
 
     #da-skeleton-grid .al-toolbar { display: none !important; }
