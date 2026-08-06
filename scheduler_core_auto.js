@@ -19010,14 +19010,66 @@
                         try { Object.keys(fieldLedger || {}).forEach(function (k) { if (fieldLedger[k] && Array.isArray(fieldLedger[k].claims)) fieldLedger[k].claims = (snap[k] || []).slice(); }); } catch (_e) {}
                     };
                     var _glArrScore = function (r) {
-                        // lower = better. Floors are near-lexicographic (1e6), honest-open subcat
-                        // minutes next (1e3 — a commitment left open outweighs any dead gap),
-                        // then gap minutes weighted by the probe's own class: placement-
-                        // recoverable 10 (an arrangement CAN fix these — exactly what we search
-                        // over), cross-bunk-contended 8, config-stuck 1 (relocatable only).
-                        var s = 0, st = (r.out && r.out.stats) || {};
-                        s += 1e6 * ((st.unmetFloors || 0) + (st.unmetSpecialFloors || 0));
-                        s += 1e3 * (r.openMin || 0);
+                        // lower = better. The floor term is ENDGAME-AWARE: a raw pre-endgame
+                        // unmet-floor count mis-ranks candidates, because the endgame passes
+                        // rescue SOME open floor windows (a seat frees up at the final seam →
+                        // cross-exchange fills it) and not others (the subcat's pool is
+                        // genuinely dry at that span). Live proof: a candidate with FEWER
+                        // pre-endgame unmet floors won, then FLOOR-AUDIT flagged a bunk — it
+                        // had traded three rescuable shiur windows for one unrescuable
+                        // uncategorized window. So each open subcat window is classified:
+                        //   · bunk already holds that subcat elsewhere → surplus time, 1e3/min
+                        //   · floor breach, free-win rescuable (duration-matched activity,
+                        //     access-gated, seat free at the span, rule-legal) → 2e5 + 1e3/min
+                        //   · floor breach, UNRESCUABLE → 3e6 (dominates everything)
+                        // then dead-gap minutes weighted by the probe's recoverability class.
+                        var s = 0;
+                        var _asCanon = function (v) { var c = String(v == null ? '' : v).toLowerCase().trim(); return (!c || c === 'regular' || c === 'uncategorized') ? 'uncategorized' : c; };
+                        var _asDurOf = function (x) { return x.defaultDuration || x.duration || x.durationMin || 0; };
+                        var _asCapOf = function (x) { return (x.sharableWith && x.sharableWith.capacity) || x.capacity || 1; };
+                        // per-bunk: concrete specials held (by subcat + by name) and a template
+                        // for the rule gate; global: concrete tiles per activity name for the
+                        // seat-busy overlap count — all from THIS candidate's tiles.
+                        var _asHolds = {}, _asNames = {}, _asTmpl = {}, _asByAct = {};
+                        (r.order || []).forEach(function (b) {
+                            var res = r.out && r.out.layoutByBunk && r.out.layoutByBunk[b]; if (!res) return;
+                            var hs = (_asHolds[b] = {}), nm = (_asNames[b] = {}), tp = (_asTmpl[b] = []);
+                            (res.tiles || []).forEach(function (t) {
+                                if (!t) return;
+                                var act = t._concrete || (t.generic === false && t.name) || null;
+                                tp.push({ type: t.kind, event: act || t.name, startMin: t.startMin, endMin: t.endMin, _assignedSpecial: (t.kind === 'special' && act) ? act : undefined });
+                                if (t.kind === 'special' && act) { hs[_asCanon(t.subcat)] = 1; nm[String(act)] = 1; }
+                                if (act) (_asByAct[act] = _asByAct[act] || []).push([t.startMin, t.endMin]);
+                            });
+                        });
+                        var _asBusy = function (name, s0, e0) {
+                            var n = 0; ((_asByAct[name]) || []).forEach(function (iv) { if (iv[0] < e0 && iv[1] > s0) n++; });
+                            return n;
+                        };
+                        var _asSpecials = null;
+                        (r.openSlots || []).forEach(function (rec) {
+                            if (!rec) return;
+                            var len = Math.max(0, rec.endMin - rec.startMin);
+                            var sub = _asCanon(rec.subcat);
+                            if (_asHolds[rec.bunk] && _asHolds[rec.bunk][sub]) { s += 1e3 * len; return; }
+                            // floor breach — endgame free-win probe against THIS candidate's world
+                            if (_asSpecials === null) {
+                                try { _asSpecials = ((getGlobalSettings().app1 || {}).specialActivities || []).filter(function (x) { return x && x.name && x.available !== false; }); } catch (_e) { _asSpecials = []; }
+                            }
+                            var rescuable = false;
+                            for (var _x = 0; _x < _asSpecials.length && !rescuable; _x++) {
+                                var X = _asSpecials[_x];
+                                if (_asCanon(X.subcategory) !== sub) continue;
+                                if (_asDurOf(X) !== len) continue;
+                                if (_asNames[rec.bunk] && _asNames[rec.bunk][X.name]) continue;
+                                try { if (typeof isSpecialAvailableForBunk === 'function' && !isSpecialAvailableForBunk(X.name, rec.division, rec.bunk, globalSettings)) continue; } catch (_e) {}
+                                if (_asCapOf(X) - _asBusy(X.name, rec.startMin, rec.endMin) < 1) continue;
+                                var ok = true;
+                                try { if (_glGate) ok = _glGate({ type: 'special', event: X.name, _assignedSpecial: X.name, _specialLocation: X.name, startMin: rec.startMin, endMin: rec.endMin }, _asTmpl[rec.bunk] || []); } catch (_e) { ok = true; }
+                                if (ok) rescuable = true;
+                            }
+                            s += rescuable ? (2e5 + 1e3 * len) : 3e6;
+                        });
                         (r.order || []).forEach(function (b) {
                             var res = r.out && r.out.layoutByBunk && r.out.layoutByBunk[b]; if (!res) return;
                             (res.gaps || []).forEach(function (g) {
