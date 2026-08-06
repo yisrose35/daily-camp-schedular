@@ -1187,34 +1187,51 @@ function shouldHighlightBunk(bunkName) {
     }
 
     // ★ Build a Set of "special activity" names (e.g. Gameroom, Canteen, Arts & Crafts)
-    //   so we can exclude them from the sharers display. Re-read each call so updates
-    //   in settings appear immediately.
+    //   so the sharers display can tell a special apart from a sports field.
+    //   Re-read each call so updates in settings appear immediately.
+    //   ⚠ Special config lives in more than one place — the canonical registry
+    //   (getAllSpecialActivities = specialActivities + rainyDayActivities) and the
+    //   persisted app1 copy can diverge. Union every source: a name missed here
+    //   makes a special render as a sports "vs" matchup.
     function _specialNamesSet() {
         const out = new Set();
+        const add = list => (list || []).forEach(s => {
+            if (s && s.name) out.add(String(s.name).toLowerCase().trim());
+        });
+        try {
+            if (typeof window.getAllSpecialActivities === 'function') add(window.getAllSpecialActivities());
+            else { add(window.specialActivities); add(window.rainyDayActivities); }
+        } catch (e) { /* ignore */ }
         try {
             const g = window.loadGlobalSettings ? window.loadGlobalSettings() : {};
-            const specials = (g.app1 && g.app1.specialActivities) || [];
-            specials.forEach(s => {
-                if (s && s.name) out.add(String(s.name).toLowerCase().trim());
-            });
+            add(g.app1 && g.app1.specialActivities);
+            add(g.specialActivities);
         } catch (e) { /* ignore */ }
         return out;
     }
 
-    // ★ Find OTHER bunks (any division) that share this bunk's field at this time.
-    //   Sports only — pinned events, electives, leagues, transitions, and special
-    //   activities (Gameroom, Canteen, Arts & Crafts, etc.) are skipped.
+    function _noSharers() { return { kind: 'sport', bunks: [] }; }
+
+    // ★ Find OTHER bunks (any division) that are on this bunk's facility at this
+    //   time. The two shapes read differently to a counselor, so they are labelled
+    //   differently by the caller:
+    //     • sport   — both bunks are on one FIELD, which normally means they are
+    //                 playing each other        → "vs Bunk 2, Bunk 3"
+    //     • special — both bunks are AT the same special activity, which is a group,
+    //                 not a contest             → "with Bunks 2, 3, & 4"
+    //   Pinned events, electives, leagues, transitions and trips are skipped.
+    //   Returns { kind: 'sport' | 'special', bunks: [...] }.
     function findFieldSharers(bunk, slotIdx, divName) {
         const myEntry = window.scheduleAssignments?.[bunk]?.[slotIdx];
-        if (!myEntry) return [];
-        if (myEntry._swimElective || myEntry._isTransition || myEntry.continuation) return [];
-        if (myEntry._h2h || myEntry._isSpecialtyLeague || myEntry._allMatchups) return [];
-        if (myEntry._isDismissal || myEntry._isSnack) return [];
-        if (myEntry._pinned) return [];
+        if (!myEntry) return _noSharers();
+        if (myEntry._swimElective || myEntry._isTransition || myEntry.continuation) return _noSharers();
+        if (myEntry._h2h || myEntry._isSpecialtyLeague || myEntry._allMatchups) return _noSharers();
+        if (myEntry._isDismissal || myEntry._isSnack) return _noSharers();
+        if (myEntry._pinned) return _noSharers();
         // Trips are off-site events, not a shared field — never annotate "vs Bunk X".
         // The trip's "field" is just its name, so co-attending bunks would otherwise
         // get treated as field-sharers and read "Trip – vs Bunk 2, Bunk 3".
-        if (myEntry._isTrip || myEntry._trip || (myEntry.type || '').toLowerCase() === 'trip') return [];
+        if (myEntry._isTrip || myEntry._trip || (myEntry.type || '').toLowerCase() === 'trip') return _noSharers();
         const _myAct = (myEntry._activity || myEntry.sport || '').toLowerCase().trim();
         const _myField = (typeof myEntry.field === 'string' ? myEntry.field
             : (myEntry.field && myEntry.field.name) || '').toLowerCase().trim();
@@ -1222,16 +1239,28 @@ function shouldHighlightBunk(bunkName) {
                             'dismissal', 'change', 'free', 'free play', 'free time', 'rest',
                             'regroup', 'flagpole', 'assembly', 'davening', 'shacharis', 'mincha',
                             'maariv', 'tefillah', 'learning', 'shiur'];
-        if (NON_SPORTS.some(n => _myAct === n || _myAct.includes(n))) return [];
-        // Skip if either the activity or the field is a configured special activity.
+        if (NON_SPORTS.some(n => _myAct === n || _myAct.includes(n))) return _noSharers();
         const _specials = _specialNamesSet();
-        if (_specials.has(_myAct) || _specials.has(_myField)) return [];
-        const myField = (typeof myEntry.field === 'string') ? myEntry.field
-            : (myEntry.field && myEntry.field.name ? myEntry.field.name : '');
-        if (!myField) return [];
-        const myFieldKey = myField.toLowerCase().trim();
+        const isSpecial = _specials.has(_myAct) || _specials.has(_myField);
+        // What counts as "the same thing at the same time":
+        //   sport   → the FIELD name (the authoritative placement).
+        //   special → the ACTIVITY name, because a special stores field = its own
+        //             name and keeps its real room in _specialLocation/_customField;
+        //             narrowed by room only when BOTH sides resolve a real one, so
+        //             one special running in two rooms stays two separate groups.
+        let myKey, myRoom = '';
+        if (isSpecial) {
+            if (!_myAct) return _noSharers();
+            myKey = _myAct;
+            myRoom = (resolveEntryLocation(myEntry) || '').toLowerCase().trim();
+        } else {
+            const myField = (typeof myEntry.field === 'string') ? myEntry.field
+                : (myEntry.field && myEntry.field.name ? myEntry.field.name : '');
+            if (!myField) return _noSharers();
+            myKey = myField.toLowerCase().trim();
+        }
         const mySlot = window.divisionTimes?.[divName]?.[slotIdx];
-        if (!mySlot || mySlot.startMin == null) return [];
+        if (!mySlot || mySlot.startMin == null) return _noSharers();
         const myStart = mySlot.startMin, myEnd = mySlot.endMin;
         const sharers = [];
         const seen = new Set();
@@ -1250,10 +1279,20 @@ function shouldHighlightBunk(bunkName) {
                 if (oslot.startMin >= myEnd || oslot.endMin <= myStart) continue;
                 const oentry = otherEntries[si];
                 if (!oentry || oentry.continuation) continue;
-                const ofield = (typeof oentry.field === 'string') ? oentry.field
-                    : (oentry.field && oentry.field.name ? oentry.field.name : '');
-                if (!ofield) continue;
-                if (ofield.toLowerCase().trim() === myFieldKey) {
+                let match;
+                if (isSpecial) {
+                    const oact = (oentry._activity || oentry.sport || '').toLowerCase().trim();
+                    if (oact !== myKey) continue;
+                    const oroom = (resolveEntryLocation(oentry) || '').toLowerCase().trim();
+                    if (myRoom && oroom && myRoom !== oroom) continue;
+                    match = true;
+                } else {
+                    const ofield = (typeof oentry.field === 'string') ? oentry.field
+                        : (oentry.field && oentry.field.name ? oentry.field.name : '');
+                    if (!ofield) continue;
+                    match = ofield.toLowerCase().trim() === myKey;
+                }
+                if (match) {
                     sharers.push(otherBunk);
                     seen.add(otherBunk);
                     break;
@@ -1263,7 +1302,23 @@ function shouldHighlightBunk(bunkName) {
         // Natural sort if available, else default
         if (typeof window.naturalSort === 'function') sharers.sort(window.naturalSort);
         else sharers.sort();
-        return sharers;
+        return { kind: isSpecial ? 'special' : 'sport', bunks: sharers };
+    }
+
+    // ★ Render a sharer list as prose: "Bunk 2" / "Bunks 2 & 3" / "Bunks 2, 3, & 4".
+    //   Bunks attending a special TOGETHER are a group, so they get "&", never the
+    //   "vs" that reads as a matchup. Bare-number bunk names collapse under one
+    //   "Bunks" prefix; anything else (e.g. "Majors 1") is listed verbatim.
+    function _formatSharerGroup(bunks) {
+        if (!bunks.length) return '';
+        const allNumeric = bunks.every(b => /^\d/.test(String(b)));
+        const parts = allNumeric
+            ? bunks.map(String)
+            : bunks.map(b => /^\d/.test(String(b)) ? 'Bunk ' + b : String(b));
+        const list = parts.length === 1 ? parts[0]
+            : parts.length === 2 ? parts[0] + ' & ' + parts[1]
+            : parts.slice(0, -1).join(', ') + ', & ' + parts[parts.length - 1];
+        return allNumeric ? (parts.length === 1 ? 'Bunk ' : 'Bunks ') + list : list;
     }
 
     // ★ Resolve the location/room to DISPLAY next to an activity name. Sports keep
@@ -4356,12 +4411,18 @@ divBlocks.forEach((block, blockIdx) => {
             bgColor = '#fff8e1';
         } else if (entry && !entry.continuation) {
             displayText = formatEntry(entry);
-            // ★ Sports only: if other bunks share this field at this time, show
-            //   "Activity – Location – vs Bunk 2, Bunk 3".
+            // ★ If other bunks are on this facility at this time, name them. A shared
+            //   SPORTS field normally means a game between the bunks → "vs Bunk 2,
+            //   Bunk 3". A shared SPECIAL is just a group attending together, so it
+            //   reads "with Bunks 2, 3, & 4" — never "vs".
             const _sharers = findFieldSharers(bunk, slotIdx, divName);
-            if (_sharers.length) {
-                const _names = _sharers.map(b => /^\d/.test(String(b)) ? 'Bunk ' + b : b);
-                displayText += ' – vs ' + _names.join(', ');
+            if (_sharers.bunks.length) {
+                if (_sharers.kind === 'special') {
+                    displayText += ' – with ' + _formatSharerGroup(_sharers.bunks);
+                } else {
+                    const _names = _sharers.bunks.map(b => /^\d/.test(String(b)) ? 'Bunk ' + b : b);
+                    displayText += ' – vs ' + _names.join(', ');
+                }
             }
             bgColor = getEntryBackground(entry, block.event);
             // pinned state tracked internally, no visual prefix needed
