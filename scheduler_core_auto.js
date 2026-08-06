@@ -19025,7 +19025,18 @@
                         // then dead-gap minutes weighted by the probe's recoverability class.
                         var s = 0;
                         var _asCanon = function (v) { var c = String(v == null ? '' : v).toLowerCase().trim(); return (!c || c === 'regular' || c === 'uncategorized') ? 'uncategorized' : c; };
-                        var _asDurOf = function (x) { return x.defaultDuration || x.duration || x.durationMin || 0; };
+                        // ALL legal durations for a special — the canonical helper first (live
+                        // configs carry a durations ARRAY, e.g. shiur [20]; reading only
+                        // defaultDuration returned 0 and mis-probed every shiur window as
+                        // unrescuable, scoring identity at 9e6 for windows the endgame in fact
+                        // fills every single run).
+                        var _asDursOf = function (x) {
+                            try { if (typeof getSpecialDurations === 'function') { var d = getSpecialDurations(x); if (d && d.length) return d; } } catch (_e) {}
+                            var one = x.defaultDuration || x.duration || x.durationMin || 0;
+                            if (one) return [one];
+                            if (Array.isArray(x.durations) && x.durations.length) return x.durations;
+                            return [];
+                        };
                         var _asCapOf = function (x) { return (x.sharableWith && x.sharableWith.capacity) || x.capacity || 1; };
                         // per-bunk: concrete specials held (by subcat + by name) and a template
                         // for the rule gate; global: concrete tiles per activity name for the
@@ -19047,11 +19058,18 @@
                             return n;
                         };
                         var _asSpecials = null;
+                        // Weights (per LIVE calibration, not theory): an UNRESCUABLE floor
+                        // breach is catastrophic (3e6). A RESCUABLE breach is CHEAP (5/min) —
+                        // the endgame fills it every run, so those minutes end up as live
+                        // activity. SURPLUS open time is plain dead time (12/min) — barely
+                        // worse than a placement-class gap (10/min), not 100× worse: the old
+                        // 1e3/min made a zero-breach day with MORE total dead minutes beat
+                        // the day the endgame finishes better (live: 270min dead beat 165).
                         (r.openSlots || []).forEach(function (rec) {
                             if (!rec) return;
                             var len = Math.max(0, rec.endMin - rec.startMin);
                             var sub = _asCanon(rec.subcat);
-                            if (_asHolds[rec.bunk] && _asHolds[rec.bunk][sub]) { s += 1e3 * len; return; }
+                            if (_asHolds[rec.bunk] && _asHolds[rec.bunk][sub]) { s += 12 * len; return; }
                             // floor breach — endgame free-win probe against THIS candidate's world
                             if (_asSpecials === null) {
                                 try { _asSpecials = ((getGlobalSettings().app1 || {}).specialActivities || []).filter(function (x) { return x && x.name && x.available !== false; }); } catch (_e) { _asSpecials = []; }
@@ -19060,7 +19078,7 @@
                             for (var _x = 0; _x < _asSpecials.length && !rescuable; _x++) {
                                 var X = _asSpecials[_x];
                                 if (_asCanon(X.subcategory) !== sub) continue;
-                                if (_asDurOf(X) !== len) continue;
+                                if (_asDursOf(X).indexOf(len) < 0) continue;
                                 if (_asNames[rec.bunk] && _asNames[rec.bunk][X.name]) continue;
                                 try { if (typeof isSpecialAvailableForBunk === 'function' && !isSpecialAvailableForBunk(X.name, rec.division, rec.bunk, globalSettings)) continue; } catch (_e) {}
                                 if (_asCapOf(X) - _asBusy(X.name, rec.startMin, rec.endMin) < 1) continue;
@@ -19068,7 +19086,7 @@
                                 try { if (_glGate) ok = _glGate({ type: 'special', event: X.name, _assignedSpecial: X.name, _specialLocation: X.name, startMin: rec.startMin, endMin: rec.endMin }, _asTmpl[rec.bunk] || []); } catch (_e) { ok = true; }
                                 if (ok) rescuable = true;
                             }
-                            s += rescuable ? (2e5 + 1e3 * len) : 3e6;
+                            s += rescuable ? (5 * len) : 3e6;
                         });
                         (r.order || []).forEach(function (b) {
                             var res = r.out && r.out.layoutByBunk && r.out.layoutByBunk[b]; if (!res) return;
