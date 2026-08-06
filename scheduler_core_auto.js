@@ -18992,10 +18992,10 @@
                     //   republished winner-only; __genOpenSlots publish moved to the tail; every
                     //   other ledger/closure is function-local to the trial body. __floatSwim
                     //   mutates bunkTimelines destructively, so it forces single-trial.
-                    var _glArrTrials = 4;
+                    var _glArrTrials = 6;
                     try {
                         var _glArrRaw = (typeof window !== 'undefined') ? window.__glArrangeTrials : undefined;
-                        if (_glArrRaw != null && isFinite(_glArrRaw)) _glArrTrials = Math.max(1, Math.min(8, Math.floor(_glArrRaw)));
+                        if (_glArrRaw != null && isFinite(_glArrRaw)) _glArrTrials = Math.max(1, Math.min(10, Math.floor(_glArrRaw)));
                         if (typeof window !== 'undefined' && window.__floatSwim) _glArrTrials = 1;
                     } catch (_eArrN) { _glArrTrials = 1; }
                     var _glArrHash = function (s) { var h = 2166136261 >>> 0; s = String(s || ''); for (var i = 0; i < s.length; i++) { h ^= s.charCodeAt(i); h = Math.imul(h, 16777619) >>> 0; } return h >>> 0; };
@@ -19091,7 +19091,8 @@
                                 try { if (_glGate) ok = _glGate({ type: 'special', event: X.name, _assignedSpecial: X.name, _specialLocation: X.name, startMin: rec.startMin, endMin: rec.endMin }, _asTmpl[rec.bunk] || []); } catch (_e) { ok = true; }
                                 if (ok) rescuable = true;
                             }
-                            s += rescuable ? (5 * len) : 3e6;
+                            if (rescuable) { s += 5 * len; r._resc = (r._resc || 0) + 1; }
+                            else { s += 3e6; r._unresc = (r._unresc || 0) + 1; }
                         });
                         (r.order || []).forEach(function (b) {
                             var res = r.out && r.out.layoutByBunk && r.out.layoutByBunk[b]; if (!res) return;
@@ -21674,13 +21675,16 @@
                     for (var _gt = 0; _gt < _glArrTrials; _gt++) {
                         _glArrRestClaims(_glArrClaims0);
                         try { if (typeof window !== 'undefined' && window.__genFloorWarnings) window.__genFloorWarnings.length = _glArrFWLen; } catch (_e) {}
-                        // strategy table: t0 = identity (untouchable baseline); t1 = alternative
-                        // within-bunk packings (the probe's "deeper reorder" — same order, k-th
-                        // gate-passing tiling per window); t2 = per-bunk demand order; t3+ =
-                        // combined shuffle + packing + demand-order variation.
+                        // strategy table: t0 = identity (untouchable baseline); then single-dial
+                        // variants (alternative within-bunk packings pick1/pick2, per-bunk
+                        // demand order), then combined dials, then seeded shuffle combos. On
+                        // floor-starved days candidates differ in UNRESCUABLE breach count
+                        // (live: 3 vs 5 across four trials) — diversity here is floor rescue.
                         var _gStrat = (_gt === 0) ? { perm: 'identity', label: 'identity' }
                             : (_gt === 1) ? { pickIndex: 1, label: 'pick1' }
                             : (_gt === 2) ? { floatSeed: (_glArrSeedBase ^ 0x9E3779B9) >>> 0, label: 'floatOrder' }
+                            : (_gt === 3) ? { pickIndex: 2, label: 'pick2' }
+                            : (_gt === 4) ? { pickIndex: 1, floatSeed: (_glArrSeedBase ^ 0x85EBCA6B) >>> 0, label: 'float+pick1' }
                             : { perm: 'shuffle', seed: (_glArrSeedBase + _gt * 2654435761) >>> 0, pickIndex: ((_gt - 2) % 3), floatSeed: (_glArrSeedBase + _gt * 40503) >>> 0, label: 'shuffle+pick' + ((_gt - 2) % 3) };
                         var _gRes = null;
                         try { _gRes = _glRunTrial(_gStrat); } catch (_eTrial) {
@@ -21692,7 +21696,7 @@
                         if (!_gRes) continue;
                         _gRes._trial = _gt; _gRes._strat = _gStrat.label;
                         _gRes._score = _glArrScore(_gRes);
-                        _glScores.push('t' + _gt + '(' + _gStrat.label + ')=' + _gRes._score);
+                        _glScores.push('t' + _gt + '(' + _gStrat.label + ')=' + _gRes._score + '[u' + (_gRes._unresc || 0) + '/r' + (_gRes._resc || 0) + ']');
                         if (!_glBest || _gRes._score < _glBest._score) _glBest = _gRes;
                     }
                     if (_glArrTrials > 1) {
