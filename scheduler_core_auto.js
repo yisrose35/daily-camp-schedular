@@ -19031,7 +19031,7 @@
                         // unrescuable, scoring identity at 9e6 for windows the endgame in fact
                         // fills every single run).
                         var _asDursOf = function (x) {
-                            try { if (typeof getSpecialDurations === 'function') { var d = getSpecialDurations(x); if (d && d.length) return d; } } catch (_e) {}
+                            try { if (typeof getSpecialDurations === 'function') { var gd0 = getSpecialDurations(x.name, (typeof window !== 'undefined' && window.activityProperties) || {}, globalSettings); var d = (gd0 && gd0.durations) || gd0; if (d && d.length) return d; } } catch (_e) {}
                             var one = x.defaultDuration || x.duration || x.durationMin || 0;
                             if (one) return [one];
                             if (Array.isArray(x.durations) && x.durations.length) return x.durations;
