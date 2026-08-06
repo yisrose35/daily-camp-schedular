@@ -19048,7 +19048,12 @@
                             (res.tiles || []).forEach(function (t) {
                                 if (!t) return;
                                 var act = t._concrete || (t.generic === false && t.name) || null;
-                                tp.push({ type: t.kind, event: act || t.name, startMin: t.startMin, endMin: t.endMin, _assignedSpecial: (t.kind === 'special' && act) ? act : undefined });
+                                // unfilled generic specials are DROPPED at emit (honest-open) —
+                                // they must not enter the probe's rule template either, or the
+                                // probe block collides with the open window's own phantom tile
+                                // at the exact same span and every breach reads "unrescuable"
+                                var _isDroppedOpen = (t.kind === 'special' && t.generic !== false && !t._concrete && !t._weeklyKeep);
+                                if (!_isDroppedOpen) tp.push({ type: t.kind, event: act || t.name, startMin: t.startMin, endMin: t.endMin, _assignedSpecial: (t.kind === 'special' && act) ? act : undefined });
                                 if (t.kind === 'special' && act) { hs[_asCanon(t.subcat)] = 1; nm[String(act)] = 1; }
                                 if (act) (_asByAct[act] = _asByAct[act] || []).push([t.startMin, t.endMin]);
                             });
