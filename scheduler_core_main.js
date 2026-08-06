@@ -4674,6 +4674,9 @@ console.log(`[Generation] Rainy Day Mode: ${window.isRainyDay ? 'ACTIVE 🌧️'
         // =========================================================================
 
         console.log("\n[STEP 2] Processing bunk overrides...");
+        // Placeholder written into slots the user deleted for a single bunk; see the
+        // delete branch below and STEP 7.97, which converts these back to empty.
+        const _DELETED_SENTINEL = '— deleted —';
         // ★ BUNK-OVERRIDE WIPE FIX: prefer the overrides passed in externalOverrides (daily_adjustments
         //   sets currentOverrides.bunkActivityOverrides in its restore-after-wipe, then passes it here).
         //   loadCurrentDailyData() gets clobbered mid-run by the partial-mode force-load-from-cloud
@@ -4829,6 +4832,39 @@ console.log(`[Generation] Rainy Day Mode: ${window.isRainyDay ? 'ACTIVE 🌧️'
             }
 
             if (allowedDivisionsSet && !allowedDivisionsSet.has(String(divName))) {
+                return;
+            }
+
+            // ── delete: this bunk gets NOTHING in the window (the 🗑 button on a
+            //   bunk-override tile). Auto already honours this in Phase 0 + its
+            //   final enforcement pass; manual had no handling at all, so the
+            //   override was silently ignored and the solver filled the slot.
+            //   We pin a SENTINEL rather than leaving the slot null, because a
+            //   null is exactly what every backfill pass hunts for (STEP 7.5's
+            //   `if (!e)`, STEP 7.6's empty-activity scan, STEP 7.65/7.67 …).
+            //   The sentinel carries _bunkOverride (respected almost everywhere)
+            //   AND _layerDeleted (checked by the passes that match on activity
+            //   instead of flags). STEP 7.97 turns the sentinels into real empty
+            //   slots once every fill pass has run.
+            if (override.overrideMode === 'delete') {
+                slots.forEach((slotIndex, i) => {
+                    window.scheduleAssignments[bunk][slotIndex] = {
+                        field: null,
+                        sport: null,
+                        continuation: i > 0,
+                        _fixed: true,
+                        // Deliberately NON-empty: half a dozen backfill passes decide
+                        // "is this slot Free?" from the activity string alone, so an
+                        // empty/null activity would be refilled no matter which flags
+                        // the entry carries. STEP 7.97 clears it to a real empty slot.
+                        _activity: _DELETED_SENTINEL,
+                        _bunkOverride: true,
+                        _layerDeleted: true,
+                        _startMin: startMin,
+                        _endMin: endMin
+                    };
+                });
+                console.log(`[BunkOverride] ${bunk}: DELETED ${override.startTime}-${override.endTime} (${slots.length} slot(s)) — left empty`);
                 return;
             }
 
@@ -7166,6 +7202,10 @@ console.log(`[Generation] Rainy Day Mode: ${window.isRainyDay ? 'ACTIVE 🌧️'
                 const g = _b2g76[String(b)] || '?'; const arr = _sa76[b] || [];
                 arr.forEach((e, idx) => {
                     if (!e || e.continuation || e._isTransition || e._league || e._h2h) return;
+                    // ★ A per-bunk DELETED block is empty ON PURPOSE. This pass matches on
+                    //   activity rather than flags, so without this guard it would treat the
+                    //   deletion sentinel as a Free slot and immediately refill it.
+                    if (e._layerDeleted) return;
                     const a = String((e._activity || e.field || e.sport || '')).toLowerCase().trim();
                     // Free detected by ACTIVITY, regardless of _fixed/_pinned/_bunkOverride flags.
                     if (!(a === '' || a === 'free' || a === 'free play' || a === 'free (timeout)')) return;
@@ -7802,6 +7842,7 @@ console.log(`[Generation] Rainy Day Mode: ${window.isRainyDay ? 'ACTIVE 🌧️'
                     const g = _b2g76[String(b)] || '?';
                     (_sa76[b] || []).forEach((e, idx) => {
                         if (!e || e.continuation || e._isTransition || e._league || e._h2h) return;
+                        if (e._layerDeleted) return; // per-bunk deletion — empty on purpose
                         const a = String((e._activity || e.field || e.sport || '')).toLowerCase().trim();
                         if (!(a === '' || a === 'free' || a === 'free play' || a === 'free (timeout)')) return;
                         const _ck = _kindByCell76[String(b) + '|' + idx];
@@ -8078,6 +8119,63 @@ console.log(`[Generation] Rainy Day Mode: ${window.isRainyDay ? 'ACTIVE 🌧️'
             }
         } catch (_e96) {
             console.warn('[STEP 7.96] keep-in-use sweep failed:', _e96);
+        }
+
+        // =========================================================================
+        // STEP 7.97: PER-BUNK DELETION ENFORCEMENT (manual analog of the auto pass)
+        // The 🗑 button on a bunk-override tile writes an overrideMode:'delete'
+        // override. STEP 2 pinned a sentinel so no backfill pass could claim the
+        // slot; now that every fill pass has run, turn those sentinels into real
+        // empty slots. We ALSO re-read the overrides and evict anything that still
+        // occupies a delete window — a later pass may have written into the slot
+        // through a path that doesn't consult the pin (mirrors the auto builder's
+        // "re-derive from saved overrides" belt-and-braces enforcement).
+        // Runs BEFORE STEP 8 so rotation history never counts a deleted block.
+        // =========================================================================
+        try {
+            // Re-derive from the saved overrides rather than closing over STEP 2's
+            // local — same reasoning as the auto builder's enforcement pass. Prefer
+            // `externalOverrides` (a live reference that survives the mid-run cloud
+            // re-hydrate that clobbers loadCurrentDailyData during partial regen).
+            const _srcOvs97 = (externalOverrides && Array.isArray(externalOverrides.bunkActivityOverrides) && externalOverrides.bunkActivityOverrides.length)
+                ? externalOverrides.bunkActivityOverrides
+                : (window.loadCurrentDailyData?.().bunkActivityOverrides || []);
+            const _delOvs = {};
+            _srcOvs97.forEach(ov => {
+                if (!ov || ov.overrideMode !== 'delete' || !ov.bunk) return;
+                const _p97 = window.SchedulerCoreUtils?.parseTimeToMinutes;
+                const s = ov.startMin ?? (_p97 ? _p97(ov.startTime) : null);
+                const e = ov.endMin ?? (_p97 ? _p97(ov.endTime) : null);
+                if (s == null || e == null || e <= s) return;
+                (_delOvs[ov.bunk] = _delOvs[ov.bunk] || []).push({ s, e });
+            });
+            let _cleared97 = 0, _evicted97 = 0;
+            Object.keys(window.scheduleAssignments || {}).forEach(bunk => {
+                const arr = window.scheduleAssignments[bunk];
+                if (!Array.isArray(arr)) return;
+                const wins = _delOvs[bunk] || [];
+                for (let i = 0; i < arr.length; i++) {
+                    const e = arr[i];
+                    if (!e) continue;
+                    if (e._layerDeleted) { arr[i] = null; _cleared97++; continue; }
+                    if (!wins.length) continue;
+                    // League/head-to-head blocks belong to the division, not the bunk —
+                    // a per-bunk deletion must never dissolve a scheduled game.
+                    if (e._league || e._h2h) continue;
+                    const s = e._startMin, en = e._endMin;
+                    if (s == null || en == null) continue;
+                    // CONTAINMENT, not overlap: only evict a block that lives inside the
+                    // deleted window. A longer neighbouring block that merely straddles
+                    // the edge was never the thing the user deleted.
+                    if (wins.some(w => s >= w.s && en <= w.e)) { arr[i] = null; _evicted97++; }
+                }
+            });
+            if (_cleared97 || _evicted97) {
+                console.log(`[STEP 7.97] Per-bunk deletions: ${_cleared97} slot(s) left empty` +
+                    (_evicted97 ? `, ${_evicted97} late placement(s) evicted` : ''));
+            }
+        } catch (_e97) {
+            console.warn('[STEP 7.97] per-bunk deletion enforcement failed:', _e97);
         }
 
         // =========================================================================

@@ -5743,7 +5743,8 @@ function _pruneOldDailyDateMaps(app1, keepKey) {
     var hi = new Date(now.getTime() + KEEP_FUTURE_DAYS * 86400000).toISOString().slice(0, 10);
     var DATE = /^\d{4}-\d{2}-\d{2}$/;
     var maps = ['dailySkeletons', 'dailySkeletonsTs', 'dailyAutoLayers', 'dailyAutoLayersTs',
-                'dailyResourcesByDate', 'dailyColumnOrders', 'dailyTripsByDate'];
+                'dailyResourcesByDate', 'dailyColumnOrders', 'dailyTripsByDate',
+                'dailyBunkOverridesByDate'];
     var pruned = 0;
     maps.forEach(function (m) {
       var map = app1[m];
@@ -6421,6 +6422,7 @@ function _boToggleView() {
       delete _boPane.dataset.boPrevOverflowY;
     }
     if (boContainer) boContainer.style.display = 'none';
+    _boClearStickyOffsets();
     renderGrid();
   }
 }
@@ -7681,7 +7683,17 @@ function renderBunkOverridesUI() {
   }
 
   // Build header + grade selector
-  let html = '<div class="da-section">';
+  // ★ STICKY CHROME: while this view is active the DA pane is the scroll
+  //   container (see _boToggleView), so the title, the grade selector and the
+  //   override-count bar scrolled out of sight — the user had to scroll all the
+  //   way back up just to switch grade or clear overrides. Everything down to
+  //   the count bar lives in a sticky stack; `top` is measured after render by
+  //   _boApplyStickyOffsets so it sits directly under the pinned toolbar.
+  //   (padding:1px 0 stops the child .da-section's 16px margins from COLLAPSING
+  //   out of the sticky box — without it the pinned band sits 16px low and grid
+  //   rows show through the gap above it.)
+  let html = '<div id="bo-sticky-head" style="position:sticky;top:0;z-index:30;background:#fff;box-shadow:0 1px 0 #e2e8f0;padding:1px 0;">';
+  html += '<div class="da-section">';
   html += '<h3 class="da-section-title">Bunk-Level Overrides</h3>';
   html += '<p class="da-section-desc">Select a grade to see its skeleton expanded per-bunk. Click any block to change it for that specific bunk.</p>';
   html += '<div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:10px;">';
@@ -7709,6 +7721,7 @@ function renderBunkOverridesUI() {
     html += '<button type="button" id="bo-clear-all" class="da-btn da-btn-danger da-btn-sm">Clear All Overrides</button>';
     html += '</div>';
   }
+  html += '</div>'; // /#bo-sticky-head
 
   // Bunk grid (only if a division is selected)
   html += '<div id="bo-bunk-grid-wrap"></div>';
@@ -7743,6 +7756,97 @@ function renderBunkOverridesUI() {
       _boRenderBunkGrid(container.querySelector('#bo-bunk-grid-wrap'), _boSelectedDiv);
     }
   }
+
+  _boApplyStickyOffsets();
+}
+
+// ★ Freeze the bunk-override chrome to the top of the scrolling DA pane.
+//   Three bands stack, each pinned directly below the previous one:
+//     1. #da-skeleton-toolbar  — template actions + Generate Schedule
+//     2. #bo-sticky-head       — title, grade selector, override count / Clear All
+//     3. .bo-sticky-row        — the per-bunk column header row
+//   Heights are MEASURED rather than hard-coded because the toolbar wraps to two
+//   rows on narrow windows and the count bar only exists when overrides exist.
+//   No-op when the view isn't showing, so the normal skeleton view is untouched.
+let _boStickyResizeBound = false;
+function _boApplyStickyOffsets() {
+  try {
+    const container = document.getElementById('da-bunk-overrides-container');
+    if (!container || container.style.display === 'none') return;
+
+    const pane = container.closest('.da-pane') || container.parentElement;
+
+    let top = 0;
+    const toolbar = document.getElementById('da-skeleton-toolbar');
+    if (toolbar && toolbar.offsetParent !== null) {
+      // ★ A sticky element can never escape its own containing block. In manual
+      //   mode the toolbar lives inside #da-view-skeleton, whose grid wrapper is
+      //   HIDDEN in this view — so that box is only as tall as the toolbar itself
+      //   and `sticky` would unstick immediately. Collapse the intermediate
+      //   wrappers with display:contents so the toolbar's containing block
+      //   becomes the scrolling pane. (Restored by _boClearStickyOffsets.)
+      for (let el = toolbar.parentElement; el && el !== pane; el = el.parentElement) {
+        if (el.dataset.boPrevDisplay == null) el.dataset.boPrevDisplay = el.style.display || '';
+        el.style.display = 'contents';
+      }
+      if (toolbar.dataset.boPrevPosition == null) {
+        toolbar.dataset.boPrevPosition = toolbar.style.position || '';
+        toolbar.dataset.boPrevTop = toolbar.style.top || '';
+        toolbar.dataset.boPrevZ = toolbar.style.zIndex || '';
+        toolbar.dataset.boPrevBg = toolbar.style.background || '';
+      }
+      toolbar.style.position = 'sticky';
+      toolbar.style.top = '0px';
+      toolbar.style.zIndex = '40';
+      toolbar.style.background = '#fff';
+      top += toolbar.getBoundingClientRect().height;
+    }
+
+    const head = container.querySelector('#bo-sticky-head');
+    if (head) {
+      head.style.top = top + 'px';
+      top += head.getBoundingClientRect().height;
+    }
+
+    // The bulk-selection bar sits above the grid and is sticky too — when it's
+    // showing it takes the next slot and the column headers move below it.
+    const selBar = container.querySelector('#bo-sel-bar');
+    if (selBar) {
+      selBar.style.top = top + 'px';
+      if (selBar.style.display !== 'none') top += selBar.getBoundingClientRect().height;
+    }
+
+    container.querySelectorAll('.bo-sticky-row').forEach(el => { el.style.top = top + 'px'; });
+
+    // The toolbar wraps to a second row on narrow windows, which changes every
+    // offset below it — re-measure on resize (installed once).
+    if (!_boStickyResizeBound) {
+      _boStickyResizeBound = true;
+      window.addEventListener('resize', () => { _boApplyStickyOffsets(); });
+    }
+  } catch (_e) { /* sticky chrome is cosmetic — never break the render */ }
+}
+
+// Restore the toolbar's own positioning when the override view is dismissed, so
+// the normal skeleton view keeps its original (non-sticky) toolbar behaviour.
+function _boClearStickyOffsets() {
+  try {
+    // Undo the display:contents lift on every wrapper we collapsed.
+    document.querySelectorAll('[data-bo-prev-display]').forEach(el => {
+      el.style.display = el.dataset.boPrevDisplay || '';
+      delete el.dataset.boPrevDisplay;
+    });
+    const toolbar = document.getElementById('da-skeleton-toolbar');
+    if (!toolbar || toolbar.dataset.boPrevPosition == null) return;
+    toolbar.style.position = toolbar.dataset.boPrevPosition;
+    toolbar.style.top = toolbar.dataset.boPrevTop || '';
+    toolbar.style.zIndex = toolbar.dataset.boPrevZ || '';
+    toolbar.style.background = toolbar.dataset.boPrevBg || '';
+    delete toolbar.dataset.boPrevPosition;
+    delete toolbar.dataset.boPrevTop;
+    delete toolbar.dataset.boPrevZ;
+    delete toolbar.dataset.boPrevBg;
+  } catch (_e) {}
 }
 
 // ★ Day 24: Auto-mode per-bunk grid — mirrors _boRenderBunkGrid layout (time
@@ -8607,8 +8711,32 @@ function _boShowAutoLayerPopover(anchorEl, bunk, startMin, endMin, layerType) {
       renderBunkOverridesUI();
     };
 
-    pop.querySelector('#bo-pop-save').onclick = () => {
+    pop.querySelector('#bo-pop-save').onclick = async () => {
       if (curEnd <= curStart) { alert('End time must be after start time.'); return; }
+
+      // Same setup-conflict pre-flight the manual grid runs (_boApplyOverrideBulk):
+      // warn when the pick is switched off for the date, closed by a time rule, or
+      // breaks the facility's sharing rule. Warn only — the user may accept.
+      try {
+        const _chkItems = isPoolType
+          ? [...selectedSports].map(n => ({ name: n, type: 'sport', location: null }))
+          : (pickedActivity && pickedActivity.name
+              ? [{ name: pickedActivity.name, type: pickedActivity.type, location: pickedActivity.location || null }]
+              : []);
+        if (_chkItems.length) {
+          const _w = _boCheckOverrideConflicts([{ bunk, startMin: curStart, endMin: curEnd }], _chkItems);
+          if (_w.length) {
+            const ok = await daShowConfirm(
+              'This override conflicts with your setup:<br><br>' +
+              _w.map(x => '• ' + x).join('<br>') +
+              '<br><br>Apply it anyway?',
+              { danger: true, confirmText: 'Apply anyway', cancelText: 'Cancel' }
+            );
+            if (!ok) return;
+          }
+        }
+      } catch (_eChk) { /* pre-check must never block the save */ }
+
       // Remove any existing override matching original time + layer
       let list = (currentOverrides.bunkActivityOverrides || []).filter(o =>
         !(o.bunk === bunk && _boOvMatchesLayer(o, startMin, endMin, layerType || 'custom'))
@@ -8691,6 +8819,30 @@ function _inputTimeToMinutes(s) {
   return (h || 0) * 60 + (m || 0);
 }
 
+// ★ Per-tile action cluster for the bunk-override grid.
+//   `kind` is one of:
+//     'skeleton' — the grade's own block, not yet overridden for this bunk
+//     'override' — a per-bunk replacement activity
+//     'deleted'  — a per-bunk "nothing here" (overrideMode:'delete')
+//   Every tile gets ✏ (change the activity) and 🗑 (remove the block for this
+//   bunk only). An override additionally gets ↩ to drop back to the grade
+//   skeleton — that is a DIFFERENT action from 🗑, which leaves the bunk with
+//   nothing scheduled in the window.
+function _boTileActionsHTML(kind) {
+  let html = '<div class="bo-tile-actions">';
+  html += '<button type="button" class="bo-tile-btn bo-tile-edit" title="Change this block for this bunk">✏</button>';
+  if (kind === 'override') {
+    html += '<button type="button" class="bo-tile-btn bo-tile-revert" title="Revert to the grade skeleton">↩</button>';
+  }
+  if (kind === 'deleted') {
+    html += '<button type="button" class="bo-tile-btn bo-tile-revert" title="Restore this block for this bunk">↩</button>';
+  } else {
+    html += '<button type="button" class="bo-tile-btn bo-tile-del" title="Delete this block for this bunk (leaves the time empty)">🗑</button>';
+  }
+  html += '</div>';
+  return html;
+}
+
 function _boRenderBunkGrid(wrap, divName) {
   if (!wrap) return;
   // ★ Prefer the LIVE registry (window.divisions, built from campStructure) —
@@ -8744,11 +8896,16 @@ function _boRenderBunkGrid(wrap, divName) {
   html += `<div class="bo-grid" style="display:grid;grid-template-columns:70px repeat(${bunks.length}, 1fr);column-gap:3px;margin-top:4px;">`;
 
   // Header row
-  html += '<div class="da-grid-header da-time-header" style="font-size:11px;">Time</div>';
+  // ★ `.da-grid-header` is already `position:sticky; top:0` — but so is the
+  //   toolbar/grade-selector stack above it, so both competed for y=0 and the
+  //   bunk names ended up UNDER the pinned chrome. `bo-sticky-row` marks them
+  //   for _boApplyStickyOffsets, which pushes their `top` down by the measured
+  //   height of that chrome so the whole stack reads as one frozen header.
+  html += '<div class="da-grid-header da-time-header bo-sticky-row" style="font-size:11px;">Time</div>';
   bunks.forEach(bunk => {
     const bunkOverrides = overrides.filter(o => o.bunk === bunk);
     const badge = bunkOverrides.length > 0 ? ` <span style="background:#ef4444;color:#fff;border-radius:99px;padding:1px 5px;font-size:9px;font-weight:700;">${bunkOverrides.length}</span>` : '';
-    html += `<div class="da-grid-header" style="background:${color};color:#fff;border-radius:6px 6px 0 0;font-size:11px;padding:6px 4px;text-align:center;">${_escHtml(bunk)}${badge}</div>`;
+    html += `<div class="da-grid-header bo-sticky-row" style="background:${color};color:#fff;border-radius:6px 6px 0 0;font-size:11px;padding:6px 4px;text-align:center;">${_escHtml(bunk)}${badge}</div>`;
   });
 
   // Time column
@@ -8776,27 +8933,39 @@ function _boRenderBunkGrid(wrap, divName) {
       const top = (evStart - earliestMin) * PX;
       const height = Math.max((evEnd - evStart) * PX - 2, 24);
 
+      const shortCls = height < 35 ? ' bo-short' : '';
+
       if (override) {
         // Render the override block (highlighted). A pool ("either/or") override
-        // gets a distinct green treatment so it reads as "solver picks one of N".
+        // gets a distinct green treatment so it reads as "solver picks one of N";
+        // a DELETED block gets the same grey hatch the auto grid uses so "this
+        // bunk has nothing here" is unmistakable at a glance.
         const isPool = override.overrideMode === 'sportPool' || override.type === 'sportPool';
-        const oStyle = isPool
-          ? 'background:#dcfce7;color:#065f46;border:2px solid #10b981;'
-          : 'background:#fef3c7;color:#92400e;border:2px solid #f59e0b;';
-        const typeIcon = isPool ? '🔀 ' : (override.type === 'pinned' ? '📌 ' : (override.type === 'sport' ? '⚽ ' : (override.type === 'field' ? '🏟️ ' : '🎨 ')));
+        const isDeleted = override.overrideMode === 'delete';
+        const oStyle = isDeleted
+          ? 'background:repeating-linear-gradient(45deg,#e5e7eb,#e5e7eb 6px,#cbd5e1 6px,#cbd5e1 12px);color:#475569;border:2px solid #94a3b8;'
+          : isPool
+            ? 'background:#dcfce7;color:#065f46;border:2px solid #10b981;'
+            : 'background:#fef3c7;color:#92400e;border:2px solid #f59e0b;';
+        const typeIcon = isDeleted ? '🚫 ' : (isPool ? '🔀 ' : (override.type === 'pinned' ? '📌 ' : (override.type === 'sport' ? '⚽ ' : (override.type === 'field' ? '🏟️ ' : '🎨 '))));
+        const label = isDeleted ? 'Deleted' : override.activity;
         let fontSize = height < 35 ? '10px' : (height < 50 ? '11px' : '12px');
         let content;
         if (height < 35) {
-          content = `<span style="font-weight:600;font-size:${fontSize};">${typeIcon}${_escHtml(override.activity)}</span>`;
+          content = `<span style="font-weight:600;font-size:${fontSize};">${typeIcon}${_escHtml(label)}</span>`;
         } else {
-          content = `<strong style="font-size:${fontSize};">${typeIcon}${_escHtml(override.activity)}</strong>`;
-          if (override.location) content += `<div style="font-size:9px;opacity:0.8;">📍 ${_escHtml(override.location)}</div>`;
+          content = `<strong style="font-size:${fontSize};">${typeIcon}${_escHtml(label)}</strong>`;
+          if (isDeleted) content += `<div style="font-size:9px;opacity:0.8;">nothing scheduled</div>`;
+          else if (override.location) content += `<div style="font-size:9px;opacity:0.8;">📍 ${_escHtml(override.location)}</div>`;
         }
-        html += `<div class="da-event bo-block bo-override" data-bunk="${_escHtml(bunk)}" data-start="${evStart}" data-end="${evEnd}" data-ov-id="${_escHtml(override.id)}"
-          title="OVERRIDE: ${_escHtml(override.activity)} (${minutesToTime(evStart)}-${minutesToTime(evEnd)}) — Click to edit, right-click to revert"
+        const _titleTxt = isDeleted
+          ? `DELETED for ${bunk} (${minutesToTime(evStart)}-${minutesToTime(evEnd)}) — nothing will be scheduled`
+          : `OVERRIDE: ${override.activity} (${minutesToTime(evStart)}-${minutesToTime(evEnd)})`;
+        html += `<div class="da-event bo-block bo-override${shortCls}" data-bunk="${_escHtml(bunk)}" data-start="${evStart}" data-end="${evEnd}" data-ov-id="${_escHtml(override.id)}"
+          title="${_escHtml(_titleTxt)}"
           style="${oStyle}top:${top}px;height:${height}px;font-size:${fontSize};padding:3px 6px;cursor:pointer;position:absolute;left:2px;right:2px;border-radius:6px;overflow:hidden;">
           ${content}
-          <div style="position:absolute;top:2px;right:4px;font-size:9px;cursor:pointer;" class="bo-revert-btn" title="Revert to original">✕</div>
+          ${_boTileActionsHTML(isDeleted ? 'deleted' : 'override')}
         </div>`;
       } else {
         // Render the skeleton block (normal)
@@ -8811,10 +8980,11 @@ function _boRenderBunkGrid(wrap, divName) {
           const locDisplay = ev.location || (ev.reservedFields?.length > 0 ? ev.reservedFields.join(', ') : null);
           if (locDisplay) content += `<div style="font-size:9px;opacity:0.8;">📍 ${_escHtml(locDisplay)}</div>`;
         }
-        html += `<div class="da-event bo-block bo-skeleton" data-bunk="${_escHtml(bunk)}" data-start="${evStart}" data-end="${evEnd}" data-ev-type="${ev.type || 'slot'}"
+        html += `<div class="da-event bo-block bo-skeleton${shortCls}" data-bunk="${_escHtml(bunk)}" data-start="${evStart}" data-end="${evEnd}" data-ev-type="${ev.type || 'slot'}"
           title="${_escHtml(evName)} (${minutesToTime(evStart)}-${minutesToTime(evEnd)}) — Click to override for ${_escHtml(bunk)}"
           style="${style}top:${top}px;height:${height}px;font-size:${fontSize};padding:3px 6px;cursor:pointer;position:absolute;left:2px;right:2px;border-radius:6px;overflow:hidden;">
           ${content}
+          ${_boTileActionsHTML('skeleton')}
         </div>`;
       }
     });
@@ -8830,10 +9000,11 @@ function _boRenderBunkGrid(wrap, divName) {
   // in/out of the multi-selection. A short timer disambiguates the two so a
   // double-click never also fires the single-click picker.
   let _boClickTimer = null;
+  const _fromTileBtn = (e) => !!(e.target.closest && e.target.closest('.bo-tile-actions'));
   wrap.querySelectorAll('.bo-block').forEach(block => {
     block.style.userSelect = 'none';
     block.onclick = (e) => {
-      if (e.target.classList.contains('bo-revert-btn')) return;
+      if (_fromTileBtn(e)) return;
       if (_boClickTimer) return; // a double-click is unfolding — let ondblclick handle it
       _boClickTimer = setTimeout(() => {
         _boClickTimer = null;
@@ -8844,10 +9015,49 @@ function _boRenderBunkGrid(wrap, divName) {
       }, 350);
     };
     block.ondblclick = (e) => {
-      if (e.target.classList.contains('bo-revert-btn')) return;
+      if (_fromTileBtn(e)) return;
       if (_boClickTimer) { clearTimeout(_boClickTimer); _boClickTimer = null; }
       e.preventDefault();
       _boToggleCellSelection(block);
+    };
+  });
+
+  // ✏ Edit — same picker the tile body opens, but immediate (no double-click
+  // disambiguation wait) since the intent is explicit.
+  wrap.querySelectorAll('.bo-tile-edit').forEach(btn => {
+    btn.onclick = (e) => {
+      e.stopPropagation();
+      if (_boClickTimer) { clearTimeout(_boClickTimer); _boClickTimer = null; }
+      const block = btn.closest('.bo-block');
+      if (!block) return;
+      _boShowPicker(block, block.dataset.bunk, parseInt(block.dataset.start), parseInt(block.dataset.end));
+    };
+  });
+
+  // ↩ Revert — drop the per-bunk override so the bunk follows the grade skeleton
+  // again. (Distinct from 🗑, which leaves the bunk with nothing.)
+  wrap.querySelectorAll('.bo-tile-revert').forEach(btn => {
+    btn.onclick = (e) => {
+      e.stopPropagation();
+      if (_boClickTimer) { clearTimeout(_boClickTimer); _boClickTimer = null; }
+      const block = btn.closest('.bo-block');
+      const ovId = block?.dataset?.ovId;
+      if (!ovId) return;
+      _boSaveOverrides((currentOverrides.bunkActivityOverrides || []).filter(o => o.id !== ovId));
+      renderBunkOverridesUI();
+    };
+  });
+
+  // 🗑 Delete — remove this block for THIS bunk only. Stored as an
+  // overrideMode:'delete' override, which both solvers honour by leaving the
+  // window empty for the bunk (see scheduler_core_main STEP 2 / auto Phase 0).
+  wrap.querySelectorAll('.bo-tile-del').forEach(btn => {
+    btn.onclick = async (e) => {
+      e.stopPropagation();
+      if (_boClickTimer) { clearTimeout(_boClickTimer); _boClickTimer = null; }
+      const block = btn.closest('.bo-block');
+      if (!block) return;
+      await _boDeleteTileForBunk(block.dataset.bunk, parseInt(block.dataset.start), parseInt(block.dataset.end), block.dataset.layerType || null);
     };
   });
 
@@ -8861,20 +9071,43 @@ function _boRenderBunkGrid(wrap, divName) {
   if (_clearBtn) _clearBtn.onclick = () => { _boSelectedCells.clear(); renderBunkOverridesUI(); };
   const _regenBtn = wrap.querySelector('#bo-sel-regen');
   if (_regenBtn) _regenBtn.onclick = () => { _boRegenerateSelectedCells(); };
+  // (Revert lives in the per-tile ↩ button now — see .bo-tile-revert above.)
+}
 
-  // Revert buttons on overrides
-  wrap.querySelectorAll('.bo-revert-btn').forEach(btn => {
-    btn.onclick = (e) => {
-      e.stopPropagation();
-      const block = btn.closest('.bo-override');
-      if (!block) return;
-      const ovId = block.dataset.ovId;
-      let list = currentOverrides.bunkActivityOverrides || [];
-      list = list.filter(o => o.id !== ovId);
-      _boSaveOverrides(list);
-      renderBunkOverridesUI();
-    };
+// Delete one block for ONE bunk. Writes an overrideMode:'delete' override at the
+// block's window, replacing whatever override was already there. Both solvers
+// treat that as "this bunk has nothing scheduled in this window" — auto in its
+// Phase-0 / final enforcement pass, manual in STEP 2 (see scheduler_core_main).
+async function _boDeleteTileForBunk(bunk, startMin, endMin, layerType) {
+  if (!bunk || !(startMin >= 0) || !(endMin > startMin)) return;
+  const lt = layerType || null;
+  let list = (currentOverrides.bunkActivityOverrides || []).slice();
+  const existing = list.find(o => o.bunk === bunk && o.startMin === startMin && o.endMin === endMin && (o.layerType || null) === lt);
+  if (existing && existing.overrideMode === 'delete') return; // already deleted
+
+  // NOTE: daShowConfirm renders its message as RAW HTML — escape interpolations.
+  const ok = await daShowConfirm(
+    `Delete this block for <strong>${_escHtml(bunk)}</strong> only?<br><br>` +
+    `${_escHtml(minutesToTime(startMin))}–${_escHtml(minutesToTime(endMin))} will be left empty for this bunk. Every other bunk keeps the block.`,
+    { danger: true, confirmText: 'Delete' }
+  );
+  if (!ok) return;
+
+  list = list.filter(o => !(o.bunk === bunk && o.startMin === startMin && o.endMin === endMin && (o.layerType || null) === lt));
+  list.push({
+    id: uid(),
+    bunk,
+    activity: '— deleted —',
+    location: null,
+    startTime: minutesToTime(startMin),
+    endTime: minutesToTime(endMin),
+    startMin, endMin,
+    type: 'delete',
+    overrideMode: 'delete',
+    layerType: lt
   });
+  _boSaveOverrides(list);
+  renderBunkOverridesUI();
 }
 
 // Toggle one slot in/out of the bulk multi-selection (driven by double-click).
@@ -8905,10 +9138,12 @@ function _boUpdateSelBar() {
   const bar = document.getElementById('bo-sel-bar');
   if (!bar) return;
   const n = _boSelectedCells.size;
-  if (n === 0) { bar.style.display = 'none'; return; }
+  if (n === 0) { bar.style.display = 'none'; _boApplyStickyOffsets(); return; }
   bar.style.display = 'flex';
   const cnt = bar.querySelector('#bo-sel-count');
   if (cnt) cnt.textContent = n + (n === 1 ? ' slot selected' : ' slots selected');
+  // The bar joins the pinned stack, so the column headers shift down under it.
+  _boApplyStickyOffsets();
 }
 
 // ★ Partial (per-tile) regeneration — Manual builder only.
@@ -9340,10 +9575,220 @@ function _boShowPicker(anchorEl, bunk, startMin, endMin, layerType) {
   setTimeout(() => document.addEventListener('mousedown', closeHandler), 0);
 }
 
+// =================================================================
+// BUNK-OVERRIDE PRE-FLIGHT: does this pick fight the camp's own config?
+// =================================================================
+// A bunk override is a manual instruction, so it BYPASSES the solver's own fit
+// checks — which means the user can silently hand a bunk a facility that is
+// switched off for the day, or hand one not-sharable room to three bunks at
+// once, and only discover it in the generated schedule. These helpers surface
+// that at pick time. They WARN, they don't block: the head counselor is allowed
+// to knowingly override their own configuration, so the caller asks and obeys.
+
+// Which facility does this picker item actually occupy?
+//   • fields / facilities carry it directly
+//   • pinned + fixed tiles carry the resolved location
+//   • specials resolve through their configured location
+//   • plain sports don't — the solver picks the field at generation time, so
+//     there is nothing to check yet (returns null).
+function _boItemFacility(item) {
+  if (!item) return null;
+  if (item.location) return item.location;
+  if (item.type === 'field' || item.type === 'facility') return item.name;
+  if (item.type === 'special') {
+    const s = (masterSettings.app1?.specialActivities || []).find(x => x && x.name === item.name);
+    if (s && s.location) return s.location;
+  }
+  return null;
+}
+
+function _boFieldByName(name) {
+  if (!name) return null;
+  const want = String(name).toLowerCase().trim();
+  return (masterSettings.app1?.fields || []).find(f => f && String(f.name).toLowerCase().trim() === want) || null;
+}
+
+// Mirrors SchedulerCoreUtils.getFieldCapacity's resolution of sharableWith so the
+// warning quotes the same number the solver would enforce.
+function _boFieldCapacity(field) {
+  const sw = field && field.sharableWith;
+  if (!sw) return 1;
+  const n = parseInt(sw.capacity);
+  switch (String(sw.type || '')) {
+    case 'all': return n || 999;
+    case 'not_sharable': return 1;
+    case 'same_division': return n || 2;
+    case 'cross_division': return n || 2;
+    case 'custom': return n || 2;
+    default: return n || 1;
+  }
+}
+
+function _boDivisionOfBunk(bunk) {
+  const divisions = window.divisions || masterSettings.app1?.divisions || {};
+  return Object.keys(divisions).find(d => (divisions[d]?.bunks || []).includes(bunk)) || null;
+}
+
+// Per-date time rules (Resources → Details & Time Rules) fall back to the
+// facility's own setup windows, and are evaluated exactly like the iron gate:
+// an `unavailable` rule that OVERLAPS the window closes it, and when only
+// `available` windows exist the block must sit fully inside one.
+function _boFacilityClosedDuring(facName, startMin, endMin, division) {
+  const daRules = (currentOverrides.dailyFieldAvailability || {})[facName];
+  let rules = (Array.isArray(daRules) && daRules.length) ? daRules : null;
+  if (!rules) {
+    const f = _boFieldByName(facName);
+    if (f && Array.isArray(f.timeRules) && f.timeRules.length) rules = f.timeRules;
+  }
+  if (!Array.isArray(rules) || rules.length === 0) return false;
+  const parse = window.SchedulerCoreUtils?.parseTimeToMinutes;
+  let hasAvail = false, inside = false;
+  for (const r of rules) {
+    if (!r) continue;
+    if (Array.isArray(r.divisions) && r.divisions.length > 0 && division != null
+        && !r.divisions.map(String).includes(String(division))) continue;
+    const rs = (r.startMin != null) ? r.startMin : (parse ? parse(r.start || r.startTime) : null);
+    const re = (r.endMin != null) ? r.endMin : (parse ? parse(r.end || r.endTime) : null);
+    if (rs == null || re == null) continue;
+    const t = String(r.type || '').toLowerCase();
+    const isUnavail = t === 'unavailable' || r.available === false;
+    const isAvail = t === 'available' || r.available === true;
+    if (isUnavail && rs < endMin && re > startMin) return true;
+    if (isAvail) { hasAvail = true; if (startMin >= rs && endMin <= re) inside = true; }
+  }
+  return hasAvail && !inside;
+}
+
+// Returns a list of human-readable problems with applying `items` to `targets`.
+// Empty list ⇒ nothing to warn about.
+function _boCheckOverrideConflicts(targets, items) {
+  const warnings = [];
+  try {
+    const disabledFields = currentOverrides.disabledFields || [];
+    const disabledSpecials = currentOverrides.disabledSpecials || [];
+    const disabledSportsByField = currentOverrides.dailyDisabledSportsByField || {};
+    const existing = currentOverrides.bunkActivityOverrides || [];
+
+    // ── 1. Switched off for this date in Resources ──────────────────────────
+    items.forEach(item => {
+      if (item.type === 'special' && disabledSpecials.includes(item.name)) {
+        warnings.push(`<strong>${_escHtml(item.name)}</strong> is turned OFF for this date in Resources.`);
+        return;
+      }
+      const fac = _boItemFacility(item);
+      if (fac && disabledFields.includes(fac)) {
+        warnings.push(`<strong>${_escHtml(fac)}</strong> is turned OFF for this date in Resources.`);
+      }
+      // A sport has no facility yet, but if every field that hosts it is off
+      // today the solver will have nowhere to put it.
+      if (item.type === 'sport') {
+        const hosts = (masterSettings.app1?.fields || []).filter(f => (f.activities || []).includes(item.name));
+        if (hosts.length > 0 && hosts.every(f => disabledFields.includes(f.name))) {
+          warnings.push(`Every field that hosts <strong>${_escHtml(item.name)}</strong> is turned OFF for this date.`);
+        }
+      }
+    });
+
+    // ── 2. Closed during the requested window (per-date or setup time rules),
+    //       and sports explicitly disabled at that field for the day ─────────
+    items.forEach(item => {
+      const fac = _boItemFacility(item);
+      if (!fac) return;
+      const seen = new Set();
+      targets.forEach(t => {
+        const key = t.startMin + '-' + t.endMin;
+        if (seen.has(key)) return;
+        seen.add(key);
+        if (_boFacilityClosedDuring(fac, t.startMin, t.endMin, _boDivisionOfBunk(t.bunk))) {
+          warnings.push(`<strong>${_escHtml(fac)}</strong> is closed at ${_escHtml(minutesToTime(t.startMin))}–${_escHtml(minutesToTime(t.endMin))} by a time rule.`);
+        }
+      });
+      const blocked = disabledSportsByField[fac] || [];
+      if (blocked.includes(item.name)) {
+        warnings.push(`<strong>${_escHtml(item.name)}</strong> is disabled at <strong>${_escHtml(fac)}</strong> for this date.`);
+      }
+    });
+
+    // ── 3. Sharing rules ────────────────────────────────────────────────────
+    // Count every bunk that would end up on the facility in the same window:
+    // the cells being assigned now, plus overrides already pointing at it that
+    // this apply is not replacing.
+    const replacedKeys = new Set(targets.map(t => `${t.bunk}|${t.startMin}|${t.endMin}`));
+    items.forEach(item => {
+      const fac = _boItemFacility(item);
+      if (!fac) return;
+      const field = _boFieldByName(fac);
+      if (!field) return; // facility isn't a configured field — no sharing model
+      const shareType = String(field.sharableWith?.type || 'not_sharable');
+      const baseCap = _boFieldCapacity(field);
+
+      // Group the target cells by time window — sharing is per moment in time.
+      const byWindow = new Map();
+      targets.forEach(t => {
+        const key = t.startMin + '|' + t.endMin;
+        if (!byWindow.has(key)) byWindow.set(key, { startMin: t.startMin, endMin: t.endMin, bunks: new Set() });
+        byWindow.get(key).bunks.add(t.bunk);
+      });
+
+      byWindow.forEach(win => {
+        const bunks = new Set(win.bunks);
+        existing.forEach(o => {
+          if (!o || o.bunk == null) return;
+          if (replacedKeys.has(`${o.bunk}|${o.startMin}|${o.endMin}`)) return; // being overwritten
+          if (o.startMin == null || o.endMin == null) return;
+          if (!(o.startMin < win.endMin && o.endMin > win.startMin)) return;   // different time
+          const oFac = o.location || ((o.type === 'field') ? o.activity : null);
+          if (oFac && String(oFac).toLowerCase().trim() === String(fac).toLowerCase().trim()) bunks.add(o.bunk);
+        });
+
+        const n = bunks.size;
+        if (n <= 1) return; // one bunk can always use a facility it's allowed on
+        const when = `${minutesToTime(win.startMin)}–${minutesToTime(win.endMin)}`;
+
+        // A per-grade rule (Facilities → per-grade sharing) beats the default.
+        const divs = [...new Set([...bunks].map(_boDivisionOfBunk).filter(Boolean))];
+        const gradeRule = divs.length === 1 ? field.gradeShareRules?.[divs[0]] : null;
+        const effType = gradeRule ? String(gradeRule.type || 'not_sharable') : shareType;
+        const effCap = gradeRule
+          ? (parseInt(gradeRule.capacity) || (gradeRule.type === 'not_sharable' ? 1 : 2))
+          : baseCap;
+
+        if (effType === 'not_sharable') {
+          warnings.push(`<strong>${_escHtml(fac)}</strong> is set to <em>not shareable</em>, but you are giving it to <strong>${n}</strong> bunks at ${_escHtml(when)}.`);
+        } else if (effType === 'same_division' && divs.length > 1) {
+          warnings.push(`<strong>${_escHtml(fac)}</strong> may only be shared within one grade, but the ${n} bunks at ${_escHtml(when)} span ${_escHtml(divs.join(', '))}.`);
+        } else if (n > effCap) {
+          warnings.push(`<strong>${_escHtml(fac)}</strong> allows <strong>${effCap}</strong> bunk(s) at a time, but you are giving it to <strong>${n}</strong> at ${_escHtml(when)}.`);
+        }
+      });
+    });
+  } catch (e) {
+    console.warn('[BunkOverride] conflict pre-check failed (allowing the change):', e);
+    return [];
+  }
+  // Same problem can be reported once per item/window — collapse duplicates.
+  return [...new Set(warnings)];
+}
+
 // Write one override per target cell. items.length === 1 ⇒ concrete override;
 // items.length >= 2 ⇒ an "either/or" sportPool the solver resolves at gen time.
-function _boApplyOverrideBulk(targets, items, layerTypeFallback) {
+async function _boApplyOverrideBulk(targets, items, layerTypeFallback) {
   if (!targets || !targets.length || !items || !items.length) return;
+
+  // Warn (don't block) when the pick contradicts the camp's configuration —
+  // a facility switched off for the day, closed by a time rule, or a sharing
+  // rule this assignment would break. The user accepts or backs out.
+  const _conflicts = _boCheckOverrideConflicts(targets, items);
+  if (_conflicts.length) {
+    const ok = await daShowConfirm(
+      'This override conflicts with your setup:<br><br>' +
+      _conflicts.map(w => '• ' + w).join('<br>') +
+      '<br><br>Apply it anyway?',
+      { danger: true, confirmText: 'Apply anyway', cancelText: 'Cancel' }
+    );
+    if (!ok) return;
+  }
+
   let overrides = currentOverrides.bunkActivityOverrides || [];
   const isPool = items.length >= 2;
   const names = items.map(it => it.name);
@@ -9395,7 +9840,8 @@ function _boApplyOverrideBulk(targets, items, layerTypeFallback) {
 
 // Back-compat single-cell apply (window-exposed; delegates to the bulk writer).
 function _boApplyOverride(bunk, startMin, endMin, item, layerType) {
-  _boApplyOverrideBulk([{ bunk, startMin, endMin, layerType: layerType || null }], [item], layerType || null);
+  // Returns the promise so callers can await the (possibly confirmed) apply.
+  return _boApplyOverrideBulk([{ bunk, startMin, endMin, layerType: layerType || null }], [item], layerType || null);
 }
 
 function createChip(name, color) {
@@ -10399,6 +10845,19 @@ function getStyles() {
     .ms-container #da-bunk-overrides-container { padding:16px; }
     .ms-container #da-resources-container { padding:16px; }
    
+    /* === Bunk-override tile actions (edit / revert / delete) === */
+    /* Mirrors the regular tiles: the buttons stay out of the way until the
+       pointer is over the tile, so a dense per-bunk grid stays readable. */
+    .bo-tile-actions { position:absolute; top:2px; right:3px; display:flex; gap:2px; opacity:0; transition:opacity 0.12s; z-index:6; }
+    .bo-block:hover .bo-tile-actions, .bo-block:focus-within .bo-tile-actions { opacity:1; }
+    .bo-tile-btn { display:flex; align-items:center; justify-content:center; width:16px; height:16px; border-radius:4px;
+                   background:rgba(255,255,255,0.92); border:1px solid rgba(15,23,42,0.18); color:#334155;
+                   font-size:9px; line-height:1; cursor:pointer; padding:0; }
+    .bo-tile-btn:hover { background:#fff; border-color:#94a3b8; }
+    .bo-tile-btn.bo-tile-del:hover { background:#fee2e2; border-color:#ef4444; color:#b91c1c; }
+    /* Short tiles have no room for a button row — shrink it rather than clip. */
+    .bo-block.bo-short .bo-tile-btn { width:13px; height:13px; font-size:8px; }
+
     #da-skeleton-grid .al-toolbar { display: none !important; }
     #da-skeleton-grid .al-palette { display: none !important; }
   </style>`;
@@ -11135,6 +11594,11 @@ window._boApplyOverride = _boApplyOverride;
 window._boGetActivityGroups = _boGetActivityGroups;
 window._boSaveOverrides = _boSaveOverrides;
 window._boGetCurrentOverrides = function() { return (currentOverrides.bunkActivityOverrides || []).slice(); };
+// Exposed for live verification: returns the setup conflicts (disabled facility,
+// closed time window, sharing-rule breach) a pick would introduce, without
+// applying it. Empty array = clean.
+window._boCheckOverrideConflicts = _boCheckOverrideConflicts;
+window._boDeleteTileForBunk = _boDeleteTileForBunk;
 window.parseTimeToMinutes = parseTimeToMinutes;
 window.minutesToTime = minutesToTime;
 window.isRainyDayActive = isRainyDayActive;

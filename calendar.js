@@ -259,6 +259,25 @@
                 });
             }
         } catch (_eRes) { /* ignore — non-fatal enrichment */ }
+        // ★ CROSS-DEVICE BUNK OVERRIDES (pair of the mirror in saveCurrentDailyData):
+        // adopt the cloud copy when its stamp is NEWER than this device's, so a
+        // teammate's per-bunk overrides land here — including a teammate CLEARING
+        // them (empty array with a newer stamp wins, instead of the stale local list
+        // surviving forever). We also refresh the dedicated localStorage key on adopt
+        // so loadCurrentOverrides' fallback can't resurrect what was just deleted.
+        try {
+            var _bgs2 = _rgs || (window.loadGlobalSettings && window.loadGlobalSettings());
+            var _bmir = _bgs2 && _bgs2.app1 && _bgs2.app1.dailyBunkOverridesByDate && _bgs2.app1.dailyBunkOverridesByDate[date];
+            if (_bmir && Array.isArray(_bmir.v)) {
+                var _localBoTs = String(all[date]._boTs || '');
+                var _cloudBoTs = String(_bmir.t || '');
+                if (_cloudBoTs && _cloudBoTs > _localBoTs) {
+                    all[date].bunkActivityOverrides = _bmir.v;
+                    all[date]._boTs = _cloudBoTs;
+                    try { localStorage.setItem('campBunkOverrides_' + date, JSON.stringify(_bmir.v)); } catch (_eLs) {}
+                }
+            }
+        } catch (_eBoLoad) { /* ignore — non-fatal enrichment */ }
         window.currentDailyData = all[date];
         return window.currentDailyData;
     };
@@ -342,6 +361,26 @@ all[date].updated_at = new Date().toISOString();
                     window.saveGlobalSettings('app1', _sgs.app1);
                 }
             } catch (_eResSave) { /* ignore — daily_schedules path above is the fallback */ }
+
+            // ★ CROSS-DEVICE BUNK OVERRIDES: per-bunk overrides used to be strictly
+            // LOCAL — they sit in every _LOCAL_ONLY carry-forward list (realtime merge,
+            // orchestrator, scheduler) AND the daily_schedules bundle above is skipped
+            // for any date without a materialized schedule, which is exactly when
+            // overrides are authored. Result: a second user/device never saw them.
+            // Mirror through app1 → camp_state_kv — the same proven lane the per-date
+            // skeleton, trips and resource closures use — with a last-write-wins stamp
+            // so the newest author wins on the receiving device.
+            try {
+                if (key === 'bunkActivityOverrides' && typeof window.loadGlobalSettings === 'function' && typeof window.saveGlobalSettings === 'function') {
+                    var _bgs = window.loadGlobalSettings() || {};
+                    if (!_bgs.app1) _bgs.app1 = {};
+                    if (!_bgs.app1.dailyBunkOverridesByDate) _bgs.app1.dailyBunkOverridesByDate = {};
+                    var _boTs = all[date].updated_at || new Date().toISOString();
+                    all[date]._boTs = _boTs;
+                    _bgs.app1.dailyBunkOverridesByDate[date] = { v: Array.isArray(value) ? value : [], t: _boTs };
+                    window.saveGlobalSettings('app1', _bgs.app1);
+                }
+            } catch (_eBoSave) { /* ignore — local copy above still holds */ }
         } catch (e) {
             console.error("Failed to save daily data:", e);
         }
