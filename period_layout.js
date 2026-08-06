@@ -106,6 +106,11 @@
         var minSeg = opts.minSegmentMin || 10;
         var topN = opts.topN || 8;
         var maxSegments = opts.maxSegments || 4;
+        // ARRANGEMENT-SEARCH dial: pick the k-th gate-passing packing instead of the
+        // first (mod passer count). 0/absent = exact legacy behavior (first passer,
+        // early return) — the arrangement trials thread k>0 to explore the ranked
+        // packings 2..topN that otherwise die unexamined.
+        var pickIdx = (opts.pickIndex | 0) > 0 ? (opts.pickIndex | 0) : 0;
         // Optional LAYOUT gate: gate(block,template)->bool. Lets the caller veto a
         // generic tile that breaks a SPACING rule (e.g. "no sport within 40min of a
         // sport") — checked against already-placed tiles. NOT a content gate (it
@@ -329,12 +334,23 @@
             return true;
         }
         // First packing (best-scored first) whose laid segments all pass the gate.
+        // With opts.pickIndex k>0 (arrangement trials): the k-th gate-passing packing
+        // (mod passer count) — same legality, different tiling of the same window.
         function _pickGated(packings, start, base, contentGateOff) {
-            for (var p = 0; p < packings.length; p++) {
-                var laid = _laySegs(packings[p].segments, start);
-                if (_gatePass(laid, base, contentGateOff)) return laid;
+            if (!pickIdx) {
+                for (var p = 0; p < packings.length; p++) {
+                    var laid = _laySegs(packings[p].segments, start);
+                    if (_gatePass(laid, base, contentGateOff)) return laid;
+                }
+                return null;
             }
-            return null;
+            var passers = [];
+            for (var q = 0; q < packings.length; q++) {
+                var laidQ = _laySegs(packings[q].segments, start);
+                if (_gatePass(laidQ, base, contentGateOff)) passers.push(laidQ);
+            }
+            if (!passers.length) return null;
+            return passers[pickIdx % passers.length];
         }
 
         // Build candidates for [wStart,wEnd] from `floating` (respecting the quota

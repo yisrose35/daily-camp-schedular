@@ -20251,7 +20251,25 @@
 
                     // 2) Lay generic tiles wall-to-wall (pure; per-bunk independent — except the
                     //    cross-bunk resourceGate, which enforces shared-facility limits).
-                    var _glOut = window.PeriodLayout.planAllBunksLayout({ order: _glOrder, perBunk: _glPerBunk, packer: window.PeriodPacker, gate: _glGate, resourceGate: _glResourceGate, resourceCommit: _glResourceCommit, resourceRelease: _glResourceRelease, pressure: _glPressure, opts: { granularityMin: 5, minSegmentMin: 10, topN: 8, maxSegments: 4, crossBunk: ((typeof window === 'undefined') || (window.__crossBunkRepair !== false)) } });
+                    // ★ ARRANGEMENT STRATEGY: per-bunk floating-demand order. The list order
+                    //   drives the packer's candidate enumeration and every stable-sort tie
+                    //   downstream — a different order explores different tilings of the same
+                    //   windows. Seeded per (trial, bunk); period_layout never mutates the
+                    //   demand objects, so reordering the array is safe.
+                    try {
+                        if (_glStrategy && _glStrategy.floatSeed != null) {
+                            Object.keys(_glPerBunk).forEach(function (fb) {
+                                var fl = _glPerBunk[fb] && _glPerBunk[fb].floating;
+                                if (!Array.isArray(fl) || fl.length < 2) return;
+                                var _fsRnd = _glArrRnd((_glStrategy.floatSeed + _glArrHash(fb)) >>> 0);
+                                for (var _fi = fl.length - 1; _fi > 0; _fi--) {
+                                    var _fj = Math.floor(_fsRnd() * (_fi + 1));
+                                    var _ft = fl[_fi]; fl[_fi] = fl[_fj]; fl[_fj] = _ft;
+                                }
+                            });
+                        }
+                    } catch (_eFs) {}
+                    var _glOut = window.PeriodLayout.planAllBunksLayout({ order: _glOrder, perBunk: _glPerBunk, packer: window.PeriodPacker, gate: _glGate, resourceGate: _glResourceGate, resourceCommit: _glResourceCommit, resourceRelease: _glResourceRelease, pressure: _glPressure, opts: { granularityMin: 5, minSegmentMin: 10, topN: 8, maxSegments: 4, pickIndex: ((_glStrategy && _glStrategy.pickIndex) | 0), crossBunk: ((typeof window === 'undefined') || (window.__crossBunkRepair !== false)) } });
 
                     // 2.5) FILL — assign a CONCRETE special activity to each generic special tile.
                     // STEP 1 (specials, per-bunk): for each generic "Special: <subcat>" tile, pick the
@@ -21581,18 +21599,25 @@
                     for (var _gt = 0; _gt < _glArrTrials; _gt++) {
                         _glArrRestClaims(_glArrClaims0);
                         try { if (typeof window !== 'undefined' && window.__genFloorWarnings) window.__genFloorWarnings.length = _glArrFWLen; } catch (_e) {}
-                        var _gStrat = (_gt === 0) ? { perm: 'identity' } : (_gt === 1 ? { perm: 'reverse' } : { perm: 'shuffle', seed: (_glArrSeedBase + _gt * 2654435761) >>> 0 });
+                        // strategy table: t0 = identity (untouchable baseline); t1 = alternative
+                        // within-bunk packings (the probe's "deeper reorder" — same order, k-th
+                        // gate-passing tiling per window); t2 = per-bunk demand order; t3+ =
+                        // combined shuffle + packing + demand-order variation.
+                        var _gStrat = (_gt === 0) ? { perm: 'identity', label: 'identity' }
+                            : (_gt === 1) ? { pickIndex: 1, label: 'pick1' }
+                            : (_gt === 2) ? { floatSeed: (_glArrSeedBase ^ 0x9E3779B9) >>> 0, label: 'floatOrder' }
+                            : { perm: 'shuffle', seed: (_glArrSeedBase + _gt * 2654435761) >>> 0, pickIndex: ((_gt - 2) % 3), floatSeed: (_glArrSeedBase + _gt * 40503) >>> 0, label: 'shuffle+pick' + ((_gt - 2) % 3) };
                         var _gRes = null;
                         try { _gRes = _glRunTrial(_gStrat); } catch (_eTrial) {
                             // a failed non-identity trial is skippable; a failed trial 0 must
                             // fall through to the legacy solver exactly like before the search
                             if (_gt === 0) throw _eTrial;
-                            try { warn('[ARRANGE] trial ' + _gt + ' (' + _gStrat.perm + ') failed — skipped: ' + (_eTrial && _eTrial.message)); } catch (_e) {}
+                            try { warn('[ARRANGE] trial ' + _gt + ' (' + _gStrat.label + ') failed — skipped: ' + (_eTrial && _eTrial.message)); } catch (_e) {}
                         }
                         if (!_gRes) continue;
-                        _gRes._trial = _gt; _gRes._strat = _gStrat.perm;
+                        _gRes._trial = _gt; _gRes._strat = _gStrat.label;
                         _gRes._score = _glArrScore(_gRes);
-                        _glScores.push('t' + _gt + '(' + _gStrat.perm + ')=' + _gRes._score);
+                        _glScores.push('t' + _gt + '(' + _gStrat.label + ')=' + _gRes._score);
                         if (!_glBest || _gRes._score < _glBest._score) _glBest = _gRes;
                     }
                     if (_glArrTrials > 1) {
