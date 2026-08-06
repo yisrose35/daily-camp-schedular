@@ -18974,6 +18974,67 @@
                         ? function (block, template) { try { return window.SchedulingRules.isCandidateAllowed(block, template, { mode: 'auto' }); } catch (_e) { return true; } }
                         : null;
 
+                    // ★ ARRANGEMENT SEARCH (window.__glArrangeTrials, default 4; ≤1 = off) ──────
+                    //   The tiling pipeline is deterministic but GREEDY: the pack order decides
+                    //   who wins every contended seat (the resource ledger is first-come), and
+                    //   one arrangement is all it ever tried — while the gap probe reports the
+                    //   remaining holes as "placement-recoverable (deeper reorder could fill)"
+                    //   (live: 120 of 120 min in that class). So: run the WHOLE tiling stage N
+                    //   times as isolated trials — trial 0 is byte-identical to today's behavior,
+                    //   later trials permute the pack order (seeded, deterministic per date) —
+                    //   score each finished candidate (unmet floors ≫ open subcat minutes ≫
+                    //   dead-gap minutes weighted by the probe's own recoverability class), keep
+                    //   the best, and only the WINNER is emitted, endgame-passed, persisted and
+                    //   announced. Trial isolation (audited): fieldLedger claims are snapshotted
+                    //   and restored per trial (the sport-fill wipes+pushes them and the endgame
+                    //   passes read them via isFieldAvailable, so the winner's claims are
+                    //   restored before the tail); __genFloorWarnings is truncated per trial and
+                    //   republished winner-only; __genOpenSlots publish moved to the tail; every
+                    //   other ledger/closure is function-local to the trial body. __floatSwim
+                    //   mutates bunkTimelines destructively, so it forces single-trial.
+                    var _glArrTrials = 4;
+                    try {
+                        var _glArrRaw = (typeof window !== 'undefined') ? window.__glArrangeTrials : undefined;
+                        if (_glArrRaw != null && isFinite(_glArrRaw)) _glArrTrials = Math.max(1, Math.min(8, Math.floor(_glArrRaw)));
+                        if (typeof window !== 'undefined' && window.__floatSwim) _glArrTrials = 1;
+                    } catch (_eArrN) { _glArrTrials = 1; }
+                    var _glArrHash = function (s) { var h = 2166136261 >>> 0; s = String(s || ''); for (var i = 0; i < s.length; i++) { h ^= s.charCodeAt(i); h = Math.imul(h, 16777619) >>> 0; } return h >>> 0; };
+                    var _glArrRnd = function (seed) { var a = seed >>> 0; return function () { a = (a + 0x6D2B79F5) >>> 0; var t = a; t = Math.imul(t ^ (t >>> 15), t | 1); t ^= t + Math.imul(t ^ (t >>> 7), t | 61); return ((t ^ (t >>> 14)) >>> 0) / 4294967296; }; };
+                    var _glArrSeedBase = _glArrHash((typeof window !== 'undefined' && (window._activeGenDate || window.currentScheduleDate)) || currentDate || '');
+                    var _glArrSnapClaims = function () {
+                        var snap = {};
+                        try { Object.keys(fieldLedger || {}).forEach(function (k) { if (fieldLedger[k] && Array.isArray(fieldLedger[k].claims)) snap[k] = fieldLedger[k].claims.slice(); }); } catch (_e) {}
+                        return snap;
+                    };
+                    var _glArrRestClaims = function (snap) {
+                        try { Object.keys(fieldLedger || {}).forEach(function (k) { if (fieldLedger[k] && Array.isArray(fieldLedger[k].claims)) fieldLedger[k].claims = (snap[k] || []).slice(); }); } catch (_e) {}
+                    };
+                    var _glArrScore = function (r) {
+                        // lower = better. Floors are near-lexicographic (1e6), honest-open subcat
+                        // minutes next (1e3 — a commitment left open outweighs any dead gap),
+                        // then gap minutes weighted by the probe's own class: placement-
+                        // recoverable 10 (an arrangement CAN fix these — exactly what we search
+                        // over), cross-bunk-contended 8, config-stuck 1 (relocatable only).
+                        var s = 0, st = (r.out && r.out.stats) || {};
+                        s += 1e6 * ((st.unmetFloors || 0) + (st.unmetSpecialFloors || 0));
+                        s += 1e3 * (r.openMin || 0);
+                        (r.order || []).forEach(function (b) {
+                            var res = r.out && r.out.layoutByBunk && r.out.layoutByBunk[b]; if (!res) return;
+                            (res.gaps || []).forEach(function (g) {
+                                if (!g || !(g.len >= 5)) return;
+                                var p = String(g.probe || '');
+                                if (p.indexOf('swap-chain') >= 0 || p.indexOf('spacing-gated') >= 0 || p.indexOf('fillable-now') >= 0) s += 10 * g.len;
+                                else if (p.indexOf('seat-busy') >= 0) s += 8 * g.len;
+                                else s += g.len;
+                            });
+                        });
+                        return s;
+                    };
+                    var _glArrClaims0 = _glArrSnapClaims();
+                    var _glArrFWLen = 0;
+                    try { _glArrFWLen = ((typeof window !== 'undefined' && window.__genFloorWarnings) || []).length; } catch (_e) {}
+                    var _glRunTrial = function (_glStrategy) {
+
                     // 1) Build per-bunk DEMAND ({pinned, floating}) from the layers.
                     var _glOrder = [], _glPerBunk = {}, _glInjectedSwim = 0, _glInjectedLayer = 0, _glCapLogged = {};
                     // ── FLOAT SWIM (opt-in: window.__floatSwim) ───────────────────────────
@@ -19791,6 +19852,19 @@
                             }
                         }
                     } catch (_cfErr) {}
+                    // ★ ARRANGEMENT STRATEGY: permute the pack order for this trial. Earlier
+                    //   bunks win every contended seat, so this is the single highest-leverage
+                    //   arbitrary choice in the pipeline. identity = today's exact order.
+                    try {
+                        if (_glStrategy && _glStrategy.perm === 'reverse') _glOrder.reverse();
+                        else if (_glStrategy && _glStrategy.perm === 'shuffle') {
+                            var _apRnd = _glArrRnd(_glStrategy.seed >>> 0);
+                            for (var _ap = _glOrder.length - 1; _ap > 0; _ap--) {
+                                var _apJ = Math.floor(_apRnd() * (_ap + 1));
+                                var _apT = _glOrder[_ap]; _glOrder[_ap] = _glOrder[_apJ]; _glOrder[_apJ] = _apT;
+                            }
+                        }
+                    } catch (_apErr) {}
                     // category key for a generic tile — DURATION-AWARE for specials (seats are per length).
                     // swim handled by its own pool gate, not here.
                     var _glCatOf = function (kind, ref, sMin, eMin, grade) {
@@ -21485,12 +21559,63 @@
                             _genSkeleton.push({ division: grade, _bunk: bunk, startMin: t.startMin, endMin: t.endMin, startTime: minutesToTimeLabel(t.startMin), endTime: minutesToTimeLabel(t.endMin), type: t.kind, event: _ev, _generic: t._concrete ? false : !!t.generic, _subcat: t.subcat || null, _specialLocation: t._fillLoc || null });
                         });
                     });
+                    // ★ end of the ARRANGEMENT TRIAL body — everything above ran per trial with
+                    //   trial-local state; hand the finished candidate back to the search loop.
+                    //   (__genOpenSlots publish + the GENERIC-HONEST log moved to the winner-only
+                    //   tail below so N trials don't overwrite the global or spam the log.)
+                    return {
+                        skeleton: _genSkeleton, out: _glOut, order: _glOrder, fill: _glFill, resv: _glResv,
+                        openSlots: _glOpenSlots, openMin: _glOpenMin,
+                        injectedSwim: _glInjectedSwim, injectedLayer: _glInjectedLayer, doFill: _doFillSpecials,
+                        claims: _glArrSnapClaims(),
+                        floorWarnings: (function () { try { return ((typeof window !== 'undefined' && window.__genFloorWarnings) || []).slice(_glArrFWLen); } catch (_e) { return []; } })()
+                    };
+                    };   // end _glRunTrial
+
+                    // ★ THE SEARCH LOOP: trial 0 = identity (today's exact arrangement — a tie
+                    //   can never dethrone it), trial 1 = reversed pack order, trials 2+ =
+                    //   seeded shuffles (deterministic per date). Strict < keeps the earliest
+                    //   best. Per-trial: restore the fieldLedger claims snapshot and truncate
+                    //   the floor-warning accumulator, then run the full tiling body.
+                    var _glBest = null, _glScores = [];
+                    for (var _gt = 0; _gt < _glArrTrials; _gt++) {
+                        _glArrRestClaims(_glArrClaims0);
+                        try { if (typeof window !== 'undefined' && window.__genFloorWarnings) window.__genFloorWarnings.length = _glArrFWLen; } catch (_e) {}
+                        var _gStrat = (_gt === 0) ? { perm: 'identity' } : (_gt === 1 ? { perm: 'reverse' } : { perm: 'shuffle', seed: (_glArrSeedBase + _gt * 2654435761) >>> 0 });
+                        var _gRes = null;
+                        try { _gRes = _glRunTrial(_gStrat); } catch (_eTrial) {
+                            // a failed non-identity trial is skippable; a failed trial 0 must
+                            // fall through to the legacy solver exactly like before the search
+                            if (_gt === 0) throw _eTrial;
+                            try { warn('[ARRANGE] trial ' + _gt + ' (' + _gStrat.perm + ') failed — skipped: ' + (_eTrial && _eTrial.message)); } catch (_e) {}
+                        }
+                        if (!_gRes) continue;
+                        _gRes._trial = _gt; _gRes._strat = _gStrat.perm;
+                        _gRes._score = _glArrScore(_gRes);
+                        _glScores.push('t' + _gt + '(' + _gStrat.perm + ')=' + _gRes._score);
+                        if (!_glBest || _gRes._score < _glBest._score) _glBest = _gRes;
+                    }
+                    if (_glArrTrials > 1) {
+                        log('[ARRANGE] ' + _glArrTrials + ' arrangement trial(s) scored — ' + _glScores.join(', ') + ' → winner: trial ' + _glBest._trial + ' (' + _glBest._strat + ')' + (_glBest._trial === 0 ? ' — today\'s arrangement was already best' : ' — a better lineup than the default was found and kept'));
+                    }
+                    // ★ WINNER-ONLY tail: restore the winner's world, then emit exactly once.
+                    _glArrRestClaims(_glBest.claims);
+                    try {
+                        if (typeof window !== 'undefined' && window.__genFloorWarnings) {
+                            window.__genFloorWarnings.length = _glArrFWLen;
+                            _glBest.floorWarnings.forEach(function (w) { window.__genFloorWarnings.push(w); });
+                        }
+                    } catch (_e) {}
+                    var _genSkeleton = _glBest.skeleton, _glOut = _glBest.out, _glOrder = _glBest.order,
+                        _glFill = _glBest.fill, _glResv = _glBest.resv, _glOpenSlots = _glBest.openSlots,
+                        _glOpenMinW = _glBest.openMin, _glInjectedSwim = _glBest.injectedSwim,
+                        _glInjectedLayer = _glBest.injectedLayer, _doFillSpecials = _glBest.doFill;
                     // expose the dropped tiles (fresh each run) so GenMetrics can attribute the open
                     // time to a subcategory in its capacity advice — the WARNING the user chose over
                     // repeat-fill. Empty array on a clean run so no stale prior-run data lingers.
                     try { if (typeof window !== 'undefined') window.__genOpenSlots = _glOpenSlots; } catch (_e) {}
                     if (_glOpenSlots.length) {
-                        log('[GENERIC-HONEST] ' + _glOpenSlots.length + ' unfillable tile(s) (' + _glOpenMin + ' min) left as GENUINE OPEN time — each subcategory\'s own pool was exhausted (subcat-strict: never filled from another subcategory). See the [GenMetrics] capacity advice for the exact seats to add.');
+                        log('[GENERIC-HONEST] ' + _glOpenSlots.length + ' unfillable tile(s) (' + _glOpenMinW + ' min) left as GENUINE OPEN time — each subcategory\'s own pool was exhausted (subcat-strict: never filled from another subcategory). See the [GenMetrics] capacity advice for the exact seats to add.');
                     }
 
                     window.divisionTimes = window.DivisionTimesSystem.buildFromSkeleton(_genSkeleton, divisions);
