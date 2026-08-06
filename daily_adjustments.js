@@ -7692,7 +7692,7 @@ function renderBunkOverridesUI() {
   //   (padding:1px 0 stops the child .da-section's 16px margins from COLLAPSING
   //   out of the sticky box — without it the pinned band sits 16px low and grid
   //   rows show through the gap above it.)
-  let html = '<div id="bo-sticky-head" style="position:sticky;top:0;z-index:30;background:#fff;box-shadow:0 1px 0 #e2e8f0;padding:1px 0;">';
+  let html = `<div id="bo-sticky-head" style="position:sticky;top:0;z-index:${_BO_Z.head};background:#fff;box-shadow:0 1px 0 #e2e8f0;padding:1px 0;">`;
   html += '<div class="da-section">';
   html += '<h3 class="da-section-title">Bunk-Level Overrides</h3>';
   html += '<p class="da-section-desc">Select a grade to see its skeleton expanded per-bunk. Click any block to change it for that specific bunk.</p>';
@@ -7768,6 +7768,11 @@ function renderBunkOverridesUI() {
 //   Heights are MEASURED rather than hard-coded because the toolbar wraps to two
 //   rows on narrow windows and the count bar only exists when overrides exist.
 //   No-op when the view isn't showing, so the normal skeleton view is untouched.
+// Stacking scale for the pinned bunk-override chrome. Every value MUST stay
+// below .sidebar-backdrop (40) and .sidebar (50) from styles.css — see the note
+// in _boApplyStickyOffsets — and above the grid's own tiles (2-5) and column
+// headers (.da-grid-header, 10).
+const _BO_Z = { toolbar: 22, head: 20, selBar: 18 };
 let _boStickyResizeBound = false;
 function _boApplyStickyOffsets() {
   try {
@@ -7797,7 +7802,13 @@ function _boApplyStickyOffsets() {
       }
       toolbar.style.position = 'sticky';
       toolbar.style.top = '0px';
-      toolbar.style.zIndex = '40';
+      // ★ Must stay UNDER the off-canvas nav: .sidebar-backdrop is z-index 40 and
+      //   .sidebar is 50 (styles.css). At 40 the pinned toolbar TIED with the
+      //   backdrop and, being later in paint order, drew a white bar straight
+      //   across the open navigation drawer. Everything in this sticky stack now
+      //   sits in the low 20s — above the grid (tiles 2-5, headers 10), below the
+      //   nav — so opening the drawer dims it like the rest of the page.
+      toolbar.style.zIndex = String(_BO_Z.toolbar);
       toolbar.style.background = '#fff';
       top += toolbar.getBoundingClientRect().height;
     }
@@ -8829,18 +8840,91 @@ function _inputTimeToMinutes(s) {
 //   skeleton — that is a DIFFERENT action from 🗑, which leaves the bunk with
 //   nothing scheduled in the window.
 function _boTileActionsHTML(kind) {
-  let html = '<div class="bo-tile-actions">';
-  html += '<button type="button" class="bo-tile-btn bo-tile-edit" title="Change this block for this bunk">✏</button>';
-  if (kind === 'override') {
-    html += '<button type="button" class="bo-tile-btn bo-tile-revert" title="Revert to the grade skeleton">↩</button>';
+  // Only an OVERRIDE carries its own time window, so only an override can be
+  // moved / resized / spanned — see _boBindTileDrag for why a bare skeleton
+  // block can't be (the manual grid has no per-bunk slot geometry).
+  if (kind === 'skeleton') return '';
+  return '<div class="bo-h bo-h-top" data-edge="top"></div>' +
+         '<div class="bo-h bo-h-bot" data-edge="bottom"></div>' +
+         '<div class="bo-h bo-h-left" data-edge="left"></div>' +
+         '<div class="bo-h bo-h-right" data-edge="right"></div>';
+}
+
+// ─────────────────────────────────────────────────────────────────────────
+// Tile selection + Edit/Delete action bar (mirrors the skeleton grid's
+// _showTileActionBar so both grids behave the same: click a tile to select it,
+// then act on it from the little bar that pops up underneath).
+// ─────────────────────────────────────────────────────────────────────────
+let _boSelectedTile = null; // { bunk, startMin, endMin }
+
+function _boClearTileSelection() {
+  _boSelectedTile = null;
+  document.querySelectorAll('.bo-block.bo-selected').forEach(el => el.classList.remove('bo-selected'));
+  document.getElementById('bo-tile-action-bar')?.remove();
+}
+
+function _boShowTileActionBar(block) {
+  document.getElementById('bo-tile-action-bar')?.remove();
+  document.querySelectorAll('.bo-block.bo-selected').forEach(el => el.classList.remove('bo-selected'));
+  if (!block) return;
+
+  block.classList.add('bo-selected');
+  const bunk = block.dataset.bunk;
+  const startMin = parseInt(block.dataset.start);
+  const endMin = parseInt(block.dataset.end);
+  const ovId = block.dataset.ovId || null;
+  const isDeleted = block.dataset.mode === 'delete';
+  _boSelectedTile = { bunk, startMin, endMin };
+
+  const bar = document.createElement('div');
+  bar.id = 'bo-tile-action-bar';
+  bar.style.cssText = 'position:fixed;z-index:10000;display:flex;gap:4px;background:#fff;border:1px solid #d1d5db;border-radius:8px;box-shadow:0 4px 12px rgba(0,0,0,0.15);padding:4px;';
+  const rect = block.getBoundingClientRect();
+  bar.style.top = Math.min(rect.bottom + 4, window.innerHeight - 40) + 'px';
+  bar.style.left = Math.max(rect.left, 8) + 'px';
+
+  const btnStyle = 'padding:5px 12px;border:none;border-radius:6px;font-size:11px;font-weight:600;cursor:pointer;font-family:inherit;';
+  const mkBtn = (label, css, onClick) => {
+    const b = document.createElement('button');
+    b.type = 'button';
+    b.textContent = label;
+    b.style.cssText = btnStyle + css;
+    b.onclick = onClick;
+    return b;
+  };
+
+  bar.appendChild(mkBtn('Edit', 'background:#f1f5f9;color:#374151;', () => {
+    bar.remove();
+    _boShowPicker(block, bunk, startMin, endMin);
+  }));
+
+  // An override can go back to the grade skeleton; that is a different action
+  // from Delete, which leaves the bunk with nothing scheduled.
+  if (ovId) {
+    bar.appendChild(mkBtn(isDeleted ? 'Restore' : 'Revert', 'background:#eff6ff;color:#1d4ed8;', () => {
+      bar.remove();
+      _boClearTileSelection();
+      _boSaveOverrides((currentOverrides.bunkActivityOverrides || []).filter(o => o.id !== ovId));
+      renderBunkOverridesUI();
+    }));
   }
-  if (kind === 'deleted') {
-    html += '<button type="button" class="bo-tile-btn bo-tile-revert" title="Restore this block for this bunk">↩</button>';
-  } else {
-    html += '<button type="button" class="bo-tile-btn bo-tile-del" title="Delete this block for this bunk (leaves the time empty)">🗑</button>';
+
+  if (!isDeleted) {
+    bar.appendChild(mkBtn('Delete', 'background:#fef2f2;color:#dc2626;', async () => {
+      bar.remove();
+      _boClearTileSelection();
+      await _boDeleteTileForBunk(bunk, startMin, endMin, block.dataset.layerType || null);
+    }));
   }
-  html += '</div>';
-  return html;
+
+  document.body.appendChild(bar);
+
+  const closeHandler = (e) => {
+    if (bar.contains(e.target) || block.contains(e.target) || e.target === block) return;
+    document.removeEventListener('mousedown', closeHandler);
+    _boClearTileSelection();
+  };
+  setTimeout(() => document.addEventListener('mousedown', closeHandler), 0);
 }
 
 function _boRenderBunkGrid(wrap, divName) {
@@ -8884,7 +8968,7 @@ function _boRenderBunkGrid(wrap, divName) {
   _boSelectedCells.clear();
 
   // Bulk-selection action bar (hidden until the user double-clicks ≥1 slot).
-  let html = `<div id="bo-sel-bar" style="display:none;align-items:center;gap:10px;position:sticky;top:0;z-index:20;background:#eff6ff;border:1px solid #bfdbfe;border-radius:8px;padding:8px 12px;margin-bottom:8px;">
+  let html = `<div id="bo-sel-bar" style="display:none;align-items:center;gap:10px;position:sticky;top:0;z-index:${_BO_Z.selBar};background:#eff6ff;border:1px solid #bfdbfe;border-radius:8px;padding:8px 12px;margin-bottom:8px;">
     <span style="font-size:16px;">🎯</span>
     <strong id="bo-sel-count" style="font-size:13px;color:#1e40af;">0 slots selected</strong>
     <span style="font-size:11px;color:#3b82f6;">— double-click slots to (de)select, then Assign or Regenerate</span>
@@ -8961,7 +9045,7 @@ function _boRenderBunkGrid(wrap, divName) {
         const _titleTxt = isDeleted
           ? `DELETED for ${bunk} (${minutesToTime(evStart)}-${minutesToTime(evEnd)}) — nothing will be scheduled`
           : `OVERRIDE: ${override.activity} (${minutesToTime(evStart)}-${minutesToTime(evEnd)})`;
-        html += `<div class="da-event bo-block bo-override${shortCls}" data-bunk="${_escHtml(bunk)}" data-start="${evStart}" data-end="${evEnd}" data-ov-id="${_escHtml(override.id)}"
+        html += `<div class="da-event bo-block bo-override${shortCls}" data-bunk="${_escHtml(bunk)}" data-start="${evStart}" data-end="${evEnd}" data-ov-id="${_escHtml(override.id)}" data-mode="${_escHtml(override.overrideMode || 'force')}" data-span-group="${_escHtml(override._spanGroup || '')}"
           title="${_escHtml(_titleTxt)}"
           style="${oStyle}top:${top}px;height:${height}px;font-size:${fontSize};padding:3px 6px;cursor:pointer;position:absolute;left:2px;right:2px;border-radius:6px;overflow:hidden;">
           ${content}
@@ -8995,71 +9079,34 @@ function _boRenderBunkGrid(wrap, divName) {
   html += '</div>';
   wrap.innerHTML = html;
 
-  // Attach handlers on blocks. Single-click opens the picker (for the active
-  // multi-selection if any, else just this slot); DOUBLE-click toggles this slot
-  // in/out of the multi-selection. A short timer disambiguates the two so a
-  // double-click never also fires the single-click picker.
+  // Attach handlers on blocks. Single-click SELECTS the tile and pops the
+  // Edit/Delete bar (same gesture as the skeleton grid); DOUBLE-click toggles
+  // this slot in/out of the bulk multi-selection. A short timer disambiguates
+  // the two so a double-click never also fires the single-click bar.
   let _boClickTimer = null;
-  const _fromTileBtn = (e) => !!(e.target.closest && e.target.closest('.bo-tile-actions'));
+  const _fromHandle = (e) => !!(e.target.closest && e.target.closest('.bo-h'));
   wrap.querySelectorAll('.bo-block').forEach(block => {
     block.style.userSelect = 'none';
     block.onclick = (e) => {
-      if (_fromTileBtn(e)) return;
+      if (_fromHandle(e)) return;
+      if (block.dataset.boDragged === '1') { delete block.dataset.boDragged; return; } // drag, not a click
       if (_boClickTimer) return; // a double-click is unfolding — let ondblclick handle it
       _boClickTimer = setTimeout(() => {
         _boClickTimer = null;
-        const bunk = block.dataset.bunk;
-        const startMin = parseInt(block.dataset.start);
-        const endMin = parseInt(block.dataset.end);
-        _boShowPicker(block, bunk, startMin, endMin);
+        _boShowTileActionBar(block);
       }, 350);
     };
     block.ondblclick = (e) => {
-      if (_fromTileBtn(e)) return;
+      if (_fromHandle(e)) return;
       if (_boClickTimer) { clearTimeout(_boClickTimer); _boClickTimer = null; }
       e.preventDefault();
+      _boClearTileSelection();
       _boToggleCellSelection(block);
     };
   });
 
-  // ✏ Edit — same picker the tile body opens, but immediate (no double-click
-  // disambiguation wait) since the intent is explicit.
-  wrap.querySelectorAll('.bo-tile-edit').forEach(btn => {
-    btn.onclick = (e) => {
-      e.stopPropagation();
-      if (_boClickTimer) { clearTimeout(_boClickTimer); _boClickTimer = null; }
-      const block = btn.closest('.bo-block');
-      if (!block) return;
-      _boShowPicker(block, block.dataset.bunk, parseInt(block.dataset.start), parseInt(block.dataset.end));
-    };
-  });
-
-  // ↩ Revert — drop the per-bunk override so the bunk follows the grade skeleton
-  // again. (Distinct from 🗑, which leaves the bunk with nothing.)
-  wrap.querySelectorAll('.bo-tile-revert').forEach(btn => {
-    btn.onclick = (e) => {
-      e.stopPropagation();
-      if (_boClickTimer) { clearTimeout(_boClickTimer); _boClickTimer = null; }
-      const block = btn.closest('.bo-block');
-      const ovId = block?.dataset?.ovId;
-      if (!ovId) return;
-      _boSaveOverrides((currentOverrides.bunkActivityOverrides || []).filter(o => o.id !== ovId));
-      renderBunkOverridesUI();
-    };
-  });
-
-  // 🗑 Delete — remove this block for THIS bunk only. Stored as an
-  // overrideMode:'delete' override, which both solvers honour by leaving the
-  // window empty for the bunk (see scheduler_core_main STEP 2 / auto Phase 0).
-  wrap.querySelectorAll('.bo-tile-del').forEach(btn => {
-    btn.onclick = async (e) => {
-      e.stopPropagation();
-      if (_boClickTimer) { clearTimeout(_boClickTimer); _boClickTimer = null; }
-      const block = btn.closest('.bo-block');
-      if (!block) return;
-      await _boDeleteTileForBunk(block.dataset.bunk, parseInt(block.dataset.start), parseInt(block.dataset.end), block.dataset.layerType || null);
-    };
-  });
+  // Drag: move / resize / span. Snapped to the grade's own tile boundaries.
+  _boBindTileDrag(wrap, bunks, divEvents, earliestMin, PX);
 
   // Selection action bar buttons.
   const _assignBtn = wrap.querySelector('#bo-sel-assign');
@@ -9108,6 +9155,204 @@ async function _boDeleteTileForBunk(bunk, startMin, endMin, layerType) {
   });
   _boSaveOverrides(list);
   renderBunkOverridesUI();
+}
+
+// ─────────────────────────────────────────────────────────────────────────
+// TILE DRAG — move (body / top+bottom edges) and span (left+right edges)
+// ─────────────────────────────────────────────────────────────────────────
+// Only OVERRIDE tiles are draggable, and that is a real constraint, not an
+// oversight: an override carries its own startMin/endMin and STEP 2 of
+// scheduler_core_main pins it through findSlotsForRange, so moving it genuinely
+// moves the placement. A bare skeleton block has no per-bunk window to change —
+// the manual builder gives a grade ONE slot per skeleton tile shared by all its
+// bunks (no _perBunkSlots, that's auto-only), so a per-bunk drag of a grade
+// block would have no way to survive generation. Assign an activity first, then
+// the block becomes draggable.
+//
+// Vertical movement SNAPS to the grade's own tile boundaries. That's honest
+// about the grid's real granularity: the pin lands on whichever slots the window
+// overlaps, so a free-form window would silently round anyway.
+function _boBindTileDrag(wrap, bunks, divEvents, earliestMin, PX) {
+  const bounds = [...new Set(divEvents.flatMap(ev => {
+    const s = parseTimeToMinutes(ev.startTime), e = parseTimeToMinutes(ev.endTime);
+    return (s == null || e == null) ? [] : [s, e];
+  }))].sort((a, b) => a - b);
+  if (bounds.length < 2) return;
+  const snap = (m) => bounds.reduce((best, b) => (Math.abs(b - m) < Math.abs(best - m) ? b : best), bounds[0]);
+
+  wrap.querySelectorAll('.bo-block.bo-override').forEach(block => {
+    block.addEventListener('mousedown', (e) => {
+      if (e.button !== 0) return;
+      const handle = e.target.closest && e.target.closest('.bo-h');
+      const edge = handle ? handle.dataset.edge : 'move';
+      _boStartTileDrag(e, block, edge, { wrap, bunks, bounds, snap, earliestMin, PX });
+    });
+  });
+}
+
+function _boStartTileDrag(ev0, block, edge, ctx) {
+  ev0.preventDefault();
+  ev0.stopPropagation();
+  const ovId = block.dataset.ovId;
+  if (!ovId) return;
+
+  const origStart = parseInt(block.dataset.start);
+  const origEnd = parseInt(block.dataset.end);
+  const origTop = parseFloat(block.style.top || '0');
+  const track = block.parentElement;               // .bo-bunk-col
+  if (!track) return;
+
+  const horizontal = (edge === 'left' || edge === 'right');
+  let newStart = origStart, newEnd = origEnd;
+  let spanBunks = [block.dataset.bunk];
+  let moved = false;
+
+  // Ghost preview — vertical drags draw a dashed box in the column, horizontal
+  // drags tint the bunk columns that would receive a copy.
+  const ghost = document.createElement('div');
+  ghost.style.cssText = 'position:absolute;left:2px;right:2px;background:rgba(37,99,235,0.16);' +
+    'border:2px dashed #2563eb;border-radius:6px;pointer-events:none;z-index:40;' +
+    'display:flex;align-items:center;justify-content:center;font-size:10px;font-weight:700;color:#1e3a8a;';
+  ghost.style.top = block.style.top;
+  ghost.style.height = block.style.height;
+  ghost.textContent = minutesToTime(origStart) + '–' + minutesToTime(origEnd);
+  if (!horizontal) track.appendChild(ghost);
+
+  const cols = Array.from(ctx.wrap.querySelectorAll('.bo-bunk-col[data-bunk]'));
+  const myIdx = cols.findIndex(c => c.dataset.bunk === block.dataset.bunk);
+  const paintSpan = (idxs) => {
+    cols.forEach((c, i) => { c.style.background = idxs.includes(i) ? 'rgba(37,99,235,0.10)' : ''; });
+  };
+
+  const onMove = (e) => {
+    // A plain click always jitters a pixel or two. Without a threshold that
+    // would register as a drag and swallow the click that opens the action bar.
+    if (!moved) {
+      if (Math.abs(e.clientX - ev0.clientX) < 4 && Math.abs(e.clientY - ev0.clientY) < 4) return;
+      moved = true;
+    }
+    if (horizontal) {
+      // Which columns does the pointer cover, counting outward from this bunk?
+      let hit = cols.findIndex(c => {
+        const r = c.getBoundingClientRect();
+        return e.clientX >= r.left && e.clientX <= r.right;
+      });
+      if (hit < 0) hit = e.clientX < cols[0].getBoundingClientRect().left ? 0 : cols.length - 1;
+      const lo = Math.min(myIdx, hit), hi = Math.max(myIdx, hit);
+      const idxs = [];
+      for (let i = lo; i <= hi; i++) idxs.push(i);
+      spanBunks = idxs.map(i => cols[i].dataset.bunk);
+      paintSpan(idxs);
+      return;
+    }
+    const dMin = (e.clientY - ev0.clientY) / ctx.PX;
+    if (edge === 'top') {
+      newStart = Math.min(ctx.snap(origStart + dMin), origEnd - 1);
+      newEnd = origEnd;
+    } else if (edge === 'bottom') {
+      newStart = origStart;
+      newEnd = Math.max(ctx.snap(origEnd + dMin), origStart + 1);
+    } else {
+      const s = ctx.snap(origStart + dMin);
+      newStart = s;
+      newEnd = s + (origEnd - origStart);
+      // Keep the tail on a real boundary too, so a moved block still lines up.
+      const snappedEnd = ctx.snap(newEnd);
+      if (Math.abs(snappedEnd - newEnd) <= 10 && snappedEnd > newStart) newEnd = snappedEnd;
+    }
+    ghost.style.top = ((newStart - ctx.earliestMin) * ctx.PX) + 'px';
+    ghost.style.height = Math.max((newEnd - newStart) * ctx.PX - 2, 18) + 'px';
+    ghost.textContent = minutesToTime(newStart) + '–' + minutesToTime(newEnd);
+  };
+
+  const onUp = async () => {
+    document.removeEventListener('mousemove', onMove);
+    document.removeEventListener('mouseup', onUp);
+    ghost.remove();
+    paintSpan([]);
+    if (!moved) return;
+    block.dataset.boDragged = '1'; // suppress the click that follows a drag
+    _boClearTileSelection();
+    if (horizontal) {
+      if (spanBunks.length > 1 || String(block.dataset.spanGroup || '')) await _boCommitOverrideSpan(ovId, spanBunks);
+    } else if (newStart !== origStart || newEnd !== origEnd) {
+      await _boCommitOverrideMove(ovId, newStart, newEnd);
+    }
+  };
+
+  document.addEventListener('mousemove', onMove);
+  document.addEventListener('mouseup', onUp);
+}
+
+// Move / resize an override (and every member of its span) to a new window.
+async function _boCommitOverrideMove(ovId, newStart, newEnd) {
+  const list = (currentOverrides.bunkActivityOverrides || []).slice();
+  const me = list.find(o => o.id === ovId);
+  if (!me) return;
+  const group = me._spanGroup || null;
+  const members = group ? list.filter(o => o._spanGroup === group) : [me];
+
+  const conflicts = _boCheckOverrideConflicts(
+    members.map(m => ({ bunk: m.bunk, startMin: newStart, endMin: newEnd, layerType: m.layerType || null })),
+    [{ name: me.activity, type: me.type, location: me.location || null }]
+  );
+  if (conflicts.length && !(await _boConfirmConflicts(conflicts))) return;
+
+  const memberIds = new Set(members.map(m => m.id));
+  // Anything already sitting on the destination window for these bunks loses.
+  const bunkSet = new Set(members.map(m => m.bunk));
+  const next = list.filter(o => memberIds.has(o.id) ||
+    !(bunkSet.has(o.bunk) && o.startMin === newStart && o.endMin === newEnd));
+  next.forEach(o => {
+    if (!memberIds.has(o.id)) return;
+    o.startMin = newStart; o.endMin = newEnd;
+    o.startTime = minutesToTime(newStart); o.endTime = minutesToTime(newEnd);
+  });
+  _boSaveOverrides(next);
+  renderBunkOverridesUI();
+}
+
+// Extend (or shrink) an override across a contiguous run of bunks. Members share
+// a `_spanGroup` so a later move/resize/span of any one of them moves the set.
+async function _boCommitOverrideSpan(ovId, bunkNames) {
+  const list = (currentOverrides.bunkActivityOverrides || []).slice();
+  const me = list.find(o => o.id === ovId);
+  if (!me) return;
+  const group = me._spanGroup || uid();
+  const targets = bunkNames.map(b => ({ bunk: b, startMin: me.startMin, endMin: me.endMin, layerType: me.layerType || null }));
+
+  const conflicts = _boCheckOverrideConflicts(targets, [{ name: me.activity, type: me.type, location: me.location || null }]);
+  if (conflicts.length && !(await _boConfirmConflicts(conflicts))) return;
+
+  const keep = new Set(bunkNames);
+  // Drop the previous span members and anything occupying the same window on a
+  // bunk we're about to write, then lay the group down fresh.
+  let next = list.filter(o =>
+    !(o._spanGroup && o._spanGroup === group) &&
+    !(keep.has(o.bunk) && o.startMin === me.startMin && o.endMin === me.endMin && (o.layerType || null) === (me.layerType || null))
+  );
+  const single = bunkNames.length === 1;
+  bunkNames.forEach(b => {
+    next.push(Object.assign({}, me, {
+      id: uid(),
+      bunk: b,
+      // A one-bunk "span" is just a plain override again — don't leave a group
+      // marker behind or the next drag would think it still has partners.
+      _spanGroup: single ? undefined : group
+    }));
+  });
+  _boSaveOverrides(next);
+  renderBunkOverridesUI();
+}
+
+// Shared accept/deny prompt for the drag paths.
+function _boConfirmConflicts(conflicts) {
+  return daShowConfirm(
+    'This override conflicts with your setup:<br><br>' +
+    conflicts.map(w => '• ' + w).join('<br>') +
+    '<br><br>Apply it anyway?',
+    { danger: true, confirmText: 'Apply anyway', cancelText: 'Cancel' }
+  );
 }
 
 // Toggle one slot in/out of the bulk multi-selection (driven by double-click).
@@ -9659,6 +9904,95 @@ function _boFacilityClosedDuring(facName, startMin, endMin, division) {
   return hasAvail && !inside;
 }
 
+// What else does this bunk already have on this day, OUTSIDE the windows we are
+// about to write? Two sources, because both matter:
+//   • the GENERATED schedule, when the day has already been built — this is the
+//     "they're re-doing just that one bunk and it already has it today" case;
+//   • the bunk's other overrides, so the checks still work before generation.
+// Returns rule-engine block shapes {startMin, endMin, type, event, field} so the
+// list can be handed straight to SchedulingRules as a template.
+function _boBunkDayBlocks(bunk, targets) {
+  const out = [];
+  const inTarget = (s, e) => (targets || []).some(t => s < t.endMin && e > t.startMin);
+  const infer = window.SchedulingRules?.inferTypeFromActivity || (() => 'activity');
+  try {
+    const slots = (window.scheduleAssignments || {})[bunk] || [];
+    const times = window.unifiedTimes || [];
+    slots.forEach((s, i) => {
+      if (!s || s.continuation || s._isTransition) return;
+      const act = s._activity || s.sport;
+      if (!act) return;
+      const a = String(act).toLowerCase().trim();
+      if (a === 'free' || a === 'free play' || a === 'free (timeout)') return;
+      const t = times[i] || {};
+      const sm = (s._startMin != null) ? s._startMin : (t.startMin != null ? t.startMin : null);
+      const em = (s._endMin != null) ? s._endMin : (t.endMin != null ? t.endMin : null);
+      if (sm == null || em == null || inTarget(sm, em)) return;
+      out.push({ startMin: sm, endMin: em, type: infer(act), event: act, field: s._location || s.field || null });
+    });
+  } catch (_e) { /* no generated day — overrides below still apply */ }
+  try {
+    (currentOverrides.bunkActivityOverrides || []).forEach(o => {
+      if (!o || o.bunk !== bunk || o.overrideMode === 'delete') return;
+      if (o.startMin == null || o.endMin == null || inTarget(o.startMin, o.endMin)) return;
+      const act = o.activity;
+      if (!act) return;
+      out.push({ startMin: o.startMin, endMin: o.endMin, type: infer(act), event: act, field: o.location || null });
+    });
+  } catch (_e) {}
+  return out;
+}
+
+// calculateLimitScore returns Infinity plus a machine reason; turn that into
+// something a head counselor can act on.
+const _BO_ROT_REASON = {
+  'special-disabled': 'it is switched off in the activity setup',
+  'per-date-bunk-restriction': 'a per-date bunk restriction excludes this bunk',
+  'frequencyDays-cooldown': 'the minimum number of days between visits has not passed',
+  'multiPart-complete': 'the bunk has already completed every part of it',
+  'multiPart-daysBetween': 'the next part is not due yet',
+  'availableDays-weekday': 'it is not offered on this weekday',
+  'rotationCohort-waiting': 'other bunks in its rotation group are still behind',
+  'maxUsage-cap': 'the bunk is already at its maximum-usage cap',
+  'exactFrequency-reached': 'the bunk has already hit its exact-frequency target',
+  'fairShare-cap': 'the bunk is already at its fair-share cap'
+};
+
+// Access gates, mirroring the generator (and post_edit_system's soft warning):
+// specials go through isSpecialAvailableForBunk, fields through accessRestrictions.
+// Fails OPEN on any error — a warning must never be manufactured from a bug.
+function _boAccessBlockedLabel(item, facility, bunk, division) {
+  try {
+    if (!division) return null;
+    const names = [];
+    if (facility) names.push(facility);
+    if (item.name && String(item.name).toLowerCase() !== String(facility || '').toLowerCase()) names.push(item.name);
+    const specials = window.getGlobalSpecialActivities?.() || masterSettings.app1?.specialActivities || [];
+    const props = window.SchedulerCoreUtils?.getActivityProperties?.() || window.activityProperties || {};
+    for (const name of names) {
+      const lname = String(name).toLowerCase();
+      if (specials.some(s => s && String(s.name).toLowerCase() === lname)) {
+        if (typeof window.isSpecialAvailableForBunk === 'function') {
+          if (!window.isSpecialAvailableForBunk(name, division, bunk, window.globalSettings || null)) return name;
+        }
+        continue;
+      }
+      const ar = props[name]?.accessRestrictions;
+      if (!ar || ar.enabled !== true) continue;
+      const divRules = ar.divisions || {};
+      if (Object.keys(divRules).length === 0) continue;
+      const divStr = String(division);
+      if (!(divStr in divRules) && !(division in divRules)) return name;
+      const rule = divRules[divStr] || divRules[division];
+      if (Array.isArray(rule) && rule.length > 0) {
+        const bStr = String(bunk), bNum = parseInt(bunk, 10);
+        if (!rule.some(b => String(b) === bStr || parseInt(b, 10) === bNum)) return name;
+      }
+    }
+  } catch (_e) { /* fail open */ }
+  return null;
+}
+
 // Returns a list of human-readable problems with applying `items` to `targets`.
 // Empty list ⇒ nothing to warn about.
 function _boCheckOverrideConflicts(targets, items) {
@@ -9762,6 +10096,129 @@ function _boCheckOverrideConflicts(targets, items) {
         }
       });
     });
+    // ── 4. Outside the grade's own day ──────────────────────────────────────
+    const divisionsMap = window.divisions || masterSettings.app1?.divisions || {};
+    targets.forEach(t => {
+      const dn = _boDivisionOfBunk(t.bunk);
+      const info = dn ? divisionsMap[dn] : null;
+      if (!info) return;
+      const ds = parseTimeToMinutes(info.startTime), de = parseTimeToMinutes(info.endTime);
+      if (ds == null || de == null) return;
+      if (t.startMin < ds || t.endMin > de) {
+        warnings.push(`${_escHtml(minutesToTime(t.startMin))}–${_escHtml(minutesToTime(t.endMin))} falls outside <strong>${_escHtml(dn)}</strong>'s day (${_escHtml(minutesToTime(ds))}–${_escHtml(minutesToTime(de))}).`);
+      }
+    });
+
+    // ── 5. The bunk already has this today ──────────────────────────────────
+    // Covers the case the user called out: the day is already generated and
+    // they're redoing one bunk that has the activity elsewhere on the day.
+    targets.forEach(t => {
+      const day = _boBunkDayBlocks(t.bunk, targets);
+      items.forEach(item => {
+        const want = String(item.name).toLowerCase().trim();
+        const clash = day.find(b => String(b.event).toLowerCase().trim() === want);
+        if (clash) {
+          warnings.push(`<strong>${_escHtml(t.bunk)}</strong> already has <strong>${_escHtml(item.name)}</strong> today at ${_escHtml(minutesToTime(clash.startMin))}–${_escHtml(minutesToTime(clash.endMin))}.`);
+        }
+      });
+    });
+
+    // ── 6. Cooldown / spacing rules ─────────────────────────────────────────
+    // Same engine + mode the solver and the post-edit gate use, so the wording
+    // and the verdict match what generation would have refused.
+    if (window.SchedulingRules?.checkCandidateDetailed) {
+      const mode = (window._daBuilderMode === 'auto') ? 'auto' : 'manual';
+      targets.forEach(t => {
+        const day = _boBunkDayBlocks(t.bunk, targets);
+        items.forEach(item => {
+          try {
+            const candidate = {
+              startMin: t.startMin, endMin: t.endMin,
+              type: window.SchedulingRules.inferTypeFromActivity(item.name),
+              event: item.name,
+              field: _boItemFacility(item)
+            };
+            const res = window.SchedulingRules.checkCandidateDetailed(candidate, day, { mode });
+            if (res && res.allowed === false) {
+              (res.violated || []).forEach(r => {
+                warnings.push(`<strong>${_escHtml(t.bunk)}</strong> breaks a spacing rule: ${_escHtml(window.SchedulingRules.describeRule(r))}.`);
+              });
+            }
+          } catch (_e) { /* fail open */ }
+        });
+      });
+    }
+
+    // ── 7. Access restrictions ──────────────────────────────────────────────
+    targets.forEach(t => {
+      const dn = _boDivisionOfBunk(t.bunk);
+      items.forEach(item => {
+        const blocked = _boAccessBlockedLabel(item, _boItemFacility(item), t.bunk, dn);
+        if (blocked) {
+          warnings.push(`<strong>${_escHtml(blocked)}</strong> is not normally allowed for <strong>${_escHtml(t.bunk)}</strong>${dn ? ' (' + _escHtml(dn) + ')' : ''} — it has an access restriction.`);
+        }
+      });
+    });
+
+    // ── 8. Rotation / frequency limits ──────────────────────────────────────
+    // available=false, availableDays, frequencyDays, maxUsage, exactFrequency,
+    // rotation cohort, multi-part gating — all live behind one scorer. Props come
+    // from the live map when a generation has built it, otherwise straight from
+    // the special's own config so the check still works before the first run.
+    if (window.RotationEngine?.calculateLimitScore) {
+      const liveProps = window.SchedulerCoreUtils?.getActivityProperties?.() || window.activityProperties || {};
+      targets.forEach(t => {
+        const dn = _boDivisionOfBunk(t.bunk);
+        items.forEach(item => {
+          try {
+            let props = liveProps[item.name] ? liveProps : null;
+            if (!props) {
+              const cfg = (masterSettings.app1?.specialActivities || []).find(s => s && s.name === item.name);
+              if (cfg) props = { [item.name]: cfg };
+            }
+            if (!props) return; // nothing configured to violate
+            const score = window.RotationEngine.calculateLimitScore(t.bunk, item.name, props, dn);
+            if (score === Infinity) {
+              const why = _BO_ROT_REASON[window.RotationEngine._lastBlockReason] || 'a rotation limit blocks it';
+              warnings.push(`<strong>${_escHtml(item.name)}</strong> would not normally be given to <strong>${_escHtml(t.bunk)}</strong> — ${_escHtml(why)}.`);
+            }
+          } catch (_e) { /* fail open */ }
+        });
+      });
+    }
+
+    // ── 9. Sport headcount (min / max players) ──────────────────────────────
+    // Inert unless BOTH camper counts and the sport's min/max are configured —
+    // the same guard the solver uses.
+    try {
+      const meta = window.getBunkMetaData?.() || window.bunkMetaData || {};
+      const sizeOf = (b) => (meta[b]?.size || meta[String(b)]?.size || 0);
+      const reqOf = window.SchedulerCoreUtils?.getSportPlayerRequirements;
+      if (reqOf) {
+        items.forEach(item => {
+          if (item.type !== 'sport') return;
+          const req = reqOf(item.name) || {};
+          if (!req.minPlayers && !req.maxPlayers) return;
+          const byWindow = new Map();
+          targets.forEach(t => {
+            const k = t.startMin + '|' + t.endMin;
+            if (!byWindow.has(k)) byWindow.set(k, { startMin: t.startMin, endMin: t.endMin, bunks: new Set() });
+            byWindow.get(k).bunks.add(t.bunk);
+          });
+          byWindow.forEach(win => {
+            let total = 0, known = 0;
+            win.bunks.forEach(b => { const s = sizeOf(b); if (s > 0) { total += s; known++; } });
+            if (known === 0) return; // no camper counts configured — nothing to judge
+            const when = `${minutesToTime(win.startMin)}–${minutesToTime(win.endMin)}`;
+            if (req.maxPlayers && total > req.maxPlayers) {
+              warnings.push(`<strong>${_escHtml(item.name)}</strong> takes at most <strong>${req.maxPlayers}</strong> players, but these bunks bring <strong>${total}</strong> at ${_escHtml(when)}.`);
+            } else if (req.minPlayers && total < req.minPlayers) {
+              warnings.push(`<strong>${_escHtml(item.name)}</strong> needs at least <strong>${req.minPlayers}</strong> players, but only <strong>${total}</strong> are on it at ${_escHtml(when)}.`);
+            }
+          });
+        });
+      }
+    } catch (_e) { /* fail open */ }
   } catch (e) {
     console.warn('[BunkOverride] conflict pre-check failed (allowing the change):', e);
     return [];
@@ -10845,18 +11302,21 @@ function getStyles() {
     .ms-container #da-bunk-overrides-container { padding:16px; }
     .ms-container #da-resources-container { padding:16px; }
    
-    /* === Bunk-override tile actions (edit / revert / delete) === */
-    /* Mirrors the regular tiles: the buttons stay out of the way until the
-       pointer is over the tile, so a dense per-bunk grid stays readable. */
-    .bo-tile-actions { position:absolute; top:2px; right:3px; display:flex; gap:2px; opacity:0; transition:opacity 0.12s; z-index:6; }
-    .bo-block:hover .bo-tile-actions, .bo-block:focus-within .bo-tile-actions { opacity:1; }
-    .bo-tile-btn { display:flex; align-items:center; justify-content:center; width:16px; height:16px; border-radius:4px;
-                   background:rgba(255,255,255,0.92); border:1px solid rgba(15,23,42,0.18); color:#334155;
-                   font-size:9px; line-height:1; cursor:pointer; padding:0; }
-    .bo-tile-btn:hover { background:#fff; border-color:#94a3b8; }
-    .bo-tile-btn.bo-tile-del:hover { background:#fee2e2; border-color:#ef4444; color:#b91c1c; }
-    /* Short tiles have no room for a button row — shrink it rather than clip. */
-    .bo-block.bo-short .bo-tile-btn { width:13px; height:13px; font-size:8px; }
+    /* === Bunk-override tile selection + drag handles === */
+    /* Same feel as the skeleton grid: click a tile to select it (blue ring +
+       grips), act on it from the Edit/Delete bar that pops up underneath. */
+    .bo-block.bo-selected { box-shadow:0 0 0 3px #2563eb, 0 4px 12px rgba(37,99,235,0.25) !important; z-index:12; }
+    .bo-h { position:absolute; opacity:0; transition:opacity 0.12s; z-index:8; }
+    .bo-block:hover .bo-h, .bo-block.bo-selected .bo-h { opacity:1; }
+    .bo-h-top, .bo-h-bot { left:14%; right:14%; height:7px; cursor:ns-resize; border-radius:3px; background:rgba(37,99,235,0.55); }
+    .bo-h-top { top:1px; }
+    .bo-h-bot { bottom:1px; }
+    .bo-h-left, .bo-h-right { top:26%; bottom:26%; width:6px; cursor:ew-resize; border-radius:3px; background:rgba(37,99,235,0.55); }
+    .bo-h-left { left:1px; }
+    .bo-h-right { right:1px; }
+    /* A short tile can't fit edge grips without swallowing the label. */
+    .bo-block.bo-short .bo-h-top, .bo-block.bo-short .bo-h-bot { height:5px; left:26%; right:26%; }
+    .bo-block[data-span-group]:not([data-span-group=""]) { border-style:dashed !important; }
 
     #da-skeleton-grid .al-toolbar { display: none !important; }
     #da-skeleton-grid .al-palette { display: none !important; }
