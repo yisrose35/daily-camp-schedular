@@ -21672,7 +21672,15 @@
                     //   best. Per-trial: restore the fieldLedger claims snapshot and truncate
                     //   the floor-warning accumulator, then run the full tiling body.
                     var _glBest = null, _glScores = [];
-                    for (var _gt = 0; _gt < _glArrTrials; _gt++) {
+                    // ★ ADAPTIVE EXTENSION: if the best of the default trials still carries an
+                    //   UNRESCUABLE floor breach, the day is starved and diversity is floor
+                    //   rescue (live: default identity u5 → pick2 found u2 → audit confirmed
+                    //   only 1 bunk short post-endgame) — spend 4 more shuffle+pick combos
+                    //   before settling. Explicit __glArrangeTrials disables the extension.
+                    var _glArrExplicit = false;
+                    try { _glArrExplicit = (typeof window !== 'undefined') && window.__glArrangeTrials != null && isFinite(window.__glArrangeTrials); } catch (_e) {}
+                    var _glArrMax = _glArrTrials;
+                    for (var _gt = 0; _gt < _glArrMax; _gt++) {
                         _glArrRestClaims(_glArrClaims0);
                         try { if (typeof window !== 'undefined' && window.__genFloorWarnings) window.__genFloorWarnings.length = _glArrFWLen; } catch (_e) {}
                         // strategy table: t0 = identity (untouchable baseline); then single-dial
@@ -21698,9 +21706,14 @@
                         _gRes._score = _glArrScore(_gRes);
                         _glScores.push('t' + _gt + '(' + _gStrat.label + ')=' + _gRes._score + '[u' + (_gRes._unresc || 0) + '/r' + (_gRes._resc || 0) + ']');
                         if (!_glBest || _gRes._score < _glBest._score) _glBest = _gRes;
+                        if (_gt === _glArrTrials - 1 && !_glArrExplicit && _glArrMax === _glArrTrials
+                            && _glBest && (_glBest._unresc || 0) > 0 && _glArrTrials > 1) {
+                            _glArrMax = Math.min(10, _glArrTrials + 4);
+                            log('[ARRANGE] best after ' + _glArrTrials + ' trial(s) still has ' + _glBest._unresc + ' unrescuable floor breach(es) — extending the search by ' + (_glArrMax - _glArrTrials) + ' trial(s)');
+                        }
                     }
-                    if (_glArrTrials > 1) {
-                        log('[ARRANGE] ' + _glArrTrials + ' arrangement trial(s) scored — ' + _glScores.join(', ') + ' → winner: trial ' + _glBest._trial + ' (' + _glBest._strat + ')' + (_glBest._trial === 0 ? ' — today\'s arrangement was already best' : ' — a better lineup than the default was found and kept'));
+                    if (_glArrMax > 1) {
+                        log('[ARRANGE] ' + _glArrMax + ' arrangement trial(s) scored — ' + _glScores.join(', ') + ' → winner: trial ' + _glBest._trial + ' (' + _glBest._strat + ')' + (_glBest._trial === 0 ? ' — today\'s arrangement was already best' : ' — a better lineup than the default was found and kept'));
                     }
                     // ★ WINNER-ONLY tail: restore the winner's world, then emit exactly once.
                     _glArrRestClaims(_glBest.claims);
