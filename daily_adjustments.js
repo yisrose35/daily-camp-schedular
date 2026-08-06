@@ -8835,19 +8835,52 @@ function _inputTimeToMinutes(s) {
 //     'skeleton' — the grade's own block, not yet overridden for this bunk
 //     'override' — a per-bunk replacement activity
 //     'deleted'  — a per-bunk "nothing here" (overrideMode:'delete')
-//   Every tile gets ✏ (change the activity) and 🗑 (remove the block for this
-//   bunk only). An override additionally gets ↩ to drop back to the grade
-//   skeleton — that is a DIFFERENT action from 🗑, which leaves the bunk with
-//   nothing scheduled in the window.
-function _boTileActionsHTML(kind) {
-  // Only an OVERRIDE carries its own time window, so only an override can be
-  // moved / resized / spanned — see _boBindTileDrag for why a bare skeleton
-  // block can't be (the manual grid has no per-bunk slot geometry).
-  if (kind === 'skeleton') return '';
+//   Grips: top/bottom resize, left/right extend across bunks, body moves.
+function _boTileActionsHTML(draggable) {
+  if (!draggable) return '';
   return '<div class="bo-h bo-h-top" data-edge="top"></div>' +
          '<div class="bo-h bo-h-bot" data-edge="bottom"></div>' +
          '<div class="bo-h bo-h-left" data-edge="left"></div>' +
          '<div class="bo-h bo-h-right" data-edge="right"></div>';
+}
+
+// ─────────────────────────────────────────────────────────────────────────
+// What does a SKELETON tile actually represent, and can a per-bunk drag of it
+// be expressed as an override?
+// ─────────────────────────────────────────────────────────────────────────
+// A drag only survives generation if it becomes an override, and an override
+// has to name something concrete for STEP 2 to pin. So:
+//   • concrete  — the tile already names a real thing (Swim, Lunch, a pinned
+//     activity, a custom block). Dragging writes a force override carrying that
+//     identity, plus a delete override on the vacated window so the block really
+//     MOVES rather than being duplicated.
+//   • generic   — the tile is a placeholder the solver fills later ("Sports
+//     Slot", "Special Activity", an elective menu). There is nothing to pin
+//     until the user says what this bunk should do, so a drag opens the picker
+//     for the destination window and that writes the override.
+//   • not draggable — league tiles. A league game belongs to the whole
+//     division; moving it for one bunk is not a thing.
+const _BO_GENERIC_EVENTS = {
+  'general activity slot': 1, 'sports slot': 1, 'special activity': 1,
+  'main activity': 1, 'activity slot': 1, 'free': 1
+};
+function _boTileIdentity(ev) {
+  const type = String(ev?.type || '').toLowerCase();
+  if (type === 'league' || type === 'specialty_league') return { draggable: false };
+  const name = String(ev?.customActivity || ev?.event || '').trim();
+  const key = _boLayerKey(ev);
+  if (_BO_FIXED_SET[key]) {
+    return { draggable: true, concrete: true, activity: name || key, type: key, location: ev?.location || null };
+  }
+  const generic = !name || _BO_GENERIC_EVENTS[name.toLowerCase()] ||
+    type === 'activity' || type === 'sports' || type === 'special' ||
+    type === 'elective' || type === 'swim_elective';
+  if (generic) return { draggable: true, concrete: false };
+  return {
+    draggable: true, concrete: true, activity: name,
+    type: (type === 'trip') ? 'trip' : 'pinned',
+    location: ev?.location || null
+  };
 }
 
 // ─────────────────────────────────────────────────────────────────────────
@@ -9049,7 +9082,7 @@ function _boRenderBunkGrid(wrap, divName) {
           title="${_escHtml(_titleTxt)}"
           style="${oStyle}top:${top}px;height:${height}px;font-size:${fontSize};padding:3px 6px;cursor:pointer;position:absolute;left:2px;right:2px;border-radius:6px;overflow:hidden;">
           ${content}
-          ${_boTileActionsHTML(isDeleted ? 'deleted' : 'override')}
+          ${_boTileActionsHTML(true)}
         </div>`;
       } else {
         // Render the skeleton block (normal)
@@ -9064,11 +9097,16 @@ function _boRenderBunkGrid(wrap, divName) {
           const locDisplay = ev.location || (ev.reservedFields?.length > 0 ? ev.reservedFields.join(', ') : null);
           if (locDisplay) content += `<div style="font-size:9px;opacity:0.8;">📍 ${_escHtml(locDisplay)}</div>`;
         }
-        html += `<div class="da-event bo-block bo-skeleton${shortCls}" data-bunk="${_escHtml(bunk)}" data-start="${evStart}" data-end="${evEnd}" data-ev-type="${ev.type || 'slot'}"
+        // Identity travels on the tile so a drag knows whether it can write a
+        // concrete override or has to ask the user first (see _boTileIdentity).
+        const ident = _boTileIdentity(ev);
+        const identAttrs = ` data-drag="${ident.draggable ? 1 : 0}" data-concrete="${ident.concrete ? 1 : 0}"` +
+          (ident.concrete ? ` data-act="${_escHtml(ident.activity)}" data-act-type="${_escHtml(ident.type)}" data-act-loc="${_escHtml(ident.location || '')}"` : '');
+        html += `<div class="da-event bo-block bo-skeleton${shortCls}" data-bunk="${_escHtml(bunk)}" data-start="${evStart}" data-end="${evEnd}" data-ev-type="${ev.type || 'slot'}"${identAttrs}
           title="${_escHtml(evName)} (${minutesToTime(evStart)}-${minutesToTime(evEnd)}) — Click to override for ${_escHtml(bunk)}"
           style="${style}top:${top}px;height:${height}px;font-size:${fontSize};padding:3px 6px;cursor:pointer;position:absolute;left:2px;right:2px;border-radius:6px;overflow:hidden;">
           ${content}
-          ${_boTileActionsHTML('skeleton')}
+          ${_boTileActionsHTML(ident.draggable)}
         </div>`;
       }
     });
@@ -9160,18 +9198,17 @@ async function _boDeleteTileForBunk(bunk, startMin, endMin, layerType) {
 // ─────────────────────────────────────────────────────────────────────────
 // TILE DRAG — move (body / top+bottom edges) and span (left+right edges)
 // ─────────────────────────────────────────────────────────────────────────
-// Only OVERRIDE tiles are draggable, and that is a real constraint, not an
-// oversight: an override carries its own startMin/endMin and STEP 2 of
-// scheduler_core_main pins it through findSlotsForRange, so moving it genuinely
-// moves the placement. A bare skeleton block has no per-bunk window to change —
-// the manual builder gives a grade ONE slot per skeleton tile shared by all its
-// bunks (no _perBunkSlots, that's auto-only), so a per-bunk drag of a grade
-// block would have no way to survive generation. Assign an activity first, then
-// the block becomes draggable.
+// Everything a per-bunk drag does has to end up as an OVERRIDE, because that is
+// the only per-bunk thing generation reads (STEP 2 pins it via
+// findSlotsForRange). An override tile already is one; a skeleton tile becomes
+// one on first drag — see _boTileIdentity for how its identity is resolved and
+// what happens when the tile is only a placeholder.
 //
 // Vertical movement SNAPS to the grade's own tile boundaries. That's honest
-// about the grid's real granularity: the pin lands on whichever slots the window
-// overlaps, so a free-form window would silently round anyway.
+// about the grid's real granularity: the manual builder gives a grade ONE slot
+// per skeleton tile (no per-bunk geometry — _perBunkSlots is auto-only), so the
+// pin lands on whichever slots the window overlaps and a free-form window would
+// silently round anyway.
 function _boBindTileDrag(wrap, bunks, divEvents, earliestMin, PX) {
   const bounds = [...new Set(divEvents.flatMap(ev => {
     const s = parseTimeToMinutes(ev.startTime), e = parseTimeToMinutes(ev.endTime);
@@ -9180,7 +9217,8 @@ function _boBindTileDrag(wrap, bunks, divEvents, earliestMin, PX) {
   if (bounds.length < 2) return;
   const snap = (m) => bounds.reduce((best, b) => (Math.abs(b - m) < Math.abs(best - m) ? b : best), bounds[0]);
 
-  wrap.querySelectorAll('.bo-block.bo-override').forEach(block => {
+  wrap.querySelectorAll('.bo-block').forEach(block => {
+    if (block.dataset.drag === '0') return;         // league tiles
     block.addEventListener('mousedown', (e) => {
       if (e.button !== 0) return;
       const handle = e.target.closest && e.target.closest('.bo-h');
@@ -9191,10 +9229,11 @@ function _boBindTileDrag(wrap, bunks, divEvents, earliestMin, PX) {
 }
 
 function _boStartTileDrag(ev0, block, edge, ctx) {
+  // preventDefault kills text-selection while dragging. Deliberately NOT
+  // stopPropagation: the picker / action bar close themselves on a document
+  // mousedown, and swallowing it would strand them open on the previous tile.
   ev0.preventDefault();
-  ev0.stopPropagation();
-  const ovId = block.dataset.ovId;
-  if (!ovId) return;
+  const ovId = block.dataset.ovId || null;
 
   const origStart = parseInt(block.dataset.start);
   const origEnd = parseInt(block.dataset.end);
@@ -9274,14 +9313,110 @@ function _boStartTileDrag(ev0, block, edge, ctx) {
     block.dataset.boDragged = '1'; // suppress the click that follows a drag
     _boClearTileSelection();
     if (horizontal) {
-      if (spanBunks.length > 1 || String(block.dataset.spanGroup || '')) await _boCommitOverrideSpan(ovId, spanBunks);
+      if (spanBunks.length < 2 && !String(block.dataset.spanGroup || '')) return;
+      if (ovId) await _boCommitOverrideSpan(ovId, spanBunks);
+      else await _boCommitSkeletonSpan(block, spanBunks);
     } else if (newStart !== origStart || newEnd !== origEnd) {
-      await _boCommitOverrideMove(ovId, newStart, newEnd);
+      if (ovId) await _boCommitOverrideMove(ovId, newStart, newEnd);
+      else await _boCommitSkeletonMove(block, origStart, origEnd, newStart, newEnd);
     }
   };
 
   document.addEventListener('mousemove', onMove);
   document.addEventListener('mouseup', onUp);
+}
+
+// Dragging a tile that has no override yet. A CONCRETE tile (Swim, Lunch, a
+// pinned or custom block) is turned into a real override at the new window, and
+// — when the new window doesn't overlap the old one — a delete override is put
+// on the vacated slot so the block genuinely MOVES for this bunk instead of
+// being duplicated. A PLACEHOLDER tile has nothing to pin, so the picker opens
+// on the destination and writes the override once the user names the activity.
+async function _boCommitSkeletonMove(block, origStart, origEnd, newStart, newEnd) {
+  const bunk = block.dataset.bunk;
+  const lt = block.dataset.layerType || null;
+
+  if (block.dataset.concrete !== '1') {
+    // A stale bulk selection would hijack the picker's targets.
+    _boSelectedCells.clear();
+    _boShowPicker(block, bunk, newStart, newEnd);
+    return;
+  }
+
+  const item = {
+    name: block.dataset.act,
+    type: block.dataset.actType || 'pinned',
+    location: block.dataset.actLoc || null
+  };
+  const conflicts = _boCheckOverrideConflicts([{ bunk, startMin: newStart, endMin: newEnd, layerType: lt }], [item]);
+  if (conflicts.length && !(await _boConfirmConflicts(conflicts))) return;
+
+  const vacates = !(newStart < origEnd && newEnd > origStart);
+  let list = (currentOverrides.bunkActivityOverrides || []).filter(o =>
+    !(o.bunk === bunk && o.startMin === newStart && o.endMin === newEnd && (o.layerType || null) === lt) &&
+    !(vacates && o.bunk === bunk && o.startMin === origStart && o.endMin === origEnd && (o.layerType || null) === lt)
+  );
+  if (vacates) {
+    list.push({
+      id: uid(), bunk,
+      activity: '— deleted —', location: null,
+      startTime: minutesToTime(origStart), endTime: minutesToTime(origEnd),
+      startMin: origStart, endMin: origEnd,
+      type: 'delete', overrideMode: 'delete', layerType: lt
+    });
+  }
+  list.push({
+    id: uid(), bunk,
+    activity: item.name, location: item.location,
+    startTime: minutesToTime(newStart), endTime: minutesToTime(newEnd),
+    startMin: newStart, endMin: newEnd,
+    type: item.type, overrideMode: 'force', layerType: lt
+  });
+  _boSaveOverrides(list);
+  renderBunkOverridesUI();
+}
+
+// Extending a not-yet-overridden tile sideways. Concrete tiles write one force
+// override per covered bunk; a placeholder loads the covered cells into the bulk
+// selection and opens the picker, so one choice lands on all of them.
+async function _boCommitSkeletonSpan(block, bunkNames) {
+  const startMin = parseInt(block.dataset.start);
+  const endMin = parseInt(block.dataset.end);
+  const lt = block.dataset.layerType || null;
+
+  if (block.dataset.concrete !== '1') {
+    _boSelectedCells.clear();
+    bunkNames.forEach(b => _boSelectedCells.set(b + '||' + startMin + '||' + endMin + '||', { bunk: b, startMin, endMin, layerType: lt }));
+    _boShowPicker(block, bunkNames[0], startMin, endMin);
+    return;
+  }
+
+  const item = {
+    name: block.dataset.act,
+    type: block.dataset.actType || 'pinned',
+    location: block.dataset.actLoc || null
+  };
+  const targets = bunkNames.map(b => ({ bunk: b, startMin, endMin, layerType: lt }));
+  const conflicts = _boCheckOverrideConflicts(targets, [item]);
+  if (conflicts.length && !(await _boConfirmConflicts(conflicts))) return;
+
+  const group = bunkNames.length > 1 ? uid() : null;
+  const keep = new Set(bunkNames);
+  let list = (currentOverrides.bunkActivityOverrides || []).filter(o =>
+    !(keep.has(o.bunk) && o.startMin === startMin && o.endMin === endMin && (o.layerType || null) === lt)
+  );
+  bunkNames.forEach(b => {
+    list.push({
+      id: uid(), bunk: b,
+      activity: item.name, location: item.location,
+      startTime: minutesToTime(startMin), endTime: minutesToTime(endMin),
+      startMin, endMin,
+      type: item.type, overrideMode: 'force', layerType: lt,
+      _spanGroup: group || undefined
+    });
+  });
+  _boSaveOverrides(list);
+  renderBunkOverridesUI();
 }
 
 // Move / resize an override (and every member of its span) to a new window.

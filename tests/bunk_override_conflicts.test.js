@@ -620,7 +620,8 @@ describe('bunk-override setup-conflict pre-flight', () => {
     assertClean(c.check([{ bunk: '5A', ...W }], [{ name: 'Basketball', location: null, type: 'sport' }]));
   });
 
-  // ── capacity resolution mirrors SchedulerCoreUtils.getFieldCapacity ────────
+  // ── capacity resolution mirrors SchedulerCoreUtils.getFieldCapacity ───────
+
   it('resolves capacity the same way the solver does', () => {
     const c = makeChecker({ fields: [], divisions: {} });
     assert.equal(c.capacity({ sharableWith: { type: 'not_sharable', capacity: 9 } }), 1, 'not_sharable is always 1');
@@ -629,5 +630,94 @@ describe('bunk-override setup-conflict pre-flight', () => {
     assert.equal(c.capacity({ sharableWith: { type: 'same_division' } }), 2);
     assert.equal(c.capacity({ sharableWith: { type: 'cross_division' } }), 2);
     assert.equal(c.capacity({}), 1, 'no sharing config → 1');
+  });
+});
+
+// ═════════════════════════════════════════════════════════════════════════
+// TILE IDENTITY — what a per-bunk DRAG of a skeleton tile can become.
+// ═════════════════════════════════════════════════════════════════════════
+// A drag only survives generation if it turns into an override, and an override
+// must name something concrete for STEP 2 to pin. _boTileIdentity is the gate
+// that decides between "write it straight away", "ask the user first" and
+// "don't drag this at all", so its classification is the whole feature.
+describe('bunk-override tile identity (drag classification)', () => {
+  const identCtx = (() => {
+    const ctx = { console, window: {} };
+    vm.createContext(ctx);
+    vm.runInContext([
+      sliceConst('_BO_GA_QT'),
+      sliceConst('_BO_FIXED_SET'),
+      sliceConst('_BO_GENERIC_EVENTS'),
+      sliceFunction('_boLayerKey'),
+      sliceFunction('_boTileIdentity')
+    ].join('\n'), ctx);
+    return ctx;
+  })();
+  const identify = (ev) => vm.runInContext('_boTileIdentity', identCtx)(ev);
+
+  it('a league tile is not draggable at all', () => {
+    // A league game belongs to the division; moving it for one bunk isn't a thing.
+    assert.equal(identify({ type: 'league', event: '7th Grade Leagues' }).draggable, false);
+    assert.equal(identify({ type: 'specialty_league', event: 'Hockey League' }).draggable, false);
+  });
+
+  it('a fixed tile is concrete and keeps its behaviour type', () => {
+    const id = identify({ type: 'swim', event: 'Swim', location: 'Pool' });
+    assert.equal(id.draggable, true);
+    assert.equal(id.concrete, true);
+    assert.equal(id.activity, 'Swim');
+    assert.equal(id.type, 'swim', 'must stay a swim so generation places it natively');
+    assert.equal(id.location, 'Pool');
+  });
+
+  it('a GA-backed fixed tile resolves through quickType', () => {
+    // Saved as a custom layer carrying quickType — same normalisation the solver does.
+    const id = identify({ type: 'custom', quickType: 'lunch', event: 'Lunch', location: 'Dining Room' });
+    assert.equal(id.concrete, true);
+    assert.equal(id.type, 'lunch');
+    assert.equal(id.location, 'Dining Room');
+  });
+
+  it('"Snack" (singular) still resolves to the snacks behaviour', () => {
+    assert.equal(identify({ type: 'custom', quickType: 'snack', event: 'Snack' }).type, 'snacks');
+  });
+
+  it('a named custom block is concrete and pins as a pinned activity', () => {
+    const id = identify({ type: 'custom', event: 'AVL', location: 'Slam Plex 1' });
+    assert.equal(id.concrete, true);
+    assert.equal(id.activity, 'AVL');
+    assert.equal(id.type, 'pinned');
+  });
+
+  it('customActivity wins over the display event name', () => {
+    assert.equal(identify({ type: 'custom', event: 'Pinned', customActivity: 'Gaga' }).activity, 'Gaga');
+  });
+
+  it('a trip keeps its own type', () => {
+    assert.equal(identify({ type: 'trip', event: 'Zoo Trip' }).type, 'trip');
+  });
+
+  // Placeholders: nothing to pin until the user says what the bunk should do.
+  for (const ev of [
+    { type: 'sports', event: 'Sports Slot' },
+    { type: 'activity', event: 'General Activity Slot' },
+    { type: 'special', event: 'Special Activity' },
+    { type: 'elective', event: 'Electives' },
+    { type: 'swim_elective', event: 'Special / Swim' }
+  ]) {
+    it(`"${ev.event}" is draggable but NOT concrete (drag opens the picker)`, () => {
+      const id = identify(ev);
+      assert.equal(id.draggable, true);
+      assert.equal(id.concrete, false, 'pinning a placeholder name would schedule garbage');
+    });
+  }
+
+  it('a nameless tile is treated as a placeholder', () => {
+    assert.equal(identify({ type: 'custom', event: '' }).concrete, false);
+  });
+
+  it('survives a missing/─null event object', () => {
+    assert.equal(identify(null).concrete, false);
+    assert.equal(identify(undefined).draggable, true);
   });
 });
