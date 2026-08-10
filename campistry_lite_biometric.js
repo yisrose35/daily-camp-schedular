@@ -42,12 +42,18 @@
 (function () {
     'use strict';
 
-    var CRED_KEY     = 'lite_bio_cred';      // credential id (base64)
-    var USER_KEY     = 'lite_bio_user';      // whose credential it is
-    var SESS_KEY     = 'lite_bio_session';   // tokens to restore after sign-out
-    var DECLINED_KEY = 'lite_bio_declined';  // don't nag after "Not now"
-    var PASS_KEY     = 'lite_bio_pass';      // sessionStorage — one-shot handoff
-    var PASS_TTL_MS  = 60000;                // generous for a slow cold boot
+    // One implementation, two apps. Campistry Link sets these before loading
+    // this file; Lite sets nothing and keeps its original key names exactly, so
+    // no already-enrolled device is disturbed.
+    var NS       = window.__CAMPISTRY_BIO_NS || 'lite';
+    var APP_NAME = window.__CAMPISTRY_BIO_APP || 'Campistry Lite';
+
+    var CRED_KEY     = NS + '_bio_cred';      // credential id (base64)
+    var USER_KEY     = NS + '_bio_user';      // whose credential it is
+    var SESS_KEY     = NS + '_bio_session';   // tokens to restore after sign-out
+    var DECLINED_KEY = NS + '_bio_declined';  // don't nag after "Not now"
+    var PASS_KEY     = NS + '_bio_pass';      // sessionStorage — one-shot handoff
+    var PASS_TTL_MS  = 60000;                 // generous for a slow cold boot
 
     var lastError = null;   // real cause of the last failed enrol/verify
 
@@ -154,11 +160,11 @@
     function enroll(email, name, userId) {
         return navigator.credentials.create({ publicKey: {
             challenge: randomBytes(32),
-            rp: { name: 'Campistry Lite' },   // rp.id omitted → current origin
+            rp: { name: APP_NAME },          // rp.id omitted → current origin
             user: {
                 id: randomBytes(16),
                 name: email || 'campistry',
-                displayName: name || email || 'Campistry user'
+                displayName: name || email || APP_NAME + ' user'
             },
             pubKeyCredParams: [{ type: 'public-key', alg: -7 }, { type: 'public-key', alg: -257 }],
             authenticatorSelection: {
@@ -208,7 +214,9 @@
         });
     }
 
-    window.CampistryLiteBio = {
+    // CampistryBio is the name to use; CampistryLiteBio is kept because Lite
+    // already refers to it in several places.
+    window.CampistryBio = window.CampistryLiteBio = {
         available: available,
         why: why,
         lastError: function () { return lastError; },

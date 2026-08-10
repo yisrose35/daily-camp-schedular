@@ -933,8 +933,12 @@ button { cursor: pointer; border: none; background: none; }
     mask: url('Campistry_logo.png') center / contain no-repeat;
 }
 
+/* Body font, not Fraunces. Everywhere else in Lite the serif display face is
+   the brand's voice, but on the sign-in screen it read as softer and less
+   assured than Link's sans — and this is the one screen whose job is to look
+   like a company. The two apps now share a wordmark treatment. */
 .lite-login-title {
-    font-family: var(--font-display); font-size: 2rem; font-weight: 700;
+    font-family: var(--font-body); font-size: 2rem; font-weight: 800;
     letter-spacing: -0.02em; line-height: 1.1; margin: 0; color: #fff;
 }
 .lite-login-title span { opacity: 0.82; }

@@ -1304,3 +1304,24 @@ body {
     color: rgba(255, 255, 255, 0.62);
 }
 .lk-login-foot strong { color: rgba(255, 255, 255, 0.9); font-weight: 700; }
+
+/* Password reveal. A parent typing a password on a phone keyboard, one-handed,
+   with a child on their hip, needs to be able to check what they typed. */
+.lk-login-wrap { position: relative; }
+.lk-login-wrap .lk-login-input { padding-right: 50px; }
+.lk-login-eye {
+    position: absolute; top: 50%; right: 6px; transform: translateY(-50%);
+    width: 40px; height: 40px; border: none; border-radius: 10px;
+    display: flex; align-items: center; justify-content: center;
+    background: none; color: rgba(255, 255, 255, 0.75); cursor: pointer;
+}
+.lk-login-eye svg { width: 19px; height: 19px; }
+.lk-login-eye[aria-pressed="true"] { color: #fff; }
+
+/* Unlock layout: mark and wordmark stay high, the actions sit in the middle of
+   the screen — thumb height, and the same shape as Lite's unlock screen.
+   :has() is well supported in both app WebViews; the fallback if it ever isn't
+   is simply the actions sitting under the wordmark, which is still usable. */
+.lk-auth-brand:has(.lk-login-unlock) { align-items: stretch !important; }
+.lk-login-unlock { display: flex; flex-direction: column; }
+.lk-login-unlock .lk-login-actions { margin-top: auto; margin-bottom: auto; }
