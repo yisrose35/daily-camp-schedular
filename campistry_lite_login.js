@@ -41,6 +41,9 @@
             sub.hidden = name === 'bio';
             sub.textContent = name === 'offer' ? 'You’re signed in' : 'Sign in to your camp';
         }
+        // Drives the unlock layout: mark stays top, actions centre. See
+        // .lite-login.is-bio in campistry_lite.css.
+        $('liteLogin').classList.toggle('is-bio', name === 'bio');
         $('liteLogin').style.display = '';
     }
 

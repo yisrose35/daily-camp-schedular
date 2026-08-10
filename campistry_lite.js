@@ -5262,16 +5262,34 @@
     // in 200ms and then sitting at full for two seconds; real progress stops it
     // gliding to 100% while the network hangs, which is the lie every fake
     // progress bar tells. Past the hold, only real progress is left.
-    function paintSplashFill() {
+    // Boot stages land in steps (6 → 28 → 50 → 64 …), so drawing the target
+    // directly meant the mark froze at a stage and then snapped to the next —
+    // which is what read as jank. The drawn value now EASES toward the target
+    // instead: each frame it closes a fixed proportion of the remaining gap, so
+    // a step arrives as a glide and a stall decelerates rather than stopping
+    // dead. Deliberately NOT a fake creep toward 100% — the ceiling is still
+    // real progress, so the mark never claims to be further along than it is.
+    let _splashShown = 0, _splashLastT = 0;
+    const SPLASH_EASE_MS = 190;   // time constant: lower is snappier
+
+    function paintSplashFill(now) {
         const el = document.getElementById('liteSplashLogo');
         if (!el) return;
         const timePct = sinceLaunch() / SPLASH_MIN_MS * 100;
-        const shown = Math.min(_splashPct, timePct);
-        el.style.setProperty('--fill', shown.toFixed(2) + '%');
-        el.setAttribute('aria-valuenow', String(Math.round(shown)));
+        const target = Math.min(_splashPct, timePct);
+
+        // Frame-rate independent: the same easing on 60Hz and 120Hz. Clamped so
+        // a backgrounded tab returning after seconds doesn't jump in one frame.
+        const dt = Math.min(64, _splashLastT ? now - _splashLastT : 16);
+        _splashLastT = now;
+        _splashShown += (target - _splashShown) * (1 - Math.exp(-dt / SPLASH_EASE_MS));
+        if (Math.abs(target - _splashShown) < 0.08) _splashShown = target;   // settle, don't crawl
+
+        el.style.setProperty('--fill', _splashShown.toFixed(2) + '%');
+        el.setAttribute('aria-valuenow', String(Math.round(_splashShown)));
     }
-    let _splashRaf = requestAnimationFrame(function tick() {
-        paintSplashFill();
+    let _splashRaf = requestAnimationFrame(function tick(now) {
+        paintSplashFill(now);
         _splashRaf = requestAnimationFrame(tick);
     });
 

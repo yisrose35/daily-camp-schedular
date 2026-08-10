@@ -211,10 +211,13 @@ button { cursor: pointer; border: none; background: none; }
 .lite-splash-logo {
     --fill: 0%;
     width: 184px; height: 88px;
+    /* The fill edge is feathered over a few percent rather than being a hard
+       line. A crisp boundary makes every sub-pixel step of the fill visible as
+       a stutter; a soft one reads as a rising level. */
     background: linear-gradient(to top,
         var(--accent) 0%,
-        var(--accent) var(--fill),
-        color-mix(in srgb, var(--ink) 20%, transparent) var(--fill),
+        var(--accent) calc(var(--fill) - 2%),
+        color-mix(in srgb, var(--ink) 20%, transparent) calc(var(--fill) + 3%),
         color-mix(in srgb, var(--ink) 20%, transparent) 100%);
     -webkit-mask: url('Lite_clean.png') center / contain no-repeat;
     mask: url('Lite_clean.png') center / contain no-repeat;
@@ -989,8 +992,16 @@ button { cursor: pointer; border: none; background: none; }
     color: #fff; font-size: 0.82rem; font-weight: 600;
 }
 
-/* The unlock pane hides the subtitle, and the subtitle was carrying the gap
-   under the wordmark — without this the button crowds the mark. */
+/* Unlock layout: the mark and wordmark stay high where they are, and the two
+   actions sit in the middle of the screen — thumb height, and it stops the
+   screen reading as a stack of things crowded under a logo. The inner column
+   stretches to full height so `margin: auto` can do the centring; the footer
+   is left to settle at the bottom. */
+.lite-login.is-bio { align-items: stretch; }
+.lite-login.is-bio .lite-login-inner { display: flex; flex-direction: column; }
+.lite-login.is-bio #liteBioPane { margin-top: auto; margin-bottom: auto; }
+/* Sign-in and offer panes keep the old flow; only the gap the hidden subtitle
+   used to carry needs replacing. */
 #liteBioPane { margin-top: 30px; }
 
 /* Biometric entry. Given the same weight as the password button because it is
