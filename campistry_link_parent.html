@@ -4756,6 +4756,13 @@ function _renderTipHistory(child) {
 
     window.lkExpandNav = function () {
         if (!els()) return;
+        // Animate to the REAL content height, not a fixed 58vh. With eleven
+        // items the content is far shorter than 58vh, so a fixed target spent
+        // most of the animation travelling through empty space and then
+        // stopped dead — which is what read as abrupt. Capped so a long list
+        // still cannot swallow the screen.
+        var cap = Math.round(window.innerHeight * 0.58);
+        sheet.style.setProperty("--sheet-h", Math.min(sheet.scrollHeight + 8, cap) + "px");
         bar.classList.add("expanded");
         if (backdrop) backdrop.classList.add("show");
         if (grab) grab.setAttribute("aria-expanded", "true");

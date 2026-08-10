@@ -1420,29 +1420,59 @@ body {
 .lk-bnav.expanded .lk-bnav-grab span { width: 52px; background: var(--slate-400, #94A3B8); }
 
 .lk-bnav-sheet {
-    display: grid; grid-template-columns: repeat(4, 1fr); gap: 6px;
-    padding: 0 10px;
+    display: grid; grid-template-columns: repeat(4, 1fr);
+    /* Uniform rows, so labels of different lengths cannot stagger the grid. */
+    grid-auto-rows: 86px;
+    gap: 2px 0;
+    padding: 0 6px;
+    /* Sits under the tab row: the quick toggles stay the top line of the bar
+       and these rows appear beneath them as it grows. */
+    border-top: 1px solid var(--slate-100, #F1F5F9);
     /* Animating max-height keeps the bar anchored to the bottom while it grows;
-       animating height or transform would drag the tab row with it. */
+       animating height or transform would drag the tab row with it. --sheet-h is
+       set from JS to the real content height: animating to a fixed 58vh when the
+       content is shorter spends most of the duration travelling through empty
+       space, which is what made it feel like it snapped at the end. */
     max-height: 0; overflow: hidden;
-    transition: max-height 0.28s cubic-bezier(0.22, 1, 0.36, 1), opacity 0.2s ease;
+    transition: max-height 0.34s cubic-bezier(0.32, 0.72, 0, 1), opacity 0.22s ease 0.02s;
     opacity: 0;
 }
-.lk-bnav.expanded .lk-bnav-sheet { max-height: 58vh; overflow-y: auto; opacity: 1; padding-bottom: 10px; }
+.lk-bnav.expanded .lk-bnav-sheet {
+    max-height: var(--sheet-h, 58vh); overflow-y: auto; opacity: 1; padding-bottom: 8px;
+}
+/* The rows themselves rise in behind the height change, which reads as the
+   contents arriving rather than being revealed by a shutter. */
+.lk-bnav.expanded .lk-bsheet-item { animation: lkSheetItemIn 0.26s cubic-bezier(0.22, 1, 0.36, 1) both; }
+@keyframes lkSheetItemIn { from { opacity: 0; transform: translateY(6px); } to { opacity: 1; transform: none; } }
+@media (prefers-reduced-motion: reduce) {
+    .lk-bnav-sheet { transition: none; }
+    .lk-bnav.expanded .lk-bsheet-item { animation: none; }
+}
 
 .lk-bsheet-item {
-    display: flex; flex-direction: column; align-items: center; gap: 6px;
-    padding: 12px 4px 10px; border: none; border-radius: var(--radius-md);
+    display: flex; flex-direction: column; align-items: center; justify-content: flex-start;
+    gap: 7px; padding: 12px 2px 8px; border: none; border-radius: var(--radius-md);
     background: none; cursor: pointer;
-    font-family: inherit; font-size: 0.68rem; font-weight: 600; line-height: 1.2;
-    color: var(--text-muted); text-align: center;
+    font-family: inherit; font-size: 0.7rem; font-weight: 600; line-height: 1.15;
+    /* Full-strength label. These were --text-muted, which is right for a caption
+       under something else but made a screen of tappable destinations look
+       disabled — especially next to the tab row above, which is not muted. */
+    color: var(--slate-900); text-align: center;
+}
+/* One line, ellipsised. "Emergency Info" wrapping to two lines while its
+   neighbours stay on one is what made the rows look ragged. */
+.lk-bsheet-item > span:last-child {
+    display: block; width: 100%;
+    white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
 }
 .lk-bsheet-item:active { background: var(--slate-50, #F8FAFC); }
 .lk-bsheet-item.active { color: var(--link-color); }
 .lk-bsheet-icon {
-    width: 42px; height: 42px; border-radius: 12px;
+    width: 44px; height: 44px; border-radius: 13px; flex: none;
     display: flex; align-items: center; justify-content: center;
-    background: var(--slate-50, #F8FAFC);
+    /* Brand tint rather than grey-on-grey: a grey glyph in a grey box is what
+       read as dimmed. */
+    background: var(--link-tint); color: var(--link-color);
 }
 .lk-bsheet-item.active .lk-bsheet-icon { background: var(--md-primary-container); }
 .lk-bsheet-icon svg { width: 20px; height: 20px; }
