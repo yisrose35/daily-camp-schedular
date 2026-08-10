@@ -237,27 +237,46 @@ body {
    blobs or multi-stop gradients — M3 conveys depth through color and
    shape, not shine) */
 .lk-hero {
-    background: var(--link-color);
+    /* Was a flat fill. The same two-layer treatment as the sign-in screen —
+       a diagonal brand ramp plus a soft light behind the greeting — so the
+       first thing a parent sees matches the door they came through. An
+       implied light source is most of what separates a product surface from
+       a coloured box. */
+    background:
+        radial-gradient(120% 80% at 15% 0%, rgba(255, 255, 255, 0.16), rgba(255, 255, 255, 0) 60%),
+        linear-gradient(152deg, #1A8F49 0%, var(--link-color) 55%, #0F4A28 100%);
     border-radius: var(--radius-2xl);
-    padding: 32px 36px;
-    margin-bottom: 24px;
+    padding: 30px 32px 28px;
+    margin-bottom: 22px;
     color: white;
     position: relative;
+    overflow: hidden;
+    box-shadow: 0 12px 30px -14px rgba(6, 46, 24, 0.55);
+}
+/* Hairline top edge: catches the light like a real surface rather than
+   ending abruptly at the corner radius. */
+.lk-hero::after {
+    content: ""; position: absolute; inset: 0; border-radius: inherit;
+    box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.22);
+    pointer-events: none;
 }
 .lk-hero-left { position: relative; z-index: 1; }
 .lk-hero-greeting {
-    font-size: 0.875rem;
-    font-weight: 400;
-    opacity: 0.9;
-    margin-bottom: 4px;
+    font-size: 0.78rem;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.09em;
+    opacity: 0.72;
+    margin-bottom: 6px;
 }
 .lk-hero-title {
     font-family: var(--font-display);
-    font-size: 1.75rem;
-    font-weight: 500;
+    font-size: 1.8rem;
+    /* 500 read tentative at this size against a saturated fill. */
+    font-weight: 700;
     color: white;
     margin-bottom: 4px;
-    letter-spacing: 0;
+    letter-spacing: -0.02em;
 }
 .lk-hero-title span { font-weight: 700; }
 .lk-hero-sub {
@@ -769,7 +788,10 @@ body {
     transition: box-shadow 0.25s var(--ease-out, cubic-bezier(0.16,1,0.3,1)), transform 0.25s var(--ease-out, cubic-bezier(0.16,1,0.3,1)), border-color 0.25s ease;
     font-family: var(--font-body);
     text-align: left;
-    min-height: 152px;
+    /* Was 152px with the icon pushed to the top by margin-bottom:auto, which
+       left a large empty band through the middle of every tile. Sized to its
+       content instead, with a floor that keeps the grid even. */
+    min-height: 118px;
     grid-column: span 1;
     overflow: hidden;
 }
@@ -777,7 +799,13 @@ body {
     box-shadow: var(--shadow-md);
     background: var(--md-surface-container-high);
 }
-.lk-home-tile:active { background: var(--md-surface-container-high); }
+/* A tile that only changes colour on press feels like a link; one that gives
+   under the finger feels like a control. */
+.lk-home-tile:active {
+    background: var(--md-surface-container-high);
+    transform: scale(0.985);
+    box-shadow: var(--shadow-sm);
+}
 .lk-home-tile-icon {
     width: 46px; height: 46px;
     border-radius: var(--radius-md);
@@ -785,10 +813,10 @@ body {
     display: flex; align-items: center; justify-content: center;
     color: var(--acc-1, var(--link-color));
     flex-shrink: 0;
-    margin-bottom: auto;
+    /* No margin-bottom:auto — that is what stretched the gap. */
 }
 .lk-home-tile-icon svg { width: 21px; height: 21px; }
-.lk-home-tile-body { display: flex; flex-direction: column; gap: 2px; padding-top: 16px; width: 100%; }
+.lk-home-tile-body { display: flex; flex-direction: column; gap: 3px; padding-top: 14px; margin-top: auto; width: 100%; }
 .lk-home-tile-label { font-family: var(--font-display); font-size: 1.02rem; font-weight: 600; color: var(--slate-900); line-height: 1.2; }
 .lk-home-tile-sub { font-size: 0.77rem; color: var(--slate-400); font-weight: 500; }
 /* Per-feature identity colors */
@@ -818,9 +846,21 @@ body {
     min-height: 172px;
     padding: 26px 24px 22px;
 }
+/* The wide tiles lay the icon beside the text instead of above it. Stacked,
+   a full-width tile left two thirds of its own width empty, which is what made
+   the top of the screen feel unfinished. */
+.lk-home-tile.featured { flex-direction: row; align-items: center; gap: 16px; }
+.lk-home-tile.featured .lk-home-tile-body { padding-top: 0; margin-top: 0; }
 .lk-home-tile.featured .lk-home-tile-icon { width: 52px; height: 52px; }
 .lk-home-tile.featured .lk-home-tile-icon svg { width: 24px; height: 24px; }
 .lk-home-tile.featured .lk-home-tile-label { font-size: 1.15rem; }
+/* The two large tiles carry the figures a parent opens the app to check —
+   a balance, whether anything is waiting. At caption size they were the
+   smallest thing on the biggest tile. */
+.lk-home-tile.featured .lk-home-tile-sub {
+    font-size: 1.02rem; font-weight: 700; color: var(--slate-700);
+    letter-spacing: -0.01em; margin-top: 1px;
+}
 .lk-home-tile-badge {
     position: absolute; top: 14px; right: 14px;
     min-width: 22px; height: 22px;
@@ -1099,11 +1139,11 @@ body {
     .lk-page-header h1 { font-size: 1.2rem; }
     .lk-camp-name { display: none; }
     .channel-btns { flex-direction: column; }
-    .lk-hero { padding: 28px 24px; border-radius: var(--radius-lg); }
+    .lk-hero { padding: 24px 22px 22px; border-radius: var(--radius-xl); }
     .lk-hero-title { font-size: 1.55rem; }
     .lk-home-grid { grid-template-columns: repeat(2, 1fr); gap: 12px; }
-    .lk-home-tile { min-height: 140px; padding: 18px 16px; grid-column: span 1; }
-    .lk-home-tile.featured { grid-column: span 2; min-height: 150px; }
+    .lk-home-tile { min-height: 112px; padding: 16px 15px; grid-column: span 1; }
+    .lk-home-tile.featured { grid-column: span 2; min-height: 124px; }
 }
 @media (max-width: 480px) {
     .lk-stats { grid-template-columns: 1fr; }
