@@ -1094,6 +1094,46 @@
                             done = true;
                             log('[CROSS-EXCHANGE] ' + A + ' gets ' + X.name + ' at its open "' + sub + '" window ' + minutesToTimeLabel(rec.startMin) + '-' + minutesToTimeLabel(rec.endMin) + ' — holder ' + B + ' moved its ' + X.name + ' ' + minutesToTimeLabel(yS) + '→' + minutesToTimeLabel(Y._startMin) + ' (swapped with ' + (Z._activity || Z.field) + (zRe ? ', re-sported to ' + zRe : '') + '); both bunks stay wall-to-wall');
                         }
+                        // ★ HOLE-RELOCATION (stuck-holder fallback): no equal-length swap
+                        //   partner exists inside B — but B may have an OPEN gap Y fits into.
+                        //   Moving Y there frees the seat for A with no partner, and coverage
+                        //   strictly improves (B's dead gap absorbs Y; live: 22 holders were
+                        //   "stuck" on a day with 1550min of open time). Subcat-strict: never
+                        //   relocate INTO a span overlapping a reserved open record of B.
+                        if (!done && Y) {
+                            var _hrCov = liveB.slice().sort(function (p, q) { return p._startMin - q._startMin; });
+                            var _hrS = _hrCov.length ? _hrCov[0]._startMin : 0, _hrE = _hrCov.length ? _hrCov[_hrCov.length - 1]._endMin : 0;
+                            var _hrGaps = [], _hrCur = _hrS;
+                            _hrCov.forEach(function (r) { if (r._startMin - _hrCur >= yDur) _hrGaps.push([_hrCur, r._startMin]); if (r._endMin > _hrCur) _hrCur = r._endMin; });
+                            if (_hrE - _hrCur >= yDur) _hrGaps.push([_hrCur, _hrE]);
+                            var _hrOpen = (typeof window !== 'undefined' && Array.isArray(window.__genOpenSlots)) ? window.__genOpenSlots : [];
+                            var _hrTmplB = liveB.filter(function (r) { return r !== Y; })
+                                .map(function (r) { return { type: r.type, event: r._activity || r.field, sport: r.sport, startMin: r._startMin, endMin: r._endMin, _assignedSpecial: r.type === 'special' ? r._activity : undefined }; });
+                            for (var _hg = 0; _hg < _hrGaps.length && !done; _hg++) {
+                                var _anchors = [_hrGaps[_hg][0], _hrGaps[_hg][1] - yDur];
+                                for (var _ha = 0; _ha < _anchors.length && !done; _ha++) {
+                                    if (_ha === 1 && _anchors[1] === _anchors[0]) continue;
+                                    var hs = _anchors[_ha], he = hs + yDur;
+                                    if (hs < _hrGaps[_hg][0] || he > _hrGaps[_hg][1]) continue;
+                                    var _hrRes = false;
+                                    for (var _ho = 0; _ho < _hrOpen.length; _ho++) {
+                                        var _og = _hrOpen[_ho];
+                                        if (_og && String(_og.bunk) === String(B) && _og.startMin < he && _og.endMin > hs) { _hrRes = true; break; }
+                                    }
+                                    if (_hrRes) continue;
+                                    if (!_cxLegal({ type: 'special', event: X.name, _assignedSpecial: X.name, _specialLocation: X.name, startMin: hs, endMin: he }, _hrTmplB)) continue;
+                                    var _hrUse = _cxBusy(X.name, hs, he, B, Y._startMin) + ((rec.startMin < he && rec.endMin > hs) ? 1 : 0);
+                                    if (_cxCapOf(X) - _hrUse < 1) continue;
+                                    var yS2 = Y._startMin, yE2 = Y._endMin;
+                                    if (!fillA(X, { holder: B, yFrom: [yS2, yE2], yTo: [hs, he], zOrig: null, zRe: null })) { done = true; return; }
+                                    Y._startMin = hs; Y._endMin = he; Y._crossExchange = true;
+                                    _syncAlignedSlot(B, _cxGradeOf[B], arrB.indexOf(Y));
+                                    _cxC.exchanged++;
+                                    done = true;
+                                    log('[CROSS-EXCHANGE] ' + A + ' gets ' + X.name + ' at its open "' + sub + '" window ' + minutesToTimeLabel(rec.startMin) + '-' + minutesToTimeLabel(rec.endMin) + ' — holder ' + B + ' RELOCATED its ' + X.name + ' ' + minutesToTimeLabel(yS2) + '→' + minutesToTimeLabel(hs) + ' into its own open gap (no swap partner needed); coverage strictly improves');
+                                }
+                            }
+                        }
                         if (!done && Y) _cxC.holderStuck++;
                     });
                     if (!done) _cxC.noHolder++;
@@ -1157,7 +1197,7 @@
                                         var rb = arrB2[i3];
                                         if (!rb || !rb._crossExchange) continue;
                                         if (rb._activity === J.name && rb._startMin === J.yTo[0]) { rb._startMin = J.yFrom[0]; rb._endMin = J.yFrom[1]; delete rb._crossExchange; _syncAlignedSlot(J.holder, _cxGradeOf[J.holder], i3); }
-                                        else if (rb._startMin === J.yFrom[0] && rb._endMin === J.yFrom[1]) {
+                                        else if (J.zOrig && rb._startMin === J.yFrom[0] && rb._endMin === J.yFrom[1]) {
                                             rb._startMin = J.zOrig.s; rb._endMin = J.zOrig.e;
                                             if (J.zRe) { rb.field = J.zOrig.field; rb.sport = J.zOrig.sport; rb._activity = J.zOrig.activity; }
                                             delete rb._crossExchange;
