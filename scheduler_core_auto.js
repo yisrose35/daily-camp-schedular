@@ -982,7 +982,23 @@
             // undo journal for the validate-and-rollback settle check
             var _cxJournal = [];
             var _cxDateKey = (typeof window !== 'undefined' && (window._activeGenDate || window.currentScheduleDate)) || '';
-            _cxOpen.slice().forEach(function (rec) {
+            // ★ MOST-CONSTRAINED-FIRST: greedy first-fit loses matches on scarce days —
+            //   a flexible bunk can take the last seat of an activity that was some other
+            //   bunk's ONLY option. Order the windows by how few candidate activities
+            //   each has (fewest first), the classic bipartite-matching heuristic.
+            var _cxOrdered = _cxOpen.slice();
+            try {
+                var _cxCandCount = function (rec) {
+                    if (!rec || !rec.bunk) return 99;
+                    var sub0 = _cxCanon(rec.subcat), len0 = rec.endMin - rec.startMin, n = 0;
+                    var held = {};
+                    ((_cxSA[String(rec.bunk)]) || []).forEach(function (r) { if (r && r._activity) held[r._activity] = 1; });
+                    _cxSpecials.forEach(function (x) { if (_cxCanon(x.subcategory) === sub0 && !held[x.name] && _cxDursOf(x).indexOf(len0) >= 0) n++; });
+                    return n;
+                };
+                _cxOrdered.sort(function (a, b) { return _cxCandCount(a) - _cxCandCount(b); });
+            } catch (_eCxSort) {}
+            _cxOrdered.forEach(function (rec) {
                 if (!rec || !rec.bunk || rec._exchanged) return;
                 var A = String(rec.bunk);
                 var arrA = _cxSA[A];
