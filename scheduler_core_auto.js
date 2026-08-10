@@ -1155,8 +1155,59 @@
                     if (!done) _cxC.noHolder++;
                 });
             });
+            // ★ AUGMENT (bipartite matching, one-level): a window still stuck may be
+            //   blocked ONLY because an earlier fill took its activity's seat; if that
+            //   fill's bunk has an alternative for its own window, re-assign the fill
+            //   and give the freed activity to the stuck window. This recovers exactly
+            //   the matches greedy assignment loses.
+            var _cxAug = 0;
+            _cxOrdered.forEach(function (rec) {
+                if (!rec || rec._exchanged || !rec.bunk) return;
+                var A = String(rec.bunk); var arrA = _cxSA[A]; if (!Array.isArray(arrA)) return;
+                var sub = _cxCanon(rec.subcat); var len = rec.endMin - rec.startMin;
+                var liveA = arrA.filter(function (r) { return r && r._startMin != null; });
+                for (var _a1 = 0; _a1 < liveA.length; _a1++) { if (liveA[_a1]._startMin < rec.endMin && liveA[_a1]._endMin > rec.startMin) return; }
+                var mineA = {}; liveA.forEach(function (r) { mineA[String(r._activity || r.field)] = 1; });
+                var tmplA = _cxTmplOf(A, null);
+                var xs = _cxSpecials.filter(function (x) { return _cxCanon(x.subcategory) === sub && !mineA[x.name] && _cxDursOf(x).indexOf(len) >= 0; });
+                for (var xi = 0; xi < xs.length && !rec._exchanged; xi++) {
+                    var X = xs[xi];
+                    if (!_cxLegal({ type: 'special', event: X.name, _assignedSpecial: X.name, _specialLocation: X.name, startMin: rec.startMin, endMin: rec.endMin }, tmplA)) continue;
+                    for (var _jb = 0; _jb < _cxJournal.length && !rec._exchanged; _jb++) {
+                        var J = _cxJournal[_jb];
+                        if (J.name !== X.name || J.kind !== 'fill') continue;
+                        if (!(J.startMin < rec.endMin && J.endMin > rec.startMin)) continue;
+                        var B = String(J.bunk); if (B === A) continue;
+                        var arrB = _cxSA[B]; if (!Array.isArray(arrB)) continue;
+                        var fIdx = -1;
+                        for (var _k = 0; _k < arrB.length; _k++) { var rb0 = arrB[_k]; if (rb0 && rb0._crossExchange && rb0._activity === X.name && rb0._startMin === J.startMin) { fIdx = _k; break; } }
+                        if (fIdx < 0) continue;
+                        var subB = _cxCanon(J.recCopy && J.recCopy.subcat);
+                        var mineB = {}; arrB.forEach(function (r) { if (r && r._startMin != null) mineB[String(r._activity || r.field)] = 1; });
+                        var tmplB = _cxTmplOf(B, arrB[fIdx]);
+                        for (var yi = 0; yi < _cxSpecials.length; yi++) {
+                            var Y2 = _cxSpecials[yi];
+                            if (Y2.name === X.name || _cxCanon(Y2.subcategory) !== subB || mineB[Y2.name]) continue;
+                            if (_cxDursOf(Y2).indexOf(J.endMin - J.startMin) < 0) continue;
+                            if (_cxCapOf(Y2) - _cxBusy(Y2.name, J.startMin, J.endMin, B, J.startMin) < 1) continue;
+                            if (!_cxLegal({ type: 'special', event: Y2.name, _assignedSpecial: Y2.name, _specialLocation: Y2.name, startMin: J.startMin, endMin: J.endMin }, tmplB)) continue;
+                            var fb = arrB[fIdx];
+                            fb.field = Y2.name; fb._activity = Y2.name; fb._specialLocation = Y2.name;
+                            _syncAlignedSlot(B, _cxGradeOf[B], fIdx);
+                            J.name = Y2.name; J.cap = _cxCapOf(Y2);
+                            if (_appendAlignedSlot(A, _cxGradeOf[A], { field: X.name, sport: null, _activity: X.name, _startMin: rec.startMin, _endMin: rec.endMin, _fixed: true, _autoMode: true, _generic: false, continuation: false, type: 'special', _subcat: sub, _specialLocation: X.name, _crossExchange: true }) >= 0) {
+                                rec._exchanged = true;
+                                _cxJournal.push({ kind: 'fill', bunk: A, name: X.name, startMin: rec.startMin, endMin: rec.endMin, cap: _cxCapOf(X), recCopy: { bunk: rec.bunk, division: rec.division, startMin: rec.startMin, endMin: rec.endMin, subcat: rec.subcat, kind: rec.kind } });
+                                _cxAug++; _cxC.directFill++;
+                                log('[CROSS-EXCHANGE] AUGMENT: ' + A + ' gets ' + X.name + ' at ' + minutesToTimeLabel(rec.startMin) + '-' + minutesToTimeLabel(rec.endMin) + ' — ' + B + '\'s fill re-assigned to ' + Y2.name + ' (one-level augmenting swap; both windows stay filled)');
+                            }
+                            break;
+                        }
+                    }
+                }
+            });
             if (_cxC.records > 0) {
-                log('[CROSS-EXCHANGE] ' + (_cxC.directFill + _cxC.exchanged) + ' of ' + _cxC.records + ' open subcat window(s) resolved (' + _cxC.directFill + ' direct fill, ' + _cxC.exchanged + ' cross-bunk exchange' + (_cxC.exchanged === 1 ? '' : 's') + '; holders examined but stuck: ' + _cxC.holderStuck + ')');
+                log('[CROSS-EXCHANGE] ' + (_cxC.directFill + _cxC.exchanged) + ' of ' + _cxC.records + ' open subcat window(s) resolved (' + _cxC.directFill + ' direct fill, ' + _cxC.exchanged + ' cross-bunk exchange' + (_cxC.exchanged === 1 ? '' : 's') + (_cxAug ? '; ' + _cxAug + ' via augmenting swap' : '') + '; holders examined but stuck: ' + _cxC.holderStuck + ')');
             }
             if (_cxC.directFill + _cxC.exchanged > 0) {
                 try { window.__genOpenSlots = _cxOpen.filter(function (r) { return !(r && r._exchanged); }); } catch (_eCxP) {}
