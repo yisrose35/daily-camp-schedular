@@ -1080,7 +1080,10 @@ body {
 /* RESPONSIVE */
 @media (max-width: 768px) {
     .lk-sidebar { display: none; }
-    .lk-main { margin-left: 0; padding: 16px 14px calc(100px + env(safe-area-inset-bottom)); }
+    /* Top inset matters as much as the bottom one: Android 15 draws apps
+       edge-to-edge whether or not the status bar is asked to sit above the
+       WebView, so without this the hero runs under the clock and the icons. */
+    .lk-main { margin-left: 0; padding: calc(16px + env(safe-area-inset-top)) 14px calc(100px + env(safe-area-inset-bottom)); }
     .lk-bnav { display: block; }
     .lk-stats { grid-template-columns: 1fr 1fr; gap: 10px; }
     .lk-page-header h1 { font-size: 1.2rem; }

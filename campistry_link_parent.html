@@ -3516,7 +3516,10 @@ window.addEventListener('storage', function(e) {
     var Bio = window.CampistryBio || null;
 
     // The unlock screen: same canvas as sign-in, mark high, one action centred.
-    function _showBioUnlock(hasLiveSession, errorMsg) {
+    // autoPrompt is false when re-rendering after a failed or cancelled attempt.
+    // Re-prompting there trapped the user: cancel, the screen re-rendered, the
+    // prompt fired again, and "Use password instead" was never reachable.
+    function _showBioUnlock(hasLiveSession, errorMsg, autoPrompt) {
         var err = errorMsg ? '<div class="lk-login-err">'+_esc(errorMsg)+'</div>' : '';
         _showOverlay('parentAuthOverlay',
             '<div class="lk-login lk-login-unlock">' +
@@ -3528,6 +3531,7 @@ window.addEventListener('storage', function(e) {
             '<button class="lk-login-alt" onclick="parentUsePassword()">Use password instead</button>' +
             '</div></div>', 'brand');
         window.__paBioLive = !!hasLiveSession;
+        if (autoPrompt === false) return;
         // Let the brand screen paint before the system sheet slides over it.
         requestAnimationFrame(function () {
             requestAnimationFrame(function () { setTimeout(window.parentRunBio, 240); });
@@ -3548,9 +3552,12 @@ window.addEventListener('storage', function(e) {
             if (!ok) {
                 if (btn) btn.disabled = false;
                 var e = Bio.lastError() || '';
+                // autoPrompt=false: the user just dismissed it. Firing again
+                // would be arguing with them, and would hide the password route.
                 _showBioUnlock(window.__paBioLive,
-                    /NotAllowed|cancel/i.test(e) ? 'Not verified. Try again, or use your password.'
-                                                 : 'Could not verify. Use your password.');
+                    /NotAllowed|cancel/i.test(e) ? 'Not verified. Tap to try again, or use your password.'
+                                                 : 'Could not verify. Use your password.',
+                    false);
                 return;
             }
             _afterBioPass();

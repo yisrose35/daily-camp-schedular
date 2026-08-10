@@ -103,5 +103,10 @@
 <script src="campistry_bio_native.js"></script>
 <script src="campistry_lite_capacitor.js"></script>
 <script src="campistry_lite_login.js"></script>
+<!-- LAST, and load-bearing. This page IS index.html — the app's entry point —
+     so it is where a live update has to confirm it booted. Without it the
+     updater saw every launch that stopped at sign-in as a failed bundle and
+     rolled the app back to the version built into the APK. -->
+<script src="campistry_ota.js"></script>
 </body>
 </html>
