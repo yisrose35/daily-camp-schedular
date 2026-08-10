@@ -19,6 +19,35 @@
         }
     });
 
+    // ── Links that leave the bundle ───────────────────────────────────────
+    // The app bundles only the portal page, so a relative link to any other
+    // page ("Open in Notes →" in the quick-notes widget) would navigate the
+    // WebView to a file that isn't there — a dead end with no way back short
+    // of force-quitting. External https links (Venmo / PayPal / Cash App
+    // payment handoffs) shouldn't hijack the app's own WebView either.
+    // Both go to the system browser instead.
+    var WEB_ORIGIN = window.__CAMPISTRY_WEB_URL__ || 'https://campistry.org';
+    var BUNDLED_PAGES = ['index.html'];
+    document.addEventListener('click', function(e) {
+        var a = e.target && e.target.closest ? e.target.closest('a[href]') : null;
+        if (!a) return;
+        var href = a.getAttribute('href') || '';
+        if (!href || href.charAt(0) === '#' || /^(mailto|tel|sms|blob|data):/i.test(href)) return;
+
+        var url = null;
+        if (/^https?:\/\//i.test(href)) {
+            url = href;
+        } else if (/\.html($|[?#])/i.test(href)) {
+            var page = href.replace(/^\.?\//, '').split(/[?#]/)[0];
+            if (BUNDLED_PAGES.indexOf(page) !== -1) return;   // in-bundle nav: leave alone
+            url = WEB_ORIGIN + '/' + href.replace(/^\.?\//, '');
+        } else {
+            return;   // file downloads etc. — leave to the WebView delegate
+        }
+        e.preventDefault();
+        if (Plugins.Browser) Plugins.Browser.open({ url: url }).catch(function() {});
+    }, true);
+
     // ── Deep links (parent invite links opened from an email/SMS) ──────────
     // A universal link / app link / custom scheme URL like
     // https://link.campistry.app/invite?token=XXXX or campistrylink://invite?token=XXXX
