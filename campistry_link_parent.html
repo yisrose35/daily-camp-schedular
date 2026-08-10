@@ -2982,27 +2982,41 @@ window.addEventListener('storage', function(e) {
     var SPIN_CSS = '@keyframes _pa_spin{to{transform:rotate(360deg)}}';
     (function(){var s=document.createElement('style');s.textContent=SPIN_CSS;document.head.appendChild(s);})();
 
-    function _showOverlay(id, html) {
+    // variant 'brand' swaps the plain white sheet for the green sign-in canvas.
+    // Scoped rather than global so the screens that still expect a white
+    // background keep working until they're brought across too.
+    function _showOverlay(id, html, variant) {
         var el = document.getElementById(id);
         if (!el) { el = document.createElement('div'); el.id = id; document.body.appendChild(el); }
         el.style.cssText = OVERLAY_CSS;
+        el.classList.toggle('lk-auth-brand', variant === 'brand');
         el.innerHTML = html;
         el.style.display = 'flex';
     }
     function _hideOverlay(id) {
         var el = document.getElementById(id); if (el) el.style.display = 'none';
     }
+    // Branded to match the sign-in screen it hands over to. It used to be a
+    // white sheet, so opening the app flashed white and then jumped to green.
     function _showLoading(msg) {
         _showOverlay('parentAuthOverlay',
-            '<div style="text-align:center;">' +
-            '<img src="Link_clean.png" style="height:44px;display:block;margin:0 auto 20px;">' +
-            '<div style="width:28px;height:28px;border:3px solid #E2E8F0;border-top-color:#3B82F6;border-radius:50%;animation:_pa_spin .7s linear infinite;margin:0 auto 14px;"></div>' +
-            '<p style="font-size:.82rem;color:#64748B;margin:0;">'+(msg||'Loading…')+'</p>' +
-            '</div>');
+            '<div class="lk-login">' +
+            '<div class="lk-login-badge"><span class="lk-login-mark" role="img" aria-label="Campistry"></span></div>' +
+            '<h1 class="lk-login-title">Campistry <span>Link</span></h1>' +
+            '<div style="width:26px;height:26px;border:3px solid rgba(255,255,255,0.28);border-top-color:#fff;border-radius:50%;animation:_pa_spin .7s linear infinite;margin:26px auto 14px;"></div>' +
+            '<p class="lk-login-sub" style="margin:0;">'+(msg||'Loading…')+'</p>' +
+            '</div>', 'brand');
     }
     function _setMsg(msg, color) {
         var el = document.getElementById('paMsg');
-        if (el) { el.textContent = msg; el.style.color = color || '#EF4444'; }
+        if (!el) return;
+        el.textContent = msg;
+        // On the green sign-in canvas the slate/red inline colours are close to
+        // unreadable, so let the stylesheet own it there: white for progress,
+        // a pale rose for errors.
+        var onBrand = !!el.closest('.lk-auth-brand');
+        if (onBrand) el.style.color = color ? 'rgba(255,255,255,0.9)' : '#FFD9DC';
+        else el.style.color = color || '#EF4444';
     }
     function _esc(s) { return String(s||'').replace(/&/g,'&amp;').replace(/"/g,'&quot;').replace(/</g,'&lt;'); }
 
@@ -3412,20 +3426,24 @@ window.addEventListener('storage', function(e) {
     // ── Auth screens ──────────────────────────────────────────────────────────
     function _showSignIn(prefillEmail, errorMsg) {
         var ev = prefillEmail || '';
-        var err = errorMsg ? '<div style="background:#FEF2F2;border:1px solid #FECACA;border-radius:8px;padding:10px 14px;font-size:.82rem;color:#EF4444;margin-bottom:14px;">'+_esc(errorMsg)+'</div>' : '';
+        var err = errorMsg ? '<div class="lk-login-err">'+_esc(errorMsg)+'</div>' : '';
+        // Same front door as Campistry Lite, in Link's green — see the
+        // "Parent sign-in" block in campistry_link.css.
         _showOverlay('parentAuthOverlay',
-            '<div style="width:100%;max-width:380px;">' +
-            '<div style="text-align:center;margin-bottom:24px;"><img src="Link_clean.png" style="height:48px;margin-bottom:12px;display:block;margin-left:auto;margin-right:auto;"><h2 style="font-size:1.15rem;font-weight:700;color:#0F172A;margin:0 0 4px;">Parent Portal</h2><p style="font-size:.83rem;color:#64748B;margin:0;">Sign in to access your camp portal</p></div>' +
+            '<div class="lk-login">' +
+            '<div class="lk-login-badge"><span class="lk-login-mark" role="img" aria-label="Campistry"></span></div>' +
+            '<h1 class="lk-login-title">Campistry <span>Link</span></h1>' +
+            '<p class="lk-login-sub">Sign in to your camp portal</p>' +
             err +
-            '<div style="margin-bottom:12px;"><label style="font-size:.78rem;font-weight:600;color:#475569;display:block;margin-bottom:5px;">Email</label><input id="paEmail" type="email" value="'+_esc(ev)+'" placeholder="your@email.com" style="width:100%;box-sizing:border-box;padding:10px 12px;border:1px solid #CBD5E1;border-radius:8px;font-size:.9rem;outline:none;" onkeydown="if(event.key===\'Enter\')document.getElementById(\'paPass\').focus()"></div>' +
-            '<div style="margin-bottom:18px;"><label style="font-size:.78rem;font-weight:600;color:#475569;display:block;margin-bottom:5px;">Password</label><input id="paPass" type="password" placeholder="••••••••" style="width:100%;box-sizing:border-box;padding:10px 12px;border:1px solid #CBD5E1;border-radius:8px;font-size:.9rem;outline:none;" onkeydown="if(event.key===\'Enter\')parentSignIn()"></div>' +
-            '<button onclick="parentSignIn()" style="width:100%;padding:11px;background:#3B82F6;color:#fff;border:none;border-radius:8px;font-size:.95rem;font-weight:600;cursor:pointer;margin-bottom:12px;">Sign In</button>' +
-            '<div id="paMsg" style="font-size:.8rem;color:#EF4444;text-align:center;min-height:18px;margin-bottom:12px;"></div>' +
-            '<div style="text-align:center;border-top:1px solid #F1F5F9;padding-top:16px;">' +
-            '<p style="font-size:.78rem;color:#94A3B8;margin:0 0 8px;">First time here? Sign up with the <strong>same email you gave your camp</strong> — your children connect automatically.</p>' +
-            '<button onclick="parentShowSignup()" style="background:none;border:1px solid #CBD5E1;border-radius:8px;padding:8px 20px;font-size:.82rem;color:#3B82F6;font-weight:600;cursor:pointer;">' + (urlToken ? 'Create account with invite' : 'Create account') + '</button>' +
-            '</div>' +
-            '</div>');
+            '<div class="lk-login-field"><label for="paEmail">Email address</label>' +
+            '<input class="lk-login-input" id="paEmail" type="email" value="'+_esc(ev)+'" inputmode="email" autocomplete="username" autocapitalize="none" autocorrect="off" spellcheck="false" onkeydown="if(event.key===\'Enter\')document.getElementById(\'paPass\').focus()"></div>' +
+            '<div class="lk-login-field"><label for="paPass">Password</label>' +
+            '<input class="lk-login-input" id="paPass" type="password" autocomplete="current-password" onkeydown="if(event.key===\'Enter\')parentSignIn()"></div>' +
+            '<button class="lk-login-go" onclick="parentSignIn()">Sign in</button>' +
+            '<div id="paMsg" class="lk-login-msg"></div>' +
+            '<button class="lk-login-alt" onclick="parentShowSignup()">' + (urlToken ? 'Create account with invite' : 'Create an account') + '</button>' +
+            '<p class="lk-login-foot">First time here? Sign up with the <strong>same email you gave your camp</strong> — your children connect automatically.</p>' +
+            '</div>', 'brand');
         setTimeout(function(){var f=document.getElementById('paEmail');if(f&&!ev)f.focus();else{var p=document.getElementById('paPass');if(p)p.focus();}},100);
     }
 
