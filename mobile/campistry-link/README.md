@@ -91,3 +91,24 @@ Currently `com.campistry.link` / "Campistry Link" (set in `capacitor.config.json
 and already propagated into `android/app/src/main/res/values/strings.xml` and
 `ios/App/App/Info.plist`). **Confirm this before your first store submission —
 the bundle ID can't be changed afterward without shipping as a new app.**
+
+## Shipping a change without a store release (live updates)
+
+The app bundles its web assets, so pushing to campistry.org does **not** change
+an installed app. To ship a web change to phones already out there, run the
+**"Mobile — OTA release"** workflow from the Actions tab. It builds the bundle
+with this same sync script, attaches it to a GitHub Release, and updates
+`ota/link.json`; `/api/ota` serves that manifest and each phone picks the bundle
+up on its next launch.
+
+- **Covers:** HTML, CSS, JS, images — anything in `www/`.
+- **Does not cover:** plugins, permissions, app icon, Capacitor config, or
+  anything else native. Those need a real store release. A phone on an older
+  native shell keeps running its built-in bundle, so this is safe, not silent.
+- **If a bundle is broken:** `campistry_ota.js` never confirms the boot, and the
+  updater rolls the phone back to the last working bundle by itself. Publish
+  again from a fixed commit to move forward.
+
+**Note when committing:** don't quote the CI skip token in a commit message —
+GitHub scans the whole message, not just the subject, and will silently skip
+the build.

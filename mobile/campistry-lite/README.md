@@ -41,6 +41,23 @@ and `.github/workflows/mobile-ios.yml`. Run either from the Actions tab.
 Capacitor 8's iOS project is Swift Package Manager-based, so there is no
 CocoaPods step and nothing about maintaining `ios/` requires macOS.
 
+## Shipping a change without a store release (live updates)
+
+The app bundles its web assets, so pushing to campistry.org does **not** change
+an installed app. To ship a web change to phones already out there, run the
+**"Mobile — OTA release"** workflow from the Actions tab. It builds the bundle
+with this same sync script, attaches it to a GitHub Release, and updates
+`ota/lite.json`; `/api/ota` serves that manifest and each phone picks the bundle
+up on its next launch.
+
+- **Covers:** HTML, CSS, JS, images — anything in `www/`.
+- **Does not cover:** plugins, permissions, app icon, Capacitor config, or
+  anything else native. Those need a real store release. A phone on an older
+  native shell keeps running its built-in bundle, so this is safe, not silent.
+- **If a bundle is broken:** `campistry_ota.js` never confirms the boot, and the
+  updater rolls the phone back to the last working bundle by itself. Publish
+  again from a fixed commit to move forward.
+
 ## Bundle-completeness check
 
 The native app **bundles** its web assets — there is no server to 404 against, so
