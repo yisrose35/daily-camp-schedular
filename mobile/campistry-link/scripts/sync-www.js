@@ -18,6 +18,7 @@ const FILES = [
     'campistry_link.css',
     'campistry_notes_quick.js',
     'campistry_link_capacitor.js',
+    'campistry_ota.js',            // live-update bundle confirmation
     // Face matching, for the camper headshot + photo-consent flow. These were
     // missing from the bundle until the reference check below caught them.
     'face_match_core.js',

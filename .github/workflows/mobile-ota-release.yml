@@ -1,0 +1,129 @@
+name: Mobile — OTA release
+
+# Publishes a live update to the installed apps WITHOUT a store release.
+#
+# What happens:
+#   1. Build the web bundle exactly as the app would (same sync-www.js, same
+#      completeness check — a bundle that would white-screen fails here).
+#   2. Zip it and attach it to a GitHub Release (free, CDN-backed, and it keeps
+#      multi-MB zips out of the git history).
+#   3. Write ota/<app>.json pointing at that zip and commit it.
+#   4. Vercel deploys the new manifest, /api/ota starts serving it, and each
+#      phone picks the bundle up on its next launch.
+#
+# ONLY ships web assets (HTML/CSS/JS/images). Native changes — plugins,
+# permissions, app icon, Capacitor config — need a real store release; a phone
+# running an older native shell will just keep running its built-in bundle.
+#
+# If a published bundle fails to boot, the app rolls itself back to the last
+# working one (the updater plugin waits for campistry_ota.js to confirm the
+# boot). To pull a bad release forward, run this again from a fixed commit.
+
+on:
+  workflow_dispatch:
+    inputs:
+      app:
+        description: Which app to publish
+        required: true
+        default: both
+        type: choice
+        options: [both, lite, link]
+
+permissions:
+  contents: write        # create releases and commit the manifest
+
+concurrency:
+  group: ota-release     # two releases racing would fight over the manifest commit
+  cancel-in-progress: false
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      max-parallel: 1    # both jobs commit to the same branch
+      matrix:
+        app: [lite, link]
+    steps:
+      - name: Skip unselected app
+        id: gate
+        run: |
+          if [ "${{ inputs.app }}" = "both" ] || [ "${{ inputs.app }}" = "${{ matrix.app }}" ]; then
+            echo "run=yes" >> "$GITHUB_OUTPUT"
+          else
+            echo "run=no" >> "$GITHUB_OUTPUT"
+          fi
+
+      - uses: actions/checkout@v4
+        if: steps.gate.outputs.run == 'yes'
+
+      - uses: actions/setup-node@v4
+        if: steps.gate.outputs.run == 'yes'
+        with:
+          node-version: 22
+
+      - name: Install Capacitor
+        if: steps.gate.outputs.run == 'yes'
+        working-directory: mobile/campistry-${{ matrix.app }}
+        run: npm ci --no-audit --no-fund || npm install --no-audit --no-fund
+
+      # Same script the app build uses, so what ships over the air is byte-for-byte
+      # what a store build would have contained — including the completeness check.
+      - name: Build web bundle
+        if: steps.gate.outputs.run == 'yes'
+        working-directory: mobile/campistry-${{ matrix.app }}
+        run: npm run sync:www
+
+      - name: Zip and publish
+        if: steps.gate.outputs.run == 'yes'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          APP: ${{ matrix.app }}
+        run: |
+          set -euo pipefail
+          # Version must differ from the last one for phones to take it, and
+          # from the native versionName ("1.0") so it is recognised as newer.
+          VERSION="1.0.${{ github.run_number }}"
+          TAG="ota-${APP}-${VERSION}"
+          ZIP="${APP}-${VERSION}.zip"
+
+          # Zip the CONTENTS of www (index.html must sit at the zip root).
+          ( cd "mobile/campistry-${APP}/www" && zip -qr "$GITHUB_WORKSPACE/$ZIP" . )
+          CHECKSUM=$(sha256sum "$ZIP" | cut -d' ' -f1)
+
+          gh release create "$TAG" "$ZIP" \
+            --title "OTA ${APP} ${VERSION}" \
+            --notes "Live update for Campistry ${APP} from ${GITHUB_SHA}. Web assets only." \
+            --repo "$GITHUB_REPOSITORY"
+
+          URL="https://github.com/${GITHUB_REPOSITORY}/releases/download/${TAG}/${ZIP}"
+
+          cat > "ota/${APP}.json" <<JSON
+          {
+            "app": "com.campistry.${APP}",
+            "version": "${VERSION}",
+            "url": "${URL}",
+            "checksum": "${CHECKSUM}",
+            "commit": "${GITHUB_SHA}",
+            "note": "Written by the 'Mobile - OTA release' workflow. Do not hand-edit."
+          }
+          JSON
+
+          echo "Published ${APP} ${VERSION}"
+          cat "ota/${APP}.json"
+
+      - name: Commit the manifest
+        if: steps.gate.outputs.run == 'yes'
+        run: |
+          set -euo pipefail
+          git config user.name  "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add "ota/${{ matrix.app }}.json"
+          if git diff --cached --quiet; then
+            echo "manifest unchanged, nothing to commit"
+            exit 0
+          fi
+          # [skip ci] so publishing an update doesn't kick off the app builds.
+          git commit -m "OTA: publish ${{ matrix.app }} 1.0.${{ github.run_number }} [skip ci]"
+          git pull --rebase origin "${GITHUB_REF_NAME}"
+          git push origin "HEAD:${GITHUB_REF_NAME}"

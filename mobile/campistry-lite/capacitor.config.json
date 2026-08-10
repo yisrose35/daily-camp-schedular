@@ -4,6 +4,12 @@
   "webDir": "www",
   "backgroundColor": "#F7F2EF",
   "plugins": {
+    "CapacitorUpdater": {
+      "updateUrl": "https://campistry.org/api/ota",
+      "autoUpdate": "onLaunch",
+      "appReadyTimeout": 20000,
+      "statsUrl": ""
+    },
     "SplashScreen": {
       "launchShowDuration": 1200,
       "launchAutoHide": true,
