@@ -34,6 +34,18 @@ on:
         required: false
         default: false
         type: boolean
+  # workflow_dispatch only appears once this file is on the default branch, so
+  # until then the push trigger is the only way to run it. Unsigned compile
+  # check only — the TestFlight path is always a deliberate manual dispatch.
+  push:
+    branches: [New-Features]
+    paths:
+      - 'mobile/**'
+      - 'campistry_lite*.js'
+      - 'campistry_lite*.html'
+      - 'campistry_link*.js'
+      - 'campistry_link*.html'
+      - '.github/workflows/mobile-ios.yml'
 
 jobs:
   build:
@@ -46,7 +58,7 @@ jobs:
       - name: Skip unselected app
         id: gate
         run: |
-          want='${{ inputs.app }}'
+          want='${{ github.event_name == 'workflow_dispatch' && inputs.app || 'both' }}'
           if [ "$want" = "both" ] || [ "$want" = "${{ matrix.app }}" ]; then
             echo "run=yes" >> "$GITHUB_OUTPUT"
           else
