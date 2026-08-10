@@ -5,7 +5,7 @@
   "backgroundColor": "#F7F2EF",
   "plugins": {
     "CapacitorUpdater": {
-      "updateUrl": "https://campistry.org/api/ota",
+      "updateUrl": "https://link.campistry.org/api/ota",
       "autoUpdate": "onLaunch",
       "appReadyTimeout": 20000,
       "statsUrl": ""
