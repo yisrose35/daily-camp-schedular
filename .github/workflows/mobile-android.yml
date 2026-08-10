@@ -86,9 +86,13 @@ jobs:
         working-directory: mobile/campistry-${{ matrix.app }}/android
         run: chmod +x ./gradlew && ./gradlew assembleDebug --no-daemon
 
+      # The commit sha is in the artifact name on purpose: `gh run list` right
+      # after a push still returns the PREVIOUS run, so it is easy to download
+      # a build that is one commit stale and not notice. With the sha here, the
+      # artifact you fetched either matches the commit you meant or it doesn't.
       - uses: actions/upload-artifact@v4
         if: steps.gate.outputs.run == 'yes'
         with:
-          name: campistry-${{ matrix.app }}-debug-apk
+          name: campistry-${{ matrix.app }}-debug-apk-${{ github.sha }}
           path: mobile/campistry-${{ matrix.app }}/android/app/build/outputs/apk/debug/*.apk
           if-no-files-found: error
