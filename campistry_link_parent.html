@@ -165,7 +165,28 @@
 </nav>
 
 <!-- BOTTOM NAV (Mobile) -->
-<div class="lk-bnav"><div class="lk-bnav-inner">
+<div class="lk-bnav-backdrop" id="lkBnavBackdrop" onclick="lkCollapseNav()"></div>
+<div class="lk-bnav" id="lkBnav">
+    <button class="lk-bnav-grab" id="lkBnavGrab" aria-label="Show all sections" aria-expanded="false" onclick="lkToggleNav()"><span></span></button>
+    <div class="lk-bnav-sheet" id="lkBnavSheet">
+        <button class="lk-bsheet-item" data-page="home" onclick="lkNavFromSheet('home')"><span class="lk-bsheet-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="7" height="7"/><rect x="14" y="3" width="7" height="7"/><rect x="14" y="14" width="7" height="7"/><rect x="3" y="14" width="7" height="7"/></svg></span><span>Home</span></button>
+        <button class="lk-bsheet-item" data-page="children" onclick="lkNavFromSheet('children')"><span class="lk-bsheet-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/></svg></span><span>My Children</span></button>
+        <button class="lk-bsheet-item" data-page="payments" onclick="lkNavFromSheet('payments')"><span class="lk-bsheet-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="1" y="4" width="22" height="16" rx="2"/><line x1="1" y1="10" x2="23" y2="10"/></svg></span><span>Payments</span></button>
+        <button class="lk-bsheet-item" data-page="canteen" onclick="lkNavFromSheet('canteen')"><span class="lk-bsheet-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M18 8h1a4 4 0 0 1 0 8h-1"/><path d="M2 8h16v9a4 4 0 0 1-4 4H6a4 4 0 0 1-4-4V8z"/></svg></span><span>Canteen</span></button>
+        <button class="lk-bsheet-item" data-page="shop" onclick="lkNavFromSheet('shop')"><span class="lk-bsheet-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M6 2L3 6v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2V6l-3-4z"/><line x1="3" y1="6" x2="21" y2="6"/><path d="M16 10a4 4 0 0 1-8 0"/></svg></span><span>Camp Shop</span></button>
+        <button class="lk-bsheet-item" data-page="tips" onclick="lkNavFromSheet('tips')"><span class="lk-bsheet-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><path d="M16 8h-6a2 2 0 1 0 0 4h4a2 2 0 1 1 0 4H8"/><line x1="12" y1="6" x2="12" y2="8"/><line x1="12" y1="16" x2="12" y2="18"/></svg></span><span>Tips</span></button>
+        <button class="lk-bsheet-item" data-page="messages" onclick="lkNavFromSheet('messages')"><span class="lk-bsheet-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg></span><span>Messages</span></button>
+        <button class="lk-bsheet-item" data-page="mail" onclick="lkNavFromSheet('mail')"><span class="lk-bsheet-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 4h16c1.1 0 2 .9 2 2v12c0 1.1-.9 2-2 2H4c-1.1 0-2-.9-2-2V6c0-1.1.9-2 2-2z"/><polyline points="22,6 12,13 2,6"/></svg></span><span>Camper Mail</span></button>
+        <button class="lk-bsheet-item" data-page="schedule" onclick="lkNavFromSheet('schedule')"><span class="lk-bsheet-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="4" width="18" height="18" rx="2"/><line x1="16" y1="2" x2="16" y2="6"/><line x1="8" y1="2" x2="8" y2="6"/><line x1="3" y1="10" x2="21" y2="10"/></svg></span><span>Schedule</span></button>
+        <button class="lk-bsheet-item" data-page="forms" onclick="lkNavFromSheet('forms')"><span class="lk-bsheet-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/></svg></span><span>Forms & Docs</span></button>
+        <button class="lk-bsheet-item" data-page="lists" onclick="lkNavFromSheet('lists')"><span class="lk-bsheet-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="8" y1="6" x2="21" y2="6"/><line x1="8" y1="12" x2="21" y2="12"/><line x1="8" y1="18" x2="21" y2="18"/><polyline points="3 6 4 7 6 5"/><polyline points="3 12 4 13 6 11"/><polyline points="3 18 4 19 6 17"/></svg></span><span>Lists</span></button>
+        <button class="lk-bsheet-item" data-page="photos" onclick="lkNavFromSheet('photos')"><span class="lk-bsheet-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="8.5" cy="8.5" r="1.5"/><polyline points="21 15 16 10 5 21"/></svg></span><span>Photos</span></button>
+        <button class="lk-bsheet-item" data-page="pickup" onclick="lkNavFromSheet('pickup')"><span class="lk-bsheet-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M5 17H3a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11a2 2 0 0 1 2 2v3"/><rect x="9" y="11" width="14" height="10" rx="2"/><circle cx="12" cy="16" r="1"/></svg></span><span>Pickup & Arrival</span></button>
+        <button class="lk-bsheet-item" data-page="health" onclick="lkNavFromSheet('health')"><span class="lk-bsheet-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M22 12h-4l-3 9L9 3l-3 9H2"/></svg></span><span>Health</span></button>
+        <button class="lk-bsheet-item" data-page="emergency" onclick="lkNavFromSheet('emergency')"><span class="lk-bsheet-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"/><line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg></span><span>Emergency Info</span></button>
+        <button class="lk-bsheet-item" data-page="settings" onclick="lkNavFromSheet('settings')"><span class="lk-bsheet-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg></span><span>Settings</span></button>
+    </div>
+    <div class="lk-bnav-inner">
     <button class="lk-bnav-item active" data-page="home" onclick="nav('home')"><span class="lk-bnav-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="7" height="7"/><rect x="14" y="3" width="7" height="7"/><rect x="14" y="14" width="7" height="7"/><rect x="3" y="14" width="7" height="7"/></svg></span><span class="lk-bnav-label">Home</span></button>
     <button class="lk-bnav-item" data-page="pickup" onclick="nav('pickup')"><span class="lk-bnav-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M5 17H3a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11a2 2 0 0 1 2 2v3"/><rect x="9" y="11" width="14" height="10" rx="2"/><circle cx="12" cy="16" r="1"/></svg></span><span class="lk-bnav-label">Transport</span></button>
     <button class="lk-bnav-item" data-page="photos" onclick="nav('photos')"><span class="lk-bnav-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="8.5" cy="8.5" r="1.5"/><polyline points="21 15 16 10 5 21"/></svg></span><span class="lk-bnav-label">Photos</span></button>
@@ -4718,6 +4739,90 @@ function _renderTipHistory(child) {
 }
 </script>
 <!-- LAST: confirms this bundle booted, so the live-update rollback works. -->
+
+<script>
+// ── Expandable bottom nav ────────────────────────────────────────────────
+// Drag up on the bar to see every section without going Home first. The drag
+// follows your finger rather than firing on release, so it reads as pulling a
+// sheet rather than triggering a hidden gesture.
+(function () {
+    var bar, sheet, backdrop, grab;
+    var startY = null, dragging = false, wasExpanded = false;
+    var THRESHOLD = 34;   // px of intent before it commits either way
+
+    function els() {
+        bar = bar || document.getElementById("lkBnav");
+        sheet = sheet || document.getElementById("lkBnavSheet");
+        backdrop = backdrop || document.getElementById("lkBnavBackdrop");
+        grab = grab || document.getElementById("lkBnavGrab");
+        return bar && sheet;
+    }
+
+    window.lkExpandNav = function () {
+        if (!els()) return;
+        bar.classList.add("expanded");
+        if (backdrop) backdrop.classList.add("show");
+        if (grab) grab.setAttribute("aria-expanded", "true");
+        _markActiveSheetItem();
+        if (window.CampistryHaptics) window.CampistryHaptics.impact("medium");
+    };
+    window.lkCollapseNav = function () {
+        if (!els()) return;
+        bar.classList.remove("expanded");
+        if (backdrop) backdrop.classList.remove("show");
+        if (grab) grab.setAttribute("aria-expanded", "false");
+    };
+    window.lkToggleNav = function () {
+        if (!els()) return;
+        if (bar.classList.contains("expanded")) window.lkCollapseNav();
+        else window.lkExpandNav();
+    };
+    // Navigate, then close — leaving it open would cover the page just opened.
+    window.lkNavFromSheet = function (page) {
+        window.lkCollapseNav();
+        if (typeof nav === "function") nav(page);
+    };
+
+    function _markActiveSheetItem() {
+        var current = document.querySelector(".lk-page.active");
+        var id = current ? String(current.id || "").replace(/^page-/, "") : "";
+        document.querySelectorAll(".lk-bsheet-item").forEach(function (b) {
+            b.classList.toggle("active", b.dataset.page === id);
+        });
+    }
+
+    // Listen on the bar itself: the tab row and the grab handle are both inside
+    // it, so an upward drag anywhere along the bar opens the sheet.
+    document.addEventListener("touchstart", function (e) {
+        if (!els()) return;
+        var inBar = e.target.closest && e.target.closest(".lk-bnav");
+        if (!inBar) return;
+        startY = e.touches[0].clientY;
+        wasExpanded = bar.classList.contains("expanded");
+        dragging = false;
+    }, { passive: true });
+
+    document.addEventListener("touchmove", function (e) {
+        if (startY === null || !els()) return;
+        var dy = startY - e.touches[0].clientY;   // positive = upward
+        // An expanded sheet scrolls internally; only treat a downward drag
+        // from the top of that scroll as a collapse, or the list fights the
+        // gesture every time someone scrolls it.
+        if (wasExpanded && sheet.scrollTop > 0 && dy < 0) return;
+        if (!dragging && Math.abs(dy) > 8) dragging = true;
+        if (!dragging) return;
+        if (!wasExpanded && dy > THRESHOLD) { window.lkExpandNav(); startY = null; }
+        else if (wasExpanded && dy < -THRESHOLD) { window.lkCollapseNav(); startY = null; }
+    }, { passive: true });
+
+    document.addEventListener("touchend", function () { startY = null; dragging = false; }, { passive: true });
+
+    // Escape closes it, same as the backdrop.
+    document.addEventListener("keydown", function (e) {
+        if (e.key === "Escape" && bar && bar.classList.contains("expanded")) window.lkCollapseNav();
+    });
+})();
+</script>
 <script src="campistry_ota.js"></script>
 </body>
 </html>

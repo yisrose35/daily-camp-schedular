@@ -1402,3 +1402,60 @@ body {
 }
 .lk-set-signout:active { background: var(--slate-50); }
 .lk-set-version { text-align: center; font-size: 0.72rem; color: var(--text-muted); margin: 16px 0 4px; }
+
+/* ─── Expandable bottom nav ───────────────────────────────────────────────
+   Five tabs cover the common destinations; the rest used to mean going Home
+   and picking a tile. Dragging up on the bar (or tapping the grab handle)
+   opens the full list in place, so you can cross the app from wherever you
+   are. Collapsed height is unchanged, so nothing moves until you ask it to. */
+.lk-bnav-grab {
+    display: none;                      /* shown with the bar, on mobile only */
+    width: 100%; padding: 9px 0 4px; border: none; background: none; cursor: grab;
+    -webkit-tap-highlight-color: transparent;
+}
+.lk-bnav-grab span {
+    display: block; width: 38px; height: 4px; margin: 0 auto; border-radius: 999px;
+    background: var(--slate-200, #E2E8F0); transition: background 0.15s ease, width 0.15s ease;
+}
+.lk-bnav.expanded .lk-bnav-grab span { width: 52px; background: var(--slate-400, #94A3B8); }
+
+.lk-bnav-sheet {
+    display: grid; grid-template-columns: repeat(4, 1fr); gap: 6px;
+    padding: 0 10px;
+    /* Animating max-height keeps the bar anchored to the bottom while it grows;
+       animating height or transform would drag the tab row with it. */
+    max-height: 0; overflow: hidden;
+    transition: max-height 0.28s cubic-bezier(0.22, 1, 0.36, 1), opacity 0.2s ease;
+    opacity: 0;
+}
+.lk-bnav.expanded .lk-bnav-sheet { max-height: 58vh; overflow-y: auto; opacity: 1; padding-bottom: 10px; }
+
+.lk-bsheet-item {
+    display: flex; flex-direction: column; align-items: center; gap: 6px;
+    padding: 12px 4px 10px; border: none; border-radius: var(--radius-md);
+    background: none; cursor: pointer;
+    font-family: inherit; font-size: 0.68rem; font-weight: 600; line-height: 1.2;
+    color: var(--text-muted); text-align: center;
+}
+.lk-bsheet-item:active { background: var(--slate-50, #F8FAFC); }
+.lk-bsheet-item.active { color: var(--link-color); }
+.lk-bsheet-icon {
+    width: 42px; height: 42px; border-radius: 12px;
+    display: flex; align-items: center; justify-content: center;
+    background: var(--slate-50, #F8FAFC);
+}
+.lk-bsheet-item.active .lk-bsheet-icon { background: var(--md-primary-container); }
+.lk-bsheet-icon svg { width: 20px; height: 20px; }
+
+.lk-bnav-backdrop {
+    display: none; position: fixed; inset: 0; z-index: 89;
+    background: rgba(15, 23, 42, 0.35);
+    opacity: 0; transition: opacity 0.24s ease;
+}
+.lk-bnav-backdrop.show { display: block; opacity: 1; }
+
+/* Matches where .lk-bnav itself becomes visible (768px). At 900px the
+   handle appeared on screens that have no bottom bar at all. */
+@media (max-width: 768px) {
+    .lk-bnav-grab { display: block; }
+}
