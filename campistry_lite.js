@@ -1422,6 +1422,7 @@
         const bioOn = !!(Bio && Bio.isEnabledFor(userId));
         const roleLabel = cap(role || 'viewer');
         const camp = campDisplayName ? esc(campDisplayName) : '';
+        const hapticOn = !window.CampistryHaptics || window.CampistryHaptics.enabled();
 
         v.innerHTML = `
             <div class="lite-settings-head">
@@ -1452,6 +1453,15 @@
                 <span class="lite-toggle${bioOn ? ' on' : ''}${bioAvail ? '' : ' disabled'}" id="liteBioToggle"></span>
             </div>
 
+            <div class="lite-set-section-label">Feedback</div>
+            <div class="lite-card lite-set-row" id="liteHapticRow">
+                <div class="lite-set-row-main">
+                    <div class="lite-set-row-title">Haptics</div>
+                    <div class="lite-set-row-sub">A short tap when you press something.</div>
+                </div>
+                <span class="lite-toggle${hapticOn ? ' on' : ''}" id="liteHapticToggle"></span>
+            </div>
+
             <div class="lite-set-section-label">Appearance</div>
             <div class="lite-card lite-set-row" style="display:block;">
                 <div class="lite-set-row-title" style="margin-bottom:9px;">Theme</div>
@@ -1471,6 +1481,11 @@
 
         v.querySelector('#liteSettingsBack').addEventListener('click', () => { if (history.state && history.state.liteSettings) history.back(); else { settingsOpen = false; goHome(); } });
         v.querySelector('#liteSettingsSignout').addEventListener('click', () => document.getElementById('liteSignOut').click());
+        v.querySelector('#liteHapticToggle')?.addEventListener('click', () => {
+            const next = !(window.CampistryHaptics && window.CampistryHaptics.enabled());
+            window.CampistryHaptics?.setEnabled(next);   // fires a tap when switching ON, so you feel what you chose
+            renderSettings();
+        });
         v.querySelectorAll('#liteThemeSeg .lite-seg-btn').forEach(b =>
             b.addEventListener('click', () => { haptic(); setColorScheme(b.dataset.val); renderSettings(); }));
 

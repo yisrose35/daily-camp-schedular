@@ -217,8 +217,18 @@ body {
 /* MAIN */
 .lk-main { margin-left: 244px; padding: 28px 32px 80px; min-height: calc(100vh - 64px); }
 .lk-page { display: none; }
+/* Opacity only — deliberately no transform. A transform on .lk-page makes it
+   the containing block for its position:fixed descendants, so the compose FAB
+   inside the Messages page rendered up in the page box for the length of the
+   animation and then snapped to the bottom of the screen. The rise now lives on
+   the page hero instead, which is not an ancestor of anything fixed. */
 .lk-page.active { display: block; animation: lkPageIn 0.35s var(--ease-out, cubic-bezier(0.16,1,0.3,1)); }
-@keyframes lkPageIn { from { opacity: 0; transform: translateY(6px); } to { opacity: 1; transform: translateY(0); } }
+@keyframes lkPageIn { from { opacity: 0; } to { opacity: 1; } }
+.lk-page.active .lk-page-hero { animation: lkHeroIn 0.35s var(--ease-out, cubic-bezier(0.16,1,0.3,1)); }
+@keyframes lkHeroIn { from { transform: translateY(6px); } to { transform: translateY(0); } }
+@media (prefers-reduced-motion: reduce) {
+    .lk-page.active, .lk-page.active .lk-page-hero { animation: none; }
+}
 .lk-page-header { margin-bottom: 22px; padding-bottom: 16px; border-bottom: 1px solid var(--slate-100); }
 .lk-page-header h1 { font-family: var(--font-display); font-size: 1.45rem; font-weight: 700; margin-bottom: 2px; color: var(--slate-900); }
 .lk-page-header p { font-size: 0.84rem; color: var(--slate-400); }

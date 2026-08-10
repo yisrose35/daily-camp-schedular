@@ -44,6 +44,7 @@ const FILES = [
     'campistry_lite_login.js',
     'campistry_lite_capacitor.js', // native glue; a no-op on the web
     'campistry_bio_native.js',     // shared native biometrics bridge
+    'campistry_haptics.js',        // shared haptics + the Settings preference
     'campistry_ota.js',            // live-update bundle confirmation
 
     'manifest_lite.webmanifest',
