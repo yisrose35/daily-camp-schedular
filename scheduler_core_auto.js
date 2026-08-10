@@ -982,6 +982,26 @@
             // undo journal for the validate-and-rollback settle check
             var _cxJournal = [];
             var _cxDateKey = (typeof window !== 'undefined' && (window._activeGenDate || window.currentScheduleDate)) || '';
+            // ★ CROSS-DAY LOOK-AHEAD: week-scope future-need per activity — how many
+            //   bunks have NOT had it this week (all bunks; the asking bunk shifts every
+            //   candidate equally so ordering is unaffected). Candidates are tried
+            //   lowest-need first: spend the activity few bunks can still use, preserve
+            //   the widely-needed ones for tomorrow. This steers the week-drain shape
+            //   that corners bunks by Tuesday. Fresh cache per generation.
+            var _laCache = {};
+            var _laNeed = function (nm) {
+                if (_laCache[nm] != null) return _laCache[nm];
+                var n = 0;
+                try {
+                    var U = (typeof window !== 'undefined') && window.SchedulerCoreUtils;
+                    if (U && typeof U.getPeriodActivityCount === 'function') {
+                        Object.keys(_cxSA).forEach(function (ob) {
+                            try { if ((U.getPeriodActivityCount(ob, nm, '1week', _cxDateKey) || 0) === 0) n++; } catch (_e) {}
+                        });
+                    }
+                } catch (_e2) {}
+                return (_laCache[nm] = n);
+            };
             // ★ MOST-CONSTRAINED-FIRST: greedy first-fit loses matches on scarce days —
             //   a flexible bunk can take the last seat of an activity that was some other
             //   bunk's ONLY option. Order the windows by how few candidate activities
@@ -1013,6 +1033,7 @@
                 liveA.forEach(function (r) { mineA[String(r._activity || r.field)] = 1; });
                 var xs = _cxSpecials.filter(function (x) { return _cxCanon(x.subcategory) === sub && !mineA[x.name] && _cxDursOf(x).indexOf(holeDur) >= 0; });
                 if (!xs.length) return;
+                try { if (xs.length > 1) xs.sort(function (a, b) { return _laNeed(a.name) - _laNeed(b.name); }); } catch (_eLaS) {}
                 var tmplA = _cxTmplOf(A, null);
                 var fillA = function (X, journalExtra) {
                     // index-sound write: the fill enters scheduleAssignments AND the
