@@ -1,7 +1,8 @@
 {
   "app": "com.campistry.link",
-  "version": "",
-  "url": "",
-  "checksum": "",
-  "note": "Written by the 'Mobile - OTA release' workflow. Empty = nothing published yet, apps run their built-in bundle."
+  "version": "1.0.1",
+  "url": "https://github.com/yisrose35/daily-camp-schedular/releases/download/ota-link-1.0.1/link-1.0.1.zip",
+  "checksum": "dcfe487cd52469c26011c241261de2ccbb611327661112425a096e48ac684334",
+  "commit": "60b52561bedc80f59a7ae949c458da0fa2755c7b",
+  "note": "Written by the 'Mobile - OTA release' workflow. Do not hand-edit."
 }
