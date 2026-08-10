@@ -20430,7 +20430,14 @@
                                     for (var i = 0; i < ranked.length; i++) {
                                         var dem = ranked[i].dem, q = (dem.qty || 0);
                                         if (kept + q <= deliverable) { kept += q; continue; }      // still within capacity → keep its floor
-                                        dem.qty = 0; demoted++;                                    // demote: drop the GUARANTEE, keep the cap (opportunistic)
+                                        // ★ SOFT demote (window.__softDemote !== false): qty 0 made the miss
+                                        //   SILENT — no tile, no open window, invisible to the score and
+                                        //   unfixable by the endgame (which iterates open records). Keep ONE
+                                        //   visible unit: it fills if the capacity model was pessimistic
+                                        //   (live: it said few deliverable, the endgame filled 28), else it
+                                        //   becomes an honest-open window the passes can still rescue.
+                                        if ((typeof window === 'undefined') || (window.__softDemote !== false)) { dem.qty = Math.min(q, 1); dem._reconcileSoft = true; demoted++; }
+                                        else { dem.qty = 0; demoted++; }
                                     }
                                     try { log('[GENERIC-RECONCILE] ' + cat + ': demand floor ' + totalFloor + ' > deliverable ' + deliverable + ' (' + g.seats + ' seat' + (g.seats === 1 ? '' : 's') + ' × ' + slots + ' session' + (slots === 1 ? '' : 's') + '/day @' + g.repDur + 'min) → kept floors for ' + (g.entries.length - demoted) + ' most-owed bunk(s), demoted ' + demoted + ' to opportunistic (cap kept)'); } catch (_e) {}
                                 });
