@@ -1,0 +1,94 @@
+name: Mobile — Android build
+
+# Builds installable Android APKs for the two Campistry mobile apps.
+# Runs on Linux (no Android Studio, no local JDK/SDK needed), so a
+# Windows-only workstation can still produce a build to sideload for testing.
+#
+# Download the APK from the run's "Artifacts" section, open it on an Android
+# phone, and allow install-from-unknown-sources when prompted.
+
+on:
+  workflow_dispatch:
+    inputs:
+      app:
+        description: Which app to build
+        required: true
+        default: both
+        type: choice
+        options: [both, lite, link]
+  push:
+    branches: [New-Features]
+    paths:
+      - 'mobile/**'
+      - 'campistry_lite*.js'
+      - 'campistry_lite*.html'
+      - 'campistry_lite.css'
+      - 'campistry_link*.js'
+      - 'campistry_link*.html'
+      - 'campistry_link.css'
+      - 'campistry-unified.css'
+      - 'config.js'
+      - '.github/workflows/mobile-android.yml'
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        app: [lite, link]
+    steps:
+      - name: Skip unselected app
+        id: gate
+        run: |
+          want='${{ github.event_name == 'workflow_dispatch' && inputs.app || 'both' }}'
+          if [ "$want" = "both" ] || [ "$want" = "${{ matrix.app }}" ]; then
+            echo "run=yes" >> "$GITHUB_OUTPUT"
+          else
+            echo "run=no" >> "$GITHUB_OUTPUT"
+          fi
+
+      - uses: actions/checkout@v4
+        if: steps.gate.outputs.run == 'yes'
+
+      - uses: actions/setup-node@v4
+        if: steps.gate.outputs.run == 'yes'
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: mobile/campistry-${{ matrix.app }}/package-lock.json
+
+      - uses: actions/setup-java@v4
+        if: steps.gate.outputs.run == 'yes'
+        with:
+          distribution: temurin
+          java-version: 21
+
+      - uses: android-actions/setup-android@v3
+        if: steps.gate.outputs.run == 'yes'
+
+      # npm ci needs a lockfile; fall back to install so a freshly scaffolded
+      # app builds before its lockfile is committed.
+      - name: Install Capacitor
+        if: steps.gate.outputs.run == 'yes'
+        working-directory: mobile/campistry-${{ matrix.app }}
+        run: npm ci --no-audit --no-fund || npm install --no-audit --no-fund
+
+      # sync-www.js also verifies every referenced file made it into www/ —
+      # a missing file is a white screen on device, so let it fail the build.
+      - name: Sync web assets into the app bundle
+        if: steps.gate.outputs.run == 'yes'
+        working-directory: mobile/campistry-${{ matrix.app }}
+        run: npm run sync
+
+      - name: Assemble debug APK
+        if: steps.gate.outputs.run == 'yes'
+        working-directory: mobile/campistry-${{ matrix.app }}/android
+        run: chmod +x ./gradlew && ./gradlew assembleDebug --no-daemon
+
+      - uses: actions/upload-artifact@v4
+        if: steps.gate.outputs.run == 'yes'
+        with:
+          name: campistry-${{ matrix.app }}-debug-apk
+          path: mobile/campistry-${{ matrix.app }}/android/app/build/outputs/apk/debug/*.apk
+          if-no-files-found: error

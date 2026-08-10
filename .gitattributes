@@ -1,0 +1,5 @@
+# The Gradle wrapper is a POSIX shell script. Committed with CRLF (which is what
+# happens by default on a Windows checkout) it fails on every Linux/macOS runner
+# with "bad interpreter: /bin/sh^M" — so pin it to LF regardless of platform.
+mobile/**/gradlew text eol=lf
+*.sh text eol=lf

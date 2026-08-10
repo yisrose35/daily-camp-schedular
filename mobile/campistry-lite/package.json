@@ -1,0 +1,27 @@
+{
+  "name": "campistry-lite-app",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Native iOS/Android shell for Campistry Lite (staff mobile companion), packaged via Capacitor.",
+  "scripts": {
+    "sync:www": "node scripts/sync-www.js",
+    "sync": "npm run sync:www && npx cap sync",
+    "assets": "npx @capacitor/assets generate",
+    "open:android": "npx cap open android",
+    "open:ios": "npx cap open ios"
+  },
+  "dependencies": {
+    "@aparajita/capacitor-biometric-auth": "^10.0.0",
+    "@capacitor/android": "^8.4.1",
+    "@capacitor/app": "^8.1.0",
+    "@capacitor/browser": "^8.0.3",
+    "@capacitor/core": "^8.4.1",
+    "@capacitor/ios": "^8.4.1",
+    "@capacitor/keyboard": "^8.0.2",
+    "@capacitor/splash-screen": "^8.0.1",
+    "@capacitor/status-bar": "^8.0.2"
+  },
+  "devDependencies": {
+    "@capacitor/cli": "^8.4.1"
+  }
+}

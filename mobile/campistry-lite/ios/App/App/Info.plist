@@ -2,12 +2,12 @@
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
 <dict>
-    <key>CAPACITOR_DEBUG</key>
+  <key>CAPACITOR_DEBUG</key>
 	<string>$(CAPACITOR_DEBUG)</string>
 	<key>CFBundleDevelopmentRegion</key>
 	<string>en</string>
 	<key>CFBundleDisplayName</key>
-        <string>Campistry Link</string>
+        <string>Campistry Lite</string>
 	<key>CFBundleExecutable</key>
 	<string>$(EXECUTABLE_NAME)</string>
 	<key>CFBundleIdentifier</key>
@@ -22,25 +22,31 @@
 	<string>$(MARKETING_VERSION)</string>
 	<key>CFBundleVersion</key>
 	<string>$(CURRENT_PROJECT_VERSION)</string>
-	<key>CFBundleURLTypes</key>
-	<array>
-		<dict>
-			<key>CFBundleURLSchemes</key>
-			<array>
-				<string>campistrylink</string>
-			</array>
-		</dict>
-	</array>
 	<key>LSRequiresIPhoneOS</key>
 	<true/>
-	<!-- The portal's <input type="file" accept="image/*"> pickers (reference
-	     photos for face matching, health documents, returned forms) offer
-	     "Take Photo" / "Photo Library". iOS terminates the app on that choice
-	     if these keys are absent, so they are required, not optional. -->
-	<key>NSCameraUsageDescription</key>
-	<string>Take a photo of your child for face matching, or photograph a health form or document to send to the camp.</string>
-	<key>NSPhotoLibraryUsageDescription</key>
-	<string>Choose a photo of your child for face matching, or attach a saved health form or document to send to the camp.</string>
+	<!-- Required for the biometric app lock. Without this key iOS reports Face ID
+	     as unavailable, and a raw evaluatePolicy() call would crash the app. -->
+	<key>NSFaceIDUsageDescription</key>
+	<string>Campistry Lite uses Face ID to unlock the app, so camper medical and contact details stay protected if your phone is handed around.</string>
+	<key>UIApplicationSceneManifest</key>
+	<dict>
+		<key>UIApplicationSupportsMultipleScenes</key>
+    <false/>
+    <key>UISceneConfigurations</key>
+    <dict>
+      <key>UIWindowSceneSessionRoleApplication</key>
+      <array>
+        <dict>
+            <key>UISceneConfigurationName</key>
+            <string>Default Configuration</string>
+            <key>UISceneDelegateClassName</key>
+            <string>$(PRODUCT_MODULE_NAME).SceneDelegate</string>
+            <key>UISceneStoryboardFile</key>
+            <string>Main</string>
+        </dict>
+      </array>
+    </dict>
+	</dict>
 	<key>UILaunchStoryboardName</key>
 	<string>LaunchScreen</string>
 	<key>UIMainStoryboardFile</key>

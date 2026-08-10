@@ -126,8 +126,12 @@
         // SDK, then supabase_client.js in its onload so init order is guaranteed.
         (function () {
             var s = document.createElement('script');
-            s.src = (window.location.protocol === 'file:')
-                ? 'supabase-js-local.js'
+            // The native app (Capacitor) bundles its own copy: a CDN fetch at
+            // boot would mean a dead app on bad camp reception, and it's the
+            // one request that has to succeed before anything renders.
+            var native = !!(window.Capacitor && window.Capacitor.isNativePlatform && window.Capacitor.isNativePlatform());
+            s.src = (native || window.location.protocol === 'file:')
+                ? 'supabase-js@2.js'
                 : 'https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2';
             s.onload = function () {
                 var chain = [
@@ -139,6 +143,7 @@
                     'rotation_cloud.js',
                     'campistry_visibility.js',
                     'campistry_lite_biometric.js',
+                    'campistry_lite_capacitor.js',   // native shell glue; no-op on the web
                     'campistry_lite.js'
                 ];
                 (function next(i) {
