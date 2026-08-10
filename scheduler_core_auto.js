@@ -769,11 +769,18 @@
             var _feOpen = (typeof window !== 'undefined' && Array.isArray(window.__genOpenSlots)) ? window.__genOpenSlots : [];
             if (!_feOpen.length) return;
             var _feGs = getGlobalSettings() || {};
-            var _feSpecials = ((_feGs.app1 && _feGs.app1.specialActivities) || []).filter(function (s) { return s && s.name && s.available !== false; });
+            // day-filtered pool first — the raw registry ignores availableDays etc. and
+            // offers activities that do not exist TODAY
+            var _feSpecials = ((typeof todaysSpecials !== 'undefined' && todaysSpecials) || (_feGs.app1 && _feGs.app1.specialActivities) || []).filter(function (s) { return s && s.name && s.available !== false; });
             if (!_feSpecials.length) return;
             var _feCanon = function (v) { var s = String(v == null ? '' : v).toLowerCase().trim(); return (!s || s === 'regular' || s === 'uncategorized') ? 'uncategorized' : s; };
             var _feCapOf = function (s) { return (s.sharableWith && s.sharableWith.capacity) || s.capacity || 1; };
-            var _feDurOf = function (s) { return s.defaultDuration || s.duration || s.durationMin || 0; };
+            // ALL legal durations (durations-array configs are invisible to scalar reads)
+            var _feDursOf = function (s) {
+                try { if (typeof getSpecialDurations === 'function') { var gd = getSpecialDurations(s.name, (typeof window !== 'undefined' && window.activityProperties) || {}, _feGs); var d = (gd && gd.durations) || gd; if (d && d.length) return d; } } catch (_e) {}
+                var one = s.defaultDuration || s.duration || s.durationMin || 0;
+                return one ? [one] : (Array.isArray(s.durations) ? s.durations : []);
+            };
             var _feSA = window.scheduleAssignments;
             var _feGradeOf = {};
             try {
@@ -862,7 +869,7 @@
                     // incoming activity of the hole's subcat, exactly T's length, seat free at T's old span
                     for (var xi = 0; xi < xs.length; xi++) {
                         var X = xs[xi];
-                        if (_feDurOf(X) !== tDur) continue;
+                        if (_feDursOf(X).indexOf(tDur) < 0) continue;
                         if (_feCapOf(X) - _feBusy(X.name, T._startMin, T._endMin, null, null) <= 0) continue;
                         var xOk = false;
                         try {
@@ -933,11 +940,20 @@
             var _cxOpen = (typeof window !== 'undefined' && Array.isArray(window.__genOpenSlots)) ? window.__genOpenSlots : [];
             if (!_cxOpen.length) return;
             var _cxGs = getGlobalSettings() || {};
-            var _cxSpecials = ((_cxGs.app1 && _cxGs.app1.specialActivities) || []).filter(function (s) { return s && s.name && s.available !== false; });
+            // day-filtered pool first (raw registry ignores availableDays — it can offer
+            // an activity that does not exist today)
+            var _cxSpecials = ((typeof todaysSpecials !== 'undefined' && todaysSpecials) || (_cxGs.app1 && _cxGs.app1.specialActivities) || []).filter(function (s) { return s && s.name && s.available !== false; });
             if (!_cxSpecials.length) return;
             var _cxCanon = function (v) { var s = String(v == null ? '' : v).toLowerCase().trim(); return (!s || s === 'regular' || s === 'uncategorized') ? 'uncategorized' : s; };
             var _cxCapOf = function (s) { return (s.sharableWith && s.sharableWith.capacity) || s.capacity || 1; };
-            var _cxDurOf = function (s) { return s.defaultDuration || s.duration || s.durationMin || 0; };
+            // ALL legal durations — the scalar read returned 0 for durations-array
+            // configs (food [10,20], uncat [30,40]) and silently excluded them from xs,
+            // which is why the pass under-filled vs the probe's rescuable count
+            var _cxDursOf = function (s) {
+                try { if (typeof getSpecialDurations === 'function') { var gd = getSpecialDurations(s.name, (typeof window !== 'undefined' && window.activityProperties) || {}, _cxGs); var d = (gd && gd.durations) || gd; if (d && d.length) return d; } } catch (_e) {}
+                var one = s.defaultDuration || s.duration || s.durationMin || 0;
+                return one ? [one] : (Array.isArray(s.durations) ? s.durations : []);
+            };
             var _cxSA = window.scheduleAssignments;
             var _cxGradeOf = {};
             try {
@@ -979,7 +995,7 @@
                 var holeDur = rec.endMin - rec.startMin;
                 var mineA = {};
                 liveA.forEach(function (r) { mineA[String(r._activity || r.field)] = 1; });
-                var xs = _cxSpecials.filter(function (x) { return _cxCanon(x.subcategory) === sub && !mineA[x.name] && _cxDurOf(x) === holeDur; });
+                var xs = _cxSpecials.filter(function (x) { return _cxCanon(x.subcategory) === sub && !mineA[x.name] && _cxDursOf(x).indexOf(holeDur) >= 0; });
                 if (!xs.length) return;
                 var tmplA = _cxTmplOf(A, null);
                 var fillA = function (X, journalExtra) {
@@ -1305,11 +1321,12 @@
                                 });
                                 var usedToday = {};
                                 live.forEach(function (r) { usedToday[String(r._activity || r.field)] = 1; });
-                                var occ = {};
+                                var occ = {}, occG = {};
                                 Object.keys(_fbSA).forEach(function (ob) {
                                     (_fbSA[ob] || []).forEach(function (r) {
                                         if (r && r._startMin != null && r._startMin < e && r._endMin > s && r.field) {
                                             occ[r.field] = (occ[r.field] || 0) + 1;
+                                            (occG[r.field] = occG[r.field] || {})[_fbGradeOf[String(ob)] || '?'] = 1;
                                         }
                                     });
                                 });
@@ -1318,6 +1335,23 @@
                                     var f = _fbFields[fi];
                                     if (usedToday[f.name]) continue;
                                     if ((_fbCap(f) - (occ[f.name] || 0)) <= 0) continue;
+                                    // SHARING-TYPE guard: capacity alone is not permission. A
+                                    // same_division field (validator normalization: 'all' and
+                                    // empty-'custom' count as same_division) may only be shared
+                                    // within ONE division — the pass placed two cross-division
+                                    // pairs live (elbow tag, jumprope) that the validator flagged.
+                                    if ((occ[f.name] || 0) > 0) {
+                                        var _swT = (f.sharableWith && f.sharableWith.type) || 'not_sharable';
+                                        var _swD = (f.sharableWith && Array.isArray(f.sharableWith.divisions)) ? f.sharableWith.divisions : [];
+                                        if (_swT === 'custom' && _swD.length === 0) _swT = 'same_division';
+                                        if (_swT === 'all') _swT = 'same_division';
+                                        var _myG = _fbGradeOf[String(bk)];
+                                        var _gset = Object.keys(occG[f.name] || {});
+                                        var _shareOk = false;
+                                        if (_swT === 'same_division') _shareOk = (_gset.length === 1 && _gset[0] === _myG);
+                                        else if (_swT === 'custom') _shareOk = (_swD.indexOf(_myG) >= 0) && _gset.every(function (g) { return g === _myG || _swD.indexOf(g) >= 0; });
+                                        if (!_shareOk) continue;
+                                    }
                                     var ok = false;
                                     try {
                                         ok = window.SchedulingRules.isCandidateAllowed(
@@ -19077,7 +19111,10 @@
                             if (_asHolds[rec.bunk] && _asHolds[rec.bunk][sub]) { s += 12 * len; return; }
                             // floor breach — endgame free-win probe against THIS candidate's world
                             if (_asSpecials === null) {
-                                try { _asSpecials = ((getGlobalSettings().app1 || {}).specialActivities || []).filter(function (x) { return x && x.name && x.available !== false; }); } catch (_e) { _asSpecials = []; }
+                                // day-filtered pool — the raw registry made the probe call windows
+                                // "rescuable" with activities that do not exist TODAY (live: r42
+                                // predicted, 26 actually fillable, 88 floor misses in the audit)
+                                try { _asSpecials = ((typeof todaysSpecials !== 'undefined' && todaysSpecials) || (getGlobalSettings().app1 || {}).specialActivities || []).filter(function (x) { return x && x.name && x.available !== false; }); } catch (_e) { _asSpecials = []; }
                             }
                             var rescuable = false;
                             for (var _x = 0; _x < _asSpecials.length && !rescuable; _x++) {
