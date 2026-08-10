@@ -20909,7 +20909,7 @@
                                             });
                                         });
                                     } catch (_eSm) { _absSportMax = {}; }
-                                    var _absRes = window.GLStagger.absorbUnfilledToSport({ bunks: _absBunks, gate: _glGate, sportLabel: 'Sport', specialLabel: 'Special: Uncategorized', maxMergeMin: 40, sportMaxByGrade: _absSportMax, capFits: _glCapFits, recordUse: _glRecordUse, specialDurs: _glSpecialDurs, canon: _glCanon, canAbsorb: _glMayRepurpose, probeReorder: (window.__reorderProbe !== false), splitFill: (window.__absorbSplit !== false), allowRepeatFill: (typeof window !== 'undefined' && window.__sportlessRepeatFill === true) });
+                                    var _absRes = window.GLStagger.absorbUnfilledToSport({ bunks: _absBunks, gate: _glGate, sportLabel: 'Sport', specialLabel: 'Special: Uncategorized', maxMergeMin: 40, sportMaxByGrade: _absSportMax, capFits: _glCapFits, recordUse: _glRecordUse, specialDurs: _glSpecialDurs, canon: _glCanon, canAbsorb: _glMayRepurpose, probeReorder: (window.__reorderProbe !== false), splitFill: (window.__absorbSplit !== false), allowRepeatFill: (typeof window !== 'undefined' && window.__sportlessRepeatFill === true), stagMenuFlip: !!(_glStrategy && _glStrategy.stagFlip) });
                                     if (_absRes) { _glFill.absorbed = _absRes.toSport || 0; _glFill.absorbBlocked = _absRes.blockedBySpacing || 0; _glFill.absorbFilled = _absRes.toFilledSpecial || 0; _glFill.absorbSplit = _absRes.toSplitFilled || 0; _glFill.absorbRepeat = _absRes.toRepeatFilled || 0; _glFill.filled = (_glFill.filled || 0) + (_absRes.toFilledSpecial || 0) + (_absRes.toSplitFilled || 0) + (_absRes.toRepeatFilled || 0); }
                                     if (_absRes && (_absRes.bornDeadSkipped || 0) > 0) { log('[GENERIC-ABSORB] ' + _absRes.bornDeadSkipped + ' stuck block(s) left as honest OPEN time instead of a born-dead "Special: Uncategorized" — no uncategorized activity runs that length (the placeholder could never have filled; the capacity advice now names the real shortage)'); }
                                     if (_absRes && (_absRes.toRepeatFilled || 0) > 0) { log('[GENERIC-ABSORB-REPEAT] ' + _absRes.toRepeatFilled + ' open block(s) filled with a REPEAT special (sportless camp, window.__sportlessRepeatFill on) — same-day repeats expected'); }
@@ -21769,8 +21769,8 @@
                             : (_gt === 1) ? { pickIndex: 1, label: 'pick1' }
                             : (_gt === 2) ? { floatSeed: (_glArrSeedBase ^ 0x9E3779B9) >>> 0, label: 'floatOrder' }
                             : (_gt === 3) ? { pickIndex: 2, label: 'pick2' }
-                            : (_gt === 4) ? { pickIndex: 1, floatSeed: (_glArrSeedBase ^ 0x85EBCA6B) >>> 0, label: 'float+pick1' }
-                            : { perm: 'shuffle', seed: (_glArrSeedBase + _gt * 2654435761) >>> 0, pickIndex: ((_gt - 2) % 3), floatSeed: (_glArrSeedBase + _gt * 40503) >>> 0, label: 'shuffle+pick' + ((_gt - 2) % 3) };
+                            : (_gt === 4) ? { pickIndex: 1, floatSeed: (_glArrSeedBase ^ 0x85EBCA6B) >>> 0, stagFlip: true, label: 'float+pick1+stag' }
+                            : { perm: 'shuffle', seed: (_glArrSeedBase + _gt * 2654435761) >>> 0, pickIndex: ((_gt - 2) % 3), floatSeed: (_glArrSeedBase + _gt * 40503) >>> 0, stagFlip: ((_gt % 2) === 1), label: 'shuffle+pick' + ((_gt - 2) % 3) + ((_gt % 2) === 1 ? '+stag' : '') };
                         var _gRes = null;
                         try { _gRes = _glRunTrial(_gStrat); } catch (_eTrial) {
                             // a failed non-identity trial is skippable; a failed trial 0 must

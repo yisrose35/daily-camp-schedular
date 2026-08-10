@@ -277,7 +277,10 @@
     // `used` marked) or null if it can't FULLY cover the block (then it stays dead — never worse).
     // Pieces are strictly SHORTER than the block (the full length already failed), so ≥2 pieces.
     function _absSplitFill(ctx, bunk, s, end, used, canon, allowPartial) {
-        var MENU = [30, 20, 10];          // sub-tile lengths (standard 10-min grid; pickAnyFillable filters by what exists)
+        // sub-tile lengths (standard 10-min grid; pickAnyFillable filters by what exists).
+        // ctx.stagMenuFlip (arrangement-trial dial): smallest-first instead of biggest-
+        // first — a different split SHAPE for the same block; absent = exact legacy order.
+        var MENU = (ctx && ctx.stagMenuFlip) ? [10, 20, 30] : [30, 20, 10];
         var span = end - s;
         var picks = [];
         function rec(pos) {
