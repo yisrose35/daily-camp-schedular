@@ -179,4 +179,48 @@
     // pages list it immediately after), so the module is already there.
     if (window.CampistryLiteBio) installNativeBio();
     else ready(installNativeBio);
+
+    // ── TEMPORARY on-device diagnostics ──────────────────────────────────────
+    // Sign-in reports "Can't reach Campistry" on device, but the exact same
+    // bundle signs in fine from a localhost origin in a desktop browser — so
+    // whatever breaks is specific to the WebView and invisible from here.
+    // This prints the facts that would distinguish the candidates. Login screen
+    // only, native only. REMOVE once the cause is known.
+    ready(function () {
+        if (!document.getElementById('liteLoginBtn')) return;   // login page only
+
+        var box = document.createElement('pre');
+        box.style.cssText = 'position:fixed;left:0;right:0;bottom:0;z-index:99999;margin:0;'
+            + 'max-height:45vh;overflow:auto;background:#111;color:#0f0;font-size:10px;'
+            + 'line-height:1.35;padding:8px;white-space:pre-wrap;';
+        box.textContent = 'diagnostics running…';
+        document.body.appendChild(box);
+
+        var lines = [];
+        function say(k, v) { lines.push(k + ': ' + v); box.textContent = lines.join('\n'); }
+
+        say('origin', location.origin);
+        say('online', navigator.onLine);
+        say('supabase sdk', typeof window.supabase);
+        say('client ready', !!(window.supabase && window.supabase.auth));
+        say('config url', (window.__CAMPISTRY_SUPABASE__ || {}).url || 'MISSING');
+        say('plugins', Object.keys(Plugins).join(',') || 'NONE');
+        say('webview', (navigator.userAgent.match(/Chrome\/[\d.]+/) || ['?'])[0]);
+
+        var cfg = window.__CAMPISTRY_SUPABASE__ || {};
+        // Raw fetch, no SDK in the way: separates "network blocked" from
+        // "the SDK is misconfigured".
+        fetch(cfg.url + '/auth/v1/health', { headers: { apikey: cfg.anonKey || '' } })
+            .then(function (r) { say('raw fetch', 'HTTP ' + r.status); })
+            .catch(function (e) { say('raw fetch', 'FAILED ' + (e && e.name) + ': ' + (e && e.message)); })
+            .then(function () {
+                // And the same call the sign-in button makes, with bad creds:
+                // a 400 means the path works and the real problem is elsewhere.
+                var sb = window.supabase && window.supabase.auth ? window.supabase : null;
+                if (!sb) { say('sdk auth', 'NO CLIENT'); return; }
+                return sb.auth.signInWithPassword({ email: 'probe@example.com', password: 'wrong-on-purpose' })
+                    .then(function (r) { say('sdk auth', r.error ? (r.error.status + ' ' + r.error.message) : 'unexpected success'); })
+                    .catch(function (e) { say('sdk auth', 'THREW ' + (e && e.name) + ': ' + (e && e.message)); });
+            });
+    });
 })();

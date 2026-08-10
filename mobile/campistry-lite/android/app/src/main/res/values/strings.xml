@@ -1,7 +1,7 @@
 <?xml version='1.0' encoding='utf-8'?>
 <resources>
-    <string name="app_name">Campistry Lite</string>
-    <string name="title_activity_main">Campistry Lite</string>
+    <string name="app_name">Lite</string>
+    <string name="title_activity_main">Lite</string>
     <string name="package_name">com.campistry.lite</string>
     <string name="custom_url_scheme">com.campistry.lite</string>
 </resources>
