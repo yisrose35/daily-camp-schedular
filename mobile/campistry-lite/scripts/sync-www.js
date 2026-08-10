@@ -45,6 +45,7 @@ const FILES = [
     'campistry_lite_capacitor.js', // native glue; a no-op on the web
     'campistry_bio_native.js',     // shared native biometrics bridge
     'campistry_haptics.js',        // shared haptics + the Settings preference
+    'campistry_keyboard.js',       // keeps the focused field clear of the keyboard
     'campistry_ota.js',            // live-update bundle confirmation
 
     'manifest_lite.webmanifest',

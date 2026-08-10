@@ -186,13 +186,6 @@
                     <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>
                     Settings
                 </button>
-                <!-- Stays open on tap: a toggle you have to reopen a menu to
-                     check is a toggle nobody trusts. -->
-                <button class="lk-avatar-menu-item" id="lkHapticItem" onclick="parentToggleHaptics(event)">
-                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="7" y="2" width="10" height="20" rx="2"/><path d="M3 9v6M21 9v6"/></svg>
-                    <span style="flex:1;text-align:left;">Haptics</span>
-                    <span id="lkHapticState" style="font-size:.76rem;font-weight:700;opacity:.7;"></span>
-                </button>
                 <div class="lk-avatar-menu-divider"></div>
                 <button class="lk-avatar-menu-item" onclick="parentSignOut && parentSignOut()">
                     <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/><polyline points="16 17 21 12 16 7"/><line x1="21" y1="12" x2="9" y2="12"/></svg>
@@ -536,10 +529,7 @@
             <div class="pickup-type-icon" style="background:var(--blue-50);color:var(--blue-500);"><svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><polyline points="17 1 21 5 17 9"/><path d="M3 11V9a4 4 0 0 1 4-4h14"/><polyline points="7 23 3 19 7 15"/><path d="M21 13v2a4 4 0 0 1-4 4H3"/></svg></div>
             <div class="pickup-type-label">Pickup Change</div>
         </button>
-        <button class="pickup-type-btn" data-type="friend" onclick="selPickup('friend',this)">
-            <div class="pickup-type-icon" style="background:var(--purple-50);color:var(--purple-500);"><svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/></svg></div>
-            <div class="pickup-type-label">Going With Friend</div>
-        </button>
+        
         <button class="pickup-type-btn" data-type="late" onclick="selPickup('late',this)">
             <div class="pickup-type-icon" style="background:var(--product-50);color:var(--product-600);"><svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg></div>
             <div class="pickup-type-label">Late Arrival</div>
@@ -566,42 +556,43 @@
         <div class="lk-card">
             <div class="lk-card-head"><h2>Pickup Change</h2></div>
             <div class="lk-tabs" id="pickupChangeTabs"></div>
-            <div class="lk-field"><label>New pickup person</label><input type="text" class="lk-input" placeholder="Full name"></div>
-            <div class="lk-field"><label>Relationship to child</label>
-                <select class="lk-select"><option>Parent</option><option>Grandparent</option><option>Sibling (18+)</option><option>Aunt / Uncle</option><option>Family Friend</option><option>Other</option></select>
+            <div class="lk-field"><label>What is changing?</label>
+                <select class="lk-select" id="changeKind" onchange="selChangeKind(this.value)"><option value="person">Someone else is picking up</option><option value="friend">Going home with a friend</option></select>
             </div>
-            <div class="lk-field"><label>Their phone number</label><input type="tel" class="lk-input" placeholder="(555) 000-0000"></div>
+            <div id="changeFieldsPerson">
+                <div class="lk-field"><label>New pickup person</label><input type="text" class="lk-input" placeholder="Full name"></div>
+                <div class="lk-field"><label>Relationship to child</label>
+                    <select class="lk-select"><option>Parent</option><option>Grandparent</option><option>Sibling (18+)</option><option>Aunt / Uncle</option><option>Family Friend</option><option>Other</option></select>
+                </div>
+                <div class="lk-field"><label>Their phone number</label><input type="tel" class="lk-input" placeholder="(555) 000-0000"></div>
+            </div>
+            <div id="changeFieldsFriend" style="display:none;">
+                <div class="lk-field"><label>Friend&#39;s name</label><input type="text" class="lk-input" id="chFriendName" placeholder="Friend&#39;s full name"></div>
+                <div class="lk-field"><label>Friend&#39;s parent name</label><input type="text" class="lk-input" id="chFriendParent" placeholder="Parent driving"></div>
+                <div class="lk-field"><label>Friend&#39;s parent phone</label><input type="tel" class="lk-input" id="chFriendPhone" placeholder="(555) 000-0000"></div>
+                <div style="background:var(--amber-50);border:1px solid var(--amber-500);border-radius:var(--radius-md);padding:12px;margin-bottom:14px;font-size:.8rem;color:var(--amber-600);">
+                    <strong>Note:</strong> By submitting, you confirm you have verbal approval from the other parent. Camp will verify before releasing.
+                </div>
+            </div>
             <div class="lk-field"><label>Notes (optional)</label><textarea class="lk-textarea" placeholder="Any additional info..."></textarea></div>
-            <button class="btn btn-primary" onclick="submitPickup('change')">Send to Camp Office</button>
-        </div>
-    </div>
-
-    <!-- GOING WITH FRIEND FORM -->
-    <div class="pickup-form" id="pickup-friend">
-        <div class="lk-card">
-            <div class="lk-card-head"><h2>Going Home With Friend</h2></div>
-            <div class="lk-tabs" id="pickupFriendTabs"></div>
-            <div class="lk-field"><label>Friend's name</label><input type="text" class="lk-input" placeholder="Friend's full name"></div>
-            <div class="lk-field"><label>Friend's parent name</label><input type="text" class="lk-input" placeholder="Parent driving"></div>
-            <div class="lk-field"><label>Friend's parent phone</label><input type="tel" class="lk-input" placeholder="(555) 000-0000"></div>
-            <div style="background:var(--amber-50);border:1px solid var(--amber-500);border-radius:var(--radius-md);padding:12px;margin-bottom:14px;font-size:.8rem;color:var(--amber-600);">
-                <strong>Note:</strong> By submitting, you confirm you have verbal approval from the other parent. Camp will verify before releasing.
-            </div>
-            <button class="btn btn-primary" onclick="submitPickup('friend')">Send to Camp Office</button>
+            <button class="btn btn-primary" onclick="submitPickup(&#39;change&#39;)">Send to Camp Office</button>
         </div>
     </div>
 
     <!-- LATE ARRIVAL FORM -->
+    <!-- Not an ETA: parents tell the office their child HAS arrived, at the
+         moment they drop them off, so the office can mark them in. An expected
+         time was a promise the parent had to keep and the office had to chase. -->
     <div class="pickup-form" id="pickup-late">
         <div class="lk-card">
             <div class="lk-card-head"><h2>Late Arrival</h2></div>
             <div class="lk-tabs" id="pickupLateTabs"></div>
-            <div class="lk-field"><label>Expected arrival time</label><input type="time" class="lk-input" value="09:30"></div>
+            <p style="font-size:.84rem;color:var(--text-muted);margin:0 0 14px;">Just dropped your child off? Let the office know they have arrived.</p>
             <div class="lk-field"><label>Reason (optional)</label>
                 <select class="lk-select"><option value="">Select reason...</option><option>Doctor appointment</option><option>Traffic / Transportation</option><option>Family matter</option><option>Other</option></select>
             </div>
             <div class="lk-field"><label>Notes (optional)</label><textarea class="lk-textarea" placeholder="Any additional info for the office..."></textarea></div>
-            <button class="btn btn-primary" onclick="submitPickup('late')">Send to Camp Office</button>
+            <button class="btn btn-primary" onclick="submitPickup(&#39;late&#39;)">I just dropped them off</button>
         </div>
     </div>
 
@@ -697,6 +688,11 @@
     <div class="lk-card"><div class="lk-card-head"><h2>Messages</h2></div>
         <div style="display:flex;flex-direction:column;gap:12px;">
             <label style="display:flex;align-items:center;justify-content:space-between;cursor:pointer;"><div><div style="font-size:.85rem;font-weight:600;">Confirm before deleting</div><div style="font-size:.72rem;color:var(--text-muted);">Ask for confirmation before a message is deleted</div></div><input type="checkbox" id="prtConfirmDeleteToggle" onchange="lkSetConfirmDelete(this.checked)" style="accent-color:var(--link-color);width:17px;height:17px;"></label>
+        </div>
+    </div>
+    <div class="lk-card"><div class="lk-card-head"><h2>Feedback</h2></div>
+        <div style="display:flex;flex-direction:column;gap:12px;">
+            <label style="display:flex;align-items:center;justify-content:space-between;cursor:pointer;"><div><div style="font-size:.85rem;font-weight:600;">Haptics</div><div style="font-size:.72rem;color:var(--text-muted);">A short tap when you press something</div></div><input type="checkbox" id="prtHapticToggle" onchange="parentSetHaptics(this.checked)" style="accent-color:var(--link-color);width:17px;height:17px;"></label>
         </div>
     </div>
 </div>
@@ -2583,8 +2579,11 @@ function selPickup(type, btn) {
 }
 function submitPickup(type) {
     var labels = {early:'Early Pickup',change:'Pickup Change',friend:'Going With Friend',late:'Late Arrival'};
+    // A friend pickup still reports under its own name, so the office sees at a
+    // glance what it is even though the parent entered it as a pickup change.
+    if (type === 'change' && (document.getElementById('changeKind')||{}).value === 'friend') labels.change = 'Going With Friend';
     var icons = _PICKUP_ICONS;
-    var tabsIds = {early:'pickupChildTabs',change:'pickupChangeTabs',friend:'pickupFriendTabs',late:'pickupLateTabs'};
+    var tabsIds = {early:'pickupChildTabs',change:'pickupChangeTabs',late:'pickupLateTabs'};
     var now = new Date();
     var reqId = now.getTime().toString(36)+Math.random().toString(36).slice(2,5);
     var timeStr = now.getHours()+':'+(now.getMinutes()<10?'0':'')+now.getMinutes();
@@ -2603,17 +2602,23 @@ function submitPickup(type) {
         fields.relationship = (form.querySelector('select')||{}).value||'';
         fields.notes = (form.querySelector('textarea')||{}).value||'';
     } else if (type==='change') {
-        fields.newPickupPerson = (form.querySelectorAll('input[type=text]')[0]||{}).value||'';
-        fields.relationship = (form.querySelector('select')||{}).value||'';
-        fields.phone = (form.querySelector('input[type=tel]')||{}).value||'';
+        // Going-with-a-friend is a kind of pickup change now, not its own
+        // category — so it shares this form and reports under its own label.
+        var kind = (document.getElementById('changeKind')||{}).value || 'person';
         fields.notes = (form.querySelector('textarea')||{}).value||'';
-    } else if (type==='friend') {
-        var tinputs = form.querySelectorAll('input[type=text]');
-        fields.friendName = (tinputs[0]||{}).value||'';
-        fields.friendParentName = (tinputs[1]||{}).value||'';
-        fields.friendParentPhone = (form.querySelector('input[type=tel]')||{}).value||'';
+        if (kind === 'friend') {
+            fields.friendName = (document.getElementById('chFriendName')||{}).value||'';
+            fields.friendParentName = (document.getElementById('chFriendParent')||{}).value||'';
+            fields.friendParentPhone = (document.getElementById('chFriendPhone')||{}).value||'';
+        } else {
+            fields.newPickupPerson = (form.querySelectorAll('#changeFieldsPerson input[type=text]')[0]||{}).value||'';
+            fields.relationship = (form.querySelectorAll('#changeFieldsPerson select')[0]||{}).value||'';
+            fields.phone = (form.querySelector('#changeFieldsPerson input[type=tel]')||{}).value||'';
+        }
     } else if (type==='late') {
-        fields.arrivalTime = (form.querySelector('input[type=time]')||{}).value||'';
+        // The parent is reporting an arrival that has ALREADY happened, so the
+        // time is now — not something they type and the office then chases.
+        fields.arrivedAt = now.toLocaleTimeString([], { hour:'numeric', minute:'2-digit' });
         fields.reason = (form.querySelector('select')||{}).value||'';
         fields.notes = (form.querySelector('textarea')||{}).value||'';
     }
@@ -2643,7 +2648,7 @@ function submitPickup(type) {
                 pickupTime:'Pickup time', pickupBy:'Picked up by', relationship:'Relationship',
                 newPickupPerson:'New pickup person', phone:'Phone',
                 friendName:'Going with friend', friendParentName:"Friend's parent", friendParentPhone:"Friend's parent phone",
-                arrivalTime:'Arriving at', reason:'Reason', notes:'Notes'
+                arrivalTime:'Arriving at', arrivedAt:'Dropped off at', reason:'Reason', notes:'Notes'
             };
             var lines = [];
             Object.keys(fields).forEach(function(k){ if(fields[k]) lines.push((_fieldLabels[k]||k)+': '+fields[k]); });
@@ -2727,7 +2732,7 @@ nav = function(p) {
 
 // Init pickup child tabs
 function initPickupTabs() {
-    ['pickupChildTabs','pickupChangeTabs','pickupFriendTabs','pickupLateTabs'].forEach(function(id){
+    ['pickupChildTabs','pickupChangeTabs','pickupLateTabs'].forEach(function(id){
         var el = document.getElementById(id); if(!el) return;
         el.innerHTML = '';
         children.forEach(function(c,i){
@@ -2773,6 +2778,7 @@ window.addEventListener('storage', function(e) {
 <script src="campistry_lite_biometric.js"></script>
 <script src="campistry_bio_native.js"></script>
 <script src="campistry_haptics.js"></script>
+<script src="campistry_keyboard.js"></script>
 <script src="campistry_notes_quick.js"></script>
 <script src="campistry_link_capacitor.js"></script>
 <script src="face_match_core.js"></script>
@@ -3482,17 +3488,22 @@ window.addEventListener('storage', function(e) {
                '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8">' +
                '<path d="M2 12s3.6-7 10-7 10 7 10 7-3.6 7-10 7-10-7-10-7z"/><circle cx="12" cy="12" r="3"/></svg></button>';
     }
-    window.parentToggleHaptics = function(ev) {
-        if (ev) ev.stopPropagation();   // keep the menu open so the state is visible
-        var H = window.CampistryHaptics;
-        if (!H) return;
-        H.setEnabled(!H.enabled());
-        _paintHapticState();
+    // Haptics preference — in Settings with the other toggles, not the account menu.
+    // Swaps the Pickup Change form between 'someone else' and 'with a friend'.
+    window.selChangeKind = function(kind) {
+        var p = document.getElementById('changeFieldsPerson');
+        var fr = document.getElementById('changeFieldsFriend');
+        if (p)  p.style.display  = kind === 'friend' ? 'none' : '';
+        if (fr) fr.style.display = kind === 'friend' ? '' : 'none';
+    };
+
+    window.parentSetHaptics = function(on) {
+        if (window.CampistryHaptics) window.CampistryHaptics.setEnabled(!!on);
     };
     function _paintHapticState() {
-        var el = document.getElementById('lkHapticState');
+        var el = document.getElementById('prtHapticToggle');
         var H = window.CampistryHaptics;
-        if (el) el.textContent = (!H || H.enabled()) ? 'On' : 'Off';
+        if (el) el.checked = (!H || H.enabled());
     }
     document.addEventListener('DOMContentLoaded', _paintHapticState);
     _paintHapticState();
