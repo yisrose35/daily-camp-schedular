@@ -36999,8 +36999,27 @@
                 });
                 var keys = Object.keys(short);
                 if (!keys.length) { log('[FLOOR-AUDIT] every bunk met its required subcategory floor(s)'); return; }
+                // DAY-AWARE: a subcat with ZERO activities available TODAY (availableDays)
+                // is structurally void — the demand build already IGNORED its floor, and
+                // "add another activity / raise a capacity" is the wrong advice. Report it
+                // as an informational line naming the real cause instead of a warning.
+                // Only applies when the day-filtered list exists and is non-empty (an
+                // empty/undefined todaysSpecials must not silence real shortfalls).
+                var _faCanonSub = function (v) { var c = String(v == null ? '' : v).toLowerCase().trim(); return (!c || c === 'regular' || c === 'uncategorized') ? 'uncategorized' : c; };
+                var _faAvailToday = null;
+                try {
+                    if (typeof todaysSpecials !== 'undefined' && Array.isArray(todaysSpecials) && todaysSpecials.length) {
+                        _faAvailToday = {};
+                        todaysSpecials.forEach(function (s) { if (s && s.name && s.available !== false) _faAvailToday[_faCanonSub(s.subcategory)] = 1; });
+                    }
+                } catch (_eFaAv) { _faAvailToday = null; }
                 keys.forEach(function (sc) {
                     var list = short[sc];
+                    if (_faAvailToday && !_faAvailToday[_faCanonSub(sc)]) {
+                        log('[FLOOR-AUDIT] ⓘ "' + sc + '" floor unmet for ' + list.length + ' bunk(s) — structurally VOID today: no "' + sc + '" activity is available on this day (availableDays). Not a capacity problem; nothing the generator can place.');
+                        try { (window.__genFloorWarnings = window.__genFloorWarnings || []).push({ subcat: sc, unmetBunks: list.length, bunks: list.slice(0, 20), kind: 'void-today' }); } catch (_eFa0) {}
+                        return;
+                    }
                     warn('[FLOOR-AUDIT] ⚠ ' + list.length + ' bunk(s) did NOT get a required "' + sc +
                         '" special: ' + list.slice(0, 10).join(', ') + (list.length > 10 ? ' …+' + (list.length - 10) + ' more' : '') +
                         '. The layer asks for it but the pool ran dry today — add another "' + sc +
