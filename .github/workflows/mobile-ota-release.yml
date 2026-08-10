@@ -20,6 +20,8 @@ name: Mobile — OTA release
 # boot). To pull a bad release forward, run this again from a fixed commit.
 
 on:
+  # The normal way to publish, once these workflows are on the default branch —
+  # until then GitHub won't show a dispatch button for them at all.
   workflow_dispatch:
     inputs:
       app:
@@ -28,6 +30,13 @@ on:
         default: both
         type: choice
         options: [both, lite, link]
+  # Until then: touching ota/RELEASE publishes both apps. Editing that file is
+  # the deliberate act — no ordinary push can ship a live update by accident.
+  # The manifests this workflow writes back carry a CI-skip marker, so
+  # publishing cannot re-trigger itself.
+  push:
+    paths:
+      - 'ota/RELEASE'
 
 permissions:
   contents: write        # create releases and commit the manifest
@@ -48,7 +57,7 @@ jobs:
       - name: Skip unselected app
         id: gate
         run: |
-          if [ "${{ inputs.app }}" = "both" ] || [ "${{ inputs.app }}" = "${{ matrix.app }}" ]; then
+          if [ "${{ github.event_name == 'workflow_dispatch' && inputs.app || 'both' }}" = "both" ] || [ "${{ inputs.app }}" = "${{ matrix.app }}" ]; then
             echo "run=yes" >> "$GITHUB_OUTPUT"
           else
             echo "run=no" >> "$GITHUB_OUTPUT"
