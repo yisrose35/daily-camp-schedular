@@ -659,42 +659,65 @@
 <div class="lk-page" id="page-settings">
     <div class="lk-page-hero">
     <div class="lk-page-hero-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg></div>
-    <div><h1>Settings</h1><p>Manage your account and preferences</p></div>
+    <div><h1>Settings</h1><p>Your account, notifications and app preferences</p></div>
 </div>
-    <div class="lk-card"><div class="lk-card-head"><h2>Account</h2></div>
-        <div class="lk-field"><label>Name</label><input type="text" class="lk-input" id="settingsName" value="" placeholder="Your name"></div>
-        <div class="lk-field"><label>Login Email</label>
-            <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;">
-                <input type="email" class="lk-input" id="settingsEmail" value="" placeholder="your@email.com" style="flex:1;min-width:180px;">
-                <button class="btn btn-secondary btn-sm" onclick="changeParentEmail()">Change email</button>
+
+    <!-- Identity, read-only. Which account you are signed in as is a fact to
+         confirm at a glance, not a form field to edit. -->
+    <div class="lk-set-id">
+        <div class="lk-set-id-avatar" id="setIdAvatar">·</div>
+        <div class="lk-set-id-body">
+            <div class="lk-set-id-name" id="setIdName">Your account</div>
+            <div class="lk-set-id-sub" id="setIdEmail"></div>
+            <div class="lk-set-id-camps" id="setIdCamps"></div>
+        </div>
+    </div>
+
+    <div class="lk-set-label">Your details</div>
+    <div class="lk-card lk-set-card">
+        <div class="lk-field"><label for="settingsName">Name</label><input type="text" class="lk-input" id="settingsName" placeholder="Your name"></div>
+        <div class="lk-field"><label for="settingsPhone">Phone</label><input type="tel" class="lk-input" id="settingsPhone" placeholder="Best number for the camp office"></div>
+        <div class="lk-set-actions">
+            <button class="btn btn-primary btn-sm" onclick="saveParentSettings()">Save changes</button>
+            <span class="lk-set-saved" id="settingsSavedMsg"></span>
+        </div>
+    </div>
+
+    <div class="lk-set-label">Sign-in</div>
+    <div class="lk-card lk-set-card">
+        <div class="lk-field"><label for="settingsEmail">Login email</label>
+            <div class="lk-set-inline">
+                <input type="email" class="lk-input" id="settingsEmail" placeholder="your@email.com">
+                <button class="btn btn-secondary btn-sm" onclick="changeParentEmail()">Change</button>
             </div>
-            <div id="settingsEmailMsg" style="font-size:.76rem;min-height:15px;margin-top:4px;color:var(--text-muted);"></div>
+            <div id="settingsEmailMsg" class="lk-set-hint"></div>
         </div>
-        <div class="lk-field"><label>Phone</label><input type="tel" class="lk-input" id="settingsPhone" value="" placeholder="(555) 000-0000"></div>
-        <div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:4px;">
-            <button class="btn btn-primary btn-sm" onclick="saveParentSettings()">Save Changes</button>
-            <button class="btn btn-secondary btn-sm" onclick="parentSignOut && parentSignOut()">Sign Out</button>
-        </div>
-    </div>
-    <div class="lk-card"><div class="lk-card-head"><h2>Notifications</h2></div>
-        <div style="display:flex;flex-direction:column;gap:12px;">
-            <label style="display:flex;align-items:center;justify-content:space-between;cursor:pointer;"><div><div style="font-size:.85rem;font-weight:600;">Messages</div><div style="font-size:.72rem;color:var(--text-muted);">New messages from camp</div></div><input type="checkbox" checked data-pref="notifyMessages" onchange="saveParentSettings(true)" style="accent-color:var(--link-color);width:17px;height:17px;"></label>
-            <label style="display:flex;align-items:center;justify-content:space-between;cursor:pointer;"><div><div style="font-size:.85rem;font-weight:600;">Payment Reminders</div><div style="font-size:.72rem;color:var(--text-muted);">Upcoming payment alerts</div></div><input type="checkbox" checked data-pref="notifyPayments" onchange="saveParentSettings(true)" style="accent-color:var(--link-color);width:17px;height:17px;"></label>
-            <label style="display:flex;align-items:center;justify-content:space-between;cursor:pointer;"><div><div style="font-size:.85rem;font-weight:600;">Canteen Activity</div><div style="font-size:.72rem;color:var(--text-muted);">Purchases and low balance</div></div><input type="checkbox" data-pref="notifyCanteen" onchange="saveParentSettings(true)" style="accent-color:var(--link-color);width:17px;height:17px;"></label>
-            <label style="display:flex;align-items:center;justify-content:space-between;cursor:pointer;"><div><div style="font-size:.85rem;font-weight:600;">Photos</div><div style="font-size:.72rem;color:var(--text-muted);">New photo uploads</div></div><input type="checkbox" checked data-pref="notifyPhotos" onchange="saveParentSettings(true)" style="accent-color:var(--link-color);width:17px;height:17px;"></label>
-            <label style="display:flex;align-items:center;justify-content:space-between;cursor:pointer;"><div><div style="font-size:.85rem;font-weight:600;">Health Updates</div><div style="font-size:.72rem;color:var(--text-muted);">Nurse visit notes and health alerts</div></div><input type="checkbox" checked data-pref="notifyHealth" onchange="saveParentSettings(true)" style="accent-color:var(--link-color);width:17px;height:17px;"></label>
+        <div class="lk-set-row" id="setBioRow" style="display:none;">
+            <div class="lk-set-row-main">
+                <div class="lk-set-row-title">Unlock with biometrics</div>
+                <div class="lk-set-row-sub" id="setBioSub">Use your face or fingerprint instead of your password</div>
+            </div>
+            <input type="checkbox" class="lk-set-check" id="prtBioToggle" onchange="parentSetBiometrics(this.checked)">
         </div>
     </div>
-    <div class="lk-card"><div class="lk-card-head"><h2>Messages</h2></div>
-        <div style="display:flex;flex-direction:column;gap:12px;">
-            <label style="display:flex;align-items:center;justify-content:space-between;cursor:pointer;"><div><div style="font-size:.85rem;font-weight:600;">Confirm before deleting</div><div style="font-size:.72rem;color:var(--text-muted);">Ask for confirmation before a message is deleted</div></div><input type="checkbox" id="prtConfirmDeleteToggle" onchange="lkSetConfirmDelete(this.checked)" style="accent-color:var(--link-color);width:17px;height:17px;"></label>
-        </div>
+
+    <div class="lk-set-label">Notifications</div>
+    <div class="lk-card lk-set-card">
+        <div class="lk-set-row"><div class="lk-set-row-main"><div class="lk-set-row-title">Messages</div><div class="lk-set-row-sub">New messages from camp</div></div><input type="checkbox" class="lk-set-check" checked data-pref="notifyMessages" onchange="saveParentSettings(true)"></div>
+        <div class="lk-set-row"><div class="lk-set-row-main"><div class="lk-set-row-title">Payment reminders</div><div class="lk-set-row-sub">Upcoming payment alerts</div></div><input type="checkbox" class="lk-set-check" checked data-pref="notifyPayments" onchange="saveParentSettings(true)"></div>
+        <div class="lk-set-row"><div class="lk-set-row-main"><div class="lk-set-row-title">Canteen activity</div><div class="lk-set-row-sub">Purchases and low balance</div></div><input type="checkbox" class="lk-set-check" data-pref="notifyCanteen" onchange="saveParentSettings(true)"></div>
+        <div class="lk-set-row"><div class="lk-set-row-main"><div class="lk-set-row-title">Photos</div><div class="lk-set-row-sub">New photo uploads</div></div><input type="checkbox" class="lk-set-check" checked data-pref="notifyPhotos" onchange="saveParentSettings(true)"></div>
+        <div class="lk-set-row"><div class="lk-set-row-main"><div class="lk-set-row-title">Health updates</div><div class="lk-set-row-sub">Nurse visit notes and health alerts</div></div><input type="checkbox" class="lk-set-check" checked data-pref="notifyHealth" onchange="saveParentSettings(true)"></div>
     </div>
-    <div class="lk-card"><div class="lk-card-head"><h2>Feedback</h2></div>
-        <div style="display:flex;flex-direction:column;gap:12px;">
-            <label style="display:flex;align-items:center;justify-content:space-between;cursor:pointer;"><div><div style="font-size:.85rem;font-weight:600;">Haptics</div><div style="font-size:.72rem;color:var(--text-muted);">A short tap when you press something</div></div><input type="checkbox" id="prtHapticToggle" onchange="parentSetHaptics(this.checked)" style="accent-color:var(--link-color);width:17px;height:17px;"></label>
-        </div>
+
+    <div class="lk-set-label">App</div>
+    <div class="lk-card lk-set-card">
+        <div class="lk-set-row"><div class="lk-set-row-main"><div class="lk-set-row-title">Haptics</div><div class="lk-set-row-sub">A short tap when you press something</div></div><input type="checkbox" class="lk-set-check" id="prtHapticToggle" onchange="parentSetHaptics(this.checked)"></div>
+        <div class="lk-set-row"><div class="lk-set-row-main"><div class="lk-set-row-title">Confirm before deleting</div><div class="lk-set-row-sub">Ask before a message is deleted</div></div><input type="checkbox" class="lk-set-check" id="prtConfirmDeleteToggle" onchange="lkSetConfirmDelete(this.checked)"></div>
     </div>
+
+    <button class="lk-set-signout" onclick="parentSignOut && parentSignOut()">Sign out</button>
+    <div class="lk-set-version" id="setVersion">Campistry Link</div>
 </div>
 
 <!-- TIPS PAGE -->
@@ -1323,6 +1346,8 @@ function init(){
     // Settings fields
     var sn=document.getElementById('settingsName');if(sn)sn.value=parent.name;
     var se=document.getElementById('settingsEmail');if(se)se.value=parent.email;
+    _paintParentSettings();
+    _hydrateParentSettings();   // the cloud copy wins once it arrives (migration 051)
 
     _updateMsgBadges();
     var bal=children.length?(children.reduce(function(s,c){return s+(c.canteenBalance||0)},0)).toFixed(2):null;
@@ -2073,13 +2098,146 @@ function changeSchedDate(delta){
 // SETTINGS — persisted locally per device
 var PARENT_PREFS_KEY = 'campistry_link_parent_prefs_v1';
 function _loadParentPrefs(){ try{ return JSON.parse(localStorage.getItem(PARENT_PREFS_KEY)||'{}'); }catch(e){ return {}; } }
+// Settings used to be written to localStorage and nowhere else, so the camp
+// never saw a corrected phone number and nothing followed the parent to a
+// second device or from the browser into the app. The name was not saved at
+// all. It now writes locally AND to the cloud; local stays as the instant,
+// offline-safe copy, the cloud is the one the camp and your other devices read.
+//
+// save_my_parent_profile arrives with migration 051. Until that is applied the
+// RPC is simply absent, the call fails, and the local save still stands — so
+// this degrades to exactly the old behaviour rather than breaking.
 function saveParentSettings(silent){
     var prefs=_loadParentPrefs();
+    prefs.name =(document.getElementById('settingsName')||{}).value||'';
     prefs.phone=(document.getElementById('settingsPhone')||{}).value||'';
     document.querySelectorAll('#page-settings input[data-pref]').forEach(function(cb){ prefs[cb.dataset.pref]=cb.checked; });
     try{ localStorage.setItem(PARENT_PREFS_KEY, JSON.stringify(prefs)); }catch(e){}
-    if(!silent) toast('Settings saved');
+
+    var db=window._parentDB;
+    if(db&&db.rpc){
+        db.rpc('save_my_parent_profile',{
+            p_display_name: prefs.name || null,
+            p_phone:        prefs.phone || null,
+            p_prefs:        _prefsForCloud(prefs)
+        }).then(function(res){
+            if(res.error){ console.warn('[Parent] profile save (migration 051 applied?):', res.error.message); }
+        }, function(){});
+    }
+
+    if(silent) return;
+    var el=document.getElementById('settingsSavedMsg');
+    if(el){ el.textContent='Saved'; el.classList.add('show'); setTimeout(function(){ el.classList.remove('show'); },1800); }
+    else toast('Settings saved');
 }
+
+// Only the notification switches belong in the shared prefs blob — name and
+// phone are columns of their own, and the local-only keys (dismissed prompts,
+// UI state) have no business travelling between devices.
+function _prefsForCloud(prefs){
+    var out={};
+    ['notifyMessages','notifyPayments','notifyCanteen','notifyPhotos','notifyHealth'].forEach(function(k){
+        if(typeof prefs[k]!=='undefined') out[k]=!!prefs[k];
+    });
+    return out;
+}
+
+// Pull the cloud copy on open so a parent who set things up on their phone sees
+// the same settings in the browser. The local copy wins only when it is all we
+// have, since the cloud is the shared truth.
+function _hydrateParentSettings(){
+    var db=window._parentDB;
+    if(!(db&&db.rpc)) return;
+    db.rpc('get_my_parent_profile',{}).then(function(res){
+        var d=res&&res.data;
+        if(!d||!d.success) return;   // absent RPC (051 not applied) or no row yet
+        var prefs=_loadParentPrefs();
+        if(d.displayName) prefs.name=d.displayName;
+        if(d.phone) prefs.phone=d.phone;
+        Object.keys(d.prefs||{}).forEach(function(k){ prefs[k]=d.prefs[k]; });
+        try{ localStorage.setItem(PARENT_PREFS_KEY, JSON.stringify(prefs)); }catch(e){}
+        _paintParentSettings();
+    }, function(){});
+}
+
+// Fills the page from whatever we know. Safe to call repeatedly.
+function _paintParentSettings(){
+    var prefs=_loadParentPrefs();
+    var p=(typeof parent!=='undefined'&&parent)?parent:{};
+    var nameEl=document.getElementById('settingsName');
+    var phoneEl=document.getElementById('settingsPhone');
+    var mailEl=document.getElementById('settingsEmail');
+    if(nameEl&&!nameEl.value) nameEl.value=prefs.name||p.name||'';
+    if(phoneEl&&!phoneEl.value) phoneEl.value=prefs.phone||'';
+    if(mailEl&&!mailEl.value) mailEl.value=p.email||'';
+    document.querySelectorAll('#page-settings input[data-pref]').forEach(function(cb){
+        if(typeof prefs[cb.dataset.pref]!=='undefined') cb.checked=!!prefs[cb.dataset.pref];
+    });
+
+    var full=(prefs.name||p.name||'').trim();
+    var av=document.getElementById('setIdAvatar');
+    if(av) av.textContent=full?full.split(/\s+/).map(function(w){return w[0];}).slice(0,2).join('').toUpperCase():'·';
+    var nm=document.getElementById('setIdName'); if(nm) nm.textContent=full||'Your account';
+    var em=document.getElementById('setIdEmail'); if(em) em.textContent=p.email||'';
+    // Which camps this family is connected to — the thing a multi-camp parent
+    // most often wants to confirm, and previously had nowhere to see.
+    var camps={}; (typeof children!=='undefined'?children:[]).forEach(function(c){ if(c.campName) camps[c.campName]=1; });
+    var cs=document.getElementById('setIdCamps');
+    if(cs) cs.innerHTML=Object.keys(camps).map(function(n){ return '<span>'+_escHtml(n)+'</span>'; }).join('');
+
+    // Guarded: the haptics painter lives inside the portal IIFE and is exposed
+    // on window from there, so it may not exist yet when this runs early.
+    if (window._paintHapticState) window._paintHapticState();
+    _paintBioState();
+}
+
+// Biometrics belongs in Settings — until now the only way to reach the enrolment
+// was the unlock screen, and "Use password instead" deliberately does not turn
+// it off, so there was no way to remove it from a device at all.
+function _paintBioState(){
+    var row=document.getElementById('setBioRow');
+    var box=document.getElementById('prtBioToggle');
+    var sub=document.getElementById('setBioSub');
+    var B=window.CampistryBio;
+    if(!row||!box||!B) return;
+    B.available().then(function(ok){
+        var why=B.why?null:null;
+        row.style.display = ok ? '' : 'none';   // hide rather than show a dead switch
+        box.checked = B.isEnabled();
+        if(sub) sub.textContent = B.isEnabled()
+            ? 'On — asked each time you open Campistry Link'
+            : 'Use your face or fingerprint instead of your password';
+    }).catch(function(){});
+}
+
+window.parentSetBiometrics=function(on){
+    var B=window.CampistryBio;
+    if(!B) return;
+    if(!on){
+        // Turning it off is the "forget this device" action: the enrolment and
+        // the stored session both go, so nothing is left behind to unlock with.
+        B.disable();
+        _paintBioState();
+        toast('Biometric unlock turned off');
+        return;
+    }
+    var p=(typeof parent!=='undefined'&&parent)?parent:{};
+    var db=window._parentDB;
+    if(!(db&&db.auth)){ toast('Not signed in'); return; }
+    // The enrolment is bound to the signed-in user id, so on a shared phone a
+    // second parent's face can never unlock the first one's session. Read it
+    // from the live session rather than a global that may not be set yet.
+    db.auth.getSession().then(function(r){
+        var s=r&&r.data&&r.data.session;
+        var uid=s&&s.user&&s.user.id;
+        if(!uid){ toast('Not signed in'); return; }
+        B.enroll(p.email||'', p.name||p.email||'', uid).then(function(ok){
+            if(!ok) toast('Could not turn on biometrics');
+            else { B.saveSession(s); toast('Biometric unlock is on'); }
+            _paintBioState();
+        });
+    });
+};
 
 // Change the parent's LOGIN email. Supabase updates the auth account (and,
 // depending on the project's settings, sends a confirmation to the new address);
@@ -2109,13 +2267,10 @@ function changeParentEmail(){
         }).catch(function(){ say('Check '+newEmail+' for a confirmation link to finish the change.', 'var(--green-600)'); });
     }).catch(function(){ say('Could not update — check your connection.', 'var(--red-500)'); });
 }
-function applyParentPrefs(){
-    var prefs=_loadParentPrefs();
-    var ph=document.getElementById('settingsPhone'); if(ph&&prefs.phone)ph.value=prefs.phone;
-    document.querySelectorAll('#page-settings input[data-pref]').forEach(function(cb){
-        if(typeof prefs[cb.dataset.pref]==='boolean') cb.checked=prefs[cb.dataset.pref];
-    });
-}
+// Kept as the entry point the rest of the code already calls; the work now
+// lives in _paintParentSettings so the identity block, the toggles and the
+// fields can never drift out of step with each other.
+function applyParentPrefs(){ _paintParentSettings(); }
 
 // CAMP LISTS (packing lists / checklists shared by the camp)
 var LIST_CHECK_KEY = 'campistry_link_list_checks_v1';
@@ -3505,6 +3660,8 @@ window.addEventListener('storage', function(e) {
         var H = window.CampistryHaptics;
         if (el) el.checked = (!H || H.enabled());
     }
+    // Exposed: _paintParentSettings lives outside this IIFE and needs it.
+    window._paintHapticState = _paintHapticState;
     document.addEventListener('DOMContentLoaded', _paintHapticState);
     _paintHapticState();
 

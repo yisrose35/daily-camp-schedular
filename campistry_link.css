@@ -1338,3 +1338,67 @@ body {
 .lk-auth-brand:has(.lk-login-unlock) { align-items: stretch !important; }
 .lk-login-unlock { display: flex; flex-direction: column; }
 .lk-login-unlock .lk-login-actions { margin-top: auto; margin-bottom: auto; }
+
+/* ─── Settings ────────────────────────────────────────────────────────────
+   Grouped rows with a section label above each card, which is the pattern
+   people already know from their phone's own settings — and the pattern the
+   old page was missing, being one long undifferentiated stack of cards. */
+.lk-set-label {
+    font-size: 0.72rem; font-weight: 700; text-transform: uppercase;
+    letter-spacing: 0.07em; color: var(--text-muted);
+    margin: 22px 2px 8px;
+}
+.lk-set-card { padding: 4px 16px; }
+.lk-set-card .lk-field { margin: 14px 0; }
+
+/* Identity block: who you are, and which camps you're connected to. */
+.lk-set-id {
+    display: flex; align-items: center; gap: 14px;
+    background: var(--md-surface); border-radius: var(--radius-lg);
+    padding: 16px; box-shadow: var(--shadow-sm);
+}
+.lk-set-id-avatar {
+    width: 52px; height: 52px; border-radius: 50%; flex: none;
+    background: var(--link-color); color: #fff;
+    display: flex; align-items: center; justify-content: center;
+    font-size: 1.1rem; font-weight: 700;
+}
+.lk-set-id-body { min-width: 0; }
+.lk-set-id-name { font-size: 1rem; font-weight: 700; color: var(--slate-900); }
+.lk-set-id-sub  { font-size: 0.8rem; color: var(--text-muted); word-break: break-all; }
+.lk-set-id-camps { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 7px; }
+.lk-set-id-camps span {
+    font-size: 0.7rem; font-weight: 600; padding: 3px 9px; border-radius: 999px;
+    background: var(--link-tint); color: var(--link-color);
+}
+
+/* One row shape for every toggle, so the controls line up down the card
+   instead of each label sizing its own row. */
+.lk-set-row {
+    display: flex; align-items: center; gap: 14px;
+    padding: 14px 0; border-top: 1px solid var(--slate-100);
+}
+.lk-set-card .lk-set-row:first-child,
+.lk-set-card .lk-field + .lk-set-row { border-top: 1px solid var(--slate-100); }
+.lk-set-card > .lk-set-row:first-child { border-top: none; }
+.lk-set-row-main { flex: 1; min-width: 0; }
+.lk-set-row-title { font-size: 0.87rem; font-weight: 600; color: var(--slate-900); }
+.lk-set-row-sub { font-size: 0.75rem; color: var(--text-muted); margin-top: 2px; line-height: 1.45; }
+/* 20px, not 17: this is a touch target on a phone, not a desktop checkbox. */
+.lk-set-check { width: 20px; height: 20px; flex: none; accent-color: var(--link-color); cursor: pointer; }
+
+.lk-set-inline { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+.lk-set-inline .lk-input { flex: 1; min-width: 180px; }
+.lk-set-hint { font-size: 0.75rem; min-height: 15px; margin-top: 5px; color: var(--text-muted); }
+.lk-set-actions { display: flex; align-items: center; gap: 10px; margin: 4px 0 16px; }
+.lk-set-saved { font-size: 0.76rem; font-weight: 600; color: var(--green-600); opacity: 0; transition: opacity 0.2s ease; }
+.lk-set-saved.show { opacity: 1; }
+
+.lk-set-signout {
+    display: block; width: 100%; margin-top: 26px; padding: 14px;
+    background: var(--md-surface); border: 1px solid var(--slate-100);
+    border-radius: var(--radius-lg); cursor: pointer;
+    font-family: inherit; font-size: 0.9rem; font-weight: 700; color: var(--red-500);
+}
+.lk-set-signout:active { background: var(--slate-50); }
+.lk-set-version { text-align: center; font-size: 0.72rem; color: var(--text-muted); margin: 16px 0 4px; }
