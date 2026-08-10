@@ -29,14 +29,21 @@
     function showPane(name) {
         const panes = { bio: $('liteBioPane'), form: $('liteLoginForm'), offer: $('liteBioOffer') };
         Object.keys(panes).forEach(k => { if (panes[k]) panes[k].hidden = k !== name; });
+
+        // The unlock screen is deliberately barer than the sign-in screen: mark,
+        // wordmark, one action. "Unlock Campistry Lite" is on the button, so a
+        // title and a subtitle saying much the same thing are just noise on a
+        // screen you see every single time you open the app.
+        const title = $('liteLoginTitle');
         const sub = $('liteLoginSub');
+        if (title) title.innerHTML = name === 'bio' ? 'Lite' : 'Campistry <span>Lite</span>';
         if (sub) {
-            sub.textContent = name === 'offer' ? 'You’re signed in'
-                            : name === 'bio'   ? 'Unlock to continue'
-                            :                    'Sign in to your camp';
+            sub.hidden = name === 'bio';
+            sub.textContent = name === 'offer' ? 'You’re signed in' : 'Sign in to your camp';
         }
         $('liteLogin').style.display = '';
     }
+
 
     function toast(msg) {
         const el = $('liteToast');
@@ -83,7 +90,7 @@
             return;
         }
         bioAvailable = Bio ? await Bio.available() : false;
-        $('liteBioLabel').textContent = 'Sign in using biometrics';
+        $('liteBioLabel').textContent = 'Unlock with biometrics';
         $('liteBioKind').textContent = BIO_NAME;
 
         let session = null;
@@ -109,7 +116,7 @@
                 showPane('bio');
                 // Some platforms only allow the prompt from a user gesture; the
                 // button is the fallback when this auto-attempt is refused.
-                runBio();
+                autoBio();
                 return;
             }
             location.replace(HOME);
@@ -122,7 +129,7 @@
         // than a password. Show the same biometric screen and restore on pass.
         if (Bio && Bio.isEnabled() && Bio.storedSession()) {
             showPane('bio');
-            runBio();
+            autoBio();
             return;
         }
         if (Bio) Bio.clearPass();
@@ -130,6 +137,16 @@
         // Deliberately no autofocus: it opens the keyboard over half the screen
         // before anyone has decided to type, and the accent focus ring on an
         // empty field reads as a validation error.
+    }
+
+    // Fire the prompt on open, but only after the brand screen has actually
+    // painted — so it reads as "the app opened, now unlock it" rather than a
+    // system sheet sliding over a blank frame. Two frames guarantees the paint;
+    // the short beat after is what makes it feel deliberate instead of abrupt.
+    function autoBio() {
+        requestAnimationFrame(function () {
+            requestAnimationFrame(function () { setTimeout(runBio, 240); });
+        });
     }
 
     async function runBio() {
