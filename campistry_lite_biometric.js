@@ -52,7 +52,7 @@
     var USER_KEY     = NS + '_bio_user';      // whose credential it is
     var SESS_KEY     = NS + '_bio_session';   // tokens to restore after sign-out
     var DECLINED_KEY = NS + '_bio_declined';  // don't nag after "Not now"
-    var PASS_KEY     = NS + '_bio_pass';      // sessionStorage — one-shot handoff
+    var PASS_KEY     = NS + '_bio_pass';      // one-shot handoff, see passFresh()
     var PASS_TTL_MS  = 60000;                 // generous for a slow cold boot
 
     var lastError = null;   // real cause of the last failed enrol/verify
@@ -144,18 +144,25 @@
     // A one-shot handoff, not a session flag. The login page writes it, the app
     // consumes it on the very next load, and it expires on its own — so every
     // fresh load of the app asks again, including a plain browser reload.
+    // The pass lives in localStorage, NOT sessionStorage. It has to survive a
+    // WebView reload: the live-update plugin reloads the app during startup to
+    // apply a pending bundle, and sessionStorage does not survive that — so
+    // someone who had just passed the check was asked for their face a second
+    // time, on nearly every launch while updates were shipping. It stays safe
+    // because it is still one-shot (consumed on read) and still expires after
+    // PASS_TTL_MS, so it can never become a "verified forever" flag.
     function markVerified() {
-        ls(function () { sessionStorage.setItem(PASS_KEY, String(Date.now())); });
+        ls(function () { localStorage.setItem(PASS_KEY, String(Date.now())); });
     }
     function passFresh() {
-        var raw = ls(function () { return sessionStorage.getItem(PASS_KEY); }, null);
+        var raw = ls(function () { return localStorage.getItem(PASS_KEY); }, null);
         if (!raw) return false;
         var t = parseInt(raw, 10);
         return !!t && (Date.now() - t) < PASS_TTL_MS;
     }
     function hasPass()     { return passFresh(); }               // peek
     function consumePass() { var ok = passFresh(); clearPass(); return ok; }
-    function clearPass()   { ls(function () { sessionStorage.removeItem(PASS_KEY); }); }
+    function clearPass()   { ls(function () { localStorage.removeItem(PASS_KEY); sessionStorage.removeItem(PASS_KEY); }); }
 
     function enroll(email, name, userId) {
         return navigator.credentials.create({ publicKey: {
