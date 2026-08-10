@@ -186,8 +186,17 @@
             userEmail = (session.user?.email || '').toLowerCase();
             splashProgress(28);
 
-            window.supabase.auth.onAuthStateChange((event) => {
-                if (event === 'SIGNED_OUT') window.location.href = LOGIN_PAGE;
+            window.supabase.auth.onAuthStateChange((event, s) => {
+                if (event === 'SIGNED_OUT') { window.location.href = LOGIN_PAGE; return; }
+                // Supabase refresh tokens are SINGLE-USE: each refresh (roughly
+                // hourly, via autoRefreshToken) invalidates the previous one.
+                // Saving the biometric copy only at sign-in therefore left it
+                // holding a dead token within the hour, and unlocking failed
+                // with "your saved sign-in expired" — for everyone, every time.
+                // Re-save on every rotation so the stored copy stays live.
+                if (s && Bio && (event === 'TOKEN_REFRESHED' || event === 'SIGNED_IN' || event === 'USER_UPDATED')) {
+                    Bio.saveSession(s);
+                }
             });
 
             // Camp + role resolution

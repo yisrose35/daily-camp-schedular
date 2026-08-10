@@ -876,59 +876,93 @@ button { cursor: pointer; border: none; background: none; }
 /* The app's single gate. Coral gradient canvas, badged mark, display wordmark,
    one white primary action. Intentionally theme-independent — the brand colour
    IS the surface here, so there is no light/dark variant to keep in sync. */
+/* Two layers, not one flat ramp: a diagonal brand gradient, plus a soft radial
+   light behind where the mark sits. A single linear fill is what makes a brand
+   screen read as a coloured <div>; an implied light source is most of what
+   separates it from a real product's front door. */
 .lite-login-page {
-    background: linear-gradient(160deg, var(--coral-500, #EE6A53), var(--coral-700, #B23A28));
+    background:
+        radial-gradient(120% 62% at 50% 6%, rgba(255, 255, 255, 0.22), rgba(255, 255, 255, 0) 62%),
+        linear-gradient(163deg, var(--coral-500, #EE6A53) 0%, var(--coral-600, #D9553F) 46%, var(--coral-700, #B23A28) 100%);
     background-attachment: fixed;
 }
 /* The app's ambient wash is tuned for the neutral surfaces; it only muddies
    the gradient here. */
 .lite-login-page::before { display: none; }
 
+/* Top-anchored, not centred. Centring buried the mark in the middle of the
+   screen and left the whole thing floating; every banking app worth copying
+   puts the mark high and lets the form hang beneath it. clamp() keeps that
+   true from a small phone to a tablet without a media query. */
 .lite-login {
-    min-height: 100dvh; display: flex; align-items: center; justify-content: center;
-    padding: calc(28px + env(safe-area-inset-top)) 24px calc(24px + env(safe-area-inset-bottom));
+    min-height: 100dvh; display: flex; align-items: flex-start; justify-content: center;
+    padding: calc(clamp(44px, 11vh, 104px) + env(safe-area-inset-top)) 24px calc(28px + env(safe-area-inset-bottom));
 }
-.lite-login-inner { width: 100%; max-width: 340px; text-align: center; color: #fff; }
+.lite-login-inner {
+    width: 100%; max-width: 348px; text-align: center; color: #fff;
+    animation: liteLoginIn 0.5s cubic-bezier(0.22, 1, 0.36, 1) both;
+}
+/* Rises in rather than appearing. Cheap, and it is the difference between a
+   screen that loaded and a screen that arrived. */
+@keyframes liteLoginIn {
+    from { opacity: 0; transform: translateY(10px); }
+    to   { opacity: 1; transform: none; }
+}
+@media (prefers-reduced-motion: reduce) {
+    .lite-login-inner { animation: none; }
+}
 
+/* The badge carries a rim-light and an inner lift so the mark sits ON the
+   surface instead of being punched out of it. */
 .lite-login-badge {
-    width: 84px; height: 84px; border-radius: 50%; margin: 0 auto 18px;
-    background: rgba(255, 255, 255, 0.18);
+    width: 92px; height: 92px; border-radius: 50%; margin: 0 auto 22px;
+    background: linear-gradient(180deg, rgba(255, 255, 255, 0.26), rgba(255, 255, 255, 0.13));
+    box-shadow:
+        inset 0 1px 0 rgba(255, 255, 255, 0.45),
+        0 10px 28px rgba(87, 22, 10, 0.22);
     display: flex; align-items: center; justify-content: center;
 }
 /* Masked rather than an <img>: the source PNG is matted, so it haloes on a
    saturated surface. A mask also lets the mark simply be white. */
 .lite-login-mark {
-    width: 40px; height: 40px; background: #fff;
+    width: 42px; height: 42px; background: #fff;
     -webkit-mask: url('Campistry_logo.png') center / contain no-repeat;
     mask: url('Campistry_logo.png') center / contain no-repeat;
 }
 
-.lite-login-title { font-family: var(--font-display); font-size: 1.6rem; font-weight: 700; margin: 0; color: #fff; }
-.lite-login-title span { opacity: 0.85; }
-.lite-login-sub { font-size: 0.9rem; opacity: 0.9; margin: 4px 0 26px; }
+.lite-login-title {
+    font-family: var(--font-display); font-size: 2rem; font-weight: 700;
+    letter-spacing: -0.02em; line-height: 1.1; margin: 0; color: #fff;
+}
+.lite-login-title span { opacity: 0.82; }
+.lite-login-sub {
+    font-size: 0.9rem; opacity: 0.82; margin: 8px 0 30px; letter-spacing: 0.01em;
+}
 
 /* Fields are translucent white rather than solid: on this canvas a solid white
    input competes with the white button, and the button has to stay the single
    obvious action. Placeholders are omitted — a label plus a real focus state
    is clearer than grey text people mistake for a filled value. */
-.lite-lf { margin-bottom: 14px; text-align: left; }
+.lite-lf { margin-bottom: 16px; text-align: left; }
 .lite-lf label {
-    display: block; font-size: 0.78rem; font-weight: 600;
-    color: rgba(255, 255, 255, 0.92); margin: 0 0 6px 2px;
+    display: block; font-size: 0.72rem; font-weight: 700;
+    text-transform: uppercase; letter-spacing: 0.07em;
+    color: rgba(255, 255, 255, 0.78); margin: 0 0 8px 2px;
 }
 .lite-lf-wrap { position: relative; }
 .lite-lf-input {
-    width: 100%; height: 50px; padding: 0 14px;
-    font-size: 16px; color: #fff; caret-color: #fff;
-    background: rgba(255, 255, 255, 0.16);
-    border: 1px solid rgba(255, 255, 255, 0.28); border-radius: 12px;
-    transition: background 0.14s ease, border-color 0.14s ease, box-shadow 0.14s ease;
+    width: 100%; height: 54px; padding: 0 16px;
+    font-size: 16px; font-weight: 500; color: #fff; caret-color: #fff;
+    background: rgba(255, 255, 255, 0.13);
+    border: 1px solid rgba(255, 255, 255, 0.22); border-radius: 14px;
+    box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.10);
+    transition: background 0.16s ease, border-color 0.16s ease, box-shadow 0.16s ease;
 }
-.lite-lf-wrap .lite-lf-input { padding-right: 48px; }
+.lite-lf-wrap .lite-lf-input { padding-right: 50px; }
 .lite-lf-input:focus {
-    outline: none; background: rgba(255, 255, 255, 0.22);
-    border-color: rgba(255, 255, 255, 0.85);
-    box-shadow: 0 0 0 3px rgba(255, 255, 255, 0.18);
+    outline: none; background: rgba(255, 255, 255, 0.19);
+    border-color: rgba(255, 255, 255, 0.72);
+    box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.12), 0 0 0 4px rgba(255, 255, 255, 0.14);
 }
 /* Chrome's autofill paints its own opaque background and near-black text,
    which would be unreadable here; the inset shadow trick is the only way to
@@ -955,16 +989,24 @@ button { cursor: pointer; border: none; background: none; }
     color: #fff; font-size: 0.82rem; font-weight: 600;
 }
 
+/* The unlock pane hides the subtitle, and the subtitle was carrying the gap
+   under the wordmark — without this the button crowds the mark. */
+#liteBioPane { margin-top: 30px; }
+
 /* Biometric entry. Given the same weight as the password button because it is
    the same action, not a shortcut tucked underneath one. */
 .lite-bio-btn {
     display: flex; width: 100%; align-items: center; justify-content: center; gap: 10px;
     min-height: 56px; padding: 0 18px; border-radius: 14px;
     background: #fff; color: var(--coral-700, #B23A28);
-    font-size: 0.98rem; font-weight: 700;
-    transition: transform 0.1s ease, background 0.15s ease;
+    font-size: 1rem; font-weight: 700; letter-spacing: 0.01em;
+    box-shadow: 0 8px 22px rgba(87, 22, 10, 0.26);
+    transition: transform 0.12s ease, box-shadow 0.12s ease, background 0.15s ease;
 }
-.lite-bio-btn:active { transform: scale(0.98); background: rgba(255, 255, 255, 0.88); }
+.lite-bio-btn:active {
+    transform: translateY(1px); background: rgba(255, 255, 255, 0.9);
+    box-shadow: 0 4px 12px rgba(87, 22, 10, 0.22);
+}
 .lite-bio-btn:disabled { opacity: 0.6; }
 .lite-bio-btn svg { width: 24px; height: 24px; flex: none; }
 
@@ -974,15 +1016,33 @@ button { cursor: pointer; border: none; background: none; }
 }
 .lite-login-offer span { font-weight: 700; }
 
-.lite-login .lite-btn { background: #fff; color: var(--coral-700, #B23A28); }
-.lite-login .lite-btn:active { background: rgba(255, 255, 255, 0.88); }
-.lite-login-go { margin-top: 8px; height: 52px; font-size: 0.98rem; }
+/* The one solid element on the screen, and the only thing casting a real
+   shadow — that is what makes it read as the action rather than a panel. */
+.lite-login .lite-btn {
+    background: #fff; color: var(--coral-700, #B23A28);
+    box-shadow: 0 8px 22px rgba(87, 22, 10, 0.26);
+    transition: transform 0.12s ease, box-shadow 0.12s ease, background 0.15s ease;
+}
+.lite-login .lite-btn:active {
+    background: rgba(255, 255, 255, 0.9);
+    transform: translateY(1px);
+    box-shadow: 0 4px 12px rgba(87, 22, 10, 0.22);
+}
+.lite-login-go {
+    margin-top: 12px; height: 54px; border-radius: 14px;
+    font-size: 1rem; font-weight: 700; letter-spacing: 0.01em;
+}
 .lite-login-alt {
-    display: block; width: 100%; margin-top: 14px; background: none;
-    color: #fff; opacity: 0.85; font-size: 0.86rem; font-weight: 600;
+    display: block; width: 100%; margin-top: 18px; background: none;
+    color: #fff; opacity: 0.78; font-size: 0.86rem; font-weight: 600;
+    letter-spacing: 0.01em;
 }
+.lite-login-alt:active { opacity: 1; }
+/* Pushed to the bottom of the screen rather than trailing the form: legal-ish
+   small print belongs at the foot of the page, not attached to the controls. */
 .lite-login-foot {
-    margin: 26px 0 0; font-size: 0.75rem; line-height: 1.55;
-    color: rgba(255, 255, 255, 0.72);
+    margin: 40px 0 0; font-size: 0.74rem; line-height: 1.6;
+    color: rgba(255, 255, 255, 0.62);
 }
+.lite-login-foot a { color: rgba(255, 255, 255, 0.9); font-weight: 600; }
 .lite-login-foot a { color: #fff; font-weight: 600; text-decoration: none; opacity: 0.9; }
