@@ -19181,6 +19181,42 @@
                                 else s += g.len;
                             });
                         });
+                        // ★ SILENT FLOOR MISSES — the openSlots census has a blind spot: a
+                        //   floor demoted at demand-reconcile leaves NO tile and NO open
+                        //   window, so neither the probe nor the endgame ever sees it (live:
+                        //   a u0-scored winner audited at 6 unmet floors). Census the floors
+                        //   straight from the layers vs the candidate's tiles; a miss with
+                        //   no window is unfixable post-emit → full 3e6.
+                        try {
+                            var _sfOpenBy = {};
+                            (r.openSlots || []).forEach(function (rec) { if (rec) (_sfOpenBy[rec.bunk] = _sfOpenBy[rec.bunk] || {})[_asCanon(rec.subcat)] = 1; });
+                            var _sfAvail = {};
+                            try { ((typeof todaysSpecials !== 'undefined' && todaysSpecials) || []).forEach(function (x) { if (x && x.name && x.available !== false) _sfAvail[_asCanon(x.subcategory)] = 1; }); } catch (_e) {}
+                            var _sfNeed = {};
+                            (layers || []).forEach(function (l) {
+                                if (!l || String(l.type || '').toLowerCase() !== 'special' || !l.subQuantities) return;
+                                var g = l.grade || l.division || '_all';
+                                var ops = l.subOps || {};
+                                Object.keys(l.subQuantities).forEach(function (sn) {
+                                    if (!(parseInt(l.subQuantities[sn], 10) > 0)) return;
+                                    var mk = Object.keys(ops).filter(function (x) { return x.toLowerCase() === String(sn).toLowerCase(); })[0];
+                                    if ((mk ? ops[mk] : '=') === '<=') return;
+                                    (_sfNeed[g] = _sfNeed[g] || {})[_asCanon(sn)] = 1;
+                                });
+                            });
+                            (r.order || []).forEach(function (b) {
+                                var res = r.out && r.out.layoutByBunk && r.out.layoutByBunk[b]; if (!res) return;
+                                var g2 = null;
+                                try { g2 = Object.keys(_sfNeed).filter(function (gg) { return gg !== '_all' && (getBunksForGrade(gg, divisions) || []).indexOf(b) >= 0; })[0] || (_sfNeed._all ? '_all' : null); } catch (_e) {}
+                                if (!g2) return;
+                                Object.keys(_sfNeed[g2]).forEach(function (sc) {
+                                    if (!_sfAvail[sc]) return;                              // void today — not a miss
+                                    if (_asHolds[b] && _asHolds[b][sc]) return;             // floor met
+                                    if (_sfOpenBy[b] && _sfOpenBy[b][sc]) return;           // has a window — already scored above
+                                    s += 3e6; r._silent = (r._silent || 0) + 1;
+                                });
+                            });
+                        } catch (_eSf) {}
                         return s;
                     };
                     var _glArrClaims0 = _glArrSnapClaims();
@@ -21781,10 +21817,10 @@
                         if (!_gRes) continue;
                         _gRes._trial = _gt; _gRes._strat = _gStrat.label;
                         _gRes._score = _glArrScore(_gRes);
-                        _glScores.push('t' + _gt + '(' + _gStrat.label + ')=' + _gRes._score + '[u' + (_gRes._unresc || 0) + '/r' + (_gRes._resc || 0) + ']');
+                        _glScores.push('t' + _gt + '(' + _gStrat.label + ')=' + _gRes._score + '[u' + (_gRes._unresc || 0) + '/r' + (_gRes._resc || 0) + (_gRes._silent ? '/s' + _gRes._silent : '') + ']');
                         if (!_glBest || _gRes._score < _glBest._score) _glBest = _gRes;
                         if (_gt === _glArrTrials - 1 && !_glArrExplicit && _glArrMax === _glArrTrials
-                            && _glBest && (_glBest._unresc || 0) > 0 && _glArrTrials > 1) {
+                            && _glBest && ((_glBest._unresc || 0) + (_glBest._silent || 0)) > 0 && _glArrTrials > 1) {
                             _glArrMax = Math.min(10, _glArrTrials + 4);
                             log('[ARRANGE] best after ' + _glArrTrials + ' trial(s) still has ' + _glBest._unresc + ' unrescuable floor breach(es) — extending the search by ' + (_glArrMax - _glArrTrials) + ' trial(s)');
                         }
