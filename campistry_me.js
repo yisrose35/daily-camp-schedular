@@ -2935,7 +2935,6 @@ function renderStaffing(){
     h+='<div style="flex:1;min-width:200px"><div style="font-size:.8rem;font-weight:600;color:var(--s500)">STAFF APPLICATION LINK</div>';
     h+='<div style="font-size:.85rem;color:var(--me);font-weight:600;word-break:break-all;margin-top:2px">'+esc(window.location.origin+'/campistry_staff_apply.html')+'</div></div>';
     h+='<button class="me-btn me-btn--pri me-btn--sm" onclick="CampistryMe.copyStaffLink()">Copy Link</button>';
-    h+='<a href="campistry_staff_apply.html" target="_blank" class="me-btn me-btn--sec me-btn--sm" style="text-decoration:none">Preview Form</a>';
     h+='<button class="me-btn me-btn--sec me-btn--sm" onclick="CampistryMe.openSendStaffLinkModal()">✉ Send Link</button>';
     h+='<button class="me-btn me-btn--sec me-btn--sm" onclick="CampistryMe.showStaffQR()">▦ QR Code</button>';
     h+='<button class="me-btn me-btn--sec me-btn--sm" onclick="CampistryMe.openStaffFormConfig()">⚙ Customize Form</button></div>';
@@ -3109,7 +3108,6 @@ function renderEnrollment(){
     h+='<div style="flex:1;min-width:200px"><div style="font-size:.8rem;font-weight:600;color:var(--s500)">PARENT REGISTRATION LINK</div>';
     h+='<div style="font-size:.85rem;color:var(--me);font-weight:600;word-break:break-all;margin-top:2px">'+esc(window.location.origin+'/campistry_register.html')+'</div></div>';
     h+='<button class="me-btn me-btn--pri me-btn--sm" onclick="CampistryMe.copyRegLink()">Copy Link</button>';
-    h+='<a href="campistry_register.html" target="_blank" class="me-btn me-btn--sec me-btn--sm" style="text-decoration:none">Preview Form</a>';
     h+='<button class="me-btn me-btn--sec me-btn--sm" onclick="CampistryMe.openSendRegLinkModal()">✉ Send Link</button>';
     h+='<button class="me-btn me-btn--sec me-btn--sm" onclick="CampistryMe.showRegistrationQR()">▦ QR Code</button>';
     h+='<button class="me-btn me-btn--sec me-btn--sm" onclick="CampistryMe.openFormConfig()">⚙ Customize Form</button></div>';
