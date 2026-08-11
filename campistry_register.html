@@ -286,22 +286,26 @@ var FIELD_REQUIRED_STATE={
 };
 var FIELD_ENABLED_STATE={};
 
+// Baseline required-state this page shipped with — applyFieldConfig resets
+// to this before applying overrides, so it's safe to call repeatedly with a
+// changing draft config (live preview) rather than only ever adding hides.
+var FIELD_REQUIRED_DEFAULT={first:true,last:true,dob:true,gender:false,school:false,schoolGrade:false,teacher:false,parentName:true,parentRelation:false,parentPhone:true,parentEmail:true,parent2Name:false,parent2Phone:false,street:true,city:true,state:false,zip:true,emName:true,emRelation:false,emPhone:true,allergies:false,medications:false,dietary:false,medicalNotes:false,bunkmate:false,separate:false,shirt:false,source:false,notes:false};
 function applyFieldConfig(fields){
-    if(!fields)return;
+    fields=fields||{};
     Object.keys(FIELD_ELEMENT_MAP).forEach(function(fid){
-        var cfg=fields[fid]; if(!cfg)return;
         var input=document.getElementById(FIELD_ELEMENT_MAP[fid]);
         if(!input)return;
         var fg=input.closest('.fg');
-        var enabled=cfg.enabled!==false;
+        var cfg=fields[fid];
+        var enabled=cfg?(cfg.enabled!==false):true;
         FIELD_ENABLED_STATE[fid]=enabled;
         if(!enabled){ if(fg)fg.style.display='none'; return; }
         if(fg)fg.style.display='';
-        var required=!!cfg.required;
+        var required=cfg?!!cfg.required:!!FIELD_REQUIRED_DEFAULT[fid];
         FIELD_REQUIRED_STATE[fid]=required;
         var label=fg&&fg.querySelector('.fl');
         if(label){
-            var text=cfg.label||FIELD_DEFAULT_LABEL[fid];
+            var text=(cfg&&cfg.label)||FIELD_DEFAULT_LABEL[fid];
             label.innerHTML=esc(text)+(required?' <span class="rq">*</span>':'');
         }
     });
@@ -329,15 +333,15 @@ function applySectionOrder(order){
     if(cq&&sig&&sig.parentNode)sig.parentNode.insertBefore(cq,sig);
 }
 
+var BRAND_COLOR_DEFAULT='#D97706';
 function applyBranding(branding){
-    if(!branding)return;
-    if(branding.logo){
-        var img=document.getElementById('campLogo');
-        if(img){img.src=branding.logo;img.style.display='block';}
+    branding=branding||{};
+    var img=document.getElementById('campLogo');
+    if(img){
+        if(branding.logo){img.src=branding.logo;img.style.display='block';}
+        else{img.src='';img.style.display='none';}
     }
-    if(branding.color){
-        document.documentElement.style.setProperty('--me',branding.color);
-    }
+    document.documentElement.style.setProperty('--me',branding.color||BRAND_COLOR_DEFAULT);
 }
 
 // HTML+attribute-context escape. The previous textContent/innerHTML
@@ -426,6 +430,64 @@ async function showStatus(id){
 }
 
 // ─── LOAD DATA ───────────────────────────────────────────────
+var _baseCampNm=''; // camp name shown when no custom welcome message is set
+var SEC_MAP={address:'addrCard',emergency:'emCard',medical:'medCard',preferences:'prefCard',documents:'docCard',payment:'payCard',siblings:'sibCard',signature:'sigCard'};
+
+// Applies one form-config object to the live DOM. Written to be idempotent —
+// safe to call repeatedly with a changing draft (the Form Builder's live
+// preview does exactly that), not just once at page load.
+function applyFormConfig(fc){
+    fc=fc||{};
+    document.getElementById('campNm').textContent=fc.welcomeMessage||_baseCampNm;
+
+    var oldInstr=document.getElementById('_fcInstrEl'); if(oldInstr)oldInstr.remove();
+    if(fc.instructions){
+        var instrEl=document.createElement('p');
+        instrEl.id='_fcInstrEl';
+        instrEl.style.cssText='font-size:.85rem;color:var(--s600);text-align:center;margin-top:6px;line-height:1.5';
+        instrEl.textContent=fc.instructions;
+        document.querySelector('.hdr').appendChild(instrEl);
+    }
+
+    // Section toggles — reset to visible first so a re-enabled section
+    // reappears rather than staying hidden from a previous draft.
+    Object.keys(SEC_MAP).forEach(function(key){ var el=document.getElementById(SEC_MAP[key]); if(el)el.style.display=''; });
+    if(fc.sections){
+        Object.entries(fc.sections).forEach(function([key,cfg]){
+            if(!cfg.enabled&&SEC_MAP[key]){var el=document.getElementById(SEC_MAP[key]);if(el)el.style.display='none'}
+        });
+    }
+
+    // Custom questions
+    var cqEl=document.getElementById('customQCard');
+    if(fc.customQuestions&&fc.customQuestions.length){
+        var qh='';
+        fc.customQuestions.forEach(function(q,i){
+            qh+='<div class="fg">';
+            qh+='<label class="fl">'+esc(q.label)+(q.required?'<span class="rq">*</span>':'')+'</label>';
+            if(q.type==='text')qh+='<input class="fi cqInput" data-q="'+i+'">';
+            else if(q.type==='textarea')qh+='<textarea class="fta cqInput" data-q="'+i+'"></textarea>';
+            else if(q.type==='yesno')qh+='<select class="fs cqInput" data-q="'+i+'"><option value="">—</option><option>Yes</option><option>No</option></select>';
+            else if(q.type==='select')qh+='<select class="fs cqInput" data-q="'+i+'"><option value="">—</option>'+(q.options||[]).map(function(o){return'<option>'+esc(o)+'</option>'}).join('')+'</select>';
+            else if(q.type==='checkbox'){
+                (q.options||[]).forEach(function(o,oi){
+                    qh+='<label style="display:flex;align-items:center;gap:6px;padding:3px 0;font-size:.85rem;cursor:pointer"><input type="checkbox" class="cqCb" data-q="'+i+'" value="'+esc(o)+'" style="accent-color:var(--me)">'+esc(o)+'</label>';
+                });
+            }
+            qh+='</div>';
+        });
+        if(cqEl){document.getElementById('cqContent').innerHTML=qh;cqEl.style.display='block';}
+    }else if(cqEl){
+        cqEl.style.display='none';
+        document.getElementById('cqContent').innerHTML='';
+    }
+
+    // Advanced: per-field overrides, section order, branding
+    applyFieldConfig(fc.fields);
+    applySectionOrder(fc.sectionOrder);
+    applyBranding(fc.branding);
+}
+
 function load(){
     try{
         var g=JSON.parse(localStorage.getItem('campGlobalSettings_v1')||'{}');
@@ -433,50 +495,24 @@ function load(){
         sessions=me.sessions||[];
         promoCodes=me.promoCodes||{EARLYBIRD:{pct:10,label:'Early Bird 10% Off'},SIBLING:{pct:5,label:'Sibling Discount 5%'},REFER:{amt:50,label:'Referral $50 Off'}};
         var cn=g.campName||g.app1?.campName||'';
+        _baseCampNm=cn;
         if(cn){document.getElementById('campTitle').textContent=cn+' Registration';document.getElementById('campNm').textContent=cn}
-
-        // Apply form config
-        var fc=me.formConfig;
-        if(fc){
-            if(fc.welcomeMessage){document.getElementById('campNm').textContent=fc.welcomeMessage}
-            if(fc.instructions){var instrEl=document.createElement('p');instrEl.style.cssText='font-size:.85rem;color:var(--s600);text-align:center;margin-top:6px;line-height:1.5';instrEl.textContent=fc.instructions;document.querySelector('.hdr').appendChild(instrEl)}
-            // Section toggles
-            var secMap={address:'addrCard',emergency:'emCard',medical:'medCard',preferences:'prefCard',documents:'docCard',payment:'payCard',siblings:'sibCard',signature:'sigCard'};
-            if(fc.sections){
-                Object.entries(fc.sections).forEach(function([key,cfg]){
-                    if(!cfg.enabled&&secMap[key]){var el=document.getElementById(secMap[key]);if(el)el.style.display='none'}
-                });
-            }
-            // Custom questions
-            if(fc.customQuestions&&fc.customQuestions.length){
-                var cqEl=document.getElementById('customQCard');
-                if(cqEl){
-                    var qh='';
-                    fc.customQuestions.forEach(function(q,i){
-                        qh+='<div class="fg">';
-                        qh+='<label class="fl">'+esc(q.label)+(q.required?'<span class="rq">*</span>':'')+'</label>';
-                        if(q.type==='text')qh+='<input class="fi cqInput" data-q="'+i+'">';
-                        else if(q.type==='textarea')qh+='<textarea class="fta cqInput" data-q="'+i+'"></textarea>';
-                        else if(q.type==='yesno')qh+='<select class="fs cqInput" data-q="'+i+'"><option value="">—</option><option>Yes</option><option>No</option></select>';
-                        else if(q.type==='select')qh+='<select class="fs cqInput" data-q="'+i+'"><option value="">—</option>'+(q.options||[]).map(function(o){return'<option>'+esc(o)+'</option>'}).join('')+'</select>';
-                        else if(q.type==='checkbox'){
-                            (q.options||[]).forEach(function(o,oi){
-                                qh+='<label style="display:flex;align-items:center;gap:6px;padding:3px 0;font-size:.85rem;cursor:pointer"><input type="checkbox" class="cqCb" data-q="'+i+'" value="'+esc(o)+'" style="accent-color:var(--me)">'+esc(o)+'</label>';
-                            });
-                        }
-                        qh+='</div>';
-                    });
-                    document.getElementById('cqContent').innerHTML=qh;
-                    cqEl.style.display='block';
-                }
-            }
-            // Advanced: per-field overrides, section order, branding
-            applyFieldConfig(fc.fields);
-            applySectionOrder(fc.sectionOrder);
-            applyBranding(fc.branding);
-        }
+        applyFormConfig(me.formConfig);
         renderSessions();
     }catch(e){console.warn(e)}
+}
+
+// ─── LIVE PREVIEW MODE (embedded in the Me "Form Builder") ────────────
+// When opened as ?preview=1 inside the builder's iframe, listen for draft
+// config pushed from the parent window and re-apply it live — nothing here
+// touches localStorage, so a draft never leaks into the saved/live form.
+if(new URLSearchParams(window.location.search).get('preview')==='1'){
+    window.addEventListener('message',function(ev){
+        if(ev.source!==window.parent)return;
+        if(!ev.data||ev.data.type!=='campistry-form-preview')return;
+        try{ applyFormConfig(ev.data.config||{}); }catch(e){ console.warn('[Register] preview apply failed',e); }
+    });
+    try{ window.parent.postMessage({type:'campistry-form-preview-ready'},'*'); }catch(e){}
 }
 
 function renderSessions(){

@@ -3350,33 +3350,151 @@ function _readAdvFields(prefix,catalog){
     });
     return fields;
 }
+// Real drag-and-drop reordering — same native-HTML5-DnD pattern already
+// used for camp-structure reordering (_meReorderInit/_meAttachItemDrag),
+// so this feels consistent with the rest of the app rather than inventing
+// a second drag system.
 function _renderSectionOrderList(prefix,sections,order){
     var keys=(order&&order.length)?order.slice():sections.map(function(s){return s.key});
     // Include any section missing from a stale saved order (e.g. after an app update).
     sections.forEach(function(s){ if(keys.indexOf(s.key)<0) keys.push(s.key); });
     var byKey={}; sections.forEach(function(s){byKey[s.key]=s;});
-    return '<div id="'+prefix+'OrderList">'+keys.map(function(k,i){
+    return '<div id="'+prefix+'OrderList">'+keys.map(function(k){
         var s=byKey[k]; if(!s)return'';
-        return '<div class="'+prefix+'OrderRow" data-key="'+k+'" style="display:flex;align-items:center;gap:8px;padding:6px 10px;border:1px solid var(--s200);border-radius:6px;margin-bottom:4px;background:#fff">'
-            +'<span style="flex:1;font-size:.82rem;font-weight:600;color:var(--s700)">'+esc(s.label)+'</span>'
-            +'<button type="button" class="me-btn me-btn--ghost me-btn--sm" style="padding:2px 8px" onclick="CampistryMe._moveOrderRow(this,-1)" '+(i===0?'disabled':'')+'>↑</button>'
-            +'<button type="button" class="me-btn me-btn--ghost me-btn--sm" style="padding:2px 8px" onclick="CampistryMe._moveOrderRow(this,1)">↓</button>'
+        return '<div class="'+prefix+'OrderRow" data-key="'+k+'" draggable="true" style="display:flex;align-items:center;gap:10px;padding:9px 10px;border:1px solid var(--s200);border-radius:8px;margin-bottom:5px;background:#fff;cursor:grab">'
+            +'<span style="color:var(--s300);font-size:.95rem;line-height:1;letter-spacing:-1px">⠿⠿</span>'
+            +'<span style="flex:1;font-size:.83rem;font-weight:600;color:var(--s700)">'+esc(s.label)+'</span>'
             +'</div>';
     }).join('')+'</div>';
 }
-function _moveOrderRow(btn,dir){
-    var row=btn.closest('[class*="OrderRow"]');
-    var list=row.parentElement;
-    if(dir<0&&row.previousElementSibling) list.insertBefore(row,row.previousElementSibling);
-    else if(dir>0&&row.nextElementSibling) list.insertBefore(row.nextElementSibling,row);
-    // Refresh disabled state on the "up" button of the first row in each list.
-    list.querySelectorAll('[class*="OrderRow"]').forEach(function(r,i){
-        var up=r.querySelector('button');
-        if(up) up.disabled=(i===0);
-    });
+// Wires the drag handlers onto a rendered order list — must run after the
+// HTML above is actually in the DOM (dragover listener lives on the
+// container; each row needs draggable dragstart/dragend wiring).
+function _initOrderDrag(prefix){
+    var list=document.getElementById(prefix+'OrderList');
+    if(!list)return;
+    _meReorderInit(list,'.'+prefix+'OrderRow');
+    list.querySelectorAll('.'+prefix+'OrderRow').forEach(function(row){ _meAttachItemDrag(row); });
 }
 function _readSectionOrder(prefix){
     return Array.prototype.map.call(document.querySelectorAll('.'+prefix+'OrderRow'),function(r){return r.dataset.key;});
+}
+
+// ═══════════════════════════════════════════════════════════════
+// FORM BUILDER — split view: settings on the left (#fbPanel, built by
+// _buildFcPanelHtml/_buildSfcPanelHtml), a live iframe of the actual public
+// form on the right. Every edit in the panel — typing, a checkbox, a drag
+// reorder — pushes the current draft config into the iframe via
+// postMessage, so the preview updates in real time without ever writing
+// the draft to localStorage (nothing is saved until Save is clicked).
+// ═══════════════════════════════════════════════════════════════
+var _fbKind=null;        // 'registration' | 'staff' — which form is open
+var _fbPushTimer=null;
+var _fbMsgListenerInstalled=false;
+
+// Reads the same DOM the old modal's Save button read — one source of
+// truth shared by the live-preview pusher and the real Save.
+function _collectFormConfigDraft(){
+    var sections={};
+    document.querySelectorAll('.fcSec').forEach(function(cb){sections[cb.dataset.key]={enabled:cb.checked}});
+    var documents=[];
+    document.querySelectorAll('.fcDoc').forEach(function(el){
+        var name=(el.querySelector('.fcDocName')?.value||'').trim();
+        if(!name)return;
+        var maxFiles=parseInt(el.querySelector('.fcDocMax')?.value,10)||1;
+        documents.push({name:name,maxFiles:Math.max(1,Math.min(20,maxFiles))});
+    });
+    return {
+        sections:sections,
+        customQuestions:_readCustomQuestions('fc'),
+        documents:documents,
+        welcomeMessage:(document.getElementById('fcWelcome')?.value||'').trim(),
+        instructions:(document.getElementById('fcInstructions')?.value||'').trim(),
+        fields:_readAdvFields('fc',FC_FIELD_CATALOG),
+        sectionOrder:_readSectionOrder('fc'),
+        branding:{
+            logo:(document.getElementById('fcLogoData')?.value||''),
+            color:(document.getElementById('fcAccentColor')?.value||'')
+        }
+    };
+}
+function _collectStaffFormConfigDraft(){
+    var sections={};
+    document.querySelectorAll('.sfcSec').forEach(function(cb){sections[cb.dataset.key]={enabled:cb.checked}});
+    var positions=_readChipList('sfcPos'); if(!positions.length)positions=SFC_POSITIONS_DEFAULT.slice();
+    var certifications=_readChipList('sfcCert'); if(!certifications.length)certifications=SFC_CERTS_DEFAULT.slice();
+    return {
+        sections:sections,
+        customQuestions:_readCustomQuestions('sfc'),
+        welcomeMessage:(document.getElementById('sfcWelcome')?.value||'').trim(),
+        instructions:(document.getElementById('sfcInstructions')?.value||'').trim(),
+        positions:positions,
+        certifications:certifications,
+        fields:_readAdvFields('sfc',SFC_FIELD_CATALOG),
+        sectionOrder:_readSectionOrder('sfc'),
+        branding:{
+            logo:(document.getElementById('sfcLogoData')?.value||''),
+            color:(document.getElementById('sfcAccentColor')?.value||'')
+        }
+    };
+}
+function _fbCollectAndSend(){
+    var frame=document.getElementById('fbPreviewFrame');
+    if(!frame||!frame.contentWindow)return;
+    var fc=(_fbKind==='staff')?_collectStaffFormConfigDraft():_collectFormConfigDraft();
+    frame.contentWindow.postMessage({type:'campistry-form-preview',config:fc},'*');
+}
+function _fbPushPreview(){
+    clearTimeout(_fbPushTimer);
+    _fbPushTimer=setTimeout(_fbCollectAndSend,150);
+}
+
+function openFormBuilder(kind){
+    _fbKind=(kind==='staff')?'staff':'registration';
+    var isStaff=_fbKind==='staff';
+    document.getElementById('fbTitle').textContent=isStaff?'Staff Application Form Builder':'Registration Form Builder';
+
+    var panel=document.getElementById('fbPanel');
+    panel.innerHTML=isStaff?_buildSfcPanelHtml():_buildFcPanelHtml();
+    _initOrderDrag(isStaff?'sfc':'fc');
+
+    // Live-update the preview on any edit — typing, checkboxes, drag
+    // reorder, or a row being added/removed — via one delegated listener
+    // pair plus a MutationObserver (drag reorder and add/remove rows don't
+    // fire input/change, they mutate the DOM directly).
+    if(panel._fbObserver) panel._fbObserver.disconnect();
+    panel.oninput=_fbPushPreview;
+    panel.onchange=_fbPushPreview;
+    var mo=new MutationObserver(_fbPushPreview);
+    mo.observe(panel,{childList:true,subtree:true});
+    panel._fbObserver=mo;
+
+    var saveBtn=document.getElementById('fbSaveBtn');
+    saveBtn.onclick=isStaff?saveStaffFormConfig:saveFormConfig;
+
+    if(!_fbMsgListenerInstalled){
+        _fbMsgListenerInstalled=true;
+        window.addEventListener('message',function(ev){
+            if(!ev.data||ev.data.type!=='campistry-form-preview-ready')return;
+            var f=document.getElementById('fbPreviewFrame');
+            if(!f||ev.source!==f.contentWindow)return;
+            _fbCollectAndSend();
+        });
+    }
+
+    // Show the overlay BEFORE pointing the iframe at its src — some browsers
+    // deprioritize/delay a frame's load while its ancestor chain is
+    // display:none, which left the preview frame stuck mid-parse.
+    document.getElementById('formBuilderOverlay').style.display='flex';
+    var frame=document.getElementById('fbPreviewFrame');
+    frame.src=(isStaff?'campistry_staff_apply.html':'campistry_register.html')+'?preview=1';
+}
+function closeFormBuilder(){
+    var panel=document.getElementById('fbPanel');
+    if(panel&&panel._fbObserver){ panel._fbObserver.disconnect(); panel._fbObserver=null; }
+    document.getElementById('formBuilderOverlay').style.display='none';
+    var frame=document.getElementById('fbPreviewFrame');
+    if(frame)frame.src='about:blank';
 }
 function _brandingLogoPick(prefix,input){
     var f=input.files&&input.files[0]; if(!f)return;
@@ -3439,7 +3557,7 @@ function _toggleAcc(id){
     if(chev)chev.textContent=willOpen?'▾':'▸';
 }
 
-function openFormConfig(){
+function _buildFcPanelHtml(){
     var fc=getFormConfig();
     var h=_fcTabBarHtml('fc');
 
@@ -3499,7 +3617,7 @@ function openFormConfig(){
     h+=_accCard('Branding',brandHtml,{open:true});
 
     var orderHtml='<p style="font-size:.78rem;color:var(--s400);margin:0 0 10px">Reorder how sections appear on the form.</p>'+_renderSectionOrderList('fc',FC_SECTIONS,fc.sectionOrder);
-    h+=_accCard('Section Order',orderHtml,{});
+    h+=_accCard('Section Order',orderHtml,{open:true});
 
     var fieldsHtml='<p style="font-size:.78rem;color:var(--s400);margin:0 0 10px">Show/hide, require, or relabel individual fields — pick a section to open it.</p>';
     Object.keys(FC_FIELD_CATALOG).forEach(function(sectionKey){
@@ -3509,10 +3627,9 @@ function openFormConfig(){
     });
     h+=_accCard('Field-by-Field Control',fieldsHtml,{});
     h+='</div>'; // /fcTabAdv
-
-    document.getElementById('fcBody').innerHTML=h;
-    openModal('formConfigModal');
+    return h;
 }
+function openFormConfig(){ openFormBuilder('registration'); }
 
 function renderCustomQ(q,i,prefix){
     prefix=prefix||'fc';
@@ -3643,7 +3760,7 @@ function _readChipList(cls){
     return Array.prototype.map.call(document.querySelectorAll('.'+cls+'Val'),function(el){return (el.value||'').trim();}).filter(Boolean);
 }
 
-function openStaffFormConfig(){
+function _buildSfcPanelHtml(){
     var fc=getStaffFormConfig();
     var h=_fcTabBarHtml('sfc');
 
@@ -3694,7 +3811,7 @@ function openStaffFormConfig(){
     h+=_accCard('Branding',brandHtml,{open:true});
 
     var orderHtml='<p style="font-size:.78rem;color:var(--s400);margin:0 0 10px">Reorder how sections appear on the form.</p>'+_renderSectionOrderList('sfc',SFC_SECTIONS,fc.sectionOrder);
-    h+=_accCard('Section Order',orderHtml,{});
+    h+=_accCard('Section Order',orderHtml,{open:true});
 
     var fieldsHtml='<p style="font-size:.78rem;color:var(--s400);margin:0 0 10px">Show/hide, require, or relabel individual fields — pick a section to open it.</p>';
     Object.keys(SFC_FIELD_CATALOG).forEach(function(sectionKey){
@@ -3704,53 +3821,22 @@ function openStaffFormConfig(){
     });
     h+=_accCard('Field-by-Field Control',fieldsHtml,{});
     h+='</div>'; // /sfcTabAdv
-
-    document.getElementById('sfcBody').innerHTML=h;
-    openModal('staffFormConfigModal');
+    return h;
 }
+function openStaffFormConfig(){ openFormBuilder('staff'); }
 
 function saveStaffFormConfig(){
-    var sections={};
-    document.querySelectorAll('.sfcSec').forEach(function(cb){sections[cb.dataset.key]={enabled:cb.checked}});
-
-    staffFormConfig={
-        sections:sections,
-        customQuestions:_readCustomQuestions('sfc'),
-        welcomeMessage:(document.getElementById('sfcWelcome')?.value||'').trim(),
-        instructions:(document.getElementById('sfcInstructions')?.value||'').trim(),
-        positions:_readChipList('sfcPos'),
-        certifications:_readChipList('sfcCert'),
-        fields:_readAdvFields('sfc',SFC_FIELD_CATALOG),
-        sectionOrder:_readSectionOrder('sfc'),
-        branding:{
-            logo:(document.getElementById('sfcLogoData')?.value||''),
-            color:(document.getElementById('sfcAccentColor')?.value||'')
-        }
-    };
-    if(!staffFormConfig.positions.length) staffFormConfig.positions=SFC_POSITIONS_DEFAULT.slice();
-    if(!staffFormConfig.certifications.length) staffFormConfig.certifications=SFC_CERTS_DEFAULT.slice();
-
+    staffFormConfig=_collectStaffFormConfigDraft();
     save();
-    closeModal('staffFormConfigModal');toast('Staff application form configuration saved');
+    closeFormBuilder();
+    toast('Staff application form configuration saved');
 }
 
 function saveFormConfig(){
-    // Read sections
-    var sections={};
-    document.querySelectorAll('.fcSec').forEach(function(cb){sections[cb.dataset.key]={enabled:cb.checked}});
+    formConfig=_collectFormConfigDraft();
 
-    // Read custom questions
-    var customQuestions=[];
-    document.querySelectorAll('.fcQ').forEach(function(el){
-        var label=el.querySelector('.fcQLabel')?.value?.trim();
-        var type=el.querySelector('.fcQType')?.value||'text';
-        var required=el.querySelector('.fcQReq')?.checked||false;
-        var optsRaw=el.querySelector('.fcQOpts')?.value||'';
-        var options=optsRaw?optsRaw.split(',').map(function(o){return o.trim()}).filter(Boolean):[];
-        if(label)customQuestions.push({label:label,type:type,required:required,options:options});
-    });
-
-    // Read promo codes
+    // Promo codes live in enrollSettings (not formConfig) so they persist
+    // through the main save() path — read separately.
     var promos={};
     var codes=document.querySelectorAll('.fcPromoCode');
     var labels=document.querySelectorAll('.fcPromoLabel');
@@ -3761,36 +3847,11 @@ function saveFormConfig(){
         if(!code)continue;
         promos[code]={label:(labels[i]?.value||'').trim(),pct:parseFloat(pcts[i]?.value)||0,amt:parseFloat(amts[i]?.value)||0};
     }
-
-    // Read required documents (name + max files each)
-    var documents=[];
-    document.querySelectorAll('.fcDoc').forEach(function(el){
-        var name=(el.querySelector('.fcDocName')?.value||'').trim();
-        if(!name)return;
-        var maxFiles=parseInt(el.querySelector('.fcDocMax')?.value,10)||1;
-        documents.push({name:name,maxFiles:Math.max(1,Math.min(20,maxFiles))});
-    });
-
-    formConfig={
-        sections:sections,
-        customQuestions:customQuestions,
-        documents:documents,
-        welcomeMessage:(document.getElementById('fcWelcome')?.value||'').trim(),
-        instructions:(document.getElementById('fcInstructions')?.value||'').trim(),
-        fields:_readAdvFields('fc',FC_FIELD_CATALOG),
-        sectionOrder:_readSectionOrder('fc'),
-        branding:{
-            logo:(document.getElementById('fcLogoData')?.value||''),
-            color:(document.getElementById('fcAccentColor')?.value||'')
-        }
-    };
-
-    // Store promoCodes in enrollSettings so it persists through the main save() path
     enrollSettings.promoCodes=promos;
 
-    // Use the main save() which handles localStorage + cloud sync
     save();
-    closeModal('formConfigModal');toast('Form configuration saved');
+    closeFormBuilder();
+    toast('Form configuration saved');
 }
 
 // View full application (review modal)
@@ -9032,7 +9093,8 @@ window.CampistryMe={
     openFormConfig:openFormConfig,saveFormConfig:saveFormConfig,addCustomQ:addCustomQ,addPromoRow:addPromoRow,
     openStaffFormConfig:openStaffFormConfig,saveStaffFormConfig:saveStaffFormConfig,addStaffCustomQ:addStaffCustomQ,
     addPositionRow:addPositionRow,addCertRow:addCertRow,
-    _fcSwitchTab:_fcSwitchTab,_moveOrderRow:_moveOrderRow,_brandingLogoPick:_brandingLogoPick,_brandingLogoClear:_brandingLogoClear,_toggleAcc:_toggleAcc,
+    _fcSwitchTab:_fcSwitchTab,_brandingLogoPick:_brandingLogoPick,_brandingLogoClear:_brandingLogoClear,_toggleAcc:_toggleAcc,
+    openFormBuilder:openFormBuilder,closeFormBuilder:closeFormBuilder,
     copyLinkText:copyLinkText,showLinkQR:showLinkQR,showRegistrationQR:showRegistrationQR,showStaffQR:showStaffQR,
     openSendLinkModal:openSendLinkModal,openSendRegLinkModal:openSendRegLinkModal,openSendStaffLinkModal:openSendStaffLinkModal,
     // Payroll

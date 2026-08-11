@@ -126,31 +126,34 @@ var FIELD_REQUIRED_STATE={first:true,last:true,email:true,phone:true,dob:false,s
 var FIELD_ENABLED_STATE={};
 var RESUME_REQUIRED=false;
 
+// Baseline required-state this page shipped with — applyFieldConfig resets
+// to this before applying overrides, so it's safe to call repeatedly with a
+// changing draft config (live preview), not just once at page load.
+var FIELD_REQUIRED_DEFAULT={first:true,last:true,email:true,phone:true,dob:false,street:false,city:false,state:false,zip:false,availStart:false,availEnd:false,education:false,experience:false};
 function applyFieldConfig(fields){
-    if(!fields)return;
+    fields=fields||{};
     Object.keys(FIELD_ELEMENT_MAP).forEach(function(fid){
-        var cfg=fields[fid]; if(!cfg)return;
         var input=document.getElementById(FIELD_ELEMENT_MAP[fid]);
         if(!input)return;
         var fg=input.closest('.fg');
-        var enabled=cfg.enabled!==false;
+        var cfg=fields[fid];
+        var enabled=cfg?(cfg.enabled!==false):true;
         FIELD_ENABLED_STATE[fid]=enabled;
         if(!enabled){ if(fg)fg.style.display='none'; return; }
         if(fg)fg.style.display='';
-        var required=!!cfg.required;
+        var required=cfg?!!cfg.required:!!FIELD_REQUIRED_DEFAULT[fid];
         FIELD_REQUIRED_STATE[fid]=required;
         var label=fg&&fg.querySelector('.fl');
         if(label){
-            var text=cfg.label||FIELD_DEFAULT_LABEL[fid];
+            var text=(cfg&&cfg.label)||FIELD_DEFAULT_LABEL[fid];
             label.innerHTML=esc(text)+(required?' <span class="rq">*</span>':'');
         }
     });
-    if(fields.resume){
-        RESUME_REQUIRED=!!fields.resume.required;
-        var rIn=document.getElementById('aResume'), rFg=rIn&&rIn.closest('.fg'), rLbl=rFg&&rFg.querySelector('.fl');
-        if(fields.resume.enabled===false&&rFg){ rFg.style.display='none'; }
-        else if(rLbl){ rLbl.innerHTML=esc(fields.resume.label||'Resume (PDF / DOC, optional)')+(RESUME_REQUIRED?' <span class="rq">*</span>':''); }
-    }
+    var rf=fields.resume;
+    RESUME_REQUIRED=!!(rf&&rf.required);
+    var rIn=document.getElementById('aResume'), rFg=rIn&&rIn.closest('.fg'), rLbl=rFg&&rFg.querySelector('.fl');
+    if(rFg)rFg.style.display=(rf&&rf.enabled===false)?'none':'';
+    if(rLbl)rLbl.innerHTML=esc((rf&&rf.label)||'Resume (PDF / DOC, optional)')+(RESUME_REQUIRED?' <span class="rq">*</span>':'');
 }
 
 // Section reordering — about/role/experience/references/consent. The
@@ -171,74 +174,101 @@ function applySectionOrder(order){
     if(cq&&consent&&consent.parentNode)consent.parentNode.insertBefore(cq,consent);
 }
 
+var BRAND_COLOR_DEFAULT='#D97706';
 function applyBranding(branding){
-    if(!branding)return;
-    if(branding.logo){
-        var img=document.getElementById('campLogo');
-        if(img){img.src=branding.logo;img.style.display='block';}
+    branding=branding||{};
+    var img=document.getElementById('campLogo');
+    if(img){
+        if(branding.logo){img.src=branding.logo;img.style.display='block';}
+        else{img.src='';img.style.display='none';}
     }
-    if(branding.color){
-        document.documentElement.style.setProperty('--me',branding.color);
-    }
+    document.documentElement.style.setProperty('--me',branding.color||BRAND_COLOR_DEFAULT);
 }
 
-// ─── LOAD CONFIG, CHIPS, CAMP NAME ─────────────────────────────
-var sfc=null;
-try{
-    var g=JSON.parse(localStorage.getItem('campGlobalSettings_v1')||'{}');
-    var me=g.campistryMe||{};
-    sfc=me.staffFormConfig||null;
-    var cn=g.campName||g.camp_name||me.campName||'';
-    if(cn){document.getElementById('campTitle').textContent=cn+' — Staff Application';document.getElementById('campNm').textContent=cn;}
-}catch(e){}
+// Section toggles — about/role/consent are locked required, so only
+// experience/references can actually be disabled here.
+var SEC_MAP={experience:'expCard',references:'refCard'};
+var _baseCampNm='';
 
-var POSITIONS=(sfc&&sfc.positions&&sfc.positions.length)?sfc.positions:POSITIONS_DEFAULT;
-var CERTS=(sfc&&sfc.certifications&&sfc.certifications.length)?sfc.certifications:CERTS_DEFAULT;
+// Applies one staff-form-config object to the live DOM. Idempotent — safe to
+// call repeatedly with a changing draft (the Form Builder's live preview
+// does exactly that), not just once at page load.
+function applyFormConfig(sfc){
+    sfc=sfc||{};
+    document.getElementById('campNm').textContent=sfc.welcomeMessage||_baseCampNm;
 
-// Chips
-document.getElementById('posChips').innerHTML=POSITIONS.map(function(p,i){return '<label class="chip"><input type="checkbox" class="posCb" value="'+esc(p)+'"> '+esc(p)+'</label>';}).join('');
-document.getElementById('certChips').innerHTML=CERTS.map(function(cc){return '<label class="chip"><input type="checkbox" class="certCb" value="'+esc(cc)+'"> '+esc(cc)+'</label>';}).join('');
-document.querySelectorAll('.chip input').forEach(function(cb){cb.addEventListener('change',function(){cb.closest('.chip').classList.toggle('sel',cb.checked);});});
+    var oldInstr=document.getElementById('_fcInstrEl'); if(oldInstr)oldInstr.remove();
+    if(sfc.instructions){
+        var instrEl=document.createElement('p');
+        instrEl.id='_fcInstrEl';
+        instrEl.style.cssText='font-size:.85rem;color:var(--s600);text-align:center;margin-top:6px;line-height:1.5';
+        instrEl.textContent=sfc.instructions;
+        document.querySelector('.hdr').appendChild(instrEl);
+    }
 
-if(sfc){
-    if(sfc.welcomeMessage){document.getElementById('campNm').textContent=sfc.welcomeMessage;}
-    if(sfc.instructions){var instrEl=document.createElement('p');instrEl.style.cssText='font-size:.85rem;color:var(--s600);text-align:center;margin-top:6px;line-height:1.5';instrEl.textContent=sfc.instructions;document.querySelector('.hdr').appendChild(instrEl);}
-    // Section toggles — about/role/consent are locked required, so only
-    // experience/references can actually be disabled here.
-    var secMap={experience:'expCard',references:'refCard'};
+    Object.keys(SEC_MAP).forEach(function(key){ var el=document.getElementById(SEC_MAP[key]); if(el)el.style.display=''; });
     if(sfc.sections){
         Object.entries(sfc.sections).forEach(function(entry){
             var key=entry[0],cfg=entry[1];
-            if(!cfg.enabled&&secMap[key]){var el=document.getElementById(secMap[key]);if(el)el.style.display='none';}
+            if(!cfg.enabled&&SEC_MAP[key]){var el=document.getElementById(SEC_MAP[key]);if(el)el.style.display='none';}
         });
     }
+
+    // Positions / Certifications chips — rebuilt from the current draft list.
+    var positions=(sfc.positions&&sfc.positions.length)?sfc.positions:POSITIONS_DEFAULT;
+    var certs=(sfc.certifications&&sfc.certifications.length)?sfc.certifications:CERTS_DEFAULT;
+    document.getElementById('posChips').innerHTML=positions.map(function(p){return '<label class="chip"><input type="checkbox" class="posCb" value="'+esc(p)+'"> '+esc(p)+'</label>';}).join('');
+    document.getElementById('certChips').innerHTML=certs.map(function(cc){return '<label class="chip"><input type="checkbox" class="certCb" value="'+esc(cc)+'"> '+esc(cc)+'</label>';}).join('');
+    document.querySelectorAll('.chip input').forEach(function(cb){cb.addEventListener('change',function(){cb.closest('.chip').classList.toggle('sel',cb.checked);});});
+
     // Custom questions
     customQuestions=sfc.customQuestions||[];
+    var cqEl=document.getElementById('customQCard');
     if(customQuestions.length){
-        var cqEl=document.getElementById('customQCard');
-        if(cqEl){
-            var qh='';
-            customQuestions.forEach(function(q,i){
-                qh+='<div class="fg">';
-                qh+='<label class="fl">'+esc(q.label)+(q.required?'<span class="rq">*</span>':'')+'</label>';
-                if(q.type==='text')qh+='<input class="fi cqInput" data-q="'+i+'">';
-                else if(q.type==='textarea')qh+='<textarea class="fta cqInput" data-q="'+i+'"></textarea>';
-                else if(q.type==='yesno')qh+='<select class="fs cqInput" data-q="'+i+'"><option value="">—</option><option>Yes</option><option>No</option></select>';
-                else if(q.type==='select')qh+='<select class="fs cqInput" data-q="'+i+'"><option value="">—</option>'+(q.options||[]).map(function(o){return'<option>'+esc(o)+'</option>'}).join('')+'</select>';
-                else if(q.type==='checkbox'){
-                    (q.options||[]).forEach(function(o,oi){
-                        qh+='<label style="display:flex;align-items:center;gap:6px;padding:3px 0;font-size:.85rem;cursor:pointer"><input type="checkbox" class="cqCb" data-q="'+i+'" value="'+esc(o)+'" style="accent-color:var(--me)">'+esc(o)+'</label>';
-                    });
-                }
-                qh+='</div>';
-            });
-            document.getElementById('cqContent').innerHTML=qh;
-            cqEl.style.display='block';
-        }
+        var qh='';
+        customQuestions.forEach(function(q,i){
+            qh+='<div class="fg">';
+            qh+='<label class="fl">'+esc(q.label)+(q.required?'<span class="rq">*</span>':'')+'</label>';
+            if(q.type==='text')qh+='<input class="fi cqInput" data-q="'+i+'">';
+            else if(q.type==='textarea')qh+='<textarea class="fta cqInput" data-q="'+i+'"></textarea>';
+            else if(q.type==='yesno')qh+='<select class="fs cqInput" data-q="'+i+'"><option value="">—</option><option>Yes</option><option>No</option></select>';
+            else if(q.type==='select')qh+='<select class="fs cqInput" data-q="'+i+'"><option value="">—</option>'+(q.options||[]).map(function(o){return'<option>'+esc(o)+'</option>'}).join('')+'</select>';
+            else if(q.type==='checkbox'){
+                (q.options||[]).forEach(function(o,oi){
+                    qh+='<label style="display:flex;align-items:center;gap:6px;padding:3px 0;font-size:.85rem;cursor:pointer"><input type="checkbox" class="cqCb" data-q="'+i+'" value="'+esc(o)+'" style="accent-color:var(--me)">'+esc(o)+'</label>';
+                });
+            }
+            qh+='</div>';
+        });
+        if(cqEl){document.getElementById('cqContent').innerHTML=qh;cqEl.style.display='block';}
+    }else if(cqEl){
+        cqEl.style.display='none';
+        document.getElementById('cqContent').innerHTML='';
     }
+
     applyFieldConfig(sfc.fields);
     applySectionOrder(sfc.sectionOrder);
     applyBranding(sfc.branding);
+}
+
+// ─── LOAD CONFIG, CAMP NAME ─────────────────────────────
+try{
+    var g=JSON.parse(localStorage.getItem('campGlobalSettings_v1')||'{}');
+    var me=g.campistryMe||{};
+    var cn=g.campName||g.camp_name||me.campName||'';
+    _baseCampNm=cn;
+    if(cn){document.getElementById('campTitle').textContent=cn+' — Staff Application';document.getElementById('campNm').textContent=cn;}
+    applyFormConfig(me.staffFormConfig);
+}catch(e){ applyFormConfig(null); }
+
+// ─── LIVE PREVIEW MODE (embedded in the Me "Form Builder") ────────────
+if(new URLSearchParams(window.location.search).get('preview')==='1'){
+    window.addEventListener('message',function(ev){
+        if(ev.source!==window.parent)return;
+        if(!ev.data||ev.data.type!=='campistry-form-preview')return;
+        try{ applyFormConfig(ev.data.config||{}); }catch(e){ console.warn('[StaffApply] preview apply failed',e); }
+    });
+    try{ window.parent.postMessage({type:'campistry-form-preview-ready'},'*'); }catch(e){}
 }
 
 // Resume
