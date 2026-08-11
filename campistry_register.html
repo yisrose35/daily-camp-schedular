@@ -84,14 +84,14 @@ body{font-family:var(--font);background:var(--s50);color:var(--s800);-webkit-fon
 </head>
 <body>
 <div class="wrap" id="formWrap">
-<div class="hdr"><h1 id="campTitle">Camp Registration</h1><div class="cn" id="campNm"></div><p>Complete the form below to apply for enrollment</p></div>
+<div class="hdr"><img id="campLogo" src="" alt="" style="display:none;max-height:64px;max-width:220px;margin:0 auto 10px;border-radius:8px"><h1 id="campTitle">Camp Registration</h1><div class="cn" id="campNm"></div><p>Complete the form below to apply for enrollment</p></div>
 
 <!-- Session -->
 <div class="cd"><div class="ct"><svg viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="18" rx="2"/><line x1="16" y1="2" x2="16" y2="6"/><line x1="8" y1="2" x2="8" y2="6"/><line x1="3" y1="10" x2="21" y2="10"/></svg>Select Session</div>
 <div id="sessList"></div></div>
 
 <!-- Primary Camper -->
-<div class="cd"><div class="ct"><svg viewBox="0 0 24 24"><path d="M20 21v-2a4 4 0 00-4-4H8a4 4 0 00-4 4v2"/><circle cx="12" cy="7" r="4"/></svg>Camper Information</div>
+<div class="cd" id="camperCard"><div class="ct"><svg viewBox="0 0 24 24"><path d="M20 21v-2a4 4 0 00-4-4H8a4 4 0 00-4 4v2"/><circle cx="12" cy="7" r="4"/></svg>Camper Information</div>
 <div class="fr"><div class="fg"><label class="fl">First Name<span class="rq">*</span></label><input class="fi" id="rF"></div><div class="fg"><label class="fl">Last Name<span class="rq">*</span></label><input class="fi" id="rL"></div></div>
 <div class="fr"><div class="fg"><label class="fl">Date of Birth<span class="rq">*</span></label><input type="date" class="fi" id="rDob"></div><div class="fg"><label class="fl">Gender</label><select class="fs" id="rGen"><option value="">—</option><option>Male</option><option>Female</option><option>Non-binary</option><option>Other</option></select></div></div>
 <div class="fr"><div class="fg"><label class="fl">School Name</label><input class="fi" id="rSch"></div><div class="fg"><label class="fl">School Grade</label><input class="fi" id="rSchGr"></div></div>
@@ -105,7 +105,7 @@ body{font-family:var(--font);background:var(--s50);color:var(--s800);-webkit-fon
 </div>
 
 <!-- Parent -->
-<div class="cd"><div class="ct"><svg viewBox="0 0 24 24"><path d="M22 16.92v3a2 2 0 01-2.18 2 19.79 19.79 0 01-8.63-3.07 19.5 19.5 0 01-6-6A19.79 19.79 0 012.12 2.18 2 2 0 014.11 2h3"/></svg>Parent / Guardian</div>
+<div class="cd" id="parentCard"><div class="ct"><svg viewBox="0 0 24 24"><path d="M22 16.92v3a2 2 0 01-2.18 2 19.79 19.79 0 01-8.63-3.07 19.5 19.5 0 01-6-6A19.79 19.79 0 012.12 2.18 2 2 0 014.11 2h3"/></svg>Parent / Guardian</div>
 <div class="fr"><div class="fg"><label class="fl">Full Name<span class="rq">*</span></label><input class="fi" id="rPar"></div><div class="fg"><label class="fl">Relationship</label><select class="fs" id="rRel"><option>Mother</option><option>Father</option><option>Guardian</option><option>Grandparent</option><option>Other</option></select></div></div>
 <div class="fr"><div class="fg"><label class="fl">Phone<span class="rq">*</span></label><input type="tel" class="fi" id="rPh"></div><div class="fg"><label class="fl">Email<span class="rq">*</span></label><input type="email" class="fi" id="rEm"></div></div>
 <p style="font-size:.75rem;color:var(--s400);margin:6px 0 4px">Second parent/guardian (optional):</p>
@@ -253,6 +253,93 @@ var selSess='',selPM='',siblings=[],uploads=[],discount={active:false,code:'',pc
 var sessions=[],promoCodes={};
 var sigCtx=null,sigDrawing=false,sigHasData=false;
 
+// ─── ADVANCED FORM CONFIG (fields / section order / branding) ─────────
+// Mirrors FC_FIELD_CATALOG in campistry_me.js — maps a catalog field id to
+// this page's element id. Only present here for the sections broken out
+// field-by-field in the Advanced customizer (payment/signature/siblings/
+// documents stay whole-section toggles, handled by secMap in load()).
+var FIELD_ELEMENT_MAP={
+    first:'rF',last:'rL',dob:'rDob',gender:'rGen',school:'rSch',schoolGrade:'rSchGr',teacher:'rTch',
+    parentName:'rPar',parentRelation:'rRel',parentPhone:'rPh',parentEmail:'rEm',parent2Name:'rP2',parent2Phone:'rP2Ph',
+    street:'rSt',city:'rCi',state:'rSa',zip:'rZp',
+    emName:'rEmN',emRelation:'rEmR',emPhone:'rEmPh',
+    allergies:'rAlg',medications:'rMed',dietary:'rDit',medicalNotes:'rMdN',
+    bunkmate:'rBnk',separate:'rSep',shirt:'rShirt',source:'rSrc',notes:'rNotes'
+};
+var FIELD_DEFAULT_LABEL={
+    first:'First Name',last:'Last Name',dob:'Date of Birth',gender:'Gender',school:'School Name',schoolGrade:'School Grade',teacher:'Teacher',
+    parentName:'Parent / Guardian Name',parentRelation:'Relationship',parentPhone:'Phone',parentEmail:'Email',parent2Name:'Second Parent / Guardian',parent2Phone:'Second Parent Phone',
+    street:'Street',city:'City',state:'State',zip:'ZIP',
+    emName:'Emergency Contact Name',emRelation:'Relationship',emPhone:'Phone',
+    allergies:'Allergies',medications:'Medications',dietary:'Dietary Restrictions',medicalNotes:'Additional Medical Notes',
+    bunkmate:'Bunkmate Request',separate:'Separation Request',shirt:'T-Shirt Size',source:'How did you hear about us?',notes:'Additional Notes'
+};
+// Defaults match the hardcoded validation this page shipped with — a camp
+// that never opens the Advanced tab sees byte-identical required-ness.
+var FIELD_REQUIRED_STATE={
+    first:true,last:true,dob:true,gender:false,school:false,schoolGrade:false,teacher:false,
+    parentName:true,parentRelation:false,parentPhone:true,parentEmail:true,parent2Name:false,parent2Phone:false,
+    street:true,city:true,state:false,zip:true,
+    emName:true,emRelation:false,emPhone:true,
+    allergies:false,medications:false,dietary:false,medicalNotes:false,
+    bunkmate:false,separate:false,shirt:false,source:false,notes:false
+};
+var FIELD_ENABLED_STATE={};
+
+function applyFieldConfig(fields){
+    if(!fields)return;
+    Object.keys(FIELD_ELEMENT_MAP).forEach(function(fid){
+        var cfg=fields[fid]; if(!cfg)return;
+        var input=document.getElementById(FIELD_ELEMENT_MAP[fid]);
+        if(!input)return;
+        var fg=input.closest('.fg');
+        var enabled=cfg.enabled!==false;
+        FIELD_ENABLED_STATE[fid]=enabled;
+        if(!enabled){ if(fg)fg.style.display='none'; return; }
+        if(fg)fg.style.display='';
+        var required=!!cfg.required;
+        FIELD_REQUIRED_STATE[fid]=required;
+        var label=fg&&fg.querySelector('.fl');
+        if(label){
+            var text=cfg.label||FIELD_DEFAULT_LABEL[fid];
+            label.innerHTML=esc(text)+(required?' <span class="rq">*</span>':'');
+        }
+    });
+}
+
+// Section reordering — camper/siblings/parent/address/emergency/medical/
+// preferences/documents/payment/signature can be reordered; the session
+// picker (always first) and the auto-generated custom-questions block
+// (always pinned right before Signature) are not part of the reorderable
+// set. DEFAULT_SECTION_ORDER matches this page's shipped layout exactly
+// so applying it with no customization is a visual no-op.
+var SECTION_ORDER_MAP={camper:'camperCard',siblings:'sibCard',parent:'parentCard',address:'addrCard',emergency:'emCard',medical:'medCard',preferences:'prefCard',documents:'docCard',payment:'payCard',signature:'sigCard'};
+var DEFAULT_SECTION_ORDER=['camper','siblings','parent','address','emergency','medical','preferences','documents','payment','signature'];
+function applySectionOrder(order){
+    order=(order&&order.length)?order:DEFAULT_SECTION_ORDER;
+    var anchor=document.getElementById('formErr');
+    if(!anchor||!anchor.parentNode)return;
+    var parent=anchor.parentNode;
+    order.forEach(function(key){
+        var elId=SECTION_ORDER_MAP[key];
+        var el=elId&&document.getElementById(elId);
+        if(el)parent.insertBefore(el,anchor);
+    });
+    var cq=document.getElementById('customQCard'),sig=document.getElementById('sigCard');
+    if(cq&&sig&&sig.parentNode)sig.parentNode.insertBefore(cq,sig);
+}
+
+function applyBranding(branding){
+    if(!branding)return;
+    if(branding.logo){
+        var img=document.getElementById('campLogo');
+        if(img){img.src=branding.logo;img.style.display='block';}
+    }
+    if(branding.color){
+        document.documentElement.style.setProperty('--me',branding.color);
+    }
+}
+
 // HTML+attribute-context escape. The previous textContent/innerHTML
 // round-trip escaped <>& but NOT " or ' — every value="'+esc(x)+'" in
 // this file was a latent attribute-context XSS the moment user data
@@ -383,6 +470,10 @@ function load(){
                     cqEl.style.display='block';
                 }
             }
+            // Advanced: per-field overrides, section order, branding
+            applyFieldConfig(fc.fields);
+            applySectionOrder(fc.sectionOrder);
+            applyBranding(fc.branding);
         }
         renderSessions();
     }catch(e){console.warn(e)}
@@ -573,15 +664,20 @@ window.submitApp=function(){
     document.querySelectorAll('.sib-gr').forEach(function(el){var i=parseInt(el.dataset.i);if(siblings[i])siblings[i].schoolGrade=el.value.trim()});
     document.querySelectorAll('.sib-tch').forEach(function(el){var i=parseInt(el.dataset.i);if(siblings[i])siblings[i].teacher=el.value.trim()});
 
-    // Validate
+    // Validate — data-driven off FIELD_REQUIRED_STATE/FIELD_ENABLED_STATE so a
+    // camp's Advanced-tab required/hidden overrides are enforced here too.
     var first=v('rF'),last=v('rL'),dob=v('rDob'),par=v('rPar'),ph=v('rPh'),em=v('rEm'),st=v('rSt'),ci=v('rCi'),zp=v('rZp'),emN=v('rEmN'),emPh=v('rEmPh');
-    if(!first||!last)return showErr('Enter camper first and last name.');
-    if(!dob)return showErr('Enter date of birth.');
-    if(!par)return showErr('Enter parent/guardian name.');
-    if(!ph)return showErr('Enter phone number.');
-    if(!em)return showErr('Enter email address.');
-    if(!st||!ci||!zp)return showErr('Enter complete address.');
-    if(!emN||!emPh)return showErr('Enter emergency contact.');
+    for(var _fid in FIELD_ELEMENT_MAP){
+        if(FIELD_ENABLED_STATE[_fid]===false)continue;
+        if(!FIELD_REQUIRED_STATE[_fid])continue;
+        if(!v(FIELD_ELEMENT_MAP[_fid])){
+            var _el=document.getElementById(FIELD_ELEMENT_MAP[_fid]);
+            var _fg=_el&&_el.closest('.fg');
+            var _lbl=_fg&&_fg.querySelector('.fl');
+            var _txt=_lbl?_lbl.textContent.replace(/\*$/,'').trim():FIELD_DEFAULT_LABEL[_fid];
+            return showErr('Please enter: '+_txt+'.');
+        }
+    }
     if(!selSess&&sessions.filter(function(s){return s.registrationOpen!==false}).length)return showErr('Select a session.');
     for(var si=0;si<siblings.length;si++){if(!siblings[si].first||!siblings[si].last)return showErr('Enter name for Camper '+(si+2)+'.')}
     if(!document.getElementById('ag1').checked||!document.getElementById('ag2').checked||!document.getElementById('ag3').checked||!document.getElementById('ag4').checked)return showErr('Please agree to all terms.');

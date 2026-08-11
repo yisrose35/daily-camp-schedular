@@ -24,6 +24,7 @@ var curPage='campers', editingCamper=null, editingDiv=null, editingFam=null;
 var campersView='list'; // 'list' | 'family' — Families now lives inside the Campers page
 var regFilter='all';    // Registration section filter: all | applied | waitlisted | accepted | enrolled | withdrawn | declined
 var staffApplications={};   // Staff hiring: applicant id → application record
+var staffFormConfig=null;   // Staff application form config — mirrors formConfig, drives campistry_staff_apply.html
 var counselorVisibility=null; // What counselors see in Lite; null = catalogue defaults
 var staffFilter='all';      // Staffing pipeline filter
 var leads={};               // Inquiry CRM: lead id → prospective-family record
@@ -149,6 +150,7 @@ function loadData(){
         leads=me.leads||{};
         counselorVisibility=(me.counselorVisibility&&typeof me.counselorVisibility==='object')?me.counselorVisibility:null;
         formConfig=me.formConfig||null;
+        staffFormConfig=me.staffFormConfig||null;
         printSheets=Array.isArray(me.printSheets)?me.printSheets:[];
         savedReports=Array.isArray(me.savedReports)?me.savedReports:[];
         var pr=me.payroll||{};
@@ -246,6 +248,7 @@ function save(){
             sessions:sessions,
             enrollSettings:enrollSettings,
             formConfig:formConfig,
+            staffFormConfig:staffFormConfig,
             printSheets:printSheets,
             savedReports:savedReports,
             promoCodes:enrollSettings.promoCodes||(g.campistryMe?.promoCodes)||{},
@@ -2932,7 +2935,10 @@ function renderStaffing(){
     h+='<div style="flex:1;min-width:200px"><div style="font-size:.8rem;font-weight:600;color:var(--s500)">STAFF APPLICATION LINK</div>';
     h+='<div style="font-size:.85rem;color:var(--me);font-weight:600;word-break:break-all;margin-top:2px">'+esc(window.location.origin+'/campistry_staff_apply.html')+'</div></div>';
     h+='<button class="me-btn me-btn--pri me-btn--sm" onclick="CampistryMe.copyStaffLink()">Copy Link</button>';
-    h+='<a href="campistry_staff_apply.html" target="_blank" class="me-btn me-btn--sec me-btn--sm" style="text-decoration:none">Preview Form</a></div>';
+    h+='<a href="campistry_staff_apply.html" target="_blank" class="me-btn me-btn--sec me-btn--sm" style="text-decoration:none">Preview Form</a>';
+    h+='<button class="me-btn me-btn--sec me-btn--sm" onclick="CampistryMe.openSendStaffLinkModal()">✉ Send Link</button>';
+    h+='<button class="me-btn me-btn--sec me-btn--sm" onclick="CampistryMe.showStaffQR()">▦ QR Code</button>';
+    h+='<button class="me-btn me-btn--sec me-btn--sm" onclick="CampistryMe.openStaffFormConfig()">⚙ Customize Form</button></div>';
 
     // Pipeline cards
     h+='<div style="display:flex;gap:8px;margin-bottom:16px;flex-wrap:wrap">';
@@ -3104,6 +3110,8 @@ function renderEnrollment(){
     h+='<div style="font-size:.85rem;color:var(--me);font-weight:600;word-break:break-all;margin-top:2px">'+esc(window.location.origin+'/campistry_register.html')+'</div></div>';
     h+='<button class="me-btn me-btn--pri me-btn--sm" onclick="CampistryMe.copyRegLink()">Copy Link</button>';
     h+='<a href="campistry_register.html" target="_blank" class="me-btn me-btn--sec me-btn--sm" style="text-decoration:none">Preview Form</a>';
+    h+='<button class="me-btn me-btn--sec me-btn--sm" onclick="CampistryMe.openSendRegLinkModal()">✉ Send Link</button>';
+    h+='<button class="me-btn me-btn--sec me-btn--sm" onclick="CampistryMe.showRegistrationQR()">▦ QR Code</button>';
     h+='<button class="me-btn me-btn--sec me-btn--sm" onclick="CampistryMe.openFormConfig()">⚙ Customize Form</button></div>';
 
     // Capacity overview — sessions, divisions, bunks
@@ -3252,18 +3260,164 @@ var FC_SECTIONS=[
     {key:'siblings',label:'Sibling Registration',desc:'Allow adding multiple campers in one form',default:true,required:false}
 ];
 
+// Field-level catalog for the ADVANCED tab. Only the plain data-entry sections
+// are broken out field-by-field — payment/signature/siblings/documents stay
+// section-level toggles (they're structural, not a flat field list, and
+// signature/payment carry legal/compliance weight we don't want a camp to
+// accidentally mis-configure). `locked` fields can't be disabled or made
+// optional — they're required for the enrollment record to mean anything.
+var FC_FIELD_CATALOG={
+    camper:[
+        {id:'first',label:'Camper First Name',locked:true},
+        {id:'last',label:'Camper Last Name',locked:true},
+        {id:'dob',label:'Date of Birth',required:true},
+        {id:'gender',label:'Gender'},
+        {id:'school',label:'School Name'},
+        {id:'schoolGrade',label:'School Grade'},
+        {id:'teacher',label:'Teacher'}
+    ],
+    parent:[
+        {id:'parentName',label:'Parent / Guardian Name',locked:true},
+        {id:'parentRelation',label:'Relationship'},
+        {id:'parentPhone',label:'Phone',required:true},
+        {id:'parentEmail',label:'Email',required:true},
+        {id:'parent2Name',label:'Second Parent / Guardian Name'},
+        {id:'parent2Phone',label:'Second Parent / Guardian Phone'}
+    ],
+    address:[
+        {id:'street',label:'Street',required:true},
+        {id:'city',label:'City',required:true},
+        {id:'state',label:'State'},
+        {id:'zip',label:'ZIP',required:true}
+    ],
+    emergency:[
+        {id:'emName',label:'Emergency Contact Name',required:true},
+        {id:'emRelation',label:'Relationship'},
+        {id:'emPhone',label:'Emergency Phone',required:true}
+    ],
+    medical:[
+        {id:'allergies',label:'Allergies'},
+        {id:'medications',label:'Medications'},
+        {id:'dietary',label:'Dietary Restrictions'},
+        {id:'medicalNotes',label:'Additional Medical Notes'}
+    ],
+    preferences:[
+        {id:'bunkmate',label:'Bunkmate Request'},
+        {id:'separate',label:'Separation Request'},
+        {id:'shirt',label:'T-Shirt Size'},
+        {id:'source',label:'How did you hear about us?'},
+        {id:'notes',label:'Additional Notes'}
+    ]
+};
+
 function getFormConfig(){
     if(formConfig)return formConfig;
     // Default config
     var sections={};
     FC_SECTIONS.forEach(function(s){sections[s.key]={enabled:s.default}});
-    return{sections:sections,customQuestions:[],welcomeMessage:'',instructions:''};
+    return{sections:sections,customQuestions:[],welcomeMessage:'',instructions:'',fields:{},sectionOrder:FC_SECTIONS.map(function(s){return s.key}),branding:{}};
+}
+
+// Shared by the parent (FC_FIELD_CATALOG) and staff (SFC_FIELD_CATALOG)
+// advanced-tab renderers — one field row with Enabled/Required checkboxes
+// and a relabel input. `locked` fields render checked+disabled so the
+// camp can still rename them but can't turn off the fields the record
+// depends on.
+function _renderAdvFieldRow(prefix,sectionKey,f,cfg){
+    cfg=cfg||{};
+    var enabled=f.locked?true:(cfg.enabled!==false);
+    var required=f.locked?true:(cfg.required!=null?cfg.required:!!f.required);
+    var label=cfg.label!=null?cfg.label:f.label;
+    var lockAttr=f.locked?' disabled':'';
+    return '<div class="'+prefix+'Field" data-section="'+sectionKey+'" data-id="'+f.id+'" style="display:flex;align-items:center;gap:8px;padding:5px 8px;border:1px solid var(--s100);border-radius:6px;margin-bottom:4px;background:'+(enabled?'#fff':'var(--s50)')+'">'
+        +'<label style="display:flex;align-items:center;gap:3px;font-size:.68rem;color:var(--s500);white-space:nowrap"><input type="checkbox" class="'+prefix+'FEnabled"'+(enabled?' checked':'')+lockAttr+' style="accent-color:var(--me)">On</label>'
+        +'<label style="display:flex;align-items:center;gap:3px;font-size:.68rem;color:var(--s500);white-space:nowrap"><input type="checkbox" class="'+prefix+'FRequired"'+(required?' checked':'')+lockAttr+' style="accent-color:var(--me)">Req</label>'
+        +'<input class="fi '+prefix+'FLabel" style="flex:1;font-size:.78rem;padding:4px 8px" value="'+esc(label)+'">'
+        +(f.locked?'<span style="font-size:.62rem;color:var(--s400);white-space:nowrap">locked</span>':'')
+        +'</div>';
+}
+function _readAdvFields(prefix,catalog){
+    var fields={};
+    Object.keys(catalog).forEach(function(sectionKey){
+        catalog[sectionKey].forEach(function(f){
+            var row=document.querySelector('.'+prefix+'Field[data-section="'+sectionKey+'"][data-id="'+f.id+'"]');
+            if(!row)return;
+            var enabled=f.locked?true:!!row.querySelector('.'+prefix+'FEnabled').checked;
+            var required=f.locked?true:!!row.querySelector('.'+prefix+'FRequired').checked;
+            var label=(row.querySelector('.'+prefix+'FLabel').value||f.label).trim()||f.label;
+            fields[f.id]={enabled:enabled,required:required,label:label};
+        });
+    });
+    return fields;
+}
+function _renderSectionOrderList(prefix,sections,order){
+    var keys=(order&&order.length)?order.slice():sections.map(function(s){return s.key});
+    // Include any section missing from a stale saved order (e.g. after an app update).
+    sections.forEach(function(s){ if(keys.indexOf(s.key)<0) keys.push(s.key); });
+    var byKey={}; sections.forEach(function(s){byKey[s.key]=s;});
+    return '<div id="'+prefix+'OrderList">'+keys.map(function(k,i){
+        var s=byKey[k]; if(!s)return'';
+        return '<div class="'+prefix+'OrderRow" data-key="'+k+'" style="display:flex;align-items:center;gap:8px;padding:6px 10px;border:1px solid var(--s200);border-radius:6px;margin-bottom:4px;background:#fff">'
+            +'<span style="flex:1;font-size:.82rem;font-weight:600;color:var(--s700)">'+esc(s.label)+'</span>'
+            +'<button type="button" class="me-btn me-btn--ghost me-btn--sm" style="padding:2px 8px" onclick="CampistryMe._moveOrderRow(this,-1)" '+(i===0?'disabled':'')+'>↑</button>'
+            +'<button type="button" class="me-btn me-btn--ghost me-btn--sm" style="padding:2px 8px" onclick="CampistryMe._moveOrderRow(this,1)">↓</button>'
+            +'</div>';
+    }).join('')+'</div>';
+}
+function _moveOrderRow(btn,dir){
+    var row=btn.closest('[class*="OrderRow"]');
+    var list=row.parentElement;
+    if(dir<0&&row.previousElementSibling) list.insertBefore(row,row.previousElementSibling);
+    else if(dir>0&&row.nextElementSibling) list.insertBefore(row.nextElementSibling,row);
+    // Refresh disabled state on the "up" button of the first row in each list.
+    list.querySelectorAll('[class*="OrderRow"]').forEach(function(r,i){
+        var up=r.querySelector('button');
+        if(up) up.disabled=(i===0);
+    });
+}
+function _readSectionOrder(prefix){
+    return Array.prototype.map.call(document.querySelectorAll('.'+prefix+'OrderRow'),function(r){return r.dataset.key;});
+}
+function _brandingLogoPick(prefix,input){
+    var f=input.files&&input.files[0]; if(!f)return;
+    if(typeof _downscaleImage==='function'){
+        _downscaleImage(f,240,function(dataUrl){
+            var img=document.getElementById(prefix+'LogoPreview');
+            if(img){img.src=dataUrl;img.style.display='block';}
+            document.getElementById(prefix+'LogoData').value=dataUrl;
+        });
+    }
+}
+function _brandingLogoClear(prefix){
+    document.getElementById(prefix+'LogoData').value='';
+    var img=document.getElementById(prefix+'LogoPreview');
+    if(img){img.src='';img.style.display='none';}
+}
+
+// Shared tab-bar renderer for the parent (fc) and staff (sfc) form
+// customizers — two buttons flip between a Quick Setup pane and an
+// Advanced pane without closing/reopening the modal.
+function _fcTabBarHtml(prefix){
+    return '<div style="display:flex;gap:6px;margin-bottom:16px;border-bottom:1px solid var(--s200);padding-bottom:0">'
+        +'<button type="button" id="'+prefix+'TabBtnQuick" onclick="CampistryMe._fcSwitchTab(\''+prefix+'\',\'quick\')" style="padding:8px 14px;border:none;border-bottom:2px solid var(--me);background:none;font-weight:700;font-size:.85rem;color:var(--me);cursor:pointer;font-family:inherit">Quick Setup</button>'
+        +'<button type="button" id="'+prefix+'TabBtnAdv" onclick="CampistryMe._fcSwitchTab(\''+prefix+'\',\'adv\')" style="padding:8px 14px;border:none;border-bottom:2px solid transparent;background:none;font-weight:700;font-size:.85rem;color:var(--s400);cursor:pointer;font-family:inherit">Advanced</button>'
+        +'</div>';
+}
+function _fcSwitchTab(prefix,tab){
+    var q=document.getElementById(prefix+'TabQuick'), a=document.getElementById(prefix+'TabAdv');
+    var qb=document.getElementById(prefix+'TabBtnQuick'), ab=document.getElementById(prefix+'TabBtnAdv');
+    if(q)q.style.display=(tab==='quick')?'block':'none';
+    if(a)a.style.display=(tab==='adv')?'block':'none';
+    if(qb){qb.style.borderBottomColor=(tab==='quick')?'var(--me)':'transparent';qb.style.color=(tab==='quick')?'var(--me)':'var(--s400)';}
+    if(ab){ab.style.borderBottomColor=(tab==='adv')?'var(--me)':'transparent';ab.style.color=(tab==='adv')?'var(--me)':'var(--s400)';}
 }
 
 function openFormConfig(){
     var fc=getFormConfig();
-    var h='';
+    var h=_fcTabBarHtml('fc');
 
+    // ── QUICK SETUP ──────────────────────────────────────────────
+    h+='<div id="fcTabQuick">';
     h+='<div style="margin-bottom:16px"><div class="fsec" style="margin-bottom:6px">Form Branding</div>';
     h+='<div class="fg"><label class="fl">Welcome Message</label><input class="fi" id="fcWelcome" value="'+esc(fc.welcomeMessage||'')+'" placeholder="e.g., Welcome to Camp Sunrise!"></div>';
     h+='<div class="fg"><label class="fl">Instructions for Parents</label><textarea class="fi" id="fcInstructions" style="min-height:50px;resize:vertical" placeholder="Any special instructions shown at the top of the form">'+(fc.instructions||'')+'</textarea></div></div>';
@@ -3313,33 +3467,76 @@ function openFormConfig(){
     });
     h+='</div>';
     h+='<button class="me-btn me-btn--sec me-btn--sm" style="margin-top:4px" onclick="CampistryMe.addPromoRow()">+ Add Code</button>';
+    h+='</div>'; // /fcTabQuick
+
+    // ── ADVANCED ──────────────────────────────────────────────────
+    h+='<div id="fcTabAdv" style="display:none">';
+    h+='<div class="fsec" style="margin-bottom:6px">Branding</div>';
+    h+='<p style="font-size:.78rem;color:var(--s400);margin-bottom:10px">Shown at the top of the registration form.</p>';
+    h+='<div class="fg"><label class="fl">Camp Logo</label>';
+    h+='<input type="hidden" id="fcLogoData" value="'+esc((fc.branding&&fc.branding.logo)||'')+'">';
+    h+='<img id="fcLogoPreview" src="'+esc((fc.branding&&fc.branding.logo)||'')+'" style="display:'+((fc.branding&&fc.branding.logo)?'block':'none')+';max-height:60px;max-width:200px;margin-bottom:6px;border-radius:6px">';
+    h+='<div style="display:flex;gap:8px;align-items:center"><input type="file" accept="image/*" class="fi" style="flex:1" onchange="CampistryMe._brandingLogoPick(\'fc\',this)"><button type="button" class="me-btn me-btn--ghost me-btn--sm" onclick="CampistryMe._brandingLogoClear(\'fc\')">Remove</button></div></div>';
+    h+='<div class="fg"><label class="fl">Accent Color</label><input type="color" id="fcAccentColor" value="'+esc((fc.branding&&fc.branding.color)||'#D97706')+'" style="width:60px;height:34px;padding:2px;border:1.5px solid var(--s200);border-radius:var(--r);cursor:pointer"></div>';
+
+    h+='<div class="fsec" style="margin:16px 0 6px">Section Order</div>';
+    h+='<p style="font-size:.78rem;color:var(--s400);margin-bottom:10px">Reorder how sections appear on the form.</p>';
+    h+=_renderSectionOrderList('fc',FC_SECTIONS,fc.sectionOrder);
+
+    h+='<div class="fsec" style="margin:16px 0 6px">Field-by-Field Control</div>';
+    h+='<p style="font-size:.78rem;color:var(--s400);margin-bottom:10px">Show/hide, require, or relabel individual fields within a section.</p>';
+    Object.keys(FC_FIELD_CATALOG).forEach(function(sectionKey){
+        var sec=FC_SECTIONS.filter(function(s){return s.key===sectionKey})[0];
+        h+='<div style="font-size:.75rem;font-weight:700;color:var(--s600);margin:10px 0 4px">'+esc(sec?sec.label:sectionKey)+'</div>';
+        FC_FIELD_CATALOG[sectionKey].forEach(function(f){
+            h+=_renderAdvFieldRow('fc',sectionKey,f,(fc.fields||{})[f.id]);
+        });
+    });
+    h+='</div>'; // /fcTabAdv
 
     document.getElementById('fcBody').innerHTML=h;
     openModal('formConfigModal');
 }
 
-function renderCustomQ(q,i){
+function renderCustomQ(q,i,prefix){
+    prefix=prefix||'fc';
     var types={'text':'Short Text','textarea':'Long Text','select':'Dropdown','checkbox':'Checkboxes','yesno':'Yes/No'};
     var needsOpts=q.type==='select'||q.type==='checkbox';
-    var h='<div class="fcQ" style="border:1px solid var(--s200);border-radius:var(--r);padding:10px 12px;margin-bottom:6px;background:var(--s50)">';
+    var qCls=prefix+'Q';
+    var h='<div class="'+qCls+'" style="border:1px solid var(--s200);border-radius:var(--r);padding:10px 12px;margin-bottom:6px;background:var(--s50)">';
     h+='<div style="display:flex;gap:6px;align-items:center;margin-bottom:6px">';
-    h+='<input class="fi fcQLabel" style="flex:1;font-size:.82rem;padding:5px 8px" value="'+esc(q.label||'')+'" placeholder="Question text">';
-    h+='<select class="fs fcQType" style="flex:0 0 110px;font-size:.78rem;padding:5px 6px" onchange="var o=this.closest(\'.fcQ\').querySelector(\'.fcQOpts\');o.style.display=(this.value===\'select\'||this.value===\'checkbox\')?\'block\':\'none\'">';
+    h+='<input class="fi '+qCls+'Label" style="flex:1;font-size:.82rem;padding:5px 8px" value="'+esc(q.label||'')+'" placeholder="Question text">';
+    h+='<select class="fs '+qCls+'Type" style="flex:0 0 110px;font-size:.78rem;padding:5px 6px" onchange="var o=this.closest(\'.'+qCls+'\').querySelector(\'.'+qCls+'Opts\');o.style.display=(this.value===\'select\'||this.value===\'checkbox\')?\'block\':\'none\'">';
     Object.entries(types).forEach(function([k,v]){h+='<option value="'+k+'"'+(q.type===k?' selected':'')+'>'+v+'</option>'});
     h+='</select>';
-    h+='<label style="display:flex;align-items:center;gap:3px;font-size:.72rem;color:var(--s500);white-space:nowrap"><input type="checkbox" class="fcQReq"'+(q.required?' checked':'')+' style="accent-color:var(--me)">Req</label>';
-    h+='<button class="me-btn me-btn--ghost" style="color:var(--err);font-size:.7rem" onclick="this.closest(\'.fcQ\').remove()">✕</button></div>';
-    h+='<input class="fi fcQOpts" style="font-size:.78rem;padding:4px 8px;'+(needsOpts?'':'display:none')+'" value="'+esc((q.options||[]).join(', '))+'" placeholder="Options (comma-separated, e.g. Option A, Option B, Option C)">';
+    h+='<label style="display:flex;align-items:center;gap:3px;font-size:.72rem;color:var(--s500);white-space:nowrap"><input type="checkbox" class="'+qCls+'Req"'+(q.required?' checked':'')+' style="accent-color:var(--me)">Req</label>';
+    h+='<button class="me-btn me-btn--ghost" style="color:var(--err);font-size:.7rem" onclick="this.closest(\'.'+qCls+'\').remove()">✕</button></div>';
+    h+='<input class="fi '+qCls+'Opts" style="font-size:.78rem;padding:4px 8px;'+(needsOpts?'':'display:none')+'" value="'+esc((q.options||[]).join(', '))+'" placeholder="Options (comma-separated, e.g. Option A, Option B, Option C)">';
     h+='</div>';
     return h;
 }
+function _readCustomQuestions(prefix){
+    var qCls=(prefix||'fc')+'Q';
+    var out=[];
+    document.querySelectorAll('.'+qCls).forEach(function(el){
+        var label=el.querySelector('.'+qCls+'Label')?.value?.trim();
+        var type=el.querySelector('.'+qCls+'Type')?.value||'text';
+        var required=el.querySelector('.'+qCls+'Req')?.checked||false;
+        var optsRaw=el.querySelector('.'+qCls+'Opts')?.value||'';
+        var options=optsRaw?optsRaw.split(',').map(function(o){return o.trim()}).filter(Boolean):[];
+        if(label)out.push({label:label,type:type,required:required,options:options});
+    });
+    return out;
+}
 
-function addCustomQ(){
-    var list=document.getElementById('fcQList');
+function addCustomQ(prefix){
+    prefix=prefix||'fc';
+    var list=document.getElementById(prefix+'QList');
     var div=document.createElement('div');
-    div.innerHTML=renderCustomQ({label:'',type:'text',required:false,options:[]},-1);
+    div.innerHTML=renderCustomQ({label:'',type:'text',required:false,options:[]},-1,prefix);
     list.appendChild(div.firstChild);
 }
+function addStaffCustomQ(){ addCustomQ('sfc'); }
 
 function _renderDocRow(d){
     d=d||{};
@@ -3360,6 +3557,171 @@ function addPromoRow(){
     var div=document.createElement('div');
     div.innerHTML='<div style="display:flex;gap:6px;align-items:center;margin-bottom:4px;padding:6px 10px;border:1px solid var(--s200);border-radius:var(--r)"><input class="fi fcPromoCode" style="flex:0 0 120px;font-size:.8rem;padding:5px 8px" placeholder="CODE"><input class="fi fcPromoLabel" style="flex:1;font-size:.8rem;padding:5px 8px" placeholder="Label"><input class="fi fcPromoPct" style="flex:0 0 60px;font-size:.8rem;padding:5px 8px" placeholder="% off"><input class="fi fcPromoAmt" style="flex:0 0 60px;font-size:.8rem;padding:5px 8px" placeholder="$ off"><button class="me-btn me-btn--ghost" style="color:var(--err);font-size:.7rem" onclick="this.closest(\'div\').remove()">✕</button></div>';
     list.appendChild(div.firstChild);
+}
+
+// ═══════════════════════════════════════════════════════════════
+// STAFF APPLICATION FORM CUSTOMIZER — mirrors the parent Form
+// Customizer above (getFormConfig/openFormConfig/saveFormConfig),
+// driving campistry_staff_apply.html the same way formConfig drives
+// campistry_register.html.
+// ═══════════════════════════════════════════════════════════════
+var SFC_POSITIONS_DEFAULT=['Counselor','Head Counselor','Junior Counselor','Specialist','Lifeguard','Nurse / Medical','Kitchen Staff','Maintenance','Office Staff','Bus Driver','Division Head'];
+var SFC_CERTS_DEFAULT=['CPR','First Aid','Lifeguard (WSI)','Food Handler','Wilderness First Responder','EMT','Teaching license'];
+
+var SFC_SECTIONS=[
+    {key:'about',label:'About You',desc:'Name, contact info, address',default:true,required:true},
+    {key:'role',label:'Role & Availability',desc:'Position(s), available dates',default:true,required:true},
+    {key:'experience',label:'Experience & Certifications',desc:'Education, experience, certifications, resume',default:true,required:false},
+    {key:'references',label:'References',desc:'Two reference contacts',default:true,required:false},
+    {key:'consent',label:'Consent & Signature',desc:'Background check consent, signature',default:true,required:true}
+];
+
+var SFC_FIELD_CATALOG={
+    about:[
+        {id:'first',label:'First Name',locked:true},
+        {id:'last',label:'Last Name',locked:true},
+        {id:'email',label:'Email',locked:true},
+        {id:'phone',label:'Phone',required:true},
+        {id:'dob',label:'Date of Birth'},
+        {id:'street',label:'Street Address'},
+        {id:'city',label:'City'},
+        {id:'state',label:'State'},
+        {id:'zip',label:'ZIP'}
+    ],
+    role:[
+        {id:'availStart',label:'Available From'},
+        {id:'availEnd',label:'Available Until'}
+    ],
+    experience:[
+        {id:'education',label:'Education'},
+        {id:'experience',label:'Relevant Experience'},
+        {id:'resume',label:'Resume Upload'}
+    ]
+};
+
+function getStaffFormConfig(){
+    if(staffFormConfig)return staffFormConfig;
+    var sections={};
+    SFC_SECTIONS.forEach(function(s){sections[s.key]={enabled:s.default}});
+    return{sections:sections,customQuestions:[],welcomeMessage:'',instructions:'',fields:{},sectionOrder:SFC_SECTIONS.map(function(s){return s.key}),branding:{},positions:SFC_POSITIONS_DEFAULT.slice(),certifications:SFC_CERTS_DEFAULT.slice()};
+}
+
+function _renderChipEditRow(cls,val){
+    return '<div class="'+cls+'" style="display:flex;gap:6px;align-items:center;margin-bottom:4px">'
+        +'<input class="fi '+cls+'Val" style="flex:1;font-size:.82rem;padding:5px 8px" value="'+esc(val||'')+'">'
+        +'<button type="button" class="me-btn me-btn--ghost" style="color:var(--err);font-size:.7rem" onclick="this.closest(\'.'+cls+'\').remove()">✕</button></div>';
+}
+function addPositionRow(){
+    var list=document.getElementById('sfcPosList');
+    var div=document.createElement('div');
+    div.innerHTML=_renderChipEditRow('sfcPos','');
+    list.appendChild(div.firstChild);
+}
+function addCertRow(){
+    var list=document.getElementById('sfcCertList');
+    var div=document.createElement('div');
+    div.innerHTML=_renderChipEditRow('sfcCert','');
+    list.appendChild(div.firstChild);
+}
+function _readChipList(cls){
+    return Array.prototype.map.call(document.querySelectorAll('.'+cls+'Val'),function(el){return (el.value||'').trim();}).filter(Boolean);
+}
+
+function openStaffFormConfig(){
+    var fc=getStaffFormConfig();
+    var h=_fcTabBarHtml('sfc');
+
+    // ── QUICK SETUP ──────────────────────────────────────────────
+    h+='<div id="sfcTabQuick">';
+    h+='<div style="margin-bottom:16px"><div class="fsec" style="margin-bottom:6px">Form Branding</div>';
+    h+='<div class="fg"><label class="fl">Welcome Message</label><input class="fi" id="sfcWelcome" value="'+esc(fc.welcomeMessage||'')+'" placeholder="e.g., Join our team at Camp Sunrise!"></div>';
+    h+='<div class="fg"><label class="fl">Instructions for Applicants</label><textarea class="fi" id="sfcInstructions" style="min-height:50px;resize:vertical" placeholder="Any special instructions shown at the top of the form">'+(fc.instructions||'')+'</textarea></div></div>';
+
+    h+='<div class="fsec" style="margin-bottom:6px">Sections</div>';
+    h+='<p style="font-size:.78rem;color:var(--s400);margin-bottom:10px">Toggle which sections appear on the staff application form. Required sections cannot be disabled.</p>';
+    SFC_SECTIONS.forEach(function(s){
+        var enabled=fc.sections&&fc.sections[s.key]?fc.sections[s.key].enabled:s.default;
+        var disabled=s.required?' disabled':'';
+        h+='<label style="display:flex;align-items:center;gap:10px;padding:8px 12px;border:1px solid var(--s200);border-radius:var(--r);margin-bottom:4px;cursor:'+(s.required?'default':'pointer')+';background:'+(enabled?'rgba(217,119,6,.03)':'var(--s50)')+'">';
+        h+='<input type="checkbox" class="sfcSec" data-key="'+s.key+'" '+(enabled?'checked':'')+disabled+' style="accent-color:var(--me);flex-shrink:0">';
+        h+='<div style="flex:1"><div style="font-size:.85rem;font-weight:600;color:var(--s800)">'+esc(s.label)+(s.required?' <span style="font-size:.65rem;color:var(--s400)">(required)</span>':'')+'</div>';
+        h+='<div style="font-size:.72rem;color:var(--s400)">'+esc(s.desc)+'</div></div></label>';
+    });
+
+    h+='<div class="fsec" style="margin:16px 0 6px">Positions</div>';
+    h+='<p style="font-size:.78rem;color:var(--s400);margin-bottom:10px">The list of positions an applicant can select from.</p>';
+    h+='<div id="sfcPosList">';
+    (fc.positions&&fc.positions.length?fc.positions:SFC_POSITIONS_DEFAULT).forEach(function(p){ h+=_renderChipEditRow('sfcPos',p); });
+    h+='</div>';
+    h+='<button class="me-btn me-btn--sec me-btn--sm" style="margin-top:4px" onclick="CampistryMe.addPositionRow()">+ Add Position</button>';
+
+    h+='<div class="fsec" style="margin:16px 0 6px">Certifications</div>';
+    h+='<p style="font-size:.78rem;color:var(--s400);margin-bottom:10px">The list of certifications an applicant can select from.</p>';
+    h+='<div id="sfcCertList">';
+    (fc.certifications&&fc.certifications.length?fc.certifications:SFC_CERTS_DEFAULT).forEach(function(c){ h+=_renderChipEditRow('sfcCert',c); });
+    h+='</div>';
+    h+='<button class="me-btn me-btn--sec me-btn--sm" style="margin-top:4px" onclick="CampistryMe.addCertRow()">+ Add Certification</button>';
+
+    h+='<div class="fsec" style="margin:16px 0 6px">Custom Questions</div>';
+    h+='<p style="font-size:.78rem;color:var(--s400);margin-bottom:10px">Add your own questions. These appear in an "Additional Information" section on the form.</p>';
+    h+='<div id="sfcQList">';
+    (fc.customQuestions||[]).forEach(function(q,i){ h+=renderCustomQ(q,i,'sfc'); });
+    h+='</div>';
+    h+='<button class="me-btn me-btn--sec me-btn--sm" style="margin-top:6px" onclick="CampistryMe.addStaffCustomQ()">+ Add Question</button>';
+    h+='</div>'; // /sfcTabQuick
+
+    // ── ADVANCED ──────────────────────────────────────────────────
+    h+='<div id="sfcTabAdv" style="display:none">';
+    h+='<div class="fsec" style="margin-bottom:6px">Branding</div>';
+    h+='<p style="font-size:.78rem;color:var(--s400);margin-bottom:10px">Shown at the top of the staff application form.</p>';
+    h+='<div class="fg"><label class="fl">Camp Logo</label>';
+    h+='<input type="hidden" id="sfcLogoData" value="'+esc((fc.branding&&fc.branding.logo)||'')+'">';
+    h+='<img id="sfcLogoPreview" src="'+esc((fc.branding&&fc.branding.logo)||'')+'" style="display:'+((fc.branding&&fc.branding.logo)?'block':'none')+';max-height:60px;max-width:200px;margin-bottom:6px;border-radius:6px">';
+    h+='<div style="display:flex;gap:8px;align-items:center"><input type="file" accept="image/*" class="fi" style="flex:1" onchange="CampistryMe._brandingLogoPick(\'sfc\',this)"><button type="button" class="me-btn me-btn--ghost me-btn--sm" onclick="CampistryMe._brandingLogoClear(\'sfc\')">Remove</button></div></div>';
+    h+='<div class="fg"><label class="fl">Accent Color</label><input type="color" id="sfcAccentColor" value="'+esc((fc.branding&&fc.branding.color)||'#D97706')+'" style="width:60px;height:34px;padding:2px;border:1.5px solid var(--s200);border-radius:var(--r);cursor:pointer"></div>';
+
+    h+='<div class="fsec" style="margin:16px 0 6px">Section Order</div>';
+    h+='<p style="font-size:.78rem;color:var(--s400);margin-bottom:10px">Reorder how sections appear on the form.</p>';
+    h+=_renderSectionOrderList('sfc',SFC_SECTIONS,fc.sectionOrder);
+
+    h+='<div class="fsec" style="margin:16px 0 6px">Field-by-Field Control</div>';
+    h+='<p style="font-size:.78rem;color:var(--s400);margin-bottom:10px">Show/hide, require, or relabel individual fields within a section.</p>';
+    Object.keys(SFC_FIELD_CATALOG).forEach(function(sectionKey){
+        var sec=SFC_SECTIONS.filter(function(s){return s.key===sectionKey})[0];
+        h+='<div style="font-size:.75rem;font-weight:700;color:var(--s600);margin:10px 0 4px">'+esc(sec?sec.label:sectionKey)+'</div>';
+        SFC_FIELD_CATALOG[sectionKey].forEach(function(f){
+            h+=_renderAdvFieldRow('sfc',sectionKey,f,(fc.fields||{})[f.id]);
+        });
+    });
+    h+='</div>'; // /sfcTabAdv
+
+    document.getElementById('sfcBody').innerHTML=h;
+    openModal('staffFormConfigModal');
+}
+
+function saveStaffFormConfig(){
+    var sections={};
+    document.querySelectorAll('.sfcSec').forEach(function(cb){sections[cb.dataset.key]={enabled:cb.checked}});
+
+    staffFormConfig={
+        sections:sections,
+        customQuestions:_readCustomQuestions('sfc'),
+        welcomeMessage:(document.getElementById('sfcWelcome')?.value||'').trim(),
+        instructions:(document.getElementById('sfcInstructions')?.value||'').trim(),
+        positions:_readChipList('sfcPos'),
+        certifications:_readChipList('sfcCert'),
+        fields:_readAdvFields('sfc',SFC_FIELD_CATALOG),
+        sectionOrder:_readSectionOrder('sfc'),
+        branding:{
+            logo:(document.getElementById('sfcLogoData')?.value||''),
+            color:(document.getElementById('sfcAccentColor')?.value||'')
+        }
+    };
+    if(!staffFormConfig.positions.length) staffFormConfig.positions=SFC_POSITIONS_DEFAULT.slice();
+    if(!staffFormConfig.certifications.length) staffFormConfig.certifications=SFC_CERTS_DEFAULT.slice();
+
+    save();
+    closeModal('staffFormConfigModal');toast('Staff application form configuration saved');
 }
 
 function saveFormConfig(){
@@ -3404,7 +3766,13 @@ function saveFormConfig(){
         customQuestions:customQuestions,
         documents:documents,
         welcomeMessage:(document.getElementById('fcWelcome')?.value||'').trim(),
-        instructions:(document.getElementById('fcInstructions')?.value||'').trim()
+        instructions:(document.getElementById('fcInstructions')?.value||'').trim(),
+        fields:_readAdvFields('fc',FC_FIELD_CATALOG),
+        sectionOrder:_readSectionOrder('fc'),
+        branding:{
+            logo:(document.getElementById('fcLogoData')?.value||''),
+            color:(document.getElementById('fcAccentColor')?.value||'')
+        }
     };
 
     // Store promoCodes in enrollSettings so it persists through the main save() path
@@ -3712,6 +4080,114 @@ function copyRegLink(){
         navigator.clipboard.writeText(url).then(function(){toast('Registration link copied!')});
     }else{
         prompt('Copy this link and share with parents:',url);
+    }
+}
+
+// ═══════════════════════════════════════════════════════════════
+// SEND LINK (email) + QR CODE — shared by the parent registration link
+// and the staff application link.
+// ═══════════════════════════════════════════════════════════════
+function copyLinkText(url){
+    if(navigator.clipboard){ navigator.clipboard.writeText(url).then(function(){toast('Link copied!')}); }
+    else{ prompt('Copy this link:',url); }
+}
+
+// Loads the qrcode-generator library on demand (same CDN + API already used
+// by campistry_live.js for printed template QR codes) — not loaded eagerly
+// on every Me page view since only a QR click needs it.
+var _qrLibPromise=null;
+function _ensureQrLib(){
+    if(window.qrcode)return Promise.resolve();
+    if(_qrLibPromise)return _qrLibPromise;
+    _qrLibPromise=new Promise(function(resolve,reject){
+        var s=document.createElement('script');
+        s.src='https://cdn.jsdelivr.net/npm/qrcode-generator@1.4.4/qrcode.min.js';
+        s.onload=function(){resolve();};
+        s.onerror=function(){reject(new Error('QR library failed to load'));};
+        document.head.appendChild(s);
+    });
+    return _qrLibPromise;
+}
+function showLinkQR(url,title){
+    document.getElementById('qrTitle').textContent=title||'QR Code';
+    document.getElementById('qrBody').innerHTML='<div style="padding:30px;color:var(--s400);font-size:.85rem">Loading…</div>';
+    openModal('qrModal');
+    _ensureQrLib().then(function(){
+        try{
+            var qr=window.qrcode(0,'M');
+            qr.addData(url);
+            qr.make();
+            var svg=qr.createSvgTag(6,0);
+            document.getElementById('qrBody').innerHTML='<div style="display:inline-block;padding:16px;background:#fff;border-radius:8px;border:1px solid var(--s200)">'+svg+'</div>'
+                +'<div style="margin-top:10px;font-size:.75rem;color:var(--s500);word-break:break-all">'+esc(url)+'</div>'
+                +'<div style="margin-top:10px"><button class="me-btn me-btn--sec me-btn--sm" onclick="CampistryMe.copyLinkText(\''+je(url)+'\')">Copy Link</button></div>';
+        }catch(e){
+            document.getElementById('qrBody').innerHTML='<div style="color:var(--err);font-size:.85rem">Could not generate QR code.</div>';
+        }
+    }).catch(function(){
+        document.getElementById('qrBody').innerHTML='<div style="color:var(--err);font-size:.85rem">Could not load the QR library — check your connection.</div>';
+    });
+}
+function showRegistrationQR(){ showLinkQR(window.location.origin+'/campistry_register.html','Registration Link QR Code'); }
+function showStaffQR(){ showLinkQR(window.location.origin+'/campistry_staff_apply.html','Staff Application Link QR Code'); }
+
+// Opens the "Send Link" modal for either the parent registration link
+// (kind='registration', with an audience picker sourced from families/
+// divisions) or the staff application link (kind='staff', which has no
+// existing recipient list to draw from — always a manual email list).
+function openSendLinkModal(kind){
+    var isStaff=(kind==='staff');
+    var url=window.location.origin+'/'+(isStaff?'campistry_staff_apply.html':'campistry_register.html');
+    document.getElementById('slTitle').textContent=isStaff?'Send Staff Application Link':'Send Registration Link';
+    var h='';
+    if(!isStaff){
+        h+='<div class="fg"><label class="fl">Send to</label><select class="fs" id="slAudience" onchange="document.getElementById(\'slCustomWrap\').style.display=(this.value===\'custom\')?\'block\':\'none\'">';
+        h+='<option value="all">All Families</option>';
+        Object.keys(structure).sort().forEach(function(d){h+='<option value="'+esc(d)+'">'+esc(d)+' Only</option>';});
+        h+='<option value="custom">Custom Email List</option>';
+        h+='</select></div>';
+    }
+    h+='<div class="fg" id="slCustomWrap" style="'+(isStaff?'':'display:none')+'"><label class="fl">Email addresses (comma or newline separated)</label><textarea class="fi" id="slEmails" style="min-height:70px;resize:vertical" placeholder="parent1@example.com, parent2@example.com"></textarea></div>';
+    h+='<div class="fg"><label class="fl">Subject</label><input class="fi" id="slSubject" value="'+esc(isStaff?'Join our team — Staff Application':'Camp Registration is Open')+'"></div>';
+    h+='<div class="fg"><label class="fl">Message</label><textarea class="fi" id="slBodyText" style="min-height:110px;resize:vertical">'+esc((isStaff?"We're hiring for the upcoming season! Apply here:\n\n":'Registration is now open! Apply here:\n\n')+url)+'</textarea></div>';
+    document.getElementById('slBody').innerHTML=h;
+    var btn=document.getElementById('slSendBtn');
+    if(btn){ btn.disabled=false; btn.textContent='Send'; btn.onclick=function(){ _sendLinkNow(isStaff); }; }
+    openModal('sendLinkModal');
+}
+function openSendRegLinkModal(){ openSendLinkModal('registration'); }
+function openSendStaffLinkModal(){ openSendLinkModal('staff'); }
+
+async function _sendLinkNow(isStaff){
+    var recipients=[];
+    var audience=isStaff?'custom':(document.getElementById('slAudience')?.value||'all');
+    if(audience==='custom'){
+        var raw=(document.getElementById('slEmails')?.value||'');
+        raw.split(/[,\n]/).map(function(s){return s.trim();}).filter(Boolean).forEach(function(email){recipients.push({email:email,name:''});});
+    }else{
+        Object.values(families).forEach(function(f){(f.households||[]).forEach(function(hh){(hh.parents||[]).forEach(function(p){if(p.email)recipients.push({email:p.email,name:p.name||''});});});});
+        var seen={};recipients=recipients.filter(function(r){var k=r.email.toLowerCase();if(seen[k])return false;seen[k]=true;return true;});
+        if(audience!=='all'){
+            var divCampers={};Object.entries(roster).forEach(function(entry){if(entry[1].division===audience)divCampers[entry[0]]=1;});
+            var divEmails={};Object.values(families).forEach(function(f){if((f.camperIds||[]).some(function(n){return divCampers[n];}))(f.households||[]).forEach(function(hh){(hh.parents||[]).forEach(function(p){if(p.email)divEmails[p.email.toLowerCase()]=1;});});});
+            recipients=recipients.filter(function(r){return divEmails[r.email.toLowerCase()];});
+        }
+    }
+    if(!recipients.length){toast('No recipients with an email address','error');return;}
+    var subject=(document.getElementById('slSubject')?.value||'').trim();
+    var body=(document.getElementById('slBodyText')?.value||'').trim();
+    if(!body){toast('Enter a message','error');return;}
+    var campName='';try{var ss=JSON.parse(localStorage.getItem('campGlobalSettings_v1')||'{}');campName=ss.campName||ss.camp_name||'Camp';}catch(e){}
+    var btn=document.getElementById('slSendBtn');
+    if(btn){btn.disabled=true;btn.textContent='Sending…';}
+    try{
+        await callEdgeFunction('send-broadcast',{to:recipients,subject:subject,body:body,method:'email',campName:campName});
+        toast('Sent to '+recipients.length+' recipient'+(recipients.length!==1?'s':''));
+        closeModal('sendLinkModal');
+    }catch(err){
+        toast('Send failed: '+(err&&err.message||'unknown error'),'error');
+    }finally{
+        if(btn){btn.disabled=false;btn.textContent='Send';}
     }
 }
 
@@ -8544,6 +9020,11 @@ window.CampistryMe={
     viewApplication:viewApplication,updateEnrollStatus:updateEnrollStatus,bulkEnrollStatus:bulkEnrollStatus,toggleAllEnroll:toggleAllEnroll,_updateRegBulkBar:_updateRegBulkBar,enrollCamper:enrollCamper,generateParentInvite:generateParentInvite,setRegFilter:setRegFilter,rescindEnrollment:rescindEnrollment,syncAllParentPortals:syncAllParentPortals,auditParentEmails:auditParentEmails,
     saveAppNote:saveAppNote,printApplication:printApplication,
     openFormConfig:openFormConfig,saveFormConfig:saveFormConfig,addCustomQ:addCustomQ,addPromoRow:addPromoRow,
+    openStaffFormConfig:openStaffFormConfig,saveStaffFormConfig:saveStaffFormConfig,addStaffCustomQ:addStaffCustomQ,
+    addPositionRow:addPositionRow,addCertRow:addCertRow,
+    _fcSwitchTab:_fcSwitchTab,_moveOrderRow:_moveOrderRow,_brandingLogoPick:_brandingLogoPick,_brandingLogoClear:_brandingLogoClear,
+    copyLinkText:copyLinkText,showLinkQR:showLinkQR,showRegistrationQR:showRegistrationQR,showStaffQR:showStaffQR,
+    openSendLinkModal:openSendLinkModal,openSendRegLinkModal:openSendRegLinkModal,openSendStaffLinkModal:openSendStaffLinkModal,
     // Payroll
     prSetTab:prSetTab,prEditStaff:prEditStaff,prRemoveStaff:prRemoveStaff,
     prToggleSummer:prToggleSummer,prToggleYc:prToggleYc,prPayTypeHint:prPayTypeHint,
