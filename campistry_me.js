@@ -3329,11 +3329,11 @@ function _renderAdvFieldRow(prefix,sectionKey,f,cfg){
     var required=f.locked?true:(cfg.required!=null?cfg.required:!!f.required);
     var label=cfg.label!=null?cfg.label:f.label;
     var lockAttr=f.locked?' disabled':'';
-    return '<div class="'+prefix+'Field" data-section="'+sectionKey+'" data-id="'+f.id+'" style="display:flex;align-items:center;gap:8px;padding:5px 8px;border:1px solid var(--s100);border-radius:6px;margin-bottom:4px;background:'+(enabled?'#fff':'var(--s50)')+'">'
-        +'<label style="display:flex;align-items:center;gap:3px;font-size:.68rem;color:var(--s500);white-space:nowrap"><input type="checkbox" class="'+prefix+'FEnabled"'+(enabled?' checked':'')+lockAttr+' style="accent-color:var(--me)">On</label>'
-        +'<label style="display:flex;align-items:center;gap:3px;font-size:.68rem;color:var(--s500);white-space:nowrap"><input type="checkbox" class="'+prefix+'FRequired"'+(required?' checked':'')+lockAttr+' style="accent-color:var(--me)">Req</label>'
-        +'<input class="fi '+prefix+'FLabel" style="flex:1;font-size:.78rem;padding:4px 8px" value="'+esc(label)+'">'
-        +(f.locked?'<span style="font-size:.62rem;color:var(--s400);white-space:nowrap">locked</span>':'')
+    return '<div class="'+prefix+'Field" data-section="'+sectionKey+'" data-id="'+f.id+'" style="display:flex;align-items:center;gap:14px;padding:9px 4px;border-bottom:1px solid var(--s100)">'
+        +'<input class="fi '+prefix+'FLabel" style="flex:1;font-size:.82rem;padding:6px 10px" value="'+esc(label)+'">'
+        +'<label style="display:flex;align-items:center;gap:5px;font-size:.75rem;color:var(--s500);white-space:nowrap;cursor:'+(f.locked?'default':'pointer')+'"><input type="checkbox" class="'+prefix+'FEnabled"'+(enabled?' checked':'')+lockAttr+' style="accent-color:var(--me);width:15px;height:15px">Show</label>'
+        +'<label style="display:flex;align-items:center;gap:5px;font-size:.75rem;color:var(--s500);white-space:nowrap;cursor:'+(f.locked?'default':'pointer')+'"><input type="checkbox" class="'+prefix+'FRequired"'+(required?' checked':'')+lockAttr+' style="accent-color:var(--me);width:15px;height:15px">Required</label>'
+        +(f.locked?'<span style="font-size:.68rem;color:var(--s400);white-space:nowrap">🔒</span>':'<span style="width:14px"></span>')
         +'</div>';
 }
 function _readAdvFields(prefix,catalog){
@@ -3412,86 +3412,102 @@ function _fcSwitchTab(prefix,tab){
     if(ab){ab.style.borderBottomColor=(tab==='adv')?'var(--me)':'transparent';ab.style.color=(tab==='adv')?'var(--me)':'var(--s400)';}
 }
 
+// Collapsible card used throughout the form customizers so a long list of
+// settings reads as a handful of named, closed drawers instead of one dense
+// scroll — open only what you're there to change. `sub:true` renders a
+// slightly smaller/flatter nested card (used for the per-section field
+// groups inside "Field-by-Field Control").
+var _accSeq=0;
+function _accCard(title,bodyHtml,opts){
+    opts=opts||{};
+    var id='acc'+(_accSeq++);
+    var open=!!opts.open;
+    var sub=!!opts.sub;
+    return '<div class="fcAcc" style="border:1px solid var(--s200);border-radius:'+(sub?'8px':'10px')+';margin-bottom:'+(sub?'6px':'10px')+';overflow:hidden;background:#fff">'
+        +'<div onclick="CampistryMe._toggleAcc(\''+id+'\')" style="display:flex;align-items:center;justify-content:space-between;gap:10px;padding:'+(sub?'9px 12px':'12px 16px')+';cursor:pointer;background:'+(sub?'var(--s50)':'#fff')+';user-select:none">'
+        +'<span style="font-weight:700;font-size:'+(sub?'.8rem':'.88rem')+';color:var(--s800)">'+esc(title)+(opts.badge?' <span style="font-weight:600;color:var(--s400);font-size:.72rem">'+esc(opts.badge)+'</span>':'')+'</span>'
+        +'<span id="'+id+'Chev" style="color:var(--s400);font-size:.75rem;flex-shrink:0">'+(open?'▾':'▸')+'</span>'
+        +'</div>'
+        +'<div id="'+id+'" style="display:'+(open?'block':'none')+';padding:14px 16px;border-top:1px solid var(--s200)">'+bodyHtml+'</div>'
+        +'</div>';
+}
+function _toggleAcc(id){
+    var el=document.getElementById(id); if(!el)return;
+    var chev=document.getElementById(id+'Chev');
+    var willOpen=el.style.display==='none';
+    el.style.display=willOpen?'block':'none';
+    if(chev)chev.textContent=willOpen?'▾':'▸';
+}
+
 function openFormConfig(){
     var fc=getFormConfig();
     var h=_fcTabBarHtml('fc');
 
-    // ── QUICK SETUP ──────────────────────────────────────────────
+    // ── QUICK SETUP — each settings group is its own closed drawer ──
     h+='<div id="fcTabQuick">';
-    h+='<div style="margin-bottom:16px"><div class="fsec" style="margin-bottom:6px">Form Branding</div>';
-    h+='<div class="fg"><label class="fl">Welcome Message</label><input class="fi" id="fcWelcome" value="'+esc(fc.welcomeMessage||'')+'" placeholder="e.g., Welcome to Camp Sunrise!"></div>';
-    h+='<div class="fg"><label class="fl">Instructions for Parents</label><textarea class="fi" id="fcInstructions" style="min-height:50px;resize:vertical" placeholder="Any special instructions shown at the top of the form">'+(fc.instructions||'')+'</textarea></div></div>';
 
-    h+='<div class="fsec" style="margin-bottom:6px">Sections</div>';
-    h+='<p style="font-size:.78rem;color:var(--s400);margin-bottom:10px">Toggle which sections appear on the parent registration form. Required sections cannot be disabled.</p>';
+    var welcomeHtml='<div class="fg"><label class="fl">Welcome Message</label><input class="fi" id="fcWelcome" value="'+esc(fc.welcomeMessage||'')+'" placeholder="e.g., Welcome to Camp Sunrise!"></div>'
+        +'<div class="fg" style="margin-bottom:0"><label class="fl">Instructions for Parents</label><textarea class="fi" id="fcInstructions" style="min-height:50px;resize:vertical" placeholder="Any special instructions shown at the top of the form">'+(fc.instructions||'')+'</textarea></div>';
+    h+=_accCard('Welcome Message',welcomeHtml,{open:true});
+
+    var sectionsHtml='<p style="font-size:.78rem;color:var(--s400);margin:0 0 10px">Turn sections on or off. Required sections can\'t be disabled.</p>';
     FC_SECTIONS.forEach(function(s){
         var enabled=fc.sections&&fc.sections[s.key]?fc.sections[s.key].enabled:s.default;
         var disabled=s.required?' disabled':'';
-        h+='<label style="display:flex;align-items:center;gap:10px;padding:8px 12px;border:1px solid var(--s200);border-radius:var(--r);margin-bottom:4px;cursor:'+(s.required?'default':'pointer')+';background:'+(enabled?'rgba(217,119,6,.03)':'var(--s50)')+'">';
-        h+='<input type="checkbox" class="fcSec" data-key="'+s.key+'" '+(enabled?'checked':'')+disabled+' style="accent-color:var(--me);flex-shrink:0">';
-        h+='<div style="flex:1"><div style="font-size:.85rem;font-weight:600;color:var(--s800)">'+esc(s.label)+(s.required?' <span style="font-size:.65rem;color:var(--s400)">(required)</span>':'')+'</div>';
-        h+='<div style="font-size:.72rem;color:var(--s400)">'+esc(s.desc)+'</div></div></label>';
+        sectionsHtml+='<label style="display:flex;align-items:center;gap:10px;padding:9px 10px;border-bottom:1px solid var(--s100);cursor:'+(s.required?'default':'pointer')+'">';
+        sectionsHtml+='<input type="checkbox" class="fcSec" data-key="'+s.key+'" '+(enabled?'checked':'')+disabled+' style="accent-color:var(--me);flex-shrink:0;width:16px;height:16px">';
+        sectionsHtml+='<div style="flex:1"><div style="font-size:.85rem;font-weight:600;color:var(--s800)">'+esc(s.label)+(s.required?' <span style="font-size:.65rem;color:var(--s400);font-weight:500">(required)</span>':'')+'</div>';
+        sectionsHtml+='<div style="font-size:.72rem;color:var(--s400)">'+esc(s.desc)+'</div></div></label>';
     });
+    h+=_accCard('Sections',sectionsHtml,{open:true});
 
     // Required documents — each with a max number of files parents may upload.
-    h+='<div class="fsec" style="margin:16px 0 6px">Required Documents</div>';
-    h+='<p style="font-size:.78rem;color:var(--s400);margin-bottom:10px">Documents parents upload during registration. Set how many files each one accepts (e.g. front and back of an insurance card = 2).</p>';
-    h+='<div id="fcDocList">';
     var docs=(fc.documents&&fc.documents.length)?fc.documents:[{name:'Immunization records',maxFiles:1},{name:'Health form',maxFiles:1},{name:'Insurance card',maxFiles:2}];
-    docs.forEach(function(d){ h+=_renderDocRow(d); });
-    h+='</div>';
-    h+='<button class="me-btn me-btn--sec me-btn--sm" style="margin-top:4px" onclick="CampistryMe.addDocRow()">+ Add Document</button>';
+    var docsHtml='<p style="font-size:.78rem;color:var(--s400);margin:0 0 10px">Documents parents upload during registration. Set how many files each accepts (e.g. front + back of an insurance card = 2).</p>'
+        +'<div id="fcDocList">'+docs.map(_renderDocRow).join('')+'</div>'
+        +'<button class="me-btn me-btn--sec me-btn--sm" style="margin-top:4px" onclick="CampistryMe.addDocRow()">+ Add Document</button>';
+    h+=_accCard('Required Documents',docsHtml,{badge:docs.length+' set'});
 
-    h+='<div class="fsec" style="margin:16px 0 6px">Custom Questions</div>';
-    h+='<p style="font-size:.78rem;color:var(--s400);margin-bottom:10px">Add your own questions. These appear in a "Additional Information" section on the form.</p>';
-    h+='<div id="fcQList">';
-    (fc.customQuestions||[]).forEach(function(q,i){
-        h+=renderCustomQ(q,i);
-    });
-    h+='</div>';
-    h+='<button class="me-btn me-btn--sec me-btn--sm" style="margin-top:6px" onclick="CampistryMe.addCustomQ()">+ Add Question</button>';
+    var qHtml='<p style="font-size:.78rem;color:var(--s400);margin:0 0 10px">Your own questions, shown in an "Additional Information" section on the form.</p>'
+        +'<div id="fcQList">'+(fc.customQuestions||[]).map(function(q,i){return renderCustomQ(q,i);}).join('')+'</div>'
+        +'<button class="me-btn me-btn--sec me-btn--sm" style="margin-top:6px" onclick="CampistryMe.addCustomQ()">+ Add Question</button>';
+    h+=_accCard('Custom Questions',qHtml,{badge:(fc.customQuestions||[]).length+' added'});
 
-    // Promo codes
-    h+='<div class="fsec" style="margin:16px 0 6px">Promo / Discount Codes</div>';
-    h+='<p style="font-size:.78rem;color:var(--s400);margin-bottom:10px">Configure discount codes parents can use during registration.</p>';
-    h+='<div id="fcPromoList">';
     var g=JSON.parse(localStorage.getItem('campGlobalSettings_v1')||'{}');
     var promos=g.campistryMe?.promoCodes||{EARLYBIRD:{pct:10,label:'Early Bird 10% Off'},SIBLING:{pct:5,label:'Sibling Discount 5%'},REFER:{amt:50,label:'Referral $50 Off'}};
-    Object.entries(promos).forEach(function([code,p],i){
-        h+='<div style="display:flex;gap:6px;align-items:center;margin-bottom:4px;padding:6px 10px;border:1px solid var(--s200);border-radius:var(--r)">';
-        h+='<input class="fi fcPromoCode" style="flex:0 0 120px;font-size:.8rem;padding:5px 8px" value="'+esc(code)+'">';
-        h+='<input class="fi fcPromoLabel" style="flex:1;font-size:.8rem;padding:5px 8px" value="'+esc(p.label||'')+'" placeholder="Label">';
-        h+='<input class="fi fcPromoPct" style="flex:0 0 60px;font-size:.8rem;padding:5px 8px" value="'+(p.pct||'')+'" placeholder="% off">';
-        h+='<input class="fi fcPromoAmt" style="flex:0 0 60px;font-size:.8rem;padding:5px 8px" value="'+(p.amt||'')+'" placeholder="$ off">';
-        h+='<button class="me-btn me-btn--ghost" style="color:var(--err);font-size:.7rem" onclick="this.closest(\'div\').remove()">✕</button></div>';
+    var promoHtml='<p style="font-size:.78rem;color:var(--s400);margin:0 0 10px">Discount codes parents can use during registration.</p><div id="fcPromoList">';
+    Object.entries(promos).forEach(function([code,p]){
+        promoHtml+='<div style="display:flex;gap:6px;align-items:center;margin-bottom:4px;padding:6px 10px;border:1px solid var(--s200);border-radius:var(--r)">';
+        promoHtml+='<input class="fi fcPromoCode" style="flex:0 0 120px;font-size:.8rem;padding:5px 8px" value="'+esc(code)+'">';
+        promoHtml+='<input class="fi fcPromoLabel" style="flex:1;font-size:.8rem;padding:5px 8px" value="'+esc(p.label||'')+'" placeholder="Label">';
+        promoHtml+='<input class="fi fcPromoPct" style="flex:0 0 60px;font-size:.8rem;padding:5px 8px" value="'+(p.pct||'')+'" placeholder="% off">';
+        promoHtml+='<input class="fi fcPromoAmt" style="flex:0 0 60px;font-size:.8rem;padding:5px 8px" value="'+(p.amt||'')+'" placeholder="$ off">';
+        promoHtml+='<button class="me-btn me-btn--ghost" style="color:var(--err);font-size:.7rem" onclick="this.closest(\'div\').remove()">✕</button></div>';
     });
-    h+='</div>';
-    h+='<button class="me-btn me-btn--sec me-btn--sm" style="margin-top:4px" onclick="CampistryMe.addPromoRow()">+ Add Code</button>';
+    promoHtml+='</div><button class="me-btn me-btn--sec me-btn--sm" style="margin-top:4px" onclick="CampistryMe.addPromoRow()">+ Add Code</button>';
+    h+=_accCard('Promo / Discount Codes',promoHtml,{badge:Object.keys(promos).length+' codes'});
     h+='</div>'; // /fcTabQuick
 
-    // ── ADVANCED ──────────────────────────────────────────────────
+    // ── ADVANCED — same drawer pattern; fields are grouped by section ──
     h+='<div id="fcTabAdv" style="display:none">';
-    h+='<div class="fsec" style="margin-bottom:6px">Branding</div>';
-    h+='<p style="font-size:.78rem;color:var(--s400);margin-bottom:10px">Shown at the top of the registration form.</p>';
-    h+='<div class="fg"><label class="fl">Camp Logo</label>';
-    h+='<input type="hidden" id="fcLogoData" value="'+esc((fc.branding&&fc.branding.logo)||'')+'">';
-    h+='<img id="fcLogoPreview" src="'+esc((fc.branding&&fc.branding.logo)||'')+'" style="display:'+((fc.branding&&fc.branding.logo)?'block':'none')+';max-height:60px;max-width:200px;margin-bottom:6px;border-radius:6px">';
-    h+='<div style="display:flex;gap:8px;align-items:center"><input type="file" accept="image/*" class="fi" style="flex:1" onchange="CampistryMe._brandingLogoPick(\'fc\',this)"><button type="button" class="me-btn me-btn--ghost me-btn--sm" onclick="CampistryMe._brandingLogoClear(\'fc\')">Remove</button></div></div>';
-    h+='<div class="fg"><label class="fl">Accent Color</label><input type="color" id="fcAccentColor" value="'+esc((fc.branding&&fc.branding.color)||'#D97706')+'" style="width:60px;height:34px;padding:2px;border:1.5px solid var(--s200);border-radius:var(--r);cursor:pointer"></div>';
 
-    h+='<div class="fsec" style="margin:16px 0 6px">Section Order</div>';
-    h+='<p style="font-size:.78rem;color:var(--s400);margin-bottom:10px">Reorder how sections appear on the form.</p>';
-    h+=_renderSectionOrderList('fc',FC_SECTIONS,fc.sectionOrder);
+    var brandHtml='<div class="fg"><label class="fl">Camp Logo</label>'
+        +'<input type="hidden" id="fcLogoData" value="'+esc((fc.branding&&fc.branding.logo)||'')+'">'
+        +'<img id="fcLogoPreview" src="'+esc((fc.branding&&fc.branding.logo)||'')+'" style="display:'+((fc.branding&&fc.branding.logo)?'block':'none')+';max-height:60px;max-width:200px;margin-bottom:6px;border-radius:6px">'
+        +'<div style="display:flex;gap:8px;align-items:center"><input type="file" accept="image/*" class="fi" style="flex:1" onchange="CampistryMe._brandingLogoPick(\'fc\',this)"><button type="button" class="me-btn me-btn--ghost me-btn--sm" onclick="CampistryMe._brandingLogoClear(\'fc\')">Remove</button></div></div>'
+        +'<div class="fg" style="margin-bottom:0"><label class="fl">Accent Color</label><input type="color" id="fcAccentColor" value="'+esc((fc.branding&&fc.branding.color)||'#D97706')+'" style="width:60px;height:34px;padding:2px;border:1.5px solid var(--s200);border-radius:var(--r);cursor:pointer"></div>';
+    h+=_accCard('Branding',brandHtml,{open:true});
 
-    h+='<div class="fsec" style="margin:16px 0 6px">Field-by-Field Control</div>';
-    h+='<p style="font-size:.78rem;color:var(--s400);margin-bottom:10px">Show/hide, require, or relabel individual fields within a section.</p>';
+    var orderHtml='<p style="font-size:.78rem;color:var(--s400);margin:0 0 10px">Reorder how sections appear on the form.</p>'+_renderSectionOrderList('fc',FC_SECTIONS,fc.sectionOrder);
+    h+=_accCard('Section Order',orderHtml,{});
+
+    var fieldsHtml='<p style="font-size:.78rem;color:var(--s400);margin:0 0 10px">Show/hide, require, or relabel individual fields — pick a section to open it.</p>';
     Object.keys(FC_FIELD_CATALOG).forEach(function(sectionKey){
         var sec=FC_SECTIONS.filter(function(s){return s.key===sectionKey})[0];
-        h+='<div style="font-size:.75rem;font-weight:700;color:var(--s600);margin:10px 0 4px">'+esc(sec?sec.label:sectionKey)+'</div>';
-        FC_FIELD_CATALOG[sectionKey].forEach(function(f){
-            h+=_renderAdvFieldRow('fc',sectionKey,f,(fc.fields||{})[f.id]);
-        });
+        var rows=FC_FIELD_CATALOG[sectionKey].map(function(f){return _renderAdvFieldRow('fc',sectionKey,f,(fc.fields||{})[f.id]);}).join('');
+        fieldsHtml+=_accCard(sec?sec.label:sectionKey,rows,{sub:true});
     });
+    h+=_accCard('Field-by-Field Control',fieldsHtml,{});
     h+='</div>'; // /fcTabAdv
 
     document.getElementById('fcBody').innerHTML=h;
@@ -3631,68 +3647,62 @@ function openStaffFormConfig(){
     var fc=getStaffFormConfig();
     var h=_fcTabBarHtml('sfc');
 
-    // ── QUICK SETUP ──────────────────────────────────────────────
+    // ── QUICK SETUP — each settings group is its own closed drawer ──
     h+='<div id="sfcTabQuick">';
-    h+='<div style="margin-bottom:16px"><div class="fsec" style="margin-bottom:6px">Form Branding</div>';
-    h+='<div class="fg"><label class="fl">Welcome Message</label><input class="fi" id="sfcWelcome" value="'+esc(fc.welcomeMessage||'')+'" placeholder="e.g., Join our team at Camp Sunrise!"></div>';
-    h+='<div class="fg"><label class="fl">Instructions for Applicants</label><textarea class="fi" id="sfcInstructions" style="min-height:50px;resize:vertical" placeholder="Any special instructions shown at the top of the form">'+(fc.instructions||'')+'</textarea></div></div>';
 
-    h+='<div class="fsec" style="margin-bottom:6px">Sections</div>';
-    h+='<p style="font-size:.78rem;color:var(--s400);margin-bottom:10px">Toggle which sections appear on the staff application form. Required sections cannot be disabled.</p>';
+    var welcomeHtml='<div class="fg"><label class="fl">Welcome Message</label><input class="fi" id="sfcWelcome" value="'+esc(fc.welcomeMessage||'')+'" placeholder="e.g., Join our team at Camp Sunrise!"></div>'
+        +'<div class="fg" style="margin-bottom:0"><label class="fl">Instructions for Applicants</label><textarea class="fi" id="sfcInstructions" style="min-height:50px;resize:vertical" placeholder="Any special instructions shown at the top of the form">'+(fc.instructions||'')+'</textarea></div>';
+    h+=_accCard('Welcome Message',welcomeHtml,{open:true});
+
+    var sectionsHtml='<p style="font-size:.78rem;color:var(--s400);margin:0 0 10px">Turn sections on or off. Required sections can\'t be disabled.</p>';
     SFC_SECTIONS.forEach(function(s){
         var enabled=fc.sections&&fc.sections[s.key]?fc.sections[s.key].enabled:s.default;
         var disabled=s.required?' disabled':'';
-        h+='<label style="display:flex;align-items:center;gap:10px;padding:8px 12px;border:1px solid var(--s200);border-radius:var(--r);margin-bottom:4px;cursor:'+(s.required?'default':'pointer')+';background:'+(enabled?'rgba(217,119,6,.03)':'var(--s50)')+'">';
-        h+='<input type="checkbox" class="sfcSec" data-key="'+s.key+'" '+(enabled?'checked':'')+disabled+' style="accent-color:var(--me);flex-shrink:0">';
-        h+='<div style="flex:1"><div style="font-size:.85rem;font-weight:600;color:var(--s800)">'+esc(s.label)+(s.required?' <span style="font-size:.65rem;color:var(--s400)">(required)</span>':'')+'</div>';
-        h+='<div style="font-size:.72rem;color:var(--s400)">'+esc(s.desc)+'</div></div></label>';
+        sectionsHtml+='<label style="display:flex;align-items:center;gap:10px;padding:9px 10px;border-bottom:1px solid var(--s100);cursor:'+(s.required?'default':'pointer')+'">';
+        sectionsHtml+='<input type="checkbox" class="sfcSec" data-key="'+s.key+'" '+(enabled?'checked':'')+disabled+' style="accent-color:var(--me);flex-shrink:0;width:16px;height:16px">';
+        sectionsHtml+='<div style="flex:1"><div style="font-size:.85rem;font-weight:600;color:var(--s800)">'+esc(s.label)+(s.required?' <span style="font-size:.65rem;color:var(--s400);font-weight:500">(required)</span>':'')+'</div>';
+        sectionsHtml+='<div style="font-size:.72rem;color:var(--s400)">'+esc(s.desc)+'</div></div></label>';
     });
+    h+=_accCard('Sections',sectionsHtml,{open:true});
 
-    h+='<div class="fsec" style="margin:16px 0 6px">Positions</div>';
-    h+='<p style="font-size:.78rem;color:var(--s400);margin-bottom:10px">The list of positions an applicant can select from.</p>';
-    h+='<div id="sfcPosList">';
-    (fc.positions&&fc.positions.length?fc.positions:SFC_POSITIONS_DEFAULT).forEach(function(p){ h+=_renderChipEditRow('sfcPos',p); });
-    h+='</div>';
-    h+='<button class="me-btn me-btn--sec me-btn--sm" style="margin-top:4px" onclick="CampistryMe.addPositionRow()">+ Add Position</button>';
+    var positions=(fc.positions&&fc.positions.length?fc.positions:SFC_POSITIONS_DEFAULT);
+    var posHtml='<p style="font-size:.78rem;color:var(--s400);margin:0 0 10px">The list of positions an applicant can select from.</p>'
+        +'<div id="sfcPosList">'+positions.map(function(p){return _renderChipEditRow('sfcPos',p);}).join('')+'</div>'
+        +'<button class="me-btn me-btn--sec me-btn--sm" style="margin-top:4px" onclick="CampistryMe.addPositionRow()">+ Add Position</button>';
+    h+=_accCard('Positions',posHtml,{badge:positions.length+' positions'});
 
-    h+='<div class="fsec" style="margin:16px 0 6px">Certifications</div>';
-    h+='<p style="font-size:.78rem;color:var(--s400);margin-bottom:10px">The list of certifications an applicant can select from.</p>';
-    h+='<div id="sfcCertList">';
-    (fc.certifications&&fc.certifications.length?fc.certifications:SFC_CERTS_DEFAULT).forEach(function(c){ h+=_renderChipEditRow('sfcCert',c); });
-    h+='</div>';
-    h+='<button class="me-btn me-btn--sec me-btn--sm" style="margin-top:4px" onclick="CampistryMe.addCertRow()">+ Add Certification</button>';
+    var certs=(fc.certifications&&fc.certifications.length?fc.certifications:SFC_CERTS_DEFAULT);
+    var certHtml='<p style="font-size:.78rem;color:var(--s400);margin:0 0 10px">The list of certifications an applicant can select from.</p>'
+        +'<div id="sfcCertList">'+certs.map(function(c){return _renderChipEditRow('sfcCert',c);}).join('')+'</div>'
+        +'<button class="me-btn me-btn--sec me-btn--sm" style="margin-top:4px" onclick="CampistryMe.addCertRow()">+ Add Certification</button>';
+    h+=_accCard('Certifications',certHtml,{badge:certs.length+' certifications'});
 
-    h+='<div class="fsec" style="margin:16px 0 6px">Custom Questions</div>';
-    h+='<p style="font-size:.78rem;color:var(--s400);margin-bottom:10px">Add your own questions. These appear in an "Additional Information" section on the form.</p>';
-    h+='<div id="sfcQList">';
-    (fc.customQuestions||[]).forEach(function(q,i){ h+=renderCustomQ(q,i,'sfc'); });
-    h+='</div>';
-    h+='<button class="me-btn me-btn--sec me-btn--sm" style="margin-top:6px" onclick="CampistryMe.addStaffCustomQ()">+ Add Question</button>';
+    var qHtml='<p style="font-size:.78rem;color:var(--s400);margin:0 0 10px">Your own questions, shown in an "Additional Information" section on the form.</p>'
+        +'<div id="sfcQList">'+(fc.customQuestions||[]).map(function(q,i){return renderCustomQ(q,i,'sfc');}).join('')+'</div>'
+        +'<button class="me-btn me-btn--sec me-btn--sm" style="margin-top:6px" onclick="CampistryMe.addStaffCustomQ()">+ Add Question</button>';
+    h+=_accCard('Custom Questions',qHtml,{badge:(fc.customQuestions||[]).length+' added'});
     h+='</div>'; // /sfcTabQuick
 
-    // ── ADVANCED ──────────────────────────────────────────────────
+    // ── ADVANCED — same drawer pattern; fields are grouped by section ──
     h+='<div id="sfcTabAdv" style="display:none">';
-    h+='<div class="fsec" style="margin-bottom:6px">Branding</div>';
-    h+='<p style="font-size:.78rem;color:var(--s400);margin-bottom:10px">Shown at the top of the staff application form.</p>';
-    h+='<div class="fg"><label class="fl">Camp Logo</label>';
-    h+='<input type="hidden" id="sfcLogoData" value="'+esc((fc.branding&&fc.branding.logo)||'')+'">';
-    h+='<img id="sfcLogoPreview" src="'+esc((fc.branding&&fc.branding.logo)||'')+'" style="display:'+((fc.branding&&fc.branding.logo)?'block':'none')+';max-height:60px;max-width:200px;margin-bottom:6px;border-radius:6px">';
-    h+='<div style="display:flex;gap:8px;align-items:center"><input type="file" accept="image/*" class="fi" style="flex:1" onchange="CampistryMe._brandingLogoPick(\'sfc\',this)"><button type="button" class="me-btn me-btn--ghost me-btn--sm" onclick="CampistryMe._brandingLogoClear(\'sfc\')">Remove</button></div></div>';
-    h+='<div class="fg"><label class="fl">Accent Color</label><input type="color" id="sfcAccentColor" value="'+esc((fc.branding&&fc.branding.color)||'#D97706')+'" style="width:60px;height:34px;padding:2px;border:1.5px solid var(--s200);border-radius:var(--r);cursor:pointer"></div>';
 
-    h+='<div class="fsec" style="margin:16px 0 6px">Section Order</div>';
-    h+='<p style="font-size:.78rem;color:var(--s400);margin-bottom:10px">Reorder how sections appear on the form.</p>';
-    h+=_renderSectionOrderList('sfc',SFC_SECTIONS,fc.sectionOrder);
+    var brandHtml='<div class="fg"><label class="fl">Camp Logo</label>'
+        +'<input type="hidden" id="sfcLogoData" value="'+esc((fc.branding&&fc.branding.logo)||'')+'">'
+        +'<img id="sfcLogoPreview" src="'+esc((fc.branding&&fc.branding.logo)||'')+'" style="display:'+((fc.branding&&fc.branding.logo)?'block':'none')+';max-height:60px;max-width:200px;margin-bottom:6px;border-radius:6px">'
+        +'<div style="display:flex;gap:8px;align-items:center"><input type="file" accept="image/*" class="fi" style="flex:1" onchange="CampistryMe._brandingLogoPick(\'sfc\',this)"><button type="button" class="me-btn me-btn--ghost me-btn--sm" onclick="CampistryMe._brandingLogoClear(\'sfc\')">Remove</button></div></div>'
+        +'<div class="fg" style="margin-bottom:0"><label class="fl">Accent Color</label><input type="color" id="sfcAccentColor" value="'+esc((fc.branding&&fc.branding.color)||'#D97706')+'" style="width:60px;height:34px;padding:2px;border:1.5px solid var(--s200);border-radius:var(--r);cursor:pointer"></div>';
+    h+=_accCard('Branding',brandHtml,{open:true});
 
-    h+='<div class="fsec" style="margin:16px 0 6px">Field-by-Field Control</div>';
-    h+='<p style="font-size:.78rem;color:var(--s400);margin-bottom:10px">Show/hide, require, or relabel individual fields within a section.</p>';
+    var orderHtml='<p style="font-size:.78rem;color:var(--s400);margin:0 0 10px">Reorder how sections appear on the form.</p>'+_renderSectionOrderList('sfc',SFC_SECTIONS,fc.sectionOrder);
+    h+=_accCard('Section Order',orderHtml,{});
+
+    var fieldsHtml='<p style="font-size:.78rem;color:var(--s400);margin:0 0 10px">Show/hide, require, or relabel individual fields — pick a section to open it.</p>';
     Object.keys(SFC_FIELD_CATALOG).forEach(function(sectionKey){
         var sec=SFC_SECTIONS.filter(function(s){return s.key===sectionKey})[0];
-        h+='<div style="font-size:.75rem;font-weight:700;color:var(--s600);margin:10px 0 4px">'+esc(sec?sec.label:sectionKey)+'</div>';
-        SFC_FIELD_CATALOG[sectionKey].forEach(function(f){
-            h+=_renderAdvFieldRow('sfc',sectionKey,f,(fc.fields||{})[f.id]);
-        });
+        var rows=SFC_FIELD_CATALOG[sectionKey].map(function(f){return _renderAdvFieldRow('sfc',sectionKey,f,(fc.fields||{})[f.id]);}).join('');
+        fieldsHtml+=_accCard(sec?sec.label:sectionKey,rows,{sub:true});
     });
+    h+=_accCard('Field-by-Field Control',fieldsHtml,{});
     h+='</div>'; // /sfcTabAdv
 
     document.getElementById('sfcBody').innerHTML=h;
@@ -9022,7 +9032,7 @@ window.CampistryMe={
     openFormConfig:openFormConfig,saveFormConfig:saveFormConfig,addCustomQ:addCustomQ,addPromoRow:addPromoRow,
     openStaffFormConfig:openStaffFormConfig,saveStaffFormConfig:saveStaffFormConfig,addStaffCustomQ:addStaffCustomQ,
     addPositionRow:addPositionRow,addCertRow:addCertRow,
-    _fcSwitchTab:_fcSwitchTab,_moveOrderRow:_moveOrderRow,_brandingLogoPick:_brandingLogoPick,_brandingLogoClear:_brandingLogoClear,
+    _fcSwitchTab:_fcSwitchTab,_moveOrderRow:_moveOrderRow,_brandingLogoPick:_brandingLogoPick,_brandingLogoClear:_brandingLogoClear,_toggleAcc:_toggleAcc,
     copyLinkText:copyLinkText,showLinkQR:showLinkQR,showRegistrationQR:showRegistrationQR,showStaffQR:showStaffQR,
     openSendLinkModal:openSendLinkModal,openSendRegLinkModal:openSendRegLinkModal,openSendStaffLinkModal:openSendStaffLinkModal,
     // Payroll
