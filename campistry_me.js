@@ -364,6 +364,32 @@ function fm(n){return'$'+Number(n||0).toLocaleString()}
 function toast(m,t){var el=document.getElementById('meToast');if(!el)return;el.className='me-toast '+(t==='error'?'bad':'ok')+' vis';document.getElementById('tI').textContent=t==='error'?'✕':'✓';document.getElementById('tM').textContent=m;clearTimeout(el._t);el._t=setTimeout(function(){el.classList.remove('vis')},2600)}
 function openModal(id){var e=document.getElementById(id);if(e)e.style.display='flex'}
 function closeModal(id){var e=document.getElementById(id);if(e){if(id==='dynModal')e.remove();else e.style.display='none'}}
+
+// Small overflow menu ("More"/"Share" buttons) — collapses a row of
+// secondary actions into one button + dropdown instead of a wall of
+// buttons. One outside-click listener (installed once) closes whichever
+// menu is open.
+function _toggleMenu(id){
+    var menu=document.getElementById(id); if(!menu)return;
+    var willOpen=!menu.classList.contains('open');
+    _closeMenus();
+    if(willOpen)menu.classList.add('open');
+}
+function _closeMenus(){
+    document.querySelectorAll('.me-more-menu.open').forEach(function(m){m.classList.remove('open')});
+}
+if(!window._meMenuOutsideClickInit){
+    window._meMenuOutsideClickInit=true;
+    document.addEventListener('click',function(e){
+        // A click on a menu ITEM closes the menu after its own onclick has
+        // already fired (element listeners run before ancestor listeners in
+        // the same bubble phase). A click on the trigger button is handled
+        // by _toggleMenu itself. Anything else outside the menu closes it.
+        if(e.target.closest('.me-more-menu')){ _closeMenus(); return; }
+        if(e.target.closest('.me-more-wrap'))return;
+        _closeMenus();
+    });
+}
 function setupModals(){document.querySelectorAll('.me-overlay').forEach(function(o){o.addEventListener('mousedown',function(e){if(e.target===o)closeModal(o.id)})});
     var dz=document.getElementById('csvDZ'),fi=document.getElementById('csvFI');
     if(dz&&fi){dz.onclick=function(){fi.click()};dz.ondragover=function(e){e.preventDefault();dz.classList.add('dragover')};dz.ondragleave=function(){dz.classList.remove('dragover')};dz.ondrop=function(e){e.preventDefault();dz.classList.remove('dragover');handleCsv(e.dataTransfer.files[0])};fi.onchange=function(e){handleCsv(e.target.files[0])}}
@@ -2640,6 +2666,10 @@ function _capBar(label,en,cap,wl){
 function _assignedInBunk(b){
     return (bunkManualCounts[b]!=null)?bunkManualCounts[b]:Object.values(roster).filter(function(c){return c.bunk===b}).length;
 }
+// Collapsed by default — with a large camp (dozens of bunks) this is a wall
+// of "0 set" rows that dominates the page before anyone's even applied.
+// The badge summarizes what's inside so it's still clear there's something
+// there without opening it.
 function _capacityCardHtml(){
     var actByS={},wlByS={};
     Object.values(enrollments).forEach(function(e){
@@ -2647,13 +2677,14 @@ function _capacityCardHtml(){
         if(e.status==='accepted'||e.status==='enrolled') actByS[s]=(actByS[s]||0)+1;
         else if(e.status==='waitlisted') wlByS[s]=(wlByS[s]||0)+1;
     });
-    var h='<div class="me-card" style="padding:16px;margin-bottom:16px"><div style="font-size:.9rem;font-weight:700;margin-bottom:10px">Capacity</div>';
+    var divs=Object.keys(structure);
+    var bunks=(typeof _allBunkNames==='function')?_allBunkNames():[];
+    var h='';
     if(sessions.length){
         h+='<div style="font-size:.72rem;font-weight:700;color:var(--s400);text-transform:uppercase;margin:2px 0 6px">Sessions</div>';
         sessions.forEach(function(s){ h+=_capBar(s.name||'(unnamed)',actByS[s.name]||0,s.capacity||0,wlByS[s.name]||0); });
     }
     // Divisions — enrolled headcount from roster
-    var divs=Object.keys(structure);
     if(divs.length){
         h+='<div style="font-size:.72rem;font-weight:700;color:var(--s400);text-transform:uppercase;margin:12px 0 6px">Divisions</div>';
         divs.sort().forEach(function(dv){
@@ -2662,7 +2693,6 @@ function _capacityCardHtml(){
         });
     }
     // Bunks — assigned vs capacity, editable
-    var bunks=(typeof _allBunkNames==='function')?_allBunkNames():[];
     if(bunks.length){
         h+='<div style="font-size:.72rem;font-weight:700;color:var(--s400);text-transform:uppercase;margin:12px 0 6px">Bunks <span style="font-weight:400;text-transform:none;color:var(--s400)">(set a capacity to track fill)</span></div>';
         h+='<div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(190px,1fr));gap:6px">';
@@ -2677,8 +2707,12 @@ function _capacityCardHtml(){
         h+='</div>';
     }
     if(!sessions.length&&!divs.length&&!bunks.length) h+='<div style="font-size:.8rem;color:var(--s400)">Add sessions or camp structure to track capacity.</div>';
-    h+='</div>';
-    return h;
+
+    var badgeParts=[];
+    if(sessions.length)badgeParts.push(sessions.length+' session'+(sessions.length===1?'':'s'));
+    if(divs.length)badgeParts.push(divs.length+' division'+(divs.length===1?'':'s'));
+    if(bunks.length)badgeParts.push(bunks.length+' bunk'+(bunks.length===1?'':'s'));
+    return _accCard('Capacity',h,{badge:badgeParts.join(' · ')});
 }
 function setBunkCapacityPrompt(bunk){
     var cur=bunkCapacity[bunk]||'';
@@ -2918,7 +2952,13 @@ function renderStaffing(){
     });
 
     var h='<div class="sec-hd"><div><h2 class="sec-title">Staffing &amp; Hiring</h2><p class="sec-desc">'+total+' applicant'+(total!==1?'s':'')+' · '+hired+' hired</p></div>';
-    h+='<div class="sec-actions"><button class="me-btn me-btn--sec me-btn--sm" onclick="CampistryMe.exportStaffCSV()">↓ Export CSV</button><button class="me-btn me-btn--sec me-btn--sm" onclick="CampistryMe.copyStaffLink()">🔗 Copy Application Link</button><button class="me-btn me-btn--pri" onclick="CampistryMe.addStaffApp()">+ Add Applicant</button></div></div>';
+    h+='<div class="sec-actions">'
+        +'<button class="me-btn me-btn--pri" onclick="CampistryMe.addStaffApp()">+ Add Applicant</button>'
+        +'<div class="me-more-wrap"><button class="me-btn me-btn--sec me-btn--sm" onclick="CampistryMe._toggleMenu(\'staffMoreMenu\')">⋯ More</button>'
+        +'<div class="me-more-menu" id="staffMoreMenu">'
+        +'<button onclick="CampistryMe.exportStaffCSV()">↓ Export CSV</button>'
+        +'</div></div>'
+        +'</div></div>';
 
     if(unplaced.length){
         h+='<div style="background:#FFF7ED;border:1px solid #FED7AA;border-radius:var(--r);padding:10px 14px;margin-bottom:14px;font-size:.83rem;color:#9A3412">'
@@ -2934,9 +2974,12 @@ function renderStaffing(){
     h+='<div style="background:#fff;border:1px solid var(--s200);border-radius:var(--r);padding:12px 16px;margin-bottom:14px;display:flex;align-items:center;gap:12px;flex-wrap:wrap">';
     h+='<div style="flex:1;min-width:200px"><div style="font-size:.8rem;font-weight:600;color:var(--s500)">STAFF APPLICATION LINK</div>';
     h+='<div style="font-size:.85rem;color:var(--me);font-weight:600;word-break:break-all;margin-top:2px">'+esc(window.location.origin+'/campistry_staff_apply.html')+'</div></div>';
-    h+='<button class="me-btn me-btn--pri me-btn--sm" onclick="CampistryMe.copyStaffLink()">Copy Link</button>';
-    h+='<button class="me-btn me-btn--sec me-btn--sm" onclick="CampistryMe.openSendStaffLinkModal()">✉ Send Link</button>';
-    h+='<button class="me-btn me-btn--sec me-btn--sm" onclick="CampistryMe.showStaffQR()">▦ QR Code</button>';
+    h+='<div class="me-more-wrap"><button class="me-btn me-btn--pri me-btn--sm" onclick="CampistryMe._toggleMenu(\'staffShareMenu\')">Share ▾</button>'
+        +'<div class="me-more-menu" id="staffShareMenu">'
+        +'<button onclick="CampistryMe.copyStaffLink()">🔗 Copy Link</button>'
+        +'<button onclick="CampistryMe.openSendStaffLinkModal()">✉ Send Link</button>'
+        +'<button onclick="CampistryMe.showStaffQR()">▦ QR Code</button>'
+        +'</div></div>';
     h+='<button class="me-btn me-btn--sec me-btn--sm" onclick="CampistryMe.openStaffFormConfig()">⚙ Customize Form</button></div>';
 
     // Pipeline cards
@@ -3101,15 +3144,27 @@ function renderEnrollment(){
     var enrolled=byStatus.enrolled||0,accepted=byStatus.accepted||0,applied=byStatus.applied||0,waitlisted=byStatus.waitlisted||0;
 
     var h='<div class="sec-hd"><div><h2 class="sec-title">Registration & Enrollment</h2><p class="sec-desc">'+total+' application'+(total!==1?'s':'')+' · '+enrolled+' enrolled · '+waitlisted+' waitlisted</p></div>';
-    h+='<div class="sec-actions"><button class="me-btn me-btn--sec me-btn--sm" onclick="CampistryMe.auditParentEmails()" title="See which parent email each child\'s messages route to — flags emails shared across families">✉ Check Parent Emails</button><button class="me-btn me-btn--sec me-btn--sm" onclick="CampistryMe.syncAllParentPortals()" title="Rebuild every parent portal from current families — use this if a parent sees a child that isn\'t theirs">↻ Sync Parent Portals</button><button class="me-btn me-btn--sec me-btn--sm" onclick="CampistryMe.copyRegLink()">🔗 Copy Registration Link</button><button class="me-btn me-btn--sec me-btn--sm" onclick="CampistryMe.previewBlankForm()" title="Preview / print the blank registration form as a PDF">📄 Preview Blank Form</button><button class="me-btn me-btn--sec me-btn--sm" onclick="CampistryMe.addSession()">+ Add Session</button><button class="me-btn me-btn--pri" onclick="CampistryMe.addApplication()">+ Manual Entry</button></div></div>';
+    h+='<div class="sec-actions">'
+        +'<button class="me-btn me-btn--sec me-btn--sm" onclick="CampistryMe.addSession()">+ Add Session</button>'
+        +'<button class="me-btn me-btn--pri" onclick="CampistryMe.addApplication()">+ Manual Entry</button>'
+        +'<div class="me-more-wrap"><button class="me-btn me-btn--sec me-btn--sm" onclick="CampistryMe._toggleMenu(\'regMoreMenu\')">⋯ More</button>'
+        +'<div class="me-more-menu" id="regMoreMenu">'
+        +'<button onclick="CampistryMe.previewBlankForm()">📄 Preview Blank Form</button>'
+        +'<button onclick="CampistryMe.auditParentEmails()" title="Flags a parent email shared across families">✉ Check Parent Emails</button>'
+        +'<button onclick="CampistryMe.syncAllParentPortals()" title="Use if a parent sees a child that isn\'t theirs">↻ Sync Parent Portals</button>'
+        +'</div></div>'
+        +'</div></div>';
 
     // Registration link banner
     h+='<div style="background:#fff;border:1px solid var(--s200);border-radius:var(--r);padding:12px 16px;margin-bottom:14px;display:flex;align-items:center;gap:12px;flex-wrap:wrap">';
     h+='<div style="flex:1;min-width:200px"><div style="font-size:.8rem;font-weight:600;color:var(--s500)">PARENT REGISTRATION LINK</div>';
     h+='<div style="font-size:.85rem;color:var(--me);font-weight:600;word-break:break-all;margin-top:2px">'+esc(window.location.origin+'/campistry_register.html')+'</div></div>';
-    h+='<button class="me-btn me-btn--pri me-btn--sm" onclick="CampistryMe.copyRegLink()">Copy Link</button>';
-    h+='<button class="me-btn me-btn--sec me-btn--sm" onclick="CampistryMe.openSendRegLinkModal()">✉ Send Link</button>';
-    h+='<button class="me-btn me-btn--sec me-btn--sm" onclick="CampistryMe.showRegistrationQR()">▦ QR Code</button>';
+    h+='<div class="me-more-wrap"><button class="me-btn me-btn--pri me-btn--sm" onclick="CampistryMe._toggleMenu(\'regShareMenu\')">Share ▾</button>'
+        +'<div class="me-more-menu" id="regShareMenu">'
+        +'<button onclick="CampistryMe.copyRegLink()">🔗 Copy Link</button>'
+        +'<button onclick="CampistryMe.openSendRegLinkModal()">✉ Send Link</button>'
+        +'<button onclick="CampistryMe.showRegistrationQR()">▦ QR Code</button>'
+        +'</div></div>';
     h+='<button class="me-btn me-btn--sec me-btn--sm" onclick="CampistryMe.openFormConfig()">⚙ Customize Form</button></div>';
 
     // Capacity overview — sessions, divisions, bunks
@@ -9093,6 +9148,7 @@ window.CampistryMe={
     addPositionRow:addPositionRow,addCertRow:addCertRow,
     _fcSwitchTab:_fcSwitchTab,_brandingLogoPick:_brandingLogoPick,_brandingLogoClear:_brandingLogoClear,_toggleAcc:_toggleAcc,
     openFormBuilder:openFormBuilder,closeFormBuilder:closeFormBuilder,
+    _toggleMenu:_toggleMenu,
     copyLinkText:copyLinkText,showLinkQR:showLinkQR,showRegistrationQR:showRegistrationQR,showStaffQR:showStaffQR,
     openSendLinkModal:openSendLinkModal,openSendRegLinkModal:openSendRegLinkModal,openSendStaffLinkModal:openSendStaffLinkModal,
     // Payroll

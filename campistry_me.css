@@ -123,6 +123,13 @@ body.sidebar-open .sidebar{transform:translateX(0)}
 .fb-savenote{font-size:.72rem;color:var(--s400)}
 @media(max-width:900px){.fb-body{flex-direction:column}.fb-panel{width:100%;border-right:none;border-bottom:1px solid var(--s200);max-height:42vh}.fb-preview{padding:12px}}
 
+/* ── OVERFLOW MENU (More / Share buttons) ─────────────── */
+.me-more-wrap{position:relative;display:inline-block}
+.me-more-menu{position:absolute;top:calc(100% + 6px);right:0;background:#fff;border:1px solid var(--s200);border-radius:10px;box-shadow:0 10px 28px rgba(0,0,0,.14);min-width:210px;z-index:60;padding:5px;display:none}
+.me-more-menu.open{display:block}
+.me-more-menu button{display:flex;align-items:center;gap:8px;width:100%;text-align:left;padding:8px 10px;border:none;background:none;font-size:.82rem;font-weight:500;color:var(--s700);border-radius:6px;cursor:pointer;font-family:inherit}
+.me-more-menu button:hover{background:var(--s50)}
+
 /* ── DRAG-AND-DROP REORDERING ─────────────── */
 .me-dragging{opacity:0.45;cursor:grabbing!important;}
 .me-grip{cursor:grab;}
