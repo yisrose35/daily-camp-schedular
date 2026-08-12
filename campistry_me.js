@@ -3435,7 +3435,20 @@ function getPostAcceptFormConfig(){
     if(paFormConfig)return paFormConfig;
     var sections={};
     PAF_SECTIONS.forEach(function(s){sections[s.key]={enabled:s.default}});
-    return{sections:sections,customQuestions:[],welcomeMessage:'',instructions:'',fields:{},sectionOrder:PAF_SECTIONS.map(function(s){return s.key}),branding:{},autoSend:false};
+    return{sections:sections,customQuestions:[],welcomeMessage:'',instructions:'',fields:{},sectionOrder:PAF_SECTIONS.map(function(s){return s.key}),branding:{},autoSend:false,attachedListIds:[]};
+}
+
+// Lists (packing lists / checklists) live in the Link admin app, stored
+// camp-wide under the top-level `link_lists` key (sibling of campistryMe,
+// not nested inside it — see campistry_link_admin.html's
+// _loadLinkListsStore). Read-only here: the Post-Acceptance builder lets a
+// camp pick which existing list(s) to show on the public form; creating/
+// editing lists themselves still happens in Link → Lists.
+function _getLinkLists(){
+    try{
+        var s=JSON.parse(localStorage.getItem('campGlobalSettings_v1')||'{}');
+        return Array.isArray(s.link_lists)?s.link_lists:[];
+    }catch(e){ return []; }
 }
 
 // Shared by the parent (FC_FIELD_CATALOG) and staff (SFC_FIELD_CATALOG)
@@ -3571,6 +3584,7 @@ function _collectPostAcceptFormConfigDraft(){
         fields:_readAdvFields('paf',PAF_FIELD_CATALOG),
         sectionOrder:_readSectionOrder('paf'),
         autoSend:!!(document.getElementById('pafAutoSend')&&document.getElementById('pafAutoSend').checked),
+        attachedListIds:Array.prototype.map.call(document.querySelectorAll('.pafListAttach:checked'),function(cb){return cb.value;}),
         branding:{
             logo:(document.getElementById('pafLogoData')?.value||''),
             color:(document.getElementById('pafAccentColor')?.value||'')
@@ -4031,6 +4045,28 @@ function _buildPafPanelHtml(){
         sectionsHtml+='<div style="font-size:.72rem;color:var(--s400)">'+esc(s.desc)+'</div></div></label>';
     });
     h+=_accCard('Sections',sectionsHtml,{open:true});
+
+    // Attach existing Lists (packing lists / checklists) from Link — shown
+    // read-only right on the public form so parents see them without
+    // needing portal access yet. Lists themselves are still created/edited
+    // in Link → Lists; this just picks which ones show here.
+    var allLists=_getLinkLists();
+    var attachedIds=fc.attachedListIds||[];
+    var listsHtml;
+    if(!allLists.length){
+        listsHtml='<p style="font-size:.78rem;color:var(--s400);margin:0">No lists yet. Create a packing list or checklist in <strong>Link → Lists</strong>, then come back here to attach it.</p>';
+    }else{
+        listsHtml='<p style="font-size:.78rem;color:var(--s400);margin:0 0 10px">Attach a packing list or checklist — parents see it right on this form.</p>';
+        allLists.forEach(function(l){
+            var n=(l.items||[]).length;
+            var checked=attachedIds.indexOf(l.id)>=0;
+            listsHtml+='<label style="display:flex;align-items:center;gap:10px;padding:8px 10px;border-bottom:1px solid var(--s100);cursor:pointer">'
+                +'<input type="checkbox" class="pafListAttach" value="'+esc(l.id)+'" '+(checked?'checked':'')+' style="accent-color:var(--me);flex-shrink:0;width:16px;height:16px">'
+                +'<div style="flex:1"><div style="font-size:.85rem;font-weight:600;color:var(--s800)">'+esc(l.name)+'</div>'
+                +'<div style="font-size:.72rem;color:var(--s400)">'+n+' item'+(n!==1?'s':'')+'</div></div></label>';
+        });
+    }
+    h+=_accCard('Packing List',listsHtml,{badge:attachedIds.length?attachedIds.length+' attached':''});
 
     var qHtml='<p style="font-size:.78rem;color:var(--s400);margin:0 0 10px">Your own questions, shown in an "Additional Information" section on the form.</p>'
         +'<div id="pafQList">'+(fc.customQuestions||[]).map(function(q,i){return renderCustomQ(q,i,'paf');}).join('')+'</div>'
