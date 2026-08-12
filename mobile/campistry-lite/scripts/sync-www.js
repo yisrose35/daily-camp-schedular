@@ -65,6 +65,7 @@ const FILES = [
 // Same-repo references we deliberately do NOT bundle: pages that belong to the
 // full desktop site. The native shell opens these in the system browser.
 const EXTERNAL_OK = new Set([
+    'campistry_reset.html',       // public reset landing, opened from an email in a browser
     'dashboard.html',
     'index.html',
     'flow.html',

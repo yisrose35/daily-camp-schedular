@@ -292,14 +292,22 @@
             const sb = client();
             if (!sb) return;
             showErr('');
+            // The link is opened from an email, so it lands in a BROWSER. It
+            // therefore has to point at a public https page — location.origin
+            // is https://localhost inside the app shell, and Lite has no page
+            // of its own on the public site, so the old redirect went nowhere.
+            const base = (window.__CAMPISTRY_PARENT_URL__ || 'https://link.campistry.org').replace(/\/+$/, '');
             try {
                 const { error } = await sb.auth.resetPasswordForEmail(email, {
-                    redirectTo: location.origin + '/index.html'
+                    redirectTo: base + '/reset?app=lite'
                 });
-                if (error) throw error;
-                toast('Reset link sent — check your email.');
+                // Same reply either way: a different message for an unknown
+                // address would tell a stranger which staff emails exist.
+                if (error) console.warn('[Lite] reset:', error.message);
+                toast('If that email has an account, a reset link is on its way.');
             } catch (err) {
-                showErr(friendlyAuthError(err));
+                console.warn('[Lite] reset:', err);
+                toast('If that email has an account, a reset link is on its way.');
             }
         });
     });

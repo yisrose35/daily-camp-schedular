@@ -39,6 +39,7 @@ const FILES = [
 // Same-repo references we deliberately do NOT bundle: pages belonging to the
 // desktop admin app, which the native shell opens in the system browser.
 const EXTERNAL_OK = new Set([
+    'campistry_reset.html',       // public reset landing, opened from an email in a browser
     'index.html',
     'dashboard.html',
     'campistry_notes.html',          // "Open in Notes →" — the desktop Notes app

@@ -3670,6 +3670,29 @@ window.addEventListener('storage', function(e) {
         if (fr) fr.style.display = kind === 'friend' ? '' : 'none';
     };
 
+    // The reset link is opened from an email, i.e. in a browser — never inside
+    // the app shell. So the redirect must be the public https page, not
+    // location.origin, which inside Capacitor is capacitor://localhost and dead.
+    window.parentForgotPassword = function() {
+        var email = ((document.getElementById('paEmail')||{}).value||'').trim();
+        if (!email || email.indexOf('@') < 0) {
+            _setMsg('Enter your email address above first, then tap this again.');
+            var f = document.getElementById('paEmail'); if (f) f.focus();
+            return;
+        }
+        _setMsg('Sending…', '#64748B');
+        var base = (window.__CAMPISTRY_PARENT_URL__ || 'https://link.campistry.org').replace(/\/+$/, '');
+        db.auth.resetPasswordForEmail(email, { redirectTo: base + '/reset?app=link' })
+            .then(function(res) {
+                // Deliberately the same message whether or not the address is
+                // registered: a differing reply tells a stranger which family
+                // emails have accounts with this camp.
+                if (res && res.error) console.warn('[Parent] reset:', res.error.message);
+                _setMsg('If that email has an account, a reset link is on its way.', '#64748B');
+            })
+            .catch(function() { _setMsg('Could not send — check your connection.'); });
+    };
+
     window.parentSetHaptics = function(on) {
         if (window.CampistryHaptics) window.CampistryHaptics.setEnabled(!!on);
     };
@@ -3712,6 +3735,7 @@ window.addEventListener('storage', function(e) {
             _eyeBtn('paPass') + '</div></div>' +
             '<button class="lk-login-go" onclick="parentSignIn()">Sign in</button>' +
             '<div id="paMsg" class="lk-login-msg"></div>' +
+            '<button class="lk-login-alt" onclick="parentForgotPassword()">Forgot your password?</button>' +
             '<button class="lk-login-alt" onclick="parentShowSignup()">' + (urlToken ? 'Create account with invite' : 'Create an account') + '</button>' +
             '<p class="lk-login-foot">First time here? Sign up with the <strong>same email you gave your camp</strong> — your children connect automatically.</p>' +
             '</div>', 'brand');

@@ -1453,6 +1453,20 @@
                 <span class="lite-toggle${bioOn ? ' on' : ''}${bioAvail ? '' : ' disabled'}" id="liteBioToggle"></span>
             </div>
 
+            <div class="lite-set-section-label">Sign-in</div>
+            <div class="lite-card lite-set-row" style="display:block;">
+                <div class="lite-set-row-title" style="margin-bottom:9px;">Login email</div>
+                <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;">
+                    <input class="lite-lf-input" type="email" id="liteSetEmail" inputmode="email"
+                           autocomplete="username" autocapitalize="none" autocorrect="off" spellcheck="false"
+                           value="${esc(userEmail || '')}" style="flex:1;min-width:170px;height:44px;">
+                    <button class="lite-btn" id="liteSetEmailBtn" style="height:44px;padding:0 16px;">Change</button>
+                </div>
+                <div class="lite-set-row-sub" id="liteSetEmailMsg" style="margin-top:6px;min-height:16px;">
+                    Camp staff sign in with this address.
+                </div>
+            </div>
+
             <div class="lite-set-section-label">Feedback</div>
             <div class="lite-card lite-set-row" id="liteHapticRow">
                 <div class="lite-set-row-main">
@@ -1481,6 +1495,26 @@
 
         v.querySelector('#liteSettingsBack').addEventListener('click', () => { if (history.state && history.state.liteSettings) history.back(); else { settingsOpen = false; goHome(); } });
         v.querySelector('#liteSettingsSignout').addEventListener('click', () => document.getElementById('liteSignOut').click());
+        // Changing the login email. Supabase sends a confirmation to the NEW
+        // address when the project requires one, so the change lands only after
+        // that link is clicked — the copy says so rather than claiming success.
+        v.querySelector('#liteSetEmailBtn')?.addEventListener('click', async () => {
+            const el = v.querySelector('#liteSetEmail');
+            const out = v.querySelector('#liteSetEmailMsg');
+            const next = (el?.value || '').trim();
+            const say = (t) => { if (out) out.textContent = t; };
+            if (!next || next.indexOf('@') < 0) { say('Enter a valid email address.'); return; }
+            if (next.toLowerCase() === String(userEmail || '').toLowerCase()) { say('That is already your login email.'); return; }
+            say('Updating…');
+            try {
+                const { error } = await window.supabase.auth.updateUser({ email: next });
+                if (error) { say('Could not update: ' + error.message); return; }
+                say('Check ' + next + ' for a confirmation link to finish the change.');
+            } catch (_) {
+                say('Could not update — check your connection.');
+            }
+        });
+
         v.querySelector('#liteHapticToggle')?.addEventListener('click', () => {
             const next = !(window.CampistryHaptics && window.CampistryHaptics.enabled());
             window.CampistryHaptics?.setEnabled(next);   // fires a tap when switching ON, so you feel what you chose
