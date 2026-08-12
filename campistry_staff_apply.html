@@ -126,18 +126,29 @@ var FIELD_REQUIRED_STATE={first:true,last:true,email:true,phone:true,dob:false,s
 var FIELD_ENABLED_STATE={};
 var RESUME_REQUIRED=false;
 
+// Which SFC_SECTIONS key each catalog field belongs to — when a whole
+// section is turned off, its fields must be treated as not-required (not
+// just visually hidden), or a camp that disables e.g. About You leaves the
+// form permanently stuck asking for a field nobody can see or fill in.
+var FIELD_TO_SECTION={
+    first:'about',last:'about',email:'about',phone:'about',dob:'about',street:'about',city:'about',state:'about',zip:'about',
+    availStart:'role',availEnd:'role',
+    education:'experience',experience:'experience'
+};
+
 // Baseline required-state this page shipped with — applyFieldConfig resets
 // to this before applying overrides, so it's safe to call repeatedly with a
 // changing draft config (live preview), not just once at page load.
 var FIELD_REQUIRED_DEFAULT={first:true,last:true,email:true,phone:true,dob:false,street:false,city:false,state:false,zip:false,availStart:false,availEnd:false,education:false,experience:false};
-function applyFieldConfig(fields){
-    fields=fields||{};
+function applyFieldConfig(fields,sectionsDisabled){
+    fields=fields||{}; sectionsDisabled=sectionsDisabled||{};
     Object.keys(FIELD_ELEMENT_MAP).forEach(function(fid){
         var input=document.getElementById(FIELD_ELEMENT_MAP[fid]);
         if(!input)return;
         var fg=input.closest('.fg');
         var cfg=fields[fid];
-        var enabled=cfg?(cfg.enabled!==false):true;
+        var sectionOff=sectionsDisabled[FIELD_TO_SECTION[fid]];
+        var enabled=sectionOff?false:(cfg?(cfg.enabled!==false):true);
         FIELD_ENABLED_STATE[fid]=enabled;
         if(!enabled){ if(fg)fg.style.display='none'; return; }
         if(fg)fg.style.display='';
@@ -149,10 +160,11 @@ function applyFieldConfig(fields){
             label.innerHTML=esc(text)+(required?' <span class="rq">*</span>':'');
         }
     });
+    var resumeSectionOff=sectionsDisabled.experience;
     var rf=fields.resume;
-    RESUME_REQUIRED=!!(rf&&rf.required);
+    RESUME_REQUIRED=resumeSectionOff?false:!!(rf&&rf.required);
     var rIn=document.getElementById('aResume'), rFg=rIn&&rIn.closest('.fg'), rLbl=rFg&&rFg.querySelector('.fl');
-    if(rFg)rFg.style.display=(rf&&rf.enabled===false)?'none':'';
+    if(rFg)rFg.style.display=(resumeSectionOff||(rf&&rf.enabled===false))?'none':'';
     if(rLbl)rLbl.innerHTML=esc((rf&&rf.label)||'Resume (PDF / DOC, optional)')+(RESUME_REQUIRED?' <span class="rq">*</span>':'');
 }
 
@@ -185,16 +197,20 @@ function applyBranding(branding){
     document.documentElement.style.setProperty('--me',branding.color||BRAND_COLOR_DEFAULT);
 }
 
-// Section toggles — about/role/consent are locked required, so only
-// experience/references can actually be disabled here.
-var SEC_MAP={experience:'expCard',references:'refCard'};
+// Every section is toggleable now — nothing is locked required.
+var SEC_MAP={about:'aboutCard',role:'roleCard',experience:'expCard',references:'refCard',consent:'consentCard'};
 var _baseCampNm='';
+// The last-applied config — submitApp() reads this to know whether Consent
+// & Signature (whose agree/sign validation isn't part of the per-field
+// FIELD_ELEMENT_MAP loop) is even on the form right now.
+var _currentFC={};
 
 // Applies one staff-form-config object to the live DOM. Idempotent — safe to
 // call repeatedly with a changing draft (the Form Builder's live preview
 // does exactly that), not just once at page load.
 function applyFormConfig(sfc){
     sfc=sfc||{};
+    _currentFC=sfc;
     document.getElementById('campNm').textContent=sfc.welcomeMessage||_baseCampNm;
 
     var oldInstr=document.getElementById('_fcInstrEl'); if(oldInstr)oldInstr.remove();
@@ -207,10 +223,14 @@ function applyFormConfig(sfc){
     }
 
     Object.keys(SEC_MAP).forEach(function(key){ var el=document.getElementById(SEC_MAP[key]); if(el)el.style.display=''; });
+    var sectionsDisabled={};
     if(sfc.sections){
         Object.entries(sfc.sections).forEach(function(entry){
             var key=entry[0],cfg=entry[1];
-            if(!cfg.enabled&&SEC_MAP[key]){var el=document.getElementById(SEC_MAP[key]);if(el)el.style.display='none';}
+            if(!cfg.enabled){
+                sectionsDisabled[key]=true;
+                if(SEC_MAP[key]){var el=document.getElementById(SEC_MAP[key]);if(el)el.style.display='none';}
+            }
         });
     }
 
@@ -246,7 +266,7 @@ function applyFormConfig(sfc){
         document.getElementById('cqContent').innerHTML='';
     }
 
-    applyFieldConfig(sfc.fields);
+    applyFieldConfig(sfc.fields,sectionsDisabled);
     applySectionOrder(sfc.sectionOrder);
     applyBranding(sfc.branding);
 }
@@ -309,7 +329,12 @@ window.submitApp=function(){
             return showErr('Please enter: '+_txt+'.');
         }
     }
-    if(!positions.length)return showErr('Select at least one position.');
+    // Role & Availability / Consent & Signature only gate submission when the
+    // camp has that section on — a camp that turns one off shouldn't get a
+    // form nobody can submit.
+    var roleOn=!(_currentFC.sections&&_currentFC.sections.role&&_currentFC.sections.role.enabled===false);
+    var consentOn=!(_currentFC.sections&&_currentFC.sections.consent&&_currentFC.sections.consent.enabled===false);
+    if(roleOn&&!positions.length)return showErr('Select at least one position.');
     if(RESUME_REQUIRED&&!resumeData)return showErr('Please attach your resume.');
     for(var _qi=0;_qi<customQuestions.length;_qi++){
         var _q=customQuestions[_qi];
@@ -319,8 +344,10 @@ window.submitApp=function(){
         if(_input&&!(_input.value||'').trim())return showErr('Please answer: '+_q.label);
         if(!_input&&_q.type==='checkbox'&&!_checked)return showErr('Please answer: '+_q.label);
     }
-    if(!document.getElementById('agTerms').checked)return showErr('Please confirm your information is accurate.');
-    if(!sigHasData)return showErr('Please sign the form.');
+    if(consentOn){
+        if(!document.getElementById('agTerms').checked)return showErr('Please confirm your information is accurate.');
+        if(!sigHasData)return showErr('Please sign the form.');
+    }
 
     var certs=[].map.call(document.querySelectorAll('.certCb:checked'),function(c){return c.value;});
     var refs=[];

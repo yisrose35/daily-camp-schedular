@@ -286,18 +286,32 @@ var FIELD_REQUIRED_STATE={
 };
 var FIELD_ENABLED_STATE={};
 
+// Which FC_SECTIONS key each catalog field belongs to — when a whole section
+// is turned off, its fields must be treated as not-required (not just
+// visually hidden), or a camp that disables e.g. Camper Info leaves the form
+// permanently stuck asking for a field nobody can see or fill in.
+var FIELD_TO_SECTION={
+    first:'camper',last:'camper',dob:'camper',gender:'camper',school:'camper',schoolGrade:'camper',teacher:'camper',
+    parentName:'parent',parentRelation:'parent',parentPhone:'parent',parentEmail:'parent',parent2Name:'parent',parent2Phone:'parent',
+    street:'address',city:'address',state:'address',zip:'address',
+    emName:'emergency',emRelation:'emergency',emPhone:'emergency',
+    allergies:'medical',medications:'medical',dietary:'medical',medicalNotes:'medical',
+    bunkmate:'preferences',separate:'preferences',shirt:'preferences',source:'preferences',notes:'preferences'
+};
+
 // Baseline required-state this page shipped with — applyFieldConfig resets
 // to this before applying overrides, so it's safe to call repeatedly with a
 // changing draft config (live preview) rather than only ever adding hides.
 var FIELD_REQUIRED_DEFAULT={first:true,last:true,dob:true,gender:false,school:false,schoolGrade:false,teacher:false,parentName:true,parentRelation:false,parentPhone:true,parentEmail:true,parent2Name:false,parent2Phone:false,street:true,city:true,state:false,zip:true,emName:true,emRelation:false,emPhone:true,allergies:false,medications:false,dietary:false,medicalNotes:false,bunkmate:false,separate:false,shirt:false,source:false,notes:false};
-function applyFieldConfig(fields){
-    fields=fields||{};
+function applyFieldConfig(fields,sectionsDisabled){
+    fields=fields||{}; sectionsDisabled=sectionsDisabled||{};
     Object.keys(FIELD_ELEMENT_MAP).forEach(function(fid){
         var input=document.getElementById(FIELD_ELEMENT_MAP[fid]);
         if(!input)return;
         var fg=input.closest('.fg');
         var cfg=fields[fid];
-        var enabled=cfg?(cfg.enabled!==false):true;
+        var sectionOff=sectionsDisabled[FIELD_TO_SECTION[fid]];
+        var enabled=sectionOff?false:(cfg?(cfg.enabled!==false):true);
         FIELD_ENABLED_STATE[fid]=enabled;
         if(!enabled){ if(fg)fg.style.display='none'; return; }
         if(fg)fg.style.display='';
@@ -431,13 +445,18 @@ async function showStatus(id){
 
 // ─── LOAD DATA ───────────────────────────────────────────────
 var _baseCampNm=''; // camp name shown when no custom welcome message is set
-var SEC_MAP={address:'addrCard',emergency:'emCard',medical:'medCard',preferences:'prefCard',documents:'docCard',payment:'payCard',siblings:'sibCard',signature:'sigCard'};
+var SEC_MAP={camper:'camperCard',parent:'parentCard',address:'addrCard',emergency:'emCard',medical:'medCard',preferences:'prefCard',documents:'docCard',payment:'payCard',siblings:'sibCard',signature:'sigCard'};
+// The last-applied config — submitApp() reads this to know whether the
+// Signature section (whose agree/sign validation isn't part of the
+// per-field FIELD_ELEMENT_MAP loop) is even on the form right now.
+var _currentFC={};
 
 // Applies one form-config object to the live DOM. Written to be idempotent —
 // safe to call repeatedly with a changing draft (the Form Builder's live
 // preview does exactly that), not just once at page load.
 function applyFormConfig(fc){
     fc=fc||{};
+    _currentFC=fc;
     document.getElementById('campNm').textContent=fc.welcomeMessage||_baseCampNm;
 
     var oldInstr=document.getElementById('_fcInstrEl'); if(oldInstr)oldInstr.remove();
@@ -452,9 +471,13 @@ function applyFormConfig(fc){
     // Section toggles — reset to visible first so a re-enabled section
     // reappears rather than staying hidden from a previous draft.
     Object.keys(SEC_MAP).forEach(function(key){ var el=document.getElementById(SEC_MAP[key]); if(el)el.style.display=''; });
+    var sectionsDisabled={};
     if(fc.sections){
         Object.entries(fc.sections).forEach(function([key,cfg]){
-            if(!cfg.enabled&&SEC_MAP[key]){var el=document.getElementById(SEC_MAP[key]);if(el)el.style.display='none'}
+            if(!cfg.enabled){
+                sectionsDisabled[key]=true;
+                if(SEC_MAP[key]){var el=document.getElementById(SEC_MAP[key]);if(el)el.style.display='none'}
+            }
         });
     }
 
@@ -483,7 +506,7 @@ function applyFormConfig(fc){
     }
 
     // Advanced: per-field overrides, section order, branding
-    applyFieldConfig(fc.fields);
+    applyFieldConfig(fc.fields,sectionsDisabled);
     applySectionOrder(fc.sectionOrder);
     applyBranding(fc.branding);
 }
@@ -716,8 +739,13 @@ window.submitApp=function(){
     }
     if(!selSess&&sessions.filter(function(s){return s.registrationOpen!==false}).length)return showErr('Select a session.');
     for(var si=0;si<siblings.length;si++){if(!siblings[si].first||!siblings[si].last)return showErr('Enter name for Camper '+(si+2)+'.')}
-    if(!document.getElementById('ag1').checked||!document.getElementById('ag2').checked||!document.getElementById('ag3').checked||!document.getElementById('ag4').checked)return showErr('Please agree to all terms.');
-    if(!sigHasData)return showErr('Please sign the form.');
+    // Signature/agreement is only required when the camp has that section on
+    // — a camp that turns it off shouldn't get a form nobody can submit.
+    var signatureOn=!(_currentFC.sections&&_currentFC.sections.signature&&_currentFC.sections.signature.enabled===false);
+    if(signatureOn){
+        if(!document.getElementById('ag1').checked||!document.getElementById('ag2').checked||!document.getElementById('ag3').checked||!document.getElementById('ag4').checked)return showErr('Please agree to all terms.');
+        if(!sigHasData)return showErr('Please sign the form.');
+    }
 
     var sigData=document.getElementById('sigCanvas').toDataURL();
     var sessObj=sessions.find(function(s){return s.name===selSess})||{};

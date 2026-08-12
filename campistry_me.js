@@ -3115,7 +3115,7 @@ function renderEnrollment(){
 
     var h='<div class="sec-hd"><div><h2 class="sec-title">Registration & Enrollment</h2><p class="sec-desc">'+total+' application'+(total!==1?'s':'')+' · '+enrolled+' enrolled · '+waitlisted+' waitlisted</p></div>';
     h+='<div class="sec-actions">'
-        +'<button class="me-btn me-btn--teal" onclick="CampistryMe.openFormConfig()">🎨 Customize Registration Form</button>'
+        +'<button class="me-btn me-btn--teal" onclick="CampistryMe.openFormConfig()">Customize Registration Form</button>'
         +'<button class="me-btn me-btn--pri" onclick="CampistryMe.addApplication()">+ Manual Entry</button>'
         +'<div class="me-more-wrap"><button class="me-btn me-btn--sec me-btn--sm" onclick="CampistryMe._toggleMenu(\'regLinkMenu\')">🔗 Get Link</button>'
         +'<div class="me-more-menu" id="regLinkMenu" style="min-width:250px">'
@@ -3230,29 +3230,32 @@ function rescindEnrollment(id){
 }
 
 // ── FORM CUSTOMIZER ───────────────────────────────────────────
+// Nothing here is locked — a camp can turn off any section, including
+// Camper Info or Signature. `default` just sets the out-of-the-box state;
+// applyFormConfig() in campistry_register.html treats a disabled section's
+// fields as not-required so turning one off never leaves the form stuck
+// asking for something it isn't showing.
 var FC_SECTIONS=[
-    {key:'camper',label:'Camper Information',desc:'Name, DOB, gender, school, grade, teacher',default:true,required:true},
-    {key:'parent',label:'Parent / Guardian',desc:'Name, phone, email, second parent',default:true,required:true},
-    {key:'address',label:'Home Address',desc:'Street, city, state, ZIP',default:true,required:false},
-    {key:'emergency',label:'Emergency Contact',desc:'Name, relationship, phone',default:true,required:false},
-    {key:'medical',label:'Medical Information',desc:'Allergies, medications, dietary, notes',default:true,required:false},
-    {key:'preferences',label:'Preferences',desc:'Bunkmate request, separation, t-shirt, referral source',default:true,required:false},
-    {key:'documents',label:'Document Uploads',desc:'Immunization records, health forms, insurance',default:true,required:false},
-    {key:'payment',label:'Payment Preference',desc:'Payment method selection and promo codes',default:true,required:false},
-    {key:'signature',label:'E-Signature & Agreement',desc:'Waivers, checkboxes, signature capture',default:true,required:true},
-    {key:'siblings',label:'Sibling Registration',desc:'Allow adding multiple campers in one form',default:true,required:false}
+    {key:'camper',label:'Camper Information',desc:'Name, DOB, gender, school, grade, teacher',default:true},
+    {key:'parent',label:'Parent / Guardian',desc:'Name, phone, email, second parent',default:true},
+    {key:'address',label:'Home Address',desc:'Street, city, state, ZIP',default:true},
+    {key:'emergency',label:'Emergency Contact',desc:'Name, relationship, phone',default:true},
+    {key:'medical',label:'Medical Information',desc:'Allergies, medications, dietary, notes',default:true},
+    {key:'preferences',label:'Preferences',desc:'Bunkmate request, separation, t-shirt, referral source',default:true},
+    {key:'documents',label:'Document Uploads',desc:'Immunization records, health forms, insurance',default:true},
+    {key:'payment',label:'Payment Preference',desc:'Payment method selection and promo codes',default:true},
+    {key:'signature',label:'E-Signature & Agreement',desc:'Waivers, checkboxes, signature capture',default:true},
+    {key:'siblings',label:'Sibling Registration',desc:'Allow adding multiple campers in one form',default:true}
 ];
 
 // Field-level catalog for the ADVANCED tab. Only the plain data-entry sections
 // are broken out field-by-field — payment/signature/siblings/documents stay
-// section-level toggles (they're structural, not a flat field list, and
-// signature/payment carry legal/compliance weight we don't want a camp to
-// accidentally mis-configure). `locked` fields can't be disabled or made
-// optional — they're required for the enrollment record to mean anything.
+// section-level toggles (they're structural, not a flat field list). No
+// field is locked; `required` only sets the default a camp starts from.
 var FC_FIELD_CATALOG={
     camper:[
-        {id:'first',label:'Camper First Name',locked:true},
-        {id:'last',label:'Camper Last Name',locked:true},
+        {id:'first',label:'Camper First Name',required:true},
+        {id:'last',label:'Camper Last Name',required:true},
         {id:'dob',label:'Date of Birth',required:true},
         {id:'gender',label:'Gender'},
         {id:'school',label:'School Name'},
@@ -3260,7 +3263,7 @@ var FC_FIELD_CATALOG={
         {id:'teacher',label:'Teacher'}
     ],
     parent:[
-        {id:'parentName',label:'Parent / Guardian Name',locked:true},
+        {id:'parentName',label:'Parent / Guardian Name',required:true},
         {id:'parentRelation',label:'Relationship'},
         {id:'parentPhone',label:'Phone',required:true},
         {id:'parentEmail',label:'Email',required:true},
@@ -3486,6 +3489,11 @@ function _brandingLogoPick(prefix,input){
             var img=document.getElementById(prefix+'LogoPreview');
             if(img){img.src=dataUrl;img.style.display='block';}
             document.getElementById(prefix+'LogoData').value=dataUrl;
+            // The file input's own 'change' event already bubbles into the
+            // Form Builder's live-preview listener, but it fires BEFORE this
+            // async downscale callback resolves — pushing here too closes
+            // that race so the preview always reflects the actual logo data.
+            if(typeof _fbPushPreview==='function')_fbPushPreview();
         });
     }
 }
@@ -3493,6 +3501,10 @@ function _brandingLogoClear(prefix){
     document.getElementById(prefix+'LogoData').value='';
     var img=document.getElementById(prefix+'LogoPreview');
     if(img){img.src='';img.style.display='none';}
+    // A plain button click fires neither an input/change event nor a DOM
+    // mutation the live-preview MutationObserver watches, so without this
+    // the preview kept showing the removed logo.
+    if(typeof _fbPushPreview==='function')_fbPushPreview();
 }
 
 // Shared tab-bar renderer for the parent (fc) and staff (sfc) form
@@ -3684,19 +3696,21 @@ function addPromoRow(){
 var SFC_POSITIONS_DEFAULT=['Counselor','Head Counselor','Junior Counselor','Specialist','Lifeguard','Nurse / Medical','Kitchen Staff','Maintenance','Office Staff','Bus Driver','Division Head'];
 var SFC_CERTS_DEFAULT=['CPR','First Aid','Lifeguard (WSI)','Food Handler','Wilderness First Responder','EMT','Teaching license'];
 
+// Nothing here is locked — same rationale as FC_SECTIONS/FC_FIELD_CATALOG
+// above. `default` just sets the out-of-the-box state.
 var SFC_SECTIONS=[
-    {key:'about',label:'About You',desc:'Name, contact info, address',default:true,required:true},
-    {key:'role',label:'Role & Availability',desc:'Position(s), available dates',default:true,required:true},
-    {key:'experience',label:'Experience & Certifications',desc:'Education, experience, certifications, resume',default:true,required:false},
-    {key:'references',label:'References',desc:'Two reference contacts',default:true,required:false},
-    {key:'consent',label:'Consent & Signature',desc:'Background check consent, signature',default:true,required:true}
+    {key:'about',label:'About You',desc:'Name, contact info, address',default:true},
+    {key:'role',label:'Role & Availability',desc:'Position(s), available dates',default:true},
+    {key:'experience',label:'Experience & Certifications',desc:'Education, experience, certifications, resume',default:true},
+    {key:'references',label:'References',desc:'Two reference contacts',default:true},
+    {key:'consent',label:'Consent & Signature',desc:'Background check consent, signature',default:true}
 ];
 
 var SFC_FIELD_CATALOG={
     about:[
-        {id:'first',label:'First Name',locked:true},
-        {id:'last',label:'Last Name',locked:true},
-        {id:'email',label:'Email',locked:true},
+        {id:'first',label:'First Name',required:true},
+        {id:'last',label:'Last Name',required:true},
+        {id:'email',label:'Email',required:true},
         {id:'phone',label:'Phone',required:true},
         {id:'dob',label:'Date of Birth'},
         {id:'street',label:'Street Address'},
@@ -4304,65 +4318,152 @@ function deleteSession(idx){
     sessions.splice(idx,1);save();renderStructure();toast('Session deleted');
 }
 
+// Maps FC_FIELD_CATALOG ids to the enrollment-record field name the public
+// registration form (campistry_register.html submitApp()) saves under, plus
+// an input type/options where it isn't plain text. Keeping these names in
+// sync means an office-entered application and a parent-submitted one are
+// indistinguishable to viewApplication()/printApplication()/etc.
+var APP_FIELD_MAP={
+    first:{rec:'camperFirst'},last:{rec:'camperLast'},
+    dob:{rec:'dob',type:'date'},gender:{rec:'gender',type:'select',opts:['Male','Female','Non-binary','Other']},
+    school:{rec:'school'},schoolGrade:{rec:'schoolGrade'},teacher:{rec:'teacher'},
+    parentName:{rec:'parentName'},parentRelation:{rec:'parentRelation'},
+    parentPhone:{rec:'parentPhone',type:'tel'},parentEmail:{rec:'parentEmail',type:'email'},
+    parent2Name:{rec:'parent2Name'},parent2Phone:{rec:'parent2Phone',type:'tel'},
+    street:{rec:'street'},city:{rec:'city'},state:{rec:'state'},zip:{rec:'zip'},
+    emName:{rec:'emergencyName'},emRelation:{rec:'emergencyRel'},emPhone:{rec:'emergencyPhone',type:'tel'},
+    allergies:{rec:'allergies'},medications:{rec:'medications'},dietary:{rec:'dietary'},medicalNotes:{rec:'medicalNotes',type:'textarea'},
+    bunkmate:{rec:'bunkmate'},separate:{rec:'separateFrom'},
+    shirt:{rec:'tshirtSize',type:'select',opts:['YS','YM','YL','AS','AM','AL','AXL']},
+    source:{rec:'source'},notes:{rec:'notes',type:'textarea'}
+};
+
+// Manual Entry mirrors whatever the camp has configured in Customize
+// Registration Form — same sections (in the same order, skipping any the
+// camp turned off), same field labels/required-ness, same custom questions
+// — so office staff see exactly what parents see on the real form instead
+// of a fixed set that can drift out of sync with it.
 function addApplication(){
+    var fc=getFormConfig();
     var sesOpts=sessions.map(function(s){return'<option value="'+esc(s.name)+'">'+esc(s.name)+' — '+fm(s.tuition)+'</option>'}).join('');
-    var h='';
-    h+='<div class="fr"><div class="fg"><label class="fl">Camper First Name</label><input type="text" id="appFirst" class="fi" placeholder="First"></div><div class="fg"><label class="fl">Last Name</label><input type="text" id="appLast" class="fi" placeholder="Last"></div></div>';
-    h+='<div class="fg"><label class="fl">Session</label><select id="appSession" class="fs"><option value="">— Select —</option>'+sesOpts+'</select></div>';
-    h+='<div class="fr"><div class="fg"><label class="fl">Date of Birth</label><input type="date" id="appDob" class="fi"></div><div class="fg"><label class="fl">Gender</label><select id="appGender" class="fs"><option value="">—</option><option>Male</option><option>Female</option></select></div></div>';
-    h+='<div class="fr"><div class="fg"><label class="fl">School</label><input type="text" id="appSchool" class="fi"></div><div class="fg"><label class="fl">School Grade</label><input type="text" id="appSchoolGrade" class="fi"></div></div>';
-    h+='<div class="fsec">Parent / Guardian</div>';
-    h+='<div class="fg"><label class="fl">Parent Name</label><input type="text" id="appParent" class="fi" placeholder="Full name"></div>';
-    h+='<div class="fr"><div class="fg"><label class="fl">Phone</label><input type="tel" id="appPhone" class="fi"></div><div class="fg"><label class="fl">Email</label><input type="email" id="appEmail" class="fi"></div></div>';
-    h+='<div class="fsec">Address</div>';
-    h+='<div class="fg"><label class="fl">Street</label><input type="text" id="appStreet" class="fi"></div>';
-    h+='<div class="fr"><div class="fg" style="flex:2"><label class="fl">City</label><input type="text" id="appCity" class="fi"></div><div class="fg"><label class="fl">State</label><input type="text" id="appState" class="fi" value="NY" maxlength="2"></div><div class="fg"><label class="fl">ZIP</label><input type="text" id="appZip" class="fi" maxlength="10"></div></div>';
-    h+='<div class="fsec">Medical (optional)</div>';
-    h+='<div class="fg"><label class="fl">Allergies</label><input type="text" id="appAllergies" class="fi" placeholder="None or list allergies"></div>';
-    h+='<div class="fg"><label class="fl">Medications</label><input type="text" id="appMeds" class="fi" placeholder="None or list medications"></div>';
-    h+='<div class="fg"><label class="fl">Notes</label><textarea id="appNotes" class="fi" style="min-height:50px;resize:vertical" placeholder="Special requests, bunkmate preferences, etc."></textarea></div>';
+    var order=(fc.sectionOrder&&fc.sectionOrder.length)?fc.sectionOrder:FC_SECTIONS.map(function(s){return s.key});
+    var secEnabled={};
+    FC_SECTIONS.forEach(function(s){ secEnabled[s.key]=fc.sections&&fc.sections[s.key]?fc.sections[s.key].enabled:s.default; });
+
+    var h='<div class="fg"><label class="fl">Session</label><select id="appSession" class="fs"><option value="">— Select —</option>'+sesOpts+'</select></div>';
+
+    function fieldHtml(f){
+        var cfg=(fc.fields&&fc.fields[f.id])||{};
+        if(cfg.enabled===false)return '';
+        var map=APP_FIELD_MAP[f.id]||{};
+        var label=cfg.label||f.label;
+        var req=cfg.required!=null?cfg.required:!!f.required;
+        var id='app_'+f.id;
+        var star=req?' <span class="rq" style="color:var(--err)">*</span>':'';
+        if(map.type==='select')return '<div class="fg"><label class="fl">'+esc(label)+star+'</label><select id="'+id+'" class="fs"><option value="">—</option>'+map.opts.map(function(o){return'<option>'+o+'</option>';}).join('')+'</select></div>';
+        if(map.type==='textarea')return '<div class="fg"><label class="fl">'+esc(label)+star+'</label><textarea id="'+id+'" class="fi" style="min-height:50px;resize:vertical"></textarea></div>';
+        return '<div class="fg"><label class="fl">'+esc(label)+star+'</label><input type="'+(map.type||'text')+'" id="'+id+'" class="fi"></div>';
+    }
+
+    order.forEach(function(sectionKey){
+        if(!secEnabled[sectionKey])return;
+        var catalog=FC_FIELD_CATALOG[sectionKey];
+        if(!catalog)return; // documents/payment/signature/siblings — office entry doesn't collect these
+        var sec=FC_SECTIONS.filter(function(s){return s.key===sectionKey;})[0];
+        var rows=catalog.map(fieldHtml).filter(Boolean);
+        if(!rows.length)return;
+        h+='<div class="fsec">'+esc(sec.label)+'</div>';
+        for(var i=0;i<rows.length;i+=2){
+            h+=rows[i+1]?('<div class="fr">'+rows[i]+rows[i+1]+'</div>'):rows[i];
+        }
+    });
+
+    if(fc.customQuestions&&fc.customQuestions.length){
+        h+='<div class="fsec">Additional Information</div>';
+        fc.customQuestions.forEach(function(q,i){
+            var star=q.required?' <span class="rq" style="color:var(--err)">*</span>':'';
+            h+='<div class="fg"><label class="fl">'+esc(q.label)+star+'</label>';
+            if(q.type==='textarea')h+='<textarea id="appCq'+i+'" class="fi" style="min-height:50px;resize:vertical"></textarea>';
+            else if(q.type==='select')h+='<select id="appCq'+i+'" class="fs"><option value="">—</option>'+(q.options||[]).map(function(o){return'<option>'+esc(o)+'</option>';}).join('')+'</select>';
+            else if(q.type==='yesno')h+='<select id="appCq'+i+'" class="fs"><option value="">—</option><option>Yes</option><option>No</option></select>';
+            else if(q.type==='checkbox'){(q.options||[]).forEach(function(o){h+='<label style="display:flex;align-items:center;gap:6px;padding:3px 0;font-size:.85rem"><input type="checkbox" class="appCqCb" data-q="'+i+'" value="'+esc(o)+'">'+esc(o)+'</label>';});}
+            else h+='<input type="text" id="appCq'+i+'" class="fi">';
+            h+='</div>';
+        });
+    }
 
     showModal('New Application',h,function(){
-        var first=(document.getElementById('appFirst').value||'').trim();
-        var last=(document.getElementById('appLast').value||'').trim();
-        if(!first||!last){alert('Enter camper name');return}
-        var camperName=first+' '+last;
+        var values={},missingLabel=null;
+        order.forEach(function(sectionKey){
+            if(!secEnabled[sectionKey])return;
+            var catalog=FC_FIELD_CATALOG[sectionKey];
+            if(!catalog)return;
+            catalog.forEach(function(f){
+                var cfg=(fc.fields&&fc.fields[f.id])||{};
+                if(cfg.enabled===false)return;
+                var el=document.getElementById('app_'+f.id);
+                if(!el)return;
+                var val=(el.value||'').trim();
+                values[f.id]=val;
+                var req=cfg.required!=null?cfg.required:!!f.required;
+                if(req&&!val&&!missingLabel)missingLabel=cfg.label||f.label;
+            });
+        });
+        if(!missingLabel){
+            (fc.customQuestions||[]).forEach(function(q,i){
+                if(missingLabel||!q.required)return;
+                if(q.type==='checkbox'){
+                    if(!document.querySelector('.appCqCb[data-q="'+i+'"]:checked'))missingLabel=q.label;
+                }else if(!(document.getElementById('appCq'+i)?.value||'').trim())missingLabel=q.label;
+            });
+        }
+        if(missingLabel){alert('Enter: '+missingLabel);return;}
+
+        var first=values.first||'',last=values.last||'';
+        var camperName=(first+' '+last).trim()||'New Applicant';
         var session=document.getElementById('appSession').value||'';
         var sesObj=sessions.find(function(s){return s.name===session});
-        // Check capacity
         if(sesObj&&sesObj.capacity>0){
             var enrolled=Object.values(enrollments).filter(function(e){return e.session===session&&(e.status==='enrolled'||e.status==='accepted')}).length;
             if(enrolled>=sesObj.capacity){
                 if(!confirm(session+' is at capacity ('+enrolled+'/'+sesObj.capacity+'). Add to waitlist?'))return;
             }
         }
+        var isWaitlist=!!(sesObj&&sesObj.capacity>0&&Object.values(enrollments).filter(function(e){return e.session===session&&(e.status==='enrolled'||e.status==='accepted')}).length>=sesObj.capacity);
         var tuition=sesObj?sesObj.tuition:0;
+
+        var customAnswers={},customQuestionLabels=[];
+        (fc.customQuestions||[]).forEach(function(q,i){
+            customQuestionLabels.push(q.label);
+            if(q.type==='checkbox'){
+                var checked=Array.prototype.map.call(document.querySelectorAll('.appCqCb[data-q="'+i+'"]:checked'),function(c){return c.value;});
+                if(checked.length)customAnswers['q'+i]=checked;
+            }else{
+                var cv=(document.getElementById('appCq'+i)?.value||'').trim();
+                if(cv)customAnswers['q'+i]=cv;
+            }
+        });
+
         var id='enr_'+Date.now()+'_'+Math.random().toString(36).substr(2,4);
-        enrollments[id]={
-            camperName:camperName,camperLast:last,
-            parentName:(document.getElementById('appParent').value||'').trim(),
-            parentEmail:(document.getElementById('appEmail').value||'').trim(),
-            parentPhone:(document.getElementById('appPhone').value||'').trim(),
-            dob:document.getElementById('appDob').value||'',
-            gender:document.getElementById('appGender').value||'',
-            school:(document.getElementById('appSchool').value||'').trim(),
-            schoolGrade:(document.getElementById('appSchoolGrade').value||'').trim(),
-            street:(document.getElementById('appStreet').value||'').trim(),
-            city:(document.getElementById('appCity').value||'').trim(),
-            state:(document.getElementById('appState').value||'').trim(),
-            zip:(document.getElementById('appZip').value||'').trim(),
-            allergies:(document.getElementById('appAllergies').value||'').trim(),
-            medications:(document.getElementById('appMeds').value||'').trim(),
-            session:session,
-            sessionTuition:tuition,
-            status:sesObj&&sesObj.capacity>0&&Object.values(enrollments).filter(function(e){return e.session===session&&(e.status==='enrolled'||e.status==='accepted')}).length>=sesObj.capacity?'waitlisted':'applied',
+        var rec={
+            camperName:camperName,camperFirst:first,camperLast:last,
+            dob:values.dob||'',gender:values.gender||'',school:values.school||'',schoolGrade:values.schoolGrade||'',teacher:values.teacher||'',
+            parentName:values.parentName||'',parentRelation:values.parentRelation||'',parentPhone:values.parentPhone||'',parentEmail:values.parentEmail||'',
+            parent2Name:values.parent2Name||'',parent2Phone:values.parent2Phone||'',
+            street:values.street||'',city:values.city||'',state:values.state||'',zip:values.zip||'',
+            emergencyName:values.emName||'',emergencyRel:values.emRelation||'',emergencyPhone:values.emPhone||'',
+            allergies:values.allergies||'',medications:values.medications||'',dietary:values.dietary||'',medicalNotes:values.medicalNotes||'',
+            bunkmate:values.bunkmate||'',separateFrom:values.separate||'',tshirtSize:values.shirt||'',source:values.source||'',notes:values.notes||'',
+            session:session,sessionTuition:tuition,
+            status:isWaitlist?'waitlisted':'applied',
             appliedDate:new Date().toISOString().split('T')[0],
             formsRequired:3,formsCompleted:0,
             paymentStatus:'pending',paymentAmount:0,
-            notes:(document.getElementById('appNotes').value||'').trim()
+            customAnswers:customAnswers,customQuestionLabels:customQuestionLabels
         };
+        enrollments[id]=rec;
         save();closeModal('dynModal');renderEnrollment();
-        toast(enrollments[id].status==='waitlisted'?camperName+' added to waitlist':camperName+' application received');
+        toast(isWaitlist?camperName+' added to waitlist':camperName+' application received');
     },{maxWidth:720});
 }
 
