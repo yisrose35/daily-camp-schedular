@@ -21,7 +21,8 @@ var _prWeek='';          // the week currently open on the Timesheets tab
 var printSheets=[]; // custom printable-sheet templates (columns + grouping)
 var savedReports=[]; // custom/saved reports: { id, name, source, fields, filters, groupBy, format, mode, snapshotRows, ... }
 var curPage='campers', editingCamper=null, editingDiv=null, editingFam=null;
-var campersView='list'; // 'list' | 'family' — Families now lives inside the Campers page
+var campersView='list'; // 'list' | 'family' | 'pipeline' — People page sub-tabs: Roster / Families / Registration & Hiring
+var pplPipeType='all';  // Pipeline type filter: all | camper | staff
 var regFilter='all';    // Registration section filter: all | applied | waitlisted | accepted | enrolled | withdrawn | declined
 var staffApplications={};   // Staff hiring: applicant id → application record
 var staffFormConfig=null;   // Staff application form config — mirrors formConfig, drives campistry_staff_apply.html
@@ -870,37 +871,320 @@ function removeCamperFromFamily(familyId,camperName){
     toast((camperName.split(' ')[0])+' removed from '+(f.name||'family'));
 }
 
-// ── CAMPERS ──────────────────────────────────────────────────────
+// ── CAMPERS / PEOPLE ────────────────────────────────────────────────
 function switchCampersView(v){campersView=v;renderCampers()}
 function _campersTabsHtml(){
-    var _cvTabs=[{k:'list',l:'All Campers'},{k:'family',l:'Families'}];
+    var _cvTabs=[{k:'list',l:'Roster'},{k:'pipeline',l:'Registration & Hiring'},{k:'family',l:'Families'}];
     return '<div style="display:flex;gap:0;border-bottom:1px solid var(--s200);margin-bottom:14px">'+_cvTabs.map(function(t){
         return '<button class="me-btn me-btn--ghost" style="padding:8px 16px;font-size:.8rem;font-weight:600;border-bottom:2px solid '+(campersView===t.k?'var(--me)':'transparent')+';color:'+(campersView===t.k?'var(--me)':'var(--s400)')+';border-radius:0" onclick="CampistryMe.switchCampersView(\''+t.k+'\')">'+t.l+'</button>';
     }).join('')+'</div>';
 }
+
+// One tab holds everyone in camp — the CampMinder-style "People" area the
+// old Campers / Registration / Staffing tabs used to split three ways.
+// Roster = accepted into camp (enrolled campers + hired staff). Pipeline =
+// still being decided (applications + staff applicants). Storage underneath
+// is unchanged — roster/enrollments/staffApplications/bunkStaff/payroll.staff
+// each stay the system of record their other consumers (Bunk Builder,
+// Payroll, Leagues, Lite, Link, CSV import/export, the Supabase camper-limit
+// trigger) already depend on; this page reads all of them and presents one
+// merged view instead of forcing a separate visit to each.
+function _refreshPplIfActive(){ if(curPage==='campers') renderCampers(); }
+// Registration and Staffing used to be their own gated pages — a role could
+// have me.campers without either, or me.enrollment without me.staffing (the
+// Office/Registrar preset is exactly that). Merging them into one page means
+// the generic per-page view/edit enforcement in campistry_access_sections.js
+// can no longer tell them apart, so the Pipeline pane and the Roster's staff
+// rows check these sub-capabilities explicitly instead of relying on it.
+function _pplCanEdit(section){ var S=window.CampistrySections; return S?S.canEdit(section):true; }
+function _typeBadge(type){
+    return type==='staff'
+        ?'<span style="display:inline-flex;align-items:center;font-size:.66rem;font-weight:700;letter-spacing:.02em;padding:2px 8px;border-radius:999px;background:#EEF2FF;color:#4338CA">STAFF</span>'
+        :'<span style="display:inline-flex;align-items:center;font-size:.66rem;font-weight:700;letter-spacing:.02em;padding:2px 8px;border-radius:999px;background:#ECFDF5;color:#047857">CAMPER</span>';
+}
+function _staffJoinKey(email,name){
+    var e=String(email||'').trim().toLowerCase();
+    if(e)return 'e:'+e;
+    var n=String(name||'').trim().toLowerCase();
+    return n?'n:'+n:'';
+}
+// One row per real person, merged across the three staff stores that were
+// never linked to each other: hired staffApplications (bio/photo/contact),
+// payroll.staff (pay + bunk assignment), bunkStaff (who's actually on which
+// bunk). A camp that never used the Staffing tab has all its staff in
+// payroll/bunkStaff alone — those show up here too, not just applicants who
+// came through the hiring pipeline.
+function buildStaffRoster(){
+    var byKey={};
+    function row(key){
+        if(!byKey[key])byKey[key]={type:'staff',bunks:[],positions:[],_key:key};
+        return byKey[key];
+    }
+    hiredStaff().forEach(function(a){
+        var key=_staffJoinKey(a.email,a.name);
+        if(!key)return;
+        var r=row(key);
+        r.appId=a.id;
+        r.name=r.name||a.name||[a.first,a.last].filter(Boolean).join(' ');
+        r.email=r.email||a.email;r.phone=r.phone||a.phone;r.photo=r.photo||a.photo;
+        if((a.positions||[]).length)r.positions=a.positions;
+    });
+    payroll.staff.forEach(function(s){
+        var key=_staffJoinKey(s.email,s.name);
+        if(!key)return;
+        var r=row(key);
+        r.payrollId=s.id;
+        r.name=r.name||s.name;
+        r.email=r.email||s.email;r.phone=r.phone||s.phone;
+        r.role=r.role||s.role;
+        r.payType=s.payType;r.payRate=s.payRate;
+        if(s.bunk&&r.bunks.indexOf(s.bunk)<0)r.bunks.push(s.bunk);
+    });
+    Object.keys(bunkStaff||{}).forEach(function(bunkName){
+        (bunkStaff[bunkName]||[]).forEach(function(s){
+            var key=_staffJoinKey(s.email,s.name);
+            if(!key)return;
+            var r=row(key);
+            r.name=r.name||s.name;
+            r.email=r.email||s.email;r.phone=r.phone||s.phone;
+            r.role=r.role||s.role;
+            if(r.bunks.indexOf(bunkName)<0)r.bunks.push(bunkName);
+        });
+    });
+    return Object.keys(byKey).map(function(k){return byKey[k]}).filter(function(r){return r.name})
+        .sort(function(a,b){return String(a.name).localeCompare(String(b.name))});
+}
+function _pplGradeForBunks(bunks){
+    for(var i=0;i<bunks.length;i++){
+        var loc=_bunkDivGrade(bunks[i]);
+        if(loc)return loc.div+' · '+loc.gr;
+    }
+    return '';
+}
+function openPayrollStaff(id){ _prTab='staff'; nav('payroll'); prEditStaff(id); }
+// Routes a Roster staff row to whichever screen actually holds their detail:
+// a hiring record if they came through the pipeline, else their payroll
+// profile, else (added straight to a bunk, before either of those existed)
+// a quick read-only card pointing at Bunk Builder.
+function _pplOpenStaff(row){
+    if(row.appId!=null){viewStaffApp(row.appId);return;}
+    if(row.payrollId!=null){openPayrollStaff(row.payrollId);return;}
+    var body='<div class="cv-row"><span class="cv-lbl">Name</span><span class="cv-val">'+esc(row.name)+'</span></div>'
+        +(row.role?'<div class="cv-row"><span class="cv-lbl">Role</span><span class="cv-val">'+esc(row.role)+'</span></div>':'')
+        +(row.email?'<div class="cv-row"><span class="cv-lbl">Email</span><span class="cv-val">'+esc(row.email)+'</span></div>':'')
+        +(row.phone?'<div class="cv-row"><span class="cv-lbl">Phone</span><span class="cv-val">'+esc(row.phone)+'</span></div>':'')
+        +(row.bunks.length?'<div class="cv-row"><span class="cv-lbl">Bunk</span><span class="cv-val">'+esc(row.bunks.join(', '))+'</span></div>':'')
+        +'<p style="font-size:.78rem;color:var(--s500);margin-top:10px">Added directly to a bunk — there\'s no hiring record or payroll profile for them yet. Edit them from Bunk Builder.</p>';
+    showModal(row.name||'Staff',body,null);
+}
+function _pplOpenStaffByKey(key){
+    var hit=buildStaffRoster().filter(function(r){return r._key===key})[0];
+    if(hit)_pplOpenStaff(hit);
+}
+function setPplPipeType(t){pplPipeType=t;renderCampers()}
+// Everyone still being decided on: applications that haven't become a camper
+// yet, applicants who haven't been hired yet. The moment either happens they
+// move to buildStaffRoster()/roster above and drop off here.
+function buildPipelineList(){
+    var out=[];
+    Object.keys(enrollments).forEach(function(id){
+        var e=enrollments[id];
+        if(!e||e.status==='enrolled')return;
+        out.push({type:'camper',id:id,name:e.camperName||'—',status:e.status||'applied',sub:e.parentName||'',appliedDate:e.appliedDate||''});
+    });
+    Object.keys(staffApplications).forEach(function(id){
+        var a=staffApplications[id];
+        if(!a||a.status==='hired')return;
+        out.push({type:'staff',id:id,name:a.name||[a.first,a.last].filter(Boolean).join(' ')||'—',status:a.status||'applied',sub:(a.positions||[]).join(', '),appliedDate:a.appliedDate||''});
+    });
+    out.sort(function(x,y){return (y.appliedDate||'').localeCompare(x.appliedDate||'')});
+    return out;
+}
+function _pplStatusMeta(type,status){
+    if(type==='staff')return {label:_staffLabel(status),color:_staffStatusType(status)};
+    var label=status?(status.charAt(0).toUpperCase()+status.slice(1)):'Applied';
+    var color=status==='enrolled'||status==='accepted'?'ok':status==='waitlisted'?'warn':(status==='declined'||status==='withdrawn')?'err':'gray';
+    return {label:label,color:color};
+}
+function _pplCamperRowActions(id,status){
+    var menuId='pplRegRowMenu_'+id;
+    var h='<div style="display:flex;gap:6px;justify-content:flex-end;align-items:center;white-space:nowrap">';
+    if(status==='applied'){
+        h+='<button class="me-btn me-btn--pri me-btn--sm" onclick="CampistryMe.updateEnrollStatus(\''+je(id)+'\',\'accepted\')">Accept</button>';
+        h+='<div class="me-more-wrap"><button class="me-btn me-btn--sec me-btn--sm" onclick="CampistryMe._toggleMenu(\''+menuId+'\')">⋯</button>'
+            +'<div class="me-more-menu" id="'+menuId+'">'
+            +'<button onclick="CampistryMe.updateEnrollStatus(\''+je(id)+'\',\'waitlisted\')">Waitlist</button>'
+            +'<button onclick="CampistryMe.updateEnrollStatus(\''+je(id)+'\',\'declined\')" style="color:var(--err)">Decline</button>'
+            +'</div></div>';
+    }else if(status==='accepted'){
+        h+='<button class="me-btn me-btn--pri me-btn--sm" onclick="CampistryMe.enrollCamper(\''+je(id)+'\')">'+ico('enroll')+'Enroll</button>';
+        h+='<div class="me-more-wrap"><button class="me-btn me-btn--sec me-btn--sm" onclick="CampistryMe._toggleMenu(\''+menuId+'\')">⋯</button>'
+            +'<div class="me-more-menu" id="'+menuId+'">'
+            +'<button onclick="CampistryMe.generateParentInvite(\''+je(id)+'\')">'+ico('invite')+'Get invite link</button>'
+            +'<button onclick="CampistryMe.rescindEnrollment(\''+je(id)+'\')" style="color:var(--err)">'+ico('rescind')+'Rescind</button>'
+            +'</div></div>';
+    }else if(status==='waitlisted'){
+        h+='<button class="me-btn me-btn--sec me-btn--sm" onclick="CampistryMe.updateEnrollStatus(\''+je(id)+'\',\'accepted\')">Accept</button>';
+    }else if(status==='withdrawn'||status==='declined'){
+        h+='<button class="me-btn me-btn--sec me-btn--sm" onclick="CampistryMe.updateEnrollStatus(\''+je(id)+'\',\'waitlisted\')">Re-add to waitlist</button>';
+    }
+    h+='</div>';
+    return h;
+}
+function _pplStaffRowActions(id,status){
+    var menuId='pplStaffRowMenu_'+id;
+    var next=_staffNextStage(status);
+    var h='<div style="display:flex;gap:6px;justify-content:flex-end;align-items:center">';
+    if(status==='declined'){
+        h+='<button class="me-btn me-btn--sec me-btn--sm" onclick="CampistryMe.setStaffStatus(\''+je(id)+'\',\'applied\',{fromRow:true})">Reconsider</button>';
+    }else{
+        if(next)h+='<button class="me-btn me-btn--pri me-btn--sm" onclick="CampistryMe.setStaffStatus(\''+je(id)+'\',\''+next+'\',{fromRow:true})">'+ico('enroll')+'Advance</button>';
+        h+='<div class="me-more-wrap"><button class="me-btn me-btn--sec me-btn--sm" onclick="CampistryMe._toggleMenu(\''+menuId+'\')">⋯</button>'
+            +'<div class="me-more-menu" id="'+menuId+'">'
+            +'<button onclick="CampistryMe.setStaffStatus(\''+je(id)+'\',\'declined\',{fromRow:true})" style="color:var(--err)">Decline</button>'
+            +'</div></div>';
+    }
+    h+='</div>';
+    return h;
+}
+function _renderPipelinePane(){
+    var canReg=_secCan('me.enrollment'), canStaff=_secCan('me.staffing');
+    var editReg=canReg&&_pplCanEdit('me.enrollment'), editStaff=canStaff&&_pplCanEdit('me.staffing');
+    if(!canReg&&!canStaff){
+        return '<div class="me-empty"><h3>No access to Registration &amp; Hiring</h3><p>Your account isn\'t set up to open this section.</p></div>';
+    }
+    var list=buildPipelineList().filter(function(r){return r.type==='camper'?canReg:canStaff;});
+    var typeCounts={all:list.length,camper:0,staff:0};
+    list.forEach(function(r){typeCounts[r.type]=(typeCounts[r.type]||0)+1});
+    var visible=pplPipeType==='all'?list:list.filter(function(r){return r.type===pplPipeType});
+
+    var h='<div class="sec-hd"><div><h2 class="sec-title">Registration &amp; Hiring</h2><p class="sec-desc">'+list.length+' in progress'+(canReg?' · '+typeCounts.camper+' camper'+(typeCounts.camper!==1?'s':''):'')+(canStaff?' · '+typeCounts.staff+' staff':'')+'</p></div>';
+    h+='<div class="sec-actions">';
+    if(editReg||editStaff){
+        h+='<div class="me-more-wrap"><button class="me-btn me-btn--teal" onclick="CampistryMe._toggleMenu(\'pplFormsMenu\')">Customize Forms ▾</button>'
+            +'<div class="me-more-menu" id="pplFormsMenu" style="min-width:210px">'
+            +(editReg?'<button onclick="CampistryMe.openFormConfig()">Registration Form</button><button onclick="CampistryMe.openPostAcceptFormConfig()" title="Sent after a camper is accepted">Post-Acceptance Form</button>':'')
+            +(editStaff?'<button onclick="CampistryMe.openStaffFormConfig()">Staff Application Form</button>':'')
+            +'</div></div>';
+    }
+    if(editReg||editStaff){
+        h+='<div class="me-more-wrap"><button class="me-btn me-btn--pri" onclick="CampistryMe._toggleMenu(\'pplAddMenu\')">+ Manual Entry ▾</button>'
+            +'<div class="me-more-menu" id="pplAddMenu" style="min-width:190px">'
+            +(editReg?'<button onclick="CampistryMe.addApplication()">Camper Application</button>':'')
+            +(editStaff?'<button onclick="CampistryMe.addStaffApp()">Staff Application</button>':'')
+            +'</div></div>';
+    }
+    h+='<div class="me-more-wrap"><button class="me-btn me-btn--sec me-btn--sm" onclick="CampistryMe._toggleMenu(\'pplLinkMenu\')">🔗 Get Link</button>'
+        +'<div class="me-more-menu" id="pplLinkMenu" style="min-width:250px">';
+    if(canReg){
+        h+='<div style="padding:6px 10px 4px;font-size:.68rem;font-weight:700;color:var(--s400)">REGISTRATION</div>'
+            +'<button onclick="CampistryMe.copyRegLink()">📋 Copy Link</button>'
+            +'<button onclick="CampistryMe.openSendRegLinkModal()">✉ Send Link</button>'
+            +'<button onclick="CampistryMe.showRegistrationQR()">▦ QR Code</button>';
+    }
+    if(canReg&&canStaff)h+='<div style="border-top:1px solid var(--s100);margin:4px 0"></div>';
+    if(canStaff){
+        h+='<div style="padding:6px 10px 4px;font-size:.68rem;font-weight:700;color:var(--s400)">STAFF</div>'
+            +'<button onclick="CampistryMe.copyStaffLink()">📋 Copy Link</button>'
+            +'<button onclick="CampistryMe.openSendStaffLinkModal()">✉ Send Link</button>'
+            +'<button onclick="CampistryMe.showStaffQR()">▦ QR Code</button>';
+    }
+    h+='<div style="border-top:1px solid var(--s100);margin:4px 0"></div>'
+        +(canReg?'<button onclick="CampistryMe.exportEnrollmentReport()">↓ Export Camper Applications</button>':'')
+        +(canStaff?'<button onclick="CampistryMe.exportStaffCSV()">↓ Export Staff Applications</button>':'')
+        +'</div></div>'
+        +'</div></div>';
+
+    if(canStaff)h+=_visibilityPanelHTML();
+
+    if(canReg&&canStaff){
+        h+='<div style="display:flex;gap:2px;border-bottom:1px solid var(--s200);margin-bottom:16px">';
+        [{k:'all',l:'All',c:typeCounts.all},{k:'camper',l:'Campers',c:typeCounts.camper},{k:'staff',l:'Staff',c:typeCounts.staff}].forEach(function(s){
+            var active=pplPipeType===s.k;
+            h+='<button onclick="CampistryMe.setPplPipeType(\''+s.k+'\')" style="padding:9px 12px;border:none;background:none;font-size:.8rem;font-weight:600;cursor:pointer;white-space:nowrap;font-family:inherit;display:flex;align-items:center;gap:6px;border-bottom:2px solid '+(active?'var(--me)':'transparent')+';color:'+(active?'var(--me)':'var(--s500)')+'">'
+                +esc(s.l)+'<span style="font-size:.68rem;font-weight:700;border-radius:9px;padding:1px 6px;background:'+(active?'var(--me)':'var(--s100)')+';color:'+(active?'#fff':'var(--s600)')+'">'+s.c+'</span></button>';
+        });
+        h+='</div>';
+    }
+
+    if(!list.length){
+        h+='<div class="me-empty"><h3>Nothing in progress</h3><p>Share your registration or staff application link, or add someone manually.</p></div>';
+    }else if(!visible.length){
+        h+='<div class="me-empty"><h3>Nothing in this filter</h3></div>';
+    }else{
+        h+='<div class="me-card"><div class="me-tw"><table class="me-t"><thead><tr><th style="width:76px">Type</th><th>Name</th><th>Detail</th><th>Applied</th><th>Status</th><th style="width:1%;white-space:nowrap"></th></tr></thead><tbody>';
+        visible.forEach(function(r){
+            var meta=_pplStatusMeta(r.type,r.status);
+            var openFn=r.type==='camper'?"CampistryMe.viewApplication('"+je(r.id)+"')":"CampistryMe.viewStaffApp('"+je(r.id)+"')";
+            var canEditRow=r.type==='camper'?editReg:editStaff;
+            h+='<tr class="click" onclick="'+openFn+'"><td>'+_typeBadge(r.type)+'</td><td class="bold">'+esc(r.name)+'</td><td style="font-size:.8rem;color:var(--s500)">'+esc(r.sub||'—')+'</td><td style="font-size:.75rem;color:var(--s400)">'+esc(r.appliedDate||'—')+'</td><td>'+bdg(meta.label,meta.color)+'</td>';
+            h+='<td style="text-align:right;white-space:nowrap" onclick="event.stopPropagation()">'+(canEditRow?(r.type==='camper'?_pplCamperRowActions(r.id,r.status):_pplStaffRowActions(r.id,r.status)):'')+'</td></tr>';
+        });
+        h+='</tbody></table></div></div>';
+    }
+    return h;
+}
+
 function renderCampers(filter){
-    var c=document.getElementById('page-campers'),entries=Object.entries(roster),total=entries.length;
-    if(filter){var q=filter.toLowerCase();entries=entries.filter(function([n,d]){var altN=[d.altFirstName,d.altLastName].filter(Boolean).join(' ').toLowerCase();return n.toLowerCase().includes(q)||altN.includes(q)||(d.division||'').toLowerCase().includes(q)||(d.bunk||'').toLowerCase().includes(q)||(d.school||'').toLowerCase().includes(q)})}
-    entries.sort(function(a,b){return a[0].localeCompare(b[0])});
+    var c=document.getElementById('page-campers');
     var tabs=_campersTabsHtml();
 
     if(campersView==='family'){
         c.innerHTML=tabs+_familyBundlesHtml();
         return;
     }
+    if(campersView==='pipeline'){
+        c.innerHTML=tabs+_renderPipelinePane();
+        return;
+    }
 
-    var h=tabs+'<div class="sec-hd"><div><h2 class="sec-title">Campers</h2><p class="sec-desc">'+total+' total</p></div><div class="sec-actions"><button class="me-btn me-btn--ghost me-btn--sm" onclick="CampistryMe.detectDuplicates()" title="Find duplicate campers">🔍 Duplicates</button><button class="me-btn me-btn--ghost me-btn--sm" onclick="CampistryMe.manageCustomFields()" title="Define custom fields">⚙ Custom Fields</button><button class="me-btn me-btn--sec me-btn--sm" onclick="CampistryMe.downloadTemplate()">Template</button><button class="me-btn me-btn--sec me-btn--sm" onclick="CampistryMe.openCsv()">Import</button><button class="me-btn me-btn--sec me-btn--sm" onclick="CampistryMe.exportCsv()">Export</button><button class="me-btn me-btn--pri" onclick="CampistryMe.addCamper()">+ Add Camper</button></div></div>';
-    if(!entries.length){h+='<div class="me-empty"><h3>No campers yet</h3><p>Add campers or import from CSV.</p><div style="display:flex;gap:6px;justify-content:center"><button class="me-btn me-btn--pri" onclick="CampistryMe.addCamper()">+ Add</button><button class="me-btn me-btn--sec" onclick="CampistryMe.openCsv()">Import</button></div></div>'}
-    else{
-        h+='<div class="me-card"><div class="me-tw"><table class="me-t"><thead><tr><th style="width:50px">ID</th><th>Name</th><th>Age</th><th>School</th><th>Grade</th><th>Teacher</th><th>Division</th><th>Bunk</th><th>Medical</th><th style="width:60px"></th></tr></thead><tbody>';
-        entries.forEach(function([n,d]){
+    // Roster — everyone accepted into camp: enrolled campers + hired staff.
+    // Staff data (bio, salary, hiring status) was only ever reachable through
+    // the Staffing or Payroll pages, each separately gated — showing it here
+    // to anyone with plain me.campers access would leak it to roles that were
+    // never granted either (Division Head, Nurse, Canteen, Bus Coordinator…).
+    var canStaff=_secCan('me.staffing')||_secCan('me.payroll');
+    var camperEntries=Object.entries(roster);
+    var staffRows=canStaff?buildStaffRoster():[];
+    if(filter){
+        var q=filter.toLowerCase();
+        camperEntries=camperEntries.filter(function([n,d]){var altN=[d.altFirstName,d.altLastName].filter(Boolean).join(' ').toLowerCase();return n.toLowerCase().includes(q)||altN.includes(q)||(d.division||'').toLowerCase().includes(q)||(d.bunk||'').toLowerCase().includes(q)||(d.school||'').toLowerCase().includes(q)});
+        staffRows=staffRows.filter(function(r){return String(r.name||'').toLowerCase().includes(q)||String(r.role||'').toLowerCase().includes(q)});
+    }
+    camperEntries.sort(function(a,b){return a[0].localeCompare(b[0])});
+    var total=camperEntries.length+staffRows.length;
+
+    var h=tabs+'<div class="sec-hd"><div><h2 class="sec-title">People</h2><p class="sec-desc">'+camperEntries.length+' camper'+(camperEntries.length!==1?'s':'')+(canStaff?' · '+staffRows.length+' staff':'')+'</p></div><div class="sec-actions"><button class="me-btn me-btn--ghost me-btn--sm" onclick="CampistryMe.detectDuplicates()" title="Find duplicate campers">🔍 Duplicates</button><button class="me-btn me-btn--ghost me-btn--sm" onclick="CampistryMe.manageCustomFields()" title="Define custom fields">⚙ Custom Fields</button><button class="me-btn me-btn--sec me-btn--sm" onclick="CampistryMe.downloadTemplate()">Template</button><button class="me-btn me-btn--sec me-btn--sm" onclick="CampistryMe.openCsv()">Import</button><button class="me-btn me-btn--sec me-btn--sm" onclick="CampistryMe.exportCsv()">Export</button><button class="me-btn me-btn--pri" onclick="CampistryMe.addCamper()">+ Add Camper</button></div></div>';
+
+    var unplaced=canStaff?hiredStaff().filter(function(a){return !String(a.email||'').trim()||!bunksForStaffEmail(a.email).length;}):[];
+    if(unplaced.length){
+        h+='<div style="background:#FFF7ED;border:1px solid #FED7AA;border-radius:var(--r);padding:10px 14px;margin-bottom:14px;font-size:.83rem;color:#9A3412">'
+          +'<strong>'+unplaced.length+' hired '+(unplaced.length===1?'person is':'people are')+' not set up yet.</strong> '
+          +'Open them from Registration &amp; Hiring to add an email and put them on a bunk — until then they can\'t sign in to Campistry Lite or receive notifications.</div>';
+    }
+
+    if(!total){
+        h+='<div class="me-empty"><h3>No one here yet</h3><p>Add campers or import from CSV — or accept an application from Registration &amp; Hiring.</p><div style="display:flex;gap:6px;justify-content:center"><button class="me-btn me-btn--pri" onclick="CampistryMe.addCamper()">+ Add</button><button class="me-btn me-btn--sec" onclick="CampistryMe.openCsv()">Import</button></div></div>';
+    }else{
+        h+='<div class="me-card"><div class="me-tw"><table class="me-t"><thead><tr><th style="width:76px">Type</th><th>Name</th><th>Details</th><th>Placement</th><th>Contact</th><th style="width:60px"></th></tr></thead><tbody>';
+        camperEntries.forEach(function([n,d]){
             var hasMed=!!(d.allergies||d.medications);
-            var idStr=d.camperId?String(d.camperId).padStart(4,'0'):'—';
             var altN=[d.altFirstName,d.altLastName].filter(Boolean).join(' ');
             var fam=_familyForCamper(n);
             var famChip=fam?'<div style="margin-top:2px"><span style="font-size:.68rem;color:var(--me);font-weight:600;cursor:pointer" onclick="event.stopPropagation();CampistryMe.viewFamilyFromCamper(\''+je(n)+'\')">👨‍👩‍👧‍👦 '+esc(fam.name)+'</span></div>':'';
             var nameCell=esc(n)+(altN&&getCampSettings().showAltNames!==false?'<div style="font-size:.7rem;color:var(--s400);font-weight:400">'+esc(altN)+'</div>':'')+famChip;
-            h+='<tr class="click" onclick="CampistryMe.viewCamper(\''+je(n)+'\')">'+'<td style="font-family:monospace;font-size:.75rem;color:var(--s400)">#'+esc(idStr)+'</td><td class="bold">'+nameCell+'</td><td>'+(d.dob?age(d.dob):'—')+'</td><td>'+esc(d.school||'—')+'</td><td>'+esc(d.schoolGrade||'—')+'</td><td>'+esc(d.teacher||'—')+'</td><td>'+(d.division?dtag(d.division):'<span style="color:var(--s300)">—</span>')+'</td><td>'+esc(d.bunk||'—')+'</td><td>'+(hasMed?'<span style="color:var(--err);font-size:.7rem;font-weight:600">⚠ '+esc((d.allergies||d.medications||'').split(',')[0])+'</span>':'<span style="color:var(--s300)">—</span>')+'</td><td style="text-align:right" onclick="event.stopPropagation()"><button class="me-btn me-btn--ghost me-btn--sm" onclick="CampistryMe.editCamper(\''+je(n)+'\')">Edit</button></td></tr>';
+            var details=(d.schoolGrade?esc(d.schoolGrade):'<span style="color:var(--s300)">—</span>')+(hasMed?' <span style="color:var(--err);font-size:.7rem;font-weight:600">⚠ Medical</span>':'');
+            var placement=(d.division?dtag(d.division):'<span style="color:var(--s300)">—</span>')+(d.bunk?' '+bdg(d.bunk,'gray'):'');
+            var contact=(d.parent1Phone||d.parent1Email)?'<span style="font-size:.78rem;color:var(--s500)">'+esc(d.parent1Name||'')+'</span>':'<span style="color:var(--s300)">—</span>';
+            h+='<tr class="click" onclick="CampistryMe.viewCamper(\''+je(n)+'\')"><td>'+_typeBadge('camper')+'</td><td class="bold">'+nameCell+'</td><td style="font-size:.8rem">'+details+'</td><td>'+placement+'</td><td>'+contact+'</td><td style="text-align:right" onclick="event.stopPropagation()"><button class="me-btn me-btn--ghost me-btn--sm" onclick="CampistryMe.editCamper(\''+je(n)+'\')">Edit</button></td></tr>';
+        });
+        staffRows.forEach(function(r){
+            var grade=_pplGradeForBunks(r.bunks);
+            var pay=r.payRate?('$'+r.payRate+(r.payType?'/'+r.payType:'')):'';
+            var details=(r.role||(r.positions||[]).join(', ')||'<span style="color:var(--s300)">—</span>')+(pay?' <span style="color:var(--s400);font-size:.78rem">· '+esc(pay)+'</span>':'');
+            var placement=(grade?'<span style="font-size:.8rem">'+esc(grade)+'</span>':'<span style="color:var(--s300)">—</span>')+(r.bunks.length?' '+r.bunks.map(function(b){return bdg(b,'gray')}).join(' '):'');
+            var contact=((r.email?'<div style="font-size:.78rem;color:var(--s500)">'+esc(r.email)+'</div>':'')+(r.phone?'<div style="font-size:.75rem;color:var(--s400)">'+esc(r.phone)+'</div>':''))||'<span style="color:var(--s300)">—</span>';
+            h+='<tr class="click" onclick="CampistryMe._pplOpenStaffByKey(\''+je(r._key)+'\')"><td>'+_typeBadge('staff')+'</td><td class="bold">'+esc(r.name)+'</td><td style="font-size:.8rem">'+details+'</td><td>'+placement+'</td><td>'+contact+'</td><td></td></tr>';
         });
         h+='</tbody></table></div></div>';
     }
@@ -2710,6 +2994,7 @@ function assignHiredToBunk(appId,bunkName){
     _syncInvitesForBunk(bunkName);
     renderBB();
     viewStaffApp(appId);
+    _refreshPplIfActive();
     toast('Added to '+bunkName);
 }
 function unassignHiredFromBunk(appId,bunkName){
@@ -2721,6 +3006,7 @@ function unassignHiredFromBunk(appId,bunkName){
     _syncInvitesForBunk(bunkName);
     renderBB();
     viewStaffApp(appId);
+    _refreshPplIfActive();
     toast('Removed from '+bunkName);
 }
 // Prefill the bunk-staff form from a hired applicant rather than making the
@@ -2951,18 +3237,18 @@ function visibilityPolicy(){
     var V=_vis(); if(!V)return {};
     return counselorVisibility||V.defaults();
 }
-function toggleVisibilityPanel(){ _visOpen=!_visOpen; renderStaffing(); }
+function toggleVisibilityPanel(){ _visOpen=!_visOpen; renderStaffing(); _refreshPplIfActive(); }
 function setCounselorVisibility(key,on){
     var V=_vis(); if(!V)return;
     if(!counselorVisibility)counselorVisibility=V.defaults();
     counselorVisibility[key]=!!on;
     save();
-    renderStaffing();
+    renderStaffing(); _refreshPplIfActive();
 }
 function resetCounselorVisibility(){
     var V=_vis(); if(!V)return;
     counselorVisibility=V.defaults();
-    save(); renderStaffing();
+    save(); renderStaffing(); _refreshPplIfActive();
     toast('Reset to defaults');
 }
 function _visibilityPanelHTML(){
@@ -3245,7 +3531,7 @@ function setStaffStatus(id,status,opts){
     var a=staffApplications[id]; if(!a)return;
     a.status=status;
     save();
-    renderStaffing();
+    renderStaffing(); _refreshPplIfActive();
     if(!opts.fromRow) viewStaffApp(id);
     toast('Moved to '+_staffLabel(status));
 }
@@ -3265,7 +3551,7 @@ async function deleteStaffApp(id){
     delete staffApplications[id];
     save();
     closeModal('appViewModal');
-    renderStaffing();
+    renderStaffing(); _refreshPplIfActive();
     toast('Applicant deleted');
 }
 // Maps SFC_FIELD_CATALOG ids to how Manual Entry should render/collect
@@ -3368,7 +3654,7 @@ function addStaffApp(){
             certifications:[],references:[],status:'applied',
             appliedDate:today(),appliedTime:new Date().toISOString(),onboarding:{}
         };
-        save();closeModal('dynModal');renderStaffing();toast('Applicant added');
+        save();closeModal('dynModal');renderStaffing();_refreshPplIfActive();toast('Applicant added');
     },{maxWidth:640});
 }
 function copyStaffLink(){var url=window.location.origin+'/campistry_staff_apply.html';try{navigator.clipboard&&navigator.clipboard.writeText(url);}catch(e){}toast('Staff application link copied');}
@@ -5053,7 +5339,7 @@ function addApplication(){
             customAnswers:customAnswers,customQuestionLabels:customQuestionLabels
         };
         enrollments[id]=rec;
-        save();closeModal('dynModal');renderEnrollment();
+        save();closeModal('dynModal');renderEnrollment();_refreshPplIfActive();
         toast(isWaitlist?camperName+' added to waitlist':camperName+' application received');
     },{maxWidth:720});
 }
@@ -5072,7 +5358,7 @@ function updateEnrollStatus(id,status,opts){
         if(session) autoPromoteWaitlist(session);
     }
     // Bulk callers pass silent:true and do one save/render/toast for the whole batch.
-    if(!opts.silent){ save();renderEnrollment();toast('Status updated to '+status); }
+    if(!opts.silent){ save();renderEnrollment();_refreshPplIfActive();toast('Status updated to '+status); }
 
     // On first acceptance, generate a parent portal invite link (skipped in bulk
     // to avoid a burst of invite generation; the office can invite from the row).
@@ -5107,7 +5393,7 @@ function bulkEnrollStatus(status){
     var verb=status==='accepted'?'Accepted':status==='declined'?'Declined':status==='waitlisted'?'Waitlisted':(status+'d');
     if(status==='declined' && !confirm('Decline '+ids.length+' application'+(ids.length>1?'s':'')+'?')) return;
     ids.forEach(function(id){ updateEnrollStatus(id,status,{silent:true}); });
-    save(); renderEnrollment(); toast(verb+' '+ids.length+' application'+(ids.length>1?'s':''));
+    save(); renderEnrollment(); _refreshPplIfActive(); toast(verb+' '+ids.length+' application'+(ids.length>1?'s':''));
 }
 
 // ─── PARENT PORTAL INVITE ────────────────────────────────────────────────────
@@ -5575,7 +5861,7 @@ function enrollCamper(id){
     }
 
     e.enrolledDate=new Date().toISOString().split('T')[0];
-    save();renderEnrollment();
+    save();renderEnrollment();_refreshPplIfActive();
 }
 
 // ── ANALYTICS & FINANCE ──────────────────────────────────────
@@ -8726,7 +9012,7 @@ function reEnrollCamper(camperName){
         var session=document.getElementById('reSession').value;var sesObj=sessions.find(function(s){return s.name===session});
         var id='enr_'+Date.now()+'_'+Math.random().toString(36).substr(2,4);
         enrollments[id]={camperName:camperName,camperLast:camperName.split(' ').pop(),parentName:d.parent1Name||'',parentEmail:d.parent1Email||'',parentPhone:d.parent1Phone||'',dob:d.dob||'',gender:d.gender||'',school:d.school||'',schoolGrade:d.schoolGrade||'',street:d.street||'',city:d.city||'',state:d.state||'',zip:d.zip||'',allergies:d.allergies||'',medications:d.medications||'',session:session,sessionTuition:sesObj?sesObj.tuition:0,status:'accepted',appliedDate:new Date().toISOString().split('T')[0],formsRequired:3,formsCompleted:0,paymentStatus:'pending',notes:'Re-enrollment — returning camper',isReturning:true};
-        save();closeModal('dynModal');renderEnrollment();toast(camperName+' re-enrolled (auto-accepted)');
+        save();closeModal('dynModal');renderEnrollment();_refreshPplIfActive();toast(camperName+' re-enrolled (auto-accepted)');
         if(d.parent1Email)sendAutoNotification('enrollment_confirmation',id);
     });
 }
@@ -9677,6 +9963,7 @@ window.CampistryMe={
     viewCamper:viewCamper,editCamper:editCamper,addCamper:addCamper,deleteCamper:deleteCamper,ceToggleSummer:ceToggleSummer,
     addFamily:function(){openFamilyForm(null)},editFamily:function(id){openFamilyForm(id)},deleteFamily:deleteFamily,removeCamperFromFamily:removeCamperFromFamily,
     switchCampersView:switchCampersView,viewFamilyFromCamper:viewFamilyFromCamper,
+    setPplPipeType:setPplPipeType,_pplOpenStaffByKey:_pplOpenStaffByKey,
     acceptFamilySuggestion:acceptFamilySuggestion,dismissFamilySuggestion:dismissFamilySuggestion,acceptAddToFamily:acceptAddToFamily,
     addDiv:function(){openDivForm(null)},editDiv:function(n){openDivForm(n)},deleteDiv:deleteDiv,moveDivision:moveDivision,
     openCsv:function(){openModal('csvModal')},exportCsv:exportCsv,downloadTemplate:downloadTemplate,
