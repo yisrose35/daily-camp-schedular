@@ -39,4 +39,10 @@
     <!-- Permissions -->
 
     <uses-permission android:name="android.permission.INTERNET" />
+
+    <!-- Android 13+ requires this to be DECLARED here before the runtime prompt
+         can be shown. The push plugin asks for it, but a plugin cannot declare
+         it on the app's behalf — without this line requestPermissions() never
+         surfaces a dialog and no notification is ever delivered. -->
+    <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
 </manifest>

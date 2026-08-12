@@ -1,0 +1,48 @@
+{
+  "project_info": {
+    "project_number": "341444597644",
+    "project_id": "campistry-36137",
+    "storage_bucket": "campistry-36137.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:341444597644:android:f0241d8ab37a59534728a9",
+        "android_client_info": {
+          "package_name": "com.campistry.link"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyDDtJr1ORMRhE3B6eAnt34HbJmCnTdNN9U"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    },
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:341444597644:android:d34ce20f725b9ac94728a9",
+        "android_client_info": {
+          "package_name": "com.campistry.lite"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyDDtJr1ORMRhE3B6eAnt34HbJmCnTdNN9U"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}
