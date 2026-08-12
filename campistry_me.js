@@ -362,11 +362,85 @@ function ini(n){var p=n.split(' ');return((p[0]||'?')[0]+(p.length>1?(p[p.length
 function avc(n){var h=0;for(var i=0;i<n.length;i++)h+=n.charCodeAt(i);return AV_BG[h%AV_BG.length]}
 function av(n,sz){var w=sz==='l'?52:sz==='m'?38:28,fs=sz==='l'?17:sz==='m'?13:10;return'<div class="av av-'+(sz||'s')+'" style="background:'+avc(n)+'">'+esc(ini(n))+'</div>'}
 function bdg(l,t){return'<span class="badge badge-'+t+'">'+esc(l)+'</span>'}
+
+// Small inline icon set for the Registration row/Review-modal action
+// buttons (Review/Enroll/Invite/Rescind) — replaces emoji-as-text, which
+// renders inconsistently across platforms and reads as a placeholder
+// rather than a real icon.
+var _ICO={
+    review:'<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M1 12s4-7 11-7 11 7 11 7-4 7-11 7-11-7-11-7z"/><circle cx="12" cy="12" r="3"/></svg>',
+    enroll:'<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6L9 17l-5-5"/></svg>',
+    invite:'<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71"/><path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71"/></svg>',
+    rescind:'<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 6h18"/><path d="M8 6V4a2 2 0 012-2h4a2 2 0 012 2v2"/><path d="M19 6l-1 14a2 2 0 01-2 2H8a2 2 0 01-2-2L5 6"/></svg>'
+};
+function ico(name){return _ICO[name]||'';}
 function dtag(d){var c=(structure[d]&&structure[d].color)||'#94A3B8';return'<span class="div-tag" style="background:'+c+'10;color:'+c+'"><span class="div-dot" style="background:'+c+'"></span>'+esc(d)+'</span>'}
 function fm(n){return'$'+Number(n||0).toLocaleString()}
 function toast(m,t){var el=document.getElementById('meToast');if(!el)return;el.className='me-toast '+(t==='error'?'bad':'ok')+' vis';document.getElementById('tI').textContent=t==='error'?'✕':'✓';document.getElementById('tM').textContent=m;clearTimeout(el._t);el._t=setTimeout(function(){el.classList.remove('vis')},2600)}
-function openModal(id){var e=document.getElementById(id);if(e)e.style.display='flex'}
-function closeModal(id){var e=document.getElementById(id);if(e){if(id==='dynModal')e.remove();else e.style.display='none'}}
+function openModal(id){
+    var e=document.getElementById(id); if(!e)return;
+    e.classList.remove('closing'); // strip a pending close if reopened mid-animation
+    e.style.display='flex';
+}
+function closeModal(id){
+    var e=document.getElementById(id); if(!e||e.classList.contains('closing'))return;
+    e.classList.add('closing');
+    setTimeout(function(){
+        if(!e.classList.contains('closing'))return; // openModal(id) fired again in the meantime
+        if(id==='dynModal'){ if(e.parentNode)e.remove(); }
+        else{ e.style.display='none'; }
+        e.classList.remove('closing');
+    },150);
+}
+
+// Small styled confirm dialog — returns a Promise<boolean>. Replaces native
+// confirm() for destructive actions (e.g. Rescind), which reads as jarring/
+// unstyled next to the rest of the app. `opts.message` is raw HTML (pre-
+// escape any interpolated values yourself); `opts.danger` picks the red
+// icon + solid-red confirm button vs the neutral amber "?" + primary button.
+function confirmDialog(opts){
+    opts=opts||{};
+    return new Promise(function(resolve){
+        var existing=document.getElementById('confirmDlgOverlay');
+        if(existing)existing.remove();
+        var danger=!!opts.danger;
+        var overlay=document.createElement('div');
+        overlay.id='confirmDlgOverlay';
+        overlay.className='me-overlay';
+        overlay.style.zIndex='10500';
+        overlay.innerHTML=
+            '<div class="me-modal me-confirm">'
+            +'<div class="me-confirm-body">'
+            +'<div class="me-confirm-icon me-confirm-icon--'+(danger?'danger':'warn')+'">'
+            +(danger
+                ? '<svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="var(--err)" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M10.29 3.86L1.82 18a2 2 0 001.71 3h16.94a2 2 0 001.71-3L13.71 3.86a2 2 0 00-3.42 0z"/><line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg>'
+                : '<svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="var(--me)" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><line x1="12" y1="16" x2="12" y2="12"/><line x1="12" y1="8" x2="12.01" y2="8"/></svg>')
+            +'</div>'
+            +'<h3>'+esc(opts.title||'Are you sure?')+'</h3>'
+            +'<p>'+(opts.message||'')+'</p>'
+            +'</div>'
+            +'<div class="me-modal-footer me-confirm-footer">'
+            +'<button class="me-btn me-btn--sec" id="confirmDlgCancel">'+esc(opts.cancelLabel||'Cancel')+'</button>'
+            +'<button class="me-btn '+(danger?'me-btn--danger-solid':'me-btn--pri')+'" id="confirmDlgOk">'+esc(opts.confirmLabel||'Confirm')+'</button>'
+            +'</div>'
+            +'</div>';
+        document.body.appendChild(overlay);
+        var settled=false;
+        function finish(result){
+            if(settled)return; settled=true;
+            document.removeEventListener('keydown',onKey);
+            overlay.classList.add('closing');
+            setTimeout(function(){ if(overlay.parentNode)overlay.remove(); },150);
+            resolve(result);
+        }
+        function onKey(ev){ if(ev.key==='Escape')finish(false); }
+        overlay.addEventListener('mousedown',function(ev){ if(ev.target===overlay)finish(false); });
+        document.getElementById('confirmDlgCancel').onclick=function(){finish(false);};
+        document.getElementById('confirmDlgOk').onclick=function(){finish(true);};
+        document.addEventListener('keydown',onKey);
+        setTimeout(function(){ var okBtn=document.getElementById('confirmDlgOk'); if(okBtn)okBtn.focus(); },10);
+    });
+}
 
 // Small overflow menu ("More"/"Share" buttons) — collapses a row of
 // secondary actions into one button + dropdown instead of a wall of
@@ -3184,20 +3258,20 @@ function renderEnrollment(){
             h+='<td><span style="font-size:.75rem;font-weight:600;color:'+formsColor+'">'+formsDone+'/'+formsTotal+'</span></td>';
             h+='<td><span style="font-size:.75rem;font-weight:600;color:'+payColor+'">'+esc(e.paymentStatus||'pending')+'</span></td>';
             h+='<td style="text-align:right" onclick="event.stopPropagation()"><div style="display:flex;gap:3px;justify-content:flex-end;flex-wrap:wrap">';
-            h+='<button class="me-btn me-btn--sec me-btn--sm" onclick="CampistryMe.viewApplication(\''+esc(id)+'\')">Review</button>';
+            h+='<button class="me-btn me-btn--sec me-btn--sm" onclick="CampistryMe.viewApplication(\''+esc(id)+'\')">'+ico('review')+'Review</button>';
             // Status change buttons
             if(e.status==='applied'){
                 h+='<button class="me-btn me-btn--pri me-btn--sm" onclick="CampistryMe.updateEnrollStatus(\''+esc(id)+'\',\'accepted\')">Accept</button>';
                 h+='<button class="me-btn me-btn--sec me-btn--sm" onclick="CampistryMe.updateEnrollStatus(\''+esc(id)+'\',\'waitlisted\')">Waitlist</button>';
             }else if(e.status==='accepted'){
-                h+='<button class="me-btn me-btn--pri me-btn--sm" onclick="CampistryMe.enrollCamper(\''+esc(id)+'\')">Enroll</button>';
-                h+='<button class="me-btn me-btn--sec me-btn--sm" onclick="CampistryMe.generateParentInvite(\''+esc(id)+'\')" title="Get parent portal invite link">🔗 Invite</button>';
-                h+='<button class="me-btn me-btn--ghost me-btn--sm" style="color:var(--err)" onclick="CampistryMe.rescindEnrollment(\''+esc(id)+'\')">Rescind</button>';
+                h+='<button class="me-btn me-btn--pri me-btn--sm" onclick="CampistryMe.enrollCamper(\''+esc(id)+'\')">'+ico('enroll')+'Enroll</button>';
+                h+='<button class="me-btn me-btn--sec me-btn--sm" onclick="CampistryMe.generateParentInvite(\''+esc(id)+'\')" title="Get parent portal invite link">'+ico('invite')+'Invite</button>';
+                h+='<button class="me-btn me-btn--ghost-danger me-btn--sm" onclick="CampistryMe.rescindEnrollment(\''+esc(id)+'\')">'+ico('rescind')+'Rescind</button>';
             }else if(e.status==='waitlisted'){
                 h+='<button class="me-btn me-btn--sec me-btn--sm" onclick="CampistryMe.updateEnrollStatus(\''+esc(id)+'\',\'accepted\')">Accept</button>';
             }else if(e.status==='enrolled'){
-                h+='<button class="me-btn me-btn--sec me-btn--sm" onclick="CampistryMe.generateParentInvite(\''+esc(id)+'\')" title="Get parent portal invite link">🔗 Invite</button>';
-                h+='<button class="me-btn me-btn--ghost me-btn--sm" style="color:var(--err)" onclick="CampistryMe.rescindEnrollment(\''+esc(id)+'\')">Rescind</button>';
+                h+='<button class="me-btn me-btn--sec me-btn--sm" onclick="CampistryMe.generateParentInvite(\''+esc(id)+'\')" title="Get parent portal invite link">'+ico('invite')+'Invite</button>';
+                h+='<button class="me-btn me-btn--ghost-danger me-btn--sm" onclick="CampistryMe.rescindEnrollment(\''+esc(id)+'\')">'+ico('rescind')+'Rescind</button>';
             }else if(e.status==='withdrawn'||e.status==='declined'){
                 h+='<button class="me-btn me-btn--sec me-btn--sm" onclick="CampistryMe.updateEnrollStatus(\''+esc(id)+'\',\'waitlisted\')">Re-add to waitlist</button>';
             }
@@ -3216,10 +3290,16 @@ function setRegFilter(f){ regFilter=f; renderEnrollment(); }
 // camper from the roster (so they drop off the Campers list), cascading the
 // removal through families / bunk assignments. The application record stays
 // for the audit trail. Frees a session seat → next waitlisted is promoted.
-function rescindEnrollment(id){
+async function rescindEnrollment(id){
     var e=enrollments[id]; if(!e) return;
     var nm=e.camperName||'this camper';
-    if(!confirm('Rescind '+nm+'’s registration?\n\nThey are removed from the Campers list. The application stays here marked Withdrawn. This cannot be undone.')) return;
+    var ok=await confirmDialog({
+        title:'Rescind Registration?',
+        message:'<strong>'+esc(nm)+'</strong> will be removed from the Campers list. The application stays here marked <strong>Withdrawn</strong> for the audit trail. This cannot be undone.',
+        confirmLabel:'Rescind',
+        danger:true
+    });
+    if(!ok)return;
     if(e.camperName && roster[e.camperName]){ delete roster[e.camperName]; cascadeCamperDelete(e.camperName); }
     var prev=e.status; e.status='withdrawn';
     e.statusHistory=e.statusHistory||[];
@@ -4000,13 +4080,22 @@ function viewApplication(id){
     document.getElementById('avHead').innerHTML=head;
 
     var b='';
-    function sec(title){return'<div style="font-size:.75rem;font-weight:700;color:var(--me);text-transform:uppercase;letter-spacing:.04em;margin:14px 0 6px;padding-bottom:3px;border-bottom:1px solid var(--s100)">'+title+'</div>'}
+    // Each sec() closes the previous section's card and opens a new one, so
+    // the whole body reads as a stack of grouped cards instead of one long
+    // undifferentiated text dump. The final open card is closed just before
+    // it's written to avBody, below.
+    var _secOpen=false;
+    function sec(title){
+        var out=_secOpen?'</div>':'';
+        _secOpen=true;
+        return out+'<div class="av-sec"><div class="av-sec-hd">'+title+'</div>';
+    }
     // ★★★ STORED-XSS HARDENING (mirrors printApplication): every enrollment
     // field originates from the UNAUTHENTICATED public registration form
     // (campistry_register.html). row() now ESCAPES the value by default; use
     // rowRaw() only for HTML we built ourselves (links / pre-escaped spans).
-    function row(l,v){if(!v)return'';return'<div style="display:flex;gap:8px;padding:2px 0;font-size:.82rem"><span style="color:var(--s400);min-width:100px;flex-shrink:0">'+esc(l)+'</span><span style="color:var(--s800);font-weight:500">'+esc(v)+'</span></div>'}
-    function rowRaw(l,v){if(!v)return'';return'<div style="display:flex;gap:8px;padding:2px 0;font-size:.82rem"><span style="color:var(--s400);min-width:100px;flex-shrink:0">'+esc(l)+'</span><span style="color:var(--s800);font-weight:500">'+v+'</span></div>'}
+    function row(l,v){if(!v)return'';return'<div class="av-row"><span class="av-row-l">'+esc(l)+'</span><span class="av-row-v">'+esc(v)+'</span></div>'}
+    function rowRaw(l,v){if(!v)return'';return'<div class="av-row"><span class="av-row-l">'+esc(l)+'</span><span class="av-row-v">'+v+'</span></div>'}
     function isSafeImageDataUrl(s){return typeof s==='string'&&/^data:image\/(png|jpeg|jpg|gif|webp);base64,[A-Za-z0-9+\/=]+$/.test(s);}
 
     b+=sec('Application');
@@ -4127,6 +4216,7 @@ function viewApplication(id){
     b+=sec('Internal Notes');
     b+='<textarea id="avNotes" style="width:100%;padding:8px 10px;border:1.5px solid var(--s200);border-radius:var(--r);font-size:.82rem;font-family:var(--font);min-height:60px;resize:vertical;outline:none" placeholder="Add internal notes (only visible to admin)...">'+(e.adminNotes?esc(e.adminNotes):'')+'</textarea>';
     b+='<button class="me-btn me-btn--sec me-btn--sm" style="margin-top:6px" onclick="CampistryMe.saveAppNote(\''+esc(id)+'\')">Save Notes</button>';
+    if(_secOpen)b+='</div>';
 
     document.getElementById('avBody').innerHTML=b;
 
@@ -4137,15 +4227,15 @@ function viewApplication(id){
         f+='<button class="me-btn me-btn--sec" onclick="CampistryMe.updateEnrollStatus(\''+esc(id)+'\',\'waitlisted\');CampistryMe.closeModal(\'appViewModal\')">Waitlist</button>';
         f+='<button class="me-btn me-btn--danger" onclick="CampistryMe.updateEnrollStatus(\''+esc(id)+'\',\'declined\');CampistryMe.closeModal(\'appViewModal\')">Decline</button>';
     }else if(e.status==='accepted'){
-        f+='<button class="me-btn me-btn--pri" onclick="CampistryMe.enrollCamper(\''+esc(id)+'\');CampistryMe.closeModal(\'appViewModal\')">Enroll Now</button>';
-        f+='<button class="me-btn me-btn--sec" onclick="CampistryMe.generateParentInvite(\''+esc(id)+'\')">🔗 Get Invite Link</button>';
+        f+='<button class="me-btn me-btn--pri" onclick="CampistryMe.enrollCamper(\''+esc(id)+'\');CampistryMe.closeModal(\'appViewModal\')">'+ico('enroll')+'Enroll Now</button>';
+        f+='<button class="me-btn me-btn--sec" onclick="CampistryMe.generateParentInvite(\''+esc(id)+'\')">'+ico('invite')+'Get Invite Link</button>';
         f+='<button class="me-btn me-btn--sec" onclick="CampistryMe.openSendPostAcceptModal(\''+esc(id)+'\')" title="Bunkmate requests and other post-acceptance choices">'+(e.postAccept?'✓ ':'')+'Post-Acceptance Form</button>';
         f+='<button class="me-btn me-btn--danger" onclick="CampistryMe.updateEnrollStatus(\''+esc(id)+'\',\'declined\');CampistryMe.closeModal(\'appViewModal\')">Decline</button>';
     }else if(e.status==='waitlisted'){
         f+='<button class="me-btn me-btn--pri" onclick="CampistryMe.updateEnrollStatus(\''+esc(id)+'\',\'accepted\');CampistryMe.closeModal(\'appViewModal\')">Accept</button>';
         f+='<button class="me-btn me-btn--danger" onclick="CampistryMe.updateEnrollStatus(\''+esc(id)+'\',\'declined\');CampistryMe.closeModal(\'appViewModal\')">Decline</button>';
     }else if(e.status==='enrolled'){
-        f+='<button class="me-btn me-btn--sec" onclick="CampistryMe.generateParentInvite(\''+esc(id)+'\')">🔗 Get Invite Link</button>';
+        f+='<button class="me-btn me-btn--sec" onclick="CampistryMe.generateParentInvite(\''+esc(id)+'\')">'+ico('invite')+'Get Invite Link</button>';
         f+='<button class="me-btn me-btn--sec" onclick="CampistryMe.openSendPostAcceptModal(\''+esc(id)+'\')" title="Bunkmate requests and other post-acceptance choices">'+(e.postAccept?'✓ ':'')+'Post-Acceptance Form</button>';
         f+='<button class="me-btn me-btn--sec" onclick="CampistryMe.updateEnrollStatus(\''+esc(id)+'\',\'withdrawn\');CampistryMe.closeModal(\'appViewModal\')">Withdraw</button>';
     }
