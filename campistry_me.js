@@ -3192,8 +3192,14 @@ function renderEnrollment(){
 
     var h='<div class="sec-hd"><div><h2 class="sec-title">Registration & Enrollment</h2><p class="sec-desc">'+total+' application'+(total!==1?'s':'')+' · '+enrolled+' enrolled · '+waitlisted+' waitlisted</p></div>';
     h+='<div class="sec-actions">'
-        +'<button class="me-btn me-btn--teal" onclick="CampistryMe.openFormConfig()">Customize Registration Form</button>'
-        +'<button class="me-btn me-btn--sec me-btn--sm" onclick="CampistryMe.openPostAcceptFormConfig()" title="Sent after a camper is accepted — bunkmate requests and other choices">Post-Acceptance Form</button>'
+        // Both form builders live behind one "Customize Forms" dropdown —
+        // they're the same kind of action (open the split-view builder),
+        // so two separate buttons here was noise, not two real choices.
+        +'<div class="me-more-wrap"><button class="me-btn me-btn--teal" onclick="CampistryMe._toggleMenu(\'regFormsMenu\')">Customize Forms ▾</button>'
+        +'<div class="me-more-menu" id="regFormsMenu" style="min-width:200px">'
+        +'<button onclick="CampistryMe.openFormConfig()">Registration Form</button>'
+        +'<button onclick="CampistryMe.openPostAcceptFormConfig()" title="Sent after a camper is accepted — bunkmate requests and other choices">Post-Acceptance Form</button>'
+        +'</div></div>'
         +'<button class="me-btn me-btn--pri" onclick="CampistryMe.addApplication()">+ Manual Entry</button>'
         +'<div class="me-more-wrap"><button class="me-btn me-btn--sec me-btn--sm" onclick="CampistryMe._toggleMenu(\'regLinkMenu\')">🔗 Get Link</button>'
         +'<div class="me-more-menu" id="regLinkMenu" style="min-width:250px">'
@@ -3265,7 +3271,7 @@ function renderEnrollment(){
             // for the page-header menus) so a row never shows more than one
             // button plus one menu trigger, no matter how many actions exist.
             var menuId='regRowMenu_'+id;
-            h+='<td style="text-align:right" onclick="event.stopPropagation()"><div style="display:flex;gap:6px;justify-content:flex-end;align-items:center">';
+            h+='<td style="text-align:right;white-space:nowrap" onclick="event.stopPropagation()"><div style="display:flex;gap:6px;justify-content:flex-end;align-items:center;white-space:nowrap">';
             if(e.status==='applied'){
                 h+='<button class="me-btn me-btn--pri me-btn--sm" onclick="CampistryMe.updateEnrollStatus(\''+esc(id)+'\',\'accepted\')">Accept</button>';
                 h+='<div class="me-more-wrap"><button class="me-btn me-btn--sec me-btn--sm" onclick="CampistryMe._toggleMenu(\''+menuId+'\')">⋯</button>'
