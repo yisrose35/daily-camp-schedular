@@ -25,6 +25,7 @@ var campersView='list'; // 'list' | 'family' — Families now lives inside the C
 var regFilter='all';    // Registration section filter: all | applied | waitlisted | accepted | enrolled | withdrawn | declined
 var staffApplications={};   // Staff hiring: applicant id → application record
 var staffFormConfig=null;   // Staff application form config — mirrors formConfig, drives campistry_staff_apply.html
+var paFormConfig=null;      // Post-acceptance form config — mirrors formConfig, drives campistry_postaccept.html
 var counselorVisibility=null; // What counselors see in Lite; null = catalogue defaults
 var staffFilter='all';      // Staffing pipeline filter
 var leads={};               // Inquiry CRM: lead id → prospective-family record
@@ -151,6 +152,7 @@ function loadData(){
         counselorVisibility=(me.counselorVisibility&&typeof me.counselorVisibility==='object')?me.counselorVisibility:null;
         formConfig=me.formConfig||null;
         staffFormConfig=me.staffFormConfig||null;
+        paFormConfig=me.postAcceptFormConfig||null;
         printSheets=Array.isArray(me.printSheets)?me.printSheets:[];
         savedReports=Array.isArray(me.savedReports)?me.savedReports:[];
         var pr=me.payroll||{};
@@ -249,6 +251,7 @@ function save(){
             enrollSettings:enrollSettings,
             formConfig:formConfig,
             staffFormConfig:staffFormConfig,
+            postAcceptFormConfig:paFormConfig,
             printSheets:printSheets,
             savedReports:savedReports,
             promoCodes:enrollSettings.promoCodes||(g.campistryMe?.promoCodes)||{},
@@ -3116,6 +3119,7 @@ function renderEnrollment(){
     var h='<div class="sec-hd"><div><h2 class="sec-title">Registration & Enrollment</h2><p class="sec-desc">'+total+' application'+(total!==1?'s':'')+' · '+enrolled+' enrolled · '+waitlisted+' waitlisted</p></div>';
     h+='<div class="sec-actions">'
         +'<button class="me-btn me-btn--teal" onclick="CampistryMe.openFormConfig()">Customize Registration Form</button>'
+        +'<button class="me-btn me-btn--sec me-btn--sm" onclick="CampistryMe.openPostAcceptFormConfig()" title="Sent after a camper is accepted — bunkmate requests and other choices">Post-Acceptance Form</button>'
         +'<button class="me-btn me-btn--pri" onclick="CampistryMe.addApplication()">+ Manual Entry</button>'
         +'<div class="me-more-wrap"><button class="me-btn me-btn--sec me-btn--sm" onclick="CampistryMe._toggleMenu(\'regLinkMenu\')">🔗 Get Link</button>'
         +'<div class="me-more-menu" id="regLinkMenu" style="min-width:250px">'
@@ -3123,11 +3127,6 @@ function renderEnrollment(){
         +'<button onclick="CampistryMe.copyRegLink()">📋 Copy Link</button>'
         +'<button onclick="CampistryMe.openSendRegLinkModal()">✉ Send Link</button>'
         +'<button onclick="CampistryMe.showRegistrationQR()">▦ QR Code</button>'
-        +'<div style="border-top:1px solid var(--s100);margin:4px 0"></div>'
-        +'<button onclick="CampistryMe.syncAllParentPortals()" title="Use if a parent sees a child that isn\'t theirs">↻ Sync Parent Portals</button>'
-        +'<button onclick="CampistryMe.auditParentEmails()" title="Flags a parent email shared across families">✉ Check Parent Emails</button>'
-        +'<div style="border-top:1px solid var(--s100);margin:4px 0"></div>'
-        +'<button onclick="CampistryMe.previewBlankForm()">📄 Preview Blank Form</button>'
         +'</div></div>'
         +'</div></div>';
 
@@ -3304,6 +3303,39 @@ function getFormConfig(){
     return{sections:sections,customQuestions:[],welcomeMessage:'',instructions:'',fields:{},sectionOrder:FC_SECTIONS.map(function(s){return s.key}),branding:{}};
 }
 
+// ── POST-ACCEPTANCE FORM ─────────────────────────────────────────────────
+// A second, separate form sent AFTER a camper is Accepted — distinct from
+// the registration/application form above. Collects choice-style info
+// (bunkmate request, session confirmation, t-shirt, transportation, photo
+// consent) back into the SAME enrollment record (enrollments[id].postAccept).
+// Same "nothing mandatory" philosophy as the registration/staff builders —
+// every section and field here is camp-configurable, nothing is locked.
+var PAF_SECTIONS=[
+    {key:'bunk',label:'Bunk & Session Choices',desc:'Bunkmate request, separation request, session confirmation',default:true},
+    {key:'logistics',label:'Logistics',desc:'T-shirt size, transportation',default:true},
+    {key:'consent',label:'Photo & Media Consent',desc:'Permission to use photos/video',default:true}
+];
+var PAF_FIELD_CATALOG={
+    bunk:[
+        {id:'bunkmate',label:'Bunkmate Request'},
+        {id:'separate',label:'Separation Request'},
+        {id:'sessionConfirm',label:'Confirm Session'}
+    ],
+    logistics:[
+        {id:'shirt',label:'T-Shirt Size'},
+        {id:'transportation',label:'Transportation'}
+    ],
+    consent:[
+        {id:'photoConsent',label:'Photo/Media Permission'}
+    ]
+};
+function getPostAcceptFormConfig(){
+    if(paFormConfig)return paFormConfig;
+    var sections={};
+    PAF_SECTIONS.forEach(function(s){sections[s.key]={enabled:s.default}});
+    return{sections:sections,customQuestions:[],welcomeMessage:'',instructions:'',fields:{},sectionOrder:PAF_SECTIONS.map(function(s){return s.key}),branding:{},autoSend:false};
+}
+
 // Shared by the parent (FC_FIELD_CATALOG) and staff (SFC_FIELD_CATALOG)
 // advanced-tab renderers — one field row with Enabled/Required checkboxes
 // and a relabel input. `locked` fields render checked+disabled so the
@@ -3374,9 +3406,10 @@ function _readSectionOrder(prefix){
 // postMessage, so the preview updates in real time without ever writing
 // the draft to localStorage (nothing is saved until Save is clicked).
 // ═══════════════════════════════════════════════════════════════
-var _fbKind=null;        // 'registration' | 'staff' — which form is open
+var _fbKind=null;        // 'registration' | 'staff' | 'postaccept' — which form is open
 var _fbPushTimer=null;
 var _fbMsgListenerInstalled=false;
+var _fbPreviewWin=null;  // full-tab live preview opened via the header's Preview button
 
 // Reads the same DOM the old modal's Save button read — one source of
 // truth shared by the live-preview pusher and the real Save.
@@ -3424,11 +3457,40 @@ function _collectStaffFormConfigDraft(){
         }
     };
 }
+// Reads the same DOM the Post-Acceptance builder's Save button reads.
+function _collectPostAcceptFormConfigDraft(){
+    var sections={};
+    document.querySelectorAll('.pafSec').forEach(function(cb){sections[cb.dataset.key]={enabled:cb.checked}});
+    return {
+        sections:sections,
+        customQuestions:_readCustomQuestions('paf'),
+        welcomeMessage:(document.getElementById('pafWelcome')?.value||'').trim(),
+        instructions:(document.getElementById('pafInstructions')?.value||'').trim(),
+        fields:_readAdvFields('paf',PAF_FIELD_CATALOG),
+        sectionOrder:_readSectionOrder('paf'),
+        autoSend:!!(document.getElementById('pafAutoSend')&&document.getElementById('pafAutoSend').checked),
+        branding:{
+            logo:(document.getElementById('pafLogoData')?.value||''),
+            color:(document.getElementById('pafAccentColor')?.value||'')
+        }
+    };
+}
 function _fbCollectAndSend(){
+    var fc=(_fbKind==='staff')?_collectStaffFormConfigDraft():(_fbKind==='postaccept')?_collectPostAcceptFormConfigDraft():_collectFormConfigDraft();
     var frame=document.getElementById('fbPreviewFrame');
-    if(!frame||!frame.contentWindow)return;
-    var fc=(_fbKind==='staff')?_collectStaffFormConfigDraft():_collectFormConfigDraft();
-    frame.contentWindow.postMessage({type:'campistry-form-preview',config:fc},'*');
+    if(frame&&frame.contentWindow)frame.contentWindow.postMessage({type:'campistry-form-preview',config:fc},'*');
+    if(_fbPreviewWin&&!_fbPreviewWin.closed)_fbPreviewWin.postMessage({type:'campistry-form-preview',config:fc},'*');
+}
+// "Preview" button in the builder header — opens the actual public form in
+// a full browser tab (not the cramped split-view iframe) so the office can
+// see exactly what parents/staff/accepted families will see. Live-synced
+// the same way the embedded iframe is: the tab announces itself ready, this
+// pushes the current unsaved draft, and every subsequent edit re-pushes.
+function _fbOpenPreviewWindow(){
+    var isStaff=_fbKind==='staff', isPaf=_fbKind==='postaccept';
+    var url=(isStaff?'campistry_staff_apply.html':isPaf?'campistry_postaccept.html':'campistry_register.html')+'?preview=1';
+    _fbPreviewWin=window.open(url,'_blank');
+    if(!_fbPreviewWin)toast('Allow pop-ups to preview the form','error');
 }
 function _fbPushPreview(){
     clearTimeout(_fbPushTimer);
@@ -3436,13 +3498,14 @@ function _fbPushPreview(){
 }
 
 function openFormBuilder(kind){
-    _fbKind=(kind==='staff')?'staff':'registration';
+    _fbKind=(kind==='staff')?'staff':(kind==='postaccept')?'postaccept':'registration';
     var isStaff=_fbKind==='staff';
-    document.getElementById('fbTitle').textContent=isStaff?'Staff Application Form Builder':'Registration Form Builder';
+    var isPaf=_fbKind==='postaccept';
+    document.getElementById('fbTitle').textContent=isStaff?'Staff Application Form Builder':isPaf?'Post-Acceptance Form Builder':'Registration Form Builder';
 
     var panel=document.getElementById('fbPanel');
-    panel.innerHTML=isStaff?_buildSfcPanelHtml():_buildFcPanelHtml();
-    _initOrderDrag(isStaff?'sfc':'fc');
+    panel.innerHTML=isStaff?_buildSfcPanelHtml():isPaf?_buildPafPanelHtml():_buildFcPanelHtml();
+    _initOrderDrag(isStaff?'sfc':isPaf?'paf':'fc');
 
     // Live-update the preview on any edit — typing, checkboxes, drag
     // reorder, or a row being added/removed — via one delegated listener
@@ -3456,14 +3519,16 @@ function openFormBuilder(kind){
     panel._fbObserver=mo;
 
     var saveBtn=document.getElementById('fbSaveBtn');
-    saveBtn.onclick=isStaff?saveStaffFormConfig:saveFormConfig;
+    saveBtn.onclick=isStaff?saveStaffFormConfig:isPaf?savePostAcceptFormConfig:saveFormConfig;
 
     if(!_fbMsgListenerInstalled){
         _fbMsgListenerInstalled=true;
         window.addEventListener('message',function(ev){
             if(!ev.data||ev.data.type!=='campistry-form-preview-ready')return;
             var f=document.getElementById('fbPreviewFrame');
-            if(!f||ev.source!==f.contentWindow)return;
+            var fromIframe=f&&ev.source===f.contentWindow;
+            var fromPreviewWin=_fbPreviewWin&&ev.source===_fbPreviewWin;
+            if(!fromIframe&&!fromPreviewWin)return;
             _fbCollectAndSend();
         });
     }
@@ -3473,7 +3538,7 @@ function openFormBuilder(kind){
     // display:none, which left the preview frame stuck mid-parse.
     document.getElementById('formBuilderOverlay').style.display='flex';
     var frame=document.getElementById('fbPreviewFrame');
-    frame.src=(isStaff?'campistry_staff_apply.html':'campistry_register.html')+'?preview=1';
+    frame.src=(isStaff?'campistry_staff_apply.html':isPaf?'campistry_postaccept.html':'campistry_register.html')+'?preview=1';
 }
 function closeFormBuilder(){
     var panel=document.getElementById('fbPanel');
@@ -3481,6 +3546,7 @@ function closeFormBuilder(){
     document.getElementById('formBuilderOverlay').style.display='none';
     var frame=document.getElementById('fbPreviewFrame');
     if(frame)frame.src='about:blank';
+    _fbPreviewWin=null; // stop tracking — a tab the office left open just stops updating, it isn't closed for them
 }
 function _brandingLogoPick(prefix,input){
     var f=input.files&&input.files[0]; if(!f)return;
@@ -3829,6 +3895,80 @@ function saveStaffFormConfig(){
     toast('Staff application form configuration saved');
 }
 
+// ═══════════════════════════════════════════════════════════════
+// POST-ACCEPTANCE FORM CUSTOMIZER — mirrors the parent Form Customizer
+// above, driving campistry_postaccept.html the same way formConfig drives
+// campistry_register.html. Adds one thing the others don't have: a
+// "Sending" toggle deciding whether the form goes out automatically the
+// moment an applicant is marked Accepted, or only when the office sends
+// it manually from the Review modal.
+// ═══════════════════════════════════════════════════════════════
+function _buildPafPanelHtml(){
+    var fc=getPostAcceptFormConfig();
+    var h=_fcTabBarHtml('paf');
+
+    // ── QUICK SETUP ──
+    h+='<div id="pafTabQuick">';
+
+    var welcomeHtml='<div class="fg"><label class="fl">Welcome Message</label><input class="fi" id="pafWelcome" value="'+esc(fc.welcomeMessage||'')+'" placeholder="e.g., Welcome to the family! A few more choices before camp starts."></div>'
+        +'<div class="fg" style="margin-bottom:0"><label class="fl">Instructions for Parents</label><textarea class="fi" id="pafInstructions" style="min-height:50px;resize:vertical" placeholder="Any special instructions shown at the top of the form">'+(fc.instructions||'')+'</textarea></div>';
+    h+=_accCard('Welcome Message',welcomeHtml,{open:true});
+
+    var sendHtml='<label style="display:flex;align-items:center;gap:10px;padding:4px 0;cursor:pointer">'
+        +'<input type="checkbox" id="pafAutoSend" '+(fc.autoSend?'checked':'')+' style="accent-color:var(--me);flex-shrink:0;width:16px;height:16px">'
+        +'<div><div style="font-size:.85rem;font-weight:600;color:var(--s800)">Send automatically on acceptance</div>'
+        +'<div style="font-size:.72rem;color:var(--s400)">When on, this form is emailed the moment an applicant is marked Accepted. When off, send it yourself from the applicant\'s Review panel whenever you\'re ready.</div></div></label>';
+    h+=_accCard('Sending',sendHtml,{open:true});
+
+    var sectionsHtml='<p style="font-size:.78rem;color:var(--s400);margin:0 0 10px">Turn sections on or off.</p>';
+    PAF_SECTIONS.forEach(function(s){
+        var enabled=fc.sections&&fc.sections[s.key]?fc.sections[s.key].enabled:s.default;
+        sectionsHtml+='<label style="display:flex;align-items:center;gap:10px;padding:9px 10px;border-bottom:1px solid var(--s100);cursor:pointer">';
+        sectionsHtml+='<input type="checkbox" class="pafSec" data-key="'+s.key+'" '+(enabled?'checked':'')+' style="accent-color:var(--me);flex-shrink:0;width:16px;height:16px">';
+        sectionsHtml+='<div style="flex:1"><div style="font-size:.85rem;font-weight:600;color:var(--s800)">'+esc(s.label)+'</div>';
+        sectionsHtml+='<div style="font-size:.72rem;color:var(--s400)">'+esc(s.desc)+'</div></div></label>';
+    });
+    h+=_accCard('Sections',sectionsHtml,{open:true});
+
+    var qHtml='<p style="font-size:.78rem;color:var(--s400);margin:0 0 10px">Your own questions, shown in an "Additional Information" section on the form.</p>'
+        +'<div id="pafQList">'+(fc.customQuestions||[]).map(function(q,i){return renderCustomQ(q,i,'paf');}).join('')+'</div>'
+        +'<button class="me-btn me-btn--sec me-btn--sm" style="margin-top:6px" onclick="CampistryMe.addPafCustomQ()">+ Add Question</button>';
+    h+=_accCard('Custom Questions',qHtml,{badge:(fc.customQuestions||[]).length+' added'});
+    h+='</div>'; // /pafTabQuick
+
+    // ── ADVANCED ──
+    h+='<div id="pafTabAdv" style="display:none">';
+
+    var brandHtml='<div class="fg"><label class="fl">Camp Logo</label>'
+        +'<input type="hidden" id="pafLogoData" value="'+esc((fc.branding&&fc.branding.logo)||'')+'">'
+        +'<img id="pafLogoPreview" src="'+esc((fc.branding&&fc.branding.logo)||'')+'" style="display:'+((fc.branding&&fc.branding.logo)?'block':'none')+';max-height:60px;max-width:200px;margin-bottom:6px;border-radius:6px">'
+        +'<div style="display:flex;gap:8px;align-items:center"><input type="file" accept="image/*" class="fi" style="flex:1" onchange="CampistryMe._brandingLogoPick(\'paf\',this)"><button type="button" class="me-btn me-btn--ghost me-btn--sm" onclick="CampistryMe._brandingLogoClear(\'paf\')">Remove</button></div></div>'
+        +'<div class="fg" style="margin-bottom:0"><label class="fl">Accent Color</label><input type="color" id="pafAccentColor" value="'+esc((fc.branding&&fc.branding.color)||'#D97706')+'" style="width:60px;height:34px;padding:2px;border:1.5px solid var(--s200);border-radius:var(--r);cursor:pointer"></div>';
+    h+=_accCard('Branding',brandHtml,{open:true});
+
+    var orderHtml='<p style="font-size:.78rem;color:var(--s400);margin:0 0 10px">Reorder how sections appear on the form.</p>'+_renderSectionOrderList('paf',PAF_SECTIONS,fc.sectionOrder);
+    h+=_accCard('Section Order',orderHtml,{open:true});
+
+    var fieldsHtml='<p style="font-size:.78rem;color:var(--s400);margin:0 0 10px">Show/hide, require, or relabel individual fields — pick a section to open it.</p>';
+    Object.keys(PAF_FIELD_CATALOG).forEach(function(sectionKey){
+        var sec=PAF_SECTIONS.filter(function(s){return s.key===sectionKey})[0];
+        var rows=PAF_FIELD_CATALOG[sectionKey].map(function(f){return _renderAdvFieldRow('paf',sectionKey,f,(fc.fields||{})[f.id]);}).join('');
+        fieldsHtml+=_accCard(sec?sec.label:sectionKey,rows,{sub:true});
+    });
+    h+=_accCard('Field-by-Field Control',fieldsHtml,{});
+    h+='</div>'; // /pafTabAdv
+    return h;
+}
+function openPostAcceptFormConfig(){ openFormBuilder('postaccept'); }
+function addPafCustomQ(){ addCustomQ('paf'); }
+
+function savePostAcceptFormConfig(){
+    paFormConfig=_collectPostAcceptFormConfigDraft();
+    save();
+    closeFormBuilder();
+    toast('Post-acceptance form configuration saved');
+}
+
 function saveFormConfig(){
     formConfig=_collectFormConfigDraft();
 
@@ -3949,6 +4089,29 @@ function viewApplication(id){
         b+='<img src="'+e.signature+'" style="max-width:300px;height:80px;border:1px solid var(--s200);border-radius:var(--r);object-fit:contain;background:#fff">';
     }
 
+    // Post-acceptance form responses — bunkmate/session/logistics choices
+    // the parent submitted after acceptance, distinct from the application
+    // fields above. Only shows once something's actually come back.
+    if(e.postAccept){
+        b+=sec('Post-Acceptance Responses');
+        b+=row('Submitted',e.postAccept.submittedDate?new Date(e.postAccept.submittedDate).toLocaleString():'—');
+        b+=row('Bunkmate Request',e.postAccept.bunkmate);
+        b+=row('Separation Request',e.postAccept.separate);
+        b+=row('Session Confirmation',e.postAccept.sessionConfirm);
+        b+=row('T-Shirt Size',e.postAccept.shirt);
+        b+=row('Transportation',e.postAccept.transportation);
+        b+=row('Photo/Media Permission',e.postAccept.photoConsent?'Yes':(e.postAccept.photoConsent===false?'No':''));
+        if(e.postAccept.customAnswers&&Object.keys(e.postAccept.customAnswers).length){
+            var pafLabels=e.postAccept.customQuestionLabels||[];
+            Object.entries(e.postAccept.customAnswers).forEach(function([key,val]){
+                var idx=parseInt(key.replace('q',''));
+                var label=pafLabels[idx]||('Question '+(idx+1));
+                var display=Array.isArray(val)?val.join(', '):val;
+                b+=row(label,display);
+            });
+        }
+    }
+
     // Sibling group
     if(e.siblingGroup){
         b+=sec('Sibling Group');
@@ -3976,12 +4139,14 @@ function viewApplication(id){
     }else if(e.status==='accepted'){
         f+='<button class="me-btn me-btn--pri" onclick="CampistryMe.enrollCamper(\''+esc(id)+'\');CampistryMe.closeModal(\'appViewModal\')">Enroll Now</button>';
         f+='<button class="me-btn me-btn--sec" onclick="CampistryMe.generateParentInvite(\''+esc(id)+'\')">🔗 Get Invite Link</button>';
+        f+='<button class="me-btn me-btn--sec" onclick="CampistryMe.openSendPostAcceptModal(\''+esc(id)+'\')" title="Bunkmate requests and other post-acceptance choices">'+(e.postAccept?'✓ ':'')+'Post-Acceptance Form</button>';
         f+='<button class="me-btn me-btn--danger" onclick="CampistryMe.updateEnrollStatus(\''+esc(id)+'\',\'declined\');CampistryMe.closeModal(\'appViewModal\')">Decline</button>';
     }else if(e.status==='waitlisted'){
         f+='<button class="me-btn me-btn--pri" onclick="CampistryMe.updateEnrollStatus(\''+esc(id)+'\',\'accepted\');CampistryMe.closeModal(\'appViewModal\')">Accept</button>';
         f+='<button class="me-btn me-btn--danger" onclick="CampistryMe.updateEnrollStatus(\''+esc(id)+'\',\'declined\');CampistryMe.closeModal(\'appViewModal\')">Decline</button>';
     }else if(e.status==='enrolled'){
         f+='<button class="me-btn me-btn--sec" onclick="CampistryMe.generateParentInvite(\''+esc(id)+'\')">🔗 Get Invite Link</button>';
+        f+='<button class="me-btn me-btn--sec" onclick="CampistryMe.openSendPostAcceptModal(\''+esc(id)+'\')" title="Bunkmate requests and other post-acceptance choices">'+(e.postAccept?'✓ ':'')+'Post-Acceptance Form</button>';
         f+='<button class="me-btn me-btn--sec" onclick="CampistryMe.updateEnrollStatus(\''+esc(id)+'\',\'withdrawn\');CampistryMe.closeModal(\'appViewModal\')">Withdraw</button>';
     }
     f+='<button class="me-btn me-btn--sec" onclick="CampistryMe.closeModal(\'appViewModal\')">Close</button>';
@@ -4256,61 +4421,65 @@ async function _sendLinkNow(isStaff){
     }
 }
 
-// Render the configured registration form as a printable blank — parents' PDF.
-// Opens a print window (Save as PDF) so the office can hand out a paper copy or
-// preview exactly what the online form asks for.
-function previewBlankForm(){
-    var fc=getFormConfig();
-    var campName='';
-    try{ campName=(JSON.parse(localStorage.getItem('campGlobalSettings_v1')||'{}').campName)||''; }catch(e){}
-    // Blank field row: a label above a printed underline / box.
-    function field(label,tall){
-        return '<div class="fld"><div class="lbl">'+esc(label)+'</div><div class="'+(tall?'box':'line')+'"></div></div>';
+// ── POST-ACCEPTANCE FORM: SENDING ────────────────────────────────────────
+// One link per enrollment (not a shared camp-wide link like registration/
+// staff) — the public page reads ?id=<enrollmentId> to know which camper's
+// record to write choices back into. Reuses the same #sendLinkModal shell
+// as the registration/staff "Send Link" flow, just pre-filled for one
+// recipient instead of an audience picker.
+function _postAcceptUrl(id){
+    return window.location.origin+'/campistry_postaccept.html?id='+encodeURIComponent(id);
+}
+function openSendPostAcceptModal(id){
+    var e=enrollments[id]; if(!e){toast('Application not found','error');return;}
+    if(!e.parentEmail){toast('No parent email on file for this applicant','error');return;}
+    var url=_postAcceptUrl(id);
+    document.getElementById('slTitle').textContent='Send Post-Acceptance Form';
+    var h='<div class="fg"><label class="fl">To</label><input class="fi" value="'+esc(e.parentEmail)+'" disabled></div>';
+    h+='<div class="fg"><label class="fl">Subject</label><input class="fi" id="slSubject" value="'+esc('A few more choices for '+(e.camperName||'your camper'))+'"></div>';
+    h+='<div class="fg"><label class="fl">Message</label><textarea class="fi" id="slBodyText" style="min-height:110px;resize:vertical">'+esc('Congratulations — '+(e.camperName||'your camper')+' is accepted! Please complete a few more choices here:\n\n'+url)+'</textarea></div>';
+    document.getElementById('slBody').innerHTML=h;
+    var btn=document.getElementById('slSendBtn');
+    if(btn){ btn.disabled=false; btn.textContent='Send'; btn.onclick=function(){ _sendPostAcceptNow(id); }; }
+    openModal('sendLinkModal');
+}
+async function _sendPostAcceptNow(id){
+    var e=enrollments[id]; if(!e)return;
+    var subject=(document.getElementById('slSubject')?.value||'').trim();
+    var body=(document.getElementById('slBodyText')?.value||'').trim();
+    if(!body){toast('Enter a message','error');return;}
+    var campName='';try{var ss=JSON.parse(localStorage.getItem('campGlobalSettings_v1')||'{}');campName=ss.campName||ss.camp_name||'Camp';}catch(ex){}
+    var btn=document.getElementById('slSendBtn');
+    if(btn){btn.disabled=true;btn.textContent='Sending…';}
+    try{
+        await callEdgeFunction('send-broadcast',{to:[{email:e.parentEmail,name:e.parentName||''}],subject:subject,body:body,method:'email',campName:campName});
+        e.postAcceptSentDate=new Date().toISOString();
+        save();
+        toast('Post-acceptance form sent to '+e.parentEmail);
+        closeModal('sendLinkModal');
+    }catch(err){
+        toast('Send failed: '+(err&&err.message||'unknown error'),'error');
+    }finally{
+        if(btn){btn.disabled=false;btn.textContent='Send';}
     }
-    function row(){ return '<div class="row">'+Array.prototype.slice.call(arguments).join('')+'</div>'; }
-    var SEC={
-        camper:function(){ return row(field('Camper first name'),field('Last name'))+row(field('Date of birth'),field('Gender'))+row(field('School'),field('Grade'))+field('Teacher'); },
-        parent:function(){ return row(field('Parent / guardian name'),field('Relationship'))+row(field('Phone'),field('Email'))+field('Second parent / guardian'); },
-        address:function(){ return field('Street address')+row(field('City'),field('State'),field('ZIP')); },
-        emergency:function(){ return row(field('Emergency contact name'),field('Relationship'))+field('Phone'); },
-        medical:function(){ return field('Allergies',true)+field('Medications',true)+field('Dietary restrictions / notes',true); },
-        preferences:function(){ return row(field('Bunkmate request'),field('T-shirt size'))+field('Separate from (name)')+field('How did you hear about us?'); },
-        documents:function(){
-            var docs=(fc.documents&&fc.documents.length)?fc.documents:[{name:'Immunization records',maxFiles:1},{name:'Health form',maxFiles:1},{name:'Insurance card',maxFiles:2}];
-            return docs.map(function(d){ return '<div class="doc">☐ '+esc(d.name)+' <span class="hint">(up to '+(d.maxFiles||1)+' file'+((d.maxFiles||1)>1?'s':'')+')</span></div>'; }).join('');
-        },
-        payment:function(){ return field('Preferred payment method')+field('Promo / discount code'); },
-        signature:function(){ return '<div class="agree">☐ I have read and agree to the camp policies and waivers.</div>'+row(field('Parent signature'),field('Date')); },
-        siblings:function(){ return '<div class="hint">Additional campers may be added on the online form.</div>'; }
-    };
-    var body='';
-    FC_SECTIONS.forEach(function(s){
-        var enabled=fc.sections&&fc.sections[s.key]?fc.sections[s.key].enabled:s.default;
-        if(!enabled||!SEC[s.key])return;
-        body+='<h2>'+esc(s.label)+'</h2>'+SEC[s.key]();
-    });
-    if((fc.customQuestions||[]).length){
-        body+='<h2>Additional Information</h2>';
-        fc.customQuestions.forEach(function(q){ body+=field(q.label,q.type==='textarea'); });
+}
+// Fires only when the camp turned "Send automatically on acceptance" on in
+// the Post-Acceptance Form builder — silent (toast only), no confirm modal,
+// since the office already opted into hands-off sending.
+async function _autoSendPostAccept(id){
+    var e=enrollments[id]; if(!e||!e.parentEmail)return;
+    var url=_postAcceptUrl(id);
+    var campName='';try{var ss=JSON.parse(localStorage.getItem('campGlobalSettings_v1')||'{}');campName=ss.campName||ss.camp_name||'Camp';}catch(ex){}
+    var subject='A few more choices for '+(e.camperName||'your camper');
+    var body='Congratulations — '+(e.camperName||'your camper')+' is accepted! Please complete a few more choices here:\n\n'+url;
+    try{
+        await callEdgeFunction('send-broadcast',{to:[{email:e.parentEmail,name:e.parentName||''}],subject:subject,body:body,method:'email',campName:campName});
+        e.postAcceptSentDate=new Date().toISOString();
+        save();
+        toast('Post-acceptance form auto-sent to '+e.parentEmail);
+    }catch(err){
+        toast('Auto-send of post-acceptance form failed: '+(err&&err.message||'unknown error'),'error');
     }
-    var w=window.open('','_blank');
-    if(!w){ toast('Allow pop-ups to preview the form'); return; }
-    var css='body{font-family:Arial,Helvetica,sans-serif;color:#222;max-width:720px;margin:24px auto;padding:0 24px}'
-        +'h1{font-size:20pt;margin:0 0 2px}h2{font-size:12pt;border-bottom:2px solid #333;padding-bottom:3px;margin:20px 0 10px}'
-        +'.sub{color:#666;font-size:10pt;margin-bottom:4px}.intro{font-size:10pt;color:#444;margin:8px 0 4px;white-space:pre-wrap}'
-        +'.row{display:flex;gap:14px}.row>.fld{flex:1}.fld{margin:8px 0}.lbl{font-size:9pt;color:#555;margin-bottom:3px}'
-        +'.line{border-bottom:1px solid #999;height:20px}.box{border:1px solid #999;height:52px;border-radius:3px}'
-        +'.doc,.agree{font-size:10pt;margin:6px 0}.hint{color:#888;font-size:8.5pt}'
-        +'@media print{.noprint{display:none}}';
-    w.document.write('<!doctype html><html><head><meta charset="utf-8"><title>Registration Form'+(campName?' — '+esc(campName):'')+'</title><style>'+css+'</style></head><body>'
-        +'<h1>'+esc(campName||'Camp')+' — Registration Form</h1>'
-        +(fc.welcomeMessage?'<div class="sub">'+esc(fc.welcomeMessage)+'</div>':'')
-        +(fc.instructions?'<div class="intro">'+esc(fc.instructions)+'</div>':'')
-        +body
-        +'<div style="margin-top:26px;text-align:center;color:#999;font-size:9pt">Powered by Campistry</div>'
-        +'<div class="noprint" style="text-align:center;margin-top:18px"><button onclick="window.print()" style="padding:8px 24px;cursor:pointer">Print / Save as PDF</button></div>'
-        +'</body></html>');
-    w.document.close();
 }
 
 function deleteSession(idx){
@@ -4487,6 +4656,13 @@ function updateEnrollStatus(id,status,opts){
     // to avoid a burst of invite generation; the office can invite from the row).
     if(!opts.silent && status==='accepted'&&prev!=='accepted'&&prev!=='enrolled'){
         generateParentInvite(id);
+        // Post-acceptance form: only fires if the camp turned "Send automatically
+        // on acceptance" on in that form's builder — otherwise the office sends
+        // it manually from the applicant's Review panel whenever they're ready.
+        try{
+            var pfc=getPostAcceptFormConfig();
+            if(pfc.autoSend && enrollments[id] && enrollments[id].parentEmail) _autoSendPostAccept(id);
+        }catch(ex){}
     }
 }
 
@@ -4682,73 +4858,6 @@ function _autoProvisionParentInvites(){
     })();
 }
 
-// Rebuild EVERY active parent portal's child list from the current family /
-// roster state. Fixes any parent whose frozen invite snapshot still lists a
-// camper that has since been moved out of their family (or was mis-grouped
-// before the family rules were tightened). Silent per invite — only already-
-// issued invites are refreshed, none are created.
-function syncAllParentPortals(){
-    var seen={}, ids=[];
-    Object.keys(enrollments).forEach(function(id){
-        var en=enrollments[id];
-        if(!en||(en.status!=='accepted'&&en.status!=='enrolled')) return;
-        var key=((en.parentEmail||en.parent1Email||'')||('name:'+(en.parentName||en.parent1Name||''))).toLowerCase();
-        if(!key||seen[key]) return;
-        seen[key]=1; ids.push(id);
-    });
-    if(!ids.length){ toast('No parent portals to sync'); return; }
-    ids.forEach(function(id){ try{ _syncParentInviteSnapshot(id,true); }catch(_){} });
-    toast('Re-syncing '+ids.length+' parent portal'+(ids.length!==1?'s':'')+' from current families…');
-}
-
-// Audit which parent email each camper's messages/forms route to. Messages are
-// delivered by parent EMAIL, so any email shared across DIFFERENT families
-// means those children all land in one portal — the usual cause of "a parent
-// got another child's message". Surfaces the shared emails so they can be fixed.
-function auditParentEmails(){
-    var byEmail={};
-    function add(email,camper,famName){
-        var k=(email||'').trim().toLowerCase()||'(no email)';
-        if(!byEmail[k]) byEmail[k]={email:(email||'').trim()||'(no email)',campers:[],families:{}};
-        byEmail[k].campers.push(camper);
-        byEmail[k].families[famName||'(no family)']=1;
-    }
-    var assigned={};
-    Object.values(families).forEach(function(f){
-        var hp=f.households&&f.households[0]&&f.households[0].parents&&f.households[0].parents[0];
-        (f.camperIds||[]).forEach(function(cn){ assigned[cn]=1; add(hp?hp.email:'', cn, f.name||'family'); });
-    });
-    Object.keys(roster).forEach(function(cn){
-        if(assigned[cn]) return;
-        add((roster[cn]||{}).parent1Email||'', cn, '(no family)');
-    });
-    var rows=Object.keys(byEmail).map(function(k){return byEmail[k];}).sort(function(a,b){return b.campers.length-a.campers.length;});
-    var shared=0, h='<div style="max-height:56vh;overflow:auto">';
-    rows.forEach(function(r){
-        var famCount=Object.keys(r.families).length;
-        var lasts={}; r.campers.forEach(function(cn){var p=cn.trim().split(/\s+/); if(p.length>1) lasts[p[p.length-1].toLowerCase()]=1;});
-        var suspicious=(famCount>1)||(Object.keys(lasts).length>1);
-        if(suspicious) shared++;
-        h+='<div style="padding:9px 0;border-bottom:1px solid var(--s100)">'
-          +'<div style="font-size:.82rem;font-weight:700;color:'+(suspicious?'var(--err)':'var(--s800)')+'">'+esc(r.email)+(suspicious?'  ⚠ '+famCount+' famil'+(famCount!==1?'ies':'y'):'')+'</div>'
-          +'<div style="font-size:.75rem;color:var(--s500);margin-top:2px">'+r.campers.map(function(c){return esc(c);}).join(', ')+'</div></div>';
-    });
-    h+='</div>';
-    var summary=shared
-        ? '<div style="font-size:.82rem;color:var(--err);font-weight:600;margin-bottom:10px">'+shared+' email'+(shared!==1?'s are':' is')+' shared across different families (⚠). Messages &amp; forms for ALL of those children go to that one portal. Fix: open the mis-assigned child in Campers → Edit and correct the parent email (or move them to the right family), then click “Sync Parent Portals”.</div>'
-        : '<div style="font-size:.82rem;color:var(--ok);font-weight:600;margin-bottom:10px">✓ No shared emails — every parent email maps to a single family. If a parent still sees another child, it isn’t an email collision.</div>';
-    _showMeModal('Parent email check',summary+h);
-}
-// Minimal self-contained modal (no dependency on the predefined modal divs).
-function _showMeModal(title,bodyHtml){
-    var el=document.createElement('div');
-    el.style.cssText='position:fixed;inset:0;background:rgba(15,23,42,.45);z-index:9200;display:flex;align-items:center;justify-content:center;padding:20px';
-    el.innerHTML='<div style="background:#fff;border-radius:14px;max-width:560px;width:100%;max-height:82vh;display:flex;flex-direction:column;box-shadow:0 24px 70px rgba(0,0,0,.28)">'
-      +'<div style="display:flex;align-items:center;justify-content:space-between;padding:16px 20px;border-bottom:1px solid var(--s200)"><span style="font-size:.95rem;font-weight:700">'+esc(title)+'</span><button onclick="this.closest(\'[style*=fixed]\').remove()" style="border:1px solid var(--s200);background:none;border-radius:6px;padding:4px 10px;cursor:pointer;font-size:.8rem">Close</button></div>'
-      +'<div style="padding:16px 20px">'+bodyHtml+'</div></div>';
-    el.addEventListener('click',function(e){ if(e.target===el) el.remove(); });
-    document.body.appendChild(el);
-}
 function _syncInvitesForBunk(bunkName){
     Object.keys(roster).forEach(function(n){
         if(roster[n].bunk===bunkName)_syncInvitesForCamper(n);
@@ -9167,14 +9276,16 @@ window.CampistryMe={
     getStaffForBunk:getStaffForBunk,getStaffForBunks:getStaffForBunks,
     getStaffForDivision:getStaffForDivision,getBunksForDivision:getBunksForDivision,
     findStaffByEmail:findStaffByEmail,getAllStaff:getAllStaff,
-    addSession:addSession,deleteSession:deleteSession,editSession:editSession,toggleSessionReg:toggleSessionReg,copyRegLink:copyRegLink,previewBlankForm:previewBlankForm,addDocRow:addDocRow,addApplication:addApplication,autoPromoteWaitlist:autoPromoteWaitlist,
-    viewApplication:viewApplication,updateEnrollStatus:updateEnrollStatus,bulkEnrollStatus:bulkEnrollStatus,toggleAllEnroll:toggleAllEnroll,_updateRegBulkBar:_updateRegBulkBar,enrollCamper:enrollCamper,generateParentInvite:generateParentInvite,setRegFilter:setRegFilter,rescindEnrollment:rescindEnrollment,syncAllParentPortals:syncAllParentPortals,auditParentEmails:auditParentEmails,
+    addSession:addSession,deleteSession:deleteSession,editSession:editSession,toggleSessionReg:toggleSessionReg,copyRegLink:copyRegLink,addDocRow:addDocRow,addApplication:addApplication,autoPromoteWaitlist:autoPromoteWaitlist,
+    viewApplication:viewApplication,updateEnrollStatus:updateEnrollStatus,bulkEnrollStatus:bulkEnrollStatus,toggleAllEnroll:toggleAllEnroll,_updateRegBulkBar:_updateRegBulkBar,enrollCamper:enrollCamper,generateParentInvite:generateParentInvite,setRegFilter:setRegFilter,rescindEnrollment:rescindEnrollment,
     saveAppNote:saveAppNote,printApplication:printApplication,
     openFormConfig:openFormConfig,saveFormConfig:saveFormConfig,addCustomQ:addCustomQ,addPromoRow:addPromoRow,
     openStaffFormConfig:openStaffFormConfig,saveStaffFormConfig:saveStaffFormConfig,addStaffCustomQ:addStaffCustomQ,
+    openPostAcceptFormConfig:openPostAcceptFormConfig,savePostAcceptFormConfig:savePostAcceptFormConfig,addPafCustomQ:addPafCustomQ,
+    openSendPostAcceptModal:openSendPostAcceptModal,
     addPositionRow:addPositionRow,addCertRow:addCertRow,
     _fcSwitchTab:_fcSwitchTab,_brandingLogoPick:_brandingLogoPick,_brandingLogoClear:_brandingLogoClear,_toggleAcc:_toggleAcc,
-    openFormBuilder:openFormBuilder,closeFormBuilder:closeFormBuilder,
+    openFormBuilder:openFormBuilder,closeFormBuilder:closeFormBuilder,_fbOpenPreviewWindow:_fbOpenPreviewWindow,
     _toggleMenu:_toggleMenu,
     copyLinkText:copyLinkText,showLinkQR:showLinkQR,showRegistrationQR:showRegistrationQR,showStaffQR:showStaffQR,
     openSendLinkModal:openSendLinkModal,openSendRegLinkModal:openSendRegLinkModal,openSendStaffLinkModal:openSendStaffLinkModal,

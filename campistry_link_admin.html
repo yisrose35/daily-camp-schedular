@@ -711,10 +711,16 @@
     <div class="lk-card">
         <div class="lk-card-head">
             <h2>Families</h2>
-            <button class="btn btn-ghost btn-sm" onclick="refreshParentsPage()">
-                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="23 4 23 10 17 10"/><polyline points="1 20 1 14 7 14"/><path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"/></svg>
-                Refresh
-            </button>
+            <div style="display:flex;gap:8px;">
+                <button class="btn btn-ghost btn-sm" onclick="bulkInviteAll()" title="Use if a parent sees a child that isn't theirs — refreshes every issued invite from the current roster">
+                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="23 4 23 10 17 10"/><polyline points="1 20 1 14 7 14"/><path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"/></svg>
+                    Sync Parent Portals
+                </button>
+                <button class="btn btn-ghost btn-sm" onclick="refreshParentsPage()">
+                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="23 4 23 10 17 10"/><polyline points="1 20 1 14 7 14"/><path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"/></svg>
+                    Refresh
+                </button>
+            </div>
         </div>
         <div style="overflow-x:auto;">
             <table class="lk-table" style="width:100%;font-size:.8rem;">

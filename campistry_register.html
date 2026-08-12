@@ -530,12 +530,17 @@ function load(){
 // config pushed from the parent window and re-apply it live — nothing here
 // touches localStorage, so a draft never leaks into the saved/live form.
 if(new URLSearchParams(window.location.search).get('preview')==='1'){
+    // Embedded in the split-view builder's iframe, window.parent is the
+    // Me app. Opened via the builder's "Preview" button (a plain popup
+    // tab, not a frame), window.parent === window itself — window.opener
+    // is the Me app there instead.
+    var _previewSrc=window.opener||window.parent;
     window.addEventListener('message',function(ev){
-        if(ev.source!==window.parent)return;
+        if(ev.source!==_previewSrc)return;
         if(!ev.data||ev.data.type!=='campistry-form-preview')return;
         try{ applyFormConfig(ev.data.config||{}); }catch(e){ console.warn('[Register] preview apply failed',e); }
     });
-    try{ window.parent.postMessage({type:'campistry-form-preview-ready'},'*'); }catch(e){}
+    try{ _previewSrc.postMessage({type:'campistry-form-preview-ready'},'*'); }catch(e){}
 }
 
 function renderSessions(){
