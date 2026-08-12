@@ -397,13 +397,14 @@ function setupModals(){document.querySelectorAll('.me-overlay').forEach(function
 
 // Dynamic modal helper — creates modal on the fly
 var _dynModalCb=null;
-function showModal(title,bodyHtml,onSave){
+function showModal(title,bodyHtml,onSave,opts){
+    opts=opts||{};
     var existing=document.getElementById('dynModal');
     if(existing)existing.remove();
     var overlay=document.createElement('div');overlay.id='dynModal';
     overlay.className='me-overlay';overlay.style.cssText='position:fixed;inset:0;z-index:10000;background:rgba(0,0,0,.5);display:flex;align-items:center;justify-content:center;';
     var footer=onSave?'<div style="display:flex;justify-content:flex-end;gap:8px;padding:12px 20px;border-top:1px solid var(--s100)"><button class="me-btn me-btn--sec" onclick="CampistryMe.closeModal(\'dynModal\')">Cancel</button><button class="me-btn me-btn--pri" id="dynModalSave">Save</button></div>':'';
-    overlay.innerHTML='<div style="background:#fff;border-radius:12px;max-width:560px;width:95%;max-height:85vh;overflow:auto;box-shadow:0 20px 60px rgba(0,0,0,.25)"><div style="display:flex;justify-content:space-between;align-items:center;padding:16px 20px;border-bottom:1px solid var(--s100)"><h3 style="margin:0;font-size:1rem;font-weight:700">'+esc(title)+'</h3><button style="background:none;border:none;font-size:1.5rem;cursor:pointer;color:var(--s400)" onclick="CampistryMe.closeModal(\'dynModal\')">&times;</button></div><div style="padding:16px 20px">'+bodyHtml+'</div>'+footer+'</div>';
+    overlay.innerHTML='<div style="background:#fff;border-radius:12px;max-width:'+(opts.maxWidth||560)+'px;width:95%;max-height:85vh;overflow:auto;box-shadow:0 20px 60px rgba(0,0,0,.25)"><div style="display:flex;justify-content:space-between;align-items:center;padding:16px 20px;border-bottom:1px solid var(--s100)"><h3 style="margin:0;font-size:1.05rem;font-weight:700">'+esc(title)+'</h3><button style="background:none;border:none;font-size:1.5rem;cursor:pointer;color:var(--s400)" onclick="CampistryMe.closeModal(\'dynModal\')">&times;</button></div><div style="padding:18px 22px">'+bodyHtml+'</div>'+footer+'</div>';
     document.body.appendChild(overlay);
     overlay.addEventListener('mousedown',function(e){if(e.target===overlay)closeModal('dynModal')});
     _dynModalCb=onSave||null;
@@ -1455,6 +1456,46 @@ function renderStructure(){
         });
         h+='</div>';
     }
+
+    // Sessions & Pricing — camp-wide session definitions (dates, tuition,
+    // capacity) that Registration draws from. Lives here with the rest of
+    // camp setup rather than on the day-to-day Registration page.
+    var eArrForSessions=Object.entries(enrollments);
+    h+='<div class="me-card" style="margin-top:14px"><div class="me-card-head"><h3>Sessions & Pricing</h3><button class="me-btn me-btn--sec me-btn--sm" onclick="CampistryMe.addSession()">+ Add Session</button></div>';
+    if(!sessions.length){
+        h+='<div class="me-empty" style="padding:24px 20px"><p>No sessions yet. Sessions are what parents pick when they register — add one to open registration.</p></div>';
+    }else{
+        h+='<div style="padding:12px 18px;display:flex;flex-wrap:wrap;gap:8px">';
+        sessions.forEach(function(s,i){
+            var sEnrolled=eArrForSessions.filter(function([,e]){return e.session===s.name&&e.status==='enrolled'}).length;
+            var sApplied=eArrForSessions.filter(function([,e]){return e.session===s.name}).length;
+            var cap=s.capacity||'∞';
+            var pct=s.capacity?Math.min(sEnrolled/s.capacity,1):0;
+            var isOpen=s.registrationOpen!==false;
+            h+='<div style="flex:1;min-width:200px;padding:14px;border-radius:var(--r);border:1px solid '+(isOpen?'var(--s200)':'var(--err)')+';background:'+(isOpen?'var(--s50)':'rgba(239,68,68,.03)')+'">';
+            h+='<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px">';
+            h+='<span style="font-size:.9rem;font-weight:700;color:var(--s800)">'+esc(s.name)+'</span>';
+            h+='<div style="display:flex;gap:3px">';
+            h+='<button class="me-btn me-btn--ghost" style="font-size:.65rem;padding:2px 5px" onclick="CampistryMe.editSession('+i+')" title="Edit">Edit</button>';
+            h+='<button class="me-btn me-btn--ghost" style="font-size:.65rem;padding:2px 5px;color:'+(isOpen?'var(--err)':'var(--ok)')+'" onclick="CampistryMe.toggleSessionReg('+i+')" title="'+(isOpen?'Close':'Open')+' registration">'+(isOpen?'Close':'Open')+'</button>';
+            h+='<button class="me-btn me-btn--ghost" style="font-size:.65rem;padding:2px 5px;color:var(--err)" onclick="CampistryMe.deleteSession('+i+')">✕</button>';
+            h+='</div></div>';
+            if(s.dates)h+='<div style="font-size:.75rem;color:var(--s500);margin-bottom:4px">📅 '+esc(s.dates)+'</div>';
+            h+='<div style="font-size:.75rem;color:var(--s500)">'+sApplied+' applied · '+sEnrolled+' / '+cap+' enrolled</div>';
+            if(s.capacity){h+='<div style="height:3px;border-radius:2px;background:var(--s200);margin-top:4px;overflow:hidden"><div style="height:100%;width:'+(pct*100)+'%;background:'+(pct>=0.9?'var(--err)':pct>=0.7?'var(--me)':'var(--ok)')+';border-radius:2px"></div></div>'}
+            if(s.tuition)h+='<div style="font-size:.85rem;font-weight:700;color:var(--me);margin-top:6px">$'+Number(s.tuition).toLocaleString()+'</div>';
+            if(s.earlyBird){
+                var today=new Date().toISOString().split('T')[0];
+                var isActive=!s.earlyBirdDeadline||today<=s.earlyBirdDeadline;
+                h+='<div style="font-size:.72rem;color:'+(isActive?'var(--ok)':'var(--s400)')+';font-weight:600;margin-top:2px">Early bird: $'+Number(s.earlyBird).toLocaleString()+(s.earlyBirdDeadline?' (until '+s.earlyBirdDeadline+')':'')+(isActive?'':' — expired')+'</div>';
+            }
+            h+='<div style="margin-top:6px">'+(!isOpen?'<span style="font-size:.7rem;font-weight:700;color:var(--err)">Registration Closed</span>':'<span style="font-size:.7rem;font-weight:700;color:var(--ok)">Registration Open</span>')+'</div>';
+            h+='</div>';
+        });
+        h+='</div>';
+    }
+    h+='</div>';
+
     c.innerHTML=h;
     // Wire drag-drop on division cards
     var listEl=document.getElementById('meDivList');
@@ -2652,77 +2693,6 @@ function openBunkCountModal(bunkName){
     },60);
 }
 
-// ── CAPACITY ──────────────────────────────────────────────────────
-function _capBar(label,en,cap,wl){
-    var pct=cap>0?Math.min(100,Math.round(en/cap*100)):0;
-    var full=cap>0&&en>=cap;
-    var color=full?'var(--err)':(pct>=80?'var(--me)':'var(--ok)');
-    return '<div style="margin-bottom:8px">'
-        +'<div style="display:flex;justify-content:space-between;font-size:.78rem;margin-bottom:3px"><span style="font-weight:600;color:var(--s700)">'+esc(label)+'</span>'
-        +'<span style="color:'+color+';font-weight:700">'+en+(cap?' / '+cap:'')+(full?' · FULL':'')+(wl?' · '+wl+' waitlist':'')+'</span></div>'
-        +(cap?'<div style="height:8px;background:var(--s100);border-radius:4px;overflow:hidden"><div style="width:'+pct+'%;height:100%;background:'+color+'"></div></div>':'')
-        +'</div>';
-}
-function _assignedInBunk(b){
-    return (bunkManualCounts[b]!=null)?bunkManualCounts[b]:Object.values(roster).filter(function(c){return c.bunk===b}).length;
-}
-// Collapsed by default — with a large camp (dozens of bunks) this is a wall
-// of "0 set" rows that dominates the page before anyone's even applied.
-// The badge summarizes what's inside so it's still clear there's something
-// there without opening it.
-function _capacityCardHtml(){
-    var actByS={},wlByS={};
-    Object.values(enrollments).forEach(function(e){
-        var s=e.session||'—';
-        if(e.status==='accepted'||e.status==='enrolled') actByS[s]=(actByS[s]||0)+1;
-        else if(e.status==='waitlisted') wlByS[s]=(wlByS[s]||0)+1;
-    });
-    var divs=Object.keys(structure);
-    var bunks=(typeof _allBunkNames==='function')?_allBunkNames():[];
-    var h='';
-    if(sessions.length){
-        h+='<div style="font-size:.72rem;font-weight:700;color:var(--s400);text-transform:uppercase;margin:2px 0 6px">Sessions</div>';
-        sessions.forEach(function(s){ h+=_capBar(s.name||'(unnamed)',actByS[s.name]||0,s.capacity||0,wlByS[s.name]||0); });
-    }
-    // Divisions — enrolled headcount from roster
-    if(divs.length){
-        h+='<div style="font-size:.72rem;font-weight:700;color:var(--s400);text-transform:uppercase;margin:12px 0 6px">Divisions</div>';
-        divs.sort().forEach(function(dv){
-            var cnt=Object.values(roster).filter(function(c){return c.division===dv;}).length;
-            h+='<div style="display:flex;justify-content:space-between;font-size:.78rem;padding:2px 0"><span style="font-weight:600;color:var(--s700)">'+esc(dv)+'</span><span style="color:var(--s500);font-weight:700">'+cnt+' camper'+(cnt===1?'':'s')+'</span></div>';
-        });
-    }
-    // Bunks — assigned vs capacity, editable
-    if(bunks.length){
-        h+='<div style="font-size:.72rem;font-weight:700;color:var(--s400);text-transform:uppercase;margin:12px 0 6px">Bunks <span style="font-weight:400;text-transform:none;color:var(--s400)">(set a capacity to track fill)</span></div>';
-        h+='<div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(190px,1fr));gap:6px">';
-        bunks.forEach(function(b){
-            var asg=_assignedInBunk(b),cap=bunkCapacity[b]||0,over=cap>0&&asg>cap;
-            h+='<div style="display:flex;align-items:center;gap:6px;font-size:.78rem;padding:4px 8px;border:1px solid '+(over?'var(--err)':'var(--s100)')+';border-radius:6px">'
-                +'<span style="flex:1;font-weight:600;color:var(--s700);overflow:hidden;text-overflow:ellipsis;white-space:nowrap">'+esc(b)+'</span>'
-                +'<span style="color:'+(over?'var(--err)':'var(--s500)')+';font-weight:700">'+asg+(cap?'/'+cap:'')+(over?' ⚠':'')+'</span>'
-                +'<button class="me-btn me-btn--ghost me-btn--sm" style="padding:1px 6px;font-size:.68rem" onclick="CampistryMe.setBunkCapacityPrompt(\''+je(b)+'\')">'+(cap?'edit':'set')+'</button>'
-                +'</div>';
-        });
-        h+='</div>';
-    }
-    if(!sessions.length&&!divs.length&&!bunks.length) h+='<div style="font-size:.8rem;color:var(--s400)">Add sessions or camp structure to track capacity.</div>';
-
-    var badgeParts=[];
-    if(sessions.length)badgeParts.push(sessions.length+' session'+(sessions.length===1?'':'s'));
-    if(divs.length)badgeParts.push(divs.length+' division'+(divs.length===1?'':'s'));
-    if(bunks.length)badgeParts.push(bunks.length+' bunk'+(bunks.length===1?'':'s'));
-    return _accCard('Capacity',h,{badge:badgeParts.join(' · ')});
-}
-function setBunkCapacityPrompt(bunk){
-    var cur=bunkCapacity[bunk]||'';
-    var val=prompt('Capacity (max campers) for '+bunk+':\n\nLeave blank to clear.',cur);
-    if(val===null)return;
-    var n=parseInt(val,10);
-    if(isNaN(n)||n<=0) delete bunkCapacity[bunk]; else bunkCapacity[bunk]=n;
-    save(); renderEnrollment(); toast('Capacity updated');
-}
-
 // ── BILLING / BROADCASTS / SOON ──────────────────────────────────
 // ── REGISTRATION & ENROLLMENT ─────────────────────────────────────
 // ═══════════════════════════════════════════════════════════════
@@ -3145,33 +3115,24 @@ function renderEnrollment(){
 
     var h='<div class="sec-hd"><div><h2 class="sec-title">Registration & Enrollment</h2><p class="sec-desc">'+total+' application'+(total!==1?'s':'')+' · '+enrolled+' enrolled · '+waitlisted+' waitlisted</p></div>';
     h+='<div class="sec-actions">'
-        +'<button class="me-btn me-btn--sec me-btn--sm" onclick="CampistryMe.addSession()">+ Add Session</button>'
+        +'<button class="me-btn me-btn--teal" onclick="CampistryMe.openFormConfig()">🎨 Customize Registration Form</button>'
         +'<button class="me-btn me-btn--pri" onclick="CampistryMe.addApplication()">+ Manual Entry</button>'
-        +'<div class="me-more-wrap"><button class="me-btn me-btn--sec me-btn--sm" onclick="CampistryMe._toggleMenu(\'regMoreMenu\')">⋯ More</button>'
-        +'<div class="me-more-menu" id="regMoreMenu">'
-        +'<button onclick="CampistryMe.previewBlankForm()">📄 Preview Blank Form</button>'
-        +'<button onclick="CampistryMe.auditParentEmails()" title="Flags a parent email shared across families">✉ Check Parent Emails</button>'
+        +'<div class="me-more-wrap"><button class="me-btn me-btn--sec me-btn--sm" onclick="CampistryMe._toggleMenu(\'regLinkMenu\')">🔗 Get Link</button>'
+        +'<div class="me-more-menu" id="regLinkMenu" style="min-width:250px">'
+        +'<div style="padding:7px 10px 9px;font-size:.7rem;color:var(--s400);word-break:break-all;border-bottom:1px solid var(--s100);margin-bottom:4px">'+esc(window.location.origin+'/campistry_register.html')+'</div>'
+        +'<button onclick="CampistryMe.copyRegLink()">📋 Copy Link</button>'
+        +'<button onclick="CampistryMe.openSendRegLinkModal()">✉ Send Link</button>'
+        +'<button onclick="CampistryMe.showRegistrationQR()">▦ QR Code</button>'
+        +'<div style="border-top:1px solid var(--s100);margin:4px 0"></div>'
         +'<button onclick="CampistryMe.syncAllParentPortals()" title="Use if a parent sees a child that isn\'t theirs">↻ Sync Parent Portals</button>'
+        +'<button onclick="CampistryMe.auditParentEmails()" title="Flags a parent email shared across families">✉ Check Parent Emails</button>'
+        +'<div style="border-top:1px solid var(--s100);margin:4px 0"></div>'
+        +'<button onclick="CampistryMe.previewBlankForm()">📄 Preview Blank Form</button>'
         +'</div></div>'
         +'</div></div>';
 
-    // Registration link banner
-    h+='<div style="background:#fff;border:1px solid var(--s200);border-radius:var(--r);padding:12px 16px;margin-bottom:14px;display:flex;align-items:center;gap:12px;flex-wrap:wrap">';
-    h+='<div style="flex:1;min-width:200px"><div style="font-size:.8rem;font-weight:600;color:var(--s500)">PARENT REGISTRATION LINK</div>';
-    h+='<div style="font-size:.85rem;color:var(--me);font-weight:600;word-break:break-all;margin-top:2px">'+esc(window.location.origin+'/campistry_register.html')+'</div></div>';
-    h+='<div class="me-more-wrap"><button class="me-btn me-btn--pri me-btn--sm" onclick="CampistryMe._toggleMenu(\'regShareMenu\')">Share ▾</button>'
-        +'<div class="me-more-menu" id="regShareMenu">'
-        +'<button onclick="CampistryMe.copyRegLink()">🔗 Copy Link</button>'
-        +'<button onclick="CampistryMe.openSendRegLinkModal()">✉ Send Link</button>'
-        +'<button onclick="CampistryMe.showRegistrationQR()">▦ QR Code</button>'
-        +'</div></div>';
-    h+='<button class="me-btn me-btn--sec me-btn--sm" onclick="CampistryMe.openFormConfig()">⚙ Customize Form</button></div>';
-
-    // Capacity overview — sessions, divisions, bunks
-    h+=_capacityCardHtml();
-
-    // Pipeline sections — click a card to filter the list below to that group
-    h+='<div style="display:flex;gap:8px;margin-bottom:16px;flex-wrap:wrap">';
+    // Status filter — a compact underline-tab strip (was a 7-box grid that
+    // ate a full row before anyone had even applied).
     var stages=[
         {label:'All',count:total,color:'var(--s700)',key:'all'},
         {label:'Applied',count:applied,color:'var(--s500)',key:'applied'},
@@ -3181,52 +3142,21 @@ function renderEnrollment(){
         {label:'Withdrawn',count:byStatus.withdrawn||0,color:'var(--s400)',key:'withdrawn'},
         {label:'Declined',count:byStatus.declined||0,color:'var(--err)',key:'declined'}
     ];
+    h+='<div style="display:flex;gap:2px;border-bottom:1px solid var(--s200);margin-bottom:16px;overflow-x:auto">';
     stages.forEach(function(s){
         var active=regFilter===s.key;
-        h+='<div class="click" onclick="CampistryMe.setRegFilter(\''+s.key+'\')" style="flex:1;min-width:86px;background:'+(active?'var(--s50)':'#fff')+';border-radius:var(--r);padding:10px 12px;border:2px solid '+(active?s.color:'var(--s200)')+';text-align:center;cursor:pointer">';
-        h+='<div style="font-size:1.2rem;font-weight:700;color:'+s.color+'">'+s.count+'</div>';
-        h+='<div style="font-size:.65rem;font-weight:600;color:var(--s400);text-transform:uppercase;letter-spacing:.05em">'+s.label+'</div></div>';
+        h+='<button onclick="CampistryMe.setRegFilter(\''+s.key+'\')" style="padding:9px 12px;border:none;background:none;font-size:.8rem;font-weight:600;cursor:pointer;white-space:nowrap;font-family:inherit;display:flex;align-items:center;gap:6px;border-bottom:2px solid '+(active?s.color:'transparent')+';color:'+(active?s.color:'var(--s500)')+'">'
+            +esc(s.label)
+            +'<span style="font-size:.68rem;font-weight:700;border-radius:9px;padding:1px 6px;background:'+(active?s.color:'var(--s100)')+';color:'+(active?'#fff':'var(--s600)')+'">'+s.count+'</span>'
+            +'</button>';
     });
     h+='</div>';
-
-    // Sessions
-    if(sessions.length){
-        h+='<div class="me-card" style="margin-bottom:14px"><div class="me-card-head"><h3>Sessions & Pricing</h3><button class="me-btn me-btn--sec me-btn--sm" onclick="CampistryMe.addSession()">+ Add</button></div>';
-        h+='<div style="padding:12px 18px;display:flex;flex-wrap:wrap;gap:8px">';
-        sessions.forEach(function(s,i){
-            var sEnrolled=eArr.filter(function([,e]){return e.session===s.name&&e.status==='enrolled'}).length;
-            var sApplied=eArr.filter(function([,e]){return e.session===s.name}).length;
-            var cap=s.capacity||'∞';
-            var pct=s.capacity?Math.min(sEnrolled/s.capacity,1):0;
-            var isOpen=s.registrationOpen!==false;
-            h+='<div style="flex:1;min-width:200px;padding:14px;border-radius:var(--r);border:1px solid '+(isOpen?'var(--s200)':'var(--err)')+';background:'+(isOpen?'var(--s50)':'rgba(239,68,68,.03)')+'">';
-            h+='<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px">';
-            h+='<span style="font-size:.9rem;font-weight:700;color:var(--s800)">'+esc(s.name)+'</span>';
-            h+='<div style="display:flex;gap:3px">';
-            h+='<button class="me-btn me-btn--ghost" style="font-size:.65rem;padding:2px 5px" onclick="CampistryMe.editSession('+i+')" title="Edit">Edit</button>';
-            h+='<button class="me-btn me-btn--ghost" style="font-size:.65rem;padding:2px 5px;color:'+(isOpen?'var(--err)':'var(--ok)')+'" onclick="CampistryMe.toggleSessionReg('+i+')" title="'+(isOpen?'Close':'Open')+' registration">'+(isOpen?'Close':'Open')+'</button>';
-            h+='<button class="me-btn me-btn--ghost" style="font-size:.65rem;padding:2px 5px;color:var(--err)" onclick="CampistryMe.deleteSession('+i+')">✕</button>';
-            h+='</div></div>';
-            if(s.dates)h+='<div style="font-size:.75rem;color:var(--s500);margin-bottom:4px">📅 '+esc(s.dates)+'</div>';
-            h+='<div style="font-size:.75rem;color:var(--s500)">'+sApplied+' applied · '+sEnrolled+' / '+cap+' enrolled</div>';
-            if(s.capacity){h+='<div style="height:3px;border-radius:2px;background:var(--s200);margin-top:4px;overflow:hidden"><div style="height:100%;width:'+(pct*100)+'%;background:'+(pct>=0.9?'var(--err)':pct>=0.7?'var(--me)':'var(--ok)')+';border-radius:2px"></div></div>'}
-            if(s.tuition)h+='<div style="font-size:.85rem;font-weight:700;color:var(--me);margin-top:6px">$'+Number(s.tuition).toLocaleString()+'</div>';
-            if(s.earlyBird){
-                var today=new Date().toISOString().split('T')[0];
-                var isActive=!s.earlyBirdDeadline||today<=s.earlyBirdDeadline;
-                h+='<div style="font-size:.72rem;color:'+(isActive?'var(--ok)':'var(--s400)')+';font-weight:600;margin-top:2px">Early bird: $'+Number(s.earlyBird).toLocaleString()+(s.earlyBirdDeadline?' (until '+s.earlyBirdDeadline+')':'')+(isActive?'':' — expired')+'</div>';
-            }
-            h+='<div style="margin-top:6px">'+(!isOpen?'<span style="font-size:.7rem;font-weight:700;color:var(--err)">Registration Closed</span>':'<span style="font-size:.7rem;font-weight:700;color:var(--ok)">Registration Open</span>')+'</div>';
-            h+='</div>';
-        });
-        h+='</div></div>';
-    }
 
     // Applications — filtered to the active section
     var sectionLabel=(stages.filter(function(s){return s.key===regFilter})[0]||{}).label||'All';
     var filtered=eArr.filter(function(pair){return regFilter==='all'||(pair[1].status||'applied')===regFilter;});
     if(!eArr.length){
-        h+='<div class="me-empty"><h3>No applications yet</h3><p>Create a session and start accepting applications.</p></div>';
+        h+='<div class="me-empty"><h3>No applications yet</h3><p>Share your registration link, or add an application manually to get started.</p></div>';
     }else{
         h+='<div class="me-card"><div class="me-card-head"><h3>'+esc(regFilter==='all'?'All Applications':sectionLabel)+' ('+filtered.length+')</h3></div>';
         if(!filtered.length){
@@ -4143,27 +4073,24 @@ function editSession(idx){openSessionModal(idx)}
 
 function openSessionModal(idx){
     var s=idx!==null?sessions[idx]:{};
-    var h='<div class="me-modal-form">';
-    h+='<div class="me-field"><label>Session Name</label><input type="text" id="sesName" class="me-input" value="'+esc(s.name||'')+'" placeholder="e.g., Summer 2026 — Full Season"></div>';
-    h+='<div style="display:grid;grid-template-columns:1fr 1fr;gap:10px">';
-    h+='<div class="me-field"><label>Start Date</label><input type="date" id="sesStart" class="me-input" value="'+(s.startDate||'')+'"></div>';
-    h+='<div class="me-field"><label>End Date</label><input type="date" id="sesEnd" class="me-input" value="'+(s.endDate||'')+'"></div>';
+    var h='<div class="fg"><label class="fl">Session Name</label><input type="text" id="sesName" class="fi" value="'+esc(s.name||'')+'" placeholder="e.g., Summer 2026 — Full Season"></div>';
+    h+='<div class="fr">';
+    h+='<div class="fg"><label class="fl">Start Date</label><input type="date" id="sesStart" class="fi" value="'+(s.startDate||'')+'"></div>';
+    h+='<div class="fg"><label class="fl">End Date</label><input type="date" id="sesEnd" class="fi" value="'+(s.endDate||'')+'"></div>';
     h+='</div>';
-    h+='<div class="me-field"><label>Date Range Label (optional)</label><input type="text" id="sesDates" class="me-input" value="'+esc(s.dates||'')+'" placeholder="e.g., June 22 – August 14"></div>';
-    h+='<div style="display:grid;grid-template-columns:1fr 1fr;gap:10px">';
-    h+='<div class="me-field"><label>Capacity</label><input type="number" id="sesCap" class="me-input" value="'+(s.capacity||'')+'" placeholder="Leave blank for unlimited" min="0"></div>';
-    h+='<div class="me-field"><label>Tuition ($)</label><input type="number" id="sesTuition" class="me-input" value="'+(s.tuition||'')+'" placeholder="0.00" step="0.01" min="0"></div>';
+    h+='<div class="fg"><label class="fl">Date Range Label (optional)</label><input type="text" id="sesDates" class="fi" value="'+esc(s.dates||'')+'" placeholder="e.g., June 22 – August 14"></div>';
+    h+='<div class="fr">';
+    h+='<div class="fg"><label class="fl">Capacity</label><input type="number" id="sesCap" class="fi" value="'+(s.capacity||'')+'" placeholder="Leave blank for unlimited" min="0"></div>';
+    h+='<div class="fg"><label class="fl">Tuition ($)</label><input type="number" id="sesTuition" class="fi" value="'+(s.tuition||'')+'" placeholder="0.00" step="0.01" min="0"></div>';
     h+='</div>';
-    h+='<div style="display:grid;grid-template-columns:1fr 1fr;gap:10px">';
-    h+='<div class="me-field"><label>Early Bird Price ($)</label><input type="number" id="sesEarly" class="me-input" value="'+(s.earlyBird||'')+'" placeholder="Optional" step="0.01" min="0"></div>';
-    h+='<div class="me-field"><label>Early Bird Deadline</label><input type="date" id="sesEarlyDate" class="me-input" value="'+(s.earlyBirdDeadline||'')+'"></div>';
+    h+='<div class="fr">';
+    h+='<div class="fg"><label class="fl">Early Bird Price ($)</label><input type="number" id="sesEarly" class="fi" value="'+(s.earlyBird||'')+'" placeholder="Optional" step="0.01" min="0"></div>';
+    h+='<div class="fg"><label class="fl">Early Bird Deadline</label><input type="date" id="sesEarlyDate" class="fi" value="'+(s.earlyBirdDeadline||'')+'"></div>';
     h+='</div>';
-    h+='<div class="me-field"><label>Sibling Discount (%)</label><input type="number" id="sesSibDisc" class="me-input" value="'+(s.siblingDiscount||'')+'" placeholder="e.g., 10 for 10% off siblings" min="0" max="100"></div>';
-    h+='<div class="me-field"><label>Payment Plan</label><select id="sesPayPlan" class="me-input"><option value="full"'+(s.paymentPlan==='full'?' selected':'')+'  >Full payment required</option><option value="2"'+(s.paymentPlan==='2'?' selected':'')+'>2 installments (50/50)</option><option value="3"'+(s.paymentPlan==='3'?' selected':'')+'>3 installments (34/33/33)</option><option value="4"'+(s.paymentPlan==='4'?' selected':'')+'>4 installments (25 each)</option><option value="deposit"'+(s.paymentPlan==='deposit'?' selected':'')+'>Deposit + balance</option></select></div>';
-    h+='<div id="sesDepositWrap" style="display:'+(s.paymentPlan==='deposit'?'block':'none')+'"><div class="me-field"><label>Deposit Amount ($)</label><input type="number" id="sesDeposit" class="me-input" value="'+(s.depositAmount||'')+'" step="0.01" min="0"></div></div>';
-    h+='<div class="me-field"><label>Description / Notes</label><textarea id="sesNotes" class="me-input" rows="2" style="resize:vertical" placeholder="Optional session description for parents">'+(s.notes||'')+'</textarea></div>';
-    h+='</div>';
-    h+='<script>document.getElementById("sesPayPlan").onchange=function(){document.getElementById("sesDepositWrap").style.display=this.value==="deposit"?"block":"none"}<\/script>';
+    h+='<div class="fg"><label class="fl">Sibling Discount (%)</label><input type="number" id="sesSibDisc" class="fi" value="'+(s.siblingDiscount||'')+'" placeholder="e.g., 10 for 10% off siblings" min="0" max="100"></div>';
+    h+='<div class="fg"><label class="fl">Payment Plan</label><select id="sesPayPlan" class="fs" onchange="document.getElementById(\'sesDepositWrap\').style.display=this.value===\'deposit\'?\'block\':\'none\'"><option value="full"'+(s.paymentPlan==='full'?' selected':'')+'>Full payment required</option><option value="2"'+(s.paymentPlan==='2'?' selected':'')+'>2 installments (50/50)</option><option value="3"'+(s.paymentPlan==='3'?' selected':'')+'>3 installments (34/33/33)</option><option value="4"'+(s.paymentPlan==='4'?' selected':'')+'>4 installments (25 each)</option><option value="deposit"'+(s.paymentPlan==='deposit'?' selected':'')+'>Deposit + balance</option></select></div>';
+    h+='<div id="sesDepositWrap" style="display:'+(s.paymentPlan==='deposit'?'block':'none')+'"><div class="fg"><label class="fl">Deposit Amount ($)</label><input type="number" id="sesDeposit" class="fi" value="'+(s.depositAmount||'')+'" step="0.01" min="0"></div></div>';
+    h+='<div class="fg"><label class="fl">Description / Notes</label><textarea id="sesNotes" class="fi" style="min-height:50px;resize:vertical" placeholder="Optional session description for parents">'+esc(s.notes||'')+'</textarea></div>';
 
     showModal(idx!==null?'Edit Session':'Create Session',h,function(){
         var obj={
@@ -4188,13 +4115,13 @@ function openSessionModal(idx){
         }
         if(idx!==null) sessions[idx]=obj;
         else sessions.push(obj);
-        save();closeModal('dynModal');renderEnrollment();toast(idx!==null?'Session updated':'Session created');
+        save();closeModal('dynModal');renderStructure();toast(idx!==null?'Session updated':'Session created');
     });
 }
 
 function toggleSessionReg(idx){
     sessions[idx].registrationOpen=!sessions[idx].registrationOpen;
-    save();renderEnrollment();
+    save();renderStructure();
     toast(sessions[idx].registrationOpen?'Registration opened':'Registration closed');
 }
 
@@ -4374,27 +4301,26 @@ function previewBlankForm(){
 
 function deleteSession(idx){
     if(!confirm('Delete session "'+sessions[idx].name+'"?'))return;
-    sessions.splice(idx,1);save();renderEnrollment();toast('Session deleted');
+    sessions.splice(idx,1);save();renderStructure();toast('Session deleted');
 }
 
 function addApplication(){
     var sesOpts=sessions.map(function(s){return'<option value="'+esc(s.name)+'">'+esc(s.name)+' — '+fm(s.tuition)+'</option>'}).join('');
-    var h='<div class="me-modal-form">';
-    h+='<div style="display:grid;grid-template-columns:1fr 1fr;gap:10px"><div class="me-field"><label>Camper First Name</label><input type="text" id="appFirst" class="me-input" placeholder="First"></div><div class="me-field"><label>Last Name</label><input type="text" id="appLast" class="me-input" placeholder="Last"></div></div>';
-    h+='<div class="me-field"><label>Session</label><select id="appSession" class="me-input"><option value="">— Select —</option>'+sesOpts+'</select></div>';
-    h+='<div style="display:grid;grid-template-columns:1fr 1fr;gap:10px"><div class="me-field"><label>Date of Birth</label><input type="date" id="appDob" class="me-input"></div><div class="me-field"><label>Gender</label><select id="appGender" class="me-input"><option value="">—</option><option>Male</option><option>Female</option></select></div></div>';
-    h+='<div style="display:grid;grid-template-columns:1fr 1fr;gap:10px"><div class="me-field"><label>School</label><input type="text" id="appSchool" class="me-input"></div><div class="me-field"><label>School Grade</label><input type="text" id="appSchoolGrade" class="me-input"></div></div>';
-    h+='<div style="border-top:1px solid var(--s200);margin:14px 0;padding-top:14px"><div style="font-size:.75rem;font-weight:700;color:var(--s500);text-transform:uppercase;letter-spacing:.06em;margin-bottom:8px">Parent / Guardian</div></div>';
-    h+='<div class="me-field"><label>Parent Name</label><input type="text" id="appParent" class="me-input" placeholder="Full name"></div>';
-    h+='<div style="display:grid;grid-template-columns:1fr 1fr;gap:10px"><div class="me-field"><label>Phone</label><input type="tel" id="appPhone" class="me-input"></div><div class="me-field"><label>Email</label><input type="email" id="appEmail" class="me-input"></div></div>';
-    h+='<div style="border-top:1px solid var(--s200);margin:14px 0;padding-top:14px"><div style="font-size:.75rem;font-weight:700;color:var(--s500);text-transform:uppercase;letter-spacing:.06em;margin-bottom:8px">Address</div></div>';
-    h+='<div class="me-field"><label>Street</label><input type="text" id="appStreet" class="me-input"></div>';
-    h+='<div style="display:grid;grid-template-columns:2fr 1fr 1fr;gap:10px"><div class="me-field"><label>City</label><input type="text" id="appCity" class="me-input"></div><div class="me-field"><label>State</label><input type="text" id="appState" class="me-input" value="NY" maxlength="2"></div><div class="me-field"><label>ZIP</label><input type="text" id="appZip" class="me-input" maxlength="10"></div></div>';
-    h+='<div style="border-top:1px solid var(--s200);margin:14px 0;padding-top:14px"><div style="font-size:.75rem;font-weight:700;color:var(--s500);text-transform:uppercase;letter-spacing:.06em;margin-bottom:8px">Medical (optional)</div></div>';
-    h+='<div class="me-field"><label>Allergies</label><input type="text" id="appAllergies" class="me-input" placeholder="None or list allergies"></div>';
-    h+='<div class="me-field"><label>Medications</label><input type="text" id="appMeds" class="me-input" placeholder="None or list medications"></div>';
-    h+='<div class="me-field"><label>Notes</label><textarea id="appNotes" class="me-input" rows="2" style="resize:vertical" placeholder="Special requests, bunkmate preferences, etc."></textarea></div>';
-    h+='</div>';
+    var h='';
+    h+='<div class="fr"><div class="fg"><label class="fl">Camper First Name</label><input type="text" id="appFirst" class="fi" placeholder="First"></div><div class="fg"><label class="fl">Last Name</label><input type="text" id="appLast" class="fi" placeholder="Last"></div></div>';
+    h+='<div class="fg"><label class="fl">Session</label><select id="appSession" class="fs"><option value="">— Select —</option>'+sesOpts+'</select></div>';
+    h+='<div class="fr"><div class="fg"><label class="fl">Date of Birth</label><input type="date" id="appDob" class="fi"></div><div class="fg"><label class="fl">Gender</label><select id="appGender" class="fs"><option value="">—</option><option>Male</option><option>Female</option></select></div></div>';
+    h+='<div class="fr"><div class="fg"><label class="fl">School</label><input type="text" id="appSchool" class="fi"></div><div class="fg"><label class="fl">School Grade</label><input type="text" id="appSchoolGrade" class="fi"></div></div>';
+    h+='<div class="fsec">Parent / Guardian</div>';
+    h+='<div class="fg"><label class="fl">Parent Name</label><input type="text" id="appParent" class="fi" placeholder="Full name"></div>';
+    h+='<div class="fr"><div class="fg"><label class="fl">Phone</label><input type="tel" id="appPhone" class="fi"></div><div class="fg"><label class="fl">Email</label><input type="email" id="appEmail" class="fi"></div></div>';
+    h+='<div class="fsec">Address</div>';
+    h+='<div class="fg"><label class="fl">Street</label><input type="text" id="appStreet" class="fi"></div>';
+    h+='<div class="fr"><div class="fg" style="flex:2"><label class="fl">City</label><input type="text" id="appCity" class="fi"></div><div class="fg"><label class="fl">State</label><input type="text" id="appState" class="fi" value="NY" maxlength="2"></div><div class="fg"><label class="fl">ZIP</label><input type="text" id="appZip" class="fi" maxlength="10"></div></div>';
+    h+='<div class="fsec">Medical (optional)</div>';
+    h+='<div class="fg"><label class="fl">Allergies</label><input type="text" id="appAllergies" class="fi" placeholder="None or list allergies"></div>';
+    h+='<div class="fg"><label class="fl">Medications</label><input type="text" id="appMeds" class="fi" placeholder="None or list medications"></div>';
+    h+='<div class="fg"><label class="fl">Notes</label><textarea id="appNotes" class="fi" style="min-height:50px;resize:vertical" placeholder="Special requests, bunkmate preferences, etc."></textarea></div>';
 
     showModal('New Application',h,function(){
         var first=(document.getElementById('appFirst').value||'').trim();
@@ -4437,7 +4363,7 @@ function addApplication(){
         };
         save();closeModal('dynModal');renderEnrollment();
         toast(enrollments[id].status==='waitlisted'?camperName+' added to waitlist':camperName+' application received');
-    });
+    },{maxWidth:720});
 }
 
 function updateEnrollStatus(id,status,opts){
@@ -9140,7 +9066,7 @@ window.CampistryMe={
     getStaffForBunk:getStaffForBunk,getStaffForBunks:getStaffForBunks,
     getStaffForDivision:getStaffForDivision,getBunksForDivision:getBunksForDivision,
     findStaffByEmail:findStaffByEmail,getAllStaff:getAllStaff,
-    addSession:addSession,deleteSession:deleteSession,editSession:editSession,toggleSessionReg:toggleSessionReg,copyRegLink:copyRegLink,previewBlankForm:previewBlankForm,addDocRow:addDocRow,setBunkCapacityPrompt:setBunkCapacityPrompt,addApplication:addApplication,autoPromoteWaitlist:autoPromoteWaitlist,
+    addSession:addSession,deleteSession:deleteSession,editSession:editSession,toggleSessionReg:toggleSessionReg,copyRegLink:copyRegLink,previewBlankForm:previewBlankForm,addDocRow:addDocRow,addApplication:addApplication,autoPromoteWaitlist:autoPromoteWaitlist,
     viewApplication:viewApplication,updateEnrollStatus:updateEnrollStatus,bulkEnrollStatus:bulkEnrollStatus,toggleAllEnroll:toggleAllEnroll,_updateRegBulkBar:_updateRegBulkBar,enrollCamper:enrollCamper,generateParentInvite:generateParentInvite,setRegFilter:setRegFilter,rescindEnrollment:rescindEnrollment,syncAllParentPortals:syncAllParentPortals,auditParentEmails:auditParentEmails,
     saveAppNote:saveAppNote,printApplication:printApplication,
     openFormConfig:openFormConfig,saveFormConfig:saveFormConfig,addCustomQ:addCustomQ,addPromoRow:addPromoRow,

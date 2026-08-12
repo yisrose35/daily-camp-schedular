@@ -60,6 +60,8 @@ body.sidebar-open .sidebar{transform:translateX(0)}
 .me-btn--sec{background:#fff;color:var(--s700);border:1px solid var(--s200)}
 .me-btn--sec:hover{background:var(--s50);border-color:var(--s300)}
 .me-btn--danger{color:var(--err);background:rgba(239,68,68,.06);border:1px solid rgba(239,68,68,.15)}
+.me-btn--teal{background:var(--teal);color:#fff}
+.me-btn--teal:hover{background:var(--teal-dk);box-shadow:0 2px 8px rgba(20,125,145,.25)}
 .me-btn--sm{padding:5px 10px;font-size:.75rem}
 .me-btn--ghost{background:transparent;color:var(--s500);padding:5px 8px}
 .me-btn--ghost:hover{color:var(--s800);background:var(--s100)}
