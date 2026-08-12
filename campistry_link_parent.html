@@ -2950,6 +2950,7 @@ window.addEventListener('storage', function(e) {
 <script src="campistry_lite_biometric.js"></script>
 <script src="campistry_bio_native.js"></script>
 <script src="campistry_haptics.js"></script>
+<script src="campistry_push.js"></script>
 <script src="campistry_keyboard.js"></script>
 <script src="campistry_notes_quick.js"></script>
 <script src="campistry_link_capacitor.js"></script>
@@ -3980,6 +3981,7 @@ window.addEventListener('storage', function(e) {
             console.log('[Parent] Signed in OK');
             var session = (res.data && res.data.session) || null;
             if (Bio) Bio.saveSession(session);
+            if (window.campistryPushRegister) window.campistryPushRegister();   // ask only once there is something to notify about
             // Offer biometrics once, here, where the benefit is obvious. Then
             // the halves come together while the portal loads.
             _maybeOfferBio(session, function () {
@@ -4056,6 +4058,10 @@ window.addEventListener('storage', function(e) {
         else { _showCreateAccount('', null); }
     };
     window.parentSignOut = function() {
+        // Unregister this device first: otherwise the phone keeps receiving the
+        // previous account's notifications, which on a shared family device
+        // means one parent seeing another's alerts.
+        if (window.campistryPushForget) window.campistryPushForget();
         db.auth.signOut().then(function() { window.location.reload(); });
     };
 

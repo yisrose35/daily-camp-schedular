@@ -22,6 +22,7 @@ const FILES = [
     'campistry_bio_native.js',     // native biometrics bridge
     'campistry_haptics.js',        // shared haptics + the Settings preference
     'campistry_keyboard.js',       // keeps the focused field clear of the keyboard
+    'campistry_push.js',           // push registration; no-op until Firebase/APNs exist
     'campistry_ota.js',            // live-update bundle confirmation
     // Face matching, for the camper headshot + photo-consent flow. These were
     // missing from the bundle until the reference check below caught them.

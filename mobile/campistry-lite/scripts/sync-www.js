@@ -46,6 +46,7 @@ const FILES = [
     'campistry_bio_native.js',     // shared native biometrics bridge
     'campistry_haptics.js',        // shared haptics + the Settings preference
     'campistry_keyboard.js',       // keeps the focused field clear of the keyboard
+    'campistry_push.js',           // push registration; no-op until Firebase/APNs exist
     'campistry_ota.js',            // live-update bundle confirmation
 
     'manifest_lite.webmanifest',
