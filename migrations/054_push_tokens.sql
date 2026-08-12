@@ -119,6 +119,12 @@ AS $$
         ) IS TRUE;
 $$;
 
+-- Service role ONLY: this returns other people's device tokens and user ids.
+-- Revoking from public and authenticated is NOT enough — Supabase grants
+-- EXECUTE on new functions to anon as well, so an anonymous caller could still
+-- run it. Verified against the live database: with only those two revokes it
+-- answered an anonymous request instead of refusing it.
 REVOKE ALL ON FUNCTION public.push_targets_for_camp(uuid, text) FROM public;
+REVOKE ALL ON FUNCTION public.push_targets_for_camp(uuid, text) FROM anon;
 REVOKE ALL ON FUNCTION public.push_targets_for_camp(uuid, text) FROM authenticated;
--- Service role only: this returns other people's device tokens.
+GRANT EXECUTE ON FUNCTION public.push_targets_for_camp(uuid, text) TO service_role;
