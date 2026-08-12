@@ -20621,6 +20621,44 @@
 
                     // 2) Lay generic tiles wall-to-wall (pure; per-bunk independent — except the
                     //    cross-bunk resourceGate, which enforces shared-facility limits).
+                    // ★ DURATION-FEASIBILITY (split-shape check): narrow each floating special
+                    //   demand's durations to the union of durations of activities WEEK-FRESH
+                    //   for THIS bunk in that subcat. The packer must never mint a piece
+                    //   length nothing can fill — live: food@10 tiles laid for bunks whose
+                    //   only week-fresh food items are 20-min became permanent 10-min orphan
+                    //   slivers. Empty intersection ⇒ durations left as-is (the week-dry
+                    //   demote at reconcile owns the fully-dry case; narrowing to [] would
+                    //   starve the packer of a demand reconcile chose to keep).
+                    try {
+                        var _dfDate = (typeof window !== 'undefined' && (window._activeGenDate || window.currentScheduleDate)) || '';
+                        var _dfU = (typeof window !== 'undefined') && window.SchedulerCoreUtils;
+                        if (_dfU && typeof _dfU.getPeriodActivityCount === 'function' && typeof todaysSpecials !== 'undefined' && todaysSpecials && todaysSpecials.length) {
+                            var _dfBySub = {};
+                            todaysSpecials.forEach(function (x) {
+                                if (!x || !x.name || x.available === false) return;
+                                var k0 = _glCanon(x.subcategory);
+                                (_dfBySub[k0] = _dfBySub[k0] || []).push({ name: x.name, durs: _glSpecialDurs(x.name) || [] });
+                            });
+                            var _dfNarrowed = 0;
+                            Object.keys(_glPerBunk).forEach(function (fb) {
+                                var fl = _glPerBunk[fb] && _glPerBunk[fb].floating;
+                                if (!Array.isArray(fl)) return;
+                                fl.forEach(function (dem) {
+                                    if (!dem || dem.kind !== 'special' || !dem.subcat || !Array.isArray(dem.durations) || dem.durations.length < 2) return;
+                                    var list = _dfBySub[_glCanon(dem.subcat)]; if (!list || !list.length) return;
+                                    var fresh = {};
+                                    for (var _li = 0; _li < list.length; _li++) {
+                                        var it = list[_li];
+                                        try { if ((_dfU.getPeriodActivityCount(fb, it.name, '1week', _dfDate) || 0) > 0) continue; } catch (_eDf1) {}
+                                        for (var _di = 0; _di < it.durs.length; _di++) fresh[it.durs[_di]] = 1;
+                                    }
+                                    var narrowed = dem.durations.filter(function (d) { return fresh[d]; });
+                                    if (narrowed.length && narrowed.length < dem.durations.length) { dem.durations = narrowed; _dfNarrowed++; }
+                                });
+                            });
+                            if (_dfNarrowed) log('[DURATION-FEASIBILITY] narrowed ' + _dfNarrowed + ' floating demand(s) to week-fresh piece lengths — no tile is minted at a length nothing can fill');
+                        }
+                    } catch (_eDf) {}
                     // ★ ARRANGEMENT STRATEGY: per-bunk floating-demand order. The list order
                     //   drives the packer's candidate enumeration and every stable-sort tie
                     //   downstream — a different order explores different tilings of the same
