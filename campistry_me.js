@@ -3242,7 +3242,7 @@ function renderEnrollment(){
             +'<button class="me-btn me-btn--sec me-btn--sm" onclick="CampistryMe.bulkEnrollStatus(\'waitlisted\')">Waitlist</button>'
             +'<button class="me-btn me-btn--ghost me-btn--sm" style="color:var(--err)" onclick="CampistryMe.bulkEnrollStatus(\'declined\')">Decline</button>'
             +'</div>';
-        h+='<div class="me-tw"><table class="me-t"><thead><tr><th style="width:26px"><input type="checkbox" title="Select all" onclick="CampistryMe.toggleAllEnroll(this)"></th><th>Date</th><th>Camper</th><th>Parent</th><th>Session</th><th>Status</th><th>Forms</th><th>Payment</th><th style="width:100px"></th></tr></thead><tbody>';
+        h+='<div class="me-tw"><table class="me-t"><thead><tr><th style="width:26px"><input type="checkbox" title="Select all" onclick="CampistryMe.toggleAllEnroll(this)"></th><th>Date</th><th>Camper</th><th>Parent</th><th>Session</th><th>Status</th><th>Forms</th><th>Payment</th><th style="width:1%;white-space:nowrap"></th></tr></thead><tbody>';
         filtered.sort(function(a,b){return(b[1].appliedDate||'').localeCompare(a[1].appliedDate||'')}).forEach(function([id,e]){
             var sc=e.status==='enrolled'?'ok':e.status==='accepted'?'ok':e.status==='waitlisted'?'warn':e.status==='declined'||e.status==='withdrawn'?'err':'gray';
             var formsDone=e.formsCompleted||0,formsTotal=e.formsRequired||0;
@@ -3257,21 +3257,37 @@ function renderEnrollment(){
             h+='<td>'+bdg(e.status||'applied',sc)+'</td>';
             h+='<td><span style="font-size:.75rem;font-weight:600;color:'+formsColor+'">'+formsDone+'/'+formsTotal+'</span></td>';
             h+='<td><span style="font-size:.75rem;font-weight:600;color:'+payColor+'">'+esc(e.paymentStatus||'pending')+'</span></td>';
-            h+='<td style="text-align:right" onclick="event.stopPropagation()"><div style="display:flex;gap:3px;justify-content:flex-end;flex-wrap:wrap">';
-            h+='<button class="me-btn me-btn--sec me-btn--sm" onclick="CampistryMe.viewApplication(\''+esc(id)+'\')">'+ico('review')+'Review</button>';
-            // Status change buttons
+            // The row itself opens Review (onclick on <tr> above) — the camper
+            // name/row IS the "open their registration" affordance, so this
+            // column only needs the status-changing actions, not a redundant
+            // Review button. Secondary/destructive actions collapse into a
+            // per-row "⋯" menu (same me-more-wrap/_toggleMenu component used
+            // for the page-header menus) so a row never shows more than one
+            // button plus one menu trigger, no matter how many actions exist.
+            var menuId='regRowMenu_'+id;
+            h+='<td style="text-align:right" onclick="event.stopPropagation()"><div style="display:flex;gap:6px;justify-content:flex-end;align-items:center">';
             if(e.status==='applied'){
                 h+='<button class="me-btn me-btn--pri me-btn--sm" onclick="CampistryMe.updateEnrollStatus(\''+esc(id)+'\',\'accepted\')">Accept</button>';
-                h+='<button class="me-btn me-btn--sec me-btn--sm" onclick="CampistryMe.updateEnrollStatus(\''+esc(id)+'\',\'waitlisted\')">Waitlist</button>';
+                h+='<div class="me-more-wrap"><button class="me-btn me-btn--sec me-btn--sm" onclick="CampistryMe._toggleMenu(\''+menuId+'\')">⋯</button>'
+                    +'<div class="me-more-menu" id="'+menuId+'">'
+                    +'<button onclick="CampistryMe.updateEnrollStatus(\''+esc(id)+'\',\'waitlisted\')">Waitlist</button>'
+                    +'<button onclick="CampistryMe.updateEnrollStatus(\''+esc(id)+'\',\'declined\')" style="color:var(--err)">Decline</button>'
+                    +'</div></div>';
             }else if(e.status==='accepted'){
                 h+='<button class="me-btn me-btn--pri me-btn--sm" onclick="CampistryMe.enrollCamper(\''+esc(id)+'\')">'+ico('enroll')+'Enroll</button>';
-                h+='<button class="me-btn me-btn--sec me-btn--sm" onclick="CampistryMe.generateParentInvite(\''+esc(id)+'\')" title="Get parent portal invite link">'+ico('invite')+'Invite</button>';
-                h+='<button class="me-btn me-btn--ghost-danger me-btn--sm" onclick="CampistryMe.rescindEnrollment(\''+esc(id)+'\')">'+ico('rescind')+'Rescind</button>';
+                h+='<div class="me-more-wrap"><button class="me-btn me-btn--sec me-btn--sm" onclick="CampistryMe._toggleMenu(\''+menuId+'\')">⋯</button>'
+                    +'<div class="me-more-menu" id="'+menuId+'">'
+                    +'<button onclick="CampistryMe.generateParentInvite(\''+esc(id)+'\')">'+ico('invite')+'Get invite link</button>'
+                    +'<button onclick="CampistryMe.rescindEnrollment(\''+esc(id)+'\')" style="color:var(--err)">'+ico('rescind')+'Rescind</button>'
+                    +'</div></div>';
             }else if(e.status==='waitlisted'){
                 h+='<button class="me-btn me-btn--sec me-btn--sm" onclick="CampistryMe.updateEnrollStatus(\''+esc(id)+'\',\'accepted\')">Accept</button>';
             }else if(e.status==='enrolled'){
-                h+='<button class="me-btn me-btn--sec me-btn--sm" onclick="CampistryMe.generateParentInvite(\''+esc(id)+'\')" title="Get parent portal invite link">'+ico('invite')+'Invite</button>';
-                h+='<button class="me-btn me-btn--ghost-danger me-btn--sm" onclick="CampistryMe.rescindEnrollment(\''+esc(id)+'\')">'+ico('rescind')+'Rescind</button>';
+                h+='<div class="me-more-wrap"><button class="me-btn me-btn--sec me-btn--sm" onclick="CampistryMe._toggleMenu(\''+menuId+'\')">⋯</button>'
+                    +'<div class="me-more-menu" id="'+menuId+'">'
+                    +'<button onclick="CampistryMe.generateParentInvite(\''+esc(id)+'\')">'+ico('invite')+'Get invite link</button>'
+                    +'<button onclick="CampistryMe.rescindEnrollment(\''+esc(id)+'\')" style="color:var(--err)">'+ico('rescind')+'Rescind</button>'
+                    +'</div></div>';
             }else if(e.status==='withdrawn'||e.status==='declined'){
                 h+='<button class="me-btn me-btn--sec me-btn--sm" onclick="CampistryMe.updateEnrollStatus(\''+esc(id)+'\',\'waitlisted\')">Re-add to waitlist</button>';
             }
