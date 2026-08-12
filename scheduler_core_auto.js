@@ -698,6 +698,35 @@
         //   producing three phantom cross-division conflicts. These helpers keep the
         //   two arrays in lockstep: append writes BOTH, sync mirrors a mutated slot's
         //   times/identity, remove splices BOTH and renumbers slotIndex.
+        // ★ REPEAT-BEFORE-DEAD gate (user doctrine): a repeat across DAYS is legal —
+        //   only the CONFIGURED limits bind: same-day no-repeat (callers' mineA/held
+        //   checks), frequencyDays min-gap, and maxUsage per week/half/period. Fresh
+        //   candidates always rank first via the look-ahead ordering; this gate only
+        //   decides whether an already-had-this-week activity may fill otherwise-dead
+        //   time. Defensive: a missing helper never blocks (the fill gates that DO
+        //   exist still apply).
+        function _repeatAllowed(bunk, name) {
+            try {
+                var ap = ((typeof window !== 'undefined' && window.activityProperties) || {})[name] || {};
+                var dk = (typeof window !== 'undefined' && (window._activeGenDate || window.currentScheduleDate)) || '';
+                var U = (typeof window !== 'undefined') && window.SchedulerCoreUtils;
+                var fd = parseInt(ap.frequencyDays, 10);
+                if (fd > 0) {
+                    var _gds = (U && U.getDaysSinceActivity) || ((typeof window !== 'undefined' && window.RotationEngine) ? window.RotationEngine.getDaysSinceActivity : null);
+                    if (typeof _gds === 'function') {
+                        var ds = null;
+                        try { ds = _gds(bunk, name, dk); } catch (_e1) { try { ds = _gds(bunk, name); } catch (_e2) {} }
+                        if (ds != null && isFinite(ds) && ds < fd) return false;
+                    }
+                }
+                var mu = parseInt(ap.maxUsage, 10);
+                if (mu > 0 && U && typeof U.getPeriodActivityCount === 'function') {
+                    var per = ap.maxUsagePeriod || ap.usagePeriod || ap.rotationPeriod || '1week';
+                    if ((U.getPeriodActivityCount(bunk, name, per, dk) || 0) >= mu) return false;
+                }
+            } catch (_eRa) {}
+            return true;
+        }
         function _alignedPbs(bunk, grade) {
             try {
                 var dt = window.divisionTimes && window.divisionTimes[grade];
@@ -819,7 +848,7 @@
                 var mine = {};
                 live.forEach(function (r) { mine[String(r._activity || r.field)] = 1; });
                 // incoming candidates: THE hole's own subcategory, free seat somewhere
-                var xs = _feSpecials.filter(function (x) { return _feCanon(x.subcategory) === sub && !mine[x.name]; });
+                var xs = _feSpecials.filter(function (x) { return _feCanon(x.subcategory) === sub && !mine[x.name] && _repeatAllowed(bk, x.name); });
                 if (!xs.length) return;
                 for (var ti2 = 0; ti2 < live.length && !rec._exchanged; ti2++) {
                     var T = live[ti2];
@@ -1031,7 +1060,7 @@
                 var holeDur = rec.endMin - rec.startMin;
                 var mineA = {};
                 liveA.forEach(function (r) { mineA[String(r._activity || r.field)] = 1; });
-                var xs = _cxSpecials.filter(function (x) { return _cxCanon(x.subcategory) === sub && !mineA[x.name] && _cxDursOf(x).indexOf(holeDur) >= 0; });
+                var xs = _cxSpecials.filter(function (x) { return _cxCanon(x.subcategory) === sub && !mineA[x.name] && _cxDursOf(x).indexOf(holeDur) >= 0 && _repeatAllowed(A, x.name); });
                 if (!xs.length) {
                     // PROVEN DRY: no same-subcat, duration-fit activity exists for this
                     // bunk today AT ALL (independent of seats). The floor is lost either
@@ -1245,7 +1274,7 @@
                 for (var _a1 = 0; _a1 < liveA.length; _a1++) { if (liveA[_a1]._startMin < rec.endMin && liveA[_a1]._endMin > rec.startMin) return; }
                 var mineA = {}; liveA.forEach(function (r) { mineA[String(r._activity || r.field)] = 1; });
                 var tmplA = _cxTmplOf(A, null);
-                var xs = _cxSpecials.filter(function (x) { return _cxCanon(x.subcategory) === sub && !mineA[x.name] && _cxDursOf(x).indexOf(len) >= 0; });
+                var xs = _cxSpecials.filter(function (x) { return _cxCanon(x.subcategory) === sub && !mineA[x.name] && _cxDursOf(x).indexOf(len) >= 0 && _repeatAllowed(A, x.name); });
                 for (var xi = 0; xi < xs.length && !rec._exchanged; xi++) {
                     var X = xs[xi];
                     if (!_cxLegal({ type: 'special', event: X.name, _assignedSpecial: X.name, _specialLocation: X.name, startMin: rec.startMin, endMin: rec.endMin }, tmplA)) continue;
@@ -1588,6 +1617,7 @@
                                         var X = _fbSpecials[_si];
                                         if (_fbDursOf(X).indexOf(_fmLen) < 0) continue;
                                         if (usedToday[X.name]) continue;
+                                        if (!_repeatAllowed(bk, X.name)) continue;
                                         var _xSub = _fbCanon(X.subcategory);
                                         if (_fmHeld[_xSub]) continue;
                                         try { if (typeof isSpecialAvailableForBunk === 'function' && !isSpecialAvailableForBunk(X.name, _fbGradeOf[String(bk)], bk, globalSettings)) continue; } catch (_eFmA) {}
@@ -20637,26 +20667,13 @@
                                         //   (live: it said few deliverable, the endgame filled 28), else it
                                         //   becomes an honest-open window the passes can still rescue.
                                         if ((typeof window === 'undefined') || (window.__softDemote !== false)) {
-                                            // WEEK-DRY at demand time: a bunk with ZERO week-fresh,
-                                            // duration-fit activities left in this subcat cannot fill
-                                            // ANY tile — soft-keeping a unit only manufactures a dead
-                                            // sliver the released window can never absorb (live: 140min
-                                            // of 10-min orphans). Hard-demote it so the packer lays
-                                            // full-length fillable demand (sports) in that space.
-                                            var _sdDry = false;
-                                            try {
-                                                var _sdNames = ranked[i].names || [];
-                                                var _sdU = (typeof window !== 'undefined') && window.SchedulerCoreUtils;
-                                                if (_sdU && typeof _sdU.getPeriodActivityCount === 'function' && _sdNames.length) {
-                                                    _sdDry = true;
-                                                    var _sdDate = (typeof window !== 'undefined' && (window._activeGenDate || window.currentScheduleDate)) || '';
-                                                    for (var _sdn = 0; _sdn < _sdNames.length; _sdn++) {
-                                                        if ((_sdU.getPeriodActivityCount(ranked[i].bunk, _sdNames[_sdn], '1week', _sdDate) || 0) === 0) { _sdDry = false; break; }
-                                                    }
-                                                }
-                                            } catch (_eSd) { _sdDry = false; }
-                                            if (_sdDry) { dem.qty = 0; demoted++; }
-                                            else { dem.qty = Math.min(q, 1); dem._reconcileSoft = true; demoted++; }
+                                            // SOFT always — even for week-dry bunks. USER DOCTRINE:
+                                            // a repeat across DAYS is legal (only same-day, cooldowns
+                                            // and per-period usage limits bind), so a week-dry bunk's
+                                            // window is FILLABLE by a legal repeat — the endgame's
+                                            // repeat-before-dead pools handle it. Zeroing the demand
+                                            // made these misses silent and unfixable.
+                                            dem.qty = Math.min(q, 1); dem._reconcileSoft = true; demoted++;
                                         }
                                         else { dem.qty = 0; demoted++; }
                                     }
