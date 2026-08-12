@@ -284,7 +284,20 @@ body {
     color: rgba(255,255,255,0.85);
     font-weight: 400;
 }
-.lk-hero-kids { position: relative; z-index: 1; display: flex; gap: 8px; margin-top: 18px; flex-wrap: wrap; }
+/* One scrolling row, not a wrapping block. A family with six children across
+   three camps would otherwise wrap to three rows and add ~100px to the hero,
+   pushing everything else down the screen. Scrolling keeps the hero the same
+   height whether you have one child or six. */
+.lk-hero-kids {
+    position: relative; z-index: 1; display: flex; gap: 8px; margin-top: 18px;
+    flex-wrap: nowrap; overflow-x: auto; scrollbar-width: none;
+    /* Bleed to the hero edges so a chip scrolling past does not stop short of
+       the padding and look clipped mid-air. */
+    margin-left: -4px; padding: 4px;
+    scroll-snap-type: x proximity;
+}
+.lk-hero-kids::-webkit-scrollbar { display: none; }
+.lk-hero-kid-chip { flex: none; scroll-snap-align: start; }
 .lk-hero-kid-chip {
     display: flex; align-items: center; gap: 8px;
     background: rgba(255,255,255,0.16);
