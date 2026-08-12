@@ -55,7 +55,7 @@ body{font-family:var(--font);background:var(--s50);color:var(--s800);-webkit-fon
 
 <!-- Bunk & Session Choices -->
 <div class="cd" id="bunkCard"><div class="ct"><svg viewBox="0 0 24 24"><path d="M3 9l9-7 9 7v11a2 2 0 01-2 2H5a2 2 0 01-2-2z"/><polyline points="9 22 9 12 15 12 15 22"/></svg>Bunk &amp; Session Choices</div>
-<div class="fr"><div class="fg"><label class="fl">Bunkmate Request</label><input class="fi" id="paBnk" placeholder="Name of camper to be with"></div><div class="fg"><label class="fl">Separation Request</label><input class="fi" id="paSep" placeholder="Name to keep apart"></div></div>
+<div class="fr"><div class="fg" id="paBnkGroup"><label class="fl" id="paBnkLabel">Bunkmate Request</label><div id="paBnkList"></div></div><div class="fg" id="paSepGroup"><label class="fl" id="paSepLabel">Separation Request</label><div id="paSepList"></div></div></div>
 <div class="fg"><label class="fl">Confirm Session</label><select class="fs" id="paSess"><option value="">—</option><option>Yes, we confirm</option><option>No, we need to reschedule</option><option>Not sure yet</option></select></div>
 </div>
 
@@ -137,13 +137,52 @@ body{font-family:var(--font);background:var(--s50);color:var(--s800);-webkit-fon
 (function(){
 
 // ─── ADVANCED FORM CONFIG (fields / section order / branding) ─────────
-// Mirrors PAF_FIELD_CATALOG in campistry_me.js.
-var FIELD_ELEMENT_MAP={bunkmate:'paBnk',separate:'paSep',sessionConfirm:'paSess',shirt:'paShirt',transportation:'paTrans'};
-var FIELD_DEFAULT_LABEL={bunkmate:'Bunkmate Request',separate:'Separation Request',sessionConfirm:'Confirm Session',shirt:'T-Shirt Size',transportation:'Transportation'};
-var FIELD_REQUIRED_DEFAULT={bunkmate:false,separate:false,sessionConfirm:false,shirt:false,transportation:false};
-var FIELD_REQUIRED_STATE=Object.assign({},FIELD_REQUIRED_DEFAULT,{photoConsent:false});
+// Mirrors PAF_FIELD_CATALOG in campistry_me.js. bunkmate/separate are handled
+// separately below (_renderBunkRequestLists) since they're a camp-configured
+// *count* of inputs, not a single field — but they still go through the same
+// section-disabled/required/label plumbing as everything else here.
+var FIELD_ELEMENT_MAP={sessionConfirm:'paSess',shirt:'paShirt',transportation:'paTrans'};
+var FIELD_DEFAULT_LABEL={bunkmate:'Bunkmate Request',separate:'Do-Not-Bunk-With Request',sessionConfirm:'Confirm Session',shirt:'T-Shirt Size',transportation:'Transportation'};
+var FIELD_REQUIRED_DEFAULT={sessionConfirm:false,shirt:false,transportation:false};
+var FIELD_REQUIRED_STATE=Object.assign({},FIELD_REQUIRED_DEFAULT,{photoConsent:false,bunkmate:false,separate:false});
 var FIELD_ENABLED_STATE={};
 var FIELD_TO_SECTION={bunkmate:'bunk',separate:'bunk',sessionConfirm:'bunk',shirt:'logistics',transportation:'logistics'};
+
+// Default mirrors campistry_me.js's _defaultBunkGenConfig() — used only if
+// the camp hasn't saved bunkGenConfig yet, or in the builder's live preview
+// (which has no real camp data to read).
+var _bunkGenCfg={requestsEnabled:true,maxRequests:2,honoredRequests:2,doNotBunkEnabled:true,maxDoNotBunk:2};
+// Builds `count` numbered text inputs into `listEl`, one per requested
+// friend / do-not-bunk-with slot — a parent literally can't type a 4th name
+// when the camp caps requests at 3, which a single comma-separated field
+// can't enforce.
+function _renderRequestInputs(listEl,count,placeholderPrefix,inputClass){
+    if(!listEl)return;
+    var h='';
+    for(var i=1;i<=count;i++){
+        h+='<input class="fi '+inputClass+'" style="margin-bottom:6px" placeholder="'+esc(placeholderPrefix+' #'+i)+'">';
+    }
+    listEl.innerHTML=h;
+}
+// Must run AFTER applyFieldConfig, so FIELD_ENABLED_STATE.bunkmate/separate
+// (the form-builder's per-field toggle) is already resolved — visibility is
+// the AND of that and the camp's bunkGenConfig toggle, either one can hide it.
+function _renderBunkRequestLists(cfg){
+    _bunkGenCfg=cfg||_bunkGenCfg;
+    var bnkGroup=document.getElementById('paBnkGroup'),sepGroup=document.getElementById('paSepGroup');
+    var showFriends=FIELD_ENABLED_STATE.bunkmate!==false&&_bunkGenCfg.requestsEnabled!==false&&(_bunkGenCfg.maxRequests||0)>0;
+    var showAvoid=FIELD_ENABLED_STATE.separate!==false&&_bunkGenCfg.doNotBunkEnabled!==false&&(_bunkGenCfg.maxDoNotBunk||0)>0;
+    if(bnkGroup)bnkGroup.style.display=showFriends?'':'none';
+    if(sepGroup)sepGroup.style.display=showAvoid?'':'none';
+    var bnkList=document.getElementById('paBnkList'),sepList=document.getElementById('paSepList');
+    if(showFriends)_renderRequestInputs(bnkList,_bunkGenCfg.maxRequests,'Friend','paBnkInput');
+    else if(bnkList)bnkList.innerHTML='';
+    if(showAvoid)_renderRequestInputs(sepList,_bunkGenCfg.maxDoNotBunk,'Name to keep apart','paSepInput');
+    else if(sepList)sepList.innerHTML='';
+}
+function _bunkListValues(inputClass){
+    return Array.prototype.map.call(document.querySelectorAll('.'+inputClass),function(el){return (el.value||'').trim();}).filter(Boolean);
+}
 
 function applyFieldConfig(fields,sectionsDisabled){
     fields=fields||{}; sectionsDisabled=sectionsDisabled||{};
@@ -163,6 +202,26 @@ function applyFieldConfig(fields,sectionsDisabled){
         if(label){
             var text=(cfg&&cfg.label)||FIELD_DEFAULT_LABEL[fid];
             label.innerHTML=esc(text)+(required?' <span class="rq">*</span>':'');
+        }
+    });
+    // bunkmate/separate are the dynamic request-count lists, not part of the
+    // text-field loop above — still respect the section toggle, per-field
+    // enable/required/label, and (separately, via _renderBunkRequestLists)
+    // the camp's request-count limits.
+    ['bunkmate','separate'].forEach(function(fid){
+        var group=document.getElementById(fid==='bunkmate'?'paBnkGroup':'paSepGroup');
+        var labelEl=document.getElementById(fid==='bunkmate'?'paBnkLabel':'paSepLabel');
+        var cfg=fields[fid];
+        var sectionOff=sectionsDisabled[FIELD_TO_SECTION[fid]];
+        var enabled=sectionOff?false:(cfg?(cfg.enabled!==false):true);
+        FIELD_ENABLED_STATE[fid]=enabled;
+        if(group)group.style.display=enabled?'':'none';
+        if(!enabled)return;
+        var required=cfg?!!cfg.required:!!FIELD_REQUIRED_DEFAULT[fid];
+        FIELD_REQUIRED_STATE[fid]=required;
+        if(labelEl){
+            var text=(cfg&&cfg.label)||FIELD_DEFAULT_LABEL[fid];
+            labelEl.innerHTML=esc(text)+(required?' <span class="rq">*</span>':'');
         }
     });
     // photoConsent is a checkbox, not part of the text-field loop above.
@@ -277,6 +336,7 @@ function applyFormConfig(fc){
     }
 
     applyFieldConfig(fc.fields,sectionsDisabled);
+    _renderBunkRequestLists(_bunkGenCfg);
     applySectionOrder(fc.sectionOrder);
     applyBranding(fc.branding);
     _refreshAttachedLists(fc.attachedListIds||[]);
@@ -400,6 +460,12 @@ window.submitApp=function submitApp(){
             missingLabel=(_currentFC.fields&&_currentFC.fields[_fid]&&_currentFC.fields[_fid].label)||FIELD_DEFAULT_LABEL[_fid];
         }
     }
+    if(!missingLabel&&FIELD_ENABLED_STATE.bunkmate!==false&&FIELD_REQUIRED_STATE.bunkmate&&!_bunkListValues('paBnkInput').length){
+        missingLabel=(_currentFC.fields&&_currentFC.fields.bunkmate&&_currentFC.fields.bunkmate.label)||FIELD_DEFAULT_LABEL.bunkmate;
+    }
+    if(!missingLabel&&FIELD_ENABLED_STATE.separate!==false&&FIELD_REQUIRED_STATE.separate&&!_bunkListValues('paSepInput').length){
+        missingLabel=(_currentFC.fields&&_currentFC.fields.separate&&_currentFC.fields.separate.label)||FIELD_DEFAULT_LABEL.separate;
+    }
     if(!missingLabel&&FIELD_ENABLED_STATE.photoConsent!==false&&FIELD_REQUIRED_STATE.photoConsent){
         var pc=document.getElementById('paPhotoConsent');
         if(pc&&!pc.checked)missingLabel=(_currentFC.fields&&_currentFC.fields.photoConsent&&_currentFC.fields.photoConsent.label)||'Photo/Media Permission';
@@ -423,8 +489,8 @@ window.submitApp=function submitApp(){
     }
 
     var rec={submittedDate:new Date().toISOString()};
-    if(FIELD_ENABLED_STATE.bunkmate!==false)rec.bunkmate=v('paBnk');
-    if(FIELD_ENABLED_STATE.separate!==false)rec.separate=v('paSep');
+    if(FIELD_ENABLED_STATE.bunkmate!==false)rec.bunkmate=_bunkListValues('paBnkInput');
+    if(FIELD_ENABLED_STATE.separate!==false)rec.separate=_bunkListValues('paSepInput');
     if(FIELD_ENABLED_STATE.sessionConfirm!==false)rec.sessionConfirm=v('paSess');
     if(FIELD_ENABLED_STATE.shirt!==false)rec.shirt=v('paShirt');
     if(FIELD_ENABLED_STATE.transportation!==false)rec.transportation=v('paTrans');
@@ -530,6 +596,7 @@ async function loadReal(id){
         showState('alreadyWrap');
         return;
     }
+    if(me&&me.bunkGenConfig)_bunkGenCfg=me.bunkGenConfig;
     applyFormConfig((me&&me.postAcceptFormConfig)||{});
     showState('formWrap');
 }

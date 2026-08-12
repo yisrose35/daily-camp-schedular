@@ -32,6 +32,22 @@ var staffFilter='all';      // Staffing pipeline filter
 var leads={};               // Inquiry CRM: lead id → prospective-family record
 var leadFilter='all';       // Leads pipeline filter
 var nextCamperId=1;
+// Bunk auto-generator settings — camp-wide policy for friend requests,
+// do-not-bunk-with requests, and bunk size, consumed by autoGenerateBunks()
+// and by the Post-Acceptance Form's friend-request inputs.
+var bunkGenConfig=_defaultBunkGenConfig();
+function _defaultBunkGenConfig(){
+    return {
+        requestsEnabled:true, maxRequests:2, honoredRequests:2,
+        doNotBunkEnabled:true, maxDoNotBunk:2,
+        minBunkSize:8, maxBunkSize:15,
+        criteria:[
+            {key:'school',label:'School',enabled:true},
+            {key:'area',label:'Area / City',enabled:true},
+            {key:'age',label:'Age',enabled:false}
+        ]
+    };
+}
 var _saveLockUntil=0; // timestamp — block cloud overwrites for 5s after local save
 
 // ═══ LOADING OVERLAY ═════════════════════════════════════════════
@@ -154,6 +170,8 @@ function loadData(){
         formConfig=me.formConfig||null;
         staffFormConfig=me.staffFormConfig||null;
         paFormConfig=me.postAcceptFormConfig||null;
+        bunkGenConfig=Object.assign(_defaultBunkGenConfig(),me.bunkGenConfig||{});
+        if(!Array.isArray(bunkGenConfig.criteria)||!bunkGenConfig.criteria.length)bunkGenConfig.criteria=_defaultBunkGenConfig().criteria;
         printSheets=Array.isArray(me.printSheets)?me.printSheets:[];
         savedReports=Array.isArray(me.savedReports)?me.savedReports:[];
         var pr=me.payroll||{};
@@ -253,6 +271,7 @@ function save(){
             formConfig:formConfig,
             staffFormConfig:staffFormConfig,
             postAcceptFormConfig:paFormConfig,
+            bunkGenConfig:bunkGenConfig,
             printSheets:printSheets,
             savedReports:savedReports,
             promoCodes:enrollSettings.promoCodes||(g.campistryMe?.promoCodes)||{},
@@ -2732,7 +2751,7 @@ function renderBB(){
     var cArr=Object.keys(roster);
     var un=cArr.filter(function(n){return!roster[n].bunk}),placed=cArr.length-un.length;
     var h=_layoutTabsHtml('bunkbuilder');
-    h+='<div class="sec-hd"><div><h2 class="sec-title">Bunk Builder</h2><p class="sec-desc">'+placed+'/'+cArr.length+' placed</p></div><div class="sec-actions"><button class="me-btn me-btn--pri me-btn--sm" onclick="CampistryMe.autoAssign()">⚡ Auto-Assign</button><button class="me-btn me-btn--sec me-btn--sm" onclick="CampistryMe.clearBunks()">Clear</button></div></div>';
+    h+='<div class="sec-hd"><div><h2 class="sec-title">Bunk Builder</h2><p class="sec-desc">'+placed+'/'+cArr.length+' placed</p></div><div class="sec-actions"><button class="me-btn me-btn--sec me-btn--sm" onclick="CampistryMe.openBunkGenSettings()">⚙ Bunk Settings</button><button class="me-btn me-btn--pri me-btn--sm" onclick="CampistryMe.autoGenerateBunks()">⚡ Auto-Generate</button><button class="me-btn me-btn--sec me-btn--sm" onclick="CampistryMe.clearBunks()">Clear</button></div></div>';
     if(!allB.length){h+='<div class="me-empty"><h3>No bunks</h3><p>Create divisions and bunks in Camp Structure first.</p></div>'}
     else{
         h+='<div class="bb"><div class="bb-pool" ondragover="event.preventDefault();this.querySelector(\'.bb-pool-bd\').classList.add(\'dragover\')" ondragleave="this.querySelector(\'.bb-pool-bd\').classList.remove(\'dragover\')" ondrop="CampistryMe.bbDrop(\'__pool__\',event);this.querySelector(\'.bb-pool-bd\').classList.remove(\'dragover\')">';
@@ -2795,8 +2814,367 @@ function autoAssign(){
     save();renderBB();toast('Auto-assigned')
 }
 function clearBunks(){if(!confirm('Clear all?'))return;Object.values(roster).forEach(function(c){c.bunk=''});save();renderBB();toast('Cleared')}
+
+// ═══ BUNK GENERATOR SETTINGS ════════════════════════════════════
+// Camp-wide policy consumed by autoGenerateBunks() below and by the
+// Post-Acceptance Form's friend-request inputs (campistry_postaccept.html).
+// Every camp field here maps 1:1 to something the user asked for: "camps
+// allow 2, others 3" (maxRequests), "we will use y" (honoredRequests),
+// min/max per bunk, and the ranked list of what matters for grouping
+// unrelated kids (criteria).
+var BUNK_CRITERIA_CATALOG=[
+    {key:'school',label:'School'},
+    {key:'area',label:'Area / City'},
+    {key:'age',label:'Age'}
+];
+function openBunkGenSettings(){
+    var c=bunkGenConfig;
+    var h='<div class="fsec">Bunk Size</div>';
+    h+='<div class="fr">'
+        +'<div class="fg"><label class="fl">Minimum per bunk</label><input type="number" min="1" id="bgMin" class="fi" value="'+(c.minBunkSize||0)+'"></div>'
+        +'<div class="fg"><label class="fl">Maximum per bunk</label><input type="number" min="1" id="bgMax" class="fi" value="'+(c.maxBunkSize||0)+'"></div>'
+        +'</div>';
+    h+='<div class="fsec">Friend Requests</div>';
+    h+='<div class="fg"><label class="fl" style="display:flex;align-items:center;gap:7px;cursor:pointer"><input type="checkbox" id="bgReqOn"'+(c.requestsEnabled?' checked':'')+'> Let parents request bunkmates on the Post-Acceptance Form</label></div>';
+    h+='<div class="fr">'
+        +'<div class="fg"><label class="fl">Friends a parent may request</label><input type="number" min="0" max="10" id="bgMaxReq" class="fi" value="'+(c.maxRequests||0)+'"></div>'
+        +'<div class="fg"><label class="fl">Of those, how many we\'ll try to honor</label><input type="number" min="0" max="10" id="bgHonReq" class="fi" value="'+(c.honoredRequests||0)+'"></div>'
+        +'</div>';
+    h+='<div class="fg"><label class="fl" style="display:flex;align-items:center;gap:7px;cursor:pointer"><input type="checkbox" id="bgAvoidOn"'+(c.doNotBunkEnabled?' checked':'')+'> Let parents request who NOT to bunk with</label></div>';
+    h+='<div class="fg"><label class="fl">Do-not-bunk-with requests allowed</label><input type="number" min="0" max="10" id="bgMaxAvoid" class="fi" value="'+(c.maxDoNotBunk||0)+'"></div>';
+    h+='<div class="fsec">What Else Matters For Grouping</div>';
+    h+='<p style="font-size:.76rem;color:var(--s500);margin:0 0 8px">Drag to set priority. The generator uses this — top to bottom — to group unrelated kids together (same school, same area, etc.) after friend requests are placed.</p>';
+    var order=(c.criteria||[]).map(function(x){return x.key});
+    BUNK_CRITERIA_CATALOG.forEach(function(x){ if(order.indexOf(x.key)<0)order.push(x.key); });
+    var enabledByKey={}; (c.criteria||[]).forEach(function(x){enabledByKey[x.key]=x.enabled!==false;});
+    var byKey={}; BUNK_CRITERIA_CATALOG.forEach(function(x){byKey[x.key]=x;});
+    h+='<div id="bgCritList">'+order.map(function(k){
+        var x=byKey[k]; if(!x)return'';
+        var on=enabledByKey[k]!==false;
+        return '<div class="bgCritRow" data-key="'+k+'" draggable="true" style="display:flex;align-items:center;gap:10px;padding:9px 10px;border:1px solid var(--s200);border-radius:8px;margin-bottom:5px;background:#fff;cursor:grab">'
+            +'<span style="color:var(--s300);font-size:.95rem;line-height:1;letter-spacing:-1px">⠿⠿</span>'
+            +'<label style="flex:1;display:flex;align-items:center;gap:8px;font-size:.83rem;font-weight:600;color:var(--s700);cursor:pointer"><input type="checkbox" class="bgCritOn"'+(on?' checked':'')+'>'+esc(x.label)+'</label>'
+            +'</div>';
+    }).join('')+'</div>';
+
+    showModal('Bunk Generator Settings',h,function(){
+        bunkGenConfig={
+            minBunkSize:Math.max(1,parseInt((document.getElementById('bgMin')||{}).value,10)||1),
+            maxBunkSize:Math.max(1,parseInt((document.getElementById('bgMax')||{}).value,10)||1),
+            requestsEnabled:!!(document.getElementById('bgReqOn')||{}).checked,
+            maxRequests:Math.max(0,parseInt((document.getElementById('bgMaxReq')||{}).value,10)||0),
+            honoredRequests:Math.max(0,parseInt((document.getElementById('bgHonReq')||{}).value,10)||0),
+            doNotBunkEnabled:!!(document.getElementById('bgAvoidOn')||{}).checked,
+            maxDoNotBunk:Math.max(0,parseInt((document.getElementById('bgMaxAvoid')||{}).value,10)||0),
+            criteria:Array.prototype.map.call(document.querySelectorAll('.bgCritRow'),function(row){
+                return {key:row.dataset.key,label:(byKey[row.dataset.key]||{}).label||row.dataset.key,enabled:row.querySelector('.bgCritOn').checked};
+            })
+        };
+        if(bunkGenConfig.honoredRequests>bunkGenConfig.maxRequests)bunkGenConfig.honoredRequests=bunkGenConfig.maxRequests;
+        if(bunkGenConfig.minBunkSize>bunkGenConfig.maxBunkSize)bunkGenConfig.minBunkSize=bunkGenConfig.maxBunkSize;
+        save();closeModal('dynModal');toast('Bunk settings saved');
+    });
+    var list=document.getElementById('bgCritList');
+    if(list){ _meReorderInit(list,'.bgCritRow'); list.querySelectorAll('.bgCritRow').forEach(function(row){_meAttachItemDrag(row)}); }
+}
 function setBunkCount(bunkName,value){var n=parseInt(value,10);if(isNaN(n)||n<0)n=0;bunkManualCounts[bunkName]=n;save()}
 function _clearBunkCount(bunkName){delete bunkManualCounts[bunkName];save();render(curPage);toast('Override cleared')}
+
+// ═══ BUNK AUTO-GENERATOR ════════════════════════════════════════
+// Fills only currently-unassigned campers (anyone already placed, manually
+// or by a previous run, is left exactly where they are). Per grade: friend
+// requests (honored up to bunkGenConfig.honoredRequests) cluster campers
+// together via union-find; do-not-bunk-with is a hard constraint checked at
+// every placement; leftover singles/clusters land in whichever valid bunk
+// scores best on the camp's configured criteria (school/area/age/…), biased
+// toward emptier bunks so bunks trend toward minBunkSize.
+function _splitNames(s){
+    if(Array.isArray(s))return s.map(function(x){return String(x||'').trim();}).filter(Boolean);
+    return String(s||'').split(/[,;\n]+|\s+and\s+|\s*&\s*/i).map(function(x){return x.trim();}).filter(Boolean);
+}
+// Prefers the enrollment with post-acceptance answers (richest source) over
+// an older/duplicate application for the same camper name.
+function _enrollmentForCamper(name){
+    var key=String(name||'').trim().toLowerCase();
+    if(!key)return null;
+    var matches=Object.values(enrollments).filter(function(e){return String(e.camperName||'').trim().toLowerCase()===key;});
+    if(!matches.length)return null;
+    matches.sort(function(a,b){
+        var aw=a.postAccept?1:0,bw=b.postAccept?1:0;
+        if(aw!==bw)return bw-aw;
+        return String(b.appliedDate||'').localeCompare(String(a.appliedDate||''));
+    });
+    return matches[0];
+}
+// Merges every source a bunk request could have come from: the roster
+// record's own Bunkmate/Do-Not-Bunk fields (office-editable in Edit Camper),
+// the original registration application, and the Post-Acceptance Form —
+// deduped and capped to the camp's configured limits.
+function _camperBunkRequests(name){
+    var cfg=bunkGenConfig,d=roster[name]||{};
+    var friends=[],avoid=[];
+    if(cfg.requestsEnabled!==false)friends=friends.concat(_splitNames(d.bunkmateRequest));
+    if(cfg.doNotBunkEnabled!==false)avoid=avoid.concat(_splitNames(d.separateFrom));
+    var enr=_enrollmentForCamper(name);
+    if(enr){
+        if(cfg.requestsEnabled!==false){
+            friends=friends.concat(_splitNames(enr.bunkmate));
+            if(enr.postAccept)friends=friends.concat(_splitNames(enr.postAccept.bunkmate));
+        }
+        if(cfg.doNotBunkEnabled!==false){
+            avoid=avoid.concat(_splitNames(enr.separateFrom));
+            if(enr.postAccept)avoid=avoid.concat(_splitNames(enr.postAccept.separate));
+        }
+    }
+    var selfKey=String(name||'').trim().toLowerCase();
+    function dedupe(arr,cap){
+        var seen={},out=[];
+        arr.forEach(function(n){
+            var k=n.toLowerCase();
+            if(!k||k===selfKey||seen[k])return;
+            seen[k]=1;out.push(n);
+        });
+        return cap!=null?out.slice(0,Math.max(0,cap)):out;
+    }
+    return {friends:dedupe(friends,cfg.maxRequests),avoid:dedupe(avoid,cfg.maxDoNotBunk)};
+}
+// Free-text names need matching to real camper records. Requires every word
+// in the typed request to prefix-match a word in the candidate's name, so
+// "Alice S" matches "Alice Smith" but not "Alice Jones" — best-effort, same
+// tradeoff as the free-text field itself (a picker would match exactly, but
+// means showing other families' kids' names to parents).
+function _resolveCamperName(text,candidates){
+    var t=String(text||'').trim().toLowerCase();
+    if(!t)return null;
+    var exact=candidates.filter(function(n){return n.toLowerCase()===t;})[0];
+    if(exact)return exact;
+    var reqWords=t.split(/\s+/).filter(Boolean);
+    if(!reqWords.length)return null;
+    var best=null;
+    candidates.forEach(function(n){
+        if(best)return;
+        var nWords=n.toLowerCase().split(/\s+/);
+        var allHit=reqWords.every(function(w){return nWords.some(function(nw){return nw.indexOf(w)===0;});});
+        if(allHit)best=n;
+    });
+    return best;
+}
+function _criterionMatch(key,d1,d2){
+    if(key==='school')return !!(d1.school&&d2.school&&d1.school.trim().toLowerCase()===d2.school.trim().toLowerCase());
+    if(key==='area')return !!((d1.city&&d2.city&&d1.city.trim().toLowerCase()===d2.city.trim().toLowerCase())||(d1.zip&&d2.zip&&d1.zip.trim()===d2.zip.trim()));
+    if(key==='age'){var a1=age(d1.dob),a2=age(d2.dob);return a1!==''&&a2!==''&&Math.abs(a1-a2)<=1;}
+    return false;
+}
+// Breaks a friend-cluster apart just enough that no do-not-bunk pair remains
+// inside any one group — each iteration moves the weaker-linked half of the
+// first violating pair into its own singleton, so the cluster converges.
+function _splitAvoidConflicts(group,reqMap){
+    if(group.length<2)return[group];
+    var groups=[group.slice()],guard=0,changed=true;
+    while(changed&&guard++<50){
+        changed=false;
+        for(var gi=0;gi<groups.length;gi++){
+            var g=groups[gi],pair=null;
+            for(var i=0;i<g.length&&!pair;i++){
+                for(var j=0;j<g.length;j++){
+                    if(i===j)continue;
+                    if(((reqMap[g[i]]&&reqMap[g[i]].avoid)||[]).indexOf(g[j])>=0){pair=[g[i],g[j]];break;}
+                }
+            }
+            if(pair){
+                var linkCount=function(x){return g.filter(function(y){return y!==x&&((reqMap[x]&&reqMap[x].friends)||[]).indexOf(y)>=0;}).length;};
+                var toMove=linkCount(pair[0])<=linkCount(pair[1])?pair[0]:pair[1];
+                groups[gi]=g.filter(function(x){return x!==toMove;});
+                groups.push([toMove]);
+                changed=true;
+                break;
+            }
+        }
+    }
+    return groups.filter(function(g){return g.length>0;});
+}
+function _capGroupSize(groups,maxSize){
+    var out=[];
+    groups.forEach(function(g){
+        if(g.length<=maxSize){out.push(g);return;}
+        for(var i=0;i<g.length;i+=maxSize)out.push(g.slice(i,i+maxSize));
+    });
+    return out;
+}
+function _placeGroupInBunk(group,bunkName,bunkState){
+    var bk=bunkState[bunkName];
+    group.forEach(function(n){
+        roster[n].bunk=bunkName;
+        roster[n].division=bk.div;
+        bk.occupants.push(n);
+    });
+}
+function _bunkGenForGrade(poolNames,bunks,cfg,report){
+    var gradeCandidates=Object.keys(roster).filter(function(n){return roster[n].grade===bunks[0].gr;});
+    var reqMap={};
+    poolNames.forEach(function(n){
+        var r=_camperBunkRequests(n);
+        var friends=r.friends.slice(0,cfg.honoredRequests).map(function(f){return _resolveCamperName(f,gradeCandidates);}).filter(Boolean);
+        var avoid=r.avoid.map(function(a){return _resolveCamperName(a,gradeCandidates);}).filter(Boolean);
+        reqMap[n]={friends:friends,avoid:avoid};
+        report.requestsTotal+=friends.length;
+    });
+
+    var parent={};poolNames.forEach(function(n){parent[n]=n;});
+    function find(x){while(parent[x]!==x){parent[x]=parent[parent[x]];x=parent[x];}return x;}
+    function union(a,b){var ra=find(a),rb=find(b);if(ra!==rb)parent[ra]=rb;}
+    poolNames.forEach(function(n){reqMap[n].friends.forEach(function(f){if(poolNames.indexOf(f)>=0)union(n,f);});});
+    var clusterMap={};
+    poolNames.forEach(function(n){var r=find(n);(clusterMap[r]=clusterMap[r]||[]).push(n);});
+    var groups=Object.keys(clusterMap).map(function(k){return clusterMap[k];});
+
+    var split=[];
+    groups.forEach(function(g){split=split.concat(_splitAvoidConflicts(g,reqMap));});
+    split=_capGroupSize(split,cfg.maxBunkSize);
+    split.sort(function(a,b){return b.length-a.length;});
+
+    var bunkState={};
+    bunks.forEach(function(bk){
+        var already=Object.keys(roster).filter(function(n){return roster[n].bunk===bk.name;});
+        bunkState[bk.name]={occupants:already.slice(),div:bk.div,gr:bk.gr};
+    });
+
+    function violatesAvoid(bunkName,names){
+        var occ=bunkState[bunkName].occupants;
+        for(var i=0;i<names.length;i++){
+            var av=(reqMap[names[i]]&&reqMap[names[i]].avoid)||[];
+            for(var j=0;j<av.length;j++)if(occ.indexOf(av[j])>=0)return true;
+            for(var k=0;k<occ.length;k++){
+                var occReq=reqMap[occ[k]]||_camperBunkRequests(occ[k]);
+                if((occReq.avoid||[]).indexOf(names[i])>=0)return true;
+            }
+        }
+        return false;
+    }
+    function similarity(bunkName,names){
+        var occ=bunkState[bunkName].occupants;
+        if(!occ.length)return 0;
+        var crit=(cfg.criteria||[]).filter(function(c){return c.enabled!==false;});
+        var score=0;
+        names.forEach(function(cn){
+            var cd=roster[cn]||{};
+            occ.forEach(function(on){
+                var od=roster[on]||{};
+                crit.forEach(function(c,idx){if(_criterionMatch(c.key,cd,od))score+=(crit.length-idx);});
+            });
+        });
+        return score;
+    }
+    function pullWeight(names){
+        var pull={};
+        names.forEach(function(n){
+            (reqMap[n].friends||[]).forEach(function(f){
+                if(poolNames.indexOf(f)>=0)return;
+                var bn=roster[f]&&roster[f].bunk;
+                if(bn)pull[bn]=(pull[bn]||0)+1;
+            });
+        });
+        return pull;
+    }
+
+    split.forEach(function(group){
+        var candidates=bunks.map(function(b){return b.name;}).filter(function(bn){
+            return (bunkState[bn].occupants.length+group.length)<=cfg.maxBunkSize;
+        });
+        if(!candidates.length){
+            report.warnings.push('No room for '+group.join(', ')+' — every bunk in this grade is at capacity.');
+            return;
+        }
+        var pull=pullWeight(group);
+        var safe=candidates.filter(function(bn){return !violatesAvoid(bn,group);});
+        var use=safe.length?safe:candidates;
+        if(!safe.length){
+            report.avoidViolations+=group.length;
+            report.warnings.push('Could not avoid a do-not-bunk conflict for '+group.join(', ')+' — no bunk had room without one.');
+        }
+        use.sort(function(a,b){
+            var sa=(pull[a]||0)*1000+similarity(a,group)*10-bunkState[a].occupants.length;
+            var sb=(pull[b]||0)*1000+similarity(b,group)*10-bunkState[b].occupants.length;
+            return sb-sa;
+        });
+        _placeGroupInBunk(group,use[0],bunkState);
+    });
+
+    poolNames.forEach(function(n){
+        var myBunk=roster[n].bunk;
+        (reqMap[n].friends||[]).forEach(function(f){
+            if(myBunk&&roster[f]&&roster[f].bunk===myBunk)report.requestsHonored++;
+        });
+    });
+    bunks.forEach(function(bk){
+        var ct=bunkState[bk.name].occupants.length;
+        if(ct>0&&ct<cfg.minBunkSize)report.underMin.push({bunk:bk.name,count:ct});
+    });
+}
+// Campers whose grade never matched a real bunk group (missing/mismatched
+// grade data) — placed by plain headcount balancing since there's no grade
+// to scope requests/criteria to. Same degraded-fallback shape as the old
+// autoAssign() cascade (grade → division → any bunk).
+function _bunkGenFallback(names,allBunks,cfg,report){
+    var counts={};allBunks.forEach(function(b){counts[b.name]=Object.keys(roster).filter(function(n){return roster[n].bunk===b.name;}).length;});
+    names.forEach(function(n){
+        var d=roster[n];
+        var el=allBunks.filter(function(b){return b.div===d.division;});
+        if(!el.length)el=allBunks;
+        el=el.filter(function(b){return counts[b.name]<cfg.maxBunkSize;});
+        if(!el.length){report.warnings.push(n+' could not be placed — every bunk is full.');return;}
+        el.sort(function(a,b){return counts[a.name]-counts[b.name];});
+        var chosen=el[0];
+        d.bunk=chosen.name;d.division=chosen.div;
+        counts[chosen.name]++;
+    });
+}
+function autoGenerateBunks(){
+    var cfg=bunkGenConfig;
+    var allBunksFlat=[];
+    Object.entries(structure).forEach(function([div,d]){
+        Object.entries(d.grades||{}).forEach(function([gr,g]){
+            (g.bunks||[]).forEach(function(b){allBunksFlat.push({name:b,div:div,gr:gr});});
+        });
+    });
+    if(!allBunksFlat.length){toast('Create divisions and bunks first','error');return;}
+
+    var report={requestsTotal:0,requestsHonored:0,avoidViolations:0,placed:0,warnings:[],underMin:[]};
+    var byGrade={};
+    allBunksFlat.forEach(function(b){(byGrade[b.gr]=byGrade[b.gr]||[]).push(b);});
+
+    var handled={};
+    Object.keys(byGrade).forEach(function(gr){
+        var pool=Object.keys(roster).filter(function(n){return roster[n].grade===gr&&!roster[n].bunk;});
+        if(!pool.length)return;
+        _bunkGenForGrade(pool,byGrade[gr],cfg,report);
+        pool.forEach(function(n){if(roster[n].bunk)handled[n]=true;});
+    });
+
+    var leftover=Object.keys(roster).filter(function(n){return !roster[n].bunk&&!handled[n];});
+    if(leftover.length)_bunkGenFallback(leftover,allBunksFlat,cfg,report);
+
+    report.placed=Object.keys(roster).filter(function(n){return roster[n].bunk;}).length;
+    save();
+    renderBB();
+    _showBunkGenReport(report);
+}
+function _showBunkGenReport(report){
+    var h='<div style="display:flex;flex-direction:column;gap:2px">';
+    h+=cvR('Campers placed',String(report.placed));
+    if(bunkGenConfig.requestsEnabled!==false)h+=cvR('Friend requests honored',report.requestsHonored+' of '+report.requestsTotal);
+    if(bunkGenConfig.doNotBunkEnabled!==false&&report.avoidViolations)h+=cvR('Do-not-bunk conflicts forced','<span class="cv-warn">'+report.avoidViolations+'</span>');
+    if(report.underMin.length){
+        h+='<div class="cv-sec">Under Minimum Size</div>';
+        report.underMin.forEach(function(u){h+=cvR(u.bunk,u.count+' / min '+bunkGenConfig.minBunkSize);});
+    }
+    if(report.warnings.length){
+        h+='<div class="cv-sec">Notes</div>';
+        report.warnings.forEach(function(w){h+='<div style="font-size:.8rem;color:var(--s600);padding:3px 0">• '+esc(w)+'</div>';});
+    }
+    h+='</div>';
+    showModal('Bunk Generation Complete',h,null);
+}
 
 // ═══ BUNK STAFF — who's taking care of this bunk (Counselor, Junior
 // Counselor, Waiter, etc.) ═══════════════════════════════════════════
@@ -3926,7 +4304,7 @@ var PAF_SECTIONS=[
 var PAF_FIELD_CATALOG={
     bunk:[
         {id:'bunkmate',label:'Bunkmate Request'},
-        {id:'separate',label:'Separation Request'},
+        {id:'separate',label:'Do-Not-Bunk-With Request'},
         {id:'sessionConfirm',label:'Confirm Session'}
     ],
     logistics:[
@@ -4812,8 +5190,8 @@ function viewApplication(id){
     if(e.postAccept){
         b+=sec('Post-Acceptance Responses');
         b+=row('Submitted',e.postAccept.submittedDate?new Date(e.postAccept.submittedDate).toLocaleString():'—');
-        b+=row('Bunkmate Request',e.postAccept.bunkmate);
-        b+=row('Separation Request',e.postAccept.separate);
+        b+=row('Bunkmate Request'+((e.postAccept.bunkmate||[]).length>1?'s':''),Array.isArray(e.postAccept.bunkmate)?e.postAccept.bunkmate.join(', '):e.postAccept.bunkmate);
+        b+=row('Do-Not-Bunk Request'+((e.postAccept.separate||[]).length>1?'s':''),Array.isArray(e.postAccept.separate)?e.postAccept.separate.join(', '):e.postAccept.separate);
         b+=row('Session Confirmation',e.postAccept.sessionConfirm);
         b+=row('T-Shirt Size',e.postAccept.shirt);
         b+=row('Transportation',e.postAccept.transportation);
@@ -9986,7 +10364,7 @@ window.CampistryMe={
     acceptFamilySuggestion:acceptFamilySuggestion,dismissFamilySuggestion:dismissFamilySuggestion,acceptAddToFamily:acceptAddToFamily,
     addDiv:function(){openDivForm(null)},editDiv:function(n){openDivForm(n)},deleteDiv:deleteDiv,moveDivision:moveDivision,
     openCsv:function(){openModal('csvModal')},exportCsv:exportCsv,downloadTemplate:downloadTemplate,
-    bbDrop:bbDrop,autoAssign:autoAssign,clearBunks:clearBunks,setBunkCount:setBunkCount,openBunkCountModal:openBunkCountModal,_clearBunkCount:_clearBunkCount,
+    bbDrop:bbDrop,autoAssign:autoAssign,autoGenerateBunks:autoGenerateBunks,openBunkGenSettings:openBunkGenSettings,clearBunks:clearBunks,setBunkCount:setBunkCount,openBunkCountModal:openBunkCountModal,_clearBunkCount:_clearBunkCount,
     openBunkStaffModal:openBunkStaffModal,addBunkStaff:addBunkStaff,removeBunkStaff:removeBunkStaff,
     editBunkStaff:editBunkStaff,_resetBunkStaffForm:_resetBunkStaffForm,
     // Staff directory — the single source of truth for who works with which
