@@ -1,22 +1,38 @@
 // =============================================================================
 // send-push — deliver a push notification to a camp's parents
 //
-// Request (service-role only):
-//   { campId, pref, title, body, data?, dryRun? }
+// Request:
+//   { campId, pref, title, body, email?, data?, dryRun? }
 //
 //   pref   which notification preference this belongs to — one of
 //          notifyMessages | notifyPayments | notifyCanteen | notifyPhotos |
 //          notifyHealth. Parents who switched it off are not sent to. That
-//          filtering happens in the database (push_targets_for_camp), not here,
-//          so a caller cannot bypass a parent's choice by forgetting to check.
+//          filtering happens in the database (push_targets_for_camp_v2), not
+//          here, so a caller cannot bypass a parent's choice by forgetting to
+//          check.
+//   email  optional. A direct message is addressed to ONE family, so passing
+//          the parent's email restricts delivery to that account's devices.
+//          Omit it for a camp-wide announcement.
 //   data   optional payload; data.page routes the app when the notification is
 //          tapped (see campistry_push.js).
+//
+// Who may call:
+//   * the service role (server-to-server, any camp), or
+//   * a signed-in camp staff member, for THEIR OWN camp only — verified with
+//     get_user_camp_id(), the same function the table RLS policies trust. This
+//     is what lets the admin UI fire a notification when it sends a message,
+//     without putting a service key in a browser.
 //
 // Android only, deliberately. Capacitor's push plugin returns an APNs token on
 // iOS, not an FCM one, so iOS devices cannot be delivered through FCM without
 // adding the Firebase iOS SDK to the app. They are counted and skipped rather
 // than silently dropped, and will be handled by a direct APNs path once the
 // .p8 key exists.
+//
+// Every response carries a `targets` breakdown. A send that reaches nobody is
+// the single most confusing failure this system has, because the phone looks
+// perfectly healthy: permission granted, token registered, app installed. The
+// counts say which of the four possible reasons it actually was.
 //
 // Secrets: FCM_SERVICE_ACCOUNT (the Firebase service-account JSON),
 //          SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY (provided by the platform).
@@ -100,6 +116,24 @@ async function getAccessToken(sa: Record<string, string>): Promise<string> {
   return cachedToken.value;
 }
 
+// ── Authorization ────────────────────────────────────────────────────────────
+// Returns true when the bearer token belongs to a staff member whose active
+// camp IS the camp being sent to. Anything else — a parent's session, another
+// camp's staff, an expired token — is false.
+async function isStaffOfCamp(url: string, anonKey: string, jwt: string, campId: string) {
+  try {
+    const asUser = createClient(url, anonKey, {
+      global: { headers: { Authorization: `Bearer ${jwt}` } },
+      auth: { persistSession: false, autoRefreshToken: false },
+    });
+    const { data, error } = await asUser.rpc("get_user_camp_id");
+    if (error) return false;
+    return !!data && String(data) === String(campId);
+  } catch (_) {
+    return false;
+  }
+}
+
 serve(async (req) => {
   if (req.method === "OPTIONS") return new Response("ok", { headers: corsHeaders });
 
@@ -110,18 +144,25 @@ serve(async (req) => {
     });
 
   try {
-    // Only the service role may send. Without this, anyone holding the anon key
-    // could push arbitrary text to every parent at a camp.
     const serviceKey = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY") || "";
+    const supabaseUrl = Deno.env.get("SUPABASE_URL") || "";
+    const anonKey = Deno.env.get("SUPABASE_ANON_KEY")
+      || Deno.env.get("SUPABASE_PUBLISHABLE_KEY")
+      || serviceKey;
     const auth = (req.headers.get("Authorization") || "").replace(/^Bearer\s+/i, "");
-    if (!serviceKey || auth !== serviceKey) {
-      return json({ success: false, error: "forbidden" }, 403);
-    }
+    if (!serviceKey || !auth) return json({ success: false, error: "forbidden" }, 403);
 
-    const { campId, pref, title, body, data, dryRun } = await req.json();
+    const { campId, pref, title, body, email, data, dryRun } = await req.json();
     if (!campId) return json({ success: false, error: "missing_campId" }, 400);
     if (!VALID_PREFS.has(pref)) return json({ success: false, error: "invalid_pref" }, 400);
     if (!title && !body) return json({ success: false, error: "empty_notification" }, 400);
+
+    // Service role may send anywhere; a staff session only to its own camp.
+    // The camp check happens before anything else reads device tokens.
+    const asService = auth === serviceKey;
+    if (!asService && !(await isStaffOfCamp(supabaseUrl, anonKey, auth, campId))) {
+      return json({ success: false, error: "forbidden" }, 403);
+    }
 
     const saRaw = Deno.env.get("FCM_SERVICE_ACCOUNT");
     if (!saRaw) return json({ success: false, error: "missing FCM_SERVICE_ACCOUNT secret" }, 500);
@@ -137,23 +178,44 @@ serve(async (req) => {
       return json({ success: false, error: "FCM_SERVICE_ACCOUNT missing project_id/client_email/private_key" }, 500);
     }
 
-    const db = createClient(Deno.env.get("SUPABASE_URL")!, serviceKey);
-    const { data: targets, error } = await db.rpc("push_targets_for_camp", {
+    const db = createClient(supabaseUrl, serviceKey);
+    const { data: rows, error } = await db.rpc("push_targets_for_camp_v2", {
       p_camp_id: campId,
       p_pref: pref,
+      p_email: email || null,
     });
     if (error) return json({ success: false, error: error.message }, 500);
 
-    const all = targets || [];
-    const android = all.filter((t: any) => t.platform === "android");
-    const skippedIos = all.length - android.length;
+    // ── Why a send reaches who it reaches ──────────────────────────────────
+    // Every device this camp knows about, split by the reason it qualifies or
+    // does not. Computed even on a successful send, because "sent: 1" when
+    // eight parents were expected is just as wrong as "sent: 0".
+    const known = rows || [];
+    const eligible = known.filter((t: any) => t.invite_active && t.pref_on && t.email_match);
+    const android = eligible.filter((t: any) => t.platform === "android");
+    const targets = {
+      devicesKnownToCamp: known.length,
+      excludedByRevokedInvite: known.filter((t: any) => !t.invite_active).length,
+      excludedByPreference: known.filter((t: any) => t.invite_active && !t.pref_on).length,
+      excludedByEmail: known.filter((t: any) => t.invite_active && t.pref_on && !t.email_match).length,
+      eligible: eligible.length,
+      android: android.length,
+      ios: eligible.length - android.length,
+    };
 
-    if (dryRun) {
-      return json({ success: true, dryRun: true, wouldSend: android.length, skippedIos });
-    }
+    // Name the reason rather than leaving the caller to compare numbers.
+    let reason: string | null = null;
     if (!android.length) {
-      return json({ success: true, sent: 0, failed: 0, skippedIos, note: "no opted-in Android devices" });
+      if (!targets.devicesKnownToCamp) reason = "no parent at this camp has registered a device";
+      else if (targets.excludedByEmail === targets.devicesKnownToCamp - targets.excludedByRevokedInvite - targets.excludedByPreference && email) reason = `no registered device belongs to ${email}`;
+      else if (targets.excludedByRevokedInvite && !targets.eligible) reason = "every registered device belongs to a parent whose invite is revoked or expired";
+      else if (targets.excludedByPreference && !targets.eligible) reason = "every eligible parent switched this notification off";
+      else if (targets.ios) reason = "the only eligible devices are iOS, which is not wired to FCM yet";
+      else reason = "no eligible Android device";
     }
+
+    if (dryRun) return json({ success: true, dryRun: true, wouldSend: android.length, targets, reason });
+    if (!android.length) return json({ success: true, sent: 0, failed: 0, targets, reason });
 
     const token = await getAccessToken(sa);
     const endpoint = `https://fcm.googleapis.com/v1/projects/${sa.project_id}/messages:send`;
@@ -207,7 +269,7 @@ serve(async (req) => {
       sent,
       failed: failures.length,
       removedStale: stale.length,
-      skippedIos,
+      targets,
       errors: failures.slice(0, 5),
     });
   } catch (e) {

@@ -257,8 +257,58 @@
                 read:         !!m.read
             })
             .then(function(res) {
-                if (res.error) console.warn('[Link] link_messages insert error:', res.error.message);
+                if (res.error) {
+                    console.warn('[Link] link_messages insert error:', res.error.message);
+                    return;
+                }
+                _pushMessageNotification(db, m);
             });
+    }
+
+    /**
+     * Ring the parent's phone.
+     *
+     * The link_messages row is what makes the message exist; this is what
+     * makes anyone notice it. Until this call existed the whole push stack —
+     * device registration, tokens, the Firebase service account, the sender —
+     * was live and correct and fired by absolutely nothing, so a message sent
+     * from the admin reached the parent's inbox and never their lock screen.
+     *
+     * Scoped to the addressed parent's email: a direct message is to one
+     * family, not an announcement. With no addressee we send nothing rather
+     * than fall back to the whole camp.
+     *
+     * Best-effort and non-blocking. A camp with no registered devices, or a
+     * parent who switched Messages off, is a NORMAL outcome — it must never
+     * surface as an error over a message that sent perfectly well. The
+     * function's own reason string is logged instead, because a silent zero
+     * here is exactly what made this impossible to debug the first time.
+     */
+    function _pushMessageNotification(db, m) {
+        if (!db.client || !db.client.functions) return;
+        if (m.direction && m.direction !== 'out') return;
+        var email = (m.metadata && m.metadata.parentEmail) || '';
+        if (!email) return;
+
+        var preview = String(m.body || '').replace(/\s+/g, ' ').trim();
+        if (preview.length > 140) preview = preview.slice(0, 139) + '...';
+
+        db.client.functions.invoke('send-push', {
+            body: {
+                campId: db.campId,
+                pref:   'notifyMessages',
+                email:  email,
+                title:  m.subject || 'New message',
+                body:   preview,
+                data:   { page: 'messages' }
+            }
+        }).then(function(r) {
+            if (r && r.error) { console.warn('[Link] push failed:', r.error.message || r.error); return; }
+            var d = r && r.data;
+            if (d && d.success && !d.sent) {
+                console.warn('[Link] push reached nobody -', d.reason, JSON.stringify(d.targets || {}));
+            }
+        }, function(e) { console.warn('[Link] push failed:', e); });
     }
 
     /**
