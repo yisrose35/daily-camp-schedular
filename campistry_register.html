@@ -96,6 +96,16 @@ body{font-family:var(--font);background:var(--s50);color:var(--s800);-webkit-fon
 <div class="fr"><div class="fg"><label class="fl">Date of Birth<span class="rq">*</span></label><input type="date" class="fi" id="rDob"></div><div class="fg"><label class="fl">Gender</label><select class="fs" id="rGen"><option value="">—</option><option>Male</option><option>Female</option><option>Non-binary</option><option>Other</option></select></div></div>
 <div class="fr"><div class="fg"><label class="fl">School Name</label><input class="fi" id="rSch"></div><div class="fg"><label class="fl">School Grade</label><input class="fi" id="rSchGr"></div></div>
 <div class="fg"><label class="fl">Teacher</label><input class="fi" id="rTch"></div>
+<div class="fg" id="rPhotoFg" style="margin-bottom:0"><label class="fl">Camper Photo</label>
+<input type="hidden" id="rPhotoData" value="">
+<div style="display:flex;align-items:center;gap:12px">
+<img id="rPhotoPreview" src="" alt="" style="display:none;width:64px;height:64px;object-fit:cover;border-radius:10px;border:1px solid var(--s200);flex-shrink:0">
+<div style="flex:1;min-width:0">
+<input type="file" accept="image/*" id="rPhotoInput" class="fi" style="padding:7px 10px" onchange="_onCamperPhotoPick(this)">
+<button type="button" id="rPhotoClearBtn" style="display:none;margin-top:6px;background:none;border:none;color:var(--err);font-size:.75rem;font-weight:600;cursor:pointer;padding:0" onclick="_clearCamperPhoto()">Remove photo</button>
+</div>
+</div>
+</div>
 </div>
 
 <!-- Siblings -->
@@ -259,7 +269,7 @@ var sigCtx=null,sigDrawing=false,sigHasData=false;
 // field-by-field in the Advanced customizer (payment/signature/siblings/
 // documents stay whole-section toggles, handled by secMap in load()).
 var FIELD_ELEMENT_MAP={
-    first:'rF',last:'rL',dob:'rDob',gender:'rGen',school:'rSch',schoolGrade:'rSchGr',teacher:'rTch',
+    first:'rF',last:'rL',dob:'rDob',gender:'rGen',school:'rSch',schoolGrade:'rSchGr',teacher:'rTch',photo:'rPhotoData',
     parentName:'rPar',parentRelation:'rRel',parentPhone:'rPh',parentEmail:'rEm',parent2Name:'rP2',parent2Phone:'rP2Ph',
     street:'rSt',city:'rCi',state:'rSa',zip:'rZp',
     emName:'rEmN',emRelation:'rEmR',emPhone:'rEmPh',
@@ -267,7 +277,7 @@ var FIELD_ELEMENT_MAP={
     bunkmate:'rBnk',separate:'rSep',shirt:'rShirt',source:'rSrc',notes:'rNotes'
 };
 var FIELD_DEFAULT_LABEL={
-    first:'First Name',last:'Last Name',dob:'Date of Birth',gender:'Gender',school:'School Name',schoolGrade:'School Grade',teacher:'Teacher',
+    first:'First Name',last:'Last Name',dob:'Date of Birth',gender:'Gender',school:'School Name',schoolGrade:'School Grade',teacher:'Teacher',photo:'Camper Photo',
     parentName:'Parent / Guardian Name',parentRelation:'Relationship',parentPhone:'Phone',parentEmail:'Email',parent2Name:'Second Parent / Guardian',parent2Phone:'Second Parent Phone',
     street:'Street',city:'City',state:'State',zip:'ZIP',
     emName:'Emergency Contact Name',emRelation:'Relationship',emPhone:'Phone',
@@ -277,7 +287,7 @@ var FIELD_DEFAULT_LABEL={
 // Defaults match the hardcoded validation this page shipped with — a camp
 // that never opens the Advanced tab sees byte-identical required-ness.
 var FIELD_REQUIRED_STATE={
-    first:true,last:true,dob:true,gender:false,school:false,schoolGrade:false,teacher:false,
+    first:true,last:true,dob:true,gender:false,school:false,schoolGrade:false,teacher:false,photo:false,
     parentName:true,parentRelation:false,parentPhone:true,parentEmail:true,parent2Name:false,parent2Phone:false,
     street:true,city:true,state:false,zip:true,
     emName:true,emRelation:false,emPhone:true,
@@ -291,7 +301,7 @@ var FIELD_ENABLED_STATE={};
 // visually hidden), or a camp that disables e.g. Camper Info leaves the form
 // permanently stuck asking for a field nobody can see or fill in.
 var FIELD_TO_SECTION={
-    first:'camper',last:'camper',dob:'camper',gender:'camper',school:'camper',schoolGrade:'camper',teacher:'camper',
+    first:'camper',last:'camper',dob:'camper',gender:'camper',school:'camper',schoolGrade:'camper',teacher:'camper',photo:'camper',
     parentName:'parent',parentRelation:'parent',parentPhone:'parent',parentEmail:'parent',parent2Name:'parent',parent2Phone:'parent',
     street:'address',city:'address',state:'address',zip:'address',
     emName:'emergency',emRelation:'emergency',emPhone:'emergency',
@@ -302,7 +312,7 @@ var FIELD_TO_SECTION={
 // Baseline required-state this page shipped with — applyFieldConfig resets
 // to this before applying overrides, so it's safe to call repeatedly with a
 // changing draft config (live preview) rather than only ever adding hides.
-var FIELD_REQUIRED_DEFAULT={first:true,last:true,dob:true,gender:false,school:false,schoolGrade:false,teacher:false,parentName:true,parentRelation:false,parentPhone:true,parentEmail:true,parent2Name:false,parent2Phone:false,street:true,city:true,state:false,zip:true,emName:true,emRelation:false,emPhone:true,allergies:false,medications:false,dietary:false,medicalNotes:false,bunkmate:false,separate:false,shirt:false,source:false,notes:false};
+var FIELD_REQUIRED_DEFAULT={first:true,last:true,dob:true,gender:false,school:false,schoolGrade:false,teacher:false,photo:false,parentName:true,parentRelation:false,parentPhone:true,parentEmail:true,parent2Name:false,parent2Phone:false,street:true,city:true,state:false,zip:true,emName:true,emRelation:false,emPhone:true,allergies:false,medications:false,dietary:false,medicalNotes:false,bunkmate:false,separate:false,shirt:false,source:false,notes:false};
 function applyFieldConfig(fields,sectionsDisabled){
     fields=fields||{}; sectionsDisabled=sectionsDisabled||{};
     Object.keys(FIELD_ELEMENT_MAP).forEach(function(fid){
@@ -658,6 +668,50 @@ function renderUploads(){
     }).join('');
 }
 
+// ─── CAMPER PHOTO ────────────────────────────────────────────
+// Stored as a downscaled JPEG data URL on rPhotoData (a hidden input, so
+// it flows through the existing FIELD_ELEMENT_MAP/required-check machinery
+// like any other field) — resized client-side so a full-resolution phone
+// photo doesn't bloat every enrollment record's storage footprint. This
+// page has no shared-script include (it's fully standalone), so this
+// mirrors — rather than reuses — campistry_me.js's _downscaleImage.
+window._onCamperPhotoPick=function(input){
+    var f=input.files&&input.files[0];
+    if(!f)return;
+    if(!/^image\//.test(f.type)){ alert('Please choose an image file.'); input.value=''; return; }
+    if(f.size>8*1024*1024){ alert('Photo is too large (max 8MB).'); input.value=''; return; }
+    var reader=new FileReader();
+    reader.onload=function(ev){
+        var img=new Image();
+        img.onload=function(){
+            var maxDim=480;
+            var scale=Math.min(1,maxDim/Math.max(img.width,img.height));
+            var cw=Math.round(img.width*scale),ch=Math.round(img.height*scale);
+            var dataUrl;
+            try{
+                var cv=document.createElement('canvas');cv.width=cw;cv.height=ch;
+                cv.getContext('2d').drawImage(img,0,0,cw,ch);
+                dataUrl=cv.toDataURL('image/jpeg',0.85);
+            }catch(ex){ dataUrl=ev.target.result; }
+            document.getElementById('rPhotoData').value=dataUrl;
+            var prev=document.getElementById('rPhotoPreview');
+            prev.src=dataUrl; prev.style.display='block';
+            document.getElementById('rPhotoClearBtn').style.display='inline-block';
+        };
+        img.onerror=function(){ alert('Could not read that image.'); };
+        img.src=ev.target.result;
+    };
+    reader.onerror=function(){ alert('Could not read that file.'); };
+    reader.readAsDataURL(f);
+};
+window._clearCamperPhoto=function(){
+    document.getElementById('rPhotoData').value='';
+    var prev=document.getElementById('rPhotoPreview');
+    prev.src=''; prev.style.display='none';
+    document.getElementById('rPhotoClearBtn').style.display='none';
+    var input=document.getElementById('rPhotoInput'); if(input)input.value='';
+};
+
 // ─── SIGNATURE ───────────────────────────────────────────────
 function initSig(){
     var canvas=document.getElementById('sigCanvas');
@@ -755,9 +809,10 @@ window.submitApp=function(){
     var sigData=document.getElementById('sigCanvas').toDataURL();
     var sessObj=sessions.find(function(s){return s.name===selSess})||{};
 
-    // Build applications (one per camper)
+    // Build applications (one per camper). Photo is only captured for the
+    // primary camper — sibling rows don't get their own upload widget.
     var appIds=[];
-    var allCampers=[{first:first,last:last,dob:dob,gender:v('rGen'),school:v('rSch'),schoolGrade:v('rSchGr'),teacher:v('rTch')}].concat(siblings);
+    var allCampers=[{first:first,last:last,dob:dob,gender:v('rGen'),school:v('rSch'),schoolGrade:v('rSchGr'),teacher:v('rTch'),photo:v('rPhotoData')}].concat(siblings);
 
     try{
         var g=JSON.parse(localStorage.getItem('campGlobalSettings_v1')||'{}');
@@ -783,7 +838,7 @@ window.submitApp=function(){
 
             g.campistryMe.enrollments[id]={
                 camperName:cam.first+' '+cam.last,camperFirst:cam.first,camperLast:cam.last,
-                dob:cam.dob,gender:cam.gender,school:cam.school,schoolGrade:cam.schoolGrade,teacher:cam.teacher,
+                dob:cam.dob,gender:cam.gender,school:cam.school,schoolGrade:cam.schoolGrade,teacher:cam.teacher,camperPhoto:cam.photo||'',
                 parentName:par,parentRelation:v('rRel'),parentPhone:ph,parentEmail:em,
                 parent2Name:v('rP2'),parent2Phone:v('rP2Ph'),
                 street:st,city:ci,state:v('rSa'),zip:zp,

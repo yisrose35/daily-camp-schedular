@@ -3361,7 +3361,8 @@ var FC_FIELD_CATALOG={
         {id:'gender',label:'Gender'},
         {id:'school',label:'School Name'},
         {id:'schoolGrade',label:'School Grade'},
-        {id:'teacher',label:'Teacher'}
+        {id:'teacher',label:'Teacher'},
+        {id:'photo',label:'Camper Photo'}
     ],
     parent:[
         {id:'parentName',label:'Parent / Guardian Name',required:true},
@@ -4151,7 +4152,8 @@ function viewApplication(id){
     var e=enrollments[id];if(!e)return;
     var sc=e.status==='enrolled'?'ok':e.status==='accepted'?'ok':e.status==='waitlisted'?'warn':e.status==='declined'||e.status==='withdrawn'?'err':'gray';
 
-    var head='<div style="display:flex;justify-content:space-between;align-items:flex-start"><div><h3 style="font-size:1.1rem;font-weight:700;color:var(--s800);margin:0">'+esc(e.camperName||'Application')+'</h3><div style="display:flex;gap:5px;margin-top:5px">'+bdg(e.status||'applied',sc)+' '+bdg(e.session||'No session','gray')+'</div></div><button class="me-modal-x" onclick="CampistryMe.closeModal(\'appViewModal\')">&times;</button></div>';
+    var headPhoto=(e.camperPhoto&&isSafeImageDataUrl(e.camperPhoto))?'<img src="'+e.camperPhoto+'" style="width:40px;height:40px;object-fit:cover;border-radius:9px;flex-shrink:0">':'';
+    var head='<div style="display:flex;justify-content:space-between;align-items:flex-start"><div style="display:flex;align-items:center;gap:10px">'+headPhoto+'<div><h3 style="font-size:1.1rem;font-weight:700;color:var(--s800);margin:0">'+esc(e.camperName||'Application')+'</h3><div style="display:flex;gap:5px;margin-top:5px">'+bdg(e.status||'applied',sc)+' '+bdg(e.session||'No session','gray')+'</div></div></div><button class="me-modal-x" onclick="CampistryMe.closeModal(\'appViewModal\')">&times;</button></div>';
     document.getElementById('avHead').innerHTML=head;
 
     var b='';
@@ -4209,6 +4211,9 @@ function viewApplication(id){
     var SECTION_RENDERERS={
         camper:function(){
             b+=sec('Camper');
+            if(e.camperPhoto&&fFieldOn('photo')&&isSafeImageDataUrl(e.camperPhoto)){
+                b+='<img src="'+e.camperPhoto+'" style="width:72px;height:72px;object-fit:cover;border-radius:10px;border:1px solid var(--s200);margin-bottom:8px">';
+            }
             if(fFieldOn('first')||fFieldOn('last'))b+=row('Name',e.camperName);
             if(fFieldOn('dob'))b+=row(fLabel('dob','Date of Birth'),e.dob);
             if(fFieldOn('gender'))b+=row(fLabel('gender','Gender'),e.gender);
@@ -4218,7 +4223,7 @@ function viewApplication(id){
         },
         parent:function(){
             b+=sec('Parent / Guardian');
-            if(fFieldOn('parentName'))b+=row(fLabel('parentName','Name'),e.parentName+(e.parentRelation?' ('+e.parentRelation+')':''));
+            if(fFieldOn('parentName'))b+=row(fLabel('parentName','Name'),(e.parentName||'')+(e.parentRelation?' ('+e.parentRelation+')':''));
             if(e.parentPhone&&fFieldOn('parentPhone'))b+=rowRaw(fLabel('parentPhone','Phone'),'<a href="tel:'+esc(e.parentPhone)+'" style="color:var(--me);font-weight:600">'+esc(e.parentPhone)+'</a>');
             if(e.parentEmail&&fFieldOn('parentEmail'))b+=rowRaw(fLabel('parentEmail','Email'),'<a href="mailto:'+esc(e.parentEmail)+'" style="color:var(--me)">'+esc(e.parentEmail)+'</a>');
             if(e.parent2Name&&fFieldOn('parent2Name'))b+=row(fLabel('parent2Name','Parent 2'),e.parent2Name+(e.parent2Phone?' — '+e.parent2Phone:''));
@@ -4233,7 +4238,7 @@ function viewApplication(id){
         },
         emergency:function(){
             b+=sec('Emergency Contact');
-            if(fFieldOn('emName'))b+=row(fLabel('emName','Name'),e.emergencyName+(e.emergencyRel?' ('+e.emergencyRel+')':''));
+            if(fFieldOn('emName'))b+=row(fLabel('emName','Name'),(e.emergencyName||'')+(e.emergencyRel?' ('+e.emergencyRel+')':''));
             if(e.emergencyPhone&&fFieldOn('emPhone'))b+=rowRaw(fLabel('emPhone','Phone'),'<a href="tel:'+esc(e.emergencyPhone)+'" style="color:var(--me);font-weight:600">'+esc(e.emergencyPhone)+'</a>');
         },
         medical:function(){
@@ -4381,6 +4386,7 @@ function printApplication(id){
     }
 
     var h='<html><head><title>'+esc('Application — '+e.camperName)+'</title><style>body{font-family:Arial,sans-serif;padding:30px;font-size:13px;color:#1E293B}h1{font-size:18px;margin:0 0 4px}h2{font-size:13px;color:#D97706;text-transform:uppercase;margin:16px 0 6px;border-bottom:1px solid #E2E8F0;padding-bottom:3px}table{width:100%;border-collapse:collapse}td{padding:3px 0;vertical-align:top}td:first-child{width:120px;color:#64748B;font-weight:600}.med{color:#EF4444;font-weight:600}.badge{display:inline-block;padding:2px 8px;border-radius:4px;font-size:11px;font-weight:700}img{max-width:250px;height:70px;object-fit:contain;border:1px solid #E2E8F0;border-radius:4px}@media print{body{padding:15px}}</style></head><body>';
+    if(e.camperPhoto&&isSafeImageDataUrl(e.camperPhoto))h+='<img src="'+e.camperPhoto+'" style="float:right;width:90px;height:90px;object-fit:cover;max-width:90px">';
     h+='<h1>'+esc(e.camperName)+'</h1>';
     h+='<div style="color:#64748B;font-size:12px;margin-bottom:12px">Application ID: '+esc(id)+' · Status: '+esc(e.status)+' · Applied: '+esc(e.appliedDate)+'</div>';
 
@@ -4389,7 +4395,7 @@ function printApplication(id){
     h+=row('School',e.school);h+=row('Grade',e.schoolGrade);h+=row('Teacher',e.teacher);h+=end();
 
     h+=sec('Parent/Guardian');
-    h+=row('Name',e.parentName+(e.parentRelation?' ('+e.parentRelation+')':''));
+    h+=row('Name',(e.parentName||'')+(e.parentRelation?' ('+e.parentRelation+')':''));
     h+=row('Phone',e.parentPhone);h+=row('Email',e.parentEmail);
     if(e.parent2Name)h+=row('Parent 2',e.parent2Name+(e.parent2Phone?' — '+e.parent2Phone:''));h+=end();
 
@@ -4397,7 +4403,7 @@ function printApplication(id){
     h+=row('Street',e.street);h+=row('City',e.city);h+=row('State',e.state);h+=row('ZIP',e.zip);h+=end();
 
     h+=sec('Emergency Contact');
-    h+=row('Name',e.emergencyName+(e.emergencyRel?' ('+e.emergencyRel+')':''));h+=row('Phone',e.emergencyPhone);h+=end();
+    h+=row('Name',(e.emergencyName||'')+(e.emergencyRel?' ('+e.emergencyRel+')':''));h+=row('Phone',e.emergencyPhone);h+=end();
 
     h+=sec('Medical');
     h+=rowRaw('Allergies',e.allergies?'<span class="med">'+esc(e.allergies)+'</span>':esc('None'));
@@ -4691,7 +4697,7 @@ function deleteSession(idx){
 var APP_FIELD_MAP={
     first:{rec:'camperFirst'},last:{rec:'camperLast'},
     dob:{rec:'dob',type:'date'},gender:{rec:'gender',type:'select',opts:['Male','Female','Non-binary','Other']},
-    school:{rec:'school'},schoolGrade:{rec:'schoolGrade'},teacher:{rec:'teacher'},
+    school:{rec:'school'},schoolGrade:{rec:'schoolGrade'},teacher:{rec:'teacher'},photo:{rec:'camperPhoto',type:'file'},
     parentName:{rec:'parentName'},parentRelation:{rec:'parentRelation'},
     parentPhone:{rec:'parentPhone',type:'tel'},parentEmail:{rec:'parentEmail',type:'email'},
     parent2Name:{rec:'parent2Name'},parent2Phone:{rec:'parent2Phone',type:'tel'},
@@ -4702,6 +4708,19 @@ var APP_FIELD_MAP={
     shirt:{rec:'tshirtSize',type:'select',opts:['YS','YM','YL','AS','AM','AL','AXL']},
     source:{rec:'source'},notes:{rec:'notes',type:'textarea'}
 };
+
+// Manual Entry's photo field — reuses the same _downscaleImage() the Form
+// Builder's logo picker uses, writing the resulting data URL into the
+// hidden input the generic values[] reader already picks up.
+function _onAppPhotoPick(input,targetId){
+    var f=input.files&&input.files[0]; if(!f)return;
+    if(!/^image\//.test(f.type)){ toast('Please choose an image file','error'); input.value=''; return; }
+    _downscaleImage(f,480,function(dataUrl){
+        var el=document.getElementById(targetId); if(el)el.value=dataUrl;
+        var prev=document.getElementById(targetId+'_prev');
+        if(prev){ prev.src=dataUrl; prev.style.display='block'; }
+    });
+}
 
 // Manual Entry mirrors whatever the camp has configured in Customize
 // Registration Form — same sections (in the same order, skipping any the
@@ -4727,6 +4746,12 @@ function addApplication(){
         var star=req?' <span class="rq" style="color:var(--err)">*</span>':'';
         if(map.type==='select')return '<div class="fg"><label class="fl">'+esc(label)+star+'</label><select id="'+id+'" class="fs"><option value="">—</option>'+map.opts.map(function(o){return'<option>'+o+'</option>';}).join('')+'</select></div>';
         if(map.type==='textarea')return '<div class="fg"><label class="fl">'+esc(label)+star+'</label><textarea id="'+id+'" class="fi" style="min-height:50px;resize:vertical"></textarea></div>';
+        if(map.type==='file')return '<div class="fg"><label class="fl">'+esc(label)+star+'</label>'
+            +'<input type="hidden" id="'+id+'">'
+            +'<div style="display:flex;align-items:center;gap:10px">'
+            +'<img id="'+id+'_prev" src="" style="display:none;width:48px;height:48px;object-fit:cover;border-radius:8px;border:1px solid var(--s200);flex-shrink:0">'
+            +'<input type="file" accept="image/*" class="fi" style="padding:6px 8px" onchange="CampistryMe._onAppPhotoPick(this,\''+id+'\')">'
+            +'</div></div>';
         return '<div class="fg"><label class="fl">'+esc(label)+star+'</label><input type="'+(map.type||'text')+'" id="'+id+'" class="fi"></div>';
     }
 
@@ -4812,7 +4837,7 @@ function addApplication(){
         var id='enr_'+Date.now()+'_'+Math.random().toString(36).substr(2,4);
         var rec={
             camperName:camperName,camperFirst:first,camperLast:last,
-            dob:values.dob||'',gender:values.gender||'',school:values.school||'',schoolGrade:values.schoolGrade||'',teacher:values.teacher||'',
+            dob:values.dob||'',gender:values.gender||'',school:values.school||'',schoolGrade:values.schoolGrade||'',teacher:values.teacher||'',camperPhoto:values.photo||'',
             parentName:values.parentName||'',parentRelation:values.parentRelation||'',parentPhone:values.parentPhone||'',parentEmail:values.parentEmail||'',
             parent2Name:values.parent2Name||'',parent2Phone:values.parent2Phone||'',
             street:values.street||'',city:values.city||'',state:values.state||'',zip:values.zip||'',
@@ -9472,7 +9497,7 @@ window.CampistryMe={
     getStaffForBunk:getStaffForBunk,getStaffForBunks:getStaffForBunks,
     getStaffForDivision:getStaffForDivision,getBunksForDivision:getBunksForDivision,
     findStaffByEmail:findStaffByEmail,getAllStaff:getAllStaff,
-    addSession:addSession,deleteSession:deleteSession,editSession:editSession,toggleSessionReg:toggleSessionReg,copyRegLink:copyRegLink,addDocRow:addDocRow,addApplication:addApplication,autoPromoteWaitlist:autoPromoteWaitlist,
+    addSession:addSession,deleteSession:deleteSession,editSession:editSession,toggleSessionReg:toggleSessionReg,copyRegLink:copyRegLink,addDocRow:addDocRow,addApplication:addApplication,_onAppPhotoPick:_onAppPhotoPick,autoPromoteWaitlist:autoPromoteWaitlist,
     viewApplication:viewApplication,updateEnrollStatus:updateEnrollStatus,bulkEnrollStatus:bulkEnrollStatus,toggleAllEnroll:toggleAllEnroll,_updateRegBulkBar:_updateRegBulkBar,enrollCamper:enrollCamper,generateParentInvite:generateParentInvite,setRegFilter:setRegFilter,rescindEnrollment:rescindEnrollment,
     saveAppNote:saveAppNote,printApplication:printApplication,
     openFormConfig:openFormConfig,saveFormConfig:saveFormConfig,addCustomQ:addCustomQ,addPromoRow:addPromoRow,
