@@ -1411,6 +1411,28 @@
                 var _fbFields = (((_fbGs.app1 && _fbGs.app1.fields) || _fbGs.fields || []) || [])
                     .filter(function (f) { return f && f.name && f.available !== false && !_fbSkip[f.name]; });
                 var _fbCap = function (f) { return (f.sharableWith && f.sharableWith.capacity) || f.capacity || 1; };
+                // ★ FULL-MENU: the fill pool is EVERYTHING the config legally allows at a
+                //   span — sports AND specials of ANY subcategory (the general filling
+                //   principle: dead minutes live in the cracks between artificially
+                //   narrowed pools). Conservative cap rule: a bunk may take a special of
+                //   subcat S only if it holds NO special of S today — can never exceed a
+                //   cap, can only help meet a floor. Day-filtered pool; canonical
+                //   durations; seat = concurrent uses of the activity across all bunks.
+                var _fbCanon = function (v) { var c = String(v == null ? '' : v).toLowerCase().trim(); return (!c || c === 'regular' || c === 'uncategorized') ? 'uncategorized' : c; };
+                var _fbSpecials = ((typeof todaysSpecials !== 'undefined' && todaysSpecials) || (_fbGs.app1 && _fbGs.app1.specialActivities) || []).filter(function (x) { return x && x.name && x.available !== false; });
+                var _fbDursOf = function (x) {
+                    try { if (typeof getSpecialDurations === 'function') { var gd = getSpecialDurations(x.name, (typeof window !== 'undefined' && window.activityProperties) || {}, _fbGs); var d = (gd && gd.durations) || gd; if (d && d.length) return d; } } catch (_e) {}
+                    var one = x.defaultDuration || x.duration || x.durationMin || 0;
+                    return one ? [one] : (Array.isArray(x.durations) ? x.durations : []);
+                };
+                var _fbSCap = function (x) { return (x.sharableWith && x.sharableWith.capacity) || x.capacity || 1; };
+                var _fbSBusy = function (name, s0, e0) {
+                    var n = 0;
+                    Object.keys(window.scheduleAssignments || {}).forEach(function (ob) {
+                        ((window.scheduleAssignments || {})[ob] || []).forEach(function (r) { if (r && r._activity === name && r._startMin < e0 && r._endMin > s0) n++; });
+                    });
+                    return n;
+                };
                 var _fbSA = window.scheduleAssignments;
                 var _fbDayS = null, _fbDayE = null;
                 Object.keys(_fbSA).forEach(function (bk) {
@@ -1432,10 +1454,10 @@
                                         .sort(function (a, b) { return a._startMin - b._startMin; });
                             var holes = [], cur = _fbDayS;
                             rs.forEach(function (r) {
-                                if (r._startMin - cur >= 20) holes.push([cur, r._startMin]);
+                                if (r._startMin - cur >= 10) holes.push([cur, r._startMin]);
                                 if (r._endMin > cur) cur = r._endMin;
                             });
-                            if (_fbDayE - cur >= 20) holes.push([cur, _fbDayE]);
+                            if (_fbDayE - cur >= 10) holes.push([cur, _fbDayE]);
                             holes.forEach(function (h) {
                                 var s = h[0], e = h[1];
                                 var live = arr.filter(function (r) { return r && r._startMin != null; })
@@ -1477,7 +1499,7 @@
                                     });
                                 });
                                 var pick = null;
-                                for (var fi = 0; fi < _fbFields.length; fi++) {
+                                for (var fi = 0; (e - s) >= 20 && fi < _fbFields.length; fi++) {
                                     var f = _fbFields[fi];
                                     if (usedToday[f.name]) continue;
                                     if ((_fbCap(f) - (occ[f.name] || 0)) <= 0) continue;
@@ -1507,7 +1529,32 @@
                                     if (!ok) continue;
                                     pick = f.name; break;
                                 }
-                                if (!pick) { _fbNoCand++; return; }
+                                if (!pick) {
+                                    // ★ FULL-MENU fallback: an any-subcat special that exactly fits
+                                    //   the hole (10-min slivers included — sports can't go below
+                                    //   20, but the config's short items can). All gates bind:
+                                    //   duration list, per-day subcat presence, access, seat, rules.
+                                    var _fmLen = e - s;
+                                    var _fmHeld = {};
+                                    live.forEach(function (r) { if (r && r.type === 'special' && r._subcat) _fmHeld[_fbCanon(r._subcat)] = 1; });
+                                    for (var _si = 0; _si < _fbSpecials.length; _si++) {
+                                        var X = _fbSpecials[_si];
+                                        if (_fbDursOf(X).indexOf(_fmLen) < 0) continue;
+                                        if (usedToday[X.name]) continue;
+                                        var _xSub = _fbCanon(X.subcategory);
+                                        if (_fmHeld[_xSub]) continue;
+                                        try { if (typeof isSpecialAvailableForBunk === 'function' && !isSpecialAvailableForBunk(X.name, _fbGradeOf[String(bk)], bk, globalSettings)) continue; } catch (_eFmA) {}
+                                        if (_fbSCap(X) - _fbSBusy(X.name, s, e) < 1) continue;
+                                        var _fmOk = false;
+                                        try { _fmOk = window.SchedulingRules.isCandidateAllowed({ type: 'special', event: X.name, _assignedSpecial: X.name, _specialLocation: X.name, startMin: s, endMin: e }, tmpl, { mode: 'auto' }); } catch (_eFmR) { _fmOk = false; }
+                                        if (!_fmOk) continue;
+                                        if (_appendAlignedSlot(bk, _fbGradeOf[bk], { field: X.name, sport: null, _activity: X.name, _startMin: s, _endMin: e, _fixed: true, _autoMode: true, _generic: false, continuation: false, type: 'special', _subcat: _xSub, _specialLocation: X.name, _finalBackfill: true }) >= 0) {
+                                            _fbFilled++; _fbPassFilled++; _fbMin += _fmLen;
+                                        }
+                                        return;
+                                    }
+                                    _fbNoCand++; return;
+                                }
                                 if (_appendAlignedSlot(bk, _fbGradeOf[bk], { field: pick, sport: pick, _activity: pick,
                                            _startMin: s, _endMin: e, _fixed: true, _autoMode: true,
                                            _generic: false, continuation: false, type: 'sport',
@@ -20542,7 +20589,28 @@
                                         //   visible unit: it fills if the capacity model was pessimistic
                                         //   (live: it said few deliverable, the endgame filled 28), else it
                                         //   becomes an honest-open window the passes can still rescue.
-                                        if ((typeof window === 'undefined') || (window.__softDemote !== false)) { dem.qty = Math.min(q, 1); dem._reconcileSoft = true; demoted++; }
+                                        if ((typeof window === 'undefined') || (window.__softDemote !== false)) {
+                                            // WEEK-DRY at demand time: a bunk with ZERO week-fresh,
+                                            // duration-fit activities left in this subcat cannot fill
+                                            // ANY tile — soft-keeping a unit only manufactures a dead
+                                            // sliver the released window can never absorb (live: 140min
+                                            // of 10-min orphans). Hard-demote it so the packer lays
+                                            // full-length fillable demand (sports) in that space.
+                                            var _sdDry = false;
+                                            try {
+                                                var _sdNames = ranked[i].names || [];
+                                                var _sdU = (typeof window !== 'undefined') && window.SchedulerCoreUtils;
+                                                if (_sdU && typeof _sdU.getPeriodActivityCount === 'function' && _sdNames.length) {
+                                                    _sdDry = true;
+                                                    var _sdDate = (typeof window !== 'undefined' && (window._activeGenDate || window.currentScheduleDate)) || '';
+                                                    for (var _sdn = 0; _sdn < _sdNames.length; _sdn++) {
+                                                        if ((_sdU.getPeriodActivityCount(ranked[i].bunk, _sdNames[_sdn], '1week', _sdDate) || 0) === 0) { _sdDry = false; break; }
+                                                    }
+                                                }
+                                            } catch (_eSd) { _sdDry = false; }
+                                            if (_sdDry) { dem.qty = 0; demoted++; }
+                                            else { dem.qty = Math.min(q, 1); dem._reconcileSoft = true; demoted++; }
+                                        }
                                         else { dem.qty = 0; demoted++; }
                                     }
                                     try { log('[GENERIC-RECONCILE] ' + cat + ': demand floor ' + totalFloor + ' > deliverable ' + deliverable + ' (' + g.seats + ' seat' + (g.seats === 1 ? '' : 's') + ' × ' + slots + ' session' + (slots === 1 ? '' : 's') + '/day @' + g.repDur + 'min) → kept floors for ' + (g.entries.length - demoted) + ' most-owed bunk(s), demoted ' + demoted + ' to opportunistic (cap kept)'); } catch (_e) {}
