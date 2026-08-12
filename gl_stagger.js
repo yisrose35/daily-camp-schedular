@@ -250,6 +250,15 @@
                 return c;
             }
         }
+        // pass 1.5 — FULL-MENU fallback (the general filling principle: the candidate
+        // pool must be everything the config allows at this span, not the rotation-
+        // thinned lists). The caller supplies ctx.menuExtra with ALL its gates
+        // (day-filtered catalog, access, held-subcat cap rule, seats). Consulted only
+        // when the bunk's own pools had nothing — pool candidates always win first.
+        if (ctx.menuExtra) {
+            const mx = ctx.menuExtra(bunk, dur, s, e, used);
+            if (mx) return mx;
+        }
         // pass 2 — repeat allowed: accept an already-used special that still has a seat
         if (allowRepeat) {
             for (let li2 = 0; li2 < _lists.length; li2++) {

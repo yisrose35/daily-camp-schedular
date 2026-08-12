@@ -21126,7 +21126,34 @@
                                             });
                                         });
                                     } catch (_eSm) { _absSportMax = {}; }
-                                    var _absRes = window.GLStagger.absorbUnfilledToSport({ bunks: _absBunks, gate: _glGate, sportLabel: 'Sport', specialLabel: 'Special: Uncategorized', maxMergeMin: 40, sportMaxByGrade: _absSportMax, capFits: _glCapFits, recordUse: _glRecordUse, specialDurs: _glSpecialDurs, canon: _glCanon, canAbsorb: _glMayRepurpose, probeReorder: (window.__reorderProbe !== false), splitFill: (window.__absorbSplit !== false), allowRepeatFill: (typeof window !== 'undefined' && window.__sportlessRepeatFill === true), stagMenuFlip: !!(_glStrategy && _glStrategy.stagFlip) });
+                                    var _absRes = window.GLStagger.absorbUnfilledToSport({ bunks: _absBunks, gate: _glGate, sportLabel: 'Sport', specialLabel: 'Special: Uncategorized', maxMergeMin: 40, sportMaxByGrade: _absSportMax, capFits: _glCapFits, recordUse: _glRecordUse, specialDurs: _glSpecialDurs, canon: _glCanon, canAbsorb: _glMayRepurpose, probeReorder: (window.__reorderProbe !== false), splitFill: (window.__absorbSplit !== false), allowRepeatFill: (typeof window !== 'undefined' && window.__sportlessRepeatFill === true), stagMenuFlip: !!(_glStrategy && _glStrategy.stagFlip),
+                                        // ★ FULL-MENU fallback for split pieces (general filling
+                                        //   principle): when the bunk's rotation-thinned pools have
+                                        //   nothing at a piece length, offer any config-legal special.
+                                        //   Conservative cap rule: only a subcat the bunk holds NO
+                                        //   concrete special of today — never exceeds a cap, can only
+                                        //   help meet a floor. Day-filtered + access + seat-gated.
+                                        menuExtra: function (bunkObj, dur, s, e, used) {
+                                            try {
+                                                var cat = (typeof todaysSpecials !== 'undefined' && todaysSpecials) || [];
+                                                var held = {};
+                                                (bunkObj.tiles || []).forEach(function (t) { if (t && t.kind === 'special' && (t._concrete || t.generic === false) && t.subcat) held[_glCanon(t.subcat)] = 1; });
+                                                for (var i = 0; i < cat.length; i++) {
+                                                    var X = cat[i];
+                                                    if (!X || !X.name || X.available === false) continue;
+                                                    var ds = _glSpecialDurs(X.name);
+                                                    if (!ds || !ds.length || ds.indexOf(dur) < 0) continue;
+                                                    if (used[String(X.name).toLowerCase()]) continue;
+                                                    var sub = _glCanon(X.subcategory);
+                                                    if (held[sub]) continue;
+                                                    try { if (typeof isSpecialAvailableForBunk === 'function' && !isSpecialAvailableForBunk(X.name, bunkObj.grade, bunkObj.name, globalSettings)) continue; } catch (_eMxA) {}
+                                                    var cand = { name: X.name, subcat: sub, sharableWith: X.sharableWith, capacity: X.capacity };
+                                                    if (_glCapFits && !_glCapFits(cand, bunkObj.grade, s, e)) continue;
+                                                    return cand;
+                                                }
+                                            } catch (_eMx) {}
+                                            return null;
+                                        } });
                                     if (_absRes) { _glFill.absorbed = _absRes.toSport || 0; _glFill.absorbBlocked = _absRes.blockedBySpacing || 0; _glFill.absorbFilled = _absRes.toFilledSpecial || 0; _glFill.absorbSplit = _absRes.toSplitFilled || 0; _glFill.absorbRepeat = _absRes.toRepeatFilled || 0; _glFill.filled = (_glFill.filled || 0) + (_absRes.toFilledSpecial || 0) + (_absRes.toSplitFilled || 0) + (_absRes.toRepeatFilled || 0); }
                                     if (_absRes && (_absRes.bornDeadSkipped || 0) > 0) { log('[GENERIC-ABSORB] ' + _absRes.bornDeadSkipped + ' stuck block(s) left as honest OPEN time instead of a born-dead "Special: Uncategorized" — no uncategorized activity runs that length (the placeholder could never have filled; the capacity advice now names the real shortage)'); }
                                     if (_absRes && (_absRes.toRepeatFilled || 0) > 0) { log('[GENERIC-ABSORB-REPEAT] ' + _absRes.toRepeatFilled + ' open block(s) filled with a REPEAT special (sportless camp, window.__sportlessRepeatFill on) — same-day repeats expected'); }
