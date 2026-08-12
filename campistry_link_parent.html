@@ -3343,6 +3343,12 @@ window.addEventListener('storage', function(e) {
         // at". See window.__linkSplash at the top of the page.
         if (window.__linkSplash) window.__linkSplash.hide();
         if (window.lkLoadFeatures) window.lkLoadFeatures();   // hide sections this camp does not have
+        // Register for push HERE, not in the sign-in handler: most launches
+        // restore a stored session or unlock with biometrics and never touch
+        // that path, so a returning parent would never have registered. The
+        // RPC upserts and tokens rotate anyway, so doing it every load is both
+        // correct and cheap.
+        if (window.campistryPushRegister) window.campistryPushRegister();
         // Load camp-configured forms, lists, tips config, mail + tip history
         if (parent.campId) {
             _loadLinkForms(parent.campId);

@@ -184,6 +184,12 @@
             if (Bio) Bio.saveSession(session);
 
             userEmail = (session.user?.email || '').toLowerCase();
+            // Register this device for push. Lite had no registration call at
+            // all, so no counselor's phone could ever have received one. Here
+            // rather than on the sign-in screen: every authenticated launch
+            // passes through this point, including the usual case of a stored
+            // session, and the RPC upserts so repeating it costs nothing.
+            if (window.campistryPushRegister) window.campistryPushRegister();
             splashProgress(28);
 
             window.supabase.auth.onAuthStateChange((event, s) => {
@@ -1579,6 +1585,10 @@
             // "sign in using biometrics" is a button that can never work.
             // Turning biometrics off is the full revoke; see the note in
             // campistry_lite_biometric.js.
+            // Stop this device receiving the outgoing account's notifications
+            // before the session goes — on a shared staff phone, the next
+            // person signing in must not inherit the previous one's alerts.
+            if (window.campistryPushForget) window.campistryPushForget();
             const bioOn = !!window.CampistryLiteBio?.isEnabled();
             try { await window.supabase.auth.signOut(bioOn ? { scope: 'local' } : undefined); } catch (_) {}
             // The enrolment itself is kept and bound to your user id, so signing
