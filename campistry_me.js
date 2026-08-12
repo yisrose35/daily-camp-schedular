@@ -316,7 +316,11 @@ function setupSidebar(){
 }
 function nav(p){
     curPage=p;
-    document.querySelectorAll('.sidebar-item').forEach(function(b){b.classList.toggle('active',b.dataset.page===p)});
+    // Camp Layout is one sidebar entry (data-page="structure") covering two
+    // pages (Structure + Bunk Builder, cross-linked via their own in-page
+    // tabs) — keep it highlighted on either one.
+    var sidebarKey=(p==='bunkbuilder')?'structure':p;
+    document.querySelectorAll('.sidebar-item').forEach(function(b){b.classList.toggle('active',b.dataset.page===sidebarKey)});
     document.querySelectorAll('.me-page').forEach(function(pg){pg.classList.toggle('active',pg.id==='page-'+p)});
     render(p);
 }
@@ -1769,9 +1773,23 @@ function _commitStructureReorder(){
     save();
 }
 
+// Camp Structure and Bunk Builder are presented together as one "Camp
+// Layout" area (one sidebar entry, cross-linked sub-tabs) even though they
+// stay two independently gated pages underneath — a role can have view-only
+// Structure and edit-level Bunk Builder (or vice versa), so each keeps its
+// own #page-* pane and its own me.structure/me.bunkbuilder capability check
+// exactly as before. This just adds the tab strip that jumps between them.
+function _layoutTabsHtml(active){
+    var tabs=[{k:'structure',l:'Structure'},{k:'bunkbuilder',l:'Bunk Builder'}];
+    return '<div style="display:flex;gap:0;border-bottom:1px solid var(--s200);margin-bottom:14px">'+tabs.map(function(t){
+        return '<button class="me-btn me-btn--ghost" data-page="'+t.k+'" style="padding:8px 16px;font-size:.8rem;font-weight:600;border-bottom:2px solid '+(active===t.k?'var(--me)':'transparent')+';color:'+(active===t.k?'var(--me)':'var(--s400)')+';border-radius:0" onclick="CampistryMe.nav(\''+t.k+'\')">'+t.l+'</button>';
+    }).join('')+'</div>';
+}
+
 function renderStructure(){
     var c=document.getElementById('page-structure'),divs=_sortedDivisions();
-    var h='<div class="sec-hd"><div><h2 class="sec-title">Camp Structure</h2></div><div class="sec-actions"><button class="me-btn me-btn--pri" onclick="CampistryMe.addDiv()">+ Add Division</button></div></div>';
+    var h=_layoutTabsHtml('structure');
+    h+='<div class="sec-hd"><div><h2 class="sec-title">Camp Structure</h2></div><div class="sec-actions"><button class="me-btn me-btn--pri" onclick="CampistryMe.addDiv()">+ Add Division</button></div></div>';
     if(!divs.length){h+='<div class="me-empty"><h3>No divisions yet</h3><p>Create your camp structure.</p></div>'}
     else{
         h+='<div id="meDivList"><div style="font-size:.72rem;color:var(--s400);margin-bottom:8px">Drag the ⋮⋮ handles or any chip to reorder divisions, grades, and bunks in place.</div>';
@@ -2713,7 +2731,8 @@ function renderBB(){
     // here before this fix).
     var cArr=Object.keys(roster);
     var un=cArr.filter(function(n){return!roster[n].bunk}),placed=cArr.length-un.length;
-    var h='<div class="sec-hd"><div><h2 class="sec-title">Bunk Builder</h2><p class="sec-desc">'+placed+'/'+cArr.length+' placed</p></div><div class="sec-actions"><button class="me-btn me-btn--pri me-btn--sm" onclick="CampistryMe.autoAssign()">⚡ Auto-Assign</button><button class="me-btn me-btn--sec me-btn--sm" onclick="CampistryMe.clearBunks()">Clear</button></div></div>';
+    var h=_layoutTabsHtml('bunkbuilder');
+    h+='<div class="sec-hd"><div><h2 class="sec-title">Bunk Builder</h2><p class="sec-desc">'+placed+'/'+cArr.length+' placed</p></div><div class="sec-actions"><button class="me-btn me-btn--pri me-btn--sm" onclick="CampistryMe.autoAssign()">⚡ Auto-Assign</button><button class="me-btn me-btn--sec me-btn--sm" onclick="CampistryMe.clearBunks()">Clear</button></div></div>';
     if(!allB.length){h+='<div class="me-empty"><h3>No bunks</h3><p>Create divisions and bunks in Camp Structure first.</p></div>'}
     else{
         h+='<div class="bb"><div class="bb-pool" ondragover="event.preventDefault();this.querySelector(\'.bb-pool-bd\').classList.add(\'dragover\')" ondragleave="this.querySelector(\'.bb-pool-bd\').classList.remove(\'dragover\')" ondrop="CampistryMe.bbDrop(\'__pool__\',event);this.querySelector(\'.bb-pool-bd\').classList.remove(\'dragover\')">';
