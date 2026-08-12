@@ -51,6 +51,13 @@ body{font-family:var(--font);background:var(--s50);color:var(--s800);-webkit-fon
       <div class="fr"><div class="fg"><label class="fl">Date of birth</label><input class="fi" id="aDob" type="date"></div></div>
       <div class="fg"><label class="fl">Street address</label><input class="fi" id="aSt"></div>
       <div class="fr"><div class="fg"><label class="fl">City</label><input class="fi" id="aCi"></div><div class="fg"><label class="fl">State</label><input class="fi" id="aSa"></div><div class="fg"><label class="fl">ZIP</label><input class="fi" id="aZp"></div></div>
+      <div class="fg" id="aPhotoFg" style="margin-bottom:0"><label class="fl">Photo</label>
+      <div style="display:flex;align-items:center;gap:12px">
+      <img id="aPhotoPreview" src="" alt="" style="display:none;width:64px;height:64px;object-fit:cover;border-radius:10px;border:1px solid var(--s200);flex-shrink:0">
+      <div style="flex:1;min-width:0">
+      <input type="file" accept="image/*" id="aPhotoInput" class="fi" style="padding:7px 10px">
+      <button type="button" id="aPhotoClearBtn" style="display:none;margin-top:6px;background:none;border:none;color:var(--err);font-size:.75rem;font-weight:600;cursor:pointer;padding:0">Remove photo</button>
+      </div></div></div>
     </div>
 
     <div class="cd" id="roleCard"><div class="ct">💼 Role &amp; Availability</div>
@@ -103,7 +110,7 @@ body{font-family:var(--font);background:var(--s50);color:var(--s800);-webkit-fon
 (function(){
 var POSITIONS_DEFAULT=['Counselor','Head Counselor','Junior Counselor','Specialist','Lifeguard','Nurse / Medical','Kitchen Staff','Maintenance','Office Staff','Bus Driver','Division Head'];
 var CERTS_DEFAULT=['CPR','First Aid','Lifeguard (WSI)','Food Handler','Wilderness First Responder','EMT','Teaching license'];
-var sigCtx=null,sigDrawing=false,sigHasData=false,resumeData=null;
+var sigCtx=null,sigDrawing=false,sigHasData=false,resumeData=null,photoData=null;
 var customQuestions=[];
 function esc(s){if(s==null)return'';return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&#34;').replace(/'/g,'&#39;');}
 function v(id){return(document.getElementById(id)?.value||'').trim();}
@@ -125,6 +132,7 @@ var FIELD_DEFAULT_LABEL={
 var FIELD_REQUIRED_STATE={first:true,last:true,email:true,phone:true,dob:false,street:false,city:false,state:false,zip:false,availStart:false,availEnd:false,education:false,experience:false};
 var FIELD_ENABLED_STATE={};
 var RESUME_REQUIRED=false;
+var PHOTO_REQUIRED=false;
 
 // Which SFC_SECTIONS key each catalog field belongs to — when a whole
 // section is turned off, its fields must be treated as not-required (not
@@ -166,6 +174,15 @@ function applyFieldConfig(fields,sectionsDisabled){
     var rIn=document.getElementById('aResume'), rFg=rIn&&rIn.closest('.fg'), rLbl=rFg&&rFg.querySelector('.fl');
     if(rFg)rFg.style.display=(resumeSectionOff||(rf&&rf.enabled===false))?'none':'';
     if(rLbl)rLbl.innerHTML=esc((rf&&rf.label)||'Resume (PDF / DOC, optional)')+(RESUME_REQUIRED?' <span class="rq">*</span>':'');
+
+    // Photo — lives in the About You section, handled separately like
+    // resume since it's not a plain text-validated input.
+    var photoSectionOff=sectionsDisabled.about;
+    var pf=fields.photo;
+    PHOTO_REQUIRED=photoSectionOff?false:!!(pf&&pf.required);
+    var pFg=document.getElementById('aPhotoFg'), pLbl=pFg&&pFg.querySelector('.fl');
+    if(pFg)pFg.style.display=(photoSectionOff||(pf&&pf.enabled===false))?'none':'';
+    if(pLbl)pLbl.innerHTML=esc((pf&&pf.label)||'Photo')+(PHOTO_REQUIRED?' <span class="rq">*</span>':'');
 }
 
 // Section reordering — about/role/experience/references/consent. The
@@ -303,6 +320,46 @@ document.getElementById('aResume').addEventListener('change',function(e){
     var rd=new FileReader();rd.onload=function(ev){resumeData={name:f.name,data:ev.target.result};};rd.readAsDataURL(f);
 });
 
+// Photo — stored as a downscaled JPEG data URL (a plain string, unlike
+// resume's {name,data}), same client-side resize campistry_register.html
+// uses for camperPhoto so a full-resolution phone photo doesn't bloat the
+// stored application.
+document.getElementById('aPhotoInput').addEventListener('change',function(e){
+    var f=e.target.files[0]; if(!f)return;
+    if(!/^image\//.test(f.type)){ showErr('Please choose an image file.'); e.target.value=''; return; }
+    if(f.size>8*1024*1024){ showErr('Photo is too large (max 8MB).'); e.target.value=''; return; }
+    var reader=new FileReader();
+    reader.onload=function(ev){
+        var img=new Image();
+        img.onload=function(){
+            var maxDim=480;
+            var scale=Math.min(1,maxDim/Math.max(img.width,img.height));
+            var cw=Math.round(img.width*scale),ch=Math.round(img.height*scale);
+            var dataUrl;
+            try{
+                var cv=document.createElement('canvas');cv.width=cw;cv.height=ch;
+                cv.getContext('2d').drawImage(img,0,0,cw,ch);
+                dataUrl=cv.toDataURL('image/jpeg',0.85);
+            }catch(ex){ dataUrl=ev.target.result; }
+            photoData=dataUrl;
+            var prev=document.getElementById('aPhotoPreview');
+            prev.src=dataUrl; prev.style.display='block';
+            document.getElementById('aPhotoClearBtn').style.display='inline-block';
+        };
+        img.onerror=function(){ showErr('Could not read that image.'); };
+        img.src=ev.target.result;
+    };
+    reader.onerror=function(){ showErr('Could not read that file.'); };
+    reader.readAsDataURL(f);
+});
+document.getElementById('aPhotoClearBtn').addEventListener('click',function(){
+    photoData=null;
+    var prev=document.getElementById('aPhotoPreview');
+    prev.src=''; prev.style.display='none';
+    this.style.display='none';
+    var input=document.getElementById('aPhotoInput'); if(input)input.value='';
+});
+
 // Signature
 (function initSig(){
     var canvas=document.getElementById('sigCanvas'),wrap=document.getElementById('sigWrap');
@@ -341,6 +398,7 @@ window.submitApp=function(){
     var consentOn=!(_currentFC.sections&&_currentFC.sections.consent&&_currentFC.sections.consent.enabled===false);
     if(roleOn&&!positions.length)return showErr('Select at least one position.');
     if(RESUME_REQUIRED&&!resumeData)return showErr('Please attach your resume.');
+    if(PHOTO_REQUIRED&&!photoData)return showErr('Please add a photo.');
     for(var _qi=0;_qi<customQuestions.length;_qi++){
         var _q=customQuestions[_qi];
         if(!_q.required)continue;
@@ -373,7 +431,7 @@ window.submitApp=function(){
     var id='staff_'+Date.now()+'_'+Math.random().toString(36).slice(2,6);
     var rec={
         first:first,last:last,name:first+' '+last,email:email,phone:phone,dob:v('aDob'),
-        street:v('aSt'),city:v('aCi'),state:v('aSa'),zip:v('aZp'),
+        street:v('aSt'),city:v('aCi'),state:v('aSa'),zip:v('aZp'),photo:photoData||'',
         positions:positions,availStart:v('aAvS'),availEnd:v('aAvE'),
         education:v('aEdu'),experience:v('aExp'),certifications:certs,
         resume:resumeData,references:refs,source:v('aSrc'),

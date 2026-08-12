@@ -2918,7 +2918,6 @@ function exportLeadsCSV(){
 // the office moves them through Applied → Screening → Interview → Reference →
 // Offered → Hired, requests references, and runs an onboarding checklist.
 // ═══════════════════════════════════════════════════════════════
-var STAFF_POSITIONS=['Counselor','Head Counselor','Junior Counselor','Specialist','Lifeguard','Nurse / Medical','Kitchen Staff','Maintenance','Office Staff','Bus Driver','Division Head'];
 var STAFF_STAGES=[
     {key:'all',label:'All',color:'var(--s700)'},
     {key:'applied',label:'Applied',color:'var(--s500)'},
@@ -2932,6 +2931,16 @@ var STAFF_STAGES=[
 var STAFF_ONBOARD=[['contract','Signed offer / contract'],['i9','I-9 verified'],['w4','W-4 / tax forms'],['bgcheck','Background check cleared'],['orientation','Orientation complete']];
 function _staffStatusType(s){return s==='hired'?'ok':s==='declined'?'err':s==='offered'?'info':s==='reference'?'warn':'gray';}
 function _staffLabel(s){var x=STAFF_STAGES.find(function(g){return g.key===s;});return x?x.label:(s||'Applied');}
+// The pipeline's forward path — used to drive the single "Advance" action
+// (row button + modal footer) instead of making every stage transition its
+// own named button. 'declined' isn't part of this path — it's reached via
+// a separate Decline action from any stage, not by advancing into it.
+var STAFF_ADVANCE_ORDER=['applied','screening','interview','reference','offered','hired'];
+function _staffNextStage(status){
+    var idx=STAFF_ADVANCE_ORDER.indexOf(status);
+    if(idx<0||idx>=STAFF_ADVANCE_ORDER.length-1)return null;
+    return STAFF_ADVANCE_ORDER[idx+1];
+}
 
 // ── What counselors can see in Campistry Lite ─────────────────────────
 // The head counselor's call, per camp. Catalogue lives in
@@ -3000,9 +3009,15 @@ function renderStaffing(){
 
     var h='<div class="sec-hd"><div><h2 class="sec-title">Staffing &amp; Hiring</h2><p class="sec-desc">'+total+' applicant'+(total!==1?'s':'')+' · '+hired+' hired</p></div>';
     h+='<div class="sec-actions">'
+        +'<button class="me-btn me-btn--teal" onclick="CampistryMe.openStaffFormConfig()">Customize Staff Form</button>'
         +'<button class="me-btn me-btn--pri" onclick="CampistryMe.addStaffApp()">+ Add Applicant</button>'
-        +'<div class="me-more-wrap"><button class="me-btn me-btn--sec me-btn--sm" onclick="CampistryMe._toggleMenu(\'staffMoreMenu\')">⋯ More</button>'
-        +'<div class="me-more-menu" id="staffMoreMenu">'
+        +'<div class="me-more-wrap"><button class="me-btn me-btn--sec me-btn--sm" onclick="CampistryMe._toggleMenu(\'staffLinkMenu\')">🔗 Get Link</button>'
+        +'<div class="me-more-menu" id="staffLinkMenu" style="min-width:250px">'
+        +'<div style="padding:7px 10px 9px;font-size:.7rem;color:var(--s400);word-break:break-all;border-bottom:1px solid var(--s100);margin-bottom:4px">'+esc(window.location.origin+'/campistry_staff_apply.html')+'</div>'
+        +'<button onclick="CampistryMe.copyStaffLink()">📋 Copy Link</button>'
+        +'<button onclick="CampistryMe.openSendStaffLinkModal()">✉ Send Link</button>'
+        +'<button onclick="CampistryMe.showStaffQR()">▦ QR Code</button>'
+        +'<div style="border-top:1px solid var(--s100);margin:4px 0"></div>'
         +'<button onclick="CampistryMe.exportStaffCSV()">↓ Export CSV</button>'
         +'</div></div>'
         +'</div></div>';
@@ -3017,26 +3032,16 @@ function renderStaffing(){
 
     h+=_visibilityPanelHTML();
 
-    // Application link banner
-    h+='<div style="background:#fff;border:1px solid var(--s200);border-radius:var(--r);padding:12px 16px;margin-bottom:14px;display:flex;align-items:center;gap:12px;flex-wrap:wrap">';
-    h+='<div style="flex:1;min-width:200px"><div style="font-size:.8rem;font-weight:600;color:var(--s500)">STAFF APPLICATION LINK</div>';
-    h+='<div style="font-size:.85rem;color:var(--me);font-weight:600;word-break:break-all;margin-top:2px">'+esc(window.location.origin+'/campistry_staff_apply.html')+'</div></div>';
-    h+='<div class="me-more-wrap"><button class="me-btn me-btn--pri me-btn--sm" onclick="CampistryMe._toggleMenu(\'staffShareMenu\')">Share ▾</button>'
-        +'<div class="me-more-menu" id="staffShareMenu">'
-        +'<button onclick="CampistryMe.copyStaffLink()">🔗 Copy Link</button>'
-        +'<button onclick="CampistryMe.openSendStaffLinkModal()">✉ Send Link</button>'
-        +'<button onclick="CampistryMe.showStaffQR()">▦ QR Code</button>'
-        +'</div></div>';
-    h+='<button class="me-btn me-btn--sec me-btn--sm" onclick="CampistryMe.openStaffFormConfig()">⚙ Customize Form</button></div>';
-
-    // Pipeline cards
-    h+='<div style="display:flex;gap:8px;margin-bottom:16px;flex-wrap:wrap">';
+    // Status filter — same compact underline-tab strip as Registration,
+    // instead of a row of colored boxes.
+    h+='<div style="display:flex;gap:2px;border-bottom:1px solid var(--s200);margin-bottom:16px;overflow-x:auto">';
     STAFF_STAGES.forEach(function(s){
         var count=s.key==='all'?total:(by[s.key]||0);
         var active=staffFilter===s.key;
-        h+='<div class="click" onclick="CampistryMe.setStaffFilter(\''+s.key+'\')" style="flex:1;min-width:82px;background:'+(active?'var(--s50)':'#fff')+';border-radius:var(--r);padding:10px 12px;border:2px solid '+(active?s.color:'var(--s200)')+';text-align:center;cursor:pointer">';
-        h+='<div style="font-size:1.2rem;font-weight:700;color:'+s.color+'">'+count+'</div>';
-        h+='<div style="font-size:.62rem;font-weight:600;color:var(--s400);text-transform:uppercase;letter-spacing:.04em">'+s.label+'</div></div>';
+        h+='<button onclick="CampistryMe.setStaffFilter(\''+s.key+'\')" style="padding:9px 12px;border:none;background:none;font-size:.8rem;font-weight:600;cursor:pointer;white-space:nowrap;font-family:inherit;display:flex;align-items:center;gap:6px;border-bottom:2px solid '+(active?s.color:'transparent')+';color:'+(active?s.color:'var(--s500)')+'">'
+            +esc(s.label)
+            +'<span style="font-size:.68rem;font-weight:700;border-radius:9px;padding:1px 6px;background:'+(active?s.color:'var(--s100)')+';color:'+(active?'#fff':'var(--s600)')+'">'+count+'</span>'
+            +'</button>';
     });
     h+='</div>';
 
@@ -3050,17 +3055,34 @@ function renderStaffing(){
     } else if(!list.length){
         h+='<div class="me-empty"><h3>No applicants in this stage</h3></div>';
     } else {
-        h+='<div class="me-card"><div class="me-tw"><table class="me-t"><thead><tr><th>Name</th><th>Position(s)</th><th>Applied</th><th>References</th><th>Status</th><th></th></tr></thead><tbody>';
+        h+='<div class="me-card"><div class="me-tw"><table class="me-t"><thead><tr><th>Name</th><th>Position(s)</th><th>Applied</th><th>References</th><th>Status</th><th style="width:1%;white-space:nowrap"></th></tr></thead><tbody>';
         list.forEach(function(a){
             var refs=(a.references||[]); var refDone=refs.filter(function(r){return r.status==='received';}).length;
             var refTxt=refs.length?refDone+'/'+refs.length:'—';
+            var st=a.status||'applied';
             h+='<tr class="click" onclick="CampistryMe.viewStaffApp(\''+je(a._id)+'\')">';
             h+='<td class="bold">'+esc(a.name||((a.first||'')+' '+(a.last||'')))+'</td>';
             h+='<td style="font-size:.8rem">'+esc((a.positions||[]).join(', ')||'—')+'</td>';
             h+='<td style="font-size:.78rem;color:var(--s500)">'+esc(a.appliedDate||'')+'</td>';
             h+='<td style="font-size:.8rem;color:'+(refs.length&&refDone===refs.length?'var(--ok)':'var(--s500)')+'">'+refTxt+'</td>';
-            h+='<td>'+bdg(_staffLabel(a.status||'applied'),_staffStatusType(a.status||'applied'))+'</td>';
-            h+='<td style="text-align:right;color:var(--s300)">›</td></tr>';
+            h+='<td>'+bdg(_staffLabel(st),_staffStatusType(st))+'</td>';
+            // The row already opens Review on click — this column only needs
+            // the status-changing actions, same pattern as Registration:
+            // one primary button (Advance/Reconsider) plus a "⋯" menu for
+            // Decline, so a row never shows more than two controls.
+            var menuId='staffRowMenu_'+a._id;
+            var next=_staffNextStage(st);
+            h+='<td style="text-align:right;white-space:nowrap" onclick="event.stopPropagation()"><div style="display:flex;gap:6px;justify-content:flex-end;align-items:center">';
+            if(st==='declined'){
+                h+='<button class="me-btn me-btn--sec me-btn--sm" onclick="CampistryMe.setStaffStatus(\''+je(a._id)+'\',\'applied\',{fromRow:true})">Reconsider</button>';
+            }else{
+                if(next)h+='<button class="me-btn me-btn--pri me-btn--sm" onclick="CampistryMe.setStaffStatus(\''+je(a._id)+'\',\''+next+'\',{fromRow:true})">'+ico('enroll')+'Advance</button>';
+                h+='<div class="me-more-wrap"><button class="me-btn me-btn--sec me-btn--sm" onclick="CampistryMe._toggleMenu(\''+menuId+'\')">⋯</button>'
+                    +'<div class="me-more-menu" id="'+menuId+'">'
+                    +'<button onclick="CampistryMe.setStaffStatus(\''+je(a._id)+'\',\'declined\',{fromRow:true})" style="color:var(--err)">Decline</button>'
+                    +'</div></div>';
+            }
+            h+='</div></td></tr>';
         });
         h+='</tbody></table></div></div>';
     }
@@ -3069,107 +3091,285 @@ function renderStaffing(){
 
 function setStaffFilter(f){staffFilter=f;renderStaffing();}
 
+// Review modal for a staff applicant — same appViewModal shell, av-sec/
+// av-row card sections, and live form-config-driven rendering as
+// viewApplication() uses for Registration: section order/labels/visibility
+// come from getStaffFormConfig()/SFC_SECTIONS/SFC_FIELD_CATALOG, so this
+// mirrors whatever the camp has actually configured on the public staff
+// application form. Bunk placement / onboarding / internal notes are
+// admin-only additions that aren't part of that public form, so — like
+// Registration's Post-Acceptance/Internal Notes — they render as trailing
+// sections outside the config-driven order.
 function viewStaffApp(id){
     var a=staffApplications[id]; if(!a)return;
     var st=a.status||'applied';
-    var opts=STAFF_STAGES.filter(function(g){return g.key!=='all';}).map(function(g){return '<option value="'+g.key+'"'+(st===g.key?' selected':'')+'>'+g.label+'</option>';}).join('');
-    var h='<div style="max-height:70vh;overflow:auto">';
-    // Header
-    h+='<div style="display:flex;justify-content:space-between;align-items:flex-start;gap:10px;margin-bottom:12px">';
-    h+='<div><div style="font-size:1.05rem;font-weight:800">'+esc(a.name||((a.first||'')+' '+(a.last||'')))+'</div><div style="font-size:.8rem;color:var(--s500)">'+esc((a.positions||[]).join(', ')||'—')+'</div></div>';
-    h+='<select class="me-input" style="width:auto" onchange="CampistryMe.setStaffStatus(\''+je(id)+'\',this.value)">'+opts+'</select>';
-    h+='</div>';
-    // Contact
-    h+='<div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;font-size:.82rem;margin-bottom:12px">';
-    if(a.email)h+='<div><span style="color:var(--s400)">Email</span><br><a href="mailto:'+esc(a.email)+'" style="color:var(--me)">'+esc(a.email)+'</a></div>';
-    if(a.phone)h+='<div><span style="color:var(--s400)">Phone</span><br><a href="tel:'+esc(a.phone)+'" style="color:var(--me)">'+esc(a.phone)+'</a></div>';
-    if(a.dob)h+='<div><span style="color:var(--s400)">DOB</span><br>'+esc(a.dob)+'</div>';
-    if(a.availStart||a.availEnd)h+='<div><span style="color:var(--s400)">Availability</span><br>'+esc((a.availStart||'?')+' – '+(a.availEnd||'?'))+'</div>';
-    if(a.street)h+='<div style="grid-column:1/-1"><span style="color:var(--s400)">Address</span><br>'+esc([a.street,a.city,a.state,a.zip].filter(Boolean).join(', '))+'</div>';
-    h+='</div>';
-    // Certifications
-    if((a.certifications||[]).length)h+='<div style="margin-bottom:10px"><span style="font-size:.7rem;font-weight:700;color:var(--s400);text-transform:uppercase">Certifications</span><div style="margin-top:4px;display:flex;flex-wrap:wrap;gap:4px">'+a.certifications.map(function(c){return '<span style="font-size:.72rem;padding:2px 8px;border-radius:999px;background:var(--s100);color:var(--s600)">'+esc(c)+'</span>';}).join('')+'</div></div>';
-    // Experience / education
-    if(a.education)h+='<div style="margin-bottom:8px;font-size:.82rem"><span style="color:var(--s400)">Education:</span> '+esc(a.education)+'</div>';
-    if(a.experience)h+='<div style="margin-bottom:12px;font-size:.82rem"><span style="color:var(--s400)">Experience</span><div style="margin-top:2px;white-space:pre-wrap;color:var(--s700)">'+esc(a.experience)+'</div></div>';
-    if(a.resume&&a.resume.data)h+='<div style="margin-bottom:12px"><a href="'+esc(a.resume.data)+'" download="'+esc(a.resume.name||'resume')+'" class="me-btn me-btn--sec me-btn--sm">📎 '+esc(a.resume.name||'Resume')+'</a></div>';
-    // References
-    h+='<div style="margin-bottom:12px"><div style="font-size:.7rem;font-weight:700;color:var(--s400);text-transform:uppercase;margin-bottom:6px">References</div>';
-    if((a.references||[]).length){
-        a.references.forEach(function(r,ri){
-            var rst=r.status||'pending';
-            var rc=rst==='received'?'ok':rst==='requested'?'warn':'gray';
-            h+='<div style="display:flex;align-items:center;gap:8px;padding:7px 0;border-bottom:1px solid var(--s100);font-size:.82rem">';
-            h+='<div style="flex:1"><strong>'+esc(r.name||'—')+'</strong>'+(r.relationship?' <span style="color:var(--s400)">('+esc(r.relationship)+')</span>':'')+'<br><span style="color:var(--s500);font-size:.76rem">'+esc([r.email,r.phone].filter(Boolean).join(' · '))+'</span></div>';
-            h+=bdg(rst,rc);
-            h+='<button class="me-btn me-btn--ghost me-btn--sm" onclick="CampistryMe.cycleRef(\''+je(id)+'\','+ri+')">'+(rst==='received'?'Reset':rst==='requested'?'Mark received':'Request')+'</button>';
-            h+='</div>';
-        });
-    } else h+='<div style="font-size:.8rem;color:var(--s400)">No references provided.</div>';
-    h+='</div>';
-    // Bunk placement (once hired). Hiring someone isn't finished until they're
-    // on a bunk — that's what gives them a schedule in Lite and what makes
-    // pickup notifications reach them.
+    var sc=_staffStatusType(st);
+    var stOpts=STAFF_STAGES.filter(function(g){return g.key!=='all';}).map(function(g){return '<option value="'+g.key+'"'+(st===g.key?' selected':'')+'>'+g.label+'</option>';}).join('');
+    var name=a.name||((a.first||'')+' '+(a.last||''))||'Applicant';
+
+    function isSafeImageDataUrl(s){return typeof s==='string'&&/^data:image\/(png|jpeg|jpg|gif|webp);base64,[A-Za-z0-9+\/=]+$/.test(s);}
+    var headPhoto=(a.photo&&isSafeImageDataUrl(a.photo))?'<img src="'+a.photo+'" style="width:40px;height:40px;object-fit:cover;border-radius:9px;flex-shrink:0">':'';
+    var head='<div style="display:flex;justify-content:space-between;align-items:flex-start;gap:10px">'
+        +'<div style="display:flex;align-items:center;gap:10px">'+headPhoto+'<div><h3 style="font-size:1.1rem;font-weight:700;color:var(--s800);margin:0">'+esc(name)+'</h3>'
+        +'<div style="display:flex;gap:5px;margin-top:5px">'+bdg(_staffLabel(st),sc)+((a.positions||[]).length?' '+bdg((a.positions||[]).join(', '),'gray'):'')+'</div></div></div>'
+        +'<div style="display:flex;align-items:center;gap:8px;flex-shrink:0"><select class="fs" style="width:auto;padding:5px 8px;font-size:.78rem" onchange="CampistryMe.setStaffStatus(\''+je(id)+'\',this.value)">'+stOpts+'</select>'
+        +'<button class="me-modal-x" onclick="CampistryMe.closeModal(\'appViewModal\')">&times;</button></div></div>';
+    document.getElementById('avHead').innerHTML=head;
+
+    var b='';
+    var _secOpen=false;
+    function sec(title){var out=_secOpen?'</div>':'';_secOpen=true;return out+'<div class="av-sec"><div class="av-sec-hd">'+title+'</div>';}
+    function row(l,v){if(!v)return'';return'<div class="av-row"><span class="av-row-l">'+esc(l)+'</span><span class="av-row-v">'+esc(v)+'</span></div>'}
+    function rowRaw(l,v){if(!v)return'';return'<div class="av-row"><span class="av-row-l">'+esc(l)+'</span><span class="av-row-v">'+v+'</span></div>'}
+
+    var sfc=getStaffFormConfig();
+    function sFieldOn(fid){var cfg=(sfc.fields||{})[fid]; return cfg?cfg.enabled!==false:true;}
+    function sLabel(fid,fallback){var cfg=(sfc.fields||{})[fid]; return (cfg&&cfg.label)||fallback;}
+    function sSectionOn(key){var cfg=(sfc.sections||{})[key]; if(cfg)return cfg.enabled!==false; var def=SFC_SECTIONS.filter(function(s){return s.key===key;})[0]; return def?def.default:true;}
+
+    var SECTION_RENDERERS={
+        about:function(){
+            b+=sec('About');
+            if(a.photo&&sFieldOn('photo')&&isSafeImageDataUrl(a.photo)){
+                b+='<img src="'+a.photo+'" style="width:72px;height:72px;object-fit:cover;border-radius:10px;border:1px solid var(--s200);margin-bottom:8px">';
+            }
+            if(sFieldOn('first')||sFieldOn('last'))b+=row('Name',name);
+            if(a.email&&sFieldOn('email'))b+=rowRaw(sLabel('email','Email'),'<a href="mailto:'+esc(a.email)+'" style="color:var(--me)">'+esc(a.email)+'</a>');
+            if(a.phone&&sFieldOn('phone'))b+=rowRaw(sLabel('phone','Phone'),'<a href="tel:'+esc(a.phone)+'" style="color:var(--me);font-weight:600">'+esc(a.phone)+'</a>');
+            if(sFieldOn('dob'))b+=row(sLabel('dob','Date of Birth'),a.dob);
+            if(sFieldOn('street'))b+=row(sLabel('street','Street'),a.street);
+            if(sFieldOn('city'))b+=row(sLabel('city','City'),a.city);
+            if(sFieldOn('state'))b+=row(sLabel('state','State'),a.state);
+            if(sFieldOn('zip'))b+=row(sLabel('zip','ZIP'),a.zip);
+        },
+        role:function(){
+            b+=sec('Role & Availability');
+            b+=row('Position(s)',(a.positions||[]).join(', '));
+            if((sFieldOn('availStart')||sFieldOn('availEnd'))&&(a.availStart||a.availEnd))b+=row('Availability',(a.availStart||'?')+' – '+(a.availEnd||'?'));
+        },
+        experience:function(){
+            b+=sec('Experience & Certifications');
+            if((a.certifications||[]).length)b+=row('Certifications',a.certifications.join(', '));
+            if(sFieldOn('education'))b+=row(sLabel('education','Education'),a.education);
+            if(sFieldOn('experience'))b+=row(sLabel('experience','Experience'),a.experience);
+            if(sFieldOn('resume')&&a.resume&&a.resume.data)b+='<div style="margin-top:4px"><a href="'+esc(a.resume.data)+'" download="'+esc(a.resume.name||'resume')+'" class="me-btn me-btn--sec me-btn--sm">📎 '+esc(a.resume.name||'Resume')+'</a></div>';
+        },
+        references:function(){
+            b+=sec('References');
+            if((a.references||[]).length){
+                a.references.forEach(function(r,ri){
+                    var rst=r.status||'pending';
+                    var rc=rst==='received'?'ok':rst==='requested'?'warn':'gray';
+                    b+='<div style="display:flex;align-items:center;gap:8px;padding:7px 0;border-bottom:1px solid var(--s100);font-size:.82rem">'
+                        +'<div style="flex:1"><strong>'+esc(r.name||'—')+'</strong>'+(r.relationship?' <span style="color:var(--s400)">('+esc(r.relationship)+')</span>':'')+'<br><span style="color:var(--s500);font-size:.76rem">'+esc([r.email,r.phone].filter(Boolean).join(' · '))+'</span></div>'
+                        +bdg(rst,rc)
+                        +'<button class="me-btn me-btn--ghost me-btn--sm" onclick="CampistryMe.cycleRef(\''+je(id)+'\','+ri+')">'+(rst==='received'?'Reset':rst==='requested'?'Mark received':'Request')+'</button>'
+                        +'</div>';
+                });
+            } else b+='<div style="font-size:.82rem;color:var(--s400)">No references provided.</div>';
+        },
+        consent:function(){
+            if(!a.source)return;
+            b+=sec('Consent');
+            b+=row('How they heard about us',a.source);
+        }
+    };
+    var order=(sfc.sectionOrder&&sfc.sectionOrder.length)?sfc.sectionOrder.slice():SFC_SECTIONS.map(function(s){return s.key;});
+    SFC_SECTIONS.forEach(function(s){ if(order.indexOf(s.key)<0)order.push(s.key); });
+    order.forEach(function(key){
+        if(!sSectionOn(key))return;
+        var fn=SECTION_RENDERERS[key];
+        if(fn)fn();
+    });
+
+    // Bunk placement (once hired) — admin-only, not part of the public
+    // form. Hiring isn't finished until they're on a bunk — that's what
+    // gives them a schedule in Lite and lets pickup notifications reach them.
     if(st==='hired'){
+        b+=sec('Bunk Placement');
         var mine=bunksForStaffEmail(a.email);
-        var free=allBunkNames().filter(function(b){return mine.indexOf(b)<0});
-        h+='<div style="margin-bottom:12px;background:var(--s50);border-radius:var(--r);padding:12px">';
-        h+='<div style="font-size:.7rem;font-weight:700;color:var(--s400);text-transform:uppercase;margin-bottom:6px">Bunk placement</div>';
+        var free=allBunkNames().filter(function(bn){return mine.indexOf(bn)<0});
         if(!String(a.email||'').trim()){
-            h+='<div style="font-size:.8rem;color:var(--err)">No email on this application, so they can\'t sign in to Campistry Lite or be notified. Add one before placing them.</div>';
+            b+='<div style="font-size:.82rem;color:var(--err)">No email on this application, so they can\'t sign in to Campistry Lite or be notified. Add one before placing them.</div>';
         }else if(mine.length){
-            h+=mine.map(function(b){
+            b+=mine.map(function(bn){
                 return '<div style="display:flex;align-items:center;gap:8px;padding:4px 0;font-size:.83rem">'
-                    +'<span style="flex:1">'+esc(b)+'</span>'
-                    +'<button class="me-btn me-btn--ghost me-btn--sm" onclick="CampistryMe.unassignHiredFromBunk(\''+je(id)+'\',\''+je(b)+'\')">Remove</button></div>';
+                    +'<span style="flex:1">'+esc(bn)+'</span>'
+                    +'<button class="me-btn me-btn--ghost me-btn--sm" onclick="CampistryMe.unassignHiredFromBunk(\''+je(id)+'\',\''+je(bn)+'\')">Remove</button></div>';
             }).join('');
         }else{
-            h+='<div style="font-size:.8rem;color:var(--s500);margin-bottom:6px">Not on a bunk yet — they won\'t see a schedule in Campistry Lite.</div>';
+            b+='<div style="font-size:.82rem;color:var(--s500);margin-bottom:6px">Not on a bunk yet — they won\'t see a schedule in Campistry Lite.</div>';
         }
         if(String(a.email||'').trim()&&free.length){
-            h+='<select class="fs" style="margin-top:6px" onchange="if(this.value)CampistryMe.assignHiredToBunk(\''+je(id)+'\',this.value)">'
+            b+='<select class="fs" style="margin-top:6px" onchange="if(this.value)CampistryMe.assignHiredToBunk(\''+je(id)+'\',this.value)">'
               +'<option value="">— Add to a bunk —</option>'
-              +free.map(function(b){return '<option value="'+esc(b)+'">'+esc(b)+'</option>'}).join('')
+              +free.map(function(bn){return '<option value="'+esc(bn)+'">'+esc(bn)+'</option>'}).join('')
               +'</select>';
         }
-        h+='</div>';
     }
-    // Onboarding (once offered/hired)
+    // Onboarding checklist (once offered/hired) — same admin-only rationale.
     if(st==='offered'||st==='hired'){
+        b+=sec('Onboarding Checklist');
         var ob=a.onboarding||{};
-        h+='<div style="margin-bottom:12px;background:var(--s50);border-radius:var(--r);padding:12px"><div style="font-size:.7rem;font-weight:700;color:var(--s400);text-transform:uppercase;margin-bottom:6px">Onboarding checklist</div>';
-        STAFF_ONBOARD.forEach(function(row){
-            h+='<label style="display:flex;align-items:center;gap:8px;font-size:.83rem;padding:3px 0;cursor:pointer"><input type="checkbox" '+(ob[row[0]]?'checked':'')+' onchange="CampistryMe.toggleOnboard(\''+je(id)+'\',\''+row[0]+'\')"> '+esc(row[1])+'</label>';
+        STAFF_ONBOARD.forEach(function(item){
+            b+='<label style="display:flex;align-items:center;gap:8px;font-size:.83rem;padding:3px 0;cursor:pointer"><input type="checkbox" '+(ob[item[0]]?'checked':'')+' onchange="CampistryMe.toggleOnboard(\''+je(id)+'\',\''+item[0]+'\')"> '+esc(item[1])+'</label>';
         });
-        h+='</div>';
     }
-    // Admin notes
-    h+='<div class="me-field"><label>Internal notes</label><textarea class="me-input" id="staffNote" rows="2" placeholder="Interview notes, impressions…">'+esc(a.adminNotes||'')+'</textarea></div>';
-    h+='<div style="display:flex;gap:6px;margin-top:8px">';
-    h+='<button class="me-btn me-btn--pri me-btn--sm" onclick="CampistryMe.saveStaffNotes(\''+je(id)+'\')">Save notes</button>';
-    h+='<button class="me-btn me-btn--ghost me-btn--sm" style="color:var(--err);margin-left:auto" onclick="CampistryMe.deleteStaffApp(\''+je(id)+'\')">Delete applicant</button>';
-    h+='</div></div>';
-    showModal(esc(a.name||'Applicant'),h);
+    // Internal Notes
+    b+=sec('Internal Notes');
+    b+='<textarea id="staffNote" style="width:100%;padding:8px 10px;border:1.5px solid var(--s200);border-radius:var(--r);font-size:.82rem;font-family:var(--font);min-height:60px;resize:vertical;outline:none" placeholder="Interview notes, impressions…">'+(a.adminNotes?esc(a.adminNotes):'')+'</textarea>';
+    b+='<button class="me-btn me-btn--sec me-btn--sm" style="margin-top:6px" onclick="CampistryMe.saveStaffNotes(\''+je(id)+'\')">Save Notes</button>';
+    if(_secOpen)b+='</div>';
+    document.getElementById('avBody').innerHTML=b;
+
+    // Footer
+    var next=_staffNextStage(st);
+    var f='';
+    if(st==='declined'){
+        f+='<button class="me-btn me-btn--pri" onclick="CampistryMe.setStaffStatus(\''+je(id)+'\',\'applied\')">Reconsider</button>';
+    }else{
+        if(next)f+='<button class="me-btn me-btn--pri" onclick="CampistryMe.setStaffStatus(\''+je(id)+'\',\''+next+'\')">'+ico('enroll')+'Advance to '+esc(_staffLabel(next))+'</button>';
+        f+='<button class="me-btn me-btn--danger" onclick="CampistryMe.setStaffStatus(\''+je(id)+'\',\'declined\')">Decline</button>';
+    }
+    f+='<button class="me-btn me-btn--ghost-danger" onclick="CampistryMe.deleteStaffApp(\''+je(id)+'\')">'+ico('rescind')+'Delete</button>';
+    f+='<button class="me-btn me-btn--sec" onclick="CampistryMe.closeModal(\'appViewModal\')">Close</button>';
+    document.getElementById('avFooter').innerHTML=f;
+
+    openModal('appViewModal');
 }
-function setStaffStatus(id,status){var a=staffApplications[id];if(!a)return;a.status=status;save();renderStaffing();viewStaffApp(id);toast('Moved to '+_staffLabel(status));}
+// opts.fromRow skips reopening the modal — a row's Advance/Decline button
+// should just update the table in place, the same way Registration's row
+// actions never pop the Review modal open.
+function setStaffStatus(id,status,opts){
+    opts=opts||{};
+    var a=staffApplications[id]; if(!a)return;
+    a.status=status;
+    save();
+    renderStaffing();
+    if(!opts.fromRow) viewStaffApp(id);
+    toast('Moved to '+_staffLabel(status));
+}
 function saveStaffNotes(id){var a=staffApplications[id];if(!a)return;var el=document.getElementById('staffNote');if(el)a.adminNotes=el.value;save();toast('Notes saved');}
 function toggleOnboard(id,key){var a=staffApplications[id];if(!a)return;if(!a.onboarding)a.onboarding={};a.onboarding[key]=!a.onboarding[key];save();}
 function cycleRef(id,ri){var a=staffApplications[id];if(!a||!a.references||!a.references[ri])return;var r=a.references[ri];r.status=r.status==='received'?'pending':r.status==='requested'?'received':'requested';save();viewStaffApp(id);}
-function deleteStaffApp(id){var a=staffApplications[id];if(!a)return;if(!confirm('Delete this applicant? This cannot be undone.'))return;delete staffApplications[id];save();closeModal('dynModal');renderStaffing();toast('Applicant deleted');}
-function addStaffApp(){
-    var h='<div class="me-modal-form">';
-    h+='<div style="display:grid;grid-template-columns:1fr 1fr;gap:10px">';
-    h+='<div class="me-field"><label>First name</label><input class="me-input" id="saF"></div><div class="me-field"><label>Last name</label><input class="me-input" id="saL"></div>';
-    h+='</div><div style="display:grid;grid-template-columns:1fr 1fr;gap:10px">';
-    h+='<div class="me-field"><label>Email</label><input class="me-input" id="saE"></div><div class="me-field"><label>Phone</label><input class="me-input" id="saP"></div>';
-    h+='</div><div class="me-field"><label>Position</label><select class="me-input" id="saPos">'+STAFF_POSITIONS.map(function(p){return '<option>'+esc(p)+'</option>';}).join('')+'</select></div></div>';
-    showModal('Add Applicant',h,function(){
-        var first=document.getElementById('saF').value.trim(),last=document.getElementById('saL').value.trim();
-        if(!first&&!last){alert('Enter a name');return;}
-        var id='staff_'+Date.now()+'_'+Math.random().toString(36).slice(2,6);
-        staffApplications[id]={first:first,last:last,name:(first+' '+last).trim(),email:document.getElementById('saE').value.trim(),phone:document.getElementById('saP').value.trim(),positions:[document.getElementById('saPos').value],references:[],status:'applied',appliedDate:today(),appliedTime:new Date().toISOString(),onboarding:{}};
-        save();closeModal('dynModal');renderStaffing();toast('Applicant added');
+async function deleteStaffApp(id){
+    var a=staffApplications[id]; if(!a)return;
+    var nm=a.name||((a.first||'')+' '+(a.last||''))||'this applicant';
+    var ok=await confirmDialog({
+        title:'Delete Applicant?',
+        message:'<strong>'+esc(nm)+'</strong> and their application will be permanently removed. This cannot be undone.',
+        confirmLabel:'Delete',
+        danger:true
     });
+    if(!ok)return;
+    delete staffApplications[id];
+    save();
+    closeModal('appViewModal');
+    renderStaffing();
+    toast('Applicant deleted');
+}
+// Maps SFC_FIELD_CATALOG ids to how Manual Entry should render/collect
+// them — same rec-mapping pattern as APP_FIELD_MAP for Registration.
+// 'resume' is intentionally absent: Manual Entry (the office typing in a
+// walk-up applicant) doesn't collect a resume file, same as it never did.
+var SAPP_FIELD_MAP={
+    first:{},last:{},email:{type:'email'},phone:{type:'tel'},dob:{type:'date'},
+    street:{},city:{},state:{},zip:{},photo:{type:'file'},
+    availStart:{type:'date'},availEnd:{type:'date'},
+    education:{},experience:{type:'textarea'}
+};
+
+// Manual Entry mirrors whatever the camp has configured in Customize Staff
+// Form — same sections/order/labels/required-ness as addApplication() does
+// for Registration, so office staff seed exactly what applicants see on
+// the real form instead of a fixed 5-field shortcut that can drift out of
+// sync with it.
+function addStaffApp(){
+    var sfc=getStaffFormConfig();
+    var order=(sfc.sectionOrder&&sfc.sectionOrder.length)?sfc.sectionOrder:SFC_SECTIONS.map(function(s){return s.key});
+    var secEnabled={};
+    SFC_SECTIONS.forEach(function(s){ secEnabled[s.key]=sfc.sections&&sfc.sections[s.key]?sfc.sections[s.key].enabled:s.default; });
+    var positions=(sfc.positions&&sfc.positions.length)?sfc.positions:SFC_POSITIONS_DEFAULT;
+
+    function fieldHtml(f){
+        if(f.id==='resume')return '';
+        var cfg=(sfc.fields&&sfc.fields[f.id])||{};
+        if(cfg.enabled===false)return '';
+        var map=SAPP_FIELD_MAP[f.id]||{};
+        var label=cfg.label||f.label;
+        var req=cfg.required!=null?cfg.required:!!f.required;
+        var id='sapp_'+f.id;
+        var star=req?' <span class="rq" style="color:var(--err)">*</span>':'';
+        if(map.type==='textarea')return '<div class="fg"><label class="fl">'+esc(label)+star+'</label><textarea id="'+id+'" class="fi" style="min-height:50px;resize:vertical"></textarea></div>';
+        if(map.type==='file')return '<div class="fg"><label class="fl">'+esc(label)+star+'</label>'
+            +'<input type="hidden" id="'+id+'">'
+            +'<div style="display:flex;align-items:center;gap:10px">'
+            +'<img id="'+id+'_prev" src="" style="display:none;width:48px;height:48px;object-fit:cover;border-radius:8px;border:1px solid var(--s200);flex-shrink:0">'
+            +'<input type="file" accept="image/*" class="fi" style="padding:6px 8px" onchange="CampistryMe._onAppPhotoPick(this,\''+id+'\')">'
+            +'</div></div>';
+        return '<div class="fg"><label class="fl">'+esc(label)+star+'</label><input type="'+(map.type||'text')+'" id="'+id+'" class="fi"></div>';
+    }
+
+    var h='';
+    order.forEach(function(sectionKey){
+        if(!secEnabled[sectionKey])return;
+        if(sectionKey==='role'){
+            // Position(s) is a chip checklist, not a plain catalog field.
+            h+='<div class="fsec">Role &amp; Availability</div>';
+            h+='<div class="fg"><label class="fl">Position(s)<span class="rq" style="color:var(--err)">*</span></label><div style="display:flex;flex-wrap:wrap;gap:6px">'
+                +positions.map(function(p){return '<label style="display:inline-flex;align-items:center;gap:5px;padding:6px 10px;border:1px solid var(--s200);border-radius:999px;font-size:.8rem;cursor:pointer"><input type="checkbox" class="sappPosCb" value="'+esc(p)+'">'+esc(p)+'</label>';}).join('')
+                +'</div></div>';
+            var roleRows=(SFC_FIELD_CATALOG.role||[]).map(fieldHtml).filter(Boolean);
+            for(var ri=0;ri<roleRows.length;ri+=2){ h+=roleRows[ri+1]?('<div class="fr">'+roleRows[ri]+roleRows[ri+1]+'</div>'):roleRows[ri]; }
+            return;
+        }
+        var catalog=SFC_FIELD_CATALOG[sectionKey];
+        if(!catalog)return; // references/consent — office entry doesn't collect these
+        var sec=SFC_SECTIONS.filter(function(s){return s.key===sectionKey;})[0];
+        var rows=catalog.map(fieldHtml).filter(Boolean);
+        if(!rows.length)return;
+        h+='<div class="fsec">'+esc(sec.label)+'</div>';
+        for(var i=0;i<rows.length;i+=2){
+            h+=rows[i+1]?('<div class="fr">'+rows[i]+rows[i+1]+'</div>'):rows[i];
+        }
+    });
+
+    showModal('Add Applicant',h,function(){
+        var values={},missingLabel=null;
+        order.forEach(function(sectionKey){
+            if(!secEnabled[sectionKey])return;
+            var catalog=SFC_FIELD_CATALOG[sectionKey];
+            if(!catalog)return;
+            catalog.forEach(function(f){
+                if(f.id==='resume')return;
+                var cfg=(sfc.fields&&sfc.fields[f.id])||{};
+                if(cfg.enabled===false)return;
+                var el=document.getElementById('sapp_'+f.id);
+                if(!el)return;
+                var val=(el.value||'').trim();
+                values[f.id]=val;
+                var req=cfg.required!=null?cfg.required:!!f.required;
+                if(req&&!val&&!missingLabel)missingLabel=cfg.label||f.label;
+            });
+        });
+        var positionsChecked=Array.prototype.map.call(document.querySelectorAll('.sappPosCb:checked'),function(c){return c.value;});
+        if(secEnabled.role&&!positionsChecked.length&&!missingLabel)missingLabel='Position(s)';
+        var first=values.first||'',last=values.last||'';
+        if(!first&&!last&&!missingLabel)missingLabel='Name';
+        if(missingLabel){alert('Enter: '+missingLabel);return;}
+
+        var id='staff_'+Date.now()+'_'+Math.random().toString(36).slice(2,6);
+        staffApplications[id]={
+            first:first,last:last,name:(first+' '+last).trim(),
+            email:values.email||'',phone:values.phone||'',dob:values.dob||'',
+            street:values.street||'',city:values.city||'',state:values.state||'',zip:values.zip||'',photo:values.photo||'',
+            positions:positionsChecked,availStart:values.availStart||'',availEnd:values.availEnd||'',
+            education:values.education||'',experience:values.experience||'',
+            certifications:[],references:[],status:'applied',
+            appliedDate:today(),appliedTime:new Date().toISOString(),onboarding:{}
+        };
+        save();closeModal('dynModal');renderStaffing();toast('Applicant added');
+    },{maxWidth:640});
 }
 function copyStaffLink(){var url=window.location.origin+'/campistry_staff_apply.html';try{navigator.clipboard&&navigator.clipboard.writeText(url);}catch(e){}toast('Staff application link copied');}
 function exportStaffCSV(){
@@ -3903,7 +4103,8 @@ var SFC_FIELD_CATALOG={
         {id:'street',label:'Street Address'},
         {id:'city',label:'City'},
         {id:'state',label:'State'},
-        {id:'zip',label:'ZIP'}
+        {id:'zip',label:'ZIP'},
+        {id:'photo',label:'Photo'}
     ],
     role:[
         {id:'availStart',label:'Available From'},
