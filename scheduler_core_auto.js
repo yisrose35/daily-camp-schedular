@@ -1179,6 +1179,52 @@
                                     log('[CROSS-EXCHANGE] ' + A + ' gets ' + X.name + ' at its open "' + sub + '" window ' + minutesToTimeLabel(rec.startMin) + '-' + minutesToTimeLabel(rec.endMin) + ' — holder ' + B + ' RELOCATED its ' + X.name + ' ' + minutesToTimeLabel(yS2) + '→' + minutesToTimeLabel(hs) + ' into its own open gap (no swap partner needed); coverage strictly improves');
                                 }
                             }
+                            // ★ 2-LEVEL RELOCATION (deeper exchange): Y fits no gap of B
+                            //   directly — but another movable tile W (|W| == |Y|) may fit a
+                            //   gap, and Y can take W's old span. Chain: W → gap, Y → W's
+                            //   span, seat freed, A fills. Every link is gate-verified
+                            //   (rules, field/seat resources, subcat-strict on the target
+                            //   gap) and coverage strictly improves — B's gap absorbs W.
+                            if (!done) {
+                                for (var _w = 0; _w < liveB.length && !done; _w++) {
+                                    var W = liveB[_w];
+                                    if (W === Y) continue;
+                                    var wt = String(W.type || '').toLowerCase();
+                                    if (wt !== 'sport' && wt !== 'special') continue;
+                                    if (WALLT[wt] || W._league || W._isTrip || W.continuation) continue;
+                                    if ((W._endMin - W._startMin) !== yDur) continue;
+                                    var wS = W._startMin, wE = W._endMin;
+                                    var _tmplB2 = liveB.filter(function (r) { return r !== Y && r !== W; })
+                                        .map(function (r) { return { type: r.type, event: r._activity || r.field, sport: r.sport, startMin: r._startMin, endMin: r._endMin, _assignedSpecial: r.type === 'special' ? r._activity : undefined }; });
+                                    for (var _hg2 = 0; _hg2 < _hrGaps.length && !done; _hg2++) {
+                                        var _anch2 = [_hrGaps[_hg2][0], _hrGaps[_hg2][1] - yDur];
+                                        for (var _ha2 = 0; _ha2 < _anch2.length && !done; _ha2++) {
+                                            if (_ha2 === 1 && _anch2[1] === _anch2[0]) continue;
+                                            var ws2 = _anch2[_ha2], we2 = ws2 + yDur;
+                                            if (ws2 < _hrGaps[_hg2][0] || we2 > _hrGaps[_hg2][1]) continue;
+                                            var _res2 = false;
+                                            for (var _ho2 = 0; _ho2 < _hrOpen.length; _ho2++) { var _og2 = _hrOpen[_ho2]; if (_og2 && String(_og2.bunk) === String(B) && _og2.startMin < we2 && _og2.endMin > ws2) { _res2 = true; break; } }
+                                            if (_res2) continue;
+                                            var wBlk = { type: W.type, event: W._activity || W.field, sport: W.sport, startMin: ws2, endMin: we2, _assignedSpecial: W.type === 'special' ? W._activity : undefined };
+                                            if (!_cxLegal(wBlk, _tmplB2.concat([{ type: 'special', event: X.name, _assignedSpecial: X.name, startMin: wS, endMin: wE }]))) continue;
+                                            if (wt === 'sport' && W.field) { var wOk = false; try { wOk = isFieldAvailable(W.field, ws2, we2, B, _cxGradeOf[B], W.sport || W._activity); } catch (_eW) {} if (!wOk) continue; }
+                                            else if (wt === 'special' && W._activity) { var wDef = null; for (var _wd = 0; _wd < _cxSpecials.length; _wd++) { if (_cxSpecials[_wd].name === W._activity) { wDef = _cxSpecials[_wd]; break; } } if (wDef && _cxCapOf(wDef) - _cxBusy(W._activity, ws2, we2, B, wS) <= 0) continue; }
+                                            if (!_cxLegal({ type: 'special', event: X.name, _assignedSpecial: X.name, _specialLocation: X.name, startMin: wS, endMin: wE }, _tmplB2.concat([wBlk]))) continue;
+                                            var _yUse2 = _cxBusy(X.name, wS, wE, B, Y._startMin) + ((rec.startMin < wE && rec.endMin > wS) ? 1 : 0);
+                                            if (_cxCapOf(X) - _yUse2 < 1) continue;
+                                            var yS3 = Y._startMin, yE3 = Y._endMin;
+                                            if (!fillA(X, { holder: B, yFrom: [yS3, yE3], yTo: [wS, wE], zOrig: null, zRe: null, wName: (W._activity || W.field), wFrom: [wS, wE], wTo: [ws2, we2] })) { done = true; return; }
+                                            W._startMin = ws2; W._endMin = we2; W._crossExchange = true;
+                                            Y._startMin = wS; Y._endMin = wE; Y._crossExchange = true;
+                                            _syncAlignedSlot(B, _cxGradeOf[B], arrB.indexOf(W));
+                                            _syncAlignedSlot(B, _cxGradeOf[B], arrB.indexOf(Y));
+                                            _cxC.exchanged++;
+                                            done = true;
+                                            log('[CROSS-EXCHANGE] 2-LEVEL: ' + A + ' gets ' + X.name + ' at ' + minutesToTimeLabel(rec.startMin) + '-' + minutesToTimeLabel(rec.endMin) + ' — holder ' + B + ' chained: ' + (W._activity || W.field) + ' ' + minutesToTimeLabel(wS) + '→' + minutesToTimeLabel(ws2) + ' (into its own gap), then ' + X.name + ' ' + minutesToTimeLabel(yS3) + '→' + minutesToTimeLabel(wS) + '; both bunks stay covered');
+                                        }
+                                    }
+                                }
+                            }
                         }
                         if (!done && Y) _cxC.holderStuck++;
                     });
@@ -1294,6 +1340,7 @@
                                         var rb = arrB2[i3];
                                         if (!rb || !rb._crossExchange) continue;
                                         if (rb._activity === J.name && rb._startMin === J.yTo[0]) { rb._startMin = J.yFrom[0]; rb._endMin = J.yFrom[1]; delete rb._crossExchange; _syncAlignedSlot(J.holder, _cxGradeOf[J.holder], i3); }
+                                        else if (J.wFrom && rb._activity === J.wName && rb._startMin === J.wTo[0] && rb._endMin === J.wTo[1]) { rb._startMin = J.wFrom[0]; rb._endMin = J.wFrom[1]; delete rb._crossExchange; _syncAlignedSlot(J.holder, _cxGradeOf[J.holder], i3); }
                                         else if (J.zOrig && rb._startMin === J.yFrom[0] && rb._endMin === J.yFrom[1]) {
                                             rb._startMin = J.zOrig.s; rb._endMin = J.zOrig.e;
                                             if (J.zRe) { rb.field = J.zOrig.field; rb.sport = J.zOrig.sport; rb._activity = J.zOrig.activity; }
