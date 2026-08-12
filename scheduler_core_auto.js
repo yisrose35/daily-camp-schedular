@@ -1032,7 +1032,16 @@
                 var mineA = {};
                 liveA.forEach(function (r) { mineA[String(r._activity || r.field)] = 1; });
                 var xs = _cxSpecials.filter(function (x) { return _cxCanon(x.subcategory) === sub && !mineA[x.name] && _cxDursOf(x).indexOf(holeDur) >= 0; });
-                if (!xs.length) return;
+                if (!xs.length) {
+                    // PROVEN DRY: no same-subcat, duration-fit activity exists for this
+                    // bunk today AT ALL (independent of seats). The floor is lost either
+                    // way and stays reported by the audit — but the WINDOW need not stay
+                    // dead: mark it so FINAL-BACKFILL may reclaim the minutes with a
+                    // rule-legal sport. Never set when candidates exist (seat-busy or
+                    // stuck windows stay protected — a later move might still fill them).
+                    rec._provenDry = true;
+                    return;
+                }
                 try { if (xs.length > 1) xs.sort(function (a, b) { return _laNeed(a.name) - _laNeed(b.name); }); } catch (_eLaS) {}
                 var tmplA = _cxTmplOf(A, null);
                 var fillA = function (X, journalExtra) {
@@ -1441,7 +1450,16 @@
                                     var _g = _fbOpen[_go];
                                     if (!_g) continue;
                                     if (String(_g.bunk) !== String(bk)) continue;
-                                    if (_g.startMin < e && _g.endMin > s) { _fbNoCand++; return; }
+                                    if (_g.startMin < e && _g.endMin > s) {
+                                        // PROVEN-DRY windows (no same-subcat candidate exists at
+                                        // all — cross-exchange verified; bornDead = no activity
+                                        // at this length) may be reclaimed with a legal sport:
+                                        // the floor is lost either way and stays reported, but
+                                        // the minutes become live activity. All other reserved
+                                        // windows stay untouchable (subcat-strict).
+                                        if (_g._provenDry || _g.bornDead) continue;
+                                        _fbNoCand++; return;
+                                    }
                                 }
                                 var tmpl = live.map(function (r) {
                                     return { type: r.type, event: r._activity || r.field, sport: r.sport,
