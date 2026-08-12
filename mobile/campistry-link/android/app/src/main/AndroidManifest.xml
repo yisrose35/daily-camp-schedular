@@ -25,6 +25,15 @@
 
         </activity>
 
+        <!-- A notification that arrives while the app is dead is built by the
+             FCM SDK, not by our JS, so it cannot ask the app which channel to
+             use. Without this it falls back to a low-importance channel and
+             arrives silently. Must stay in step with CHANNEL_ID in
+             campistry_push.js. -->
+        <meta-data
+            android:name="com.google.firebase.messaging.default_notification_channel_id"
+            android:value="campistry_alerts" />
+
         <provider
             android:name="androidx.core.content.FileProvider"
             android:authorities="${applicationId}.fileprovider"

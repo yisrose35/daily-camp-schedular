@@ -239,7 +239,23 @@ serve(async (req) => {
             data: Object.fromEntries(
               Object.entries(data || {}).map(([k, v]) => [k, String(v)]),
             ),
-            android: { priority: "HIGH" },
+            // priority:HIGH only controls how fast FCM wakes the device. What
+            // decides whether the phone makes a sound and drops a banner down
+            // is the CHANNEL, and naming one here is the whole difference
+            // between a notification that announces itself and one that
+            // appears silently in the shade an hour later. The channel is
+            // created by the app (campistry_push.js) at IMPORTANCE_HIGH.
+            android: {
+              priority: "HIGH",
+              notification: {
+                channel_id: "campistry_alerts",
+                sound: "default",
+                default_vibrate_timings: true,
+                // Pre-Oreo devices have no channels; this is what gives them
+                // the same heads-up behaviour.
+                notification_priority: "PRIORITY_HIGH",
+              },
+            },
           },
         };
         const r = await fetch(endpoint, {

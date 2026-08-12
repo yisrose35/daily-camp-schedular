@@ -27,6 +27,31 @@
         try { return C.getPlatform ? C.getPlatform() : 'unknown'; } catch (_) { return 'unknown'; }
     }
 
+    // Android 8+ takes a notification's sound, vibration and heads-up banner
+    // from its CHANNEL — not from anything in the message. With no channel of
+    // our own, FCM files everything under its low-importance fallback channel,
+    // which is why the first working notification arrived completely silently
+    // and only turned up when the shade was pulled down.
+    //
+    // IMPORTANCE_HIGH (4) is the level documented to make a sound and peek over
+    // whatever is on screen. Note the one-way door: a channel's importance can
+    // never be RAISED after it is created, and the user's own adjustments to it
+    // always win. If these ever need to get louder, the ID has to change too —
+    // editing the values below would silently do nothing on every phone that
+    // already has the channel.
+    var CHANNEL_ID = 'campistry_alerts';
+    if (platform() === 'android' && PN.createChannel) {
+        PN.createChannel({
+            id:          CHANNEL_ID,
+            name:        'Camp updates',
+            description: 'Messages, payments and alerts from your camp',
+            importance:  4,
+            visibility:  1,
+            vibration:   true,
+            lights:      true
+        }).catch(function (e) { console.warn('[push] createChannel:', e); });
+    }
+
     // Registration is deliberately NOT called on first launch. Asking for
     // notification permission before someone has signed in — before the app has
     // shown them anything worth being notified about — is the reliable way to
