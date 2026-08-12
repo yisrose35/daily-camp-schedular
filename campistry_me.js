@@ -4179,46 +4179,23 @@ function viewApplication(id){
     b+=row('Status',e.status);
     b+=row('Source',e.source);
 
-    b+=sec('Camper');
-    b+=row('Name',e.camperName);
-    b+=row('Date of Birth',e.dob);
-    b+=row('Gender',e.gender);
-    b+=row('School',e.school);
-    b+=row('School Grade',e.schoolGrade);
-    b+=row('Teacher',e.teacher);
+    // Everything below mirrors the ACTUAL registration form the parent
+    // filled out — same section order, same show/hide, same relabeled
+    // field text — read live from the current form config. A section or
+    // field the camp has turned off simply doesn't render here either,
+    // since it wasn't part of what was asked. (Custom-question answers and
+    // e-signature aren't real FC_SECTIONS entries; they're pinned right
+    // before Signature, exactly like campistry_register.html pins them.)
+    var fc=getFormConfig();
+    function fFieldOn(fid){ var cfg=(fc.fields||{})[fid]; return cfg?cfg.enabled!==false:true; }
+    function fLabel(fid,fallback){ var cfg=(fc.fields||{})[fid]; return (cfg&&cfg.label)||fallback; }
+    function sectionOn(key){ var cfg=(fc.sections||{})[key]; if(cfg)return cfg.enabled!==false; var def=FC_SECTIONS.filter(function(s){return s.key===key})[0]; return def?def.default:true; }
 
-    b+=sec('Parent / Guardian');
-    b+=row('Name',e.parentName+(e.parentRelation?' ('+e.parentRelation+')':''));
-    if(e.parentPhone)b+=rowRaw('Phone','<a href="tel:'+esc(e.parentPhone)+'" style="color:var(--me);font-weight:600">'+esc(e.parentPhone)+'</a>');
-    if(e.parentEmail)b+=rowRaw('Email','<a href="mailto:'+esc(e.parentEmail)+'" style="color:var(--me)">'+esc(e.parentEmail)+'</a>');
-    if(e.parent2Name)b+=row('Parent 2',e.parent2Name+(e.parent2Phone?' — '+e.parent2Phone:''));
-
-    b+=sec('Address');
-    b+=row('Street',e.street);
-    b+=row('City',e.city);
-    b+=row('State',e.state);
-    b+=row('ZIP',e.zip);
-    if(e.street){var fullAddr=[e.street,e.city,e.state,e.zip].filter(Boolean).join(', ');b+='<a href="https://maps.google.com/?q='+encodeURIComponent(fullAddr)+'" target="_blank" style="display:inline-block;font-size:.75rem;font-weight:600;color:var(--me);margin-top:3px;text-decoration:none">Open in Maps →</a>'}
-
-    b+=sec('Emergency Contact');
-    b+=row('Name',e.emergencyName+(e.emergencyRel?' ('+e.emergencyRel+')':''));
-    if(e.emergencyPhone)b+=rowRaw('Phone','<a href="tel:'+esc(e.emergencyPhone)+'" style="color:var(--me);font-weight:600">'+esc(e.emergencyPhone)+'</a>');
-
-    b+=sec('Medical');
-    if(e.allergies)b+=rowRaw('Allergies','<span style="color:var(--err);font-weight:600">'+esc(e.allergies)+'</span>');
-    if(e.medications)b+=rowRaw('Medications','<span style="color:var(--err);font-weight:600">'+esc(e.medications)+'</span>');
-    b+=row('Dietary',e.dietary);
-    if(e.medicalNotes)b+=row('Notes',e.medicalNotes);
-    if(!e.allergies&&!e.medications&&!e.dietary&&!e.medicalNotes)b+='<div style="font-size:.82rem;color:var(--ok);padding:2px 0">✓ No medical flags reported</div>';
-
-    b+=sec('Preferences');
-    b+=row('Bunkmate Request',e.bunkmate);
-    b+=row('Separation Request',e.separateFrom);
-    b+=row('T-Shirt Size',e.tshirtSize);
-    b+=row('Additional Notes',e.notes);
-
-    // Custom question answers
-    if(e.customAnswers&&Object.keys(e.customAnswers).length){
+    var customRendered=false;
+    function renderCustomResponses(){
+        if(customRendered)return;
+        customRendered=true;
+        if(!e.customAnswers||!Object.keys(e.customAnswers).length)return;
         b+=sec('Custom Responses');
         var labels=e.customQuestionLabels||[];
         Object.entries(e.customAnswers).forEach(function([key,val]){
@@ -4229,29 +4206,94 @@ function viewApplication(id){
         });
     }
 
-    b+=sec('Payment');
-    b+=row('Session',e.session);
-    b+=row('Tuition',e.sessionTuition?fm(e.sessionTuition):'—');
-    b+=row('Payment Method',e.paymentMethod?_payLabel(e.paymentMethod):'Not selected');
-    b+=row('Payment Status',e.paymentStatus||'pending');
-    if(e.discount&&e.discount.active!==false&&e.discount.code)b+=row('Discount',(e.discount.label||'')+' ('+e.discount.code+')');
-
-    // Documents
-    if(e.documents&&e.documents.length){
-        b+=sec('Uploaded Documents');
-        e.documents.forEach(function(doc){
-            var sz=doc.size<1024?doc.size+'B':doc.size<1048576?Math.round(doc.size/1024)+'KB':Math.round(doc.size/1048576*10)/10+'MB';
-            b+='<div style="display:flex;align-items:center;gap:6px;padding:4px 0;font-size:.8rem"><span>📄</span><strong style="color:var(--s700)">'+esc(doc.name)+'</strong><span style="color:var(--s400);font-size:.72rem">'+sz+'</span>';
-            if(doc.data)b+=' <a href="'+esc(doc.data)+'" download="'+esc(doc.name)+'" style="color:var(--me);font-size:.72rem;font-weight:600">Download</a>';
-            b+='</div>';
-        });
-    }
-
-    // Signature — only render when it's a strict image data-URL (never raw/SVG → XSS).
-    if(e.signature&&isSafeImageDataUrl(e.signature)){
-        b+=sec('Signature');
-        b+='<img src="'+e.signature+'" style="max-width:300px;height:80px;border:1px solid var(--s200);border-radius:var(--r);object-fit:contain;background:#fff">';
-    }
+    var SECTION_RENDERERS={
+        camper:function(){
+            b+=sec('Camper');
+            if(fFieldOn('first')||fFieldOn('last'))b+=row('Name',e.camperName);
+            if(fFieldOn('dob'))b+=row(fLabel('dob','Date of Birth'),e.dob);
+            if(fFieldOn('gender'))b+=row(fLabel('gender','Gender'),e.gender);
+            if(fFieldOn('school'))b+=row(fLabel('school','School'),e.school);
+            if(fFieldOn('schoolGrade'))b+=row(fLabel('schoolGrade','School Grade'),e.schoolGrade);
+            if(fFieldOn('teacher'))b+=row(fLabel('teacher','Teacher'),e.teacher);
+        },
+        parent:function(){
+            b+=sec('Parent / Guardian');
+            if(fFieldOn('parentName'))b+=row(fLabel('parentName','Name'),e.parentName+(e.parentRelation?' ('+e.parentRelation+')':''));
+            if(e.parentPhone&&fFieldOn('parentPhone'))b+=rowRaw(fLabel('parentPhone','Phone'),'<a href="tel:'+esc(e.parentPhone)+'" style="color:var(--me);font-weight:600">'+esc(e.parentPhone)+'</a>');
+            if(e.parentEmail&&fFieldOn('parentEmail'))b+=rowRaw(fLabel('parentEmail','Email'),'<a href="mailto:'+esc(e.parentEmail)+'" style="color:var(--me)">'+esc(e.parentEmail)+'</a>');
+            if(e.parent2Name&&fFieldOn('parent2Name'))b+=row(fLabel('parent2Name','Parent 2'),e.parent2Name+(e.parent2Phone?' — '+e.parent2Phone:''));
+        },
+        address:function(){
+            b+=sec('Address');
+            if(fFieldOn('street'))b+=row(fLabel('street','Street'),e.street);
+            if(fFieldOn('city'))b+=row(fLabel('city','City'),e.city);
+            if(fFieldOn('state'))b+=row(fLabel('state','State'),e.state);
+            if(fFieldOn('zip'))b+=row(fLabel('zip','ZIP'),e.zip);
+            if(e.street){var fullAddr=[e.street,e.city,e.state,e.zip].filter(Boolean).join(', ');b+='<a href="https://maps.google.com/?q='+encodeURIComponent(fullAddr)+'" target="_blank" style="display:inline-block;font-size:.75rem;font-weight:600;color:var(--me);margin-top:3px;text-decoration:none">Open in Maps →</a>'}
+        },
+        emergency:function(){
+            b+=sec('Emergency Contact');
+            if(fFieldOn('emName'))b+=row(fLabel('emName','Name'),e.emergencyName+(e.emergencyRel?' ('+e.emergencyRel+')':''));
+            if(e.emergencyPhone&&fFieldOn('emPhone'))b+=rowRaw(fLabel('emPhone','Phone'),'<a href="tel:'+esc(e.emergencyPhone)+'" style="color:var(--me);font-weight:600">'+esc(e.emergencyPhone)+'</a>');
+        },
+        medical:function(){
+            b+=sec('Medical');
+            if(e.allergies&&fFieldOn('allergies'))b+=rowRaw(fLabel('allergies','Allergies'),'<span style="color:var(--err);font-weight:600">'+esc(e.allergies)+'</span>');
+            if(e.medications&&fFieldOn('medications'))b+=rowRaw(fLabel('medications','Medications'),'<span style="color:var(--err);font-weight:600">'+esc(e.medications)+'</span>');
+            if(fFieldOn('dietary'))b+=row(fLabel('dietary','Dietary'),e.dietary);
+            if(e.medicalNotes&&fFieldOn('medicalNotes'))b+=row(fLabel('medicalNotes','Notes'),e.medicalNotes);
+            if(!e.allergies&&!e.medications&&!e.dietary&&!e.medicalNotes)b+='<div style="font-size:.82rem;color:var(--ok);padding:2px 0">✓ No medical flags reported</div>';
+        },
+        preferences:function(){
+            b+=sec('Preferences');
+            if(fFieldOn('bunkmate'))b+=row(fLabel('bunkmate','Bunkmate Request'),e.bunkmate);
+            if(fFieldOn('separate'))b+=row(fLabel('separate','Separation Request'),e.separateFrom);
+            if(fFieldOn('shirt'))b+=row(fLabel('shirt','T-Shirt Size'),e.tshirtSize);
+            if(fFieldOn('notes'))b+=row(fLabel('notes','Additional Notes'),e.notes);
+        },
+        documents:function(){
+            if(!e.documents||!e.documents.length)return;
+            b+=sec('Uploaded Documents');
+            e.documents.forEach(function(doc){
+                var sz=doc.size<1024?doc.size+'B':doc.size<1048576?Math.round(doc.size/1024)+'KB':Math.round(doc.size/1048576*10)/10+'MB';
+                b+='<div style="display:flex;align-items:center;gap:6px;padding:4px 0;font-size:.8rem"><span>📄</span><strong style="color:var(--s700)">'+esc(doc.name)+'</strong><span style="color:var(--s400);font-size:.72rem">'+sz+'</span>';
+                if(doc.data)b+=' <a href="'+esc(doc.data)+'" download="'+esc(doc.name)+'" style="color:var(--me);font-size:.72rem;font-weight:600">Download</a>';
+                b+='</div>';
+            });
+        },
+        payment:function(){
+            b+=sec('Payment');
+            b+=row('Session',e.session);
+            b+=row('Tuition',e.sessionTuition?fm(e.sessionTuition):'—');
+            b+=row('Payment Method',e.paymentMethod?_payLabel(e.paymentMethod):'Not selected');
+            b+=row('Payment Status',e.paymentStatus||'pending');
+            if(e.discount&&e.discount.active!==false&&e.discount.code)b+=row('Discount',(e.discount.label||'')+' ('+e.discount.code+')');
+        },
+        siblings:function(){
+            if(!e.siblingGroup)return;
+            var sibApps=Object.entries(enrollments).filter(function([,x]){return x.siblingGroup===e.siblingGroup||x.siblingGroup===id});
+            if(sibApps.length<=1)return;
+            b+=sec('Sibling Group');
+            sibApps.forEach(function([sid,s]){
+                if(sid!==id)b+=row('Sibling',s.camperName+' — '+s.status);
+            });
+        },
+        signature:function(){
+            renderCustomResponses(); // pinned right before Signature, same as the public form
+            if(e.signature&&isSafeImageDataUrl(e.signature)){
+                b+=sec('Signature');
+                b+='<img src="'+e.signature+'" style="max-width:300px;height:80px;border:1px solid var(--s200);border-radius:var(--r);object-fit:contain;background:#fff">';
+            }
+        }
+    };
+    var order=(fc.sectionOrder&&fc.sectionOrder.length)?fc.sectionOrder.slice():FC_SECTIONS.map(function(s){return s.key});
+    FC_SECTIONS.forEach(function(s){ if(order.indexOf(s.key)<0)order.push(s.key); });
+    order.forEach(function(key){
+        if(!sectionOn(key))return;
+        var fn=SECTION_RENDERERS[key];
+        if(fn)fn();
+    });
+    renderCustomResponses(); // fallback: still show answers even if Signature is off
 
     // Post-acceptance form responses — bunkmate/session/logistics choices
     // the parent submitted after acceptance, distinct from the application
@@ -4272,17 +4314,6 @@ function viewApplication(id){
                 var label=pafLabels[idx]||('Question '+(idx+1));
                 var display=Array.isArray(val)?val.join(', '):val;
                 b+=row(label,display);
-            });
-        }
-    }
-
-    // Sibling group
-    if(e.siblingGroup){
-        b+=sec('Sibling Group');
-        var sibApps=Object.entries(enrollments).filter(function([,x]){return x.siblingGroup===e.siblingGroup||x.siblingGroup===id});
-        if(sibApps.length>1){
-            sibApps.forEach(function([sid,s]){
-                if(sid!==id)b+=row('Sibling',s.camperName+' — '+s.status);
             });
         }
     }
