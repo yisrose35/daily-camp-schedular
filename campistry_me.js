@@ -3435,7 +3435,7 @@ function getPostAcceptFormConfig(){
     if(paFormConfig)return paFormConfig;
     var sections={};
     PAF_SECTIONS.forEach(function(s){sections[s.key]={enabled:s.default}});
-    return{sections:sections,customQuestions:[],welcomeMessage:'',instructions:'',fields:{},sectionOrder:PAF_SECTIONS.map(function(s){return s.key}),branding:{},autoSend:false,attachedListIds:[]};
+    return{sections:sections,customQuestions:[],welcomeMessage:'',instructions:'',fields:{},sectionOrder:PAF_SECTIONS.map(function(s){return s.key}),branding:{},autoSend:false,attachedListIds:[],printableList:{name:'',items:[]}};
 }
 
 // Lists (packing lists / checklists) live in the Link admin app, stored
@@ -3585,6 +3585,10 @@ function _collectPostAcceptFormConfigDraft(){
         sectionOrder:_readSectionOrder('paf'),
         autoSend:!!(document.getElementById('pafAutoSend')&&document.getElementById('pafAutoSend').checked),
         attachedListIds:Array.prototype.map.call(document.querySelectorAll('.pafListAttach:checked'),function(cb){return cb.value;}),
+        printableList:{
+            name:(document.getElementById('pafPkName')?.value||'').trim(),
+            items:(document.getElementById('pafPkItems')?.value||'').split('\n').map(function(s){return s.trim();}).filter(Boolean)
+        },
         branding:{
             logo:(document.getElementById('pafLogoData')?.value||''),
             color:(document.getElementById('pafAccentColor')?.value||'')
@@ -4046,6 +4050,19 @@ function _buildPafPanelHtml(){
     });
     h+=_accCard('Sections',sectionsHtml,{open:true});
 
+    // Create a packing list right here — separate from Link's Lists feature
+    // (an interactive, per-child check-off list in the parent portal that
+    // requires the parent to be signed in). This one is just plain text
+    // saved on the form config itself, rendered read-only on the public
+    // page with a Print button so the family can print it and pack from
+    // paper — no login, no per-child state to manage.
+    var pk=fc.printableList||{name:'',items:[]};
+    var pkItemCount=(pk.items||[]).length;
+    var pkHtml='<p style="font-size:.78rem;color:var(--s400);margin:0 0 10px">A simple printable list — parents view and print it right from this form. For the interactive per-child checklist in the parent portal, use "Attach an Existing List" below instead.</p>'
+        +'<div class="fg"><label class="fl">List Title</label><input class="fi" id="pafPkName" value="'+esc(pk.name||'')+'" placeholder="e.g., What to Pack"></div>'
+        +'<div class="fg" style="margin-bottom:0"><label class="fl">Items (one per line)</label><textarea class="fi" id="pafPkItems" style="min-height:110px;resize:vertical" placeholder="6 t-shirts&#10;Sunscreen&#10;Water bottle&#10;Sleeping bag">'+esc((pk.items||[]).join('\n'))+'</textarea></div>';
+    h+=_accCard('Your Packing List',pkHtml,{badge:pkItemCount?pkItemCount+' items':''});
+
     // Attach existing Lists (packing lists / checklists) from Link — shown
     // read-only right on the public form so parents see them without
     // needing portal access yet. Lists themselves are still created/edited
@@ -4056,7 +4073,7 @@ function _buildPafPanelHtml(){
     if(!allLists.length){
         listsHtml='<p style="font-size:.78rem;color:var(--s400);margin:0">No lists yet. Create a packing list or checklist in <strong>Link → Lists</strong>, then come back here to attach it.</p>';
     }else{
-        listsHtml='<p style="font-size:.78rem;color:var(--s400);margin:0 0 10px">Attach a packing list or checklist — parents see it right on this form.</p>';
+        listsHtml='<p style="font-size:.78rem;color:var(--s400);margin:0 0 10px">Attach an existing Link list — parents see it right on this form.</p>';
         allLists.forEach(function(l){
             var n=(l.items||[]).length;
             var checked=attachedIds.indexOf(l.id)>=0;
@@ -4066,7 +4083,7 @@ function _buildPafPanelHtml(){
                 +'<div style="font-size:.72rem;color:var(--s400)">'+n+' item'+(n!==1?'s':'')+'</div></div></label>';
         });
     }
-    h+=_accCard('Packing List',listsHtml,{badge:attachedIds.length?attachedIds.length+' attached':''});
+    h+=_accCard('Attach an Existing List',listsHtml,{badge:attachedIds.length?attachedIds.length+' attached':''});
 
     var qHtml='<p style="font-size:.78rem;color:var(--s400);margin:0 0 10px">Your own questions, shown in an "Additional Information" section on the form.</p>'
         +'<div id="pafQList">'+(fc.customQuestions||[]).map(function(q,i){return renderCustomQ(q,i,'paf');}).join('')+'</div>'

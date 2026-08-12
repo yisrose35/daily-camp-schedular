@@ -44,6 +44,8 @@ body{font-family:var(--font);background:var(--s50);color:var(--s800);-webkit-fon
 .pl-items{margin-top:8px;display:flex;flex-direction:column;gap:5px}
 .pl-item{font-size:.85rem;color:var(--s700);display:flex;align-items:flex-start;gap:8px;line-height:1.4}
 .pl-item::before{content:'';width:14px;height:14px;border:1.5px solid var(--s300);border-radius:4px;flex-shrink:0;margin-top:2px}
+.pk-print-btn{margin-top:14px;padding:8px 16px;border:1.5px solid var(--me);border-radius:var(--r);background:#fff;color:var(--me);font-weight:700;font-size:.82rem;cursor:pointer;font-family:var(--font);display:inline-flex;align-items:center;gap:6px}
+.pk-print-btn:hover{background:rgba(217,119,6,.06)}
 @media(max-width:600px){.wrap{padding:16px 12px 40px}.fr{flex-direction:column}.cd{padding:16px}}
 </style>
 </head>
@@ -67,12 +69,22 @@ body{font-family:var(--font);background:var(--s50);color:var(--s800);-webkit-fon
 <div class="ck" id="photoConsentRow"><input type="checkbox" id="paPhotoConsent"><label for="paPhotoConsent" id="photoConsentLabel">I give permission for my child to appear in camp photos/videos used for promotional purposes.</label></div>
 </div>
 
-<!-- Attached packing list(s) — hidden by default, shown when the camp
-     attaches one or more Lists in the Post-Acceptance Form Builder. Read-
-     only display (the interactive check-off-per-child list lives in the
-     parent portal); this is just so parents see it before they've signed
-     into anything. -->
-<div class="cd" id="listsCard" style="display:none"><div class="ct"><svg viewBox="0 0 24 24"><line x1="8" y1="6" x2="21" y2="6"/><line x1="8" y1="12" x2="21" y2="12"/><line x1="8" y1="18" x2="21" y2="18"/><polyline points="3 6 4 7 6 5"/><polyline points="3 12 4 13 6 11"/><polyline points="3 18 4 19 6 17"/></svg>Packing List</div>
+<!-- Camp's own printable packing list — hidden by default, shown when the
+     camp writes one in the Post-Acceptance Form Builder. Separate from the
+     "attached list" card below: this one is plain text baked into the form
+     config itself (not Link's interactive per-child Lists feature), with a
+     Print button so the family can print it and pack from paper. -->
+<div class="cd" id="pkListCard" style="display:none"><div class="ct"><svg viewBox="0 0 24 24"><line x1="8" y1="6" x2="21" y2="6"/><line x1="8" y1="12" x2="21" y2="12"/><line x1="8" y1="18" x2="21" y2="18"/><polyline points="3 6 4 7 6 5"/><polyline points="3 12 4 13 6 11"/><polyline points="3 18 4 19 6 17"/></svg><span id="pkListTitle">Packing List</span></div>
+<div id="pkListContent"></div>
+<button type="button" class="pk-print-btn" onclick="printPackingList()"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="6 9 6 2 18 2 18 9"/><path d="M6 18H4a2 2 0 01-2-2v-5a2 2 0 012-2h16a2 2 0 012 2v5a2 2 0 01-2 2h-2"/><rect x="6" y="14" width="12" height="8"/></svg>Print This List</button>
+</div>
+
+<!-- Attached existing list(s) from Link — hidden by default, shown when the
+     camp attaches one or more Lists in the Post-Acceptance Form Builder.
+     Read-only display (the interactive check-off-per-child list lives in
+     the parent portal); this is just so parents see it before they've
+     signed into anything. -->
+<div class="cd" id="listsCard" style="display:none"><div class="ct"><svg viewBox="0 0 24 24"><line x1="8" y1="6" x2="21" y2="6"/><line x1="8" y1="12" x2="21" y2="12"/><line x1="8" y1="18" x2="21" y2="18"/><polyline points="3 6 4 7 6 5"/><polyline points="3 12 4 13 6 11"/><polyline points="3 18 4 19 6 17"/></svg>More Lists</div>
 <div id="listsContent"></div></div>
 
 <!-- Custom Questions (hidden by default, shown when config has questions) -->
@@ -178,6 +190,8 @@ function applySectionOrder(order){
         var el=elId&&document.getElementById(elId);
         if(el)parent.insertBefore(el,anchor);
     });
+    var pk=document.getElementById('pkListCard');
+    if(pk)parent.insertBefore(pk,anchor);
     var lc=document.getElementById('listsCard');
     if(lc)parent.insertBefore(lc,anchor);
     var cq=document.getElementById('customQCard');
@@ -266,6 +280,46 @@ function applyFormConfig(fc){
     applySectionOrder(fc.sectionOrder);
     applyBranding(fc.branding);
     _refreshAttachedLists(fc.attachedListIds||[]);
+    _renderPackingList(fc.printableList);
+}
+
+// The camp's own printable list — plain text living on the form config
+// itself (paFormConfig.printableList), distinct from the attached-Lists
+// card above. Rendered read-only here with a Print button; printPackingList()
+// reads back out of _currentFC so it always prints whatever's currently shown.
+function _renderPackingList(pk){
+    var card=document.getElementById('pkListCard');
+    if(!card)return;
+    var items=(pk&&pk.items)||[];
+    if(!items.length){ card.style.display='none'; return; }
+    var titleEl=document.getElementById('pkListTitle');
+    if(titleEl)titleEl.textContent=(pk&&pk.name)||'Packing List';
+    document.getElementById('pkListContent').innerHTML=items.map(function(it){
+        return '<div class="pl-item">'+esc(it)+'</div>';
+    }).join('');
+    card.style.display='block';
+}
+window.printPackingList=function printPackingList(){
+    var pk=_currentFC.printableList||{};
+    var items=pk.items||[];
+    if(!items.length)return;
+    var name=pk.name||'Packing List';
+    var camperNm=(_enrollRecord&&_enrollRecord.camperName)||'';
+    var w=window.open('','_blank');
+    if(!w)return;
+    var css='body{font-family:Arial,Helvetica,sans-serif;color:#222;max-width:600px;margin:32px auto;padding:0 24px}'
+        +'h1{font-size:20pt;margin:0 0 4px}.sub{color:#666;font-size:11pt;margin-bottom:20px}'
+        +'.it{font-size:12pt;padding:8px 0;border-bottom:1px solid #ddd;display:flex;gap:12px;align-items:center}'
+        +'.bx{width:16px;height:16px;border:1.5px solid #888;border-radius:3px;flex-shrink:0}'
+        +'@media print{.noprint{display:none}}';
+    var body=items.map(function(it){return '<div class="it"><span class="bx"></span>'+esc(it)+'</div>';}).join('');
+    w.document.write('<!doctype html><html><head><meta charset="utf-8"><title>'+esc(name)+'</title><style>'+css+'</style></head><body>'
+        +'<h1>'+esc(name)+'</h1>'
+        +(camperNm?'<div class="sub">For '+esc(camperNm)+'</div>':'')
+        +body
+        +'<div class="noprint" style="text-align:center;margin-top:26px"><button onclick="window.print()" style="padding:8px 24px;cursor:pointer">Print</button></div>'
+        +'</body></html>');
+    w.document.close();
 }
 
 // Lists (packing lists / checklists) live under the top-level `link_lists`
