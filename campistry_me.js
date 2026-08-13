@@ -222,6 +222,11 @@ function loadData(){
                 }
             });
         });
+        // Post-Acceptance bunk requests land on the enrollment record
+        // (enrollments[id].postAccept), not the roster — mirror them onto the
+        // camper's own profile every load so Bunk Builder and Edit Camper show
+        // them without anyone having to go dig up the original application.
+        _syncPostAcceptBunkRequests();
     }catch(e){console.warn('[Me]',e)}
 }
 function save(){
@@ -611,15 +616,18 @@ function _famItem(name, c){
     return it;
 }
 // Find an existing family this camper belongs to — either it already lists
-// them, or they match it on 3+ of {last name, address, email, parent name}.
-// Returns the family key, or null (caller should start a new family).
+// them, or they match it on 3+ of {last name, address, email, parent name},
+// or they share the exact same parent email (email alone is enough — two
+// campers under the same parent email are the same family regardless of
+// what else does or doesn't line up). Returns the family key, or null
+// (caller should start a new family).
 function _resolveFamilyKey(camperName, item){
     var match = null;
     Object.keys(families).forEach(function(fk){
         if(match) return;
         var f = families[fk];
         if((f.camperIds || []).indexOf(camperName) >= 0){ match = fk; return; }
-        if(_famMatchCount(item, _famFieldsForExisting(f)) >= FAMILY_MATCH_THRESHOLD) match = fk;
+        if(_famShouldLink(item, _famFieldsForExisting(f))) match = fk;
     });
     return match;
 }
@@ -633,6 +641,13 @@ function _famMatchCount(a, b){
     if(a.parent && a.parent === b.parent) m++;
     return m;
 }
+// The two rules that make two campers family: the same parent email alone
+// (a household can have a nickname/typo'd last name or a P.O. box vs. street
+// address and still obviously be the same family if the email matches), or
+// 3-of-4 on {last name, address, email, parent name} when there's no shared
+// email to go on.
+function _famEmailMatches(a,b){ return !!(a.email && b.email && a.email===b.email); }
+function _famShouldLink(a,b){ return _famEmailMatches(a,b) || _famMatchCount(a,b) >= FAMILY_MATCH_THRESHOLD; }
 // Comparable fields for an existing family record.
 function _famFieldsForExisting(f){
     var hh = (f.households && f.households[0]) || {};
@@ -661,7 +676,7 @@ function detectFamilySuggestions(){
     function find(i){ while(uf[i] !== i){ uf[i] = uf[uf[i]]; i = uf[i]; } return i; }
     for(var i = 0; i < items.length; i++){
         for(var j = i + 1; j < items.length; j++){
-            if(_famMatchCount(items[i], items[j]) >= FAMILY_MATCH_THRESHOLD) uf[find(i)] = find(j);
+            if(_famShouldLink(items[i], items[j])) uf[find(i)] = find(j);
         }
     }
     var groups = {};
@@ -671,12 +686,15 @@ function detectFamilySuggestions(){
     Object.keys(groups).forEach(function(k){
         var grp = groups[k];
         if(grp.length < 2) return;
-        // Confidence = the weakest link in the group (min pairwise match).
-        var minMatch = 4;
+        // Confidence = the weakest link in the group (min pairwise match) —
+        // but a shared email on its own is always high confidence, even if
+        // it's the only thing that matched.
+        var minMatch = 4, allEmailLinked = true;
         for(var a = 0; a < grp.length; a++){
             for(var b = a + 1; b < grp.length; b++){
                 var mc = _famMatchCount(grp[a], grp[b]);
                 if(mc < minMatch) minMatch = mc;
+                if(!_famEmailMatches(grp[a], grp[b])) allEmailLinked = false;
             }
         }
         var rep = grp[0];
@@ -687,24 +705,41 @@ function detectFamilySuggestions(){
             parent: rep.camper.parent1Name || '',
             parentPhone: rep.camper.parent1Phone || '',
             parentEmail: rep.camper.parent1Email || '',
-            confidence: minMatch >= 4 ? 'high' : 'medium'
+            confidence: (minMatch >= 4 || allEmailLinked) ? 'high' : 'medium'
         });
     });
 
-    // Unassigned campers that match an EXISTING family on >= threshold fields.
+    // Unassigned campers that match an EXISTING family.
     var singleSuggestions = [];
     Object.entries(roster).forEach(function([name, c]){
         if(assignedCampers.has(name)) return;
         var it = _famItem(name, c);
         Object.entries(families).forEach(function([fk, f]){
             if((f.camperIds || []).indexOf(name) >= 0) return;
-            if(_famMatchCount(it, _famFieldsForExisting(f)) >= FAMILY_MATCH_THRESHOLD){
+            if(_famShouldLink(it, _famFieldsForExisting(f))){
                 singleSuggestions.push({ familyKey: fk, familyName: f.name, camperName: name });
             }
         });
     });
 
-    return { newFamilies: suggestions, addToExisting: singleSuggestions };
+    // Two ALREADY-SEPARATE family records that now match each other — e.g.
+    // siblings enrolled at different times whose applications didn't line up
+    // closely enough at the time, or a parent's email only got added later.
+    // Without this, "become a family" would only ever apply going forward;
+    // families that already exist as duplicates would never reconcile.
+    var mergeFamilies = [];
+    var famKeys = Object.keys(families);
+    for(var fi = 0; fi < famKeys.length; fi++){
+        for(var fj = fi + 1; fj < famKeys.length; fj++){
+            var fa = families[famKeys[fi]], fb = families[famKeys[fj]];
+            if(_famShouldLink(_famFieldsForExisting(fa), _famFieldsForExisting(fb))){
+                mergeFamilies.push({ keyA: famKeys[fi], nameA: fa.name, campersA: (fa.camperIds||[]).slice(),
+                    keyB: famKeys[fj], nameB: fb.name, campersB: (fb.camperIds||[]).slice() });
+            }
+        }
+    }
+
+    return { newFamilies: suggestions, addToExisting: singleSuggestions, mergeFamilies: mergeFamilies };
 }
 
 function acceptFamilySuggestion(idx){
@@ -730,12 +765,32 @@ function dismissFamilySuggestion(idx){
     localStorage.setItem('campistry_dismissed_fam_suggestions',JSON.stringify(dismissed));
     renderCampers();toast('Suggestion dismissed');
 }
+function dismissMergeFamilies(keyA,keyB){
+    var dismissed=JSON.parse(localStorage.getItem('campistry_dismissed_fam_suggestions')||'[]');
+    dismissed.push([keyA,keyB].sort().join('|'));
+    localStorage.setItem('campistry_dismissed_fam_suggestions',JSON.stringify(dismissed));
+    renderCampers();toast('Suggestion dismissed');
+}
 
 function acceptAddToFamily(famKey,camperName){
     if(!families[famKey]) return;
     if(!families[famKey].camperIds) families[famKey].camperIds=[];
     if(families[famKey].camperIds.indexOf(camperName)<0) families[famKey].camperIds.push(camperName);
     save();renderCampers();toast(camperName+' added to '+families[famKey].name);
+}
+
+// Two family records that turn out to be the same household (same parent
+// email, or 3-of-4 on name/address/parent) — folds B's campers into A and
+// removes B. Keeps A's own name/household/balance; only camperIds merge.
+function mergeFamilies(keyA,keyB){
+    var a=families[keyA],b=families[keyB];
+    if(!a||!b)return;
+    a.camperIds=a.camperIds||[];
+    (b.camperIds||[]).forEach(function(n){ if(a.camperIds.indexOf(n)<0)a.camperIds.push(n); });
+    a.balance=(a.balance||0)+(b.balance||0);
+    a.totalPaid=(a.totalPaid||0)+(b.totalPaid||0);
+    delete families[keyB];
+    save();renderCampers();toast(b.name+' merged into '+a.name);
 }
 
 // Body-only family bundles view — rendered INSIDE the Campers page (see
@@ -751,14 +806,15 @@ function _familyBundlesHtml(optHighlight){
     var dismissed=JSON.parse(localStorage.getItem('campistry_dismissed_fam_suggestions')||'[]');
     var newFams=suggestions.newFamilies.filter(function(s){return dismissed.indexOf(s.campers.sort().join('|'))<0});
     var addToExisting=suggestions.addToExisting;
-    var totalSuggestions=newFams.length+addToExisting.length;
+    var mergeFams=(suggestions.mergeFamilies||[]).filter(function(s){return dismissed.indexOf([s.keyA,s.keyB].sort().join('|'))<0});
+    var totalSuggestions=newFams.length+addToExisting.length+mergeFams.length;
 
     var h='<div class="sec-hd"><div><p class="sec-desc">'+e.length+' household'+(e.length!==1?'s':'')+(totalSuggestions>0?' · <span style="color:var(--me);font-weight:700">'+totalSuggestions+' suggestion'+(totalSuggestions!==1?'s':'')+'</span>':'')+'</p></div><div class="sec-actions"><button class="me-btn me-btn--sec me-btn--sm" onclick="CampistryMe.printFamilies()">🖨 Print</button><button class="me-btn me-btn--sec me-btn--sm" onclick="CampistryMe.exportFamilyReport()">↓ Export</button><button class="me-btn me-btn--pri" onclick="CampistryMe.addFamily()">+ Add Family</button></div></div>';
 
     // Show suggestions banner
-    if(newFams.length||addToExisting.length){
+    if(newFams.length||addToExisting.length||mergeFams.length){
         h+='<div style="background:linear-gradient(135deg,#FFFBEB,#FEF3C7);border:1px solid #FDE68A;border-radius:var(--r2);padding:16px;margin-bottom:18px">';
-        h+='<div style="display:flex;align-items:center;gap:8px;margin-bottom:10px"><span style="font-size:1.1rem">👨‍👩‍👧‍👦</span><span style="font-weight:700;font-size:.9rem;color:var(--s800)">Family Suggestions</span><span style="font-size:.75rem;color:var(--s500)">Campers matching on 3+ of last name, address, email or parent name may belong together</span></div>';
+        h+='<div style="display:flex;align-items:center;gap:8px;margin-bottom:10px"><span style="font-size:1.1rem">👨‍👩‍👧‍👦</span><span style="font-weight:700;font-size:.9rem;color:var(--s800)">Family Suggestions</span><span style="font-size:.75rem;color:var(--s500)">Same parent email, or 3+ of last name/address/parent name, means the same family</span></div>';
 
         // New family suggestions
         newFams.forEach(function(s,i){
@@ -781,6 +837,18 @@ function _familyBundlesHtml(optHighlight){
             h+='<div style="display:flex;align-items:center;gap:12px;padding:10px 14px;background:#fff;border-radius:var(--r);margin-bottom:6px;border:1px solid var(--s200)">';
             h+='<div style="flex:1"><div style="font-size:.8rem"><strong>'+esc(s.camperName)+'</strong> may belong to <strong>'+esc(s.familyName)+'</strong></div></div>';
             h+='<button class="me-btn me-btn--pri me-btn--sm" onclick="CampistryMe.acceptAddToFamily(\''+je(s.familyKey)+'\',\''+je(s.camperName)+'\')">Add</button>';
+            h+='</div>';
+        });
+
+        // Two already-separate family records that turn out to be the same
+        // household — most often siblings whose applications came in far
+        // enough apart, or with different-enough details, that they each
+        // got their own family record at the time.
+        mergeFams.forEach(function(s){
+            h+='<div style="display:flex;align-items:center;gap:12px;padding:10px 14px;background:#fff;border-radius:var(--r);margin-bottom:6px;border:1px solid var(--s200)">';
+            h+='<div style="flex:1"><div style="font-size:.8rem"><strong>'+esc(s.nameA)+'</strong> ('+s.campersA.map(esc).join(', ')+') and <strong>'+esc(s.nameB)+'</strong> ('+s.campersB.map(esc).join(', ')+') look like the same family</div></div>';
+            h+='<button class="me-btn me-btn--pri me-btn--sm" onclick="CampistryMe.mergeFamilies(\''+je(s.keyA)+'\',\''+je(s.keyB)+'\')">Merge</button>';
+            h+='<button class="me-btn me-btn--ghost me-btn--sm" style="color:var(--s400)" onclick="CampistryMe.dismissMergeFamilies(\''+je(s.keyA)+'\',\''+je(s.keyB)+'\')">Dismiss</button>';
             h+='</div>';
         });
 
@@ -1313,13 +1381,22 @@ function viewCamper(n){
     b+='<div class="cv-health" onclick="window.location.href=\'campistry_health.html\'">Open in Campistry Health →</div>';
 
     // More Details
-    if(d.camperType||d.swimLevel||d.shirtSize||d.bunkmateRequest||d.separateFrom){
+    if(d.camperType||d.swimLevel||d.shirtSize){
         b+='<div class="cv-sec">More Details</div>';
         if(d.camperType)b+=cvR('Camper Type',esc(d.camperType));
         if(d.swimLevel)b+=cvR('Swim Level',esc(d.swimLevel));
         if(d.shirtSize)b+=cvR('Shirt Size',esc(d.shirtSize));
-        if(d.bunkmateRequest)b+=cvR('Bunkmate Request',esc(d.bunkmateRequest));
-        if(d.separateFrom)b+=cvR('Do Not Bunk With','<span class="cv-warn">'+esc(d.separateFrom)+'</span>');
+    }
+
+    // Bunk Requests — merged from wherever they came in: office-entered on
+    // this profile, the original application, or the Post-Acceptance Form.
+    // Same data Bunk Builder uses, so what a head counselor sees here always
+    // matches what the auto-generator actually acted on.
+    var bunkReq=_camperBunkRequests(n);
+    if(bunkReq.friends.length||bunkReq.avoid.length){
+        b+='<div class="cv-sec">Bunk Requests</div>';
+        if(bunkReq.friends.length)b+=cvR('Wants to bunk with',esc(bunkReq.friends.join(', ')));
+        if(bunkReq.avoid.length)b+=cvR('Do not bunk with','<span class="cv-warn">'+esc(bunkReq.avoid.join(', '))+'</span>');
     }
 
     // Documents
@@ -2782,7 +2859,35 @@ function renderBB(){
     }
     c.innerHTML=h;
 }
-function bbC(n){var d=roster[n]||{};return'<div class="bb-c" draggable="true" ondragstart="event.dataTransfer.setData(\'text/plain\',\''+je(n)+'\')"><div style="flex:1;min-width:0"><div class="bb-c-nm">'+esc(n)+'</div></div>'+(d.allergies||d.medications?'<span style="color:var(--err);font-size:.6rem">⚠</span>':'')+'</div>'}
+// Clicking a card (as opposed to dragging it) pops up their bunk requests —
+// a head counselor scanning the board needs to know who asked to be with
+// whom without opening the full camper profile for every kid. The 🔗/🚫
+// badges make that visible even before clicking, for anyone with a request
+// on file.
+function bbC(n){
+    var d=roster[n]||{};
+    var req=_camperBunkRequests(n);
+    var badges='';
+    if(req.friends.length)badges+='<span title="Has a bunk request" style="font-size:.62rem">🔗</span>';
+    if(req.avoid.length)badges+='<span title="Has a do-not-bunk request" style="font-size:.62rem">🚫</span>';
+    return '<div class="bb-c" draggable="true" ondragstart="event.dataTransfer.setData(\'text/plain\',\''+je(n)+'\')" onclick="CampistryMe.showCamperBunkRequests(\''+je(n)+'\')" style="cursor:pointer"><div style="flex:1;min-width:0"><div class="bb-c-nm">'+esc(n)+'</div></div>'+badges+(d.allergies||d.medications?'<span style="color:var(--err);font-size:.6rem">⚠</span>':'')+'</div>';
+}
+// Quick-view popup for a camper's bunk requests, opened from a Bunk Builder
+// card click — the profile's full Bunk Requests section (viewCamper) shows
+// the same data, this is just the fast path for the board itself.
+function showCamperBunkRequests(n){
+    var d=roster[n]; if(!d)return;
+    var req=_camperBunkRequests(n);
+    var body='';
+    if(!req.friends.length&&!req.avoid.length){
+        body='<p style="font-size:.85rem;color:var(--s500)">No bunk requests on file for '+esc(n)+'.</p>';
+    }else{
+        if(req.friends.length)body+='<div class="cv-row"><span class="cv-lbl">Wants to bunk with</span><span class="cv-val">'+esc(req.friends.join(', '))+'</span></div>';
+        if(req.avoid.length)body+='<div class="cv-row"><span class="cv-lbl">Do not bunk with</span><span class="cv-val cv-warn">'+esc(req.avoid.join(', '))+'</span></div>';
+    }
+    body+='<button class="me-btn me-btn--sec me-btn--sm" style="margin-top:12px" onclick="CampistryMe.closeModal(\'dynModal\');CampistryMe.viewCamper(\''+je(n)+'\')">Open full profile</button>';
+    showModal(n,body,null);
+}
 function bbDrop(t,e){
     e.preventDefault();
     var n=e.dataTransfer.getData('text/plain');if(!n)return;
@@ -2913,8 +3018,8 @@ function _enrollmentForCamper(name){
 function _camperBunkRequests(name){
     var cfg=bunkGenConfig,d=roster[name]||{};
     var friends=[],avoid=[];
-    if(cfg.requestsEnabled!==false)friends=friends.concat(_splitNames(d.bunkmateRequest));
-    if(cfg.doNotBunkEnabled!==false)avoid=avoid.concat(_splitNames(d.separateFrom));
+    if(cfg.requestsEnabled!==false)friends=friends.concat(_splitNames(d.bunkmateRequest)).concat(_splitNames(d.bunkRequests));
+    if(cfg.doNotBunkEnabled!==false)avoid=avoid.concat(_splitNames(d.separateFrom)).concat(_splitNames(d.doNotBunkWith));
     var enr=_enrollmentForCamper(name);
     if(enr){
         if(cfg.requestsEnabled!==false){
@@ -2937,6 +3042,22 @@ function _camperBunkRequests(name){
         return cap!=null?out.slice(0,Math.max(0,cap)):out;
     }
     return {friends:dedupe(friends,cfg.maxRequests),avoid:dedupe(avoid,cfg.maxDoNotBunk)};
+}
+// Mirrors a submitted Post-Acceptance Form's bunk requests onto the roster
+// record itself — called every loadData() so the moment a parent's response
+// syncs down from the cloud, it's sitting right on the camper's own profile
+// (bunkRequests/doNotBunkWith) for CSV export, Campistry Lite, or anything
+// else that reads roster directly, not just the bunk generator's live lookup.
+function _syncPostAcceptBunkRequests(){
+    Object.keys(roster).forEach(function(name){
+        var enr=_enrollmentForCamper(name);
+        if(!enr||!enr.postAccept)return;
+        var c=roster[name];
+        var friends=_splitNames(enr.postAccept.bunkmate);
+        var avoid=_splitNames(enr.postAccept.separate);
+        if(friends.length)c.bunkRequests=friends;
+        if(avoid.length)c.doNotBunkWith=avoid;
+    });
 }
 // Free-text names need matching to real camper records. Requires every word
 // in the typed request to prefix-match a word in the candidate's name, so
@@ -6185,6 +6306,11 @@ function enrollCamper(id){
         };
         // Sync address to Go
         if(e.street)syncAddressToGo(e.camperName,roster[e.camperName]);
+        // loadData()'s sync already ran before this camper existed in the
+        // roster — if the Post-Acceptance Form was already answered before
+        // Enroll was clicked, this camper would otherwise show no bunk
+        // requests until the next full page load.
+        _syncPostAcceptBunkRequests();
         toast('Enrolled — camper added to roster with all info');
     }else{
         // Update existing camper with any missing data from application
@@ -9757,7 +9883,7 @@ function importRows(rows){
     function impFind(i){while(impUf[i]!==i){impUf[i]=impUf[impUf[i]];i=impUf[i]}return i}
     for(var ii=0;ii<impItems.length;ii++){
         for(var jj=ii+1;jj<impItems.length;jj++){
-            if(_famMatchCount(impItems[ii],impItems[jj])>=FAMILY_MATCH_THRESHOLD)impUf[impFind(ii)]=impFind(jj);
+            if(_famShouldLink(impItems[ii],impItems[jj]))impUf[impFind(ii)]=impFind(jj);
         }
     }
     var impGroups={};
@@ -10362,9 +10488,10 @@ window.CampistryMe={
     switchCampersView:switchCampersView,viewFamilyFromCamper:viewFamilyFromCamper,
     setPplPipeType:setPplPipeType,_pplOpenStaffByKey:_pplOpenStaffByKey,
     acceptFamilySuggestion:acceptFamilySuggestion,dismissFamilySuggestion:dismissFamilySuggestion,acceptAddToFamily:acceptAddToFamily,
+    mergeFamilies:mergeFamilies,dismissMergeFamilies:dismissMergeFamilies,
     addDiv:function(){openDivForm(null)},editDiv:function(n){openDivForm(n)},deleteDiv:deleteDiv,moveDivision:moveDivision,
     openCsv:function(){openModal('csvModal')},exportCsv:exportCsv,downloadTemplate:downloadTemplate,
-    bbDrop:bbDrop,autoAssign:autoAssign,autoGenerateBunks:autoGenerateBunks,openBunkGenSettings:openBunkGenSettings,clearBunks:clearBunks,setBunkCount:setBunkCount,openBunkCountModal:openBunkCountModal,_clearBunkCount:_clearBunkCount,
+    bbDrop:bbDrop,autoAssign:autoAssign,autoGenerateBunks:autoGenerateBunks,openBunkGenSettings:openBunkGenSettings,showCamperBunkRequests:showCamperBunkRequests,clearBunks:clearBunks,setBunkCount:setBunkCount,openBunkCountModal:openBunkCountModal,_clearBunkCount:_clearBunkCount,
     openBunkStaffModal:openBunkStaffModal,addBunkStaff:addBunkStaff,removeBunkStaff:removeBunkStaff,
     editBunkStaff:editBunkStaff,_resetBunkStaffForm:_resetBunkStaffForm,
     // Staff directory — the single source of truth for who works with which
