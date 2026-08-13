@@ -94,7 +94,7 @@ body{font-family:var(--font);background:var(--s50);color:var(--s800);-webkit-fon
 <div class="cd" id="camperCard"><div class="ct"><svg viewBox="0 0 24 24"><path d="M20 21v-2a4 4 0 00-4-4H8a4 4 0 00-4 4v2"/><circle cx="12" cy="7" r="4"/></svg>Camper Information</div>
 <div class="fr"><div class="fg"><label class="fl">First Name<span class="rq">*</span></label><input class="fi" id="rF"></div><div class="fg"><label class="fl">Last Name<span class="rq">*</span></label><input class="fi" id="rL"></div></div>
 <div class="fr"><div class="fg"><label class="fl">Date of Birth<span class="rq">*</span></label><input type="date" class="fi" id="rDob"></div><div class="fg"><label class="fl">Gender</label><select class="fs" id="rGen"><option value="">—</option><option>Male</option><option>Female</option><option>Non-binary</option><option>Other</option></select></div></div>
-<div class="fr"><div class="fg"><label class="fl">School Name</label><input class="fi" id="rSch"></div><div class="fg"><label class="fl">School Grade</label><input class="fi" id="rSchGr"></div></div>
+<div class="fr"><div class="fg"><label class="fl">School Name</label><input class="fi" id="rSch"></div><div class="fg"><label class="fl">School Grade</label><select class="fs" id="rSchGr"><option value="">—</option><option>Pre-K</option><option>Kindergarten</option><option>1st Grade</option><option>2nd Grade</option><option>3rd Grade</option><option>4th Grade</option><option>5th Grade</option><option>6th Grade</option><option>7th Grade</option><option>8th Grade</option><option>9th Grade</option><option>10th Grade</option><option>11th Grade</option><option>12th Grade</option></select></div></div>
 <div class="fg"><label class="fl">Teacher</label><input class="fi" id="rTch"></div>
 <div class="fg" id="rPhotoFg" style="margin-bottom:0"><label class="fl">Camper Photo</label>
 <input type="hidden" id="rPhotoData" value="">
@@ -607,13 +607,17 @@ window.addSibling=function(){
     renderSiblings();updatePrice();
 };
 window.removeSibling=function(i){siblings.splice(i,1);renderSiblings();updatePrice()};
+var SCHOOL_GRADE_OPTS=['Pre-K','Kindergarten','1st Grade','2nd Grade','3rd Grade','4th Grade','5th Grade','6th Grade','7th Grade','8th Grade','9th Grade','10th Grade','11th Grade','12th Grade'];
+function schoolGradeSelectHtml(cls,i,current){
+    return '<select class="fs '+cls+'" data-i="'+i+'"><option value="">—</option>'+SCHOOL_GRADE_OPTS.map(function(g){return '<option'+(g===current?' selected':'')+'>'+g+'</option>';}).join('')+'</select>';
+}
 function renderSiblings(){
     var c=document.getElementById('sibList');
     c.innerHTML=siblings.map(function(s,i){
         return'<div class="sib-card"><h4>Camper '+(i+2)+'</h4><button class="sib-rm" onclick="removeSibling('+i+')">Remove</button>'+
         '<div class="fr"><div class="fg"><label class="fl">First Name<span class="rq">*</span></label><input class="fi sib-f" data-i="'+i+'" value="'+esc(s.first)+'"></div><div class="fg"><label class="fl">Last Name<span class="rq">*</span></label><input class="fi sib-l" data-i="'+i+'" value="'+esc(s.last)+'"></div></div>'+
         '<div class="fr"><div class="fg"><label class="fl">DOB</label><input type="date" class="fi sib-dob" data-i="'+i+'" value="'+esc(s.dob)+'"></div><div class="fg"><label class="fl">Gender</label><select class="fs sib-gen" data-i="'+i+'"><option value="">—</option><option'+(s.gender==='Male'?' selected':'')+'>Male</option><option'+(s.gender==='Female'?' selected':'')+'>Female</option><option'+(s.gender==='Non-binary'?' selected':'')+'>Non-binary</option></select></div></div>'+
-        '<div class="fr"><div class="fg"><label class="fl">School</label><input class="fi sib-sch" data-i="'+i+'" value="'+esc(s.school)+'"></div><div class="fg"><label class="fl">Grade</label><input class="fi sib-gr" data-i="'+i+'" value="'+esc(s.schoolGrade)+'"></div></div>'+
+        '<div class="fr"><div class="fg"><label class="fl">School</label><input class="fi sib-sch" data-i="'+i+'" value="'+esc(s.school)+'"></div><div class="fg"><label class="fl">Grade</label>'+schoolGradeSelectHtml('sib-gr',i,s.schoolGrade)+'</div></div>'+
         '<div class="fg"><label class="fl">Teacher</label><input class="fi sib-tch" data-i="'+i+'" value="'+esc(s.teacher)+'"></div></div>';
     }).join('');
 }

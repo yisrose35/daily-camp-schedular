@@ -4,6 +4,21 @@
 console.log('📋 Campistry Me loading...');
 
 var COLORS=['#D97706','#147D91','#8B5CF6','#0EA5E9','#10B981','#F43F5E','#EC4899','#84CC16','#6366F1','#14B8A6'];
+// Canonical real-world school grades — shared by Camp Structure's "which
+// school grade(s) does this bunk group take?" mapping and by every place a
+// parent or office picks a camper's actual grade (Registration form, Manual
+// Entry, Edit Camper), so what a parent selects always matches exactly what
+// a camp mapped a bunk group to — no free-text "1st" vs "1st Grade" drift.
+var SCHOOL_GRADE_CATALOG=['Pre-K','Kindergarten','1st Grade','2nd Grade','3rd Grade','4th Grade','5th Grade','6th Grade','7th Grade','8th Grade','9th Grade','10th Grade','11th Grade','12th Grade'];
+// Options list for a school-grade <select> that also has to show an existing
+// record's value even when it predates this catalog (free-text data from
+// before this feature, or a value typed some other way) — otherwise opening
+// Edit Camper would silently blank it out the moment nothing matches.
+function _schoolGradeOptions(current){
+    var opts=[''].concat(SCHOOL_GRADE_CATALOG);
+    if(current&&SCHOOL_GRADE_CATALOG.indexOf(current)<0)opts.splice(1,0,current);
+    return opts;
+}
 var AV_BG=['#147D91','#6366F1','#0EA5E9','#10B981','#F43F5E','#8B5CF6','#D97706'];
 
 var structure={}, roster={}, families={}, payments=[], broadcasts=[], bunkAsgn={}, bunkManualCounts={}, bunkStaff={};
@@ -1452,7 +1467,7 @@ function editCamper(n){
     h+='<div class="fr">'+ff('Alternate First Name','ceAltFirst',d.altFirstName||'')+ff('Alternate Last Name','ceAltLast',d.altLastName||'')+'</div>';
     h+='<p style="font-size:.65rem;color:var(--s400);margin:-4px 0 8px;padding-left:2px">Hebrew, Spanish, Chinese, or any other name used at camp</p>';
     h+='<div class="fr">'+ff('Date of Birth','ceDob',d.dob||'','date')+ff('Gender','ceGender',d.gender||'','select',['','Male','Female','Non-binary','Other'])+'</div>';
-    h+='<div class="fr">'+ff('School Name','ceSchool',d.school||'')+ff('School Grade','ceSchoolGr',d.schoolGrade||'')+'</div>';
+    h+='<div class="fr">'+ff('School Name','ceSchool',d.school||'')+ff('School Grade','ceSchoolGr',d.schoolGrade||'','select',_schoolGradeOptions(d.schoolGrade))+'</div>';
     h+=ff('Teacher','ceTeacher',d.teacher||'');
 
     h+='<div class="fsec">Camp Assignment</div>';
@@ -2080,11 +2095,23 @@ function _styleDayChip(btn){
         +(on?'var(--accent,#00C896)':'var(--s100,#f1f5f9)')+';color:'
         +(on?'#fff':'var(--s400,#94a3b8)');
 }
-function _renderGradeRowHTML(gn,bunks,daysPresent){
+function _styleSgChip(btn){
+    var on=btn.getAttribute('data-on')==='1';
+    btn.style.cssText='padding:2px 9px;border-radius:999px;font-size:.68rem;font-weight:600;cursor:pointer;user-select:none;border:1px solid '
+        +(on?'var(--me)':'var(--s300,#cbd5e1)')+';background:'
+        +(on?'var(--me)':'var(--s100,#f1f5f9)')+';color:'
+        +(on?'#fff':'var(--s400,#94a3b8)');
+}
+function _renderGradeRowHTML(gn,bunks,daysPresent,schoolGrades){
     var present=Array.isArray(daysPresent)?daysPresent:null; // null → present all days
     var dayChips=DM_DAYS.map(function(d){
         var on=!present||present.indexOf(d)!==-1;
         return '<button type="button" class="dm-day-chip" data-day="'+d+'" data-on="'+(on?'1':'0')+'" title="'+d+'">'+d.charAt(0)+'</button>';
+    }).join('');
+    var sgOn=Array.isArray(schoolGrades)?schoolGrades:[];
+    var sgChips=SCHOOL_GRADE_CATALOG.map(function(sg){
+        var on=sgOn.indexOf(sg)>=0;
+        return '<button type="button" class="dm-sg-chip" data-sg="'+esc(sg)+'" data-on="'+(on?'1':'0')+'">'+esc(sg)+'</button>';
     }).join('');
     return '<div class="fg dm-grade-row" style="background:var(--s50);padding:8px 10px;border-radius:var(--r);border:1px solid var(--s200);margin-bottom:6px;cursor:grab">'
         +'<div class="fr" style="align-items:center;gap:6px">'
@@ -2095,6 +2122,10 @@ function _renderGradeRowHTML(gn,bunks,daysPresent){
         +'<div class="dm-grade-days" style="display:flex;align-items:center;gap:4px;flex-wrap:wrap;margin:6px 0 2px">'
             +'<span style="font-size:.7rem;color:var(--s400);user-select:none" title="Days this grade is around. Unchecked days hide its column in the Master Scheduler, Unified view and Print Center.">Days present:</span>'
             +dayChips
+        +'</div>'
+        +'<div class="dm-grade-sg" style="display:flex;align-items:center;gap:4px;flex-wrap:wrap;margin:4px 0 2px">'
+            +'<span style="font-size:.7rem;color:var(--s400);user-select:none" title="Which real school grade(s) this bunk group is for. Leave empty to skip this check. When set, Auto-Generate in Bunk Builder only ever places a camper in a bunk group whose school grades include theirs.">School grade(s):</span>'
+            +sgChips
         +'</div>'
         +_renderBunkChipsHTML(bunks)
         +'</div>';
@@ -2108,6 +2139,14 @@ function _wireGradeRow(rowEl){
         chip.onclick=function(){
             chip.setAttribute('data-on',chip.getAttribute('data-on')==='1'?'0':'1');
             _styleDayChip(chip);
+        };
+    });
+    // School-grade mapping toggles — same on/off chip pattern as days present.
+    rowEl.querySelectorAll('.dm-sg-chip').forEach(function(chip){
+        _styleSgChip(chip);
+        chip.onclick=function(){
+            chip.setAttribute('data-on',chip.getAttribute('data-on')==='1'?'0':'1');
+            _styleSgChip(chip);
         };
     });
     var rmBtn=rowEl.querySelector('.dm-grade-remove');
@@ -2182,7 +2221,7 @@ function openDivForm(name){
     // Grades + Bunks
     h+='<div class="fsec">Grades & Bunks <span style="font-weight:400;color:var(--s400);font-size:.75rem">(drag the ⋮⋮ handle to reorder)</span></div><div id="dmGrades">';
     _sortedGrades(d).forEach(function([gn,gd]){
-        h+=_renderGradeRowHTML(gn,gd.bunks||[],gd.daysPresent);
+        h+=_renderGradeRowHTML(gn,gd.bunks||[],gd.daysPresent,gd.schoolGrades);
     });
     h+='</div><button class="me-btn me-btn--sec me-btn--sm" style="margin-top:6px" onclick="CampistryMe._addGradeRow()">+ Add Grade</button>';
     document.getElementById('dmBody').innerHTML=h;
@@ -2237,6 +2276,11 @@ function saveDiv(){
             var _days=Array.prototype.map.call(_chips,function(c){return c.getAttribute('data-on')==='1'?c.getAttribute('data-day'):null}).filter(Boolean);
             if(_days.length<_chips.length)grades[gn].daysPresent=_days;
         }
+        // Which real school grade(s) this bunk group is for — omitted entirely
+        // when none are checked, so a camp that doesn't use this stays exactly
+        // as before (autoGenerateBunks falls back to its old grade-name match).
+        var _sgChips=Array.prototype.filter.call(row.querySelectorAll('.dm-sg-chip'),function(c){return c.getAttribute('data-on')==='1';}).map(function(c){return c.getAttribute('data-sg');});
+        if(_sgChips.length)grades[gn].schoolGrades=_sgChips;
     });
     if(editingDiv&&editingDiv!==name){
         // Rename: update roster references AND propagate to schedule records
@@ -3127,11 +3171,42 @@ function _placeGroupInBunk(group,bunkName,bunkState){
     group.forEach(function(n){
         roster[n].bunk=bunkName;
         roster[n].division=bk.div;
+        roster[n].grade=bk.gr;
         bk.occupants.push(n);
     });
 }
+// Which real school grade(s) a bunk group (Camp Structure "grade") is
+// configured for — empty when the camp hasn't set this up for that group.
+function _cohortSchoolGrades(div,gr){
+    var g=(structure[div]&&structure[div].grades&&structure[div].grades[gr])||{};
+    return Array.isArray(g.schoolGrades)?g.schoolGrades:[];
+}
+// The one bunk group configured for a given real school grade — null if no
+// group claims it, or if more than one does (ambiguous camp config; let
+// autoGenerateBunks()'s own scan surface that rather than guessing here).
+function _resolveCohortBySchoolGrade(schoolGrade){
+    var key=String(schoolGrade||'').trim().toLowerCase();
+    if(!key)return null;
+    var hit=null,multiple=false;
+    Object.keys(structure).forEach(function(div){
+        var grades=(structure[div]&&structure[div].grades)||{};
+        Object.keys(grades).forEach(function(gr){
+            if(multiple)return;
+            if(_cohortSchoolGrades(div,gr).some(function(sg){return String(sg).trim().toLowerCase()===key;})){
+                if(hit&&(hit.div!==div||hit.gr!==gr))multiple=true;
+                else hit={div:div,gr:gr};
+            }
+        });
+    });
+    return multiple?null:hit;
+}
 function _bunkGenForGrade(poolNames,bunks,cfg,report){
+    // Anyone in THIS pool is being placed into THIS grade's bunks, so they're
+    // valid friend-request candidates even before roster[n].grade is set —
+    // relying on .grade alone here would miss every camper whose grade was
+    // just resolved by schoolGrade mapping rather than pre-assigned.
     var gradeCandidates=Object.keys(roster).filter(function(n){return roster[n].grade===bunks[0].gr;});
+    poolNames.forEach(function(n){ if(gradeCandidates.indexOf(n)<0) gradeCandidates.push(n); });
     var reqMap={};
     poolNames.forEach(function(n){
         var r=_camperBunkRequests(n);
@@ -3261,18 +3336,68 @@ function autoGenerateBunks(){
     if(!allBunksFlat.length){toast('Create divisions and bunks first','error');return;}
 
     var report={requestsTotal:0,requestsHonored:0,avoidViolations:0,placed:0,warnings:[],underMin:[]};
+
+    // Real school grade → the one bunk group configured for it. A camp that
+    // never set up school-grade mapping just gets an empty table here, and
+    // every bunk group falls back to its old grade-name-only pooling below —
+    // fully opt-in, nothing changes for a camp that doesn't use this. Two
+    // bunk groups both claiming the same school grade is a camp misconfig
+    // (Camp Structure → a grade's "School grade(s)" chips overlap another
+    // grade's) — flagged rather than guessed, since guessing wrong here
+    // means a kid ends up bunked with the wrong grade.
+    var sgToCohort={},sgAmbiguous={};
+    Object.keys(structure).forEach(function(div){
+        var grades=(structure[div]&&structure[div].grades)||{};
+        Object.keys(grades).forEach(function(gr){
+            _cohortSchoolGrades(div,gr).forEach(function(sg){
+                var key=String(sg||'').trim().toLowerCase();
+                if(!key)return;
+                if(sgToCohort[key]&&(sgToCohort[key].div!==div||sgToCohort[key].gr!==gr))sgAmbiguous[key]=true;
+                else sgToCohort[key]={div:div,gr:gr};
+            });
+        });
+    });
+    Object.keys(sgAmbiguous).forEach(function(key){
+        delete sgToCohort[key];
+        report.warnings.push('"'+key+'" is set as the school grade for more than one bunk group in Camp Structure — campers with that school grade were skipped so no one gets bunked with the wrong grade by mistake. Fix the overlap and re-run.');
+    });
+
     var byGrade={};
     allBunksFlat.forEach(function(b){(byGrade[b.gr]=byGrade[b.gr]||[]).push(b);});
 
+    // Campers with an ambiguously-mapped school grade must never fall
+    // through to the grade-blind fallback below — that fallback just
+    // headcount-balances across every bunk in the division, which is exactly
+    // the "wrong grade" mistake this whole feature exists to prevent. They
+    // stay unassigned (the warning above already explains why) instead.
+    var ambiguousSkipped={};
+    Object.keys(roster).forEach(function(n){
+        var c=roster[n];
+        if(c.bunk)return;
+        var key=String(c.schoolGrade||'').trim().toLowerCase();
+        if(key&&sgAmbiguous[key])ambiguousSkipped[n]=true;
+    });
+
     var handled={};
     Object.keys(byGrade).forEach(function(gr){
-        var pool=Object.keys(roster).filter(function(n){return roster[n].grade===gr&&!roster[n].bunk;});
+        var bunksForGrade=byGrade[gr];
+        var div=bunksForGrade[0].div;
+        var mapped=_cohortSchoolGrades(div,gr).length>0;
+        var pool=Object.keys(roster).filter(function(n){
+            var c=roster[n];
+            if(c.bunk)return false;
+            if(mapped){
+                var resolved=sgToCohort[String(c.schoolGrade||'').trim().toLowerCase()];
+                return resolved&&resolved.div===div&&resolved.gr===gr;
+            }
+            return c.grade===gr;
+        });
         if(!pool.length)return;
-        _bunkGenForGrade(pool,byGrade[gr],cfg,report);
+        _bunkGenForGrade(pool,bunksForGrade,cfg,report);
         pool.forEach(function(n){if(roster[n].bunk)handled[n]=true;});
     });
 
-    var leftover=Object.keys(roster).filter(function(n){return !roster[n].bunk&&!handled[n];});
+    var leftover=Object.keys(roster).filter(function(n){return !roster[n].bunk&&!handled[n]&&!ambiguousSkipped[n];});
     if(leftover.length)_bunkGenFallback(leftover,allBunksFlat,cfg,report);
 
     report.placed=Object.keys(roster).filter(function(n){return roster[n].bunk;}).length;
@@ -5702,7 +5827,7 @@ function deleteSession(idx){
 var APP_FIELD_MAP={
     first:{rec:'camperFirst'},last:{rec:'camperLast'},
     dob:{rec:'dob',type:'date'},gender:{rec:'gender',type:'select',opts:['Male','Female','Non-binary','Other']},
-    school:{rec:'school'},schoolGrade:{rec:'schoolGrade'},teacher:{rec:'teacher'},photo:{rec:'camperPhoto',type:'file'},
+    school:{rec:'school'},schoolGrade:{rec:'schoolGrade',type:'select',opts:SCHOOL_GRADE_CATALOG},teacher:{rec:'teacher'},photo:{rec:'camperPhoto',type:'file'},
     parentName:{rec:'parentName'},parentRelation:{rec:'parentRelation'},
     parentPhone:{rec:'parentPhone',type:'tel'},parentEmail:{rec:'parentEmail',type:'email'},
     parent2Name:{rec:'parent2Name'},parent2Phone:{rec:'parent2Phone',type:'tel'},
@@ -6311,6 +6436,12 @@ function enrollCamper(id){
         // Enroll was clicked, this camper would otherwise show no bunk
         // requests until the next full page load.
         _syncPostAcceptBunkRequests();
+        // If Camp Structure has a bunk group mapped to this camper's real
+        // school grade, place them in it right away instead of leaving
+        // division/grade blank until someone runs Auto-Generate — Bunk
+        // Builder's Unassigned pool then already shows the right grade.
+        var resolvedCohort=_resolveCohortBySchoolGrade(roster[e.camperName].schoolGrade);
+        if(resolvedCohort){ roster[e.camperName].division=resolvedCohort.div; roster[e.camperName].grade=resolvedCohort.gr; }
         toast('Enrolled — camper added to roster with all info');
     }else{
         // Update existing camper with any missing data from application
