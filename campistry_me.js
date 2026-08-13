@@ -10,13 +10,20 @@ var COLORS=['#D97706','#147D91','#8B5CF6','#0EA5E9','#10B981','#F43F5E','#EC4899
 // Entry, Edit Camper), so what a parent selects always matches exactly what
 // a camp mapped a bunk group to — no free-text "1st" vs "1st Grade" drift.
 var SCHOOL_GRADE_CATALOG=['Pre-K','Kindergarten','1st Grade','2nd Grade','3rd Grade','4th Grade','5th Grade','6th Grade','7th Grade','8th Grade','9th Grade','10th Grade','11th Grade','12th Grade'];
+// The camp's own school-grade list (Bunk Settings → School Grades) once
+// they've customized it, else the built-in default — every school-grade
+// picker in the app reads through this, never SCHOOL_GRADE_CATALOG directly.
+function _schoolGradeCatalog(){
+    return (bunkGenConfig&&Array.isArray(bunkGenConfig.schoolGrades)&&bunkGenConfig.schoolGrades.length)?bunkGenConfig.schoolGrades:SCHOOL_GRADE_CATALOG;
+}
 // Options list for a school-grade <select> that also has to show an existing
 // record's value even when it predates this catalog (free-text data from
 // before this feature, or a value typed some other way) — otherwise opening
 // Edit Camper would silently blank it out the moment nothing matches.
 function _schoolGradeOptions(current){
-    var opts=[''].concat(SCHOOL_GRADE_CATALOG);
-    if(current&&SCHOOL_GRADE_CATALOG.indexOf(current)<0)opts.splice(1,0,current);
+    var cat=_schoolGradeCatalog();
+    var opts=[''].concat(cat);
+    if(current&&cat.indexOf(current)<0)opts.splice(1,0,current);
     return opts;
 }
 var AV_BG=['#147D91','#6366F1','#0EA5E9','#10B981','#F43F5E','#8B5CF6','#D97706'];
@@ -60,7 +67,13 @@ function _defaultBunkGenConfig(){
             {key:'school',label:'School',enabled:true},
             {key:'area',label:'Area / City',enabled:true},
             {key:'age',label:'Age',enabled:false}
-        ]
+        ],
+        // Every camp's own list of real school grades — seeded from the
+        // built-in default, but fully editable in Bunk Settings since camps
+        // differ (Pre-K3/Pre-K4 split, non-US grade names, etc). Drives the
+        // grade picker on Registration, Manual Entry, Edit Camper, and the
+        // "School grade(s)" mapping chips in Camp Structure.
+        schoolGrades:SCHOOL_GRADE_CATALOG.slice()
     };
 }
 var _saveLockUntil=0; // timestamp — block cloud overwrites for 5s after local save
@@ -187,6 +200,7 @@ function loadData(){
         paFormConfig=me.postAcceptFormConfig||null;
         bunkGenConfig=Object.assign(_defaultBunkGenConfig(),me.bunkGenConfig||{});
         if(!Array.isArray(bunkGenConfig.criteria)||!bunkGenConfig.criteria.length)bunkGenConfig.criteria=_defaultBunkGenConfig().criteria;
+        if(!Array.isArray(bunkGenConfig.schoolGrades)||!bunkGenConfig.schoolGrades.length)bunkGenConfig.schoolGrades=_defaultBunkGenConfig().schoolGrades;
         printSheets=Array.isArray(me.printSheets)?me.printSheets:[];
         savedReports=Array.isArray(me.savedReports)?me.savedReports:[];
         var pr=me.payroll||{};
@@ -2109,7 +2123,7 @@ function _renderGradeRowHTML(gn,bunks,daysPresent,schoolGrades){
         return '<button type="button" class="dm-day-chip" data-day="'+d+'" data-on="'+(on?'1':'0')+'" title="'+d+'">'+d.charAt(0)+'</button>';
     }).join('');
     var sgOn=Array.isArray(schoolGrades)?schoolGrades:[];
-    var sgChips=SCHOOL_GRADE_CATALOG.map(function(sg){
+    var sgChips=_schoolGradeCatalog().map(function(sg){
         var on=sgOn.indexOf(sg)>=0;
         return '<button type="button" class="dm-sg-chip" data-sg="'+esc(sg)+'" data-on="'+(on?'1':'0')+'">'+esc(sg)+'</button>';
     }).join('');
@@ -2983,6 +2997,9 @@ function openBunkGenSettings(){
         +'<div class="fg"><label class="fl">Minimum per bunk</label><input type="number" min="1" id="bgMin" class="fi" value="'+(c.minBunkSize||0)+'"></div>'
         +'<div class="fg"><label class="fl">Maximum per bunk</label><input type="number" min="1" id="bgMax" class="fi" value="'+(c.maxBunkSize||0)+'"></div>'
         +'</div>';
+    h+='<div class="fsec">School Grades</div>';
+    h+='<p style="font-size:.76rem;color:var(--s500);margin:0 0 8px">Every camp\'s grades are different — set the list parents pick from on Registration (and Manual Entry / Edit Camper), then map each bunk group to the grade(s) it takes in Camp Structure. Drag to reorder.</p>';
+    h+=_renderSchoolGradeListHtml();
     h+='<div class="fsec">Friend Requests</div>';
     h+='<div class="fg"><label class="fl" style="display:flex;align-items:center;gap:7px;cursor:pointer"><input type="checkbox" id="bgReqOn"'+(c.requestsEnabled?' checked':'')+'> Let parents request bunkmates on the Post-Acceptance Form</label></div>';
     h+='<div class="fr">'
@@ -3017,14 +3034,56 @@ function openBunkGenSettings(){
             maxDoNotBunk:Math.max(0,parseInt((document.getElementById('bgMaxAvoid')||{}).value,10)||0),
             criteria:Array.prototype.map.call(document.querySelectorAll('.bgCritRow'),function(row){
                 return {key:row.dataset.key,label:(byKey[row.dataset.key]||{}).label||row.dataset.key,enabled:row.querySelector('.bgCritOn').checked};
-            })
+            }),
+            schoolGrades:Array.prototype.map.call(document.querySelectorAll('#bgSgList .bgSgChip'),function(chip){return chip.getAttribute('data-g');})
         };
         if(bunkGenConfig.honoredRequests>bunkGenConfig.maxRequests)bunkGenConfig.honoredRequests=bunkGenConfig.maxRequests;
         if(bunkGenConfig.minBunkSize>bunkGenConfig.maxBunkSize)bunkGenConfig.minBunkSize=bunkGenConfig.maxBunkSize;
+        if(!bunkGenConfig.schoolGrades.length)bunkGenConfig.schoolGrades=_defaultBunkGenConfig().schoolGrades;
         save();closeModal('dynModal');toast('Bunk settings saved');
     });
     var list=document.getElementById('bgCritList');
     if(list){ _meReorderInit(list,'.bgCritRow'); list.querySelectorAll('.bgCritRow').forEach(function(row){_meAttachItemDrag(row)}); }
+    _wireSchoolGradeList();
+}
+// Camp-editable list of real school grades — add/remove/reorder chips, same
+// interaction shape as the bunk-name chips in Camp Structure (drag to
+// reorder, type + Enter to add, × to remove), kept as its own lightweight
+// implementation since this list has none of the schedule-migration concerns
+// a bunk rename does.
+function _renderSchoolGradeListHtml(){
+    var list=_schoolGradeCatalog();
+    return '<div id="bgSgList" style="display:flex;flex-wrap:wrap;gap:6px;margin-bottom:8px">'+list.map(function(g){
+        return '<span class="bgSgChip" data-g="'+esc(g)+'" draggable="true" style="display:inline-flex;align-items:center;gap:5px;background:var(--s100);border-radius:999px;padding:3px 6px 3px 10px;font-size:.76rem;font-weight:600;color:var(--s700);cursor:grab"><span>'+esc(g)+'</span><button type="button" class="bgSgX" style="border:none;background:none;cursor:pointer;color:var(--s400);font-size:.9rem;line-height:1;padding:0 2px">×</button></span>';
+    }).join('')+'</div>'
+    +'<div style="display:flex;gap:6px"><input type="text" id="bgSgAddInp" class="fi" style="flex:1" placeholder="Add a grade and press Enter"><button type="button" class="me-btn me-btn--sec me-btn--sm" id="bgSgAddBtn">+ Add</button></div>';
+}
+function _wireSchoolGradeList(){
+    var list=document.getElementById('bgSgList');
+    if(!list)return;
+    _meReorderInit(list,'.bgSgChip');
+    function wireChip(chip){
+        _meAttachItemDrag(chip);
+        var x=chip.querySelector('.bgSgX');
+        if(x)x.onclick=function(){chip.remove()};
+    }
+    list.querySelectorAll('.bgSgChip').forEach(wireChip);
+    var addInp=document.getElementById('bgSgAddInp'),addBtn=document.getElementById('bgSgAddBtn');
+    function addGrade(){
+        var v=(addInp.value||'').trim();
+        if(!v)return;
+        v.split(',').map(function(s){return s.trim();}).filter(Boolean).forEach(function(name){
+            var span=document.createElement('span');
+            span.className='bgSgChip';span.draggable=true;span.setAttribute('data-g',name);
+            span.style.cssText='display:inline-flex;align-items:center;gap:5px;background:var(--s100);border-radius:999px;padding:3px 6px 3px 10px;font-size:.76rem;font-weight:600;color:var(--s700);cursor:grab';
+            span.innerHTML='<span>'+esc(name)+'</span><button type="button" class="bgSgX" style="border:none;background:none;cursor:pointer;color:var(--s400);font-size:.9rem;line-height:1;padding:0 2px">×</button>';
+            list.appendChild(span);
+            wireChip(span);
+        });
+        addInp.value='';addInp.focus();
+    }
+    if(addBtn)addBtn.onclick=addGrade;
+    if(addInp)addInp.addEventListener('keydown',function(e){if(e.key==='Enter'){e.preventDefault();addGrade();}});
 }
 function setBunkCount(bunkName,value){var n=parseInt(value,10);if(isNaN(n)||n<0)n=0;bunkManualCounts[bunkName]=n;save()}
 function _clearBunkCount(bunkName){delete bunkManualCounts[bunkName];save();render(curPage);toast('Override cleared')}
@@ -5874,7 +5933,7 @@ function addApplication(){
         var req=cfg.required!=null?cfg.required:!!f.required;
         var id='app_'+f.id;
         var star=req?' <span class="rq" style="color:var(--err)">*</span>':'';
-        if(map.type==='select')return '<div class="fg"><label class="fl">'+esc(label)+star+'</label><select id="'+id+'" class="fs"><option value="">—</option>'+map.opts.map(function(o){return'<option>'+o+'</option>';}).join('')+'</select></div>';
+        if(map.type==='select'){var _opts=f.id==='schoolGrade'?_schoolGradeCatalog():map.opts;return '<div class="fg"><label class="fl">'+esc(label)+star+'</label><select id="'+id+'" class="fs"><option value="">—</option>'+_opts.map(function(o){return'<option>'+o+'</option>';}).join('')+'</select></div>';}
         if(map.type==='textarea')return '<div class="fg"><label class="fl">'+esc(label)+star+'</label><textarea id="'+id+'" class="fi" style="min-height:50px;resize:vertical"></textarea></div>';
         if(map.type==='file')return '<div class="fg"><label class="fl">'+esc(label)+star+'</label>'
             +'<input type="hidden" id="'+id+'">'

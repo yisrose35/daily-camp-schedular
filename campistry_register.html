@@ -521,6 +521,20 @@ function applyFormConfig(fc){
     applyBranding(fc.branding);
 }
 
+// Each camp's own school-grade list (Camp Structure → Bunk Settings →
+// School Grades) replaces the built-in default the moment it's configured —
+// the built-in list above stays only as the pre-load fallback so the field
+// isn't empty for the split second before load() runs.
+function _applySchoolGradeOptions(list){
+    if(!list||!list.length)return;
+    SCHOOL_GRADE_OPTS=list;
+    var primary=document.getElementById('rSchGr');
+    if(primary){
+        var cur=primary.value;
+        primary.innerHTML='<option value="">—</option>'+list.map(function(g){return '<option'+(g===cur?' selected':'')+'>'+esc(g)+'</option>';}).join('');
+    }
+    renderSiblings();
+}
 function load(){
     try{
         var g=JSON.parse(localStorage.getItem('campGlobalSettings_v1')||'{}');
@@ -531,6 +545,7 @@ function load(){
         _baseCampNm=cn;
         if(cn){document.getElementById('campTitle').textContent=cn+' Registration';document.getElementById('campNm').textContent=cn}
         applyFormConfig(me.formConfig);
+        _applySchoolGradeOptions(me.bunkGenConfig&&me.bunkGenConfig.schoolGrades);
         renderSessions();
     }catch(e){console.warn(e)}
 }
