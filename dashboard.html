@@ -68,6 +68,56 @@
             </div>
         </header>
 
+        <!-- ===== FEEDS: NOTIFICATIONS + BIRTHDAYS ===== -->
+        <!-- The two "things you need to know about today" cards, promoted
+             right under the hero instead of buried mid-page — Notifications
+             is now a live feed (see dashboard.js loadLiveNotifications), so
+             it earns top billing. -->
+        <div class="dash-feeds-row">
+            <!-- ===== NOTIFICATIONS & REMINDERS ===== -->
+            <section class="dash-notifications" id="dashNotifications">
+                <div class="dash-notif-header">
+                    <h2>
+                        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M18 8A6 6 0 0 0 6 8c0 7-3 9-3 9h18s-3-2-3-9"/><path d="M13.73 21a2 2 0 0 1-3.46 0"/></svg>
+                        Notifications &amp; Reminders
+                    </h2>
+                    <button class="dash-notif-toggle" id="dashNotifToggle" onclick="toggleNotifications()" title="Collapse">
+                        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="18 15 12 9 6 15"/></svg>
+                    </button>
+                </div>
+                <div class="dash-notif-live-list" id="dashNotifLiveList" style="display:none">
+                    <!-- Live notifications (Link messages, Notes reminders) — populated by dashboard.js -->
+                </div>
+                <div class="dash-notif-list" id="dashNotifList">
+                    <!-- Populated by JS -->
+                </div>
+            </section>
+
+            <!-- ===== BIRTHDAYS ===== -->
+            <section class="dash-birthdays" id="dashBirthdays" style="display:none;">
+                <div class="dash-notif-header">
+                    <h2>
+                        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M20 21v-8a2 2 0 0 0-2-2H6a2 2 0 0 0-2 2v8"/><path d="M4 16s1-1 3-1 3 1 5 1 3-1 5-1 3 1 3 1"/><path d="M2 21h20"/><path d="M7 8v3M12 8v3M17 8v3"/><path d="M7 5.5a1 1 0 1 0-2 0M13 5.5a1 1 0 1 0-2 0M19 5.5a1 1 0 1 0-2 0"/></svg>
+                        Birthdays
+                    </h2>
+                    <div class="dash-bday-tools">
+                        <select id="dashBdayWindow" onchange="renderBirthdays()" title="How far ahead to look">
+                            <option value="0">Today</option>
+                            <option value="7">Next 7 days</option>
+                            <option value="14">Next 14 days</option>
+                            <option value="30" selected>Next 30 days</option>
+                        </select>
+                        <select id="dashBdayWho" onchange="renderBirthdays()" title="Who to include">
+                            <option value="all" selected>Everyone</option>
+                            <option value="camper">Campers</option>
+                            <option value="staff">Staff</option>
+                        </select>
+                    </div>
+                </div>
+                <div class="dash-bday-list" id="dashBdayList"></div>
+            </section>
+        </div>
+
         <!-- ===== QUICK LAUNCH TILES ===== -->
         <section class="dash-quick-launch">
             <a href="campistry_me.html" class="dash-ql-tile" style="--ql-color: var(--me-color);">
@@ -152,48 +202,18 @@
             </div>
         </section>
 
-        <!-- ===== BIRTHDAYS ===== -->
-        <section class="dash-birthdays" id="dashBirthdays" style="display:none;">
-            <div class="dash-notif-header">
-                <h2>
-                    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M20 21v-8a2 2 0 0 0-2-2H6a2 2 0 0 0-2 2v8"/><path d="M4 16s1-1 3-1 3 1 5 1 3-1 5-1 3 1 3 1"/><path d="M2 21h20"/><path d="M7 8v3M12 8v3M17 8v3"/><path d="M7 5.5a1 1 0 1 0-2 0M13 5.5a1 1 0 1 0-2 0M19 5.5a1 1 0 1 0-2 0"/></svg>
-                    Birthdays
-                </h2>
-                <div class="dash-bday-tools">
-                    <select id="dashBdayWindow" onchange="renderBirthdays()" title="How far ahead to look">
-                        <option value="0">Today</option>
-                        <option value="7">Next 7 days</option>
-                        <option value="14">Next 14 days</option>
-                        <option value="30" selected>Next 30 days</option>
-                    </select>
-                    <select id="dashBdayWho" onchange="renderBirthdays()" title="Who to include">
-                        <option value="all" selected>Everyone</option>
-                        <option value="camper">Campers</option>
-                        <option value="staff">Staff</option>
-                    </select>
-                </div>
-            </div>
-            <div class="dash-bday-list" id="dashBdayList"></div>
-        </section>
-
-        <!-- ===== NOTIFICATIONS & REMINDERS ===== -->
-        <section class="dash-notifications" id="dashNotifications">
-            <div class="dash-notif-header">
-                <h2>
-                    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M18 8A6 6 0 0 0 6 8c0 7-3 9-3 9h18s-3-2-3-9"/><path d="M13.73 21a2 2 0 0 1-3.46 0"/></svg>
-                    Notifications &amp; Reminders
-                </h2>
-                <button class="dash-notif-toggle" id="dashNotifToggle" onclick="toggleNotifications()" title="Collapse">
-                    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="18 15 12 9 6 15"/></svg>
-                </button>
-            </div>
-            <div class="dash-notif-live-list" id="dashNotifLiveList" style="display:none">
-                <!-- Live notifications (Link messages, Notes reminders) — populated by dashboard.js -->
-            </div>
-            <div class="dash-notif-list" id="dashNotifList">
-                <!-- Populated by JS -->
-            </div>
-        </section>
+        <!-- ===== CAMP SETUP ===== -->
+        <!-- Umbrella zone grouping every owner-configuration card that used
+             to just be a long undifferentiated scroll of sequential
+             sections: Camp Profile, Account, Camp Dates, Sessions &
+             Pricing, Camp Settings, Team & Access. Each keeps its own
+             sub-header; this just gives the whole group a name and a
+             visually distinct zone. -->
+        <div class="dash-camp-setup">
+        <h2 class="section-title-bar dash-camp-setup-title">
+            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14.7 6.3a1 1 0 0 0 0 1.4l1.6 1.6a1 1 0 0 0 1.4 0l3.77-3.77a6 6 0 0 1-7.94 7.94l-6.91 6.91a2.12 2.12 0 0 1-3-3l6.91-6.91a6 6 0 0 1 7.94-7.94l-3.76 3.76z"/></svg>
+            Camp Setup
+        </h2>
 
         <!-- ===== TWO-COLUMN: PROFILE + ACCOUNT ===== -->
         <div class="dashboard-grid">
@@ -474,18 +494,6 @@
             </div>
         </section>
 
-        <!-- ===== ACHIEVEMENTS (populated by badges.js) ===== -->
-        <section id="camp-badges-section" class="dashboard-section" style="display: none;">
-            <h2 class="section-title-bar">
-                <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="8" r="7"/><polyline points="8.21 13.89 7 23 12 20 17 23 15.79 13.88"/></svg>
-                Achievements
-                <span id="campBadgesCount" style="margin-left:auto; font-size:0.78rem; font-weight:600; color:var(--slate-400);"></span>
-            </h2>
-            <div class="dashboard-card">
-                <div id="campBadgesGrid"></div>
-            </div>
-        </section>
-
         <!-- ===== RBAC TEAM & ACCESS (Owners only) ===== -->
         <section id="team-access-section" class="dashboard-section" style="display: none;">
             <h2 class="section-title-bar">
@@ -508,6 +516,20 @@
                     <p class="card-desc">Manage who can access and edit your camp schedules.</p>
                     <div id="team-placeholder" style="text-align:center; color: var(--slate-400); padding: 20px;">Loading…</div>
                 </div>
+            </div>
+        </section>
+
+        </div><!-- /dash-camp-setup -->
+
+        <!-- ===== ACHIEVEMENTS (populated by badges.js) ===== -->
+        <section id="camp-badges-section" class="dashboard-section" style="display: none;">
+            <h2 class="section-title-bar">
+                <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="8" r="7"/><polyline points="8.21 13.89 7 23 12 20 17 23 15.79 13.88"/></svg>
+                Achievements
+                <span id="campBadgesCount" style="margin-left:auto; font-size:0.78rem; font-weight:600; color:var(--slate-400);"></span>
+            </h2>
+            <div class="dashboard-card">
+                <div id="campBadgesGrid"></div>
             </div>
         </section>
 

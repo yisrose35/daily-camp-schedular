@@ -332,14 +332,26 @@ button { font-family: inherit; cursor: pointer; border: none; background: none; 
 }
 
 /* ============================================
+   FEEDS ROW — Notifications + Birthdays side by side,
+   promoted right under the hero (see dashboard.html).
+   ============================================ */
+.dash-feeds-row {
+    display: grid;
+    grid-template-columns: repeat(2, 1fr);
+    gap: 20px;
+    margin-bottom: 24px;
+    align-items: start;
+}
+
+/* ============================================
    NOTIFICATIONS & REMINDERS
    ============================================ */
 .dash-notifications {
-    margin-bottom: 28px;
+    margin-bottom: 0;
 }
 
 /* ==================== BIRTHDAYS ==================== */
-.dash-birthdays { margin-bottom: 28px; }
+.dash-birthdays { margin-bottom: 0; }
 .dash-bday-tools { display: flex; gap: 8px; }
 .dash-bday-tools select {
     font: inherit;
@@ -574,6 +586,28 @@ button { font-family: inherit; cursor: pointer; border: none; background: none; 
 }
 .section-title-bar svg { color: var(--slate-400); flex-shrink: 0; }
 
+/* ===== CAMP SETUP ZONE ===== */
+/* Every owner-configuration card (Profile, Account, Camp Dates, Sessions &
+   Pricing, Camp Settings, Team & Access) lives inside this panel so it reads
+   as one named zone instead of a long undifferentiated scroll of sections.
+   Each card keeps its own .section-title-bar sub-header — this just wraps
+   them and gives the group its own identity. */
+.dash-camp-setup {
+    background: var(--slate-50);
+    border: 1px solid var(--slate-200);
+    border-radius: var(--radius-xl);
+    padding: 32px;
+    margin-bottom: 28px;
+}
+.dash-camp-setup > *:last-child { margin-bottom: 0; }
+.dash-camp-setup-title {
+    font-family: var(--font-display);
+    font-size: 1.3rem;
+    border-bottom: 2px solid var(--camp-green);
+    color: var(--slate-900);
+}
+.dash-camp-setup-title svg { color: var(--camp-green); }
+
 /* ===== PRODUCTS SECTION ===== */
 .products-section { margin-bottom: 40px; }
 .products-grid {
@@ -647,9 +681,11 @@ button { font-family: inherit; cursor: pointer; border: none; background: none; 
     .dash-hero .welcome-title { font-size: 1.5rem; }
     .dash-hero-right { width: 100%; justify-content: space-between; }
     .dash-stats-row { grid-template-columns: repeat(2, 1fr); gap: 10px; }
+    .dash-feeds-row { grid-template-columns: 1fr; }
     .dashboard-grid { grid-template-columns: 1fr; }
     .products-grid { grid-template-columns: 1fr; }
     .team-grid { grid-template-columns: 1fr; }
+    .dash-camp-setup { padding: 20px 16px; }
     .quick-links { flex-direction: column; align-items: center; gap: 16px; }
     .nav-user { display: none; }
 }

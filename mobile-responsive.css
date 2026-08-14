@@ -256,10 +256,12 @@ html, body {
   .dashboard-grid { grid-template-columns: 1fr !important; gap: 14px !important; }
   .dashboard-card { padding: 14px !important; }
   .card-header { flex-direction: column !important; align-items: flex-start !important; gap: 6px !important; }
-  .stats-grid { grid-template-columns: repeat(3, 1fr) !important; gap: 8px !important; }
-  .stat-item { padding: 10px 6px 8px !important; }
-  .stat-item .stat-value { font-size: 1.4rem !important; }
-  .stat-item .stat-label { font-size: 0.62rem !important; }
+  .dash-feeds-row { grid-template-columns: 1fr !important; gap: 14px !important; }
+  .dash-camp-setup { padding: 18px 14px !important; }
+  .dash-stats-row { grid-template-columns: repeat(2, 1fr) !important; gap: 8px !important; }
+  .dash-stat-card { padding: 12px !important; }
+  .dash-stat-value { font-size: 1.3rem !important; }
+  .dash-stat-label { font-size: 0.65rem !important; }
   .products-grid { grid-template-columns: 1fr !important; }
   .team-grid { grid-template-columns: 1fr !important; }
   .profile-row { flex-direction: column !important; align-items: flex-start !important; gap: 4px !important; }
@@ -269,7 +271,7 @@ html, body {
 }
 
 @media (max-width: 480px) {
-  .stats-grid { grid-template-columns: 1fr 1fr !important; }
+  .dash-stats-row { grid-template-columns: 1fr 1fr !important; }
   .welcome-title { font-size: 1.2rem !important; }
 }
 
