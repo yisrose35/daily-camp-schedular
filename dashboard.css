@@ -474,6 +474,9 @@ button { font-family: inherit; cursor: pointer; border: none; background: none; 
 .dash-notif-action .dash-notif-icon { background: rgba(245,158,11,0.1); color: #D97706; }
 .dash-notif-tip .dash-notif-icon { background: rgba(37,99,235,0.08); color: #2563EB; }
 .dash-notif-coming .dash-notif-icon { background: rgba(107,33,168,0.08); color: #7C3AED; }
+.dash-notif-live-list { display: flex; flex-direction: column; gap: 10px; margin-bottom: 10px; }
+.dash-notif-live .dash-notif-icon { background: var(--slate-50); }
+.dash-notif-unread .dash-notif-body p { font-weight: 700; color: var(--slate-800); }
 .dash-notif-body { flex: 1; min-width: 0; }
 .dash-notif-body p {
     font-size: 0.88rem;

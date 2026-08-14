@@ -479,6 +479,13 @@
             if (sessionsPricingSection) sessionsPricingSection.style.display = 'block';
             loadSessionsSection();
         }
+
+        // Live notifications (Link messages, Notes reminders) — for every
+        // role, not just owners. RLS on `notifications` already scopes reads
+        // to owner/admin/scheduler, so other roles just get an empty feed
+        // back with no extra gating needed here.
+        loadLiveNotifications();
+        subscribeToLiveNotifications();
     }
     
     function addRoleBadge() {
@@ -1680,6 +1687,109 @@
             console.error('Error deleting session:', e);
         }
     };
+
+    // ========================================
+    // LIVE NOTIFICATIONS (Link messages, Notes reminders)
+    // Reads from the `notifications` table (see migrations/056_notifications.sql
+    // + NOTIFICATIONS_SETUP.md) and renders into a dedicated list above the
+    // existing static/hardcoded notifications built by dashboard.html's own
+    // inline buildNotifications() — the two are independent, this only ever
+    // touches #dashNotifLiveList.
+    // ========================================
+
+    var _notifChannel = null;
+    var _notifPollTimer = null;
+    var _notifIcons = {
+        link_message: '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>',
+        notes_reminder: '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>'
+    };
+    var _notifColors = { link_message: 'var(--link-color, #2A7A35)', notes_reminder: 'var(--notes-color, #C4891A)' };
+
+    function _notifCampId() {
+        return localStorage.getItem('campistry_camp_id') || localStorage.getItem('campistry_user_id') || (currentUser && currentUser.id);
+    }
+
+    function _notifRelTime(iso) {
+        var then = new Date(iso).getTime();
+        if (isNaN(then)) return '';
+        var diffMin = Math.round((Date.now() - then) / 60000);
+        if (diffMin < 1) return 'just now';
+        if (diffMin < 60) return diffMin + 'm ago';
+        var diffHr = Math.round(diffMin / 60);
+        if (diffHr < 24) return diffHr + 'h ago';
+        return Math.round(diffHr / 24) + 'd ago';
+    }
+
+    async function loadLiveNotifications() {
+        var wrap = document.getElementById('dashNotifLiveList');
+        if (!wrap || !window.supabase) return;
+        var campId = _notifCampId();
+        if (!campId) return;
+        try {
+            var [notifRes, readsRes] = await Promise.all([
+                window.supabase.from('notifications').select('id, source, title, body, link_target, created_at')
+                    .eq('camp_id', campId).order('created_at', { ascending: false }).limit(20),
+                currentUser ? window.supabase.from('notification_reads').select('notification_id').eq('user_id', currentUser.id) : Promise.resolve({ data: [] })
+            ]);
+            if (notifRes.error) { console.warn('[Dashboard] loadLiveNotifications:', notifRes.error.message); return; }
+            var readIds = new Set((readsRes.data || []).map(function(r) { return r.notification_id; }));
+            renderLiveNotifications(notifRes.data || [], readIds);
+        } catch (e) {
+            console.warn('[Dashboard] loadLiveNotifications failed:', e);
+        }
+    }
+
+    function renderLiveNotifications(notifs, readIds) {
+        var wrap = document.getElementById('dashNotifLiveList');
+        if (!wrap) return;
+        if (!notifs.length) { wrap.style.display = 'none'; wrap.innerHTML = ''; return; }
+        wrap.style.display = 'block';
+        wrap.innerHTML = notifs.map(function(n) {
+            var unread = !readIds.has(n.id);
+            var icon = _notifIcons[n.source] || _notifIcons.link_message;
+            var color = _notifColors[n.source] || 'var(--camp-green)';
+            var unreadDot = unread ? '<span style="display:inline-block;width:7px;height:7px;border-radius:50%;background:' + color + ';margin-right:6px;vertical-align:middle"></span>' : '';
+            return '<div class="dash-notif-item dash-notif-live' + (unread ? ' dash-notif-unread' : '') + '" style="border-left:3px solid ' + color + ';cursor:pointer" onclick="markNotificationRead(\'' + n.id + '\', ' + (n.link_target ? '\'' + n.link_target.replace(/'/g, "\\'") + '\'' : 'null') + ')">'
+                + '<div class="dash-notif-icon" style="color:' + color + '">' + icon + '</div>'
+                + '<div class="dash-notif-body"><p>' + unreadDot + _dashEsc(n.title) + (n.body ? '<br><span style="color:var(--slate-400);font-weight:400;">' + _dashEsc(n.body) + '</span>' : '') + '</p>'
+                + '<span class="dash-notif-time">' + _notifRelTime(n.created_at) + '</span></div>'
+                + '</div>';
+        }).join('');
+    }
+
+    window.markNotificationRead = async function(notifId, target) {
+        try {
+            if (currentUser && window.supabase) {
+                await window.supabase.from('notification_reads')
+                    .upsert({ notification_id: notifId, user_id: currentUser.id }, { onConflict: 'notification_id,user_id', ignoreDuplicates: true });
+            }
+        } catch (e) {
+            console.warn('[Dashboard] markNotificationRead failed:', e);
+        }
+        if (target) window.location.href = target;
+        else loadLiveNotifications();
+    };
+
+    function subscribeToLiveNotifications() {
+        var campId = _notifCampId();
+        if (!campId || !window.supabase) return;
+        try {
+            if (_notifChannel) window.supabase.removeChannel(_notifChannel);
+            _notifChannel = window.supabase.channel('dash-notifs-' + campId)
+                .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'notifications', filter: 'camp_id=eq.' + campId }, function() { loadLiveNotifications(); })
+                .subscribe();
+        } catch (e) {
+            console.warn('[Dashboard] notifications realtime subscribe failed:', e);
+        }
+        // Belt-and-suspenders fallback, same pattern as campistry_link_admin.html's
+        // admin message inbox: a 30s poll plus a visibilitychange re-sync in case
+        // the realtime socket silently drops.
+        if (_notifPollTimer) clearInterval(_notifPollTimer);
+        _notifPollTimer = setInterval(loadLiveNotifications, 30000);
+        document.addEventListener('visibilitychange', function() {
+            if (!document.hidden) loadLiveNotifications();
+        });
+    }
 
     // Live preview on date change
     ['campStartDate', 'campHalf1End', 'campHalf2Start', 'campEndDate'].forEach(function(id) {
