@@ -303,6 +303,80 @@
             </div>
         </section>
 
+        <!-- ===== CAMP SETTINGS (Owners only) ===== -->
+        <section id="camp-settings-section" class="dashboard-section" style="display: none;">
+            <h2 class="section-title-bar">
+                <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>
+                Camp Settings
+            </h2>
+
+            <div class="dashboard-card" style="max-width:700px;">
+                <div class="card-header"><h2>🌍 Language &amp; Regional</h2></div>
+                <p class="card-desc">Configure language, date formats, and alternate name display for your camp.</p>
+                <div style="display:flex; flex-direction:column; gap:14px;">
+                    <div class="form-group">
+                        <label for="settLocale" style="font-size:0.82rem; font-weight:600; color:var(--slate-600); margin-bottom:4px; display:block;">Display Language / Locale</label>
+                        <select id="settLocale" style="width:100%; padding:8px 10px; border-radius:8px; border:1px solid var(--slate-200); font-size:0.88rem;">
+                            <option value="en-US">English (US)</option>
+                            <option value="en-GB">English (UK)</option>
+                            <option value="he-IL">עברית (Hebrew)</option>
+                            <option value="es-ES">Español (Spanish)</option>
+                            <option value="fr-FR">Français (French)</option>
+                            <option value="ru-RU">Русский (Russian)</option>
+                            <option value="ar-SA">العربية (Arabic)</option>
+                            <option value="zh-CN">中文 (Chinese)</option>
+                            <option value="pt-BR">Português (Portuguese)</option>
+                            <option value="yi">ייִדיש (Yiddish)</option>
+                        </select>
+                    </div>
+                    <div style="display:grid; grid-template-columns:1fr 1fr; gap:14px;">
+                        <div class="form-group">
+                            <label style="font-size:0.82rem; font-weight:600; color:var(--slate-600);"><input type="checkbox" id="settHebrewDates" style="margin-right:6px"> Show Hebrew dates</label>
+                            <p style="font-size:0.72rem; color:var(--slate-400); margin-top:2px;">Display Hebrew calendar date alongside standard dates</p>
+                        </div>
+                        <div class="form-group">
+                            <label style="font-size:0.82rem; font-weight:600; color:var(--slate-600);"><input type="checkbox" id="settAltNames" style="margin-right:6px"> Show alternate names</label>
+                            <p style="font-size:0.72rem; color:var(--slate-400); margin-top:2px;">Display Hebrew/alternate names in roster and cards</p>
+                        </div>
+                    </div>
+                    <div class="form-group">
+                        <label style="font-size:0.82rem; font-weight:600; color:var(--slate-600);"><input type="checkbox" id="settRTL" style="margin-right:6px"> Right-to-left layout (RTL)</label>
+                        <p style="font-size:0.72rem; color:var(--slate-400); margin-top:2px;">For Hebrew, Arabic, Yiddish — flips the entire interface direction</p>
+                    </div>
+                    <div style="display:flex; gap:10px; align-items:center;">
+                        <button type="button" onclick="saveLocaleSettings()" class="btn-primary" style="padding:8px 20px; font-size:0.85rem;">Save Language Settings</button>
+                        <span id="localeSettingsStatus" style="font-size:0.82rem; color:var(--slate-400);"></span>
+                    </div>
+                </div>
+            </div>
+
+            <div class="dashboard-card" style="max-width:700px;">
+                <div class="card-header"><h2>💳 Payment Processing (Stripe)</h2></div>
+                <p class="card-desc">Connect your Stripe account to accept credit card payments, save cards on file, and auto-charge installments.</p>
+                <div style="display:flex; flex-direction:column; gap:14px;">
+                    <div class="form-group">
+                        <label for="settStripeKey" style="font-size:0.82rem; font-weight:600; color:var(--slate-600); margin-bottom:4px; display:block;">Stripe Publishable Key</label>
+                        <input type="text" id="settStripeKey" placeholder="pk_live_... or pk_test_..." style="width:100%; padding:8px 10px; border-radius:8px; border:1px solid var(--slate-200); font-size:0.88rem;">
+                        <p style="font-size:0.72rem; color:var(--slate-400); margin-top:6px;">Your <strong>secret key</strong> (sk_...) must be set as a Supabase Edge Function secret — never put it in the browser. <a href="https://dashboard.stripe.com/apikeys" target="_blank" rel="noopener">Get your keys from Stripe →</a></p>
+                    </div>
+                    <div style="display:flex; gap:10px; align-items:center;">
+                        <button type="button" onclick="saveStripeKey()" class="btn-primary" style="padding:8px 20px; font-size:0.85rem;">Save Stripe Key</button>
+                        <span id="stripeKeyStatus" style="font-size:0.82rem; color:var(--slate-400);"></span>
+                    </div>
+                </div>
+            </div>
+
+            <div class="dashboard-card" style="max-width:700px;">
+                <div class="card-header"><h2>Data Management</h2></div>
+                <div style="display:flex; gap:8px; flex-wrap:wrap; align-items:center;">
+                    <button type="button" onclick="exportAllData()" class="btn-secondary" style="padding:8px 16px; font-size:0.85rem;">Export All Data (JSON)</button>
+                    <button type="button" onclick="importAllData()" class="btn-secondary" style="padding:8px 16px; font-size:0.85rem;">Import Data (JSON)</button>
+                    <button type="button" onclick="clearAllData()" class="btn-secondary" style="padding:8px 16px; font-size:0.85rem; color:#dc2626;">Clear All Data</button>
+                    <span id="dataMgmtStatus" style="font-size:0.82rem; color:var(--slate-400);"></span>
+                </div>
+            </div>
+        </section>
+
         <!-- ===== ACHIEVEMENTS (populated by badges.js) ===== -->
         <section id="camp-badges-section" class="dashboard-section" style="display: none;">
             <h2 class="section-title-bar">

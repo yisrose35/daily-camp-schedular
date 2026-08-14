@@ -83,6 +83,9 @@
     // RBAC elements
     const teamAccessSection = document.getElementById('team-access-section');
 
+    // Camp Settings elements (owner-only; migrated from Campistry Me)
+    const campSettingsSection = document.getElementById('camp-settings-section');
+
     // ========================================
     // AUTH CHECK
     // ========================================
@@ -445,6 +448,11 @@
                 teamAccessSection.style.display = 'none';
             }
 
+            // Camp Settings (Language, Stripe, Data Management) are owner-only.
+            if (campSettingsSection) {
+                campSettingsSection.style.display = 'none';
+            }
+
             // Schedulers and admins can see camp dates (read-only)
             if (userRole === 'scheduler' || userRole === 'admin') {
                 var campDatesSection = document.getElementById('camp-dates-section');
@@ -458,6 +466,8 @@
             var campDatesSection = document.getElementById('camp-dates-section');
             if (campDatesSection) campDatesSection.style.display = 'block';
             loadCampDates(false);
+            if (campSettingsSection) campSettingsSection.style.display = 'block';
+            loadCampSettingsSection();
         }
     }
     
@@ -1315,6 +1325,157 @@
             if (status) { status.textContent = 'Cleared.'; status.style.color = 'var(--slate-400)'; setTimeout(function() { status.textContent = ''; }, 3000); }
         } catch (e) {
             console.warn('Error clearing camp dates:', e);
+        }
+    };
+
+    // ========================================
+    // CAMP SETTINGS (migrated from Campistry Me: Language & Regional,
+    // Stripe, Data Management. Camp Name itself stays on the Camp Profile
+    // card above — saveProfile() already writes it everywhere that reads it.)
+    // ========================================
+
+    function loadCampSettingsSection() {
+        try {
+            var gs = (typeof window.loadGlobalSettings === 'function') ? (window.loadGlobalSettings() || {}) : {};
+            var cm = gs.campistryMe || {};
+            var cs = cm.campSettings || {};
+            var localeEl = document.getElementById('settLocale');
+            if (localeEl) localeEl.value = cm.locale || 'en-US';
+            var hebrewEl = document.getElementById('settHebrewDates');
+            if (hebrewEl) hebrewEl.checked = !!cs.showHebrewDates;
+            var altEl = document.getElementById('settAltNames');
+            if (altEl) altEl.checked = cs.showAltNames !== false;
+            var rtlEl = document.getElementById('settRTL');
+            if (rtlEl) rtlEl.checked = !!cs.rtl;
+            var stripeEl = document.getElementById('settStripeKey');
+            if (stripeEl) stripeEl.value = cm.stripePublishableKey || '';
+        } catch (e) {
+            console.warn('Could not load camp settings:', e);
+        }
+    }
+
+    window.saveLocaleSettings = function() {
+        var status = document.getElementById('localeSettingsStatus');
+        if (isTeamMember) {
+            if (status) { status.textContent = 'Only camp owners can edit camp settings.'; status.style.color = '#dc2626'; }
+            return;
+        }
+        try {
+            var gs = window.loadGlobalSettings ? (window.loadGlobalSettings() || {}) : {};
+            if (!gs.campistryMe) gs.campistryMe = {};
+            gs.campistryMe.locale = document.getElementById('settLocale').value || 'en-US';
+            gs.campistryMe.campSettings = {
+                showHebrewDates: document.getElementById('settHebrewDates').checked,
+                showAltNames: document.getElementById('settAltNames').checked,
+                rtl: document.getElementById('settRTL').checked
+            };
+            if (window.saveGlobalSettings) window.saveGlobalSettings('campistryMe', gs.campistryMe);
+            if (status) { status.textContent = 'Saved!'; status.style.color = '#059669'; setTimeout(function() { status.textContent = ''; }, 3000); }
+        } catch (e) {
+            console.error('Error saving language settings:', e);
+            if (status) { status.textContent = 'Error saving.'; status.style.color = '#dc2626'; }
+        }
+    };
+
+    window.saveStripeKey = function() {
+        var status = document.getElementById('stripeKeyStatus');
+        if (isTeamMember) {
+            if (status) { status.textContent = 'Only camp owners can edit camp settings.'; status.style.color = '#dc2626'; }
+            return;
+        }
+        try {
+            var gs = window.loadGlobalSettings ? (window.loadGlobalSettings() || {}) : {};
+            if (!gs.campistryMe) gs.campistryMe = {};
+            gs.campistryMe.stripePublishableKey = (document.getElementById('settStripeKey').value || '').trim();
+            if (window.saveGlobalSettings) window.saveGlobalSettings('campistryMe', gs.campistryMe);
+            if (status) { status.textContent = 'Saved!'; status.style.color = '#059669'; setTimeout(function() { status.textContent = ''; }, 3000); }
+        } catch (e) {
+            console.error('Error saving Stripe key:', e);
+            if (status) { status.textContent = 'Error saving.'; status.style.color = '#dc2626'; }
+        }
+    };
+
+    window.exportAllData = function() {
+        var status = document.getElementById('dataMgmtStatus');
+        try {
+            var s = localStorage.getItem('campGlobalSettings_v1') || '{}';
+            var blob = new Blob([s], { type: 'application/json' });
+            var a = document.createElement('a');
+            a.href = URL.createObjectURL(blob);
+            a.download = 'campistry_backup_' + new Date().toISOString().split('T')[0] + '.json';
+            a.click();
+            if (status) { status.textContent = 'Backup exported.'; status.style.color = '#059669'; setTimeout(function() { status.textContent = ''; }, 3000); }
+        } catch (e) {
+            console.error('Error exporting data:', e);
+            if (status) { status.textContent = 'Export failed.'; status.style.color = '#dc2626'; }
+        }
+    };
+
+    window.importAllData = function() {
+        if (isTeamMember) {
+            var status0 = document.getElementById('dataMgmtStatus');
+            if (status0) { status0.textContent = 'Only camp owners can import data.'; status0.style.color = '#dc2626'; }
+            return;
+        }
+        var inp = document.createElement('input');
+        inp.type = 'file';
+        inp.accept = '.json';
+        inp.onchange = function() {
+            if (!inp.files[0]) return;
+            var r = new FileReader();
+            r.onload = function(e) {
+                var status = document.getElementById('dataMgmtStatus');
+                try {
+                    var data = JSON.parse(e.target.result);
+                    if (!confirm('This will replace ALL your data. Are you sure?')) return;
+                    localStorage.setItem('campGlobalSettings_v1', JSON.stringify(data));
+                    // Fan out every imported top-level key to cloud — without this,
+                    // importing on Device A leaves Device B reading the pre-import
+                    // cloud state on next hydration.
+                    if (window.saveGlobalSettings) {
+                        Object.keys(data || {}).forEach(function(k) {
+                            if (k === 'updated_at') return;
+                            try { window.saveGlobalSettings(k, data[k]); } catch (err) { console.warn('Import sync failed for', k, err); }
+                        });
+                    }
+                    if (status) { status.textContent = 'Data imported.'; status.style.color = '#059669'; setTimeout(function() { status.textContent = ''; }, 3000); }
+                    loadCampSettingsSection();
+                } catch (err) {
+                    alert('Invalid file: ' + err.message);
+                }
+            };
+            r.readAsText(inp.files[0]);
+        };
+        inp.click();
+    };
+
+    window.clearAllData = function() {
+        if (isTeamMember) {
+            var status0 = document.getElementById('dataMgmtStatus');
+            if (status0) { status0.textContent = 'Only camp owners can clear data.'; status0.style.color = '#dc2626'; }
+            return;
+        }
+        if (!confirm('This will DELETE ALL camp data. This cannot be undone. Are you absolutely sure?')) return;
+        if (!confirm('FINAL WARNING: All campers, families, enrollment, financial data will be erased.')) return;
+        var status = document.getElementById('dataMgmtStatus');
+        try {
+            var g = JSON.parse(localStorage.getItem('campGlobalSettings_v1') || '{}');
+            g.campStructure = {};
+            if (!g.app1) g.app1 = {};
+            g.app1.camperRoster = {};
+            g.app1.divisions = {};
+            g.campistryMe = {}; // families, payments, enrollments, finance, sessions, bunkAssignments, formConfig…
+            localStorage.setItem('campGlobalSettings_v1', JSON.stringify(g));
+            if (window.saveGlobalSettings) {
+                window.saveGlobalSettings('campStructure', g.campStructure);
+                window.saveGlobalSettings('app1', g.app1);
+                window.saveGlobalSettings('campistryMe', g.campistryMe);
+            }
+            if (status) { status.textContent = 'All data cleared.'; status.style.color = '#059669'; setTimeout(function() { status.textContent = ''; }, 3000); }
+            loadCampSettingsSection();
+        } catch (e) {
+            console.warn('[Dashboard] clearAllData:', e);
+            if (status) { status.textContent = 'Error clearing data.'; status.style.color = '#dc2626'; }
         }
     };
 

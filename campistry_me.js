@@ -369,10 +369,12 @@ function setupSidebar(){
 }
 function nav(p){
     curPage=p;
-    // Camp Layout is one sidebar entry (data-page="structure") covering two
-    // pages (Structure + Bunk Builder, cross-linked via their own in-page
-    // tabs) — keep it highlighted on either one.
-    var sidebarKey=(p==='bunkbuilder')?'structure':p;
+    // A couple of sidebar entries each cover two pages, cross-linked via
+    // their own in-page tabs — keep the one sidebar button highlighted on
+    // either page: Structure (data-page="structure") also covers Bunk
+    // Builder, and Reports & Sheets (data-page="reports") also covers Print
+    // Sheets.
+    var sidebarKey=(p==='bunkbuilder')?'structure':(p==='printsheets')?'reports':p;
     document.querySelectorAll('.sidebar-item').forEach(function(b){b.classList.toggle('active',b.dataset.page===sidebarKey)});
     document.querySelectorAll('.me-page').forEach(function(pg){pg.classList.toggle('active',pg.id==='page-'+p)});
     render(p);
@@ -612,7 +614,7 @@ function ff(label,id,val,type,opts){
 
 // ═══ RENDERERS ═══════════════════════════════════════════════════
 function render(p){
-    var m={campers:renderCampers,structure:renderStructure,bunkbuilder:renderBB,families:renderFamiliesPage,pipeline:renderPipelinePage,leads:renderLeads,enrollment:renderEnrollment,staffing:renderStaffing,billing:renderBilling,payroll:renderPayroll,analytics:renderAnalytics,reports:renderReports,printsheets:renderPrintSheets,settings:renderSettings};
+    var m={campers:renderCampers,structure:renderStructure,bunkbuilder:renderBB,families:renderFamiliesPage,pipeline:renderPipelinePage,leads:renderLeads,enrollment:renderEnrollment,staffing:renderStaffing,billing:renderBilling,payroll:renderPayroll,analytics:renderAnalytics,reports:renderReports,printsheets:renderPrintSheets};
     if(m[p])m[p]();else renderSoon(p);
 }
 
@@ -1283,7 +1285,7 @@ function renderCampers(filter){
     camperEntries.sort(function(a,b){return a[0].localeCompare(b[0])});
     var total=camperEntries.length+staffRows.length;
 
-    var h='<div class="sec-hd"><div><h2 class="sec-title">Roster</h2><p class="sec-desc">'+camperEntries.length+' camper'+(camperEntries.length!==1?'s':'')+(canStaff?' · '+staffRows.length+' staff':'')+'</p></div><div class="sec-actions"><button class="me-btn me-btn--ghost me-btn--sm" onclick="CampistryMe.detectDuplicates()" title="Find duplicate campers">🔍 Duplicates</button><button class="me-btn me-btn--ghost me-btn--sm" onclick="CampistryMe.manageCustomFields()" title="Define custom fields">⚙ Custom Fields</button><button class="me-btn me-btn--sec me-btn--sm" onclick="CampistryMe.downloadTemplate()">Template</button><button class="me-btn me-btn--sec me-btn--sm" onclick="CampistryMe.openCsv()">Import</button><button class="me-btn me-btn--sec me-btn--sm" onclick="CampistryMe.exportCsv()">Export</button><button class="me-btn me-btn--pri" onclick="CampistryMe.addCamper()">+ Add Camper</button></div></div>';
+    var h='<div class="sec-hd"><div><h2 class="sec-title">Roster</h2><p class="sec-desc">'+camperEntries.length+' camper'+(camperEntries.length!==1?'s':'')+(canStaff?' · '+staffRows.length+' staff':'')+'</p></div><div class="sec-actions"><button class="me-btn me-btn--ghost me-btn--sm" onclick="CampistryMe.manageCustomFields()" title="Define custom fields">⚙ Custom Fields</button><button class="me-btn me-btn--sec me-btn--sm" onclick="CampistryMe.downloadTemplate()">Template</button><button class="me-btn me-btn--sec me-btn--sm" onclick="CampistryMe.openCsv()">Import</button><button class="me-btn me-btn--sec me-btn--sm" onclick="CampistryMe.exportCsv()">Export</button><button class="me-btn me-btn--pri" onclick="CampistryMe.addCamper()">+ Add Camper</button></div></div>';
 
     var unplaced=canStaff?hiredStaff().filter(function(a){return !String(a.email||'').trim()||!bunksForStaffEmail(a.email).length;}):[];
     if(unplaced.length){
@@ -1915,6 +1917,19 @@ function _commitStructureReorder(){
 // exactly as before. This just adds the tab strip that jumps between them.
 function _layoutTabsHtml(active){
     var tabs=[{k:'structure',l:'Structure'},{k:'bunkbuilder',l:'Bunk Builder'}];
+    return '<div style="display:flex;gap:0;border-bottom:1px solid var(--s200);margin-bottom:14px">'+tabs.map(function(t){
+        return '<button class="me-btn me-btn--ghost" data-page="'+t.k+'" style="padding:8px 16px;font-size:.8rem;font-weight:600;border-bottom:2px solid '+(active===t.k?'var(--me)':'transparent')+';color:'+(active===t.k?'var(--me)':'var(--s400)')+';border-radius:0" onclick="CampistryMe.nav(\''+t.k+'\')">'+t.l+'</button>';
+    }).join('')+'</div>';
+}
+
+// Reports and Print Sheets are presented together as one "Reports & Sheets"
+// area (one sidebar entry, cross-linked sub-tabs), same pattern as Structure/
+// Bunk Builder — they stay two independently gated pages (me.reports is
+// view-only by design, me.printsheets supports full edit, and roles split
+// them differently: e.g. Office gets both, Bookkeeper gets reports but not
+// printsheets), so each keeps its own #page-* pane and capability check.
+function _reportsTabsHtml(active){
+    var tabs=[{k:'reports',l:'Reports'},{k:'printsheets',l:'Print Sheets'}];
     return '<div style="display:flex;gap:0;border-bottom:1px solid var(--s200);margin-bottom:14px">'+tabs.map(function(t){
         return '<button class="me-btn me-btn--ghost" data-page="'+t.k+'" style="padding:8px 16px;font-size:.8rem;font-weight:600;border-bottom:2px solid '+(active===t.k?'var(--me)':'transparent')+';color:'+(active===t.k?'var(--me)':'var(--s400)')+';border-radius:0" onclick="CampistryMe.nav(\''+t.k+'\')">'+t.l+'</button>';
     }).join('')+'</div>';
@@ -9041,7 +9056,8 @@ function deleteLinkItem(type,idx){
 // ═══════════════════════════════════════════════════════════════
 function renderReports(){
     var c=document.getElementById('page-reports');
-    var h='<div class="sec-hd"><div><h2 class="sec-title">Reports & Export</h2><p class="sec-desc">Build any report you want, or grab a quick one below</p></div><div class="sec-actions"><button class="me-btn me-btn--pri" onclick="CampistryMe.openReportBuilder()">+ Build Report</button></div></div>';
+    var h=_reportsTabsHtml('reports');
+    h+='<div class="sec-hd"><div><h2 class="sec-title">Reports & Export</h2><p class="sec-desc">Build any report you want, or grab a quick one below</p></div><div class="sec-actions"><button class="me-btn me-btn--pri" onclick="CampistryMe.openReportBuilder()">+ Build Report</button></div></div>';
 
     // ── Custom / saved reports ──────────────────────────────────────────────
     h+='<div class="fsec" style="margin:4px 0 8px">My Reports</div>';
@@ -9462,143 +9478,6 @@ function exportFinancialReport(){
 }
 
 // ═══════════════════════════════════════════════════════════════
-// SETTINGS
-// ═══════════════════════════════════════════════════════════════
-function renderSettings(){
-    var c=document.getElementById('page-settings');
-    var s=JSON.parse(localStorage.getItem('campGlobalSettings_v1')||'{}');
-    var campName=s.camp_name||s.campName||'';
-    var h='<div class="sec-hd"><div><h2 class="sec-title">Camp Settings</h2></div></div>';
-    h+='<div class="me-card" style="padding:18px;max-width:600px">';
-    h+='<div class="me-field"><label style="font-weight:600;font-size:.8rem">Camp Name</label><input type="text" id="settCampName" class="me-input" value="'+esc(campName)+'" placeholder="Your Camp Name"></div>';
-    h+='<div style="margin-top:14px"><button class="me-btn me-btn--pri" onclick="CampistryMe.saveSettings()">Save Settings</button></div>';
-    h+='</div>';
-
-    // Language & locale settings
-    var cs=getCampSettings();
-    var locale=getCampLocale();
-    h+='<div class="me-card" style="padding:18px;max-width:600px;margin-top:18px"><h3 style="font-size:.9rem;font-weight:700;margin-bottom:4px">🌍 Language & Regional</h3><p style="font-size:.75rem;color:var(--s400);margin-bottom:12px">Configure language, date formats, and alternate name display for your camp.</p>';
-    h+='<div class="me-field"><label style="font-weight:600;font-size:.8rem">Display Language / Locale</label><select id="settLocale" class="me-input"><option value="en-US"'+(locale==='en-US'?' selected':'')+'>English (US)</option><option value="en-GB"'+(locale==='en-GB'?' selected':'')+'>English (UK)</option><option value="he-IL"'+(locale==='he-IL'?' selected':'')+'>עברית (Hebrew)</option><option value="es-ES"'+(locale==='es-ES'?' selected':'')+'>Español (Spanish)</option><option value="fr-FR"'+(locale==='fr-FR'?' selected':'')+'>Français (French)</option><option value="ru-RU"'+(locale==='ru-RU'?' selected':'')+'>Русский (Russian)</option><option value="ar-SA"'+(locale==='ar-SA'?' selected':'')+'>العربية (Arabic)</option><option value="zh-CN"'+(locale==='zh-CN'?' selected':'')+'>中文 (Chinese)</option><option value="pt-BR"'+(locale==='pt-BR'?' selected':'')+'>Português (Portuguese)</option><option value="yi"'+(locale==='yi'?' selected':'')+'>ייִדיש (Yiddish)</option></select></div>';
-    h+='<div style="display:grid;grid-template-columns:1fr 1fr;gap:10px">';
-    h+='<div class="me-field"><label style="font-weight:600;font-size:.8rem"><input type="checkbox" id="settHebrewDates" style="accent-color:var(--me);margin-right:6px"'+(cs.showHebrewDates?' checked':'')+'>Show Hebrew dates</label><p style="font-size:.65rem;color:var(--s400);margin-top:2px">Display Hebrew calendar date alongside standard dates</p></div>';
-    h+='<div class="me-field"><label style="font-weight:600;font-size:.8rem"><input type="checkbox" id="settAltNames" style="accent-color:var(--me);margin-right:6px"'+(cs.showAltNames!==false?' checked':'')+'>Show alternate names</label><p style="font-size:.65rem;color:var(--s400);margin-top:2px">Display Hebrew/alternate names in roster and cards</p></div>';
-    h+='</div>';
-    h+='<div class="me-field"><label style="font-weight:600;font-size:.8rem"><input type="checkbox" id="settRTL" style="accent-color:var(--me);margin-right:6px"'+(cs.rtl?' checked':'')+'>Right-to-left layout (RTL)</label><p style="font-size:.65rem;color:var(--s400);margin-top:2px">For Hebrew, Arabic, Yiddish — flips the entire interface direction</p></div>';
-    h+='<div style="margin-top:14px"><button class="me-btn me-btn--pri" onclick="CampistryMe.saveLocaleSettings()">Save Language Settings</button></div>';
-    h+='</div>';
-
-    // Stripe settings
-    var stripeKey=(s.campistryMe&&s.campistryMe.stripePublishableKey)||'';
-    h+='<div class="me-card" style="padding:18px;max-width:600px;margin-top:18px"><h3 style="font-size:.9rem;font-weight:700;margin-bottom:4px">💳 Payment Processing (Stripe)</h3><p style="font-size:.75rem;color:var(--s400);margin-bottom:12px">Connect your Stripe account to accept credit card payments, save cards on file, and auto-charge installments.</p>';
-    h+='<div class="me-field"><label style="font-weight:600;font-size:.8rem">Stripe Publishable Key</label><input type="text" id="settStripeKey" class="me-input" value="'+esc(stripeKey)+'" placeholder="pk_live_... or pk_test_..."></div>';
-    h+='<p style="font-size:.7rem;color:var(--s400);margin-top:4px">Your <strong>secret key</strong> (sk_...) must be set as a Supabase Edge Function secret — never put it in the browser. <a href="https://dashboard.stripe.com/apikeys" target="_blank" style="color:var(--me)">Get your keys from Stripe →</a></p>';
-    h+='<div style="margin-top:14px"><button class="me-btn me-btn--pri" onclick="CampistryMe.saveStripeKey()">Save Stripe Key</button></div>';
-    h+='</div>';
-
-    // Data management
-    h+='<div class="me-card" style="padding:18px;max-width:600px;margin-top:18px"><h3 style="font-size:.9rem;font-weight:700;margin-bottom:12px">Data Management</h3>';
-    h+='<div style="display:flex;gap:8px;flex-wrap:wrap">';
-    h+='<button class="me-btn me-btn--sec me-btn--sm" onclick="CampistryMe.exportAllData()">Export All Data (JSON)</button>';
-    h+='<button class="me-btn me-btn--sec me-btn--sm" onclick="CampistryMe.importAllData()">Import Data (JSON)</button>';
-    h+='<button class="me-btn me-btn--ghost me-btn--sm" style="color:var(--err)" onclick="CampistryMe.clearAllData()">Clear All Data</button>';
-    h+='</div></div>';
-    c.innerHTML=h;
-}
-function saveSettings(){
-    var s=JSON.parse(localStorage.getItem('campGlobalSettings_v1')||'{}');
-    s.camp_name=document.getElementById('settCampName').value.trim();
-    s.campName=s.camp_name;
-    localStorage.setItem('campGlobalSettings_v1',JSON.stringify(s));
-    // Fan out to cloud — localStorage alone never reached Supabase.
-    if(typeof window!=='undefined'&&typeof window.saveGlobalSettings==='function'){
-        window.saveGlobalSettings('camp_name',s.camp_name);
-        window.saveGlobalSettings('campName',s.camp_name);
-    }
-    save();toast('Settings saved');
-}
-function saveLocaleSettings(){
-    var s=JSON.parse(localStorage.getItem('campGlobalSettings_v1')||'{}');
-    if(!s.campistryMe)s.campistryMe={};
-    s.campistryMe.locale=document.getElementById('settLocale').value||'en-US';
-    s.campistryMe.campSettings={
-        showHebrewDates:document.getElementById('settHebrewDates').checked,
-        showAltNames:document.getElementById('settAltNames').checked,
-        rtl:document.getElementById('settRTL').checked
-    };
-    localStorage.setItem('campGlobalSettings_v1',JSON.stringify(s));
-    if(typeof window!=='undefined'&&typeof window.saveGlobalSettings==='function')
-        window.saveGlobalSettings('campistryMe',s.campistryMe);
-    // Apply RTL immediately
-    if(s.campistryMe.campSettings.rtl) document.documentElement.setAttribute('dir','rtl');
-    else document.documentElement.removeAttribute('dir');
-    save();render(curPage);toast('Language settings saved');
-}
-function saveStripeKey(){
-    var s=JSON.parse(localStorage.getItem('campGlobalSettings_v1')||'{}');
-    if(!s.campistryMe)s.campistryMe={};
-    s.campistryMe.stripePublishableKey=(document.getElementById('settStripeKey').value||'').trim();
-    localStorage.setItem('campGlobalSettings_v1',JSON.stringify(s));
-    if(typeof window!=='undefined'&&typeof window.saveGlobalSettings==='function')
-        window.saveGlobalSettings('campistryMe',s.campistryMe);
-    save();toast('Stripe key saved');
-}
-function exportAllData(){
-    var s=localStorage.getItem('campGlobalSettings_v1')||'{}';
-    var blob=new Blob([s],{type:'application/json'});
-    var a=document.createElement('a');a.href=URL.createObjectURL(blob);a.download='campistry_backup_'+new Date().toISOString().split('T')[0]+'.json';a.click();toast('Backup exported');
-}
-function importAllData(){
-    var inp=document.createElement('input');inp.type='file';inp.accept='.json';
-    inp.onchange=function(){
-        if(!inp.files[0])return;
-        var r=new FileReader();r.onload=function(e){
-            try{
-                var data=JSON.parse(e.target.result);
-                if(!confirm('This will replace ALL your data. Are you sure?'))return;
-                localStorage.setItem('campGlobalSettings_v1',JSON.stringify(data));
-                // Fan out every imported top-level key to cloud — without
-                // this, importing on Device A leaves Device B reading the
-                // pre-import cloud state on next hydration.
-                if(typeof window!=='undefined'&&typeof window.saveGlobalSettings==='function'){
-                    Object.keys(data||{}).forEach(function(k){
-                        if(k==='updated_at')return;
-                        try{window.saveGlobalSettings(k,data[k]);}catch(e){console.warn('Import sync failed for',k,e);}
-                    });
-                }
-                loadData();render(curPage);toast('Data imported');
-            }catch(err){alert('Invalid file: '+err.message)}
-        };r.readAsText(inp.files[0]);
-    };inp.click();
-}
-function clearAllData(){
-    if(!confirm('This will DELETE ALL camp data. This cannot be undone. Are you absolutely sure?'))return;
-    if(!confirm('FINAL WARNING: All campers, families, enrollment, financial data will be erased.'))return;
-    // ★ #6: the old version only removed the LOCAL blob, so the cloud copy survived and
-    //   re-hydrated everything on the next load — the "clear" silently undid itself.
-    //   Mirror the importRows wipe AND fan it to the cloud so the reset actually sticks.
-    //   Scope = the camp data the warning promises (campers + structure + families +
-    //   enrollment + finance); the scheduler's own config (facilities/rules in app1) is
-    //   preserved, matching the label which enumerates only camper/family/financial data.
-    try{
-        var g=JSON.parse(localStorage.getItem('campGlobalSettings_v1')||'{}');
-        g.campStructure={};
-        if(!g.app1)g.app1={};
-        g.app1.camperRoster={};
-        g.app1.divisions={};
-        g.campistryMe={};   // families, payments, enrollments, finance, sessions, bunkAssignments, formConfig…
-        localStorage.setItem('campGlobalSettings_v1',JSON.stringify(g));
-        if(typeof window.saveGlobalSettings==='function'){
-            window.saveGlobalSettings('campStructure',g.campStructure);
-            window.saveGlobalSettings('app1',g.app1);
-            window.saveGlobalSettings('campistryMe',g.campistryMe);
-        }
-    }catch(e){console.warn('[Me] clearAllData:',e)}
-    try{var go=JSON.parse(localStorage.getItem('campistry_go_data')||'{}');go.addresses={};localStorage.setItem('campistry_go_data',JSON.stringify(go))}catch(e){}
-    if(typeof window.forceSyncToCloud==='function'){try{window.forceSyncToCloud()}catch(e){}}
-    loadData();render(curPage);toast('All data cleared');
-}
-
-// ═══════════════════════════════════════════════════════════════
 // BROADCAST EMAIL/SMS DELIVERY
 // ═══════════════════════════════════════════════════════════════
 async function sendBroadcastNow(broadcast){
@@ -9796,27 +9675,6 @@ function addScholarship(camperName){
 // ═══════════════════════════════════════════════════════════════
 // DUPLICATE DETECTION
 // ═══════════════════════════════════════════════════════════════
-function detectDuplicates(){
-    var names=Object.keys(roster);var dupes=[];
-    for(var i=0;i<names.length;i++)for(var j=i+1;j<names.length;j++){var sc=dupeScore(names[i],names[j],roster[names[i]],roster[names[j]]);if(sc>=3)dupes.push({a:names[i],b:names[j],score:sc})}
-    dupes.sort(function(a,b){return b.score-a.score});
-    if(!dupes.length){toast('No duplicates found');return}
-    var h='<p style="font-size:.85rem;color:var(--s600);margin-bottom:14px">'+dupes.length+' potential duplicate'+(dupes.length!==1?'s':'')+'</p>';
-    dupes.forEach(function(d){var a=roster[d.a],b=roster[d.b];var conf=d.score>=5?'High':d.score>=4?'Medium':'Low';var cc=d.score>=5?'var(--ok)':d.score>=4?'var(--warn)':'var(--s400)';
-    h+='<div style="display:flex;align-items:center;gap:12px;padding:10px 14px;background:var(--s50);border-radius:var(--r);margin-bottom:6px;border:1px solid var(--s200)"><div style="flex:1"><div style="font-weight:700;font-size:.85rem">'+esc(d.a)+' ↔ '+esc(d.b)+'</div><div style="font-size:.7rem;color:var(--s500)">'+(a.dob&&b.dob&&a.dob===b.dob?'Same DOB · ':'')+(a.parent1Name&&b.parent1Name&&a.parent1Name===b.parent1Name?'Same parent · ':'')+(a.street&&b.street&&a.street===b.street?'Same address':'')+'</div></div><span style="font-size:.65rem;font-weight:600;color:'+cc+'">'+conf+'</span><button class="me-btn me-btn--pri me-btn--sm" onclick="CampistryMe.mergeCampers(\''+je(d.a)+'\',\''+je(d.b)+'\')">Merge</button></div>'});
-    showModal('Duplicates — '+dupes.length+' found',h);
-}
-function dupeScore(nA,nB,a,b){var s=0;var pA=nA.toLowerCase().split(/\s+/),pB=nB.toLowerCase().split(/\s+/);if(pA[pA.length-1]===pB[pB.length-1])s+=2;if(pA[0]===pB[0])s+=1;if(a.dob&&b.dob&&a.dob===b.dob)s+=2;if(a.parent1Name&&b.parent1Name&&a.parent1Name.toLowerCase()===b.parent1Name.toLowerCase())s+=2;if(a.parent1Email&&b.parent1Email&&a.parent1Email.toLowerCase()===b.parent1Email.toLowerCase())s+=2;if(a.street&&b.street&&a.street.toLowerCase()===b.street.toLowerCase())s+=1;return s}
-function mergeCampers(nA,nB){
-    if(!confirm('Merge "'+nB+'" into "'+nA+'"? "'+nB+'" will be deleted.'))return;
-    var a=roster[nA],b=roster[nB];Object.keys(b).forEach(function(k){if(!a[k]&&b[k])a[k]=b[k]});
-    if(b.notes)a.notes=(a.notes||[]).concat(b.notes);if(b.documents)a.documents=(a.documents||[]).concat(b.documents);if(b.scholarships)a.scholarships=(a.scholarships||[]).concat(b.scholarships);
-    Object.values(families).forEach(function(f){var i=(f.camperIds||[]).indexOf(nB);if(i>=0){f.camperIds.splice(i,1);if(f.camperIds.indexOf(nA)<0)f.camperIds.push(nA)}});
-    Object.values(enrollments).forEach(function(e){if(e.camperName===nB)e.camperName=nA});
-    Object.entries(bunkAsgn).forEach(function([bk,kids]){var i=kids.indexOf(nB);if(i>=0){kids.splice(i,1);if(kids.indexOf(nA)<0)kids.push(nA)}});
-    delete roster[nB];save();closeModal('dynModal');render(curPage);toast('Merged into "'+nA+'"');
-}
-
 // ── CSV ──────────────────────────────────────────────────────────
 var CSV_HEADERS=['First Name','Last Name','Date of Birth','Gender','School Name','School Grade','Teacher','Division','Grade','Bunk','Street Address','City','State','ZIP','Parent 1 Name','Parent 1 Phone','Parent 1 Email','Emergency Name','Emergency Phone','Emergency Relation','Allergies','Medications','Dietary Restrictions'];
 
@@ -10596,7 +10454,8 @@ function renderPrintSheets(){
     if(!c)return;
     if(psEditingId&&psGet(psEditingId)){c.innerHTML=psEditorHtml(psGet(psEditingId));return}
     psEditingId=null;
-    var h='<div class="sec-hd"><div><h2 class="sec-title">Print Sheets</h2><p class="sec-desc">Design custom printable sheets — pick what goes in each column, then print one per bunk, grade, or division.</p></div><div class="sec-actions"><button class="me-btn me-btn--pri" onclick="CampistryMe.psNew()">+ New Sheet</button></div></div>';
+    var h=_reportsTabsHtml('printsheets');
+    h+='<div class="sec-hd"><div><h2 class="sec-title">Print Sheets</h2><p class="sec-desc">Design custom printable sheets — pick what goes in each column, then print one per bunk, grade, or division.</p></div><div class="sec-actions"><button class="me-btn me-btn--pri" onclick="CampistryMe.psNew()">+ New Sheet</button></div></div>';
     if(!printSheets.length){
         h+='<div class="me-empty"><h3>No print sheets yet</h3><p>Build a sheet of columns — camper name, bunk, parent address, allergies, a blank sign-in column — and print it grouped however you need.</p><button class="me-btn me-btn--pri" style="margin-top:10px" onclick="CampistryMe.psNew()">+ Create your first sheet</button></div>';
         c.innerHTML=h;return;
@@ -10760,8 +10619,6 @@ window.CampistryMe={
     openReportBuilder:openReportBuilder,rbSourceChange:rbSourceChange,rbAddFilter:rbAddFilter,rbPreview:rbPreview,saveCurrentReport:saveCurrentReport,runSavedReport:runSavedReport,exportSavedReport:exportSavedReport,printSavedReport:printSavedReport,deleteSavedReport:deleteSavedReport,
     exportEnrollmentReport:exportEnrollmentReport,exportDivisionReport:exportDivisionReport,
     exportMedicalReport:exportMedicalReport,exportFinancialReport:exportFinancialReport,
-    // Settings
-    saveSettings:saveSettings,saveStripeKey:saveStripeKey,saveLocaleSettings:saveLocaleSettings,exportAllData:exportAllData,importAllData:importAllData,clearAllData:clearAllData,
     // Broadcast delivery
     sendBroadcastNow:sendBroadcastNow,sendPaymentReminders:sendPaymentReminders,sendFormReminders:sendFormReminders,
     // Camper notes & timeline
@@ -10774,8 +10631,6 @@ window.CampistryMe={
     uploadDocument:uploadDocument,_removeDoc:_removeDoc,
     // Scholarships
     addScholarship:addScholarship,
-    // Duplicate detection
-    detectDuplicates:detectDuplicates,mergeCampers:mergeCampers,
     // Print Sheets
     psNew:psNew,psEdit:psEdit,psBack:psBack,psDelete:psDelete,psDuplicate:psDuplicate,
     psPrint:psPrint,psRename:psRename,psSetProp:psSetProp,psToggleHideEmpty:psToggleHideEmpty,
