@@ -43,7 +43,7 @@ var _prWeek='';          // the week currently open on the Timesheets tab
 var printSheets=[]; // custom printable-sheet templates (columns + grouping)
 var savedReports=[]; // custom/saved reports: { id, name, source, fields, filters, groupBy, format, mode, snapshotRows, ... }
 var curPage='campers', editingCamper=null, editingDiv=null, editingFam=null;
-var campersView='list'; // 'list' | 'family' | 'pipeline' — People page sub-tabs: Roster / Families / Registration & Hiring
+var _famHighlight=null; // camper name to scroll-to-and-highlight next time Families renders (set by viewFamilyFromCamper)
 var pplPipeType='all';  // Pipeline type filter: all | camper | staff
 var regFilter='all';    // Registration section filter: all | applied | waitlisted | accepted | enrolled | withdrawn | declined
 var staffApplications={};   // Staff hiring: applicant id → application record
@@ -612,7 +612,7 @@ function ff(label,id,val,type,opts){
 
 // ═══ RENDERERS ═══════════════════════════════════════════════════
 function render(p){
-    var m={campers:renderCampers,structure:renderStructure,bunkbuilder:renderBB,leads:renderLeads,enrollment:renderEnrollment,staffing:renderStaffing,billing:renderBilling,payroll:renderPayroll,analytics:renderAnalytics,reports:renderReports,printsheets:renderPrintSheets,settings:renderSettings};
+    var m={campers:renderCampers,structure:renderStructure,bunkbuilder:renderBB,families:renderFamiliesPage,pipeline:renderPipelinePage,leads:renderLeads,enrollment:renderEnrollment,staffing:renderStaffing,billing:renderBilling,payroll:renderPayroll,analytics:renderAnalytics,reports:renderReports,printsheets:renderPrintSheets,settings:renderSettings};
     if(m[p])m[p]();else renderSoon(p);
 }
 
@@ -782,7 +782,7 @@ function acceptFamilySuggestion(idx){
         camperIds:s.campers.slice(),
         balance:0,totalPaid:0,notes:'Auto-detected family'
     };
-    save();renderCampers();toast(s.lastName+' Family created with '+s.campers.length+' campers');
+    save();renderFamiliesPage();toast(s.lastName+' Family created with '+s.campers.length+' campers');
 }
 
 function dismissFamilySuggestion(idx){
@@ -792,20 +792,20 @@ function dismissFamilySuggestion(idx){
     var dismissed=JSON.parse(localStorage.getItem('campistry_dismissed_fam_suggestions')||'[]');
     dismissed.push(s.campers.sort().join('|'));
     localStorage.setItem('campistry_dismissed_fam_suggestions',JSON.stringify(dismissed));
-    renderCampers();toast('Suggestion dismissed');
+    renderFamiliesPage();toast('Suggestion dismissed');
 }
 function dismissMergeFamilies(keyA,keyB){
     var dismissed=JSON.parse(localStorage.getItem('campistry_dismissed_fam_suggestions')||'[]');
     dismissed.push([keyA,keyB].sort().join('|'));
     localStorage.setItem('campistry_dismissed_fam_suggestions',JSON.stringify(dismissed));
-    renderCampers();toast('Suggestion dismissed');
+    renderFamiliesPage();toast('Suggestion dismissed');
 }
 
 function acceptAddToFamily(famKey,camperName){
     if(!families[famKey]) return;
     if(!families[famKey].camperIds) families[famKey].camperIds=[];
     if(families[famKey].camperIds.indexOf(camperName)<0) families[famKey].camperIds.push(camperName);
-    save();renderCampers();toast(camperName+' added to '+families[famKey].name);
+    save();renderFamiliesPage();toast(camperName+' added to '+families[famKey].name);
 }
 
 // Two family records that turn out to be the same household (same parent
@@ -819,7 +819,7 @@ function mergeFamilies(keyA,keyB){
     a.balance=(a.balance||0)+(b.balance||0);
     a.totalPaid=(a.totalPaid||0)+(b.totalPaid||0);
     delete families[keyB];
-    save();renderCampers();toast(b.name+' merged into '+a.name);
+    save();renderFamiliesPage();toast(b.name+' merged into '+a.name);
 }
 
 // Body-only family bundles view — rendered INSIDE the Campers page (see
@@ -910,13 +910,37 @@ function _familyForCamper(camperName){
     return found;
 }
 function viewFamilyFromCamper(camperName){
-    campersView='family';
-    document.getElementById('page-campers').innerHTML=_campersTabsHtml()+_familyBundlesHtml(camperName);
-    var fam=_familyForCamper(camperName);
-    if(fam){
-        var el=document.getElementById('famcard-'+fam.id);
-        if(el)el.scrollIntoView({behavior:'smooth',block:'center'});
+    _famHighlight=camperName;
+    nav('families');
+}
+// Families now has its own sidebar entry (Camp → Families) rather than
+// living as a sub-tab of Roster — same me.campers capability gate a
+// restricted role already has (or doesn't) for the roster itself.
+function renderFamiliesPage(){
+    var c=document.getElementById('page-families');
+    if(!c)return;
+    if(!_secCan('me.campers')){
+        c.innerHTML='<div class="me-empty"><h3>No access to Families</h3><p>Your account isn\'t set up to open this section.</p></div>';
+        return;
     }
+    var highlight=_famHighlight; _famHighlight=null;
+    c.innerHTML=_familyBundlesHtml(highlight);
+    if(highlight){
+        var fam=_familyForCamper(highlight);
+        if(fam){
+            var el=document.getElementById('famcard-'+fam.id);
+            if(el)el.scrollIntoView({behavior:'smooth',block:'center'});
+        }
+    }
+}
+// Registration & Hiring now has its own sidebar entry under Operations
+// rather than living as a sub-tab of Roster — _renderPipelinePane() already
+// carries its own me.enrollment/me.staffing gating internally (built when
+// this was still a merged pane), unchanged by the move.
+function renderPipelinePage(){
+    var c=document.getElementById('page-pipeline');
+    if(!c)return;
+    c.innerHTML=_renderPipelinePane();
 }
 
 // Family create/edit
@@ -971,7 +995,7 @@ function deleteFamily(id){
     var nm=families[id].name||'this family';
     if(!confirm('Delete "'+nm+'"? Its campers will remain in the roster but be unassigned from this family. This cannot be undone.'))return;
     delete families[id];
-    save();closeModal('familyModal');renderCampers();toast('Family deleted');
+    save();closeModal('familyModal');renderFamiliesPage();toast('Family deleted');
 }
 
 // Pull a single camper out of a family (the camper stays in the roster,
@@ -980,7 +1004,7 @@ function removeCamperFromFamily(familyId,camperName){
     var f=families[familyId]; if(!f)return;
     var others=(f.camperIds||[]).filter(function(c){return c!==camperName});
     f.camperIds=others;
-    save();renderCampers();
+    save();renderFamiliesPage();
     // Refresh the parent-portal Link snapshots so the removed camper actually
     // drops off this family's parent link: re-sync a remaining family member
     // (rebuilds the family's snapshot without them) and the removed camper
@@ -992,14 +1016,6 @@ function removeCamperFromFamily(familyId,camperName){
 }
 
 // ── CAMPERS / PEOPLE ────────────────────────────────────────────────
-function switchCampersView(v){campersView=v;renderCampers()}
-function _campersTabsHtml(){
-    var _cvTabs=[{k:'list',l:'Roster'},{k:'pipeline',l:'Registration & Hiring'},{k:'family',l:'Families'}];
-    return '<div style="display:flex;gap:0;border-bottom:1px solid var(--s200);margin-bottom:14px">'+_cvTabs.map(function(t){
-        return '<button class="me-btn me-btn--ghost" style="padding:8px 16px;font-size:.8rem;font-weight:600;border-bottom:2px solid '+(campersView===t.k?'var(--me)':'transparent')+';color:'+(campersView===t.k?'var(--me)':'var(--s400)')+';border-radius:0" onclick="CampistryMe.switchCampersView(\''+t.k+'\')">'+t.l+'</button>';
-    }).join('')+'</div>';
-}
-
 // One tab holds everyone in camp — the CampMinder-style "People" area the
 // old Campers / Registration / Staffing tabs used to split three ways.
 // Roster = accepted into camp (enrolled campers + hired staff). Pipeline =
@@ -1009,7 +1025,10 @@ function _campersTabsHtml(){
 // Payroll, Leagues, Lite, Link, CSV import/export, the Supabase camper-limit
 // trigger) already depend on; this page reads all of them and presents one
 // merged view instead of forcing a separate visit to each.
-function _refreshPplIfActive(){ if(curPage==='campers') renderCampers(); }
+function _refreshPplIfActive(){
+    if(curPage==='campers')renderCampers();
+    else if(curPage==='pipeline')renderPipelinePage();
+}
 // Registration and Staffing used to be their own gated pages — a role could
 // have me.campers without either, or me.enrollment without me.staffing (the
 // Office/Registrar preset is exactly that). Merging them into one page means
@@ -1101,7 +1120,7 @@ function _pplOpenStaffByKey(key){
     var hit=buildStaffRoster().filter(function(r){return r._key===key})[0];
     if(hit)_pplOpenStaff(hit);
 }
-function setPplPipeType(t){pplPipeType=t;renderCampers()}
+function setPplPipeType(t){pplPipeType=t;renderPipelinePage()}
 // Everyone still being decided on: applications that haven't become a camper
 // yet, applicants who haven't been hired yet. The moment either happens they
 // move to buildStaffRoster()/roster above and drop off here.
@@ -1247,16 +1266,6 @@ function _renderPipelinePane(){
 
 function renderCampers(filter){
     var c=document.getElementById('page-campers');
-    var tabs=_campersTabsHtml();
-
-    if(campersView==='family'){
-        c.innerHTML=tabs+_familyBundlesHtml();
-        return;
-    }
-    if(campersView==='pipeline'){
-        c.innerHTML=tabs+_renderPipelinePane();
-        return;
-    }
 
     // Roster — everyone accepted into camp: enrolled campers + hired staff.
     // Staff data (bio, salary, hiring status) was only ever reachable through
@@ -1274,7 +1283,7 @@ function renderCampers(filter){
     camperEntries.sort(function(a,b){return a[0].localeCompare(b[0])});
     var total=camperEntries.length+staffRows.length;
 
-    var h=tabs+'<div class="sec-hd"><div><h2 class="sec-title">People</h2><p class="sec-desc">'+camperEntries.length+' camper'+(camperEntries.length!==1?'s':'')+(canStaff?' · '+staffRows.length+' staff':'')+'</p></div><div class="sec-actions"><button class="me-btn me-btn--ghost me-btn--sm" onclick="CampistryMe.detectDuplicates()" title="Find duplicate campers">🔍 Duplicates</button><button class="me-btn me-btn--ghost me-btn--sm" onclick="CampistryMe.manageCustomFields()" title="Define custom fields">⚙ Custom Fields</button><button class="me-btn me-btn--sec me-btn--sm" onclick="CampistryMe.downloadTemplate()">Template</button><button class="me-btn me-btn--sec me-btn--sm" onclick="CampistryMe.openCsv()">Import</button><button class="me-btn me-btn--sec me-btn--sm" onclick="CampistryMe.exportCsv()">Export</button><button class="me-btn me-btn--pri" onclick="CampistryMe.addCamper()">+ Add Camper</button></div></div>';
+    var h='<div class="sec-hd"><div><h2 class="sec-title">Roster</h2><p class="sec-desc">'+camperEntries.length+' camper'+(camperEntries.length!==1?'s':'')+(canStaff?' · '+staffRows.length+' staff':'')+'</p></div><div class="sec-actions"><button class="me-btn me-btn--ghost me-btn--sm" onclick="CampistryMe.detectDuplicates()" title="Find duplicate campers">🔍 Duplicates</button><button class="me-btn me-btn--ghost me-btn--sm" onclick="CampistryMe.manageCustomFields()" title="Define custom fields">⚙ Custom Fields</button><button class="me-btn me-btn--sec me-btn--sm" onclick="CampistryMe.downloadTemplate()">Template</button><button class="me-btn me-btn--sec me-btn--sm" onclick="CampistryMe.openCsv()">Import</button><button class="me-btn me-btn--sec me-btn--sm" onclick="CampistryMe.exportCsv()">Export</button><button class="me-btn me-btn--pri" onclick="CampistryMe.addCamper()">+ Add Camper</button></div></div>';
 
     var unplaced=canStaff?hiredStaff().filter(function(a){return !String(a.email||'').trim()||!bunksForStaffEmail(a.email).length;}):[];
     if(unplaced.length){
@@ -10675,7 +10684,7 @@ window.CampistryMe={
     nav:nav,closeModal:closeModal,
     viewCamper:viewCamper,editCamper:editCamper,addCamper:addCamper,deleteCamper:deleteCamper,ceToggleSummer:ceToggleSummer,
     addFamily:function(){openFamilyForm(null)},editFamily:function(id){openFamilyForm(id)},deleteFamily:deleteFamily,removeCamperFromFamily:removeCamperFromFamily,
-    switchCampersView:switchCampersView,viewFamilyFromCamper:viewFamilyFromCamper,
+    viewFamilyFromCamper:viewFamilyFromCamper,
     setPplPipeType:setPplPipeType,_pplOpenStaffByKey:_pplOpenStaffByKey,
     acceptFamilySuggestion:acceptFamilySuggestion,dismissFamilySuggestion:dismissFamilySuggestion,acceptAddToFamily:acceptAddToFamily,
     mergeFamilies:mergeFamilies,dismissMergeFamilies:dismissMergeFamilies,
