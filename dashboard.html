@@ -303,6 +303,100 @@
             </div>
         </section>
 
+        <!-- ===== SESSIONS & PRICING (Owners only) ===== -->
+        <section id="sessions-pricing-section" class="dashboard-section" style="display: none;">
+            <h2 class="section-title-bar">
+                <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="2" y="7" width="20" height="14" rx="2"/><path d="M16 21V5a2 2 0 0 0-2-2h-4a2 2 0 0 0-2 2v16"/></svg>
+                Sessions &amp; Pricing
+            </h2>
+            <div class="dashboard-card" style="max-width:760px;">
+                <div class="card-header">
+                    <h2>Sessions</h2>
+                    <button class="btn-edit" type="button" onclick="addSessionForm()">+ Add Session</button>
+                </div>
+                <p class="card-desc">What parents pick when they register — dates, tuition, capacity. Reuse the Camp Dates halves above instead of retyping them for each session.</p>
+                <div id="sessionsList" style="display:flex; flex-direction:column; gap:10px; margin-top:10px;"></div>
+
+                <div id="sessionEditForm" style="display:none; margin-top:16px; padding-top:16px; border-top:1px solid var(--slate-200);">
+                    <div class="form-group">
+                        <label for="sesName" style="font-size:0.82rem; font-weight:600; color:var(--slate-600); margin-bottom:4px; display:block;">Session Name</label>
+                        <input type="text" id="sesName" placeholder="e.g., Summer 2026 — Full Season" style="width:100%; padding:8px 10px; border-radius:8px; border:1px solid var(--slate-200); font-size:0.88rem;">
+                    </div>
+                    <div class="form-group">
+                        <label for="sesDatePreset" style="font-size:0.82rem; font-weight:600; color:var(--slate-600); margin-bottom:4px; display:block;">Quick-fill from Camp Dates</label>
+                        <select id="sesDatePreset" onchange="applySessionDatePreset()" style="width:100%; padding:8px 10px; border-radius:8px; border:1px solid var(--slate-200); font-size:0.88rem;">
+                            <option value="">Custom (set dates manually below)</option>
+                            <option value="full">Full Summer</option>
+                            <option value="half1">1st Half</option>
+                            <option value="half2">2nd Half</option>
+                        </select>
+                        <p id="sesDatePresetHint" style="font-size:0.72rem; color:var(--slate-400); margin-top:4px;"></p>
+                    </div>
+                    <div style="display:grid; grid-template-columns:1fr 1fr; gap:14px;">
+                        <div class="form-group">
+                            <label for="sesStart" style="font-size:0.82rem; font-weight:600; color:var(--slate-600); margin-bottom:4px; display:block;">Start Date</label>
+                            <input type="date" id="sesStart" style="width:100%; padding:8px 10px; border-radius:8px; border:1px solid var(--slate-200); font-size:0.88rem;">
+                        </div>
+                        <div class="form-group">
+                            <label for="sesEnd" style="font-size:0.82rem; font-weight:600; color:var(--slate-600); margin-bottom:4px; display:block;">End Date</label>
+                            <input type="date" id="sesEnd" style="width:100%; padding:8px 10px; border-radius:8px; border:1px solid var(--slate-200); font-size:0.88rem;">
+                        </div>
+                    </div>
+                    <div class="form-group">
+                        <label for="sesDates" style="font-size:0.82rem; font-weight:600; color:var(--slate-600); margin-bottom:4px; display:block;">Date Range Label (optional)</label>
+                        <input type="text" id="sesDates" placeholder="e.g., June 22 – August 14" style="width:100%; padding:8px 10px; border-radius:8px; border:1px solid var(--slate-200); font-size:0.88rem;">
+                    </div>
+                    <div style="display:grid; grid-template-columns:1fr 1fr; gap:14px;">
+                        <div class="form-group">
+                            <label for="sesCap" style="font-size:0.82rem; font-weight:600; color:var(--slate-600); margin-bottom:4px; display:block;">Capacity</label>
+                            <input type="number" id="sesCap" placeholder="Leave blank for unlimited" min="0" style="width:100%; padding:8px 10px; border-radius:8px; border:1px solid var(--slate-200); font-size:0.88rem;">
+                        </div>
+                        <div class="form-group">
+                            <label for="sesTuition" style="font-size:0.82rem; font-weight:600; color:var(--slate-600); margin-bottom:4px; display:block;">Tuition ($)</label>
+                            <input type="number" id="sesTuition" placeholder="0.00" step="0.01" min="0" style="width:100%; padding:8px 10px; border-radius:8px; border:1px solid var(--slate-200); font-size:0.88rem;">
+                        </div>
+                    </div>
+                    <div style="display:grid; grid-template-columns:1fr 1fr; gap:14px;">
+                        <div class="form-group">
+                            <label for="sesEarly" style="font-size:0.82rem; font-weight:600; color:var(--slate-600); margin-bottom:4px; display:block;">Early Bird Price ($)</label>
+                            <input type="number" id="sesEarly" placeholder="Optional" step="0.01" min="0" style="width:100%; padding:8px 10px; border-radius:8px; border:1px solid var(--slate-200); font-size:0.88rem;">
+                        </div>
+                        <div class="form-group">
+                            <label for="sesEarlyDate" style="font-size:0.82rem; font-weight:600; color:var(--slate-600); margin-bottom:4px; display:block;">Early Bird Deadline</label>
+                            <input type="date" id="sesEarlyDate" style="width:100%; padding:8px 10px; border-radius:8px; border:1px solid var(--slate-200); font-size:0.88rem;">
+                        </div>
+                    </div>
+                    <div class="form-group">
+                        <label for="sesSibDisc" style="font-size:0.82rem; font-weight:600; color:var(--slate-600); margin-bottom:4px; display:block;">Sibling Discount (%)</label>
+                        <input type="number" id="sesSibDisc" placeholder="e.g., 10 for 10% off siblings" min="0" max="100" style="width:100%; padding:8px 10px; border-radius:8px; border:1px solid var(--slate-200); font-size:0.88rem;">
+                    </div>
+                    <div class="form-group">
+                        <label for="sesPayPlan" style="font-size:0.82rem; font-weight:600; color:var(--slate-600); margin-bottom:4px; display:block;">Payment Plan</label>
+                        <select id="sesPayPlan" onchange="document.getElementById('sesDepositWrap').style.display=this.value==='deposit'?'block':'none'" style="width:100%; padding:8px 10px; border-radius:8px; border:1px solid var(--slate-200); font-size:0.88rem;">
+                            <option value="full">Full payment required</option>
+                            <option value="2">2 installments (50/50)</option>
+                            <option value="3">3 installments (34/33/33)</option>
+                            <option value="4">4 installments (25 each)</option>
+                            <option value="deposit">Deposit + balance</option>
+                        </select>
+                    </div>
+                    <div class="form-group" id="sesDepositWrap" style="display:none;">
+                        <label for="sesDeposit" style="font-size:0.82rem; font-weight:600; color:var(--slate-600); margin-bottom:4px; display:block;">Deposit Amount ($)</label>
+                        <input type="number" id="sesDeposit" step="0.01" min="0" style="width:100%; padding:8px 10px; border-radius:8px; border:1px solid var(--slate-200); font-size:0.88rem;">
+                    </div>
+                    <div class="form-group">
+                        <label for="sesNotes" style="font-size:0.82rem; font-weight:600; color:var(--slate-600); margin-bottom:4px; display:block;">Description / Notes</label>
+                        <textarea id="sesNotes" placeholder="Optional session description for parents" style="width:100%; padding:8px 10px; border-radius:8px; border:1px solid var(--slate-200); font-size:0.88rem; min-height:60px; resize:vertical;"></textarea>
+                    </div>
+                    <div style="display:flex; gap:10px; align-items:center;">
+                        <button type="button" class="btn-secondary" onclick="cancelSessionForm()">Cancel</button>
+                        <button type="button" class="btn-primary" onclick="saveSessionForm()">Save Session</button>
+                        <span id="sessionFormStatus" style="font-size:0.82rem; color:var(--slate-400);"></span>
+                    </div>
+                </div>
+            </div>
+        </section>
+
         <!-- ===== CAMP SETTINGS (Owners only) ===== -->
         <section id="camp-settings-section" class="dashboard-section" style="display: none;">
             <h2 class="section-title-bar">

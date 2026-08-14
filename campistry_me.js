@@ -1985,45 +1985,6 @@ function renderStructure(){
         h+='</div>';
     }
 
-    // Sessions & Pricing — camp-wide session definitions (dates, tuition,
-    // capacity) that Registration draws from. Lives here with the rest of
-    // camp setup rather than on the day-to-day Registration page.
-    var eArrForSessions=Object.entries(enrollments);
-    h+='<div class="me-card" style="margin-top:14px"><div class="me-card-head"><h3>Sessions & Pricing</h3><button class="me-btn me-btn--sec me-btn--sm" onclick="CampistryMe.addSession()">+ Add Session</button></div>';
-    if(!sessions.length){
-        h+='<div class="me-empty" style="padding:24px 20px"><p>No sessions yet. Sessions are what parents pick when they register — add one to open registration.</p></div>';
-    }else{
-        h+='<div style="padding:12px 18px;display:flex;flex-wrap:wrap;gap:8px">';
-        sessions.forEach(function(s,i){
-            var sEnrolled=eArrForSessions.filter(function([,e]){return e.session===s.name&&e.status==='enrolled'}).length;
-            var sApplied=eArrForSessions.filter(function([,e]){return e.session===s.name}).length;
-            var cap=s.capacity||'∞';
-            var pct=s.capacity?Math.min(sEnrolled/s.capacity,1):0;
-            var isOpen=s.registrationOpen!==false;
-            h+='<div style="flex:1;min-width:200px;padding:14px;border-radius:var(--r);border:1px solid '+(isOpen?'var(--s200)':'var(--err)')+';background:'+(isOpen?'var(--s50)':'rgba(239,68,68,.03)')+'">';
-            h+='<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px">';
-            h+='<span style="font-size:.9rem;font-weight:700;color:var(--s800)">'+esc(s.name)+'</span>';
-            h+='<div style="display:flex;gap:3px">';
-            h+='<button class="me-btn me-btn--ghost" style="font-size:.65rem;padding:2px 5px" onclick="CampistryMe.editSession('+i+')" title="Edit">Edit</button>';
-            h+='<button class="me-btn me-btn--ghost" style="font-size:.65rem;padding:2px 5px;color:'+(isOpen?'var(--err)':'var(--ok)')+'" onclick="CampistryMe.toggleSessionReg('+i+')" title="'+(isOpen?'Close':'Open')+' registration">'+(isOpen?'Close':'Open')+'</button>';
-            h+='<button class="me-btn me-btn--ghost" style="font-size:.65rem;padding:2px 5px;color:var(--err)" onclick="CampistryMe.deleteSession('+i+')">✕</button>';
-            h+='</div></div>';
-            if(s.dates)h+='<div style="font-size:.75rem;color:var(--s500);margin-bottom:4px">📅 '+esc(s.dates)+'</div>';
-            h+='<div style="font-size:.75rem;color:var(--s500)">'+sApplied+' applied · '+sEnrolled+' / '+cap+' enrolled</div>';
-            if(s.capacity){h+='<div style="height:3px;border-radius:2px;background:var(--s200);margin-top:4px;overflow:hidden"><div style="height:100%;width:'+(pct*100)+'%;background:'+(pct>=0.9?'var(--err)':pct>=0.7?'var(--me)':'var(--ok)')+';border-radius:2px"></div></div>'}
-            if(s.tuition)h+='<div style="font-size:.85rem;font-weight:700;color:var(--me);margin-top:6px">$'+Number(s.tuition).toLocaleString()+'</div>';
-            if(s.earlyBird){
-                var today=new Date().toISOString().split('T')[0];
-                var isActive=!s.earlyBirdDeadline||today<=s.earlyBirdDeadline;
-                h+='<div style="font-size:.72rem;color:'+(isActive?'var(--ok)':'var(--s400)')+';font-weight:600;margin-top:2px">Early bird: $'+Number(s.earlyBird).toLocaleString()+(s.earlyBirdDeadline?' (until '+s.earlyBirdDeadline+')':'')+(isActive?'':' — expired')+'</div>';
-            }
-            h+='<div style="margin-top:6px">'+(!isOpen?'<span style="font-size:.7rem;font-weight:700;color:var(--err)">Registration Closed</span>':'<span style="font-size:.7rem;font-weight:700;color:var(--ok)">Registration Open</span>')+'</div>';
-            h+='</div>';
-        });
-        h+='</div>';
-    }
-    h+='</div>';
-
     c.innerHTML=h;
     // Wire drag-drop on division cards
     var listEl=document.getElementById('meDivList');
@@ -5662,63 +5623,6 @@ function printApplication(id){
     setTimeout(function(){w.print()},300);
 }
 
-function addSession(){openSessionModal(null)}
-function editSession(idx){openSessionModal(idx)}
-
-function openSessionModal(idx){
-    var s=idx!==null?sessions[idx]:{};
-    var h='<div class="fg"><label class="fl">Session Name</label><input type="text" id="sesName" class="fi" value="'+esc(s.name||'')+'" placeholder="e.g., Summer 2026 — Full Season"></div>';
-    h+='<div class="fr">';
-    h+='<div class="fg"><label class="fl">Start Date</label><input type="date" id="sesStart" class="fi" value="'+(s.startDate||'')+'"></div>';
-    h+='<div class="fg"><label class="fl">End Date</label><input type="date" id="sesEnd" class="fi" value="'+(s.endDate||'')+'"></div>';
-    h+='</div>';
-    h+='<div class="fg"><label class="fl">Date Range Label (optional)</label><input type="text" id="sesDates" class="fi" value="'+esc(s.dates||'')+'" placeholder="e.g., June 22 – August 14"></div>';
-    h+='<div class="fr">';
-    h+='<div class="fg"><label class="fl">Capacity</label><input type="number" id="sesCap" class="fi" value="'+(s.capacity||'')+'" placeholder="Leave blank for unlimited" min="0"></div>';
-    h+='<div class="fg"><label class="fl">Tuition ($)</label><input type="number" id="sesTuition" class="fi" value="'+(s.tuition||'')+'" placeholder="0.00" step="0.01" min="0"></div>';
-    h+='</div>';
-    h+='<div class="fr">';
-    h+='<div class="fg"><label class="fl">Early Bird Price ($)</label><input type="number" id="sesEarly" class="fi" value="'+(s.earlyBird||'')+'" placeholder="Optional" step="0.01" min="0"></div>';
-    h+='<div class="fg"><label class="fl">Early Bird Deadline</label><input type="date" id="sesEarlyDate" class="fi" value="'+(s.earlyBirdDeadline||'')+'"></div>';
-    h+='</div>';
-    h+='<div class="fg"><label class="fl">Sibling Discount (%)</label><input type="number" id="sesSibDisc" class="fi" value="'+(s.siblingDiscount||'')+'" placeholder="e.g., 10 for 10% off siblings" min="0" max="100"></div>';
-    h+='<div class="fg"><label class="fl">Payment Plan</label><select id="sesPayPlan" class="fs" onchange="document.getElementById(\'sesDepositWrap\').style.display=this.value===\'deposit\'?\'block\':\'none\'"><option value="full"'+(s.paymentPlan==='full'?' selected':'')+'>Full payment required</option><option value="2"'+(s.paymentPlan==='2'?' selected':'')+'>2 installments (50/50)</option><option value="3"'+(s.paymentPlan==='3'?' selected':'')+'>3 installments (34/33/33)</option><option value="4"'+(s.paymentPlan==='4'?' selected':'')+'>4 installments (25 each)</option><option value="deposit"'+(s.paymentPlan==='deposit'?' selected':'')+'>Deposit + balance</option></select></div>';
-    h+='<div id="sesDepositWrap" style="display:'+(s.paymentPlan==='deposit'?'block':'none')+'"><div class="fg"><label class="fl">Deposit Amount ($)</label><input type="number" id="sesDeposit" class="fi" value="'+(s.depositAmount||'')+'" step="0.01" min="0"></div></div>';
-    h+='<div class="fg"><label class="fl">Description / Notes</label><textarea id="sesNotes" class="fi" style="min-height:50px;resize:vertical" placeholder="Optional session description for parents">'+esc(s.notes||'')+'</textarea></div>';
-
-    showModal(idx!==null?'Edit Session':'Create Session',h,function(){
-        var obj={
-            name:(document.getElementById('sesName').value||'').trim(),
-            startDate:document.getElementById('sesStart').value||'',
-            endDate:document.getElementById('sesEnd').value||'',
-            dates:(document.getElementById('sesDates').value||'').trim(),
-            capacity:parseInt(document.getElementById('sesCap').value)||0,
-            tuition:parseFloat(document.getElementById('sesTuition').value)||0,
-            earlyBird:parseFloat(document.getElementById('sesEarly').value)||0,
-            earlyBirdDeadline:document.getElementById('sesEarlyDate').value||'',
-            siblingDiscount:parseInt(document.getElementById('sesSibDisc').value)||0,
-            paymentPlan:document.getElementById('sesPayPlan').value||'full',
-            depositAmount:parseFloat(document.getElementById('sesDeposit').value)||0,
-            notes:(document.getElementById('sesNotes').value||'').trim(),
-            registrationOpen:idx!==null?(sessions[idx].registrationOpen!==false):true
-        };
-        if(!obj.name){alert('Enter a session name');return}
-        // Auto-generate date range label from dates if not manually set
-        if(!obj.dates&&obj.startDate&&obj.endDate){
-            obj.dates=new Date(obj.startDate+'T12:00:00').toLocaleDateString('en-US',{month:'long',day:'numeric'})+' – '+new Date(obj.endDate+'T12:00:00').toLocaleDateString('en-US',{month:'long',day:'numeric',year:'numeric'});
-        }
-        if(idx!==null) sessions[idx]=obj;
-        else sessions.push(obj);
-        save();closeModal('dynModal');renderStructure();toast(idx!==null?'Session updated':'Session created');
-    });
-}
-
-function toggleSessionReg(idx){
-    sessions[idx].registrationOpen=!sessions[idx].registrationOpen;
-    save();renderStructure();
-    toast(sessions[idx].registrationOpen?'Registration opened':'Registration closed');
-}
-
 function copyRegLink(){
     var url=window.location.origin+'/campistry_register.html';
     if(navigator.clipboard){
@@ -5895,11 +5799,6 @@ async function _autoSendPostAccept(id){
     }catch(err){
         toast('Auto-send of post-acceptance form failed: '+(err&&err.message||'unknown error'),'error');
     }
-}
-
-function deleteSession(idx){
-    if(!confirm('Delete session "'+sessions[idx].name+'"?'))return;
-    sessions.splice(idx,1);save();renderStructure();toast('Session deleted');
 }
 
 // Maps FC_FIELD_CATALOG ids to the enrollment-record field name the public
@@ -10567,7 +10466,7 @@ window.CampistryMe={
     getStaffForBunk:getStaffForBunk,getStaffForBunks:getStaffForBunks,
     getStaffForDivision:getStaffForDivision,getBunksForDivision:getBunksForDivision,
     findStaffByEmail:findStaffByEmail,getAllStaff:getAllStaff,
-    addSession:addSession,deleteSession:deleteSession,editSession:editSession,toggleSessionReg:toggleSessionReg,copyRegLink:copyRegLink,addDocRow:addDocRow,addApplication:addApplication,_onAppPhotoPick:_onAppPhotoPick,autoPromoteWaitlist:autoPromoteWaitlist,
+    copyRegLink:copyRegLink,addDocRow:addDocRow,addApplication:addApplication,_onAppPhotoPick:_onAppPhotoPick,autoPromoteWaitlist:autoPromoteWaitlist,
     viewApplication:viewApplication,updateEnrollStatus:updateEnrollStatus,bulkEnrollStatus:bulkEnrollStatus,toggleAllEnroll:toggleAllEnroll,_updateRegBulkBar:_updateRegBulkBar,enrollCamper:enrollCamper,generateParentInvite:generateParentInvite,setRegFilter:setRegFilter,rescindEnrollment:rescindEnrollment,
     saveAppNote:saveAppNote,printApplication:printApplication,
     openFormConfig:openFormConfig,saveFormConfig:saveFormConfig,addCustomQ:addCustomQ,addPromoRow:addPromoRow,

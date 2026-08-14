@@ -86,6 +86,9 @@
     // Camp Settings elements (owner-only; migrated from Campistry Me)
     const campSettingsSection = document.getElementById('camp-settings-section');
 
+    // Sessions & Pricing elements (owner-only; migrated from Campistry Me)
+    const sessionsPricingSection = document.getElementById('sessions-pricing-section');
+
     // ========================================
     // AUTH CHECK
     // ========================================
@@ -453,6 +456,11 @@
                 campSettingsSection.style.display = 'none';
             }
 
+            // Sessions & Pricing is owner-only (touches tuition/registration).
+            if (sessionsPricingSection) {
+                sessionsPricingSection.style.display = 'none';
+            }
+
             // Schedulers and admins can see camp dates (read-only)
             if (userRole === 'scheduler' || userRole === 'admin') {
                 var campDatesSection = document.getElementById('camp-dates-section');
@@ -468,6 +476,8 @@
             loadCampDates(false);
             if (campSettingsSection) campSettingsSection.style.display = 'block';
             loadCampSettingsSection();
+            if (sessionsPricingSection) sessionsPricingSection.style.display = 'block';
+            loadSessionsSection();
         }
     }
     
@@ -1476,6 +1486,198 @@
         } catch (e) {
             console.warn('[Dashboard] clearAllData:', e);
             if (status) { status.textContent = 'Error clearing data.'; status.style.color = '#dc2626'; }
+        }
+    };
+
+    // ========================================
+    // SESSIONS & PRICING (migrated from Campistry Me's Camp Structure page.
+    // Registration/Manual Entry/waitlist logic in Me and campistry_register.html
+    // keep reading campistryMe.sessions directly — only the editor UI moved.)
+    // ========================================
+
+    var _dashSessions = [];
+    var _dashEditingSessionIdx = null;
+
+    function loadSessionsSection() {
+        try {
+            var gs = (typeof window.loadGlobalSettings === 'function') ? (window.loadGlobalSettings() || {}) : {};
+            _dashSessions = (gs.campistryMe && gs.campistryMe.sessions) || [];
+            renderSessionsList();
+            var form = document.getElementById('sessionEditForm');
+            if (form) form.style.display = 'none';
+        } catch (e) {
+            console.warn('Could not load sessions:', e);
+        }
+    }
+
+    function renderSessionsList() {
+        var list = document.getElementById('sessionsList');
+        if (!list) return;
+        if (!_dashSessions.length) {
+            list.innerHTML = '<p style="color:var(--slate-400); font-size:0.85rem; text-align:center; padding:10px;">No sessions yet. Sessions are what parents pick when they register — add one to open registration.</p>';
+            return;
+        }
+        list.innerHTML = _dashSessions.map(function(s, i) {
+            var isOpen = s.registrationOpen !== false;
+            var html = '<div style="padding:12px 14px; border-radius:8px; border:1px solid ' + (isOpen ? 'var(--slate-200)' : '#fecaca') + '; background:' + (isOpen ? 'var(--slate-50)' : 'rgba(239,68,68,.04)') + ';">';
+            html += '<div style="display:flex; justify-content:space-between; align-items:center; gap:8px;">';
+            html += '<span style="font-size:0.9rem; font-weight:700; color:var(--slate-800);">' + _dashEsc(s.name) + '</span>';
+            html += '<div style="display:flex; gap:6px; flex-shrink:0;">';
+            html += '<button type="button" class="btn-secondary" style="padding:3px 10px; font-size:0.72rem;" onclick="editSessionForm(' + i + ')">Edit</button>';
+            html += '<button type="button" class="btn-secondary" style="padding:3px 10px; font-size:0.72rem;' + (isOpen ? '' : ' color:#059669;') + '" onclick="toggleSessionRegistration(' + i + ')">' + (isOpen ? 'Close' : 'Open') + '</button>';
+            html += '<button type="button" class="btn-secondary" style="padding:3px 10px; font-size:0.72rem; color:#dc2626;" onclick="deleteSessionEntry(' + i + ')">Delete</button>';
+            html += '</div></div>';
+            if (s.dates) html += '<div style="font-size:0.75rem; color:var(--slate-500); margin-top:4px;">📅 ' + _dashEsc(s.dates) + '</div>';
+            if (s.tuition) html += '<div style="font-size:0.82rem; font-weight:700; color:var(--slate-700); margin-top:4px;">$' + Number(s.tuition).toLocaleString() + (s.capacity ? ' · capacity ' + s.capacity : '') + '</div>';
+            html += '<div style="margin-top:4px; font-size:0.7rem; font-weight:700; color:' + (isOpen ? '#059669' : '#dc2626') + ';">' + (isOpen ? 'Registration Open' : 'Registration Closed') + '</div>';
+            html += '</div>';
+            return html;
+        }).join('');
+    }
+
+    function _dashFillSessionForm(s) {
+        document.getElementById('sesName').value = s.name || '';
+        document.getElementById('sesDatePreset').value = '';
+        document.getElementById('sesDatePresetHint').textContent = '';
+        document.getElementById('sesStart').value = s.startDate || '';
+        document.getElementById('sesEnd').value = s.endDate || '';
+        document.getElementById('sesDates').value = s.dates || '';
+        document.getElementById('sesCap').value = s.capacity || '';
+        document.getElementById('sesTuition').value = s.tuition || '';
+        document.getElementById('sesEarly').value = s.earlyBird || '';
+        document.getElementById('sesEarlyDate').value = s.earlyBirdDeadline || '';
+        document.getElementById('sesSibDisc').value = s.siblingDiscount || '';
+        document.getElementById('sesPayPlan').value = s.paymentPlan || 'full';
+        document.getElementById('sesDeposit').value = s.depositAmount || '';
+        document.getElementById('sesDepositWrap').style.display = (s.paymentPlan === 'deposit') ? 'block' : 'none';
+        document.getElementById('sesNotes').value = s.notes || '';
+    }
+
+    window.addSessionForm = function() {
+        if (isTeamMember) {
+            var status0 = document.getElementById('sessionFormStatus');
+            if (status0) { status0.textContent = 'Only camp owners can manage sessions.'; status0.style.color = '#dc2626'; }
+            return;
+        }
+        _dashEditingSessionIdx = null;
+        _dashFillSessionForm({});
+        var form = document.getElementById('sessionEditForm');
+        if (form) form.style.display = 'block';
+        var status = document.getElementById('sessionFormStatus');
+        if (status) status.textContent = '';
+    };
+
+    window.editSessionForm = function(idx) {
+        _dashEditingSessionIdx = idx;
+        _dashFillSessionForm(_dashSessions[idx] || {});
+        var form = document.getElementById('sessionEditForm');
+        if (form) form.style.display = 'block';
+        var status = document.getElementById('sessionFormStatus');
+        if (status) status.textContent = '';
+    };
+
+    window.cancelSessionForm = function() {
+        var form = document.getElementById('sessionEditForm');
+        if (form) form.style.display = 'none';
+        _dashEditingSessionIdx = null;
+    };
+
+    // Quick-fill Start/End from the Camp Dates section above — Full Summer /
+    // 1st Half / 2nd Half — instead of retyping the same boundaries per session.
+    window.applySessionDatePreset = function() {
+        var preset = document.getElementById('sesDatePreset').value;
+        var hint = document.getElementById('sesDatePresetHint');
+        if (!preset) { if (hint) hint.textContent = ''; return; }
+        var start = document.getElementById('campStartDate')?.value || '';
+        var half1End = document.getElementById('campHalf1End')?.value || '';
+        var half2Start = document.getElementById('campHalf2Start')?.value || '';
+        var end = document.getElementById('campEndDate')?.value || '';
+        var range = { full: [start, end], half1: [start, half1End], half2: [half2Start, end] }[preset];
+        if (!range || !range[0] || !range[1]) {
+            if (hint) hint.textContent = 'Set Camp Dates above first — that boundary isn\'t filled in yet.';
+            return;
+        }
+        document.getElementById('sesStart').value = range[0];
+        document.getElementById('sesEnd').value = range[1];
+        if (hint) hint.textContent = 'Filled from Camp Dates — you can still adjust below.';
+    };
+
+    window.saveSessionForm = function() {
+        var status = document.getElementById('sessionFormStatus');
+        if (isTeamMember) {
+            if (status) { status.textContent = 'Only camp owners can manage sessions.'; status.style.color = '#dc2626'; }
+            return;
+        }
+        var name = (document.getElementById('sesName').value || '').trim();
+        if (!name) {
+            if (status) { status.textContent = 'Enter a session name.'; status.style.color = '#dc2626'; }
+            return;
+        }
+        var idx = _dashEditingSessionIdx;
+        var obj = {
+            name: name,
+            startDate: document.getElementById('sesStart').value || '',
+            endDate: document.getElementById('sesEnd').value || '',
+            dates: (document.getElementById('sesDates').value || '').trim(),
+            capacity: parseInt(document.getElementById('sesCap').value) || 0,
+            tuition: parseFloat(document.getElementById('sesTuition').value) || 0,
+            earlyBird: parseFloat(document.getElementById('sesEarly').value) || 0,
+            earlyBirdDeadline: document.getElementById('sesEarlyDate').value || '',
+            siblingDiscount: parseInt(document.getElementById('sesSibDisc').value) || 0,
+            paymentPlan: document.getElementById('sesPayPlan').value || 'full',
+            depositAmount: parseFloat(document.getElementById('sesDeposit').value) || 0,
+            notes: (document.getElementById('sesNotes').value || '').trim(),
+            registrationOpen: (idx != null && _dashSessions[idx]) ? (_dashSessions[idx].registrationOpen !== false) : true
+        };
+        if (!obj.dates && obj.startDate && obj.endDate) {
+            obj.dates = new Date(obj.startDate + 'T12:00:00').toLocaleDateString('en-US', { month: 'long', day: 'numeric' }) + ' – ' + new Date(obj.endDate + 'T12:00:00').toLocaleDateString('en-US', { month: 'long', day: 'numeric', year: 'numeric' });
+        }
+        try {
+            if (idx != null && _dashSessions[idx]) _dashSessions[idx] = obj;
+            else _dashSessions.push(obj);
+            var gs = window.loadGlobalSettings ? (window.loadGlobalSettings() || {}) : {};
+            if (!gs.campistryMe) gs.campistryMe = {};
+            gs.campistryMe.sessions = _dashSessions;
+            if (window.saveGlobalSettings) window.saveGlobalSettings('campistryMe', gs.campistryMe);
+            renderSessionsList();
+            window.cancelSessionForm();
+            if (status) { status.textContent = (idx != null ? 'Session updated.' : 'Session created.'); status.style.color = '#059669'; setTimeout(function() { status.textContent = ''; }, 3000); }
+        } catch (e) {
+            console.error('Error saving session:', e);
+            if (status) { status.textContent = 'Error saving.'; status.style.color = '#dc2626'; }
+        }
+    };
+
+    window.toggleSessionRegistration = function(idx) {
+        if (isTeamMember) return;
+        var s = _dashSessions[idx];
+        if (!s) return;
+        s.registrationOpen = s.registrationOpen === false;
+        try {
+            var gs = window.loadGlobalSettings ? (window.loadGlobalSettings() || {}) : {};
+            if (!gs.campistryMe) gs.campistryMe = {};
+            gs.campistryMe.sessions = _dashSessions;
+            if (window.saveGlobalSettings) window.saveGlobalSettings('campistryMe', gs.campistryMe);
+            renderSessionsList();
+        } catch (e) {
+            console.error('Error toggling session registration:', e);
+        }
+    };
+
+    window.deleteSessionEntry = function(idx) {
+        if (isTeamMember) return;
+        var s = _dashSessions[idx];
+        if (!s) return;
+        if (!confirm('Delete session "' + s.name + '"?')) return;
+        try {
+            _dashSessions.splice(idx, 1);
+            var gs = window.loadGlobalSettings ? (window.loadGlobalSettings() || {}) : {};
+            if (!gs.campistryMe) gs.campistryMe = {};
+            gs.campistryMe.sessions = _dashSessions;
+            if (window.saveGlobalSettings) window.saveGlobalSettings('campistryMe', gs.campistryMe);
+            renderSessionsList();
+        } catch (e) {
+            console.error('Error deleting session:', e);
         }
     };
 
