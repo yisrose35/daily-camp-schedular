@@ -372,9 +372,9 @@ function nav(p){
     // A couple of sidebar entries each cover two pages, cross-linked via
     // their own in-page tabs — keep the one sidebar button highlighted on
     // either page: Structure (data-page="structure") also covers Bunk
-    // Builder, and Reports & Sheets (data-page="reports") also covers Print
-    // Sheets.
-    var sidebarKey=(p==='bunkbuilder')?'structure':(p==='printsheets')?'reports':p;
+    // Builder, Reports & Sheets (data-page="reports") also covers Print
+    // Sheets, and Roster (data-page="campers") also covers Families.
+    var sidebarKey=(p==='bunkbuilder')?'structure':(p==='printsheets')?'reports':(p==='families')?'campers':p;
     document.querySelectorAll('.sidebar-item').forEach(function(b){b.classList.toggle('active',b.dataset.page===sidebarKey)});
     document.querySelectorAll('.me-page').forEach(function(pg){pg.classList.toggle('active',pg.id==='page-'+p)});
     render(p);
@@ -840,7 +840,7 @@ function _familyBundlesHtml(optHighlight){
     var mergeFams=(suggestions.mergeFamilies||[]).filter(function(s){return dismissed.indexOf([s.keyA,s.keyB].sort().join('|'))<0});
     var totalSuggestions=newFams.length+addToExisting.length+mergeFams.length;
 
-    var h='<div class="sec-hd"><div><p class="sec-desc">'+e.length+' household'+(e.length!==1?'s':'')+(totalSuggestions>0?' · <span style="color:var(--me);font-weight:700">'+totalSuggestions+' suggestion'+(totalSuggestions!==1?'s':'')+'</span>':'')+'</p></div><div class="sec-actions"><button class="me-btn me-btn--sec me-btn--sm" onclick="CampistryMe.printFamilies()">🖨 Print</button><button class="me-btn me-btn--sec me-btn--sm" onclick="CampistryMe.exportFamilyReport()">↓ Export</button><button class="me-btn me-btn--pri" onclick="CampistryMe.addFamily()">+ Add Family</button></div></div>';
+    var h='<div class="sec-hd"><div><h2 class="sec-title">Families</h2><p class="sec-desc">'+e.length+' household'+(e.length!==1?'s':'')+(totalSuggestions>0?' · <span style="color:var(--me);font-weight:700">'+totalSuggestions+' suggestion'+(totalSuggestions!==1?'s':'')+'</span>':'')+'</p></div><div class="sec-actions"><button class="me-btn me-btn--sec me-btn--sm" onclick="CampistryMe.printFamilies()">🖨 Print</button><button class="me-btn me-btn--sec me-btn--sm" onclick="CampistryMe.exportFamilyReport()">↓ Export</button><button class="me-btn me-btn--pri" onclick="CampistryMe.addFamily()">+ Add Family</button></div></div>';
 
     // Show suggestions banner
     if(newFams.length||addToExisting.length||mergeFams.length){
@@ -915,18 +915,18 @@ function viewFamilyFromCamper(camperName){
     _famHighlight=camperName;
     nav('families');
 }
-// Families now has its own sidebar entry (Camp → Families) rather than
-// living as a sub-tab of Roster — same me.campers capability gate a
-// restricted role already has (or doesn't) for the roster itself.
+// Families lives as a sub-tab of Roster (same me.campers capability gate
+// as the roster itself — one sidebar entry, cross-linked in-page tabs,
+// same pattern as Structure/Bunk Builder and Reports/Print Sheets).
 function renderFamiliesPage(){
     var c=document.getElementById('page-families');
     if(!c)return;
     if(!_secCan('me.campers')){
-        c.innerHTML='<div class="me-empty"><h3>No access to Families</h3><p>Your account isn\'t set up to open this section.</p></div>';
+        c.innerHTML=_rosterTabsHtml('families')+'<div class="me-empty"><h3>No access to Families</h3><p>Your account isn\'t set up to open this section.</p></div>';
         return;
     }
     var highlight=_famHighlight; _famHighlight=null;
-    c.innerHTML=_familyBundlesHtml(highlight);
+    c.innerHTML=_rosterTabsHtml('families')+_familyBundlesHtml(highlight);
     if(highlight){
         var fam=_familyForCamper(highlight);
         if(fam){
@@ -1285,7 +1285,8 @@ function renderCampers(filter){
     camperEntries.sort(function(a,b){return a[0].localeCompare(b[0])});
     var total=camperEntries.length+staffRows.length;
 
-    var h='<div class="sec-hd"><div><h2 class="sec-title">Roster</h2><p class="sec-desc">'+camperEntries.length+' camper'+(camperEntries.length!==1?'s':'')+(canStaff?' · '+staffRows.length+' staff':'')+'</p></div><div class="sec-actions"><button class="me-btn me-btn--ghost me-btn--sm" onclick="CampistryMe.manageCustomFields()" title="Define custom fields">⚙ Custom Fields</button><button class="me-btn me-btn--sec me-btn--sm" onclick="CampistryMe.downloadTemplate()">Template</button><button class="me-btn me-btn--sec me-btn--sm" onclick="CampistryMe.openCsv()">Import</button><button class="me-btn me-btn--sec me-btn--sm" onclick="CampistryMe.exportCsv()">Export</button><button class="me-btn me-btn--pri" onclick="CampistryMe.addCamper()">+ Add Camper</button></div></div>';
+    var h=_rosterTabsHtml('campers');
+    h+='<div class="sec-hd"><div><h2 class="sec-title">Roster</h2><p class="sec-desc">'+camperEntries.length+' camper'+(camperEntries.length!==1?'s':'')+(canStaff?' · '+staffRows.length+' staff':'')+'</p></div><div class="sec-actions"><button class="me-btn me-btn--ghost me-btn--sm" onclick="CampistryMe.manageCustomFields()" title="Define custom fields">⚙ Custom Fields</button><button class="me-btn me-btn--sec me-btn--sm" onclick="CampistryMe.downloadTemplate()">Template</button><button class="me-btn me-btn--sec me-btn--sm" onclick="CampistryMe.openCsv()">Import</button><button class="me-btn me-btn--sec me-btn--sm" onclick="CampistryMe.exportCsv()">Export</button><button class="me-btn me-btn--pri" onclick="CampistryMe.addCamper()">+ Add Camper</button></div></div>';
 
     var unplaced=canStaff?hiredStaff().filter(function(a){return !String(a.email||'').trim()||!bunksForStaffEmail(a.email).length;}):[];
     if(unplaced.length){
@@ -1928,6 +1929,13 @@ function _layoutTabsHtml(active){
 // view-only by design, me.printsheets supports full edit, and roles split
 // them differently: e.g. Office gets both, Bookkeeper gets reports but not
 // printsheets), so each keeps its own #page-* pane and capability check.
+function _rosterTabsHtml(active){
+    var tabs=[{k:'campers',l:'Roster'},{k:'families',l:'Families'}];
+    return '<div style="display:flex;gap:0;border-bottom:1px solid var(--s200);margin-bottom:14px">'+tabs.map(function(t){
+        return '<button class="me-btn me-btn--ghost" data-page="'+t.k+'" style="padding:8px 16px;font-size:.8rem;font-weight:600;border-bottom:2px solid '+(active===t.k?'var(--me)':'transparent')+';color:'+(active===t.k?'var(--me)':'var(--s400)')+';border-radius:0" onclick="CampistryMe.nav(\''+t.k+'\')">'+t.l+'</button>';
+    }).join('')+'</div>';
+}
+
 function _reportsTabsHtml(active){
     var tabs=[{k:'reports',l:'Reports'},{k:'printsheets',l:'Print Sheets'}];
     return '<div style="display:flex;gap:0;border-bottom:1px solid var(--s200);margin-bottom:14px">'+tabs.map(function(t){
