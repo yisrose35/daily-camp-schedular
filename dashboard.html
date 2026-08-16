@@ -217,7 +217,22 @@
             Camp Setup
         </h2>
 
-        <!-- ===== TWO-COLUMN: PROFILE + ACCOUNT ===== -->
+        <!-- One zone instead of six stacked sections — a tab per area, only
+             the active one's content is visible. Role gating hides tab
+             buttons that role can't reach (see dashboard.js
+             setupDashboardForRole()); it never touches which panel is
+             showing. -->
+        <div class="dash-setup-tabs" id="dashSetupTabs">
+            <button class="dash-setup-tab active" data-tab="profile" onclick="switchSetupTab('profile')">Profile &amp; Account</button>
+            <button class="dash-setup-tab" data-tab="dates" onclick="switchSetupTab('dates')" style="display:none;">Camp Dates</button>
+            <button class="dash-setup-tab" data-tab="sessions" onclick="switchSetupTab('sessions')" style="display:none;">Sessions &amp; Pricing</button>
+            <button class="dash-setup-tab" data-tab="payment" onclick="switchSetupTab('payment')" style="display:none;">Payment</button>
+            <button class="dash-setup-tab" data-tab="settings" onclick="switchSetupTab('settings')" style="display:none;">Camp Settings</button>
+            <button class="dash-setup-tab" data-tab="team" onclick="switchSetupTab('team')" style="display:none;">Team &amp; Access</button>
+        </div>
+
+        <!-- ===== PROFILE + ACCOUNT ===== -->
+        <div id="dash-setup-profile" class="dash-setup-panel">
         <div class="dashboard-grid">
             <!-- CAMP PROFILE CARD -->
             <section class="dashboard-card">
@@ -286,13 +301,10 @@
                 </div>
             </section>
         </div>
+        </div>
 
         <!-- ===== CAMP DATES ===== -->
-        <section id="camp-dates-section" class="dashboard-section" style="display: none;">
-            <h2 class="section-title-bar">
-                <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="4" width="18" height="18" rx="2" ry="2"/><line x1="16" y1="2" x2="16" y2="6"/><line x1="8" y1="2" x2="8" y2="6"/><line x1="3" y1="10" x2="21" y2="10"/></svg>
-                Camp Dates
-            </h2>
+        <div id="camp-dates-section" class="dash-setup-panel" style="display: none;">
             <div class="dashboard-card" style="max-width:700px;">
                 <div class="card-header">
                     <h2>Summer Schedule</h2>
@@ -326,20 +338,16 @@
                     </div>
                 </div>
             </div>
-        </section>
+        </div>
 
         <!-- ===== SESSIONS & PRICING (Owners only) ===== -->
-        <section id="sessions-pricing-section" class="dashboard-section" style="display: none;">
-            <h2 class="section-title-bar">
-                <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="2" y="7" width="20" height="14" rx="2"/><path d="M16 21V5a2 2 0 0 0-2-2h-4a2 2 0 0 0-2 2v16"/></svg>
-                Sessions &amp; Pricing
-            </h2>
+        <div id="sessions-pricing-section" class="dash-setup-panel" style="display: none;">
             <div class="dashboard-card" style="max-width:760px;">
                 <div class="card-header">
                     <h2>Sessions</h2>
                     <button class="btn-edit" type="button" onclick="addSessionForm()">+ Add Session</button>
                 </div>
-                <p class="card-desc">What parents pick when they register — dates, tuition, capacity. Reuse the Camp Dates halves above instead of retyping them for each session.</p>
+                <p class="card-desc">What parents pick when they register — dates, tuition, capacity. Reuse the halves from the Camp Dates tab instead of retyping them for each session.</p>
                 <div id="sessionsList" style="display:flex; flex-direction:column; gap:10px; margin-top:10px;"></div>
 
                 <div id="sessionEditForm" style="display:none; margin-top:16px; padding-top:16px; border-top:1px solid var(--slate-200);">
@@ -420,15 +428,29 @@
                     </div>
                 </div>
             </div>
-        </section>
+        </div>
+
+        <!-- ===== PAYMENT (Owners only) ===== -->
+        <div id="dash-setup-payment" class="dash-setup-panel" style="display: none;">
+            <div class="dashboard-card" style="max-width:700px;">
+                <div class="card-header"><h2>💳 Payment Processing (Stripe)</h2></div>
+                <p class="card-desc">Connect your Stripe account to accept credit card payments, save cards on file, and auto-charge installments.</p>
+                <div style="display:flex; flex-direction:column; gap:14px;">
+                    <div class="form-group">
+                        <label for="settStripeKey" style="font-size:0.82rem; font-weight:600; color:var(--slate-600); margin-bottom:4px; display:block;">Stripe Publishable Key</label>
+                        <input type="text" id="settStripeKey" placeholder="pk_live_... or pk_test_..." style="width:100%; padding:8px 10px; border-radius:8px; border:1px solid var(--slate-200); font-size:0.88rem;">
+                        <p style="font-size:0.72rem; color:var(--slate-400); margin-top:6px;">Your <strong>secret key</strong> (sk_...) must be set as a Supabase Edge Function secret — never put it in the browser. <a href="https://dashboard.stripe.com/apikeys" target="_blank" rel="noopener">Get your keys from Stripe →</a></p>
+                    </div>
+                    <div style="display:flex; gap:10px; align-items:center;">
+                        <button type="button" onclick="saveStripeKey()" class="btn-primary" style="padding:8px 20px; font-size:0.85rem;">Save Stripe Key</button>
+                        <span id="stripeKeyStatus" style="font-size:0.82rem; color:var(--slate-400);"></span>
+                    </div>
+                </div>
+            </div>
+        </div>
 
         <!-- ===== CAMP SETTINGS (Owners only) ===== -->
-        <section id="camp-settings-section" class="dashboard-section" style="display: none;">
-            <h2 class="section-title-bar">
-                <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>
-                Camp Settings
-            </h2>
-
+        <div id="camp-settings-section" class="dash-setup-panel" style="display: none;">
             <div class="dashboard-card" style="max-width:700px;">
                 <div class="card-header"><h2>🌍 Language &amp; Regional</h2></div>
                 <p class="card-desc">Configure language, date formats, and alternate name display for your camp.</p>
@@ -468,45 +490,10 @@
                     </div>
                 </div>
             </div>
-
-            <div class="dashboard-card" style="max-width:700px;">
-                <div class="card-header"><h2>💳 Payment Processing (Stripe)</h2></div>
-                <p class="card-desc">Connect your Stripe account to accept credit card payments, save cards on file, and auto-charge installments.</p>
-                <div style="display:flex; flex-direction:column; gap:14px;">
-                    <div class="form-group">
-                        <label for="settStripeKey" style="font-size:0.82rem; font-weight:600; color:var(--slate-600); margin-bottom:4px; display:block;">Stripe Publishable Key</label>
-                        <input type="text" id="settStripeKey" placeholder="pk_live_... or pk_test_..." style="width:100%; padding:8px 10px; border-radius:8px; border:1px solid var(--slate-200); font-size:0.88rem;">
-                        <p style="font-size:0.72rem; color:var(--slate-400); margin-top:6px;">Your <strong>secret key</strong> (sk_...) must be set as a Supabase Edge Function secret — never put it in the browser. <a href="https://dashboard.stripe.com/apikeys" target="_blank" rel="noopener">Get your keys from Stripe →</a></p>
-                    </div>
-                    <div style="display:flex; gap:10px; align-items:center;">
-                        <button type="button" onclick="saveStripeKey()" class="btn-primary" style="padding:8px 20px; font-size:0.85rem;">Save Stripe Key</button>
-                        <span id="stripeKeyStatus" style="font-size:0.82rem; color:var(--slate-400);"></span>
-                    </div>
-                </div>
-            </div>
-
-            <div class="dashboard-card" style="max-width:700px;">
-                <div class="card-header"><h2>Data Management</h2></div>
-                <div style="display:flex; gap:8px; flex-wrap:wrap; align-items:center;">
-                    <button type="button" onclick="exportAllData()" class="btn-secondary" style="padding:8px 16px; font-size:0.85rem;">Export All Data (JSON)</button>
-                    <button type="button" onclick="importAllData()" class="btn-secondary" style="padding:8px 16px; font-size:0.85rem;">Import Data (JSON)</button>
-                    <button type="button" onclick="clearAllData()" class="btn-secondary" style="padding:8px 16px; font-size:0.85rem; color:#dc2626;">Clear All Data</button>
-                    <span id="dataMgmtStatus" style="font-size:0.82rem; color:var(--slate-400);"></span>
-                </div>
-            </div>
-        </section>
+        </div>
 
         <!-- ===== RBAC TEAM & ACCESS (Owners only) ===== -->
-        <section id="team-access-section" class="dashboard-section" style="display: none;">
-            <h2 class="section-title-bar">
-                <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                    <path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/>
-                    <circle cx="9" cy="7" r="4"/>
-                    <path d="M23 21v-2a4 4 0 0 0-3-3.87"/>
-                    <path d="M16 3.13a4 4 0 0 1 0 7.75"/>
-                </svg>
-                Team &amp; Access
-            </h2>
+        <div id="team-access-section" class="dash-setup-panel" style="display: none;">
             <div class="team-grid">
                 <div id="subdivisions-card" class="dashboard-card">
                     <div class="card-header"><h2>Divisions</h2></div>
@@ -519,7 +506,7 @@
                     <div id="team-placeholder" style="text-align:center; color: var(--slate-400); padding: 20px;">Loading…</div>
                 </div>
             </div>
-        </section>
+        </div>
 
         </div><!-- /dash-camp-setup -->
 
