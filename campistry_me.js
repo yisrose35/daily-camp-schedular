@@ -7241,15 +7241,46 @@ function buildFamilyLedgers(){
         ledgers[fk]={family:f,famKey:fk,entries:[],totalCharges:0,totalPayments:0,totalCredits:0,balance:0};
     });
 
-    // 1. Tuition charges from enrollments
+    // 1. Tuition charges from enrollments — including 'accepted' applications
+    // that haven't been enrolled yet. An accepted camper has no families[]
+    // record until enrollCamper() actually runs (that's the only place one
+    // gets created), so without this they'd show up nowhere in Billing.
+    // _resolveFamilyKey() is the SAME matcher enrollCamper() itself uses, so
+    // if a sibling is already enrolled, the accepted camper's charge lands on
+    // that real family's ledger. Only when no existing family matches at all
+    // do we synthesize an ephemeral ledger entry — never written to
+    // families{}, just built fresh on every render — flagged
+    // `pendingEnrollment` so Billing can show it's not a full camper record
+    // yet.
     Object.entries(enrollments).forEach(function([eid,e]){
         if(e.status!=='enrolled'&&e.status!=='accepted') return;
-        var lastName=(e.camperName||'').split(' ').pop();
-        var fk='fam_'+lastName.toLowerCase().replace(/[^a-z0-9]/g,'');
-        if(!ledgers[fk]){
-            // Try to find family by camper name
-            var found=Object.entries(families).find(function([,f]){return(f.camperIds||[]).indexOf(e.camperName)>=0});
-            if(found) fk=found[0]; else return;
+        var fk=_resolveFamilyKey(e.camperName,_famItemRaw(e.camperName,e.street,e.city,e.state,e.zip,e.parentName,e.parentEmail));
+        if(!fk){
+            if(e.status!=='accepted'||!e.parentName) return; // nothing to attribute this charge to
+            var lastName=(e.camperName||'').split(' ').pop();
+            fk='pending_'+lastName.toLowerCase().replace(/[^a-z0-9]/g,'')+'_'+eid;
+            if(!ledgers[fk]){
+                var parents=[{name:e.parentName,phone:e.parentPhone||'',email:e.parentEmail||'',relation:e.parentRelation||'Parent'}];
+                if(e.parent2Name)parents.push({name:e.parent2Name,phone:e.parent2Phone||'',relation:'Parent'});
+                var synthFamily={
+                    name:lastName+' Family',
+                    households:[{label:'Primary',parents:parents,address:[e.street,e.city,e.state,e.zip].filter(Boolean).join(', '),billingContact:true}],
+                    camperIds:[e.camperName],
+                    balance:0,totalPaid:0
+                };
+                ledgers[fk]={family:synthFamily,famKey:fk,entries:[],totalCharges:0,totalPayments:0,totalCredits:0,balance:0,pendingEnrollment:true};
+            }
+        }
+        if(!ledgers[fk])return;
+        // An accepted camper joining an ALREADY-REAL family (a sibling's
+        // ledger) isn't in that family's real camperIds yet — enrollCamper()
+        // is what actually adds them. Track it separately for display rather
+        // than mutating families[fk].camperIds here, which would persist a
+        // membership that isn't final (the application could still be
+        // declined/rescinded before enrollment).
+        if(e.status==='accepted'&&(ledgers[fk].family.camperIds||[]).indexOf(e.camperName)<0){
+            if(!ledgers[fk].pendingCamperIds)ledgers[fk].pendingCamperIds=[];
+            if(ledgers[fk].pendingCamperIds.indexOf(e.camperName)<0)ledgers[fk].pendingCamperIds.push(e.camperName);
         }
         var tuition=Number(e.sessionTuition)||0;
         var discAmt=e.discount?Number(e.discount.amt)||0:0;
@@ -7988,10 +8019,10 @@ function renderBilling(){
     } else {
         filtered.forEach(function(l){
             var statusBadge=l.status==='paid'?bdg('Paid','ok'):l.status==='overdue'?bdg('Overdue','err'):l.status==='partial'?bdg('Partial','warn'):bdg('Pending','warn');
-            var camperNames=(l.family.camperIds||[]).join(', ');
+            var camperNames=(l.family.camperIds||[]).concat((l.pendingCamperIds||[]).map(function(n){return n+' (pending)'})).join(', ');
 
             h+='<div class="me-card" style="margin-bottom:12px"><div class="me-card-head" style="cursor:pointer" onclick="this.nextElementSibling.style.display=this.nextElementSibling.style.display===\'none\'?\'block\':\'none\'">';
-            h+='<div style="display:flex;align-items:center;gap:12px;flex:1"><h3 style="margin:0">'+esc(l.family.name||'')+'</h3><span style="font-size:.75rem;color:var(--s400)">'+esc(camperNames)+'</span></div>';
+            h+='<div style="display:flex;align-items:center;gap:12px;flex:1"><h3 style="margin:0">'+esc(l.family.name||'')+'</h3><span style="font-size:.75rem;color:var(--s400)">'+esc(camperNames)+'</span>'+(l.pendingEnrollment?bdg('Accepted — pending enrollment','warn'):'')+'</div>';
             h+='<div style="display:flex;align-items:center;gap:10px">'+statusBadge;
             h+='<span style="font-size:1rem;font-weight:800;color:'+(l.balance>0?'var(--err)':'var(--ok)')+'">'+fm(l.balance)+'</span>';
             h+='<span style="font-size:.7rem;color:var(--s400)">▼</span></div>';
