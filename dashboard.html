@@ -68,11 +68,57 @@
             </div>
         </header>
 
+        <!-- ===== QUICK LAUNCH TILES ===== -->
+        <!-- The primary way people get to where they need to go — kept
+             right under the hero, above the feeds, so it's never buried. -->
+        <section class="dash-quick-launch">
+            <a href="campistry_me.html" class="dash-ql-tile" style="--ql-color: var(--me-color);">
+                <img src="Me_clean.png" alt="Me" class="dash-ql-logo">
+                <span>Me</span>
+            </a>
+            <a href="flow.html" class="dash-ql-tile" style="--ql-color: var(--flow-color);">
+                <img src="Flow_clean.png" alt="Flow" class="dash-ql-logo">
+                <span>Flow</span>
+            </a>
+            <a href="campistry_lite.html" class="dash-ql-tile" style="--ql-color: var(--lite-color);">
+                <img src="Lite_clean.png" alt="Lite" class="dash-ql-logo">
+                <span>Lite</span>
+            </a>
+            <a href="campistry_go.html" class="dash-ql-tile" style="--ql-color: var(--go-color);">
+                <img src="Go_clean.png" alt="Go" class="dash-ql-logo">
+                <span>Go</span>
+            </a>
+            <a href="campistry_health.html" class="dash-ql-tile" style="--ql-color: var(--health-color);">
+                <img src="Health_clean.png" alt="Health" class="dash-ql-logo">
+                <span>Health</span>
+            </a>
+            <a href="campistry_live.html" class="dash-ql-tile" style="--ql-color: var(--live-color);">
+                <img src="Live_clean.png" alt="Live" class="dash-ql-logo">
+                <span>Live</span>
+            </a>
+            <a href="campistry_snacks.html" class="dash-ql-tile" style="--ql-color: var(--snacks-color);">
+                <img src="Snacks_clean.png" alt="Snacks" class="dash-ql-logo">
+                <span>Snacks</span>
+            </a>
+            <a href="campistry_link_admin.html" class="dash-ql-tile" style="--ql-color: var(--link-color);">
+                <img src="Link_clean.png" alt="Link" class="dash-ql-logo">
+                <span>Link</span>
+            </a>
+            <a href="campistry_notes.html" class="dash-ql-tile" style="--ql-color: var(--notes-color);">
+                <img src="Notes_clean.png" alt="Notes" class="dash-ql-logo">
+                <span>Notes</span>
+            </a>
+            <!-- No tiles for Shop or Luggage: they're sections of Snacks and Go,
+                 reached from inside those apps. A tile here would imply they're
+                 products of their own, and an emoji next to the real wordmarks
+                 looked out of place. -->
+        </section>
+
         <!-- ===== FEEDS: NOTIFICATIONS + BIRTHDAYS ===== -->
-        <!-- The two "things you need to know about today" cards, promoted
-             right under the hero instead of buried mid-page — Notifications
-             is now a live feed (see dashboard.js loadLiveNotifications), so
-             it earns top billing. -->
+        <!-- The two "things you need to know about today" cards, promoted up
+             from mid-page (Quick Launch stays first — it's how people get
+             to where they need to go). Notifications is now a live feed
+             (see dashboard.js loadLiveNotifications). -->
         <div class="dash-feeds-row">
             <!-- ===== NOTIFICATIONS & REMINDERS ===== -->
             <section class="dash-notifications" id="dashNotifications">
@@ -117,50 +163,6 @@
                 <div class="dash-bday-list" id="dashBdayList"></div>
             </section>
         </div>
-
-        <!-- ===== QUICK LAUNCH TILES ===== -->
-        <section class="dash-quick-launch">
-            <a href="campistry_me.html" class="dash-ql-tile" style="--ql-color: var(--me-color);">
-                <img src="Me_clean.png" alt="Me" class="dash-ql-logo">
-                <span>Me</span>
-            </a>
-            <a href="flow.html" class="dash-ql-tile" style="--ql-color: var(--flow-color);">
-                <img src="Flow_clean.png" alt="Flow" class="dash-ql-logo">
-                <span>Flow</span>
-            </a>
-            <a href="campistry_lite.html" class="dash-ql-tile" style="--ql-color: var(--lite-color);">
-                <img src="Lite_clean.png" alt="Lite" class="dash-ql-logo">
-                <span>Lite</span>
-            </a>
-            <a href="campistry_go.html" class="dash-ql-tile" style="--ql-color: var(--go-color);">
-                <img src="Go_clean.png" alt="Go" class="dash-ql-logo">
-                <span>Go</span>
-            </a>
-            <a href="campistry_health.html" class="dash-ql-tile" style="--ql-color: var(--health-color);">
-                <img src="Health_clean.png" alt="Health" class="dash-ql-logo">
-                <span>Health</span>
-            </a>
-            <a href="campistry_live.html" class="dash-ql-tile" style="--ql-color: var(--live-color);">
-                <img src="Live_clean.png" alt="Live" class="dash-ql-logo">
-                <span>Live</span>
-            </a>
-            <a href="campistry_snacks.html" class="dash-ql-tile" style="--ql-color: var(--snacks-color);">
-                <img src="Snacks_clean.png" alt="Snacks" class="dash-ql-logo">
-                <span>Snacks</span>
-            </a>
-            <a href="campistry_link_admin.html" class="dash-ql-tile" style="--ql-color: var(--link-color);">
-                <img src="Link_clean.png" alt="Link" class="dash-ql-logo">
-                <span>Link</span>
-            </a>
-            <a href="campistry_notes.html" class="dash-ql-tile" style="--ql-color: var(--notes-color);">
-                <img src="Notes_clean.png" alt="Notes" class="dash-ql-logo">
-                <span>Notes</span>
-            </a>
-            <!-- No tiles for Shop or Luggage: they're sections of Snacks and Go,
-                 reached from inside those apps. A tile here would imply they're
-                 products of their own, and an emoji next to the real wordmarks
-                 looked out of place. -->
-        </section>
 
         <!-- ===== QUICK STATS ROW ===== -->
         <section class="dash-stats-row">
