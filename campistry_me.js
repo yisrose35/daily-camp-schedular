@@ -6483,29 +6483,40 @@ function enrollCamper(id){
     }
 
     // Generate payment plan / installment schedule
-    if(sesObj&&sesObj.paymentPlan&&sesObj.paymentPlan!=='full'){
-        var plan=sesObj.paymentPlan;
-        e.installments=[];
-        var today=new Date();
-        if(plan==='deposit'){
-            var dep=sesObj.depositAmount||Math.round(tuition*0.25);
-            e.installments.push({label:'Deposit',amount:dep,dueDate:today.toISOString().split('T')[0],status:'pending'});
-            e.installments.push({label:'Balance',amount:tuition-dep,dueDate:sesObj.startDate||'',status:'pending'});
-        }else{
-            var numPayments=parseInt(plan)||2;
-            var perPayment=Math.floor(tuition/numPayments);
-            var remainder=tuition-(perPayment*numPayments);
-            for(var pi=0;pi<numPayments;pi++){
-                var due=new Date(today);due.setDate(due.getDate()+30*(pi));
-                var amt=perPayment+(pi===0?remainder:0);
-                e.installments.push({label:'Payment '+(pi+1)+' of '+numPayments,amount:amt,dueDate:due.toISOString().split('T')[0],status:'pending'});
-            }
-        }
+    var schedule=_buildInstallmentSchedule(sesObj,tuition);
+    if(schedule){
+        e.installments=schedule;
         console.log('[Me] Payment plan: '+e.installments.length+' installments for '+e.camperName);
     }
 
     e.enrolledDate=new Date().toISOString().split('T')[0];
     save();renderEnrollment();_refreshPplIfActive();
+}
+
+// Down payment (deposit) vs. the rest of tuition are genuinely different
+// things to a parent and to the office — this is the one place that split
+// gets computed, shared by enrollCamper() (persists it once someone's
+// actually enrolled) and buildFamilyLedgers() (previews it for an accepted-
+// but-not-yet-enrolled applicant, so Billing shows the real payment
+// structure instead of one lump "Tuition" number).
+function _buildInstallmentSchedule(sesObj,tuition){
+    if(!sesObj||!sesObj.paymentPlan||sesObj.paymentPlan==='full')return null;
+    var plan=sesObj.paymentPlan,out=[],today=new Date();
+    if(plan==='deposit'){
+        var dep=sesObj.depositAmount||Math.round(tuition*0.25);
+        out.push({label:'Down Payment',amount:dep,dueDate:today.toISOString().split('T')[0],status:'pending'});
+        out.push({label:'Remaining Tuition',amount:tuition-dep,dueDate:sesObj.startDate||'',status:'pending'});
+    }else{
+        var numPayments=parseInt(plan)||2;
+        var perPayment=Math.floor(tuition/numPayments);
+        var remainder=tuition-(perPayment*numPayments);
+        for(var pi=0;pi<numPayments;pi++){
+            var due=new Date(today);due.setDate(due.getDate()+30*pi);
+            var amt=perPayment+(pi===0?remainder:0);
+            out.push({label:'Payment '+(pi+1)+' of '+numPayments,amount:amt,dueDate:due.toISOString().split('T')[0],status:'pending'});
+        }
+    }
+    return out;
 }
 
 // ── ANALYTICS & FINANCE ──────────────────────────────────────
@@ -7292,9 +7303,18 @@ function buildFamilyLedgers(){
             ledgers[fk].entries.push({type:'credit',category:'Discount',desc:(e.discount.pct?e.discount.pct+'% ':'')+'discount for '+esc(e.camperName),amount:discAmt,date:e.enrolledDate||e.appliedDate||'',ref:eid+'_disc'});
             ledgers[fk].totalCredits+=discAmt;
         }
-        // Installments as sub-entries
-        if(e.installments&&e.installments.length>1){
-            e.installments.forEach(function(inst,ii){
+        // Installments as sub-entries — the down payment vs. the rest of
+        // tuition. Already-enrolled campers have this persisted on
+        // e.installments; an accepted-but-not-yet-enrolled applicant doesn't
+        // (enrollCamper() is what computes and saves it), so preview it here
+        // with the same builder instead of only ever showing one lump
+        // "Tuition" number.
+        var schedule=e.installments;
+        if((!schedule||!schedule.length)&&e.status==='accepted'){
+            schedule=_buildInstallmentSchedule(sessions.find(function(s){return s.name===e.session}),net);
+        }
+        if(schedule&&schedule.length>1){
+            schedule.forEach(function(inst,ii){
                 ledgers[fk].entries.push({type:'installment',category:inst.label,desc:esc(e.camperName)+' — '+esc(inst.label),amount:inst.amount,date:inst.dueDate||'',status:inst.status||'pending',ref:eid+'_inst'+ii});
             });
         }
