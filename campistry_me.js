@@ -436,7 +436,25 @@ var _ICO={
 function ico(name){return _ICO[name]||'';}
 function dtag(d){var c=(structure[d]&&structure[d].color)||'#94A3B8';return'<span class="div-tag" style="background:'+c+'10;color:'+c+'"><span class="div-dot" style="background:'+c+'"></span>'+esc(d)+'</span>'}
 function fm(n){return'$'+Number(n||0).toLocaleString()}
-function toast(m,t){var el=document.getElementById('meToast');if(!el)return;el.className='me-toast '+(t==='error'?'bad':'ok')+' vis';document.getElementById('tI').textContent=t==='error'?'✕':'✓';document.getElementById('tM').textContent=m;clearTimeout(el._t);el._t=setTimeout(function(){el.classList.remove('vis')},2600)}
+// opts: {actionLabel, onAction} — an optional action button (e.g. "Undo").
+// Gets a longer on-screen window than a plain toast so a real click can land.
+function toast(m,t,opts){
+    var el=document.getElementById('meToast');if(!el)return;
+    el.className='me-toast '+(t==='error'?'bad':'ok')+' vis';
+    document.getElementById('tI').textContent=t==='error'?'✕':'✓';
+    document.getElementById('tM').textContent=m;
+    var a=document.getElementById('tA');
+    clearTimeout(el._t);
+    if(a&&opts&&opts.actionLabel&&opts.onAction){
+        a.textContent=opts.actionLabel;
+        a.style.display='';
+        a.onclick=function(){clearTimeout(el._t);el.classList.remove('vis');opts.onAction()};
+        el._t=setTimeout(function(){el.classList.remove('vis')},6000);
+    }else{
+        if(a){a.style.display='none';a.onclick=null}
+        el._t=setTimeout(function(){el.classList.remove('vis')},2600);
+    }
+}
 function openModal(id){
     var e=document.getElementById(id); if(!e)return;
     e.classList.remove('closing'); // strip a pending close if reopened mid-animation
@@ -992,12 +1010,15 @@ function saveFamily(){
 // ★ Day 5: families had no delete control (a missing/dead-control gap). Campers do NOT
 //   back-reference a family, so deleting one just removes the household; the campers
 //   remain (simply unassigned) — no cascade needed.
-function deleteFamily(id){
+async function deleteFamily(id){
     if(!id||!families[id])return;
     var nm=families[id].name||'this family';
-    if(!confirm('Delete "'+nm+'"? Its campers will remain in the roster but be unassigned from this family. This cannot be undone.'))return;
+    var ok=await confirmDialog({title:'Delete Family?',message:'<strong>'+esc(nm)+'</strong> will be deleted. Its campers will remain in the roster but be unassigned from this family.',confirmLabel:'Delete',danger:true});
+    if(!ok)return;
+    var captured=families[id];
     delete families[id];
-    save();closeModal('familyModal');renderFamiliesPage();toast('Family deleted');
+    save();closeModal('familyModal');renderFamiliesPage();
+    toast('Family deleted','ok',{actionLabel:'Undo',onAction:function(){families[id]=captured;save();renderFamiliesPage();toast('Family restored')}});
 }
 
 // Pull a single camper out of a family (the camper stays in the roster,
@@ -1747,12 +1768,24 @@ function cascadeCamperDelete(name){
     // is removed is worse than leaving the (now-deleted) name on the financial record.
     try{var raw=localStorage.getItem('campistry_go_data');if(raw){var go=JSON.parse(raw);if(go&&go.addresses&&go.addresses[name]){delete go.addresses[name];localStorage.setItem('campistry_go_data',JSON.stringify(go))}}}catch(_){}
 }
-function deleteCamper(n){
+async function deleteCamper(n){
     if(!n||!roster[n])return;
-    if(!confirm('Delete camper "'+n+'"? This cannot be undone.'))return;
+    var ok=await confirmDialog({title:'Delete Camper?',message:'<strong>'+esc(n)+'</strong> will be permanently deleted.',confirmLabel:'Delete',danger:true});
+    if(!ok)return;
+    var capturedRoster=roster[n];
+    var capturedFamilyLinks=[];
+    Object.entries(families).forEach(function(pair){if((pair[1].camperIds||[]).indexOf(n)>=0)capturedFamilyLinks.push(pair[0])});
+    var capturedBunks=[];
+    Object.entries(bunkAsgn).forEach(function(pair){if(Array.isArray(pair[1])&&pair[1].indexOf(n)>=0)capturedBunks.push(pair[0])});
     delete roster[n];
     cascadeCamperDelete(n);
-    save();closeModal('camperViewModal');render(curPage);toast('Camper deleted');
+    save();closeModal('camperViewModal');render(curPage);
+    toast('Camper deleted','ok',{actionLabel:'Undo',onAction:function(){
+        roster[n]=capturedRoster;
+        capturedFamilyLinks.forEach(function(fk){if(families[fk]){if(!families[fk].camperIds)families[fk].camperIds=[];if(families[fk].camperIds.indexOf(n)<0)families[fk].camperIds.push(n)}});
+        capturedBunks.forEach(function(b){if(!bunkAsgn[b])bunkAsgn[b]=[];if(bunkAsgn[b].indexOf(n)<0)bunkAsgn[b].push(n)});
+        save();render(curPage);toast('Camper restored');
+    }});
 }
 function grOpts(div){var o=[''];if(div&&structure[div]){var ord=structure[div].gradeOrder,keys=Object.keys(structure[div].grades||{});(Array.isArray(ord)&&ord.length?ord.filter(function(g){return g in(structure[div].grades||{})}):keys.sort()).forEach(function(g){o.push(g)})}return o}
 function bkOpts(div,gr){var o=[''];if(div&&gr&&structure[div]&&structure[div].grades&&structure[div].grades[gr])(structure[div].grades[gr].bunks||[]).forEach(function(b){o.push(b)});return o}
@@ -2157,7 +2190,7 @@ function _wireGradeRow(rowEl){
         };
     });
     var rmBtn=rowEl.querySelector('.dm-grade-remove');
-    if(rmBtn)rmBtn.onclick=function(){if(confirm('Remove this grade?'))rowEl.remove()};
+    if(rmBtn)rmBtn.onclick=async function(){var ok=await confirmDialog({title:'Remove Grade?',message:'This grade group will be removed.',confirmLabel:'Remove',danger:true});if(ok)rowEl.remove()};
     var bunkList=rowEl.querySelector('.me-bunk-list');
     var addInp=rowEl.querySelector('.me-bunk-input');
     var addBtn=rowEl.querySelector('.me-bunk-add');
@@ -2363,8 +2396,9 @@ function saveDiv(){
     var removedGrades=oldGrades.filter(function(g){return !(g in grades)&&!(g in gradeRenameMap)});
     if(removedGrades.length>0){_purgeOrphanedSkeletonTiles(removedGrades);_purgeOrphanedAutoLayers(removedGrades);_purgeOrphanedCampPeriods(removedGrades);/* ★ CB-102/105 */}
 }
-function deleteDiv(n){
-    if(!confirm('Delete "'+n+'"?'))return;
+async function deleteDiv(n){
+    var ok=await confirmDialog({title:'Delete Division?',message:'<strong>'+esc(n)+'</strong> and all its grades and bunks will be deleted. Campers in it become unassigned.',confirmLabel:'Delete',danger:true});
+    if(!ok)return;
     // ★ Collect all bunks AND grades from this division before deleting
     var removedBunks=[];var removedGrades=[];
     if(structure[n]&&structure[n].grades){
@@ -2969,7 +3003,7 @@ function autoAssign(){
     });
     save();renderBB();toast('Auto-assigned')
 }
-function clearBunks(){if(!confirm('Clear all?'))return;Object.values(roster).forEach(function(c){c.bunk=''});save();renderBB();toast('Cleared')}
+async function clearBunks(){var ok=await confirmDialog({title:'Clear All Bunk Assignments?',message:'Every camper will be unassigned from their bunk.',confirmLabel:'Clear All',danger:true});if(!ok)return;Object.values(roster).forEach(function(c){c.bunk=''});save();renderBB();toast('Cleared')}
 
 // ═══ BUNK GENERATOR SETTINGS ════════════════════════════════════
 // Camp-wide policy consumed by autoGenerateBunks() below and by the
@@ -3867,7 +3901,7 @@ function setLeadStatus(id,status){var l=leads[id];if(!l)return;l.status=status;i
 function saveLeadNotes(id){var l=leads[id];if(!l)return;var el=document.getElementById('leadNote');if(el)l.notes=el.value;save();toast('Notes saved');}
 function setLeadFollowUp(id){var l=leads[id];if(!l)return;var el=document.getElementById('leadFU');if(el)l.nextFollowUp=el.value;save();renderLeads();viewLead(id);toast('Follow-up set');}
 function addLeadActivity(id){var l=leads[id];if(!l)return;var el=document.getElementById('leadAct');var t=el&&el.value.trim();if(!t)return;if(!l.activity)l.activity=[];l.activity.push({date:today(),text:t});save();viewLead(id);}
-function deleteLead(id){if(!leads[id])return;if(!confirm('Delete this lead?'))return;delete leads[id];save();closeModal('dynModal');renderLeads();toast('Lead deleted');}
+async function deleteLead(id){if(!leads[id])return;var ok=await confirmDialog({title:'Delete Lead?',message:'This lead will be permanently deleted.',confirmLabel:'Delete',danger:true});if(!ok)return;delete leads[id];save();closeModal('dynModal');renderLeads();toast('Lead deleted');}
 function addLead(){
     var h='<div class="me-modal-form">';
     h+='<div class="me-field"><label>Parent / guardian name</label><input class="me-input" id="ldN"></div>';
@@ -3877,7 +3911,7 @@ function addLead(){
     h+='<div class="me-field"><label>Source</label><input class="me-input" id="ldS" placeholder="Referral, website, social…"></div></div>';
     showModal('Add Lead',h,function(){
         var name=document.getElementById('ldN').value.trim();
-        if(!name){alert('Enter a parent name');return;}
+        if(!name){toast('Enter a parent name','error');return;}
         var id='lead_'+Date.now()+'_'+Math.random().toString(36).slice(2,6);
         leads[id]={parentName:name,email:document.getElementById('ldE').value.trim(),phone:document.getElementById('ldP').value.trim(),camperName:document.getElementById('ldC').value.trim(),camperGrade:document.getElementById('ldG').value.trim(),interests:document.getElementById('ldI').value.trim(),source:document.getElementById('ldS').value.trim()||'Manual',status:'new',createdDate:today(),createdAt:new Date().toISOString(),notes:'',activity:[]};
         save();closeModal('dynModal');renderLeads();toast('Lead added');
@@ -4337,7 +4371,7 @@ function addStaffApp(){
         if(secEnabled.role&&!positionsChecked.length&&!missingLabel)missingLabel='Position(s)';
         var first=values.first||'',last=values.last||'';
         if(!first&&!last&&!missingLabel)missingLabel='Name';
-        if(missingLabel){alert('Enter: '+missingLabel);return;}
+        if(missingLabel){toast('Enter: '+missingLabel,'error');return;}
 
         var id='staff_'+Date.now()+'_'+Math.random().toString(36).slice(2,6);
         staffApplications[id]={
@@ -5902,7 +5936,7 @@ function addApplication(){
         });
     }
 
-    showModal('New Application',h,function(){
+    showModal('New Application',h,async function(){
         var values={},missingLabel=null;
         order.forEach(function(sectionKey){
             if(!secEnabled[sectionKey])return;
@@ -5927,7 +5961,7 @@ function addApplication(){
                 }else if(!(document.getElementById('appCq'+i)?.value||'').trim())missingLabel=q.label;
             });
         }
-        if(missingLabel){alert('Enter: '+missingLabel);return;}
+        if(missingLabel){toast('Enter: '+missingLabel,'error');return;}
 
         var first=values.first||'',last=values.last||'';
         var camperName=(first+' '+last).trim()||'New Applicant';
@@ -5936,7 +5970,8 @@ function addApplication(){
         if(sesObj&&sesObj.capacity>0){
             var enrolled=Object.values(enrollments).filter(function(e){return e.session===session&&(e.status==='enrolled'||e.status==='accepted')}).length;
             if(enrolled>=sesObj.capacity){
-                if(!confirm(session+' is at capacity ('+enrolled+'/'+sesObj.capacity+'). Add to waitlist?'))return;
+                var okWl=await confirmDialog({title:'Session at Capacity',message:esc(session)+' is at capacity ('+enrolled+'/'+sesObj.capacity+'). Add this applicant to the waitlist instead?',confirmLabel:'Add to Waitlist',danger:false});
+                if(!okWl)return;
             }
         }
         var isWaitlist=!!(sesObj&&sesObj.capacity>0&&Object.values(enrollments).filter(function(e){return e.session===session&&(e.status==='enrolled'||e.status==='accepted')}).length>=sesObj.capacity);
@@ -6020,11 +6055,14 @@ function _updateRegBulkBar(){
     var bar=document.getElementById('regBulkBar'); if(bar) bar.style.display=n?'flex':'none';
     var lbl=document.getElementById('regBulkCount'); if(lbl) lbl.textContent=n+' selected';
 }
-function bulkEnrollStatus(status){
+async function bulkEnrollStatus(status){
     var ids=_checkedEnrollIds();
     if(!ids.length){ toast('Select at least one application'); return; }
     var verb=status==='accepted'?'Accepted':status==='declined'?'Declined':status==='waitlisted'?'Waitlisted':(status+'d');
-    if(status==='declined' && !confirm('Decline '+ids.length+' application'+(ids.length>1?'s':'')+'?')) return;
+    if(status==='declined'){
+        var okDecline=await confirmDialog({title:'Decline Applications?',message:'Decline '+ids.length+' application'+(ids.length>1?'s':'')+'?',confirmLabel:'Decline',danger:true});
+        if(!okDecline)return;
+    }
     ids.forEach(function(id){ updateEnrollStatus(id,status,{silent:true}); });
     save(); renderEnrollment(); _refreshPplIfActive(); toast(verb+' '+ids.length+' application'+(ids.length>1?'s':''));
 }
@@ -6984,11 +7022,11 @@ function finAddPayment(){
     h+='</div>';
     showModal('Record Payment',h,function(){
         var family=(document.getElementById('fapFamily').value||'').trim();
-        if(!family){alert('Family name is required');return}
+        if(!family){toast('Family name is required','error');return}
         var amount=parseFloat(document.getElementById('fapAmount').value)||0;
-        if(!amount){alert('Enter an amount');return}
+        if(!amount){toast('Enter an amount','error');return}
         var method=document.getElementById('fapMethod').value;
-        if(!_payAllowed(method,'tuition')){alert('That payment method isn\'t accepted for tuition.');return}
+        if(!_payAllowed(method,'tuition')){toast('That payment method isn\'t accepted for tuition.','error');return}
         finPayments.push({id:Date.now(),family:family,amount:amount,method:method,
                           date:document.getElementById('fapDate').value||today,status:'paid'});
         closeModal('dynModal');
@@ -7034,7 +7072,7 @@ function finRefund(id){
     h+='</div>';
     showModal('Refund Payment',h,async function(){
         var amt=parseFloat(document.getElementById('rfAmount').value)||0;
-        if(amt<=0||amt>maxRefund+0.001){alert('Enter an amount up to '+fm(maxRefund));return}
+        if(amt<=0||amt>maxRefund+0.001){toast('Enter an amount up to '+fm(maxRefund),'error');return}
         var reasonSel=document.getElementById('rfReason').value;
         var doStripe=canStripe&&document.getElementById('rfStripe')&&document.getElementById('rfStripe').checked;
         var stripeRefundId=null;
@@ -7684,9 +7722,10 @@ function prPayTypeHint(){
     var t=core.PAY_TYPES.filter(function(p){return p.id===sel.value})[0];
     lbl.textContent=t?t.rateLabel:'Rate';
 }
-function prRemoveStaff(id){
+async function prRemoveStaff(id){
     var s=_prStaffById(id); if(!s)return;
-    if(!confirm('Remove '+(s.name||'this person')+' from payroll? Their timesheets are removed too.'))return;
+    var ok=await confirmDialog({title:'Remove from Payroll?',message:'<strong>'+esc(s.name||'This person')+'</strong> will be removed from payroll. Their timesheets are removed too.',confirmLabel:'Remove',danger:true});
+    if(!ok)return;
     payroll.staff=payroll.staff.filter(function(x){return String(x.id)!==String(id)});
     payroll.timesheets=payroll.timesheets.filter(function(t){return String(t.staffId)!==String(id)});
     save(); renderPayroll(); toast('Removed from payroll');
@@ -7947,10 +7986,17 @@ function prNewRun(){
         save(); renderPayroll(); toast('Pay run created');
     });
 }
-function prDeleteRun(id){
-    if(!confirm('Delete this pay run? The timesheets it was built from are kept.'))return;
+async function prDeleteRun(id){
+    var ok=await confirmDialog({title:'Delete Pay Run?',message:'This pay run will be deleted. The timesheets it was built from are kept.',confirmLabel:'Delete',danger:true});
+    if(!ok)return;
+    var idx=payroll.payRuns.findIndex(function(r){return r.id===id});
+    var captured=idx>=0?payroll.payRuns[idx]:null;
     payroll.payRuns=payroll.payRuns.filter(function(r){return r.id!==id});
-    save(); renderPayroll(); toast('Pay run deleted');
+    save(); renderPayroll();
+    toast('Pay run deleted','ok',{actionLabel:'Undo',onAction:function(){
+        if(captured){if(idx>=0&&idx<=payroll.payRuns.length)payroll.payRuns.splice(idx,0,captured);else payroll.payRuns.push(captured);}
+        save();renderPayroll();toast('Pay run restored');
+    }});
 }
 
 function prExportCSV(){
@@ -8162,14 +8208,14 @@ function openPaymentForFamily(famKey){
     showModal('Record Payment',h,function(){
         var fk=document.getElementById('payFamKey').value;
         var f=families[fk];
-        if(!fk||!f){alert('Select a family');return}
+        if(!fk||!f){toast('Select a family','error');return}
         var amt=parseFloat(document.getElementById('payAmount').value)||0;
-        if(!amt){alert('Enter an amount');return}
+        if(!amt){toast('Enter an amount','error');return}
         var date=document.getElementById('payDate').value;
         var method=document.getElementById('payMethod').value;
         // Guard the save path too — a stale tab or an edited DOM must not slip
         // a refused method (debit) past the picker.
-        if(!_payAllowed(method,'tuition')){alert('That payment method isn\'t accepted for tuition.');return}
+        if(!_payAllowed(method,'tuition')){toast('That payment method isn\'t accepted for tuition.','error');return}
         var ref=document.getElementById('payRef').value.trim();
         var notes=document.getElementById('payNotes').value.trim();
         finPayments.push({id:'pay_'+Date.now(),family:f.name,familyKey:fk,amount:amt,date:date,method:method,reference:ref,notes:notes,timestamp:Date.now()});
@@ -8206,9 +8252,9 @@ function addChargeForFamily(famKey){
     showModal('Add Charge',h,function(){
         var fk=document.getElementById('chgFamKey').value;
         var f=families[fk];
-        if(!fk||!f){alert('Select a family');return}
+        if(!fk||!f){toast('Select a family','error');return}
         var amt=parseFloat(document.getElementById('chgAmount').value)||0;
-        if(!amt){alert('Enter an amount');return}
+        if(!amt){toast('Enter an amount','error');return}
         if(!f.charges) f.charges=[];
         f.charges.push({id:'chg_'+Date.now(),category:document.getElementById('chgCategory').value,description:document.getElementById('chgDesc').value.trim(),amount:amt,date:document.getElementById('chgDate').value,timestamp:Date.now()});
         f.balance=(f.balance||0)+amt;
@@ -8237,9 +8283,9 @@ function issueCreditForFamily(famKey){
     showModal('Issue Credit',h,function(){
         var fk=document.getElementById('crFamKey').value;
         var f=families[fk];
-        if(!fk||!f){alert('Select a family');return}
+        if(!fk||!f){toast('Select a family','error');return}
         var amt=parseFloat(document.getElementById('crAmount').value)||0;
-        if(!amt){alert('Enter an amount');return}
+        if(!amt){toast('Enter an amount','error');return}
         if(!f.credits) f.credits=[];
         f.credits.push({id:'cr_'+Date.now(),reason:document.getElementById('crReason').value.trim(),amount:amt,date:new Date().toISOString().split('T')[0],timestamp:Date.now()});
         f.balance=Math.max(0,(f.balance||0)-amt);
@@ -8283,14 +8329,24 @@ function printStatement(famKey){
     w.document.write(h);w.document.close();
 }
 
-function removePayment(idx){
-    if(!confirm('Remove this payment?'))return;
+async function removePayment(idx){
+    var ok=await confirmDialog({title:'Remove Payment?',message:'This will remove the payment record and adjust the family balance.',confirmLabel:'Remove',danger:true});
+    if(!ok)return;
     var p=finPayments[idx];
+    var captured=p?JSON.parse(JSON.stringify(p)):null;
     if(p){
         var f=Object.values(families).find(function(f){return f.name===p.family});
         if(f){f.totalPaid=Math.max(0,(f.totalPaid||0)-p.amount);f.balance=(f.balance||0)+p.amount}
     }
-    finPayments.splice(idx,1);save();renderBilling();toast('Payment removed');
+    finPayments.splice(idx,1);save();renderBilling();
+    toast('Payment removed','ok',{actionLabel:'Undo',onAction:function(){
+        if(captured){
+            var f=Object.values(families).find(function(f){return f.name===captured.family});
+            if(f){f.totalPaid=(f.totalPaid||0)+captured.amount;f.balance=Math.max(0,(f.balance||0)-captured.amount)}
+            finPayments.splice(idx,0,captured);
+        }
+        save();renderBilling();toast('Payment restored');
+    }});
 }
 
 // ═══════════════════════════════════════════════════════════════
@@ -8435,7 +8491,7 @@ async function chargeStoredCard(famKey,amount,description){
         showModal('Charge Card',h,function(){
             var amt=parseFloat(document.getElementById('chargeAmt').value)||0;
             var desc=document.getElementById('chargeDesc').value.trim();
-            if(amt<0.50){alert('Minimum charge is $0.50');return}
+            if(amt<0.50){toast('Minimum charge is $0.50','error');return}
             closeModal('dynModal');
             chargeStoredCard(famKey,amt,desc);
         });
@@ -8543,7 +8599,7 @@ async function sendPayLink(famKey){
     h+='</div>';
     showModal('Online Payment Link',h,async function(){
         var amt=parseFloat(document.getElementById('plAmt').value)||0;
-        if(amt<0.50){alert('Enter an amount of at least $0.50');return}
+        if(amt<0.50){toast('Enter an amount of at least $0.50','error');return}
         var desc=document.getElementById('plDesc').value.trim();
         var btn=document.getElementById('dynModalSave'); if(btn){btn.disabled=true;btn.textContent='Creating…';}
         try{
@@ -8596,7 +8652,7 @@ function monthlyPlan(famKey){
     showModal(existing?'Edit Monthly Plan':'Set Up Monthly Plan',h,function(){
         var total=parseFloat(document.getElementById('mpTotal').value)||0;
         var months=parseInt(document.getElementById('mpMonths').value,10)||1;
-        if(total<0.5){alert('Enter a total of at least $0.50');return}
+        if(total<0.5){toast('Enter a total of at least $0.50','error');return}
         if(months<1)months=1; if(months>24)months=24;
         var start=document.getElementById('mpStart').value||defStart;
         var auto=hasCard&&document.getElementById('mpAuto')&&document.getElementById('mpAuto').checked;
@@ -8618,9 +8674,10 @@ function toggleFamilyAutopay(famKey){
     f.plan.autopay=!f.plan.autopay; save();renderBilling();
     toast('Autopay '+(f.plan.autopay?'ON':'off')+' for '+f.name);
 }
-function cancelMonthlyPlan(famKey){
+async function cancelMonthlyPlan(famKey){
     var f=families[famKey]; if(!f||!f.plan)return;
-    if(!confirm('Cancel the monthly plan for '+f.name+'? Payments already made stay on the ledger.'))return;
+    var ok=await confirmDialog({title:'Cancel Monthly Plan?',message:'Cancel the monthly plan for '+f.name+'? Payments already made stay on the ledger.',confirmLabel:'Cancel Plan',danger:true});
+    if(!ok)return;
     delete f.plan; save();renderBilling();toast('Monthly plan cancelled');
 }
 function _planCardHtml(l){
@@ -8681,13 +8738,13 @@ function openBroadcastModal(){
     h+='<div class="me-field"><label>Method</label><select id="bcMethod" class="me-input"><option value="In-App">In-App (Parent Portal)</option><option value="Email">Email</option><option value="SMS">SMS</option><option value="All Channels">All Channels</option></select></div>';
     h+='<div class="me-field"><label>Subject</label><input type="text" id="bcSubject" class="me-input" placeholder="Message subject..."></div>';
     h+='<div class="me-field"><label>Message</label><textarea id="bcBody" class="me-input" rows="6" placeholder="Type your message here..." style="resize:vertical"></textarea></div></div>';
-    showModal('New Broadcast',h,function(){
+    showModal('New Broadcast',h,async function(){
         var to=document.getElementById('bcTo').value;
         var div=document.getElementById('bcDiv')?.value||'';
         var method=document.getElementById('bcMethod').value;
         var subject=document.getElementById('bcSubject').value.trim();
         var body=document.getElementById('bcBody').value.trim();
-        if(!subject&&!body){alert('Enter a subject or message');return}
+        if(!subject&&!body){toast('Enter a subject or message','error');return}
         // Count recipients
         var count=0;
         if(to==='all') count=Object.keys(families).length||Object.keys(roster).length;
@@ -8700,7 +8757,10 @@ function openBroadcastModal(){
         //   modal only LOGGED the broadcast yet toasted "sent" — so e-mail/SMS reached no one.
         //   Now: confirm before a real send (safety gate), then deliver; In-App is a portal record.
         var realSend=/email|sms|all channels/i.test(method);
-        if(realSend&&!confirm('Send this '+method+' broadcast to '+label+' (~'+count+' recipient'+(count!==1?'s':'')+') now? This delivers to real parents/staff immediately.'))return;
+        if(realSend){
+            var okSend=await confirmDialog({title:'Send Broadcast?',message:'Send this '+method+' broadcast to '+label+' (~'+count+' recipient'+(count!==1?'s':'')+') now? This delivers to real parents/staff immediately.',confirmLabel:'Send',danger:false});
+            if(!okSend)return;
+        }
         broadcasts.push(rec);
         save();closeModal();renderBroadcasts();
         if(realSend){
@@ -8721,12 +8781,18 @@ function viewBroadcast(idx){
     h+='<div style="background:var(--s50);padding:14px;border-radius:var(--r);font-size:.85rem;line-height:1.6;white-space:pre-wrap">'+esc(b.body||'(no body)')+'</div>';
     showModal('Broadcast',h);
 }
-function removeBroadcast(idx){
+async function removeBroadcast(idx){
     var sorted=[...broadcasts].sort(function(a,b){return(b.timestamp||0)-(a.timestamp||0)});
-    if(!confirm('Delete this broadcast?'))return;
+    var ok=await confirmDialog({title:'Delete Broadcast?',message:'Delete this broadcast? This only removes the log entry, not messages already delivered.',confirmLabel:'Delete',danger:true});
+    if(!ok)return;
     var orig=broadcasts.indexOf(sorted[idx]);
+    var captured=orig>=0?broadcasts[orig]:null;
     if(orig>=0) broadcasts.splice(orig,1);
-    save();renderBroadcasts();toast('Broadcast removed');
+    save();renderBroadcasts();
+    toast('Broadcast removed','ok',{actionLabel:'Undo',onAction:function(){
+        if(captured){broadcasts.splice(orig,0,captured)}
+        save();renderBroadcasts();toast('Broadcast restored');
+    }});
 }
 
 // ═══════════════════════════════════════════════════════════════
@@ -8902,7 +8968,7 @@ function addForm(){
     h+='<div class="me-field"><label>Fields (one per line)</label><textarea id="formFields" class="me-input" rows="6" placeholder="Full Name\nDate of Birth\nAllergies\nMedications\nDoctor Name\nDoctor Phone\nInsurance Provider\nParent Signature" style="resize:vertical;font-family:monospace;font-size:.8rem"></textarea></div></div>';
     showModal('Create Form',h,function(){
         var name=document.getElementById('formName').value.trim();
-        if(!name){alert('Enter a form name');return}
+        if(!name){toast('Enter a form name','error');return}
         var fields=(document.getElementById('formFields').value||'').split('\n').map(function(l){return l.trim()}).filter(Boolean);
         campForms.push({
             id:'form_'+Date.now(),
@@ -8917,7 +8983,11 @@ function addForm(){
         saveForms();save();closeModal();renderForms();toast('Form created');
     });
 }
-function deleteForm(idx){if(!confirm('Delete this form?'))return;campForms.splice(idx,1);saveForms();save();renderForms();toast('Form deleted')}
+async function deleteForm(idx){
+    var ok=await confirmDialog({title:'Delete Form?',message:'Delete this form?',confirmLabel:'Delete',danger:true});
+    if(!ok)return;
+    campForms.splice(idx,1);saveForms();save();renderForms();toast('Form deleted')
+}
 function viewFormResponses(idx){
     var f=campForms[idx];if(!f)return;
     var completed=new Set((f.responses||[]).map(function(r){return r.camper}));
@@ -8947,7 +9017,7 @@ function addLinkDigitalForm(){
     h+='</div>';
     showModal('Add Digital Form',h,function(){
         var name=document.getElementById('lfName').value.trim();
-        if(!name){alert('Enter a form name');return;}
+        if(!name){toast('Enter a form name','error');return;}
         linkForms.digital.push({id:'lfd_'+Date.now(),name:name,description:document.getElementById('lfDesc').value.trim(),required:document.getElementById('lfReq').value.startsWith('Yes'),created:Date.now()});
         saveLinkForms();closeModal('dynModal');renderForms();switchFormsTab('link');toast('Digital form added');
     });
@@ -8962,7 +9032,7 @@ function addLinkPrintForm(){
     h+='</div>';
     showModal('Add Print & Return Form',h,function(){
         var name=document.getElementById('lfName').value.trim();
-        if(!name){alert('Enter a form name');return;}
+        if(!name){toast('Enter a form name','error');return;}
         linkForms.printReturn.push({id:'lfp_'+Date.now(),name:name,description:document.getElementById('lfDesc').value.trim(),downloadUrl:document.getElementById('lfUrl').value.trim(),required:document.getElementById('lfReq').value.startsWith('Yes'),created:Date.now()});
         saveLinkForms();closeModal('dynModal');renderForms();switchFormsTab('link');toast('Print form added');
     });
@@ -8976,7 +9046,7 @@ function addLinkDocument(){
     h+='</div>';
     showModal('Add Camp Document',h,function(){
         var name=document.getElementById('lfName').value.trim();
-        if(!name){alert('Enter a document name');return;}
+        if(!name){toast('Enter a document name','error');return;}
         linkForms.documents.push({id:'lfdoc_'+Date.now(),name:name,description:document.getElementById('lfDesc').value.trim(),downloadUrl:document.getElementById('lfUrl').value.trim(),created:Date.now()});
         saveLinkForms();closeModal('dynModal');renderForms();switchFormsTab('link');toast('Document added');
     });
@@ -8994,7 +9064,7 @@ function editLinkItem(type,idx){
     h+='</div>';
     showModal('Edit Item',h,function(){
         var name=document.getElementById('lfName').value.trim();
-        if(!name){alert('Enter a name');return;}
+        if(!name){toast('Enter a name','error');return;}
         item.name=name;
         item.description=document.getElementById('lfDesc').value.trim();
         if(!isDigital)item.downloadUrl=document.getElementById('lfUrl').value.trim();
@@ -9003,8 +9073,9 @@ function editLinkItem(type,idx){
     });
 }
 
-function deleteLinkItem(type,idx){
-    if(!confirm('Delete this item?'))return;
+async function deleteLinkItem(type,idx){
+    var ok=await confirmDialog({title:'Delete Item?',message:'Delete this item?',confirmLabel:'Delete',danger:true});
+    if(!ok)return;
     linkForms[type].splice(idx,1);
     saveLinkForms();renderForms();switchFormsTab('link');toast('Deleted');
 }
@@ -9349,11 +9420,17 @@ function printSavedReport(id){
     w.document.close();
 }
 
-function deleteSavedReport(id){
+async function deleteSavedReport(id){
     var rep=savedReports.filter(function(r){return r.id===id;})[0]; if(!rep) return;
-    if(!confirm('Delete report "'+rep.name+'"?')) return;
+    var ok=await confirmDialog({title:'Delete Report?',message:'Delete report "'+rep.name+'"?',confirmLabel:'Delete',danger:true});
+    if(!ok) return;
+    var idx=savedReports.indexOf(rep);
     savedReports=savedReports.filter(function(r){return r.id!==id;});
-    save(); renderReports(); toast('Report deleted');
+    save(); renderReports();
+    toast('Report deleted','ok',{actionLabel:'Undo',onAction:function(){
+        savedReports.splice(Math.min(idx,savedReports.length),0,rep);
+        save(); renderReports(); toast('Report restored');
+    }});
 }
 
 function dlCsv(name,csv){
@@ -9474,7 +9551,8 @@ async function sendPaymentReminders(){
     var jobs=[];
     Object.entries(enrollments).forEach(function([eid,e]){if(e.status!=='enrolled'||!e.installments)return;e.installments.forEach(function(inst){if(inst.status!=='pending')return;if(inst.dueDate===sevenDays||inst.dueDate===today||(inst.dueDate&&inst.dueDate<today)){if(e.parentEmail){var type=inst.dueDate<today?'payment_overdue':'payment_reminder';jobs.push({email:e.parentEmail,name:e.parentName||'',type:type,data:{campName:campName,camperName:e.camperName||'',parentName:e.parentName||'',amount:fm(inst.amount||0),dueDate:inst.dueDate}})}}})});
     if(!jobs.length){toast('No payment reminders due','error');return}
-    if(!confirm('Send '+jobs.length+' payment reminder email'+(jobs.length!==1?'s':'')+' to parents now? This emails them immediately.'))return;
+    var okPr=await confirmDialog({title:'Send Payment Reminders?',message:'Send '+jobs.length+' payment reminder email'+(jobs.length!==1?'s':'')+' to parents now? This emails them immediately.',confirmLabel:'Send',danger:false});
+    if(!okPr)return;
     jobs.forEach(function(j){callEdgeFunction('auto-notify',{recipients:[{email:j.email,name:j.name}],type:j.type,data:j.data}).catch(function(){})});
     toast(jobs.length+' payment reminder'+(jobs.length!==1?'s':'')+' sent');
 }
@@ -9484,7 +9562,8 @@ async function sendFormReminders(){
     var jobs=[];
     campForms.filter(function(f){return f.required}).forEach(function(f){var completed=new Set((f.responses||[]).map(function(r){return r.camper}));Object.entries(roster).forEach(function([name,c]){if(completed.has(name))return;if(!c.parent1Email)return;jobs.push({email:c.parent1Email,name:c.parent1Name||'',data:{campName:campName,camperName:name,parentName:c.parent1Name||'',formName:f.name}})})});
     if(!jobs.length){toast('No form reminders to send','error');return}
-    if(!confirm('Send '+jobs.length+' form reminder email'+(jobs.length!==1?'s':'')+' to parents now? This emails them immediately.'))return;
+    var okFr=await confirmDialog({title:'Send Form Reminders?',message:'Send '+jobs.length+' form reminder email'+(jobs.length!==1?'s':'')+' to parents now? This emails them immediately.',confirmLabel:'Send',danger:false});
+    if(!okFr)return;
     jobs.forEach(function(j){callEdgeFunction('auto-notify',{recipients:[{email:j.email,name:j.name}],type:'form_reminder',data:j.data}).catch(function(){})});
     toast(jobs.length+' form reminder'+(jobs.length!==1?'s':'')+' sent');
 }
@@ -9495,7 +9574,7 @@ async function sendFormReminders(){
 function addCamperNote(camperName){
     var h='<div class="me-modal-form"><div class="me-field"><label>Note Type</label><select id="noteType" class="me-input"><option>General</option><option>Parent Communication</option><option>Behavior</option><option>Medical</option><option>Bunk Change</option><option>Incident</option><option>Financial</option></select></div><div class="me-field"><label>Note</label><textarea id="noteBody" class="me-input" rows="4" style="resize:vertical" placeholder="What happened..."></textarea></div></div>';
     showModal('Add Note — '+camperName,h,function(){
-        var body=document.getElementById('noteBody').value.trim();if(!body){alert('Enter a note');return}
+        var body=document.getElementById('noteBody').value.trim();if(!body){toast('Enter a note','error');return}
         if(!roster[camperName])return;if(!roster[camperName].notes)roster[camperName].notes=[];
         roster[camperName].notes.push({type:document.getElementById('noteType').value,body:body,date:new Date().toISOString(),by:'office'});
         save();closeModal('dynModal');viewCamper(camperName);toast('Note added');
@@ -9598,7 +9677,7 @@ function manageCustomFields(){
     showModal('Manage Custom Fields',h);
     setTimeout(function(){var s=document.getElementById('cfNewType');if(s)s.onchange=function(){document.getElementById('cfOptWrap').style.display=s.value==='select'?'block':'none'}},100);
 }
-function _addCustomField(){var l=(document.getElementById('cfNewLabel').value||'').trim();if(!l){alert('Enter name');return}var t=document.getElementById('cfNewType').value||'text';var o=t==='select'?(document.getElementById('cfOpts').value||'').split(',').map(function(x){return x.trim()}).filter(Boolean):[];customFields.push({label:l,type:t,options:o,id:'cf_'+Date.now()});saveCustomFields();save();closeModal('dynModal');manageCustomFields();toast('Field added')}
+function _addCustomField(){var l=(document.getElementById('cfNewLabel').value||'').trim();if(!l){toast('Enter name','error');return}var t=document.getElementById('cfNewType').value||'text';var o=t==='select'?(document.getElementById('cfOpts').value||'').split(',').map(function(x){return x.trim()}).filter(Boolean):[];customFields.push({label:l,type:t,options:o,id:'cf_'+Date.now()});saveCustomFields();save();closeModal('dynModal');manageCustomFields();toast('Field added')}
 function _removeCustomField(i){customFields.splice(i,1);saveCustomFields();save();closeModal('dynModal');manageCustomFields();toast('Removed')}
 
 // ═══════════════════════════════════════════════════════════════
@@ -9621,7 +9700,7 @@ function _removeDoc(n,i){if(!roster[n]||!roster[n].documents)return;roster[n].do
 function addScholarship(camperName){
     var h='<div class="me-modal-form"><p style="font-size:.85rem;color:var(--s600);margin-bottom:12px">Award aid to <strong>'+esc(camperName)+'</strong></p><div class="me-field"><label>Type</label><select id="aidType" class="me-input"><option>Scholarship</option><option>Financial Aid</option><option>Campership</option><option>Staff Discount</option><option>Donor Sponsored</option></select></div><div style="display:grid;grid-template-columns:1fr 1fr;gap:10px"><div class="me-field"><label>Amount ($)</label><input type="number" id="aidAmt" class="me-input" step="0.01" min="0"></div><div class="me-field"><label>Source</label><input type="text" id="aidSrc" class="me-input" placeholder="Donor or fund name"></div></div><div class="me-field"><label>Notes</label><input type="text" id="aidNotes" class="me-input"></div></div>';
     showModal('Award Financial Aid',h,function(){
-        var amt=parseFloat(document.getElementById('aidAmt').value)||0;if(!amt){alert('Enter amount');return}
+        var amt=parseFloat(document.getElementById('aidAmt').value)||0;if(!amt){toast('Enter amount','error');return}
         if(!roster[camperName])return;if(!roster[camperName].scholarships)roster[camperName].scholarships=[];
         roster[camperName].scholarships.push({type:document.getElementById('aidType').value,amount:amt,source:(document.getElementById('aidSrc').value||'').trim(),notes:(document.getElementById('aidNotes').value||'').trim(),date:new Date().toISOString().split('T')[0]});
         var famKey=Object.keys(families).find(function(k){return(families[k].camperIds||[]).indexOf(camperName)>=0});
@@ -9749,7 +9828,7 @@ function handleCsv(file){
             var pvEl=document.getElementById('csvPV');
             if(pvEl){pvEl.style.display='block';pvEl.innerHTML='<div style="font-weight:600;margin:8px 0 4px">'+rows.length+' campers found</div><div style="font-size:.75rem;color:var(--s400)">Columns detected: '+hdr.filter(function(h){return h}).length+'</div>'}
             var btn=document.getElementById('csvBtn');
-            if(btn){btn.disabled=false;btn.onclick=function(){
+            if(btn){btn.disabled=false;btn.onclick=async function(){
                 // ★ #3 + footgun: importRows WIPES all current campers/structure/families/bunks
                 //   (and fans the wipe to cloud) — confirm first. Also, roster is keyed by NAME,
                 //   so duplicate-name rows would silently overwrite each other; de-dupe (last
@@ -9758,9 +9837,9 @@ function handleCsv(file){
                 rows.forEach(function(r){ if(byName[r.name])dupNames.push(r.name); byName[r.name]=r; });
                 var uniqueRows=Object.keys(byName).map(function(n){return byName[n]});
                 var msg='Import will REPLACE all current campers, divisions, grades, bunks, and families with this file ('+uniqueRows.length+' camper'+(uniqueRows.length===1?'':'s')+'). This cannot be undone.';
-                if(dupNames.length){var ex=dupNames.slice(0,3).join(', ');msg+='\n\n⚠ '+dupNames.length+' duplicate name'+(dupNames.length===1?'':'s')+' ('+ex+(dupNames.length>3?'…':'')+') — only the last row of each will be kept.';}
-                msg+='\n\nContinue?';
-                if(!confirm(msg))return;
+                if(dupNames.length){var ex=dupNames.slice(0,3).join(', ');msg+='<br><br>⚠ '+dupNames.length+' duplicate name'+(dupNames.length===1?'':'s')+' ('+esc(ex)+(dupNames.length>3?'…':'')+') — only the last row of each will be kept.';}
+                var ok=await confirmDialog({title:'Replace All Camp Data?',message:msg,confirmLabel:'Import & Replace',danger:true});
+                if(!ok)return;
                 importRows(uniqueRows);
             }}
         }
@@ -10261,8 +10340,9 @@ function psNew(){
 }
 function psEdit(id){psEditingId=id;renderPrintSheets()}
 function psBack(){psEditingId=null;renderPrintSheets()}
-function psDelete(id){
-    if(!confirm('Delete this sheet template?'))return;
+async function psDelete(id){
+    var ok=await confirmDialog({title:'Delete Sheet Template?',message:'Delete this sheet template?',confirmLabel:'Delete',danger:true});
+    if(!ok)return;
     var i=printSheets.findIndex(function(s){return s.id===id});
     if(i>=0)printSheets.splice(i,1);
     psSave();if(psEditingId===id)psEditingId=null;renderPrintSheets();toast('Sheet deleted');
