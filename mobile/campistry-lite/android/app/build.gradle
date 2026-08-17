@@ -7,8 +7,16 @@ android {
         applicationId "com.campistry.lite"
         minSdkVersion rootProject.ext.minSdkVersion
         targetSdkVersion rootProject.ext.targetSdkVersion
-        versionCode 1
-        versionName "1.0"
+        // Play Console rejects any upload whose versionCode isn't strictly
+        // higher than the last one it has on file, so this is driven by a
+        // value the release workflow passes in (the CI run number, same
+        // idea as the OTA version stamps) rather than a number someone has
+        // to remember to bump by hand before every submission. Only that
+        // workflow ever sets -PappVersionCode/-PappVersionName; every other
+        // build (debug, a manual local build) falls back to a fixed
+        // placeholder Play Store will never see.
+        versionCode project.hasProperty('appVersionCode') ? (project.appVersionCode as Integer) : 1
+        versionName project.hasProperty('appVersionName') ? project.appVersionName : "1.0"
         testInstrumentationRunner "androidx.test.runner.AndroidJUnitRunner"
         aaptOptions {
              // Files and dirs to omit from the packaged assets dir, modified to accommodate modern web apps.
@@ -16,10 +24,31 @@ android {
             ignoreAssetsPattern = '!.svn:!.git:!.ds_store:!*.scc:.*:!CVS:!thumbs.db:!picasa.ini:!*~'
         }
     }
+
+    // Reads from environment variables, never from a committed value. The
+    // release workflow decodes the keystore secret to a file and exports
+    // these three before invoking bundleRelease; nothing else ever sets
+    // them, so debug builds and a plain local build are completely
+    // unaffected — this whole block is a no-op without that CI job.
+    signingConfigs {
+        release {
+            def ksPath = System.getenv("ANDROID_KEYSTORE_PATH")
+            if (ksPath) {
+                storeFile file(ksPath)
+                storePassword System.getenv("ANDROID_KEYSTORE_PASSWORD")
+                keyAlias System.getenv("ANDROID_KEY_ALIAS")
+                keyPassword System.getenv("ANDROID_KEYSTORE_PASSWORD")
+            }
+        }
+    }
+
     buildTypes {
         release {
             minifyEnabled false
             proguardFiles getDefaultProguardFile('proguard-android.txt'), 'proguard-rules.pro'
+            if (System.getenv("ANDROID_KEYSTORE_PATH")) {
+                signingConfig signingConfigs.release
+            }
         }
     }
 }

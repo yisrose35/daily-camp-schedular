@@ -2,3 +2,10 @@
 *Vulner.txt
 SECURITY_AUDIT.md
 
+# Android signing keys — these live outside the repo entirely
+# (C:\Users\yisro\campistry-signing-keys), never as committed files. This is
+# a defense-in-depth backstop in case a copy ever ends up nearby, not the
+# actual safeguard.
+*.keystore
+*.jks
+

@@ -6,6 +6,17 @@ name: Mobile — Android build
 #
 # Download the APK from the run's "Artifacts" section, open it on an Android
 # phone, and allow install-from-unknown-sources when prompted.
+#
+# Two modes, same shape as the iOS workflow:
+#   * Debug (default) — assembleDebug, unsigned-for-Play-Store, sideload only.
+#     No secrets needed.
+#   * Release — set `release: true` on a manual dispatch. Signs a real
+#     Play Store .aab with the permanent upload key. Requires these secrets
+#     (Settings → Secrets → Actions), one set per app:
+#       LITE_KEYSTORE_BASE64     base64 of the upload keystore file
+#       LITE_KEYSTORE_PASSWORD   its store/key password (same value for both)
+#       LITE_KEY_ALIAS           key alias inside the keystore (e.g. "upload")
+#       LINK_KEYSTORE_BASE64 / LINK_KEYSTORE_PASSWORD / LINK_KEY_ALIAS  — same, for Link
 
 on:
   workflow_dispatch:
@@ -16,6 +27,11 @@ on:
         default: both
         type: choice
         options: [both, lite, link]
+      release:
+        description: Sign a real Play Store .aab with the upload key (requires the keystore secrets)
+        required: false
+        default: false
+        type: boolean
   push:
     branches: [New-Features]
     paths:
@@ -82,7 +98,7 @@ jobs:
         run: npm run sync
 
       - name: Assemble debug APK
-        if: steps.gate.outputs.run == 'yes'
+        if: steps.gate.outputs.run == 'yes' && inputs.release != true
         working-directory: mobile/campistry-${{ matrix.app }}/android
         run: chmod +x ./gradlew && ./gradlew assembleDebug --no-daemon
 
@@ -91,8 +107,50 @@ jobs:
       # a build that is one commit stale and not notice. With the sha here, the
       # artifact you fetched either matches the commit you meant or it doesn't.
       - uses: actions/upload-artifact@v4
-        if: steps.gate.outputs.run == 'yes'
+        if: steps.gate.outputs.run == 'yes' && inputs.release != true
         with:
           name: campistry-${{ matrix.app }}-debug-apk-${{ github.sha }}
           path: mobile/campistry-${{ matrix.app }}/android/app/build/outputs/apk/debug/*.apk
+          if-no-files-found: error
+
+      # ── Signed release .aab ───────────────────────────────────────────────
+      # GitHub Actions can't interpolate a secret NAME from an expression
+      # (${{ secrets[matrix.app] }} isn't allowed), so each app's three
+      # secrets are selected in its own gated step and re-exported under one
+      # fixed set of env var names — the same trick build.gradle's
+      # signingConfigs.release block expects (ANDROID_KEYSTORE_PATH etc.).
+      - name: Select keystore secrets (lite)
+        if: steps.gate.outputs.run == 'yes' && inputs.release == true && matrix.app == 'lite'
+        run: |
+          echo "${{ secrets.LITE_KEYSTORE_BASE64 }}" | base64 --decode > "$RUNNER_TEMP/upload.keystore"
+          echo "ANDROID_KEYSTORE_PATH=$RUNNER_TEMP/upload.keystore" >> "$GITHUB_ENV"
+          echo "ANDROID_KEYSTORE_PASSWORD=${{ secrets.LITE_KEYSTORE_PASSWORD }}" >> "$GITHUB_ENV"
+          echo "ANDROID_KEY_ALIAS=${{ secrets.LITE_KEY_ALIAS }}" >> "$GITHUB_ENV"
+
+      - name: Select keystore secrets (link)
+        if: steps.gate.outputs.run == 'yes' && inputs.release == true && matrix.app == 'link'
+        run: |
+          echo "${{ secrets.LINK_KEYSTORE_BASE64 }}" | base64 --decode > "$RUNNER_TEMP/upload.keystore"
+          echo "ANDROID_KEYSTORE_PATH=$RUNNER_TEMP/upload.keystore" >> "$GITHUB_ENV"
+          echo "ANDROID_KEYSTORE_PASSWORD=${{ secrets.LINK_KEYSTORE_PASSWORD }}" >> "$GITHUB_ENV"
+          echo "ANDROID_KEY_ALIAS=${{ secrets.LINK_KEY_ALIAS }}" >> "$GITHUB_ENV"
+
+      # Play Console rejects a re-upload whose versionCode isn't strictly
+      # higher than the last one on file. run_number always increases across
+      # runs of THIS workflow, which is exactly the property needed here —
+      # nothing has to remember to bump a number by hand before submitting.
+      - name: Build signed release .aab
+        if: steps.gate.outputs.run == 'yes' && inputs.release == true
+        working-directory: mobile/campistry-${{ matrix.app }}/android
+        run: |
+          chmod +x ./gradlew
+          ./gradlew bundleRelease --no-daemon \
+            -PappVersionCode=${{ github.run_number }} \
+            -PappVersionName="1.0.${{ github.run_number }}"
+
+      - uses: actions/upload-artifact@v4
+        if: steps.gate.outputs.run == 'yes' && inputs.release == true
+        with:
+          name: campistry-${{ matrix.app }}-release-aab-${{ github.sha }}
+          path: mobile/campistry-${{ matrix.app }}/android/app/build/outputs/bundle/release/*.aab
           if-no-files-found: error
