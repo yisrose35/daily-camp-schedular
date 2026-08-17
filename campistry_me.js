@@ -81,6 +81,7 @@ var staffApplications={};   // Staff hiring: applicant id → application record
 var staffFormConfig=null;   // Staff application form config — mirrors formConfig, drives campistry_staff_apply.html
 var paFormConfig=null;      // Post-acceptance form config — mirrors formConfig, drives campistry_postaccept.html
 var counselorVisibility=null; // What counselors see in Lite; null = catalogue defaults
+var _setupChecklistDismissed=false; // owner dismissed the onboarding progress card
 var staffFilter='all';      // Staffing pipeline filter
 var leads={};               // Inquiry CRM: lead id → prospective-family record
 var leadFilter='all';       // Leads pipeline filter
@@ -226,6 +227,7 @@ function loadData(){
         staffApplications=me.staffApplications||{};
         leads=me.leads||{};
         counselorVisibility=(me.counselorVisibility&&typeof me.counselorVisibility==='object')?me.counselorVisibility:null;
+        _setupChecklistDismissed=!!me.setupChecklistDismissed;
         formConfig=me.formConfig||null;
         staffFormConfig=me.staffFormConfig||null;
         paFormConfig=me.postAcceptFormConfig||null;
@@ -339,6 +341,7 @@ function save(){
             bunkGenConfig:bunkGenConfig,
             printSheets:printSheets,
             savedReports:savedReports,
+            setupChecklistDismissed:_setupChecklistDismissed,
             promoCodes:enrollSettings.promoCodes||(g.campistryMe?.promoCodes)||{},
             payroll:payroll,
             finance:{staff:finStaff,expenses:finExpenses,payments:finPayments,budget:finBudget,integrations:finIntegrations}
@@ -1436,6 +1439,7 @@ function renderCampers(filter){
 
     var h=_rosterTabsHtml('campers');
     h+='<div class="sec-hd"><div><h2 class="sec-title">Roster</h2><p class="sec-desc">'+camperEntries.length+' camper'+(camperEntries.length!==1?'s':'')+(canStaff?' · '+staffRows.length+' staff':'')+'</p></div><div class="sec-actions"><button class="me-btn me-btn--ghost me-btn--sm" onclick="CampistryMe.manageCustomFields()" title="Define custom fields">⚙ Custom Fields</button><button class="me-btn me-btn--sec me-btn--sm" onclick="CampistryMe.downloadTemplate()">Template</button><button class="me-btn me-btn--sec me-btn--sm" onclick="CampistryMe.openCsv()">Import</button><button class="me-btn me-btn--sec me-btn--sm" onclick="CampistryMe.exportCsv()">Export</button><button class="me-btn me-btn--pri" onclick="CampistryMe.addCamper()">+ Add Camper</button></div></div>';
+    h+=_setupChecklistHtml();
 
     var unplaced=canStaff?hiredStaff().filter(function(a){return !String(a.email||'').trim()||!bunksForStaffEmail(a.email).length;}):[];
     if(unplaced.length){
@@ -1484,6 +1488,44 @@ function renderCampers(filter){
     }
     c.innerHTML=h;
 }
+// Onboarding checklist — modeled on badges.js's BADGE_DEFS {id, check} shape.
+// Shown at the top of Roster (the landing page) until every step is done or
+// the owner dismisses it.
+var SETUP_CHECKLIST=[
+    {id:'structure',label:'Set up your camp structure — divisions, grades, and bunks',check:function(){return Object.keys(structure).length>0},action:function(){nav('structure')}},
+    {id:'camper',label:'Add your first camper',check:function(){return Object.keys(roster).length>0},action:function(){addCamper()}},
+    {id:'session',label:'Create a session on the Dashboard',check:function(){return sessions.length>0},href:'dashboard.html'},
+    {id:'family',label:'Add a family / billing account',check:function(){return Object.keys(families).length>0},action:function(){nav('families')}}
+];
+function _setupChecklistHtml(){
+    if(_setupChecklistDismissed)return '';
+    var done=SETUP_CHECKLIST.filter(function(i){return i.check()});
+    if(done.length===SETUP_CHECKLIST.length)return '';
+    var pct=Math.round(done.length/SETUP_CHECKLIST.length*100);
+    var h='<div class="me-card" style="padding:16px 18px;margin-bottom:16px;border:1px solid var(--s200)">';
+    h+='<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px">';
+    h+='<div><div style="font-weight:700;font-size:.92rem;color:var(--s800)">Getting Started</div><div style="font-size:.75rem;color:var(--s400);margin-top:2px">'+done.length+' of '+SETUP_CHECKLIST.length+' steps complete</div></div>';
+    h+='<button class="me-btn me-btn--ghost me-btn--sm" onclick="CampistryMe.dismissSetupChecklist()" title="Dismiss">✕</button>';
+    h+='</div>';
+    h+='<div style="height:6px;background:var(--s100);border-radius:999px;overflow:hidden;margin-bottom:12px"><div style="height:100%;width:'+pct+'%;background:var(--me);border-radius:999px"></div></div>';
+    h+='<div style="display:grid;gap:8px">';
+    SETUP_CHECKLIST.forEach(function(item,i){
+        var isDone=item.check();
+        var inner='<span style="width:18px;height:18px;border-radius:50%;flex-shrink:0;display:flex;align-items:center;justify-content:center;font-size:.7rem;font-weight:700;background:'+(isDone?'var(--ok)':'var(--s100)')+';color:'+(isDone?'#fff':'var(--s400)')+'">'+(isDone?'✓':'')+'</span>'
+            +'<span style="'+(isDone?'color:var(--s400);text-decoration:line-through':'color:var(--s700);font-weight:600')+'">'+esc(item.label)+'</span>';
+        if(isDone){
+            h+='<div style="display:flex;align-items:center;gap:8px;font-size:.82rem">'+inner+'</div>';
+        }else if(item.href){
+            h+='<a href="'+esc(item.href)+'" style="display:flex;align-items:center;gap:8px;font-size:.82rem;text-decoration:none;cursor:pointer">'+inner+'</a>';
+        }else{
+            h+='<div style="display:flex;align-items:center;gap:8px;font-size:.82rem;cursor:pointer" onclick="CampistryMe._runSetupChecklistAction('+i+')">'+inner+'</div>';
+        }
+    });
+    h+='</div></div>';
+    return h;
+}
+function _runSetupChecklistAction(idx){var item=SETUP_CHECKLIST[idx];if(item&&item.action)item.action();}
+function dismissSetupChecklist(){_setupChecklistDismissed=true;save();render(curPage);}
 function _checkedRosterNames(){
     return Array.prototype.map.call(document.querySelectorAll('.roster-check:checked'), function(cb){ return cb.dataset.name; });
 }
@@ -10826,6 +10868,7 @@ window.CampistryMe={
     toggleAllRoster:toggleAllRoster,_updateRosterBulkBar:_updateRosterBulkBar,bulkExportRoster:bulkExportRoster,bulkDeleteRoster:bulkDeleteRoster,
     _updateBillingBulkBar:_updateBillingBulkBar,bulkExportBilling:bulkExportBilling,
     setRosterPage:setRosterPage,setBillingPage:setBillingPage,setAnalyticsInvoicePage:setAnalyticsInvoicePage,setAnalyticsPaymentPage:setAnalyticsPaymentPage,
+    _runSetupChecklistAction:_runSetupChecklistAction,dismissSetupChecklist:dismissSetupChecklist,
     bbDrop:bbDrop,autoAssign:autoAssign,autoGenerateBunks:autoGenerateBunks,openBunkGenSettings:openBunkGenSettings,showCamperBunkRequests:showCamperBunkRequests,clearBunks:clearBunks,setBunkCount:setBunkCount,openBunkCountModal:openBunkCountModal,_clearBunkCount:_clearBunkCount,
     openBunkStaffModal:openBunkStaffModal,addBunkStaff:addBunkStaff,removeBunkStaff:removeBunkStaff,
     editBunkStaff:editBunkStaff,_resetBunkStaffForm:_resetBunkStaffForm,
