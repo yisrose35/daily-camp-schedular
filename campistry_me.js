@@ -9368,7 +9368,7 @@ function renderReports(){
         h+='<div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(300px,1fr));gap:14px;margin-bottom:18px">';
         savedReports.forEach(function(r){
             var srcLabel=({campers:'Campers',families:'Families',enrollments:'Enrollments',staff:'Staff'})[r.source]||r.source;
-            var meta=srcLabel+' · '+(r.fields||[]).length+' fields'+((r.filters||[]).length?' · '+r.filters.length+' filter'+(r.filters.length>1?'s':''):'')+(r.groupBy?' · grouped':'');
+            var meta=srcLabel+' · '+(r.fields||[]).length+' fields'+((r.filters||[]).length?' · '+r.filters.length+' filter'+(r.filters.length>1?'s':''):'')+(r.groupBy?' · grouped':'')+(r.schedule?' · 📧 '+(r.schedule.freq==='weekly'?'Weekly':'Monthly'):'');
             var badgeCss='font-size:.62rem;font-weight:700;padding:2px 8px;border-radius:999px;white-space:nowrap;';
             var modeBadge=r.mode==='snapshot'?'<span style="'+badgeCss+'background:var(--s100);color:var(--s500)">Snapshot</span>':'<span style="'+badgeCss+'background:rgba(217,119,6,.1);color:var(--me)">Live</span>';
             var isHighlight=highlightId&&r.id===highlightId;
@@ -9495,12 +9495,13 @@ function openReportBuilder(existingId){
     if(existing){
         _rbDraft={id:existing.id,name:existing.name,source:existing.source,
             fields:(existing.fields||[]).slice(),filters:(existing.filters||[]).map(function(f){return Object.assign({},f);}),
-            groupBy:existing.groupBy||'',mode:existing.mode||'live'};
+            groupBy:existing.groupBy||'',mode:existing.mode||'live',
+            schedule:existing.schedule?Object.assign({},existing.schedule):{freq:'off',recipients:''}};
     }else{
         var first=sources.campers;
         _rbDraft={id:null,name:'',source:'campers',
             fields:first.fields.slice(0,6).map(function(f){return f.key;}),
-            filters:[],groupBy:'',mode:'live'};
+            filters:[],groupBy:'',mode:'live',schedule:{freq:'off',recipients:''}};
     }
     showModal(existing?'Edit Report':'Build Report','<div id="rbBody">'+_rbInner()+'</div>',saveCurrentReport);
     // Relabel the modal Save button
@@ -9537,6 +9538,14 @@ function _rbInner(){
         +'<label style="display:flex;align-items:center;gap:6px;font-size:.82rem"><input type="radio" name="rbMode" value="live"'+(_rbDraft.mode!=='snapshot'?' checked':'')+' style="accent-color:var(--me)"> <span><strong>Live</strong> — re-runs on fresh data each time</span></label>'
         +'<label style="display:flex;align-items:center;gap:6px;font-size:.82rem"><input type="radio" name="rbMode" value="snapshot"'+(_rbDraft.mode==='snapshot'?' checked':'')+' style="accent-color:var(--me)"> <span><strong>Snapshot</strong> — freezes the records as they are now</span></label>'
     +'</div></div>';
+    // Scheduled delivery
+    var sch=_rbDraft.schedule||{freq:'off',recipients:''};
+    h+='<div class="fg"><label class="fl">Email this report <span style="font-weight:400;color:var(--s400);font-size:.7rem">(sends a link to open it in Me — not an attachment)</span></label>';
+    h+='<select class="fi" id="rbSchedFreq" onchange="document.getElementById(\'rbSchedRecipWrap\').style.display=this.value===\'off\'?\'none\':\'block\'">';
+    [['off','Off'],['weekly','Weekly'],['monthly','Monthly']].forEach(function(o){ h+='<option value="'+o[0]+'"'+(sch.freq===o[0]?' selected':'')+'>'+o[1]+'</option>'; });
+    h+='</select>';
+    h+='<div id="rbSchedRecipWrap" style="margin-top:6px;'+(sch.freq==='off'?'display:none':'')+'"><input class="fi" id="rbSchedRecipients" value="'+esc(sch.recipients||'')+'" placeholder="Recipient emails, comma-separated"></div>';
+    h+='</div>';
     // Preview
     h+='<div style="display:flex;justify-content:space-between;align-items:center;margin-top:6px"><button class="me-btn me-btn--sec me-btn--sm" onclick="CampistryMe.rbPreview()">Preview</button><span id="rbPreviewCount" style="font-size:.78rem;color:var(--s400)"></span></div>';
     h+='<div id="rbPreview" style="margin-top:10px"></div>';
@@ -9566,6 +9575,9 @@ function _rbSyncFromDom(){
     _rbDraft.filters=Array.prototype.map.call(document.querySelectorAll('.rbFilter'),function(el){
         return {field:el.querySelector('.rbfField').value,op:el.querySelector('.rbfOp').value,value:el.querySelector('.rbfVal').value};
     });
+    var schFreqEl=document.getElementById('rbSchedFreq');
+    var schRecipEl=document.getElementById('rbSchedRecipients');
+    _rbDraft.schedule={freq:schFreqEl?schFreqEl.value:'off',recipients:schRecipEl?schRecipEl.value.trim():''};
 }
 function rbSourceChange(v){
     _rbSyncFromDom();
@@ -9633,11 +9645,15 @@ function saveCurrentReport(){
     _rbSyncFromDom();
     if(!_rbDraft.name.trim()){ toast('Give the report a name'); return; }
     if(!_rbDraft.fields.length){ toast('Pick at least one field'); return; }
+    if(_rbDraft.schedule&&_rbDraft.schedule.freq!=='off'&&!_rbDraft.schedule.recipients){
+        toast('Add at least one recipient email for scheduled delivery','error'); return;
+    }
     var rep={
         id:_rbDraft.id||('rep_'+Date.now().toString(36)+Math.random().toString(36).slice(2,6)),
         name:_rbDraft.name.trim(), source:_rbDraft.source,
         fields:_rbDraft.fields.slice(), filters:_rbDraft.filters.slice(),
         groupBy:_rbDraft.groupBy, mode:_rbDraft.mode,
+        schedule:(_rbDraft.schedule&&_rbDraft.schedule.freq!=='off')?{freq:_rbDraft.schedule.freq,recipients:_rbDraft.schedule.recipients}:null,
         updatedAt:new Date().toISOString()
     };
     if(rep.mode==='snapshot'){
@@ -9648,7 +9664,16 @@ function saveCurrentReport(){
         rep.snapshotAt=new Date().toISOString();
     }
     var idx=savedReports.findIndex(function(r){return r.id===rep.id;});
-    if(idx>=0){ if(savedReports[idx].createdAt) rep.createdAt=savedReports[idx].createdAt; savedReports[idx]=rep; }
+    if(idx>=0){
+        var old=savedReports[idx];
+        if(old.createdAt) rep.createdAt=old.createdAt;
+        // Preserve lastSentAt only if the schedule itself didn't change — a new
+        // freq/recipient list means "start fresh," not "skip until the old cadence would have fired."
+        if(rep.schedule&&old.schedule&&old.schedule.freq===rep.schedule.freq&&old.schedule.recipients===rep.schedule.recipients&&old.schedule.lastSentAt){
+            rep.schedule.lastSentAt=old.schedule.lastSentAt;
+        }
+        savedReports[idx]=rep;
+    }
     else { rep.createdAt=new Date().toISOString(); savedReports.unshift(rep); }
     _rbDraft=null;
     closeModal('dynModal');
