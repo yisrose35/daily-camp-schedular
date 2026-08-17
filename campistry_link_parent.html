@@ -4068,7 +4068,38 @@ window.addEventListener('storage', function(e) {
         // previous account's notifications, which on a shared family device
         // means one parent seeing another's alerts.
         if (window.campistryPushForget) window.campistryPushForget();
-        db.auth.signOut().then(function() { window.location.reload(); });
+
+        // supabase-js's signOut() calls the server BEFORE clearing the local
+        // session, and on a network error it RESOLVES (never rejects) with an
+        // error and skips the local clear entirely — so a bad connection
+        // during sign-out left the session fully intact, and the getSession()
+        // check on the very next line (the reload below) found the parent
+        // still signed in and walked them straight back into the portal.
+        // "Sign out" cannot depend on that round trip actually succeeding, so
+        // the local session is force-cleared here regardless of what the
+        // network does, and a stuck request gets a deadline instead of a
+        // button that silently does nothing.
+        //
+        // scope:'local' when biometrics is on is what keeps the refresh token
+        // Bio.storedSession() needs alive server-side — that is the entire
+        // point of "sign in with your face" after signing out. The previous
+        // unscoped call defaulted to 'global', which revoked that very token
+        // and silently broke the biometric route back in.
+        var bioOn = !!(window.CampistryBio && window.CampistryBio.isEnabled());
+        var finished = false;
+        function finish() {
+            if (finished) return;
+            finished = true;
+            try {
+                Object.keys(localStorage).forEach(function (k) {
+                    if (/^sb-.*-auth-token$/.test(k)) localStorage.removeItem(k);
+                });
+            } catch (_) {}
+            window.location.reload();
+        }
+        try { db.auth.signOut(bioOn ? { scope: 'local' } : undefined).then(finish, finish); }
+        catch (_) { finish(); }
+        setTimeout(finish, 3000);
     };
 
     // ── Auth flows ────────────────────────────────────────────────────────────

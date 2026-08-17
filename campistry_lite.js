@@ -1590,7 +1590,26 @@
             // person signing in must not inherit the previous one's alerts.
             if (window.campistryPushForget) window.campistryPushForget();
             const bioOn = !!window.CampistryLiteBio?.isEnabled();
-            try { await window.supabase.auth.signOut(bioOn ? { scope: 'local' } : undefined); } catch (_) {}
+            // signOut() calls the server BEFORE clearing the local session, and
+            // on a network error it resolves without ever clearing it -- so a
+            // bad connection during sign-out left the session fully intact, and
+            // the login page's own boot() (campistry_lite_login.js) found the
+            // counselor still signed in and bounced them straight back into the
+            // app with no prompt at all when biometrics wasn't even enabled.
+            // Racing a deadline and clearing the local copy ourselves is what
+            // makes "sign out" mean signed out, independent of whether that
+            // round trip to Supabase ever completes.
+            try {
+                await Promise.race([
+                    window.supabase.auth.signOut(bioOn ? { scope: 'local' } : undefined),
+                    new Promise(r => setTimeout(r, 3000))
+                ]);
+            } catch (_) {}
+            try {
+                Object.keys(localStorage).forEach(k => {
+                    if (/^sb-.*-auth-token$/.test(k)) localStorage.removeItem(k);
+                });
+            } catch (_) {}
             // The enrolment itself is kept and bound to your user id, so signing
             // back in as yourself doesn't mean setting it up again, and someone
             // else signing in here doesn't inherit it.
