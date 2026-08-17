@@ -29,6 +29,24 @@
 (function () {
     'use strict';
 
+    // Nothing in this app has ever surfaced a JS error to the person using
+    // it -- an exception anywhere just vanishes, which from the other side of
+    // the screen is identical to "I pressed the button and nothing happened".
+    // Turning that invisible failure into a toast with the real error text is
+    // what makes the next bug report say what actually broke.
+    window.addEventListener('error', function (e) {
+        try {
+            const loc = e && e.filename ? ' @' + e.filename.split('/').pop() + ':' + e.lineno : '';
+            toast('Error: ' + ((e && e.message) || 'unknown') + loc);
+        } catch (_) {}
+    });
+    window.addEventListener('unhandledrejection', function (e) {
+        try {
+            const r = e && e.reason;
+            toast('Error: ' + ((r && (r.message || String(r))) || 'unknown'));
+        } catch (_) {}
+    });
+
     const HEAD_ROLES = ['owner', 'admin', 'scheduler'];
     const KV_KEYS = ['app1', 'campStructure', 'leaguesByName', 'specialtyLeagues',
                      'liteStaffAssignments', 'liteSmsSettings', 'camp_name', 'fields',
