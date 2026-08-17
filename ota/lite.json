@@ -1,8 +1,8 @@
 {
   "app": "com.campistry.lite",
-  "version": "1.0.30",
-  "url": "https://github.com/yisrose35/daily-camp-schedular/releases/download/ota-lite-1.0.30/lite-1.0.30.zip",
-  "checksum": "97317de3730a85917377d50a34cb05dc750bb48472abf4fcf59b36b2f546eaf1",
-  "commit": "80e51f3514d3e59e6205e4d9ca825218fd5fd228",
+  "version": "1.0.31",
+  "url": "https://github.com/yisrose35/daily-camp-schedular/releases/download/ota-lite-1.0.31/lite-1.0.31.zip",
+  "checksum": "dece7835003bd7e8ae94ce7b181190a2f3e08ef417acd708a28e2fc97c57b7cc",
+  "commit": "ae430a0918012c7f4ebde27e4166865fb0c262b6",
   "note": "Written by the 'Mobile - OTA release' workflow. Do not hand-edit."
 }
