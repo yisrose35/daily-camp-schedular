@@ -4169,6 +4169,15 @@ window.addEventListener('storage', function(e) {
                     if (/^sb-.*-auth-token$/.test(k)) localStorage.removeItem(k);
                 });
             } catch (_) {}
+            // hasPass() is a one-shot "already proved it this load" flag with
+            // a 60s window, meant to stop the SAME continuous session from
+            // being asked for a face twice. Left uncleared, signing out
+            // within that window carried a stale "already verified" into the
+            // very next render -- _showSignIn's own gate check would see it
+            // and hide the fingerprint button on the screen sign-out lands
+            // on, the one time a fresh, deliberate gate is exactly what
+            // should show. Mirrors Lite's sign-out, which already does this.
+            if (window.CampistryBio) window.CampistryBio.clearPass();
             window.location.reload();
         }
         try { db.auth.signOut(bioOn ? { scope: 'local' } : undefined).then(finish, finish); }
