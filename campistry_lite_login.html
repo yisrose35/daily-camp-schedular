@@ -42,19 +42,22 @@
         <h1 class="lite-login-title" id="liteLoginTitle">Campistry <span>Lite</span></h1>
         <p class="lite-login-sub" id="liteLoginSub">Sign in to your camp</p>
 
-        <!-- Biometric mode. Same screen, same branding — just the other way
-             through the one door. Shown instead of the password form when a
-             credential is enrolled and the session is still good. -->
-        <div id="liteBioPane" hidden>
+        <!-- Biometric entry sits ABOVE the form, not on a screen of its own —
+             cancelling the OS prompt should leave you looking at the sign-in
+             form already, the way dismissing Face ID in any other app just
+             leaves you on the screen underneath, not a second tap away from
+             it. Hidden entirely when this device has no credential enrolled,
+             in which case the form below is all there ever is. -->
+        <div id="liteBioQuick" hidden>
             <!-- No symbol: the branded mark is already directly above, and a
                  second glyph on the button competed with it. The words carry it. -->
             <button type="button" class="lite-bio-btn" id="liteBioGo">
-                <span id="liteBioLabel">Unlock with biometrics</span>
+                <span id="liteBioLabel">Sign in with biometrics</span>
             </button>
-            <button type="button" class="lite-login-alt" id="liteBioPassword">Use password instead</button>
+            <div class="lite-login-divider"><span>or</span></div>
         </div>
 
-        <form id="liteLoginForm" novalidate autocomplete="on" hidden>
+        <form id="liteLoginForm" novalidate autocomplete="on">
             <div class="lite-lf">
                 <label for="liteEmail">Email address</label>
                 <input class="lite-lf-input" type="email" id="liteEmail" inputmode="email"

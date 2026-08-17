@@ -996,20 +996,9 @@ button { cursor: pointer; border: none; background: none; }
     color: #fff; font-size: 0.82rem; font-weight: 600;
 }
 
-/* Unlock layout: the mark and wordmark stay high where they are, and the two
-   actions sit in the middle of the screen — thumb height, and it stops the
-   screen reading as a stack of things crowded under a logo. The inner column
-   stretches to full height so `margin: auto` can do the centring; the footer
-   is left to settle at the bottom. */
-.lite-login.is-bio { align-items: stretch; }
-.lite-login.is-bio .lite-login-inner { display: flex; flex-direction: column; }
-.lite-login.is-bio #liteBioPane { margin-top: auto; margin-bottom: auto; }
-/* Sign-in and offer panes keep the old flow; only the gap the hidden subtitle
-   used to carry needs replacing. */
-#liteBioPane { margin-top: 30px; }
-
 /* Biometric entry. Given the same weight as the password button because it is
-   the same action, not a shortcut tucked underneath one. */
+   the same action, not a shortcut tucked underneath one. Sits above the form
+   (see #liteBioQuick), not on a screen of its own. */
 .lite-bio-btn {
     display: flex; width: 100%; align-items: center; justify-content: center; gap: 10px;
     min-height: 56px; padding: 0 18px; border-radius: 14px;
@@ -1024,6 +1013,18 @@ button { cursor: pointer; border: none; background: none; }
 }
 .lite-bio-btn:disabled { opacity: 0.6; }
 .lite-bio-btn svg { width: 24px; height: 24px; flex: none; }
+
+/* The seam between "sign in a fast way" and "sign in the normal way" — a
+   line through the middle of the word is the standard shorthand for this
+   everywhere, so it reads correctly without needing to be explained. */
+.lite-login-divider {
+    display: flex; align-items: center; gap: 12px;
+    margin: 18px 0; color: rgba(255, 255, 255, 0.6);
+    font-size: 0.78rem; font-weight: 600; letter-spacing: 0.02em;
+}
+.lite-login-divider::before, .lite-login-divider::after {
+    content: ''; flex: 1; height: 1px; background: rgba(255, 255, 255, 0.28);
+}
 
 .lite-login-offer {
     font-size: 0.92rem; line-height: 1.5; color: rgba(255, 255, 255, 0.94);

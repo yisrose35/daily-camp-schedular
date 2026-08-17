@@ -3783,21 +3783,33 @@ window.addEventListener('storage', function(e) {
     // handed to someone else should not open straight into it.
     var Bio = window.CampistryBio || null;
 
-    // The unlock screen: same canvas as sign-in, mark high, one action centred.
-    // autoPrompt is false when re-rendering after a failed or cancelled attempt.
-    // Re-prompting there trapped the user: cancel, the screen re-rendered, the
-    // prompt fired again, and "Use password instead" was never reachable.
+    // The unlock screen renders the SAME sign-in form as _showSignIn, with the
+    // biometric quick-action above it — cancelling the OS Face ID/fingerprint
+    // prompt should leave a form you can already type into, not a screen you
+    // have to back out of first. That is the whole point of merging these:
+    // the old version showed a bare biometric-only screen with no way to
+    // reach the form except an extra "Use password instead" tap, which is
+    // not how any major app's sign-in actually behaves.
+    // autoPrompt is false when re-rendering after a failed or cancelled
+    // attempt, so retrying via the button doesn't refire the system sheet.
     function _showBioUnlock(hasLiveSession, errorMsg, autoPrompt) {
         var err = errorMsg ? '<div class="lk-login-err">'+_esc(errorMsg)+'</div>' : '';
         _showOverlay('parentAuthOverlay',
-            '<div class="lk-login lk-login-unlock">' +
+            '<div class="lk-login">' +
             '<div class="lk-login-badge"><span class="lk-login-mark" role="img" aria-label="Campistry"></span></div>' +
-            '<h1 class="lk-login-title">Link</h1>' +
-            '<div class="lk-login-actions">' +
+            '<h1 class="lk-login-title">Campistry <span>Link</span></h1>' +
+            '<p class="lk-login-sub">Sign in to your camp portal</p>' +
             err +
-            '<button class="lk-login-go" id="paBioGo" onclick="parentRunBio()">Unlock with biometrics</button>' +
-            '<button class="lk-login-alt" onclick="parentUsePassword()">Use password instead</button>' +
-            '</div></div>', 'brand');
+            '<button class="lk-login-go" id="paBioGo" onclick="parentRunBio()">Sign in with biometrics</button>' +
+            '<div class="lk-login-divider"><span>or</span></div>' +
+            '<div class="lk-login-field"><label for="paEmail">Email address</label>' +
+            '<input class="lk-login-input" id="paEmail" type="email" inputmode="email" autocomplete="username" autocapitalize="none" autocorrect="off" spellcheck="false" onkeydown="if(event.key===\'Enter\')document.getElementById(\'paPass\').focus()"></div>' +
+            '<div class="lk-login-field"><label for="paPass">Password</label><div class="lk-login-wrap">' +
+            '<input class="lk-login-input" id="paPass" type="password" autocomplete="current-password" onkeydown="if(event.key===\'Enter\')parentSignIn()">' +
+            _eyeBtn('paPass') + '</div></div>' +
+            '<button class="lk-login-go" onclick="parentSignIn()">Sign in</button>' +
+            '<div id="paMsg" class="lk-login-msg"></div>' +
+            '</div>', 'brand');
         window.__paBioLive = !!hasLiveSession;
         if (autoPrompt === false) return;
         // Let the brand screen paint before the system sheet slides over it.
@@ -3806,26 +3818,26 @@ window.addEventListener('storage', function(e) {
         });
     }
 
-    window.parentUsePassword = function () {
-        // Deliberately does NOT drop the enrolment — the parent may simply not
-        // want to use their face right now. Turning it off is a settings action.
-        _showSignIn();
-    };
-
     window.parentRunBio = function () {
         var btn = document.getElementById('paBioGo');
-        if (!Bio) { _showSignIn(); return; }
+        if (!Bio) return;
         if (btn) btn.disabled = true;
         Bio.verify().then(function (ok) {
             if (!ok) {
                 if (btn) btn.disabled = false;
                 var e = Bio.lastError() || '';
-                // autoPrompt=false: the user just dismissed it. Firing again
-                // would be arguing with them, and would hide the password route.
-                _showBioUnlock(window.__paBioLive,
-                    /NotAllowed|cancel/i.test(e) ? 'Not verified. Tap to try again, or use your password.'
-                                                 : 'Could not verify. Use your password.',
-                    false);
+                // A plain cancel gets no message at all — the form is already
+                // sitting right there to type into, exactly like dismissing
+                // Face ID in any other app leaves you looking at the screen
+                // underneath it. And unlike the old behaviour, this does NOT
+                // re-render the screen on a genuine failure either: that used
+                // to wipe out anything already typed into the email/password
+                // fields, which only mattered once those fields lived on the
+                // same screen as the biometric button.
+                if (!/NotAllowed|cancel/i.test(e)) {
+                    var msgEl = document.getElementById('paMsg');
+                    if (msgEl) msgEl.textContent = 'Could not verify. You can sign in with your password below.';
+                }
                 return;
             }
             _afterBioPass();

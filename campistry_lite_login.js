@@ -24,26 +24,18 @@
     let bioAvailable = false;
     let signedInUserId = null;   // who we just signed in, to bind an enrolment to
 
-    // Exactly one of these panes is on screen at a time — the screen never
-    // shows a password form and a biometric button competing for the tap.
+    // The form and the offer pane are the only two full-screen states now —
+    // biometrics is a quick-action ABOVE the form (#liteBioQuick), not a
+    // separate screen you have to back out of. That is the whole point of
+    // this design: cancelling the OS Face ID/fingerprint prompt should leave
+    // you looking at a sign-in form you can already type into, the way
+    // dismissing Face ID in any other app leaves you on the screen
+    // underneath it, not one more tap away from it.
     function showPane(name) {
-        const panes = { bio: $('liteBioPane'), form: $('liteLoginForm'), offer: $('liteBioOffer') };
+        const panes = { form: $('liteLoginForm'), offer: $('liteBioOffer') };
         Object.keys(panes).forEach(k => { if (panes[k]) panes[k].hidden = k !== name; });
-
-        // The unlock screen is deliberately barer than the sign-in screen: mark,
-        // wordmark, one action. "Unlock Campistry Lite" is on the button, so a
-        // title and a subtitle saying much the same thing are just noise on a
-        // screen you see every single time you open the app.
-        const title = $('liteLoginTitle');
         const sub = $('liteLoginSub');
-        if (title) title.innerHTML = name === 'bio' ? 'Lite' : 'Campistry <span>Lite</span>';
-        if (sub) {
-            sub.hidden = name === 'bio';
-            sub.textContent = name === 'offer' ? 'You’re signed in' : 'Sign in to your camp';
-        }
-        // Drives the unlock layout: mark stays top, actions centre. See
-        // .lite-login.is-bio in campistry_lite.css.
-        $('liteLogin').classList.toggle('is-bio', name === 'bio');
+        if (sub) { sub.hidden = false; sub.textContent = name === 'offer' ? 'You’re signed in' : 'Sign in to your camp'; }
         $('liteLogin').style.display = '';
     }
 
@@ -93,7 +85,7 @@
             return;
         }
         bioAvailable = Bio ? await Bio.available() : false;
-        $('liteBioLabel').textContent = 'Unlock with biometrics';
+        $('liteBioLabel').textContent = 'Sign in with biometrics';
         $('liteBioKind').textContent = BIO_NAME;
 
         let session = null;
@@ -116,7 +108,9 @@
             // is the one that consumes it, so we don't eat the handoff we just
             // wrote and send the user round again.
             if (Bio && Bio.isEnabledFor(session.user?.id) && !Bio.hasPass()) {
-                showPane('bio');
+                showPane('form');
+                $('liteBioQuick').hidden = false;
+                if (session.user?.email) $('liteEmail').value = session.user.email;
                 // Some platforms only allow the prompt from a user gesture; the
                 // button is the fallback when this auto-attempt is refused.
                 autoBio();
@@ -129,14 +123,17 @@
         localStorage.removeItem('campistry_auth_user_id');
         // No live session, but an enrolled device with tokens kept for exactly
         // this case: signed out, and wanting back in with biometrics rather
-        // than a password. Show the same biometric screen and restore on pass.
+        // than a password. Same screen either way — sign-in form as the base,
+        // biometric offered above it, cancelling it leaves the form untouched.
         if (Bio && Bio.isEnabled() && Bio.storedSession()) {
-            showPane('bio');
+            showPane('form');
+            $('liteBioQuick').hidden = false;
             autoBio();
             return;
         }
         if (Bio) Bio.clearPass();
         showPane('form');
+        $('liteBioQuick').hidden = true;
         // Deliberately no autofocus: it opens the keyboard over half the screen
         // before anyone has decided to type, and the accent focus ring on an
         // empty field reads as a validation error.
@@ -159,9 +156,13 @@
         if (!ok) {
             btn.disabled = false;
             const e = Bio.lastError() || '';
-            showErr(/NotAllowed/.test(e)
-                ? 'Not verified. Tap to try again, or use your password.'
-                : 'Could not verify' + (e ? ' (' + e.split(':')[0] + ')' : '') + '. Use your password.');
+            // A plain cancel gets no error text at all — the form is already
+            // sitting right there to type into, exactly like dismissing Face
+            // ID in any other app just leaves you looking at the screen
+            // underneath, with nothing to explain.
+            if (!/NotAllowed|cancel/i.test(e)) {
+                showErr('Could not verify' + (e ? ' (' + e.split(':')[0] + ')' : '') + '. You can sign in with your password below.');
+            }
             return;
         }
 
@@ -183,11 +184,13 @@
                 if (data.session.user?.id) localStorage.setItem('campistry_auth_user_id', data.session.user.id);
             } catch (err) {
                 // The stored token is dead (revoked, expired, password changed).
-                // Drop it and fall back to the password rather than looping.
+                // Drop it and fall back to the password rather than looping —
+                // hiding the quick-action too, since retrying it here would
+                // just fail the exact same way again.
                 Bio.clearSession();
                 btn.disabled = false;
                 showErr('Your saved sign-in expired. Please use your password once.');
-                showPane('form');
+                $('liteBioQuick').hidden = true;
                 return;
             }
         }
@@ -250,14 +253,6 @@
         });
 
         $('liteBioGo').addEventListener('click', () => { showErr(''); runBio(); });
-
-        // Escape hatch: biometrics can fail for reasons the user can't fix
-        // (re-enrolled face, sensor wet, credential wiped by the OS). Never
-        // leave the only way in behind a sensor.
-        $('liteBioPassword').addEventListener('click', () => {
-            showErr('');
-            showPane('form');
-        });
 
         $('liteBioEnable').addEventListener('click', async () => {
             const btn = $('liteBioEnable');
