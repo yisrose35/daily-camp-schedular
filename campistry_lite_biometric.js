@@ -164,6 +164,52 @@
     function consumePass() { var ok = passFresh(); clearPass(); return ok; }
     function clearPass()   { ls(function () { localStorage.removeItem(PASS_KEY); sessionStorage.removeItem(PASS_KEY); }); }
 
+    // "Closed the app" and "walked away for a while" should both demand the
+    // face/fingerprint again, the way a banking app does. Biometrics as built
+    // above only ever gates a genuine cold start — the page load that runs
+    // isEnabled()/hasPass() at boot. Capacitor keeps the WebView and all its
+    // JS state alive across a plain background/foreground cycle (switching
+    // apps, screen lock, a phone call), so without this, once past that first
+    // gate the session stays open indefinitely no matter how long the phone
+    // sits untouched — nothing ever re-runs the boot check on its own.
+    //
+    // RELOCK_MS is a grace window, not a hard rule: under it, a quick
+    // app-switch (checking a text, glancing at another app) doesn't nag for
+    // a face on every return, which is how the apps this was modeled on
+    // actually behave too. At or past it, the next foreground clears the
+    // one-shot pass and fires 'campistry-bio-relock' — each app's own page
+    // listens for that and re-shows its unlock screen exactly as it would on
+    // a cold launch, reusing that same logic rather than duplicating it here.
+    var BG_KEY = NS + '_bio_bg_at';
+    var RELOCK_MS = 30000;
+
+    function markBackgrounded()  { ls(function () { localStorage.setItem(BG_KEY, String(Date.now())); }); }
+    function clearBackgrounded() { ls(function () { localStorage.removeItem(BG_KEY); }); }
+    function wasAwayLongEnough() {
+        var raw = ls(function () { return localStorage.getItem(BG_KEY); }, null);
+        if (!raw) return false;
+        var t = parseInt(raw, 10);
+        return !!t && (Date.now() - t) >= RELOCK_MS;
+    }
+
+    (function wireAppLifecycle() {
+        var C = window.Capacitor;
+        var AppPlugin = C && (C.Plugins || {}).App;
+        if (!AppPlugin || !AppPlugin.addListener) return;   // web, or build without the plugin
+        AppPlugin.addListener('appStateChange', function (state) {
+            if (!state) return;
+            if (state.isActive === false) { markBackgrounded(); return; }
+            if (state.isActive === true) {
+                var relock = isEnabled() && wasAwayLongEnough();
+                clearBackgrounded();
+                if (relock) {
+                    clearPass();
+                    try { window.dispatchEvent(new CustomEvent('campistry-bio-relock')); } catch (_) {}
+                }
+            }
+        });
+    })();
+
     function enroll(email, name, userId) {
         return navigator.credentials.create({ publicKey: {
             challenge: randomBytes(32),

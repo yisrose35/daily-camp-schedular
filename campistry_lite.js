@@ -58,6 +58,17 @@
     const LOGIN_PAGE = 'campistry_lite_login.html';
     const SMS_BATCH_SIZE = 100;
 
+    // Fired by campistry_lite_biometric.js when the app returns to the
+    // foreground after being away long enough to warrant asking for a face
+    // again. Reusing the login page's own gate — rather than building a
+    // second unlock screen here — is what keeps this in sync with every
+    // other biometric decision the app makes; the session itself is left
+    // alone, so the moment it clears, the counselor is back where they left
+    // off with no re-typed password required.
+    window.addEventListener('campistry-bio-relock', () => {
+        window.location.href = LOGIN_PAGE;
+    });
+
     // ─── State ──────────────────────────────────────────────────────────
     let campId = null;
     let role = null;

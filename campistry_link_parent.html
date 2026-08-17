@@ -3898,6 +3898,16 @@ window.addEventListener('storage', function(e) {
         });
     }
 
+    // Fired by campistry_lite_biometric.js when the portal returns to the
+    // foreground after being away long enough to warrant asking for a face
+    // again. Reuses the exact same unlock screen a cold launch shows — the
+    // session itself is untouched, so the parent is back where they left off
+    // the moment it clears, with no password re-typed.
+    window.addEventListener('campistry-bio-relock', function () {
+        if (window.__linkSplash) window.__linkSplash.show();
+        _showBioUnlock(true);
+    });
+
     function _showCreateAccount(prefillEmail, inviteData) {
         var ev = prefillEmail || (inviteData && inviteData.parent_email) || '';
         var wn = inviteData && inviteData.parent_name ? inviteData.parent_name.split(' ')[0] : '';

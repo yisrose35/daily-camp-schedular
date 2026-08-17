@@ -115,13 +115,21 @@
     });
 
     // Signing out should stop this device receiving that account's
-    // notifications. Called by the apps' sign-out paths.
+    // notifications. Called by the apps' sign-out paths — as the very FIRST
+    // line of both, before anything else runs. Supabase's .rpc() does not
+    // return a real Promise: it is a thenable that implements .then(), and
+    // deliberately has no .catch()/.finally() at all. Calling .catch() on it
+    // threw a synchronous TypeError the instant this ran, which aborted the
+    // rest of the sign-out handler before it reached the code that actually
+    // signs you out — "tap Sign Out, nothing happens" was this line, not the
+    // sign-out logic itself. .then(ok, fail) is the form that already works
+    // correctly two lines up, for the exact same reason.
     window.campistryPushForget = function () {
         var token = null;
         try { token = localStorage.getItem(LAST_KEY); } catch (_) {}
         if (!token) return;
         var d = db();
-        if (d && d.rpc) d.rpc('forget_my_push_token', { p_token: token }).catch(function () {});
+        if (d && d.rpc) d.rpc('forget_my_push_token', { p_token: token }).then(function () {}, function () {});
         try { localStorage.removeItem(LAST_KEY); } catch (_) {}
     };
 })();
