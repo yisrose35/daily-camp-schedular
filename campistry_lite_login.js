@@ -141,12 +141,13 @@
 
     // Fire the prompt on open, but only after the sign-in screen has had a
     // real moment on its own — long enough to register as "this is the app,
-    // here's the form" before the system sheet arrives on top of it, the way
-    // Chase/Amex-style apps pace this. Two frames guarantees the paint before
-    // the clock even starts; 650ms after that is the deliberate beat.
+    // here's the form" before the system sheet arrives on top of it. 650ms
+    // still read as immediate; 1.5s is a real, deliberate pause modeled on
+    // how banking apps pace this. Two frames guarantees the paint before the
+    // clock even starts.
     function autoBio() {
         requestAnimationFrame(function () {
-            requestAnimationFrame(function () { setTimeout(runBio, 650); });
+            requestAnimationFrame(function () { setTimeout(runBio, 1500); });
         });
     }
 

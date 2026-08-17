@@ -3804,11 +3804,19 @@ window.addEventListener('storage', function(e) {
             // as "Sign in" reads as a second, competing way in. A compact
             // scan-frame icon with a caption reads as part of this screen
             // instead of bolted onto it.
+            // Fingerprint, not a face outline: WebAuthn never tells the app
+            // which sensor the platform authenticator will actually use, so
+            // showing a face glyph on a fingerprint-only phone would just be
+            // wrong. Fingerprint reads as "biometric" regardless of which one
+            // the device ends up asking for.
             '<div class="lk-bio-quick"><button type="button" class="lk-bio-quick-btn" id="paBioGo" onclick="parentRunBio()" aria-label="Sign in with biometrics">' +
-            '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round">' +
-            '<path d="M4 8V6a2 2 0 0 1 2-2h2"/><path d="M16 4h2a2 2 0 0 1 2 2v2"/>' +
-            '<path d="M20 16v2a2 2 0 0 1-2 2h-2"/><path d="M8 20H6a2 2 0 0 1-2-2v-2"/>' +
-            '<circle cx="12" cy="12" r="3"/></svg></button>' +
+            '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round">' +
+            '<path d="M10 18.5Q12 15.5 14 18.5"/>' +
+            '<path d="M8.3 19.5Q12 13.5 15.7 19.5"/>' +
+            '<path d="M6.5 20.5Q12 11 17.5 20.5"/>' +
+            '<path d="M4.7 19Q12 7.5 19.3 19"/>' +
+            '<path d="M3 14Q12 3.5 21 14"/>' +
+            '</svg></button>' +
             '<span class="lk-bio-quick-label">Sign in with biometrics</span></div>' +
             '<div class="lk-login-field"><label for="paEmail">Email address</label>' +
             '<input class="lk-login-input" id="paEmail" type="email" inputmode="email" autocomplete="username" autocapitalize="none" autocorrect="off" spellcheck="false" onkeydown="if(event.key===\'Enter\')document.getElementById(\'paPass\').focus()"></div>' +
@@ -3822,11 +3830,11 @@ window.addEventListener('storage', function(e) {
         if (autoPrompt === false) return;
         // A real moment on the sign-in screen first -- long enough to
         // register as "this is the app, here's the form" -- before the
-        // system sheet arrives on top of it, the way Chase/Amex-style apps
-        // pace this. Two frames guarantees the paint before the clock even
-        // starts; 650ms after that is the deliberate beat.
+        // system sheet arrives on top of it. 650ms still read as immediate;
+        // 1.5s is a real, deliberate pause modeled on how banking apps pace
+        // this. Two frames guarantees the paint before the clock even starts.
         requestAnimationFrame(function () {
-            requestAnimationFrame(function () { setTimeout(window.parentRunBio, 650); });
+            requestAnimationFrame(function () { setTimeout(window.parentRunBio, 1500); });
         });
     }
 
