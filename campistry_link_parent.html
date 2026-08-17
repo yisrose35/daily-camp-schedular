@@ -3811,11 +3811,11 @@ window.addEventListener('storage', function(e) {
             // the device ends up asking for.
             '<div class="lk-bio-quick"><button type="button" class="lk-bio-quick-btn" id="paBioGo" onclick="parentRunBio()" aria-label="Sign in with biometrics">' +
             '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round">' +
-            '<path d="M10 18.5Q12 15.5 14 18.5"/>' +
-            '<path d="M8.3 19.5Q12 13.5 15.7 19.5"/>' +
-            '<path d="M6.5 20.5Q12 11 17.5 20.5"/>' +
-            '<path d="M4.7 19Q12 7.5 19.3 19"/>' +
-            '<path d="M3 14Q12 3.5 21 14"/>' +
+            '<path d="M11.8 14.8C10.6 13.6 10.7 11.7 12.2 10.8C13.5 10 15 10.6 15.4 12"/>' +
+            '<path d="M10.3 16.6C8.2 14.5 8.3 10.9 11 9C13.5 7.3 16.8 8.2 17.6 10.8"/>' +
+            '<path d="M8.8 18.4C5.9 15.3 6 10 9.8 7.4C13.5 4.9 18.6 6.1 19.8 9.9"/>' +
+            '<path d="M7.3 20.1C3.8 16.2 3.9 9.5 8.5 6.2C13.2 3.1 19.8 4.5 21.3 9.1"/>' +
+            '<path d="M5.8 21.6C1.6 17 1.7 8.8 7.3 4.9C13.1 1 20.8 2.6 22.6 8.3"/>' +
             '</svg></button>' +
             '<span class="lk-bio-quick-label">Sign in with biometrics</span></div>' +
             '<div class="lk-login-field"><label for="paEmail">Email address</label>' +
@@ -3825,6 +3825,11 @@ window.addEventListener('storage', function(e) {
             _eyeBtn('paPass') + '</div></div>' +
             '<button class="lk-login-go" onclick="parentSignIn()">Sign in</button>' +
             '<div id="paMsg" class="lk-login-msg"></div>' +
+            // Dropped when this screen was merged with the sign-in form —
+            // someone whose device is enrolled for biometrics can still have
+            // forgotten the password behind it, and until this was added
+            // back there was no route to reset one from here at all.
+            '<button class="lk-login-alt" onclick="parentForgotPassword()">Forgot your password?</button>' +
             '</div>', 'brand');
         window.__paBioLive = !!hasLiveSession;
         if (autoPrompt === false) return;
