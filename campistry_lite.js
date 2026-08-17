@@ -1610,28 +1610,53 @@
         });
 
         document.getElementById('liteSignOut').addEventListener('click', async () => {
-            // With biometrics on, sign out LOCALLY so the kept refresh token
-            // stays valid and biometrics can get you back in — otherwise
-            // "sign in using biometrics" is a button that can never work.
-            // Turning biometrics off is the full revoke; see the note in
-            // campistry_lite_biometric.js.
             // Stop this device receiving the outgoing account's notifications
             // before the session goes — on a shared staff phone, the next
             // person signing in must not inherit the previous one's alerts.
             if (window.campistryPushForget) window.campistryPushForget();
             const bioOn = !!window.CampistryLiteBio?.isEnabled();
+
+            if (bioOn) {
+                // Biometrics being on means "sign out" has to be a LOCK, not
+                // a revoke — there is no scope that terminates THIS device's
+                // own session while leaving behind a token that can restore
+                // it later. Confirmed straight from the SDK: signOut() posts
+                // to /logout?scope=<scope> using THIS device's own current
+                // access token, and 'local' vs 'global' only decides whether
+                // OTHER devices are ALSO signed out — either way, THIS
+                // session's own refresh token is revoked. That is exactly
+                // the token Bio.storedSession() was caching for restore, so
+                // calling signOut() here — at any scope — killed the very
+                // thing it was trying to preserve. That is why "sign in with
+                // biometrics" after signing out kept landing on "Your saved
+                // sign-in expired": the token being restored was already
+                // dead by the time biometrics tried to use it.
+                //
+                // The session is left completely untouched here; only the
+                // one-shot "already unlocked" flag is cleared, so the login
+                // page re-locks behind biometrics and unlocking is just
+                // resuming a session that was never actually destroyed —
+                // the only way "always sign in with biometrics" can be
+                // literally true.
+                try { window.CampistryLiteBio?.clearPass(); } catch (_) {}
+                window.location.href = LOGIN_PAGE;
+                return;
+            }
+
+            // Biometrics off: there is no lock screen to fall back on, so
+            // this has to be a real revoke or "signed out" would be a lie.
+            //
             // signOut() calls the server BEFORE clearing the local session, and
             // on a network error it resolves without ever clearing it -- so a
             // bad connection during sign-out left the session fully intact, and
             // the login page's own boot() (campistry_lite_login.js) found the
             // counselor still signed in and bounced them straight back into the
-            // app with no prompt at all when biometrics wasn't even enabled.
-            // Racing a deadline and clearing the local copy ourselves is what
-            // makes "sign out" mean signed out, independent of whether that
-            // round trip to Supabase ever completes.
+            // app with no prompt at all. Racing a deadline and clearing the
+            // local copy ourselves is what makes "sign out" mean signed out,
+            // independent of whether that round trip to Supabase ever completes.
             try {
                 await Promise.race([
-                    window.supabase.auth.signOut(bioOn ? { scope: 'local' } : undefined),
+                    window.supabase.auth.signOut(),
                     new Promise(r => setTimeout(r, 3000))
                 ]);
             } catch (_) {}
@@ -1640,10 +1665,6 @@
                     if (/^sb-.*-auth-token$/.test(k)) localStorage.removeItem(k);
                 });
             } catch (_) {}
-            // The enrolment itself is kept and bound to your user id, so signing
-            // back in as yourself doesn't mean setting it up again, and someone
-            // else signing in here doesn't inherit it.
-            try { window.CampistryLiteBio?.clearPass(); } catch (_) {}
             ['campistry_auth_user_id', 'campistry_camp_id', 'campistry_role',
              'campistry_user_id', 'campistry_is_team_member'].forEach(k => {
                 try { localStorage.removeItem(k); } catch (_) {}

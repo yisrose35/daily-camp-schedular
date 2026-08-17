@@ -31,13 +31,25 @@
    from opening Campistry, which is the threat counselors actually have.
 
    The sign-out trade-off, stated plainly: while biometrics is on, signing out
-   is LOCAL — the refresh token is kept on this device so biometrics can get
-   you back in, instead of forcing the password every time. That is how banking
-   apps behave, and it is the only way "sign in using biometrics" can mean
-   anything on the sign-in screen. It does mean a signed-out phone still holds a
-   usable token until biometrics is turned off, which revokes the session for
-   real and wipes it. Turning it off is therefore the "forget this device"
-   action, and the UI says so.
+   is a LOCK, not a revoke. There is no Supabase scope that terminates this
+   device's own session while leaving a token behind that can restore it
+   later — signOut() at ANY scope kills the current session's own refresh
+   token; scope only decides whether OTHER devices are ALSO signed out. So
+   sign-out doesn't call it at all: the session sits in storage completely
+   untouched, and only a one-shot "already unlocked this load" flag is
+   cleared, which is what makes the app ask for a face again. That is how
+   banking apps behave, and it is the only way "sign in using biometrics"
+   can mean anything on the sign-in screen — with an actual revoke, biometric
+   sign-in would just be restoring an already-dead token, which is exactly
+   the "your saved sign-in expired" failure this design avoids. It does mean
+   a signed-out phone still holds a fully usable session until biometrics is
+   turned off, which revokes it for real and wipes it. Turning it off is
+   therefore the "forget this device" action, and the UI says so.
+
+   storedSession()/saveSession() below still matter: they are the fallback
+   for a session that expires through some OTHER means (revoked elsewhere,
+   long enough offline that autoRefreshToken never got a chance to run) —
+   just no longer the path an ordinary sign-out takes.
    ============================================================================ */
 (function () {
     'use strict';
