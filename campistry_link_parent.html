@@ -3849,6 +3849,14 @@ window.addEventListener('storage', function(e) {
         Bio.verify().then(function (ok) {
             if (!ok) {
                 if (btn) btn.disabled = false;
+                // Whoever called _showSignIn before this attempt may have
+                // shown the splash first (the relock listener and the
+                // "already have a live session" boot path both do) — a
+                // failed or cancelled verify has to hide it again, or it sits
+                // on screen forever with nothing left that will ever hide
+                // it. Safe to call even when nothing showed it: hide() no-ops
+                // once the overlay is already hidden.
+                if (window.__linkSplash) window.__linkSplash.hide();
                 var e = Bio.lastError() || '';
                 // A plain cancel gets no message at all — the form is already
                 // sitting right there to type into, exactly like dismissing

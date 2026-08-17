@@ -208,6 +208,23 @@
         var C = window.Capacitor;
         var AppPlugin = C && (C.Plugins || {}).App;
         if (!AppPlugin || !AppPlugin.addListener) return;   // web, or build without the plugin
+
+        // BG_KEY lives in localStorage, which survives the app being killed
+        // outright — swiped away, or just left in the background until the
+        // OS reclaims it, both far more common than a clean foreground visit
+        // that would clear it itself. A PREVIOUS session's timestamp was
+        // still sitting there on the next cold launch, and the very first
+        // appStateChange the App plugin fires is often isActive:true as
+        // ordinary startup, not a real resume. wasAwayLongEnough() saw that
+        // stale timestamp, the gap was trivially past 30s, and cold launch
+        // fired a SECOND, spurious relock right on top of the entry point's
+        // own normal boot render — the exact "cancel the prompt, a splash
+        // flashes, biometrics fires again" loop this was meant to prevent,
+        // not cause. A fresh script execution can only mean a cold launch or
+        // a same-process reload, neither of which is the "away, then back"
+        // case this feature exists for, so it starts clean every time.
+        clearBackgrounded();
+
         AppPlugin.addListener('appStateChange', function (state) {
             if (!state) return;
             if (state.isActive === false) { markBackgrounded(); return; }
