@@ -32,6 +32,13 @@ a{color:inherit;text-decoration:none}button{font-family:inherit;cursor:pointer;b
 .me-search-icon{position:absolute;left:10px;top:50%;transform:translateY(-50%);color:var(--s400);pointer-events:none}
 .me-search-input{padding:7px 12px 7px 32px;border:1.5px solid var(--s200);border-radius:var(--r);font-size:12px;color:var(--s800);width:200px;outline:none;transition:border .15s,box-shadow .15s}
 .me-search-input:focus{border-color:var(--me);box-shadow:0 0 0 3px rgba(217,119,6,.08)}
+.gs-dropdown{position:absolute;top:calc(100% + 6px);left:0;width:320px;max-height:420px;overflow-y:auto;background:#fff;border:1px solid var(--s200);border-radius:var(--r2);box-shadow:0 8px 24px rgba(0,0,0,.12);z-index:1200;padding:6px}
+.gs-group-label{font-size:.65rem;font-weight:700;color:var(--s400);text-transform:uppercase;letter-spacing:.05em;padding:8px 10px 4px}
+.gs-result{padding:7px 10px;border-radius:var(--r);cursor:pointer}
+.gs-result:hover{background:var(--s50)}
+.gs-result-label{font-size:.82rem;font-weight:600;color:var(--s800)}
+.gs-result-sub{font-size:.7rem;color:var(--s400);margin-top:1px}
+.gs-empty{padding:14px 10px;font-size:.8rem;color:var(--s400);text-align:center}
 .sync-badge{display:flex;align-items:center;gap:5px;padding:4px 10px;background:var(--s100);border-radius:999px;font-size:.7rem;font-weight:500;color:var(--s500)}
 .sync-dot{width:8px;height:8px;border-radius:50%;background:var(--ok)}
 

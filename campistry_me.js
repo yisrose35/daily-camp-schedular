@@ -44,6 +44,8 @@ var printSheets=[]; // custom printable-sheet templates (columns + grouping)
 var savedReports=[]; // custom/saved reports: { id, name, source, fields, filters, groupBy, format, mode, snapshotRows, ... }
 var curPage='campers', editingCamper=null, editingDiv=null, editingFam=null;
 var _famHighlight=null; // camper name to scroll-to-and-highlight next time Families renders (set by viewFamilyFromCamper)
+var _billHighlight=null; // family key to expand/scroll-to/highlight next time Billing renders (set by global search)
+var _repHighlight=null;  // saved report id to scroll-to/highlight next time Reports renders (set by global search)
 var pplPipeType='all';  // Pipeline type filter: all | camper | staff
 var regFilter='all';    // Registration section filter: all | applied | waitlisted | accepted | enrolled | withdrawn | declined
 var staffApplications={};   // Staff hiring: applicant id → application record
@@ -380,9 +382,106 @@ function nav(p){
     render(p);
 }
 
+// Cross-entity search: cheap substring match on name/label across the
+// in-memory stores that actually hold identifiable people/records. Each
+// result carries its own open() so the dropdown doesn't need to know how
+// each entity type is best surfaced (a modal for some, a scroll-to for
+// others that have no detail view yet).
+var GLOBAL_SEARCH_TYPE_LABELS={camper:'Camper',family:'Family',staff:'Staff',payment:'Payment',report:'Report',lead:'Lead'};
+function _globalSearchIndex(query){
+    var q=(query||'').trim().toLowerCase();
+    if(!q) return [];
+    var results=[];
+    function pushIfRoom(type,item){
+        if(results.filter(function(r){return r.type===type}).length>=5) return;
+        results.push(item);
+    }
+    Object.keys(roster).forEach(function(name){
+        if(name.toLowerCase().indexOf(q)<0) return;
+        var c=roster[name]||{};
+        pushIfRoom('camper',{type:'camper',label:name,sublabel:[c.division,c.bunk].filter(Boolean).join(' · ')||'Camper',
+            open:function(){nav('campers');setTimeout(function(){viewCamper(name)},50)}});
+    });
+    Object.keys(families).forEach(function(fk){
+        var f=families[fk]||{};
+        if(!f.name||f.name.toLowerCase().indexOf(q)<0) return;
+        pushIfRoom('family',{type:'family',label:f.name,sublabel:(f.camperIds||[]).length+' camper'+((f.camperIds||[]).length!==1?'s':''),
+            open:function(){
+                var cn=(f.camperIds||[])[0];
+                if(cn){viewFamilyFromCamper(cn);}
+                else{nav('families');}
+            }});
+    });
+    (payroll.staff||[]).forEach(function(s){
+        if(!s||!s.name||s.name.toLowerCase().indexOf(q)<0) return;
+        pushIfRoom('staff',{type:'staff',label:s.name,sublabel:s.role||'Staff',
+            open:function(){nav('payroll');setTimeout(function(){prEditStaff(s.id)},50)}});
+    });
+    finPayments.forEach(function(p){
+        if(!p||!p.family||p.family.toLowerCase().indexOf(q)<0) return;
+        pushIfRoom('payment',{type:'payment',label:p.family+' — '+fm(p.amount||0),sublabel:[p.date,p.method].filter(Boolean).join(' · ')||'Payment',
+            open:function(){
+                _billHighlight=Object.keys(families).find(function(k){return families[k].name===p.family})||null;
+                nav('billing');
+            }});
+    });
+    savedReports.forEach(function(r){
+        if(!r||!r.name||r.name.toLowerCase().indexOf(q)<0) return;
+        pushIfRoom('report',{type:'report',label:r.name,sublabel:'Saved report',
+            open:function(){_repHighlight=r.id;nav('reports');}});
+    });
+    Object.keys(leads).forEach(function(id){
+        var l=leads[id]||{};
+        var nm=l.parentName||l.camperName||'';
+        if(!nm||nm.toLowerCase().indexOf(q)<0) return;
+        pushIfRoom('lead',{type:'lead',label:nm,sublabel:l.camperName&&l.camperName!==nm?('Camper: '+l.camperName):'Lead',
+            open:function(){nav('leads');setTimeout(function(){viewLead(id)},50)}});
+    });
+    return results;
+}
+function _globalSearchResultsHtml(results){
+    if(!results.length) return '<div class="gs-empty">No matches</div>';
+    var order=['camper','family','staff','payment','report','lead'],h='';
+    order.forEach(function(type){
+        var group=results.filter(function(r){return r.type===type});
+        if(!group.length) return;
+        h+='<div class="gs-group-label">'+GLOBAL_SEARCH_TYPE_LABELS[type]+'</div>';
+        group.forEach(function(r,i){
+            h+='<div class="gs-result" data-type="'+type+'" data-idx="'+i+'"><div class="gs-result-label">'+esc(r.label)+'</div>'+(r.sublabel?'<div class="gs-result-sub">'+esc(r.sublabel)+'</div>':'')+'</div>';
+        });
+    });
+    return h;
+}
 function setupSearch(){
     var inp=document.getElementById('globalSearch');if(!inp)return;
-    var t;inp.oninput=function(){clearTimeout(t);t=setTimeout(function(){if(curPage==='campers')renderCampers(inp.value.trim())},200)};
+    var dd=document.getElementById('globalSearchResults');
+    var t,lastResults=[];
+    function closeDD(){if(dd)dd.style.display='none'}
+    function openDD(){if(dd)dd.style.display='block'}
+    inp.oninput=function(){
+        clearTimeout(t);
+        var val=inp.value.trim();
+        if(curPage==='campers')renderCampers(val);
+        t=setTimeout(function(){
+            if(!val){lastResults=[];closeDD();return}
+            lastResults=_globalSearchIndex(val);
+            if(dd){dd.innerHTML=_globalSearchResultsHtml(lastResults);openDD()}
+        },200);
+    };
+    inp.onfocus=function(){if(inp.value.trim()&&lastResults.length)openDD()};
+    if(dd)dd.onclick=function(ev){
+        var row=ev.target.closest('.gs-result');if(!row)return;
+        var type=row.dataset.type;
+        var group=lastResults.filter(function(r){return r.type===type});
+        var r=group[Number(row.dataset.idx)];
+        if(!r)return;
+        closeDD();inp.value='';
+        r.open();
+    };
+    document.addEventListener('click',function(ev){
+        if(ev.target!==inp&&!(dd&&dd.contains(ev.target)))closeDD();
+    });
+    inp.addEventListener('keydown',function(ev){if(ev.key==='Escape'){closeDD();inp.blur()}});
 }
 
 // ═══ HELPERS ═════════════════════════════════════════════════════
@@ -8029,6 +8128,7 @@ function prExportCSV(){
 
 function renderBilling(){
     var c=document.getElementById('page-billing');
+    var highlightKey=_billHighlight; _billHighlight=null;
     var ledgers=buildFamilyLedgers();
     var famList=Object.values(ledgers).sort(function(a,b){return(a.family.name||'').localeCompare(b.family.name||'')});
 
@@ -8084,18 +8184,19 @@ function renderBilling(){
         h+='<div class="me-empty"><h3>No accounts match this filter</h3></div>';
     } else {
         filtered.forEach(function(l){
+            var isHighlight=highlightKey&&l.famKey===highlightKey;
             var statusBadge=l.status==='paid'?bdg('Paid','ok'):l.status==='overdue'?bdg('Overdue','err'):l.status==='partial'?bdg('Partial','warn'):bdg('Pending','warn');
             var camperNames=(l.family.camperIds||[]).concat((l.pendingCamperIds||[]).map(function(n){return n+' (pending)'})).join(', ');
 
-            h+='<div class="me-card" style="margin-bottom:12px"><div class="me-card-head" style="cursor:pointer" onclick="this.nextElementSibling.style.display=this.nextElementSibling.style.display===\'none\'?\'block\':\'none\'">';
+            h+='<div class="me-card" id="billfam-'+je(l.famKey)+'" style="margin-bottom:12px'+(isHighlight?';box-shadow:0 0 0 2px var(--me)':'')+'"><div class="me-card-head" style="cursor:pointer" onclick="this.nextElementSibling.style.display=this.nextElementSibling.style.display===\'none\'?\'block\':\'none\'">';
             h+='<div style="display:flex;align-items:center;gap:12px;flex:1"><h3 style="margin:0">'+esc(l.family.name||'')+'</h3><span style="font-size:.75rem;color:var(--s400)">'+esc(camperNames)+'</span>'+(l.pendingEnrollment?bdg('Accepted — pending enrollment','warn'):'')+'</div>';
             h+='<div style="display:flex;align-items:center;gap:10px">'+statusBadge;
             h+='<span style="font-size:1rem;font-weight:800;color:'+(l.balance>0?'var(--err)':'var(--ok)')+'">'+fm(l.balance)+'</span>';
             h+='<span style="font-size:.7rem;color:var(--s400)">▼</span></div>';
             h+='</div>';
 
-            // Ledger (collapsed by default)
-            h+='<div style="display:none;padding:0">';
+            // Ledger (collapsed by default, expanded when jumped to from search)
+            h+='<div style="display:'+(isHighlight?'block':'none')+';padding:0">';
 
             // Ledger summary bar
             h+='<div style="display:flex;gap:16px;padding:10px 16px;background:var(--s50);border-bottom:1px solid var(--s100);font-size:.75rem">';
@@ -8172,6 +8273,10 @@ function renderBilling(){
     }
 
     c.innerHTML=h;
+    if(highlightKey){
+        var hEl=document.getElementById('billfam-'+highlightKey);
+        if(hEl)hEl.scrollIntoView({behavior:'smooth',block:'center'});
+    }
 }
 
 function setBillFilter(f){_billFilter=f;renderBilling()}
@@ -9085,6 +9190,7 @@ async function deleteLinkItem(type,idx){
 // ═══════════════════════════════════════════════════════════════
 function renderReports(){
     var c=document.getElementById('page-reports');
+    var highlightId=_repHighlight; _repHighlight=null;
     var h=_reportsTabsHtml('reports');
     h+='<div class="sec-hd"><div><h2 class="sec-title">Reports & Export</h2><p class="sec-desc">Build any report you want, or grab a quick one below</p></div><div class="sec-actions"><button class="me-btn me-btn--pri" onclick="CampistryMe.openReportBuilder()">+ Build Report</button></div></div>';
 
@@ -9099,7 +9205,8 @@ function renderReports(){
             var meta=srcLabel+' · '+(r.fields||[]).length+' fields'+((r.filters||[]).length?' · '+r.filters.length+' filter'+(r.filters.length>1?'s':''):'')+(r.groupBy?' · grouped':'');
             var badgeCss='font-size:.62rem;font-weight:700;padding:2px 8px;border-radius:999px;white-space:nowrap;';
             var modeBadge=r.mode==='snapshot'?'<span style="'+badgeCss+'background:var(--s100);color:var(--s500)">Snapshot</span>':'<span style="'+badgeCss+'background:rgba(217,119,6,.1);color:var(--me)">Live</span>';
-            h+='<div class="me-card" style="padding:16px">'
+            var isHighlight=highlightId&&r.id===highlightId;
+            h+='<div class="me-card" id="repcard-'+esc(r.id)+'" style="padding:16px'+(isHighlight?';box-shadow:0 0 0 2px var(--me)':'')+'">'
                 +'<div style="display:flex;justify-content:space-between;align-items:flex-start;gap:8px;margin-bottom:6px"><div style="font-size:.92rem;font-weight:700;color:var(--s800)">'+esc(r.name)+'</div>'+modeBadge+'</div>'
                 +'<div style="font-size:.73rem;color:var(--s400);margin-bottom:12px">'+esc(meta)+'</div>'
                 +'<div style="display:flex;gap:6px;flex-wrap:wrap">'
@@ -9136,6 +9243,10 @@ function renderReports(){
 
     h+='</div>';
     c.innerHTML=h;
+    if(highlightId){
+        var hEl=document.getElementById('repcard-'+highlightId);
+        if(hEl)hEl.scrollIntoView({behavior:'smooth',block:'center'});
+    }
 }
 
 // ═══════════════════════════════════════════════════════════════
