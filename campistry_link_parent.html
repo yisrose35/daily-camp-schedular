@@ -3775,10 +3775,39 @@ window.addEventListener('storage', function(e) {
         try { el.focus(); el.setSelectionRange(el.value.length, el.value.length); } catch (_) {}
     };
 
-    // ── Auth screens ──────────────────────────────────────────────────────────
-    function _showSignIn(prefillEmail, errorMsg) {
+    // Same module and same bridge as Lite, under the 'link' namespace. The
+    // portal holds children's medical details, contacts and money, so a phone
+    // handed to someone else should not open straight into it. Declared here,
+    // above _showSignIn, because that function reads it on every render.
+    var Bio = window.CampistryBio || null;
+
+    // ── Auth screen ───────────────────────────────────────────────────────────
+    // ONE screen for every case — first launch, a returning sign-out, an
+    // expired saved session — not a separate bare "unlock" screen shown only
+    // when biometrics happens to be enrolled. That used to mean signing out
+    // landed on a DIFFERENT page than the one a brand-new parent sees, with
+    // no "First time here?" footer and no way to create an account, for no
+    // reason a parent could see. This decides for itself, from the actual
+    // enrolment + session state, whether the biometric quick-action belongs
+    // on screen and whether to fire the OS prompt — callers just say who they
+    // are (prefillEmail), what went wrong (errorMsg) if anything, and whether
+    // a session is currently live (hasLiveSession, for parentRunBio's restore
+    // path). Nothing else has to know biometrics exists.
+    function _showSignIn(prefillEmail, errorMsg, hasLiveSession) {
         var ev = prefillEmail || '';
         var err = errorMsg ? '<div class="lk-login-err">'+_esc(errorMsg)+'</div>' : '';
+        // Mirrors the condition the entry point used to gate _showBioUnlock:
+        // enrolled, not already passed this load, and something to actually
+        // authorise (a live session to confirm, or a kept one to restore).
+        var bioReady = !!(Bio && Bio.isEnabled() && !Bio.hasPass() && (hasLiveSession || Bio.storedSession()));
+        // Fingerprint, not a face outline: WebAuthn never tells the app which
+        // sensor the platform authenticator will actually use, so showing a
+        // face glyph on a fingerprint-only phone would just be wrong.
+        // Fingerprint reads as "biometric" regardless of which one fires.
+        var bioHtml = !bioReady ? '' :
+            '<div class="lk-bio-quick"><button type="button" class="lk-bio-quick-btn" id="paBioGo" onclick="parentRunBio()" aria-label="Sign in with biometrics">' +
+            '<svg viewBox="0 0 24 24" fill="currentColor"><path d="M17.81,4.47C17.73,4.47 17.65,4.45 17.58,4.41C15.66,3.42 14,3 12,3C10.03,3 8.15,3.47 6.44,4.41C6.2,4.54 5.9,4.45 5.76,4.21C5.63,3.97 5.72,3.66 5.96,3.53C7.82,2.5 9.86,2 12,2C14.14,2 16,2.47 18.04,3.5C18.29,3.65 18.38,3.95 18.25,4.19C18.16,4.37 18,4.47 17.81,4.47M3.5,9.72C3.4,9.72 3.3,9.69 3.21,9.63C3,9.47 2.93,9.16 3.09,8.93C4.08,7.53 5.34,6.43 6.84,5.66C10,4.04 14,4.03 17.15,5.65C18.65,6.42 19.91,7.5 20.9,8.9C21.06,9.12 21,9.44 20.78,9.6C20.55,9.76 20.24,9.71 20.08,9.5C19.18,8.22 18.04,7.23 16.69,6.54C13.82,5.07 10.15,5.07 7.29,6.55C5.93,7.25 4.79,8.25 3.89,9.5C3.81,9.65 3.66,9.72 3.5,9.72M9.75,21.79C9.62,21.79 9.5,21.74 9.4,21.64C8.53,20.77 8.06,20.21 7.39,19C6.7,17.77 6.34,16.27 6.34,14.66C6.34,11.69 8.88,9.27 12,9.27C15.12,9.27 17.66,11.69 17.66,14.66A0.5,0.5 0 0,1 17.16,15.16A0.5,0.5 0 0,1 16.66,14.66C16.66,12.24 14.57,10.27 12,10.27C9.43,10.27 7.34,12.24 7.34,14.66C7.34,16.1 7.66,17.43 8.27,18.5C8.91,19.66 9.35,20.15 10.12,20.93C10.31,21.13 10.31,21.44 10.12,21.64C10,21.74 9.88,21.79 9.75,21.79M16.92,19.94C15.73,19.94 14.68,19.64 13.82,19.05C12.33,18.04 11.44,16.4 11.44,14.66A0.5,0.5 0 0,1 11.94,14.16A0.5,0.5 0 0,1 12.44,14.66C12.44,16.07 13.16,17.4 14.38,18.22C15.09,18.7 15.92,18.93 16.92,18.93C17.16,18.93 17.56,18.9 17.96,18.83C18.23,18.78 18.5,18.96 18.54,19.24C18.59,19.5 18.41,19.77 18.13,19.82C17.56,19.93 17.06,19.94 16.92,19.94M14.91,22C14.87,22 14.82,22 14.78,22C13.19,21.54 12.15,20.95 11.06,19.88C9.66,18.5 8.89,16.64 8.89,14.66C8.89,13.04 10.27,11.72 11.97,11.72C13.67,11.72 15.05,13.04 15.05,14.66C15.05,15.73 16,16.6 17.13,16.6C18.28,16.6 19.21,15.73 19.21,14.66C19.21,10.89 15.96,7.83 11.96,7.83C9.12,7.83 6.5,9.41 5.35,11.86C4.96,12.67 4.76,13.62 4.76,14.66C4.76,15.44 4.83,16.67 5.43,18.27C5.53,18.53 5.4,18.82 5.14,18.91C4.88,19 4.59,18.87 4.5,18.62C4,17.31 3.77,16 3.77,14.66C3.77,13.46 4,12.37 4.45,11.42C5.78,8.63 8.73,6.82 11.96,6.82C16.5,6.82 20.21,10.33 20.21,14.65C20.21,16.27 18.83,17.59 17.13,17.59C15.43,17.59 14.05,16.27 14.05,14.65C14.05,13.58 13.12,12.71 11.97,12.71C10.82,12.71 9.89,13.58 9.89,14.65C9.89,16.36 10.55,17.96 11.76,19.16C12.71,20.1 13.62,20.62 15.03,21C15.3,21.08 15.45,21.36 15.38,21.62C15.33,21.85 15.12,22 14.91,22Z"/></svg></button>' +
+            '<span class="lk-bio-quick-label">Sign in with biometrics</span></div>';
         // Same front door as Campistry Lite, in Link's green — see the
         // "Parent sign-in" block in campistry_link.css.
         _showOverlay('parentAuthOverlay',
@@ -3787,6 +3816,7 @@ window.addEventListener('storage', function(e) {
             '<h1 class="lk-login-title">Campistry <span>Link</span></h1>' +
             '<p class="lk-login-sub">Sign in to your camp portal</p>' +
             err +
+            bioHtml +
             '<div class="lk-login-field"><label for="paEmail">Email address</label>' +
             '<input class="lk-login-input" id="paEmail" type="email" value="'+_esc(ev)+'" inputmode="email" autocomplete="username" autocapitalize="none" autocorrect="off" spellcheck="false" onkeydown="if(event.key===\'Enter\')document.getElementById(\'paPass\').focus()"></div>' +
             '<div class="lk-login-field"><label for="paPass">Password</label><div class="lk-login-wrap">' +
@@ -3798,67 +3828,18 @@ window.addEventListener('storage', function(e) {
             '<button class="lk-login-alt" onclick="parentShowSignup()">' + (urlToken ? 'Create account with invite' : 'Create an account') + '</button>' +
             '<p class="lk-login-foot">First time here? Sign up with the <strong>same email you gave your camp</strong> — your children connect automatically.</p>' +
             '</div>', 'brand');
-        setTimeout(function(){var f=document.getElementById('paEmail');if(f&&!ev)f.focus();else{var p=document.getElementById('paPass');if(p)p.focus();}},100);
-    }
-
-    // ── Biometric unlock ──────────────────────────────────────────────────────
-    // Same module and same bridge as Lite, under the 'link' namespace. The
-    // portal holds children's medical details, contacts and money, so a phone
-    // handed to someone else should not open straight into it.
-    var Bio = window.CampistryBio || null;
-
-    // The unlock screen renders the SAME sign-in form as _showSignIn, with the
-    // biometric quick-action above it — cancelling the OS Face ID/fingerprint
-    // prompt should leave a form you can already type into, not a screen you
-    // have to back out of first. That is the whole point of merging these:
-    // the old version showed a bare biometric-only screen with no way to
-    // reach the form except an extra "Use password instead" tap, which is
-    // not how any major app's sign-in actually behaves.
-    // autoPrompt is false when re-rendering after a failed or cancelled
-    // attempt, so retrying via the button doesn't refire the system sheet.
-    function _showBioUnlock(hasLiveSession, errorMsg, autoPrompt) {
-        var err = errorMsg ? '<div class="lk-login-err">'+_esc(errorMsg)+'</div>' : '';
-        _showOverlay('parentAuthOverlay',
-            '<div class="lk-login">' +
-            '<div class="lk-login-badge"><span class="lk-login-mark" role="img" aria-label="Campistry"></span></div>' +
-            '<h1 class="lk-login-title">Campistry <span>Link</span></h1>' +
-            '<p class="lk-login-sub">Sign in to your camp portal</p>' +
-            err +
-            // Small and quiet on purpose: a full-width button the same size
-            // as "Sign in" reads as a second, competing way in. A compact
-            // scan-frame icon with a caption reads as part of this screen
-            // instead of bolted onto it.
-            // Fingerprint, not a face outline: WebAuthn never tells the app
-            // which sensor the platform authenticator will actually use, so
-            // showing a face glyph on a fingerprint-only phone would just be
-            // wrong. Fingerprint reads as "biometric" regardless of which one
-            // the device ends up asking for.
-            '<div class="lk-bio-quick"><button type="button" class="lk-bio-quick-btn" id="paBioGo" onclick="parentRunBio()" aria-label="Sign in with biometrics">' +
-            '<svg viewBox="0 0 24 24" fill="currentColor"><path d="M17.81,4.47C17.73,4.47 17.65,4.45 17.58,4.41C15.66,3.42 14,3 12,3C10.03,3 8.15,3.47 6.44,4.41C6.2,4.54 5.9,4.45 5.76,4.21C5.63,3.97 5.72,3.66 5.96,3.53C7.82,2.5 9.86,2 12,2C14.14,2 16,2.47 18.04,3.5C18.29,3.65 18.38,3.95 18.25,4.19C18.16,4.37 18,4.47 17.81,4.47M3.5,9.72C3.4,9.72 3.3,9.69 3.21,9.63C3,9.47 2.93,9.16 3.09,8.93C4.08,7.53 5.34,6.43 6.84,5.66C10,4.04 14,4.03 17.15,5.65C18.65,6.42 19.91,7.5 20.9,8.9C21.06,9.12 21,9.44 20.78,9.6C20.55,9.76 20.24,9.71 20.08,9.5C19.18,8.22 18.04,7.23 16.69,6.54C13.82,5.07 10.15,5.07 7.29,6.55C5.93,7.25 4.79,8.25 3.89,9.5C3.81,9.65 3.66,9.72 3.5,9.72M9.75,21.79C9.62,21.79 9.5,21.74 9.4,21.64C8.53,20.77 8.06,20.21 7.39,19C6.7,17.77 6.34,16.27 6.34,14.66C6.34,11.69 8.88,9.27 12,9.27C15.12,9.27 17.66,11.69 17.66,14.66A0.5,0.5 0 0,1 17.16,15.16A0.5,0.5 0 0,1 16.66,14.66C16.66,12.24 14.57,10.27 12,10.27C9.43,10.27 7.34,12.24 7.34,14.66C7.34,16.1 7.66,17.43 8.27,18.5C8.91,19.66 9.35,20.15 10.12,20.93C10.31,21.13 10.31,21.44 10.12,21.64C10,21.74 9.88,21.79 9.75,21.79M16.92,19.94C15.73,19.94 14.68,19.64 13.82,19.05C12.33,18.04 11.44,16.4 11.44,14.66A0.5,0.5 0 0,1 11.94,14.16A0.5,0.5 0 0,1 12.44,14.66C12.44,16.07 13.16,17.4 14.38,18.22C15.09,18.7 15.92,18.93 16.92,18.93C17.16,18.93 17.56,18.9 17.96,18.83C18.23,18.78 18.5,18.96 18.54,19.24C18.59,19.5 18.41,19.77 18.13,19.82C17.56,19.93 17.06,19.94 16.92,19.94M14.91,22C14.87,22 14.82,22 14.78,22C13.19,21.54 12.15,20.95 11.06,19.88C9.66,18.5 8.89,16.64 8.89,14.66C8.89,13.04 10.27,11.72 11.97,11.72C13.67,11.72 15.05,13.04 15.05,14.66C15.05,15.73 16,16.6 17.13,16.6C18.28,16.6 19.21,15.73 19.21,14.66C19.21,10.89 15.96,7.83 11.96,7.83C9.12,7.83 6.5,9.41 5.35,11.86C4.96,12.67 4.76,13.62 4.76,14.66C4.76,15.44 4.83,16.67 5.43,18.27C5.53,18.53 5.4,18.82 5.14,18.91C4.88,19 4.59,18.87 4.5,18.62C4,17.31 3.77,16 3.77,14.66C3.77,13.46 4,12.37 4.45,11.42C5.78,8.63 8.73,6.82 11.96,6.82C16.5,6.82 20.21,10.33 20.21,14.65C20.21,16.27 18.83,17.59 17.13,17.59C15.43,17.59 14.05,16.27 14.05,14.65C14.05,13.58 13.12,12.71 11.97,12.71C10.82,12.71 9.89,13.58 9.89,14.65C9.89,16.36 10.55,17.96 11.76,19.16C12.71,20.1 13.62,20.62 15.03,21C15.3,21.08 15.45,21.36 15.38,21.62C15.33,21.85 15.12,22 14.91,22Z"/></svg></button>' +
-            '<span class="lk-bio-quick-label">Sign in with biometrics</span></div>' +
-            '<div class="lk-login-field"><label for="paEmail">Email address</label>' +
-            '<input class="lk-login-input" id="paEmail" type="email" inputmode="email" autocomplete="username" autocapitalize="none" autocorrect="off" spellcheck="false" onkeydown="if(event.key===\'Enter\')document.getElementById(\'paPass\').focus()"></div>' +
-            '<div class="lk-login-field"><label for="paPass">Password</label><div class="lk-login-wrap">' +
-            '<input class="lk-login-input" id="paPass" type="password" autocomplete="current-password" onkeydown="if(event.key===\'Enter\')parentSignIn()">' +
-            _eyeBtn('paPass') + '</div></div>' +
-            '<button class="lk-login-go" onclick="parentSignIn()">Sign in</button>' +
-            '<div id="paMsg" class="lk-login-msg"></div>' +
-            // Dropped when this screen was merged with the sign-in form —
-            // someone whose device is enrolled for biometrics can still have
-            // forgotten the password behind it, and until this was added
-            // back there was no route to reset one from here at all.
-            '<button class="lk-login-alt" onclick="parentForgotPassword()">Forgot your password?</button>' +
-            '</div>', 'brand');
         window.__paBioLive = !!hasLiveSession;
-        if (autoPrompt === false) return;
-        // A real moment on the sign-in screen first -- long enough to
-        // register as "this is the app, here's the form" -- before the
-        // system sheet arrives on top of it. 650ms still read as immediate;
-        // 1.5s is a real, deliberate pause modeled on how banking apps pace
-        // this. Two frames guarantees the paint before the clock even starts.
-        requestAnimationFrame(function () {
-            requestAnimationFrame(function () { setTimeout(window.parentRunBio, 1500); });
-        });
+        if (bioReady) {
+            // A real moment on the sign-in screen first -- long enough to
+            // register as "this is the app, here's the form" -- before the
+            // system sheet arrives on top of it. Two frames guarantees the
+            // paint before the clock even starts; 1.5s after that is a real,
+            // deliberate pause modeled on how banking apps pace this.
+            requestAnimationFrame(function () {
+                requestAnimationFrame(function () { setTimeout(window.parentRunBio, 1500); });
+            });
+        }
+        setTimeout(function(){var f=document.getElementById('paEmail');if(f&&!ev)f.focus();else{var p=document.getElementById('paPass');if(p)p.focus();}},100);
     }
 
     window.parentRunBio = function () {
@@ -3960,7 +3941,7 @@ window.addEventListener('storage', function(e) {
     // the moment it clears, with no password re-typed.
     window.addEventListener('campistry-bio-relock', function () {
         if (window.__linkSplash) window.__linkSplash.show();
-        _showBioUnlock(true);
+        _showSignIn('', '', true);
     });
 
     function _showCreateAccount(prefillEmail, inviteData) {
@@ -4318,9 +4299,12 @@ window.addEventListener('storage', function(e) {
             // Enrolled on this device? Then the portal is gated behind the
             // unlock, whether or not the session is still live — that gate IS
             // the feature. hasPass() only peeks, so a pass written moments ago
-            // (same visit) isn't demanded twice.
+            // (same visit) isn't demanded twice. _showSignIn re-derives this
+            // exact condition itself to decide whether to show the biometric
+            // quick-action; it's checked here too because this branch also
+            // decides whether to skip straight into the portal below instead.
             if (Bio && Bio.isEnabled() && !Bio.hasPass() && (live || Bio.storedSession())) {
-                _showBioUnlock(live);
+                _showSignIn('', '', live);
                 return;
             }
             if (live) {
