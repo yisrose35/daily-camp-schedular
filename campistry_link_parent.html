@@ -690,25 +690,21 @@
         </div>
     </div>
 
+    <!-- Phone and email both live on the camp's own roster/invite record —
+         collecting a second copy here just gave them a chance to drift apart,
+         with no way for the camp to know which one was current. Name is the
+         only thing that's genuinely this screen's to own. -->
     <div class="lk-set-label">Your details</div>
     <div class="lk-card lk-set-card">
         <div class="lk-field"><label for="settingsName">Name</label><input type="text" class="lk-input" id="settingsName" placeholder="Your name"></div>
-        <div class="lk-field"><label for="settingsPhone">Phone</label><input type="tel" class="lk-input" id="settingsPhone" placeholder="Best number for the camp office"></div>
         <div class="lk-set-actions">
             <button class="btn btn-primary btn-sm" onclick="saveParentSettings()">Save changes</button>
             <span class="lk-set-saved" id="settingsSavedMsg"></span>
         </div>
     </div>
 
-    <div class="lk-set-label">Sign-in</div>
+    <div class="lk-set-label">Security</div>
     <div class="lk-card lk-set-card">
-        <div class="lk-field"><label for="settingsEmail">Login email</label>
-            <div class="lk-set-inline">
-                <input type="email" class="lk-input" id="settingsEmail" placeholder="your@email.com">
-                <button class="btn btn-secondary btn-sm" onclick="changeParentEmail()">Change</button>
-            </div>
-            <div id="settingsEmailMsg" class="lk-set-hint"></div>
-        </div>
         <div class="lk-set-row" id="setBioRow" style="display:none;">
             <div class="lk-set-row-main">
                 <div class="lk-set-row-title">Unlock with biometrics</div>
@@ -1379,7 +1375,6 @@ function init(){
 
     // Settings fields
     var sn=document.getElementById('settingsName');if(sn)sn.value=parent.name;
-    var se=document.getElementById('settingsEmail');if(se)se.value=parent.email;
     _paintParentSettings();
     _hydrateParentSettings();   // the cloud copy wins once it arrives (migration 051)
 
@@ -1862,11 +1857,24 @@ function fMsg(f,btn){
     var c=document.getElementById('msgList');c.innerHTML='';
     if(!list.length){c.innerHTML='<div class="lk-empty"><div class="lk-empty-icon"><svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M4 4h16c1.1 0 2 .9 2 2v12c0 1.1-.9 2-2 2H4c-1.1 0-2-.9-2-2V6c0-1.1.9-2 2-2z"/><polyline points="22,6 12,13 2,6"/></svg></div><h3>'+(archivedView?'No archived messages':'No messages')+'</h3></div>';return;}
     list.forEach(function(m){
-        var inner='<div class="msg-item '+(m.read?'':'unread')+'" onclick="openMsg(\''+m.id+'\')">'+_msgAvatarHtml(m)+'<div class="msg-body"><div class="msg-subj">'+m.subject+'</div><div class="msg-preview">'+m.preview+'</div><div class="msg-from">'+m.from+'</div></div><span class="msg-time">'+m.date+'</span></div>';
+        // subject/preview/from were inserted completely unescaped — a sender
+        // name or pasted link containing "&<>\"" rendered wrong, and camp-
+        // authored HTML in a message would execute in the parent's session.
+        var inner='<div class="msg-item '+(m.read?'':'unread')+'" onclick="openMsg(\''+m.id+'\')">'+_msgAvatarHtml(m)+'<div class="msg-body"><div class="msg-subj">'+_escHtml(m.subject)+'</div><div class="msg-preview">'+_escHtml(m.preview)+'</div><div class="msg-from">'+_escHtml(m.from)+'</div></div><span class="msg-time">'+_escHtml(m.date)+'</span></div>';
         // Announcements are shared camp broadcasts (no per-parent row) — plain
         // row, no swipe/archive/delete actions.
         if(m.type==='announcement'){ c.innerHTML+=inner; }
-        else{ c.innerHTML+='<div class="msg-swipe">'+inner+_msgActionsHtml(m.id,!!m._archived)+'</div>'; }
+        else{
+            var mid=String(m.id).replace(/'/g,'');
+            // Colored backdrops behind the row, revealed by drag direction —
+            // see initMsgSwipe. Kept alongside the old tap-to-reveal panel
+            // (.msg-actions, added below) rather than replacing it: a mouse
+            // can't swipe, so desktop still hovers the panel open and clicks
+            // a button, exactly as before. Only touch changes.
+            var bg='<div class="msg-swipe-bg left">'+LK_ICON_ARCHIVE+'<span>'+(m._archived?'Unarchive':'Archive')+'</span></div>'+
+                   '<div class="msg-swipe-bg right">'+LK_ICON_TRASH+'<span>Delete</span></div>';
+            c.innerHTML+='<div class="msg-swipe" data-msg-id="'+mid+'" data-archived="'+(m._archived?'1':'0')+'">'+bg+inner+_msgActionsHtml(m.id,!!m._archived)+'</div>';
+        }
     });
     initMsgSwipe(c);
 }
@@ -1902,8 +1910,19 @@ function openMsg(id){
     // Announcements are shared camp broadcasts, not a per-parent link_messages
     // row — there's nothing to archive/delete for just this parent, so no actions.
     var headActions=m.type!=='announcement'?_msgDetailActionsHtml(String(m.id).replace(/'/g,''),!!m._archived):'';
-    var titleRow='<div style="display:flex;align-items:flex-start;gap:12px;margin-bottom:6px;"><div style="font-size:1.15rem;font-weight:700;flex:1;min-width:0;">'+m.subject+'</div>'+headActions+'</div>';
-    document.getElementById('msgDetail').innerHTML='<div style="margin-bottom:16px;padding-bottom:14px;border-bottom:1px solid var(--border-light);">'+titleRow+'<div style="font-size:.78rem;color:var(--text-muted);display:flex;gap:14px;">From: <strong>'+m.from+'</strong> &nbsp;'+m.date+' &nbsp;'+typeBadge+'</div></div><div style="font-size:.9rem;line-height:1.7;color:var(--text-secondary);">'+m.body+'</div>'+_msgFormActionHtml(m)+replyHtml;
+    // subject/from/body were inserted into innerHTML completely unescaped —
+    // any message containing "&<>\"" (a sender's name with an ampersand, a
+    // pasted link, anything) rendered wrong, and camp-authored HTML in a
+    // message body would execute in a parent's signed-in session. Now
+    // escaped like every other user-supplied field in this file.
+    var titleRow='<div style="display:flex;align-items:flex-start;gap:12px;margin-bottom:8px;"><div style="font-size:1.2rem;font-weight:700;line-height:1.35;flex:1;min-width:0;">'+_escHtml(m.subject)+'</div>'+headActions+'</div>';
+    // white-space:pre-wrap is what makes a message actually read as the
+    // sender wrote it: without it, every line break they typed collapses
+    // into one run-on paragraph, which was the biggest single readability
+    // problem here — no font size fixes that on its own. Font bumped to a
+    // full 16px (browsers' own "no pinch-zoom needed" threshold) with more
+    // line-height and breathing room around it.
+    document.getElementById('msgDetail').innerHTML='<div style="margin-bottom:18px;padding-bottom:16px;border-bottom:1px solid var(--border-light);">'+titleRow+'<div style="font-size:.8rem;color:var(--text-muted);display:flex;gap:14px;">From: <strong>'+_escHtml(m.from)+'</strong> &nbsp;'+_escHtml(m.date)+' &nbsp;'+typeBadge+'</div></div><div style="font-size:1rem;line-height:1.8;color:var(--text-secondary);white-space:pre-wrap;word-break:break-word;">'+_escHtml(m.body)+'</div>'+_msgFormActionHtml(m)+replyHtml;
 }
 
 // If a message is a form request ("<Form name> — <Camper>"), let the parent
@@ -2141,33 +2160,48 @@ function _loadParentPrefs(){ try{ return JSON.parse(localStorage.getItem(PARENT_
 // save_my_parent_profile arrives with migration 051. Until that is applied the
 // RPC is simply absent, the call fails, and the local save still stands — so
 // this degrades to exactly the old behaviour rather than breaking.
+//
+// A failed (or not-yet-landed) cloud write used to fail SILENTLY — the toast
+// said "Saved" regardless, because it was written the instant localStorage
+// updated, before the RPC had even resolved. That silence is what made
+// "my settings don't stick" impossible to diagnose: this device kept the
+// edit, told the parent it was saved, and then a later hydrate (see below)
+// could still overwrite it with the stale cloud value with nothing to explain
+// why. Real cloud failures now say so plainly instead of lying.
 function saveParentSettings(silent){
     var prefs=_loadParentPrefs();
-    prefs.name =(document.getElementById('settingsName')||{}).value||'';
-    prefs.phone=(document.getElementById('settingsPhone')||{}).value||'';
+    prefs.name=(document.getElementById('settingsName')||{}).value||'';
     document.querySelectorAll('#page-settings input[data-pref]').forEach(function(cb){ prefs[cb.dataset.pref]=cb.checked; });
     try{ localStorage.setItem(PARENT_PREFS_KEY, JSON.stringify(prefs)); }catch(e){}
 
     var db=window._parentDB;
+    function say(t){
+        if(silent) return;
+        var el=document.getElementById('settingsSavedMsg');
+        if(el){ el.textContent=t; el.classList.add('show'); setTimeout(function(){ el.classList.remove('show'); },2200); }
+        else toast(t);
+    }
+
     if(db&&db.rpc){
         db.rpc('save_my_parent_profile',{
             p_display_name: prefs.name || null,
-            p_phone:        prefs.phone || null,
             p_prefs:        _prefsForCloud(prefs)
         }).then(function(res){
-            if(res.error){ console.warn('[Parent] profile save (migration 051 applied?):', res.error.message); }
-        }, function(){});
+            if(res.error){
+                console.warn('[Parent] profile save (migration 051 applied?):', res.error.message);
+                say('Saved on this device — reconnect to sync everywhere');
+            } else {
+                say('Saved');
+            }
+        }, function(){ say('Saved on this device — reconnect to sync everywhere'); });
+    } else {
+        say('Saved on this device — reconnect to sync everywhere');
     }
-
-    if(silent) return;
-    var el=document.getElementById('settingsSavedMsg');
-    if(el){ el.textContent='Saved'; el.classList.add('show'); setTimeout(function(){ el.classList.remove('show'); },1800); }
-    else toast('Settings saved');
 }
 
-// Only the notification switches belong in the shared prefs blob — name and
-// phone are columns of their own, and the local-only keys (dismissed prompts,
-// UI state) have no business travelling between devices.
+// Only the notification switches belong in the shared prefs blob — name is a
+// column of its own, and the local-only keys (dismissed prompts, UI state)
+// have no business travelling between devices.
 function _prefsForCloud(prefs){
     var out={};
     ['notifyMessages','notifyPayments','notifyCanteen','notifyPhotos','notifyHealth'].forEach(function(k){
@@ -2176,18 +2210,26 @@ function _prefsForCloud(prefs){
     return out;
 }
 
-// Pull the cloud copy on open so a parent who set things up on their phone sees
-// the same settings in the browser. The local copy wins only when it is all we
-// have, since the cloud is the shared truth.
+// Pull the cloud copy once per session so a parent who set things up on their
+// phone sees the same settings in the browser. Guarded to fire only ONCE:
+// init() re-runs several times during the ordinary multi-camp boot sequence
+// (see _augmentOtherCamps), and re-hydrating on every one of those passes
+// raced a fresh save against its own cloud write still in flight — a second
+// hydrate could read the row from BEFORE that write landed and silently
+// overwrite the edit the parent had just made, with the "Saved" toast having
+// already told them it was fine. That race, not anything about the save
+// itself, was what "my settings don't stick" actually was.
+var _settingsHydrated = false;
 function _hydrateParentSettings(){
+    if (_settingsHydrated) return;
     var db=window._parentDB;
-    if(!(db&&db.rpc)) return;
+    if(!(db&&db.rpc)) return;   // not ready yet — a later init() will retry
+    _settingsHydrated = true;
     db.rpc('get_my_parent_profile',{}).then(function(res){
         var d=res&&res.data;
         if(!d||!d.success) return;   // absent RPC (051 not applied) or no row yet
         var prefs=_loadParentPrefs();
         if(d.displayName) prefs.name=d.displayName;
-        if(d.phone) prefs.phone=d.phone;
         Object.keys(d.prefs||{}).forEach(function(k){ prefs[k]=d.prefs[k]; });
         try{ localStorage.setItem(PARENT_PREFS_KEY, JSON.stringify(prefs)); }catch(e){}
         _paintParentSettings();
@@ -2199,11 +2241,7 @@ function _paintParentSettings(){
     var prefs=_loadParentPrefs();
     var p=(typeof parent!=='undefined'&&parent)?parent:{};
     var nameEl=document.getElementById('settingsName');
-    var phoneEl=document.getElementById('settingsPhone');
-    var mailEl=document.getElementById('settingsEmail');
     if(nameEl&&!nameEl.value) nameEl.value=prefs.name||p.name||'';
-    if(phoneEl&&!phoneEl.value) phoneEl.value=prefs.phone||'';
-    if(mailEl&&!mailEl.value) mailEl.value=p.email||'';
     document.querySelectorAll('#page-settings input[data-pref]').forEach(function(cb){
         if(typeof prefs[cb.dataset.pref]!=='undefined') cb.checked=!!prefs[cb.dataset.pref];
     });
@@ -2284,34 +2322,6 @@ window.parentSetBiometrics=function(on){
     });
 };
 
-// Change the parent's LOGIN email. Supabase updates the auth account (and,
-// depending on the project's settings, sends a confirmation to the new address);
-// once confirmed, sync_my_invite_email re-points their invites so future
-// auto-claims still match. The family connection itself is by user_id, so it
-// never breaks regardless.
-function changeParentEmail(){
-    var db=window._parentDB;
-    var msg=document.getElementById('settingsEmailMsg');
-    var say=function(t,c){ if(msg){ msg.textContent=t; msg.style.color=c||'var(--text-muted)'; } };
-    var newEmail=((document.getElementById('settingsEmail')||{}).value||'').trim();
-    if(!db){ say('Not signed in.', 'var(--red-500)'); return; }
-    if(!newEmail || newEmail.indexOf('@')<0){ say('Enter a valid email address.', 'var(--red-500)'); return; }
-    var current=(typeof parent!=='undefined'&&parent)?(parent.email||'').toLowerCase():'';
-    if(newEmail.toLowerCase()===current){ say('That is already your login email.'); return; }
-    say('Updating…');
-    db.auth.updateUser({ email:newEmail }).then(function(res){
-        if(res.error){ say('Could not update: '+res.error.message, 'var(--red-500)'); return; }
-        // If the project requires confirmation, the change applies after the
-        // parent clicks the link sent to the NEW address. Try to sync now (works
-        // immediately when confirmations are off); it re-runs harmlessly later.
-        var doSync=window._pRpc?window._pRpc('sync_my_invite_email',{}):db.rpc('sync_my_invite_email',{});
-        Promise.resolve(doSync).then(function(r){
-            var synced=r&&r.data&&r.data.success&&r.data.synced;
-            if(synced){ say('Email changed to '+newEmail+'. ✓', 'var(--green-600)'); if(parent) parent.email=newEmail; }
-            else { say('Check '+newEmail+' for a confirmation link to finish the change.', 'var(--green-600)'); }
-        }).catch(function(){ say('Check '+newEmail+' for a confirmation link to finish the change.', 'var(--green-600)'); });
-    }).catch(function(){ say('Could not update — check your connection.', 'var(--red-500)'); });
-}
 // Kept as the entry point the rest of the code already calls; the work now
 // lives in _paintParentSettings so the identity block, the toggles and the
 // fields can never drift out of step with each other.
@@ -2542,17 +2552,29 @@ function _msgDetailActionsHtml(id, isArchived){
         :'<button class="msg-detail-btn archive" type="button" onclick="msgArchive(\''+id+'\')">'+LK_ICON_ARCHIVE+'Archive</button>';
     return '<div class="msg-detail-actions">'+arch+'<button class="msg-detail-btn delete" type="button" onclick="msgDelete(\''+id+'\')">'+LK_ICON_TRASH+'Delete</button></div>';
 }
+// Touch: one swipe past the threshold commits the action directly on
+// release — no second tap on a revealed button. Mail apps everywhere work
+// this way; the old version made a parent swipe to reveal a button panel
+// and then tap one of two buttons in it, which is the exact "push twice"
+// this replaces. Direction carries the meaning, matching the camp's own
+// green: swipe LEFT (toward red) deletes, swipe RIGHT (toward the archive
+// color) archives — or unarchives, from the Archived tab.
+//
+// Desktop is untouched: a mouse never fires touch events at all, so
+// .msg-swipe:hover in the stylesheet keeps revealing the old .msg-actions
+// button panel exactly as before, and clicking one of those buttons still
+// works. Only the touch gesture changed.
 function initMsgSwipe(container){
     if(!container) return;
+    var THRESH=84, CLAMP=132;
     container.querySelectorAll('.msg-swipe').forEach(function(row){
         if(row._swipeInit) return; row._swipeInit=true;
         var item=row.querySelector('.msg-item'); if(!item) return;
         if(!row.querySelector('.msg-actions')) return; // announcement rows have no actions
-        var revealW=parseInt(getComputedStyle(row).getPropertyValue('--msg-actions-w'),10)||140;
+        var id=row.dataset.msgId, isArchived=row.dataset.archived==='1';
         var sx=0,sy=0,dx=0,dragging=false,horizontal=false;
         row.addEventListener('touchstart',function(e){
             var t=e.touches[0]; sx=t.clientX; sy=t.clientY; dx=0; dragging=true; horizontal=false;
-            container.querySelectorAll('.msg-swipe.revealed').forEach(function(r){ if(r!==row) r.classList.remove('revealed'); });
         },{passive:true});
         row.addEventListener('touchmove',function(e){
             if(!dragging) return;
@@ -2563,21 +2585,23 @@ function initMsgSwipe(container){
             }
             if(horizontal){
                 e.preventDefault();
-                var base=row.classList.contains('revealed')?-revealW:0;
-                var tx=Math.max(-revealW,Math.min(0,base+dx));
+                var tx=Math.max(-CLAMP,Math.min(CLAMP,dx));
                 item.style.transform='translateX('+tx+'px)';
+                row.classList.toggle('swipe-right', tx>16);
+                row.classList.toggle('swipe-left', tx<-16);
+                row.classList.toggle('swipe-armed', Math.abs(tx)>=THRESH);
             }
         },{passive:false});
         function endDrag(){
             if(!dragging) return; dragging=false;
-            row.classList.remove('dragging'); item.style.transform='';
-            if(horizontal){ if(dx<-50) row.classList.add('revealed'); else if(dx>50) row.classList.remove('revealed'); }
+            row.classList.remove('dragging','swipe-right','swipe-left','swipe-armed');
+            item.style.transform='';
+            if(!horizontal) return;
+            if(dx<=-THRESH) msgDelete(id);
+            else if(dx>=THRESH) { if(isArchived) msgUnarchive(id); else msgArchive(id); }
         }
         row.addEventListener('touchend',endDrag);
         row.addEventListener('touchcancel',endDrag);
-        item.addEventListener('click',function(e){
-            if(row.classList.contains('revealed')){ e.stopImmediatePropagation(); e.preventDefault(); row.classList.remove('revealed'); }
-        },true);
     });
 }
 
@@ -3810,13 +3834,7 @@ window.addEventListener('storage', function(e) {
             // wrong. Fingerprint reads as "biometric" regardless of which one
             // the device ends up asking for.
             '<div class="lk-bio-quick"><button type="button" class="lk-bio-quick-btn" id="paBioGo" onclick="parentRunBio()" aria-label="Sign in with biometrics">' +
-            '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round">' +
-            '<path d="M11.8 14.8C10.6 13.6 10.7 11.7 12.2 10.8C13.5 10 15 10.6 15.4 12"/>' +
-            '<path d="M10.3 16.6C8.2 14.5 8.3 10.9 11 9C13.5 7.3 16.8 8.2 17.6 10.8"/>' +
-            '<path d="M8.8 18.4C5.9 15.3 6 10 9.8 7.4C13.5 4.9 18.6 6.1 19.8 9.9"/>' +
-            '<path d="M7.3 20.1C3.8 16.2 3.9 9.5 8.5 6.2C13.2 3.1 19.8 4.5 21.3 9.1"/>' +
-            '<path d="M5.8 21.6C1.6 17 1.7 8.8 7.3 4.9C13.1 1 20.8 2.6 22.6 8.3"/>' +
-            '</svg></button>' +
+            '<svg viewBox="0 0 24 24" fill="currentColor"><path d="M17.81,4.47C17.73,4.47 17.65,4.45 17.58,4.41C15.66,3.42 14,3 12,3C10.03,3 8.15,3.47 6.44,4.41C6.2,4.54 5.9,4.45 5.76,4.21C5.63,3.97 5.72,3.66 5.96,3.53C7.82,2.5 9.86,2 12,2C14.14,2 16,2.47 18.04,3.5C18.29,3.65 18.38,3.95 18.25,4.19C18.16,4.37 18,4.47 17.81,4.47M3.5,9.72C3.4,9.72 3.3,9.69 3.21,9.63C3,9.47 2.93,9.16 3.09,8.93C4.08,7.53 5.34,6.43 6.84,5.66C10,4.04 14,4.03 17.15,5.65C18.65,6.42 19.91,7.5 20.9,8.9C21.06,9.12 21,9.44 20.78,9.6C20.55,9.76 20.24,9.71 20.08,9.5C19.18,8.22 18.04,7.23 16.69,6.54C13.82,5.07 10.15,5.07 7.29,6.55C5.93,7.25 4.79,8.25 3.89,9.5C3.81,9.65 3.66,9.72 3.5,9.72M9.75,21.79C9.62,21.79 9.5,21.74 9.4,21.64C8.53,20.77 8.06,20.21 7.39,19C6.7,17.77 6.34,16.27 6.34,14.66C6.34,11.69 8.88,9.27 12,9.27C15.12,9.27 17.66,11.69 17.66,14.66A0.5,0.5 0 0,1 17.16,15.16A0.5,0.5 0 0,1 16.66,14.66C16.66,12.24 14.57,10.27 12,10.27C9.43,10.27 7.34,12.24 7.34,14.66C7.34,16.1 7.66,17.43 8.27,18.5C8.91,19.66 9.35,20.15 10.12,20.93C10.31,21.13 10.31,21.44 10.12,21.64C10,21.74 9.88,21.79 9.75,21.79M16.92,19.94C15.73,19.94 14.68,19.64 13.82,19.05C12.33,18.04 11.44,16.4 11.44,14.66A0.5,0.5 0 0,1 11.94,14.16A0.5,0.5 0 0,1 12.44,14.66C12.44,16.07 13.16,17.4 14.38,18.22C15.09,18.7 15.92,18.93 16.92,18.93C17.16,18.93 17.56,18.9 17.96,18.83C18.23,18.78 18.5,18.96 18.54,19.24C18.59,19.5 18.41,19.77 18.13,19.82C17.56,19.93 17.06,19.94 16.92,19.94M14.91,22C14.87,22 14.82,22 14.78,22C13.19,21.54 12.15,20.95 11.06,19.88C9.66,18.5 8.89,16.64 8.89,14.66C8.89,13.04 10.27,11.72 11.97,11.72C13.67,11.72 15.05,13.04 15.05,14.66C15.05,15.73 16,16.6 17.13,16.6C18.28,16.6 19.21,15.73 19.21,14.66C19.21,10.89 15.96,7.83 11.96,7.83C9.12,7.83 6.5,9.41 5.35,11.86C4.96,12.67 4.76,13.62 4.76,14.66C4.76,15.44 4.83,16.67 5.43,18.27C5.53,18.53 5.4,18.82 5.14,18.91C4.88,19 4.59,18.87 4.5,18.62C4,17.31 3.77,16 3.77,14.66C3.77,13.46 4,12.37 4.45,11.42C5.78,8.63 8.73,6.82 11.96,6.82C16.5,6.82 20.21,10.33 20.21,14.65C20.21,16.27 18.83,17.59 17.13,17.59C15.43,17.59 14.05,16.27 14.05,14.65C14.05,13.58 13.12,12.71 11.97,12.71C10.82,12.71 9.89,13.58 9.89,14.65C9.89,16.36 10.55,17.96 11.76,19.16C12.71,20.1 13.62,20.62 15.03,21C15.3,21.08 15.45,21.36 15.38,21.62C15.33,21.85 15.12,22 14.91,22Z"/></svg></button>' +
             '<span class="lk-bio-quick-label">Sign in with biometrics</span></div>' +
             '<div class="lk-login-field"><label for="paEmail">Email address</label>' +
             '<input class="lk-login-input" id="paEmail" type="email" inputmode="email" autocomplete="username" autocapitalize="none" autocorrect="off" spellcheck="false" onkeydown="if(event.key===\'Enter\')document.getElementById(\'paPass\').focus()"></div>' +

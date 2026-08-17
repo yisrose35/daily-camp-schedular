@@ -533,23 +533,42 @@ body {
 .msg-from { font-size: 0.69rem; color: var(--slate-400); margin-top: 3px; }
 .msg-time { font-size: 0.69rem; color: var(--slate-400); flex-shrink: 0; white-space: nowrap; }
 
-/* ── MESSAGE ROW: swipe-to-reveal (mobile) + hover-reveal (desktop) ────────
-   One markup shape works on both: touch swipes the foreground aside, a
-   fine-pointer hover slides it the same distance, revealing the actions.
-   --msg-actions-w = combined width of the action buttons in a row. */
+/* ── MESSAGE ROW: swipe-to-commit (touch) + hover-reveal (desktop) ────────
+   Two different interactions on the same markup, because they're the only
+   two that make sense for their input device: a mouse can't swipe, so
+   desktop hovers .msg-actions open (unchanged below) and clicks a button.
+   Touch commits directly on release past the threshold — see the
+   swipe-left/-right/-armed classes toggled by initMsgSwipe — because
+   requiring a swipe-to-reveal AND THEN a tap on a button was two actions to
+   do the one thing a directional swipe already means in every mail app. */
 .msg-swipe { position: relative; overflow: hidden; background: #fff; --msg-actions-w: 140px; }
 .msg-swipe:last-child > .msg-item { border-bottom: none; }
 .msg-swipe > .msg-item { position: relative; z-index: 2; background: #fff;
     transition: transform 0.22s cubic-bezier(0.4,0,0.2,1); touch-action: pan-y; }
 .msg-swipe > .msg-item.unread { background: var(--link-tint-bg); }
 .msg-swipe.dragging > .msg-item { transition: none; }
+
+/* Backdrops revealed by drag direction, underneath the sliding row. Not
+   buttons — nothing to tap here, the gesture itself is the action, and
+   swipe-armed is the only feedback that release will actually commit it. */
+.msg-swipe-bg {
+    position: absolute; top: 0; bottom: 0; z-index: 1;
+    display: flex; align-items: center; gap: 8px; padding: 0 22px;
+    font-size: 0.78rem; font-weight: 700; color: #fff;
+    opacity: 0; transition: opacity 0.1s ease;
+}
+.msg-swipe-bg svg { width: 20px; height: 20px; flex: none; }
+.msg-swipe-bg.left  { left: 0;  background: var(--amber-500); justify-content: flex-start; }
+.msg-swipe-bg.right { right: 0; background: var(--red-500);   justify-content: flex-end; }
+.msg-swipe.swipe-right .msg-swipe-bg.left  { opacity: 1; }
+.msg-swipe.swipe-left  .msg-swipe-bg.right { opacity: 1; }
+.msg-swipe.swipe-armed .msg-swipe-bg { filter: brightness(1.12); }
+
 .msg-actions {
     position: absolute; top: 0; right: 0; bottom: 0;
     display: flex; align-items: stretch; z-index: 1;
     opacity: 0; pointer-events: none; transition: opacity 0.15s ease;
 }
-.msg-swipe.revealed > .msg-item { transform: translateX(calc(-1 * var(--msg-actions-w))); }
-.msg-swipe.revealed .msg-actions { opacity: 1; pointer-events: auto; }
 @media (hover: hover) and (pointer: fine) {
     /* Only reveal after the pointer lingers ~0.45s — a quick pass-over won't
        pop the actions open. Retracts immediately when the pointer leaves. */
