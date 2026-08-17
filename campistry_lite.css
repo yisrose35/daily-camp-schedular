@@ -996,34 +996,26 @@ button { cursor: pointer; border: none; background: none; }
     color: #fff; font-size: 0.82rem; font-weight: 600;
 }
 
-/* Biometric entry. Given the same weight as the password button because it is
-   the same action, not a shortcut tucked underneath one. Sits above the form
-   (see #liteBioQuick), not on a screen of its own. */
-.lite-bio-btn {
-    display: flex; width: 100%; align-items: center; justify-content: center; gap: 10px;
-    min-height: 56px; padding: 0 18px; border-radius: 14px;
-    background: #fff; color: var(--coral-700, #B23A28);
-    font-size: 1rem; font-weight: 700; letter-spacing: 0.01em;
-    box-shadow: 0 8px 22px rgba(87, 22, 10, 0.26);
-    transition: transform 0.12s ease, box-shadow 0.12s ease, background 0.15s ease;
+/* Biometric entry. Small and quiet on purpose: a full-width button the same
+   size as "Sign in" read as a second, competing way in rather than a shortcut
+   belonging to the same one — a compact scan-frame icon with a caption is
+   what makes it feel like part of this screen instead of bolted onto it.
+   Sits above the form (see #liteBioQuick), not on a screen of its own. */
+.lite-bio-quick {
+    display: flex; flex-direction: column; align-items: center; gap: 9px;
+    margin-bottom: 24px;
 }
-.lite-bio-btn:active {
-    transform: translateY(1px); background: rgba(255, 255, 255, 0.9);
-    box-shadow: 0 4px 12px rgba(87, 22, 10, 0.22);
+.lite-bio-quick-btn {
+    width: 56px; height: 56px; border-radius: 50%; flex: none;
+    display: flex; align-items: center; justify-content: center;
+    background: rgba(255, 255, 255, 0.16); border: 1.5px solid rgba(255, 255, 255, 0.42);
+    color: #fff; transition: transform 0.12s ease, background 0.15s ease;
 }
-.lite-bio-btn:disabled { opacity: 0.6; }
-.lite-bio-btn svg { width: 24px; height: 24px; flex: none; }
-
-/* The seam between "sign in a fast way" and "sign in the normal way" — a
-   line through the middle of the word is the standard shorthand for this
-   everywhere, so it reads correctly without needing to be explained. */
-.lite-login-divider {
-    display: flex; align-items: center; gap: 12px;
-    margin: 18px 0; color: rgba(255, 255, 255, 0.6);
-    font-size: 0.78rem; font-weight: 600; letter-spacing: 0.02em;
-}
-.lite-login-divider::before, .lite-login-divider::after {
-    content: ''; flex: 1; height: 1px; background: rgba(255, 255, 255, 0.28);
+.lite-bio-quick-btn:active { transform: scale(0.94); background: rgba(255, 255, 255, 0.26); }
+.lite-bio-quick-btn:disabled { opacity: 0.5; }
+.lite-bio-quick-btn svg { width: 25px; height: 25px; }
+.lite-bio-quick-label {
+    font-size: 0.78rem; font-weight: 600; color: rgba(255, 255, 255, 0.8); letter-spacing: 0.01em;
 }
 
 .lite-login-offer {

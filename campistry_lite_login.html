@@ -46,15 +46,21 @@
              cancelling the OS prompt should leave you looking at the sign-in
              form already, the way dismissing Face ID in any other app just
              leaves you on the screen underneath, not a second tap away from
-             it. Hidden entirely when this device has no credential enrolled,
-             in which case the form below is all there ever is. -->
-        <div id="liteBioQuick" hidden>
-            <!-- No symbol: the branded mark is already directly above, and a
-                 second glyph on the button competed with it. The words carry it. -->
-            <button type="button" class="lite-bio-btn" id="liteBioGo">
-                <span id="liteBioLabel">Sign in with biometrics</span>
+             it. Sized and weighted as a small addition to this screen, not a
+             second competing action — a scan-frame icon, not a full-width
+             button matching "Sign in", is what makes it read as PART of
+             signing in rather than an alternative to it. Hidden entirely
+             when this device has no credential enrolled, in which case the
+             form below is all there ever is. -->
+        <div id="liteBioQuick" class="lite-bio-quick" hidden>
+            <button type="button" class="lite-bio-quick-btn" id="liteBioGo" aria-label="Sign in with biometrics">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round">
+                    <path d="M4 8V6a2 2 0 0 1 2-2h2"/><path d="M16 4h2a2 2 0 0 1 2 2v2"/>
+                    <path d="M20 16v2a2 2 0 0 1-2 2h-2"/><path d="M8 20H6a2 2 0 0 1-2-2v-2"/>
+                    <circle cx="12" cy="12" r="3"/>
+                </svg>
             </button>
-            <div class="lite-login-divider"><span>or</span></div>
+            <span class="lite-bio-quick-label" id="liteBioLabel">Sign in with biometrics</span>
         </div>
 
         <form id="liteLoginForm" novalidate autocomplete="on">

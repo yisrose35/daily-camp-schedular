@@ -3800,8 +3800,16 @@ window.addEventListener('storage', function(e) {
             '<h1 class="lk-login-title">Campistry <span>Link</span></h1>' +
             '<p class="lk-login-sub">Sign in to your camp portal</p>' +
             err +
-            '<button class="lk-login-go" id="paBioGo" onclick="parentRunBio()">Sign in with biometrics</button>' +
-            '<div class="lk-login-divider"><span>or</span></div>' +
+            // Small and quiet on purpose: a full-width button the same size
+            // as "Sign in" reads as a second, competing way in. A compact
+            // scan-frame icon with a caption reads as part of this screen
+            // instead of bolted onto it.
+            '<div class="lk-bio-quick"><button type="button" class="lk-bio-quick-btn" id="paBioGo" onclick="parentRunBio()" aria-label="Sign in with biometrics">' +
+            '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round">' +
+            '<path d="M4 8V6a2 2 0 0 1 2-2h2"/><path d="M16 4h2a2 2 0 0 1 2 2v2"/>' +
+            '<path d="M20 16v2a2 2 0 0 1-2 2h-2"/><path d="M8 20H6a2 2 0 0 1-2-2v-2"/>' +
+            '<circle cx="12" cy="12" r="3"/></svg></button>' +
+            '<span class="lk-bio-quick-label">Sign in with biometrics</span></div>' +
             '<div class="lk-login-field"><label for="paEmail">Email address</label>' +
             '<input class="lk-login-input" id="paEmail" type="email" inputmode="email" autocomplete="username" autocapitalize="none" autocorrect="off" spellcheck="false" onkeydown="if(event.key===\'Enter\')document.getElementById(\'paPass\').focus()"></div>' +
             '<div class="lk-login-field"><label for="paPass">Password</label><div class="lk-login-wrap">' +
@@ -3812,9 +3820,13 @@ window.addEventListener('storage', function(e) {
             '</div>', 'brand');
         window.__paBioLive = !!hasLiveSession;
         if (autoPrompt === false) return;
-        // Let the brand screen paint before the system sheet slides over it.
+        // A real moment on the sign-in screen first -- long enough to
+        // register as "this is the app, here's the form" -- before the
+        // system sheet arrives on top of it, the way Chase/Amex-style apps
+        // pace this. Two frames guarantees the paint before the clock even
+        // starts; 650ms after that is the deliberate beat.
         requestAnimationFrame(function () {
-            requestAnimationFrame(function () { setTimeout(window.parentRunBio, 240); });
+            requestAnimationFrame(function () { setTimeout(window.parentRunBio, 650); });
         });
     }
 

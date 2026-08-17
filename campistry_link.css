@@ -1384,18 +1384,26 @@ body {
 .lk-login-eye svg { width: 19px; height: 19px; }
 .lk-login-eye[aria-pressed="true"] { color: #fff; }
 
-/* The seam between "sign in a fast way" and "sign in the normal way" — a line
-   through the middle of the word is the standard shorthand for this
-   everywhere, so it reads correctly without needing to be explained. Sits
-   between the biometric quick-action and the form on the unlock screen; see
-   _showBioUnlock. */
-.lk-login-divider {
-    display: flex; align-items: center; gap: 12px;
-    margin: 18px 0; color: rgba(255, 255, 255, 0.6);
-    font-size: 0.78rem; font-weight: 600; letter-spacing: 0.02em;
+/* Biometric entry on the unlock screen (_showBioUnlock). Small and quiet on
+   purpose: a full-width button the same size as "Sign in" reads as a second,
+   competing way in rather than a shortcut belonging to the same one — a
+   compact scan-frame icon with a caption is what makes it feel like part of
+   this screen instead of bolted onto it. */
+.lk-bio-quick {
+    display: flex; flex-direction: column; align-items: center; gap: 9px;
+    margin-bottom: 24px;
 }
-.lk-login-divider::before, .lk-login-divider::after {
-    content: ''; flex: 1; height: 1px; background: rgba(255, 255, 255, 0.28);
+.lk-bio-quick-btn {
+    width: 56px; height: 56px; border-radius: 50%; flex: none; padding: 0;
+    display: flex; align-items: center; justify-content: center;
+    background: rgba(255, 255, 255, 0.16); border: 1.5px solid rgba(255, 255, 255, 0.42);
+    color: #fff; cursor: pointer; transition: transform 0.12s ease, background 0.15s ease;
+}
+.lk-bio-quick-btn:active { transform: scale(0.94); background: rgba(255, 255, 255, 0.26); }
+.lk-bio-quick-btn:disabled { opacity: 0.5; }
+.lk-bio-quick-btn svg { width: 25px; height: 25px; }
+.lk-bio-quick-label {
+    font-size: 0.78rem; font-weight: 600; color: rgba(255, 255, 255, 0.8); letter-spacing: 0.01em;
 }
 
 /* ─── Settings ────────────────────────────────────────────────────────────

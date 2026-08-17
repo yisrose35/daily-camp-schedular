@@ -139,13 +139,14 @@
         // empty field reads as a validation error.
     }
 
-    // Fire the prompt on open, but only after the brand screen has actually
-    // painted — so it reads as "the app opened, now unlock it" rather than a
-    // system sheet sliding over a blank frame. Two frames guarantees the paint;
-    // the short beat after is what makes it feel deliberate instead of abrupt.
+    // Fire the prompt on open, but only after the sign-in screen has had a
+    // real moment on its own — long enough to register as "this is the app,
+    // here's the form" before the system sheet arrives on top of it, the way
+    // Chase/Amex-style apps pace this. Two frames guarantees the paint before
+    // the clock even starts; 650ms after that is the deliberate beat.
     function autoBio() {
         requestAnimationFrame(function () {
-            requestAnimationFrame(function () { setTimeout(runBio, 240); });
+            requestAnimationFrame(function () { setTimeout(runBio, 650); });
         });
     }
 
