@@ -2206,6 +2206,17 @@ function _paintParentSettings(){
     // on window from there, so it may not exist yet when this runs early.
     if (window._paintHapticState) window._paintHapticState();
     _paintBioState();
+
+    // The running bundle version, once. A device that never picked up a
+    // shipped fix looks identical to one that did until this is on screen —
+    // otherwise "did you close and reopen it" is a guess for both of us.
+    var verEl = document.getElementById('setVersion');
+    if (verEl && !verEl.dataset.painted && window.campistryOtaVersion) {
+        verEl.dataset.painted = '1';
+        window.campistryOtaVersion().then(function (v) {
+            if (v) verEl.textContent = 'Campistry Link · build ' + v;
+        });
+    }
 }
 
 // Biometrics belongs in Settings — until now the only way to reach the enrolment

@@ -42,4 +42,15 @@
             return r;
         });
     };
+
+    // Same thing, but plain text for the Settings screen. A device that never
+    // picked up a shipped fix is otherwise invisible from here — the app looks
+    // identical either way, and "did you close and reopen it" only gets a
+    // reliable answer once the running build is something the user can just
+    // read off the screen instead of us both guessing at it.
+    window.campistryOtaVersion = function () {
+        return Updater.current()
+            .then(function (r) { return (r && r.bundle && r.bundle.version) || null; })
+            .catch(function () { return null; });
+    };
 })();

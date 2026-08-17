@@ -1429,6 +1429,7 @@
         const roleLabel = cap(role || 'viewer');
         const camp = campDisplayName ? esc(campDisplayName) : '';
         const hapticOn = !window.CampistryHaptics || window.CampistryHaptics.enabled();
+        const otaVersion = window.campistryOtaVersion ? await window.campistryOtaVersion() : null;
 
         v.innerHTML = `
             <div class="lite-settings-head">
@@ -1497,7 +1498,7 @@
 
             <a href="dashboard.html" class="lite-link-row">Open full Campistry ↗</a>
             <button class="lite-link-row danger" id="liteSettingsSignout">Sign out</button>
-            <div class="lite-set-version">Campistry Lite${camp ? ' · ' + camp : ''}</div>`;
+            <div class="lite-set-version">Campistry Lite${camp ? ' · ' + camp : ''}${otaVersion ? ' · build ' + esc(otaVersion) : ''}</div>`;
 
         v.querySelector('#liteSettingsBack').addEventListener('click', () => { if (history.state && history.state.liteSettings) history.back(); else { settingsOpen = false; goHome(); } });
         v.querySelector('#liteSettingsSignout').addEventListener('click', () => document.getElementById('liteSignOut').click());
