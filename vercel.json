@@ -7,6 +7,7 @@
     { "source": "/link", "destination": "/campistry_link_parent.html" },
     { "source": "/parents", "destination": "/campistry_link_parent.html" },
     { "source": "/reset", "destination": "/campistry_reset.html" },
-    { "source": "/privacy", "destination": "/campistry_privacy.html" }
+    { "source": "/privacy", "destination": "/campistry_privacy.html" },
+    { "source": "/delete-account", "destination": "/campistry_delete_account.html" }
   ]
 }
