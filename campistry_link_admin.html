@@ -906,24 +906,11 @@
         </div>
     </div>
 
-    <!-- Suggested tip amounts -->
-    <div class="lk-card">
-        <div class="lk-card-head">
-            <h2>Suggested Tip Amounts</h2>
-        </div>
-        <p style="font-size:.82rem;color:var(--text-muted);margin-bottom:14px;">Parents tap these quick amounts when sending a tip. You can add custom values.</p>
-        <div id="tipsAmountsRow" style="display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin-bottom:14px;"></div>
-        <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;">
-            <input type="number" id="tipNewAmt" class="lk-input" min="1" max="500" step="1" placeholder="e.g. 15" style="max-width:130px;">
-            <button class="btn btn-secondary btn-sm" onclick="addTipAmount()">+ Add Amount</button>
-        </div>
-    </div>
-
     <!-- Suggested tip by role — one amount per position, applied to whoever -->
     <!-- holds that position on a camper's bunk (assigned in Registration & -->
     <!-- Hiring / bunk staff). Parents only ever see the actual people on -->
     <!-- their own child's bunk — never the full staff list. -->
-    <div class="lk-card" style="margin-top:18px;">
+    <div class="lk-card">
         <div class="lk-card-head">
             <h2>Suggested Tip by Role</h2>
         </div>
@@ -936,28 +923,30 @@
         </div>
     </div>
 
-    <!-- Staff payment info — the handles parents pay directly to -->
-    <div class="lk-card" style="margin-top:18px;">
-        <div class="lk-card-head">
-            <div>
-                <h2>Staff Payment Info</h2>
-                <p style="font-size:.78rem;color:var(--text-muted);margin:2px 0 0;">Add each staff member's Zelle / Venmo / PayPal so parents can send tips directly. Parents see these next to the matching role.</p>
-            </div>
-            <div style="display:flex;gap:6px;flex-shrink:0;flex-wrap:wrap;">
-                <button class="btn btn-ghost btn-sm" onclick="downloadStaffPayTemplate()" title="Download a spreadsheet pre-filled with your staff and their bunks">
-                    <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" style="vertical-align:-2px;"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
-                    Template
-                </button>
-                <button class="btn btn-ghost btn-sm" onclick="document.getElementById('staffPayUpload').click()" title="Upload the filled-in spreadsheet">
-                    <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" style="vertical-align:-2px;"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg>
-                    Upload
-                </button>
-                <input type="file" id="staffPayUpload" accept=".csv,text/csv" style="display:none;" onchange="uploadStaffPayTemplate(this)">
-                <button class="btn btn-secondary btn-sm" onclick="openAddStaffPay()">
-                    <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" style="vertical-align:-2px;"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
-                    Add person
-                </button>
-            </div>
+    <!-- Staff payment info (Zelle/Venmo/PayPal) and the Card Tips ledger are
+         both legacy/occasional-use now that staff self-enter their own
+         handles and connect their own Stripe account from Campistry Lite
+         (migration 060) — collapsed shut by default so they're out of the
+         way unless an admin specifically needs them. -->
+    <details class="lk-card" style="margin-top:18px;">
+        <summary style="cursor:pointer;">
+            <h2 style="display:inline;">Staff Payment Info</h2>
+            <p style="font-size:.78rem;color:var(--text-muted);margin:2px 0 0;">Zelle / Venmo / PayPal for staff who haven't set this up themselves in Campistry Lite yet — most camps won't need to touch this.</p>
+        </summary>
+        <div style="margin-top:14px;display:flex;gap:6px;flex-shrink:0;flex-wrap:wrap;justify-content:flex-end;">
+            <button class="btn btn-ghost btn-sm" onclick="downloadStaffPayTemplate()" title="Download a spreadsheet pre-filled with your staff and their bunks">
+                <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" style="vertical-align:-2px;"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
+                Template
+            </button>
+            <button class="btn btn-ghost btn-sm" onclick="document.getElementById('staffPayUpload').click()" title="Upload the filled-in spreadsheet">
+                <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" style="vertical-align:-2px;"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg>
+                Upload
+            </button>
+            <input type="file" id="staffPayUpload" accept=".csv,text/csv" style="display:none;" onchange="uploadStaffPayTemplate(this)">
+            <button class="btn btn-secondary btn-sm" onclick="openAddStaffPay()">
+                <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" style="vertical-align:-2px;"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
+                Add person
+            </button>
         </div>
         <div id="staffPayList"></div>
         <div id="staffPayEmpty" class="lk-empty" style="display:none;padding:24px 0;">
@@ -965,27 +954,21 @@
             <h3>No payment info yet</h3>
             <p>Download the template, fill in Zelle/Venmo, and upload it — or add people one at a time.</p>
         </div>
-    </div>
+    </details>
 
     <!-- Card tips (Stripe Connect) — parents pay by card, money splits automatically.
-         Staff now set this up themselves from Campistry Lite (no code needed) —
-         the ledger below is for occasional admin lookups, not daily use, so it
-         stays collapsed by default. -->
-    <div class="lk-card" style="margin-top:18px;">
-        <div class="lk-card-head">
-            <div>
-                <h2>Card Tips</h2>
-                <p style="font-size:.78rem;color:var(--text-muted);margin:2px 0 0;">Staff connect their own bank account from Campistry Lite's Tips tab — nothing to set up here for most camps.</p>
-            </div>
+         Staff now set this up themselves from Campistry Lite (no code needed),
+         so this whole card — including the ledger — stays collapsed by default. -->
+    <details class="lk-card" style="margin-top:18px;">
+        <summary style="cursor:pointer;">
+            <h2 style="display:inline;">Card Tips</h2>
+            <p style="font-size:.78rem;color:var(--text-muted);margin:2px 0 0;">Staff connect their own bank account from Campistry Lite's Tips tab — nothing to set up here for most camps.</p>
+        </summary>
+        <div style="margin-top:14px;display:flex;justify-content:flex-end;">
+            <button class="btn btn-secondary btn-sm" onclick="openAddStaffAccount()">+ Add Staff Account</button>
         </div>
-        <details id="staffAccountsAdvanced">
-            <summary style="cursor:pointer;font-size:.82rem;font-weight:700;color:var(--slate-600);padding:4px 0;">Show staff ledger (balances, payouts, access codes)</summary>
-            <div style="margin-top:10px;display:flex;justify-content:flex-end;">
-                <button class="btn btn-secondary btn-sm" onclick="openAddStaffAccount()">+ Add Staff Account</button>
-            </div>
-            <div id="staffAccountsList" style="margin-top:8px;"></div>
-        </details>
-    </div>
+        <div id="staffAccountsList" style="margin-top:8px;"></div>
+    </details>
 </div>
 
 <!-- Staff payment info modal -->
@@ -4489,7 +4472,6 @@ function _loadTipsLog() {
 
 function renderTipsAdmin() {
     var cfg = _loadTipsConfig();
-    _renderTipAmounts(cfg);
     _renderRoleTips(cfg);
     _renderStaffPay(cfg);
     _loadStaffAccounts(_renderStaffAccounts);
@@ -4733,38 +4715,6 @@ function openAddStaffAccount() {
             _renderStaffAccounts();
             toast(name + '\'s account created — code ' + res.data.access_code);
         });
-}
-
-function _renderTipAmounts(cfg) {
-    var el = document.getElementById('tipsAmountsRow'); if (!el) return;
-    var amounts = cfg.amounts || [];
-    el.innerHTML = amounts.map(function(a, i) {
-        return '<div style="display:inline-flex;align-items:center;gap:4px;background:var(--link-tint);color:var(--link-color);border:1.5px solid var(--link-color);border-radius:999px;padding:5px 14px;font-size:.85rem;font-weight:700;">' +
-            '$' + a +
-            '<button onclick="removeTipAmount(' + i + ')" style="background:none;border:none;cursor:pointer;color:var(--link-color);margin-left:2px;font-size:.85rem;line-height:1;padding:0 2px;" title="Remove">×</button></div>';
-    }).join('');
-    if (!amounts.length) el.innerHTML = '<span style="font-size:.8rem;color:var(--text-muted);">No amounts set — add one below.</span>';
-}
-
-function addTipAmount() {
-    var inp = document.getElementById('tipNewAmt'); if (!inp) return;
-    var v = parseInt(inp.value, 10);
-    if (!v || v < 1 || v > 500) { toast('Enter a valid amount ($1–$500)'); return; }
-    var cfg = _loadTipsConfig();
-    if (cfg.amounts.indexOf(v) >= 0) { toast('Amount already in list'); inp.value=''; return; }
-    cfg.amounts.push(v);
-    cfg.amounts.sort(function(a, b) { return a - b; });
-    _saveTipsConfig(cfg);
-    inp.value = '';
-    _renderTipAmounts(cfg);
-    toast('$' + v + ' added');
-}
-
-function removeTipAmount(idx) {
-    var cfg = _loadTipsConfig();
-    cfg.amounts.splice(idx, 1);
-    _saveTipsConfig(cfg);
-    _renderTipAmounts(cfg);
 }
 
 // ─── STAFF PAYMENT INFO (Zelle/Venmo/PayPal handles relayed to parents) ──────
