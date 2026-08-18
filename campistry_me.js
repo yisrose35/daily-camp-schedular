@@ -75,7 +75,7 @@ function setRosterPage(n){_rosterPage=n;var inp=document.getElementById('globalS
 function setBillingPage(n){_billingPage=n;renderBilling();}
 function setAnalyticsInvoicePage(n){_analyticsInvoicePage=n;renderAnalytics();}
 function setAnalyticsPaymentPage(n){_analyticsPaymentPage=n;renderAnalytics();}
-var pplPipeType='all';  // Pipeline type filter: all | camper | staff
+var pplPipeType='all';  // Pipeline type filter: all | camper | staff | hired
 var regFilter='all';    // Registration section filter: all | applied | waitlisted | accepted | enrolled | withdrawn | declined
 var staffApplications={};   // Staff hiring: applicant id → application record
 var staffFormConfig=null;   // Staff application form config — mirrors formConfig, drives campistry_staff_apply.html
@@ -1349,7 +1349,8 @@ function _renderPipelinePane(){
     var list=buildPipelineList().filter(function(r){return r.type==='camper'?canReg:canStaff;});
     var typeCounts={all:list.length,camper:0,staff:0};
     list.forEach(function(r){typeCounts[r.type]=(typeCounts[r.type]||0)+1});
-    var visible=pplPipeType==='all'?list:list.filter(function(r){return r.type===pplPipeType});
+    var hiredList=canStaff?hiredStaff():[];
+    var visible=pplPipeType==='all'?list:pplPipeType==='hired'?[]:list.filter(function(r){return r.type===pplPipeType});
 
     var h='<div class="sec-hd"><div><h2 class="sec-title">Registration &amp; Hiring</h2><p class="sec-desc">'+list.length+' in progress'+(canReg?' · '+typeCounts.camper+' camper'+(typeCounts.camper!==1?'s':''):'')+(canStaff?' · '+typeCounts.staff+' staff':'')+'</p></div>';
     h+='<div class="sec-actions">';
@@ -1390,14 +1391,29 @@ function _renderPipelinePane(){
 
     if(canStaff)h+=_visibilityPanelHTML();
 
-    if(canReg&&canStaff){
+    if(canReg||canStaff){
         h+='<div style="display:flex;gap:2px;border-bottom:1px solid var(--s200);margin-bottom:16px">';
-        [{k:'all',l:'All',c:typeCounts.all},{k:'camper',l:'Campers',c:typeCounts.camper},{k:'staff',l:'Staff',c:typeCounts.staff}].forEach(function(s){
+        var tabDefs=[];
+        if(canReg&&canStaff)tabDefs.push({k:'all',l:'All',c:typeCounts.all});
+        if(canReg)tabDefs.push({k:'camper',l:'Campers',c:typeCounts.camper});
+        if(canStaff)tabDefs.push({k:'staff',l:'Applicants',c:typeCounts.staff});
+        // Hired staff intentionally drop OFF the "in progress" list above the
+        // moment they're hired (buildPipelineList() excludes status==='hired')
+        // — this tab is where they land instead, so "accepted a counselor,
+        // now what" has an answer inside this same page rather than only in
+        // the separate Roster page.
+        if(canStaff)tabDefs.push({k:'hired',l:'Hired',c:hiredList.length});
+        tabDefs.forEach(function(s){
             var active=pplPipeType===s.k;
             h+='<button onclick="CampistryMe.setPplPipeType(\''+s.k+'\')" style="padding:9px 12px;border:none;background:none;font-size:.8rem;font-weight:600;cursor:pointer;white-space:nowrap;font-family:inherit;display:flex;align-items:center;gap:6px;border-bottom:2px solid '+(active?'var(--me)':'transparent')+';color:'+(active?'var(--me)':'var(--s500)')+'">'
                 +esc(s.l)+'<span style="font-size:.68rem;font-weight:700;border-radius:9px;padding:1px 6px;background:'+(active?'var(--me)':'var(--s100)')+';color:'+(active?'#fff':'var(--s600)')+'">'+s.c+'</span></button>';
         });
         h+='</div>';
+    }
+
+    if(pplPipeType==='hired'){
+        h+=_renderHiredStaffTable(hiredList,editStaff);
+        return h;
     }
 
     if(!list.length){
@@ -1416,6 +1432,58 @@ function _renderPipelinePane(){
         h+='</tbody></table></div></div>';
     }
     return h;
+}
+// The "Hired" tab — everyone who's cleared the pipeline, formatted as an
+// actual staff directory (not an applicant-review queue): position, bunk if
+// placed, contact, and an inline "Assign position" action that writes
+// straight back to the application record (previously read-only — see
+// openAssignPositionModal). Position is what an admin most wants to set the
+// moment someone's hired, well before — or entirely without — assigning a
+// bunk, which the old "must place on a bunk first" flow didn't allow.
+function _renderHiredStaffTable(hiredList,editStaff){
+    if(!hiredList.length){
+        return '<div class="me-empty"><h3>No hired staff yet</h3><p>Once you hire someone from Applicants, they\'ll show up here.</p></div>';
+    }
+    var h='<div class="me-card"><div class="me-tw"><table class="me-t"><thead><tr><th>Name</th><th>Position</th><th>Bunk</th><th>Contact</th><th style="width:1%;white-space:nowrap"></th></tr></thead><tbody>';
+    hiredList.forEach(function(a){
+        var bunks=bunksForStaffEmail(a.email);
+        var positions=(a.positions||[]);
+        h+='<tr class="click" onclick="CampistryMe.viewStaffApp(\''+je(a.id)+'\')">'
+            +'<td class="bold">'+esc(a.name||[a.first,a.last].filter(Boolean).join(' ')||'—')+'</td>'
+            +'<td style="font-size:.8rem;color:var(--s500)">'+(positions.length?esc(positions.join(', ')):'<span style="color:var(--s400)">Not set</span>')+'</td>'
+            +'<td style="font-size:.8rem;color:var(--s500)">'+(bunks.length?esc(bunks.join(', ')):'<span style="color:var(--s400)">Unplaced</span>')+'</td>'
+            +'<td style="font-size:.78rem;color:var(--s400)">'+esc(a.email||a.phone||'—')+'</td>'
+            +'<td style="text-align:right;white-space:nowrap" onclick="event.stopPropagation()">'+(editStaff?'<button class="me-btn me-btn--sec me-btn--sm" onclick="CampistryMe.openAssignPositionModal(\''+je(a.id)+'\')">Assign position</button>':'')+'</td>'
+            +'</tr>';
+    });
+    h+='</tbody></table></div></div>';
+    return h;
+}
+// Position was previously set once, at application time, then locked —
+// viewStaffApp()'s "Role & Availability" section only ever displayed it.
+// This is the first place it can be changed after hire, reusing the same
+// configured position list the application form itself offers (sfc.positions,
+// falling back to SFC_POSITIONS_DEFAULT) so the two stay consistent.
+function openAssignPositionModal(id){
+    var a=staffApplications[id]; if(!a)return;
+    var sfc=getStaffFormConfig();
+    var options=(sfc.positions&&sfc.positions.length)?sfc.positions:SFC_POSITIONS_DEFAULT;
+    var current=a.positions||[];
+    var body='<p style="font-size:.8rem;color:var(--s500);margin:0 0 12px">Position for <strong>'+esc(a.name||'this staff member')+'</strong>:</p>'
+        +'<div id="posModalChecks" style="display:flex;flex-direction:column;gap:6px;max-height:260px;overflow-y:auto">'
+        +options.map(function(p){
+            var checked=current.indexOf(p)>=0;
+            return '<label style="display:flex;align-items:center;gap:8px;font-size:.85rem;cursor:pointer"><input type="checkbox" class="posModalCB" value="'+esc(p)+'"'+(checked?' checked':'')+' style="accent-color:var(--me)"> '+esc(p)+'</label>';
+        }).join('')
+        +'</div>';
+    showModal('Assign Position',body,function(){
+        var picked=[];document.querySelectorAll('.posModalCB:checked').forEach(function(cb){picked.push(cb.value)});
+        a.positions=picked;
+        save();
+        closeModal('dynModal');
+        renderPipelinePage();
+        toast('Position updated for '+(a.name||'staff member'));
+    });
 }
 
 function renderCampers(filter){
@@ -11004,7 +11072,7 @@ window.CampistryMe={
     finAddPayment:finAddPayment,finRemovePayment:finRemovePayment,finRefund:finRefund,
     sendPayLink:sendPayLink,copyPayLink:copyPayLink,
     monthlyPlan:monthlyPlan,toggleFamilyAutopay:toggleFamilyAutopay,cancelMonthlyPlan:cancelMonthlyPlan,
-    setStaffFilter:setStaffFilter,viewStaffApp:viewStaffApp,setStaffStatus:setStaffStatus,saveStaffNotes:saveStaffNotes,
+    setStaffFilter:setStaffFilter,viewStaffApp:viewStaffApp,setStaffStatus:setStaffStatus,saveStaffNotes:saveStaffNotes,openAssignPositionModal:openAssignPositionModal,
     toggleOnboard:toggleOnboard,cycleRef:cycleRef,deleteStaffApp:deleteStaffApp,addStaffApp:addStaffApp,
     copyStaffLink:copyStaffLink,exportStaffCSV:exportStaffCSV,
     setLeadFilter:setLeadFilter,viewLead:viewLead,setLeadStatus:setLeadStatus,saveLeadNotes:saveLeadNotes,
