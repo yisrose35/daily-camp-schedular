@@ -4549,15 +4549,33 @@
         return '$' + n.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 });
     }
 
+    const TIPS_ACCT_COLS = 'id, staff_name, role, balance, total_earned, total_paid_out, ' +
+        'stripe_account_id, stripe_charges_enabled, stripe_onboarding_status, ' +
+        'zelle_handle, venmo_handle, paypal_handle, cashapp_handle';
+
     async function _tipsLoadAccount() {
         if (!window.supabase || !userId) return null;
         const { data, error } = await window.supabase
             .from('link_staff_accounts')
-            .select('id, staff_name, role, balance, total_earned, total_paid_out, stripe_account_id, stripe_charges_enabled, stripe_onboarding_status')
+            .select(TIPS_ACCT_COLS)
             .eq('user_id', userId)
             .maybeSingle();
         if (error) { console.warn('[Lite] tips account load failed:', error); return null; }
-        return data || null;
+        if (data) return data;
+
+        // No row yet — self-provision one instead of making a freshly-hired
+        // counselor hunt for an access code that only exists if an admin
+        // happened to have already created it. Claims an admin-precreated
+        // row by name match if one exists, else creates a fresh one.
+        const { data: prov, error: provErr } = await window.supabase.rpc('ensure_my_tip_account', {
+            p_staff_name: userName || (userEmail || '').split('@')[0] || 'Staff member',
+            p_role: 'counselor',
+        });
+        if (provErr || !prov || !prov.success) {
+            console.warn('[Lite] tip account provisioning failed:', provErr || (prov && prov.error));
+            return null;
+        }
+        return prov.account;
     }
 
     async function renderTips() {
@@ -4572,8 +4590,9 @@
                 <div class="lite-card">
                     <div class="lite-section-label" style="margin-top:0;">Link your tip account</div>
                     <p style="font-size:.85rem;color:#6b7280;margin:0 0 14px;">
-                        Enter the access code the camp office gave you to link your tips
-                        balance to this login — you'll only need to do this once.
+                        We couldn't set up your tip account automatically. If the camp
+                        office gave you an access code, enter it here to link it —
+                        you'll only need to do this once.
                     </p>
                     <input class="lite-input" id="tipsClaimCode" type="text" placeholder="e.g. ABCD-1234"
                         autocapitalize="characters" autocomplete="off" style="text-transform:uppercase;margin-bottom:10px;">
@@ -4612,9 +4631,59 @@
                     <span style="font-size:.8rem;color:#6b7280;">${connected ? 'Parents can pay you by card' : 'Connect a bank account to receive card tips'}</span>
                 </div>
                 ${connected ? '' : `<button class="lite-btn block" id="tipsConnectBtn">${_tipsAccount.stripe_account_id ? 'Finish connecting' : 'Connect Stripe'}</button>`}
+            </div>
+            <div class="lite-card">
+                <div class="lite-section-label" style="margin-top:0;">Other ways to get paid</div>
+                <p style="font-size:.8rem;color:#6b7280;margin:0 0 12px;">
+                    Add Zelle, Venmo, PayPal, or Cash App so parents can tip you
+                    directly — this shows up even before you connect a bank account
+                    for card tips above.
+                </p>
+                ${_tipsHandleField('tipsZelle', 'Zelle', 'Phone or email', _tipsAccount.zelle_handle)}
+                ${_tipsHandleField('tipsVenmo', 'Venmo', '@username', _tipsAccount.venmo_handle)}
+                ${_tipsHandleField('tipsPaypal', 'PayPal', 'paypal.me link or email', _tipsAccount.paypal_handle)}
+                ${_tipsHandleField('tipsCashapp', 'Cash App', '$username', _tipsAccount.cashapp_handle)}
+                <button class="lite-btn block" id="tipsSaveHandlesBtn" style="margin-top:2px;">Save</button>
             </div>`;
         const cbtn = document.getElementById('tipsConnectBtn');
         if (cbtn) cbtn.addEventListener('click', _tipsConnectStripe);
+        const hbtn = document.getElementById('tipsSaveHandlesBtn');
+        if (hbtn) hbtn.addEventListener('click', _tipsSaveHandles);
+    }
+
+    function _tipsHandleField(id, label, placeholder, value) {
+        return `
+            <div style="margin-bottom:10px;">
+                <label for="${id}" style="display:block;font-size:.72rem;font-weight:700;color:#6b7280;text-transform:uppercase;letter-spacing:.04em;margin-bottom:4px;">${esc(label)}</label>
+                <input class="lite-input" id="${id}" type="text" placeholder="${esc(placeholder)}" value="${esc(value || '')}" autocomplete="off">
+            </div>`;
+    }
+
+    async function _tipsSaveHandles() {
+        if (!_tipsAccount) return;
+        const btn = document.getElementById('tipsSaveHandlesBtn');
+        const val = id => { const el = document.getElementById(id); return el ? el.value.trim() : ''; };
+        const patch = {
+            zelle_handle: val('tipsZelle') || null,
+            venmo_handle: val('tipsVenmo') || null,
+            paypal_handle: val('tipsPaypal') || null,
+            cashapp_handle: val('tipsCashapp') || null,
+        };
+        if (btn) { btn.disabled = true; btn.textContent = 'Saving…'; }
+        try {
+            const { error } = await window.supabase
+                .from('link_staff_accounts')
+                .update(patch)
+                .eq('id', _tipsAccount.id);
+            if (error) throw error;
+            Object.assign(_tipsAccount, patch);
+            haptic(10);
+            toast('Payment info saved');
+        } catch (e) {
+            toast(e.message || 'Could not save payment info');
+        } finally {
+            if (btn) { btn.disabled = false; btn.textContent = 'Save'; }
+        }
     }
 
     async function _tipsClaim() {

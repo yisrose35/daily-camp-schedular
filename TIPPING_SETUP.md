@@ -12,26 +12,36 @@ build** — test-mode only until the notes at the bottom are addressed.
 |---|---|---|
 | **Head counselor / admin** | Link Admin → Tips Setup → Card Tips | Creates a staff tip account (name, role, generates an access code), sets the suggested tip amount, and sees the ledger (Earned / Balance / Paid Out per staff member) |
 | **Parent** | Link Parent → Tips | Pays a tip by card |
-| **Staff member (the receiver)** | Campistry Lite → **Tips** tab (inside "My Camp" for counselors, or Link Lite for head staff) | Links their own login to the account the admin created (one-time, via the access code), then connects their own Stripe Express account themselves |
+| **Staff member (the receiver)** | Campistry Lite → **Tips** tab (inside "My Camp" for counselors, or Link Lite for head staff) | Their tip account is set up automatically the first time they open the Tips tab — no admin step, no access code needed (`ensure_my_tip_account`, migration 060). They connect their own Stripe Express account, and/or type in their own Zelle/Venmo/PayPal/Cash App. |
 
 A staff member can have personal handles configured, be Stripe-connected,
 both, or neither — the parent-facing Tips page shows whichever applies for
-that staff member automatically.
+that staff member automatically. Handles a staff member enters themselves in
+Lite take priority over the separate admin-entered directory in Link Admin's
+"Staff payment info" section — that list still works and is shown for any
+staff member who hasn't self-entered their own.
 
 ## How money reaches a staff member
 
-1. Admin creates the staff account in Link Admin (name, role, access code) —
-   unchanged from before.
-2. **The staff member**, not the admin, connects Stripe: in Campistry Lite's
-   Tips tab, they enter that access code once to link it to their own login
-   (`claim_staff_tip_account`, migration 058), then tap **Connect Stripe** —
-   `stripe-connect-onboard` creates a Stripe Connect **Express** account
-   under *their* session and returns a hosted onboarding link. They fill in
-   their own bank account there — Campistry never sees or stores it. (The
-   old admin-triggered "Connect Stripe" button in Link Admin still works as
-   a fallback, e.g. for a staff member without a Lite login yet — but the
-   receiver connecting themselves is now the primary path, since a real bank
-   account should be attached by the actual person.)
+1. **The staff member**, not the admin, sets everything up themselves: the
+   first time they open the Tips tab in Campistry Lite, `ensure_my_tip_account`
+   (migration 060) provisions their `link_staff_accounts` row automatically —
+   claiming an admin-precreated row by name match if one already exists
+   (preserving any tips already logged against it), otherwise creating a
+   fresh one tied straight to their login. No access code is required for
+   this to work, though the old code-based `claim_staff_tip_account` flow
+   (migration 058) still works as a manual fallback if auto-provisioning
+   ever fails (e.g. `get_user_camp_id()` can't resolve).
+2. From there they tap **Connect Stripe** — `stripe-connect-onboard` creates
+   a Stripe Connect **Express** account under *their* session and returns a
+   hosted onboarding link. They fill in their own bank account there —
+   Campistry never sees or stores it. (The old admin-triggered "Connect
+   Stripe" button in Link Admin still works too, e.g. for a staff member
+   without a Lite login yet.) They can also type Zelle/Venmo/PayPal/Cash App
+   handles directly into the Tips tab at any time — self-editable per the
+   `link_staff_accounts_self_update` RLS policy (migration 058); the guard
+   trigger there only pins ledger/identity columns, so these handle columns
+   were self-editable with no trigger change needed.
 3. Once Stripe confirms the account can receive money (`charges_enabled`),
    Lite shows **Connected**, and that staff member appears as a "Pay with
    card" option on the parent's Tips page instead of (or alongside) personal
@@ -89,6 +99,12 @@ Run, in order, in the Supabase SQL editor:
   recipients. **Required** even if you don't care about multi-recipient
   carts yet — without it, `stripe-connect-tip-cart`/the webhook's cart
   handler will fail outright (no table to write to).
+- `migrations/060_link_staff_self_service_handles.sql` — adds
+  `zelle_handle`/`venmo_handle`/`paypal_handle`/`cashapp_handle` to
+  `link_staff_accounts`, adds `ensure_my_tip_account()` so a staff member's
+  own Lite login can provision their tip account with no admin step and no
+  access code, and updates `get_link_tip_targets` to surface the
+  self-entered handles to the parent tip sheet.
 
 ### 2. Enable Stripe Connect
 Stripe Dashboard → Connect → get started, choose **Express** as the account

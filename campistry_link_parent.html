@@ -4867,7 +4867,12 @@ function openTipSheet(name, role, suggested) {
         return;
     }
 
-    var h = _tipHandlesFor(name);
+    // Prefer handles the staff member entered themselves in Lite
+    // (connectTarget, from get_link_tip_targets) — falls back to the
+    // admin-entered directory (_tipHandlesFor) only if they haven't.
+    var h = (connectTarget && (connectTarget.zelle || connectTarget.venmo || connectTarget.paypal || connectTarget.cashapp))
+        ? connectTarget
+        : _tipHandlesFor(name);
     var rows = [];
     if (h) {
         if (h.zelle)   rows.push(_tipPayRow('Zelle',    h.zelle,   ''));
