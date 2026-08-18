@@ -6565,11 +6565,17 @@ function _autoProvisionParentInvites(){
     // so the signature never changed and this bailed out on every save after
     // the first) — the parent portal kept showing the old bunk and old staff
     // indefinitely.
+    // Also fold in the CONTENTS of that bunk's staff list (not just which
+    // bunk the camper is in) — adding/editing/removing a counselor on a bunk
+    // a camper was ALREADY on doesn't change bunk/division/grade at all, so
+    // without this the signature stayed identical and the new counselor
+    // never reached camper_data.staff either.
     var sig=keys.slice().sort().map(function(k){
         return k+':'+fams[k].campers.slice().sort().map(function(cn){
             var w=_linkCamperWindow(cn);
             var r=roster[cn]||{};
-            return cn+'@'+w.accessStart+'-'+w.accessEnd+'#'+(r.bunk||'')+'/'+(r.division||'')+'/'+(r.grade||'');
+            var staffSig=(bunkStaff[r.bunk]||[]).map(function(s){return (s.name||'')+':'+(s.role||'')+':'+(s.email||'');}).join(',');
+            return cn+'@'+w.accessStart+'-'+w.accessEnd+'#'+(r.bunk||'')+'/'+(r.division||'')+'/'+(r.grade||'')+'~'+staffSig;
         }).join('|');
     }).join(';');
     if(sig===_apiLastSig)return;
