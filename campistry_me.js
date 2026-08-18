@@ -6557,11 +6557,19 @@ function _autoProvisionParentInvites(){
 
     // Skip entirely when nothing invite-relevant changed since the last run.
     // Include each camper's access window so editing SESSION DATES (not just
-    // membership) also re-stamps the invites.
+    // membership) also re-stamps the invites — and bunk/division/grade, since
+    // camper_data.staff/counselor/teacher are all derived from the camper's
+    // CURRENT bunk (bunkStaff[r.bunk]) at snapshot time. Without these, moving
+    // a camper to a new bunk in Bunk Builder never re-stamped the parent's
+    // invite (accessStart/accessEnd are always empty per the comment above,
+    // so the signature never changed and this bailed out on every save after
+    // the first) — the parent portal kept showing the old bunk and old staff
+    // indefinitely.
     var sig=keys.slice().sort().map(function(k){
         return k+':'+fams[k].campers.slice().sort().map(function(cn){
             var w=_linkCamperWindow(cn);
-            return cn+'@'+w.accessStart+'-'+w.accessEnd;
+            var r=roster[cn]||{};
+            return cn+'@'+w.accessStart+'-'+w.accessEnd+'#'+(r.bunk||'')+'/'+(r.division||'')+'/'+(r.grade||'');
         }).join('|');
     }).join(';');
     if(sig===_apiLastSig)return;
