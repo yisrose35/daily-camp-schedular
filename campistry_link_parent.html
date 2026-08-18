@@ -4660,7 +4660,7 @@ function _loadTipsConfigP() {
     if (cid && byCamp[cid]) return byCamp[cid];
     if (window._cloudTipsConfig) return window._cloudTipsConfig;
     var gs = {}; try { gs = JSON.parse(localStorage.getItem('campGlobalSettings_v1') || '{}'); } catch(e){}
-    return gs.link_tips_config || { amounts: [5, 10, 20, 50], categories: [] };
+    return gs.link_tips_config || { amounts: [5, 10, 20, 50], categories: [], roleSuggestedTips: {} };
 }
 
 function _loadTipsLogP() {
@@ -4736,26 +4736,45 @@ function _renderTipRecipients(child, cfg) {
         return;
     }
 
-    // Build the recipient list from the configured tip roles. Each role either
-    // resolves a merge tag (the child's actual counselor/rebbi from Me), lists
-    // specific people, or shows the role generically.
+    // Recipients are simply whoever the camp assigned to THIS child's bunk
+    // (child.staff — synced from Me's bunk-staff directory, so a parent only
+    // ever sees the actual people on their own kid's bunk, never the full
+    // staff list). The suggested amount comes from the admin's one
+    // amount-per-role config (roleSuggestedTips), keyed by that same role.
     var recipients = [];
     var seen = {};
     function add(r) { var k = (r.name + '|' + r.role).toLowerCase(); if (seen[k]) return; seen[k] = 1; recipients.push(r); }
 
-    (cfg.categories || []).forEach(function(cat) {
-        if (cat.tag) {
-            var hit = _resolveTipTag(cat.tag, child);
-            if (hit) add({ name: hit.name, role: cat.label, amount: cat.amount });
-            else add({ name: 'Your ' + cat.label, role: cat.label, generic: true, amount: cat.amount });
-        } else if (cat.staff && cat.staff.length) {
-            cat.staff.forEach(function(s) { add({ name: s, role: cat.label, amount: cat.amount }); });
-        } else {
-            add({ name: 'Your ' + cat.label, role: cat.label, generic: true, amount: cat.amount });
-        }
+    var roleAmts = cfg.roleSuggestedTips || {};
+    function amtForRole(role) {
+        if (roleAmts[role] != null) return roleAmts[role];
+        var rl = String(role || '').trim().toLowerCase();
+        var hitKey = Object.keys(roleAmts).filter(function(k) { return k.toLowerCase() === rl; })[0];
+        return hitKey ? roleAmts[hitKey] : null;
+    }
+
+    (child.staff || []).forEach(function(s) {
+        if (!s || !s.name) return;
+        add({ name: s.name, role: s.role || 'Staff', amount: amtForRole(s.role) });
     });
 
-    // Legacy fallback: a named counselor from the child profile with no config
+    // Legacy fallback for camps still on the old tag/category config (only
+    // used when this child has no bunk-staff assignment at all yet).
+    if (!recipients.length) {
+        (cfg.categories || []).forEach(function(cat) {
+            if (cat.tag) {
+                var hit = _resolveTipTag(cat.tag, child);
+                if (hit) add({ name: hit.name, role: cat.label, amount: cat.amount });
+                else add({ name: 'Your ' + cat.label, role: cat.label, generic: true, amount: cat.amount });
+            } else if (cat.staff && cat.staff.length) {
+                cat.staff.forEach(function(s) { add({ name: s, role: cat.label, amount: cat.amount }); });
+            } else {
+                add({ name: 'Your ' + cat.label, role: cat.label, generic: true, amount: cat.amount });
+            }
+        });
+    }
+
+    // Older-still fallback: a named counselor from the child profile with no config
     if (!recipients.length && child.counselor) {
         add({ name: child.counselor, role: 'Counselor', fromRoster: true });
     }

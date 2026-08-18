@@ -3815,8 +3815,23 @@ function openBunkStaffModal(bunkName){
 // counselor their own bunk, and what league captains and pickup notifications
 // are addressed to. Records without an email still work as a paper roster, but
 // nothing can be sent to them, so the UI says so rather than failing silently.
-var STAFF_ROLES=['Counselor','Co-Counselor','Junior Counselor','Head Counselor','Division Head','Waiter','Learning Specialist'];
 function staffKey(s){ return String((s&&s.email)||'').trim().toLowerCase(); }
+// Bunk-staff roles come from the same configured position list hiring uses
+// (getStaffFormConfig().positions, customizable in Staff Application Form
+// Customizer → Positions) — one role vocabulary end to end, from hiring
+// through bunk assignment to Link's per-role suggested tip amounts. Any
+// role already saved on this bunk that isn't in the current position list
+// (older free-typed data) is appended so editing it doesn't silently
+// reassign it to something else.
+function _bunkStaffRoleOptions(bunkName){
+    var sfc=getStaffFormConfig();
+    var positions=(sfc.positions&&sfc.positions.length)?sfc.positions.slice():SFC_POSITIONS_DEFAULT.slice();
+    (bunkStaff[bunkName]||[]).forEach(function(s){
+        var r=(s.role||'').trim();
+        if(r&&positions.indexOf(r)<0)positions.push(r);
+    });
+    return positions;
+}
 function _renderBunkStaffModalBody(bunkName){
     var staff=bunkStaff[bunkName]||[];
     var listHtml=staff.length
@@ -3860,7 +3875,10 @@ function _renderBunkStaffModalBody(bunkName){
         +'<input type="hidden" id="bsIdx" value="-1">'
         +'<div style="display:flex;gap:8px;margin-bottom:8px">'
         +'<input type="text" id="bsName" placeholder="Name" class="fi" style="flex:1.3">'
-        +'<input type="text" id="bsRole" placeholder="Role" class="fi" list="bsRoleOpts" style="flex:1">'
+        +'<select id="bsRole" class="fs" style="flex:1">'
+        +'<option value="">— Role —</option>'
+        +_bunkStaffRoleOptions(bunkName).map(function(r){return '<option value="'+esc(r)+'">'+esc(r)+'</option>';}).join('')
+        +'</select>'
         +'</div>'
         +'<div style="display:flex;gap:8px;margin-bottom:8px">'
         +'<input type="email" id="bsEmail" placeholder="Email (for their login)" class="fi" style="flex:1.3" autocapitalize="none" spellcheck="false">'
@@ -3873,8 +3891,7 @@ function _renderBunkStaffModalBody(bunkName){
         +'<button class="me-btn me-btn--pri me-btn--sm" id="bsSave" onclick="CampistryMe.addBunkStaff(\''+je(bunkName)+'\')">Add</button>'
         +'</div>'
         +'<p style="font-size:.72rem;color:var(--s400);margin:10px 0 0">The email is how this person signs in to Campistry Lite and how the office reaches them. Without one they still appear on the roster, but they cannot be sent anything.</p>'
-        +'</div>'
-        +'<datalist id="bsRoleOpts">'+STAFF_ROLES.map(function(r){return '<option value="'+esc(r)+'">'}).join('')+'</datalist>';
+        +'</div>';
     showModal('Staff — '+bunkName,body);
 }
 function _resetBunkStaffForm(bunkName){ _renderBunkStaffModalBody(bunkName); }
