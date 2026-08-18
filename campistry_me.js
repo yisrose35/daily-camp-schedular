@@ -6525,10 +6525,10 @@ function _scheduleAutoParentInvites(){
     _apiTimer=setTimeout(_autoProvisionParentInvites,4000);
 }
 function _autoProvisionParentInvites(){
-    if(_apiRunning)return;
+    if(_apiRunning){console.log('[Me] Parent sign-up: skipped — a previous run is still in flight');return;}
     var db=window.CampistryDB&&window.CampistryDB.getClient?window.CampistryDB.getClient():null;
     var campId=window.CampistryDB&&window.CampistryDB.getCampId?window.CampistryDB.getCampId():null;
-    if(!db||!campId)return;
+    if(!db||!campId){console.log('[Me] Parent sign-up: skipped — cloud not ready (db='+!!db+', campId='+!!campId+')');return;}
 
     // Group campers into families: explicit family records win, remaining
     // roster campers group by shared parent1Email (implied families) — the
@@ -6553,7 +6553,7 @@ function _autoProvisionParentInvites(){
     });
 
     var keys=Object.keys(fams).filter(function(k){return fams[k].campers.length;});
-    if(!keys.length)return;
+    if(!keys.length){console.log('[Me] Parent sign-up: skipped — no families with a parent email yet');return;}
 
     // Skip entirely when nothing invite-relevant changed since the last run.
     // Include each camper's access window so editing SESSION DATES (not just
@@ -6578,7 +6578,8 @@ function _autoProvisionParentInvites(){
             return cn+'@'+w.accessStart+'-'+w.accessEnd+'#'+(r.bunk||'')+'/'+(r.division||'')+'/'+(r.grade||'')+'~'+staffSig;
         }).join('|');
     }).join(';');
-    if(sig===_apiLastSig)return;
+    if(sig===_apiLastSig){console.log('[Me] Parent sign-up: skipped — nothing invite-relevant changed since last sync');return;}
+    console.log('[Me] Parent sign-up: syncing '+keys.length+' famil'+(keys.length===1?'y':'ies')+' —',sig);
 
     _apiRunning=true;
     var expires=new Date();expires.setFullYear(expires.getFullYear()+1);
@@ -6618,13 +6619,14 @@ function _autoProvisionParentInvites(){
                 counselor:(function(){var st=bunkStaff[r.bunk]||[];var c=st.filter(function(s){return (s.role||'').toLowerCase()==='counselor';})[0];return c?c.name:'';})()
             };
         });
+        console.log('[Me] Parent sign-up: upserting '+f.parentEmail+' —',Object.keys(camperData).map(function(cn){return cn+' @ '+camperData[cn].bunk+' (staff: '+camperData[cn].staff.map(function(s){return s.name;}).join(', ')+')';}));
         db.rpc('upsert_parent_invite',{
             p_camp_id:campId,p_token:_genToken(),
             p_parent_name:f.parentName||f.parentEmail,p_parent_email:f.parentEmail,
             p_camper_names:f.campers,p_camper_data:camperData,
             p_expires_at:expires.toISOString()
         }).then(function(res){
-            if(!res.error&&res.data&&res.data.success)done++;else failed++;
+            if(!res.error&&res.data&&res.data.success)done++;else{failed++;console.warn('[Me] Parent sign-up: upsert failed for '+f.parentEmail+' —',res.error||res.data);}
             next();
         }).catch(function(){failed++;next();});
     })();
