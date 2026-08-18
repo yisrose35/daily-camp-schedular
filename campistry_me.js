@@ -3763,6 +3763,7 @@ function _renderBunkStaffModalBody(bunkName){
                     +(s.email?' · '+esc(s.email):'')+(s.phone?' · '+esc(s.phone):'')+'</div>'
                   +'<div style="margin-top:2px">'+reach+(s.smsOptIn?' <span style="font-size:.66rem;font-weight:700;color:var(--ok)">SMS ok</span>':'')+'</div>'
                 +'</div>'
+                +(s.email?'<button class="me-btn me-btn--ghost me-btn--sm" title="Send a Campistry Lite invite to this email" onclick="CampistryMe.inviteBunkStaffToLite(\''+je(bunkName)+'\','+i+')">Invite to Lite</button>':'')
                 +'<button class="me-btn me-btn--ghost me-btn--sm" onclick="CampistryMe.editBunkStaff(\''+je(bunkName)+'\','+i+')">Edit</button>'
                 +'<button class="me-btn me-btn--ghost me-btn--sm" onclick="CampistryMe.removeBunkStaff(\''+je(bunkName)+'\','+i+')">Remove</button>'
                 +'</div>';
@@ -3973,6 +3974,50 @@ function fillBunkStaffFromHired(appId){
     if(g('bsEmail'))g('bsEmail').value=a.email||'';
     if(g('bsPhone'))g('bsPhone').value=a.phone||'';
     if(g('bsName'))g('bsName').focus();
+}
+// Invites this bunk-staff record's email to Campistry Lite as a counselor —
+// creates the camp_users row (AccessControl.inviteTeamMember) that
+// campistry_lite_login.html's "Create account" flow needs to have something
+// to claim. Idempotent: inviteTeamMember already no-ops on a duplicate
+// email+camp, so it's safe to click again for someone already invited.
+// Deliberately hardcoded to 'counselor' — this button lives on the bunk
+// roster, which is where counselors live; a role that needs more access
+// (admin/scheduler) still goes through Team management as before.
+async function inviteBunkStaffToLite(bunkName,idx){
+    var s=bunkStaff[bunkName]&&bunkStaff[bunkName][idx];
+    if(!s)return;
+    var email=String(s.email||'').trim();
+    if(!email){toast('Add an email for '+(s.name||'this person')+' first','error');return;}
+    if(!window.AccessControl||!window.AccessControl.inviteTeamMember){
+        toast('Invites aren\'t available right now — try again in a moment','error');return;
+    }
+    toast('Inviting '+(s.name||email)+'…','info');
+    try{
+        var result=await window.AccessControl.inviteTeamMember(email,'counselor',[],s.name||'');
+        if(result&&result.error){toast(result.error,'error');return;}
+        if(!result||!result.inviteUrl){toast('Could not create the invite','error');return;}
+
+        // Best-effort email via the same edge function Team management uses —
+        // if it fails, the copy-link fallback below still gets them in.
+        try{
+            var client=window.CampistryDB&&window.CampistryDB.getClient?window.CampistryDB.getClient():window.supabase;
+            var sess=client&&client.auth?(await client.auth.getSession()):null;
+            var token=sess&&sess.data&&sess.data.session&&sess.data.session.access_token;
+            var supaUrl=(client&&client.supabaseUrl)||(window.__CAMPISTRY_SUPABASE__&&window.__CAMPISTRY_SUPABASE__.url);
+            if(token&&supaUrl){
+                await fetch(supaUrl+'/functions/v1/send-invite-email',{
+                    method:'POST',
+                    headers:{'Content-Type':'application/json','Authorization':'Bearer '+token},
+                    body:JSON.stringify({to:email,inviteUrl:result.inviteUrl,role:'Counselor',campName:(window.AccessControl.getCampName&&window.AccessControl.getCampName())||'Your Camp'})
+                });
+            }
+        }catch(mailErr){console.warn('[Me] send-invite-email failed:',mailErr);}
+
+        try{navigator.clipboard&&navigator.clipboard.writeText(result.inviteUrl);}catch(_){}
+        toast('Invited '+(s.name||email)+' — link copied, and emailed if that worked');
+    }catch(err){
+        toast(err.message||'Could not invite '+(s.name||email),'error');
+    }
 }
 function removeBunkStaff(bunkName,idx){
     if(!bunkStaff[bunkName]||!bunkStaff[bunkName][idx])return;
@@ -10896,7 +10941,7 @@ window.CampistryMe={
     _runSetupChecklistAction:_runSetupChecklistAction,dismissSetupChecklist:dismissSetupChecklist,
     bbDrop:bbDrop,autoAssign:autoAssign,autoGenerateBunks:autoGenerateBunks,openBunkGenSettings:openBunkGenSettings,showCamperBunkRequests:showCamperBunkRequests,clearBunks:clearBunks,setBunkCount:setBunkCount,openBunkCountModal:openBunkCountModal,_clearBunkCount:_clearBunkCount,
     openBunkStaffModal:openBunkStaffModal,addBunkStaff:addBunkStaff,removeBunkStaff:removeBunkStaff,
-    editBunkStaff:editBunkStaff,_resetBunkStaffForm:_resetBunkStaffForm,
+    editBunkStaff:editBunkStaff,_resetBunkStaffForm:_resetBunkStaffForm,inviteBunkStaffToLite:inviteBunkStaffToLite,
     // Staff directory — the single source of truth for who works with which
     // bunk. Flow (league captains), Lite (a counselor's own bunk) and the
     // office (pickup notifications) all resolve people through these, so the

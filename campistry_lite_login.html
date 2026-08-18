@@ -42,6 +42,14 @@
         <h1 class="lite-login-title" id="liteLoginTitle">Campistry <span>Lite</span></h1>
         <p class="lite-login-sub" id="liteLoginSub">Sign in to your camp</p>
 
+        <!-- Two modes, one form — signup is additive (an email/password field
+             set plus a confirm field), not a separate screen, so switching
+             back and forth doesn't lose what you already typed. -->
+        <div class="lite-login-modes" id="liteLoginModes">
+            <button type="button" class="lite-login-mode active" id="liteModeSignin">Sign in</button>
+            <button type="button" class="lite-login-mode" id="liteModeSignup">Create account</button>
+        </div>
+
         <!-- Biometric entry sits ABOVE the form, not on a screen of its own —
              cancelling the OS prompt should leave you looking at the sign-in
              form already, the way dismissing Face ID in any other app just
@@ -83,6 +91,11 @@
                 </div>
             </div>
 
+            <div class="lite-lf" id="litePwConfirmField" hidden>
+                <label for="litePasswordConfirm">Confirm password</label>
+                <input class="lite-lf-input" type="password" id="litePasswordConfirm" autocomplete="new-password">
+            </div>
+
             <div class="lite-login-err" id="liteLoginErr" role="alert" hidden></div>
 
             <button class="lite-btn block lite-login-go" type="submit" id="liteLoginBtn">Sign in</button>
@@ -98,8 +111,11 @@
             <button type="button" class="lite-login-alt" id="liteBioSkip">Not now</button>
         </div>
 
-        <p class="lite-login-foot">
-            Accounts are created by your camp on <a href="index.html">campistry.org</a>
+        <p class="lite-login-foot" id="liteFootSignin">
+            New staff — <button type="button" class="lite-login-foot-link" id="liteFootToSignup">create your account</button> with the email your camp has on file.
+        </p>
+        <p class="lite-login-foot" id="liteFootSignup" hidden>
+            Use the same email your camp invited you with — that's what links your login to your camp.
         </p>
     </div>
 </div>

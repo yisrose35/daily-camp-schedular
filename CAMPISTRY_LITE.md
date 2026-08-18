@@ -406,6 +406,29 @@ Counselors can also be invited from the existing team management UI
 (`team_subdivisions_ui.js` now has a Counselor role option) — but bunk
 assignment only exists in Lite's Staff tab.
 
+**A third invite entry point, from Hiring.** Once a hired applicant is on a
+bunk (Camp Structure → bunk → Staff, `openBunkStaffModal`), any row with an
+email now has an **"Invite to Lite"** button (`inviteBunkStaffToLite()` in
+`campistry_me.js`) — same `AccessControl.inviteTeamMember()` call as above,
+defaulting to the `counselor` role, so hiring → bunk placement → a real
+login is one continuous flow instead of a hop over to Team management.
+
+**Staff can now create their own account, not just accept an emailed
+link.** `campistry_lite_login.html` has a **Sign in / Create account**
+toggle (`campistry_lite_login.js`) — Create account calls
+`supabase.auth.signUp` directly, then looks for a pending `camp_users`
+invite matching that email (the exact same detect-and-accept logic
+`landing.js`'s own signup form uses) and links it if found. An admin still
+has to create the `camp_users` row first (via either invite path above) —
+this only removes the "open the emailed link" step, letting a hired staff
+member download the app and self-serve with the email their camp has on
+file. A direct link (`campistry_lite_login.html?mode=signup`) pre-selects
+the Create Account tab, useful for "download the app, tap this to sign up"
+instructions. If no invite exists yet for that email, the account is still
+created (Supabase requires a session before `camp_users` can be queried at
+all, so this can't be checked first) but boot()'s existing "No camp found
+for this account" screen is what actually gates entry from there.
+
 ### Daily SMS blast
 
 1. **Alerts tab → flip "Camp opted in to SMS"** (stored in `liteSmsSettings`;

@@ -1,12 +1,24 @@
 /* ============================================================================
-   Campistry Lite — standalone sign-in
+   Campistry Lite — standalone sign-in + staff self-signup
    ----------------------------------------------------------------------------
    Lite installs to the home screen as its own app, so it needs its own front
-   door rather than bouncing to the marketing site's landing page. This is a
-   sign-in ONLY screen: it calls the same supabase.auth.signInWithPassword the
-   desktop landing page uses, against the same project, so credentials, session
-   storage and RLS behave identically. Account creation deliberately lives on
-   the main site — camps are provisioned there and members arrive by invite.
+   door rather than bouncing to the marketing site's landing page. Sign-in
+   calls the same supabase.auth.signInWithPassword the desktop landing page
+   uses, against the same project, so credentials, session storage and RLS
+   behave identically.
+
+   Create-account mirrors landing.js's own invite-detection logic exactly
+   (see its "SIGNUP: Create camp or accept invite" branch) rather than
+   opening a new, unauthenticated path onto camp_users: an admin still has to
+   create the camp_users row first (Team management, or the hiring pipeline's
+   "Invite to Lite" action in campistry_me.js) — this screen just lets a
+   hired staff member accept that invite by typing their email + a new
+   password directly here, instead of needing to open a separate emailed
+   link first. Sign up with an email that has no pending invite still
+   creates a real login (Supabase doesn't let us check camp_users before
+   auth — RLS requires a session), but boot()'s existing "No camp found for
+   this account" screen in campistry_lite.js is what actually gates entry,
+   so nothing sensitive is exposed by that order.
    ============================================================================ */
 (function () {
     'use strict';
@@ -23,6 +35,25 @@
 
     let bioAvailable = false;
     let signedInUserId = null;   // who we just signed in, to bind an enrolment to
+    let authMode = 'signin';     // 'signin' | 'signup' — which branch the form submit takes
+
+    function setAuthMode(mode) {
+        authMode = mode;
+        showErr('');
+        const signup = mode === 'signup';
+        $('liteModeSignin').classList.toggle('active', !signup);
+        $('liteModeSignup').classList.toggle('active', signup);
+        $('litePwConfirmField').hidden = !signup;
+        $('litePasswordConfirm').required = signup;
+        $('litePassword').autocomplete = signup ? 'new-password' : 'current-password';
+        $('liteLoginSub').textContent = signup ? 'Create your account' : 'Sign in to your camp';
+        $('liteLoginBtn').textContent = signup ? 'Create account' : 'Sign in';
+        $('liteForgot').hidden = signup;
+        $('liteFootSignin').hidden = signup;
+        $('liteFootSignup').hidden = !signup;
+        // A biometric quick-unlock only ever applies to an existing account.
+        if (signup) $('liteBioQuick').hidden = true;
+    }
 
     // The form and the offer pane are the only two full-screen states now —
     // biometrics is a quick-action ABOVE the form (#liteBioQuick), not a
@@ -34,8 +65,15 @@
     function showPane(name) {
         const panes = { form: $('liteLoginForm'), offer: $('liteBioOffer') };
         Object.keys(panes).forEach(k => { if (panes[k]) panes[k].hidden = k !== name; });
+        // The mode toggle and its footnotes belong to the form pane only —
+        // they'd read as a stray extra choice sitting above the post-sign-in
+        // biometric offer.
+        const formOnly = name === 'form';
+        $('liteLoginModes').hidden = !formOnly;
+        $('liteFootSignin').hidden = !formOnly || authMode === 'signup';
+        $('liteFootSignup').hidden = !formOnly || authMode !== 'signup';
         const sub = $('liteLoginSub');
-        if (sub) { sub.hidden = false; sub.textContent = name === 'offer' ? 'You’re signed in' : 'Sign in to your camp'; }
+        if (sub) { sub.hidden = false; sub.textContent = name === 'offer' ? 'You’re signed in' : (authMode === 'signup' ? 'Create your account' : 'Sign in to your camp'); }
         $('liteLogin').style.display = '';
     }
 
@@ -60,7 +98,9 @@
         const btn = $('liteLoginBtn');
         if (!btn) return;
         btn.disabled = on;
-        btn.textContent = on ? (label || 'Signing in…') : 'Sign in';
+        const idle = authMode === 'signup' ? 'Create account' : 'Sign in';
+        const doing = authMode === 'signup' ? 'Creating account…' : 'Signing in…';
+        btn.textContent = on ? (label || doing) : idle;
     }
 
     // Supabase's messages are written for developers; these are for counselors.
@@ -68,6 +108,8 @@
         const m = String((err && err.message) || err || '');
         if (/Invalid login credentials/i.test(m)) return 'That email or password isn’t right.';
         if (/Email not confirmed/i.test(m)) return 'Confirm your email address first — check your inbox for the invite.';
+        if (/User already registered|already been registered/i.test(m)) return 'An account already exists for that email — try Sign In instead.';
+        if (/Password should be at least/i.test(m)) return 'Choose a password with at least 6 characters.';
         if (/rate|too many/i.test(m)) return 'Too many attempts. Wait a moment and try again.';
         if (/network|fetch|Failed to fetch/i.test(m)) return 'Can’t reach Campistry. Check your connection.';
         return m || 'Could not sign in.';
@@ -137,6 +179,13 @@
         // Deliberately no autofocus: it opens the keyboard over half the screen
         // before anyone has decided to type, and the accent focus ring on an
         // empty field reads as a validation error.
+
+        // A camp can hand a hired staff member a direct link
+        // (campistry_lite_login.html?mode=signup) instead of "open the app,
+        // find Create Account" — same screen, just pre-selected.
+        try {
+            if (new URLSearchParams(location.search).get('mode') === 'signup') setAuthMode('signup');
+        } catch (_) {}
     }
 
     // Fire the prompt on open, but only after the sign-in screen has had a
@@ -211,6 +260,10 @@
     document.addEventListener('DOMContentLoaded', () => {
         boot();
 
+        $('liteModeSignin').addEventListener('click', () => setAuthMode('signin'));
+        $('liteModeSignup').addEventListener('click', () => setAuthMode('signup'));
+        $('liteFootToSignup').addEventListener('click', () => setAuthMode('signup'));
+
         $('litePwToggle').addEventListener('click', () => {
             const pw = $('litePassword'), btn = $('litePwToggle');
             const show = pw.type === 'password';
@@ -232,6 +285,68 @@
 
             const sb = client();
             if (!sb) { showErr('Authentication service unavailable. Please reload.'); return; }
+
+            if (authMode === 'signup') {
+                const confirm = $('litePasswordConfirm').value || '';
+                if (password !== confirm) { showErr('Those passwords don’t match.'); return; }
+                if (password.length < 6) { showErr('Choose a password with at least 6 characters.'); return; }
+
+                busy(true);
+                try {
+                    const { data, error } = await sb.auth.signUp({ email, password });
+                    if (error) throw error;
+                    if (!data?.session) {
+                        // This project's Auth settings require email confirmation —
+                        // the account exists but isn't usable yet. Nothing to claim
+                        // until they come back with a real session.
+                        busy(false);
+                        setAuthMode('signin');
+                        showErr('Account created — check your email to confirm it, then sign in.');
+                        return;
+                    }
+                    if (data.user?.id) localStorage.setItem('campistry_auth_user_id', data.user.id);
+
+                    // Mirrors landing.js's own "SIGNUP: accept invite" branch
+                    // exactly — an admin must have already created this
+                    // camp_users row (Team management, or campistry_me.js's
+                    // "Invite to Lite" action) for there to be anything to
+                    // claim. Query WITHOUT .is('user_id', null): a race with
+                    // another tab/flow may have already accepted it.
+                    try {
+                        const { data: invite } = await sb
+                            .from('camp_users')
+                            .select('id, role, camp_id, user_id')
+                            .eq('email', email.toLowerCase())
+                            .maybeSingle();
+                        if (invite) {
+                            if (!invite.user_id) {
+                                await sb.from('camp_users')
+                                    .update({ user_id: data.user.id, accepted_at: new Date().toISOString() })
+                                    .eq('id', invite.id);
+                            }
+                            localStorage.setItem('campistry_camp_id', invite.camp_id);
+                            localStorage.setItem('campistry_role', invite.role);
+                            localStorage.setItem('campistry_is_team_member', 'true');
+                        }
+                        // No invite found: still proceed — campistry_lite.js's own
+                        // boot() shows "No camp found for this account" clearly,
+                        // rather than this screen guessing at a different message
+                        // for what is ultimately the same unresolved-camp state.
+                    } catch (claimErr) {
+                        console.warn('[Lite] invite claim failed:', claimErr);
+                    }
+
+                    if (Bio) Bio.markVerified();
+                    busy(false);
+                    signedInUserId = data.user?.id || null;
+                    if (maybeOfferBio(signedInUserId)) return;
+                    location.replace(HOME);
+                } catch (err) {
+                    showErr(friendlyAuthError(err));
+                    busy(false);
+                }
+                return;
+            }
 
             busy(true);
             try {
