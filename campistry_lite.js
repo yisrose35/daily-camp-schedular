@@ -285,11 +285,28 @@
 
             wireChrome();
 
-            // Always land on the home launcher — the user picks a Lite app there.
+            // Land back here from Stripe Connect onboarding
+            // (stripe-connect-onboard's returnTo:'lite') — sync the status
+            // immediately (mirrors campistry_link_admin.html's own
+            // stripeReturn handling) rather than waiting on the
+            // account.updated webhook, then jump straight to the Tips tab
+            // instead of the home launcher.
+            const bootParams = new URLSearchParams(window.location.search);
+            const stripeReturnAccountId = bootParams.get('stripeReturn') === '1' ? bootParams.get('accountId') : null;
+            if (stripeReturnAccountId) {
+                try { history.replaceState({}, '', window.location.pathname); } catch (_) {}
+            }
+
             applyColorScheme();
             document.getElementById('liteApp').style.display = '';
             wirePullToRefresh();
-            goHome();
+            if (stripeReturnAccountId) {
+                await _tipsHandleStripeReturn(stripeReturnAccountId);
+                openApp(role === 'counselor' ? 'counselor' : 'link');
+                switchTab('tips');
+            } else {
+                goHome();
+            }
             dismissSplash();
         } catch (e) {
             console.error('[Lite] Boot failed:', e);
@@ -1010,7 +1027,8 @@
         notesList: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="8" y1="13" x2="16" y2="13"/><line x1="8" y1="17" x2="13" y2="17"/></svg>',
         league: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M6 9H4.5a2.5 2.5 0 0 1 0-5H6"/><path d="M18 9h1.5a2.5 2.5 0 0 0 0-5H18"/><path d="M4 22h16"/><path d="M10 14.66V17c0 .55-.47.98-.97 1.21C7.85 18.75 7 20.24 7 22"/><path d="M14 14.66V17c0 .55.47.98.97 1.21C16.15 18.75 17 20.24 17 22"/><path d="M18 2H6v7a6 6 0 0 0 12 0V2Z"/></svg>',
         staff: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="8" r="4"/><path d="M4 21v-1a7 7 0 0 1 14 0v1"/><path d="M19 8h4"/><path d="M21 6v4"/></svg>',
-        messaging: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>'
+        messaging: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>',
+        tips: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="9"/><path d="M12 7v10"/><path d="M15 9.5c0-1.4-1.34-2.5-3-2.5s-3 1.1-3 2.5S10.34 12 12 12s3 1.1 3 2.5-1.34 2.5-3 2.5-3-1.1-3-2.5"/></svg>'
     };
 
     // ─── Lite apps (home launcher) — mirrors the website dashboard suite,
@@ -1037,7 +1055,7 @@
           tabs: [{ id: 'liveRoll', label: 'Roll Call' }, { id: 'liveChanges', label: 'Changes' }] },
         { id: 'link',   name: 'Link',   title: 'Link Lite', logo: 'Link_clean.png', color: '#2A7A35',
           theme: { accent: '#2A7A35', dark: '#1F5A28', tint: '#E4F3E6' }, roles: HEAD, status: 'available',
-          tabs: [{ id: 'linkMessages', label: 'Messages' }, { id: 'linkCompose', label: 'Compose' }] },
+          tabs: [{ id: 'linkMessages', label: 'Messages' }, { id: 'linkCompose', label: 'Compose' }, { id: 'tips', label: 'Tips' }] },
         { id: 'notes',  name: 'Notes',  title: 'Notes Lite', logo: 'Notes_clean.png', color: '#C4891A',
           theme: { accent: '#C4891A', dark: '#9A6A12', tint: '#FBF0D8' }, roles: HEAD, status: 'available',
           tabs: [{ id: 'notesList', label: 'Notes' }] },
@@ -1047,7 +1065,7 @@
           theme: { accent: '#4338CA', dark: '#3730A3', tint: '#EEF2FF' }, roles: HEAD, status: 'soon' },
         { id: 'counselor', name: 'My Camp', title: 'My Camp', tag: 'Your bunk, schedule & league',
           logo: 'Lite_clean.png', color: '#EE6A53', theme: CORAL_THEME, roles: ['counselor'], status: 'available',
-          tabs: [{ id: 'today', label: 'My Day' }, { id: 'roster', label: 'My Bunk' }, { id: 'league', label: 'League' }] }
+          tabs: [{ id: 'today', label: 'My Day' }, { id: 'roster', label: 'My Bunk' }, { id: 'league', label: 'League' }, { id: 'tips', label: 'Tips' }] }
     ];
 
     // Per-app internal theming: each app runs in its product color; the Lite
@@ -1424,6 +1442,7 @@
         else if (id === 'league') renderLeague();
         else if (id === 'staff') renderStaff();
         else if (id === 'messaging') renderMessaging();
+        else if (id === 'tips') renderTips();
     }
 
     function toggleMenu(e) {
@@ -4512,6 +4531,158 @@
 
         view.innerHTML = sections.join('')
             || emptyHTML('🏆', 'No leagues are set up for your division yet.');
+    }
+
+    // ─── Tips (Stripe Connect self-service) ─────────────────────────────
+    // The tip RECIPIENT's own balance + onboarding view. Previously the
+    // ADMIN connected Stripe on a staff member's behalf from Link Admin —
+    // moved here because a real bank account should be connected by the
+    // actual person, not set up for them. link_staff_accounts rows are
+    // still created by an admin with just a name/access code (migration
+    // 017); this links a real Lite login to that row via
+    // claim_staff_tip_account() (migration 058), one time, using the
+    // access code as proof of identity.
+    let _tipsAccount = null; // cached link_staff_accounts row for this login
+
+    function _tipsMoney(n) {
+        n = Number(n) || 0;
+        return '$' + n.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+    }
+
+    async function _tipsLoadAccount() {
+        if (!window.supabase || !userId) return null;
+        const { data, error } = await window.supabase
+            .from('link_staff_accounts')
+            .select('id, staff_name, role, balance, total_earned, total_paid_out, stripe_account_id, stripe_charges_enabled, stripe_onboarding_status')
+            .eq('user_id', userId)
+            .maybeSingle();
+        if (error) { console.warn('[Lite] tips account load failed:', error); return null; }
+        return data || null;
+    }
+
+    async function renderTips() {
+        const view = document.getElementById('view-tips');
+        if (!view) return;
+        view.innerHTML = loadingHTML(1);
+        _tipsAccount = await _tipsLoadAccount();
+        if (activeTab !== 'tips') return;
+
+        if (!_tipsAccount) {
+            view.innerHTML = `
+                <div class="lite-card">
+                    <div class="lite-section-label" style="margin-top:0;">Link your tip account</div>
+                    <p style="font-size:.85rem;color:#6b7280;margin:0 0 14px;">
+                        Enter the access code the camp office gave you to link your tips
+                        balance to this login — you'll only need to do this once.
+                    </p>
+                    <input class="lite-input" id="tipsClaimCode" type="text" placeholder="e.g. ABCD-1234"
+                        autocapitalize="characters" autocomplete="off" style="text-transform:uppercase;margin-bottom:10px;">
+                    <button class="lite-btn block" id="tipsClaimBtn">Link my account</button>
+                </div>`;
+            const btn = document.getElementById('tipsClaimBtn');
+            if (btn) btn.addEventListener('click', _tipsClaim);
+            return;
+        }
+
+        const connected = !!_tipsAccount.stripe_charges_enabled;
+        const statusHTML = connected
+            ? `<span class="lite-pill" style="background:#DCFCE7;color:#166534;">Connected</span>`
+            : (_tipsAccount.stripe_account_id
+                ? `<span class="lite-pill" style="background:#FEF3C7;color:#92400E;">Onboarding…</span>`
+                : `<span class="lite-pill gray">Not connected</span>`);
+
+        view.innerHTML = `
+            <div class="lite-card">
+                <div class="lite-team-hero">
+                    <div class="league">${esc(_tipsAccount.staff_name)}</div>
+                    <div class="team">${_tipsMoney(_tipsAccount.balance)}</div>
+                    <div class="record">Balance</div>
+                </div>
+                <div style="display:flex;justify-content:space-between;padding:10px 0;border-top:1px solid rgba(0,0,0,.08);font-size:.85rem;">
+                    <span>Total earned</span><strong>${_tipsMoney(_tipsAccount.total_earned)}</strong>
+                </div>
+                <div style="display:flex;justify-content:space-between;padding:10px 0;border-top:1px solid rgba(0,0,0,.08);font-size:.85rem;">
+                    <span>Paid out</span><strong>${_tipsMoney(_tipsAccount.total_paid_out)}</strong>
+                </div>
+            </div>
+            <div class="lite-card">
+                <div class="lite-section-label" style="margin-top:0;">Card tips</div>
+                <div style="display:flex;align-items:center;gap:10px;margin-bottom:12px;flex-wrap:wrap;">
+                    ${statusHTML}
+                    <span style="font-size:.8rem;color:#6b7280;">${connected ? 'Parents can pay you by card' : 'Connect a bank account to receive card tips'}</span>
+                </div>
+                ${connected ? '' : `<button class="lite-btn block" id="tipsConnectBtn">${_tipsAccount.stripe_account_id ? 'Finish connecting' : 'Connect Stripe'}</button>`}
+            </div>`;
+        const cbtn = document.getElementById('tipsConnectBtn');
+        if (cbtn) cbtn.addEventListener('click', _tipsConnectStripe);
+    }
+
+    async function _tipsClaim() {
+        const input = document.getElementById('tipsClaimCode');
+        const btn = document.getElementById('tipsClaimBtn');
+        const code = ((input && input.value) || '').trim();
+        if (!code) { toast('Enter your access code'); return; }
+        if (btn) { btn.disabled = true; btn.textContent = 'Linking…'; }
+        try {
+            const { data, error } = await window.supabase.rpc('claim_staff_tip_account', { p_code: code });
+            if (error) throw error;
+            if (!data || !data.success) {
+                const err = (data && data.error) || 'unknown';
+                toast(err === 'invalid_code' ? 'That code doesn\'t match any staff account'
+                    : err === 'already_claimed' ? 'That code is already linked to a different login'
+                    : 'Could not link your account');
+                if (btn) { btn.disabled = false; btn.textContent = 'Link my account'; }
+                return;
+            }
+            haptic(10);
+            toast('Linked! Loading your account…');
+            await renderTips();
+        } catch (e) {
+            toast(e.message || 'Could not link your account');
+            if (btn) { btn.disabled = false; btn.textContent = 'Link my account'; }
+        }
+    }
+
+    async function _tipsConnectStripe() {
+        if (!_tipsAccount) return;
+        const btn = document.getElementById('tipsConnectBtn');
+        if (btn) { btn.disabled = true; btn.textContent = 'Redirecting…'; }
+        try {
+            const sess = await window.supabase.auth.getSession();
+            const token = sess && sess.data && sess.data.session && sess.data.session.access_token;
+            if (!token) throw new Error('Not signed in');
+            const s = window.__CAMPISTRY_SUPABASE__ || {};
+            if (!s.url) throw new Error('Payments are not set up for this camp yet.');
+            const resp = await fetch(s.url + '/functions/v1/stripe-connect-onboard', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + token, 'apikey': s.anonKey || '' },
+                body: JSON.stringify({ accountId: _tipsAccount.id, returnTo: 'lite' }),
+            });
+            const data = await resp.json();
+            if (!resp.ok || data.error) throw new Error(data.error || 'Could not start onboarding');
+            window.location.href = data.url;
+        } catch (e) {
+            toast(e.message || 'Could not start onboarding');
+            if (btn) { btn.disabled = false; btn.textContent = 'Connect Stripe'; }
+        }
+    }
+
+    // Called from boot() on ?stripeReturn=1&accountId=... — the synchronous
+    // "check now" (mirrors campistry_link_admin.html's own handling); the
+    // account.updated webhook is still the durable source of truth if this
+    // call is ever missed (closed app, dropped connection, etc).
+    async function _tipsHandleStripeReturn(accountId) {
+        try {
+            const sess = await window.supabase.auth.getSession();
+            const token = sess && sess.data && sess.data.session && sess.data.session.access_token;
+            const s = window.__CAMPISTRY_SUPABASE__ || {};
+            if (!token || !s.url) return;
+            await fetch(s.url + '/functions/v1/stripe-connect-status', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + token, 'apikey': s.anonKey || '' },
+                body: JSON.stringify({ accountId }),
+            });
+        } catch (e) { console.warn('[Lite] stripe-connect-status check failed:', e); }
     }
 
     // ════════════════════════════════════════════════════════════════════

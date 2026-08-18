@@ -4827,7 +4827,7 @@ function openTipSheet(name, role, suggested) {
                     '<span style="font-weight:700;color:var(--text-muted);">$</span>' +
                     '<input type="number" id="tipCustomAmt" min="1" max="500" step="1" placeholder="Custom amount" oninput="_updateTipFeeNote()" style="flex:1;border:1.5px solid var(--slate-200);border-radius:10px;padding:8px 12px;font-size:.9rem;">' +
                 '</div>' +
-                '<p id="tipFeeNote" style="font-size:.78rem;color:var(--text-muted);margin-bottom:12px;">Card charge includes a 2% processing fee — ' + _pEsc(name) + ' receives your full tip.</p>' +
+                '<p id="tipFeeNote" style="font-size:.78rem;color:var(--text-muted);margin-bottom:12px;">Card charge includes a small processing fee — ' + _pEsc(name) + ' receives your full tip.</p>' +
                 '<button class="btn btn-primary" style="width:100%;" onclick="payTipWithStripe()">Pay with card</button>';
         }
         document.getElementById('tipsAmountSheet').style.display = '';
@@ -4854,17 +4854,31 @@ function openTipSheet(name, role, suggested) {
     document.getElementById('tipsAmountSheet').scrollIntoView({ behavior: 'smooth', block: 'nearest' });
 }
 
+// Mirrors stripe-connect-tip's computeFees() exactly (Campistry's 2% +
+// Stripe's real 2.9%+30c processing rate, grossed up so Stripe's percentage
+// — charged on the FULL total, fee included — never eats into the tip or
+// Campistry's cut) so the estimate shown here matches what Checkout
+// actually charges to the cent. If either formula changes, change both.
+function _tipComputeFeeCents(tipCents) {
+    var CAMPISTRY_FEE_RATE = 0.02, STRIPE_PCT = 0.029, STRIPE_FIXED_CENTS = 30;
+    var campistryFeeCents = Math.round(tipCents * CAMPISTRY_FEE_RATE);
+    var preStripeCents = tipCents + campistryFeeCents + STRIPE_FIXED_CENTS;
+    var totalCents = Math.ceil(preStripeCents / (1 - STRIPE_PCT));
+    return totalCents - tipCents;
+}
 function _updateTipFeeNote() {
     var note = document.getElementById('tipFeeNote');
     if (!note || !_tipTarget) return;
     var amt = parseFloat((document.getElementById('tipCustomAmt') || {}).value || '');
     if (!amt || amt < 1) {
-        note.textContent = 'Card charge includes a 2% processing fee — ' + _tipTarget.name + ' receives your full tip.';
+        note.textContent = 'Card charge includes a small processing fee — ' + _tipTarget.name + ' receives your full tip.';
         return;
     }
-    var fee = Math.round(amt * 0.02 * 100) / 100;
-    var total = Math.round((amt + fee) * 100) / 100;
-    note.textContent = '$' + amt.toFixed(2) + ' tip + $' + fee.toFixed(2) + ' fee (2%) = $' + total.toFixed(2) + ' total — ' + _tipTarget.name + ' receives the full $' + amt.toFixed(2) + '.';
+    var tipCents = Math.round(amt * 100);
+    var feeCents = _tipComputeFeeCents(tipCents);
+    var fee = feeCents / 100;
+    var total = (tipCents + feeCents) / 100;
+    note.textContent = '$' + amt.toFixed(2) + ' tip + $' + fee.toFixed(2) + ' fee = $' + total.toFixed(2) + ' total — ' + _tipTarget.name + ' receives the full $' + amt.toFixed(2) + '.';
 }
 
 async function payTipWithStripe() {

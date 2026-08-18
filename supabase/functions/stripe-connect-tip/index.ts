@@ -15,6 +15,15 @@
 // The 2% platform fee is hardcoded for this first concept — not yet a
 // camp-configurable setting (see TIPPING_SETUP.md).
 //
+// Stripe's own processing fee (2.9% + 30c, the standard US card rate) is
+// ALSO passed to the parent on top of that 2%, not absorbed by Campistry.
+// Without this, Campistry actually loses money on every tip: Stripe deducts
+// its real cut from the platform's application_fee_amount regardless of
+// what that's set to, and 2% of a typical tip doesn't cover 2.9%+30c of the
+// total charge. See computeFees() below for the exact (grossed-up) math —
+// grossing up matters because Stripe's percentage is charged on the TOTAL
+// charge, which itself includes the fee being solved for.
+//
 // Request:  { campId, accountId, camperName?, parentName?, parentEmail?, tipAmount }
 //           (accountId = link_staff_accounts.id; only ids returned by the
 //           get_link_tip_targets RPC are ever passed in from the client, so
@@ -31,9 +40,27 @@ const SUPABASE_URL = Deno.env.get("SUPABASE_URL") || "";
 const SUPABASE_ANON_KEY = Deno.env.get("SUPABASE_ANON_KEY") || "";
 const SUPABASE_SERVICE_KEY = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY") || "";
 
-const PLATFORM_FEE_RATE = 0.02; // 2%, charged on top of the tip — see header note.
+const PLATFORM_FEE_RATE = 0.02;  // Campistry's cut, 2% of the tip — see header note.
+const STRIPE_PCT = 0.029;        // Stripe's standard US card rate — 2.9% + 30c.
+const STRIPE_FIXED_CENTS = 30;
 const MIN_TIP = 1;
 const MAX_TIP = 500; // mirrors submit_link_tip()'s existing bounds
+
+// Solves for the total charge such that, after Stripe takes its real cut
+// (STRIPE_PCT of the FULL charge + a fixed 30c) out of the platform's
+// application_fee_amount, the staff member still gets the exact tip amount
+// (transfer_data.destination = total - applicationFee = tip, always) AND
+// Campistry's 2% survives as real margin instead of covering Stripe's cost.
+// total = tip + campistryFee + (total * STRIPE_PCT + STRIPE_FIXED_CENTS)
+// => total = (tip + campistryFee + STRIPE_FIXED_CENTS) / (1 - STRIPE_PCT)
+function computeFees(tipCents: number) {
+  const campistryFeeCents = Math.round(tipCents * PLATFORM_FEE_RATE);
+  const preStripeCents = tipCents + campistryFeeCents + STRIPE_FIXED_CENTS;
+  const totalCents = Math.ceil(preStripeCents / (1 - STRIPE_PCT));
+  const feeCents = totalCents - tipCents; // combined Stripe + Campistry fee, shown to the parent as one number
+  const stripeFeeCents = feeCents - campistryFeeCents;
+  return { totalCents, feeCents, campistryFeeCents, stripeFeeCents };
+}
 
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
@@ -133,16 +160,17 @@ serve(async (req) => {
     }
 
     const tipCents = Math.round(tip * 100);
-    const feeCents = Math.round(tipCents * PLATFORM_FEE_RATE);
-    const totalCents = tipCents + feeCents;
+    const { totalCents, feeCents, campistryFeeCents, stripeFeeCents } = computeFees(tipCents);
 
     const origin = req.headers.get("origin") || "";
     const success = `${origin}/campistry_pay_thanks.html?status=success&context=tip`;
     const cancel = `${origin}/campistry_pay_thanks.html?status=cancelled&context=tip`;
 
     // One combined line item — the tip sheet in campistry_link_parent.html
-    // already shows the parent "$X tip + 2% fee = $Y total" before they get
-    // here, so Checkout itself doesn't need to itemize it again.
+    // already shows the parent "$X tip + $Y fee = $Z total" (Stripe's cut +
+    // Campistry's cut summed into one number, per the owner's chosen
+    // display) before they get here, so Checkout itself doesn't need to
+    // itemize it again.
     // auth.uid() isn't directly on the invite row we selected — fetch it via
     // the same RLS-scoped client (cheap; JWT is already decoded locally by
     // getUser() with no extra round trip needed beyond token introspection).
@@ -159,6 +187,8 @@ serve(async (req) => {
       parentEmail: String(parentEmail || invite.parent_email || ""),
       tipCents: String(tipCents),
       feeCents: String(feeCents),
+      campistryFeeCents: String(campistryFeeCents),
+      stripeFeeCents: String(stripeFeeCents),
       source: "campistry-link-tip",
     };
 

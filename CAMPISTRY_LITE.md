@@ -57,11 +57,11 @@ blurred header/tab bar, safe-area-aware. Tokens live at the top of
 |---|---|---|
 | **Head staff** (owner / admin / scheduler) — **Flow Lite** | Schedule · Now · Locate · Reports | A comprehensive, **read-only** window into all of Flow: the full schedule for any division/bunk/date, a live **whole-camp "Now" board** (what every bunk is doing right now, grouped by division or by field), a **camper locator** (where's this kid right now / at any time), and **Bunk Rotation & Usage** reports. No generating, no printing, no setup. |
 | **Head staff** — **Notes Lite** | Notes | Notes, same as the desktop Notes app, mobile-friendly: a colored masonry card grid (pinned first) with All / Pinned / Reminders / Shared / Trash filters and search; a **+** FAB creates a note; tapping one opens a full-screen editor (title, autosaving body, 7 colors, pin, trash/restore/delete-forever, **reminder**, and **share by email**). **Per-user & private unless shared** (own `campistry_notes` table with RLS) — the same notes appear on the desktop and every device; a note shared with you opens read-only. |
-| **Head staff** — **Link Lite** | Messages · Compose | Parent communication on the go. **Messages:** the inbox as parent-threaded conversations (received + sent), tap a thread to read it and fire off a quick reply. **Compose:** search a camper → message their parent, and **attach an existing form or list** (created on the desktop) via a picker — Lite can attach them, never create them. Sends a real `link_messages` row the parent portal reads. Photos: next phase (needs a cloud photo store). |
+| **Head staff** — **Link Lite** | Messages · Compose · Tips | Parent communication on the go, plus the same **Tips** self-service tab as counselors (for a head-staff tip recipient). **Messages:** the inbox as parent-threaded conversations (received + sent), tap a thread to read it and fire off a quick reply. **Compose:** search a camper → message their parent, and **attach an existing form or list** (created on the desktop) via a picker — Lite can attach them, never create them. Sends a real `link_messages` row the parent portal reads. Photos: next phase (needs a cloud photo store). |
 | **Head staff** — **Health Lite** | Meds · Roster · Trip | Medications on the go. **Meds:** today's dispensing board — every camper on meds with allergy banners and a **live Given / Not-given** status; head staff tap **Give** to log it (writes to the cloud, everyone sees it live). **Roster:** allergy + medication reference, searchable. **Trip:** pick the group going out → the consolidated meds to pack, with give-status. The **first Lite app that writes** (gated to head staff for now). |
 | **Head staff** — **Live Lite** | Roll Call · Changes | Attendance on the go. **Roll Call:** who's here today — Present / Absent / Left-early tallies, then every camper by bunk with a status pill (Here · Absent · Sick · Late · Left early), division-filterable, tap for full camper info. **Changes:** today's dismissal changes & late arrivals (early pickups with time + who, late arrivals with notes), searchable. Read-only; reads the office roll call synced to the cloud. |
 | **Head staff** — **Me Lite** | Roster · Medical · Staff | Camp *people* on the go. **Roster:** searchable camp-wide roster with a headcount strip + birthdays, grouped by bunk with medical flags; tap a camper for **all their info** (medical, personal, school, placement, parents with tap-to-call/email, address, emergency, teams, notes). **Medical:** a camp-wide allergy/meds/dietary safety list, filterable, facts shown inline. **Staff:** a bunk→counselor contact directory with tap-to-call. Read-only. |
-| **Counselor** (`counselor` role) | My Day · My Bunk · League | See their assigned bunk's daily schedule, bunk roster (contacts, allergies, dietary), and their league team + standings + today's matchup |
+| **Counselor** (`counselor` role) | My Day · My Bunk · League · Tips | See their assigned bunk's daily schedule, bunk roster (contacts, allergies, dietary), their league team + standings + today's matchup, and their own Campistry Link tips balance/Stripe Connect setup |
 | **Viewer** | Schedule · Now · Locate · Reports | Same read-only Flow Lite view as head staff |
 
 **Roster** (camper browse/search) belongs to **Me Lite** (see below) and has been
@@ -225,6 +225,18 @@ The on-the-go version of **Link** (parent communication) for staff. Phase 1 —
   invisible body token — `[[form:<id>:<thatCamper>]]` or `[[list:<id>]]` — which
   the parent portal renders as an "Open & fill" / "View list" button. **Lite
   attaches, never creates** forms/lists (matching the requirement).
+
+**Tips** — the tip *recipient's* own self-service Stripe Connect setup and
+balance view (shared with the counselor "My Camp" app's Tips tab — same
+render code, same `link_staff_accounts` row, gated by whichever app opened
+it). First-time flow: enter the access code an admin generated for you in
+Link Admin to link this login to your account
+(`claim_staff_tip_account()`), then **Connect Stripe** to onboard your own
+Express account and start receiving card tips. Once connected, shows
+balance / total earned / total paid out, live from the cloud. Replaces the
+original admin-triggered onboarding (Link Admin still has that button as a
+fallback) — see `TIPPING_SETUP.md` for the full money-flow writeup and
+migration `058_link_staff_lite_self_service.sql` for the RLS/claim design.
 
 **Same cloud as the desktop.** Lite reads/writes the same `link_messages` table
 the desktop inbox uses, scoped by the **same `camp_id`**: Lite now resolves
