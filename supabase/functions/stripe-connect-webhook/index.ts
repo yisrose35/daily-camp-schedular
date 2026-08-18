@@ -1,13 +1,31 @@
 // =============================================================================
 // stripe-connect-webhook — Lands Connect-tip money in Campistry Link's ledger
 //
-// Kept as its OWN function with its OWN webhook secret (STRIPE_CONNECT_WEBHOOK_SECRET),
-// separate from stripe-webhook (which is scoped to the billing ledger only,
-// per its own header comment) — so this feature's event handling can evolve
-// without touching that function's signature-verification/idempotency logic.
-// Must be registered in the Stripe Dashboard with "Listen to events on
-// connected accounts" enabled, since account.updated fires on the connected
-// account, not the platform account.
+// Kept as its OWN function with its OWN webhook secret(s), separate from
+// stripe-webhook (which is scoped to the billing ledger only, per its own
+// header comment) — so this feature's event handling can evolve without
+// touching that function's signature-verification/idempotency logic.
+//
+// Must be registered TWICE in the Stripe Dashboard, as two separate
+// endpoints pointing at this same URL, because the two event types this
+// function cares about live on two different accounts:
+//   - account.updated fires on the CONNECTED account (the staff member's
+//     Express account) → register with "Listen to events on: Connected
+//     accounts".
+//   - payment_intent.succeeded / payment_intent.payment_failed fire on the
+//     PLATFORM account, because stripe-connect-tip creates the Checkout
+//     Session (and therefore the PaymentIntent) on the platform account and
+//     merely routes the money via transfer_data.destination (a destination
+//     charge) — the PI itself never becomes an object on the connected
+//     account. → register with "Listen to events on: Your account" (the
+//     default). A single "Connected accounts" endpoint will silently never
+//     receive payment_intent.succeeded — that was a real bug here: money
+//     charged, nothing recorded, because only the Connected-accounts
+//     endpoint was ever registered.
+// Each endpoint gets its OWN signing secret from Stripe — set both:
+//   STRIPE_CONNECT_WEBHOOK_SECRET           (the "Your account" endpoint)
+//   STRIPE_CONNECT_ACCOUNT_WEBHOOK_SECRET   (the "Connected accounts" endpoint)
+// verifySignature is tried against both; either match is accepted.
 //
 // Events handled:
 //   - account.updated          → sync stripe_charges_enabled/onboarding_status
@@ -38,6 +56,7 @@ import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 
 const STRIPE_CONNECT_WEBHOOK_SECRET = Deno.env.get("STRIPE_CONNECT_WEBHOOK_SECRET");
+const STRIPE_CONNECT_ACCOUNT_WEBHOOK_SECRET = Deno.env.get("STRIPE_CONNECT_ACCOUNT_WEBHOOK_SECRET");
 const SUPABASE_URL = Deno.env.get("SUPABASE_URL") || "";
 const SUPABASE_SERVICE_KEY = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY") || "";
 
@@ -152,8 +171,16 @@ serve(async (req) => {
   try {
     const body = await req.text();
     const signature = req.headers.get("stripe-signature") || "";
-    if (STRIPE_CONNECT_WEBHOOK_SECRET) {
-      const valid = await verifySignature(body, signature, STRIPE_CONNECT_WEBHOOK_SECRET);
+    // Two endpoints (see header note) can deliver here, each signed with its
+    // own secret — accept either. If neither secret is configured at all,
+    // skip verification (matches this function's original permissive
+    // behavior rather than hard-failing on an incomplete deploy).
+    const secrets = [STRIPE_CONNECT_WEBHOOK_SECRET, STRIPE_CONNECT_ACCOUNT_WEBHOOK_SECRET].filter(Boolean) as string[];
+    if (secrets.length > 0) {
+      let valid = false;
+      for (const secret of secrets) {
+        if (await verifySignature(body, signature, secret)) { valid = true; break; }
+      }
       if (!valid) {
         console.error("[stripe-connect-webhook] Invalid signature");
         return new Response(JSON.stringify({ error: "Invalid signature" }), {

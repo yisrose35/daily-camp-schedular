@@ -62,20 +62,42 @@ supabase functions deploy stripe-connect-webhook
 ### 4. Set secrets
 ```bash
 supabase secrets set STRIPE_SECRET_KEY=sk_test_xxx        # same var the rest of Stripe already uses
-supabase secrets set STRIPE_CONNECT_WEBHOOK_SECRET=whsec_xxx   # from step 5, a DIFFERENT secret than STRIPE_WEBHOOK_SECRET
+supabase secrets set STRIPE_CONNECT_WEBHOOK_SECRET=whsec_xxx           # from step 5a
+supabase secrets set STRIPE_CONNECT_ACCOUNT_WEBHOOK_SECRET=whsec_yyy   # from step 5b — a DIFFERENT secret
 supabase secrets set SUPABASE_ANON_KEY=<your anon/publishable key>
 # SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY are injected automatically.
 ```
 
-### 5. Register the Connect webhook in Stripe
-Dashboard → Developers → Webhooks → Add endpoint:
+### 5. Register the Connect webhook in Stripe — TWO endpoints, same URL
+The two event types this feature needs live on two different accounts, so
+one endpoint is not enough — you must create **both**:
+
+**5a. Platform-account endpoint** (for the actual money-moving event)
 - URL: `https://<your-project>.supabase.co/functions/v1/stripe-connect-webhook`
-- **Listen to events on: Connected accounts** (not "Your account" — easy to
-  miss, and `account.updated` won't fire without it)
-- Events: `account.updated`, `payment_intent.succeeded`, `payment_intent.payment_failed`
-- Copy the signing secret into `STRIPE_CONNECT_WEBHOOK_SECRET` (step 4) —
-  this is a **separate** webhook/secret from the existing billing
-  `stripe-webhook`, so this feature's event handling can evolve independently.
+- **Listen to events on: Your account** (the default — leave "Connected
+  accounts" OFF here)
+- Events: `payment_intent.succeeded`, `payment_intent.payment_failed`
+- Why: `stripe-connect-tip` creates the Checkout Session (and thus the
+  PaymentIntent) on the **platform** account and routes the money via
+  `transfer_data.destination` — a destination charge. The PaymentIntent
+  itself is a platform-account object, so its `succeeded` event only ever
+  fires on a "Your account" endpoint. A Connected-accounts-only endpoint
+  will never receive it — money charged, nothing recorded.
+- Copy the signing secret into `STRIPE_CONNECT_WEBHOOK_SECRET` (step 4).
+
+**5b. Connected-accounts endpoint** (for onboarding status)
+- URL: same as above
+- **Listen to events on: Connected accounts**
+- Events: `account.updated`
+- Why: this fires on the staff member's own Express account, never on the
+  platform account.
+- Copy this endpoint's (different) signing secret into
+  `STRIPE_CONNECT_ACCOUNT_WEBHOOK_SECRET` (step 4).
+
+Both secrets are a **separate** pair from the existing billing
+`stripe-webhook`'s secret, so this feature's event handling can evolve
+independently. The function accepts either secret on incoming requests, so
+one shared function correctly serves both endpoints.
 
 ## Testing end-to-end (test mode)
 
@@ -97,11 +119,15 @@ Dashboard → Developers → Webhooks → Add endpoint:
    should show the tip in recent activity.
 
 No local dev server convention exists in this repo for edge functions — test
-against the deployed test-mode functions. Forward webhook events with
+against the deployed test-mode functions. `stripe listen` conveniently
+forwards both platform and connected-account events through one CLI session
+with a single temporary `whsec_...` (unlike the two separate Dashboard
+endpoints/secrets required in step 5) — forward with:
 `stripe listen --events account.updated,payment_intent.succeeded,payment_intent.payment_failed --forward-to https://<project-ref>.supabase.co/functions/v1/stripe-connect-webhook`
-(prints a temporary `whsec_...` you can use in place of step 5's Dashboard
-webhook while testing), or just register the permanent Dashboard webhook from
-step 5 and test against it directly.
+and set BOTH `STRIPE_CONNECT_WEBHOOK_SECRET` and
+`STRIPE_CONNECT_ACCOUNT_WEBHOOK_SECRET` to that one printed secret while
+testing this way. Or just register the two permanent Dashboard endpoints
+from step 5 and test against them directly.
 
 ## Notes / follow-ups (known concept-stage limitations)
 
