@@ -406,12 +406,25 @@ Counselors can also be invited from the existing team management UI
 (`team_subdivisions_ui.js` now has a Counselor role option) — but bunk
 assignment only exists in Lite's Staff tab.
 
-**A third invite entry point, from Hiring.** Once a hired applicant is on a
-bunk (Camp Structure → bunk → Staff, `openBunkStaffModal`), any row with an
-email now has an **"Invite to Lite"** button (`inviteBunkStaffToLite()` in
-`campistry_me.js`) — same `AccessControl.inviteTeamMember()` call as above,
-defaulting to the `counselor` role, so hiring → bunk placement → a real
-login is one continuous flow instead of a hop over to Team management.
+**Hiring → login is now automatic on hire, not a separate step.**
+`setStaffStatus()` in `campistry_me.js` fires `_autoInviteHiredToLite()` the
+moment an applicant's stage becomes `hired` — same
+`AccessControl.inviteTeamMember(email, 'counselor', ...)` call as the manual
+paths below, just triggered silently in the background the instant they're
+accepted, using whatever email is already on their application. No bunk
+placement or admin click required first. Silent on failure/duplicate (e.g.
+no email on file yet) — it's a background convenience, not a blocking step;
+the manual "Invite to Lite" button below still exists as a retry/fallback.
+**Known follow-up, not built yet:** every hire currently lands at the
+`counselor` tier regardless of position — division heads, head counselors,
+and admins hired through this same pipeline need a different (higher) tier,
+which is intentionally deferred rather than guessed at here.
+
+Once a hired applicant is on a bunk (Camp Structure → bunk → Staff,
+`openBunkStaffModal`), any row with an email also has an **"Invite to
+Lite"** button (`inviteBunkStaffToLite()` in `campistry_me.js`) — the same
+call, kept as a manual fallback (e.g. an applicant hired before this
+existed, or whose email was added after the fact).
 
 **Staff can now create their own account, not just accept an emailed
 link.** `campistry_lite_login.html` has a **Sign in / Create account**

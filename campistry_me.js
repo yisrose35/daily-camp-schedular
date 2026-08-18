@@ -4533,6 +4533,29 @@ function setStaffStatus(id,status,opts){
     renderStaffing(); _refreshPplIfActive();
     if(!opts.fromRow) viewStaffApp(id);
     toast('Moved to '+_staffLabel(status));
+    // Reaching "hired" is the acceptance moment — this is what should turn
+    // an applicant into someone who can actually log in, not a separate
+    // manual step later. Fire-and-forget: creates the camp_users invite row
+    // (role 'counselor' — the tier every hired applicant starts at; a
+    // separate pass for admin/division-head-level staff is a known follow-up,
+    // not built yet) so a Campistry Lite "Create account" signup with this
+    // same email links up immediately. Silent on failure/duplicate — this is
+    // a background convenience, not something that should block or alarm
+    // the office if it can't complete (no email on file yet, etc).
+    if(status==='hired') _autoInviteHiredToLite(a);
+}
+// See setStaffStatus's "hired" branch. Kept separate from
+// inviteBunkStaffToLite (which stays as the manual, bunk-staff-scoped
+// button) since this one is a quiet background action, not a user-facing
+// button with its own loading/error toast.
+async function _autoInviteHiredToLite(a){
+    var email=String(a.email||'').trim();
+    if(!email||!window.AccessControl||!window.AccessControl.inviteTeamMember)return;
+    try{
+        var result=await window.AccessControl.inviteTeamMember(email,'counselor',[],a.name||'');
+        if(result&&result.error){console.log('[Me] auto-invite-to-Lite skipped for '+email+':',result.error);return;}
+        console.log('[Me] auto-invited '+email+' to Campistry Lite as counselor on hire');
+    }catch(err){console.warn('[Me] auto-invite-to-Lite failed for '+email+':',err.message);}
 }
 function saveStaffNotes(id){var a=staffApplications[id];if(!a)return;var el=document.getElementById('staffNote');if(el)a.adminNotes=el.value;save();toast('Notes saved');}
 function toggleOnboard(id,key){var a=staffApplications[id];if(!a)return;if(!a.onboarding)a.onboarding={};a.onboarding[key]=!a.onboarding[key];save();}
