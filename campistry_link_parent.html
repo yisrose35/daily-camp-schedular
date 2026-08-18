@@ -3161,6 +3161,27 @@ window.addEventListener('storage', function(e) {
         camps.forEach(function(cp){ var cid = cp.camp_id || cp.campId; if (cid) _loadTipsConfigCloud(cid); });
     };
 
+    // ── Stripe Connect tip targets (migration 057) ─────────────────────────────
+    // Which staff accounts can actually be charged a real tip. Separate from
+    // the personal-handle config above — a staff member can have Venmo/Zelle
+    // handles configured, be Stripe-connected, both, or neither.
+    window._linkTipTargets = window._linkTipTargets || {}; // lowercased staff_name -> target record
+    function _loadTipTargetsCloud(campId) {
+        db.rpc('get_link_tip_targets', { p_camp_id: campId }).then(function(res) {
+            if (res.error || !res.data || !res.data.success) return;
+            (res.data.targets || []).forEach(function(t) {
+                if (t && t.staff_name) window._linkTipTargets[String(t.staff_name).toLowerCase()] = t;
+            });
+            var pg = document.getElementById('page-tips');
+            if (pg && pg.classList.contains('active') && typeof renderTipsPage === 'function') renderTipsPage();
+        });
+    }
+    window._loadAllTipTargets = function() {
+        var camps = ((typeof parent !== 'undefined' && parent && parent.camps && parent.camps.length)
+            ? parent.camps : [{ camp_id: (typeof parent !== 'undefined' && parent) ? parent.campId : null }]);
+        camps.forEach(function(cp){ var cid = cp.camp_id || cp.campId; if (cid) _loadTipTargetsCloud(cid); });
+    };
+
     // ── Messages bridge (migration 020) ───────────────────────────────────────
     // Before this, Messages had no cloud path at all in either direction — a
     // message sent by the admin, or a reply sent from another device, could
@@ -3406,6 +3427,7 @@ window.addEventListener('storage', function(e) {
             _loadLinkForms(parent.campId);
             _loadLinkLists(parent.campId);
             _loadTipsConfigCloud(parent.campId);
+            _loadTipTargetsCloud(parent.campId);
         }
         _loadMyMail();
         _loadMyTips();
@@ -3479,6 +3501,8 @@ window.addEventListener('storage', function(e) {
                 if (typeof _loadLinkLists === 'function') _loadLinkLists(parent.campId);
                 if (typeof window._loadAllTipsConfig === 'function') window._loadAllTipsConfig();
                 else if (typeof _loadTipsConfigCloud === 'function') _loadTipsConfigCloud(parent.campId);
+                if (typeof window._loadAllTipTargets === 'function') window._loadAllTipTargets();
+                else if (typeof _loadTipTargetsCloud === 'function') _loadTipTargetsCloud(parent.campId);
             }
             if (typeof _loadMyHealthDocs === 'function') _loadMyHealthDocs();
             if (typeof _loadParentPhotos === 'function') _loadParentPhotos();
@@ -4787,6 +4811,30 @@ function openTipSheet(name, role, suggested) {
 
     var info = document.getElementById('tipPayInfo');
     var hint = document.getElementById('tipPayHint');
+
+    // Stripe-connected staff get a real "pay now" flow; everyone else falls
+    // back to the existing personal Venmo/Zelle/etc. handles, unchanged.
+    var connectTarget = (window._linkTipTargets || {})[String(name || '').toLowerCase()];
+    if (connectTarget && connectTarget.stripe_charges_enabled) {
+        if (hint) hint.style.display = 'none';
+        if (info) {
+            var amtBtn = function(v) {
+                return '<button class="tip-amt-btn" style="border:1.5px solid var(--slate-200);background:#fff;color:var(--slate-700);border-radius:10px;padding:8px 16px;font-weight:700;cursor:pointer;font-size:.85rem;" onclick="pickTipAmt(' + v + ',this)">$' + v + '</button>';
+            };
+            info.innerHTML =
+                '<div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:12px;">' + [5,10,20,50].map(amtBtn).join('') + '</div>' +
+                '<div style="display:flex;align-items:center;gap:8px;margin-bottom:10px;">' +
+                    '<span style="font-weight:700;color:var(--text-muted);">$</span>' +
+                    '<input type="number" id="tipCustomAmt" min="1" max="500" step="1" placeholder="Custom amount" oninput="_updateTipFeeNote()" style="flex:1;border:1.5px solid var(--slate-200);border-radius:10px;padding:8px 12px;font-size:.9rem;">' +
+                '</div>' +
+                '<p id="tipFeeNote" style="font-size:.78rem;color:var(--text-muted);margin-bottom:12px;">Card charge includes a 2% processing fee — ' + _pEsc(name) + ' receives your full tip.</p>' +
+                '<button class="btn btn-primary" style="width:100%;" onclick="payTipWithStripe()">Pay with card</button>';
+        }
+        document.getElementById('tipsAmountSheet').style.display = '';
+        document.getElementById('tipsAmountSheet').scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+        return;
+    }
+
     var h = _tipHandlesFor(name);
     var rows = [];
     if (h) {
@@ -4806,6 +4854,65 @@ function openTipSheet(name, role, suggested) {
     document.getElementById('tipsAmountSheet').scrollIntoView({ behavior: 'smooth', block: 'nearest' });
 }
 
+function _updateTipFeeNote() {
+    var note = document.getElementById('tipFeeNote');
+    if (!note || !_tipTarget) return;
+    var amt = parseFloat((document.getElementById('tipCustomAmt') || {}).value || '');
+    if (!amt || amt < 1) {
+        note.textContent = 'Card charge includes a 2% processing fee — ' + _tipTarget.name + ' receives your full tip.';
+        return;
+    }
+    var fee = Math.round(amt * 0.02 * 100) / 100;
+    var total = Math.round((amt + fee) * 100) / 100;
+    note.textContent = '$' + amt.toFixed(2) + ' tip + $' + fee.toFixed(2) + ' fee (2%) = $' + total.toFixed(2) + ' total — ' + _tipTarget.name + ' receives the full $' + amt.toFixed(2) + '.';
+}
+
+async function payTipWithStripe() {
+    if (!_tipTarget) { toast('Select a recipient first'); return; }
+    var connectTarget = (window._linkTipTargets || {})[String(_tipTarget.name || '').toLowerCase()];
+    if (!connectTarget || !connectTarget.stripe_charges_enabled) { toast('This staff member is not set up for card tips yet'); return; }
+
+    var amtStr = (document.getElementById('tipCustomAmt') || {}).value || '';
+    var amt = parseFloat(amtStr);
+    if (!amt || amt < 1 || amt > 500) { toast('Enter an amount between $1 and $500'); return; }
+    amt = Math.round(amt * 100) / 100;
+
+    var child = _activeTipChild();
+    if (!child) { toast('Select a child first'); return; }
+    var campId = child.campId || ((typeof parent !== 'undefined' && parent) ? parent.campId : null);
+    if (!campId) { toast('Could not determine which camp this tip is for'); return; }
+
+    var db = window._parentDB;
+    if (!(db && db.auth)) { toast('Not signed in'); return; }
+
+    var btn = document.querySelector('#tipPayInfo .btn-primary');
+    if (btn) { btn.disabled = true; btn.textContent = 'Redirecting to payment…'; }
+
+    try {
+        var sess = await db.auth.getSession();
+        var token = sess && sess.data && sess.data.session && sess.data.session.access_token;
+        if (!token) { toast('Not signed in'); if (btn) { btn.disabled = false; btn.textContent = 'Pay with card'; } return; }
+
+        var s = _lkSupa();
+        if (!s.url) throw new Error('Payments are not set up for this camp yet.');
+        var resp = await fetch(s.url + '/functions/v1/stripe-connect-tip', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + token, 'apikey': s.anonKey || '' },
+            body: JSON.stringify({
+                campId: campId, accountId: connectTarget.id, tipAmount: amt,
+                camperName: child.name, parentName: (typeof parent !== 'undefined' && parent) ? parent.name : '',
+                parentEmail: (typeof parent !== 'undefined' && parent) ? parent.email : '',
+            }),
+        });
+        var data = await resp.json();
+        if (!resp.ok || data.error) throw new Error(data.error || 'Could not start checkout');
+        window.location.href = data.url;
+    } catch (err) {
+        toast(err.message || 'Could not start payment');
+        if (btn) { btn.disabled = false; btn.textContent = 'Pay with card'; }
+    }
+}
+
 function closeTipSheet() {
     _tipTarget = null;
     var sheet = document.getElementById('tipsAmountSheet');
@@ -4816,6 +4923,7 @@ function pickTipAmt(v, btn) {
     document.querySelectorAll('.tip-amt-btn').forEach(function(b){ b.style.borderColor='var(--slate-200)';b.style.background='#fff';b.style.color='var(--slate-700)'; });
     if (btn) { btn.style.borderColor='var(--link-color)'; btn.style.background='var(--link-tint)'; btn.style.color='var(--link-color)'; }
     var ci = document.getElementById('tipCustomAmt'); if (ci) ci.value = v;
+    if (typeof _updateTipFeeNote === 'function') _updateTipFeeNote();
 }
 
 function confirmTip() {

@@ -964,6 +964,18 @@
             <p>Download the template, fill in Zelle/Venmo, and upload it — or add people one at a time.</p>
         </div>
     </div>
+
+    <!-- Card tips (Stripe Connect) — parents pay by card, money splits automatically -->
+    <div class="lk-card" style="margin-top:18px;">
+        <div class="lk-card-head">
+            <div>
+                <h2>Card Tips</h2>
+                <p style="font-size:.78rem;color:var(--text-muted);margin:2px 0 0;">Let parents tip by card instead of Zelle/Venmo. Each staff member connects their own bank account once — a 2% fee covers card processing, they still receive the full tip.</p>
+            </div>
+            <button class="btn btn-secondary btn-sm" onclick="openAddStaffAccount()">+ Add Staff Account</button>
+        </div>
+        <div id="staffAccountsList"></div>
+    </div>
 </div>
 
 <!-- Add category modal -->
@@ -4511,6 +4523,7 @@ function renderTipsAdmin() {
     _renderTipAmounts(cfg);
     _renderTipCategories(cfg);
     _renderStaffPay(cfg);
+    _loadStaffAccounts(_renderStaffAccounts);
 }
 
 // ─── STAFF TIP ACCOUNTS (link_staff_accounts, migration 017) ─────────────────
@@ -4521,7 +4534,7 @@ function _loadStaffAccounts(cb) {
     if (!db) { if (cb) cb(); return; }
     db.client
         .from('link_staff_accounts')
-        .select('id, staff_name, role, access_code, balance, total_earned, total_paid_out, updated_at')
+        .select('id, staff_name, role, access_code, balance, total_earned, total_paid_out, updated_at, stripe_account_id, stripe_charges_enabled, stripe_onboarding_status')
         .eq('camp_id', db.campId)
         .order('balance', { ascending: false })
         .then(function(res) {
@@ -4565,6 +4578,7 @@ function _renderStaffAccounts() {
             '<th style="text-align:right;padding:6px 10px;font-size:.72rem;color:var(--text-muted);font-weight:600;">Paid Out</th>' +
             '<th style="text-align:right;padding:6px 10px;font-size:.72rem;color:var(--text-muted);font-weight:600;">Balance</th>' +
             '<th style="text-align:left;padding:6px 10px;font-size:.72rem;color:var(--text-muted);font-weight:600;">Access Code</th>' +
+            '<th style="text-align:left;padding:6px 10px;font-size:.72rem;color:var(--text-muted);font-weight:600;">Card Tips</th>' +
             '<th style="padding:6px 10px;"></th>' +
         '</tr></thead><tbody>' +
         _staffAccounts.map(function(a) {
@@ -4578,11 +4592,79 @@ function _renderStaffAccounts() {
                     '<code style="background:var(--slate-50);border:1px solid var(--slate-200);border-radius:6px;padding:2px 7px;font-size:.76rem;letter-spacing:.06em;">' + esc(a.access_code || '') + '</code> ' +
                     '<button class="btn btn-ghost btn-sm" onclick="copyStaffLink(\'' + esc(a.access_code || '') + '\')" title="Copy their balance-page link" style="padding:2px 7px;"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71"/><path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71"/></svg></button>' +
                 '</td>' +
+                '<td style="padding:8px 10px;white-space:nowrap;">' + _stripeConnectCell(a) + '</td>' +
                 '<td style="padding:8px 10px;text-align:right;">' +
                     '<button class="btn btn-secondary btn-sm" onclick="payoutStaff(\'' + esc(a.id) + '\')"' + (bal <= 0 ? ' disabled style="opacity:.45;cursor:default;"' : '') + '>Pay out</button>' +
                 '</td>' +
             '</tr>';
         }).join('') + '</tbody></table>';
+}
+
+// One cell: a status badge for a connected/pending account, or a "Connect
+// Stripe" button to start onboarding. id is escaped for the onclick string
+// the same way payoutStaff()'s button above already does.
+function _stripeConnectCell(a) {
+    if (a.stripe_charges_enabled) {
+        return '<span style="display:inline-flex;align-items:center;gap:5px;color:var(--green-600);font-weight:700;font-size:.78rem;"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="20 6 9 17 4 12"/></svg> Connected</span>';
+    }
+    if (a.stripe_account_id) {
+        return '<span style="color:var(--amber-600);font-weight:700;font-size:.78rem;margin-right:6px;">Onboarding…</span>' +
+            '<button class="btn btn-ghost btn-sm" onclick="connectStaffStripe(\'' + esc(a.id) + '\')" style="padding:2px 8px;">Resume</button>';
+    }
+    return '<button class="btn btn-secondary btn-sm" onclick="connectStaffStripe(\'' + esc(a.id) + '\')">Connect Stripe</button>';
+}
+
+async function connectStaffStripe(accountId) {
+    var s = window.__CAMPISTRY_SUPABASE__ || {};
+    if (!s.url) { toast('Payments are not set up for this camp yet.'); return; }
+    if (!(window.CampistryDB && window.CampistryDB.getAccessToken)) { toast('Not signed in'); return; }
+    var token = await window.CampistryDB.getAccessToken();
+    if (!token) { toast('Not signed in'); return; }
+    try {
+        var resp = await fetch(s.url + '/functions/v1/stripe-connect-onboard', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + token, 'apikey': s.anonKey || '' },
+            body: JSON.stringify({ accountId: accountId }),
+        });
+        var data = await resp.json();
+        if (!resp.ok || data.error) throw new Error(data.error || 'Could not start onboarding');
+        window.location.href = data.url;
+    } catch (err) {
+        toast('Could not connect Stripe: ' + (err.message || 'unknown error'));
+    }
+}
+
+// After Stripe redirects back with ?stripeReturn=1&accountId=..., check the
+// account's real status right away instead of waiting on the async webhook.
+async function _checkStripeReturn() {
+    var params = new URLSearchParams(window.location.search);
+    if (params.get('stripeReturn') !== '1') return;
+    var accountId = params.get('accountId');
+    history.replaceState(null, '', window.location.pathname + window.location.hash);
+    if (!accountId) return;
+    var s = window.__CAMPISTRY_SUPABASE__ || {};
+    if (!s.url || !(window.CampistryDB && window.CampistryDB.getAccessToken)) return;
+    var token = await window.CampistryDB.getAccessToken();
+    if (!token) return;
+    try {
+        var resp = await fetch(s.url + '/functions/v1/stripe-connect-status', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + token, 'apikey': s.anonKey || '' },
+            body: JSON.stringify({ accountId: accountId }),
+        });
+        var data = await resp.json();
+        if (resp.ok && !data.error) {
+            var a = _staffAccounts.find(function(x) { return x.id === accountId; });
+            if (a) {
+                a.stripe_charges_enabled = data.charges_enabled;
+                a.stripe_onboarding_status = data.onboarding_status;
+                _renderStaffAccounts();
+            }
+            toast(data.charges_enabled ? 'Stripe connected — ready for card tips' : 'Onboarding in progress — finish it on Stripe\'s site');
+        }
+    } catch (err) {
+        console.warn('[Link Admin] Stripe return check failed:', err.message);
+    }
 }
 
 function copyStaffLink(code) {
@@ -5166,6 +5248,12 @@ function boot() {
     // Pull parent form responses, camper mail, and tips from the cloud once
     // the DB client is ready
     function _initCloudSubs() {
+        // Returning from Stripe Connect onboarding — jump to the Tips page
+        // (where the account lives) and confirm the account's real status.
+        if (new URLSearchParams(window.location.search).get('stripeReturn') === '1') {
+            nav('tips');
+            _checkStripeReturn();
+        }
         _loadCloudSubmissions(function() {
             _loadFormSubmissions();
             if (document.getElementById('page-forms').classList.contains('active')) { renderReceivedTree(); renderSentForms(); }
