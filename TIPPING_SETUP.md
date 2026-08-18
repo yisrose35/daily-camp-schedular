@@ -36,21 +36,39 @@ that staff member automatically.
    Lite shows **Connected**, and that staff member appears as a "Pay with
    card" option on the parent's Tips page instead of (or alongside) personal
    handles.
-4. A parent taps an amount and **Pay with card** → `stripe-connect-tip`
-   creates a hosted Stripe Checkout session for `tip + fee`, where `fee` is
-   **Stripe's real processing cost (2.9% + 30¢) plus Campistry's 2%** —
-   `application_fee_amount` = that combined fee and
-   `transfer_data.destination` = the staff member's connected account, so
-   the connected account always receives the exact tip amount regardless of
-   what Stripe itself deducts. (Passing only Campistry's 2% to the parent,
-   as the very first version of this did, meant Campistry paid Stripe's cut
-   out of its own margin — see `computeFees()` in `stripe-connect-tip` for
-   the exact grossed-up math.)
-5. Stripe calls `stripe-connect-webhook`, which records the tip into
-   `link_tips` (`fee_amount` = the combined Stripe + Campistry fee) and
-   credits `link_staff_accounts.total_earned` — **not** `balance`, since the
-   money already reached the staff member directly; an admin should never
-   "pay out" a Stripe-paid tip a second time.
+4. A parent adds one or more recipients to their **tip cart** — even across
+   different camps, if they have kids at more than one — and pays everyone
+   in **one checkout**. Two different Stripe patterns handle this
+   automatically depending on cart size, but the parent never sees the
+   difference:
+   - **One recipient** (`stripe-connect-tip`): a Stripe *destination
+     charge* — one PaymentIntent with `transfer_data.destination` = that
+     staff member's connected account, so Stripe routes the money as part
+     of the charge itself.
+   - **Two or more recipients, or any cross-camp cart**
+     (`stripe-connect-tip-cart`): Stripe can't split one PaymentIntent
+     across multiple destination accounts, so this charges the parent's
+     card into the **platform's own** Stripe balance (no destination on the
+     charge), persists who-gets-what in `link_tip_cart_items` (migration
+     059) keyed by a `cartId`, and lets `stripe-connect-webhook` fan the
+     payment out into one Stripe `Transfer` per recipient the instant it
+     succeeds — Stripe's own documented "separate charges and transfers"
+     pattern for one payment, many payouts.
+   Either way, the fee is **Stripe's real processing cost (2.9% + 30¢) plus
+   Campistry's 2%**, computed so every recipient still receives their exact
+   tip amount regardless of what Stripe itself deducts. (Passing only
+   Campistry's 2% to the parent, as the very first version of this did,
+   meant Campistry paid Stripe's cut out of its own margin — see
+   `computeFees()`/the cart's inline equivalent for the exact grossed-up
+   math. For a cart, Stripe's 2.9%+30¢ is computed **once on the whole
+   cart** — it's one charge, not N charges — and shown as one combined
+   "Card & platform fees" line item alongside each recipient's own tip line.)
+5. Stripe calls `stripe-connect-webhook`, which records each tip into
+   `link_tips` (`fee_amount` = that recipient's own share of Campistry's 2%;
+   the cart's shared Stripe fee isn't attributed per recipient — see the
+   migration's comment) and credits `link_staff_accounts.total_earned` —
+   **not** `balance`, since the money already reached the staff member
+   directly; an admin should never "pay out" a Stripe-paid tip a second time.
 
 ## One-time setup
 
@@ -64,6 +82,13 @@ Run, in order, in the Supabase SQL editor:
   `claim_staff_tip_account()`, so a staff member's own Lite login can reach
   and connect their own row (see the header comment for the security
   reasoning behind the guard trigger).
+- `migrations/059_link_tip_cart.sql` — adds `link_tip_cart_items` (the tip
+  cart's server-side bookkeeping) and changes `link_tips`' idempotency key
+  from `stripe_payment_intent_id` alone to `(stripe_payment_intent_id,
+  staff_account_id)`, since a cart checkout is one PaymentIntent covering N
+  recipients. **Required** even if you don't care about multi-recipient
+  carts yet — without it, `stripe-connect-tip-cart`/the webhook's cart
+  handler will fail outright (no table to write to).
 
 ### 2. Enable Stripe Connect
 Stripe Dashboard → Connect → get started, choose **Express** as the account
@@ -75,6 +100,7 @@ their own Stripe account for this.
 supabase functions deploy stripe-connect-onboard
 supabase functions deploy stripe-connect-status
 supabase functions deploy stripe-connect-tip
+supabase functions deploy stripe-connect-tip-cart
 supabase functions deploy stripe-connect-webhook
 ```
 
@@ -141,6 +167,26 @@ one shared function correctly serves both endpoints.
 7. `campistry_link_staff.html` (the staff's own access-code balance page)
    and the Lite Tips tab should both show the updated numbers.
 
+**Cart test (2+ recipients, or cross-camp):** connect a second staff account
+the same way. As the test parent, open two different recipients' amount
+sheets and tap **Add to cart** on each — a sticky bar should appear at the
+bottom of the Tips page ("2 recipients · $X total — Review & Pay"). Tap it,
+confirm the review sheet lists both with a combined total and one **Pay $X
+total** button, and pay with the same test card. In Stripe Dashboard: the
+PaymentIntent should have **no** `transfer_data`/`application_fee_amount` at
+all (this is the platform-balance charge, not a destination charge) — then
+under **Connect → Transfers**, confirm two separate Transfer objects, one
+per connected account, each for exactly that recipient's tip amount. In
+Supabase, `link_tip_cart_items` for that `cart_id` should show both rows
+with `processed_at` set and a `stripe_transfer_id`, and `link_tips` should
+have two new rows (one per recipient) sharing the same
+`stripe_payment_intent_id` but different `staff_account_id`s — this is
+exactly the case the old unique index would have rejected, so if this step
+fails with a constraint violation, migration 059 wasn't applied.
+For the cross-camp case specifically, this only actually requires a parent
+account with an active invite at two different camps — the cart code
+doesn't otherwise care whether items span camps or not.
+
 No local dev server convention exists in this repo for edge functions — test
 against the deployed test-mode functions. `stripe listen` conveniently
 forwards both platform and connected-account events through one CLI session
@@ -180,6 +226,18 @@ from step 5 and test against them directly.
 - The admin-triggered "Connect Stripe" button in Link Admin still exists as
   a fallback and keeps working exactly as before — nothing was removed
   there, self-service in Lite is additive.
+- **A cart's Transfer fan-out has no automatic retry beyond Stripe's own
+  webhook redelivery window.** If one recipient's Transfer fails (their
+  connected account got disconnected mid-cart, a Stripe hiccup, etc.), the
+  webhook logs `transfer_error` on that `link_tip_cart_items` row and moves
+  on to the rest of the cart — everyone else still gets paid — but that one
+  recipient's payout needs a manual look (query
+  `link_tip_cart_items WHERE transfer_error IS NOT NULL`) and a manual
+  re-trigger for now. Fine for a concept build's expected volume; an
+  automatic retry/alerting pass is the natural next step before this scales.
+- **Cart size is capped at 20 recipients** (`MAX_ITEMS` in
+  `stripe-connect-tip-cart`) — comfortably above any real family's tip list,
+  and well under Stripe Checkout's own 100-line-item ceiling.
 - Existing personal-handle tipping (Venmo/Zelle/PayPal/Cash App) is
   completely unaffected — it's the fallback for any staff member who isn't
   Stripe-connected yet.
