@@ -4618,7 +4618,8 @@ function setStaffStatus(id,status,opts){
 // button with its own loading/error toast.
 async function _autoInviteHiredToLite(a){
     var email=String(a.email||'').trim();
-    if(!email||!window.AccessControl||!window.AccessControl.inviteTeamMember)return;
+    if(!email){console.log('[Me] auto-invite-to-Lite skipped for '+(a.name||'this hire')+': no email on the application yet');return;}
+    if(!window.AccessControl||!window.AccessControl.inviteTeamMember){console.warn('[Me] auto-invite-to-Lite skipped for '+email+': AccessControl.inviteTeamMember not available');return;}
     try{
         var result=await window.AccessControl.inviteTeamMember(email,'counselor',[],a.name||'');
         if(result&&result.error){console.log('[Me] auto-invite-to-Lite skipped for '+email+':',result.error);return;}
