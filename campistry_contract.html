@@ -1,0 +1,199 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>Offer &amp; Contract</title>
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<link rel="icon" type="image/png" href="Campistry_logo.png">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+<style>
+:root{--me:#D97706;--me2:#B45309;--ok:#10B981;--err:#EF4444;--s50:#F8FAFC;--s100:#F1F5F9;--s200:#E2E8F0;--s300:#CBD5E1;--s400:#94A3B8;--s500:#64748B;--s600:#475569;--s700:#334155;--s800:#1E293B;--s900:#0F172A;--r:8px;--font:'DM Sans',system-ui,sans-serif}
+*,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
+body{font-family:var(--font);background:var(--s50);color:var(--s800);-webkit-font-smoothing:antialiased}
+.wrap{max-width:620px;margin:0 auto;padding:24px 20px 60px}
+.hdr{text-align:center;margin-bottom:24px;padding:20px 0}
+.hdr h1{font-size:1.4rem;font-weight:800;color:var(--s900)}
+.hdr .cn{color:var(--me);font-size:1.1rem;font-weight:700}
+.hdr p{font-size:.88rem;color:var(--s500);margin:4px 0 0}
+.cd{background:#fff;border-radius:12px;border:1px solid var(--s200);padding:22px;margin-bottom:14px}
+.ct{font-size:.92rem;font-weight:700;color:var(--s800);margin:0 0 12px}
+.row{display:flex;gap:10px;padding:6px 0;font-size:.9rem;border-bottom:1px solid var(--s100)}
+.row:last-child{border-bottom:none}
+.row-l{color:var(--s500);min-width:110px;flex-shrink:0}
+.row-v{color:var(--s800);font-weight:600}
+.terms{white-space:pre-wrap;font-size:.86rem;line-height:1.5;color:var(--s700)}
+.fg{margin-bottom:12px}
+.fl{display:block;font-size:.78rem;font-weight:600;color:var(--s600);margin-bottom:3px}
+.fi{width:100%;padding:10px 12px;border:1.5px solid var(--s200);border-radius:var(--r);font-size:.92rem;color:var(--s800);outline:none;font-family:var(--font);background:#fff}
+.fi:focus{border-color:var(--me);box-shadow:0 0 0 3px rgba(217,119,6,.08)}
+.chk{display:flex;align-items:flex-start;gap:8px;font-size:.82rem;color:var(--s600);cursor:pointer;margin:14px 0}
+.chk input{margin-top:2px;accent-color:var(--me)}
+.btn{width:100%;padding:13px;background:var(--me);color:#fff;border:none;border-radius:var(--r);font-size:1rem;font-weight:700;cursor:pointer;font-family:var(--font)}
+.btn:hover{background:var(--me2)}
+.btn:disabled{opacity:.5;cursor:not-allowed}
+.err{display:none;background:#FEF2F2;border:1px solid #FECACA;color:#991B1B;padding:10px 14px;border-radius:var(--r);font-size:.85rem;margin-bottom:14px}
+.ok-wrap{display:none;text-align:center;background:#fff;border-radius:12px;border:1px solid var(--s200);padding:40px 24px}
+.ok-wrap .ic{font-size:48px;margin-bottom:8px}
+.mut{font-size:.75rem;color:var(--s400);margin-top:4px}
+.badge{display:inline-flex;align-items:center;font-size:.7rem;font-weight:700;padding:3px 10px;border-radius:999px}
+.badge-ok{background:#ECFDF5;color:#047857}
+.spin{text-align:center;padding:60px 0;color:var(--s400);font-size:.9rem}
+</style>
+</head>
+<body>
+<div class="wrap">
+    <div class="hdr">
+        <h1>Offer &amp; Contract</h1>
+        <p id="hdrSub">Loading…</p>
+    </div>
+    <div id="loadingWrap" class="spin">Loading your offer…</div>
+    <div id="errWrap" class="err"></div>
+    <div id="formWrap" style="display:none">
+        <div class="cd">
+            <div class="ct">Position</div>
+            <div class="row"><span class="row-l">Candidate</span><span class="row-v" id="fName"></span></div>
+            <div class="row"><span class="row-l">Position</span><span class="row-v" id="fPosition"></span></div>
+            <div class="row" id="fPayRow" style="display:none"><span class="row-l" id="fPayLbl">Pay</span><span class="row-v" id="fPay"></span></div>
+            <div class="row" id="fDatesRow" style="display:none"><span class="row-l">Dates</span><span class="row-v" id="fDates"></span></div>
+        </div>
+        <div class="cd" id="fTermsCard" style="display:none">
+            <div class="ct">Terms</div>
+            <div class="terms" id="fTerms"></div>
+        </div>
+        <div class="cd">
+            <div class="ct">Accept This Offer</div>
+            <div class="fg"><label class="fl">Type your full legal name to sign</label><input class="fi" id="acName" placeholder="First Last"></div>
+            <label class="chk"><input type="checkbox" id="acAgree"> I have read the terms above and agree to accept this position on these terms.</label>
+            <button class="btn" id="acBtn">Accept Offer</button>
+            <p class="mut" id="acNote"></p>
+        </div>
+    </div>
+    <div class="ok-wrap" id="okWrap">
+        <div class="ic">✅</div>
+        <h2>Offer Accepted</h2>
+        <p class="mut" id="okMsg" style="margin-top:8px;font-size:.85rem"></p>
+    </div>
+</div>
+
+<script src="config.js" onerror="console.log('[Contract] config not loaded — local only')"></script>
+<script src="supabase-js@2.js" onerror="console.log('[Contract] supabase-js not loaded')"></script>
+<script src="campistry_payroll_core.js" onerror="console.log('[Contract] payroll core not loaded')"></script>
+<script>
+(function(){
+'use strict';
+
+// This page is opened by a candidate who may have never touched Campistry
+// before — there's no session to resolve a camp from, so campId AND the
+// applicant id both travel in the URL and every read/write is scoped to
+// them explicitly. Same anon-write posture the registration/staff-
+// application forms already rely on for camp_state_kv (RLS is the real
+// boundary, not obscurity — see config.js's own comment on the anon key).
+var params=new URLSearchParams(window.location.search);
+var campId=params.get('camp');
+var appId=params.get('id');
+
+function esc(s){var d=document.createElement('div');d.textContent=s==null?'':String(s);return d.innerHTML;}
+function fm(n){n=parseFloat(n)||0;return '$'+n.toLocaleString('en-US',{minimumFractionDigits:2,maximumFractionDigits:2});}
+function showErr(msg){
+    document.getElementById('loadingWrap').style.display='none';
+    var e=document.getElementById('errWrap');
+    e.textContent=msg;e.style.display='block';
+    document.getElementById('hdrSub').textContent='';
+}
+
+function client(){
+    if(!window.supabase||typeof window.supabase.createClient!=='function')return null;
+    if(!window.__CAMPISTRY_SUPABASE__)return null;
+    if(!client._c)client._c=window.supabase.createClient(window.__CAMPISTRY_SUPABASE__.url,window.__CAMPISTRY_SUPABASE__.anonKey);
+    return client._c;
+}
+
+async function loadOffer(){
+    if(!campId||!appId){showErr('This link is missing information — ask the camp to resend it.');return;}
+    var c=null;
+    for(var i=0;i<20&&!c;i++){c=client();if(!c)await new Promise(function(r){setTimeout(r,150);});}
+    if(!c){showErr('Could not connect. Check your internet connection and reload this page.');return;}
+    var res;
+    try{ res=await c.from('camp_state_kv').select('value').eq('camp_id',campId).eq('key','campistryMe').maybeSingle(); }
+    catch(e){ showErr('Could not load your offer. Reload this page to try again.'); return; }
+    if(res.error||!res.data||!res.data.value){showErr('This offer could not be found. Ask the camp to resend the link.');return;}
+    var me=res.data.value;
+    var a=(me.staffApplications||{})[appId];
+    var ctr=a&&a.contract;
+    if(!a||!ctr||ctr.status==='none'||!ctr.status){showErr('This offer could not be found, or hasn\'t been set up yet. Ask the camp to resend the link.');return;}
+
+    var campName=me.campName||me.camp_name||'the camp';
+    document.getElementById('hdrSub').innerHTML='From <span class="cn">'+esc(campName)+'</span>';
+    document.getElementById('loadingWrap').style.display='none';
+
+    if(ctr.status==='accepted'){
+        document.getElementById('okWrap').style.display='block';
+        document.getElementById('okMsg').textContent='You accepted this offer as '+(ctr.acceptedName||'')+' on '+((ctr.acceptedAt||'').slice(0,10)||'')+'. Nothing more to do here.';
+        return;
+    }
+
+    var name=a.name||((a.first||'')+' '+(a.last||''))||'—';
+    document.getElementById('fName').textContent=name;
+    document.getElementById('fPosition').textContent=ctr.position||'—';
+    if(ctr.payRate){
+        var core=window.PayrollCore;
+        var pt=core?(core.PAY_TYPES.filter(function(p){return p.id===ctr.payType})[0]||{}):{};
+        document.getElementById('fPayLbl').textContent=pt.rateLabel||'Pay';
+        document.getElementById('fPay').textContent=fm(ctr.payRate);
+        document.getElementById('fPayRow').style.display='flex';
+    }
+    if(ctr.startDate||ctr.endDate){
+        document.getElementById('fDates').textContent=(ctr.startDate||'?')+' – '+(ctr.endDate||'?');
+        document.getElementById('fDatesRow').style.display='flex';
+    }
+    if(ctr.terms){
+        document.getElementById('fTerms').textContent=ctr.terms;
+        document.getElementById('fTermsCard').style.display='block';
+    }
+    document.getElementById('formWrap').style.display='block';
+
+    document.getElementById('acBtn').onclick=async function(){
+        var typedName=(document.getElementById('acName').value||'').trim();
+        var agreed=document.getElementById('acAgree').checked;
+        var note=document.getElementById('acNote');
+        if(!typedName){note.textContent='Type your name to sign.';note.style.color='var(--err)';return;}
+        if(!agreed){note.textContent='Check the box to confirm you agree to the terms.';note.style.color='var(--err)';return;}
+        var btn=document.getElementById('acBtn');
+        btn.disabled=true;btn.textContent='Submitting…';note.textContent='';
+        try{
+            // Re-fetch immediately before writing so a concurrent office edit
+            // (e.g. they tweaked the pay rate right before you clicked) isn't
+            // clobbered by whatever was in memory when the page first loaded.
+            var cur=await c.from('camp_state_kv').select('value').eq('camp_id',campId).eq('key','campistryMe').maybeSingle();
+            var cloudMe=(cur&&cur.data&&cur.data.value&&typeof cur.data.value==='object')?cur.data.value:me;
+            var merged=Object.assign({},cloudMe);
+            merged.staffApplications=Object.assign({},cloudMe.staffApplications||{});
+            var freshApp=Object.assign({},merged.staffApplications[appId]||a);
+            var freshCtr=Object.assign({},freshApp.contract||ctr);
+            freshCtr.status='accepted';
+            freshCtr.acceptedAt=new Date().toISOString();
+            freshCtr.acceptedName=typedName;
+            freshApp.contract=freshCtr;
+            merged.staffApplications[appId]=freshApp;
+            var up=await c.from('camp_state_kv').upsert({camp_id:campId,key:'campistryMe',value:merged,updated_at:new Date().toISOString()},{onConflict:'camp_id,key'});
+            if(up&&up.error)throw new Error(up.error.message);
+        }catch(e){
+            console.error('[Contract] accept error',e);
+            note.textContent='Something went wrong submitting your acceptance. Please try again.';
+            note.style.color='var(--err)';
+            btn.disabled=false;btn.textContent='Accept Offer';
+            return;
+        }
+        document.getElementById('formWrap').style.display='none';
+        document.getElementById('okWrap').style.display='block';
+        document.getElementById('okMsg').textContent='Thanks, '+typedName.split(' ')[0]+'! Your acceptance has been sent to '+campName+'.';
+        window.scrollTo(0,0);
+    };
+}
+
+loadOffer();
+})();
+</script>
+</body>
+</html>

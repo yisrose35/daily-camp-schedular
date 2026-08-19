@@ -1000,7 +1000,12 @@ function _familyBundlesHtml(optHighlight){
     var mergeFams=(suggestions.mergeFamilies||[]).filter(function(s){return dismissed.indexOf([s.keyA,s.keyB].sort().join('|'))<0});
     var totalSuggestions=newFams.length+addToExisting.length+mergeFams.length;
 
-    var h='<div class="sec-hd"><div><h2 class="sec-title">Families</h2><p class="sec-desc">'+e.length+' household'+(e.length!==1?'s':'')+(totalSuggestions>0?' · <span style="color:var(--me);font-weight:700">'+totalSuggestions+' suggestion'+(totalSuggestions!==1?'s':'')+'</span>':'')+'</p></div><div class="sec-actions"><button class="me-btn me-btn--sec me-btn--sm" onclick="CampistryMe.printFamilies()">🖨 Print</button><button class="me-btn me-btn--sec me-btn--sm" onclick="CampistryMe.exportFamilyReport()">↓ Export</button><button class="me-btn me-btn--pri" onclick="CampistryMe.addFamily()">+ Add Family</button></div></div>';
+    // A family only matters when siblings need to share ONE bill/balance
+    // and ONE Link login — a camper with no siblings works fine with just
+    // their own parent1Name/Phone/Email fields on the Roster and never
+    // needs a family record at all. That's the thing this page is easy to
+    // miss, so it gets said outright instead of assumed.
+    var h='<div class="sec-hd"><div><h2 class="sec-title">Families</h2><p class="sec-desc">Groups siblings into one household so they share a single bill and one parent login to Link · '+e.length+' household'+(e.length!==1?'s':'')+(totalSuggestions>0?' · <span style="color:var(--me);font-weight:700">'+totalSuggestions+' suggestion'+(totalSuggestions!==1?'s':'')+'</span>':'')+'</p></div><div class="sec-actions"><button class="me-btn me-btn--sec me-btn--sm" onclick="CampistryMe.printFamilies()">🖨 Print</button><button class="me-btn me-btn--sec me-btn--sm" onclick="CampistryMe.exportFamilyReport()">↓ Export</button><button class="me-btn me-btn--pri" onclick="CampistryMe.addFamily()">+ Add Family</button></div></div>';
 
     // Show suggestions banner
     if(newFams.length||addToExisting.length||mergeFams.length){
@@ -1046,7 +1051,7 @@ function _familyBundlesHtml(optHighlight){
         h+='</div>';
     }
 
-    if(!e.length&&!totalSuggestions){h+='<div class="me-empty"><h3>No families yet</h3><p>Add a family to get started, or import campers and we\'ll detect families automatically.</p><button class="me-btn me-btn--pri" onclick="CampistryMe.addFamily()">+ Add Family</button></div>'}
+    if(!e.length&&!totalSuggestions){h+='<div class="me-empty"><h3>No families yet</h3><p>Only needed when siblings should share one bill and one Link login — a camper with no siblings works fine without one. Add a family to group siblings, or import campers and we\'ll suggest matches automatically.</p><button class="me-btn me-btn--pri" onclick="CampistryMe.addFamily()">+ Add Family</button></div>'}
     else e.forEach(function([id,f]){
         var sb=f.balance>0?bdg(fm(f.balance)+' due','err'):f.totalPaid>0?bdg('Paid','ok'):bdg('Pending','warn');
         var isHighlight=optHighlight&&(f.camperIds||[]).indexOf(optHighlight)>=0;
@@ -1412,6 +1417,7 @@ function _renderHiringPane(){
     if(!canStaff){
         return '<div class="me-empty"><h3>No access to Hiring</h3><p>Your account isn\'t set up to open this section.</p></div>';
     }
+    _syncAcceptedContractsToPayroll();
     var editStaff=_pplCanEdit('me.staffing');
     var list=buildPipelineList().filter(function(r){return r.type==='staff';});
     var hiredList=hiredStaff();
@@ -1779,7 +1785,7 @@ function viewCamper(n){
     }else{
         fcBody+='<div style="font-size:.8rem;color:var(--s400);font-style:italic;padding:2px 0">No summer address on file</div>';
     }
-    b+=_accCard('Family & Contact',fcBody,{open:!d.parent1Name||!d.emergencyName});
+    b+=_accCard('Family & Contact',fcBody,{open:!d.parent1Name||!d.emergencyName,key:'cv_'+n+'_family'});
 
     // Medical Summary — auto-open when the snapshot banner above flagged
     // something, so the flag is never one click away from its own detail.
@@ -1792,30 +1798,30 @@ function viewCamper(n){
     if(d.physician)medBody+=cvR('Physician',esc(d.physician)+(d.physicianPhone?' · '+esc(d.physicianPhone):''));
     if(d.insuranceProvider)medBody+=cvR('Insurance',esc(d.insuranceProvider)+(d.insurancePolicy?' · #'+esc(d.insurancePolicy):''));
     medBody+='<div class="cv-health" onclick="window.location.href=\'campistry_health.html\'">Open in Campistry Health →</div>';
-    b+=_accCard('Medical Summary',medBody,{open:hasMedFlags});
+    b+=_accCard('Medical Summary',medBody,{open:hasMedFlags,key:'cv_'+n+'_medical'});
 
     // Documents
     var docs=(d.documents||[]);
-    b+=_accCard('Documents',renderDocuments(n),{badge:docs.length?String(docs.length):'',actionHtml:'<button class="me-btn me-btn--ghost me-btn--sm" onclick="CampistryMe.uploadDocument(\''+je(n)+'\')">+ Upload</button>'});
+    b+=_accCard('Documents',renderDocuments(n),{badge:docs.length?String(docs.length):'',actionHtml:'<button class="me-btn me-btn--ghost me-btn--sm" onclick="CampistryMe.uploadDocument(\''+je(n)+'\')">+ Upload</button>',key:'cv_'+n+'_docs'});
 
     // Financial Aid
     var schols=d.scholarships||[];
     var aidBody=schols.length?schols.map(function(s){return cvR(s.type,fm(s.amount)+(s.source?' — '+s.source:'')+(s.date?' ('+s.date+')':''))}).join(''):'<div style="font-size:.8rem;color:var(--s400);font-style:italic">No aid on file</div>';
-    b+=_accCard('Financial Aid',aidBody,{badge:schols.length?String(schols.length):'',actionHtml:'<button class="me-btn me-btn--ghost me-btn--sm" onclick="CampistryMe.addScholarship(\''+je(n)+'\')">+ Award</button>'});
+    b+=_accCard('Financial Aid',aidBody,{badge:schols.length?String(schols.length):'',actionHtml:'<button class="me-btn me-btn--ghost me-btn--sm" onclick="CampistryMe.addScholarship(\''+je(n)+'\')">+ Award</button>',key:'cv_'+n+'_aid'});
 
     // Custom Fields
     loadCustomFields();
     if(customFields.length){
         var cfBody=customFields.map(function(cf){return cvR(cf.label,d['cf_'+cf.id]||'<span style="color:var(--s300)">—</span>')}).join('');
-        b+=_accCard('Custom Fields',cfBody,{});
+        b+=_accCard('Custom Fields',cfBody,{key:'cv_'+n+'_custom'});
     }
 
     // Notes & Timeline
     var noteCount=(d.notes||[]).length;
-    b+=_accCard('Notes & Timeline',renderCamperTimeline(n),{badge:noteCount?String(noteCount):'',actionHtml:'<button class="me-btn me-btn--ghost me-btn--sm" onclick="CampistryMe.addCamperNote(\''+je(n)+'\')">+ Add Note</button>'});
+    b+=_accCard('Notes & Timeline',renderCamperTimeline(n),{badge:noteCount?String(noteCount):'',actionHtml:'<button class="me-btn me-btn--ghost me-btn--sm" onclick="CampistryMe.addCamperNote(\''+je(n)+'\')">+ Add Note</button>',key:'cv_'+n+'_notes'});
 
     // Change History (audit trail of edits) — least-checked section, stays closed
-    b+=_accCard('History',renderCamperHistory(n),{});
+    b+=_accCard('History',renderCamperHistory(n),{key:'cv_'+n+'_history'});
 
     b+='</div>';
 
@@ -4429,9 +4435,6 @@ function viewStaffApp(id){
         +'<button class="me-modal-x" onclick="CampistryMe.closeModal(\'appViewModal\')">&times;</button></div></div>';
     document.getElementById('avHead').innerHTML=head;
 
-    var b='';
-    var _secOpen=false;
-    function sec(title){var out=_secOpen?'</div>':'';_secOpen=true;return out+'<div class="av-sec"><div class="av-sec-hd">'+title+'</div>';}
     function row(l,v){if(!v)return'';return'<div class="av-row"><span class="av-row-l">'+esc(l)+'</span><span class="av-row-v">'+esc(v)+'</span></div>'}
     function rowRaw(l,v){if(!v)return'';return'<div class="av-row"><span class="av-row-l">'+esc(l)+'</span><span class="av-row-v">'+v+'</span></div>'}
 
@@ -4440,100 +4443,149 @@ function viewStaffApp(id){
     function sLabel(fid,fallback){var cfg=(sfc.fields||{})[fid]; return (cfg&&cfg.label)||fallback;}
     function sSectionOn(key){var cfg=(sfc.sections||{})[key]; if(cfg)return cfg.enabled!==false; var def=SFC_SECTIONS.filter(function(s){return s.key===key;})[0]; return def?def.default:true;}
 
+    // About/Role stay in the always-visible snapshot ("who is this, can I
+    // reach them, what did they apply for" — no click needed). Experience,
+    // References and Consent are more of an as-needed lookup during review,
+    // so they collapse into accordions (same _accCard()/_toggleAcc()
+    // component the Roster profile and Form Builder already use) — same
+    // idea as the Roster camper-profile cleanup, applied here.
     var SECTION_RENDERERS={
         about:function(){
-            b+=sec('About');
+            var h='';
             if(a.photo&&sFieldOn('photo')&&isSafeImageDataUrl(a.photo)){
-                b+='<img src="'+a.photo+'" style="width:72px;height:72px;object-fit:cover;border-radius:10px;border:1px solid var(--s200);margin-bottom:8px">';
+                h+='<img src="'+a.photo+'" style="width:72px;height:72px;object-fit:cover;border-radius:10px;border:1px solid var(--s200);margin-bottom:8px">';
             }
-            if(sFieldOn('first')||sFieldOn('last'))b+=row('Name',name);
-            if(a.email&&sFieldOn('email'))b+=rowRaw(sLabel('email','Email'),'<a href="mailto:'+esc(a.email)+'" style="color:var(--me)">'+esc(a.email)+'</a>');
-            if(a.phone&&sFieldOn('phone'))b+=rowRaw(sLabel('phone','Phone'),'<a href="tel:'+esc(a.phone)+'" style="color:var(--me);font-weight:600">'+esc(a.phone)+'</a>');
-            if(sFieldOn('dob'))b+=row(sLabel('dob','Date of Birth'),a.dob);
-            if(sFieldOn('street'))b+=row(sLabel('street','Street'),a.street);
-            if(sFieldOn('city'))b+=row(sLabel('city','City'),a.city);
-            if(sFieldOn('state'))b+=row(sLabel('state','State'),a.state);
-            if(sFieldOn('zip'))b+=row(sLabel('zip','ZIP'),a.zip);
+            if(sFieldOn('first')||sFieldOn('last'))h+=row('Name',name);
+            if(a.email&&sFieldOn('email'))h+=rowRaw(sLabel('email','Email'),'<a href="mailto:'+esc(a.email)+'" style="color:var(--me)">'+esc(a.email)+'</a>');
+            if(a.phone&&sFieldOn('phone'))h+=rowRaw(sLabel('phone','Phone'),'<a href="tel:'+esc(a.phone)+'" style="color:var(--me);font-weight:600">'+esc(a.phone)+'</a>');
+            if(sFieldOn('dob'))h+=row(sLabel('dob','Date of Birth'),a.dob);
+            if(sFieldOn('street'))h+=row(sLabel('street','Street'),a.street);
+            if(sFieldOn('city'))h+=row(sLabel('city','City'),a.city);
+            if(sFieldOn('state'))h+=row(sLabel('state','State'),a.state);
+            if(sFieldOn('zip'))h+=row(sLabel('zip','ZIP'),a.zip);
+            return {title:'About',body:h,snapshot:true};
         },
         role:function(){
-            b+=sec('Role & Availability');
-            b+=row('Position(s)',(a.positions||[]).join(', '));
-            if((sFieldOn('availStart')||sFieldOn('availEnd'))&&(a.availStart||a.availEnd))b+=row('Availability',(a.availStart||'?')+' – '+(a.availEnd||'?'));
+            var h=row('Position(s)',(a.positions||[]).join(', '));
+            if((sFieldOn('availStart')||sFieldOn('availEnd'))&&(a.availStart||a.availEnd))h+=row('Availability',(a.availStart||'?')+' – '+(a.availEnd||'?'));
+            return {title:'Role & Availability',body:h,snapshot:true};
         },
         experience:function(){
-            b+=sec('Experience & Certifications');
-            if((a.certifications||[]).length)b+=row('Certifications',a.certifications.join(', '));
-            if(sFieldOn('education'))b+=row(sLabel('education','Education'),a.education);
-            if(sFieldOn('experience'))b+=row(sLabel('experience','Experience'),a.experience);
-            if(sFieldOn('resume')&&a.resume&&a.resume.data)b+='<div style="margin-top:4px"><a href="'+esc(a.resume.data)+'" download="'+esc(a.resume.name||'resume')+'" class="me-btn me-btn--sec me-btn--sm">📎 '+esc(a.resume.name||'Resume')+'</a></div>';
+            var h='';
+            if((a.certifications||[]).length)h+=row('Certifications',a.certifications.join(', '));
+            if(sFieldOn('education'))h+=row(sLabel('education','Education'),a.education);
+            if(sFieldOn('experience'))h+=row(sLabel('experience','Experience'),a.experience);
+            if(sFieldOn('resume')&&a.resume&&a.resume.data)h+='<div style="margin-top:4px"><a href="'+esc(a.resume.data)+'" download="'+esc(a.resume.name||'resume')+'" class="me-btn me-btn--sec me-btn--sm">📎 '+esc(a.resume.name||'Resume')+'</a></div>';
+            return {title:'Experience & Certifications',body:h||'<div style="font-size:.82rem;color:var(--s400)">Nothing on file.</div>'};
         },
         references:function(){
-            b+=sec('References');
-            if((a.references||[]).length){
-                a.references.forEach(function(r,ri){
+            var refs=a.references||[];
+            var h;
+            if(refs.length){
+                h=refs.map(function(r,ri){
                     var rst=r.status||'pending';
                     var rc=rst==='received'?'ok':rst==='requested'?'warn':'gray';
-                    b+='<div style="display:flex;align-items:center;gap:8px;padding:7px 0;border-bottom:1px solid var(--s100);font-size:.82rem">'
+                    return '<div style="display:flex;align-items:center;gap:8px;padding:7px 0;border-bottom:1px solid var(--s100);font-size:.82rem">'
                         +'<div style="flex:1"><strong>'+esc(r.name||'—')+'</strong>'+(r.relationship?' <span style="color:var(--s400)">('+esc(r.relationship)+')</span>':'')+'<br><span style="color:var(--s500);font-size:.76rem">'+esc([r.email,r.phone].filter(Boolean).join(' · '))+'</span></div>'
                         +bdg(rst,rc)
                         +'<button class="me-btn me-btn--ghost me-btn--sm" onclick="CampistryMe.cycleRef(\''+je(id)+'\','+ri+')">'+(rst==='received'?'Reset':rst==='requested'?'Mark received':'Request')+'</button>'
                         +'</div>';
-                });
-            } else b+='<div style="font-size:.82rem;color:var(--s400)">No references provided.</div>';
+                }).join('');
+            } else h='<div style="font-size:.82rem;color:var(--s400)">No references provided.</div>';
+            return {title:'References',body:h,badge:refs.length?String(refs.length):''};
         },
         consent:function(){
-            if(!a.source)return;
-            b+=sec('Consent');
-            b+=row('How they heard about us',a.source);
+            if(!a.source)return null;
+            return {title:'Consent',body:row('How they heard about us',a.source)};
         }
     };
     var order=(sfc.sectionOrder&&sfc.sectionOrder.length)?sfc.sectionOrder.slice():SFC_SECTIONS.map(function(s){return s.key;});
     SFC_SECTIONS.forEach(function(s){ if(order.indexOf(s.key)<0)order.push(s.key); });
+    var snap='',acc='';
     order.forEach(function(key){
         if(!sSectionOn(key))return;
         var fn=SECTION_RENDERERS[key];
-        if(fn)fn();
+        if(!fn)return;
+        var res=fn();
+        if(!res)return;
+        if(res.snapshot)snap+='<div class="av-sec"><div class="av-sec-hd">'+res.title+'</div>'+res.body+'</div>';
+        else acc+=_accCard(res.title,res.body,{badge:res.badge,key:'sa_'+id+'_'+key});
     });
+
+    // Contract & Pay (once an offer is on the table) — position, pay terms
+    // and a link the candidate opens on their OWN device to review and
+    // accept, same shareable-link pattern as the registration/staff
+    // application links. Pay type/rate reuse Payroll's own PAY_TYPES so
+    // there's one source of truth for how pay is structured, not two.
+    if(st==='offered'||st==='hired'){
+        var ctr=a.contract||{status:'none'};
+        var core=PC();
+        var ctrBody='';
+        if(ctr.status==='accepted'){
+            ctrBody+='<div style="font-size:.82rem;color:var(--ok);font-weight:600;margin-bottom:8px">✓ Accepted by '+esc(ctr.acceptedName||'the candidate')+' on '+esc((ctr.acceptedAt||'').slice(0,10))+'</div>';
+        }else if(ctr.status==='sent'){
+            ctrBody+='<div style="font-size:.82rem;color:var(--me);font-weight:600;margin-bottom:8px">Sent — awaiting acceptance</div>';
+        }
+        if(ctr.position||ctr.payRate){
+            var rl=(core&&(core.PAY_TYPES.filter(function(p){return p.id===ctr.payType})[0]||{}).rateLabel)||'Rate';
+            ctrBody+=row('Position',ctr.position);
+            if(ctr.payRate)ctrBody+=row(rl,fm(ctr.payRate));
+            if(ctr.startDate||ctr.endDate)ctrBody+=row('Dates',(ctr.startDate||'?')+' – '+(ctr.endDate||'?'));
+        }else{
+            ctrBody+='<div style="font-size:.82rem;color:var(--s400)">No contract terms set yet.</div>';
+        }
+        ctrBody+='<div style="display:flex;gap:6px;margin-top:8px;flex-wrap:wrap">';
+        ctrBody+='<button class="me-btn me-btn--sec me-btn--sm" onclick="CampistryMe.openStaffContractModal(\''+je(id)+'\')">'+(ctr.status==='none'?'Set Up Contract':'Edit Contract')+'</button>';
+        if(ctr.status!=='none')ctrBody+='<button class="me-btn me-btn--sec me-btn--sm" onclick="CampistryMe.copyStaffContractLink(\''+je(id)+'\')">🔗 Copy Link</button>';
+        ctrBody+='</div>';
+        snap+='<div class="av-sec"><div class="av-sec-hd">Contract & Pay</div>'+ctrBody+'</div>';
+    }
 
     // Bunk placement (once hired) — admin-only, not part of the public
     // form. Hiring isn't finished until they're on a bunk — that's what
     // gives them a schedule in Lite and lets pickup notifications reach them.
+    // Stays in the always-visible snapshot: whether this hire is actually
+    // set up to work is not a detail worth hiding behind a click.
     if(st==='hired'){
-        b+=sec('Bunk Placement');
+        var bpBody='';
         var mine=bunksForStaffEmail(a.email);
         var free=allBunkNames().filter(function(bn){return mine.indexOf(bn)<0});
         if(!String(a.email||'').trim()){
-            b+='<div style="font-size:.82rem;color:var(--err)">No email on this application, so they can\'t sign in to Campistry Lite or be notified. Add one before placing them.</div>';
+            bpBody+='<div style="font-size:.82rem;color:var(--err)">No email on this application, so they can\'t sign in to Campistry Lite or be notified. Add one before placing them.</div>';
         }else if(mine.length){
-            b+=mine.map(function(bn){
+            bpBody+=mine.map(function(bn){
                 return '<div style="display:flex;align-items:center;gap:8px;padding:4px 0;font-size:.83rem">'
                     +'<span style="flex:1">'+esc(bn)+'</span>'
                     +'<button class="me-btn me-btn--ghost me-btn--sm" onclick="CampistryMe.unassignHiredFromBunk(\''+je(id)+'\',\''+je(bn)+'\')">Remove</button></div>';
             }).join('');
         }else{
-            b+='<div style="font-size:.82rem;color:var(--s500);margin-bottom:6px">Not on a bunk yet — they won\'t see a schedule in Campistry Lite.</div>';
+            bpBody+='<div style="font-size:.82rem;color:var(--s500);margin-bottom:6px">Not on a bunk yet — they won\'t see a schedule in Campistry Lite.</div>';
         }
         if(String(a.email||'').trim()&&free.length){
-            b+='<select class="fs" style="margin-top:6px" onchange="if(this.value)CampistryMe.assignHiredToBunk(\''+je(id)+'\',this.value)">'
+            bpBody+='<select class="fs" style="margin-top:6px" onchange="if(this.value)CampistryMe.assignHiredToBunk(\''+je(id)+'\',this.value)">'
               +'<option value="">— Add to a bunk —</option>'
               +free.map(function(bn){return '<option value="'+esc(bn)+'">'+esc(bn)+'</option>'}).join('')
               +'</select>';
         }
+        snap+='<div class="av-sec"><div class="av-sec-hd">Bunk Placement</div>'+bpBody+'</div>';
     }
-    // Onboarding checklist (once offered/hired) — same admin-only rationale.
+    // Onboarding checklist (once offered/hired) — an active to-do list during
+    // those stages, so it defaults open rather than collapsed.
     if(st==='offered'||st==='hired'){
-        b+=sec('Onboarding Checklist');
         var ob=a.onboarding||{};
-        STAFF_ONBOARD.forEach(function(item){
-            b+='<label style="display:flex;align-items:center;gap:8px;font-size:.83rem;padding:3px 0;cursor:pointer"><input type="checkbox" '+(ob[item[0]]?'checked':'')+' onchange="CampistryMe.toggleOnboard(\''+je(id)+'\',\''+item[0]+'\')"> '+esc(item[1])+'</label>';
-        });
+        var obBody=STAFF_ONBOARD.map(function(item){
+            return '<label style="display:flex;align-items:center;gap:8px;font-size:.83rem;padding:3px 0;cursor:pointer"><input type="checkbox" '+(ob[item[0]]?'checked':'')+' onchange="CampistryMe.toggleOnboard(\''+je(id)+'\',\''+item[0]+'\')"> '+esc(item[1])+'</label>';
+        }).join('');
+        var obDone=STAFF_ONBOARD.filter(function(item){return ob[item[0]]}).length;
+        acc+=_accCard('Onboarding Checklist',obBody,{open:true,badge:obDone+'/'+STAFF_ONBOARD.length,key:'sa_'+id+'_onboard'});
     }
-    // Internal Notes
-    b+=sec('Internal Notes');
-    b+='<textarea id="staffNote" style="width:100%;padding:8px 10px;border:1.5px solid var(--s200);border-radius:var(--r);font-size:.82rem;font-family:var(--font);min-height:60px;resize:vertical;outline:none" placeholder="Interview notes, impressions…">'+(a.adminNotes?esc(a.adminNotes):'')+'</textarea>';
-    b+='<button class="me-btn me-btn--sec me-btn--sm" style="margin-top:6px" onclick="CampistryMe.saveStaffNotes(\''+je(id)+'\')">Save Notes</button>';
-    if(_secOpen)b+='</div>';
-    document.getElementById('avBody').innerHTML=b;
+    // Internal Notes — opens by default once something's actually been
+    // written, so existing notes aren't hidden behind an extra click.
+    var notesBody='<textarea id="staffNote" style="width:100%;padding:8px 10px;border:1.5px solid var(--s200);border-radius:var(--r);font-size:.82rem;font-family:var(--font);min-height:60px;resize:vertical;outline:none" placeholder="Interview notes, impressions…">'+(a.adminNotes?esc(a.adminNotes):'')+'</textarea>'
+        +'<button class="me-btn me-btn--sec me-btn--sm" style="margin-top:6px" onclick="CampistryMe.saveStaffNotes(\''+je(id)+'\')">Save Notes</button>';
+    acc+=_accCard('Internal Notes',notesBody,{open:!!a.adminNotes,key:'sa_'+id+'_notes'});
+
+    document.getElementById('avBody').innerHTML=snap+'<div style="margin-top:'+(snap?'14px':'0')+'">'+acc+'</div>';
 
     // Footer
     var next=_staffNextStage(st);
@@ -4549,6 +4601,99 @@ function viewStaffApp(id){
     document.getElementById('avFooter').innerHTML=f;
 
     openModal('appViewModal');
+}
+// The link a candidate opens on their OWN device to review and accept a
+// contract — campId+applicant id are both in the URL (not resolved from
+// the recipient's local session, since they may have never opened this
+// app before) so campistry_contract.html can look the offer up directly
+// with the public anon key, same anon-write posture as camp_state_kv
+// already has for the registration/staff-application forms.
+function _staffContractLink(id){
+    return window.location.origin+'/campistry_contract.html?camp='+encodeURIComponent(getCampId())+'&id='+encodeURIComponent(id);
+}
+function copyStaffContractLink(id){
+    var url=_staffContractLink(id);
+    if(navigator.clipboard){navigator.clipboard.writeText(url).then(function(){toast('Contract link copied')});}
+    else{prompt('Copy this link and send it to the candidate:',url);}
+}
+function openStaffContractModal(id){
+    var a=staffApplications[id]; if(!a)return;
+    var core=PC(); if(!core){toast('Payroll isn\'t available yet','error');return;}
+    var ctr=a.contract||{};
+    var h='<div class="fg"><label class="fl">Position</label><input class="fi" id="scPosition" value="'+esc(ctr.position||(a.positions||[]).join(', '))+'"></div>';
+    h+='<div class="fr"><div class="fg"><label class="fl">Pay Type</label><select id="scPayType" class="fs" onchange="CampistryMe.scPayTypeHint()">'+
+        core.PAY_TYPES.map(function(p){return '<option value="'+esc(p.id)+'"'+((ctr.payType||'hourly')===p.id?' selected':'')+'>'+esc(p.label)+'</option>'}).join('')+
+        '</select></div><div class="fg"><label class="fl" id="scRateLbl">Rate</label><input type="number" min="0" step="0.01" id="scRate" class="fi" value="'+(ctr.payRate||'')+'"></div></div>';
+    h+='<div class="fr">'+ff('Start Date','scStart',ctr.startDate||'','date')+ff('End Date','scEnd',ctr.endDate||'','date')+'</div>';
+    h+='<div class="fg"><label class="fl">Terms</label><textarea id="scTerms" class="fi" style="min-height:90px;resize:vertical" placeholder="Duties, housing, time off, anything else the offer should spell out…">'+(ctr.terms?esc(ctr.terms):'')+'</textarea></div>';
+    h+='<p style="font-size:.72rem;color:var(--s400);margin-top:-4px">Saving generates a link the candidate opens to review these terms and accept by typing their name — no account needed on their end.</p>';
+    showModal(ctr.position?'Edit Contract':'Set Up Contract',h,function(){ saveStaffContract(id); });
+    setTimeout(function(){var el=document.getElementById('scRateLbl');if(el){var t=core.PAY_TYPES.filter(function(p){return p.id===(ctr.payType||'hourly')})[0];el.textContent=t?t.rateLabel:'Rate';}},0);
+}
+function scPayTypeHint(){
+    var core=PC(); if(!core)return;
+    var sel=document.getElementById('scPayType'), lbl=document.getElementById('scRateLbl');
+    if(!sel||!lbl)return;
+    var t=core.PAY_TYPES.filter(function(p){return p.id===sel.value})[0];
+    lbl.textContent=t?t.rateLabel:'Rate';
+}
+function saveStaffContract(id){
+    var a=staffApplications[id]; if(!a)return;
+    function v(fid){var e=document.getElementById(fid);return e?(e.value||'').trim():''}
+    var position=v('scPosition');
+    if(!position){toast('Enter a position','error');return;}
+    var ctr=a.contract||{status:'none'};
+    ctr.position=position;
+    ctr.payType=v('scPayType')||'hourly';
+    ctr.payRate=parseFloat(v('scRate'))||0;
+    ctr.startDate=v('scStart');
+    ctr.endDate=v('scEnd');
+    ctr.terms=v('scTerms');
+    if(ctr.status!=='accepted'){
+        ctr.status='sent';
+        ctr.sentAt=new Date().toISOString();
+    }
+    a.contract=ctr;
+    save();
+    closeModal('dynModal');
+    viewStaffApp(id);
+    copyStaffContractLink(id);
+}
+// Runs on every Hiring page render — picks up contracts a candidate accepted
+// since the last render (accepted via campistry_contract.html, so this admin
+// session only learns about it on the next cloud sync/reload, not live) and
+// finishes the loop: writes the agreed pay into payroll.staff (creating a
+// record if this hire never had one) and checks off the existing "Signed
+// offer / contract" onboarding item, which used to be a manually-ticked box
+// with nothing behind it. Idempotent via contract.syncedToPayroll.
+function _syncAcceptedContractsToPayroll(){
+    var changed=false;
+    Object.values(staffApplications).forEach(function(a){
+        var ctr=a.contract;
+        if(!ctr||ctr.status!=='accepted'||ctr.syncedToPayroll)return;
+        var payFields={payType:ctr.payType||'hourly',payRate:parseFloat(ctr.payRate)||0,startDate:ctr.startDate||'',endDate:ctr.endDate||''};
+        var key=_staffJoinKey(a.email,a.name);
+        var idx=key?payroll.staff.findIndex(function(s){return _staffJoinKey(s.email,s.name)===key}):-1;
+        if(idx>=0){
+            Object.assign(payroll.staff[idx],payFields);
+        }else{
+            payroll.staff.push(Object.assign({
+                id:payroll.nextStaffId++,
+                name:a.name||((a.first||'')+' '+(a.last||'')),
+                email:a.email||'',phone:a.phone||'',role:ctr.position||(a.positions||[]).join(', '),
+                employmentType:'seasonal',isCampCounselor:true,
+                homeAddress:{},summerAddressSameAsHome:true,summerAddress:{},
+                expectedWeeklyHours:0,seasonWeeks:0,paymentMethod:'',
+                i9OnFile:false,w4OnFile:false,backgroundCheck:false,
+                youthCorps:{enrolled:false}
+            },payFields));
+        }
+        ctr.syncedToPayroll=true;
+        if(!a.onboarding)a.onboarding={};
+        a.onboarding.contract=true;
+        changed=true;
+    });
+    if(changed)save();
 }
 // opts.fromRow skips reopening the modal — a row's Advance/Decline button
 // should just update the table in place, the same way Registration's row
@@ -5130,13 +5275,24 @@ function _fcSwitchTab(prefix,tab){
 // slightly smaller/flatter nested card (used for the per-section field
 // groups inside "Field-by-Field Control").
 var _accSeq=0;
+// Modals that fully rebuild their body on every action (viewCamper,
+// viewStaffApp — a note/upload/status-change re-renders the whole thing to
+// pick up the new data) would otherwise reset every accordion to its
+// default open/closed state on each rebuild, snapping shut a card the user
+// just expanded. opts.key is a stable id (unlike the auto-incrementing
+// `id` below, which changes every render) that survives across rebuilds —
+// pass one whenever the card lives inside a modal that re-renders itself
+// mid-interaction. Callers that never re-render while open (the Form
+// Builder accordions) can skip it and keep relying on opts.open alone.
+var _accOpenState={};
 function _accCard(title,bodyHtml,opts){
     opts=opts||{};
     var id='acc'+(_accSeq++);
-    var open=!!opts.open;
+    var key=opts.key;
+    var open=(key&&Object.prototype.hasOwnProperty.call(_accOpenState,key))?_accOpenState[key]:!!opts.open;
     var sub=!!opts.sub;
     return '<div class="fcAcc" style="border:1px solid var(--s200);border-radius:'+(sub?'8px':'10px')+';margin-bottom:'+(sub?'6px':'10px')+';overflow:hidden;background:#fff">'
-        +'<div onclick="CampistryMe._toggleAcc(\''+id+'\')" style="display:flex;align-items:center;justify-content:space-between;gap:10px;padding:'+(sub?'9px 12px':'12px 16px')+';cursor:pointer;background:'+(sub?'var(--s50)':'#fff')+';user-select:none">'
+        +'<div onclick="CampistryMe._toggleAcc(\''+id+'\''+(key?',\''+je(key)+'\'':'')+')" style="display:flex;align-items:center;justify-content:space-between;gap:10px;padding:'+(sub?'9px 12px':'12px 16px')+';cursor:pointer;background:'+(sub?'var(--s50)':'#fff')+';user-select:none">'
         +'<span style="font-weight:700;font-size:'+(sub?'.8rem':'.88rem')+';color:var(--s800)">'+esc(title)+(opts.badge?' <span style="font-weight:600;color:var(--s400);font-size:.72rem">'+esc(opts.badge)+'</span>':'')+'</span>'
         +'<span style="display:flex;align-items:center;gap:10px;flex-shrink:0">'
         +(opts.actionHtml?'<span onclick="event.stopPropagation()">'+opts.actionHtml+'</span>':'')
@@ -5146,10 +5302,11 @@ function _accCard(title,bodyHtml,opts){
         +'<div id="'+id+'" style="display:'+(open?'block':'none')+';padding:14px 16px;border-top:1px solid var(--s200)">'+bodyHtml+'</div>'
         +'</div>';
 }
-function _toggleAcc(id){
+function _toggleAcc(id,key){
     var el=document.getElementById(id); if(!el)return;
     var chev=document.getElementById(id+'Chev');
     var willOpen=el.style.display==='none';
+    if(key)_accOpenState[key]=willOpen;
     el.style.display=willOpen?'block':'none';
     if(chev)chev.textContent=willOpen?'▾':'▸';
 }
@@ -11280,6 +11437,7 @@ window.CampistryMe={
     sendPayLink:sendPayLink,copyPayLink:copyPayLink,
     monthlyPlan:monthlyPlan,toggleFamilyAutopay:toggleFamilyAutopay,cancelMonthlyPlan:cancelMonthlyPlan,
     viewStaffApp:viewStaffApp,setStaffStatus:setStaffStatus,saveStaffNotes:saveStaffNotes,openAssignPositionModal:openAssignPositionModal,
+    openStaffContractModal:openStaffContractModal,saveStaffContract:saveStaffContract,scPayTypeHint:scPayTypeHint,copyStaffContractLink:copyStaffContractLink,
     toggleOnboard:toggleOnboard,cycleRef:cycleRef,deleteStaffApp:deleteStaffApp,addStaffApp:addStaffApp,
     copyStaffLink:copyStaffLink,exportStaffCSV:exportStaffCSV,
     setLeadFilter:setLeadFilter,viewLead:viewLead,setLeadStatus:setLeadStatus,saveLeadNotes:saveLeadNotes,
