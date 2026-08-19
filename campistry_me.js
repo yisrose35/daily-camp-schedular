@@ -1692,184 +1692,140 @@ function viewCamper(n){
     _camperDetailName=n;
     nav('camperdetail');
 }
+// A compact, always-visible grid card — the practical counterpart to
+// _accCard(): no click-to-expand, because the whole point of this page's
+// layout is fitting the record on one screen instead of hiding pieces of
+// it behind an accordion. opts.flag tints the card for the one section
+// (Medical) where missing/flagged data needs to catch the eye immediately.
+function _dpCard(title,bodyHtml,opts){
+    opts=opts||{};
+    return '<div class="me-card" style="padding:13px 15px;'+(opts.flag?'border-left:3px solid var(--err)':'')+'">'
+        +'<div style="display:flex;align-items:center;justify-content:space-between;gap:8px;margin-bottom:7px">'
+        +'<div style="font-size:.7rem;font-weight:700;color:var(--s500);text-transform:uppercase;letter-spacing:.05em">'+esc(title)+(opts.badge?' <span style="font-weight:600;color:var(--s400)">'+esc(opts.badge)+'</span>':'')+'</div>'
+        +(opts.actionHtml||'')
+        +'</div>'+bodyHtml+'</div>';
+}
 function renderCamperDetailPage(){
     var c=document.getElementById('page-camperdetail');
     if(!c)return;
     var n=_camperDetailName;
     var d=n?roster[n]:null;
     if(!d){
-        c.innerHTML='<div style="max-width:720px;margin:0 auto"><div class="me-empty"><h3>Camper not found</h3><p>They may have been deleted or renamed.</p><button class="me-btn me-btn--sec" onclick="CampistryMe.nav(\'campers\')">← Back to Roster</button></div></div>';
+        c.innerHTML='<div class="me-empty"><h3>Camper not found</h3><p>They may have been deleted or renamed.</p><button class="me-btn me-btn--sec" onclick="CampistryMe.nav(\'campers\')">← Back to Roster</button></div>';
         return;
     }
     var idStr=d.camperId?String(d.camperId).padStart(4,'0'):'—';
-
-    var altDisplay=[d.altFirstName,d.altLastName].filter(Boolean).join(' ');
-    var altHtml=altDisplay?'<div style="font-size:.9rem;color:var(--s500);margin-top:2px">'+esc(altDisplay)+'</div>':'';
-    // A centered profile card — colored banner + a large initials avatar
-    // overlapping it — instead of a plain left-aligned title row, so this
-    // reads as a real record page (closer to what CampMinder's camper
-    // profile looks like) rather than a form dumped on a blank page.
-    var h='<button class="me-btn me-btn--ghost me-btn--sm" style="margin-bottom:14px" onclick="CampistryMe.nav(\'campers\')">← Back to Roster</button>';
-    h+='<div class="me-card" style="overflow:hidden;margin-bottom:18px;box-shadow:0 1px 3px rgba(15,23,42,.07),0 1px 2px rgba(15,23,42,.04)">';
-    h+='<div style="height:76px;background:linear-gradient(135deg,'+avc(n)+',var(--me))"></div>';
-    h+='<div style="padding:0 28px 26px;text-align:center;margin-top:-42px">';
-    h+='<div style="width:84px;height:84px;border-radius:20px;background:'+avc(n)+';color:#fff;display:inline-flex;align-items:center;justify-content:center;font-size:1.9rem;font-weight:800;border:4px solid #fff;box-shadow:0 2px 10px rgba(15,23,42,.15)">'+esc(ini(n))+'</div>';
-    h+='<h2 style="margin-top:14px;font-size:1.5rem;font-weight:800;color:var(--s900)">'+esc(n)+'</h2>'+altHtml;
-    h+='<div style="margin-top:9px;display:flex;justify-content:center;gap:6px;flex-wrap:wrap"><span class="badge badge-gray" style="font-family:monospace">#'+esc(idStr)+'</span>'+(d.division?dtag(d.division):'')+(d.bunk?' '+bdg(d.bunk,'gray'):'')+'</div>';
-    h+='<div style="margin-top:20px;display:flex;justify-content:center;gap:8px">'
-        +'<button class="me-btn me-btn--pri" onclick="CampistryMe.editCamper(\''+je(n)+'\')">Edit Camper</button>'
-        +'<button class="me-btn me-btn--sm" style="background:var(--err);color:#fff;border:none" onclick="CampistryMe.deleteCamper(\''+je(n)+'\')">Delete</button>'
-        +'</div>';
-    h+='</div></div>';
-
-    var b='';
-
-    // ── Snapshot — always visible, no click required. Everything else below
-    // is a record-level detail (docs, aid, notes, history...) that piled up
-    // on this one profile over time; those move into collapsed-by-default
-    // accordions (same _accCard()/_toggleAcc() component the Form Builder
-    // uses) so opening a camper shows "who is this" first, not a full-page
-    // scroll of every field ever collected.
-    b+='<div class="cv-sec">Personal Information</div>';
-    b+=cvR('Full Name',n);
     var altName=[d.altFirstName,d.altLastName].filter(Boolean).join(' ');
-    if(altName) b+=cvR('Alternate Name','<span style="font-size:1rem">'+esc(altName)+'</span>');
-    b+=cvR('Camper ID','#'+idStr);
+
+    // Compact header — same small-avatar-next-to-title shape every other
+    // page in Me uses (.sec-hd), not a decorative banner, so it costs as
+    // little vertical space as possible before the actual record starts.
+    var h='<button class="me-btn me-btn--ghost me-btn--sm" style="margin-bottom:10px" onclick="CampistryMe.nav(\'campers\')">← Back to Roster</button>';
+    h+='<div class="sec-hd"><div style="display:flex;align-items:center;gap:12px">'
+        +av(n,'l')
+        +'<div><h2 class="sec-title">'+esc(n)+(altName?' <span style="font-weight:500;color:var(--s400);font-size:.85rem">('+esc(altName)+')</span>':'')+'</h2>'
+        +'<p class="sec-desc">#'+esc(idStr)+(d.division?' · '+esc(d.division):'')+(d.bunk?' · '+esc(d.bunk):'')+'</p></div>'
+        +'</div><div class="sec-actions">'
+        +'<button class="me-btn me-btn--sec me-btn--sm" onclick="CampistryMe.reEnrollCamper(\''+je(n)+'\')">Re-Enroll</button>'
+        +'<button class="me-btn me-btn--sec" onclick="CampistryMe.editCamper(\''+je(n)+'\')">Edit</button>'
+        +'<button class="me-btn me-btn--sm" style="background:var(--err);color:#fff;border:none" onclick="CampistryMe.deleteCamper(\''+je(n)+'\')">Delete</button>'
+        +'</div></div>';
+
+    var hasMedFlags=!!(d.allergies||d.medications||d.dietary||d.medicalNotes);
+    if(hasMedFlags){
+        h+='<div style="display:flex;align-items:center;gap:8px;background:rgba(220,38,38,.06);border:1px solid rgba(220,38,38,.2);border-radius:var(--r);padding:8px 12px;margin-bottom:14px;font-size:.8rem;font-weight:600;color:var(--err)">⚠ '+esc([d.allergies?'Allergies':'',d.medications?'Medications':''].filter(Boolean).join(' · ')||'Medical flags')+' on file — see Medical Summary</div>';
+    }
+
+    // ── Everything below is a grid of small always-open cards, not
+    // accordions — the goal is to get as much of the record on screen at
+    // once as a normal desktop viewport allows, not to hide detail behind
+    // clicks. Columns pack as many 260px-minimum cards per row as fit.
+    var g='<div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(260px,1fr));gap:12px;align-items:start">';
+
+    var personal=cvR('Camper ID','#'+idStr);
     if(d.dob){
         var dobStr=new Date(d.dob+'T12:00:00').toLocaleDateString('en-US',{month:'long',day:'numeric',year:'numeric'})+' (age '+age(d.dob)+')';
         var hebDate=toHebrewDate(d.dob);
         if(hebDate) dobStr+=' · <span style="font-size:.85rem;color:var(--me)">'+hebDate+'</span>';
-        b+=cvR('Date of Birth',dobStr);
+        personal+=cvR('Date of Birth',dobStr);
     }
-    b+=cvR('Gender',d.gender);
-    b+=cvR('School',d.school);
-    b+=cvR('School Grade',d.schoolGrade);
-    b+=cvR('Teacher',d.teacher);
+    personal+=cvR('Gender',d.gender)+cvR('School',d.school)+cvR('School Grade',d.schoolGrade)+cvR('Teacher',d.teacher);
+    g+=_dpCard('Personal Information',personal);
 
-    b+='<div class="cv-sec">Camp Assignment</div>';
-    b+=cvR('Division',d.division);
-    b+=cvR('Grade',d.grade);
-    b+=cvR('Bunk',d.bunk);
+    var camp=cvR('Division',d.division)+cvR('Grade',d.grade)+cvR('Bunk',d.bunk);
     var teams=d.teams||{};var teamKeys=Object.keys(teams);
-    if(d.team&&!teamKeys.length)b+=cvR('Team',d.team);
-    else teamKeys.forEach(function(lg){b+=cvR(lg,teams[lg])});
-    if(d.camperType)b+=cvR('Camper Type',esc(d.camperType));
-    if(d.swimLevel)b+=cvR('Swim Level',esc(d.swimLevel));
-    if(d.shirtSize)b+=cvR('Shirt Size',esc(d.shirtSize));
-
-    // Bunk Requests — merged from wherever they came in: office-entered on
-    // this profile, the original application, or the Post-Acceptance Form.
-    // Same data Bunk Builder uses, so what a head counselor sees here always
-    // matches what the auto-generator actually acted on. Kept in the always-
-    // visible snapshot (not an accordion) since it directly affects bunking.
+    if(d.team&&!teamKeys.length)camp+=cvR('Team',d.team);
+    else teamKeys.forEach(function(lg){camp+=cvR(lg,teams[lg])});
+    if(d.camperType)camp+=cvR('Camper Type',esc(d.camperType));
+    if(d.swimLevel)camp+=cvR('Swim Level',esc(d.swimLevel));
+    if(d.shirtSize)camp+=cvR('Shirt Size',esc(d.shirtSize));
     var bunkReq=_camperBunkRequests(n);
-    if(bunkReq.friends.length||bunkReq.avoid.length){
-        b+='<div class="cv-sec">Bunk Requests</div>';
-        if(bunkReq.friends.length)b+=cvR('Wants to bunk with',esc(bunkReq.friends.join(', ')));
-        if(bunkReq.avoid.length)b+=cvR('Do not bunk with','<span class="cv-warn">'+esc(bunkReq.avoid.join(', '))+'</span>');
-    }
+    if(bunkReq.friends.length)camp+=cvR('Wants to bunk with',esc(bunkReq.friends.join(', ')));
+    if(bunkReq.avoid.length)camp+=cvR('Do not bunk with','<span class="cv-warn">'+esc(bunkReq.avoid.join(', '))+'</span>');
+    g+=_dpCard('Camp Assignment',camp);
 
-    // Medical flag — a one-line banner up top so an allergy/medication isn't
-    // missed just because it's inside a closed accordion below; the full
-    // Medical Summary accordion (further down) still has every field.
-    var hasMedFlags=!!(d.allergies||d.medications||d.dietary||d.medicalNotes);
-    if(hasMedFlags){
-        b+='<div style="display:flex;align-items:center;gap:8px;background:rgba(220,38,38,.06);border:1px solid rgba(220,38,38,.2);border-radius:var(--r);padding:9px 12px;margin-top:12px;font-size:.8rem;font-weight:600;color:var(--err)">⚠ Medical flags on file — see Medical Summary below</div>';
-    }
-
-    b+='<div style="margin-top:14px">';
-
-    // Family & Contact
-    var fcBody='<div class="cv-sec" style="margin-top:0">Parent / Guardian</div>';
+    var fam='';
     if(d.parent1Name){
-        fcBody+=cvR('Name',d.parent1Name);
-        if(d.parent1Phone)fcBody+=cvR('Phone','<a href="tel:'+esc(d.parent1Phone)+'" style="color:var(--me);font-weight:600">'+esc(d.parent1Phone)+'</a>');
-        if(d.parent1Email)fcBody+=cvR('Email','<a href="mailto:'+esc(d.parent1Email)+'" style="color:var(--me)">'+esc(d.parent1Email)+'</a>');
+        fam+=cvR('Parent',d.parent1Name);
+        if(d.parent1Phone)fam+=cvR('Phone','<a href="tel:'+esc(d.parent1Phone)+'" style="color:var(--me);font-weight:600">'+esc(d.parent1Phone)+'</a>');
+        if(d.parent1Email)fam+=cvR('Email','<a href="mailto:'+esc(d.parent1Email)+'" style="color:var(--me)">'+esc(d.parent1Email)+'</a>');
     }else{
-        fcBody+='<div style="font-size:.8rem;color:var(--s400);font-style:italic;padding:2px 0">No parent info on file</div>';
+        fam+='<div style="font-size:.8rem;color:var(--s400);font-style:italic;padding:2px 0">No parent info on file</div>';
     }
-    fcBody+='<div class="cv-sec">Emergency Contact</div>';
     if(d.emergencyName){
-        fcBody+=cvR('Name',d.emergencyName+(d.emergencyRel?' ('+d.emergencyRel+')':''));
-        if(d.emergencyPhone)fcBody+=cvR('Phone','<a href="tel:'+esc(d.emergencyPhone)+'" style="color:var(--me);font-weight:600">'+esc(d.emergencyPhone)+'</a>');
+        fam+=cvR('Emergency',d.emergencyName+(d.emergencyRel?' ('+d.emergencyRel+')':''));
+        if(d.emergencyPhone)fam+=cvR('Phone','<a href="tel:'+esc(d.emergencyPhone)+'" style="color:var(--me);font-weight:600">'+esc(d.emergencyPhone)+'</a>');
     }else{
-        fcBody+='<div style="font-size:.8rem;color:var(--err);font-style:italic;padding:2px 0">⚠ No emergency contact on file</div>';
+        fam+='<div style="font-size:.8rem;color:var(--err);font-style:italic;padding:2px 0">⚠ No emergency contact</div>';
     }
-    fcBody+='<div class="cv-sec">Home Address</div>';
+    g+=_dpCard('Family & Emergency Contact',fam);
+
+    var addr='';
     if(d.street){
-        fcBody+=cvR('Street',d.street);
-        fcBody+=cvR('City',d.city);
-        fcBody+=cvR('State',d.state);
-        fcBody+=cvR('ZIP',d.zip);
+        addr+=cvR('Home',[d.street,d.city,d.state,d.zip].filter(Boolean).join(', '));
         var fullAddr=[d.street,d.city,d.state,d.zip].filter(Boolean).join(', ');
-        fcBody+='<a href="https://maps.google.com/?q='+encodeURIComponent(fullAddr)+'" target="_blank" style="display:inline-flex;align-items:center;gap:4px;font-size:.75rem;font-weight:600;color:var(--me);margin-top:4px;text-decoration:none">Open in Maps →</a>';
+        addr+='<a href="https://maps.google.com/?q='+encodeURIComponent(fullAddr)+'" target="_blank" style="display:inline-flex;font-size:.75rem;font-weight:600;color:var(--me);margin:2px 0 6px;text-decoration:none">Open in Maps →</a>';
     }else{
-        fcBody+='<div style="font-size:.8rem;color:var(--s400);font-style:italic;padding:2px 0">No address on file</div>';
+        addr+='<div style="font-size:.8rem;color:var(--s400);font-style:italic;padding:2px 0">No home address on file</div>';
     }
-    fcBody+='<div class="cv-sec">Summer Address</div>';
-    if(d.summerSameAsHome!==false){
-        fcBody+='<div style="font-size:.8rem;color:var(--s400);padding:2px 0">Same as home</div>';
-    }else if(d.summerStreet){
-        fcBody+=cvR('Street',d.summerStreet);
-        fcBody+=cvR('City',d.summerCity);
-        fcBody+=cvR('State',d.summerState);
-        fcBody+=cvR('ZIP',d.summerZip);
-        fcBody+=cvR('Phone',d.summerPhone);
-        var summerAddr=[d.summerStreet,d.summerCity,d.summerState,d.summerZip].filter(Boolean).join(', ');
-        fcBody+='<a href="https://maps.google.com/?q='+encodeURIComponent(summerAddr)+'" target="_blank" style="display:inline-flex;align-items:center;gap:4px;font-size:.75rem;font-weight:600;color:var(--me);margin-top:4px;text-decoration:none">Open in Maps →</a>';
-    }else{
-        fcBody+='<div style="font-size:.8rem;color:var(--s400);font-style:italic;padding:2px 0">No summer address on file</div>';
+    if(d.summerSameAsHome===false&&d.summerStreet){
+        addr+=cvR('Summer',[d.summerStreet,d.summerCity,d.summerState,d.summerZip].filter(Boolean).join(', '));
+        if(d.summerPhone)addr+=cvR('Summer Phone',d.summerPhone);
     }
-    b+=_accCard('Family & Contact',fcBody,{open:!d.parent1Name||!d.emergencyName,key:'cv_'+n+'_family'});
+    g+=_dpCard('Address',addr);
 
-    // Medical Summary — auto-open when the snapshot banner above flagged
-    // something, so the flag is never one click away from its own detail.
-    var medBody='';
-    if(d.allergies)medBody+=cvR('Allergies',d.allergies,true);
-    if(d.medications)medBody+=cvR('Medications',d.medications,true);
-    if(d.dietary)medBody+=cvR('Dietary',d.dietary);
-    if(d.medicalNotes)medBody+=cvR('Medical Notes',esc(d.medicalNotes));
-    if(!hasMedFlags)medBody+='<div style="font-size:.8rem;color:var(--ok);padding:2px 0">✓ No medical flags</div>';
-    if(d.physician)medBody+=cvR('Physician',esc(d.physician)+(d.physicianPhone?' · '+esc(d.physicianPhone):''));
-    if(d.insuranceProvider)medBody+=cvR('Insurance',esc(d.insuranceProvider)+(d.insurancePolicy?' · #'+esc(d.insurancePolicy):''));
-    medBody+='<div class="cv-health" onclick="window.location.href=\'campistry_health.html\'">Open in Campistry Health →</div>';
-    b+=_accCard('Medical Summary',medBody,{open:hasMedFlags,key:'cv_'+n+'_medical'});
+    var med='';
+    if(d.allergies)med+=cvR('Allergies',d.allergies,true);
+    if(d.medications)med+=cvR('Medications',d.medications,true);
+    if(d.dietary)med+=cvR('Dietary',d.dietary);
+    if(d.medicalNotes)med+=cvR('Notes',esc(d.medicalNotes));
+    if(!hasMedFlags)med+='<div style="font-size:.8rem;color:var(--ok);padding:2px 0">✓ No medical flags</div>';
+    if(d.physician)med+=cvR('Physician',esc(d.physician)+(d.physicianPhone?' · '+esc(d.physicianPhone):''));
+    if(d.insuranceProvider)med+=cvR('Insurance',esc(d.insuranceProvider)+(d.insurancePolicy?' · #'+esc(d.insurancePolicy):''));
+    med+='<div class="cv-health" onclick="window.location.href=\'campistry_health.html\'">Open in Campistry Health →</div>';
+    g+=_dpCard('Medical Summary',med,{flag:hasMedFlags});
 
-    // Documents
     var docs=(d.documents||[]);
-    b+=_accCard('Documents',renderDocuments(n),{badge:docs.length?String(docs.length):'',actionHtml:'<button class="me-btn me-btn--ghost me-btn--sm" onclick="CampistryMe.uploadDocument(\''+je(n)+'\')">+ Upload</button>',key:'cv_'+n+'_docs'});
+    g+=_dpCard('Documents',renderDocuments(n),{badge:docs.length?String(docs.length):'',actionHtml:'<button class="me-btn me-btn--ghost me-btn--sm" onclick="CampistryMe.uploadDocument(\''+je(n)+'\')">+ Upload</button>'});
 
-    // Financial Aid
     var schols=d.scholarships||[];
     var aidBody=schols.length?schols.map(function(s){return cvR(s.type,fm(s.amount)+(s.source?' — '+s.source:'')+(s.date?' ('+s.date+')':''))}).join(''):'<div style="font-size:.8rem;color:var(--s400);font-style:italic">No aid on file</div>';
-    b+=_accCard('Financial Aid',aidBody,{badge:schols.length?String(schols.length):'',actionHtml:'<button class="me-btn me-btn--ghost me-btn--sm" onclick="CampistryMe.addScholarship(\''+je(n)+'\')">+ Award</button>',key:'cv_'+n+'_aid'});
+    g+=_dpCard('Financial Aid',aidBody,{badge:schols.length?String(schols.length):'',actionHtml:'<button class="me-btn me-btn--ghost me-btn--sm" onclick="CampistryMe.addScholarship(\''+je(n)+'\')">+ Award</button>'});
 
-    // Custom Fields
     loadCustomFields();
     if(customFields.length){
         var cfBody=customFields.map(function(cf){return cvR(cf.label,d['cf_'+cf.id]||'<span style="color:var(--s300)">—</span>')}).join('');
-        b+=_accCard('Custom Fields',cfBody,{key:'cv_'+n+'_custom'});
+        g+=_dpCard('Custom Fields',cfBody);
     }
 
-    // Notes & Timeline
     var noteCount=(d.notes||[]).length;
-    b+=_accCard('Notes & Timeline',renderCamperTimeline(n),{badge:noteCount?String(noteCount):'',actionHtml:'<button class="me-btn me-btn--ghost me-btn--sm" onclick="CampistryMe.addCamperNote(\''+je(n)+'\')">+ Add Note</button>',key:'cv_'+n+'_notes'});
+    g+=_dpCard('Notes & Timeline',renderCamperTimeline(n),{badge:noteCount?String(noteCount):'',actionHtml:'<button class="me-btn me-btn--ghost me-btn--sm" onclick="CampistryMe.addCamperNote(\''+je(n)+'\')">+ Add Note</button>'});
 
-    // Change History (audit trail of edits) — least-checked section, stays closed
-    b+=_accCard('History',renderCamperHistory(n),{key:'cv_'+n+'_history'});
+    g+=_dpCard('History',renderCamperHistory(n));
 
-    b+='</div>';
+    g+='</div>';
 
-    // Quick Actions — always visible; these are buttons, not detail to hide.
-    b+='<div class="cv-sec">Quick Actions</div>';
-    b+='<div style="display:flex;gap:6px;flex-wrap:wrap">';
-    b+='<button class="me-btn me-btn--pri me-btn--sm" onclick="CampistryMe.reEnrollCamper(\''+je(n)+'\')">Re-Enroll</button>';
-    b+='<button class="me-btn me-btn--sec me-btn--sm" onclick="CampistryMe.addCamperNote(\''+je(n)+'\')">Add Note</button>';
-    b+='<button class="me-btn me-btn--sec me-btn--sm" onclick="CampistryMe.uploadDocument(\''+je(n)+'\')">Upload Doc</button>';
-    b+='<button class="me-btn me-btn--sec me-btn--sm" onclick="CampistryMe.addScholarship(\''+je(n)+'\')">Award Aid</button>';
-    b+='</div>';
-
-    c.innerHTML='<div style="max-width:720px;margin:0 auto">'+h+'<div class="me-card" style="padding:24px 28px;box-shadow:0 1px 3px rgba(15,23,42,.07),0 1px 2px rgba(15,23,42,.04)">'+b+'</div></div>';
+    c.innerHTML='<div style="max-width:1400px;margin:0 auto">'+h+g+'</div>';
 }
 function cvR(l,v,w){if(!v)return'';return'<div class="cv-row"><span class="cv-lbl">'+esc(l)+'</span><span class="cv-val'+(w?' cv-warn':'')+'">'+v+'</span></div>'}
 
