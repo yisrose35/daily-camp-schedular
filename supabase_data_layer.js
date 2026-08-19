@@ -262,8 +262,9 @@
         return record;
     }
 
-    async function reviewParentPickupRequest(id, status) {
+    async function reviewParentPickupRequest(id, status, message) {
         var changes = { status: status, reviewed_at: nowIso(), reviewed_by: userId() };
+        if (message != null) changes.office_message = message;
         if (USE_SUPABASE) {
             var db = sbClient();
             if (db) {

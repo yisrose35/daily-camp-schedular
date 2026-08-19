@@ -2872,53 +2872,64 @@ function submitPickup(type) {
         localStorage.setItem(PARENT_REQ_KEY, JSON.stringify(store));
     } catch(e){}
 
-    // Cloud write so it reaches Campistry Live across devices. A late/pickup
-    // request IS a notification to the camp office, so it rides the existing
-    // parent->office message channel (link_messages, submit_message_reply).
-    // Live reads link_messages and surfaces the pickup-typed ones on its Parent
-    // Requests page; the office also sees it in the Link inbox. The subject is
-    // "<Label> — <Camper>" so Live can recognise and parse it. (No new table
-    // needed — works today; migration 025 is an optional dedicated channel.)
+    // Cloud write via the dedicated pickup-requests channel (submit_pickup_request,
+    // migration 025 + 061) so it reaches Campistry Live's Parent Requests page as
+    // a real reviewable row (status / reviewed_by / office_message), not a
+    // subject-line guess parsed out of the general inbox.
+    var histEntry = {id:reqId,type:type,label:labels[type],icon:icons[type],time:timeStr,status:'Pending',cloudId:null};
+    pickupRequests.unshift(histEntry);
     try {
-        var db = window._parentDB;
-        if (db && db.rpc) {
-            var _fieldLabels = {
-                pickupTime:'Pickup time', pickupBy:'Picked up by', relationship:'Relationship',
-                newPickupPerson:'New pickup person', phone:'Phone',
-                friendName:'Going with friend', friendParentName:"Friend's parent", friendParentPhone:"Friend's parent phone",
-                arrivalTime:'Arriving at', arrivedAt:'Dropped off at', reason:'Reason', notes:'Notes'
-            };
-            var lines = [];
-            Object.keys(fields).forEach(function(k){ if(fields[k]) lines.push((_fieldLabels[k]||k)+': '+fields[k]); });
-            var body = labels[type] + ' request for ' + (child.name||'') + (child.bunk?(' ('+child.bunk+')'):'') + '.'
-                       + (lines.length ? '\n\n' + lines.join('\n') : '');
-            var subject = labels[type] + ' — ' + (child.name||'');
-            var send = window._pRpc ? window._pRpc('submit_message_reply', { p_thread_id:null, p_subject:subject, p_body:body }, child.campId)
-                                    : db.rpc('submit_message_reply', { p_thread_id:null, p_subject:subject, p_body:body, p_camp_id:child.campId||(parent&&parent.campId)||null });
-            send.then(function(res){
+        var call = window._pRpc
+            ? window._pRpc('submit_pickup_request', { p_type:type, p_camper_name:child.name||'', p_details:fields, p_label:labels[type] }, child.campId)
+            : (window._parentDB && window._parentDB.rpc('submit_pickup_request', { p_type:type, p_camper_name:child.name||'', p_details:fields, p_label:labels[type], p_camp_id:child.campId||(parent&&parent.campId)||null }));
+        if (call) {
+            call.then(function(res){
                 if (res.error || !res.data || !res.data.success) {
                     console.warn('[Parent] pickup request cloud submit failed:', res.error ? res.error.message : (res.data||{}).error);
+                    return;
                 }
+                histEntry.cloudId = res.data.id;
+                renderPickupHistory();
             });
         }
     } catch(e){ console.warn('[Parent] pickup cloud submit error:', e); }
 
-    pickupRequests.unshift({id:reqId,type:type,label:labels[type],icon:icons[type],time:timeStr,status:'Pending'});
     renderPickupHistory();
     toast(labels[type]+' request sent to camp office!');
 }
+// Poll the office's decision on this parent's own pickup requests — RLS
+// (ppr_parent_read, migration 025) already scopes the read to rows tied to
+// this parent's invite, so a plain select is safe here.
+function pollPickupStatuses() {
+    if (!pickupRequests.some(function(r){ return r.cloudId && r.status === 'Pending'; })) return;
+    var db = window._parentDB; if (!db) return;
+    var cid = (typeof parent!=='undefined'&&parent)?parent.campId:null;
+    db.from('parent_pickup_requests').select('id,status,office_message').eq('camp_id', cid)
+        .then(function(res){
+            if (res.error || !res.data) return;
+            var byId = {}; res.data.forEach(function(r){ byId[r.id] = r; });
+            var changed = false;
+            pickupRequests.forEach(function(r){
+                var row = r.cloudId && byId[r.cloudId];
+                if (row && (row.status !== r.status || row.office_message !== r.officeMessage)) {
+                    r.status = row.status; r.officeMessage = row.office_message || '';
+                    changed = true;
+                }
+            });
+            if (changed) renderPickupHistory();
+        });
+}
+setInterval(pollPickupStatuses, 30000);
+function _pickupEsc(s){ if(s==null)return''; var d=document.createElement('div'); d.textContent=s; return d.innerHTML; }
 function renderPickupHistory() {
     var el = document.getElementById('pickupHistory');
     if (!pickupRequests.length) { el.innerHTML='<div class="lk-empty"><div class="lk-empty-icon"><svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/></svg></div><h3>No requests today</h3></div>'; return; }
-    // Sync live status from shared store
-    var store = [];
-    try { store = JSON.parse(localStorage.getItem(PARENT_REQ_KEY)||'[]'); } catch(e){}
     el.innerHTML = '';
     var statusBadge={Pending:'badge-warn',Confirmed:'badge-info',Released:'badge-ok',Declined:'badge-error'};
     pickupRequests.forEach(function(r){
-        var live = store.find(function(s){return s.id===r.id;});
-        var status = (live&&live.status)||r.status;
-        el.innerHTML += '<div class="lk-hist-item"><div class="lk-hist-icon">'+r.icon+'</div><div class="lk-hist-info"><div class="lk-hist-label">'+r.label+'</div><div class="lk-hist-time">Submitted at '+r.time+'</div></div><span class="badge '+(statusBadge[status]||'badge-neutral')+'">'+status+'</span></div>';
+        el.innerHTML += '<div class="lk-hist-item"><div class="lk-hist-icon">'+r.icon+'</div><div class="lk-hist-info"><div class="lk-hist-label">'+r.label+'</div><div class="lk-hist-time">Submitted at '+r.time+'</div>'
+            + (r.officeMessage ? '<div class="lk-hist-office-msg">Office: “'+_pickupEsc(r.officeMessage)+'”</div>' : '')
+            + '</div><span class="badge '+(statusBadge[r.status]||'badge-neutral')+'">'+r.status+'</span></div>';
     });
 }
 

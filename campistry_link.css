@@ -1047,6 +1047,7 @@ body {
 .lk-hist-info { flex: 1; }
 .lk-hist-label { font-size: .84rem; font-weight: 600; color: var(--slate-800); }
 .lk-hist-time { font-size: .71rem; color: var(--text-muted); }
+.lk-hist-office-msg { font-size: .74rem; color: var(--slate-600); margin-top: 3px; font-style: italic; }
 
 /* DATE NAV BUTTON */
 .lk-date-nav-btn {

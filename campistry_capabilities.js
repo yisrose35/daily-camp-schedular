@@ -138,7 +138,6 @@
         {
             key: 'live', label: 'Campistry Live', hint: 'Attendance and day-of ops',
             sections: [
-                { key: 'dashboard',        label: 'Dashboard',        desc: 'Live overview' },
                 { key: 'roll-call',        label: 'Roll Call',        desc: 'Taking attendance' },
                 { key: 'absences',         label: 'Absences',         desc: 'Absence log' },
                 { key: 'bunk-tracker',     label: 'Bunk Tracker',     desc: 'Where each bunk is now' },

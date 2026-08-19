@@ -289,7 +289,7 @@ test('Go: setup is sensitive because it holds the API keys', () => {
 
 test('Live: roll call can be watched without being marked', () => {
     const watcher = staff({ overrides: {
-        'live.dashboard': 'view', 'live.roll-call': 'view',
+        'live.roll-call': 'view',
         'live.bunk-tracker': 'view', 'live.absences': 'none'
     } });
     assert.ok(C.can('live.roll-call', watcher));

@@ -33,11 +33,10 @@
 <!-- ═══ SIDEBAR ═══ -->
 <div id="sidebarBackdrop" class="sidebar-backdrop"></div>
 <aside id="sidebar" class="sidebar">
-    <button class="sidebar-item active" data-page="dashboard"><span class="sidebar-dot"></span> Dashboard</button>
     <button class="sidebar-item" data-page="activity-board"><span class="sidebar-dot"></span> Activity Board</button>
     <button class="sidebar-item" data-page="bunk-tracker"><span class="sidebar-dot"></span> Bunk Tracker</button>
     <div class="sidebar-label">Attendance</div>
-    <button class="sidebar-item" data-page="roll-call"><span class="sidebar-dot"></span> Roll Call <span class="sb-badge" id="sbAbsentCount">0</span></button>
+    <button class="sidebar-item active" data-page="roll-call"><span class="sidebar-dot"></span> Roll Call <span class="sb-badge" id="sbAbsentCount">0</span></button>
     <button class="sidebar-item" data-page="absences"><span class="sidebar-dot"></span> Absences &amp; Exceptions</button>
     <button class="sidebar-item" data-page="early-pickup"><span class="sidebar-dot"></span> Early Pickups</button>
     <div class="sidebar-label">Reports</div>
@@ -49,41 +48,6 @@
 
 <!-- ═══ MAIN CONTENT ═══ -->
 <div class="app-content">
-
-<!-- ── DASHBOARD ── -->
-<div id="page-dashboard" class="live-page active">
-    <div class="page-hero">
-        <div class="page-hero-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="22" height="22"><rect x="3" y="3" width="7" height="7"/><rect x="14" y="3" width="7" height="7"/><rect x="14" y="14" width="7" height="7"/><rect x="3" y="14" width="7" height="7"/></svg></div>
-        <div><h1>Dashboard</h1><p>Live camp-wide attendance and activity overview</p></div>
-    </div>
-    <div class="page-header">
-        <div><div class="page-subtitle" id="dashDateLine">Loading...</div></div>
-        <div class="page-actions">
-            <button class="btn btn-secondary" onclick="CampistryLive.refresh()"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M1 4v6h6"/><path d="M23 20v-6h-6"/><path d="M20.49 9A9 9 0 005.64 5.64L1 10m22 4l-4.64 4.36A9 9 0 013.51 15"/></svg> Refresh</button>
-            <button class="btn btn-primary" onclick="CampistryLive.openAbsenceModal()"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M16 21v-2a4 4 0 00-4-4H5a4 4 0 00-4-4v2"/><circle cx="8.5" cy="7" r="4"/><line x1="18" y1="8" x2="23" y2="13"/><line x1="23" y1="8" x2="18" y2="13"/></svg> Mark Absent</button>
-        </div>
-    </div>
-
-    <!-- Stats row -->
-    <div class="stats-grid">
-        <div class="stat-card"><div class="stat-icon blue"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M17 21v-2a4 4 0 00-4-4H5a4 4 0 00-4-4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 00-3-3.87"/><path d="M16 3.13a4 4 0 010 7.75"/></svg></div><div><div class="stat-value" id="statTotalCampers">—</div><div class="stat-label">Total Campers</div></div></div>
-        <div class="stat-card"><div class="stat-icon green"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="20 6 9 17 4 12"/></svg></div><div><div class="stat-value" id="statPresent">—</div><div class="stat-label">Present Today</div></div></div>
-        <div class="stat-card"><div class="stat-icon red"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><line x1="15" y1="9" x2="9" y2="15"/><line x1="9" y1="9" x2="15" y2="15"/></svg></div><div><div class="stat-value" id="statAbsent">—</div><div class="stat-label">Absent</div></div></div>
-        <div class="stat-card"><div class="stat-icon amber"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z"/></svg></div><div><div class="stat-value" id="statCurrentPeriod">—</div><div class="stat-label">Current Period</div></div></div>
-    </div>
-
-    <!-- Live activity grid -->
-    <div class="card">
-        <div class="card-header"><h2>Right Now — Activity Overview</h2><span class="period-label" id="currentPeriodLabel"></span></div>
-        <div class="card-body" id="activityOverviewBody"><div class="empty-state">Loading schedule data...</div></div>
-    </div>
-
-    <!-- Division summary -->
-    <div class="card">
-        <div class="card-header"><h2>Division Summary</h2></div>
-        <div class="card-body" id="divisionSummaryBody"><div class="empty-state">Loading...</div></div>
-    </div>
-</div>
 
 <!-- ── ACTIVITY BOARD ── -->
 <div id="page-activity-board" class="live-page">
@@ -113,7 +77,7 @@
 </div>
 
 <!-- ── ROLL CALL ── -->
-<div id="page-roll-call" class="live-page">
+<div id="page-roll-call" class="live-page active">
     <div class="page-hero">
         <div class="page-hero-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="22" height="22"><polyline points="9 11 12 14 22 4"/><path d="M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11"/></svg></div>
         <div><h1>Morning Roll Call</h1><p>Mark attendance by division — who's here today?</p></div>
@@ -320,45 +284,37 @@
 })();
 </script>
 <script>
-// ── Parent Requests bridge — reads from campistry_parent_requests_v1 ──────────
+// ── Parent Requests bridge — reads directly from parent_pickup_requests ──────
+// (migrations 025 + 061). Cached locally under campistry_parent_requests_v1
+// so the page isn't blank while a fetch is in flight / offline.
 var ParentRequests = (function(){
     var PKEY = 'campistry_parent_requests_v1';
     var LIVE_KEY = 'campistry_live_v1';
+    var CONFIRM_CANNED = ['Approved — see you then!', 'Confirmed, thanks for letting us know.'];
+    var DECLINE_CANNED = ["Sorry, we can't accommodate this today — please call the office.", 'Please have them show ID at pickup.'];
+    var _compose = null; // {index, action:'Confirmed'|'Declined'}
 
     function esc(s){if(s==null)return'';var m={'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#x27;'};return String(s).replace(/[&<>"']/g,function(c){return m[c]});}
     function getReqs(){try{return JSON.parse(localStorage.getItem(PKEY)||'[]');}catch(e){return[];}}
     function saveReqs(arr){try{localStorage.setItem(PKEY,JSON.stringify(arr));}catch(e){}}
     function _db(){ var d=window.CampistryDB; if(!d)return null; var c=d.getClient?d.getClient():null, id=d.getCampId?d.getCampId():null; return (c&&id&&c.from)?{client:c,campId:id}:null; }
 
-    // Parent late/pickup/dismissal requests ride the parent->office message
-    // channel (link_messages, direction 'in'), subject "<Label> — <Camper>".
-    // Pull those, recognise the pickup labels, and merge into the local store so
-    // a request submitted from a parent's OWN device shows up here cross-device.
-    var _LABEL_TYPE = { 'Early Pickup':'early', 'Pickup Change':'change', 'Going With Friend':'friend', 'Late Arrival':'late' };
     function syncFromCloud(cb){
         var db=_db(); if(!db){ if(cb)cb(); return; }
-        db.client.from('link_messages').select('id,subject,body,parent_name,parent_email,direction,created_at')
-            .eq('camp_id',db.campId).eq('direction','in').order('created_at',{ascending:false}).limit(300)
+        db.client.from('parent_pickup_requests')
+            .select('id,type,label,camper_name,camper_bunk,parent_name,parent_email,details,status,office_message,created_at')
+            .eq('camp_id',db.campId).order('created_at',{ascending:false}).limit(200)
             .then(function(res){
-                if(res.error){ console.warn('[Live] parent requests (link_messages) load:',res.error.message); if(cb)cb(); return; }
-                var local=getReqs(), byId={}; local.forEach(function(r){ byId[r.id]=r; });
-                (res.data||[]).forEach(function(m){
-                    var subj=String(m.subject||''); var dash=subj.indexOf(' — ');
-                    var label=dash>=0?subj.slice(0,dash).trim():subj.trim();
-                    var type=_LABEL_TYPE[label]; if(!type) return; // not a pickup/late request
-                    var camper=dash>=0?subj.slice(dash+3).trim():'';
-                    var bodyLines=String(m.body||'').split('\n').map(function(s){return s.trim();}).filter(Boolean);
-                    var detailLines=bodyLines.slice(1); // first line is the summary
-                    var mapped={
-                        id:m.id, type:type, label:label, childName:camper, childBunk:'',
+                if(res.error){ console.warn('[Live] parent requests load:',res.error.message); if(cb)cb(); return; }
+                var mapped=(res.data||[]).map(function(m){
+                    return Object.assign({}, m.details||{}, {
+                        id:m.id, type:m.type, label:m.label, childName:m.camper_name, childBunk:m.camper_bunk||'',
                         parentName:m.parent_name||'', parentEmail:m.parent_email||'',
                         submittedAt:new Date(m.created_at).getTime(),
-                        status:(byId[m.id]&&byId[m.id].status)||'Pending', _detailLines:detailLines
-                    };
-                    if(byId[m.id]){ Object.assign(byId[m.id], mapped, {status:byId[m.id].status||'Pending'}); }
-                    else { local.unshift(mapped); byId[m.id]=mapped; }
+                        status:m.status||'Pending', officeMessage:m.office_message||''
+                    });
                 });
-                saveReqs(local);
+                saveReqs(mapped);
                 if(cb)cb();
             }, function(){ if(cb)cb(); });
     }
@@ -401,26 +357,36 @@ var ParentRequests = (function(){
         updateBadge();
         if(!reqs.length){body.innerHTML='<div class="empty-state">No parent requests yet — they\'ll appear here when parents submit from Campistry Link</div>';return;}
 
-        var typeLabel={early:'Early Pickup',change:'Pickup Change',friend:'Going With Friend',late:'Late Arrival'};
         var typeClr={early:'var(--amber-600)',change:'var(--blue-500)',friend:'var(--purple-500)',late:'var(--red-500)'};
         var html='<div class="card"><div class="card-body" style="padding:0 18px;">';
         reqs.forEach(function(r,i){
             var statusCls=r.status==='Pending'?'badge-warn':r.status==='Confirmed'?'badge-info':r.status==='Declined'?'badge-error':'badge-ok';
             var details=[];
-            if(r._detailLines&&r._detailLines.length){ details=r._detailLines.slice(); }
-            else {
-                if(r.type==='early'){if(r.pickupTime)details.push('Pickup: '+r.pickupTime);if(r.pickupBy)details.push('By: '+r.pickupBy);}
-                else if(r.type==='change'){if(r.newPickupPerson)details.push('New person: '+r.newPickupPerson);if(r.phone)details.push(r.phone);}
-                else if(r.type==='friend'){if(r.friendName)details.push('Friend: '+r.friendName);if(r.friendParentName)details.push('Parent: '+r.friendParentName);}
-                else if(r.type==='late'){if(r.arrivalTime)details.push('Arriving: '+r.arrivalTime);if(r.reason)details.push(r.reason);}
-                if(r.notes)details.push('“'+r.notes+'”');
-            }
+            if(r.type==='early'){if(r.pickupTime)details.push('Pickup: '+r.pickupTime);if(r.pickupBy)details.push('By: '+r.pickupBy);}
+            else if(r.type==='change'){if(r.newPickupPerson)details.push('New person: '+r.newPickupPerson);if(r.phone)details.push(r.phone);}
+            else if(r.type==='friend'){if(r.friendName)details.push('Friend: '+r.friendName);if(r.friendParentName)details.push('Parent: '+r.friendParentName);}
+            else if(r.type==='late'){if(r.arrivedAt)details.push('Arrived: '+r.arrivedAt);if(r.reason)details.push(r.reason);}
+            if(r.notes)details.push('“'+r.notes+'”');
             var initials=esc(r.childName||'').split(' ').map(function(n){return n[0]||'';}).join('').slice(0,2);
-            var actions=r.status==='Pending'?
-                '<div style="display:flex;gap:6px;margin-top:6px;">'+
-                '<button class="btn btn-primary btn-sm" onclick="ParentRequests.confirm('+i+')">Confirm</button>'+
-                '<button class="btn btn-secondary btn-sm" onclick="ParentRequests.decline('+i+')">Decline</button>'+
-                '</div>':'';
+
+            var actions='';
+            if(_compose&&_compose.index===i){
+                var canned=_compose.action==='Confirmed'?CONFIRM_CANNED:DECLINE_CANNED;
+                actions='<div style="margin-top:8px;padding:10px;background:var(--slate-50);border-radius:8px;">'+
+                    '<div style="display:flex;flex-wrap:wrap;gap:5px;margin-bottom:6px;">'+
+                    canned.map(function(c){return '<button class="btn btn-secondary btn-sm" style="font-size:.72rem;" onclick="ParentRequests.useCanned('+i+',\''+esc(c).replace(/'/g,"\\'")+'\')">'+esc(c)+'</button>';}).join('')+
+                    '</div>'+
+                    '<textarea id="rqComposeMsg" class="form-input" rows="2" placeholder="Message to parent (optional)"></textarea>'+
+                    '<div style="display:flex;gap:6px;margin-top:6px;">'+
+                    '<button class="btn btn-primary btn-sm" onclick="ParentRequests.sendCompose()">Send '+esc(_compose.action)+'</button>'+
+                    '<button class="btn btn-secondary btn-sm" onclick="ParentRequests.cancelCompose()">Cancel</button>'+
+                    '</div></div>';
+            } else if(r.status==='Pending'){
+                actions='<div style="display:flex;gap:6px;margin-top:6px;">'+
+                    '<button class="btn btn-primary btn-sm" onclick="ParentRequests.startCompose('+i+',\'Confirmed\')">Confirm</button>'+
+                    '<button class="btn btn-secondary btn-sm" onclick="ParentRequests.startCompose('+i+',\'Declined\')">Decline</button>'+
+                    '</div>';
+            }
             html+=
                 '<div style="display:flex;align-items:flex-start;gap:12px;padding:14px 0;border-bottom:1px solid var(--slate-100);">'+
                 '<div style="width:36px;height:36px;border-radius:50%;background:var(--slate-100);display:flex;align-items:center;justify-content:center;flex-shrink:0;font-size:.72rem;font-weight:700;color:var(--slate-600);">'+initials+'</div>'+
@@ -432,6 +398,7 @@ var ParentRequests = (function(){
                     '</div>'+
                     '<div style="font-size:.76rem;color:var(--slate-500);margin-top:2px;">From: '+esc(r.parentName)+'&nbsp;&middot;&nbsp;'+fmtTime(r.submittedAt)+'</div>'+
                     (details.length?'<div style="font-size:.79rem;color:var(--slate-600);margin-top:4px;line-height:1.5;">'+details.map(esc).join('&nbsp;&nbsp;&middot;&nbsp;&nbsp;')+'</div>':'')+
+                    (r.officeMessage?'<div style="font-size:.76rem;color:var(--slate-600);margin-top:4px;font-style:italic;">Office: “'+esc(r.officeMessage)+'”</div>':'')+
                     actions+
                 '</div>'+
                 '<span class="badge '+statusCls+'" style="flex-shrink:0;">'+esc(r.status)+'</span>'+
@@ -441,43 +408,61 @@ var ParentRequests = (function(){
         body.innerHTML=html;
     }
 
-    // These requests are link_messages rows; acknowledging = mark the office
-    // message read. Status itself stays in Live's local store.
-    function _cloudStatus(id,status){ var db=_db(); if(db&&id){ db.client.from('link_messages').update({read:true}).eq('id',id).then(function(res){ if(res.error)console.warn('[Live] pickup ack:',res.error.message); }); } }
+    function startCompose(i,action){ _compose={index:i,action:action}; _paint(); var ta=document.getElementById('rqComposeMsg'); if(ta)ta.focus(); }
+    function cancelCompose(){ _compose=null; _paint(); }
+    function useCanned(i,msg){ var ta=document.getElementById('rqComposeMsg'); if(ta)ta.value=msg; }
 
-    function confirm(i){
-        var reqs=getReqs(),r=reqs[i];
-        if(!r||r.status!=='Pending')return;
-        r.status='Confirmed';
-        saveReqs(reqs);
-        _cloudStatus(r.id,'Confirmed');
-        // Inject into Live's own data store
-        var today=getTodayData();
-        var now=new Date(),timeStr=now.getHours()+':'+(now.getMinutes()<10?'0':'')+now.getMinutes();
-        if(r.type==='late'){
-            if(!today.absences.some(function(a){return a.name===r.childName;})){
-                today.absences.push({name:r.childName,reason:'late',notes:'Late arrival'+(r.arrivalTime?' — '+r.arrivalTime:'')+(r.notes?' ('+r.notes+')':''),time:timeStr,timestamp:Date.now(),fromParent:true});
-                today.attendance[r.childName]=false;
-            }
-        } else {
-            if(!today.earlyPickups.some(function(p){return p.name===r.childName;})){
-                today.earlyPickups.push({name:r.childName,pickupTime:r.pickupTime||r.arrivalTime||timeStr,pickedUpBy:r.pickupBy||r.newPickupPerson||r.friendParentName||r.parentName||'',reason:r.label+(r.notes?' — '+r.notes:''),timestamp:Date.now(),fromParent:true});
-            }
-        }
-        saveTodayData(today);
-        if(window.CampistryLive) CampistryLive.refresh();
-        render();
-        liveToast(r.childName+' — '+r.label+' confirmed');
+    function sendCompose(){
+        if(!_compose)return;
+        var ta=document.getElementById('rqComposeMsg');
+        var message=ta?ta.value.trim():'';
+        _apply(_compose.index,_compose.action,message);
+        _compose=null;
     }
 
-    function decline(i){
+    function _reviewerId(db,cb){
+        if(!db.client.auth||!db.client.auth.getUser){cb(null);return;}
+        db.client.auth.getUser().then(function(res){cb((res&&res.data&&res.data.user&&res.data.user.id)||null);},function(){cb(null);});
+    }
+
+    function _apply(i,status,message){
         var reqs=getReqs(),r=reqs[i];
         if(!r||r.status!=='Pending')return;
-        r.status='Declined';
+        r.status=status; r.officeMessage=message||'';
         saveReqs(reqs);
-        _cloudStatus(r.id,'Declined');
+
+        var db=_db();
+        if(db){
+            _reviewerId(db,function(uid){
+                db.client.from('parent_pickup_requests')
+                    .update({status:status,office_message:message||null,reviewed_at:new Date().toISOString(),reviewed_by:uid})
+                    .eq('id',r.id)
+                    .then(function(res){ if(res.error)console.warn('[Live] pickup review update:',res.error.message); });
+            });
+        }
+
+        if(status==='Confirmed'){
+            var today=getTodayData();
+            var now=new Date(),timeStr=now.getHours()+':'+(now.getMinutes()<10?'0':'')+now.getMinutes();
+            if(r.type==='late'){
+                // The office is confirming the camper HAS arrived (late), not that
+                // they're still out — flip them to present, same as a manual
+                // roll-call toggle or the bubble-sheet scanner's present branch.
+                today.absences=today.absences.filter(function(a){return a.name!==r.childName;});
+                delete today.attendance[r.childName];
+                var noteText='Confirmed late arrival'+(r.arrivedAt?' — '+r.arrivedAt:'')+(r.notes?' ('+r.notes+')':'');
+                today.notes=(today.notes?today.notes+'\n':'')+r.childName+': '+noteText;
+            } else {
+                if(!today.earlyPickups.some(function(p){return p.name===r.childName;})){
+                    today.earlyPickups.push({name:r.childName,pickupTime:r.pickupTime||timeStr,pickedUpBy:r.pickupBy||r.newPickupPerson||r.friendParentName||r.parentName||'',reason:r.label+(r.notes?' — '+r.notes:''),timestamp:Date.now(),fromParent:true});
+                }
+            }
+            saveTodayData(today);
+            if(window.CampistryLive) CampistryLive.refresh();
+        }
+
         render();
-        liveToast((r.label||'Request')+' declined');
+        liveToast(r.childName+' — '+r.label+' '+status.toLowerCase());
     }
 
     function refresh(){render();}
@@ -485,7 +470,7 @@ var ParentRequests = (function(){
     // Update badge on load
     updateBadge();
 
-    return {render:render,confirm:confirm,decline:decline,refresh:refresh,updateBadge:updateBadge};
+    return {render:render,startCompose:startCompose,cancelCompose:cancelCompose,useCanned:useCanned,sendCompose:sendCompose,refresh:refresh,updateBadge:updateBadge};
 })();
 </script>
 <script>
@@ -596,11 +581,7 @@ var CamperMail = (function(){
 
 <!-- ═══ BOTTOM NAV (mobile) ═══ -->
 <div class="cs-bnav" id="csBottomNav">
-  <button class="cs-bnav-item active" data-page="dashboard" onclick="CampistryLive && document.querySelector('.sidebar-item[data-page=dashboard]').click()">
-    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="7" height="7"/><rect x="14" y="3" width="7" height="7"/><rect x="14" y="14" width="7" height="7"/><rect x="3" y="14" width="7" height="7"/></svg>
-    Dashboard
-  </button>
-  <button class="cs-bnav-item" data-page="roll-call" onclick="document.querySelector('.sidebar-item[data-page=roll-call]').click()">
+  <button class="cs-bnav-item active" data-page="roll-call" onclick="document.querySelector('.sidebar-item[data-page=roll-call]').click()">
     <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="9 11 12 14 22 4"/><path d="M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11"/></svg>
     Roll Call
   </button>

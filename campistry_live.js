@@ -168,11 +168,6 @@ function esc(s) { if (s == null) return ''; var d = document.createElement('div'
         }
     }
 
-    function filterRollCall(val) {
-        _rcFilter = val;
-        renderRollCall();
-    }
-
     function toggleAttendance(name) {
     if (!_secEdit('roll-call', 'Marking attendance')) return;
         const today = getTodayData();
@@ -466,62 +461,6 @@ function esc(s) { if (s == null) return ''; var d = document.createElement('div'
     }
 
     function filterBunks(val) { _bunkFilter = val; renderBunkTracker(); }
-
-    // =========================================================================
-    // RENDER: ROLL CALL
-    // =========================================================================
-    function renderRollCall() {
-        const struct = getStructure();
-        const roster = getRoster();
-        const today = getTodayData();
-        const body = document.getElementById('rollCallBody');
-        if (!body) return;
-
-        let html = '';
-        Object.entries(struct).forEach(([divName, divData]) => {
-            const color = divData.color || '#3b82f6';
-            const divCampers = Object.entries(roster).filter(([, c]) => c.division === divName).sort(([a], [b]) => a.localeCompare(b));
-            const presentCount = divCampers.filter(([n]) => today.attendance[n] !== false && !today.absences.some(a => a.name === n)).length;
-
-            html += '<div class="rollcall-division"><div class="rollcall-division-header"><span class="division-dot" style="background:' + esc(color) + '"></span><span>' + esc(divName) + '</span><span style="margin-left:auto;font-size:.75rem;color:var(--slate-500);">' + presentCount + '/' + divCampers.length + '</span></div><div class="rollcall-body">';
-
-            divCampers.forEach(([name, c]) => {
-                const isAbsent = today.absences.some(a => a.name === name);
-                const isPresent = !isAbsent && today.attendance[name] !== false;
-                html += '<div class="rollcall-row"><span class="rollcall-bunk">' + esc(c.bunk || '') + '</span><span class="rollcall-name">' + esc(name) + '</span><button class="rollcall-toggle ' + (isPresent ? 'on' : 'off') + '" onclick="CampistryLive.toggleAttendance(\'' + esc(name.replace(/'/g, "\\'")) + '\')" title="' + (isPresent ? 'Present' : 'Absent') + '"></button></div>';
-            });
-
-            html += '</div></div>';
-        });
-
-        body.innerHTML = html || '<div class="empty-state">No divisions configured. Set up camp structure in Campistry Me.</div>';
-    }
-
-    function toggleAttendance(name) {
-        const today = getTodayData();
-        // Remove from absences if present there
-        today.absences = today.absences.filter(a => a.name !== name);
-        // Toggle manual attendance
-        if (today.attendance[name] === false) {
-            delete today.attendance[name]; // back to present (default)
-        } else {
-            today.attendance[name] = false; // mark absent
-        }
-        saveTodayData(today);
-        renderRollCall();
-        renderDashboard();
-        toast(name + (today.attendance[name] === false ? ' marked absent' : ' marked present'));
-    }
-
-    function markAllPresent() {
-        const today = getTodayData();
-        today.attendance = {};
-        today.absences = [];
-        saveTodayData(today);
-        renderRollCall();
-        renderDashboard();
-        toast('All campers marked present');
-    }
 
     // =========================================================================
     // ABSENCES & EXCEPTIONS
