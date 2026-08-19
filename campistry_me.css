@@ -208,7 +208,7 @@ body.sidebar-open .sidebar{transform:translateX(0)}
 .cv-tags{display:flex;gap:4px;margin-top:4px;flex-wrap:wrap}
 .cv-sec{font-size:.72rem;font-weight:600;color:var(--s500);text-transform:uppercase;letter-spacing:.04em;margin:12px 0 4px;padding-bottom:3px;border-bottom:1px solid var(--s100)}
 .cv-row{display:flex;gap:8px;padding:3px 0;font-size:.8rem}
-.cv-lbl{color:var(--s400);min-width:80px;flex-shrink:0}
+.cv-lbl{color:var(--s400);min-width:92px;flex-shrink:0}
 .cv-val{color:var(--s800);font-weight:500;min-width:0;overflow-wrap:anywhere}
 .cv-val a{color:var(--me)}
 .cv-warn{color:var(--err);font-weight:600}

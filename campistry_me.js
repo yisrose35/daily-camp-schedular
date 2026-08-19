@@ -573,7 +573,19 @@ var _ICO={
     review:'<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M1 12s4-7 11-7 11 7 11 7-4 7-11 7-11-7-11-7z"/><circle cx="12" cy="12" r="3"/></svg>',
     enroll:'<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6L9 17l-5-5"/></svg>',
     invite:'<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71"/><path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71"/></svg>',
-    rescind:'<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 6h18"/><path d="M8 6V4a2 2 0 012-2h4a2 2 0 012 2v2"/><path d="M19 6l-1 14a2 2 0 01-2 2H8a2 2 0 01-2-2L5 6"/></svg>'
+    rescind:'<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 6h18"/><path d="M8 6V4a2 2 0 012-2h4a2 2 0 012 2v2"/><path d="M19 6l-1 14a2 2 0 01-2 2H8a2 2 0 01-2-2L5 6"/></svg>',
+    // Camper-profile card headers — same stroke-icon language as the
+    // buttons above, just one size up (14px) since these sit next to text.
+    user:'<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/></svg>',
+    mapPin:'<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 10c0 7-9 13-9 13s-9-6-9-13a9 9 0 0 1 18 0z"/><circle cx="12" cy="10" r="3"/></svg>',
+    users:'<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/></svg>',
+    home:'<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 9l9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/><polyline points="9 22 9 12 15 12 15 22"/></svg>',
+    heart:'<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20.8 4.6a5.5 5.5 0 0 0-7.8 0L12 5.6l-1-1a5.5 5.5 0 0 0-7.8 7.8l1 1L12 21l7.8-7.8 1-1a5.5 5.5 0 0 0 0-7.8z"/></svg>',
+    fileText:'<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="16" y1="13" x2="8" y2="13"/><line x1="16" y1="17" x2="8" y2="17"/></svg>',
+    dollarSign:'<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="12" y1="1" x2="12" y2="23"/><path d="M17 5H9.5a3.5 3.5 0 0 0 0 7h5a3.5 3.5 0 0 1 0 7H6"/></svg>',
+    messageSquare:'<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>',
+    clock:'<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>',
+    list:'<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="8" y1="6" x2="21" y2="6"/><line x1="8" y1="12" x2="21" y2="12"/><line x1="8" y1="18" x2="21" y2="18"/><line x1="3" y1="6" x2="3.01" y2="6"/><line x1="3" y1="12" x2="3.01" y2="12"/><line x1="3" y1="18" x2="3.01" y2="18"/></svg>'
 };
 function ico(name){return _ICO[name]||'';}
 function dtag(d){var c=(structure[d]&&structure[d].color)||'#94A3B8';return'<span class="div-tag" style="background:'+c+'10;color:'+c+'"><span class="div-dot" style="background:'+c+'"></span>'+esc(d)+'</span>'}
@@ -1699,9 +1711,10 @@ function viewCamper(n){
 // (Medical) where missing/flagged data needs to catch the eye immediately.
 function _dpCard(title,bodyHtml,opts){
     opts=opts||{};
+    var iconHtml=opts.icon?'<span style="display:inline-flex;color:'+(opts.flag?'var(--err)':'var(--me)')+'">'+ico(opts.icon)+'</span>':'';
     return '<div class="me-card" style="padding:18px 20px;'+(opts.flag?'border-left:3px solid var(--err)':'')+'">'
         +'<div style="display:flex;align-items:center;justify-content:space-between;gap:8px;margin-bottom:10px">'
-        +'<div style="font-size:.7rem;font-weight:700;color:var(--s500);text-transform:uppercase;letter-spacing:.05em">'+esc(title)+(opts.badge?' <span style="font-weight:600;color:var(--s400)">'+esc(opts.badge)+'</span>':'')+'</div>'
+        +'<div style="display:flex;align-items:center;gap:7px;font-size:.7rem;font-weight:700;color:var(--s500);text-transform:uppercase;letter-spacing:.05em">'+iconHtml+esc(title)+(opts.badge?' <span style="font-weight:600;color:var(--s400)">'+esc(opts.badge)+'</span>':'')+'</div>'
         +(opts.actionHtml||'')
         +'</div>'+bodyHtml+'</div>';
 }
@@ -1761,7 +1774,7 @@ function renderCamperDetailPage(){
         personal+=cvR('Date of Birth',dobStr);
     }
     personal+=cvR('Gender',d.gender)+cvR('School',d.school)+cvR('School Grade',d.schoolGrade)+cvR('Teacher',d.teacher);
-    g+=_dpCard('Personal Information',personal);
+    g+=_dpCard('Personal Information',personal,{icon:'user'});
 
     var camp=cvR('Division',d.division)+cvR('Grade',d.grade)+cvR('Bunk',d.bunk);
     var teams=d.teams||{};var teamKeys=Object.keys(teams);
@@ -1773,7 +1786,7 @@ function renderCamperDetailPage(){
     var bunkReq=_camperBunkRequests(n);
     if(bunkReq.friends.length)camp+=cvR('Wants to bunk with',esc(bunkReq.friends.join(', ')));
     if(bunkReq.avoid.length)camp+=cvR('Do not bunk with','<span class="cv-warn">'+esc(bunkReq.avoid.join(', '))+'</span>');
-    g+=_dpCard('Camp Assignment',camp);
+    g+=_dpCard('Camp Assignment',camp,{icon:'mapPin'});
 
     var fam='';
     if(d.parent1Name){
@@ -1789,7 +1802,18 @@ function renderCamperDetailPage(){
     }else{
         fam+='<div style="font-size:.8rem;color:var(--err);font-style:italic;padding:2px 0">⚠ No emergency contact</div>';
     }
-    g+=_dpCard('Family & Emergency Contact',fam);
+    // Siblings — same household, one click to the other camper's own
+    // record (CampMinder's "Unified Person Record" links siblings the
+    // same way). Same family lookup the Families page's own detection
+    // uses, just read here instead of on the Families page.
+    var famEntry=Object.entries(families).filter(function(pair){return(pair[1].camperIds||[]).indexOf(n)>=0;})[0];
+    var siblings=famEntry?(famEntry[1].camperIds||[]).filter(function(cn){return cn!==n;}):[];
+    if(siblings.length){
+        fam+='<div style="margin-top:8px;padding-top:8px;border-top:1px solid var(--s100)"><span class="cv-lbl" style="display:block;margin-bottom:4px">Siblings</span><div style="display:flex;flex-wrap:wrap;gap:5px">'
+            +siblings.map(function(sn){return '<span style="display:inline-flex;align-items:center;padding:3px 9px;border-radius:999px;background:var(--s50);border:1px solid var(--s200);font-size:.76rem;font-weight:600;color:var(--me);cursor:pointer" onclick="CampistryMe.viewCamper(\''+je(sn)+'\')">'+esc(sn)+'</span>';}).join('')
+            +'</div></div>';
+    }
+    g+=_dpCard('Family & Emergency Contact',fam,{icon:'users'});
 
     var addr='';
     if(d.street){
@@ -1803,7 +1827,7 @@ function renderCamperDetailPage(){
         addr+=cvR('Summer',_addrJoin([d.summerStreet,d.summerCity,d.summerState,d.summerZip]));
         if(d.summerPhone)addr+=cvR('Summer Phone',d.summerPhone);
     }
-    g+=_dpCard('Address',addr);
+    g+=_dpCard('Address',addr,{icon:'home'});
 
     var med='';
     if(d.allergies)med+=cvR('Allergies',d.allergies,true);
@@ -1814,25 +1838,25 @@ function renderCamperDetailPage(){
     if(d.physician)med+=cvR('Physician',esc(d.physician)+(d.physicianPhone?' · '+esc(d.physicianPhone):''));
     if(d.insuranceProvider)med+=cvR('Insurance',esc(d.insuranceProvider)+(d.insurancePolicy?' · #'+esc(d.insurancePolicy):''));
     med+='<div class="cv-health" onclick="window.location.href=\'campistry_health.html\'">Open in Campistry Health →</div>';
-    g+=_dpCard('Medical Summary',med,{flag:hasMedFlags});
+    g+=_dpCard('Medical Summary',med,{flag:hasMedFlags,icon:'heart'});
 
     var docs=(d.documents||[]);
-    g+=_dpCard('Documents',renderDocuments(n),{badge:docs.length?String(docs.length):'',actionHtml:'<button class="me-btn me-btn--ghost me-btn--sm" onclick="CampistryMe.uploadDocument(\''+je(n)+'\')">+ Upload</button>'});
+    g+=_dpCard('Documents',renderDocuments(n),{icon:'fileText',badge:docs.length?String(docs.length):'',actionHtml:'<button class="me-btn me-btn--ghost me-btn--sm" onclick="CampistryMe.uploadDocument(\''+je(n)+'\')">+ Upload</button>'});
 
     var schols=d.scholarships||[];
     var aidBody=schols.length?schols.map(function(s){return cvR(s.type,fm(s.amount)+(s.source?' — '+s.source:'')+(s.date?' ('+s.date+')':''))}).join(''):'<div style="font-size:.8rem;color:var(--s400);font-style:italic">No aid on file</div>';
-    g+=_dpCard('Financial Aid',aidBody,{badge:schols.length?String(schols.length):'',actionHtml:'<button class="me-btn me-btn--ghost me-btn--sm" onclick="CampistryMe.addScholarship(\''+je(n)+'\')">+ Award</button>'});
+    g+=_dpCard('Financial Aid',aidBody,{icon:'dollarSign',badge:schols.length?String(schols.length):'',actionHtml:'<button class="me-btn me-btn--ghost me-btn--sm" onclick="CampistryMe.addScholarship(\''+je(n)+'\')">+ Award</button>'});
 
     loadCustomFields();
     if(customFields.length){
         var cfBody=customFields.map(function(cf){return cvR(cf.label,d['cf_'+cf.id]||'<span style="color:var(--s300)">—</span>')}).join('');
-        g+=_dpCard('Custom Fields',cfBody);
+        g+=_dpCard('Custom Fields',cfBody,{icon:'list'});
     }
 
     var noteCount=(d.notes||[]).length;
-    g+=_dpCard('Notes & Timeline',renderCamperTimeline(n),{badge:noteCount?String(noteCount):'',actionHtml:'<button class="me-btn me-btn--ghost me-btn--sm" onclick="CampistryMe.addCamperNote(\''+je(n)+'\')">+ Add Note</button>'});
+    g+=_dpCard('Notes & Timeline',renderCamperTimeline(n),{icon:'messageSquare',badge:noteCount?String(noteCount):'',actionHtml:'<button class="me-btn me-btn--ghost me-btn--sm" onclick="CampistryMe.addCamperNote(\''+je(n)+'\')">+ Add Note</button>'});
 
-    g+=_dpCard('History',renderCamperHistory(n));
+    g+=_dpCard('History',renderCamperHistory(n),{icon:'clock'});
 
     g+='</div>';
 
