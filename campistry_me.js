@@ -76,13 +76,11 @@ function setBillingPage(n){_billingPage=n;renderBilling();}
 function setAnalyticsInvoicePage(n){_analyticsInvoicePage=n;renderAnalytics();}
 function setAnalyticsPaymentPage(n){_analyticsPaymentPage=n;renderAnalytics();}
 var pplStaffSubTab='applicants';  // Hiring page's own top tab: applicants | hired
-var regFilter='all';    // Registration section filter: all | applied | waitlisted | accepted | enrolled | withdrawn | declined
 var staffApplications={};   // Staff hiring: applicant id → application record
 var staffFormConfig=null;   // Staff application form config — mirrors formConfig, drives campistry_staff_apply.html
 var paFormConfig=null;      // Post-acceptance form config — mirrors formConfig, drives campistry_postaccept.html
 var counselorVisibility=null; // What counselors see in Lite; null = catalogue defaults
 var _setupChecklistDismissed=false; // owner dismissed the onboarding progress card
-var staffFilter='all';      // Staffing pipeline filter
 var leads={};               // Inquiry CRM: lead id → prospective-family record
 var leadFilter='all';       // Leads pipeline filter
 var nextCamperId=1;
@@ -776,7 +774,7 @@ function ff(label,id,val,type,opts){
 
 // ═══ RENDERERS ═══════════════════════════════════════════════════
 function render(p){
-    var m={campers:renderCampers,structure:renderStructure,bunkbuilder:renderBB,families:renderFamiliesPage,registration:renderRegistrationPage,hiring:renderHiringPage,leads:renderLeads,enrollment:renderEnrollment,staffing:renderStaffing,billing:renderBilling,payroll:renderPayroll,analytics:renderAnalytics,reports:renderReports,printsheets:renderPrintSheets};
+    var m={campers:renderCampers,structure:renderStructure,bunkbuilder:renderBB,families:renderFamiliesPage,registration:renderRegistrationPage,hiring:renderHiringPage,leads:renderLeads,billing:renderBilling,payroll:renderPayroll,analytics:renderAnalytics,reports:renderReports,printsheets:renderPrintSheets};
     if(m[p])m[p]();else renderSoon(p);
 }
 
@@ -1685,7 +1683,12 @@ function viewCamper(n){
 
     var b='';
 
-    // Personal
+    // ── Snapshot — always visible, no click required. Everything else below
+    // is a record-level detail (docs, aid, notes, history...) that piled up
+    // on this one profile over time; those move into collapsed-by-default
+    // accordions (same _accCard()/_toggleAcc() component the Form Builder
+    // uses) so opening a camper shows "who is this" first, not a full-page
+    // scroll of every field ever collected.
     b+='<div class="cv-sec">Personal Information</div>';
     b+=cvR('Full Name',n);
     var altName=[d.altFirstName,d.altLastName].filter(Boolean).join(' ');
@@ -1702,88 +1705,22 @@ function viewCamper(n){
     b+=cvR('School Grade',d.schoolGrade);
     b+=cvR('Teacher',d.teacher);
 
-    // Camp Assignment
     b+='<div class="cv-sec">Camp Assignment</div>';
     b+=cvR('Division',d.division);
     b+=cvR('Grade',d.grade);
     b+=cvR('Bunk',d.bunk);
-
-    // League Teams
     var teams=d.teams||{};var teamKeys=Object.keys(teams);
-    if(d.team&&!teamKeys.length){b+='<div class="cv-sec">League Teams</div>';b+=cvR('Team',d.team)}
-    else if(teamKeys.length){b+='<div class="cv-sec">League Teams</div>';teamKeys.forEach(function(lg){b+=cvR(lg,teams[lg])})}
-
-    // Parent / Guardian
-    b+='<div class="cv-sec">Parent / Guardian</div>';
-    if(d.parent1Name){
-        b+=cvR('Name',d.parent1Name);
-        if(d.parent1Phone)b+=cvR('Phone','<a href="tel:'+esc(d.parent1Phone)+'" style="color:var(--me);font-weight:600">'+esc(d.parent1Phone)+'</a>');
-        if(d.parent1Email)b+=cvR('Email','<a href="mailto:'+esc(d.parent1Email)+'" style="color:var(--me)">'+esc(d.parent1Email)+'</a>');
-    }else{
-        b+='<div style="font-size:.8rem;color:var(--s400);font-style:italic;padding:2px 0">No parent info on file</div>';
-    }
-
-    // Address
-    b+='<div class="cv-sec">Home Address</div>';
-    if(d.street){
-        b+=cvR('Street',d.street);
-        b+=cvR('City',d.city);
-        b+=cvR('State',d.state);
-        b+=cvR('ZIP',d.zip);
-        var fullAddr=[d.street,d.city,d.state,d.zip].filter(Boolean).join(', ');
-        b+='<a href="https://maps.google.com/?q='+encodeURIComponent(fullAddr)+'" target="_blank" style="display:inline-flex;align-items:center;gap:4px;font-size:.75rem;font-weight:600;color:var(--me);margin-top:4px;text-decoration:none">Open in Maps →</a>';
-    }else{
-        b+='<div style="font-size:.8rem;color:var(--s400);font-style:italic;padding:2px 0">No address on file</div>';
-    }
-
-    // Summer address — only worth its own block when it differs from home.
-    b+='<div class="cv-sec">Summer Address</div>';
-    if(d.summerSameAsHome!==false){
-        b+='<div style="font-size:.8rem;color:var(--s400);padding:2px 0">Same as home</div>';
-    }else if(d.summerStreet){
-        b+=cvR('Street',d.summerStreet);
-        b+=cvR('City',d.summerCity);
-        b+=cvR('State',d.summerState);
-        b+=cvR('ZIP',d.summerZip);
-        b+=cvR('Phone',d.summerPhone);
-        var summerAddr=[d.summerStreet,d.summerCity,d.summerState,d.summerZip].filter(Boolean).join(', ');
-        b+='<a href="https://maps.google.com/?q='+encodeURIComponent(summerAddr)+'" target="_blank" style="display:inline-flex;align-items:center;gap:4px;font-size:.75rem;font-weight:600;color:var(--me);margin-top:4px;text-decoration:none">Open in Maps →</a>';
-    }else{
-        b+='<div style="font-size:.8rem;color:var(--s400);font-style:italic;padding:2px 0">No summer address on file</div>';
-    }
-
-    // Emergency Contact
-    b+='<div class="cv-sec">Emergency Contact</div>';
-    if(d.emergencyName){
-        b+=cvR('Name',d.emergencyName+(d.emergencyRel?' ('+d.emergencyRel+')':''));
-        if(d.emergencyPhone)b+=cvR('Phone','<a href="tel:'+esc(d.emergencyPhone)+'" style="color:var(--me);font-weight:600">'+esc(d.emergencyPhone)+'</a>');
-    }else{
-        b+='<div style="font-size:.8rem;color:var(--err);font-style:italic;padding:2px 0">⚠ No emergency contact on file</div>';
-    }
-
-    // Medical
-    b+='<div class="cv-sec">Medical Summary</div>';
-    if(d.allergies)b+=cvR('Allergies',d.allergies,true);
-    if(d.medications)b+=cvR('Medications',d.medications,true);
-    if(d.dietary)b+=cvR('Dietary',d.dietary);
-    if(d.medicalNotes)b+=cvR('Medical Notes',esc(d.medicalNotes));
-    if(!d.allergies&&!d.medications&&!d.dietary&&!d.medicalNotes)b+='<div style="font-size:.8rem;color:var(--ok);padding:2px 0">✓ No medical flags</div>';
-    if(d.physician)b+=cvR('Physician',esc(d.physician)+(d.physicianPhone?' · '+esc(d.physicianPhone):''));
-    if(d.insuranceProvider)b+=cvR('Insurance',esc(d.insuranceProvider)+(d.insurancePolicy?' · #'+esc(d.insurancePolicy):''));
-    b+='<div class="cv-health" onclick="window.location.href=\'campistry_health.html\'">Open in Campistry Health →</div>';
-
-    // More Details
-    if(d.camperType||d.swimLevel||d.shirtSize){
-        b+='<div class="cv-sec">More Details</div>';
-        if(d.camperType)b+=cvR('Camper Type',esc(d.camperType));
-        if(d.swimLevel)b+=cvR('Swim Level',esc(d.swimLevel));
-        if(d.shirtSize)b+=cvR('Shirt Size',esc(d.shirtSize));
-    }
+    if(d.team&&!teamKeys.length)b+=cvR('Team',d.team);
+    else teamKeys.forEach(function(lg){b+=cvR(lg,teams[lg])});
+    if(d.camperType)b+=cvR('Camper Type',esc(d.camperType));
+    if(d.swimLevel)b+=cvR('Swim Level',esc(d.swimLevel));
+    if(d.shirtSize)b+=cvR('Shirt Size',esc(d.shirtSize));
 
     // Bunk Requests — merged from wherever they came in: office-entered on
     // this profile, the original application, or the Post-Acceptance Form.
     // Same data Bunk Builder uses, so what a head counselor sees here always
-    // matches what the auto-generator actually acted on.
+    // matches what the auto-generator actually acted on. Kept in the always-
+    // visible snapshot (not an accordion) since it directly affects bunking.
     var bunkReq=_camperBunkRequests(n);
     if(bunkReq.friends.length||bunkReq.avoid.length){
         b+='<div class="cv-sec">Bunk Requests</div>';
@@ -1791,32 +1728,98 @@ function viewCamper(n){
         if(bunkReq.avoid.length)b+=cvR('Do not bunk with','<span class="cv-warn">'+esc(bunkReq.avoid.join(', '))+'</span>');
     }
 
-    // Documents
-    b+='<div class="cv-sec" style="display:flex;justify-content:space-between;align-items:center">Documents <button class="me-btn me-btn--ghost me-btn--sm" onclick="CampistryMe.uploadDocument(\''+je(n)+'\')">+ Upload</button></div>';
-    b+=renderDocuments(n);
+    // Medical flag — a one-line banner up top so an allergy/medication isn't
+    // missed just because it's inside a closed accordion below; the full
+    // Medical Summary accordion (further down) still has every field.
+    var hasMedFlags=!!(d.allergies||d.medications||d.dietary||d.medicalNotes);
+    if(hasMedFlags){
+        b+='<div style="display:flex;align-items:center;gap:8px;background:rgba(220,38,38,.06);border:1px solid rgba(220,38,38,.2);border-radius:var(--r);padding:9px 12px;margin-top:12px;font-size:.8rem;font-weight:600;color:var(--err)">⚠ Medical flags on file — see Medical Summary below</div>';
+    }
 
-    // Scholarships / Financial Aid
+    b+='<div style="margin-top:14px">';
+
+    // Family & Contact
+    var fcBody='<div class="cv-sec" style="margin-top:0">Parent / Guardian</div>';
+    if(d.parent1Name){
+        fcBody+=cvR('Name',d.parent1Name);
+        if(d.parent1Phone)fcBody+=cvR('Phone','<a href="tel:'+esc(d.parent1Phone)+'" style="color:var(--me);font-weight:600">'+esc(d.parent1Phone)+'</a>');
+        if(d.parent1Email)fcBody+=cvR('Email','<a href="mailto:'+esc(d.parent1Email)+'" style="color:var(--me)">'+esc(d.parent1Email)+'</a>');
+    }else{
+        fcBody+='<div style="font-size:.8rem;color:var(--s400);font-style:italic;padding:2px 0">No parent info on file</div>';
+    }
+    fcBody+='<div class="cv-sec">Emergency Contact</div>';
+    if(d.emergencyName){
+        fcBody+=cvR('Name',d.emergencyName+(d.emergencyRel?' ('+d.emergencyRel+')':''));
+        if(d.emergencyPhone)fcBody+=cvR('Phone','<a href="tel:'+esc(d.emergencyPhone)+'" style="color:var(--me);font-weight:600">'+esc(d.emergencyPhone)+'</a>');
+    }else{
+        fcBody+='<div style="font-size:.8rem;color:var(--err);font-style:italic;padding:2px 0">⚠ No emergency contact on file</div>';
+    }
+    fcBody+='<div class="cv-sec">Home Address</div>';
+    if(d.street){
+        fcBody+=cvR('Street',d.street);
+        fcBody+=cvR('City',d.city);
+        fcBody+=cvR('State',d.state);
+        fcBody+=cvR('ZIP',d.zip);
+        var fullAddr=[d.street,d.city,d.state,d.zip].filter(Boolean).join(', ');
+        fcBody+='<a href="https://maps.google.com/?q='+encodeURIComponent(fullAddr)+'" target="_blank" style="display:inline-flex;align-items:center;gap:4px;font-size:.75rem;font-weight:600;color:var(--me);margin-top:4px;text-decoration:none">Open in Maps →</a>';
+    }else{
+        fcBody+='<div style="font-size:.8rem;color:var(--s400);font-style:italic;padding:2px 0">No address on file</div>';
+    }
+    fcBody+='<div class="cv-sec">Summer Address</div>';
+    if(d.summerSameAsHome!==false){
+        fcBody+='<div style="font-size:.8rem;color:var(--s400);padding:2px 0">Same as home</div>';
+    }else if(d.summerStreet){
+        fcBody+=cvR('Street',d.summerStreet);
+        fcBody+=cvR('City',d.summerCity);
+        fcBody+=cvR('State',d.summerState);
+        fcBody+=cvR('ZIP',d.summerZip);
+        fcBody+=cvR('Phone',d.summerPhone);
+        var summerAddr=[d.summerStreet,d.summerCity,d.summerState,d.summerZip].filter(Boolean).join(', ');
+        fcBody+='<a href="https://maps.google.com/?q='+encodeURIComponent(summerAddr)+'" target="_blank" style="display:inline-flex;align-items:center;gap:4px;font-size:.75rem;font-weight:600;color:var(--me);margin-top:4px;text-decoration:none">Open in Maps →</a>';
+    }else{
+        fcBody+='<div style="font-size:.8rem;color:var(--s400);font-style:italic;padding:2px 0">No summer address on file</div>';
+    }
+    b+=_accCard('Family & Contact',fcBody,{open:!d.parent1Name||!d.emergencyName});
+
+    // Medical Summary — auto-open when the snapshot banner above flagged
+    // something, so the flag is never one click away from its own detail.
+    var medBody='';
+    if(d.allergies)medBody+=cvR('Allergies',d.allergies,true);
+    if(d.medications)medBody+=cvR('Medications',d.medications,true);
+    if(d.dietary)medBody+=cvR('Dietary',d.dietary);
+    if(d.medicalNotes)medBody+=cvR('Medical Notes',esc(d.medicalNotes));
+    if(!hasMedFlags)medBody+='<div style="font-size:.8rem;color:var(--ok);padding:2px 0">✓ No medical flags</div>';
+    if(d.physician)medBody+=cvR('Physician',esc(d.physician)+(d.physicianPhone?' · '+esc(d.physicianPhone):''));
+    if(d.insuranceProvider)medBody+=cvR('Insurance',esc(d.insuranceProvider)+(d.insurancePolicy?' · #'+esc(d.insurancePolicy):''));
+    medBody+='<div class="cv-health" onclick="window.location.href=\'campistry_health.html\'">Open in Campistry Health →</div>';
+    b+=_accCard('Medical Summary',medBody,{open:hasMedFlags});
+
+    // Documents
+    var docs=(d.documents||[]);
+    b+=_accCard('Documents',renderDocuments(n),{badge:docs.length?String(docs.length):'',actionHtml:'<button class="me-btn me-btn--ghost me-btn--sm" onclick="CampistryMe.uploadDocument(\''+je(n)+'\')">+ Upload</button>'});
+
+    // Financial Aid
     var schols=d.scholarships||[];
-    b+='<div class="cv-sec" style="display:flex;justify-content:space-between;align-items:center">Financial Aid <button class="me-btn me-btn--ghost me-btn--sm" onclick="CampistryMe.addScholarship(\''+je(n)+'\')">+ Award</button></div>';
-    if(schols.length){schols.forEach(function(s){b+=cvR(s.type,fm(s.amount)+(s.source?' — '+s.source:'')+(s.date?' ('+s.date+')':''))})}
-    else b+='<div style="font-size:.8rem;color:var(--s400);font-style:italic">No aid on file</div>';
+    var aidBody=schols.length?schols.map(function(s){return cvR(s.type,fm(s.amount)+(s.source?' — '+s.source:'')+(s.date?' ('+s.date+')':''))}).join(''):'<div style="font-size:.8rem;color:var(--s400);font-style:italic">No aid on file</div>';
+    b+=_accCard('Financial Aid',aidBody,{badge:schols.length?String(schols.length):'',actionHtml:'<button class="me-btn me-btn--ghost me-btn--sm" onclick="CampistryMe.addScholarship(\''+je(n)+'\')">+ Award</button>'});
 
     // Custom Fields
     loadCustomFields();
     if(customFields.length){
-        b+='<div class="cv-sec">Custom Fields</div>';
-        customFields.forEach(function(cf){b+=cvR(cf.label,d['cf_'+cf.id]||'<span style="color:var(--s300)">—</span>')});
+        var cfBody=customFields.map(function(cf){return cvR(cf.label,d['cf_'+cf.id]||'<span style="color:var(--s300)">—</span>')}).join('');
+        b+=_accCard('Custom Fields',cfBody,{});
     }
 
     // Notes & Timeline
-    b+='<div class="cv-sec" style="display:flex;justify-content:space-between;align-items:center">Notes & Timeline <button class="me-btn me-btn--ghost me-btn--sm" onclick="CampistryMe.addCamperNote(\''+je(n)+'\')">+ Add Note</button></div>';
-    b+=renderCamperTimeline(n);
+    var noteCount=(d.notes||[]).length;
+    b+=_accCard('Notes & Timeline',renderCamperTimeline(n),{badge:noteCount?String(noteCount):'',actionHtml:'<button class="me-btn me-btn--ghost me-btn--sm" onclick="CampistryMe.addCamperNote(\''+je(n)+'\')">+ Add Note</button>'});
 
-    // Change History (audit trail of edits)
-    b+='<div class="cv-sec">History</div>';
-    b+=renderCamperHistory(n);
+    // Change History (audit trail of edits) — least-checked section, stays closed
+    b+=_accCard('History',renderCamperHistory(n),{});
 
-    // Quick Actions
+    b+='</div>';
+
+    // Quick Actions — always visible; these are buttons, not detail to hide.
     b+='<div class="cv-sec">Quick Actions</div>';
     b+='<div style="display:flex;gap:6px;flex-wrap:wrap">';
     b+='<button class="me-btn me-btn--pri me-btn--sm" onclick="CampistryMe.reEnrollCamper(\''+je(n)+'\')">Re-Enroll</button>';
@@ -4358,18 +4361,18 @@ function visibilityPolicy(){
     var V=_vis(); if(!V)return {};
     return counselorVisibility||V.defaults();
 }
-function toggleVisibilityPanel(){ _visOpen=!_visOpen; renderStaffing(); _refreshPplIfActive(); }
+function toggleVisibilityPanel(){ _visOpen=!_visOpen; _refreshPplIfActive(); }
 function setCounselorVisibility(key,on){
     var V=_vis(); if(!V)return;
     if(!counselorVisibility)counselorVisibility=V.defaults();
     counselorVisibility[key]=!!on;
     save();
-    renderStaffing(); _refreshPplIfActive();
+    _refreshPplIfActive();
 }
 function resetCounselorVisibility(){
     var V=_vis(); if(!V)return;
     counselorVisibility=V.defaults();
-    save(); renderStaffing(); _refreshPplIfActive();
+    save(); _refreshPplIfActive();
     toast('Reset to defaults');
 }
 function _visibilityPanelHTML(){
@@ -4400,103 +4403,6 @@ function _visibilityPanelHTML(){
     h+='</div>';
     return h;
 }
-function renderStaffing(){
-    var c=document.getElementById('page-staffing');
-    var arr=Object.entries(staffApplications);
-    var total=arr.length;
-    var by={}; STAFF_STAGES.forEach(function(g){if(g.key!=='all')by[g.key]=0;});
-    arr.forEach(function([,a]){var st=a.status||'applied'; by[st]=(by[st]||0)+1;});
-    var hired=by.hired||0;
-    // Hiring isn't finished at "Hired" — someone with no bunk has no schedule
-    // in Lite and can't be reached by a pickup notification. Surface that here
-    // rather than making anyone open each applicant to discover it.
-    var unplaced=hiredStaff().filter(function(a){
-        return !String(a.email||'').trim()||!bunksForStaffEmail(a.email).length;
-    });
-
-    var h='<div class="sec-hd"><div><h2 class="sec-title">Staffing &amp; Hiring</h2><p class="sec-desc">'+total+' applicant'+(total!==1?'s':'')+' · '+hired+' hired</p></div>';
-    h+='<div class="sec-actions">'
-        +'<button class="me-btn me-btn--teal" onclick="CampistryMe.openStaffFormConfig()">Customize Staff Form</button>'
-        +'<button class="me-btn me-btn--pri" onclick="CampistryMe.addStaffApp()">+ Add Applicant</button>'
-        +'<div class="me-more-wrap"><button class="me-btn me-btn--sec me-btn--sm" onclick="CampistryMe._toggleMenu(\'staffLinkMenu\')">🔗 Get Link</button>'
-        +'<div class="me-more-menu" id="staffLinkMenu" style="min-width:250px">'
-        +'<div style="padding:7px 10px 9px;font-size:.7rem;color:var(--s400);word-break:break-all;border-bottom:1px solid var(--s100);margin-bottom:4px">'+esc(window.location.origin+'/campistry_staff_apply.html')+'</div>'
-        +'<button onclick="CampistryMe.copyStaffLink()">📋 Copy Link</button>'
-        +'<button onclick="CampistryMe.openSendStaffLinkModal()">✉ Send Link</button>'
-        +'<button onclick="CampistryMe.showStaffQR()">▦ QR Code</button>'
-        +'<div style="border-top:1px solid var(--s100);margin:4px 0"></div>'
-        +'<button onclick="CampistryMe.exportStaffCSV()">↓ Export CSV</button>'
-        +'</div></div>'
-        +'</div></div>';
-
-    if(unplaced.length){
-        h+='<div style="background:#FFF7ED;border:1px solid #FED7AA;border-radius:var(--r);padding:10px 14px;margin-bottom:14px;font-size:.83rem;color:#9A3412">'
-          +'<strong>'+unplaced.length+' hired '+(unplaced.length===1?'person is':'people are')+' not set up yet.</strong> '
-          +'Open them to add an email and put them on a bunk — until then they can\'t sign in to Campistry Lite or receive notifications.'
-          +'<div style="margin-top:4px;font-size:.78rem">'+unplaced.slice(0,6).map(function(a){return esc(a.name||'Unnamed')}).join(' · ')
-          +(unplaced.length>6?' · +'+(unplaced.length-6)+' more':'')+'</div></div>';
-    }
-
-    h+=_visibilityPanelHTML();
-
-    // Status filter — same compact underline-tab strip as Registration,
-    // instead of a row of colored boxes.
-    h+='<div style="display:flex;gap:2px;border-bottom:1px solid var(--s200);margin-bottom:16px;overflow-x:auto">';
-    STAFF_STAGES.forEach(function(s){
-        var count=s.key==='all'?total:(by[s.key]||0);
-        var active=staffFilter===s.key;
-        h+='<button onclick="CampistryMe.setStaffFilter(\''+s.key+'\')" style="padding:9px 12px;border:none;background:none;font-size:.8rem;font-weight:600;cursor:pointer;white-space:nowrap;font-family:inherit;display:flex;align-items:center;gap:6px;border-bottom:2px solid '+(active?s.color:'transparent')+';color:'+(active?s.color:'var(--s500)')+'">'
-            +esc(s.label)
-            +'<span style="font-size:.68rem;font-weight:700;border-radius:9px;padding:1px 6px;background:'+(active?s.color:'var(--s100)')+';color:'+(active?'#fff':'var(--s600)')+'">'+count+'</span>'
-            +'</button>';
-    });
-    h+='</div>';
-
-    // Applicant list
-    var list=arr.map(function([id,a]){a._id=id;return a;});
-    if(staffFilter!=='all') list=list.filter(function(a){return (a.status||'applied')===staffFilter;});
-    list.sort(function(a,b){return(b.appliedTime||'').localeCompare(a.appliedTime||'');});
-
-    if(!total){
-        h+='<div class="me-empty"><h3>No applicants yet</h3><p>Share your staff application link and applications will appear here.</p><button class="me-btn me-btn--pri" onclick="CampistryMe.copyStaffLink()">🔗 Copy Application Link</button></div>';
-    } else if(!list.length){
-        h+='<div class="me-empty"><h3>No applicants in this stage</h3></div>';
-    } else {
-        h+='<div class="me-card"><div class="me-tw"><table class="me-t"><thead><tr><th>Name</th><th>Position(s)</th><th>Applied</th><th>References</th><th>Status</th><th style="width:1%;white-space:nowrap"></th></tr></thead><tbody>';
-        list.forEach(function(a){
-            var refs=(a.references||[]); var refDone=refs.filter(function(r){return r.status==='received';}).length;
-            var refTxt=refs.length?refDone+'/'+refs.length:'—';
-            var st=a.status||'applied';
-            h+='<tr class="click" onclick="CampistryMe.viewStaffApp(\''+je(a._id)+'\')">';
-            h+='<td class="bold">'+esc(a.name||((a.first||'')+' '+(a.last||'')))+'</td>';
-            h+='<td style="font-size:.8rem">'+esc((a.positions||[]).join(', ')||'—')+'</td>';
-            h+='<td style="font-size:.78rem;color:var(--s500)">'+esc(a.appliedDate||'')+'</td>';
-            h+='<td style="font-size:.8rem;color:'+(refs.length&&refDone===refs.length?'var(--ok)':'var(--s500)')+'">'+refTxt+'</td>';
-            h+='<td>'+bdg(_staffLabel(st),_staffStatusType(st))+'</td>';
-            // The row already opens Review on click — this column only needs
-            // the status-changing actions, same pattern as Registration:
-            // one primary button (Advance/Reconsider) plus a "⋯" menu for
-            // Decline, so a row never shows more than two controls.
-            var menuId='staffRowMenu_'+a._id;
-            var next=_staffNextStage(st);
-            h+='<td style="text-align:right;white-space:nowrap" onclick="event.stopPropagation()"><div style="display:flex;gap:6px;justify-content:flex-end;align-items:center">';
-            if(st==='declined'){
-                h+='<button class="me-btn me-btn--sec me-btn--sm" onclick="CampistryMe.setStaffStatus(\''+je(a._id)+'\',\'applied\',{fromRow:true})">Reconsider</button>';
-            }else{
-                if(next)h+='<button class="me-btn me-btn--pri me-btn--sm" onclick="CampistryMe.setStaffStatus(\''+je(a._id)+'\',\''+next+'\',{fromRow:true})">'+ico('enroll')+'Advance</button>';
-                h+='<div class="me-more-wrap"><button class="me-btn me-btn--sec me-btn--sm" onclick="CampistryMe._toggleMenu(\''+menuId+'\')">⋯</button>'
-                    +'<div class="me-more-menu" id="'+menuId+'">'
-                    +'<button onclick="CampistryMe.setStaffStatus(\''+je(a._id)+'\',\'declined\',{fromRow:true})" style="color:var(--err)">Decline</button>'
-                    +'</div></div>';
-            }
-            h+='</div></td></tr>';
-        });
-        h+='</tbody></table></div></div>';
-    }
-    c.innerHTML=h;
-}
-
-function setStaffFilter(f){staffFilter=f;renderStaffing();}
 
 // Review modal for a staff applicant — same appViewModal shell, av-sec/
 // av-row card sections, and live form-config-driven rendering as
@@ -4652,7 +4558,7 @@ function setStaffStatus(id,status,opts){
     var a=staffApplications[id]; if(!a)return;
     a.status=status;
     save();
-    renderStaffing(); _refreshPplIfActive();
+    _refreshPplIfActive();
     if(!opts.fromRow) viewStaffApp(id);
     toast('Moved to '+_staffLabel(status));
     // Reaching "hired" is the acceptance moment — this is what should turn
@@ -4696,7 +4602,7 @@ async function deleteStaffApp(id){
     delete staffApplications[id];
     save();
     closeModal('appViewModal');
-    renderStaffing(); _refreshPplIfActive();
+    _refreshPplIfActive();
     toast('Applicant deleted');
 }
 // Maps SFC_FIELD_CATALOG ids to how Manual Entry should render/collect
@@ -4799,7 +4705,7 @@ function addStaffApp(){
             certifications:[],references:[],status:'applied',
             appliedDate:today(),appliedTime:new Date().toISOString(),onboarding:{}
         };
-        save();closeModal('dynModal');renderStaffing();_refreshPplIfActive();toast('Applicant added');
+        save();closeModal('dynModal');_refreshPplIfActive();toast('Applicant added');
     },{maxWidth:640});
 }
 function copyStaffLink(){var url=window.location.origin+'/campistry_staff_apply.html';try{navigator.clipboard&&navigator.clipboard.writeText(url);}catch(e){}toast('Staff application link copied');}
@@ -4813,131 +4719,6 @@ function exportStaffCSV(){
     dlFile(csv,'staff-applicants.csv','text/csv');
 }
 
-function renderEnrollment(){
-    var c=document.getElementById('page-enrollment');
-    var eArr=Object.entries(enrollments);
-    var total=eArr.length;
-    var byStatus={applied:0,accepted:0,waitlisted:0,enrolled:0,declined:0,withdrawn:0};
-    eArr.forEach(function([,e]){byStatus[e.status]=(byStatus[e.status]||0)+1});
-    var enrolled=byStatus.enrolled||0,accepted=byStatus.accepted||0,applied=byStatus.applied||0,waitlisted=byStatus.waitlisted||0;
-
-    var h='<div class="sec-hd"><div><h2 class="sec-title">Registration & Enrollment</h2><p class="sec-desc">'+total+' application'+(total!==1?'s':'')+' · '+enrolled+' enrolled · '+waitlisted+' waitlisted</p></div>';
-    h+='<div class="sec-actions">'
-        // Both form builders live behind one "Customize Forms" dropdown —
-        // they're the same kind of action (open the split-view builder),
-        // so two separate buttons here was noise, not two real choices.
-        +'<div class="me-more-wrap"><button class="me-btn me-btn--teal" onclick="CampistryMe._toggleMenu(\'regFormsMenu\')">Customize Forms ▾</button>'
-        +'<div class="me-more-menu" id="regFormsMenu" style="min-width:200px">'
-        +'<button onclick="CampistryMe.openFormConfig()">Registration Form</button>'
-        +'<button onclick="CampistryMe.openPostAcceptFormConfig()" title="Sent after a camper is accepted — bunkmate requests and other choices">Post-Acceptance Form</button>'
-        +'</div></div>'
-        +'<button class="me-btn me-btn--pri" onclick="CampistryMe.addApplication()">+ Manual Entry</button>'
-        +'<div class="me-more-wrap"><button class="me-btn me-btn--sec me-btn--sm" onclick="CampistryMe._toggleMenu(\'regLinkMenu\')">🔗 Get Link</button>'
-        +'<div class="me-more-menu" id="regLinkMenu" style="min-width:250px">'
-        +'<div style="padding:7px 10px 9px;font-size:.7rem;color:var(--s400);word-break:break-all;border-bottom:1px solid var(--s100);margin-bottom:4px">'+esc(window.location.origin+'/campistry_register.html')+'</div>'
-        +'<button onclick="CampistryMe.copyRegLink()">📋 Copy Link</button>'
-        +'<button onclick="CampistryMe.openSendRegLinkModal()">✉ Send Link</button>'
-        +'<button onclick="CampistryMe.showRegistrationQR()">▦ QR Code</button>'
-        +'</div></div>'
-        +'</div></div>';
-
-    // Status filter — a compact underline-tab strip (was a 7-box grid that
-    // ate a full row before anyone had even applied).
-    var stages=[
-        {label:'All',count:total,color:'var(--s700)',key:'all'},
-        {label:'Applied',count:applied,color:'var(--s500)',key:'applied'},
-        {label:'Waitlist',count:waitlisted,color:'var(--me)',key:'waitlisted'},
-        {label:'Accepted',count:accepted,color:'#3B82F6',key:'accepted'},
-        {label:'Enrolled',count:enrolled,color:'var(--ok)',key:'enrolled'},
-        {label:'Withdrawn',count:byStatus.withdrawn||0,color:'var(--s400)',key:'withdrawn'},
-        {label:'Declined',count:byStatus.declined||0,color:'var(--err)',key:'declined'}
-    ];
-    h+='<div style="display:flex;gap:2px;border-bottom:1px solid var(--s200);margin-bottom:16px;overflow-x:auto">';
-    stages.forEach(function(s){
-        var active=regFilter===s.key;
-        h+='<button onclick="CampistryMe.setRegFilter(\''+s.key+'\')" style="padding:9px 12px;border:none;background:none;font-size:.8rem;font-weight:600;cursor:pointer;white-space:nowrap;font-family:inherit;display:flex;align-items:center;gap:6px;border-bottom:2px solid '+(active?s.color:'transparent')+';color:'+(active?s.color:'var(--s500)')+'">'
-            +esc(s.label)
-            +'<span style="font-size:.68rem;font-weight:700;border-radius:9px;padding:1px 6px;background:'+(active?s.color:'var(--s100)')+';color:'+(active?'#fff':'var(--s600)')+'">'+s.count+'</span>'
-            +'</button>';
-    });
-    h+='</div>';
-
-    // Applications — filtered to the active section
-    var sectionLabel=(stages.filter(function(s){return s.key===regFilter})[0]||{}).label||'All';
-    var filtered=eArr.filter(function(pair){return regFilter==='all'||(pair[1].status||'applied')===regFilter;});
-    if(!eArr.length){
-        h+='<div class="me-empty"><h3>No applications yet</h3><p>Share your registration link, or add an application manually to get started.</p></div>';
-    }else{
-        h+='<div class="me-card"><div class="me-card-head"><h3>'+esc(regFilter==='all'?'All Applications':sectionLabel)+' ('+filtered.length+')</h3></div>';
-        if(!filtered.length){
-            h+='<div class="me-empty" style="padding:26px 20px"><p>No '+esc(sectionLabel.toLowerCase())+' campers.</p></div>';
-        }else{
-        h+='<div id="regBulkBar" style="display:none;align-items:center;gap:8px;padding:8px 12px;background:var(--me-bg,#eef2ff);border:1px solid var(--s200);border-radius:8px;margin-bottom:8px">'
-            +'<span id="regBulkCount" style="font-weight:700;font-size:.8rem;color:var(--s700)"></span>'
-            +'<span style="flex:1"></span>'
-            +'<button class="me-btn me-btn--pri me-btn--sm" onclick="CampistryMe.bulkEnrollStatus(\'accepted\')">Accept</button>'
-            +'<button class="me-btn me-btn--sec me-btn--sm" onclick="CampistryMe.bulkEnrollStatus(\'waitlisted\')">Waitlist</button>'
-            +'<button class="me-btn me-btn--ghost me-btn--sm" style="color:var(--err)" onclick="CampistryMe.bulkEnrollStatus(\'declined\')">Decline</button>'
-            +'</div>';
-        h+='<div class="me-tw"><table class="me-t"><thead><tr><th style="width:26px"><input type="checkbox" title="Select all" onclick="CampistryMe.toggleAllEnroll(this)"></th><th>Date</th><th>Camper</th><th>Parent</th><th>Session</th><th>Status</th><th>Forms</th><th>Payment</th><th style="width:1%;white-space:nowrap"></th></tr></thead><tbody>';
-        filtered.sort(function(a,b){return(b[1].appliedDate||'').localeCompare(a[1].appliedDate||'')}).forEach(function([id,e]){
-            var sc=e.status==='enrolled'?'ok':e.status==='accepted'?'ok':e.status==='waitlisted'?'warn':e.status==='declined'||e.status==='withdrawn'?'err':'gray';
-            var formsDone=e.formsCompleted||0,formsTotal=e.formsRequired||0;
-            var formsColor=formsTotal===0?'var(--s400)':formsDone>=formsTotal?'var(--ok)':'var(--me)';
-            var payColor=e.paymentStatus==='paid'?'var(--ok)':e.paymentStatus==='partial'?'var(--me)':'var(--s400)';
-            h+='<tr class="click" onclick="CampistryMe.viewApplication(\''+esc(id)+'\')">';
-            h+='<td onclick="event.stopPropagation()"><input type="checkbox" class="reg-check" data-id="'+esc(id)+'" onclick="CampistryMe._updateRegBulkBar()"></td>';
-            h+='<td style="font-size:.75rem;color:var(--s400)">'+esc(e.appliedDate||'—')+'</td>';
-            h+='<td class="bold" style="color:var(--me)">'+esc(e.camperName||'—')+'</td>';
-            h+='<td>'+esc(e.parentName||'—')+'</td>';
-            h+='<td>'+esc(e.session||'—')+'</td>';
-            h+='<td>'+bdg(e.status||'applied',sc)+'</td>';
-            h+='<td><span style="font-size:.75rem;font-weight:600;color:'+formsColor+'">'+formsDone+'/'+formsTotal+'</span></td>';
-            h+='<td><span style="font-size:.75rem;font-weight:600;color:'+payColor+'">'+esc(e.paymentStatus||'pending')+'</span></td>';
-            // The row itself opens Review (onclick on <tr> above) — the camper
-            // name/row IS the "open their registration" affordance, so this
-            // column only needs the status-changing actions, not a redundant
-            // Review button. Secondary/destructive actions collapse into a
-            // per-row "⋯" menu (same me-more-wrap/_toggleMenu component used
-            // for the page-header menus) so a row never shows more than one
-            // button plus one menu trigger, no matter how many actions exist.
-            var menuId='regRowMenu_'+id;
-            h+='<td style="text-align:right;white-space:nowrap" onclick="event.stopPropagation()"><div style="display:flex;gap:6px;justify-content:flex-end;align-items:center;white-space:nowrap">';
-            if(e.status==='applied'){
-                h+='<button class="me-btn me-btn--pri me-btn--sm" onclick="CampistryMe.updateEnrollStatus(\''+esc(id)+'\',\'accepted\')">Accept</button>';
-                h+='<div class="me-more-wrap"><button class="me-btn me-btn--sec me-btn--sm" onclick="CampistryMe._toggleMenu(\''+menuId+'\')">⋯</button>'
-                    +'<div class="me-more-menu" id="'+menuId+'">'
-                    +'<button onclick="CampistryMe.updateEnrollStatus(\''+esc(id)+'\',\'waitlisted\')">Waitlist</button>'
-                    +'<button onclick="CampistryMe.updateEnrollStatus(\''+esc(id)+'\',\'declined\')" style="color:var(--err)">Decline</button>'
-                    +'</div></div>';
-            }else if(e.status==='accepted'){
-                h+='<button class="me-btn me-btn--pri me-btn--sm" onclick="CampistryMe.enrollCamper(\''+esc(id)+'\')">'+ico('enroll')+'Enroll</button>';
-                h+='<div class="me-more-wrap"><button class="me-btn me-btn--sec me-btn--sm" onclick="CampistryMe._toggleMenu(\''+menuId+'\')">⋯</button>'
-                    +'<div class="me-more-menu" id="'+menuId+'">'
-                    +'<button onclick="CampistryMe.generateParentInvite(\''+esc(id)+'\')">'+ico('invite')+'Get invite link</button>'
-                    +'<button onclick="CampistryMe.rescindEnrollment(\''+esc(id)+'\')" style="color:var(--err)">'+ico('rescind')+'Rescind</button>'
-                    +'</div></div>';
-            }else if(e.status==='waitlisted'){
-                h+='<button class="me-btn me-btn--sec me-btn--sm" onclick="CampistryMe.updateEnrollStatus(\''+esc(id)+'\',\'accepted\')">Accept</button>';
-            }else if(e.status==='enrolled'){
-                h+='<div class="me-more-wrap"><button class="me-btn me-btn--sec me-btn--sm" onclick="CampistryMe._toggleMenu(\''+menuId+'\')">⋯</button>'
-                    +'<div class="me-more-menu" id="'+menuId+'">'
-                    +'<button onclick="CampistryMe.generateParentInvite(\''+esc(id)+'\')">'+ico('invite')+'Get invite link</button>'
-                    +'<button onclick="CampistryMe.rescindEnrollment(\''+esc(id)+'\')" style="color:var(--err)">'+ico('rescind')+'Rescind</button>'
-                    +'</div></div>';
-            }else if(e.status==='withdrawn'||e.status==='declined'){
-                h+='<button class="me-btn me-btn--sec me-btn--sm" onclick="CampistryMe.updateEnrollStatus(\''+esc(id)+'\',\'waitlisted\')">Re-add to waitlist</button>';
-            }
-            h+='</div></td></tr>';
-        });
-        h+='</tbody></table></div>';
-        }
-        h+='</div>';
-    }
-    c.innerHTML=h;
-}
-
-function setRegFilter(f){ regFilter=f; renderEnrollment(); }
 
 // Rescind a registration: mark the application Withdrawn AND remove the
 // camper from the roster (so they drop off the Campers list), cascading the
@@ -5357,7 +5138,10 @@ function _accCard(title,bodyHtml,opts){
     return '<div class="fcAcc" style="border:1px solid var(--s200);border-radius:'+(sub?'8px':'10px')+';margin-bottom:'+(sub?'6px':'10px')+';overflow:hidden;background:#fff">'
         +'<div onclick="CampistryMe._toggleAcc(\''+id+'\')" style="display:flex;align-items:center;justify-content:space-between;gap:10px;padding:'+(sub?'9px 12px':'12px 16px')+';cursor:pointer;background:'+(sub?'var(--s50)':'#fff')+';user-select:none">'
         +'<span style="font-weight:700;font-size:'+(sub?'.8rem':'.88rem')+';color:var(--s800)">'+esc(title)+(opts.badge?' <span style="font-weight:600;color:var(--s400);font-size:.72rem">'+esc(opts.badge)+'</span>':'')+'</span>'
-        +'<span id="'+id+'Chev" style="color:var(--s400);font-size:.75rem;flex-shrink:0">'+(open?'▾':'▸')+'</span>'
+        +'<span style="display:flex;align-items:center;gap:10px;flex-shrink:0">'
+        +(opts.actionHtml?'<span onclick="event.stopPropagation()">'+opts.actionHtml+'</span>':'')
+        +'<span id="'+id+'Chev" style="color:var(--s400);font-size:.75rem">'+(open?'▾':'▸')+'</span>'
+        +'</span>'
         +'</div>'
         +'<div id="'+id+'" style="display:'+(open?'block':'none')+';padding:14px 16px;border-top:1px solid var(--s200)">'+bodyHtml+'</div>'
         +'</div>';
@@ -6423,7 +6207,7 @@ function addApplication(){
             customAnswers:customAnswers,customQuestionLabels:customQuestionLabels
         };
         enrollments[id]=rec;
-        save();closeModal('dynModal');renderEnrollment();_refreshPplIfActive();
+        save();closeModal('dynModal');_refreshPplIfActive();
         toast(isWaitlist?camperName+' added to waitlist':camperName+' application received');
     },{maxWidth:720});
 }
@@ -6442,7 +6226,7 @@ function updateEnrollStatus(id,status,opts){
         if(session) autoPromoteWaitlist(session);
     }
     // Bulk callers pass silent:true and do one save/render/toast for the whole batch.
-    if(!opts.silent){ save();renderEnrollment();_refreshPplIfActive();toast('Status updated to '+status); }
+    if(!opts.silent){ save();_refreshPplIfActive();toast('Status updated to '+status); }
 
     // On first acceptance, generate a parent portal invite link (skipped in bulk
     // to avoid a burst of invite generation; the office can invite from the row).
@@ -6480,7 +6264,7 @@ async function bulkEnrollStatus(status){
         if(!okDecline)return;
     }
     ids.forEach(function(id){ updateEnrollStatus(id,status,{silent:true}); });
-    save(); renderEnrollment(); _refreshPplIfActive(); toast(verb+' '+ids.length+' application'+(ids.length>1?'s':''));
+    save(); _refreshPplIfActive(); toast(verb+' '+ids.length+' application'+(ids.length>1?'s':''));
 }
 
 // ─── PARENT PORTAL INVITE ────────────────────────────────────────────────────
@@ -6960,7 +6744,7 @@ function enrollCamper(id){
     }
 
     e.enrolledDate=new Date().toISOString().split('T')[0];
-    save();renderEnrollment();_refreshPplIfActive();
+    save();_refreshPplIfActive();
 }
 
 // Down payment (deposit) vs. the rest of tuition are genuinely different
@@ -10508,7 +10292,7 @@ function reEnrollCamper(camperName){
         var session=document.getElementById('reSession').value;var sesObj=sessions.find(function(s){return s.name===session});
         var id='enr_'+Date.now()+'_'+Math.random().toString(36).substr(2,4);
         enrollments[id]={camperName:camperName,camperLast:camperName.split(' ').pop(),parentName:d.parent1Name||'',parentEmail:d.parent1Email||'',parentPhone:d.parent1Phone||'',dob:d.dob||'',gender:d.gender||'',school:d.school||'',schoolGrade:d.schoolGrade||'',street:d.street||'',city:d.city||'',state:d.state||'',zip:d.zip||'',allergies:d.allergies||'',medications:d.medications||'',session:session,sessionTuition:sesObj?sesObj.tuition:0,status:'accepted',appliedDate:new Date().toISOString().split('T')[0],formsRequired:3,formsCompleted:0,paymentStatus:'pending',notes:'Re-enrollment — returning camper',isReturning:true};
-        save();closeModal('dynModal');renderEnrollment();_refreshPplIfActive();toast(camperName+' re-enrolled (auto-accepted)');
+        save();closeModal('dynModal');_refreshPplIfActive();toast(camperName+' re-enrolled (auto-accepted)');
         if(d.parent1Email)sendAutoNotification('enrollment_confirmation',id);
     });
 }
@@ -11469,7 +11253,7 @@ window.CampistryMe={
     getStaffForDivision:getStaffForDivision,getBunksForDivision:getBunksForDivision,
     findStaffByEmail:findStaffByEmail,getAllStaff:getAllStaff,
     copyRegLink:copyRegLink,addDocRow:addDocRow,addApplication:addApplication,_onAppPhotoPick:_onAppPhotoPick,autoPromoteWaitlist:autoPromoteWaitlist,
-    viewApplication:viewApplication,updateEnrollStatus:updateEnrollStatus,bulkEnrollStatus:bulkEnrollStatus,toggleAllEnroll:toggleAllEnroll,_updateRegBulkBar:_updateRegBulkBar,enrollCamper:enrollCamper,generateParentInvite:generateParentInvite,setRegFilter:setRegFilter,rescindEnrollment:rescindEnrollment,
+    viewApplication:viewApplication,updateEnrollStatus:updateEnrollStatus,bulkEnrollStatus:bulkEnrollStatus,toggleAllEnroll:toggleAllEnroll,_updateRegBulkBar:_updateRegBulkBar,enrollCamper:enrollCamper,generateParentInvite:generateParentInvite,rescindEnrollment:rescindEnrollment,
     saveAppNote:saveAppNote,printApplication:printApplication,
     openFormConfig:openFormConfig,saveFormConfig:saveFormConfig,addCustomQ:addCustomQ,addPromoRow:addPromoRow,
     openStaffFormConfig:openStaffFormConfig,saveStaffFormConfig:saveStaffFormConfig,addStaffCustomQ:addStaffCustomQ,
@@ -11495,7 +11279,7 @@ window.CampistryMe={
     finAddPayment:finAddPayment,finRemovePayment:finRemovePayment,finRefund:finRefund,
     sendPayLink:sendPayLink,copyPayLink:copyPayLink,
     monthlyPlan:monthlyPlan,toggleFamilyAutopay:toggleFamilyAutopay,cancelMonthlyPlan:cancelMonthlyPlan,
-    setStaffFilter:setStaffFilter,viewStaffApp:viewStaffApp,setStaffStatus:setStaffStatus,saveStaffNotes:saveStaffNotes,openAssignPositionModal:openAssignPositionModal,
+    viewStaffApp:viewStaffApp,setStaffStatus:setStaffStatus,saveStaffNotes:saveStaffNotes,openAssignPositionModal:openAssignPositionModal,
     toggleOnboard:toggleOnboard,cycleRef:cycleRef,deleteStaffApp:deleteStaffApp,addStaffApp:addStaffApp,
     copyStaffLink:copyStaffLink,exportStaffCSV:exportStaffCSV,
     setLeadFilter:setLeadFilter,viewLead:viewLead,setLeadStatus:setLeadStatus,saveLeadNotes:saveLeadNotes,
