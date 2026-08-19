@@ -58,17 +58,8 @@
     <div class="header-left">
         <a href="dashboard.html" class="header-back">&larr; Dashboard</a>
         <button id="hamburgerBtn" class="hamburger-btn" aria-label="Menu"><span></span><span></span><span></span></button>
-        <div class="quick-switch-bar">
-            <div class="quick-switch-active" data-app="me">
-                <img src="Me_clean.png" alt="Campistry Me">
-            </div>
-            <a href="flow.html" class="quick-switch-link" data-app="flow" title="Open Campistry Flow — Scheduling">
-                <img src="Flow_clean.png" alt="Campistry Flow">
-            </a>
-            <span class="quick-switch-link" data-app="go" title="Campistry Go — Coming Soon" style="opacity:0.35;cursor:not-allowed;pointer-events:none;">
-                <img src="Go_clean.png" alt="Campistry Go">
-            </span>
-        </div>
+        <div data-quick-switch-mount="me"></div>
+        <script src="campistry_app_switcher.js"></script>
     </div>
     <div class="header-right">
         <div class="me-search-wrap">

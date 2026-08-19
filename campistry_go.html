@@ -132,17 +132,8 @@
         <div class="nav-inner">
             <div class="nav-left">
                 <a href="dashboard.html" class="nav-back">&larr; Dashboard</a>
-                <div class="quick-switch-bar">
-                    <div class="quick-switch-active" data-app="go">
-                        <img src="Go_clean.png" alt="Campistry Go">
-                    </div>
-                    <a href="campistry_me.html" class="quick-switch-link" data-app="me" title="Open Campistry Me — Structure &amp; Campers">
-                        <img src="Me_clean.png" alt="Campistry Me">
-                    </a>
-                    <a href="flow.html" class="quick-switch-link" data-app="flow" title="Open Campistry Flow — Scheduling">
-                        <img src="Flow_clean.png" alt="Campistry Flow">
-                    </a>
-                </div>
+                <div data-quick-switch-mount="go"></div>
+                <script src="campistry_app_switcher.js"></script>
             </div>
             <div class="sync-badge">
                 <div class="sync-dot" id="syncDot"></div>

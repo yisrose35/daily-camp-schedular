@@ -583,7 +583,15 @@ body {
     border: 1px solid rgba(0, 0, 0, 0.06);
     border-radius: 14px;
     box-shadow: 0 2px 8px rgba(0, 0, 0, 0.04), 0 0 0 1px rgba(255,255,255,0.7) inset;
+    /* Now lists every owner app (8, up from 3) — some headers have less
+       room to spare than others, so let the bar scroll horizontally
+       rather than wrap or force the rest of the header to reflow. */
+    overflow-x: auto;
+    scrollbar-width: none;
+    max-width: 100%;
+    flex-shrink: 1;
 }
+.quick-switch-bar::-webkit-scrollbar { display: none; }
 
 /* ── Shared base for both active + link ── */
 .quick-switch-link,
@@ -596,6 +604,7 @@ body {
     position: relative;
     border: none;
     outline: none;
+    flex-shrink: 0;
 }
 
 /* ── Inactive link ── */
@@ -648,6 +657,31 @@ body {
     --qs-glow: rgba(16, 185, 129, 0.15);
 }
 
+.quick-switch-link[data-app="health"] {
+    --qs-bg-hover: rgba(95, 27, 140, 0.10);
+    --qs-glow: rgba(95, 27, 140, 0.15);
+}
+
+.quick-switch-link[data-app="live"] {
+    --qs-bg-hover: rgba(33, 81, 181, 0.10);
+    --qs-glow: rgba(33, 81, 181, 0.15);
+}
+
+.quick-switch-link[data-app="notes"] {
+    --qs-bg-hover: rgba(99, 102, 241, 0.10);
+    --qs-glow: rgba(99, 102, 241, 0.15);
+}
+
+.quick-switch-link[data-app="snacks"] {
+    --qs-bg-hover: rgba(106, 50, 15, 0.10);
+    --qs-glow: rgba(106, 50, 15, 0.15);
+}
+
+.quick-switch-link[data-app="link"] {
+    --qs-bg-hover: rgba(42, 122, 53, 0.10);
+    --qs-glow: rgba(42, 122, 53, 0.15);
+}
+
 /* ── Active app (current page) ── */
 .quick-switch-active {
     background: var(--qs-active-bg, rgba(0,0,0,0.05));
@@ -693,6 +727,41 @@ body {
     --qs-active-shadow: rgba(16, 185, 129, 0.12);
     --qs-active-ring: rgba(16, 185, 129, 0.18);
     --qs-dot: #10B981;
+}
+
+.quick-switch-active[data-app="health"] {
+    --qs-active-bg: rgba(95, 27, 140, 0.10);
+    --qs-active-shadow: rgba(95, 27, 140, 0.12);
+    --qs-active-ring: rgba(95, 27, 140, 0.18);
+    --qs-dot: #5F1B8C;
+}
+
+.quick-switch-active[data-app="live"] {
+    --qs-active-bg: rgba(33, 81, 181, 0.10);
+    --qs-active-shadow: rgba(33, 81, 181, 0.12);
+    --qs-active-ring: rgba(33, 81, 181, 0.18);
+    --qs-dot: #2151B5;
+}
+
+.quick-switch-active[data-app="notes"] {
+    --qs-active-bg: rgba(99, 102, 241, 0.10);
+    --qs-active-shadow: rgba(99, 102, 241, 0.12);
+    --qs-active-ring: rgba(99, 102, 241, 0.18);
+    --qs-dot: #6366F1;
+}
+
+.quick-switch-active[data-app="snacks"] {
+    --qs-active-bg: rgba(106, 50, 15, 0.10);
+    --qs-active-shadow: rgba(106, 50, 15, 0.12);
+    --qs-active-ring: rgba(106, 50, 15, 0.18);
+    --qs-dot: #6A320F;
+}
+
+.quick-switch-active[data-app="link"] {
+    --qs-active-bg: rgba(42, 122, 53, 0.10);
+    --qs-active-shadow: rgba(42, 122, 53, 0.12);
+    --qs-active-ring: rgba(42, 122, 53, 0.18);
+    --qs-dot: #2A7A35;
 }
 
 /* ==================== RESPONSIVE ==================== */

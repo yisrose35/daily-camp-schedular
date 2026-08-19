@@ -204,18 +204,9 @@
                 <button id="hamburgerBtn" class="hamburger-btn" aria-label="Toggle Navigation">
                     <span></span><span></span><span></span>
                 </button>
-                <!-- Quick-Switch Bar -->
-                <div class="quick-switch-bar">
-                    <div class="quick-switch-active" data-app="flow">
-                        <img src="Flow_clean.png" alt="Campistry Flow">
-                    </div>
-                    <a href="campistry_me.html" class="quick-switch-link" data-app="me" title="Open Campistry Me — Structure &amp; Campers">
-                        <img src="Me_clean.png" alt="Campistry Me">
-                    </a>
-                    <span class="quick-switch-link" data-app="go" title="Campistry Go — Coming Soon" style="opacity:0.35;cursor:not-allowed;pointer-events:none;">
-                        <img src="Go_clean.png" alt="Campistry Go">
-                    </span>
-                </div>
+                <!-- Quick-Switch Bar (shared component — see campistry_app_switcher.js) -->
+                <div data-quick-switch-mount="flow"></div>
+                <script src="campistry_app_switcher.js"></script>
             </div>
             <div class="header-right">
                 <label class="header-date-label" for="calendar-date-picker">
