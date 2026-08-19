@@ -30,8 +30,8 @@ a{color:inherit;text-decoration:none}button{font-family:inherit;cursor:pointer;b
    shrink and internally scroll — rather than overlap anything — the
    moment the header runs out of room. */
 .app-header{display:flex;align-items:center;height:56px;padding:0 16px;background:#fff;border-bottom:1px solid var(--s200);position:sticky;top:0;z-index:30}
-.header-left{display:flex;align-items:center;gap:12px;min-width:0;flex:1 1 0;justify-content:flex-start}
-.header-right{display:flex;align-items:center;gap:10px;min-width:0;flex:1 1 0;justify-content:flex-end}
+.header-left{display:flex;align-items:center;gap:12px;min-width:0;flex:1 1 0;justify-content:flex-start;overflow:hidden}
+.header-right{display:flex;align-items:center;gap:10px;min-width:0;flex:1 1 0;justify-content:flex-end;overflow:hidden}
 .app-header-center{display:flex;justify-content:center;min-width:0;overflow:hidden;flex:0 1 auto}
 .app-header .quick-switch-bar{position:static;transform:none;max-width:100%}
 .header-back{color:var(--me);font-weight:600;font-size:.85rem;white-space:nowrap}
@@ -44,9 +44,9 @@ a{color:inherit;text-decoration:none}button{font-family:inherit;cursor:pointer;b
 .app-logo-go-img{height:36px;width:auto;position:relative;top:-1px}
 .header-app-switch{display:flex;align-items:center;margin-left:12px;transition:opacity .2s}
 .header-app-switch:hover{opacity:.7}
-.me-search-wrap{position:relative}
+.me-search-wrap{position:relative;flex:1 1 auto;min-width:0;max-width:200px}
 .me-search-icon{position:absolute;left:10px;top:50%;transform:translateY(-50%);color:var(--s400);pointer-events:none}
-.me-search-input{padding:7px 12px 7px 32px;border:1.5px solid var(--s200);border-radius:var(--r);font-size:12px;color:var(--s800);width:200px;outline:none;transition:border .15s,box-shadow .15s}
+.me-search-input{padding:7px 12px 7px 32px;border:1.5px solid var(--s200);border-radius:var(--r);font-size:12px;color:var(--s800);width:100%;min-width:0;outline:none;transition:border .15s,box-shadow .15s}
 .me-search-input:focus{border-color:var(--me);box-shadow:0 0 0 3px rgba(217,119,6,.08)}
 .gs-dropdown{position:absolute;top:calc(100% + 6px);left:0;width:320px;max-height:420px;overflow-y:auto;background:#fff;border:1px solid var(--s200);border-radius:var(--r2);box-shadow:0 8px 24px rgba(0,0,0,.12);z-index:1200;padding:6px}
 .gs-group-label{font-size:.65rem;font-weight:700;color:var(--s400);text-transform:uppercase;letter-spacing:.05em;padding:8px 10px 4px}
