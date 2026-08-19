@@ -419,7 +419,7 @@ function nav(p){
     // either page: Structure (data-page="structure") also covers Bunk
     // Builder, Reports & Sheets (data-page="reports") also covers Print
     // Sheets, and Roster (data-page="campers") also covers Families.
-    var sidebarKey=(p==='bunkbuilder')?'structure':(p==='printsheets')?'reports':(p==='families'||p==='camperdetail')?'campers':p;
+    var sidebarKey=(p==='bunkbuilder')?'structure':(p==='printsheets')?'reports':(p==='camperdetail')?'campers':p;
     document.querySelectorAll('.sidebar-item').forEach(function(b){b.classList.toggle('active',b.dataset.page===sidebarKey)});
     document.querySelectorAll('.me-page').forEach(function(pg){pg.classList.toggle('active',pg.id==='page-'+p)});
     render(p);
@@ -1092,18 +1092,19 @@ function viewFamilyFromCamper(camperName){
     _famHighlight=camperName;
     nav('families');
 }
-// Families lives as a sub-tab of Roster (same me.campers capability gate
-// as the roster itself — one sidebar entry, cross-linked in-page tabs,
-// same pattern as Structure/Bunk Builder and Reports/Print Sheets).
+// Families is its own top-level sidebar entry (same me.campers capability
+// gate as the Roster, since a family groups the same campers) — previously
+// a tab shared with Roster, split out the same way Registration/Hiring
+// were, so it's reachable directly instead of a second click inside Roster.
 function renderFamiliesPage(){
     var c=document.getElementById('page-families');
     if(!c)return;
     if(!_secCan('me.campers')){
-        c.innerHTML=_rosterTabsHtml('families')+'<div class="me-empty"><h3>No access to Families</h3><p>Your account isn\'t set up to open this section.</p></div>';
+        c.innerHTML='<div class="me-empty"><h3>No access to Families</h3><p>Your account isn\'t set up to open this section.</p></div>';
         return;
     }
     var highlight=_famHighlight; _famHighlight=null;
-    c.innerHTML=_rosterTabsHtml('families')+_familyBundlesHtml(highlight);
+    c.innerHTML=_familyBundlesHtml(highlight);
     if(highlight){
         var fam=_familyForCamper(highlight);
         if(fam){
@@ -1558,8 +1559,7 @@ function renderCampers(filter){
     camperEntries.sort(function(a,b){return a[0].localeCompare(b[0])});
     var total=camperEntries.length+staffRows.length;
 
-    var h=_rosterTabsHtml('campers');
-    h+='<div class="sec-hd"><div><h2 class="sec-title">Roster</h2><p class="sec-desc">'+camperEntries.length+' camper'+(camperEntries.length!==1?'s':'')+(canStaff?' · '+staffRows.length+' staff':'')+'</p></div><div class="sec-actions"><button class="me-btn me-btn--ghost me-btn--sm" onclick="CampistryMe.manageCustomFields()" title="Define custom fields">⚙ Custom Fields</button><button class="me-btn me-btn--sec me-btn--sm" onclick="CampistryMe.downloadTemplate()">Template</button><button class="me-btn me-btn--sec me-btn--sm" onclick="CampistryMe.openCsv()">Import</button><button class="me-btn me-btn--sec me-btn--sm" onclick="CampistryMe.exportCsv()">Export</button><button class="me-btn me-btn--pri" onclick="CampistryMe.addCamper()">+ Add Camper</button></div></div>';
+    var h='<div class="sec-hd"><div><h2 class="sec-title">Roster</h2><p class="sec-desc">'+camperEntries.length+' camper'+(camperEntries.length!==1?'s':'')+(canStaff?' · '+staffRows.length+' staff':'')+'</p></div><div class="sec-actions"><button class="me-btn me-btn--ghost me-btn--sm" onclick="CampistryMe.manageCustomFields()" title="Define custom fields">⚙ Custom Fields</button><button class="me-btn me-btn--sec me-btn--sm" onclick="CampistryMe.downloadTemplate()">Template</button><button class="me-btn me-btn--sec me-btn--sm" onclick="CampistryMe.openCsv()">Import</button><button class="me-btn me-btn--sec me-btn--sm" onclick="CampistryMe.exportCsv()">Export</button><button class="me-btn me-btn--pri" onclick="CampistryMe.addCamper()">+ Add Camper</button></div></div>';
     h+=_setupChecklistHtml();
 
     var unplaced=canStaff?hiredStaff().filter(function(a){return !String(a.email||'').trim()||!bunksForStaffEmail(a.email).length;}):[];
@@ -2337,13 +2337,6 @@ function _layoutTabsHtml(active){
 // view-only by design, me.printsheets supports full edit, and roles split
 // them differently: e.g. Office gets both, Bookkeeper gets reports but not
 // printsheets), so each keeps its own #page-* pane and capability check.
-function _rosterTabsHtml(active){
-    var tabs=[{k:'campers',l:'Roster'},{k:'families',l:'Families'}];
-    return '<div style="display:flex;gap:0;border-bottom:1px solid var(--s200);margin-bottom:14px">'+tabs.map(function(t){
-        return '<button class="me-btn me-btn--ghost" data-page="'+t.k+'" style="padding:8px 16px;font-size:.8rem;font-weight:600;border-bottom:2px solid '+(active===t.k?'var(--me)':'transparent')+';color:'+(active===t.k?'var(--me)':'var(--s400)')+';border-radius:0" onclick="CampistryMe.nav(\''+t.k+'\')">'+t.l+'</button>';
-    }).join('')+'</div>';
-}
-
 function _reportsTabsHtml(active){
     var tabs=[{k:'reports',l:'Reports'},{k:'printsheets',l:'Print Sheets'}];
     return '<div style="display:flex;gap:0;border-bottom:1px solid var(--s200);margin-bottom:14px">'+tabs.map(function(t){

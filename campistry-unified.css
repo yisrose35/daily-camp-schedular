@@ -575,7 +575,6 @@ body {
     display: flex;
     align-items: center;
     gap: 4px;
-    margin-left: 14px;
     padding: 4px;
     background: rgba(255, 255, 255, 0.6);
     backdrop-filter: blur(12px);
@@ -588,8 +587,19 @@ body {
        rather than wrap or force the rest of the header to reflow. */
     overflow-x: auto;
     scrollbar-width: none;
-    max-width: 100%;
+    max-width: calc(100% - 24px);
     flex-shrink: 1;
+    /* Centered in the header regardless of how wide the back-button/logo
+       on the left or the avatar/sync-badge on the right happen to be —
+       every header this mounts into (.app-header, .nav, .nt-header,
+       .lk-header) is `position: sticky`, which is a valid positioning
+       context, so this centers on THAT element without needing each
+       page's own header markup restructured into left/center/right
+       zones. */
+    position: absolute;
+    left: 50%;
+    top: 50%;
+    transform: translate(-50%, -50%);
 }
 .quick-switch-bar::-webkit-scrollbar { display: none; }
 
@@ -773,7 +783,7 @@ body {
     .c-modal { width: 95vw; max-width: 95vw; border-radius: var(--radius-lg); }
     .c-btn { min-height: 44px; }
     .c-page-title { font-size: 1.5rem; }
-    .quick-switch-bar { margin-left: 8px; padding: 3px; gap: 2px; border-radius: 10px; }
+    .quick-switch-bar { padding: 3px; gap: 2px; border-radius: 10px; }
     .quick-switch-link { padding: 4px 7px; border-radius: 8px; }
     .quick-switch-link img { height: 22px; }
     .quick-switch-active { padding: 4px 7px; border-radius: 8px; }
