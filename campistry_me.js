@@ -1668,7 +1668,7 @@ function renderCampers(filter){
     camperEntries.sort(function(a,b){return a[0].localeCompare(b[0])});
     var total=camperEntries.length+staffRows.length;
 
-    var h='<div class="sec-hd"><div><h2 class="sec-title">Roster</h2><p class="sec-desc">'+camperEntries.length+' camper'+(camperEntries.length!==1?'s':'')+(canStaff?' · '+staffRows.length+' staff':'')+'</p></div><div class="sec-actions"><button class="me-btn me-btn--ghost me-btn--sm" onclick="CampistryMe.manageCustomFields()" title="Define custom fields">⚙ Custom Fields</button><button class="me-btn me-btn--sec me-btn--sm" onclick="CampistryMe.downloadTemplate()">Template</button><button class="me-btn me-btn--sec me-btn--sm" onclick="CampistryMe.openCsv()">Import</button><button class="me-btn me-btn--sec me-btn--sm" onclick="CampistryMe.exportCsv()">Export</button><button class="me-btn me-btn--pri" onclick="CampistryMe.addCamper()">+ Add Camper</button></div></div>';
+    var h='<div class="sec-hd"><div><h2 class="sec-title">Roster</h2><p class="sec-desc">'+camperEntries.length+' camper'+(camperEntries.length!==1?'s':'')+(canStaff?' · '+staffRows.length+' staff':'')+'</p></div><div class="sec-actions"><button class="me-btn me-btn--ghost me-btn--sm" onclick="CampistryMe.manageCustomFields()" title="Define custom fields">⚙ Custom Fields</button><button class="me-btn me-btn--sec me-btn--sm" onclick="CampistryMe.downloadTemplate()">Template</button><button class="me-btn me-btn--sec me-btn--sm" onclick="CampistryMe.openCsv()">Import</button><button class="me-btn me-btn--pri" onclick="CampistryMe.addCamper()">+ Add Camper</button></div></div>';
     h+=_setupChecklistHtml();
 
     var unplaced=canStaff?hiredStaff().filter(function(a){return !String(a.email||'').trim()||!bunksForStaffEmail(a.email).length;}):[];
@@ -1681,17 +1681,9 @@ function renderCampers(filter){
     if(!total){
         h+='<div class="me-empty"><h3>No one here yet</h3><p>Add campers or import from CSV — or accept an application from Registration &amp; Hiring.</p><div style="display:flex;gap:6px;justify-content:center"><button class="me-btn me-btn--pri" onclick="CampistryMe.addCamper()">+ Add</button><button class="me-btn me-btn--sec" onclick="CampistryMe.openCsv()">Import</button></div></div>';
     }else{
-        if(camperEntries.length){
-            h+='<div id="rosterBulkBar" style="display:none;align-items:center;gap:8px;padding:8px 12px;background:var(--me-bg,#eef2ff);border:1px solid var(--s200);border-radius:8px;margin-bottom:8px">'
-                +'<span id="rosterBulkCount" style="font-weight:700;font-size:.8rem;color:var(--s700)"></span>'
-                +'<span style="flex:1"></span>'
-                +'<button class="me-btn me-btn--sec me-btn--sm" onclick="CampistryMe.bulkExportRoster()">↓ Export Selected</button>'
-                +'<button class="me-btn me-btn--ghost me-btn--sm" style="color:var(--err)" onclick="CampistryMe.bulkDeleteRoster()">Delete Selected</button>'
-                +'</div>';
-        }
         var combined=camperEntries.map(function(pair){return{kind:'camper',n:pair[0],d:pair[1]}}).concat(staffRows.map(function(r){return{kind:'staff',r:r}}));
         var paged=_paginate(combined,PAGE_SIZE,_rosterPage);
-        h+='<div class="me-card"><div class="me-tw"><table class="me-t"><thead><tr><th style="width:26px">'+(camperEntries.length?'<input type="checkbox" title="Select all campers" onclick="CampistryMe.toggleAllRoster(this)">':'')+'</th><th style="width:76px">Type</th><th>Name</th><th>Details</th><th>Placement</th><th>Contact</th><th style="width:60px"></th></tr></thead><tbody>';
+        h+='<div class="me-card"><div class="me-tw"><table class="me-t"><thead><tr><th style="width:76px">Type</th><th>Name</th><th>Details</th><th>Placement</th><th>Contact</th><th style="width:60px"></th></tr></thead><tbody>';
         paged.items.forEach(function(item){
             if(item.kind==='camper'){
                 var n=item.n,d=item.d;
@@ -1703,7 +1695,7 @@ function renderCampers(filter){
                 var details=(d.schoolGrade?esc(d.schoolGrade):'<span style="color:var(--s300)">—</span>')+(hasMed?' <span style="color:var(--err);font-size:.7rem;font-weight:600">⚠ Medical</span>':'');
                 var placement=(d.division?dtag(d.division):'<span style="color:var(--s300)">—</span>')+(d.bunk?' '+bdg(d.bunk,'gray'):'');
                 var contact=(d.parent1Phone||d.parent1Email)?'<span style="font-size:.78rem;color:var(--s500)">'+esc(d.parent1Name||'')+'</span>':'<span style="color:var(--s300)">—</span>';
-                h+='<tr class="click" onclick="CampistryMe.viewCamper(\''+je(n)+'\')"><td onclick="event.stopPropagation()"><input type="checkbox" class="roster-check" data-name="'+esc(n)+'" onclick="CampistryMe._updateRosterBulkBar()"></td><td>'+_typeBadge('camper')+'</td><td class="bold">'+nameCell+'</td><td style="font-size:.8rem">'+details+'</td><td>'+placement+'</td><td>'+contact+'</td><td style="text-align:right" onclick="event.stopPropagation()"><button class="me-btn me-btn--ghost me-btn--sm" onclick="CampistryMe.editCamper(\''+je(n)+'\')">Edit</button></td></tr>';
+                h+='<tr class="click" onclick="CampistryMe.viewCamper(\''+je(n)+'\')"><td>'+_typeBadge('camper')+'</td><td class="bold">'+nameCell+'</td><td style="font-size:.8rem">'+details+'</td><td>'+placement+'</td><td>'+contact+'</td><td style="text-align:right" onclick="event.stopPropagation()"><button class="me-btn me-btn--ghost me-btn--sm" onclick="CampistryMe.editCamper(\''+je(n)+'\')">Edit</button></td></tr>';
             }else{
                 var r=item.r;
                 var grade=_pplGradeForBunks(r.bunks);
@@ -1711,7 +1703,7 @@ function renderCampers(filter){
                 var details2=(r.role||(r.positions||[]).join(', ')||'<span style="color:var(--s300)">—</span>')+(pay?' <span style="color:var(--s400);font-size:.78rem">· '+esc(pay)+'</span>':'');
                 var placement2=(grade?'<span style="font-size:.8rem">'+esc(grade)+'</span>':'<span style="color:var(--s300)">—</span>')+(r.bunks.length?' '+r.bunks.map(function(b){return bdg(b,'gray')}).join(' '):'');
                 var contact2=((r.email?'<div style="font-size:.78rem;color:var(--s500)">'+esc(r.email)+'</div>':'')+(r.phone?'<div style="font-size:.75rem;color:var(--s400)">'+esc(r.phone)+'</div>':''))||'<span style="color:var(--s300)">—</span>';
-                h+='<tr class="click" onclick="CampistryMe.viewStaffMember(\''+je(r._key)+'\')"><td></td><td>'+_typeBadge('staff')+'</td><td class="bold">'+esc(r.name)+'</td><td style="font-size:.8rem">'+details2+'</td><td>'+placement2+'</td><td>'+contact2+'</td><td style="text-align:right" onclick="event.stopPropagation()"><button class="me-btn me-btn--ghost me-btn--sm" onclick="CampistryMe.openEditStaffModal(\''+je(r._key)+'\')">Edit</button></td></tr>';
+                h+='<tr class="click" onclick="CampistryMe.viewStaffMember(\''+je(r._key)+'\')"><td>'+_typeBadge('staff')+'</td><td class="bold">'+esc(r.name)+'</td><td style="font-size:.8rem">'+details2+'</td><td>'+placement2+'</td><td>'+contact2+'</td><td style="text-align:right" onclick="event.stopPropagation()"><button class="me-btn me-btn--ghost me-btn--sm" onclick="CampistryMe.openEditStaffModal(\''+je(r._key)+'\')">Edit</button></td></tr>';
             }
         });
         h+='</tbody></table></div>'+_pagerHtml(combined.length,PAGE_SIZE,_rosterPage,'setRosterPage')+'</div>';
@@ -1756,49 +1748,6 @@ function _setupChecklistHtml(){
 }
 function _runSetupChecklistAction(idx){var item=SETUP_CHECKLIST[idx];if(item&&item.action)item.action();}
 function dismissSetupChecklist(){_setupChecklistDismissed=true;save();render(curPage);}
-function _checkedRosterNames(){
-    return Array.prototype.map.call(document.querySelectorAll('.roster-check:checked'), function(cb){ return cb.dataset.name; });
-}
-function toggleAllRoster(cb){
-    document.querySelectorAll('.roster-check').forEach(function(x){ x.checked=cb.checked; });
-    _updateRosterBulkBar();
-}
-function _updateRosterBulkBar(){
-    var n=document.querySelectorAll('.roster-check:checked').length;
-    var bar=document.getElementById('rosterBulkBar'); if(bar) bar.style.display=n?'flex':'none';
-    var lbl=document.getElementById('rosterBulkCount'); if(lbl) lbl.textContent=n+' selected';
-}
-function bulkExportRoster(){
-    var names=_checkedRosterNames();
-    if(!names.length){ toast('Select at least one camper'); return; }
-    exportCsv(names);
-}
-async function bulkDeleteRoster(){
-    var names=_checkedRosterNames();
-    if(!names.length){ toast('Select at least one camper'); return; }
-    var ok=await confirmDialog({title:'Delete '+names.length+' Camper'+(names.length!==1?'s':'')+'?',message:names.length+' camper'+(names.length!==1?'s':'')+' will be permanently deleted.',confirmLabel:'Delete',danger:true});
-    if(!ok)return;
-    // Capture each camper plus their family/bunk links so Undo can restore all of it,
-    // same fidelity as the single-camper delete — cascadeCamperDelete strips both.
-    var captured=names.filter(function(n){return roster[n]}).map(function(n){
-        var capturedFamilyLinks=[];
-        Object.entries(families).forEach(function(pair){if((pair[1].camperIds||[]).indexOf(n)>=0)capturedFamilyLinks.push(pair[0])});
-        var capturedBunks=[];
-        Object.entries(bunkAsgn).forEach(function(pair){if(Array.isArray(pair[1])&&pair[1].indexOf(n)>=0)capturedBunks.push(pair[0])});
-        return{name:n,camper:roster[n],famLinks:capturedFamilyLinks,bunks:capturedBunks};
-    });
-    captured.forEach(function(item){ delete roster[item.name]; cascadeCamperDelete(item.name); });
-    save();render(curPage);
-    toast(captured.length+' camper'+(captured.length!==1?'s':'')+' deleted','ok',{actionLabel:'Undo',onAction:function(){
-        captured.forEach(function(item){
-            roster[item.name]=item.camper;
-            item.famLinks.forEach(function(fk){if(families[fk]){if(!families[fk].camperIds)families[fk].camperIds=[];if(families[fk].camperIds.indexOf(item.name)<0)families[fk].camperIds.push(item.name)}});
-            item.bunks.forEach(function(b){if(!bunkAsgn[b])bunkAsgn[b]=[];if(bunkAsgn[b].indexOf(item.name)<0)bunkAsgn[b].push(item.name)});
-        });
-        save();render(curPage);toast('Campers restored');
-    }});
-}
-
 // Camper profile — a full page (like CampMinder's camper record), not a
 // modal: there's meaningfully more here than a quick popup should hold, and
 // a dedicated page leaves room to grow (the same accordions below) without
@@ -11004,30 +10953,6 @@ function importRows(rows){
     console.log('[Me] CSV import (full overwrite):',summary);
 }
 
-// names: optional array to export only those campers (bulk-select); omit for everyone.
-function exportCsv(names){
-    var entries=names?names.map(function(n){return[n,roster[n]]}).filter(function(pair){return pair[1]}):Object.entries(roster);
-    if(!entries.length){toast('No campers','error');return}
-    var leagues=getLeagues();var leagueNames=Object.keys(leagues).sort();
-    var headers=CSV_HEADERS.slice();
-    leagueNames.forEach(function(lg){headers.push('Team: '+lg)});
-    var csv='\uFEFF'+headers.map(function(h){return'"'+h+'"'}).join(',')+'\n';
-    entries.sort(function(a,b){return a[0].localeCompare(b[0])});
-    entries.forEach(function([n,d]){
-        var parts=n.split(' ');
-        var first=parts[0]||'';
-        var last=parts.slice(1).join(' ')||'';
-        var teams=d.teams||{};
-        var row=[first,last,d.dob||'',d.gender||'',d.school||'',d.schoolGrade||'',d.teacher||'',d.division||'',d.grade||'',d.bunk||'',d.street||'',d.city||'',d.state||'',d.zip||'',d.parent1Name||'',d.parent1Phone||'',d.parent1Email||'',d.emergencyName||'',d.emergencyPhone||'',d.emergencyRel||'',d.allergies||'',d.medications||'',d.dietary||''];
-        leagueNames.forEach(function(lg){row.push(teams[lg]||'')});
-        csv+=row.map(function(v){return'"'+String(v).replace(/"/g,'""')+'"'}).join(',')+'\n';
-    });
-    var a=document.createElement('a');
-    a.href=URL.createObjectURL(new Blob([csv],{type:'text/csv'}));
-    a.download='campers_'+new Date().toISOString().split('T')[0]+'.csv';
-    a.click();
-    toast('Exported '+entries.length+' camper'+(entries.length!==1?'s':''));
-}
 
 // ═══ BOOT ════════════════════════════════════════════════════════
 if(document.readyState==='loading')document.addEventListener('DOMContentLoaded',init);else init();
@@ -11524,8 +11449,7 @@ window.CampistryMe={
     acceptFamilySuggestion:acceptFamilySuggestion,dismissFamilySuggestion:dismissFamilySuggestion,acceptAddToFamily:acceptAddToFamily,
     mergeFamilies:mergeFamilies,dismissMergeFamilies:dismissMergeFamilies,
     addDiv:function(){openDivForm(null)},editDiv:function(n){openDivForm(n)},deleteDiv:deleteDiv,moveDivision:moveDivision,
-    openCsv:function(){openModal('csvModal')},exportCsv:exportCsv,downloadTemplate:downloadTemplate,
-    toggleAllRoster:toggleAllRoster,_updateRosterBulkBar:_updateRosterBulkBar,bulkExportRoster:bulkExportRoster,bulkDeleteRoster:bulkDeleteRoster,
+    openCsv:function(){openModal('csvModal')},downloadTemplate:downloadTemplate,
     _updateBillingBulkBar:_updateBillingBulkBar,bulkExportBilling:bulkExportBilling,
     setRosterPage:setRosterPage,setBillingPage:setBillingPage,setAnalyticsInvoicePage:setAnalyticsInvoicePage,setAnalyticsPaymentPage:setAnalyticsPaymentPage,
     _runSetupChecklistAction:_runSetupChecklistAction,dismissSetupChecklist:dismissSetupChecklist,
