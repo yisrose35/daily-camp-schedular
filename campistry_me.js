@@ -1698,21 +1698,29 @@ function renderCamperDetailPage(){
     var n=_camperDetailName;
     var d=n?roster[n]:null;
     if(!d){
-        c.innerHTML='<div class="me-empty"><h3>Camper not found</h3><p>They may have been deleted or renamed.</p><button class="me-btn me-btn--sec" onclick="CampistryMe.nav(\'campers\')">← Back to Roster</button></div>';
+        c.innerHTML='<div style="max-width:720px;margin:0 auto"><div class="me-empty"><h3>Camper not found</h3><p>They may have been deleted or renamed.</p><button class="me-btn me-btn--sec" onclick="CampistryMe.nav(\'campers\')">← Back to Roster</button></div></div>';
         return;
     }
     var idStr=d.camperId?String(d.camperId).padStart(4,'0'):'—';
 
     var altDisplay=[d.altFirstName,d.altLastName].filter(Boolean).join(' ');
-    var altHtml=altDisplay?'<div style="font-size:.85rem;color:var(--s500);margin-top:2px">'+esc(altDisplay)+'</div>':'';
-    var h='<div class="sec-hd"><div>'
-        +'<button class="me-btn me-btn--ghost me-btn--sm" style="margin-bottom:10px" onclick="CampistryMe.nav(\'campers\')">← Back to Roster</button>'
-        +'<h2 class="cv-name" style="font-size:1.3rem">'+esc(n)+'</h2>'+altHtml
-        +'<div class="cv-tags" style="margin-top:6px"><span class="badge badge-gray" style="font-family:monospace">#'+esc(idStr)+'</span>'+(d.division?dtag(d.division):'')+(d.bunk?' '+bdg(d.bunk,'gray'):'')+'</div>'
-        +'</div><div class="sec-actions">'
-        +'<button class="me-btn me-btn--sm" style="background:var(--err);color:#fff;border:none" onclick="CampistryMe.deleteCamper(\''+je(n)+'\')">Delete</button>'
+    var altHtml=altDisplay?'<div style="font-size:.9rem;color:var(--s500);margin-top:2px">'+esc(altDisplay)+'</div>':'';
+    // A centered profile card — colored banner + a large initials avatar
+    // overlapping it — instead of a plain left-aligned title row, so this
+    // reads as a real record page (closer to what CampMinder's camper
+    // profile looks like) rather than a form dumped on a blank page.
+    var h='<button class="me-btn me-btn--ghost me-btn--sm" style="margin-bottom:14px" onclick="CampistryMe.nav(\'campers\')">← Back to Roster</button>';
+    h+='<div class="me-card" style="overflow:hidden;margin-bottom:18px;box-shadow:0 1px 3px rgba(15,23,42,.07),0 1px 2px rgba(15,23,42,.04)">';
+    h+='<div style="height:76px;background:linear-gradient(135deg,'+avc(n)+',var(--me))"></div>';
+    h+='<div style="padding:0 28px 26px;text-align:center;margin-top:-42px">';
+    h+='<div style="width:84px;height:84px;border-radius:20px;background:'+avc(n)+';color:#fff;display:inline-flex;align-items:center;justify-content:center;font-size:1.9rem;font-weight:800;border:4px solid #fff;box-shadow:0 2px 10px rgba(15,23,42,.15)">'+esc(ini(n))+'</div>';
+    h+='<h2 style="margin-top:14px;font-size:1.5rem;font-weight:800;color:var(--s900)">'+esc(n)+'</h2>'+altHtml;
+    h+='<div style="margin-top:9px;display:flex;justify-content:center;gap:6px;flex-wrap:wrap"><span class="badge badge-gray" style="font-family:monospace">#'+esc(idStr)+'</span>'+(d.division?dtag(d.division):'')+(d.bunk?' '+bdg(d.bunk,'gray'):'')+'</div>';
+    h+='<div style="margin-top:20px;display:flex;justify-content:center;gap:8px">'
         +'<button class="me-btn me-btn--pri" onclick="CampistryMe.editCamper(\''+je(n)+'\')">Edit Camper</button>'
-        +'</div></div>';
+        +'<button class="me-btn me-btn--sm" style="background:var(--err);color:#fff;border:none" onclick="CampistryMe.deleteCamper(\''+je(n)+'\')">Delete</button>'
+        +'</div>';
+    h+='</div></div>';
 
     var b='';
 
@@ -1861,7 +1869,7 @@ function renderCamperDetailPage(){
     b+='<button class="me-btn me-btn--sec me-btn--sm" onclick="CampistryMe.addScholarship(\''+je(n)+'\')">Award Aid</button>';
     b+='</div>';
 
-    c.innerHTML=h+'<div class="me-card" style="padding:20px;max-width:760px">'+b+'</div>';
+    c.innerHTML='<div style="max-width:720px;margin:0 auto">'+h+'<div class="me-card" style="padding:24px 28px;box-shadow:0 1px 3px rgba(15,23,42,.07),0 1px 2px rgba(15,23,42,.04)">'+b+'</div></div>';
 }
 function cvR(l,v,w){if(!v)return'';return'<div class="cv-row"><span class="cv-lbl">'+esc(l)+'</span><span class="cv-val'+(w?' cv-warn':'')+'">'+v+'</span></div>'}
 
