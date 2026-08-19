@@ -83,7 +83,13 @@ body {
     position: sticky;
     top: 0;
     z-index: 100;
+    overflow: hidden;
 }
+/* The quick-switch bar mounts inside .lk-header-right; drop the global
+   absolute-centering so it's a normal shrinkable/scrollable flex item
+   there instead of floating over the logo/camp name on narrow screens. */
+.lk-header .quick-switch-bar { position: static; transform: none; max-width: 100%; }
+.lk-header-right { min-width: 0; }
 .lk-header-left { display: flex; align-items: center; gap: 14px; }
 .lk-logo {
     font-family: var(--font-display);

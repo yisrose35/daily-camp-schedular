@@ -67,8 +67,12 @@ button { font-family: inherit; cursor: pointer; border: none; background: none; 
     border-bottom: 1px solid var(--border-light);
     position: sticky; top: 0; z-index: 100;
 }
-.header-left { display: flex; align-items: center; gap: 12px; }
-.header-right { display: flex; align-items: center; gap: 10px; }
+.header-left { display: flex; align-items: center; gap: 12px; flex: 0 0 auto; }
+.header-right { display: flex; align-items: center; gap: 10px; flex: 0 0 auto; }
+/* Quick-switch app bar: the one zone allowed to shrink and internally
+   scroll — never the nav controls or the sync badge/avatar either side. */
+.app-header-center { display: flex; align-items: center; justify-content: center; min-width: 0; overflow: hidden; flex: 1 1 auto; }
+.app-header .quick-switch-bar { position: static; transform: none; max-width: 100%; }
 
 .snacks-back-btn {
     display: inline-flex; align-items: center; gap: 4px;

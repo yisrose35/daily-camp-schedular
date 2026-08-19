@@ -38,7 +38,12 @@
     -webkit-backdrop-filter: blur(20px) saturate(180%);
 }
 .nav-inner { max-width: 1280px; margin: 0 auto; padding: 0 2rem; display: flex; justify-content: space-between; align-items: center; }
-.nav-left { display: flex; align-items: center; gap: 1rem; }
+.nav-left { display: flex; align-items: center; gap: 1rem; flex: 0 0 auto; }
+/* Quick-switch app bar: the one zone allowed to shrink and internally
+   scroll — never the back link or the sync badge either side. */
+.nav-center { display: flex; align-items: center; justify-content: center; min-width: 0; overflow: hidden; flex: 1 1 auto; }
+.nav .quick-switch-bar { position: static; transform: none; max-width: 100%; }
+.nav-inner > .sync-badge { flex: 0 0 auto; }
 .nav-back {
     color: var(--text-secondary); text-decoration: none;
     font-weight: 500; font-size: .8125rem;

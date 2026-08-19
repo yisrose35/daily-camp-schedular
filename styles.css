@@ -2102,13 +2102,27 @@ label.override-checkbox span {
   display: flex;
   align-items: center;
   gap: 1rem;
+  flex: 0 0 auto;
 }
 
 .header-right {
   display: flex;
   align-items: center;
   gap: 0.6rem;
+  flex: 0 0 auto;
 }
+
+/* Quick-switch app bar: the one zone allowed to shrink and internally
+   scroll — never the nav controls or the date picker either side of it. */
+.app-header-center {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 0;
+  overflow: hidden;
+  flex: 1 1 auto;
+}
+.app-header .quick-switch-bar { position: static; transform: none; max-width: 100%; }
 
 .header-date-label {
   font-size: 0.85rem;
