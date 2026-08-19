@@ -75,8 +75,7 @@ function setRosterPage(n){_rosterPage=n;var inp=document.getElementById('globalS
 function setBillingPage(n){_billingPage=n;renderBilling();}
 function setAnalyticsInvoicePage(n){_analyticsInvoicePage=n;renderAnalytics();}
 function setAnalyticsPaymentPage(n){_analyticsPaymentPage=n;renderAnalytics();}
-var pplPipeType='overview';  // Pipeline top tab: overview | camper | staff
-var pplStaffSubTab='applicants';  // Staff sub-tab (shown only when pplPipeType==='staff'): applicants | hired
+var pplStaffSubTab='applicants';  // Hiring page's own top tab: applicants | hired
 var regFilter='all';    // Registration section filter: all | applied | waitlisted | accepted | enrolled | withdrawn | declined
 var staffApplications={};   // Staff hiring: applicant id → application record
 var staffFormConfig=null;   // Staff application form config — mirrors formConfig, drives campistry_staff_apply.html
@@ -777,7 +776,7 @@ function ff(label,id,val,type,opts){
 
 // ═══ RENDERERS ═══════════════════════════════════════════════════
 function render(p){
-    var m={campers:renderCampers,structure:renderStructure,bunkbuilder:renderBB,families:renderFamiliesPage,pipeline:renderPipelinePage,leads:renderLeads,enrollment:renderEnrollment,staffing:renderStaffing,billing:renderBilling,payroll:renderPayroll,analytics:renderAnalytics,reports:renderReports,printsheets:renderPrintSheets};
+    var m={campers:renderCampers,structure:renderStructure,bunkbuilder:renderBB,families:renderFamiliesPage,registration:renderRegistrationPage,hiring:renderHiringPage,leads:renderLeads,enrollment:renderEnrollment,staffing:renderStaffing,billing:renderBilling,payroll:renderPayroll,analytics:renderAnalytics,reports:renderReports,printsheets:renderPrintSheets};
     if(m[p])m[p]();else renderSoon(p);
 }
 
@@ -1098,14 +1097,19 @@ function renderFamiliesPage(){
         }
     }
 }
-// Registration & Hiring now has its own sidebar entry under Operations
-// rather than living as a sub-tab of Roster — _renderPipelinePane() already
-// carries its own me.enrollment/me.staffing gating internally (built when
-// this was still a merged pane), unchanged by the move.
-function renderPipelinePage(){
-    var c=document.getElementById('page-pipeline');
+// Registration and Hiring are now two separate top-level sidebar entries
+// under Operations, matching CampMinder's separate-products approach —
+// _renderRegistrationPane()/_renderHiringPane() each carry their own
+// me.enrollment/me.staffing gating internally.
+function renderRegistrationPage(){
+    var c=document.getElementById('page-registration');
     if(!c)return;
-    c.innerHTML=_renderPipelinePane();
+    c.innerHTML=_renderRegistrationPane();
+}
+function renderHiringPage(){
+    var c=document.getElementById('page-hiring');
+    if(!c)return;
+    c.innerHTML=_renderHiringPane();
 }
 
 // Family create/edit
@@ -1195,14 +1199,16 @@ function removeCamperFromFamily(familyId,camperName){
 // merged view instead of forcing a separate visit to each.
 function _refreshPplIfActive(){
     if(curPage==='campers')renderCampers();
-    else if(curPage==='pipeline')renderPipelinePage();
+    else if(curPage==='registration')renderRegistrationPage();
+    else if(curPage==='hiring')renderHiringPage();
 }
 // Registration and Staffing used to be their own gated pages — a role could
 // have me.campers without either, or me.enrollment without me.staffing (the
 // Office/Registrar preset is exactly that). Merging them into one page means
 // the generic per-page view/edit enforcement in campistry_access_sections.js
-// can no longer tell them apart, so the Pipeline pane and the Roster's staff
-// rows check these sub-capabilities explicitly instead of relying on it.
+// can no longer tell them apart, so the Registration/Hiring panes and the
+// Roster's staff rows check these sub-capabilities explicitly instead of
+// relying on it.
 function _pplCanEdit(section){ var S=window.CampistrySections; return S?S.canEdit(section):true; }
 function _typeBadge(type){
     return type==='staff'
@@ -1288,8 +1294,7 @@ function _pplOpenStaffByKey(key){
     var hit=buildStaffRoster().filter(function(r){return r._key===key})[0];
     if(hit)_pplOpenStaff(hit);
 }
-function setPplPipeType(t){pplPipeType=t;renderPipelinePage()}
-function setPplStaffSubTab(t){pplStaffSubTab=t;renderPipelinePage()}
+function setPplStaffSubTab(t){pplStaffSubTab=t;renderHiringPage()}
 // Everyone still being decided on: applications that haven't become a camper
 // yet, applicants who haven't been hired yet. The moment either happens they
 // move to buildStaffRoster()/roster above and drop off here.
@@ -1355,139 +1360,111 @@ function _pplStaffRowActions(id,status){
     h+='</div>';
     return h;
 }
-// Overview's landing summary — reuses Payroll's _prStat() tile shape
-// (campistry_me.js ~7866) so this page's default view matches the same
-// "counts + links into the real work" pattern already used in Payroll and
-// Analytics & Finance, instead of inventing a new one.
-function _pplOverviewHTML(canReg,canStaff,typeCounts,hiredCount){
-    var h='<div style="display:flex;gap:8px;flex-wrap:wrap;margin:16px 0">';
-    if(canReg)h+=_prStat('Camper Applications',typeCounts.camper+'','In progress','var(--me)');
-    if(canStaff)h+=_prStat('Staff Applicants',typeCounts.staff+'','In progress','#3B82F6');
-    if(canStaff)h+=_prStat('Hired Staff',hiredCount+'','Ready to place','#8B5CF6');
-    h+='</div><div style="display:flex;gap:10px;flex-wrap:wrap">';
-    if(canReg)h+='<button class="me-btn me-btn--sec" onclick="CampistryMe.setPplPipeType(\'camper\')">Open Campers →</button>';
-    if(canStaff)h+='<button class="me-btn me-btn--sec" onclick="CampistryMe.setPplPipeType(\'staff\')">Open Staff →</button>';
-    h+='</div>';
-    return h;
-}
-function _renderPipelinePane(){
-    var canReg=_secCan('me.enrollment'), canStaff=_secCan('me.staffing');
-    var editReg=canReg&&_pplCanEdit('me.enrollment'), editStaff=canStaff&&_pplCanEdit('me.staffing');
-    if(!canReg&&!canStaff){
-        return '<div class="me-empty"><h3>No access to Registration &amp; Hiring</h3><p>Your account isn\'t set up to open this section.</p></div>';
+// Registration and Hiring are now two separate top-level nav destinations
+// instead of tabs inside one shared page — matching how camp management
+// competitors (e.g. Campminder) run staff hiring as a fully separate
+// applicant-tracking product from camper registration, rather than a mode
+// switch inside one screen. buildPipelineList()/_pplStatusMeta()/
+// _pplCamperRowActions()/_pplStaffRowActions() etc. stay shared since the
+// underlying data and row actions haven't changed, only how the two
+// domains are reached.
+function _renderRegistrationPane(){
+    var canReg=_secCan('me.enrollment');
+    if(!canReg){
+        return '<div class="me-empty"><h3>No access to Registration</h3><p>Your account isn\'t set up to open this section.</p></div>';
     }
-    var list=buildPipelineList().filter(function(r){return r.type==='camper'?canReg:canStaff;});
-    var typeCounts={camper:0,staff:0};
-    list.forEach(function(r){typeCounts[r.type]=(typeCounts[r.type]||0)+1});
-    var hiredList=canStaff?hiredStaff():[];
+    var editReg=_pplCanEdit('me.enrollment');
+    var list=buildPipelineList().filter(function(r){return r.type==='camper';});
 
-    // Self-correct pplPipeType/pplStaffSubTab to a state this account can
-    // actually see — handles permission changes and single-domain accounts
-    // (e.g. a Registrar role with me.enrollment but not me.staffing) without
-    // needing special-cased tab lists like the old flat row did.
-    if(pplPipeType==='overview'&&!(canReg&&canStaff))pplPipeType=canReg?'camper':'staff';
-    if(pplPipeType==='camper'&&!canReg)pplPipeType=canStaff?'staff':'overview';
-    if(pplPipeType==='staff'&&!canStaff)pplPipeType=canReg?'camper':'overview';
-    if(pplStaffSubTab!=='applicants'&&pplStaffSubTab!=='hired')pplStaffSubTab='applicants';
-
-    var h='<div class="sec-hd"><div><h2 class="sec-title">Registration &amp; Hiring</h2><p class="sec-desc">'+list.length+' in progress'+(canReg?' · '+typeCounts.camper+' camper'+(typeCounts.camper!==1?'s':''):'')+(canStaff?' · '+typeCounts.staff+' staff':'')+'</p></div>';
+    var h='<div class="sec-hd"><div><h2 class="sec-title">Registration</h2><p class="sec-desc">'+list.length+' application'+(list.length!==1?'s':'')+' in progress</p></div>';
     h+='<div class="sec-actions">';
-    if(editReg||editStaff){
+    if(editReg){
         h+='<div class="me-more-wrap"><button class="me-btn me-btn--teal" onclick="CampistryMe._toggleMenu(\'pplFormsMenu\')">Customize Forms ▾</button>'
             +'<div class="me-more-menu" id="pplFormsMenu" style="min-width:210px">'
-            +(editReg?'<button onclick="CampistryMe.openFormConfig()">Registration Form</button><button onclick="CampistryMe.openPostAcceptFormConfig()" title="Sent after a camper is accepted">Post-Acceptance Form</button>':'')
-            +(editStaff?'<button onclick="CampistryMe.openStaffFormConfig()">Staff Application Form</button>':'')
-            +'</div></div>';
-    }
-    if(editReg||editStaff){
-        h+='<div class="me-more-wrap"><button class="me-btn me-btn--pri" onclick="CampistryMe._toggleMenu(\'pplAddMenu\')">+ Manual Entry ▾</button>'
-            +'<div class="me-more-menu" id="pplAddMenu" style="min-width:190px">'
-            +(editReg?'<button onclick="CampistryMe.addApplication()">Camper Application</button>':'')
-            +(editStaff?'<button onclick="CampistryMe.addStaffApp()">Staff Application</button>':'')
-            +'</div></div>';
+            +'<button onclick="CampistryMe.openFormConfig()">Registration Form</button><button onclick="CampistryMe.openPostAcceptFormConfig()" title="Sent after a camper is accepted">Post-Acceptance Form</button>'
+            +'</div></div>'
+            +'<button class="me-btn me-btn--pri" onclick="CampistryMe.addApplication()">+ Manual Entry</button>';
     }
     h+='<div class="me-more-wrap"><button class="me-btn me-btn--sec me-btn--sm" onclick="CampistryMe._toggleMenu(\'pplLinkMenu\')">🔗 Get Link</button>'
-        +'<div class="me-more-menu" id="pplLinkMenu" style="min-width:250px">';
-    if(canReg){
-        h+='<div style="padding:6px 10px 4px;font-size:.68rem;font-weight:700;color:var(--s400)">REGISTRATION</div>'
-            +'<button onclick="CampistryMe.copyRegLink()">📋 Copy Link</button>'
-            +'<button onclick="CampistryMe.openSendRegLinkModal()">✉ Send Link</button>'
-            +'<button onclick="CampistryMe.showRegistrationQR()">▦ QR Code</button>';
-    }
-    if(canReg&&canStaff)h+='<div style="border-top:1px solid var(--s100);margin:4px 0"></div>';
-    if(canStaff){
-        h+='<div style="padding:6px 10px 4px;font-size:.68rem;font-weight:700;color:var(--s400)">STAFF</div>'
-            +'<button onclick="CampistryMe.copyStaffLink()">📋 Copy Link</button>'
-            +'<button onclick="CampistryMe.openSendStaffLinkModal()">✉ Send Link</button>'
-            +'<button onclick="CampistryMe.showStaffQR()">▦ QR Code</button>';
-    }
-    h+='<div style="border-top:1px solid var(--s100);margin:4px 0"></div>'
-        +(canReg?'<button onclick="CampistryMe.exportEnrollmentReport()">↓ Export Camper Applications</button>':'')
-        +(canStaff?'<button onclick="CampistryMe.exportStaffCSV()">↓ Export Staff Applications</button>':'')
+        +'<div class="me-more-menu" id="pplLinkMenu" style="min-width:250px">'
+        +'<button onclick="CampistryMe.copyRegLink()">📋 Copy Link</button>'
+        +'<button onclick="CampistryMe.openSendRegLinkModal()">✉ Send Link</button>'
+        +'<button onclick="CampistryMe.showRegistrationQR()">▦ QR Code</button>'
+        +'<div style="border-top:1px solid var(--s100);margin:4px 0"></div>'
+        +'<button onclick="CampistryMe.exportEnrollmentReport()">↓ Export Applications</button>'
         +'</div></div>'
         +'</div></div>';
 
-    if(canStaff)h+=_visibilityPanelHTML();
-
-    // Top-level tabs: Overview (only when this account can see both camper
-    // and staff work — otherwise there's nothing to summarize across) plus
-    // one tab per domain it can access. Applicants/Hired used to be two more
-    // siblings in this same flat row; they're really two stages of one staff
-    // pipeline, so they're now a second-level sub-tab shown only once you're
-    // already inside Staff, rather than competing with Campers for attention
-    // up front.
-    var topTabs=[];
-    if(canReg&&canStaff)topTabs.push({k:'overview',l:'Overview'});
-    if(canReg)topTabs.push({k:'camper',l:'Campers',c:typeCounts.camper});
-    if(canStaff)topTabs.push({k:'staff',l:'Staff',c:typeCounts.staff+hiredList.length});
-    if(topTabs.length>1){
-        h+='<div style="display:flex;gap:2px;border-bottom:1px solid var(--s200)">';
-        topTabs.forEach(function(s){
-            var active=pplPipeType===s.k;
-            h+='<button onclick="CampistryMe.setPplPipeType(\''+s.k+'\')" style="padding:9px 12px;border:none;background:none;font-size:.8rem;font-weight:600;cursor:pointer;white-space:nowrap;font-family:inherit;display:flex;align-items:center;gap:6px;border-bottom:2px solid '+(active?'var(--me)':'transparent')+';color:'+(active?'var(--me)':'var(--s500)')+'">'
-                +esc(s.l)+(s.c!=null?'<span style="font-size:.68rem;font-weight:700;border-radius:9px;padding:1px 6px;background:'+(active?'var(--me)':'var(--s100)')+';color:'+(active?'#fff':'var(--s600)')+'">'+s.c+'</span>':'')+'</button>';
+    if(!list.length){
+        h+='<div class="me-empty"><h3>Nothing in progress</h3><p>Share your registration link, or add someone manually.</p></div>';
+    }else{
+        h+='<div class="me-card"><div class="me-tw"><table class="me-t"><thead><tr><th>Name</th><th>Detail</th><th>Applied</th><th>Status</th><th style="width:1%;white-space:nowrap"></th></tr></thead><tbody>';
+        list.forEach(function(r){
+            var meta=_pplStatusMeta(r.type,r.status);
+            h+='<tr class="click" onclick="CampistryMe.viewApplication(\''+je(r.id)+'\')"><td class="bold">'+esc(r.name)+'</td><td style="font-size:.8rem;color:var(--s500)">'+esc(r.sub||'—')+'</td><td style="font-size:.75rem;color:var(--s400)">'+esc(r.appliedDate||'—')+'</td><td>'+bdg(meta.label,meta.color)+'</td>';
+            h+='<td style="text-align:right;white-space:nowrap" onclick="event.stopPropagation()">'+(editReg?_pplCamperRowActions(r.id,r.status):'')+'</td></tr>';
         });
-        h+='</div>';
+        h+='</tbody></table></div></div>';
     }
+    return h;
+}
 
-    if(pplPipeType==='overview'){
-        h+=_pplOverviewHTML(canReg,canStaff,typeCounts,hiredList.length);
+function _renderHiringPane(){
+    var canStaff=_secCan('me.staffing');
+    if(!canStaff){
+        return '<div class="me-empty"><h3>No access to Hiring</h3><p>Your account isn\'t set up to open this section.</p></div>';
+    }
+    var editStaff=_pplCanEdit('me.staffing');
+    var list=buildPipelineList().filter(function(r){return r.type==='staff';});
+    var hiredList=hiredStaff();
+    if(pplStaffSubTab!=='applicants'&&pplStaffSubTab!=='hired')pplStaffSubTab='applicants';
+
+    var h='<div class="sec-hd"><div><h2 class="sec-title">Hiring</h2><p class="sec-desc">'+list.length+' applicant'+(list.length!==1?'s':'')+' in progress · '+hiredList.length+' hired</p></div>';
+    h+='<div class="sec-actions">';
+    if(editStaff){
+        h+='<div class="me-more-wrap"><button class="me-btn me-btn--teal" onclick="CampistryMe._toggleMenu(\'pplFormsMenu\')">Customize Forms ▾</button>'
+            +'<div class="me-more-menu" id="pplFormsMenu" style="min-width:210px">'
+            +'<button onclick="CampistryMe.openStaffFormConfig()">Staff Application Form</button>'
+            +'</div></div>'
+            +'<button class="me-btn me-btn--pri" onclick="CampistryMe.addStaffApp()">+ Manual Entry</button>';
+    }
+    h+='<div class="me-more-wrap"><button class="me-btn me-btn--sec me-btn--sm" onclick="CampistryMe._toggleMenu(\'pplLinkMenu\')">🔗 Get Link</button>'
+        +'<div class="me-more-menu" id="pplLinkMenu" style="min-width:250px">'
+        +'<button onclick="CampistryMe.copyStaffLink()">📋 Copy Link</button>'
+        +'<button onclick="CampistryMe.openSendStaffLinkModal()">✉ Send Link</button>'
+        +'<button onclick="CampistryMe.showStaffQR()">▦ QR Code</button>'
+        +'<div style="border-top:1px solid var(--s100);margin:4px 0"></div>'
+        +'<button onclick="CampistryMe.exportStaffCSV()">↓ Export Applications</button>'
+        +'</div></div>'
+        +'</div></div>';
+
+    h+=_visibilityPanelHTML();
+
+    // Hired staff intentionally drop OFF the "in progress" list the moment
+    // they're hired (buildPipelineList() excludes status==='hired') — this
+    // Hired tab is where they land instead, so "accepted a counselor, now
+    // what" has an answer inside this same page rather than only in Roster.
+    h+='<div style="display:flex;gap:2px;border-bottom:1px solid var(--s200);margin-bottom:16px">';
+    [{k:'applicants',l:'Applicants',c:list.length},{k:'hired',l:'Hired',c:hiredList.length}].forEach(function(s){
+        var active=pplStaffSubTab===s.k;
+        h+='<button onclick="CampistryMe.setPplStaffSubTab(\''+s.k+'\')" style="padding:9px 12px;border:none;background:none;font-size:.8rem;font-weight:600;cursor:pointer;white-space:nowrap;font-family:inherit;display:flex;align-items:center;gap:6px;border-bottom:2px solid '+(active?'var(--me)':'transparent')+';color:'+(active?'var(--me)':'var(--s500)')+'">'
+            +esc(s.l)+'<span style="font-size:.68rem;font-weight:700;border-radius:9px;padding:1px 6px;background:'+(active?'var(--me)':'var(--s100)')+';color:'+(active?'#fff':'var(--s600)')+'">'+s.c+'</span></button>';
+    });
+    h+='</div>';
+
+    if(pplStaffSubTab==='hired'){
+        h+=_renderHiredStaffTable(hiredList,editStaff);
         return h;
     }
 
-    // Hired staff intentionally drop OFF the "in progress" list the moment
-    // they're hired (buildPipelineList() excludes status==='hired') — the
-    // Hired sub-tab is where they land instead, so "accepted a counselor,
-    // now what" has an answer inside this same page rather than only in the
-    // separate Roster page.
-    if(pplPipeType==='staff'){
-        h+='<div style="display:flex;gap:14px;padding:10px 2px 14px">';
-        [{k:'applicants',l:'Applicants',c:typeCounts.staff},{k:'hired',l:'Hired',c:hiredList.length}].forEach(function(s){
-            var active=pplStaffSubTab===s.k;
-            h+='<button onclick="CampistryMe.setPplStaffSubTab(\''+s.k+'\')" style="border:none;background:'+(active?'var(--s100)':'none')+';border-radius:999px;padding:5px 14px;font-size:.78rem;font-weight:600;cursor:pointer;color:'+(active?'var(--s800)':'var(--s500)')+'">'+esc(s.l)+' <span style="font-weight:700;opacity:.7">'+s.c+'</span></button>';
-        });
-        h+='</div>';
-        if(pplStaffSubTab==='hired'){
-            h+=_renderHiredStaffTable(hiredList,editStaff);
-            return h;
-        }
-    }else{
-        h+='<div style="margin-top:16px"></div>';
-    }
-
-    var visible=list.filter(function(r){return r.type===(pplPipeType==='staff'?'staff':'camper');});
     if(!list.length){
-        h+='<div class="me-empty"><h3>Nothing in progress</h3><p>Share your registration or staff application link, or add someone manually.</p></div>';
-    }else if(!visible.length){
-        h+='<div class="me-empty"><h3>Nothing in this filter</h3></div>';
+        h+='<div class="me-empty"><h3>Nothing in progress</h3><p>Share your staff application link, or add someone manually.</p></div>';
     }else{
-        h+='<div class="me-card"><div class="me-tw"><table class="me-t"><thead><tr><th style="width:76px">Type</th><th>Name</th><th>Detail</th><th>Applied</th><th>Status</th><th style="width:1%;white-space:nowrap"></th></tr></thead><tbody>';
-        visible.forEach(function(r){
+        h+='<div class="me-card"><div class="me-tw"><table class="me-t"><thead><tr><th>Name</th><th>Detail</th><th>Applied</th><th>Status</th><th style="width:1%;white-space:nowrap"></th></tr></thead><tbody>';
+        list.forEach(function(r){
             var meta=_pplStatusMeta(r.type,r.status);
-            var openFn=r.type==='camper'?"CampistryMe.viewApplication('"+je(r.id)+"')":"CampistryMe.viewStaffApp('"+je(r.id)+"')";
-            var canEditRow=r.type==='camper'?editReg:editStaff;
-            h+='<tr class="click" onclick="'+openFn+'"><td>'+_typeBadge(r.type)+'</td><td class="bold">'+esc(r.name)+'</td><td style="font-size:.8rem;color:var(--s500)">'+esc(r.sub||'—')+'</td><td style="font-size:.75rem;color:var(--s400)">'+esc(r.appliedDate||'—')+'</td><td>'+bdg(meta.label,meta.color)+'</td>';
-            h+='<td style="text-align:right;white-space:nowrap" onclick="event.stopPropagation()">'+(canEditRow?(r.type==='camper'?_pplCamperRowActions(r.id,r.status):_pplStaffRowActions(r.id,r.status)):'')+'</td></tr>';
+            h+='<tr class="click" onclick="CampistryMe.viewStaffApp(\''+je(r.id)+'\')"><td class="bold">'+esc(r.name)+'</td><td style="font-size:.8rem;color:var(--s500)">'+esc(r.sub||'—')+'</td><td style="font-size:.75rem;color:var(--s400)">'+esc(r.appliedDate||'—')+'</td><td>'+bdg(meta.label,meta.color)+'</td>';
+            h+='<td style="text-align:right;white-space:nowrap" onclick="event.stopPropagation()">'+(editStaff?_pplStaffRowActions(r.id,r.status):'')+'</td></tr>';
         });
         h+='</tbody></table></div></div>';
     }
@@ -1541,7 +1518,7 @@ function openAssignPositionModal(id){
         a.positions=picked;
         save();
         closeModal('dynModal');
-        renderPipelinePage();
+        renderHiringPage();
         toast('Position updated for '+(a.name||'staff member'));
     });
 }
@@ -11464,7 +11441,7 @@ window.CampistryMe={
     viewCamper:viewCamper,editCamper:editCamper,addCamper:addCamper,deleteCamper:deleteCamper,ceToggleSummer:ceToggleSummer,
     addFamily:function(){openFamilyForm(null)},editFamily:function(id){openFamilyForm(id)},deleteFamily:deleteFamily,removeCamperFromFamily:removeCamperFromFamily,
     viewFamilyFromCamper:viewFamilyFromCamper,
-    setPplPipeType:setPplPipeType,setPplStaffSubTab:setPplStaffSubTab,_pplOpenStaffByKey:_pplOpenStaffByKey,
+    setPplStaffSubTab:setPplStaffSubTab,_pplOpenStaffByKey:_pplOpenStaffByKey,
     acceptFamilySuggestion:acceptFamilySuggestion,dismissFamilySuggestion:dismissFamilySuggestion,acceptAddToFamily:acceptAddToFamily,
     mergeFamilies:mergeFamilies,dismissMergeFamilies:dismissMergeFamilies,
     addDiv:function(){openDivForm(null)},editDiv:function(n){openDivForm(n)},deleteDiv:deleteDiv,moveDivision:moveDivision,
