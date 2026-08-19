@@ -35,6 +35,7 @@
 <aside id="sidebar" class="sidebar">
     <button class="sidebar-item" data-page="activity-board"><span class="sidebar-dot"></span> Activity Board</button>
     <button class="sidebar-item" data-page="bunk-tracker"><span class="sidebar-dot"></span> Bunk Tracker</button>
+    <button class="sidebar-item" data-page="camper-locator"><span class="sidebar-dot"></span> Camper Locator</button>
     <div class="sidebar-label">Attendance</div>
     <button class="sidebar-item active" data-page="roll-call"><span class="sidebar-dot"></span> Roll Call <span class="sb-badge" id="sbAbsentCount">0</span></button>
     <button class="sidebar-item" data-page="absences"><span class="sidebar-dot"></span> Absences &amp; Exceptions</button>
@@ -74,6 +75,42 @@
         </div>
     </div>
     <div id="bunkTrackerBody"><div class="empty-state">Loading...</div></div>
+</div>
+
+<!-- ── CAMPER LOCATOR ── -->
+<div id="page-camper-locator" class="live-page">
+    <div class="page-hero">
+        <div class="page-hero-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="22" height="22"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg></div>
+        <div><h1>Camper Locator</h1><p>Find any camper's current activity, plus a read-only view of today's full schedule</p></div>
+    </div>
+    <div class="card" style="margin-bottom:16px;">
+        <div class="card-body">
+            <div style="display:flex;gap:10px;flex-wrap:wrap;align-items:end;">
+                <div style="flex:2;min-width:220px;position:relative;">
+                    <label class="form-label">Camper Name</label>
+                    <input id="loc-search-input" class="form-input" placeholder="Start typing a name..." autocomplete="off">
+                    <div id="loc-search-suggestions" style="display:none;position:absolute;background:#fff;border:1px solid #ccc;max-height:200px;overflow-y:auto;width:100%;z-index:50;border-radius:0 0 8px 8px;box-shadow:0 4px 10px rgba(0,0,0,.1);"></div>
+                </div>
+                <div style="flex:1;min-width:140px;">
+                    <label class="form-label">Time</label>
+                    <input id="loc-time-input" type="text" class="form-input" placeholder="e.g. 10:30 AM">
+                </div>
+                <button id="loc-now-btn" class="btn btn-secondary">Now</button>
+                <button id="loc-search-btn" class="btn btn-primary">Find</button>
+            </div>
+            <div id="loc-result-display" style="margin-top:16px;padding:16px;background:var(--slate-50);border-radius:10px;display:none;"></div>
+        </div>
+    </div>
+
+    <div class="page-header">
+        <div><div class="page-title">Today's Schedule</div><div class="page-subtitle">Read-only — filter by division, grade, or bunk</div></div>
+        <div class="page-actions">
+            <select class="btn btn-secondary btn-sm" id="locFilterDiv" style="min-width:140px;"><option value="">All divisions</option></select>
+            <select class="btn btn-secondary btn-sm" id="locFilterGrade" style="min-width:140px;"><option value="">All grades</option></select>
+            <select class="btn btn-secondary btn-sm" id="locFilterBunk" style="min-width:140px;"><option value="">All bunks</option></select>
+        </div>
+    </div>
+    <div id="locScheduleBody"><div class="empty-state">Loading schedule…</div></div>
 </div>
 
 <!-- ── ROLL CALL ── -->
@@ -256,6 +293,8 @@
 <script src="integration_hooks.js"></script>
 <script src="campistry_cloud_bootstrap.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/jsqr@1.4.0/dist/jsQR.js"></script>
+<script src="campistry_live_schedule_reader.js"></script>
+<script src="campistry_live_locator.js"></script>
 <script src="campistry_live.js"></script>
 <script>setTimeout(function(){document.documentElement.classList.add('css-ready')},3000)</script>
 <script>
@@ -279,6 +318,7 @@
             close();
             if(p==='parent-requests'&&window.ParentRequests) ParentRequests.render();
             if(p==='camper-mail'&&window.CamperMail) CamperMail.render();
+            if(p==='camper-locator'&&window.CampistryLiveLocator) CampistryLiveLocator.refresh();
         });
     });
 })();

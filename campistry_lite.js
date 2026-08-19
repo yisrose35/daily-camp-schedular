@@ -545,6 +545,10 @@
     // (Swap this one predicate for a `nurse` role check later.)
     function canGiveMeds() { return ['owner', 'admin', 'scheduler'].includes(role); }
 
+    // Same office tier as canGiveMeds — the bubble-sheet scan is a secretary
+    // action, not something every bunk counselor should be able to overwrite.
+    function canScanAttendance() { return ['owner', 'admin', 'scheduler'].includes(role); }
+
     // ─── Link data (messages + forms/lists) ─────────────────────────────
     function loadLinkMessages(force) {
         if (linkMsgs && !force) return Promise.resolve(linkMsgs);
@@ -3468,15 +3472,19 @@
         const view = document.getElementById('view-liveRoll');
         if (!camp.stateLoaded) { view.innerHTML = emptyHTML('', 'Attendance isn\'t available for your role.'); return; }
 
-        view.innerHTML = dateStripHTML() + `<div id="liteRollBody">${loadingHTML()}</div>`;
+        const scanBtn = canScanAttendance()
+            ? `<button type="button" class="lite-btn" id="liteScanBtn" style="width:100%;margin:10px 0;">Scan attendance sheet</button>`
+            : '';
+        view.innerHTML = dateStripHTML() + scanBtn + `<div id="liteRollBody">${loadingHTML()}</div>`;
         wireDateStrip(view, () => renderLiveRoll());
+        if (canScanAttendance()) view.querySelector('#liteScanBtn').addEventListener('click', openScanSheet);
         const body = view.querySelector('#liteRollBody');
 
         const day = await loadLiveDay(currentDate);
         if (activeTab !== 'liveRoll') return;
 
         if (!day) {
-            body.innerHTML = emptyHTML('', `No attendance recorded for ${friendlyDate(currentDate)} yet.<br>Roll call happens in the office Live app.`);
+            body.innerHTML = emptyHTML('', `No attendance recorded for ${friendlyDate(currentDate)} yet.<br>Roll call happens in the office Live app${canScanAttendance() ? ', or scan a bubble sheet above.' : '.'}`);
             return;
         }
         if (!Object.keys(camp.roster || {}).length) {
@@ -3530,6 +3538,172 @@
                 <span class="lite-camper-flags">${pill}</span>
             </button>
         </div>`;
+    }
+
+    // ════════════════════════════════════════════════════════════════════
+    // ROLL CALL — bubble-sheet photo scan (ported from campistry_live.js;
+    // that desktop app still owns "Print Templates" — nothing here prints,
+    // it only reads the photo a secretary takes on their phone). Geometry
+    // constants MUST match the printed template exactly (campistry_live.js
+    // scannerPrintTemplates); they're duplicated rather than shared since
+    // Live and Lite are separate bundles.
+    // ════════════════════════════════════════════════════════════════════
+    const SCAN_TMPL = { qrSize: 140, bDX: 124, bDY0: 198, bDDY: 52, sampleR: 14, fillThresh: 0.22 };
+    let _scanResults = [], _scanBunkLabel = '', _scanCanvas = null, _scanCtx = null, _scanDateKey = null, _scanSheetEl = null;
+
+    function openScanSheet() {
+        _scanResults = []; _scanBunkLabel = ''; _scanCanvas = null; _scanCtx = null; _scanDateKey = null;
+        _scanSheetEl = openSheet(`
+            <h3 class="lite-sheet-title">Scan attendance sheet</h3>
+            <p class="lite-note">Take a photo of a filled-in bubble sheet (printed from the office Live app) — this reads it and fills in today's roll call.</p>
+            <div id="scanStep1">
+                <input type="file" accept="image/*" capture="environment" id="scanFileInput" style="display:none;">
+                <button type="button" class="lite-btn" id="scanTakePhotoBtn" style="width:100%;">Take photo</button>
+                <button type="button" class="lite-btn" id="scanUploadBtn" style="width:100%;margin-top:8px;background:transparent;color:var(--lite-accent,#2563eb);border:1.5px solid var(--lite-accent,#2563eb);">Choose from library</button>
+            </div>
+            <div id="scanStatusMsg"></div>
+            <div id="scanPreviewTable"></div>
+            <div style="display:flex;gap:10px;margin-top:14px;">
+                <button type="button" class="lite-btn" id="scanConfirmBtn" style="flex:1;display:none;">Apply to roll call</button>
+            </div>`);
+        const fileInput = _scanSheetEl.querySelector('#scanFileInput');
+        _scanSheetEl.querySelector('#scanTakePhotoBtn').addEventListener('click', () => fileInput.click());
+        _scanSheetEl.querySelector('#scanUploadBtn').addEventListener('click', () => { fileInput.removeAttribute('capture'); fileInput.click(); });
+        fileInput.addEventListener('change', (e) => { const f = e.target.files && e.target.files[0]; if (f) scannerHandleFileSelect(f); });
+        _scanSheetEl.querySelector('#scanConfirmBtn').addEventListener('click', scannerConfirm);
+    }
+
+    function scannerHandleFileSelect(file) {
+        if (!file || !file.type.startsWith('image/')) { toast('Please select an image'); return; }
+        const el = id => _scanSheetEl && _scanSheetEl.querySelector('#' + id);
+        if (el('scanStep1')) el('scanStep1').style.display = 'none';
+        if (el('scanStatusMsg')) el('scanStatusMsg').innerHTML = '<p class="lite-note">Scanning sheet…</p>';
+        if (el('scanPreviewTable')) el('scanPreviewTable').innerHTML = '';
+
+        const img = new Image();
+        img.onload = () => {
+            _scanCanvas = document.createElement('canvas');
+            _scanCanvas.width = img.naturalWidth; _scanCanvas.height = img.naturalHeight;
+            _scanCtx = _scanCanvas.getContext('2d', { willReadFrequently: true });
+            _scanCtx.drawImage(img, 0, 0);
+            URL.revokeObjectURL(img.src);
+            scannerProcessImage();
+        };
+        img.onerror = () => scannerShowError('Could not load that photo — try again.');
+        img.src = URL.createObjectURL(file);
+    }
+
+    function scannerProcessImage() {
+        const el = id => _scanSheetEl && _scanSheetEl.querySelector('#' + id);
+        if (typeof jsQR === 'undefined') { scannerShowError('QR scanner not loaded — check your connection and reopen this sheet.'); return; }
+        const imgData = _scanCtx.getImageData(0, 0, _scanCanvas.width, _scanCanvas.height);
+        const code = jsQR(imgData.data, imgData.width, imgData.height, { inversionAttempts: 'dontInvert' });
+        if (!code) { scannerShowError('QR code not found — make sure the top-right QR is fully visible, in focus, and well-lit.'); return; }
+
+        let info; try { info = JSON.parse(code.data); } catch (_) { info = null; }
+        if (!info || info.t !== 'cs-roll' || !info.bunk) { scannerShowError('That QR isn\'t a Campistry attendance template.'); return; }
+
+        const campers = campersInBunk(info.bunk).map(c => c.name);
+        if (!campers.length) { scannerShowError(`Bunk "${info.bunk}" has no campers in the roster.`); return; }
+
+        const loc = code.location;
+        const tl = loc.topLeftCorner, tr = loc.topRightCorner, bl = loc.bottomLeftCorner;
+        const pxX = { x: (tr.x - tl.x) / SCAN_TMPL.qrSize, y: (tr.y - tl.y) / SCAN_TMPL.qrSize };
+        const pxY = { x: (bl.x - tl.x) / SCAN_TMPL.qrSize, y: (bl.y - tl.y) / SCAN_TMPL.qrSize };
+        const photoQrW = Math.hypot(tr.x - tl.x, tr.y - tl.y);
+        const sampleRPhoto = Math.round(SCAN_TMPL.sampleR * (photoQrW / SCAN_TMPL.qrSize));
+
+        _scanBunkLabel = info.bunk + (info.date ? ' · ' + info.date : '');
+        _scanDateKey = info.date || currentDate;
+        _scanResults = campers.map((name, i) => {
+            const dx = SCAN_TMPL.bDX, dy = SCAN_TMPL.bDY0 + i * SCAN_TMPL.bDDY;
+            const cx = Math.round(tl.x + dx * pxX.x + dy * pxY.x);
+            const cy = Math.round(tl.y + dx * pxX.y + dy * pxY.y);
+            const dark = scannerSampleDark(cx, cy, sampleRPhoto);
+            return { name, present: dark >= SCAN_TMPL.fillThresh };
+        });
+
+        if (el('scanStatusMsg')) el('scanStatusMsg').innerHTML = '';
+        scannerRenderPreview();
+    }
+
+    function scannerSampleDark(cx, cy, r) {
+        if (!_scanCtx) return 0;
+        const ri = Math.max(2, r);
+        let data;
+        try { data = _scanCtx.getImageData(Math.max(0, cx - ri), Math.max(0, cy - ri), 2 * ri + 1, 2 * ri + 1); }
+        catch (_) { return 0; }
+        let dark = 0, total = 0;
+        const size = 2 * ri + 1;
+        for (let i = 0; i < data.data.length; i += 4) {
+            const px = i / 4, dx = (px % size) - ri, dy = Math.floor(px / size) - ri;
+            if (dx * dx + dy * dy <= ri * ri) {
+                const luma = data.data[i] * 0.299 + data.data[i + 1] * 0.587 + data.data[i + 2] * 0.114;
+                if (luma < 128) dark++;
+                total++;
+            }
+        }
+        return total > 0 ? dark / total : 0;
+    }
+
+    function scannerShowError(msg) {
+        const el = id => _scanSheetEl && _scanSheetEl.querySelector('#' + id);
+        if (el('scanStatusMsg')) el('scanStatusMsg').innerHTML = `<div class="lite-warn">${esc(msg)}</div>`;
+        if (el('scanStep1')) el('scanStep1').style.display = '';
+    }
+
+    function scannerRenderPreview() {
+        const el = id => _scanSheetEl && _scanSheetEl.querySelector('#' + id);
+        const present = _scanResults.filter(r => r.present).length, absent = _scanResults.length - present;
+        let html = `<div class="lite-note" style="margin:8px 0;"><strong>${esc(_scanBunkLabel)}</strong> — ${present} present, ${absent} absent. Tap to correct any errors.</div>`;
+        html += _scanResults.map((r, i) => `
+            <button type="button" class="lite-camper-row" data-i="${i}" style="width:100%;">
+                <span><span class="lite-camper-name">${esc(r.name)}</span></span>
+                <span class="lite-status ${r.present ? 'present' : 'absent'}">${r.present ? 'Here' : 'Absent'}</span>
+            </button>`).join('');
+        if (el('scanPreviewTable')) {
+            el('scanPreviewTable').innerHTML = html;
+            el('scanPreviewTable').querySelectorAll('[data-i]').forEach(btn =>
+                btn.addEventListener('click', () => { const i = +btn.dataset.i; _scanResults[i].present = !_scanResults[i].present; scannerRenderPreview(); }));
+        }
+        if (el('scanConfirmBtn')) el('scanConfirmBtn').style.display = _scanResults.length ? '' : 'none';
+    }
+
+    // Read-modify-write against the SAME cloud row the office Live app writes
+    // (camp_state_kv key liveDaily_<date>) — always re-fetch fresh (bypass
+    // the cache) right before merging, so a concurrent office edit isn't
+    // clobbered by a stale local copy.
+    async function scannerConfirm() {
+        if (!_scanResults.length) return;
+        const dateKey = _scanDateKey || currentDate;
+        invalidateLiveDay(dateKey);
+        const fresh = await loadLiveDay(dateKey);
+        const day = Object.assign({ attendance: {}, absences: [], earlyPickups: [], notes: '' }, fresh);
+        if (!day.attendance) day.attendance = {};
+        if (!Array.isArray(day.absences)) day.absences = [];
+
+        _scanResults.forEach(r => {
+            if (r.present) {
+                day.absences = day.absences.filter(a => a.name !== r.name);
+                delete day.attendance[r.name];
+            } else {
+                if (!day.absences.some(a => a.name === r.name)) {
+                    day.absences.push({ name: r.name, reason: 'absent', notes: 'Via scan (Lite)', time: new Date().toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit' }), timestamp: Date.now() });
+                }
+                day.attendance[r.name] = false;
+            }
+        });
+
+        try {
+            await saveKV('liveDaily_' + dateKey, day);
+            invalidateLiveDay(dateKey);
+            closeSheet();
+            toast(`Attendance updated — ${_scanResults.length} camper${_scanResults.length !== 1 ? 's' : ''} from scan`);
+            if (dateKey === currentDate && activeTab === 'liveRoll') renderLiveRoll();
+        } catch (e) {
+            toast('Could not save — check your connection and try again.');
+            console.warn('[Lite] scannerConfirm save failed:', e && e.message || e);
+        }
     }
 
     async function renderLiveChanges() {
