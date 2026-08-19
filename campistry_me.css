@@ -207,9 +207,9 @@ body.sidebar-open .sidebar{transform:translateX(0)}
 .cv-name{font-size:1.1rem;font-weight:700;color:var(--s800);margin:0}
 .cv-tags{display:flex;gap:4px;margin-top:4px;flex-wrap:wrap}
 .cv-sec{font-size:.72rem;font-weight:600;color:var(--s500);text-transform:uppercase;letter-spacing:.04em;margin:12px 0 4px;padding-bottom:3px;border-bottom:1px solid var(--s100)}
-.cv-row{display:flex;gap:8px;padding:2px 0;font-size:.8rem}
+.cv-row{display:flex;gap:8px;padding:3px 0;font-size:.8rem}
 .cv-lbl{color:var(--s400);min-width:80px;flex-shrink:0}
-.cv-val{color:var(--s800);font-weight:500}
+.cv-val{color:var(--s800);font-weight:500;min-width:0;overflow-wrap:anywhere}
 .cv-val a{color:var(--me)}
 .cv-warn{color:var(--err);font-weight:600}
 .cv-health{display:inline-flex;align-items:center;gap:6px;padding:6px 12px;border-radius:var(--r);background:rgba(139,92,246,.06);border:1px solid rgba(139,92,246,.15);font-size:.75rem;font-weight:600;color:var(--purple);margin-top:6px;cursor:pointer}

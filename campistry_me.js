@@ -1699,8 +1699,8 @@ function viewCamper(n){
 // (Medical) where missing/flagged data needs to catch the eye immediately.
 function _dpCard(title,bodyHtml,opts){
     opts=opts||{};
-    return '<div class="me-card" style="padding:13px 15px;'+(opts.flag?'border-left:3px solid var(--err)':'')+'">'
-        +'<div style="display:flex;align-items:center;justify-content:space-between;gap:8px;margin-bottom:7px">'
+    return '<div class="me-card" style="padding:18px 20px;'+(opts.flag?'border-left:3px solid var(--err)':'')+'">'
+        +'<div style="display:flex;align-items:center;justify-content:space-between;gap:8px;margin-bottom:10px">'
         +'<div style="font-size:.7rem;font-weight:700;color:var(--s500);text-transform:uppercase;letter-spacing:.05em">'+esc(title)+(opts.badge?' <span style="font-weight:600;color:var(--s400)">'+esc(opts.badge)+'</span>':'')+'</div>'
         +(opts.actionHtml||'')
         +'</div>'+bodyHtml+'</div>';
@@ -1717,12 +1717,21 @@ function renderCamperDetailPage(){
     var idStr=d.camperId?String(d.camperId).padStart(4,'0'):'—';
     var altName=[d.altFirstName,d.altLastName].filter(Boolean).join(' ');
 
+    // A camper's photo (when one was uploaded on their application) lives on
+    // the enrollment record, not the roster record — same lookup Registration's
+    // own application review uses. Falls back to the initials avatar.
+    function isSafeImageDataUrl(s){return typeof s==='string'&&/^data:image\/(png|jpeg|jpg|gif|webp);base64,[A-Za-z0-9+\/=]+$/.test(s);}
+    var _enr=_enrollmentForCamper(n);
+    var avatarHtml=(_enr&&_enr.camperPhoto&&isSafeImageDataUrl(_enr.camperPhoto))
+        ?'<img src="'+_enr.camperPhoto+'" style="width:52px;height:52px;object-fit:cover;border-radius:8px;flex-shrink:0">'
+        :av(n,'l');
+
     // Compact header — same small-avatar-next-to-title shape every other
     // page in Me uses (.sec-hd), not a decorative banner, so it costs as
     // little vertical space as possible before the actual record starts.
     var h='<button class="me-btn me-btn--ghost me-btn--sm" style="margin-bottom:10px" onclick="CampistryMe.nav(\'campers\')">← Back to Roster</button>';
     h+='<div class="sec-hd"><div style="display:flex;align-items:center;gap:12px">'
-        +av(n,'l')
+        +avatarHtml
         +'<div><h2 class="sec-title">'+esc(n)+(altName?' <span style="font-weight:500;color:var(--s400);font-size:.85rem">('+esc(altName)+')</span>':'')+'</h2>'
         +'<p class="sec-desc">#'+esc(idStr)+(d.division?' · '+esc(d.division):'')+(d.bunk?' · '+esc(d.bunk):'')+'</p></div>'
         +'</div><div class="sec-actions">'
@@ -1739,14 +1748,16 @@ function renderCamperDetailPage(){
     // ── Everything below is a grid of small always-open cards, not
     // accordions — the goal is to get as much of the record on screen at
     // once as a normal desktop viewport allows, not to hide detail behind
-    // clicks. Columns pack as many 260px-minimum cards per row as fit.
-    var g='<div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(260px,1fr));gap:12px;align-items:start">';
+    // clicks. Columns pack as many 280px-minimum cards per row as fit.
+    var g='<div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(280px,1fr));gap:16px;align-items:start">';
 
     var personal=cvR('Camper ID','#'+idStr);
     if(d.dob){
         var dobStr=new Date(d.dob+'T12:00:00').toLocaleDateString('en-US',{month:'long',day:'numeric',year:'numeric'})+' (age '+age(d.dob)+')';
-        var hebDate=toHebrewDate(d.dob);
-        if(hebDate) dobStr+=' · <span style="font-size:.85rem;color:var(--me)">'+hebDate+'</span>';
+        if(getCampSettings().showHebrewDates){
+            var hebDate=toHebrewDate(d.dob);
+            if(hebDate) dobStr+=' · <span style="font-size:.85rem;color:var(--me)">'+hebDate+'</span>';
+        }
         personal+=cvR('Date of Birth',dobStr);
     }
     personal+=cvR('Gender',d.gender)+cvR('School',d.school)+cvR('School Grade',d.schoolGrade)+cvR('Teacher',d.teacher);
@@ -1782,14 +1793,14 @@ function renderCamperDetailPage(){
 
     var addr='';
     if(d.street){
-        addr+=cvR('Home',[d.street,d.city,d.state,d.zip].filter(Boolean).join(', '));
-        var fullAddr=[d.street,d.city,d.state,d.zip].filter(Boolean).join(', ');
+        var fullAddr=_addrJoin([d.street,d.city,d.state,d.zip]);
+        addr+=cvR('Home',fullAddr);
         addr+='<a href="https://maps.google.com/?q='+encodeURIComponent(fullAddr)+'" target="_blank" style="display:inline-flex;font-size:.75rem;font-weight:600;color:var(--me);margin:2px 0 6px;text-decoration:none">Open in Maps →</a>';
     }else{
         addr+='<div style="font-size:.8rem;color:var(--s400);font-style:italic;padding:2px 0">No home address on file</div>';
     }
     if(d.summerSameAsHome===false&&d.summerStreet){
-        addr+=cvR('Summer',[d.summerStreet,d.summerCity,d.summerState,d.summerZip].filter(Boolean).join(', '));
+        addr+=cvR('Summer',_addrJoin([d.summerStreet,d.summerCity,d.summerState,d.summerZip]));
         if(d.summerPhone)addr+=cvR('Summer Phone',d.summerPhone);
     }
     g+=_dpCard('Address',addr);
@@ -1828,6 +1839,12 @@ function renderCamperDetailPage(){
     c.innerHTML='<div style="max-width:1400px;margin:0 auto">'+h+g+'</div>';
 }
 function cvR(l,v,w){if(!v)return'';return'<div class="cv-row"><span class="cv-lbl">'+esc(l)+'</span><span class="cv-val'+(w?' cv-warn':'')+'">'+v+'</span></div>'}
+// Joins address parts with ", " — trims each part and strips any trailing
+// comma a part might already carry (e.g. a street typed as "123 Main St,")
+// so two commas never land back to back.
+function _addrJoin(parts){
+    return parts.map(function(p){return String(p||'').trim().replace(/,+$/,'')}).filter(Boolean).join(', ');
+}
 
 // Camper edit
 function editCamper(n){
