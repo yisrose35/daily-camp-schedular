@@ -419,7 +419,7 @@ function nav(p){
     // either page: Structure (data-page="structure") also covers Bunk
     // Builder, Reports & Sheets (data-page="reports") also covers Print
     // Sheets, and Roster (data-page="campers") also covers Families.
-    var sidebarKey=(p==='bunkbuilder')?'structure':(p==='printsheets')?'reports':(p==='families')?'campers':p;
+    var sidebarKey=(p==='bunkbuilder')?'structure':(p==='printsheets')?'reports':(p==='families'||p==='camperdetail')?'campers':p;
     document.querySelectorAll('.sidebar-item').forEach(function(b){b.classList.toggle('active',b.dataset.page===sidebarKey)});
     document.querySelectorAll('.me-page').forEach(function(pg){pg.classList.toggle('active',pg.id==='page-'+p)});
     render(p);
@@ -774,7 +774,7 @@ function ff(label,id,val,type,opts){
 
 // ═══ RENDERERS ═══════════════════════════════════════════════════
 function render(p){
-    var m={campers:renderCampers,structure:renderStructure,bunkbuilder:renderBB,families:renderFamiliesPage,registration:renderRegistrationPage,hiring:renderHiringPage,leads:renderLeads,billing:renderBilling,payroll:renderPayroll,analytics:renderAnalytics,reports:renderReports,printsheets:renderPrintSheets};
+    var m={campers:renderCampers,camperdetail:renderCamperDetailPage,structure:renderStructure,bunkbuilder:renderBB,families:renderFamiliesPage,registration:renderRegistrationPage,hiring:renderHiringPage,leads:renderLeads,billing:renderBilling,payroll:renderPayroll,analytics:renderAnalytics,reports:renderReports,printsheets:renderPrintSheets};
     if(m[p])m[p]();else renderSoon(p);
 }
 
@@ -1678,14 +1678,41 @@ async function bulkDeleteRoster(){
     }});
 }
 
-// Camper view (centered modal)
+// Camper profile — a full page (like CampMinder's camper record), not a
+// modal: there's meaningfully more here than a quick popup should hold, and
+// a dedicated page leaves room to grow (the same accordions below) without
+// fighting a fixed modal height. viewCamper() just remembers which camper
+// and navigates; renderCamperDetailPage() (wired into nav()'s page-render
+// dispatch as 'camperdetail') does the actual rendering, the same way the
+// Families page's scroll-to-camper highlight works off a remembered global
+// instead of a function argument threaded through nav().
+var _camperDetailName=null;
 function viewCamper(n){
-    var d=roster[n];if(!d)return;
+    if(!roster[n])return;
+    _camperDetailName=n;
+    nav('camperdetail');
+}
+function renderCamperDetailPage(){
+    var c=document.getElementById('page-camperdetail');
+    if(!c)return;
+    var n=_camperDetailName;
+    var d=n?roster[n]:null;
+    if(!d){
+        c.innerHTML='<div class="me-empty"><h3>Camper not found</h3><p>They may have been deleted or renamed.</p><button class="me-btn me-btn--sec" onclick="CampistryMe.nav(\'campers\')">← Back to Roster</button></div>';
+        return;
+    }
     var idStr=d.camperId?String(d.camperId).padStart(4,'0'):'—';
 
     var altDisplay=[d.altFirstName,d.altLastName].filter(Boolean).join(' ');
     var altHtml=altDisplay?'<div style="font-size:.85rem;color:var(--s500);margin-top:2px">'+esc(altDisplay)+'</div>':'';
-    document.getElementById('cvHead').innerHTML='<div style="padding:4px 0"><h3 class="cv-name">'+esc(n)+'</h3>'+altHtml+'<div class="cv-tags" style="margin-top:6px"><span class="badge badge-gray" style="font-family:monospace">#'+esc(idStr)+'</span>'+(d.division?dtag(d.division):'')+(d.bunk?' '+bdg(d.bunk,'gray'):'')+'</div></div>';
+    var h='<div class="sec-hd"><div>'
+        +'<button class="me-btn me-btn--ghost me-btn--sm" style="margin-bottom:10px" onclick="CampistryMe.nav(\'campers\')">← Back to Roster</button>'
+        +'<h2 class="cv-name" style="font-size:1.3rem">'+esc(n)+'</h2>'+altHtml
+        +'<div class="cv-tags" style="margin-top:6px"><span class="badge badge-gray" style="font-family:monospace">#'+esc(idStr)+'</span>'+(d.division?dtag(d.division):'')+(d.bunk?' '+bdg(d.bunk,'gray'):'')+'</div>'
+        +'</div><div class="sec-actions">'
+        +'<button class="me-btn me-btn--sm" style="background:var(--err);color:#fff;border:none" onclick="CampistryMe.deleteCamper(\''+je(n)+'\')">Delete</button>'
+        +'<button class="me-btn me-btn--pri" onclick="CampistryMe.editCamper(\''+je(n)+'\')">Edit Camper</button>'
+        +'</div></div>';
 
     var b='';
 
@@ -1834,10 +1861,7 @@ function viewCamper(n){
     b+='<button class="me-btn me-btn--sec me-btn--sm" onclick="CampistryMe.addScholarship(\''+je(n)+'\')">Award Aid</button>';
     b+='</div>';
 
-    document.getElementById('cvBody').innerHTML=b;
-    document.getElementById('cvEditBtn').onclick=function(){closeModal('camperViewModal');editCamper(n)};
-    document.getElementById('cvDeleteBtn').onclick=function(){deleteCamper(n)};
-    openModal('camperViewModal');
+    c.innerHTML=h+'<div class="me-card" style="padding:20px;max-width:760px">'+b+'</div>';
 }
 function cvR(l,v,w){if(!v)return'';return'<div class="cv-row"><span class="cv-lbl">'+esc(l)+'</span><span class="cv-val'+(w?' cv-warn':'')+'">'+v+'</span></div>'}
 
@@ -2042,6 +2066,10 @@ function saveCamper(){
     var wasNew=!editingCamper;
     if(wasNew)_autoCreateAcceptedEnrollment(full);
     var wasEdit=!!editingCamper;
+    // A rename means roster[editingCamper] no longer exists — if their
+    // profile page is what's open (which is where Edit is reached from),
+    // point it at the new name so the re-render below doesn't hit "not found".
+    if(curPage==='camperdetail'&&_camperDetailName===editingCamper)_camperDetailName=full;
     save();closeModal('camperEditModal');render(curPage);toast(editingCamper?'Updated':'Added');
     // Keep any already-issued parent portal invite in sync. The invite stores
     // a snapshot of camper_data at creation time (see _syncParentInviteSnapshot)
@@ -2118,7 +2146,10 @@ async function deleteCamper(n){
     Object.entries(bunkAsgn).forEach(function(pair){if(Array.isArray(pair[1])&&pair[1].indexOf(n)>=0)capturedBunks.push(pair[0])});
     delete roster[n];
     cascadeCamperDelete(n);
-    save();closeModal('camperViewModal');render(curPage);
+    save();
+    // Deleting from their own profile page leaves nothing to show there —
+    // head back to the list instead of rendering a "not found" page.
+    if(curPage==='camperdetail'&&_camperDetailName===n)nav('campers');else render(curPage);
     toast('Camper deleted','ok',{actionLabel:'Undo',onAction:function(){
         roster[n]=capturedRoster;
         capturedFamilyLinks.forEach(function(fk){if(families[fk]){if(!families[fk].camperIds)families[fk].camperIds=[];if(families[fk].camperIds.indexOf(n)<0)families[fk].camperIds.push(n)}});
