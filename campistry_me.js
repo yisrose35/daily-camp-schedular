@@ -419,7 +419,7 @@ function nav(p){
     // either page: Structure (data-page="structure") also covers Bunk
     // Builder, Reports & Sheets (data-page="reports") also covers Print
     // Sheets, and Roster (data-page="campers") also covers Families.
-    var sidebarKey=(p==='bunkbuilder')?'structure':(p==='printsheets')?'reports':(p==='camperdetail')?'campers':p;
+    var sidebarKey=(p==='bunkbuilder')?'structure':(p==='printsheets')?'reports':(p==='camperdetail'||p==='staffdetail')?'campers':p;
     document.querySelectorAll('.sidebar-item').forEach(function(b){b.classList.toggle('active',b.dataset.page===sidebarKey)});
     document.querySelectorAll('.me-page').forEach(function(pg){pg.classList.toggle('active',pg.id==='page-'+p)});
     render(p);
@@ -786,7 +786,7 @@ function ff(label,id,val,type,opts){
 
 // ═══ RENDERERS ═══════════════════════════════════════════════════
 function render(p){
-    var m={campers:renderCampers,camperdetail:renderCamperDetailPage,structure:renderStructure,bunkbuilder:renderBB,families:renderFamiliesPage,registration:renderRegistrationPage,hiring:renderHiringPage,leads:renderLeads,billing:renderBilling,payroll:renderPayroll,analytics:renderAnalytics,reports:renderReports,printsheets:renderPrintSheets};
+    var m={campers:renderCampers,camperdetail:renderCamperDetailPage,staffdetail:renderStaffDetailPage,structure:renderStructure,bunkbuilder:renderBB,families:renderFamiliesPage,registration:renderRegistrationPage,hiring:renderHiringPage,leads:renderLeads,billing:renderBilling,payroll:renderPayroll,analytics:renderAnalytics,reports:renderReports,printsheets:renderPrintSheets};
     if(m[p])m[p]();else renderSoon(p);
 }
 
@@ -1291,24 +1291,133 @@ function _pplGradeForBunks(bunks){
     return '';
 }
 function openPayrollStaff(id){ _prTab='staff'; nav('payroll'); prEditStaff(id); }
-// Routes a Roster staff row to whichever screen actually holds their detail:
-// a hiring record if they came through the pipeline, else their payroll
-// profile, else (added straight to a bunk, before either of those existed)
-// a quick read-only card pointing at Bunk Builder.
-function _pplOpenStaff(row){
-    if(row.appId!=null){viewStaffApp(row.appId);return;}
-    if(row.payrollId!=null){openPayrollStaff(row.payrollId);return;}
-    var body='<div class="cv-row"><span class="cv-lbl">Name</span><span class="cv-val">'+esc(row.name)+'</span></div>'
-        +(row.role?'<div class="cv-row"><span class="cv-lbl">Role</span><span class="cv-val">'+esc(row.role)+'</span></div>':'')
-        +(row.email?'<div class="cv-row"><span class="cv-lbl">Email</span><span class="cv-val">'+esc(row.email)+'</span></div>':'')
-        +(row.phone?'<div class="cv-row"><span class="cv-lbl">Phone</span><span class="cv-val">'+esc(row.phone)+'</span></div>':'')
-        +(row.bunks.length?'<div class="cv-row"><span class="cv-lbl">Bunk</span><span class="cv-val">'+esc(row.bunks.join(', '))+'</span></div>':'')
-        +'<p style="font-size:.78rem;color:var(--s500);margin-top:10px">Added directly to a bunk — there\'s no hiring record or payroll profile for them yet. Edit them from Bunk Builder.</p>';
-    showModal(row.name||'Staff',body,null);
+
+// Staff profile — same full-page treatment as a camper's, and for the same
+// reason: "click a row, see everything" beats routing to three different
+// screens depending on which of {staffApplications, payroll.staff,
+// bunkStaff} happens to hold this person's record. buildStaffRoster()
+// already joins those three into one row by email-or-name
+// (_staffJoinKey) — this page just renders that joined view instead of
+// picking ONE source and hiding the rest.
+var _staffDetailKey=null;
+function viewStaffMember(key){
+    if(!key)return;
+    _staffDetailKey=key;
+    nav('staffdetail');
 }
-function _pplOpenStaffByKey(key){
-    var hit=buildStaffRoster().filter(function(r){return r._key===key})[0];
-    if(hit)_pplOpenStaff(hit);
+function renderStaffDetailPage(){
+    var c=document.getElementById('page-staffdetail');
+    if(!c)return;
+    var key=_staffDetailKey;
+    var row=key?buildStaffRoster().filter(function(r){return r._key===key;})[0]:null;
+    if(!row){
+        c.innerHTML='<div class="me-empty"><h3>Staff member not found</h3><p>They may have been removed.</p><button class="me-btn me-btn--sec" onclick="CampistryMe.nav(\'campers\')">← Back to Roster</button></div>';
+        return;
+    }
+    function isSafeImageDataUrl(s){return typeof s==='string'&&/^data:image\/(png|jpeg|jpg|gif|webp);base64,[A-Za-z0-9+\/=]+$/.test(s);}
+    var avatarHtml=(row.photo&&isSafeImageDataUrl(row.photo))
+        ?'<img src="'+row.photo+'" style="width:52px;height:52px;object-fit:cover;border-radius:8px;flex-shrink:0">'
+        :av(row.name,'l');
+
+    var h='<button class="me-btn me-btn--ghost me-btn--sm" style="margin-bottom:10px" onclick="CampistryMe.nav(\'campers\')">← Back to Roster</button>';
+    h+='<div class="sec-hd"><div style="display:flex;align-items:center;gap:12px">'
+        +avatarHtml
+        +'<div><h2 class="sec-title">'+esc(row.name)+'</h2>'
+        +'<p class="sec-desc">'+esc(row.role||(row.positions||[]).join(', ')||'Staff')+(row.bunks.length?' · '+esc(row.bunks.join(', ')):'')+'</p></div>'
+        +'</div><div class="sec-actions">'
+        +'<button class="me-btn me-btn--pri" onclick="CampistryMe.openEditStaffModal(\''+je(key)+'\')">Edit</button>'
+        +'</div></div>';
+
+    var g='<div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(280px,1fr));gap:16px;align-items:start">';
+
+    var contact=cvR('Email',row.email?'<a href="mailto:'+esc(row.email)+'" style="color:var(--me)">'+esc(row.email)+'</a>':'')
+        +cvR('Phone',row.phone?'<a href="tel:'+esc(row.phone)+'" style="color:var(--me);font-weight:600">'+esc(row.phone)+'</a>':'');
+    if(!row.email&&!row.phone)contact='<div style="font-size:.8rem;color:var(--s400);font-style:italic">No contact info on file</div>';
+    g+=_dpCard('Contact Info',contact,{icon:'user'});
+
+    var posBody=cvR('Role',row.role)+((row.positions||[]).length?cvR('Position(s)',esc(row.positions.join(', '))):'');
+    if(row.payrollId!=null){
+        var core=PC();
+        var rl=(core&&(core.PAY_TYPES.filter(function(p){return p.id===row.payType})[0]||{}).rateLabel)||'Rate';
+        if(row.payRate)posBody+=cvR(rl,fm(row.payRate));
+        posBody+='<button class="me-btn me-btn--ghost me-btn--sm" style="margin-top:6px" onclick="CampistryMe.openPayrollStaff('+row.payrollId+')">Open in Payroll →</button>';
+    }else{
+        posBody+='<div style="font-size:.8rem;color:var(--s400);font-style:italic;margin-top:4px">Not on payroll yet</div>';
+    }
+    if(!posBody)posBody='<div style="font-size:.8rem;color:var(--s400);font-style:italic">No role on file</div>';
+    g+=_dpCard('Position & Pay',posBody,{icon:'dollarSign'});
+
+    var bunkBody=row.bunks.length?row.bunks.map(function(b){return cvR('Bunk',esc(b));}).join(''):'<div style="font-size:.8rem;color:var(--s400);font-style:italic">Not placed on a bunk yet</div>';
+    g+=_dpCard('Bunk Placement',bunkBody,{icon:'mapPin'});
+
+    if(row.appId!=null){
+        var app=staffApplications[row.appId];
+        var appBody=app?cvR('Status',_staffLabel(app.status||'applied')):'';
+        appBody+='<button class="me-btn me-btn--ghost me-btn--sm" style="margin-top:6px" onclick="CampistryMe.viewStaffApp(\''+je(row.appId)+'\')">View Full Application →</button>';
+        g+=_dpCard('Hiring Application',appBody,{icon:'fileText'});
+    }
+
+    g+='</div>';
+    c.innerHTML='<div style="max-width:1400px;margin:0 auto">'+h+g+'</div>';
+}
+function openEditStaffModal(key){
+    var row=buildStaffRoster().filter(function(r){return r._key===key;})[0];
+    if(!row)return;
+    var h='<div class="fg">'+ff('Name','esName',row.name||'')+'</div>'
+        +'<div class="fr">'+ff('Email','esEmail',row.email||'','email')+ff('Phone','esPhone',row.phone||'','tel')+'</div>'
+        +'<div class="fg">'+ff('Role','esRole',row.role||(row.positions||[]).join(', ')||'')+'</div>';
+    if(row.payrollId!=null){
+        var core=PC();
+        h+='<div class="fr"><div class="fg"><label class="fl">Pay Type</label><select id="esPayType" class="fs">'
+            +(core?core.PAY_TYPES.map(function(p){return '<option value="'+esc(p.id)+'"'+((row.payType||'hourly')===p.id?' selected':'')+'>'+esc(p.label)+'</option>';}).join(''):'')
+            +'</select></div><div class="fg"><label class="fl">Rate</label><input type="number" min="0" step="0.01" id="esPayRate" class="fi" value="'+(row.payRate||'')+'"></div></div>';
+    }
+    showModal('Edit '+(row.name||'Staff Member'),h,function(){ saveStaffMember(key); });
+}
+// Writes to whichever of {payroll.staff, staffApplications} this person
+// actually has a record in, THEN pushes the same identity fields onto every
+// matching bunkStaff entry — the join across all three is done by
+// email-or-name match at read time (_staffJoinKey), not a stored id, so a
+// rename/email edit that only touched one store would silently split this
+// person into two rows the next time the roster re-renders.
+function saveStaffMember(key){
+    var row=buildStaffRoster().filter(function(r){return r._key===key;})[0];
+    if(!row)return;
+    function v(id){var e=document.getElementById(id);return e?(e.value||'').trim():'';}
+    var name=v('esName');
+    if(!name){toast('Name is required','error');return;}
+    var email=v('esEmail').toLowerCase();
+    var phone=v('esPhone');
+    var role=v('esRole');
+
+    if(row.payrollId!=null){
+        var idx=payroll.staff.findIndex(function(s){return String(s.id)===String(row.payrollId);});
+        if(idx>=0){
+            payroll.staff[idx].name=name;payroll.staff[idx].email=email;payroll.staff[idx].phone=phone;payroll.staff[idx].role=role;
+            var pt=document.getElementById('esPayType');if(pt)payroll.staff[idx].payType=pt.value;
+            var pr=document.getElementById('esPayRate');if(pr)payroll.staff[idx].payRate=parseFloat(pr.value)||0;
+        }
+    }
+    if(row.appId!=null){
+        var a=staffApplications[row.appId];
+        if(a){a.name=name;a.email=email;a.phone=phone;}
+    }
+    Object.keys(bunkStaff||{}).forEach(function(bunkName){
+        var touched=false;
+        (bunkStaff[bunkName]||[]).forEach(function(s){
+            if(_staffJoinKey(s.email,s.name)===key){
+                s.name=name;s.email=email;s.phone=phone;s.role=role||s.role;
+                touched=true;
+            }
+        });
+        if(touched)_syncInvitesForBunk(bunkName);
+    });
+
+    save();
+    closeModal('dynModal');
+    _staffDetailKey=_staffJoinKey(email,name);
+    if(curPage==='staffdetail')renderStaffDetailPage();else render(curPage);
+    toast('Saved');
 }
 function setPplStaffSubTab(t){pplStaffSubTab=t;renderHiringPage()}
 // Everyone still being decided on: applications that haven't become a camper
@@ -1589,7 +1698,7 @@ function renderCampers(filter){
                 var hasMed=!!(d.allergies||d.medications);
                 var altN=[d.altFirstName,d.altLastName].filter(Boolean).join(' ');
                 var fam=_familyForCamper(n);
-                var famChip=fam?'<div style="margin-top:2px"><span style="font-size:.68rem;color:var(--me);font-weight:600;cursor:pointer" onclick="event.stopPropagation();CampistryMe.viewFamilyFromCamper(\''+je(n)+'\')">👨‍👩‍👧‍👦 '+esc(fam.name)+'</span></div>':'';
+                var famChip=fam?'<div style="margin-top:2px"><span style="font-size:.68rem;color:var(--me);font-weight:600;cursor:pointer" onclick="event.stopPropagation();CampistryMe.viewFamilyFromCamper(\''+je(n)+'\')">'+esc(fam.name)+'</span></div>':'';
                 var nameCell=esc(n)+(altN&&getCampSettings().showAltNames!==false?'<div style="font-size:.7rem;color:var(--s400);font-weight:400">'+esc(altN)+'</div>':'')+famChip;
                 var details=(d.schoolGrade?esc(d.schoolGrade):'<span style="color:var(--s300)">—</span>')+(hasMed?' <span style="color:var(--err);font-size:.7rem;font-weight:600">⚠ Medical</span>':'');
                 var placement=(d.division?dtag(d.division):'<span style="color:var(--s300)">—</span>')+(d.bunk?' '+bdg(d.bunk,'gray'):'');
@@ -1602,7 +1711,7 @@ function renderCampers(filter){
                 var details2=(r.role||(r.positions||[]).join(', ')||'<span style="color:var(--s300)">—</span>')+(pay?' <span style="color:var(--s400);font-size:.78rem">· '+esc(pay)+'</span>':'');
                 var placement2=(grade?'<span style="font-size:.8rem">'+esc(grade)+'</span>':'<span style="color:var(--s300)">—</span>')+(r.bunks.length?' '+r.bunks.map(function(b){return bdg(b,'gray')}).join(' '):'');
                 var contact2=((r.email?'<div style="font-size:.78rem;color:var(--s500)">'+esc(r.email)+'</div>':'')+(r.phone?'<div style="font-size:.75rem;color:var(--s400)">'+esc(r.phone)+'</div>':''))||'<span style="color:var(--s300)">—</span>';
-                h+='<tr class="click" onclick="CampistryMe._pplOpenStaffByKey(\''+je(r._key)+'\')"><td></td><td>'+_typeBadge('staff')+'</td><td class="bold">'+esc(r.name)+'</td><td style="font-size:.8rem">'+details2+'</td><td>'+placement2+'</td><td>'+contact2+'</td><td></td></tr>';
+                h+='<tr class="click" onclick="CampistryMe.viewStaffMember(\''+je(r._key)+'\')"><td></td><td>'+_typeBadge('staff')+'</td><td class="bold">'+esc(r.name)+'</td><td style="font-size:.8rem">'+details2+'</td><td>'+placement2+'</td><td>'+contact2+'</td><td style="text-align:right" onclick="event.stopPropagation()"><button class="me-btn me-btn--ghost me-btn--sm" onclick="CampistryMe.openEditStaffModal(\''+je(r._key)+'\')">Edit</button></td></tr>';
             }
         });
         h+='</tbody></table></div>'+_pagerHtml(combined.length,PAGE_SIZE,_rosterPage,'setRosterPage')+'</div>';
@@ -11411,7 +11520,7 @@ window.CampistryMe={
     viewCamper:viewCamper,editCamper:editCamper,addCamper:addCamper,deleteCamper:deleteCamper,ceToggleSummer:ceToggleSummer,
     addFamily:function(){openFamilyForm(null)},editFamily:function(id){openFamilyForm(id)},deleteFamily:deleteFamily,removeCamperFromFamily:removeCamperFromFamily,
     viewFamilyFromCamper:viewFamilyFromCamper,
-    setPplStaffSubTab:setPplStaffSubTab,_pplOpenStaffByKey:_pplOpenStaffByKey,
+    setPplStaffSubTab:setPplStaffSubTab,viewStaffMember:viewStaffMember,openEditStaffModal:openEditStaffModal,saveStaffMember:saveStaffMember,
     acceptFamilySuggestion:acceptFamilySuggestion,dismissFamilySuggestion:dismissFamilySuggestion,acceptAddToFamily:acceptAddToFamily,
     mergeFamilies:mergeFamilies,dismissMergeFamilies:dismissMergeFamilies,
     addDiv:function(){openDivForm(null)},editDiv:function(n){openDivForm(n)},deleteDiv:deleteDiv,moveDivision:moveDivision,
