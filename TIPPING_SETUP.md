@@ -10,16 +10,24 @@ build** — test-mode only until the notes at the bottom are addressed.
 
 | Who | Surface | Does what |
 |---|---|---|
-| **Head counselor / admin** | Link Admin → Tips Setup → Card Tips | Creates a staff tip account (name, role, generates an access code), sets the suggested tip amount, and sees the ledger (Earned / Balance / Paid Out per staff member) |
+| **Head counselor / admin** | Campistry Me → Payroll → **Tip Payments** | Creates a staff tip account (name, role, generates an access code), edits Zelle/Venmo/PayPal/Cash App, sees the ledger (Earned / Balance / Paid Out), removes accounts |
 | **Parent** | Link Parent → Tips | Pays a tip by card |
 | **Staff member (the receiver)** | Campistry Lite → **Tips** tab (inside "My Camp" for counselors, or Link Lite for head staff) | Their tip account is set up automatically the first time they open the Tips tab — no admin step, no access code needed (`ensure_my_tip_account`, migration 060). They connect their own Stripe Express account, and/or type in their own Zelle/Venmo/PayPal/Cash App. |
+
+Staff Payments management (accounts, handles, Stripe status, ledger, remove)
+lives in **Campistry Me → Payroll → Tip Payments**, not Link Admin — every
+other piece of staff data (roster, hiring, positions, bunk assignment, wage
+payroll) already lives in Me, so managing how a staff member gets tipped
+lives with the rest of their record instead of a separate app. Link Admin's
+Tips Setup page still owns the "Suggested Tip by Role" $ amounts (parent-
+facing config), but no longer touches `link_staff_accounts` directly.
 
 A staff member can have personal handles configured, be Stripe-connected,
 both, or neither — the parent-facing Tips page shows whichever applies for
 that staff member automatically. Handles a staff member enters themselves in
-Lite take priority over the separate admin-entered directory in Link Admin's
-"Staff payment info" section — that list still works and is shown for any
-staff member who hasn't self-entered their own.
+Lite take priority over anything an admin entered in Me's Tip Payments tab —
+that list still works and is shown for any staff member who hasn't
+self-entered their own.
 
 ## How money reaches a staff member
 
@@ -35,13 +43,13 @@ staff member who hasn't self-entered their own.
 2. From there they tap **Connect Stripe** — `stripe-connect-onboard` creates
    a Stripe Connect **Express** account under *their* session and returns a
    hosted onboarding link. They fill in their own bank account there —
-   Campistry never sees or stores it. (The old admin-triggered "Connect
-   Stripe" button in Link Admin still works too, e.g. for a staff member
-   without a Lite login yet.) They can also type Zelle/Venmo/PayPal/Cash App
-   handles directly into the Tips tab at any time — self-editable per the
-   `link_staff_accounts_self_update` RLS policy (migration 058); the guard
-   trigger there only pins ledger/identity columns, so these handle columns
-   were self-editable with no trigger change needed.
+   Campistry never sees or stores it. (The admin-triggered "Connect Stripe"
+   button in Me → Payroll → Tip Payments still works too, e.g. for a staff
+   member without a Lite login yet.) They can also type Zelle/Venmo/PayPal/
+   Cash App handles directly into the Tips tab at any time — self-editable
+   per the `link_staff_accounts_self_update` RLS policy (migration 058); the
+   guard trigger there only pins ledger/identity columns, so these handle
+   columns were self-editable with no trigger change needed.
 3. Once Stripe confirms the account can receive money (`charges_enabled`),
    Lite shows **Connected**, and that staff member appears as a "Pay with
    card" option on the parent's Tips page instead of (or alongside) personal
@@ -162,7 +170,7 @@ one shared function correctly serves both endpoints.
 
 ## Testing end-to-end (test mode)
 
-1. In Link admin → Tips Setup → Card Tips, **+ Add Staff Account** — note
+1. In Campistry Me → Payroll → **Tip Payments**, **+ Add Person** — note
    the generated access code.
 2. As that staff member, in Campistry Lite → **Tips** tab, enter the access
    code → **Link my account** → **Connect Stripe**.
@@ -239,9 +247,10 @@ from step 5 and test against them directly.
   Campistry-fee vs. tip — the itemized breakdown (well, the combined-fee
   breakdown, per the owner's chosen display) only appears in Campistry's own
   tip sheet before the parent redirects to pay.
-- The admin-triggered "Connect Stripe" button in Link Admin still exists as
-  a fallback and keeps working exactly as before — nothing was removed
-  there, self-service in Lite is additive.
+- The admin-triggered "Connect Stripe" button now lives in Campistry Me →
+  Payroll → Tip Payments (moved from Link Admin, where all Staff Payments
+  management used to live) and still works exactly as before — nothing was
+  removed, self-service in Lite is additive.
 - **A cart's Transfer fan-out has no automatic retry beyond Stripe's own
   webhook redelivery window.** If one recipient's Transfer fails (their
   connected account got disconnected mid-cart, a Stripe hiccup, etc.), the

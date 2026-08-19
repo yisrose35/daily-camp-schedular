@@ -2,19 +2,19 @@
 // stripe-connect-onboard — Create/resume a Stripe Connect Express account for
 // one Campistry Link staff tip account, and return a hosted onboarding URL.
 //
-// Called from either campistry_link_admin.html's "Connect Stripe" button
-// (an admin acting on a staff member's row — the original, still-supported
-// fallback) or campistry_lite.js's Tips tab (the staff member acting on
-// their OWN row after claim_staff_tip_account() links it to their login —
-// the primary flow now, since a real bank account should be connected by
-// the actual person, not set up on their behalf). Either way the caller's
-// own Supabase session JWT is used to read/write the row through Supabase's
-// normal RLS — migration 017 covers the admin path, migration 058's
-// self-service policies cover the staff path. This is a deliberate
-// departure from the rest of the Stripe functions in this repo, which trust
-// an unauthenticated campId from the request body. Minting a Connect
-// account tied to a real bank account is higher-stakes than the existing
-// billing flow, so we lean on real auth here instead.
+// Called from either campistry_me.js's Tip Payments tab (Payroll — an admin
+// acting on a staff member's row; Staff Payments management lives in
+// Campistry Me now, not Link Admin) or campistry_lite.js's Tips tab (the
+// staff member acting on their OWN row after claim_staff_tip_account() links
+// it to their login — the primary flow, since a real bank account should be
+// connected by the actual person, not set up on their behalf). Either way
+// the caller's own Supabase session JWT is used to read/write the row
+// through Supabase's normal RLS — migration 017 covers the admin path,
+// migration 058's self-service policies cover the staff path. This is a
+// deliberate departure from the rest of the Stripe functions in this repo,
+// which trust an unauthenticated campId from the request body. Minting a
+// Connect account tied to a real bank account is higher-stakes than the
+// existing billing flow, so we lean on real auth here instead.
 //
 // capabilities[transfers][requested]=true only — NOT card_payments. Campistry
 // (the platform) takes the actual charge via a destination charge; the
@@ -23,8 +23,7 @@
 // extra Stripe underwriting requirements this feature doesn't need.
 //
 // Request:  { accountId, returnTo? }  (link_staff_accounts.id;
-//           returnTo: 'lite' | 'admin', default 'admin' for back-compat with
-//           existing callers that don't send it)
+//           returnTo: 'lite' | 'me', default 'me')
 //           header: Authorization: Bearer <caller's Supabase access token>
 // Response: { url }
 // =============================================================================
@@ -127,7 +126,7 @@ serve(async (req) => {
     // one. This also doubles as "resume onboarding" for a staff member who
     // dropped off partway through.
     const origin = req.headers.get("origin") || "";
-    const returnPage = returnTo === "lite" ? "campistry_lite.html" : "campistry_link_admin.html";
+    const returnPage = returnTo === "lite" ? "campistry_lite.html" : "campistry_me.html";
     const returnUrl = `${origin}/${returnPage}?stripeReturn=1&accountId=${encodeURIComponent(accountId)}`;
     const link = await stripePost("/account_links", {
       account: stripeAccountId,

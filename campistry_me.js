@@ -143,6 +143,19 @@ function init(){
     nav('campers');
     console.log('📋 Me ready:',Object.keys(roster).length,'campers');
 
+    // Returning from Stripe Connect onboarding (started from Payroll → Tip
+    // Payments, or resumed from Lite) — jump straight to that tab and
+    // confirm the account's real status instead of waiting on the webhook.
+    (function(){
+        var params=new URLSearchParams(window.location.search);
+        if(params.get('stripeReturn')!=='1')return;
+        var accountId=params.get('accountId');
+        history.replaceState(null,'',window.location.pathname+window.location.hash);
+        _prTab='tips';
+        nav('payroll');
+        if(accountId)_ptCheckStripeReturn(accountId);
+    })();
+
     // Sync UI with whatever's in _localCache after hydration. We ALWAYS reload
     // — the previous save-lock guard skipped loadData when the user had recent
     // local edits, intending to protect them from cloud overwrites. But:
@@ -7833,11 +7846,18 @@ function renderPayroll(){
     }
     if(!_prWeek) _prWeek=_prWeekStart();
 
-    var tabs=[{k:'overview',l:'Overview'},{k:'staff',l:'Staff'},{k:'timesheets',l:'Timesheets'},{k:'youth',l:'Youth Corps'},{k:'runs',l:'Pay Runs'}];
+    var tabs=[{k:'overview',l:'Overview'},{k:'staff',l:'Staff'},{k:'timesheets',l:'Timesheets'},{k:'youth',l:'Youth Corps'},{k:'runs',l:'Pay Runs'},{k:'tips',l:'Tip Payments'}];
     var h='<div class="sec-hd"><div><h2 class="sec-title">Payroll</h2><p class="sec-desc">Staff pay, timesheets, and Youth Corps compliance</p></div>';
     h+='<div class="sec-actions">';
-    h+='<button class="me-btn me-btn--sec me-btn--sm" onclick="CampistryMe.prExportCSV()">↓ Export CSV</button>';
-    h+='<button class="me-btn me-btn--pri me-btn--sm" onclick="CampistryMe.prEditStaff()">+ Add Staff</button>';
+    if(_prTab==='tips'){
+        h+='<button class="me-btn me-btn--sec me-btn--sm" onclick="CampistryMe.ptDownloadTemplate()">↓ Template</button>';
+        h+='<button class="me-btn me-btn--sec me-btn--sm" onclick="document.getElementById(\'ptUpload\').click()">↑ Upload</button>';
+        h+='<input type="file" id="ptUpload" accept=".csv,text/csv" style="display:none" onchange="CampistryMe.ptUploadTemplate(this)">';
+        h+='<button class="me-btn me-btn--pri me-btn--sm" onclick="CampistryMe.ptOpenAdd()">+ Add Person</button>';
+    }else{
+        h+='<button class="me-btn me-btn--sec me-btn--sm" onclick="CampistryMe.prExportCSV()">↓ Export CSV</button>';
+        h+='<button class="me-btn me-btn--pri me-btn--sm" onclick="CampistryMe.prEditStaff()">+ Add Staff</button>';
+    }
     h+='</div></div>';
 
     h+='<div style="display:flex;gap:0;border-bottom:1px solid var(--s200);margin-bottom:14px;flex-wrap:wrap">';
@@ -7850,6 +7870,7 @@ function renderPayroll(){
     else if(_prTab==='staff') h+=_prStaffTab();
     else if(_prTab==='timesheets') h+=_prTimesheetsTab();
     else if(_prTab==='youth') h+=_prYouthTab();
+    else if(_prTab==='tips') h+=_prTipsTab();
     else h+=_prRunsTab();
 
     c.innerHTML=h;
@@ -7863,6 +7884,347 @@ function _prStat(label,value,sub,color){
 }
 function _prEmpty(msg,cta){
     return'<div class="me-card" style="padding:28px 20px;text-align:center"><p style="font-size:.86rem;color:var(--s400);margin:0 0 10px">'+esc(msg)+'</p>'+(cta||'')+'</div>';
+}
+
+// ── Tip Payments (link_staff_accounts) ──────────────────────────────
+// Zelle/Venmo/PayPal/Cash App handles and Stripe Connect card-tip status,
+// per staff member — moved here from Link Admin because every other piece
+// of staff data (roster, hiring, positions, bunk assignment, wage payroll)
+// already lives in Me; having to leave this app to check a counselor's
+// Zelle handle was the awkward part, not a feature. link_staff_accounts is
+// just a Supabase table — this reads/writes it directly with the same
+// CampistryDB client the rest of Me already uses, no new plumbing.
+var _ptAccounts=null,_ptLoading=false;
+var PT_ACCOUNT_COLS='id, staff_name, role, access_code, balance, total_earned, total_paid_out, '+
+    'stripe_account_id, stripe_charges_enabled, stripe_onboarding_status, '+
+    'zelle_handle, venmo_handle, paypal_handle, cashapp_handle';
+var PT_METHODS=[{key:'zelle_handle',label:'Zelle'},{key:'venmo_handle',label:'Venmo'},{key:'paypal_handle',label:'PayPal'},{key:'cashapp_handle',label:'Cash App'}];
+
+function _ptClient(){ return window.CampistryDB&&window.CampistryDB.getClient?window.CampistryDB.getClient():null; }
+function _ptCampId(){ return window.CampistryDB&&window.CampistryDB.getCampId?window.CampistryDB.getCampId():null; }
+
+function _ptLoadAccounts(cb){
+    var client=_ptClient(),campId=_ptCampId();
+    if(!client||!campId){ _ptAccounts=_ptAccounts||[]; if(cb)cb(); return; }
+    client.from('link_staff_accounts').select(PT_ACCOUNT_COLS).eq('camp_id',campId).order('staff_name',{ascending:true})
+        .then(function(res){
+            if(res.error){ console.warn('[Me] link_staff_accounts load:',res.error.message); _ptAccounts=_ptAccounts||[]; }
+            else _ptAccounts=res.data||[];
+            if(cb)cb();
+        });
+}
+
+// The OLD admin-entered Zelle/Venmo list (link_tips_config.staffPay, a
+// camp_state_kv array keyed by free-text name — Link Admin's original,
+// pre-link_staff_accounts implementation) gets folded in here too, the
+// same one-time backfill Link Admin itself ran: match by name, only fill
+// in handle fields still empty (never overwrite what a staff member
+// already self-entered in Lite), then clear the legacy array so repeat
+// calls are a no-op. Running it here as well means this works even for a
+// camp that never happens to open Link Admin's Tips page again.
+function _ptLoadLegacyConfig(){
+    var gs={}; try{ gs=JSON.parse(localStorage.getItem('campGlobalSettings_v1')||'{}'); }catch(e){}
+    return gs.link_tips_config||null;
+}
+function _ptSaveLegacyConfig(cfg){
+    var gs={}; try{ gs=JSON.parse(localStorage.getItem('campGlobalSettings_v1')||'{}'); }catch(e){}
+    gs.link_tips_config=cfg; gs.updated_at=new Date().toISOString();
+    try{ localStorage.setItem('campGlobalSettings_v1',JSON.stringify(gs)); }catch(e){}
+    try{ localStorage.setItem('CAMPISTRY_LOCAL_CACHE',JSON.stringify(gs)); }catch(e){}
+    var client=_ptClient(),campId=_ptCampId();
+    if(client&&campId){
+        client.from('camp_state_kv').upsert({camp_id:campId,key:'link_tips_config',value:cfg,updated_at:new Date().toISOString()},{onConflict:'camp_id,key'})
+            .then(function(r){ if(r.error)console.warn('[Me] Tips config cloud save failed:',r.error.message); });
+    }
+}
+function _ptMergeLegacyStaffPay(cb){
+    var cfg=_ptLoadLegacyConfig();
+    var legacy=(cfg&&cfg.staffPay)||[];
+    var client=_ptClient(),campId=_ptCampId();
+    if(!legacy.length||!client||!campId){ cb(); return; }
+    var byName={}; (_ptAccounts||[]).forEach(function(a){ byName[String(a.staff_name||'').trim().toLowerCase()]=a; });
+    var ops=[];
+    legacy.forEach(function(p){
+        var key=String(p.name||'').trim().toLowerCase(); if(!key)return;
+        var handles={zelle_handle:p.zelle||null,venmo_handle:p.venmo||null,paypal_handle:p.paypal||null,cashapp_handle:p.cashapp||null};
+        var match=byName[key];
+        if(match){
+            var patch={}; Object.keys(handles).forEach(function(k){ if(!match[k]&&handles[k])patch[k]=handles[k]; });
+            if(Object.keys(patch).length) ops.push(client.from('link_staff_accounts').update(patch).eq('id',match.id).then(function(r){ if(!r.error)Object.assign(match,patch); }));
+        }else{
+            var insertRow=Object.assign({camp_id:campId,staff_name:p.name,role:p.role||''},handles);
+            ops.push(client.from('link_staff_accounts').insert(insertRow).select().single().then(function(r){
+                if(!r.error&&r.data){ if(!_ptAccounts)_ptAccounts=[]; _ptAccounts.push(r.data); byName[key]=r.data; }
+            }));
+        }
+    });
+    Promise.all(ops).then(function(){ cfg.staffPay=[]; _ptSaveLegacyConfig(cfg); cb(); });
+}
+
+function _prTipsTab(){
+    if(_ptAccounts===null){
+        if(!_ptLoading){
+            _ptLoading=true;
+            _ptLoadAccounts(function(){ _ptMergeLegacyStaffPay(function(){ _ptLoading=false; if(curPage==='payroll')renderPayroll(); }); });
+        }
+        return _prEmpty('Loading tip payment info…');
+    }
+    if(!_ptAccounts.length){
+        return _prEmpty('No tip payment info yet. Staff can set this up themselves from Campistry Lite\'s Tips tab, or add someone here.',
+            '<button class="me-btn me-btn--pri me-btn--sm" onclick="CampistryMe.ptOpenAdd()">+ Add Person</button>');
+    }
+    var h='<div class="me-card" style="padding:0;overflow:hidden">';
+    h+='<table style="width:100%;border-collapse:collapse;font-size:.82rem">';
+    h+='<thead><tr style="border-bottom:1.5px solid var(--s200)">'+
+        '<th style="text-align:left;padding:8px 12px;font-size:.72rem;color:var(--s400);font-weight:600">Staff Member</th>'+
+        '<th style="text-align:left;padding:8px 12px;font-size:.72rem;color:var(--s400);font-weight:600">Payment Info</th>'+
+        '<th style="text-align:left;padding:8px 12px;font-size:.72rem;color:var(--s400);font-weight:600">Card Tips</th>'+
+        '<th style="text-align:right;padding:8px 12px;font-size:.72rem;color:var(--s400);font-weight:600">Balance</th>'+
+        '<th style="padding:8px 12px"></th></tr></thead><tbody>';
+    _ptAccounts.forEach(function(a){
+        var bal=parseFloat(a.balance)||0;
+        var chips=PT_METHODS.filter(function(m){return a[m.key];}).map(function(m){
+            return '<span style="display:inline-flex;align-items:center;gap:4px;background:var(--s50);border:1px solid var(--s200);border-radius:999px;padding:2px 9px;font-size:.72rem;color:var(--s700);margin:1px"><strong>'+esc(m.label)+'</strong> '+esc(a[m.key])+'</span>';
+        }).join('');
+        if(!chips) chips='<span style="font-size:.74rem;color:var(--s400)">None</span>';
+        h+='<tr style="border-bottom:1px solid var(--s100)">'+
+            '<td style="padding:8px 12px;vertical-align:top"><strong>'+esc(a.staff_name)+'</strong>'+(a.role?' <span style="color:var(--s400);font-size:.74rem">· '+esc(a.role)+'</span>':'')+
+                '<div style="margin-top:3px"><code style="background:var(--s50);border:1px solid var(--s200);border-radius:6px;padding:2px 7px;font-size:.72rem;letter-spacing:.06em">'+esc(a.access_code||'')+'</code> '+
+                '<button class="me-btn me-btn--ghost me-btn--sm" onclick="CampistryMe.ptCopyLink(\''+esc(a.access_code||'')+'\')" style="padding:1px 6px">Copy link</button></div></td>'+
+            '<td style="padding:8px 12px;vertical-align:top;max-width:260px">'+chips+'</td>'+
+            '<td style="padding:8px 12px;white-space:nowrap;vertical-align:top">'+_ptStripeCell(a)+'</td>'+
+            '<td style="padding:8px 12px;text-align:right;vertical-align:top"><div style="font-weight:700;color:'+(bal>0?'var(--ok)':'var(--s400)')+'">'+fm(bal)+'</div><div style="font-size:.7rem;color:var(--s400)">'+fm(parseFloat(a.total_earned)||0)+' earned</div></td>'+
+            '<td style="padding:8px 12px;text-align:right;white-space:nowrap;vertical-align:top">'+
+                '<button class="me-btn me-btn--sec me-btn--sm" onclick="CampistryMe.ptPayout(\''+esc(a.id)+'\')"'+(bal<=0?' disabled style="opacity:.45;cursor:default"':'')+'>Pay out</button> '+
+                '<button class="me-btn me-btn--ghost me-btn--sm" onclick="CampistryMe.ptOpenEdit(\''+esc(a.id)+'\')">Edit</button> '+
+                '<button class="me-btn me-btn--ghost me-btn--sm" style="color:var(--err)" onclick="CampistryMe.ptRemove(\''+esc(a.id)+'\')">Remove</button>'+
+                '</td></tr>';
+    });
+    h+='</tbody></table></div>';
+    return h;
+}
+
+function _ptStripeCell(a){
+    if(a.stripe_charges_enabled) return '<span style="display:inline-flex;align-items:center;gap:5px;color:var(--ok);font-weight:700;font-size:.78rem"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="20 6 9 17 4 12"/></svg> Connected</span>';
+    if(a.stripe_account_id) return '<span style="color:var(--me);font-weight:700;font-size:.78rem;margin-right:6px">Onboarding…</span><button class="me-btn me-btn--ghost me-btn--sm" onclick="CampistryMe.ptConnectStripe(\''+esc(a.id)+'\')" style="padding:2px 8px">Resume</button>';
+    return '<button class="me-btn me-btn--sec me-btn--sm" onclick="CampistryMe.ptConnectStripe(\''+esc(a.id)+'\')">Connect Stripe</button>';
+}
+
+async function ptConnectStripe(accountId){
+    var url=getSupabaseUrl(),key=getSupabaseKey();
+    if(!url){ toast('Payments are not set up for this camp yet.','error'); return; }
+    if(!(window.CampistryDB&&window.CampistryDB.getAccessToken)){ toast('Not signed in','error'); return; }
+    var token=await window.CampistryDB.getAccessToken();
+    if(!token){ toast('Not signed in','error'); return; }
+    try{
+        var resp=await fetch(url+'/functions/v1/stripe-connect-onboard',{
+            method:'POST',
+            headers:{'Content-Type':'application/json','Authorization':'Bearer '+token,'apikey':key||''},
+            body:JSON.stringify({accountId:accountId,returnTo:'me'})
+        });
+        var data=await resp.json();
+        if(!resp.ok||data.error) throw new Error(data.error||'Could not start onboarding');
+        window.location.href=data.url;
+    }catch(err){ toast('Could not connect Stripe: '+(err.message||'unknown error'),'error'); }
+}
+
+// Called from init() when Stripe redirects back with ?stripeReturn=1 —
+// confirms the account's real status right away instead of waiting on the
+// async webhook (which stays the durable source of truth either way).
+async function _ptCheckStripeReturn(accountId){
+    var url=getSupabaseUrl(),key=getSupabaseKey();
+    if(!url||!(window.CampistryDB&&window.CampistryDB.getAccessToken))return;
+    var token=await window.CampistryDB.getAccessToken();
+    if(!token)return;
+    try{
+        var resp=await fetch(url+'/functions/v1/stripe-connect-status',{
+            method:'POST',
+            headers:{'Content-Type':'application/json','Authorization':'Bearer '+token,'apikey':key||''},
+            body:JSON.stringify({accountId:accountId})
+        });
+        var data=await resp.json();
+        if(resp.ok&&!data.error){
+            if(_ptAccounts){
+                var a=_ptAccounts.find(function(x){return x.id===accountId;});
+                if(a){ a.stripe_charges_enabled=data.charges_enabled; a.stripe_onboarding_status=data.onboarding_status; if(curPage==='payroll')renderPayroll(); }
+            }
+            toast(data.charges_enabled?'Stripe connected — ready for card tips':'Onboarding in progress — finish it on Stripe\'s site');
+        }
+    }catch(err){ console.warn('[Me] Stripe return check failed:',err.message); }
+}
+
+function ptCopyLink(code){
+    var url=window.location.href.replace(/[^/]*$/,'')+'campistry_link_staff.html?code='+encodeURIComponent(code);
+    var done=function(){ toast('Balance-page link copied — send it to the staff member'); };
+    if(navigator.clipboard&&navigator.clipboard.writeText) navigator.clipboard.writeText(url).then(done,function(){ prompt('Copy this link:',url); });
+    else prompt('Copy this link:',url);
+}
+
+function ptPayout(accountId){
+    var a=(_ptAccounts||[]).find(function(x){return x.id===accountId;}); if(!a)return;
+    var bal=parseFloat(a.balance)||0;
+    if(bal<=0){ toast('Nothing to pay out'); return; }
+    var raw=prompt('Pay out to '+a.staff_name+'.\nCurrent balance: $'+bal.toFixed(2)+'\n\nAmount to pay out:',bal.toFixed(2));
+    if(raw==null)return;
+    var amt=parseFloat(raw);
+    if(!amt||amt<=0||amt>bal){ toast('Enter an amount between $0.01 and $'+bal.toFixed(2),'error'); return; }
+    var client=_ptClient();
+    if(!client){ toast('Cloud not connected','error'); return; }
+    client.rpc('record_staff_payout',{p_account_id:accountId,p_amount:amt}).then(function(res){
+        if(res.error||!res.data||!res.data.success){ toast('Payout failed: '+(res.error?res.error.message:(res.data||{}).error||'unknown'),'error'); return; }
+        a.balance=res.data.balance;
+        a.total_paid_out=(parseFloat(a.total_paid_out)||0)+(parseFloat(res.data.paid)||0);
+        renderPayroll();
+        toast('$'+(parseFloat(res.data.paid)||0).toFixed(2)+' paid out to '+a.staff_name);
+    });
+}
+
+function ptOpenAdd(){ _ptOpenModal(null); }
+function ptOpenEdit(id){ _ptOpenModal(id); }
+function _ptOpenModal(id){
+    var a=id?(_ptAccounts||[]).find(function(x){return x.id===id;}):null;
+    var h='<div class="me-modal-form">';
+    h+='<div class="me-field"><label>Name</label><input type="text" id="ptName" class="me-input" placeholder="e.g. Sarah M." value="'+esc(a?a.staff_name:'')+'"></div>';
+    h+='<div class="me-field"><label>Role (optional)</label><input type="text" id="ptRole" class="me-input" placeholder="e.g. Counselor" value="'+esc(a?a.role||'':'')+'"></div>';
+    h+='<p style="font-size:.78rem;color:var(--s400);margin:2px 0 4px">Add at least one payment handle — parents will see whichever you fill in.</p>';
+    h+='<div class="me-field"><label>Zelle</label><input type="text" id="ptZelle" class="me-input" placeholder="phone or email" value="'+esc(a?a.zelle_handle||'':'')+'"></div>';
+    h+='<div class="me-field"><label>Venmo</label><input type="text" id="ptVenmo" class="me-input" placeholder="@username" value="'+esc(a?a.venmo_handle||'':'')+'"></div>';
+    h+='<div class="me-field"><label>PayPal</label><input type="text" id="ptPaypal" class="me-input" placeholder="paypal.me link or email" value="'+esc(a?a.paypal_handle||'':'')+'"></div>';
+    h+='<div class="me-field"><label>Cash App</label><input type="text" id="ptCashapp" class="me-input" placeholder="$cashtag" value="'+esc(a?a.cashapp_handle||'':'')+'"></div>';
+    h+='</div>';
+    showModal(id?'Edit Staff Payment Info':'Add Staff Payment Info',h,function(){ ptSaveAccount(id); });
+}
+
+function ptSaveAccount(id){
+    var name=(document.getElementById('ptName').value||'').trim();
+    if(!name){ toast('Enter the person\'s name','error'); return; }
+    if(!id&&(_ptAccounts||[]).some(function(a){return a.staff_name.toLowerCase()===name.toLowerCase();})){
+        toast(name+' already has an account','error'); return;
+    }
+    var patch={
+        staff_name:name,
+        role:(document.getElementById('ptRole').value||'').trim(),
+        zelle_handle:(document.getElementById('ptZelle').value||'').trim()||null,
+        venmo_handle:(document.getElementById('ptVenmo').value||'').trim()||null,
+        paypal_handle:(document.getElementById('ptPaypal').value||'').trim()||null,
+        cashapp_handle:(document.getElementById('ptCashapp').value||'').trim()||null
+    };
+    var client=_ptClient(),campId=_ptCampId();
+    if(!client||!campId){ toast('Cloud not connected — accounts need migration 017','error'); return; }
+    if(id){
+        client.from('link_staff_accounts').update(patch).eq('id',id).select().single().then(function(res){
+            if(res.error){ toast('Could not save: '+res.error.message,'error'); return; }
+            var a=(_ptAccounts||[]).find(function(x){return x.id===id;});
+            if(a)Object.assign(a,res.data);
+            closeModal('dynModal');
+            renderPayroll();
+            toast('Payment info updated');
+        });
+    }else{
+        client.from('link_staff_accounts').insert(Object.assign({camp_id:campId},patch)).select().single().then(function(res){
+            if(res.error){ toast('Could not create account: '+res.error.message,'error'); return; }
+            if(!_ptAccounts)_ptAccounts=[];
+            _ptAccounts.push(res.data);
+            closeModal('dynModal');
+            renderPayroll();
+            toast(name+' added — code '+res.data.access_code);
+        });
+    }
+}
+
+async function ptRemove(id){
+    var a=(_ptAccounts||[]).find(function(x){return x.id===id;}); if(!a)return;
+    var bal=parseFloat(a.balance)||0;
+    if(bal>0){ toast('Pay out '+a.staff_name+'\'s $'+bal.toFixed(2)+' balance before removing their account','error'); return; }
+    var ok=await confirmDialog({title:'Remove '+a.staff_name+'?',message:'This deletes their payment info, access code, and Stripe connection. This can\'t be undone.',confirmLabel:'Remove',danger:true});
+    if(!ok)return;
+    var client=_ptClient();
+    if(!client){ toast('Cloud not connected','error'); return; }
+    client.from('link_staff_accounts').delete().eq('id',id).then(function(res){
+        if(res.error){ toast('Could not remove: '+res.error.message,'error'); return; }
+        _ptAccounts=(_ptAccounts||[]).filter(function(x){return x.id!==id;});
+        renderPayroll();
+        toast(a.staff_name+' removed');
+    });
+}
+
+// ── CSV template — pre-fill from bunkStaff, round-trip through the same
+// link_staff_accounts rows the table above shows ────────────────────
+var PT_CSV_COLS=['Name','Role','Zelle','Venmo','PayPal','Cash App'];
+function _ptCsvCell(v){ v=(v==null)?'':String(v); return /[",\n]/.test(v)?'"'+v.replace(/"/g,'""')+'"':v; }
+
+function ptDownloadTemplate(){
+    var byName={}; (_ptAccounts||[]).forEach(function(a){ byName[String(a.staff_name).trim().toLowerCase()]=a; });
+    var rows=[],seen={};
+    Object.keys(bunkStaff||{}).forEach(function(bunk){
+        (bunkStaff[bunk]||[]).forEach(function(m){
+            if(m&&m.name&&!seen[m.name.trim().toLowerCase()]){ rows.push({name:m.name,role:m.role||''}); seen[m.name.trim().toLowerCase()]=1; }
+        });
+    });
+    (_ptAccounts||[]).forEach(function(a){ if(!seen[String(a.staff_name).trim().toLowerCase()]){ rows.push({name:a.staff_name,role:a.role||''}); seen[String(a.staff_name).trim().toLowerCase()]=1; } });
+    if(!rows.length) rows=[{name:'',role:'Counselor'},{name:'',role:'Rebbi'}];
+    var lines=[PT_CSV_COLS.map(_ptCsvCell).join(',')];
+    rows.forEach(function(r){
+        var e=byName[String(r.name).trim().toLowerCase()]||{};
+        lines.push([r.name,r.role,e.zelle_handle||'',e.venmo_handle||'',e.paypal_handle||'',e.cashapp_handle||''].map(_ptCsvCell).join(','));
+    });
+    var csv=lines.join('\r\n');
+    var blob=new Blob([csv],{type:'text/csv;charset=utf-8;'});
+    var url=URL.createObjectURL(blob);
+    var a=document.createElement('a'); a.href=url; a.download='staff-payment-info.csv';
+    document.body.appendChild(a); a.click(); document.body.removeChild(a);
+    setTimeout(function(){URL.revokeObjectURL(url);},1000);
+    toast(rows.length+' staff exported — fill in Zelle/Venmo and upload it back');
+}
+
+// Minimal RFC-4180 CSV parser (handles quotes, commas, newlines in fields)
+function _ptParseCsv(text){
+    var rows=[],row=[],field='',i=0,inQ=false,c;
+    text=String(text).replace(/^﻿/,'');
+    while(i<text.length){
+        c=text[i];
+        if(inQ){ if(c==='"'){ if(text[i+1]==='"'){field+='"';i++;} else inQ=false; } else field+=c; }
+        else{ if(c==='"')inQ=true; else if(c===','){row.push(field);field='';} else if(c==='\n'){row.push(field);rows.push(row);row=[];field='';} else if(c==='\r'){} else field+=c; }
+        i++;
+    }
+    if(field.length||row.length){row.push(field);rows.push(row);}
+    return rows;
+}
+
+function ptUploadTemplate(input){
+    var file=input.files&&input.files[0]; input.value='';
+    if(!file)return;
+    var client=_ptClient(),campId=_ptCampId();
+    if(!client||!campId){ toast('Cloud not connected — accounts need migration 017','error'); return; }
+    var reader=new FileReader();
+    reader.onload=function(){
+        try{
+            var rows=_ptParseCsv(reader.result).filter(function(r){return r.some(function(c){return String(c).trim();});});
+            if(rows.length<2){ toast('That file has no rows to import','error'); return; }
+            var head=rows[0].map(function(h){return String(h).trim().toLowerCase();});
+            function col(names){ for(var k=0;k<names.length;k++){var idx=head.indexOf(names[k]); if(idx>=0)return idx;} return -1; }
+            var iName=col(['name']),iRole=col(['role']),iZelle=col(['zelle']),iVenmo=col(['venmo']),iPaypal=col(['paypal','pay pal']),iCash=col(['cash app','cashapp','cash']);
+            if(iName<0){ toast('Missing a "Name" column — use the downloaded template','error'); return; }
+            var byName={}; (_ptAccounts||[]).forEach(function(a){ byName[String(a.staff_name).trim().toLowerCase()]=a; });
+            var get=function(r,idx){ return idx>=0?String(r[idx]||'').trim():''; };
+            var ops=[],added=0,updated=0;
+            for(var r=1;r<rows.length;r++){
+                var name=get(rows[r],iName); if(!name)continue;
+                var patch={role:get(rows[r],iRole)||undefined,zelle_handle:get(rows[r],iZelle)||null,venmo_handle:get(rows[r],iVenmo)||null,paypal_handle:get(rows[r],iPaypal)||null,cashapp_handle:get(rows[r],iCash)||null};
+                var key=name.toLowerCase(); var existing=byName[key];
+                if(existing){
+                    updated++;
+                    ops.push(client.from('link_staff_accounts').update(patch).eq('id',existing.id).then(function(res){ if(!res.error)Object.assign(existing,res.data); }));
+                }else{
+                    added++;
+                    var insertRow=Object.assign({camp_id:campId,staff_name:name},patch,{role:patch.role||''});
+                    ops.push(client.from('link_staff_accounts').insert(insertRow).select().single().then(function(res){ if(!res.error&&res.data){ if(!_ptAccounts)_ptAccounts=[]; _ptAccounts.push(res.data); } }));
+                }
+            }
+            Promise.all(ops).then(function(){ renderPayroll(); toast('Imported — '+added+' added, '+updated+' updated'); });
+        }catch(e){ console.warn('[Me] Tip payments CSV import failed:',e); toast('Could not read that file — make sure it\'s the CSV template','error'); }
+    };
+    reader.readAsText(file);
 }
 
 // ── Overview ─────────────────────────────────────────────────────
@@ -11101,6 +11463,9 @@ window.CampistryMe={
     prWeekStep:prWeekStep,prWeekToday:prWeekToday,
     prSetHours:prSetHours,prSetSigned:prSetSigned,prSetSheetStatus:prSetSheetStatus,
     prEditProgram:prEditProgram,prNewRun:prNewRun,prDeleteRun:prDeleteRun,prExportCSV:prExportCSV,
+    ptConnectStripe:ptConnectStripe,ptCopyLink:ptCopyLink,ptPayout:ptPayout,
+    ptOpenAdd:ptOpenAdd,ptOpenEdit:ptOpenEdit,ptSaveAccount:ptSaveAccount,ptRemove:ptRemove,
+    ptDownloadTemplate:ptDownloadTemplate,ptUploadTemplate:ptUploadTemplate,
     finSetTab:finSetTab,finAddStaff:finAddStaff,finEditStaff:finEditStaff,finStaffModal:finStaffModal,_staffPhotoPick:_staffPhotoPick,_staffPhotoClear:_staffPhotoClear,finRemoveStaff:finRemoveStaff,
     finAddExpense:finAddExpense,finRemoveExpense:finRemoveExpense,
     finAddPayment:finAddPayment,finRemovePayment:finRemovePayment,finRefund:finRefund,
