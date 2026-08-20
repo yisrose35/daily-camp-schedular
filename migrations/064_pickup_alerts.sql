@@ -98,8 +98,8 @@ CREATE POLICY par_self_select ON public.pickup_alert_recipients FOR SELECT USING
 -- ─── Realtime ───────────────────────────────────────────────────────────────
 -- REPLICA IDENTITY FULL on the recipients table: the realtime filter needs
 -- to key off recipient_email/camp_id, not just the primary key.
-ALTER TABLE public.pickup_alerts ENABLE REPLICA IDENTITY FULL;
-ALTER TABLE public.pickup_alert_recipients ENABLE REPLICA IDENTITY FULL;
+ALTER TABLE public.pickup_alerts REPLICA IDENTITY FULL;
+ALTER TABLE public.pickup_alert_recipients REPLICA IDENTITY FULL;
 
 DO $$
 BEGIN
