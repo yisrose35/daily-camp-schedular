@@ -1442,6 +1442,9 @@
     }
 
     function switchTab(id, dir) {
+        // Navigating away mid-scan would otherwise leave the camera running
+        // in the background — stop it the moment focus leaves Roll Call.
+        if (id !== 'liveRoll' && typeof scannerCloseLive === 'function') scannerCloseLive();
         activeTab = id;
         if (id !== 'notesList') { notesEditorId = null; showNotesFab(false); }
         document.querySelectorAll('.lite-tab').forEach(b =>
@@ -3630,45 +3633,38 @@
     }
     let _scanResults = [], _scanBunkLabel = '', _scanCanvas = null, _scanCtx = null, _scanDateKey = null, _scanSheetEl = null;
     // A queue of photos, each one bunk's sheet. "Choose from library" can hand
-    // us several at once; "Take photo" always hands us exactly one. Either way
-    // they're walked one at a time through the same QR+bubble pipeline, with a
-    // running tally shown once the whole queue is done.
+    // us several at once; a single native/file capture always hands us
+    // exactly one. Either way they're walked one at a time through the same
+    // QR+bubble pipeline, with a running tally shown once the whole queue is
+    // done. Live-camera scanning (below) doesn't use this queue at all — it
+    // re-arms itself directly, since there's no fixed list to walk.
     let _scanQueue = [], _scanQueueIndex = 0, _scanQueueTally = null;
+    let _liveMode = false;
 
     function openScanSheet() {
-        _scanResults = []; _scanBunkLabel = ''; _scanCanvas = null; _scanCtx = null; _scanDateKey = null;
+        _scanResults = []; _scanBunkLabel = ''; _scanCanvas = null; _scanCtx = null; _scanDateKey = null; _liveMode = false;
         _scanQueue = []; _scanQueueIndex = 0; _scanQueueTally = { bunks: 0, applied: 0, skipped: 0, hitCurrentDate: false };
         _scanSheetEl = openSheet(`
             <h3 class="lite-sheet-title">Scan attendance sheet</h3>
-            <p class="lite-note">Take a photo of a filled-in bubble sheet (printed from the office Live app) — this reads it and fills in today's roll call. Choosing from your library lets you pick several bunks' sheets at once.</p>
+            <p class="lite-note">Point your camera at a filled-in bubble sheet (printed from the office Live app) — it locks on and reads it automatically. Choosing from your library lets you pick several bunks' sheets at once instead.</p>
             <div id="scanStep1">
                 <input type="file" accept="image/*" capture="environment" id="scanFileInput" style="display:none;">
                 <input type="file" accept="image/*" multiple id="scanFileInputMulti" style="display:none;">
-                <button type="button" class="lite-btn" id="scanTakePhotoBtn" style="width:100%;">Take photo</button>
+                <button type="button" class="lite-btn" id="scanTakePhotoBtn" style="width:100%;">Scan with camera</button>
                 <button type="button" class="lite-btn" id="scanUploadBtn" style="width:100%;margin-top:8px;background:transparent;color:var(--lite-accent,#2563eb);border:1.5px solid var(--lite-accent,#2563eb);">Choose from library</button>
             </div>
             <div id="scanStatusMsg"></div>
             <div id="scanPreviewTable"></div>
             <div style="display:flex;gap:10px;margin-top:14px;">
                 <button type="button" class="lite-btn" id="scanConfirmBtn" style="flex:1;display:none;">Apply to roll call</button>
+                <button type="button" class="lite-btn" id="scanDoneBtn" style="flex:none;width:auto;padding:10px 16px;background:transparent;color:var(--muted,#6b7280);display:none;">Done</button>
             </div>`);
         const fileInput = _scanSheetEl.querySelector('#scanFileInput');
         const fileInputMulti = _scanSheetEl.querySelector('#scanFileInputMulti');
-        // The Capacitor Camera plugin opens the camera / gallery natively —
-        // "Take photo" goes straight to the camera (no chooser prompt in the
-        // way), and the gallery picker supports real multi-select. The plain
-        // <input type=file> pair above only fires as a fallback on a build
-        // without the plugin (e.g. the plain web).
+        _scanSheetEl.querySelector('#scanTakePhotoBtn').addEventListener('click', scannerOpenLive);
+        _scanSheetEl.querySelector('#scanConfirmBtn').addEventListener('click', () => scannerConfirm());
+        _scanSheetEl.querySelector('#scanDoneBtn').addEventListener('click', () => scannerConfirm(true));
         const Cam = window.Capacitor && window.Capacitor.Plugins && window.Capacitor.Plugins.Camera;
-        _scanSheetEl.querySelector('#scanTakePhotoBtn').addEventListener('click', () => {
-            if (Cam && Cam.takePhoto) {
-                Cam.takePhoto({ correctOrientation: true, saveToGallery: false })
-                    .then(r => { if (r && r.webPath) scannerStartQueue([r.webPath]); })
-                    .catch(scannerHandleCameraCancel);
-            } else {
-                fileInput.click();
-            }
-        });
         _scanSheetEl.querySelector('#scanUploadBtn').addEventListener('click', () => {
             if (Cam && Cam.chooseFromGallery) {
                 Cam.chooseFromGallery({ allowMultipleSelection: true, limit: 0, correctOrientation: true })
@@ -3683,7 +3679,6 @@
         });
         fileInput.addEventListener('change', (e) => { const f = e.target.files && e.target.files[0]; if (f) scannerStartQueue([f]); });
         fileInputMulti.addEventListener('change', (e) => { const files = Array.from(e.target.files || []); if (files.length) scannerStartQueue(files); });
-        _scanSheetEl.querySelector('#scanConfirmBtn').addEventListener('click', scannerConfirm);
     }
 
     // The plugin rejects on a plain user cancel too (closing the camera /
@@ -3698,6 +3693,7 @@
     // items: an array of File objects (fallback file inputs) or webPath
     // strings (Capacitor Camera). Each item is one bunk's sheet.
     function scannerStartQueue(items) {
+        _liveMode = false;
         _scanQueue = items.map(it => (typeof it === 'string')
             ? { src: it, isBlobUrl: false }
             : { src: URL.createObjectURL(it), isBlobUrl: true });
@@ -3705,6 +3701,150 @@
         _scanQueueTally = { bunks: 0, applied: 0, skipped: 0, hitCurrentDate: false };
         scannerLoadQueueItem();
     }
+
+    // Fallback to the pre-existing native-camera / file-input capture path
+    // (a single manually-snapped photo) — used when the browser/webview has
+    // no getUserMedia support at all, or live-camera permission is denied.
+    function scannerFallbackPhotoCapture() {
+        const el = id => _scanSheetEl && _scanSheetEl.querySelector('#' + id);
+        const Cam = window.Capacitor && window.Capacitor.Plugins && window.Capacitor.Plugins.Camera;
+        if (Cam && Cam.takePhoto) {
+            Cam.takePhoto({ correctOrientation: true, saveToGallery: false })
+                .then(r => { if (r && r.webPath) scannerStartQueue([r.webPath]); })
+                .catch(scannerHandleCameraCancel);
+        } else if (el('scanFileInput')) {
+            el('scanFileInput').click();
+        }
+    }
+
+    // ── Live camera scan ────────────────────────────────────────────────
+    // Continuously runs jsQR against the camera feed and auto-captures a
+    // full-resolution still the instant a frame decodes cleanly — far more
+    // forgiving than betting on one manually-snapped photo, since a dozen
+    // blurry/misaligned frames a second are silently discarded and only a
+    // clean one is used. Pure web APIs (getUserMedia + <video> + canvas),
+    // no native dependency and nothing new for the office to install —
+    // stays entirely inside Lite, same as everything else here.
+    let _liveStream = null, _liveVideoEl = null, _liveGateTimer = null, _liveOverlayEl = null;
+    let _liveGateCanvas = null, _liveGateCtx = null, _liveLocked = false;
+
+    function scannerOpenLive() {
+        if (!(navigator.mediaDevices && navigator.mediaDevices.getUserMedia)) {
+            scannerFallbackPhotoCapture();
+            return;
+        }
+        _liveMode = true;
+        _liveLocked = false;
+        const el = id => _scanSheetEl && _scanSheetEl.querySelector('#' + id);
+        if (el('scanStep1')) el('scanStep1').style.display = 'none';
+        if (el('scanStatusMsg')) el('scanStatusMsg').innerHTML = '';
+        if (el('scanPreviewTable')) el('scanPreviewTable').innerHTML = '';
+        if (el('scanConfirmBtn')) el('scanConfirmBtn').style.display = 'none';
+        if (el('scanDoneBtn')) el('scanDoneBtn').style.display = 'none';
+
+        _liveOverlayEl = document.createElement('div');
+        _liveOverlayEl.className = 'lite-scan-overlay';
+        _liveOverlayEl.innerHTML = `
+            <div class="lite-scan-topbar">
+                <button type="button" class="lite-scan-close" id="scanLiveCloseBtn" aria-label="Close">&times;</button>
+                <span class="lite-scan-title">Scan attendance sheet</span>
+                <span style="width:34px;flex:none;"></span>
+            </div>
+            <video id="scanLiveVideo" playsinline autoplay muted></video>
+            <div class="lite-scan-frame"></div>
+            <div class="lite-scan-status" id="scanLiveStatus">Point the camera at the QR code</div>`;
+        document.body.appendChild(_liveOverlayEl);
+        _liveOverlayEl.querySelector('#scanLiveCloseBtn').addEventListener('click', scannerCloseLive);
+
+        navigator.mediaDevices.getUserMedia({
+            video: { facingMode: { ideal: 'environment' }, width: { ideal: 1920 }, height: { ideal: 1080 } },
+            audio: false
+        }).then(stream => {
+            _liveStream = stream;
+            _liveVideoEl = _liveOverlayEl && _liveOverlayEl.querySelector('#scanLiveVideo');
+            if (!_liveVideoEl) { stream.getTracks().forEach(t => t.stop()); return; } // overlay closed mid-request
+            _liveVideoEl.srcObject = stream;
+            _liveVideoEl.onloadedmetadata = () => {
+                _liveVideoEl.play().catch(() => {});
+                _liveGateTimer = setInterval(scannerGateTick, 180);
+            };
+        }).catch(e => {
+            console.warn('[Lite] live camera unavailable, falling back to photo capture:', e && e.message || e);
+            scannerCloseLive();
+            scannerFallbackPhotoCapture();
+        });
+    }
+
+    // Fast, low-resolution detection pass — downscaled so each jsQR call is
+    // cheap enough to run several times a second without cooking the phone.
+    // Only decides "is a valid Campistry QR in frame right now?"; the real
+    // high-resolution analysis happens once, after this locks on.
+    function scannerGateTick() {
+        if (_liveLocked || !_liveVideoEl || _liveVideoEl.readyState < 2 || typeof jsQR === 'undefined') return;
+        const vw = _liveVideoEl.videoWidth, vh = _liveVideoEl.videoHeight;
+        if (!vw || !vh) return;
+        if (!_liveGateCanvas) { _liveGateCanvas = document.createElement('canvas'); _liveGateCtx = _liveGateCanvas.getContext('2d', { willReadFrequently: true }); }
+        const scale = 480 / vw;
+        _liveGateCanvas.width = Math.round(vw * scale);
+        _liveGateCanvas.height = Math.round(vh * scale);
+        _liveGateCtx.drawImage(_liveVideoEl, 0, 0, _liveGateCanvas.width, _liveGateCanvas.height);
+        let imgData;
+        try { imgData = _liveGateCtx.getImageData(0, 0, _liveGateCanvas.width, _liveGateCanvas.height); }
+        catch (_) { return; }
+        const code = jsQR(imgData.data, imgData.width, imgData.height, { inversionAttempts: 'dontInvert' });
+        if (code && /^CSR2:\d+$/.test(code.data || '')) {
+            _liveLocked = true;
+            scannerLiveCapture();
+        }
+    }
+
+    // Locked on — grab the video's NATIVE resolution (not the small gate
+    // canvas) into the same _scanCanvas/_scanCtx the file-based flow uses,
+    // so scannerProcessImage() (full jsQR decode + homography + bubble
+    // sampling) runs completely unchanged against a proper high-res frame.
+    function scannerLiveCapture() {
+        if (_liveGateTimer) { clearInterval(_liveGateTimer); _liveGateTimer = null; }
+        const statusEl = _liveOverlayEl && _liveOverlayEl.querySelector('#scanLiveStatus');
+        if (statusEl) statusEl.textContent = 'Got it — reading sheet…';
+        if (navigator.vibrate) { try { navigator.vibrate(15); } catch (_) {} }
+        const vw = _liveVideoEl.videoWidth, vh = _liveVideoEl.videoHeight;
+        _scanCanvas = document.createElement('canvas');
+        _scanCanvas.width = vw; _scanCanvas.height = vh;
+        _scanCtx = _scanCanvas.getContext('2d', { willReadFrequently: true });
+        _scanCtx.drawImage(_liveVideoEl, 0, 0, vw, vh);
+
+        // Brief pause so "Got it" is actually readable before the camera
+        // view disappears — this is a whole-frame decode, not instant.
+        setTimeout(() => {
+            scannerStopLiveStream();
+            if (_liveOverlayEl) { _liveOverlayEl.remove(); _liveOverlayEl = null; }
+            const el = id => _scanSheetEl && _scanSheetEl.querySelector('#' + id);
+            if (el('scanStatusMsg')) el('scanStatusMsg').innerHTML = '<p class="lite-note">Reading sheet…</p>';
+            scannerProcessImage();
+        }, 220);
+    }
+
+    function scannerStopLiveStream() {
+        if (_liveStream) { _liveStream.getTracks().forEach(t => t.stop()); _liveStream = null; }
+        _liveLocked = false;
+    }
+
+    // Closes just the camera view, back to the sheet's step1 (Scan with
+    // camera / Choose from library) — not the whole scan flow.
+    function scannerCloseLive() {
+        if (_liveGateTimer) { clearInterval(_liveGateTimer); _liveGateTimer = null; }
+        scannerStopLiveStream();
+        if (_liveOverlayEl) { _liveOverlayEl.remove(); _liveOverlayEl = null; }
+        const el = id => _scanSheetEl && _scanSheetEl.querySelector('#' + id);
+        if (el('scanStep1')) el('scanStep1').style.display = '';
+    }
+
+    // Backgrounding the app (switching apps, locking the phone) should stop
+    // the camera rather than leave it running unseen — battery and privacy
+    // both care. Re-opening live scan on return is one tap.
+    document.addEventListener('visibilitychange', () => {
+        if (document.hidden && _liveStream) scannerCloseLive();
+    });
 
     function scannerLoadQueueItem() {
         const el = id => _scanSheetEl && _scanSheetEl.querySelector('#' + id);
@@ -3889,15 +4029,20 @@
         }
         if (el('scanConfirmBtn')) {
             el('scanConfirmBtn').style.display = _scanResults.length ? '' : 'none';
-            el('scanConfirmBtn').textContent = (more && _scanQueueIndex < _scanQueue.length - 1) ? 'Apply & scan next' : 'Apply to roll call';
+            el('scanConfirmBtn').textContent = _liveMode
+                ? 'Apply & scan next'
+                : (more && _scanQueueIndex < _scanQueue.length - 1) ? 'Apply & scan next' : 'Apply to roll call';
         }
+        // Live mode has no fixed end, unlike a pre-picked photo queue — an
+        // explicit "Done" stops the chain and applies this last sheet.
+        if (el('scanDoneBtn')) el('scanDoneBtn').style.display = (_liveMode && _scanResults.length) ? '' : 'none';
     }
 
     // Read-modify-write against the SAME cloud row the office Live app writes
     // (camp_state_kv key liveDaily_<date>) — always re-fetch fresh (bypass
     // the cache) right before merging, so a concurrent office edit isn't
     // clobbered by a stale local copy.
-    async function scannerConfirm() {
+    async function scannerConfirm(stopLive) {
         if (!_scanResults.length) { scannerSkipQueueItem(); return; }
         const dateKey = _scanDateKey || currentDate;
         invalidateLiveDay(dateKey);
@@ -3931,8 +4076,12 @@
             _scanQueueTally.applied += applied;
             _scanQueueTally.skipped += skipped;
             if (dateKey === currentDate) _scanQueueTally.hitCurrentDate = true;
-            _scanQueueIndex++;
-            scannerLoadQueueItem();
+            if (_liveMode && !stopLive) {
+                scannerOpenLive(); // re-arm the camera for the next sheet
+            } else {
+                _scanQueueIndex++;
+                scannerLoadQueueItem();
+            }
         } catch (e) {
             toast('Could not save — check your connection and try again.');
             console.warn('[Lite] scannerConfirm save failed:', e && e.message || e);

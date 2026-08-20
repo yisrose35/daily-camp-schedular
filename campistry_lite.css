@@ -737,6 +737,16 @@ button { cursor: pointer; border: none; background: none; }
 .lite-change-top { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
 .lite-change-detail { font-size: 0.82rem; color: var(--ink-2); margin-top: 6px; }
 
+/* ─── Live Lite: live camera QR scan overlay ───────────────────────────── */
+.lite-scan-overlay { position: fixed; inset: 0; z-index: 200; background: #000; display: flex; flex-direction: column; }
+.lite-scan-topbar { flex: none; display: flex; align-items: center; justify-content: space-between; padding: calc(14px + env(safe-area-inset-top)) 16px 14px; color: #fff; }
+.lite-scan-title { font-family: var(--font-display); font-size: 0.95rem; font-weight: 700; }
+.lite-scan-close { flex: none; width: 34px; height: 34px; border-radius: 50%; display: flex; align-items: center; justify-content: center; background: rgba(255,255,255,0.14); color: #fff; font-size: 1.3rem; line-height: 1; border: none; }
+.lite-scan-close:active { background: rgba(255,255,255,0.24); }
+#scanLiveVideo { flex: 1; width: 100%; min-height: 0; object-fit: cover; background: #000; }
+.lite-scan-frame { position: absolute; left: 10%; right: 10%; top: 22%; bottom: 30%; border: 3px solid rgba(255,255,255,0.85); border-radius: 20px; box-shadow: 0 0 0 2000px rgba(0,0,0,0.28); pointer-events: none; }
+.lite-scan-status { flex: none; padding: 14px 20px calc(20px + env(safe-area-inset-bottom)); text-align: center; color: #fff; font-size: 0.9rem; font-weight: 600; background: rgba(0,0,0,0.35); }
+
 /* ─── Health Lite: meds board + trip ──────────────────────────────────── */
 .lite-health-today { font-size: 0.8rem; font-weight: 700; color: var(--accent-dark); margin: 2px 2px 12px; }
 .lite-health-card { padding: 0; overflow: hidden; }

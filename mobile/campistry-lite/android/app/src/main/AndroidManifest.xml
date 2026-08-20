@@ -54,4 +54,11 @@
          it on the app's behalf — without this line requestPermissions() never
          surfaces a dialog and no notification is ever delivered. -->
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+
+    <!-- The live bubble-sheet scanner uses getUserMedia (a plain WebView
+         camera stream, not the @capacitor/camera plugin, which declares its
+         own permission separately) — WebView's onPermissionRequest can only
+         grant a permission the manifest has already declared. -->
+    <uses-permission android:name="android.permission.CAMERA" />
+    <uses-feature android:name="android.hardware.camera" android:required="false" />
 </manifest>
