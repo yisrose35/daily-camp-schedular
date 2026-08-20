@@ -301,7 +301,28 @@ function loadData(){
         // camper's own profile every load so Bunk Builder and Edit Camper show
         // them without anyone having to go dig up the original application.
         _syncPostAcceptBunkRequests();
+        _syncCampTimezone();
     }catch(e){console.warn('[Me]',e)}
+}
+// The camp's timezone (used by the pickup-alert reminder — see migration
+// 063/065) is picked up automatically from whoever's device loads Me, the
+// same "just works, no settings field" spirit as Lite's weather card —
+// except this needs no permission prompt at all: the browser already knows
+// its own zone via Intl. Staff configuring the camp are assumed to be
+// physically at (or local to) the camp, so their device's zone IS the
+// camp's. Fire-and-forget, once per page load: the RPC itself is owner/
+// admin-gated server-side, so a scheduler/viewer session loading Me just
+// gets a harmless 'forbidden' back, silently ignored — same as this file's
+// other best-effort background syncs.
+var _tzSynced=false;
+function _syncCampTimezone(){
+    if(_tzSynced)return; _tzSynced=true;
+    try{
+        var tz=Intl.DateTimeFormat().resolvedOptions().timeZone;
+        if(!tz)return;
+        var client=window.CampistryDB&&window.CampistryDB.getClient?window.CampistryDB.getClient():window.supabase;
+        if(client&&client.rpc)client.rpc('set_camp_timezone',{p_timezone:tz}).then(function(){},function(){});
+    }catch(e){}
 }
 function save(){
     try{
