@@ -9,3 +9,6 @@ SECURITY_AUDIT.md
 *.keystore
 *.jks
 
+# npm dependencies (test tooling only — the app itself has no build step)
+node_modules/
+
