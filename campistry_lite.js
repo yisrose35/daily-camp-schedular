@@ -3445,27 +3445,31 @@
     // ════════════════════════════════════════════════════════════════════
 
     // A camper's live status for the day, mirroring the office Live logic:
-    //   left    — logged as an early pickup (was here, went home early)
-    //   absent  — in the absences list, or attendance flag false; reason kept
-    //   present — everything else (default)
+    //   left     — logged as an early pickup (was here, went home early)
+    //   absent   — in the absences list, or attendance flag false; reason kept
+    //   present  — attendance flag explicitly true
+    //   unmarked — nobody has taken roll call for this camper yet (default —
+    //              never assumed present; a fresh day starts everyone here)
     function liveStatusFor(name, day) {
         const pick = (day.earlyPickups || []).find(p => p.name === name);
         if (pick) return { status: 'left', pickup: pick };
         const ab = (day.absences || []).find(a => a.name === name);
         if (ab) return { status: 'absent', reason: ab.reason || 'absent', absence: ab };
+        if (day.attendance && day.attendance[name] === true) return { status: 'present' };
         if (day.attendance && day.attendance[name] === false) return { status: 'absent', reason: 'absent' };
-        return { status: 'present' };
+        return { status: 'unmarked' };
     }
 
     function liveTallies(day) {
-        let present = 0, absent = 0, left = 0, late = 0;
+        let present = 0, absent = 0, left = 0, late = 0, unmarked = 0;
         Object.keys(camp.roster || {}).forEach(name => {
             const s = liveStatusFor(name, day);
             if (s.status === 'left') left++;
             else if (s.status === 'absent') { absent++; if (s.reason === 'late') late++; }
+            else if (s.status === 'unmarked') unmarked++;
             else present++;
         });
-        return { present, absent, left, late };
+        return { present, absent, left, late, unmarked };
     }
 
     async function renderLiveRoll() {
@@ -3501,6 +3505,7 @@
             ${statTileHTML(t.present, 'Present')}
             ${statTileHTML(t.absent, 'Absent')}
             ${statTileHTML(t.left, 'Left early')}
+            ${statTileHTML(t.unmarked, 'Not marked')}
         </div>`;
 
         body.innerHTML = strip + chipRowHTML(chips, liveRollDivision) + '<div id="liteRollGroups"></div>';
@@ -3514,7 +3519,7 @@
             bunksForParent(p).forEach(b => {
                 const campers = campersInBunk(b);
                 if (!campers.length) return;
-                const here = campers.filter(c => liveStatusFor(c.name, day).status !== 'absent').length;
+                const here = campers.filter(c => liveStatusFor(c.name, day).status === 'present').length;
                 out += `<div class="lite-section-label">${esc(b)} · ${here}/${campers.length} here</div>`
                     + campers.map(c => liveRollRowHTML(c, liveStatusFor(c.name, day))).join('');
             });
@@ -3527,6 +3532,7 @@
         let pill;
         if (s.status === 'present') pill = '<span class="lite-status present">Here</span>';
         else if (s.status === 'left') pill = `<span class="lite-status left">Left early</span>`;
+        else if (s.status === 'unmarked') pill = `<span class="lite-status left">Not marked</span>`;
         else pill = `<span class="lite-status absent">${esc(s.reason === 'late' ? 'Late / not in' : cap(s.reason || 'Absent'))}</span>`;
         const meta = [c.bunk, c.division].filter(Boolean).join(' · ');
         return `<div class="lite-card lite-camper">
@@ -3548,7 +3554,11 @@
     // scannerPrintTemplates); they're duplicated rather than shared since
     // Live and Lite are separate bundles.
     // ════════════════════════════════════════════════════════════════════
-    const SCAN_TMPL = { qrSize: 140, bDX: 124, bDY0: 198, bDDY: 52, sampleR: 14, fillThresh: 0.22 };
+    // Two bubbles per row (PRESENT then ABSENT) — must match the template
+    // geometry printed from the office Live app (campistry_live.js). Empty
+    // = unmarked, both filled = ambiguous; neither is guessed at, both are
+    // skipped on confirm and left flagged for manual review.
+    const SCAN_TMPL = { qrSize: 140, bPresentDX: 76, bAbsentDX: 124, bDY0: 198, bDDY: 52, sampleR: 13, fillThresh: 0.22 };
     let _scanResults = [], _scanBunkLabel = '', _scanCanvas = null, _scanCtx = null, _scanDateKey = null, _scanSheetEl = null;
 
     function openScanSheet() {
@@ -3616,11 +3626,19 @@
         _scanBunkLabel = info.bunk + (info.date ? ' · ' + info.date : '');
         _scanDateKey = info.date || currentDate;
         _scanResults = campers.map((name, i) => {
-            const dx = SCAN_TMPL.bDX, dy = SCAN_TMPL.bDY0 + i * SCAN_TMPL.bDDY;
-            const cx = Math.round(tl.x + dx * pxX.x + dy * pxY.x);
-            const cy = Math.round(tl.y + dx * pxX.y + dy * pxY.y);
-            const dark = scannerSampleDark(cx, cy, sampleRPhoto);
-            return { name, present: dark >= SCAN_TMPL.fillThresh };
+            const dy = SCAN_TMPL.bDY0 + i * SCAN_TMPL.bDDY;
+            const sample = (dx) => {
+                const cx = Math.round(tl.x + dx * pxX.x + dy * pxY.x);
+                const cy = Math.round(tl.y + dx * pxX.y + dy * pxY.y);
+                return scannerSampleDark(cx, cy, sampleRPhoto) >= SCAN_TMPL.fillThresh;
+            };
+            const presentFilled = sample(SCAN_TMPL.bPresentDX);
+            const absentFilled = sample(SCAN_TMPL.bAbsentDX);
+            const state = presentFilled && absentFilled ? 'ambiguous'
+                : presentFilled ? 'present'
+                : absentFilled ? 'absent'
+                : 'unmarked';
+            return { name, state };
         });
 
         if (el('scanStatusMsg')) el('scanStatusMsg').innerHTML = '';
@@ -3652,19 +3670,32 @@
         if (el('scanStep1')) el('scanStep1').style.display = '';
     }
 
+    const SCAN_STATE_LABEL = { present: 'Here', absent: 'Absent', unmarked: 'Not marked', ambiguous: 'Both filled' };
+
     function scannerRenderPreview() {
         const el = id => _scanSheetEl && _scanSheetEl.querySelector('#' + id);
-        const present = _scanResults.filter(r => r.present).length, absent = _scanResults.length - present;
-        let html = `<div class="lite-note" style="margin:8px 0;"><strong>${esc(_scanBunkLabel)}</strong> — ${present} present, ${absent} absent. Tap to correct any errors.</div>`;
-        html += _scanResults.map((r, i) => `
+        const present = _scanResults.filter(r => r.state === 'present').length;
+        const absent = _scanResults.filter(r => r.state === 'absent').length;
+        const needsReview = _scanResults.filter(r => r.state === 'unmarked' || r.state === 'ambiguous').length;
+        let html = `<div class="lite-note" style="margin:8px 0;"><strong>${esc(_scanBunkLabel)}</strong> — ${present} present, ${absent} absent${needsReview ? `, ${needsReview} need${needsReview === 1 ? 's' : ''} review` : ''}. Tap to correct any errors — rows needing review are skipped until fixed.</div>`;
+        html += _scanResults.map((r, i) => {
+            const cls = r.state === 'present' ? 'present' : r.state === 'absent' ? 'absent' : 'left';
+            return `
             <button type="button" class="lite-camper-row" data-i="${i}" style="width:100%;">
                 <span><span class="lite-camper-name">${esc(r.name)}</span></span>
-                <span class="lite-status ${r.present ? 'present' : 'absent'}">${r.present ? 'Here' : 'Absent'}</span>
-            </button>`).join('');
+                <span class="lite-status ${cls}">${SCAN_STATE_LABEL[r.state] || 'Not marked'}</span>
+            </button>`;
+        }).join('');
         if (el('scanPreviewTable')) {
             el('scanPreviewTable').innerHTML = html;
+            // Tap cycles present <-> absent; an unresolved row starts at 'present'
+            // on first tap — a manual correction is always an explicit choice.
             el('scanPreviewTable').querySelectorAll('[data-i]').forEach(btn =>
-                btn.addEventListener('click', () => { const i = +btn.dataset.i; _scanResults[i].present = !_scanResults[i].present; scannerRenderPreview(); }));
+                btn.addEventListener('click', () => {
+                    const i = +btn.dataset.i;
+                    _scanResults[i].state = _scanResults[i].state === 'present' ? 'absent' : 'present';
+                    scannerRenderPreview();
+                }));
         }
         if (el('scanConfirmBtn')) el('scanConfirmBtn').style.display = _scanResults.length ? '' : 'none';
     }
@@ -3682,15 +3713,21 @@
         if (!day.attendance) day.attendance = {};
         if (!Array.isArray(day.absences)) day.absences = [];
 
+        let applied = 0, skipped = 0;
         _scanResults.forEach(r => {
-            if (r.present) {
+            if (r.state === 'present') {
                 day.absences = day.absences.filter(a => a.name !== r.name);
-                delete day.attendance[r.name];
-            } else {
+                day.attendance[r.name] = true;
+                applied++;
+            } else if (r.state === 'absent') {
                 if (!day.absences.some(a => a.name === r.name)) {
                     day.absences.push({ name: r.name, reason: 'absent', notes: 'Via scan (Lite)', time: new Date().toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit' }), timestamp: Date.now() });
                 }
                 day.attendance[r.name] = false;
+                applied++;
+            } else {
+                // unmarked / ambiguous — left untouched, never guessed at.
+                skipped++;
             }
         });
 
@@ -3698,7 +3735,7 @@
             await saveKV('liveDaily_' + dateKey, day);
             invalidateLiveDay(dateKey);
             closeSheet();
-            toast(`Attendance updated — ${_scanResults.length} camper${_scanResults.length !== 1 ? 's' : ''} from scan`);
+            toast(`Attendance updated — ${applied} camper${applied !== 1 ? 's' : ''} from scan${skipped ? `, ${skipped} left unmarked` : ''}`);
             if (dateKey === currentDate && activeTab === 'liveRoll') renderLiveRoll();
         } catch (e) {
             toast('Could not save — check your connection and try again.');

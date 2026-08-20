@@ -728,7 +728,7 @@ button { cursor: pointer; border: none; background: none; }
 .lite-call-btn:active { background: var(--accent-dark); }
 
 /* ─── Live Lite: roll call + changes ──────────────────────────────────── */
-.lite-stat-row.live { grid-template-columns: repeat(3, 1fr); }
+/* Present / Absent / Left early / Not marked — 4 tiles, uses the base 4-col grid above */
 .lite-status { font-size: 0.7rem; font-weight: 800; padding: 4px 10px; border-radius: 999px; white-space: nowrap; }
 .lite-status.present { background: #DCFAE6; color: #067647; }
 .lite-status.absent { background: #FEE4E2; color: #B42318; }

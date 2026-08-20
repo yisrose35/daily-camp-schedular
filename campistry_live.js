@@ -77,9 +77,18 @@ function esc(s) { if (s == null) return ''; var d = document.createElement('div'
     // =========================================================================
     let _rcFilter = '';
 
-    function rcIsPresent(name, today) {
-        return !today.absences.some(a => a.name === name) && today.attendance[name] !== false;
+    // ★ Attendance is tri-state: 'present' | 'absent' | 'unmarked'. A fresh
+    //   day starts every camper unmarked — nothing defaults to present until
+    //   someone actually takes roll call. attendance[name] is stored
+    //   explicitly as true/false (never implied by a missing key); a
+    //   detailed absences[] record (reason/time/notes) also counts as absent.
+    function rcState(name, today) {
+        if (today.absences.some(a => a.name === name)) return 'absent';
+        if (today.attendance[name] === true) return 'present';
+        if (today.attendance[name] === false) return 'absent';
+        return 'unmarked';
     }
+    function rcIsPresent(name, today) { return rcState(name, today) === 'present'; }
 
     function rcInitials(name) {
         return String(name).split(' ').map(p => p[0] || '').join('').slice(0, 2).toUpperCase();
@@ -88,21 +97,23 @@ function esc(s) { if (s == null) return ''; var d = document.createElement('div'
     const RC_REASON_LABEL = { absent: 'Absent', sick: 'Sick', late: 'Late', appointment: 'Appointment', family: 'Family event', other: 'Other' };
 
     function rcRow(name, c, today, showBunk) {
-        const present = rcIsPresent(name, today);
+        const state = rcState(name, today);
         const check = '<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="20 6 9 17 4 12"/></svg>';
         const x = '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>';
-        const absence = !present ? today.absences.find(a => a.name === name) : null;
+        const dash = '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><line x1="5" y1="12" x2="19" y2="12"/></svg>';
+        const icon = state === 'present' ? check : state === 'absent' ? x : dash;
+        const absence = state === 'absent' ? today.absences.find(a => a.name === name) : null;
         const reasonBadge = absence
             ? '<div class="rc-detail" style="color:var(--live);font-weight:600;">' + esc(RC_REASON_LABEL[absence.reason] || absence.reason || 'Absent') + (absence.time ? ' — ' + esc(absence.time) : '') + '</div>'
-            : '';
-        return '<div class="rc-row ' + (present ? 'present' : 'absent') + '" data-camper="' + esc(name) + '" onclick="CampistryLive.toggleByEl(this)">' +
+            : (state === 'unmarked' ? '<div class="rc-detail rc-unmarked-tag">Not marked yet</div>' : '');
+        return '<div class="rc-row ' + state + '" data-camper="' + esc(name) + '" onclick="CampistryLive.toggleByEl(this)">' +
             '<div class="rc-avatar">' + esc(rcInitials(name)) + '</div>' +
             '<div class="rc-info">' +
             '<div class="rc-name">' + esc(name) + '</div>' +
             (showBunk && c.bunk ? '<div class="rc-detail">' + esc(c.bunk) + (c.division ? ' · ' + esc(c.division) : '') + '</div>' : '') +
             reasonBadge +
             '</div>' +
-            '<div class="rc-check">' + (present ? check : x) + '</div>' +
+            '<div class="rc-check">' + icon + '</div>' +
             '</div>';
     }
 
@@ -148,7 +159,8 @@ function esc(s) { if (s == null) return ''; var d = document.createElement('div'
                 if (!divCampers.length) return;
                 matchedAny = true;
 
-                const presentInDiv = divCampers.filter(([n]) => rcIsPresent(n, today)).length;
+                const presentInDiv = divCampers.filter(([n]) => rcState(n, today) === 'present').length;
+                const unmarkedInDiv = divCampers.filter(([n]) => rcState(n, today) === 'unmarked').length;
                 const pct = divCampers.length ? Math.round((presentInDiv / divCampers.length) * 100) : 0;
 
                 // Group by bunk
@@ -166,11 +178,12 @@ function esc(s) { if (s == null) return ''; var d = document.createElement('div'
                     '<div class="rc-div-sub">' + divCampers.length + ' campers &nbsp;&middot;&nbsp; ' + Object.keys(bunkMap).length + ' bunk' + (Object.keys(bunkMap).length !== 1 ? 's' : '') + '</div></div>' +
                     '<div class="rc-div-right">' +
                     '<div class="rc-div-count">' + presentInDiv + ' <span>/ ' + divCampers.length + '</span></div>' +
+                    (unmarkedInDiv ? '<div class="rc-detail rc-unmarked-tag" style="text-align:right;">' + unmarkedInDiv + ' not marked</div>' : '') +
                     '<div class="rc-div-bar"><div class="rc-div-bar-fill" style="width:' + pct + '%;background:' + esc(color) + '"></div></div>' +
                     '</div></div>';
 
                 Object.entries(bunkMap).forEach(([bunkName, campers]) => {
-                    const presentInBunk = campers.filter(([n]) => rcIsPresent(n, today)).length;
+                    const presentInBunk = campers.filter(([n]) => rcState(n, today) === 'present').length;
                     html += '<div class="rc-bunk">' +
                         '<div class="rc-bunk-header">' +
                         '<span class="rc-bunk-name">' + esc(bunkName) + '</span>' +
@@ -210,23 +223,25 @@ function esc(s) { if (s == null) return ''; var d = document.createElement('div'
     function toggleAttendance(name) {
     if (!_secEdit('roll-call', 'Marking attendance')) return;
         const today = getTodayData();
+        const cur = rcState(name, today);
         today.absences = today.absences.filter(a => a.name !== name);
-        if (today.attendance[name] === false) {
-            delete today.attendance[name];
-        } else {
-            today.attendance[name] = false;
-        }
+        // unmarked/absent -> present; present -> absent. Always an explicit
+        // true/false — never delete the key, since a missing key now means
+        // "not marked" rather than "present".
+        today.attendance[name] = (cur === 'present') ? false : true;
         saveTodayData(today);
         renderRollCall();
         renderDashboard();
-        toast(name + (today.attendance[name] === false ? ' marked absent' : ' marked present'));
+        toast(name + (today.attendance[name] === true ? ' marked present' : ' marked absent'));
     }
 
     function markAllPresent() {
     if (!_secEdit('roll-call', 'Marking attendance')) return;
+        const roster = getRoster();
         const today = getTodayData();
         today.attendance = {};
         today.absences = [];
+        Object.keys(roster).forEach(name => { today.attendance[name] = true; });
         saveTodayData(today);
         renderRollCall();
         renderDashboard();
@@ -241,7 +256,7 @@ function esc(s) { if (s == null) return ''; var d = document.createElement('div'
         Object.entries(roster).forEach(([name, c]) => {
             if (c.bunk === bunkName) {
                 today.absences = today.absences.filter(a => a.name !== name);
-                delete today.attendance[name];
+                today.attendance[name] = true;
                 count++;
             }
         });
@@ -556,16 +571,26 @@ function esc(s) { if (s == null) return ''; var d = document.createElement('div'
     //
     // Template layout (must match printed template CSS):
     //   Page 816x1056px, QR at right=48,top=48, size=140x140
-    //   Bubble rows start at top=220, height=52, bubble=32px at flex-end
-    //   QR top-left=(628,48), bubble center X=752, row-i center Y=246+i*52
-    //   Offsets from QR top-left: bDX=124, bDY0=198, bDDY=52
+    //   Bubble rows start at top=220, height=52, two bubbles (32px each, 16px
+    //   gap) flush against the row's right edge — PRESENT bubble, then ABSENT.
+    //   QR top-left=(628,48), row-i center Y=246+i*52
+    //   Offsets from QR top-left: bPresentDX=76, bAbsentDX=124, bDY0=198, bDDY=52
+    //
+    //   ★ Two bubbles per row, not one — an empty single bubble used to be
+    //   read as "absent" while the app's own default treated an unmarked
+    //   camper as "present", a contradiction that meant a sheet nobody
+    //   filled in at all silently produced two different answers depending
+    //   on which side you looked at. Two explicit bubbles force a real mark
+    //   for every camper: neither filled = genuinely unmarked (skipped on
+    //   confirm, flagged for the office to check by hand), not defaulted.
     // =========================================================================
     const SCAN_TMPL = {
         qrSize: 140,
-        bDX: 124,
+        bPresentDX: 76,
+        bAbsentDX: 124,
         bDY0: 198,
         bDDY: 52,
-        sampleR: 14,
+        sampleR: 13,
         fillThresh: 0.22
     };
 
@@ -660,11 +685,19 @@ function esc(s) { if (s == null) return ''; var d = document.createElement('div'
 
         _scanBunkLabel = info.bunk + (info.date ? ' · ' + info.date : '');
         _scanResults = campers.map((name, i) => {
-            const dx = SCAN_TMPL.bDX, dy = SCAN_TMPL.bDY0 + i * SCAN_TMPL.bDDY;
-            const cx = Math.round(tl.x + dx * pxX.x + dy * pxY.x);
-            const cy = Math.round(tl.y + dx * pxX.y + dy * pxY.y);
-            const dark = scannerSampleDark(cx, cy, sampleRPhoto);
-            return { name, present: dark >= SCAN_TMPL.fillThresh };
+            const dy = SCAN_TMPL.bDY0 + i * SCAN_TMPL.bDDY;
+            const sample = (dx) => {
+                const cx = Math.round(tl.x + dx * pxX.x + dy * pxY.x);
+                const cy = Math.round(tl.y + dx * pxX.y + dy * pxY.y);
+                return scannerSampleDark(cx, cy, sampleRPhoto) >= SCAN_TMPL.fillThresh;
+            };
+            const presentFilled = sample(SCAN_TMPL.bPresentDX);
+            const absentFilled = sample(SCAN_TMPL.bAbsentDX);
+            const state = presentFilled && absentFilled ? 'ambiguous'
+                : presentFilled ? 'present'
+                : absentFilled ? 'absent'
+                : 'unmarked';
+            return { name, state };
         });
 
         scannerRenderPreview();
@@ -699,9 +732,17 @@ function esc(s) { if (s == null) return ''; var d = document.createElement('div'
             '<button class="btn btn-secondary" onclick="AttendanceScanner.back()">&#8592; Try Again</button></div>';
     }
 
+    const SCAN_STATE_STYLE = {
+        present: { bg: '#dcfce7', clr: '#16a34a', lbl: '&#10003; Present' },
+        absent: { bg: '#fee2e2', clr: '#dc2626', lbl: '&#10007; Absent' },
+        unmarked: { bg: '#fef9c3', clr: '#a16207', lbl: 'Not marked — tap' },
+        ambiguous: { bg: '#fef9c3', clr: '#a16207', lbl: 'Both filled — tap' }
+    };
+
     function scannerRenderPreview() {
-        const present = _scanResults.filter(r => r.present).length;
-        const absent = _scanResults.length - present;
+        const present = _scanResults.filter(r => r.state === 'present').length;
+        const absent = _scanResults.filter(r => r.state === 'absent').length;
+        const needsReview = _scanResults.filter(r => r.state === 'unmarked' || r.state === 'ambiguous').length;
         const el = id => document.getElementById(id);
 
         if (el('scanStatusMsg')) el('scanStatusMsg').innerHTML =
@@ -709,8 +750,9 @@ function esc(s) { if (s == null) return ''; var d = document.createElement('div'
             '<strong>' + esc(_scanBunkLabel) + '</strong>' +
             '<span style="color:#16a34a;font-weight:600;">' + present + ' present</span>' +
             '<span style="color:#dc2626;font-weight:600;">' + absent + ' absent</span>' +
+            (needsReview ? '<span style="color:#a16207;font-weight:600;">' + needsReview + ' need' + (needsReview === 1 ? 's' : '') + ' review</span>' : '') +
             '</div>' +
-            '<div style="font-size:.74rem;color:var(--slate-500);margin-bottom:8px;">Tap a pill to correct any errors before applying.</div>';
+            '<div style="font-size:.74rem;color:var(--slate-500);margin-bottom:8px;">Tap a pill to correct any errors. Rows needing review are skipped and left unmarked until you fix them.</div>';
 
         let html = '<div style="max-height:300px;overflow-y:auto;border:1px solid var(--slate-200);border-radius:8px;">';
         html += '<table style="width:100%;border-collapse:collapse;font-size:.82rem;">';
@@ -720,14 +762,12 @@ function esc(s) { if (s == null) return ''; var d = document.createElement('div'
             '<th style="text-align:center;padding:8px 10px;">Status</th></tr></thead><tbody>';
 
         _scanResults.forEach((r, i) => {
-            const bg = r.present ? '#dcfce7' : '#fee2e2';
-            const clr = r.present ? '#16a34a' : '#dc2626';
-            const lbl = r.present ? '&#10003; Present' : '&#10007; Absent';
+            const st = SCAN_STATE_STYLE[r.state] || SCAN_STATE_STYLE.unmarked;
             html += '<tr style="border-top:1px solid var(--slate-100);">' +
                 '<td style="padding:7px 10px;color:var(--slate-400);">' + (i + 1) + '</td>' +
                 '<td style="padding:7px 10px;font-weight:500;">' + esc(r.name) + '</td>' +
                 '<td style="padding:7px 10px;text-align:center;">' +
-                '<button onclick="AttendanceScanner.toggleResult(' + i + ')" style="background:' + bg + ';color:' + clr + ';border:none;padding:3px 12px;border-radius:999px;cursor:pointer;font-weight:600;font-size:.74rem;">' + lbl + '</button>' +
+                '<button onclick="AttendanceScanner.toggleResult(' + i + ')" style="background:' + st.bg + ';color:' + st.clr + ';border:none;padding:3px 12px;border-radius:999px;cursor:pointer;font-weight:600;font-size:.74rem;">' + st.lbl + '</button>' +
                 '</td></tr>';
         });
 
@@ -736,8 +776,16 @@ function esc(s) { if (s == null) return ''; var d = document.createElement('div'
         if (el('scanConfirmBtn')) el('scanConfirmBtn').style.display = _scanResults.length ? '' : 'none';
     }
 
+    // Tap cycles present -> absent -> present. A row read as unmarked or
+    // ambiguous starts the cycle at 'present' on first tap — a manual
+    // correction is always an explicit present/absent choice, never back to
+    // an unresolved state (the office can always re-scan or leave it out if
+    // they don't actually know).
     function scannerToggleResult(i) {
-        if (_scanResults[i]) { _scanResults[i].present = !_scanResults[i].present; scannerRenderPreview(); }
+        const r = _scanResults[i];
+        if (!r) return;
+        r.state = r.state === 'present' ? 'absent' : 'present';
+        scannerRenderPreview();
     }
 
     function scannerBack() {
@@ -752,21 +800,30 @@ function esc(s) { if (s == null) return ''; var d = document.createElement('div'
 
     function scannerConfirm() {
         const today = getTodayData();
+        let applied = 0, skipped = 0;
         _scanResults.forEach(r => {
-            if (r.present) {
+            if (r.state === 'present') {
                 today.absences = today.absences.filter(a => a.name !== r.name);
-                delete today.attendance[r.name];
-            } else {
+                today.attendance[r.name] = true;
+                applied++;
+            } else if (r.state === 'absent') {
                 if (!today.absences.some(a => a.name === r.name)) {
                     today.absences.push({ name: r.name, reason: 'absent', notes: 'Via scan', time: formatTimeNow(), timestamp: Date.now() });
                 }
                 today.attendance[r.name] = false;
+                applied++;
+            } else {
+                // unmarked / ambiguous rows are left exactly as they were \u2014
+                // never guessed at \u2014 so they stay flagged in Roll Call for
+                // the office to check by hand.
+                skipped++;
             }
         });
         saveTodayData(today);
         closeModal('scanModal');
         renderRollCall(); renderDashboard(); renderAbsences();
-        toast('Attendance updated \u2014 ' + _scanResults.length + ' camper' + (_scanResults.length !== 1 ? 's' : '') + ' from scan');
+        toast('Attendance updated \u2014 ' + applied + ' camper' + (applied !== 1 ? 's' : '') + ' from scan' +
+            (skipped ? ', ' + skipped + ' left unmarked (needs manual review)' : ''));
     }
 
     function scannerPrintTemplates() {
@@ -818,13 +875,15 @@ function esc(s) { if (s == null) return ''; var d = document.createElement('div'
                 .toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric' });
             const rows = campers.map((name, i) =>
                 `<div class="tmpl-row"><span class="tmpl-num">${i + 1}</span>` +
-                `<span class="tmpl-name">${esc(name)}</span><div class="tmpl-bubble"></div></div>`
+                `<span class="tmpl-name">${esc(name)}</span>` +
+                `<div class="tmpl-bubble-group"><div class="tmpl-bubble"></div><div class="tmpl-bubble"></div></div></div>`
             ).join('');
             return `<div class="tmpl-page"><div class="tmpl-inner">` +
                 `<div class="tmpl-qr" data-qr="${payload}"></div>` +
                 `<div class="tmpl-head">${esc(bunkName)}</div>` +
                 `<div class="tmpl-sub">${rowDate}</div>` +
-                `<hr class="tmpl-hr"><div class="tmpl-instr">&#9679; Fill bubble = <strong>PRESENT</strong> &nbsp; &#9675; Empty = ABSENT</div>` +
+                `<hr class="tmpl-hr"><div class="tmpl-instr">Fill exactly ONE bubble per camper — never leave both blank</div>` +
+                `<div class="tmpl-col-labels"><span class="tmpl-col-lbl-present">PRESENT</span><span class="tmpl-col-lbl-absent">ABSENT</span></div>` +
                 `<div class="tmpl-rows">${rows}</div></div></div>`;
         }).join('\n');
 
@@ -844,17 +903,22 @@ body{font-family:Arial,Helvetica,sans-serif;background:#eee}
 .tmpl-sub{font-size:13px;color:#555;margin-bottom:10px;padding-right:160px}
 .tmpl-hr{border:none;border-top:2px solid #ddd;margin:8px 0}
 .tmpl-instr{font-size:11px;color:#555;padding:5px 8px;background:#f5f5f5;border-radius:4px;display:inline-block;margin-bottom:2px}
+.tmpl-col-labels{position:absolute;left:48px;right:48px;top:198px;height:18px}
+.tmpl-col-lbl-present,.tmpl-col-lbl-absent{position:absolute;top:0;font-size:8.5px;font-weight:700;color:#666;letter-spacing:.06em;transform:translateX(-50%)}
+.tmpl-col-lbl-present{left:656px}
+.tmpl-col-lbl-absent{left:704px}
 .tmpl-rows{position:absolute;left:48px;right:48px;top:220px}
 .tmpl-row{display:flex;align-items:center;height:52px;border-bottom:1px solid #ebebeb}
 .tmpl-num{font-size:11px;color:#bbb;width:22px;flex-shrink:0}
 .tmpl-name{flex:1;font-size:15px;color:#111;padding-right:8px}
+.tmpl-bubble-group{display:flex;gap:16px;flex-shrink:0}
 .tmpl-bubble{width:32px;height:32px;border:2.5px solid #222;border-radius:50%;flex-shrink:0}
 </style></head><body>
 <div class="no-print">
   <span style="font-weight:700">Campistry Attendance Templates</span>
   <span style="opacity:.7;font-size:13px">${dateStr}</span>
   <button onclick="window.print()">Print All (${bunkPages.length} sheets)</button>
-  <span style="opacity:.55;font-size:12px">Fill bubble = present today</span>
+  <span style="opacity:.55;font-size:12px">Fill exactly one bubble per camper — present or absent</span>
 </div>
 ${pages}
 <script>

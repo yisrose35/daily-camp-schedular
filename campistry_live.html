@@ -535,7 +535,7 @@ var ParentRequests = (function(){
                 // they're still out — flip them to present, same as a manual
                 // roll-call toggle or the bubble-sheet scanner's present branch.
                 today.absences=today.absences.filter(function(a){return a.name!==r.childName;});
-                delete today.attendance[r.childName];
+                today.attendance[r.childName]=true;
                 var noteText='Confirmed late arrival'+(r.arrivedAt?' — '+r.arrivedAt:'')+(r.notes?' ('+r.notes+')':'');
                 today.notes=(today.notes?today.notes+'\n':'')+r.childName+': '+noteText;
             } else if(r.type!=='bus'){
