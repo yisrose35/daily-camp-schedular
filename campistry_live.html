@@ -371,7 +371,21 @@ var ParentRequests = (function(){
                 client.rpc('add_pickup_alert_league_recipients',{
                     p_camp_id:campId,p_camper_name:camperName,p_captain_ids:captainIds,
                     p_league_name:leagueData.leagueName,p_team:team
-                }).then(function(){},function(e){console.warn('[Live] league-captain pickup alert failed:',e&&e.message||e);});
+                }).then(function(res){
+                    if(res&&res.error)return;
+                    // Captains join the alert AFTER the immediate confirm-time
+                    // push (this whole check runs on a delay) — a separate,
+                    // smaller push just to them, same reason _sendPickupAlertPush
+                    // exists at all: a DB insert alone doesn't buzz a phone.
+                    var captainEmails=captainIds.filter(function(id){return id.indexOf('@')>=0;}).map(function(id){return id.toLowerCase();});
+                    if(!captainEmails.length)return;
+                    client.functions.invoke('send-push',{body:{
+                        campId:campId, pref:'pickupAlert', staffEmails:captainEmails,
+                        title:camperName+' is leaving early — mid-game',
+                        body:pickupTimeStr?('Pickup at '+pickupTimeStr):'',
+                        data:{page:'campistry_lite.html'}
+                    }}).then(function(){},function(e){console.warn('[Live] league-captain push failed:',e&&e.message||e);});
+                },function(e){console.warn('[Live] league-captain pickup alert failed:',e&&e.message||e);});
             }, function(){});
         }, 900);
     }
@@ -566,6 +580,35 @@ var ParentRequests = (function(){
         db.client.auth.getUser().then(function(res){cb((res&&res.data&&res.data.user&&res.data.user.id)||null);},function(){cb(null);});
     }
 
+    // The DB trigger (migration 065) creates pickup_alerts/pickup_alert_
+    // recipients the moment the status UPDATE above lands — but a database
+    // trigger can't itself push a phone (no HTTP from plain plpgsql). That's
+    // the whole reason this exists: without it, the alert only ever shows up
+    // via the realtime subscription while Lite happens to already be open —
+    // exactly what surfaced testing this live. Reads back the recipients the
+    // trigger just created and pushes them, same db.client.functions.invoke
+    // pattern campistry_link_data.js already uses for parent notifications.
+    function _sendPickupAlertPush(camperName,db){
+        db.client.from('pickup_alerts')
+            .select('pickup_time,camper_bunk,pickup_alert_recipients(recipient_email)')
+            .eq('camp_id',db.campId).eq('camper_name',camperName)
+            .order('created_at',{ascending:false}).limit(1)
+            .then(function(res){
+                var alert=res.data&&res.data[0];
+                var recips=alert&&alert.pickup_alert_recipients||[];
+                var emails=recips.map(function(x){return x.recipient_email;}).filter(Boolean);
+                if(!emails.length)return;
+                db.client.functions.invoke('send-push',{body:{
+                    campId:db.campId, pref:'pickupAlert', staffEmails:emails,
+                    title:camperName+' is leaving early',
+                    body:'Pickup at '+(alert.pickup_time||'')+(alert.camper_bunk?' · '+alert.camper_bunk:''),
+                    data:{page:'campistry_lite.html'}
+                }}).then(function(r){
+                    if(r&&r.error)console.warn('[Live] pickup alert push failed:',r.error.message||r.error);
+                },function(e){console.warn('[Live] pickup alert push failed:',e&&e.message||e);});
+            },function(e){console.warn('[Live] pickup alert recipients lookup failed:',e&&e.message||e);});
+    }
+
     function _apply(i,status,message,repaint){
         var reqs=getReqs(),r=reqs[i];
         if(!r||r.status!=='Pending')return;
@@ -578,7 +621,10 @@ var ParentRequests = (function(){
                 db.client.from('parent_pickup_requests')
                     .update({status:status,office_message:message||null,reviewed_at:new Date().toISOString(),reviewed_by:uid})
                     .eq('id',r.id)
-                    .then(function(res){ if(res.error)console.warn('[Live] pickup review update:',res.error.message); });
+                    .then(function(res){
+                        if(res.error){console.warn('[Live] pickup review update:',res.error.message);return;}
+                        if(status==='Confirmed'&&r.type==='early'&&r.pickupTime) _sendPickupAlertPush(r.childName,db);
+                    });
             });
         }
 
