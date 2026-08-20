@@ -15,7 +15,20 @@
     'use strict';
 
     var GLOBAL_KEY = 'campGlobalSettings_v1';
-    function readGlobal() { try { return JSON.parse(localStorage.getItem(GLOBAL_KEY) || '{}'); } catch (e) { return {}; } }
+    // ★ Same fix as campistry_live.js's readGlobal(): integration_hooks.js
+    //   strips app1.camperRoster from the localStorage snapshot (full state
+    //   lives in its in-memory cache, reachable via loadGlobalSettings()).
+    //   Reading localStorage directly here loses the roster the moment
+    //   integration_hooks hydrates after this file's own bootstrap-driven read.
+    function readGlobal() {
+        try {
+            if (typeof window.loadGlobalSettings === 'function') {
+                var full = window.loadGlobalSettings();
+                if (full && Object.keys(full).length) return full;
+            }
+        } catch (e) {}
+        try { return JSON.parse(localStorage.getItem(GLOBAL_KEY) || '{}'); } catch (e) { return {}; }
+    }
     function getRoster() { var g = readGlobal(); return (g.app1 && g.app1.camperRoster) || {}; }
     function getStructure() { return readGlobal().campStructure || {}; }
     function esc(s) { if (s == null) return ''; var d = document.createElement('div'); d.textContent = s; return d.innerHTML; }

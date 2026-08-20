@@ -25,7 +25,23 @@
     // =========================================================================
     var GLOBAL_KEY = 'campGlobalSettings_v1';
     var LIVE_STORE_KEY = 'campistry_live_v1';
-    function readGlobal() { try { return JSON.parse(localStorage.getItem(GLOBAL_KEY) || '{}'); } catch (e) { return {}; } }
+    // ★ integration_hooks.js deliberately strips heavy/unbounded keys (incl.
+    //   app1.camperRoster) out of the localStorage snapshot it writes — the
+    //   full state lives in its in-memory cache / IndexedDB, reachable only
+    //   via window.loadGlobalSettings(). Reading localStorage directly here
+    //   returned a roster-less object the moment integration_hooks hydrated
+    //   after this file's own bootstrap-driven read (roster would flash then
+    //   vanish). Prefer the safe accessor; fall back to localStorage only
+    //   when it isn't loaded yet.
+    function readGlobal() {
+        try {
+            if (typeof window.loadGlobalSettings === 'function') {
+                var full = window.loadGlobalSettings();
+                if (full && Object.keys(full).length) return full;
+            }
+        } catch (e) {}
+        try { return JSON.parse(localStorage.getItem(GLOBAL_KEY) || '{}'); } catch (e) { return {}; }
+    }
     function getRoster() { var g = readGlobal(); return (g.app1 && g.app1.camperRoster) || {}; }
     function getStructure() { return readGlobal().campStructure || {}; }
     function getCampName() { var g = readGlobal(); return g.camp_name || g.campName || localStorage.getItem('campistry_camp_name') || 'Your Camp'; }
