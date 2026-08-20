@@ -1927,6 +1927,22 @@
                 //   discarded above.
                 if (trustLocal && (localState.app1 || cloudState.app1)) {
                     mergedState.app1 = { ...(cloudState.app1 || {}), ...(localState.app1 || {}) };
+                    // ★ The trustLocal branch fires whenever local's overall
+                    //   updated_at is newer than cloud's — which can be true
+                    //   for reasons unrelated to the roster (any other key
+                    //   edited bumps it). The wholesale spread above then
+                    //   still lets a STALE/empty local camperRoster silently
+                    //   wipe a cloud copy that genuinely has campers (reported
+                    //   bug: roster visibly populates, then drops to 0 a
+                    //   moment later). Never let an empty local roster
+                    //   override a non-empty cloud one.
+                    try {
+                        const _cloudRoster = (cloudState.app1 && cloudState.app1.camperRoster) || {};
+                        const _localRoster = (localState.app1 && localState.app1.camperRoster) || {};
+                        if (Object.keys(_cloudRoster).length > 0 && Object.keys(_localRoster).length === 0) {
+                            mergedState.app1.camperRoster = _cloudRoster;
+                        }
+                    } catch (_eRosterGuard) {}
                 }
 
                 // ★ Preserve special-activity SUBCATEGORY tags across the cross-device
