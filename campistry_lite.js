@@ -3776,9 +3776,9 @@
             video: { facingMode: { ideal: 'environment' }, width: { ideal: 1920 }, height: { ideal: 1080 } },
             audio: false
         }).then(stream => {
-            _liveStream = stream;
             _liveVideoEl = _liveOverlayEl && _liveOverlayEl.querySelector('#scanLiveVideo');
-            if (!_liveVideoEl) { stream.getTracks().forEach(t => t.stop()); return; } // overlay closed mid-request
+            if (!_liveVideoEl) { stream.getTracks().forEach(t => t.stop()); return; } // overlay closed mid-request — leave _liveStream untouched, not set to a dead stream
+            _liveStream = stream;
             _liveVideoEl.srcObject = stream;
             _liveVideoEl.onloadedmetadata = () => {
                 _liveVideoEl.play().catch(() => {});
@@ -3925,7 +3925,14 @@
         if (el('scanPreviewTable')) el('scanPreviewTable').innerHTML = '';
         if (el('scanConfirmBtn')) el('scanConfirmBtn').style.display = 'none';
         if (el('scanStep1')) el('scanStep1').style.display = '';
-        if (!t.bunks) {
+        // A late-resolving getUserMedia() promise (e.g. the user backed out
+        // of the scan sheet, or switched apps, while the camera permission
+        // prompt was still pending) can set _liveStream and fire
+        // visibilitychange -> scannerCloseLive() -> here, after the sheet
+        // that originally called openScanSheet() is long gone and
+        // _scanQueueTally was never initialized (still its null default).
+        // Nothing to report in that case — just don't crash.
+        if (!t || !t.bunks) {
             // Nothing applied yet this session (first batch errored/was
             // skipped) — just go back to a clean picker, no tally to show.
             if (el('scanStatusMsg')) el('scanStatusMsg').innerHTML = '';
@@ -6214,6 +6221,17 @@
 
     function closeSheet() {
         if (sheetEl) { sheetEl.remove(); sheetEl = null; }
+        // closeSheet() is generic — every bottom sheet in the app calls it —
+        // but the live camera overlay lives outside the sheet DOM (appended
+        // straight to document.body, so it survives its own sheet closing)
+        // and getUserMedia() can still be pending when this fires. Without
+        // this, an orphaned stream/late permission grant sets _liveStream
+        // and _liveOverlayEl for a scan session whose _scanSheetEl/
+        // _scanQueueTally are already gone, and the next unrelated
+        // visibilitychange crashed scannerFinishQueue() on a null tally.
+        if (typeof scannerStopLiveStream === 'function') scannerStopLiveStream();
+        if (typeof _liveGateTimer !== 'undefined' && _liveGateTimer) { clearInterval(_liveGateTimer); _liveGateTimer = null; }
+        if (typeof _liveOverlayEl !== 'undefined' && _liveOverlayEl) { _liveOverlayEl.remove(); _liveOverlayEl = null; }
     }
 
     let toastTimer = null;
