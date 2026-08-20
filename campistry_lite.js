@@ -3585,16 +3585,49 @@
     // = unmarked, both filled = ambiguous; neither is guessed at, both are
     // skipped on confirm and left flagged for manual review.
     //
-    // Bunk identity is a stable serial number, printed as BOTH the QR
-    // payload and its own 8-bit bubble row, cross-checked against each
-    // other — see the matching comment in campistry_live.js SCAN_TMPL for
-    // why (a QR that can't be found at all still blocks everything; this
-    // guards against a QR that's found but misread).
+    // Bunk identity is a stable serial number, printed as the QR's payload
+    // and as a plain readable number under the QR (see scannerManualLookup
+    // for the last-resort typed fallback). No fixed bit-width, so no
+    // camp-size ceiling.
+    //
+    // Perspective, not just rotation/scale: a photo shot from a low or high
+    // angle keystones the page, which a 3-point affine map only corrects
+    // exactly for a dead-on photo. jsQR's `code.location` already returns
+    // all 4 QR corners; scannerHomography()/scannerApplyH() solve a proper
+    // 4-point projective transform from them instead — see the matching
+    // comment in campistry_live.js SCAN_TMPL.
     const SCAN_TMPL = {
         qrSize: 140, bPresentDX: 76, bAbsentDX: 124, bDY0: 246, bDDY: 52,
-        sampleR: 13, fillThresh: 0.22,
-        idBubbleCount: 8, idDX0: -535, idDDX: 90, idDY: 126, idSampleR: 8
+        sampleR: 13, fillThresh: 0.22
     };
+
+    function scannerHomography(src, dst) {
+        const A = [], b = [];
+        for (let i = 0; i < 4; i++) {
+            const x = src[i][0], y = src[i][1], u = dst[i].x, v = dst[i].y;
+            A.push([x, y, 1, 0, 0, 0, -x * u, -y * u]); b.push(u);
+            A.push([0, 0, 0, x, y, 1, -x * v, -y * v]); b.push(v);
+        }
+        const n = 8;
+        const M = A.map((row, i) => row.concat(b[i]));
+        for (let col = 0; col < n; col++) {
+            let piv = col;
+            for (let r = col + 1; r < n; r++) if (Math.abs(M[r][col]) > Math.abs(M[piv][col])) piv = r;
+            const tmp = M[col]; M[col] = M[piv]; M[piv] = tmp;
+            const pv = M[col][col] || 1e-9;
+            for (let c = col; c <= n; c++) M[col][c] /= pv;
+            for (let r = 0; r < n; r++) {
+                if (r === col) continue;
+                const f = M[r][col];
+                for (let c = col; c <= n; c++) M[r][c] -= f * M[col][c];
+            }
+        }
+        return M.map(row => row[n]);
+    }
+    function scannerApplyH(h, x, y) {
+        const denom = h[6] * x + h[7] * y + 1;
+        return { x: (h[0] * x + h[1] * y + h[2]) / denom, y: (h[3] * x + h[4] * y + h[5]) / denom };
+    }
     let _scanResults = [], _scanBunkLabel = '', _scanCanvas = null, _scanCtx = null, _scanDateKey = null, _scanSheetEl = null;
     // A queue of photos, each one bunk's sheet. "Choose from library" can hand
     // us several at once; "Take photo" always hands us exactly one. Either way
@@ -3726,27 +3759,15 @@
         if (!m) { scannerShowError('That QR isn\'t a Campistry attendance template.'); return; }
         const qrSerial = parseInt(m[1], 10);
 
+        // 4-point homography (not a 3-point affine map) — stays accurate
+        // when the photo was shot from an angle, not just straight above.
         const loc = code.location;
-        const tl = loc.topLeftCorner, tr = loc.topRightCorner, bl = loc.bottomLeftCorner;
-        const pxX = { x: (tr.x - tl.x) / SCAN_TMPL.qrSize, y: (tr.y - tl.y) / SCAN_TMPL.qrSize };
-        const pxY = { x: (bl.x - tl.x) / SCAN_TMPL.qrSize, y: (bl.y - tl.y) / SCAN_TMPL.qrSize };
-        const photoQrW = Math.hypot(tr.x - tl.x, tr.y - tl.y);
+        const h = scannerHomography(
+            [[0, 0], [SCAN_TMPL.qrSize, 0], [0, SCAN_TMPL.qrSize], [SCAN_TMPL.qrSize, SCAN_TMPL.qrSize]],
+            [loc.topLeftCorner, loc.topRightCorner, loc.bottomLeftCorner, loc.bottomRightCorner]
+        );
+        const photoQrW = Math.hypot(loc.topRightCorner.x - loc.topLeftCorner.x, loc.topRightCorner.y - loc.topLeftCorner.y);
         const sampleRPhoto = Math.round(SCAN_TMPL.sampleR * (photoQrW / SCAN_TMPL.qrSize));
-        const sampleRId = Math.round(SCAN_TMPL.idSampleR * (photoQrW / SCAN_TMPL.qrSize));
-
-        // Factor 2: re-read the same serial from its own bubble row.
-        let bubbleSerial = 0;
-        for (let b = 0; b < SCAN_TMPL.idBubbleCount; b++) {
-            const dx = SCAN_TMPL.idDX0 + b * SCAN_TMPL.idDDX;
-            const cx = Math.round(tl.x + dx * pxX.x + SCAN_TMPL.idDY * pxY.x);
-            const cy = Math.round(tl.y + dx * pxX.y + SCAN_TMPL.idDY * pxY.y);
-            const filled = scannerSampleDark(cx, cy, sampleRId) >= SCAN_TMPL.fillThresh;
-            bubbleSerial = (bubbleSerial << 1) | (filled ? 1 : 0);
-        }
-        if (bubbleSerial !== qrSerial) {
-            scannerShowError(`Could not confirm which bunk this is — the QR and the ID bubbles disagree (#${qrSerial} vs #${bubbleSerial}). Retake the photo straight-on and well-lit.`);
-            return;
-        }
 
         const serials = await loadBunkSerials();
         const bunkName = Object.keys(serials).find(name => serials[name] === qrSerial);
@@ -3760,9 +3781,8 @@
         _scanResults = campers.map((name, i) => {
             const dy = SCAN_TMPL.bDY0 + i * SCAN_TMPL.bDDY;
             const sample = (dx) => {
-                const cx = Math.round(tl.x + dx * pxX.x + dy * pxY.x);
-                const cy = Math.round(tl.y + dx * pxX.y + dy * pxY.y);
-                return scannerSampleDark(cx, cy, sampleRPhoto) >= SCAN_TMPL.fillThresh;
+                const p = scannerApplyH(h, dx, dy);
+                return scannerSampleDark(Math.round(p.x), Math.round(p.y), sampleRPhoto) >= SCAN_TMPL.fillThresh;
             };
             const presentFilled = sample(SCAN_TMPL.bPresentDX);
             const absentFilled = sample(SCAN_TMPL.bAbsentDX);
@@ -3800,18 +3820,42 @@
         const el = id => _scanSheetEl && _scanSheetEl.querySelector('#' + id);
         // Mid-queue, one bad photo shouldn't stall the rest — offer to skip
         // it. A lone scan just goes back to the take-photo/choose-library step.
+        // Either way, offer the printed-number fallback for when the QR
+        // truly can't be located in the photo at all.
         const more = _scanQueue.length > 1;
+        const manualRow = `<div style="margin-top:10px;padding-top:8px;border-top:1px solid var(--line,#e5e7eb);font-size:.78rem;color:var(--muted,#6b7280);">` +
+            `Or type the number printed under the QR code:` +
+            `<div style="display:flex;gap:6px;margin-top:5px;">` +
+            `<input id="scanManualNum" type="number" min="1" inputmode="numeric" class="lite-input" style="flex:1;">` +
+            `<button type="button" class="lite-btn" id="scanManualGoBtn" style="width:auto;padding:8px 16px;">Go</button>` +
+            `</div></div>`;
         if (more) {
             if (el('scanStatusMsg')) {
                 el('scanStatusMsg').innerHTML = `<div class="lite-warn">${esc(msg)} ` +
-                    `<button type="button" class="lite-btn" id="scanSkipBtn" style="width:auto;display:inline-block;padding:4px 12px;margin-top:6px;">Skip this one</button></div>`;
+                    `<button type="button" class="lite-btn" id="scanSkipBtn" style="width:auto;display:inline-block;padding:4px 12px;margin-top:6px;">Skip this one</button></div>` + manualRow;
                 const btn = el('scanSkipBtn');
                 if (btn) btn.addEventListener('click', scannerSkipQueueItem);
             }
         } else {
-            if (el('scanStatusMsg')) el('scanStatusMsg').innerHTML = `<div class="lite-warn">${esc(msg)}</div>`;
+            if (el('scanStatusMsg')) el('scanStatusMsg').innerHTML = `<div class="lite-warn">${esc(msg)}</div>` + manualRow;
             if (el('scanStep1')) el('scanStep1').style.display = '';
         }
+        const goBtn = el('scanManualGoBtn');
+        if (goBtn) goBtn.addEventListener('click', () => scannerManualLookup(el('scanManualNum') && el('scanManualNum').value));
+    }
+
+    // Last-resort fallback for when the QR truly can't be located in the
+    // photo at all — identifies the bunk from the printed number, but can't
+    // fabricate a bubble read without the QR's geometry, so it just names
+    // the bunk and moves the queue on; the office marks it by hand.
+    async function scannerManualLookup(text) {
+        const n = parseInt(String(text || '').trim(), 10);
+        if (!Number.isFinite(n) || n <= 0) { toast('Enter the number printed under the QR code'); return; }
+        const serials = await loadBunkSerials();
+        const bunkName = Object.keys(serials).find(name => serials[name] === n);
+        if (!bunkName) { toast('No bunk found with that number'); return; }
+        toast('That’s ' + bunkName + '’s sheet — mark it by hand in Roll Call');
+        scannerSkipQueueItem();
     }
 
     const SCAN_STATE_LABEL = { present: 'Here', absent: 'Absent', unmarked: 'Not marked', ambiguous: 'Both filled' };

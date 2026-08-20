@@ -129,13 +129,13 @@ function esc(s) { if (s == null) return ''; var d = document.createElement('div'
 
         let html = '<div class="rc-search-wrap">' +
             '<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>' +
-            '<input id="rcSearchInput" type="text" placeholder="Search camper…" value="' + esc(filter) + '" oninput="CampistryLive.filterRollCall(this.value)" autocomplete="off">' +
+            '<input id="rcSearchInput" type="text" placeholder="Search camper or bunk…" value="' + esc(filter) + '" oninput="CampistryLive.filterRollCall(this.value)" autocomplete="off">' +
             (filter ? '<button class="rc-clear" onclick="CampistryLive.clearRcFilter()">&times;</button>' : '') +
             '</div>';
 
         if (filter) {
             const matches = Object.entries(roster)
-                .filter(([name]) => name.toLowerCase().includes(filter))
+                .filter(([name, c]) => name.toLowerCase().includes(filter) || (c.bunk && c.bunk.toLowerCase().includes(filter)))
                 .sort(([a], [b]) => a.localeCompare(b));
 
             if (!matches.length) {
@@ -586,21 +586,21 @@ function esc(s) { if (s == null) return ''; var d = document.createElement('div'
     //
     //   ★ Every bunk gets a small STABLE serial number (persisted, never
     //   reassigned once given — see scannerLoadSerials/scannerAssignSerials),
-    //   printed as BOTH the QR's payload and its own row of pre-filled
-    //   bubbles. Two independent readings of the same number: if the QR
-    //   photo is clean, its decode is instant; if it's blurry/glare-y but
-    //   still locatable, the bubble row (coarse darkness threshold, far more
-    //   forgiving than resolving a QR's fine modules) confirms or corrects
-    //   it. A mismatch between the two is never silently guessed at — the
-    //   scan is rejected and the office is asked to retake the photo. (The
-    //   QR still has to be FOUND at all for either reading to work — it's
-    //   the only thing giving us the page's corners to compute every other
-    //   position from. A QR jsQR can't locate at all — not even attempt a
-    //   decode — is the one failure neither factor can route around; the
-    //   inversion retry below and the bigger, lower-payload QR are what
-    //   address that case.)
-    //   idBubbleCount 8-bit bubbles, MSB-first, offsets from QR top-left:
-    //   idDX0=-535, idDDX=90 (bubble i center = idDX0 + i*idDDX), idDY=126.
+    //   printed as the QR's payload AND as a plain readable number under the
+    //   QR (for a human to check, or type in if a scan totally fails — see
+    //   scannerManualLookup). No fixed bit-width, so no camp-size ceiling —
+    //   the registry is a plain incrementing counter, not an encoded field.
+    //
+    //   ★ Perspective, not just rotation/scale: a photo taken from a low or
+    //   high angle keystones the page (parallel lines converge), which a
+    //   3-point affine map (the old approach) only corrects exactly for a
+    //   photo shot dead-on — error grows with distance from the QR, worst
+    //   for the bottom rows on a tall sheet. jsQR's `code.location` already
+    //   hands back all 4 QR corners; scannerHomography() solves a proper
+    //   4-point projective transform (a homography) from them, which stays
+    //   accurate at an angle. scannerApplyH() maps any (dx,dy) offset from
+    //   the QR's top-left (in print-template pixels) to its real photo
+    //   pixel position.
     // =========================================================================
     const SCAN_TMPL = {
         qrSize: 140,
@@ -609,16 +609,41 @@ function esc(s) { if (s == null) return ''; var d = document.createElement('div'
         bDY0: 246,
         bDDY: 52,
         sampleR: 13,
-        fillThresh: 0.22,
-        idBubbleCount: 8,
-        idDX0: -535,
-        idDDX: 90,
-        idDY: 126,
-        idSampleR: 8
+        fillThresh: 0.22
     };
     const SCAN_QR_PREFIX = 'CSR2:';
     const SCAN_SERIALS_KEY = 'liveBunkSerials';
-    const SCAN_MAX_SERIAL = (1 << 8) - 1; // 8 bubbles
+
+    // Solve the 3x3 projective matrix (8 unknowns, h33 fixed to 1) mapping
+    // 4 template-space points to 4 photo-space points, via the standard DLT
+    // linear system + Gaussian elimination with partial pivoting.
+    function scannerHomography(src, dst) {
+        const A = [], b = [];
+        for (let i = 0; i < 4; i++) {
+            const x = src[i][0], y = src[i][1], u = dst[i].x, v = dst[i].y;
+            A.push([x, y, 1, 0, 0, 0, -x * u, -y * u]); b.push(u);
+            A.push([0, 0, 0, x, y, 1, -x * v, -y * v]); b.push(v);
+        }
+        const n = 8;
+        const M = A.map((row, i) => row.concat(b[i]));
+        for (let col = 0; col < n; col++) {
+            let piv = col;
+            for (let r = col + 1; r < n; r++) if (Math.abs(M[r][col]) > Math.abs(M[piv][col])) piv = r;
+            const tmp = M[col]; M[col] = M[piv]; M[piv] = tmp;
+            const pv = M[col][col] || 1e-9;
+            for (let c = col; c <= n; c++) M[col][c] /= pv;
+            for (let r = 0; r < n; r++) {
+                if (r === col) continue;
+                const f = M[r][col];
+                for (let c = col; c <= n; c++) M[r][c] -= f * M[col][c];
+            }
+        }
+        return M.map(row => row[n]); // [h11,h12,h13,h21,h22,h23,h31,h32]
+    }
+    function scannerApplyH(h, x, y) {
+        const denom = h[6] * x + h[7] * y + 1;
+        return { x: (h[0] * x + h[1] * y + h[2]) / denom, y: (h[3] * x + h[4] * y + h[5]) / denom };
+    }
 
     let _scanResults = [];
     let _scanBunkLabel = '';
@@ -644,17 +669,15 @@ function esc(s) { if (s == null) return ''; var d = document.createElement('div'
 
     // Called at print time: assigns a serial to any bunk in bunkNames that
     // doesn't have one yet, persists the updated registry if anything
-    // changed, and returns the (possibly updated) map. Returns null for any
-    // bunk once SCAN_MAX_SERIAL is exhausted — vanishingly unlikely for a
-    // real camp (255 bunks), but printTemplates surfaces it rather than
-    // silently reusing a number.
+    // changed, and returns the (possibly updated) map. Plain incrementing
+    // counter — no bit-width to run out of, so camps with hundreds of bunks
+    // are fine.
     function scannerAssignSerials(bunkNames) {
         const map = scannerLoadSerials();
         let next = Object.values(map).reduce((m, v) => Math.max(m, v || 0), 0) + 1;
         let changed = false;
         bunkNames.forEach(name => {
             if (map[name] != null) return;
-            if (next > SCAN_MAX_SERIAL) return;
             map[name] = next++;
             changed = true;
         });
@@ -730,32 +753,15 @@ function esc(s) { if (s == null) return ''; var d = document.createElement('div'
         }
         const qrSerial = parseInt(m[1], 10);
 
+        // 4-point homography (not a 3-point affine map) — stays accurate
+        // when the photo was shot from an angle, not just straight above.
         const loc = code.location;
-        const tl = loc.topLeftCorner, tr = loc.topRightCorner, bl = loc.bottomLeftCorner;
-        const pxX = { x: (tr.x - tl.x) / SCAN_TMPL.qrSize, y: (tr.y - tl.y) / SCAN_TMPL.qrSize };
-        const pxY = { x: (bl.x - tl.x) / SCAN_TMPL.qrSize, y: (bl.y - tl.y) / SCAN_TMPL.qrSize };
-        const photoQrW = Math.hypot(tr.x - tl.x, tr.y - tl.y);
+        const h = scannerHomography(
+            [[0, 0], [SCAN_TMPL.qrSize, 0], [0, SCAN_TMPL.qrSize], [SCAN_TMPL.qrSize, SCAN_TMPL.qrSize]],
+            [loc.topLeftCorner, loc.topRightCorner, loc.bottomLeftCorner, loc.bottomRightCorner]
+        );
+        const photoQrW = Math.hypot(loc.topRightCorner.x - loc.topLeftCorner.x, loc.topRightCorner.y - loc.topLeftCorner.y);
         const sampleRPhoto = Math.round(SCAN_TMPL.sampleR * (photoQrW / SCAN_TMPL.qrSize));
-        const sampleRId = Math.round(SCAN_TMPL.idSampleR * (photoQrW / SCAN_TMPL.qrSize));
-
-        // Bunk identity, factor 2: the same serial re-read from its own
-        // 8-bit bubble row (MSB-first). The QR's successful decode already
-        // gave us a trustworthy serial (Reed-Solomon error correction makes
-        // a *wrong* decode rare — jsQR fails outright far more often than it
-        // silently misdecodes) — this is a cross-check against that rarer
-        // failure mode, not the primary read.
-        let bubbleSerial = 0;
-        for (let b = 0; b < SCAN_TMPL.idBubbleCount; b++) {
-            const dx = SCAN_TMPL.idDX0 + b * SCAN_TMPL.idDDX;
-            const cx = Math.round(tl.x + dx * pxX.x + SCAN_TMPL.idDY * pxY.x);
-            const cy = Math.round(tl.y + dx * pxX.y + SCAN_TMPL.idDY * pxY.y);
-            const filled = scannerSampleDark(cx, cy, sampleRId) >= SCAN_TMPL.fillThresh;
-            bubbleSerial = (bubbleSerial << 1) | (filled ? 1 : 0);
-        }
-        if (bubbleSerial !== qrSerial) {
-            scannerShowError(`Could not confirm which bunk this is — the QR and the ID bubbles on the sheet disagree (#${qrSerial} vs #${bubbleSerial}). Retake the photo straight-on and well-lit.`);
-            return;
-        }
 
         const serials = scannerLoadSerials();
         const bunkName = Object.keys(serials).find(name => serials[name] === qrSerial);
@@ -774,9 +780,8 @@ function esc(s) { if (s == null) return ''; var d = document.createElement('div'
         _scanResults = campers.map((name, i) => {
             const dy = SCAN_TMPL.bDY0 + i * SCAN_TMPL.bDDY;
             const sample = (dx) => {
-                const cx = Math.round(tl.x + dx * pxX.x + dy * pxY.x);
-                const cy = Math.round(tl.y + dx * pxX.y + dy * pxY.y);
-                return scannerSampleDark(cx, cy, sampleRPhoto) >= SCAN_TMPL.fillThresh;
+                const p = scannerApplyH(h, dx, dy);
+                return scannerSampleDark(Math.round(p.x), Math.round(p.y), sampleRPhoto) >= SCAN_TMPL.fillThresh;
             };
             const presentFilled = sample(SCAN_TMPL.bPresentDX);
             const absentFilled = sample(SCAN_TMPL.bAbsentDX);
@@ -788,6 +793,25 @@ function esc(s) { if (s == null) return ''; var d = document.createElement('div'
         });
 
         scannerRenderPreview();
+    }
+
+    // Last-resort manual fallback for when the QR truly can't be located at
+    // all (severe blur/angle/lighting) — the printed number under the QR is
+    // exactly what this reads back. Doesn't fabricate a bubble read (there's
+    // no usable photo geometry without the QR) — it just identifies the
+    // bunk and hands off to Roll Call so the office can mark it there.
+    // Nothing to tap through on the happy path; this only appears after a
+    // scan has already failed.
+    function scannerManualLookup(text) {
+        const n = parseInt(String(text || '').trim(), 10);
+        if (!Number.isFinite(n) || n <= 0) { toast('Enter the number printed under the QR code', 'error'); return; }
+        const serials = scannerLoadSerials();
+        const bunkName = Object.keys(serials).find(name => serials[name] === n);
+        if (!bunkName) { toast('No bunk found with that number', 'error'); return; }
+        closeModal('scanModal');
+        _rcFilter = bunkName;
+        renderRollCall();
+        toast('That’s ' + bunkName + '’s sheet — showing them in Roll Call to mark by hand');
     }
 
     function scannerSampleDark(cx, cy, r) {
@@ -816,7 +840,13 @@ function esc(s) { if (s == null) return ''; var d = document.createElement('div'
             '<strong>Could not read sheet — </strong>' + esc(msg) + '</div>';
         if (el('scanPreviewTable')) el('scanPreviewTable').innerHTML =
             '<div style="text-align:center;margin-top:12px;">' +
-            '<button class="btn btn-secondary" onclick="AttendanceScanner.back()">&#8592; Try Again</button></div>';
+            '<button class="btn btn-secondary" onclick="AttendanceScanner.back()">&#8592; Try Again</button>' +
+            '<div style="margin-top:14px;padding-top:12px;border-top:1px solid var(--slate-200);font-size:.76rem;color:var(--slate-500);">' +
+            'Or type the number printed under the QR code:<br>' +
+            '<div style="display:flex;gap:6px;justify-content:center;margin-top:6px;">' +
+            '<input id="scanManualNum" type="number" min="1" inputmode="numeric" style="width:80px;text-align:center;padding:6px;border:1px solid var(--slate-300);border-radius:6px;">' +
+            '<button class="btn btn-secondary" onclick="AttendanceScanner.manualLookup(document.getElementById(\'scanManualNum\').value)">Go</button>' +
+            '</div></div></div>';
     }
 
     const SCAN_STATE_STYLE = {
@@ -923,12 +953,12 @@ function esc(s) { if (s == null) return ''; var d = document.createElement('div'
         const dateKey = getTodayKey();
         const bunkPages = [];
         let bunkCount = 0;
-        Object.entries(struct).forEach(([, divData]) => {
+        Object.entries(struct).forEach(([divName, divData]) => {
             Object.entries(divData.grades || {}).forEach(([, gradeData]) => {
                 (gradeData.bunks || []).forEach(bunkName => {
                     bunkCount++;
                     const campers = scannerGetBunkCampers(bunkName);
-                    if (campers.length) bunkPages.push({ bunkName, campers });
+                    if (campers.length) bunkPages.push({ bunkName, divName, campers });
                 });
             });
         });
@@ -961,61 +991,60 @@ function esc(s) { if (s == null) return ''; var d = document.createElement('div'
             toast(unassigned.length + ' bunk(s) could not get an ID number (registry full) — skipped: ' + unassigned.map(p => p.bunkName).join(', '), 'error');
         }
 
-        const pages = bunkPages.filter(p => serials[p.bunkName] != null).map(({ bunkName, campers }) => {
+        const pages = bunkPages.filter(p => serials[p.bunkName] != null).map(({ bunkName, divName, campers }) => {
             const serial = serials[bunkName];
             const payload = SCAN_QR_PREFIX + serial;
             const rowDate = new Date(dateKey + 'T12:00:00')
                 .toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric' });
             const rows = campers.map((name, i) =>
-                `<div class="tmpl-row"><span class="tmpl-num">${i + 1}</span>` +
+                `<div class="tmpl-row${i % 2 ? ' odd' : ''}"><span class="tmpl-num">${i + 1}</span>` +
                 `<span class="tmpl-name">${esc(name)}</span>` +
                 `<div class="tmpl-bubble-group"><div class="tmpl-bubble"></div><div class="tmpl-bubble"></div></div></div>`
             ).join('');
-            const idBubbles = Array.from({ length: SCAN_TMPL.idBubbleCount }, (_, b) => {
-                const bit = (serial >> (SCAN_TMPL.idBubbleCount - 1 - b)) & 1;
-                const x = 628 + SCAN_TMPL.idDX0 + b * SCAN_TMPL.idDDX;
-                return `<div class="tmpl-id-bubble${bit ? ' filled' : ''}" style="left:${x}px"></div>`;
-            }).join('');
-            return `<div class="tmpl-page"><div class="tmpl-inner">` +
+            return `<div class="tmpl-page">` +
+                `<div class="tmpl-header"></div>` +
                 `<div class="tmpl-qr" data-qr="${payload}"></div>` +
-                `<div class="tmpl-head">${esc(bunkName)} <span class="tmpl-serial">#${serial}</span></div>` +
-                `<div class="tmpl-sub">${rowDate}</div>` +
-                `<hr class="tmpl-hr"><div class="tmpl-instr">Fill exactly ONE bubble per camper — never leave both blank</div>` +
-                `<div class="tmpl-id-row">${idBubbles}</div>` +
+                `<div class="tmpl-serial">BUNK <strong>#${serial}</strong></div>` +
+                `<div class="tmpl-head">${esc(bunkName)}</div>` +
+                `<div class="tmpl-sub">${esc(divName)} &middot; ${rowDate}</div>` +
+                `<div class="tmpl-instr"><span class="tmpl-instr-dot"></span>Fill exactly ONE bubble per camper — never leave both blank</div>` +
                 `<div class="tmpl-col-labels"><span class="tmpl-col-lbl-present">PRESENT</span><span class="tmpl-col-lbl-absent">ABSENT</span></div>` +
-                `<div class="tmpl-rows">${rows}</div></div></div>`;
+                `<div class="tmpl-rows">${rows}</div>` +
+                `<div class="tmpl-footer">Campistry Attendance &middot; ${esc(bunkName)} &middot; printed ${dateStr}</div>` +
+                `</div>`;
         }).join('\n');
 
         win.document.write(`<!DOCTYPE html><html><head><meta charset="UTF-8"><title>Attendance ${dateKey}</title>
 <script src="https://cdn.jsdelivr.net/npm/qrcode-generator@1.4.4/qrcode.min.js"><\/script>
 <style>
 *{box-sizing:border-box;margin:0;padding:0}
-body{font-family:Arial,Helvetica,sans-serif;background:#eee}
+body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Arial,Helvetica,sans-serif;background:#eee}
 @media print{body{background:#fff}.no-print{display:none!important}.tmpl-page{box-shadow:none!important;margin:0!important;page-break-after:always}}
 .no-print{background:#1e293b;color:#fff;padding:10px 20px;display:flex;align-items:center;gap:16px;position:sticky;top:0;z-index:10;font-family:inherit}
-.no-print button{background:#2563eb;color:#fff;border:none;padding:8px 18px;border-radius:6px;font-size:14px;cursor:pointer}
+.no-print button{background:#2563eb;color:#fff;border:none;padding:8px 18px;border-radius:6px;font-size:14px;cursor:pointer;font-weight:600}
 .tmpl-page{width:816px;height:1056px;position:relative;background:#fff;box-shadow:0 2px 10px rgba(0,0,0,.18);margin:24px auto;overflow:hidden}
-.tmpl-inner{padding:48px;height:100%}
+.tmpl-header{position:absolute;left:48px;top:48px;width:720px;height:182px;background:linear-gradient(135deg,#eff6ff,#f8fafc);border:1px solid #dbeafe;border-radius:16px}
 .tmpl-qr{position:absolute;right:48px;top:48px;width:140px;height:140px}
 .tmpl-qr svg{width:140px!important;height:140px!important;display:block}
-.tmpl-head{font-size:30px;font-weight:700;color:#111;margin-bottom:4px;padding-right:160px}
-.tmpl-serial{font-size:14px;font-weight:600;color:#999;vertical-align:middle}
-.tmpl-sub{font-size:13px;color:#555;margin-bottom:10px;padding-right:160px}
-.tmpl-hr{border:none;border-top:2px solid #ddd;margin:8px 0}
-.tmpl-instr{font-size:11px;color:#555;padding:5px 8px;background:#f5f5f5;border-radius:4px;display:inline-block;margin-bottom:2px}
-.tmpl-id-row{position:absolute;top:163px;height:22px}
-.tmpl-id-bubble{position:absolute;top:0;width:22px;height:22px;border:2px solid #222;border-radius:50%;transform:translateX(-50%)}
-.tmpl-id-bubble.filled{background:#111}
-.tmpl-col-labels{position:absolute;left:48px;right:48px;top:246px;height:18px}
-.tmpl-col-lbl-present,.tmpl-col-lbl-absent{position:absolute;top:0;font-size:8.5px;font-weight:700;color:#666;letter-spacing:.06em;transform:translateX(-50%)}
+.tmpl-serial{position:absolute;right:48px;top:194px;width:140px;text-align:center;font-size:11px;font-weight:700;letter-spacing:.05em;color:#1d4ed8}
+.tmpl-serial strong{font-size:13px}
+.tmpl-head{position:absolute;left:72px;top:78px;right:220px;font-size:34px;font-weight:800;color:#0f172a;line-height:1.1;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.tmpl-sub{position:absolute;left:72px;top:130px;right:220px;font-size:14px;color:#475569;font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.tmpl-instr{position:absolute;left:72px;top:174px;font-size:11.5px;color:#1d4ed8;background:#dbeafe;padding:7px 14px 7px 12px;border-radius:999px;font-weight:700;display:flex;align-items:center;gap:7px}
+.tmpl-instr-dot{width:9px;height:9px;border-radius:50%;background:#1d4ed8;flex-shrink:0}
+.tmpl-col-labels{position:absolute;left:48px;right:48px;top:250px;height:20px}
+.tmpl-col-lbl-present,.tmpl-col-lbl-absent{position:absolute;top:2px;font-size:9px;font-weight:800;color:#64748b;letter-spacing:.07em;transform:translateX(-50%)}
 .tmpl-col-lbl-present{left:656px}
 .tmpl-col-lbl-absent{left:704px}
-.tmpl-rows{position:absolute;left:48px;right:48px;top:268px}
-.tmpl-row{display:flex;align-items:center;height:52px;border-bottom:1px solid #ebebeb}
-.tmpl-num{font-size:11px;color:#bbb;width:22px;flex-shrink:0}
-.tmpl-name{flex:1;font-size:15px;color:#111;padding-right:8px}
+.tmpl-rows{position:absolute;left:48px;right:48px;top:268px;border-radius:12px;overflow:hidden;box-shadow:0 0 0 1px #e2e8f0}
+.tmpl-row{display:flex;align-items:center;height:52px;border-bottom:1px solid #f1f5f9;background:#fff}
+.tmpl-row.odd{background:#f8fafc}
+.tmpl-row:last-child{border-bottom:none}
+.tmpl-num{font-size:11px;color:#94a3b8;width:22px;flex-shrink:0;font-weight:600;margin-left:16px}
+.tmpl-name{flex:1;font-size:15px;color:#111;padding-right:8px;font-weight:500}
 .tmpl-bubble-group{display:flex;gap:16px;flex-shrink:0}
-.tmpl-bubble{width:32px;height:32px;border:2.5px solid #222;border-radius:50%;flex-shrink:0}
+.tmpl-bubble{width:32px;height:32px;border:2.5px solid #334155;border-radius:50%;flex-shrink:0;background:#fff}
+.tmpl-footer{position:absolute;left:48px;right:48px;bottom:28px;text-align:center;font-size:10px;color:#94a3b8;font-weight:600;letter-spacing:.02em}
 </style></head><body>
 <div class="no-print">
   <span style="font-weight:700">Campistry Attendance Templates</span>
@@ -1039,7 +1068,8 @@ document.querySelectorAll('[data-qr]').forEach(function(el){
         toggleResult: scannerToggleResult,
         back: scannerBack,
         confirm: scannerConfirm,
-        printTemplates: scannerPrintTemplates
+        printTemplates: scannerPrintTemplates,
+        manualLookup: scannerManualLookup
     };
 
     // =========================================================================
