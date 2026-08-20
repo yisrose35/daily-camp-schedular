@@ -501,7 +501,12 @@ var ParentRequests = (function(){
             if(window.CampistryLive) CampistryLive.refresh();
         }
 
-        render();
+        // Paint from the local state we just set — NOT render(), which would
+        // kick off syncFromCloud(). That SELECT is a single hop while the
+        // status update above is queued behind an extra auth.getUser() hop,
+        // so the pull can land first and overwrite this row back to Pending
+        // with stale server data before our own update has even been sent.
+        _paint();
         liveToast(r.childName+' — '+r.label+' '+status.toLowerCase());
     }
 
