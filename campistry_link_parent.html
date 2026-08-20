@@ -547,6 +547,10 @@
             <div class="pickup-type-label">Pickup Change</div>
         </button>
         
+        <button class="pickup-type-btn" data-type="bus" onclick="selPickup('bus',this)">
+            <div class="pickup-type-icon" style="background:var(--green-50,#ecfdf5);color:var(--green-600,#059669);"><svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><path d="M8 6v6"/><path d="M15 6v6"/><path d="M2 12h19.6"/><path d="M18 18h3s.5-1.7.8-2.8c.1-.4.2-.8.2-1.2 0-.4-.1-.8-.2-1.2l-1.4-5C20.1 6.8 19.1 6 18 6H4a2 2 0 0 0-2 2v10h3"/><circle cx="7" cy="18" r="2"/><circle cx="17" cy="18" r="2"/></svg></div>
+            <div class="pickup-type-label">Bus Change</div>
+        </button>
         <button class="pickup-type-btn" data-type="late" onclick="selPickup('late',this)">
             <div class="pickup-type-icon" style="background:var(--product-50);color:var(--product-600);"><svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg></div>
             <div class="pickup-type-label">Late Arrival</div>
@@ -593,6 +597,19 @@
             </div>
             <div class="lk-field"><label>Notes (optional)</label><textarea class="lk-textarea" placeholder="Any additional info..."></textarea></div>
             <button class="btn btn-primary" onclick="submitPickup(&#39;change&#39;)">Send to Camp Office</button>
+        </div>
+    </div>
+
+    <!-- BUS CHANGE FORM -->
+    <div class="pickup-form" id="pickup-bus">
+        <div class="lk-card">
+            <div class="lk-card-head"><h2>Bus Change</h2></div>
+            <div class="lk-tabs" id="pickupBusTabs"></div>
+            <div class="lk-field"><label>What's changing?</label>
+                <select class="lk-select" id="busChangeKind"><option value="Not riding the bus today">Not riding the bus today</option><option value="Different stop today">Different stop today</option><option value="Different bus/route">Different bus/route</option><option value="Other">Other</option></select>
+            </div>
+            <div class="lk-field"><label>Notes (optional)</label><textarea class="lk-textarea" placeholder="Any additional info for the office..."></textarea></div>
+            <button class="btn btn-primary" onclick="submitPickup('bus')">Send to Camp Office</button>
         </div>
     </div>
 
@@ -2529,7 +2546,7 @@ function sendCamperMail(){
 var PARENT_REQ_KEY = 'campistry_parent_requests_v1';
 var LINK_STORE_KEY = 'campistry_link_v1';
 var pickupRequests = [];
-var _PICKUP_ICONS = {early:'<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="1" y="3" width="15" height="13" rx="1"/><path d="M16 8h4l3 5v3h-7V8z"/><circle cx="5.5" cy="18.5" r="2.5"/><circle cx="18.5" cy="18.5" r="2.5"/></svg>',change:'<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="17 1 21 5 17 9"/><path d="M3 11V9a4 4 0 0 1 4-4h14"/><polyline points="7 23 3 19 7 15"/><path d="M21 13v2a4 4 0 0 1-4 4H3"/></svg>',friend:'<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/></svg>',late:'<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>'};
+var _PICKUP_ICONS = {early:'<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="1" y="3" width="15" height="13" rx="1"/><path d="M16 8h4l3 5v3h-7V8z"/><circle cx="5.5" cy="18.5" r="2.5"/><circle cx="18.5" cy="18.5" r="2.5"/></svg>',change:'<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="17 1 21 5 17 9"/><path d="M3 11V9a4 4 0 0 1 4-4h14"/><polyline points="7 23 3 19 7 15"/><path d="M21 13v2a4 4 0 0 1-4 4H3"/></svg>',friend:'<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/></svg>',bus:'<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M8 6v6"/><path d="M15 6v6"/><path d="M2 12h19.6"/><path d="M18 18h3s.5-1.7.8-2.8c.1-.4.2-.8.2-1.2 0-.4-.1-.8-.2-1.2l-1.4-5C20.1 6.8 19.1 6 18 6H4a2 2 0 0 0-2 2v10h3"/><circle cx="7" cy="18" r="2"/><circle cx="17" cy="18" r="2"/></svg>',late:'<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>'};
 
 // Rebuild today's request history from the shared store, so it survives reload
 function hydratePickupRequests(){
@@ -2816,12 +2833,12 @@ function selPickup(type, btn) {
     document.getElementById('pickup-'+type).classList.add('active');
 }
 function submitPickup(type) {
-    var labels = {early:'Early Pickup',change:'Pickup Change',friend:'Going With Friend',late:'Late Arrival'};
+    var labels = {early:'Early Pickup',change:'Pickup Change',friend:'Going With Friend',bus:'Bus Change',late:'Late Arrival'};
     // A friend pickup still reports under its own name, so the office sees at a
     // glance what it is even though the parent entered it as a pickup change.
     if (type === 'change' && (document.getElementById('changeKind')||{}).value === 'friend') labels.change = 'Going With Friend';
     var icons = _PICKUP_ICONS;
-    var tabsIds = {early:'pickupChildTabs',change:'pickupChangeTabs',late:'pickupLateTabs'};
+    var tabsIds = {early:'pickupChildTabs',change:'pickupChangeTabs',bus:'pickupBusTabs',late:'pickupLateTabs'};
     var now = new Date();
     var reqId = now.getTime().toString(36)+Math.random().toString(36).slice(2,5);
     var timeStr = now.getHours()+':'+(now.getMinutes()<10?'0':'')+now.getMinutes();
@@ -2853,6 +2870,9 @@ function submitPickup(type) {
             fields.relationship = (form.querySelectorAll('#changeFieldsPerson select')[0]||{}).value||'';
             fields.phone = (form.querySelector('#changeFieldsPerson input[type=tel]')||{}).value||'';
         }
+    } else if (type==='bus') {
+        fields.busChange = (document.getElementById('busChangeKind')||{}).value||'';
+        fields.notes = (form.querySelector('textarea')||{}).value||'';
     } else if (type==='late') {
         // The parent is reporting an arrival that has ALREADY happened, so the
         // time is now — not something they type and the office then chases.
@@ -2981,7 +3001,7 @@ nav = function(p) {
 
 // Init pickup child tabs
 function initPickupTabs() {
-    ['pickupChildTabs','pickupChangeTabs','pickupLateTabs'].forEach(function(id){
+    ['pickupChildTabs','pickupChangeTabs','pickupBusTabs','pickupLateTabs'].forEach(function(id){
         var el = document.getElementById(id); if(!el) return;
         el.innerHTML = '';
         children.forEach(function(c,i){

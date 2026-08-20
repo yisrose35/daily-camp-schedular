@@ -33,49 +33,20 @@
 <!-- ═══ SIDEBAR ═══ -->
 <div id="sidebarBackdrop" class="sidebar-backdrop"></div>
 <aside id="sidebar" class="sidebar">
-    <button class="sidebar-item" data-page="activity-board"><span class="sidebar-dot"></span> Activity Board</button>
-    <button class="sidebar-item" data-page="bunk-tracker"><span class="sidebar-dot"></span> Bunk Tracker</button>
     <button class="sidebar-item" data-page="camper-locator"><span class="sidebar-dot"></span> Camper Locator</button>
     <div class="sidebar-label">Attendance</div>
     <button class="sidebar-item active" data-page="roll-call"><span class="sidebar-dot"></span> Roll Call <span class="sb-badge" id="sbAbsentCount">0</span></button>
-    <button class="sidebar-item" data-page="absences"><span class="sidebar-dot"></span> Absences &amp; Exceptions</button>
     <button class="sidebar-item" data-page="early-pickup"><span class="sidebar-dot"></span> Early Pickups</button>
     <div class="sidebar-label">Reports</div>
     <button class="sidebar-item" data-page="reports"><span class="sidebar-dot"></span> Attendance Reports</button>
     <div class="sidebar-label">Parent</div>
-    <button class="sidebar-item" data-page="parent-requests"><span class="sidebar-dot"></span> Parent Requests <span class="sb-badge warn" id="sbParentReqCount" style="display:none;">0</span></button>
+    <button class="sidebar-item" data-page="messages"><span class="sidebar-dot"></span> Messages <span class="sb-badge warn" id="sbMessagesCount" style="display:none;">0</span></button>
+    <button class="sidebar-item" data-page="changes"><span class="sidebar-dot"></span> Changes <span class="sb-badge warn" id="sbChangesCount" style="display:none;">0</span></button>
     <button class="sidebar-item" data-page="camper-mail"><span class="sidebar-dot"></span> Camper Mail <span class="sb-badge warn" id="sbMailCount" style="display:none;">0</span></button>
 </aside>
 
 <!-- ═══ MAIN CONTENT ═══ -->
 <div class="app-content">
-
-<!-- ── ACTIVITY BOARD ── -->
-<div id="page-activity-board" class="live-page">
-    <div class="page-hero">
-        <div class="page-hero-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="22" height="22"><path d="M8 6h13"/><path d="M8 12h13"/><path d="M8 18h13"/><path d="M3 6h.01"/><path d="M3 12h.01"/><path d="M3 18h.01"/></svg></div>
-        <div><h1>Activity Board</h1><p>Every activity happening right now — who's where</p></div>
-    </div>
-    <div class="page-header">
-        <div><div class="page-title">Activity Board</div><div class="page-subtitle">Every activity happening right now — who's where</div></div>
-    </div>
-    <div id="activityBoardBody"><div class="empty-state">Loading...</div></div>
-</div>
-
-<!-- ── BUNK TRACKER ── -->
-<div id="page-bunk-tracker" class="live-page">
-    <div class="page-hero">
-        <div class="page-hero-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="22" height="22"><path d="M3 9l9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/><polyline points="9 22 9 12 15 12 15 22"/></svg></div>
-        <div><h1>Bunk Tracker</h1><p>Track every bunk through the day</p></div>
-    </div>
-    <div class="page-header">
-        <div><div class="page-title">Bunk Tracker</div><div class="page-subtitle">Track every bunk through the day</div></div>
-        <div class="page-actions">
-            <div class="search-bar" style="width:280px"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg><input type="text" id="bunkSearch" placeholder="Search bunk or camper..." oninput="CampistryLive.filterBunks(this.value)"></div>
-        </div>
-    </div>
-    <div id="bunkTrackerBody"><div class="empty-state">Loading...</div></div>
-</div>
 
 <!-- ── CAMPER LOCATOR ── -->
 <div id="page-camper-locator" class="live-page">
@@ -103,6 +74,11 @@
     </div>
 
     <div class="page-header">
+        <div><div class="page-title">Right Now</div><div class="page-subtitle">Every activity happening this period — who's where</div></div>
+    </div>
+    <div id="locRightNowBody"><div class="empty-state">Loading…</div></div>
+
+    <div class="page-header">
         <div><div class="page-title">Today's Schedule</div><div class="page-subtitle">Read-only — filter by division, grade, or bunk</div></div>
         <div class="page-actions">
             <select class="btn btn-secondary btn-sm" id="locFilterDiv" style="min-width:140px;"><option value="">All divisions</option></select>
@@ -124,25 +100,11 @@
         <div class="page-actions">
             <button class="btn btn-secondary" onclick="AttendanceScanner.printTemplates()"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="6 9 6 2 18 2 18 9"/><path d="M6 18H4a2 2 0 0 1-2-2v-5a2 2 0 0 1 2-2h16a2 2 0 0 1 2 2v5a2 2 0 0 1-2 2h-2"/><rect x="6" y="14" width="12" height="8"/></svg> Print Templates</button>
             <button class="btn btn-secondary" onclick="AttendanceScanner.open()"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M23 19a2 2 0 0 1-2 2H3a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h4l2-3h6l2 3h4a2 2 0 0 1 2 2z"/><circle cx="12" cy="13" r="4"/></svg> Scan Sheet</button>
+            <button class="btn btn-secondary" onclick="CampistryLive.openAbsenceModal()">+ Mark Absent</button>
             <button class="btn btn-secondary" onclick="CampistryLive.markAllPresent()">Mark All Present</button>
         </div>
     </div>
     <div id="rollCallBody"><div class="empty-state">Loading roster...</div></div>
-</div>
-
-<!-- ── ABSENCES & EXCEPTIONS ── -->
-<div id="page-absences" class="live-page">
-    <div class="page-hero">
-        <div class="page-hero-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="22" height="22"><circle cx="12" cy="12" r="10"/><line x1="15" y1="9" x2="9" y2="15"/><line x1="9" y1="9" x2="15" y2="15"/></svg></div>
-        <div><h1>Absences &amp; Exceptions</h1><p>Today's absent campers, late arrivals, early departures</p></div>
-    </div>
-    <div class="page-header">
-        <div><div class="page-title">Absences &amp; Exceptions</div><div class="page-subtitle">Today's absent campers, late arrivals, early departures</div></div>
-        <div class="page-actions">
-            <button class="btn btn-primary" onclick="CampistryLive.openAbsenceModal()">+ Add Exception</button>
-        </div>
-    </div>
-    <div id="absencesBody"><div class="empty-state">No absences recorded today</div></div>
 </div>
 
 <!-- ── EARLY PICKUPS ── -->
@@ -175,19 +137,34 @@
     <div id="reportsBody"><div class="empty-state">Generate a report to view attendance data</div></div>
 </div>
 
-<!-- ── PARENT REQUESTS ── -->
-<div id="page-parent-requests" class="live-page">
+<!-- ── MESSAGES (late arrivals) ── -->
+<div id="page-messages" class="live-page">
     <div class="page-hero">
-        <div class="page-hero-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="22" height="22"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg></div>
-        <div><h1>Parent Requests</h1><p>Late arrivals &amp; dismissal changes submitted by parents via Campistry Link</p></div>
+        <div class="page-hero-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="22" height="22"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg></div>
+        <div><h1>Messages</h1><p>Late arrivals reported by parents via Campistry Link</p></div>
     </div>
     <div class="page-header">
-        <div><div class="page-title">Parent Requests</div><div class="page-subtitle">Late arrivals &amp; dismissal changes submitted by parents via Campistry Link</div></div>
+        <div><div class="page-title">Messages</div><div class="page-subtitle">Late arrivals reported by parents via Campistry Link</div></div>
         <div class="page-actions">
-            <button class="btn btn-secondary" onclick="ParentRequests.refresh()"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M1 4v6h6"/><path d="M23 20v-6h-6"/><path d="M20.49 9A9 9 0 005.64 5.64L1 10m22 4l-4.64 4.36A9 9 0 013.51 15"/></svg> Refresh</button>
+            <button class="btn btn-secondary" onclick="ParentRequests.renderMessages()"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M1 4v6h6"/><path d="M23 20v-6h-6"/><path d="M20.49 9A9 9 0 005.64 5.64L1 10m22 4l-4.64 4.36A9 9 0 013.51 15"/></svg> Refresh</button>
         </div>
     </div>
-    <div id="parentRequestsBody"><div class="empty-state">No parent requests yet — they'll appear here when parents submit from Campistry Link</div></div>
+    <div id="messagesBody"><div class="empty-state">No late-arrival messages — they'll appear here when a parent reports a late drop-off from Campistry Link</div></div>
+</div>
+
+<!-- ── CHANGES (early pickup / pickup change / bus change) ── -->
+<div id="page-changes" class="live-page">
+    <div class="page-hero">
+        <div class="page-hero-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="22" height="22"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg></div>
+        <div><h1>Changes</h1><p>Early pickups, pickup changes, and bus changes submitted by parents via Campistry Link</p></div>
+    </div>
+    <div class="page-header">
+        <div><div class="page-title">Changes</div><div class="page-subtitle">Early pickups, pickup changes, and bus changes submitted by parents via Campistry Link</div></div>
+        <div class="page-actions">
+            <button class="btn btn-secondary" onclick="ParentRequests.renderChanges()"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M1 4v6h6"/><path d="M23 20v-6h-6"/><path d="M20.49 9A9 9 0 005.64 5.64L1 10m22 4l-4.64 4.36A9 9 0 013.51 15"/></svg> Refresh</button>
+        </div>
+    </div>
+    <div id="changesBody"><div class="empty-state">Loading…</div></div>
 </div>
 
 <div id="page-camper-mail" class="live-page">
@@ -316,7 +293,8 @@
             document.querySelectorAll('.cs-bnav-item').forEach(function(x){x.classList.remove('active')});
             var bn=document.querySelector('.cs-bnav-item[data-page="'+p+'"]');if(bn)bn.classList.add('active');
             close();
-            if(p==='parent-requests'&&window.ParentRequests) ParentRequests.render();
+            if(p==='messages'&&window.ParentRequests) ParentRequests.renderMessages();
+            if(p==='changes'&&window.ParentRequests) ParentRequests.renderChanges();
             if(p==='camper-mail'&&window.CamperMail) CamperMail.render();
             if(p==='camper-locator'&&window.CampistryLiveLocator) CampistryLiveLocator.refresh();
         });
@@ -332,6 +310,11 @@ var ParentRequests = (function(){
     var LIVE_KEY = 'campistry_live_v1';
     var CONFIRM_CANNED = ['Approved — see you then!', 'Confirmed, thanks for letting us know.'];
     var DECLINE_CANNED = ["Sorry, we can't accommodate this today — please call the office.", 'Please have them show ID at pickup.'];
+    var GROUPS = [
+        { key:'early', title:'Early Pickup', types:['early'] },
+        { key:'change', title:'Pickup Change', types:['change','friend'] },
+        { key:'bus', title:'Bus Change', types:['bus'] }
+    ];
     var _compose = null; // {index, action:'Confirmed'|'Declined'}
 
     function esc(s){if(s==null)return'';var m={'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#x27;'};return String(s).replace(/[&<>"']/g,function(c){return m[c]});}
@@ -342,7 +325,7 @@ var ParentRequests = (function(){
     function syncFromCloud(cb){
         var db=_db(); if(!db){ if(cb)cb(); return; }
         db.client.from('parent_pickup_requests')
-            .select('id,type,label,camper_name,camper_bunk,parent_name,parent_email,details,status,office_message,created_at')
+            .select('id,type,label,camper_name,camper_bunk,parent_name,parent_email,details,status,office_message,staff_notes,created_at')
             .eq('camp_id',db.campId).order('created_at',{ascending:false}).limit(200)
             .then(function(res){
                 if(res.error){ console.warn('[Live] parent requests load:',res.error.message); if(cb)cb(); return; }
@@ -351,7 +334,7 @@ var ParentRequests = (function(){
                         id:m.id, type:m.type, label:m.label, childName:m.camper_name, childBunk:m.camper_bunk||'',
                         parentName:m.parent_name||'', parentEmail:m.parent_email||'',
                         submittedAt:new Date(m.created_at).getTime(),
-                        status:m.status||'Pending', officeMessage:m.office_message||''
+                        status:m.status||'Pending', officeMessage:m.office_message||'', staffNote:m.staff_notes||''
                     });
                 });
                 saveReqs(mapped);
@@ -380,84 +363,147 @@ var ParentRequests = (function(){
     }
 
     function updateBadge(){
-        var count=getReqs().filter(function(r){return r.status==='Pending';}).length;
-        var badge=document.getElementById('sbParentReqCount');
-        if(badge){badge.textContent=String(count);badge.style.display=count?'':'none';}
-    }
-
-    function render(){
-        // Pull the latest from the cloud, then paint. Paint immediately too so
-        // the page isn't blank while the fetch is in flight.
-        syncFromCloud(_paint);
-        _paint();
-    }
-    function _paint(){
         var reqs=getReqs();
-        var body=document.getElementById('parentRequestsBody');if(!body)return;
+        var msgCount=reqs.filter(function(r){return r.type==='late'&&r.status==='Pending';}).length;
+        var chgCount=reqs.filter(function(r){return r.type!=='late'&&r.status==='Pending';}).length;
+        var mb=document.getElementById('sbMessagesCount');
+        if(mb){mb.textContent=String(msgCount);mb.style.display=msgCount?'':'none';}
+        var cb=document.getElementById('sbChangesCount');
+        if(cb){cb.textContent=String(chgCount);cb.style.display=chgCount?'':'none';}
+    }
+
+    // ── MESSAGES — late arrivals only. One-click "Mark read" flips the
+    // camper to present on Roll Call; no reply-composer, this isn't a
+    // decision the parent needs an answer to. ──────────────────────────
+    function renderMessages(){
+        syncFromCloud(_paintMessages);
+        _paintMessages();
+    }
+    function _paintMessages(){
+        var reqs=getReqs();
+        var body=document.getElementById('messagesBody');if(!body)return;
         updateBadge();
-        if(!reqs.length){body.innerHTML='<div class="empty-state">No parent requests yet — they\'ll appear here when parents submit from Campistry Link</div>';return;}
+        var late=reqs.map(function(r,i){return{r:r,i:i};}).filter(function(x){return x.r.type==='late';});
+        if(!late.length){body.innerHTML='<div class="empty-state">No late-arrival messages — they\'ll appear here when a parent reports a late drop-off from Campistry Link</div>';return;}
 
-        var typeClr={early:'var(--amber-600)',change:'var(--blue-500)',friend:'var(--purple-500)',late:'var(--red-500)'};
         var html='<div class="card"><div class="card-body" style="padding:0 18px;">';
-        reqs.forEach(function(r,i){
-            var statusCls=r.status==='Pending'?'badge-warn':r.status==='Confirmed'?'badge-info':r.status==='Declined'?'badge-error':'badge-ok';
+        late.forEach(function(x){
+            var r=x.r,i=x.i;
+            var statusCls=r.status==='Pending'?'badge-warn':'badge-ok';
             var details=[];
-            if(r.type==='early'){if(r.pickupTime)details.push('Pickup: '+r.pickupTime);if(r.pickupBy)details.push('By: '+r.pickupBy);}
-            else if(r.type==='change'){if(r.newPickupPerson)details.push('New person: '+r.newPickupPerson);if(r.phone)details.push(r.phone);}
-            else if(r.type==='friend'){if(r.friendName)details.push('Friend: '+r.friendName);if(r.friendParentName)details.push('Parent: '+r.friendParentName);}
-            else if(r.type==='late'){if(r.arrivedAt)details.push('Arrived: '+r.arrivedAt);if(r.reason)details.push(r.reason);}
+            if(r.arrivedAt)details.push('Arrived: '+r.arrivedAt);
+            if(r.reason)details.push(r.reason);
             if(r.notes)details.push('“'+r.notes+'”');
-            var initials=esc(r.childName||'').split(' ').map(function(n){return n[0]||'';}).join('').slice(0,2);
-
-            var actions='';
-            if(_compose&&_compose.index===i){
-                var canned=_compose.action==='Confirmed'?CONFIRM_CANNED:DECLINE_CANNED;
-                actions='<div style="margin-top:8px;padding:10px;background:var(--slate-50);border-radius:8px;">'+
-                    '<div style="display:flex;flex-wrap:wrap;gap:5px;margin-bottom:6px;">'+
-                    canned.map(function(c){return '<button class="btn btn-secondary btn-sm" style="font-size:.72rem;" onclick="ParentRequests.useCanned('+i+',\''+esc(c).replace(/'/g,"\\'")+'\')">'+esc(c)+'</button>';}).join('')+
-                    '</div>'+
-                    '<textarea id="rqComposeMsg" class="form-input" rows="2" placeholder="Message to parent (optional)"></textarea>'+
-                    '<div style="display:flex;gap:6px;margin-top:6px;">'+
-                    '<button class="btn btn-primary btn-sm" onclick="ParentRequests.sendCompose()">Send '+esc(_compose.action)+'</button>'+
-                    '<button class="btn btn-secondary btn-sm" onclick="ParentRequests.cancelCompose()">Cancel</button>'+
-                    '</div></div>';
-            } else if(r.status==='Pending'){
-                actions='<div style="display:flex;gap:6px;margin-top:6px;">'+
-                    '<button class="btn btn-primary btn-sm" onclick="ParentRequests.startCompose('+i+',\'Confirmed\')">Confirm</button>'+
-                    '<button class="btn btn-secondary btn-sm" onclick="ParentRequests.startCompose('+i+',\'Declined\')">Decline</button>'+
-                    '</div>';
-            }
             html+=
                 '<div style="display:flex;align-items:flex-start;gap:12px;padding:14px 0;border-bottom:1px solid var(--slate-100);">'+
-                '<div style="width:36px;height:36px;border-radius:50%;background:var(--slate-100);display:flex;align-items:center;justify-content:center;flex-shrink:0;font-size:.72rem;font-weight:700;color:var(--slate-600);">'+initials+'</div>'+
+                '<div style="width:36px;height:36px;border-radius:50%;background:var(--red-50,#fef2f2);color:var(--red-500);display:flex;align-items:center;justify-content:center;flex-shrink:0;"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg></div>'+
                 '<div style="flex:1;min-width:0;">'+
-                    '<div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;">'+
-                        '<span style="font-weight:700;">'+esc(r.childName)+'</span>'+
-                        (r.childBunk?'<span style="font-size:.7rem;color:var(--slate-400);background:var(--slate-100);padding:1px 8px;border-radius:999px;">'+esc(r.childBunk)+'</span>':'')+
-                        '<span style="font-size:.7rem;font-weight:600;padding:2px 8px;border-radius:999px;background:var(--slate-50);color:'+typeClr[r.type||'early']+';">'+esc(r.label)+'</span>'+
-                    '</div>'+
+                    '<div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;"><span style="font-weight:700;">'+esc(r.childName)+'</span>'+(r.childBunk?'<span style="font-size:.7rem;color:var(--slate-400);background:var(--slate-100);padding:1px 8px;border-radius:999px;">'+esc(r.childBunk)+'</span>':'')+'</div>'+
                     '<div style="font-size:.76rem;color:var(--slate-500);margin-top:2px;">From: '+esc(r.parentName)+'&nbsp;&middot;&nbsp;'+fmtTime(r.submittedAt)+'</div>'+
-                    (details.length?'<div style="font-size:.79rem;color:var(--slate-600);margin-top:4px;line-height:1.5;">'+details.map(esc).join('&nbsp;&nbsp;&middot;&nbsp;&nbsp;')+'</div>':'')+
-                    (r.officeMessage?'<div style="font-size:.76rem;color:var(--slate-600);margin-top:4px;font-style:italic;">Office: “'+esc(r.officeMessage)+'”</div>':'')+
-                    actions+
+                    (details.length?'<div style="font-size:.79rem;color:var(--slate-600);margin-top:4px;">'+details.map(esc).join('&nbsp;&nbsp;&middot;&nbsp;&nbsp;')+'</div>':'')+
+                    (r.status==='Pending'?'<button class="btn btn-primary btn-sm" style="margin-top:8px;" onclick="ParentRequests.markLateRead('+i+')">Mark read — camper came late</button>':'')+
                 '</div>'+
-                '<span class="badge '+statusCls+'" style="flex-shrink:0;">'+esc(r.status)+'</span>'+
+                '<span class="badge '+statusCls+'" style="flex-shrink:0;">'+(r.status==='Pending'?'New':'Read')+'</span>'+
                 '</div>';
         });
         html+='</div></div>';
         body.innerHTML=html;
     }
+    function markLateRead(i){ _apply(i,'Confirmed','',_paintMessages); }
 
-    function startCompose(i,action){ _compose={index:i,action:action}; _paint(); var ta=document.getElementById('rqComposeMsg'); if(ta)ta.focus(); }
-    function cancelCompose(){ _compose=null; _paint(); }
-    function useCanned(i,msg){ var ta=document.getElementById('rqComposeMsg'); if(ta)ta.value=msg; }
+    // ── CHANGES — Early Pickup / Pickup Change / Bus Change, all 3 groups
+    // visible at once, each with Confirm/Decline+reply and a staff-only
+    // notes field. ───────────────────────────────────────────────────
+    function renderChanges(){
+        syncFromCloud(_paintChanges);
+        _paintChanges();
+    }
+    function _paintChanges(){
+        var reqs=getReqs();
+        var body=document.getElementById('changesBody');if(!body)return;
+        updateBadge();
+
+        var html='<div class="changes-grid">';
+        GROUPS.forEach(function(g){
+            var items=reqs.map(function(r,i){return{r:r,i:i};}).filter(function(x){return g.types.indexOf(x.r.type)>=0;});
+            html+='<div class="card"><div class="card-header"><h2 style="font-size:.92rem;">'+esc(g.title)+'</h2><span class="badge badge-warn" style="'+(items.filter(function(x){return x.r.status==='Pending';}).length?'':'display:none;')+'">'+items.filter(function(x){return x.r.status==='Pending';}).length+' pending</span></div><div class="card-body" style="padding:0 16px;">';
+            if(!items.length){
+                html+='<div class="empty-state" style="padding:20px 0;">Nothing here yet</div>';
+            } else {
+                items.forEach(function(x){ html+=_changeItemHtml(x.r,x.i); });
+            }
+            html+='</div></div>';
+        });
+        html+='</div>';
+        body.innerHTML=html;
+    }
+    function _changeItemHtml(r,i){
+        var statusCls=r.status==='Pending'?'badge-warn':r.status==='Confirmed'?'badge-info':r.status==='Declined'?'badge-error':'badge-ok';
+        var details=[];
+        if(r.type==='early'){if(r.pickupTime)details.push('Pickup: '+r.pickupTime);if(r.pickupBy)details.push('By: '+r.pickupBy);}
+        else if(r.type==='change'){if(r.newPickupPerson)details.push('New person: '+r.newPickupPerson);if(r.phone)details.push(r.phone);}
+        else if(r.type==='friend'){if(r.friendName)details.push('Friend: '+r.friendName);if(r.friendParentName)details.push('Parent: '+r.friendParentName);}
+        else if(r.type==='bus'){if(r.busChange)details.push(r.busChange);}
+        if(r.notes)details.push('“'+r.notes+'”');
+
+        var actions='';
+        if(_compose&&_compose.index===i){
+            var canned=_compose.action==='Confirmed'?CONFIRM_CANNED:DECLINE_CANNED;
+            actions='<div style="margin-top:8px;padding:10px;background:var(--slate-50);border-radius:8px;">'+
+                '<div style="display:flex;flex-wrap:wrap;gap:5px;margin-bottom:6px;">'+
+                canned.map(function(c){return '<button class="btn btn-secondary btn-sm" style="font-size:.72rem;" onclick="ParentRequests.useCanned(\''+esc(c).replace(/'/g,"\\'")+'\')">'+esc(c)+'</button>';}).join('')+
+                '</div>'+
+                '<textarea id="rqComposeMsg" class="form-input" rows="2" placeholder="Message to parent (optional)"></textarea>'+
+                '<div style="display:flex;gap:6px;margin-top:6px;">'+
+                '<button class="btn btn-primary btn-sm" onclick="ParentRequests.sendCompose()">Send '+esc(_compose.action)+'</button>'+
+                '<button class="btn btn-secondary btn-sm" onclick="ParentRequests.cancelCompose()">Cancel</button>'+
+                '</div></div>';
+        } else if(r.status==='Pending'){
+            actions='<div style="display:flex;gap:6px;margin-top:6px;">'+
+                '<button class="btn btn-primary btn-sm" onclick="ParentRequests.startCompose('+i+',\'Confirmed\')">Confirm</button>'+
+                '<button class="btn btn-secondary btn-sm" onclick="ParentRequests.startCompose('+i+',\'Declined\')">Decline</button>'+
+                '</div>';
+        }
+        var initials=esc(r.childName||'').split(' ').map(function(n){return n[0]||'';}).join('').slice(0,2);
+        return '<div style="display:flex;align-items:flex-start;gap:12px;padding:14px 0;border-bottom:1px solid var(--slate-100);">'+
+            '<div style="width:36px;height:36px;border-radius:50%;background:var(--slate-100);display:flex;align-items:center;justify-content:center;flex-shrink:0;font-size:.72rem;font-weight:700;color:var(--slate-600);">'+initials+'</div>'+
+            '<div style="flex:1;min-width:0;">'+
+                '<div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;">'+
+                    '<span style="font-weight:700;">'+esc(r.childName)+'</span>'+
+                    (r.childBunk?'<span style="font-size:.7rem;color:var(--slate-400);background:var(--slate-100);padding:1px 8px;border-radius:999px;">'+esc(r.childBunk)+'</span>':'')+
+                '</div>'+
+                '<div style="font-size:.76rem;color:var(--slate-500);margin-top:2px;">From: '+esc(r.parentName)+'&nbsp;&middot;&nbsp;'+fmtTime(r.submittedAt)+'</div>'+
+                (details.length?'<div style="font-size:.79rem;color:var(--slate-600);margin-top:4px;line-height:1.5;">'+details.map(esc).join('&nbsp;&nbsp;&middot;&nbsp;&nbsp;')+'</div>':'')+
+                (r.officeMessage?'<div style="font-size:.76rem;color:var(--slate-600);margin-top:4px;font-style:italic;">Office: “'+esc(r.officeMessage)+'”</div>':'')+
+                '<textarea class="form-input" rows="1" placeholder="Staff note (not shared with parent)" style="margin-top:6px;font-size:.76rem;" onblur="ParentRequests.saveNote('+i+',this.value)">'+esc(r.staffNote||'')+'</textarea>'+
+                actions+
+            '</div>'+
+            '<span class="badge '+statusCls+'" style="flex-shrink:0;">'+esc(r.status)+'</span>'+
+            '</div>';
+    }
+
+    function startCompose(i,action){ _compose={index:i,action:action}; _paintChanges(); var ta=document.getElementById('rqComposeMsg'); if(ta)ta.focus(); }
+    function cancelCompose(){ _compose=null; _paintChanges(); }
+    function useCanned(msg){ var ta=document.getElementById('rqComposeMsg'); if(ta)ta.value=msg; }
 
     function sendCompose(){
         if(!_compose)return;
         var ta=document.getElementById('rqComposeMsg');
         var message=ta?ta.value.trim():'';
-        _apply(_compose.index,_compose.action,message);
+        _apply(_compose.index,_compose.action,message,_paintChanges);
         _compose=null;
+    }
+
+    function saveNote(i,text){
+        var reqs=getReqs(),r=reqs[i];
+        if(!r)return;
+        r.staffNote=text||'';
+        saveReqs(reqs);
+        var db=_db();
+        if(db){
+            db.client.from('parent_pickup_requests').update({staff_notes:text||null}).eq('id',r.id)
+                .then(function(res){ if(res.error)console.warn('[Live] pickup note save:',res.error.message); });
+        }
     }
 
     function _reviewerId(db,cb){
@@ -465,7 +511,7 @@ var ParentRequests = (function(){
         db.client.auth.getUser().then(function(res){cb((res&&res.data&&res.data.user&&res.data.user.id)||null);},function(){cb(null);});
     }
 
-    function _apply(i,status,message){
+    function _apply(i,status,message,repaint){
         var reqs=getReqs(),r=reqs[i];
         if(!r||r.status!=='Pending')return;
         r.status=status; r.officeMessage=message||'';
@@ -492,7 +538,7 @@ var ParentRequests = (function(){
                 delete today.attendance[r.childName];
                 var noteText='Confirmed late arrival'+(r.arrivedAt?' — '+r.arrivedAt:'')+(r.notes?' ('+r.notes+')':'');
                 today.notes=(today.notes?today.notes+'\n':'')+r.childName+': '+noteText;
-            } else {
+            } else if(r.type!=='bus'){
                 if(!today.earlyPickups.some(function(p){return p.name===r.childName;})){
                     today.earlyPickups.push({name:r.childName,pickupTime:r.pickupTime||timeStr,pickedUpBy:r.pickupBy||r.newPickupPerson||r.friendParentName||r.parentName||'',reason:r.label+(r.notes?' — '+r.notes:''),timestamp:Date.now(),fromParent:true});
                 }
@@ -501,21 +547,24 @@ var ParentRequests = (function(){
             if(window.CampistryLive) CampistryLive.refresh();
         }
 
-        // Paint from the local state we just set — NOT render(), which would
-        // kick off syncFromCloud(). That SELECT is a single hop while the
-        // status update above is queued behind an extra auth.getUser() hop,
-        // so the pull can land first and overwrite this row back to Pending
-        // with stale server data before our own update has even been sent.
-        _paint();
+        // Paint from the local state we just set — NOT a fresh syncFromCloud().
+        // That SELECT is a single hop while the status update above is queued
+        // behind an extra auth.getUser() hop, so the pull can land first and
+        // overwrite this row back to Pending with stale server data before
+        // our own update has even been sent.
+        (repaint||_paintChanges)();
         liveToast(r.childName+' — '+r.label+' '+status.toLowerCase());
     }
 
-    function refresh(){render();}
+    function refresh(){ _paintMessages(); _paintChanges(); }
 
     // Update badge on load
+    syncFromCloud(updateBadge);
     updateBadge();
 
-    return {render:render,startCompose:startCompose,cancelCompose:cancelCompose,useCanned:useCanned,sendCompose:sendCompose,refresh:refresh,updateBadge:updateBadge};
+    return {renderMessages:renderMessages,renderChanges:renderChanges,markLateRead:markLateRead,
+        startCompose:startCompose,cancelCompose:cancelCompose,useCanned:useCanned,sendCompose:sendCompose,
+        saveNote:saveNote,refresh:refresh,updateBadge:updateBadge};
 })();
 </script>
 <script>
@@ -630,17 +679,17 @@ var CamperMail = (function(){
     <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="9 11 12 14 22 4"/><path d="M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11"/></svg>
     Roll Call
   </button>
-  <button class="cs-bnav-item" data-page="absences" onclick="document.querySelector('.sidebar-item[data-page=absences]').click()">
-    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><line x1="15" y1="9" x2="9" y2="15"/><line x1="9" y1="9" x2="15" y2="15"/></svg>
-    Absences
+  <button class="cs-bnav-item" data-page="camper-locator" onclick="document.querySelector('.sidebar-item[data-page=camper-locator]').click()">
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
+    Locator
   </button>
   <button class="cs-bnav-item" data-page="early-pickup" onclick="document.querySelector('.sidebar-item[data-page=early-pickup]').click()">
     <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M5 17H3a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11a2 2 0 0 1 2 2v3"/><rect x="9" y="11" width="14" height="10" rx="2"/><circle cx="12" cy="16" r="1"/></svg>
     Pickups
   </button>
-  <button class="cs-bnav-item" data-page="parent-requests" onclick="document.querySelector('.sidebar-item[data-page=parent-requests]').click()">
+  <button class="cs-bnav-item" data-page="changes" onclick="document.querySelector('.sidebar-item[data-page=changes]').click()">
     <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>
-    Requests
+    Changes
   </button>
 </div>
 <script>window.__CAMPISTRY_PRODUCT__='live';</script>

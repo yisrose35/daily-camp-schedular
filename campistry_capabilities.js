@@ -140,11 +140,10 @@
             sections: [
                 { key: 'roll-call',        label: 'Roll Call',        desc: 'Taking attendance' },
                 { key: 'absences',         label: 'Absences',         desc: 'Absence log' },
-                { key: 'bunk-tracker',     label: 'Bunk Tracker',     desc: 'Where each bunk is now' },
-                { key: 'activity-board',   label: 'Activity Board',   desc: 'Live activity display' },
-                { key: 'camper-locator',   label: 'Camper Locator',   desc: 'Find a camper + read-only day schedule', viewOnly: true },
+                { key: 'camper-locator',   label: 'Camper Locator',   desc: 'Find a camper, what\'s happening now, and the read-only day schedule', viewOnly: true },
                 { key: 'early-pickup',     label: 'Early Pickup',     desc: 'Early pickup requests' },
-                { key: 'parent-requests',  label: 'Parent Requests',  desc: 'Requests coming from parents' },
+                { key: 'messages',         label: 'Messages',         desc: 'Late-arrival messages from parents' },
+                { key: 'changes',          label: 'Changes',          desc: 'Early pickup, pickup change, and bus change requests from parents' },
                 { key: 'camper-mail',      label: 'Camper Mail',      desc: 'Mail to campers' },
                 { key: 'reports',          label: 'Reports',          desc: 'Attendance reporting', viewOnly: true }
             ]

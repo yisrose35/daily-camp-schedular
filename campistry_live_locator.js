@@ -415,6 +415,41 @@
         body.innerHTML = html || '<div class="empty-state">No activities found for this filter today.</div>';
     }
 
+    // Replaces the old (broken — it read a field nothing ever wrote) Activity
+    // Board: every activity happening this exact minute, grouped by
+    // activity+field, with the bunks currently in it.
+    function renderRightNow() {
+        const body = document.getElementById('locRightNowBody');
+        if (!body) return;
+        if (!_schedule || !Object.keys(_schedule.scheduleAssignments || {}).length) {
+            body.innerHTML = '<div class="empty-state">No schedule generated for today yet.</div>';
+            return;
+        }
+        const now = getCurrentTimeMinutes();
+        const groups = {};
+        Object.keys(_schedule.scheduleAssignments).forEach(function (bunk) {
+            const entries = _schedule.scheduleAssignments[bunk] || [];
+            const a = entries.find(function (e) { return e && e._startMin != null && e._startMin <= now && now < e._endMin; });
+            if (!a) return;
+            const isLg = isLeagueAssignment(a);
+            const name = isLg ? (a._gameLabel || 'League') : (a._displayName || a.sport || a._activity || 'Activity');
+            const field = (typeof a.field === 'object') ? (a.field && a.field.name) : a.field;
+            const key = name + '||' + (field || '');
+            if (!groups[key]) groups[key] = { name: name, field: field || '', bunks: [] };
+            groups[key].bunks.push(bunk);
+        });
+        const list = Object.values(groups).sort(function (a, b) { return b.bunks.length - a.bunks.length; });
+        if (!list.length) { body.innerHTML = '<div class="empty-state">Nothing scheduled at this exact time — try a bunk in Today\'s Schedule below.</div>'; return; }
+        body.innerHTML = '<div class="card"><div class="card-body" style="display:grid;grid-template-columns:repeat(auto-fill,minmax(220px,1fr));gap:10px;">' +
+            list.map(function (g) {
+                return '<div style="border:1px solid var(--slate-200);border-radius:8px;padding:10px;">' +
+                    '<div style="font-weight:700;font-size:.86rem;">' + esc(g.name) + '</div>' +
+                    (g.field ? '<div style="font-size:.74rem;color:var(--slate-500);margin-bottom:6px;">' + esc(g.field) + '</div>' : '') +
+                    '<div style="display:flex;flex-wrap:wrap;gap:4px;">' + g.bunks.map(function (b) { return '<span style="font-size:.7rem;background:var(--slate-100);padding:1px 7px;border-radius:999px;">' + esc(b) + '</span>'; }).join('') + '</div>' +
+                    '</div>';
+            }).join('') + '</div></div>';
+    }
+
     function renderFilters() {
         var opts = structureOptions();
         var divSel = document.getElementById('locFilterDiv');
@@ -467,6 +502,7 @@
             _schedule = data;
             _loading = false;
             renderFilters();
+            renderRightNow();
             renderScheduleGrid();
         });
     }

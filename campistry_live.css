@@ -52,11 +52,14 @@ body.sidebar-open .sidebar{transform:translateX(0)}
 .app-content{padding:1.25rem 1.5rem 3rem}
 .live-page{display:none}.live-page.active{display:block}
 
-@media(min-width:769px){
-    .sidebar{transform:translateX(0)}
-    .app-content{margin-left:240px}
-    .hamburger-btn{display:none}
-}
+/* Unlike the other Campistry apps, Live always uses the hamburger +
+   off-canvas sidebar, even on wide screens — never a permanently-pinned
+   sidebar. The page-nav list here is long (attendance, changes, reports,
+   parent messages) and the office staff who use Live want the content
+   area, not the nav, to have the room. */
+
+/* ══ CHANGES — 3 always-visible groupings ═══════════════════════ */
+.changes-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(280px,1fr));gap:16px;align-items:start}
 
 /* ══ LIVE CLOCK ══════════════════════════════════════════════ */
 .live-clock{font-family:'SF Mono',SFMono-Regular,ui-monospace,'Cascadia Code',Consolas,monospace;font-size:.8125rem;font-weight:700;color:var(--live);background:var(--live-bg);padding:4px 10px;border-radius:6px;letter-spacing:.5px}

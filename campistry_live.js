@@ -69,15 +69,22 @@ function esc(s) { if (s == null) return ''; var d = document.createElement('div'
         return String(name).split(' ').map(p => p[0] || '').join('').slice(0, 2).toUpperCase();
     }
 
+    const RC_REASON_LABEL = { absent: 'Absent', sick: 'Sick', late: 'Late', appointment: 'Appointment', family: 'Family event', other: 'Other' };
+
     function rcRow(name, c, today, showBunk) {
         const present = rcIsPresent(name, today);
         const check = '<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="20 6 9 17 4 12"/></svg>';
         const x = '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>';
+        const absence = !present ? today.absences.find(a => a.name === name) : null;
+        const reasonBadge = absence
+            ? '<div class="rc-detail" style="color:var(--live);font-weight:600;">' + esc(RC_REASON_LABEL[absence.reason] || absence.reason || 'Absent') + (absence.time ? ' — ' + esc(absence.time) : '') + '</div>'
+            : '';
         return '<div class="rc-row ' + (present ? 'present' : 'absent') + '" data-camper="' + esc(name) + '" onclick="CampistryLive.toggleByEl(this)">' +
             '<div class="rc-avatar">' + esc(rcInitials(name)) + '</div>' +
             '<div class="rc-info">' +
             '<div class="rc-name">' + esc(name) + '</div>' +
             (showBunk && c.bunk ? '<div class="rc-detail">' + esc(c.bunk) + (c.division ? ' · ' + esc(c.division) : '') + '</div>' : '') +
+            reasonBadge +
             '</div>' +
             '<div class="rc-check">' + (present ? check : x) + '</div>' +
             '</div>';
@@ -115,13 +122,15 @@ function esc(s) { if (s == null) return ''; var d = document.createElement('div'
         } else {
             const divEntries = Object.entries(struct);
             if (!divEntries.length) {
-                html += '<div class="empty-state">No divisions configured. Set up camp structure in Campistry Me.</div>';
+                html += '<div class="empty-state">' + (window.__CAMPISTRY_CLOUD_READY__ === false ? 'Camp data is still loading…' : 'No divisions configured. Set up camp structure in Campistry Me.') + '</div>';
             }
 
+            let matchedAny = false;
             divEntries.forEach(([divName, divData]) => {
                 const color = divData.color || '#3b82f6';
                 const divCampers = Object.entries(roster).filter(([, c]) => c.division === divName);
                 if (!divCampers.length) return;
+                matchedAny = true;
 
                 const presentInDiv = divCampers.filter(([n]) => rcIsPresent(n, today)).length;
                 const pct = divCampers.length ? Math.round((presentInDiv / divCampers.length) * 100) : 0;
@@ -158,6 +167,20 @@ function esc(s) { if (s == null) return ''; var d = document.createElement('div'
 
                 html += '</div>';
             });
+
+            // divEntries existed but not one camper matched any division — either
+            // the roster hasn't loaded yet, is genuinely empty, or (most likely
+            // if campers do exist in Campistry Me) a camper's stored division
+            // no longer matches a current division name/key, which silently
+            // dropped them from every grouped view instead of surfacing an error.
+            if (divEntries.length && !matchedAny) {
+                const rosterCount = Object.keys(roster).length;
+                if (!rosterCount) {
+                    html += '<div class="empty-state">' + (window.__CAMPISTRY_CLOUD_READY__ === false ? 'Camp data is still loading…' : 'No campers loaded yet — if campers exist in Campistry Me, try reloading this page.') + '</div>';
+                } else {
+                    html += '<div class="empty-state">' + rosterCount + ' camper(s) loaded, but none match a current division — a division may have been renamed in Campistry Me since they were assigned. Re-check their division there.</div>';
+                }
+            }
         }
 
         body.innerHTML = html;
@@ -237,230 +260,17 @@ function esc(s) { if (s == null) return ''; var d = document.createElement('div'
     }
 
     // =========================================================================
-    // SCHEDULE READING — uses same data as camper_locator.js
-    // =========================================================================
-
-    function findDivisionSlotForTime(divisionName, timeMinutes) {
-        const divSlots = window.divisionTimes?.[divisionName] || [];
-        if (!divSlots.length) {
-            if (window.SchedulerCoreUtils?.findSlotForTime) return window.SchedulerCoreUtils.findSlotForTime(divisionName, timeMinutes);
-            return -1;
-        }
-        for (let i = 0; i < divSlots.length; i++) {
-            if (divSlots[i].startMin <= timeMinutes && timeMinutes < divSlots[i].endMin) return i;
-        }
-        if (timeMinutes < divSlots[0].startMin) return 0;
-        if (timeMinutes >= divSlots[divSlots.length - 1].endMin) return divSlots.length - 1;
-        return -1;
-    }
-
-    function getSlotLabel(divisionName, slotIdx) {
-        const divSlots = window.divisionTimes?.[divisionName] || [];
-        const slot = divSlots[slotIdx];
-        if (!slot) return 'Period ' + (slotIdx + 1);
-        return formatTimeMinutes(slot.startMin) + ' – ' + formatTimeMinutes(slot.endMin);
-    }
-
-    function getCurrentPeriodInfo() {
-        const struct = getStructure();
-        const divNames = Object.keys(struct);
-        if (!divNames.length) return { periodLabel: 'No schedule', slotIdx: -1 };
-        const now = getCurrentTimeMinutes();
-        const firstDiv = divNames[0];
-        const idx = findDivisionSlotForTime(firstDiv, now);
-        if (idx < 0) return { periodLabel: 'Outside schedule', slotIdx: -1 };
-        return { periodLabel: 'Period ' + (idx + 1) + ' — ' + getSlotLabel(firstDiv, idx), slotIdx: idx };
-    }
-
-    // Get what a bunk is doing right now
-    function getBunkActivity(bunkName, divisionName) {
-        const now = getCurrentTimeMinutes();
-        const slotIdx = findDivisionSlotForTime(divisionName, now);
-        if (slotIdx < 0) return { activity: 'No schedule', location: '' };
-
-        const settings = readGlobal();
-        const schedule = settings.app1?.schedule;
-        if (!schedule) return { activity: 'No schedule loaded', location: '' };
-
-        // Find today's schedule
-        const todayKey = getTodayKey();
-        const todaySchedule = schedule[todayKey] || schedule;
-        const bunks = todaySchedule.bunks || todaySchedule;
-
-        // Look up this bunk's assignment
-        const bunkData = bunks[bunkName];
-        if (!bunkData) return { activity: 'Unscheduled', location: '' };
-
-        const assignment = Array.isArray(bunkData) ? bunkData[slotIdx] : bunkData[slotIdx];
-        if (!assignment) return { activity: 'Free', location: '' };
-
-        if (typeof assignment === 'string') return { activity: assignment, location: '' };
-        return { activity: assignment.activity || assignment.name || 'Unknown', location: assignment.field || assignment.location || '' };
-    }
-
-    // Build full activity map for current time
-    function buildActivityMap() {
-        const struct = getStructure();
-        const roster = getRoster();
-        const today = getTodayData();
-        const absentNames = new Set(today.absences.map(a => a.name));
-        const pickedUpNames = new Set(today.earlyPickups.map(p => p.name));
-        const activities = {}; // activity → { location, bunks: [{bunkName, division, camperCount}] }
-
-        Object.entries(struct).forEach(([divName, divData]) => {
-            const grades = divData.grades || {};
-            Object.entries(grades).forEach(([gradeName, gradeData]) => {
-                const bunks = gradeData.bunks || [];
-                bunks.forEach(bunkName => {
-                    const { activity, location } = getBunkActivity(bunkName, divName);
-                    if (!activity || activity === 'No schedule' || activity === 'No schedule loaded') return;
-
-                    // Count campers in this bunk
-                    let camperCount = 0;
-                    Object.entries(roster).forEach(([name, c]) => {
-                        if (c.bunk === bunkName && !absentNames.has(name) && !pickedUpNames.has(name)) camperCount++;
-                    });
-
-                    const key = activity + '||' + (location || '');
-                    if (!activities[key]) activities[key] = { activity, location, bunks: [], totalKids: 0 };
-                    activities[key].bunks.push({ bunkName, division: divName, camperCount });
-                    activities[key].totalKids += camperCount;
-                });
-            });
-        });
-
-        return Object.values(activities).sort((a, b) => b.totalKids - a.totalKids);
-    }
-
-    // =========================================================================
-    // RENDER: DASHBOARD
+    // SIDEBAR BADGE — "Right Now" activity view and bunk browsing moved into
+    // the Camper Locator page (campistry_live_locator.js), reading from the
+    // actually-working schedule reader instead of the app1.schedule field
+    // this used to read, which nothing in the app ever wrote.
     // =========================================================================
     function renderDashboard() {
-        const roster = getRoster();
-        const struct = getStructure();
         const today = getTodayData();
-        const camperNames = Object.keys(roster);
-        const totalCampers = camperNames.length;
         const absentCount = today.absences.length;
-        const pickedUpCount = today.earlyPickups.length;
-        const presentCount = Math.max(0, totalCampers - absentCount - pickedUpCount);
-
-        // Date line
-        const dateEl = document.getElementById('dashDateLine');
-        if (dateEl) {
-            const d = new Date();
-            const opts = { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' };
-            dateEl.textContent = getCampName() + ' — ' + d.toLocaleDateString('en-US', opts);
-        }
-
-        // Stats
-        const el = id => document.getElementById(id);
-        if (el('statTotalCampers')) el('statTotalCampers').textContent = totalCampers;
-        if (el('statPresent')) el('statPresent').textContent = presentCount;
-        if (el('statAbsent')) el('statAbsent').textContent = absentCount + pickedUpCount;
-        const period = getCurrentPeriodInfo();
-        if (el('statCurrentPeriod')) el('statCurrentPeriod').textContent = period.slotIdx >= 0 ? 'P' + (period.slotIdx + 1) : '—';
-        if (el('currentPeriodLabel')) el('currentPeriodLabel').textContent = period.periodLabel;
-        if (el('sbAbsentCount')) el('sbAbsentCount').textContent = absentCount;
-
-        // Activity overview
-        const actMap = buildActivityMap();
-        const actBody = el('activityOverviewBody');
-        if (actBody) {
-            if (!actMap.length) {
-                actBody.innerHTML = '<div class="empty-state">No schedule loaded for today. Generate a schedule in Flow first.</div>';
-            } else {
-                actBody.innerHTML = '<div class="activity-grid">' + actMap.map(a => {
-                    const bunkChips = a.bunks.map(b => '<span class="bunk-chip">' + esc(b.bunkName) + '</span>').join('');
-                    return '<div class="activity-cell"><div class="activity-cell-header"><span class="activity-name">' + esc(a.activity) + '</span>' + (a.location ? '<span class="activity-location">' + esc(a.location) + '</span>' : '') + '</div><div class="activity-bunks">' + bunkChips + '</div><div style="margin-top:6px"><span class="activity-count">' + a.totalKids + ' campers</span> · ' + a.bunks.length + ' bunk(s)</div></div>';
-                }).join('') + '</div>';
-            }
-        }
-
-        // Division summary
-        const divBody = el('divisionSummaryBody');
-        if (divBody) {
-            const absentNames = new Set(today.absences.map(a => a.name));
-            const pickedUpNames = new Set(today.earlyPickups.map(p => p.name));
-            let html = '';
-            Object.entries(struct).forEach(([divName, divData]) => {
-                const color = divData.color || '#3b82f6';
-                let total = 0, present = 0;
-                Object.values(roster).forEach(c => {
-                    if (c.division === divName) { total++; if (!absentNames.has(c.name) && !pickedUpNames.has(c.name)) present++; }
-                });
-                // Lookup current activity for first bunk in this division
-                const firstBunk = Object.values(divData.grades || {})[0]?.bunks?.[0];
-                const activity = firstBunk ? getBunkActivity(firstBunk, divName) : { activity: '—' };
-                html += '<div class="division-row"><span class="division-dot" style="background:' + esc(color) + '"></span><span class="division-name">' + esc(divName) + '</span><span class="division-info">' + present + '/' + total + ' present · ' + esc(activity.activity) + '</span></div>';
-            });
-            divBody.innerHTML = html || '<div class="empty-state">No divisions configured</div>';
-        }
+        const el = document.getElementById('sbAbsentCount');
+        if (el) el.textContent = absentCount;
     }
-
-    // =========================================================================
-    // RENDER: ACTIVITY BOARD
-    // =========================================================================
-    function renderActivityBoard() {
-        const actMap = buildActivityMap();
-        const body = document.getElementById('activityBoardBody');
-        if (!body) return;
-        if (!actMap.length) { body.innerHTML = '<div class="empty-state">No schedule loaded for today</div>'; return; }
-
-        body.innerHTML = '<div class="activity-grid">' + actMap.map(a => {
-            const bunkRows = a.bunks.map(b => '<div style="display:flex;justify-content:space-between;padding:3px 0;font-size:.8rem;border-bottom:1px solid var(--slate-50,#f8fafc);"><span style="font-weight:500;">' + esc(b.bunkName) + '</span><span style="color:var(--slate-500);font-size:.7rem;">' + esc(b.division) + '</span><span style="font-weight:600;">' + b.camperCount + '</span></div>').join('');
-            return '<div class="activity-cell"><div class="activity-cell-header"><span class="activity-name">' + esc(a.activity) + '</span><span class="activity-count">' + a.totalKids + ' kids</span></div>' + (a.location ? '<div style="font-size:.7rem;color:var(--slate-500);margin-bottom:6px;">📍 ' + esc(a.location) + '</div>' : '') + '<div>' + bunkRows + '</div></div>';
-        }).join('') + '</div>';
-    }
-
-    // =========================================================================
-    // RENDER: BUNK TRACKER
-    // =========================================================================
-    let _bunkFilter = '';
-
-    function renderBunkTracker() {
-        const struct = getStructure();
-        const roster = getRoster();
-        const today = getTodayData();
-        const absentNames = new Set(today.absences.map(a => a.name));
-        const pickedUpNames = new Set(today.earlyPickups.map(p => p.name));
-        const body = document.getElementById('bunkTrackerBody');
-        if (!body) return;
-
-        let html = '<div class="bunk-grid">';
-        const filter = _bunkFilter.toLowerCase();
-
-        Object.entries(struct).forEach(([divName, divData]) => {
-            const color = divData.color || '#3b82f6';
-            Object.entries(divData.grades || {}).forEach(([gradeName, gradeData]) => {
-                (gradeData.bunks || []).forEach(bunkName => {
-                    // Get campers in this bunk
-                    const campers = Object.entries(roster).filter(([, c]) => c.bunk === bunkName);
-                    if (filter && !bunkName.toLowerCase().includes(filter) && !campers.some(([n]) => n.toLowerCase().includes(filter))) return;
-
-                    const { activity, location } = getBunkActivity(bunkName, divName);
-                    const presentCount = campers.filter(([n]) => !absentNames.has(n) && !pickedUpNames.has(n)).length;
-
-                    html += '<div class="bunk-card"><div class="bunk-card-header" style="background:' + esc(color) + '20;border-left:4px solid ' + esc(color) + ';"><span>' + esc(bunkName) + ' <span style="font-weight:400;font-size:.7rem;color:var(--slate-500);">' + esc(divName) + '</span></span><span style="font-size:.75rem;">' + presentCount + '/' + campers.length + ' · ' + esc(activity) + '</span></div><div class="bunk-card-body">';
-
-                    campers.forEach(([name, c]) => {
-                        const isAbsent = absentNames.has(name);
-                        const isPickedUp = pickedUpNames.has(name);
-                        const status = isPickedUp ? 'pickup' : isAbsent ? 'absent' : (today.attendance[name] === false ? 'absent' : 'present');
-                        const statusLabel = isPickedUp ? 'Picked Up' : isAbsent ? 'Absent' : 'Present';
-                        html += '<div class="bunk-camper-row"><span>' + esc(name) + '</span><span class="camper-status ' + status + '">' + statusLabel + '</span></div>';
-                    });
-
-                    html += '</div></div>';
-                });
-            });
-        });
-
-        html += '</div>';
-        body.innerHTML = html;
-    }
-
-    function filterBunks(val) { _bunkFilter = val; renderBunkTracker(); }
 
     // =========================================================================
     // ABSENCES & EXCEPTIONS
@@ -500,7 +310,7 @@ function esc(s) { if (s == null) return ''; var d = document.createElement('div'
         today.attendance[name] = false;
         saveTodayData(today);
         closeModal('absenceModal');
-        renderAbsences(); renderRollCall(); renderDashboard(); renderBunkTracker();
+        renderAbsences(); renderRollCall(); renderDashboard();
         toast(name + ' marked ' + reason);
     }
 
@@ -510,7 +320,7 @@ function esc(s) { if (s == null) return ''; var d = document.createElement('div'
         const removed = today.absences.splice(idx, 1)[0];
         if (removed) delete today.attendance[removed.name];
         saveTodayData(today);
-        renderAbsences(); renderRollCall(); renderDashboard(); renderBunkTracker();
+        renderAbsences(); renderRollCall(); renderDashboard();
         toast((removed?.name || 'Camper') + ' absence removed');
     }
 
@@ -552,7 +362,7 @@ function esc(s) { if (s == null) return ''; var d = document.createElement('div'
         today.earlyPickups.push({ name, pickupTime, pickedUpBy, reason, timestamp: Date.now() });
         saveTodayData(today);
         closeModal('pickupModal');
-        renderEarlyPickups(); renderDashboard(); renderBunkTracker();
+        renderEarlyPickups(); renderDashboard();
         toast(name + ' early pickup recorded');
     }
 
@@ -561,7 +371,7 @@ function esc(s) { if (s == null) return ''; var d = document.createElement('div'
         const today = getTodayData();
         const removed = today.earlyPickups.splice(idx, 1)[0];
         saveTodayData(today);
-        renderEarlyPickups(); renderDashboard(); renderBunkTracker();
+        renderEarlyPickups(); renderDashboard();
         toast((removed?.name || 'Camper') + ' pickup removed');
     }
 
@@ -684,8 +494,6 @@ function esc(s) { if (s == null) return ''; var d = document.createElement('div'
     // =========================================================================
     function refresh() {
         renderDashboard();
-        renderActivityBoard();
-        renderBunkTracker();
         renderRollCall();
         renderAbsences();
         renderEarlyPickups();
@@ -941,24 +749,45 @@ function esc(s) { if (s == null) return ''; var d = document.createElement('div'
         });
         saveTodayData(today);
         closeModal('scanModal');
-        renderRollCall(); renderDashboard(); renderAbsences(); renderBunkTracker();
+        renderRollCall(); renderDashboard(); renderAbsences();
         toast('Attendance updated \u2014 ' + _scanResults.length + ' camper' + (_scanResults.length !== 1 ? 's' : '') + ' from scan');
     }
 
     function scannerPrintTemplates() {
+        if (!window.__CAMPISTRY_CLOUD_READY__) {
+            toast('Camp data is still loading — wait a moment and try again', 'error');
+            return;
+        }
         const struct = getStructure();
+        const roster = getRoster();
         const dateKey = getTodayKey();
         const bunkPages = [];
+        let bunkCount = 0;
         Object.entries(struct).forEach(([, divData]) => {
             Object.entries(divData.grades || {}).forEach(([, gradeData]) => {
                 (gradeData.bunks || []).forEach(bunkName => {
+                    bunkCount++;
                     const campers = scannerGetBunkCampers(bunkName);
                     if (campers.length) bunkPages.push({ bunkName, campers });
                 });
             });
         });
 
-        if (!bunkPages.length) { toast('No campers found in any bunk', 'error'); return; }
+        // Distinguish the three real failure modes instead of one generic
+        // message — "no campers" was reported as misleading when the actual
+        // cause was camp data not loaded yet, or campers not yet bunk-assigned.
+        if (!bunkPages.length) {
+            if (!Object.keys(struct).length) {
+                toast('No camp structure loaded — set up divisions/bunks in Campistry Me, or reload this page if you just set it up', 'error');
+            } else if (!Object.keys(roster).length) {
+                toast('No campers loaded yet — if campers exist in Campistry Me, try reloading this page', 'error');
+            } else if (!bunkCount) {
+                toast('Camp structure has no bunks configured yet', 'error');
+            } else {
+                toast(Object.keys(roster).length + ' camper(s) found, but none are assigned to a bunk yet — assign bunks in Campistry Me', 'error');
+            }
+            return;
+        }
 
         const win = window.open('', '_blank');
         if (!win) { toast('Pop-up blocked \u2014 please allow pop-ups for this site', 'error'); return; }
@@ -1060,7 +889,6 @@ document.querySelectorAll('[data-qr]').forEach(function(el){
         savePickup,
         removePickup,
         exportAttendanceCsv,
-        filterBunks,
         openModal,
         closeModal
     };
