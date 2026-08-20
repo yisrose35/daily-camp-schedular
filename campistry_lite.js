@@ -52,7 +52,11 @@
                      'liteStaffAssignments', 'liteSmsSettings', 'camp_name', 'fields',
                      // Me owns the staff directory and the counselor visibility
                      // policy; Lite reads both rather than keeping its own copy.
-                     'campistryMe'];
+                     'campistryMe',
+                     // The office Live app's bunk-number registry for bubble-sheet
+                     // scanning (see campistry_live.js scannerAssignSerials) — Lite
+                     // reads it read-only, it never assigns new serials itself.
+                     'liveBunkSerials'];
     // Lite is installed as its own app, so it signs in on its own page rather
     // than bouncing to the marketing site.
     const LOGIN_PAGE = 'campistry_lite_login.html';
@@ -405,6 +409,7 @@
                 : (Array.isArray(app1.manualColumnOrder) ? app1.manualColumnOrder : []);
             camp.roster = app1.camperRoster || {};
             camp.structure = byKey.campStructure || {};
+            camp.bunkSerials = byKey.liveBunkSerials || {};
             camp.leagues = byKey.leaguesByName || {};
             camp.specialty = byKey.specialtyLeagues || {};
             camp.specialActivities = app1.specialActivities || [];
@@ -442,6 +447,27 @@
                 { onConflict: 'camp_id,key' }
             );
         if (error) throw error;
+    }
+
+    // Fresh (not bootstrap-cached) read of the office Live app's bunk-serial
+    // registry, right before a scan decodes a sheet — a serial assigned by
+    // Live moments ago (someone just printed) must not be missed because
+    // this session hydrated earlier. Falls back to the cached camp.bunkSerials
+    // (from initial load) if the live fetch fails, rather than blocking scan.
+    async function loadBunkSerials() {
+        try {
+            const { data, error } = await window.supabase
+                .from('camp_state_kv')
+                .select('value')
+                .eq('camp_id', campId)
+                .eq('key', 'liveBunkSerials')
+                .maybeSingle();
+            if (error) throw error;
+            return (data && data.value) || {};
+        } catch (e) {
+            console.warn('[Lite] fresh bunk-serial fetch failed, using cached copy:', e?.message || e);
+            return camp.bunkSerials || {};
+        }
     }
 
     function getSchedule(dateKey) {
@@ -3558,7 +3584,17 @@
     // geometry printed from the office Live app (campistry_live.js). Empty
     // = unmarked, both filled = ambiguous; neither is guessed at, both are
     // skipped on confirm and left flagged for manual review.
-    const SCAN_TMPL = { qrSize: 140, bPresentDX: 76, bAbsentDX: 124, bDY0: 198, bDDY: 52, sampleR: 13, fillThresh: 0.22 };
+    //
+    // Bunk identity is a stable serial number, printed as BOTH the QR
+    // payload and its own 8-bit bubble row, cross-checked against each
+    // other — see the matching comment in campistry_live.js SCAN_TMPL for
+    // why (a QR that can't be found at all still blocks everything; this
+    // guards against a QR that's found but misread).
+    const SCAN_TMPL = {
+        qrSize: 140, bPresentDX: 76, bAbsentDX: 124, bDY0: 246, bDDY: 52,
+        sampleR: 13, fillThresh: 0.22,
+        idBubbleCount: 8, idDX0: -535, idDDX: 90, idDY: 126, idSampleR: 8
+    };
     let _scanResults = [], _scanBunkLabel = '', _scanCanvas = null, _scanCtx = null, _scanDateKey = null, _scanSheetEl = null;
 
     function openScanSheet() {
@@ -3603,18 +3639,19 @@
         img.src = URL.createObjectURL(file);
     }
 
-    function scannerProcessImage() {
+    async function scannerProcessImage() {
         const el = id => _scanSheetEl && _scanSheetEl.querySelector('#' + id);
         if (typeof jsQR === 'undefined') { scannerShowError('QR scanner not loaded — check your connection and reopen this sheet.'); return; }
         const imgData = _scanCtx.getImageData(0, 0, _scanCanvas.width, _scanCanvas.height);
-        const code = jsQR(imgData.data, imgData.width, imgData.height, { inversionAttempts: 'dontInvert' });
-        if (!code) { scannerShowError('QR code not found — make sure the top-right QR is fully visible, in focus, and well-lit.'); return; }
+        // 'attemptBoth' retries inverted light/dark after a normal pass fails
+        // — sometimes recovers a photo where shadow/glare flipped the QR's
+        // apparent polarity in one corner.
+        const code = jsQR(imgData.data, imgData.width, imgData.height, { inversionAttempts: 'attemptBoth' });
+        if (!code) { scannerShowError('QR code not found — make sure the top-right QR is fully visible, in focus, and well-lit. Fill the frame with the page and hold the phone directly above it.'); return; }
 
-        let info; try { info = JSON.parse(code.data); } catch (_) { info = null; }
-        if (!info || info.t !== 'cs-roll' || !info.bunk) { scannerShowError('That QR isn\'t a Campistry attendance template.'); return; }
-
-        const campers = campersInBunk(info.bunk).map(c => c.name);
-        if (!campers.length) { scannerShowError(`Bunk "${info.bunk}" has no campers in the roster.`); return; }
+        const m = /^CSR2:(\d+)$/.exec(code.data || '');
+        if (!m) { scannerShowError('That QR isn\'t a Campistry attendance template.'); return; }
+        const qrSerial = parseInt(m[1], 10);
 
         const loc = code.location;
         const tl = loc.topLeftCorner, tr = loc.topRightCorner, bl = loc.bottomLeftCorner;
@@ -3622,9 +3659,31 @@
         const pxY = { x: (bl.x - tl.x) / SCAN_TMPL.qrSize, y: (bl.y - tl.y) / SCAN_TMPL.qrSize };
         const photoQrW = Math.hypot(tr.x - tl.x, tr.y - tl.y);
         const sampleRPhoto = Math.round(SCAN_TMPL.sampleR * (photoQrW / SCAN_TMPL.qrSize));
+        const sampleRId = Math.round(SCAN_TMPL.idSampleR * (photoQrW / SCAN_TMPL.qrSize));
 
-        _scanBunkLabel = info.bunk + (info.date ? ' · ' + info.date : '');
-        _scanDateKey = info.date || currentDate;
+        // Factor 2: re-read the same serial from its own bubble row.
+        let bubbleSerial = 0;
+        for (let b = 0; b < SCAN_TMPL.idBubbleCount; b++) {
+            const dx = SCAN_TMPL.idDX0 + b * SCAN_TMPL.idDDX;
+            const cx = Math.round(tl.x + dx * pxX.x + SCAN_TMPL.idDY * pxY.x);
+            const cy = Math.round(tl.y + dx * pxX.y + SCAN_TMPL.idDY * pxY.y);
+            const filled = scannerSampleDark(cx, cy, sampleRId) >= SCAN_TMPL.fillThresh;
+            bubbleSerial = (bubbleSerial << 1) | (filled ? 1 : 0);
+        }
+        if (bubbleSerial !== qrSerial) {
+            scannerShowError(`Could not confirm which bunk this is — the QR and the ID bubbles disagree (#${qrSerial} vs #${bubbleSerial}). Retake the photo straight-on and well-lit.`);
+            return;
+        }
+
+        const serials = await loadBunkSerials();
+        const bunkName = Object.keys(serials).find(name => serials[name] === qrSerial);
+        if (!bunkName) { scannerShowError('This sheet’s bunk number isn’t recognized — it may be from a different camp, or the bunk registry was reset. Reprint templates and rescan.'); return; }
+
+        const campers = campersInBunk(bunkName).map(c => c.name);
+        if (!campers.length) { scannerShowError(`Bunk "${bunkName}" has no campers in the roster.`); return; }
+
+        _scanBunkLabel = bunkName + ' · ' + currentDate;
+        _scanDateKey = currentDate;
         _scanResults = campers.map((name, i) => {
             const dy = SCAN_TMPL.bDY0 + i * SCAN_TMPL.bDDY;
             const sample = (dx) => {

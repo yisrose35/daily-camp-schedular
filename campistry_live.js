@@ -571,10 +571,10 @@ function esc(s) { if (s == null) return ''; var d = document.createElement('div'
     //
     // Template layout (must match printed template CSS):
     //   Page 816x1056px, QR at right=48,top=48, size=140x140
-    //   Bubble rows start at top=220, height=52, two bubbles (32px each, 16px
+    //   Bubble rows start at top=268, height=52, two bubbles (32px each, 16px
     //   gap) flush against the row's right edge — PRESENT bubble, then ABSENT.
-    //   QR top-left=(628,48), row-i center Y=246+i*52
-    //   Offsets from QR top-left: bPresentDX=76, bAbsentDX=124, bDY0=198, bDDY=52
+    //   QR top-left=(628,48), row-i center Y=294+i*52
+    //   Offsets from QR top-left: bPresentDX=76, bAbsentDX=124, bDY0=246, bDDY=52
     //
     //   ★ Two bubbles per row, not one — an empty single bubble used to be
     //   read as "absent" while the app's own default treated an unmarked
@@ -583,16 +583,42 @@ function esc(s) { if (s == null) return ''; var d = document.createElement('div'
     //   on which side you looked at. Two explicit bubbles force a real mark
     //   for every camper: neither filled = genuinely unmarked (skipped on
     //   confirm, flagged for the office to check by hand), not defaulted.
+    //
+    //   ★ Every bunk gets a small STABLE serial number (persisted, never
+    //   reassigned once given — see scannerLoadSerials/scannerAssignSerials),
+    //   printed as BOTH the QR's payload and its own row of pre-filled
+    //   bubbles. Two independent readings of the same number: if the QR
+    //   photo is clean, its decode is instant; if it's blurry/glare-y but
+    //   still locatable, the bubble row (coarse darkness threshold, far more
+    //   forgiving than resolving a QR's fine modules) confirms or corrects
+    //   it. A mismatch between the two is never silently guessed at — the
+    //   scan is rejected and the office is asked to retake the photo. (The
+    //   QR still has to be FOUND at all for either reading to work — it's
+    //   the only thing giving us the page's corners to compute every other
+    //   position from. A QR jsQR can't locate at all — not even attempt a
+    //   decode — is the one failure neither factor can route around; the
+    //   inversion retry below and the bigger, lower-payload QR are what
+    //   address that case.)
+    //   idBubbleCount 8-bit bubbles, MSB-first, offsets from QR top-left:
+    //   idDX0=-535, idDDX=90 (bubble i center = idDX0 + i*idDDX), idDY=126.
     // =========================================================================
     const SCAN_TMPL = {
         qrSize: 140,
         bPresentDX: 76,
         bAbsentDX: 124,
-        bDY0: 198,
+        bDY0: 246,
         bDDY: 52,
         sampleR: 13,
-        fillThresh: 0.22
+        fillThresh: 0.22,
+        idBubbleCount: 8,
+        idDX0: -535,
+        idDDX: 90,
+        idDY: 126,
+        idSampleR: 8
     };
+    const SCAN_QR_PREFIX = 'CSR2:';
+    const SCAN_SERIALS_KEY = 'liveBunkSerials';
+    const SCAN_MAX_SERIAL = (1 << 8) - 1; // 8 bubbles
 
     let _scanResults = [];
     let _scanBunkLabel = '';
@@ -603,6 +629,37 @@ function esc(s) { if (s == null) return ''; var d = document.createElement('div'
             .filter(([, c]) => c.bunk === bunkName)
             .sort(([a], [b]) => a.localeCompare(b))
             .map(([name]) => name);
+    }
+
+    // Persisted bunk -> serial number registry (camp-wide, cloud-synced via
+    // the same saveGlobalSettings/loadGlobalSettings path every other app
+    // uses). A serial is assigned once, the first time a bunk's template is
+    // printed, and never reassigned or reused — unlike a live positional
+    // index, it stays correct even if bunks are added/removed/reordered
+    // elsewhere in the camp structure after this bunk's sheet was printed.
+    function scannerLoadSerials() {
+        try { return (window.loadGlobalSettings && window.loadGlobalSettings(SCAN_SERIALS_KEY)) || {}; }
+        catch (e) { return {}; }
+    }
+
+    // Called at print time: assigns a serial to any bunk in bunkNames that
+    // doesn't have one yet, persists the updated registry if anything
+    // changed, and returns the (possibly updated) map. Returns null for any
+    // bunk once SCAN_MAX_SERIAL is exhausted — vanishingly unlikely for a
+    // real camp (255 bunks), but printTemplates surfaces it rather than
+    // silently reusing a number.
+    function scannerAssignSerials(bunkNames) {
+        const map = scannerLoadSerials();
+        let next = Object.values(map).reduce((m, v) => Math.max(m, v || 0), 0) + 1;
+        let changed = false;
+        bunkNames.forEach(name => {
+            if (map[name] != null) return;
+            if (next > SCAN_MAX_SERIAL) return;
+            map[name] = next++;
+            changed = true;
+        });
+        if (changed && window.saveGlobalSettings) window.saveGlobalSettings(SCAN_SERIALS_KEY, map);
+        return map;
     }
 
     function scannerOpen() {
@@ -656,25 +713,22 @@ function esc(s) { if (s == null) return ''; var d = document.createElement('div'
             return;
         }
         const imgData = _scanCtx.getImageData(0, 0, _scanCanvas.width, _scanCanvas.height);
-        const code = jsQR(imgData.data, imgData.width, imgData.height, { inversionAttempts: 'dontInvert' });
+        // 'attemptBoth' retries with inverted light/dark after a normal pass
+        // fails — costs a little time, sometimes recovers a photo where
+        // shadow/glare flipped the QR's apparent polarity in one corner.
+        const code = jsQR(imgData.data, imgData.width, imgData.height, { inversionAttempts: 'attemptBoth' });
 
         if (!code) {
-            scannerShowError('QR code not detected. Make sure the QR in the top-right corner is fully visible, in focus, and well-lit. Try photographing from directly above.');
+            scannerShowError('QR code not detected. Make sure the QR in the top-right corner is fully visible, in focus, and well-lit — fill the frame with the page and hold the phone directly above it, not at an angle.');
             return;
         }
 
-        let info;
-        try { info = JSON.parse(code.data); } catch (_) { info = null; }
-        if (!info || info.t !== 'cs-roll' || !info.bunk) {
+        const m = /^CSR2:(\d+)$/.exec(code.data || '');
+        if (!m) {
             scannerShowError('QR code found but is not a Campistry template. Use templates printed from this app.');
             return;
         }
-
-        const campers = scannerGetBunkCampers(info.bunk);
-        if (!campers.length) {
-            scannerShowError(`Bunk "${info.bunk}" has no campers in the roster. Make sure the roster is loaded.`);
-            return;
-        }
+        const qrSerial = parseInt(m[1], 10);
 
         const loc = code.location;
         const tl = loc.topLeftCorner, tr = loc.topRightCorner, bl = loc.bottomLeftCorner;
@@ -682,8 +736,41 @@ function esc(s) { if (s == null) return ''; var d = document.createElement('div'
         const pxY = { x: (bl.x - tl.x) / SCAN_TMPL.qrSize, y: (bl.y - tl.y) / SCAN_TMPL.qrSize };
         const photoQrW = Math.hypot(tr.x - tl.x, tr.y - tl.y);
         const sampleRPhoto = Math.round(SCAN_TMPL.sampleR * (photoQrW / SCAN_TMPL.qrSize));
+        const sampleRId = Math.round(SCAN_TMPL.idSampleR * (photoQrW / SCAN_TMPL.qrSize));
 
-        _scanBunkLabel = info.bunk + (info.date ? ' · ' + info.date : '');
+        // Bunk identity, factor 2: the same serial re-read from its own
+        // 8-bit bubble row (MSB-first). The QR's successful decode already
+        // gave us a trustworthy serial (Reed-Solomon error correction makes
+        // a *wrong* decode rare — jsQR fails outright far more often than it
+        // silently misdecodes) — this is a cross-check against that rarer
+        // failure mode, not the primary read.
+        let bubbleSerial = 0;
+        for (let b = 0; b < SCAN_TMPL.idBubbleCount; b++) {
+            const dx = SCAN_TMPL.idDX0 + b * SCAN_TMPL.idDDX;
+            const cx = Math.round(tl.x + dx * pxX.x + SCAN_TMPL.idDY * pxY.x);
+            const cy = Math.round(tl.y + dx * pxX.y + SCAN_TMPL.idDY * pxY.y);
+            const filled = scannerSampleDark(cx, cy, sampleRId) >= SCAN_TMPL.fillThresh;
+            bubbleSerial = (bubbleSerial << 1) | (filled ? 1 : 0);
+        }
+        if (bubbleSerial !== qrSerial) {
+            scannerShowError(`Could not confirm which bunk this is — the QR and the ID bubbles on the sheet disagree (#${qrSerial} vs #${bubbleSerial}). Retake the photo straight-on and well-lit.`);
+            return;
+        }
+
+        const serials = scannerLoadSerials();
+        const bunkName = Object.keys(serials).find(name => serials[name] === qrSerial);
+        if (!bunkName) {
+            scannerShowError('This sheet’s bunk number isn’t recognized — it may have been printed for a different camp, or the bunk registry was reset. Reprint templates and rescan.');
+            return;
+        }
+
+        const campers = scannerGetBunkCampers(bunkName);
+        if (!campers.length) {
+            scannerShowError(`Bunk "${bunkName}" has no campers in the roster. Make sure the roster is loaded.`);
+            return;
+        }
+
+        _scanBunkLabel = bunkName + ' · ' + getTodayKey();
         _scanResults = campers.map((name, i) => {
             const dy = SCAN_TMPL.bDY0 + i * SCAN_TMPL.bDDY;
             const sample = (dx) => {
@@ -868,9 +955,15 @@ function esc(s) { if (s == null) return ''; var d = document.createElement('div'
         const date = new Date(dateKey + 'T12:00:00');
         const dateStr = date.toLocaleDateString('en-US', { weekday: 'long', month: 'long', day: 'numeric', year: 'numeric' });
 
-        const pages = bunkPages.map(({ bunkName, campers }) => {
-            const payload = JSON.stringify({ t: 'cs-roll', v: 1, bunk: bunkName, date: dateKey })
-                .replace(/&/g, '&amp;').replace(/"/g, '&quot;');
+        const serials = scannerAssignSerials(bunkPages.map(p => p.bunkName));
+        const unassigned = bunkPages.filter(p => serials[p.bunkName] == null);
+        if (unassigned.length) {
+            toast(unassigned.length + ' bunk(s) could not get an ID number (registry full) — skipped: ' + unassigned.map(p => p.bunkName).join(', '), 'error');
+        }
+
+        const pages = bunkPages.filter(p => serials[p.bunkName] != null).map(({ bunkName, campers }) => {
+            const serial = serials[bunkName];
+            const payload = SCAN_QR_PREFIX + serial;
             const rowDate = new Date(dateKey + 'T12:00:00')
                 .toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric' });
             const rows = campers.map((name, i) =>
@@ -878,11 +971,17 @@ function esc(s) { if (s == null) return ''; var d = document.createElement('div'
                 `<span class="tmpl-name">${esc(name)}</span>` +
                 `<div class="tmpl-bubble-group"><div class="tmpl-bubble"></div><div class="tmpl-bubble"></div></div></div>`
             ).join('');
+            const idBubbles = Array.from({ length: SCAN_TMPL.idBubbleCount }, (_, b) => {
+                const bit = (serial >> (SCAN_TMPL.idBubbleCount - 1 - b)) & 1;
+                const x = 628 + SCAN_TMPL.idDX0 + b * SCAN_TMPL.idDDX;
+                return `<div class="tmpl-id-bubble${bit ? ' filled' : ''}" style="left:${x}px"></div>`;
+            }).join('');
             return `<div class="tmpl-page"><div class="tmpl-inner">` +
                 `<div class="tmpl-qr" data-qr="${payload}"></div>` +
-                `<div class="tmpl-head">${esc(bunkName)}</div>` +
+                `<div class="tmpl-head">${esc(bunkName)} <span class="tmpl-serial">#${serial}</span></div>` +
                 `<div class="tmpl-sub">${rowDate}</div>` +
                 `<hr class="tmpl-hr"><div class="tmpl-instr">Fill exactly ONE bubble per camper — never leave both blank</div>` +
+                `<div class="tmpl-id-row">${idBubbles}</div>` +
                 `<div class="tmpl-col-labels"><span class="tmpl-col-lbl-present">PRESENT</span><span class="tmpl-col-lbl-absent">ABSENT</span></div>` +
                 `<div class="tmpl-rows">${rows}</div></div></div>`;
         }).join('\n');
@@ -900,14 +999,18 @@ body{font-family:Arial,Helvetica,sans-serif;background:#eee}
 .tmpl-qr{position:absolute;right:48px;top:48px;width:140px;height:140px}
 .tmpl-qr svg{width:140px!important;height:140px!important;display:block}
 .tmpl-head{font-size:30px;font-weight:700;color:#111;margin-bottom:4px;padding-right:160px}
+.tmpl-serial{font-size:14px;font-weight:600;color:#999;vertical-align:middle}
 .tmpl-sub{font-size:13px;color:#555;margin-bottom:10px;padding-right:160px}
 .tmpl-hr{border:none;border-top:2px solid #ddd;margin:8px 0}
 .tmpl-instr{font-size:11px;color:#555;padding:5px 8px;background:#f5f5f5;border-radius:4px;display:inline-block;margin-bottom:2px}
-.tmpl-col-labels{position:absolute;left:48px;right:48px;top:198px;height:18px}
+.tmpl-id-row{position:absolute;top:163px;height:22px}
+.tmpl-id-bubble{position:absolute;top:0;width:22px;height:22px;border:2px solid #222;border-radius:50%;transform:translateX(-50%)}
+.tmpl-id-bubble.filled{background:#111}
+.tmpl-col-labels{position:absolute;left:48px;right:48px;top:246px;height:18px}
 .tmpl-col-lbl-present,.tmpl-col-lbl-absent{position:absolute;top:0;font-size:8.5px;font-weight:700;color:#666;letter-spacing:.06em;transform:translateX(-50%)}
 .tmpl-col-lbl-present{left:656px}
 .tmpl-col-lbl-absent{left:704px}
-.tmpl-rows{position:absolute;left:48px;right:48px;top:220px}
+.tmpl-rows{position:absolute;left:48px;right:48px;top:268px}
 .tmpl-row{display:flex;align-items:center;height:52px;border-bottom:1px solid #ebebeb}
 .tmpl-num{font-size:11px;color:#bbb;width:22px;flex-shrink:0}
 .tmpl-name{flex:1;font-size:15px;color:#111;padding-right:8px}
@@ -923,7 +1026,7 @@ body{font-family:Arial,Helvetica,sans-serif;background:#eee}
 ${pages}
 <script>
 document.querySelectorAll('[data-qr]').forEach(function(el){
-  try{var qr=qrcode(0,'M');qr.addData(el.getAttribute('data-qr'));qr.make();el.innerHTML=qr.createSvgTag(3,0);var s=el.querySelector('svg');if(s){s.setAttribute('width','140');s.setAttribute('height','140');}}catch(e){el.textContent='QR err';}
+  try{var qr=qrcode(0,'H');qr.addData(el.getAttribute('data-qr'));qr.make();el.innerHTML=qr.createSvgTag(3,0);var s=el.querySelector('svg');if(s){s.setAttribute('width','140');s.setAttribute('height','140');}}catch(e){el.textContent='QR err';}
 });
 <\/script></body></html>`);
         win.document.close();
