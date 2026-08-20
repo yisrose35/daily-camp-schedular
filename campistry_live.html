@@ -699,9 +699,35 @@ var ParentRequests = (function(){
 
     function refresh(){ _paintMessages(); _paintChanges(); }
 
-    // Update badge on load
-    syncFromCloud(updateBadge);
-    updateBadge();
+    // Realtime — a new submission, or a status/hidden change from another
+    // office device, repaints whichever of Messages/Changes is on screen
+    // without anyone hitting refresh. Debounced so a burst of changes (e.g.
+    // this session's own confirm, which fires its own update) collapses
+    // into one re-sync instead of several back to back.
+    var _prChan=null, _prDebTimer=null;
+    function _debouncedResync(){ if(_prDebTimer)clearTimeout(_prDebTimer); _prDebTimer=setTimeout(function(){ syncFromCloud(refresh); },250); }
+    function _subscribeRealtime(){
+        var db=_db();
+        if(!db){ setTimeout(_subscribeRealtime,1500); return; }   // DB/auth not ready yet — keep trying rather than give up silently
+        if(_prChan)return;
+        try{
+            _prChan=db.client.channel('parent-pickup-requests-'+db.campId+'-'+Date.now())
+                .on('postgres_changes',{event:'*',schema:'public',table:'parent_pickup_requests',filter:'camp_id=eq.'+db.campId},_debouncedResync)
+                .subscribe();
+        }catch(e){ console.warn('[Live] parent requests realtime subscribe failed:',e&&e.message||e); }
+    }
+
+    // Initial load — same retry-until-ready as the realtime subscribe above,
+    // so a page opened before auth finishes resolving self-heals instead of
+    // silently staying empty until a manual refresh (exactly what happened
+    // testing this live: "wasn't properly signed in for some reason").
+    function _initialLoad(){
+        var db=_db();
+        if(!db){ setTimeout(_initialLoad,1500); return; }
+        syncFromCloud(function(){ updateBadge(); refresh(); });
+    }
+    _initialLoad();
+    _subscribeRealtime();
 
     return {renderMessages:renderMessages,renderChanges:renderChanges,
         confirmNow:confirmNow,hideRequest:hideRequest,deleteRequest:deleteRequest,
@@ -801,7 +827,9 @@ var PickupAlerts = (function(){
     var _debTimer=null;
     function _debouncedSync(){ if(_debTimer)clearTimeout(_debTimer); _debTimer=setTimeout(function(){ syncFromCloud(render); },250); }
     function _subscribeRealtime(){
-        var db=_db(); if(!db||_chan)return;
+        var db=_db();
+        if(!db){ setTimeout(_subscribeRealtime,1500); return; }   // DB/auth not ready yet — keep trying rather than give up silently
+        if(_chan)return;
         try{
             _chan=db.client.channel('pickup-alerts-'+db.campId+'-'+Date.now())
                 .on('postgres_changes',{event:'*',schema:'public',table:'pickup_alerts',filter:'camp_id=eq.'+db.campId},_debouncedSync)
@@ -810,7 +838,13 @@ var PickupAlerts = (function(){
         }catch(e){ console.warn('[Live] pickup-alerts realtime subscribe failed:',e&&e.message||e); }
     }
 
-    syncFromCloud(function(){ _subscribeRealtime(); });
+    function _initialLoad(){
+        var db=_db();
+        if(!db){ setTimeout(_initialLoad,1500); return; }
+        syncFromCloud(render);
+    }
+    _initialLoad();
+    _subscribeRealtime();
 
     return {syncFromCloud:syncFromCloud,render:render,statusStripHtml:statusStripHtml};
 })();
