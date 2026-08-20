@@ -604,7 +604,14 @@ var ParentRequests = (function(){
                     body:'Pickup at '+(alert.pickup_time||'')+(alert.camper_bunk?' · '+alert.camper_bunk:''),
                     data:{page:'campistry_lite.html'}
                 }}).then(function(r){
-                    if(r&&r.error)console.warn('[Live] pickup alert push failed:',r.error.message||r.error);
+                    if(r&&r.error){console.warn('[Live] pickup alert push failed:',r.error.message||r.error);return;}
+                    var d=r&&r.data;
+                    // A call that "succeeds" but reaches nobody looks identical
+                    // to a real send from the UI's perspective — this is the
+                    // exact ambiguity send-push's own targets/reason breakdown
+                    // exists to resolve, so surface it rather than staying quiet.
+                    if(d&&(!d.sent||!d.success))console.warn('[Live] pickup alert push sent:',d&&d.sent,'reason:',d&&d.reason,'targets:',d&&JSON.stringify(d.targets),'emails tried:',emails);
+                    else console.log('[Live] pickup alert push sent:',d&&d.sent,'of',emails.length,'recipient(s)');
                 },function(e){console.warn('[Live] pickup alert push failed:',e&&e.message||e);});
             },function(e){console.warn('[Live] pickup alert recipients lookup failed:',e&&e.message||e);});
     }
