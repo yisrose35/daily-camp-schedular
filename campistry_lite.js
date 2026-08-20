@@ -3629,10 +3629,16 @@
         return { x: (h[0] * x + h[1] * y + h[2]) / denom, y: (h[3] * x + h[4] * y + h[5]) / denom };
     }
     let _scanResults = [], _scanBunkLabel = '', _scanCanvas = null, _scanCtx = null, _scanDateKey = null, _scanSheetEl = null;
-    // A queue of photos, each one bunk's sheet. "Choose from library" can hand
-    // us several at once; "Take photo" always hands us exactly one. Either way
-    // they're walked one at a time through the same QR+bubble pipeline, with a
-    // running tally shown once the whole queue is done.
+    // A queue of photos, each one bunk's sheet, walked one at a time through
+    // the same QR+bubble pipeline. "Take photo" always hands us exactly one;
+    // "Choose from library" is SUPPOSED to allow picking several at once, but
+    // Android's multi-select picker intent is unreliable across devices/OEMs
+    // (a documented, unresolved platform issue — the "allow multiple" flag is
+    // only a hint some gallery apps ignore). So _scanQueueTally accumulates
+    // across the whole sheet session, not just one pick: after each batch
+    // finishes, the picker buttons reappear so the user can add more sheets,
+    // one pick at a time if that's all the device will give us, until they
+    // tap Done.
     let _scanQueue = [], _scanQueueIndex = 0, _scanQueueTally = null;
 
     function openScanSheet() {
@@ -3651,6 +3657,7 @@
             <div id="scanPreviewTable"></div>
             <div style="display:flex;gap:10px;margin-top:14px;">
                 <button type="button" class="lite-btn" id="scanConfirmBtn" style="flex:1;display:none;">Apply to roll call</button>
+                <button type="button" class="lite-btn" id="scanDoneBtn" style="flex:1;display:none;background:transparent;color:var(--lite-accent,#2563eb);border:1.5px solid var(--lite-accent,#2563eb);">Done</button>
             </div>`);
         const fileInput = _scanSheetEl.querySelector('#scanFileInput');
         const fileInputMulti = _scanSheetEl.querySelector('#scanFileInputMulti');
@@ -3684,6 +3691,7 @@
         fileInput.addEventListener('change', (e) => { const f = e.target.files && e.target.files[0]; if (f) scannerStartQueue([f]); });
         fileInputMulti.addEventListener('change', (e) => { const files = Array.from(e.target.files || []); if (files.length) scannerStartQueue(files); });
         _scanSheetEl.querySelector('#scanConfirmBtn').addEventListener('click', scannerConfirm);
+        _scanSheetEl.querySelector('#scanDoneBtn').addEventListener('click', closeSheet);
     }
 
     // The plugin rejects on a plain user cancel too (closing the camera /
@@ -3702,7 +3710,8 @@
             ? { src: it, isBlobUrl: false }
             : { src: URL.createObjectURL(it), isBlobUrl: true });
         _scanQueueIndex = 0;
-        _scanQueueTally = { bunks: 0, applied: 0, skipped: 0, hitCurrentDate: false };
+        // _scanQueueTally is NOT reset here — it accumulates across every
+        // pick made during this sheet session (see comment at declaration).
         scannerLoadQueueItem();
     }
 
@@ -3711,6 +3720,7 @@
         if (_scanQueueIndex >= _scanQueue.length) { scannerFinishQueue(); return; }
         const item = _scanQueue[_scanQueueIndex];
         if (el('scanStep1')) el('scanStep1').style.display = 'none';
+        if (el('scanDoneBtn')) el('scanDoneBtn').style.display = 'none';
         const progress = _scanQueue.length > 1 ? ` — photo ${_scanQueueIndex + 1} of ${_scanQueue.length}` : '';
         if (el('scanStatusMsg')) el('scanStatusMsg').innerHTML = `<p class="lite-note">Scanning sheet${esc(progress)}…</p>`;
         if (el('scanPreviewTable')) el('scanPreviewTable').innerHTML = '';
@@ -3736,12 +3746,30 @@
         scannerLoadQueueItem();
     }
 
+    // This batch (one picker invocation) is done. Rather than close the
+    // sheet, hand control back to the picker buttons so the user can keep
+    // adding sheets — necessary because "Choose from library" can't be
+    // trusted to actually return more than one photo per pick on every
+    // device (see comment at the top of this section).
     function scannerFinishQueue() {
+        const el = id => _scanSheetEl && _scanSheetEl.querySelector('#' + id);
         const t = _scanQueueTally;
-        closeSheet();
-        if (!t.bunks) return;   // every photo errored or was skipped — nothing to announce
+        if (el('scanPreviewTable')) el('scanPreviewTable').innerHTML = '';
+        if (el('scanConfirmBtn')) el('scanConfirmBtn').style.display = 'none';
+        if (el('scanStep1')) el('scanStep1').style.display = '';
+        if (!t.bunks) {
+            // Nothing applied yet this session (first batch errored/was
+            // skipped) — just go back to a clean picker, no tally to show.
+            if (el('scanStatusMsg')) el('scanStatusMsg').innerHTML = '';
+            return;
+        }
         const scope = t.bunks === 1 ? 'from scan' : `across ${t.bunks} bunks`;
-        toast(`Attendance updated — ${t.applied} camper${t.applied !== 1 ? 's' : ''} ${scope}${t.skipped ? `, ${t.skipped} left unmarked` : ''}`);
+        if (el('scanStatusMsg')) {
+            el('scanStatusMsg').innerHTML = `<div class="lite-note" style="margin:8px 0;">` +
+                `✓ ${t.applied} camper${t.applied !== 1 ? 's' : ''} updated ${scope}${t.skipped ? `, ${t.skipped} left unmarked` : ''}. ` +
+                `Scan another bunk, or you're done.</div>`;
+        }
+        if (el('scanDoneBtn')) el('scanDoneBtn').style.display = '';
         if (t.hitCurrentDate && activeTab === 'liveRoll') renderLiveRoll();
     }
 
