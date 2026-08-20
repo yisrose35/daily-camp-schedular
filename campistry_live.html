@@ -36,7 +36,6 @@
     <button class="sidebar-item" data-page="camper-locator"><span class="sidebar-dot"></span> Camper Locator</button>
     <div class="sidebar-label">Attendance</div>
     <button class="sidebar-item active" data-page="roll-call"><span class="sidebar-dot"></span> Roll Call <span class="sb-badge" id="sbAbsentCount">0</span></button>
-    <button class="sidebar-item" data-page="early-pickup"><span class="sidebar-dot"></span> Early Pickups</button>
     <button class="sidebar-item" data-page="pickup-alerts"><span class="sidebar-dot"></span> Pickup Alerts</button>
     <div class="sidebar-label">Reports</div>
     <button class="sidebar-item" data-page="reports"><span class="sidebar-dot"></span> Attendance Reports</button>
@@ -106,21 +105,6 @@
         </div>
     </div>
     <div id="rollCallBody"><div class="empty-state">Loading roster...</div></div>
-</div>
-
-<!-- ── EARLY PICKUPS ── -->
-<div id="page-early-pickup" class="live-page">
-    <div class="page-hero">
-        <div class="page-hero-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="22" height="22"><path d="M5 17H3a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11a2 2 0 0 1 2 2v3"/><rect x="9" y="11" width="14" height="10" rx="2"/><circle cx="12" cy="16" r="1"/></svg></div>
-        <div><h1>Early Pickups</h1><p>Campers leaving before dismissal</p></div>
-    </div>
-    <div class="page-header">
-        <div><div class="page-title">Early Pickups</div><div class="page-subtitle">Campers leaving before dismissal</div></div>
-        <div class="page-actions">
-            <button class="btn btn-primary" onclick="CampistryLive.openPickupModal()">+ Early Pickup</button>
-        </div>
-    </div>
-    <div id="earlyPickupBody"><div class="empty-state">No early pickups today</div></div>
 </div>
 
 <!-- ── PICKUP ALERTS ── -->
@@ -393,7 +377,7 @@ var ParentRequests = (function(){
     function syncFromCloud(cb){
         var db=_db(); if(!db){ if(cb)cb(); return; }
         db.client.from('parent_pickup_requests')
-            .select('id,type,label,camper_name,camper_bunk,parent_name,parent_email,details,status,office_message,staff_notes,created_at')
+            .select('id,type,label,camper_name,camper_bunk,parent_name,parent_email,details,status,office_message,staff_notes,hidden,created_at')
             .eq('camp_id',db.campId).order('created_at',{ascending:false}).limit(200)
             .then(function(res){
                 if(res.error){ console.warn('[Live] parent requests load:',res.error.message); if(cb)cb(); return; }
@@ -402,7 +386,8 @@ var ParentRequests = (function(){
                         id:m.id, type:m.type, label:m.label, childName:m.camper_name, childBunk:m.camper_bunk||'',
                         parentName:m.parent_name||'', parentEmail:m.parent_email||'',
                         submittedAt:new Date(m.created_at).getTime(),
-                        status:m.status||'Pending', officeMessage:m.office_message||'', staffNote:m.staff_notes||''
+                        status:m.status||'Pending', officeMessage:m.office_message||'', staffNote:m.staff_notes||'',
+                        hidden:!!m.hidden
                     });
                 });
                 saveReqs(mapped);
@@ -432,17 +417,26 @@ var ParentRequests = (function(){
 
     function updateBadge(){
         var reqs=getReqs();
-        var msgCount=reqs.filter(function(r){return r.type==='late'&&r.status==='Pending';}).length;
-        var chgCount=reqs.filter(function(r){return r.type!=='late'&&r.status==='Pending';}).length;
+        // Every pending item of every type lives in Messages now — Changes
+        // is resolved-only, so it has nothing left to badge.
+        var msgCount=reqs.filter(function(r){return r.status==='Pending'&&!r.hidden;}).length;
         var mb=document.getElementById('sbMessagesCount');
         if(mb){mb.textContent=String(msgCount);mb.style.display=msgCount?'':'none';}
         var cb=document.getElementById('sbChangesCount');
-        if(cb){cb.textContent=String(chgCount);cb.style.display=chgCount?'':'none';}
+        if(cb)cb.style.display='none';
     }
 
-    // ── MESSAGES — late arrivals only. One-click "Mark read" flips the
-    // camper to present on Roll Call; no reply-composer, this isn't a
-    // decision the parent needs an answer to. ──────────────────────────
+    // ── MESSAGES — the ONE triage inbox for every kind of parent request:
+    // early pickup, pickup change, going-with-a-friend, bus change, and late
+    // arrival, all together, Pending only. ──────────────────────────
+    // Messages is now the ONE triage inbox for every kind of parent request —
+    // early pickup, pickup change, going-with-a-friend, bus change, late
+    // arrival, all together, newest first, Pending only. What happens after
+    // Confirm depends on type (see confirmNow()): late routes into Roll
+    // Call's attendance directly (nothing further to show here), everything
+    // else becomes a resolved record on the Changes page. Either way it
+    // leaves this list the moment it's acted on — Messages is only ever
+    // "what still needs a decision."
     function renderMessages(){
         syncFromCloud(_paintMessages);
         _paintMessages();
@@ -451,39 +445,22 @@ var ParentRequests = (function(){
         var reqs=getReqs();
         var body=document.getElementById('messagesBody');if(!body)return;
         updateBadge();
-        var late=reqs.map(function(r,i){return{r:r,i:i};}).filter(function(x){return x.r.type==='late';});
-        if(!late.length){body.innerHTML='<div class="empty-state">No late-arrival messages — they\'ll appear here when a parent reports a late drop-off from Campistry Link</div>';return;}
-
+        var items=reqs.map(function(r,i){return{r:r,i:i};}).filter(function(x){return x.r.status==='Pending'&&!x.r.hidden;});
+        if(!items.length){body.innerHTML='<div class="empty-state">Nothing pending — early pickups, changes, bus changes, and late arrivals all show up here the moment a parent sends one from Campistry Link</div>';return;}
         var html='<div class="card"><div class="card-body" style="padding:0 18px;">';
-        late.forEach(function(x){
-            var r=x.r,i=x.i;
-            var statusCls=r.status==='Pending'?'badge-warn':'badge-ok';
-            var details=[];
-            if(r.arrivedAt)details.push('Arrived: '+r.arrivedAt);
-            if(r.reason)details.push(r.reason);
-            if(r.notes)details.push('“'+r.notes+'”');
-            html+=
-                '<div style="display:flex;align-items:flex-start;gap:12px;padding:14px 0;border-bottom:1px solid var(--slate-100);">'+
-                '<div style="width:36px;height:36px;border-radius:50%;background:var(--red-50,#fef2f2);color:var(--red-500);display:flex;align-items:center;justify-content:center;flex-shrink:0;"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg></div>'+
-                '<div style="flex:1;min-width:0;">'+
-                    '<div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;"><span style="font-weight:700;">'+esc(r.childName)+'</span>'+(r.childBunk?'<span style="font-size:.7rem;color:var(--slate-400);background:var(--slate-100);padding:1px 8px;border-radius:999px;">'+esc(r.childBunk)+'</span>':'')+'</div>'+
-                    '<div style="font-size:.76rem;color:var(--slate-500);margin-top:2px;">From: '+esc(r.parentName)+'&nbsp;&middot;&nbsp;'+fmtTime(r.submittedAt)+'</div>'+
-                    (details.length?'<div style="font-size:.79rem;color:var(--slate-600);margin-top:4px;">'+details.map(esc).join('&nbsp;&nbsp;&middot;&nbsp;&nbsp;')+'</div>':'')+
-                    (r.status==='Pending'?'<button class="btn btn-primary btn-sm" style="margin-top:8px;" onclick="ParentRequests.markLateRead('+i+')">Mark read — camper came late</button>':'')+
-                '</div>'+
-                '<span class="badge '+statusCls+'" style="flex-shrink:0;">'+(r.status==='Pending'?'New':'Read')+'</span>'+
-                '</div>';
-        });
+        items.forEach(function(x){ html+=_changeItemHtml(x.r,x.i); });
         html+='</div></div>';
         body.innerHTML=html;
     }
-    function markLateRead(i){ _apply(i,'Confirmed','',_paintMessages); }
 
-    // ── CHANGES — Early Pickup / Pickup Change / Bus Change, all 3 groups
-    // visible at once, each with Confirm/Decline+reply and a staff-only
-    // notes field. ───────────────────────────────────────────────────
+    // ── CHANGES — the resolved LOG for everything except late arrivals
+    // (those route straight into Roll Call's attendance instead — nothing
+    // for them to show here). Early Pickup / Pickup Change / Bus Change,
+    // grouped, Confirmed/Declined only — the moment something's acted on in
+    // Messages it disappears from there and lands here as a record, with
+    // Hide/Delete to keep the list from growing forever. ─────────────────
     function renderChanges(){
-        syncFromCloud(_paintChanges);
+        syncFromCloud(function(){ _paintChanges(); if(window.CampistryLive)CampistryLive.renderEarlyPickups(); });
         _paintChanges();
     }
     function _paintChanges(){
@@ -493,22 +470,31 @@ var ParentRequests = (function(){
 
         var html='<div class="changes-grid">';
         GROUPS.forEach(function(g){
-            var items=reqs.map(function(r,i){return{r:r,i:i};}).filter(function(x){return g.types.indexOf(x.r.type)>=0;});
-            html+='<div class="card"><div class="card-header"><h2 style="font-size:.92rem;">'+esc(g.title)+'</h2><span class="badge badge-warn" style="'+(items.filter(function(x){return x.r.status==='Pending';}).length?'':'display:none;')+'">'+items.filter(function(x){return x.r.status==='Pending';}).length+' pending</span></div><div class="card-body" style="padding:0 16px;">';
+            var items=reqs.map(function(r,i){return{r:r,i:i};}).filter(function(x){return g.types.indexOf(x.r.type)>=0&&x.r.status!=='Pending'&&!x.r.hidden;});
+            var extraBtn=g.key==='early'?'<button class="btn btn-secondary btn-sm" onclick="CampistryLive.openPickupModal()">+ Add</button>':'';
+            html+='<div class="card"><div class="card-header"><h2 style="font-size:.92rem;">'+esc(g.title)+'</h2>'+extraBtn+'</div><div class="card-body" style="padding:0 16px;">';
             if(!items.length){
                 html+='<div class="empty-state" style="padding:20px 0;">Nothing here yet</div>';
             } else {
                 items.forEach(function(x){ html+=_changeItemHtml(x.r,x.i); });
             }
+            // Office-entered pickups (not from a parent request at all) live in
+            // the same local today.earlyPickups store Roll Call/Reports read —
+            // rendered by campistry_live.js into this container, right under
+            // the parent-request history, so "Early Pickup" reads as one list
+            // regardless of which side originated it.
+            if(g.key==='early')html+='<div id="earlyPickupBody"></div>';
             html+='</div></div>';
         });
         html+='</div>';
         body.innerHTML=html;
+        if(window.CampistryLive)CampistryLive.renderEarlyPickups();
     }
     function _changeItemHtml(r,i){
         var statusCls=r.status==='Pending'?'badge-warn':r.status==='Confirmed'?'badge-info':r.status==='Declined'?'badge-error':'badge-ok';
         var details=[];
-        if(r.type==='early'){if(r.pickupTime)details.push('Pickup: '+r.pickupTime);if(r.pickupBy)details.push('By: '+r.pickupBy);}
+        if(r.type==='late'){if(r.arrivedAt)details.push('Arrived: '+r.arrivedAt);if(r.reason)details.push(r.reason);}
+        else if(r.type==='early'){if(r.pickupTime)details.push('Pickup: '+r.pickupTime);if(r.pickupBy)details.push('By: '+r.pickupBy);}
         else if(r.type==='change'){if(r.newPickupPerson)details.push('New person: '+r.newPickupPerson);if(r.phone)details.push(r.phone);}
         else if(r.type==='friend'){if(r.friendName)details.push('Friend: '+r.friendName);if(r.friendParentName)details.push('Parent: '+r.friendParentName);}
         else if(r.type==='bus'){if(r.busChange)details.push(r.busChange);}
@@ -516,20 +502,29 @@ var ParentRequests = (function(){
 
         var actions='';
         if(_compose&&_compose.index===i){
-            var canned=_compose.action==='Confirmed'?CONFIRM_CANNED:DECLINE_CANNED;
+            var canned=DECLINE_CANNED;
             actions='<div style="margin-top:8px;padding:10px;background:var(--slate-50);border-radius:8px;">'+
                 '<div style="display:flex;flex-wrap:wrap;gap:5px;margin-bottom:6px;">'+
                 canned.map(function(c){return '<button class="btn btn-secondary btn-sm" style="font-size:.72rem;" onclick="ParentRequests.useCanned(\''+esc(c).replace(/'/g,"\\'")+'\')">'+esc(c)+'</button>';}).join('')+
                 '</div>'+
                 '<textarea id="rqComposeMsg" class="form-input" rows="2" placeholder="Message to parent (optional)"></textarea>'+
                 '<div style="display:flex;gap:6px;margin-top:6px;">'+
-                '<button class="btn btn-primary btn-sm" onclick="ParentRequests.sendCompose()">Send '+esc(_compose.action)+'</button>'+
+                '<button class="btn btn-primary btn-sm" onclick="ParentRequests.sendCompose()">Send Declined</button>'+
                 '<button class="btn btn-secondary btn-sm" onclick="ParentRequests.cancelCompose()">Cancel</button>'+
                 '</div></div>';
         } else if(r.status==='Pending'){
+            // One tap, no compose step — confirming almost never needs a
+            // reply typed first, and the friction of a mandatory second step
+            // was the whole complaint. Decline still opens the composer,
+            // since a decline usually DOES need an explanation to the parent.
             actions='<div style="display:flex;gap:6px;margin-top:6px;">'+
-                '<button class="btn btn-primary btn-sm" onclick="ParentRequests.startCompose('+i+',\'Confirmed\')">Confirm</button>'+
+                '<button class="btn btn-primary btn-sm" onclick="ParentRequests.confirmNow('+i+')">Confirm</button>'+
                 '<button class="btn btn-secondary btn-sm" onclick="ParentRequests.startCompose('+i+',\'Declined\')">Decline</button>'+
+                '</div>';
+        } else {
+            actions='<div style="display:flex;gap:6px;margin-top:6px;">'+
+                '<button class="btn btn-secondary btn-sm" onclick="ParentRequests.hideRequest('+i+')">Hide</button>'+
+                '<button class="btn btn-secondary btn-sm" onclick="ParentRequests.deleteRequest('+i+')">Delete</button>'+
                 '</div>';
         }
         var initials=esc(r.childName||'').split(' ').map(function(n){return n[0]||'';}).join('').slice(0,2);
@@ -669,13 +664,47 @@ var ParentRequests = (function(){
         liveToast(r.childName+' — '+r.label+' '+status.toLowerCase());
     }
 
+    // One tap from Messages (or Changes) — no compose step. Repaints both
+    // lists regardless of which page is currently open: the item is
+    // disappearing from one and (unless it's 'late', which has nowhere
+    // further to go) appearing in the other, and each paint function is a
+    // no-op if its own page isn't the one in the DOM right now.
+    function confirmNow(i){ _apply(i,'Confirmed','',refresh); }
+
+    function hideRequest(i){
+        var reqs=getReqs(),r=reqs[i]; if(!r)return;
+        r.hidden=true; saveReqs(reqs);
+        var db=_db();
+        if(db){
+            db.client.from('parent_pickup_requests').update({hidden:true}).eq('id',r.id)
+                .then(function(res){ if(res.error)console.warn('[Live] hide request failed:',res.error.message); });
+        }
+        refresh();
+    }
+
+    function deleteRequest(i){
+        var reqs=getReqs(),r=reqs[i]; if(!r)return;
+        if(!confirm('Delete this request permanently for '+(r.childName||'this camper')+'? This can\'t be undone.'))return;
+        var db=_db();
+        if(!db){ reqs.splice(i,1); saveReqs(reqs); refresh(); return; }
+        db.client.from('parent_pickup_requests').delete().eq('id',r.id).then(function(res){
+            if(res.error){ console.warn('[Live] delete request failed:',res.error.message); liveToast('Could not delete — check your connection'); return; }
+            // getReqs() re-parses JSON on every call, so this is a fresh array
+            // of fresh objects each time — match by id, not object identity.
+            var fresh=getReqs(); var idx=fresh.findIndex(function(x){return x.id===r.id;});
+            if(idx>=0)fresh.splice(idx,1);
+            saveReqs(fresh); refresh();
+        });
+    }
+
     function refresh(){ _paintMessages(); _paintChanges(); }
 
     // Update badge on load
     syncFromCloud(updateBadge);
     updateBadge();
 
-    return {renderMessages:renderMessages,renderChanges:renderChanges,markLateRead:markLateRead,
+    return {renderMessages:renderMessages,renderChanges:renderChanges,
+        confirmNow:confirmNow,hideRequest:hideRequest,deleteRequest:deleteRequest,
         startCompose:startCompose,cancelCompose:cancelCompose,useCanned:useCanned,sendCompose:sendCompose,
         saveNote:saveNote,refresh:refresh,updateBadge:updateBadge};
 })();
@@ -902,9 +931,9 @@ var CamperMail = (function(){
     <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
     Locator
   </button>
-  <button class="cs-bnav-item" data-page="early-pickup" onclick="document.querySelector('.sidebar-item[data-page=early-pickup]').click()">
-    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M5 17H3a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11a2 2 0 0 1 2 2v3"/><rect x="9" y="11" width="14" height="10" rx="2"/><circle cx="12" cy="16" r="1"/></svg>
-    Pickups
+  <button class="cs-bnav-item" data-page="messages" onclick="document.querySelector('.sidebar-item[data-page=messages]').click()">
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>
+    Messages
   </button>
   <button class="cs-bnav-item" data-page="changes" onclick="document.querySelector('.sidebar-item[data-page=changes]').click()">
     <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>
