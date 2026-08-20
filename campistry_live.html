@@ -37,6 +37,7 @@
     <div class="sidebar-label">Attendance</div>
     <button class="sidebar-item active" data-page="roll-call"><span class="sidebar-dot"></span> Roll Call <span class="sb-badge" id="sbAbsentCount">0</span></button>
     <button class="sidebar-item" data-page="early-pickup"><span class="sidebar-dot"></span> Early Pickups</button>
+    <button class="sidebar-item" data-page="pickup-alerts"><span class="sidebar-dot"></span> Pickup Alerts</button>
     <div class="sidebar-label">Reports</div>
     <button class="sidebar-item" data-page="reports"><span class="sidebar-dot"></span> Attendance Reports</button>
     <div class="sidebar-label">Parent</div>
@@ -120,6 +121,21 @@
         </div>
     </div>
     <div id="earlyPickupBody"><div class="empty-state">No early pickups today</div></div>
+</div>
+
+<!-- ── PICKUP ALERTS ── -->
+<div id="page-pickup-alerts" class="live-page">
+    <div class="page-hero">
+        <div class="page-hero-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="22" height="22"><path d="M18 8A6 6 0 0 0 6 8c0 7-3 9-3 9h18s-3-2-3-9"/><path d="M13.73 21a2 2 0 0 1-3.46 0"/></svg></div>
+        <div><h1>Pickup Alerts</h1><p>Who's been told a camper is leaving early, and whether they've seen it</p></div>
+    </div>
+    <div class="page-header">
+        <div><div class="page-title">Pickup Alerts</div><div class="page-subtitle">Division head, bunk staff, and league captain notifications</div></div>
+        <div class="page-actions">
+            <select class="btn btn-secondary btn-sm" id="pickupAlertsDivFilter" style="min-width:160px;"><option value="">All divisions</option></select>
+        </div>
+    </div>
+    <div id="pickupAlertsBody"><div class="empty-state">Loading…</div></div>
 </div>
 
 <!-- ── REPORTS ── -->
@@ -297,6 +313,7 @@
             if(p==='changes'&&window.ParentRequests) ParentRequests.renderChanges();
             if(p==='camper-mail'&&window.CamperMail) CamperMail.render();
             if(p==='camper-locator'&&window.CampistryLiveLocator) CampistryLiveLocator.refresh();
+            if(p==='pickup-alerts'&&window.PickupAlerts) PickupAlerts.render();
         });
     });
 })();
@@ -321,6 +338,43 @@ var ParentRequests = (function(){
     function getReqs(){try{return JSON.parse(localStorage.getItem(PKEY)||'[]');}catch(e){return[];}}
     function saveReqs(arr){try{localStorage.setItem(PKEY,JSON.stringify(arr));}catch(e){}}
     function _db(){ var d=window.CampistryDB; if(!d)return null; var c=d.getClient?d.getClient():null, id=d.getCampId?d.getCampId():null; return (c&&id&&c.from)?{client:c,campId:id}:null; }
+
+    // Pickup-alert league cross-check: does this camper have an active league
+    // game at the exact pickup time? If so, that team's captains join the
+    // division-head/bunk-staff recipients the DB trigger (migration 065)
+    // already created. Fire-and-forget, does not block the confirm UI — a
+    // short delay gives the trigger a moment to have inserted the
+    // pickup_alerts row this RPC looks up by (camp_id, camper_name).
+    function _checkLeagueMatchAndNotify(camperName,pickupTimeStr,campId,client){
+        if(!window.CampistryLiveLocator||!window.LiveScheduleReader||!camperName||!pickupTimeStr)return;
+        setTimeout(function(){
+            var g=(typeof window.loadGlobalSettings==='function')?(window.loadGlobalSettings()||{}):{};
+            var structure=g.campStructure||{};
+            window.LiveScheduleReader.loadToday(structure).then(function(scheduleData){
+                window.CampistryLiveLocator.setScheduleData(scheduleData);
+                var camper=((g.app1&&g.app1.camperRoster)||{})[camperName];
+                if(!camper){ client.rpc('mark_pickup_alert_league_checked',{p_camp_id:campId,p_camper_name:camperName}).then(function(){},function(){}); return; }
+                var division=window.CampistryLiveLocator.bunkToDivision(camper.bunk)||camper.division;
+                var targetMin=window.CampistryLiveLocator.parseTypedTime(pickupTimeStr);
+                var leagueData=division&&targetMin>=0?window.CampistryLiveLocator.getEffectiveLeagueData(division,-1,targetMin,null):null;
+                if(!leagueData||!leagueData.leagueName){
+                    client.rpc('mark_pickup_alert_league_checked',{p_camp_id:campId,p_camper_name:camperName}).then(function(){},function(){});
+                    return;
+                }
+                var team=window.CampistryLiveLocator.resolveCamperTeam(camper,leagueData.leagueName);
+                var league=(g.leaguesByName||{})[leagueData.leagueName];
+                var captainIds=(league&&league.teamCaptains&&team&&league.teamCaptains[team])||[];
+                if(!captainIds.length){
+                    client.rpc('mark_pickup_alert_league_checked',{p_camp_id:campId,p_camper_name:camperName}).then(function(){},function(){});
+                    return;
+                }
+                client.rpc('add_pickup_alert_league_recipients',{
+                    p_camp_id:campId,p_camper_name:camperName,p_captain_ids:captainIds,
+                    p_league_name:leagueData.leagueName,p_team:team
+                }).then(function(){},function(e){console.warn('[Live] league-captain pickup alert failed:',e&&e.message||e);});
+            }, function(){});
+        }, 900);
+    }
 
     function syncFromCloud(cb){
         var db=_db(); if(!db){ if(cb)cb(); return; }
@@ -475,6 +529,7 @@ var ParentRequests = (function(){
                 '<div style="font-size:.76rem;color:var(--slate-500);margin-top:2px;">From: '+esc(r.parentName)+'&nbsp;&middot;&nbsp;'+fmtTime(r.submittedAt)+'</div>'+
                 (details.length?'<div style="font-size:.79rem;color:var(--slate-600);margin-top:4px;line-height:1.5;">'+details.map(esc).join('&nbsp;&nbsp;&middot;&nbsp;&nbsp;')+'</div>':'')+
                 (r.officeMessage?'<div style="font-size:.76rem;color:var(--slate-600);margin-top:4px;font-style:italic;">Office: “'+esc(r.officeMessage)+'”</div>':'')+
+                (r.status==='Confirmed'&&r.type==='early'&&window.PickupAlerts?window.PickupAlerts.statusStripHtml(r.childName):'')+
                 '<textarea class="form-input" rows="1" placeholder="Staff note (not shared with parent)" style="margin-top:6px;font-size:.76rem;" onblur="ParentRequests.saveNote('+i+',this.value)">'+esc(r.staffNote||'')+'</textarea>'+
                 actions+
             '</div>'+
@@ -545,6 +600,11 @@ var ParentRequests = (function(){
             }
             saveTodayData(today);
             if(window.CampistryLive) CampistryLive.refresh();
+
+            if(r.type==='early'&&r.pickupTime){
+                var _pdb=_db();
+                if(_pdb) _checkLeagueMatchAndNotify(r.childName,r.pickupTime,_pdb.campId,_pdb.client);
+            }
         }
 
         // Paint from the local state we just set — NOT a fresh syncFromCloud().
@@ -565,6 +625,112 @@ var ParentRequests = (function(){
     return {renderMessages:renderMessages,renderChanges:renderChanges,markLateRead:markLateRead,
         startCompose:startCompose,cancelCompose:cancelCompose,useCanned:useCanned,sendCompose:sendCompose,
         saveNote:saveNote,refresh:refresh,updateBadge:updateBadge};
+})();
+</script>
+<script>
+// ── Pickup Alerts — reads pickup_alerts + pickup_alert_recipients (migration
+//    064). Office-wide view (owner/admin/scheduler RLS already grants
+//    camp-wide SELECT — see 064's pa_office_select/par_office_select
+//    policies) with a division filter; a real Division Head's OWN alerts
+//    reach them through Lite's alert stack instead, same as bunk staff.
+var PickupAlerts = (function(){
+    var _alerts = [];       // [{id, camper_name, camper_bunk, camper_division, pickup_time, pickup_at, league_check_state, recipients:[...]}]
+    var _divFilter = '';
+    var _chan = null;
+
+    function _db(){ var d=window.CampistryDB; if(!d)return null; var c=d.getClient?d.getClient():null, id=d.getCampId?d.getCampId():null; return (c&&id&&c.from)?{client:c,campId:id}:null; }
+    function esc(s){if(s==null)return'';var m={'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#x27;'};return String(s).replace(/[&<>"']/g,function(c){return m[c]});}
+
+    function syncFromCloud(cb){
+        var db=_db(); if(!db){ if(cb)cb(); return; }
+        db.client.from('pickup_alerts').select('*').eq('camp_id',db.campId)
+            .order('created_at',{ascending:false}).limit(100)
+            .then(function(res){
+                if(res.error){ console.warn('[Live] pickup_alerts load:',res.error.message); if(cb)cb(); return; }
+                _alerts = res.data||[];
+                var ids = _alerts.map(function(a){return a.id;});
+                if(!ids.length){ if(cb)cb(); return; }
+                db.client.from('pickup_alert_recipients').select('*').in('alert_id',ids)
+                    .then(function(rres){
+                        var byAlert={};
+                        (rres.data||[]).forEach(function(r){ (byAlert[r.alert_id]=byAlert[r.alert_id]||[]).push(r); });
+                        _alerts.forEach(function(a){ a.recipients=byAlert[a.id]||[]; });
+                        if(cb)cb();
+                    }, function(){ if(cb)cb(); });
+            }, function(){ if(cb)cb(); });
+    }
+
+    // Inline status strip for a confirmed early-pickup row in ParentRequests'
+    // own list (see campistry_live.html's _changeItemHtml).
+    function statusStripHtml(camperName){
+        var a=_alerts.filter(function(x){return x.camper_name===camperName;})
+            .sort(function(x,y){return (y.created_at||'').localeCompare(x.created_at||'');})[0];
+        if(!a||!a.recipients||!a.recipients.length)return '';
+        var rows=a.recipients.map(function(r){
+            var icon=r.ack_state==='acknowledged'?'✓':(r.ack_state==='snoozed'?'⏰':'○');
+            var label=esc(r.recipient_name||r.recipient_email||'Someone')+' ('+esc((r.recipient_role||'').replace('_',' '))+')';
+            var tail=r.ack_state==='acknowledged'?' — saw it':(r.ack_state==='snoozed'?' — snoozed':' — not yet');
+            return '<span style="display:inline-block;margin:2px 8px 2px 0;font-size:.7rem;color:var(--slate-500);">'+icon+' '+label+tail+'</span>';
+        }).join('');
+        return '<div style="margin-top:4px;">'+rows+'</div>';
+    }
+
+    function divisions(){
+        var seen={},out=[];
+        _alerts.forEach(function(a){ var d=a.camper_division; if(d&&!seen[d]){seen[d]=1;out.push(d);} });
+        return out.sort();
+    }
+
+    function render(){
+        var body=document.getElementById('pickupAlertsBody');
+        var filterSel=document.getElementById('pickupAlertsDivFilter');
+        if(!body)return;
+        if(filterSel && !filterSel.dataset.wired){
+            filterSel.dataset.wired='1';
+            filterSel.addEventListener('change',function(){ _divFilter=filterSel.value; render(); });
+        }
+        if(filterSel){
+            var opts='<option value="">All divisions</option>'+divisions().map(function(d){
+                return '<option value="'+esc(d)+'"'+(d===_divFilter?' selected':'')+'>'+esc(d)+'</option>';
+            }).join('');
+            if(filterSel.innerHTML!==opts)filterSel.innerHTML=opts;
+        }
+        var list=_divFilter?_alerts.filter(function(a){return a.camper_division===_divFilter;}):_alerts;
+        if(!list.length){ body.innerHTML='<div class="empty-state">No pickup alerts yet today.</div>'; return; }
+        body.innerHTML=list.map(function(a){
+            var allAcked=(a.recipients||[]).length && a.recipients.every(function(r){return r.ack_state==='acknowledged';});
+            var leagueTag=a.league_check_state==='checked_match'?'<span class="badge badge-info" style="margin-left:6px;">League game</span>':'';
+            return '<div class="card" style="margin-bottom:10px;"><div class="card-body">'+
+                '<div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;">'+
+                    '<span style="font-weight:700;">'+esc(a.camper_name)+'</span>'+
+                    (a.camper_bunk?'<span style="font-size:.7rem;color:var(--slate-400);background:var(--slate-100);padding:1px 8px;border-radius:999px;">'+esc(a.camper_bunk)+'</span>':'')+
+                    leagueTag+
+                    '<span class="badge '+(allAcked?'badge-ok':'badge-warn')+'" style="margin-left:auto;">'+(allAcked?'All acknowledged':'Awaiting acknowledgment')+'</span>'+
+                '</div>'+
+                '<div style="font-size:.78rem;color:var(--slate-500);margin-top:4px;">Pickup at '+esc(a.pickup_time)+(a.camper_division?' · '+esc(a.camper_division):'')+'</div>'+
+                statusStripHtml(a.camper_name)+
+            '</div></div>';
+        }).join('');
+    }
+
+    // Camp-wide realtime feed — mirrors the hardened camp_state_kv
+    // subscription pattern (integration_hooks.js): a fresh channel per
+    // page-load, debounced re-sync on any change to either table.
+    var _debTimer=null;
+    function _debouncedSync(){ if(_debTimer)clearTimeout(_debTimer); _debTimer=setTimeout(function(){ syncFromCloud(render); },250); }
+    function _subscribeRealtime(){
+        var db=_db(); if(!db||_chan)return;
+        try{
+            _chan=db.client.channel('pickup-alerts-'+db.campId+'-'+Date.now())
+                .on('postgres_changes',{event:'*',schema:'public',table:'pickup_alerts',filter:'camp_id=eq.'+db.campId},_debouncedSync)
+                .on('postgres_changes',{event:'*',schema:'public',table:'pickup_alert_recipients',filter:'camp_id=eq.'+db.campId},_debouncedSync)
+                .subscribe();
+        }catch(e){ console.warn('[Live] pickup-alerts realtime subscribe failed:',e&&e.message||e); }
+    }
+
+    syncFromCloud(function(){ _subscribeRealtime(); });
+
+    return {syncFromCloud:syncFromCloud,render:render,statusStripHtml:statusStripHtml};
 })();
 </script>
 <script>

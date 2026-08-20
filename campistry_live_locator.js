@@ -520,7 +520,19 @@
         });
     }
 
-    window.CampistryLiveLocator = { init: init, refresh: load };
+    // Widened beyond {init, refresh} for the pickup-alert league cross-check
+    // (campistry_live.html's ParentRequests confirm handler): it needs this
+    // module's matchup-resolution logic directly, without going through this
+    // file's own page/UI — hence setScheduleData() to feed it the same shape
+    // load() would have, without touching the DOM search UI at all.
+    window.CampistryLiveLocator = {
+        init: init, refresh: load,
+        setScheduleData: function (d) { _schedule = d; },
+        getEffectiveLeagueData: getEffectiveLeagueData,
+        resolveCamperTeam: resolveCamperTeam,
+        bunkToDivision: bunkToDivision,
+        parseTypedTime: parseTypedTime
+    };
 
     if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', init);
     else init();

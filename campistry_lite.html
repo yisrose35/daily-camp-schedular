@@ -120,6 +120,11 @@
     <!-- Toast -->
     <div class="lite-toast" id="liteToast" style="display:none;"></div>
 
+    <!-- Pickup alerts — a small stack above whatever page is active, one
+         card per unresolved alert addressed to this login (see
+         campistry_lite.js renderPickupAlerts()). -->
+    <div id="litePickupAlerts" class="lite-pickup-alerts"></div>
+
     <!-- ===== Core stack (order matters: config → SDK → client → RBAC → data) ===== -->
     <script src="config.js"></script>
     <script>

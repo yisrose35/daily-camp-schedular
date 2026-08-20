@@ -47,6 +47,7 @@ const corsHeaders = {
 
 const VALID_PREFS = new Set([
   "notifyMessages", "notifyPayments", "notifyCanteen", "notifyPhotos", "notifyHealth",
+  "pickupAlert",
 ]);
 
 // ── Google OAuth: service account → access token ─────────────────────────────
@@ -152,7 +153,7 @@ serve(async (req) => {
     const auth = (req.headers.get("Authorization") || "").replace(/^Bearer\s+/i, "");
     if (!serviceKey || !auth) return json({ success: false, error: "forbidden" }, 403);
 
-    const { campId, pref, title, body, email, data, dryRun } = await req.json();
+    const { campId, pref, title, body, email, data, dryRun, staffEmails } = await req.json();
     if (!campId) return json({ success: false, error: "missing_campId" }, 400);
     if (!VALID_PREFS.has(pref)) return json({ success: false, error: "invalid_pref" }, 400);
     if (!title && !body) return json({ success: false, error: "empty_notification" }, 400);
@@ -179,39 +180,71 @@ serve(async (req) => {
     }
 
     const db = createClient(supabaseUrl, serviceKey);
-    const { data: rows, error } = await db.rpc("push_targets_for_camp_v2", {
-      p_camp_id: campId,
-      p_pref: pref,
-      p_email: email || null,
-    });
-    if (error) return json({ success: false, error: error.message }, 500);
 
-    // ── Why a send reaches who it reaches ──────────────────────────────────
-    // Every device this camp knows about, split by the reason it qualifies or
-    // does not. Computed even on a successful send, because "sent: 1" when
-    // eight parents were expected is just as wrong as "sent: 0".
-    const known = rows || [];
-    const eligible = known.filter((t: any) => t.invite_active && t.pref_on && t.email_match);
-    const android = eligible.filter((t: any) => t.platform === "android");
-    const targets = {
-      devicesKnownToCamp: known.length,
-      excludedByRevokedInvite: known.filter((t: any) => !t.invite_active).length,
-      excludedByPreference: known.filter((t: any) => t.invite_active && !t.pref_on).length,
-      excludedByEmail: known.filter((t: any) => t.invite_active && t.pref_on && !t.email_match).length,
-      eligible: eligible.length,
-      android: android.length,
-      ios: eligible.length - android.length,
-    };
-
-    // Name the reason rather than leaving the caller to compare numbers.
+    // Two entirely separate targeting paths under one send loop: staffEmails
+    // routes to staff (Division Head / bunk staff / league captain alerts —
+    // there is no parent-style invite/preference gate for staff, and no
+    // per-notification opt-out for this alert type, given the safety
+    // context), while everything else keeps the existing parent-targeting
+    // path untouched.
+    const isStaffTarget = Array.isArray(staffEmails) && staffEmails.length > 0;
+    let android: any[] = [];
+    let targets: Record<string, unknown>;
     let reason: string | null = null;
-    if (!android.length) {
-      if (!targets.devicesKnownToCamp) reason = "no parent at this camp has registered a device";
-      else if (targets.excludedByEmail === targets.devicesKnownToCamp - targets.excludedByRevokedInvite - targets.excludedByPreference && email) reason = `no registered device belongs to ${email}`;
-      else if (targets.excludedByRevokedInvite && !targets.eligible) reason = "every registered device belongs to a parent whose invite is revoked or expired";
-      else if (targets.excludedByPreference && !targets.eligible) reason = "every eligible parent switched this notification off";
-      else if (targets.ios) reason = "the only eligible devices are iOS, which is not wired to FCM yet";
-      else reason = "no eligible Android device";
+
+    if (isStaffTarget) {
+      const { data: staffRows, error: staffErr } = await db.rpc("push_targets_for_staff_emails", {
+        p_camp_id: campId,
+        p_emails: staffEmails,
+      });
+      if (staffErr) return json({ success: false, error: staffErr.message }, 500);
+      const known = staffRows || [];
+      android = known.filter((t: any) => t.platform === "android");
+      targets = {
+        devicesKnownToCamp: known.length,
+        eligible: known.length,
+        android: android.length,
+        ios: known.length - android.length,
+      };
+      if (!android.length) {
+        reason = !known.length
+          ? "none of the given staff emails have a registered device"
+          : "the only matching devices are iOS, which is not wired to FCM yet";
+      }
+    } else {
+      const { data: rows, error } = await db.rpc("push_targets_for_camp_v2", {
+        p_camp_id: campId,
+        p_pref: pref,
+        p_email: email || null,
+      });
+      if (error) return json({ success: false, error: error.message }, 500);
+
+      // ── Why a send reaches who it reaches ──────────────────────────────
+      // Every device this camp knows about, split by the reason it qualifies
+      // or does not. Computed even on a successful send, because "sent: 1"
+      // when eight parents were expected is just as wrong as "sent: 0".
+      const known = rows || [];
+      const eligible = known.filter((t: any) => t.invite_active && t.pref_on && t.email_match);
+      android = eligible.filter((t: any) => t.platform === "android");
+      targets = {
+        devicesKnownToCamp: known.length,
+        excludedByRevokedInvite: known.filter((t: any) => !t.invite_active).length,
+        excludedByPreference: known.filter((t: any) => t.invite_active && !t.pref_on).length,
+        excludedByEmail: known.filter((t: any) => t.invite_active && t.pref_on && !t.email_match).length,
+        eligible: eligible.length,
+        android: android.length,
+        ios: eligible.length - android.length,
+      };
+
+      // Name the reason rather than leaving the caller to compare numbers.
+      if (!android.length) {
+        if (!(targets.devicesKnownToCamp as number)) reason = "no parent at this camp has registered a device";
+        else if ((targets.excludedByEmail as number) === (targets.devicesKnownToCamp as number) - (targets.excludedByRevokedInvite as number) - (targets.excludedByPreference as number) && email) reason = `no registered device belongs to ${email}`;
+        else if ((targets.excludedByRevokedInvite as number) && !(targets.eligible as number)) reason = "every registered device belongs to a parent whose invite is revoked or expired";
+        else if ((targets.excludedByPreference as number) && !(targets.eligible as number)) reason = "every eligible parent switched this notification off";
+        else if (targets.ios) reason = "the only eligible devices are iOS, which is not wired to FCM yet";
+        else reason = "no eligible Android device";
+      }
     }
 
     if (dryRun) return json({ success: true, dryRun: true, wouldSend: android.length, targets, reason });

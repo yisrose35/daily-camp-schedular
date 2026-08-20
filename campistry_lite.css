@@ -672,6 +672,16 @@ button { cursor: pointer; border: none; background: none; }
 /* ─── Toast ───────────────────────────────────────────────────────────── */
 .lite-toast { position: fixed; left: 50%; transform: translateX(-50%); bottom: calc(var(--tabbar-h) + 20px + env(safe-area-inset-bottom)); z-index: 200; background: #1A2231; color: #fff; padding: 12px 20px; border-radius: 999px; font-size: 0.85rem; font-weight: 500; box-shadow: var(--shadow-lg); max-width: 88vw; text-align: center; animation: liteIn 0.2s ease; }
 
+/* ─── Pickup alerts ───────────────────────────────────────────────────── */
+.lite-pickup-alerts { position: fixed; left: 0; right: 0; top: calc(env(safe-area-inset-top) + 8px); z-index: 210; display: flex; flex-direction: column; gap: 8px; padding: 0 12px; pointer-events: none; }
+.lite-pickup-alert-card { pointer-events: auto; background: #1A2231; color: #fff; border-radius: 16px; padding: 12px 14px; box-shadow: var(--shadow-lg); animation: liteSheetUp 0.22s cubic-bezier(0.16,1,0.3,1); }
+.lite-pickup-alert-title { font-weight: 700; font-size: 0.9rem; margin-bottom: 2px; }
+.lite-pickup-alert-sub { font-size: 0.76rem; color: rgba(255,255,255,0.7); margin-bottom: 10px; }
+.lite-pickup-alert-actions { display: flex; gap: 8px; }
+.lite-pickup-alert-actions button { flex: 1; min-height: 38px; border-radius: 10px; font-size: 0.82rem; font-weight: 600; border: none; }
+.lite-pickup-alert-actions .lpa-ack { background: #fff; color: #1A2231; }
+.lite-pickup-alert-actions .lpa-snooze { background: rgba(255,255,255,0.15); color: #fff; }
+
 /* ─── Bottom sheet ────────────────────────────────────────────────────── */
 .lite-sheet-backdrop { position: fixed; inset: 0; z-index: 150; background: rgba(19,26,38,0.5); display: flex; align-items: flex-end; justify-content: center; animation: liteFade 0.2s ease; }
 @keyframes liteFade { from { opacity: 0; } to { opacity: 1; } }

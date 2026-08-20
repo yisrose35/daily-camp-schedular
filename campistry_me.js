@@ -28,7 +28,7 @@ function _schoolGradeOptions(current){
 }
 var AV_BG=['#147D91','#6366F1','#0EA5E9','#10B981','#F43F5E','#8B5CF6','#D97706'];
 
-var structure={}, roster={}, families={}, payments=[], broadcasts=[], bunkAsgn={}, bunkManualCounts={}, bunkStaff={};
+var structure={}, roster={}, families={}, payments=[], broadcasts=[], bunkAsgn={}, bunkManualCounts={}, bunkStaff={}, divisionHeads={};
 var bunkCapacity={}; // max campers per bunk (capacity), keyed by bunk name — distinct from bunkManualCounts (headcount override)
 var enrollments={}, sessions=[], enrollSettings={}, formConfig=null;
 var finStaff=[], finExpenses=[], finPayments=[], finBudget={revenue:0,payroll:0,expenses:0}, finIntegrations={};
@@ -234,6 +234,7 @@ function loadData(){
         broadcasts=me.broadcasts||[]; bunkAsgn=me.bunkAssignments||{}; bunkManualCounts=me.bunkManualCounts||{};
         bunkCapacity=me.bunkCapacity||{};
         bunkStaff=me.bunkStaff||{};
+        divisionHeads=me.divisionHeads||{};
         enrollments=me.enrollments||{}; sessions=me.sessions||[]; enrollSettings=me.enrollSettings||{};
         staffApplications=me.staffApplications||{};
         leads=me.leads||{};
@@ -339,6 +340,7 @@ function save(){
             bunkManualCounts:bunkManualCounts,
             bunkCapacity:bunkCapacity,
             bunkStaff:bunkStaff,
+            divisionHeads:divisionHeads,
             nextCamperId:nextCamperId,
             enrollments:enrollments,
             staffApplications:staffApplications,
@@ -2415,6 +2417,10 @@ function renderStructure(){
             var col=dd.color||'#94A3B8';
             var upDis=ix===0?' disabled':'';
             var dnDis=ix===divs.length-1?' disabled':'';
+            var dHeads=divisionHeads[dn]||[];
+            var dHeadChip=dHeads.length
+                ?dHeads.map(function(s){return esc(s.name);}).join(', ')
+                :'+ Assign division head';
             h+='<div class="me-card me-div-card" data-div="'+je(dn)+'" style="margin-bottom:10px"><div class="me-card-head"><div style="display:flex;align-items:center;gap:8px">'
                 +'<span class="me-grip me-div-grip" title="Drag to reorder division" style="cursor:grab;color:var(--s400);font-size:1rem;line-height:1;padding:0 4px;user-select:none">⋮⋮</span>'
                 +'<div style="width:10px;height:10px;border-radius:3px;background:'+col+'"></div><h3 style="margin:0">'+esc(dn)+'</h3><span style="font-size:.75rem;color:var(--s400)">'+grades.length+' grades · '+bCt+' bunks</span></div><div style="display:flex;gap:4px;align-items:center">'
@@ -2422,7 +2428,11 @@ function renderStructure(){
                 +'<button class="me-btn me-btn--ghost me-btn--sm" title="Move down"'+dnDis+' onclick="CampistryMe.moveDivision(\''+je(dn)+'\',1)" style="padding:4px 8px">↓</button>'
                 +'<button class="me-btn me-btn--ghost me-btn--sm" onclick="CampistryMe.editDiv(\''+je(dn)+'\')">Edit</button>'
                 +'<button class="me-btn me-btn--danger me-btn--sm" onclick="CampistryMe.deleteDiv(\''+je(dn)+'\')">Delete</button>'
-                +'</div></div>';
+                +'</div></div>'
+                +'<div style="padding:0 18px 10px;display:flex;align-items:center;gap:6px;cursor:pointer" onclick="CampistryMe.openDivisionHeadModal(\''+je(dn)+'\')" title="Manage this division\'s head(s) — who gets notified for this division">'
+                +'<span style="font-size:.7rem;color:var(--s400);font-weight:600">Division Head:</span>'
+                +'<span style="font-size:.72rem;'+(dHeads.length?'color:var(--s600);font-weight:600':'color:var(--me);font-weight:600')+'">'+dHeadChip+'</span>'
+                +'</div>';
             h+='<div class="me-grade-list" data-div="'+je(dn)+'" style="padding:14px 18px">';
             grades.forEach(function([gn,gd]){
                 h+='<div class="me-grade-block" data-grade="'+je(gn)+'" style="margin-bottom:10px;padding:6px 8px;border:1px dashed transparent;border-radius:6px">'
@@ -4244,6 +4254,168 @@ function removeBunkStaff(bunkName,idx){
     _syncInvitesForBunk(bunkName);
     renderBB();
     _renderBunkStaffModalBody(bunkName);
+}
+// ── Division Heads ──────────────────────────────────────────────────
+// Same shape and the same join-key convention as bunkStaff (see staffKey()
+// above) — a record is {name,role,email,phone,smsOptIn}, keyed by division
+// (or grade, checked as a fallback the same way leagues/pickup-notification
+// resolution already accepts either). This is the "who to notify" mapping
+// for a division: pickup-alert routing reads campistryMe.divisionHeads the
+// same way it reads bunkStaff.
+function divisionsForStaffEmail(email){
+    var k=String(email||'').trim().toLowerCase();
+    if(!k)return [];
+    return Object.keys(divisionHeads||{}).filter(function(d){
+        return (divisionHeads[d]||[]).some(function(s){ return staffKey(s)===k; });
+    });
+}
+function openDivisionHeadModal(divName){
+    _renderDivisionHeadModalBody(divName);
+}
+function _renderDivisionHeadModalBody(divName){
+    var staff=divisionHeads[divName]||[];
+    var listHtml=staff.length
+        ?staff.map(function(s,i){
+            var reach=staffKey(s)
+                ?'<span style="font-size:.66rem;font-weight:700;color:var(--ok)">Can sign in</span>'
+                :'<span style="font-size:.66rem;font-weight:700;color:var(--s400)" title="Without an email this person cannot sign in to Campistry Lite or receive notifications">No login</span>';
+            return '<div style="display:flex;align-items:center;gap:10px;padding:8px 0;border-bottom:1px solid var(--s100)">'
+                +'<div style="flex:1;min-width:0">'
+                  +'<div style="font-weight:600;font-size:.85rem">'+esc(s.name)+'</div>'
+                  +'<div style="font-size:.72rem;color:var(--s400)">'+esc(s.role||'Division Head')
+                    +(s.email?' · '+esc(s.email):'')+(s.phone?' · '+esc(s.phone):'')+'</div>'
+                  +'<div style="margin-top:2px">'+reach+'</div>'
+                +'</div>'
+                +(s.email?'<button class="me-btn me-btn--ghost me-btn--sm" title="Send a Campistry Lite invite to this email" onclick="CampistryMe.inviteDivisionHeadToLite(\''+je(divName)+'\','+i+')">Invite to Lite</button>':'')
+                +'<button class="me-btn me-btn--ghost me-btn--sm" onclick="CampistryMe.editDivisionHead(\''+je(divName)+'\','+i+')">Edit</button>'
+                +'<button class="me-btn me-btn--ghost me-btn--sm" onclick="CampistryMe.removeDivisionHead(\''+je(divName)+'\','+i+')">Remove</button>'
+                +'</div>';
+        }).join('')
+        :'<p style="font-size:.8rem;color:var(--s400);margin:0 0 4px">No division head assigned yet.</p>';
+    // Anyone already hired can be dropped in without retyping, same
+    // convenience as the bunk-staff picker.
+    var hired=hiredStaff().filter(function(a){
+        return divisionsForStaffEmail(a.email).indexOf(divName)<0;
+    });
+    var hiredPick=hired.length
+        ?'<div style="margin-top:14px;padding-top:12px;border-top:1px solid var(--s100)">'
+          +'<label class="fl" style="display:block;margin-bottom:4px">Add someone you\'ve hired</label>'
+          +'<select class="fs" id="dhHired" onchange="CampistryMe.fillDivisionHeadFromHired(this.value)">'
+          +'<option value="">— Pick from hired staff —</option>'
+          +hired.map(function(a){
+              return '<option value="'+esc(a.id)+'">'+esc(a.name||'Unnamed')
+                  +((a.positions&&a.positions[0])?' · '+esc(a.positions[0]):'')
+                  +(a.email?'':' (no email)')+'</option>';
+          }).join('')
+          +'</select></div>'
+        :'';
+    var body=listHtml
+        +hiredPick
+        +'<div id="dhForm" style="margin-top:14px;padding-top:12px;border-top:1px solid var(--s100)">'
+        +'<input type="hidden" id="dhIdx" value="-1">'
+        +'<div style="display:flex;gap:8px;margin-bottom:8px">'
+        +'<input type="text" id="dhName" placeholder="Name" class="fi" style="flex:1.3">'
+        +'<input type="email" id="dhEmail" placeholder="Email (for their login)" class="fi" style="flex:1" autocapitalize="none" spellcheck="false">'
+        +'</div>'
+        +'<div style="display:flex;gap:8px;margin-bottom:8px">'
+        +'<input type="tel" id="dhPhone" placeholder="Mobile (optional)" class="fi" style="flex:1">'
+        +'</div>'
+        +'<div style="display:flex;gap:8px;justify-content:flex-end">'
+        +'<button class="me-btn me-btn--ghost me-btn--sm" id="dhCancel" style="display:none" onclick="CampistryMe._resetDivisionHeadForm(\''+je(divName)+'\')">Cancel</button>'
+        +'<button class="me-btn me-btn--pri me-btn--sm" id="dhSave" onclick="CampistryMe.addDivisionHead(\''+je(divName)+'\')">Add</button>'
+        +'</div>'
+        +'<p style="font-size:.72rem;color:var(--s400);margin:10px 0 0">The email is how this person signs in to Campistry Lite and how pickup alerts and other notifications reach them. Without one they still appear here, but they cannot be sent anything.</p>'
+        +'</div>';
+    showModal('Division Head — '+divName,body);
+}
+function _resetDivisionHeadForm(divName){ _renderDivisionHeadModalBody(divName); }
+function editDivisionHead(divName,idx){
+    var s=(divisionHeads[divName]||[])[idx]; if(!s)return;
+    _renderDivisionHeadModalBody(divName);
+    setTimeout(function(){
+        var g=function(id){return document.getElementById(id)};
+        if(g('dhIdx'))g('dhIdx').value=String(idx);
+        if(g('dhName'))g('dhName').value=s.name||'';
+        if(g('dhEmail'))g('dhEmail').value=s.email||'';
+        if(g('dhPhone'))g('dhPhone').value=s.phone||'';
+        if(g('dhSave'))g('dhSave').textContent='Save';
+        if(g('dhCancel'))g('dhCancel').style.display='';
+        if(g('dhName'))g('dhName').focus();
+    },40);
+}
+function fillDivisionHeadFromHired(appId){
+    var a=staffApplications[appId]; if(!a)return;
+    var g=function(id){return document.getElementById(id)};
+    if(g('dhName'))g('dhName').value=a.name||[a.first,a.last].filter(Boolean).join(' ');
+    if(g('dhEmail'))g('dhEmail').value=a.email||'';
+    if(g('dhPhone'))g('dhPhone').value=a.phone||'';
+    if(g('dhName'))g('dhName').focus();
+}
+function addDivisionHead(divName){
+    var g=function(id){return document.getElementById(id)};
+    var name=((g('dhName')||{}).value||'').trim(),
+        email=((g('dhEmail')||{}).value||'').trim().toLowerCase(),
+        phone=((g('dhPhone')||{}).value||'').trim(),
+        idx=parseInt(((g('dhIdx')||{}).value||'-1'),10);
+    if(!name){toast('Enter a name','error');return}
+    if(email&&!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(email)){toast('That email doesn’t look right','error');return}
+    if(!divisionHeads[divName])divisionHeads[divName]=[];
+    if(email){
+        var clash=divisionHeads[divName].findIndex(function(s,i){return i!==idx&&staffKey(s)===email});
+        if(clash>=0){toast('Someone with that email is already a head of this division','error');return}
+    }
+    var rec={name:name,role:'Division Head',email:email,phone:phone};
+    if(idx>=0&&divisionHeads[divName][idx])divisionHeads[divName][idx]=rec;
+    else divisionHeads[divName].push(rec);
+    save();
+    renderStructure();
+    _renderDivisionHeadModalBody(divName);
+    toast((idx>=0?'Saved ':'Added ')+name);
+}
+function removeDivisionHead(divName,idx){
+    if(!divisionHeads[divName]||!divisionHeads[divName][idx])return;
+    divisionHeads[divName].splice(idx,1);
+    save();
+    renderStructure();
+    _renderDivisionHeadModalBody(divName);
+}
+// Mirrors inviteBunkStaffToLite exactly — same 'counselor' role rationale:
+// a Division Head's personal alerts arrive through the same Lite alert
+// stack as bunk counselors (see PICKUP-ALERTS plan), so their login is the
+// same counselor-role account, just also resolved via divisionHeads at
+// notify time. A head who also needs broader access still goes through
+// Team management, same caveat as inviteBunkStaffToLite.
+async function inviteDivisionHeadToLite(divName,idx){
+    var s=divisionHeads[divName]&&divisionHeads[divName][idx];
+    if(!s)return;
+    var email=String(s.email||'').trim();
+    if(!email){toast('Add an email for '+(s.name||'this person')+' first','error');return;}
+    if(!window.AccessControl||!window.AccessControl.inviteTeamMember){
+        toast('Invites aren\'t available right now — try again in a moment','error');return;
+    }
+    toast('Inviting '+(s.name||email)+'…','info');
+    try{
+        var result=await window.AccessControl.inviteTeamMember(email,'counselor',[],s.name||'');
+        if(result&&result.error){toast(result.error,'error');return;}
+        if(!result||!result.inviteUrl){toast('Could not create the invite','error');return;}
+        try{
+            var client=window.CampistryDB&&window.CampistryDB.getClient?window.CampistryDB.getClient():window.supabase;
+            var sess=client&&client.auth?(await client.auth.getSession()):null;
+            var token=sess&&sess.data&&sess.data.session&&sess.data.session.access_token;
+            var supaUrl=(client&&client.supabaseUrl)||(window.__CAMPISTRY_SUPABASE__&&window.__CAMPISTRY_SUPABASE__.url);
+            if(token&&supaUrl){
+                await fetch(supaUrl+'/functions/v1/send-invite-email',{
+                    method:'POST',
+                    headers:{'Content-Type':'application/json','Authorization':'Bearer '+token},
+                    body:JSON.stringify({to:email,inviteUrl:result.inviteUrl,role:'Counselor',campName:(window.AccessControl.getCampName&&window.AccessControl.getCampName())||'Your Camp'})
+                });
+            }
+        }catch(mailErr){console.warn('[Me] send-invite-email failed:',mailErr);}
+        try{navigator.clipboard&&navigator.clipboard.writeText(result.inviteUrl);}catch(_){}
+        toast('Invited '+(s.name||email)+' — link copied, and emailed if that worked');
+    }catch(err){
+        toast(err.message||'Could not invite '+(s.name||email),'error');
+    }
 }
 function openBunkCountModal(bunkName){
     var rosterCt=Object.values(roster).filter(function(c){return c.bunk===bunkName}).length;
@@ -11456,6 +11628,9 @@ window.CampistryMe={
     bbDrop:bbDrop,autoAssign:autoAssign,autoGenerateBunks:autoGenerateBunks,openBunkGenSettings:openBunkGenSettings,showCamperBunkRequests:showCamperBunkRequests,clearBunks:clearBunks,setBunkCount:setBunkCount,openBunkCountModal:openBunkCountModal,_clearBunkCount:_clearBunkCount,
     openBunkStaffModal:openBunkStaffModal,addBunkStaff:addBunkStaff,removeBunkStaff:removeBunkStaff,
     editBunkStaff:editBunkStaff,_resetBunkStaffForm:_resetBunkStaffForm,inviteBunkStaffToLite:inviteBunkStaffToLite,
+    openDivisionHeadModal:openDivisionHeadModal,addDivisionHead:addDivisionHead,removeDivisionHead:removeDivisionHead,
+    editDivisionHead:editDivisionHead,_resetDivisionHeadForm:_resetDivisionHeadForm,inviteDivisionHeadToLite:inviteDivisionHeadToLite,
+    fillDivisionHeadFromHired:fillDivisionHeadFromHired,
     // Staff directory — the single source of truth for who works with which
     // bunk. Flow (league captains), Lite (a counselor's own bunk) and the
     // office (pickup notifications) all resolve people through these, so the

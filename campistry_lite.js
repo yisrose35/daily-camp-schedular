@@ -288,6 +288,7 @@
             }
 
             wireChrome();
+            initPickupAlerts();
 
             // Land back here from Stripe Connect onboarding
             // (stripe-connect-onboard's returnTo:'lite') — sync the status
@@ -6222,6 +6223,87 @@
         el.style.display = '';
         clearTimeout(toastTimer);
         toastTimer = setTimeout(() => { el.style.display = 'none'; }, 3200);
+    }
+
+    // ── Pickup alerts ────────────────────────────────────────────────────
+    // A camper leaving early notifies whoever's a recipient on the matching
+    // pickup_alert_recipients row (division head / bunk staff / league
+    // captain — see migrations 064-065). This is that person's OWN alert
+    // stack — RLS (par_self_select) already scopes it to rows addressed to
+    // their email, so no role check is needed here: an owner who's also a
+    // bunk counselor sees their own alerts the same way a counselor does.
+    let _pickupAlertItems = [], _pickupAlertChan = null, _pickupAlertPoll = null;
+
+    async function loadPickupAlerts() {
+        if (!userEmail || !window.supabase) return;
+        try {
+            const { data, error } = await window.supabase
+                .from('pickup_alert_recipients')
+                .select('id, ack_state, snoozed_until, pickup_alerts(camper_name, camper_bunk, pickup_time)')
+                .eq('recipient_email', userEmail)
+                .neq('ack_state', 'acknowledged');
+            if (error) { console.warn('[Lite] pickup alerts load:', error.message); return; }
+            const now = Date.now();
+            _pickupAlertItems = (data || []).filter(r => !r.snoozed_until || new Date(r.snoozed_until).getTime() <= now);
+            renderPickupAlerts();
+        } catch (e) { console.warn('[Lite] pickup alerts load failed:', e && e.message || e); }
+    }
+
+    function renderPickupAlerts() {
+        const el = document.getElementById('litePickupAlerts');
+        if (!el) return;
+        el.innerHTML = _pickupAlertItems.map(r => {
+            const a = r.pickup_alerts || {};
+            return `<div class="lite-pickup-alert-card" data-id="${esc(r.id)}">
+                <div class="lite-pickup-alert-title">${esc(a.camper_name || 'A camper')} is leaving early</div>
+                <div class="lite-pickup-alert-sub">Pickup at ${esc(a.pickup_time || '')}${a.camper_bunk ? ' · ' + esc(a.camper_bunk) : ''}</div>
+                <div class="lite-pickup-alert-actions">
+                    <button type="button" class="lpa-ack" data-act="ack">Saw it</button>
+                    <button type="button" class="lpa-snooze" data-act="snooze">Remind me later</button>
+                </div>
+            </div>`;
+        }).join('');
+        el.querySelectorAll('[data-act]').forEach(btn => {
+            btn.addEventListener('click', () => {
+                const card = btn.closest('[data-id]');
+                const id = card && card.dataset.id;
+                if (!id) return;
+                if (btn.dataset.act === 'ack') ackPickupAlert(id); else snoozePickupAlert(id);
+            });
+        });
+    }
+
+    async function ackPickupAlert(id) {
+        _pickupAlertItems = _pickupAlertItems.filter(r => r.id !== id);
+        renderPickupAlerts();
+        try { await window.supabase.rpc('ack_pickup_alert', { p_recipient_id: id }); }
+        catch (e) { console.warn('[Lite] ack_pickup_alert failed:', e && e.message || e); }
+    }
+
+    async function snoozePickupAlert(id) {
+        _pickupAlertItems = _pickupAlertItems.filter(r => r.id !== id);
+        renderPickupAlerts();
+        try {
+            await window.supabase.rpc('snooze_pickup_alert', { p_recipient_id: id, p_minutes: 15 });
+            toast('Snoozed for 15 minutes');
+        } catch (e) { console.warn('[Lite] snooze_pickup_alert failed:', e && e.message || e); }
+    }
+
+    // Realtime (primary path — an INSERT for a new alert, or an UPDATE that
+    // clears a snooze early, e.g. the T-5 cron reminder) plus a 60s poll as
+    // a backstop for the case nothing writes to the row again: a snooze
+    // simply expiring with the passage of time is not a database event.
+    function initPickupAlerts() {
+        if (!userEmail || !window.supabase) return;
+        loadPickupAlerts();
+        try {
+            _pickupAlertChan = window.supabase
+                .channel('pickup-alert-recipients-' + userEmail.replace(/[^a-z0-9]/gi, '_'))
+                .on('postgres_changes', { event: '*', schema: 'public', table: 'pickup_alert_recipients', filter: 'recipient_email=eq.' + userEmail }, loadPickupAlerts)
+                .subscribe();
+        } catch (e) { console.warn('[Lite] pickup alerts realtime subscribe failed:', e && e.message || e); }
+        clearInterval(_pickupAlertPoll);
+        _pickupAlertPoll = setInterval(loadPickupAlerts, 60000);
     }
 
     // The launch screen holds a minimum beat so a warm start doesn't flash it
