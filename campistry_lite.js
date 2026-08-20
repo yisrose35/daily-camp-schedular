@@ -3672,9 +3672,14 @@
         const fileInputMulti = _scanSheetEl.querySelector('#scanFileInputMulti');
         _scanSheetEl.querySelector('#scanTakePhotoBtn').addEventListener('click', scannerOpenLive);
         const Cam = window.Capacitor && window.Capacitor.Plugins && window.Capacitor.Plugins.Camera;
+        // targetWidth/Height (gallery pick) ask the NATIVE layer to hand back
+        // an already-downscaled image, so the WebView never has to decode a
+        // full 12+MP photo just to draw it into a canvas — see SCAN_MAX_DIM
+        // below for why, and scannerFallbackPhotoCapture() for the matching
+        // takePhoto() request.
         _scanSheetEl.querySelector('#scanUploadBtn').addEventListener('click', () => {
             if (Cam && Cam.chooseFromGallery) {
-                Cam.chooseFromGallery({ allowMultipleSelection: true, limit: 0, correctOrientation: true })
+                Cam.chooseFromGallery({ allowMultipleSelection: true, limit: 0, correctOrientation: true, targetWidth: 1600, targetHeight: 1600 })
                     .then(r => {
                         const paths = ((r && r.results) || []).map(m => m.webPath).filter(Boolean);
                         if (paths.length) scannerStartQueue(paths);
@@ -3719,7 +3724,7 @@
         const el = id => _scanSheetEl && _scanSheetEl.querySelector('#' + id);
         const Cam = window.Capacitor && window.Capacitor.Plugins && window.Capacitor.Plugins.Camera;
         if (Cam && Cam.takePhoto) {
-            Cam.takePhoto({ correctOrientation: true, saveToGallery: false })
+            Cam.takePhoto({ correctOrientation: true, saveToGallery: false, targetWidth: 1600, targetHeight: 1600 })
                 .then(r => { if (r && r.webPath) scannerStartQueue([r.webPath]); })
                 .catch(scannerHandleCameraCancel);
         } else if (el('scanFileInput')) {
@@ -3858,6 +3863,19 @@
         if (document.hidden && _liveStream) scannerCloseLive();
     });
 
+    // A full camera photo (the takePhoto/file-input fallback path — the live
+    // scan above is already capped at getUserMedia's 1920x1080 request) can
+    // be 12+ megapixels; jsQR + the per-bubble darkness sampling both run
+    // synchronously on the main thread, so scanning one at full resolution
+    // can visibly freeze the app for several seconds. 1600px on the long
+    // edge is far more than the QR decode or a coarse fill-detection needs,
+    // and cuts the pixel count (and freeze time) by roughly 6x on a typical
+    // 4000x3000 photo. This is the defensive cap for every fallback path
+    // (including plain file input); the native takePhoto/chooseFromGallery
+    // calls also request a pre-downscaled image so the WebView never has to
+    // decode the full-size original in the first place.
+    const SCAN_MAX_DIM = 1600;
+
     function scannerLoadQueueItem() {
         const el = id => _scanSheetEl && _scanSheetEl.querySelector('#' + id);
         if (_scanQueueIndex >= _scanQueue.length) { scannerFinishQueue(); return; }
@@ -3870,12 +3888,18 @@
 
         const img = new Image();
         img.onload = () => {
+            const scale = Math.min(1, SCAN_MAX_DIM / Math.max(img.naturalWidth, img.naturalHeight));
             _scanCanvas = document.createElement('canvas');
-            _scanCanvas.width = img.naturalWidth; _scanCanvas.height = img.naturalHeight;
+            _scanCanvas.width = Math.round(img.naturalWidth * scale);
+            _scanCanvas.height = Math.round(img.naturalHeight * scale);
             _scanCtx = _scanCanvas.getContext('2d', { willReadFrequently: true });
-            _scanCtx.drawImage(img, 0, 0);
+            _scanCtx.drawImage(img, 0, 0, _scanCanvas.width, _scanCanvas.height);
             if (item.isBlobUrl) URL.revokeObjectURL(item.src);
-            scannerProcessImage();
+            // Let the "Scanning sheet…" message actually paint before the
+            // synchronous jsQR/sampling work blocks the thread — without
+            // this the status text and the freeze land in the same frame,
+            // so it just looks stuck rather than working.
+            requestAnimationFrame(() => setTimeout(scannerProcessImage, 0));
         };
         img.onerror = () => {
             if (item.isBlobUrl) URL.revokeObjectURL(item.src);
