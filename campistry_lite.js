@@ -3632,12 +3632,21 @@
         return { x: (h[0] * x + h[1] * y + h[2]) / denom, y: (h[3] * x + h[4] * y + h[5]) / denom };
     }
     let _scanResults = [], _scanBunkLabel = '', _scanCanvas = null, _scanCtx = null, _scanDateKey = null, _scanSheetEl = null;
-    // A queue of photos, each one bunk's sheet. "Choose from library" can hand
-    // us several at once; a single native/file capture always hands us
-    // exactly one. Either way they're walked one at a time through the same
-    // QR+bubble pipeline, with a running tally shown once the whole queue is
-    // done. Live-camera scanning (below) doesn't use this queue at all — it
-    // re-arms itself directly, since there's no fixed list to walk.
+    // A queue of photos, each one bunk's sheet, walked one at a time through
+    // the same QR+bubble pipeline. A single native/file capture always hands
+    // us exactly one; "Choose from library" is SUPPOSED to allow picking
+    // several at once, but Android's multi-select picker intent is
+    // unreliable across devices/OEMs (a documented, unresolved platform
+    // issue — the "allow multiple" flag is only a hint some gallery apps
+    // ignore). So _scanQueueTally accumulates across the WHOLE sheet
+    // session (not reset per pick) — after each batch finishes, the picker
+    // buttons reappear so the user can add more sheets, one pick at a time
+    // if that's all the device will give us, until they tap Done.
+    //
+    // Live-camera scanning (below) doesn't use this queue array at all — it
+    // re-arms itself directly after each confirm instead of waiting for the
+    // "batch finished" screen — but it shares the same _scanQueueTally and
+    // the same Done button once the user backs out of the camera view.
     let _scanQueue = [], _scanQueueIndex = 0, _scanQueueTally = null;
     let _liveMode = false;
 
@@ -3657,13 +3666,11 @@
             <div id="scanPreviewTable"></div>
             <div style="display:flex;gap:10px;margin-top:14px;">
                 <button type="button" class="lite-btn" id="scanConfirmBtn" style="flex:1;display:none;">Apply to roll call</button>
-                <button type="button" class="lite-btn" id="scanDoneBtn" style="flex:none;width:auto;padding:10px 16px;background:transparent;color:var(--muted,#6b7280);display:none;">Done</button>
+                <button type="button" class="lite-btn" id="scanDoneBtn" style="flex:1;display:none;background:transparent;color:var(--lite-accent,#2563eb);border:1.5px solid var(--lite-accent,#2563eb);">Done</button>
             </div>`);
         const fileInput = _scanSheetEl.querySelector('#scanFileInput');
         const fileInputMulti = _scanSheetEl.querySelector('#scanFileInputMulti');
         _scanSheetEl.querySelector('#scanTakePhotoBtn').addEventListener('click', scannerOpenLive);
-        _scanSheetEl.querySelector('#scanConfirmBtn').addEventListener('click', () => scannerConfirm());
-        _scanSheetEl.querySelector('#scanDoneBtn').addEventListener('click', () => scannerConfirm(true));
         const Cam = window.Capacitor && window.Capacitor.Plugins && window.Capacitor.Plugins.Camera;
         _scanSheetEl.querySelector('#scanUploadBtn').addEventListener('click', () => {
             if (Cam && Cam.chooseFromGallery) {
@@ -3679,6 +3686,8 @@
         });
         fileInput.addEventListener('change', (e) => { const f = e.target.files && e.target.files[0]; if (f) scannerStartQueue([f]); });
         fileInputMulti.addEventListener('change', (e) => { const files = Array.from(e.target.files || []); if (files.length) scannerStartQueue(files); });
+        _scanSheetEl.querySelector('#scanConfirmBtn').addEventListener('click', scannerConfirm);
+        _scanSheetEl.querySelector('#scanDoneBtn').addEventListener('click', closeSheet);
     }
 
     // The plugin rejects on a plain user cancel too (closing the camera /
@@ -3698,7 +3707,8 @@
             ? { src: it, isBlobUrl: false }
             : { src: URL.createObjectURL(it), isBlobUrl: true });
         _scanQueueIndex = 0;
-        _scanQueueTally = { bunks: 0, applied: 0, skipped: 0, hitCurrentDate: false };
+        // _scanQueueTally is NOT reset here — it accumulates across every
+        // pick made during this sheet session (see comment at declaration).
         scannerLoadQueueItem();
     }
 
@@ -3835,8 +3845,10 @@
         if (_liveGateTimer) { clearInterval(_liveGateTimer); _liveGateTimer = null; }
         scannerStopLiveStream();
         if (_liveOverlayEl) { _liveOverlayEl.remove(); _liveOverlayEl = null; }
-        const el = id => _scanSheetEl && _scanSheetEl.querySelector('#' + id);
-        if (el('scanStep1')) el('scanStep1').style.display = '';
+        // Same "batch finished" screen the gallery-queue flow uses — shows
+        // the running tally + Done if anything's been captured this session,
+        // or just a clean reset back to scanStep1 if nothing has yet.
+        scannerFinishQueue();
     }
 
     // Backgrounding the app (switching apps, locking the phone) should stop
@@ -3851,6 +3863,7 @@
         if (_scanQueueIndex >= _scanQueue.length) { scannerFinishQueue(); return; }
         const item = _scanQueue[_scanQueueIndex];
         if (el('scanStep1')) el('scanStep1').style.display = 'none';
+        if (el('scanDoneBtn')) el('scanDoneBtn').style.display = 'none';
         const progress = _scanQueue.length > 1 ? ` — photo ${_scanQueueIndex + 1} of ${_scanQueue.length}` : '';
         if (el('scanStatusMsg')) el('scanStatusMsg').innerHTML = `<p class="lite-note">Scanning sheet${esc(progress)}…</p>`;
         if (el('scanPreviewTable')) el('scanPreviewTable').innerHTML = '';
@@ -3876,12 +3889,30 @@
         scannerLoadQueueItem();
     }
 
+    // This batch (one picker invocation) is done. Rather than close the
+    // sheet, hand control back to the picker buttons so the user can keep
+    // adding sheets — necessary because "Choose from library" can't be
+    // trusted to actually return more than one photo per pick on every
+    // device (see comment at the top of this section).
     function scannerFinishQueue() {
+        const el = id => _scanSheetEl && _scanSheetEl.querySelector('#' + id);
         const t = _scanQueueTally;
-        closeSheet();
-        if (!t.bunks) return;   // every photo errored or was skipped — nothing to announce
+        if (el('scanPreviewTable')) el('scanPreviewTable').innerHTML = '';
+        if (el('scanConfirmBtn')) el('scanConfirmBtn').style.display = 'none';
+        if (el('scanStep1')) el('scanStep1').style.display = '';
+        if (!t.bunks) {
+            // Nothing applied yet this session (first batch errored/was
+            // skipped) — just go back to a clean picker, no tally to show.
+            if (el('scanStatusMsg')) el('scanStatusMsg').innerHTML = '';
+            return;
+        }
         const scope = t.bunks === 1 ? 'from scan' : `across ${t.bunks} bunks`;
-        toast(`Attendance updated — ${t.applied} camper${t.applied !== 1 ? 's' : ''} ${scope}${t.skipped ? `, ${t.skipped} left unmarked` : ''}`);
+        if (el('scanStatusMsg')) {
+            el('scanStatusMsg').innerHTML = `<div class="lite-note" style="margin:8px 0;">` +
+                `✓ ${t.applied} camper${t.applied !== 1 ? 's' : ''} updated ${scope}${t.skipped ? `, ${t.skipped} left unmarked` : ''}. ` +
+                `Scan another bunk, or you're done.</div>`;
+        }
+        if (el('scanDoneBtn')) el('scanDoneBtn').style.display = '';
         if (t.hitCurrentDate && activeTab === 'liveRoll') renderLiveRoll();
     }
 
@@ -4027,22 +4058,23 @@
                     scannerRenderPreview();
                 }));
         }
+        // Done stays hidden while a captured result is pending — it's only
+        // ever shown by scannerFinishQueue(), once everything captured so
+        // far is already saved, never as an alternative to confirming.
+        if (el('scanDoneBtn')) el('scanDoneBtn').style.display = 'none';
         if (el('scanConfirmBtn')) {
             el('scanConfirmBtn').style.display = _scanResults.length ? '' : 'none';
             el('scanConfirmBtn').textContent = _liveMode
                 ? 'Apply & scan next'
                 : (more && _scanQueueIndex < _scanQueue.length - 1) ? 'Apply & scan next' : 'Apply to roll call';
         }
-        // Live mode has no fixed end, unlike a pre-picked photo queue — an
-        // explicit "Done" stops the chain and applies this last sheet.
-        if (el('scanDoneBtn')) el('scanDoneBtn').style.display = (_liveMode && _scanResults.length) ? '' : 'none';
     }
 
     // Read-modify-write against the SAME cloud row the office Live app writes
     // (camp_state_kv key liveDaily_<date>) — always re-fetch fresh (bypass
     // the cache) right before merging, so a concurrent office edit isn't
     // clobbered by a stale local copy.
-    async function scannerConfirm(stopLive) {
+    async function scannerConfirm() {
         if (!_scanResults.length) { scannerSkipQueueItem(); return; }
         const dateKey = _scanDateKey || currentDate;
         invalidateLiveDay(dateKey);
@@ -4076,8 +4108,14 @@
             _scanQueueTally.applied += applied;
             _scanQueueTally.skipped += skipped;
             if (dateKey === currentDate) _scanQueueTally.hitCurrentDate = true;
-            if (_liveMode && !stopLive) {
-                scannerOpenLive(); // re-arm the camera for the next sheet
+            if (_liveMode) {
+                // Speed is the whole point of live mode — re-arm immediately
+                // rather than making the user tap through a "batch finished"
+                // screen between every single sheet. The camera view's own
+                // close button (or backgrounding/switching tabs) is how they
+                // stop; scannerCloseLive() shows the same tally + Done screen
+                // scannerFinishQueue() gives the gallery-queue flow.
+                scannerOpenLive();
             } else {
                 _scanQueueIndex++;
                 scannerLoadQueueItem();
