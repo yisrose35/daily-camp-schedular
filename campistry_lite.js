@@ -3560,14 +3560,21 @@
     // skipped on confirm and left flagged for manual review.
     const SCAN_TMPL = { qrSize: 140, bPresentDX: 76, bAbsentDX: 124, bDY0: 198, bDDY: 52, sampleR: 13, fillThresh: 0.22 };
     let _scanResults = [], _scanBunkLabel = '', _scanCanvas = null, _scanCtx = null, _scanDateKey = null, _scanSheetEl = null;
+    // A queue of photos, each one bunk's sheet. "Choose from library" can hand
+    // us several at once; "Take photo" always hands us exactly one. Either way
+    // they're walked one at a time through the same QR+bubble pipeline, with a
+    // running tally shown once the whole queue is done.
+    let _scanQueue = [], _scanQueueIndex = 0, _scanQueueTally = null;
 
     function openScanSheet() {
         _scanResults = []; _scanBunkLabel = ''; _scanCanvas = null; _scanCtx = null; _scanDateKey = null;
+        _scanQueue = []; _scanQueueIndex = 0; _scanQueueTally = { bunks: 0, applied: 0, skipped: 0, hitCurrentDate: false };
         _scanSheetEl = openSheet(`
             <h3 class="lite-sheet-title">Scan attendance sheet</h3>
-            <p class="lite-note">Take a photo of a filled-in bubble sheet (printed from the office Live app) — this reads it and fills in today's roll call.</p>
+            <p class="lite-note">Take a photo of a filled-in bubble sheet (printed from the office Live app) — this reads it and fills in today's roll call. Choosing from your library lets you pick several bunks' sheets at once.</p>
             <div id="scanStep1">
                 <input type="file" accept="image/*" capture="environment" id="scanFileInput" style="display:none;">
+                <input type="file" accept="image/*" multiple id="scanFileInputMulti" style="display:none;">
                 <button type="button" class="lite-btn" id="scanTakePhotoBtn" style="width:100%;">Take photo</button>
                 <button type="button" class="lite-btn" id="scanUploadBtn" style="width:100%;margin-top:8px;background:transparent;color:var(--lite-accent,#2563eb);border:1.5px solid var(--lite-accent,#2563eb);">Choose from library</button>
             </div>
@@ -3577,17 +3584,66 @@
                 <button type="button" class="lite-btn" id="scanConfirmBtn" style="flex:1;display:none;">Apply to roll call</button>
             </div>`);
         const fileInput = _scanSheetEl.querySelector('#scanFileInput');
-        _scanSheetEl.querySelector('#scanTakePhotoBtn').addEventListener('click', () => fileInput.click());
-        _scanSheetEl.querySelector('#scanUploadBtn').addEventListener('click', () => { fileInput.removeAttribute('capture'); fileInput.click(); });
-        fileInput.addEventListener('change', (e) => { const f = e.target.files && e.target.files[0]; if (f) scannerHandleFileSelect(f); });
+        const fileInputMulti = _scanSheetEl.querySelector('#scanFileInputMulti');
+        // The Capacitor Camera plugin opens the camera / gallery natively —
+        // "Take photo" goes straight to the camera (no chooser prompt in the
+        // way), and the gallery picker supports real multi-select. The plain
+        // <input type=file> pair above only fires as a fallback on a build
+        // without the plugin (e.g. the plain web).
+        const Cam = window.Capacitor && window.Capacitor.Plugins && window.Capacitor.Plugins.Camera;
+        _scanSheetEl.querySelector('#scanTakePhotoBtn').addEventListener('click', () => {
+            if (Cam && Cam.takePhoto) {
+                Cam.takePhoto({ correctOrientation: true, saveToGallery: false })
+                    .then(r => { if (r && r.webPath) scannerStartQueue([r.webPath]); })
+                    .catch(scannerHandleCameraCancel);
+            } else {
+                fileInput.click();
+            }
+        });
+        _scanSheetEl.querySelector('#scanUploadBtn').addEventListener('click', () => {
+            if (Cam && Cam.chooseFromGallery) {
+                Cam.chooseFromGallery({ allowMultipleSelection: true, limit: 0, correctOrientation: true })
+                    .then(r => {
+                        const paths = ((r && r.results) || []).map(m => m.webPath).filter(Boolean);
+                        if (paths.length) scannerStartQueue(paths);
+                    })
+                    .catch(scannerHandleCameraCancel);
+            } else {
+                fileInputMulti.click();
+            }
+        });
+        fileInput.addEventListener('change', (e) => { const f = e.target.files && e.target.files[0]; if (f) scannerStartQueue([f]); });
+        fileInputMulti.addEventListener('change', (e) => { const files = Array.from(e.target.files || []); if (files.length) scannerStartQueue(files); });
         _scanSheetEl.querySelector('#scanConfirmBtn').addEventListener('click', scannerConfirm);
     }
 
-    function scannerHandleFileSelect(file) {
-        if (!file || !file.type.startsWith('image/')) { toast('Please select an image'); return; }
+    // The plugin rejects on a plain user cancel too (closing the camera /
+    // picker) — that's not an error worth surfacing.
+    function scannerHandleCameraCancel(e) {
+        const msg = (e && e.message) || '';
+        if (/cancel/i.test(msg)) return;
+        toast('Could not open the camera — check app permissions in your phone Settings.');
+        console.warn('[Lite] scanner camera error:', msg || e);
+    }
+
+    // items: an array of File objects (fallback file inputs) or webPath
+    // strings (Capacitor Camera). Each item is one bunk's sheet.
+    function scannerStartQueue(items) {
+        _scanQueue = items.map(it => (typeof it === 'string')
+            ? { src: it, isBlobUrl: false }
+            : { src: URL.createObjectURL(it), isBlobUrl: true });
+        _scanQueueIndex = 0;
+        _scanQueueTally = { bunks: 0, applied: 0, skipped: 0, hitCurrentDate: false };
+        scannerLoadQueueItem();
+    }
+
+    function scannerLoadQueueItem() {
         const el = id => _scanSheetEl && _scanSheetEl.querySelector('#' + id);
+        if (_scanQueueIndex >= _scanQueue.length) { scannerFinishQueue(); return; }
+        const item = _scanQueue[_scanQueueIndex];
         if (el('scanStep1')) el('scanStep1').style.display = 'none';
-        if (el('scanStatusMsg')) el('scanStatusMsg').innerHTML = '<p class="lite-note">Scanning sheet…</p>';
+        const progress = _scanQueue.length > 1 ? ` — photo ${_scanQueueIndex + 1} of ${_scanQueue.length}` : '';
+        if (el('scanStatusMsg')) el('scanStatusMsg').innerHTML = `<p class="lite-note">Scanning sheet${esc(progress)}…</p>`;
         if (el('scanPreviewTable')) el('scanPreviewTable').innerHTML = '';
 
         const img = new Image();
@@ -3596,11 +3652,28 @@
             _scanCanvas.width = img.naturalWidth; _scanCanvas.height = img.naturalHeight;
             _scanCtx = _scanCanvas.getContext('2d', { willReadFrequently: true });
             _scanCtx.drawImage(img, 0, 0);
-            URL.revokeObjectURL(img.src);
+            if (item.isBlobUrl) URL.revokeObjectURL(item.src);
             scannerProcessImage();
         };
-        img.onerror = () => scannerShowError('Could not load that photo — try again.');
-        img.src = URL.createObjectURL(file);
+        img.onerror = () => {
+            if (item.isBlobUrl) URL.revokeObjectURL(item.src);
+            scannerShowError('Could not load that photo — try again.');
+        };
+        img.src = item.src;
+    }
+
+    function scannerSkipQueueItem() {
+        _scanQueueIndex++;
+        scannerLoadQueueItem();
+    }
+
+    function scannerFinishQueue() {
+        const t = _scanQueueTally;
+        closeSheet();
+        if (!t.bunks) return;   // every photo errored or was skipped — nothing to announce
+        const scope = t.bunks === 1 ? 'from scan' : `across ${t.bunks} bunks`;
+        toast(`Attendance updated — ${t.applied} camper${t.applied !== 1 ? 's' : ''} ${scope}${t.skipped ? `, ${t.skipped} left unmarked` : ''}`);
+        if (t.hitCurrentDate && activeTab === 'liveRoll') renderLiveRoll();
     }
 
     function scannerProcessImage() {
@@ -3666,8 +3739,20 @@
 
     function scannerShowError(msg) {
         const el = id => _scanSheetEl && _scanSheetEl.querySelector('#' + id);
-        if (el('scanStatusMsg')) el('scanStatusMsg').innerHTML = `<div class="lite-warn">${esc(msg)}</div>`;
-        if (el('scanStep1')) el('scanStep1').style.display = '';
+        // Mid-queue, one bad photo shouldn't stall the rest — offer to skip
+        // it. A lone scan just goes back to the take-photo/choose-library step.
+        const more = _scanQueue.length > 1;
+        if (more) {
+            if (el('scanStatusMsg')) {
+                el('scanStatusMsg').innerHTML = `<div class="lite-warn">${esc(msg)} ` +
+                    `<button type="button" class="lite-btn" id="scanSkipBtn" style="width:auto;display:inline-block;padding:4px 12px;margin-top:6px;">Skip this one</button></div>`;
+                const btn = el('scanSkipBtn');
+                if (btn) btn.addEventListener('click', scannerSkipQueueItem);
+            }
+        } else {
+            if (el('scanStatusMsg')) el('scanStatusMsg').innerHTML = `<div class="lite-warn">${esc(msg)}</div>`;
+            if (el('scanStep1')) el('scanStep1').style.display = '';
+        }
     }
 
     const SCAN_STATE_LABEL = { present: 'Here', absent: 'Absent', unmarked: 'Not marked', ambiguous: 'Both filled' };
@@ -3677,7 +3762,9 @@
         const present = _scanResults.filter(r => r.state === 'present').length;
         const absent = _scanResults.filter(r => r.state === 'absent').length;
         const needsReview = _scanResults.filter(r => r.state === 'unmarked' || r.state === 'ambiguous').length;
-        let html = `<div class="lite-note" style="margin:8px 0;"><strong>${esc(_scanBunkLabel)}</strong> — ${present} present, ${absent} absent${needsReview ? `, ${needsReview} need${needsReview === 1 ? 's' : ''} review` : ''}. Tap to correct any errors — rows needing review are skipped until fixed.</div>`;
+        const more = _scanQueue.length > 1;
+        const progress = more ? ` (photo ${_scanQueueIndex + 1} of ${_scanQueue.length})` : '';
+        let html = `<div class="lite-note" style="margin:8px 0;"><strong>${esc(_scanBunkLabel)}</strong>${esc(progress)} — ${present} present, ${absent} absent${needsReview ? `, ${needsReview} need${needsReview === 1 ? 's' : ''} review` : ''}. Tap to correct any errors — rows needing review are skipped until fixed.</div>`;
         html += _scanResults.map((r, i) => {
             const cls = r.state === 'present' ? 'present' : r.state === 'absent' ? 'absent' : 'left';
             return `
@@ -3697,7 +3784,10 @@
                     scannerRenderPreview();
                 }));
         }
-        if (el('scanConfirmBtn')) el('scanConfirmBtn').style.display = _scanResults.length ? '' : 'none';
+        if (el('scanConfirmBtn')) {
+            el('scanConfirmBtn').style.display = _scanResults.length ? '' : 'none';
+            el('scanConfirmBtn').textContent = (more && _scanQueueIndex < _scanQueue.length - 1) ? 'Apply & scan next' : 'Apply to roll call';
+        }
     }
 
     // Read-modify-write against the SAME cloud row the office Live app writes
@@ -3705,7 +3795,7 @@
     // the cache) right before merging, so a concurrent office edit isn't
     // clobbered by a stale local copy.
     async function scannerConfirm() {
-        if (!_scanResults.length) return;
+        if (!_scanResults.length) { scannerSkipQueueItem(); return; }
         const dateKey = _scanDateKey || currentDate;
         invalidateLiveDay(dateKey);
         const fresh = await loadLiveDay(dateKey);
@@ -3734,9 +3824,12 @@
         try {
             await saveKV('liveDaily_' + dateKey, day);
             invalidateLiveDay(dateKey);
-            closeSheet();
-            toast(`Attendance updated — ${applied} camper${applied !== 1 ? 's' : ''} from scan${skipped ? `, ${skipped} left unmarked` : ''}`);
-            if (dateKey === currentDate && activeTab === 'liveRoll') renderLiveRoll();
+            _scanQueueTally.bunks++;
+            _scanQueueTally.applied += applied;
+            _scanQueueTally.skipped += skipped;
+            if (dateKey === currentDate) _scanQueueTally.hitCurrentDate = true;
+            _scanQueueIndex++;
+            scannerLoadQueueItem();
         } catch (e) {
             toast('Could not save — check your connection and try again.');
             console.warn('[Lite] scannerConfirm save failed:', e && e.message || e);

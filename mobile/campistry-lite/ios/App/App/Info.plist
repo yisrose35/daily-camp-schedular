@@ -28,6 +28,15 @@
 	     as unavailable, and a raw evaluatePolicy() call would crash the app. -->
 	<key>NSFaceIDUsageDescription</key>
 	<string>Campistry Lite uses Face ID to unlock the app, so camper medical and contact details stay protected if your phone is handed around.</string>
+	<!-- Required for the attendance bubble-sheet scanner (Take photo / Choose
+	     from library). Without these keys iOS kills the app the moment it
+	     tries to open the camera or photo library. -->
+	<key>NSCameraUsageDescription</key>
+	<string>Campistry Lite uses the camera to scan a filled-in attendance bubble sheet and fill in today's roll call.</string>
+	<key>NSPhotoLibraryUsageDescription</key>
+	<string>Campistry Lite can read attendance bubble sheet photos from your library to fill in today's roll call.</string>
+	<key>NSPhotoLibraryAddUsageDescription</key>
+	<string>Campistry Lite does not save photos to your library; this permission is requested by the camera component but unused.</string>
 	<key>UIApplicationSceneManifest</key>
 	<dict>
 		<key>UIApplicationSupportsMultipleScenes</key>
