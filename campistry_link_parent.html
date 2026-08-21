@@ -884,9 +884,12 @@ async function _lkCheckout(body){
 }
 function loadPayments(){
     var host=document.getElementById('payBalanceCards'); var pt=document.getElementById('payTable'); if(!host) return;
-    var camps={}; (children||[]).forEach(function(c){ if(c.campId) camps[c.campId]=c.campName||''; });
+    // isCurrent per camp, not just the name — lets a family with camps from
+    // different years see this year's balance up top instead of buried in a
+    // flat stack alongside mostly-paid-off history.
+    var camps={}; (children||[]).forEach(function(c){ if(c.campId) camps[c.campId]={name:c.campName||'', isCurrent:c.campIsCurrent!==false}; });
     var ids=Object.keys(camps);
-    if(!ids.length && parent && parent.campId){ camps[parent.campId]=''; ids=[parent.campId]; }
+    if(!ids.length && parent && parent.campId){ camps[parent.campId]={name:'',isCurrent:true}; ids=[parent.campId]; }
     if(!ids.length){ host.innerHTML=''; if(pt)_renderPayHistory(pt,[]); return; }
     host.innerHTML='<div class="lk-card" style="padding:18px;text-align:center;color:var(--text-muted);">Loading your balance…</div>';
     var cards={}, allHistory=[], done=0;
@@ -894,15 +897,34 @@ function loadPayments(){
         var call=window._pRpc?window._pRpc('get_my_balance',{},cid):(window._parentDB&&window._parentDB.rpc('get_my_balance',{p_camp_id:cid}));
         Promise.resolve(call).then(function(res){
             var d=(res&&res.data)?res.data:null;
-            if(d&&d.success){ _balByCamp[cid]=d; cards[cid]=_payCardHtml(cid,camps[cid],d); (d.payments||[]).forEach(function(p){allHistory.push(p);}); }
+            if(d&&d.success){ _balByCamp[cid]=d; cards[cid]=_payCardHtml(cid,camps[cid].name,d); (d.payments||[]).forEach(function(p){allHistory.push(p);}); }
         }).catch(function(){}).then(function(){
             done++; if(done===ids.length){
-                var html=ids.map(function(id){return cards[id]||'';}).join('');
-                host.innerHTML=html||'<div class="lk-card" style="padding:20px;text-align:center;color:var(--text-muted);">No balance on file. If you expect one, contact the camp office.</div>';
+                var currentIds=ids.filter(function(id){return camps[id].isCurrent;});
+                var pastIds=ids.filter(function(id){return !camps[id].isCurrent;});
+                var currentHtml=currentIds.map(function(id){return cards[id]||'';}).join('');
+                var pastHtml=pastIds.map(function(id){return cards[id]||'';}).join('');
+                var pastOwed=pastIds.some(function(id){ var d=_balByCamp[id]; return d && Number(d.balance)>0.005; });
+                var html=currentHtml || (pastHtml?'':'<div class="lk-card" style="padding:20px;text-align:center;color:var(--text-muted);">No balance on file. If you expect one, contact the camp office.</div>');
+                if(pastIds.length){
+                    html+='<div style="margin-top:16px;">'+
+                        '<button type="button" onclick="_togglePastCamps(this)" style="width:100%;display:flex;align-items:center;justify-content:space-between;gap:10px;padding:12px 16px;background:none;border:1px solid var(--line,#e5e7eb);border-radius:12px;color:var(--text-muted);font-size:.85rem;font-weight:600;cursor:pointer;">'+
+                        '<span>Other camps ('+pastIds.length+')'+(pastOwed?' — balance due':'')+'</span>'+
+                        '<span aria-hidden="true">▾</span></button>'+
+                        '<div style="display:none;margin-top:10px;">'+pastHtml+'</div>'+
+                        '</div>';
+                }
+                host.innerHTML=html;
                 _renderPayHistory(pt,allHistory);
             }
         });
     });
+}
+function _togglePastCamps(btn){
+    var box=btn.nextElementSibling; if(!box) return;
+    var open=box.style.display!=='none';
+    box.style.display=open?'none':'';
+    var arrow=btn.querySelector('span[aria-hidden]'); if(arrow) arrow.textContent=open?'▾':'▴';
 }
 function _payCardHtml(cid,campName,d){
     var bal=Number(d.balance)||0; var owed=bal>0.005;
@@ -3496,15 +3518,25 @@ window.addEventListener('storage', function(e) {
     // Load ALL the parent's camps and merge in the kids from any camp OTHER than
     // the primary one already loaded. Each child is tagged with its campId so
     // actions (canteen, forms, messages) route to the correct camp.
+    // A camp with no campDates configured is never hidden — only a camp whose
+    // own endDate has already passed counts as "past". Fails toward showing
+    // a camp rather than silently burying it under an assumption about dates
+    // nobody set.
+    function _campIsCurrent(campDates) {
+        if (!campDates || !campDates.endDate) return true;
+        try { return new Date(campDates.endDate + 'T23:59:59').getTime() >= Date.now(); }
+        catch (e) { return true; }
+    }
     function _augmentOtherCamps(primaryCampId) {
         var call = window._pRpc ? window._pRpc('get_my_camps', {}) : db.rpc('get_my_camps');
         Promise.resolve(call).then(function(res) {
             if (!res || res.error || !res.data || !res.data.success) return;
             var camps = res.data.camps || [];
+            camps.forEach(function(cp){ cp.isCurrent = _campIsCurrent(cp.camp_dates); });
             parent.camps = camps;
-            // give the primary camp its display name
+            // give the primary camp its display name (+ current/past flag)
             var primary = camps.find(function(cp){ return cp.camp_id === primaryCampId; });
-            if (primary) children.forEach(function(ch){ if(ch.campId===primaryCampId) ch.campName = primary.camp_name || ''; });
+            if (primary) children.forEach(function(ch){ if(ch.campId===primaryCampId) { ch.campName = primary.camp_name || ''; ch.campIsCurrent = primary.isCurrent; } });
             var others = camps.filter(function(cp){ return cp.camp_id !== primaryCampId; });
             if (!others.length) { init(); _afterMergeReloadCloud(); _checkConnectableCamps(); return; } // single connected camp — but still check for pending invites on OTHER camps
             others.forEach(function(cp){
@@ -3518,7 +3550,7 @@ window.addEventListener('storage', function(e) {
                     if (c.parent2Name)   ec.push({name:c.parent2Name,   rel:'Parent',                    phone:c.parent2Phone||''});
                     children.push({
                         id:'child_'+children.length, name:name, initials:initials, age:age,
-                        campId:cp.camp_id, campName:cp.camp_name||'',
+                        campId:cp.camp_id, campName:cp.camp_name||'', campIsCurrent:cp.isCurrent,
                         division:c.division||'', grade:c.grade||'', bunk:c.bunk||'',
                         session:c.session||'', counselor:c.counselor||'', staff:c.staff||[], teacher:c.teacher||'',
                         allergies:c.allergies||'None', medications:c.medications||'None',
