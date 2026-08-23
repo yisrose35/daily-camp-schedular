@@ -102,11 +102,22 @@ async function campPhoneBook(req: Request): Promise<Set<string> | null> {
   return book;
 }
 
-async function sendTelnyxSMS(to: string, body: string): Promise<{ ok: boolean; error?: string }> {
-  if (!TELNYX_API_KEY || (!TELNYX_FROM && !TELNYX_PROFILE)) return { ok: false, error: "SMS not configured" };
+async function sendTelnyxSMS(to: string, body: string, fromNumber?: string): Promise<{ ok: boolean; error?: string }> {
+  // A camp's own number (Dashboard → Camp Profile → SMS Sending Number)
+  // takes priority — isolates deliverability/reputation per camp instead of
+  // every camp sharing one platform-wide number. Falls back to the shared
+  // TELNYX_FROM_NUMBER/TELNYX_MESSAGING_PROFILE_ID for camps that haven't
+  // set up their own yet.
+  const effectiveFrom = fromNumber || TELNYX_FROM;
+  if (!TELNYX_API_KEY || (!effectiveFrom && !TELNYX_PROFILE)) return { ok: false, error: "SMS not configured" };
   try {
     const payload: Record<string, unknown> = { to, text: body.slice(0, 1600) };
-    if (TELNYX_PROFILE) payload.messaging_profile_id = TELNYX_PROFILE; else payload.from = TELNYX_FROM;
+    // A camp's own number always wins. Otherwise defer to whichever the
+    // platform has configured — a shared Messaging Profile (if set) over a
+    // shared bare number, matching the original platform-wide priority.
+    if (fromNumber) payload.from = fromNumber;
+    else if (TELNYX_PROFILE) payload.messaging_profile_id = TELNYX_PROFILE;
+    else payload.from = TELNYX_FROM;
     const res = await fetch("https://api.telnyx.com/v2/messages", {
       method: "POST",
       headers: { Authorization: `Bearer ${TELNYX_API_KEY}`, "Content-Type": "application/json" },
@@ -140,17 +151,20 @@ serve(async (req) => {
 
     const phoneBook = sendSms ? await campPhoneBook(req) : null;
 
-    // Each camp's own mailing address (CAN-SPAM footer) and contact email
+    // Each camp's own mailing address (CAN-SPAM footer), contact email
     // (Reply-To, so a parent's reply reaches the camp's real inbox, not a
-    // noreply@ mailbox) — set on the Dashboard's Camp Profile card. Falls
-    // back to the platform-wide POSTAL_ADDRESS secret for camps that
-    // haven't filled theirs in yet, so the footer is never blank.
+    // noreply@ mailbox), and SMS sending number (own deliverability/
+    // reputation instead of sharing the platform-wide number) — all set on
+    // the Dashboard's Camp Profile card. Address/number fall back to
+    // platform-wide defaults for camps that haven't filled theirs in yet.
     let campAddress = "";
     let campReplyTo: string | undefined;
-    if (sendEmail) {
-      const { data: campRow } = await supabase.from("camps").select("address, contact_email").eq("id", campId).maybeSingle();
+    let campTelnyxNumber: string | undefined;
+    if (sendEmail || sendSms) {
+      const { data: campRow } = await supabase.from("camps").select("address, contact_email, telnyx_from_number").eq("id", campId).maybeSingle();
       campAddress = campRow?.address || Deno.env.get("POSTAL_ADDRESS") || "";
       campReplyTo = campRow?.contact_email || undefined;
+      campTelnyxNumber = campRow?.telnyx_from_number || undefined;
     }
 
     // Pull opt-out/unsubscribe lists once up front — small tables, cheap to
@@ -232,7 +246,7 @@ serve(async (req) => {
         else if (optedOutPhones.has(key)) { results.smsSkipped++; }
         else {
           const smsBody = (rSubject ? rSubject + "\n\n" : "") + rBody + "\n\n— " + (campName || "Camp") + "\nReply STOP to opt out.";
-          const r = await sendTelnyxSMS(smsTo, smsBody);
+          const r = await sendTelnyxSMS(smsTo, smsBody, campTelnyxNumber);
           if (r.ok) results.smsSent++; else results.smsFailed++;
         }
       }

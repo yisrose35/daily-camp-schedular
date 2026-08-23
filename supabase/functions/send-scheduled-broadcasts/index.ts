@@ -21,11 +21,15 @@ function normalizePhone(raw: unknown): string | null {
   return null;
 }
 
-async function sendTelnyxSMS(to: string, body: string): Promise<boolean> {
-  if (!TELNYX_API_KEY || (!TELNYX_FROM && !TELNYX_PROFILE)) return false;
+async function sendTelnyxSMS(to: string, body: string, fromNumber?: string): Promise<boolean> {
+  // A camp's own number (Dashboard → Camp Profile) wins for deliverability/
+  // reputation isolation; otherwise defer to the platform's shared default.
+  if (!TELNYX_API_KEY || (!fromNumber && !TELNYX_FROM && !TELNYX_PROFILE)) return false;
   try {
     const payload: Record<string, unknown> = { to, text: body.slice(0, 1600) };
-    if (TELNYX_PROFILE) payload.messaging_profile_id = TELNYX_PROFILE; else payload.from = TELNYX_FROM;
+    if (fromNumber) payload.from = fromNumber;
+    else if (TELNYX_PROFILE) payload.messaging_profile_id = TELNYX_PROFILE;
+    else payload.from = TELNYX_FROM;
     const res = await fetch("https://api.telnyx.com/v2/messages", {
       method: "POST",
       headers: { Authorization: `Bearer ${TELNYX_API_KEY}`, "Content-Type": "application/json" },
@@ -144,15 +148,18 @@ serve(async (req) => {
     const optedOutPhones = new Set((optOuts || []).map((r: any) => r.phone_key));
     const unsubscribedEmails = new Set((unsubs || []).map((r: any) => r.email));
 
-    // This camp's own mailing address (CAN-SPAM footer) and contact email
-    // (Reply-To) — set on the Dashboard's Camp Profile card. Falls back to
-    // the platform-wide POSTAL_ADDRESS secret if a camp hasn't set one yet.
+    // This camp's own mailing address (CAN-SPAM footer), contact email
+    // (Reply-To), and SMS sending number — set on the Dashboard's Camp
+    // Profile card. Address/number fall back to platform-wide defaults if a
+    // camp hasn't set theirs yet.
     let campAddress = "";
     let campReplyTo: string | undefined;
-    if (channels.includes("email")) {
-      const { data: campRow } = await supabase.from("camps").select("address, contact_email").eq("id", b.camp_id).maybeSingle();
+    let campTelnyxNumber: string | undefined;
+    if (channels.includes("email") || channels.includes("sms")) {
+      const { data: campRow } = await supabase.from("camps").select("address, contact_email, telnyx_from_number").eq("id", b.camp_id).maybeSingle();
       campAddress = campRow?.address || Deno.env.get("POSTAL_ADDRESS") || "";
       campReplyTo = campRow?.contact_email || undefined;
+      campTelnyxNumber = campRow?.telnyx_from_number || undefined;
     }
 
     if (channels.includes("email")) {
@@ -185,7 +192,7 @@ serve(async (req) => {
         const key = to ? phoneKey(to) : null;
         if (!to || !key || optedOutPhones.has(key)) continue;
         const smsBody = (r.body || b.body || "") + "\n\n— Campistry\nReply STOP to opt out.";
-        if (await sendTelnyxSMS(to, smsBody)) sent++;
+        if (await sendTelnyxSMS(to, smsBody, campTelnyxNumber)) sent++;
       }
     }
 

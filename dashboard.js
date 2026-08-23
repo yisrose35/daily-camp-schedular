@@ -64,9 +64,11 @@
     const profileAddress = document.getElementById('profileAddress');
     const profileContactEmail = document.getElementById('profileContactEmail');
     const profileEmail = document.getElementById('profileEmail');
+    const profileTelnyxNumber = document.getElementById('profileTelnyxNumber');
     const editCampName = document.getElementById('editCampName');
     const editAddress = document.getElementById('editAddress');
     const editContactEmail = document.getElementById('editContactEmail');
+    const editTelnyxNumber = document.getElementById('editTelnyxNumber');
     const profileError = document.getElementById('profileError');
     const profileSuccess = document.getElementById('profileSuccess');
     
@@ -809,8 +811,9 @@
         let displayCampName = campName || currentUser.user_metadata?.camp_name || 'Your Camp';
         let campAddress = campData?.address || '';
         let campContactEmail = campData?.contact_email || '';
+        let campTelnyxNumber = campData?.telnyx_from_number || '';
 
-        console.log('📊 Final display values:', { displayCampName, userName, campAddress, campContactEmail });
+        console.log('📊 Final display values:', { displayCampName, userName, campAddress, campContactEmail, campTelnyxNumber });
 
         // Update the personalized welcome message
         updateWelcomeMessage();
@@ -825,6 +828,9 @@
         if (profileContactEmail) {
             profileContactEmail.textContent = campContactEmail || 'Not set';
         }
+        if (profileTelnyxNumber) {
+            profileTelnyxNumber.textContent = campTelnyxNumber || 'Not set — using shared number';
+        }
 
         // Pre-fill edit form (only relevant for owners)
         if (editCampName) {
@@ -835,6 +841,9 @@
         }
         if (editContactEmail) {
             editContactEmail.value = campContactEmail;
+        }
+        if (editTelnyxNumber) {
+            editTelnyxNumber.value = campTelnyxNumber;
         }
         
         // Load stats from cloud storage
@@ -1007,6 +1016,7 @@
         const newCampName = editCampName?.value.trim();
         const newAddress = editAddress?.value.trim();
         const newContactEmail = editContactEmail?.value.trim() || null;
+        let newTelnyxNumber = editTelnyxNumber?.value.trim() || null;
 
         if (!newCampName) {
             if (profileError) profileError.textContent = 'Camp name is required.';
@@ -1016,6 +1026,19 @@
             if (profileError) profileError.textContent = 'Camp contact email looks invalid.';
             return;
         }
+        if (newTelnyxNumber) {
+            // Lenient normalize, same forgiving rules the sending functions use:
+            // bare 10-digit US numbers get a +1 prefix, everything else must
+            // already look like E.164 (+ followed by 8-15 digits).
+            const digits = newTelnyxNumber.replace(/[^\d+]/g, '');
+            if (/^\d{10}$/.test(digits)) newTelnyxNumber = '+1' + digits;
+            else if (/^1\d{10}$/.test(digits)) newTelnyxNumber = '+' + digits;
+            else newTelnyxNumber = digits;
+            if (!/^\+\d{8,15}$/.test(newTelnyxNumber)) {
+                if (profileError) profileError.textContent = 'SMS sending number looks invalid — use +1 followed by the 10-digit number.';
+                return;
+            }
+        }
 
         if (profileError) profileError.textContent = '';
         if (profileSuccess) profileSuccess.textContent = '';
@@ -1024,7 +1047,7 @@
             if (campData?.id) {
                 const { error } = await window.supabase
                     .from('camps')
-                    .update({ name: newCampName, address: newAddress, contact_email: newContactEmail })
+                    .update({ name: newCampName, address: newAddress, contact_email: newContactEmail, telnyx_from_number: newTelnyxNumber })
                     .eq('id', campData.id);
 
                 if (error) throw error;
@@ -1084,7 +1107,8 @@
                         owner: currentUser.id,
                         name: newCampName,
                         address: newAddress,
-                        contact_email: newContactEmail
+                        contact_email: newContactEmail,
+                        telnyx_from_number: newTelnyxNumber
                     }])
                     .select()
                     .single();
@@ -1100,6 +1124,7 @@
             if (profileCampName) profileCampName.textContent = newCampName;
             if (profileAddress) profileAddress.textContent = newAddress || 'Not set';
             if (profileContactEmail) profileContactEmail.textContent = newContactEmail || 'Not set';
+            if (profileTelnyxNumber) profileTelnyxNumber.textContent = newTelnyxNumber || 'Not set — using shared number';
             if (campNameDisplay) campNameDisplay.textContent = newCampName;
             
             updateWelcomeMessage();
