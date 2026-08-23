@@ -6,6 +6,7 @@
 - **Stack:** Vanilla JS, HTML, CSS — no build step, no framework. Files load directly in the browser.
 - **Backend:** Supabase (PostgreSQL, Auth, RLS). Tables: `daily_schedules`, `rotation_counts`, `camp_state_kv`.
 - **Two builder modes:** Auto Builder (layer-based solver) and Manual Builder (drag-drop skeleton).
+- **The user has no Supabase CLI.** Never give `supabase` CLI commands (migrations, `functions deploy`, `secrets set`). Every deploy/config step must be a Supabase Dashboard walkthrough (Edge Functions → Deploy/Secrets UI, SQL Editor for migrations, etc.), and every migration is handed to the user as raw SQL to paste into the SQL Editor themselves.
 
 ## Active Mission
 
