@@ -9567,13 +9567,12 @@ async function chargeStoredCard(famKey,amount,description){
 
     toast('Charging '+fm(amount)+' to '+f.name+'...');
     try{
-        var result=await callEdgeFunction('stripe-charge',{
+        var result=await callEdgeFunctionAuthed('stripe-charge',{
             customerId:f.stripeCustomerId,
             paymentMethodId:f.stripePaymentMethodId||null,
             amount:amount,
             currency:'usd',
             description:description||'Campistry payment',
-            campId:getCampId(),
             metadata:{campId:getCampId(),familyName:f.name,familyKey:famKey}
         });
 

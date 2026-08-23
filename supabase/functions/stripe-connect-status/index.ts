@@ -85,7 +85,13 @@ serve(async (req) => {
     const account = await stripeGet(`/accounts/${acct.stripe_account_id}`);
     if (account.error) throw new Error(account.error.message);
 
-    const chargesEnabled = !!account.charges_enabled;
+    // This account only ever requests the `transfers` capability (never
+    // card_payments), so charges_enabled may never turn true even once
+    // onboarding is fully complete — payouts_enabled is the field that
+    // actually reflects readiness to receive money. Check either (matches
+    // the same fix in stripe-connect-webhook's handleAccountUpdated and
+    // stripe-connect-status-camp).
+    const chargesEnabled = !!(account.charges_enabled || account.payouts_enabled);
     const onboardingStatus = chargesEnabled ? "complete" : "pending";
     const update: Record<string, unknown> = {
       stripe_charges_enabled: chargesEnabled,

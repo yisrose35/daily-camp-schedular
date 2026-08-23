@@ -62,7 +62,13 @@ serve(async (req) => {
     const account = await stripeGet(`/accounts/${camp.stripe_account_id}`);
     if (account.error) throw new Error(account.error.message);
 
-    const chargesEnabled = !!account.charges_enabled;
+    // This account only ever requests the `transfers` capability (never
+    // card_payments — see stripe-connect-onboard-camp), so Stripe's
+    // charges_enabled flag (which tracks whether the account can create its
+    // own charges) may never turn true even once onboarding is fully
+    // complete. payouts_enabled is what actually indicates the account has
+    // satisfied its requirements and can receive money — check either.
+    const chargesEnabled = !!(account.charges_enabled || account.payouts_enabled);
     const onboardingStatus = chargesEnabled ? "complete" : "pending";
     const update: Record<string, unknown> = {
       stripe_charges_enabled: chargesEnabled,

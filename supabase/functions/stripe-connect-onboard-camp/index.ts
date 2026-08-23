@@ -92,13 +92,34 @@ serve(async (req) => {
       if (account.error) throw new Error(account.error.message);
       stripeAccountId = account.id;
 
-      const { error: updErr } = await asUser
+      // Conditional write, not a blind update — a double-click or slow-network
+      // retry can race two requests into this branch at once (both saw
+      // stripe_account_id as null). Only claim the row if it's STILL null;
+      // if a concurrent request already won, adopt the account it created
+      // instead of leaving this new (now-orphaned) one referenced nowhere.
+      const { data: claimed, error: updErr } = await asUser
         .from("camps")
         .update({ stripe_account_id: stripeAccountId, stripe_onboarding_status: "pending" })
-        .eq("id", campId);
+        .eq("id", campId)
+        .is("stripe_account_id", null)
+        .select("stripe_account_id")
+        .maybeSingle();
       if (updErr) throw new Error(updErr.message);
 
-      console.log(`[stripe-connect-onboard-camp] Created Connect account ${stripeAccountId} for camp ${camp.name}`);
+      if (!claimed) {
+        // Lost the race — re-fetch whichever account id actually won.
+        const { data: winner } = await asUser
+          .from("camps")
+          .select("stripe_account_id")
+          .eq("id", campId)
+          .maybeSingle();
+        if (winner?.stripe_account_id) {
+          stripeAccountId = winner.stripe_account_id;
+          console.log(`[stripe-connect-onboard-camp] Lost onboarding race for camp ${camp.name} — using ${stripeAccountId}, abandoning the account just created`);
+        }
+      } else {
+        console.log(`[stripe-connect-onboard-camp] Created Connect account ${stripeAccountId} for camp ${camp.name}`);
+      }
     }
 
     // Express onboarding links expire after ~5 minutes — always mint a

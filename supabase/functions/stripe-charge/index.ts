@@ -5,7 +5,21 @@
 // Uses the stored Stripe Customer + PaymentMethod to create
 // an off-session PaymentIntent (auto-debit).
 //
-// If campId is provided and that camp has connected its own Stripe account
+// Auth: requires the caller's real Supabase session JWT (this function is
+// only ever called from campistry_me.js's staff Billing page — confirmed,
+// no other caller in the codebase — so requiring a real session breaks
+// nothing legitimate). The camp that receives a destination transfer is
+// derived EXCLUSIVELY from that authenticated caller's own owner/admin
+// membership — never from a client-supplied campId. Earlier drafts of this
+// function trusted an unauthenticated request-body campId to pick the
+// Stripe Connect destination; a caller could send a real family's
+// customerId/paymentMethodId alongside an arbitrary OTHER (attacker-owned,
+// Connect-enabled) camp's campId and misroute that family's money. Deriving
+// the destination camp from the session instead of the request body closes
+// that off entirely — there is no campId value a client can send that
+// changes where the money goes.
+//
+// If the caller's own camp has connected its own Stripe account
 // (camps.stripe_account_id, see stripe-connect-onboard-camp), the resulting
 // PaymentIntent gets transfer_data[destination] added so the money lands in
 // the camp's own bank account instead of the platform's. This is a
@@ -17,6 +31,9 @@
 // this stays the exact same platform-account charge as before.
 //
 // Request:  { customerId, paymentMethodId, amount, currency, description, metadata, campId? }
+//           header: Authorization: Bearer <caller's Supabase access token>
+//           (campId in the body is kept for metadata/logging only — it is
+//           NEVER used to pick a Stripe Connect destination)
 // Response: { paymentIntentId, status, amount }
 // =============================================================================
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
@@ -25,15 +42,63 @@ import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 const STRIPE_SECRET = Deno.env.get("STRIPE_SECRET_KEY");
 const STRIPE_API = "https://api.stripe.com/v1";
 const SUPABASE_URL = Deno.env.get("SUPABASE_URL") || "";
+const SUPABASE_ANON_KEY = Deno.env.get("SUPABASE_ANON_KEY") || "";
 const SUPABASE_SERVICE_KEY = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY") || "";
+const SENDER_ROLES = ["owner", "admin"];
 
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
   "Access-Control-Allow-Headers": "authorization, x-client-info, apikey, content-type",
 };
 
-async function lookupCampDestination(campId: string | undefined): Promise<string | null> {
+// Resolves the camp the AUTHENTICATED caller actually belongs to as
+// owner/admin — this, not any client-supplied value, is the only campId
+// ever used to pick a Stripe Connect destination.
+async function callerCampId(req: Request): Promise<string | null> {
+  const jwt = (req.headers.get("Authorization") || "").replace(/^Bearer\s+/i, "");
+  if (!jwt || !SUPABASE_URL || !SUPABASE_ANON_KEY) return null;
+  const asUser = createClient(SUPABASE_URL, SUPABASE_ANON_KEY, {
+    global: { headers: { Authorization: `Bearer ${jwt}` } },
+    auth: { persistSession: false, autoRefreshToken: false },
+  });
+  const { data: userData } = await asUser.auth.getUser();
+  const uid = userData?.user?.id;
+  if (!uid) return null;
+
+  const { data: owned } = await asUser.from("camps").select("id").eq("owner", uid).maybeSingle();
+  if (owned?.id) return owned.id;
+
+  const { data: membership } = await asUser
+    .from("camp_users")
+    .select("camp_id, role")
+    .eq("user_id", uid)
+    .maybeSingle();
+  if (membership?.camp_id && SENDER_ROLES.includes(membership.role)) return membership.camp_id;
+  return null;
+}
+
+// Defense in depth on top of callerCampId already being server-derived:
+// only apply a destination when the resolved camp's own camp_state_kv
+// actually contains a family with this exact stripeCustomerId — otherwise
+// fall through with no destination (the same safe behavior as an
+// unconnected camp), never reject the charge itself.
+async function campOwnsCustomer(campId: string | undefined, customerId: string | undefined): Promise<boolean> {
+  if (!campId || !customerId || !SUPABASE_URL || !SUPABASE_SERVICE_KEY) return false;
+  const supabase = createClient(SUPABASE_URL, SUPABASE_SERVICE_KEY);
+  const { data } = await supabase
+    .from("camp_state_kv")
+    .select("value")
+    .eq("camp_id", campId)
+    .eq("key", "campistryMe")
+    .maybeSingle();
+  const families = data?.value && typeof data.value === "object" ? (data.value as Record<string, any>).families : null;
+  if (!families || typeof families !== "object") return false;
+  return Object.values(families).some((f: any) => f && f.stripeCustomerId === customerId);
+}
+
+async function lookupCampDestination(campId: string | undefined, customerId: string | undefined): Promise<string | null> {
   if (!campId || !SUPABASE_URL || !SUPABASE_SERVICE_KEY) return null;
+  if (!(await campOwnsCustomer(campId, customerId))) return null;
   const supabase = createClient(SUPABASE_URL, SUPABASE_SERVICE_KEY);
   const { data: camp } = await supabase
     .from("camps")
@@ -75,7 +140,15 @@ serve(async (req) => {
       });
     }
 
-    const { customerId, paymentMethodId, amount, currency, description, metadata, campId } = await req.json();
+    const authedCampId = await callerCampId(req);
+    if (!authedCampId) {
+      return new Response(JSON.stringify({ error: "Only camp owners/admins can charge a stored card." }), {
+        status: 403,
+        headers: { ...corsHeaders, "Content-Type": "application/json" },
+      });
+    }
+
+    const { customerId, paymentMethodId, amount, currency, description, metadata } = await req.json();
 
     if (!customerId || !amount) {
       return new Response(JSON.stringify({ error: "customerId and amount required" }), {
@@ -118,7 +191,7 @@ serve(async (req) => {
       });
     }
 
-    const destinationAccountId = await lookupCampDestination(campId);
+    const destinationAccountId = await lookupCampDestination(authedCampId, customerId);
     if (destinationAccountId) {
       params["transfer_data[destination]"] = destinationAccountId;
     }

@@ -19,6 +19,27 @@
 // Checkout Session itself is created. No platform fee (camp keeps 100%). A
 // camp that hasn't connected is unaffected — same behavior as before.
 //
+// KNOWN RESIDUAL RISK, not fully closed by campOwnsFamily() below: this
+// endpoint is called from campistry_link_parent.html's _lkCheckout() using
+// only the shared anon key, with no per-user session token — so there is no
+// real identity check on the caller at all (same pre-existing gap flagged
+// in BILLING_PAYMENTS_SETUP.md — "route stripe-checkout behind an
+// authenticated RPC"). campOwnsFamily() blocks the simple case (a stale/
+// wrong campId sent alongside a REAL family's key from a genuine caller),
+// but it can't stop someone who has gone through real Stripe Connect
+// onboarding for their OWN camp from planting a matching familyKey in their
+// OWN camp_state_kv (which their owner/admin RLS already lets them write)
+// and then phishing a victim into paying a crafted link — the destination
+// account would be real and KYC-verified, but not the victim's actual camp.
+// Closing this fully needs stripe-checkout to require the CALLER's real
+// session (parent or staff) and derive campId/familyKey from it server-side
+// — the same pattern stripe-charge now uses — rather than trusting any
+// client-supplied value. Deferred here because campistry_link_parent.html's
+// _lkCheckout() would need to switch from the anon key to forwarding the
+// signed-in parent's own access token first, which is untestable without a
+// live Supabase/Stripe account in this environment and risks breaking the
+// live parent payment flow if rushed. Flagged, not silently left unfixed.
+//
 // Request:  { campId, familyKey, familyName, email?, amount, description?,
 //             enrollmentId?, successUrl?, cancelUrl? }
 // Response: { url, sessionId }
@@ -36,8 +57,28 @@ const corsHeaders = {
   "Access-Control-Allow-Headers": "authorization, x-client-info, apikey, content-type",
 };
 
-async function lookupCampDestination(campId: string | undefined): Promise<string | null> {
+// campId is client-supplied and this endpoint has no session auth at all
+// (it's the public Pay Link flow) — never trust it alone to pick a money
+// destination. Only apply a destination when campId's own camp_state_kv
+// actually contains this exact familyKey — otherwise fall through with no
+// destination (same safe behavior as an unconnected camp), never reject
+// the checkout itself.
+async function campOwnsFamily(campId: string | undefined, familyKey: string | undefined): Promise<boolean> {
+  if (!campId || !familyKey || !SUPABASE_URL || !SUPABASE_SERVICE_KEY) return false;
+  const supabase = createClient(SUPABASE_URL, SUPABASE_SERVICE_KEY);
+  const { data } = await supabase
+    .from("camp_state_kv")
+    .select("value")
+    .eq("camp_id", campId)
+    .eq("key", "campistryMe")
+    .maybeSingle();
+  const families = data?.value && typeof data.value === "object" ? (data.value as Record<string, any>).families : null;
+  return !!(families && typeof families === "object" && Object.prototype.hasOwnProperty.call(families, familyKey));
+}
+
+async function lookupCampDestination(campId: string | undefined, familyKey: string | undefined): Promise<string | null> {
   if (!campId || !SUPABASE_URL || !SUPABASE_SERVICE_KEY) return null;
+  if (!(await campOwnsFamily(campId, familyKey))) return null;
   const supabase = createClient(SUPABASE_URL, SUPABASE_SERVICE_KEY);
   const { data: camp } = await supabase
     .from("camps")
@@ -118,7 +159,7 @@ serve(async (req) => {
       params[`payment_intent_data[metadata][${k}]`] = v;
     });
 
-    const destinationAccountId = await lookupCampDestination(campId);
+    const destinationAccountId = await lookupCampDestination(campId, familyKey);
     if (destinationAccountId) {
       params["payment_intent_data[transfer_data][destination]"] = destinationAccountId;
     }

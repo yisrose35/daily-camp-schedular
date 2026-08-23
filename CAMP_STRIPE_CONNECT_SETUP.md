@@ -35,9 +35,16 @@ Redeploy (changed):
 - `stripe-connect-webhook` — `account.updated` handler now also matches
   camp-level connected accounts (falls back to a `camps` lookup when there's
   no `staffAccountId` in the account's metadata).
-- `stripe-charge` — now looks up the camp's connected account and adds
-  `transfer_data[destination]` when present.
-- `stripe-checkout` — same lookup/destination logic.
+- `stripe-charge` — **now requires a real caller session** (owner/admin of
+  the camp being charged) — no longer callable with just the anon key. The
+  destination camp for fund routing is derived exclusively from that
+  session, never from a client-supplied `campId`, closing a real
+  fund-misrouting risk caught in review (see "Security notes" below).
+  `campistry_me.js`'s `chargeStoredCard()` already switched to
+  `callEdgeFunctionAuthed()` to match.
+- `stripe-checkout` — same destination lookup, plus an ownership check
+  (`campOwnsFamily`) — but this endpoint still has a known residual gap,
+  see "Security notes" below before treating it as fully hardened.
 - `charge-due-installments` — same, batch-fetched once per cron run instead
   of per-charge.
 - `stripe-refund` — now fetches the PaymentIntent from Stripe before
@@ -73,6 +80,56 @@ needs both secrets set (`STRIPE_CONNECT_WEBHOOK_SECRET` and
 never creates a payment_intent.succeeded event on the platform account
 directly (tuition PaymentIntents' succeeded/failed events are handled by
 the existing `stripe-webhook`, unchanged).
+
+## Security notes (read before scaling past a handful of camps)
+
+A correctness/security review of this feature caught 3 real issues before
+launch; all 3 are fixed, one is only partially closed:
+
+1. **Fund misrouting (fixed, fully closed).** `stripe-charge` originally
+   trusted a client-supplied `campId` to pick the Stripe Connect
+   destination, with no verification it matched the family actually being
+   charged — a crafted or buggy request could misroute a real family's
+   card charge into an unrelated camp's bank account. Fixed by requiring a
+   real caller session on `stripe-charge` and deriving the destination camp
+   exclusively from that session's own owner/admin membership — never from
+   anything the client sends. `campistry_me.js` was updated to send its real
+   session token (`callEdgeFunctionAuthed`) for this call.
+2. **`stripe-checkout` — partially closed, known residual gap.** The same
+   class of issue exists here, but this endpoint is also called from the
+   parent portal (`campistry_link_parent.html`) using only the shared anon
+   key, with no per-user session forwarded at all — so it can't require real
+   auth without first changing that caller too. An ownership check
+   (`campOwnsFamily`) was added, which blocks the simple/accidental version
+   of the bug, but a determined attacker who has completed real Stripe
+   Connect KYC for their **own** camp could still plant a matching
+   `familyKey` in their own data and phish a victim into paying a crafted
+   link. Full closure needs `campistry_link_parent.html`'s `_lkCheckout()`
+   to forward the signed-in parent's real session instead of the anon key,
+   and `stripe-checkout` to derive `campId`/`familyKey` from that session —
+   deferred here since it touches the live parent payment flow and
+   couldn't be tested end-to-end in this environment. See the code comment
+   at the top of `stripe-checkout/index.ts` for the exact mechanism.
+3. **Onboarding race (fixed).** A double-click (or slow-network retry) on
+   "Connect your Stripe account" could create two separate Stripe accounts
+   for one camp, leaving the row pointed at whichever the owner never
+   finished onboarding. Fixed with a conditional database write
+   (`stripe-connect-onboard-camp` only claims the row if it's still
+   unclaimed, otherwise adopts the account that won) plus a client-side
+   button disable.
+4. **`charges_enabled` may never flip true (fixed).** These Connect
+   accounts only ever request the `transfers` capability, never
+   `card_payments` — so Stripe's `charges_enabled` flag, which tracks
+   whether an account can create its *own* charges, may stay `false`
+   forever even after a camp fully completes onboarding. Fixed by also
+   checking `payouts_enabled` (the field that actually reflects readiness
+   to receive transferred money) in `stripe-connect-status-camp` and the
+   webhook's `account.updated` handler — and, for consistency, in the
+   pre-existing staff-tipping equivalents (`stripe-connect-status`,
+   same handler) since they had the identical defect. **This one is worth
+   spot-checking against a real Stripe test account** — confirm a fully
+   onboarded test camp actually flips to "Connected" on the Dashboard;
+   if it doesn't, that's the field to look at first.
 
 ## 5. Verify end to end
 

@@ -133,7 +133,13 @@ async function verifySignature(payload: string, signature: string, secret: strin
 }
 
 async function handleAccountUpdated(supabase: ReturnType<typeof createClient>, account: Record<string, any>) {
-  const chargesEnabled = !!account.charges_enabled;
+  // Both staff and camp connected accounts only ever request the
+  // `transfers` capability (never card_payments), so Stripe's charges_enabled
+  // flag — which tracks whether the account can create its OWN charges — may
+  // never turn true even once onboarding is fully complete. payouts_enabled
+  // is what actually indicates the account has satisfied its requirements
+  // and is ready to receive money; check either.
+  const chargesEnabled = !!(account.charges_enabled || account.payouts_enabled);
   const onboardingStatus = chargesEnabled ? "complete" : "pending";
 
   const staffAccountId = account.metadata?.staffAccountId;

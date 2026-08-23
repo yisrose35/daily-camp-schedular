@@ -1309,16 +1309,16 @@
 
             if (!data.connected) {
                 box.innerHTML = '<p style="margin:0 0 10px;">Right now tuition payments deposit into Campistry\'s account. Connect your camp\'s own Stripe account so payments go straight to your bank.</p>' +
-                    (canConnect ? '<button type="button" class="btn-primary" onclick="startCampStripeConnect()">Connect your Stripe account</button>' : '') + ownerNote;
+                    (canConnect ? '<button type="button" class="btn-primary" onclick="startCampStripeConnect(this)">Connect your Stripe account</button>' : '') + ownerNote;
             } else if (data.charges_enabled) {
                 box.innerHTML = '<p style="margin:0;color:#059669;"><strong>Connected</strong> — tuition payments go directly to your bank account' +
                     (data.connected_at ? ' since ' + new Date(data.connected_at).toLocaleDateString() : '') + '.</p>';
             } else if (data.onboarding_status === 'pending') {
                 box.innerHTML = '<p style="margin:0 0 8px;">Onboarding started but not finished yet.</p>' +
-                    (canConnect ? '<button type="button" class="btn-primary" onclick="startCampStripeConnect()">Finish setup</button>' : '') + ownerNote;
+                    (canConnect ? '<button type="button" class="btn-primary" onclick="startCampStripeConnect(this)">Finish setup</button>' : '') + ownerNote;
             } else {
                 box.innerHTML = '<p style="margin:0 0 8px;color:#dc2626;">Your Stripe account needs attention before it can accept payments again.</p>' +
-                    (canConnect ? '<button type="button" class="btn-primary" onclick="startCampStripeConnect()">Review account</button>' : '') + ownerNote;
+                    (canConnect ? '<button type="button" class="btn-primary" onclick="startCampStripeConnect(this)">Review account</button>' : '') + ownerNote;
             }
         } catch (e) {
             box.textContent = 'Could not load Stripe Connect status.';
@@ -1334,18 +1334,32 @@
         await loadCampStripeConnectStatus(campId);
     };
 
-    window.startCampStripeConnect = async function() {
+    window.startCampStripeConnect = async function(btn) {
         if (!campData || !campData.id) return;
+        // Disable immediately — a double-click here can otherwise race two
+        // onboarding requests into creating two different Stripe accounts
+        // for the same camp (the server has its own guard too, but this is
+        // the cheap first line of defense).
+        var originalLabel = btn ? btn.textContent : '';
+        if (btn) { btn.disabled = true; btn.textContent = 'Connecting…'; }
         try {
             const { data, error } = await window.supabase.functions.invoke('stripe-connect-onboard-camp', {
                 body: { campId: campData.id },
             });
             if (error) throw new Error(error.message || 'Could not start Stripe Connect setup');
             if (data && data.error) throw new Error(data.error);
-            if (data && data.url) window.location.href = data.url;
+            if (data && data.url) { window.location.href = data.url; return; }
+            // No error, but also no URL — treat as failure rather than
+            // silently leaving the button stuck on "Connecting…".
+            throw new Error('Could not start Stripe Connect setup — no redirect URL returned.');
         } catch (e) {
             const box = document.getElementById('campStripeConnectBox');
             if (box) box.innerHTML = '<p style="margin:0;color:#dc2626;">' + (e.message || 'Could not start Stripe Connect setup.') + '</p>';
+            // btn may already be a detached node here (the innerHTML replace
+            // above just removed it from the DOM) — restoring its own label
+            // is harmless either way and correct when it's still attached
+            // (e.g. the box wasn't replaced for some other reason).
+            if (btn) { btn.disabled = false; btn.textContent = originalLabel || 'Connect your Stripe account'; }
         }
     };
 
