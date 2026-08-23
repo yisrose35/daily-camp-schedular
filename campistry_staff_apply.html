@@ -92,6 +92,15 @@ body{font-family:var(--font);background:var(--s50);color:var(--s800);-webkit-fon
       <button type="button" onclick="clearSig()" style="background:none;border:none;color:var(--me);font-size:.8rem;cursor:pointer;margin-top:4px">Clear signature</button>
     </div>
 
+    <!-- SMS/Email consent — always shown and always required, regardless of
+         whether the camp has turned off the Consent & Signature section
+         above. This is the applicant's own legal consent to be texted/
+         emailed, not a camp preference, so it can never be a togglable
+         section. -->
+    <div class="cd" id="smsEmailConsentCard"><div class="ct">📱 Communication Preferences</div>
+      <label class="chip" style="width:100%;border-radius:var(--r)"><input type="checkbox" id="agSmsEmail"> I agree to receive text messages and emails from the camp about my application and (if hired) my schedule and camp updates. Message/data rates may apply. Reply STOP to a text at any time to opt out.</label>
+    </div>
+
     <button class="btn" onclick="submitApp()">Submit Application</button>
     <p id="cloudSyncNote" class="mut" style="text-align:center;margin-top:10px"></p>
   </div>
@@ -407,6 +416,9 @@ window.submitApp=function(){
         if(_input&&!(_input.value||'').trim())return showErr('Please answer: '+_q.label);
         if(!_input&&_q.type==='checkbox'&&!_checked)return showErr('Please answer: '+_q.label);
     }
+    // SMS/email consent is the applicant's own legal consent, not a camp
+    // preference — always required, never gated by a section toggle.
+    if(!document.getElementById('agSmsEmail').checked)return showErr('Please agree to receive text messages and emails to continue.');
     if(consentOn){
         if(!document.getElementById('agTerms').checked)return showErr('Please confirm your information is accurate.');
         if(!sigHasData)return showErr('Please sign the form.');
@@ -436,6 +448,7 @@ window.submitApp=function(){
         education:v('aEdu'),experience:v('aExp'),certifications:certs,
         resume:resumeData,references:refs,source:v('aSrc'),
         bgCheckConsent:document.getElementById('agBg').checked,
+        smsEmailConsent:document.getElementById('agSmsEmail').checked,
         signature:document.getElementById('sigCanvas').toDataURL(),
         status:'applied',appliedDate:new Date().toISOString().split('T')[0],appliedTime:new Date().toISOString(),
         adminNotes:'',onboarding:{},

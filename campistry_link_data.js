@@ -608,7 +608,7 @@
             if (!parents.length) return;
             var children = (fam.camperIds || []).map(function(cid) {
                 var c = roster[cid];
-                return c ? { name: cid, division: c.division, grade: c.grade, bunk: c.bunk, camperId: c.camperId } : { name: cid };
+                return c ? { name: cid, division: c.division, grade: c.grade, bunk: c.bunk, camperId: c.camperId, smsEmailConsent: !!c.smsEmailConsent } : { name: cid };
             });
             var primary = parents[0];
             var key = (primary.email || primary.name || '').toLowerCase();
@@ -646,7 +646,7 @@
                     address: [c.street, c.city, c.state, c.zip].filter(Boolean).join(', ')
                 };
             }
-            impliedFamilies[key].children.push({ name: name, division: c.division, grade: c.grade, bunk: c.bunk, camperId: c.camperId });
+            impliedFamilies[key].children.push({ name: name, division: c.division, grade: c.grade, bunk: c.bunk, camperId: c.camperId, smsEmailConsent: !!c.smsEmailConsent });
         });
         Object.values(impliedFamilies).forEach(function(f) { directory.push(f); });
 

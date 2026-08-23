@@ -4192,7 +4192,8 @@ function assignHiredToBunk(appId,bunkName){
     bunkStaff[bunkName].push({
         name:a.name||[a.first,a.last].filter(Boolean).join(' '),
         role:(a.positions&&a.positions[0])||'Counselor',
-        email:email, phone:a.phone||'', smsOptIn:false
+        email:email, phone:a.phone||'', smsOptIn:false,
+        smsEmailConsent:!!a.smsEmailConsent // the applicant's OWN consent from their form — distinct from smsOptIn (an admin-asserted flag for the separate manual Lite blast feature)
     });
     save();
     _syncInvitesForBunk(bunkName);
@@ -6409,7 +6410,7 @@ async function _sendLinkNow(isStaff){
     var btn=document.getElementById('slSendBtn');
     if(btn){btn.disabled=true;btn.textContent='Sending…';}
     try{
-        await callEdgeFunction('send-broadcast',{to:recipients,subject:subject,body:body,method:'email',campName:campName});
+        await callEdgeFunctionAuthed('send-broadcast',{campId:getCampId(),to:recipients,subject:subject,body:body,method:'email',campName:campName});
         toast('Sent to '+recipients.length+' recipient'+(recipients.length!==1?'s':''));
         closeModal('sendLinkModal');
     }catch(err){
@@ -6450,7 +6451,7 @@ async function _sendPostAcceptNow(id){
     var btn=document.getElementById('slSendBtn');
     if(btn){btn.disabled=true;btn.textContent='Sending…';}
     try{
-        await callEdgeFunction('send-broadcast',{to:[{email:e.parentEmail,name:e.parentName||''}],subject:subject,body:body,method:'email',campName:campName});
+        await callEdgeFunctionAuthed('send-broadcast',{campId:getCampId(),to:[{email:e.parentEmail,name:e.parentName||''}],subject:subject,body:body,method:'email',campName:campName});
         e.postAcceptSentDate=new Date().toISOString();
         save();
         toast('Post-acceptance form sent to '+e.parentEmail);
@@ -6471,7 +6472,7 @@ async function _autoSendPostAccept(id){
     var subject='A few more choices for '+(e.camperName||'your camper');
     var body='Congratulations — '+(e.camperName||'your camper')+' is accepted! Please complete a few more choices here:\n\n'+url;
     try{
-        await callEdgeFunction('send-broadcast',{to:[{email:e.parentEmail,name:e.parentName||''}],subject:subject,body:body,method:'email',campName:campName});
+        await callEdgeFunctionAuthed('send-broadcast',{campId:getCampId(),to:[{email:e.parentEmail,name:e.parentName||''}],subject:subject,body:body,method:'email',campName:campName});
         e.postAcceptSentDate=new Date().toISOString();
         save();
         toast('Post-acceptance form auto-sent to '+e.parentEmail);
@@ -7108,7 +7109,8 @@ function enrollCamper(id){
             street:e.street||'',city:e.city||'',state:e.state||'',zip:e.zip||'',
             parent1Name:e.parentName||'',parent1Phone:e.parentPhone||'',parent1Email:e.parentEmail||'',
             emergencyName:e.emergencyName||'',emergencyPhone:e.emergencyPhone||'',emergencyRel:e.emergencyRel||'',
-            allergies:e.allergies||'',medications:e.medications||'',dietary:e.dietary||''
+            allergies:e.allergies||'',medications:e.medications||'',dietary:e.dietary||'',
+            smsEmailConsent:!!e.smsEmailConsent
         };
         // Sync address to Go
         if(e.street)syncAddressToGo(e.camperName,roster[e.camperName]);
@@ -7134,6 +7136,7 @@ function enrollCamper(id){
         if(!c.teacher&&e.teacher)c.teacher=e.teacher;
         if(!c.street&&e.street){c.street=e.street;c.city=e.city;c.state=e.state;c.zip=e.zip;syncAddressToGo(e.camperName,c)}
         if(!c.parent1Name&&e.parentName){c.parent1Name=e.parentName;c.parent1Phone=e.parentPhone;c.parent1Email=e.parentEmail}
+        if(!c.smsEmailConsent&&e.smsEmailConsent)c.smsEmailConsent=true; // never downgrade consent already captured
         if(!c.emergencyName&&e.emergencyName){c.emergencyName=e.emergencyName;c.emergencyPhone=e.emergencyPhone;c.emergencyRel=e.emergencyRel}
         if(!c.allergies&&e.allergies)c.allergies=e.allergies;
         if(!c.medications&&e.medications)c.medications=e.medications;
@@ -9421,6 +9424,21 @@ async function callEdgeFunction(fnName,body){
     return data;
 }
 
+// For edge functions that re-verify the CALLER's own role server-side
+// (send-broadcast, send-sms) — those need the signed-in user's own session
+// token, not the anon key callEdgeFunction sends. .functions.invoke()
+// forwards the client's current session automatically (same pattern the
+// working send-sms/send-push callers already use elsewhere in this app).
+async function callEdgeFunctionAuthed(fnName,body){
+    var client=window.CampistryDB&&window.CampistryDB.getClient?window.CampistryDB.getClient():null;
+    if(!client) throw new Error('Not signed in');
+    var res=await client.functions.invoke(fnName,{body:body});
+    if(res.error) throw new Error(res.error.message||'Edge function error');
+    var data=res.data;
+    if(data&&data.error) throw new Error(data.error);
+    return data;
+}
+
 // Request a family to save their card
 async function requestCardSetup(famKey){
     var f=families[famKey];if(!f)return;
@@ -10631,9 +10649,9 @@ async function sendBroadcastNow(broadcast){
     var campName='';try{var ss=JSON.parse(localStorage.getItem('campGlobalSettings_v1')||'{}');campName=ss.camp_name||ss.campName||'Camp'}catch(e){}
     var target=(broadcast.to||'').toLowerCase();
     if(target==='staff'||target==='staff only'){
-        finStaff.forEach(function(s){if(s.email)recipients.push({email:s.email,name:s.name,phone:''})});
+        finStaff.forEach(function(s){if(s.email)recipients.push({email:s.email,name:s.name,phone:'',consent:!!s.smsEmailConsent})});
     }else{
-        Object.values(families).forEach(function(f){(f.households||[]).forEach(function(hh){(hh.parents||[]).forEach(function(p){if(p.email)recipients.push({email:p.email,name:p.name||'',phone:p.phone||''})})})});
+        Object.values(families).forEach(function(f){(f.households||[]).forEach(function(hh){(hh.parents||[]).forEach(function(p){if(p.email)recipients.push({email:p.email,name:p.name||'',phone:p.phone||'',consent:!!p.smsEmailConsent})})})});
         var seen=new Set();recipients=recipients.filter(function(r){if(seen.has(r.email))return false;seen.add(r.email);return true});
         if(target!=='all families'&&target!=='enrolled'&&target!=='all'&&target){
             var divCampers=new Set();Object.entries(roster).forEach(function([n,c]){if(c.division===broadcast.to)divCampers.add(n)});
@@ -10642,7 +10660,11 @@ async function sendBroadcastNow(broadcast){
         }
     }
     if(!recipients.length){toast('No recipients with email','error');return{sent:0,failed:0}}
-    try{return await callEdgeFunction('send-broadcast',{to:recipients,subject:broadcast.subject||'',body:broadcast.body||'',method:broadcast.method||'Email',campName:campName})}
+    // send-broadcast now requires campId (auth check) and per-recipient
+    // consent (smsEmailConsent, captured on the registration/staff-apply
+    // forms) — a recipient added before that consent flow existed is
+    // correctly skipped rather than texted/emailed without consent on file.
+    try{return await callEdgeFunctionAuthed('send-broadcast',{campId:getCampId(),to:recipients,subject:broadcast.subject||'',body:broadcast.body||'',method:broadcast.method||'Email',campName:campName,eventKey:'me-broadcast:'+(broadcast.timestamp||Date.now())})}
     catch(err){toast('Send failed: '+err.message,'error');return{sent:0,failed:0}}
 }
 

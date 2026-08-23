@@ -190,6 +190,14 @@ body{font-family:var(--font);background:var(--s50);color:var(--s800);-webkit-fon
 <div class="sig-wrap" id="sigWrap"><canvas id="sigCanvas"></canvas><div class="sig-line"></div><div class="sig-label">Sign above</div><button class="sig-clear" onclick="clearSig()">Clear</button></div>
 </div></div>
 
+<!-- SMS/Email consent — always shown and always required, regardless of
+     whether the camp has turned off the Signature section above. This is
+     the recipient's own legal consent to be texted/emailed, not a camp
+     preference, so it can never be a togglable section. -->
+<div class="cd" id="smsEmailConsentCard"><div class="ct"><svg viewBox="0 0 24 24"><path d="M21 15a2 2 0 01-2 2H7l-4 4V5a2 2 0 012-2h14a2 2 0 012 2z"/></svg>Communication Preferences</div>
+<div class="ck"><input type="checkbox" id="agSmsEmail"><label for="agSmsEmail">I agree to receive text messages and emails from the camp about my camper — schedules, alerts, messages, and payment reminders. Message/data rates may apply. Reply STOP to a text at any time to opt out.</label></div>
+</div>
+
 <div id="formErr" class="err-msg"></div>
 <button class="sub-btn" onclick="submitApp()">Submit Application</button>
 <div class="pwr">Powered by <a href="index.html">Campistry</a></div>
@@ -820,6 +828,9 @@ window.submitApp=function(){
     // Signature/agreement is only required when the camp has that section on
     // — a camp that turns it off shouldn't get a form nobody can submit.
     var signatureOn=!(_currentFC.sections&&_currentFC.sections.signature&&_currentFC.sections.signature.enabled===false);
+    // SMS/email consent is the recipient's own legal consent, not a camp
+    // preference — always required, never gated by a section toggle.
+    if(!document.getElementById('agSmsEmail').checked)return showErr('Please agree to receive text messages and emails to continue.');
     if(signatureOn){
         if(!document.getElementById('ag1').checked||!document.getElementById('ag2').checked||!document.getElementById('ag3').checked||!document.getElementById('ag4').checked)return showErr('Please agree to all terms.');
         if(!sigHasData)return showErr('Please sign the form.');
@@ -868,6 +879,7 @@ window.submitApp=function(){
                 paymentMethod:selPM,paymentStatus:'pending',paymentAmount:0,
                 discount:discount.active?{code:discount.code,label:discount.label,pct:discount.pct,amt:discount.amt}:null,
                 signature:sigData,
+                smsEmailConsent:true,
                 documents:uploads.map(function(u){return{name:u.name,size:u.size,data:u.data}}),
                 status:'applied',appliedDate:new Date().toISOString().split('T')[0],appliedTime:new Date().toISOString(),
                 formsRequired:3,formsCompleted:uploads.length>0?1:0,
