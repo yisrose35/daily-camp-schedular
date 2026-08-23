@@ -91,13 +91,22 @@ const SUPABASE_SERVICE_KEY = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY") || "";
 // Only used by the cart fan-out (handleTipCartSucceeded) — the
 // single-recipient flow never calls the Stripe API from this function at
 // all, since a destination charge already moves the money by itself.
-async function stripePost(endpoint: string, body: Record<string, string>) {
+// idempotencyKey matters a lot here: without it, a Stripe webhook retry (or
+// two overlapping invocations of the same event) racing past the DB-level
+// "already recorded?" check below — both reading "not yet" before either
+// has written its link_tips row — would each independently POST /transfers
+// and Stripe would execute BOTH as real, separate payouts. With a stable
+// key, Stripe recognizes the retry and returns the original Transfer
+// instead of creating a second one.
+async function stripePost(endpoint: string, body: Record<string, string>, idempotencyKey?: string) {
+  const headers: Record<string, string> = {
+    "Authorization": `Bearer ${STRIPE_SECRET}`,
+    "Content-Type": "application/x-www-form-urlencoded",
+  };
+  if (idempotencyKey) headers["Idempotency-Key"] = idempotencyKey;
   const resp = await fetch(`${STRIPE_API}${endpoint}`, {
     method: "POST",
-    headers: {
-      "Authorization": `Bearer ${STRIPE_SECRET}`,
-      "Content-Type": "application/x-www-form-urlencoded",
-    },
+    headers,
     body: new URLSearchParams(body).toString(),
   });
   return resp.json();
@@ -107,6 +116,15 @@ const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
   "Access-Control-Allow-Headers": "authorization, x-client-info, apikey, content-type, stripe-signature",
 };
+
+// Stripe's own recommended tolerance for webhook signature freshness — a
+// signature is cryptographically valid forever once computed, so without
+// this, a captured/leaked past payload+signature (a log, a misconfigured
+// proxy, a webhook-testing tool run against production) stays replayable
+// indefinitely. DB-level idempotency (link_tips' unique index) still stops
+// a replay from re-crediting money, but this is a cheap first line of
+// defense that matches Stripe's documented verification guidance.
+const WEBHOOK_TOLERANCE_SECONDS = 5 * 60;
 
 async function verifySignature(payload: string, signature: string, secret: string): Promise<boolean> {
   if (!secret || !signature) return false;
@@ -119,6 +137,10 @@ async function verifySignature(payload: string, signature: string, secret: strin
     const timestamp = parts["t"];
     const sig = parts["v1"];
     if (!timestamp || !sig) return false;
+    const tsSeconds = Number(timestamp);
+    if (!Number.isFinite(tsSeconds) || Math.abs(Date.now() / 1000 - tsSeconds) > WEBHOOK_TOLERANCE_SECONDS) {
+      return false;
+    }
     const signedPayload = `${timestamp}.${payload}`;
     const key = await crypto.subtle.importKey(
       "raw", new TextEncoder().encode(secret),
@@ -226,16 +248,14 @@ async function handleTipSucceeded(supabase: ReturnType<typeof createClient>, pi:
     return;
   }
 
-  // total_earned only — see header note on why balance/total_paid_out stay untouched.
-  const { data: acct } = await supabase
-    .from("link_staff_accounts")
-    .select("total_earned")
-    .eq("id", meta.staffAccountId)
-    .maybeSingle();
-  const { error: updErr } = await supabase
-    .from("link_staff_accounts")
-    .update({ total_earned: (Number(acct?.total_earned) || 0) + tipAmount, updated_at: new Date().toISOString() })
-    .eq("id", meta.staffAccountId);
+  // total_earned only — see header note on why balance/total_paid_out stay
+  // untouched. Atomic single-statement increment (migration 078) — a plain
+  // SELECT-then-UPDATE here could lose an increment if two tips land on the
+  // same staff member close together.
+  const { error: updErr } = await supabase.rpc("increment_staff_total_earned", {
+    p_account_id: meta.staffAccountId,
+    p_amount: tipAmount,
+  });
 
   console.log(`[stripe-connect-webhook] tip recorded: $${tipAmount} for ${meta.staffName} (camp ${meta.campId}): ${updErr ? "FAILED " + updErr.message : "ok"}`);
 }
@@ -296,6 +316,11 @@ async function handleTipCartSucceeded(supabase: ReturnType<typeof createClient>,
         continue;
       }
 
+      // Same dimension as the DB-level idempotency check just above
+      // (stripe_payment_intent_id, staff_account_id) — a retried delivery
+      // of this exact event for this exact recipient reuses this same key,
+      // so Stripe itself refuses to create a second Transfer even if two
+      // invocations both raced past the "already recorded?" check.
       const transfer = await stripePost("/transfers", {
         amount: String(item.tip_cents),
         currency: "usd",
@@ -304,7 +329,7 @@ async function handleTipCartSucceeded(supabase: ReturnType<typeof createClient>,
         "transfer_group": `cart_${cartId}`,
         "metadata[cartId]": cartId,
         "metadata[cartItemId]": item.id,
-      });
+      }, `tipcart_${pi.id}_${item.staff_account_id}`);
       if (transfer.error) throw new Error(transfer.error.message);
 
       const tipAmount = item.tip_cents / 100;
@@ -325,15 +350,12 @@ async function handleTipCartSucceeded(supabase: ReturnType<typeof createClient>,
       });
       if (insErr) throw new Error(`link_tips insert: ${insErr.message}`);
 
-      const { data: acct } = await supabase
-        .from("link_staff_accounts")
-        .select("total_earned")
-        .eq("id", item.staff_account_id)
-        .maybeSingle();
-      await supabase
-        .from("link_staff_accounts")
-        .update({ total_earned: (Number(acct?.total_earned) || 0) + tipAmount, updated_at: new Date().toISOString() })
-        .eq("id", item.staff_account_id);
+      // Atomic increment (migration 078) — same lost-update risk as the
+      // single-recipient path, across every item in this cart's loop.
+      await supabase.rpc("increment_staff_total_earned", {
+        p_account_id: item.staff_account_id,
+        p_amount: tipAmount,
+      });
 
       await supabase
         .from("link_tip_cart_items")

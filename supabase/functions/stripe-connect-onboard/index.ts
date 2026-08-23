@@ -113,11 +113,27 @@ serve(async (req) => {
       if (account.error) throw new Error(account.error.message);
       stripeAccountId = account.id;
 
-      const { error: updErr } = await asUser
+      // A plain .update().eq() with no .select() reports NO error when RLS
+      // silently matches zero rows (e.g. a scheduler-role caller — allowed
+      // to SELECT this row per migration 017, but not to UPDATE it) — the
+      // Stripe account above would then exist with no persisted id, and
+      // this function would still hand back a working onboarding link for
+      // an account nothing will ever find again. Require the write to
+      // actually return the row it claims to have updated.
+      const { data: persisted, error: updErr } = await asUser
         .from("link_staff_accounts")
         .update({ stripe_account_id: stripeAccountId, stripe_onboarding_status: "pending" })
-        .eq("id", accountId);
+        .eq("id", accountId)
+        .select("stripe_account_id")
+        .maybeSingle();
       if (updErr) throw new Error(updErr.message);
+      if (!persisted || persisted.stripe_account_id !== stripeAccountId) {
+        console.error(`[stripe-connect-onboard] Created Stripe account ${stripeAccountId} for ${acct.staff_name} but could not persist it (insufficient permissions?) — refusing to hand back an onboarding link for an orphaned account.`);
+        return new Response(JSON.stringify({ error: "Could not save the Connect account — only an owner or admin can set this up." }), {
+          status: 403,
+          headers: { ...corsHeaders, "Content-Type": "application/json" },
+        });
+      }
 
       console.log(`[stripe-connect-onboard] Created Connect account ${stripeAccountId} for ${acct.staff_name}`);
     }

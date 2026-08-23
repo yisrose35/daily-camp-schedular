@@ -3,8 +3,30 @@
 Real, card-charged staff tipping in Campistry Link — modeled on Grazzee.
 Parents pay a tip by card; Stripe splits it automatically so the staff
 member's own connected account receives the full tip, and Campistry keeps a
-2% fee on top of Stripe's own processing cost. This is a first **concept
-build** — test-mode only until the notes at the bottom are addressed.
+2% fee on top of Stripe's own processing cost.
+
+**Going live for real money this year.** A correctness review (see
+`CAMP_STRIPE_CONNECT_SETUP.md`'s "Security notes" for the sibling review that
+prompted this one) caught 4 real bugs in this feature — all fixed by
+migration 078 and the edge-function changes alongside it:
+1. `ensure_my_tip_account()` let any authenticated staff member at a camp
+   claim a co-worker's still-unclaimed tip account by name match alone (no
+   proof of identity) — a real account-hijack path for stealing someone
+   else's future tips. Now requires the row's real access code to claim an
+   *existing* row, same as the admin-triggered flow always required;
+   self-provisioning a *brand-new* row (nothing to steal) stays instant.
+2. The cart Transfer fan-out had no Stripe idempotency key, so a webhook
+   retry racing the DB-level check could pay a recipient twice. Fixed.
+3. `total_earned` was incremented via SELECT-then-UPDATE, which could lose
+   an increment under concurrent tips to the same staff member. Now an
+   atomic single-statement RPC.
+4. A scheduler-role caller triggering onboarding could create a real Stripe
+   account that silently never got saved (RLS blocks their UPDATE, no error
+   surfaced) — an orphaned account with a working-but-doomed onboarding
+   link. Fixed to detect and reject this instead of proceeding.
+
+Still test-mode only until you've walked the testing section below again
+post-fix — treat this as the pre-launch checklist, not a formality.
 
 ## Three people, three surfaces
 
@@ -112,7 +134,14 @@ Run, in order, in the Supabase SQL editor:
   `link_staff_accounts`, adds `ensure_my_tip_account()` so a staff member's
   own Lite login can provision their tip account with no admin step and no
   access code, and updates `get_link_tip_targets` to surface the
-  self-entered handles to the parent tip sheet.
+  self-entered handles to the parent tip sheet. **Superseded by 078 below —
+  078 replaces this migration's version of `ensure_my_tip_account()` with a
+  fixed one; run 060 first, then 078, in order.**
+- `migrations/078_tip_account_hardening.sql` — **required before real
+  money flows through this.** Fixes the account-hijack hole in
+  `ensure_my_tip_account()` (see the callout above) and adds
+  `increment_staff_total_earned()`, an atomic ledger-credit RPC used by the
+  webhook fixes below.
 
 ### 2. Enable Stripe Connect
 Stripe Dashboard → Connect → get started, choose **Express** as the account
@@ -120,22 +149,29 @@ type. One-time, done by Campistry (the platform) — no camp ever touches
 their own Stripe account for this.
 
 ### 3. Deploy the edge functions
-```bash
-supabase functions deploy stripe-connect-onboard
-supabase functions deploy stripe-connect-status
-supabase functions deploy stripe-connect-tip
-supabase functions deploy stripe-connect-tip-cart
-supabase functions deploy stripe-connect-webhook
-```
+No Supabase CLI — deploy each of these from the Supabase Dashboard (Edge
+Functions → Deploy new function → paste the file's contents), JWT
+verification **on** (default) for all five:
+- `stripe-connect-onboard` — redeploy (fixed: no longer hands back a working
+  onboarding link for a Stripe account it failed to save).
+- `stripe-connect-status`
+- `stripe-connect-tip`
+- `stripe-connect-tip-cart`
+- `stripe-connect-webhook` — redeploy (fixed: idempotency key on cart
+  transfers, atomic earnings increment, webhook signature timestamp
+  tolerance, and now also recognizes camp-level connected accounts —
+  see `CAMP_STRIPE_CONNECT_SETUP.md`).
 
 ### 4. Set secrets
-```bash
-supabase secrets set STRIPE_SECRET_KEY=sk_test_xxx        # same var the rest of Stripe already uses
-supabase secrets set STRIPE_CONNECT_WEBHOOK_SECRET=whsec_xxx           # from step 5a
-supabase secrets set STRIPE_CONNECT_ACCOUNT_WEBHOOK_SECRET=whsec_yyy   # from step 5b — a DIFFERENT secret
-supabase secrets set SUPABASE_ANON_KEY=<your anon/publishable key>
-# SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY are injected automatically.
+Supabase Dashboard → Edge Functions → Manage secrets → add each:
 ```
+STRIPE_SECRET_KEY=sk_test_xxx          # same var the rest of Stripe already uses
+STRIPE_CONNECT_WEBHOOK_SECRET=whsec_xxx           # from step 5a
+STRIPE_CONNECT_ACCOUNT_WEBHOOK_SECRET=whsec_yyy   # from step 5b — a DIFFERENT secret
+SUPABASE_ANON_KEY=<your anon/publishable key>
+```
+`SUPABASE_URL` and `SUPABASE_SERVICE_ROLE_KEY` are injected automatically —
+no need to set those two yourself.
 
 ### 5. Register the Connect webhook in Stripe — TWO endpoints, same URL
 The two event types this feature needs live on two different accounts, so
@@ -242,7 +278,11 @@ from step 5 and test against them directly.
   and isn't itself identity-verified — whoever has the code can claim the
   row. Acceptable for a single pilot camp; a stronger version would have the
   admin pick the staff member's existing Lite account directly instead of
-  going through a shared code.
+  going through a shared code. **As of migration 078, `ensure_my_tip_account()`
+  requires this same access code to claim any pre-existing row — it
+  previously accepted a bare name match with no code at all, which was a
+  real account-hijack path (see the callout at the top of this doc), not
+  just a weaker version of this same acceptable limitation.**
 - **Checkout shows one combined total**, not itemized Stripe-fee vs.
   Campistry-fee vs. tip — the itemized breakdown (well, the combined-fee
   breakdown, per the owner's chosen display) only appears in Campistry's own
