@@ -9184,6 +9184,7 @@ function renderBilling(){
             h+='<button class="me-btn me-btn--sec me-btn--sm" onclick="CampistryMe.addChargeForFamily(\''+je(l.famKey)+'\')">Add Charge</button>';
             h+='<button class="me-btn me-btn--sec me-btn--sm" onclick="CampistryMe.issueCreditForFamily(\''+je(l.famKey)+'\')">Issue Credit</button>';
             h+='<button class="me-btn me-btn--ghost me-btn--sm" onclick="CampistryMe.printStatement(\''+je(l.famKey)+'\')">Print Statement</button>';
+            h+='<button class="me-btn me-btn--ghost me-btn--sm" onclick="CampistryMe.toggleBillingAccess(\''+je(l.famKey)+'\')">'+(families[l.famKey]?.billingAccessClosed?'Reopen billing access':'Close billing access')+'</button>';
             h+='</div>';
 
             h+='</div></div>'; // end collapsed, end card
@@ -9672,6 +9673,37 @@ function _showPayLinkResult(f,url){
     showModal('Send this link to the parent',h);
 }
 function copyPayLink(){var el=document.getElementById('plUrl');if(!el)return;el.select();try{navigator.clipboard&&navigator.clipboard.writeText(el.value)}catch(e){try{document.execCommand('copy')}catch(_){}}toast('Link copied')}
+
+// Billing access (migration 070) is independent of a parent's portal/roster
+// status — removing a camper from the roster closes messaging/forms for that
+// family but was ALSO silently wiping their balance/payment history, which
+// broke families still mid-payment-plan after the season ended. Billing
+// access defaults to open and stays open forever unless staff explicitly
+// close it here — this is the only place it's ever turned off.
+async function toggleBillingAccess(famKey){
+    var f=families[famKey]; if(!f){toast('Family not found','error');return}
+    var email='';(f.households||[]).forEach(function(hh){(hh.parents||[]).forEach(function(p){if(p.email&&!email)email=p.email})});
+    if(!email){toast('No parent email on file for this family','error');return}
+    var closing=!f.billingAccessClosed;
+    var bal=buildFamilyLedgers()[famKey]?.balance||0;
+    var msg=closing
+        ?('This stops <strong>'+esc(f.name)+'</strong> from seeing or paying their balance in the parent portal.'+(bal>0.005?' They still owe <strong>'+fm(bal)+'</strong>.':'')+' You can reopen it anytime.')
+        :('This restores <strong>'+esc(f.name)+'</strong>\'s access to their balance and payment history in the parent portal.');
+    var ok=await confirmDialog({title:closing?'Close billing access?':'Reopen billing access?',message:msg,confirmLabel:closing?'Close access':'Reopen access',danger:closing&&bal>0.005});
+    if(!ok)return;
+    var client=window.CampistryDB&&window.CampistryDB.getClient?window.CampistryDB.getClient():null;
+    var campId=window.CampistryDB&&window.CampistryDB.getCampId?window.CampistryDB.getCampId():null;
+    if(!client||!campId){toast('Cloud not connected','error');return}
+    client.rpc('set_parent_billing_access',{p_camp_id:campId,p_parent_email:email,p_enabled:!closing}).then(function(res){
+        var d=res&&res.data;
+        if(!d||!d.success){toast('Could not update billing access','error');return}
+        if(!d.updated){toast('No parent portal invite found for this family','error');return}
+        f.billingAccessClosed=closing;
+        save();
+        toast(closing?'Billing access closed':'Billing access reopened');
+        render(curPage);
+    }).catch(function(){toast('Could not update billing access','error')});
+}
 
 // ═══════════════════════════════════════════════════════════════
 // MONTHLY BILLING (AUTOPAY) — split a balance into monthly payments and
@@ -11692,7 +11724,7 @@ window.CampistryMe={
     finSetTab:finSetTab,finAddStaff:finAddStaff,finEditStaff:finEditStaff,finStaffModal:finStaffModal,_staffPhotoPick:_staffPhotoPick,_staffPhotoClear:_staffPhotoClear,finRemoveStaff:finRemoveStaff,
     finAddExpense:finAddExpense,finRemoveExpense:finRemoveExpense,
     finAddPayment:finAddPayment,finRemovePayment:finRemovePayment,finRefund:finRefund,
-    sendPayLink:sendPayLink,copyPayLink:copyPayLink,
+    sendPayLink:sendPayLink,copyPayLink:copyPayLink,toggleBillingAccess:toggleBillingAccess,
     monthlyPlan:monthlyPlan,toggleFamilyAutopay:toggleFamilyAutopay,cancelMonthlyPlan:cancelMonthlyPlan,
     viewStaffApp:viewStaffApp,setStaffStatus:setStaffStatus,saveStaffNotes:saveStaffNotes,openAssignPositionModal:openAssignPositionModal,
     openStaffContractModal:openStaffContractModal,saveStaffContract:saveStaffContract,scPayTypeHint:scPayTypeHint,copyStaffContractLink:copyStaffContractLink,

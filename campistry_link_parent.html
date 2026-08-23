@@ -886,8 +886,17 @@ function loadPayments(){
     var host=document.getElementById('payBalanceCards'); var pt=document.getElementById('payTable'); if(!host) return;
     // isCurrent per camp, not just the name — lets a family with camps from
     // different years see this year's balance up top instead of buried in a
-    // flat stack alongside mostly-paid-off history.
-    var camps={}; (children||[]).forEach(function(c){ if(c.campId) camps[c.campId]={name:c.campName||'', isCurrent:c.campIsCurrent!==false}; });
+    // flat stack alongside mostly-paid-off history. Uses parent.billingCamps
+    // (set in _augmentOtherCamps), not `children` — billing access can
+    // outlive a closed portal (migration 070), and a billing-only camp never
+    // gets its campers merged into `children` since that would also resurrect
+    // messaging/forms entry points that are supposed to stay closed. A
+    // billing-only camp (portal_active===false) always sorts into "Other
+    // camps" regardless of campDates — a closed portal is never "current".
+    var campList=(typeof parent!=='undefined'&&parent&&parent.billingCamps&&parent.billingCamps.length)
+        ? parent.billingCamps
+        : (children||[]).map(function(c){ return {camp_id:c.campId, camp_name:c.campName, isCurrent:c.campIsCurrent!==false, portal_active:true}; });
+    var camps={}; campList.forEach(function(cp){ var cid=cp.camp_id; if(cid) camps[cid]={name:cp.camp_name||'', isCurrent:cp.isCurrent!==false && cp.portal_active!==false}; });
     var ids=Object.keys(camps);
     if(!ids.length && parent && parent.campId){ camps[parent.campId]={name:'',isCurrent:true}; ids=[parent.campId]; }
     if(!ids.length){ host.innerHTML=''; if(pt)_renderPayHistory(pt,[]); return; }
@@ -3532,12 +3541,21 @@ window.addEventListener('storage', function(e) {
         Promise.resolve(call).then(function(res) {
             if (!res || res.error || !res.data || !res.data.success) return;
             var camps = res.data.camps || [];
-            camps.forEach(function(cp){ cp.isCurrent = _campIsCurrent(cp.camp_dates); });
-            parent.camps = camps;
+            camps.forEach(function(cp){ cp.isCurrent = _campIsCurrent(cp.camp_dates); if (cp.portal_active === undefined) cp.portal_active = true; });
+            // Billing access (migration 070) can survive a closed portal — a
+            // camper removed from the roster still leaves the family able to
+            // see/pay their balance for that camp. Keep the FULL list for
+            // payments (parent.billingCamps), but every other feature here
+            // (messages, forms, camper mail, canteen) only ever operates on
+            // portal-active camps — a billing-only camp never gets its
+            // campers merged into `children`, which would otherwise resurrect
+            // entry points that are supposed to stay closed.
+            parent.billingCamps = camps;
+            parent.camps = camps.filter(function(cp){ return cp.portal_active !== false; });
             // give the primary camp its display name (+ current/past flag)
-            var primary = camps.find(function(cp){ return cp.camp_id === primaryCampId; });
+            var primary = parent.camps.find(function(cp){ return cp.camp_id === primaryCampId; });
             if (primary) children.forEach(function(ch){ if(ch.campId===primaryCampId) { ch.campName = primary.camp_name || ''; ch.campIsCurrent = primary.isCurrent; } });
-            var others = camps.filter(function(cp){ return cp.camp_id !== primaryCampId; });
+            var others = parent.camps.filter(function(cp){ return cp.camp_id !== primaryCampId; });
             if (!others.length) { init(); _afterMergeReloadCloud(); _checkConnectableCamps(); return; } // single connected camp — but still check for pending invites on OTHER camps
             others.forEach(function(cp){
                 var cnames = (cp.camper_names && cp.camper_names.length) ? cp.camper_names : Object.keys(cp.camper_data || {});
