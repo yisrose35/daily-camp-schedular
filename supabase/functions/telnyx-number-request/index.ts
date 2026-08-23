@@ -32,11 +32,20 @@ const TELNYX_API_KEY = Deno.env.get("TELNYX_API_KEY");
 const TELNYX_API = "https://api.telnyx.com/v2";
 const SENDER_ROLES = ["owner", "admin"];
 
-// Placeholder pricing — confirm actual current Telnyx pricing before this
-// ships, then update these two numbers. Kept as one named constant, not
-// scattered magic numbers, so that update is a one-line change.
-const REGISTRATION_FEE_CENTS = 1500; // $15 one-time (number + 10DLC brand/campaign registration)
-const MONTHLY_FEE_CENTS = 300;       // $3/month (number rental + campaign fee)
+// Pricing researched against Telnyx's own published fee schedule (see
+// TELNYX_NUMBER_PROVISIONING_SETUP.md for the full breakdown and sources).
+// Telnyx hard costs: number $1.00 one-time + $1.00/mo rental + $0.10/mo
+// SMS/MMS add-on, 10DLC brand $4.50 one-time, 10DLC campaign carrier-review
+// $15.00 one-time (can recur on resubmission), 10DLC campaign monthly fee
+// $10/mo for the "MIXED" use case this code registers (10dlc/campaign call
+// below uses usecase: "MIXED" — Standard tier, not the cheaper $1.50/mo Low
+// Volume Mixed tier). Total hard cost: ~$20.50 one-time, ~$11.10/mo
+// recurring. These constants add a small buffer on top since actual
+// per-message carrier costs (~$0.004-0.008/message) are NOT separately
+// metered or passed through anywhere in this flow — see the setup doc's
+// "usage costs are not metered" note before enabling this for real camps.
+const REGISTRATION_FEE_CENTS = 2500; // $25 one-time
+const MONTHLY_FEE_CENTS = 1500;      // $15/month
 
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",

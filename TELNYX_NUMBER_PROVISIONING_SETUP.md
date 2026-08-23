@@ -58,12 +58,55 @@ matching `charge-due-installments`'s existing convention:
   actually charges rows whose `next_charge_at` is due, so running it daily
   (not monthly) is correct and matches `charge-due-installments`'s pattern.
 
-## 5. Confirm real Telnyx pricing before launch
+## 5. Telnyx pricing — researched and confirmed
 
-`telnyx-number-request/index.ts` has two placeholder constants:
-`REGISTRATION_FEE_CENTS` (currently $15) and `MONTHLY_FEE_CENTS` (currently
-$3). Check Telnyx's current number + 10DLC campaign pricing and update
-these two numbers before any camp is charged for real.
+`telnyx-number-request/index.ts`'s two fee constants are now set from
+Telnyx's actual published fee schedule (Telnyx's own knowledge-base repo,
+`10dlc-compliance--part-3.md` and `10dlc-campaign-registration-and-compliance--part-1.md`
+at github.com/team-telnyx/knowledge-base, cross-checked against
+telnyx.com/pricing/numbers and telnyx.com/pricing/messaging via search —
+telnyx.com itself is blocked by this environment's proxy, hence the GitHub
+mirror). This environment has no live Telnyx account to test against, so
+these are Telnyx's *published* rates, not verified by an actual purchase —
+re-confirm against your live account/invoice once you provision a real
+number.
+
+**Telnyx hard costs, one-time:**
+- Phone number purchase: $1.00
+- 10DLC brand registration: $4.50
+- 10DLC campaign carrier-review fee: $15.00 (charged **per submission** —
+  recurs if a campaign is rejected and resubmitted)
+- **Total: ~$20.50**
+
+**Telnyx hard costs, recurring monthly:**
+- Number rental: $1.00/mo
+- SMS/MMS capability add-on: $0.10/mo
+- 10DLC campaign fee — tiered by registered use case: Low Volume Mixed
+  $1.50/mo, Sole Proprietor $2/mo, Charity $3/mo, Emergency $5/mo,
+  **Standard/Mixed $10/mo**. `telnyx-number-request/index.ts` registers
+  `usecase: "MIXED"` (the `/10dlc/campaign` call), which is the **Standard**
+  tier at $10/mo — not the cheaper Low Volume tier. A camp's actual SMS
+  volume (a few hundred parents, a handful of broadcasts a week) would
+  likely qualify for Low Volume Mixed instead, which would cut this to
+  $1.50/mo — worth revisiting once you've confirmed Telnyx's exact
+  eligibility threshold for that tier, since switching the `usecase` field
+  is unverified against a live account either way.
+- **Total: ~$11.10/mo**
+
+`REGISTRATION_FEE_CENTS` is set to **$25** (covers the $20.50 hard cost plus
+a buffer for a resubmission). `MONTHLY_FEE_CENTS` is set to **$15/mo**
+(covers the $11.10 hard cost plus a buffer).
+
+**Not covered by either flat fee — read before launch:** Telnyx also
+charges per-message: ~$0.004/message base rate plus carrier surcharges of
+roughly $0.003-0.0045 per message part per carrier (AT&T/T-Mobile/Verizon).
+None of that is metered or passed through anywhere in this flow — a camp
+sending frequent large broadcasts could cost more in per-message fees than
+the flat $15/mo covers. This pass has no usage cap, no per-camp message
+counter, and no overage billing. Worth deciding before this scales past a
+few camps: options include metering and billing overage, capping broadcast
+recipient count per camp tier, or accepting the cost as a rounding error at
+current volumes and revisiting if it isn't.
 
 ## 6. Verify end to end
 
