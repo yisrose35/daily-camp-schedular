@@ -263,10 +263,6 @@
                         <span class="profile-label">Account Email</span>
                         <span class="profile-value" id="profileEmail">Loading...</span>
                     </div>
-                    <div class="profile-row">
-                        <span class="profile-label">SMS Sending Number</span>
-                        <span class="profile-value" id="profileTelnyxNumber">Not set — using shared number</span>
-                    </div>
                 </div>
                 <form class="profile-edit-form" id="profileEditForm" style="display: none;" onsubmit="event.preventDefault(); saveProfile();">
                     <div class="form-group">
@@ -282,11 +278,6 @@
                         <input type="email" id="editContactEmail" placeholder="office@yourcamp.com">
                         <small style="color:var(--text-muted,#64748b);font-size:.75rem;">Shown as the reply-to address on automated emails sent to parents — a parent's reply reaches this inbox, not Campistry.</small>
                     </div>
-                    <div class="form-group">
-                        <label for="editTelnyxNumber">SMS Sending Number</label>
-                        <input type="text" id="editTelnyxNumber" placeholder="+15551234567">
-                        <small style="color:var(--text-muted,#64748b);font-size:.75rem;">Your own dedicated number for texting parents (set this up in your Telnyx account first, then paste it here in +1XXXXXXXXXX format). Leave blank to use Campistry's shared number for now.</small>
-                    </div>
                     <div class="form-actions">
                         <button type="button" class="btn-secondary" onclick="cancelEdit()">Cancel</button>
                         <button type="submit" class="btn-primary">Save Changes</button>
@@ -295,6 +286,58 @@
                     <div id="profileSuccess" class="form-success"></div>
                 </form>
             </section>
+
+            <!-- TEXTING NUMBER CARD -->
+            <section class="dashboard-card">
+                <div class="card-header">
+                    <h2>Texting Number</h2>
+                </div>
+                <div id="telnyxStatusBox" style="font-size:.9rem;color:var(--text-muted,#64748b);">Loading…</div>
+            </section>
+
+            <!-- Texting number request modal -->
+            <div id="telnyxRequestOverlay" style="display:none;position:fixed;inset:0;background:rgba(15,23,42,.5);z-index:1000;align-items:center;justify-content:center;">
+                <div style="background:#fff;border-radius:12px;max-width:480px;width:92%;max-height:88vh;overflow-y:auto;padding:24px;">
+                    <h2 style="margin:0 0 4px;font-size:1.1rem;">Get your own texting number</h2>
+                    <p style="font-size:.82rem;color:var(--text-muted,#64748b);margin:0 0 16px;">Your own dedicated number for texting parents, instead of sharing Campistry's number with every other camp. Registration is a one-time <strong id="telnyxRegFeeDisplay">$15.00</strong>, then <strong id="telnyxMonthlyFeeDisplay">$3.00</strong>/month. Approval usually takes 3–7 business days.</p>
+                    <div class="form-group">
+                        <label for="telnyxBizName">Legal business name</label>
+                        <input type="text" id="telnyxBizName" placeholder="Camp Sunshine LLC">
+                    </div>
+                    <div class="form-group">
+                        <label for="telnyxEin">EIN (Tax ID)</label>
+                        <input type="text" id="telnyxEin" placeholder="12-3456789">
+                    </div>
+                    <div class="form-group">
+                        <label><input type="checkbox" id="telnyxNonprofit" style="width:auto;margin-right:6px;">This is a registered nonprofit</label>
+                    </div>
+                    <div class="form-group">
+                        <label for="telnyxBizAddress">Business address</label>
+                        <input type="text" id="telnyxBizAddress" placeholder="123 Camp Road, City, State ZIP">
+                    </div>
+                    <div class="form-group">
+                        <label for="telnyxBizEmail">Business email</label>
+                        <input type="email" id="telnyxBizEmail" placeholder="office@yourcamp.com">
+                    </div>
+                    <div class="form-group">
+                        <label for="telnyxBizPhone">Business phone</label>
+                        <input type="text" id="telnyxBizPhone" placeholder="+15551234567">
+                    </div>
+                    <div id="telnyxCardStep" style="display:none;">
+                        <div class="form-group">
+                            <label>Card details</label>
+                            <div id="telnyx-card-element" style="padding:12px;border:1px solid #cbd5e1;border-radius:8px;background:#fff;min-height:44px;"></div>
+                            <div id="telnyx-card-errors" style="color:#dc2626;font-size:.8rem;margin-top:6px;"></div>
+                        </div>
+                    </div>
+                    <div id="telnyxRequestError" class="form-error"></div>
+                    <div class="form-actions" style="margin-top:16px;">
+                        <button type="button" class="btn-secondary" onclick="closeTelnyxRequestModal()">Cancel</button>
+                        <button type="button" class="btn-primary" id="telnyxNextBtn" onclick="telnyxGoToCardStep()">Continue to payment</button>
+                        <button type="button" class="btn-primary" id="telnyxSubmitBtn" style="display:none;" disabled onclick="telnyxSubmitRequest()">Request number</button>
+                    </div>
+                </div>
+            </div>
 
             <!-- ACCOUNT SETTINGS CARD -->
             <section class="dashboard-card">

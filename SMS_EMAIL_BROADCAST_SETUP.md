@@ -68,14 +68,14 @@ requirement.
 own.** Sharing one Telnyx number across every camp means one camp's parents
 marking texts as spam can hurt deliverability for every other camp sharing
 it, and caps everyone under Telnyx's shared/low-volume throughput tier.
-`camps.telnyx_from_number` (migration 075, Dashboard → Camp Profile → "SMS
-Sending Number") lets a camp paste in their own number once they've bought
-one in Telnyx — `send-broadcast`/`send-scheduled-broadcasts` use it when
-set, falling back to the platform-wide `TELNYX_FROM_NUMBER`/
-`TELNYX_MESSAGING_PROFILE_ID` secret for any camp that hasn't set one up
-yet. Provisioning the actual number in Telnyx (buying it, registering its
-10DLC brand/campaign) is still a manual step per camp — this only wires the
-code to use one once a camp has it.
+`camps.telnyx_from_number` (migration 075) is used by
+`send-broadcast`/`send-scheduled-broadcasts` when set, falling back to the
+platform-wide `TELNYX_FROM_NUMBER`/`TELNYX_MESSAGING_PROFILE_ID` secret for
+any camp that hasn't gotten their own number yet. As of migration 076, a
+camp requests and pays for their own number entirely from their own
+Dashboard — see **TELNYX_NUMBER_PROVISIONING_SETUP.md** for that whole
+flow (it fills in `telnyx_from_number` automatically once approved; nobody
+pastes a number in by hand anymore).
 
 ## 4. Register the Telnyx inbound webhook
 

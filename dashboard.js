@@ -64,11 +64,9 @@
     const profileAddress = document.getElementById('profileAddress');
     const profileContactEmail = document.getElementById('profileContactEmail');
     const profileEmail = document.getElementById('profileEmail');
-    const profileTelnyxNumber = document.getElementById('profileTelnyxNumber');
     const editCampName = document.getElementById('editCampName');
     const editAddress = document.getElementById('editAddress');
     const editContactEmail = document.getElementById('editContactEmail');
-    const editTelnyxNumber = document.getElementById('editTelnyxNumber');
     const profileError = document.getElementById('profileError');
     const profileSuccess = document.getElementById('profileSuccess');
     
@@ -811,9 +809,8 @@
         let displayCampName = campName || currentUser.user_metadata?.camp_name || 'Your Camp';
         let campAddress = campData?.address || '';
         let campContactEmail = campData?.contact_email || '';
-        let campTelnyxNumber = campData?.telnyx_from_number || '';
 
-        console.log('📊 Final display values:', { displayCampName, userName, campAddress, campContactEmail, campTelnyxNumber });
+        console.log('📊 Final display values:', { displayCampName, userName, campAddress, campContactEmail });
 
         // Update the personalized welcome message
         updateWelcomeMessage();
@@ -828,9 +825,6 @@
         if (profileContactEmail) {
             profileContactEmail.textContent = campContactEmail || 'Not set';
         }
-        if (profileTelnyxNumber) {
-            profileTelnyxNumber.textContent = campTelnyxNumber || 'Not set — using shared number';
-        }
 
         // Pre-fill edit form (only relevant for owners)
         if (editCampName) {
@@ -842,12 +836,11 @@
         if (editContactEmail) {
             editContactEmail.value = campContactEmail;
         }
-        if (editTelnyxNumber) {
-            editTelnyxNumber.value = campTelnyxNumber;
-        }
-        
+
         // Load stats from cloud storage
         await loadStats();
+        // SMS sending number — a self-serve request flow, not a manual field.
+        if (campData?.id) loadTelnyxStatus(campData.id);
     }
 
     // ========================================
@@ -1016,7 +1009,6 @@
         const newCampName = editCampName?.value.trim();
         const newAddress = editAddress?.value.trim();
         const newContactEmail = editContactEmail?.value.trim() || null;
-        let newTelnyxNumber = editTelnyxNumber?.value.trim() || null;
 
         if (!newCampName) {
             if (profileError) profileError.textContent = 'Camp name is required.';
@@ -1026,28 +1018,19 @@
             if (profileError) profileError.textContent = 'Camp contact email looks invalid.';
             return;
         }
-        if (newTelnyxNumber) {
-            // Lenient normalize, same forgiving rules the sending functions use:
-            // bare 10-digit US numbers get a +1 prefix, everything else must
-            // already look like E.164 (+ followed by 8-15 digits).
-            const digits = newTelnyxNumber.replace(/[^\d+]/g, '');
-            if (/^\d{10}$/.test(digits)) newTelnyxNumber = '+1' + digits;
-            else if (/^1\d{10}$/.test(digits)) newTelnyxNumber = '+' + digits;
-            else newTelnyxNumber = digits;
-            if (!/^\+\d{8,15}$/.test(newTelnyxNumber)) {
-                if (profileError) profileError.textContent = 'SMS sending number looks invalid — use +1 followed by the 10-digit number.';
-                return;
-            }
-        }
 
         if (profileError) profileError.textContent = '';
         if (profileSuccess) profileSuccess.textContent = '';
 
         try {
             if (campData?.id) {
+                // telnyx_from_number is intentionally NOT touched here — it's
+                // exclusively system-managed (set once by
+                // telnyx-check-registration-status when a self-serve number
+                // request is approved), never a manually-edited profile field.
                 const { error } = await window.supabase
                     .from('camps')
-                    .update({ name: newCampName, address: newAddress, contact_email: newContactEmail, telnyx_from_number: newTelnyxNumber })
+                    .update({ name: newCampName, address: newAddress, contact_email: newContactEmail })
                     .eq('id', campData.id);
 
                 if (error) throw error;
@@ -1107,8 +1090,7 @@
                         owner: currentUser.id,
                         name: newCampName,
                         address: newAddress,
-                        contact_email: newContactEmail,
-                        telnyx_from_number: newTelnyxNumber
+                        contact_email: newContactEmail
                     }])
                     .select()
                     .single();
@@ -1124,7 +1106,6 @@
             if (profileCampName) profileCampName.textContent = newCampName;
             if (profileAddress) profileAddress.textContent = newAddress || 'Not set';
             if (profileContactEmail) profileContactEmail.textContent = newContactEmail || 'Not set';
-            if (profileTelnyxNumber) profileTelnyxNumber.textContent = newTelnyxNumber || 'Not set — using shared number';
             if (campNameDisplay) campNameDisplay.textContent = newCampName;
             
             updateWelcomeMessage();
@@ -1149,6 +1130,156 @@
     
     window.cancelEdit = function() {
         window.toggleEditMode();
+    };
+
+    // ========================================
+    // TEXTING NUMBER — self-serve Telnyx provisioning
+    // ========================================
+
+    var _telnyxCampId = null;
+    var _telnyxStripe = null;
+    var _telnyxCardEl = null;
+
+    async function _telnyxStripePk() {
+        // dashboard.js doesn't load campistry_me.js (where getStripePublishableKey()
+        // normally lives), so read the same campistryMe.stripePublishableKey
+        // field directly from camp_state_kv rather than duplicating a whole
+        // settings-loading module just for this one string.
+        if (!_telnyxCampId) return '';
+        try {
+            const { data } = await window.supabase.from('camp_state_kv')
+                .select('value').eq('camp_id', _telnyxCampId).eq('key', 'campistryMe').maybeSingle();
+            return (data && data.value && data.value.stripePublishableKey) || '';
+        } catch (e) { return ''; }
+    }
+
+    window.loadTelnyxStatus = async function(campId) {
+        _telnyxCampId = campId;
+        const box = document.getElementById('telnyxStatusBox');
+        if (!box) return;
+        try {
+            const { data, error } = await window.supabase.rpc('get_camp_telnyx_status', { p_camp_id: campId });
+            if (error || !data || !data.success) { box.textContent = 'Using Campistry\'s shared number for now.'; return; }
+            if (!data.exists) {
+                box.innerHTML = '<p style="margin:0 0 10px;">Using Campistry\'s shared number for now. Get your own dedicated number so parents always see the same recognizable number from your camp.</p>' +
+                    '<button type="button" class="btn-primary" onclick="openTelnyxRequestModal()">Get a texting number</button>';
+                return;
+            }
+            if (data.status === 'active') {
+                box.innerHTML = '<p style="margin:0;"><strong>' + escTelnyx(data.phone_number || '') + '</strong> — active' +
+                    (data.requested_at ? ' since ' + new Date(data.requested_at).toLocaleDateString() : '') + '.</p>';
+            } else if (data.status === 'rejected' || data.status === 'failed') {
+                box.innerHTML = '<p style="margin:0 0 8px;color:#dc2626;">Number request ' + (data.status === 'rejected' ? 'was rejected' : 'failed') + ': ' + escTelnyx(data.error_message || 'Unknown error') + '</p>' +
+                    '<button type="button" class="btn-primary" onclick="openTelnyxRequestModal()">Try again</button>';
+            } else {
+                box.innerHTML = '<p style="margin:0;">Setting up your number for <strong>' + escTelnyx(data.business_legal_name || '') + '</strong> — this usually takes 3–7 business days for carrier approval. We\'ll update this automatically once it\'s active.</p>';
+            }
+        } catch (e) {
+            box.textContent = 'Using Campistry\'s shared number for now.';
+        }
+    };
+
+    function escTelnyx(s) { return String(s == null ? '' : s).replace(/[<>&"]/g, function(c) { return { '<': '&lt;', '>': '&gt;', '&': '&amp;', '"': '&quot;' }[c]; }); }
+
+    window.openTelnyxRequestModal = function() {
+        const overlay = document.getElementById('telnyxRequestOverlay');
+        if (!overlay) return;
+        document.getElementById('telnyxRequestError').textContent = '';
+        document.getElementById('telnyxCardStep').style.display = 'none';
+        document.getElementById('telnyxNextBtn').style.display = '';
+        document.getElementById('telnyxSubmitBtn').style.display = 'none';
+        if (campData && campData.address) document.getElementById('telnyxBizAddress').value = campData.address;
+        if (campData && campData.contact_email) document.getElementById('telnyxBizEmail').value = campData.contact_email;
+        overlay.style.display = 'flex';
+    };
+
+    window.closeTelnyxRequestModal = function() {
+        const overlay = document.getElementById('telnyxRequestOverlay');
+        if (overlay) overlay.style.display = 'none';
+    };
+
+    window.telnyxGoToCardStep = async function() {
+        const errEl = document.getElementById('telnyxRequestError');
+        errEl.textContent = '';
+        const businessName = document.getElementById('telnyxBizName').value.trim();
+        const ein = document.getElementById('telnyxEin').value.trim();
+        const isNonprofit = document.getElementById('telnyxNonprofit').checked;
+        const businessAddress = document.getElementById('telnyxBizAddress').value.trim();
+        const businessEmail = document.getElementById('telnyxBizEmail').value.trim();
+        const businessPhone = document.getElementById('telnyxBizPhone').value.trim();
+
+        if (!businessName || !ein || !businessAddress || !businessEmail || !businessPhone) {
+            errEl.textContent = 'Please fill in every field — Telnyx\'s carrier registration requires all of them.';
+            return;
+        }
+
+        const nextBtn = document.getElementById('telnyxNextBtn');
+        nextBtn.disabled = true; nextBtn.textContent = 'Setting up…';
+        try {
+            const { data, error } = await window.supabase.functions.invoke('telnyx-number-setup', {
+                body: { campId: _telnyxCampId, businessName, businessEmail, businessPhone, businessAddress, ein, isNonprofit },
+            });
+            if (error) throw new Error(error.message || 'Setup failed');
+            if (data && data.error) throw new Error(data.error);
+
+            const pk = await _telnyxStripePk();
+            if (!pk) throw new Error('Stripe is not configured for this camp yet — set it up in Billing first.');
+
+            document.getElementById('telnyxNextBtn').style.display = 'none';
+            document.getElementById('telnyxCardStep').style.display = '';
+            const submitBtn = document.getElementById('telnyxSubmitBtn');
+            submitBtn.style.display = '';
+            submitBtn.disabled = true;
+
+            const mountCard = function() {
+                _telnyxStripe = window.Stripe(pk);
+                const elements = _telnyxStripe.elements();
+                _telnyxCardEl = elements.create('card', { style: { base: { fontSize: '15px', color: '#1e293b' } } });
+                _telnyxCardEl.mount('#telnyx-card-element');
+                _telnyxCardEl.on('change', function(ev) {
+                    document.getElementById('telnyx-card-errors').textContent = ev.error ? ev.error.message : '';
+                    submitBtn.disabled = !ev.complete;
+                });
+                _telnyxCardEl.__clientSecret = data.clientSecret;
+            };
+            if (!window.Stripe) {
+                const script = document.createElement('script');
+                script.src = 'https://js.stripe.com/v3/';
+                script.onload = mountCard;
+                document.head.appendChild(script);
+            } else {
+                mountCard();
+            }
+        } catch (e) {
+            errEl.textContent = e.message || 'Could not start setup.';
+        } finally {
+            nextBtn.disabled = false; nextBtn.textContent = 'Continue to payment';
+        }
+    };
+
+    window.telnyxSubmitRequest = async function() {
+        const errEl = document.getElementById('telnyxRequestError');
+        const submitBtn = document.getElementById('telnyxSubmitBtn');
+        errEl.textContent = '';
+        if (!_telnyxStripe || !_telnyxCardEl) { errEl.textContent = 'Card not ready yet.'; return; }
+
+        submitBtn.disabled = true; submitBtn.textContent = 'Processing…';
+        try {
+            const result = await _telnyxStripe.confirmCardSetup(_telnyxCardEl.__clientSecret, { payment_method: { card: _telnyxCardEl } });
+            if (result.error) throw new Error(result.error.message);
+
+            const { data, error } = await window.supabase.functions.invoke('telnyx-number-request', {
+                body: { campId: _telnyxCampId },
+            });
+            if (error) throw new Error(error.message || 'Request failed');
+            if (data && data.error) throw new Error(data.error);
+
+            closeTelnyxRequestModal();
+            await loadTelnyxStatus(_telnyxCampId);
+        } catch (e) {
+            errEl.textContent = e.message || 'Could not submit the request.';
+            submitBtn.disabled = false; submitBtn.textContent = 'Request number';
+        }
     };
 
     // ========================================
