@@ -385,7 +385,8 @@ window.rAccounts = function(filter) {
             '</td><td>$' + a.dailyLimit.toFixed(2) + '</td><td>$' + a.spentToday.toFixed(2) +
             '</td><td>' + st + '</td><td style="white-space:nowrap">' +
             '<button class="btn btn-sm btn-primary" onclick="openMFor(\'dep\',\'depCamper\',\'' + jsName + '\')">+ Deposit</button> ' +
-            '<button class="btn btn-sm btn-secondary" onclick="openMFor(\'cash\',\'cashCamper\',\'' + jsName + '\')">Cash Out</button>' +
+            '<button class="btn btn-sm btn-secondary" onclick="openMFor(\'cash\',\'cashCamper\',\'' + jsName + '\')">Cash Out</button> ' +
+            '<button class="btn btn-sm btn-secondary" onclick="openMFor(\'refund\',\'refundCamper\',\'' + jsName + '\')">Refund</button>' +
             '</td></tr>';
     }).join('');
 };
@@ -396,6 +397,7 @@ window.openMFor = function(modal, selectId, name) {
     const el = document.getElementById(selectId);
     if (el) el.value = name;
     if (modal === 'cash') cashPickCamper();
+    if (modal === 'refund') refundPickCamper();
 };
 
 // ==========================================================================
@@ -610,7 +612,7 @@ function popSelects() {
     const opts = '<option value="">— Select —</option>' + camperList.map(c =>
         '<option value="' + esc(c.name) + '">' + esc(c.name) + ' (' + esc(c.division) + ')</option>'
     ).join('');
-    ['depCamper', 'limCamper', 'cashCamper'].forEach(id => {
+    ['depCamper', 'limCamper', 'cashCamper', 'refundCamper'].forEach(id => {
         const el = document.getElementById(id);
         if (!el) return;
         const keep = el.value;                 // don't lose a selection on re-populate
@@ -755,6 +757,110 @@ window.cashOut = function() {
     toast('Paid out $' + rounded.toFixed(2) + ' cash to ' + name);
     ['cashAmt', 'cashNote'].forEach(id => { const e = document.getElementById(id); if (e) e.value = ''; });
 };
+
+// ==========================================================================
+// REFUNDS — Stripe-backed deposits only (migrations/079_canteen_stripe_deposits.sql).
+// A manual/cash deposit (addDep above) has no PaymentIntent, so it never
+// appears in this list — there's nothing for Stripe to refund. Real
+// authorization (owner/admin only) is enforced server-side in
+// stripe-canteen-refund, not here — _secEdit is the same UX-level gate the
+// rest of this tab already uses, not the security boundary.
+// ==========================================================================
+
+function _stripeDeposits(name) {
+    return (snacks.transactions || []).filter(t =>
+        t && t.camper === name && t.kind === 'deposit' && t.method === 'stripe' && t.stripePaymentIntentId
+    );
+}
+
+window.refundPickCamper = function() {
+    const name = (document.getElementById('refundCamper') || {}).value || '';
+    const sel = document.getElementById('refundDeposit');
+    const box = document.getElementById('refundBox');
+    const btn = document.getElementById('refundBtn');
+    if (!sel) return;
+    const deposits = name ? _stripeDeposits(name) : [];
+    sel.innerHTML = deposits.length
+        ? '<option value="">— Select a deposit —</option>' + deposits.map(t =>
+            '<option value="' + esc(t.stripePaymentIntentId) + '">' + (t.date || '') + ' — $' + Number(t.amount).toFixed(2) + '</option>'
+          ).join('')
+        : '<option value="">No online deposits for this camper</option>';
+    if (box) box.style.display = 'none';
+    if (btn) btn.disabled = true;
+};
+
+window.refundPickDeposit = function() {
+    const name = (document.getElementById('refundCamper') || {}).value || '';
+    const pi = (document.getElementById('refundDeposit') || {}).value || '';
+    const box = document.getElementById('refundBox');
+    const btn = document.getElementById('refundBtn');
+    if (!pi) { if (box) box.style.display = 'none'; if (btn) btn.disabled = true; return; }
+    const deposit = _stripeDeposits(name).find(t => t.stripePaymentIntentId === pi);
+    const a = getAccount(name);
+    const available = Math.max(0, Math.round((a.balance - (a.balanceFloor || 0)) * 100) / 100);
+    if (box) {
+        box.style.display = '';
+        box.innerHTML =
+            '<div>Original deposit: <strong>$' + Number(deposit ? deposit.amount : 0).toFixed(2) + '</strong></div>' +
+            '<div>Currently available to refund: <strong>$' + available.toFixed(2) + '</strong>' +
+            (available < Number(deposit ? deposit.amount : 0) ? ' <span style="color:var(--text-muted)">(some has already been spent)</span>' : '') + '</div>';
+    }
+    if (btn) btn.disabled = available <= 0;
+};
+
+window.refundCanteenDeposit = function() {
+    if (!_secEdit('accounts', 'Refunding a deposit')) return;
+    const name = (document.getElementById('refundCamper') || {}).value || '';
+    const pi = (document.getElementById('refundDeposit') || {}).value || '';
+    const warn = document.getElementById('refundWarn');
+    const btn = document.getElementById('refundBtn');
+    if (!name || !pi) { toast('Pick a camper and a deposit', 1); return; }
+    const db = window.CampistryDB;
+    const client = db && db.client;
+    if (!client) { toast('Not signed in', 1); return; }
+    if (warn) warn.style.display = 'none';
+    if (btn) { btn.disabled = true; btn.textContent = 'Refunding…'; }
+    client.functions.invoke('stripe-canteen-refund', { body: { paymentIntentId: pi, camperName: name } })
+        .then(function(res) {
+            if (btn) { btn.disabled = false; btn.textContent = 'Refund'; }
+            var data = res && res.data;
+            var err = (res && res.error && res.error.message) || (data && data.error);
+            if (err) {
+                if (warn) { warn.style.display = ''; warn.textContent = err; }
+                else toast(err, 1);
+                return;
+            }
+            closeM('refund');
+            toast('Refunded $' + Number(data.amount).toFixed(2) + (data.capped ? ' (capped to what was left)' : '') + ' to ' + name);
+            _refreshSnacksFromCloud();
+        }, function(e) {
+            if (btn) { btn.disabled = false; btn.textContent = 'Refund'; }
+            var msg = (e && e.message) || 'Could not process the refund.';
+            if (warn) { warn.style.display = ''; warn.textContent = msg; }
+            else toast(msg, 1);
+        });
+};
+
+// The refund's balance/transaction change happens server-side (the RPC), not
+// via saveSnacksData's push-and-merge path — pull the fresh row directly so
+// the UI reflects it immediately instead of waiting on whatever polling/
+// realtime sync interval the rest of the app relies on.
+function _refreshSnacksFromCloud() {
+    try {
+        const db = window.CampistryDB;
+        const client = db && db.client;
+        const campId = db && db.getCampId && db.getCampId();
+        if (!client || !campId) return;
+        client.from('camp_state_kv').select('value').eq('camp_id', campId).eq('key', 'campistrySnacks').maybeSingle()
+            .then(function(res) {
+                var cloud = res && res.data && res.data.value;
+                if (!cloud || typeof cloud !== 'object') return;
+                snacks = cloud;
+                try { var g = JSON.parse(localStorage.getItem(STORE_KEY) || '{}'); g.campistrySnacks = cloud; localStorage.setItem(STORE_KEY, JSON.stringify(g)); } catch (_) {}
+                renderStats(); rAccounts(); rAnalytics(); rSettings();
+            });
+    } catch (e) { console.warn('[Snacks] refresh after refund failed:', e); }
+}
 
 window.setLimit = function() {
     if (!_secEdit('accounts', 'Changing a spending limit')) return;

@@ -40,8 +40,15 @@
 // live Supabase/Stripe account in this environment and risks breaking the
 // live parent payment flow if rushed. Flagged, not silently left unfixed.
 //
+// CANTEEN DEPOSITS (added alongside tuition Pay Links): pass
+// source:'campistry-canteen-deposit' and camperName instead of familyKey.
+// Unlike the tuition case, an ownership failure here is a HARD REJECT (400),
+// not a silent no-destination fallback — see campOwnsCamper()'s comment for
+// why. See migrations/079_canteen_stripe_deposits.sql for the full flow
+// (webhook crediting, refunds).
+//
 // Request:  { campId, familyKey, familyName, email?, amount, description?,
-//             enrollmentId?, successUrl?, cancelUrl? }
+//             enrollmentId?, successUrl?, cancelUrl?, source?, camperName? }
 // Response: { url, sessionId }
 // =============================================================================
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
@@ -51,6 +58,8 @@ const STRIPE_SECRET = Deno.env.get("STRIPE_SECRET_KEY");
 const STRIPE_API = "https://api.stripe.com/v1";
 const SUPABASE_URL = Deno.env.get("SUPABASE_URL") || "";
 const SUPABASE_SERVICE_KEY = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY") || "";
+
+const VALID_SOURCES = new Set(["campistry-checkout", "campistry-canteen-deposit"]);
 
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
@@ -88,6 +97,38 @@ async function lookupCampDestination(campId: string | undefined, familyKey: stri
   return (camp?.stripe_account_id && camp.stripe_charges_enabled) ? camp.stripe_account_id : null;
 }
 
+// Canteen's own ownership check, keyed on camper name (app1.camperRoster),
+// not familyKey (campistryMe.families) — canteen is per-camper, not
+// per-family. UNLIKE campOwnsFamily, a failure here must HARD-REJECT the
+// checkout session rather than fall through with no destination: falling
+// through would still create a session that, on success, credits a real
+// JSON balance to a possibly-fabricated camper name — a ledger-integrity
+// problem, not just a routing one (tuition's fallback only risks a wrong
+// *destination*, money still lands somewhere real either way).
+async function campOwnsCamper(campId: string | undefined, camperName: string | undefined): Promise<boolean> {
+  if (!campId || !camperName || !SUPABASE_URL || !SUPABASE_SERVICE_KEY) return false;
+  const supabase = createClient(SUPABASE_URL, SUPABASE_SERVICE_KEY);
+  const { data } = await supabase
+    .from("camp_state_kv")
+    .select("value")
+    .eq("camp_id", campId)
+    .eq("key", "app1")
+    .maybeSingle();
+  const roster = data?.value && typeof data.value === "object" ? (data.value as Record<string, any>).camperRoster : null;
+  return !!(roster && typeof roster === "object" && Object.prototype.hasOwnProperty.call(roster, camperName));
+}
+
+async function lookupCampDestinationForCamper(campId: string | undefined, camperName: string | undefined): Promise<string | null> {
+  if (!campId || !SUPABASE_URL || !SUPABASE_SERVICE_KEY) return null;
+  const supabase = createClient(SUPABASE_URL, SUPABASE_SERVICE_KEY);
+  const { data: camp } = await supabase
+    .from("camps")
+    .select("stripe_account_id, stripe_charges_enabled")
+    .eq("id", campId)
+    .maybeSingle();
+  return (camp?.stripe_account_id && camp.stripe_charges_enabled) ? camp.stripe_account_id : null;
+}
+
 async function stripePost(endpoint: string, body: Record<string, string>) {
   const resp = await fetch(`${STRIPE_API}${endpoint}`, {
     method: "POST",
@@ -115,7 +156,7 @@ serve(async (req) => {
 
     const {
       campId, familyKey, familyName, email, amount, description,
-      enrollmentId, successUrl, cancelUrl,
+      enrollmentId, successUrl, cancelUrl, source, camperName,
     } = await req.json();
 
     if (!amount || Number(amount) <= 0) {
@@ -125,8 +166,28 @@ serve(async (req) => {
       });
     }
 
+    const checkoutSource = source ? String(source) : "campistry-checkout";
+    if (!VALID_SOURCES.has(checkoutSource)) {
+      return new Response(JSON.stringify({ error: "Invalid source" }), {
+        status: 400,
+        headers: { ...corsHeaders, "Content-Type": "application/json" },
+      });
+    }
+    const isCanteenDeposit = checkoutSource === "campistry-canteen-deposit";
+
+    if (isCanteenDeposit) {
+      if (!camperName || !(await campOwnsCamper(campId, camperName))) {
+        return new Response(JSON.stringify({ error: "Camper not found for this camp" }), {
+          status: 400,
+          headers: { ...corsHeaders, "Content-Type": "application/json" },
+        });
+      }
+    }
+
     const cents = String(Math.round(Number(amount) * 100));
-    const label = description || `Camp payment${familyName ? " — " + familyName : ""}`;
+    const label = description || (isCanteenDeposit
+      ? `Canteen funds — ${camperName}`
+      : `Camp payment${familyName ? " — " + familyName : ""}`);
     const origin = req.headers.get("origin") || "";
     const success = successUrl || `${origin}/campistry_pay_thanks.html?status=success`;
     const cancel = cancelUrl || `${origin}/campistry_pay_thanks.html?status=cancelled`;
@@ -138,8 +199,9 @@ serve(async (req) => {
       familyKey: String(familyKey || ""),
       familyName: String(familyName || ""),
       enrollmentId: String(enrollmentId || ""),
-      source: "campistry-checkout",
+      source: checkoutSource,
     };
+    if (isCanteenDeposit) meta.camperName = String(camperName);
 
     const params: Record<string, string> = {
       "mode": "payment",
@@ -159,7 +221,25 @@ serve(async (req) => {
       params[`payment_intent_data[metadata][${k}]`] = v;
     });
 
-    const destinationAccountId = await lookupCampDestination(campId, familyKey);
+    const destinationAccountId = isCanteenDeposit
+      ? await lookupCampDestinationForCamper(campId, camperName)
+      : await lookupCampDestination(campId, familyKey);
+
+    // Tuition's Pay Link works fine with no destination (money still lands
+    // somewhere real — the platform account). Canteen is different: the
+    // entire point of this flow is "money must land in the camp's own
+    // account," so a canteen deposit with nowhere real to route to would be
+    // a silent policy violation, not just degraded UX. Reject outright
+    // rather than quietly falling back to the platform account — the
+    // client is also expected to hide "Add Funds" for an unconnected camp
+    // (get_camp_canteen_stripe_status), this is the server-side backstop.
+    if (isCanteenDeposit && !destinationAccountId) {
+      return new Response(JSON.stringify({ error: "This camp hasn't set up online canteen funding yet." }), {
+        status: 400,
+        headers: { ...corsHeaders, "Content-Type": "application/json" },
+      });
+    }
+
     if (destinationAccountId) {
       params["payment_intent_data[transfer_data][destination]"] = destinationAccountId;
     }
@@ -167,7 +247,7 @@ serve(async (req) => {
     const session = await stripePost("/checkout/sessions", params);
     if (session.error) throw new Error(session.error.message);
 
-    console.log(`[stripe-checkout] Session ${session.id} for ${familyName || familyKey} — $${amount}`);
+    console.log(`[stripe-checkout] Session ${session.id} for ${isCanteenDeposit ? camperName : (familyName || familyKey)} — $${amount}`);
 
     return new Response(
       JSON.stringify({ url: session.url, sessionId: session.id }),

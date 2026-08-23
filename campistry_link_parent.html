@@ -1359,41 +1359,62 @@ function _mutateSnacks(fn){
     try{localStorage.setItem('CAMPISTRY_LOCAL_CACHE',JSON.stringify(gs));}catch(e){}
 }
 
-function addFunds(){
+// Real money now — submit_canteen_deposit (self-reported balance bump, no
+// payment ever collected) is retired server-side (migration 079). This
+// creates a real Stripe Checkout Session and redirects; the balance is
+// credited server-side by stripe-webhook once Stripe confirms payment, not
+// here — so there's no optimistic local echo to write anymore (an
+// optimistic credit could show a balance the cloud copy doesn't have yet,
+// and would be wrong if the payment failed or was cancelled).
+async function addFunds(){
     var c=_activeCanteenChild();if(!c){toast('No canteen account yet');return;}
     var amt=_selAmt||25;
     if(!(amt>0)){toast('Enter an amount first');return;}
-    var db=window._parentDB;
-    if(!db){toast('Connection not ready — try again in a moment.');return;}
     var btn=document.getElementById('canteenAddBtn');
-    if(btn){btn.disabled=true;btn.textContent='Adding…';}
-    (window._pRpc?window._pRpc('submit_canteen_deposit',{p_camper_name:c.name,p_amount:amt},c.campId):db.rpc('submit_canteen_deposit',{p_camper_name:c.name,p_amount:amt,p_camp_id:c.campId})).then(function(res){
-        if(btn){btn.disabled=false;btn.textContent='Add Funds';}
-        if(res.error){
-            console.error('[Parent] submit_canteen_deposit error:',res.error.message,res.error);
-            toast('Could not add funds — please try again.');
-            return;
-        }
-        var d=res.data;
-        if(!d||!d.success){
-            var msg=(d&&d.error==='camper_not_on_invite')?'That camper isn\'t on your account.':'Could not add funds.';
-            toast(msg);
-            return;
-        }
-        // Keep the same local echo the rest of the canteen UI already reads from
-        // (transaction history, other-device fallback) — the RPC call above is
-        // what actually persists this to Campistry Snacks in the cloud.
-        var now=new Date();
-        _mutateSnacks(function(s){
-            s.accounts[c.name]={balance:d.balance,dailyLimit:(s.accounts[c.name]&&s.accounts[c.name].dailyLimit)||10,spentToday:(s.accounts[c.name]&&s.accounts[c.name].spentToday)||0};
-            s.transactions.unshift({time:now.toLocaleTimeString([],{hour:'numeric',minute:'2-digit'}),camper:c.name,items:'Funds added by parent',amount:amt,type:'credit',date:now.getFullYear()+'-'+String(now.getMonth()+1).padStart(2,'0')+'-'+String(now.getDate()).padStart(2,'0')});
+    if(btn){btn.disabled=true;btn.textContent='Opening secure checkout…';}
+    try{
+        var email=(parent&&parent.email)||'';
+        var res=await _lkCheckout({
+            campId:c.campId, camperName:c.name, amount:amt, email:email,
+            description:'Canteen funds — '+c.name,
+            source:'campistry-canteen-deposit',
+            successUrl:location.origin+location.pathname.replace(/[^/]*$/,'')+'campistry_pay_thanks.html?status=success&type=canteen',
+            cancelUrl:location.origin+location.pathname.replace(/[^/]*$/,'')+'campistry_pay_thanks.html?status=cancelled&type=canteen',
         });
-        _loadSnacksData(children);
-        c.canteenBalance=d.balance;
-        switchCanteen(c.id);
-        var ci=document.getElementById('canteenCustomAmt');if(ci)ci.value='';
-        toast('$'+amt.toFixed(2)+' added to '+c.name.split(' ')[0]+"'s canteen account");
-    });
+        if(res&&res.url){ window.location.href=res.url; return; }
+        throw new Error('No checkout link');
+    }catch(err){
+        console.error('[Parent] canteen checkout error:',err);
+        toast('Could not start payment: '+((err&&err.message)||'error'));
+    }
+    if(btn){btn.disabled=false;btn.textContent='Add Funds';}
+}
+
+// Rollout gate: canteen deposits only make sense once the camp has
+// connected its own Stripe account (see migrations/077_camp_stripe_connect.sql,
+// 079_canteen_stripe_deposits.sql) — a deposit with nowhere real to land
+// would be a silent policy violation, not just bad UX, so this is hidden
+// entirely rather than left enabled to fail server-side. Cached per camp
+// since switchCanteen can run repeatedly as a parent taps between kids.
+var _canteenStripeByCamp={};
+async function _checkCanteenStripeStatus(campId){
+    if(!campId)return;
+    if(_canteenStripeByCamp[campId]!==undefined){ _applyCanteenStripeGate(_canteenStripeByCamp[campId]); return; }
+    var db=window._parentDB; if(!db)return;
+    try{
+        var res=await (window._pRpc?window._pRpc('get_camp_canteen_stripe_status',{p_camp_id:campId},campId):db.rpc('get_camp_canteen_stripe_status',{p_camp_id:campId}));
+        var d=res&&res.data;
+        var connected=!!(d&&d.success&&d.connected&&d.charges_enabled);
+        _canteenStripeByCamp[campId]=connected;
+        _applyCanteenStripeGate(connected);
+    }catch(e){ _applyCanteenStripeGate(false); }
+}
+function _applyCanteenStripeGate(connected){
+    var btn=document.getElementById('canteenAddBtn');
+    if(!btn)return;
+    btn.disabled=!connected;
+    btn.title=connected?'':"Online funding isn't set up for this camp yet — contact the camp office.";
+    btn.style.opacity=connected?'':'0.5';
 }
 
 function saveSpendingControls(){
@@ -1556,6 +1577,7 @@ function switchCanteen(id,btn){
     var c=children.find(function(k){return k.id===id});
     if(!c)return;
     document.getElementById('canteenAmt').textContent='$'+c.canteenBalance.toFixed(2);
+    _checkCanteenStripeStatus(c.campId);
     var walletCard=document.querySelector('.canteen-bal');if(walletCard)walletCard.setAttribute('data-accent',childAccent(id));
     // Sync spending-control sliders with real Snacks values
     var lim=c.dailyLimit!=null?c.dailyLimit:5, credit=c.creditLimit||0, floor=c.balanceFloor||0;

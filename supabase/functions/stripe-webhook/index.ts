@@ -16,6 +16,13 @@
 // Idempotent by stripePaymentIntentId: webhook retries — and payments the office
 // already recorded client-side via stripe-charge — are updated in place, never
 // duplicated.
+//
+// CANTEEN DEPOSITS are a separate, either/or path: a PaymentIntent with
+// metadata.source === 'campistry-canteen-deposit' (created by stripe-checkout
+// for the Link "Add Funds" flow) is credited to campistrySnacks instead — see
+// handleCanteenDeposit() and migrations/079_canteen_stripe_deposits.sql. It
+// must NEVER also land in campistryMe.finance.payments, or Billing/Analytics
+// would misreport a canteen top-up as tuition revenue.
 // =============================================================================
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
@@ -126,6 +133,35 @@ async function upsertPayment(
   return false;
 }
 
+// Only acts on a final 'succeeded' status — canteen has no "pending balance"
+// concept in the UI (unlike tuition's visible-but-uncounted pending row), so
+// crediting only once Stripe confirms the charge is final is the safe call:
+// a kid tapping the POS terminal needs the balance to already be real money.
+async function handleCanteenDeposit(
+  supabase: ReturnType<typeof createClient>,
+  campId: string,
+  pi: Record<string, any>,
+  status: "pending" | "succeeded" | "failed",
+) {
+  if (status !== "succeeded") {
+    console.log(`[stripe-webhook] canteen deposit ${pi.id} status=${status} — no ledger write (only 'succeeded' credits)`);
+    return;
+  }
+  const meta = pi.metadata || {};
+  const camperName = meta.camperName;
+  if (!camperName) {
+    console.error(`[stripe-webhook] canteen deposit ${pi.id} has no camperName in metadata — skipping`);
+    return;
+  }
+  const { data, error } = await supabase.rpc("credit_canteen_balance_from_stripe", {
+    p_camp_id: campId,
+    p_camper_name: camperName,
+    p_amount: (pi.amount || 0) / 100,
+    p_payment_intent_id: pi.id,
+  });
+  console.log(`[stripe-webhook] canteen deposit $${(pi.amount || 0) / 100} for ${camperName} (camp ${campId}): ${error ? "FAILED " + error.message : JSON.stringify(data)}`);
+}
+
 serve(async (req) => {
   if (req.method === "OPTIONS") return new Response("ok", { headers: corsHeaders });
 
@@ -157,6 +193,9 @@ serve(async (req) => {
       const campId = pi.metadata?.campId;
       if (!campId) {
         console.log("[stripe-webhook] No campId in metadata — skipping ledger write");
+      } else if (pi.metadata?.source === "campistry-canteen-deposit") {
+        // Either/or with the tuition path below — never both.
+        await handleCanteenDeposit(supabase, campId, pi, statusFor[event.type]);
       } else {
         const ok = await upsertPayment(supabase, campId, pi, statusFor[event.type]);
         console.log(`[stripe-webhook] ledger ${statusFor[event.type]} $${(pi.amount || 0) / 100} camp ${campId}: ${ok ? "ok" : "FAILED"}`);
