@@ -5,6 +5,16 @@
 // PaymentIntent created by stripe-charge (or any PaymentIntent id on the payment
 // record). Amount is optional — omit for a full refund.
 //
+// If the original charge was a destination charge (routed to a camp's own
+// connected Stripe account, see migrations/077_camp_stripe_connect.sql), the
+// refund needs reverse_transfer:true so the money is clawed back from the
+// CAMP's account, not the platform's own (now-smaller) balance. Rather than
+// trust a client-supplied campId/flag, this is looked up directly from
+// Stripe itself — authoritative, and a camp that was never connected (or
+// wasn't connected yet when the original charge happened) simply has no
+// transfer_data on its PI, so this is a no-op for every pre-Connect payment
+// on file.
+//
 // Request:  { paymentIntentId, amount?, reason?, metadata? }
 // Response: { refundId, status, amount }
 // =============================================================================
@@ -26,6 +36,13 @@ async function stripePost(endpoint: string, body: Record<string, string>) {
       "Content-Type": "application/x-www-form-urlencoded",
     },
     body: new URLSearchParams(body).toString(),
+  });
+  return resp.json();
+}
+
+async function stripeGet(endpoint: string) {
+  const resp = await fetch(`${STRIPE_API}${endpoint}`, {
+    headers: { "Authorization": `Bearer ${STRIPE_SECRET}` },
   });
   return resp.json();
 }
@@ -67,6 +84,14 @@ serve(async (req) => {
       Object.entries(metadata).forEach(([k, v]) => {
         params[`metadata[${k}]`] = String(v);
       });
+    }
+
+    // Was the original charge a destination charge to a camp's own
+    // connected account? If so, reverse the transfer along with the refund
+    // so the camp's account (not the platform's) is debited.
+    const pi = await stripeGet(`/payment_intents/${paymentIntentId}`);
+    if (pi?.transfer_data?.destination) {
+      params.reverse_transfer = "true";
     }
 
     const refund = await stripePost("/refunds", params);

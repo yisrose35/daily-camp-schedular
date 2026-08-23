@@ -11,19 +11,41 @@
 // Note: Venmo and Zelle are NOT Stripe methods — Venmo is PayPal-only, Zelle has
 // no merchant API. Those stay manual-entry methods (recorded by office staff).
 //
+// If the camp identified by campId has connected its own Stripe account
+// (camps.stripe_account_id, see stripe-connect-onboard-camp),
+// payment_intent_data[transfer_data][destination] is added so the resulting
+// charge routes to the camp's own bank account instead of the platform's —
+// a destination charge, no Stripe-Account header, no change to how the
+// Checkout Session itself is created. No platform fee (camp keeps 100%). A
+// camp that hasn't connected is unaffected — same behavior as before.
+//
 // Request:  { campId, familyKey, familyName, email?, amount, description?,
 //             enrollmentId?, successUrl?, cancelUrl? }
 // Response: { url, sessionId }
 // =============================================================================
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
+import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 
 const STRIPE_SECRET = Deno.env.get("STRIPE_SECRET_KEY");
 const STRIPE_API = "https://api.stripe.com/v1";
+const SUPABASE_URL = Deno.env.get("SUPABASE_URL") || "";
+const SUPABASE_SERVICE_KEY = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY") || "";
 
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
   "Access-Control-Allow-Headers": "authorization, x-client-info, apikey, content-type",
 };
+
+async function lookupCampDestination(campId: string | undefined): Promise<string | null> {
+  if (!campId || !SUPABASE_URL || !SUPABASE_SERVICE_KEY) return null;
+  const supabase = createClient(SUPABASE_URL, SUPABASE_SERVICE_KEY);
+  const { data: camp } = await supabase
+    .from("camps")
+    .select("stripe_account_id, stripe_charges_enabled")
+    .eq("id", campId)
+    .maybeSingle();
+  return (camp?.stripe_account_id && camp.stripe_charges_enabled) ? camp.stripe_account_id : null;
+}
 
 async function stripePost(endpoint: string, body: Record<string, string>) {
   const resp = await fetch(`${STRIPE_API}${endpoint}`, {
@@ -95,6 +117,11 @@ serve(async (req) => {
       params[`metadata[${k}]`] = v;
       params[`payment_intent_data[metadata][${k}]`] = v;
     });
+
+    const destinationAccountId = await lookupCampDestination(campId);
+    if (destinationAccountId) {
+      params["payment_intent_data[transfer_data][destination]"] = destinationAccountId;
+    }
 
     const session = await stripePost("/checkout/sessions", params);
     if (session.error) throw new Error(session.error.message);

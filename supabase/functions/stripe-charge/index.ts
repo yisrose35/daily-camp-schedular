@@ -5,18 +5,43 @@
 // Uses the stored Stripe Customer + PaymentMethod to create
 // an off-session PaymentIntent (auto-debit).
 //
-// Request:  { customerId, paymentMethodId, amount, currency, description, metadata }
+// If campId is provided and that camp has connected its own Stripe account
+// (camps.stripe_account_id, see stripe-connect-onboard-camp), the resulting
+// PaymentIntent gets transfer_data[destination] added so the money lands in
+// the camp's own bank account instead of the platform's. This is a
+// destination charge — the Customer/PaymentMethod/Charge object all stay on
+// the PLATFORM account (never a Stripe-Account header), so nothing about
+// how the card was saved needs to change. No platform fee is applied (the
+// camp keeps 100% of the charge) — see migrations/077_camp_stripe_connect.sql.
+// A camp that hasn't connected (stripe_account_id IS NULL) is unaffected —
+// this stays the exact same platform-account charge as before.
+//
+// Request:  { customerId, paymentMethodId, amount, currency, description, metadata, campId? }
 // Response: { paymentIntentId, status, amount }
 // =============================================================================
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
+import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 
 const STRIPE_SECRET = Deno.env.get("STRIPE_SECRET_KEY");
 const STRIPE_API = "https://api.stripe.com/v1";
+const SUPABASE_URL = Deno.env.get("SUPABASE_URL") || "";
+const SUPABASE_SERVICE_KEY = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY") || "";
 
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
   "Access-Control-Allow-Headers": "authorization, x-client-info, apikey, content-type",
 };
+
+async function lookupCampDestination(campId: string | undefined): Promise<string | null> {
+  if (!campId || !SUPABASE_URL || !SUPABASE_SERVICE_KEY) return null;
+  const supabase = createClient(SUPABASE_URL, SUPABASE_SERVICE_KEY);
+  const { data: camp } = await supabase
+    .from("camps")
+    .select("stripe_account_id, stripe_charges_enabled")
+    .eq("id", campId)
+    .maybeSingle();
+  return (camp?.stripe_account_id && camp.stripe_charges_enabled) ? camp.stripe_account_id : null;
+}
 
 async function stripePost(endpoint: string, body: Record<string, string>) {
   const resp = await fetch(`${STRIPE_API}${endpoint}`, {
@@ -50,7 +75,7 @@ serve(async (req) => {
       });
     }
 
-    const { customerId, paymentMethodId, amount, currency, description, metadata } = await req.json();
+    const { customerId, paymentMethodId, amount, currency, description, metadata, campId } = await req.json();
 
     if (!customerId || !amount) {
       return new Response(JSON.stringify({ error: "customerId and amount required" }), {
@@ -91,6 +116,11 @@ serve(async (req) => {
       Object.entries(metadata).forEach(([k, v]) => {
         params[`metadata[${k}]`] = String(v);
       });
+    }
+
+    const destinationAccountId = await lookupCampDestination(campId);
+    if (destinationAccountId) {
+      params["transfer_data[destination]"] = destinationAccountId;
     }
 
     const paymentIntent = await stripePost("/payment_intents", params);

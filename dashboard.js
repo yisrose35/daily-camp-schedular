@@ -841,6 +841,13 @@
         await loadStats();
         // SMS sending number — a self-serve request flow, not a manual field.
         if (campData?.id) loadTelnyxStatus(campData.id);
+        // Stripe Connect — where tuition money lands.
+        if (campData?.id) {
+            loadCampStripeConnectStatus(campData.id);
+            if (new URLSearchParams(window.location.search).get('stripeReturn') === '1') {
+                syncCampStripeConnectStatus(campData.id);
+            }
+        }
     }
 
     // ========================================
@@ -1283,9 +1290,69 @@
     };
 
     // ========================================
+    // STRIPE CONNECT (per-camp tuition billing)
+    // ========================================
+    // Where a family's tuition/store payment actually lands. Without this,
+    // every camp's tuition pools into Campistry's own shared Stripe account
+    // (see migrations/077_camp_stripe_connect.sql). Owner-only — a bank
+    // account connection is higher-stakes than ordinary billing actions.
+
+    window.loadCampStripeConnectStatus = async function(campId) {
+        const box = document.getElementById('campStripeConnectBox');
+        if (!box) return;
+        try {
+            const { data, error } = await window.supabase.rpc('get_camp_stripe_status', { p_camp_id: campId });
+            if (error || !data || !data.success) { box.textContent = 'Could not load Stripe Connect status.'; return; }
+
+            const canConnect = userRole === 'owner';
+            const ownerNote = canConnect ? '' : '<p style="margin:6px 0 0;font-size:0.78rem;color:var(--slate-400);">Only the camp owner can connect Stripe.</p>';
+
+            if (!data.connected) {
+                box.innerHTML = '<p style="margin:0 0 10px;">Right now tuition payments deposit into Campistry\'s account. Connect your camp\'s own Stripe account so payments go straight to your bank.</p>' +
+                    (canConnect ? '<button type="button" class="btn-primary" onclick="startCampStripeConnect()">Connect your Stripe account</button>' : '') + ownerNote;
+            } else if (data.charges_enabled) {
+                box.innerHTML = '<p style="margin:0;color:#059669;"><strong>Connected</strong> — tuition payments go directly to your bank account' +
+                    (data.connected_at ? ' since ' + new Date(data.connected_at).toLocaleDateString() : '') + '.</p>';
+            } else if (data.onboarding_status === 'pending') {
+                box.innerHTML = '<p style="margin:0 0 8px;">Onboarding started but not finished yet.</p>' +
+                    (canConnect ? '<button type="button" class="btn-primary" onclick="startCampStripeConnect()">Finish setup</button>' : '') + ownerNote;
+            } else {
+                box.innerHTML = '<p style="margin:0 0 8px;color:#dc2626;">Your Stripe account needs attention before it can accept payments again.</p>' +
+                    (canConnect ? '<button type="button" class="btn-primary" onclick="startCampStripeConnect()">Review account</button>' : '') + ownerNote;
+            }
+        } catch (e) {
+            box.textContent = 'Could not load Stripe Connect status.';
+        }
+    };
+
+    window.syncCampStripeConnectStatus = async function(campId) {
+        try {
+            await window.supabase.functions.invoke('stripe-connect-status-camp', { body: { campId } });
+        } catch (e) {
+            // best-effort — the webhook is the durable source of truth either way
+        }
+        await loadCampStripeConnectStatus(campId);
+    };
+
+    window.startCampStripeConnect = async function() {
+        if (!campData || !campData.id) return;
+        try {
+            const { data, error } = await window.supabase.functions.invoke('stripe-connect-onboard-camp', {
+                body: { campId: campData.id },
+            });
+            if (error) throw new Error(error.message || 'Could not start Stripe Connect setup');
+            if (data && data.error) throw new Error(data.error);
+            if (data && data.url) window.location.href = data.url;
+        } catch (e) {
+            const box = document.getElementById('campStripeConnectBox');
+            if (box) box.innerHTML = '<p style="margin:0;color:#dc2626;">' + (e.message || 'Could not start Stripe Connect setup.') + '</p>';
+        }
+    };
+
+    // ========================================
     // CHANGE PASSWORD
     // ========================================
-    
+
     window.changePassword = async function() {
         const pw = newPassword?.value;
         const confirm = confirmPassword?.value;

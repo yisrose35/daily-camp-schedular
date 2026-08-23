@@ -29,9 +29,21 @@
 //
 // Events handled:
 //   - account.updated          → sync stripe_charges_enabled/onboarding_status
-//                                 onto link_staff_accounts (durable source of
-//                                 truth; stripe-connect-status is just the
-//                                 synchronous "check now" right after redirect)
+//                                 onto link_staff_accounts OR camps (durable
+//                                 source of truth; stripe-connect-status/
+//                                 stripe-connect-status-camp are just the
+//                                 synchronous "check now" right after redirect).
+//                                 The SAME "Connected accounts" endpoint fires
+//                                 this for every connected account under the
+//                                 platform — staff Express accounts AND camp
+//                                 Express accounts alike — so no separate
+//                                 registration is needed for camps; only the
+//                                 handler below needed to learn to also look
+//                                 there. Dispatched by metadata.staffAccountId
+//                                 when present (staff, existing behavior), else
+//                                 by a direct camps.stripe_account_id lookup
+//                                 (camps deliberately don't set that metadata
+//                                 key — see stripe-connect-onboard-camp).
 //   - payment_intent.succeeded → the money-lands moment for a tip charge.
 //                                 Two shapes, both gated on metadata.source
 //                                 so neither can ever collide with the
@@ -121,28 +133,53 @@ async function verifySignature(payload: string, signature: string, secret: strin
 }
 
 async function handleAccountUpdated(supabase: ReturnType<typeof createClient>, account: Record<string, any>) {
+  const chargesEnabled = !!account.charges_enabled;
+  const onboardingStatus = chargesEnabled ? "complete" : "pending";
+
   const staffAccountId = account.metadata?.staffAccountId;
-  if (!staffAccountId) {
-    console.log("[stripe-connect-webhook] account.updated with no staffAccountId metadata — skipping");
+  if (staffAccountId) {
+    const { data: existing } = await supabase
+      .from("link_staff_accounts")
+      .select("stripe_connected_at")
+      .eq("id", staffAccountId)
+      .maybeSingle();
+
+    const update: Record<string, unknown> = {
+      stripe_charges_enabled: chargesEnabled,
+      stripe_onboarding_status: onboardingStatus,
+      updated_at: new Date().toISOString(),
+    };
+    if (chargesEnabled && !existing?.stripe_connected_at) {
+      update.stripe_connected_at = new Date().toISOString();
+    }
+    const { error } = await supabase.from("link_staff_accounts").update(update).eq("id", staffAccountId);
+    console.log(`[stripe-connect-webhook] account.updated ${account.id} (staff) charges_enabled=${chargesEnabled}: ${error ? "FAILED " + error.message : "ok"}`);
     return;
   }
-  const chargesEnabled = !!account.charges_enabled;
-  const { data: existing } = await supabase
-    .from("link_staff_accounts")
-    .select("stripe_connected_at")
-    .eq("id", staffAccountId)
-    .maybeSingle();
 
-  const update: Record<string, unknown> = {
-    stripe_charges_enabled: chargesEnabled,
-    stripe_onboarding_status: chargesEnabled ? "complete" : "pending",
-    updated_at: new Date().toISOString(),
-  };
-  if (chargesEnabled && !existing?.stripe_connected_at) {
-    update.stripe_connected_at = new Date().toISOString();
+  // Not a staff account (no staffAccountId metadata) — try camps, matched
+  // by the unique idx_camps_stripe_account index instead of metadata, since
+  // stripe-connect-onboard-camp deliberately doesn't set a metadata key that
+  // would need to be kept in sync with this handler forever.
+  const { data: camp } = await supabase
+    .from("camps")
+    .select("id, stripe_connected_at")
+    .eq("stripe_account_id", account.id)
+    .maybeSingle();
+  if (camp) {
+    const update: Record<string, unknown> = {
+      stripe_charges_enabled: chargesEnabled,
+      stripe_onboarding_status: onboardingStatus,
+    };
+    if (chargesEnabled && !camp.stripe_connected_at) {
+      update.stripe_connected_at = new Date().toISOString();
+    }
+    const { error } = await supabase.from("camps").update(update).eq("id", camp.id);
+    console.log(`[stripe-connect-webhook] account.updated ${account.id} (camp) charges_enabled=${chargesEnabled}: ${error ? "FAILED " + error.message : "ok"}`);
+    return;
   }
-  const { error } = await supabase.from("link_staff_accounts").update(update).eq("id", staffAccountId);
-  console.log(`[stripe-connect-webhook] account.updated ${account.id} charges_enabled=${chargesEnabled}: ${error ? "FAILED " + error.message : "ok"}`);
+
+  console.log(`[stripe-connect-webhook] account.updated ${account.id} — no matching staff or camp row`);
 }
 
 async function handleTipSucceeded(supabase: ReturnType<typeof createClient>, pi: Record<string, any>) {

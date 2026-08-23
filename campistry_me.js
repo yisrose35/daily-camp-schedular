@@ -9573,6 +9573,7 @@ async function chargeStoredCard(famKey,amount,description){
             amount:amount,
             currency:'usd',
             description:description||'Campistry payment',
+            campId:getCampId(),
             metadata:{campId:getCampId(),familyName:f.name,familyKey:famKey}
         });
 

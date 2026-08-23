@@ -13,6 +13,13 @@
 // Auth: requires header  x-cron-secret: <INSTALLMENT_CRON_SECRET>  so only the
 // scheduler can trigger it.
 //
+// If a camp has connected its own Stripe account (camps.stripe_account_id,
+// see stripe-connect-onboard-camp / migrations/077_camp_stripe_connect.sql),
+// each installment charge for that camp becomes a destination charge routing
+// the money to the camp's own bank account instead of the platform's. No
+// change to the Customer/PaymentMethod used to charge — only where the
+// money settles. A camp that hasn't connected charges exactly as before.
+//
 // Response: { ok, charged, failed, skippedCamps, details[] }
 // =============================================================================
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
@@ -29,7 +36,7 @@ const corsHeaders = {
   "Access-Control-Allow-Headers": "authorization, x-client-info, apikey, content-type, x-cron-secret",
 };
 
-async function stripeCharge(customerId: string, pmId: string | null, amount: number, description: string, metadata: Record<string, string>) {
+async function stripeCharge(customerId: string, pmId: string | null, amount: number, description: string, metadata: Record<string, string>, destinationAccountId?: string | null) {
   const params: Record<string, string> = {
     amount: String(Math.round(amount * 100)),
     currency: "usd",
@@ -40,6 +47,11 @@ async function stripeCharge(customerId: string, pmId: string | null, amount: num
   };
   if (pmId) params["payment_method"] = pmId;
   Object.entries(metadata).forEach(([k, v]) => { params[`metadata[${k}]`] = String(v); });
+  // Destination charge — routes the resulting money to the camp's own
+  // connected Stripe account (see migrations/077_camp_stripe_connect.sql).
+  // No Stripe-Account header, no change to the Customer/PaymentMethod used
+  // above — only where the money settles. No platform fee.
+  if (destinationAccountId) params["transfer_data[destination]"] = destinationAccountId;
   const resp = await fetch(`${STRIPE_API}/payment_intents`, {
     method: "POST",
     headers: { "Authorization": `Bearer ${STRIPE_SECRET}`, "Content-Type": "application/x-www-form-urlencoded" },
@@ -78,6 +90,18 @@ serve(async (req) => {
     });
   }
 
+  // Batch-fetch every connected camp once, up front, instead of a per-family
+  // lookup — this loop can iterate thousands of installments in one run.
+  const { data: connectedCamps } = await supabase
+    .from("camps")
+    .select("id, stripe_account_id, stripe_charges_enabled")
+    .not("stripe_account_id", "is", null)
+    .eq("stripe_charges_enabled", true);
+  const campDestinations = new Map<string, string>();
+  for (const c of (connectedCamps || [])) {
+    if (c.stripe_account_id) campDestinations.set(c.id, c.stripe_account_id);
+  }
+
   for (const row of (rows || [])) {
     const me = (row.value && typeof row.value === "object") ? row.value as Record<string, any> : null;
     if (!me || !me.families) continue;
@@ -102,6 +126,7 @@ serve(async (req) => {
           f.stripeCustomerId, f.stripePaymentMethodId || null, amount,
           `Autopay installment — ${f.name || famKey}`,
           { campId: String(row.camp_id), familyKey: famKey, familyName: camperName, source: "autopay" },
+          campDestinations.get(String(row.camp_id)) || null,
         );
 
         if (pi.error || pi.status === "requires_action") {
