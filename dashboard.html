@@ -256,7 +256,11 @@
                         <span class="profile-value" id="profileAddress">Loading...</span>
                     </div>
                     <div class="profile-row">
-                        <span class="profile-label">Email</span>
+                        <span class="profile-label">Camp Contact Email</span>
+                        <span class="profile-value" id="profileContactEmail">Not set</span>
+                    </div>
+                    <div class="profile-row">
+                        <span class="profile-label">Account Email</span>
                         <span class="profile-value" id="profileEmail">Loading...</span>
                     </div>
                 </div>
@@ -268,6 +272,11 @@
                     <div class="form-group">
                         <label for="editAddress">Address</label>
                         <input type="text" id="editAddress" placeholder="123 Camp Road, City, State">
+                    </div>
+                    <div class="form-group">
+                        <label for="editContactEmail">Camp Contact Email</label>
+                        <input type="email" id="editContactEmail" placeholder="office@yourcamp.com">
+                        <small style="color:var(--text-muted,#64748b);font-size:.75rem;">Shown as the reply-to address on automated emails sent to parents — a parent's reply reaches this inbox, not Campistry.</small>
                     </div>
                     <div class="form-actions">
                         <button type="button" class="btn-secondary" onclick="cancelEdit()">Cancel</button>

@@ -144,6 +144,17 @@ serve(async (req) => {
     const optedOutPhones = new Set((optOuts || []).map((r: any) => r.phone_key));
     const unsubscribedEmails = new Set((unsubs || []).map((r: any) => r.email));
 
+    // This camp's own mailing address (CAN-SPAM footer) and contact email
+    // (Reply-To) — set on the Dashboard's Camp Profile card. Falls back to
+    // the platform-wide POSTAL_ADDRESS secret if a camp hasn't set one yet.
+    let campAddress = "";
+    let campReplyTo: string | undefined;
+    if (channels.includes("email")) {
+      const { data: campRow } = await supabase.from("camps").select("address, contact_email").eq("id", b.camp_id).maybeSingle();
+      campAddress = campRow?.address || Deno.env.get("POSTAL_ADDRESS") || "";
+      campReplyTo = campRow?.contact_email || undefined;
+    }
+
     if (channels.includes("email")) {
       for (const r of recipients) {
         if (!r.email || !r.consent || r.adopter) continue; // adopters already see this in Link — no redundant email
@@ -154,9 +165,10 @@ serve(async (req) => {
             from: "Campistry <onboarding@resend.dev>",
             to: [r.email],
             subject: r.subject || b.subject || "A message from your camp",
+            replyTo: campReplyTo,
             html: `<div style="font-family:sans-serif;max-width:600px;margin:0 auto;white-space:pre-wrap;">${
               (r.body || b.body || "").replace(/</g, "&lt;")
-            }</div>${link ? `<p style="font-size:12px;color:#94a3b8;"><a href="${link}" style="color:#94a3b8;">Unsubscribe</a></p>` : ""}`,
+            }</div><p style="font-size:12px;color:#94a3b8;">${link ? `<a href="${link}" style="color:#94a3b8;">Unsubscribe</a>` : ""}${campAddress ? ` ${campAddress}` : ""}</p>`,
             headers: link ? { "List-Unsubscribe": `<${link}>`, "List-Unsubscribe-Post": "List-Unsubscribe=One-Click" } : undefined,
           });
           sent++;

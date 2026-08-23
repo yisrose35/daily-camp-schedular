@@ -62,9 +62,11 @@
     const profileEditForm = document.getElementById('profileEditForm');
     const profileCampName = document.getElementById('profileCampName');
     const profileAddress = document.getElementById('profileAddress');
+    const profileContactEmail = document.getElementById('profileContactEmail');
     const profileEmail = document.getElementById('profileEmail');
     const editCampName = document.getElementById('editCampName');
     const editAddress = document.getElementById('editAddress');
+    const editContactEmail = document.getElementById('editContactEmail');
     const profileError = document.getElementById('profileError');
     const profileSuccess = document.getElementById('profileSuccess');
     
@@ -806,12 +808,13 @@
         // Get display values
         let displayCampName = campName || currentUser.user_metadata?.camp_name || 'Your Camp';
         let campAddress = campData?.address || '';
-        
-        console.log('📊 Final display values:', { displayCampName, userName, campAddress });
-        
+        let campContactEmail = campData?.contact_email || '';
+
+        console.log('📊 Final display values:', { displayCampName, userName, campAddress, campContactEmail });
+
         // Update the personalized welcome message
         updateWelcomeMessage();
-        
+
         // Update profile card displays
         if (profileCampName) {
             profileCampName.textContent = displayCampName || '—';
@@ -819,13 +822,19 @@
         if (profileAddress) {
             profileAddress.textContent = campAddress || 'Not set';
         }
-        
+        if (profileContactEmail) {
+            profileContactEmail.textContent = campContactEmail || 'Not set';
+        }
+
         // Pre-fill edit form (only relevant for owners)
         if (editCampName) {
             editCampName.value = displayCampName !== 'Your Camp' ? displayCampName : '';
         }
         if (editAddress) {
             editAddress.value = campAddress;
+        }
+        if (editContactEmail) {
+            editContactEmail.value = campContactEmail;
         }
         
         // Load stats from cloud storage
@@ -997,20 +1006,25 @@
         
         const newCampName = editCampName?.value.trim();
         const newAddress = editAddress?.value.trim();
-        
+        const newContactEmail = editContactEmail?.value.trim() || null;
+
         if (!newCampName) {
             if (profileError) profileError.textContent = 'Camp name is required.';
             return;
         }
-        
+        if (newContactEmail && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(newContactEmail)) {
+            if (profileError) profileError.textContent = 'Camp contact email looks invalid.';
+            return;
+        }
+
         if (profileError) profileError.textContent = '';
         if (profileSuccess) profileSuccess.textContent = '';
-        
+
         try {
             if (campData?.id) {
                 const { error } = await window.supabase
                     .from('camps')
-                    .update({ name: newCampName, address: newAddress })
+                    .update({ name: newCampName, address: newAddress, contact_email: newContactEmail })
                     .eq('id', campData.id);
 
                 if (error) throw error;
@@ -1066,24 +1080,26 @@
                 // Create new camp
                 const { data: newCamp, error } = await window.supabase
                     .from('camps')
-                    .insert([{ 
-                        owner: currentUser.id, 
-                        name: newCampName, 
-                        address: newAddress 
+                    .insert([{
+                        owner: currentUser.id,
+                        name: newCampName,
+                        address: newAddress,
+                        contact_email: newContactEmail
                     }])
                     .select()
                     .single();
-                
+
                 if (error) throw error;
                 campData = newCamp;
             }
-            
+
             // Update local state
             campName = newCampName;
-            
+
             // Update displays
             if (profileCampName) profileCampName.textContent = newCampName;
             if (profileAddress) profileAddress.textContent = newAddress || 'Not set';
+            if (profileContactEmail) profileContactEmail.textContent = newContactEmail || 'Not set';
             if (campNameDisplay) campNameDisplay.textContent = newCampName;
             
             updateWelcomeMessage();

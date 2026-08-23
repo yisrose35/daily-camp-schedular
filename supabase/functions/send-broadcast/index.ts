@@ -140,6 +140,19 @@ serve(async (req) => {
 
     const phoneBook = sendSms ? await campPhoneBook(req) : null;
 
+    // Each camp's own mailing address (CAN-SPAM footer) and contact email
+    // (Reply-To, so a parent's reply reaches the camp's real inbox, not a
+    // noreply@ mailbox) — set on the Dashboard's Camp Profile card. Falls
+    // back to the platform-wide POSTAL_ADDRESS secret for camps that
+    // haven't filled theirs in yet, so the footer is never blank.
+    let campAddress = "";
+    let campReplyTo: string | undefined;
+    if (sendEmail) {
+      const { data: campRow } = await supabase.from("camps").select("address, contact_email").eq("id", campId).maybeSingle();
+      campAddress = campRow?.address || Deno.env.get("POSTAL_ADDRESS") || "";
+      campReplyTo = campRow?.contact_email || undefined;
+    }
+
     // Pull opt-out/unsubscribe lists once up front — small tables, cheap to
     // scan in full rather than one round-trip per recipient.
     const phoneKeys = new Set((to as any[]).map((r) => phoneKey(r.phone)).filter(Boolean) as string[]);
@@ -198,12 +211,13 @@ serve(async (req) => {
                   ${rSubject ? `<h2 style="margin:0 0 12px;font-size:18px;">${rSubject}</h2>` : ""}
                   <div style="font-size:15px;line-height:1.6;color:#334155;white-space:pre-wrap;">${rBody}</div>
                   <hr style="border:none;border-top:1px solid #e2e8f0;margin:24px 0;">
-                  <p style="font-size:12px;color:#94a3b8;">Sent via Campistry.${link ? ` <a href="${link}" style="color:#94a3b8;">Unsubscribe</a>` : ""}</p>
+                  <p style="font-size:12px;color:#94a3b8;">Sent via Campistry.${link ? ` <a href="${link}" style="color:#94a3b8;">Unsubscribe</a>` : ""}${campAddress ? ` ${campAddress}` : ""}</p>
                 </div>
               </div>`;
             const { error } = await resend.emails.send({
               from: FROM_EMAIL, to: [recipient.email],
               subject: rSubject || `Message from ${campName || "Camp"}`, html: htmlBody,
+              replyTo: campReplyTo,
               headers: link ? { "List-Unsubscribe": `<${link}>`, "List-Unsubscribe-Post": "List-Unsubscribe=One-Click" } : undefined,
             });
             if (error) results.emailFailed++; else results.emailSent++;

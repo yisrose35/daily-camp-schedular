@@ -11,6 +11,7 @@ design writeup.
 071_link_adoption_status.sql
 072_sms_opt_outs.sql
 073_email_unsubscribes.sql
+074_camp_contact_email.sql
 ```
 
 Safe to re-run — every statement is `CREATE OR REPLACE` / `ADD COLUMN IF NOT
@@ -27,9 +28,10 @@ New:
 Changed (redeploy):
 - `send-broadcast` — now requires a real caller session (owner/admin/
   scheduler), swapped Twilio → Telnyx for SMS, added consent + opt-out
-  gating and idempotency.
+  gating and idempotency, and pulls the sending camp's own address/contact
+  email per-send (see below).
 - `send-scheduled-broadcasts` — added consent/opt-out gating and real
-  Telnyx SMS sending (was a stub before).
+  Telnyx SMS sending (was a stub before), same per-camp address/email pull.
 
 ## 3. Set secrets
 
@@ -38,16 +40,28 @@ supabase secrets set TELNYX_API_KEY=...
 supabase secrets set TELNYX_FROM_NUMBER=+1...          # or TELNYX_MESSAGING_PROFILE_ID
 supabase secrets set TELNYX_PUBLIC_KEY=...              # from the Telnyx portal, for webhook signature verification
 supabase secrets set EMAIL_UNSUB_SECRET=$(openssl rand -hex 32)
-supabase secrets set POSTAL_ADDRESS="..."                # required for CAN-SPAM — your actual business mailing address
+supabase secrets set POSTAL_ADDRESS="..."                # fallback only — see below
 ```
 
 `SUPABASE_URL` / `SUPABASE_SERVICE_ROLE_KEY` / `RESEND_API_KEY` are already
 set from prior work.
 
-**Action item — I need your real business mailing address** before this
-ships to production. There's no reliable per-camp mailing address anywhere
-in the schema today, so every fallback email uses one platform-wide
-`POSTAL_ADDRESS` in its footer, which CAN-SPAM requires.
+**CAN-SPAM address + Reply-To now come from each camp's own Dashboard**, not
+a platform-wide secret. `camps.address` already existed (Dashboard → Camp
+Profile → Address); migration 074 adds `camps.contact_email` alongside it
+(Dashboard → Camp Profile → "Camp Contact Email") — both edit fields live in
+the same Camp Profile card. Every fallback email's footer pulls `address`
+for that camp, and sets `contact_email` as the Reply-To (so a parent's reply
+lands in the camp's own inbox, not Campistry's). `POSTAL_ADDRESS` is only a
+fallback for a camp that hasn't filled in its address yet — worth setting
+so the footer is never blank, but it's no longer the primary source.
+
+The `From:` address itself stays on Campistry's own verified sending domain
+regardless — Resend (and every ESP) requires SPF/DKIM-verified domain
+ownership to send `From:`, so a camp's own email can't be the raw sender
+without that camp verifying their domain with Resend separately. Reply-To
+is the correct mechanism for "replies reach the camp" without that
+requirement.
 
 ## 4. Register the Telnyx inbound webhook
 
@@ -62,6 +76,9 @@ This is what makes "reply STOP" actually work.
 
 ## 5. Verify end to end
 
+0. Dashboard → Camp Profile → Edit → set an Address and a Camp Contact
+   Email, Save. Confirm both show up in `SELECT address, contact_email FROM
+   camps WHERE id = '<camp_id>'`.
 1. Seed one parent with a claimed Link account and one with only an
    unclaimed invite, both in the same division, both with
    `smsEmailConsent:true` on their roster record.
