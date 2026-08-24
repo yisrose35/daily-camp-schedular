@@ -792,7 +792,7 @@ function recordSubmission(){
     }catch(_){}
 }
 
-window.submitApp=function(){
+window.submitApp=async function(){
     var err=document.getElementById('formErr');err.style.display='none';
     if(_registerSubmitInFlight){return showErr('Already submitting…');}
     var rateMsg=checkRateLimit();
@@ -912,30 +912,34 @@ window.submitApp=function(){
             }catch(ex){}
         },500);
 
-        // Persist to the cloud RELIABLY. integration_hooks' batched sync
-        // silently defers/drops the write when the Supabase client isn't ready
-        // yet on this lightweight page (getClient() is null at submit time, so
-        // executeBatchSync bails at "client not ready" and the retry dies when
-        // the page is left). We do a direct, awaited, fetch-merged upsert so the
-        // application actually reaches the camp — and surface the result.
-        _flushEnrollmentsToCloud(g.campistryMe).then(function(res){
-            var el=document.getElementById('cloudSyncNote'); if(!el)return;
-            if(res&&res.ok){ el.textContent='✓ Received by the camp'; el.style.color='var(--ok)'; }
-            else{ el.textContent='⚠ Saved on this device — reconnect to finish sending your application'; el.style.color='var(--me)'; }
-        });
+        // Persist to the cloud RELIABLY, via submit_public_application (migration
+        // 082) — a SECURITY DEFINER RPC granted to anon, since this page has no
+        // login at all and camp_state_kv's own RLS only allows owner/admin.
+        // AWAITED (not fire-and-forget) — the success screen below only shows
+        // once the camp has actually received this, not just this browser.
         // Belt-and-suspenders: also nudge integration_hooks if it's authoritative.
         try{ if(window.saveGlobalSettings&&window.saveGlobalSettings._isAuthoritativeHandler) window.saveGlobalSettings('campistryMe',g.campistryMe); }catch(_){}
+
+        var cloudRes=await _flushEnrollmentsToCloud(g.campistryMe);
+        if(!cloudRes||!cloudRes.ok){
+            console.error('[Register] Cloud submit failed:',cloudRes&&cloudRes.reason);
+            _registerSubmitInFlight=false;
+            return showErr('Your application was saved on this device but could not reach the camp ('+((cloudRes&&cloudRes.reason)||'connection problem')+'). Please check your connection and press Submit again.');
+        }
     }catch(e){
         console.error('[Register] Save error:',e);
+        _registerSubmitInFlight=false;
         return showErr('Error submitting. Please try again.');
     }
 
     recordSubmission();
     _registerSubmitInFlight=false;
 
-    // Show success
+    // Show success — cloudRes.ok is already confirmed true at this point.
     document.getElementById('formWrap').style.display='none';
     document.getElementById('successWrap').style.display='block';
+    var syncNote=document.getElementById('cloudSyncNote');
+    if(syncNote){ syncNote.textContent='✓ Received by the camp'; syncNote.style.color='var(--ok)'; }
     var names=allCampers.map(function(c){return c.first+' '+c.last});
     document.getElementById('summaryOut').innerHTML='<strong>'+names.map(esc).join(', ')+'</strong><br>Session: '+esc(selSess||'—')+'<br>Parent: '+esc(par)+' ('+esc(ph)+')<br>Applied: '+new Date().toISOString().split('T')[0]+'<br>Payment: '+esc(selPM||'Not selected')+(discount.active?'<br>Discount: '+esc(discount.label):'')+(uploads.length?'<br>Documents: '+uploads.length+' uploaded':'');
     var statusUrl=window.location.origin+window.location.pathname+'?status='+appIds[0];
@@ -953,23 +957,27 @@ async function _flushEnrollmentsToCloud(campistryMe){
     try{
         var client=null, campId=null;
         for(var i=0;i<48;i++){ // up to ~12s
-            client = (window.CampistryDB&&window.CampistryDB.getClient&&window.CampistryDB.getClient()) || (window.supabase&&typeof window.supabase.from==='function'?window.supabase:null);
+            client = (window.CampistryDB&&window.CampistryDB.getClient&&window.CampistryDB.getClient()) || (window.supabase&&typeof window.supabase.rpc==='function'?window.supabase:null);
             campId = (window.CampistryDB&&window.CampistryDB.getCampId&&window.CampistryDB.getCampId()) || localStorage.getItem('campistry_camp_id');
-            if(client&&typeof client.from==='function'&&campId) break;
+            if(client&&typeof client.rpc==='function'&&campId) break;
             await new Promise(function(r){setTimeout(r,250);});
         }
-        if(!client||typeof client.from!=='function'||!campId){
+        if(!client||typeof client.rpc!=='function'||!campId){
             console.warn('[Register] Cloud client unavailable — application saved locally only');
             return {ok:false,reason:'no-client'};
         }
-        // Fetch-merge so we never drop cloud-only enrollments/families.
-        var cur=await client.from('camp_state_kv').select('value').eq('camp_id',campId).eq('key','campistryMe').maybeSingle();
-        var cloudMe=(cur&&cur.data&&cur.data.value&&typeof cur.data.value==='object')?cur.data.value:{};
-        var merged=Object.assign({},cloudMe,campistryMe);
-        merged.enrollments=Object.assign({},cloudMe.enrollments||{},campistryMe.enrollments||{});
-        var up=await client.from('camp_state_kv').upsert({camp_id:campId,key:'campistryMe',value:merged,updated_at:new Date().toISOString()},{onConflict:'camp_id,key'});
-        if(up&&up.error){ console.warn('[Register] Cloud upsert failed:',up.error.message); return {ok:false,reason:up.error.message}; }
-        console.log('[Register] ✓ Application synced to cloud — '+Object.keys(merged.enrollments||{}).length+' enrollment(s)');
+        // One call per camper (siblings submit as separate enrollment entries).
+        // submit_public_application (migration 082) does the merge atomically
+        // server-side — no read-modify-write from this browser, so two
+        // families submitting around the same moment can't clobber each other.
+        var ids=Object.keys(campistryMe.enrollments||{});
+        for(var j=0;j<ids.length;j++){
+            var id=ids[j];
+            var res=await client.rpc('submit_public_application',{p_camp_id:campId,p_kind:'enrollments',p_entry_id:id,p_entry:campistryMe.enrollments[id]});
+            if(res&&res.error){ console.warn('[Register] Cloud submit failed for',id,res.error.message); return {ok:false,reason:res.error.message}; }
+            if(res&&res.data&&res.data.success===false){ console.warn('[Register] Cloud submit rejected for',id,res.data.error); return {ok:false,reason:res.data.error}; }
+        }
+        console.log('[Register] ✓ Application synced to cloud — '+ids.length+' enrollment(s)');
         return {ok:true};
     }catch(e){ console.warn('[Register] Cloud flush error:',e&&e.message); return {ok:false,reason:e&&e.message}; }
 }

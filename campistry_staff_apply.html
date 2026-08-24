@@ -384,7 +384,7 @@ window.clearSig=function(){sigCtx.clearRect(0,0,sigCtx.canvas.width,sigCtx.canva
 
 function showErr(m){var el=document.getElementById('formErr');el.textContent=m;el.style.display='block';el.scrollIntoView({behavior:'smooth',block:'center'});}
 
-window.submitApp=function(){
+window.submitApp=async function(){
     document.getElementById('formErr').style.display='none';
     var first=v('aF'),last=v('aL'),email=v('aE'),phone=v('aP');
     var positions=[].map.call(document.querySelectorAll('.posCb:checked'),function(c){return c.value;});
@@ -463,37 +463,43 @@ window.submitApp=function(){
         g.campistryMe.staffApplications[id]=rec;
         g.updated_at=new Date().toISOString();
         localStorage.setItem('campGlobalSettings_v1',JSON.stringify(g));
-        _flushToCloud(g.campistryMe.staffApplications).then(function(res){
-            var el=document.getElementById('cloudSyncNote');if(!el)return;
-            if(res&&res.ok){el.textContent='✓ Received by the camp';el.style.color='var(--ok)';}
-            else{el.textContent='⚠ Saved on this device — reconnect to finish sending your application';el.style.color='var(--me)';}
-        });
     }catch(e){console.error('[StaffApply] save error',e);return showErr('Error submitting. Please try again.');}
+
+    // Persist to the cloud via submit_public_application (migration 082) — a
+    // SECURITY DEFINER RPC granted to anon, since this page has no login at
+    // all and camp_state_kv's own RLS only allows owner/admin. AWAITED — the
+    // success screen below only shows once the camp has actually received
+    // this application, not just this browser.
+    var cloudRes=await _flushToCloud(id,rec);
+    if(!cloudRes||!cloudRes.ok){
+        console.error('[StaffApply] Cloud submit failed:',cloudRes&&cloudRes.reason);
+        return showErr('Your application was saved on this device but could not reach the camp ('+((cloudRes&&cloudRes.reason)||'connection problem')+'). Please check your connection and press Submit again.');
+    }
 
     document.getElementById('formWrap').style.display='none';
     document.getElementById('okWrap').style.display='block';
+    var syncNote=document.getElementById('cloudSyncNote');
+    if(syncNote){syncNote.textContent='✓ Received by the camp';syncNote.style.color='var(--ok)';}
     document.getElementById('okMsg').textContent='Thanks, '+first+'! We\'ve received your application for '+positions.join(', ')+' and will be in touch.';
     window.scrollTo(0,0);
 };
 
-// Fetch-merge the new application into the camp's staffApplications so we never
-// clobber other applicants that came in on other devices.
-async function _flushToCloud(staffApps){
+// Submit this one application via the public RPC — no read-modify-write
+// from this browser, so the atomic server-side merge (migration 082) can't
+// clobber another applicant who submitted around the same moment.
+async function _flushToCloud(id,rec){
     try{
         var client=null,campId=null;
         for(var i=0;i<48;i++){
-            client=(window.CampistryDB&&window.CampistryDB.getClient&&window.CampistryDB.getClient())||(window.supabase&&typeof window.supabase.from==='function'?window.supabase:null);
+            client=(window.CampistryDB&&window.CampistryDB.getClient&&window.CampistryDB.getClient())||(window.supabase&&typeof window.supabase.rpc==='function'?window.supabase:null);
             campId=(window.CampistryDB&&window.CampistryDB.getCampId&&window.CampistryDB.getCampId())||localStorage.getItem('campistry_camp_id');
-            if(client&&typeof client.from==='function'&&campId)break;
+            if(client&&typeof client.rpc==='function'&&campId)break;
             await new Promise(function(r){setTimeout(r,250);});
         }
-        if(!client||!campId)return{ok:false,reason:'no-client'};
-        var cur=await client.from('camp_state_kv').select('value').eq('camp_id',campId).eq('key','campistryMe').maybeSingle();
-        var cloudMe=(cur&&cur.data&&cur.data.value&&typeof cur.data.value==='object')?cur.data.value:{};
-        var merged=Object.assign({},cloudMe);
-        merged.staffApplications=Object.assign({},cloudMe.staffApplications||{},staffApps||{});
-        var up=await client.from('camp_state_kv').upsert({camp_id:campId,key:'campistryMe',value:merged,updated_at:new Date().toISOString()},{onConflict:'camp_id,key'});
-        if(up&&up.error)return{ok:false,reason:up.error.message};
+        if(!client||typeof client.rpc!=='function'||!campId)return{ok:false,reason:'no-client'};
+        var res=await client.rpc('submit_public_application',{p_camp_id:campId,p_kind:'staffApplications',p_entry_id:id,p_entry:rec});
+        if(res&&res.error)return{ok:false,reason:res.error.message};
+        if(res&&res.data&&res.data.success===false)return{ok:false,reason:res.data.error};
         return{ok:true};
     }catch(e){return{ok:false,reason:e&&e.message};}
 }

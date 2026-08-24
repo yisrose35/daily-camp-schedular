@@ -515,33 +515,39 @@ window.submitApp=function submitApp(){
     saveResponse(rec);
 }
 
-// Direct, awaited, fetch-merged cloud upsert — same reliability pattern
-// campistry_register.html's submitApp() uses (_flushEnrollmentsToCloud),
-// but scoped to just THIS one enrollment id so a stale local snapshot on
-// this device can never clobber other campers' records in the cloud.
+// Submit via submit_postaccept_response (migration 082) — a SECURITY
+// DEFINER RPC granted to anon, since this page has no login and
+// camp_state_kv's own RLS only allows owner/admin. The direct anon upsert
+// this used to do was ALWAYS rejected by that RLS — every post-acceptance
+// form submission has failed at this step until now. The RPC merges
+// {postAccept: rec} onto the existing enrollment atomically server-side —
+// no read-modify-write from this browser, so a stale local snapshot can
+// never clobber another camper's record in the cloud.
 async function saveResponse(rec){
     var btn=document.querySelector('.sub-btn'); if(btn){btn.disabled=true;btn.textContent='Submitting…';}
     var errEl=document.getElementById('formErr');
     try{
         var client=null, campId=null;
         for(var i=0;i<48;i++){ // up to ~12s
-            client=(window.CampistryDB&&window.CampistryDB.getClient&&window.CampistryDB.getClient())||(window.supabase&&typeof window.supabase.from==='function'?window.supabase:null);
+            client=(window.CampistryDB&&window.CampistryDB.getClient&&window.CampistryDB.getClient())||(window.supabase&&typeof window.supabase.rpc==='function'?window.supabase:null);
             campId=(window.CampistryDB&&window.CampistryDB.getCampId&&window.CampistryDB.getCampId())||localStorage.getItem('campistry_camp_id');
-            if(client&&typeof client.from==='function'&&campId)break;
+            if(client&&typeof client.rpc==='function'&&campId)break;
             await new Promise(function(r){setTimeout(r,250);});
         }
-        if(!client||typeof client.from!=='function'||!campId)throw new Error('Could not reach the camp — check your connection and try again.');
-        var cur=await client.from('camp_state_kv').select('value').eq('camp_id',campId).eq('key','campistryMe').maybeSingle();
-        var cloudMe=(cur&&cur.data&&cur.data.value&&typeof cur.data.value==='object')?cur.data.value:{};
-        var cloudEnrollments=cloudMe.enrollments||{};
-        var existing=cloudEnrollments[_enrollId]||_enrollRecord||{};
-        var merged=Object.assign({},cloudMe);
-        merged.enrollments=Object.assign({},cloudEnrollments);
-        merged.enrollments[_enrollId]=Object.assign({},existing,{postAccept:rec});
-        var up=await client.from('camp_state_kv').upsert({camp_id:campId,key:'campistryMe',value:merged,updated_at:new Date().toISOString()},{onConflict:'camp_id,key'});
-        if(up&&up.error)throw new Error(up.error.message);
+        if(!client||typeof client.rpc!=='function'||!campId)throw new Error('Could not reach the camp — check your connection and try again.');
+        var res=await client.rpc('submit_postaccept_response',{p_camp_id:campId,p_enroll_id:_enrollId,p_postaccept:rec});
+        if(res&&res.error)throw new Error(res.error.message);
+        if(res&&res.data&&res.data.success===false)throw new Error(res.data.error);
         // Best-effort local cache nudge — only helps an admin on this SAME device.
-        try{ if(window.saveGlobalSettings&&window.saveGlobalSettings._isAuthoritativeHandler)window.saveGlobalSettings('campistryMe',merged); }catch(_){}
+        try{
+            if(window.saveGlobalSettings&&window.saveGlobalSettings._isAuthoritativeHandler){
+                var g=JSON.parse(localStorage.getItem('campGlobalSettings_v1')||'{}');
+                var me=Object.assign({},g.campistryMe);
+                me.enrollments=Object.assign({},me.enrollments||{});
+                me.enrollments[_enrollId]=Object.assign({},me.enrollments[_enrollId]||_enrollRecord||{},{postAccept:rec});
+                window.saveGlobalSettings('campistryMe',me);
+            }
+        }catch(_){}
         showState('successWrap');
         window.scrollTo(0,0);
     }catch(ex){
