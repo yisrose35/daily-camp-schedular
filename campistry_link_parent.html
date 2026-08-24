@@ -3651,9 +3651,19 @@ window.addEventListener('storage', function(e) {
     }
     // Branded to match the sign-in screen it hands over to. It used to be a
     // white sheet, so opening the app flashed white and then jumped to green.
-    function _showLoading(msg) {
+    function _showLoading(msg, noAnim) {
+        // noAnim: the very first thing a launch shows is this screen, for
+        // the near-instant "checking your session" step — getSession()
+        // usually resolves inside the .lk-login entrance animation's own
+        // 0.5s, so the real screen it flips to (sign-in or portal-loading)
+        // would restart that animation mid-flight: the still-arriving
+        // loading card visibly snaps back and re-animates in as the next
+        // screen. Rendering this one instance static removes the collision
+        // — whatever follows gets one clean entrance instead of two competing
+        // ones. Later _showLoading calls (after a real user action) follow
+        // an already-settled screen, so they keep the normal animation.
         _showOverlay('parentAuthOverlay',
-            '<div class="lk-login">' +
+            '<div class="lk-login"' + (noAnim ? ' style="animation:none;"' : '') + '>' +
             '<div class="lk-login-badge"><span class="lk-login-mark" role="img" aria-label="Campistry"></span></div>' +
             '<h1 class="lk-login-title">Campistry <span>Link</span></h1>' +
             '<div style="width:26px;height:26px;border:3px solid rgba(255,255,255,0.28);border-top-color:#fff;border-radius:50%;animation:_pa_spin .7s linear infinite;margin:26px auto 14px;"></div>' +
@@ -3672,6 +3682,21 @@ window.addEventListener('storage', function(e) {
         else el.style.color = color || '#EF4444';
     }
     function _esc(s) { return String(s||'').replace(/&/g,'&amp;').replace(/"/g,'&quot;').replace(/</g,'&lt;'); }
+
+    // Remembers the last email that actually signed in/up on this device, so
+    // a returning parent sees it prefilled instead of retyping it every
+    // launch. Deliberately used as a fallback wherever a call site doesn't
+    // have a more specific email of its own (see _showSignIn) rather than
+    // only at the cold-boot entry point — every one of those call sites
+    // passes '' because it genuinely has nothing better to offer, not
+    // because it wants to blank a known email.
+    var _LAST_EMAIL_KEY = 'campistry_link_last_email';
+    function _rememberEmail(email) {
+        try { if (email) localStorage.setItem(_LAST_EMAIL_KEY, email); } catch (_) {}
+    }
+    function _lastEmail() {
+        try { return localStorage.getItem(_LAST_EMAIL_KEY) || ''; } catch (_) { return ''; }
+    }
 
     // Live canteen balances — get_canteen_accounts (migration 019) reads the
     // SAME camp_state_kv blob the admin Snacks dashboard/POS terminal use, so
@@ -4191,7 +4216,7 @@ window.addEventListener('storage', function(e) {
     // a session is currently live (hasLiveSession, for parentRunBio's restore
     // path). Nothing else has to know biometrics exists.
     function _showSignIn(prefillEmail, errorMsg, hasLiveSession) {
-        var ev = prefillEmail || '';
+        var ev = prefillEmail || _lastEmail();
         var err = errorMsg ? '<div class="lk-login-err">'+_esc(errorMsg)+'</div>' : '';
         // Mirrors the condition the entry point used to gate _showBioUnlock:
         // enrolled, not already passed this load, and something to actually
@@ -4236,7 +4261,13 @@ window.addEventListener('storage', function(e) {
                 requestAnimationFrame(function () { setTimeout(window.parentRunBio, 1500); });
             });
         }
-        setTimeout(function(){var f=document.getElementById('paEmail');if(f&&!ev)f.focus();else{var p=document.getElementById('paPass');if(p)p.focus();}},100);
+        // Skipped when the OS biometric sheet is about to appear (above): the
+        // software keyboard popping up for a moment right before Face
+        // ID/fingerprint takes over the screen is exactly the kind of
+        // flash-then-replace jank that reads as buggy rather than smooth.
+        if (!bioReady) {
+            setTimeout(function(){var f=document.getElementById('paEmail');if(f&&!ev)f.focus();else{var p=document.getElementById('paPass');if(p)p.focus();}},100);
+        }
     }
 
     window.parentRunBio = function () {
@@ -4464,6 +4495,7 @@ window.addEventListener('storage', function(e) {
         db.auth.signInWithPassword({email:email, password:pass}).then(function(res) {
             if (res.error) { console.error('[Parent] Sign in error:', res.error); _setMsg(res.error.message); return; }
             console.log('[Parent] Signed in OK');
+            _rememberEmail(email);
             var session = (res.data && res.data.session) || null;
             if (Bio) Bio.saveSession(session);
             if (window.campistryPushRegister) window.campistryPushRegister();   // ask only once there is something to notify about
@@ -4495,6 +4527,7 @@ window.addEventListener('storage', function(e) {
                 } else { _setMsg(m); }
                 return;
             }
+            _rememberEmail(email);
             if (!res.data.session) {
                 _setMsg('Check your email to confirm your account, then come back and sign in.', '#0F172A');
                 setTimeout(function(){ _showSignIn(email); }, 4000);
@@ -4718,7 +4751,7 @@ window.addEventListener('storage', function(e) {
     // ── Entry point ───────────────────────────────────────────────────────────
     // Invite URL → always show auth screen (never auto-claim from existing session)
     // No token   → check session → auto-load if linked, else sign-in
-    _showLoading('Checking your session…');
+    _showLoading('Checking your session…', true);
     if (urlToken) {
         _validateThenShowSignup(urlToken);
     } else {
