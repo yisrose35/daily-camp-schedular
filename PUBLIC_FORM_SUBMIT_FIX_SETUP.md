@@ -36,7 +36,7 @@ read-modify-write-from-the-browser approach.
 ## 1. Run the migration
 
 ```
-082_public_application_submit.sql
+083_public_application_submit.sql
 ```
 
 Paste into the Supabase SQL Editor. Safe to re-run.
@@ -76,5 +76,5 @@ This is pure SQL — no edge functions were touched, nothing to redeploy.
 
 ## Migration SQL
 
-See `migrations/082_public_application_submit.sql` for the full, commented
+See `migrations/083_public_application_submit.sql` for the full, commented
 SQL — not duplicated here to avoid the two copies drifting apart.

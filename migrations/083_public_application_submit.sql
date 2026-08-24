@@ -1,5 +1,5 @@
 -- =============================================================================
--- Migration 082: real cloud delivery for public application forms.
+-- Migration 083: real cloud delivery for public application forms.
 --
 -- CRITICAL BUG FIXED: campistry_register.html, campistry_staff_apply.html,
 -- and campistry_postaccept.html have all been writing directly to
