@@ -111,6 +111,7 @@
     let meMedDivision = 'All';        // Me Lite medical division chip
     let meStaffQuery = '';            // Me Lite staff directory search
     let liveRollDivision = 'All';     // Live Lite roll-call division chip
+    let liveRollBunkFilter = null;    // set by scannerManualLookup's QR-unreadable fallback; cleared by tapping it away
     let liveChangesQuery = '';        // Live Lite changes search
     const liveDayCache = {};          // dateKey → live daily state (attendance/absences/earlyPickups)
     const liveDayPending = {};        // dateKey → in-flight promise
@@ -468,6 +469,28 @@
         } catch (e) {
             console.warn('[Lite] fresh bunk-serial fetch failed, using cached copy:', e?.message || e);
             return camp.bunkSerials || {};
+        }
+    }
+
+    // Fresh fetch of the print-time roster snapshot (liveBunkSheetRoster,
+    // written by scannerSaveRosterSnapshot in campistry_live.js) — same
+    // "always fetch fresh, right before a scan decodes it" reasoning as
+    // loadBunkSerials above. This is the row->camper mapping that must be
+    // used for scanning: it reflects who was actually on the PAPER, not
+    // whoever the live roster says is in that bunk right now.
+    async function loadBunkSheetRosterSnapshot() {
+        try {
+            const { data, error } = await window.supabase
+                .from('camp_state_kv')
+                .select('value')
+                .eq('camp_id', campId)
+                .eq('key', 'liveBunkSheetRoster')
+                .maybeSingle();
+            if (error) throw error;
+            return (data && data.value) || {};
+        } catch (e) {
+            console.warn('[Lite] fresh roster-snapshot fetch failed:', e?.message || e);
+            return {};
         }
     }
 
@@ -3538,6 +3561,27 @@
             ${statTileHTML(t.unmarked, 'Not marked')}
         </div>`;
 
+        // A bunk-specific filter (set when the QR on a scanned sheet couldn't
+        // be read — see scannerManualLookup) takes over the whole view until
+        // cleared, same shape as the office Live app's own "scan this bunk by
+        // hand" fallback.
+        if (liveRollBunkFilter) {
+            const campers = campersInBunk(liveRollBunkFilter);
+            body.innerHTML = strip +
+                `<button type="button" class="lite-chip active" id="liteRollClearBunkFilter">Showing: ${esc(liveRollBunkFilter)} — tap to show all bunks ×</button>` +
+                '<div id="liteRollGroups"></div>';
+            const holder = body.querySelector('#liteRollGroups');
+            const here = campers.filter(c => liveStatusFor(c.name, day).status === 'present').length;
+            holder.innerHTML = campers.length
+                ? `<div class="lite-section-label">${esc(liveRollBunkFilter)} · ${here}/${campers.length} here</div>` +
+                    campers.map(c => liveRollRowHTML(c, liveStatusFor(c.name, day))).join('')
+                : emptyHTML('', 'No campers in this bunk.');
+            wireMeRoster(holder);
+            const clearBtn = body.querySelector('#liteRollClearBunkFilter');
+            if (clearBtn) clearBtn.addEventListener('click', () => { liveRollBunkFilter = null; renderLiveRoll(); });
+            return;
+        }
+
         body.innerHTML = strip + chipRowHTML(chips, liveRollDivision) + '<div id="liteRollGroups"></div>';
         body.querySelectorAll('.lite-chip').forEach(ch =>
             ch.addEventListener('click', () => { liveRollDivision = ch.dataset.val; renderLiveRoll(); }));
@@ -3633,6 +3677,7 @@
         return { x: (h[0] * x + h[1] * y + h[2]) / denom, y: (h[3] * x + h[4] * y + h[5]) / denom };
     }
     let _scanResults = [], _scanBunkLabel = '', _scanCanvas = null, _scanCtx = null, _scanDateKey = null, _scanSheetEl = null;
+    let _scanNoSnapshot = false, _scanRosterDrifted = false;
     // A queue of photos, each one bunk's sheet, walked one at a time through
     // the same QR+bubble pipeline. A single native/file capture always hands
     // us exactly one; "Choose from library" is SUPPOSED to allow picking
@@ -3976,8 +4021,21 @@
         const bunkName = Object.keys(serials).find(name => serials[name] === qrSerial);
         if (!bunkName) { scannerShowError('This sheet’s bunk number isn’t recognized — it may be from a different camp, or the bunk registry was reset. Reprint templates and rescan.'); return; }
 
-        const campers = campersInBunk(bunkName).map(c => c.name);
+        // Row N must match camper N of THIS SHEET's print-time roster, not
+        // whoever's in the bunk right now — a transfer/add/remove between
+        // printing and scanning would otherwise silently shift every row
+        // after it onto the wrong camper. Fall back to today's live roster
+        // only for a sheet printed before this snapshot existed at all
+        // (flagged to the secretary either way it's used).
+        const rosterSnapshot = await loadBunkSheetRosterSnapshot();
+        const snapshotCampers = rosterSnapshot[qrSerial];
+        const liveCampers = campersInBunk(bunkName).map(c => c.name);
+        const campers = (Array.isArray(snapshotCampers) && snapshotCampers.length) ? snapshotCampers : liveCampers;
         if (!campers.length) { scannerShowError(`Bunk "${bunkName}" has no campers in the roster.`); return; }
+
+        _scanNoSnapshot = !(Array.isArray(snapshotCampers) && snapshotCampers.length);
+        _scanRosterDrifted = !_scanNoSnapshot &&
+            (snapshotCampers.length !== liveCampers.length || snapshotCampers.some((n, i) => liveCampers[i] !== n));
 
         _scanBunkLabel = bunkName + ' · ' + currentDate;
         _scanDateKey = currentDate;
@@ -4057,8 +4115,14 @@
         const serials = await loadBunkSerials();
         const bunkName = Object.keys(serials).find(name => serials[name] === n);
         if (!bunkName) { toast('No bunk found with that number'); return; }
-        toast('That’s ' + bunkName + '’s sheet — mark it by hand in Roll Call');
-        scannerSkipQueueItem();
+        // Same behavior as the office Live app's own QR-unreadable fallback —
+        // actually land the secretary on that bunk's roll call, not just tell
+        // them to go find it themselves.
+        if (typeof scannerCloseLive === 'function') scannerCloseLive();
+        closeSheet();
+        liveRollBunkFilter = bunkName;
+        switchTab('liveRoll');
+        toast('That’s ' + bunkName + '’s sheet — mark it by hand below');
     }
 
     const SCAN_STATE_LABEL = { present: 'Here', absent: 'Absent', unmarked: 'Not marked', ambiguous: 'Both filled' };
@@ -4071,6 +4135,11 @@
         const more = _scanQueue.length > 1;
         const progress = more ? ` (photo ${_scanQueueIndex + 1} of ${_scanQueue.length})` : '';
         let html = `<div class="lite-note" style="margin:8px 0;"><strong>${esc(_scanBunkLabel)}</strong>${esc(progress)} — ${present} present, ${absent} absent${needsReview ? `, ${needsReview} need${needsReview === 1 ? 's' : ''} review` : ''}. Tap to correct any errors — rows needing review are skipped until fixed.</div>`;
+        if (_scanRosterDrifted) {
+            html += `<div class="lite-warn" style="margin:0 0 8px;">⚠️ This bunk's roster has changed since this sheet was printed (someone added, removed, or transferred) — double-check every name below before confirming, row order may not match.</div>`;
+        } else if (_scanNoSnapshot) {
+            html += `<div class="lite-warn" style="margin:0 0 8px;">⚠️ This is an older template printed before name-verification was added — please double-check each name before confirming.</div>`;
+        }
         html += _scanResults.map((r, i) => {
             const cls = r.state === 'present' ? 'present' : r.state === 'absent' ? 'absent' : 'left';
             return `

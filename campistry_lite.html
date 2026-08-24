@@ -154,7 +154,14 @@
                     'campistry_push.js',
                     'campistry_keyboard.js',
                     'campistry_lite_capacitor.js',   // native shell glue; no-op on the web
-                    'https://cdn.jsdelivr.net/npm/jsqr@1.4.0/dist/jsQR.js',  // roll-call bubble-sheet scan
+                    // Same reasoning as the supabase-js bundling above — this is
+                    // the roll-call bubble-sheet scan, exactly the offline/bad-
+                    // reception scenario the rest of this boot chain was
+                    // hardened for, so it can't be the one entry still fetched
+                    // from a CDN on native.
+                    (native || window.location.protocol === 'file:')
+                        ? 'jsqr@1.4.0.js'
+                        : 'https://cdn.jsdelivr.net/npm/jsqr@1.4.0/dist/jsQR.js',
                     'campistry_lite.js',
                     'campistry_ota.js'               // LAST: confirms the bundle booted (live updates)
                 ];

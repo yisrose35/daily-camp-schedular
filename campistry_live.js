@@ -613,6 +613,13 @@ function esc(s) { if (s == null) return ''; var d = document.createElement('div'
     };
     const SCAN_QR_PREFIX = 'CSR2:';
     const SCAN_SERIALS_KEY = 'liveBunkSerials';
+    // Row N on a printed sheet is matched to camper N of that bunk's roster
+    // AT PRINT TIME, not "whoever's in the bunk when the scan happens" — a
+    // bunk transfer/add/remove between printing and scanning would otherwise
+    // silently shift every row after it onto the wrong camper, with nothing
+    // in the UI to catch it. Keyed by serial (not bunk name) so it survives
+    // a bunk rename and never collides with a re-print for a different bunk.
+    const SCAN_ROSTER_SNAPSHOT_KEY = 'liveBunkSheetRoster';
 
     // Solve the 3x3 projective matrix (8 unknowns, h33 fixed to 1) mapping
     // 4 template-space points to 4 photo-space points, via the standard DLT
@@ -665,6 +672,22 @@ function esc(s) { if (s == null) return ''; var d = document.createElement('div'
     function scannerLoadSerials() {
         try { return (window.loadGlobalSettings && window.loadGlobalSettings(SCAN_SERIALS_KEY)) || {}; }
         catch (e) { return {}; }
+    }
+
+    function scannerLoadRosterSnapshot() {
+        try { return (window.loadGlobalSettings && window.loadGlobalSettings(SCAN_ROSTER_SNAPSHOT_KEY)) || {}; }
+        catch (e) { return {}; }
+    }
+
+    // Called at print time, once per bunk actually printed: records the
+    // EXACT ordered camper list that was used to lay out that bunk's sheet,
+    // keyed by its (already-assigned) serial. This is the row->camper
+    // mapping the scan side must use — never re-derive it from "today's"
+    // roster, which may have drifted since printing.
+    function scannerSaveRosterSnapshot(entries) {
+        const snap = scannerLoadRosterSnapshot();
+        entries.forEach(({ serial, campers }) => { snap[serial] = campers; });
+        if (window.saveGlobalSettings) window.saveGlobalSettings(SCAN_ROSTER_SNAPSHOT_KEY, snap);
     }
 
     // Called at print time: assigns a serial to any bunk in bunkNames that
@@ -990,6 +1013,21 @@ function esc(s) { if (s == null) return ''; var d = document.createElement('div'
         if (unassigned.length) {
             toast(unassigned.length + ' bunk(s) could not get an ID number (registry full) — skipped: ' + unassigned.map(p => p.bunkName).join(', '), 'error');
         }
+
+        // Freeze the exact row order for every sheet actually printed — the
+        // scan side must match bubbles against WHO WAS ON THE PAPER, not
+        // whoever the live roster says is in that bunk when it's scanned.
+        scannerSaveRosterSnapshot(
+            bunkPages.filter(p => serials[p.bunkName] != null)
+                .map(p => ({ serial: serials[p.bunkName], campers: p.campers }))
+        );
+        // Both the serial and the snapshot just written are debounced
+        // (SYNC_DEBOUNCE_MS) by default — flush now rather than making a
+        // secretary who scans within seconds of printing hit a spurious
+        // "bunk not recognized" error. Fire-and-forget: printing shouldn't
+        // wait on a network round trip, this just shrinks the race window
+        // from ~500ms to however long the flush actually takes.
+        if (window.forceSyncToCloud) window.forceSyncToCloud().catch(() => {});
 
         const pages = bunkPages.filter(p => serials[p.bunkName] != null).map(({ bunkName, divName, campers }) => {
             const serial = serials[bunkName];
