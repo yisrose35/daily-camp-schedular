@@ -43,6 +43,7 @@ const FILES = [
     'campistry_lite.js',
     'campistry_lite_login.js',
     'campistry_lite_capacitor.js', // native glue; a no-op on the web
+    'jsqr@1.4.0.js',                // vendored QR decoder — the roll-call bubble-sheet scan needs to work offline too
     'campistry_bio_native.js',     // shared native biometrics bridge
     'campistry_haptics.js',        // shared haptics + the Settings preference
     'campistry_keyboard.js',       // keeps the focused field clear of the keyboard
@@ -94,7 +95,7 @@ for (const entry of FILES) {
 const REF_RE = /['"]([A-Za-z0-9_@.\-]+\.(?:js|css|png|svg|webmanifest|html))['"]/g;
 // Third-party bundles: nothing in them refers to a repo file, and their
 // minified strings ("Node.js") trip the reference scan.
-const SKIP_SCAN = new Set(['supabase-js@2.js']);
+const SKIP_SCAN = new Set(['supabase-js@2.js', 'jsqr@1.4.0.js']);
 const missing = new Map();
 for (const name of fs.readdirSync(WWW)) {
     if (!/\.(html|js|css)$/i.test(name)) continue;
