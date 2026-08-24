@@ -23,6 +23,12 @@
 // handleCanteenDeposit() and migrations/079_canteen_stripe_deposits.sql. It
 // must NEVER also land in campistryMe.finance.payments, or Billing/Analytics
 // would misreport a canteen top-up as tuition revenue.
+//
+// LINK PHOTO PURCHASES are a third either/or path: metadata.source ===
+// 'campistry-link-photo-purchase' (created by link-photo-checkout, a
+// SEPARATE function from stripe-checkout) records a facial-recognition or
+// HD-photo unlock into link_photo_purchases instead — see
+// handleLinkPhotoPurchase() and migrations/081_link_photo_purchases.sql.
 // =============================================================================
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
@@ -162,6 +168,37 @@ async function handleCanteenDeposit(
   console.log(`[stripe-webhook] canteen deposit $${(pi.amount || 0) / 100} for ${camperName} (camp ${campId}): ${error ? "FAILED " + error.message : JSON.stringify(data)}`);
 }
 
+// Same "only 'succeeded' counts" rule as canteen deposits above — a parent
+// shouldn't see their photo folder/download unlock before Stripe confirms
+// the charge is final. record_link_photo_purchase (migration 081) is
+// idempotent on stripe_payment_intent_id, so a webhook retry is safe.
+async function handleLinkPhotoPurchase(
+  supabase: ReturnType<typeof createClient>,
+  campId: string,
+  pi: Record<string, any>,
+  status: "pending" | "succeeded" | "failed",
+) {
+  if (status !== "succeeded") {
+    console.log(`[stripe-webhook] link photo purchase ${pi.id} status=${status} — no record written (only 'succeeded' unlocks)`);
+    return;
+  }
+  const meta = pi.metadata || {};
+  if (!meta.kind || !meta.parentUserId) {
+    console.error(`[stripe-webhook] link photo purchase ${pi.id} missing kind/parentUserId in metadata — skipping`);
+    return;
+  }
+  const { data, error } = await supabase.rpc("record_link_photo_purchase", {
+    p_camp_id: campId,
+    p_parent_user_id: meta.parentUserId,
+    p_kind: meta.kind,
+    p_camper_name: meta.camperName || null,
+    p_photo_id: meta.photoId || null,
+    p_amount_cents: pi.amount || 0,
+    p_payment_intent_id: pi.id,
+  });
+  console.log(`[stripe-webhook] link photo purchase (${meta.kind}) $${(pi.amount || 0) / 100} camp ${campId}: ${error ? "FAILED " + error.message : JSON.stringify(data)}`);
+}
+
 serve(async (req) => {
   if (req.method === "OPTIONS") return new Response("ok", { headers: corsHeaders });
 
@@ -196,6 +233,9 @@ serve(async (req) => {
       } else if (pi.metadata?.source === "campistry-canteen-deposit") {
         // Either/or with the tuition path below — never both.
         await handleCanteenDeposit(supabase, campId, pi, statusFor[event.type]);
+      } else if (pi.metadata?.source === "campistry-link-photo-purchase") {
+        // Either/or — never lands in campistryMe.finance.payments either.
+        await handleLinkPhotoPurchase(supabase, campId, pi, statusFor[event.type]);
       } else {
         const ok = await upsertPayment(supabase, campId, pi, statusFor[event.type]);
         console.log(`[stripe-webhook] ledger ${statusFor[event.type]} $${(pi.amount || 0) / 100} camp ${campId}: ${ok ? "ok" : "FAILED"}`);

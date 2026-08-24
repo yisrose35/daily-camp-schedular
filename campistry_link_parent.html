@@ -525,8 +525,12 @@
         <div class="lk-ref-photo-grid" id="refPhotoGrid"></div>
     </div>
 
-    <div class="lk-tabs" id="photoTabs"><button class="lk-tab active" onclick="this.closest('.lk-tabs').querySelectorAll('.lk-tab').forEach(function(t){t.classList.remove('active')});this.classList.add('active')">All Photos</button></div>
-    <div class="lk-card"><div class="lk-card-head"><h2>This Week</h2><span style="font-size:.76rem;color:var(--text-muted);">12 new</span></div>
+    <div class="lk-tabs" id="photoTabs">
+        <button class="lk-tab active" data-tab="mine" onclick="_switchPhotoTab('mine',this)">My Kids</button>
+        <button class="lk-tab" data-tab="all" onclick="_switchPhotoTab('all',this)">All Camp Photos</button>
+    </div>
+    <div id="photoFrUpsell"></div>
+    <div class="lk-card"><div class="lk-card-head"><h2>This Week</h2><span style="font-size:.76rem;color:var(--text-muted);" id="photoGridCount"></span></div>
         <div id="photoGrid" style="display:grid;grid-template-columns:repeat(auto-fill,minmax(130px,1fr));gap:8px;"></div>
     </div>
 </div>
@@ -1828,21 +1832,103 @@ function _loadCamperFaceStatus(){
     }).catch(function(){});
 }
 
-// Load the parent's children's tagged photos from the cloud gallery.
-// get_my_camper_photos is metadata-only (migration 080) — actual pixels
-// come from a batched call to get-photo-urls (short-lived signed URLs).
+// Like _pRpcEachCamp but tags each returned item with which camp it came
+// from — needed once a per-photo action (buy the dedicated folder, buy an
+// HD download) has to know which camp's checkout to start.
+function _pRpcEachCampTagged(name,arrayField){
+    var camps=(typeof parent!=='undefined'&&parent&&parent.camps&&parent.camps.length)
+        ? parent.camps
+        : [{camp_id:(typeof parent!=='undefined'&&parent)?parent.campId:null}];
+    return Promise.all(camps.map(function(cp){
+        var cid=cp.camp_id||cp.campId||null;
+        var call=window._pRpc?window._pRpc(name,{},cid):(window._parentDB&&window._parentDB.rpc(name,{p_camp_id:cid}));
+        return Promise.resolve(call).then(function(res){
+            var items=(res&&res.data&&res.data.success&&Array.isArray(res.data[arrayField]))?res.data[arrayField]:[];
+            return items.map(function(it){ it._campId=cid; return it; });
+        }).catch(function(){return [];});
+    })).then(function(lists){ return [].concat.apply([],lists); });
+}
+
+// What has this parent already unlocked, across every camp they belong to
+// (migration 081) — a flat set of purchased camper names + a flat set of
+// purchased photo ids is enough; camper names are family-scoped and photo
+// ids are globally unique, so no per-camp bucketing is needed client-side.
+function _loadMyPhotoPurchases(){
+    var camps=(typeof parent!=='undefined'&&parent&&parent.camps&&parent.camps.length)
+        ? parent.camps
+        : [{camp_id:(typeof parent!=='undefined'&&parent)?parent.campId:null}];
+    return Promise.all(camps.map(function(cp){
+        var cid=cp.camp_id||cp.campId||null;
+        var call=window._pRpc?window._pRpc('get_my_photo_purchases',{},cid):(window._parentDB&&window._parentDB.rpc('get_my_photo_purchases',{p_camp_id:cid}));
+        return Promise.resolve(call).then(function(res){
+            var d=(res&&res.data&&res.data.success)?res.data:null;
+            return d?{fr:d.facialRecognition||[],hd:d.hdPhotoIds||[]}:{fr:[],hd:[]};
+        }).catch(function(){return {fr:[],hd:[]};});
+    })).then(function(results){
+        var fr={}, hd={};
+        results.forEach(function(r){ r.fr.forEach(function(n){fr[n]=true;}); r.hd.forEach(function(id){hd[id]=true;}); });
+        window._parentPhotoPurchases={fr:fr,hd:hd};
+        return window._parentPhotoPurchases;
+    });
+}
+
+// Start a Link Photos purchase (facial-recognition folder or HD download) —
+// needs the parent's REAL session token, same as _lkPhotoUrls, since
+// link-photo-checkout re-derives ownership server-side rather than trusting
+// these ids blindly.
+async function _lkBuyPhoto(campId,kind,extra){
+    var s=_lkSupa(), db=window._parentDB;
+    if(!s.url||!db){ toast('Payments are not set up for this camp yet.'); return; }
+    var sessRes=await db.auth.getSession();
+    var token=sessRes&&sessRes.data&&sessRes.data.session&&sessRes.data.session.access_token;
+    if(!token){ toast('Please sign in again.'); return; }
+    try{
+        var resp=await fetch(s.url+'/functions/v1/link-photo-checkout',{method:'POST',headers:{'Content-Type':'application/json','Authorization':'Bearer '+token,'apikey':s.anonKey||''},body:JSON.stringify(Object.assign({campId:campId,kind:kind},extra||{}))});
+        var data=await resp.json();
+        if(!resp.ok||data.error) throw new Error(data.error||'Could not start checkout');
+        if(data.alreadyPurchased){ toast('Already unlocked!'); _loadMyPhotoPurchases().then(function(){ if(typeof _loadParentPhotos==='function') _loadParentPhotos(); }); return; }
+        if(data.url) window.location.href=data.url;
+    }catch(e){ toast(e.message||'Could not start checkout'); }
+}
+
+// Switch between the free "All Camp Photos" browse tab and the paid
+// per-camper "My Kids" dedicated-folder tab — both render into the same
+// #photoGrid.
+function _switchPhotoTab(tab,btn){
+    var tabs=document.getElementById('photoTabs');
+    if(tabs)tabs.querySelectorAll('.lk-tab').forEach(function(t){t.classList.remove('active');});
+    if(btn)btn.classList.add('active');
+    if(tab==='all') _loadAllCampPhotos(); else _loadParentPhotos();
+}
+
+// "My Kids" tab — the paid, AI-filtered dedicated folder. get_my_camper_photos
+// (migration 081) now only returns a camper's photos once that specific
+// camper's facial-recognition folder has been purchased, so any of the
+// parent's children NOT yet purchased get an upsell button instead.
 function _loadParentPhotos(){
-    var db=window._parentDB, pg=document.getElementById('photoGrid');
+    var db=window._parentDB, pg=document.getElementById('photoGrid'), upsell=document.getElementById('photoFrUpsell');
     if(!pg||!db||typeof parent==='undefined'||!parent||!parent.campId)return;
-    _pRpcEachCamp('get_my_camper_photos','photos').then(function(photos){
-        photos=photos||[];
+    Promise.all([_pRpcEachCampTagged('get_my_camper_photos','photos'), _loadMyPhotoPurchases()]).then(function(res){
+        var photos=res[0]||[], purchases=res[1]||{fr:{},hd:{}};
         window._parentPhotoCache=photos;
         var sub=document.getElementById('homePhotosSub');if(sub)sub.textContent=photos.length?(photos.length+' photo'+(photos.length===1?'':'s')):'No photos yet';
+
+        if(upsell){
+            var kids=(typeof children!=='undefined'&&Array.isArray(children))?children:[];
+            var unpurchased=kids.filter(function(c){return c&&c.name&&!purchases.fr[c.name];});
+            upsell.innerHTML=unpurchased.length?('<div class="lk-card" style="margin-bottom:12px;padding:14px 16px;">'+
+                '<div style="font-weight:600;margin-bottom:8px;font-size:.9rem;">Get a dedicated photo folder</div>'+
+                '<div style="font-size:.8rem;color:var(--text-muted);margin-bottom:10px;">Our AI finds your child in every camp photo automatically — $20 one-time, unlocked for the rest of the season.</div>'+
+                unpurchased.map(function(c){return '<button class="btn btn-primary" style="margin:0 8px 8px 0;" onclick="_lkBuyPhoto(\''+(c.campId||parent.campId)+'\',\'facial_recognition\',{camperName:'+JSON.stringify(c.name)+'})">Get '+_escHtml(c.name)+"'s folder — $20</button>";}).join('')+
+                '</div>') : '';
+        }
+
+        var pgCount=document.getElementById('photoGridCount'); if(pgCount)pgCount.textContent=photos.length?(photos.length+' new'):'';
+        pg.innerHTML='';
         if(!photos.length)return; // keep the friendly empty state
         var ids=photos.map(function(p){return p.id;}).filter(Boolean);
         return _lkPhotoUrls(ids).then(function(urls){
             window._parentPhotoUrlCache=urls||{};
-            pg.innerHTML='';
             photos.forEach(function(p,i){
                 var url=window._parentPhotoUrlCache[p.id];
                 if(!url)return; // not authorized, or the upload never landed — skip rather than show a broken image
@@ -1858,27 +1944,100 @@ function _loadParentPhotos(){
         });
     }).catch(function(){});
 }
+
+// "All Camp Photos" tab — the new free tier (migration 081): the whole
+// camp's photo stream at preview resolution, no AI filtering or
+// camper-name labels attached, no purchase required.
+function _loadAllCampPhotos(){
+    var pg=document.getElementById('photoGrid'), upsell=document.getElementById('photoFrUpsell');
+    if(!pg||typeof parent==='undefined'||!parent||!parent.campId)return;
+    if(upsell)upsell.innerHTML='';
+    _pRpcEachCampTagged('get_camp_photos_browse','photos').then(function(photos){
+        photos=photos||[];
+        window._parentPhotoCache=photos;
+        var pgCount=document.getElementById('photoGridCount'); if(pgCount)pgCount.textContent=photos.length?(photos.length+' photos'):'';
+        pg.innerHTML='';
+        if(!photos.length)return;
+        var ids=photos.map(function(p){return p.id;}).filter(Boolean);
+        return _lkPhotoUrls(ids).then(function(urls){
+            window._parentPhotoUrlCache=urls||{};
+            photos.forEach(function(p,i){
+                var url=window._parentPhotoUrlCache[p.id];
+                if(!url)return;
+                var cell=document.createElement('div');
+                cell.style.cssText='aspect-ratio:1;border-radius:10px;overflow:hidden;background:var(--slate-100);cursor:pointer;';
+                var img=document.createElement('img');
+                img.src=url; img.alt=''; img.loading='lazy';
+                img.style.cssText='width:100%;height:100%;object-fit:cover;';
+                cell.appendChild(img);
+                cell.onclick=function(){_openParentPhoto(i);};
+                pg.appendChild(cell);
+            });
+        });
+    }).catch(function(){});
+}
+
 // Open a gallery photo full-size in a new tab (no huge string in the DOM
-// markup). Re-mints its own signed URL rather than reusing the grid's cached
-// one — the grid's URLs are only good for ~5 minutes, and a parent browsing
-// for a while before tapping a photo would otherwise hit an expired link.
+// markup). Re-mints its own signed preview URL rather than reusing the
+// grid's cached one — the grid's URLs are only good for ~5 minutes, and a
+// parent browsing for a while before tapping a photo would otherwise hit an
+// expired link. Also offers the $4 HD download (or the real download, if
+// already purchased) for THIS specific photo.
 function _openParentPhoto(i){
     var photos=window._parentPhotoCache||[]; var p=photos[i]; if(!p)return;
+    var campId=p._campId||(typeof parent!=='undefined'&&parent?parent.campId:null);
+    var purchased=!!(window._parentPhotoPurchases&&window._parentPhotoPurchases.hd&&window._parentPhotoPurchases.hd[p.id]);
     var w=window.open(); if(!w)return;
     var d=w.document; d.title='Camp photo';
-    d.body.style.margin='0'; d.body.style.background='#111';
-    d.body.innerHTML='<div style="color:#888;font:14px sans-serif;text-align:center;margin-top:40vh;">Loading…</div>';
+    d.body.style.margin='0'; d.body.style.background='#111'; d.body.style.fontFamily='sans-serif';
+    d.body.innerHTML='<div style="color:#888;text-align:center;margin-top:40vh;">Loading…</div>';
     _lkPhotoUrls([p.id]).then(function(urls){
         var url=urls&&urls[p.id];
-        if(!url){ d.body.innerHTML='<div style="color:#888;font:14px sans-serif;text-align:center;margin-top:40vh;">Photo unavailable</div>'; return; }
+        if(!url){ d.body.innerHTML='<div style="color:#888;text-align:center;margin-top:40vh;">Photo unavailable</div>'; return; }
         d.body.innerHTML='';
         var img=d.createElement('img');
         img.src=url;
-        img.style.cssText='max-width:100%;max-height:100vh;display:block;margin:auto;';
+        img.style.cssText='max-width:100%;max-height:90vh;display:block;margin:0 auto;';
         d.body.appendChild(img);
+        var bar=d.createElement('div');
+        bar.style.cssText='text-align:center;padding:14px;';
+        if(purchased){
+            var a=d.createElement('a');
+            a.href='#'; a.textContent='Download HD';
+            a.style.cssText='display:inline-block;padding:10px 18px;background:#fff;border-radius:8px;color:#111;text-decoration:none;font-weight:600;';
+            a.onclick=function(ev){
+                ev.preventDefault();
+                _fetchOriginalAndDownload(p.id,campId,w);
+                return false;
+            };
+            bar.appendChild(a);
+        }else{
+            var btn=d.createElement('button');
+            btn.textContent='Download HD — $4';
+            btn.style.cssText='padding:10px 18px;background:#fff;border:none;border-radius:8px;color:#111;font-weight:600;cursor:pointer;';
+            btn.onclick=function(){ w.close(); _lkBuyPhoto(campId,'hd_photo',{photoId:p.id}); };
+            bar.appendChild(btn);
+        }
+        d.body.appendChild(bar);
     }).catch(function(){
-        d.body.innerHTML='<div style="color:#888;font:14px sans-serif;text-align:center;margin-top:40vh;">Photo unavailable</div>';
+        d.body.innerHTML='<div style="color:#888;text-align:center;margin-top:40vh;">Photo unavailable</div>';
     });
+}
+
+// Fetch a signed original-resolution URL and hand the popup window a real
+// download link — separate round trip from the preview fetch since
+// get-photo-urls treats preview/original as mutually exclusive per call.
+function _fetchOriginalAndDownload(photoId,campId,w){
+    var s=_lkSupa(), db=window._parentDB;
+    if(!s.url||!db)return;
+    db.auth.getSession().then(function(sessRes){
+        var token=sessRes&&sessRes.data&&sessRes.data.session&&sessRes.data.session.access_token;
+        if(!token)return;
+        return fetch(s.url+'/functions/v1/get-photo-urls',{method:'POST',headers:{'Content-Type':'application/json','Authorization':'Bearer '+token,'apikey':s.anonKey||''},body:JSON.stringify({photoIds:[photoId],resolution:'original'})});
+    }).then(function(resp){ return resp&&resp.json(); }).then(function(data){
+        var url=data&&data.urls&&data.urls[photoId];
+        if(url&&w&&!w.closed) w.location.href=url;
+    }).catch(function(){});
 }
 
 var HEALTH_SUBMIT_KEY = 'campistry_health_submissions_v1';

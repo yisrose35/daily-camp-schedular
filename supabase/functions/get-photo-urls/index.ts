@@ -21,13 +21,14 @@
 //      — the same _parent_owns_camper + pending=false logic
 //      get_my_camper_photos already uses, batched into one round trip.
 //
-// PREVIEW URLs ONLY in this phase — original_path is never requested or
-// signed here. That gate belongs to Phase 3 (paid full-resolution
-// unlocks), which doesn't exist yet; until it does, nothing in this
-// codebase can ever retrieve an original-resolution photo, which is the
-// correct, safe default.
+// Preview URLs by default. Pass resolution:'original' to request the
+// full-resolution file instead (Phase 3, migration 081) — staff always get
+// it (they uploaded it, no purchase needed), a parent only gets it for a
+// photo they've actually bought an HD unlock for
+// (get_viewable_original_photo_ids, vs. get_viewable_photo_ids for
+// previews). Never mixed in one call — the whole batch is one resolution.
 //
-// Request:  { photoIds: string[] }
+// Request:  { photoIds: string[], resolution?: 'preview' | 'original' }
 //           header: Authorization: Bearer <caller's Supabase access token>
 // Response: { urls: { [photoId]: string | null } }
 // =============================================================================
@@ -56,13 +57,15 @@ serve(async (req) => {
     const jwt = (req.headers.get("Authorization") || "").replace(/^Bearer\s+/i, "");
     if (!jwt) return json({ error: "unauthorized" }, 401);
 
-    const { photoIds } = await req.json();
+    const { photoIds, resolution } = await req.json();
     if (!Array.isArray(photoIds) || photoIds.length === 0) {
       return json({ error: "photoIds must be a non-empty array" }, 400);
     }
     if (photoIds.length > MAX_IDS) {
       return json({ error: `Too many photoIds (max ${MAX_IDS})` }, 400);
     }
+    const wantOriginal = resolution === "original";
+    const pathColumn = wantOriginal ? "original_path" : "preview_path";
 
     const asUser = createClient(SUPABASE_URL, SUPABASE_ANON_KEY, {
       global: { headers: { Authorization: `Bearer ${jwt}` } },
@@ -72,52 +75,60 @@ serve(async (req) => {
     if (!userData?.user?.id) return json({ error: "unauthorized" }, 401);
 
     const service = createClient(SUPABASE_URL, SUPABASE_SERVICE_KEY);
-    const previewPathById: Record<string, string> = {};
+    const pathById: Record<string, string> = {};
 
     // Layer 1: staff access, enforced by link_photos' own RLS (lp_staff_all)
     // via the caller's own JWT-scoped client — only rows they're really
-    // staff of come back.
+    // staff of come back. Staff always get whichever resolution they asked
+    // for, no purchase check — they uploaded it.
     const { data: staffRows } = await asUser
       .from("link_photos")
-      .select("id, preview_path")
+      .select(`id, ${pathColumn}`)
       .in("id", photoIds);
     const staffAuthorizedIds = new Set<string>();
-    for (const row of staffRows || []) {
+    for (const row of (staffRows || []) as Record<string, any>[]) {
       staffAuthorizedIds.add(row.id);
-      if (row.preview_path) previewPathById[row.id] = row.preview_path;
+      if (row[pathColumn]) pathById[row.id] = row[pathColumn];
     }
 
     // Layer 2: whatever wasn't already authorized as staff — check the
-    // parent path in one batched call.
+    // parent path in one batched call. Previews use get_viewable_photo_ids
+    // (ownership + tag review only); originals ADD an HD-purchase check via
+    // get_viewable_original_photo_ids (migration 081) — this is the only
+    // place the purchase gate actually applies.
     const remainingIds = photoIds.filter((id: string) => !staffAuthorizedIds.has(id));
     const parentAuthorizedIds = new Set<string>();
     if (remainingIds.length > 0) {
-      const { data: viewableIds } = await asUser.rpc("get_viewable_photo_ids", { p_photo_ids: remainingIds });
+      const rpcName = wantOriginal ? "get_viewable_original_photo_ids" : "get_viewable_photo_ids";
+      const { data: viewableIds } = await asUser.rpc(rpcName, { p_photo_ids: remainingIds });
       for (const id of viewableIds || []) parentAuthorizedIds.add(id);
       if (parentAuthorizedIds.size > 0) {
-        // Service-role fetch for preview_path — safe here because
+        // Service-role fetch for the path column — safe here because
         // authorization was already established above; this call itself
         // bypasses RLS deliberately (parents have no direct grant on
         // link_photos), matching this session's established pattern.
         const { data: parentRows } = await service
           .from("link_photos")
-          .select("id, preview_path")
+          .select(`id, ${pathColumn}`)
           .in("id", Array.from(parentAuthorizedIds));
-        for (const row of parentRows || []) {
-          if (row.preview_path) previewPathById[row.id] = row.preview_path;
+        for (const row of (parentRows || []) as Record<string, any>[]) {
+          if (row[pathColumn]) pathById[row.id] = row[pathColumn];
         }
       }
     }
 
-    const authorizedIds = Object.keys(previewPathById);
+    const authorizedIds = Object.keys(pathById);
     const urls: Record<string, string | null> = {};
-    for (const id of photoIds) urls[id] = null; // default: unauthorized or no preview yet
+    for (const id of photoIds) urls[id] = null; // default: unauthorized or no file at this resolution yet
 
     if (authorizedIds.length > 0) {
-      const paths = authorizedIds.map((id) => previewPathById[id]);
+      const paths = authorizedIds.map((id) => pathById[id]);
+      // Originals get download:true (Content-Disposition: attachment) — a
+      // paid HD unlock should actually save the file, not just display it
+      // inline the same way a free preview does.
       const { data: signed, error: signErr } = await service.storage
         .from("camp-photos")
-        .createSignedUrls(paths, SIGNED_URL_TTL_SECONDS);
+        .createSignedUrls(paths, SIGNED_URL_TTL_SECONDS, wantOriginal ? { download: true } : undefined);
       if (signErr) throw new Error(signErr.message);
       // createSignedUrls preserves input order — zip back up by index.
       authorizedIds.forEach((id, i) => {
