@@ -1919,7 +1919,16 @@ function _loadParentPhotos(){
             upsell.innerHTML=unpurchased.length?('<div class="lk-card" style="margin-bottom:12px;padding:14px 16px;">'+
                 '<div style="font-weight:600;margin-bottom:8px;font-size:.9rem;">Get a dedicated photo folder</div>'+
                 '<div style="font-size:.8rem;color:var(--text-muted);margin-bottom:10px;">Our AI finds your child in every camp photo automatically — $8.95 one-time, unlocked for the rest of the season.</div>'+
-                unpurchased.map(function(c){return '<button class="btn btn-primary" style="margin:0 8px 8px 0;" onclick="_lkBuyPhoto(\''+(c.campId||parent.campId)+'\',\'facial_recognition\',{camperName:'+JSON.stringify(c.name)+'})">Get '+_escHtml(c.name)+"'s folder — $8.95</button>";}).join('')+
+                // JSON.stringify(c.name) is double-quoted, and so is this
+                // onclick="..." attribute — embedding it raw let the FIRST
+                // quote inside the camper's name (or JSON.stringify's own
+                // wrapping quotes, for every name) silently truncate the
+                // whole attribute at the HTML-parsing level, well before the
+                // browser ever tried to run it as JS. _escHtml turns those
+                // quotes into &quot; entities, which the parser correctly
+                // decodes back to " only once it's building the attribute's
+                // actual string value — never see a "false close".
+                unpurchased.map(function(c){return '<button class="btn btn-primary" style="margin:0 8px 8px 0;" onclick="_lkBuyPhoto(\''+(c.campId||parent.campId)+'\',\'facial_recognition\',{camperName:'+_escHtml(JSON.stringify(c.name))+'})">Get '+_escHtml(c.name)+"'s folder — $8.95</button>";}).join('')+
                 '</div>') : '';
         }
 
