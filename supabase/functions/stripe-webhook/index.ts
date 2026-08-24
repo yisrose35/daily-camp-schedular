@@ -37,6 +37,13 @@ const STRIPE_WEBHOOK_SECRET = Deno.env.get("STRIPE_WEBHOOK_SECRET");
 const SUPABASE_URL = Deno.env.get("SUPABASE_URL") || "";
 const SUPABASE_SERVICE_KEY = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY") || "";
 
+// Mirrors link-photo-checkout's own constant — that function is the only
+// place the price is actually charged, this one only needs it to split a
+// multi-camper PaymentIntent's total back into a per-camper ledger amount
+// (pi.amount is the batch total, not any single camper's share). Keep the
+// two in sync if the price ever changes.
+const FACIAL_RECOGNITION_FEE_CENTS = 895;
+
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
   "Access-Control-Allow-Headers": "authorization, x-client-info, apikey, content-type, stripe-signature",
@@ -169,9 +176,10 @@ async function handleCanteenDeposit(
 }
 
 // Same "only 'succeeded' counts" rule as canteen deposits above — a parent
-// shouldn't see their photo folder/download unlock before Stripe confirms
-// the charge is final. record_link_photo_purchase (migration 081) is
-// idempotent on stripe_payment_intent_id, so a webhook retry is safe.
+// shouldn't see their photo matching/download unlock before Stripe confirms
+// the charge is final. record_link_photo_purchase (migration 081, widened
+// in 082) is idempotent per (payment_intent, kind, camper/photo), so a
+// webhook retry — or this loop re-running mid-way through a batch — is safe.
 async function handleLinkPhotoPurchase(
   supabase: ReturnType<typeof createClient>,
   campId: string,
@@ -187,11 +195,34 @@ async function handleLinkPhotoPurchase(
     console.error(`[stripe-webhook] link photo purchase ${pi.id} missing kind/parentUserId in metadata — skipping`);
     return;
   }
+
+  if (meta.kind === "facial_recognition") {
+    let names: string[] = [];
+    try { names = JSON.parse(meta.camperNames || "[]"); } catch { names = []; }
+    if (!Array.isArray(names) || !names.length) {
+      console.error(`[stripe-webhook] link photo purchase ${pi.id} missing camperNames in metadata — skipping`);
+      return;
+    }
+    for (const name of names) {
+      const { data, error } = await supabase.rpc("record_link_photo_purchase", {
+        p_camp_id: campId,
+        p_parent_user_id: meta.parentUserId,
+        p_kind: "facial_recognition",
+        p_camper_name: name,
+        p_photo_id: null,
+        p_amount_cents: FACIAL_RECOGNITION_FEE_CENTS, // per-camper share, NOT pi.amount (that's the whole batch)
+        p_payment_intent_id: pi.id,
+      });
+      console.log(`[stripe-webhook] link photo purchase (facial_recognition) for ${name}, camp ${campId}: ${error ? "FAILED " + error.message : JSON.stringify(data)}`);
+    }
+    return;
+  }
+
   const { data, error } = await supabase.rpc("record_link_photo_purchase", {
     p_camp_id: campId,
     p_parent_user_id: meta.parentUserId,
     p_kind: meta.kind,
-    p_camper_name: meta.camperName || null,
+    p_camper_name: null,
     p_photo_id: meta.photoId || null,
     p_amount_cents: pi.amount || 0,
     p_payment_intent_id: pi.id,

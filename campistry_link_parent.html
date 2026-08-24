@@ -525,14 +525,12 @@
         <div class="lk-ref-photo-grid" id="refPhotoGrid"></div>
     </div>
 
-    <div class="lk-tabs" id="photoTabs">
-        <button class="lk-tab active" data-tab="mine" onclick="_switchPhotoTab('mine',this)">My Kids</button>
-        <button class="lk-tab" data-tab="all" onclick="_switchPhotoTab('all',this)">All Camp Photos</button>
-    </div>
-    <div id="photoFrUpsell"></div>
-    <div class="lk-card"><div class="lk-card-head"><h2>This Week</h2><span style="font-size:.76rem;color:var(--text-muted);" id="photoGridCount"></span></div>
+    <div class="lk-card"><div class="lk-card-head"><h2>Camp Photos</h2><span style="font-size:.76rem;color:var(--text-muted);" id="photoGridCount"></span></div>
+        <p style="font-size:.8rem;color:var(--text-muted);margin:-6px 0 10px;">Every photo camp shares, as soon as it's posted.</p>
         <div id="photoGrid" style="display:grid;grid-template-columns:repeat(auto-fill,minmax(130px,1fr));gap:8px;"></div>
     </div>
+    <div id="photoKidSections"></div>
+    <div id="photoFrUpsell"></div>
 </div>
 
 <!-- PICKUP & ARRIVAL -->
@@ -1530,12 +1528,6 @@ function init(){
         pg.innerHTML='<div style="text-align:center;padding:48px 20px;color:var(--slate-400);"><svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.25" style="margin-bottom:12px;opacity:.35;display:block;margin-left:auto;margin-right:auto;"><rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="8.5" cy="8.5" r="1.5"/><polyline points="21 15 16 10 5 21"/></svg><div style="font-weight:600;margin-bottom:4px;font-size:.9rem;">Photos coming soon</div><div style="font-size:.8rem;">Daily camp photos will appear here once camp begins.</div></div>';
     }
 
-    // Photo child tabs
-    var photoTabsEl=document.getElementById('photoTabs');if(photoTabsEl){
-        var allBtn=photoTabsEl.querySelector('.lk-tab');
-        photoTabsEl.innerHTML='';if(allBtn)photoTabsEl.appendChild(allBtn);
-        children.forEach(function(c){var b=document.createElement('button');b.className='lk-tab';b.textContent=c.name.split(' ')[0]+"'s Photos";b.onclick=function(){photoTabsEl.querySelectorAll('.lk-tab').forEach(function(t){t.classList.remove('active')});b.classList.add('active');};photoTabsEl.appendChild(b);});}
-
     // Emergency
     var ec=document.getElementById('emergencyCards');if(ec){ec.innerHTML='';
     if(children.length){children.forEach(function(c){
@@ -1891,99 +1883,119 @@ async function _lkBuyPhoto(campId,kind,extra){
     }catch(e){ toast(e.message||'Could not start checkout'); }
 }
 
-// Switch between the free "All Camp Photos" browse tab and the paid
-// per-camper "My Kids" dedicated-folder tab — both render into the same
-// #photoGrid.
-function _switchPhotoTab(tab,btn){
-    var tabs=document.getElementById('photoTabs');
-    if(tabs)tabs.querySelectorAll('.lk-tab').forEach(function(t){t.classList.remove('active');});
-    if(btn)btn.classList.add('active');
-    if(tab==='all') _loadAllCampPhotos(); else _loadParentPhotos();
-}
-
-// "My Kids" tab — the paid, AI-filtered dedicated folder. get_my_camper_photos
-// (migration 081) now only returns a camper's photos once that specific
-// camper's facial-recognition folder has been purchased, so any of the
-// parent's children NOT yet purchased get an upsell button instead.
+// Photos page layout: one always-on "Camp Photos" section (the free browse
+// tier, get_camp_photos_browse — no AI, no purchase needed), then one
+// section per child whose automatic matching is turned on
+// (get_my_camper_photos, migration 081 — grouped client-side by the
+// `camper` field each returned photo carries), then a multi-select upsell
+// card for any child not yet turned on. Replaces the old two-tab layout —
+// a parent with photos unlocked for one kid still wants to see the general
+// camp stream too, so both are just always visible now.
 function _loadParentPhotos(){
-    var db=window._parentDB, pg=document.getElementById('photoGrid'), upsell=document.getElementById('photoFrUpsell');
+    var db=window._parentDB, pg=document.getElementById('photoGrid'),
+        kidWrap=document.getElementById('photoKidSections'), upsell=document.getElementById('photoFrUpsell');
     if(!pg||!db||typeof parent==='undefined'||!parent||!parent.campId)return;
-    Promise.all([_pRpcEachCampTagged('get_my_camper_photos','photos'), _loadMyPhotoPurchases()]).then(function(res){
-        var photos=res[0]||[], purchases=res[1]||{fr:{},hd:{}};
-        window._parentPhotoCache=photos;
-        var sub=document.getElementById('homePhotosSub');if(sub)sub.textContent=photos.length?(photos.length+' photo'+(photos.length===1?'':'s')):'No photos yet';
+    window._parentPhotoById={};
+    Promise.all([
+        _pRpcEachCampTagged('get_camp_photos_browse','photos'),
+        _pRpcEachCampTagged('get_my_camper_photos','photos'),
+        _loadMyPhotoPurchases()
+    ]).then(function(res){
+        var campPhotos=res[0]||[], myPhotos=res[1]||[], purchases=res[2]||{fr:{},hd:{}};
 
-        if(upsell){
-            var kids=(typeof children!=='undefined'&&Array.isArray(children))?children:[];
-            var unpurchased=kids.filter(function(c){return c&&c.name&&!purchases.fr[c.name];});
-            upsell.innerHTML=unpurchased.length?('<div class="lk-card" style="margin-bottom:12px;padding:14px 16px;">'+
-                '<div style="font-weight:600;margin-bottom:8px;font-size:.9rem;">Get a dedicated photo folder</div>'+
-                '<div style="font-size:.8rem;color:var(--text-muted);margin-bottom:10px;">Our AI finds your child in every camp photo automatically — $8.95 one-time, unlocked for the rest of the season.</div>'+
-                // JSON.stringify(c.name) is double-quoted, and so is this
-                // onclick="..." attribute — embedding it raw let the FIRST
-                // quote inside the camper's name (or JSON.stringify's own
-                // wrapping quotes, for every name) silently truncate the
-                // whole attribute at the HTML-parsing level, well before the
-                // browser ever tried to run it as JS. _escHtml turns those
-                // quotes into &quot; entities, which the parser correctly
-                // decodes back to " only once it's building the attribute's
-                // actual string value — never see a "false close".
-                unpurchased.map(function(c){return '<button class="btn btn-primary" style="margin:0 8px 8px 0;" onclick="_lkBuyPhoto(\''+(c.campId||parent.campId)+'\',\'facial_recognition\',{camperName:'+_escHtml(JSON.stringify(c.name))+'})">Get '+_escHtml(c.name)+"'s folder — $8.95</button>";}).join('')+
-                '</div>') : '';
+        var sub=document.getElementById('homePhotosSub');
+        if(sub)sub.textContent=myPhotos.length?(myPhotos.length+' photo'+(myPhotos.length===1?'':'s')+' of your kids'):'No photos yet';
+
+        // ── Camp Photos: free, everyone, always shown ──────────────────────
+        var pgCount=document.getElementById('photoGridCount'); if(pgCount)pgCount.textContent=campPhotos.length?(campPhotos.length+' photos'):'';
+        _renderPhotoGrid(pg, campPhotos);
+
+        var kids=(typeof children!=='undefined'&&Array.isArray(children))?children:[];
+
+        // ── One section per child with matching turned on ──────────────────
+        if(kidWrap){
+            kidWrap.innerHTML='';
+            kids.filter(function(c){return c&&c.name&&purchases.fr[c.name];}).forEach(function(c){
+                var mine=myPhotos.filter(function(p){return p.camper===c.name;});
+                var card=document.createElement('div');
+                card.className='lk-card'; card.style.marginTop='16px';
+                var head=document.createElement('div'); head.className='lk-card-head';
+                head.innerHTML='<h2>'+_escHtml(c.name)+"'s Photos</h2><span style=\"font-size:.76rem;color:var(--text-muted);\">"+mine.length+' found</span>';
+                card.appendChild(head);
+                var grid=document.createElement('div');
+                grid.style.cssText='display:grid;grid-template-columns:repeat(auto-fill,minmax(130px,1fr));gap:8px;';
+                card.appendChild(grid);
+                kidWrap.appendChild(card);
+                _renderPhotoGrid(grid, mine);
+            });
         }
 
-        var pgCount=document.getElementById('photoGridCount'); if(pgCount)pgCount.textContent=photos.length?(photos.length+' new'):'';
-        pg.innerHTML='';
-        if(!photos.length)return; // keep the friendly empty state
-        var ids=photos.map(function(p){return p.id;}).filter(Boolean);
-        return _lkPhotoUrls(ids).then(function(urls){
-            window._parentPhotoUrlCache=urls||{};
-            photos.forEach(function(p,i){
-                var url=window._parentPhotoUrlCache[p.id];
-                if(!url)return; // not authorized, or the upload never landed — skip rather than show a broken image
-                var cell=document.createElement('div');
-                cell.style.cssText='aspect-ratio:1;border-radius:10px;overflow:hidden;background:var(--slate-100);cursor:pointer;';
-                var img=document.createElement('img');
-                img.src=url; img.alt=''; img.loading='lazy';
-                img.style.cssText='width:100%;height:100%;object-fit:cover;';
-                cell.appendChild(img);
-                cell.onclick=function(){_openParentPhoto(i);};
-                pg.appendChild(cell);
-            });
+        // ── Upsell: multi-select so one checkout can cover several kids ────
+        if(upsell){
+            var unpurchased=kids.filter(function(c){return c&&c.name&&!purchases.fr[c.name];});
+            if(!unpurchased.length){ upsell.innerHTML=''; }
+            else{
+                var rows=unpurchased.map(function(c){
+                    return '<label style="display:flex;align-items:center;gap:8px;font-size:.85rem;padding:4px 0;">'+
+                        '<input type="checkbox" class="photoFrCheck" checked value="'+_escHtml(c.name)+'" data-camp-id="'+_escHtml(String(c.campId||parent.campId))+'" onchange="_lkPhotoFrUpdateBtn()"> '+
+                        _escHtml(c.name)+'</label>';
+                }).join('');
+                upsell.innerHTML='<div class="lk-card" style="margin-top:16px;padding:14px 16px;">'+
+                    '<div style="font-weight:600;margin-bottom:4px;font-size:.95rem;">✨ Never miss a photo of your child</div>'+
+                    '<div style="font-size:.8rem;color:var(--text-muted);margin-bottom:12px;">Turn this on and our AI automatically finds your child in every camp photo and adds it to their own photo stream — nothing to search for, nothing to do. $8.95 per child, one time, for the rest of the season.</div>'+
+                    '<div id="photoFrUpsellList" style="display:flex;flex-direction:column;gap:2px;margin-bottom:12px;">'+rows+'</div>'+
+                    '<button class="btn btn-primary" id="photoFrUpsellBtn" onclick="_lkBuyPhotoSelected()"></button>'+
+                    '</div>';
+                _lkPhotoFrUpdateBtn();
+            }
+        }
+    }).catch(function(){});
+}
+
+// Renders a list of {id,...} photo objects into a grid container and wires
+// each cell to the full-size viewer. Shared by the "Camp Photos" section
+// and every per-child section above — each photo is indexed into
+// window._parentPhotoById by id so _openParentPhoto can look it up without
+// needing to know which section/array it came from.
+function _renderPhotoGrid(pg, photos){
+    pg.innerHTML='';
+    if(!photos||!photos.length)return;
+    photos.forEach(function(p){ window._parentPhotoById[p.id]=p; });
+    var ids=photos.map(function(p){return p.id;}).filter(Boolean);
+    _lkPhotoUrls(ids).then(function(urls){
+        window._parentPhotoUrlCache=Object.assign(window._parentPhotoUrlCache||{}, urls||{});
+        photos.forEach(function(p){
+            var url=urls&&urls[p.id];
+            if(!url)return; // not authorized, or the upload never landed — skip rather than show a broken image
+            var cell=document.createElement('div');
+            cell.style.cssText='aspect-ratio:1;border-radius:10px;overflow:hidden;background:var(--slate-100);cursor:pointer;';
+            var img=document.createElement('img');
+            img.src=url; img.alt=''; img.loading='lazy';
+            img.style.cssText='width:100%;height:100%;object-fit:cover;';
+            cell.appendChild(img);
+            cell.onclick=function(){_openParentPhoto(p.id);};
+            pg.appendChild(cell);
         });
     }).catch(function(){});
 }
 
-// "All Camp Photos" tab — the new free tier (migration 081): the whole
-// camp's photo stream at preview resolution, no AI filtering or
-// camper-name labels attached, no purchase required.
-function _loadAllCampPhotos(){
-    var pg=document.getElementById('photoGrid'), upsell=document.getElementById('photoFrUpsell');
-    if(!pg||typeof parent==='undefined'||!parent||!parent.campId)return;
-    if(upsell)upsell.innerHTML='';
-    _pRpcEachCampTagged('get_camp_photos_browse','photos').then(function(photos){
-        photos=photos||[];
-        window._parentPhotoCache=photos;
-        var pgCount=document.getElementById('photoGridCount'); if(pgCount)pgCount.textContent=photos.length?(photos.length+' photos'):'';
-        pg.innerHTML='';
-        if(!photos.length)return;
-        var ids=photos.map(function(p){return p.id;}).filter(Boolean);
-        return _lkPhotoUrls(ids).then(function(urls){
-            window._parentPhotoUrlCache=urls||{};
-            photos.forEach(function(p,i){
-                var url=window._parentPhotoUrlCache[p.id];
-                if(!url)return;
-                var cell=document.createElement('div');
-                cell.style.cssText='aspect-ratio:1;border-radius:10px;overflow:hidden;background:var(--slate-100);cursor:pointer;';
-                var img=document.createElement('img');
-                img.src=url; img.alt=''; img.loading='lazy';
-                img.style.cssText='width:100%;height:100%;object-fit:cover;';
-                cell.appendChild(img);
-                cell.onclick=function(){_openParentPhoto(i);};
-                pg.appendChild(cell);
-            });
-        });
-    }).catch(function(){});
+// Live-updates the multi-select upsell's CTA as checkboxes toggle.
+function _lkPhotoFrUpdateBtn(){
+    var list=document.getElementById('photoFrUpsellList'), btn=document.getElementById('photoFrUpsellBtn');
+    if(!list||!btn)return;
+    var n=list.querySelectorAll('.photoFrCheck:checked').length;
+    btn.disabled=!n;
+    btn.textContent=n?('Turn on for '+n+' child'+(n===1?'':'ren')+' — $'+(n*8.95).toFixed(2)):'Select at least one child';
+}
+
+// Kicks off one checkout covering every checked child at once.
+async function _lkBuyPhotoSelected(){
+    var list=document.getElementById('photoFrUpsellList'); if(!list)return;
+    var boxes=[].slice.call(list.querySelectorAll('.photoFrCheck:checked'));
+    if(!boxes.length){ toast('Select at least one child.'); return; }
+    var names=boxes.map(function(b){return b.value;});
+    var campId=boxes[0].getAttribute('data-camp-id')||(typeof parent!=='undefined'&&parent?parent.campId:null);
+    _lkBuyPhoto(campId,'facial_recognition',{camperNames:names});
 }
 
 // Open a gallery photo full-size in a new tab (no huge string in the DOM
@@ -1992,8 +2004,8 @@ function _loadAllCampPhotos(){
 // parent browsing for a while before tapping a photo would otherwise hit an
 // expired link. Also offers the $4 HD download (or the real download, if
 // already purchased) for THIS specific photo.
-function _openParentPhoto(i){
-    var photos=window._parentPhotoCache||[]; var p=photos[i]; if(!p)return;
+function _openParentPhoto(photoId){
+    var p=(window._parentPhotoById||{})[photoId]; if(!p)return;
     var campId=p._campId||(typeof parent!=='undefined'&&parent?parent.campId:null);
     var purchased=!!(window._parentPhotoPurchases&&window._parentPhotoPurchases.hd&&window._parentPhotoPurchases.hd[p.id]);
     var w=window.open(); if(!w)return;
