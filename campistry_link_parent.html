@@ -512,8 +512,13 @@
     <div><h1>Photos</h1><p>Camp memories shared by staff — powered by facial recognition</p></div>
 </div>
 
-    <!-- Reference photo setup (shown once consent is given) -->
-    <div class="lk-card" id="photoRefCard">
+    <!-- Facial Recognition upsell — sits first: this is the thing being sold -->
+    <div id="photoFrUpsell"></div>
+
+    <!-- Reference photo setup — hidden until at least one child is purchased;
+         uploading a face photo does nothing for a child matching isn't turned
+         on for, so there's no reason to show this before that. -->
+    <div class="lk-card" id="photoRefCard" style="display:none;">
         <div class="lk-card-head">
             <h2>Reference Photos</h2>
             <span style="font-size:.76rem;color:var(--text-muted);">Used to find your children in camp photos</span>
@@ -530,7 +535,6 @@
         <div id="photoGrid" style="display:grid;grid-template-columns:repeat(auto-fill,minmax(130px,1fr));gap:8px;"></div>
     </div>
     <div id="photoKidSections"></div>
-    <div id="photoFrUpsell"></div>
 </div>
 
 <!-- PICKUP & ARRIVAL -->
@@ -1911,11 +1915,38 @@ function _loadParentPhotos(){
         _renderPhotoGrid(pg, campPhotos);
 
         var kids=(typeof children!=='undefined'&&Array.isArray(children))?children:[];
+        var purchasedKids=kids.filter(function(c){return c&&c.name&&purchases.fr[c.name];});
+
+        // ── Reference photos: only relevant once matching is actually on for
+        // a child, so the card (and its grid, rebuilt scoped to just those
+        // kids) stays hidden until there's at least one purchased child.
+        var refCard=document.getElementById('photoRefCard'), refGrid=document.getElementById('refPhotoGrid');
+        if(refCard) refCard.style.display=purchasedKids.length?'':'none';
+        if(refGrid&&purchasedKids.length){
+            refGrid.innerHTML='';
+            purchasedKids.forEach(function(c){
+                var poses=[{key:'front',label:'Front'},{key:'left',label:'Left side'},{key:'right',label:'Right side'}];
+                var poseHtml=poses.map(function(p){
+                    return '<label class="lk-ref-pose-slot" for="refPhoto_'+c.id+'_'+p.key+'" id="refPose_'+c.id+'_'+p.key+'">'+
+                        '<div class="lk-ref-pose-thumb" id="refPoseThumb_'+c.id+'_'+p.key+'">+</div>'+
+                        '<div class="lk-ref-pose-label">'+p.label+'</div>'+
+                        '<input type="file" id="refPhoto_'+c.id+'_'+p.key+'" accept="image/*" onchange="handleRefPhoto(\''+c.id+'\',\''+p.key+'\',this)">'+
+                    '</label>';
+                }).join('');
+                refGrid.innerHTML+='<div class="lk-ref-photo-slot" id="refSlot_'+c.id+'">'+
+                    '<div class="lk-ref-photo-slot-avatar" id="refAvatar_'+c.id+'">'+_escHtml(c.initials||'')+'</div>'+
+                    '<div class="lk-ref-photo-slot-name">'+_escHtml(c.name.split(' ')[0])+'</div>'+
+                    '<div class="lk-ref-photo-slot-status" id="refStatus_'+c.id+'">Add photos from 3 angles</div>'+
+                    '<div class="lk-ref-pose-row">'+poseHtml+'</div>'+
+                '</div>';
+            });
+            if(typeof _loadCamperFaceStatus==='function') _loadCamperFaceStatus();
+        }
 
         // ── One section per child with matching turned on ──────────────────
         if(kidWrap){
             kidWrap.innerHTML='';
-            kids.filter(function(c){return c&&c.name&&purchases.fr[c.name];}).forEach(function(c){
+            purchasedKids.forEach(function(c){
                 var mine=myPhotos.filter(function(p){return p.camper===c.name;});
                 var card=document.createElement('div');
                 card.className='lk-card'; card.style.marginTop='16px';
@@ -1940,9 +1971,10 @@ function _loadParentPhotos(){
                         '<input type="checkbox" class="photoFrCheck" checked value="'+_escHtml(c.name)+'" data-camp-id="'+_escHtml(String(c.campId||parent.campId))+'" onchange="_lkPhotoFrUpdateBtn()"> '+
                         _escHtml(c.name)+'</label>';
                 }).join('');
-                upsell.innerHTML='<div class="lk-card" style="margin-top:16px;padding:14px 16px;">'+
-                    '<div style="font-weight:600;margin-bottom:4px;font-size:.95rem;">✨ Never miss a photo of your child</div>'+
-                    '<div style="font-size:.8rem;color:var(--text-muted);margin-bottom:12px;">Turn this on and our AI automatically finds your child in every camp photo and adds it to their own photo stream — nothing to search for, nothing to do. $8.95 per child, one time, for the rest of the season.</div>'+
+                upsell.innerHTML='<div class="lk-card" style="padding:16px;">'+
+                    '<div style="font-weight:700;font-size:1.05rem;margin-bottom:6px;">📸 Facial Recognition</div>'+
+                    '<div style="font-size:.88rem;font-weight:600;margin-bottom:4px;">Want a personalized picture portfolio for your child?</div>'+
+                    '<div style="font-size:.8rem;color:var(--text-muted);margin-bottom:12px;">Our AI automatically finds them in every camp photo and adds it to their own portfolio — nothing to search for, nothing to do. $8.95 per child, one time, for the rest of the season.</div>'+
                     '<div id="photoFrUpsellList" style="display:flex;flex-direction:column;gap:2px;margin-bottom:12px;">'+rows+'</div>'+
                     '<button class="btn btn-primary" id="photoFrUpsellBtn" onclick="_lkBuyPhotoSelected()"></button>'+
                     '</div>';
