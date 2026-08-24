@@ -24,12 +24,16 @@
     <script>
         var params=new URLSearchParams(location.search);
         var status=params.get('status');
-        var isCanteen=params.get('type')==='canteen';
+        var payType=params.get('type');
+        var isCanteen=payType==='canteen';
+        var isLinkPhoto=payType==='link-photo';
         var ok=status!=='cancelled';
         document.getElementById('card').innerHTML= ok
           ? '<div class="icon ok"><svg width="30" height="30" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="20 6 9 17 4 12"/></svg></div>'+
             '<h1>Thank you!</h1><p>'+(isCanteen
               ? 'Your canteen funds are on their way — they\'ll appear on the account within moments.'
+              : isLinkPhoto
+              ? 'Your purchase is confirmed. Head back to the Photos page in Link — it should be unlocked within moments.'
               : 'Your payment was received. A receipt is on its way, and it will appear on your camp account shortly. Bank (ACH) payments can take a few business days to fully clear.')+'</p>'+
             '<div class="note">You can close this window.</div>'
           : '<div class="icon no"><svg width="30" height="30" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg></div>'+

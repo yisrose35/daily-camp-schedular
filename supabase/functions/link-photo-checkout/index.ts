@@ -119,8 +119,8 @@ serve(async (req) => {
       ? `Link Photos — dedicated folder for ${camperName}`
       : "Link Photos — HD download";
     const origin = req.headers.get("origin") || "";
-    const success = `${origin}/campistry_pay_thanks.html?status=success&item=link-photo`;
-    const cancel = `${origin}/campistry_pay_thanks.html?status=cancelled&item=link-photo`;
+    const success = `${origin}/campistry_pay_thanks.html?status=success&type=link-photo`;
+    const cancel = `${origin}/campistry_pay_thanks.html?status=cancelled&type=link-photo`;
 
     const meta: Record<string, string> = {
       campId: String(campId),
