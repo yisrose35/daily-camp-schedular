@@ -9,10 +9,11 @@ Adds the two parent-facing purchases from the photos monetization plan
 2. **HD (full-resolution) download** — flat fee **per photo**, works on
    any photo the parent can already view a preview of.
 
-**Both prices are placeholders** — $20 for the folder, $4 per HD photo —
-each a single named constant in `link-photo-checkout/index.ts`
-(`FACIAL_RECOGNITION_FEE_CENTS`, `HD_PHOTO_FEE_CENTS`). Change those two
-lines whenever real pricing is decided; nothing else needs to change.
+Facial recognition is **$8.95** per camper. HD downloads are **$4 per
+photo — still a placeholder**. Both are single named constants in
+`link-photo-checkout/index.ts` (`FACIAL_RECOGNITION_FEE_CENTS`,
+`HD_PHOTO_FEE_CENTS`) — change either line whenever pricing changes;
+nothing else needs to change.
 
 Both purchases are charged through the **camp's own connected Stripe
 account** (Stripe Connect — the same one already used for tips/canteen).
@@ -28,7 +29,7 @@ purchase check at all.** This migration adds one. After this ships:
   camp's photo stream, no AI filtering, nothing showing whose kid is in
   which photo.
 - The existing personalized "my kid's tagged photos" view becomes the
-  **paid** "My Kids" tab — gated per camper on a $20 purchase.
+  **paid** "My Kids" tab — gated per camper on an $8.95 purchase.
 
 If any camp is actively using Photos this season, their parents will
 suddenly need to buy the folder they were getting for free. **Tell camp
@@ -85,11 +86,11 @@ canteen). Nothing new to register in Stripe.
 Use Stripe **test mode**, with a camp that has connected Stripe Connect.
 
 1. As a parent, open Link → Photos. Confirm you land on "My Kids" and see
-   either an upsell button ("Get {child}'s folder — $20") for each child
+   either an upsell button ("Get {child}'s folder — $8.95") for each child
    who hasn't purchased, or their photos if already purchased.
 2. Switch to "All Camp Photos" — confirm you see the whole camp's photo
    stream (not just your kid's), free, no upsell shown.
-3. Click "Get {child}'s folder — $20" → redirected to Stripe Checkout →
+3. Click "Get {child}'s folder — $8.95" → redirected to Stripe Checkout →
    pay with a test card (`4242 4242 4242 4242`) → redirected back →
    reload the Photos page → confirm that child's tagged photos now appear
    under "My Kids", and the upsell button for that child is gone.

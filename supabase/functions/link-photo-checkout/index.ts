@@ -34,10 +34,9 @@ const SUPABASE_URL = Deno.env.get("SUPABASE_URL") || "";
 const SUPABASE_ANON_KEY = Deno.env.get("SUPABASE_ANON_KEY") || "";
 const SUPABASE_SERVICE_KEY = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY") || "";
 
-// Server-side fixed prices — placeholders, bump these two constants when
-// real pricing is finalized. The client can never influence either amount.
-const FACIAL_RECOGNITION_FEE_CENTS = 2000; // $20 placeholder, one-time per camper for the season
-const HD_PHOTO_FEE_CENTS = 400;            // $4 placeholder, flat per photo
+// Server-side fixed prices — the client can never influence either amount.
+const FACIAL_RECOGNITION_FEE_CENTS = 895; // $8.95, one-time per camper for the season
+const HD_PHOTO_FEE_CENTS = 400;           // $4 placeholder, flat per photo
 
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",

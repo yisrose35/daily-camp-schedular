@@ -1918,8 +1918,8 @@ function _loadParentPhotos(){
             var unpurchased=kids.filter(function(c){return c&&c.name&&!purchases.fr[c.name];});
             upsell.innerHTML=unpurchased.length?('<div class="lk-card" style="margin-bottom:12px;padding:14px 16px;">'+
                 '<div style="font-weight:600;margin-bottom:8px;font-size:.9rem;">Get a dedicated photo folder</div>'+
-                '<div style="font-size:.8rem;color:var(--text-muted);margin-bottom:10px;">Our AI finds your child in every camp photo automatically — $20 one-time, unlocked for the rest of the season.</div>'+
-                unpurchased.map(function(c){return '<button class="btn btn-primary" style="margin:0 8px 8px 0;" onclick="_lkBuyPhoto(\''+(c.campId||parent.campId)+'\',\'facial_recognition\',{camperName:'+JSON.stringify(c.name)+'})">Get '+_escHtml(c.name)+"'s folder — $20</button>";}).join('')+
+                '<div style="font-size:.8rem;color:var(--text-muted);margin-bottom:10px;">Our AI finds your child in every camp photo automatically — $8.95 one-time, unlocked for the rest of the season.</div>'+
+                unpurchased.map(function(c){return '<button class="btn btn-primary" style="margin:0 8px 8px 0;" onclick="_lkBuyPhoto(\''+(c.campId||parent.campId)+'\',\'facial_recognition\',{camperName:'+JSON.stringify(c.name)+'})">Get '+_escHtml(c.name)+"'s folder — $8.95</button>";}).join('')+
                 '</div>') : '';
         }
 
