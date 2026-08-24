@@ -721,6 +721,33 @@
 
                 var result = await scanPhoto(originalDataUrl);
                 var displayUrl = await _resizeImage(originalDataUrl, 1200);
+
+                // Upload both Storage variants right here, one file at a time,
+                // rather than holding every full-resolution original in memory
+                // until phase 3 persists the whole batch — a large upload of
+                // full-res photos would blow up memory otherwise. The photo id
+                // is generated client-side so the paths we upload to now match
+                // the row save_scanned_photo creates later with this same id.
+                var photoId = _newPhotoId();
+                var previewPath = null, originalPath = null;
+                var assetDb = _db();
+                if (assetDb) {
+                    try {
+                        var pPath = assetDb.campId + '/preview/' + photoId + '.jpg';
+                        await _uploadPhotoAsset(assetDb, pPath, await _dataUrlToBlob(displayUrl));
+                        previewPath = pPath;
+                    } catch (pe) {
+                        console.warn('[LinkPhotos] Preview upload failed for', file.name, pe.message || pe);
+                    }
+                    try {
+                        var oPath = assetDb.campId + '/original/' + photoId + '.jpg';
+                        await _uploadPhotoAsset(assetDb, oPath, await _dataUrlToBlob(originalDataUrl));
+                        originalPath = oPath;
+                    } catch (oe) {
+                        console.warn('[LinkPhotos] Original upload failed for', file.name, oe.message || oe);
+                    }
+                }
+
                 // shutter time: EXIF DateTimeOriginal beats file.lastModified
                 // (which is the DOWNLOAD time after WhatsApp/AirDrop detours —
                 // that would merge a whole upload into one fake "burst")
@@ -734,6 +761,9 @@
                     contentHash: hash,
                     capturedAt: capturedAt || file.lastModified || null,
                     displayUrl: displayUrl,
+                    photoId: photoId,
+                    previewPath: previewPath,
+                    originalPath: originalPath,
                     result: result
                 });
             } catch(e) {
@@ -854,14 +884,28 @@
                     }));
                     var saveRes = await db.client.rpc('save_scanned_photo', {
                         p_camp_id: db.campId,
-                        p_image_data: s.displayUrl,
                         p_file_name: s.fileName,
                         p_week: weekKey,
-                        p_tags: cloudTags
+                        p_tags: cloudTags,
+                        p_photo_id: s.photoId
                     });
                     if (saveRes && saveRes.data && saveRes.data.photo_id) {
                         photoRecord.cloudId = saveRes.data.photo_id;
                         photoRecord.synced = true;
+                        // Storage uploads already happened per-file in _processOne
+                        // (phase 1) — this just records where they landed, now
+                        // that the row they belong to finally exists.
+                        if (s.previewPath || s.originalPath) {
+                            try {
+                                await db.client.rpc('set_photo_storage_paths', {
+                                    p_photo_id: saveRes.data.photo_id,
+                                    p_preview_path: s.previewPath,
+                                    p_original_path: s.originalPath
+                                });
+                            } catch (spe) {
+                                console.warn('[LinkPhotos] set_photo_storage_paths failed for', s.fileName, spe.message || spe);
+                            }
+                        }
                     }
                 } catch (ce) {
                     console.warn('[LinkPhotos] Cloud save failed for', s.fileName, ce.message || ce);
@@ -1451,6 +1495,32 @@
             reader.onload = function(e) { resolve(e.target.result); };
             reader.onerror = reject;
             reader.readAsDataURL(file);
+        });
+    }
+
+    // Client-generated Storage object id — lets us upload a photo's bytes
+    // (see _processOne) before the link_photos row for it exists, so we
+    // never have to hold a whole batch's full-resolution originals in
+    // memory at once.
+    function _newPhotoId() {
+        if (window.crypto && crypto.randomUUID) return crypto.randomUUID();
+        return 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, function(c) {
+            var r = Math.random() * 16 | 0, v = c === 'x' ? r : (r & 0x3 | 0x8);
+            return v.toString(16);
+        });
+    }
+
+    function _dataUrlToBlob(dataUrl) {
+        return fetch(dataUrl).then(function(r) { return r.blob(); });
+    }
+
+    function _uploadPhotoAsset(db, path, blob) {
+        return db.client.storage.from('camp-photos').upload(path, blob, {
+            contentType: 'image/jpeg',
+            upsert: false
+        }).then(function(res) {
+            if (res && res.error) throw new Error(res.error.message);
+            return path;
         });
     }
 

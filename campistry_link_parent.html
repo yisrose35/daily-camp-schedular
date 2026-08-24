@@ -882,6 +882,21 @@ async function _lkCheckout(body){
     var resp=await fetch(s.url+'/functions/v1/stripe-checkout',{method:'POST',headers:{'Content-Type':'application/json','Authorization':'Bearer '+(s.anonKey||''),'apikey':s.anonKey||''},body:JSON.stringify(body)});
     var data=await resp.json(); if(!resp.ok||data.error) throw new Error(data.error||'Could not start checkout'); return data;
 }
+// Photos live in a private Storage bucket as of migration 080 — the only way
+// to actually see one is a short-lived signed URL minted by get-photo-urls,
+// which re-derives authorization server-side rather than trusting these ids.
+// Unlike _lkCheckout above, this needs the parent's REAL session token, not
+// just the anon key — get-photo-urls has no anon-only path.
+async function _lkPhotoUrls(photoIds){
+    if(!photoIds||!photoIds.length) return {};
+    var s=_lkSupa(), db=window._parentDB;
+    if(!s.url||!db) return {};
+    var sessRes=await db.auth.getSession();
+    var token=sessRes&&sessRes.data&&sessRes.data.session&&sessRes.data.session.access_token;
+    if(!token) return {};
+    var resp=await fetch(s.url+'/functions/v1/get-photo-urls',{method:'POST',headers:{'Content-Type':'application/json','Authorization':'Bearer '+token,'apikey':s.anonKey||''},body:JSON.stringify({photoIds:photoIds})});
+    var data=await resp.json(); if(!resp.ok||data.error) throw new Error(data.error||'Could not load photos'); return data.urls||{};
+}
 function loadPayments(){
     var host=document.getElementById('payBalanceCards'); var pt=document.getElementById('payTable'); if(!host) return;
     // isCurrent per camp, not just the name — lets a family with camps from
@@ -1814,6 +1829,8 @@ function _loadCamperFaceStatus(){
 }
 
 // Load the parent's children's tagged photos from the cloud gallery.
+// get_my_camper_photos is metadata-only (migration 080) — actual pixels
+// come from a batched call to get-photo-urls (short-lived signed URLs).
 function _loadParentPhotos(){
     var db=window._parentDB, pg=document.getElementById('photoGrid');
     if(!pg||!db||typeof parent==='undefined'||!parent||!parent.campId)return;
@@ -1822,29 +1839,46 @@ function _loadParentPhotos(){
         window._parentPhotoCache=photos;
         var sub=document.getElementById('homePhotosSub');if(sub)sub.textContent=photos.length?(photos.length+' photo'+(photos.length===1?'':'s')):'No photos yet';
         if(!photos.length)return; // keep the friendly empty state
-        pg.innerHTML='';
-        photos.forEach(function(p,i){
-            var cell=document.createElement('div');
-            cell.style.cssText='aspect-ratio:1;border-radius:10px;overflow:hidden;background:var(--slate-100);cursor:pointer;';
-            var img=document.createElement('img');
-            img.src=p.image_data; img.alt=''; img.loading='lazy';
-            img.style.cssText='width:100%;height:100%;object-fit:cover;';
-            cell.appendChild(img);
-            cell.onclick=function(){_openParentPhoto(i);};
-            pg.appendChild(cell);
+        var ids=photos.map(function(p){return p.id;}).filter(Boolean);
+        return _lkPhotoUrls(ids).then(function(urls){
+            window._parentPhotoUrlCache=urls||{};
+            pg.innerHTML='';
+            photos.forEach(function(p,i){
+                var url=window._parentPhotoUrlCache[p.id];
+                if(!url)return; // not authorized, or the upload never landed — skip rather than show a broken image
+                var cell=document.createElement('div');
+                cell.style.cssText='aspect-ratio:1;border-radius:10px;overflow:hidden;background:var(--slate-100);cursor:pointer;';
+                var img=document.createElement('img');
+                img.src=url; img.alt=''; img.loading='lazy';
+                img.style.cssText='width:100%;height:100%;object-fit:cover;';
+                cell.appendChild(img);
+                cell.onclick=function(){_openParentPhoto(i);};
+                pg.appendChild(cell);
+            });
         });
     }).catch(function(){});
 }
-// Open a gallery photo full-size in a new tab (no huge string in the DOM markup).
+// Open a gallery photo full-size in a new tab (no huge string in the DOM
+// markup). Re-mints its own signed URL rather than reusing the grid's cached
+// one — the grid's URLs are only good for ~5 minutes, and a parent browsing
+// for a while before tapping a photo would otherwise hit an expired link.
 function _openParentPhoto(i){
     var photos=window._parentPhotoCache||[]; var p=photos[i]; if(!p)return;
     var w=window.open(); if(!w)return;
     var d=w.document; d.title='Camp photo';
     d.body.style.margin='0'; d.body.style.background='#111';
-    var img=d.createElement('img');
-    img.src=p.image_data;
-    img.style.cssText='max-width:100%;max-height:100vh;display:block;margin:auto;';
-    d.body.appendChild(img);
+    d.body.innerHTML='<div style="color:#888;font:14px sans-serif;text-align:center;margin-top:40vh;">Loading…</div>';
+    _lkPhotoUrls([p.id]).then(function(urls){
+        var url=urls&&urls[p.id];
+        if(!url){ d.body.innerHTML='<div style="color:#888;font:14px sans-serif;text-align:center;margin-top:40vh;">Photo unavailable</div>'; return; }
+        d.body.innerHTML='';
+        var img=d.createElement('img');
+        img.src=url;
+        img.style.cssText='max-width:100%;max-height:100vh;display:block;margin:auto;';
+        d.body.appendChild(img);
+    }).catch(function(){
+        d.body.innerHTML='<div style="color:#888;font:14px sans-serif;text-align:center;margin-top:40vh;">Photo unavailable</div>';
+    });
 }
 
 var HEALTH_SUBMIT_KEY = 'campistry_health_submissions_v1';
