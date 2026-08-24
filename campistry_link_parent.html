@@ -1972,7 +1972,7 @@ function _loadParentPhotos(){
                         _escHtml(c.name)+'</label>';
                 }).join('');
                 upsell.innerHTML='<div class="lk-card" style="padding:16px;">'+
-                    '<div style="font-weight:700;font-size:1.05rem;margin-bottom:6px;">📸 Facial Recognition</div>'+
+                    '<div style="font-weight:700;font-size:1.05rem;margin-bottom:6px;">Facial Recognition</div>'+
                     '<div style="font-size:.88rem;font-weight:600;margin-bottom:4px;">Want a personalized picture portfolio for your child?</div>'+
                     '<div style="font-size:.8rem;color:var(--text-muted);margin-bottom:12px;">Our AI automatically finds them in every camp photo and adds it to their own portfolio — nothing to search for, nothing to do. $8.95 per child, one time, for the rest of the season.</div>'+
                     '<div id="photoFrUpsellList" style="display:flex;flex-direction:column;gap:2px;margin-bottom:12px;">'+rows+'</div>'+
@@ -2017,7 +2017,7 @@ function _lkPhotoFrUpdateBtn(){
     if(!list||!btn)return;
     var n=list.querySelectorAll('.photoFrCheck:checked').length;
     btn.disabled=!n;
-    btn.textContent=n?('Turn on for '+n+' child'+(n===1?'':'ren')+' — $'+(n*8.95).toFixed(2)):'Select at least one child';
+    btn.textContent=n?('Pay Now — $'+(n*8.95).toFixed(2)):'Select at least one child';
 }
 
 // Kicks off one checkout covering every checked child at once.
