@@ -14,11 +14,13 @@
 // run ownership checks) and charges a server-side FIXED price the client
 // can never influence.
 //
-// Destination: always the CAMP's own connected Stripe account (Connect —
-// this is the camp's revenue). Required — a camp that hasn't connected
-// gets a hard 400, same policy as canteen deposits: a purchase with
-// nowhere real to route to is a ledger-integrity problem, not just
-// degraded UX.
+// Destination: Campistry's OWN platform Stripe account — deliberately NOT
+// a Connect destination charge to the camp. Unlike tuition/canteen/tips,
+// this is Campistry's own product (the AI matching + storage/bandwidth
+// behind it), so the money settles on the platform account and never
+// transfers out to the camp. This also means a camp does NOT need Stripe
+// Connect set up at all for parents to buy either of these — there is no
+// "camp hasn't set up payments" gate here, unlike canteen deposits.
 //
 // Request:  { campId, kind: 'facial_recognition' | 'hd_photo',
 //             camperName?, photoId? }
@@ -32,7 +34,6 @@ const STRIPE_SECRET = Deno.env.get("STRIPE_SECRET_KEY");
 const STRIPE_API = "https://api.stripe.com/v1";
 const SUPABASE_URL = Deno.env.get("SUPABASE_URL") || "";
 const SUPABASE_ANON_KEY = Deno.env.get("SUPABASE_ANON_KEY") || "";
-const SUPABASE_SERVICE_KEY = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY") || "";
 
 // Server-side fixed prices — the client can never influence either amount.
 const FACIAL_RECOGNITION_FEE_CENTS = 895; // $8.95, one-time per camper for the season
@@ -103,17 +104,6 @@ serve(async (req) => {
       }
     }
 
-    // Destination: the camp's own connected Stripe account, required.
-    const service = createClient(SUPABASE_URL, SUPABASE_SERVICE_KEY);
-    const { data: camp } = await service
-      .from("camps")
-      .select("stripe_account_id, stripe_charges_enabled")
-      .eq("id", campId)
-      .maybeSingle();
-    if (!camp?.stripe_account_id || !camp.stripe_charges_enabled) {
-      return json({ error: "This camp hasn't set up payments yet." }, 400);
-    }
-
     const cents = kind === "facial_recognition" ? FACIAL_RECOGNITION_FEE_CENTS : HD_PHOTO_FEE_CENTS;
     const label = kind === "facial_recognition"
       ? `Link Photos — dedicated folder for ${camperName}`
@@ -140,7 +130,6 @@ serve(async (req) => {
       "line_items[0][price_data][unit_amount]": String(cents),
       "line_items[0][price_data][product_data][name]": label,
       "payment_intent_data[description]": label,
-      "payment_intent_data[transfer_data][destination]": camp.stripe_account_id,
     };
     Object.entries(meta).forEach(([k, v]) => {
       params[`metadata[${k}]`] = v;
