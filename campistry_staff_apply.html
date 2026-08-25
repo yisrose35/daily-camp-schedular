@@ -49,6 +49,7 @@ body{font-family:var(--font);background:var(--s50);color:var(--s800);-webkit-fon
       <div class="fr"><div class="fg"><label class="fl">First name<span class="rq">*</span></label><input class="fi" id="aF"></div><div class="fg"><label class="fl">Last name<span class="rq">*</span></label><input class="fi" id="aL"></div></div>
       <div class="fr"><div class="fg"><label class="fl">Email<span class="rq">*</span></label><input class="fi" id="aE" type="email"></div><div class="fg"><label class="fl">Phone<span class="rq">*</span></label><input class="fi" id="aP" type="tel"></div></div>
       <div class="fr"><div class="fg"><label class="fl">Date of birth</label><input class="fi" id="aDob" type="date"></div></div>
+      <div class="fr"><div class="fg"><label class="fl">School Name</label><input class="fi" id="aSch"></div><div class="fg"><label class="fl">School Grade</label><select class="fs" id="aSchGr"><option value="">—</option><option>Pre-K</option><option>Kindergarten</option><option>1st Grade</option><option>2nd Grade</option><option>3rd Grade</option><option>4th Grade</option><option>5th Grade</option><option>6th Grade</option><option>7th Grade</option><option>8th Grade</option><option>9th Grade</option><option>10th Grade</option><option>11th Grade</option><option>12th Grade</option></select></div></div>
       <div class="fg"><label class="fl">Street address</label><input class="fi" id="aSt"></div>
       <div class="fr"><div class="fg"><label class="fl">City</label><input class="fi" id="aCi"></div><div class="fg"><label class="fl">State</label><input class="fi" id="aSa"></div><div class="fg"><label class="fl">ZIP</label><input class="fi" id="aZp"></div></div>
       <div class="fg" id="aPhotoFg" style="margin-bottom:0"><label class="fl">Photo</label>
@@ -58,6 +59,15 @@ body{font-family:var(--font);background:var(--s50);color:var(--s800);-webkit-fon
       <input type="file" accept="image/*" id="aPhotoInput" class="fi" style="padding:7px 10px">
       <button type="button" id="aPhotoClearBtn" style="display:none;margin-top:6px;background:none;border:none;color:var(--err);font-size:.75rem;font-weight:600;cursor:pointer;padding:0">Remove photo</button>
       </div></div></div>
+    </div>
+
+    <div class="cd" id="parentCard"><div class="ct">👪 Parent / Guardian</div>
+      <p style="font-size:.75rem;color:var(--s400);margin:0 0 8px">If you're under 18, please include a parent or guardian's info.</p>
+      <div class="fr"><div class="fg"><label class="fl">Full Name</label><input class="fi" id="aPar"></div><div class="fg"><label class="fl">Relationship</label><select class="fs" id="aParRel"><option>Mother</option><option>Father</option><option>Guardian</option><option>Grandparent</option><option>Other</option></select></div></div>
+      <div class="fr"><div class="fg"><label class="fl">Phone</label><input type="tel" class="fi" id="aParPh"></div><div class="fg"><label class="fl">Email</label><input type="email" class="fi" id="aParEm"></div></div>
+      <p style="font-size:.75rem;color:var(--s400);margin:6px 0 4px">Second parent/guardian (optional):</p>
+      <div class="fr"><div class="fg"><label class="fl">Full Name</label><input class="fi" id="aPar2"></div><div class="fg"><label class="fl">Relationship</label><select class="fs" id="aPar2Rel"><option>Mother</option><option>Father</option><option>Guardian</option><option>Grandparent</option><option>Other</option></select></div></div>
+      <div class="fr"><div class="fg"><label class="fl">Phone</label><input type="tel" class="fi" id="aPar2Ph"></div><div class="fg"><label class="fl">Email</label><input type="email" class="fi" id="aPar2Em"></div></div>
     </div>
 
     <div class="cd" id="roleCard"><div class="ct">💼 Role &amp; Availability</div>
@@ -137,17 +147,26 @@ function v(id){return(document.getElementById(id)?.value||'').trim();}
 // Mirrors SFC_FIELD_CATALOG in campistry_me.js.
 var FIELD_ELEMENT_MAP={
     first:'aF',last:'aL',email:'aE',phone:'aP',dob:'aDob',street:'aSt',city:'aCi',state:'aSa',zip:'aZp',
+    school:'aSch',schoolGrade:'aSchGr',
+    parentName:'aPar',parentRelation:'aParRel',parentPhone:'aParPh',parentEmail:'aParEm',
+    parent2Name:'aPar2',parent2Relation:'aPar2Rel',parent2Phone:'aPar2Ph',parent2Email:'aPar2Em',
     availStart:'aAvS',availEnd:'aAvE',
     education:'aEdu',experience:'aExp'
     // resume (aResume) is a file input, not text-validated the same way — handled separately.
 };
 var FIELD_DEFAULT_LABEL={
     first:'First name',last:'Last name',email:'Email',phone:'Phone',dob:'Date of birth',street:'Street address',city:'City',state:'State',zip:'ZIP',
+    school:'School Name',schoolGrade:'School Grade',
+    parentName:'Parent / Guardian Name',parentRelation:'Relationship',parentPhone:'Parent Phone',parentEmail:'Parent Email',
+    parent2Name:'Second Parent / Guardian Name',parent2Relation:'Second Parent / Guardian Relationship',parent2Phone:'Second Parent / Guardian Phone',parent2Email:'Second Parent / Guardian Email',
     availStart:'Available from',availEnd:'Available until',
     education:'Education',experience:'Relevant experience'
 };
 // Defaults match the hardcoded validation this page shipped with.
-var FIELD_REQUIRED_STATE={first:true,last:true,email:true,phone:true,dob:false,street:false,city:false,state:false,zip:false,availStart:false,availEnd:false,education:false,experience:false};
+var FIELD_REQUIRED_STATE={first:true,last:true,email:true,phone:true,dob:false,street:false,city:false,state:false,zip:false,
+    school:false,schoolGrade:false,parentName:false,parentRelation:false,parentPhone:false,parentEmail:false,
+    parent2Name:false,parent2Relation:false,parent2Phone:false,parent2Email:false,
+    availStart:false,availEnd:false,education:false,experience:false};
 var FIELD_ENABLED_STATE={};
 var RESUME_REQUIRED=false;
 var PHOTO_REQUIRED=false;
@@ -158,6 +177,9 @@ var PHOTO_REQUIRED=false;
 // form permanently stuck asking for a field nobody can see or fill in.
 var FIELD_TO_SECTION={
     first:'about',last:'about',email:'about',phone:'about',dob:'about',street:'about',city:'about',state:'about',zip:'about',
+    school:'about',schoolGrade:'about',
+    parentName:'parent',parentRelation:'parent',parentPhone:'parent',parentEmail:'parent',
+    parent2Name:'parent',parent2Relation:'parent',parent2Phone:'parent',parent2Email:'parent',
     availStart:'role',availEnd:'role',
     education:'experience',experience:'experience'
 };
@@ -165,7 +187,10 @@ var FIELD_TO_SECTION={
 // Baseline required-state this page shipped with — applyFieldConfig resets
 // to this before applying overrides, so it's safe to call repeatedly with a
 // changing draft config (live preview), not just once at page load.
-var FIELD_REQUIRED_DEFAULT={first:true,last:true,email:true,phone:true,dob:false,street:false,city:false,state:false,zip:false,availStart:false,availEnd:false,education:false,experience:false};
+var FIELD_REQUIRED_DEFAULT={first:true,last:true,email:true,phone:true,dob:false,street:false,city:false,state:false,zip:false,
+    school:false,schoolGrade:false,parentName:false,parentRelation:false,parentPhone:false,parentEmail:false,
+    parent2Name:false,parent2Relation:false,parent2Phone:false,parent2Email:false,
+    availStart:false,availEnd:false,education:false,experience:false};
 function applyFieldConfig(fields,sectionsDisabled){
     fields=fields||{}; sectionsDisabled=sectionsDisabled||{};
     Object.keys(FIELD_ELEMENT_MAP).forEach(function(fid){
@@ -205,8 +230,8 @@ function applyFieldConfig(fields,sectionsDisabled){
 
 // Section reordering — about/role/experience/references/consent. The
 // custom-questions block is auto-generated and pinned right before Consent.
-var SECTION_ORDER_MAP={about:'aboutCard',role:'roleCard',experience:'expCard',references:'refCard',consent:'consentCard'};
-var DEFAULT_SECTION_ORDER=['about','role','experience','references','consent'];
+var SECTION_ORDER_MAP={about:'aboutCard',parent:'parentCard',role:'roleCard',experience:'expCard',references:'refCard',consent:'consentCard'};
+var DEFAULT_SECTION_ORDER=['about','parent','role','experience','references','consent'];
 function applySectionOrder(order){
     order=(order&&order.length)?order:DEFAULT_SECTION_ORDER;
     var anchor=document.getElementById('formErr');
@@ -567,6 +592,9 @@ window.submitApp=async function(){
     var rec={
         first:first,last:last,name:first+' '+last,email:email,phone:phone,dob:v('aDob'),
         street:v('aSt'),city:v('aCi'),state:v('aSa'),zip:v('aZp'),photo:photoData||'',
+        school:v('aSch'),schoolGrade:v('aSchGr'),
+        parentName:v('aPar'),parentRelation:v('aParRel'),parentPhone:v('aParPh'),parentEmail:v('aParEm'),
+        parent2Name:v('aPar2'),parent2Relation:v('aPar2Rel'),parent2Phone:v('aPar2Ph'),parent2Email:v('aPar2Em'),
         positions:positions,availStart:v('aAvS'),availEnd:v('aAvE'),
         education:v('aEdu'),experience:v('aExp'),certifications:certs,
         resume:resumeData,references:refs,source:v('aSrc'),

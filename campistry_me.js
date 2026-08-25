@@ -1419,9 +1419,26 @@ function renderStaffDetailPage(){
         if(app.dob)contact+=cvR('Date of Birth',app.dob);
         var addr=_addrJoin([app.street,app.city,app.state,app.zip]);
         if(addr)contact+=cvR('Address',addr);
+        if(app.school)contact+=cvR('School',esc(app.school));
+        if(app.schoolGrade)contact+=cvR('School Grade',esc(app.schoolGrade));
     }
     if(!contact)contact='<div style="font-size:.8rem;color:var(--s400);font-style:italic">No contact info on file</div>';
     g+=_dpCard('Contact Info',contact,{icon:'user'});
+
+    if(app&&(app.parentName||app.parent2Name)){
+        var parBody='';
+        if(app.parentName){
+            parBody+=cvR('Parent',esc(app.parentName)+(app.parentRelation?' ('+esc(app.parentRelation)+')':''));
+            if(app.parentPhone)parBody+=cvR('Phone','<a href="tel:'+esc(app.parentPhone)+'" style="color:var(--me);font-weight:600">'+esc(app.parentPhone)+'</a>');
+            if(app.parentEmail)parBody+=cvR('Email','<a href="mailto:'+esc(app.parentEmail)+'" style="color:var(--me)">'+esc(app.parentEmail)+'</a>');
+        }
+        if(app.parent2Name){
+            parBody+=cvR('Parent 2',esc(app.parent2Name)+(app.parent2Relation?' ('+esc(app.parent2Relation)+')':''));
+            if(app.parent2Phone)parBody+=cvR('Parent 2 Phone','<a href="tel:'+esc(app.parent2Phone)+'" style="color:var(--me);font-weight:600">'+esc(app.parent2Phone)+'</a>');
+            if(app.parent2Email)parBody+=cvR('Parent 2 Email','<a href="mailto:'+esc(app.parent2Email)+'" style="color:var(--me)">'+esc(app.parent2Email)+'</a>');
+        }
+        g+=_dpCard('Parent / Guardian',parBody,{icon:'users'});
+    }
 
     var posBody=cvR('Role',row.role)+((row.positions||[]).length?cvR('Position(s)',esc(row.positions.join(', '))):'');
     if(app&&(app.availStart||app.availEnd))posBody+=cvR('Availability',(app.availStart||'?')+' – '+(app.availEnd||'?'));
@@ -4931,7 +4948,24 @@ function viewStaffApp(id){
             if(sFieldOn('city'))h+=row(sLabel('city','City'),a.city);
             if(sFieldOn('state'))h+=row(sLabel('state','State'),a.state);
             if(sFieldOn('zip'))h+=row(sLabel('zip','ZIP'),a.zip);
+            if(sFieldOn('school'))h+=row(sLabel('school','School'),a.school);
+            if(sFieldOn('schoolGrade'))h+=row(sLabel('schoolGrade','School Grade'),a.schoolGrade);
             return {title:'About',body:h,snapshot:true};
+        },
+        parent:function(){
+            if(!a.parentName&&!a.parent2Name)return null;
+            var h='';
+            if(a.parentName&&sFieldOn('parentName')){
+                h+=row('Parent',a.parentName+(a.parentRelation?' ('+a.parentRelation+')':''));
+                if(a.parentPhone&&sFieldOn('parentPhone'))h+=rowRaw('Phone','<a href="tel:'+esc(a.parentPhone)+'" style="color:var(--me);font-weight:600">'+esc(a.parentPhone)+'</a>');
+                if(a.parentEmail&&sFieldOn('parentEmail'))h+=rowRaw('Email','<a href="mailto:'+esc(a.parentEmail)+'" style="color:var(--me)">'+esc(a.parentEmail)+'</a>');
+            }
+            if(a.parent2Name&&sFieldOn('parent2Name')){
+                h+=row('Parent 2',a.parent2Name+(a.parent2Relation?' ('+a.parent2Relation+')':''));
+                if(a.parent2Phone&&sFieldOn('parent2Phone'))h+=rowRaw('Parent 2 Phone','<a href="tel:'+esc(a.parent2Phone)+'" style="color:var(--me);font-weight:600">'+esc(a.parent2Phone)+'</a>');
+                if(a.parent2Email&&sFieldOn('parent2Email'))h+=rowRaw('Parent 2 Email','<a href="mailto:'+esc(a.parent2Email)+'" style="color:var(--me)">'+esc(a.parent2Email)+'</a>');
+            }
+            return h?{title:'Parent / Guardian',body:h,snapshot:true}:null;
         },
         role:function(){
             var h=row('Position(s)',(a.positions||[]).join(', '));
@@ -5297,6 +5331,9 @@ async function deleteStaffApp(id){
 var SAPP_FIELD_MAP={
     first:{},last:{},email:{type:'email'},phone:{type:'tel'},dob:{type:'date'},
     street:{},city:{},state:{},zip:{},photo:{type:'file'},
+    school:{},schoolGrade:{type:'select'},
+    parentName:{},parentRelation:{},parentPhone:{type:'tel'},parentEmail:{type:'email'},
+    parent2Name:{},parent2Relation:{},parent2Phone:{type:'tel'},parent2Email:{type:'email'},
     availStart:{type:'date'},availEnd:{type:'date'},
     education:{},experience:{type:'textarea'}
 };
@@ -5322,6 +5359,7 @@ function addStaffApp(){
         var req=cfg.required!=null?cfg.required:!!f.required;
         var id='sapp_'+f.id;
         var star=req?' <span class="rq" style="color:var(--err)">*</span>':'';
+        if(map.type==='select'){var _opts=f.id==='schoolGrade'?_schoolGradeCatalog():(map.opts||[]);return '<div class="fg"><label class="fl">'+esc(label)+star+'</label><select id="'+id+'" class="fs"><option value="">—</option>'+_opts.map(function(o){return'<option>'+esc(o)+'</option>';}).join('')+'</select></div>';}
         if(map.type==='textarea')return '<div class="fg"><label class="fl">'+esc(label)+star+'</label><textarea id="'+id+'" class="fi" style="min-height:50px;resize:vertical"></textarea></div>';
         if(map.type==='file')return '<div class="fg"><label class="fl">'+esc(label)+star+'</label>'
             +'<input type="hidden" id="'+id+'">'
@@ -5385,6 +5423,9 @@ function addStaffApp(){
             first:first,last:last,name:(first+' '+last).trim(),
             email:values.email||'',phone:values.phone||'',dob:values.dob||'',
             street:values.street||'',city:values.city||'',state:values.state||'',zip:values.zip||'',photo:values.photo||'',
+            school:values.school||'',schoolGrade:values.schoolGrade||'',
+            parentName:values.parentName||'',parentRelation:values.parentRelation||'',parentPhone:values.parentPhone||'',parentEmail:values.parentEmail||'',
+            parent2Name:values.parent2Name||'',parent2Relation:values.parent2Relation||'',parent2Phone:values.parent2Phone||'',parent2Email:values.parent2Email||'',
             positions:positionsChecked,availStart:values.availStart||'',availEnd:values.availEnd||'',
             education:values.education||'',experience:values.experience||'',
             certifications:[],references:[],status:'applied',
@@ -6316,6 +6357,7 @@ var SFC_CERTS_DEFAULT=['CPR','First Aid','Lifeguard (WSI)','Food Handler','Wilde
 // above. `default` just sets the out-of-the-box state.
 var SFC_SECTIONS=[
     {key:'about',label:'About You',desc:'Name, contact info, address',default:true},
+    {key:'parent',label:'Parent / Guardian',desc:'For staff under 18',default:true},
     {key:'role',label:'Role & Availability',desc:'Position(s), available dates',default:true},
     {key:'experience',label:'Experience & Certifications',desc:'Education, experience, certifications, resume',default:true},
     {key:'references',label:'References',desc:'Two reference contacts',default:true},
@@ -6333,7 +6375,19 @@ var SFC_FIELD_CATALOG={
         {id:'city',label:'City'},
         {id:'state',label:'State'},
         {id:'zip',label:'ZIP'},
-        {id:'photo',label:'Photo'}
+        {id:'photo',label:'Photo'},
+        {id:'school',label:'School Name'},
+        {id:'schoolGrade',label:'School Grade'}
+    ],
+    parent:[
+        {id:'parentName',label:'Parent / Guardian Name'},
+        {id:'parentRelation',label:'Relationship'},
+        {id:'parentPhone',label:'Phone'},
+        {id:'parentEmail',label:'Email'},
+        {id:'parent2Name',label:'Second Parent / Guardian Name'},
+        {id:'parent2Relation',label:'Second Parent / Guardian Relationship'},
+        {id:'parent2Phone',label:'Second Parent / Guardian Phone'},
+        {id:'parent2Email',label:'Second Parent / Guardian Email'}
     ],
     role:[
         {id:'availStart',label:'Available From'},
