@@ -3948,23 +3948,33 @@ async function bulkInviteAll(){
     prog.style.display = 'block';
     var ok = 0, fail = 0;
     var expires = new Date(); expires.setFullYear(expires.getFullYear() + 1);
-    for (var i = 0; i < fams.length; i++) {
-        var f = fams[i];
-        prog.innerHTML = '<div style="font-size:.82rem;"><div class="progress" style="height:6px;margin-bottom:6px;"><div class="progress-fill" style="width:' + Math.round((i+1)/fams.length*100) + '%;"></div></div>' + (i+1) + '/' + fams.length + ': <strong>' + esc(f.parentName || f.parentEmail) + '</strong></div>';
+    // Each family may invite up to two DISTINCT parent emails — each gets its
+    // own link_parent_invites row (own token/access code), so both parents can
+    // create their own independent Link portal login for the same kids.
+    var jobs = [];
+    fams.forEach(function(f){
+        jobs.push({ name: f.parentName || f.parentEmail, email: f.parentEmail, children: f.children });
+        if (f.parent2Email && f.parent2Email.toLowerCase() !== (f.parentEmail || '').toLowerCase()) {
+            jobs.push({ name: f.parent2Name || f.parent2Email, email: f.parent2Email, children: f.children });
+        }
+    });
+    for (var i = 0; i < jobs.length; i++) {
+        var j = jobs[i];
+        prog.innerHTML = '<div style="font-size:.82rem;"><div class="progress" style="height:6px;margin-bottom:6px;"><div class="progress-fill" style="width:' + Math.round((i+1)/jobs.length*100) + '%;"></div></div>' + (i+1) + '/' + jobs.length + ': <strong>' + esc(j.name) + '</strong></div>';
         try {
             var res = await db.client.rpc('upsert_parent_invite', {
                 p_camp_id: db.campId,
                 p_token: _pgToken(),
-                p_parent_name: f.parentName || f.parentEmail,
-                p_parent_email: f.parentEmail,
-                p_camper_names: (f.children || []).map(function(c){ return c.name; }),
-                p_camper_data: _pgCamperData(f.children),
+                p_parent_name: j.name,
+                p_parent_email: j.email,
+                p_camper_names: (j.children || []).map(function(c){ return c.name; }),
+                p_camper_data: _pgCamperData(j.children),
                 p_expires_at: expires.toISOString()
             });
             if (res.error || !res.data || !res.data.success) fail++; else ok++;
         } catch(e) { fail++; }
     }
-    prog.innerHTML = '<div style="color:var(--green-600);font-size:.82rem;">' + ok + ' families invited' + (fail ? ' · <span style="color:var(--red-500);">' + fail + ' failed</span>' : '') + '</div>';
+    prog.innerHTML = '<div style="color:var(--green-600);font-size:.82rem;">' + ok + ' parent logins invited' + (fail ? ' · <span style="color:var(--red-500);">' + fail + ' failed</span>' : '') + '</div>';
     refreshParentsPage();
 }
 

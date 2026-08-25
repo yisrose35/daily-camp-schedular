@@ -5263,7 +5263,9 @@ var FC_FIELD_CATALOG={
         {id:'parentPhone',label:'Phone',required:true},
         {id:'parentEmail',label:'Email',required:true},
         {id:'parent2Name',label:'Second Parent / Guardian Name'},
-        {id:'parent2Phone',label:'Second Parent / Guardian Phone'}
+        {id:'parent2Relation',label:'Second Parent / Guardian Relationship'},
+        {id:'parent2Phone',label:'Second Parent / Guardian Phone'},
+        {id:'parent2Email',label:'Second Parent / Guardian Email'}
     ],
     address:[
         {id:'street',label:'Street',required:true},
@@ -6610,7 +6612,9 @@ function viewApplication(id){
             if(fFieldOn('parentName'))b+=row(fLabel('parentName','Name'),(e.parentName||'')+(e.parentRelation?' ('+e.parentRelation+')':''));
             if(e.parentPhone&&fFieldOn('parentPhone'))b+=rowRaw(fLabel('parentPhone','Phone'),'<a href="tel:'+esc(e.parentPhone)+'" style="color:var(--me);font-weight:600">'+esc(e.parentPhone)+'</a>');
             if(e.parentEmail&&fFieldOn('parentEmail'))b+=rowRaw(fLabel('parentEmail','Email'),'<a href="mailto:'+esc(e.parentEmail)+'" style="color:var(--me)">'+esc(e.parentEmail)+'</a>');
-            if(e.parent2Name&&fFieldOn('parent2Name'))b+=row(fLabel('parent2Name','Parent 2'),e.parent2Name+(e.parent2Phone?' — '+e.parent2Phone:''));
+            if(e.parent2Name&&fFieldOn('parent2Name'))b+=row(fLabel('parent2Name','Parent 2'),e.parent2Name+(e.parent2Relation?' ('+e.parent2Relation+')':''));
+            if(e.parent2Phone&&fFieldOn('parent2Phone'))b+=rowRaw(fLabel('parent2Phone','Parent 2 Phone'),'<a href="tel:'+esc(e.parent2Phone)+'" style="color:var(--me);font-weight:600">'+esc(e.parent2Phone)+'</a>');
+            if(e.parent2Email&&fFieldOn('parent2Email'))b+=rowRaw(fLabel('parent2Email','Parent 2 Email'),'<a href="mailto:'+esc(e.parent2Email)+'" style="color:var(--me)">'+esc(e.parent2Email)+'</a>');
         },
         address:function(){
             b+=sec('Address');
@@ -6798,7 +6802,10 @@ function printApplication(id){
     h+=sec('Parent/Guardian');
     h+=row('Name',(e.parentName||'')+(e.parentRelation?' ('+e.parentRelation+')':''));
     h+=row('Phone',e.parentPhone);h+=row('Email',e.parentEmail);
-    if(e.parent2Name)h+=row('Parent 2',e.parent2Name+(e.parent2Phone?' — '+e.parent2Phone:''));h+=end();
+    if(e.parent2Name)h+=row('Parent 2',e.parent2Name+(e.parent2Relation?' ('+e.parent2Relation+')':''));
+    if(e.parent2Phone)h+=row('Parent 2 Phone',e.parent2Phone);
+    if(e.parent2Email)h+=row('Parent 2 Email',e.parent2Email);
+    h+=end();
 
     h+=sec('Address');
     h+=row('Street',e.street);h+=row('City',e.city);h+=row('State',e.state);h+=row('ZIP',e.zip);h+=end();
@@ -7121,7 +7128,8 @@ var APP_FIELD_MAP={
     school:{rec:'school'},schoolGrade:{rec:'schoolGrade',type:'select',opts:SCHOOL_GRADE_CATALOG},teacher:{rec:'teacher'},photo:{rec:'camperPhoto',type:'file'},
     parentName:{rec:'parentName'},parentRelation:{rec:'parentRelation'},
     parentPhone:{rec:'parentPhone',type:'tel'},parentEmail:{rec:'parentEmail',type:'email'},
-    parent2Name:{rec:'parent2Name'},parent2Phone:{rec:'parent2Phone',type:'tel'},
+    parent2Name:{rec:'parent2Name'},parent2Relation:{rec:'parent2Relation'},
+    parent2Phone:{rec:'parent2Phone',type:'tel'},parent2Email:{rec:'parent2Email',type:'email'},
     street:{rec:'street'},city:{rec:'city'},state:{rec:'state'},zip:{rec:'zip'},
     emName:{rec:'emergencyName'},emRelation:{rec:'emergencyRel'},emPhone:{rec:'emergencyPhone',type:'tel'},
     allergies:{rec:'allergies'},medications:{rec:'medications'},dietary:{rec:'dietary'},medicalNotes:{rec:'medicalNotes',type:'textarea'},
@@ -7261,7 +7269,7 @@ function addApplication(){
             camperName:camperName,camperFirst:first,camperLast:last,
             dob:values.dob||'',gender:values.gender||'',school:values.school||'',schoolGrade:values.schoolGrade||'',teacher:values.teacher||'',camperPhoto:values.photo||'',
             parentName:values.parentName||'',parentRelation:values.parentRelation||'',parentPhone:values.parentPhone||'',parentEmail:values.parentEmail||'',
-            parent2Name:values.parent2Name||'',parent2Phone:values.parent2Phone||'',
+            parent2Name:values.parent2Name||'',parent2Relation:values.parent2Relation||'',parent2Phone:values.parent2Phone||'',parent2Email:values.parent2Email||'',
             street:values.street||'',city:values.city||'',state:values.state||'',zip:values.zip||'',
             emergencyName:values.emName||'',emergencyRel:values.emRelation||'',emergencyPhone:values.emPhone||'',
             allergies:values.allergies||'',medications:values.medications||'',dietary:values.dietary||'',medicalNotes:values.medicalNotes||'',
@@ -7420,24 +7428,43 @@ function _autoProvisionParentInvites(){
 
     // Group campers into families: explicit family records win, remaining
     // roster campers group by shared parent1Email (implied families) — the
-    // same rules the Link data bridge uses.
+    // same rules the Link data bridge uses. Each DISTINCT parent email gets
+    // its own entry in `fams` (so, below, its own upsert_parent_invite call
+    // and its own independent portal login) — a family with two parents on
+    // different emails ends up as two keys sharing the same campers list.
     var fams={},inFamily={};
     Object.keys(families||{}).forEach(function(fk){
         var fam=families[fk];
-        var p=fam&&fam.households&&fam.households[0]&&fam.households[0].parents&&fam.households[0].parents[0];
-        if(!p||!p.email)return;
-        var key=String(p.email).toLowerCase();
-        if(!fams[key])fams[key]={parentName:p.name||'',parentEmail:p.email,campers:[]};
-        (fam.camperIds||[]).forEach(function(cn){
-            if(roster[cn]&&fams[key].campers.indexOf(cn)<0){fams[key].campers.push(cn);inFamily[cn]=1;}
-        });
+        var parents=(fam&&fam.households&&fam.households[0]&&fam.households[0].parents)||[];
+        var p0=parents[0],p1=parents[1];
+        if(p0&&p0.email){
+            var key=String(p0.email).toLowerCase();
+            if(!fams[key])fams[key]={parentName:p0.name||'',parentEmail:p0.email,campers:[]};
+            (fam.camperIds||[]).forEach(function(cn){
+                if(roster[cn]&&fams[key].campers.indexOf(cn)<0){fams[key].campers.push(cn);inFamily[cn]=1;}
+            });
+        }
+        if(p1&&p1.email&&String(p1.email).toLowerCase()!==String((p0&&p0.email)||'').toLowerCase()){
+            var key2=String(p1.email).toLowerCase();
+            if(!fams[key2])fams[key2]={parentName:p1.name||'',parentEmail:p1.email,campers:[]};
+            (fam.camperIds||[]).forEach(function(cn){
+                if(roster[cn]&&fams[key2].campers.indexOf(cn)<0){fams[key2].campers.push(cn);inFamily[cn]=1;}
+            });
+        }
     });
     Object.keys(roster).forEach(function(cn){
         if(inFamily[cn])return;
-        var c=roster[cn];if(!c||!c.parent1Email)return;
-        var key=String(c.parent1Email).toLowerCase();
-        if(!fams[key])fams[key]={parentName:c.parent1Name||'',parentEmail:c.parent1Email,campers:[]};
-        if(fams[key].campers.indexOf(cn)<0)fams[key].campers.push(cn);
+        var c=roster[cn];if(!c)return;
+        if(c.parent1Email){
+            var key=String(c.parent1Email).toLowerCase();
+            if(!fams[key])fams[key]={parentName:c.parent1Name||'',parentEmail:c.parent1Email,campers:[]};
+            if(fams[key].campers.indexOf(cn)<0)fams[key].campers.push(cn);
+        }
+        if(c.parent2Email&&String(c.parent2Email).toLowerCase()!==String(c.parent1Email||'').toLowerCase()){
+            var key2=String(c.parent2Email).toLowerCase();
+            if(!fams[key2])fams[key2]={parentName:c.parent2Name||'',parentEmail:c.parent2Email,campers:[]};
+            if(fams[key2].campers.indexOf(cn)<0)fams[key2].campers.push(cn);
+        }
     });
 
     var keys=Object.keys(fams).filter(function(k){return fams[k].campers.length;});
@@ -7545,6 +7572,12 @@ function _syncParentInviteSnapshot(enrollId,silent){
     var parentEmail=e.parentEmail||e.parent1Email||'';
     var r0=roster[e.camperName]||{};
     var parentName=e.parentName||e.parent1Name||r0.parent1Name||'';
+    var parent2Email=e.parent2Email||r0.parent2Email||'';
+    var parent2Name=e.parent2Name||r0.parent2Name||'';
+    // Both parents get their OWN independent portal login — but only when
+    // they actually have distinct emails. A shared email means one login
+    // for the household, same as before this feature existed.
+    if(parent2Email&&parentEmail&&parent2Email.toLowerCase()===parentEmail.toLowerCase())parent2Email='';
     if(!parentEmail&&!parentName)return;
 
     var db=window.CampistryDB&&window.CampistryDB.getClient?window.CampistryDB.getClient():null;
@@ -7552,30 +7585,33 @@ function _syncParentInviteSnapshot(enrollId,silent){
     if(!db||!campId){
         if(silent)return;
         console.warn('[Me] Invite: Supabase not ready, showing link only');
-        _showInviteModal(enrollId,_parentPortalUrl(_genToken()),null);
+        _showInviteModal(enrollId,{email:parentEmail,name:parentName,url:_parentPortalUrl(_genToken())},null);
         return;
     }
 
-    function doUpsert(){
+    // doUpsert is keyed on WHICH parent's email is asking — each gets their
+    // own link_parent_invites row (own token/access_code/user_id), but both
+    // resolve to the exact same family/camper snapshot, so either parent's
+    // portal shows the same kids, bunk, staff, etc.
+    function doUpsert(pEmail,pName){
+        if(!pEmail)return Promise.resolve(null);
         // Which campers show up in this parent's portal?
         //  • If the invited camper belongs to a FAMILY, use that family's
         //    members — the family is the source of truth, so removing a camper
         //    from the family also drops them from the parent's portal.
         //  • Otherwise fall back to grouping by parent email (an implied
         //    family), so un-familied siblings still group together.
-        // Prefer the family whose PRIMARY PARENT EMAIL matches this invite's
-        // parent email — its members are exactly who should see this portal,
-        // regardless of which camper triggered the sync (so a family-less
-        // camper who happens to share the email is NOT pulled back in). Fall
-        // back to the family that contains the invited camper.
-        var famCamperIds=null, _pe=(parentEmail||'').toLowerCase();
-        if(_pe){
-            Object.keys(families).some(function(fk){
-                var hp=families[fk].households&&families[fk].households[0]&&families[fk].households[0].parents&&families[fk].households[0].parents[0];
-                if(hp&&String(hp.email||'').toLowerCase()===_pe){ famCamperIds=(families[fk].camperIds||[]); return true; }
-                return false;
-            });
-        }
+        // Prefer the family whose household has a parent (EITHER parent slot)
+        // matching this invite's email — its members are exactly who should
+        // see this portal, regardless of which camper triggered the sync (so
+        // a family-less camper who happens to share the email is NOT pulled
+        // back in). Fall back to the family that contains the invited camper.
+        var famCamperIds=null, _pe=pEmail.toLowerCase();
+        Object.keys(families).some(function(fk){
+            var parents=(families[fk].households&&families[fk].households[0]&&families[fk].households[0].parents)||[];
+            if(parents.some(function(p){return String(p&&p.email||'').toLowerCase()===_pe;})){ famCamperIds=(families[fk].camperIds||[]); return true; }
+            return false;
+        });
         if(!famCamperIds){
             Object.keys(families).some(function(fk){
                 if((families[fk].camperIds||[]).indexOf(e.camperName)>=0){ famCamperIds=(families[fk].camperIds||[]); return true; }
@@ -7585,8 +7621,9 @@ function _syncParentInviteSnapshot(enrollId,silent){
         var familyEnrollments=Object.values(enrollments).filter(function(en){
             if(en.status!=='accepted'&&en.status!=='enrolled') return false;
             if(famCamperIds) return famCamperIds.indexOf(en.camperName)>=0;
-            var em=en.parentEmail||en.parent1Email||'';
-            return em===parentEmail;
+            var em=(en.parentEmail||en.parent1Email||'').toLowerCase();
+            var em2=(en.parent2Email||'').toLowerCase();
+            return em===_pe||em2===_pe;
         });
         var camperNames=familyEnrollments.map(function(en){return en.camperName;});
         var camperData={};
@@ -7617,90 +7654,112 @@ function _syncParentInviteSnapshot(enrollId,silent){
         return db.rpc('upsert_parent_invite',{
             p_camp_id:     campId,
             p_token:       token,
-            p_parent_name: parentName,
-            p_parent_email:parentEmail,
+            p_parent_name: pName||pEmail,
+            p_parent_email:pEmail,
             p_camper_names:camperNames,
             p_camper_data: camperData,
             p_expires_at:  expires.toISOString()
         }).then(function(res){
             if(res.error){
                 console.error('[Me] upsert_parent_invite error:',res.error.message,res.error);
-                if(!silent)toast('Could not save invite: '+res.error.message+'. Run migration 011 in Supabase.');
-                return;
+                return {error:res.error.message};
             }
             var d=res.data;
             if(!d||!d.success){
                 console.error('[Me] upsert_parent_invite returned failure:',d);
-                if(!silent)toast('Could not save invite.');
-                return;
+                return {error:'unknown'};
             }
-            if(!silent)_showInviteModal(enrollId,_parentPortalUrl(d.token),parentEmail,d.access_code||null);
+            return {email:pEmail,name:pName||pEmail,url:_parentPortalUrl(d.token),accessCode:d.access_code||null};
         });
     }
 
     if(!silent){
-        doUpsert();
+        Promise.all([doUpsert(parentEmail,parentName),doUpsert(parent2Email,parent2Name)]).then(function(results){
+            var primary=results[0],secondary=results[1];
+            if(!primary||primary.error){toast('Could not save invite'+(primary&&primary.error?': '+primary.error:'')+'. Run migration 011 in Supabase.');return;}
+            if(secondary&&secondary.error){console.error('[Me] Second parent invite failed:',secondary.error);secondary=null;}
+            _showInviteModal(enrollId,primary,secondary);
+        });
         return;
     }
 
     // Silent path: only refresh an invite that ALREADY exists for this
-    // parent — never silently create one.
-    db.from('link_parent_invites').select('id').eq('camp_id',campId).eq('parent_email',parentEmail).eq('status','active').limit(1)
-        .then(function(res){
-            if(res.error||!res.data||!res.data.length)return;
-            doUpsert();
-        });
+    // parent — never silently create one. Each parent's email is checked
+    // independently, so a second parent who was already invited keeps
+    // getting refreshed even if the first parent's row is untouched.
+    function silentRefresh(pEmail,pName){
+        if(!pEmail)return;
+        db.from('link_parent_invites').select('id').eq('camp_id',campId).eq('parent_email',pEmail).eq('status','active').limit(1)
+            .then(function(res){
+                if(res.error||!res.data||!res.data.length)return;
+                doUpsert(pEmail,pName);
+            });
+    }
+    silentRefresh(parentEmail,parentName);
+    silentRefresh(parent2Email,parent2Name);
 }
 
-function _showInviteModal(enrollId,url,parentEmail,accessCode){
+// primary/secondary: {email,name,url,accessCode} — secondary is null/absent
+// when there's no second parent (or they share the primary's email). Each
+// gets their OWN link/code because each has their OWN link_parent_invites
+// row, so either parent can create an independent Link portal login.
+function _showInviteModal(enrollId,primary,secondary){
     var e=enrollments[enrollId]||{};
     var firstName=(e.camperName||'').split(' ')[0]||'your child';
-    var pName=e.parentName||e.parent1Name||e.parentEmail||'Parent';
-    var pFirst=pName.split(' ')[0];
+
+    function renderParentBlock(p,label){
+        var pName=p.name||p.email||'Parent';
+        var pFirst=pName.split(' ')[0];
+        var h='';
+        if(label)h+='<div style="font-size:.78rem;font-weight:700;color:var(--s600);text-transform:uppercase;letter-spacing:.05em;margin-bottom:8px;">'+esc(label)+' — '+esc(pName)+'</div>';
+        h+='<p style="font-size:.85rem;color:var(--s600);margin-bottom:14px;">Share <strong>either</strong> of these with <strong>'+esc(pFirst)+'</strong> — they only need one to get started.</p>';
+
+        if(p.accessCode){
+            h+='<div style="background:#EFF6FF;border:2px solid #BFDBFE;border-radius:10px;padding:14px 16px;margin-bottom:14px;">';
+            h+='<div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:4px;">';
+            h+='<span style="font-size:.72rem;font-weight:700;color:#1D4ED8;text-transform:uppercase;letter-spacing:.06em;">Access Code</span>';
+            h+='<button class="me-btn me-btn--sec me-btn--sm" onclick="var b=this;navigator.clipboard.writeText(\''+p.accessCode+'\').then(function(){b.textContent=\'Copied ✓\';setTimeout(function(){b.textContent=\'Copy\'},2000)})" style="font-size:.72rem;padding:3px 10px;">Copy</button>';
+            h+='</div>';
+            h+='<div style="font-size:1.5rem;font-weight:800;letter-spacing:.2em;color:#1E40AF;font-family:monospace;">'+esc(p.accessCode)+'</div>';
+            h+='<div style="font-size:.72rem;color:#3B82F6;margin-top:4px;">Parent goes to the portal URL and enters this code after creating an account</div>';
+            h+='</div>';
+        }
+
+        h+='<div style="margin-bottom:14px;">';
+        h+='<div style="font-size:.72rem;font-weight:700;color:var(--s500);text-transform:uppercase;letter-spacing:.06em;margin-bottom:6px;">Or — One-click Invite Link</div>';
+        h+='<div style="background:var(--s50);border:1px solid var(--s200);border-radius:8px;padding:10px 12px;display:flex;align-items:center;gap:8px;">';
+        h+='<span style="font-size:.72rem;color:var(--s600);flex:1;word-break:break-all;font-family:monospace;">'+esc(p.url)+'</span>';
+        h+='<button class="me-btn me-btn--sec me-btn--sm" onclick="var b=this;navigator.clipboard.writeText(\''+p.url.replace(/'/g,"\\'")+'\'||document.location).then(function(){b.textContent=\'Copied ✓\';toast(\'Link copied!\');setTimeout(function(){b.textContent=\'Copy\'},2500)})" style="white-space:nowrap;flex-shrink:0;font-size:.72rem;padding:4px 10px;">Copy</button>';
+        h+='</div></div>';
+
+        h+='<details style="margin-bottom:14px;">';
+        h+='<summary style="font-size:.8rem;font-weight:600;color:var(--s600);cursor:pointer;user-select:none;">Preview email message</summary>';
+        h+='<div style="margin-top:10px;background:#fff;border:1px solid var(--s200);border-radius:8px;padding:14px;font-size:.82rem;line-height:1.7;color:var(--s700);white-space:pre-wrap;">';
+        h+='Dear '+esc(pFirst)+',\n\nWe\'re excited to let you know that <strong>'+esc(firstName)+'</strong> has been accepted to camp!\n\n';
+        if(p.accessCode)h+='Your access code for the Campistry Link parent portal is: <strong>'+esc(p.accessCode)+'</strong>\n\nOr click the link below to get started directly:\n\n';
+        h+='<a href="'+esc(p.url)+'" style="color:#3B82F6;">'+esc(p.url)+'</a>\n\nWe look forward to a wonderful summer!\n\nCamp Office';
+        h+='</div></details>';
+
+        if(p.email){
+            h+='<div style="font-size:.75rem;color:var(--s400);">';
+            h+='<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="vertical-align:-2px;margin-right:4px;"><path d="M4 4h16c1.1 0 2 .9 2 2v12c0 1.1-.9 2-2 2H4c-1.1 0-2-.9-2-2V6c0-1.1.9-2 2-2z"/><polyline points="22,6 12,13 2,6"/></svg>';
+            h+=esc(p.email)+'</div>';
+        }
+        return h;
+    }
 
     var h='<div style="max-width:500px;">';
     h+='<div style="display:flex;align-items:center;gap:12px;margin-bottom:16px;">';
     h+='<div style="width:44px;height:44px;border-radius:50%;background:#DBEAFE;display:flex;align-items:center;justify-content:center;flex-shrink:0;">';
     h+='<svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="#3B82F6" stroke-width="2"><path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71"/><path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71"/></svg>';
     h+='</div>';
-    h+='<div><div style="font-size:1rem;font-weight:700;color:var(--s800);">Parent Portal Invite Ready</div>';
+    h+='<div><div style="font-size:1rem;font-weight:700;color:var(--s800);">Parent Portal Invite'+(secondary?'s':'')+' Ready</div>';
     h+='<div style="font-size:.8rem;color:var(--s500);">'+esc(e.camperName||'')+'\'s acceptance</div></div></div>';
 
-    h+='<p style="font-size:.85rem;color:var(--s600);margin-bottom:14px;">Share <strong>either</strong> of these with <strong>'+esc(pFirst)+'</strong> — they only need one to get started.</p>';
-
-    // Access code — prominent
-    if(accessCode){
-        h+='<div style="background:#EFF6FF;border:2px solid #BFDBFE;border-radius:10px;padding:14px 16px;margin-bottom:14px;">';
-        h+='<div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:4px;">';
-        h+='<span style="font-size:.72rem;font-weight:700;color:#1D4ED8;text-transform:uppercase;letter-spacing:.06em;">Access Code</span>';
-        h+='<button class="me-btn me-btn--sec me-btn--sm" onclick="var b=this;navigator.clipboard.writeText(\''+accessCode+'\').then(function(){b.textContent=\'Copied ✓\';setTimeout(function(){b.textContent=\'Copy\'},2000)})" style="font-size:.72rem;padding:3px 10px;">Copy</button>';
-        h+='</div>';
-        h+='<div style="font-size:1.5rem;font-weight:800;letter-spacing:.2em;color:#1E40AF;font-family:monospace;">'+esc(accessCode)+'</div>';
-        h+='<div style="font-size:.72rem;color:#3B82F6;margin-top:4px;">Parent goes to the portal URL and enters this code after creating an account</div>';
-        h+='</div>';
-    }
-
-    // Invite link
-    h+='<div style="margin-bottom:14px;">';
-    h+='<div style="font-size:.72rem;font-weight:700;color:var(--s500);text-transform:uppercase;letter-spacing:.06em;margin-bottom:6px;">Or — One-click Invite Link</div>';
-    h+='<div style="background:var(--s50);border:1px solid var(--s200);border-radius:8px;padding:10px 12px;display:flex;align-items:center;gap:8px;">';
-    h+='<span style="font-size:.72rem;color:var(--s600);flex:1;word-break:break-all;font-family:monospace;">'+esc(url)+'</span>';
-    h+='<button class="me-btn me-btn--sec me-btn--sm" onclick="var b=this;navigator.clipboard.writeText(\''+url.replace(/'/g,"\\'")+'\'||document.location).then(function(){b.textContent=\'Copied ✓\';toast(\'Link copied!\');setTimeout(function(){b.textContent=\'Copy\'},2500)})" style="white-space:nowrap;flex-shrink:0;font-size:.72rem;padding:4px 10px;">Copy</button>';
-    h+='</div></div>';
-
-    // Email preview
-    h+='<details style="margin-bottom:14px;">';
-    h+='<summary style="font-size:.8rem;font-weight:600;color:var(--s600);cursor:pointer;user-select:none;">Preview email message</summary>';
-    h+='<div style="margin-top:10px;background:#fff;border:1px solid var(--s200);border-radius:8px;padding:14px;font-size:.82rem;line-height:1.7;color:var(--s700);white-space:pre-wrap;">';
-    h+='Dear '+esc(pFirst)+',\n\nWe\'re excited to let you know that <strong>'+esc(firstName)+'</strong> has been accepted to camp!\n\n';
-    if(accessCode)h+='Your access code for the Campistry Link parent portal is: <strong>'+esc(accessCode)+'</strong>\n\nOr click the link below to get started directly:\n\n';
-    h+='<a href="'+esc(url)+'" style="color:#3B82F6;">'+esc(url)+'</a>\n\nWe look forward to a wonderful summer!\n\nCamp Office';
-    h+='</div></details>';
-
-    if(parentEmail){
-        h+='<div style="font-size:.75rem;color:var(--s400);">';
-        h+='<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="vertical-align:-2px;margin-right:4px;"><path d="M4 4h16c1.1 0 2 .9 2 2v12c0 1.1-.9 2-2 2H4c-1.1 0-2-.9-2-2V6c0-1.1.9-2 2-2z"/><polyline points="22,6 12,13 2,6"/></svg>';
-        h+=esc(parentEmail)+'</div>';
+    h+=renderParentBlock(primary,secondary?'Parent 1':'');
+    if(secondary){
+        h+='<hr style="border:none;border-top:1px solid var(--s200);margin:4px 0 18px;">';
+        h+=renderParentBlock(secondary,'Parent 2');
     }
 
     h+='</div>';
@@ -7737,6 +7796,7 @@ function enrollCamper(id){
             division:'',grade:'',bunk:'',teams:{},team:'',
             street:e.street||'',city:e.city||'',state:e.state||'',zip:e.zip||'',
             parent1Name:e.parentName||'',parent1Phone:e.parentPhone||'',parent1Email:e.parentEmail||'',
+            parent2Name:e.parent2Name||'',parent2Phone:e.parent2Phone||'',parent2Email:e.parent2Email||'',parent2Relation:e.parent2Relation||'',
             emergencyName:e.emergencyName||'',emergencyPhone:e.emergencyPhone||'',emergencyRel:e.emergencyRel||'',
             allergies:e.allergies||'',medications:e.medications||'',dietary:e.dietary||'',
             smsEmailConsent:!!e.smsEmailConsent
@@ -7765,6 +7825,7 @@ function enrollCamper(id){
         if(!c.teacher&&e.teacher)c.teacher=e.teacher;
         if(!c.street&&e.street){c.street=e.street;c.city=e.city;c.state=e.state;c.zip=e.zip;syncAddressToGo(e.camperName,c)}
         if(!c.parent1Name&&e.parentName){c.parent1Name=e.parentName;c.parent1Phone=e.parentPhone;c.parent1Email=e.parentEmail}
+        if(!c.parent2Name&&e.parent2Name){c.parent2Name=e.parent2Name;c.parent2Phone=e.parent2Phone;c.parent2Email=e.parent2Email;c.parent2Relation=e.parent2Relation}
         if(!c.smsEmailConsent&&e.smsEmailConsent)c.smsEmailConsent=true; // never downgrade consent already captured
         if(!c.emergencyName&&e.emergencyName){c.emergencyName=e.emergencyName;c.emergencyPhone=e.emergencyPhone;c.emergencyRel=e.emergencyRel}
         if(!c.allergies&&e.allergies)c.allergies=e.allergies;
@@ -7795,7 +7856,7 @@ function enrollCamper(id){
     }else if(e.parentName){
         famKey='fam_'+lastName.toLowerCase().replace(/[^a-z0-9]/g,'')+'_'+(roster[e.camperName]?roster[e.camperName].camperId:Date.now());
         var parents=[{name:e.parentName,phone:e.parentPhone||'',email:e.parentEmail||'',relation:e.parentRelation||'Parent'}];
-        if(e.parent2Name)parents.push({name:e.parent2Name,phone:e.parent2Phone||'',relation:'Parent'});
+        if(e.parent2Name)parents.push({name:e.parent2Name,phone:e.parent2Phone||'',email:e.parent2Email||'',relation:e.parent2Relation||'Parent'});
         families[famKey]={
             name:lastName+' Family',
             households:[{label:'Primary',parents:parents,address:addr,billingContact:true}],
@@ -8599,7 +8660,7 @@ function buildFamilyLedgers(){
             fk='pending_'+lastName.toLowerCase().replace(/[^a-z0-9]/g,'')+'_'+eid;
             if(!ledgers[fk]){
                 var parents=[{name:e.parentName,phone:e.parentPhone||'',email:e.parentEmail||'',relation:e.parentRelation||'Parent'}];
-                if(e.parent2Name)parents.push({name:e.parent2Name,phone:e.parent2Phone||'',relation:'Parent'});
+                if(e.parent2Name)parents.push({name:e.parent2Name,phone:e.parent2Phone||'',email:e.parent2Email||'',relation:e.parent2Relation||'Parent'});
                 var synthFamily={
                     name:lastName+' Family',
                     households:[{label:'Primary',parents:parents,address:[e.street,e.city,e.state,e.zip].filter(Boolean).join(', '),billingContact:true}],
