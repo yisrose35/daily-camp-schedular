@@ -5459,6 +5459,68 @@ function _fbPushPreview(){
     _fbPushTimer=setTimeout(_fbCollectAndSend,150);
 }
 
+// Drag-to-resize divider between the settings panel and the live preview —
+// lets the office widen the settings side when they don't need to see much
+// of the preview (e.g. while building Custom Sections) and shrink it back
+// when they want to check the layout. Width is stored as a CSS custom
+// property on .fb-body (not an inline width on .fb-panel itself) so the
+// existing max-width:900px media query — which stacks the panel full-width
+// on mobile — still wins there; an inline style would out-specificity it.
+var _fbResizeMinPanel=300, _fbResizeMinPreview=280, _fbResizeDefault=400;
+function _fbApplyPanelWidth(px){
+    var body=document.querySelector('#formBuilderOverlay .fb-body');
+    if(body)body.style.setProperty('--fb-panel-w',px+'px');
+}
+function _fbClampPanelWidth(px){
+    var body=document.querySelector('#formBuilderOverlay .fb-body');
+    var total=body?body.getBoundingClientRect().width:900;
+    var max=Math.max(_fbResizeMinPanel,total-_fbResizeMinPreview-7);
+    return Math.max(_fbResizeMinPanel,Math.min(px,max));
+}
+function _fbInitResizer(){
+    var resizer=document.getElementById('fbResizer');
+    if(!resizer||resizer._fbWired)return;
+    resizer._fbWired=true;
+    var dragging=false;
+    resizer.addEventListener('pointerdown',function(ev){
+        dragging=true;
+        resizer.classList.add('fb-resizer--active');
+        document.body.style.cursor='col-resize';
+        document.body.style.userSelect='none';
+        ev.preventDefault();
+    });
+    resizer.addEventListener('dblclick',function(){
+        _fbApplyPanelWidth(_fbResizeDefault);
+        try{localStorage.setItem('campistry_fbPanelWidth',_fbResizeDefault);}catch(e){}
+    });
+    window.addEventListener('pointermove',function(ev){
+        if(!dragging)return;
+        var body=document.querySelector('#formBuilderOverlay .fb-body');
+        if(!body)return;
+        var rect=body.getBoundingClientRect();
+        var w=_fbClampPanelWidth(ev.clientX-rect.left);
+        _fbApplyPanelWidth(w);
+    });
+    window.addEventListener('pointerup',function(){
+        if(!dragging)return;
+        dragging=false;
+        resizer.classList.remove('fb-resizer--active');
+        document.body.style.cursor='';
+        document.body.style.userSelect='';
+        var body=document.querySelector('#formBuilderOverlay .fb-body');
+        var w=body?parseInt(getComputedStyle(body).getPropertyValue('--fb-panel-w'),10):null;
+        if(w)try{localStorage.setItem('campistry_fbPanelWidth',w);}catch(e){}
+    });
+}
+function _fbRestorePanelWidth(){
+    var saved=_fbResizeDefault;
+    try{
+        var stored=parseInt(localStorage.getItem('campistry_fbPanelWidth')||'',10);
+        if(stored)saved=stored;
+    }catch(e){}
+    _fbApplyPanelWidth(_fbClampPanelWidth(saved));
+}
+
 function openFormBuilder(kind){
     _fbKind=(kind==='staff')?'staff':(kind==='postaccept')?'postaccept':'registration';
     var isStaff=_fbKind==='staff';
@@ -5499,6 +5561,8 @@ function openFormBuilder(kind){
     // deprioritize/delay a frame's load while its ancestor chain is
     // display:none, which left the preview frame stuck mid-parse.
     document.getElementById('formBuilderOverlay').style.display='flex';
+    _fbInitResizer();
+    _fbRestorePanelWidth();
     var frame=document.getElementById('fbPreviewFrame');
     frame.src=(isStaff?'campistry_staff_apply.html':isPaf?'campistry_postaccept.html':'campistry_register.html')+'?preview=1';
 }
