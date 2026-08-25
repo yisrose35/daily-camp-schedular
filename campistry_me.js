@@ -1561,6 +1561,10 @@ function renderStaffDetailPage(){
         var notesBody='<textarea id="staffNote" style="width:100%;padding:8px 10px;border:1.5px solid var(--s200);border-radius:var(--r);font-size:.82rem;font-family:var(--font);min-height:60px;resize:vertical;outline:none" placeholder="Interview notes, impressions…">'+(app.adminNotes?esc(app.adminNotes):'')+'</textarea>'
             +'<button class="me-btn me-btn--sec me-btn--sm" style="margin-top:6px" onclick="CampistryMe.saveStaffNotes(\''+je(row.appId)+'\')">Save Notes</button>';
         g+=_dpCard('Internal Notes',notesBody,{icon:'messageSquare'});
+
+        if(app.staffId)g+=_dpCard('Attendance History',_dpAttendanceHistoryCard(app.staffId,'staff',app.name||row.name,app.dob,app.otherCamps,
+            "CampistryMe.addOtherCampToStaff('"+je(row.appId)+"')",
+            "CampistryMe.removeOtherCampFromStaff('"+je(row.appId)+"',"),{icon:'clock'});
     }
 
     g+='</div>';
@@ -1983,6 +1987,136 @@ function _dpCard(title,bodyHtml,opts){
         +(opts.actionHtml||'')
         +'</div>'+bodyHtml+'</div>';
 }
+
+// ── Attendance History (migration 088) ─────────────────────────────────
+// Shared by both the camper and staff full-page profiles. Two parts: the
+// cross-season history from camp_person_seasons (async — RPC round trip,
+// so this renders a placeholder synchronously and patches the DOM once it
+// resolves) plus a manual "Other Camps Attended" list for camps entirely
+// outside Campistry, which is local/synchronous like any other roster field.
+function _dpAttendanceHistoryCard(personId,personType,name,dob,otherCamps,addOnclick,removeOnclickPrefix){
+    var cardId='attHist_'+personType+'_'+personId;
+    var otherHtml=(otherCamps&&otherCamps.length)
+        ?otherCamps.map(function(c,i){return '<div style="display:flex;justify-content:space-between;align-items:center;gap:8px;padding:4px 0;font-size:.83rem"><span>'+esc(c.name)+(c.years?' — '+esc(c.years):'')+'</span><button class="me-btn me-btn--ghost me-btn--sm" onclick="'+removeOnclickPrefix+i+')">Remove</button></div>';}).join('')
+        :'<div style="font-size:.8rem;color:var(--s400);font-style:italic">None on file</div>';
+    var h='<div id="'+cardId+'_body"><div style="font-size:.8rem;color:var(--s400)">Loading…</div></div>';
+    h+='<div style="margin-top:10px;padding-top:10px;border-top:1px solid var(--s100)">';
+    h+='<div style="font-size:.72rem;font-weight:700;color:var(--s500);text-transform:uppercase;letter-spacing:.05em;margin-bottom:6px">Other Camps Attended</div>';
+    h+='<div id="'+cardId+'_other">'+otherHtml+'</div>';
+    h+='<button class="me-btn me-btn--ghost me-btn--sm" style="margin-top:6px" onclick="'+addOnclick+'">+ Add a Previous Camp</button>';
+    h+='</div>';
+    _loadAttendanceHistory(personId,personType,name,dob,cardId); // fire-and-forget; patches #cardId_body when it resolves
+    return h;
+}
+async function _loadAttendanceHistory(personId,personType,name,dob,cardId){
+    var db=window.CampistryDB&&window.CampistryDB.getClient?window.CampistryDB.getClient():null;
+    var campId=window.CampistryDB&&window.CampistryDB.getCampId?window.CampistryDB.getCampId():null;
+    var bodyEl=document.getElementById(cardId+'_body');
+    if(!db||!campId){if(bodyEl)bodyEl.innerHTML='<div style="font-size:.8rem;color:var(--s400)">Not available offline</div>';return;}
+    var res;
+    try{ res=await db.rpc('get_person_history',{p_camp_id:campId,p_person_id:personId}); }
+    catch(ex){ res={error:ex}; }
+    bodyEl=document.getElementById(cardId+'_body'); // page may have navigated away while this was in flight
+    if(!bodyEl)return;
+    if(res.error||!res.data||!res.data.success){bodyEl.innerHTML='<div style="font-size:.8rem;color:var(--s400)">Could not load history</div>';return;}
+
+    var seasons=res.data.seasons||[];
+    bodyEl.innerHTML=seasons.length?seasons.map(function(s){
+        var typeLbl=s.personType==='camper'?'Camper':'Staff';
+        var snap=s.snapshot||{};
+        var pos=Array.isArray(snap.position)?snap.position.join(', '):snap.position;
+        var detail=s.personType==='camper'?[snap.division,snap.grade,snap.bunk].filter(Boolean).join(', '):(pos||'');
+        return '<div style="display:flex;justify-content:space-between;gap:8px;padding:5px 0;border-bottom:1px solid var(--s100);font-size:.83rem"><span><strong>'+esc(s.seasonLabel)+'</strong>'+(detail?' — '+esc(detail):'')+'</span><span style="color:var(--s400);font-size:.74rem;flex-shrink:0">'+typeLbl+'</span></div>';
+    }).join(''):'<div style="font-size:.8rem;color:var(--s400);font-style:italic">No archived seasons yet — history starts accumulating from the next Archive Current Season or CSV re-import.</div>';
+
+    // Only offer a link suggestion when nobody's confirmed-linked yet.
+    if(res.data.linkedPersonId||!name)return;
+    try{
+        var lr=await db.rpc('get_possible_person_links',{p_camp_id:campId,p_person_id:personId,p_type:personType,p_name:name,p_dob:dob||null});
+        bodyEl=document.getElementById(cardId+'_body');
+        if(!bodyEl)return;
+        var cands=(!lr.error&&lr.data&&lr.data.success)?(lr.data.candidates||[]):[];
+        var dismissed=_dismissedPersonLinks();
+        cands=cands.filter(function(c){return dismissed.indexOf(_personLinkKey(personId,c.personId))<0;});
+        if(!cands.length)return;
+        var banner=cands.map(function(c){
+            var rc=c.confidence==='high'?'ok':'warn';
+            return '<div style="display:flex;align-items:center;gap:8px;background:#FEF9E7;border:1px solid #FDE68A;border-radius:8px;padding:8px 10px;margin-bottom:6px;font-size:.82rem">'
+                +'<span style="flex:1">Might be the same person as <strong>'+esc(c.name)+'</strong> ('+(c.personType==='camper'?'camper':'staff')+(c.seasonLabels&&c.seasonLabels.length?', '+esc(c.seasonLabels.join(', ')):'')+') '+bdg(c.confidence,rc)+'</span>'
+                +'<button class="me-btn me-btn--pri me-btn--sm" onclick="CampistryMe._confirmPersonLink('+personId+',\''+personType+'\','+c.personId+',\''+c.personType+'\')">Confirm</button>'
+                +'<button class="me-btn me-btn--ghost me-btn--sm" onclick="CampistryMe._dismissPersonLink('+personId+','+c.personId+')">Dismiss</button>'
+                +'</div>';
+        }).join('');
+        bodyEl.innerHTML=banner+bodyEl.innerHTML;
+    }catch(ex){}
+}
+// Dismissed link suggestions are client-side only (per browser), same
+// convention as the family-merge suggestion banner's
+// campistry_dismissed_fam_suggestions — no server-side "dismissed" state.
+function _personLinkKey(a,b){return [a,b].sort(function(x,y){return x-y;}).join('|');}
+function _dismissedPersonLinks(){try{return JSON.parse(localStorage.getItem('campistry_dismissed_person_links')||'[]');}catch(e){return [];}}
+function _dismissPersonLink(a,b){
+    var key=_personLinkKey(a,b);
+    var list=_dismissedPersonLinks();
+    if(list.indexOf(key)<0){list.push(key);try{localStorage.setItem('campistry_dismissed_person_links',JSON.stringify(list));}catch(e){}}
+    if(curPage==='camperdetail')renderCamperDetailPage();
+    else if(curPage==='staffdetail')renderStaffDetailPage();
+}
+async function _confirmPersonLink(idA,typeA,idB,typeB){
+    var db=window.CampistryDB&&window.CampistryDB.getClient?window.CampistryDB.getClient():null;
+    var campId=window.CampistryDB&&window.CampistryDB.getCampId?window.CampistryDB.getCampId():null;
+    if(!db||!campId){toast('Not available offline','error');return;}
+    var res=await db.rpc('confirm_person_link',{p_camp_id:campId,p_person_id_a:idA,p_type_a:typeA,p_person_id_b:idB,p_type_b:typeB});
+    if(res.error||!res.data||!res.data.success){toast('Could not link records','error');return;}
+    toast('Linked — history merged');
+    if(curPage==='camperdetail')renderCamperDetailPage();
+    else if(curPage==='staffdetail')renderStaffDetailPage();
+}
+// "Other Camps Attended" — free-form, since a camp outside Campistry has
+// nothing here to look up automatically. Same micro-modal pattern as
+// addCamperNote(): a small form, onSave does the write/close/refresh.
+function _showAddOtherCampModal(onSave){
+    var h='<div class="me-modal-form"><div class="me-field"><label>Camp Name</label><input id="ocName" class="me-input" placeholder="e.g. Camp Ramah"></div><div class="me-field"><label>Years Attended</label><input id="ocYears" class="me-input" placeholder="e.g. 2019-2021"></div></div>';
+    showModal('Add a Previous Camp',h,function(){
+        var name=(document.getElementById('ocName').value||'').trim();
+        if(!name){toast('Enter a camp name','error');return;}
+        var years=(document.getElementById('ocYears').value||'').trim();
+        onSave(name,years);
+    });
+}
+function addOtherCampToCamper(camperName){
+    var d=roster[camperName]; if(!d)return;
+    _showAddOtherCampModal(function(name,years){
+        d.otherCamps=d.otherCamps||[];
+        d.otherCamps.push({name:name,years:years});
+        save();closeModal('dynModal');
+        if(curPage==='camperdetail')renderCamperDetailPage();
+        toast('Added');
+    });
+}
+function removeOtherCampFromCamper(camperName,idx){
+    var d=roster[camperName]; if(!d||!d.otherCamps)return;
+    d.otherCamps.splice(idx,1);
+    save();
+    if(curPage==='camperdetail')renderCamperDetailPage();
+}
+function addOtherCampToStaff(appId){
+    var a=staffApplications[appId]; if(!a)return;
+    _showAddOtherCampModal(function(name,years){
+        a.otherCamps=a.otherCamps||[];
+        a.otherCamps.push({name:name,years:years});
+        save();closeModal('dynModal');
+        _refreshStaffView(appId);
+        toast('Added');
+    });
+}
+function removeOtherCampFromStaff(appId,idx){
+    var a=staffApplications[appId]; if(!a||!a.otherCamps)return;
+    a.otherCamps.splice(idx,1);
+    save();
+    _refreshStaffView(appId);
+}
+
 function renderCamperDetailPage(){
     var c=document.getElementById('page-camperdetail');
     if(!c)return;
@@ -2122,6 +2256,10 @@ function renderCamperDetailPage(){
     g+=_dpCard('Notes & Timeline',renderCamperTimeline(n),{icon:'messageSquare',badge:noteCount?String(noteCount):'',actionHtml:'<button class="me-btn me-btn--ghost me-btn--sm" onclick="CampistryMe.addCamperNote(\''+je(n)+'\')">+ Add Note</button>'});
 
     g+=_dpCard('History',renderCamperHistory(n),{icon:'clock'});
+
+    if(d.camperId)g+=_dpCard('Attendance History',_dpAttendanceHistoryCard(d.camperId,'camper',n,d.dob,d.otherCamps,
+        "CampistryMe.addOtherCampToCamper('"+je(n)+"')",
+        "CampistryMe.removeOtherCampFromCamper('"+je(n)+"',"),{icon:'clock'});
 
     g+='</div>';
 
@@ -12735,6 +12873,9 @@ window.CampistryMe={
     openFormBuilder:openFormBuilder,closeFormBuilder:closeFormBuilder,_fbOpenPreviewWindow:_fbOpenPreviewWindow,
     _toggleMenu:_toggleMenu,
     _openPhotoLightbox:_openPhotoLightbox,
+    _confirmPersonLink:_confirmPersonLink,_dismissPersonLink:_dismissPersonLink,
+    addOtherCampToCamper:addOtherCampToCamper,removeOtherCampFromCamper:removeOtherCampFromCamper,
+    addOtherCampToStaff:addOtherCampToStaff,removeOtherCampFromStaff:removeOtherCampFromStaff,
     copyLinkText:copyLinkText,showLinkQR:showLinkQR,showRegistrationQR:showRegistrationQR,showStaffQR:showStaffQR,
     openSendLinkModal:openSendLinkModal,openSendRegLinkModal:openSendRegLinkModal,openSendStaffLinkModal:openSendStaffLinkModal,
     // Payroll
