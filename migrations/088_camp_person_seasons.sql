@@ -64,13 +64,10 @@ CREATE UNIQUE INDEX IF NOT EXISTS camp_person_links_pair_uq
 ALTER TABLE camp_person_links ENABLE ROW LEVEL SECURITY;
 
 -- ─── 3. archive_camp_season — snapshot every current person for one season ──
--- Client builds p_people from the CURRENT roster + hiredStaff() (that's
--- where division/grade/bunk/position/school/parent data already lives —
--- no reason to duplicate that read server-side). Idempotent per
--- (camp_id, person_id, person_type, season_label): re-archiving the same
--- label just updates the snapshot, never duplicates a row — safe to call
--- more than once for the same season (e.g. re-running before the actual
--- wipe, or a manual mid-season snapshot).
+-- Idempotent per (camp_id, person_id, person_type, season_label):
+-- re-archiving the same label just updates the snapshot, never duplicates
+-- a row — safe to call more than once for the same season (e.g. re-running
+-- before the actual wipe, or a manual mid-season snapshot).
 --
 -- Deliberately server-side-only — reads camp_state_kv('campistryMe')
 -- directly rather than accepting a client-built people list. Two reasons:
