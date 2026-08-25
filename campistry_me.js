@@ -85,6 +85,11 @@ var _setupChecklistDismissed=false; // owner dismissed the onboarding progress c
 var leads={};               // Inquiry CRM: lead id → prospective-family record
 var leadFilter='all';       // Leads pipeline filter
 var nextCamperId=1;
+// Separate from payroll.nextStaffId (an internal id that only links
+// timesheets/pay runs to payroll.staff records) — this is the camp-facing
+// Staff ID, assigned once to every hired applicant the same way camperId
+// is assigned once to every enrolled camper.
+var nextStaffId=1;
 // Bunk auto-generator settings — camp-wide policy for friend requests,
 // do-not-bunk-with requests, and bunk size, consumed by autoGenerateBunks()
 // and by the Post-Acceptance Form's friend-request inputs.
@@ -276,6 +281,14 @@ function loadData(){
         Object.values(roster).forEach(function(c){if(c.camperId&&c.camperId>maxId)maxId=c.camperId});
         if(maxId>=nextCamperId)nextCamperId=maxId+1;
         Object.entries(roster).forEach(function([n,c]){if(!c.camperId){c.camperId=nextCamperId;nextCamperId++}});
+        nextStaffId=me.nextStaffId||1;
+        // Backfill: any applicant already at "hired" from before this feature
+        // shipped gets a Staff ID assigned now — same one-time-assignment
+        // rule setStaffStatus uses going forward.
+        var maxStaffId=0;
+        Object.values(staffApplications).forEach(function(a){if(a&&a.staffId>maxStaffId)maxStaffId=a.staffId});
+        if(maxStaffId>=nextStaffId)nextStaffId=maxStaffId+1;
+        Object.values(staffApplications).forEach(function(a){if(a&&a.status==='hired'&&!a.staffId){a.staffId=nextStaffId;nextStaffId++}});
         // ★ Bunk Builder/Edit reconciliation: bunkAsgn (legacy Bunk Builder
         // drag-drop state) and roster[name].bunk (the field Edit, CSV import,
         // and Campistry Link all actually read) used to be two independent
@@ -365,6 +378,7 @@ function save(){
             bunkStaff:bunkStaff,
             divisionHeads:divisionHeads,
             nextCamperId:nextCamperId,
+            nextStaffId:nextStaffId,
             enrollments:enrollments,
             staffApplications:staffApplications,
             leads:leads,
@@ -4713,8 +4727,9 @@ function viewStaffApp(id){
 
     function isSafeImageDataUrl(s){return typeof s==='string'&&/^data:image\/(png|jpeg|jpg|gif|webp);base64,[A-Za-z0-9+\/=]+$/.test(s);}
     var headPhoto=(a.photo&&isSafeImageDataUrl(a.photo))?'<img src="'+a.photo+'" style="width:40px;height:40px;object-fit:cover;border-radius:9px;flex-shrink:0">':'';
+    var staffIdBadge=a.staffId?' <span style="font-family:monospace;font-size:.72rem;color:var(--s400);background:var(--s100);padding:2px 8px;border-radius:var(--r);vertical-align:1px">Staff ID: #'+esc(String(a.staffId).padStart(4,'0'))+'</span>':'';
     var head='<div style="display:flex;justify-content:space-between;align-items:flex-start;gap:10px">'
-        +'<div style="display:flex;align-items:center;gap:10px">'+headPhoto+'<div><h3 style="font-size:1.1rem;font-weight:700;color:var(--s800);margin:0">'+esc(name)+'</h3>'
+        +'<div style="display:flex;align-items:center;gap:10px">'+headPhoto+'<div><h3 style="font-size:1.1rem;font-weight:700;color:var(--s800);margin:0">'+esc(name)+staffIdBadge+'</h3>'
         +'<div style="display:flex;gap:5px;margin-top:5px">'+bdg(_staffLabel(st),sc)+((a.positions||[]).length?' '+bdg((a.positions||[]).join(', '),'gray'):'')+'</div></div></div>'
         +'<div style="display:flex;align-items:center;gap:8px;flex-shrink:0"><select class="fs" style="width:auto;padding:5px 8px;font-size:.78rem" onchange="CampistryMe.setStaffStatus(\''+je(id)+'\',this.value)">'+stOpts+'</select>'
         +'<button class="me-modal-x" onclick="CampistryMe.closeModal(\'appViewModal\')">&times;</button></div></div>';
@@ -5026,6 +5041,10 @@ function setStaffStatus(id,status,opts){
     var a=staffApplications[id]; if(!a)return;
     var prevStatus=a.status;
     a.status=status;
+    // Reaching "hired" for the first time assigns a permanent Staff ID —
+    // same rule as camperId: sequential, assigned once, never reused or
+    // reassigned on a later status change.
+    if(status==='hired'&&prevStatus!=='hired'&&!a.staffId){a.staffId=nextStaffId;nextStaffId++;}
     save();
     _refreshPplIfActive();
     if(!opts.fromRow) viewStaffApp(id);
