@@ -12069,7 +12069,18 @@ function handleCsv(file){
                 var archiveLabel=(archiveLabelEl&&archiveLabelEl.value||'').trim();
                 if(archiveLabel){
                     toast('Archiving current season…');
-                    await archiveCurrentSeason(archiveLabel);
+                    var archiveRes=await archiveCurrentSeason(archiveLabel);
+                    // The import wipe below is irreversible. If the archive call
+                    // didn't actually make it to the cloud (network error, RPC
+                    // failure, migration 088 not yet run), silently continuing
+                    // would wipe the roster while the office believes this
+                    // season's history was saved. Make the failure loud and let
+                    // them choose, rather than lose data quietly.
+                    if(!archiveRes||archiveRes.success===false){
+                        var archErr=(archiveRes&&archiveRes.error)||'unknown error';
+                        var proceedAnyway=await confirmDialog({title:'Archive Failed',message:'Could not save this season\'s attendance history to the cloud ('+esc(archErr)+'). If you continue, the current roster will be replaced and this season\'s history will be lost.<br><br>Continue with the import anyway?',confirmLabel:'Import Without Archiving',danger:true});
+                        if(!proceedAnyway)return;
+                    }
                 }
                 importRows(uniqueRows);
             }}
