@@ -3999,30 +3999,52 @@ function refreshParentsPage(){
         .catch(function(){ _renderJoinRequests([]); });
 }
 
+// Renders a status badge for one parent's invite and counts it into the
+// invited/claimed page-level stats — called once per parent (up to 2 per
+// family row), so the stats reflect LOGINS, not just families.
+function _pgStatusBadge(inv, counters){
+    if (inv) counters.invited++;
+    if (inv && inv.claimed) counters.claimed++;
+    return !inv ? '<span class="badge badge-neutral">No invite</span>'
+               : inv.claimed ? '<span class="badge badge-ok">Signed up ✓</span>'
+               : '<span class="badge badge-warn">Invited</span>';
+}
+function _pgLinkBtn(inv){
+    return inv ? '<button class="btn btn-ghost btn-sm" style="font-size:.68rem;padding:2px 8px;" onclick="var b=this;navigator.clipboard.writeText(_pgPortalUrl(\'' + inv.token + '\')).then(function(){b.textContent=\'✓\';setTimeout(function(){b.textContent=\'Copy link\'},1500)})">Copy link</button>' : '';
+}
+// Stacks a primary-parent value and (when a second parent exists on this
+// family) a secondary-parent value as two lines within the same table
+// cell — keeps the table at one row per FAMILY while still surfacing both
+// parents' independent invite/login state.
+function _pgStack(primaryHtml, secondaryHtml, hasP2){
+    if (!hasP2) return primaryHtml;
+    return '<div>' + primaryHtml + '</div><div style="border-top:1px solid var(--border-light);margin-top:5px;padding-top:5px;">' + secondaryHtml + '</div>';
+}
+
 function _renderParentFamilies(){
     var fams = _pgFamilies();
     var body = document.getElementById('parentFamiliesBody');
     var empty = document.getElementById('parentFamiliesEmpty');
     if (!body) return;
-    var invited = 0, claimed = 0;
+    var counters = { invited: 0, claimed: 0 };
     var rows = fams.map(function(f){
-        var inv = _parentInvitesByEmail[(f.parentEmail || '').toLowerCase()];
-        if (inv) invited++;
-        if (inv && inv.claimed) claimed++;
-        var status = !inv ? '<span class="badge badge-neutral">No invite</span>'
-                   : inv.claimed ? '<span class="badge badge-ok">Signed up ✓</span>'
-                   : '<span class="badge badge-warn">Invited</span>';
+        var hasP2 = !!(f.parent2Email && f.parent2Email.toLowerCase() !== (f.parentEmail || '').toLowerCase());
+        var inv1 = _parentInvitesByEmail[(f.parentEmail || '').toLowerCase()];
+        var inv2 = hasP2 ? _parentInvitesByEmail[f.parent2Email.toLowerCase()] : null;
         var kids = (f.children || []).map(function(c){ return c.name.split(' ')[0]; }).join(', ');
-        var linkBtn = inv ? '<button class="btn btn-ghost btn-sm" style="font-size:.68rem;padding:2px 8px;" onclick="var b=this;navigator.clipboard.writeText(_pgPortalUrl(\'' + inv.token + '\')).then(function(){b.textContent=\'✓\';setTimeout(function(){b.textContent=\'Copy link\'},1500)})">Copy link</button>' : '';
         var msgBtn = (f.parentEmail || (f.children || []).length)
             ? '<button class="btn btn-ghost btn-sm" style="font-size:.68rem;padding:2px 8px;" data-pn="' + esc(f.parentName || '') + '" onclick="msgParent(this.dataset.pn)" title="Send a quick message to this family">Message</button>'
             : '';
+
+        var nameCell1 = '<div style="font-weight:600;">' + esc(f.parentName || '—') + '</div><div style="color:var(--text-muted);font-size:.72rem;">' + esc(f.parentEmail) + '</div>';
+        var nameCell2 = hasP2 ? '<div style="font-weight:600;">' + esc(f.parent2Name || '—') + '</div><div style="color:var(--text-muted);font-size:.72rem;">' + esc(f.parent2Email) + '</div>' : '';
+
         return '<tr style="border-top:1px solid var(--border-light);">'
-            + '<td style="padding:6px 8px;"><div style="font-weight:600;">' + esc(f.parentName || '—') + '</div><div style="color:var(--text-muted);font-size:.72rem;">' + esc(f.parentEmail) + '</div></td>'
+            + '<td style="padding:6px 8px;">' + _pgStack(nameCell1, nameCell2, hasP2) + '</td>'
             + '<td style="padding:6px 8px;">' + esc(kids || '—') + '</td>'
-            + '<td style="padding:6px 8px;">' + status + '</td>'
-            + '<td style="padding:6px 8px;font-family:monospace;">' + esc(inv && inv.access_code ? inv.access_code : '—') + '</td>'
-            + '<td style="padding:6px 8px;text-align:right;white-space:nowrap;">' + msgBtn + ' ' + linkBtn + '</td>'
+            + '<td style="padding:6px 8px;">' + _pgStack(_pgStatusBadge(inv1, counters), hasP2 ? _pgStatusBadge(inv2, counters) : '', hasP2) + '</td>'
+            + '<td style="padding:6px 8px;font-family:monospace;">' + _pgStack(esc(inv1 && inv1.access_code ? inv1.access_code : '—'), hasP2 ? esc(inv2 && inv2.access_code ? inv2.access_code : '—') : '', hasP2) + '</td>'
+            + '<td style="padding:6px 8px;text-align:right;white-space:nowrap;">' + _pgStack(msgBtn + ' ' + _pgLinkBtn(inv1), hasP2 ? _pgLinkBtn(inv2) : '', hasP2) + '</td>'
             + '</tr>';
     });
     body.innerHTML = rows.join('');
@@ -4033,8 +4055,8 @@ function _renderParentFamilies(){
         var mailSvg = '<svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 4h16c1.1 0 2 .9 2 2v12c0 1.1-.9 2-2 2H4c-1.1 0-2-.9-2-2V6c0-1.1.9-2 2-2z"/><polyline points="22,6 12,13 2,6"/></svg>';
         var checkSvg = '<svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="20 6 9 17 4 12"/></svg>';
         stats.innerHTML = stat('blue', famSvg, fams.length, 'Families')
-                        + stat('amber', mailSvg, invited, 'Invited')
-                        + stat('green', checkSvg, claimed, 'Signed up');
+                        + stat('amber', mailSvg, counters.invited, 'Invited')
+                        + stat('green', checkSvg, counters.claimed, 'Signed up');
     }
 }
 
@@ -4051,7 +4073,15 @@ function _renderJoinRequests(reqs){
 
     var fams = _pgFamilies();
     var famOpts = fams.map(function(f){
-        return '<option value="' + esc(f.parentEmail) + '">' + esc((f.parentName || f.parentEmail)) + ' — ' + esc((f.children || []).map(function(c){ return c.name.split(' ')[0]; }).join(', ')) + '</option>';
+        var kids = (f.children || []).map(function(c){ return c.name.split(' ')[0]; }).join(', ');
+        var opts = '<option value="' + esc(f.parentEmail) + '">' + esc((f.parentName || f.parentEmail)) + ' — ' + esc(kids) + '</option>';
+        // A second parent on a distinct email is its own selectable match
+        // target — a join request might be THEIR signup, not the primary
+        // parent's, and each needs their own invite bound to their own email.
+        if (f.parent2Email && f.parent2Email.toLowerCase() !== (f.parentEmail || '').toLowerCase()) {
+            opts += '<option value="' + esc(f.parent2Email) + '">' + esc((f.parent2Name || f.parent2Email)) + ' — ' + esc(kids) + '</option>';
+        }
+        return opts;
     }).join('');
 
     list.innerHTML = reqs.map(function(r){
@@ -4075,13 +4105,17 @@ async function resolveJoinReq(reqId, action){
         var sel = document.getElementById('jr_' + reqId);
         email = sel && sel.value;
         if (!email) { toast('Pick the matching family first'); return; }
-        // Make sure the family has an invite to bind to (idempotent).
-        var fam = _pgFamilies().find(function(f){ return f.parentEmail === email; });
+        // Make sure the SELECTED parent has an invite to bind to (idempotent)
+        // — the dropdown may name either parent on the family, so bind to
+        // whichever one was actually picked, not always the primary.
+        var fam = _pgFamilies().find(function(f){ return f.parentEmail === email || f.parent2Email === email; });
         if (fam) {
+            var isPrimary = fam.parentEmail === email;
+            var pName = isPrimary ? fam.parentName : fam.parent2Name;
             var expires = new Date(); expires.setFullYear(expires.getFullYear() + 1);
             await db.client.rpc('upsert_parent_invite', {
                 p_camp_id: db.campId, p_token: _pgToken(),
-                p_parent_name: fam.parentName || fam.parentEmail, p_parent_email: fam.parentEmail,
+                p_parent_name: pName || email, p_parent_email: email,
                 p_camper_names: (fam.children || []).map(function(c){ return c.name; }),
                 p_camper_data: _pgCamperData(fam.children),
                 p_expires_at: expires.toISOString()
@@ -4129,16 +4163,27 @@ function downloadParentMailMerge(){
     if (!fams.length) { toast('No families on the roster'); return; }
     var head = ['Parent Name','Parent Email','Phone','Children','Invite Link','Access Code','Status'];
     var lines = [head.join(',')];
+    var csv = function(s){ s = String(s == null ? '' : s); return /[",\n]/.test(s) ? '"' + s.replace(/"/g, '""') + '"' : s; };
+    var missing = 0;
+    // One CSV row per PARENT LOGIN, not per family — a second parent on a
+    // distinct email gets their own row (same children column) so a mail
+    // merge tool can reach both instead of only the primary parent.
     fams.forEach(function(f){
-        var inv = _parentInvitesByEmail[(f.parentEmail || '').toLowerCase()];
-        var csv = function(s){ s = String(s == null ? '' : s); return /[",\n]/.test(s) ? '"' + s.replace(/"/g, '""') + '"' : s; };
-        lines.push([
-            csv(f.parentName || ''), csv(f.parentEmail), csv(f.parentPhone || ''),
-            csv((f.children || []).map(function(c){ return c.name; }).join('; ')),
-            csv(inv ? _pgPortalUrl(inv.token) : ''),
-            csv(inv ? (inv.access_code || '') : ''),
-            csv(!inv ? 'no invite' : (inv.claimed ? 'signed up' : 'invited'))
-        ].join(','));
+        var kids = (f.children || []).map(function(c){ return c.name; }).join('; ');
+        function addRow(name, email, phone){
+            var inv = _parentInvitesByEmail[(email || '').toLowerCase()];
+            if (!inv) missing++;
+            lines.push([
+                csv(name || ''), csv(email), csv(phone || ''), csv(kids),
+                csv(inv ? _pgPortalUrl(inv.token) : ''),
+                csv(inv ? (inv.access_code || '') : ''),
+                csv(!inv ? 'no invite' : (inv.claimed ? 'signed up' : 'invited'))
+            ].join(','));
+        }
+        addRow(f.parentName, f.parentEmail, f.parentPhone);
+        if (f.parent2Email && f.parent2Email.toLowerCase() !== (f.parentEmail || '').toLowerCase()) {
+            addRow(f.parent2Name, f.parent2Email, f.parent2Phone);
+        }
     });
     var blob = new Blob([lines.join('\n')], { type: 'text/csv' });
     var a = document.createElement('a');
@@ -4146,8 +4191,7 @@ function downloadParentMailMerge(){
     a.download = 'campistry_parent_invites.csv';
     a.click();
     URL.revokeObjectURL(a.href);
-    var missing = fams.filter(function(f){ return !_parentInvitesByEmail[(f.parentEmail || '').toLowerCase()]; }).length;
-    if (missing) toast(missing + ' families have no invite yet — run Generate first');
+    if (missing) toast(missing + ' parent login' + (missing === 1 ? '' : 's') + ' with no invite yet — run Generate first');
 }
 
 // ─── PHOTOS ───────────────────────────────────────────────────────────────────
