@@ -1602,6 +1602,39 @@
         }
     };
 
+    // Attendance History — snapshots the CURRENT roster/hired staff into
+    // camp_person_seasons (migration 088) under a season label, so it
+    // survives a CSV re-import wipe or next year's reset. archive_camp_season
+    // reads camp_state_kv server-side (not a client payload) — this works the
+    // same whether called from here or from campistry_me.js's own automatic
+    // archive-before-import prompt, since neither page needs the full roster
+    // loaded into memory to trigger it.
+    window.archiveCurrentSeasonNow = async function() {
+        var input = document.getElementById('seasonArchiveLabel');
+        var status = document.getElementById('seasonArchiveStatus');
+        var label = (input && input.value || '').trim();
+        if (!label) {
+            var startEl = document.getElementById('campStartDate');
+            var y = (startEl && startEl.value) ? new Date(startEl.value).getFullYear() : new Date().getFullYear();
+            label = 'Summer ' + y;
+            if (input) input.value = label;
+        }
+        var btn = document.getElementById('archiveSeasonBtn');
+        if (btn) btn.disabled = true;
+        if (status) { status.textContent = 'Archiving…'; status.style.color = 'var(--slate-400)'; }
+        try {
+            var campId = localStorage.getItem('campistry_camp_id') || localStorage.getItem('campistry_user_id') || currentUser.id;
+            var { data, error } = await window.supabase.rpc('archive_camp_season', { p_camp_id: campId, p_season_label: label });
+            if (error || !data || !data.success) throw (error || new Error((data && data.error) || 'unknown'));
+            if (status) { status.textContent = 'Archived ' + (data.saved || 0) + ' — "' + label + '" saved.'; status.style.color = '#059669'; setTimeout(function() { status.textContent = ''; }, 5000); }
+        } catch (e) {
+            console.error('Error archiving season:', e);
+            if (status) { status.textContent = 'Error archiving — try again.'; status.style.color = '#dc2626'; }
+        } finally {
+            if (btn) btn.disabled = false;
+        }
+    };
+
     window.clearCampDates = async function() {
         // ★ CB-98: owner-only write guard (see saveCampDates).
         if (isTeamMember) {

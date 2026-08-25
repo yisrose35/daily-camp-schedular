@@ -399,6 +399,22 @@
                     </div>
                 </div>
             </div>
+
+            <div class="dashboard-card" style="max-width:700px;">
+                <div class="card-header">
+                    <h2>Attendance History</h2>
+                </div>
+                <p style="font-size:0.82rem; color:var(--slate-500); margin:-4px 0 12px;">
+                    Snapshot everyone currently on the roster and hired staff under a season
+                    label, so their attendance survives a CSV re-import or next year's reset.
+                    This never changes today's roster — it only adds a record to look back on.
+                </p>
+                <div style="display:flex; gap:10px; align-items:center; flex-wrap:wrap;">
+                    <input type="text" id="seasonArchiveLabel" placeholder="e.g. Summer 2026" style="flex:1; min-width:200px; padding:8px 10px; border-radius:8px; border:1px solid var(--slate-200); font-size:0.88rem;">
+                    <button type="button" id="archiveSeasonBtn" onclick="archiveCurrentSeasonNow()" class="btn-primary" style="padding:8px 20px; font-size:0.85rem; white-space:nowrap;">Archive Current Season</button>
+                    <span id="seasonArchiveStatus" style="font-size:0.82rem; color:var(--slate-400);"></span>
+                </div>
+            </div>
         </div>
 
         <!-- ===== SESSIONS & PRICING (Owners only) ===== -->

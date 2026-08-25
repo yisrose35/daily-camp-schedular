@@ -11919,8 +11919,20 @@ function handleCsv(file){
                 var uniqueRows=Object.keys(byName).map(function(n){return byName[n]});
                 var msg='Import will REPLACE all current campers, divisions, grades, bunks, and families with this file ('+uniqueRows.length+' camper'+(uniqueRows.length===1?'':'s')+'). This cannot be undone.';
                 if(dupNames.length){var ex=dupNames.slice(0,3).join(', ');msg+='<br><br>⚠ '+dupNames.length+' duplicate name'+(dupNames.length===1?'':'s')+' ('+esc(ex)+(dupNames.length>3?'…':'')+') — only the last row of each will be kept.';}
+                // Import wipes the CURRENT roster/staff with zero history kept — the
+                // only "start fresh" action this app has. Snapshot who's here right
+                // now into camp_person_seasons first (see migration 088) so this
+                // season's attendance survives the wipe. Optional — clear the label
+                // to skip archiving for a plain data-correction re-import.
+                msg+='<div style="margin-top:14px;text-align:left"><label style="font-size:.78rem;font-weight:600;color:var(--s600);display:block;margin-bottom:4px">Archive the CURRENT roster as this season before replacing it (leave blank to skip):</label><input id="csvArchiveLabel" class="fi" value="'+esc(_defaultSeasonLabel())+'" style="width:100%;box-sizing:border-box"></div>';
                 var ok=await confirmDialog({title:'Replace All Camp Data?',message:msg,confirmLabel:'Import & Replace',danger:true});
                 if(!ok)return;
+                var archiveLabelEl=document.getElementById('csvArchiveLabel');
+                var archiveLabel=(archiveLabelEl&&archiveLabelEl.value||'').trim();
+                if(archiveLabel){
+                    toast('Archiving current season…');
+                    await archiveCurrentSeason(archiveLabel);
+                }
                 importRows(uniqueRows);
             }}
         }
@@ -11937,6 +11949,39 @@ function parseCsvLine(line){
     }
     result.push(cur);
     return result;
+}
+
+// ── Attendance History (migration 088) ─────────────────────────────────
+// Best-effort guess at what to call the CURRENT season, so the archive
+// prompt (CSV re-import) and the manual "Archive Current Season" action
+// don't start from a blank field. Falls back to the calendar year when
+// Camp Dates hasn't been configured.
+function _defaultSeasonLabel(){
+    try{
+        var cd=(window.loadGlobalSettings?window.loadGlobalSettings():JSON.parse(localStorage.getItem('campGlobalSettings_v1')||'{}')).campDates;
+        if(cd&&cd.startDate){var y=new Date(cd.startDate).getFullYear();if(y)return 'Summer '+y;}
+    }catch(e){}
+    return 'Summer '+new Date().getFullYear();
+}
+// Snapshots everyone currently on the roster/hired staff into
+// camp_person_seasons under `label` — safe to call more than once for the
+// same label (upserts, never duplicates). Called automatically right
+// before a CSV re-import wipes the roster, and available as a standalone
+// manual action (Dashboard → Archive Current Season) for camps that don't
+// use CSV import as their reset method. The RPC itself reads
+// camp_state_kv server-side (not a client-built payload) specifically so
+// it works from either caller without needing roster/staffApplications
+// loaded into this page's memory — save() already keeps the cloud copy
+// current on every edit, so there's nothing this page needs to send.
+async function archiveCurrentSeason(label){
+    var db=window.CampistryDB&&window.CampistryDB.getClient?window.CampistryDB.getClient():null;
+    var campId=window.CampistryDB&&window.CampistryDB.getCampId?window.CampistryDB.getCampId():null;
+    if(!db||!campId){console.warn('[Me] Season archive skipped: cloud not ready');return {success:false,error:'cloud_not_ready'};}
+    try{
+        var res=await db.rpc('archive_camp_season',{p_camp_id:campId,p_season_label:label});
+        if(res.error){console.error('[Me] archive_camp_season failed:',res.error.message);return {success:false,error:res.error.message};}
+        return res.data;
+    }catch(ex){console.error('[Me] archive_camp_season threw:',ex.message);return {success:false,error:ex.message};}
 }
 
 function importRows(rows){
