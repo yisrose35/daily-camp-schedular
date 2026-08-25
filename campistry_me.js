@@ -4878,6 +4878,12 @@ function viewStaffApp(id){
         phBody+=row('Emergency Phone',ph.emPhone);
         phBody+=row('Handbook Acknowledged',ph.handbookAck?'Yes':(ph.handbookAck===false?'No':''));
         phBody+=row('Photo/Media Permission',ph.photoConsent?'Yes':(ph.photoConsent===false?'No':''));
+        if(ph.policiesAgreed&&ph.policiesAgreed.length){
+            phBody+='<div style="margin-top:8px;font-weight:600;font-size:.8rem;color:var(--s700)">Camp Policies &amp; Requirements</div>';
+            phBody+=rowRaw('Agreed to',ph.policiesAgreed.map(function(p){return esc(p);}).join('<br>'));
+            phBody+=row('Signed',ph.policiesSignature);
+            if(ph.policiesSignedAt)phBody+=row('Signed On',new Date(ph.policiesSignedAt).toLocaleString());
+        }
         if(ph.customAnswers&&Object.keys(ph.customAnswers).length){
             var phLabels=ph.customQuestionLabels||[];
             Object.entries(ph.customAnswers).forEach(function([key,val]){
@@ -5359,7 +5365,7 @@ function getPostHireFormConfig(){
     if(phFormConfig)return phFormConfig;
     var sections={};
     PHF_SECTIONS.forEach(function(s){sections[s.key]={enabled:s.default}});
-    return{sections:sections,customQuestions:[],customSections:[],welcomeMessage:'',instructions:'',fields:{},sectionOrder:PHF_SECTIONS.map(function(s){return s.key}),branding:{},autoSend:false};
+    return{sections:sections,customQuestions:[],customSections:[],welcomeMessage:'',instructions:'',fields:{},sectionOrder:PHF_SECTIONS.map(function(s){return s.key}),branding:{},autoSend:false,handbook:{name:'',data:''},policies:[]};
 }
 
 // Lists (packing lists / checklists) live in the Link admin app, stored
@@ -5535,6 +5541,11 @@ function _collectPostHireFormConfigDraft(){
         fields:_readAdvFields('phf',PHF_FIELD_CATALOG),
         sectionOrder:_readSectionOrder('phf'),
         autoSend:!!(document.getElementById('phfAutoSend')&&document.getElementById('phfAutoSend').checked),
+        handbook:{
+            name:(document.getElementById('phfHandbookName')?.value||''),
+            data:(document.getElementById('phfHandbookData')?.value||'')
+        },
+        policies:_readPhfPolicies(),
         branding:{
             logo:(document.getElementById('phfLogoData')?.value||''),
             color:(document.getElementById('phfAccentColor')?.value||'')
@@ -6361,6 +6372,28 @@ function _buildPhfPanelHtml(){
         +_renderSectionsListHtml('phf',PHF_SECTIONS,fc,'phfSec',phfQSplit.bySection);
     h+=_accCard('Sections',sectionsHtml,{open:true});
 
+    // Staff Handbook — an actual attached PDF, shown as a download link next
+    // to the "Handbook Acknowledged" checkbox in Acknowledgments, so a hire
+    // has something real to read before checking that box.
+    var hb=fc.handbook||{};
+    var hbHtml='<p style="font-size:.78rem;color:var(--s400);margin:0 0 10px">Attach your staff handbook (PDF, max 8MB) — a hire can view/download it right next to the acknowledgment checkbox.</p>'
+        +'<input type="hidden" id="phfHandbookData" value="'+esc(hb.data||'')+'">'
+        +'<input type="hidden" id="phfHandbookName" value="'+esc(hb.name||'')+'">'
+        +'<div id="phfHandbookPreview" style="'+(hb.data?'':'display:none')+';font-size:.82rem;font-weight:600;color:var(--s700);margin-bottom:8px">📄 '+esc(hb.name||'')+'</div>'
+        +'<div style="display:flex;gap:8px;align-items:center"><input type="file" accept="application/pdf" class="fi" style="flex:1" onchange="CampistryMe._phfHandbookPick(this)"><button type="button" class="me-btn me-btn--ghost me-btn--sm" onclick="CampistryMe._phfHandbookClear()">Remove</button></div>';
+    h+=_accCard('Staff Handbook',hbHtml,{badge:hb.data?'attached':''});
+
+    // Camp Policies & Requirements — a camp-defined list of hard rules (no
+    // smoking, no smartphones, etc.) each a required checkbox, plus a typed
+    // signature confirming agreement to all of them — distinct from the
+    // built-in Acknowledgments section's fixed handbook/photo checkboxes,
+    // since every camp's specific rules differ.
+    var policies=fc.policies||[];
+    var polHtml='<p style="font-size:.78rem;color:var(--s400);margin:0 0 10px">Rules every hire must agree to and sign — e.g. "No smoking on camp grounds," "No smartphones during camp hours." Each becomes its own required checkbox on the form, with a signature at the end.</p>'
+        +'<div id="phfPolicyList">'+policies.map(function(p){return _renderPolicyRow(p);}).join('')+'</div>'
+        +'<button type="button" class="me-btn me-btn--sec me-btn--sm" style="margin-top:6px" onclick="CampistryMe.addPhfPolicyRow()">+ Add Policy</button>';
+    h+=_accCard('Camp Policies & Requirements',polHtml,{badge:policies.length?policies.length+' policies':''});
+
     var qHtml='<p style="font-size:.78rem;color:var(--s400);margin:0 0 10px">Standalone questions, shown in an "Additional Information" section. Pick "Show in" to move one inside a built-in section instead (or add it from that section directly, in Sections above).</p>'
         +'<div id="phfQList">'+phfQSplit.flat.map(function(q,i){return renderCustomQ(q,i,'phf',true);}).join('')+'</div>'
         +'<button class="me-btn me-btn--sec me-btn--sm" style="margin-top:6px" onclick="CampistryMe.addPhfCustomQ()">+ Add Question</button>';
@@ -6404,6 +6437,56 @@ function savePostHireFormConfig(){
     save();
     closeFormBuilder();
     toast('Post-hire form configuration saved');
+}
+
+// Attached PDF handbook — read straight to a data URL (no downscaling,
+// unlike _downscaleImage's photo path) with a size cap matching the
+// document-upload cap already used elsewhere in these public forms.
+function _phfHandbookPick(input){
+    var f=input.files&&input.files[0]; if(!f)return;
+    if(f.type!=='application/pdf'){ toast('Please choose a PDF file','error'); input.value=''; return; }
+    if(f.size>8*1024*1024){ toast('File too large — max 8MB','error'); input.value=''; return; }
+    var reader=new FileReader();
+    reader.onload=function(e){
+        var dataEl=document.getElementById('phfHandbookData'), nameEl=document.getElementById('phfHandbookName');
+        if(dataEl)dataEl.value=e.target.result;
+        if(nameEl)nameEl.value=f.name;
+        var preview=document.getElementById('phfHandbookPreview');
+        if(preview){preview.textContent='📄 '+f.name;preview.style.display='block';}
+        if(typeof _fbPushPreview==='function')_fbPushPreview();
+    };
+    reader.readAsDataURL(f);
+}
+function _phfHandbookClear(){
+    var dataEl=document.getElementById('phfHandbookData'), nameEl=document.getElementById('phfHandbookName');
+    if(dataEl)dataEl.value='';
+    if(nameEl)nameEl.value='';
+    var preview=document.getElementById('phfHandbookPreview');
+    if(preview)preview.style.display='none';
+    if(typeof _fbPushPreview==='function')_fbPushPreview();
+}
+// Camp Policies & Requirements — a simple add/remove list of plain-text
+// rules (mirrors campistry_register.html's Required Documents list
+// pattern: one text input + a remove button per row, no type/required
+// picker needed since every policy is implicitly required).
+function _renderPolicyRow(p){
+    p=p||{};
+    return '<div class="phfPolicy" style="display:flex;gap:6px;align-items:center;margin-bottom:4px;padding:6px 10px;border:1px solid var(--s200);border-radius:var(--r)">'
+        +'<input class="fi phfPolicyLabel" style="flex:1;font-size:.8rem;padding:5px 8px" value="'+esc(p.label||'')+'" placeholder="e.g. No smoking on camp grounds">'
+        +'<button type="button" class="me-btn me-btn--ghost" style="color:var(--err);font-size:.7rem" onclick="this.closest(\'.phfPolicy\').remove()">✕</button></div>';
+}
+function addPhfPolicyRow(){
+    var list=document.getElementById('phfPolicyList');
+    if(!list)return;
+    var div=document.createElement('div');
+    div.innerHTML=_renderPolicyRow({label:''});
+    list.appendChild(div.firstChild);
+}
+function _readPhfPolicies(){
+    var i=0;
+    return Array.prototype.map.call(document.querySelectorAll('#phfPolicyList .phfPolicyLabel'),function(el){return (el.value||'').trim();})
+        .filter(Boolean)
+        .map(function(label){return {id:'p'+(i++),label:label};});
 }
 
 function saveFormConfig(){
@@ -12274,6 +12357,7 @@ window.CampistryMe={
     openStaffFormConfig:openStaffFormConfig,saveStaffFormConfig:saveStaffFormConfig,addStaffCustomQ:addStaffCustomQ,
     openPostAcceptFormConfig:openPostAcceptFormConfig,savePostAcceptFormConfig:savePostAcceptFormConfig,addPafCustomQ:addPafCustomQ,
     openPostHireFormConfig:openPostHireFormConfig,savePostHireFormConfig:savePostHireFormConfig,addPhfCustomQ:addPhfCustomQ,
+    _phfHandbookPick:_phfHandbookPick,_phfHandbookClear:_phfHandbookClear,addPhfPolicyRow:addPhfPolicyRow,
     addCustomSection:addCustomSection,addSectionField:addSectionField,addCustomQToSection:addCustomQToSection,_toggleSectionQuestions:_toggleSectionQuestions,
     openSendPostAcceptModal:openSendPostAcceptModal,
     openSendPostHireModal:openSendPostHireModal,

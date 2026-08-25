@@ -34,6 +34,20 @@ form shape, same auto-send-on-trigger option.
 - New public page `campistry_posthire.html` — a hire opens their unique
   link (`?camp=<id>&id=<applicationId>`), fills out the form, submits.
   No login required.
+- **Staff Handbook attachment** — new "Staff Handbook" card in the builder
+  lets you upload an actual PDF (max 8MB). When attached, a "View Staff
+  Handbook" download link appears right next to the "Handbook
+  Acknowledged" checkbox on the public form, so a hire has something real
+  to read before checking it. Optional — the checkbox still works fine
+  with no file attached, for camps that hand the handbook out in person.
+- **Camp Policies & Requirements** — new builder card for camp-specific
+  hard rules (e.g. "No smoking on camp grounds," "No smartphones during
+  camp hours"). Add as many as you want; each becomes its own required
+  checkbox on the public form, and the whole section ends with a typed
+  signature ("Type your name to confirm you agree to the above"). Entirely
+  hidden on the public form when no policies are configured. Answers
+  (which policies were agreed to, the signature, and when) show up in the
+  Review panel's Post-Hire Form Responses.
 
 ## 1. Run the migration
 
@@ -73,6 +87,14 @@ Edge Functions side.
 7. Turn on "Send automatically on hire" in the builder, then advance a
    *different* test application to Hired — confirm the email sends on
    its own (toast confirms), without you clicking Send.
+8. Attach a test PDF as the Staff Handbook, save, open the public link —
+   confirm the "View Staff Handbook" link appears and actually opens your
+   PDF. Remove it, save, reload the link — confirm the link disappears.
+9. Add 2-3 test policies (e.g. "No smoking," "No smartphones during
+   camp hours"). Try submitting without checking all of them, or without
+   typing a signature — confirm you're blocked with a clear message.
+   Check all + sign + submit — confirm the Review panel shows which
+   policies were agreed to and the signature.
 
 ## What's NOT in this pass
 

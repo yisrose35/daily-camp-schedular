@@ -58,9 +58,16 @@ body{font-family:var(--font);background:var(--s50);color:var(--s800);-webkit-fon
 
 <!-- Acknowledgments -->
 <div class="cd" id="consentCard"><div class="ct"><svg viewBox="0 0 24 24"><rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="8.5" cy="8.5" r="1.5"/><polyline points="21 15 16 10 5 21"/></svg>Acknowledgments</div>
+<div id="handbookLinkRow" style="display:none;margin-bottom:10px"><a id="handbookLinkAnchor" href="#" target="_blank" rel="noopener" style="display:inline-flex;align-items:center;gap:6px;font-size:.85rem;font-weight:700;color:var(--me);text-decoration:none"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V8z"/><polyline points="14 2 14 8 20 8"/></svg><span id="handbookLinkText">View Staff Handbook</span></a></div>
 <div class="ck" id="handbookAckRow"><input type="checkbox" id="phHandbookAck"><label for="phHandbookAck" id="handbookAckLabel">I have read and acknowledge the staff handbook.</label></div>
 <div class="ck" id="photoConsentRow"><input type="checkbox" id="phPhotoConsent"><label for="phPhotoConsent" id="photoConsentLabel">I give permission to appear in camp photos/videos used for promotional purposes.</label></div>
 </div>
+
+<!-- Camp Policies & Requirements — admin-defined list of hard rules, each
+     its own required checkbox, plus a typed signature. Fully dynamic
+     (built by applyFormConfig), hidden entirely when the camp hasn't
+     configured any policies. -->
+<div id="policiesHolder"></div>
 
 <!-- Custom Questions (hidden by default, shown when config has questions) -->
 <div class="cd" id="customQCard" style="display:none"><div class="ct"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="10"/><path d="M9.09 9a3 3 0 015.83 1c0 2-3 3-3 3"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg>Additional Information</div>
@@ -180,6 +187,8 @@ function applySectionOrder(order){
         var el=elId&&document.getElementById(elId);
         if(el)parent.insertBefore(el,anchor);
     });
+    var polHolder=document.getElementById('policiesHolder');
+    if(polHolder)parent.insertBefore(polHolder,anchor);
     var cq=document.getElementById('customQCard');
     if(cq)parent.insertBefore(cq,anchor);
     var secHolder=document.getElementById('customSectionsHolder');
@@ -319,6 +328,43 @@ function applyFormConfig(fc){
         secHolderEl.innerHTML=secsHtml;
     }
 
+    // Attached staff handbook — a real download link next to the
+    // acknowledgment checkbox (which itself stays a plain field, present
+    // or not, since some camps hand the handbook out in person instead).
+    var hbLinkRow=document.getElementById('handbookLinkRow');
+    if(hbLinkRow){
+        var hb=fc.handbook||{};
+        if(hb.data){
+            var hbAnchor=document.getElementById('handbookLinkAnchor');
+            var hbText=document.getElementById('handbookLinkText');
+            if(hbAnchor)hbAnchor.href=hb.data;
+            if(hbText)hbText.textContent='View Staff Handbook'+(hb.name?' ('+hb.name+')':'');
+            hbLinkRow.style.display='block';
+        }else{
+            hbLinkRow.style.display='none';
+        }
+    }
+
+    // Camp Policies & Requirements — one required checkbox per camp-defined
+    // rule, plus a typed-name signature. Entirely hidden when the camp
+    // hasn't configured any policies (not every camp needs this).
+    var polHolderEl=document.getElementById('policiesHolder');
+    if(polHolderEl){
+        var policies=fc.policies||[];
+        if(policies.length){
+            var ph='<div class="cd" id="policiesCard"><div class="ct"><svg viewBox="0 0 24 24"><path d="M9 11l3 3L22 4"/><path d="M21 12v7a2 2 0 01-2 2H5a2 2 0 01-2-2V5a2 2 0 012-2h11"/></svg>Camp Policies &amp; Requirements</div>';
+            ph+='<p style="font-size:.8rem;color:var(--s500);margin-bottom:6px">Please review and agree to each of the following:</p>';
+            policies.forEach(function(p,i){
+                ph+='<div class="ck"><input type="checkbox" class="policyCb" id="policyCb'+i+'" data-p="'+i+'"><label for="policyCb'+i+'">'+esc(p.label)+'</label></div>';
+            });
+            ph+='<div class="fg" style="margin-top:10px;margin-bottom:0"><label class="fl">Type your name to sign<span class="rq">*</span></label><input class="fi" id="policiesSignature" placeholder="First Last"></div>';
+            ph+='</div>';
+            polHolderEl.innerHTML=ph;
+        }else{
+            polHolderEl.innerHTML='';
+        }
+    }
+
     applyFieldConfig(fc.fields,sectionsDisabled);
     applySectionOrder(fc.sectionOrder);
     applyBranding(fc.branding);
@@ -378,6 +424,16 @@ window.submitApp=function submitApp(){
             });
         });
     }
+    // Camp Policies & Requirements — every listed policy must be checked,
+    // plus a signature, before submit. Skipped entirely when the camp
+    // hasn't configured any policies (the card doesn't even render then).
+    if(!missingLabel&&(_currentFC.policies||[]).length){
+        (_currentFC.policies||[]).forEach(function(p,i){
+            if(missingLabel)return;
+            if(!document.querySelector('.policyCb[data-p="'+i+'"]:checked'))missingLabel=p.label;
+        });
+        if(!missingLabel&&!v('policiesSignature'))missingLabel='your signature for Camp Policies & Requirements';
+    }
     if(missingLabel){
         errEl.textContent='Please complete: '+missingLabel+'.';
         errEl.style.display='block';
@@ -399,6 +455,12 @@ window.submitApp=function submitApp(){
     if(FIELD_ENABLED_STATE.photoConsent!==false){
         var pcEl=document.getElementById('phPhotoConsent');
         rec.photoConsent=pcEl?pcEl.checked:false;
+    }
+
+    if((_currentFC.policies||[]).length){
+        rec.policiesAgreed=(_currentFC.policies||[]).map(function(p){return p.label;});
+        rec.policiesSignature=v('policiesSignature');
+        rec.policiesSignedAt=new Date().toISOString();
     }
 
     var customAnswers={}, customQuestionLabels=[];
