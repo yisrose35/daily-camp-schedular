@@ -469,6 +469,23 @@ async function showStatus(id){
 // ─── LOAD DATA ───────────────────────────────────────────────
 var _baseCampNm=''; // camp name shown when no custom welcome message is set
 var SEC_MAP={camper:'camperCard',parent:'parentCard',address:'addrCard',emergency:'emCard',medical:'medCard',preferences:'prefCard',documents:'docCard',payment:'payCard',siblings:'sibCard',signature:'sigCard'};
+// Which built-in sections a Custom Question can be attached to (any section
+// with its own labeled field group on the form) — documents/payment/
+// signature/siblings render structured blocks, not a plain fg loop, so a
+// custom field has nowhere sensible to slot into those.
+var CUSTOM_FIELD_SECTIONS=['camper','parent','address','emergency','medical','preferences'];
+// Appends (once) an empty container to the end of a built-in section's card
+// for admin-attached custom fields to render into — created lazily so no
+// static HTML edit is needed per section, and reused/cleared on every
+// re-render (the live-preview draft calls applyFormConfig repeatedly).
+function _sectionCustomFieldsEl(cardId){
+    var card=document.getElementById(cardId);
+    if(!card)return null;
+    var id=cardId+'_customFields';
+    var el=document.getElementById(id);
+    if(!el){ el=document.createElement('div'); el.id=id; card.appendChild(el); }
+    return el;
+}
 // The last-applied config — submitApp() reads this to know whether the
 // Signature section (whose agree/sign validation isn't part of the
 // per-field FIELD_ELEMENT_MAP loop) is even on the form right now.
@@ -504,28 +521,38 @@ function applyFormConfig(fc){
         });
     }
 
-    // Custom questions
+    // Custom questions — a question tagged with a built-in section (set in
+    // the Form Builder's Sections list via "+ Add Field") renders inline
+    // inside that section's own card, right after its built-in fields;
+    // everything else falls into the flat "Additional Information" card at
+    // the end, exactly as before. Same data-q attribute scheme either way,
+    // so submitApp()'s document-wide .cqInput/.cqCb read (below) needs no
+    // change — it doesn't care where in the DOM a row physically lives.
     var cqEl=document.getElementById('customQCard');
-    if(fc.customQuestions&&fc.customQuestions.length){
-        var qh='';
-        fc.customQuestions.forEach(function(q,i){
-            qh+='<div class="fg">';
-            qh+='<label class="fl">'+esc(q.label)+(q.required?'<span class="rq">*</span>':'')+'</label>';
-            if(q.type==='text')qh+='<input class="fi cqInput" data-q="'+i+'">';
-            else if(q.type==='textarea')qh+='<textarea class="fta cqInput" data-q="'+i+'"></textarea>';
-            else if(q.type==='yesno')qh+='<select class="fs cqInput" data-q="'+i+'"><option value="">—</option><option>Yes</option><option>No</option></select>';
-            else if(q.type==='select')qh+='<select class="fs cqInput" data-q="'+i+'"><option value="">—</option>'+(q.options||[]).map(function(o){return'<option>'+esc(o)+'</option>'}).join('')+'</select>';
-            else if(q.type==='checkbox'){
-                (q.options||[]).forEach(function(o,oi){
-                    qh+='<label style="display:flex;align-items:center;gap:6px;padding:3px 0;font-size:.85rem;cursor:pointer"><input type="checkbox" class="cqCb" data-q="'+i+'" value="'+esc(o)+'" style="accent-color:var(--me)">'+esc(o)+'</label>';
-                });
-            }
-            qh+='</div>';
-        });
-        if(cqEl){document.getElementById('cqContent').innerHTML=qh;cqEl.style.display='block';}
-    }else if(cqEl){
-        cqEl.style.display='none';
-        document.getElementById('cqContent').innerHTML='';
+    var cqBySection={},cqFlat='';
+    (fc.customQuestions||[]).forEach(function(q,i){
+        var qh='<div class="fg">';
+        qh+='<label class="fl">'+esc(q.label)+(q.required?'<span class="rq">*</span>':'')+'</label>';
+        if(q.type==='text')qh+='<input class="fi cqInput" data-q="'+i+'">';
+        else if(q.type==='textarea')qh+='<textarea class="fta cqInput" data-q="'+i+'"></textarea>';
+        else if(q.type==='yesno')qh+='<select class="fs cqInput" data-q="'+i+'"><option value="">—</option><option>Yes</option><option>No</option></select>';
+        else if(q.type==='select')qh+='<select class="fs cqInput" data-q="'+i+'"><option value="">—</option>'+(q.options||[]).map(function(o){return'<option>'+esc(o)+'</option>'}).join('')+'</select>';
+        else if(q.type==='checkbox'){
+            (q.options||[]).forEach(function(o,oi){
+                qh+='<label style="display:flex;align-items:center;gap:6px;padding:3px 0;font-size:.85rem;cursor:pointer"><input type="checkbox" class="cqCb" data-q="'+i+'" value="'+esc(o)+'" style="accent-color:var(--me)">'+esc(o)+'</label>';
+            });
+        }
+        qh+='</div>';
+        if(q.section&&CUSTOM_FIELD_SECTIONS.indexOf(q.section)>=0) cqBySection[q.section]=(cqBySection[q.section]||'')+qh;
+        else cqFlat+=qh;
+    });
+    CUSTOM_FIELD_SECTIONS.forEach(function(key){
+        var el=_sectionCustomFieldsEl(SEC_MAP[key]);
+        if(el)el.innerHTML=cqBySection[key]||'';
+    });
+    if(cqEl){
+        if(cqFlat){document.getElementById('cqContent').innerHTML=cqFlat;cqEl.style.display='block';}
+        else{cqEl.style.display='none';document.getElementById('cqContent').innerHTML='';}
     }
 
     // Custom Sections — admin-defined named field groups (e.g. "Dad's Info"),

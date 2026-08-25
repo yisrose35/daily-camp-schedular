@@ -231,6 +231,19 @@ function applyBranding(branding){
 
 // Every section is toggleable now — nothing is locked required.
 var SEC_MAP={about:'aboutCard',role:'roleCard',experience:'expCard',references:'refCard',consent:'consentCard'};
+// Which built-in sections a Custom Question can attach to (mirrors
+// campistry_register.html's CUSTOM_FIELD_SECTIONS) — only sections with
+// their own plain field-group markup; references/consent are structured
+// blocks, not a spot to slot an arbitrary field into.
+var CUSTOM_FIELD_SECTIONS=['about','role','experience'];
+function _sectionCustomFieldsEl(cardId){
+    var card=document.getElementById(cardId);
+    if(!card)return null;
+    var id=cardId+'_customFields';
+    var el=document.getElementById(id);
+    if(!el){ el=document.createElement('div'); el.id=id; card.appendChild(el); }
+    return el;
+}
 var _baseCampNm='';
 // The last-applied config — submitApp() reads this to know whether Consent
 // & Signature (whose agree/sign validation isn't part of the per-field
@@ -273,29 +286,37 @@ function applyFormConfig(sfc){
     document.getElementById('certChips').innerHTML=certs.map(function(cc){return '<label class="chip"><input type="checkbox" class="certCb" value="'+esc(cc)+'"> '+esc(cc)+'</label>';}).join('');
     document.querySelectorAll('.chip input').forEach(function(cb){cb.addEventListener('change',function(){cb.closest('.chip').classList.toggle('sel',cb.checked);});});
 
-    // Custom questions
+    // Custom questions — a question tagged with a built-in section renders
+    // inline inside that section's own card; everything else falls into the
+    // flat "Additional Information" card. Same data-q scheme either way, so
+    // the document-wide .cqInput/.cqCb reads elsewhere in this file need no
+    // change regardless of where a row physically ends up in the DOM.
     customQuestions=sfc.customQuestions||[];
     var cqEl=document.getElementById('customQCard');
-    if(customQuestions.length){
-        var qh='';
-        customQuestions.forEach(function(q,i){
-            qh+='<div class="fg">';
-            qh+='<label class="fl">'+esc(q.label)+(q.required?'<span class="rq">*</span>':'')+'</label>';
-            if(q.type==='text')qh+='<input class="fi cqInput" data-q="'+i+'">';
-            else if(q.type==='textarea')qh+='<textarea class="fta cqInput" data-q="'+i+'"></textarea>';
-            else if(q.type==='yesno')qh+='<select class="fs cqInput" data-q="'+i+'"><option value="">—</option><option>Yes</option><option>No</option></select>';
-            else if(q.type==='select')qh+='<select class="fs cqInput" data-q="'+i+'"><option value="">—</option>'+(q.options||[]).map(function(o){return'<option>'+esc(o)+'</option>'}).join('')+'</select>';
-            else if(q.type==='checkbox'){
-                (q.options||[]).forEach(function(o,oi){
-                    qh+='<label style="display:flex;align-items:center;gap:6px;padding:3px 0;font-size:.85rem;cursor:pointer"><input type="checkbox" class="cqCb" data-q="'+i+'" value="'+esc(o)+'" style="accent-color:var(--me)">'+esc(o)+'</label>';
-                });
-            }
-            qh+='</div>';
-        });
-        if(cqEl){document.getElementById('cqContent').innerHTML=qh;cqEl.style.display='block';}
-    }else if(cqEl){
-        cqEl.style.display='none';
-        document.getElementById('cqContent').innerHTML='';
+    var cqBySection={},cqFlat='';
+    customQuestions.forEach(function(q,i){
+        var qh='<div class="fg">';
+        qh+='<label class="fl">'+esc(q.label)+(q.required?'<span class="rq">*</span>':'')+'</label>';
+        if(q.type==='text')qh+='<input class="fi cqInput" data-q="'+i+'">';
+        else if(q.type==='textarea')qh+='<textarea class="fta cqInput" data-q="'+i+'"></textarea>';
+        else if(q.type==='yesno')qh+='<select class="fs cqInput" data-q="'+i+'"><option value="">—</option><option>Yes</option><option>No</option></select>';
+        else if(q.type==='select')qh+='<select class="fs cqInput" data-q="'+i+'"><option value="">—</option>'+(q.options||[]).map(function(o){return'<option>'+esc(o)+'</option>'}).join('')+'</select>';
+        else if(q.type==='checkbox'){
+            (q.options||[]).forEach(function(o,oi){
+                qh+='<label style="display:flex;align-items:center;gap:6px;padding:3px 0;font-size:.85rem;cursor:pointer"><input type="checkbox" class="cqCb" data-q="'+i+'" value="'+esc(o)+'" style="accent-color:var(--me)">'+esc(o)+'</label>';
+            });
+        }
+        qh+='</div>';
+        if(q.section&&CUSTOM_FIELD_SECTIONS.indexOf(q.section)>=0) cqBySection[q.section]=(cqBySection[q.section]||'')+qh;
+        else cqFlat+=qh;
+    });
+    CUSTOM_FIELD_SECTIONS.forEach(function(key){
+        var el=_sectionCustomFieldsEl(SEC_MAP[key]);
+        if(el)el.innerHTML=cqBySection[key]||'';
+    });
+    if(cqEl){
+        if(cqFlat){document.getElementById('cqContent').innerHTML=cqFlat;cqEl.style.display='block';}
+        else{cqEl.style.display='none';document.getElementById('cqContent').innerHTML='';}
     }
 
     // Custom Sections — admin-defined named field groups, rendered after
