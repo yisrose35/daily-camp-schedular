@@ -300,6 +300,12 @@ function _sectionCustomFieldsEl(cardId){
 }
 var _currentFC={};
 var _enrollId=null, _enrollRecord=null, _meBlob=null;
+// The camp this enrollment belongs to — travels in the URL because a
+// first-time visitor has no session for getCampId() to resolve from (see
+// migration 084). _resolvedCampId is set once the cloud bootstrap
+// confirms both the camp and the enrollment id are real.
+var campIdParam=new URLSearchParams(window.location.search).get('camp');
+var _resolvedCampId=null;
 
 // Applies one form-config object to the live DOM — idempotent, safe to call
 // repeatedly with a changing draft (the Form Builder's live preview does
@@ -610,10 +616,10 @@ async function saveResponse(rec){
     var btn=document.querySelector('.sub-btn'); if(btn){btn.disabled=true;btn.textContent='Submitting…';}
     var errEl=document.getElementById('formErr');
     try{
-        var client=null, campId=null;
+        var client=null, campId=_resolvedCampId||campIdParam||null;
         for(var i=0;i<48;i++){ // up to ~12s
             client=(window.CampistryDB&&window.CampistryDB.getClient&&window.CampistryDB.getClient())||(window.supabase&&typeof window.supabase.rpc==='function'?window.supabase:null);
-            campId=(window.CampistryDB&&window.CampistryDB.getCampId&&window.CampistryDB.getCampId())||localStorage.getItem('campistry_camp_id');
+            if(!campId)campId=(window.CampistryDB&&window.CampistryDB.getCampId&&window.CampistryDB.getCampId())||localStorage.getItem('campistry_camp_id');
             if(client&&typeof client.rpc==='function'&&campId)break;
             await new Promise(function(r){setTimeout(r,250);});
         }
@@ -645,7 +651,10 @@ async function saveResponse(rec){
 // direct Supabase query) — same pattern campistry_register.html's
 // showStatus() uses, since campistryMe.enrollments is deliberately
 // stripped from the localStorage snapshot to keep it under quota.
-async function loadReal(id){
+// Fast-path local lookup (existing 3-tier fallback) — used directly when
+// there's no ?camp= (old-style links already sent out), and as a fallback
+// if the cloud bootstrap below can't connect at all.
+async function _loadFromLocalCache(id){
     var me=null;
     try{
         var ls=JSON.parse(localStorage.getItem('campGlobalSettings_v1')||'{}');
@@ -690,6 +699,61 @@ async function loadReal(id){
     showState('formWrap');
 }
 
+// Authoritative path for a real family: campId + enrollment id both travel
+// in the URL (embedded by _postAcceptUrl in campistry_me.js), read via
+// get_postaccept_bootstrap (migration 084), an anon-safe RPC that returns
+// only the tiny public-facing slice of that ONE enrollment — never the
+// full record (address, medical info, parent contact, etc.) and never any
+// other family's data.
+async function _loadFromCloud(campId,id){
+    var client=null;
+    for(var i=0;i<40;i++){ // ~6s
+        client=(window.CampistryDB&&window.CampistryDB.getClient&&window.CampistryDB.getClient())||(window.supabase&&typeof window.supabase.rpc==='function'?window.supabase:null);
+        if(client&&typeof client.rpc==='function')break;
+        await new Promise(function(r){setTimeout(r,150);});
+    }
+    if(!client||typeof client.rpc!=='function'){
+        console.warn('[PostAccept] Could not connect — falling back to local cache.');
+        return _loadFromLocalCache(id);
+    }
+    var res,d;
+    try{
+        res=await client.rpc('get_postaccept_bootstrap',{p_camp_id:campId,p_enroll_id:id});
+        d=res&&res.data;
+    }catch(e){
+        console.warn('[PostAccept] Cloud bootstrap failed:',e&&e.message);
+        return _loadFromLocalCache(id);
+    }
+    if(res&&res.error){
+        console.warn('[PostAccept] get_postaccept_bootstrap failed:',res.error.message);
+        return _loadFromLocalCache(id);
+    }
+    if(!d||d.success===false){
+        // A definitive answer from the camp's own data, not a connectivity
+        // failure — trust it rather than falling back to a stale local cache.
+        showState('notFoundWrap');
+        return;
+    }
+
+    _resolvedCampId=campId;
+    _baseCampNm=d.campName||'';
+    if(_baseCampNm)document.getElementById('campTitle').textContent=_baseCampNm+' — Post-Acceptance Form';
+    document.getElementById('camperLine').textContent='For '+(d.camperName||'your camper');
+
+    _enrollId=id;
+    _enrollRecord={camperName:d.camperName,status:'accepted'};
+    _meBlob=null;
+
+    if(d.alreadySubmitted){
+        document.getElementById('alreadyText').textContent='This form was submitted on '+(d.submittedDate?new Date(d.submittedDate).toLocaleDateString():'file')+'. Contact the camp if you need to make a change.';
+        showState('alreadyWrap');
+        return;
+    }
+    if(d.bunkGenConfig)_bunkGenCfg=d.bunkGenConfig;
+    applyFormConfig(d.postAcceptFormConfig||{});
+    showState('formWrap');
+}
+
 // ─── LIVE PREVIEW MODE (embedded in the Me "Form Builder") ────────────
 var params=new URLSearchParams(window.location.search);
 if(params.get('preview')==='1'){
@@ -710,7 +774,8 @@ if(params.get('preview')==='1'){
 }else{
     var id=params.get('id');
     if(!id)showState('notFoundWrap');
-    else loadReal(id);
+    else if(campIdParam)_loadFromCloud(campIdParam,id);
+    else _loadFromLocalCache(id);
 }
 
 })();

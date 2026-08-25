@@ -120,6 +120,11 @@ body{font-family:var(--font);background:var(--s50);color:var(--s800);-webkit-fon
 <script src="supabase_client.js" onerror="console.log('[StaffApply] supabase_client not loaded')"></script>
 <script>
 (function(){
+// The camp this form belongs to — travels in the URL because a first-time
+// applicant has no session for getCampId() to resolve from (see migration
+// 084). _resolvedCampId is set once the cloud bootstrap confirms it's real.
+var campIdParam=new URLSearchParams(window.location.search).get('camp');
+var _resolvedCampId=null;
 var POSITIONS_DEFAULT=['Counselor','Head Counselor','Junior Counselor','Specialist','Lifeguard','Nurse / Medical','Kitchen Staff','Maintenance','Office Staff','Bus Driver','Division Head'];
 var CERTS_DEFAULT=['CPR','First Aid','Lifeguard (WSI)','Food Handler','Wilderness First Responder','EMT','Teaching license'];
 var sigCtx=null,sigDrawing=false,sigHasData=false,resumeData=null,photoData=null;
@@ -354,6 +359,10 @@ function applyFormConfig(sfc){
 }
 
 // ─── LOAD CONFIG, CAMP NAME ─────────────────────────────
+// Fast, synchronous fast-path — only ever populated when THIS browser has
+// previously loaded Me/Dashboard on this same origin (e.g. office staff
+// previewing/testing). A genuine first-time applicant has none of this;
+// _loadFromCloud below is the authoritative path for them.
 try{
     var g=JSON.parse(localStorage.getItem('campGlobalSettings_v1')||'{}');
     var me=g.campistryMe||{};
@@ -362,6 +371,38 @@ try{
     if(cn){document.getElementById('campTitle').textContent=cn+' — Staff Application';document.getElementById('campNm').textContent=cn;}
     applyFormConfig(me.staffFormConfig);
 }catch(e){ applyFormConfig(null); }
+
+// Authoritative path for a real applicant: the camp id travels in the URL
+// (embedded by every link Me generates), read via get_public_form_config
+// (migration 084), an anon-safe RPC returning only the public-facing
+// slice of this camp's config — never the full campistryMe blob.
+async function _loadFromCloud(campId){
+    var client=null;
+    for(var i=0;i<40;i++){ // ~6s
+        client=(window.CampistryDB&&window.CampistryDB.getClient&&window.CampistryDB.getClient())||(window.supabase&&typeof window.supabase.rpc==='function'?window.supabase:null);
+        if(client&&typeof client.rpc==='function')break;
+        await new Promise(function(r){setTimeout(r,150);});
+    }
+    if(!client||typeof client.rpc!=='function'){
+        console.warn('[StaffApply] Could not connect to load this application form.');
+        return;
+    }
+    try{
+        var res=await client.rpc('get_public_form_config',{p_camp_id:campId,p_kind:'staff'});
+        var d=res&&res.data;
+        if(res&&res.error){console.warn('[StaffApply] get_public_form_config failed:',res.error.message);return;}
+        if(!d||d.success===false){
+            if(d&&d.error==='camp_not_found')showErr('This application link doesn\'t look right — please check the link with the camp.');
+            console.warn('[StaffApply] get_public_form_config rejected:',d&&d.error);
+            return;
+        }
+        _resolvedCampId=campId;
+        _baseCampNm=d.campName||'';
+        if(_baseCampNm){document.getElementById('campTitle').textContent=_baseCampNm+' — Staff Application';document.getElementById('campNm').textContent=_baseCampNm;}
+        applyFormConfig(d.staffFormConfig||{});
+    }catch(e){ console.warn('[StaffApply] Cloud bootstrap failed:',e&&e.message); }
+}
+if(campIdParam)_loadFromCloud(campIdParam);
 
 // ─── LIVE PREVIEW MODE (embedded in the Me "Form Builder") ────────────
 if(new URLSearchParams(window.location.search).get('preview')==='1'){
@@ -572,10 +613,10 @@ window.submitApp=async function(){
 // clobber another applicant who submitted around the same moment.
 async function _flushToCloud(id,rec){
     try{
-        var client=null,campId=null;
+        var client=null,campId=_resolvedCampId||campIdParam||null;
         for(var i=0;i<48;i++){
             client=(window.CampistryDB&&window.CampistryDB.getClient&&window.CampistryDB.getClient())||(window.supabase&&typeof window.supabase.rpc==='function'?window.supabase:null);
-            campId=(window.CampistryDB&&window.CampistryDB.getCampId&&window.CampistryDB.getCampId())||localStorage.getItem('campistry_camp_id');
+            if(!campId)campId=(window.CampistryDB&&window.CampistryDB.getCampId&&window.CampistryDB.getCampId())||localStorage.getItem('campistry_camp_id');
             if(client&&typeof client.rpc==='function'&&campId)break;
             await new Promise(function(r){setTimeout(r,250);});
         }

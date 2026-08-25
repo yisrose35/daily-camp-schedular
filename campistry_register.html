@@ -400,6 +400,12 @@ function fm(n){return'$'+Number(n||0).toLocaleString()}
 
 // ─── STATUS TRACKER ──────────────────────────────────────────
 var params=new URLSearchParams(window.location.search);
+// The camp this form belongs to — travels in the URL because a first-time
+// visitor has no session for getCampId() to resolve from (see migration
+// 084). _resolvedCampId is set once the cloud bootstrap below confirms the
+// id is real; campIdParam is the raw, unverified value from the link.
+var campIdParam=params.get('camp');
+var _resolvedCampId=null;
 if(params.get('status')){
     document.getElementById('formWrap').style.display='none';
     document.getElementById('statusWrap').style.display='block';
@@ -594,7 +600,7 @@ function applyFormConfig(fc){
 // Each camp's own school-grade list (Camp Structure → Bunk Settings →
 // School Grades) replaces the built-in default the moment it's configured —
 // the built-in list above stays only as the pre-load fallback so the field
-// isn't empty for the split second before load() runs.
+// isn't empty for the split second before the real config loads.
 function _applySchoolGradeOptions(list){
     if(!list||!list.length)return;
     SCHOOL_GRADE_OPTS=list;
@@ -605,7 +611,11 @@ function _applySchoolGradeOptions(list){
     }
     renderSiblings();
 }
-function load(){
+// Fast, synchronous fast-path — only ever populated when THIS browser has
+// previously loaded Me/Dashboard on this same origin (e.g. office staff
+// previewing/testing). A genuinely first-time visitor has none of this;
+// _loadFromCloud below is the authoritative path for them.
+function _loadFromLocalCache(){
     try{
         var g=JSON.parse(localStorage.getItem('campGlobalSettings_v1')||'{}');
         var me=g.campistryMe||{};
@@ -618,6 +628,43 @@ function load(){
         _applySchoolGradeOptions(me.bunkGenConfig&&me.bunkGenConfig.schoolGrades);
         renderSessions();
     }catch(e){console.warn(e)}
+}
+// Authoritative path for a real applicant: the camp id travels in the URL
+// (embedded by every link Me generates — copyRegLink/QR/Send Link), read
+// via get_public_form_config (migration 084), an anon-safe RPC that
+// returns only the public-facing slice of this camp's config — never the
+// full campistryMe blob (no enrollments/staffApplications/families leak).
+// Overwrites whatever _loadFromLocalCache rendered, so a stale/empty local
+// cache never wins over the real cloud data.
+async function _loadFromCloud(campId){
+    var client=null;
+    for(var i=0;i<40;i++){ // ~6s
+        client=(window.CampistryDB&&window.CampistryDB.getClient&&window.CampistryDB.getClient())||(window.supabase&&typeof window.supabase.rpc==='function'?window.supabase:null);
+        if(client&&typeof client.rpc==='function')break;
+        await new Promise(function(r){setTimeout(r,150);});
+    }
+    if(!client||typeof client.rpc!=='function'){
+        console.warn('[Register] Could not connect to load this registration form.');
+        return;
+    }
+    try{
+        var res=await client.rpc('get_public_form_config',{p_camp_id:campId,p_kind:'registration'});
+        var d=res&&res.data;
+        if(res&&res.error){console.warn('[Register] get_public_form_config failed:',res.error.message);return;}
+        if(!d||d.success===false){
+            if(d&&d.error==='camp_not_found')showErr('This registration link doesn\'t look right — please check the link with the camp.');
+            console.warn('[Register] get_public_form_config rejected:',d&&d.error);
+            return;
+        }
+        _resolvedCampId=campId;
+        _baseCampNm=d.campName||'';
+        if(_baseCampNm){document.getElementById('campTitle').textContent=_baseCampNm+' Registration';document.getElementById('campNm').textContent=_baseCampNm;}
+        sessions=d.sessions||[];
+        if(d.promoCodes&&Object.keys(d.promoCodes).length)promoCodes=d.promoCodes;
+        applyFormConfig(d.formConfig||{});
+        _applySchoolGradeOptions(d.schoolGrades);
+        renderSessions();
+    }catch(e){ console.warn('[Register] Cloud bootstrap failed:',e&&e.message); }
 }
 
 // ─── LIVE PREVIEW MODE (embedded in the Me "Form Builder") ────────────
@@ -1036,10 +1083,10 @@ function showErr(m){var el=document.getElementById('formErr');el.textContent=m;e
 // campistryMe row so nothing existing is clobbered.
 async function _flushEnrollmentsToCloud(campistryMe){
     try{
-        var client=null, campId=null;
+        var client=null, campId=_resolvedCampId||campIdParam||null;
         for(var i=0;i<48;i++){ // up to ~12s
             client = (window.CampistryDB&&window.CampistryDB.getClient&&window.CampistryDB.getClient()) || (window.supabase&&typeof window.supabase.rpc==='function'?window.supabase:null);
-            campId = (window.CampistryDB&&window.CampistryDB.getCampId&&window.CampistryDB.getCampId()) || localStorage.getItem('campistry_camp_id');
+            if(!campId) campId = (window.CampistryDB&&window.CampistryDB.getCampId&&window.CampistryDB.getCampId()) || localStorage.getItem('campistry_camp_id');
             if(client&&typeof client.rpc==='function'&&campId) break;
             await new Promise(function(r){setTimeout(r,250);});
         }
@@ -1063,7 +1110,8 @@ async function _flushEnrollmentsToCloud(campistryMe){
     }catch(e){ console.warn('[Register] Cloud flush error:',e&&e.message); return {ok:false,reason:e&&e.message}; }
 }
 
-load();
+_loadFromLocalCache();
+if(campIdParam)_loadFromCloud(campIdParam);
 })();
 </script>
 </body>

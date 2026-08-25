@@ -5134,7 +5134,7 @@ function addStaffApp(){
         save();closeModal('dynModal');_refreshPplIfActive();toast('Applicant added');
     },{maxWidth:640});
 }
-function copyStaffLink(){var url=window.location.origin+'/campistry_staff_apply.html';try{navigator.clipboard&&navigator.clipboard.writeText(url);}catch(e){}toast('Staff application link copied');}
+function copyStaffLink(){var url=window.location.origin+'/campistry_staff_apply.html?camp='+encodeURIComponent(getCampId());try{navigator.clipboard&&navigator.clipboard.writeText(url);}catch(e){}toast('Staff application link copied');}
 function exportStaffCSV(){
     var rows=[['Name','Email','Phone','Positions','Status','Applied','References received','Notes']];
     Object.values(staffApplications).forEach(function(a){
@@ -6609,7 +6609,7 @@ function printApplication(id){
 }
 
 function copyRegLink(){
-    var url=window.location.origin+'/campistry_register.html';
+    var url=window.location.origin+'/campistry_register.html?camp='+encodeURIComponent(getCampId());
     if(navigator.clipboard){
         navigator.clipboard.writeText(url).then(function(){toast('Registration link copied!')});
     }else{
@@ -6662,8 +6662,8 @@ function showLinkQR(url,title){
         document.getElementById('qrBody').innerHTML='<div style="color:var(--err);font-size:.85rem">Could not load the QR library — check your connection.</div>';
     });
 }
-function showRegistrationQR(){ showLinkQR(window.location.origin+'/campistry_register.html','Registration Link QR Code'); }
-function showStaffQR(){ showLinkQR(window.location.origin+'/campistry_staff_apply.html','Staff Application Link QR Code'); }
+function showRegistrationQR(){ showLinkQR(window.location.origin+'/campistry_register.html?camp='+encodeURIComponent(getCampId()),'Registration Link QR Code'); }
+function showStaffQR(){ showLinkQR(window.location.origin+'/campistry_staff_apply.html?camp='+encodeURIComponent(getCampId()),'Staff Application Link QR Code'); }
 
 // Opens the "Send Link" modal for either the parent registration link
 // (kind='registration', with an audience picker sourced from families/
@@ -6671,7 +6671,7 @@ function showStaffQR(){ showLinkQR(window.location.origin+'/campistry_staff_appl
 // existing recipient list to draw from — always a manual email list).
 function openSendLinkModal(kind){
     var isStaff=(kind==='staff');
-    var url=window.location.origin+'/'+(isStaff?'campistry_staff_apply.html':'campistry_register.html');
+    var url=window.location.origin+'/'+(isStaff?'campistry_staff_apply.html':'campistry_register.html')+'?camp='+encodeURIComponent(getCampId());
     document.getElementById('slTitle').textContent=isStaff?'Send Staff Application Link':'Send Registration Link';
     var h='';
     if(!isStaff){
@@ -6732,7 +6732,7 @@ async function _sendLinkNow(isStaff){
 // as the registration/staff "Send Link" flow, just pre-filled for one
 // recipient instead of an audience picker.
 function _postAcceptUrl(id){
-    return window.location.origin+'/campistry_postaccept.html?id='+encodeURIComponent(id);
+    return window.location.origin+'/campistry_postaccept.html?id='+encodeURIComponent(id)+'&camp='+encodeURIComponent(getCampId());
 }
 function openSendPostAcceptModal(id){
     var e=enrollments[id]; if(!e){toast('Application not found','error');return;}
