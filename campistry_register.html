@@ -180,6 +180,9 @@ body{font-family:var(--font);background:var(--s50);color:var(--s800);-webkit-fon
 <div class="cd" id="customQCard" style="display:none"><div class="ct"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="10"/><path d="M9.09 9a3 3 0 015.83 1c0 2-3 3-3 3"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg>Additional Information</div>
 <div id="cqContent"></div></div>
 
+<!-- Custom Sections (admin-defined named field groups, e.g. "Dad's Info") -->
+<div id="customSectionsHolder"></div>
+
 <!-- Signature -->
 <div class="cd" id="sigCard"><div class="ct"><svg viewBox="0 0 24 24"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/></svg>Agreement & Signature</div>
 <div class="ck"><input type="checkbox" id="ag1"><label for="ag1">I certify that all information provided is accurate and complete.</label></div>
@@ -363,6 +366,8 @@ function applySectionOrder(order){
     });
     var cq=document.getElementById('customQCard'),sig=document.getElementById('sigCard');
     if(cq&&sig&&sig.parentNode)sig.parentNode.insertBefore(cq,sig);
+    var secHolder=document.getElementById('customSectionsHolder');
+    if(secHolder&&sig&&sig.parentNode)sig.parentNode.insertBefore(secHolder,sig);
 }
 
 var BRAND_COLOR_DEFAULT='#D97706';
@@ -521,6 +526,36 @@ function applyFormConfig(fc){
     }else if(cqEl){
         cqEl.style.display='none';
         document.getElementById('cqContent').innerHTML='';
+    }
+
+    // Custom Sections — admin-defined named field groups (e.g. "Dad's Info"),
+    // each its own labeled card, rendered after Custom Questions. Field
+    // markup mirrors the customQuestions loop above exactly, just keyed
+    // data-sec/data-f instead of data-q so answers can be collected per
+    // section on submit without colliding with the flat customAnswers bag.
+    var secHolderEl=document.getElementById('customSectionsHolder');
+    if(secHolderEl){
+        var secsHtml='';
+        (fc.customSections||[]).forEach(function(sec,si){
+            if(!sec||!sec.label)return;
+            secsHtml+='<div class="cd"><div class="ct"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="10"/><path d="M9.09 9a3 3 0 015.83 1c0 2-3 3-3 3"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg>'+esc(sec.label)+'</div>';
+            (sec.fields||[]).forEach(function(f,fi){
+                secsHtml+='<div class="fg">';
+                secsHtml+='<label class="fl">'+esc(f.label)+(f.required?'<span class="rq">*</span>':'')+'</label>';
+                if(f.type==='text')secsHtml+='<input class="fi secInput" data-sec="'+si+'" data-f="'+fi+'">';
+                else if(f.type==='textarea')secsHtml+='<textarea class="fta secInput" data-sec="'+si+'" data-f="'+fi+'"></textarea>';
+                else if(f.type==='yesno')secsHtml+='<select class="fs secInput" data-sec="'+si+'" data-f="'+fi+'"><option value="">—</option><option>Yes</option><option>No</option></select>';
+                else if(f.type==='select')secsHtml+='<select class="fs secInput" data-sec="'+si+'" data-f="'+fi+'"><option value="">—</option>'+(f.options||[]).map(function(o){return'<option>'+esc(o)+'</option>'}).join('')+'</select>';
+                else if(f.type==='checkbox'){
+                    (f.options||[]).forEach(function(o){
+                        secsHtml+='<label style="display:flex;align-items:center;gap:6px;padding:3px 0;font-size:.85rem;cursor:pointer"><input type="checkbox" class="secCb" data-sec="'+si+'" data-f="'+fi+'" value="'+esc(o)+'" style="accent-color:var(--me)">'+esc(o)+'</label>';
+                    });
+                }
+                secsHtml+='</div>';
+            });
+            secsHtml+='</div>';
+        });
+        secHolderEl.innerHTML=secsHtml;
     }
 
     // Advanced: per-field overrides, section order, branding
@@ -866,6 +901,24 @@ window.submitApp=async function(){
             var g2=JSON.parse(localStorage.getItem('campGlobalSettings_v1')||'{}');
             var cqLabels=(g2.campistryMe?.formConfig?.customQuestions||[]).map(function(q){return q.label});
 
+            // Read Custom Sections answers — grouped per section, same
+            // index-keyed answer-bag convention as customAnswers above, just
+            // one level deeper so a submitted "Dad's Info" section stays
+            // labeled as one group rather than flattening into the pile.
+            var customSectionsCfg=g2.campistryMe?.formConfig?.customSections||[];
+            var customSectionAnswers=customSectionsCfg.map(function(sec,si){
+                var answers={};
+                document.querySelectorAll('.secInput[data-sec="'+si+'"]').forEach(function(el){
+                    var fi=el.dataset.f;if(fi!=null&&el.value)answers['f'+fi]=el.value.trim();
+                });
+                document.querySelectorAll('.secCb[data-sec="'+si+'"]:checked').forEach(function(el){
+                    var fi=el.dataset.f;
+                    if(!answers['f'+fi])answers['f'+fi]=[];
+                    if(Array.isArray(answers['f'+fi]))answers['f'+fi].push(el.value);
+                });
+                return {label:sec.label,answers:answers,fieldLabels:(sec.fields||[]).map(function(f){return f.label})};
+            });
+
             g.campistryMe.enrollments[id]={
                 camperName:cam.first+' '+cam.last,camperFirst:cam.first,camperLast:cam.last,
                 dob:cam.dob,gender:cam.gender,school:cam.school,schoolGrade:cam.schoolGrade,teacher:cam.teacher,camperPhoto:cam.photo||'',
@@ -886,6 +939,7 @@ window.submitApp=async function(){
                 siblingGroup:appIds.length>1?appIds[0]:null,
                 adminNotes:'',
                 customAnswers:customAnswers,
+                customSectionAnswers:customSectionAnswers,
                 customQuestionLabels:cqLabels
             };
         });

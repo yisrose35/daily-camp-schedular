@@ -91,6 +91,9 @@ body{font-family:var(--font);background:var(--s50);color:var(--s800);-webkit-fon
 <div class="cd" id="customQCard" style="display:none"><div class="ct"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="10"/><path d="M9.09 9a3 3 0 015.83 1c0 2-3 3-3 3"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg>Additional Information</div>
 <div id="cqContent"></div></div>
 
+<!-- Custom Sections (admin-defined named field groups) -->
+<div id="customSectionsHolder"></div>
+
 <div id="formErr" class="err-msg"></div>
 <button class="sub-btn" onclick="submitApp()">Submit</button>
 <div class="pwr">Powered by <a href="index.html">Campistry</a></div>
@@ -255,6 +258,8 @@ function applySectionOrder(order){
     if(lc)parent.insertBefore(lc,anchor);
     var cq=document.getElementById('customQCard');
     if(cq)parent.insertBefore(cq,anchor);
+    var secHolder=document.getElementById('customSectionsHolder');
+    if(secHolder)parent.insertBefore(secHolder,anchor);
 }
 
 var BRAND_COLOR_DEFAULT='#D97706';
@@ -333,6 +338,34 @@ function applyFormConfig(fc){
     }else if(cqEl){
         cqEl.style.display='none';
         document.getElementById('cqContent').innerHTML='';
+    }
+
+    // Custom Sections — admin-defined named field groups, rendered after
+    // Custom Questions. Same per-type field markup as the loop above, keyed
+    // data-sec/data-f instead of data-q.
+    var secHolderEl=document.getElementById('customSectionsHolder');
+    if(secHolderEl){
+        var secsHtml='';
+        (fc.customSections||[]).forEach(function(sec,si){
+            if(!sec||!sec.label)return;
+            secsHtml+='<div class="cd"><div class="ct"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="10"/><path d="M9.09 9a3 3 0 015.83 1c0 2-3 3-3 3"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg>'+esc(sec.label)+'</div>';
+            (sec.fields||[]).forEach(function(f,fi){
+                secsHtml+='<div class="fg">';
+                secsHtml+='<label class="fl">'+esc(f.label)+(f.required?'<span class="rq">*</span>':'')+'</label>';
+                if(f.type==='text')secsHtml+='<input class="fi secInput" data-sec="'+si+'" data-f="'+fi+'">';
+                else if(f.type==='textarea')secsHtml+='<textarea class="fta secInput" data-sec="'+si+'" data-f="'+fi+'"></textarea>';
+                else if(f.type==='yesno')secsHtml+='<select class="fs secInput" data-sec="'+si+'" data-f="'+fi+'"><option value="">—</option><option>Yes</option><option>No</option></select>';
+                else if(f.type==='select')secsHtml+='<select class="fs secInput" data-sec="'+si+'" data-f="'+fi+'"><option value="">—</option>'+(f.options||[]).map(function(o){return'<option>'+esc(o)+'</option>'}).join('')+'</select>';
+                else if(f.type==='checkbox'){
+                    (f.options||[]).forEach(function(o){
+                        secsHtml+='<label style="display:flex;align-items:center;gap:6px;padding:3px 0;font-size:.85rem;cursor:pointer"><input type="checkbox" class="secCb" data-sec="'+si+'" data-f="'+fi+'" value="'+esc(o)+'" style="accent-color:var(--me)">'+esc(o)+'</label>';
+                    });
+                }
+                secsHtml+='</div>';
+            });
+            secsHtml+='</div>';
+        });
+        secHolderEl.innerHTML=secsHtml;
     }
 
     applyFieldConfig(fc.fields,sectionsDisabled);
@@ -481,6 +514,20 @@ window.submitApp=function submitApp(){
             }
         });
     }
+    if(!missingLabel){
+        (_currentFC.customSections||[]).forEach(function(sec,si){
+            if(missingLabel)return;
+            (sec.fields||[]).forEach(function(f,fi){
+                if(missingLabel||!f.required)return;
+                if(f.type==='checkbox'){
+                    if(!document.querySelector('.secCb[data-sec="'+si+'"][data-f="'+fi+'"]:checked'))missingLabel=f.label;
+                }else{
+                    var val=(document.querySelector('.secInput[data-sec="'+si+'"][data-f="'+fi+'"]')||{}).value;
+                    if(!(val||'').trim())missingLabel=f.label;
+                }
+            });
+        });
+    }
     if(missingLabel){
         errEl.textContent='Please complete: '+missingLabel+'.';
         errEl.style.display='block';
@@ -511,6 +558,21 @@ window.submitApp=function submitApp(){
         }
     });
     if(Object.keys(customAnswers).length){rec.customAnswers=customAnswers;rec.customQuestionLabels=customQuestionLabels;}
+
+    var customSectionAnswers=(_currentFC.customSections||[]).map(function(sec,si){
+        var answers={};
+        (sec.fields||[]).forEach(function(f,fi){
+            if(f.type==='checkbox'){
+                var vals=Array.prototype.map.call(document.querySelectorAll('.secCb[data-sec="'+si+'"][data-f="'+fi+'"]:checked'),function(c){return c.value;});
+                if(vals.length)answers['f'+fi]=vals;
+            }else{
+                var val3=(document.querySelector('.secInput[data-sec="'+si+'"][data-f="'+fi+'"]')||{}).value;
+                if(val3)answers['f'+fi]=val3;
+            }
+        });
+        return {label:sec.label,answers:answers,fieldLabels:(sec.fields||[]).map(function(f){return f.label;})};
+    });
+    if(customSectionAnswers.length)rec.customSectionAnswers=customSectionAnswers;
 
     saveResponse(rec);
 }

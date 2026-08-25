@@ -5241,7 +5241,7 @@ function getFormConfig(){
     // Default config
     var sections={};
     FC_SECTIONS.forEach(function(s){sections[s.key]={enabled:s.default}});
-    return{sections:sections,customQuestions:[],welcomeMessage:'',instructions:'',fields:{},sectionOrder:FC_SECTIONS.map(function(s){return s.key}),branding:{}};
+    return{sections:sections,customQuestions:[],customSections:[],welcomeMessage:'',instructions:'',fields:{},sectionOrder:FC_SECTIONS.map(function(s){return s.key}),branding:{}};
 }
 
 // ── POST-ACCEPTANCE FORM ─────────────────────────────────────────────────
@@ -5274,7 +5274,7 @@ function getPostAcceptFormConfig(){
     if(paFormConfig)return paFormConfig;
     var sections={};
     PAF_SECTIONS.forEach(function(s){sections[s.key]={enabled:s.default}});
-    return{sections:sections,customQuestions:[],welcomeMessage:'',instructions:'',fields:{},sectionOrder:PAF_SECTIONS.map(function(s){return s.key}),branding:{},autoSend:false,attachedListIds:[],printableList:{name:'',items:[]}};
+    return{sections:sections,customQuestions:[],customSections:[],welcomeMessage:'',instructions:'',fields:{},sectionOrder:PAF_SECTIONS.map(function(s){return s.key}),branding:{},autoSend:false,attachedListIds:[],printableList:{name:'',items:[]}};
 }
 
 // Lists (packing lists / checklists) live in the Link admin app, stored
@@ -5380,6 +5380,7 @@ function _collectFormConfigDraft(){
     return {
         sections:sections,
         customQuestions:_readCustomQuestions('fc'),
+        customSections:_readCustomSections('fc'),
         documents:documents,
         welcomeMessage:(document.getElementById('fcWelcome')?.value||'').trim(),
         instructions:(document.getElementById('fcInstructions')?.value||'').trim(),
@@ -5399,6 +5400,7 @@ function _collectStaffFormConfigDraft(){
     return {
         sections:sections,
         customQuestions:_readCustomQuestions('sfc'),
+        customSections:_readCustomSections('sfc'),
         welcomeMessage:(document.getElementById('sfcWelcome')?.value||'').trim(),
         instructions:(document.getElementById('sfcInstructions')?.value||'').trim(),
         positions:positions,
@@ -5418,6 +5420,7 @@ function _collectPostAcceptFormConfigDraft(){
     return {
         sections:sections,
         customQuestions:_readCustomQuestions('paf'),
+        customSections:_readCustomSections('paf'),
         welcomeMessage:(document.getElementById('pafWelcome')?.value||'').trim(),
         instructions:(document.getElementById('pafInstructions')?.value||'').trim(),
         fields:_readAdvFields('paf',PAF_FIELD_CATALOG),
@@ -5626,6 +5629,12 @@ function _buildFcPanelHtml(){
         +'<button class="me-btn me-btn--sec me-btn--sm" style="margin-top:6px" onclick="CampistryMe.addCustomQ()">+ Add Question</button>';
     h+=_accCard('Custom Questions',qHtml,{badge:(fc.customQuestions||[]).length+' added'});
 
+    var fcSecs=fc.customSections||[];
+    var secHtml='<p style="font-size:.78rem;color:var(--s400);margin:0 0 10px">Build your own multi-field sections — e.g. a full "Dad\'s Info" block with its own name, phone, and email fields, shown as its own labeled section on the form.</p>'
+        +'<div id="fcSecList">'+fcSecs.map(function(s){return renderCustomSection(s,_newSid(),'fc');}).join('')+'</div>'
+        +'<button type="button" class="me-btn me-btn--sec me-btn--sm" style="margin-top:6px" onclick="CampistryMe.addCustomSection(\'fc\')">+ Add Section</button>';
+    h+=_accCard('Custom Sections',secHtml,{badge:fcSecs.length+' added'});
+
     var g=JSON.parse(localStorage.getItem('campGlobalSettings_v1')||'{}');
     var promos=g.campistryMe?.promoCodes||{EARLYBIRD:{pct:10,label:'Early Bird 10% Off'},SIBLING:{pct:5,label:'Sibling Discount 5%'},REFER:{amt:50,label:'Referral $50 Off'}};
     var promoHtml='<p style="font-size:.78rem;color:var(--s400);margin:0 0 10px">Discount codes parents can use during registration.</p><div id="fcPromoList">';
@@ -5683,10 +5692,16 @@ function renderCustomQ(q,i,prefix){
     h+='</div>';
     return h;
 }
+// Scoped to #{prefix}QList (the flat Custom Questions card) rather than a
+// bare document-wide query — necessary once Custom Sections (below) also
+// contain .fcQ-class rows nested inside their own containers, so this
+// never picks up a section's fields too.
 function _readCustomQuestions(prefix){
-    var qCls=(prefix||'fc')+'Q';
+    prefix=prefix||'fc';
+    var qCls=prefix+'Q';
+    var scope=document.getElementById(prefix+'QList')||document;
     var out=[];
-    document.querySelectorAll('.'+qCls).forEach(function(el){
+    scope.querySelectorAll('.'+qCls).forEach(function(el){
         var label=el.querySelector('.'+qCls+'Label')?.value?.trim();
         var type=el.querySelector('.'+qCls+'Type')?.value||'text';
         var required=el.querySelector('.'+qCls+'Req')?.checked||false;
@@ -5705,6 +5720,76 @@ function addCustomQ(prefix){
     list.appendChild(div.firstChild);
 }
 function addStaffCustomQ(){ addCustomQ('sfc'); }
+
+// ── CUSTOM SECTIONS — admin-defined, named groups of fields ────────────────
+// A generalization of Custom Questions one level up: a section is a label
+// plus its own list of fields, each field using the exact same
+// {label,type,required,options} shape (and the exact same renderCustomQ row
+// markup/.fcQ class) Custom Questions already uses — reused as-is, just
+// rendered inside a per-section container instead of the flat #fcQList, so
+// e.g. a full "Dad's Info" block (name, relationship, phone, email) can be
+// built and labeled as one unit rather than dumped into the generic
+// "Additional Information" pile alongside every other custom question.
+function _newSid(){ return Date.now().toString(36)+Math.random().toString(36).slice(2,6); }
+
+function renderCustomSection(sec,sid,prefix){
+    prefix=prefix||'fc';
+    sec=sec||{};
+    var secCls=prefix+'Sec';
+    var listId=prefix+'Sec_'+sid+'List';
+    var fields=sec.fields||[];
+    var h='<div class="'+secCls+'" style="border:1px solid var(--s200);border-radius:var(--r);padding:10px 12px;margin-bottom:8px;background:var(--s50)">';
+    h+='<div style="display:flex;gap:6px;align-items:center;margin-bottom:8px">';
+    h+='<input class="fi '+secCls+'Label" style="flex:1;font-weight:600;font-size:.85rem;padding:6px 8px" value="'+esc(sec.label||'')+'" placeholder="Section name, e.g. Dad\'s Info">';
+    h+='<button type="button" class="me-btn me-btn--ghost" style="color:var(--err);font-size:.7rem;white-space:nowrap" onclick="this.closest(\'.'+secCls+'\').remove()">✕ Remove Section</button></div>';
+    h+='<div id="'+listId+'">'+fields.map(function(f){return renderCustomQ(f,-1,prefix);}).join('')+'</div>';
+    h+='<button type="button" class="me-btn me-btn--sec me-btn--sm" onclick="CampistryMe.addSectionField(\''+prefix+'\',\''+sid+'\')">+ Add Field</button>';
+    h+='</div>';
+    return h;
+}
+// Reads back every .{prefix}Sec container under #{prefix}SecList — each
+// one's fields are read the SAME way _readCustomQuestions reads a flat
+// list, just scoped to that one section's own nested container instead of
+// the document (querySelectorAll on a subtree naturally can't cross into a
+// sibling section's fields, so no extra bookkeeping is needed to keep
+// sections from bleeding into each other after an Add/Remove).
+function _readCustomSections(prefix){
+    prefix=prefix||'fc';
+    var secCls=prefix+'Sec';
+    var qCls=prefix+'Q';
+    var out=[];
+    document.querySelectorAll('#'+prefix+'SecList .'+secCls).forEach(function(secEl){
+        var label=secEl.querySelector('.'+secCls+'Label')?.value?.trim();
+        if(!label)return;
+        var fields=[];
+        secEl.querySelectorAll('.'+qCls).forEach(function(el){
+            var flabel=el.querySelector('.'+qCls+'Label')?.value?.trim();
+            var type=el.querySelector('.'+qCls+'Type')?.value||'text';
+            var required=el.querySelector('.'+qCls+'Req')?.checked||false;
+            var optsRaw=el.querySelector('.'+qCls+'Opts')?.value||'';
+            var options=optsRaw?optsRaw.split(',').map(function(o){return o.trim()}).filter(Boolean):[];
+            if(flabel)fields.push({label:flabel,type:type,required:required,options:options});
+        });
+        out.push({id:'sec_'+_newSid(),label:label,fields:fields});
+    });
+    return out;
+}
+function addCustomSection(prefix){
+    prefix=prefix||'fc';
+    var list=document.getElementById(prefix+'SecList');
+    if(!list)return;
+    var div=document.createElement('div');
+    div.innerHTML=renderCustomSection({label:'',fields:[]},_newSid(),prefix);
+    list.appendChild(div.firstChild);
+}
+function addSectionField(prefix,sid){
+    prefix=prefix||'fc';
+    var list=document.getElementById(prefix+'Sec_'+sid+'List');
+    if(!list)return;
+    var div=document.createElement('div');
+    div.innerHTML=renderCustomQ({label:'',type:'text',required:false,options:[]},-1,prefix);
+    list.appendChild(div.firstChild);
+}
 
 function _renderDocRow(d){
     d=d||{};
@@ -5774,7 +5859,7 @@ function getStaffFormConfig(){
     if(staffFormConfig)return staffFormConfig;
     var sections={};
     SFC_SECTIONS.forEach(function(s){sections[s.key]={enabled:s.default}});
-    return{sections:sections,customQuestions:[],welcomeMessage:'',instructions:'',fields:{},sectionOrder:SFC_SECTIONS.map(function(s){return s.key}),branding:{},positions:SFC_POSITIONS_DEFAULT.slice(),certifications:SFC_CERTS_DEFAULT.slice()};
+    return{sections:sections,customQuestions:[],customSections:[],welcomeMessage:'',instructions:'',fields:{},sectionOrder:SFC_SECTIONS.map(function(s){return s.key}),branding:{},positions:SFC_POSITIONS_DEFAULT.slice(),certifications:SFC_CERTS_DEFAULT.slice()};
 }
 
 function _renderChipEditRow(cls,val){
@@ -5836,6 +5921,12 @@ function _buildSfcPanelHtml(){
         +'<div id="sfcQList">'+(fc.customQuestions||[]).map(function(q,i){return renderCustomQ(q,i,'sfc');}).join('')+'</div>'
         +'<button class="me-btn me-btn--sec me-btn--sm" style="margin-top:6px" onclick="CampistryMe.addStaffCustomQ()">+ Add Question</button>';
     h+=_accCard('Custom Questions',qHtml,{badge:(fc.customQuestions||[]).length+' added'});
+
+    var sfcSecs=fc.customSections||[];
+    var sfcSecHtml='<p style="font-size:.78rem;color:var(--s400);margin:0 0 10px">Build your own multi-field sections — a labeled group of fields, shown as its own section on the form.</p>'
+        +'<div id="sfcSecList">'+sfcSecs.map(function(s){return renderCustomSection(s,_newSid(),'sfc');}).join('')+'</div>'
+        +'<button type="button" class="me-btn me-btn--sec me-btn--sm" style="margin-top:6px" onclick="CampistryMe.addCustomSection(\'sfc\')">+ Add Section</button>';
+    h+=_accCard('Custom Sections',sfcSecHtml,{badge:sfcSecs.length+' added'});
     h+='</div>'; // /sfcTabQuick
 
     // ── ADVANCED — same drawer pattern; fields are grouped by section ──
@@ -5944,6 +6035,12 @@ function _buildPafPanelHtml(){
         +'<div id="pafQList">'+(fc.customQuestions||[]).map(function(q,i){return renderCustomQ(q,i,'paf');}).join('')+'</div>'
         +'<button class="me-btn me-btn--sec me-btn--sm" style="margin-top:6px" onclick="CampistryMe.addPafCustomQ()">+ Add Question</button>';
     h+=_accCard('Custom Questions',qHtml,{badge:(fc.customQuestions||[]).length+' added'});
+
+    var pafSecs=fc.customSections||[];
+    var pafSecHtml='<p style="font-size:.78rem;color:var(--s400);margin:0 0 10px">Build your own multi-field sections — a labeled group of fields, shown as its own section on the form.</p>'
+        +'<div id="pafSecList">'+pafSecs.map(function(s){return renderCustomSection(s,_newSid(),'paf');}).join('')+'</div>'
+        +'<button type="button" class="me-btn me-btn--sec me-btn--sm" style="margin-top:6px" onclick="CampistryMe.addCustomSection(\'paf\')">+ Add Section</button>';
+    h+=_accCard('Custom Sections',pafSecHtml,{badge:pafSecs.length+' added'});
     h+='</div>'; // /pafTabQuick
 
     // ── ADVANCED ──
@@ -6061,6 +6158,26 @@ function viewApplication(id){
             b+=row(label,display);
         });
     }
+    // Custom Sections — each rendered as its OWN labeled card (unlike the
+    // flat Custom Responses above), since the whole point of a section is
+    // staying grouped under its own heading for whoever reviews it.
+    var customSecRendered=false;
+    function renderCustomSectionResponses(){
+        if(customSecRendered)return;
+        customSecRendered=true;
+        if(!e.customSectionAnswers||!e.customSectionAnswers.length)return;
+        e.customSectionAnswers.forEach(function(secAns){
+            if(!secAns||!secAns.answers||!Object.keys(secAns.answers).length)return;
+            b+=sec(secAns.label||'Additional Section');
+            var labels=secAns.fieldLabels||[];
+            Object.entries(secAns.answers).forEach(function([key,val]){
+                var idx=parseInt(key.replace('f',''));
+                var label=labels[idx]||('Field '+(idx+1));
+                var display=Array.isArray(val)?val.join(', '):val;
+                b+=row(label,display);
+            });
+        });
+    }
 
     var SECTION_RENDERERS={
         camper:function(){
@@ -6139,6 +6256,7 @@ function viewApplication(id){
         },
         signature:function(){
             renderCustomResponses(); // pinned right before Signature, same as the public form
+            renderCustomSectionResponses();
             if(e.signature&&isSafeImageDataUrl(e.signature)){
                 b+=sec('Signature');
                 b+='<img src="'+e.signature+'" style="max-width:300px;height:80px;border:1px solid var(--s200);border-radius:var(--r);object-fit:contain;background:#fff">';
@@ -6153,6 +6271,7 @@ function viewApplication(id){
         if(fn)fn();
     });
     renderCustomResponses(); // fallback: still show answers even if Signature is off
+    renderCustomSectionResponses();
 
     // Post-acceptance form responses — bunkmate/session/logistics choices
     // the parent submitted after acceptance, distinct from the application
@@ -6175,6 +6294,21 @@ function viewApplication(id){
                 b+=row(label,display);
             });
         }
+        // Custom Sections answered on the Post-Acceptance form — stays in
+        // this same card (unlike the registration-side sections above,
+        // which each get their own card) since Post-Acceptance Responses
+        // is already rendered flat, not per-FC_SECTIONS-card.
+        (e.postAccept.customSectionAnswers||[]).forEach(function(secAns){
+            if(!secAns||!secAns.answers||!Object.keys(secAns.answers).length)return;
+            b+=rowRaw(secAns.label||'Additional Section','<strong>&nbsp;</strong>');
+            var pafSecLabels=secAns.fieldLabels||[];
+            Object.entries(secAns.answers).forEach(function([key,val]){
+                var idx=parseInt(key.replace('f',''));
+                var label=pafSecLabels[idx]||('Field '+(idx+1));
+                var display=Array.isArray(val)?val.join(', '):val;
+                b+=row(label,display);
+            });
+        });
     }
 
     // Admin Notes
@@ -6278,6 +6412,27 @@ function printApplication(id){
         Object.entries(e.customAnswers).forEach(function([key,val]){
             var idx=parseInt(key.replace('q',''));var label=labels[idx]||('Question '+(idx+1));
             h+=row(label,Array.isArray(val)?val.join(', '):val);
+        });h+=end();
+    }
+
+    (e.customSectionAnswers||[]).forEach(function(secAns){
+        h+=sec(secAns.label||'Additional Section');
+        var fieldLabels=secAns.fieldLabels||[];
+        Object.entries(secAns.answers||{}).forEach(function([key,val]){
+            var idx=parseInt(key.replace('f',''));var label=fieldLabels[idx]||('Field '+(idx+1));
+            h+=row(label,Array.isArray(val)?val.join(', '):val);
+        });h+=end();
+    });
+
+    if(e.postAccept&&e.postAccept.customSectionAnswers&&e.postAccept.customSectionAnswers.length){
+        h+=sec('Post-Acceptance — Additional Sections');
+        e.postAccept.customSectionAnswers.forEach(function(secAns){
+            h+=rowRaw(secAns.label||'Additional Section','<strong>&nbsp;</strong>');
+            var fieldLabels=secAns.fieldLabels||[];
+            Object.entries(secAns.answers||{}).forEach(function([key,val]){
+                var idx=parseInt(key.replace('f',''));var label=fieldLabels[idx]||('Field '+(idx+1));
+                h+=row(label,Array.isArray(val)?val.join(', '):val);
+            });
         });h+=end();
     }
 
@@ -11727,6 +11882,7 @@ window.CampistryMe={
     openFormConfig:openFormConfig,saveFormConfig:saveFormConfig,addCustomQ:addCustomQ,addPromoRow:addPromoRow,
     openStaffFormConfig:openStaffFormConfig,saveStaffFormConfig:saveStaffFormConfig,addStaffCustomQ:addStaffCustomQ,
     openPostAcceptFormConfig:openPostAcceptFormConfig,savePostAcceptFormConfig:savePostAcceptFormConfig,addPafCustomQ:addPafCustomQ,
+    addCustomSection:addCustomSection,addSectionField:addSectionField,
     openSendPostAcceptModal:openSendPostAcceptModal,
     addPositionRow:addPositionRow,addCertRow:addCertRow,
     _fcSwitchTab:_fcSwitchTab,_brandingLogoPick:_brandingLogoPick,_brandingLogoClear:_brandingLogoClear,_toggleAcc:_toggleAcc,

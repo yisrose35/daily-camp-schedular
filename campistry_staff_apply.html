@@ -83,6 +83,9 @@ body{font-family:var(--font);background:var(--s50);color:var(--s800);-webkit-fon
     <!-- Custom Questions (hidden by default, shown when config has questions) -->
     <div class="cd" id="customQCard" style="display:none"><div class="ct">📝 Additional Information</div><div id="cqContent"></div></div>
 
+    <!-- Custom Sections (admin-defined named field groups) -->
+    <div id="customSectionsHolder"></div>
+
     <div class="cd" id="consentCard"><div class="ct">✍️ Consent &amp; Signature</div>
       <div class="fg"><label class="fl">How did you hear about us?</label><input class="fi" id="aSrc"></div>
       <label class="chip" style="width:100%;border-radius:var(--r);margin-bottom:8px"><input type="checkbox" id="agBg"> I consent to a background check as part of the hiring process.</label>
@@ -121,6 +124,7 @@ var POSITIONS_DEFAULT=['Counselor','Head Counselor','Junior Counselor','Speciali
 var CERTS_DEFAULT=['CPR','First Aid','Lifeguard (WSI)','Food Handler','Wilderness First Responder','EMT','Teaching license'];
 var sigCtx=null,sigDrawing=false,sigHasData=false,resumeData=null,photoData=null;
 var customQuestions=[];
+var customSections=[];
 function esc(s){if(s==null)return'';return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&#34;').replace(/'/g,'&#39;');}
 function v(id){return(document.getElementById(id)?.value||'').trim();}
 
@@ -210,6 +214,8 @@ function applySectionOrder(order){
     });
     var cq=document.getElementById('customQCard'),consent=document.getElementById('consentCard');
     if(cq&&consent&&consent.parentNode)consent.parentNode.insertBefore(cq,consent);
+    var secHolder=document.getElementById('customSectionsHolder');
+    if(secHolder&&consent&&consent.parentNode)consent.parentNode.insertBefore(secHolder,consent);
 }
 
 var BRAND_COLOR_DEFAULT='#D97706';
@@ -290,6 +296,35 @@ function applyFormConfig(sfc){
     }else if(cqEl){
         cqEl.style.display='none';
         document.getElementById('cqContent').innerHTML='';
+    }
+
+    // Custom Sections — admin-defined named field groups, rendered after
+    // Custom Questions. Same per-type field markup as the loop above, keyed
+    // data-sec/data-f instead of data-q.
+    customSections=sfc.customSections||[];
+    var secHolderEl=document.getElementById('customSectionsHolder');
+    if(secHolderEl){
+        var secsHtml='';
+        customSections.forEach(function(sec,si){
+            if(!sec||!sec.label)return;
+            secsHtml+='<div class="cd"><div class="ct">📝 '+esc(sec.label)+'</div>';
+            (sec.fields||[]).forEach(function(f,fi){
+                secsHtml+='<div class="fg">';
+                secsHtml+='<label class="fl">'+esc(f.label)+(f.required?'<span class="rq">*</span>':'')+'</label>';
+                if(f.type==='text')secsHtml+='<input class="fi secInput" data-sec="'+si+'" data-f="'+fi+'">';
+                else if(f.type==='textarea')secsHtml+='<textarea class="fta secInput" data-sec="'+si+'" data-f="'+fi+'"></textarea>';
+                else if(f.type==='yesno')secsHtml+='<select class="fs secInput" data-sec="'+si+'" data-f="'+fi+'"><option value="">—</option><option>Yes</option><option>No</option></select>';
+                else if(f.type==='select')secsHtml+='<select class="fs secInput" data-sec="'+si+'" data-f="'+fi+'"><option value="">—</option>'+(f.options||[]).map(function(o){return'<option>'+esc(o)+'</option>'}).join('')+'</select>';
+                else if(f.type==='checkbox'){
+                    (f.options||[]).forEach(function(o){
+                        secsHtml+='<label style="display:flex;align-items:center;gap:6px;padding:3px 0;font-size:.85rem;cursor:pointer"><input type="checkbox" class="secCb" data-sec="'+si+'" data-f="'+fi+'" value="'+esc(o)+'" style="accent-color:var(--me)">'+esc(o)+'</label>';
+                    });
+                }
+                secsHtml+='</div>';
+            });
+            secsHtml+='</div>';
+        });
+        secHolderEl.innerHTML=secsHtml;
     }
 
     applyFieldConfig(sfc.fields,sectionsDisabled);
@@ -416,6 +451,17 @@ window.submitApp=async function(){
         if(_input&&!(_input.value||'').trim())return showErr('Please answer: '+_q.label);
         if(!_input&&_q.type==='checkbox'&&!_checked)return showErr('Please answer: '+_q.label);
     }
+    for(var _si=0;_si<customSections.length;_si++){
+        var _secFields=customSections[_si].fields||[];
+        for(var _fi=0;_fi<_secFields.length;_fi++){
+            var _f=_secFields[_fi];
+            if(!_f.required)continue;
+            var _fInput=document.querySelector('.secInput[data-sec="'+_si+'"][data-f="'+_fi+'"]');
+            var _fChecked=document.querySelector('.secCb[data-sec="'+_si+'"][data-f="'+_fi+'"]:checked');
+            if(_fInput&&!(_fInput.value||'').trim())return showErr('Please answer: '+_f.label);
+            if(!_fInput&&_f.type==='checkbox'&&!_fChecked)return showErr('Please answer: '+_f.label);
+        }
+    }
     // SMS/email consent is the applicant's own legal consent, not a camp
     // preference — always required, never gated by a section toggle.
     if(!document.getElementById('agSmsEmail').checked)return showErr('Please agree to receive text messages and emails to continue.');
@@ -440,6 +486,21 @@ window.submitApp=async function(){
         if(Array.isArray(customAnswers['q'+qi]))customAnswers['q'+qi].push(el.value);
     });
 
+    // Read Custom Sections answers — grouped per section, same index-keyed
+    // answer-bag convention as customAnswers above.
+    var customSectionAnswers=customSections.map(function(sec,si){
+        var answers={};
+        document.querySelectorAll('.secInput[data-sec="'+si+'"]').forEach(function(el){
+            var fi=el.dataset.f;if(fi!=null&&el.value)answers['f'+fi]=el.value.trim();
+        });
+        document.querySelectorAll('.secCb[data-sec="'+si+'"]:checked').forEach(function(el){
+            var fi=el.dataset.f;
+            if(!answers['f'+fi])answers['f'+fi]=[];
+            if(Array.isArray(answers['f'+fi]))answers['f'+fi].push(el.value);
+        });
+        return {label:sec.label,answers:answers,fieldLabels:(sec.fields||[]).map(function(f){return f.label;})};
+    });
+
     var id='staff_'+Date.now()+'_'+Math.random().toString(36).slice(2,6);
     var rec={
         first:first,last:last,name:first+' '+last,email:email,phone:phone,dob:v('aDob'),
@@ -453,7 +514,8 @@ window.submitApp=async function(){
         status:'applied',appliedDate:new Date().toISOString().split('T')[0],appliedTime:new Date().toISOString(),
         adminNotes:'',onboarding:{},
         customAnswers:customAnswers,
-        customQuestionLabels:customQuestions.map(function(q){return q.label;})
+        customQuestionLabels:customQuestions.map(function(q){return q.label;}),
+        customSectionAnswers:customSectionAnswers
     };
 
     try{
