@@ -5670,18 +5670,9 @@ function _buildFcPanelHtml(){
         +'<div class="fg" style="margin-bottom:0"><label class="fl">Instructions for Parents</label><textarea class="fi" id="fcInstructions" style="min-height:50px;resize:vertical" placeholder="Any special instructions shown at the top of the form">'+(fc.instructions||'')+'</textarea></div>';
     h+=_accCard('Welcome Message',welcomeHtml,{open:true});
 
-    var fcQSecKeys={}; _customFieldSectionCatalog('fc').forEach(function(s){fcQSecKeys[s.key]=true;});
-    var sectionsHtml='<p style="font-size:.78rem;color:var(--s400);margin:0 0 10px">Turn sections on or off, or add a field of your own right into one below.</p>';
-    FC_SECTIONS.forEach(function(s){
-        var enabled=fc.sections&&fc.sections[s.key]?fc.sections[s.key].enabled:s.default;
-        var disabled=s.required?' disabled':'';
-        sectionsHtml+='<label style="display:flex;align-items:center;gap:10px;padding:9px 10px;border-bottom:1px solid var(--s100);cursor:'+(s.required?'default':'pointer')+'">';
-        sectionsHtml+='<input type="checkbox" class="fcSec" data-key="'+s.key+'" '+(enabled?'checked':'')+disabled+' style="accent-color:var(--me);flex-shrink:0;width:16px;height:16px">';
-        sectionsHtml+='<div style="flex:1"><div style="font-size:.85rem;font-weight:600;color:var(--s800)">'+esc(s.label)+(s.required?' <span style="font-size:.65rem;color:var(--s400);font-weight:500">(required)</span>':'')+'</div>';
-        sectionsHtml+='<div style="font-size:.72rem;color:var(--s400)">'+esc(s.desc)+'</div></div>';
-        if(fcQSecKeys[s.key])sectionsHtml+='<span onclick="event.stopPropagation()"><button type="button" class="me-btn me-btn--sec me-btn--sm" style="font-size:.68rem;padding:4px 9px;white-space:nowrap" onclick="CampistryMe.addCustomQToSection(\'fc\',\''+s.key+'\')" title="Add a custom field to '+esc(s.label)+'">+ Field</button></span>';
-        sectionsHtml+='</label>';
-    });
+    var fcQSplit=_customQuestionsSplit('fc',fc.customQuestions);
+    var sectionsHtml='<p style="font-size:.78rem;color:var(--s400);margin:0 0 10px">Turn sections on or off. Click a section to add or edit fields right inside it.</p>'
+        +_renderSectionsListHtml('fc',FC_SECTIONS,fc,'fcSec',fcQSplit.bySection);
     h+=_accCard('Sections',sectionsHtml,{open:true});
 
     // Required documents — each with a max number of files parents may upload.
@@ -5691,10 +5682,10 @@ function _buildFcPanelHtml(){
         +'<button class="me-btn me-btn--sec me-btn--sm" style="margin-top:4px" onclick="CampistryMe.addDocRow()">+ Add Document</button>';
     h+=_accCard('Required Documents',docsHtml,{badge:docs.length+' set'});
 
-    var qHtml='<p style="font-size:.78rem;color:var(--s400);margin:0 0 10px">Your own questions. Pick "Show in" on any question to have it appear inside a built-in section instead of the standalone "Additional Information" card.</p>'
-        +'<div id="fcQList">'+(fc.customQuestions||[]).map(function(q,i){return renderCustomQ(q,i,'fc',true);}).join('')+'</div>'
+    var qHtml='<p style="font-size:.78rem;color:var(--s400);margin:0 0 10px">Standalone questions, shown in an "Additional Information" section. Pick "Show in" to move one inside a built-in section instead (or add it from that section directly, in Sections above).</p>'
+        +'<div id="fcQList">'+fcQSplit.flat.map(function(q,i){return renderCustomQ(q,i,'fc',true);}).join('')+'</div>'
         +'<button class="me-btn me-btn--sec me-btn--sm" style="margin-top:6px" onclick="CampistryMe.addCustomQ()">+ Add Question</button>';
-    h+=_accCard('Custom Questions',qHtml,{badge:(fc.customQuestions||[]).length+' added',wrapId:'fcQCard'});
+    h+=_accCard('Custom Questions',qHtml,{badge:fcQSplit.flat.length+' added',wrapId:'fcQCard'});
 
     var fcSecs=fc.customSections||[];
     var secHtml='<p style="font-size:.78rem;color:var(--s400);margin:0 0 10px">Build your own multi-field sections — e.g. a full "Dad\'s Info" block with its own name, phone, and email fields, shown as its own labeled section on the form.</p>'
@@ -5753,6 +5744,61 @@ function _customFieldSectionCatalog(prefix){
     var catalog=prefix==='sfc'?SFC_FIELD_CATALOG:prefix==='paf'?PAF_FIELD_CATALOG:FC_FIELD_CATALOG;
     return sections.filter(function(s){return !!catalog[s.key];}).map(function(s){return{key:s.key,label:s.label};});
 }
+// Splits a camp's customQuestions into the ones pinned to a built-in
+// section (rendered inline inside that section's own row in the Sections
+// list) vs the standalone ones (rendered in the flat Custom Questions
+// card). Single source of truth for that split so the Sections list and
+// the Custom Questions card never disagree about which row belongs where.
+function _customQuestionsSplit(prefix,list){
+    var qSecKeys={}; _customFieldSectionCatalog(prefix).forEach(function(s){qSecKeys[s.key]=true;});
+    var flat=[],bySection={};
+    (list||[]).forEach(function(q){
+        if(q.section&&qSecKeys[q.section])(bySection[q.section]=bySection[q.section]||[]).push(q);
+        else flat.push(q);
+    });
+    return{flat:flat,bySection:bySection};
+}
+// Renders the Quick Setup "Sections" list — enable/disable each built-in
+// section, and for any section with its own field catalog, click the row
+// (not the checkbox) to expand an inline editor of the custom fields
+// already attached to it, with a "+ Add Field" to add more right there —
+// no separate card to find and open.
+function _renderSectionsListHtml(prefix,sections,fc,checkboxCls,bySection){
+    var qSecKeys={}; _customFieldSectionCatalog(prefix).forEach(function(s){qSecKeys[s.key]=true;});
+    var h='';
+    sections.forEach(function(s){
+        var enabled=fc.sections&&fc.sections[s.key]?fc.sections[s.key].enabled:s.default;
+        var disabled=s.required?' disabled':'';
+        var supports=!!qSecKeys[s.key];
+        var attached=(bySection&&bySection[s.key])||[];
+        h+='<div style="border-bottom:1px solid var(--s100)">';
+        h+='<div style="display:flex;align-items:center;gap:10px;padding:9px 10px;cursor:'+(supports||!s.required?'pointer':'default')+'"'+(supports?' onclick="CampistryMe._toggleSectionQuestions(\''+prefix+'\',\''+s.key+'\')"':'')+'>';
+        h+='<input type="checkbox" class="'+checkboxCls+'" data-key="'+s.key+'" '+(enabled?'checked':'')+disabled+(supports?' onclick="event.stopPropagation()"':'')+' style="accent-color:var(--me);flex-shrink:0;width:16px;height:16px">';
+        h+='<div style="flex:1"><div style="font-size:.85rem;font-weight:600;color:var(--s800)">'+esc(s.label)+(s.required?' <span style="font-size:.65rem;color:var(--s400);font-weight:500">(required)</span>':'')+'</div>';
+        h+='<div style="font-size:.72rem;color:var(--s400)">'+esc(s.desc)+'</div></div>';
+        if(supports){
+            if(attached.length)h+='<span style="font-size:.68rem;color:var(--s400);white-space:nowrap">'+attached.length+' field'+(attached.length===1?'':'s')+'</span>';
+            h+='<span id="'+prefix+'SecRowChev_'+s.key+'" style="color:var(--s400);font-size:.7rem;flex-shrink:0">▸</span>';
+        }
+        h+='</div>';
+        if(supports){
+            h+='<div id="'+prefix+'SecRowBody_'+s.key+'" style="display:none;padding:0 10px 10px 36px">';
+            h+='<div id="'+prefix+'SecQList_'+s.key+'">'+attached.map(function(q){return renderCustomQ(q,-1,prefix,true);}).join('')+'</div>';
+            h+='<button type="button" class="me-btn me-btn--sec me-btn--sm" style="margin-top:4px" onclick="CampistryMe.addCustomQToSection(\''+prefix+'\',\''+s.key+'\')">+ Add Field</button>';
+            h+='</div>';
+        }
+        h+='</div>';
+    });
+    return h;
+}
+function _toggleSectionQuestions(prefix,key){
+    var body=document.getElementById(prefix+'SecRowBody_'+key);
+    var chev=document.getElementById(prefix+'SecRowChev_'+key);
+    if(!body)return;
+    var willOpen=body.style.display==='none';
+    body.style.display=willOpen?'block':'none';
+    if(chev)chev.textContent=willOpen?'▾':'▸';
+}
 // `isFlat` renders the "Show in section" picker — only meaningful for a
 // top-level Custom Questions row; a field nested inside a Custom Section
 // already belongs to its own named group, so it's omitted there.
@@ -5784,16 +5830,19 @@ function renderCustomQ(q,i,prefix,isFlat){
     h+='</div>';
     return h;
 }
-// Scoped to #{prefix}QList (the flat Custom Questions card) rather than a
-// bare document-wide query — necessary once Custom Sections (below) also
-// contain .fcQ-class rows nested inside their own containers, so this
-// never picks up a section's fields too.
+// Scoped to the whole builder panel (not just #{prefix}QList) — a question
+// can now live in the flat list OR inline inside a built-in section's own
+// row in the Sections list, and both need to be read back. The only rows
+// excluded are ones nested inside a Custom Section (.{prefix}Sec) — those
+// are read separately by _readCustomSections below.
 function _readCustomQuestions(prefix){
     prefix=prefix||'fc';
     var qCls=prefix+'Q';
-    var scope=document.getElementById(prefix+'QList')||document;
+    var secCls=prefix+'Sec';
+    var scope=document.getElementById('fbPanel')||document;
     var out=[];
     scope.querySelectorAll('.'+qCls).forEach(function(el){
+        if(el.closest('.'+secCls))return;
         var label=el.querySelector('.'+qCls+'Label')?.value?.trim();
         var type=el.querySelector('.'+qCls+'Type')?.value||'text';
         var required=el.querySelector('.'+qCls+'Req')?.checked||false;
@@ -5813,22 +5862,16 @@ function addCustomQ(prefix){
     list.appendChild(div.firstChild);
 }
 function addStaffCustomQ(){ addCustomQ('sfc'); }
-// Shortcut from a built-in section's row in the Quick Setup "Sections"
-// card — expands the Custom Questions drawer (if collapsed), adds a new
-// question pre-attached to that section, and focuses its label so the
-// admin can start typing immediately. Lets an admin add a field to e.g.
-// Parent / Guardian directly from the Sections list, without first having
-// to find and open the separate Custom Questions card themselves.
+// Adds a new custom field pinned to a built-in section, right in that
+// section's own inline drawer in the Quick Setup "Sections" list —
+// expands the drawer (if collapsed) and focuses the new field's label so
+// the admin can start typing immediately, no separate card to find.
 function addCustomQToSection(prefix,sectionKey){
     prefix=prefix||'fc';
-    var wrap=document.getElementById(prefix+'QCard');
-    if(wrap){
-        var accId=wrap.dataset.accId;
-        var body=accId&&document.getElementById(accId);
-        if(body&&body.style.display==='none')_toggleAcc(accId);
-        wrap.scrollIntoView({behavior:'smooth',block:'center'});
-    }
-    var list=document.getElementById(prefix+'QList');
+    var body=document.getElementById(prefix+'SecRowBody_'+sectionKey);
+    var chev=document.getElementById(prefix+'SecRowChev_'+sectionKey);
+    if(body&&body.style.display==='none'){ body.style.display='block'; if(chev)chev.textContent='▾'; }
+    var list=document.getElementById(prefix+'SecQList_'+sectionKey);
     if(!list)return;
     var div=document.createElement('div');
     div.innerHTML=renderCustomQ({label:'',type:'text',required:false,options:[],section:sectionKey},-1,prefix,true);
@@ -6012,18 +6055,9 @@ function _buildSfcPanelHtml(){
         +'<div class="fg" style="margin-bottom:0"><label class="fl">Instructions for Applicants</label><textarea class="fi" id="sfcInstructions" style="min-height:50px;resize:vertical" placeholder="Any special instructions shown at the top of the form">'+(fc.instructions||'')+'</textarea></div>';
     h+=_accCard('Welcome Message',welcomeHtml,{open:true});
 
-    var sfcQSecKeys={}; _customFieldSectionCatalog('sfc').forEach(function(s){sfcQSecKeys[s.key]=true;});
-    var sectionsHtml='<p style="font-size:.78rem;color:var(--s400);margin:0 0 10px">Turn sections on or off, or add a field of your own right into one below.</p>';
-    SFC_SECTIONS.forEach(function(s){
-        var enabled=fc.sections&&fc.sections[s.key]?fc.sections[s.key].enabled:s.default;
-        var disabled=s.required?' disabled':'';
-        sectionsHtml+='<label style="display:flex;align-items:center;gap:10px;padding:9px 10px;border-bottom:1px solid var(--s100);cursor:'+(s.required?'default':'pointer')+'">';
-        sectionsHtml+='<input type="checkbox" class="sfcSec" data-key="'+s.key+'" '+(enabled?'checked':'')+disabled+' style="accent-color:var(--me);flex-shrink:0;width:16px;height:16px">';
-        sectionsHtml+='<div style="flex:1"><div style="font-size:.85rem;font-weight:600;color:var(--s800)">'+esc(s.label)+(s.required?' <span style="font-size:.65rem;color:var(--s400);font-weight:500">(required)</span>':'')+'</div>';
-        sectionsHtml+='<div style="font-size:.72rem;color:var(--s400)">'+esc(s.desc)+'</div></div>';
-        if(sfcQSecKeys[s.key])sectionsHtml+='<span onclick="event.stopPropagation()"><button type="button" class="me-btn me-btn--sec me-btn--sm" style="font-size:.68rem;padding:4px 9px;white-space:nowrap" onclick="CampistryMe.addCustomQToSection(\'sfc\',\''+s.key+'\')" title="Add a custom field to '+esc(s.label)+'">+ Field</button></span>';
-        sectionsHtml+='</label>';
-    });
+    var sfcQSplit=_customQuestionsSplit('sfc',fc.customQuestions);
+    var sectionsHtml='<p style="font-size:.78rem;color:var(--s400);margin:0 0 10px">Turn sections on or off. Click a section to add or edit fields right inside it.</p>'
+        +_renderSectionsListHtml('sfc',SFC_SECTIONS,fc,'sfcSec',sfcQSplit.bySection);
     h+=_accCard('Sections',sectionsHtml,{open:true});
 
     var positions=(fc.positions&&fc.positions.length?fc.positions:SFC_POSITIONS_DEFAULT);
@@ -6038,10 +6072,10 @@ function _buildSfcPanelHtml(){
         +'<button class="me-btn me-btn--sec me-btn--sm" style="margin-top:4px" onclick="CampistryMe.addCertRow()">+ Add Certification</button>';
     h+=_accCard('Certifications',certHtml,{badge:certs.length+' certifications'});
 
-    var qHtml='<p style="font-size:.78rem;color:var(--s400);margin:0 0 10px">Your own questions. Pick "Show in" on any question to have it appear inside a built-in section instead of the standalone "Additional Information" card.</p>'
-        +'<div id="sfcQList">'+(fc.customQuestions||[]).map(function(q,i){return renderCustomQ(q,i,'sfc',true);}).join('')+'</div>'
+    var qHtml='<p style="font-size:.78rem;color:var(--s400);margin:0 0 10px">Standalone questions, shown in an "Additional Information" section. Pick "Show in" to move one inside a built-in section instead (or add it from that section directly, in Sections above).</p>'
+        +'<div id="sfcQList">'+sfcQSplit.flat.map(function(q,i){return renderCustomQ(q,i,'sfc',true);}).join('')+'</div>'
         +'<button class="me-btn me-btn--sec me-btn--sm" style="margin-top:6px" onclick="CampistryMe.addStaffCustomQ()">+ Add Question</button>';
-    h+=_accCard('Custom Questions',qHtml,{badge:(fc.customQuestions||[]).length+' added',wrapId:'sfcQCard'});
+    h+=_accCard('Custom Questions',qHtml,{badge:sfcQSplit.flat.length+' added',wrapId:'sfcQCard'});
 
     var sfcSecs=fc.customSections||[];
     var sfcSecHtml='<p style="font-size:.78rem;color:var(--s400);margin:0 0 10px">Build your own multi-field sections — a labeled group of fields, shown as its own section on the form.</p>'
@@ -6107,17 +6141,9 @@ function _buildPafPanelHtml(){
         +'<div style="font-size:.72rem;color:var(--s400)">When on, this form is emailed the moment an applicant is marked Accepted. When off, send it yourself from the applicant\'s Review panel whenever you\'re ready.</div></div></label>';
     h+=_accCard('Sending',sendHtml,{open:true});
 
-    var pafQSecKeys={}; _customFieldSectionCatalog('paf').forEach(function(s){pafQSecKeys[s.key]=true;});
-    var sectionsHtml='<p style="font-size:.78rem;color:var(--s400);margin:0 0 10px">Turn sections on or off, or add a field of your own right into one below.</p>';
-    PAF_SECTIONS.forEach(function(s){
-        var enabled=fc.sections&&fc.sections[s.key]?fc.sections[s.key].enabled:s.default;
-        sectionsHtml+='<label style="display:flex;align-items:center;gap:10px;padding:9px 10px;border-bottom:1px solid var(--s100);cursor:pointer">';
-        sectionsHtml+='<input type="checkbox" class="pafSec" data-key="'+s.key+'" '+(enabled?'checked':'')+' style="accent-color:var(--me);flex-shrink:0;width:16px;height:16px">';
-        sectionsHtml+='<div style="flex:1"><div style="font-size:.85rem;font-weight:600;color:var(--s800)">'+esc(s.label)+'</div>';
-        sectionsHtml+='<div style="font-size:.72rem;color:var(--s400)">'+esc(s.desc)+'</div></div>';
-        if(pafQSecKeys[s.key])sectionsHtml+='<span onclick="event.stopPropagation()"><button type="button" class="me-btn me-btn--sec me-btn--sm" style="font-size:.68rem;padding:4px 9px;white-space:nowrap" onclick="CampistryMe.addCustomQToSection(\'paf\',\''+s.key+'\')" title="Add a custom field to '+esc(s.label)+'">+ Field</button></span>';
-        sectionsHtml+='</label>';
-    });
+    var pafQSplit=_customQuestionsSplit('paf',fc.customQuestions);
+    var sectionsHtml='<p style="font-size:.78rem;color:var(--s400);margin:0 0 10px">Turn sections on or off. Click a section to add or edit fields right inside it.</p>'
+        +_renderSectionsListHtml('paf',PAF_SECTIONS,fc,'pafSec',pafQSplit.bySection);
     h+=_accCard('Sections',sectionsHtml,{open:true});
 
     // Create a packing list right here — separate from Link's Lists feature
@@ -6155,10 +6181,10 @@ function _buildPafPanelHtml(){
     }
     h+=_accCard('Attach an Existing List',listsHtml,{badge:attachedIds.length?attachedIds.length+' attached':''});
 
-    var qHtml='<p style="font-size:.78rem;color:var(--s400);margin:0 0 10px">Your own questions. Pick "Show in" on any question to have it appear inside a built-in section instead of the standalone "Additional Information" card.</p>'
-        +'<div id="pafQList">'+(fc.customQuestions||[]).map(function(q,i){return renderCustomQ(q,i,'paf',true);}).join('')+'</div>'
+    var qHtml='<p style="font-size:.78rem;color:var(--s400);margin:0 0 10px">Standalone questions, shown in an "Additional Information" section. Pick "Show in" to move one inside a built-in section instead (or add it from that section directly, in Sections above).</p>'
+        +'<div id="pafQList">'+pafQSplit.flat.map(function(q,i){return renderCustomQ(q,i,'paf',true);}).join('')+'</div>'
         +'<button class="me-btn me-btn--sec me-btn--sm" style="margin-top:6px" onclick="CampistryMe.addPafCustomQ()">+ Add Question</button>';
-    h+=_accCard('Custom Questions',qHtml,{badge:(fc.customQuestions||[]).length+' added',wrapId:'pafQCard'});
+    h+=_accCard('Custom Questions',qHtml,{badge:pafQSplit.flat.length+' added',wrapId:'pafQCard'});
 
     var pafSecs=fc.customSections||[];
     var pafSecHtml='<p style="font-size:.78rem;color:var(--s400);margin:0 0 10px">Build your own multi-field sections — a labeled group of fields, shown as its own section on the form.</p>'
@@ -12006,7 +12032,7 @@ window.CampistryMe={
     openFormConfig:openFormConfig,saveFormConfig:saveFormConfig,addCustomQ:addCustomQ,addPromoRow:addPromoRow,
     openStaffFormConfig:openStaffFormConfig,saveStaffFormConfig:saveStaffFormConfig,addStaffCustomQ:addStaffCustomQ,
     openPostAcceptFormConfig:openPostAcceptFormConfig,savePostAcceptFormConfig:savePostAcceptFormConfig,addPafCustomQ:addPafCustomQ,
-    addCustomSection:addCustomSection,addSectionField:addSectionField,addCustomQToSection:addCustomQToSection,
+    addCustomSection:addCustomSection,addSectionField:addSectionField,addCustomQToSection:addCustomQToSection,_toggleSectionQuestions:_toggleSectionQuestions,
     openSendPostAcceptModal:openSendPostAcceptModal,
     addPositionRow:addPositionRow,addCertRow:addCertRow,
     _fcSwitchTab:_fcSwitchTab,_brandingLogoPick:_brandingLogoPick,_brandingLogoClear:_brandingLogoClear,_toggleAcc:_toggleAcc,
