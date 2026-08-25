@@ -85,10 +85,12 @@ body{font-family:var(--font);background:var(--s50);color:var(--s800);-webkit-fon
 
 // This page is opened by a candidate who may have never touched Campistry
 // before — there's no session to resolve a camp from, so campId AND the
-// applicant id both travel in the URL and every read/write is scoped to
-// them explicitly. Same anon-write posture the registration/staff-
-// application forms already rely on for camp_state_kv (RLS is the real
-// boundary, not obscurity — see config.js's own comment on the anon key).
+// applicant id both travel in the URL. Every read/write goes through the
+// two anon-safe SECURITY DEFINER RPCs below (migration 085) — a direct
+// anon SELECT/UPSERT against camp_state_kv is always blocked by its RLS
+// (owner/admin only), and even if it weren't, a full-blob client-side
+// read-modify-write is exactly the risky pattern this session has closed
+// everywhere else. The RPCs touch only this one application's contract.
 var params=new URLSearchParams(window.location.search);
 var campId=params.get('camp');
 var appId=params.get('id');
@@ -114,41 +116,37 @@ async function loadOffer(){
     var c=null;
     for(var i=0;i<20&&!c;i++){c=client();if(!c)await new Promise(function(r){setTimeout(r,150);});}
     if(!c){showErr('Could not connect. Check your internet connection and reload this page.');return;}
-    var res;
-    try{ res=await c.from('camp_state_kv').select('value').eq('camp_id',campId).eq('key','campistryMe').maybeSingle(); }
+    var res,d;
+    try{ res=await c.rpc('get_contract_offer',{p_camp_id:campId,p_app_id:appId}); d=res&&res.data; }
     catch(e){ showErr('Could not load your offer. Reload this page to try again.'); return; }
-    if(res.error||!res.data||!res.data.value){showErr('This offer could not be found. Ask the camp to resend the link.');return;}
-    var me=res.data.value;
-    var a=(me.staffApplications||{})[appId];
-    var ctr=a&&a.contract;
-    if(!a||!ctr||ctr.status==='none'||!ctr.status){showErr('This offer could not be found, or hasn\'t been set up yet. Ask the camp to resend the link.');return;}
+    if(res.error){showErr('Could not load your offer. Reload this page to try again.');return;}
+    if(!d||d.success===false){showErr('This offer could not be found, or hasn\'t been set up yet. Ask the camp to resend the link.');return;}
 
-    var campName=me.campName||me.camp_name||'the camp';
+    var campName=d.campName||'the camp';
     document.getElementById('hdrSub').innerHTML='From <span class="cn">'+esc(campName)+'</span>';
     document.getElementById('loadingWrap').style.display='none';
 
-    if(ctr.status==='accepted'){
+    if(d.status==='accepted'){
         document.getElementById('okWrap').style.display='block';
-        document.getElementById('okMsg').textContent='You accepted this offer as '+(ctr.acceptedName||'')+' on '+((ctr.acceptedAt||'').slice(0,10)||'')+'. Nothing more to do here.';
+        document.getElementById('okMsg').textContent='You accepted this offer as '+(d.acceptedName||'')+' on '+((d.acceptedAt||'').slice(0,10)||'')+'. Nothing more to do here.';
         return;
     }
 
-    var name=a.name||((a.first||'')+' '+(a.last||''))||'—';
-    document.getElementById('fName').textContent=name;
-    document.getElementById('fPosition').textContent=ctr.position||'—';
-    if(ctr.payRate){
+    document.getElementById('fName').textContent=d.candidateName||'—';
+    document.getElementById('fPosition').textContent=d.position||'—';
+    if(d.payRate){
         var core=window.PayrollCore;
-        var pt=core?(core.PAY_TYPES.filter(function(p){return p.id===ctr.payType})[0]||{}):{};
+        var pt=core?(core.PAY_TYPES.filter(function(p){return p.id===d.payType})[0]||{}):{};
         document.getElementById('fPayLbl').textContent=pt.rateLabel||'Pay';
-        document.getElementById('fPay').textContent=fm(ctr.payRate);
+        document.getElementById('fPay').textContent=fm(d.payRate);
         document.getElementById('fPayRow').style.display='flex';
     }
-    if(ctr.startDate||ctr.endDate){
-        document.getElementById('fDates').textContent=(ctr.startDate||'?')+' – '+(ctr.endDate||'?');
+    if(d.startDate||d.endDate){
+        document.getElementById('fDates').textContent=(d.startDate||'?')+' – '+(d.endDate||'?');
         document.getElementById('fDatesRow').style.display='flex';
     }
-    if(ctr.terms){
-        document.getElementById('fTerms').textContent=ctr.terms;
+    if(d.terms){
+        document.getElementById('fTerms').textContent=d.terms;
         document.getElementById('fTermsCard').style.display='block';
     }
     document.getElementById('formWrap').style.display='block';
@@ -162,22 +160,14 @@ async function loadOffer(){
         var btn=document.getElementById('acBtn');
         btn.disabled=true;btn.textContent='Submitting…';note.textContent='';
         try{
-            // Re-fetch immediately before writing so a concurrent office edit
-            // (e.g. they tweaked the pay rate right before you clicked) isn't
-            // clobbered by whatever was in memory when the page first loaded.
-            var cur=await c.from('camp_state_kv').select('value').eq('camp_id',campId).eq('key','campistryMe').maybeSingle();
-            var cloudMe=(cur&&cur.data&&cur.data.value&&typeof cur.data.value==='object')?cur.data.value:me;
-            var merged=Object.assign({},cloudMe);
-            merged.staffApplications=Object.assign({},cloudMe.staffApplications||{});
-            var freshApp=Object.assign({},merged.staffApplications[appId]||a);
-            var freshCtr=Object.assign({},freshApp.contract||ctr);
-            freshCtr.status='accepted';
-            freshCtr.acceptedAt=new Date().toISOString();
-            freshCtr.acceptedName=typedName;
-            freshApp.contract=freshCtr;
-            merged.staffApplications[appId]=freshApp;
-            var up=await c.from('camp_state_kv').upsert({camp_id:campId,key:'campistryMe',value:merged,updated_at:new Date().toISOString()},{onConflict:'camp_id,key'});
-            if(up&&up.error)throw new Error(up.error.message);
+            // accept_staff_contract (migration 085) does an atomic jsonb_set
+            // server-side, touching only this one application's
+            // contract.{status,acceptedAt,acceptedName} — no read-modify-
+            // write from this browser, so a concurrent office edit (or
+            // another candidate's application) can never be clobbered.
+            var acc=await c.rpc('accept_staff_contract',{p_camp_id:campId,p_app_id:appId,p_accepted_name:typedName});
+            if(acc&&acc.error)throw new Error(acc.error.message);
+            if(acc&&acc.data&&acc.data.success===false)throw new Error(acc.data.error);
         }catch(e){
             console.error('[Contract] accept error',e);
             note.textContent='Something went wrong submitting your acceptance. Please try again.';

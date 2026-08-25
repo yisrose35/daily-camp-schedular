@@ -96,16 +96,26 @@ Functions side.
    — confirm you get a clear "this link doesn't look right" message
    instead of a blank page or a silent failure.
 
-## Related gap flagged, not fixed here
+## Fast-follow (same day): campistry_contract.html
 
-`campistry_contract.html` (staff hiring offer/contract page) does a
-**direct** `camp_state_kv` `SELECT` as an anonymous client
-(`campId`/`appId` from the URL, same pattern this fix replaces) — that
-read is almost certainly blocked by the same RLS policy for the same
-reason. Worth its own fast-follow using the same
-`get_public_form_config`-style pattern (a narrow, whitelisted RPC scoped
-to exactly what that one page needs), not expanded into this fix since it
-wasn't part of what broke the three application forms.
+`campistry_contract.html` (staff hiring offer/contract page) had the same
+gap, plus a worse one on the write side — see migration
+`085_contract_offer_bootstrap.sql` and its own header comment for the
+full story. Short version: its direct anonymous `camp_state_kv` `SELECT`
+was blocked by the same RLS as everything above, and its "Accept Offer"
+button did a full-blob client-side read-modify-write UPSERT (also
+blocked, and risky even if it weren't). Both replaced with narrow
+SECURITY DEFINER RPCs — `get_contract_offer` (read) and
+`accept_staff_contract` (an atomic single-field merge, no blob rewrite).
+Paste `085_contract_offer_bootstrap.sql` into the SQL Editor alongside
+084. No client-side link changes were needed here — this page already
+embedded `?camp=` (it was the original precedent for that pattern) — only
+its read/write wiring was broken.
+
+Verify: open an Offer & Contract link in a cold browser, confirm the
+offer details render, accept it with a typed name, confirm the office
+sees the acceptance land on that one application (and that other
+applications/enrollments/families are untouched).
 
 ## What's NOT in this pass
 
