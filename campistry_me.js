@@ -719,6 +719,30 @@ function confirmDialog(opts){
     });
 }
 
+// Click-to-enlarge for a small profile photo (camper/staff detail page
+// avatars) — same dynamic-overlay pattern as confirmDialog() above, just
+// showing an image instead of a dialog. Click anywhere, or Escape, to close.
+function _openPhotoLightbox(url){
+    if(!url)return;
+    var existing=document.getElementById('photoLightbox');
+    if(existing)existing.remove();
+    var overlay=document.createElement('div');
+    overlay.id='photoLightbox';
+    overlay.style.cssText='position:fixed;inset:0;z-index:10500;background:rgba(0,0,0,.85);display:flex;align-items:center;justify-content:center;cursor:zoom-out;padding:24px';
+    overlay.innerHTML='<img src="'+url+'" style="max-width:100%;max-height:100%;object-fit:contain;border-radius:10px;box-shadow:0 10px 40px rgba(0,0,0,.5)">'
+        +'<button aria-label="Close" style="position:absolute;top:18px;right:24px;background:rgba(255,255,255,.15);border:none;color:#fff;width:36px;height:36px;border-radius:50%;font-size:1.3rem;cursor:pointer;line-height:1">&times;</button>';
+    document.body.appendChild(overlay);
+    function finish(){
+        if(!overlay.parentNode)return;
+        overlay.remove();
+        document.removeEventListener('keydown',onKey);
+    }
+    function onKey(ev){ if(ev.key==='Escape')finish(); }
+    overlay.addEventListener('mousedown',function(ev){ if(ev.target===overlay)finish(); });
+    overlay.querySelector('button').onclick=finish;
+    document.addEventListener('keydown',onKey);
+}
+
 // Small overflow menu ("More"/"Share" buttons) — collapses a row of
 // secondary actions into one button + dropdown instead of a wall of
 // buttons. One outside-click listener (installed once) closes whichever
@@ -1368,7 +1392,7 @@ function renderStaffDetailPage(){
 
     function isSafeImageDataUrl(s){return typeof s==='string'&&/^data:image\/(png|jpeg|jpg|gif|webp);base64,[A-Za-z0-9+\/=]+$/.test(s);}
     var avatarHtml=(row.photo&&isSafeImageDataUrl(row.photo))
-        ?'<img src="'+row.photo+'" style="width:52px;height:52px;object-fit:cover;border-radius:8px;flex-shrink:0">'
+        ?'<img src="'+row.photo+'" style="width:52px;height:52px;object-fit:cover;border-radius:8px;flex-shrink:0;cursor:pointer" onclick="CampistryMe._openPhotoLightbox(this.src)" title="Click to enlarge">'
         :av(row.name,'l');
     var idStr=(app&&app.staffId)?String(app.staffId).padStart(4,'0'):null;
 
@@ -1960,7 +1984,7 @@ function renderCamperDetailPage(){
     function isSafeImageDataUrl(s){return typeof s==='string'&&/^data:image\/(png|jpeg|jpg|gif|webp);base64,[A-Za-z0-9+\/=]+$/.test(s);}
     var _enr=_enrollmentForCamper(n);
     var avatarHtml=(_enr&&_enr.camperPhoto&&isSafeImageDataUrl(_enr.camperPhoto))
-        ?'<img src="'+_enr.camperPhoto+'" style="width:52px;height:52px;object-fit:cover;border-radius:8px;flex-shrink:0">'
+        ?'<img src="'+_enr.camperPhoto+'" style="width:52px;height:52px;object-fit:cover;border-radius:8px;flex-shrink:0;cursor:pointer" onclick="CampistryMe._openPhotoLightbox(this.src)" title="Click to enlarge">'
         :av(n,'l');
 
     // Compact header — same small-avatar-next-to-title shape every other
@@ -4870,7 +4894,7 @@ function viewStaffApp(id){
     var name=a.name||((a.first||'')+' '+(a.last||''))||'Applicant';
 
     function isSafeImageDataUrl(s){return typeof s==='string'&&/^data:image\/(png|jpeg|jpg|gif|webp);base64,[A-Za-z0-9+\/=]+$/.test(s);}
-    var headPhoto=(a.photo&&isSafeImageDataUrl(a.photo))?'<img src="'+a.photo+'" style="width:40px;height:40px;object-fit:cover;border-radius:9px;flex-shrink:0">':'';
+    var headPhoto=(a.photo&&isSafeImageDataUrl(a.photo))?'<img src="'+a.photo+'" style="width:40px;height:40px;object-fit:cover;border-radius:9px;flex-shrink:0;cursor:pointer" onclick="CampistryMe._openPhotoLightbox(this.src)" title="Click to enlarge">':'';
     var staffIdBadge=a.staffId?' <span style="font-family:monospace;font-size:.72rem;color:var(--s400);background:var(--s100);padding:2px 8px;border-radius:var(--r);vertical-align:1px">Staff ID: #'+esc(String(a.staffId).padStart(4,'0'))+'</span>':'';
     var head='<div style="display:flex;justify-content:space-between;align-items:flex-start;gap:10px">'
         +'<div style="display:flex;align-items:center;gap:10px">'+headPhoto+'<div><h3 style="font-size:1.1rem;font-weight:700;color:var(--s800);margin:0">'+esc(name)+staffIdBadge+'</h3>'
@@ -6698,7 +6722,7 @@ function viewApplication(id){
     var e=enrollments[id];if(!e)return;
     var sc=e.status==='enrolled'?'ok':e.status==='accepted'?'ok':e.status==='waitlisted'?'warn':e.status==='declined'||e.status==='withdrawn'?'err':'gray';
 
-    var headPhoto=(e.camperPhoto&&isSafeImageDataUrl(e.camperPhoto))?'<img src="'+e.camperPhoto+'" style="width:40px;height:40px;object-fit:cover;border-radius:9px;flex-shrink:0">':'';
+    var headPhoto=(e.camperPhoto&&isSafeImageDataUrl(e.camperPhoto))?'<img src="'+e.camperPhoto+'" style="width:40px;height:40px;object-fit:cover;border-radius:9px;flex-shrink:0;cursor:pointer" onclick="CampistryMe._openPhotoLightbox(this.src)" title="Click to enlarge">':'';
     var head='<div style="display:flex;justify-content:space-between;align-items:flex-start"><div style="display:flex;align-items:center;gap:10px">'+headPhoto+'<div><h3 style="font-size:1.1rem;font-weight:700;color:var(--s800);margin:0">'+esc(e.camperName||'Application')+'</h3><div style="display:flex;gap:5px;margin-top:5px">'+bdg(e.status||'applied',sc)+' '+bdg(e.session||'No session','gray')+'</div></div></div><button class="me-modal-x" onclick="CampistryMe.closeModal(\'appViewModal\')">&times;</button></div>';
     document.getElementById('avHead').innerHTML=head;
 
@@ -12611,6 +12635,7 @@ window.CampistryMe={
     _fcSwitchTab:_fcSwitchTab,_brandingLogoPick:_brandingLogoPick,_brandingLogoClear:_brandingLogoClear,_toggleAcc:_toggleAcc,
     openFormBuilder:openFormBuilder,closeFormBuilder:closeFormBuilder,_fbOpenPreviewWindow:_fbOpenPreviewWindow,
     _toggleMenu:_toggleMenu,
+    _openPhotoLightbox:_openPhotoLightbox,
     copyLinkText:copyLinkText,showLinkQR:showLinkQR,showRegistrationQR:showRegistrationQR,showStaffQR:showStaffQR,
     openSendLinkModal:openSendLinkModal,openSendRegLinkModal:openSendRegLinkModal,openSendStaffLinkModal:openSendStaffLinkModal,
     // Payroll
