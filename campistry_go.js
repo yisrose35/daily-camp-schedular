@@ -1354,13 +1354,22 @@ let _toastTimer = null;
             const g = readCampistrySettings();
             const meRoster = g?.app1?.camperRoster || {};
             if (Object.keys(meRoster).length > 0) {
+                // Camper ID and Staff ID share ONE sequence in Campistry Me
+                // (nextPersonId) so a number is never handed to both a
+                // camper and a staff member. This fallback only fires when
+                // Me's roster has an entry Me itself hasn't backfilled yet
+                // (rare), so it has to respect that same shared counter —
+                // including numbers already used by staff, which this file
+                // has no other reason to know about.
                 let needsSave = false, maxId = 0;
                 Object.values(meRoster).forEach(c => { if (c.camperId && c.camperId > maxId) maxId = c.camperId; });
-                let nextId = (g?.campistryMe?.nextCamperId) || maxId + 1;
+                const staffApps = g?.campistryMe?.staffApplications || {};
+                Object.values(staffApps).forEach(a => { if (a && a.staffId && a.staffId > maxId) maxId = a.staffId; });
+                let nextId = (g?.campistryMe?.nextPersonId) || (g?.campistryMe?.nextCamperId) || maxId + 1;
                 if (maxId >= nextId) nextId = maxId + 1;
                 Object.entries(meRoster).forEach(([n, c]) => { if (!c.camperId) { c.camperId = nextId; nextId++; needsSave = true; } });
                 if (needsSave) {
-                    try { const raw = localStorage.getItem('campGlobalSettings_v1'); if (raw) { const data = JSON.parse(raw); data.app1.camperRoster = meRoster; if (!data.campistryMe) data.campistryMe = {}; data.campistryMe.nextCamperId = nextId; localStorage.setItem('campGlobalSettings_v1', JSON.stringify(data)); } } catch (e) {}
+                    try { const raw = localStorage.getItem('campGlobalSettings_v1'); if (raw) { const data = JSON.parse(raw); data.app1.camperRoster = meRoster; if (!data.campistryMe) data.campistryMe = {}; data.campistryMe.nextPersonId = nextId; localStorage.setItem('campGlobalSettings_v1', JSON.stringify(data)); } } catch (e) {}
                 }
                 return meRoster;
             }

@@ -84,12 +84,13 @@ var counselorVisibility=null; // What counselors see in Lite; null = catalogue d
 var _setupChecklistDismissed=false; // owner dismissed the onboarding progress card
 var leads={};               // Inquiry CRM: lead id → prospective-family record
 var leadFilter='all';       // Leads pipeline filter
-var nextCamperId=1;
-// Separate from payroll.nextStaffId (an internal id that only links
-// timesheets/pay runs to payroll.staff records) — this is the camp-facing
-// Staff ID, assigned once to every hired applicant the same way camperId
-// is assigned once to every enrolled camper.
-var nextStaffId=1;
+// One shared sequence for BOTH Camper ID (roster[name].camperId) and Staff
+// ID (staffApplications[id].staffId) — camps don't want the same number
+// ever handed to a camper and a staff member. Separate from
+// payroll.nextStaffId, an unrelated internal id that only links
+// timesheets/pay runs to payroll.staff records and is never shown to
+// anyone as an "ID number".
+var nextPersonId=1;
 // Bunk auto-generator settings — camp-wide policy for friend requests,
 // do-not-bunk-with requests, and bunk size, consumed by autoGenerateBunks()
 // and by the Post-Acceptance Form's friend-request inputs.
@@ -275,20 +276,22 @@ function loadData(){
         var fin=me.finance||{};
         finStaff=fin.staff||[];finExpenses=fin.expenses||[];finPayments=fin.payments||[];
         finBudget=fin.budget||{revenue:0,payroll:0,expenses:0};finIntegrations=fin.integrations||{};
-        nextCamperId=me.nextCamperId||1;
-        // Backfill: assign IDs to any campers that don't have one
-        var maxId=0;
-        Object.values(roster).forEach(function(c){if(c.camperId&&c.camperId>maxId)maxId=c.camperId});
-        if(maxId>=nextCamperId)nextCamperId=maxId+1;
-        Object.entries(roster).forEach(function([n,c]){if(!c.camperId){c.camperId=nextCamperId;nextCamperId++}});
-        nextStaffId=me.nextStaffId||1;
-        // Backfill: any applicant already at "hired" from before this feature
-        // shipped gets a Staff ID assigned now — same one-time-assignment
-        // rule setStaffStatus uses going forward.
-        var maxStaffId=0;
-        Object.values(staffApplications).forEach(function(a){if(a&&a.staffId>maxStaffId)maxStaffId=a.staffId});
-        if(maxStaffId>=nextStaffId)nextStaffId=maxStaffId+1;
-        Object.values(staffApplications).forEach(function(a){if(a&&a.status==='hired'&&!a.staffId){a.staffId=nextStaffId;nextStaffId++}});
+        // Seed from the new shared field, but also from the two legacy
+        // counters (nextCamperId/nextStaffId) that older saves may still
+        // carry — whichever is highest wins, so upgrading from the old
+        // two-counter scheme can never hand out a number already in use.
+        nextPersonId=Math.max(me.nextPersonId||1,me.nextCamperId||1,me.nextStaffId||1);
+        // Backfill: assign IDs to any campers/hired staff that don't have
+        // one yet, and pull nextPersonId past every id ALREADY in use on
+        // either roster — a camper's or a staff member's existing number is
+        // never revisited, no matter which side assigned it first.
+        Object.values(roster).forEach(function(c){if(c&&c.camperId>=nextPersonId)nextPersonId=c.camperId+1});
+        Object.values(staffApplications).forEach(function(a){if(a&&a.staffId>=nextPersonId)nextPersonId=a.staffId+1});
+        Object.entries(roster).forEach(function([n,c]){if(!c.camperId){c.camperId=nextPersonId;nextPersonId++}});
+        // Any applicant already at "hired" from before Staff ID shipped
+        // gets one assigned now — same one-time-assignment rule
+        // setStaffStatus uses going forward.
+        Object.values(staffApplications).forEach(function(a){if(a&&a.status==='hired'&&!a.staffId){a.staffId=nextPersonId;nextPersonId++}});
         // ★ Bunk Builder/Edit reconciliation: bunkAsgn (legacy Bunk Builder
         // drag-drop state) and roster[name].bunk (the field Edit, CSV import,
         // and Campistry Link all actually read) used to be two independent
@@ -377,8 +380,7 @@ function save(){
             bunkCapacity:bunkCapacity,
             bunkStaff:bunkStaff,
             divisionHeads:divisionHeads,
-            nextCamperId:nextCamperId,
-            nextStaffId:nextStaffId,
+            nextPersonId:nextPersonId,
             enrollments:enrollments,
             staffApplications:staffApplications,
             leads:leads,
@@ -2081,7 +2083,7 @@ function saveCamper(){
     if(!editingCamper&&roster[full]){toast('Already exists','error');return}
     // Gather teams
     var teams={};document.querySelectorAll('.ceTeamSel').forEach(function(sel){var lg=sel.dataset.league,v=sel.value;if(lg&&v)teams[lg]=v});
-    if(!existingId){existingId=nextCamperId;nextCamperId++}
+    if(!existingId){existingId=nextPersonId;nextPersonId++}
     function _v(id){var el=document.getElementById(id);return el?(el.value||''):'';}
     var _summerSameEl=document.getElementById('ceSummerSame');
     var _summerSame=_summerSameEl?!!_summerSameEl.checked:true;
@@ -5044,7 +5046,7 @@ function setStaffStatus(id,status,opts){
     // Reaching "hired" for the first time assigns a permanent Staff ID —
     // same rule as camperId: sequential, assigned once, never reused or
     // reassigned on a later status change.
-    if(status==='hired'&&prevStatus!=='hired'&&!a.staffId){a.staffId=nextStaffId;nextStaffId++;}
+    if(status==='hired'&&prevStatus!=='hired'&&!a.staffId){a.staffId=nextPersonId;nextPersonId++;}
     save();
     _refreshPplIfActive();
     if(!opts.fromRow) viewStaffApp(id);
@@ -7807,7 +7809,7 @@ function enrollCamper(id){
     e.status='enrolled';
     // Auto-create camper in roster with ALL application data
     if(!roster[e.camperName]){
-        var newId=nextCamperId;nextCamperId++;
+        var newId=nextPersonId;nextPersonId++;
         roster[e.camperName]={
             camperId:newId,
             dob:e.dob||'',gender:e.gender||'',
@@ -11708,7 +11710,11 @@ function importRows(rows){
     structure={};
     families={};
     bunkAsgn={};
-    nextCamperId=1;
+    // nextPersonId is intentionally NOT reset here — it's shared with Staff
+    // ID (see the declaration above), and staff aren't wiped by a camper
+    // CSV import. Resetting it back to 1 would let newly-imported campers
+    // get IDs already handed out to staff. Re-imported campers just pick up
+    // wherever the shared counter currently is.
     // Clear Go addresses too
     try{var goRaw=localStorage.getItem('campistry_go_data');var goData=goRaw?JSON.parse(goRaw):{};goData.addresses={};localStorage.setItem('campistry_go_data',JSON.stringify(goData))}catch(e){}
     // Also wipe the cloud settings so stale data doesn't survive
@@ -11734,7 +11740,8 @@ function importRows(rows){
         if(!g.campistryMe)g.campistryMe={};
         g.campistryMe.families={};
         g.campistryMe.bunkAssignments={};
-        g.campistryMe.nextCamperId=1;
+        // nextPersonId deliberately left alone here too — see the comment
+        // above where roster/structure/families get wiped.
         localStorage.setItem('campGlobalSettings_v1',JSON.stringify(g));
         // Fan the wipe out to cloud — otherwise the next hydration
         // re-pulls the pre-wipe roster/families and undoes the reset.
@@ -11774,7 +11781,7 @@ function importRows(rows){
     rows.forEach(function(r){
         if(roster[r.name])_importDupeNames.push(r.name);
         added++;
-        var existingId=nextCamperId;nextCamperId++;
+        var existingId=nextPersonId;nextPersonId++;
 
         roster[r.name]={
             camperId:existingId,
