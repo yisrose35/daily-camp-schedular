@@ -1,0 +1,603 @@
+<!DOCTYPE html>
+<html lang="en" data-product="dashboard">
+<head>
+<meta charset="UTF-8">
+<title>Post-Hire Form</title>
+<link rel="stylesheet" href="campistry-unified.css">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<link href="https://fonts.googleapis.com/css2?family=DM+Sans:opsz,wght@9..40,400;9..40,500;9..40,600;9..40,700;9..40,800&display=swap" rel="stylesheet">
+<style>
+:root{--me:#D97706;--me2:#B45309;--teal:#147D91;--ok:#10B981;--err:#EF4444;--s50:#F8FAFC;--s100:#F1F5F9;--s200:#E2E8F0;--s300:#CBD5E1;--s400:#94A3B8;--s500:#64748B;--s600:#475569;--s700:#334155;--s800:#1E293B;--s900:#0F172A;--r:8px;--font:'DM Sans',system-ui,sans-serif}
+*,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
+body{font-family:var(--font);background:var(--s50);color:var(--s800);-webkit-font-smoothing:antialiased}
+.wrap{max-width:700px;margin:0 auto;padding:24px 20px 60px}
+.hdr{text-align:center;margin-bottom:24px;padding:20px 0}
+.hdr h1{font-size:1.5rem;font-weight:800;color:var(--s900)}
+.hdr .cn{color:var(--me);font-size:1.2rem;font-weight:700}
+.hdr p{font-size:.88rem;color:var(--s500);margin:4px 0 0}
+.cd{background:#fff;border-radius:12px;border:1px solid var(--s200);padding:22px;margin-bottom:14px}
+.ct{font-size:.92rem;font-weight:700;color:var(--s800);margin:0 0 12px;display:flex;align-items:center;gap:8px}
+.ct svg{width:18px;height:18px;fill:none;stroke:var(--me);stroke-width:1.8;stroke-linecap:round;stroke-linejoin:round;flex-shrink:0}
+.fg{margin-bottom:10px}
+.fl{display:block;font-size:.78rem;font-weight:600;color:var(--s600);margin-bottom:3px}
+.rq{color:var(--err);margin-left:2px}
+.fi,.fs,.fta{width:100%;padding:9px 12px;border:1.5px solid var(--s200);border-radius:var(--r);font-size:.88rem;color:var(--s800);outline:none;font-family:var(--font);background:#fff;transition:border .15s}
+.fi:focus,.fs:focus,.fta:focus{border-color:var(--me);box-shadow:0 0 0 3px rgba(217,119,6,.08)}
+.fta{resize:vertical;min-height:60px}
+.fr{display:flex;gap:10px}.fr>*{flex:1;min-width:0}
+.ck{display:flex;align-items:flex-start;gap:8px;padding:6px 0}
+.ck input[type=checkbox]{accent-color:var(--me);margin-top:3px;flex-shrink:0}
+.ck label{font-size:.85rem;color:var(--s700);line-height:1.4;cursor:pointer}
+.sub-btn{width:100%;padding:14px;border:none;border-radius:var(--r);background:var(--me);color:#fff;font-size:1rem;font-weight:700;cursor:pointer;font-family:var(--font);transition:all .15s;margin-top:8px}
+.sub-btn:hover{background:var(--me2);box-shadow:0 4px 12px rgba(217,119,6,.25)}
+.sub-btn:disabled{opacity:.5;cursor:not-allowed}
+.err-msg{font-size:.78rem;color:var(--err);text-align:center;margin-bottom:6px;display:none}
+.success{text-align:center;padding:40px 20px;background:#fff;border-radius:12px;border:1px solid var(--s200)}
+.success h2{font-size:1.2rem;font-weight:700;color:var(--ok);margin:10px 0 6px}
+.success p{font-size:.88rem;color:var(--s500);line-height:1.5}
+.pwr{text-align:center;margin-top:20px;font-size:.72rem;color:var(--s400)}
+.pwr a{color:var(--me);text-decoration:none;font-weight:600}
+@media(max-width:600px){.wrap{padding:16px 12px 40px}.fr{flex-direction:column}.cd{padding:16px}}
+</style>
+</head>
+<body>
+<div class="wrap" id="formWrap" style="display:none">
+<div class="hdr"><img id="campLogo" src="" alt="" style="display:none;max-height:64px;max-width:220px;margin:0 auto 10px;border-radius:8px"><h1 id="campTitle">Post-Hire Form</h1><div class="cn" id="campNm"></div><p id="candidateLine">A few more details before camp starts</p></div>
+
+<!-- Logistics -->
+<div class="cd" id="logisticsCard"><div class="ct"><svg viewBox="0 0 24 24"><rect x="1" y="3" width="15" height="13" rx="2"/><path d="M16 8h3l3 3v5a1 1 0 01-1 1h-1"/><circle cx="5.5" cy="18.5" r="2.5"/><circle cx="18.5" cy="18.5" r="2.5"/></svg>Logistics</div>
+<div class="fr"><div class="fg" id="phShirtFg"><label class="fl" id="phShirtLabel">T-Shirt Size</label><select class="fs" id="phShirt"><option value="">—</option><option>YS</option><option>YM</option><option>YL</option><option>AS</option><option>AM</option><option>AL</option><option>AXL</option></select></div><div class="fg" id="phArrivalFg"><label class="fl" id="phArrivalLabel">Arrival Date</label><input type="date" class="fi" id="phArrival"></div></div>
+<div class="fg" id="phHousingFg" style="margin-bottom:0"><label class="fl" id="phHousingLabel">Housing Preference</label><input class="fi" id="phHousing" placeholder="Any housing preferences or needs"></div>
+</div>
+
+<!-- Emergency Contact -->
+<div class="cd" id="emergencyCard"><div class="ct"><svg viewBox="0 0 24 24"><path d="M15.05 5A5 5 0 0119 8.95M15.05 1A9 9 0 0123 8.94"/><path d="M22 16.92v3a2 2 0 01-2.18 2A19.79 19.79 0 012.12 2.18 2 2 0 014.11 2h3"/></svg>Emergency Contact</div>
+<div class="fr"><div class="fg" id="phEmNameFg"><label class="fl" id="phEmNameLabel">Emergency Contact Name</label><input class="fi" id="phEmName"></div><div class="fg" id="phEmRelationFg"><label class="fl" id="phEmRelationLabel">Relationship</label><input class="fi" id="phEmRelation" placeholder="e.g. Parent, Spouse"></div></div>
+<div class="fg" id="phEmPhoneFg" style="margin-bottom:0"><label class="fl" id="phEmPhoneLabel">Emergency Contact Phone</label><input type="tel" class="fi" id="phEmPhone"></div>
+</div>
+
+<!-- Acknowledgments -->
+<div class="cd" id="consentCard"><div class="ct"><svg viewBox="0 0 24 24"><rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="8.5" cy="8.5" r="1.5"/><polyline points="21 15 16 10 5 21"/></svg>Acknowledgments</div>
+<div class="ck" id="handbookAckRow"><input type="checkbox" id="phHandbookAck"><label for="phHandbookAck" id="handbookAckLabel">I have read and acknowledge the staff handbook.</label></div>
+<div class="ck" id="photoConsentRow"><input type="checkbox" id="phPhotoConsent"><label for="phPhotoConsent" id="photoConsentLabel">I give permission to appear in camp photos/videos used for promotional purposes.</label></div>
+</div>
+
+<!-- Custom Questions (hidden by default, shown when config has questions) -->
+<div class="cd" id="customQCard" style="display:none"><div class="ct"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="10"/><path d="M9.09 9a3 3 0 015.83 1c0 2-3 3-3 3"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg>Additional Information</div>
+<div id="cqContent"></div></div>
+
+<!-- Custom Sections (admin-defined named field groups) -->
+<div id="customSectionsHolder"></div>
+
+<div id="formErr" class="err-msg"></div>
+<button class="sub-btn" onclick="submitApp()">Submit</button>
+<div class="pwr">Powered by <a href="index.html">Campistry</a></div>
+</div>
+
+<!-- Success -->
+<div class="wrap" id="successWrap" style="display:none">
+<div class="success">
+<div style="font-size:48px">🎉</div>
+<h2>Thank You!</h2>
+<p>Your details have been submitted. The camp will be in touch if anything else is needed.</p>
+</div>
+<div class="pwr" style="margin-top:16px">Powered by <a href="index.html">Campistry</a></div>
+</div>
+
+<!-- Already submitted -->
+<div class="wrap" id="alreadyWrap" style="display:none">
+<div class="success">
+<div style="font-size:48px">✅</div>
+<h2 style="color:var(--me)">Already Submitted</h2>
+<p id="alreadyText">This form has already been submitted. Contact the camp if you need to make a change.</p>
+</div>
+<div class="pwr" style="margin-top:16px">Powered by <a href="index.html">Campistry</a></div>
+</div>
+
+<!-- Not found / not available -->
+<div class="wrap" id="notFoundWrap" style="display:none">
+<div class="success">
+<div style="font-size:48px">🔎</div>
+<h2 style="color:var(--err)">Form Not Available</h2>
+<p>We couldn't find this form. Please check the link your camp sent you.</p>
+</div>
+<div class="pwr" style="margin-top:16px">Powered by <a href="index.html">Campistry</a></div>
+</div>
+
+<!-- Cloud sync (loads silently — if scripts not found, falls back to localStorage only) -->
+<script src="config.js" onerror="console.log('[PostHire] Supabase config (config.js) not loaded — local only')"></script>
+<script src="supabase-js@2.js" onerror="console.log('[PostHire] Supabase client not loaded — local only')"></script>
+<script src="supabase_client.js" onerror="console.log('[PostHire] Supabase config not loaded — local only')"></script>
+<script src="local_cache_idb.js" onerror="console.log('[PostHire] LocalCacheIDB not loaded — falling back to localStorage')"></script>
+<script src="integration_hooks.js" onerror="console.log('[PostHire] Integration hooks not loaded — local only')"></script>
+
+<script>
+(function(){
+
+// ─── ADVANCED FORM CONFIG (fields / section order / branding) ─────────
+// Mirrors PHF_FIELD_CATALOG in campistry_me.js. Text/select fields go
+// through FIELD_ELEMENT_MAP; the two checkbox fields (handbook/photo
+// consent) go through CHECKBOX_FIELD_ELEMENT_MAP since they need
+// checked-state, not .value, and a wrapping .ck row instead of .fg.
+var FIELD_ELEMENT_MAP={shirt:'phShirt',arrivalDate:'phArrival',housing:'phHousing',emName:'phEmName',emRelation:'phEmRelation',emPhone:'phEmPhone'};
+var CHECKBOX_FIELD_ELEMENT_MAP={handbookAck:'phHandbookAck',photoConsent:'phPhotoConsent'};
+var FIELD_DEFAULT_LABEL={
+    shirt:'T-Shirt Size',arrivalDate:'Arrival Date',housing:'Housing Preference',
+    emName:'Emergency Contact Name',emRelation:'Relationship',emPhone:'Emergency Contact Phone',
+    handbookAck:'I have read and acknowledge the staff handbook.',
+    photoConsent:'I give permission to appear in camp photos/videos used for promotional purposes.'
+};
+var FIELD_REQUIRED_STATE={};
+var FIELD_ENABLED_STATE={};
+var FIELD_TO_SECTION={shirt:'logistics',arrivalDate:'logistics',housing:'logistics',emName:'emergency',emRelation:'emergency',emPhone:'emergency',handbookAck:'consent',photoConsent:'consent'};
+
+function applyFieldConfig(fields,sectionsDisabled){
+    fields=fields||{}; sectionsDisabled=sectionsDisabled||{};
+    Object.keys(FIELD_ELEMENT_MAP).forEach(function(fid){
+        var input=document.getElementById(FIELD_ELEMENT_MAP[fid]);
+        if(!input)return;
+        var fg=input.closest('.fg');
+        var cfg=fields[fid];
+        var sectionOff=sectionsDisabled[FIELD_TO_SECTION[fid]];
+        var enabled=sectionOff?false:(cfg?(cfg.enabled!==false):true);
+        FIELD_ENABLED_STATE[fid]=enabled;
+        if(!enabled){ if(fg)fg.style.display='none'; return; }
+        if(fg)fg.style.display='';
+        var required=cfg?!!cfg.required:false;
+        FIELD_REQUIRED_STATE[fid]=required;
+        var label=fg&&fg.querySelector('.fl');
+        if(label){
+            var text=(cfg&&cfg.label)||FIELD_DEFAULT_LABEL[fid];
+            label.innerHTML=esc(text)+(required?' <span class="rq">*</span>':'');
+        }
+    });
+    Object.keys(CHECKBOX_FIELD_ELEMENT_MAP).forEach(function(fid){
+        var input=document.getElementById(CHECKBOX_FIELD_ELEMENT_MAP[fid]);
+        if(!input)return;
+        var row=input.closest('.ck');
+        var cfg=fields[fid];
+        var sectionOff=sectionsDisabled[FIELD_TO_SECTION[fid]];
+        var enabled=sectionOff?false:(cfg?(cfg.enabled!==false):true);
+        FIELD_ENABLED_STATE[fid]=enabled;
+        if(row)row.style.display=enabled?'':'none';
+        if(!enabled)return;
+        var required=cfg?!!cfg.required:false;
+        FIELD_REQUIRED_STATE[fid]=required;
+        var labelEl=row&&row.querySelector('label');
+        if(labelEl)labelEl.textContent=(cfg&&cfg.label)||FIELD_DEFAULT_LABEL[fid];
+    });
+}
+
+var SECTION_ORDER_MAP={logistics:'logisticsCard',emergency:'emergencyCard',consent:'consentCard'};
+var DEFAULT_SECTION_ORDER=['logistics','emergency','consent'];
+function applySectionOrder(order){
+    order=(order&&order.length)?order:DEFAULT_SECTION_ORDER;
+    var anchor=document.getElementById('formErr');
+    if(!anchor||!anchor.parentNode)return;
+    var parent=anchor.parentNode;
+    order.forEach(function(key){
+        var elId=SECTION_ORDER_MAP[key];
+        var el=elId&&document.getElementById(elId);
+        if(el)parent.insertBefore(el,anchor);
+    });
+    var cq=document.getElementById('customQCard');
+    if(cq)parent.insertBefore(cq,anchor);
+    var secHolder=document.getElementById('customSectionsHolder');
+    if(secHolder)parent.insertBefore(secHolder,anchor);
+}
+
+var BRAND_COLOR_DEFAULT='#D97706';
+function applyBranding(branding){
+    branding=branding||{};
+    var img=document.getElementById('campLogo');
+    if(img){
+        if(branding.logo){img.src=branding.logo;img.style.display='block';}
+        else{img.src='';img.style.display='none';}
+    }
+    document.documentElement.style.setProperty('--me',branding.color||BRAND_COLOR_DEFAULT);
+}
+
+function esc(s){
+    if(s===null||s===undefined)return'';
+    return String(s)
+        .replace(/&/g,'&amp;')
+        .replace(/</g,'&lt;')
+        .replace(/>/g,'&gt;')
+        .replace(/"/g,'&#34;')
+        .replace(/'/g,'&#39;');
+}
+function v(id){return(document.getElementById(id)?.value||'').trim()}
+
+var _baseCampNm='';
+var SEC_MAP={logistics:'logisticsCard',emergency:'emergencyCard',consent:'consentCard'};
+// Which built-in sections a Custom Question can attach to (mirrors
+// campistry_postaccept.html's CUSTOM_FIELD_SECTIONS) — every PHF section
+// has its own plain field-group markup, so all three qualify here.
+var CUSTOM_FIELD_SECTIONS=['logistics','emergency','consent'];
+function _sectionCustomFieldsEl(cardId){
+    var card=document.getElementById(cardId);
+    if(!card)return null;
+    var id=cardId+'_customFields';
+    var el=document.getElementById(id);
+    if(!el){ el=document.createElement('div'); el.id=id; card.appendChild(el); }
+    return el;
+}
+var _currentFC={};
+var _appId=null, _appRecord=null;
+// The camp this application belongs to — travels in the URL because a
+// first-time visitor has no session for getCampId() to resolve from (see
+// migration 084's pattern). _resolvedCampId is set once the cloud
+// bootstrap confirms both the camp and the application id are real.
+var campIdParam=new URLSearchParams(window.location.search).get('camp');
+var _resolvedCampId=null;
+
+// Applies one form-config object to the live DOM — idempotent, safe to call
+// repeatedly with a changing draft (the Form Builder's live preview does
+// exactly that).
+function applyFormConfig(fc){
+    fc=fc||{};
+    _currentFC=fc;
+    document.getElementById('campNm').textContent=fc.welcomeMessage||_baseCampNm;
+
+    var oldInstr=document.getElementById('_fcInstrEl'); if(oldInstr)oldInstr.remove();
+    if(fc.instructions){
+        var instrEl=document.createElement('p');
+        instrEl.id='_fcInstrEl';
+        instrEl.style.cssText='font-size:.85rem;color:var(--s600);text-align:center;margin-top:6px;line-height:1.5';
+        instrEl.textContent=fc.instructions;
+        document.querySelector('.hdr').appendChild(instrEl);
+    }
+
+    Object.keys(SEC_MAP).forEach(function(key){ var el=document.getElementById(SEC_MAP[key]); if(el)el.style.display=''; });
+    var sectionsDisabled={};
+    if(fc.sections){
+        Object.entries(fc.sections).forEach(function([key,cfg]){
+            if(!cfg.enabled){
+                sectionsDisabled[key]=true;
+                if(SEC_MAP[key]){var el=document.getElementById(SEC_MAP[key]);if(el)el.style.display='none'}
+            }
+        });
+    }
+
+    // Custom questions — a question tagged with a built-in section renders
+    // inline inside that section's own card; everything else falls into the
+    // flat "Additional Information" card. Same data-q scheme either way, so
+    // the document-wide .cqInput/.cqCb reads used at submit/validation time
+    // need no change regardless of where a row physically lives.
+    var cqEl=document.getElementById('customQCard');
+    var cqBySection={},cqFlat='';
+    (fc.customQuestions||[]).forEach(function(q,i){
+        var qh='<div class="fg">';
+        qh+='<label class="fl">'+esc(q.label)+(q.required?'<span class="rq">*</span>':'')+'</label>';
+        if(q.type==='text')qh+='<input class="fi cqInput" data-q="'+i+'">';
+        else if(q.type==='textarea')qh+='<textarea class="fta cqInput" data-q="'+i+'"></textarea>';
+        else if(q.type==='yesno')qh+='<select class="fs cqInput" data-q="'+i+'"><option value="">—</option><option>Yes</option><option>No</option></select>';
+        else if(q.type==='select')qh+='<select class="fs cqInput" data-q="'+i+'"><option value="">—</option>'+(q.options||[]).map(function(o){return'<option>'+esc(o)+'</option>'}).join('')+'</select>';
+        else if(q.type==='checkbox'){
+            (q.options||[]).forEach(function(o){
+                qh+='<label style="display:flex;align-items:center;gap:6px;padding:3px 0;font-size:.85rem;cursor:pointer"><input type="checkbox" class="cqCb" data-q="'+i+'" value="'+esc(o)+'" style="accent-color:var(--me)">'+esc(o)+'</label>';
+            });
+        }
+        qh+='</div>';
+        if(q.section&&CUSTOM_FIELD_SECTIONS.indexOf(q.section)>=0) cqBySection[q.section]=(cqBySection[q.section]||'')+qh;
+        else cqFlat+=qh;
+    });
+    CUSTOM_FIELD_SECTIONS.forEach(function(key){
+        var el=_sectionCustomFieldsEl(SEC_MAP[key]);
+        if(el)el.innerHTML=cqBySection[key]||'';
+    });
+    if(cqEl){
+        if(cqFlat){document.getElementById('cqContent').innerHTML=cqFlat;cqEl.style.display='block';}
+        else{cqEl.style.display='none';document.getElementById('cqContent').innerHTML='';}
+    }
+
+    // Custom Sections — admin-defined named field groups, rendered after
+    // Custom Questions. Same per-type field markup as the loop above, keyed
+    // data-sec/data-f instead of data-q.
+    var secHolderEl=document.getElementById('customSectionsHolder');
+    if(secHolderEl){
+        var secsHtml='';
+        (fc.customSections||[]).forEach(function(sec,si){
+            if(!sec||!sec.label)return;
+            secsHtml+='<div class="cd"><div class="ct"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="10"/><path d="M9.09 9a3 3 0 015.83 1c0 2-3 3-3 3"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg>'+esc(sec.label)+'</div>';
+            (sec.fields||[]).forEach(function(f,fi){
+                secsHtml+='<div class="fg">';
+                secsHtml+='<label class="fl">'+esc(f.label)+(f.required?'<span class="rq">*</span>':'')+'</label>';
+                if(f.type==='text')secsHtml+='<input class="fi secInput" data-sec="'+si+'" data-f="'+fi+'">';
+                else if(f.type==='textarea')secsHtml+='<textarea class="fta secInput" data-sec="'+si+'" data-f="'+fi+'"></textarea>';
+                else if(f.type==='yesno')secsHtml+='<select class="fs secInput" data-sec="'+si+'" data-f="'+fi+'"><option value="">—</option><option>Yes</option><option>No</option></select>';
+                else if(f.type==='select')secsHtml+='<select class="fs secInput" data-sec="'+si+'" data-f="'+fi+'"><option value="">—</option>'+(f.options||[]).map(function(o){return'<option>'+esc(o)+'</option>'}).join('')+'</select>';
+                else if(f.type==='checkbox'){
+                    (f.options||[]).forEach(function(o){
+                        secsHtml+='<label style="display:flex;align-items:center;gap:6px;padding:3px 0;font-size:.85rem;cursor:pointer"><input type="checkbox" class="secCb" data-sec="'+si+'" data-f="'+fi+'" value="'+esc(o)+'" style="accent-color:var(--me)">'+esc(o)+'</label>';
+                    });
+                }
+                secsHtml+='</div>';
+            });
+            secsHtml+='</div>';
+        });
+        secHolderEl.innerHTML=secsHtml;
+    }
+
+    applyFieldConfig(fc.fields,sectionsDisabled);
+    applySectionOrder(fc.sectionOrder);
+    applyBranding(fc.branding);
+}
+
+function showState(id){
+    ['formWrap','successWrap','alreadyWrap','notFoundWrap'].forEach(function(w){
+        document.getElementById(w).style.display=(w===id)?'block':'none';
+    });
+}
+
+window.submitApp=function submitApp(){
+    var errEl=document.getElementById('formErr');
+    errEl.style.display='none';
+    var missingLabel=null;
+    for(var _fid in FIELD_ELEMENT_MAP){
+        if(missingLabel)break;
+        if(FIELD_ENABLED_STATE[_fid]===false)continue;
+        if(!FIELD_REQUIRED_STATE[_fid])continue;
+        if(!v(FIELD_ELEMENT_MAP[_fid])){
+            missingLabel=(_currentFC.fields&&_currentFC.fields[_fid]&&_currentFC.fields[_fid].label)||FIELD_DEFAULT_LABEL[_fid];
+        }
+    }
+    if(!missingLabel){
+        for(var _cfid in CHECKBOX_FIELD_ELEMENT_MAP){
+            if(missingLabel)break;
+            if(FIELD_ENABLED_STATE[_cfid]===false)continue;
+            if(!FIELD_REQUIRED_STATE[_cfid])continue;
+            var cbEl=document.getElementById(CHECKBOX_FIELD_ELEMENT_MAP[_cfid]);
+            if(cbEl&&!cbEl.checked){
+                missingLabel=(_currentFC.fields&&_currentFC.fields[_cfid]&&_currentFC.fields[_cfid].label)||FIELD_DEFAULT_LABEL[_cfid];
+            }
+        }
+    }
+    if(!missingLabel){
+        (_currentFC.customQuestions||[]).forEach(function(q,i){
+            if(missingLabel||!q.required)return;
+            if(q.type==='checkbox'){
+                if(!document.querySelector('.cqCb[data-q="'+i+'"]:checked'))missingLabel=q.label;
+            }else{
+                var val=(document.querySelector('.cqInput[data-q="'+i+'"]')||{}).value;
+                if(!(val||'').trim())missingLabel=q.label;
+            }
+        });
+    }
+    if(!missingLabel){
+        (_currentFC.customSections||[]).forEach(function(sec,si){
+            if(missingLabel)return;
+            (sec.fields||[]).forEach(function(f,fi){
+                if(missingLabel||!f.required)return;
+                if(f.type==='checkbox'){
+                    if(!document.querySelector('.secCb[data-sec="'+si+'"][data-f="'+fi+'"]:checked'))missingLabel=f.label;
+                }else{
+                    var val=(document.querySelector('.secInput[data-sec="'+si+'"][data-f="'+fi+'"]')||{}).value;
+                    if(!(val||'').trim())missingLabel=f.label;
+                }
+            });
+        });
+    }
+    if(missingLabel){
+        errEl.textContent='Please complete: '+missingLabel+'.';
+        errEl.style.display='block';
+        errEl.scrollIntoView({behavior:'smooth',block:'center'});
+        return;
+    }
+
+    var rec={submittedDate:new Date().toISOString()};
+    if(FIELD_ENABLED_STATE.shirt!==false)rec.shirt=v('phShirt');
+    if(FIELD_ENABLED_STATE.arrivalDate!==false)rec.arrivalDate=v('phArrival');
+    if(FIELD_ENABLED_STATE.housing!==false)rec.housing=v('phHousing');
+    if(FIELD_ENABLED_STATE.emName!==false)rec.emName=v('phEmName');
+    if(FIELD_ENABLED_STATE.emRelation!==false)rec.emRelation=v('phEmRelation');
+    if(FIELD_ENABLED_STATE.emPhone!==false)rec.emPhone=v('phEmPhone');
+    if(FIELD_ENABLED_STATE.handbookAck!==false){
+        var hbEl=document.getElementById('phHandbookAck');
+        rec.handbookAck=hbEl?hbEl.checked:false;
+    }
+    if(FIELD_ENABLED_STATE.photoConsent!==false){
+        var pcEl=document.getElementById('phPhotoConsent');
+        rec.photoConsent=pcEl?pcEl.checked:false;
+    }
+
+    var customAnswers={}, customQuestionLabels=[];
+    (_currentFC.customQuestions||[]).forEach(function(q,i){
+        customQuestionLabels[i]=q.label;
+        if(q.type==='checkbox'){
+            var vals=Array.prototype.map.call(document.querySelectorAll('.cqCb[data-q="'+i+'"]:checked'),function(c){return c.value;});
+            if(vals.length)customAnswers['q'+i]=vals;
+        }else{
+            var val2=(document.querySelector('.cqInput[data-q="'+i+'"]')||{}).value;
+            if(val2)customAnswers['q'+i]=val2;
+        }
+    });
+    if(Object.keys(customAnswers).length){rec.customAnswers=customAnswers;rec.customQuestionLabels=customQuestionLabels;}
+
+    var customSectionAnswers=(_currentFC.customSections||[]).map(function(sec,si){
+        var answers={};
+        (sec.fields||[]).forEach(function(f,fi){
+            if(f.type==='checkbox'){
+                var vals=Array.prototype.map.call(document.querySelectorAll('.secCb[data-sec="'+si+'"][data-f="'+fi+'"]:checked'),function(c){return c.value;});
+                if(vals.length)answers['f'+fi]=vals;
+            }else{
+                var val3=(document.querySelector('.secInput[data-sec="'+si+'"][data-f="'+fi+'"]')||{}).value;
+                if(val3)answers['f'+fi]=val3;
+            }
+        });
+        return {label:sec.label,answers:answers,fieldLabels:(sec.fields||[]).map(function(f){return f.label;})};
+    });
+    if(customSectionAnswers.length)rec.customSectionAnswers=customSectionAnswers;
+
+    saveResponse(rec);
+}
+
+// Submit via submit_posthire_response (migration 086) — a SECURITY
+// DEFINER RPC granted to anon, since this page has no login and
+// camp_state_kv's own RLS only allows owner/admin. Merges {postHire: rec}
+// onto the existing application atomically server-side — no
+// read-modify-write from this browser, so a stale local snapshot can
+// never clobber another candidate's record in the cloud.
+async function saveResponse(rec){
+    var btn=document.querySelector('.sub-btn'); if(btn){btn.disabled=true;btn.textContent='Submitting…';}
+    var errEl=document.getElementById('formErr');
+    try{
+        var client=null, campId=_resolvedCampId||campIdParam||null;
+        for(var i=0;i<48;i++){ // up to ~12s
+            client=(window.CampistryDB&&window.CampistryDB.getClient&&window.CampistryDB.getClient())||(window.supabase&&typeof window.supabase.rpc==='function'?window.supabase:null);
+            if(!campId)campId=(window.CampistryDB&&window.CampistryDB.getCampId&&window.CampistryDB.getCampId())||localStorage.getItem('campistry_camp_id');
+            if(client&&typeof client.rpc==='function'&&campId)break;
+            await new Promise(function(r){setTimeout(r,250);});
+        }
+        if(!client||typeof client.rpc!=='function'||!campId)throw new Error('Could not reach the camp — check your connection and try again.');
+        var res=await client.rpc('submit_posthire_response',{p_camp_id:campId,p_app_id:_appId,p_posthire:rec});
+        if(res&&res.error)throw new Error(res.error.message);
+        if(res&&res.data&&res.data.success===false)throw new Error(res.data.error);
+        // Best-effort local cache nudge — only helps an admin on this SAME device.
+        try{
+            if(window.saveGlobalSettings&&window.saveGlobalSettings._isAuthoritativeHandler){
+                var g=JSON.parse(localStorage.getItem('campGlobalSettings_v1')||'{}');
+                var me=Object.assign({},g.campistryMe);
+                me.staffApplications=Object.assign({},me.staffApplications||{});
+                me.staffApplications[_appId]=Object.assign({},me.staffApplications[_appId]||_appRecord||{},{postHire:rec});
+                window.saveGlobalSettings('campistryMe',me);
+            }
+        }catch(_){}
+        showState('successWrap');
+        window.scrollTo(0,0);
+    }catch(ex){
+        errEl.textContent='Could not submit — check your connection and try again.';
+        errEl.style.display='block';
+        if(btn){btn.disabled=false;btn.textContent='Submit';}
+    }
+}
+
+// ─── LOAD DATA ───────────────────────────────────────────────
+// Fast-path local lookup — used directly when there's no ?camp= (old-style
+// links, or none exist yet since this is a new feature), and as a
+// fallback if the cloud bootstrap below can't connect at all.
+async function _loadFromLocalCache(id){
+    var me=null;
+    try{
+        var ls=JSON.parse(localStorage.getItem('campGlobalSettings_v1')||'{}');
+        if(ls.campistryMe&&ls.campistryMe.staffApplications&&ls.campistryMe.staffApplications[id])me=ls.campistryMe;
+    }catch(_){}
+    if(!me){
+        try{
+            if(typeof window.loadGlobalSettings==='function'){
+                var full=window.loadGlobalSettings();
+                if(full&&full.campistryMe&&full.campistryMe.staffApplications&&full.campistryMe.staffApplications[id])me=full.campistryMe;
+            }
+        }catch(_){}
+    }
+    if(!me){
+        try{
+            var client=window.CampistryDB?.getClient?.();
+            var campId=window.CampistryDB?.getCampId?.();
+            if(client&&campId){
+                var res=await client.from('camp_state_kv').select('value').eq('camp_id',campId).eq('key','campistryMe').maybeSingle();
+                if(!res?.error&&res?.data?.value&&res.data.value.staffApplications&&res.data.value.staffApplications[id])me=res.data.value;
+            }
+        }catch(_){}
+    }
+    var a=me&&me.staffApplications&&me.staffApplications[id];
+    if(!a||a.status!=='hired'){ showState('notFoundWrap'); return; }
+
+    var campNm='';
+    try{ var g=JSON.parse(localStorage.getItem('campGlobalSettings_v1')||'{}'); campNm=g.campName||(g.app1&&g.app1.campName)||''; }catch(_){}
+    _baseCampNm=campNm;
+    if(campNm)document.getElementById('campTitle').textContent=campNm+' — Post-Hire Form';
+    document.getElementById('candidateLine').textContent='For '+(a.name||'you');
+
+    _appId=id; _appRecord=a;
+
+    if(a.postHire){
+        document.getElementById('alreadyText').textContent='This form was submitted on '+(a.postHire.submittedDate?new Date(a.postHire.submittedDate).toLocaleDateString():'file')+'. Contact the camp if you need to make a change.';
+        showState('alreadyWrap');
+        return;
+    }
+    applyFormConfig((me&&me.postHireFormConfig)||{});
+    showState('formWrap');
+}
+
+// Authoritative path for a real hire: campId + application id both travel
+// in the URL (embedded by _postHireUrl in campistry_me.js), read via
+// get_posthire_bootstrap (migration 086), an anon-safe RPC that returns
+// only the tiny public-facing slice of that ONE application — never the
+// full record (references, resume, phone/address, etc.) and never any
+// other candidate's data.
+async function _loadFromCloud(campId,id){
+    var client=null;
+    for(var i=0;i<40;i++){ // ~6s
+        client=(window.CampistryDB&&window.CampistryDB.getClient&&window.CampistryDB.getClient())||(window.supabase&&typeof window.supabase.rpc==='function'?window.supabase:null);
+        if(client&&typeof client.rpc==='function')break;
+        await new Promise(function(r){setTimeout(r,150);});
+    }
+    if(!client||typeof client.rpc!=='function'){
+        console.warn('[PostHire] Could not connect — falling back to local cache.');
+        return _loadFromLocalCache(id);
+    }
+    var res,d;
+    try{
+        res=await client.rpc('get_posthire_bootstrap',{p_camp_id:campId,p_app_id:id});
+        d=res&&res.data;
+    }catch(e){
+        console.warn('[PostHire] Cloud bootstrap failed:',e&&e.message);
+        return _loadFromLocalCache(id);
+    }
+    if(res&&res.error){
+        console.warn('[PostHire] get_posthire_bootstrap failed:',res.error.message);
+        return _loadFromLocalCache(id);
+    }
+    if(!d||d.success===false){
+        // A definitive answer from the camp's own data, not a connectivity
+        // failure — trust it rather than falling back to a stale local cache.
+        showState('notFoundWrap');
+        return;
+    }
+
+    _resolvedCampId=campId;
+    _baseCampNm=d.campName||'';
+    if(_baseCampNm)document.getElementById('campTitle').textContent=_baseCampNm+' — Post-Hire Form';
+    document.getElementById('candidateLine').textContent='For '+(d.candidateName||'you');
+
+    _appId=id;
+    _appRecord={name:d.candidateName,status:'hired'};
+
+    if(d.alreadySubmitted){
+        document.getElementById('alreadyText').textContent='This form was submitted on '+(d.submittedDate?new Date(d.submittedDate).toLocaleDateString():'file')+'. Contact the camp if you need to make a change.';
+        showState('alreadyWrap');
+        return;
+    }
+    applyFormConfig(d.postHireFormConfig||{});
+    showState('formWrap');
+}
+
+// ─── LIVE PREVIEW MODE (embedded in the Me "Form Builder") ────────────
+var params=new URLSearchParams(window.location.search);
+if(params.get('preview')==='1'){
+    document.getElementById('candidateLine').textContent='For Jane Doe (sample)';
+    applyFormConfig({});
+    showState('formWrap');
+    // Embedded in the split-view builder's iframe, window.parent is the Me
+    // app. Opened via the builder's "Preview" button (a plain popup tab,
+    // not a frame), window.parent === window itself — window.opener is
+    // the Me app there instead.
+    var _previewSrc=window.opener||window.parent;
+    window.addEventListener('message',function(ev){
+        if(ev.source!==_previewSrc)return;
+        if(!ev.data||ev.data.type!=='campistry-form-preview')return;
+        try{ applyFormConfig(ev.data.config||{}); }catch(e){ console.warn('[PostHire] preview apply failed',e); }
+    });
+    try{ _previewSrc.postMessage({type:'campistry-form-preview-ready'},'*'); }catch(e){}
+}else{
+    var id=params.get('id');
+    if(!id)showState('notFoundWrap');
+    else if(campIdParam)_loadFromCloud(campIdParam,id);
+    else _loadFromLocalCache(id);
+}
+
+})();
+</script>
+</body>
+</html>

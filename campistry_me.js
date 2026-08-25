@@ -79,6 +79,7 @@ var pplStaffSubTab='applicants';  // Hiring page's own top tab: applicants | hir
 var staffApplications={};   // Staff hiring: applicant id → application record
 var staffFormConfig=null;   // Staff application form config — mirrors formConfig, drives campistry_staff_apply.html
 var paFormConfig=null;      // Post-acceptance form config — mirrors formConfig, drives campistry_postaccept.html
+var phFormConfig=null;      // Post-hire form config — mirrors paFormConfig, drives campistry_posthire.html
 var counselorVisibility=null; // What counselors see in Lite; null = catalogue defaults
 var _setupChecklistDismissed=false; // owner dismissed the onboarding progress card
 var leads={};               // Inquiry CRM: lead id → prospective-family record
@@ -243,6 +244,7 @@ function loadData(){
         formConfig=me.formConfig||null;
         staffFormConfig=me.staffFormConfig||null;
         paFormConfig=me.postAcceptFormConfig||null;
+        phFormConfig=me.postHireFormConfig||null;
         bunkGenConfig=Object.assign(_defaultBunkGenConfig(),me.bunkGenConfig||{});
         if(!Array.isArray(bunkGenConfig.criteria)||!bunkGenConfig.criteria.length)bunkGenConfig.criteria=_defaultBunkGenConfig().criteria;
         if(!Array.isArray(bunkGenConfig.schoolGrades)||!bunkGenConfig.schoolGrades.length)bunkGenConfig.schoolGrades=_defaultBunkGenConfig().schoolGrades;
@@ -372,6 +374,7 @@ function save(){
             formConfig:formConfig,
             staffFormConfig:staffFormConfig,
             postAcceptFormConfig:paFormConfig,
+            postHireFormConfig:phFormConfig,
             bunkGenConfig:bunkGenConfig,
             printSheets:printSheets,
             savedReports:savedReports,
@@ -1574,6 +1577,7 @@ function _renderHiringPane(){
         h+='<div class="me-more-wrap"><button class="me-btn me-btn--teal" onclick="CampistryMe._toggleMenu(\'pplFormsMenu\')">Customize Forms ▾</button>'
             +'<div class="me-more-menu" id="pplFormsMenu" style="min-width:210px">'
             +'<button onclick="CampistryMe.openStaffFormConfig()">Staff Application Form</button>'
+            +'<button onclick="CampistryMe.openPostHireFormConfig()">Post-Hire Form</button>'
             +'</div></div>'
             +'<button class="me-btn me-btn--pri" onclick="CampistryMe.addStaffApp()">+ Manual Entry</button>';
     }
@@ -4860,6 +4864,37 @@ function viewStaffApp(id){
         var obDone=STAFF_ONBOARD.filter(function(item){return ob[item[0]]}).length;
         acc+=_accCard('Onboarding Checklist',obBody,{open:true,badge:obDone+'/'+STAFF_ONBOARD.length,key:'sa_'+id+'_onboard'});
     }
+    // Post-Hire Form responses — mirrors viewApplication()'s e.postAccept
+    // display for campers. Only rendered once the hire has actually
+    // submitted; before that the footer's "Post-Hire Form" button (no
+    // checkmark yet) is the only indicator, same as the camper Pipeline.
+    if(st==='hired'&&a.postHire){
+        var ph=a.postHire;
+        var phBody=row('Submitted',ph.submittedDate?new Date(ph.submittedDate).toLocaleString():'');
+        phBody+=row('T-Shirt Size',ph.shirt);
+        phBody+=row('Arrival Date',ph.arrivalDate);
+        phBody+=row('Housing Preference',ph.housing);
+        phBody+=row('Emergency Contact',(ph.emName||'')+(ph.emRelation?' ('+ph.emRelation+')':''));
+        phBody+=row('Emergency Phone',ph.emPhone);
+        phBody+=row('Handbook Acknowledged',ph.handbookAck?'Yes':(ph.handbookAck===false?'No':''));
+        phBody+=row('Photo/Media Permission',ph.photoConsent?'Yes':(ph.photoConsent===false?'No':''));
+        if(ph.customAnswers&&Object.keys(ph.customAnswers).length){
+            var phLabels=ph.customQuestionLabels||[];
+            Object.entries(ph.customAnswers).forEach(function([key,val]){
+                var idx=parseInt(key.replace('q',''));var label=phLabels[idx]||('Question '+(idx+1));
+                phBody+=row(label,Array.isArray(val)?val.join(', '):val);
+            });
+        }
+        (ph.customSectionAnswers||[]).forEach(function(secAns){
+            phBody+='<div style="margin-top:8px;font-weight:600;font-size:.8rem;color:var(--s700)">'+esc(secAns.label||'Additional Section')+'</div>';
+            var fieldLabels=secAns.fieldLabels||[];
+            Object.entries(secAns.answers||{}).forEach(function([key,val]){
+                var idx=parseInt(key.replace('f',''));var label=fieldLabels[idx]||('Field '+(idx+1));
+                phBody+=row(label,Array.isArray(val)?val.join(', '):val);
+            });
+        });
+        acc+=_accCard('Post-Hire Form Responses',phBody,{open:true,key:'sa_'+id+'_posthire'});
+    }
     // Internal Notes — opens by default once something's actually been
     // written, so existing notes aren't hidden behind an extra click.
     var notesBody='<textarea id="staffNote" style="width:100%;padding:8px 10px;border:1.5px solid var(--s200);border-radius:var(--r);font-size:.82rem;font-family:var(--font);min-height:60px;resize:vertical;outline:none" placeholder="Interview notes, impressions…">'+(a.adminNotes?esc(a.adminNotes):'')+'</textarea>'
@@ -4877,6 +4912,7 @@ function viewStaffApp(id){
         if(next)f+='<button class="me-btn me-btn--pri" onclick="CampistryMe.setStaffStatus(\''+je(id)+'\',\''+next+'\')">'+ico('enroll')+'Advance to '+esc(_staffLabel(next))+'</button>';
         f+='<button class="me-btn me-btn--danger" onclick="CampistryMe.setStaffStatus(\''+je(id)+'\',\'declined\')">Decline</button>';
     }
+    if(st==='hired')f+='<button class="me-btn me-btn--sec" onclick="CampistryMe.openSendPostHireModal(\''+je(id)+'\')" title="Onboarding logistics and other post-hire details">'+(a.postHire?'✓ ':'')+'Post-Hire Form</button>';
     f+='<button class="me-btn me-btn--ghost-danger" onclick="CampistryMe.deleteStaffApp(\''+je(id)+'\')">'+ico('rescind')+'Delete</button>';
     f+='<button class="me-btn me-btn--sec" onclick="CampistryMe.closeModal(\'appViewModal\')">Close</button>';
     document.getElementById('avFooter').innerHTML=f;
@@ -4982,6 +5018,7 @@ function _syncAcceptedContractsToPayroll(){
 function setStaffStatus(id,status,opts){
     opts=opts||{};
     var a=staffApplications[id]; if(!a)return;
+    var prevStatus=a.status;
     a.status=status;
     save();
     _refreshPplIfActive();
@@ -4996,7 +5033,19 @@ function setStaffStatus(id,status,opts){
     // same email links up immediately. Silent on failure/duplicate — this is
     // a background convenience, not something that should block or alarm
     // the office if it can't complete (no email on file yet, etc).
-    if(status==='hired') _autoInviteHiredToLite(a);
+    if(status==='hired'){
+        _autoInviteHiredToLite(a);
+        // Post-hire form: only fires on the actual transition into "hired"
+        // (never re-fires if it's already hired), and only if the camp
+        // turned "Send automatically on hire" on in that form's builder —
+        // otherwise the office sends it manually from the Review panel.
+        if(prevStatus!=='hired'){
+            try{
+                var phc=getPostHireFormConfig();
+                if(phc.autoSend && a.email) _autoSendPostHire(id);
+            }catch(ex){}
+        }
+    }
 }
 // See setStaffStatus's "hired" branch. Kept separate from
 // inviteBunkStaffToLite (which stays as the manual, bunk-staff-scoped
@@ -5277,6 +5326,42 @@ function getPostAcceptFormConfig(){
     return{sections:sections,customQuestions:[],customSections:[],welcomeMessage:'',instructions:'',fields:{},sectionOrder:PAF_SECTIONS.map(function(s){return s.key}),branding:{},autoSend:false,attachedListIds:[],printableList:{name:'',items:[]}};
 }
 
+// ── POST-HIRE FORM ───────────────────────────────────────────────────────
+// A third form, distinct from the Staff Application above — sent AFTER a
+// candidate reaches the Hired stage (setStaffStatus(id,'hired')), separate
+// from Offer & Contract acceptance (campistry_contract.html), which only
+// confirms pay terms — this collects onboarding logistics back into the
+// SAME application record (staffApplications[id].postHire). Same "nothing
+// mandatory" philosophy as every other builder here — every section and
+// field is camp-configurable, nothing is locked.
+var PHF_SECTIONS=[
+    {key:'logistics',label:'Logistics',desc:'T-shirt size, arrival date, housing preference',default:true},
+    {key:'emergency',label:'Emergency Contact',desc:'Who to contact in case of an emergency',default:true},
+    {key:'consent',label:'Acknowledgments',desc:'Staff handbook, photo/media permission',default:true}
+];
+var PHF_FIELD_CATALOG={
+    logistics:[
+        {id:'shirt',label:'T-Shirt Size'},
+        {id:'arrivalDate',label:'Arrival Date'},
+        {id:'housing',label:'Housing Preference'}
+    ],
+    emergency:[
+        {id:'emName',label:'Emergency Contact Name'},
+        {id:'emRelation',label:'Relationship'},
+        {id:'emPhone',label:'Emergency Contact Phone'}
+    ],
+    consent:[
+        {id:'handbookAck',label:'Staff Handbook Acknowledged'},
+        {id:'photoConsent',label:'Photo/Media Permission'}
+    ]
+};
+function getPostHireFormConfig(){
+    if(phFormConfig)return phFormConfig;
+    var sections={};
+    PHF_SECTIONS.forEach(function(s){sections[s.key]={enabled:s.default}});
+    return{sections:sections,customQuestions:[],customSections:[],welcomeMessage:'',instructions:'',fields:{},sectionOrder:PHF_SECTIONS.map(function(s){return s.key}),branding:{},autoSend:false};
+}
+
 // Lists (packing lists / checklists) live in the Link admin app, stored
 // camp-wide under the top-level `link_lists` key (sibling of campistryMe,
 // not nested inside it — see campistry_link_admin.html's
@@ -5437,8 +5522,36 @@ function _collectPostAcceptFormConfigDraft(){
         }
     };
 }
+// Reads the same DOM the Post-Hire builder's Save button reads.
+function _collectPostHireFormConfigDraft(){
+    var sections={};
+    document.querySelectorAll('.phfSec').forEach(function(cb){sections[cb.dataset.key]={enabled:cb.checked}});
+    return {
+        sections:sections,
+        customQuestions:_readCustomQuestions('phf'),
+        customSections:_readCustomSections('phf'),
+        welcomeMessage:(document.getElementById('phfWelcome')?.value||'').trim(),
+        instructions:(document.getElementById('phfInstructions')?.value||'').trim(),
+        fields:_readAdvFields('phf',PHF_FIELD_CATALOG),
+        sectionOrder:_readSectionOrder('phf'),
+        autoSend:!!(document.getElementById('phfAutoSend')&&document.getElementById('phfAutoSend').checked),
+        branding:{
+            logo:(document.getElementById('phfLogoData')?.value||''),
+            color:(document.getElementById('phfAccentColor')?.value||'')
+        }
+    };
+}
+// Maps the open builder's kind to the public HTML file it drives — one
+// place to extend when a new form kind is added, instead of repeating the
+// same ternary chain at every call site.
+function _fbPublicPageFile(){
+    if(_fbKind==='staff')return'campistry_staff_apply.html';
+    if(_fbKind==='postaccept')return'campistry_postaccept.html';
+    if(_fbKind==='posthire')return'campistry_posthire.html';
+    return'campistry_register.html';
+}
 function _fbCollectAndSend(){
-    var fc=(_fbKind==='staff')?_collectStaffFormConfigDraft():(_fbKind==='postaccept')?_collectPostAcceptFormConfigDraft():_collectFormConfigDraft();
+    var fc=(_fbKind==='staff')?_collectStaffFormConfigDraft():(_fbKind==='postaccept')?_collectPostAcceptFormConfigDraft():(_fbKind==='posthire')?_collectPostHireFormConfigDraft():_collectFormConfigDraft();
     var frame=document.getElementById('fbPreviewFrame');
     if(frame&&frame.contentWindow)frame.contentWindow.postMessage({type:'campistry-form-preview',config:fc},'*');
     if(_fbPreviewWin&&!_fbPreviewWin.closed)_fbPreviewWin.postMessage({type:'campistry-form-preview',config:fc},'*');
@@ -5449,8 +5562,7 @@ function _fbCollectAndSend(){
 // the same way the embedded iframe is: the tab announces itself ready, this
 // pushes the current unsaved draft, and every subsequent edit re-pushes.
 function _fbOpenPreviewWindow(){
-    var isStaff=_fbKind==='staff', isPaf=_fbKind==='postaccept';
-    var url=(isStaff?'campistry_staff_apply.html':isPaf?'campistry_postaccept.html':'campistry_register.html')+'?preview=1';
+    var url=_fbPublicPageFile()+'?preview=1';
     _fbPreviewWin=window.open(url,'_blank');
     if(!_fbPreviewWin)toast('Allow pop-ups to preview the form','error');
 }
@@ -5522,14 +5634,15 @@ function _fbRestorePanelWidth(){
 }
 
 function openFormBuilder(kind){
-    _fbKind=(kind==='staff')?'staff':(kind==='postaccept')?'postaccept':'registration';
+    _fbKind=(kind==='staff')?'staff':(kind==='postaccept')?'postaccept':(kind==='posthire')?'posthire':'registration';
     var isStaff=_fbKind==='staff';
     var isPaf=_fbKind==='postaccept';
-    document.getElementById('fbTitle').textContent=isStaff?'Staff Application Form Builder':isPaf?'Post-Acceptance Form Builder':'Registration Form Builder';
+    var isPhf=_fbKind==='posthire';
+    document.getElementById('fbTitle').textContent=isStaff?'Staff Application Form Builder':isPaf?'Post-Acceptance Form Builder':isPhf?'Post-Hire Form Builder':'Registration Form Builder';
 
     var panel=document.getElementById('fbPanel');
-    panel.innerHTML=isStaff?_buildSfcPanelHtml():isPaf?_buildPafPanelHtml():_buildFcPanelHtml();
-    _initOrderDrag(isStaff?'sfc':isPaf?'paf':'fc');
+    panel.innerHTML=isStaff?_buildSfcPanelHtml():isPaf?_buildPafPanelHtml():isPhf?_buildPhfPanelHtml():_buildFcPanelHtml();
+    _initOrderDrag(isStaff?'sfc':isPaf?'paf':isPhf?'phf':'fc');
 
     // Live-update the preview on any edit — typing, checkboxes, drag
     // reorder, or a row being added/removed — via one delegated listener
@@ -5543,7 +5656,7 @@ function openFormBuilder(kind){
     panel._fbObserver=mo;
 
     var saveBtn=document.getElementById('fbSaveBtn');
-    saveBtn.onclick=isStaff?saveStaffFormConfig:isPaf?savePostAcceptFormConfig:saveFormConfig;
+    saveBtn.onclick=isStaff?saveStaffFormConfig:isPaf?savePostAcceptFormConfig:isPhf?savePostHireFormConfig:saveFormConfig;
 
     if(!_fbMsgListenerInstalled){
         _fbMsgListenerInstalled=true;
@@ -5564,7 +5677,7 @@ function openFormBuilder(kind){
     _fbInitResizer();
     _fbRestorePanelWidth();
     var frame=document.getElementById('fbPreviewFrame');
-    frame.src=(isStaff?'campistry_staff_apply.html':isPaf?'campistry_postaccept.html':'campistry_register.html')+'?preview=1';
+    frame.src=_fbPublicPageFile()+'?preview=1';
 }
 function closeFormBuilder(){
     var panel=document.getElementById('fbPanel');
@@ -5740,8 +5853,8 @@ function openFormConfig(){ openFormBuilder('registration'); }
 // (documents/payment/signature/siblings render structured blocks, not a
 // plain field list, so there's nowhere sensible to slot an extra field in).
 function _customFieldSectionCatalog(prefix){
-    var sections=prefix==='sfc'?SFC_SECTIONS:prefix==='paf'?PAF_SECTIONS:FC_SECTIONS;
-    var catalog=prefix==='sfc'?SFC_FIELD_CATALOG:prefix==='paf'?PAF_FIELD_CATALOG:FC_FIELD_CATALOG;
+    var sections=prefix==='sfc'?SFC_SECTIONS:prefix==='paf'?PAF_SECTIONS:prefix==='phf'?PHF_SECTIONS:FC_SECTIONS;
+    var catalog=prefix==='sfc'?SFC_FIELD_CATALOG:prefix==='paf'?PAF_FIELD_CATALOG:prefix==='phf'?PHF_FIELD_CATALOG:FC_FIELD_CATALOG;
     return sections.filter(function(s){return !!catalog[s.key];}).map(function(s){return{key:s.key,label:s.label};});
 }
 // Splits a camp's customQuestions into the ones pinned to a built-in
@@ -6224,6 +6337,73 @@ function savePostAcceptFormConfig(){
     save();
     closeFormBuilder();
     toast('Post-acceptance form configuration saved');
+}
+
+function _buildPhfPanelHtml(){
+    var fc=getPostHireFormConfig();
+    var h=_fcTabBarHtml('phf');
+
+    // ── QUICK SETUP ──
+    h+='<div id="phfTabQuick">';
+
+    var welcomeHtml='<div class="fg"><label class="fl">Welcome Message</label><input class="fi" id="phfWelcome" value="'+esc(fc.welcomeMessage||'')+'" placeholder="e.g., Welcome to the team! A few more details before camp starts."></div>'
+        +'<div class="fg" style="margin-bottom:0"><label class="fl">Instructions</label><textarea class="fi" id="phfInstructions" style="min-height:50px;resize:vertical" placeholder="Any special instructions shown at the top of the form">'+(fc.instructions||'')+'</textarea></div>';
+    h+=_accCard('Welcome Message',welcomeHtml,{open:true});
+
+    var sendHtml='<label style="display:flex;align-items:center;gap:10px;padding:4px 0;cursor:pointer">'
+        +'<input type="checkbox" id="phfAutoSend" '+(fc.autoSend?'checked':'')+' style="accent-color:var(--me);flex-shrink:0;width:16px;height:16px">'
+        +'<div><div style="font-size:.85rem;font-weight:600;color:var(--s800)">Send automatically on hire</div>'
+        +'<div style="font-size:.72rem;color:var(--s400)">When on, this form is emailed the moment a candidate is marked Hired. When off, send it yourself from the applicant\'s Review panel whenever you\'re ready.</div></div></label>';
+    h+=_accCard('Sending',sendHtml,{open:true});
+
+    var phfQSplit=_customQuestionsSplit('phf',fc.customQuestions);
+    var sectionsHtml='<p style="font-size:.78rem;color:var(--s400);margin:0 0 10px">Turn sections on or off. Click a section to add or edit fields right inside it.</p>'
+        +_renderSectionsListHtml('phf',PHF_SECTIONS,fc,'phfSec',phfQSplit.bySection);
+    h+=_accCard('Sections',sectionsHtml,{open:true});
+
+    var qHtml='<p style="font-size:.78rem;color:var(--s400);margin:0 0 10px">Standalone questions, shown in an "Additional Information" section. Pick "Show in" to move one inside a built-in section instead (or add it from that section directly, in Sections above).</p>'
+        +'<div id="phfQList">'+phfQSplit.flat.map(function(q,i){return renderCustomQ(q,i,'phf',true);}).join('')+'</div>'
+        +'<button class="me-btn me-btn--sec me-btn--sm" style="margin-top:6px" onclick="CampistryMe.addPhfCustomQ()">+ Add Question</button>';
+    h+=_accCard('Custom Questions',qHtml,{badge:phfQSplit.flat.length+' added',wrapId:'phfQCard'});
+
+    var phfSecs=fc.customSections||[];
+    var phfSecHtml='<p style="font-size:.78rem;color:var(--s400);margin:0 0 10px">Build your own multi-field sections — a labeled group of fields, shown as its own section on the form.</p>'
+        +'<div id="phfSecList">'+phfSecs.map(function(s){return renderCustomSection(s,_newSid(),'phf');}).join('')+'</div>'
+        +'<button type="button" class="me-btn me-btn--sec me-btn--sm" style="margin-top:6px" onclick="CampistryMe.addCustomSection(\'phf\')">+ Add Section</button>';
+    h+=_accCard('Custom Sections',phfSecHtml,{badge:phfSecs.length+' added'});
+    h+='</div>'; // /phfTabQuick
+
+    // ── ADVANCED ──
+    h+='<div id="phfTabAdv" style="display:none">';
+
+    var brandHtml='<div class="fg"><label class="fl">Camp Logo</label>'
+        +'<input type="hidden" id="phfLogoData" value="'+esc((fc.branding&&fc.branding.logo)||'')+'">'
+        +'<img id="phfLogoPreview" src="'+esc((fc.branding&&fc.branding.logo)||'')+'" style="display:'+((fc.branding&&fc.branding.logo)?'block':'none')+';max-height:60px;max-width:200px;margin-bottom:6px;border-radius:6px">'
+        +'<div style="display:flex;gap:8px;align-items:center"><input type="file" accept="image/*" class="fi" style="flex:1" onchange="CampistryMe._brandingLogoPick(\'phf\',this)"><button type="button" class="me-btn me-btn--ghost me-btn--sm" onclick="CampistryMe._brandingLogoClear(\'phf\')">Remove</button></div></div>'
+        +'<div class="fg" style="margin-bottom:0"><label class="fl">Accent Color</label><input type="color" id="phfAccentColor" value="'+esc((fc.branding&&fc.branding.color)||'#D97706')+'" style="width:60px;height:34px;padding:2px;border:1.5px solid var(--s200);border-radius:var(--r);cursor:pointer"></div>';
+    h+=_accCard('Branding',brandHtml,{open:true});
+
+    var orderHtml='<p style="font-size:.78rem;color:var(--s400);margin:0 0 10px">Reorder how sections appear on the form.</p>'+_renderSectionOrderList('phf',PHF_SECTIONS,fc.sectionOrder);
+    h+=_accCard('Section Order',orderHtml,{open:true});
+
+    var fieldsHtml='<p style="font-size:.78rem;color:var(--s400);margin:0 0 10px">Show/hide, require, or relabel individual fields — pick a section to open it.</p>';
+    Object.keys(PHF_FIELD_CATALOG).forEach(function(sectionKey){
+        var sec=PHF_SECTIONS.filter(function(s){return s.key===sectionKey})[0];
+        var rows=PHF_FIELD_CATALOG[sectionKey].map(function(f){return _renderAdvFieldRow('phf',sectionKey,f,(fc.fields||{})[f.id]);}).join('');
+        fieldsHtml+=_accCard(sec?sec.label:sectionKey,rows,{sub:true});
+    });
+    h+=_accCard('Field-by-Field Control',fieldsHtml,{});
+    h+='</div>'; // /phfTabAdv
+    return h;
+}
+function openPostHireFormConfig(){ openFormBuilder('posthire'); }
+function addPhfCustomQ(){ addCustomQ('phf'); }
+
+function savePostHireFormConfig(){
+    phFormConfig=_collectPostHireFormConfigDraft();
+    save();
+    closeFormBuilder();
+    toast('Post-hire form configuration saved');
 }
 
 function saveFormConfig(){
@@ -6783,6 +6963,67 @@ async function _autoSendPostAccept(id){
         toast('Post-acceptance form auto-sent to '+e.parentEmail);
     }catch(err){
         toast('Auto-send of post-acceptance form failed: '+(err&&err.message||'unknown error'),'error');
+    }
+}
+
+// ── POST-HIRE FORM: SENDING ──────────────────────────────────────────────
+// One link per application (not a shared camp-wide link like the Staff
+// Application itself) — the public page reads ?id=<applicationId> to know
+// which hire's record to write onboarding answers back into. Mirrors the
+// Post-Acceptance Form sending functions above exactly, one tier over on
+// the hiring side.
+function _postHireUrl(id){
+    return window.location.origin+'/campistry_posthire.html?id='+encodeURIComponent(id)+'&camp='+encodeURIComponent(getCampId());
+}
+function openSendPostHireModal(id){
+    var a=staffApplications[id]; if(!a){toast('Application not found','error');return;}
+    if(!a.email){toast('No email on file for this applicant','error');return;}
+    var url=_postHireUrl(id);
+    document.getElementById('slTitle').textContent='Send Post-Hire Form';
+    var h='<div class="fg"><label class="fl">To</label><input class="fi" value="'+esc(a.email)+'" disabled></div>';
+    h+='<div class="fg"><label class="fl">Subject</label><input class="fi" id="slSubject" value="'+esc('A few more details for '+(a.name||'your onboarding'))+'"></div>';
+    h+='<div class="fg"><label class="fl">Message</label><textarea class="fi" id="slBodyText" style="min-height:110px;resize:vertical">'+esc('Welcome to the team, '+((a.first||a.name||'').split(' ')[0]||'')+'! Please complete a few more details here:\n\n'+url)+'</textarea></div>';
+    document.getElementById('slBody').innerHTML=h;
+    var btn=document.getElementById('slSendBtn');
+    if(btn){ btn.disabled=false; btn.textContent='Send'; btn.onclick=function(){ _sendPostHireNow(id); }; }
+    openModal('sendLinkModal');
+}
+async function _sendPostHireNow(id){
+    var a=staffApplications[id]; if(!a)return;
+    var subject=(document.getElementById('slSubject')?.value||'').trim();
+    var body=(document.getElementById('slBodyText')?.value||'').trim();
+    if(!body){toast('Enter a message','error');return;}
+    var campName='';try{var ss=JSON.parse(localStorage.getItem('campGlobalSettings_v1')||'{}');campName=ss.campName||ss.camp_name||'Camp';}catch(ex){}
+    var btn=document.getElementById('slSendBtn');
+    if(btn){btn.disabled=true;btn.textContent='Sending…';}
+    try{
+        await callEdgeFunctionAuthed('send-broadcast',{campId:getCampId(),to:[{email:a.email,name:a.name||''}],subject:subject,body:body,method:'email',campName:campName});
+        a.postHireSentDate=new Date().toISOString();
+        save();
+        toast('Post-hire form sent to '+a.email);
+        closeModal('sendLinkModal');
+    }catch(err){
+        toast('Send failed: '+(err&&err.message||'unknown error'),'error');
+    }finally{
+        if(btn){btn.disabled=false;btn.textContent='Send';}
+    }
+}
+// Fires only when the camp turned "Send automatically on hire" on in the
+// Post-Hire Form builder — silent (toast only), no confirm modal, since
+// the office already opted into hands-off sending.
+async function _autoSendPostHire(id){
+    var a=staffApplications[id]; if(!a||!a.email)return;
+    var url=_postHireUrl(id);
+    var campName='';try{var ss=JSON.parse(localStorage.getItem('campGlobalSettings_v1')||'{}');campName=ss.campName||ss.camp_name||'Camp';}catch(ex){}
+    var subject='A few more details for '+(a.name||'your onboarding');
+    var body='Welcome to the team, '+((a.first||a.name||'').split(' ')[0]||'')+'! Please complete a few more details here:\n\n'+url;
+    try{
+        await callEdgeFunctionAuthed('send-broadcast',{campId:getCampId(),to:[{email:a.email,name:a.name||''}],subject:subject,body:body,method:'email',campName:campName});
+        a.postHireSentDate=new Date().toISOString();
+        save();
+        toast('Post-hire form auto-sent to '+a.email);
+    }catch(err){
+        toast('Auto-send of post-hire form failed: '+(err&&err.message||'unknown error'),'error');
     }
 }
 
@@ -12032,8 +12273,10 @@ window.CampistryMe={
     openFormConfig:openFormConfig,saveFormConfig:saveFormConfig,addCustomQ:addCustomQ,addPromoRow:addPromoRow,
     openStaffFormConfig:openStaffFormConfig,saveStaffFormConfig:saveStaffFormConfig,addStaffCustomQ:addStaffCustomQ,
     openPostAcceptFormConfig:openPostAcceptFormConfig,savePostAcceptFormConfig:savePostAcceptFormConfig,addPafCustomQ:addPafCustomQ,
+    openPostHireFormConfig:openPostHireFormConfig,savePostHireFormConfig:savePostHireFormConfig,addPhfCustomQ:addPhfCustomQ,
     addCustomSection:addCustomSection,addSectionField:addSectionField,addCustomQToSection:addCustomQToSection,_toggleSectionQuestions:_toggleSectionQuestions,
     openSendPostAcceptModal:openSendPostAcceptModal,
+    openSendPostHireModal:openSendPostHireModal,
     addPositionRow:addPositionRow,addCertRow:addCertRow,
     _fcSwitchTab:_fcSwitchTab,_brandingLogoPick:_brandingLogoPick,_brandingLogoClear:_brandingLogoClear,_toggleAcc:_toggleAcc,
     openFormBuilder:openFormBuilder,closeFormBuilder:closeFormBuilder,_fbOpenPreviewWindow:_fbOpenPreviewWindow,
