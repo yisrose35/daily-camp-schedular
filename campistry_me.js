@@ -43,8 +43,7 @@ var _prWeek='';          // the week currently open on the Timesheets tab
 var printSheets=[]; // custom printable-sheet templates (columns + grouping)
 var savedReports=[]; // custom/saved reports: { id, name, source, fields, filters, groupBy, format, mode, snapshotRows, ... }
 var curPage='campers', editingCamper=null, editingDiv=null, editingFam=null;
-var _famHighlight=null; // camper name to scroll-to-and-highlight next time Families renders (set by viewFamilyFromCamper)
-var _billHighlight=null; // family key to expand/scroll-to/highlight next time Billing renders (set by global search)
+var _billHighlight=null; // family key to expand/scroll-to/highlight next time Billing renders (set by global search / viewFamilyFromCamper)
 var _repHighlight=null;  // saved report id to scroll-to/highlight next time Reports renders (set by global search)
 var PAGE_SIZE=50;
 var _rosterPage=1, _billingPage=1, _analyticsInvoicePage=1, _analyticsPaymentPage=1;
@@ -492,9 +491,8 @@ function _globalSearchIndex(query){
         if(!f.name||f.name.toLowerCase().indexOf(q)<0) return;
         pushIfRoom('family',{type:'family',label:f.name,sublabel:(f.camperIds||[]).length+' camper'+((f.camperIds||[]).length!==1?'s':''),
             open:function(){
-                var cn=(f.camperIds||[])[0];
-                if(cn){viewFamilyFromCamper(cn);}
-                else{nav('families');}
+                _billHighlight=fk;
+                nav('billing');
             }});
     });
     (payroll.staff||[]).forEach(function(s){
@@ -855,7 +853,7 @@ function ff(label,id,val,type,opts){
 
 // ═══ RENDERERS ═══════════════════════════════════════════════════
 function render(p){
-    var m={campers:renderCampers,camperdetail:renderCamperDetailPage,staffdetail:renderStaffDetailPage,structure:renderStructure,bunkbuilder:renderBB,families:renderFamiliesPage,registration:renderRegistrationPage,hiring:renderHiringPage,leads:renderLeads,billing:renderBilling,payroll:renderPayroll,analytics:renderAnalytics,reports:renderReports,printsheets:renderPrintSheets};
+    var m={campers:renderCampers,camperdetail:renderCamperDetailPage,staffdetail:renderStaffDetailPage,structure:renderStructure,bunkbuilder:renderBB,registration:renderRegistrationPage,hiring:renderHiringPage,leads:renderLeads,billing:renderBilling,payroll:renderPayroll,analytics:renderAnalytics,reports:renderReports,printsheets:renderPrintSheets};
     if(m[p])m[p]();else renderSoon(p);
 }
 
@@ -1025,7 +1023,7 @@ function acceptFamilySuggestion(idx){
         camperIds:s.campers.slice(),
         balance:0,totalPaid:0,notes:'Auto-detected family'
     };
-    save();renderFamiliesPage();toast(s.lastName+' Family created with '+s.campers.length+' campers');
+    save();render(curPage);toast(s.lastName+' Family created with '+s.campers.length+' campers');
 }
 
 function dismissFamilySuggestion(idx){
@@ -1035,20 +1033,20 @@ function dismissFamilySuggestion(idx){
     var dismissed=JSON.parse(localStorage.getItem('campistry_dismissed_fam_suggestions')||'[]');
     dismissed.push(s.campers.sort().join('|'));
     localStorage.setItem('campistry_dismissed_fam_suggestions',JSON.stringify(dismissed));
-    renderFamiliesPage();toast('Suggestion dismissed');
+    render(curPage);toast('Suggestion dismissed');
 }
 function dismissMergeFamilies(keyA,keyB){
     var dismissed=JSON.parse(localStorage.getItem('campistry_dismissed_fam_suggestions')||'[]');
     dismissed.push([keyA,keyB].sort().join('|'));
     localStorage.setItem('campistry_dismissed_fam_suggestions',JSON.stringify(dismissed));
-    renderFamiliesPage();toast('Suggestion dismissed');
+    render(curPage);toast('Suggestion dismissed');
 }
 
 function acceptAddToFamily(famKey,camperName){
     if(!families[famKey]) return;
     if(!families[famKey].camperIds) families[famKey].camperIds=[];
     if(families[famKey].camperIds.indexOf(camperName)<0) families[famKey].camperIds.push(camperName);
-    save();renderFamiliesPage();toast(camperName+' added to '+families[famKey].name);
+    save();render(curPage);toast(camperName+' added to '+families[famKey].name);
 }
 
 // Two family records that turn out to be the same household (same parent
@@ -1062,91 +1060,86 @@ function mergeFamilies(keyA,keyB){
     a.balance=(a.balance||0)+(b.balance||0);
     a.totalPaid=(a.totalPaid||0)+(b.totalPaid||0);
     delete families[keyB];
-    save();renderFamiliesPage();toast(b.name+' merged into '+a.name);
+    save();render(curPage);toast(b.name+' merged into '+a.name);
 }
 
-// Body-only family bundles view — rendered INSIDE the Campers page (see
-// renderCampers) as the "Families" tab, rather than as its own sidebar
-// section. optHighlight is an optional camper name whose family card should
-// be scrolled to and briefly highlighted (used by the "family" link on a
-// camper row in the main list).
-function _familyBundlesHtml(optHighlight){
-    var e=Object.entries(families);
-
-    // Detect family suggestions
+// Households form automatically in the background (every camper add/edit
+// and every CSV import already auto-clusters siblings via _resolveFamilyKey
+// / the union-find matching below — see enrollCamper/importRows) — there is
+// no dedicated "Families" page anymore (CampMinder made the same move,
+// retiring its old Family Tab in favor of Household as a background
+// concept). What still needs a human is the stuff auto-linking can't safely
+// do alone: a brand-new household to confirm, a stray camper that might
+// belong to an existing one, or two already-separate household records that
+// turn out to be the same family. That's this banner — rendered inside
+// Billing (see renderBilling), which is where household/balance data
+// actually lives, instead of its own sidebar section.
+function _famSuggestionsBannerHtml(){
     var suggestions=detectFamilySuggestions();
     var dismissed=JSON.parse(localStorage.getItem('campistry_dismissed_fam_suggestions')||'[]');
     var newFams=suggestions.newFamilies.filter(function(s){return dismissed.indexOf(s.campers.sort().join('|'))<0});
     var addToExisting=suggestions.addToExisting;
     var mergeFams=(suggestions.mergeFamilies||[]).filter(function(s){return dismissed.indexOf([s.keyA,s.keyB].sort().join('|'))<0});
-    var totalSuggestions=newFams.length+addToExisting.length+mergeFams.length;
+    if(!newFams.length&&!addToExisting.length&&!mergeFams.length)return '';
 
-    // A family only matters when siblings need to share ONE bill/balance
-    // and ONE Link login — a camper with no siblings works fine with just
-    // their own parent1Name/Phone/Email fields on the Roster and never
-    // needs a family record at all. That's the thing this page is easy to
-    // miss, so it gets said outright instead of assumed.
-    var h='<div class="sec-hd"><div><h2 class="sec-title">Families</h2><p class="sec-desc">Groups siblings into one household so they share a single bill and one parent login to Link · '+e.length+' household'+(e.length!==1?'s':'')+(totalSuggestions>0?' · <span style="color:var(--me);font-weight:700">'+totalSuggestions+' suggestion'+(totalSuggestions!==1?'s':'')+'</span>':'')+'</p></div><div class="sec-actions"><button class="me-btn me-btn--sec me-btn--sm" onclick="CampistryMe.printFamilies()">🖨 Print</button><button class="me-btn me-btn--sec me-btn--sm" onclick="CampistryMe.exportFamilyReport()">↓ Export</button><button class="me-btn me-btn--pri" onclick="CampistryMe.addFamily()">+ Add Family</button></div></div>';
+    var h='<div style="background:linear-gradient(135deg,#FFFBEB,#FEF3C7);border:1px solid #FDE68A;border-radius:var(--r2);padding:16px;margin-bottom:18px">';
+    h+='<div style="display:flex;align-items:center;gap:8px;margin-bottom:10px"><span style="font-size:1.1rem">👨‍👩‍👧‍👦</span><span style="font-weight:700;font-size:.9rem;color:var(--s800)">Household Suggestions</span><span style="font-size:.75rem;color:var(--s500)">Same parent email, or 3+ of last name/address/parent name, means the same household</span></div>';
 
-    // Show suggestions banner
-    if(newFams.length||addToExisting.length||mergeFams.length){
-        h+='<div style="background:linear-gradient(135deg,#FFFBEB,#FEF3C7);border:1px solid #FDE68A;border-radius:var(--r2);padding:16px;margin-bottom:18px">';
-        h+='<div style="display:flex;align-items:center;gap:8px;margin-bottom:10px"><span style="font-size:1.1rem">👨‍👩‍👧‍👦</span><span style="font-weight:700;font-size:.9rem;color:var(--s800)">Family Suggestions</span><span style="font-size:.75rem;color:var(--s500)">Same parent email, or 3+ of last name/address/parent name, means the same family</span></div>';
-
-        // New family suggestions
-        newFams.forEach(function(s,i){
-            var confColor=s.confidence==='high'?'var(--ok)':s.confidence==='medium'?'var(--warn)':'var(--s400)';
-            var confLabel=s.confidence==='high'?'High confidence':s.confidence==='medium'?'Medium':'Low';
-            h+='<div style="display:flex;align-items:center;gap:12px;padding:10px 14px;background:#fff;border-radius:var(--r);margin-bottom:6px;border:1px solid var(--s200)">';
-            h+='<div style="flex:1"><div style="font-weight:700;font-size:.875rem">'+esc(s.lastName)+' Family</div>';
-            h+='<div style="font-size:.75rem;color:var(--s500);margin-top:2px">'+s.campers.map(function(n){return'<strong>'+esc(n)+'</strong>'}).join(', ');
-            if(s.address) h+=' · '+esc(s.address);
-            if(s.parent) h+=' · Parent: '+esc(s.parent);
-            h+='</div></div>';
-            h+='<span style="font-size:.65rem;font-weight:600;color:'+confColor+';background:'+confColor+'15;padding:2px 8px;border-radius:4px">'+confLabel+'</span>';
-            h+='<button class="me-btn me-btn--pri me-btn--sm" onclick="CampistryMe.acceptFamilySuggestion('+i+')">Accept</button>';
-            h+='<button class="me-btn me-btn--ghost me-btn--sm" style="color:var(--s400)" onclick="CampistryMe.dismissFamilySuggestion('+i+')">Dismiss</button>';
-            h+='</div>';
-        });
-
-        // Add-to-existing suggestions
-        addToExisting.forEach(function(s){
-            h+='<div style="display:flex;align-items:center;gap:12px;padding:10px 14px;background:#fff;border-radius:var(--r);margin-bottom:6px;border:1px solid var(--s200)">';
-            h+='<div style="flex:1"><div style="font-size:.8rem"><strong>'+esc(s.camperName)+'</strong> may belong to <strong>'+esc(s.familyName)+'</strong></div></div>';
-            h+='<button class="me-btn me-btn--pri me-btn--sm" onclick="CampistryMe.acceptAddToFamily(\''+je(s.familyKey)+'\',\''+je(s.camperName)+'\')">Add</button>';
-            h+='</div>';
-        });
-
-        // Two already-separate family records that turn out to be the same
-        // household — most often siblings whose applications came in far
-        // enough apart, or with different-enough details, that they each
-        // got their own family record at the time.
-        mergeFams.forEach(function(s){
-            h+='<div style="display:flex;align-items:center;gap:12px;padding:10px 14px;background:#fff;border-radius:var(--r);margin-bottom:6px;border:1px solid var(--s200)">';
-            h+='<div style="flex:1"><div style="font-size:.8rem"><strong>'+esc(s.nameA)+'</strong> ('+s.campersA.map(esc).join(', ')+') and <strong>'+esc(s.nameB)+'</strong> ('+s.campersB.map(esc).join(', ')+') look like the same family</div></div>';
-            h+='<button class="me-btn me-btn--pri me-btn--sm" onclick="CampistryMe.mergeFamilies(\''+je(s.keyA)+'\',\''+je(s.keyB)+'\')">Merge</button>';
-            h+='<button class="me-btn me-btn--ghost me-btn--sm" style="color:var(--s400)" onclick="CampistryMe.dismissMergeFamilies(\''+je(s.keyA)+'\',\''+je(s.keyB)+'\')">Dismiss</button>';
-            h+='</div>';
-        });
-
-        h+='</div>';
-    }
-
-    if(!e.length&&!totalSuggestions){h+='<div class="me-empty"><h3>No families yet</h3><p>Only needed when siblings should share one bill and one Link login — a camper with no siblings works fine without one. Add a family to group siblings, or import campers and we\'ll suggest matches automatically.</p><button class="me-btn me-btn--pri" onclick="CampistryMe.addFamily()">+ Add Family</button></div>'}
-    else e.forEach(function([id,f]){
-        var sb=f.balance>0?bdg(fm(f.balance)+' due','err'):f.totalPaid>0?bdg('Paid','ok'):bdg('Pending','warn');
-        var isHighlight=optHighlight&&(f.camperIds||[]).indexOf(optHighlight)>=0;
-        h+='<div class="fam-card" id="famcard-'+je(id)+'"'+(isHighlight?' style="box-shadow:0 0 0 2px var(--me)"':'')+'><div style="display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:10px"><div><div style="font-size:.95rem;font-weight:600;color:var(--s800)">'+esc(f.name)+'</div><div style="font-size:.75rem;color:var(--s400)">'+(f.camperIds||[]).length+' camper'+((f.camperIds||[]).length!==1?'s':'')+'</div></div><div style="display:flex;gap:6px;align-items:center">'+sb+'<button class="me-btn me-btn--ghost me-btn--sm" onclick="CampistryMe.editFamily(\''+je(id)+'\')">Edit</button><button class="me-btn me-btn--ghost me-btn--sm" onclick="CampistryMe.deleteFamily(\''+je(id)+'\')" style="color:var(--err)">Delete</button></div></div>';
-        (f.households||[]).forEach(function(hh){
-            h+='<div class="hh"><div style="font-size:.65rem;font-weight:600;color:var(--s400);text-transform:uppercase;letter-spacing:.06em;margin-bottom:3px">'+esc(hh.label||'Primary')+(hh.billingContact?' · Billing':'')+'</div>';
-            (hh.parents||[]).forEach(function(p){h+='<div style="font-size:.8rem;margin-bottom:2px"><strong>'+esc(p.name)+'</strong>'+(p.phone?' — <a href="tel:'+esc(p.phone)+'" style="color:var(--me)">'+esc(p.phone)+'</a>':'')+'</div>'});
-            if(hh.address)h+='<div style="font-size:.7rem;color:var(--s400);margin-top:2px">'+esc(hh.address)+'</div>';
-            h+='</div>';
-        });
-        h+='<div style="display:flex;gap:4px;flex-wrap:wrap;margin-top:8px">';
-        (f.camperIds||[]).forEach(function(cn){h+='<span style="display:inline-flex;align-items:center;gap:4px;padding:3px 5px 3px 8px;border-radius:6px;border:1px solid var(--s200);font-size:.7rem;font-weight:600"><span style="cursor:pointer" onclick="CampistryMe.viewCamper(\''+je(cn)+'\')">'+esc(cn.split(' ')[0])+'</span><button title="Remove from family" onclick="event.stopPropagation();CampistryMe.removeCamperFromFamily(\''+je(id)+'\',\''+je(cn)+'\')" style="border:none;background:none;cursor:pointer;color:var(--s400);font-size:.9rem;line-height:1;padding:0 1px">&times;</button></span>'});
+    // New household suggestions
+    newFams.forEach(function(s,i){
+        var confColor=s.confidence==='high'?'var(--ok)':s.confidence==='medium'?'var(--warn)':'var(--s400)';
+        var confLabel=s.confidence==='high'?'High confidence':s.confidence==='medium'?'Medium':'Low';
+        h+='<div style="display:flex;align-items:center;gap:12px;padding:10px 14px;background:#fff;border-radius:var(--r);margin-bottom:6px;border:1px solid var(--s200)">';
+        h+='<div style="flex:1"><div style="font-weight:700;font-size:.875rem">'+esc(s.lastName)+' Family</div>';
+        h+='<div style="font-size:.75rem;color:var(--s500);margin-top:2px">'+s.campers.map(function(n){return'<strong>'+esc(n)+'</strong>'}).join(', ');
+        if(s.address) h+=' · '+esc(s.address);
+        if(s.parent) h+=' · Parent: '+esc(s.parent);
         h+='</div></div>';
+        h+='<span style="font-size:.65rem;font-weight:600;color:'+confColor+';background:'+confColor+'15;padding:2px 8px;border-radius:4px">'+confLabel+'</span>';
+        h+='<button class="me-btn me-btn--pri me-btn--sm" onclick="CampistryMe.acceptFamilySuggestion('+i+')">Accept</button>';
+        h+='<button class="me-btn me-btn--ghost me-btn--sm" style="color:var(--s400)" onclick="CampistryMe.dismissFamilySuggestion('+i+')">Dismiss</button>';
+        h+='</div>';
     });
+
+    // Add-to-existing suggestions
+    addToExisting.forEach(function(s){
+        h+='<div style="display:flex;align-items:center;gap:12px;padding:10px 14px;background:#fff;border-radius:var(--r);margin-bottom:6px;border:1px solid var(--s200)">';
+        h+='<div style="flex:1"><div style="font-size:.8rem"><strong>'+esc(s.camperName)+'</strong> may belong to <strong>'+esc(s.familyName)+'</strong></div></div>';
+        h+='<button class="me-btn me-btn--pri me-btn--sm" onclick="CampistryMe.acceptAddToFamily(\''+je(s.familyKey)+'\',\''+je(s.camperName)+'\')">Add</button>';
+        h+='</div>';
+    });
+
+    // Two already-separate household records that turn out to be the same
+    // family — most often siblings whose applications came in far enough
+    // apart, or with different-enough details, that they each got their own
+    // record at the time. Never auto-merged (it combines balances), always
+    // a human confirmation.
+    mergeFams.forEach(function(s){
+        h+='<div style="display:flex;align-items:center;gap:12px;padding:10px 14px;background:#fff;border-radius:var(--r);margin-bottom:6px;border:1px solid var(--s200)">';
+        h+='<div style="flex:1"><div style="font-size:.8rem"><strong>'+esc(s.nameA)+'</strong> ('+s.campersA.map(esc).join(', ')+') and <strong>'+esc(s.nameB)+'</strong> ('+s.campersB.map(esc).join(', ')+') look like the same family</div></div>';
+        h+='<button class="me-btn me-btn--pri me-btn--sm" onclick="CampistryMe.mergeFamilies(\''+je(s.keyA)+'\',\''+je(s.keyB)+'\')">Merge</button>';
+        h+='<button class="me-btn me-btn--ghost me-btn--sm" style="color:var(--s400)" onclick="CampistryMe.dismissMergeFamilies(\''+je(s.keyA)+'\',\''+je(s.keyB)+'\')">Dismiss</button>';
+        h+='</div>';
+    });
+
+    h+='</div>';
+    return h;
+}
+// Household contact block (parents/address + camper chips) for one family
+// record — reused on the Billing account card and the camper profile's
+// Family & Emergency Contact card, so household details live wherever a
+// balance or a camper already does instead of a page of their own.
+function _famHouseholdHtml(id,f){
+    var h='';
+    (f.households||[]).forEach(function(hh){
+        h+='<div class="hh"><div style="font-size:.65rem;font-weight:600;color:var(--s400);text-transform:uppercase;letter-spacing:.06em;margin-bottom:3px">'+esc(hh.label||'Primary')+(hh.billingContact?' · Billing':'')+'</div>';
+        (hh.parents||[]).forEach(function(p){h+='<div style="font-size:.8rem;margin-bottom:2px"><strong>'+esc(p.name)+'</strong>'+(p.phone?' — <a href="tel:'+esc(p.phone)+'" style="color:var(--me)">'+esc(p.phone)+'</a>':'')+'</div>'});
+        if(hh.address)h+='<div style="font-size:.7rem;color:var(--s400);margin-top:2px">'+esc(hh.address)+'</div>';
+        h+='</div>';
+    });
+    h+='<div style="display:flex;gap:4px;flex-wrap:wrap;margin-top:8px">';
+    (f.camperIds||[]).forEach(function(cn){h+='<span style="display:inline-flex;align-items:center;gap:4px;padding:3px 5px 3px 8px;border-radius:6px;border:1px solid var(--s200);font-size:.7rem;font-weight:600"><span style="cursor:pointer" onclick="CampistryMe.viewCamper(\''+je(cn)+'\')">'+esc(cn.split(' ')[0])+'</span><button title="Remove from household" onclick="event.stopPropagation();CampistryMe.removeCamperFromFamily(\''+je(id)+'\',\''+je(cn)+'\')" style="border:none;background:none;cursor:pointer;color:var(--s400);font-size:.9rem;line-height:1;padding:0 1px">&times;</button></span>'});
+    h+='</div>';
     return h;
 }
 function _familyForCamper(camperName){
@@ -1157,30 +1150,15 @@ function _familyForCamper(camperName){
     });
     return found;
 }
+// Households don't have their own page (see the note above
+// _famSuggestionsBannerHtml) — jumping to a camper's family means jumping
+// to their Billing account, highlighted and expanded, the same way a
+// payment search result already does.
 function viewFamilyFromCamper(camperName){
-    _famHighlight=camperName;
-    nav('families');
-}
-// Families is its own top-level sidebar entry (same me.campers capability
-// gate as the Roster, since a family groups the same campers) — previously
-// a tab shared with Roster, split out the same way Registration/Hiring
-// were, so it's reachable directly instead of a second click inside Roster.
-function renderFamiliesPage(){
-    var c=document.getElementById('page-families');
-    if(!c)return;
-    if(!_secCan('me.campers')){
-        c.innerHTML='<div class="me-empty"><h3>No access to Families</h3><p>Your account isn\'t set up to open this section.</p></div>';
-        return;
-    }
-    var highlight=_famHighlight; _famHighlight=null;
-    c.innerHTML=_familyBundlesHtml(highlight);
-    if(highlight){
-        var fam=_familyForCamper(highlight);
-        if(fam){
-            var el=document.getElementById('famcard-'+fam.id);
-            if(el)el.scrollIntoView({behavior:'smooth',block:'center'});
-        }
-    }
+    var fam=_familyForCamper(camperName);
+    if(!fam){toast('No household on file for this camper','error');return;}
+    _billHighlight=fam.id;
+    nav('billing');
 }
 // Registration and Hiring are now two separate top-level sidebar entries
 // under Operations, matching CampMinder's separate-products approach —
@@ -1251,8 +1229,8 @@ async function deleteFamily(id){
     if(!ok)return;
     var captured=families[id];
     delete families[id];
-    save();closeModal('familyModal');renderFamiliesPage();
-    toast('Family deleted','ok',{actionLabel:'Undo',onAction:function(){families[id]=captured;save();renderFamiliesPage();toast('Family restored')}});
+    save();closeModal('familyModal');render(curPage);
+    toast('Family deleted','ok',{actionLabel:'Undo',onAction:function(){families[id]=captured;save();render(curPage);toast('Family restored')}});
 }
 
 // Pull a single camper out of a family (the camper stays in the roster,
@@ -1261,7 +1239,7 @@ function removeCamperFromFamily(familyId,camperName){
     var f=families[familyId]; if(!f)return;
     var others=(f.camperIds||[]).filter(function(c){return c!==camperName});
     f.camperIds=others;
-    save();renderFamiliesPage();
+    save();render(curPage);
     // Refresh the parent-portal Link snapshots so the removed camper actually
     // drops off this family's parent link: re-sync a remaining family member
     // (rebuilds the family's snapshot without them) and the removed camper
@@ -1928,7 +1906,7 @@ var SETUP_CHECKLIST=[
     {id:'structure',label:'Set up your camp structure — divisions, grades, and bunks',check:function(){return Object.keys(structure).length>0},action:function(){nav('structure')}},
     {id:'camper',label:'Add your first camper',check:function(){return Object.keys(roster).length>0},action:function(){addCamper()}},
     {id:'session',label:'Create a session on the Dashboard',check:function(){return sessions.length>0},href:'dashboard.html'},
-    {id:'family',label:'Add a family / billing account',check:function(){return Object.keys(families).length>0},action:function(){nav('families')}}
+    {id:'family',label:'Add a family / billing account',check:function(){return Object.keys(families).length>0},action:function(){nav('billing')}}
 ];
 function _setupChecklistHtml(){
     if(_setupChecklistDismissed)return '';
@@ -2203,8 +2181,9 @@ function renderCamperDetailPage(){
     }
     // Siblings — same household, one click to the other camper's own
     // record (CampMinder's "Unified Person Record" links siblings the
-    // same way). Same family lookup the Families page's own detection
-    // uses, just read here instead of on the Families page.
+    // same way). Households form automatically in the background as
+    // campers are added (see _famSuggestionsBannerHtml) — there's no
+    // separate Families page anymore, just this lookup.
     var famEntry=Object.entries(families).filter(function(pair){return(pair[1].camperIds||[]).indexOf(n)>=0;})[0];
     var siblings=famEntry?(famEntry[1].camperIds||[]).filter(function(cn){return cn!==n;}):[];
     if(siblings.length){
@@ -2212,7 +2191,8 @@ function renderCamperDetailPage(){
             +siblings.map(function(sn){return '<span style="display:inline-flex;align-items:center;padding:3px 9px;border-radius:999px;background:var(--s50);border:1px solid var(--s200);font-size:.76rem;font-weight:600;color:var(--me);cursor:pointer" onclick="CampistryMe.viewCamper(\''+je(sn)+'\')">'+esc(sn)+'</span>';}).join('')
             +'</div></div>';
     }
-    g+=_dpCard('Family & Emergency Contact',fam,{icon:'users'});
+    var famAction=famEntry?'<button class="me-btn me-btn--ghost me-btn--sm" onclick="CampistryMe.editFamily(\''+je(famEntry[0])+'\')">Edit Household</button>':'';
+    g+=_dpCard('Family & Emergency Contact',fam,{icon:'users',actionHtml:famAction});
 
     var addr='';
     if(d.street){
@@ -10149,7 +10129,12 @@ function renderBilling(){
     var _unmatchedTotal=_unmatchedPays.reduce(function(s,p){return s+(Number(p.amount)||0)},0);
 
     var cardsOnFile=famList.filter(function(l){return families[l.famKey]?.cardOnFile}).length;
-    var h='<div class="sec-hd"><div><h2 class="sec-title">Billing & Payments</h2><p class="sec-desc">'+famList.length+' account'+(famList.length!==1?'s':'')+' · '+cardsOnFile+' card'+(cardsOnFile!==1?'s':'')+' on file · '+finPayments.length+' payment'+(finPayments.length!==1?'s':'')+'</p></div><div class="sec-actions"><button class="me-btn me-btn--sec" onclick="CampistryMe.addCharge()">+ Charge</button><button class="me-btn me-btn--sec" onclick="CampistryMe.issueCredit()">+ Credit</button><button class="me-btn me-btn--pri" onclick="CampistryMe.openPaymentModal()">+ Payment</button>'+(cardsOnFile>0?'<button class="me-btn me-btn--pri" style="background:var(--purple)" onclick="CampistryMe.batchCharge()">⚡ Batch Charge</button>':'')+'</div></div>';
+    var h='<div class="sec-hd"><div><h2 class="sec-title">Billing & Payments</h2><p class="sec-desc">'+famList.length+' account'+(famList.length!==1?'s':'')+' · '+cardsOnFile+' card'+(cardsOnFile!==1?'s':'')+' on file · '+finPayments.length+' payment'+(finPayments.length!==1?'s':'')+'</p></div><div class="sec-actions"><button class="me-btn me-btn--sec me-btn--sm" onclick="CampistryMe.printFamilies()" title="Print all households">🖨 Print</button><button class="me-btn me-btn--sec me-btn--sm" onclick="CampistryMe.exportFamilyReport()" title="Export all households">↓ Export</button><button class="me-btn me-btn--sec" onclick="CampistryMe.addFamily()">+ Add Household</button><button class="me-btn me-btn--sec" onclick="CampistryMe.addCharge()">+ Charge</button><button class="me-btn me-btn--sec" onclick="CampistryMe.issueCredit()">+ Credit</button><button class="me-btn me-btn--pri" onclick="CampistryMe.openPaymentModal()">+ Payment</button>'+(cardsOnFile>0?'<button class="me-btn me-btn--pri" style="background:var(--purple)" onclick="CampistryMe.batchCharge()">⚡ Batch Charge</button>':'')+'</div></div>';
+
+    // Households form automatically in the background as campers are added
+    // (see _famSuggestionsBannerHtml) — this only surfaces what auto-linking
+    // couldn't safely decide on its own.
+    h+=_famSuggestionsBannerHtml();
 
     // Stats
     h+='<div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(155px,1fr));gap:10px;margin-bottom:18px">';
@@ -10211,6 +10196,15 @@ function renderBilling(){
             h+='<span>Payments: <strong style="color:var(--ok)">'+fm(l.totalPayments)+'</strong></span>';
             if(l.totalCredits>0) h+='<span>Credits: <strong style="color:var(--purple)">'+fm(l.totalCredits)+'</strong></span>';
             h+='<span style="margin-left:auto">Balance: <strong style="color:'+(l.balance>0?'var(--err)':'var(--ok)')+'">'+fm(l.balance)+'</strong></span>';
+            h+='</div>';
+
+            // Household — parents/address/siblings, same block the old
+            // standalone Families page used to show. Lives here now since
+            // this IS the household record (a family only ever exists to
+            // share one bill).
+            h+='<div style="padding:10px 16px;border-bottom:1px solid var(--s100)">';
+            h+='<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px"><span style="font-size:.7rem;font-weight:700;color:var(--s500);text-transform:uppercase">Household</span><span style="display:flex;gap:4px"><button class="me-btn me-btn--ghost me-btn--sm" onclick="CampistryMe.editFamily(\''+je(l.famKey)+'\')">Edit</button><button class="me-btn me-btn--ghost me-btn--sm" style="color:var(--err)" onclick="CampistryMe.deleteFamily(\''+je(l.famKey)+'\')">Delete</button></span></div>';
+            h+=_famHouseholdHtml(l.famKey,l.family);
             h+='</div>';
 
             // Ledger entries table
