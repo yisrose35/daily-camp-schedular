@@ -568,6 +568,7 @@
         <div class="lk-card">
             <div class="lk-card-head"><h2>Early Pickup</h2></div>
             <div class="lk-tabs" id="pickupChildTabs"></div>
+            <div class="lk-field"><label>Date</label><input type="date" class="lk-input lk-req-date" id="earlyDate"></div>
             <div class="lk-field"><label>Pickup Time</label><input type="time" class="lk-input" value="14:00"></div>
             <div class="lk-field"><label>Who is picking up?</label><input type="text" class="lk-input" placeholder="Full name of person picking up"></div>
             <div class="lk-field"><label>Relationship to child</label>
@@ -583,6 +584,7 @@
         <div class="lk-card">
             <div class="lk-card-head"><h2>Pickup Change</h2></div>
             <div class="lk-tabs" id="pickupChangeTabs"></div>
+            <div class="lk-field"><label>Date</label><input type="date" class="lk-input lk-req-date" id="changeDate"></div>
             <div class="lk-field"><label>What is changing?</label>
                 <select class="lk-select" id="changeKind" onchange="selChangeKind(this.value)"><option value="person">Someone else is picking up</option><option value="friend">Going home with a friend</option></select>
             </div>
@@ -611,6 +613,7 @@
         <div class="lk-card">
             <div class="lk-card-head"><h2>Bus Change</h2></div>
             <div class="lk-tabs" id="pickupBusTabs"></div>
+            <div class="lk-field"><label>Date</label><input type="date" class="lk-input lk-req-date" id="busDate"></div>
             <div class="lk-field"><label>What's changing?</label>
                 <select class="lk-select" id="busChangeKind"><option value="Not riding the bus today">Not riding the bus today</option><option value="Different stop today">Different stop today</option><option value="Different bus/route">Different bus/route</option><option value="Other">Other</option></select>
             </div>
@@ -620,19 +623,38 @@
     </div>
 
     <!-- LATE ARRIVAL FORM -->
-    <!-- Not an ETA: parents tell the office their child HAS arrived, at the
-         moment they drop them off, so the office can mark them in. An expected
-         time was a promise the parent had to keep and the office had to chase. -->
+    <!-- Two flows, not one: "I just dropped them off" (details.arrivedAt) is
+         still the fast path for a parent standing at the office right now.
+         "Estimated time of arrival" (details.estArrival) is for a parent
+         still en route who wants the office to know ahead of time — that
+         promise is explicitly followed up on with a "Dropped Off" button
+         (see reportDroppedOff) once they actually arrive, so the office
+         gets a real timestamp instead of just trusting the estimate. -->
     <div class="pickup-form" id="pickup-late">
         <div class="lk-card">
             <div class="lk-card-head"><h2>Late Arrival</h2></div>
             <div class="lk-tabs" id="pickupLateTabs"></div>
-            <p style="font-size:.84rem;color:var(--text-muted);margin:0 0 14px;">Just dropped your child off? Let the office know they have arrived.</p>
+            <div class="lk-field"><label>Date</label><input type="date" class="lk-input lk-req-date" id="lateDate" onchange="_onLateDateChange()"></div>
+            <p id="lateArrivedHint" style="font-size:.84rem;color:var(--text-muted);margin:0 0 14px;">Just dropped your child off? Let the office know they have arrived.</p>
             <div class="lk-field"><label>Reason (optional)</label>
                 <select class="lk-select"><option value="">Select reason...</option><option>Doctor appointment</option><option>Traffic / Transportation</option><option>Family matter</option><option>Other</option></select>
             </div>
             <div class="lk-field"><label>Notes (optional)</label><textarea class="lk-textarea" placeholder="Any additional info for the office..."></textarea></div>
-            <button class="btn btn-primary" onclick="submitPickup(&#39;late&#39;)">I just dropped them off</button>
+            <button class="btn btn-primary" id="lateArrivedBtn" onclick="submitPickup(&#39;late&#39;,&#39;arrived&#39;)">I just dropped them off</button>
+
+            <div style="display:flex;align-items:center;gap:10px;margin:18px 0;color:var(--slate-400);font-size:.76rem;">
+                <div style="flex:1;height:1px;background:var(--border-color,#e5e7eb);"></div>OR<div style="flex:1;height:1px;background:var(--border-color,#e5e7eb);"></div>
+            </div>
+
+            <!-- On-the-way flow: parent gives an ETA instead of an already-arrived
+                 time. Once the office confirms, the reply appended to this
+                 request tells the parent what their child will walk into AT
+                 that ETA (see _apply's late-arrival branch in campistry_live.html)
+                 — a live, before-you-submit preview isn't built here, since
+                 that would need the parent portal to read the day's schedule
+                 directly, which nothing today grants it. -->
+            <div class="lk-field"><label>Or, estimated time of arrival</label><input type="time" class="lk-input" id="lateEta"></div>
+            <button class="btn btn-secondary" onclick="submitPickup(&#39;late&#39;,&#39;eta&#39;)">Let the office know I&#39;m on my way</button>
         </div>
     </div>
 
@@ -2858,7 +2880,8 @@ function hydratePickupRequests(){
     }).map(function(r){
         var d=new Date(r.submittedAt);
         return {id:r.id,type:r.type,label:r.label||r.type,icon:_PICKUP_ICONS[r.type]||_PICKUP_ICONS.late,
-            time:d.getHours()+':'+(d.getMinutes()<10?'0':'')+d.getMinutes(),status:r.status||'Pending'};
+            time:d.getHours()+':'+(d.getMinutes()<10?'0':'')+d.getMinutes(),status:r.status||'Pending',
+            cloudId:r.cloudId||null,requestDate:r.requestDate||'',estArrival:r.estArrival||'',droppedOffAt:r.droppedOffAt||''};
     });
     renderPickupHistory();
 }
@@ -3136,7 +3159,7 @@ function selPickup(type, btn) {
     document.querySelectorAll('.pickup-form').forEach(function(f){f.classList.remove('active')});
     document.getElementById('pickup-'+type).classList.add('active');
 }
-function submitPickup(type) {
+function submitPickup(type, lateMode) {
     var labels = {early:'Early Pickup',change:'Pickup Change',friend:'Going With Friend',bus:'Bus Change',late:'Late Arrival'};
     // A friend pickup still reports under its own name, so the office sees at a
     // glance what it is even though the parent entered it as a pickup change.
@@ -3146,6 +3169,7 @@ function submitPickup(type) {
     var now = new Date();
     var reqId = now.getTime().toString(36)+Math.random().toString(36).slice(2,5);
     var timeStr = now.getHours()+':'+(now.getMinutes()<10?'0':'')+now.getMinutes();
+    var reqDate = (document.getElementById(type+'Date')||{}).value || _pickupTodayStr();
 
     // Get active child from tab
     var activeTab = document.querySelector('#'+tabsIds[type]+' .lk-tab.active');
@@ -3178,18 +3202,25 @@ function submitPickup(type) {
         fields.busChange = (document.getElementById('busChangeKind')||{}).value||'';
         fields.notes = (form.querySelector('textarea')||{}).value||'';
     } else if (type==='late') {
-        // The parent is reporting an arrival that has ALREADY happened, so the
-        // time is now — not something they type and the office then chases.
-        fields.arrivedAt = now.toLocaleTimeString([], { hour:'numeric', minute:'2-digit' });
         fields.reason = (form.querySelector('select')||{}).value||'';
         fields.notes = (form.querySelector('textarea')||{}).value||'';
+        if (lateMode === 'eta') {
+            var etaVal = (document.getElementById('lateEta')||{}).value||'';
+            if (!etaVal) { toast('Enter an estimated time of arrival first.'); return; }
+            fields.estArrival = etaVal;
+        } else {
+            if (reqDate !== _pickupTodayStr()) { toast('Pick today’s date to report an arrival that already happened.'); return; }
+            // The parent is reporting an arrival that has ALREADY happened, so
+            // the time is now — not something they type and the office chases.
+            fields.arrivedAt = now.toLocaleTimeString([], { hour:'numeric', minute:'2-digit' });
+        }
     }
 
     // Local echo (same-device fallback / instant history)
     try {
         var store = JSON.parse(localStorage.getItem(PARENT_REQ_KEY)||'[]');
         store.unshift(Object.assign({
-            id:reqId, type:type, label:labels[type],
+            id:reqId, type:type, label:labels[type], requestDate:reqDate,
             childName:child.name||'Unknown', childBunk:child.bunk||'',
             parentName:parent.name, submittedAt:now.getTime(), status:'Pending'
         }, fields));
@@ -3197,15 +3228,17 @@ function submitPickup(type) {
     } catch(e){}
 
     // Cloud write via the dedicated pickup-requests channel (submit_pickup_request,
-    // migration 025 + 061) so it reaches Campistry Live's Parent Requests page as
-    // a real reviewable row (status / reviewed_by / office_message), not a
-    // subject-line guess parsed out of the general inbox.
-    var histEntry = {id:reqId,type:type,label:labels[type],icon:icons[type],time:timeStr,status:'Pending',cloudId:null};
+    // migrations 025 + 061 + 093) so it reaches Campistry Live's Parent Requests
+    // page as a real reviewable row (status / reviewed_by / office_message), not
+    // a subject-line guess parsed out of the general inbox.
+    var histEntry = {id:reqId,type:type,label:labels[type],icon:icons[type],time:timeStr,status:'Pending',cloudId:null,
+        requestDate:reqDate, estArrival:fields.estArrival||'', droppedOffAt:''};
     pickupRequests.unshift(histEntry);
     try {
+        var rpcArgs = { p_type:type, p_camper_name:child.name||'', p_details:fields, p_label:labels[type], p_request_date:reqDate };
         var call = window._pRpc
-            ? window._pRpc('submit_pickup_request', { p_type:type, p_camper_name:child.name||'', p_details:fields, p_label:labels[type] }, child.campId)
-            : (window._parentDB && window._parentDB.rpc('submit_pickup_request', { p_type:type, p_camper_name:child.name||'', p_details:fields, p_label:labels[type], p_camp_id:child.campId||(parent&&parent.campId)||null }));
+            ? window._pRpc('submit_pickup_request', rpcArgs, child.campId)
+            : (window._parentDB && window._parentDB.rpc('submit_pickup_request', Object.assign({}, rpcArgs, { p_camp_id:child.campId||(parent&&parent.campId)||null })));
         if (call) {
             call.then(function(res){
                 if (res.error || !res.data || !res.data.success) {
@@ -3213,13 +3246,49 @@ function submitPickup(type) {
                     return;
                 }
                 histEntry.cloudId = res.data.id;
+                // Persisted so the "Dropped Off" follow-up (reportDroppedOff)
+                // still has a cloudId to call report_dropped_off with after a
+                // reload — the whole point of the ETA flow is submit now,
+                // confirm arrival later, often after the tab's been closed.
+                try {
+                    var s2 = JSON.parse(localStorage.getItem(PARENT_REQ_KEY)||'[]');
+                    var row = s2.filter(function(x){ return x.id===reqId; })[0];
+                    if (row) { row.cloudId = res.data.id; localStorage.setItem(PARENT_REQ_KEY, JSON.stringify(s2)); }
+                } catch(e){}
                 renderPickupHistory();
             });
         }
     } catch(e){ console.warn('[Parent] pickup cloud submit error:', e); }
 
     renderPickupHistory();
-    toast(labels[type]+' request sent to camp office!');
+    toast(labels[type]+(reqDate!==_pickupTodayStr()?' request sent for '+reqDate+'!':' request sent to camp office!'));
+}
+
+// Follow-up once a parent who gave an ETA has actually dropped their child
+// off — a real timestamp for the office instead of just trusting the
+// estimate (report_dropped_off, migration 093). Idempotent server-side, so a
+// double-tap is harmless.
+function reportDroppedOff(reqId) {
+    var entry = pickupRequests.filter(function(r){ return r.id===reqId; })[0];
+    if (!entry || !entry.cloudId) { toast('Still sending your earlier request — try again in a moment.'); return; }
+    var call = window._pRpc ? window._pRpc('report_dropped_off', { p_request_id: entry.cloudId })
+        : (window._parentDB && window._parentDB.rpc('report_dropped_off', { p_request_id: entry.cloudId }));
+    if (!call) return;
+    call.then(function(res){
+        if (res.error || !res.data || !res.data.success) {
+            console.warn('[Parent] report dropped off failed:', res.error ? res.error.message : (res.data||{}).error);
+            toast('Could not reach the camp office — try again.');
+            return;
+        }
+        entry.droppedOffAt = new Date().toLocaleTimeString([], { hour:'numeric', minute:'2-digit' });
+        try {
+            var store = JSON.parse(localStorage.getItem(PARENT_REQ_KEY)||'[]');
+            var s = store.filter(function(x){ return x.id===reqId; })[0];
+            if (s) { s.droppedOffAt = entry.droppedOffAt; localStorage.setItem(PARENT_REQ_KEY, JSON.stringify(store)); }
+        } catch(e){}
+        renderPickupHistory();
+        toast('Got it — the office knows they’ve arrived!');
+    });
 }
 // Poll the office's decision on this parent's own pickup requests — RLS
 // (ppr_parent_read, migration 025) already scopes the read to rows tied to
@@ -3248,13 +3317,36 @@ function _pickupEsc(s){ if(s==null)return''; var d=document.createElement('div')
 function renderPickupHistory() {
     var el = document.getElementById('pickupHistory');
     if (!pickupRequests.length) { el.innerHTML='<div class="lk-empty"><div class="lk-empty-icon"><svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/></svg></div><h3>No requests today</h3></div>'; return; }
-    el.innerHTML = '';
     var statusBadge={Pending:'badge-warn',Confirmed:'badge-info',Released:'badge-ok',Declined:'badge-error'};
-    pickupRequests.forEach(function(r){
-        el.innerHTML += '<div class="lk-hist-item"><div class="lk-hist-icon">'+r.icon+'</div><div class="lk-hist-info"><div class="lk-hist-label">'+r.label+'</div><div class="lk-hist-time">Submitted at '+r.time+'</div>'
+    var today = _pickupTodayStr();
+    // requestDate is only tracked going forward (migration 093 field) — an
+    // older locally-cached entry with no requestDate is always "today" since
+    // that was the only option before this feature existed.
+    var todays = pickupRequests.filter(function(r){ return !r.requestDate || r.requestDate===today; });
+    var upcoming = pickupRequests.filter(function(r){ return r.requestDate && r.requestDate!==today; });
+
+    function rowHtml(r){
+        var droppedOffBtn = '';
+        if (r.type==='late' && r.estArrival && !r.droppedOffAt && r.status!=='Declined') {
+            droppedOffBtn = '<button class="btn btn-sm" style="background:#16a34a;border-color:#16a34a;color:#fff;margin-top:8px;" onclick="reportDroppedOff(\''+r.id+'\')">✓ Dropped Off</button>';
+        }
+        return '<div class="lk-hist-item"><div class="lk-hist-icon">'+r.icon+'</div><div class="lk-hist-info"><div class="lk-hist-label">'+r.label
+            + (r.requestDate && r.requestDate!==today ? ' <span style="font-weight:400;color:var(--slate-400);">('+r.requestDate+')</span>' : '')
+            + '</div><div class="lk-hist-time">Submitted at '+r.time
+            + (r.estArrival ? ' · ETA '+_pickupEsc(r.estArrival) : '')
+            + (r.droppedOffAt ? ' · Dropped off at '+_pickupEsc(r.droppedOffAt) : '')
+            + '</div>'
             + (r.officeMessage ? '<div class="lk-hist-office-msg">Office: “'+_pickupEsc(r.officeMessage)+'”</div>' : '')
+            + droppedOffBtn
             + '</div><span class="badge '+(statusBadge[r.status]||'badge-neutral')+'">'+r.status+'</span></div>';
-    });
+    }
+
+    var html = todays.map(rowHtml).join('');
+    if (upcoming.length) {
+        html += '<div style="font-size:.72rem;font-weight:600;color:var(--slate-400);text-transform:uppercase;letter-spacing:.03em;margin:16px 0 6px;">Upcoming</div>'
+            + upcoming.map(rowHtml).join('');
+    }
+    el.innerHTML = html || '<div class="lk-empty"><div class="lk-empty-icon"><svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/></svg></div><h3>No requests today</h3></div>';
 }
 
 // PHOTO CONSENT — only an explicit "yes" unlocks the Photos page;
@@ -3312,6 +3404,33 @@ function initPickupTabs() {
             el.innerHTML += '<button class="lk-tab '+(i===0?'active':'')+'" data-child-id="'+c.id+'" onclick="this.closest(\'.lk-tabs\').querySelectorAll(\'.lk-tab\').forEach(function(t){t.classList.remove(\'active\')});this.classList.add(\'active\')">'+c.name.split(' ')[0]+'</button>';
         });
     });
+    var today = _pickupTodayStr();
+    document.querySelectorAll('.lk-req-date').forEach(function(inp){
+        inp.min = today;
+        if (!inp.value) inp.value = today;
+    });
+    _onLateDateChange();
+}
+
+// Local YYYY-MM-DD (not UTC) so it matches what the <input type=date> shows —
+// submit_pickup_request (migration 093) treats a missing/omitted date as
+// "today" server-side anyway, this is just so the field isn't blank.
+function _pickupTodayStr(){
+    var d = new Date();
+    return d.getFullYear()+'-'+String(d.getMonth()+1).padStart(2,'0')+'-'+String(d.getDate()).padStart(2,'0');
+}
+
+// A future-dated Late Arrival can only ever be an ETA — "I just dropped them
+// off" is a claim about something that hasn't happened yet, so hide it
+// entirely once the date picker moves off today rather than letting a parent
+// submit a nonsensical already-arrived report for next Thursday.
+function _onLateDateChange(){
+    var dateEl = document.getElementById('lateDate');
+    var isToday = !dateEl || dateEl.value === _pickupTodayStr();
+    var btn = document.getElementById('lateArrivedBtn');
+    var hint = document.getElementById('lateArrivedHint');
+    if (btn) btn.style.display = isToday ? '' : 'none';
+    if (hint) hint.style.display = isToday ? '' : 'none';
 }
 
 init();

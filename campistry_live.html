@@ -26,9 +26,31 @@
         <script src="campistry_app_switcher.js"></script>
     </div>
     <div class="header-right">
+        <span class="nav-live-date" id="navLiveDate" title="Everything in Live is for today — it resets each morning" style="font-size:.82rem;color:var(--slate-500);margin-right:14px;white-space:nowrap;"></span>
         <span class="nav-user" id="navUserEmail">Office</span>
     </div>
 </header>
+<script>
+// Live is always "today" — Roll Call, Messages, Changes, the Camper Locator
+// schedule, all of it resets fresh each morning with nothing carried over.
+// That's easy to forget mid-shift, so show the date right in the header.
+// Re-checks on an interval (not just on load) so a device left open
+// overnight rolls over to the new date instead of showing yesterday's.
+(function(){
+    var el=document.getElementById('navLiveDate');
+    if(!el)return;
+    var shown='';
+    function paint(){
+        var now=new Date();
+        var key=now.toDateString();
+        if(key===shown)return;
+        shown=key;
+        el.textContent=now.toLocaleDateString('en-US',{weekday:'short',month:'short',day:'numeric'});
+    }
+    paint();
+    setInterval(paint,60000);
+})();
+</script>
 
 <!-- ═══ SIDEBAR ═══ -->
 <div id="sidebarBackdrop" class="sidebar-backdrop"></div>
@@ -288,6 +310,18 @@
 // inside either IIFE below) so both the Parent Requests and Pickup Alerts
 // scripts can share it. Falls back to the raw string for anything that
 // isn't a clean "HH:MM" (already-formatted text, empty, garbage input).
+// report_dropped_off (migration 093) stores details.droppedOffAt as a UTC
+// ISO timestamp ("2026-08-27T14:32:10Z"), not "HH:MM" — _fmtTime12 above
+// only understands the latter, so this handles the ISO shape separately.
+function _fmtDroppedOffTime(v){
+    if(!v)return v||'';
+    if(/^\d{4}-\d{2}-\d{2}T/.test(v)){
+        var d=new Date(v);
+        if(!isNaN(d.getTime()))return d.toLocaleTimeString([],{hour:'numeric',minute:'2-digit'});
+    }
+    return v; // already a friendly time (e.g. a same-session local echo)
+}
+
 function _fmtTime12(hhmm){
     if(!hhmm)return hhmm||'';
     var m=/^(\d{1,2}):(\d{2})$/.exec(String(hhmm).trim());
@@ -310,7 +344,14 @@ var ParentRequests = (function(){
     var GROUPS = [
         { key:'early', title:'Early Pickup', types:['early'] },
         { key:'change', title:'Pickup Change', types:['change','friend'] },
-        { key:'bus', title:'Bus Change', types:['bus'] }
+        { key:'bus', title:'Bus Change', types:['bus'] },
+        // Only the ETA flow lands here (see the extra filter in _paintChanges
+        // below) — an "I just dropped them off" late arrival still routes
+        // straight into Roll Call on confirm with nothing left to track. An
+        // ETA-based one stays visible here until the parent's own "Dropped
+        // Off" follow-up lands, since confirming an ETA message is just an
+        // acknowledgement, not proof the camper has actually arrived.
+        { key:'late', title:'Late Arrival — On the Way', types:['late'] }
     ];
     var _compose = null; // {index, action:'Confirmed'|'Declined'}
     var _sentenceCache = {}; // request id -> resolved "he'll be at..." sentence (or '' if none)
@@ -319,6 +360,19 @@ var ParentRequests = (function(){
     function getReqs(){try{return JSON.parse(localStorage.getItem(PKEY)||'[]');}catch(e){return[];}}
     function saveReqs(arr){try{localStorage.setItem(PKEY,JSON.stringify(arr));}catch(e){}}
     function _db(){ var d=window.CampistryDB; if(!d)return null; var c=d.getClient?d.getClient():null, id=d.getCampId?d.getCampId():null; return (c&&id&&c.from)?{client:c,campId:id}:null; }
+
+    // Subject pronoun for staff-facing copy ("When he/she/they gets/get
+    // here..."). CampistryLiveLocator.describeCamperAt already picks its own
+    // pronoun for the activity sentence itself — this is only for the
+    // wrapper sentence built around it, which needs the same camper's gender.
+    function _subjPronoun(camperName){
+        var g=(typeof window.loadGlobalSettings==='function')?(window.loadGlobalSettings()||{}):{};
+        var camper=((g.app1&&g.app1.camperRoster)||{})[camperName];
+        var gender=camper&&camper.gender?String(camper.gender).trim().toLowerCase():'';
+        if(gender==='male')return{subj:'he',verb:'gets'};
+        if(gender==='female')return{subj:'she',verb:'gets'};
+        return{subj:'they',verb:'get'};
+    }
 
     // Pickup-alert league cross-check: does this camper have an active league
     // game at the exact pickup time? If so, that team's captains join the
@@ -418,7 +472,7 @@ var ParentRequests = (function(){
             var r=x.r;
             if((r.type==='early'||r.type==='late')&&r.status==='Pending'&&_sentenceCache[r.id]===undefined){
                 _sentenceCache[r.id]='';
-                _activitySentenceFor(r.childName, r.type==='late'?r.arrivedAt:r.pickupTime, function(sentence){
+                _activitySentenceFor(r.childName, r.type==='late'?(r.arrivedAt||r.estArrival):r.pickupTime, function(sentence){
                     _sentenceCache[r.id]=sentence;
                     if(sentence)repaintFn();
                 });
@@ -426,10 +480,34 @@ var ParentRequests = (function(){
         });
     }
 
+    // An ETA-based late arrival (details.estArrival, no arrivedAt) does NOT
+    // flip the camper present when the office confirms — confirming is just
+    // acknowledging the message, the camper isn't there yet. The real arrival
+    // signal is the parent's own "Dropped Off" tap (report_dropped_off,
+    // migration 093), which lands here as a realtime UPDATE. Diff against
+    // the previously-cached rows so a droppedOffAt that just appeared marks
+    // attendance exactly once, mirroring the existing "arrived now" branch
+    // in _apply below.
+    function _markArrivedOnDropOff(freshRows){
+        var prevById={};
+        getReqs().forEach(function(r){ prevById[r.id]=r; });
+        var today=null;
+        freshRows.forEach(function(r){
+            if(r.type!=='late'||!r.droppedOffAt)return;
+            var prev=prevById[r.id];
+            if(prev&&prev.droppedOffAt)return; // already handled
+            if(!today)today=getTodayData();
+            today.absences=today.absences.filter(function(a){return a.name!==r.childName;});
+            today.attendance[r.childName]=true;
+            today.notes=(today.notes?today.notes+'\n':'')+r.childName+': Dropped off'+(r.droppedOffAt?' — '+_fmtDroppedOffTime(r.droppedOffAt):'')+' (confirmed by parent)';
+        });
+        if(today){ saveTodayData(today); if(window.CampistryLive) CampistryLive.refresh(); }
+    }
+
     function syncFromCloud(cb){
         var db=_db(); if(!db){ if(cb)cb(); return; }
         db.client.from('parent_pickup_requests')
-            .select('id,type,label,camper_name,camper_bunk,parent_name,parent_email,details,status,office_message,staff_notes,hidden,created_at')
+            .select('id,type,label,camper_name,camper_bunk,parent_name,parent_email,details,status,office_message,staff_notes,hidden,created_at,request_date')
             .eq('camp_id',db.campId).order('created_at',{ascending:false}).limit(200)
             .then(function(res){
                 if(res.error){ console.warn('[Live] parent requests load:',res.error.message); if(cb)cb(); return; }
@@ -437,11 +515,12 @@ var ParentRequests = (function(){
                     return Object.assign({}, m.details||{}, {
                         id:m.id, type:m.type, label:m.label, childName:m.camper_name, childBunk:m.camper_bunk||'',
                         parentName:m.parent_name||'', parentEmail:m.parent_email||'',
-                        submittedAt:new Date(m.created_at).getTime(),
+                        submittedAt:new Date(m.created_at).getTime(), requestDate:m.request_date||'',
                         status:m.status||'Pending', officeMessage:m.office_message||'', staffNote:m.staff_notes||'',
                         hidden:!!m.hidden
                     });
                 });
+                _markArrivedOnDropOff(mapped);
                 saveReqs(mapped);
                 if(cb)cb();
             }, function(){ if(cb)cb(); });
@@ -523,7 +602,11 @@ var ParentRequests = (function(){
 
         var html='<div class="changes-grid">';
         GROUPS.forEach(function(g){
-            var items=reqs.map(function(r,i){return{r:r,i:i};}).filter(function(x){return g.types.indexOf(x.r.type)>=0&&x.r.status!=='Pending'&&!x.r.hidden;});
+            var items=reqs.map(function(r,i){return{r:r,i:i};}).filter(function(x){
+                if(g.types.indexOf(x.r.type)<0||x.r.status==='Pending'||x.r.hidden)return false;
+                if(g.key==='late')return !!x.r.estArrival; // "arrived now" flow already went to Roll Call
+                return true;
+            });
             var extraBtn=g.key==='early'?'<button class="btn btn-secondary btn-sm" onclick="CampistryLive.openPickupModal()">+ Add</button>':'';
             html+='<div class="card"><div class="card-header"><h2 style="font-size:.92rem;">'+esc(g.title)+'</h2>'+extraBtn+'</div><div class="card-body" style="padding:0 16px;">';
             if(!items.length){
@@ -546,7 +629,12 @@ var ParentRequests = (function(){
     function _changeItemHtml(r,i){
         var statusCls=r.status==='Pending'?'badge-warn':r.status==='Confirmed'?'badge-info':r.status==='Declined'?'badge-error':'badge-ok';
         var details=[];
-        if(r.type==='late'){if(r.arrivedAt)details.push('Arrived: '+r.arrivedAt);if(r.reason)details.push(r.reason);}
+        if(r.type==='late'){
+            if(r.arrivedAt)details.push('Arrived: '+r.arrivedAt);
+            if(r.estArrival)details.push('ETA: '+_fmtTime12(r.estArrival));
+            if(r.droppedOffAt)details.push('✓ Dropped off: '+_fmtDroppedOffTime(r.droppedOffAt));
+            if(r.reason)details.push(r.reason);
+        }
         else if(r.type==='early'){if(r.pickupTime)details.push('Pickup: '+_fmtTime12(r.pickupTime));if(r.pickupBy)details.push('By: '+r.pickupBy);}
         else if(r.type==='change'){if(r.newPickupPerson)details.push('New person: '+r.newPickupPerson);if(r.phone)details.push(r.phone);}
         else if(r.type==='friend'){if(r.friendName)details.push('Friend: '+r.friendName);if(r.friendParentName)details.push('Parent: '+r.friendParentName);}
@@ -587,6 +675,7 @@ var ParentRequests = (function(){
                 '<div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;">'+
                     '<span style="font-weight:700;">'+esc(r.childName)+'</span>'+
                     (r.childBunk?'<span style="font-size:.7rem;color:var(--slate-400);background:var(--slate-100);padding:1px 8px;border-radius:999px;">'+esc(r.childBunk)+'</span>':'')+
+                    (r.requestDate&&r.requestDate!==todayKey()?'<span style="font-size:.7rem;color:#7c3aed;background:#f5f3ff;padding:1px 8px;border-radius:999px;font-weight:600;">'+esc(r.requestDate)+'</span>':'')+
                 '</div>'+
                 '<div style="font-size:.76rem;color:var(--slate-500);margin-top:2px;">From: '+esc(r.parentName)+'&nbsp;&middot;&nbsp;'+fmtTime(r.submittedAt)+'</div>'+
                 (details.length?'<div style="font-size:.79rem;color:var(--slate-600);margin-top:4px;line-height:1.5;">'+details.map(esc).join('&nbsp;&nbsp;&middot;&nbsp;&nbsp;')+'</div>':'')+
@@ -679,7 +768,7 @@ var ParentRequests = (function(){
         // just makes the follow-up push/note arrive a beat after Confirm
         // instead of at the same moment.
         var sentencePromise=(status==='Confirmed'&&(r.type==='late'||(r.type==='early'&&r.pickupTime)))
-            ? new Promise(function(resolve){ _activitySentenceFor(r.childName, r.type==='late'?r.arrivedAt:r.pickupTime, resolve); })
+            ? new Promise(function(resolve){ _activitySentenceFor(r.childName, r.type==='late'?(r.arrivedAt||r.estArrival):r.pickupTime, resolve); })
             : Promise.resolve('');
 
         var db=_db();
@@ -702,7 +791,8 @@ var ParentRequests = (function(){
                             // confirm itself on it.
                             sentencePromise.then(function(sentence){
                                 if(!sentence)return;
-                                var extra='When he gets here, '+sentence+'.';
+                                var pron=_subjPronoun(r.childName);
+                                var extra='When '+pron.subj+' '+pron.verb+' here, '+sentence+'.';
                                 var newMsg=(message?message+' ':'')+extra;
                                 var reqs2=getReqs(), r2=reqs2.filter(function(x){return x.id===r.id;})[0];
                                 if(r2){ r2.officeMessage=newMsg; saveReqs(reqs2); }
@@ -718,15 +808,19 @@ var ParentRequests = (function(){
         if(status==='Confirmed'){
             var today=getTodayData();
             var now=new Date(),timeStr=now.getHours()+':'+(now.getMinutes()<10?'0':'')+now.getMinutes();
-            if(r.type==='late'){
+            if(r.type==='late'&&r.arrivedAt){
                 // The office is confirming the camper HAS arrived (late), not that
                 // they're still out — flip them to present, same as a manual
                 // roll-call toggle or the bubble-sheet scanner's present branch.
+                // An ETA-only report (r.estArrival, no arrivedAt) is NOT this —
+                // the camper isn't here yet, confirming just acknowledges the
+                // message. _markArrivedOnDropOff flips attendance for that case,
+                // triggered by the parent's own "Dropped Off" follow-up instead.
                 today.absences=today.absences.filter(function(a){return a.name!==r.childName;});
                 today.attendance[r.childName]=true;
                 var noteText='Confirmed late arrival'+(r.arrivedAt?' — '+r.arrivedAt:'')+(r.notes?' ('+r.notes+')':'');
                 today.notes=(today.notes?today.notes+'\n':'')+r.childName+': '+noteText;
-            } else if(r.type!=='bus'){
+            } else if(r.type!=='bus'&&r.type!=='late'){
                 if(!today.earlyPickups.some(function(p){return p.name===r.childName;})){
                     today.earlyPickups.push({name:r.childName,pickupTime:r.pickupTime||timeStr,pickedUpBy:r.pickupBy||r.newPickupPerson||r.friendParentName||r.parentName||'',reason:r.label+(r.notes?' — '+r.notes:''),timestamp:Date.now(),fromParent:true});
                 }
