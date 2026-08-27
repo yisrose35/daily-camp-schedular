@@ -2738,10 +2738,13 @@ function renderStructure(){
                 +'</div>';
             h+='<div class="me-grade-list" data-div="'+je(dn)+'" style="padding:14px 18px">';
             grades.forEach(function([gn,gd]){
+                var gHeads=divisionHeads[gn]||[];
+                var gHeadChip=gHeads.length?gHeads.map(function(s){return esc(s.name);}).join(', '):'+ Assign head';
                 h+='<div class="me-grade-block" data-grade="'+je(gn)+'" style="margin-bottom:10px;padding:6px 8px;border:1px dashed transparent;border-radius:6px">'
                     +'<div style="display:flex;align-items:center;gap:6px;margin-bottom:4px">'
                         +'<span class="me-grip me-grade-grip" title="Drag to reorder grade" style="cursor:grab;color:var(--s400);font-size:.85rem;line-height:1;padding:0 2px;user-select:none">⋮⋮</span>'
                         +'<div style="font-size:.8rem;font-weight:600;color:var(--s700)">'+esc(gn)+'</div>'
+                        +'<span style="font-size:.66rem;cursor:pointer;'+(gHeads.length?'color:var(--s500);font-weight:600':'color:var(--me);font-weight:600')+'" onclick="event.stopPropagation();CampistryMe.openDivisionHeadModal(\''+je(gn)+'\')" title="Manage this grade\'s head — can be different from the division head, and notified alongside them for this grade\'s pickups">Head: '+gHeadChip+'</span>'
                     +'</div>'
                     +'<div class="me-card-bunks" data-grade="'+je(gn)+'" style="display:flex;flex-wrap:wrap;gap:4px;padding-left:18px">';
                 (gd.bunks||[]).forEach(function(b){
@@ -4561,11 +4564,13 @@ function removeBunkStaff(bunkName,idx){
 }
 // ── Division Heads ──────────────────────────────────────────────────
 // Same shape and the same join-key convention as bunkStaff (see staffKey()
-// above) — a record is {name,role,email,phone,smsOptIn}, keyed by division
-// (or grade, checked as a fallback the same way leagues/pickup-notification
-// resolution already accepts either). This is the "who to notify" mapping
-// for a division: pickup-alert routing reads campistryMe.divisionHeads the
-// same way it reads bunkStaff.
+// above) — a record is {name,role,email,phone,smsOptIn}, keyed by EITHER a
+// division name or a grade name (grades within one division can have their
+// own, different heads — a camp's actual org chart, not every grade
+// reporting to the same division-wide head). Pickup-alert routing
+// (migration 089) notifies BOTH the camper's grade head and their division
+// head when both are set, so this genuinely supports either level or both
+// at once rather than one overriding the other.
 function divisionsForStaffEmail(email){
     var k=String(email||'').trim().toLowerCase();
     if(!k)return [];
@@ -4573,6 +4578,10 @@ function divisionsForStaffEmail(email){
         return (divisionHeads[d]||[]).some(function(s){ return staffKey(s)===k; });
     });
 }
+// A key in divisionHeads is a division name if it's literally a division in
+// structure{}; otherwise it's a grade name. Used only for modal copy — the
+// data model itself doesn't care which kind a key is.
+function _headKind(name){ return structure[name]?'Division':'Grade'; }
 function openDivisionHeadModal(divName){
     _renderDivisionHeadModalBody(divName);
 }
@@ -4586,7 +4595,7 @@ function _renderDivisionHeadModalBody(divName){
             return '<div style="display:flex;align-items:center;gap:10px;padding:8px 0;border-bottom:1px solid var(--s100)">'
                 +'<div style="flex:1;min-width:0">'
                   +'<div style="font-weight:600;font-size:.85rem">'+esc(s.name)+'</div>'
-                  +'<div style="font-size:.72rem;color:var(--s400)">'+esc(s.role||'Division Head')
+                  +'<div style="font-size:.72rem;color:var(--s400)">'+esc(s.role||(_headKind(divName)+' Head'))
                     +(s.email?' · '+esc(s.email):'')+(s.phone?' · '+esc(s.phone):'')+'</div>'
                   +'<div style="margin-top:2px">'+reach+'</div>'
                 +'</div>'
@@ -4595,7 +4604,7 @@ function _renderDivisionHeadModalBody(divName){
                 +'<button class="me-btn me-btn--ghost me-btn--sm" onclick="CampistryMe.removeDivisionHead(\''+je(divName)+'\','+i+')">Remove</button>'
                 +'</div>';
         }).join('')
-        :'<p style="font-size:.8rem;color:var(--s400);margin:0 0 4px">No division head assigned yet.</p>';
+        :'<p style="font-size:.8rem;color:var(--s400);margin:0 0 4px">No '+_headKind(divName).toLowerCase()+' head assigned yet.</p>';
     // Anyone already hired can be dropped in without retyping, same
     // convenience as the bunk-staff picker.
     var hired=hiredStaff().filter(function(a){
@@ -4630,7 +4639,7 @@ function _renderDivisionHeadModalBody(divName){
         +'</div>'
         +'<p style="font-size:.72rem;color:var(--s400);margin:10px 0 0">The email is how this person signs in to Campistry Lite and how pickup alerts and other notifications reach them. Without one they still appear here, but they cannot be sent anything.</p>'
         +'</div>';
-    showModal('Division Head — '+divName,body);
+    showModal(_headKind(divName)+' Head — '+divName,body);
 }
 function _resetDivisionHeadForm(divName){ _renderDivisionHeadModalBody(divName); }
 function editDivisionHead(divName,idx){
@@ -4666,9 +4675,9 @@ function addDivisionHead(divName){
     if(!divisionHeads[divName])divisionHeads[divName]=[];
     if(email){
         var clash=divisionHeads[divName].findIndex(function(s,i){return i!==idx&&staffKey(s)===email});
-        if(clash>=0){toast('Someone with that email is already a head of this division','error');return}
+        if(clash>=0){toast('Someone with that email is already a head here','error');return}
     }
-    var rec={name:name,role:'Division Head',email:email,phone:phone};
+    var rec={name:name,role:_headKind(divName)+' Head',email:email,phone:phone};
     if(idx>=0&&divisionHeads[divName][idx])divisionHeads[divName][idx]=rec;
     else divisionHeads[divName].push(rec);
     save();
