@@ -1142,24 +1142,6 @@ function _famHouseholdHtml(id,f){
     h+='</div>';
     return h;
 }
-function _familyForCamper(camperName){
-    var found=null;
-    Object.entries(families).forEach(function(pair){
-        if(found)return;
-        if((pair[1].camperIds||[]).indexOf(camperName)>=0)found={id:pair[0],name:pair[1].name};
-    });
-    return found;
-}
-// Households don't have their own page (see the note above
-// _famSuggestionsBannerHtml) — jumping to a camper's family means jumping
-// to their Billing account, highlighted and expanded, the same way a
-// payment search result already does.
-function viewFamilyFromCamper(camperName){
-    var fam=_familyForCamper(camperName);
-    if(!fam){toast('No household on file for this camper','error');return;}
-    _billHighlight=fam.id;
-    nav('billing');
-}
 // Registration and Hiring are now two separate top-level sidebar entries
 // under Operations, matching CampMinder's separate-products approach —
 // _renderRegistrationPane()/_renderHiringPane() each carry their own
@@ -1878,9 +1860,7 @@ function renderCampers(filter){
                 var n=item.n,d=item.d;
                 var hasMed=!!(d.allergies||d.medications);
                 var altN=[d.altFirstName,d.altLastName].filter(Boolean).join(' ');
-                var fam=_familyForCamper(n);
-                var famChip=fam?'<div style="margin-top:2px"><span style="font-size:.68rem;color:var(--me);font-weight:600;cursor:pointer" onclick="event.stopPropagation();CampistryMe.viewFamilyFromCamper(\''+je(n)+'\')">'+esc(fam.name)+'</span></div>':'';
-                var nameCell=esc(n)+(altN&&getCampSettings().showAltNames!==false?'<div style="font-size:.7rem;color:var(--s400);font-weight:400">'+esc(altN)+'</div>':'')+famChip;
+                var nameCell=esc(n)+(altN&&getCampSettings().showAltNames!==false?'<div style="font-size:.7rem;color:var(--s400);font-weight:400">'+esc(altN)+'</div>':'');
                 var details=(d.schoolGrade?esc(d.schoolGrade):'<span style="color:var(--s300)">—</span>')+(hasMed?' <span style="color:var(--err);font-size:.7rem;font-weight:600">⚠ Medical</span>':'');
                 var placement=(d.division?dtag(d.division):'<span style="color:var(--s300)">—</span>')+(d.bunk?' '+bdg(d.bunk,'gray'):'');
                 var contact=(d.parent1Phone||d.parent1Email)?'<span style="font-size:.78rem;color:var(--s500)">'+esc(d.parent1Name||'')+'</span>':'<span style="color:var(--s300)">—</span>';
@@ -12832,7 +12812,6 @@ window.CampistryMe={
     nav:nav,closeModal:closeModal,
     viewCamper:viewCamper,editCamper:editCamper,addCamper:addCamper,deleteCamper:deleteCamper,ceToggleSummer:ceToggleSummer,
     addFamily:function(){openFamilyForm(null)},editFamily:function(id){openFamilyForm(id)},deleteFamily:deleteFamily,removeCamperFromFamily:removeCamperFromFamily,
-    viewFamilyFromCamper:viewFamilyFromCamper,
     setPplStaffSubTab:setPplStaffSubTab,viewStaffMember:viewStaffMember,openEditStaffModal:openEditStaffModal,saveStaffMember:saveStaffMember,
     acceptFamilySuggestion:acceptFamilySuggestion,dismissFamilySuggestion:dismissFamilySuggestion,acceptAddToFamily:acceptAddToFamily,
     mergeFamilies:mergeFamilies,dismissMergeFamilies:dismissMergeFamilies,
