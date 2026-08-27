@@ -296,6 +296,7 @@ var ParentRequests = (function(){
         { key:'bus', title:'Bus Change', types:['bus'] }
     ];
     var _compose = null; // {index, action:'Confirmed'|'Declined'}
+    var _sentenceCache = {}; // request id -> resolved "he'll be at..." sentence (or '' if none)
 
     function esc(s){if(s==null)return'';var m={'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#x27;'};return String(s).replace(/[&<>"']/g,function(c){return m[c]});}
     function getReqs(){try{return JSON.parse(localStorage.getItem(PKEY)||'[]');}catch(e){return[];}}
@@ -351,6 +352,61 @@ var ParentRequests = (function(){
                 },function(e){console.warn('[Live] league-captain pickup alert failed:',e&&e.message||e);});
             }, function(){});
         }, 900);
+    }
+
+    // Loads (and caches) today's schedule into CampistryLiveLocator once, so
+    // confirming a late-arrival/early-pickup can resolve "what will they be
+    // doing" without a fresh fetch every time. A failed attempt (DB not
+    // ready yet) clears the cache so the next call retries instead of
+    // staying broken for the rest of the session.
+    var _scheduleReady = null;
+    function _ensureSchedule(){
+        if(_scheduleReady)return _scheduleReady;
+        _scheduleReady=new Promise(function(resolve){
+            if(!window.LiveScheduleReader||!window.CampistryLiveLocator){resolve(false);return;}
+            var ready=(window.CampistryDB&&window.CampistryDB.ready&&window.CampistryDB.ready.then)?window.CampistryDB.ready:Promise.resolve();
+            ready.then(function(){
+                var g=(typeof window.loadGlobalSettings==='function')?(window.loadGlobalSettings()||{}):{};
+                return window.LiveScheduleReader.loadToday(g.campStructure||{});
+            }).then(function(data){
+                window.CampistryLiveLocator.setScheduleData(data);
+                resolve(true);
+            },function(){resolve(false);});
+        }).then(function(ok){ if(!ok)_scheduleReady=null; return ok; });
+        return _scheduleReady;
+    }
+
+    // "he'll be playing leagues – baseball on Baseball Field 3" / "he'll be
+    // having Arts & Crafts at Arts Cabin" / '' when there's nothing to say
+    // (outside schedule hours, no schedule generated, camper not found).
+    // camperName + a time string ('10:00 AM', '14:00', etc. — anything
+    // CampistryLiveLocator.parseTypedTime already understands).
+    function _activitySentenceFor(camperName,timeStr,cb){
+        if(!camperName||!timeStr||!window.CampistryLiveLocator){cb('');return;}
+        _ensureSchedule().then(function(ok){
+            if(!ok){cb('');return;}
+            var t=window.CampistryLiveLocator.parseTypedTime(timeStr);
+            if(t<0){cb('');return;}
+            var result=window.CampistryLiveLocator.resolveCamperAt(camperName,t);
+            cb(window.CampistryLiveLocator.describeCamperAt(result));
+        });
+    }
+
+    // Lazily resolves + caches the sentence for every pending early/late
+    // item in a just-rendered list, repainting once each one lands. Cache
+    // is set to '' immediately (synchronously) so a second paint before the
+    // fetch resolves doesn't kick off a duplicate lookup for the same row.
+    function _warmSentences(items,repaintFn){
+        items.forEach(function(x){
+            var r=x.r;
+            if((r.type==='early'||r.type==='late')&&r.status==='Pending'&&_sentenceCache[r.id]===undefined){
+                _sentenceCache[r.id]='';
+                _activitySentenceFor(r.childName, r.type==='late'?r.arrivedAt:r.pickupTime, function(sentence){
+                    _sentenceCache[r.id]=sentence;
+                    if(sentence)repaintFn();
+                });
+            }
+        });
     }
 
     function syncFromCloud(cb){
@@ -425,6 +481,7 @@ var ParentRequests = (function(){
         var body=document.getElementById('messagesBody');if(!body)return;
         updateBadge();
         var items=reqs.map(function(r,i){return{r:r,i:i};}).filter(function(x){return x.r.status==='Pending'&&!x.r.hidden;});
+        _warmSentences(items,_paintMessages);
         if(!items.length){body.innerHTML='<div class="empty-state">Nothing pending — early pickups, changes, bus changes, and late arrivals all show up here the moment a parent sends one from Campistry Link</div>';return;}
         var html='<div class="card"><div class="card-body" style="padding:0 18px;">';
         items.forEach(function(x){ html+=_changeItemHtml(x.r,x.i); });
@@ -516,6 +573,7 @@ var ParentRequests = (function(){
                 '</div>'+
                 '<div style="font-size:.76rem;color:var(--slate-500);margin-top:2px;">From: '+esc(r.parentName)+'&nbsp;&middot;&nbsp;'+fmtTime(r.submittedAt)+'</div>'+
                 (details.length?'<div style="font-size:.79rem;color:var(--slate-600);margin-top:4px;line-height:1.5;">'+details.map(esc).join('&nbsp;&nbsp;&middot;&nbsp;&nbsp;')+'</div>':'')+
+                (r.status==='Pending'&&(r.type==='early'||r.type==='late')&&_sentenceCache[r.id]?'<div style="font-size:.78rem;color:#0284c7;margin-top:4px;">📍 '+esc(_sentenceCache[r.id])+'</div>':'')+
                 (r.officeMessage?'<div style="font-size:.76rem;color:var(--slate-600);margin-top:4px;font-style:italic;">Office: “'+esc(r.officeMessage)+'”</div>':'')+
                 (r.status==='Confirmed'&&r.type==='early'&&window.PickupAlerts?window.PickupAlerts.statusStripHtml(r.childName):'')+
                 '<textarea class="form-input" rows="1" placeholder="Staff note (not shared with parent)" style="margin-top:6px;font-size:.76rem;" onblur="ParentRequests.saveNote('+i+',this.value)">'+esc(r.staffNote||'')+'</textarea>'+
@@ -562,7 +620,7 @@ var ParentRequests = (function(){
     // exactly what surfaced testing this live. Reads back the recipients the
     // trigger just created and pushes them, same db.client.functions.invoke
     // pattern campistry_link_data.js already uses for parent notifications.
-    function _sendPickupAlertPush(camperName,db){
+    function _sendPickupAlertPush(camperName,db,sentence){
         db.client.from('pickup_alerts')
             .select('pickup_time,camper_bunk,pickup_alert_recipients(recipient_email)')
             .eq('camp_id',db.campId).eq('camper_name',camperName)
@@ -575,7 +633,7 @@ var ParentRequests = (function(){
                 db.client.functions.invoke('send-push',{body:{
                     campId:db.campId, pref:'pickupAlert', staffEmails:emails,
                     title:camperName+' is leaving early',
-                    body:'Pickup at '+(alert.pickup_time||'')+(alert.camper_bunk?' · '+alert.camper_bunk:''),
+                    body:camperName+' is getting picked up at '+(alert.pickup_time||'')+(alert.camper_bunk?' · '+alert.camper_bunk:'')+(sentence?' — '+sentence:''),
                     data:{page:'campistry_lite.html'}
                 }}).then(function(r){
                     if(r&&r.error){console.warn('[Live] pickup alert push failed:',r.error.message||r.error);return;}
@@ -596,6 +654,17 @@ var ParentRequests = (function(){
         r.status=status; r.officeMessage=message||'';
         saveReqs(reqs);
 
+        // Kicked off in parallel with the status write below, not after it —
+        // Confirm needs to feel instant, not wait on a schedule fetch. By
+        // the time the write's own .then() below fires, this is usually
+        // already resolved (schedule is cached after the first lookup this
+        // session — see _ensureSchedule); if not, whichever finishes later
+        // just makes the follow-up push/note arrive a beat after Confirm
+        // instead of at the same moment.
+        var sentencePromise=(status==='Confirmed'&&(r.type==='late'||(r.type==='early'&&r.pickupTime)))
+            ? new Promise(function(resolve){ _activitySentenceFor(r.childName, r.type==='late'?r.arrivedAt:r.pickupTime, resolve); })
+            : Promise.resolve('');
+
         var db=_db();
         if(db){
             _reviewerId(db,function(uid){
@@ -604,7 +673,27 @@ var ParentRequests = (function(){
                     .eq('id',r.id)
                     .then(function(res){
                         if(res.error){console.warn('[Live] pickup review update:',res.error.message);return;}
-                        if(status==='Confirmed'&&r.type==='early'&&r.pickupTime) _sendPickupAlertPush(r.childName,db);
+                        if(status==='Confirmed'&&r.type==='early'&&r.pickupTime){
+                            sentencePromise.then(function(sentence){ _sendPickupAlertPush(r.childName,db,sentence); });
+                        }
+                        if(status==='Confirmed'&&r.type==='late'){
+                            // The parent's own Confirm reply is already sent above
+                            // (office_message = whatever message() was, '' for the
+                            // one-tap Confirm button) — this is a follow-up PATCH
+                            // once the schedule lookup resolves, appending what the
+                            // camper will walk into rather than delaying the
+                            // confirm itself on it.
+                            sentencePromise.then(function(sentence){
+                                if(!sentence)return;
+                                var extra='When he gets here, '+sentence+'.';
+                                var newMsg=(message?message+' ':'')+extra;
+                                var reqs2=getReqs(), r2=reqs2.filter(function(x){return x.id===r.id;})[0];
+                                if(r2){ r2.officeMessage=newMsg; saveReqs(reqs2); }
+                                db.client.from('parent_pickup_requests').update({office_message:newMsg}).eq('id',r.id)
+                                    .then(function(res2){ if(res2.error)console.warn('[Live] late-arrival schedule note save:',res2.error.message); });
+                                (repaint||_paintChanges)();
+                            });
+                        }
                     });
             });
         }
@@ -707,6 +796,11 @@ var ParentRequests = (function(){
     }
     _initialLoad();
     _subscribeRealtime();
+    // Warm the schedule cache eagerly (not on first Confirm click) so the
+    // "where will they be" sentence is usually already sitting there —
+    // both for the secretary seeing it on a pending row and for the
+    // Confirm follow-up push/note.
+    _ensureSchedule();
 
     return {renderMessages:renderMessages,renderChanges:renderChanges,
         confirmNow:confirmNow,hideRequest:hideRequest,deleteRequest:deleteRequest,

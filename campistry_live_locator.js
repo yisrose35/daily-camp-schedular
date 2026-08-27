@@ -221,42 +221,18 @@
         });
     }
 
-    function performSearch(nameQuery, timeValue) {
-        if (!nameQuery || !resultContainer) return;
+    // Core resolver — what is this camper doing at a given time? Pure data,
+    // no DOM/HTML — shared by the search UI (performSearch, below) and by
+    // the late-arrival/early-pickup messaging helpers in campistry_live.html
+    // (resolveCamperAt), which need the same answer to tell a parent/staffer
+    // what a camper will walk into when they arrive or leave.
+    function resolveCamperAt(camperName, targetTimeMin) {
         var roster = getRoster();
-        var keys = Object.keys(roster);
-        var q = nameQuery.toLowerCase();
-        var exact = keys.filter(function (k) { return k.toLowerCase() === q; })[0];
-        var partial = keys.filter(function (k) { return k.toLowerCase().indexOf(q) >= 0; })[0];
-        var camperName = exact || partial;
-
-        resultContainer.style.display = 'block';
-        if (!camperName) {
-            resultContainer.replaceChildren();
-            var h3 = document.createElement('h3'); h3.style.cssText = 'color:red;margin:0;';
-            h3.textContent = 'Camper "' + nameQuery + '" not found.';
-            var p = document.createElement('p'); p.append('Make sure the camper has been added in ');
-            var strong = document.createElement('strong'); strong.textContent = 'Campistry Me';
-            p.append(strong, '.'); resultContainer.append(h3, p);
-            return;
-        }
-
         var camper = roster[camperName];
+        if (!camper) return { ok: false, reason: 'not-found' };
+
         var bunk = camper.bunk;
         var division = bunkToDivision(bunk) || camper.division;
-
-        var targetTimeMin, timeLabel;
-        if (timeValue === 'now' || timeValue === '') {
-            targetTimeMin = getCurrentTimeMinutes();
-            timeLabel = 'Right Now (' + minutesToTimeLabel(targetTimeMin) + ')';
-        } else {
-            targetTimeMin = parseTypedTime(timeValue);
-            if (targetTimeMin < 0) {
-                resultContainer.innerHTML = '<h3 style="color:red;margin:0;">Couldn\'t understand "' + esc(timeValue) + '"</h3><p>Try a format like <strong>10:30 AM</strong> or <strong>2:15 PM</strong>.</p>';
-                return;
-            }
-            timeLabel = minutesToTimeLabel(targetTimeMin);
-        }
 
         var slotIdx = -1, slotTimeLabel = '', assignment = null;
         var bunkAssignments = (_schedule.scheduleAssignments || {})[bunk];
@@ -292,70 +268,138 @@
             }
         }
 
-        resultContainer.style.display = 'block';
-        var locationHtml = '', detailsHtml = '';
-        var timeContext = slotTimeLabel ? '<div style="font-size:.8rem;color:#0284c7;margin-top:2px;">' + esc(slotTimeLabel) + '</div>' : '';
+        var base = { ok: true, camperName: camperName, camper: camper, bunk: bunk, division: division, targetTimeMin: targetTimeMin, slotTimeLabel: slotTimeLabel };
 
         if (!assignment) {
-            var isOutsideSchedule = false;
             if (divSlots.length > 0) {
                 var scheduleStart = divSlots[0].startMin, scheduleEnd = divSlots[divSlots.length - 1].endMin;
-                if (targetTimeMin < scheduleStart || targetTimeMin >= scheduleEnd) isOutsideSchedule = true;
-            }
-            if (isOutsideSchedule) {
-                locationHtml = '<span style="color:#999;">Outside Schedule Hours</span>';
-                detailsHtml = esc(division) + '\'s schedule runs from <strong>' + esc(minutesToTimeLabel(divSlots[0].startMin)) + '</strong> to <strong>' + esc(minutesToTimeLabel(divSlots[divSlots.length - 1].endMin)) + '</strong>.';
-            } else if (divSlots.length === 0) {
-                locationHtml = '<span style="color:#999;">No Schedule Generated</span>';
-                detailsHtml = 'No schedule has been generated yet for this division.';
-            } else {
-                var leagueData = resolveLeagueData(division, slotIdx, targetTimeMin);
-                if (leagueData) {
-                    var leagueName = leagueData.leagueName;
-                    var team = resolveCamperTeam(camper, leagueName);
-                    if (!team) {
-                        locationHtml = '<span style="color:#d97706;font-weight:bold;font-size:1.4rem;">Leagues</span>';
-                        detailsHtml = esc(bunk) + ' is playing leagues at this time.<br><strong>' + esc(camperName) + '</strong> has no team assigned yet.';
-                    } else {
-                        var match = findTeamMatchup(leagueData, team);
-                        if (match) {
-                            locationHtml = '<span style="color:#059669;font-weight:bold;font-size:1.4rem;">' + esc(match.field) + ' - ' + esc(match.sport || leagueData.sport || 'League') + '</span>';
-                            detailsHtml = 'Team ' + esc(team);
-                        } else {
-                            locationHtml = '<span style="color:#d97706;font-weight:bold;font-size:1.4rem;">Leagues</span>';
-                            detailsHtml = '<strong>' + esc(leagueData.gameLabel || 'League Game') + '</strong> — Team <strong>' + esc(team) + '</strong> not found in matchups.' + buildAllMatchupsHtml(leagueData);
-                        }
-                    }
-                } else if (slotIdx < 0) {
-                    locationHtml = '<span style="color:#999;">Outside Schedule Hours</span>';
-                    detailsHtml = 'The selected time (' + esc(minutesToTimeLabel(targetTimeMin)) + ') is outside ' + esc(division) + '\'s scheduled hours.';
-                } else {
-                    locationHtml = '<span style="color:#999;">No Activity Assigned</span>';
-                    detailsHtml = esc(bunk) + ' does not have an activity assigned at this time — may be a gap in the schedule.';
+                if (targetTimeMin < scheduleStart || targetTimeMin >= scheduleEnd) {
+                    return Object.assign(base, { status: 'outside-hours', scheduleStart: scheduleStart, scheduleEnd: scheduleEnd });
                 }
+            } else {
+                return Object.assign(base, { status: 'no-schedule' });
             }
-        } else if (isLeagueAssignment(assignment)) {
+            var leagueData = resolveLeagueData(division, slotIdx, targetTimeMin);
+            if (leagueData) {
+                var leagueName = leagueData.leagueName;
+                var team = resolveCamperTeam(camper, leagueName);
+                if (!team) return Object.assign(base, { status: 'league-noteam' });
+                var match = findTeamMatchup(leagueData, team);
+                if (match) return Object.assign(base, { status: 'league-known', field: match.field, sport: match.sport || leagueData.sport || 'League', team: team });
+                return Object.assign(base, { status: 'league-nomatchup', gameLabel: leagueData.gameLabel || 'League Game', team: team });
+            }
+            if (slotIdx < 0) return Object.assign(base, { status: 'outside-hours', scheduleStart: null, scheduleEnd: null, targetOutsideDivisionWindow: true });
+            return Object.assign(base, { status: 'no-activity' });
+        }
+
+        if (isLeagueAssignment(assignment)) {
             var effectiveLeagueData = getEffectiveLeagueData(division, slotIdx, targetTimeMin, assignment);
             var lgName = (effectiveLeagueData && effectiveLeagueData.leagueName) || assignment._leagueName;
             var teamB2 = resolveCamperTeam(camper, lgName);
-            if (!teamB2) {
-                locationHtml = '<span style="color:#d97706;">Playing Leagues (Team Unknown)</span>';
-                detailsHtml = 'We know ' + esc(bunk) + ' is playing leagues, but <strong>' + esc(camperName) + '</strong> has no team assigned.';
-            } else {
-                var match2 = findTeamMatchup(effectiveLeagueData, teamB2);
-                if (match2) {
-                    locationHtml = '<span style="color:#059669;font-weight:bold;font-size:1.4rem;">' + esc(match2.field) + ' - ' + esc(match2.sport || (effectiveLeagueData && effectiveLeagueData.sport) || 'League') + '</span>';
-                    detailsHtml = 'Team ' + esc(teamB2);
-                } else {
-                    locationHtml = '<span style="color:#d97706;font-weight:bold;font-size:1.4rem;">Leagues</span>';
-                    detailsHtml = '<strong>' + esc((effectiveLeagueData && effectiveLeagueData.gameLabel) || 'League Game') + '</strong> — Team <strong>' + esc(teamB2) + '</strong> not found in matchups.' + buildAllMatchupsHtml(effectiveLeagueData);
-                }
-            }
+            if (!teamB2) return Object.assign(base, { status: 'league-noteam' });
+            var match2 = findTeamMatchup(effectiveLeagueData, teamB2);
+            if (match2) return Object.assign(base, { status: 'league-known', field: match2.field, sport: match2.sport || (effectiveLeagueData && effectiveLeagueData.sport) || 'League', team: teamB2 });
+            return Object.assign(base, { status: 'league-nomatchup', gameLabel: (effectiveLeagueData && effectiveLeagueData.gameLabel) || 'League Game', team: teamB2 });
+        }
+
+        var activityName = assignment._displayName || assignment.sport || assignment._activity || 'Activity';
+        var fieldName = (typeof assignment.field === 'object') ? assignment.field.name : assignment.field;
+        return Object.assign(base, { status: 'activity', activityName: activityName, field: fieldName });
+    }
+
+    // Turns a resolveCamperAt() result into one short, parent/staff-facing
+    // sentence — "he'll be playing leagues – baseball on Baseball Field 3",
+    // "he'll be having Arts & Crafts at Arts Cabin". Returns '' when there's
+    // genuinely nothing worth saying (outside schedule hours, no schedule
+    // generated, camper not found) — callers should just omit the sentence
+    // rather than force an awkward one.
+    function describeCamperAt(result) {
+        if (!result || !result.ok) return '';
+        switch (result.status) {
+            case 'league-known':
+                return "he'll be playing leagues – " + result.sport + ' on ' + result.field;
+            case 'league-noteam':
+                return "he'll be playing leagues (team not assigned yet)";
+            case 'league-nomatchup':
+                return "he'll be playing leagues – " + result.gameLabel;
+            case 'activity':
+                return "he'll be having " + result.activityName + (result.field ? ' at ' + result.field : '');
+            default:
+                return '';
+        }
+    }
+
+    function performSearch(nameQuery, timeValue) {
+        if (!nameQuery || !resultContainer) return;
+        var roster = getRoster();
+        var keys = Object.keys(roster);
+        var q = nameQuery.toLowerCase();
+        var exact = keys.filter(function (k) { return k.toLowerCase() === q; })[0];
+        var partial = keys.filter(function (k) { return k.toLowerCase().indexOf(q) >= 0; })[0];
+        var camperName = exact || partial;
+
+        resultContainer.style.display = 'block';
+        if (!camperName) {
+            resultContainer.replaceChildren();
+            var h3 = document.createElement('h3'); h3.style.cssText = 'color:red;margin:0;';
+            h3.textContent = 'Camper "' + nameQuery + '" not found.';
+            var p = document.createElement('p'); p.append('Make sure the camper has been added in ');
+            var strong = document.createElement('strong'); strong.textContent = 'Campistry Me';
+            p.append(strong, '.'); resultContainer.append(h3, p);
+            return;
+        }
+
+        var targetTimeMin, timeLabel;
+        if (timeValue === 'now' || timeValue === '') {
+            targetTimeMin = getCurrentTimeMinutes();
+            timeLabel = 'Right Now (' + minutesToTimeLabel(targetTimeMin) + ')';
         } else {
-            var activityName = assignment._displayName || assignment.sport || assignment._activity || 'Activity';
-            var fieldName = (typeof assignment.field === 'object') ? assignment.field.name : assignment.field;
-            locationHtml = '<span style="color:#0284c7;font-weight:bold;font-size:1.4rem;">' + esc(fieldName) + '</span>';
-            detailsHtml = 'Activity: <strong>' + esc(activityName) + '</strong>';
+            targetTimeMin = parseTypedTime(timeValue);
+            if (targetTimeMin < 0) {
+                resultContainer.innerHTML = '<h3 style="color:red;margin:0;">Couldn\'t understand "' + esc(timeValue) + '"</h3><p>Try a format like <strong>10:30 AM</strong> or <strong>2:15 PM</strong>.</p>';
+                return;
+            }
+            timeLabel = minutesToTimeLabel(targetTimeMin);
+        }
+
+        var result = resolveCamperAt(camperName, targetTimeMin);
+        var camper = result.camper, bunk = result.bunk, division = result.division;
+        var divSlots = (_schedule.divisionTimes || {})[division] || [];
+
+        var locationHtml = '', detailsHtml = '';
+        var timeContext = result.slotTimeLabel ? '<div style="font-size:.8rem;color:#0284c7;margin-top:2px;">' + esc(result.slotTimeLabel) + '</div>' : '';
+
+        switch (result.status) {
+            case 'outside-hours':
+                locationHtml = '<span style="color:#999;">Outside Schedule Hours</span>';
+                detailsHtml = divSlots.length > 0
+                    ? esc(division) + '\'s schedule runs from <strong>' + esc(minutesToTimeLabel(divSlots[0].startMin)) + '</strong> to <strong>' + esc(minutesToTimeLabel(divSlots[divSlots.length - 1].endMin)) + '</strong>.'
+                    : 'The selected time (' + esc(minutesToTimeLabel(targetTimeMin)) + ') is outside ' + esc(division) + '\'s scheduled hours.';
+                break;
+            case 'no-schedule':
+                locationHtml = '<span style="color:#999;">No Schedule Generated</span>';
+                detailsHtml = 'No schedule has been generated yet for this division.';
+                break;
+            case 'league-noteam':
+                locationHtml = '<span style="color:#d97706;font-weight:bold;font-size:1.4rem;">Leagues</span>';
+                detailsHtml = esc(bunk) + ' is playing leagues at this time.<br><strong>' + esc(camperName) + '</strong> has no team assigned yet.';
+                break;
+            case 'league-known':
+                locationHtml = '<span style="color:#059669;font-weight:bold;font-size:1.4rem;">' + esc(result.field) + ' - ' + esc(result.sport) + '</span>';
+                detailsHtml = 'Team ' + esc(result.team);
+                break;
+            case 'league-nomatchup':
+                locationHtml = '<span style="color:#d97706;font-weight:bold;font-size:1.4rem;">Leagues</span>';
+                detailsHtml = '<strong>' + esc(result.gameLabel) + '</strong> — Team <strong>' + esc(result.team) + '</strong> not found in matchups.';
+                break;
+            case 'no-activity':
+                locationHtml = '<span style="color:#999;">No Activity Assigned</span>';
+                detailsHtml = esc(bunk) + ' does not have an activity assigned at this time — may be a gap in the schedule.';
+                break;
+            case 'activity':
+                locationHtml = '<span style="color:#0284c7;font-weight:bold;font-size:1.4rem;">' + esc(result.field) + '</span>';
+                detailsHtml = 'Activity: <strong>' + esc(result.activityName) + '</strong>';
+                break;
         }
 
         resultContainer.innerHTML =
@@ -575,7 +619,13 @@
         getEffectiveLeagueData: getEffectiveLeagueData,
         resolveCamperTeam: resolveCamperTeam,
         bunkToDivision: bunkToDivision,
-        parseTypedTime: parseTypedTime
+        parseTypedTime: parseTypedTime,
+        // What is this camper doing at a given time (minutes since midnight)?
+        // Used by the late-arrival/early-pickup confirm flow in
+        // campistry_live.html to tell a parent/division-head what a camper
+        // will walk into — same resolution logic the search box uses.
+        resolveCamperAt: resolveCamperAt,
+        describeCamperAt: describeCamperAt
     };
 
     if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', init);
