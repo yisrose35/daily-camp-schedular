@@ -424,7 +424,8 @@
                 <p class="card-desc">What parents pick when they register — dates, tuition, capacity. The 1st Half and 2nd Half sessions stay in sync with the halves above automatically. A bundle is a combined price across two or more sessions (e.g. both halves at $2,000 each, but "Full Summer" bundled at $3,500).</p>
                 <div id="sessionsList" style="display:flex; flex-direction:column; gap:10px; margin-top:10px;"></div>
 
-                <div id="bundleEditForm" style="display:none; margin-top:16px; padding-top:16px; border-top:1px solid var(--slate-200);">
+                <div id="bundleEditForm" style="display:none; margin-top:16px; padding:14px 16px; border-radius:10px; background:#f5f3ff; border:1px solid #ddd6fe;">
+                    <h3 id="bundleFormTitle" style="margin:0 0 12px; font-size:0.9rem; font-weight:700; color:#5b21b6;">📦 Add Bundle</h3>
                     <div class="form-group">
                         <label for="bunName" style="font-size:0.82rem; font-weight:600; color:var(--slate-600); margin-bottom:4px; display:block;">Bundle Name</label>
                         <input type="text" id="bunName" placeholder="e.g., Full Summer" style="width:100%; padding:8px 10px; border-radius:8px; border:1px solid var(--slate-200); font-size:0.88rem;">
@@ -444,7 +445,8 @@
                     </div>
                 </div>
 
-                <div id="sessionEditForm" style="display:none; margin-top:16px; padding-top:16px; border-top:1px solid var(--slate-200);">
+                <div id="sessionEditForm" style="display:none; margin-top:16px; padding:14px 16px; border-radius:10px; background:var(--slate-50); border:1px solid var(--slate-200);">
+                    <h3 id="sessionFormTitle" style="margin:0 0 12px; font-size:0.9rem; font-weight:700; color:var(--slate-700);">Add Session</h3>
                     <div class="form-group">
                         <label for="sesName" style="font-size:0.82rem; font-weight:600; color:var(--slate-600); margin-bottom:4px; display:block;">Session Name</label>
                         <input type="text" id="sesName" placeholder="e.g., Summer 2026 — Full Season" style="width:100%; padding:8px 10px; border-radius:8px; border:1px solid var(--slate-200); font-size:0.88rem;">

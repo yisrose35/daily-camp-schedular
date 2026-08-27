@@ -1966,8 +1966,11 @@
             if (status0) { status0.textContent = 'Only camp owners can manage sessions.'; status0.style.color = '#dc2626'; }
             return;
         }
+        window.cancelBundleForm();
         _dashEditingSessionIdx = null;
         _dashFillSessionForm({});
+        var title = document.getElementById('sessionFormTitle');
+        if (title) title.textContent = 'Add Session';
         var form = document.getElementById('sessionEditForm');
         if (form) form.style.display = 'block';
         var status = document.getElementById('sessionFormStatus');
@@ -1975,8 +1978,11 @@
     };
 
     window.editSessionForm = function(idx) {
+        window.cancelBundleForm();
         _dashEditingSessionIdx = idx;
         _dashFillSessionForm(_dashSessions[idx] || {});
+        var title = document.getElementById('sessionFormTitle');
+        if (title) title.textContent = 'Edit Session';
         var form = document.getElementById('sessionEditForm');
         if (form) form.style.display = 'block';
         var status = document.getElementById('sessionFormStatus');
@@ -2121,10 +2127,13 @@
             if (status0) { status0.textContent = 'Add at least 2 sessions first — a bundle combines two or more.'; status0.style.color = '#dc2626'; }
             return;
         }
+        window.cancelSessionForm();
         _dashEditingBundleIdx = null;
         document.getElementById('bunName').value = '';
         document.getElementById('bunPrice').value = '';
         _dashRenderBundleSessionChecks([]);
+        var title = document.getElementById('bundleFormTitle');
+        if (title) title.textContent = '📦 Add Bundle';
         var form = document.getElementById('bundleEditForm');
         if (form) form.style.display = 'block';
         var status = document.getElementById('bundleFormStatus');
@@ -2134,10 +2143,13 @@
     window.editBundleForm = function(idx) {
         var b = _dashBundles[idx];
         if (!b) return;
+        window.cancelSessionForm();
         _dashEditingBundleIdx = idx;
         document.getElementById('bunName').value = b.name || '';
         document.getElementById('bunPrice').value = b.price || '';
         _dashRenderBundleSessionChecks(b.sessionIds || []);
+        var title = document.getElementById('bundleFormTitle');
+        if (title) title.textContent = '📦 Edit Bundle';
         var form = document.getElementById('bundleEditForm');
         if (form) form.style.display = 'block';
         var status = document.getElementById('bundleFormStatus');
