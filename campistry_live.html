@@ -282,6 +282,23 @@
 })();
 </script>
 <script>
+// pickup_time is stored raw as "HH:MM" 24-hour wall-clock (migration 064) —
+// this only reformats it for DISPLAY; parsing/resolution elsewhere still
+// uses the raw string via CampistryLiveLocator.parseTypedTime. Global (not
+// inside either IIFE below) so both the Parent Requests and Pickup Alerts
+// scripts can share it. Falls back to the raw string for anything that
+// isn't a clean "HH:MM" (already-formatted text, empty, garbage input).
+function _fmtTime12(hhmm){
+    if(!hhmm)return hhmm||'';
+    var m=/^(\d{1,2}):(\d{2})$/.exec(String(hhmm).trim());
+    if(!m)return hhmm;
+    var h=parseInt(m[1],10), min=m[2];
+    if(isNaN(h)||h<0||h>23)return hhmm;
+    var ampm=h>=12?'PM':'AM';
+    var h12=h%12; if(h12===0)h12=12;
+    return h12+':'+min+' '+ampm;
+}
+
 // ── Parent Requests bridge — reads directly from parent_pickup_requests ──────
 // (migrations 025 + 061). Cached locally under campistry_parent_requests_v1
 // so the page isn't blank while a fetch is in flight / offline.
@@ -346,7 +363,7 @@ var ParentRequests = (function(){
                     client.functions.invoke('send-push',{body:{
                         campId:campId, pref:'pickupAlert', staffEmails:captainEmails,
                         title:camperName+' is leaving early — mid-game',
-                        body:pickupTimeStr?('Pickup at '+pickupTimeStr):'',
+                        body:pickupTimeStr?('Pickup at '+_fmtTime12(pickupTimeStr)):'',
                         data:{page:'campistry_lite.html'}
                     }}).then(function(){},function(e){console.warn('[Live] league-captain push failed:',e&&e.message||e);});
                 },function(e){console.warn('[Live] league-captain pickup alert failed:',e&&e.message||e);});
@@ -530,7 +547,7 @@ var ParentRequests = (function(){
         var statusCls=r.status==='Pending'?'badge-warn':r.status==='Confirmed'?'badge-info':r.status==='Declined'?'badge-error':'badge-ok';
         var details=[];
         if(r.type==='late'){if(r.arrivedAt)details.push('Arrived: '+r.arrivedAt);if(r.reason)details.push(r.reason);}
-        else if(r.type==='early'){if(r.pickupTime)details.push('Pickup: '+r.pickupTime);if(r.pickupBy)details.push('By: '+r.pickupBy);}
+        else if(r.type==='early'){if(r.pickupTime)details.push('Pickup: '+_fmtTime12(r.pickupTime));if(r.pickupBy)details.push('By: '+r.pickupBy);}
         else if(r.type==='change'){if(r.newPickupPerson)details.push('New person: '+r.newPickupPerson);if(r.phone)details.push(r.phone);}
         else if(r.type==='friend'){if(r.friendName)details.push('Friend: '+r.friendName);if(r.friendParentName)details.push('Parent: '+r.friendParentName);}
         else if(r.type==='bus'){if(r.busChange)details.push(r.busChange);}
@@ -633,7 +650,7 @@ var ParentRequests = (function(){
                 db.client.functions.invoke('send-push',{body:{
                     campId:db.campId, pref:'pickupAlert', staffEmails:emails,
                     title:camperName+' is leaving early',
-                    body:camperName+' is getting picked up at '+(alert.pickup_time||'')+(alert.camper_bunk?' · '+alert.camper_bunk:'')+(sentence?' — '+sentence:''),
+                    body:camperName+' is getting picked up at '+(alert.pickup_time?_fmtTime12(alert.pickup_time):'')+(alert.camper_bunk?' · '+alert.camper_bunk:'')+(sentence?' — '+sentence:''),
                     data:{page:'campistry_lite.html'}
                 }}).then(function(r){
                     if(r&&r.error){console.warn('[Live] pickup alert push failed:',r.error.message||r.error);return;}
@@ -802,6 +819,18 @@ var ParentRequests = (function(){
     // Confirm follow-up push/note.
     _ensureSchedule();
 
+    // campStructure (needed to resolve bunk→division inside the schedule
+    // reader) frequently hasn't hydrated from cloud yet at page init — the
+    // eager _ensureSchedule() above can "succeed" against a stale/empty
+    // structure, so the confirm-flow's "📍 where they'll be" sentence works
+    // for a message that arrives live (structure has landed by then) but is
+    // missing after a fresh reload. Re-running once real data lands fixes
+    // it without the user needing to refresh.
+    window.addEventListener('campistry-cloud-hydrated', function(){
+        _scheduleReady=null; _sentenceCache={};
+        _ensureSchedule().then(function(){ refresh(); });
+    });
+
     return {renderMessages:renderMessages,renderChanges:renderChanges,
         confirmNow:confirmNow,hideRequest:hideRequest,deleteRequest:deleteRequest,
         startCompose:startCompose,cancelCompose:cancelCompose,useCanned:useCanned,sendCompose:sendCompose,
@@ -888,7 +917,7 @@ var PickupAlerts = (function(){
                     leagueTag+
                     '<span class="badge '+(allAcked?'badge-ok':'badge-warn')+'" style="margin-left:auto;">'+(allAcked?'All acknowledged':'Awaiting acknowledgment')+'</span>'+
                 '</div>'+
-                '<div style="font-size:.78rem;color:var(--slate-500);margin-top:4px;">Pickup at '+esc(a.pickup_time)+(a.camper_division?' · '+esc(a.camper_division):'')+'</div>'+
+                '<div style="font-size:.78rem;color:var(--slate-500);margin-top:4px;">Pickup at '+esc(_fmtTime12(a.pickup_time))+(a.camper_division?' · '+esc(a.camper_division):'')+'</div>'+
                 statusStripHtml(a.camper_name)+
             '</div></div>';
         }).join('');

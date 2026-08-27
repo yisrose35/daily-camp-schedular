@@ -313,17 +313,28 @@
     // genuinely nothing worth saying (outside schedule hours, no schedule
     // generated, camper not found) — callers should just omit the sentence
     // rather than force an awkward one.
+    // Roster gender is free text ('Male'/'Female'/'Non-binary'/'Other'/'') —
+    // only 'Male'/'Female' map to a gendered pronoun, everything else (including
+    // unset) falls back to singular "they" rather than guessing.
+    function _pronounFor(camper) {
+        var g = camper && camper.gender ? String(camper.gender).trim().toLowerCase() : '';
+        if (g === 'male') return "he'll";
+        if (g === 'female') return "she'll";
+        return "they'll";
+    }
+
     function describeCamperAt(result) {
         if (!result || !result.ok) return '';
+        var willBe = _pronounFor(result.camper);
         switch (result.status) {
             case 'league-known':
-                return "he'll be playing leagues – " + result.sport + ' on ' + result.field;
+                return willBe + ' be playing leagues – ' + result.sport + ' on ' + result.field;
             case 'league-noteam':
-                return "he'll be playing leagues (team not assigned yet)";
+                return willBe + ' be playing leagues (team not assigned yet)';
             case 'league-nomatchup':
-                return "he'll be playing leagues – " + result.gameLabel;
+                return willBe + ' be playing leagues – ' + result.gameLabel;
             case 'activity':
-                return "he'll be having " + result.activityName + (result.field ? ' at ' + result.field : '');
+                return willBe + ' be having ' + result.activityName + (result.field ? ' at ' + result.field : '');
             default:
                 return '';
         }
@@ -620,6 +631,7 @@
         resolveCamperTeam: resolveCamperTeam,
         bunkToDivision: bunkToDivision,
         parseTypedTime: parseTypedTime,
+        minutesToTimeLabel: minutesToTimeLabel,
         // What is this camper doing at a given time (minutes since midnight)?
         // Used by the late-arrival/early-pickup confirm flow in
         // campistry_live.html to tell a parent/division-head what a camper
@@ -630,4 +642,14 @@
 
     if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', init);
     else init();
+
+    // load() runs on page init, often before campStructure has actually
+    // hydrated from cloud (campistry_cloud_bootstrap.js's fetch is async and
+    // frequently still in flight at that point) — bunkToDivision built from
+    // an empty structure resolves everything via camper.division fallback
+    // only, and never gets corrected because the schedule fetch itself
+    // "succeeded" with stale/partial data. Re-running once real data lands
+    // fixes the grid and every schedule-lookup consumer (the confirm-flow
+    // sentences in campistry_live.html included) without needing a reload.
+    window.addEventListener('campistry-cloud-hydrated', function () { load(); });
 })();
