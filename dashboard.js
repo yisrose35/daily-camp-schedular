@@ -1527,6 +1527,21 @@
         return weeks;
     }
 
+    // Closed by default — a full week-by-week list is more detail than most
+    // owners need to see every time they open this page; the toggle state
+    // is kept in this module var (not re-read from anywhere) so it survives
+    // updateWeekPreview() re-rendering on every date field change without
+    // snapping shut on the user mid-edit.
+    var _weekPreviewOpen = false;
+
+    window._toggleWeekPreview = function() {
+        _weekPreviewOpen = !_weekPreviewOpen;
+        var body = document.getElementById('weekPreviewBody');
+        var chev = document.getElementById('weekPreviewChevron');
+        if (body) body.style.display = _weekPreviewOpen ? 'block' : 'none';
+        if (chev) chev.textContent = _weekPreviewOpen ? '▾' : '▸';
+    };
+
     function updateWeekPreview() {
         var startDate = document.getElementById('campStartDate')?.value;
         var endDate = document.getElementById('campEndDate')?.value;
@@ -1550,7 +1565,7 @@
             var parts = d.split('-');
             return parseInt(parts[1]) + '/' + parseInt(parts[2]);
         };
-        var html = '<strong style="color:var(--slate-700);">Week breakdown:</strong><br>';
+        var weeksHtml = '';
         var transitionShown = false;
         weeks.forEach(function(w) {
             var halfTag = '';
@@ -1558,16 +1573,21 @@
                 var isFirstHalf = w.end <= h1End;
                 var containsH2Start = w.start <= h2Start && w.end >= h2Start;
                 if (!transitionShown && containsH2Start) {
-                    html += '<span style="color:#d97706; font-weight:600;">Transition: ' + fmt(h1End) + ' – ' + fmt(h2Start) + '</span><br>';
+                    weeksHtml += '<span style="color:#d97706; font-weight:600;">Transition: ' + fmt(h1End) + ' – ' + fmt(h2Start) + '</span><br>';
                     transitionShown = true;
                 }
                 if (isFirstHalf) halfTag = ' <span style="color:#7C3AED; font-weight:600;">(1st half)</span>';
                 else halfTag = ' <span style="color:#2563EB; font-weight:600;">(2nd half)</span>';
             }
-            html += 'Week ' + w.week + ': ' + fmt(w.start) + ' – ' + fmt(w.end) + halfTag + '<br>';
+            weeksHtml += 'Week ' + w.week + ': ' + fmt(w.start) + ' – ' + fmt(w.end) + halfTag + '<br>';
         });
 
-        preview.innerHTML = html;
+        preview.innerHTML =
+            '<div style="cursor:pointer; user-select:none;" onclick="window._toggleWeekPreview()">' +
+                '<span id="weekPreviewChevron">' + (_weekPreviewOpen ? '▾' : '▸') + '</span> ' +
+                '<strong style="color:var(--slate-700);">Week breakdown (' + weeks.length + ' weeks)</strong>' +
+            '</div>' +
+            '<div id="weekPreviewBody" style="display:' + (_weekPreviewOpen ? 'block' : 'none') + '; margin-top:6px;">' + weeksHtml + '</div>';
         preview.style.display = 'block';
     }
 
@@ -1605,6 +1625,7 @@
             if (window.saveGlobalSettings) window.saveGlobalSettings('campDates', campDates);
             if (status) { status.textContent = 'Saved!'; status.style.color = '#059669'; setTimeout(function() { status.textContent = ''; }, 3000); }
             updateWeekPreview();
+            _dashSyncHalfSessions(startDate, h1End, h2Start, endDate);
         } catch (e) {
             console.error('Error saving camp dates:', e);
             if (status) { status.textContent = 'Error saving.'; status.style.color = '#dc2626'; }
@@ -1746,16 +1767,103 @@
 
     var _dashSessions = [];
     var _dashEditingSessionIdx = null;
+    var _dashBundles = [];
+    var _dashEditingBundleIdx = null;
+
+    function _dashGenId() {
+        return 's_' + Date.now().toString(36) + Math.random().toString(36).slice(2, 8);
+    }
+
+    function _dashSaveSessions() {
+        var gs = window.loadGlobalSettings ? (window.loadGlobalSettings() || {}) : {};
+        if (!gs.campistryMe) gs.campistryMe = {};
+        gs.campistryMe.sessions = _dashSessions;
+        if (window.saveGlobalSettings) window.saveGlobalSettings('campistryMe', gs.campistryMe);
+    }
+
+    function _dashSaveBundles() {
+        var gs = window.loadGlobalSettings ? (window.loadGlobalSettings() || {}) : {};
+        if (!gs.campistryMe) gs.campistryMe = {};
+        gs.campistryMe.sessionBundles = _dashBundles;
+        if (window.saveGlobalSettings) window.saveGlobalSettings('campistryMe', gs.campistryMe);
+    }
+
+    function _dashFormatDateRange(startDate, endDate) {
+        if (!startDate || !endDate) return '';
+        return new Date(startDate + 'T12:00:00').toLocaleDateString('en-US', { month: 'long', day: 'numeric' })
+            + ' – ' + new Date(endDate + 'T12:00:00').toLocaleDateString('en-US', { month: 'long', day: 'numeric', year: 'numeric' });
+    }
 
     function loadSessionsSection() {
         try {
             var gs = (typeof window.loadGlobalSettings === 'function') ? (window.loadGlobalSettings() || {}) : {};
             _dashSessions = (gs.campistryMe && gs.campistryMe.sessions) || [];
+            _dashBundles = (gs.campistryMe && gs.campistryMe.sessionBundles) || [];
+            // Backfill stable ids on sessions saved before bundles existed —
+            // bundles reference a session by id (array position isn't safe,
+            // it shifts on delete/reorder).
+            var idsAdded = false;
+            _dashSessions.forEach(function(s) { if (!s.id) { s.id = _dashGenId(); idsAdded = true; } });
+            if (idsAdded) _dashSaveSessions();
             renderSessionsList();
+            renderBundlesList();
             var form = document.getElementById('sessionEditForm');
             if (form) form.style.display = 'none';
+            var bform = document.getElementById('bundleEditForm');
+            if (bform) bform.style.display = 'none';
         } catch (e) {
             console.warn('Could not load sessions:', e);
+        }
+    }
+
+    // Keeps a "1st Half" and "2nd Half" session in sync with the Camp Dates
+    // halves — created the first time both boundary dates for that half are
+    // set, and just date-refreshed (name/price/everything else the owner
+    // may have customized left untouched) on every later save. Identified
+    // by autoKey rather than name, so renaming one doesn't create a
+    // duplicate or lose the sync.
+    function _dashSyncHalfSessions(startDate, h1End, h2Start, endDate) {
+        var halves = [
+            { key: 'half1', label: '1st Half', start: startDate, end: h1End },
+            { key: 'half2', label: '2nd Half', start: h2Start, end: endDate }
+        ];
+        var changed = false;
+        halves.forEach(function(h) {
+            if (!h.start || !h.end) return;
+            var existing = _dashSessions.find(function(s) { return s.autoKey === h.key; });
+            var dates = _dashFormatDateRange(h.start, h.end);
+            if (existing) {
+                if (existing.startDate !== h.start || existing.endDate !== h.end) {
+                    existing.startDate = h.start;
+                    existing.endDate = h.end;
+                    existing.dates = dates;
+                    changed = true;
+                }
+            } else {
+                _dashSessions.push({
+                    id: _dashGenId(),
+                    autoKey: h.key,
+                    name: h.label,
+                    startDate: h.start,
+                    endDate: h.end,
+                    dates: dates,
+                    capacity: 0,
+                    tuition: 0,
+                    earlyBird: 0,
+                    earlyBirdDeadline: '',
+                    siblingDiscount: 0,
+                    paymentPlan: 'full',
+                    depositAmount: 0,
+                    notes: '',
+                    registrationOpen: true
+                });
+                changed = true;
+            }
+        });
+        if (changed) {
+            _dashSaveSessions();
+            renderSessionsList();
+            renderBundlesList();
         }
     }
 
@@ -1763,26 +1871,38 @@
         var list = document.getElementById('sessionsList');
         if (!list) return;
         if (!_dashSessions.length) {
-            list.innerHTML = '<p style="color:var(--slate-400); font-size:0.85rem; text-align:center; padding:10px;">No sessions yet. Sessions are what parents pick when they register — add one to open registration.</p>';
+            list.innerHTML = '<p style="color:var(--slate-400); font-size:0.85rem; text-align:center; padding:10px;">No sessions yet — set your camp dates above to auto-create 1st/2nd Half sessions, or add one to open registration.</p>';
             return;
         }
         list.innerHTML = _dashSessions.map(function(s, i) {
             var isOpen = s.registrationOpen !== false;
             var html = '<div style="padding:12px 14px; border-radius:8px; border:1px solid ' + (isOpen ? 'var(--slate-200)' : '#fecaca') + '; background:' + (isOpen ? 'var(--slate-50)' : 'rgba(239,68,68,.04)') + ';">';
             html += '<div style="display:flex; justify-content:space-between; align-items:center; gap:8px;">';
-            html += '<span style="font-size:0.9rem; font-weight:700; color:var(--slate-800);">' + _dashEsc(s.name) + '</span>';
+            html += '<span style="font-size:0.9rem; font-weight:700; color:var(--slate-800);">' + _dashEsc(s.name) + (s.autoKey ? ' <span style="font-size:0.68rem; font-weight:600; color:var(--slate-400);">(synced to Camp Dates)</span>' : '') + '</span>';
             html += '<div style="display:flex; gap:6px; flex-shrink:0;">';
             html += '<button type="button" class="btn-secondary" style="padding:3px 10px; font-size:0.72rem;" onclick="editSessionForm(' + i + ')">Edit</button>';
             html += '<button type="button" class="btn-secondary" style="padding:3px 10px; font-size:0.72rem;' + (isOpen ? '' : ' color:#059669;') + '" onclick="toggleSessionRegistration(' + i + ')">' + (isOpen ? 'Close' : 'Open') + '</button>';
             html += '<button type="button" class="btn-secondary" style="padding:3px 10px; font-size:0.72rem; color:#dc2626;" onclick="deleteSessionEntry(' + i + ')">Delete</button>';
             html += '</div></div>';
             if (s.dates) html += '<div style="font-size:0.75rem; color:var(--slate-500); margin-top:4px;">📅 ' + _dashEsc(s.dates) + '</div>';
-            if (s.tuition) html += '<div style="font-size:0.82rem; font-weight:700; color:var(--slate-700); margin-top:4px;">$' + Number(s.tuition).toLocaleString() + (s.capacity ? ' · capacity ' + s.capacity : '') + '</div>';
-            html += '<div style="margin-top:4px; font-size:0.7rem; font-weight:700; color:' + (isOpen ? '#059669' : '#dc2626') + ';">' + (isOpen ? 'Registration Open' : 'Registration Closed') + '</div>';
+            html += '<div style="display:flex; align-items:center; gap:8px; margin-top:6px;">';
+            html += '<label style="font-size:0.78rem; color:var(--slate-500);">Price: $</label>';
+            html += '<input type="number" step="0.01" min="0" value="' + (s.tuition || '') + '" placeholder="0.00" style="width:100px; padding:4px 8px; border-radius:6px; border:1px solid var(--slate-200); font-size:0.82rem;" onchange="updateSessionPriceInline(' + i + ', this.value)">';
+            if (s.capacity) html += '<span style="font-size:0.75rem; color:var(--slate-400);">· capacity ' + s.capacity + '</span>';
+            html += '</div>';
+            html += '<div style="margin-top:6px; font-size:0.7rem; font-weight:700; color:' + (isOpen ? '#059669' : '#dc2626') + ';">' + (isOpen ? 'Registration Open' : 'Registration Closed') + '</div>';
             html += '</div>';
             return html;
         }).join('');
     }
+
+    window.updateSessionPriceInline = function(idx, value) {
+        if (isTeamMember) return;
+        var s = _dashSessions[idx];
+        if (!s) return;
+        s.tuition = parseFloat(value) || 0;
+        _dashSaveSessions();
+    };
 
     function _dashFillSessionForm(s) {
         document.getElementById('sesName').value = s.name || '';
@@ -1863,7 +1983,10 @@
             return;
         }
         var idx = _dashEditingSessionIdx;
+        var existing = (idx != null && _dashSessions[idx]) ? _dashSessions[idx] : null;
         var obj = {
+            id: existing ? existing.id : _dashGenId(),
+            autoKey: existing ? existing.autoKey : undefined,
             name: name,
             startDate: document.getElementById('sesStart').value || '',
             endDate: document.getElementById('sesEnd').value || '',
@@ -1876,21 +1999,18 @@
             paymentPlan: document.getElementById('sesPayPlan').value || 'full',
             depositAmount: parseFloat(document.getElementById('sesDeposit').value) || 0,
             notes: (document.getElementById('sesNotes').value || '').trim(),
-            registrationOpen: (idx != null && _dashSessions[idx]) ? (_dashSessions[idx].registrationOpen !== false) : true
+            registrationOpen: existing ? (existing.registrationOpen !== false) : true
         };
         if (!obj.dates && obj.startDate && obj.endDate) {
-            obj.dates = new Date(obj.startDate + 'T12:00:00').toLocaleDateString('en-US', { month: 'long', day: 'numeric' }) + ' – ' + new Date(obj.endDate + 'T12:00:00').toLocaleDateString('en-US', { month: 'long', day: 'numeric', year: 'numeric' });
+            obj.dates = _dashFormatDateRange(obj.startDate, obj.endDate);
         }
         try {
-            if (idx != null && _dashSessions[idx]) _dashSessions[idx] = obj;
+            if (existing) _dashSessions[idx] = obj;
             else _dashSessions.push(obj);
-            var gs = window.loadGlobalSettings ? (window.loadGlobalSettings() || {}) : {};
-            if (!gs.campistryMe) gs.campistryMe = {};
-            gs.campistryMe.sessions = _dashSessions;
-            if (window.saveGlobalSettings) window.saveGlobalSettings('campistryMe', gs.campistryMe);
+            _dashSaveSessions();
             renderSessionsList();
             window.cancelSessionForm();
-            if (status) { status.textContent = (idx != null ? 'Session updated.' : 'Session created.'); status.style.color = '#059669'; setTimeout(function() { status.textContent = ''; }, 3000); }
+            if (status) { status.textContent = (existing ? 'Session updated.' : 'Session created.'); status.style.color = '#059669'; setTimeout(function() { status.textContent = ''; }, 3000); }
         } catch (e) {
             console.error('Error saving session:', e);
             if (status) { status.textContent = 'Error saving.'; status.style.color = '#dc2626'; }
@@ -1903,10 +2023,7 @@
         if (!s) return;
         s.registrationOpen = s.registrationOpen === false;
         try {
-            var gs = window.loadGlobalSettings ? (window.loadGlobalSettings() || {}) : {};
-            if (!gs.campistryMe) gs.campistryMe = {};
-            gs.campistryMe.sessions = _dashSessions;
-            if (window.saveGlobalSettings) window.saveGlobalSettings('campistryMe', gs.campistryMe);
+            _dashSaveSessions();
             renderSessionsList();
         } catch (e) {
             console.error('Error toggling session registration:', e);
@@ -1917,16 +2034,156 @@
         if (isTeamMember) return;
         var s = _dashSessions[idx];
         if (!s) return;
-        if (!confirm('Delete session "' + s.name + '"?')) return;
+        var inBundles = _dashBundles.filter(function(b) { return (b.sessionIds || []).indexOf(s.id) >= 0; });
+        var warn = inBundles.length ? (' It\'s used in ' + inBundles.length + ' bundle' + (inBundles.length === 1 ? '' : 's') + ' (' + inBundles.map(function(b) { return b.name; }).join(', ') + ') — deleting it will remove it from ' + (inBundles.length === 1 ? 'that bundle' : 'those bundles') + ' too, and any bundle left with fewer than 2 sessions will be deleted.') : '';
+        if (!confirm('Delete session "' + s.name + '"?' + warn)) return;
         try {
             _dashSessions.splice(idx, 1);
-            var gs = window.loadGlobalSettings ? (window.loadGlobalSettings() || {}) : {};
-            if (!gs.campistryMe) gs.campistryMe = {};
-            gs.campistryMe.sessions = _dashSessions;
-            if (window.saveGlobalSettings) window.saveGlobalSettings('campistryMe', gs.campistryMe);
+            _dashSaveSessions();
+            if (inBundles.length) {
+                _dashBundles.forEach(function(b) {
+                    b.sessionIds = (b.sessionIds || []).filter(function(id) { return id !== s.id; });
+                });
+                _dashBundles = _dashBundles.filter(function(b) { return (b.sessionIds || []).length >= 2; });
+                _dashSaveBundles();
+                renderBundlesList();
+            }
             renderSessionsList();
         } catch (e) {
             console.error('Error deleting session:', e);
+        }
+    };
+
+    // ========================================
+    // BUNDLES — a combined price for 2+ sessions together (e.g. both
+    // halves at $2,000 each individually, but a "Full Summer" bundle of
+    // both at $3,500). References sessions by id, not array index, since
+    // indices shift on delete/reorder.
+    // ========================================
+
+    function renderBundlesList() {
+        var list = document.getElementById('bundlesList');
+        if (!list) return;
+        if (!_dashBundles.length) {
+            list.innerHTML = '<p style="color:var(--slate-400); font-size:0.85rem; text-align:center; padding:10px;">No bundles yet. Add one if a combination of sessions should cost less than paying for each separately.</p>';
+            return;
+        }
+        var sessionsById = {};
+        _dashSessions.forEach(function(s) { sessionsById[s.id] = s; });
+        list.innerHTML = _dashBundles.map(function(b, i) {
+            var names = (b.sessionIds || []).map(function(id) { return sessionsById[id] ? sessionsById[id].name : '(deleted session)'; });
+            var html = '<div style="padding:12px 14px; border-radius:8px; border:1px solid var(--slate-200); background:var(--slate-50);">';
+            html += '<div style="display:flex; justify-content:space-between; align-items:center; gap:8px;">';
+            html += '<span style="font-size:0.9rem; font-weight:700; color:var(--slate-800);">' + _dashEsc(b.name) + '</span>';
+            html += '<div style="display:flex; gap:6px; flex-shrink:0;">';
+            html += '<button type="button" class="btn-secondary" style="padding:3px 10px; font-size:0.72rem;" onclick="editBundleForm(' + i + ')">Edit</button>';
+            html += '<button type="button" class="btn-secondary" style="padding:3px 10px; font-size:0.72rem; color:#dc2626;" onclick="deleteBundleEntry(' + i + ')">Delete</button>';
+            html += '</div></div>';
+            html += '<div style="font-size:0.75rem; color:var(--slate-500); margin-top:4px;">' + names.map(_dashEsc).join(' + ') + '</div>';
+            html += '<div style="font-size:0.82rem; font-weight:700; color:var(--slate-700); margin-top:4px;">$' + Number(b.price || 0).toLocaleString() + '</div>';
+            html += '</div>';
+            return html;
+        }).join('');
+    }
+
+    function _dashRenderBundleSessionChecks(selectedIds) {
+        var wrap = document.getElementById('bunSessionChecks');
+        if (!wrap) return;
+        if (!_dashSessions.length) {
+            wrap.innerHTML = '<span style="font-size:0.8rem; color:var(--slate-400);">Add sessions above first.</span>';
+            return;
+        }
+        wrap.innerHTML = _dashSessions.map(function(s) {
+            var checked = selectedIds.indexOf(s.id) >= 0 ? ' checked' : '';
+            return '<label style="display:flex; align-items:center; gap:6px; font-size:0.85rem; color:var(--slate-700);">'
+                + '<input type="checkbox" value="' + _dashEsc(s.id) + '" class="bunSessionCheck"' + checked + '> ' + _dashEsc(s.name)
+                + '</label>';
+        }).join('');
+    }
+
+    window.addBundleForm = function() {
+        if (isTeamMember) return;
+        if (_dashSessions.length < 2) {
+            var status0 = document.getElementById('bundleFormStatus');
+            if (status0) { status0.textContent = 'Add at least 2 sessions first — a bundle combines two or more.'; status0.style.color = '#dc2626'; }
+            return;
+        }
+        _dashEditingBundleIdx = null;
+        document.getElementById('bunName').value = '';
+        document.getElementById('bunPrice').value = '';
+        _dashRenderBundleSessionChecks([]);
+        var form = document.getElementById('bundleEditForm');
+        if (form) form.style.display = 'block';
+        var status = document.getElementById('bundleFormStatus');
+        if (status) status.textContent = '';
+    };
+
+    window.editBundleForm = function(idx) {
+        var b = _dashBundles[idx];
+        if (!b) return;
+        _dashEditingBundleIdx = idx;
+        document.getElementById('bunName').value = b.name || '';
+        document.getElementById('bunPrice').value = b.price || '';
+        _dashRenderBundleSessionChecks(b.sessionIds || []);
+        var form = document.getElementById('bundleEditForm');
+        if (form) form.style.display = 'block';
+        var status = document.getElementById('bundleFormStatus');
+        if (status) status.textContent = '';
+    };
+
+    window.cancelBundleForm = function() {
+        var form = document.getElementById('bundleEditForm');
+        if (form) form.style.display = 'none';
+        _dashEditingBundleIdx = null;
+    };
+
+    window.saveBundleForm = function() {
+        var status = document.getElementById('bundleFormStatus');
+        if (isTeamMember) {
+            if (status) { status.textContent = 'Only camp owners can manage bundles.'; status.style.color = '#dc2626'; }
+            return;
+        }
+        var name = (document.getElementById('bunName').value || '').trim();
+        if (!name) {
+            if (status) { status.textContent = 'Enter a bundle name.'; status.style.color = '#dc2626'; }
+            return;
+        }
+        var sessionIds = Array.prototype.map.call(document.querySelectorAll('.bunSessionCheck:checked'), function(el) { return el.value; });
+        if (sessionIds.length < 2) {
+            if (status) { status.textContent = 'Select at least 2 sessions.'; status.style.color = '#dc2626'; }
+            return;
+        }
+        var idx = _dashEditingBundleIdx;
+        var obj = {
+            id: (idx != null && _dashBundles[idx]) ? _dashBundles[idx].id : _dashGenId(),
+            name: name,
+            sessionIds: sessionIds,
+            price: parseFloat(document.getElementById('bunPrice').value) || 0
+        };
+        try {
+            if (idx != null && _dashBundles[idx]) _dashBundles[idx] = obj;
+            else _dashBundles.push(obj);
+            _dashSaveBundles();
+            renderBundlesList();
+            window.cancelBundleForm();
+            if (status) { status.textContent = (idx != null ? 'Bundle updated.' : 'Bundle created.'); status.style.color = '#059669'; setTimeout(function() { status.textContent = ''; }, 3000); }
+        } catch (e) {
+            console.error('Error saving bundle:', e);
+            if (status) { status.textContent = 'Error saving.'; status.style.color = '#dc2626'; }
+        }
+    };
+
+    window.deleteBundleEntry = function(idx) {
+        if (isTeamMember) return;
+        var b = _dashBundles[idx];
+        if (!b) return;
+        if (!confirm('Delete bundle "' + b.name + '"?')) return;
+        try {
+            _dashBundles.splice(idx, 1);
+            _dashSaveBundles();
+            renderBundlesList();
+        } catch (e) {
+            console.error('Error deleting bundle:', e);
         }
     };
 
