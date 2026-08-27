@@ -388,14 +388,31 @@
         return { divisions: divisions, grades: Object.keys(grades), bunkGrade: bunkGrade, bunkDiv: bunkDiv };
     }
 
+    // Resolve one bunk's activity at a division-period index, mirroring
+    // performSearch()'s own fallback exactly: a LOT of assignment entries
+    // (leagues especially) don't carry their own _startMin/_endMin at all —
+    // their time is purely positional, entry i belongs to that division's
+    // period i (divisionTimes[division][i]). Reading only entries with an
+    // explicit _startMin (the previous version of this function) silently
+    // dropped every one of those — leagues, specialty leagues, anything
+    // stored index-aligned instead of self-timed — which is why the grid
+    // showed empty cells for periods that were actually scheduled.
+    function resolveGridEntry(bunkAssignments, idx) {
+        var a = bunkAssignments[idx];
+        if (!a) return null;
+        if (a.continuation) return null; // shown on the period that started it, not repeated
+        var isLg = isLeagueAssignment(a);
+        var name = isLg ? (a._gameLabel || 'League') : (a._displayName || a.sport || a._activity || 'Activity');
+        var field = (typeof a.field === 'object') ? (a.field && a.field.name) : a.field;
+        return { name: name, field: field || '' };
+    }
+
     // A real grid — bunks down the side, time periods across the top, one
-    // cell per bunk/period. Columns come from the union of distinct
-    // start/end windows actually present across the CURRENTLY FILTERED
-    // bunks, sorted chronologically — filtering to one division naturally
-    // gives a clean grid since that division's own periods line up; "All
-    // divisions" with mismatched period times will show more (sparser)
-    // columns, which is just an honest reflection of the underlying data,
-    // not a bug.
+    // cell per bunk/period. Columns come from each involved division's own
+    // divisionTimes (the camp's actual master period list), not from
+    // scattered per-entry timestamps — those can be missing or slightly
+    // trimmed (travel time, multi-period spans) and produced a column per
+    // near-duplicate window instead of one clean shared timeline.
     function renderScheduleGrid() {
         var body = document.getElementById('locScheduleBody');
         if (!body) return;
@@ -414,28 +431,45 @@
         if (!bunks.length) { body.innerHTML = '<div class="empty-state">No bunks match this filter, or no schedule has been generated for today.</div>'; return; }
         if (!_schedule || !Object.keys(_schedule.scheduleAssignments || {}).length) { body.innerHTML = '<div class="empty-state">No schedule generated for today yet.</div>'; return; }
 
-        // bunk -> [{startMin,endMin,name,field}], keyed for column lookup
-        var byBunk = {};
+        var divisionTimes = _schedule.divisionTimes || {};
+        var scheduleAssignments = _schedule.scheduleAssignments || {};
+
+        // Columns: the union of every involved division's own period
+        // windows, deduped by identical (startMin,endMin) — most camps run
+        // several divisions on the same shared blocks, so this naturally
+        // collapses to one clean timeline rather than one column per
+        // division.
+        var involvedDivisions = {};
+        bunks.forEach(function (b) { involvedDivisions[opts.bunkDiv[b]] = true; });
         var columnsByKey = {};
+        Object.keys(involvedDivisions).forEach(function (div) {
+            (divisionTimes[div] || []).forEach(function (slot) {
+                if (slot.startMin == null || slot.endMin == null) return;
+                columnsByKey[slot.startMin + '-' + slot.endMin] = { startMin: slot.startMin, endMin: slot.endMin };
+            });
+        });
+        var columns = Object.keys(columnsByKey).map(function (k) { return columnsByKey[k]; })
+            .sort(function (a, b) { return a.startMin - b.startMin; });
+
+        // byBunk[bunk][columnKey] = resolved cell, found by POSITION within
+        // that bunk's own division's period list (same convention
+        // performSearch relies on) — a column that isn't one of this bunk's
+        // own division's periods is correctly left blank, not searched for.
+        var byBunk = {};
         bunks.forEach(function (bunk) {
-            var entries = (_schedule.scheduleAssignments || {})[bunk] || [];
-            var rows = entries.filter(function (a) { return a && !a.continuation && a._startMin != null && a._endMin != null; });
+            var div = opts.bunkDiv[bunk];
+            var divSlots = divisionTimes[div] || [];
+            var bunkAssignments = scheduleAssignments[bunk] || [];
             var cells = {};
-            rows.forEach(function (a) {
-                var key = a._startMin + '-' + a._endMin;
-                columnsByKey[key] = { startMin: a._startMin, endMin: a._endMin };
-                var isLg = isLeagueAssignment(a);
-                var name = isLg ? (a._gameLabel || 'League') : (a._displayName || a.sport || a._activity || 'Activity');
-                var field = (typeof a.field === 'object') ? (a.field && a.field.name) : a.field;
-                cells[key] = { name: name, field: field || '' };
+            divSlots.forEach(function (slot, idx) {
+                if (slot.startMin == null || slot.endMin == null) return;
+                var cell = resolveGridEntry(bunkAssignments, idx);
+                if (cell) cells[slot.startMin + '-' + slot.endMin] = cell;
             });
             byBunk[bunk] = cells;
         });
 
-        var columns = Object.keys(columnsByKey).map(function (k) { return columnsByKey[k]; })
-            .sort(function (a, b) { return a.startMin - b.startMin; });
-
-        if (!columns.length) { body.innerHTML = '<div class="empty-state">No activities found for this filter today.</div>'; return; }
+        if (!columns.length) { body.innerHTML = '<div class="empty-state">No schedule times have been set up for this filter today.</div>'; return; }
 
         var html = '<div style="overflow-x:auto;"><table style="border-collapse:collapse;width:100%;font-size:.8rem;">' +
             '<thead><tr>' +
