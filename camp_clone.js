@@ -292,13 +292,10 @@
               '<div id="dcList" style="display:flex;flex-direction:column;gap:8px;max-height:420px;overflow:auto;"></div>' +
             '</div>';
 
-        var anchor = document.getElementById('camp-dates-section') ||
-                     document.getElementById('team-access-section');
-        if (anchor && anchor.parentNode) {
-            anchor.parentNode.insertBefore(section, anchor);
-        } else {
-            (document.querySelector('main') || document.body).appendChild(section);
-        }
+        // Always last on the page — this is a super-admin tool, not something
+        // that belongs competing for attention with the camp's own dashboard
+        // cards above it.
+        (document.querySelector('main') || document.body).appendChild(section);
 
         var statusEl = section.querySelector('#dcStatus');
         var listEl = section.querySelector('#dcList');
