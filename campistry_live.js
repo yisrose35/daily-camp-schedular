@@ -1124,6 +1124,7 @@ document.querySelectorAll('[data-qr]').forEach(function(el){
     // =========================================================================
     window.CampistryLive = {
         refresh,
+        renderEarlyPickups,
         toggleAttendance,
         toggleByEl,
         markAllPresent,
