@@ -3075,7 +3075,12 @@ function _loadMessages(){
             from:byMe?('You → '+m.to):'Camp Office',
             subject:m.subject||'(No subject)',
             preview:_parsed.clean.slice(0,80),
-            body:'<p>'+_parsed.clean.replace(/\n/g,'</p><p>')+'</p>',
+            // Plain text, not pre-wrapped HTML — openMsg() HTML-escapes this
+            // for XSS safety and relies on white-space:pre-wrap (not real <p>
+            // tags) to preserve line breaks. Wrapping it in literal <p> tags
+            // here meant the escape turned them into visible "<p>...</p>"
+            // text on screen instead of real paragraph markup.
+            body:_parsed.clean,
             _refs:_parsed.refs,
             date:_formatMsgDate(m.date),_rawDate:m.date,
             read:m.read||byMe,_storeId:m.id,_archived:!!m.archived
@@ -3085,7 +3090,7 @@ function _loadMessages(){
         messages.push({
             id:b.id,type:'announcement',from:'Camp — All Families',
             subject:b.subject||'(No subject)',preview:(b.body||'').slice(0,80),
-            body:'<p>'+(b.body||'').replace(/\n/g,'</p><p>')+'</p>',
+            body:b.body||'',
             date:_formatMsgDate(b.date),_rawDate:b.date,read:true
         });
     });
@@ -3095,7 +3100,7 @@ function _loadMessages(){
             messages.push({
                 id:n.id,type:'announcement',from:'Camp Update',
                 subject:n.subject||'(No subject)',preview:(n.body||'').slice(0,80),
-                body:'<p>'+(n.body||'').replace(/\n/g,'</p><p>')+'</p>',
+                body:n.body||'',
                 date:_formatMsgDate(n.date),_rawDate:n.date,read:true
             });
         });
