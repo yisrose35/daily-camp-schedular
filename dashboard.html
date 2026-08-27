@@ -126,18 +126,40 @@
                     <h2>
                         <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M18 8A6 6 0 0 0 6 8c0 7-3 9-3 9h18s-3-2-3-9"/><path d="M13.73 21a2 2 0 0 1-3.46 0"/></svg>
                         Notifications &amp; Reminders
+                        <span class="dash-notif-badge" id="dashNotifBadge" style="display:none;">0</span>
                     </h2>
-                    <button class="dash-notif-toggle" id="dashNotifToggle" onclick="toggleNotifications()" title="Collapse">
-                        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="18 15 12 9 6 15"/></svg>
-                    </button>
+                    <div class="dash-notif-header-tools">
+                        <button class="dash-notif-settings-btn" id="dashNotifSettingsBtn" onclick="openNotifSettings()" title="Notification settings">
+                            <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>
+                        </button>
+                        <button class="dash-notif-toggle" id="dashNotifToggle" onclick="toggleNotifications()" title="Expand">
+                            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="6 9 12 15 18 9"/></svg>
+                        </button>
+                    </div>
                 </div>
-                <div class="dash-notif-live-list" id="dashNotifLiveList" style="display:none">
-                    <!-- Live notifications (Link messages, Notes reminders) — populated by dashboard.js -->
-                </div>
-                <div class="dash-notif-list" id="dashNotifList">
-                    <!-- Populated by JS -->
+                <!-- Closed by default — the badge above carries the unread count so
+                     nothing important is missed without needing the panel open. -->
+                <div class="dash-notif-collapsible" id="dashNotifCollapsible" style="display:none;">
+                    <div class="dash-notif-live-list" id="dashNotifLiveList" style="display:none">
+                        <!-- Live notifications (Link messages, Notes reminders, schedule changes) — populated by dashboard.js -->
+                    </div>
+                    <div class="dash-notif-list" id="dashNotifList">
+                        <!-- Populated by JS -->
+                    </div>
                 </div>
             </section>
+
+            <!-- ===== NOTIFICATION SETTINGS MODAL ===== -->
+            <div class="notif-settings-overlay" id="notifSettingsOverlay" style="display:none;" onclick="if(event.target===this) closeNotifSettings()">
+                <div class="notif-settings-card">
+                    <h3>Notification Settings</h3>
+                    <p class="notif-settings-desc">Choose how each kind of notification behaves. <strong>Ignore</strong> hides it from the feed and badge count. <strong>Important</strong> flags it and sorts it to the top.</p>
+                    <div id="notifSettingsRows"><!-- populated by dashboard.js --></div>
+                    <div class="notif-settings-footer">
+                        <button class="btn-secondary" type="button" onclick="closeNotifSettings()">Close</button>
+                    </div>
+                </div>
+            </div>
 
             <!-- ===== BIRTHDAYS ===== -->
             <section class="dash-birthdays" id="dashBirthdays" style="display:none;">
@@ -766,13 +788,15 @@ if (window.location.protocol === 'file:') {
 
     <!-- ===== DASHBOARD WIDGETS (clock, weather, notifications, greeting) ===== -->
     <script>
-    // Notification collapse/expand toggle (global so onclick can reach it)
+    // Notification collapse/expand toggle (global so onclick can reach it).
+    // Closed by default — the badge next to the header carries the unread
+    // count, so nothing needs the panel open just to know something's there.
     function toggleNotifications() {
-        var list = document.getElementById('dashNotifList');
+        var body = document.getElementById('dashNotifCollapsible');
         var btn = document.getElementById('dashNotifToggle');
-        if (!list || !btn) return;
-        var collapsed = list.style.display === 'none';
-        list.style.display = collapsed ? 'flex' : 'none';
+        if (!body || !btn) return;
+        var collapsed = body.style.display === 'none';
+        body.style.display = collapsed ? 'flex' : 'none';
         btn.innerHTML = collapsed
             ? '<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="18 15 12 9 6 15"/></svg>'
             : '<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="6 9 12 15 18 9"/></svg>';
@@ -907,10 +931,19 @@ if (window.location.protocol === 'file:') {
             if (!B || !section || !list) return;
 
             if (_bdayPeople === null) _bdayPeople = _bdayReadPeople();
+            var feedsRow = document.querySelector('.dash-feeds-row');
             // Nobody has a date of birth on file — an empty card would just be
-            // noise, so the whole section stays hidden.
-            if (!_bdayPeople.length) { section.style.display = 'none'; return; }
+            // noise, so the whole section stays hidden. The feeds row's grid
+            // has two explicit fixed-width columns, so hiding this child alone
+            // still leaves its column reserved as blank space — collapse the
+            // row to one column too.
+            if (!_bdayPeople.length) {
+                section.style.display = 'none';
+                if (feedsRow) feedsRow.classList.add('dash-feeds-row--single');
+                return;
+            }
             section.style.display = '';
+            if (feedsRow) feedsRow.classList.remove('dash-feeds-row--single');
 
             var windowDays = parseInt((document.getElementById('dashBdayWindow') || {}).value, 10);
             if (!isFinite(windowDays)) windowDays = 30;

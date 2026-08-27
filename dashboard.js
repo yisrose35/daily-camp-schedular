@@ -2213,21 +2213,52 @@
     };
 
     // ========================================
-    // LIVE NOTIFICATIONS (Link messages, Notes reminders)
+    // LIVE NOTIFICATIONS (Link messages, Notes reminders, schedule changes)
     // Reads from the `notifications` table (see migrations/056_notifications.sql
     // + NOTIFICATIONS_SETUP.md) and renders into a dedicated list above the
     // existing static/hardcoded notifications built by dashboard.html's own
     // inline buildNotifications() — the two are independent, this only ever
     // touches #dashNotifLiveList.
+    //
+    // Three writers feed the shared `notifications` table with two different
+    // shapes: the source-based one (056) for link_message/notes_reminder —
+    // camp-wide, source_id-addressable, read state via notification_reads —
+    // and the legacy hand-created one (pre-056, still used by
+    // post_edit_system.js's schedule-conflict notices) — per-user via
+    // user_id/type/read, source is NULL on those rows. send-broadcast also
+    // writes rows with source='broadcast_fallback', but purely as an
+    // idempotency ledger (has it already sent this recipient this event) —
+    // those were never meant to be shown to anyone and are filtered out here.
+    //
+    // Preferences (ignore/notify/important per category) are per-BROWSER —
+    // stored in localStorage, same convention as this app's other
+    // client-only dismissed-suggestion state (e.g.
+    // campistry_dismissed_fam_suggestions) — not synced across devices.
     // ========================================
 
     var _notifChannel = null;
     var _notifPollTimer = null;
     var _notifIcons = {
         link_message: '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>',
-        notes_reminder: '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>'
+        notes_reminder: '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>',
+        schedule_conflict: '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 9v4"/><path d="M10.29 3.86 1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"/><path d="M12 17h.01"/></svg>'
     };
-    var _notifColors = { link_message: 'var(--link-color, #2A7A35)', notes_reminder: 'var(--notes-color, #C4891A)' };
+    var _notifColors = { link_message: 'var(--link-color, #2A7A35)', notes_reminder: 'var(--notes-color, #C4891A)', schedule_conflict: '#D97706' };
+    var NOTIF_CATEGORY_META = {
+        link_message:      { label: 'Parent Messages',  desc: 'A parent sends you a message from Campistry Link.' },
+        notes_reminder:    { label: 'Notes Reminders',  desc: 'A reminder you set in Campistry Notes comes due.' },
+        schedule_conflict: { label: 'Schedule Changes',  desc: 'Another scheduler edits or overrides a slot you’re also scheduling.' }
+    };
+    var NOTIF_PREFS_KEY = 'campistry_notif_prefs_v1';
+    var NOTIF_PREFS_DEFAULT = { link_message: 'notify', notes_reminder: 'notify', schedule_conflict: 'notify' };
+
+    function _notifPrefs() {
+        try { return Object.assign({}, NOTIF_PREFS_DEFAULT, JSON.parse(localStorage.getItem(NOTIF_PREFS_KEY) || '{}')); }
+        catch (e) { return Object.assign({}, NOTIF_PREFS_DEFAULT); }
+    }
+    function _notifSavePrefs(p) {
+        try { localStorage.setItem(NOTIF_PREFS_KEY, JSON.stringify(p)); } catch (e) {}
+    }
 
     function _notifCampId() {
         return localStorage.getItem('campistry_camp_id') || localStorage.getItem('campistry_user_id') || (currentUser && currentUser.id);
@@ -2244,6 +2275,15 @@
         return Math.round(diffHr / 24) + 'd ago';
     }
 
+    // Which category a row belongs to — source-based rows map 1:1 on
+    // `source`; legacy (source IS NULL) rows map off their `type` column.
+    function _notifCategoryOf(n) {
+        if (n.source === 'link_message') return 'link_message';
+        if (n.source === 'notes_reminder') return 'notes_reminder';
+        if (n.source == null && (n.type === 'schedule_conflict' || n.type === 'schedule_bypassed')) return 'schedule_conflict';
+        return n.source || null;
+    }
+
     async function loadLiveNotifications() {
         var wrap = document.getElementById('dashNotifLiveList');
         if (!wrap || !window.supabase) return;
@@ -2251,33 +2291,102 @@
         if (!campId) return;
         try {
             var [notifRes, readsRes] = await Promise.all([
-                window.supabase.from('notifications').select('id, source, title, body, link_target, created_at')
-                    .eq('camp_id', campId).order('created_at', { ascending: false }).limit(20),
+                window.supabase.from('notifications')
+                    .select('id, source, source_id, title, body, message, link_target, created_at, type, user_id, metadata, read')
+                    .eq('camp_id', campId).order('created_at', { ascending: false }).limit(40),
                 currentUser ? window.supabase.from('notification_reads').select('notification_id').eq('user_id', currentUser.id) : Promise.resolve({ data: [] })
             ]);
             if (notifRes.error) { console.warn('[Dashboard] loadLiveNotifications:', notifRes.error.message); return; }
             var readIds = new Set((readsRes.data || []).map(function(r) { return r.notification_id; }));
-            renderLiveNotifications(notifRes.data || [], readIds);
+            var myUid = currentUser && currentUser.id;
+            // broadcast_fallback rows are send-broadcast's own idempotency
+            // ledger, never meant to be shown. Legacy (source IS NULL) rows
+            // are addressed per-user via user_id — 056's SELECT policy widened
+            // read access to the whole camp, so without this filter every
+            // staff member would see every OTHER scheduler's historical
+            // conflict notices too.
+            var rows = (notifRes.data || []).filter(function(n) {
+                if (n.source === 'broadcast_fallback') return false;
+                if (n.source == null) return n.user_id === myUid;
+                return true;
+            });
+            renderLiveNotifications(rows, readIds);
         } catch (e) {
             console.warn('[Dashboard] loadLiveNotifications failed:', e);
         }
     }
 
+    function _notifBuildLinkTarget(n, category) {
+        if (n.link_target) return n.link_target;
+        return null;
+    }
+
+    function _notifBodyText(n, category) {
+        if (category === 'schedule_conflict' && n.metadata && n.metadata.dateKey) {
+            return (n.message || n.body || '') || ('Check the schedule for ' + n.metadata.dateKey + ' in Flow.');
+        }
+        return n.body || n.message || '';
+    }
+
+    function _updateNotifBadge(count) {
+        var badge = document.getElementById('dashNotifBadge');
+        if (!badge) return;
+        if (count > 0) { badge.style.display = ''; badge.textContent = count > 99 ? '99+' : String(count); }
+        else { badge.style.display = 'none'; }
+    }
+
     function renderLiveNotifications(notifs, readIds) {
         var wrap = document.getElementById('dashNotifLiveList');
         if (!wrap) return;
-        if (!notifs.length) { wrap.style.display = 'none'; wrap.innerHTML = ''; return; }
+        var prefs = _notifPrefs();
+
+        var visible = [];
+        var unreadCount = 0;
+        notifs.forEach(function(n) {
+            var category = _notifCategoryOf(n);
+            var pref = category ? (prefs[category] || 'notify') : 'notify';
+            if (pref === 'ignore') return;
+            var unread = n.source == null ? (n.read !== true) : !readIds.has(n.id);
+            if (unread) unreadCount++;
+            visible.push({ n: n, category: category, important: pref === 'important', unread: unread });
+        });
+        // Important first, then chronological (rows already arrive newest-first).
+        visible.sort(function(a, b) { return (b.important - a.important); });
+
+        _updateNotifBadge(unreadCount);
+
+        if (!visible.length) { wrap.style.display = 'none'; wrap.innerHTML = ''; return; }
         wrap.style.display = 'block';
-        wrap.innerHTML = notifs.map(function(n) {
-            var unread = !readIds.has(n.id);
-            var icon = _notifIcons[n.source] || _notifIcons.link_message;
-            var color = _notifColors[n.source] || 'var(--camp-green)';
-            var unreadDot = unread ? '<span style="display:inline-block;width:7px;height:7px;border-radius:50%;background:' + color + ';margin-right:6px;vertical-align:middle"></span>' : '';
-            return '<div class="dash-notif-item dash-notif-live' + (unread ? ' dash-notif-unread' : '') + '" style="border-left:3px solid ' + color + ';cursor:pointer" onclick="markNotificationRead(\'' + n.id + '\', ' + (n.link_target ? '\'' + n.link_target.replace(/'/g, "\\'") + '\'' : 'null') + ')">'
+        wrap.innerHTML = visible.map(function(v) {
+            var n = v.n, category = v.category;
+            var icon = _notifIcons[category] || _notifIcons.link_message;
+            var color = _notifColors[category] || 'var(--camp-green)';
+            var unreadDot = v.unread ? '<span style="display:inline-block;width:7px;height:7px;border-radius:50%;background:' + color + ';margin-right:6px;vertical-align:middle"></span>' : '';
+            var importantTag = v.important ? '<span class="dash-notif-important-tag">Important</span>' : '';
+            var target = _notifBuildLinkTarget(n, category);
+            var bodyText = _notifBodyText(n, category);
+            var canReply = category === 'link_message' && n.source_id;
+
+            var card = '<div class="dash-notif-item dash-notif-live' + (v.unread ? ' dash-notif-unread' : '') + '" style="border-left:3px solid ' + color + ';" id="notifCard_' + n.id + '">'
                 + '<div class="dash-notif-icon" style="color:' + color + '">' + icon + '</div>'
-                + '<div class="dash-notif-body"><p>' + unreadDot + _dashEsc(n.title) + (n.body ? '<br><span style="color:var(--slate-400);font-weight:400;">' + _dashEsc(n.body) + '</span>' : '') + '</p>'
-                + '<span class="dash-notif-time">' + _notifRelTime(n.created_at) + '</span></div>'
+                + '<div class="dash-notif-body">'
+                + '<p style="cursor:' + (target ? 'pointer' : 'default') + ';" onclick="markNotificationRead(\'' + n.id + '\', ' + (target ? '\'' + target.replace(/'/g, "\\'") + '\'' : 'null') + ')">' + unreadDot + _dashEsc(n.title) + importantTag
+                + (bodyText ? '<br><span style="color:var(--slate-400);font-weight:400;">' + _dashEsc(bodyText) + '</span>' : '') + '</p>'
+                + '<span class="dash-notif-time">' + _notifRelTime(n.created_at) + '</span>';
+            if (canReply) {
+                card += '<div><button type="button" class="dash-notif-reply-btn" onclick="toggleNotifQuickReply(\'' + n.id + '\')">Reply</button></div>'
+                    + '<div class="dash-notif-reply-box" id="notifReply_' + n.id + '" style="display:none;">'
+                    + '<textarea id="notifReplyText_' + n.id + '" placeholder="Type a quick reply…"></textarea>'
+                    + '<div class="dash-notif-reply-actions">'
+                    + '<button type="button" class="dash-notif-reply-send" onclick="sendNotifQuickReply(\'' + n.id + '\', \'' + (n.source_id || '') + '\')">Send</button>'
+                    + '<button type="button" class="dash-notif-reply-cancel" onclick="toggleNotifQuickReply(\'' + n.id + '\')">Cancel</button>'
+                    + '</div><span class="dash-notif-reply-status" id="notifReplyStatus_' + n.id + '"></span></div>';
+            }
+            card += '</div>'
+                + '<button type="button" class="dash-notif-dismiss" title="Dismiss" onclick="dismissNotification(\'' + n.id + '\', ' + (n.source == null ? 'true' : 'false') + ')">'
+                + '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg></button>'
                 + '</div>';
+            return card;
         }).join('');
     }
 
@@ -2292,6 +2401,118 @@
         }
         if (target) window.location.href = target;
         else loadLiveNotifications();
+    };
+
+    // Removes a notification from view for good. Source-based rows (camp-
+    // wide) use the notification_reads join table — the row itself has no
+    // owner to mutate. Legacy per-user rows (source IS NULL) are mutated
+    // directly via their own `read` column, the same mechanism
+    // integration_hooks.js's conflict-notify receiver already uses (RLS:
+    // notifications_update allows user_id = auth.uid()).
+    window.dismissNotification = async function(notifId, isLegacy) {
+        var card = document.getElementById('notifCard_' + notifId);
+        if (card) card.remove();
+        try {
+            if (!window.supabase) return;
+            if (isLegacy) {
+                await window.supabase.from('notifications').update({ read: true }).eq('id', notifId);
+            } else if (currentUser) {
+                await window.supabase.from('notification_reads')
+                    .upsert({ notification_id: notifId, user_id: currentUser.id }, { onConflict: 'notification_id,user_id', ignoreDuplicates: true });
+            }
+        } catch (e) {
+            console.warn('[Dashboard] dismissNotification failed:', e);
+        }
+        loadLiveNotifications();
+    };
+
+    window.toggleNotifQuickReply = function(notifId) {
+        var box = document.getElementById('notifReply_' + notifId);
+        if (!box) return;
+        box.style.display = box.style.display === 'none' ? 'flex' : 'none';
+        if (box.style.display === 'flex') {
+            var ta = document.getElementById('notifReplyText_' + notifId);
+            if (ta) ta.focus();
+        }
+    };
+
+    // Quick reply from the Dashboard card — mirrors campistry_link_data.js's
+    // _insertMessageRow (the same direct link_messages insert the full Link
+    // admin composer uses), just without loading that whole app's state.
+    // Looks the parent's thread/name/email up fresh from the source message
+    // rather than trusting anything embedded in the notification row itself.
+    window.sendNotifQuickReply = async function(notifId, sourceMsgId) {
+        var status = document.getElementById('notifReplyStatus_' + notifId);
+        var ta = document.getElementById('notifReplyText_' + notifId);
+        var body = (ta && ta.value || '').trim();
+        if (!body) { if (status) status.textContent = 'Enter a reply.'; return; }
+        if (!sourceMsgId || !window.supabase) { if (status) status.textContent = 'Cannot reply to this message.'; return; }
+        if (status) status.textContent = 'Sending…';
+        try {
+            var srcRes = await window.supabase.from('link_messages')
+                .select('thread_id, parent_name, parent_email, camper_name').eq('id', sourceMsgId).single();
+            if (srcRes.error || !srcRes.data || !srcRes.data.parent_email) {
+                if (status) status.textContent = 'Could not find this conversation.';
+                return;
+            }
+            var src = srcRes.data;
+            var campId = _notifCampId();
+            var insRes = await window.supabase.from('link_messages').insert({
+                camp_id: campId, thread_id: src.thread_id, direction: 'out',
+                parent_name: src.parent_name || '', parent_email: src.parent_email,
+                camper_name: src.camper_name || null,
+                subject: 'Reply from Camp', body: body, channels: ['app'], read: false
+            });
+            if (insRes.error) { if (status) status.textContent = 'Could not send — try again.'; return; }
+            // Best-effort push — never block the reply itself on this.
+            if (window.supabase.functions) {
+                var preview = body.length > 140 ? body.slice(0, 139) + '...' : body;
+                window.supabase.functions.invoke('send-push', {
+                    body: { campId: campId, pref: 'notifyMessages', email: src.parent_email, title: 'Reply from Camp', body: preview, data: { page: 'messages' } }
+                }).catch(function() {});
+            }
+            if (status) status.textContent = 'Sent!';
+            if (typeof dnToast === 'function') dnToast('Reply sent to ' + (src.parent_name || 'parent'));
+            window.dismissNotification(notifId, false);
+        } catch (e) {
+            console.warn('[Dashboard] sendNotifQuickReply failed:', e);
+            if (status) status.textContent = 'Could not send — try again.';
+        }
+    };
+
+    // ── NOTIFICATION SETTINGS (ignore / notify / important, per category) ──
+    window.openNotifSettings = function() {
+        var rowsWrap = document.getElementById('notifSettingsRows');
+        var overlay = document.getElementById('notifSettingsOverlay');
+        if (!rowsWrap || !overlay) return;
+        var prefs = _notifPrefs();
+        var options = [['ignore', 'Ignore'], ['notify', 'Notify'], ['important', 'Important']];
+        rowsWrap.innerHTML = Object.keys(NOTIF_CATEGORY_META).map(function(cat) {
+            var meta = NOTIF_CATEGORY_META[cat];
+            var current = prefs[cat] || 'notify';
+            var buttons = options.map(function(o) {
+                return '<button type="button" data-cat="' + cat + '" data-val="' + o[0] + '" class="' + (current === o[0] ? 'active' : '') + '" onclick="_notifSettingsPick(this)">' + o[1] + '</button>';
+            }).join('');
+            return '<div class="notif-settings-row">'
+                + '<span class="notif-settings-row-label">' + _dashEsc(meta.label) + '</span>'
+                + '<span class="notif-settings-row-desc">' + _dashEsc(meta.desc) + '</span>'
+                + '<div class="notif-settings-seg">' + buttons + '</div>'
+                + '</div>';
+        }).join('');
+        overlay.style.display = 'flex';
+    };
+    window.closeNotifSettings = function() {
+        var overlay = document.getElementById('notifSettingsOverlay');
+        if (overlay) overlay.style.display = 'none';
+    };
+    window._notifSettingsPick = function(btn) {
+        var cat = btn.getAttribute('data-cat'), val = btn.getAttribute('data-val');
+        var prefs = _notifPrefs();
+        prefs[cat] = val;
+        _notifSavePrefs(prefs);
+        var seg = btn.parentElement;
+        Array.prototype.forEach.call(seg.querySelectorAll('button'), function(b) { b.classList.toggle('active', b === btn); });
+        loadLiveNotifications();
     };
 
     function subscribeToLiveNotifications() {
