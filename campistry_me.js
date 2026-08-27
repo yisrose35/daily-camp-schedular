@@ -2649,16 +2649,6 @@ function _sortedGrades(divData){
     }
     return entries;
 }
-function moveDivision(name,dir){
-    var keys=_sortedDivisions().map(function(e){return e[0]});
-    var i=keys.indexOf(name);
-    if(i<0)return;
-    var j=i+dir;
-    if(j<0||j>=keys.length)return;
-    var tmp=keys[i];keys[i]=keys[j];keys[j]=tmp;
-    _saveDivisionOrder(keys);
-    render(curPage);
-}
 function _commitStructureReorder(){
     // Read DOM and rebuild structure objects in the new order.
     var listEl=document.getElementById('meDivList');
@@ -2724,8 +2714,6 @@ function renderStructure(){
             var grades=_sortedGrades(dd);
             var bCt=grades.reduce(function(s,e){return s+(e[1].bunks||[]).length},0);
             var col=dd.color||'#94A3B8';
-            var upDis=ix===0?' disabled':'';
-            var dnDis=ix===divs.length-1?' disabled':'';
             var rollup=_divisionHeadRollup(dn,grades);
             var dHeadChip=rollup.heads.length
                 ?rollup.heads.map(function(s){return esc(s.name);}).join(', ')
@@ -2735,7 +2723,7 @@ function renderStructure(){
                 :' style="cursor:default"';
             var bodyId='structBody'+ix;
             var openKey='struct_'+dn;
-            var isOpen=Object.prototype.hasOwnProperty.call(_accOpenState,openKey)?_accOpenState[openKey]:true;
+            var isOpen=Object.prototype.hasOwnProperty.call(_accOpenState,openKey)?_accOpenState[openKey]:false;
             h+='<div class="me-card me-div-card" data-div="'+je(dn)+'" style="margin-bottom:10px">'
                 +'<div class="me-card-head"><div style="display:flex;align-items:center;gap:8px;cursor:pointer;min-width:0" onclick="CampistryMe._toggleAcc(\''+bodyId+'\',\''+je(openKey)+'\')" title="'+(isOpen?'Collapse':'Expand')+' this division">'
                 +'<span class="me-grip me-div-grip" title="Drag to reorder division" onclick="event.stopPropagation()" style="cursor:grab;color:var(--s400);font-size:1rem;line-height:1;padding:0 4px;user-select:none">⋮⋮</span>'
@@ -2743,8 +2731,6 @@ function renderStructure(){
                 +'<div style="width:10px;height:10px;border-radius:3px;background:'+col+';flex-shrink:0"></div><h3 style="margin:0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">'+esc(dn)+'</h3>'
                 +'<span style="display:flex;gap:4px;flex-shrink:0">'+bdg(grades.length+' grade'+(grades.length!==1?'s':''),'gray')+bdg(bCt+' bunk'+(bCt!==1?'s':''),'gray')+'</span>'
                 +'</div><div style="display:flex;gap:4px;align-items:center;flex-shrink:0">'
-                +'<button class="me-btn me-btn--ghost me-btn--sm" title="Move up"'+upDis+' onclick="CampistryMe.moveDivision(\''+je(dn)+'\',-1)" style="padding:4px 8px">↑</button>'
-                +'<button class="me-btn me-btn--ghost me-btn--sm" title="Move down"'+dnDis+' onclick="CampistryMe.moveDivision(\''+je(dn)+'\',1)" style="padding:4px 8px">↓</button>'
                 +'<button class="me-btn me-btn--ghost me-btn--sm" onclick="CampistryMe.editDiv(\''+je(dn)+'\')">Edit</button>'
                 +'<button class="me-btn me-btn--danger me-btn--sm" onclick="CampistryMe.deleteDiv(\''+je(dn)+'\')">Delete</button>'
                 +'</div></div>'
@@ -12877,7 +12863,7 @@ window.CampistryMe={
     setPplStaffSubTab:setPplStaffSubTab,viewStaffMember:viewStaffMember,openEditStaffModal:openEditStaffModal,saveStaffMember:saveStaffMember,
     acceptFamilySuggestion:acceptFamilySuggestion,dismissFamilySuggestion:dismissFamilySuggestion,acceptAddToFamily:acceptAddToFamily,
     mergeFamilies:mergeFamilies,dismissMergeFamilies:dismissMergeFamilies,
-    addDiv:function(){openDivForm(null)},editDiv:function(n){openDivForm(n)},deleteDiv:deleteDiv,moveDivision:moveDivision,
+    addDiv:function(){openDivForm(null)},editDiv:function(n){openDivForm(n)},deleteDiv:deleteDiv,
     openCsv:function(){openModal('csvModal')},downloadTemplate:downloadTemplate,
     _updateBillingBulkBar:_updateBillingBulkBar,bulkExportBilling:bulkExportBilling,
     setRosterPage:setRosterPage,setBillingPage:setBillingPage,setAnalyticsInvoicePage:setAnalyticsInvoicePage,setAnalyticsPaymentPage:setAnalyticsPaymentPage,
