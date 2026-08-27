@@ -2720,10 +2720,13 @@ function renderStructure(){
             var col=dd.color||'#94A3B8';
             var upDis=ix===0?' disabled':'';
             var dnDis=ix===divs.length-1?' disabled':'';
-            var dHeads=divisionHeads[dn]||[];
-            var dHeadChip=dHeads.length
-                ?dHeads.map(function(s){return esc(s.name);}).join(', ')
-                :'+ Assign division head';
+            var rollup=_divisionHeadRollup(dn,grades);
+            var dHeadChip=rollup.heads.length
+                ?rollup.heads.map(function(s){return esc(s.name);}).join(', ')
+                :(rollup.editable?'+ Assign division head':(rollup.mixed?'Set per grade below':'+ Assign a head per grade below'));
+            var dHeadAttrs=rollup.editable
+                ?' onclick="CampistryMe.openDivisionHeadModal(\''+je(dn)+'\')" style="cursor:pointer"'
+                :' style="cursor:default"';
             h+='<div class="me-card me-div-card" data-div="'+je(dn)+'" style="margin-bottom:10px"><div class="me-card-head"><div style="display:flex;align-items:center;gap:8px">'
                 +'<span class="me-grip me-div-grip" title="Drag to reorder division" style="cursor:grab;color:var(--s400);font-size:1rem;line-height:1;padding:0 4px;user-select:none">⋮⋮</span>'
                 +'<div style="width:10px;height:10px;border-radius:3px;background:'+col+'"></div><h3 style="margin:0">'+esc(dn)+'</h3><span style="font-size:.75rem;color:var(--s400)">'+grades.length+' grades · '+bCt+' bunks</span></div><div style="display:flex;gap:4px;align-items:center">'
@@ -2732,9 +2735,9 @@ function renderStructure(){
                 +'<button class="me-btn me-btn--ghost me-btn--sm" onclick="CampistryMe.editDiv(\''+je(dn)+'\')">Edit</button>'
                 +'<button class="me-btn me-btn--danger me-btn--sm" onclick="CampistryMe.deleteDiv(\''+je(dn)+'\')">Delete</button>'
                 +'</div></div>'
-                +'<div style="padding:0 18px 10px;display:flex;align-items:center;gap:6px;cursor:pointer" onclick="CampistryMe.openDivisionHeadModal(\''+je(dn)+'\')" title="Manage this division\'s head(s) — who gets notified for this division">'
+                +'<div style="padding:0 18px 10px;display:flex;align-items:center;gap:6px"'+dHeadAttrs+' title="'+(rollup.editable?'Manage this division\'s head(s) — who gets notified for this division':'Assigned per grade below — shows here only once every grade shares the same head')+'">'
                 +'<span style="font-size:.7rem;color:var(--s400);font-weight:600">Division Head:</span>'
-                +'<span style="font-size:.72rem;'+(dHeads.length?'color:var(--s600);font-weight:600':'color:var(--me);font-weight:600')+'">'+dHeadChip+'</span>'
+                +'<span style="font-size:.72rem;'+(rollup.heads.length?'color:var(--s600);font-weight:600':(rollup.editable?'color:var(--me);font-weight:600':'color:var(--s400);font-weight:600'))+'">'+dHeadChip+'</span>'
                 +'</div>';
             h+='<div class="me-grade-list" data-div="'+je(dn)+'" style="padding:14px 18px">';
             grades.forEach(function([gn,gd]){
@@ -4582,6 +4585,36 @@ function divisionsForStaffEmail(email){
 // structure{}; otherwise it's a grade name. Used only for modal copy — the
 // data model itself doesn't care which kind a key is.
 function _headKind(name){ return structure[name]?'Division':'Grade'; }
+// Two head lists count as "the same person(s)" when their emails match
+// (falling back to name for anyone with no email), regardless of order.
+function _sameHeadSet(a,b){
+    var ka=(a||[]).map(function(s){return (s.email||s.name||'').toLowerCase();}).sort();
+    var kb=(b||[]).map(function(s){return (s.email||s.name||'').toLowerCase();}).sort();
+    if(ka.length!==kb.length)return false;
+    return ka.every(function(v,i){return v===kb[i];});
+}
+// Division-level head display is DERIVED from its grades, never edited
+// directly, once the division has grades — a division only ever shows one
+// head at that level when every grade under it happens to share the exact
+// same head(s); if grades differ (or some are unassigned), there's nothing
+// uniform to show and the office manages it per grade instead. The one
+// exception is a division with no grades yet (nothing to derive from), or
+// one that already has a head assigned from before this existed and no
+// grade has been given its own head yet — that legacy value still shows
+// (and still gets notified, via migration 089's union) until a grade-level
+// assignment supersedes it.
+function _divisionHeadRollup(divName,gradeEntries){
+    var legacy=divisionHeads[divName]||[];
+    if(!gradeEntries.length)return {heads:legacy,editable:true};
+    var lists=gradeEntries.map(function(pair){return divisionHeads[pair[0]]||[];});
+    if(lists.every(function(l){return l.length>0;})&&lists.every(function(l){return _sameHeadSet(l,lists[0]);})){
+        return {heads:lists[0],editable:false};
+    }
+    if(lists.every(function(l){return l.length===0;})&&legacy.length){
+        return {heads:legacy,editable:false};
+    }
+    return {heads:[],editable:false,mixed:lists.some(function(l){return l.length>0;})};
+}
 function openDivisionHeadModal(divName){
     _renderDivisionHeadModalBody(divName);
 }
