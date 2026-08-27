@@ -661,6 +661,7 @@ var ParentRequests = (function(){
             actions='<div style="display:flex;gap:6px;margin-top:6px;">'+
                 '<button class="btn btn-primary btn-sm" onclick="ParentRequests.confirmNow('+i+')">Confirm</button>'+
                 '<button class="btn btn-secondary btn-sm" onclick="ParentRequests.startCompose('+i+',\'Declined\')">Decline</button>'+
+                '<button class="btn btn-secondary btn-sm" title="Delete" onclick="ParentRequests.deleteRequest('+i+')">🗑</button>'+
                 '</div>';
         } else {
             actions='<div style="display:flex;gap:6px;margin-top:6px;">'+
@@ -883,7 +884,7 @@ var ParentRequests = (function(){
     // without anyone hitting refresh. Debounced so a burst of changes (e.g.
     // this session's own confirm, which fires its own update) collapses
     // into one re-sync instead of several back to back.
-    var _prChan=null, _prDebTimer=null;
+    var _prChan=null, _prDebTimer=null, _prPollTimer=null;
     function _debouncedResync(){ if(_prDebTimer)clearTimeout(_prDebTimer); _prDebTimer=setTimeout(function(){ syncFromCloud(refresh); },250); }
     function _subscribeRealtime(){
         var db=_db();
@@ -892,8 +893,23 @@ var ParentRequests = (function(){
         try{
             _prChan=db.client.channel('parent-pickup-requests-'+db.campId+'-'+Date.now())
                 .on('postgres_changes',{event:'*',schema:'public',table:'parent_pickup_requests',filter:'camp_id=eq.'+db.campId},_debouncedResync)
-                .subscribe();
+                .subscribe(function(status,err){
+                    // Realtime setup lives partly outside this app's control
+                    // (project-level Realtime being on, WAL replication slot
+                    // health, network/proxy websocket support) — a silent
+                    // failure here means "I need to refresh" comes right back
+                    // with no clue why. Log loudly, and the poll below (started
+                    // unconditionally, not just on failure) means new messages
+                    // still arrive within ~20s even if the socket never works.
+                    if(status==='SUBSCRIBED')console.log('[Live] parent requests realtime connected');
+                    else if(status==='CHANNEL_ERROR'||status==='TIMED_OUT'||status==='CLOSED')console.warn('[Live] parent requests realtime',status,err&&err.message||err||'');
+                });
         }catch(e){ console.warn('[Live] parent requests realtime subscribe failed:',e&&e.message||e); }
+        // Belt-and-suspenders poll — Realtime delivery depends on project
+        // config this app can't verify from the client, so don't make "new
+        // messages appear automatically" depend on the socket alone. 20s is
+        // fast enough to feel automatic without hammering the DB.
+        if(!_prPollTimer)_prPollTimer=setInterval(function(){ syncFromCloud(refresh); },20000);
     }
 
     // Initial load — same retry-until-ready as the realtime subscribe above,
