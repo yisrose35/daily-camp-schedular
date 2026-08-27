@@ -2341,20 +2341,24 @@
         if (!wrap) return;
         var prefs = _notifPrefs();
 
+        // A dismissed/read row is filtered out here, not just destyled — the
+        // earlier version only used "unread" for the dot/bold treatment and
+        // still rendered every row regardless, so dismissing marked it read
+        // and then the very next reload rendered it right back (nothing
+        // dismissed ever actually left the list).
         var visible = [];
-        var unreadCount = 0;
         notifs.forEach(function(n) {
             var category = _notifCategoryOf(n);
             var pref = category ? (prefs[category] || 'notify') : 'notify';
             if (pref === 'ignore') return;
             var unread = n.source == null ? (n.read !== true) : !readIds.has(n.id);
-            if (unread) unreadCount++;
-            visible.push({ n: n, category: category, important: pref === 'important', unread: unread });
+            if (!unread) return;
+            visible.push({ n: n, category: category, important: pref === 'important' });
         });
         // Important first, then chronological (rows already arrive newest-first).
         visible.sort(function(a, b) { return (b.important - a.important); });
 
-        _updateNotifBadge(unreadCount);
+        _updateNotifBadge(visible.length);
         _notifVisibleRows = visible.map(function(v) { return { id: v.n.id, isLegacy: v.n.source == null }; });
         var clearBtn = document.getElementById('dashNotifClearAllBtn');
         if (clearBtn) clearBtn.style.display = visible.length ? '' : 'none';
@@ -2369,13 +2373,15 @@
             var n = v.n, category = v.category;
             var icon = _notifIcons[category] || _notifIcons.link_message;
             var color = _notifColors[category] || 'var(--camp-green)';
-            var unreadDot = v.unread ? '<span style="display:inline-block;width:7px;height:7px;border-radius:50%;background:' + color + ';margin-right:6px;vertical-align:middle"></span>' : '';
+            // Everything reaching this point is unread — a read/dismissed row
+            // never enters `visible` in the first place (see above).
+            var unreadDot = '<span style="display:inline-block;width:7px;height:7px;border-radius:50%;background:' + color + ';margin-right:6px;vertical-align:middle"></span>';
             var importantTag = v.important ? '<span class="dash-notif-important-tag">Important</span>' : '';
             var target = _notifBuildLinkTarget(n, category);
             var bodyText = _notifBodyText(n, category);
             var canReply = category === 'link_message' && n.source_id;
 
-            var card = '<div class="dash-notif-item dash-notif-live' + (v.unread ? ' dash-notif-unread' : '') + '" style="border-left:3px solid ' + color + ';" id="notifCard_' + n.id + '">'
+            var card = '<div class="dash-notif-item dash-notif-live dash-notif-unread" style="border-left:3px solid ' + color + ';" id="notifCard_' + n.id + '">'
                 + '<div class="dash-notif-icon" style="color:' + color + '">' + icon + '</div>'
                 + '<div class="dash-notif-body">'
                 + '<p style="cursor:' + (target ? 'pointer' : 'default') + ';" onclick="markNotificationRead(\'' + n.id + '\', ' + (target ? '\'' + target.replace(/'/g, "\\'") + '\'' : 'null') + ')">' + unreadDot + _dashEsc(n.title) + importantTag
@@ -2478,18 +2484,24 @@
     // Quick reply from the Dashboard card — mirrors campistry_link_data.js's
     // _insertMessageRow (the same direct link_messages insert the full Link
     // admin composer uses), just without loading that whole app's state.
-    // Looks the parent's thread/name/email up fresh from the source message
-    // rather than trusting anything embedded in the notification row itself.
-    window.sendNotifQuickReply = async function(notifId, sourceMsgId) {
+    // Looks the parent's thread/name/email up fresh from the most recent
+    // inbound message in the thread, rather than trusting anything embedded
+    // in the notification row itself. `threadId` is the notification's
+    // source_id — migration 092 keys link_message notifications on the
+    // thread, not the individual message, so this is a thread id, not a
+    // message id.
+    window.sendNotifQuickReply = async function(notifId, threadId) {
         var status = document.getElementById('notifReplyStatus_' + notifId);
         var ta = document.getElementById('notifReplyText_' + notifId);
         var body = (ta && ta.value || '').trim();
         if (!body) { if (status) status.textContent = 'Enter a reply.'; return; }
-        if (!sourceMsgId || !window.supabase) { if (status) status.textContent = 'Cannot reply to this message.'; return; }
+        if (!threadId || !window.supabase) { if (status) status.textContent = 'Cannot reply to this message.'; return; }
         if (status) status.textContent = 'Sending…';
         try {
             var srcRes = await window.supabase.from('link_messages')
-                .select('thread_id, parent_name, parent_email, camper_name').eq('id', sourceMsgId).single();
+                .select('thread_id, parent_name, parent_email, camper_name')
+                .eq('thread_id', threadId).eq('direction', 'in')
+                .order('created_at', { ascending: false }).limit(1).maybeSingle();
             if (srcRes.error || !srcRes.data || !srcRes.data.parent_email) {
                 if (status) status.textContent = 'Could not find this conversation.';
                 return;
