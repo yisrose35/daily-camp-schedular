@@ -408,46 +408,39 @@
                 </div>
             </div>
 
-            <!-- Sessions & Pricing — owner-only, toggled via #sessionsCard -->
+            <!-- Sessions & Pricing — owner-only, toggled via #sessionsCard.
+                 Bundles aren't a separate feature area — they render as
+                 rows in the same #sessionsList as sessions (tagged with a
+                 small "Bundle" badge), so there's one list of "things a
+                 parent can pick at registration," not two. -->
             <div class="dashboard-card" id="sessionsCard">
                 <div class="card-header">
                     <h2>Sessions</h2>
-                    <button class="btn-edit" type="button" onclick="addSessionForm()">+ Add Session</button>
+                    <div style="display:flex; gap:8px;">
+                        <button class="btn-edit" type="button" onclick="addBundleForm()">+ Add Bundle</button>
+                        <button class="btn-edit" type="button" onclick="addSessionForm()">+ Add Session</button>
+                    </div>
                 </div>
-                <p class="card-desc">What parents pick when they register — dates, tuition, capacity. The 1st Half and 2nd Half sessions are kept in sync with the halves above automatically; add more for anything else (Full Summer, a mini-session, etc).</p>
+                <p class="card-desc">What parents pick when they register — dates, tuition, capacity. The 1st Half and 2nd Half sessions stay in sync with the halves above automatically. A bundle is a combined price across two or more sessions (e.g. both halves at $2,000 each, but "Full Summer" bundled at $3,500).</p>
                 <div id="sessionsList" style="display:flex; flex-direction:column; gap:10px; margin-top:10px;"></div>
 
-                <!-- Bundles — a combined price across 2+ sessions (e.g. Full
-                     Summer at $3500 instead of paying for both halves at
-                     $2000 each). Doesn't replace a session's own price;
-                     it's an alternate, usually-cheaper way to pay for
-                     several sessions at once. -->
-                <div style="margin-top:18px; padding-top:16px; border-top:1px solid var(--slate-200);">
-                    <div class="card-header" style="margin-bottom:8px;">
-                        <h3 style="margin:0; font-size:0.95rem;">Bundles</h3>
-                        <button class="btn-edit" type="button" id="addBundleBtn" onclick="addBundleForm()">+ Add Bundle</button>
+                <div id="bundleEditForm" style="display:none; margin-top:16px; padding-top:16px; border-top:1px solid var(--slate-200);">
+                    <div class="form-group">
+                        <label for="bunName" style="font-size:0.82rem; font-weight:600; color:var(--slate-600); margin-bottom:4px; display:block;">Bundle Name</label>
+                        <input type="text" id="bunName" placeholder="e.g., Full Summer" style="width:100%; padding:8px 10px; border-radius:8px; border:1px solid var(--slate-200); font-size:0.88rem;">
                     </div>
-                    <p class="card-desc" style="margin-top:0;">A combined price for two or more sessions together — e.g. both halves separately at $2,000 each, but a "Full Summer" bundle of both at $3,500.</p>
-                    <div id="bundlesList" style="display:flex; flex-direction:column; gap:10px; margin-top:10px;"></div>
-
-                    <div id="bundleEditForm" style="display:none; margin-top:16px; padding-top:16px; border-top:1px solid var(--slate-200);">
-                        <div class="form-group">
-                            <label for="bunName" style="font-size:0.82rem; font-weight:600; color:var(--slate-600); margin-bottom:4px; display:block;">Bundle Name</label>
-                            <input type="text" id="bunName" placeholder="e.g., Full Summer" style="width:100%; padding:8px 10px; border-radius:8px; border:1px solid var(--slate-200); font-size:0.88rem;">
-                        </div>
-                        <div class="form-group">
-                            <label style="font-size:0.82rem; font-weight:600; color:var(--slate-600); margin-bottom:4px; display:block;">Sessions included</label>
-                            <div id="bunSessionChecks" style="display:flex; flex-direction:column; gap:6px; padding:8px 10px; border-radius:8px; border:1px solid var(--slate-200);"></div>
-                        </div>
-                        <div class="form-group">
-                            <label for="bunPrice" style="font-size:0.82rem; font-weight:600; color:var(--slate-600); margin-bottom:4px; display:block;">Bundle Price ($)</label>
-                            <input type="number" id="bunPrice" placeholder="0.00" step="0.01" min="0" style="width:100%; padding:8px 10px; border-radius:8px; border:1px solid var(--slate-200); font-size:0.88rem;">
-                        </div>
-                        <div style="display:flex; gap:10px; align-items:center;">
-                            <button type="button" class="btn-secondary" onclick="cancelBundleForm()">Cancel</button>
-                            <button type="button" class="btn-primary" onclick="saveBundleForm()">Save Bundle</button>
-                            <span id="bundleFormStatus" style="font-size:0.82rem; color:var(--slate-400);"></span>
-                        </div>
+                    <div class="form-group">
+                        <label style="font-size:0.82rem; font-weight:600; color:var(--slate-600); margin-bottom:4px; display:block;">Sessions included</label>
+                        <div id="bunSessionChecks" style="display:flex; flex-direction:column; gap:6px; padding:8px 10px; border-radius:8px; border:1px solid var(--slate-200);"></div>
+                    </div>
+                    <div class="form-group">
+                        <label for="bunPrice" style="font-size:0.82rem; font-weight:600; color:var(--slate-600); margin-bottom:4px; display:block;">Bundle Price ($)</label>
+                        <input type="number" id="bunPrice" placeholder="0.00" step="0.01" min="0" style="width:100%; padding:8px 10px; border-radius:8px; border:1px solid var(--slate-200); font-size:0.88rem;">
+                    </div>
+                    <div style="display:flex; gap:10px; align-items:center;">
+                        <button type="button" class="btn-secondary" onclick="cancelBundleForm()">Cancel</button>
+                        <button type="button" class="btn-primary" onclick="saveBundleForm()">Save Bundle</button>
+                        <span id="bundleFormStatus" style="font-size:0.82rem; color:var(--slate-400);"></span>
                     </div>
                 </div>
 

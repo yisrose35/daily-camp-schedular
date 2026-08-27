@@ -35,6 +35,7 @@ body{font-family:var(--font);background:var(--s50);color:var(--s800);-webkit-fon
 .ss-meta{font-size:.75rem;color:var(--s500);margin-top:2px}
 .ss-price{font-size:.95rem;font-weight:800;color:var(--me);margin-top:4px}
 .ss-eb{font-size:.72rem;color:var(--ok);font-weight:600;margin-top:2px}
+.ss-bundle-tag{font-size:.6rem;font-weight:700;color:#7c3aed;background:#ede9fe;padding:1px 6px;border-radius:4px;vertical-align:middle}
 /* Pay */
 .po{display:flex;align-items:center;gap:8px;padding:9px 12px;border:1.5px solid var(--s200);border-radius:var(--r);cursor:pointer;transition:all .15s;margin-bottom:5px}
 .po:hover{border-color:var(--s300)}.po.sel{border-color:var(--me);background:rgba(217,119,6,.04)}
@@ -271,8 +272,25 @@ body{font-family:var(--font);background:var(--s50);color:var(--s800);-webkit-fon
 
 <script>
 (function(){
-var selSess='',selPM='',siblings=[],uploads=[],discount={active:false,code:'',pct:0,amt:0,label:''};
-var sessions=[],promoCodes={};
+var selSess='',selSessKind='session',selPM='',siblings=[],uploads=[],discount={active:false,code:'',pct:0,amt:0,label:''};
+var sessions=[],bundles=[],promoCodes={};
+// A bundle is just another pickable thing alongside sessions — a combined
+// price across 2+ sessions (e.g. both halves individually, but a "Full
+// Summer" bundle of both at one lower price). Only offered when every
+// session it covers is still open for registration and still exists.
+function _pickerItems(){
+    var openSessions=sessions.filter(function(s){return s.registrationOpen!==false});
+    var byId={};sessions.forEach(function(s){if(s.id)byId[s.id]=s});
+    var openIds={};openSessions.forEach(function(s){if(s.id)openIds[s.id]=true});
+    var items=openSessions.map(function(s){return{kind:'session',name:s.name,dates:s.dates,tuition:s.tuition,earlyBird:s.earlyBird,earlyBirdDeadline:s.earlyBirdDeadline}});
+    (bundles||[]).forEach(function(b){
+        var ids=b.sessionIds||[];
+        if(ids.length<2||!ids.every(function(id){return openIds[id]}))return;
+        var names=ids.map(function(id){return byId[id]&&byId[id].name}).filter(Boolean);
+        items.push({kind:'bundle',name:b.name,dates:names.join(' + '),tuition:b.price,earlyBird:0,earlyBirdDeadline:''});
+    });
+    return items;
+}
 var sigCtx=null,sigDrawing=false,sigHasData=false;
 
 // ─── ADVANCED FORM CONFIG (fields / section order / branding) ─────────
@@ -621,6 +639,7 @@ function _loadFromLocalCache(){
         var g=JSON.parse(localStorage.getItem('campGlobalSettings_v1')||'{}');
         var me=g.campistryMe||{};
         sessions=me.sessions||[];
+        bundles=me.sessionBundles||[];
         promoCodes=me.promoCodes||{EARLYBIRD:{pct:10,label:'Early Bird 10% Off'},SIBLING:{pct:5,label:'Sibling Discount 5%'},REFER:{amt:50,label:'Referral $50 Off'}};
         var cn=g.campName||g.app1?.campName||'';
         _baseCampNm=cn;
@@ -661,6 +680,7 @@ async function _loadFromCloud(campId){
         _baseCampNm=d.campName||'';
         if(_baseCampNm){document.getElementById('campTitle').textContent=_baseCampNm+' Registration';document.getElementById('campNm').textContent=_baseCampNm;}
         sessions=d.sessions||[];
+        bundles=d.sessionBundles||[];
         if(d.promoCodes&&Object.keys(d.promoCodes).length)promoCodes=d.promoCodes;
         applyFormConfig(d.formConfig||{});
         _applySchoolGradeOptions(d.schoolGrades);
@@ -688,24 +708,29 @@ if(new URLSearchParams(window.location.search).get('preview')==='1'){
 
 function renderSessions(){
     var c=document.getElementById('sessList');
-    if(!sessions.length){c.innerHTML='<p style="color:var(--s400);font-size:.85rem;text-align:center;padding:10px">No sessions available.</p>';return}
-    c.innerHTML=sessions.filter(function(s){return s.registrationOpen!==false}).map(function(s,i){
+    var items=_pickerItems();
+    if(!items.length){c.innerHTML='<p style="color:var(--s400);font-size:.85rem;text-align:center;padding:10px">No sessions available.</p>';return}
+    c.innerHTML=items.map(function(s,i){
         var today=new Date().toISOString().split('T')[0];
         var eb=s.earlyBird&&(!s.earlyBirdDeadline||today<=s.earlyBirdDeadline);
-        return'<div class="ss" id="ss_'+i+'" onclick="window._selSess('+i+')"><div class="ss-nm">'+esc(s.name)+'</div>'+(s.dates?'<div class="ss-meta">'+esc(s.dates)+'</div>':'')+(s.tuition?'<div class="ss-price">'+fm(s.tuition)+'</div>':'')+(eb?'<div class="ss-eb">Early bird: '+fm(s.earlyBird)+(s.earlyBirdDeadline?' until '+s.earlyBirdDeadline:'')+'</div>':'')+'</div>';
+        var bundleTag=s.kind==='bundle'?'<span class="ss-bundle-tag">BUNDLE</span>':'';
+        return'<div class="ss" id="ss_'+i+'" onclick="window._selSess('+i+')"><div class="ss-nm">'+esc(s.name)+' '+bundleTag+'</div>'+(s.dates?'<div class="ss-meta">'+esc(s.dates)+'</div>':'')+(s.tuition?'<div class="ss-price">'+fm(s.tuition)+'</div>':'')+(eb?'<div class="ss-eb">Early bird: '+fm(s.earlyBird)+(s.earlyBirdDeadline?' until '+s.earlyBirdDeadline:'')+'</div>':'')+'</div>';
     }).join('');
 }
 
 window._selSess=function(i){
-    var openSessions=sessions.filter(function(s){return s.registrationOpen!==false});
-    selSess=openSessions[i].name;
+    var items=_pickerItems();
+    var picked=items[i];
+    if(!picked)return;
+    selSess=picked.name;
+    selSessKind=picked.kind;
     document.querySelectorAll('.ss').forEach(function(c,j){c.classList.toggle('sel',j===i)});
     updatePrice();
 };
 window.selPay=function(el,m){selPM=m;document.querySelectorAll('.po').forEach(function(o){o.classList.remove('sel')});el.classList.add('sel')};
 
 function updatePrice(){
-    var s=sessions.find(function(s){return s.name===selSess});
+    var s=_pickerItems().find(function(s){return s.name===selSess&&s.kind===selSessKind});
     var el=document.getElementById('priceDisplay');
     if(!s||!s.tuition){el.innerHTML='';return}
     var base=s.tuition;var total=base;var lines=[];
@@ -933,7 +958,7 @@ window.submitApp=async function(){
             return showErr('Please enter: '+_txt+'.');
         }
     }
-    if(!selSess&&sessions.filter(function(s){return s.registrationOpen!==false}).length)return showErr('Select a session.');
+    if(!selSess&&_pickerItems().length)return showErr('Select a session.');
     for(var si=0;si<siblings.length;si++){if(!siblings[si].first||!siblings[si].last)return showErr('Enter name for Camper '+(si+2)+'.')}
     // Signature/agreement is only required when the camp has that section on
     // — a camp that turns it off shouldn't get a form nobody can submit.
@@ -947,7 +972,7 @@ window.submitApp=async function(){
     }
 
     var sigData=document.getElementById('sigCanvas').toDataURL();
-    var sessObj=sessions.find(function(s){return s.name===selSess})||{};
+    var sessObj=_pickerItems().find(function(s){return s.name===selSess&&s.kind===selSessKind})||{};
 
     // Build applications (one per camper). Photo is only captured for the
     // primary camper — sibling rows don't get their own upload widget.
@@ -1003,7 +1028,7 @@ window.submitApp=async function(){
                 emergencyName:emN,emergencyPhone:emPh,emergencyRel:v('rEmR'),
                 allergies:v('rAlg'),medications:v('rMed'),dietary:v('rDit'),medicalNotes:v('rMdN'),
                 bunkmate:v('rBnk'),separateFrom:v('rSep'),tshirtSize:v('rShirt'),source:v('rSrc'),notes:v('rNotes'),
-                session:selSess,sessionTuition:sessObj.tuition||0,
+                session:selSess,sessionKind:selSessKind,sessionTuition:sessObj.tuition||0,
                 paymentMethod:selPM,paymentStatus:'pending',paymentAmount:0,
                 discount:discount.active?{code:discount.code,label:discount.label,pct:discount.pct,amt:discount.amt}:null,
                 signature:sigData,

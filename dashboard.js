@@ -513,9 +513,12 @@
             // Owner sees everything
             checkAccessControl();
             _setSetupTabVisible('dates', true);
-            loadCampDates(false);
             _setSessionsCardVisible(true);
+            // Sessions must load BEFORE camp dates — loadCampDates() syncs
+            // the half-sessions against _dashSessions, which loadSessionsSection()
+            // is what populates in the first place.
             loadSessionsSection();
+            loadCampDates(false);
             _setSetupTabVisible('settings', true);
             _setSetupTabVisible('payment', true);
             loadCampSettingsSection();
@@ -1480,6 +1483,14 @@
                 if (h2StartEl && campDates.half2Start) h2StartEl.value = campDates.half2Start;
                 if (endEl && campDates.endDate) endEl.value = campDates.endDate;
                 updateWeekPreview();
+                // Dates saved before this feature existed (or from any prior
+                // session) never got their half-sessions auto-created, since
+                // that used to only fire on Save — do it here too, on every
+                // load, so it's not just new saves that get it. Owner-only
+                // (matches saveCampDates' write gate); _dashSessions must
+                // already be loaded — see the call order in
+                // setupDashboardForRole().
+                if (!readOnly) _dashSyncHalfSessions(campDates.startDate, campDates.half1End, campDates.half2Start, campDates.endDate);
             }
 
             if (readOnly) {
@@ -1867,14 +1878,18 @@
         }
     }
 
+    // Sessions and bundles render as ONE list — a bundle is just another
+    // thing a parent can pick at registration, not a separate feature area.
+    // Sessions first (in their existing order), bundles after, each tagged
+    // clearly by a badge so the distinction is still visible in the row.
     function renderSessionsList() {
         var list = document.getElementById('sessionsList');
         if (!list) return;
-        if (!_dashSessions.length) {
+        if (!_dashSessions.length && !_dashBundles.length) {
             list.innerHTML = '<p style="color:var(--slate-400); font-size:0.85rem; text-align:center; padding:10px;">No sessions yet — set your camp dates above to auto-create 1st/2nd Half sessions, or add one to open registration.</p>';
             return;
         }
-        list.innerHTML = _dashSessions.map(function(s, i) {
+        var sessionsHtml = _dashSessions.map(function(s, i) {
             var isOpen = s.registrationOpen !== false;
             var html = '<div style="padding:12px 14px; border-radius:8px; border:1px solid ' + (isOpen ? 'var(--slate-200)' : '#fecaca') + '; background:' + (isOpen ? 'var(--slate-50)' : 'rgba(239,68,68,.04)') + ';">';
             html += '<div style="display:flex; justify-content:space-between; align-items:center; gap:8px;">';
@@ -1894,7 +1909,30 @@
             html += '</div>';
             return html;
         }).join('');
+
+        var sessionsById = {};
+        _dashSessions.forEach(function(s) { sessionsById[s.id] = s; });
+        var bundlesHtml = _dashBundles.map(function(b, i) {
+            var names = (b.sessionIds || []).map(function(id) { return sessionsById[id] ? sessionsById[id].name : '(deleted session)'; });
+            var html = '<div style="padding:12px 14px; border-radius:8px; border:1px solid #ddd6fe; background:#f5f3ff;">';
+            html += '<div style="display:flex; justify-content:space-between; align-items:center; gap:8px;">';
+            html += '<span style="font-size:0.9rem; font-weight:700; color:var(--slate-800);">' + _dashEsc(b.name) + ' <span style="font-size:0.68rem; font-weight:700; color:#7c3aed; background:#ede9fe; padding:1px 6px; border-radius:4px;">BUNDLE</span></span>';
+            html += '<div style="display:flex; gap:6px; flex-shrink:0;">';
+            html += '<button type="button" class="btn-secondary" style="padding:3px 10px; font-size:0.72rem;" onclick="editBundleForm(' + i + ')">Edit</button>';
+            html += '<button type="button" class="btn-secondary" style="padding:3px 10px; font-size:0.72rem; color:#dc2626;" onclick="deleteBundleEntry(' + i + ')">Delete</button>';
+            html += '</div></div>';
+            html += '<div style="font-size:0.75rem; color:var(--slate-500); margin-top:4px;">📦 ' + names.map(_dashEsc).join(' + ') + '</div>';
+            html += '<div style="font-size:0.82rem; font-weight:700; color:var(--slate-700); margin-top:6px;">$' + Number(b.price || 0).toLocaleString() + '</div>';
+            html += '</div>';
+            return html;
+        }).join('');
+
+        list.innerHTML = sessionsHtml + bundlesHtml;
     }
+    // Kept as an alias — several call sites re-render after a bundle
+    // add/edit/delete without also wanting to rebuild the sessions half of
+    // the list; since both live in one function/list now, it's just that.
+    function renderBundlesList() { renderSessionsList(); }
 
     window.updateSessionPriceInline = function(idx, value) {
         if (isTeamMember) return;
@@ -2060,31 +2098,6 @@
     // both at $3,500). References sessions by id, not array index, since
     // indices shift on delete/reorder.
     // ========================================
-
-    function renderBundlesList() {
-        var list = document.getElementById('bundlesList');
-        if (!list) return;
-        if (!_dashBundles.length) {
-            list.innerHTML = '<p style="color:var(--slate-400); font-size:0.85rem; text-align:center; padding:10px;">No bundles yet. Add one if a combination of sessions should cost less than paying for each separately.</p>';
-            return;
-        }
-        var sessionsById = {};
-        _dashSessions.forEach(function(s) { sessionsById[s.id] = s; });
-        list.innerHTML = _dashBundles.map(function(b, i) {
-            var names = (b.sessionIds || []).map(function(id) { return sessionsById[id] ? sessionsById[id].name : '(deleted session)'; });
-            var html = '<div style="padding:12px 14px; border-radius:8px; border:1px solid var(--slate-200); background:var(--slate-50);">';
-            html += '<div style="display:flex; justify-content:space-between; align-items:center; gap:8px;">';
-            html += '<span style="font-size:0.9rem; font-weight:700; color:var(--slate-800);">' + _dashEsc(b.name) + '</span>';
-            html += '<div style="display:flex; gap:6px; flex-shrink:0;">';
-            html += '<button type="button" class="btn-secondary" style="padding:3px 10px; font-size:0.72rem;" onclick="editBundleForm(' + i + ')">Edit</button>';
-            html += '<button type="button" class="btn-secondary" style="padding:3px 10px; font-size:0.72rem; color:#dc2626;" onclick="deleteBundleEntry(' + i + ')">Delete</button>';
-            html += '</div></div>';
-            html += '<div style="font-size:0.75rem; color:var(--slate-500); margin-top:4px;">' + names.map(_dashEsc).join(' + ') + '</div>';
-            html += '<div style="font-size:0.82rem; font-weight:700; color:var(--slate-700); margin-top:4px;">$' + Number(b.price || 0).toLocaleString() + '</div>';
-            html += '</div>';
-            return html;
-        }).join('');
-    }
 
     function _dashRenderBundleSessionChecks(selectedIds) {
         var wrap = document.getElementById('bunSessionChecks');
