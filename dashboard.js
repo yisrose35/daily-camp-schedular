@@ -88,9 +88,6 @@
     // Camp Settings elements (owner-only; migrated from Campistry Me)
     const campSettingsSection = document.getElementById('camp-settings-section');
 
-    // Sessions & Pricing elements (owner-only; migrated from Campistry Me)
-    const sessionsPricingSection = document.getElementById('sessions-pricing-section');
-
     // ========================================
     // AUTH CHECK
     // ========================================
@@ -447,7 +444,6 @@
     const SETUP_TAB_PANELS = {
         profile: 'dash-setup-profile',
         dates: 'camp-dates-section',
-        sessions: 'sessions-pricing-section',
         payment: 'dash-setup-payment',
         settings: 'camp-settings-section',
         team: 'team-access-section'
@@ -456,6 +452,16 @@
     function _setSetupTabVisible(tab, visible) {
         const btn = document.querySelector('.dash-setup-tab[data-tab="' + tab + '"]');
         if (btn) btn.style.display = visible ? '' : 'none';
+    }
+
+    // Sessions & Pricing lives inside the "Dates & Pricing" tab now (see
+    // camp-dates-section in dashboard.html) but stays owner-only — this
+    // toggles just that one card, not the whole tab, so scheduler/admin
+    // team members still get their read-only Camp Dates + Attendance
+    // History view without seeing pricing.
+    function _setSessionsCardVisible(visible) {
+        const card = document.getElementById('sessionsCard');
+        if (card) card.style.display = visible ? '' : 'none';
     }
 
     window.switchSetupTab = function(tab) {
@@ -483,14 +489,17 @@
             // Add "Your Permissions" section for team members
             addPermissionsSection();
 
-            // Hide team management, settings, payment, and sessions tabs
-            // (owner-only — this just controls which Camp Setup tab BUTTONS
-            // are reachable; each tab's own panel content still loads lazily
-            // below regardless, same as before).
+            // Hide team management, settings, and payment tabs (owner-only —
+            // this just controls which Camp Setup tab BUTTONS are reachable;
+            // each tab's own panel content still loads lazily below
+            // regardless, same as before). Sessions & Pricing is owner-only
+            // too, but it's a card inside the Dates & Pricing tab now, not
+            // its own tab — hidden separately below so it doesn't hide Camp
+            // Dates / Attendance History along with it.
             _setSetupTabVisible('team', false);
             _setSetupTabVisible('settings', false);
             _setSetupTabVisible('payment', false);
-            _setSetupTabVisible('sessions', false);
+            _setSessionsCardVisible(false);
 
             // Schedulers and admins can see camp dates (read-only)
             if (userRole === 'scheduler' || userRole === 'admin') {
@@ -505,11 +514,11 @@
             checkAccessControl();
             _setSetupTabVisible('dates', true);
             loadCampDates(false);
+            _setSessionsCardVisible(true);
+            loadSessionsSection();
             _setSetupTabVisible('settings', true);
             _setSetupTabVisible('payment', true);
             loadCampSettingsSection();
-            _setSetupTabVisible('sessions', true);
-            loadSessionsSection();
         }
         switchSetupTab('profile');
 

@@ -224,8 +224,7 @@
              showing. -->
         <div class="dash-setup-tabs" id="dashSetupTabs">
             <button class="dash-setup-tab active" data-tab="profile" onclick="switchSetupTab('profile')">Profile &amp; Account</button>
-            <button class="dash-setup-tab" data-tab="dates" onclick="switchSetupTab('dates')" style="display:none;">Camp Dates</button>
-            <button class="dash-setup-tab" data-tab="sessions" onclick="switchSetupTab('sessions')" style="display:none;">Sessions &amp; Pricing</button>
+            <button class="dash-setup-tab" data-tab="dates" onclick="switchSetupTab('dates')" style="display:none;">Dates &amp; Pricing</button>
             <button class="dash-setup-tab" data-tab="payment" onclick="switchSetupTab('payment')" style="display:none;">Payment</button>
             <button class="dash-setup-tab" data-tab="settings" onclick="switchSetupTab('settings')" style="display:none;">Camp Settings</button>
             <button class="dash-setup-tab" data-tab="team" onclick="switchSetupTab('team')" style="display:none;">Team &amp; Access</button>
@@ -364,7 +363,15 @@
         </div>
         </div>
 
-        <!-- ===== CAMP DATES ===== -->
+        <!-- ===== DATES & PRICING =====
+             Camp Dates, Sessions & Pricing, and Attendance History used to be
+             two separate tabs (Sessions reuses the Camp Dates halves for its
+             quick-fill preset, so they were always really one topic split in
+             two). Combined into one panel/tab. Sessions stays owner-only —
+             see #sessionsCard, shown/hidden by setupDashboardForRole() in
+             dashboard.js — while Camp Dates and Attendance History stay
+             visible (read-only for dates) to scheduler/admin team members,
+             same as before. -->
         <div id="camp-dates-section" class="dash-setup-panel" style="display: none;">
             <div class="dashboard-card" style="max-width:700px;">
                 <div class="card-header">
@@ -400,31 +407,13 @@
                 </div>
             </div>
 
-            <div class="dashboard-card" style="max-width:700px;">
-                <div class="card-header">
-                    <h2>Attendance History</h2>
-                </div>
-                <p style="font-size:0.82rem; color:var(--slate-500); margin:-4px 0 12px;">
-                    Snapshot everyone currently on the roster and hired staff under a season
-                    label, so their attendance survives a CSV re-import or next year's reset.
-                    This never changes today's roster — it only adds a record to look back on.
-                </p>
-                <div style="display:flex; gap:10px; align-items:center; flex-wrap:wrap;">
-                    <input type="text" id="seasonArchiveLabel" placeholder="e.g. Summer 2026" style="flex:1; min-width:200px; padding:8px 10px; border-radius:8px; border:1px solid var(--slate-200); font-size:0.88rem;">
-                    <button type="button" id="archiveSeasonBtn" onclick="archiveCurrentSeasonNow()" class="btn-primary" style="padding:8px 20px; font-size:0.85rem; white-space:nowrap;">Archive Current Season</button>
-                    <span id="seasonArchiveStatus" style="font-size:0.82rem; color:var(--slate-400);"></span>
-                </div>
-            </div>
-        </div>
-
-        <!-- ===== SESSIONS & PRICING (Owners only) ===== -->
-        <div id="sessions-pricing-section" class="dash-setup-panel" style="display: none;">
-            <div class="dashboard-card" style="max-width:760px;">
+            <!-- Sessions & Pricing — owner-only, toggled via #sessionsCard -->
+            <div class="dashboard-card" id="sessionsCard" style="max-width:760px;">
                 <div class="card-header">
                     <h2>Sessions</h2>
                     <button class="btn-edit" type="button" onclick="addSessionForm()">+ Add Session</button>
                 </div>
-                <p class="card-desc">What parents pick when they register — dates, tuition, capacity. Reuse the halves from the Camp Dates tab instead of retyping them for each session.</p>
+                <p class="card-desc">What parents pick when they register — dates, tuition, capacity. Reuse the halves above instead of retyping them for each session.</p>
                 <div id="sessionsList" style="display:flex; flex-direction:column; gap:10px; margin-top:10px;"></div>
 
                 <div id="sessionEditForm" style="display:none; margin-top:16px; padding-top:16px; border-top:1px solid var(--slate-200);">
@@ -503,6 +492,22 @@
                         <button type="button" class="btn-primary" onclick="saveSessionForm()">Save Session</button>
                         <span id="sessionFormStatus" style="font-size:0.82rem; color:var(--slate-400);"></span>
                     </div>
+                </div>
+            </div>
+
+            <div class="dashboard-card" style="max-width:700px;">
+                <div class="card-header">
+                    <h2>Attendance History</h2>
+                </div>
+                <p style="font-size:0.82rem; color:var(--slate-500); margin:-4px 0 12px;">
+                    Snapshot everyone currently on the roster and hired staff under a season
+                    label, so their attendance survives a CSV re-import or next year's reset.
+                    This never changes today's roster — it only adds a record to look back on.
+                </p>
+                <div style="display:flex; gap:10px; align-items:center; flex-wrap:wrap;">
+                    <input type="text" id="seasonArchiveLabel" placeholder="e.g. Summer 2026" style="flex:1; min-width:200px; padding:8px 10px; border-radius:8px; border:1px solid var(--slate-200); font-size:0.88rem;">
+                    <button type="button" id="archiveSeasonBtn" onclick="archiveCurrentSeasonNow()" class="btn-primary" style="padding:8px 20px; font-size:0.85rem; white-space:nowrap;">Archive Current Season</button>
+                    <span id="seasonArchiveStatus" style="font-size:0.82rem; color:var(--slate-400);"></span>
                 </div>
             </div>
         </div>
