@@ -2709,7 +2709,7 @@ function renderStructure(){
         +'<button class="me-btn me-btn--pri" onclick="CampistryMe.addDiv()">+ Add Division</button></div></div>';
     if(!divs.length){h+='<div class="me-empty"><h3>No divisions yet</h3><p>Create your camp structure to get started — divisions, grades, and bunks.</p><button class="me-btn me-btn--pri" onclick="CampistryMe.addDiv()">+ Add Division</button></div>'}
     else{
-        h+='<div id="meDivList"><div style="font-size:.72rem;color:var(--s400);margin-bottom:8px">Drag the ⋮⋮ handles or any chip to reorder divisions, grades, and bunks in place.</div>';
+        h+='<div id="meDivList"><div style="font-size:.75rem;color:var(--s600);background:var(--me-bg);border:1px solid var(--me-border);border-radius:var(--r);padding:8px 12px;margin-bottom:10px"><strong>Order matters:</strong> Flow, the schedule grid, and print sheets all follow the order set here — set divisions up <strong>youngest to oldest, top to bottom</strong> (grades within a division the same way). Drag the ⋮⋮ handles or any chip to reorder in place.</div>';
         divs.forEach(function([dn,dd],ix){
             var grades=_sortedGrades(dd);
             var bCt=grades.reduce(function(s,e){return s+(e[1].bunks||[]).length},0);
@@ -3004,7 +3004,7 @@ function openDivForm(name){
     COLORS.forEach(function(c){h+='<button class="swatch'+(d.color===c?' sel':'')+'" style="background:'+c+'" data-color="'+c+'" onclick="CampistryMe._pickColor(this)"></button>'});
     h+='</div><input type="hidden" id="dmColor" value="'+(d.color||COLORS[0])+'"></div>';
     // Grades + Bunks
-    h+='<div class="fsec">Grades & Bunks <span style="font-weight:400;color:var(--s400);font-size:.75rem">(drag the ⋮⋮ handle to reorder)</span></div><div id="dmGrades">';
+    h+='<div class="fsec">Grades & Bunks <span style="font-weight:400;color:var(--s400);font-size:.75rem">(drag the ⋮⋮ handle to reorder — youngest to oldest)</span></div><div id="dmGrades">';
     _sortedGrades(d).forEach(function([gn,gd]){
         h+=_renderGradeRowHTML(gn,gd.bunks||[],gd.daysPresent,gd.schoolGrades);
     });
