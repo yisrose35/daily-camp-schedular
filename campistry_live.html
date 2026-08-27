@@ -169,12 +169,27 @@
      separate pages a staffer had to cross-reference. ── -->
 <div id="page-activity" class="live-page">
     <div class="page-header">
-        <div><div class="page-title">Activity</div><div class="page-subtitle">Every pickup request, change, and notification, grouped by camper</div></div>
+        <div><div class="page-title">Activity</div><div class="page-subtitle">Every pickup request and change, filterable by type</div></div>
         <div class="page-actions">
             <input id="activitySearch" class="form-input" placeholder="Search camper..." style="width:160px;">
+            <select class="btn btn-secondary btn-sm" id="activityTypeFilter" style="min-width:150px;">
+                <option value="">All types</option>
+                <option value="early">Early Pickup</option>
+                <option value="change">Pickup Change / Carpool</option>
+                <option value="bus">Bus Change</option>
+                <option value="late">Late Arrival</option>
+            </select>
             <select class="btn btn-secondary btn-sm" id="activityDivFilter" style="min-width:150px;"><option value="">All divisions</option></select>
             <button class="btn btn-secondary" onclick="ParentRequests.renderActivity()"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M1 4v6h6"/><path d="M23 20v-6h-6"/><path d="M20.49 9A9 9 0 005.64 5.64L1 10m22 4l-4.64 4.36A9 9 0 013.51 15"/></svg> Refresh</button>
         </div>
+    </div>
+    <!-- Subtabs: Messages = everything still Pending (needs a decision),
+         Changes = the resolved log. Same underlying data, one flat row list
+         per request either way — type shows as a badge on the row instead
+         of the old separate cards-per-type layout. -->
+    <div style="display:flex;gap:8px;margin-bottom:14px;">
+        <button class="btn btn-sm btn-primary" id="activityTabBtn-messages" onclick="ParentRequests.setActivityTab('messages')">Messages <span class="sb-badge warn" id="activityMsgCount" style="display:none;">0</span></button>
+        <button class="btn btn-sm btn-secondary" id="activityTabBtn-changes" onclick="ParentRequests.setActivityTab('changes')">Changes</button>
     </div>
     <!-- Today's early-pickup log (office manual entries + parent-confirmed
          ones, already merged into one list in today.earlyPickups) — a quick
@@ -280,6 +295,25 @@
             <button class="btn btn-secondary" id="scanBackBtn" style="display:none;" onclick="AttendanceScanner.back()">&#8592; Back</button>
             <button class="btn btn-secondary" onclick="CampistryLive.closeModal('scanModal')">Cancel</button>
             <button class="btn btn-primary" id="scanConfirmBtn" style="display:none;" onclick="AttendanceScanner.confirm()">Apply to Roll Call</button>
+        </div>
+    </div>
+</div>
+
+<!-- Delete-request confirmation — an in-page modal, not the browser's
+     native confirm() (which pauses the whole tab and looks/feels
+     inconsistent with everything else here). -->
+<div class="modal-overlay" id="deleteConfirmModal">
+    <div class="modal" style="max-width:420px;">
+        <div class="modal-header"><h3>Delete this request?</h3><button class="modal-close" onclick="ParentRequests.closeDeleteConfirm()">&times;</button></div>
+        <div class="modal-body">
+            <p id="deleteConfirmMsg" style="margin:0 0 14px;color:var(--slate-600);font-size:.88rem;"></p>
+            <label style="display:flex;align-items:center;gap:8px;font-size:.82rem;color:var(--slate-500);cursor:pointer;">
+                <input type="checkbox" id="deleteConfirmDontAsk"> Don't ask me again
+            </label>
+        </div>
+        <div class="modal-footer">
+            <button class="btn btn-secondary" onclick="ParentRequests.closeDeleteConfirm()">Cancel</button>
+            <button class="btn btn-danger" onclick="ParentRequests.confirmDeleteNow()">Delete</button>
         </div>
     </div>
 </div>
@@ -575,8 +609,24 @@ var ParentRequests = (function(){
     // card already carries that. Was _changeItemHtml when Messages/Changes
     // were separate flat lists; kept all the same per-type detail/action
     // logic, just dropped the header block the card now owns.
+    // Type signifier shown on every row, since rows from every type now sit
+    // in one flat list together — colors loosely echo the old per-type
+    // card headers so the eye can still sort them at a glance.
+    var TYPE_META={
+        early:{label:'Early Pickup',bg:'#ecfdf5',fg:'#059669'},
+        change:{label:'Pickup Change',bg:'#eff6ff',fg:'#2563eb'},
+        friend:{label:'Going With Friend',bg:'#eff6ff',fg:'#2563eb'},
+        bus:{label:'Bus Change',bg:'#ecfdf5',fg:'#059669'},
+        late:{label:'Late Arrival',bg:'#fef3f2',fg:'#b42318'}
+    };
+    // The type filter groups "Pickup Change" and "Going With Friend" under
+    // one option (they're the same underlying form) — this maps a row's
+    // real type to the filter value it belongs to.
+    function _typeFilterKey(type){ return type==='friend'?'change':type; }
+
     function _activityReqRowHtml(r,i){
         var statusCls=r.status==='Pending'?'badge-warn':r.status==='Confirmed'?'badge-info':r.status==='Declined'?'badge-error':'badge-ok';
+        var tm=TYPE_META[r.type]||{label:r.label||r.type,bg:'var(--slate-100)',fg:'var(--slate-600)'};
         var details=[];
         if(r.type==='late'){
             if(r.arrivedAt)details.push('Arrived: '+r.arrivedAt);
@@ -618,9 +668,14 @@ var ParentRequests = (function(){
                 '<button class="btn btn-secondary btn-sm" onclick="ParentRequests.deleteRequest('+i+')">Delete</button>'+
                 '</div>';
         }
-        return '<div style="padding:10px 0;border-bottom:1px solid var(--slate-100);">'+
+        var initials=esc(r.childName||'').split(' ').map(function(n){return n[0]||'';}).join('').slice(0,2);
+        return '<div style="display:flex;align-items:flex-start;gap:12px;padding:14px 0;border-bottom:1px solid var(--slate-100);">'+
+            '<div style="width:36px;height:36px;border-radius:50%;background:var(--slate-100);display:flex;align-items:center;justify-content:center;flex-shrink:0;font-size:.72rem;font-weight:700;color:var(--slate-600);">'+initials+'</div>'+
+            '<div style="flex:1;min-width:0;">'+
                 '<div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;">'+
-                    '<span style="font-weight:600;font-size:.86rem;">'+esc(r.label||r.type)+'</span>'+
+                    '<span style="font-weight:700;">'+esc(r.childName)+'</span>'+
+                    (r.childBunk?'<span style="font-size:.7rem;color:var(--slate-400);background:var(--slate-100);padding:1px 8px;border-radius:999px;">'+esc(r.childBunk)+'</span>':'')+
+                    '<span style="font-size:.68rem;font-weight:700;background:'+tm.bg+';color:'+tm.fg+';padding:1px 8px;border-radius:999px;">'+esc(tm.label)+'</span>'+
                     '<span class="badge '+statusCls+'" style="font-size:.66rem;">'+esc(r.status)+'</span>'+
                     (r.requestDate&&r.requestDate!==window.getLiveViewDate()?'<span style="font-size:.68rem;color:#7c3aed;background:#f5f3ff;padding:1px 8px;border-radius:999px;font-weight:600;">'+esc(r.requestDate)+'</span>':'')+
                 '</div>'+
@@ -628,88 +683,61 @@ var ParentRequests = (function(){
                 (details.length?'<div style="font-size:.79rem;color:var(--slate-600);margin-top:4px;line-height:1.5;">'+details.map(esc).join('&nbsp;&nbsp;&middot;&nbsp;&nbsp;')+'</div>':'')+
                 (r.status==='Pending'&&(r.type==='early'||r.type==='late')&&_sentenceCache[r.id]?'<div style="font-size:.78rem;color:#0284c7;margin-top:4px;">📍 '+esc(_sentenceCache[r.id])+'</div>':'')+
                 (r.officeMessage?'<div style="font-size:.76rem;color:var(--slate-600);margin-top:4px;font-style:italic;">Office: “'+esc(r.officeMessage)+'”</div>':'')+
+                // A confirmed early pickup can have a division-head/bunk-staff/
+                // league-captain notification behind it (pickup_alerts,
+                // migration 064) — this is the one place that acknowledgment
+                // status still shows, same as before Messages/Changes/Pickup
+                // Alerts were three separate pages.
+                (r.status==='Confirmed'&&r.type==='early'&&window.PickupAlerts?window.PickupAlerts.statusStripHtml(r.childName):'')+
                 '<textarea class="form-input" rows="1" placeholder="Staff note (not shared with parent)" style="margin-top:6px;font-size:.76rem;" onblur="ParentRequests.saveNote('+i+',this.value)">'+esc(r.staffNote||'')+'</textarea>'+
                 actions+
-            '</div>';
-    }
-
-    // A pickup_alerts row (league-notification acknowledgment), rendered as
-    // a row inside the same per-camper card as that camper's requests —
-    // this used to be PickupAlerts' own separate page.
-    function _activityAlertRowHtml(a){
-        var allAcked=(a.recipients||[]).length && a.recipients.every(function(r){return r.ack_state==='acknowledged';});
-        var leagueTag=a.league_check_state==='checked_match'?'<span class="badge badge-info" style="margin-left:6px;">League game</span>':'';
-        return '<div style="padding:10px 0;border-bottom:1px solid var(--slate-100);">'+
-            '<div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;">'+
-                '<span style="font-weight:600;font-size:.86rem;">Pickup Alert</span>'+leagueTag+
-                '<span class="badge '+(allAcked?'badge-ok':'badge-warn')+'" style="font-size:.66rem;">'+(allAcked?'All acknowledged':'Awaiting acknowledgment')+'</span>'+
             '</div>'+
-            '<div style="font-size:.76rem;color:var(--slate-500);margin-top:2px;">Pickup at '+esc(_fmtTime12(a.pickup_time))+'</div>'+
-            (window.PickupAlerts?window.PickupAlerts.statusStripHtml(a.camper_name):'')+
+            '<span class="badge '+statusCls+'" style="flex-shrink:0;">'+esc(r.status)+'</span>'+
             '</div>';
     }
 
-    function _dateKeyFromIso(iso){
-        var d=new Date(iso);
-        return d.getFullYear()+'-'+String(d.getMonth()+1).padStart(2,'0')+'-'+String(d.getDate()).padStart(2,'0');
+    var _activityTab='messages'; // 'messages' (Pending) | 'changes' (resolved log)
+    function setActivityTab(tab){
+        _activityTab=tab;
+        var mb=document.getElementById('activityTabBtn-messages'), cb=document.getElementById('activityTabBtn-changes');
+        if(mb){mb.className='btn btn-sm '+(tab==='messages'?'btn-primary':'btn-secondary');}
+        if(cb){cb.className='btn btn-sm '+(tab==='changes'?'btn-primary':'btn-secondary');}
+        _paintActivity();
     }
 
-    // Groups every pickup request + pickup alert by camper into one card
-    // each — pending requests always included (they need action regardless
-    // of what date is being viewed), resolved requests and alerts filtered
-    // to the currently-viewed date (window.getLiveViewDate, from the date
-    // picker in the header).
-    function _activityCampers(){
-        var reqs=getReqs(), alerts=(window.PickupAlerts&&window.PickupAlerts.getAlerts)?window.PickupAlerts.getAlerts():[];
+    // Messages = every type, Pending only (needs a decision). Changes = the
+    // resolved log — every type EXCEPT an "arrived now" late arrival, which
+    // routes straight into Roll Call on confirm with nothing left to show;
+    // an ETA-based late arrival (estArrival set) stays visible here until
+    // the parent's own "Dropped Off" follow-up lands, since confirming an
+    // ETA message is only an acknowledgement, not proof of arrival.
+    function _activityRows(){
+        var reqs=getReqs();
         var viewDate=window.getLiveViewDate?window.getLiveViewDate():_realTodayKey();
         var divFilter=(document.getElementById('activityDivFilter')||{}).value||'';
+        var typeFilter=(document.getElementById('activityTypeFilter')||{}).value||'';
         var searchVal=((document.getElementById('activitySearch')||{}).value||'').trim().toLowerCase();
-        var byName={};
-        function ensure(name,bunk,division){
-            if(!byName[name])byName[name]={name:name,bunk:bunk||'',division:division||'',items:[],hasPending:false,latestTs:0};
-            var c=byName[name];
-            if(bunk&&!c.bunk)c.bunk=bunk;
-            if(division&&!c.division)c.division=division;
-            return c;
-        }
-        reqs.forEach(function(r,i){
-            if(r.hidden)return;
+        var items=reqs.map(function(r,i){return {r:r,i:i};}).filter(function(x){
+            var r=x.r;
+            if(r.hidden)return false;
             var isPending=r.status==='Pending';
-            if(!isPending&&(r.requestDate||_realTodayKey())!==viewDate)return;
-            var division=(window.CampistryLiveLocator&&window.CampistryLiveLocator.bunkToDivision)?(CampistryLiveLocator.bunkToDivision(r.childBunk)||''):'';
-            var c=ensure(r.childName,r.childBunk,division);
-            c.items.push({kind:'req',r:r,i:i,ts:r.submittedAt||0});
-            if(isPending)c.hasPending=true;
-            c.latestTs=Math.max(c.latestTs,r.submittedAt||0);
+            if(_activityTab==='messages'){
+                if(!isPending)return false;
+            } else {
+                if(isPending)return false;
+                if(r.type==='late'&&!r.estArrival)return false; // arrived-now flow: nothing left to show
+                if((r.requestDate||_realTodayKey())!==viewDate)return false;
+            }
+            if(typeFilter&&_typeFilterKey(r.type)!==typeFilter)return false;
+            if(searchVal&&r.childName.toLowerCase().indexOf(searchVal)<0)return false;
+            if(divFilter){
+                var division=(window.CampistryLiveLocator&&window.CampistryLiveLocator.bunkToDivision)?(CampistryLiveLocator.bunkToDivision(r.childBunk)||''):'';
+                if(division!==divFilter)return false;
+            }
+            return true;
         });
-        alerts.forEach(function(a){
-            var ts=a.created_at?new Date(a.created_at).getTime():0;
-            var alertDateKey=a.created_at?_dateKeyFromIso(a.created_at):_realTodayKey();
-            if(alertDateKey!==viewDate)return;
-            var c=ensure(a.camper_name,a.camper_bunk,a.camper_division);
-            c.items.push({kind:'alert',a:a,ts:ts});
-            c.latestTs=Math.max(c.latestTs,ts);
-        });
-        var list=Object.keys(byName).map(function(k){return byName[k];});
-        if(divFilter)list=list.filter(function(c){return c.division===divFilter;});
-        if(searchVal)list=list.filter(function(c){return c.name.toLowerCase().indexOf(searchVal)>=0;});
-        list.forEach(function(c){c.items.sort(function(x,y){return y.ts-x.ts;});});
-        list.sort(function(x,y){ if(x.hasPending!==y.hasPending)return x.hasPending?-1:1; return y.latestTs-x.latestTs; });
-        return list;
-    }
-
-    function _activityCardHtml(c){
-        var initials=esc(c.name).split(' ').map(function(n){return n[0]||'';}).join('').slice(0,2);
-        var rows=c.items.map(function(it){ return it.kind==='req'?_activityReqRowHtml(it.r,it.i):_activityAlertRowHtml(it.a); }).join('');
-        return '<div class="card" style="margin-bottom:12px;"><div class="card-body">'+
-            '<div style="display:flex;align-items:center;gap:10px;margin-bottom:4px;">'+
-            '<div style="width:34px;height:34px;border-radius:50%;background:var(--slate-100);display:flex;align-items:center;justify-content:center;flex-shrink:0;font-size:.7rem;font-weight:700;color:var(--slate-600);">'+initials+'</div>'+
-            '<div style="flex:1;min-width:0;"><div style="font-weight:700;">'+esc(c.name)+'</div>'+
-            (c.bunk||c.division?'<div style="font-size:.72rem;color:var(--slate-400);">'+[c.bunk,c.division].filter(Boolean).map(esc).join(' &middot; ')+'</div>':'')+'</div>'+
-            (c.hasPending?'<span class="badge badge-warn">Needs action</span>':'')+
-            '</div>'+
-            rows+
-            '</div></div>';
+        items.sort(function(a,b){return (b.r.submittedAt||0)-(a.r.submittedAt||0);});
+        return items;
     }
 
     function renderActivity(){
@@ -722,30 +750,40 @@ var ParentRequests = (function(){
     function _paintActivity(){
         var body=document.getElementById('activityBody'); if(!body)return;
         updateBadge();
-        var divSel=document.getElementById('activityDivFilter');
-        if(divSel&&!divSel.dataset.wired){
-            divSel.dataset.wired='1';
-            divSel.addEventListener('change',_paintActivity);
-        }
+        ['activityDivFilter','activityTypeFilter'].forEach(function(id){
+            var el=document.getElementById(id);
+            if(el&&!el.dataset.wired){ el.dataset.wired='1'; el.addEventListener('change',_paintActivity); }
+        });
         var searchEl=document.getElementById('activitySearch');
         if(searchEl&&!searchEl.dataset.wired){
             searchEl.dataset.wired='1';
             searchEl.addEventListener('input',_paintActivity);
         }
+        var divSel=document.getElementById('activityDivFilter');
         if(divSel){
-            var seen={},divs=[];
-            (window.PickupAlerts&&window.PickupAlerts.divisions?PickupAlerts.divisions():[]).forEach(function(d){if(d&&!seen[d]){seen[d]=1;divs.push(d);}});
+            var seen={},divs=[],bd=(window.CampistryLiveLocator&&window.CampistryLiveLocator.bunkToDivision)?CampistryLiveLocator.bunkToDivision:null;
+            if(bd)getReqs().forEach(function(r){ var d=bd(r.childBunk); if(d&&!seen[d]){seen[d]=1;divs.push(d);} });
+            divs.sort();
             var opts='<option value="">All divisions</option>'+divs.map(function(d){return '<option value="'+esc(d)+'"'+(d===divSel.value?' selected':'')+'>'+esc(d)+'</option>';}).join('');
             if(divSel.innerHTML!==opts){var cur=divSel.value;divSel.innerHTML=opts;divSel.value=cur;}
         }
-        var campers=_activityCampers();
-        _warmSentences(campers.reduce(function(acc,c){return acc.concat(c.items.filter(function(it){return it.kind==='req';}));},[]),_paintActivity);
-        if(!campers.length){
+        var msgCount=getReqs().filter(function(r){return r.status==='Pending'&&!r.hidden;}).length;
+        var mc=document.getElementById('activityMsgCount');
+        if(mc){mc.textContent=String(msgCount);mc.style.display=msgCount?'':'none';}
+
+        var items=_activityRows();
+        _warmSentences(items,_paintActivity);
+        if(!items.length){
             var isToday=window.isLiveViewingToday?window.isLiveViewingToday():true;
-            body.innerHTML='<div class="empty-state">'+(isToday?'Nothing here yet — pickup requests, changes, and alerts will appear here as parents submit them':'Nothing for this date')+'</div>';
+            var msg=_activityTab==='messages'
+                ? 'Nothing pending — early pickups, changes, bus changes, and late arrivals all show up here the moment a parent sends one from Campistry Link'
+                : (isToday?'Nothing here yet':'Nothing for this date');
+            body.innerHTML='<div class="empty-state">'+msg+'</div>';
             return;
         }
-        body.innerHTML=campers.map(_activityCardHtml).join('');
+        body.innerHTML='<div class="card"><div class="card-body" style="padding:0 18px;">'+
+            items.map(function(x){return _activityReqRowHtml(x.r,x.i);}).join('')+
+            '</div></div>';
     }
 
     function startCompose(i,action){ _compose={index:i,action:action}; _paintActivity(); var ta=document.getElementById('rqComposeMsg'); if(ta)ta.focus(); }
@@ -920,11 +958,39 @@ var ParentRequests = (function(){
         refresh();
     }
 
+    // Delete confirmation — an in-page modal (#deleteConfirmModal), not the
+    // browser's native confirm(), with a "Don't ask again" opt-out stored
+    // per-device. The id (not the array index passed in) is what actually
+    // gets deleted, since the modal introduces a real async gap where the
+    // underlying reqs array can change (realtime resync) before the user
+    // clicks Delete — an index captured at click-time could point at a
+    // different row by then.
+    var DONT_ASK_DELETE_KEY='campistry_live_skip_delete_confirm';
+    var _pendingDeleteReqId=null;
     function deleteRequest(i){
         var reqs=getReqs(),r=reqs[i]; if(!r)return;
-        if(!confirm('Delete this request permanently for '+(r.childName||'this camper')+'? This can\'t be undone.'))return;
+        if(localStorage.getItem(DONT_ASK_DELETE_KEY)==='1'){ _doDeleteRequest(r); return; }
+        _pendingDeleteReqId=r.id;
+        var msg=document.getElementById('deleteConfirmMsg');
+        if(msg)msg.textContent='Delete this request permanently for '+(r.childName||'this camper')+'? This can\'t be undone.';
+        var dontAsk=document.getElementById('deleteConfirmDontAsk'); if(dontAsk)dontAsk.checked=false;
+        var modal=document.getElementById('deleteConfirmModal'); if(modal)modal.classList.add('open');
+    }
+    function closeDeleteConfirm(){
+        _pendingDeleteReqId=null;
+        var modal=document.getElementById('deleteConfirmModal'); if(modal)modal.classList.remove('open');
+    }
+    function confirmDeleteNow(){
+        if(!_pendingDeleteReqId)return;
+        var r=getReqs().filter(function(x){return x.id===_pendingDeleteReqId;})[0];
+        var dontAsk=document.getElementById('deleteConfirmDontAsk');
+        if(dontAsk&&dontAsk.checked){ try{localStorage.setItem(DONT_ASK_DELETE_KEY,'1');}catch(e){} }
+        closeDeleteConfirm();
+        if(r)_doDeleteRequest(r);
+    }
+    function _doDeleteRequest(r){
         var db=_db();
-        if(!db){ reqs.splice(i,1); saveReqs(reqs); refresh(); return; }
+        if(!db){ var reqs=getReqs();var idx=reqs.findIndex(function(x){return x.id===r.id;}); if(idx>=0)reqs.splice(idx,1); saveReqs(reqs); refresh(); return; }
         db.client.from('parent_pickup_requests').delete().eq('id',r.id).then(function(res){
             if(res.error){ console.warn('[Live] delete request failed:',res.error.message); liveToast('Could not delete — check your connection'); return; }
             // getReqs() re-parses JSON on every call, so this is a fresh array
@@ -999,8 +1065,9 @@ var ParentRequests = (function(){
         _ensureSchedule().then(function(){ refresh(); });
     });
 
-    return {renderActivity:renderActivity,
+    return {renderActivity:renderActivity,setActivityTab:setActivityTab,
         confirmNow:confirmNow,hideRequest:hideRequest,deleteRequest:deleteRequest,
+        closeDeleteConfirm:closeDeleteConfirm,confirmDeleteNow:confirmDeleteNow,
         startCompose:startCompose,cancelCompose:cancelCompose,useCanned:useCanned,sendCompose:sendCompose,
         saveNote:saveNote,refresh:refresh,updateBadge:updateBadge};
 })();
@@ -1038,8 +1105,8 @@ var PickupAlerts = (function(){
             }, function(){ if(cb)cb(); });
     }
 
-    // Inline status strip for a pickup-alert row inside ParentRequests'
-    // merged Activity view (see _activityAlertRowHtml in campistry_live.html).
+    // Inline status strip shown on a Confirmed early-pickup row in
+    // ParentRequests' Activity view (see _activityReqRowHtml).
     function statusStripHtml(camperName){
         var a=_alerts.filter(function(x){return x.camper_name===camperName;})
             .sort(function(x,y){return (y.created_at||'').localeCompare(x.created_at||'');})[0];
