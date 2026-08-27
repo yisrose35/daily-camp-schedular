@@ -2710,8 +2710,14 @@ function _reportsTabsHtml(active){
 function renderStructure(){
     var c=document.getElementById('page-structure'),divs=_sortedDivisions();
     var h=_layoutTabsHtml('structure');
-    h+='<div class="sec-hd"><div><h2 class="sec-title">Camp Structure</h2></div><div class="sec-actions"><button class="me-btn me-btn--pri" onclick="CampistryMe.addDiv()">+ Add Division</button></div></div>';
-    if(!divs.length){h+='<div class="me-empty"><h3>No divisions yet</h3><p>Create your camp structure.</p></div>'}
+    var totGrades=0,totBunks=0;
+    divs.forEach(function(pair){var gr=_sortedGrades(pair[1]);totGrades+=gr.length;gr.forEach(function(g){totBunks+=(g[1].bunks||[]).length;});});
+    h+='<div class="sec-hd"><div><h2 class="sec-title">Camp Structure</h2>'
+        +(divs.length?'<p class="sec-desc">'+divs.length+' division'+(divs.length!==1?'s':'')+' · '+totGrades+' grade'+(totGrades!==1?'s':'')+' · '+totBunks+' bunk'+(totBunks!==1?'s':'')+'</p>':'')
+        +'</div><div class="sec-actions">'
+        +(divs.length>1?'<button class="me-btn me-btn--sec me-btn--sm" onclick="CampistryMe.setAllStructDivsOpen(true)">Expand all</button><button class="me-btn me-btn--sec me-btn--sm" onclick="CampistryMe.setAllStructDivsOpen(false)">Collapse all</button>':'')
+        +'<button class="me-btn me-btn--pri" onclick="CampistryMe.addDiv()">+ Add Division</button></div></div>';
+    if(!divs.length){h+='<div class="me-empty"><h3>No divisions yet</h3><p>Create your camp structure to get started — divisions, grades, and bunks.</p><button class="me-btn me-btn--pri" onclick="CampistryMe.addDiv()">+ Add Division</button></div>'}
     else{
         h+='<div id="meDivList"><div style="font-size:.72rem;color:var(--s400);margin-bottom:8px">Drag the ⋮⋮ handles or any chip to reorder divisions, grades, and bunks in place.</div>';
         divs.forEach(function([dn,dd],ix){
@@ -2727,29 +2733,37 @@ function renderStructure(){
             var dHeadAttrs=rollup.editable
                 ?' onclick="CampistryMe.openDivisionHeadModal(\''+je(dn)+'\')" style="cursor:pointer"'
                 :' style="cursor:default"';
-            h+='<div class="me-card me-div-card" data-div="'+je(dn)+'" style="margin-bottom:10px"><div class="me-card-head"><div style="display:flex;align-items:center;gap:8px">'
-                +'<span class="me-grip me-div-grip" title="Drag to reorder division" style="cursor:grab;color:var(--s400);font-size:1rem;line-height:1;padding:0 4px;user-select:none">⋮⋮</span>'
-                +'<div style="width:10px;height:10px;border-radius:3px;background:'+col+'"></div><h3 style="margin:0">'+esc(dn)+'</h3><span style="font-size:.75rem;color:var(--s400)">'+grades.length+' grades · '+bCt+' bunks</span></div><div style="display:flex;gap:4px;align-items:center">'
+            var bodyId='structBody'+ix;
+            var openKey='struct_'+dn;
+            var isOpen=Object.prototype.hasOwnProperty.call(_accOpenState,openKey)?_accOpenState[openKey]:true;
+            h+='<div class="me-card me-div-card" data-div="'+je(dn)+'" style="margin-bottom:10px">'
+                +'<div class="me-card-head"><div style="display:flex;align-items:center;gap:8px;cursor:pointer;min-width:0" onclick="CampistryMe._toggleAcc(\''+bodyId+'\',\''+je(openKey)+'\')" title="'+(isOpen?'Collapse':'Expand')+' this division">'
+                +'<span class="me-grip me-div-grip" title="Drag to reorder division" onclick="event.stopPropagation()" style="cursor:grab;color:var(--s400);font-size:1rem;line-height:1;padding:0 4px;user-select:none">⋮⋮</span>'
+                +'<span id="'+bodyId+'Chev" style="color:var(--s400);font-size:.7rem;flex-shrink:0">'+(isOpen?'▾':'▸')+'</span>'
+                +'<div style="width:10px;height:10px;border-radius:3px;background:'+col+';flex-shrink:0"></div><h3 style="margin:0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">'+esc(dn)+'</h3>'
+                +'<span style="display:flex;gap:4px;flex-shrink:0">'+bdg(grades.length+' grade'+(grades.length!==1?'s':''),'gray')+bdg(bCt+' bunk'+(bCt!==1?'s':''),'gray')+'</span>'
+                +'</div><div style="display:flex;gap:4px;align-items:center;flex-shrink:0">'
                 +'<button class="me-btn me-btn--ghost me-btn--sm" title="Move up"'+upDis+' onclick="CampistryMe.moveDivision(\''+je(dn)+'\',-1)" style="padding:4px 8px">↑</button>'
                 +'<button class="me-btn me-btn--ghost me-btn--sm" title="Move down"'+dnDis+' onclick="CampistryMe.moveDivision(\''+je(dn)+'\',1)" style="padding:4px 8px">↓</button>'
                 +'<button class="me-btn me-btn--ghost me-btn--sm" onclick="CampistryMe.editDiv(\''+je(dn)+'\')">Edit</button>'
                 +'<button class="me-btn me-btn--danger me-btn--sm" onclick="CampistryMe.deleteDiv(\''+je(dn)+'\')">Delete</button>'
                 +'</div></div>'
-                +'<div style="padding:0 18px 10px;display:flex;align-items:center;gap:6px"'+dHeadAttrs+' title="'+(rollup.editable?'Manage this division\'s head(s) — who gets notified for this division':'Assigned per grade below — shows here only once every grade shares the same head')+'">'
+                +'<div style="padding:10px 18px 0;display:flex;align-items:center;gap:6px"'+dHeadAttrs+' title="'+(rollup.editable?'Manage this division\'s head(s) — who gets notified for this division':'Assigned per grade below — shows here only once every grade shares the same head')+'">'
                 +'<span style="font-size:.7rem;color:var(--s400);font-weight:600">Division Head:</span>'
                 +'<span style="font-size:.72rem;'+(rollup.heads.length?'color:var(--s600);font-weight:600':(rollup.editable?'color:var(--me);font-weight:600':'color:var(--s400);font-weight:600'))+'">'+dHeadChip+'</span>'
-                +'</div>';
+                +'</div>'
+                +'<div id="'+bodyId+'" style="display:'+(isOpen?'block':'none')+'">';
             h+='<div class="me-grade-list" data-div="'+je(dn)+'" style="padding:14px 18px">';
             grades.forEach(function([gn,gd]){
                 var gHeads=divisionHeads[gn]||[];
                 var gHeadChip=gHeads.length?gHeads.map(function(s){return esc(s.name);}).join(', '):'+ Assign head';
-                h+='<div class="me-grade-block" data-grade="'+je(gn)+'" style="margin-bottom:10px;padding:6px 8px;border:1px dashed transparent;border-radius:6px">'
-                    +'<div style="display:flex;align-items:center;gap:6px;margin-bottom:4px">'
+                h+='<div class="me-grade-block" data-grade="'+je(gn)+'" style="margin-bottom:8px;padding:8px 10px;background:var(--s50);border:1px solid var(--s100);border-radius:8px">'
+                    +'<div style="display:flex;align-items:center;gap:6px;margin-bottom:6px">'
                         +'<span class="me-grip me-grade-grip" title="Drag to reorder grade" style="cursor:grab;color:var(--s400);font-size:.85rem;line-height:1;padding:0 2px;user-select:none">⋮⋮</span>'
-                        +'<div style="font-size:.8rem;font-weight:600;color:var(--s700)">'+esc(gn)+'</div>'
-                        +'<span style="font-size:.66rem;cursor:pointer;'+(gHeads.length?'color:var(--s500);font-weight:600':'color:var(--me);font-weight:600')+'" onclick="event.stopPropagation();CampistryMe.openDivisionHeadModal(\''+je(gn)+'\')" title="Manage this grade\'s head — can be different from the division head, and notified alongside them for this grade\'s pickups">Head: '+gHeadChip+'</span>'
+                        +'<div style="font-size:.8rem;font-weight:700;color:var(--s700)">'+esc(gn)+'</div>'
+                        +'<span style="font-size:.66rem;cursor:pointer;margin-left:auto;flex-shrink:0;'+(gHeads.length?'color:var(--s500);font-weight:600':'color:var(--me);font-weight:600')+'" onclick="event.stopPropagation();CampistryMe.openDivisionHeadModal(\''+je(gn)+'\')" title="Manage this grade\'s head — can be different from the division head, and notified alongside them for this grade\'s pickups">Head: '+gHeadChip+'</span>'
                     +'</div>'
-                    +'<div class="me-card-bunks" data-grade="'+je(gn)+'" style="display:flex;flex-wrap:wrap;gap:4px;padding-left:18px">';
+                    +'<div class="me-card-bunks" data-grade="'+je(gn)+'" style="display:flex;flex-wrap:wrap;gap:5px;padding-left:18px">';
                 (gd.bunks||[]).forEach(function(b){
                     var rCt=Object.values(roster).filter(function(c){return c.bunk===b}).length;
                     var mCt=bunkManualCounts[b];
@@ -2759,14 +2773,14 @@ function renderStructure(){
                     var badgeStyle=isOverride
                         ?'background:var(--me);color:#fff;'
                         :(rCt?'background:#e2e8f0;color:#475569;':'background:#f1f5f9;color:#94a3b8;');
-                    h+='<span class="me-card-bunk" data-bunk="'+je(b)+'" draggable="true" style="display:inline-flex;align-items:center;gap:4px;padding:3px 6px 3px 8px;border-radius:6px;border:1px solid var(--s200);font-size:.7rem;font-weight:600;color:var(--s600);cursor:grab;user-select:none">'
+                    h+='<span class="me-card-bunk" data-bunk="'+je(b)+'" draggable="true" style="display:inline-flex;align-items:center;gap:4px;padding:3px 6px 3px 8px;border-radius:6px;border:1px solid var(--s200);background:#fff;font-size:.7rem;font-weight:600;color:var(--s600);cursor:grab;user-select:none">'
                         +esc(b)
                         +'<span class="bunk-ct-pill" title="'+esc(badgeTip)+'" onclick="event.stopPropagation();CampistryMe.openBunkCountModal(\''+je(b)+'\')" style="'+badgeStyle+'min-width:18px;height:16px;border-radius:8px;font-size:.65rem;font-weight:700;padding:0 5px;cursor:pointer;display:inline-flex;align-items:center;justify-content:center;">'+dispCt+'</span>'
                         +'</span>';
                 });
                 h+='</div></div>';
             });
-            h+='</div></div>';
+            h+='</div></div></div>';
         });
         h+='</div>';
     }
@@ -4614,6 +4628,12 @@ function _divisionHeadRollup(divName,gradeEntries){
         return {heads:legacy,editable:false};
     }
     return {heads:[],editable:false,mixed:lists.some(function(l){return l.length>0;})};
+}
+// Expand-all/Collapse-all for Camp Structure's per-division accordions
+// (state lives in _accOpenState, same mechanism _toggleAcc already uses).
+function setAllStructDivsOpen(open){
+    _sortedDivisions().forEach(function(pair){ _accOpenState['struct_'+pair[0]]=open; });
+    renderStructure();
 }
 function openDivisionHeadModal(divName){
     _renderDivisionHeadModalBody(divName);
@@ -12865,7 +12885,7 @@ window.CampistryMe={
     bbDrop:bbDrop,autoAssign:autoAssign,autoGenerateBunks:autoGenerateBunks,openBunkGenSettings:openBunkGenSettings,showCamperBunkRequests:showCamperBunkRequests,clearBunks:clearBunks,setBunkCount:setBunkCount,openBunkCountModal:openBunkCountModal,_clearBunkCount:_clearBunkCount,
     openBunkStaffModal:openBunkStaffModal,addBunkStaff:addBunkStaff,removeBunkStaff:removeBunkStaff,
     editBunkStaff:editBunkStaff,_resetBunkStaffForm:_resetBunkStaffForm,inviteBunkStaffToLite:inviteBunkStaffToLite,
-    openDivisionHeadModal:openDivisionHeadModal,addDivisionHead:addDivisionHead,removeDivisionHead:removeDivisionHead,
+    openDivisionHeadModal:openDivisionHeadModal,addDivisionHead:addDivisionHead,removeDivisionHead:removeDivisionHead,setAllStructDivsOpen:setAllStructDivsOpen,
     editDivisionHead:editDivisionHead,_resetDivisionHeadForm:_resetDivisionHeadForm,inviteDivisionHeadToLite:inviteDivisionHeadToLite,
     fillDivisionHeadFromHired:fillDivisionHeadFromHired,
     // Staff directory — the single source of truth for who works with which
