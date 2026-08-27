@@ -544,7 +544,19 @@
         var body = document.getElementById('locScheduleBody');
         if (body) body.innerHTML = '<div class="empty-state">Loading schedule…</div>';
         if (!window.LiveScheduleReader) { _loading = false; return; }
-        window.LiveScheduleReader.loadToday(getStructure()).then(function (data) {
+        // CampistryDB's campId isn't available synchronously — it needs a
+        // verified detection round after auth (see supabase_client.js's
+        // initialize()), exposed here as CampistryDB.ready. Without waiting
+        // for it, loading this page on first paint (Camper Locator is often
+        // the landing tab) raced that detection: loadForDate() saw no
+        // client/campId yet and silently resolved an EMPTY schedule with no
+        // retry — it only "fixed itself" if the user happened to navigate
+        // away and back after the race settled.
+        var ready = (window.CampistryDB && window.CampistryDB.ready && window.CampistryDB.ready.then)
+            ? window.CampistryDB.ready : Promise.resolve();
+        ready.then(function () {
+            return window.LiveScheduleReader.loadToday(getStructure());
+        }).then(function (data) {
             _schedule = data;
             _loading = false;
             renderFilters();
