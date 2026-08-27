@@ -460,7 +460,12 @@ button { font-family: inherit; cursor: pointer; border: none; background: none; 
     font-weight: 700;
     line-height: 1;
 }
-.dash-notif-header-tools { display: flex; align-items: center; gap: 4px; }
+.dash-notif-header-tools { display: flex; align-items: center; gap: 10px; }
+.dash-notif-clearall-btn {
+    font-size: 0.78rem; font-weight: 600; color: var(--slate-400);
+    background: none; border: none; cursor: pointer; padding: 0;
+}
+.dash-notif-clearall-btn:hover { color: #DC2626; text-decoration: underline; }
 .dash-notif-toggle, .dash-notif-settings-btn {
     width: 32px;
     height: 32px;

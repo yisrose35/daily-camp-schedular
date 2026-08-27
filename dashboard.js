@@ -2215,10 +2215,10 @@
     // ========================================
     // LIVE NOTIFICATIONS (Link messages, Notes reminders, schedule changes)
     // Reads from the `notifications` table (see migrations/056_notifications.sql
-    // + NOTIFICATIONS_SETUP.md) and renders into a dedicated list above the
-    // existing static/hardcoded notifications built by dashboard.html's own
-    // inline buildNotifications() — the two are independent, this only ever
-    // touches #dashNotifLiveList.
+    // + NOTIFICATIONS_SETUP.md) and renders into #dashNotifLiveList. This is
+    // now the entire panel's content — the old static/hardcoded onboarding
+    // tips (buildNotifications() in dashboard.html) were removed since they
+    // never reflected anything real and couldn't be dismissed.
     //
     // Three writers feed the shared `notifications` table with two different
     // shapes: the source-based one (056) for link_message/notes_reminder —
@@ -2238,6 +2238,7 @@
 
     var _notifChannel = null;
     var _notifPollTimer = null;
+    var _notifVisibleRows = []; // [{id, isLegacy}] currently rendered — what "Clear all" acts on
     var _notifIcons = {
         link_message: '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>',
         notes_reminder: '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>',
@@ -2354,8 +2355,15 @@
         visible.sort(function(a, b) { return (b.important - a.important); });
 
         _updateNotifBadge(unreadCount);
+        _notifVisibleRows = visible.map(function(v) { return { id: v.n.id, isLegacy: v.n.source == null }; });
+        var clearBtn = document.getElementById('dashNotifClearAllBtn');
+        if (clearBtn) clearBtn.style.display = visible.length ? '' : 'none';
 
-        if (!visible.length) { wrap.style.display = 'none'; wrap.innerHTML = ''; return; }
+        if (!visible.length) {
+            wrap.style.display = 'block';
+            wrap.innerHTML = '<p style="color:var(--slate-400);font-size:0.85rem;text-align:center;padding:14px 0;">You’re all caught up — no notifications right now.</p>';
+            return;
+        }
         wrap.style.display = 'block';
         wrap.innerHTML = visible.map(function(v) {
             var n = v.n, category = v.category;
@@ -2422,6 +2430,37 @@
             }
         } catch (e) {
             console.warn('[Dashboard] dismissNotification failed:', e);
+        }
+        loadLiveNotifications();
+    };
+
+    // Dismisses every notification currently in view in one pass, batched
+    // per mechanism (one upsert for all source-based ids, one update for
+    // all legacy ids) rather than N round trips.
+    window.clearAllNotifications = async function() {
+        var rows = _notifVisibleRows.slice();
+        if (!rows.length) return;
+        if (!confirm('Clear all ' + rows.length + ' notification' + (rows.length === 1 ? '' : 's') + '?')) return;
+        rows.forEach(function(r) {
+            var card = document.getElementById('notifCard_' + r.id);
+            if (card) card.remove();
+        });
+        try {
+            if (window.supabase) {
+                var legacyIds = rows.filter(function(r) { return r.isLegacy; }).map(function(r) { return r.id; });
+                var liveIds = rows.filter(function(r) { return !r.isLegacy; }).map(function(r) { return r.id; });
+                var ops = [];
+                if (legacyIds.length) {
+                    ops.push(window.supabase.from('notifications').update({ read: true }).in('id', legacyIds));
+                }
+                if (liveIds.length && currentUser) {
+                    ops.push(window.supabase.from('notification_reads')
+                        .upsert(liveIds.map(function(id) { return { notification_id: id, user_id: currentUser.id }; }), { onConflict: 'notification_id,user_id', ignoreDuplicates: true }));
+                }
+                await Promise.all(ops);
+            }
+        } catch (e) {
+            console.warn('[Dashboard] clearAllNotifications failed:', e);
         }
         loadLiveNotifications();
     };
