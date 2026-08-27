@@ -47,7 +47,15 @@
     function getCampName() { var g = readGlobal(); return g.camp_name || g.campName || localStorage.getItem('campistry_camp_name') || 'Your Camp'; }
     function getLive() { try { return JSON.parse(localStorage.getItem(LIVE_STORE_KEY) || '{}'); } catch (e) { return {}; } }
     function saveLive(d) { try { d.updated_at = new Date().toISOString(); localStorage.setItem(LIVE_STORE_KEY, JSON.stringify(d)); } catch (e) {} }
-    function getTodayKey() { var d = new Date(); d.setHours(12, 0, 0, 0); return d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0') + '-' + String(d.getDate()).padStart(2, '0'); }
+    // Defers to the shared view-date picker (campistry_live.html's header)
+    // when present, so Roll Call reads/writes the day currently being
+    // browsed instead of always today. Falls back to real "today" if the
+    // picker script hasn't run yet (or this file is ever loaded standalone).
+    function getTodayKey() {
+        if (typeof window.getLiveViewDate === 'function') return window.getLiveViewDate();
+        var d = new Date(); d.setHours(12, 0, 0, 0);
+        return d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0') + '-' + String(d.getDate()).padStart(2, '0');
+    }
     function getTodayData() { var data = getLive(), key = getTodayKey(); if (!data[key]) data[key] = { attendance: {}, absences: [], earlyPickups: [], notes: '' }; return data[key]; }
     function saveTodayData(t) { var d = getLive(); d[getTodayKey()] = t; saveLive(d); }
 
@@ -530,6 +538,17 @@ function esc(s) { if (s == null) return ''; var d = document.createElement('div'
         renderEarlyPickups();
         renderReports();
         toast('Refreshed');
+    }
+
+    // Same re-render as refresh() minus the "Refreshed" toast — used when
+    // the header's date picker changes (campistry_live.html), since that's
+    // not a manual refresh action and shouldn't look like one.
+    function _rerenderForDateChange() {
+        renderDashboard();
+        renderRollCall();
+        renderAbsences();
+        renderEarlyPickups();
+        renderReports();
     }
 
     function init() {
@@ -1124,6 +1143,7 @@ document.querySelectorAll('[data-qr]').forEach(function(el){
     // =========================================================================
     window.CampistryLive = {
         refresh,
+        _rerenderForDateChange,
         renderEarlyPickups,
         toggleAttendance,
         toggleByEl,

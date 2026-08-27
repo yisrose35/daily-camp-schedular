@@ -26,29 +26,51 @@
         <script src="campistry_app_switcher.js"></script>
     </div>
     <div class="header-right">
-        <span class="nav-live-date" id="navLiveDate" title="Everything in Live is for today — it resets each morning" style="font-size:.82rem;color:var(--slate-500);margin-right:14px;white-space:nowrap;"></span>
+        <input type="date" id="navLiveDate" class="form-input" title="Viewing date — Roll Call and Activity show this day's data" style="font-size:.82rem;color:var(--slate-600);margin-right:14px;padding:4px 8px;width:150px;">
         <span class="nav-user" id="navUserEmail">Office</span>
     </div>
 </header>
 <script>
-// Live is always "today" — Roll Call, Messages, Changes, the Camper Locator
-// schedule, all of it resets fresh each morning with nothing carried over.
-// That's easy to forget mid-shift, so show the date right in the header.
-// Re-checks on an interval (not just on load) so a device left open
-// overnight rolls over to the new date instead of showing yesterday's.
+// Shared "what day is Live looking at" state — Roll Call and the Activity
+// page (Messages/Changes/Pickup Alerts merged) both read this instead of
+// always computing "today" themselves, so a camp can look back at
+// yesterday's roll call or ahead at a request already submitted for next
+// week. null means "today" (not a fixed string) so it stays correct across
+// midnight without anyone having to notice and reset it.
 (function(){
+    var _viewDate=null; // "YYYY-MM-DD" or null for today
+    function _todayStr(){ var d=new Date(); d.setHours(12,0,0,0); return d.getFullYear()+'-'+String(d.getMonth()+1).padStart(2,'0')+'-'+String(d.getDate()).padStart(2,'0'); }
+    window.getLiveViewDate=function(){ return _viewDate||_todayStr(); };
+    window.isLiveViewingToday=function(){ return !_viewDate||_viewDate===_todayStr(); };
+    window.setLiveViewDate=function(dateStr){
+        _viewDate=(dateStr===_todayStr())?null:dateStr;
+        var el=document.getElementById('navLiveDate'); if(el)el.value=window.getLiveViewDate();
+        window.dispatchEvent(new CustomEvent('live-view-date-changed'));
+    };
     var el=document.getElementById('navLiveDate');
-    if(!el)return;
-    var shown='';
-    function paint(){
-        var now=new Date();
-        var key=now.toDateString();
-        if(key===shown)return;
-        shown=key;
-        el.textContent=now.toLocaleDateString('en-US',{weekday:'short',month:'short',day:'numeric'});
+    if(el){
+        el.value=_todayStr();
+        el.addEventListener('change',function(){ window.setLiveViewDate(el.value||_todayStr()); });
     }
-    paint();
-    setInterval(paint,60000);
+    // A staffer marking attendance is editing whatever date is loaded —
+    // easy to forget mid-shift after browsing to a different day, so make
+    // it impossible to miss on the one page where a mis-click actually
+    // changes a record (Roll Call).
+    function _updateDateBanner(){
+        var b=document.getElementById('rollCallDateBanner'); if(!b)return;
+        if(window.isLiveViewingToday()){ b.innerHTML=''; return; }
+        b.innerHTML='<div style="background:#fef3c7;border:1px solid #f59e0b;color:#92400e;padding:8px 14px;border-radius:8px;margin-bottom:12px;font-size:.82rem;font-weight:600;">'+
+            '⚠ Viewing '+window.getLiveViewDate()+' — attendance changes here apply to that date, not today.</div>';
+    }
+    // Both modules load in later <script> blocks — safe to reference here
+    // since this callback only ever runs later, once the date is actually
+    // changed by a user well after the page has finished loading.
+    window.addEventListener('live-view-date-changed',function(){
+        _updateDateBanner();
+        if(window.CampistryLive&&window.CampistryLive._rerenderForDateChange)window.CampistryLive._rerenderForDateChange();
+        if(window.ParentRequests)window.ParentRequests.refresh();
+    });
+    _updateDateBanner();
 })();
 </script>
 
@@ -57,13 +79,16 @@
 <aside id="sidebar" class="sidebar">
     <div class="sidebar-label">Attendance</div>
     <button class="sidebar-item active" data-page="roll-call"><span class="sidebar-dot"></span> Roll Call <span class="sb-badge" id="sbAbsentCount">0</span></button>
-    <button class="sidebar-item" data-page="pickup-alerts"><span class="sidebar-dot"></span> Pickup Alerts</button>
     <button class="sidebar-item" data-page="camper-locator"><span class="sidebar-dot"></span> Camper Locator</button>
     <div class="sidebar-label">Reports</div>
     <button class="sidebar-item" data-page="reports"><span class="sidebar-dot"></span> Attendance Reports</button>
     <div class="sidebar-label">Parent</div>
-    <button class="sidebar-item" data-page="messages"><span class="sidebar-dot"></span> Messages <span class="sb-badge warn" id="sbMessagesCount" style="display:none;">0</span></button>
-    <button class="sidebar-item" data-page="changes"><span class="sidebar-dot"></span> Changes <span class="sb-badge warn" id="sbChangesCount" style="display:none;">0</span></button>
+    <!-- Messages, Changes, and Pickup Alerts used to be three separate pages
+         covering the same underlying thing — a parent's request or a
+         pickup-time notification, tied to one camper. They're now one page,
+         one timeline per camper (see renderActivity in the ParentRequests
+         script below). -->
+    <button class="sidebar-item" data-page="activity"><span class="sidebar-dot"></span> Activity <span class="sb-badge warn" id="sbActivityCount" style="display:none;">0</span></button>
     <button class="sidebar-item" data-page="camper-mail"><span class="sidebar-dot"></span> Camper Mail <span class="sb-badge warn" id="sbMailCount" style="display:none;">0</span></button>
 </aside>
 
@@ -121,20 +146,11 @@
             <button class="btn btn-secondary" onclick="CampistryLive.markAllPresent()">Mark All Present</button>
         </div>
     </div>
+    <div id="rollCallDateBanner"></div>
     <div id="rollCallBody"><div class="empty-state">Loading roster...</div></div>
 </div>
 
 <!-- ── PICKUP ALERTS ── -->
-<div id="page-pickup-alerts" class="live-page">
-    <div class="page-header">
-        <div><div class="page-title">Pickup Alerts</div><div class="page-subtitle">Division head, bunk staff, and league captain notifications</div></div>
-        <div class="page-actions">
-            <select class="btn btn-secondary btn-sm" id="pickupAlertsDivFilter" style="min-width:160px;"><option value="">All divisions</option></select>
-        </div>
-    </div>
-    <div id="pickupAlertsBody"><div class="empty-state">Loading…</div></div>
-</div>
-
 <!-- ── REPORTS ── -->
 <div id="page-reports" class="live-page">
     <div class="page-header">
@@ -146,26 +162,32 @@
     <div id="reportsBody"><div class="empty-state">Generate a report to view attendance data</div></div>
 </div>
 
-<!-- ── MESSAGES (late arrivals) ── -->
-<div id="page-messages" class="live-page">
+<!-- ── ACTIVITY — Messages, Changes, and Pickup Alerts merged into one
+     per-camper timeline. A camper's pending request, the office's reply,
+     a pickup-time league-notification acknowledgment, and the resolved
+     history all live under that one camper's card now instead of three
+     separate pages a staffer had to cross-reference. ── -->
+<div id="page-activity" class="live-page">
     <div class="page-header">
-        <div><div class="page-title">Messages</div><div class="page-subtitle">Late arrivals reported by parents via Campistry Link</div></div>
+        <div><div class="page-title">Activity</div><div class="page-subtitle">Every pickup request, change, and notification, grouped by camper</div></div>
         <div class="page-actions">
-            <button class="btn btn-secondary" onclick="ParentRequests.renderMessages()"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M1 4v6h6"/><path d="M23 20v-6h-6"/><path d="M20.49 9A9 9 0 005.64 5.64L1 10m22 4l-4.64 4.36A9 9 0 013.51 15"/></svg> Refresh</button>
+            <input id="activitySearch" class="form-input" placeholder="Search camper..." style="width:160px;">
+            <select class="btn btn-secondary btn-sm" id="activityDivFilter" style="min-width:150px;"><option value="">All divisions</option></select>
+            <button class="btn btn-secondary" onclick="ParentRequests.renderActivity()"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M1 4v6h6"/><path d="M23 20v-6h-6"/><path d="M20.49 9A9 9 0 005.64 5.64L1 10m22 4l-4.64 4.36A9 9 0 013.51 15"/></svg> Refresh</button>
         </div>
     </div>
-    <div id="messagesBody"><div class="empty-state">No late-arrival messages — they'll appear here when a parent reports a late drop-off from Campistry Link</div></div>
-</div>
-
-<!-- ── CHANGES (early pickup / pickup change / bus change) ── -->
-<div id="page-changes" class="live-page">
-    <div class="page-header">
-        <div><div class="page-title">Changes</div><div class="page-subtitle">Early pickups, pickup changes, and bus changes submitted by parents via Campistry Link</div></div>
-        <div class="page-actions">
-            <button class="btn btn-secondary" onclick="ParentRequests.renderChanges()"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M1 4v6h6"/><path d="M23 20v-6h-6"/><path d="M20.49 9A9 9 0 005.64 5.64L1 10m22 4l-4.64 4.36A9 9 0 013.51 15"/></svg> Refresh</button>
+    <!-- Today's early-pickup log (office manual entries + parent-confirmed
+         ones, already merged into one list in today.earlyPickups) — a quick
+         roster of who's left, separate from the per-camper request cards
+         below. Only meaningful for today, so it's hidden on any other date. -->
+    <div id="earlyPickupLogWrap">
+        <div class="page-header" style="margin-top:0;">
+            <div><div class="page-title" style="font-size:1rem;">Today's Early Pickups</div></div>
+            <div class="page-actions"><button class="btn btn-secondary btn-sm" onclick="CampistryLive.openPickupModal()">+ Add</button></div>
         </div>
+        <div id="earlyPickupBody"></div>
     </div>
-    <div id="changesBody"><div class="empty-state">Loading…</div></div>
+    <div id="activityBody"><div class="empty-state">Loading…</div></div>
 </div>
 
 <div id="page-camper-mail" class="live-page">
@@ -294,11 +316,9 @@
             document.querySelectorAll('.cs-bnav-item').forEach(function(x){x.classList.remove('active')});
             var bn=document.querySelector('.cs-bnav-item[data-page="'+p+'"]');if(bn)bn.classList.add('active');
             close();
-            if(p==='messages'&&window.ParentRequests) ParentRequests.renderMessages();
-            if(p==='changes'&&window.ParentRequests) ParentRequests.renderChanges();
+            if(p==='activity'&&window.ParentRequests) ParentRequests.renderActivity();
             if(p==='camper-mail'&&window.CamperMail) CamperMail.render();
             if(p==='camper-locator'&&window.CampistryLiveLocator) CampistryLiveLocator.refresh();
-            if(p==='pickup-alerts'&&window.PickupAlerts) PickupAlerts.render();
         });
     });
 })();
@@ -341,18 +361,6 @@ var ParentRequests = (function(){
     var LIVE_KEY = 'campistry_live_v1';
     var CONFIRM_CANNED = ['Approved — see you then!', 'Confirmed, thanks for letting us know.'];
     var DECLINE_CANNED = ["Sorry, we can't accommodate this today — please call the office.", 'Please have them show ID at pickup.'];
-    var GROUPS = [
-        { key:'early', title:'Early Pickup', types:['early'] },
-        { key:'change', title:'Pickup Change', types:['change','friend'] },
-        { key:'bus', title:'Bus Change', types:['bus'] },
-        // Only the ETA flow lands here (see the extra filter in _paintChanges
-        // below) — an "I just dropped them off" late arrival still routes
-        // straight into Roll Call on confirm with nothing left to track. An
-        // ETA-based one stays visible here until the parent's own "Dropped
-        // Off" follow-up lands, since confirming an ETA message is just an
-        // acknowledgement, not proof the camper has actually arrived.
-        { key:'late', title:'Late Arrival — On the Way', types:['late'] }
-    ];
     var _compose = null; // {index, action:'Confirmed'|'Declined'}
     var _sentenceCache = {}; // request id -> resolved "he'll be at..." sentence (or '' if none)
 
@@ -527,7 +535,16 @@ var ParentRequests = (function(){
     }
     function getLive(){try{return JSON.parse(localStorage.getItem(LIVE_KEY)||'{}');}catch(e){return{};}}
     function saveLive(d){try{d.updated_at=new Date().toISOString();localStorage.setItem(LIVE_KEY,JSON.stringify(d));}catch(e){}}
-    function todayKey(){var d=new Date();d.setHours(12,0,0,0);return d.getFullYear()+'-'+String(d.getMonth()+1).padStart(2,'0')+'-'+String(d.getDate()).padStart(2,'0');}
+    // Real calendar today, regardless of what date is being browsed —
+    // distinct from todayKey() below, which is the STORAGE key and follows
+    // the view-date picker. Used only where "today" has to mean the actual
+    // day (e.g. treating an old undated row as belonging to today, since it
+    // predates the request_date column existing at all).
+    function _realTodayKey(){var d=new Date();d.setHours(12,0,0,0);return d.getFullYear()+'-'+String(d.getMonth()+1).padStart(2,'0')+'-'+String(d.getDate()).padStart(2,'0');}
+    // The Roll Call storage key (campistry_live_v1, shared with
+    // campistry_live.js) — follows the header's date picker so browsing to
+    // yesterday reads/writes yesterday's attendance instead of always today.
+    function todayKey(){return window.getLiveViewDate?window.getLiveViewDate():_realTodayKey();}
     function getTodayData(){var data=getLive(),key=todayKey();if(!data[key])data[key]={attendance:{},absences:[],earlyPickups:[],notes:''};return data[key];}
     function saveTodayData(t){var d=getLive();d[todayKey()]=t;saveLive(d);}
 
@@ -548,85 +565,17 @@ var ParentRequests = (function(){
 
     function updateBadge(){
         var reqs=getReqs();
-        // Every pending item of every type lives in Messages now — Changes
-        // is resolved-only, so it has nothing left to badge.
-        var msgCount=reqs.filter(function(r){return r.status==='Pending'&&!r.hidden;}).length;
-        var mb=document.getElementById('sbMessagesCount');
-        if(mb){mb.textContent=String(msgCount);mb.style.display=msgCount?'':'none';}
-        var cb=document.getElementById('sbChangesCount');
-        if(cb)cb.style.display='none';
+        var count=reqs.filter(function(r){return r.status==='Pending'&&!r.hidden;}).length;
+        var ab=document.getElementById('sbActivityCount');
+        if(ab){ab.textContent=String(count);ab.style.display=count?'':'none';}
     }
 
-    // ── MESSAGES — the ONE triage inbox for every kind of parent request:
-    // early pickup, pickup change, going-with-a-friend, bus change, and late
-    // arrival, all together, Pending only. ──────────────────────────
-    // Messages is now the ONE triage inbox for every kind of parent request —
-    // early pickup, pickup change, going-with-a-friend, bus change, late
-    // arrival, all together, newest first, Pending only. What happens after
-    // Confirm depends on type (see confirmNow()): late routes into Roll
-    // Call's attendance directly (nothing further to show here), everything
-    // else becomes a resolved record on the Changes page. Either way it
-    // leaves this list the moment it's acted on — Messages is only ever
-    // "what still needs a decision."
-    function renderMessages(){
-        syncFromCloud(_paintMessages);
-        _paintMessages();
-    }
-    function _paintMessages(){
-        var reqs=getReqs();
-        var body=document.getElementById('messagesBody');if(!body)return;
-        updateBadge();
-        var items=reqs.map(function(r,i){return{r:r,i:i};}).filter(function(x){return x.r.status==='Pending'&&!x.r.hidden;});
-        _warmSentences(items,_paintMessages);
-        if(!items.length){body.innerHTML='<div class="empty-state">Nothing pending — early pickups, changes, bus changes, and late arrivals all show up here the moment a parent sends one from Campistry Link</div>';return;}
-        var html='<div class="card"><div class="card-body" style="padding:0 18px;">';
-        items.forEach(function(x){ html+=_changeItemHtml(x.r,x.i); });
-        html+='</div></div>';
-        body.innerHTML=html;
-    }
-
-    // ── CHANGES — the resolved LOG for everything except late arrivals
-    // (those route straight into Roll Call's attendance instead — nothing
-    // for them to show here). Early Pickup / Pickup Change / Bus Change,
-    // grouped, Confirmed/Declined only — the moment something's acted on in
-    // Messages it disappears from there and lands here as a record, with
-    // Hide/Delete to keep the list from growing forever. ─────────────────
-    function renderChanges(){
-        syncFromCloud(function(){ _paintChanges(); if(window.CampistryLive)CampistryLive.renderEarlyPickups(); });
-        _paintChanges();
-    }
-    function _paintChanges(){
-        var reqs=getReqs();
-        var body=document.getElementById('changesBody');if(!body)return;
-        updateBadge();
-
-        var html='<div class="changes-grid">';
-        GROUPS.forEach(function(g){
-            var items=reqs.map(function(r,i){return{r:r,i:i};}).filter(function(x){
-                if(g.types.indexOf(x.r.type)<0||x.r.status==='Pending'||x.r.hidden)return false;
-                if(g.key==='late')return !!x.r.estArrival; // "arrived now" flow already went to Roll Call
-                return true;
-            });
-            var extraBtn=g.key==='early'?'<button class="btn btn-secondary btn-sm" onclick="CampistryLive.openPickupModal()">+ Add</button>':'';
-            html+='<div class="card"><div class="card-header"><h2 style="font-size:.92rem;">'+esc(g.title)+'</h2>'+extraBtn+'</div><div class="card-body" style="padding:0 16px;">';
-            if(!items.length){
-                html+='<div class="empty-state" style="padding:20px 0;">Nothing here yet</div>';
-            } else {
-                items.forEach(function(x){ html+=_changeItemHtml(x.r,x.i); });
-            }
-            // Office-entered pickups (not from a parent request at all) live in
-            // the same local today.earlyPickups store Roll Call/Reports read —
-            // rendered by campistry_live.js into this container, right under
-            // the parent-request history, so "Early Pickup" reads as one list
-            // regardless of which side originated it.
-            if(g.key==='early')html+='<div id="earlyPickupBody"></div>';
-            html+='</div></div>';
-        });
-        html+='</div>';
-        body.innerHTML=html;
-        if(window.CampistryLive)CampistryLive.renderEarlyPickups();
-    }
-    function _changeItemHtml(r,i){
+    // One request, rendered as a row INSIDE that camper's Activity card (see
+    // renderActivity below) — no avatar/name header here, the enclosing
+    // card already carries that. Was _changeItemHtml when Messages/Changes
+    // were separate flat lists; kept all the same per-type detail/action
+    // logic, just dropped the header block the card now owns.
+    function _activityReqRowHtml(r,i){
         var statusCls=r.status==='Pending'?'badge-warn':r.status==='Confirmed'?'badge-info':r.status==='Declined'?'badge-error':'badge-ok';
         var details=[];
         if(r.type==='late'){
@@ -669,36 +618,145 @@ var ParentRequests = (function(){
                 '<button class="btn btn-secondary btn-sm" onclick="ParentRequests.deleteRequest('+i+')">Delete</button>'+
                 '</div>';
         }
-        var initials=esc(r.childName||'').split(' ').map(function(n){return n[0]||'';}).join('').slice(0,2);
-        return '<div style="display:flex;align-items:flex-start;gap:12px;padding:14px 0;border-bottom:1px solid var(--slate-100);">'+
-            '<div style="width:36px;height:36px;border-radius:50%;background:var(--slate-100);display:flex;align-items:center;justify-content:center;flex-shrink:0;font-size:.72rem;font-weight:700;color:var(--slate-600);">'+initials+'</div>'+
-            '<div style="flex:1;min-width:0;">'+
+        return '<div style="padding:10px 0;border-bottom:1px solid var(--slate-100);">'+
                 '<div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;">'+
-                    '<span style="font-weight:700;">'+esc(r.childName)+'</span>'+
-                    (r.childBunk?'<span style="font-size:.7rem;color:var(--slate-400);background:var(--slate-100);padding:1px 8px;border-radius:999px;">'+esc(r.childBunk)+'</span>':'')+
-                    (r.requestDate&&r.requestDate!==todayKey()?'<span style="font-size:.7rem;color:#7c3aed;background:#f5f3ff;padding:1px 8px;border-radius:999px;font-weight:600;">'+esc(r.requestDate)+'</span>':'')+
+                    '<span style="font-weight:600;font-size:.86rem;">'+esc(r.label||r.type)+'</span>'+
+                    '<span class="badge '+statusCls+'" style="font-size:.66rem;">'+esc(r.status)+'</span>'+
+                    (r.requestDate&&r.requestDate!==window.getLiveViewDate()?'<span style="font-size:.68rem;color:#7c3aed;background:#f5f3ff;padding:1px 8px;border-radius:999px;font-weight:600;">'+esc(r.requestDate)+'</span>':'')+
                 '</div>'+
                 '<div style="font-size:.76rem;color:var(--slate-500);margin-top:2px;">From: '+esc(r.parentName)+'&nbsp;&middot;&nbsp;'+fmtTime(r.submittedAt)+'</div>'+
                 (details.length?'<div style="font-size:.79rem;color:var(--slate-600);margin-top:4px;line-height:1.5;">'+details.map(esc).join('&nbsp;&nbsp;&middot;&nbsp;&nbsp;')+'</div>':'')+
                 (r.status==='Pending'&&(r.type==='early'||r.type==='late')&&_sentenceCache[r.id]?'<div style="font-size:.78rem;color:#0284c7;margin-top:4px;">📍 '+esc(_sentenceCache[r.id])+'</div>':'')+
                 (r.officeMessage?'<div style="font-size:.76rem;color:var(--slate-600);margin-top:4px;font-style:italic;">Office: “'+esc(r.officeMessage)+'”</div>':'')+
-                (r.status==='Confirmed'&&r.type==='early'&&window.PickupAlerts?window.PickupAlerts.statusStripHtml(r.childName):'')+
                 '<textarea class="form-input" rows="1" placeholder="Staff note (not shared with parent)" style="margin-top:6px;font-size:.76rem;" onblur="ParentRequests.saveNote('+i+',this.value)">'+esc(r.staffNote||'')+'</textarea>'+
                 actions+
-            '</div>'+
-            '<span class="badge '+statusCls+'" style="flex-shrink:0;">'+esc(r.status)+'</span>'+
             '</div>';
     }
 
-    function startCompose(i,action){ _compose={index:i,action:action}; _paintChanges(); var ta=document.getElementById('rqComposeMsg'); if(ta)ta.focus(); }
-    function cancelCompose(){ _compose=null; _paintChanges(); }
+    // A pickup_alerts row (league-notification acknowledgment), rendered as
+    // a row inside the same per-camper card as that camper's requests —
+    // this used to be PickupAlerts' own separate page.
+    function _activityAlertRowHtml(a){
+        var allAcked=(a.recipients||[]).length && a.recipients.every(function(r){return r.ack_state==='acknowledged';});
+        var leagueTag=a.league_check_state==='checked_match'?'<span class="badge badge-info" style="margin-left:6px;">League game</span>':'';
+        return '<div style="padding:10px 0;border-bottom:1px solid var(--slate-100);">'+
+            '<div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;">'+
+                '<span style="font-weight:600;font-size:.86rem;">Pickup Alert</span>'+leagueTag+
+                '<span class="badge '+(allAcked?'badge-ok':'badge-warn')+'" style="font-size:.66rem;">'+(allAcked?'All acknowledged':'Awaiting acknowledgment')+'</span>'+
+            '</div>'+
+            '<div style="font-size:.76rem;color:var(--slate-500);margin-top:2px;">Pickup at '+esc(_fmtTime12(a.pickup_time))+'</div>'+
+            (window.PickupAlerts?window.PickupAlerts.statusStripHtml(a.camper_name):'')+
+            '</div>';
+    }
+
+    function _dateKeyFromIso(iso){
+        var d=new Date(iso);
+        return d.getFullYear()+'-'+String(d.getMonth()+1).padStart(2,'0')+'-'+String(d.getDate()).padStart(2,'0');
+    }
+
+    // Groups every pickup request + pickup alert by camper into one card
+    // each — pending requests always included (they need action regardless
+    // of what date is being viewed), resolved requests and alerts filtered
+    // to the currently-viewed date (window.getLiveViewDate, from the date
+    // picker in the header).
+    function _activityCampers(){
+        var reqs=getReqs(), alerts=(window.PickupAlerts&&window.PickupAlerts.getAlerts)?window.PickupAlerts.getAlerts():[];
+        var viewDate=window.getLiveViewDate?window.getLiveViewDate():_realTodayKey();
+        var divFilter=(document.getElementById('activityDivFilter')||{}).value||'';
+        var searchVal=((document.getElementById('activitySearch')||{}).value||'').trim().toLowerCase();
+        var byName={};
+        function ensure(name,bunk,division){
+            if(!byName[name])byName[name]={name:name,bunk:bunk||'',division:division||'',items:[],hasPending:false,latestTs:0};
+            var c=byName[name];
+            if(bunk&&!c.bunk)c.bunk=bunk;
+            if(division&&!c.division)c.division=division;
+            return c;
+        }
+        reqs.forEach(function(r,i){
+            if(r.hidden)return;
+            var isPending=r.status==='Pending';
+            if(!isPending&&(r.requestDate||_realTodayKey())!==viewDate)return;
+            var division=(window.CampistryLiveLocator&&window.CampistryLiveLocator.bunkToDivision)?(CampistryLiveLocator.bunkToDivision(r.childBunk)||''):'';
+            var c=ensure(r.childName,r.childBunk,division);
+            c.items.push({kind:'req',r:r,i:i,ts:r.submittedAt||0});
+            if(isPending)c.hasPending=true;
+            c.latestTs=Math.max(c.latestTs,r.submittedAt||0);
+        });
+        alerts.forEach(function(a){
+            var ts=a.created_at?new Date(a.created_at).getTime():0;
+            var alertDateKey=a.created_at?_dateKeyFromIso(a.created_at):_realTodayKey();
+            if(alertDateKey!==viewDate)return;
+            var c=ensure(a.camper_name,a.camper_bunk,a.camper_division);
+            c.items.push({kind:'alert',a:a,ts:ts});
+            c.latestTs=Math.max(c.latestTs,ts);
+        });
+        var list=Object.keys(byName).map(function(k){return byName[k];});
+        if(divFilter)list=list.filter(function(c){return c.division===divFilter;});
+        if(searchVal)list=list.filter(function(c){return c.name.toLowerCase().indexOf(searchVal)>=0;});
+        list.forEach(function(c){c.items.sort(function(x,y){return y.ts-x.ts;});});
+        list.sort(function(x,y){ if(x.hasPending!==y.hasPending)return x.hasPending?-1:1; return y.latestTs-x.latestTs; });
+        return list;
+    }
+
+    function _activityCardHtml(c){
+        var initials=esc(c.name).split(' ').map(function(n){return n[0]||'';}).join('').slice(0,2);
+        var rows=c.items.map(function(it){ return it.kind==='req'?_activityReqRowHtml(it.r,it.i):_activityAlertRowHtml(it.a); }).join('');
+        return '<div class="card" style="margin-bottom:12px;"><div class="card-body">'+
+            '<div style="display:flex;align-items:center;gap:10px;margin-bottom:4px;">'+
+            '<div style="width:34px;height:34px;border-radius:50%;background:var(--slate-100);display:flex;align-items:center;justify-content:center;flex-shrink:0;font-size:.7rem;font-weight:700;color:var(--slate-600);">'+initials+'</div>'+
+            '<div style="flex:1;min-width:0;"><div style="font-weight:700;">'+esc(c.name)+'</div>'+
+            (c.bunk||c.division?'<div style="font-size:.72rem;color:var(--slate-400);">'+[c.bunk,c.division].filter(Boolean).map(esc).join(' &middot; ')+'</div>':'')+'</div>'+
+            (c.hasPending?'<span class="badge badge-warn">Needs action</span>':'')+
+            '</div>'+
+            rows+
+            '</div></div>';
+    }
+
+    function renderActivity(){
+        if(window.PickupAlerts)PickupAlerts.syncFromCloud(_paintActivity);
+        syncFromCloud(_paintActivity);
+        _paintActivity();
+        if(window.CampistryLive)CampistryLive.renderEarlyPickups();
+    }
+
+    function _paintActivity(){
+        var body=document.getElementById('activityBody'); if(!body)return;
+        updateBadge();
+        var divSel=document.getElementById('activityDivFilter');
+        if(divSel&&!divSel.dataset.wired){
+            divSel.dataset.wired='1';
+            divSel.addEventListener('change',_paintActivity);
+        }
+        var searchEl=document.getElementById('activitySearch');
+        if(searchEl&&!searchEl.dataset.wired){
+            searchEl.dataset.wired='1';
+            searchEl.addEventListener('input',_paintActivity);
+        }
+        if(divSel){
+            var seen={},divs=[];
+            (window.PickupAlerts&&window.PickupAlerts.divisions?PickupAlerts.divisions():[]).forEach(function(d){if(d&&!seen[d]){seen[d]=1;divs.push(d);}});
+            var opts='<option value="">All divisions</option>'+divs.map(function(d){return '<option value="'+esc(d)+'"'+(d===divSel.value?' selected':'')+'>'+esc(d)+'</option>';}).join('');
+            if(divSel.innerHTML!==opts){var cur=divSel.value;divSel.innerHTML=opts;divSel.value=cur;}
+        }
+        var campers=_activityCampers();
+        _warmSentences(campers.reduce(function(acc,c){return acc.concat(c.items.filter(function(it){return it.kind==='req';}));},[]),_paintActivity);
+        if(!campers.length){
+            var isToday=window.isLiveViewingToday?window.isLiveViewingToday():true;
+            body.innerHTML='<div class="empty-state">'+(isToday?'Nothing here yet — pickup requests, changes, and alerts will appear here as parents submit them':'Nothing for this date')+'</div>';
+            return;
+        }
+        body.innerHTML=campers.map(_activityCardHtml).join('');
+    }
+
+    function startCompose(i,action){ _compose={index:i,action:action}; _paintActivity(); var ta=document.getElementById('rqComposeMsg'); if(ta)ta.focus(); }
+    function cancelCompose(){ _compose=null; _paintActivity(); }
     function useCanned(msg){ var ta=document.getElementById('rqComposeMsg'); if(ta)ta.value=msg; }
 
     function sendCompose(){
         if(!_compose)return;
         var ta=document.getElementById('rqComposeMsg');
         var message=ta?ta.value.trim():'';
-        _apply(_compose.index,_compose.action,message,_paintChanges);
+        _apply(_compose.index,_compose.action,message,_paintActivity);
         _compose=null;
     }
 
@@ -799,7 +857,7 @@ var ParentRequests = (function(){
                                 if(r2){ r2.officeMessage=newMsg; saveReqs(reqs2); }
                                 db.client.from('parent_pickup_requests').update({office_message:newMsg}).eq('id',r.id)
                                     .then(function(res2){ if(res2.error)console.warn('[Live] late-arrival schedule note save:',res2.error.message); });
-                                (repaint||_paintChanges)();
+                                (repaint||_paintActivity)();
                             });
                         }
                     });
@@ -840,7 +898,7 @@ var ParentRequests = (function(){
         // behind an extra auth.getUser() hop, so the pull can land first and
         // overwrite this row back to Pending with stale server data before
         // our own update has even been sent.
-        (repaint||_paintChanges)();
+        (repaint||_paintActivity)();
         liveToast(r.childName+' — '+r.label+' '+status.toLowerCase());
     }
 
@@ -877,11 +935,11 @@ var ParentRequests = (function(){
         });
     }
 
-    function refresh(){ _paintMessages(); _paintChanges(); }
+    function refresh(){ _paintActivity(); }
 
     // Realtime — a new submission, or a status/hidden change from another
-    // office device, repaints whichever of Messages/Changes is on screen
-    // without anyone hitting refresh. Debounced so a burst of changes (e.g.
+    // office device, repaints Activity if it's on screen without anyone
+    // hitting refresh. Debounced so a burst of changes (e.g.
     // this session's own confirm, which fires its own update) collapses
     // into one re-sync instead of several back to back.
     var _prChan=null, _prDebTimer=null, _prPollTimer=null;
@@ -941,7 +999,7 @@ var ParentRequests = (function(){
         _ensureSchedule().then(function(){ refresh(); });
     });
 
-    return {renderMessages:renderMessages,renderChanges:renderChanges,
+    return {renderActivity:renderActivity,
         confirmNow:confirmNow,hideRequest:hideRequest,deleteRequest:deleteRequest,
         startCompose:startCompose,cancelCompose:cancelCompose,useCanned:useCanned,sendCompose:sendCompose,
         saveNote:saveNote,refresh:refresh,updateBadge:updateBadge};
@@ -980,8 +1038,8 @@ var PickupAlerts = (function(){
             }, function(){ if(cb)cb(); });
     }
 
-    // Inline status strip for a confirmed early-pickup row in ParentRequests'
-    // own list (see campistry_live.html's _changeItemHtml).
+    // Inline status strip for a pickup-alert row inside ParentRequests'
+    // merged Activity view (see _activityAlertRowHtml in campistry_live.html).
     function statusStripHtml(camperName){
         var a=_alerts.filter(function(x){return x.camper_name===camperName;})
             .sort(function(x,y){return (y.created_at||'').localeCompare(x.created_at||'');})[0];
@@ -1037,7 +1095,12 @@ var PickupAlerts = (function(){
     // subscription pattern (integration_hooks.js): a fresh channel per
     // page-load, debounced re-sync on any change to either table.
     var _debTimer=null;
-    function _debouncedSync(){ if(_debTimer)clearTimeout(_debTimer); _debTimer=setTimeout(function(){ syncFromCloud(render); },250); }
+    function _debouncedSync(){ if(_debTimer)clearTimeout(_debTimer); _debTimer=setTimeout(function(){
+        // render() itself no longer targets a live DOM container (Pickup
+        // Alerts merged into ParentRequests' Activity page) — the actual
+        // repaint now happens through there instead.
+        syncFromCloud(function(){ if(window.ParentRequests)ParentRequests.refresh(); });
+    },250); }
     function _subscribeRealtime(){
         var db=_db();
         if(!db){ setTimeout(_subscribeRealtime,1500); return; }   // DB/auth not ready yet — keep trying rather than give up silently
@@ -1058,7 +1121,8 @@ var PickupAlerts = (function(){
     _initialLoad();
     _subscribeRealtime();
 
-    return {syncFromCloud:syncFromCloud,render:render,statusStripHtml:statusStripHtml};
+    return {syncFromCloud:syncFromCloud,render:render,statusStripHtml:statusStripHtml,
+        getAlerts:function(){return _alerts;},divisions:divisions};
 })();
 </script>
 <script>
@@ -1177,13 +1241,9 @@ var CamperMail = (function(){
     <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
     Locator
   </button>
-  <button class="cs-bnav-item" data-page="messages" onclick="document.querySelector('.sidebar-item[data-page=messages]').click()">
+  <button class="cs-bnav-item" data-page="activity" onclick="document.querySelector('.sidebar-item[data-page=activity]').click()">
     <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>
-    Messages
-  </button>
-  <button class="cs-bnav-item" data-page="changes" onclick="document.querySelector('.sidebar-item[data-page=changes]').click()">
-    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>
-    Changes
+    Activity
   </button>
 </div>
 <script>window.__CAMPISTRY_PRODUCT__='live';</script>
