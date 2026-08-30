@@ -411,6 +411,14 @@ body {
 .lk-tab:hover { color: var(--slate-800); }
 .lk-tab.active { color: var(--link-color); border-bottom-color: var(--link-color); }
 
+/* Sits right under a child-tab row on the pickup/transport forms — states
+   plainly which camper the form below applies to, since the tab row above
+   is easy to miss once you've scrolled down to actually submit. */
+.lk-pickup-for {
+    font-size: 0.8rem; font-weight: 700; color: var(--link-color);
+    margin: -6px 0 14px;
+}
+
 /* TABLE */
 .lk-table { width: 100%; border-collapse: collapse; }
 .lk-table th {

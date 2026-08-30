@@ -337,7 +337,7 @@
     <div><h1>Canteen</h1><p>Manage canteen accounts — powered by Campistry Snacks</p></div>
 </div>
     <div class="lk-tabs" id="canteenTabs"></div>
-    <div class="canteen-bal"><div class="canteen-bal-lbl">Current Balance</div><div class="canteen-bal-amt" id="canteenAmt">$32.50</div>
+    <div class="canteen-bal"><div class="canteen-bal-lbl">Current Balance — <strong id="canteenChildName"></strong></div><div class="canteen-bal-amt" id="canteenAmt">$32.50</div>
         <div style="display:flex;gap:6px;justify-content:center;margin:12px 0;">
             <button class="canteen-quick-btn" onclick="selAmt(10,this)">$10</button><button class="canteen-quick-btn sel" onclick="selAmt(25,this)">$25</button><button class="canteen-quick-btn" onclick="selAmt(50,this)">$50</button>
         </div>
@@ -568,6 +568,7 @@
         <div class="lk-card">
             <div class="lk-card-head"><h2>Early Pickup</h2></div>
             <div class="lk-tabs" id="pickupChildTabs"></div>
+            <div class="lk-pickup-for" id="pickupEarlyFor"></div>
             <div class="lk-field"><label>Date</label><input type="date" class="lk-input lk-req-date" id="earlyDate"></div>
             <div class="lk-field"><label>Pickup Time</label><input type="time" class="lk-input" value="14:00"></div>
             <div class="lk-field"><label>Who is picking up?</label><input type="text" class="lk-input" placeholder="Full name of person picking up"></div>
@@ -584,6 +585,7 @@
         <div class="lk-card">
             <div class="lk-card-head"><h2>Pickup Change</h2></div>
             <div class="lk-tabs" id="pickupChangeTabs"></div>
+            <div class="lk-pickup-for" id="pickupChangeFor"></div>
             <div class="lk-field"><label>Date</label><input type="date" class="lk-input lk-req-date" id="changeDate"></div>
             <div class="lk-field"><label>What is changing?</label>
                 <select class="lk-select" id="changeKind" onchange="selChangeKind(this.value)"><option value="person">Someone else is picking up</option><option value="friend">Going home with a friend</option></select>
@@ -613,6 +615,7 @@
         <div class="lk-card">
             <div class="lk-card-head"><h2>Bus Change</h2></div>
             <div class="lk-tabs" id="pickupBusTabs"></div>
+            <div class="lk-pickup-for" id="pickupBusFor"></div>
             <div class="lk-field"><label>Date</label><input type="date" class="lk-input lk-req-date" id="busDate"></div>
             <div class="lk-field"><label>What's changing?</label>
                 <select class="lk-select" id="busChangeKind"><option value="Not riding the bus today">Not riding the bus today</option><option value="Different stop today">Different stop today</option><option value="Different bus/route">Different bus/route</option><option value="Other">Other</option></select>
@@ -634,6 +637,7 @@
         <div class="lk-card">
             <div class="lk-card-head"><h2>Late Arrival</h2></div>
             <div class="lk-tabs" id="pickupLateTabs"></div>
+            <div class="lk-pickup-for" id="pickupLateFor"></div>
             <div class="lk-field"><label>Date</label><input type="date" class="lk-input lk-req-date" id="lateDate" onchange="_onLateDateChange()"></div>
             <p id="lateArrivedHint" style="font-size:.84rem;color:var(--text-muted);margin:0 0 14px;">Just dropped your child off? Let the office know they have arrived.</p>
             <div class="lk-field"><label>Reason (optional)</label>
@@ -1430,7 +1434,7 @@ async function addFunds(){
         console.error('[Parent] canteen checkout error:',err);
         toast('Could not start payment: '+((err&&err.message)||'error'));
     }
-    if(btn){btn.disabled=false;btn.textContent='Add Funds';}
+    if(btn){btn.disabled=false;btn.textContent='Add Funds for '+c.name.split(' ')[0];}
 }
 
 // Rollout gate: canteen deposits only make sense once the camp has
@@ -1614,6 +1618,11 @@ function switchCanteen(id,btn){
     var c=children.find(function(k){return k.id===id});
     if(!c)return;
     document.getElementById('canteenAmt').textContent='$'+c.canteenBalance.toFixed(2);
+    // Named right on the balance card and the button that spends money — the
+    // tab above is easy to miss once you've scrolled to actually add funds,
+    // and this is the one page where "wrong kid" costs a parent real money.
+    var cn=document.getElementById('canteenChildName'); if(cn) cn.textContent=c.name;
+    var ab=document.getElementById('canteenAddBtn'); if(ab && !ab.disabled) ab.textContent='Add Funds for '+c.name.split(' ')[0];
     _checkCanteenStripeStatus(c.campId);
     var walletCard=document.querySelector('.canteen-bal');if(walletCard)walletCard.setAttribute('data-accent',childAccent(id));
     // Sync spending-control sliders with real Snacks values
@@ -3165,7 +3174,7 @@ function submitPickup(type, lateMode) {
     // glance what it is even though the parent entered it as a pickup change.
     if (type === 'change' && (document.getElementById('changeKind')||{}).value === 'friend') labels.change = 'Going With Friend';
     var icons = _PICKUP_ICONS;
-    var tabsIds = {early:'pickupChildTabs',change:'pickupChangeTabs',bus:'pickupBusTabs',late:'pickupLateTabs'};
+    var tabsIds = _PICKUP_TABS;
     var now = new Date();
     var reqId = now.getTime().toString(36)+Math.random().toString(36).slice(2,5);
     var timeStr = now.getHours()+':'+(now.getMinutes()<10?'0':'')+now.getMinutes();
@@ -3395,14 +3404,36 @@ nav = function(p) {
     if (p === 'health') { _loadMyHealthDocs(); }
 };
 
+// One tabs row + one "For: <child>" label per pickup form. The label is the
+// point: a tab row alone is easy to miss once you've scrolled down to the
+// actual submit button, and a wrong-camper early-pickup/bus-change report
+// is the kind of mistake that actually matters to a camp office.
+var _PICKUP_TABS = {early:'pickupChildTabs', change:'pickupChangeTabs', bus:'pickupBusTabs', late:'pickupLateTabs'};
+var _PICKUP_FOR   = {early:'pickupEarlyFor',  change:'pickupChangeFor',  bus:'pickupBusFor',   late:'pickupLateFor'};
+function _updatePickupFor(type, childId) {
+    var forEl = document.getElementById(_PICKUP_FOR[type]); if (!forEl) return;
+    var c = children.find(function(k){ return k.id===childId; }) || children[0];
+    forEl.textContent = c ? ('For '+c.name) : '';
+}
 // Init pickup child tabs
 function initPickupTabs() {
-    ['pickupChildTabs','pickupChangeTabs','pickupBusTabs','pickupLateTabs'].forEach(function(id){
+    Object.keys(_PICKUP_TABS).forEach(function(type){
+        var id = _PICKUP_TABS[type];
         var el = document.getElementById(id); if(!el) return;
         el.innerHTML = '';
         children.forEach(function(c,i){
-            el.innerHTML += '<button class="lk-tab '+(i===0?'active':'')+'" data-child-id="'+c.id+'" onclick="this.closest(\'.lk-tabs\').querySelectorAll(\'.lk-tab\').forEach(function(t){t.classList.remove(\'active\')});this.classList.add(\'active\')">'+c.name.split(' ')[0]+'</button>';
+            var btn = document.createElement('button');
+            btn.className = 'lk-tab'+(i===0?' active':'');
+            btn.dataset.childId = c.id;
+            btn.textContent = c.name.split(' ')[0];
+            btn.onclick = function(){
+                el.querySelectorAll('.lk-tab').forEach(function(t){ t.classList.remove('active'); });
+                btn.classList.add('active');
+                _updatePickupFor(type, c.id);
+            };
+            el.appendChild(btn);
         });
+        if (children.length) _updatePickupFor(type, children[0].id);
     });
     var today = _pickupTodayStr();
     document.querySelectorAll('.lk-req-date').forEach(function(inp){
@@ -3912,6 +3943,16 @@ window.addEventListener('storage', function(e) {
             document.addEventListener('visibilitychange',function(){ if(document.visibilityState==='visible'){ _syncMessagesFromCloud(); if(typeof _checkConnectableCamps==='function') _checkConnectableCamps(); } });
         }
         init();
+        // initPickupTabs() also runs once at script load (line ~3437), but
+        // that first run always sees children=[] — auth hasn't resolved yet
+        // at that point, so it builds every pickup form's child-tab row
+        // against an empty list and it stays empty for the rest of the
+        // session. init() gets re-run right here once real data lands (the
+        // line above) and rebuilds every OTHER tab row (canteen, schedule,
+        // health...) the same way; this one has to be called explicitly too
+        // or a parent has no way to tell the pickup forms which camper they
+        // mean — every submission silently fell back to children[0].
+        initPickupTabs();
         hydratePickupRequests();
         _hideOverlay('parentAuthOverlay');
         // The portal is rendered — let the splash go. It was covering exactly
@@ -3973,7 +4014,7 @@ window.addEventListener('storage', function(e) {
             var primary = parent.camps.find(function(cp){ return cp.camp_id === primaryCampId; });
             if (primary) children.forEach(function(ch){ if(ch.campId===primaryCampId) { ch.campName = primary.camp_name || ''; ch.campIsCurrent = primary.isCurrent; } });
             var others = parent.camps.filter(function(cp){ return cp.camp_id !== primaryCampId; });
-            if (!others.length) { init(); _afterMergeReloadCloud(); _checkConnectableCamps(); return; } // single connected camp — but still check for pending invites on OTHER camps
+            if (!others.length) { init(); initPickupTabs(); _afterMergeReloadCloud(); _checkConnectableCamps(); return; } // single connected camp — but still check for pending invites on OTHER camps
             others.forEach(function(cp){
                 var cnames = (cp.camper_names && cp.camper_names.length) ? cp.camper_names : Object.keys(cp.camper_data || {});
                 cnames.forEach(function(name){
@@ -4004,6 +4045,7 @@ window.addEventListener('storage', function(e) {
                 if (kids.length) _syncCanteenFromCloud(kids, cp.camp_id);
             });
             init(); // rebuild every child-tab list now that all camps are in
+            initPickupTabs(); // init() doesn't touch the pickup forms' own tab rows
             _afterMergeReloadCloud();
             console.log('[Parent] Multi-camp: '+camps.length+' camps, '+children.length+' children total');
             _checkConnectableCamps(); // a new camp may have added a child since sign-up
