@@ -494,8 +494,19 @@
         // several divisions on the same shared blocks, so this naturally
         // collapses to one clean timeline rather than one column per
         // division.
+        //
+        // Deliberately opts.bunkGrade here, not opts.bunkDiv — divisionTimes
+        // (the schedule's actual per-division period list) is keyed by GRADE
+        // name, not by structureOptions()'s top-level division key. Those
+        // only coincide for a camp with no real subdivision grouping; for one
+        // that does (e.g. a top-level "division" containing several grade-
+        // level scheduling units), keying off bunkDiv here silently found
+        // nothing and showed "No schedule times have been set up" even with
+        // a real schedule generated. opts.bunkDiv is still correct for the
+        // filter dropdown/matching above — that's a genuinely different,
+        // coarser grouping than what the scheduler itself operates on.
         var involvedDivisions = {};
-        bunks.forEach(function (b) { involvedDivisions[opts.bunkDiv[b]] = true; });
+        bunks.forEach(function (b) { involvedDivisions[opts.bunkGrade[b]] = true; });
         var columnsByKey = {};
         Object.keys(involvedDivisions).forEach(function (div) {
             (divisionTimes[div] || []).forEach(function (slot) {
@@ -512,7 +523,7 @@
         // own division's periods is correctly left blank, not searched for.
         var byBunk = {};
         bunks.forEach(function (bunk) {
-            var div = opts.bunkDiv[bunk];
+            var div = opts.bunkGrade[bunk]; // scheduling division — see comment above
             var divSlots = divisionTimes[div] || [];
             var bunkAssignments = scheduleAssignments[bunk] || [];
             var cells = {};

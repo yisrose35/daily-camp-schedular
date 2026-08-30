@@ -54,16 +54,31 @@
         return d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0') + '-' + String(d.getDate()).padStart(2, '0');
     }
 
-    // { bunkName: divisionName }, sourced from the camp structure passed in by
-    // the caller (Live's own getStructure()) — not window.divisions, which is
-    // Flow-only state.
+    // { bunkName: schedulingDivisionName }, sourced from the camp structure
+    // passed in by the caller (Live's own getStructure()) — not
+    // window.divisions, which is Flow-only state.
+    //
+    // Maps to the GRADE name, not the top-level structure key. Confirmed via
+    // access_control.js's own subdivision-expansion comment ("window.divisions
+    // is keyed by grade names... each grade entry has a parentDivision
+    // property linking back") and by inspecting a real camp's data directly:
+    // campStructure's top level ("Nanitos", "Neranina") is an organizational
+    // grouping, but daily_schedules.schedule_data.divisionTimes — the actual
+    // per-division period list the scheduler writes — is keyed by the GRADE
+    // names underneath it ("Prop", "Trios", "Duetos", ...). Mapping bunks to
+    // the top-level key here meant every divisionTimes[...] lookup elsewhere
+    // in this file (and resolveCamperAt/performSearch, which read this map
+    // via CampistryLiveLocator.bunkToDivision()) silently found nothing for
+    // any camp using this two-level structure — the schedule grid showed
+    // "No schedule times have been set up" and the search box showed
+    // "no-schedule" for every camper, even with a real schedule generated.
     function bunkToDivisionMap(structure) {
         var m = {};
         Object.keys(structure || {}).forEach(function (divName) {
             var divData = structure[divName] || {};
             Object.keys(divData.grades || {}).forEach(function (gradeName) {
                 (((divData.grades || {})[gradeName] || {}).bunks || []).forEach(function (b) {
-                    m[String(b)] = divName;
+                    m[String(b)] = gradeName;
                 });
             });
         });
