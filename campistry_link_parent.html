@@ -469,7 +469,7 @@
     <div class="lk-page-hero-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="8" y1="6" x2="21" y2="6"/><line x1="8" y1="12" x2="21" y2="12"/><line x1="8" y1="18" x2="21" y2="18"/><polyline points="3 6 4 7 6 5"/><polyline points="3 12 4 13 6 11"/><polyline points="3 18 4 19 6 17"/></svg></div>
     <div><h1>Lists</h1><p>Packing lists and checklists from camp — check items off as you go</p></div>
 </div>
-    <div class="lk-tabs" id="listChildTabs" style="margin-bottom:16px;"></div>
+    <div id="listChildTabs" style="margin-bottom:16px;"></div>
     <div id="campListsWrap"><div class="lk-empty"><div class="lk-empty-icon"><svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><line x1="8" y1="6" x2="21" y2="6"/><line x1="8" y1="12" x2="21" y2="12"/><line x1="8" y1="18" x2="21" y2="18"/><polyline points="3 6 4 7 6 5"/><polyline points="3 12 4 13 6 11"/><polyline points="3 18 4 19 6 17"/></svg></div><h3>No lists yet</h3><p>When camp shares a packing list or checklist, it will appear here.</p></div></div>
 </div>
 
@@ -482,7 +482,7 @@
 
     <div class="lk-card">
         <div class="lk-card-head"><h2>Write a Letter</h2></div>
-        <div class="lk-tabs" id="mailChildTabs" style="margin-bottom:14px;"></div>
+        <div id="mailChildTabs" style="margin-bottom:14px;"></div>
         <div class="lk-field"><label>Subject <span style="font-weight:400;color:var(--text-muted);">(optional)</span></label>
             <input type="text" class="lk-input" id="mailSubject" maxlength="120" placeholder='e.g. "We miss you!"'>
         </div>
@@ -2740,7 +2740,7 @@ function toggleListItem(childName, listId, itemIdx, checked){
     var k=_listCheckId(childName, listId, itemIdx);
     if(checked) checks[k]=true; else delete checks[k];
     try{ localStorage.setItem(LIST_CHECK_KEY, JSON.stringify(checks)); }catch(e){}
-    renderCampLists(); // refresh progress bars
+    _renderCampListsContent(); // refresh progress bars — no need to rebuild the tab row for this
 }
 
 function _listAppliesToChild(list, c){
@@ -2752,23 +2752,27 @@ function _listAppliesToChild(list, c){
 }
 
 function renderCampLists(){
-    var wrap=document.getElementById('campListsWrap'); if(!wrap) return;
     var tabs=document.getElementById('listChildTabs');
-    var lists=window._campLists||[];
 
-    // Child tabs (lists are checked off per child)
+    // Child tabs (lists are checked off per child). Built here, separately
+    // from _renderCampListsContent below — a chip tap only needs to redraw
+    // the lists themselves, not rebuild+re-fire the tab row it was just
+    // clicked from.
     if(tabs){
-        tabs.innerHTML='';
         if(children.length>1){
-            if(!_listActiveChild || !children.some(function(c){return c.name===_listActiveChild;})) _listActiveChild=children[0].name;
-            children.forEach(function(c){
-                tabs.innerHTML+='<button class="lk-tab '+(c.name===_listActiveChild?'active':'')+'" onclick="_listActiveChild=\''+c.name.replace(/'/g,"\\'")+'\';renderCampLists()">'+c.name.split(' ')[0]+'</button>';
-            });
+            var activeChild=children.find(function(c){return c.name===_listActiveChild;});
+            _renderCamperSwitch('listChildTabs', function(c){ _listActiveChild=c.name; _renderCampListsContent(); }, activeChild?activeChild.id:null, true);
         } else {
+            tabs.innerHTML='';
             _listActiveChild=children.length?children[0].name:null;
         }
     }
+    _renderCampListsContent();
+}
 
+function _renderCampListsContent(){
+    var wrap=document.getElementById('campListsWrap'); if(!wrap) return;
+    var lists=window._campLists||[];
     var c=children.find(function(k){return k.name===_listActiveChild;})||children[0];
     var visible=c?lists.filter(function(l){return _listAppliesToChild(l,c);}):[];
     if(!c||!visible.length){
@@ -2832,16 +2836,16 @@ function _mailCount(){
 function _mailLocal(){ try{ return JSON.parse(localStorage.getItem(MAIL_LOCAL_KEY)||'[]'); }catch(e){ return []; } }
 
 function renderCamperMail(){
-    // Child tabs
+    // Child tabs — who the letter is addressed to. _renderMyMail below shows
+    // every letter regardless of the active tab, so switching camper here
+    // never needs to trigger a re-render of anything else.
     var ct=document.getElementById('mailChildTabs');
     if(ct){
-        ct.innerHTML='';
         if(children.length>1){
-            if(!_mailChildName||!children.some(function(c){return c.name===_mailChildName;}))_mailChildName=children[0].name;
-            children.forEach(function(c){
-                ct.innerHTML+='<button class="lk-tab '+(c.name===_mailChildName?'active':'')+'" onclick="_mailChildName=\''+c.name.replace(/'/g,"\\'")+'\';renderCamperMail()">'+_mailEsc(c.name.split(' ')[0])+'</button>';
-            });
+            var activeChild=children.find(function(c){return c.name===_mailChildName;});
+            _renderCamperSwitch('mailChildTabs', function(c){ _mailChildName=c.name; }, activeChild?activeChild.id:null);
         } else {
+            ct.innerHTML='';
             _mailChildName=children.length?children[0].name:null;
             if(children.length===1)ct.innerHTML='<span style="font-size:.8rem;color:var(--text-muted);">To: <strong>'+_mailEsc(children[0].name)+'</strong></span>';
         }
