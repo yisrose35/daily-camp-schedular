@@ -1212,10 +1212,9 @@
     function renderHome() {
         const view = document.getElementById('view-home');
         const apps = appsForRole();
-        const campName = campDisplayName;
         const single = apps.length === 1;
 
-        view.innerHTML = heroCardHTML(campName)
+        view.innerHTML = heroCardHTML()
             + `<div class="lite-launch-grid${single ? ' single' : ''}">${apps.map(a => tileHTML(a)).join('')}</div>`;
 
         view.querySelectorAll('.lite-launch-tile[data-app]').forEach(t =>
@@ -1227,8 +1226,11 @@
         renderWeather();
     }
 
-    function heroCardHTML(campName) {
-        const name = campName ? esc(campName) : 'your camp';
+    function heroCardHTML() {
+        // Greet the person, not the camp — the camp's name is already the
+        // header subtitle and the Settings pill; this greeting is the one
+        // spot that's actually about who's signed in.
+        const name = esc(firstName(userName) || 'there');
         return `<div class="lite-hero-card">
             <button class="lite-hero-settings" id="liteHeroMenuBtn" aria-label="Account & settings"><span>${esc(avatarInitials())}</span></button>
             <div class="lite-hero-greeting">${greeting()},</div>
@@ -1365,6 +1367,20 @@
     }
 
     function goHome() {
+        // A role with only one available app (counselor's "My Camp" is the
+        // only one today) has nothing to pick between — the launcher would
+        // just be an extra tap in front of the one place they can go. Skip
+        // straight into it instead: My Day/My Bunk/League/Tips become the
+        // top-level experience, with no "choose an app" screen behind them.
+        const apps = appsForRole();
+        if (apps.length === 1) {
+            // Already there (e.g. the history stack popped past the app's own
+            // pushState) — nothing else to "go home" to, so just stay put
+            // instead of falling through to a single-tile launcher.
+            if (currentApp !== apps[0].id) openApp(apps[0].id);
+            return;
+        }
+
         currentApp = null;
         settingsOpen = false;
         applyTheme(null);
@@ -1436,11 +1452,16 @@
         await new Promise(r => setTimeout(r, 320));
     }
 
-    // A short tick on tap. Real apps confirm a press physically; on the web
-    // that's the Vibration API, which iOS Safari ignores — so it's a bonus on
-    // Android, never a dependency.
+    // A short tick on tap, routed through the shared CampistryHaptics module
+    // so it actually respects the Settings toggle and gets the native
+    // plugin on-device instead of always falling back to navigator.vibrate.
+    // This used to call navigator.vibrate() directly — it fired every time
+    // regardless of the toggle, which is why turning haptics off in Settings
+    // never actually silenced it. ms is unused now (every call here was a
+    // few ms of "light" anyway); kept as a parameter so call sites don't
+    // need touching.
     function haptic(ms) {
-        try { if (navigator.vibrate) navigator.vibrate(ms || 8); } catch (_) {}
+        try { window.CampistryHaptics && window.CampistryHaptics.tap(); } catch (_) {}
     }
 
     // Screens push in from the right and pop back to the right, the way a
@@ -1553,55 +1574,57 @@
                 </div>
             </div>
 
-            <div class="lite-set-section-label">Security</div>
-            <div class="lite-card lite-set-row" id="liteBioRow">
-                <div class="lite-set-row-main">
-                    <div class="lite-set-row-title">Biometric sign-in</div>
-                    <div class="lite-set-row-sub" id="liteBioSub">${bioAvail
-                        ? (bioOn ? 'On — asked each time you open Campistry Lite'
-                                 : 'Unlock Campistry Lite without typing your password')
-                        : esc(bioWhy)}</div>
+            <div class="lite-set-section-label">Account &amp; Security</div>
+            <div class="lite-card">
+                <div class="lite-set-row" id="liteBioRow">
+                    <div class="lite-set-row-main">
+                        <div class="lite-set-row-title">Biometric sign-in</div>
+                        <div class="lite-set-row-sub" id="liteBioSub">${bioAvail
+                            ? (bioOn ? 'On — asked each time you open Campistry Lite'
+                                     : 'Unlock Campistry Lite without typing your password')
+                            : esc(bioWhy)}</div>
+                    </div>
+                    <span class="lite-toggle${bioOn ? ' on' : ''}${bioAvail ? '' : ' disabled'}" id="liteBioToggle"></span>
                 </div>
-                <span class="lite-toggle${bioOn ? ' on' : ''}${bioAvail ? '' : ' disabled'}" id="liteBioToggle"></span>
+                <div class="lite-set-divider"></div>
+                <div>
+                    <div class="lite-set-row-title" style="margin-bottom:9px;">Login email</div>
+                    <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;">
+                        <input class="lite-lf-input" type="email" id="liteSetEmail" inputmode="email"
+                               autocomplete="username" autocapitalize="none" autocorrect="off" spellcheck="false"
+                               value="${esc(userEmail || '')}" style="flex:1;min-width:170px;height:44px;">
+                        <button class="lite-btn" id="liteSetEmailBtn" style="height:44px;padding:0 16px;">Change</button>
+                    </div>
+                    <div class="lite-set-row-sub" id="liteSetEmailMsg" style="margin-top:6px;min-height:16px;">
+                        Camp staff sign in with this address.
+                    </div>
+                </div>
             </div>
 
-            <div class="lite-set-section-label">Sign-in</div>
-            <div class="lite-card lite-set-row" style="display:block;">
-                <div class="lite-set-row-title" style="margin-bottom:9px;">Login email</div>
-                <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;">
-                    <input class="lite-lf-input" type="email" id="liteSetEmail" inputmode="email"
-                           autocomplete="username" autocapitalize="none" autocorrect="off" spellcheck="false"
-                           value="${esc(userEmail || '')}" style="flex:1;min-width:170px;height:44px;">
-                    <button class="lite-btn" id="liteSetEmailBtn" style="height:44px;padding:0 16px;">Change</button>
+            <div class="lite-set-section-label">Preferences</div>
+            <div class="lite-card">
+                <div class="lite-set-row" id="liteHapticRow">
+                    <div class="lite-set-row-main">
+                        <div class="lite-set-row-title">Haptics</div>
+                        <div class="lite-set-row-sub">A short tap when you press something.</div>
+                    </div>
+                    <span class="lite-toggle${hapticOn ? ' on' : ''}" id="liteHapticToggle"></span>
                 </div>
-                <div class="lite-set-row-sub" id="liteSetEmailMsg" style="margin-top:6px;min-height:16px;">
-                    Camp staff sign in with this address.
+                <div class="lite-set-divider"></div>
+                <div>
+                    <div class="lite-set-row-title" style="margin-bottom:9px;">Theme</div>
+                    ${segHTML('liteThemeSeg', [
+                        { val: 'light', label: 'Light' },
+                        { val: 'dark', label: 'Dark' },
+                        { val: 'auto', label: 'Match phone' }
+                    ], colorSchemePref())}
+                    <div class="lite-set-row-sub" style="margin-top:2px;">${colorSchemePref() === 'auto'
+                        ? 'Follows your phone’s appearance setting.'
+                        : 'Always ' + colorSchemePref() + ', whatever your phone is set to.'}</div>
                 </div>
             </div>
 
-            <div class="lite-set-section-label">Feedback</div>
-            <div class="lite-card lite-set-row" id="liteHapticRow">
-                <div class="lite-set-row-main">
-                    <div class="lite-set-row-title">Haptics</div>
-                    <div class="lite-set-row-sub">A short tap when you press something.</div>
-                </div>
-                <span class="lite-toggle${hapticOn ? ' on' : ''}" id="liteHapticToggle"></span>
-            </div>
-
-            <div class="lite-set-section-label">Appearance</div>
-            <div class="lite-card lite-set-row" style="display:block;">
-                <div class="lite-set-row-title" style="margin-bottom:9px;">Theme</div>
-                ${segHTML('liteThemeSeg', [
-                    { val: 'light', label: 'Light' },
-                    { val: 'dark', label: 'Dark' },
-                    { val: 'auto', label: 'Match phone' }
-                ], colorSchemePref())}
-                <div class="lite-set-row-sub" style="margin-top:2px;">${colorSchemePref() === 'auto'
-                    ? 'Follows your phone’s appearance setting.'
-                    : 'Always ' + colorSchemePref() + ', whatever your phone is set to.'}</div>
-            </div>
-
-            <a href="dashboard.html" class="lite-link-row">Open full Campistry ↗</a>
+            ${isHeadStaff() ? '<a href="dashboard.html" class="lite-link-row">Open full Campistry ↗</a>' : ''}
             <button class="lite-link-row danger" id="liteSettingsSignout">Sign out</button>
             <div class="lite-set-version">Campistry Lite${camp ? ' · ' + camp : ''}${otaVersion ? ' · build ' + esc(otaVersion) : ''}</div>`;
 
@@ -1756,10 +1779,10 @@
     async function renderToday() {
         const view = document.getElementById('view-today');
 
-        // Counselor: just their bunk(s) timeline — no controls.
+        // Counselor: just their bunk(s) timeline — no controls, no date
+        // picker either. It's always today.
         if (isCounselor()) {
-            view.innerHTML = dateStripHTML() + `<div id="liteTodayBody">${loadingHTML()}</div>`;
-            wireDateStrip(view, () => renderToday());
+            view.innerHTML = simpleDateHTML() + `<div id="liteTodayBody">${loadingHTML()}</div>`;
             const body = view.querySelector('#liteTodayBody');
             const bunks = myBunks();
             if (!bunks.length) {
@@ -6209,6 +6232,20 @@
                 <input type="date" id="liteDatePick" value="${esc(currentDate)}" aria-label="Pick a date">
             </div>
             <button type="button" class="lite-date-arrow" id="liteDateNext" aria-label="Next day">${chevR}</button>
+        </div>`;
+    }
+
+    // Read-only version of the date pill, no arrows or picker — for My Day,
+    // which only ever shows today (see the isCounselor() branch of
+    // renderToday). A counselor doesn't need to browse other days here;
+    // showing controls that don't lead anywhere useful is what made it feel
+    // cluttered rather than a clean "here's your day" view.
+    function simpleDateHTML() {
+        return `<div class="lite-datebar">
+            <div class="lite-date-pill">
+                <div class="lite-date-day">${esc(friendlyDate(currentDate))}</div>
+                <div class="lite-date-tag today">Today</div>
+            </div>
         </div>`;
     }
 

@@ -876,6 +876,10 @@ button { cursor: pointer; border: none; background: none; }
 .lite-set-tags { display: flex; flex-wrap: wrap; gap: 5px; }
 .lite-set-section-label { font-size: 0.72rem; font-weight: 800; text-transform: uppercase; letter-spacing: 0.06em; color: var(--muted); margin: 20px 4px 8px; }
 .lite-set-row { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+/* Related settings now share one card (Account & Security; Preferences)
+   instead of each getting its own elevated box — fewer separately-shadowed
+   rectangles reads as one calm screen instead of a stack of tiles. */
+.lite-set-divider { height: 1px; background: var(--line); margin: 14px 0; }
 .lite-set-row-title { font-weight: 600; font-size: 0.95rem; }
 .lite-set-row-sub { font-size: 0.78rem; color: var(--muted); margin-top: 2px; line-height: 1.4; }
 .lite-link-row { display: block; width: 100%; text-align: left; background: var(--card); border: 1px solid var(--line); border-radius: 13px; padding: 14px 15px; font-size: 0.92rem; font-weight: 600; color: var(--accent-dark); margin-top: 8px; text-decoration: none; }
