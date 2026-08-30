@@ -1695,9 +1695,42 @@
         window.dispatchEvent(new CustomEvent('campistry-cloud-hydrated'));
     }
 
+    // Cross-camp guard: the local cache (campGlobalSettings_v1 + IDB
+    // snapshot) is browser-wide, not camp-scoped. If it was written by a
+    // DIFFERENT camp (stamp mismatch), letting it stand — or merging it —
+    // shows/pushes that camp's data (rosters, staff applications, everything
+    // in the blob) into THIS camp. Refuse it and purge the foreign cache;
+    // the cloud state is the truth for this camp.
+    //
+    // Must run for EVERY hydration attempt, not just the ones that come back
+    // with cloud data — a brand-new camp with zero camp_state_kv rows and no
+    // legacy camp_state row hits an early return before ever reaching the
+    // merge logic, and previously skipped this check entirely, letting a
+    // stale local cache from a PREVIOUS camp tested in the same browser show
+    // through as if it belonged to the new camp (e.g. staff applicants that
+    // were never actually submitted).
+    function _purgeForeignLocalCache(campId) {
+        try {
+            const _stamp = localStorage.getItem('campistry_settings_camp_id');
+            if (_stamp && campId && _stamp !== String(campId)) {
+                console.warn('🛑 [IntegrationHooks] Local settings cache belongs to camp ' + _stamp + ' but this session is camp ' + campId + ' — discarding the foreign local cache (cloud wins).');
+                try { localStorage.removeItem(CONFIG.LOCAL_STORAGE_KEY); } catch (_) {}
+                try { localStorage.removeItem('campistry_settings_camp_id'); } catch (_) {}
+                try { window.LocalCacheIDB?.clear?.(); } catch (_) {}
+                _localCache = {};
+                return true;
+            }
+        } catch (_eCampGuard) {}
+        return false;
+    }
+
     async function hydrateFromCloud() {
         const client = window.CampistryDB?.getClient?.();
         const campId = window.CampistryDB?.getCampId?.();
+
+        // Run before anything else, unconditionally — a purge here must not
+        // depend on whether this attempt actually finds cloud data to merge.
+        _purgeForeignLocalCache(campId);
 
         if (!client || !campId) {
             log('No client/camp ID for hydration');
@@ -1807,24 +1840,13 @@
             if (cloudState) {
                 let localState = getLocalSettings();
 
-                // ★ Cross-camp guard: the local cache (campGlobalSettings_v1 +
-                //   IDB snapshot) is browser-wide, not camp-scoped. If it was
-                //   written by a DIFFERENT camp (stamp mismatch), merging it
-                //   below would push that camp's keys into THIS camp's cloud —
-                //   the newer-local-wins branch and the missing-key backfill
-                //   both do it. Refuse the merge and purge the foreign cache;
-                //   the cloud state is the truth for this camp.
-                try {
-                    const _stamp = localStorage.getItem('campistry_settings_camp_id');
-                    if (_stamp && campId && _stamp !== String(campId)) {
-                        console.warn('🛑 [IntegrationHooks] Local settings cache belongs to camp ' + _stamp + ' but this session is camp ' + campId + ' — discarding the foreign local cache (cloud wins).');
-                        try { localStorage.removeItem(CONFIG.LOCAL_STORAGE_KEY); } catch (_) {}
-                        try { localStorage.removeItem('campistry_settings_camp_id'); } catch (_) {}
-                        try { window.LocalCacheIDB?.clear?.(); } catch (_) {}
-                        _localCache = {};
-                        localState = {};
-                    }
-                } catch (_eCampGuard) {}
+                // Already run unconditionally near the top of this function
+                // (see _purgeForeignLocalCache) — calling it again here is
+                // just to catch the local variable up if it purged: a fresh
+                // getLocalSettings() read after a purge is empty anyway, but
+                // localState above was read before this check could run on
+                // the very first call, so re-check and reset it explicitly.
+                if (_purgeForeignLocalCache(campId)) localState = {};
 
                 const cloudTime = new Date(cloudState.updated_at || 0).getTime();
                 const localTime = new Date(localState.updated_at || 0).getTime();
