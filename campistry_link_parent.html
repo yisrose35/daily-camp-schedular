@@ -336,7 +336,7 @@
     <div class="lk-page-hero-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M18 8h1a4 4 0 0 1 0 8h-1"/><path d="M2 8h16v9a4 4 0 0 1-4 4H6a4 4 0 0 1-4-4V8z"/></svg></div>
     <div><h1>Canteen</h1><p>Manage canteen accounts — powered by Campistry Snacks</p></div>
 </div>
-    <div class="lk-tabs" id="canteenTabs"></div>
+    <div id="canteenTabs"></div>
     <div class="canteen-bal"><div class="canteen-bal-lbl">Current Balance — <strong id="canteenChildName"></strong></div><div class="canteen-bal-amt" id="canteenAmt">$32.50</div>
         <div style="display:flex;gap:6px;justify-content:center;margin:12px 0;">
             <button class="canteen-quick-btn" onclick="selAmt(10,this)">$10</button><button class="canteen-quick-btn sel" onclick="selAmt(25,this)">$25</button><button class="canteen-quick-btn" onclick="selAmt(50,this)">$50</button>
@@ -371,7 +371,7 @@
         <div class="lk-page-hero-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M6 2L3 6v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2V6l-3-4z"/><line x1="3" y1="6" x2="21" y2="6"/><path d="M16 10a4 4 0 0 1-8 0"/></svg></div>
         <div><h1>Camp Shop</h1><p>Camp t-shirts, sweatshirts and gear — delivered to the bunk</p></div>
     </div>
-    <div class="lk-tabs" id="shopChildTabs"></div>
+    <div id="shopChildTabs"></div>
     <div id="shopCatalogue"></div>
     <div class="lk-card" id="shopCartCard" style="display:none;">
         <div class="lk-card-head"><h2>Your Order</h2></div>
@@ -567,7 +567,7 @@
     <div class="pickup-form active" id="pickup-early">
         <div class="lk-card">
             <div class="lk-card-head"><h2>Early Pickup</h2></div>
-            <div class="lk-tabs" id="pickupChildTabs"></div>
+            <div id="pickupChildTabs"></div>
             <div class="lk-pickup-for" id="pickupEarlyFor"></div>
             <div class="lk-field"><label>Date</label><input type="date" class="lk-input lk-req-date" id="earlyDate"></div>
             <div class="lk-field"><label>Pickup Time</label><input type="time" class="lk-input" value="14:00"></div>
@@ -584,7 +584,7 @@
     <div class="pickup-form" id="pickup-change">
         <div class="lk-card">
             <div class="lk-card-head"><h2>Pickup Change</h2></div>
-            <div class="lk-tabs" id="pickupChangeTabs"></div>
+            <div id="pickupChangeTabs"></div>
             <div class="lk-pickup-for" id="pickupChangeFor"></div>
             <div class="lk-field"><label>Date</label><input type="date" class="lk-input lk-req-date" id="changeDate"></div>
             <div class="lk-field"><label>What is changing?</label>
@@ -614,7 +614,7 @@
     <div class="pickup-form" id="pickup-bus">
         <div class="lk-card">
             <div class="lk-card-head"><h2>Bus Change</h2></div>
-            <div class="lk-tabs" id="pickupBusTabs"></div>
+            <div id="pickupBusTabs"></div>
             <div class="lk-pickup-for" id="pickupBusFor"></div>
             <div class="lk-field"><label>Date</label><input type="date" class="lk-input lk-req-date" id="busDate"></div>
             <div class="lk-field"><label>What's changing?</label>
@@ -636,7 +636,7 @@
     <div class="pickup-form" id="pickup-late">
         <div class="lk-card">
             <div class="lk-card-head"><h2>Late Arrival</h2></div>
-            <div class="lk-tabs" id="pickupLateTabs"></div>
+            <div id="pickupLateTabs"></div>
             <div class="lk-pickup-for" id="pickupLateFor"></div>
             <div class="lk-field"><label>Date</label><input type="date" class="lk-input lk-req-date" id="lateDate" onchange="_onLateDateChange()"></div>
             <p id="lateArrivedHint" style="font-size:.84rem;color:var(--text-muted);margin:0 0 14px;">Just dropped your child off? Let the office know they have arrived.</p>
@@ -688,7 +688,7 @@
         <div><h1>Health</h1><p>Nurse visit log and health documents — powered by Campistry Health</p></div>
     </div>
 
-    <div class="lk-tabs" id="healthTabs"></div>
+    <div id="healthTabs"></div>
 
     <!-- Nurse visit log -->
     <div class="lk-card">
@@ -795,7 +795,7 @@
     </div>
 
     <!-- Child selector tabs -->
-    <div class="lk-tabs" id="tipChildTabs" style="margin-bottom:20px;"></div>
+    <div id="tipChildTabs" style="margin-bottom:20px;"></div>
 
     <!-- Recipient cards -->
     <div id="tipsRecipients"></div>
@@ -1073,6 +1073,42 @@ window.addEventListener('unhandledrejection', function(e){
 // upload/list render). The forms module has its own IIFE-local copy; declaring a
 // top-level one here makes it resolvable from both blocks without shadowing.
 function _escHtml(s){ return String(s==null?'':s).replace(/&/g,'&amp;').replace(/"/g,'&quot;').replace(/</g,'&lt;').replace(/>/g,'&gt;'); }
+
+// Shared camper picker — a colored avatar + name pill with a strong filled
+// active state, used everywhere a page needs to know which child an action
+// applies to (Canteen, Camp Shop, Schedule, Health, every pickup form).
+// Replaces the old plain .lk-tab text row for this specific job: a thin
+// underline on a name was too easy to act right past without noticing there
+// was a choice to make, which is exactly how a parent ends up submitting a
+// request — or spending money — against the wrong kid. onSelect(child) fires
+// once immediately for whichever child starts active, and again on every tap.
+function _renderCamperSwitch(containerId, onSelect, activeId, skipInitialFire){
+    var el = document.getElementById(containerId); if(!el) return;
+    el.classList.add('lk-camper-switch'); // idempotent — safe if this container gets rebuilt more than once
+    el.innerHTML = '';
+    children.forEach(function(c,i){
+        var isActive = activeId ? (c.id === activeId) : (i === 0);
+        var chip = document.createElement('button');
+        chip.type = 'button';
+        chip.className = 'lk-camper-chip' + (isActive ? ' active' : '');
+        chip.dataset.childId = c.id;
+        chip.setAttribute('data-accent', childAccent(c.id));
+        chip.innerHTML = '<span class="lk-camper-chip-avatar">'+_escHtml(c.initials||'')+'</span><span class="lk-camper-chip-name">'+_escHtml(c.name.split(' ')[0])+'</span>';
+        chip.onclick = function(){
+            el.querySelectorAll('.lk-camper-chip').forEach(function(b){ b.classList.remove('active'); });
+            chip.classList.add('active');
+            onSelect(c, chip);
+        };
+        el.appendChild(chip);
+        // skipInitialFire: a page whose switch handler has a destructive side
+        // effect (Camp Shop clears the cart on an actual camper change) must
+        // not run that effect just because the page re-rendered — only a real
+        // tap should count as "switched." Such pages read the active chip
+        // themselves for the initial render instead.
+        if (isActive && !skipInitialFire) onSelect(c, chip);
+    });
+}
+
 var _selAmt=25;
 function selAmt(v,b){_selAmt=v;document.querySelectorAll('.canteen-quick-btn').forEach(function(e){e.classList.remove('sel')});b.classList.add('sel');var ci=document.getElementById('canteenCustomAmt');if(ci)ci.value='';}
 function selCustomAmt(input){
@@ -1095,7 +1131,7 @@ var _shopOrders=[];
 var _shopLoading=false;
 
 function _shopChild(){
-    var t=document.querySelector('#shopChildTabs .lk-tab.active');
+    var t=document.querySelector('#shopChildTabs .lk-camper-chip.active');
     var id=t?t.dataset.childId:'';
     return children.find(function(c){return c.id===id;})||children[0]||null;
 }
@@ -1125,14 +1161,14 @@ function renderShopPage(){
     // Child tabs — an order is placed for one camper, so this picks who.
     var ct=document.getElementById('shopChildTabs');
     if(ct){
-        ct.innerHTML='';
-        // One camper needs no picker, but the hidden tab still carries the id
-        // _shopChild() reads. display is always set, never just toggled off, so
-        // a second camper appearing later brings the picker back.
+        // skipInitialFire: revisiting this page must not clear an in-progress
+        // cart just because the tabs got rebuilt — only an actual tap should.
+        _renderCamperSwitch('shopChildTabs', function(c){ switchShopChild(c.id); }, null, true);
+        // One camper needs no picker, but the (still-active) chip stays in the
+        // DOM carrying the id _shopChild() reads. display is always set, never
+        // just toggled off, so a second camper appearing later brings the
+        // picker back.
         ct.style.display=(children.length>1)?'':'none';
-        children.forEach(function(c,i){
-            ct.innerHTML+='<button class="lk-tab '+(i===0?'active':'')+'" data-child-id="'+_shopEsc(c.id)+'" onclick="switchShopChild(\''+_shopEsc(c.id)+'\',this)">'+_shopEsc(c.name.split(' ')[0])+'</button>';
-        });
     }
     if(_shopCatalogue===null&&!_shopLoading) loadShopCatalogue();
     renderShopCatalogue();
@@ -1140,9 +1176,8 @@ function renderShopPage(){
     renderShopOrders();
 }
 
-function switchShopChild(id,btn){
-    document.querySelectorAll('#shopChildTabs .lk-tab').forEach(function(b){b.classList.remove('active')});
-    if(btn)btn.classList.add('active');
+function switchShopChild(id){
+    // Active-chip toggling is handled by _renderCamperSwitch itself now.
     // The cart belongs to a camper — sizes differ per child, so switching
     // clears it rather than silently re-attributing what's in it.
     if(_shopCart.length){_shopCart=[];toast('Cart cleared — switched camper');}
@@ -1350,7 +1385,7 @@ function shopPlaceOrder(){
         renderShopCart();
         if(d.paid&&d.balance!=null){
             c.canteenBalance=d.balance;
-            if(typeof switchCanteen==='function'&&document.querySelector('#canteenTabs .lk-tab'))switchCanteen(c.id);
+            if(typeof switchCanteen==='function'&&document.querySelector('#canteenTabs .lk-camper-chip'))switchCanteen(c.id);
         }
         loadShopCatalogue();
         toast('Order placed — '+_shopMoney(d.total)+' for '+c.name.split(' ')[0]);
@@ -1388,7 +1423,7 @@ function renderShopOrders(){
 }
 
 function _activeCanteenChild(){
-    var activeTab=document.querySelector('#canteenTabs .lk-tab.active');
+    var activeTab=document.querySelector('#canteenTabs .lk-camper-chip.active');
     var id=activeTab?activeTab.dataset.childId:'';
     return children.find(function(c){return c.id===id;})||children[0]||null;
 }
@@ -1539,9 +1574,11 @@ function init(){
     else{pt.innerHTML='<tr><td colspan="4" style="text-align:center;color:var(--text-muted);padding:20px;">No payment records</td></tr>';}}
 
     // Canteen tabs
-    var ct=document.getElementById('canteenTabs');if(ct){ct.innerHTML='';
-    if(children.length){children.forEach(function(c,i){ct.innerHTML+='<button class="lk-tab '+(i===0?'active':'')+'" data-child-id="'+c.id+'" onclick="switchCanteen(\''+c.id+'\',this)">'+c.name.split(' ')[0]+'</button>';});switchCanteen(children[0].id);}
-    else{var ca=document.getElementById('canteenAmt');if(ca)ca.textContent='$0.00';var tl=document.getElementById('txList');if(tl)tl.innerHTML='<div class="lk-empty" style="padding:24px 0;"><h3>No canteen accounts yet</h3></div>';}}
+    var ct=document.getElementById('canteenTabs');
+    if(ct){
+        if(children.length){ _renderCamperSwitch('canteenTabs', function(c){ switchCanteen(c.id); }); }
+        else{ct.innerHTML='';var ca=document.getElementById('canteenAmt');if(ca)ca.textContent='$0.00';var tl=document.getElementById('txList');if(tl)tl.innerHTML='<div class="lk-empty" style="padding:24px 0;"><h3>No canteen accounts yet</h3></div>';}
+    }
 
     // Schedule date label
     var today=new Date(schedBaseDateMs+schedDateOffset*86400000);
@@ -1566,9 +1603,11 @@ function init(){
     else{ec.innerHTML='<div class="lk-empty"><h3>No campers linked yet</h3></div>';}}
 
     // Health tabs
-    var ht=document.getElementById('healthTabs');if(ht){ht.innerHTML='';
-    if(children.length){children.forEach(function(c,i){ht.innerHTML+='<button class="lk-tab '+(i===0?'active':'')+'" onclick="switchHealth(\''+c.id+'\',this)">'+c.name.split(' ')[0]+'</button>';});switchHealth(children[0].id);}
-    else{var hb=document.getElementById('healthCamperBadge');if(hb)hb.textContent='';var hdb=document.getElementById('healthDocBadge');if(hdb)hdb.textContent='';}}
+    var ht=document.getElementById('healthTabs');
+    if(ht){
+        if(children.length){ _renderCamperSwitch('healthTabs', function(c){ switchHealth(c.id); }); }
+        else{ht.innerHTML='';var hb=document.getElementById('healthCamperBadge');if(hb)hb.textContent='';var hdb=document.getElementById('healthDocBadge');if(hdb)hdb.textContent='';}
+    }
 
     // Forms — online
     var fol=document.getElementById('formsOnlineList');if(fol){
@@ -1613,8 +1652,8 @@ function init(){
 var txSvgDebit='<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="12" y1="1" x2="12" y2="23"/><path d="M17 5H9.5a3.5 3.5 0 0 0 0 7h5a3.5 3.5 0 0 1 0 7H6"/></svg>';
 var txSvgCredit='<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="12" y1="19" x2="12" y2="5"/><polyline points="5 12 12 5 19 12"/></svg>';
 
-function switchCanteen(id,btn){
-    if(btn){btn.closest('.lk-tabs').querySelectorAll('.lk-tab').forEach(function(t){t.classList.remove('active')});btn.classList.add('active');}
+function switchCanteen(id){
+    // Active-chip toggling is handled by _renderCamperSwitch itself now.
     var c=children.find(function(k){return k.id===id});
     if(!c)return;
     document.getElementById('canteenAmt').textContent='$'+c.canteenBalance.toFixed(2);
@@ -1703,8 +1742,8 @@ function handleFormReturn(rowId,camperName,formName,input,formId){
     input.value='';
 }
 
-function switchHealth(id,btn){
-    if(btn){btn.closest('.lk-tabs').querySelectorAll('.lk-tab').forEach(function(t){t.classList.remove('active')});btn.classList.add('active');}
+function switchHealth(id){
+    // Active-chip toggling is handled by _renderCamperSwitch itself now.
     var c=children.find(function(k){return k.id===id});if(!c)return;
     var idx=children.indexOf(c);
     var camperNum='#'+String(idx+1).padStart(4,'0');
@@ -3181,7 +3220,7 @@ function submitPickup(type, lateMode) {
     var reqDate = (document.getElementById(type+'Date')||{}).value || _pickupTodayStr();
 
     // Get active child from tab
-    var activeTab = document.querySelector('#'+tabsIds[type]+' .lk-tab.active');
+    var activeTab = document.querySelector('#'+tabsIds[type]+' .lk-camper-chip.active');
     var childId = activeTab ? activeTab.dataset.childId : '';
     var child = children.find(function(c){return c.id===childId}) || children[0] || {};
 
@@ -3404,10 +3443,11 @@ nav = function(p) {
     if (p === 'health') { _loadMyHealthDocs(); }
 };
 
-// One tabs row + one "For: <child>" label per pickup form. The label is the
-// point: a tab row alone is easy to miss once you've scrolled down to the
-// actual submit button, and a wrong-camper early-pickup/bus-change report
-// is the kind of mistake that actually matters to a camp office.
+// One camper-switch row + one "For: <child>" label per pickup form. The
+// label is the point: even the bold chip row can end up scrolled out of
+// view by the time a parent reaches the submit button, and a wrong-camper
+// early-pickup/bus-change report is the kind of mistake that actually
+// matters to a camp office.
 var _PICKUP_TABS = {early:'pickupChildTabs', change:'pickupChangeTabs', bus:'pickupBusTabs', late:'pickupLateTabs'};
 var _PICKUP_FOR   = {early:'pickupEarlyFor',  change:'pickupChangeFor',  bus:'pickupBusFor',   late:'pickupLateFor'};
 function _updatePickupFor(type, childId) {
@@ -3418,22 +3458,7 @@ function _updatePickupFor(type, childId) {
 // Init pickup child tabs
 function initPickupTabs() {
     Object.keys(_PICKUP_TABS).forEach(function(type){
-        var id = _PICKUP_TABS[type];
-        var el = document.getElementById(id); if(!el) return;
-        el.innerHTML = '';
-        children.forEach(function(c,i){
-            var btn = document.createElement('button');
-            btn.className = 'lk-tab'+(i===0?' active':'');
-            btn.dataset.childId = c.id;
-            btn.textContent = c.name.split(' ')[0];
-            btn.onclick = function(){
-                el.querySelectorAll('.lk-tab').forEach(function(t){ t.classList.remove('active'); });
-                btn.classList.add('active');
-                _updatePickupFor(type, c.id);
-            };
-            el.appendChild(btn);
-        });
-        if (children.length) _updatePickupFor(type, children[0].id);
+        _renderCamperSwitch(_PICKUP_TABS[type], function(c){ _updatePickupFor(type, c.id); });
     });
     var today = _pickupTodayStr();
     document.querySelectorAll('.lk-req-date').forEach(function(inp){
@@ -5218,23 +5243,21 @@ function _loadTipsLogP() {
 
 function _activeTipChild() {
     if (_tipChildId) return children.find(function(c){ return c.id === _tipChildId; }) || children[0] || null;
-    var at = document.querySelector('#tipChildTabs .lk-tab.active');
-    var first = at ? at.textContent.trim() : '';
-    return children.find(function(c){ return c.name.split(' ')[0] === first; }) || children[0] || null;
+    var at = document.querySelector('#tipChildTabs .lk-camper-chip.active');
+    var id = at ? at.dataset.childId : '';
+    return children.find(function(c){ return c.id === id; }) || children[0] || null;
 }
 
 function renderTipsPage() {
     var cfg = _loadTipsConfigP();
 
-    // Build child tabs
+    // Build child tabs — lazily, once. renderTipsPage can be called again on
+    // its own (a nav revisit, a cloud refresh), and rebuilding here every
+    // time would silently reset back to the first camper, discarding
+    // whatever the parent had actually selected.
     var ct = document.getElementById('tipChildTabs');
-    if (ct && children.length) {
-        if (!ct.innerHTML) {
-            ct.innerHTML = children.map(function(c, i) {
-                return '<button class="lk-tab' + (i===0?' active':'') + '" data-childid="' + c.id + '" onclick="switchTipChild(\'' + c.id + '\',this)">' + c.name.split(' ')[0] + '</button>';
-            }).join('');
-            _tipChildId = children[0].id;
-        }
+    if (ct && children.length && !ct.innerHTML) {
+        _renderCamperSwitch('tipChildTabs', function(c){ switchTipChild(c.id); });
     }
 
     var child = _activeTipChild();
@@ -5243,8 +5266,8 @@ function renderTipsPage() {
     renderTipCartBar();
 }
 
-function switchTipChild(id, btn) {
-    if (btn) { btn.closest('.lk-tabs').querySelectorAll('.lk-tab').forEach(function(t){t.classList.remove('active')}); btn.classList.add('active'); }
+function switchTipChild(id) {
+    // Active-chip toggling is handled by _renderCamperSwitch itself now.
     _tipChildId = id;
     var cfg = _loadTipsConfigP();
     var child = _activeTipChild();

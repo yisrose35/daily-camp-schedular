@@ -419,6 +419,40 @@ body {
     margin: -6px 0 14px;
 }
 
+/* ─── Camper switcher ─────────────────────────────────────────────────────
+   The plain text-tab row (.lk-tabs/.lk-tab) used to double as the camper
+   picker on Canteen, Camp Shop, Schedule, Health and every pickup form — a
+   thin underline on a name is easy to act right past without registering
+   it as a choice, so a parent with more than one child could easily submit
+   or spend against the wrong one without ever noticing there was a
+   decision to make. This is deliberately much louder: a colored avatar +
+   name pill with a strong filled active state, reusing the same per-child
+   accent colors already used on the Home hero chips (childAccent()/
+   CHILD_ACCENTS), just restyled for a light card background instead of the
+   dark hero. */
+.lk-camper-switch {
+    display: flex; gap: 10px; overflow-x: auto; padding: 3px 1px;
+    margin-bottom: 16px; scrollbar-width: none;
+}
+.lk-camper-switch::-webkit-scrollbar { display: none; }
+.lk-camper-chip {
+    flex: none; display: flex; align-items: center; gap: 9px;
+    padding: 7px 18px 7px 7px; border-radius: var(--radius-full);
+    border: 2px solid var(--slate-200); background: #fff;
+    cursor: pointer; font-family: var(--font-body);
+    transition: border-color 0.15s ease, background 0.15s ease, transform 0.1s ease;
+}
+.lk-camper-chip:active { transform: scale(0.97); }
+.lk-camper-chip-avatar {
+    width: 30px; height: 30px; border-radius: 50%; flex-shrink: 0;
+    background: var(--acc-1, var(--link-color)); color: #fff;
+    font-size: 0.68rem; font-weight: 700;
+    display: flex; align-items: center; justify-content: center;
+}
+.lk-camper-chip-name { font-size: 0.86rem; font-weight: 600; color: var(--slate-500); }
+.lk-camper-chip.active { border-color: var(--link-color); background: var(--link-tint); }
+.lk-camper-chip.active .lk-camper-chip-name { color: var(--link-color); }
+
 /* TABLE */
 .lk-table { width: 100%; border-collapse: collapse; }
 .lk-table th {
