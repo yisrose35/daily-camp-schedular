@@ -426,21 +426,68 @@
     // =============================================================
     // READ-ONLY FULL-DAY SCHEDULE GRID (filterable by division/grade/bunk)
     // =============================================================
+    // Ordering here MUST mirror Flow's own column order (app1.js's
+    // window._getMeDivisionOrder) — otherwise Live's grid/filters silently
+    // show a different order than what the user arranged in Campistry Me,
+    // even though the underlying data is identical. Three pieces, same as
+    // app1.js:
+    //   1. Parent (top-level structure key) order — app1.divisionOrder
+    //      (Me's own drag-reorder), then legacy app1.manualColumnOrder, then
+    //      a numeric-aware alphabetical fallback. Plain Object.keys(struct)
+    //      is NOT reliable here even before any of that — campStructure is
+    //      stored as JSONB in the cloud, which does not preserve object key
+    //      order (see app1.js's own "FN-50 / JSONB-order fix" comment).
+    //   2. Grade order within a parent — that division's own gradeOrder
+    //      array (filtered to grades that still exist), with any leftover
+    //      grade appended at the end.
+    //   3. Bunk order within a grade — grades[gradeName].bunks is already a
+    //      user-ordered ARRAY (set via drag-and-drop in Me); the previous
+    //      version of this function threw that order away by collecting
+    //      bunk names into an object and re-sorting alphabetically later.
     function structureOptions() {
-        var struct = getStructure();
-        var divisions = Object.keys(struct);
-        var grades = {}, bunkGrade = {}, bunkDiv = {};
+        var g = readGlobal();
+        var struct = g.campStructure || {};
+        var appCfg = g.app1 || {};
+
+        var divOrdList = Array.isArray(appCfg.divisionOrder) ? appCfg.divisionOrder : [];
+        var manualOrdList = Array.isArray(appCfg.manualColumnOrder) ? appCfg.manualColumnOrder : [];
+        var parentManualPos = {};
+        divOrdList.forEach(function (k) { if (struct[k] != null && parentManualPos[k] == null) parentManualPos[k] = Object.keys(parentManualPos).length; });
+        manualOrdList.forEach(function (k) { if (struct[k] != null && parentManualPos[k] == null) parentManualPos[k] = Object.keys(parentManualPos).length; });
+        var hasAnyOrderList = divOrdList.length > 0 || manualOrdList.length > 0;
+        var divisions = Object.keys(struct).sort(function (a, b) {
+            var pa = parentManualPos[a], pb = parentManualPos[b];
+            if (pa != null && pb != null && pa !== pb) return pa - pb;
+            if (pa != null && pb == null) return -1;
+            if (pa == null && pb != null) return 1;
+            if (!hasAnyOrderList) {
+                var na = parseInt(a, 10), nb = parseInt(b, 10);
+                if (!isNaN(na) && !isNaN(nb) && na !== nb) return na - nb;
+            }
+            return String(a).localeCompare(String(b));
+        });
+
+        var grades = [], gradeSeen = {}, bunkOrder = [], bunkGrade = {}, bunkDiv = {};
         divisions.forEach(function (divName) {
-            var gradeMap = (struct[divName] || {}).grades || {};
-            Object.keys(gradeMap).forEach(function (gradeName) {
-                grades[gradeName] = true;
+            var divData = struct[divName] || {};
+            var gradeMap = divData.grades || {};
+            var allGradeNames = Object.keys(gradeMap);
+            var ord = divData.gradeOrder;
+            var gradeNamesInOrder = (Array.isArray(ord) && ord.length)
+                ? ord.filter(function (gname) { return gname in gradeMap; })
+                     .concat(allGradeNames.filter(function (gname) { return ord.indexOf(gname) < 0; }))
+                : allGradeNames;
+            gradeNamesInOrder.forEach(function (gradeName) {
+                if (!gradeSeen[gradeName]) { gradeSeen[gradeName] = true; grades.push(gradeName); }
                 (gradeMap[gradeName].bunks || []).forEach(function (b) {
-                    bunkGrade[String(b)] = gradeName;
-                    bunkDiv[String(b)] = divName;
+                    var bunkStr = String(b);
+                    bunkGrade[bunkStr] = gradeName;
+                    bunkDiv[bunkStr] = divName;
+                    bunkOrder.push(bunkStr);
                 });
             });
         });
-        return { divisions: divisions, grades: Object.keys(grades), bunkGrade: bunkGrade, bunkDiv: bunkDiv };
+        return { divisions: divisions, grades: grades, bunkOrder: bunkOrder, bunkGrade: bunkGrade, bunkDiv: bunkDiv };
     }
 
     // Resolve one bunk's activity at a division-period index, mirroring
@@ -476,12 +523,15 @@
         var gradeFilter = (document.getElementById('locFilterGrade') || {}).value || '';
         var bunkFilter = (document.getElementById('locFilterBunk') || {}).value || '';
 
-        var bunks = Object.keys(opts.bunkDiv).filter(function (b) {
+        // opts.bunkOrder is already in Flow's configured order (Me's
+        // division/grade/bunk drag-order) — filter it in place rather than
+        // re-deriving from bunkDiv's key order and re-sorting alphabetically.
+        var bunks = opts.bunkOrder.filter(function (b) {
             if (divFilter && opts.bunkDiv[b] !== divFilter) return false;
             if (gradeFilter && opts.bunkGrade[b] !== gradeFilter) return false;
             if (bunkFilter && b !== bunkFilter) return false;
             return true;
-        }).sort();
+        });
 
         if (!bunks.length) { body.innerHTML = '<div class="empty-state">No bunks match this filter, or no schedule has been generated for today.</div>'; return; }
         if (!_schedule || !Object.keys(_schedule.scheduleAssignments || {}).length) { body.innerHTML = '<div class="empty-state">No schedule generated for today yet.</div>'; return; }
@@ -514,8 +564,19 @@
                 columnsByKey[slot.startMin + '-' + slot.endMin] = { startMin: slot.startMin, endMin: slot.endMin };
             });
         });
+        // Grades with genuinely different period boundaries (e.g. Grade A runs
+        // 9:00-9:45/9:45-10:30, Grade B runs 9:00-9:30/9:30-10:15) legitimately
+        // produce MORE columns here, one per distinct (startMin,endMin) pair —
+        // that's correct, not a bug: each bunk's cells are looked up later by
+        // its OWN grade's exact period key (see byBunk below), so a column
+        // that isn't one of a given bunk's own periods is correctly left
+        // blank for that row rather than showing a neighboring grade's data
+        // under the wrong time. Tie-break by endMin too (not just startMin)
+        // so two columns that happen to share a start time still render in a
+        // stable, sensible left-to-right order instead of whatever order
+        // Object.keys() happened to produce them in.
         var columns = Object.keys(columnsByKey).map(function (k) { return columnsByKey[k]; })
-            .sort(function (a, b) { return a.startMin - b.startMin; });
+            .sort(function (a, b) { return (a.startMin - b.startMin) || (a.endMin - b.endMin); });
 
         // byBunk[bunk][columnKey] = resolved cell, found by POSITION within
         // that bunk's own division's period list (same convention
@@ -569,7 +630,7 @@
         var bunkSel = document.getElementById('locFilterBunk');
         if (divSel) divSel.innerHTML = '<option value="">All divisions</option>' + opts.divisions.map(function (d) { return '<option value="' + esc(d) + '">' + esc(d) + '</option>'; }).join('');
         if (gradeSel) gradeSel.innerHTML = '<option value="">All grades</option>' + opts.grades.map(function (g) { return '<option value="' + esc(g) + '">' + esc(g) + '</option>'; }).join('');
-        if (bunkSel) bunkSel.innerHTML = '<option value="">All bunks</option>' + Object.keys(opts.bunkDiv).sort().map(function (b) { return '<option value="' + esc(b) + '">' + esc(b) + '</option>'; }).join('');
+        if (bunkSel) bunkSel.innerHTML = '<option value="">All bunks</option>' + opts.bunkOrder.map(function (b) { return '<option value="' + esc(b) + '">' + esc(b) + '</option>'; }).join('');
     }
 
     // =============================================================
