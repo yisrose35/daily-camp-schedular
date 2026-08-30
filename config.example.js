@@ -12,4 +12,13 @@
         url: 'https://your-project.supabase.co',
         anonKey: 'YOUR_SUPABASE_ANON_KEY'
     };
+
+    // Your Stripe PUBLISHABLE key (pk_live_... or pk_test_...) — safe to ship
+    // to the browser, same as the anon key above. One value for the whole
+    // platform, set once here — never per camp. The matching SECRET key
+    // (sk_...) goes only in Supabase → Edge Functions → Secrets as
+    // STRIPE_SECRET_KEY, also set once, never touched by camp owners.
+    window.__CAMPISTRY_STRIPE__ = {
+        publishableKey: 'YOUR_STRIPE_PUBLISHABLE_KEY'
+    };
 })();

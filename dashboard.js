@@ -1160,16 +1160,14 @@
     var _telnyxCardEl = null;
 
     async function _telnyxStripePk() {
-        // dashboard.js doesn't load campistry_me.js (where getStripePublishableKey()
-        // normally lives), so read the same campistryMe.stripePublishableKey
-        // field directly from camp_state_kv rather than duplicating a whole
-        // settings-loading module just for this one string.
-        if (!_telnyxCampId) return '';
-        try {
-            const { data } = await window.supabase.from('camp_state_kv')
-                .select('value').eq('camp_id', _telnyxCampId).eq('key', 'campistryMe').maybeSingle();
-            return (data && data.value && data.value.stripePublishableKey) || '';
-        } catch (e) { return ''; }
+        // One platform-wide publishable key (config.js), same as
+        // getStripePublishableKey() in campistry_me.js — this used to read a
+        // PER-CAMP key a camp owner typed into Settings, which was wrong: the
+        // client_secret Stripe.js confirms here is always issued on
+        // Campistry's own platform Stripe account (server-side, via
+        // STRIPE_SECRET_KEY), so the publishable key has to match THAT
+        // account, not whatever key an individual camp owner might paste in.
+        return (window.__CAMPISTRY_STRIPE__ && window.__CAMPISTRY_STRIPE__.publishableKey) || '';
     }
 
     window.loadTelnyxStatus = async function(campId) {
@@ -1314,7 +1312,23 @@
         if (!box) return;
         try {
             const { data, error } = await window.supabase.rpc('get_camp_stripe_status', { p_camp_id: campId });
-            if (error || !data || !data.success) { box.textContent = 'Could not load Stripe Connect status.'; return; }
+            // Surface the real reason instead of a generic message — a missing
+            // RPC (migration 077 never pasted into the SQL Editor), an RLS/
+            // membership rejection, and a genuine network error all look
+            // identical to a camp owner staring at "Could not load Stripe
+            // Connect status." with nothing to act on.
+            if (error) {
+                console.error('[Dashboard] get_camp_stripe_status RPC error:', error);
+                box.innerHTML = '<p style="margin:0;color:#dc2626;">Could not load Stripe Connect status: ' +
+                    escTelnyx(error.message || String(error)) + '</p>';
+                return;
+            }
+            if (!data || !data.success) {
+                const reason = (data && data.error) || 'unknown error';
+                console.error('[Dashboard] get_camp_stripe_status returned failure:', data);
+                box.innerHTML = '<p style="margin:0;color:#dc2626;">Could not load Stripe Connect status (' + escTelnyx(reason) + ').</p>';
+                return;
+            }
 
             const canConnect = userRole === 'owner';
             const ownerNote = canConnect ? '' : '<p style="margin:6px 0 0;font-size:0.78rem;color:var(--slate-400);">Only the camp owner can connect Stripe.</p>';
@@ -1333,7 +1347,8 @@
                     (canConnect ? '<button type="button" class="btn-primary" onclick="startCampStripeConnect(this)">Review account</button>' : '') + ownerNote;
             }
         } catch (e) {
-            box.textContent = 'Could not load Stripe Connect status.';
+            console.error('[Dashboard] loadCampStripeConnectStatus threw:', e);
+            box.innerHTML = '<p style="margin:0;color:#dc2626;">Could not load Stripe Connect status: ' + escTelnyx(e && e.message ? e.message : String(e)) + '</p>';
         }
     };
 
@@ -1722,8 +1737,6 @@
             if (altEl) altEl.checked = cs.showAltNames !== false;
             var rtlEl = document.getElementById('settRTL');
             if (rtlEl) rtlEl.checked = !!cs.rtl;
-            var stripeEl = document.getElementById('settStripeKey');
-            if (stripeEl) stripeEl.value = cm.stripePublishableKey || '';
         } catch (e) {
             console.warn('Could not load camp settings:', e);
         }
@@ -1748,24 +1761,6 @@
             if (status) { status.textContent = 'Saved!'; status.style.color = '#059669'; setTimeout(function() { status.textContent = ''; }, 3000); }
         } catch (e) {
             console.error('Error saving language settings:', e);
-            if (status) { status.textContent = 'Error saving.'; status.style.color = '#dc2626'; }
-        }
-    };
-
-    window.saveStripeKey = function() {
-        var status = document.getElementById('stripeKeyStatus');
-        if (isTeamMember) {
-            if (status) { status.textContent = 'Only camp owners can edit camp settings.'; status.style.color = '#dc2626'; }
-            return;
-        }
-        try {
-            var gs = window.loadGlobalSettings ? (window.loadGlobalSettings() || {}) : {};
-            if (!gs.campistryMe) gs.campistryMe = {};
-            gs.campistryMe.stripePublishableKey = (document.getElementById('settStripeKey').value || '').trim();
-            if (window.saveGlobalSettings) window.saveGlobalSettings('campistryMe', gs.campistryMe);
-            if (status) { status.textContent = 'Saved!'; status.style.color = '#059669'; setTimeout(function() { status.textContent = ''; }, 3000); }
-        } catch (e) {
-            console.error('Error saving Stripe key:', e);
             if (status) { status.textContent = 'Error saving.'; status.style.color = '#dc2626'; }
         }
     };

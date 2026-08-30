@@ -10514,9 +10514,18 @@ async function removePayment(idx){
 // ═══════════════════════════════════════════════════════════════
 function getSupabaseUrl(){return window.__CAMPISTRY_SUPABASE__?.url||''}
 function getSupabaseKey(){return window.__CAMPISTRY_SUPABASE__?.anonKey||''}
+// One platform-wide publishable key (config.js), not a per-camp setting.
+// The client_secret Stripe.js confirms below (SetupIntent from stripe-setup,
+// PaymentIntent from stripe-charge/stripe-checkout) is always issued on
+// Campistry's own platform Stripe account server-side, via STRIPE_SECRET_KEY
+// — so the publishable key used to initialize Stripe.js has to match THAT
+// same account, not a key an individual camp owner might type in. Which
+// camp's bank account the money ultimately lands in is a completely
+// separate question, handled by Stripe Connect destination routing
+// server-side (see CAMP_STRIPE_CONNECT_SETUP.md) — never by swapping which
+// publishable key the browser uses.
 function getStripePublishableKey(){
-    var s=JSON.parse(localStorage.getItem('campGlobalSettings_v1')||'{}');
-    return(s.campistryMe&&s.campistryMe.stripePublishableKey)||'';
+    return(window.__CAMPISTRY_STRIPE__&&window.__CAMPISTRY_STRIPE__.publishableKey)||'';
 }
 function getCampId(){return localStorage.getItem('campistry_camp_id')||''}
 
@@ -10579,7 +10588,7 @@ function openCardCollectionModal(famKey,clientSecret){
     var f=families[famKey];
     var pk=getStripePublishableKey();
     if(!pk){
-        toast('Set your Stripe publishable key in Settings first','error');
+        toast('Stripe is not configured for this deployment — set window.__CAMPISTRY_STRIPE__.publishableKey in config.js','error');
         return;
     }
 

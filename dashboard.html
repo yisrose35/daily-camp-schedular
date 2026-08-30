@@ -9,8 +9,8 @@
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link href="https://fonts.googleapis.com/css2?family=DM+Sans:opsz,wght@9..40,300;9..40,400;9..40,500;9..40,600;9..40,700;9..40,800&family=Fraunces:opsz,wght@9..144,400;9..144,500;9..144,600;9..144,700&display=swap" rel="stylesheet">
     <style>html:not(.css-ready) body { opacity: 0; } html.css-ready body { transition: opacity 0.15s ease; }</style>
-    <link rel="stylesheet" href="dashboard.css?v=20260830-4" onload="document.documentElement.classList.add('css-ready')">
-    <link rel="stylesheet" href="mobile-responsive.css?v=20260830-4">
+    <link rel="stylesheet" href="dashboard.css?v=20260830-5" onload="document.documentElement.classList.add('css-ready')">
+    <link rel="stylesheet" href="mobile-responsive.css?v=20260830-5">
     <noscript><style>html body { opacity: 1 !important; }</style></noscript>
 </head>
 <body>
@@ -567,18 +567,9 @@
         <div id="dash-setup-payment" class="dash-setup-panel" style="display: none;">
             <div class="dashboard-card" style="max-width:700px;">
                 <div class="card-header"><h2>💳 Payment Processing (Stripe)</h2></div>
-                <p class="card-desc">Connect your Stripe account to accept credit card payments, save cards on file, and auto-charge installments.</p>
+                <p class="card-desc">Connect your Stripe account to accept credit card payments, save cards on file, and auto-charge installments — nothing to type here, just connect below.</p>
                 <div style="display:flex; flex-direction:column; gap:14px;">
-                    <div class="form-group">
-                        <label for="settStripeKey" style="font-size:0.82rem; font-weight:600; color:var(--slate-600); margin-bottom:4px; display:block;">Stripe Publishable Key</label>
-                        <input type="text" id="settStripeKey" placeholder="pk_live_... or pk_test_..." style="width:100%; padding:8px 10px; border-radius:8px; border:1px solid var(--slate-200); font-size:0.88rem;">
-                        <p style="font-size:0.72rem; color:var(--slate-400); margin-top:6px;">Your <strong>secret key</strong> (sk_...) must be set as a Supabase Edge Function secret — never put it in the browser. <a href="https://dashboard.stripe.com/apikeys" target="_blank" rel="noopener">Get your keys from Stripe →</a></p>
-                    </div>
-                    <div style="display:flex; gap:10px; align-items:center;">
-                        <button type="button" onclick="saveStripeKey()" class="btn-primary" style="padding:8px 20px; font-size:0.85rem;">Save Stripe Key</button>
-                        <span id="stripeKeyStatus" style="font-size:0.82rem; color:var(--slate-400);"></span>
-                    </div>
-                    <div style="border-top:1px solid var(--slate-200); margin-top:4px; padding-top:14px;">
+                    <div>
                         <h3 style="font-size:0.9rem; margin:0 0 8px; font-weight:600;">Where tuition money lands</h3>
                         <div id="campStripeConnectBox" style="font-size:0.85rem; color:var(--slate-600);">Loading…</div>
                     </div>
@@ -761,27 +752,27 @@
     <!-- ========================================= -->
     <!-- SCRIPTS -->
     <!-- ========================================= -->
-    <script data-cfasync="false" src="/cdn-cgi/scripts/5c5dd728/cloudflare-static/email-decode.min.js?v=20260830-4"></script>
-    <script src="demo_mode.js?v=20260830-4"></script>
-    <script src="config.js?v=20260830-4"></script>
+    <script data-cfasync="false" src="/cdn-cgi/scripts/5c5dd728/cloudflare-static/email-decode.min.js?v=20260830-5"></script>
+    <script src="demo_mode.js?v=20260830-5"></script>
+    <script src="config.js?v=20260830-5"></script>
     <script>
 if (window.location.protocol === 'file:') {
-    document.write('<script src="supabase-js-local.js?v=20260830-4"><\/script>');
+    document.write('<script src="supabase-js-local.js?v=20260830-5"><\/script>');
 } else {
     document.write('<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"><\/script>');
 }
 </script>
-    <script src="supabase_client.js?v=20260830-4"></script>
-    <script src="campistry_utils.js?v=20260830-4"></script>
-    <script src="campistry_security.js?v=20260830-4"></script>
-    <script src="dashboard.js?v=20260830-4"></script>
-    <script src="campistry_birthdays.js?v=20260830-4"></script>
-    <script src="badges.js?v=20260830-4"></script>
-    <script src="access_control.js?v=20260830-4"></script>
-    <script src="campistry_capabilities.js?v=20260830-4"></script>
-<script src="campistry_access_settings.js?v=20260830-4"></script>
-<script src="team_subdivisions_ui.js?v=20260830-4"></script>
-    <script src="camp_clone.js?v=20260830-4"></script>
+    <script src="supabase_client.js?v=20260830-5"></script>
+    <script src="campistry_utils.js?v=20260830-5"></script>
+    <script src="campistry_security.js?v=20260830-5"></script>
+    <script src="dashboard.js?v=20260830-5"></script>
+    <script src="campistry_birthdays.js?v=20260830-5"></script>
+    <script src="badges.js?v=20260830-5"></script>
+    <script src="access_control.js?v=20260830-5"></script>
+    <script src="campistry_capabilities.js?v=20260830-5"></script>
+<script src="campistry_access_settings.js?v=20260830-5"></script>
+<script src="team_subdivisions_ui.js?v=20260830-5"></script>
+    <script src="camp_clone.js?v=20260830-5"></script>
     <script>setTimeout(function(){ document.documentElement.classList.add('css-ready'); }, 3000);</script>
 
     <!-- ===== DASHBOARD WIDGETS (clock, weather, notifications, greeting) ===== -->
@@ -1019,12 +1010,12 @@ if (window.location.protocol === 'file:') {
         }
     })();
     </script>
-    <script src="plan_limits.js?v=20260830-4"></script>
-    <script src="trial_guard.js?v=20260830-4"></script>
+    <script src="plan_limits.js?v=20260830-5"></script>
+    <script src="trial_guard.js?v=20260830-5"></script>
     <script>
   window.va = window.va || function () { (window.vaq = window.vaq || []).push(arguments); };
 </script>
-<script defer src="/_vercel/insights/script.js?v=20260830-4"></script>
-<script src="parent_lockout_guard.js?v=20260830-4"></script>
+<script defer src="/_vercel/insights/script.js?v=20260830-5"></script>
+<script src="parent_lockout_guard.js?v=20260830-5"></script>
 </body>
 </html>

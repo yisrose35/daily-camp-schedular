@@ -24,4 +24,21 @@
     // email points THERE instead of the admin's origin. Trailing slash optional.
     // Empty string = same origin as the page generating the link (default).
     window.__CAMPISTRY_PARENT_URL__ = 'https://link.campistry.org';
+
+    // Campistry's own Stripe PUBLISHABLE key (pk_live_... / pk_test_...) — one
+    // value, platform-wide, same as the anon key above: designed to be public,
+    // safe to ship to every browser. This is NOT a per-camp setting — every
+    // card Stripe.js collects (save-a-card, tuition checkout, installments)
+    // is issued as a SetupIntent/PaymentIntent on THIS platform Stripe account
+    // server-side (via the STRIPE_SECRET_KEY Edge Function secret, set once in
+    // the Supabase dashboard — never here, never in any browser-facing file).
+    // Which camp's bank account the resulting money lands in is handled
+    // separately, per camp, via Stripe Connect (Dashboard → Payment
+    // Processing → "Where tuition money lands") — camp owners never touch
+    // Supabase or this file at all.
+    // TODO: replace with your real publishable key from
+    // https://dashboard.stripe.com/apikeys before card collection will work.
+    window.__CAMPISTRY_STRIPE__ = {
+        publishableKey: ''
+    };
 })();
