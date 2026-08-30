@@ -160,6 +160,25 @@
         </div>
     </div>
     <div id="reportsBody"><div class="empty-state">Generate a report to view attendance data</div></div>
+
+    <!-- Dismissal Changes report — every early pickup / pickup change /
+         going-with-a-friend / bus change over a date range, one row per
+         camper's change, with their original dismissal bus/carpool for
+         comparison (from Campistry Go's saved routes, when available). -->
+    <div class="page-header" style="margin-top:28px;">
+        <div><div class="page-title" style="font-size:1.05rem;">Dismissal Changes Report</div><div class="page-subtitle">Early pickups, pickup changes, and bus changes over a date range</div></div>
+    </div>
+    <div class="card" style="margin-bottom:16px;">
+        <div class="card-body">
+            <div style="display:flex;gap:12px;flex-wrap:wrap;align-items:end;">
+                <div><label class="form-label">From</label><input type="date" class="form-input" id="dismissalReportStart"></div>
+                <div><label class="form-label">To</label><input type="date" class="form-input" id="dismissalReportEnd"></div>
+                <button class="btn btn-primary" onclick="CampistryLive.generateDismissalReport()">Generate Report</button>
+                <button class="btn btn-secondary" id="dismissalReportExportBtn" style="display:none;" onclick="CampistryLive.exportDismissalReportCsv()">Export CSV</button>
+            </div>
+        </div>
+    </div>
+    <div id="dismissalReportBody"></div>
 </div>
 
 <!-- ── ACTIVITY — Messages, Changes, and Pickup Alerts merged into one
@@ -191,13 +210,14 @@
         <button class="btn btn-sm btn-primary" id="activityTabBtn-messages" onclick="ParentRequests.setActivityTab('messages')">Messages <span class="sb-badge warn" id="activityMsgCount" style="display:none;">0</span></button>
         <button class="btn btn-sm btn-secondary" id="activityTabBtn-changes" onclick="ParentRequests.setActivityTab('changes')">Changes</button>
     </div>
-    <!-- Today's early-pickup log (office manual entries + parent-confirmed
-         ones, already merged into one list in today.earlyPickups) — a quick
-         roster of who's left, separate from the per-camper request cards
-         below. Only meaningful for today, so it's hidden on any other date. -->
+    <!-- Office-entered early pickups only — a pickup typed in directly by
+         staff (no matching parent_pickup_requests row, so it has nowhere
+         else to show). A parent-submitted early pickup already has its own
+         full row below in Changes, so it's deliberately excluded here to
+         avoid showing the same pickup twice (see renderEarlyPickups). -->
     <div id="earlyPickupLogWrap">
         <div class="page-header" style="margin-top:0;">
-            <div><div class="page-title" style="font-size:1rem;">Today's Early Pickups</div></div>
+            <div><div class="page-title" style="font-size:1rem;">Office-Entered Early Pickups</div></div>
             <div class="page-actions"><button class="btn btn-secondary btn-sm" onclick="CampistryLive.openPickupModal()">+ Add</button></div>
         </div>
         <div id="earlyPickupBody"></div>
@@ -329,6 +349,7 @@
 <script src="jsqr@1.4.0.js"></script>
 <script src="campistry_live_schedule_reader.js"></script>
 <script src="campistry_live_locator.js"></script>
+<script src="campistry_bus_routes.js"></script>
 <script src="campistry_live.js"></script>
 <script>setTimeout(function(){document.documentElement.classList.add('css-ready')},3000)</script>
 <script>
@@ -566,6 +587,33 @@ var ParentRequests = (function(){
                 saveReqs(mapped);
                 if(cb)cb();
             }, function(){ if(cb)cb(); });
+    }
+
+    // Dismissal Changes report (Reports page, campistry_live.js) — a fresh,
+    // range-scoped query rather than reusing getReqs()'s cache, since that
+    // cache is capped at the 200 most recent rows ordered by created_at and
+    // is meant for "what's active right now," not an arbitrary date range
+    // that could reach past it. Declined rows are excluded — a request the
+    // office turned down never became a real dismissal change. Late arrivals
+    // aren't dismissal-related at all, so only early/change/friend/bus.
+    function queryDismissalChanges(startDate,endDate){
+        var db=_db(); if(!db)return Promise.resolve([]);
+        return db.client.from('parent_pickup_requests')
+            .select('id,type,label,camper_name,camper_bunk,details,status,request_date,created_at')
+            .eq('camp_id',db.campId)
+            .in('type',['early','change','friend','bus'])
+            .neq('status','Declined')
+            .gte('request_date',startDate).lte('request_date',endDate)
+            .order('request_date',{ascending:true})
+            .then(function(res){
+                if(res.error){ console.warn('[Live] dismissal changes report query failed:',res.error.message); return []; }
+                return (res.data||[]).map(function(m){
+                    return Object.assign({}, m.details||{}, {
+                        id:m.id, type:m.type, label:m.label, childName:m.camper_name, childBunk:m.camper_bunk||'',
+                        status:m.status||'Pending', requestDate:m.request_date||''
+                    });
+                });
+            }, function(){ return []; });
     }
     function getLive(){try{return JSON.parse(localStorage.getItem(LIVE_KEY)||'{}');}catch(e){return{};}}
     function saveLive(d){try{d.updated_at=new Date().toISOString();localStorage.setItem(LIVE_KEY,JSON.stringify(d));}catch(e){}}
@@ -1065,7 +1113,7 @@ var ParentRequests = (function(){
         _ensureSchedule().then(function(){ refresh(); });
     });
 
-    return {renderActivity:renderActivity,setActivityTab:setActivityTab,
+    return {renderActivity:renderActivity,setActivityTab:setActivityTab,queryDismissalChanges:queryDismissalChanges,
         confirmNow:confirmNow,hideRequest:hideRequest,deleteRequest:deleteRequest,
         closeDeleteConfirm:closeDeleteConfirm,confirmDeleteNow:confirmDeleteNow,
         startCompose:startCompose,cancelCompose:cancelCompose,useCanned:useCanned,sendCompose:sendCompose,

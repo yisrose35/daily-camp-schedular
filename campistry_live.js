@@ -370,9 +370,18 @@ function esc(s) { if (s == null) return ''; var d = document.createElement('div'
         const today = getTodayData();
         const body = document.getElementById('earlyPickupBody');
         if (!body) return;
-        if (!today.earlyPickups.length) { body.innerHTML = '<div class="empty-state">No early pickups today</div>'; return; }
+        // A parent-submitted early pickup (fromParent:true, pushed here by
+        // ParentRequests' _apply on Confirm) already has a full row in the
+        // Activity page's Changes subtab — name, time, who's picking up,
+        // notes, staff note, Hide/Delete. Listing it again here duplicated
+        // that entirely. This widget now only shows what has nothing else
+        // to show it: pickups the office typed in directly (savePickup()),
+        // which never touch parent_pickup_requests at all.
+        const officePickups = today.earlyPickups.filter(p => !p.fromParent);
+        if (!officePickups.length) { body.innerHTML = '<div class="empty-state">No office-entered early pickups' + (window.isLiveViewingToday && !window.isLiveViewingToday() ? ' for this date' : ' today') + '</div>'; return; }
 
-        body.innerHTML = '<div class="card"><div class="card-body">' + today.earlyPickups.map((p, i) => {
+        body.innerHTML = '<div class="card"><div class="card-body">' + officePickups.map((p) => {
+            const i = today.earlyPickups.indexOf(p);
             return '<div class="absence-row"><span style="font-weight:600;flex:1;">' + esc(p.name) + '</span><span style="font-size:.75rem;color:var(--slate-500);">Pickup: ' + esc(p.pickupTime || '') + '</span><span style="font-size:.75rem;color:var(--slate-500);">By: ' + esc(p.pickedUpBy || '—') + '</span>' + (p.reason ? '<span style="font-size:.75rem;color:var(--slate-400);">' + esc(p.reason) + '</span>' : '') + '<button class="btn btn-secondary" style="padding:4px 8px;font-size:.7rem;" onclick="CampistryLive.removePickup(' + i + ')">Remove</button></div>';
         }).join('') + '</div></div>';
     }
@@ -493,6 +502,112 @@ function esc(s) { if (s == null) return ''; var d = document.createElement('div'
         a.download = 'campistry_attendance_' + getTodayKey() + '.csv';
         a.click();
         toast('Attendance exported');
+    }
+
+    // =========================================================================
+    // DISMISSAL CHANGES REPORT
+    // The query itself lives in ParentRequests (campistry_live.html) — that
+    // module already owns every parent_pickup_requests read/write, this file
+    // has none. Bus/carpool assignments come from Campistry Go's saved
+    // routes (campistry_bus_routes.js) — loaded once per report generation
+    // and cached, not fetched per row.
+    // =========================================================================
+    function _db() { const d = window.CampistryDB; if (!d) return null; const c = d.getClient ? d.getClient() : null, id = d.getCampId ? d.getCampId() : null; return (c && id && c.from) ? { client: c, campId: id } : null; }
+
+    let _dismissalReportRows = []; // last-generated rows, for CSV export
+
+    function _splitName(full) {
+        const parts = String(full || '').trim().split(/\s+/);
+        if (!parts.length || !parts[0]) return { first: '', last: '' };
+        return { first: parts[0], last: parts.slice(1).join(' ') };
+    }
+
+    function _describeDismissalChange(r) {
+        if (r.type === 'early') {
+            let s = 'Early pickup' + (r.pickupTime ? ' at ' + r.pickupTime : '');
+            if (r.pickupBy) s += ' by ' + r.pickupBy + (r.relationship ? ' (' + r.relationship + ')' : '');
+            return s;
+        }
+        if (r.type === 'change') {
+            let s = 'New pickup person: ' + (r.newPickupPerson || '—');
+            if (r.relationship) s += ' (' + r.relationship + ')';
+            if (r.phone) s += ', ' + r.phone;
+            return s;
+        }
+        if (r.type === 'friend') {
+            let s = 'Going home with ' + (r.friendName || '—');
+            if (r.friendParentName) s += ' (parent: ' + r.friendParentName + (r.friendParentPhone ? ', ' + r.friendParentPhone : '') + ')';
+            return s;
+        }
+        if (r.type === 'bus') return r.busChange || 'Bus change';
+        return r.label || r.type;
+    }
+
+    function generateDismissalReport() {
+        const startEl = document.getElementById('dismissalReportStart'), endEl = document.getElementById('dismissalReportEnd');
+        const today = getTodayKey();
+        const start = (startEl && startEl.value) || today;
+        const end = (endEl && endEl.value) || start;
+        if (startEl && !startEl.value) startEl.value = start;
+        if (endEl && !endEl.value) endEl.value = end;
+        if (!window.ParentRequests || !window.ParentRequests.queryDismissalChanges) { toast('Report unavailable — reload the page and try again', 'error'); return; }
+
+        const body = document.getElementById('dismissalReportBody');
+        if (body) body.innerHTML = '<div class="empty-state">Generating…</div>';
+
+        const db = _db();
+        const routesPromise = (window.CampistryBusRoutes && db)
+            ? window.CampistryBusRoutes.load(db.client, db.campId).then(data => window.CampistryBusRoutes.index(data))
+            : Promise.resolve({});
+
+        Promise.all([window.ParentRequests.queryDismissalChanges(start, end), routesPromise]).then(([rows, routeIdx]) => {
+            _dismissalReportRows = rows.map(r => {
+                const name = _splitName(r.childName);
+                const route = window.CampistryBusRoutes ? window.CampistryBusRoutes.forCamper(routeIdx, r.childName, 'dismissal') : null;
+                const originalRoute = route ? (route.busName || 'Bus') + (route.stopNum ? ' — Stop ' + route.stopNum : '') + (route.address ? ' (' + route.address + ')' : '') : '—';
+                return {
+                    first: name.first, last: name.last, bunk: r.childBunk || '',
+                    originalRoute, newChange: _describeDismissalChange(r),
+                    notes: r.notes || '', date: r.requestDate || '', status: r.status || '', type: r.label || r.type
+                };
+            });
+            _renderDismissalReport();
+        }, () => { if (body) body.innerHTML = '<div class="empty-state">Could not generate the report — check your connection and try again</div>'; });
+    }
+
+    function _renderDismissalReport() {
+        const body = document.getElementById('dismissalReportBody');
+        const exportBtn = document.getElementById('dismissalReportExportBtn');
+        if (!body) return;
+        if (exportBtn) exportBtn.style.display = _dismissalReportRows.length ? '' : 'none';
+        if (!_dismissalReportRows.length) { body.innerHTML = '<div class="empty-state">No dismissal changes in that date range</div>'; return; }
+
+        const th = 'style="text-align:left;padding:8px;white-space:nowrap;"';
+        const td = 'style="padding:8px;border-top:1px solid var(--slate-100);vertical-align:top;"';
+        let html = '<div class="card"><div class="card-body" style="overflow-x:auto;"><table style="width:100%;border-collapse:collapse;font-size:.8125rem;"><thead><tr style="border-bottom:2px solid var(--slate-200);">' +
+            '<th ' + th + '>First Name</th><th ' + th + '>Last Name</th><th ' + th + '>Bunk</th><th ' + th + '>Date</th><th ' + th + '>Type</th><th ' + th + '>Original Bus Route / Carpool</th><th ' + th + '>New Change</th><th ' + th + '>Notes</th><th ' + th + '>Status</th>' +
+            '</tr></thead><tbody>';
+        _dismissalReportRows.forEach(r => {
+            html += '<tr><td ' + td + '>' + esc(r.first) + '</td><td ' + td + '>' + esc(r.last) + '</td><td ' + td + '>' + esc(r.bunk) + '</td><td ' + td + '>' + esc(r.date) + '</td><td ' + td + '>' + esc(r.type) + '</td><td ' + td + '>' + esc(r.originalRoute) + '</td><td ' + td + '>' + esc(r.newChange) + '</td><td ' + td + '>' + esc(r.notes) + '</td><td ' + td + '>' + esc(r.status) + '</td></tr>';
+        });
+        html += '</tbody></table></div></div>';
+        body.innerHTML = html;
+    }
+
+    function exportDismissalReportCsv() {
+        if (!_dismissalReportRows.length) { toast('Generate the report first', 'error'); return; }
+        let csv = '﻿First Name,Last Name,Bunk,Date,Type,Original Bus Route/Carpool,New Change,Additional Notes,Status\n';
+        _dismissalReportRows.forEach(r => {
+            csv += [r.first, r.last, r.bunk, r.date, r.type, r.originalRoute, r.newChange, r.notes, r.status].map(v => '"' + String(v).replace(/"/g, '""') + '"').join(',') + '\n';
+        });
+        const blob = new Blob([csv], { type: 'text/csv' });
+        const a = document.createElement('a');
+        a.href = URL.createObjectURL(blob);
+        const startEl = document.getElementById('dismissalReportStart'), endEl = document.getElementById('dismissalReportEnd');
+        const start = (startEl && startEl.value) || getTodayKey(), end = (endEl && endEl.value) || start;
+        a.download = 'campistry_dismissal_changes_' + start + '_to_' + end + '.csv';
+        a.click();
+        toast('Dismissal changes report exported');
     }
 
     // =========================================================================
@@ -1161,6 +1276,8 @@ document.querySelectorAll('[data-qr]').forEach(function(el){
         savePickup,
         removePickup,
         exportAttendanceCsv,
+        generateDismissalReport,
+        exportDismissalReportCsv,
         openModal,
         closeModal
     };
