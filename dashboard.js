@@ -849,8 +849,18 @@
             editContactEmail.value = campContactEmail;
         }
 
-        // Load stats from cloud storage
-        await loadStats();
+        // Load stats from cloud storage — deliberately NOT awaited. This reads
+        // the camp's entire camp_state_kv blob (campStructure, roster,
+        // everything), which can take a few seconds on a real camp. It used to
+        // block this whole function, which in turn blocked setupDashboardForRole()
+        // at the call site below (await loadDashboardData(); setupDashboardForRole();)
+        // — so Camp Dates/Sessions & Pricing/Payment/Settings sat waiting on a
+        // stats query none of them actually depend on, while Profile & Account
+        // (filled in synchronously above) appeared instantly. Firing this
+        // without awaiting lets it populate the stat cards whenever it resolves,
+        // in parallel with everything else, same as the Telnyx/Stripe Connect
+        // status calls right below it already do.
+        loadStats();
         // SMS sending number — a self-serve request flow, not a manual field.
         if (campData?.id) loadTelnyxStatus(campData.id);
         // Stripe Connect — where tuition money lands.
