@@ -1082,7 +1082,12 @@
         league: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M6 9H4.5a2.5 2.5 0 0 1 0-5H6"/><path d="M18 9h1.5a2.5 2.5 0 0 0 0-5H18"/><path d="M4 22h16"/><path d="M10 14.66V17c0 .55-.47.98-.97 1.21C7.85 18.75 7 20.24 7 22"/><path d="M14 14.66V17c0 .55.47.98.97 1.21C16.15 18.75 17 20.24 17 22"/><path d="M18 2H6v7a6 6 0 0 0 12 0V2Z"/></svg>',
         staff: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="8" r="4"/><path d="M4 21v-1a7 7 0 0 1 14 0v1"/><path d="M19 8h4"/><path d="M21 6v4"/></svg>',
         messaging: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>',
-        tips: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="9"/><path d="M12 7v10"/><path d="M15 9.5c0-1.4-1.34-2.5-3-2.5s-3 1.1-3 2.5S10.34 12 12 12s3 1.1 3 2.5-1.34 2.5-3 2.5-3-1.1-3-2.5"/></svg>'
+        tips: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="9"/><path d="M12 7v10"/><path d="M15 9.5c0-1.4-1.34-2.5-3-2.5s-3 1.1-3 2.5S10.34 12 12 12s3 1.1 3 2.5-1.34 2.5-3 2.5-3-1.1-3-2.5"/></svg>',
+        announcements: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="m3 11 18-5v12L3 14v-3z"/><path d="M11.6 16.8a3 3 0 1 1-5.8-1.6"/></svg>',
+        // Same bus glyph Link's pickup-request icons use (_PICKUP_ICONS.bus in
+        // campistry_link_parent.html) — one visual language for "transport"
+        // across the parent and staff apps.
+        transport: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M8 6v6"/><path d="M15 6v6"/><path d="M2 12h19.6"/><path d="M18 18h3s.5-1.7.8-2.8c.1-.4.2-.8.2-1.2 0-.4-.1-.8-.2-1.2l-1.4-5C20.1 6.8 19.1 6 18 6H4a2 2 0 0 0-2 2v10h3"/><circle cx="7" cy="18" r="2"/><circle cx="17" cy="18" r="2"/></svg>'
     };
 
     // ─── Lite apps (home launcher) — mirrors the website dashboard suite,
@@ -1119,7 +1124,8 @@
           theme: { accent: '#4338CA', dark: '#3730A3', tint: '#EEF2FF' }, roles: HEAD, status: 'soon' },
         { id: 'counselor', name: 'My Camp', title: 'My Camp', tag: 'Your bunk, schedule & league',
           logo: 'Lite_clean.png', color: '#EE6A53', theme: CORAL_THEME, roles: ['counselor'], status: 'available',
-          tabs: [{ id: 'today', label: 'My Day' }, { id: 'roster', label: 'My Bunk' }, { id: 'league', label: 'League' }, { id: 'tips', label: 'Tips' }] }
+          tabs: [{ id: 'today', label: 'My Day' }, { id: 'roster', label: 'My Bunk' }, { id: 'league', label: 'League' }, { id: 'tips', label: 'Tips' },
+                 { id: 'announcements', label: 'Messages' }, { id: 'transport', label: 'Transport' }] }
     ];
 
     // Per-app internal theming: each app runs in its product color; the Lite
@@ -1537,6 +1543,8 @@
         else if (id === 'staff') renderStaff();
         else if (id === 'messaging') renderMessaging();
         else if (id === 'tips') renderTips();
+        else if (id === 'announcements') renderAnnouncements();
+        else if (id === 'transport') renderTransportAlerts();
     }
 
     function toggleMenu(e) {
@@ -6444,6 +6452,86 @@
         } catch (e) { console.warn('[Lite] pickup alerts realtime subscribe failed:', e && e.message || e); }
         clearInterval(_pickupAlertPoll);
         _pickupAlertPoll = setInterval(loadPickupAlerts, 60000);
+    }
+
+    // ── Messages (camp-wide announcements) ──────────────────────────────────
+    // Reuses the same link_broadcasts feed / get_camp_broadcasts RPC parents
+    // already read in Link — one announcement, everyone (parents AND now
+    // staff) sees it, rather than building a second staff-only channel.
+    async function renderAnnouncements() {
+        const view = document.getElementById('view-announcements');
+        if (!view) return;
+        view.innerHTML = loadingHTML();
+        if (!campId || !window.supabase) { view.innerHTML = emptyHTML('', 'Could not load announcements.'); return; }
+        try {
+            const { data, error } = await window.supabase.rpc('get_camp_broadcasts', { p_camp_id: campId });
+            if (activeTab !== 'announcements') return;
+            if (error || !data || !data.success) { view.innerHTML = emptyHTML('', 'Could not load announcements.'); return; }
+            const items = data.broadcasts || [];
+            if (!items.length) { view.innerHTML = emptyHTML('', 'No announcements yet.'); return; }
+            view.innerHTML = items.map(b => `<div class="lite-card">
+                <div class="lite-set-row-title">${esc(b.subject || 'Announcement')}</div>
+                <div class="lite-set-row-sub" style="margin-top:4px;white-space:pre-wrap;">${esc(b.body || '')}</div>
+                <div class="lite-set-row-sub" style="margin-top:8px;">${esc(b.created_at ? new Date(b.created_at).toLocaleString(undefined, { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' }) : '')}</div>
+            </div>`).join('');
+        } catch (e) {
+            console.warn('[Lite] announcements load failed:', e && e.message || e);
+            if (activeTab === 'announcements') view.innerHTML = emptyHTML('', 'Could not load announcements.');
+        }
+    }
+
+    // ── Transport (on-demand dismissal alerts) ──────────────────────────────
+    // Same pickup_alert_recipients rows the floating alert stack (above)
+    // reacts to in real time, but browsable at will instead of only ever
+    // appearing as a toast that's gone the moment it's acknowledged — a
+    // counselor who was mid-activity and missed one can still find it here.
+    // NOTE: as of migrations/065+089_pickup_alert_trigger, this only covers
+    // EARLY PICKUP ("dismissal") confirmations — the trigger deliberately
+    // gates on type='early' because that's the only request type with a
+    // future pickup_at instant for the T-5 reminder to fire against. Bus
+    // changes and late-arrival reports don't populate pickup_alerts yet, so
+    // they won't show up here until that's built out separately.
+    async function renderTransportAlerts() {
+        const view = document.getElementById('view-transport');
+        if (!view) return;
+        view.innerHTML = loadingHTML();
+        if (!userEmail || !window.supabase) { view.innerHTML = emptyHTML('', 'Could not load.'); return; }
+        try {
+            const { data, error } = await window.supabase
+                .from('pickup_alert_recipients')
+                .select('id, ack_state, created_at, pickup_alerts(camper_name, camper_bunk, pickup_time, request_date)')
+                .eq('recipient_email', userEmail)
+                .order('created_at', { ascending: false })
+                .limit(50);
+            if (activeTab !== 'transport') return;
+            if (error) { view.innerHTML = emptyHTML('', 'Could not load dismissal alerts.'); return; }
+            const items = data || [];
+            if (!items.length) { view.innerHTML = emptyHTML('', 'No dismissal alerts right now.'); return; }
+            view.innerHTML = items.map(r => {
+                const a = r.pickup_alerts || {};
+                const seen = r.ack_state === 'acknowledged';
+                return `<div class="lite-card"${seen ? ' style="opacity:.6;"' : ''}>
+                    <div class="lite-set-row-title">${esc(a.camper_name || 'A camper')} — early dismissal</div>
+                    <div class="lite-set-row-sub" style="margin-top:2px;">Pickup at ${esc(a.pickup_time || '')}${a.camper_bunk ? ' · ' + esc(a.camper_bunk) : ''}${a.request_date ? ' · ' + esc(a.request_date) : ''}</div>
+                    ${seen
+                        ? '<div class="lite-set-row-sub" style="margin-top:6px;">✓ Seen</div>'
+                        : `<div class="lite-pickup-alert-actions" style="margin-top:10px;">
+                            <button type="button" class="lite-btn" style="flex:1;min-height:40px;padding:0 12px;" data-act="ack" data-id="${esc(r.id)}">Saw it</button>
+                            <button type="button" class="lite-btn secondary" style="flex:1;min-height:40px;padding:0 12px;" data-act="snooze" data-id="${esc(r.id)}">Remind me later</button>
+                          </div>`}
+                </div>`;
+            }).join('');
+            view.querySelectorAll('[data-act]').forEach(btn => {
+                btn.addEventListener('click', () => {
+                    const id = btn.dataset.id; if (!id) return;
+                    const go = btn.dataset.act === 'ack' ? ackPickupAlert(id) : snoozePickupAlert(id);
+                    go.then(renderTransportAlerts);
+                });
+            });
+        } catch (e) {
+            console.warn('[Lite] transport alerts load failed:', e && e.message || e);
+            if (activeTab === 'transport') view.innerHTML = emptyHTML('', 'Could not load dismissal alerts.');
+        }
     }
 
     // The launch screen holds a minimum beat so a warm start doesn't flash it
