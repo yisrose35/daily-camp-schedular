@@ -1212,13 +1212,28 @@
     function renderHome() {
         const view = document.getElementById('view-home');
         const apps = appsForRole();
-        const single = apps.length === 1;
+        // A counselor's one "app" (My Camp) is really just their own personal
+        // tabs — My Day, My Bunk, League, Tips. Showing that as a single
+        // generic tile just adds a tap in front of a second decision
+        // (which tab?) instead of getting them there directly. Put the tabs
+        // themselves on the dashboard instead — still the same one tap, but
+        // now it's a tap on the thing they actually want.
+        const counselorApp = (isCounselor() && apps.length === 1 && apps[0].id === 'counselor') ? apps[0] : null;
+        const single = !counselorApp && apps.length === 1;
 
+        const tiles = counselorApp
+            ? counselorApp.tabs.map(t => counselorTileHTML(counselorApp, t)).join('')
+            : apps.map(a => tileHTML(a)).join('');
         view.innerHTML = heroCardHTML()
-            + `<div class="lite-launch-grid${single ? ' single' : ''}">${apps.map(a => tileHTML(a)).join('')}</div>`;
+            + `<div class="lite-launch-grid${single ? ' single' : ''}">${tiles}</div>`;
 
-        view.querySelectorAll('.lite-launch-tile[data-app]').forEach(t =>
-            t.addEventListener('click', () => openApp(t.dataset.app)));
+        if (counselorApp) {
+            view.querySelectorAll('.lite-launch-tile[data-tab]').forEach(t =>
+                t.addEventListener('click', () => openApp('counselor', t.dataset.tab)));
+        } else {
+            view.querySelectorAll('.lite-launch-tile[data-app]').forEach(t =>
+                t.addEventListener('click', () => openApp(t.dataset.app)));
+        }
         const heroBtn = view.querySelector('#liteHeroMenuBtn');
         if (heroBtn) heroBtn.addEventListener('click', toggleMenu);
 
@@ -1267,6 +1282,17 @@
             <span class="lite-launch-icon-box">${art}</span>
             <span class="lite-launch-name">${esc(app.name)}</span>
             ${soon ? '<span class="lite-launch-soon">Soon</span>' : ''}
+        </button>`;
+    }
+
+    // One dashboard tile per counselor tab (My Day / My Bunk / League /
+    // Tips) — reuses the same tab-bar icons (TAB_ICONS) so the tile a
+    // counselor taps on the dashboard matches the tab it lands on inside.
+    function counselorTileHTML(app, tab) {
+        const icon = TAB_ICONS[tab.id] || '';
+        return `<button class="lite-launch-tile" data-tab="${tab.id}" style="--ql:${app.color}">
+            <span class="lite-launch-icon-box"><span class="lite-launch-logo lite-launch-icon">${icon}</span></span>
+            <span class="lite-launch-name">${esc(tab.label)}</span>
         </button>`;
     }
 
@@ -1347,7 +1373,7 @@
         }
     }
 
-    function openApp(id) {
+    function openApp(id, startTab) {
         const app = LITE_APPS.find(a => a.id === id);
         if (!app || app.status !== 'available') return;
         // Also gate here, not just in the launcher — a restored history entry or
@@ -1363,24 +1389,14 @@
         document.getElementById('liteApp').setAttribute('data-screen', 'app');
         haptic();
         buildTabs(app.tabs);
-        switchTab(app.tabs[0].id, 'push');
+        // startTab: which dashboard tile was tapped (e.g. counselorTileHTML
+        // passes its own tab id) — falls back to the app's first tab exactly
+        // like before when nothing more specific was asked for.
+        const tab = (startTab && app.tabs.some(t => t.id === startTab)) ? startTab : app.tabs[0].id;
+        switchTab(tab, 'push');
     }
 
     function goHome() {
-        // A role with only one available app (counselor's "My Camp" is the
-        // only one today) has nothing to pick between — the launcher would
-        // just be an extra tap in front of the one place they can go. Skip
-        // straight into it instead: My Day/My Bunk/League/Tips become the
-        // top-level experience, with no "choose an app" screen behind them.
-        const apps = appsForRole();
-        if (apps.length === 1) {
-            // Already there (e.g. the history stack popped past the app's own
-            // pushState) — nothing else to "go home" to, so just stay put
-            // instead of falling through to a single-tile launcher.
-            if (currentApp !== apps[0].id) openApp(apps[0].id);
-            return;
-        }
-
         currentApp = null;
         settingsOpen = false;
         applyTheme(null);
