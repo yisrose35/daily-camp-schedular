@@ -1,8 +1,8 @@
 {
   "app": "com.campistry.link",
-  "version": "1.0.52",
-  "url": "https://github.com/yisrose35/daily-camp-schedular/releases/download/ota-link-1.0.52/link-1.0.52.zip",
-  "checksum": "f05ef52541a2b50e53b4e7f50b8b4fa2452362552200abfae29cac6b86943101",
-  "commit": "4d72b90dfe828783d6ca8156f8b3f5ce60507f49",
+  "version": "1.0.53",
+  "url": "https://github.com/yisrose35/daily-camp-schedular/releases/download/ota-link-1.0.53/link-1.0.53.zip",
+  "checksum": "d8bb51f2537fe57e470f4b6c9a3b89ae2e71094068ce768eb94714fb6e21a935",
+  "commit": "c79568de2ca05d4e98860258e3ac6306b38b043b",
   "note": "Written by the 'Mobile - OTA release' workflow. Do not hand-edit."
 }
