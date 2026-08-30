@@ -49,21 +49,36 @@
     --card-2:       #F6F0EC;
     --surface-over: #FFFFFF;   /* sheets/menus — the top of the stack */
 
-    --r-sm: 12px;
-    --r:    16px;
-    --r-lg: 22px;
+    /* M3 shape scale — same tokens/values as campistry_link.css, so a
+       component that's structurally the same in both apps (a card, a
+       button, a chip) resolves to the identical corner radius. --r-sm/--r/
+       --r-lg are kept as aliases so every existing rule below that already
+       reads them doesn't need to change. */
+    --radius-xs: 6px; --radius-sm: 8px; --radius-md: 12px; --radius-lg: 16px;
+    --radius-xl: 20px; --radius-2xl: 28px; --radius-full: 999px;
+    --r-sm: var(--radius-md);
+    --r:    var(--radius-lg);
+    --r-lg: var(--radius-xl);
 
-    /* Warm shadows. Neutral-black shadows over warm surfaces go muddy grey;
-       tinting them with the brand's dark keeps depth in the same family. */
-    --shadow-sm: 0 1px 2px rgba(74,38,26,0.055);
-    --shadow:    0 1px 2px rgba(74,38,26,0.045), 0 10px 26px -10px rgba(74,38,26,0.18);
-    --shadow-lg: 0 16px 40px -12px rgba(74,38,26,0.26);
+    /* M3 elevation — neutral, shallow shadows (height expressed through tone
+       first, shadow second), matching campistry_link.css's --shadow-sm/-md/
+       -lg exactly. Previously these were tinted with the brand's warm dark
+       (rgba(74,38,26,...)); Link's own system never tints shadows by brand,
+       so a card or sheet now casts the same neutral shadow in both apps. */
+    --shadow-sm: 0 1px 2px rgba(0,0,0,0.06), 0 1px 3px 1px rgba(0,0,0,0.05);
+    --shadow:    0 1px 2px rgba(0,0,0,0.06), 0 2px 6px 2px rgba(0,0,0,0.06);
+    --shadow-lg: 0 1px 3px rgba(0,0,0,0.08), 0 4px 8px 3px rgba(0,0,0,0.07);
 
     --header-h: 58px;
     --tabbar-h: 64px;
 
-    --font-display: 'Fraunces', Georgia, serif;
-    --font-body: 'DM Sans', system-ui, -apple-system, BlinkMacSystemFont, sans-serif;
+    /* M3 system font — Roboto everywhere, one family varied by weight
+       instead of a display+body pairing. Same stack as campistry_link.css,
+       loaded via the same Google Fonts request (see campistry_lite.html /
+       campistry_lite_login.html). Coral stays the brand hue — this only
+       retires the serif display face in favor of Link's typographic system. */
+    --font-display: 'Roboto', 'Roboto Flex', system-ui, -apple-system, sans-serif;
+    --font-body: 'Roboto', 'Roboto Flex', system-ui, -apple-system, sans-serif;
 }
 
 /* ── Dark context ────────────────────────────────────────────────────────
@@ -281,7 +296,10 @@ button { cursor: pointer; border: none; background: none; }
 
 .lite-avatar {
     width: 38px; height: 38px; border-radius: 50%; flex: none;
-    background: linear-gradient(140deg, var(--coral-500), var(--coral-600));
+    /* Material-style: a solid fill with white initials (like Link's own
+       avatars — see campistry_link.css's .lk-avatar comment), not a
+       gradient sheen. */
+    background: var(--accent);
     color: #fff; font-size: 0.82rem; font-weight: 700; letter-spacing: 0.02em;
     display: flex; align-items: center; justify-content: center;
     box-shadow: var(--shadow-sm);
@@ -298,7 +316,10 @@ button { cursor: pointer; border: none; background: none; }
 .lite-menu-head { display: flex; align-items: center; gap: 11px; padding: 14px; border-bottom: 1px solid var(--line); }
 .lite-menu-avatar {
     width: 40px; height: 40px; border-radius: 50%; flex: none;
-    background: linear-gradient(140deg, var(--coral-500), var(--coral-600));
+    /* Material-style: a solid fill with white initials (like Link's own
+       avatars — see campistry_link.css's .lk-avatar comment), not a
+       gradient sheen. */
+    background: var(--accent);
     color: #fff; font-weight: 700; font-size: 0.85rem;
     display: flex; align-items: center; justify-content: center;
 }
@@ -332,7 +353,8 @@ button { cursor: pointer; border: none; background: none; }
 .lite-hero-card {
     position: relative;
     background: linear-gradient(150deg, #F0765F 0%, #C4402A 100%);
-    border-radius: 24px; padding: 22px 20px; color: #fff; margin-bottom: 18px;
+    /* radius-2xl, same corner radius as Link's own .lk-hero */
+    border-radius: var(--radius-2xl); padding: 22px 20px; color: #fff; margin-bottom: 18px;
     box-shadow: 0 16px 36px -14px rgba(196,64,42,0.55);
 }
 .lite-hero-settings {
@@ -369,7 +391,8 @@ button { cursor: pointer; border: none; background: none; }
 .lite-launch-tile {
     position: relative; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 9px;
     min-height: 104px; padding: 16px 10px;
-    background: var(--card); border: 1px solid var(--line); border-radius: 18px;
+    /* radius-xl, matching Link's own .lk-home-tile corner radius */
+    background: var(--card); border: 1px solid var(--line); border-radius: var(--radius-xl);
     border-bottom: 4px solid var(--ql, var(--line-2)); box-shadow: var(--shadow);
     transition: transform 0.12s ease, box-shadow 0.12s ease;
 }
@@ -423,13 +446,23 @@ button { cursor: pointer; border: none; background: none; }
 .lite-tab:active .lite-tab-ic { background: var(--coral-100); }
 
 /* ─── Cards & shared ──────────────────────────────────────────────────── */
-.lite-card { background: var(--card); border: 1px solid var(--line); border-radius: var(--r); box-shadow: var(--shadow); padding: 15px; margin-bottom: 12px; }
+/* Borderless, shadow-only elevation — matches Link's own .lk-card ("flat
+   surface, minimal shadow" per Material 3's elevated-card convention)
+   instead of the border+shadow combination the rest of Lite's chrome uses
+   for smaller elements (chips, inputs, control bars — Link keeps borders on
+   its own analogous small controls too, e.g. .lk-input, .channel-btn). */
+.lite-card { background: var(--card); border-radius: var(--r); box-shadow: var(--shadow); padding: 15px; margin-bottom: 12px; transition: box-shadow 0.2s ease; }
+.lite-card:hover { box-shadow: var(--shadow-lg); }
 .lite-card-title { font-family: var(--font-display); font-size: 1.05rem; font-weight: 700; letter-spacing: -0.01em; margin: 0 0 10px; }
 .lite-section-label { font-size: 0.72rem; font-weight: 800; text-transform: uppercase; letter-spacing: 0.06em; color: var(--muted); margin: 18px 4px 9px; }
 .lite-empty { text-align: center; color: var(--muted); font-size: 0.9rem; padding: 40px 18px; line-height: 1.5; }
 .lite-empty-icon { font-size: 2.1rem; margin-bottom: 10px; }
 
-.lite-btn { display: inline-flex; align-items: center; justify-content: center; gap: 7px; min-height: 48px; padding: 0 18px; border-radius: 13px; font-size: 0.95rem; font-weight: 600; border: 1px solid transparent; background: var(--accent); color: #fff; transition: transform 0.1s ease, background 0.15s ease; }
+/* Pill-shaped (radius-full), like Link's .btn/.btn-primary — Material 3
+   buttons are always fully rounded, never a soft rounded-rect. The mobile
+   press-scale stays (Link has no touch equivalent to copy; this is the
+   native-app affordance Lite already had, just reshaped). */
+.lite-btn { display: inline-flex; align-items: center; justify-content: center; gap: 7px; min-height: 48px; padding: 0 20px; border-radius: var(--radius-full); font-size: 0.95rem; font-weight: 600; border: 1px solid transparent; background: var(--accent); color: #fff; transition: transform 0.1s ease, background 0.15s ease; }
 .lite-btn:active { transform: scale(0.98); background: var(--accent-dark); }
 .lite-btn:disabled { opacity: 0.5; }
 .lite-btn.secondary { background: var(--card); color: var(--accent-dark); border-color: var(--line-2); }
@@ -438,7 +471,8 @@ button { cursor: pointer; border: none; background: none; }
 
 .lite-input, .lite-select, .lite-textarea {
     width: 100%; min-height: 48px; padding: 11px 14px;
-    border: 1px solid var(--line-2); border-radius: 13px; background: var(--card); color: var(--ink); font-size: 16px;
+    /* 1.5px + radius-md, same as Link's .lk-input */
+    border: 1.5px solid var(--line-2); border-radius: var(--radius-md); background: var(--card); color: var(--ink); font-size: 16px;
     transition: border-color 0.15s ease, box-shadow 0.15s ease;
 }
 .lite-input:focus, .lite-select:focus, .lite-textarea:focus { outline: none; border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-tint); }
@@ -685,7 +719,8 @@ button { cursor: pointer; border: none; background: none; }
 /* ─── Bottom sheet ────────────────────────────────────────────────────── */
 .lite-sheet-backdrop { position: fixed; inset: 0; z-index: 150; background: rgba(19,26,38,0.5); display: flex; align-items: flex-end; justify-content: center; animation: liteFade 0.2s ease; }
 @keyframes liteFade { from { opacity: 0; } to { opacity: 1; } }
-.lite-sheet { background: var(--surface-over); width: 100%; max-width: 680px; border-radius: 24px 24px 0 0; padding: 20px 16px calc(20px + env(safe-area-inset-bottom)); max-height: 88dvh; overflow-y: auto; -webkit-overflow-scrolling: touch; animation: liteSheetUp 0.24s cubic-bezier(0.16,1,0.3,1); }
+/* radius-xl top corners — same corner radius Link's own .lk-modal uses */
+.lite-sheet { background: var(--surface-over); width: 100%; max-width: 680px; border-radius: var(--radius-xl) var(--radius-xl) 0 0; padding: 20px 16px calc(20px + env(safe-area-inset-bottom)); max-height: 88dvh; overflow-y: auto; -webkit-overflow-scrolling: touch; animation: liteSheetUp 0.24s cubic-bezier(0.16,1,0.3,1); }
 @keyframes liteSheetUp { from { transform: translateY(100%); } to { transform: none; } }
 .lite-sheet-grip { display: block; width: 38px; height: 4px; border-radius: 999px; background: var(--line-2); margin: -8px auto 12px; }
 .lite-sheet { transition: transform 0.24s cubic-bezier(0.22,1,0.36,1); }
@@ -708,7 +743,8 @@ button { cursor: pointer; border: none; background: none; }
 
 /* ─── Me Lite: at-a-glance stats + birthdays ──────────────────────────── */
 .lite-stat-row { display: grid; grid-template-columns: repeat(4, 1fr); gap: 8px; margin-bottom: 12px; }
-.lite-stat { background: var(--card); border: 1px solid var(--line); border-radius: 14px; padding: 11px 4px; text-align: center; }
+/* radius-lg, matching Link's own .lk-stat corner radius */
+.lite-stat { background: var(--card); border: 1px solid var(--line); border-radius: var(--radius-lg); padding: 11px 4px; text-align: center; }
 .lite-stat-num { font-family: var(--font-display); font-size: 1.4rem; font-weight: 700; color: var(--accent-dark); line-height: 1; }
 .lite-stat-lbl { font-size: 0.64rem; font-weight: 700; text-transform: uppercase; letter-spacing: 0.04em; color: var(--muted); margin-top: 5px; }
 .lite-bday-card { background: var(--accent-tint); border-radius: 14px; padding: 12px 14px; margin-bottom: 14px; }
