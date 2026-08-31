@@ -8824,10 +8824,12 @@ function finRefund(id){
     }
     h+='</div>';
     showModal('Refund Payment',h,async function(){
+        console.log('[Refund DEBUG] submit fired. original payment p =',JSON.parse(JSON.stringify(p)));
         var amt=parseFloat(document.getElementById('rfAmount').value)||0;
-        if(amt<=0||amt>maxRefund+0.001){toast('Enter an amount up to '+fm(maxRefund),'error');return}
+        if(amt<=0||amt>maxRefund+0.001){toast('Enter an amount up to '+fm(maxRefund),'error');console.log('[Refund DEBUG] rejected: amt',amt,'maxRefund',maxRefund);return}
         var reasonSel=document.getElementById('rfReason').value;
         var doStripe=canStripe&&document.getElementById('rfStripe')&&document.getElementById('rfStripe').checked;
+        console.log('[Refund DEBUG] amt=',amt,'doStripe=',doStripe,'canStripe=',canStripe);
         var stripeRefundId=null;
         if(doStripe){
             var stripeReason=(reasonSel==='requested_by_customer'||reasonSel==='duplicate'||reasonSel==='fraudulent')?reasonSel:'requested_by_customer';
@@ -8842,16 +8844,24 @@ function finRefund(id){
             }
         }
         var reasonLabel={requested_by_customer:'Requested by customer',cancellation:'Cancellation / withdrawal',adjustment:'Billing adjustment',duplicate:'Duplicate charge',fraudulent:'Fraudulent'}[reasonSel]||reasonSel;
-        finPayments.push({
+        var refundEntry={
             id:'ref_'+Date.now(),
             family:p.family,familyKey:p.familyKey||null,enrollmentId:p.enrollmentId||null,
             amount:-amt,date:today(),method:'Refund',
             reference:stripeRefundId||'',notes:'Refund — '+reasonLabel+(doStripe?' (Stripe)':''),
             reason:reasonSel,refundOf:p.id,stripeRefundId:stripeRefundId,timestamp:Date.now()
-        });
+        };
+        finPayments.push(refundEntry);
+        console.log('[Refund DEBUG] pushed refund entry:',refundEntry,'— finPayments.length now',finPayments.length);
         var f=(p.familyKey&&families[p.familyKey])||Object.values(families).find(function(x){return x.name===p.family});
+        console.log('[Refund DEBUG] matched family f =',f?{name:f.name,key:p.familyKey||'(matched by name)'}:'NOT FOUND');
         if(f){f.totalPaid=Math.max(0,(f.totalPaid||0)-amt);f.balance=(f.balance||0)+amt;}
         save();closeModal('dynModal');
+        try{
+            var _checkLedgers=buildFamilyLedgers();
+            var _checkFk=(p.familyKey&&_checkLedgers[p.familyKey])?p.familyKey:Object.keys(_checkLedgers).find(function(k){return _checkLedgers[k].family.name===p.family});
+            console.log('[Refund DEBUG] fresh buildFamilyLedgers() balance for this family right now:',_checkFk?_checkLedgers[_checkFk].balance:'FAMILY NOT FOUND IN LEDGERS',' famKey used:',_checkFk);
+        }catch(e){console.error('[Refund DEBUG] buildFamilyLedgers() check itself threw:',e)}
         // The refund itself (finPayments push + save) is already done at this
         // point — a rendering failure below must never look like the refund
         // silently vanished, so surface it loudly instead of swallowing it.
