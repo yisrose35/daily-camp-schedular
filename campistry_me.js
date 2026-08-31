@@ -9085,7 +9085,15 @@ function buildFamilyLedgers(){
             if(!ledgers[fk].pendingCamperIds)ledgers[fk].pendingCamperIds=[];
             if(ledgers[fk].pendingCamperIds.indexOf(e.camperName)<0)ledgers[fk].pendingCamperIds.push(e.camperName);
         }
-        var tuition=Number(e.sessionTuition)||0;
+        // Prefer the session's CURRENT price over the tuition snapshot frozen
+        // onto the enrollment at application time — otherwise editing a
+        // session's price in Sessions & Pricing, or moving an accepted camper
+        // to a different session, never re-bills that family. Only fall back
+        // to the frozen e.sessionTuition when the named session no longer
+        // exists (renamed/deleted since they applied) — there's nothing
+        // current left to look up.
+        var sessObj=sessions.find(function(s){return s.name===e.session});
+        var tuition=(sessObj&&sessObj.tuition!=null)?Number(sessObj.tuition)||0:Number(e.sessionTuition)||0;
         var discAmt=e.discount?Number(e.discount.amt)||0:0;
         if(e.discount&&e.discount.pct>0) discAmt=Math.round(tuition*e.discount.pct/100);
         var net=tuition-discAmt;
@@ -9103,7 +9111,7 @@ function buildFamilyLedgers(){
         // "Tuition" number.
         var schedule=e.installments;
         if((!schedule||!schedule.length)&&e.status==='accepted'){
-            schedule=_buildInstallmentSchedule(sessions.find(function(s){return s.name===e.session}),net);
+            schedule=_buildInstallmentSchedule(sessObj,net);
         }
         if(schedule&&schedule.length>1){
             schedule.forEach(function(inst,ii){
@@ -11405,11 +11413,17 @@ function _reportSources(){
                 {key:'parent',label:'Primary Parent'},{key:'phone',label:'Phone'},{key:'email',label:'Email'},
                 {key:'address',label:'Address'},{key:'totalPaid',label:'Total Paid'},{key:'balance',label:'Balance'},{key:'status',label:'Status'}],
             rows:function(){
+                // Derived from buildFamilyLedgers(), not families[k].balance/
+                // .totalPaid — that stored pair is a separate hand-maintained
+                // counter that isn't kept in sync with accept/decline/session
+                // changes and can disagree with what Billing itself shows.
+                var ledgers=buildFamilyLedgers();
                 return Object.keys(families).map(function(k){
                     var f=families[k]||{}; var hh=(f.households||[])[0]||{}; var pp=(hh.parents||[])[0]||{};
+                    var l=ledgers[k]||{totalPayments:0,balance:0};
                     return {name:f.name||'',campers:(f.camperIds||[]).join('; '),camperCount:(f.camperIds||[]).length,
                         parent:pp.name||'',phone:pp.phone||'',email:pp.email||'',address:hh.address||'',
-                        totalPaid:f.totalPaid||0,balance:f.balance||0,status:f.balance>0?'Outstanding':f.totalPaid>0?'Paid':'Pending'};
+                        totalPaid:l.totalPayments||0,balance:l.balance||0,status:l.balance>0?'Outstanding':l.totalPayments>0?'Paid':'Pending'};
                 });
             } },
         enrollments:{ key:'enrollments', label:'Enrollments',
@@ -11693,11 +11707,16 @@ function exportRosterReport(){
 }
 function exportFamilyReport(){
     var csv='Family,Campers,Primary Parent,Phone,Email,Address,Total Paid,Balance,Status\n';
-    Object.values(families).sort(function(a,b){return(a.name||'').localeCompare(b.name||'')}).forEach(function(f){
+    // Ledger-derived, same as the Report Builder's families export — see the
+    // comment there for why families[k].balance/.totalPaid isn't used.
+    var ledgers=buildFamilyLedgers();
+    Object.entries(families).sort(function(a,b){return(a[1].name||'').localeCompare(b[1].name||'')}).forEach(function(entry){
+        var k=entry[0],f=entry[1];
         var pp=(f.households||[])[0]?.parents?.[0]||{};
         var addr=(f.households||[])[0]?.address||'';
-        var status=f.balance>0?'Outstanding':f.totalPaid>0?'Paid':'Pending';
-        csv+=[f.name||'',(f.camperIds||[]).join('; '),pp.name||'',pp.phone||'',pp.email||'',addr,f.totalPaid||0,f.balance||0,status].map(function(v){return'"'+String(v).replace(/"/g,'""')+'"'}).join(',')+'\n';
+        var l=ledgers[k]||{totalPayments:0,balance:0};
+        var status=l.balance>0?'Outstanding':l.totalPayments>0?'Paid':'Pending';
+        csv+=[f.name||'',(f.camperIds||[]).join('; '),pp.name||'',pp.phone||'',pp.email||'',addr,l.totalPayments||0,l.balance||0,status].map(function(v){return'"'+String(v).replace(/"/g,'""')+'"'}).join(',')+'\n';
     });
     dlCsv('campistry_families_'+new Date().toISOString().split('T')[0]+'.csv',csv);
 }
@@ -11706,10 +11725,13 @@ function exportFamilyReport(){
 function printFamilies(){
     var campName='';
     try{ campName=(JSON.parse(localStorage.getItem('campGlobalSettings_v1')||'{}').campName)||''; }catch(e){}
-    var rows=Object.values(families).sort(function(a,b){return(a.name||'').localeCompare(b.name||'')}).map(function(f){
+    var ledgers=buildFamilyLedgers();
+    var rows=Object.entries(families).sort(function(a,b){return(a[1].name||'').localeCompare(b[1].name||'')}).map(function(entry){
+        var k=entry[0],f=entry[1];
         var pp=(f.households||[])[0]?.parents?.[0]||{};
         var kids=(f.camperIds||[]).map(function(n){return esc(n)}).join(', ');
-        return '<tr><td>'+esc(f.name||'')+'</td><td>'+kids+'</td><td>'+esc(pp.name||'')+'</td><td>'+esc(pp.phone||'')+'</td><td>'+esc(pp.email||'')+'</td><td class="right">'+fm(f.balance||0)+'</td></tr>';
+        var bal=(ledgers[k]&&ledgers[k].balance)||0;
+        return '<tr><td>'+esc(f.name||'')+'</td><td>'+kids+'</td><td>'+esc(pp.name||'')+'</td><td>'+esc(pp.phone||'')+'</td><td>'+esc(pp.email||'')+'</td><td class="right">'+fm(bal)+'</td></tr>';
     }).join('');
     var w=window.open('','_blank');
     if(!w){ toast('Allow pop-ups to print'); return; }

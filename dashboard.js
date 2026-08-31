@@ -1785,6 +1785,12 @@
     var _dashEditingSessionIdx = null;
     var _dashBundles = [];
     var _dashEditingBundleIdx = null;
+    // Enrolled-count source for the live "X / capacity" shown on each session
+    // card below — same campistryMe.enrollments object campistry_me.js reads
+    // (window.loadGlobalSettings() returns the identical settings blob), so
+    // this needs no separate fetch: it's already hydrated by the time this
+    // page loads.
+    var _dashEnrollments = {};
 
     function _dashGenId() {
         return 's_' + Date.now().toString(36) + Math.random().toString(36).slice(2, 8);
@@ -1815,6 +1821,7 @@
             var gs = (typeof window.loadGlobalSettings === 'function') ? (window.loadGlobalSettings() || {}) : {};
             _dashSessions = (gs.campistryMe && gs.campistryMe.sessions) || [];
             _dashBundles = (gs.campistryMe && gs.campistryMe.sessionBundles) || [];
+            _dashEnrollments = (gs.campistryMe && gs.campistryMe.enrollments) || {};
             // Backfill stable ids on sessions saved before bundles existed —
             // bundles reference a session by id (array position isn't safe,
             // it shifts on delete/reorder).
@@ -1894,6 +1901,18 @@
             list.innerHTML = '<p style="color:var(--slate-400); font-size:0.85rem; text-align:center; padding:10px;">No sessions yet — set your camp dates above to auto-create 1st/2nd Half sessions, or add one to open registration.</p>';
             return;
         }
+        // Live enrolled count per session name — same filter enrollCamper()/
+        // the office "Add Application" capacity check already use elsewhere
+        // (status enrolled or accepted counts toward the session), just
+        // finally surfaced here so accepting someone actually moves a number
+        // on this page instead of only affecting an internal count nothing
+        // displays.
+        var enrolledBySession = {};
+        Object.values(_dashEnrollments).forEach(function(e) {
+            if (e && (e.status === 'enrolled' || e.status === 'accepted') && e.session) {
+                enrolledBySession[e.session] = (enrolledBySession[e.session] || 0) + 1;
+            }
+        });
         var sessionsHtml = _dashSessions.map(function(s, i) {
             var isOpen = s.registrationOpen !== false;
             var html = '<div style="padding:12px 14px; border-radius:8px; border:1px solid ' + (isOpen ? 'var(--slate-200)' : '#fecaca') + '; background:' + (isOpen ? 'var(--slate-50)' : 'rgba(239,68,68,.04)') + ';">';
@@ -1908,7 +1927,13 @@
             html += '<div style="display:flex; align-items:center; gap:8px; margin-top:6px;">';
             html += '<label style="font-size:0.78rem; color:var(--slate-500);">Price: $</label>';
             html += '<input type="number" step="0.01" min="0" value="' + (s.tuition || '') + '" placeholder="0.00" style="width:100px; padding:4px 8px; border-radius:6px; border:1px solid var(--slate-200); font-size:0.82rem;" onchange="updateSessionPriceInline(' + i + ', this.value)">';
-            if (s.capacity) html += '<span style="font-size:0.75rem; color:var(--slate-400);">· capacity ' + s.capacity + '</span>';
+            var enrolledCount = enrolledBySession[s.name] || 0;
+            if (s.capacity) {
+                var overCap = enrolledCount > s.capacity;
+                html += '<span style="font-size:0.75rem; font-weight:600; color:' + (overCap ? '#dc2626' : 'var(--slate-500)') + ';">· ' + enrolledCount + ' / ' + s.capacity + ' enrolled' + (overCap ? ' (over capacity)' : '') + '</span>';
+            } else if (enrolledCount > 0) {
+                html += '<span style="font-size:0.75rem; color:var(--slate-400);">· ' + enrolledCount + ' enrolled</span>';
+            }
             html += '</div>';
             html += '<div style="margin-top:6px; font-size:0.7rem; font-weight:700; color:' + (isOpen ? '#059669' : '#dc2626') + ';">' + (isOpen ? 'Registration Open' : 'Registration Closed') + '</div>';
             html += '</div>';
