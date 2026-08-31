@@ -36,9 +36,7 @@
     // separately, per camp, via Stripe Connect (Dashboard → Payment
     // Processing → "Where tuition money lands") — camp owners never touch
     // Supabase or this file at all.
-    // TODO: replace with your real publishable key from
-    // https://dashboard.stripe.com/apikeys before card collection will work.
     window.__CAMPISTRY_STRIPE__ = {
-        publishableKey: ''
+        publishableKey: 'pk_test_51T7jnkACFU6ag04dBmvZyJnCRBbE9R2mQX57rfdk7mhDd7mtIb1W5woft8vRSasuHTMm65GdWTrb8uYmuXKvVxpp00iMamnh81'
     };
 })();
