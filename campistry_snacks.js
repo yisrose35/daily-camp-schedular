@@ -773,54 +773,79 @@ function _stripeDeposits(name) {
     );
 }
 
+// How much of this camper's balance can actually be refunded THROUGH STRIPE
+// — mirrors the edge function's own math client-side, purely for display:
+// each Stripe deposit's original amount minus whatever's already been
+// refunded from that same PaymentIntent (a cash/manual deposit has no
+// PaymentIntent at all, so it can never contribute here).
+function _stripeRefundCapacity(name) {
+    const txs = snacks.transactions || [];
+    return Math.round(_stripeDeposits(name).reduce((sum, dep) => {
+        const refundedSoFar = txs.filter(t => t && t.kind === 'refund' && t.stripePaymentIntentId === dep.stripePaymentIntentId)
+            .reduce((s, t) => s + (Number(t.amount) || 0), 0);
+        return sum + Math.max(0, Number(dep.amount) - refundedSoFar);
+    }, 0) * 100) / 100;
+}
+
 window.refundPickCamper = function() {
     const name = (document.getElementById('refundCamper') || {}).value || '';
-    const sel = document.getElementById('refundDeposit');
     const box = document.getElementById('refundBox');
+    const amtInput = document.getElementById('refundAmt');
     const btn = document.getElementById('refundBtn');
-    if (!sel) return;
-    const deposits = name ? _stripeDeposits(name) : [];
-    sel.innerHTML = deposits.length
-        ? '<option value="">— Select a deposit —</option>' + deposits.map(t =>
-            '<option value="' + esc(t.stripePaymentIntentId) + '">' + (t.date || '') + ' — $' + Number(t.amount).toFixed(2) + '</option>'
-          ).join('')
-        : '<option value="">No online deposits for this camper</option>';
-    if (box) box.style.display = 'none';
-    if (btn) btn.disabled = true;
+    if (!box || !amtInput) return;
+    if (!name) {
+        box.style.display = 'none';
+        amtInput.value = ''; amtInput.max = '';
+        if (btn) btn.disabled = true;
+        return;
+    }
+    const a = getAccount(name);
+    const walletAvailable = Math.max(0, Math.round((a.balance - (a.balanceFloor || 0)) * 100) / 100);
+    const capacity = _stripeRefundCapacity(name);
+    const max = Math.min(walletAvailable, capacity);
+
+    box.style.display = '';
+    box.innerHTML =
+        '<div>Available to refund via Stripe: <strong>$' + max.toFixed(2) + '</strong></div>' +
+        (capacity < walletAvailable
+            ? '<div style="color:var(--text-muted);margin-top:2px;">$' + (walletAvailable - capacity).toFixed(2) + ' of this balance came from a cash/manual deposit — refund that portion separately, it can\'t go through Stripe.</div>'
+            : '');
+    amtInput.max = String(max);
+    amtInput.value = max > 0 ? max.toFixed(2) : '';
+    if (btn) btn.disabled = max <= 0;
 };
 
-window.refundPickDeposit = function() {
-    const name = (document.getElementById('refundCamper') || {}).value || '';
-    const pi = (document.getElementById('refundDeposit') || {}).value || '';
-    const box = document.getElementById('refundBox');
+// Fills the amount field with everything currently refundable — the
+// "send back all leftover money" shortcut. Just a convenience preset on
+// top of the same free-text amount field, not a separate code path.
+window.refundSetMax = function() {
+    const amtInput = document.getElementById('refundAmt');
+    if (amtInput && amtInput.max) amtInput.value = Number(amtInput.max).toFixed(2);
+    refundAmtChanged();
+};
+
+window.refundAmtChanged = function() {
+    const amtInput = document.getElementById('refundAmt');
     const btn = document.getElementById('refundBtn');
-    if (!pi) { if (box) box.style.display = 'none'; if (btn) btn.disabled = true; return; }
-    const deposit = _stripeDeposits(name).find(t => t.stripePaymentIntentId === pi);
-    const a = getAccount(name);
-    const available = Math.max(0, Math.round((a.balance - (a.balanceFloor || 0)) * 100) / 100);
-    if (box) {
-        box.style.display = '';
-        box.innerHTML =
-            '<div>Original deposit: <strong>$' + Number(deposit ? deposit.amount : 0).toFixed(2) + '</strong></div>' +
-            '<div>Currently available to refund: <strong>$' + available.toFixed(2) + '</strong>' +
-            (available < Number(deposit ? deposit.amount : 0) ? ' <span style="color:var(--text-muted)">(some has already been spent)</span>' : '') + '</div>';
-    }
-    if (btn) btn.disabled = available <= 0;
+    if (!amtInput || !btn) return;
+    const max = Number(amtInput.max) || 0;
+    const val = Number(amtInput.value) || 0;
+    btn.disabled = !(val > 0 && val <= max + 0.001); // small epsilon for float rounding
 };
 
 window.refundCanteenDeposit = function() {
     if (!_secEdit('accounts', 'Refunding a deposit')) return;
     const name = (document.getElementById('refundCamper') || {}).value || '';
-    const pi = (document.getElementById('refundDeposit') || {}).value || '';
+    const amount = Number((document.getElementById('refundAmt') || {}).value) || 0;
     const warn = document.getElementById('refundWarn');
     const btn = document.getElementById('refundBtn');
-    if (!name || !pi) { toast('Pick a camper and a deposit', 1); return; }
+    if (!name || !(amount > 0)) { toast('Pick a camper and an amount', 1); return; }
     const db = window.CampistryDB;
     const client = db && db.client;
     if (!client) { toast('Not signed in', 1); return; }
     if (warn) warn.style.display = 'none';
     if (btn) { btn.disabled = true; btn.textContent = 'Refunding…'; }
-    client.functions.invoke('stripe-canteen-refund', { body: { paymentIntentId: pi, camperName: name } })
+    client.functions.invoke('stripe-canteen-refund', { body: { camperName: name, amount: amount } })
         .then(function(res) {
             if (btn) { btn.disabled = false; btn.textContent = 'Refund'; }
             var data = res && res.data;
@@ -831,7 +856,10 @@ window.refundCanteenDeposit = function() {
                 return;
             }
             closeM('refund');
-            toast('Refunded $' + Number(data.amount).toFixed(2) + (data.capped ? ' (capped to what was left)' : '') + ' to ' + name);
+            var acrossN = (data.refunds || []).length;
+            toast('Refunded $' + Number(data.totalRefunded).toFixed(2) + ' to ' + name +
+                (acrossN > 1 ? ' (across ' + acrossN + ' deposits)' : '') +
+                (data.capped && data.cappedReason ? ' — ' + data.cappedReason : ''));
             _refreshSnacksFromCloud();
         }, function(e) {
             if (btn) { btn.disabled = false; btn.textContent = 'Refund'; }

@@ -78,11 +78,18 @@ Use Stripe **test mode**.
    genuine retry) — confirm the balance does NOT get credited twice.
 7. Spend part of the deposit at the POS terminal (`campistry_snacks_pos.js`
    or the desk order flow), then in the Accounts tab click **Refund** for
-   that camper, pick the Stripe deposit → confirm it caps at what's left
-   unspent, shows "(capped to what was left)" if applicable, and the
-   Stripe test dashboard shows the connected account's balance debited
-   back. Then try refunding a deposit that's been fully spent — confirm
-   the "already spent" block.
+   that camper — the modal shows "Available to refund via Stripe: $X"
+   (pre-filled into the amount field) rather than a deposit picker; type a
+   smaller custom amount, or click **Refund all** to send back everything
+   left. Confirm a custom amount that spans more than one Stripe deposit
+   (e.g. two separate $10 top-ups) issues one refund per deposit behind
+   the scenes and reports the combined total. Confirm it caps at what's
+   left unspent and reports why if capped, and the Stripe test dashboard
+   shows the connected account's balance debited back. Then try refunding
+   a balance that's been fully spent — confirm the "already spent" block.
+   If some of the balance came from a manual/cash deposit (no PaymentIntent
+   behind it), confirm the modal calls that portion out explicitly rather
+   than silently under-refunding.
 8. Confirm the office's manual **+ Deposit** button (cash/check/Zelle
    handed over at the desk) still works exactly as before, regardless of
    whether the camp has connected Stripe — it never touches Stripe.
