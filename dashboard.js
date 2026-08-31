@@ -1170,8 +1170,7 @@
     var _telnyxCardEl = null;
 
     async function _telnyxStripePk() {
-        // One platform-wide publishable key (config.js), same as
-        // getStripePublishableKey() in campistry_me.js — this used to read a
+        // One platform-wide publishable key (config.js) — this used to read a
         // PER-CAMP key a camp owner typed into Settings, which was wrong: the
         // client_secret Stripe.js confirms here is always issued on
         // Campistry's own platform Stripe account (server-side, via

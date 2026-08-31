@@ -11,7 +11,7 @@ is already wired; this is the one-time deploy + Stripe configuration.
 | Family ledgers, add-on charges, credits, statements | Me → Billing | — |
 | **Refunds** (full/partial, + Stripe refund) | Me → Billing / Analytics | ✅ |
 | **A/R aging** (0-30 / 31-60 / 61-90 / 90+) | Me → Analytics → Overview | — |
-| Save a card on file + charge it + batch charge | Me → Billing | ✅ (webhook) |
+| Save a payment method (card or ACH bank, hosted on Stripe) + charge it + batch charge | Me → Billing / Link → Payments | ✅ (webhook) |
 | **Online "Pay Link"** the office sends a parent | Me → Billing → 💳 Pay Link | ✅ (webhook) |
 | **Parent self-pay** (their own balance) | Campistry Link → Payments | ✅ (webhook) |
 | **Monthly billing (autopay)** — split a balance into monthly payments, auto-charge the card each due date | Me → Billing → 📆 Monthly Plan | ✅ (nightly job) |
@@ -74,8 +74,37 @@ appear automatically on every checkout — no redeploy.
 ## Monthly billing (autopay)
 
 The office sets a family up on **📆 Monthly Plan** (Me → Billing): a balance is
-split into N monthly installments and, if a card is on file, **auto-charged on
-each due date**. A nightly job does the charging.
+split into N monthly installments and, if a payment method is on file,
+**auto-charged on each due date**. A nightly job does the charging.
+
+**Getting a payment method on file never happens on Campistry's own site.**
+Both the parent (Campistry Link → Payments → "Set up autopay") and the office
+fallback (Me → Billing → a family → "Set Up in Stripe") redirect to a real
+Stripe-hosted Checkout page (`stripe-setup-checkout`, `mode: 'setup'`) where
+card **or bank transfer (ACH)** is entered directly with Stripe — nothing
+reaches Campistry's servers or database. Stripe confirms completion via a
+`setup_intent.succeeded` webhook event, which writes the resulting Customer +
+PaymentMethod straight onto the family record.
+
+### Deploy stripe-setup-checkout
+```bash
+supabase functions deploy stripe-setup-checkout
+```
+No new secrets needed — it reuses `STRIPE_SECRET_KEY` (already set in step 3
+above).
+
+### Add the new webhook event
+In the same Stripe Dashboard webhook endpoint created in step 5 above (or a
+new one, either works), add **`setup_intent.succeeded`** to its event list —
+`stripe-webhook` now handles it alongside the existing `payment_intent.*`
+events.
+
+### Apply migration 096
+Run `migrations/096_get_my_balance_autopay_status.sql` in the Supabase SQL
+editor — it extends `get_my_balance` to also return `familyKey`,
+`cardOnFile`, `paymentMethodType`/`paymentMethodLabel`, and the family's
+`plan`, which is what the parent's Payments page reads to show the "Set up
+autopay" prompt and current status.
 
 ### Deploy the runner + schedule it
 ```bash

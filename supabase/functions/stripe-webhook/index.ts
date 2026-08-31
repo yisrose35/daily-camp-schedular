@@ -29,11 +29,22 @@
 // SEPARATE function from stripe-checkout) records a facial-recognition or
 // HD-photo unlock into link_photo_purchases instead — see
 // handleLinkPhotoPurchase() and migrations/081_link_photo_purchases.sql.
+//
+// AUTOPAY SETUP is a fourth, unrelated path — it isn't a payment at all.
+// stripe-setup-checkout creates a Checkout Session in `mode: 'setup'`
+// (parent or office saving a card/bank account for future autopay, never
+// typed into Campistry's own site). That produces a `setup_intent.succeeded`
+// event, not a payment_intent one — handled separately below by
+// handleAutopaySetup(), which writes the resulting Customer + PaymentMethod
+// straight onto the family record (f.stripeCustomerId/stripePaymentMethodId/
+// cardOnFile) that charge-due-installments already reads for autopay.
 // =============================================================================
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 
 const STRIPE_WEBHOOK_SECRET = Deno.env.get("STRIPE_WEBHOOK_SECRET");
+const STRIPE_SECRET = Deno.env.get("STRIPE_SECRET_KEY");
+const STRIPE_API = "https://api.stripe.com/v1";
 const SUPABASE_URL = Deno.env.get("SUPABASE_URL") || "";
 const SUPABASE_SERVICE_KEY = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY") || "";
 
@@ -230,6 +241,78 @@ async function handleLinkPhotoPurchase(
   console.log(`[stripe-webhook] link photo purchase (${meta.kind}) $${(pi.amount || 0) / 100} camp ${campId}: ${error ? "FAILED " + error.message : JSON.stringify(data)}`);
 }
 
+// A saved payment method carries no ledger amount, so this doesn't gate on
+// status the way the payment/deposit handlers above do — setup_intent.succeeded
+// only fires once Stripe actually confirms the method is usable.
+async function handleAutopaySetup(
+  supabase: ReturnType<typeof createClient>,
+  si: Record<string, any>,
+) {
+  const meta = si.metadata || {};
+  const campId = meta.campId;
+  const familyKey = meta.familyKey;
+  if (!campId || !familyKey) {
+    console.error(`[stripe-webhook] autopay setup ${si.id} missing campId/familyKey in metadata — skipping`);
+    return;
+  }
+  const customerId = si.customer;
+  const paymentMethodId = si.payment_method;
+  if (!customerId || !paymentMethodId) {
+    console.error(`[stripe-webhook] autopay setup ${si.id} missing customer/payment_method — skipping`);
+    return;
+  }
+
+  // Look up the method's type (card vs us_bank_account) for a friendly
+  // label in the office/parent UI — informational only, charge-due-installments
+  // doesn't care which type it is, off-session PaymentIntents work the same
+  // way for both once a PaymentMethod is attached to a Customer.
+  let pmType = "card";
+  let pmLabel = "";
+  if (STRIPE_SECRET) {
+    try {
+      const resp = await fetch(`${STRIPE_API}/payment_methods/${paymentMethodId}`, {
+        headers: { "Authorization": `Bearer ${STRIPE_SECRET}` },
+      });
+      const pm = await resp.json();
+      if (pm.type) pmType = pm.type;
+      if (pmType === "card" && pm.card) pmLabel = `${pm.card.brand || "Card"} ···· ${pm.card.last4 || ""}`.trim();
+      else if (pmType === "us_bank_account" && pm.us_bank_account) pmLabel = `${pm.us_bank_account.bank_name || "Bank"} ···· ${pm.us_bank_account.last4 || ""}`.trim();
+    } catch (e) {
+      console.warn(`[stripe-webhook] could not fetch payment_method ${paymentMethodId} for label: ${(e as Error).message}`);
+    }
+  }
+
+  for (let attempt = 0; attempt < 4; attempt++) {
+    const cur = await supabase.from("camp_state_kv").select("value")
+      .eq("camp_id", campId).eq("key", "campistryMe").maybeSingle();
+    const me: Record<string, any> = (cur.data && cur.data.value && typeof cur.data.value === "object")
+      ? cur.data.value : {};
+    if (!me.families || typeof me.families !== "object") me.families = {};
+    const f = me.families[familyKey];
+    if (!f) {
+      console.error(`[stripe-webhook] autopay setup ${si.id}: family ${familyKey} no longer exists in camp ${campId} — skipping`);
+      return;
+    }
+
+    f.stripeCustomerId = customerId;
+    f.stripePaymentMethodId = paymentMethodId;
+    f.cardOnFile = true;
+    f.paymentMethodType = pmType;
+    if (pmLabel) f.paymentMethodLabel = pmLabel;
+    f.cardSavedDate = new Date().toISOString();
+
+    const up = await supabase.from("camp_state_kv").upsert(
+      { camp_id: campId, key: "campistryMe", value: me, updated_at: new Date().toISOString() },
+      { onConflict: "camp_id,key" },
+    );
+    if (!up.error) {
+      console.log(`[stripe-webhook] autopay setup complete for family ${familyKey}, camp ${campId} (${pmType})`);
+      return;
+    }
+    console.warn(`[stripe-webhook] autopay setup upsert attempt ${attempt} failed: ${up.error.message}`);
+  }
+}
+
 serve(async (req) => {
   if (req.method === "OPTIONS") return new Response("ok", { headers: corsHeaders });
 
@@ -271,6 +354,9 @@ serve(async (req) => {
         const ok = await upsertPayment(supabase, campId, pi, statusFor[event.type]);
         console.log(`[stripe-webhook] ledger ${statusFor[event.type]} $${(pi.amount || 0) / 100} camp ${campId}: ${ok ? "ok" : "FAILED"}`);
       }
+    } else if (event.type === "setup_intent.succeeded") {
+      // Not a payment at all — a saved card/bank account for future autopay.
+      await handleAutopaySetup(supabase, event.data.object);
     } else {
       console.log(`[stripe-webhook] Unhandled event: ${event.type}`);
     }

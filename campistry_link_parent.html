@@ -16,8 +16,8 @@
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link href="https://fonts.googleapis.com/css2?family=Roboto:wght@400;500;700;900&family=Roboto+Flex:opsz,wght@8..144,400;8..144,500;8..144,700;8..144,900&display=swap" rel="stylesheet">
-    <link rel="stylesheet" href="campistry-unified.css?v=20260830-9">
-    <link rel="stylesheet" href="campistry_link.css?v=20260830-9">
+    <link rel="stylesheet" href="campistry-unified.css?v=20260830-10">
+    <link rel="stylesheet" href="campistry_link.css?v=20260830-10">
     <!-- Splash screen — inline so it appears before any external CSS -->
     <style>
         #link-splash {
@@ -1031,7 +1031,54 @@ function _payCardHtml(cid,campName,d){
         '<div style="text-align:right;font-size:.75rem;color:var(--text-muted);line-height:1.7;">Billed '+_lkMoney(d.billed)+'<br>Paid '+_lkMoney(d.paid)+(Number(d.credits)>0.005?'<br>Credits '+_lkMoney(d.credits):'')+'</div>'+
         '</div>'+payBtn+
         (owed?'<div style="font-size:.7rem;color:var(--text-muted);margin-top:8px;text-align:center;">Pay securely by card, bank (ACH), Cash App, PayPal &amp; more.</div>':'<div style="font-size:.72rem;color:#0E7C4A;margin-top:6px;text-align:center;font-weight:600;">You\'re all paid up. Thank you!</div>')+
-        '</div>';
+        '</div>'+_autopayCardHtml(cid,d);
+}
+// Monthly Plan / autopay — only appears when the camp office has actually
+// set a family up on a plan (Me -> Billing -> Monthly Plan, see migration
+// 096 which added plan/cardOnFile to get_my_balance). Setting up or
+// changing the payment method NEVER happens on this page: it redirects to
+// a real Stripe-hosted page (stripe-setup-checkout, mode 'setup') where the
+// parent picks card or bank transfer and enters it directly with Stripe —
+// nothing reaches Campistry's own site or servers. stripe-webhook writes
+// the result back once Stripe confirms it; next load of this page reflects
+// it via get_my_balance's cardOnFile/paymentMethodType fields.
+function _autopayCardHtml(cid,d){
+    var insts=(d.plan&&Array.isArray(d.plan.installments))?d.plan.installments:[];
+    if(!insts.length) return '';
+    var next=insts.filter(function(i){return i.status==='pending'||i.status==='failed';})
+        .sort(function(a,b){return String(a.dueDate||'').localeCompare(String(b.dueDate||''));})[0];
+    var onFile=!!d.cardOnFile;
+    var methodTxt=d.paymentMethodLabel||(d.paymentMethodType==='us_bank_account'?'a bank account':'a card');
+    var body='';
+    if(next){
+        body+='<div style="font-size:.75rem;color:var(--text-muted);margin-bottom:2px;">Next payment</div>';
+        body+='<div style="font-size:1.1rem;font-weight:700;margin-bottom:10px;">'+_lkMoney(next.amount)+' due '+String(next.dueDate||'').replace(/[<>&]/g,'')+'</div>';
+    }
+    if(onFile){
+        body+='<div style="font-size:.78rem;color:#0E7C4A;font-weight:600;display:flex;align-items:center;gap:6px;">✓ Autopay is on — charging '+String(methodTxt).replace(/[<>&]/g,'')+' automatically</div>';
+        body+='<button class="btn btn-secondary" style="width:100%;margin-top:10px;font-size:.8rem;" onclick="startAutopaySetup(\''+cid+'\')">Update payment method</button>';
+    }else{
+        body+='<div style="font-size:.78rem;color:var(--text-muted);">Autopay isn\'t set up yet — until then you can pay each installment yourself above.</div>';
+        body+='<button class="btn btn-primary" style="width:100%;margin-top:10px;font-size:.85rem;" onclick="startAutopaySetup(\''+cid+'\')">Set up autopay (card or bank)</button>';
+    }
+    return '<div class="lk-card" style="padding:18px;margin-bottom:12px;">'+
+        '<div style="font-size:.72rem;font-weight:700;color:var(--link-color);text-transform:uppercase;letter-spacing:.04em;margin-bottom:8px;">Monthly Plan</div>'+
+        body+'</div>';
+}
+async function startAutopaySetup(cid){
+    var d=_balByCamp[cid]; if(!d||!d.familyKey){toast('Plan not loaded yet');return;}
+    try{
+        toast('Opening secure Stripe page…');
+        var s=_lkSupa(); if(!s.url) throw new Error('Payments are not set up for this camp yet.');
+        var resp=await fetch(s.url+'/functions/v1/stripe-setup-checkout',{method:'POST',headers:{'Content-Type':'application/json','Authorization':'Bearer '+(s.anonKey||''),'apikey':s.anonKey||''},body:JSON.stringify({
+            campId:cid,
+            familyKey:d.familyKey,
+            familyName:d.familyName||'',
+            email:(parent&&parent.email)||undefined
+        })});
+        var data=await resp.json(); if(!resp.ok||data.error) throw new Error(data.error||'Could not start setup');
+        _lkGoToCheckout(data.url);
+    }catch(err){ console.error('[Parent] autopay setup error:',err); toast('Could not start setup: '+(err&&err.message||'error')); }
 }
 function _renderPayHistory(pt,history){
     if(!pt) return;
@@ -3589,18 +3636,18 @@ window.addEventListener('storage', function(e) {
      namespace so the two apps never share or clobber an enrolment. Must be set
      before the module loads. -->
 <script>window.__CAMPISTRY_BIO_NS = 'link'; window.__CAMPISTRY_BIO_APP = 'Campistry Link';</script>
-<script src="campistry_lite_biometric.js?v=20260830-9"></script>
-<script src="campistry_bio_native.js?v=20260830-9"></script>
-<script src="campistry_haptics.js?v=20260830-9"></script>
-<script src="campistry_push.js?v=20260830-9"></script>
-<script src="campistry_keyboard.js?v=20260830-9"></script>
-<script src="campistry_notes_quick.js?v=20260830-9"></script>
-<script src="campistry_link_capacitor.js?v=20260830-9"></script>
-<script src="face_match_core.js?v=20260830-9"></script>
-<script src="campistry_face_shared.js?v=20260830-9"></script>
-<script src="campistry_face_engine_v2.js?v=20260830-9"></script>
-<script src="supabase-js@2.js?v=20260830-9"></script>
-<script src="config.js?v=20260830-9"></script>
+<script src="campistry_lite_biometric.js?v=20260830-10"></script>
+<script src="campistry_bio_native.js?v=20260830-10"></script>
+<script src="campistry_haptics.js?v=20260830-10"></script>
+<script src="campistry_push.js?v=20260830-10"></script>
+<script src="campistry_keyboard.js?v=20260830-10"></script>
+<script src="campistry_notes_quick.js?v=20260830-10"></script>
+<script src="campistry_link_capacitor.js?v=20260830-10"></script>
+<script src="face_match_core.js?v=20260830-10"></script>
+<script src="campistry_face_shared.js?v=20260830-10"></script>
+<script src="campistry_face_engine_v2.js?v=20260830-10"></script>
+<script src="supabase-js@2.js?v=20260830-10"></script>
+<script src="config.js?v=20260830-10"></script>
 <script>
 // =============================================================================
 // Parent Portal — Auth layer
@@ -6014,6 +6061,6 @@ function _renderTipHistory(child) {
 })();
 </script>
 
-<script src="campistry_ota.js?v=20260830-9"></script>
+<script src="campistry_ota.js?v=20260830-10"></script>
 </body>
 </html>

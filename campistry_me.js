@@ -10278,8 +10278,8 @@ function renderFamilyDetailPage(){
     var _fam=families[l.famKey];
     if(!(_fam&&_fam.plan&&_fam.plan.installments&&_fam.plan.installments.length)) h+='<button class="me-btn me-btn--sec me-btn--sm" onclick="CampistryMe.monthlyPlan(\''+je(l.famKey)+'\')">📆 Monthly Plan</button>';
     if(hasCard&&l.balance>0) h+='<button class="me-btn me-btn--pri me-btn--sm" style="background:var(--purple)" onclick="CampistryMe.chargeStoredCard(\''+je(l.famKey)+'\')">⚡ Charge Card</button>';
-    if(!hasCard) h+='<button class="me-btn me-btn--sec me-btn--sm" onclick="CampistryMe.requestCardSetup(\''+je(l.famKey)+'\')">💳 Save Card</button>';
-    else h+='<span style="font-size:.7rem;color:var(--ok);font-weight:600;padding:4px 8px;align-self:center">💳 Card on file</span>';
+    if(!hasCard) h+='<button class="me-btn me-btn--sec me-btn--sm" onclick="CampistryMe.requestCardSetup(\''+je(l.famKey)+'\')">💳 Set Up in Stripe</button>';
+    else h+='<span style="font-size:.7rem;color:var(--ok);font-weight:600;padding:4px 8px;align-self:center">💳 '+esc(families[l.famKey]?.paymentMethodLabel||(families[l.famKey]?.paymentMethodType==='us_bank_account'?'Bank account on file':'Card on file'))+'</span>';
     h+='<button class="me-btn me-btn--sec me-btn--sm" onclick="CampistryMe.addChargeForFamily(\''+je(l.famKey)+'\')">Add Charge</button>';
     h+='<button class="me-btn me-btn--sec me-btn--sm" onclick="CampistryMe.issueCreditForFamily(\''+je(l.famKey)+'\')">Issue Credit</button>';
     h+='<button class="me-btn me-btn--ghost me-btn--sm" onclick="CampistryMe.printStatement(\''+je(l.famKey)+'\')">Print Statement</button>';
@@ -10550,19 +10550,6 @@ async function removePayment(idx){
 // ═══════════════════════════════════════════════════════════════
 function getSupabaseUrl(){return window.__CAMPISTRY_SUPABASE__?.url||''}
 function getSupabaseKey(){return window.__CAMPISTRY_SUPABASE__?.anonKey||''}
-// One platform-wide publishable key (config.js), not a per-camp setting.
-// The client_secret Stripe.js confirms below (SetupIntent from stripe-setup,
-// PaymentIntent from stripe-charge/stripe-checkout) is always issued on
-// Campistry's own platform Stripe account server-side, via STRIPE_SECRET_KEY
-// — so the publishable key used to initialize Stripe.js has to match THAT
-// same account, not a key an individual camp owner might type in. Which
-// camp's bank account the money ultimately lands in is a completely
-// separate question, handled by Stripe Connect destination routing
-// server-side (see CAMP_STRIPE_CONNECT_SETUP.md) — never by swapping which
-// publishable key the browser uses.
-function getStripePublishableKey(){
-    return(window.__CAMPISTRY_STRIPE__&&window.__CAMPISTRY_STRIPE__.publishableKey)||'';
-}
 function getCampId(){return localStorage.getItem('campistry_camp_id')||''}
 
 async function callEdgeFunction(fnName,body){
@@ -10592,111 +10579,40 @@ async function callEdgeFunctionAuthed(fnName,body){
     return data;
 }
 
-// Request a family to save their card
+// Office-side fallback for getting a payment method on file — e.g. a family
+// with no Link portal access, or a parent on the phone. This does NOT collect
+// card/bank details on Campistry's own page: it opens a real Stripe-hosted
+// page in a new tab, the same way the parent's own "Set up autopay" button in
+// Link does (see stripe-setup-checkout). Nothing typed there ever reaches
+// Campistry's servers. On completion, stripe-webhook writes the result back
+// onto this family automatically — no further action needed here.
 async function requestCardSetup(famKey){
     var f=families[famKey];if(!f)return;
     var email='';
     (f.households||[]).forEach(function(hh){(hh.parents||[]).forEach(function(p){if(p.email&&!email)email=p.email})});
-    if(!email){toast('No parent email on file — add email in Families first','error');return}
 
-    toast('Setting up card collection for '+f.name+'...');
+    toast('Opening secure Stripe page for '+f.name+'…');
     try{
-        var result=await callEdgeFunction('stripe-setup',{
-            familyName:f.name,
-            email:email,
+        var result=await callEdgeFunction('stripe-setup-checkout',{
             campId:getCampId(),
+            familyKey:famKey,
+            familyName:f.name,
+            email:email||undefined,
             existingCustomerId:f.stripeCustomerId||null
         });
-        // Store Stripe customer ID on family
-        f.stripeCustomerId=result.customerId;
-        f.stripeSetupSecret=result.clientSecret;
-        save();
-
-        // Open card collection UI
-        openCardCollectionModal(famKey,result.clientSecret);
+        if(!result||!result.url) throw new Error('No checkout link returned');
+        window.open(result.url,'_blank');
+        toast('Opened in a new tab — once '+f.name+' completes it there, this page will show it on file.');
     }catch(err){
         console.error('[Me] Stripe setup error:',err);
         toast('Stripe error: '+err.message,'error');
     }
 }
 
-function openCardCollectionModal(famKey,clientSecret){
-    var f=families[famKey];
-    var pk=getStripePublishableKey();
-    if(!pk){
-        toast('Stripe is not configured for this deployment — set window.__CAMPISTRY_STRIPE__.publishableKey in config.js','error');
-        return;
-    }
-
-    var h='<div id="stripeCardSetup" style="min-height:200px">';
-    h+='<p style="font-size:.85rem;color:var(--s600);margin-bottom:16px">Enter card details for <strong>'+esc(f.name)+'</strong>. The card will be saved securely with Stripe for future payments.</p>';
-    h+='<div id="stripe-card-element" style="padding:12px;border:1px solid var(--s300);border-radius:var(--r);background:#fff;min-height:44px"></div>';
-    h+='<div id="stripe-card-errors" style="color:var(--err);font-size:.8rem;margin-top:8px"></div>';
-    h+='<div style="margin-top:16px;display:flex;justify-content:flex-end;gap:8px">';
-    h+='<button class="me-btn me-btn--sec" onclick="CampistryMe.closeModal(\'dynModal\')">Cancel</button>';
-    h+='<button class="me-btn me-btn--pri" id="stripeSubmitBtn" disabled>Save Card</button>';
-    h+='</div></div>';
-
-    showModal('Save Payment Method',h);
-
-    // Load Stripe.js if not already loaded
-    if(!window.Stripe){
-        var script=document.createElement('script');
-        script.src='https://js.stripe.com/v3/';
-        script.onload=function(){initStripeElements(pk,clientSecret,famKey)};
-        document.head.appendChild(script);
-    }else{
-        setTimeout(function(){initStripeElements(pk,clientSecret,famKey)},100);
-    }
-}
-
-function initStripeElements(pk,clientSecret,famKey){
-    var stripe=window.Stripe(pk);
-    var elements=stripe.elements();
-    var cardElement=elements.create('card',{
-        style:{base:{fontSize:'16px',fontFamily:'DM Sans, sans-serif',color:'#1e293b','::placeholder':{color:'#94a3b8'}}}
-    });
-    var mountEl=document.getElementById('stripe-card-element');
-    if(!mountEl)return;
-    cardElement.mount('#stripe-card-element');
-
-    var submitBtn=document.getElementById('stripeSubmitBtn');
-    var errEl=document.getElementById('stripe-card-errors');
-
-    cardElement.on('change',function(ev){
-        if(ev.error) errEl.textContent=ev.error.message;
-        else errEl.textContent='';
-        submitBtn.disabled=!ev.complete;
-    });
-
-    submitBtn.onclick=async function(){
-        submitBtn.disabled=true;
-        submitBtn.textContent='Saving...';
-        var result=await stripe.confirmCardSetup(clientSecret,{payment_method:{card:cardElement}});
-        if(result.error){
-            errEl.textContent=result.error.message;
-            submitBtn.disabled=false;
-            submitBtn.textContent='Save Card';
-        }else{
-            // Card saved successfully
-            var f=families[famKey];
-            if(f){
-                f.stripePaymentMethodId=result.setupIntent.payment_method;
-                f.cardOnFile=true;
-                f.cardSavedDate=new Date().toISOString();
-            }
-            save();
-            closeModal('dynModal');
-            if(curPage==='familydetail')renderFamilyDetailPage();else renderBilling();
-            toast('Card saved for '+f.name+'!');
-        }
-    };
-}
-
 // Charge a family's stored card
 async function chargeStoredCard(famKey,amount,description){
     var f=families[famKey];
-    if(!f||!f.stripeCustomerId){toast('No card on file — save a card first','error');return}
+    if(!f||!f.stripeCustomerId){toast('No payment method on file yet','error');return}
 
     if(!amount){
         // Ask for amount
@@ -10891,14 +10807,14 @@ function monthlyPlan(famKey){
     var d=new Date(); var defStart=new Date(d.getFullYear(),d.getMonth()+1,1).toISOString().split('T')[0];
     var h='<div class="me-modal-form">';
     if(existing) h+='<div style="background:#FFFBEB;border:1px solid #FDE68A;padding:9px 12px;border-radius:var(--r);margin-bottom:12px;font-size:.8rem;color:#92400E">This family already has a monthly plan ('+f.plan.installments.length+' payments). Saving replaces it.</div>';
-    h+='<div style="background:var(--s50);padding:10px 14px;border-radius:var(--r);margin-bottom:14px;font-size:.85rem">Balance to schedule: <strong style="color:var(--err)">'+fm(bal)+'</strong>'+(hasCard?' · <span style="color:var(--ok)">card on file ✓</span>':'')+'</div>';
+    h+='<div style="background:var(--s50);padding:10px 14px;border-radius:var(--r);margin-bottom:14px;font-size:.85rem">Balance to schedule: <strong style="color:var(--err)">'+fm(bal)+'</strong>'+(hasCard?' · <span style="color:var(--ok)">payment method on file ✓</span>':'')+'</div>';
     h+='<div style="display:grid;grid-template-columns:1fr 1fr;gap:10px">';
     h+='<div class="me-field"><label>Total to schedule ($)</label><input type="number" id="mpTotal" class="me-input" value="'+(bal>0?bal.toFixed(2):'')+'" step="0.01" min="0.50"></div>';
     h+='<div class="me-field"><label># Monthly payments</label><input type="number" id="mpMonths" class="me-input" value="3" min="1" max="24"></div>';
     h+='</div>';
     h+='<div class="me-field"><label>First payment date</label><input type="date" id="mpStart" class="me-input" value="'+defStart+'"></div>';
-    if(hasCard) h+='<label style="display:flex;align-items:center;gap:8px;font-size:.85rem;margin-top:4px"><input type="checkbox" id="mpAuto" checked> Auto-charge the card on file on each due date</label>';
-    else h+='<div style="font-size:.75rem;color:var(--me);margin-top:6px">No card on file — save a card to enable auto-charge. You can still create the schedule; the parent can pay each month from their portal.</div>';
+    if(hasCard) h+='<label style="display:flex;align-items:center;gap:8px;font-size:.85rem;margin-top:4px"><input type="checkbox" id="mpAuto" checked> Auto-charge the payment method on file on each due date</label>';
+    else h+='<div style="font-size:.75rem;color:var(--me);margin-top:6px">No payment method on file yet — the parent can set up autopay themselves from their Link portal (card or bank transfer), or use "Set Up in Stripe" above for this family. You can still create the schedule now; until then, the parent can pay each month from their portal manually.</div>';
     h+='</div>';
     showModal(existing?'Edit Monthly Plan':'Set Up Monthly Plan',h,function(){
         var total=parseFloat(document.getElementById('mpTotal').value)||0;
