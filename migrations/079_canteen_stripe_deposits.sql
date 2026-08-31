@@ -37,7 +37,13 @@
 -- addDep, honest bookkeeping for money already physically received) never
 -- called this RPC in the first place -- it writes camp_state_kv directly
 -- under an authenticated staff session -- so this revoke does not affect it.
-REVOKE EXECUTE ON FUNCTION public.submit_canteen_deposit(text, numeric) FROM authenticated;
+-- NOTE: migration 024 already changed this function's signature to add a
+-- trailing p_camp_id uuid (DROP + recreate as (text, numeric, uuid)) --
+-- revoking the older (text, numeric) overload here would error with
+-- "function does not exist" on any database that has 024 applied (which
+-- every real camp does by now), aborting this whole script before any of
+-- the Stripe-backed functions below get created.
+REVOKE EXECUTE ON FUNCTION public.submit_canteen_deposit(text, numeric, uuid) FROM authenticated;
 
 -- ─── 2. credit_canteen_balance_from_stripe ──────────────────────────────────
 -- Called ONLY by stripe-webhook (service-role client) once Stripe confirms a
