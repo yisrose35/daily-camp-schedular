@@ -74,6 +74,8 @@
     const ROLES = {
         OWNER: 'owner',
         ADMIN: 'admin',
+        MANAGER: 'manager',     // configurable via Access Groups (migration 097) — same coarse
+                                 // trust tier as scheduler, restricted by product_access/section_access
         SCHEDULER: 'scheduler',
         VIEWER: 'viewer',
         COUNSELOR: 'counselor'   // Campistry Lite: read-only bunk-level staff
@@ -82,7 +84,8 @@
     const ROLE_HIERARCHY = {
         owner: 4,
         admin: 3,
-        scheduler: 2,
+        manager: 2,     // same tier as scheduler for edit/save — the real restriction is
+        scheduler: 2,   // product_access/section_access (campistry_capabilities.js), not this rank
         viewer: 1,
         counselor: 1   // same trust level as viewer (read-only)
     };
@@ -1441,6 +1444,10 @@
             return 'Counselor access (Campistry Lite: bunk schedule, roster, leagues)';
         }
 
+        if (_currentRole === ROLES.MANAGER) {
+            return 'Configurable access — see Staff & Access for exactly what this person can open';
+        }
+
         if (_currentRole === ROLES.SCHEDULER) {
             if (_editableDivisions.length === 0) {
                 return 'Full editing access (no divisions assigned for generation - contact owner)';
@@ -1480,6 +1487,7 @@
         const roleNames = {
             owner: 'Owner',
             admin: 'Administrator',
+            manager: 'Manager',
             scheduler: 'Scheduler',
             viewer: 'Viewer',
             counselor: 'Counselor'
@@ -1488,6 +1496,7 @@
         const roleColors = {
             owner: '#7C3AED',
             admin: '#2563EB',
+            manager: '#0891B2',
             scheduler: '#059669',
             viewer: '#6B7280',
             counselor: '#EE6A53'
@@ -1496,6 +1505,7 @@
         const roleDescriptions = {
             owner: 'Full access to all features and team management',
             admin: 'Full editing access to all divisions (no team management)',
+            manager: 'Configurable access to specific apps and sections (set in Staff & Access)',
             scheduler: 'Full editing access — generates assigned divisions only',
             viewer: 'View-only access (can print and lookup campers)',
             counselor: 'Campistry Lite access — bunk schedule, roster and leagues'
@@ -1521,6 +1531,9 @@
         } else if (_currentRole === ROLES.ADMIN) {
             permissions.push({ icon: '✏️', text: 'Edit all divisions and schedules' });
             permissions.push({ icon: '🖨️', text: 'Print and export' });
+            permissions.push({ icon: '🔒', text: 'Cannot manage team members' });
+        } else if (_currentRole === ROLES.MANAGER) {
+            permissions.push({ icon: '🔧', text: 'Configurable — apps and sections set per person' });
             permissions.push({ icon: '🔒', text: 'Cannot manage team members' });
         } else if (_currentRole === ROLES.SCHEDULER) {
             permissions.push({ icon: '✏️', text: 'Edit all divisions and schedules' });
@@ -1560,6 +1573,7 @@
         const names = {
             owner: 'Owner',
             admin: 'Admin',
+            manager: 'Manager',
             scheduler: 'Scheduler',
             viewer: 'Viewer',
             counselor: 'Counselor'
@@ -1571,6 +1585,7 @@
         const colors = {
             owner: '#7C3AED',
             admin: '#2563EB',
+            manager: '#0891B2',
             scheduler: '#059669',
             viewer: '#6B7280',
             counselor: '#EE6A53'

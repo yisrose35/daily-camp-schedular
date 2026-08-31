@@ -27,6 +27,17 @@
     var _advanced = false;
     var _onSaved = null;
 
+    // ── group mode ──────────────────────────────────────────────────────────
+    // Same preset-picker + fine-tune-matrix UI, retargeted to edit a
+    // camp_access_groups row (migration 097) instead of one member's own
+    // access_preset/section_access columns — a named, reusable permission
+    // template instead of a one-shot per-person combination. _mode picks
+    // which save path doSave() takes; everything else below (levelOf,
+    // bodyHtml, wire) is shared between the two modes.
+    var _mode = 'member';       // 'member' | 'group'
+    var _group = null;          // the camp_access_groups row being edited (group mode)
+    var _groupProducts = [];    // group mode's own product_access, edited live in this modal
+
     function C() { return window.CampistryCapabilities; }
     function esc(s) {
         var d = document.createElement('div');
@@ -44,9 +55,9 @@
         return 'none';
     }
 
-    /** Apps this member can open at all — no point showing sections of the rest. */
+    /** Apps this member/group can open at all — no point showing sections of the rest. */
     function visibleApps() {
-        var products = (_member && _member.product_access) || [];
+        var products = _mode === 'group' ? _groupProducts : ((_member && _member.product_access) || []);
         return C().APPS.filter(function (app) {
             return !products.length || products.indexOf(app.key) >= 0;
         });
@@ -56,6 +67,7 @@
 
     A.open = function (member, onSaved) {
         if (!C()) { alert('Access registry not loaded'); return; }
+        _mode = 'member';
         _member = member || {};
         _preset = _member.access_preset || null;
         _overrides = Object.assign({}, _member.section_access || {});
@@ -68,6 +80,25 @@
             showAdminNotice();
             return;
         }
+        draw();
+    };
+
+    /**
+     * Create or edit a named, reusable Access Group (camp_access_groups).
+     * group = {id?, name, product_access, access_preset, section_access} —
+     * id absent means creating a new one. onSaved(group) fires after a
+     * successful save with the group's fresh id/name folded in.
+     */
+    A.openForGroup = function (group, campId, onSaved) {
+        if (!C()) { alert('Access registry not loaded'); return; }
+        _mode = 'group';
+        _group = group || {};
+        _member = { campId: campId };  // carried through to doSave's RPC call
+        _preset = _group.access_preset || null;
+        _overrides = Object.assign({}, _group.section_access || {});
+        _groupProducts = (_group.product_access || []).slice();
+        _advanced = false;
+        _onSaved = onSaved || null;
         draw();
     };
 
@@ -84,10 +115,14 @@
             'display:flex;flex-direction:column;box-shadow:0 24px 70px rgba(0,0,0,.28);">' +
                 '<div style="display:flex;align-items:center;justify-content:space-between;gap:10px;' +
                 'padding:16px 22px;border-bottom:1px solid #E2E8F0;">' +
-                    '<div><h2 style="margin:0;font-size:1.05rem;font-weight:700;color:#0F172A;">What ' +
-                        esc(_member.display_name || _member.name || 'this person') + ' can open</h2>' +
-                    '<p style="margin:2px 0 0;font-size:.78rem;color:#64748B;">' +
-                        esc(_member.email || '') + '</p></div>' +
+                    (_mode === 'group'
+                        ? '<div><h2 style="margin:0;font-size:1.05rem;font-weight:700;color:#0F172A;">' +
+                          esc(_group.id ? 'Edit access group' : 'New access group') + '</h2>' +
+                          '<p style="margin:2px 0 0;font-size:.78rem;color:#64748B;">A named, reusable permission set — assign it to any number of staff.</p></div>'
+                        : '<div><h2 style="margin:0;font-size:1.05rem;font-weight:700;color:#0F172A;">What ' +
+                          esc(_member.display_name || _member.name || 'this person') + ' can open</h2>' +
+                          '<p style="margin:2px 0 0;font-size:.78rem;color:#64748B;">' +
+                          esc(_member.email || '') + '</p></div>') +
                     '<button id="asClose" style="border:none;background:none;font-size:1.5rem;line-height:1;' +
                         'color:#94A3B8;cursor:pointer;">&times;</button>' +
                 '</div>' +
@@ -134,6 +169,25 @@
         });
 
         var h = '';
+
+        if (_mode === 'group') {
+            h += '<div style="margin-bottom:16px;"><label style="display:block;font-size:.68rem;font-weight:700;' +
+                 'color:#94A3B8;text-transform:uppercase;letter-spacing:.05em;margin-bottom:6px;">Group name</label>' +
+                 '<input id="agName" type="text" value="' + esc(_group.name || '') + '" placeholder="e.g. Office Admin" ' +
+                 'style="width:100%;padding:9px 12px;border-radius:9px;border:1.5px solid #E2E8F0;font:inherit;font-size:.88rem;box-sizing:border-box;"></div>';
+
+            h += '<div style="margin-bottom:16px;"><div style="font-size:.68rem;font-weight:700;color:#94A3B8;' +
+                 'text-transform:uppercase;letter-spacing:.05em;margin-bottom:8px;">Apps this group can open</div>';
+            h += '<div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(150px,1fr));gap:7px;">';
+            Cc.APPS.forEach(function (app) {
+                var on = _groupProducts.indexOf(app.key) >= 0;
+                h += '<label style="display:flex;align-items:center;gap:7px;font-size:.82rem;color:#334155;' +
+                     'padding:7px 10px;border-radius:9px;border:1.5px solid ' + (on ? '#4F46E5' : '#E2E8F0') +
+                     ';background:' + (on ? '#EEF2FF' : '#fff') + ';cursor:pointer;">' +
+                     '<input type="checkbox" data-agproduct="' + esc(app.key) + '"' + (on ? ' checked' : '') + '> ' + esc(app.label) + '</label>';
+            });
+            h += '</div></div>';
+        }
 
         // ── simple: the preset picker ──
         h += '<div style="font-size:.68rem;font-weight:700;color:#94A3B8;text-transform:uppercase;' +
@@ -242,6 +296,16 @@
         var adv = document.getElementById('asToggleAdv');
         if (adv) adv.onclick = function () { _advanced = !_advanced; redraw(); };
 
+        m.querySelectorAll('[data-agproduct]').forEach(function (cb) {
+            cb.onchange = function () {
+                var key = cb.getAttribute('data-agproduct');
+                var i = _groupProducts.indexOf(key);
+                if (cb.checked && i < 0) _groupProducts.push(key);
+                else if (!cb.checked && i >= 0) _groupProducts.splice(i, 1);
+                redraw();
+            };
+        });
+
         m.querySelectorAll('[data-preset]').forEach(function (b) {
             b.onclick = function () {
                 var k = b.getAttribute('data-preset');
@@ -314,6 +378,8 @@
             payload = Object.assign({}, _overrides);
         }
 
+        if (_mode === 'group') { doSaveGroup(m, btn, client, payload); return; }
+
         client.rpc('set_member_access', {
             p_member_id: _member.id,
             p_preset: _preset,
@@ -342,6 +408,47 @@
             btn.disabled = false;
             btn.textContent = 'Save access';
             alert('Could not save access — please try again.');
+        });
+    }
+
+    function doSaveGroup(m, btn, client, payload) {
+        var nameEl = document.getElementById('agName');
+        var name = nameEl ? nameEl.value.trim() : '';
+        if (!name) {
+            alert('Give this group a name.');
+            btn.disabled = false;
+            btn.textContent = 'Save access';
+            return;
+        }
+        var rpc = _group.id ? 'update_access_group' : 'create_access_group';
+        var args = _group.id
+            ? { p_group_id: _group.id, p_name: name, p_product_access: _groupProducts, p_preset: _preset, p_section_access: payload }
+            : { p_camp_id: _member.campId, p_name: name, p_product_access: _groupProducts, p_preset: _preset, p_section_access: payload };
+
+        client.rpc(rpc, args).then(function (res) {
+            btn.disabled = false;
+            btn.textContent = 'Save access';
+            if (res.error) { alert('Could not save: ' + res.error.message); return; }
+            var r = res.data;
+            if (!r || !r.success) {
+                var e = r && r.error;
+                alert(e === 'not_authorized' ? 'Only the camp owner or an admin can manage access groups.'
+                    : e === 'name_required' ? 'Give this group a name.'
+                    : e === 'invalid_level' ? 'Something went wrong with one of the toggles. Please try again.'
+                    : 'Could not save this group.');
+                return;
+            }
+            _group.id = _group.id || r.id;
+            _group.name = name;
+            _group.product_access = _groupProducts.slice();
+            _group.access_preset = _preset;
+            _group.section_access = payload;
+            m.remove();
+            if (_onSaved) { try { _onSaved(_group); } catch (e) {} }
+        }, function () {
+            btn.disabled = false;
+            btn.textContent = 'Save access';
+            alert('Could not save this group — please try again.');
         });
     }
 

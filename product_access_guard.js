@@ -67,9 +67,22 @@
             // Owner of this camp → full access.
             client.from('camps').select('id').eq('id', campId).eq('owner', uid).maybeSingle().then(function (o) {
                 if (o && o.data) return; // owner
-                client.from('camp_users').select('role,product_access').eq('camp_id', campId).eq('user_id', uid).maybeSingle().then(function (r) {
+                client.from('camp_users').select('role,product_access,access_group_id').eq('camp_id', campId).eq('user_id', uid).maybeSingle().then(function (r) {
                     if (r.error || !r.data) return;        // not a resolvable member here — don't block (fail open)
                     if (r.data.role === 'admin') return;   // admins get everything
+                    // A member assigned to an Access Group (migration 097) has
+                    // their real product_access on the GROUP, not this row —
+                    // editing the group must take effect immediately, so this
+                    // reads live rather than trusting a possibly-stale/empty
+                    // column on the member's own row.
+                    if (r.data.access_group_id) {
+                        client.from('camp_access_groups').select('product_access').eq('id', r.data.access_group_id).maybeSingle().then(function (g) {
+                            var pa = (g && g.data && g.data.product_access) || [];
+                            if (Array.isArray(pa) && pa.indexOf(PRODUCT) >= 0) return; // granted
+                            block();
+                        }, function () { /* fail open */ });
+                        return;
+                    }
                     var pa = r.data.product_access || [];
                     if (Array.isArray(pa) && pa.indexOf(PRODUCT) >= 0) return; // granted
                     block();                                // member without this product → gate it

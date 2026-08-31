@@ -724,10 +724,20 @@
         try {
             if (role === 'owner' || !userId || !window.supabase) return;
             const { data, error } = await window.supabase
-                .from('camp_users').select('role,product_access')
+                .from('camp_users').select('role,product_access,access_group_id')
                 .eq('camp_id', campId).eq('user_id', userId).maybeSingle();
             if (error || !data) return;                              // fail open
             if (String(data.role || '').toLowerCase() === 'admin') return;
+            // A member assigned to an Access Group (migration 097) has their
+            // real product_access on the GROUP, not this row — same live
+            // lookup product_access_guard.js does on the desktop side.
+            if (data.access_group_id) {
+                const { data: g } = await window.supabase
+                    .from('camp_access_groups').select('product_access')
+                    .eq('id', data.access_group_id).maybeSingle();
+                if (Array.isArray(g?.product_access)) camp.productAccess = g.product_access;
+                return;
+            }
             if (Array.isArray(data.product_access)) camp.productAccess = data.product_access;
         } catch (e) {
             console.warn('[Lite] product access lookup failed:', e?.message || e);

@@ -785,8 +785,10 @@ button { font-family: inherit; cursor: pointer; border: none; background: none; 
 /* ===== ROLE BADGES ===== */
 .role-owner { color: #7C3AED; background: rgba(124,58,237,0.08); padding: 3px 10px; border-radius: 999px; font-size: 0.78rem; font-weight: 600; letter-spacing: 0.02em; }
 .role-admin { color: #2563EB; background: rgba(37,99,235,0.08); padding: 3px 10px; border-radius: 999px; font-size: 0.78rem; font-weight: 600; letter-spacing: 0.02em; }
+.role-manager { color: #0891B2; background: rgba(8,145,178,0.08); padding: 3px 10px; border-radius: 999px; font-size: 0.78rem; font-weight: 600; letter-spacing: 0.02em; }
 .role-scheduler { color: #147D91; background: rgba(20,125,145,0.08); padding: 3px 10px; border-radius: 999px; font-size: 0.78rem; font-weight: 600; letter-spacing: 0.02em; }
 .role-viewer { color: #6B7280; background: rgba(107,114,128,0.08); padding: 3px 10px; border-radius: 999px; font-size: 0.78rem; font-weight: 600; letter-spacing: 0.02em; }
+.role-counselor { color: #EE6A53; background: rgba(238,106,83,0.08); padding: 3px 10px; border-radius: 999px; font-size: 0.78rem; font-weight: 600; letter-spacing: 0.02em; }
 
 /* ===== QUICK LINKS ===== */
 .quick-links { display: flex; justify-content: center; gap: 32px; padding-top: 24px; border-top: 1px solid var(--slate-200); }

@@ -899,13 +899,17 @@
                             if (window.TeamSubdivisionsUI) {
                                 document.getElementById('subdivisions-placeholder')?.remove();
                                 document.getElementById('team-placeholder')?.remove();
-                                
+                                document.getElementById('access-groups-placeholder')?.remove();
+
                                 await window.TeamSubdivisionsUI.initialize();
                                 window.TeamSubdivisionsUI.renderSubdivisionsCard(
                                     document.getElementById('subdivisions-card')
                                 );
                                 window.TeamSubdivisionsUI.renderTeamCard(
                                     document.getElementById('team-card')
+                                );
+                                window.TeamSubdivisionsUI.renderAccessGroupsCard?.(
+                                    document.getElementById('access-groups-card')
                                 );
                             }
                         }
@@ -916,20 +920,24 @@
             }
         };
         await checkRole();
-        
+
         document.addEventListener('campistry-access-loaded', async (e) => {
             if (e.detail.role === 'owner') {
                 _setSetupTabVisible('team', true);
                 if (window.TeamSubdivisionsUI) {
                     document.getElementById('subdivisions-placeholder')?.remove();
                     document.getElementById('team-placeholder')?.remove();
-                    
+                    document.getElementById('access-groups-placeholder')?.remove();
+
                     await window.TeamSubdivisionsUI.initialize();
                     window.TeamSubdivisionsUI.renderSubdivisionsCard(
                         document.getElementById('subdivisions-card')
                     );
                     window.TeamSubdivisionsUI.renderTeamCard(
                         document.getElementById('team-card')
+                    );
+                    window.TeamSubdivisionsUI.renderAccessGroupsCard?.(
+                        document.getElementById('access-groups-card')
                     );
                 }
             }

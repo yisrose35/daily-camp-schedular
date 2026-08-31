@@ -443,7 +443,8 @@
                         <label for="invite-role">Role *</label>
                         <select id="invite-role" required>
                             <option value="">Select a role...</option>
-                            <option value="admin">Admin - Full access to all divisions</option>
+                            <option value="admin">Admin - Full access to everything</option>
+                            <option value="manager">Manager - Configurable access to specific apps and sections</option>
                             <option value="scheduler">Scheduler - Access to assigned divisions</option>
                             <option value="viewer">Viewer - View only, no editing</option>
                             <option value="counselor">Counselor - Campistry Lite mobile app only</option>
@@ -528,6 +529,8 @@
     async function showEditMemberModal(member) {
         const subdivisions = window.AccessControl?.getSubdivisions() || [];
         const meDivisions = await getMeDivisions(false);
+        const accessGroups = await fetchAccessGroups();
+        const hasGroup = !!member.access_group_id;
 
         const modal = document.createElement('div');
         modal.className = 'modal-overlay';
@@ -541,6 +544,7 @@
                         <label for="edit-role">Role</label>
                         <select id="edit-role">
                             <option value="admin" ${member.role === 'admin' ? 'selected' : ''}>Admin</option>
+                            <option value="manager" ${member.role === 'manager' ? 'selected' : ''}>Manager</option>
                             <option value="scheduler" ${member.role === 'scheduler' ? 'selected' : ''}>Scheduler</option>
                             <option value="viewer" ${member.role === 'viewer' ? 'selected' : ''}>Viewer</option>
                             <option value="counselor" ${member.role === 'counselor' ? 'selected' : ''}>Counselor</option>
@@ -574,29 +578,38 @@
                         <label class="checkbox-item" style="cursor:pointer;"><input type="checkbox" id="edit-contactable" ${member.parent_contactable ? 'checked' : ''}> <span>Parents can message this person</span></label>
                     </div>
                     <div class="form-group">
-                        <label>Access to (the parts of Campistry this person can open)</label>
-                        <div class="subdivision-checkboxes">
-                            ${[
-                                { key: 'me', label: 'Me — camper management' },
-                                { key: 'flow', label: 'Flow — scheduling' },
-                                { key: 'go', label: 'Go — bussing / transport' },
-                                { key: 'health', label: 'Health — nurse station' },
-                                { key: 'snacks', label: 'Snacks — canteen / POS' },
-                                { key: 'live', label: 'Live — attendance / ops' },
-                                { key: 'link', label: 'Link — parent communication' },
-                                { key: 'notes', label: 'Notes — shared notes' },
-                                { key: 'guard', label: 'Guard — safety' }
-                            ].map(p => `<label class="checkbox-item"><input type="checkbox" name="product" value="${p.key}" ${(member.product_access || []).includes(p.key) ? 'checked' : ''}> <span>${p.label}</span></label>`).join('')}
-                        </div>
+                        <label for="edit-access-group">Access Group <span style="font-weight:400;color:var(--slate-400);">— a named, reusable permission set (optional)</span></label>
+                        <select id="edit-access-group">
+                            <option value="">No group — configure apps and sections individually below</option>
+                            ${accessGroups.map(g => `<option value="${g.id}" ${member.access_group_id === g.id ? 'selected' : ''}>${_tsuEsc(g.name)}</option>`).join('')}
+                        </select>
                     </div>
-                    <div class="form-group">
-                        <label>Sections within those apps</label>
-                        <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;padding:9px 12px;background:var(--slate-50,#F8FAFC);border:1px solid var(--slate-200,#E2E8F0);border-radius:9px;">
-                            <div style="flex:1;min-width:180px;">
-                                <div style="font-size:.8rem;color:var(--slate-700);font-weight:500;" id="edit-access-summary">${_tsuEsc(_accessSummary(member))}</div>
-                                <div style="font-size:.71rem;color:var(--slate-400);margin-top:1px;">Limit them to parts of an app — e.g. the roster but not billing.</div>
+                    <div id="edit-individual-access" style="display:${hasGroup ? 'none' : 'block'};">
+                        <div class="form-group">
+                            <label>Access to (the parts of Campistry this person can open)</label>
+                            <div class="subdivision-checkboxes">
+                                ${[
+                                    { key: 'me', label: 'Me — camper management' },
+                                    { key: 'flow', label: 'Flow — scheduling' },
+                                    { key: 'go', label: 'Go — bussing / transport' },
+                                    { key: 'health', label: 'Health — nurse station' },
+                                    { key: 'snacks', label: 'Snacks — canteen / POS' },
+                                    { key: 'live', label: 'Live — attendance / ops' },
+                                    { key: 'link', label: 'Link — parent communication' },
+                                    { key: 'notes', label: 'Notes — shared notes' },
+                                    { key: 'guard', label: 'Guard — safety' }
+                                ].map(p => `<label class="checkbox-item"><input type="checkbox" name="product" value="${p.key}" ${(member.product_access || []).includes(p.key) ? 'checked' : ''}> <span>${p.label}</span></label>`).join('')}
                             </div>
-                            <button type="button" class="btn-edit" id="edit-open-access">Configure</button>
+                        </div>
+                        <div class="form-group">
+                            <label>Sections within those apps</label>
+                            <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;padding:9px 12px;background:var(--slate-50,#F8FAFC);border:1px solid var(--slate-200,#E2E8F0);border-radius:9px;">
+                                <div style="flex:1;min-width:180px;">
+                                    <div style="font-size:.8rem;color:var(--slate-700);font-weight:500;" id="edit-access-summary">${_tsuEsc(_accessSummary(member))}</div>
+                                    <div style="font-size:.71rem;color:var(--slate-400);margin-top:1px;">Limit them to parts of an app — e.g. the roster but not billing.</div>
+                                </div>
+                                <button type="button" class="btn-edit" id="edit-open-access">Configure</button>
+                            </div>
                         </div>
                     </div>
                     <div id="edit-member-error" class="form-error"></div>
@@ -614,6 +627,9 @@
             });
         });
         document.getElementById('edit-role').addEventListener('change', () => { document.getElementById('edit-subdivisions-group').style.display = document.getElementById('edit-role').value === 'scheduler' ? 'block' : 'none'; });
+        document.getElementById('edit-access-group').addEventListener('change', (e) => {
+            document.getElementById('edit-individual-access').style.display = e.target.value ? 'none' : 'block';
+        });
         const closeModal = () => modal.remove();
         document.getElementById('modal-close').addEventListener('click', closeModal);
         document.getElementById('cancel-edit').addEventListener('click', closeModal);
@@ -629,10 +645,30 @@
             const display_name = document.getElementById('edit-display-name').value.trim() || null;
             const department = document.getElementById('edit-department').value.trim() || null;
             const parent_contactable = document.getElementById('edit-contactable').checked;
-            const product_access = [...modal.querySelectorAll('input[name="product"]:checked')].map(cb => cb.value);
+            const groupId = document.getElementById('edit-access-group').value || null;
+            const updates = { role, subdivision_ids: subdivisionIds, display_name, department, parent_contactable };
+            // Only touch product_access here when NOT assigned to a group — a
+            // grouped member's app/section access resolves from the group
+            // (get_my_access, migration 097), so their own product_access column
+            // is left untouched rather than overwritten with an empty selection
+            // the "individual access" block never rendered for them.
+            if (!groupId) {
+                updates.product_access = [...modal.querySelectorAll('input[name="product"]:checked')].map(cb => cb.value);
+            }
             try {
-                const result = await window.AccessControl.updateTeamMember(member.id, { role, subdivision_ids: subdivisionIds, display_name, department, parent_contactable, product_access });
+                const result = await window.AccessControl.updateTeamMember(member.id, updates);
                 if (result.error) { errorEl.textContent = result.error; return; }
+                if (window.supabase) {
+                    const { data: agRes, error: agErr } = await window.supabase.rpc('assign_member_access_group', {
+                        p_member_id: member.id, p_group_id: groupId
+                    });
+                    if (agErr || !agRes || !agRes.success) {
+                        errorEl.textContent = (agRes && agRes.error === 'cannot_restrict_admin')
+                            ? 'Owners and admins always have full access — change their role first.'
+                            : 'Saved role and details, but could not set the access group.';
+                        return;
+                    }
+                }
                 closeModal(); await refreshData();
                 const c = document.getElementById('team-card'); if (c) renderTeamCard(c);
             } catch (err) { errorEl.textContent = err.message || 'An error occurred'; }
@@ -715,10 +751,107 @@
     }
 
     // =========================================================================
+    // ACCESS GROUPS (migration 097) — named, reusable permission templates
+    // =========================================================================
+    // Section-level access editing itself lives in campistry_access_settings.js
+    // (CampistryAccessSettings.openForGroup) — same preset-picker + fine-tune
+    // matrix already built for one-off per-member access, retargeted to save
+    // a camp_access_groups row instead. This block is just the list/create/
+    // edit/delete chrome around it, mirroring the Divisions card above.
+
+    let _accessGroups = [];
+
+    async function fetchAccessGroups() {
+        try {
+            const campId = window.AccessControl?.getCampId?.();
+            if (!campId || !window.supabase) return [];
+            const { data, error } = await window.supabase.rpc('list_access_groups', { p_camp_id: campId });
+            if (error || !data || !data.success) return [];
+            return data.groups || [];
+        } catch (e) { return []; }
+    }
+
+    function renderAccessGroupItem(group) {
+        const apps = (group.product_access || []).map(p => p.charAt(0).toUpperCase() + p.slice(1)).join(', ') || 'No apps yet';
+        return `
+            <div class="team-member-item">
+                <div class="member-info">
+                    <div class="member-email">${_tsuEsc(group.name)}</div>
+                    <div style="font-size:0.8rem;color:var(--slate-500);margin-top:2px;">${_tsuEsc(apps)} · ${group.member_count || 0} member${group.member_count === 1 ? '' : 's'}</div>
+                </div>
+                <div class="member-actions">
+                    <button class="btn-icon ag-edit-btn" data-id="${group.id}" title="Edit"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/></svg></button>
+                    <button class="btn-icon ag-delete-btn" data-id="${group.id}" title="Delete"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="3 6 5 6 21 6"></polyline><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"></path></svg></button>
+                </div>
+            </div>`;
+    }
+
+    function openAccessGroupEditor(group, onDone) {
+        if (!window.CampistryAccessSettings) { showToast('Access editor not loaded', 'error'); return; }
+        const campId = window.AccessControl?.getCampId?.();
+        window.CampistryAccessSettings.openForGroup(group ? Object.assign({}, group) : {}, campId, function () {
+            showToast(group && group.id ? 'Group updated' : 'Group created');
+            if (onDone) onDone();
+        });
+    }
+
+    async function renderAccessGroupsCard(container) {
+        if (!container) return;
+        _accessGroups = await fetchAccessGroups();
+
+        container.innerHTML = `
+            <div class="card-header">
+                <h2>Access Groups</h2>
+                <button class="btn-edit" id="add-access-group-btn">
+                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                        <line x1="12" y1="5" x2="12" y2="19"></line><line x1="5" y1="12" x2="19" y2="12"></line>
+                    </svg>
+                    New Group
+                </button>
+            </div>
+            <p style="color: var(--slate-500); font-size: 0.9rem; margin-bottom: 1rem;">
+                Named, reusable permission sets — assign one to any Manager, Scheduler, Viewer, or Counselor. Editing a group updates everyone assigned to it.
+            </p>
+            <div id="access-groups-list">
+                ${_accessGroups.length === 0 ? `
+                    <div class="empty-state">
+                        <p style="color: var(--slate-600); margin: 0; font-weight: 500;">No access groups yet</p>
+                        <p style="color: var(--slate-400); font-size: 0.85rem; margin-top: 6px;">Create one to reuse the same app/section permissions across multiple staff, instead of configuring each person one at a time.</p>
+                    </div>
+                ` : _accessGroups.map(renderAccessGroupItem).join('')}
+            </div>
+        `;
+
+        container.querySelector('#add-access-group-btn')?.addEventListener('click', () => {
+            openAccessGroupEditor(null, () => renderAccessGroupsCard(container));
+        });
+        container.querySelectorAll('.ag-edit-btn').forEach(btn => {
+            btn.addEventListener('click', () => {
+                const g = _accessGroups.find(x => x.id === btn.dataset.id);
+                if (g) openAccessGroupEditor(g, () => renderAccessGroupsCard(container));
+            });
+        });
+        container.querySelectorAll('.ag-delete-btn').forEach(btn => {
+            btn.addEventListener('click', async () => {
+                const g = _accessGroups.find(x => x.id === btn.dataset.id);
+                if (!g) return;
+                const warn = g.member_count > 0
+                    ? ` ${g.member_count} member${g.member_count === 1 ? '' : 's'} using it will keep exactly the access they have right now (frozen onto their own account) and stop being linked to this group.`
+                    : '';
+                if (!confirm(`Delete "${g.name}"?${warn}`)) return;
+                const { data, error } = await window.supabase.rpc('delete_access_group', { p_group_id: g.id });
+                if (error || !data || !data.success) { showToast('Could not delete group', 'error'); return; }
+                showToast('Group deleted');
+                renderAccessGroupsCard(container);
+            });
+        });
+    }
+
+    // =========================================================================
     // EXPORTS
     // =========================================================================
 
-    const TeamSubdivisionsUI = { initialize, refreshData, renderSubdivisionsCard, renderTeamCard, showSubdivisionModal, showInviteModal, getNextColor, getMeDivisions, renderDivisionPill, renderDivisionPills, copyToClipboard, showToast, openInviteEmail, sendInviteEmailViaResend, sendInviteEmail, SUBDIVISION_COLORS, injectStyles };
+    const TeamSubdivisionsUI = { initialize, refreshData, renderSubdivisionsCard, renderTeamCard, renderAccessGroupsCard, fetchAccessGroups, showSubdivisionModal, showInviteModal, getNextColor, getMeDivisions, renderDivisionPill, renderDivisionPills, copyToClipboard, showToast, openInviteEmail, sendInviteEmailViaResend, sendInviteEmail, SUBDIVISION_COLORS, injectStyles };
     window.TeamSubdivisionsUI = TeamSubdivisionsUI;
     if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', injectStyles); else injectStyles();
     console.log("[TeamUI] v2.1 loaded");
