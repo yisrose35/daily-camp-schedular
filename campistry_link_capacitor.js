@@ -48,6 +48,27 @@
         if (Plugins.Browser) Plugins.Browser.open({ url: url }).catch(function() {});
     }, true);
 
+    // ── Stripe Checkout handoffs (billing/canteen/photos/tips) ─────────────
+    // The checkout flows in campistry_link_parent.html (payNow, addFunds,
+    // _lkBuyPhoto, the tip cart) open Stripe's hosted Checkout via
+    // Browser.open() instead of navigating the WebView directly — same
+    // reasoning as the click-listener above: hijacking the app's own
+    // WebView with an external, cross-origin page leaves no way back short
+    // of force-quitting. Browser.open() shows it in a dismissible sheet
+    // instead. Once the parent taps Done (having paid, cancelled, or just
+    // closed it), nothing in the still-open app behind it knows anything
+    // happened — a full reload is blunt, but every balance/purchase-status
+    // read in this app already fetches fresh from cloud at boot, so it's
+    // no different from the hard refresh a parent would otherwise have to
+    // do themselves.
+    if (Plugins.Browser && Plugins.Browser.addListener) {
+        Plugins.Browser.addListener('browserFinished', function() {
+            if (!window.__lkCheckoutPending) return;   // some other link opened the browser — leave it alone
+            window.__lkCheckoutPending = false;
+            window.location.reload();
+        });
+    }
+
     // ── Deep links (parent invite links opened from an email/SMS) ──────────
     // A universal link / app link / custom scheme URL like
     // https://link.campistry.app/invite?token=XXXX or campistrylink://invite?token=XXXX

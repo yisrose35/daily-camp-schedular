@@ -914,6 +914,31 @@ async function _lkCheckout(body){
     var resp=await fetch(s.url+'/functions/v1/stripe-checkout',{method:'POST',headers:{'Content-Type':'application/json','Authorization':'Bearer '+(s.anonKey||''),'apikey':s.anonKey||''},body:JSON.stringify(body)});
     var data=await resp.json(); if(!resp.ok||data.error) throw new Error(data.error||'Could not start checkout'); return data;
 }
+// Every Stripe Checkout redirect (billing, canteen, Link Photos, tips) goes
+// through here rather than a bare window.location.href assignment.
+// campistry_link_capacitor.js already routes payment-handoff <a href> CLICKS
+// to the system browser instead of the app's own WebView — its own comment
+// explains why (a hosted cross-origin checkout page would hijack the WebView
+// with no way back, same as an unbundled page would). That protection is a
+// delegated click LISTENER, so it can only ever see actual clicks — it can
+// never intercept these 4 spots, which navigate via JS instead of a link.
+// Same fix, same reasoning: on native, hand off to Browser.open() (a
+// dismissible sheet) instead of navigating the app itself away.
+// window.__lkCheckoutPending is read by campistry_link_capacitor.js's
+// browserFinished listener, which reloads the app once that sheet closes —
+// blunt, but every balance/purchase-status read here already fetches fresh
+// from cloud at boot, so it's the same effect as the hard refresh a parent
+// would otherwise have to do themselves after paying.
+function _lkGoToCheckout(url){
+    try{
+        if(window.Capacitor&&window.Capacitor.isNativePlatform&&window.Capacitor.isNativePlatform()&&window.Capacitor.Plugins&&window.Capacitor.Plugins.Browser){
+            window.__lkCheckoutPending=true;
+            window.Capacitor.Plugins.Browser.open({url:url}).catch(function(){});
+            return;
+        }
+    }catch(_){}
+    window.location.href=url;
+}
 // Photos live in a private Storage bucket as of migration 080 — the only way
 // to actually see one is a short-lived signed URL minted by get-photo-urls,
 // which re-derives authorization server-side rather than trusting these ids.
@@ -1014,7 +1039,7 @@ async function payNow(cid){
     try{
         toast('Opening secure checkout…');
         var res=await _lkCheckout({campId:cid,familyName:d.familyName||'',email:email,amount:amt,description:'Camp payment'+(d.familyName?' — '+d.familyName:'')});
-        if(res&&res.url){ window.location.href=res.url; } else { throw new Error('No checkout link'); }
+        if(res&&res.url){ _lkGoToCheckout(res.url); } else { throw new Error('No checkout link'); }
     }catch(err){ console.error('[Parent] checkout error:',err); toast('Could not start payment: '+(err&&err.message||'error')); }
 }
 
@@ -1463,7 +1488,7 @@ async function addFunds(){
             successUrl:location.origin+location.pathname.replace(/[^/]*$/,'')+'campistry_pay_thanks.html?status=success&type=canteen',
             cancelUrl:location.origin+location.pathname.replace(/[^/]*$/,'')+'campistry_pay_thanks.html?status=cancelled&type=canteen',
         });
-        if(res&&res.url){ window.location.href=res.url; return; }
+        if(res&&res.url){ _lkGoToCheckout(res.url); return; }
         throw new Error('No checkout link');
     }catch(err){
         console.error('[Parent] canteen checkout error:',err);
@@ -1953,7 +1978,7 @@ async function _lkBuyPhoto(campId,kind,extra){
         var data=await resp.json();
         if(!resp.ok||data.error) throw new Error(data.error||'Could not start checkout');
         if(data.alreadyPurchased){ toast('Already unlocked!'); _loadMyPhotoPurchases().then(function(){ if(typeof _loadParentPhotos==='function') _loadParentPhotos(); }); return; }
-        if(data.url) window.location.href=data.url;
+        if(data.url) _lkGoToCheckout(data.url);
     }catch(e){ toast(e.message||'Could not start checkout'); }
 }
 
@@ -5651,7 +5676,7 @@ async function payTipCart() {
         });
         var data = await resp.json();
         if (!resp.ok || data.error) throw new Error(data.error || 'Could not start checkout');
-        window.location.href = data.url;
+        _lkGoToCheckout(data.url);
     } catch (err) {
         toast(err.message || 'Could not start payment');
         if (btn) { btn.disabled = false; renderTipCartSheet(); }
