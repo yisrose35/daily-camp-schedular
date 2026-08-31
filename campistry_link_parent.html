@@ -1616,10 +1616,28 @@ async function _checkCanteenStripeStatus(campId){
     try{
         var res=await (window._pRpc?window._pRpc('get_camp_canteen_stripe_status',{p_camp_id:campId},campId):db.rpc('get_camp_canteen_stripe_status',{p_camp_id:campId}));
         var d=res&&res.data;
-        var connected=!!(d&&d.success&&d.connected&&d.charges_enabled);
-        _canteenStripeByCamp[campId]=connected;
+        if(res&&res.error){
+            // Most common cause: migrations/079_canteen_stripe_deposits.sql was
+            // never pasted into the SQL Editor, so this RPC doesn't exist yet —
+            // this used to fail completely silently, leaving "Add Funds" grey
+            // with no clue why. Don't cache a transient/setup failure as
+            // permanently disconnected — retry on the next switchCanteen call.
+            console.error('[Parent] get_camp_canteen_stripe_status RPC error (is migration 079 applied?):',res.error.message||res.error);
+            _applyCanteenStripeGate(false);
+            return;
+        }
+        if(!d||!d.success){
+            console.warn('[Parent] get_camp_canteen_stripe_status returned failure:',d&&d.error);
+            _applyCanteenStripeGate(false);
+            return;
+        }
+        var connected=!!(d.connected&&d.charges_enabled);
+        _canteenStripeByCamp[campId]=connected; // only cache a definitive answer
         _applyCanteenStripeGate(connected);
-    }catch(e){ _applyCanteenStripeGate(false); }
+    }catch(e){
+        console.error('[Parent] get_camp_canteen_stripe_status threw:',e&&e.message);
+        _applyCanteenStripeGate(false);
+    }
 }
 function _applyCanteenStripeGate(connected){
     var btn=document.getElementById('canteenAddBtn');
