@@ -10301,7 +10301,7 @@ function renderFamilyDetailPage(){
     // Action bar — one primary action plus a single "More" menu, instead of
     // 8 buttons in a row. Payment-method status is plain text, not a pill.
     var moreItems='<button onclick="CampistryMe.sendPayLink(\''+je(l.famKey)+'\')">Send Pay Link</button>';
-    if(!(_fam&&_fam.plan&&_fam.plan.installments&&_fam.plan.installments.length)) moreItems+='<button onclick="CampistryMe.monthlyPlan(\''+je(l.famKey)+'\')">Set up Monthly Plan</button>';
+    if(!(_fam&&_fam.plan&&_fam.plan.installments&&_fam.plan.installments.length)) moreItems+='<button onclick="CampistryMe.monthlyPlan(\''+je(l.famKey)+'\')">Set up Payment Plan</button>';
     moreItems+=hasCard?'<button onclick="CampistryMe.requestCardSetup(\''+je(l.famKey)+'\')">Replace payment method</button>':'<button onclick="CampistryMe.requestCardSetup(\''+je(l.famKey)+'\')">Set up payment method</button>';
     moreItems+='<button onclick="CampistryMe.addChargeForFamily(\''+je(l.famKey)+'\')">Add Charge</button>';
     moreItems+='<button onclick="CampistryMe.issueCreditForFamily(\''+je(l.famKey)+'\')">Issue Credit</button>';
@@ -10845,40 +10845,110 @@ async function toggleBillingAccess(famKey){
 // daily and charges whatever is due for families with autopay + a card on
 // file, recording each payment into the ledger.
 // ═══════════════════════════════════════════════════════════════
+// Steps a date forward by a cadence. Weekly/biweekly step by exact days;
+// monthly steps by calendar month (handles month-length differences —
+// e.g. Jan 31 -> Feb 28 — better than a fixed 30-day step would).
+function _mpStepDate(sd,cadence,i){
+    if(cadence==='weekly') return new Date(sd.getTime()+i*7*86400000);
+    if(cadence==='biweekly') return new Date(sd.getTime()+i*14*86400000);
+    return new Date(sd.getFullYear(),sd.getMonth()+i,sd.getDate()); // monthly / custom scaffold
+}
+// Builds N rows (evenly split, last one absorbs rounding) for a given
+// cadence/total/start — the starting scaffold a office can then hand-edit
+// (change any row's amount/date, add or remove rows) for full flexibility,
+// not just a fixed preset.
+function _mpGenRows(total,count,start,cadence){
+    var each=Math.round(total/count*100)/100;
+    var sd=new Date(start+'T12:00:00');
+    var rows=[];
+    for(var i=0;i<count;i++){
+        var amt=(i===count-1)?Math.round((total-each*(count-1))*100)/100:each;
+        var due=cadence==='custom'?'':_mpStepDate(sd,cadence,i).toISOString().split('T')[0];
+        rows.push({amount:amt,dueDate:due});
+    }
+    return rows;
+}
+function _mpRowHtml(amount,dueDate){
+    return '<div class="mp-row" style="display:flex;gap:8px;align-items:center;margin-bottom:6px">'
+        +'<input type="date" class="me-input mp-row-date" value="'+esc(dueDate||'')+'" style="flex:1">'
+        +'<div style="position:relative;flex:1"><span style="position:absolute;left:9px;top:50%;transform:translateY(-50%);color:var(--s400);font-size:.85rem">$</span><input type="number" class="me-input mp-row-amt" value="'+(amount!=null?amount:'')+'" step="0.01" min="0" style="padding-left:20px" oninput="CampistryMe._mpUpdateTotal()"></div>'
+        +'<button type="button" class="me-btn me-btn--ghost me-btn--sm" style="color:var(--err)" onclick="this.closest(\'.mp-row\').remove();CampistryMe._mpUpdateTotal()">✕</button>'
+        +'</div>';
+}
+function _mpRowsHtml(rows){ return rows.map(function(r){return _mpRowHtml(r.amount,r.dueDate)}).join(''); }
+function _mpAddRow(){
+    var body=document.getElementById('mpRowsBody'); if(!body)return;
+    body.insertAdjacentHTML('beforeend',_mpRowHtml(0,''));
+    _mpUpdateTotal();
+}
+function _mpGenerate(){
+    var total=parseFloat(document.getElementById('mpTotal').value)||0;
+    var count=parseInt(document.getElementById('mpCount').value,10)||1;
+    var start=document.getElementById('mpStart').value;
+    var cadence=document.getElementById('mpCadence').value;
+    if(total<0.5){toast('Enter a total of at least $0.50','error');return}
+    if(count<1)count=1; if(count>60)count=60;
+    if(cadence!=='custom'&&!start){toast('Pick a first payment date','error');return}
+    var body=document.getElementById('mpRowsBody'); if(!body)return;
+    body.innerHTML=_mpRowsHtml(_mpGenRows(total,count,start,cadence));
+    _mpUpdateTotal();
+}
+function _mpUpdateTotal(){
+    var sum=0;
+    document.querySelectorAll('.mp-row-amt').forEach(function(inp){sum+=parseFloat(inp.value)||0});
+    var el=document.getElementById('mpRunningTotal'); if(el)el.textContent=fm(sum);
+}
 function monthlyPlan(famKey){
     var f=families[famKey]; if(!f){toast('Family not found','error');return}
     var bal=buildFamilyLedgers()[famKey]?.balance||0;
     var hasCard=!!f.cardOnFile;
     var existing=f.plan&&f.plan.installments&&f.plan.installments.length;
     var d=new Date(); var defStart=new Date(d.getFullYear(),d.getMonth()+1,1).toISOString().split('T')[0];
+    var defTotal=bal>0?bal:0;
+    // Starting rows: the existing plan's own installments when editing (so
+    // the office sees exactly what's there and can tweak individual rows),
+    // otherwise a 3-monthly scaffold from the current balance.
+    var startRows=existing?f.plan.installments.map(function(i){return{amount:i.amount,dueDate:i.dueDate}}):_mpGenRows(defTotal||1,3,defStart,'monthly');
+
     var h='<div class="me-modal-form">';
-    if(existing) h+='<div style="background:#FFFBEB;border:1px solid #FDE68A;padding:9px 12px;border-radius:var(--r);margin-bottom:12px;font-size:.8rem;color:#92400E">This family already has a monthly plan ('+f.plan.installments.length+' payments). Saving replaces it.</div>';
-    h+='<div style="background:var(--s50);padding:10px 14px;border-radius:var(--r);margin-bottom:14px;font-size:.85rem">Balance to schedule: <strong style="color:var(--err)">'+fm(bal)+'</strong>'+(hasCard?' · <span style="color:var(--ok)">payment method on file ✓</span>':'')+'</div>';
+    if(existing) h+='<div style="background:#FFFBEB;border:1px solid #FDE68A;padding:9px 12px;border-radius:var(--r);margin-bottom:12px;font-size:.8rem;color:#92400E">This family already has a payment plan ('+f.plan.installments.length+' payments). Saving replaces it.</div>';
+    h+='<div style="background:var(--s50);padding:10px 14px;border-radius:var(--r);margin-bottom:14px;font-size:.85rem">Balance to schedule: <strong style="color:var(--err)">'+fm(bal)+'</strong>'+(hasCard?' · <span style="color:var(--ok)">payment method on file</span>':'')+'</div>';
+
+    h+='<div style="font-size:.7rem;font-weight:700;color:var(--s500);text-transform:uppercase;letter-spacing:.05em;margin-bottom:6px">Generate a schedule</div>';
     h+='<div style="display:grid;grid-template-columns:1fr 1fr;gap:10px">';
-    h+='<div class="me-field"><label>Total to schedule ($)</label><input type="number" id="mpTotal" class="me-input" value="'+(bal>0?bal.toFixed(2):'')+'" step="0.01" min="0.50"></div>';
-    h+='<div class="me-field"><label># Monthly payments</label><input type="number" id="mpMonths" class="me-input" value="3" min="1" max="24"></div>';
-    h+='</div>';
+    h+='<div class="me-field"><label>Cadence</label><select id="mpCadence" class="me-input"><option value="weekly">Weekly</option><option value="biweekly">Biweekly</option><option value="monthly" selected>Monthly</option><option value="custom">Custom (blank rows)</option></select></div>';
+    h+='<div class="me-field"><label># of payments</label><input type="number" id="mpCount" class="me-input" value="3" min="1" max="60"></div>';
+    h+='<div class="me-field"><label>Total to schedule ($)</label><input type="number" id="mpTotal" class="me-input" value="'+(defTotal>0?defTotal.toFixed(2):'')+'" step="0.01" min="0.50"></div>';
     h+='<div class="me-field"><label>First payment date</label><input type="date" id="mpStart" class="me-input" value="'+defStart+'"></div>';
-    if(hasCard) h+='<label style="display:flex;align-items:center;gap:8px;font-size:.85rem;margin-top:4px"><input type="checkbox" id="mpAuto" checked> Auto-charge the payment method on file on each due date</label>';
-    else h+='<div style="font-size:.75rem;color:var(--me);margin-top:6px">No payment method on file yet — the parent can set up autopay themselves from their Link portal (card or bank transfer), or use "Set Up in Stripe" above for this family. You can still create the schedule now; until then, the parent can pay each month from their portal manually.</div>';
     h+='</div>';
-    showModal(existing?'Edit Monthly Plan':'Set Up Monthly Plan',h,function(){
-        var total=parseFloat(document.getElementById('mpTotal').value)||0;
-        var months=parseInt(document.getElementById('mpMonths').value,10)||1;
-        if(total<0.5){toast('Enter a total of at least $0.50','error');return}
-        if(months<1)months=1; if(months>24)months=24;
-        var start=document.getElementById('mpStart').value||defStart;
+    h+='<button type="button" class="me-btn me-btn--sec me-btn--sm" onclick="CampistryMe._mpGenerate()" style="margin-bottom:14px">Generate schedule</button>';
+
+    h+='<div style="font-size:.7rem;font-weight:700;color:var(--s500);text-transform:uppercase;letter-spacing:.05em;margin-bottom:6px">Payments — edit any date or amount, add or remove rows freely</div>';
+    h+='<div id="mpRowsBody" style="margin-bottom:8px">'+_mpRowsHtml(startRows)+'</div>';
+    h+='<button type="button" class="me-btn me-btn--ghost me-btn--sm" onclick="CampistryMe._mpAddRow()">+ Add payment</button>';
+    h+='<div style="text-align:right;font-size:.8rem;color:var(--s500);margin:8px 0 14px">Total scheduled: <strong id="mpRunningTotal" style="color:var(--s800)">'+fm(startRows.reduce(function(s,r){return s+(Number(r.amount)||0)},0))+'</strong></div>';
+
+    if(hasCard) h+='<label style="display:flex;align-items:center;gap:8px;font-size:.85rem"><input type="checkbox" id="mpAuto" '+((!existing||f.plan.autopay)?'checked':'')+'> Auto-charge the payment method on file on each due date</label>';
+    else h+='<div style="font-size:.75rem;color:var(--me)">No payment method on file yet — the parent can set up autopay themselves from their Link portal (card or bank transfer), or use "Set Up in Stripe" above for this family. You can still create the schedule now; until then, the parent can pay each installment from their portal manually.</div>';
+    h+='</div>';
+    showModal(existing?'Edit Payment Plan':'Set Up Payment Plan',h,function(){
+        var rowEls=document.querySelectorAll('.mp-row');
+        var insts=[]; var n=0;
+        rowEls.forEach(function(row){
+            var dateEl=row.querySelector('.mp-row-date'), amtEl=row.querySelector('.mp-row-amt');
+            var due=dateEl&&dateEl.value; var amt=amtEl?parseFloat(amtEl.value)||0:0;
+            if(!due||amt<=0) return; // skip incomplete rows rather than blocking save
+            n++;
+            insts.push({n:n,amount:Math.round(amt*100)/100,dueDate:due,status:'pending',paymentId:null});
+        });
+        if(!insts.length){toast('Add at least one payment with a date and amount','error');return}
+        insts.sort(function(a,b){return a.dueDate.localeCompare(b.dueDate)});
+        insts.forEach(function(inst,idx){inst.n=idx+1});
+        var total=insts.reduce(function(s,i){return s+i.amount},0);
         var auto=hasCard&&document.getElementById('mpAuto')&&document.getElementById('mpAuto').checked;
-        var each=Math.round(total/months*100)/100;
-        var insts=[]; var sd=new Date(start+'T12:00:00');
-        for(var i=0;i<months;i++){
-            var due=new Date(sd.getFullYear(),sd.getMonth()+i,sd.getDate());
-            var amt=(i===months-1)?Math.round((total-each*(months-1))*100)/100:each;
-            insts.push({n:i+1,amount:amt,dueDate:due.toISOString().split('T')[0],status:'pending',paymentId:null});
-        }
-        f.plan={installments:insts,autopay:!!auto,total:total,createdAt:new Date().toISOString()};
+        f.plan={installments:insts,autopay:!!auto,total:Math.round(total*100)/100,createdAt:new Date().toISOString()};
         save();closeModal('dynModal');if(curPage==='familydetail')renderFamilyDetailPage();else renderBilling();
-        toast('Monthly plan created — '+months+' payment'+(months>1?'s':'')+(auto?', autopay on':''));
+        toast('Payment plan saved — '+insts.length+' payment'+(insts.length>1?'s':'')+(auto?', autopay on':''));
     });
 }
 function toggleFamilyAutopay(famKey){
@@ -10910,7 +10980,7 @@ function _planCardHtml(l){
         '<button class="me-btn me-btn--ghost me-btn--sm" onclick="CampistryMe.monthlyPlan(\''+je(l.famKey)+'\')">Edit plan</button>'+
         '<button class="me-btn me-btn--ghost me-btn--sm" style="color:var(--err)" onclick="CampistryMe.cancelMonthlyPlan(\''+je(l.famKey)+'\')">Cancel plan</button>'+
         '</div>';
-    return '<div style="font-size:.7rem;font-weight:700;color:var(--s500);text-transform:uppercase;letter-spacing:.05em;margin-bottom:8px">Monthly Plan</div>'+nextLine+table+actions;
+    return '<div style="font-size:.7rem;font-weight:700;color:var(--s500);text-transform:uppercase;letter-spacing:.05em;margin-bottom:8px">Payment Plan</div>'+nextLine+table+actions;
 }
 
 // ═══════════════════════════════════════════════════════════════

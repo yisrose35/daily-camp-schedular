@@ -1070,7 +1070,7 @@ function _autopaySectionHtml(cid,d){
         .sort(function(a,b){return String(a.dueDate||'').localeCompare(String(b.dueDate||''));})[0];
     var onFile=!!d.cardOnFile;
     var methodTxt=d.paymentMethodLabel||(d.paymentMethodType==='us_bank_account'?'a bank account':'a card');
-    var body='<div style="font-size:.72rem;font-weight:700;color:var(--link-color);text-transform:uppercase;letter-spacing:.04em;margin-bottom:8px;">Monthly Plan</div>';
+    var body='<div style="font-size:.72rem;font-weight:700;color:var(--link-color);text-transform:uppercase;letter-spacing:.04em;margin-bottom:8px;">Payment Plan</div>';
     if(next){
         body+='<div style="font-size:.75rem;color:var(--text-muted);margin-bottom:2px;">Next payment</div>';
         body+='<div style="font-size:1.1rem;font-weight:700;margin-bottom:10px;">'+_lkMoney(next.amount)+' due '+String(next.dueDate||'').replace(/[<>&]/g,'')+'</div>';
