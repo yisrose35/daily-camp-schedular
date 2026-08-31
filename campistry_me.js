@@ -8824,12 +8824,10 @@ function finRefund(id){
     }
     h+='</div>';
     showModal('Refund Payment',h,async function(){
-        console.log('[Refund DEBUG] submit fired. original payment p =',JSON.parse(JSON.stringify(p)));
         var amt=parseFloat(document.getElementById('rfAmount').value)||0;
-        if(amt<=0||amt>maxRefund+0.001){toast('Enter an amount up to '+fm(maxRefund),'error');console.log('[Refund DEBUG] rejected: amt',amt,'maxRefund',maxRefund);return}
+        if(amt<=0||amt>maxRefund+0.001){toast('Enter an amount up to '+fm(maxRefund),'error');return}
         var reasonSel=document.getElementById('rfReason').value;
         var doStripe=canStripe&&document.getElementById('rfStripe')&&document.getElementById('rfStripe').checked;
-        console.log('[Refund DEBUG] amt=',amt,'doStripe=',doStripe,'canStripe=',canStripe);
         var stripeRefundId=null;
         if(doStripe){
             var stripeReason=(reasonSel==='requested_by_customer'||reasonSel==='duplicate'||reasonSel==='fraudulent')?reasonSel:'requested_by_customer';
@@ -8852,16 +8850,9 @@ function finRefund(id){
             reason:reasonSel,refundOf:p.id,stripeRefundId:stripeRefundId,timestamp:Date.now()
         };
         finPayments.push(refundEntry);
-        console.log('[Refund DEBUG] pushed refund entry:',refundEntry,'— finPayments.length now',finPayments.length);
         var f=(p.familyKey&&families[p.familyKey])||Object.values(families).find(function(x){return x.name===p.family});
-        console.log('[Refund DEBUG] matched family f =',f?{name:f.name,key:p.familyKey||'(matched by name)'}:'NOT FOUND');
         if(f){f.totalPaid=Math.max(0,(f.totalPaid||0)-amt);f.balance=(f.balance||0)+amt;}
         save();closeModal('dynModal');
-        try{
-            var _checkLedgers=buildFamilyLedgers();
-            var _checkFk=(p.familyKey&&_checkLedgers[p.familyKey])?p.familyKey:Object.keys(_checkLedgers).find(function(k){return _checkLedgers[k].family.name===p.family});
-            console.log('[Refund DEBUG] fresh buildFamilyLedgers() balance for this family right now:',_checkFk?_checkLedgers[_checkFk].balance:'FAMILY NOT FOUND IN LEDGERS',' famKey used:',_checkFk);
-        }catch(e){console.error('[Refund DEBUG] buildFamilyLedgers() check itself threw:',e)}
         // The refund itself (finPayments push + save) is already done at this
         // point — a rendering failure below must never look like the refund
         // silently vanished, so surface it loudly instead of swallowing it.
@@ -9142,6 +9133,17 @@ function buildFamilyLedgers(){
         (f.charges||[]).forEach(function(ch){
             ledgers[fk].entries.push({type:'charge',category:ch.category||'Add-On',desc:ch.description||'',amount:Number(ch.amount)||0,date:ch.date||'',ref:ch.id||''});
             ledgers[fk].totalCharges+=Number(ch.amount)||0;
+        });
+    });
+
+    // 2b. Manual credits from family.credits array (Issue Credit action,
+    // financial aid grants) — these were being pushed onto f.credits[] and
+    // never read anywhere, so they silently never affected the balance.
+    Object.entries(families).forEach(function([fk,f]){
+        if(!ledgers[fk])return;
+        (f.credits||[]).forEach(function(cr){
+            ledgers[fk].entries.push({type:'credit',category:'Credit',desc:cr.reason||'',amount:Number(cr.amount)||0,date:cr.date||'',ref:cr.id||''});
+            ledgers[fk].totalCredits+=Number(cr.amount)||0;
         });
     });
 
