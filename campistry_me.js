@@ -10517,7 +10517,9 @@ function issueCreditForFamily(famKey){
     var h='<div class="me-modal-form">';
     h+='<div class="me-field"><label>Family</label><select id="crFamKey" class="me-input" onchange="CampistryMe._crFamChanged()">'+famOpts+'</select></div>';
     h+='<div class="me-field"><label>Type</label><select id="crType" class="me-input" onchange="CampistryMe._crToggleType()"><option value="credit">Issue a credit</option><option value="refund">Refund a payment</option></select></div>';
-    h+='<div id="crCreditFields"><div style="display:grid;grid-template-columns:2fr 1fr;gap:10px">';
+    h+='<div id="crCreditFields">';
+    h+='<div style="background:var(--s50);padding:10px 14px;border-radius:var(--r);margin-bottom:14px;font-size:.8rem;color:var(--s600)">A credit only adjusts what the family owes in Campistry — no money is returned to a card. To actually send money back to a parent, use <strong>Refund a payment</strong> instead.</div>';
+    h+='<div style="display:grid;grid-template-columns:2fr 1fr;gap:10px">';
     h+='<div class="me-field"><label>Reason</label><input type="text" id="crReason" class="me-input" placeholder="e.g., Referral credit, adjustment"></div>';
     h+='<div class="me-field"><label>Amount ($)</label><input type="number" id="crAmount" class="me-input" placeholder="0.00" step="0.01" min="0"></div>';
     h+='</div></div>';
