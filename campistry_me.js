@@ -8852,8 +8852,15 @@ function finRefund(id){
         var f=(p.familyKey&&families[p.familyKey])||Object.values(families).find(function(x){return x.name===p.family});
         if(f){f.totalPaid=Math.max(0,(f.totalPaid||0)-amt);f.balance=(f.balance||0)+amt;}
         save();closeModal('dynModal');
-        try{renderAnalytics()}catch(e){}
-        try{if(curPage==='familydetail')renderFamilyDetailPage();else renderBilling()}catch(e){}
+        // The refund itself (finPayments push + save) is already done at this
+        // point — a rendering failure below must never look like the refund
+        // silently vanished, so surface it loudly instead of swallowing it.
+        try{renderAnalytics()}catch(e){console.error('[Me] renderAnalytics after refund failed:',e)}
+        try{if(curPage==='familydetail')renderFamilyDetailPage();else renderBilling()}
+        catch(e){
+            console.error('[Me] Re-render after refund failed:',e);
+            toast('Refund recorded, but the page failed to refresh (see console) — reload to see it.','error');
+        }
         toast('Refunded '+fm(amt)+(doStripe?' to card':'')+' for '+(p.family||'family'));
     });
 }
