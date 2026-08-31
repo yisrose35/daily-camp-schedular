@@ -833,6 +833,28 @@ window.refundAmtChanged = function() {
     btn.disabled = !(val > 0 && val <= max + 0.001); // small epsilon for float rounding
 };
 
+// supabase-js's functions.invoke() collapses EVERY non-2xx response into the
+// same generic "Edge Function returned a non-2xx status code" on res.error.message
+// — the real { error: "..." } body this and every other edge function in this
+// app actually returns lands on res.error.context instead (a raw Response
+// object nothing here was unwrapping). Without this, every deliberate,
+// specific error message written server-side (missing field, nothing left
+// to refund, cash-only balance, etc.) was invisible — the office only ever
+// saw the useless generic string.
+async function _edgeFnErrorMessage(res) {
+    var data = res && res.data;
+    if (data && data.error) return data.error;
+    var err = res && res.error;
+    if (!err) return null;
+    try {
+        if (err.context && typeof err.context.json === 'function') {
+            var body = await err.context.json();
+            if (body && body.error) return body.error;
+        }
+    } catch (_) { /* context wasn't JSON — fall through to the generic message */ }
+    return err.message || String(err);
+}
+
 window.refundCanteenDeposit = function() {
     if (!_secEdit('accounts', 'Refunding a deposit')) return;
     const name = (document.getElementById('refundCamper') || {}).value || '';
@@ -846,10 +868,11 @@ window.refundCanteenDeposit = function() {
     if (warn) warn.style.display = 'none';
     if (btn) { btn.disabled = true; btn.textContent = 'Refunding…'; }
     client.functions.invoke('stripe-canteen-refund', { body: { camperName: name, amount: amount } })
-        .then(function(res) {
+        .then(async function(res) {
             if (btn) { btn.disabled = false; btn.textContent = 'Refund'; }
             var data = res && res.data;
-            var err = (res && res.error && res.error.message) || (data && data.error);
+            var hasError = !!(res && res.error) || !!(data && data.error);
+            var err = hasError ? await _edgeFnErrorMessage(res) : null;
             if (err) {
                 if (warn) { warn.style.display = ''; warn.textContent = err; }
                 else toast(err, 1);
