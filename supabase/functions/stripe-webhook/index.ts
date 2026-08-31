@@ -38,15 +38,33 @@
 // handleAutopaySetup(), which writes the resulting Customer + PaymentMethod
 // straight onto the family record (f.stripeCustomerId/stripePaymentMethodId/
 // cardOnFile) that charge-due-installments already reads for autopay.
+//
+// PLATFORM RISK EVENTS are a fifth, unrelated path — not billing at all.
+// Every camp's charge is ultimately a destination charge on CAMPISTRY'S OWN
+// platform Stripe account (camps only ever RECEIVE a transfer — see
+// stripe-connect-onboard-camp's header comment), so a sudden volume spike
+// across all camps combined can trip Stripe's automated risk systems on
+// the platform account itself: early fraud warnings, manual reviews,
+// disputes, or a failed payout. None of that is visible to any individual
+// camp's office — it has to be watched at the platform level. handleRiskEvent()
+// below emails the platform operator immediately when one of these fires,
+// so it can be addressed (per Stripe's own guidance) before it escalates
+// into a rolling reserve that would delay real payouts to camps.
 // =============================================================================
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
+import { Resend } from "npm:resend@2.0.0";
 
 const STRIPE_WEBHOOK_SECRET = Deno.env.get("STRIPE_WEBHOOK_SECRET");
 const STRIPE_SECRET = Deno.env.get("STRIPE_SECRET_KEY");
 const STRIPE_API = "https://api.stripe.com/v1";
 const SUPABASE_URL = Deno.env.get("SUPABASE_URL") || "";
 const SUPABASE_SERVICE_KEY = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY") || "";
+
+// Where platform-risk alerts go — not a camp's inbox, Campistry's own.
+const RISK_ALERT_EMAIL = "campistryoffice@gmail.com";
+const RESEND_API_KEY = Deno.env.get("RESEND_API_KEY");
+const resend = new Resend(RESEND_API_KEY);
 
 // Mirrors link-photo-checkout's own constant — that function is the only
 // place the price is actually charged, this one only needs it to split a
@@ -313,6 +331,97 @@ async function handleAutopaySetup(
   }
 }
 
+// Best-effort — a failed alert email must never fail the webhook response
+// (Stripe retries on non-2xx, and we don't want risk-event handling to
+// become a source of duplicate/stuck webhook deliveries).
+async function sendRiskAlertEmail(subject: string, html: string) {
+  if (!RESEND_API_KEY) {
+    console.error(`[stripe-webhook] RESEND_API_KEY not configured — cannot send risk alert: ${subject}`);
+    return;
+  }
+  try {
+    const { error } = await resend.emails.send({
+      from: "Campistry Platform Alerts <onboarding@resend.dev>",
+      to: [RISK_ALERT_EMAIL],
+      subject,
+      html,
+    });
+    if (error) console.error(`[stripe-webhook] risk alert email failed: ${JSON.stringify(error)}`);
+    else console.log(`[stripe-webhook] risk alert email sent: ${subject}`);
+  } catch (e) {
+    console.error(`[stripe-webhook] risk alert email threw: ${(e as Error).message}`);
+  }
+}
+
+// The four platform-account signals Stripe's own guidance points to as
+// early warnings before a rolling reserve gets imposed — see the header
+// comment. Everything else keeps falling through to the generic
+// "Unhandled event" log line at the bottom of the handler, unchanged.
+const RISK_EVENT_TYPES = new Set([
+  "radar.early_fraud_warning.created",
+  "review.opened",
+  "charge.dispute.created",
+  "payout.failed",
+]);
+
+async function handleRiskEvent(event: Record<string, any>) {
+  const obj = event.data.object || {};
+  let heading = "";
+  let detailsHtml = "";
+
+  switch (event.type) {
+    case "radar.early_fraud_warning.created":
+      heading = "Stripe Radar flagged a charge as likely fraud";
+      detailsHtml = `
+        <p><strong>Charge:</strong> ${obj.charge || "—"}</p>
+        <p><strong>Fraud type:</strong> ${obj.fraud_type || "—"}</p>
+        <p><strong>Actionable:</strong> ${obj.actionable ? "Yes — you can still act on this" : "No"}</p>`;
+      break;
+    case "review.opened":
+      heading = "Stripe opened a manual review on a payment";
+      detailsHtml = `
+        <p><strong>Reason:</strong> ${obj.reason || "—"}</p>
+        <p><strong>Payment Intent:</strong> ${obj.payment_intent || "—"}</p>
+        <p><strong>Charge:</strong> ${obj.charge || "—"}</p>`;
+      break;
+    case "charge.dispute.created":
+      heading = "A parent disputed a charge (chargeback filed)";
+      detailsHtml = `
+        <p><strong>Amount:</strong> $${((obj.amount || 0) / 100).toFixed(2)} ${(obj.currency || "usd").toUpperCase()}</p>
+        <p><strong>Reason:</strong> ${obj.reason || "—"}</p>
+        <p><strong>Charge:</strong> ${obj.charge || "—"}</p>
+        <p><strong>Respond by:</strong> ${obj.evidence_details?.due_by ? new Date(obj.evidence_details.due_by * 1000).toLocaleString() : "—"}</p>`;
+      break;
+    case "payout.failed":
+      heading = "A Stripe payout failed";
+      detailsHtml = `
+        <p><strong>Amount:</strong> $${((obj.amount || 0) / 100).toFixed(2)} ${(obj.currency || "usd").toUpperCase()}</p>
+        <p><strong>Failure reason:</strong> ${obj.failure_message || obj.failure_code || "—"}</p>
+        <p><strong>Arrival date:</strong> ${obj.arrival_date ? new Date(obj.arrival_date * 1000).toLocaleDateString() : "—"}</p>`;
+      break;
+    default:
+      heading = `Stripe platform risk event: ${event.type}`;
+      detailsHtml = `<p>See the Stripe Dashboard for details.</p>`;
+  }
+
+  const html = `
+    <div style="font-family:sans-serif;max-width:600px;">
+      <h2 style="color:#B91C1C;">${heading}</h2>
+      ${detailsHtml}
+      <p style="margin-top:20px;color:#64748B;font-size:13px;">
+        Event: ${event.type} (${event.id})<br/>
+        This fired on Campistry's platform Stripe account — every camp's
+        payments flow through it before being transferred to that camp's
+        own connected account. Look this event up in the Stripe Dashboard
+        (Developers &rarr; Events, search "${event.id}") for full details
+        and to respond if action is needed.
+      </p>
+    </div>`;
+
+  console.warn(`[stripe-webhook] RISK EVENT: ${event.type} (${event.id})`);
+  await sendRiskAlertEmail(`Stripe alert: ${heading}`, html);
+}
+
 serve(async (req) => {
   if (req.method === "OPTIONS") return new Response("ok", { headers: corsHeaders });
 
@@ -357,6 +466,9 @@ serve(async (req) => {
     } else if (event.type === "setup_intent.succeeded") {
       // Not a payment at all — a saved card/bank account for future autopay.
       await handleAutopaySetup(supabase, event.data.object);
+    } else if (RISK_EVENT_TYPES.has(event.type)) {
+      // Platform-account risk signal — alert the operator, not any camp.
+      await handleRiskEvent(event);
     } else {
       console.log(`[stripe-webhook] Unhandled event: ${event.type}`);
     }
