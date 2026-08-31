@@ -929,6 +929,25 @@ async function _lkCheckout(body){
 // blunt, but every balance/purchase-status read here already fetches fresh
 // from cloud at boot, so it's the same effect as the hard refresh a parent
 // would otherwise have to do themselves after paying.
+// Web only (native's dismissible Browser sheet already returns the parent to
+// the app on its own, see campistry_link_capacitor.js's browserFinished
+// listener) — after a full-page redirect to Stripe, land back on THIS page
+// instead of the generic standalone "you can close this window" thank-you
+// page, so the parent doesn't have to navigate back in manually.
+function _lkReturnUrl(status,tag){
+    return location.origin+location.pathname+'?linkback='+encodeURIComponent(tag)+'&status='+encodeURIComponent(status);
+}
+function _handleStripeReturn(){
+    var params=new URLSearchParams(location.search);
+    var tag=params.get('linkback'); var status=params.get('status');
+    if(!tag) return;
+    history.replaceState(null,'',location.pathname);
+    if(status==='cancelled'){ toast('Cancelled — no changes were made.'); return; }
+    var msgs={pay:'Payment received — thank you!',canteen:'Funds are on their way to the canteen account.',autopay:'Autopay is set up!'};
+    var pages={pay:'payments',canteen:'canteen',autopay:'payments'};
+    toast(msgs[tag]||'Done!');
+    if(pages[tag]) nav(pages[tag]);
+}
 function _lkGoToCheckout(url){
     try{
         if(window.Capacitor&&window.Capacitor.isNativePlatform&&window.Capacitor.isNativePlatform()&&window.Capacitor.Plugins&&window.Capacitor.Plugins.Browser){
@@ -1031,9 +1050,11 @@ function _payCardHtml(cid,campName,d){
         '<div style="text-align:right;font-size:.75rem;color:var(--text-muted);line-height:1.7;">Billed '+_lkMoney(d.billed)+'<br>Paid '+_lkMoney(d.paid)+(Number(d.credits)>0.005?'<br>Credits '+_lkMoney(d.credits):'')+'</div>'+
         '</div>'+payBtn+
         (owed?'<div style="font-size:.7rem;color:var(--text-muted);margin-top:8px;text-align:center;">Pay securely by card, bank (ACH), Cash App, PayPal &amp; more.</div>':'<div style="font-size:.72rem;color:#0E7C4A;margin-top:6px;text-align:center;font-weight:600;">You\'re all paid up. Thank you!</div>')+
-        '</div>'+_autopayCardHtml(cid,d);
+        _autopaySectionHtml(cid,d)+
+        '</div>';
 }
-// Monthly Plan / autopay — only appears when the camp office has actually
+// Monthly Plan / autopay — lives INSIDE the same balance card (not a
+// separate one below it), only appears when the camp office has actually
 // set a family up on a plan (Me -> Billing -> Monthly Plan, see migration
 // 096 which added plan/cardOnFile to get_my_balance). Setting up or
 // changing the payment method NEVER happens on this page: it redirects to
@@ -1042,14 +1063,14 @@ function _payCardHtml(cid,campName,d){
 // nothing reaches Campistry's own site or servers. stripe-webhook writes
 // the result back once Stripe confirms it; next load of this page reflects
 // it via get_my_balance's cardOnFile/paymentMethodType fields.
-function _autopayCardHtml(cid,d){
+function _autopaySectionHtml(cid,d){
     var insts=(d.plan&&Array.isArray(d.plan.installments))?d.plan.installments:[];
     if(!insts.length) return '';
     var next=insts.filter(function(i){return i.status==='pending'||i.status==='failed';})
         .sort(function(a,b){return String(a.dueDate||'').localeCompare(String(b.dueDate||''));})[0];
     var onFile=!!d.cardOnFile;
     var methodTxt=d.paymentMethodLabel||(d.paymentMethodType==='us_bank_account'?'a bank account':'a card');
-    var body='';
+    var body='<div style="font-size:.72rem;font-weight:700;color:var(--link-color);text-transform:uppercase;letter-spacing:.04em;margin-bottom:8px;">Monthly Plan</div>';
     if(next){
         body+='<div style="font-size:.75rem;color:var(--text-muted);margin-bottom:2px;">Next payment</div>';
         body+='<div style="font-size:1.1rem;font-weight:700;margin-bottom:10px;">'+_lkMoney(next.amount)+' due '+String(next.dueDate||'').replace(/[<>&]/g,'')+'</div>';
@@ -1061,9 +1082,7 @@ function _autopayCardHtml(cid,d){
         body+='<div style="font-size:.78rem;color:var(--text-muted);">Autopay isn\'t set up yet — until then you can pay each installment yourself above.</div>';
         body+='<button class="btn btn-primary" style="width:100%;margin-top:10px;font-size:.85rem;" onclick="startAutopaySetup(\''+cid+'\')">Set up autopay (card or bank)</button>';
     }
-    return '<div class="lk-card" style="padding:18px;margin-bottom:12px;">'+
-        '<div style="font-size:.72rem;font-weight:700;color:var(--link-color);text-transform:uppercase;letter-spacing:.04em;margin-bottom:8px;">Monthly Plan</div>'+
-        body+'</div>';
+    return '<div style="border-top:1px solid var(--border-color,#E2E8F0);margin-top:16px;padding-top:16px;">'+body+'</div>';
 }
 async function startAutopaySetup(cid){
     var d=_balByCamp[cid]; if(!d||!d.familyKey){toast('Plan not loaded yet');return;}
@@ -1074,7 +1093,9 @@ async function startAutopaySetup(cid){
             campId:cid,
             familyKey:d.familyKey,
             familyName:d.familyName||'',
-            email:(parent&&parent.email)||undefined
+            email:(parent&&parent.email)||undefined,
+            successUrl:_lkReturnUrl('success','autopay'),
+            cancelUrl:_lkReturnUrl('cancelled','autopay')
         })});
         var data=await resp.json(); if(!resp.ok||data.error) throw new Error(data.error||'Could not start setup');
         _lkGoToCheckout(data.url);
@@ -1114,7 +1135,7 @@ async function _lkPayConfirm(){
     var email=(parent&&parent.email)||'';
     try{
         toast('Opening secure checkout…');
-        var res=await _lkCheckout({campId:cid,familyName:d.familyName||'',email:email,amount:amt,description:'Camp payment'+(d.familyName?' — '+d.familyName:'')});
+        var res=await _lkCheckout({campId:cid,familyName:d.familyName||'',email:email,amount:amt,description:'Camp payment'+(d.familyName?' — '+d.familyName:''),successUrl:_lkReturnUrl('success','pay'),cancelUrl:_lkReturnUrl('cancelled','pay')});
         if(res&&res.url){ _lkGoToCheckout(res.url); } else { throw new Error('No checkout link'); }
     }catch(err){ console.error('[Parent] checkout error:',err); toast('Could not start payment: '+(err&&err.message||'error')); }
 }
@@ -1569,8 +1590,8 @@ async function addFunds(){
             campId:c.campId, camperName:c.name, amount:amt, email:email,
             description:'Canteen funds — '+c.name,
             source:'campistry-canteen-deposit',
-            successUrl:location.origin+location.pathname.replace(/[^/]*$/,'')+'campistry_pay_thanks.html?status=success&type=canteen',
-            cancelUrl:location.origin+location.pathname.replace(/[^/]*$/,'')+'campistry_pay_thanks.html?status=cancelled&type=canteen',
+            successUrl:_lkReturnUrl('success','canteen'),
+            cancelUrl:_lkReturnUrl('cancelled','canteen'),
         });
         if(res&&res.url){ _lkGoToCheckout(res.url); return; }
         throw new Error('No checkout link');
@@ -3603,6 +3624,7 @@ function _onLateDateChange(){
 }
 
 init();
+_handleStripeReturn();
 initPickupTabs();
 hydratePickupRequests();
 applyParentPrefs();
