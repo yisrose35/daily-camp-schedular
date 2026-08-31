@@ -23,11 +23,20 @@
     /**
      * One line describing a member's section access, for the staff list and the
      * edit modal. Delegates to the capability registry so the wording stays in
-     * step with what the resolver actually does.
+     * step with what the resolver actually does. A member assigned to an
+     * Access Group (migration 097) resolves through the GROUP's own
+     * product_access/preset/section_access — not the member's own columns,
+     * which go stale/irrelevant the moment a group is assigned — and names
+     * the group directly rather than falling back to a generic "Custom"
+     * summary that wouldn't say which one.
      */
     function _accessSummary(member) {
         const C = window.CampistryCapabilities;
         if (!C) return 'Full access to their apps';
+        if (member.access_group_id) {
+            const g = (_accessGroups || []).find(x => x.id === member.access_group_id);
+            if (g) return `${g.name} (group)`;
+        }
         return C.summarize({
             role: member.role,
             products: (member.product_access && member.product_access.length) ? member.product_access : null,
@@ -323,6 +332,9 @@
 
         // ★ Fetch Me divisions so member subdivision summaries can show colored pills
         const meDivisions = await getMeDivisions(false);
+        // Refresh the Access Groups cache so _accessSummary can name a
+        // member's group instead of falling back to a generic summary.
+        _accessGroups = await fetchAccessGroups();
 
         container.innerHTML = `
             <div class="card-header">
@@ -848,10 +860,58 @@
     }
 
     // =========================================================================
+    // READ-ONLY SUMMARY (Dashboard's "Team & Access" tab)
+    // =========================================================================
+    // The Dashboard tab used to embed the full editable cards above — too
+    // cramped for what this now covers (roles, Access Groups, the fine-tune
+    // matrix). It shows this compact, no-buttons overview instead; all
+    // editing happens on the dedicated team_access_setup.html page.
+
+    async function renderTeamAccessSummary(container) {
+        if (!container) return;
+        await refreshData();
+        _accessGroups = await fetchAccessGroups();
+
+        const memberRows = _teamMembers.length === 0
+            ? `<p style="color:var(--slate-400,#94A3B8);font-size:0.85rem;padding:8px 0;">No team members yet.</p>`
+            : _teamMembers.map(m => `
+                <div style="display:flex;align-items:center;gap:10px;padding:9px 0;border-bottom:1px solid var(--slate-100,#F1F5F9);">
+                    <div style="flex:1;min-width:0;">
+                        <div style="font-weight:500;color:var(--slate-800,#1E293B);font-size:0.88rem;">${_tsuEsc(m.display_name ? m.display_name + ' · ' : '')}${_tsuEsc(m.email)}${!m.accepted_at ? '<span class="pending-badge">Pending</span>' : ''}</div>
+                        <div style="font-size:0.78rem;color:var(--slate-500,#64748B);margin-top:1px;">${_tsuEsc(_accessSummary(m))}</div>
+                    </div>
+                    <span class="role-${m.role}">${_tsuEsc(window.AccessControl?.getRoleDisplayName(m.role) || m.role)}</span>
+                </div>`).join('');
+
+        const groupRows = _accessGroups.length === 0
+            ? `<p style="color:var(--slate-400,#94A3B8);font-size:0.85rem;padding:8px 0;">No access groups yet.</p>`
+            : _accessGroups.map(g => `
+                <div style="display:flex;align-items:center;gap:10px;padding:9px 0;border-bottom:1px solid var(--slate-100,#F1F5F9);">
+                    <div style="flex:1;min-width:0;">
+                        <div style="font-weight:500;color:var(--slate-800,#1E293B);font-size:0.88rem;">${_tsuEsc(g.name)}</div>
+                        <div style="font-size:0.78rem;color:var(--slate-500,#64748B);margin-top:1px;">${_tsuEsc((g.product_access || []).map(p => p.charAt(0).toUpperCase() + p.slice(1)).join(', ') || 'No apps yet')}</div>
+                    </div>
+                    <span style="font-size:0.78rem;color:var(--slate-500,#64748B);">${g.member_count || 0} member${g.member_count === 1 ? '' : 's'}</span>
+                </div>`).join('');
+
+        container.innerHTML = `
+            <div class="card-header">
+                <h2>Team & Access</h2>
+                <a href="team_access_setup.html" class="btn-edit" style="text-decoration:none;">Manage &rarr;</a>
+            </div>
+            <p class="card-desc">Who's on your team, their role, and what they can access. Invite, edit, and build Access Groups on the setup page.</p>
+            <div style="font-size:0.7rem;font-weight:700;color:var(--slate-400,#94A3B8);text-transform:uppercase;letter-spacing:0.05em;margin:14px 0 4px;">Team Members</div>
+            ${memberRows}
+            <div style="font-size:0.7rem;font-weight:700;color:var(--slate-400,#94A3B8);text-transform:uppercase;letter-spacing:0.05em;margin:18px 0 4px;">Access Groups</div>
+            ${groupRows}
+        `;
+    }
+
+    // =========================================================================
     // EXPORTS
     // =========================================================================
 
-    const TeamSubdivisionsUI = { initialize, refreshData, renderSubdivisionsCard, renderTeamCard, renderAccessGroupsCard, fetchAccessGroups, showSubdivisionModal, showInviteModal, getNextColor, getMeDivisions, renderDivisionPill, renderDivisionPills, copyToClipboard, showToast, openInviteEmail, sendInviteEmailViaResend, sendInviteEmail, SUBDIVISION_COLORS, injectStyles };
+    const TeamSubdivisionsUI = { initialize, refreshData, renderSubdivisionsCard, renderTeamCard, renderAccessGroupsCard, renderTeamAccessSummary, fetchAccessGroups, showSubdivisionModal, showInviteModal, getNextColor, getMeDivisions, renderDivisionPill, renderDivisionPills, copyToClipboard, showToast, openInviteEmail, sendInviteEmailViaResend, sendInviteEmail, SUBDIVISION_COLORS, injectStyles };
     window.TeamSubdivisionsUI = TeamSubdivisionsUI;
     if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', injectStyles); else injectStyles();
     console.log("[TeamUI] v2.1 loaded");
