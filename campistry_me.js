@@ -10143,6 +10143,13 @@ function viewFamily(famKey){
     nav('familydetail');
 }
 
+// Plain colored text, no pill/background — used throughout Billing instead
+// of bdg()'s filled rounded badges, which read as too playful for a money
+// screen. Same semantic colors, just quieter.
+function _flatStatus(label,type){
+    var col=type==='ok'?'var(--ok)':type==='err'?'var(--err)':type==='warn'?'var(--warn)':'var(--s500)';
+    return '<span style="font-size:.78rem;font-weight:700;color:'+col+'">'+esc(label)+'</span>';
+}
 function renderBilling(){
     var c=document.getElementById('page-billing');
     var ledgers=buildFamilyLedgers();
@@ -10169,21 +10176,33 @@ function renderBilling(){
     var _unmatchedTotal=_unmatchedPays.reduce(function(s,p){return s+(Number(p.amount)||0)},0);
 
     var cardsOnFile=famList.filter(function(l){return families[l.famKey]?.cardOnFile}).length;
-    var h='<div class="sec-hd"><div><h2 class="sec-title">Billing & Payments</h2><p class="sec-desc">'+famList.length+' account'+(famList.length!==1?'s':'')+' · '+cardsOnFile+' card'+(cardsOnFile!==1?'s':'')+' on file · '+finPayments.length+' payment'+(finPayments.length!==1?'s':'')+'</p></div><div class="sec-actions"><button class="me-btn me-btn--sec me-btn--sm" onclick="CampistryMe.printFamilies()" title="Print all households">🖨 Print</button><button class="me-btn me-btn--sec me-btn--sm" onclick="CampistryMe.exportFamilyReport()" title="Export all households">↓ Export</button><button class="me-btn me-btn--sec" onclick="CampistryMe.addFamily()">+ Add Household</button><button class="me-btn me-btn--sec" onclick="CampistryMe.addCharge()">+ Charge</button><button class="me-btn me-btn--sec" onclick="CampistryMe.issueCredit()">+ Credit</button><button class="me-btn me-btn--pri" onclick="CampistryMe.openPaymentModal()">+ Payment</button>'+(cardsOnFile>0?'<button class="me-btn me-btn--pri" style="background:var(--purple)" onclick="CampistryMe.batchCharge()">⚡ Batch Charge</button>':'')+'</div></div>';
+    var billMoreId='billHdMoreMenu';
+    var h='<div class="sec-hd"><div><h2 class="sec-title">Billing & Payments</h2><p class="sec-desc">'+famList.length+' account'+(famList.length!==1?'s':'')+' · '+cardsOnFile+' card'+(cardsOnFile!==1?'s':'')+' on file · '+finPayments.length+' payment'+(finPayments.length!==1?'s':'')+'</p></div><div class="sec-actions">'
+        +'<button class="me-btn me-btn--pri" onclick="CampistryMe.openPaymentModal()">Record Payment</button>'
+        +(cardsOnFile>0?'<button class="me-btn me-btn--sec" onclick="CampistryMe.batchCharge()">Batch Charge</button>':'')
+        +'<div class="me-more-wrap"><button class="me-btn me-btn--sec me-btn--sm" onclick="CampistryMe._toggleMenu(\''+billMoreId+'\')">⋯</button>'
+        +'<div class="me-more-menu" id="'+billMoreId+'">'
+        +'<button onclick="CampistryMe.addFamily()">Add Household</button>'
+        +'<button onclick="CampistryMe.addCharge()">Add Charge</button>'
+        +'<button onclick="CampistryMe.issueCredit()">Issue Credit</button>'
+        +'<button onclick="CampistryMe.printFamilies()">Print all households</button>'
+        +'<button onclick="CampistryMe.exportFamilyReport()">Export all households</button>'
+        +'</div></div></div></div>';
 
     // Households form automatically in the background as campers are added
     // (see _famSuggestionsBannerHtml) — this only surfaces what auto-linking
     // couldn't safely decide on its own.
     h+=_famSuggestionsBannerHtml();
 
-    // Stats
+    // Stats — plain borders, only the number itself is colored, so this
+    // reads as a data summary rather than a row of colorful tiles.
     h+='<div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(155px,1fr));gap:10px;margin-bottom:18px">';
-    h+='<div style="background:#fff;border-radius:var(--r2);padding:14px 16px;border:1px solid var(--s200)"><div style="font-size:1.25rem;font-weight:800;color:var(--s800)">'+fm(totalCharged)+'</div><div style="font-size:.7rem;color:var(--s400);font-weight:600;text-transform:uppercase">Total Charged</div></div>';
-    h+='<div style="background:#fff;border-radius:var(--r2);padding:14px 16px;border:1px solid var(--s200)"><div style="font-size:1.25rem;font-weight:800;color:var(--ok)">'+fm(totalCollected)+'</div><div style="font-size:.7rem;color:var(--s400);font-weight:600;text-transform:uppercase">Collected</div></div>';
-    h+='<div style="background:#fff;border-radius:var(--r2);padding:14px 16px;border:1px solid var(--s200)"><div style="font-size:1.25rem;font-weight:800;color:var(--err)">'+fm(totalOutstanding)+'</div><div style="font-size:.7rem;color:var(--s400);font-weight:600;text-transform:uppercase">Outstanding</div></div>';
-    h+='<div style="background:#fff;border-radius:var(--r2);padding:14px 16px;border:1px solid var(--s200)"><div style="font-size:1.25rem;font-weight:800;color:var(--s800)">'+rate+'%</div><div style="font-size:.7rem;color:var(--s400);font-weight:600;text-transform:uppercase">Collection Rate</div></div>';
-    h+='<div style="background:#fff;border-radius:var(--r2);padding:14px 16px;border:1px solid '+(overdueCount>0?'var(--err)':'var(--s200)')+'"><div style="font-size:1.25rem;font-weight:800;color:'+(overdueCount>0?'var(--err)':'var(--s800)')+'">'+overdueCount+'</div><div style="font-size:.7rem;color:var(--s400);font-weight:600;text-transform:uppercase">Overdue</div></div>';
-    if(_unmatchedTotal>0)h+='<div style="background:#fff;border-radius:var(--r2);padding:14px 16px;border:1px solid var(--me)" title="Payments not linked to any family. Included in Analytics revenue but NOT in the family ledgers above. Collected + Unmatched = Analytics revenue."><div style="font-size:1.25rem;font-weight:800;color:var(--me)">'+fm(_unmatchedTotal)+'</div><div style="font-size:.7rem;color:var(--s400);font-weight:600;text-transform:uppercase">Unmatched ('+_unmatchedPays.length+')</div></div>';
+    h+='<div style="background:#fff;border-radius:var(--r);padding:14px 16px;border:1px solid var(--s200)"><div style="font-size:1.2rem;font-weight:700;color:var(--s800)">'+fm(totalCharged)+'</div><div style="font-size:.7rem;color:var(--s400);font-weight:600;text-transform:uppercase">Total Charged</div></div>';
+    h+='<div style="background:#fff;border-radius:var(--r);padding:14px 16px;border:1px solid var(--s200)"><div style="font-size:1.2rem;font-weight:700;color:var(--ok)">'+fm(totalCollected)+'</div><div style="font-size:.7rem;color:var(--s400);font-weight:600;text-transform:uppercase">Collected</div></div>';
+    h+='<div style="background:#fff;border-radius:var(--r);padding:14px 16px;border:1px solid var(--s200)"><div style="font-size:1.2rem;font-weight:700;color:var(--err)">'+fm(totalOutstanding)+'</div><div style="font-size:.7rem;color:var(--s400);font-weight:600;text-transform:uppercase">Outstanding</div></div>';
+    h+='<div style="background:#fff;border-radius:var(--r);padding:14px 16px;border:1px solid var(--s200)"><div style="font-size:1.2rem;font-weight:700;color:var(--s800)">'+rate+'%</div><div style="font-size:.7rem;color:var(--s400);font-weight:600;text-transform:uppercase">Collection Rate</div></div>';
+    h+='<div style="background:#fff;border-radius:var(--r);padding:14px 16px;border:1px solid var(--s200)"><div style="font-size:1.2rem;font-weight:700;color:'+(overdueCount>0?'var(--err)':'var(--s800)')+'">'+overdueCount+'</div><div style="font-size:.7rem;color:var(--s400);font-weight:600;text-transform:uppercase">Overdue</div></div>';
+    if(_unmatchedTotal>0)h+='<div style="background:#fff;border-radius:var(--r);padding:14px 16px;border:1px solid var(--s200)" title="Payments not linked to any family. Included in Analytics revenue but NOT in the family ledgers above. Collected + Unmatched = Analytics revenue."><div style="font-size:1.2rem;font-weight:700;color:var(--me)">'+fm(_unmatchedTotal)+'</div><div style="font-size:.7rem;color:var(--s400);font-weight:600;text-transform:uppercase">Unmatched ('+_unmatchedPays.length+')</div></div>';
     h+='</div>';
 
     // Filter tabs
@@ -10216,13 +10235,13 @@ function renderBilling(){
             // same click-through pattern Roster uses for a camper. This used
             // to expand inline into the household + ledger + 8 action buttons
             // right here, which is what made the list feel crowded.
-            var statusBadge=l.status==='paid'?bdg('Paid','ok'):l.status==='overdue'?bdg('Overdue','err'):l.status==='partial'?bdg('Partial','warn'):bdg('Pending','warn');
+            var statusBadge=l.status==='paid'?_flatStatus('Paid','ok'):l.status==='overdue'?_flatStatus('Overdue','err'):l.status==='partial'?_flatStatus('Partial','warn'):_flatStatus('Pending','warn');
             var camperNames=(l.family.camperIds||[]).concat((l.pendingCamperIds||[]).map(function(n){return n+' (pending)'})).join(', ');
 
             h+='<div class="me-card" id="billfam-'+je(l.famKey)+'" style="margin-bottom:10px;cursor:pointer" onclick="CampistryMe.viewFamily(\''+je(l.famKey)+'\')">';
             h+='<div style="display:flex;align-items:center;gap:12px">';
             h+='<input type="checkbox" class="billing-check" data-famkey="'+esc(l.famKey)+'" onclick="event.stopPropagation();CampistryMe._updateBillingBulkBar()">';
-            h+='<div style="flex:1;min-width:0"><h3 style="margin:0">'+esc(l.family.name||'')+'</h3><span style="font-size:.75rem;color:var(--s400)">'+esc(camperNames)+'</span>'+(l.pendingEnrollment?' '+bdg('Accepted — pending enrollment','warn'):'')+'</div>';
+            h+='<div style="flex:1;min-width:0"><h3 style="margin:0">'+esc(l.family.name||'')+'</h3><span style="font-size:.75rem;color:var(--s400)">'+esc(camperNames)+'</span>'+(l.pendingEnrollment?' · '+_flatStatus('Accepted — pending enrollment','warn'):'')+'</div>';
             h+='<div style="display:flex;align-items:center;gap:10px;flex-shrink:0">'+statusBadge;
             h+='<span style="font-size:1rem;font-weight:800;color:'+(l.balance>0?'var(--err)':'var(--ok)')+'">'+fm(l.balance)+'</span>';
             h+='<span style="font-size:1rem;color:var(--s300)">›</span></div>';
@@ -10250,117 +10269,122 @@ function renderFamilyDetailPage(){
         c.innerHTML='<div class="me-empty"><h3>Family not found</h3><p>They may have been deleted or merged into another household.</p><button class="me-btn me-btn--sec" onclick="CampistryMe.nav(\'billing\')">← Back to Billing</button></div>';
         return;
     }
-    var statusBadge=l.status==='paid'?bdg('Paid','ok'):l.status==='overdue'?bdg('Overdue','err'):l.status==='partial'?bdg('Partial','warn'):bdg('Pending','warn');
+    var statusBadge=l.status==='paid'?_flatStatus('Paid','ok'):l.status==='overdue'?_flatStatus('Overdue','err'):l.status==='partial'?_flatStatus('Partial','warn'):_flatStatus('Pending','warn');
     var camperNames=(l.family.camperIds||[]).concat((l.pendingCamperIds||[]).map(function(n){return n+' (pending)'})).join(', ');
+    var hasCard=families[l.famKey]?.cardOnFile;
+    var _fam=families[l.famKey];
+    var moreId='famDetailMoreMenu';
 
     var h='<button class="me-btn me-btn--ghost me-btn--sm" style="margin-bottom:10px" onclick="CampistryMe.nav(\'billing\')">← Back to Billing</button>';
-    // Same avatar + name/meta header language as the Staff/Camper full-page
-    // profiles (av(), sec-hd) — this page was built separately and never
-    // picked up that treatment, which is most of why it read as a plain
-    // list next to the rest of the app.
-    h+='<div class="sec-hd"><div style="display:flex;align-items:center;gap:12px">'
-        +av(l.family.name||'','l')
-        +'<div><h2 class="sec-title">'+esc(l.family.name||'')+'</h2>'
-        +'<p class="sec-desc">'+esc(camperNames)+' · '+statusBadge+(l.pendingEnrollment?' · '+bdg('Accepted — pending enrollment','warn'):'')+'</p></div>'
-        +'</div><div class="sec-actions">'
-        +'<div style="text-align:right"><div style="font-size:.68rem;font-weight:700;color:var(--s400);text-transform:uppercase;letter-spacing:.05em">Balance</div>'
-        +'<div style="font-size:1.6rem;font-weight:800;line-height:1.1;color:'+(l.balance>0?'var(--err)':'var(--ok)')+'">'+fm(l.balance)+'</div></div>'
-        +'</div></div>';
+    // One continuous statement/ledger-style panel — a single .me-card with
+    // thin dividers between sections — instead of five separately-elevated
+    // cards. A financial record page should read like one document you
+    // scan top to bottom, not a stack of disconnected boxes.
+    h+='<div class="me-card" style="padding:22px 24px">';
 
-    // Stat tiles — same shape used on Broadcasts/Analytics (flex-1 white
-    // tiles with a big number over an uppercase label) instead of one
-    // cramped inline text row.
-    h+='<div style="display:flex;gap:10px;flex-wrap:wrap;margin-bottom:16px">';
-    h+='<div style="flex:1;min-width:120px;background:#fff;border-radius:var(--r2);padding:14px 16px;border:1px solid var(--s200)"><div style="font-size:1.25rem;font-weight:800;color:var(--s800)">'+fm(l.totalCharges)+'</div><div style="font-size:.68rem;color:var(--s400);font-weight:600;text-transform:uppercase;letter-spacing:.03em">Charges</div></div>';
-    h+='<div style="flex:1;min-width:120px;background:#fff;border-radius:var(--r2);padding:14px 16px;border:1px solid var(--s200)"><div style="font-size:1.25rem;font-weight:800;color:var(--ok)">'+fm(l.totalPayments)+'</div><div style="font-size:.68rem;color:var(--s400);font-weight:600;text-transform:uppercase;letter-spacing:.03em">Payments</div></div>';
-    if(l.totalCredits>0) h+='<div style="flex:1;min-width:120px;background:#fff;border-radius:var(--r2);padding:14px 16px;border:1px solid var(--s200)"><div style="font-size:1.25rem;font-weight:800;color:var(--purple)">'+fm(l.totalCredits)+'</div><div style="font-size:.68rem;color:var(--s400);font-weight:600;text-transform:uppercase;letter-spacing:.03em">Credits</div></div>';
-    h+='<div style="flex:1;min-width:120px;background:'+(l.balance>0?'var(--me-bg)':'#ECFDF5')+';border-radius:var(--r2);padding:14px 16px;border:1px solid '+(l.balance>0?'var(--me-border)':'#A7F3D0')+'"><div style="font-size:1.25rem;font-weight:800;color:'+(l.balance>0?'var(--err)':'var(--ok)')+'">'+fm(l.balance)+'</div><div style="font-size:.68rem;color:var(--s500);font-weight:600;text-transform:uppercase;letter-spacing:.03em">Balance Due</div></div>';
+    // Header — name, campers, status, balance. No avatar/color decoration;
+    // this is a ledger, not a profile.
+    h+='<div style="display:flex;justify-content:space-between;align-items:flex-start;gap:16px;flex-wrap:wrap;margin-bottom:14px">';
+    h+='<div><h2 style="font-size:1.15rem;font-weight:700;color:var(--s800);margin:0 0 2px">'+esc(l.family.name||'')+'</h2>';
+    h+='<p style="font-size:.83rem;color:var(--s500);margin:0">'+esc(camperNames)+' · '+statusBadge+(l.pendingEnrollment?' · '+_flatStatus('Accepted — pending enrollment','warn'):'')+'</p></div>';
+    h+='<div style="text-align:right"><div style="font-size:.68rem;font-weight:700;color:var(--s400);text-transform:uppercase;letter-spacing:.05em">Balance</div>'
+        +'<div style="font-size:1.5rem;font-weight:700;line-height:1.1;color:'+(l.balance>0?'var(--err)':'var(--ok)')+'">'+fm(l.balance)+'</div></div>';
     h+='</div>';
 
-    // Quick actions
-    var hasCard=families[l.famKey]?.cardOnFile;
-    var actBtns='<button class="me-btn me-btn--pri me-btn--sm" onclick="CampistryMe.openPaymentForFamily(\''+je(l.famKey)+'\')">Record Payment</button>';
-    actBtns+='<button class="me-btn me-btn--sec me-btn--sm" onclick="CampistryMe.sendPayLink(\''+je(l.famKey)+'\')">💳 Pay Link</button>';
-    var _fam=families[l.famKey];
-    if(!(_fam&&_fam.plan&&_fam.plan.installments&&_fam.plan.installments.length)) actBtns+='<button class="me-btn me-btn--sec me-btn--sm" onclick="CampistryMe.monthlyPlan(\''+je(l.famKey)+'\')">📆 Monthly Plan</button>';
-    if(hasCard&&l.balance>0) actBtns+='<button class="me-btn me-btn--pri me-btn--sm" style="background:var(--purple)" onclick="CampistryMe.chargeStoredCard(\''+je(l.famKey)+'\')">⚡ Charge Card</button>';
-    if(!hasCard) actBtns+='<button class="me-btn me-btn--sec me-btn--sm" onclick="CampistryMe.requestCardSetup(\''+je(l.famKey)+'\')">💳 Set Up in Stripe</button>';
-    else actBtns+='<span style="font-size:.72rem;color:var(--ok);font-weight:600;padding:4px 8px;align-self:center;background:#ECFDF5;border-radius:999px">💳 '+esc(families[l.famKey]?.paymentMethodLabel||(families[l.famKey]?.paymentMethodType==='us_bank_account'?'Bank account on file':'Card on file'))+'</span>';
-    actBtns+='<button class="me-btn me-btn--sec me-btn--sm" onclick="CampistryMe.addChargeForFamily(\''+je(l.famKey)+'\')">Add Charge</button>';
-    actBtns+='<button class="me-btn me-btn--sec me-btn--sm" onclick="CampistryMe.issueCreditForFamily(\''+je(l.famKey)+'\')">Issue Credit</button>';
-    actBtns+='<button class="me-btn me-btn--ghost me-btn--sm" onclick="CampistryMe.printStatement(\''+je(l.famKey)+'\')">Print Statement</button>';
-    actBtns+='<button class="me-btn me-btn--ghost me-btn--sm" onclick="CampistryMe.toggleBillingAccess(\''+je(l.famKey)+'\')">'+(families[l.famKey]?.billingAccessClosed?'Reopen billing access':'Close billing access')+'</button>';
-    h+=_dpCard('Quick Actions','<div style="display:flex;gap:6px;flex-wrap:wrap">'+actBtns+'</div>',{icon:'dollarSign'});
+    // Plain summary line — Charges / Payments / Credits, no tinted tiles.
+    h+='<div style="font-size:.82rem;color:var(--s600);padding-bottom:14px;border-bottom:1px solid var(--s100)">'
+        +'Charges <strong style="color:var(--s800)">'+fm(l.totalCharges)+'</strong>'
+        +' &nbsp;·&nbsp; Payments <strong style="color:var(--ok)">'+fm(l.totalPayments)+'</strong>'
+        +(l.totalCredits>0?' &nbsp;·&nbsp; Credits <strong style="color:var(--purple)">'+fm(l.totalCredits)+'</strong>':'')
+        +'</div>';
 
-    // Household — parents/address/siblings.
-    var hhActions='<span style="display:flex;gap:4px"><button class="me-btn me-btn--ghost me-btn--sm" onclick="CampistryMe.editFamily(\''+je(l.famKey)+'\')">Edit</button><button class="me-btn me-btn--ghost me-btn--sm" style="color:var(--err)" onclick="CampistryMe.deleteFamily(\''+je(l.famKey)+'\')">Delete</button></span>';
-    h+=_dpCard('Household',_famHouseholdHtml(l.famKey,l.family),{icon:'home',actionHtml:hhActions});
+    // Action bar — one primary action plus a single "More" menu, instead of
+    // 8 buttons in a row. Payment-method status is plain text, not a pill.
+    var moreItems='<button onclick="CampistryMe.sendPayLink(\''+je(l.famKey)+'\')">Send Pay Link</button>';
+    if(!(_fam&&_fam.plan&&_fam.plan.installments&&_fam.plan.installments.length)) moreItems+='<button onclick="CampistryMe.monthlyPlan(\''+je(l.famKey)+'\')">Set up Monthly Plan</button>';
+    moreItems+=hasCard?'<button onclick="CampistryMe.requestCardSetup(\''+je(l.famKey)+'\')">Replace payment method</button>':'<button onclick="CampistryMe.requestCardSetup(\''+je(l.famKey)+'\')">Set up payment method</button>';
+    moreItems+='<button onclick="CampistryMe.addChargeForFamily(\''+je(l.famKey)+'\')">Add Charge</button>';
+    moreItems+='<button onclick="CampistryMe.issueCreditForFamily(\''+je(l.famKey)+'\')">Issue Credit</button>';
+    moreItems+='<button onclick="CampistryMe.printStatement(\''+je(l.famKey)+'\')">Print Statement</button>';
+    moreItems+='<button onclick="CampistryMe.editFamily(\''+je(l.famKey)+'\')">Edit Household</button>';
+    moreItems+='<button onclick="CampistryMe.toggleBillingAccess(\''+je(l.famKey)+'\')">'+(families[l.famKey]?.billingAccessClosed?'Reopen billing access':'Close billing access')+'</button>';
+    moreItems+='<button onclick="CampistryMe.deleteFamily(\''+je(l.famKey)+'\')" style="color:var(--err)">Delete Household</button>';
+    h+='<div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;padding:14px 0;border-bottom:1px solid var(--s100)">'
+        +'<button class="me-btn me-btn--pri me-btn--sm" onclick="CampistryMe.openPaymentForFamily(\''+je(l.famKey)+'\')">Record Payment</button>'
+        +(hasCard&&l.balance>0?'<button class="me-btn me-btn--sec me-btn--sm" onclick="CampistryMe.chargeStoredCard(\''+je(l.famKey)+'\')">Charge Card</button>':'')
+        +'<span style="font-size:.75rem;color:'+(hasCard?'var(--ok)':'var(--s400)')+'">'+(hasCard?esc(_fam.paymentMethodLabel||(_fam.paymentMethodType==='us_bank_account'?'Bank account on file':'Card on file')):'No payment method on file')+'</span>'
+        +'<span style="flex:1"></span>'
+        +'<div class="me-more-wrap"><button class="me-btn me-btn--sec me-btn--sm" onclick="CampistryMe._toggleMenu(\''+moreId+'\')">More ⋯</button>'
+        +'<div class="me-more-menu" id="'+moreId+'">'+moreItems+'</div></div>'
+        +'</div>';
+
+    // Household — parents/address/siblings, folded into the same panel.
+    h+='<div style="padding:16px 0;border-bottom:1px solid var(--s100)">';
+    h+='<div style="font-size:.7rem;font-weight:700;color:var(--s500);text-transform:uppercase;letter-spacing:.05em;margin-bottom:8px">Household</div>';
+    h+=_famHouseholdHtml(l.famKey,l.family);
+    h+='</div>';
 
     // Ledger entries table
     if(l.entries.length){
-        var rows='<table class="me-t" style="margin:0 -20px;width:calc(100% + 40px)"><thead><tr><th style="padding-left:20px">Date</th><th>Type</th><th>Description</th><th style="text-align:right">Charge</th><th style="text-align:right">Payment</th><th style="padding-right:20px"></th></tr></thead><tbody>';
+        h+='<div style="padding:16px 0;border-bottom:1px solid var(--s100)">';
+        h+='<div style="font-size:.7rem;font-weight:700;color:var(--s500);text-transform:uppercase;letter-spacing:.05em;margin-bottom:8px">Account Activity</div>';
+        h+='<table class="me-t" style="margin:0"><thead><tr><th>Date</th><th>Type</th><th>Description</th><th style="text-align:right">Charge</th><th style="text-align:right">Payment</th><th></th></tr></thead><tbody>';
         l.entries.forEach(function(e){
-            if(e.type==='installment') return; // show in the schedule card below
+            if(e.type==='installment') return; // shown in Monthly Plan below
             var isCharge=e.type==='charge';
             var isPayment=e.type==='payment';
             var isCredit=e.type==='credit';
             var isRefund=isPayment&&e.amount<0;
             var payTxt=(isPayment||isCredit)?(isRefund?'−'+fm(Math.abs(e.amount)):fm(e.amount)):'';
             var refBtn=(isPayment&&e.amount>0&&e.ref)?'<button class="me-btn me-btn--ghost me-btn--sm" title="Refund this payment" onclick="CampistryMe.finRefund(\''+je(String(e.ref))+'\')">↩</button>':'';
-            rows+='<tr><td style="padding-left:20px;font-size:.75rem;color:var(--s500)">'+esc(e.date||'')+'</td>';
-            rows+='<td>'+bdg(e.category||e.type,isCharge?'err':isRefund?'err':isPayment?'ok':'warn')+'</td>';
-            rows+='<td style="font-size:.8rem">'+esc(e.desc||'')+'</td>';
-            rows+='<td style="text-align:right;font-weight:600;color:var(--s800)">'+(isCharge?fm(e.amount):'')+'</td>';
-            rows+='<td style="text-align:right;font-weight:600;color:'+(isRefund?'var(--err)':'var(--ok)')+'">'+payTxt+'</td>';
-            rows+='<td style="text-align:right;padding-right:20px">'+refBtn+'</td></tr>';
+            h+='<tr><td style="font-size:.75rem;color:var(--s500)">'+esc(e.date||'')+'</td>';
+            h+='<td>'+_flatStatus(e.category||e.type,isCharge?'err':isRefund?'err':isPayment?'ok':'warn')+'</td>';
+            h+='<td style="font-size:.8rem">'+esc(e.desc||'')+'</td>';
+            h+='<td style="text-align:right;font-weight:600;color:var(--s800)">'+(isCharge?fm(e.amount):'')+'</td>';
+            h+='<td style="text-align:right;font-weight:600;color:'+(isRefund?'var(--err)':'var(--ok)')+'">'+payTxt+'</td>';
+            h+='<td style="text-align:right">'+refBtn+'</td></tr>';
         });
-        rows+='</tbody></table>';
-        h+=_dpCard('Account Activity',rows,{icon:'list'});
+        h+='</tbody></table></div>';
     }
 
     // Installment schedule if any (non-Monthly-Plan installments, e.g. a
-    // manual payment plan attached at enrollment) — same timeline visual
-    // as the Monthly Plan card below for consistency.
+    // manual payment plan attached at enrollment) — same plain table as
+    // Monthly Plan below, not a separate visual style.
     var installments=l.entries.filter(function(e){return e.type==='installment'});
     if(installments.length){
         var today=new Date().toISOString().split('T')[0];
-        h+=_dpCard('Payment Schedule',_installmentTimelineHtml(installments.map(function(inst){
+        h+='<div style="padding:16px 0;border-bottom:1px solid var(--s100)">';
+        h+='<div style="font-size:.7rem;font-weight:700;color:var(--s500);text-transform:uppercase;letter-spacing:.05em;margin-bottom:8px">Payment Schedule</div>';
+        h+=_installmentTableHtml(installments.map(function(inst){
             var isPastDue=inst.status==='pending'&&inst.date&&inst.date<today;
             return {amount:inst.amount,dueDate:inst.date,status:isPastDue?'failed':inst.status,label:inst.desc||inst.category};
-        })),{icon:'clock'});
+        }));
+        h+='</div>';
     }
 
     // Monthly plan / autopay
     var planHtml=_planCardHtml(l);
-    if(planHtml) h+=planHtml;
+    if(planHtml) h+='<div style="padding-top:16px">'+planHtml+'</div>';
 
+    h+='</div>'; // close outer .me-card
     c.innerHTML=h;
 }
 
-// Shared vertical timeline for installment-style schedules (Monthly Plan
-// and any other per-installment entries) — a connecting line down the left
-// with a colored, status-coded dot per row, instead of a wall of near-
-// identical pill chips that all blur together at a glance.
-function _installmentTimelineHtml(items){
+// Shared plain table for installment-style schedules (Monthly Plan and any
+// other per-installment entries) — Date / Amount / Status columns, same
+// .me-t style as Account Activity, so a schedule reads as one more ledger
+// table rather than a differently-decorated visual element.
+function _installmentTableHtml(items){
     var today=new Date().toISOString().split('T')[0];
-    return '<div style="position:relative;padding-left:4px">'
-        +'<div style="position:absolute;left:9px;top:6px;bottom:6px;width:2px;background:var(--s100)"></div>'
-        +items.map(function(it,i){
-            var overdue=it.status==='failed'||(it.status!=='paid'&&it.dueDate&&it.dueDate<today);
-            var paid=it.status==='paid';
-            var dot=paid?'var(--ok)':overdue?'var(--err)':'var(--s300)';
-            var amtColor=paid?'var(--s400)':overdue?'var(--err)':'var(--s800)';
-            var badge=paid?bdg('Paid','ok'):overdue?bdg('Overdue','err'):bdg('Upcoming','warn');
-            return '<div style="position:relative;display:flex;align-items:center;gap:14px;padding:8px 0 8px 0;'+(i<items.length-1?'':'')+'">'
-                +'<span style="position:relative;z-index:1;width:20px;height:20px;border-radius:50%;background:'+dot+';display:flex;align-items:center;justify-content:center;flex-shrink:0;box-shadow:0 0 0 3px #fff">'
-                +(paid?'<svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg>':'')
-                +'</span>'
-                +'<div style="flex:1;min-width:0;display:flex;justify-content:space-between;align-items:baseline;gap:10px;flex-wrap:wrap">'
-                +'<div><span style="font-weight:700;font-size:.9rem;color:'+amtColor+(paid?';text-decoration:line-through':'')+'">'+fm(it.amount)+'</span>'
-                +'<span style="font-size:.75rem;color:var(--s500);margin-left:8px">'+esc(it.dueDate||'TBD')+(it.label?' · '+esc(it.label):'')+'</span></div>'
-                +badge+'</div></div>';
-        }).join('')
-        +'</div>';
+    var rows=items.map(function(it){
+        var overdue=it.status==='failed'||(it.status!=='paid'&&it.dueDate&&it.dueDate<today);
+        var paid=it.status==='paid';
+        var status=paid?_flatStatus('Paid','ok'):overdue?_flatStatus('Overdue','err'):_flatStatus('Upcoming',null);
+        return '<tr><td style="font-size:.8rem;color:var(--s600)">'+esc(it.dueDate||'TBD')+(it.label?' · '+esc(it.label):'')+'</td>'
+            +'<td style="text-align:right;font-weight:600;color:'+(paid?'var(--s400)':overdue?'var(--err)':'var(--s800)')+(paid?';text-decoration:line-through':'')+'">'+fm(it.amount)+'</td>'
+            +'<td style="text-align:right">'+status+'</td></tr>';
+    }).join('');
+    return '<table class="me-t" style="margin:0"><thead><tr><th>Due</th><th style="text-align:right">Amount</th><th style="text-align:right">Status</th></tr></thead><tbody>'+rows+'</tbody></table>';
 }
 
 function setBillFilter(f){_billFilter=f;_billingPage=1;renderBilling()}
@@ -10873,19 +10897,20 @@ function _planCardHtml(l){
     var f=families[l.famKey]; if(!f||!f.plan||!f.plan.installments||!f.plan.installments.length) return '';
     var pend=f.plan.installments.filter(function(i){return i.status!=='paid'}).sort(function(a,b){return(a.dueDate||'').localeCompare(b.dueDate||'')});
     var next=pend[0];
-    var timeline=_installmentTimelineHtml(f.plan.installments.map(function(i){return{amount:i.amount,dueDate:i.dueDate,status:i.status};}));
-    var autoBadge=f.plan.autopay
-        ?'<span style="font-size:.72rem;font-weight:700;color:var(--ok);background:#ECFDF5;padding:3px 10px;border-radius:999px">● Autopay ON</span>'
-        :'<span style="font-size:.72rem;font-weight:700;color:var(--s400);background:var(--s100);padding:3px 10px;border-radius:999px">○ Autopay off</span>';
+    var table=_installmentTableHtml(f.plan.installments.map(function(i){return{amount:i.amount,dueDate:i.dueDate,status:i.status};}));
+    var autoText=f.plan.autopay
+        ?'<span style="font-size:.75rem;font-weight:700;color:var(--ok)">Autopay on</span>'
+        :'<span style="font-size:.75rem;font-weight:700;color:var(--s400)">Autopay off</span>';
     var nextLine=next
         ?'<div style="font-size:.78rem;color:var(--s500);margin-bottom:12px">Next: <strong style="color:var(--s800)">'+fm(next.amount)+'</strong> due '+esc(next.dueDate)+(f.plan.autopay&&f.cardOnFile?' — auto-charges the payment method on file':(f.plan.autopay?' — autopay on, but no payment method on file yet':''))+'</div>'
-        :'<div style="font-size:.78rem;color:var(--ok);font-weight:600;margin-bottom:12px">All installments paid ✓</div>';
-    var actions='<div style="display:flex;gap:6px;flex-wrap:wrap;margin-top:12px;padding-top:12px;border-top:1px solid var(--s100)">'+
-        '<button class="me-btn me-btn--ghost me-btn--sm" onclick="CampistryMe.toggleFamilyAutopay(\''+je(l.famKey)+'\')">'+(f.plan.autopay?'Turn autopay off':'Turn autopay on')+'</button>'+
+        :'<div style="font-size:.78rem;color:var(--ok);font-weight:600;margin-bottom:12px">All installments paid</div>';
+    var actions='<div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin-top:12px">'+
+        autoText+
+        '<button class="me-btn me-btn--ghost me-btn--sm" onclick="CampistryMe.toggleFamilyAutopay(\''+je(l.famKey)+'\')">'+(f.plan.autopay?'Turn off':'Turn on')+'</button>'+
         '<button class="me-btn me-btn--ghost me-btn--sm" onclick="CampistryMe.monthlyPlan(\''+je(l.famKey)+'\')">Edit plan</button>'+
         '<button class="me-btn me-btn--ghost me-btn--sm" style="color:var(--err)" onclick="CampistryMe.cancelMonthlyPlan(\''+je(l.famKey)+'\')">Cancel plan</button>'+
         '</div>';
-    return _dpCard('Monthly Plan',nextLine+timeline+actions,{icon:'clock',actionHtml:autoBadge});
+    return '<div style="font-size:.7rem;font-weight:700;color:var(--s500);text-transform:uppercase;letter-spacing:.05em;margin-bottom:8px">Monthly Plan</div>'+nextLine+table+actions;
 }
 
 // ═══════════════════════════════════════════════════════════════
