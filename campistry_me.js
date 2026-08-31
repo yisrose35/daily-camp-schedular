@@ -43,7 +43,7 @@ var _prWeek='';          // the week currently open on the Timesheets tab
 var printSheets=[]; // custom printable-sheet templates (columns + grouping)
 var savedReports=[]; // custom/saved reports: { id, name, source, fields, filters, groupBy, format, mode, snapshotRows, ... }
 var curPage='campers', editingCamper=null, editingDiv=null, editingFam=null;
-var _billHighlight=null; // family key to expand/scroll-to/highlight next time Billing renders (set by global search / viewFamilyFromCamper)
+var _familyDetailKey=null; // famKey currently shown on the full-page family/billing detail view (set by viewFamily)
 var _repHighlight=null;  // saved report id to scroll-to/highlight next time Reports renders (set by global search)
 var PAGE_SIZE=50;
 var _rosterPage=1, _billingPage=1, _analyticsInvoicePage=1, _analyticsPaymentPage=1;
@@ -460,7 +460,7 @@ function nav(p){
     // either page: Structure (data-page="structure") also covers Bunk
     // Builder, Reports & Sheets (data-page="reports") also covers Print
     // Sheets, and Roster (data-page="campers") also covers Families.
-    var sidebarKey=(p==='bunkbuilder')?'structure':(p==='printsheets')?'reports':(p==='camperdetail'||p==='staffdetail')?'campers':p;
+    var sidebarKey=(p==='bunkbuilder')?'structure':(p==='printsheets')?'reports':(p==='camperdetail'||p==='staffdetail')?'campers':(p==='familydetail')?'billing':p;
     document.querySelectorAll('.sidebar-item').forEach(function(b){b.classList.toggle('active',b.dataset.page===sidebarKey)});
     document.querySelectorAll('.me-page').forEach(function(pg){pg.classList.toggle('active',pg.id==='page-'+p)});
     render(p);
@@ -490,10 +490,7 @@ function _globalSearchIndex(query){
         var f=families[fk]||{};
         if(!f.name||f.name.toLowerCase().indexOf(q)<0) return;
         pushIfRoom('family',{type:'family',label:f.name,sublabel:(f.camperIds||[]).length+' camper'+((f.camperIds||[]).length!==1?'s':''),
-            open:function(){
-                _billHighlight=fk;
-                nav('billing');
-            }});
+            open:function(){nav('billing');setTimeout(function(){viewFamily(fk)},50);}});
     });
     (payroll.staff||[]).forEach(function(s){
         if(!s||!s.name||s.name.toLowerCase().indexOf(q)<0) return;
@@ -504,8 +501,8 @@ function _globalSearchIndex(query){
         if(!p||!p.family||p.family.toLowerCase().indexOf(q)<0) return;
         pushIfRoom('payment',{type:'payment',label:p.family+' — '+fm(p.amount||0),sublabel:[p.date,p.method].filter(Boolean).join(' · ')||'Payment',
             open:function(){
-                _billHighlight=Object.keys(families).find(function(k){return families[k].name===p.family})||null;
-                nav('billing');
+                var fk=Object.keys(families).find(function(k){return families[k].name===p.family})||null;
+                if(fk){nav('billing');setTimeout(function(){viewFamily(fk)},50);}else nav('billing');
             }});
     });
     savedReports.forEach(function(r){
@@ -853,7 +850,7 @@ function ff(label,id,val,type,opts){
 
 // ═══ RENDERERS ═══════════════════════════════════════════════════
 function render(p){
-    var m={campers:renderCampers,camperdetail:renderCamperDetailPage,staffdetail:renderStaffDetailPage,structure:renderStructure,bunkbuilder:renderBB,registration:renderRegistrationPage,hiring:renderHiringPage,leads:renderLeads,billing:renderBilling,payroll:renderPayroll,analytics:renderAnalytics,reports:renderReports,printsheets:renderPrintSheets};
+    var m={campers:renderCampers,camperdetail:renderCamperDetailPage,staffdetail:renderStaffDetailPage,structure:renderStructure,bunkbuilder:renderBB,registration:renderRegistrationPage,hiring:renderHiringPage,leads:renderLeads,billing:renderBilling,familydetail:renderFamilyDetailPage,payroll:renderPayroll,analytics:renderAnalytics,reports:renderReports,printsheets:renderPrintSheets};
     if(m[p])m[p]();else renderSoon(p);
 }
 
@@ -1210,9 +1207,11 @@ async function deleteFamily(id){
     var ok=await confirmDialog({title:'Delete Family?',message:'<strong>'+esc(nm)+'</strong> will be deleted. Its campers will remain in the roster but be unassigned from this family.',confirmLabel:'Delete',danger:true});
     if(!ok)return;
     var captured=families[id];
+    var wasOnDetailPage=curPage==='familydetail'&&_familyDetailKey===id;
     delete families[id];
-    save();closeModal('familyModal');render(curPage);
-    toast('Family deleted','ok',{actionLabel:'Undo',onAction:function(){families[id]=captured;save();render(curPage);toast('Family restored')}});
+    save();closeModal('familyModal');
+    if(wasOnDetailPage)nav('billing');else render(curPage);
+    toast('Family deleted','ok',{actionLabel:'Undo',onAction:function(){families[id]=captured;save();if(wasOnDetailPage){_familyDetailKey=id;nav('familydetail')}else render(curPage);toast('Family restored')}});
 }
 
 // Pull a single camper out of a family (the camper stays in the roster,
@@ -8854,7 +8853,7 @@ function finRefund(id){
         if(f){f.totalPaid=Math.max(0,(f.totalPaid||0)-amt);f.balance=(f.balance||0)+amt;}
         save();closeModal('dynModal');
         try{renderAnalytics()}catch(e){}
-        try{renderBilling()}catch(e){}
+        try{if(curPage==='familydetail')renderFamilyDetailPage();else renderBilling()}catch(e){}
         toast('Refunded '+fm(amt)+(doStripe?' to card':'')+' for '+(p.family||'family'));
     });
 }
@@ -10138,9 +10137,14 @@ function prExportCSV(){
     toast('Payroll exported');
 }
 
+function viewFamily(famKey){
+    if(!families[famKey])return;
+    _familyDetailKey=famKey;
+    nav('familydetail');
+}
+
 function renderBilling(){
     var c=document.getElementById('page-billing');
-    var highlightKey=_billHighlight; _billHighlight=null;
     var ledgers=buildFamilyLedgers();
     var famList=Object.values(ledgers).sort(function(a,b){return(a.family.name||'').localeCompare(b.family.name||'')});
 
@@ -10200,11 +10204,6 @@ function renderBilling(){
     if(!filtered.length){
         h+='<div class="me-empty"><h3>No accounts match this filter</h3></div>';
     } else {
-        // Jumping to a specific family from search — force onto whichever page it lands on.
-        if(highlightKey){
-            var hIdx=filtered.findIndex(function(l){return l.famKey===highlightKey});
-            if(hIdx>=0)_billingPage=Math.floor(hIdx/PAGE_SIZE)+1;
-        }
         h+='<div id="billingBulkBar" style="display:none;align-items:center;gap:8px;padding:8px 12px;background:var(--me-bg,#eef2ff);border:1px solid var(--s200);border-radius:8px;margin-bottom:8px">'
             +'<span id="billingBulkCount" style="font-weight:700;font-size:.8rem;color:var(--s700)"></span>'
             +'<span style="flex:1"></span>'
@@ -10212,110 +10211,134 @@ function renderBilling(){
             +'</div>';
         var billPaged=_paginate(filtered,PAGE_SIZE,_billingPage);
         billPaged.items.forEach(function(l){
-            var isHighlight=highlightKey&&l.famKey===highlightKey;
+            // A single scannable row per family — click anywhere on it to open
+            // the full-page family/billing detail (renderFamilyDetailPage),
+            // same click-through pattern Roster uses for a camper. This used
+            // to expand inline into the household + ledger + 8 action buttons
+            // right here, which is what made the list feel crowded.
             var statusBadge=l.status==='paid'?bdg('Paid','ok'):l.status==='overdue'?bdg('Overdue','err'):l.status==='partial'?bdg('Partial','warn'):bdg('Pending','warn');
             var camperNames=(l.family.camperIds||[]).concat((l.pendingCamperIds||[]).map(function(n){return n+' (pending)'})).join(', ');
 
-            h+='<div class="me-card" id="billfam-'+je(l.famKey)+'" style="margin-bottom:12px'+(isHighlight?';box-shadow:0 0 0 2px var(--me)':'')+'"><div class="me-card-head" style="cursor:pointer" onclick="this.nextElementSibling.style.display=this.nextElementSibling.style.display===\'none\'?\'block\':\'none\'">';
-            h+='<div style="display:flex;align-items:center;gap:12px;flex:1"><input type="checkbox" class="billing-check" data-famkey="'+esc(l.famKey)+'" onclick="event.stopPropagation();CampistryMe._updateBillingBulkBar()"><h3 style="margin:0">'+esc(l.family.name||'')+'</h3><span style="font-size:.75rem;color:var(--s400)">'+esc(camperNames)+'</span>'+(l.pendingEnrollment?bdg('Accepted — pending enrollment','warn'):'')+'</div>';
-            h+='<div style="display:flex;align-items:center;gap:10px">'+statusBadge;
+            h+='<div class="me-card" id="billfam-'+je(l.famKey)+'" style="margin-bottom:10px;cursor:pointer" onclick="CampistryMe.viewFamily(\''+je(l.famKey)+'\')">';
+            h+='<div style="display:flex;align-items:center;gap:12px">';
+            h+='<input type="checkbox" class="billing-check" data-famkey="'+esc(l.famKey)+'" onclick="event.stopPropagation();CampistryMe._updateBillingBulkBar()">';
+            h+='<div style="flex:1;min-width:0"><h3 style="margin:0">'+esc(l.family.name||'')+'</h3><span style="font-size:.75rem;color:var(--s400)">'+esc(camperNames)+'</span>'+(l.pendingEnrollment?' '+bdg('Accepted — pending enrollment','warn'):'')+'</div>';
+            h+='<div style="display:flex;align-items:center;gap:10px;flex-shrink:0">'+statusBadge;
             h+='<span style="font-size:1rem;font-weight:800;color:'+(l.balance>0?'var(--err)':'var(--ok)')+'">'+fm(l.balance)+'</span>';
-            h+='<span style="font-size:.7rem;color:var(--s400)">▼</span></div>';
-            h+='</div>';
-
-            // Ledger (collapsed by default, expanded when jumped to from search)
-            h+='<div style="display:'+(isHighlight?'block':'none')+';padding:0">';
-
-            // Ledger summary bar
-            h+='<div style="display:flex;gap:16px;padding:10px 16px;background:var(--s50);border-bottom:1px solid var(--s100);font-size:.75rem">';
-            h+='<span>Charges: <strong>'+fm(l.totalCharges)+'</strong></span>';
-            h+='<span>Payments: <strong style="color:var(--ok)">'+fm(l.totalPayments)+'</strong></span>';
-            if(l.totalCredits>0) h+='<span>Credits: <strong style="color:var(--purple)">'+fm(l.totalCredits)+'</strong></span>';
-            h+='<span style="margin-left:auto">Balance: <strong style="color:'+(l.balance>0?'var(--err)':'var(--ok)')+'">'+fm(l.balance)+'</strong></span>';
-            h+='</div>';
-
-            // Household — parents/address/siblings, same block the old
-            // standalone Families page used to show. Lives here now since
-            // this IS the household record (a family only ever exists to
-            // share one bill).
-            h+='<div style="padding:10px 16px;border-bottom:1px solid var(--s100)">';
-            h+='<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px"><span style="font-size:.7rem;font-weight:700;color:var(--s500);text-transform:uppercase">Household</span><span style="display:flex;gap:4px"><button class="me-btn me-btn--ghost me-btn--sm" onclick="CampistryMe.editFamily(\''+je(l.famKey)+'\')">Edit</button><button class="me-btn me-btn--ghost me-btn--sm" style="color:var(--err)" onclick="CampistryMe.deleteFamily(\''+je(l.famKey)+'\')">Delete</button></span></div>';
-            h+=_famHouseholdHtml(l.famKey,l.family);
-            h+='</div>';
-
-            // Ledger entries table
-            if(l.entries.length){
-                h+='<table class="me-t" style="margin:0"><thead><tr><th>Date</th><th>Type</th><th>Description</th><th style="text-align:right">Charge</th><th style="text-align:right">Payment</th><th>Status</th></tr></thead><tbody>';
-                var runBal=0;
-                l.entries.forEach(function(e){
-                    if(e.type==='installment') return; // show in detail only
-                    var isCharge=e.type==='charge';
-                    var isPayment=e.type==='payment';
-                    var isCredit=e.type==='credit';
-                    var isRefund=isPayment&&e.amount<0;
-                    if(isCharge) runBal+=e.amount;
-                    if(isPayment||isCredit) runBal-=e.amount;
-                    var payTxt=(isPayment||isCredit)?(isRefund?'−'+fm(Math.abs(e.amount)):fm(e.amount)):'';
-                    var refBtn=(isPayment&&e.amount>0&&e.ref)?'<button class="me-btn me-btn--ghost me-btn--sm" title="Refund this payment" onclick="CampistryMe.finRefund(\''+je(String(e.ref))+'\')">↩</button>':'';
-                    h+='<tr><td style="font-size:.75rem;color:var(--s500)">'+esc(e.date||'')+'</td>';
-                    h+='<td>'+bdg(e.category||e.type,isCharge?'err':isRefund?'err':isPayment?'ok':'warn')+'</td>';
-                    h+='<td style="font-size:.8rem">'+esc(e.desc||'')+'</td>';
-                    h+='<td style="text-align:right;font-weight:600;color:var(--s800)">'+(isCharge?fm(e.amount):'')+'</td>';
-                    h+='<td style="text-align:right;font-weight:600;color:'+(isRefund?'var(--err)':'var(--ok)')+'">'+payTxt+'</td>';
-                    h+='<td style="text-align:right">'+refBtn+'</td></tr>';
-                });
-                h+='</tbody></table>';
-            }
-
-            // Installment schedule if any
-            var installments=l.entries.filter(function(e){return e.type==='installment'});
-            if(installments.length){
-                h+='<div style="padding:10px 16px;border-top:1px solid var(--s100)"><div style="font-size:.75rem;font-weight:700;color:var(--s500);text-transform:uppercase;margin-bottom:6px">Payment Schedule</div>';
-                h+='<div style="display:grid;gap:6px">';
-                var today=new Date().toISOString().split('T')[0];
-                installments.forEach(function(inst){
-                    var isPastDue=inst.status==='pending'&&inst.date&&inst.date<today;
-                    var bg=inst.status==='paid'?'var(--ok)':isPastDue?'var(--err)':'var(--s300)';
-                    h+='<div style="display:flex;align-items:center;gap:10px;padding:6px 10px;border-radius:6px;background:var(--s50);font-size:.8rem">';
-                    h+='<span style="width:8px;height:8px;border-radius:50%;background:'+bg+';flex-shrink:0"></span>';
-                    h+='<span style="flex:1;font-weight:500">'+esc(inst.desc||inst.category)+'</span>';
-                    h+='<span style="font-size:.75rem;color:var(--s500)">Due: '+esc(inst.date||'TBD')+'</span>';
-                    h+='<span style="font-weight:700">'+fm(inst.amount)+'</span>';
-                    h+=bdg(isPastDue?'Past Due':inst.status==='paid'?'Paid':'Pending',isPastDue?'err':inst.status==='paid'?'ok':'warn');
-                    h+='</div>';
-                });
-                h+='</div></div>';
-            }
-
-            // Monthly plan / autopay
-            h+=_planCardHtml(l);
-
-            // Quick actions
-            var hasCard=families[l.famKey]?.cardOnFile;
-            h+='<div style="display:flex;gap:6px;padding:10px 16px;border-top:1px solid var(--s100);flex-wrap:wrap">';
-            h+='<button class="me-btn me-btn--pri me-btn--sm" onclick="CampistryMe.openPaymentForFamily(\''+je(l.famKey)+'\')">Record Payment</button>';
-            h+='<button class="me-btn me-btn--sec me-btn--sm" onclick="CampistryMe.sendPayLink(\''+je(l.famKey)+'\')">💳 Pay Link</button>';
-            var _fam=families[l.famKey];
-            if(!(_fam&&_fam.plan&&_fam.plan.installments&&_fam.plan.installments.length)) h+='<button class="me-btn me-btn--sec me-btn--sm" onclick="CampistryMe.monthlyPlan(\''+je(l.famKey)+'\')">📆 Monthly Plan</button>';
-            if(hasCard&&l.balance>0) h+='<button class="me-btn me-btn--pri me-btn--sm" style="background:var(--purple)" onclick="CampistryMe.chargeStoredCard(\''+je(l.famKey)+'\')">⚡ Charge Card</button>';
-            if(!hasCard) h+='<button class="me-btn me-btn--sec me-btn--sm" onclick="CampistryMe.requestCardSetup(\''+je(l.famKey)+'\')">💳 Save Card</button>';
-            else h+='<span style="font-size:.7rem;color:var(--ok);font-weight:600;padding:4px 8px;align-self:center">💳 Card on file</span>';
-            h+='<button class="me-btn me-btn--sec me-btn--sm" onclick="CampistryMe.addChargeForFamily(\''+je(l.famKey)+'\')">Add Charge</button>';
-            h+='<button class="me-btn me-btn--sec me-btn--sm" onclick="CampistryMe.issueCreditForFamily(\''+je(l.famKey)+'\')">Issue Credit</button>';
-            h+='<button class="me-btn me-btn--ghost me-btn--sm" onclick="CampistryMe.printStatement(\''+je(l.famKey)+'\')">Print Statement</button>';
-            h+='<button class="me-btn me-btn--ghost me-btn--sm" onclick="CampistryMe.toggleBillingAccess(\''+je(l.famKey)+'\')">'+(families[l.famKey]?.billingAccessClosed?'Reopen billing access':'Close billing access')+'</button>';
-            h+='</div>';
-
-            h+='</div></div>'; // end collapsed, end card
+            h+='<span style="font-size:1rem;color:var(--s300)">›</span></div>';
+            h+='</div></div>';
         });
         h+=_pagerHtml(filtered.length,PAGE_SIZE,_billingPage,'setBillingPage');
     }
 
     c.innerHTML=h;
-    if(highlightKey){
-        var hEl=document.getElementById('billfam-'+highlightKey);
-        if(hEl)hEl.scrollIntoView({behavior:'smooth',block:'center'});
+}
+
+// Full-page family/billing detail — replaces the old inline-accordion body
+// that used to expand under a family's row in renderBilling() (household +
+// ledger table + 8 action buttons all crammed into one card). Same
+// full-page-on-click pattern as renderCamperDetailPage()/
+// renderStaffDetailPage(): opened via viewFamily(famKey), navigated by
+// nav('familydetail'), back button returns to nav('billing').
+function renderFamilyDetailPage(){
+    var c=document.getElementById('page-familydetail');
+    if(!c)return;
+    var famKey=_familyDetailKey;
+    var ledgers=buildFamilyLedgers();
+    var l=famKey?ledgers[famKey]:null;
+    if(!l){
+        c.innerHTML='<div class="me-empty"><h3>Family not found</h3><p>They may have been deleted or merged into another household.</p><button class="me-btn me-btn--sec" onclick="CampistryMe.nav(\'billing\')">← Back to Billing</button></div>';
+        return;
     }
+    var statusBadge=l.status==='paid'?bdg('Paid','ok'):l.status==='overdue'?bdg('Overdue','err'):l.status==='partial'?bdg('Partial','warn'):bdg('Pending','warn');
+    var camperNames=(l.family.camperIds||[]).concat((l.pendingCamperIds||[]).map(function(n){return n+' (pending)'})).join(', ');
+
+    var h='<button class="me-btn me-btn--ghost me-btn--sm" style="margin-bottom:10px" onclick="CampistryMe.nav(\'billing\')">← Back to Billing</button>';
+    h+='<div class="sec-hd"><div>'
+        +'<h2 class="sec-title">'+esc(l.family.name||'')+'</h2>'
+        +'<p class="sec-desc">'+esc(camperNames)+(l.pendingEnrollment?' · '+bdg('Accepted — pending enrollment','warn'):'')+'</p>'
+        +'</div><div class="sec-actions">'+statusBadge
+        +'<span style="font-size:1.3rem;font-weight:800;color:'+(l.balance>0?'var(--err)':'var(--ok)')+'">'+fm(l.balance)+'</span>'
+        +'</div></div>';
+
+    // Ledger summary bar
+    h+='<div class="me-card" style="display:flex;gap:16px;font-size:.8rem">';
+    h+='<span>Charges: <strong>'+fm(l.totalCharges)+'</strong></span>';
+    h+='<span>Payments: <strong style="color:var(--ok)">'+fm(l.totalPayments)+'</strong></span>';
+    if(l.totalCredits>0) h+='<span>Credits: <strong style="color:var(--purple)">'+fm(l.totalCredits)+'</strong></span>';
+    h+='<span style="margin-left:auto">Balance: <strong style="color:'+(l.balance>0?'var(--err)':'var(--ok)')+'">'+fm(l.balance)+'</strong></span>';
+    h+='</div>';
+
+    // Quick actions — up near the top now (this page's whole reason for
+    // existing is these buttons), not buried below a full ledger table.
+    var hasCard=families[l.famKey]?.cardOnFile;
+    h+='<div class="me-card" style="display:flex;gap:6px;flex-wrap:wrap">';
+    h+='<button class="me-btn me-btn--pri me-btn--sm" onclick="CampistryMe.openPaymentForFamily(\''+je(l.famKey)+'\')">Record Payment</button>';
+    h+='<button class="me-btn me-btn--sec me-btn--sm" onclick="CampistryMe.sendPayLink(\''+je(l.famKey)+'\')">💳 Pay Link</button>';
+    var _fam=families[l.famKey];
+    if(!(_fam&&_fam.plan&&_fam.plan.installments&&_fam.plan.installments.length)) h+='<button class="me-btn me-btn--sec me-btn--sm" onclick="CampistryMe.monthlyPlan(\''+je(l.famKey)+'\')">📆 Monthly Plan</button>';
+    if(hasCard&&l.balance>0) h+='<button class="me-btn me-btn--pri me-btn--sm" style="background:var(--purple)" onclick="CampistryMe.chargeStoredCard(\''+je(l.famKey)+'\')">⚡ Charge Card</button>';
+    if(!hasCard) h+='<button class="me-btn me-btn--sec me-btn--sm" onclick="CampistryMe.requestCardSetup(\''+je(l.famKey)+'\')">💳 Save Card</button>';
+    else h+='<span style="font-size:.7rem;color:var(--ok);font-weight:600;padding:4px 8px;align-self:center">💳 Card on file</span>';
+    h+='<button class="me-btn me-btn--sec me-btn--sm" onclick="CampistryMe.addChargeForFamily(\''+je(l.famKey)+'\')">Add Charge</button>';
+    h+='<button class="me-btn me-btn--sec me-btn--sm" onclick="CampistryMe.issueCreditForFamily(\''+je(l.famKey)+'\')">Issue Credit</button>';
+    h+='<button class="me-btn me-btn--ghost me-btn--sm" onclick="CampistryMe.printStatement(\''+je(l.famKey)+'\')">Print Statement</button>';
+    h+='<button class="me-btn me-btn--ghost me-btn--sm" onclick="CampistryMe.toggleBillingAccess(\''+je(l.famKey)+'\')">'+(families[l.famKey]?.billingAccessClosed?'Reopen billing access':'Close billing access')+'</button>';
+    h+='</div>';
+
+    // Household — parents/address/siblings.
+    h+='<div class="me-card">';
+    h+='<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px"><span style="font-size:.7rem;font-weight:700;color:var(--s500);text-transform:uppercase">Household</span><span style="display:flex;gap:4px"><button class="me-btn me-btn--ghost me-btn--sm" onclick="CampistryMe.editFamily(\''+je(l.famKey)+'\')">Edit</button><button class="me-btn me-btn--ghost me-btn--sm" style="color:var(--err)" onclick="CampistryMe.deleteFamily(\''+je(l.famKey)+'\')">Delete</button></span></div>';
+    h+=_famHouseholdHtml(l.famKey,l.family);
+    h+='</div>';
+
+    // Ledger entries table
+    if(l.entries.length){
+        h+='<div class="me-card" style="padding:0;overflow:hidden">';
+        h+='<table class="me-t" style="margin:0"><thead><tr><th>Date</th><th>Type</th><th>Description</th><th style="text-align:right">Charge</th><th style="text-align:right">Payment</th><th>Status</th></tr></thead><tbody>';
+        l.entries.forEach(function(e){
+            if(e.type==='installment') return; // show in the schedule card below
+            var isCharge=e.type==='charge';
+            var isPayment=e.type==='payment';
+            var isCredit=e.type==='credit';
+            var isRefund=isPayment&&e.amount<0;
+            var payTxt=(isPayment||isCredit)?(isRefund?'−'+fm(Math.abs(e.amount)):fm(e.amount)):'';
+            var refBtn=(isPayment&&e.amount>0&&e.ref)?'<button class="me-btn me-btn--ghost me-btn--sm" title="Refund this payment" onclick="CampistryMe.finRefund(\''+je(String(e.ref))+'\')">↩</button>':'';
+            h+='<tr><td style="font-size:.75rem;color:var(--s500)">'+esc(e.date||'')+'</td>';
+            h+='<td>'+bdg(e.category||e.type,isCharge?'err':isRefund?'err':isPayment?'ok':'warn')+'</td>';
+            h+='<td style="font-size:.8rem">'+esc(e.desc||'')+'</td>';
+            h+='<td style="text-align:right;font-weight:600;color:var(--s800)">'+(isCharge?fm(e.amount):'')+'</td>';
+            h+='<td style="text-align:right;font-weight:600;color:'+(isRefund?'var(--err)':'var(--ok)')+'">'+payTxt+'</td>';
+            h+='<td style="text-align:right">'+refBtn+'</td></tr>';
+        });
+        h+='</tbody></table></div>';
+    }
+
+    // Installment schedule if any
+    var installments=l.entries.filter(function(e){return e.type==='installment'});
+    if(installments.length){
+        h+='<div class="me-card"><div style="font-size:.75rem;font-weight:700;color:var(--s500);text-transform:uppercase;margin-bottom:6px">Payment Schedule</div>';
+        h+='<div style="display:grid;gap:6px">';
+        var today=new Date().toISOString().split('T')[0];
+        installments.forEach(function(inst){
+            var isPastDue=inst.status==='pending'&&inst.date&&inst.date<today;
+            var bg=inst.status==='paid'?'var(--ok)':isPastDue?'var(--err)':'var(--s300)';
+            h+='<div style="display:flex;align-items:center;gap:10px;padding:6px 10px;border-radius:6px;background:var(--s50);font-size:.8rem">';
+            h+='<span style="width:8px;height:8px;border-radius:50%;background:'+bg+';flex-shrink:0"></span>';
+            h+='<span style="flex:1;font-weight:500">'+esc(inst.desc||inst.category)+'</span>';
+            h+='<span style="font-size:.75rem;color:var(--s500)">Due: '+esc(inst.date||'TBD')+'</span>';
+            h+='<span style="font-weight:700">'+fm(inst.amount)+'</span>';
+            h+=bdg(isPastDue?'Past Due':inst.status==='paid'?'Paid':'Pending',isPastDue?'err':inst.status==='paid'?'ok':'warn');
+            h+='</div>';
+        });
+        h+='</div></div>';
+    }
+
+    // Monthly plan / autopay
+    var planHtml=_planCardHtml(l);
+    if(planHtml) h+='<div class="me-card">'+planHtml+'</div>';
+
+    c.innerHTML=h;
 }
 
 function setBillFilter(f){_billFilter=f;_billingPage=1;renderBilling()}
@@ -10394,7 +10417,7 @@ function openPaymentForFamily(famKey){
         finPayments.push({id:'pay_'+Date.now(),family:f.name,familyKey:fk,amount:amt,date:date,method:method,reference:ref,notes:notes,timestamp:Date.now()});
         f.totalPaid=(f.totalPaid||0)+amt;
         f.balance=Math.max(0,(f.balance||0)-amt);
-        save();closeModal('dynModal');renderBilling();toast('Payment of '+fm(amt)+' recorded for '+f.name);
+        save();closeModal('dynModal');if(curPage==='familydetail')renderFamilyDetailPage();else renderBilling();toast('Payment of '+fm(amt)+' recorded for '+f.name);
     });
 }
 
@@ -10431,7 +10454,7 @@ function addChargeForFamily(famKey){
         if(!f.charges) f.charges=[];
         f.charges.push({id:'chg_'+Date.now(),category:document.getElementById('chgCategory').value,description:document.getElementById('chgDesc').value.trim(),amount:amt,date:document.getElementById('chgDate').value,timestamp:Date.now()});
         f.balance=(f.balance||0)+amt;
-        save();closeModal('dynModal');renderBilling();toast('Charge of '+fm(amt)+' added to '+f.name);
+        save();closeModal('dynModal');if(curPage==='familydetail')renderFamilyDetailPage();else renderBilling();toast('Charge of '+fm(amt)+' added to '+f.name);
     });
 }
 
@@ -10462,7 +10485,7 @@ function issueCreditForFamily(famKey){
         if(!f.credits) f.credits=[];
         f.credits.push({id:'cr_'+Date.now(),reason:document.getElementById('crReason').value.trim(),amount:amt,date:new Date().toISOString().split('T')[0],timestamp:Date.now()});
         f.balance=Math.max(0,(f.balance||0)-amt);
-        save();closeModal('dynModal');renderBilling();toast('Credit of '+fm(amt)+' issued to '+f.name);
+        save();closeModal('dynModal');if(curPage==='familydetail')renderFamilyDetailPage();else renderBilling();toast('Credit of '+fm(amt)+' issued to '+f.name);
     });
 }
 
@@ -10511,14 +10534,14 @@ async function removePayment(idx){
         var f=Object.values(families).find(function(f){return f.name===p.family});
         if(f){f.totalPaid=Math.max(0,(f.totalPaid||0)-p.amount);f.balance=(f.balance||0)+p.amount}
     }
-    finPayments.splice(idx,1);save();renderBilling();
+    finPayments.splice(idx,1);save();if(curPage==='familydetail')renderFamilyDetailPage();else renderBilling();
     toast('Payment removed','ok',{actionLabel:'Undo',onAction:function(){
         if(captured){
             var f=Object.values(families).find(function(f){return f.name===captured.family});
             if(f){f.totalPaid=(f.totalPaid||0)+captured.amount;f.balance=Math.max(0,(f.balance||0)-captured.amount)}
             finPayments.splice(idx,0,captured);
         }
-        save();renderBilling();toast('Payment restored');
+        save();if(curPage==='familydetail')renderFamilyDetailPage();else renderBilling();toast('Payment restored');
     }});
 }
 
@@ -10664,7 +10687,7 @@ function initStripeElements(pk,clientSecret,famKey){
             }
             save();
             closeModal('dynModal');
-            renderBilling();
+            if(curPage==='familydetail')renderFamilyDetailPage();else renderBilling();
             toast('Card saved for '+f.name+'!');
         }
     };
@@ -10727,7 +10750,7 @@ async function chargeStoredCard(famKey,amount,description){
             });
             f.totalPaid=(f.totalPaid||0)+amount;
             f.balance=Math.max(0,(f.balance||0)-amount);
-            save();renderBilling();
+            save();if(curPage==='familydetail')renderFamilyDetailPage();else renderBilling();
             toast('Charged '+fm(amount)+' to '+f.name+' — payment succeeded!');
         }else{
             toast('Payment status: '+result.status,'error');
@@ -10892,21 +10915,21 @@ function monthlyPlan(famKey){
             insts.push({n:i+1,amount:amt,dueDate:due.toISOString().split('T')[0],status:'pending',paymentId:null});
         }
         f.plan={installments:insts,autopay:!!auto,total:total,createdAt:new Date().toISOString()};
-        save();closeModal('dynModal');renderBilling();
+        save();closeModal('dynModal');if(curPage==='familydetail')renderFamilyDetailPage();else renderBilling();
         toast('Monthly plan created — '+months+' payment'+(months>1?'s':'')+(auto?', autopay on':''));
     });
 }
 function toggleFamilyAutopay(famKey){
     var f=families[famKey]; if(!f||!f.plan)return;
     if(!f.cardOnFile&&!f.plan.autopay){toast('Save a card on file first','error');return}
-    f.plan.autopay=!f.plan.autopay; save();renderBilling();
+    f.plan.autopay=!f.plan.autopay; save();if(curPage==='familydetail')renderFamilyDetailPage();else renderBilling();
     toast('Autopay '+(f.plan.autopay?'ON':'off')+' for '+f.name);
 }
 async function cancelMonthlyPlan(famKey){
     var f=families[famKey]; if(!f||!f.plan)return;
     var ok=await confirmDialog({title:'Cancel Monthly Plan?',message:'Cancel the monthly plan for '+f.name+'? Payments already made stay on the ledger.',confirmLabel:'Cancel Plan',danger:true});
     if(!ok)return;
-    delete f.plan; save();renderBilling();toast('Monthly plan cancelled');
+    delete f.plan; save();if(curPage==='familydetail')renderFamilyDetailPage();else renderBilling();toast('Monthly plan cancelled');
 }
 function _planCardHtml(l){
     var f=families[l.famKey]; if(!f||!f.plan||!f.plan.installments||!f.plan.installments.length) return '';
@@ -12972,6 +12995,7 @@ window.CampistryMe={
     finExportXero:finExportXero,finExportJournal:finExportJournal,finImportCSV:finImportCSV,
     _pickColor:_pickColor,_addGradeRow:_addGradeRow,
     // Billing — family ledger system
+    viewFamily:viewFamily,renderFamilyDetailPage:renderFamilyDetailPage,
     openPaymentModal:openPaymentModal,openPaymentForFamily:openPaymentForFamily,removePayment:removePayment,
     addCharge:addCharge,addChargeForFamily:addChargeForFamily,
     issueCredit:issueCredit,issueCreditForFamily:issueCreditForFamily,
