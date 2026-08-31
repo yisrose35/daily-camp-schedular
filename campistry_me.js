@@ -8974,9 +8974,17 @@ var _billFilter='all'; // all, outstanding, paid, overdue
 
 function buildFamilyLedgers(){
     // Build a complete ledger for each family from all data sources
-    var ledgers={}; // famKey → {family, entries[], totalCharges, totalPayments, totalCredits, balance}
+    // totalPayments is NET of refunds (a negative payment entry) — this is
+    // the figure the balance formula and every other consumer (dashboard
+    // totals, CSV export, Analytics) uses as "actually collected." For
+    // display, totalGrossPayments (money actually charged, before any
+    // refund) and totalRefunds (money given back) are tracked separately
+    // so the family detail page can show them apart instead of silently
+    // netting one against the other — that's what made the numbers hard
+    // to follow. totalGrossPayments - totalRefunds === totalPayments.
+    var ledgers={}; // famKey → {family, entries[], totalCharges, totalPayments, totalGrossPayments, totalRefunds, totalCredits, balance}
     Object.entries(families).forEach(function([fk,f]){
-        ledgers[fk]={family:f,famKey:fk,entries:[],totalCharges:0,totalPayments:0,totalCredits:0,balance:0};
+        ledgers[fk]={family:f,famKey:fk,entries:[],totalCharges:0,totalPayments:0,totalGrossPayments:0,totalRefunds:0,totalCredits:0,balance:0};
     });
 
     // 1. Tuition charges from enrollments — including 'accepted' applications
@@ -9006,7 +9014,7 @@ function buildFamilyLedgers(){
                     camperIds:[e.camperName],
                     balance:0,totalPaid:0
                 };
-                ledgers[fk]={family:synthFamily,famKey:fk,entries:[],totalCharges:0,totalPayments:0,totalCredits:0,balance:0,pendingEnrollment:true};
+                ledgers[fk]={family:synthFamily,famKey:fk,entries:[],totalCharges:0,totalPayments:0,totalGrossPayments:0,totalRefunds:0,totalCredits:0,balance:0,pendingEnrollment:true};
             }
         }
         if(!ledgers[fk])return;
@@ -9084,9 +9092,20 @@ function buildFamilyLedgers(){
         });
         if(!fk) return;
         if(!ledgers[fk]) return;
+        var amt=Number(p.amount)||0;
+        var isRefund=amt<0;
         var _notCollected=(p.status==='pending'||p.status==='failed');
-        ledgers[fk].entries.push({type:'payment',category:_payLabel(p.method)||'Payment',desc:p.notes||'Payment received',amount:Number(p.amount)||0,date:p.date||'',ref:p.id||'',status:p.status||''});
-        if(!_notCollected) ledgers[fk].totalPayments+=Number(p.amount)||0;
+        // A refund's method is stored as the literal string 'Refund', which
+        // _payLabel()/normalizeLegacy() has no entry for and falls back to
+        // "Other" — indistinguishable from an actual Other-category charge.
+        // Label it explicitly instead of routing it through the payment-
+        // method catalogue.
+        ledgers[fk].entries.push({type:'payment',category:isRefund?'Refund':(_payLabel(p.method)||'Payment'),desc:p.notes||(isRefund?'Refund issued':'Payment received'),amount:amt,date:p.date||'',ref:p.id||'',status:p.status||''});
+        if(!_notCollected){
+            ledgers[fk].totalPayments+=amt;
+            if(isRefund) ledgers[fk].totalRefunds+=Math.abs(amt);
+            else ledgers[fk].totalGrossPayments+=amt;
+        }
     });
 
     // 4. Compute balances and sort entries
@@ -10238,12 +10257,18 @@ function renderFamilyDetailPage(){
         +'<div style="font-size:1.5rem;font-weight:700;line-height:1.1;color:'+(l.balance>0?'var(--err)':'var(--ok)')+'">'+fm(l.balance)+'</div></div>';
     h+='</div>';
 
-    // Plain summary line — Charges / Payments / Credits, no tinted tiles.
-    h+='<div style="font-size:.82rem;color:var(--s600);padding-bottom:14px;border-bottom:1px solid var(--s100)">'
+    // Plain summary line — Charges / Payments (gross, before any refund) /
+    // Credits / Refunds, no tinted tiles. Payments is shown GROSS here
+    // (what actually got charged) rather than net-of-refunds, with Refunds
+    // broken out as its own figure — netting them silently into one
+    // "Payments" number is exactly what made the balance hard to follow.
+    h+='<div style="font-size:.82rem;color:var(--s600)">'
         +'Charges <strong style="color:var(--s800)">'+fm(l.totalCharges)+'</strong>'
-        +' &nbsp;·&nbsp; Payments <strong style="color:var(--ok)">'+fm(l.totalPayments)+'</strong>'
+        +' &nbsp;·&nbsp; Payments <strong style="color:var(--ok)">'+fm(l.totalGrossPayments)+'</strong>'
         +(l.totalCredits>0?' &nbsp;·&nbsp; Credits <strong style="color:var(--purple)">'+fm(l.totalCredits)+'</strong>':'')
+        +(l.totalRefunds>0?' &nbsp;·&nbsp; Refunds <strong style="color:var(--err)">'+fm(l.totalRefunds)+'</strong>':'')
         +'</div>';
+    h+='<div style="font-size:.7rem;color:var(--s400);padding-bottom:14px;border-bottom:1px solid var(--s100)">Balance = Charges − Payments − Credits'+(l.totalRefunds>0?' + Refunds':'')+'</div>';
 
     // Action bar — one primary action plus a single "More" menu, instead of
     // 8 buttons in a row. Payment-method status is plain text, not a pill.
@@ -10275,19 +10300,24 @@ function renderFamilyDetailPage(){
     if(l.entries.length){
         h+='<div style="padding:16px 0;border-bottom:1px solid var(--s100)">';
         h+='<div style="font-size:.7rem;font-weight:700;color:var(--s500);text-transform:uppercase;letter-spacing:.05em;margin-bottom:8px">Account Activity</div>';
-        h+='<table class="me-t" style="margin:0"><thead><tr><th>Date</th><th>Type</th><th>Description</th><th style="text-align:right">Charge</th><th style="text-align:right">Payment</th></tr></thead><tbody>';
+        // Four separate money columns instead of collapsing Payment/Credit/
+        // Refund into one "Payment" column distinguished only by the Type
+        // badge — each entry fills exactly one column, so reading down (or
+        // summing) any column matches the totals in the line above.
+        h+='<table class="me-t" style="margin:0"><thead><tr><th>Date</th><th>Type</th><th>Description</th><th style="text-align:right">Charge</th><th style="text-align:right">Payment</th><th style="text-align:right">Credit</th><th style="text-align:right">Refund</th></tr></thead><tbody>';
         l.entries.forEach(function(e){
             if(e.type==='installment') return; // shown in Monthly Plan below
             var isCharge=e.type==='charge';
-            var isPayment=e.type==='payment';
+            var isRefund=e.type==='payment'&&e.amount<0;
+            var isPayment=e.type==='payment'&&!isRefund;
             var isCredit=e.type==='credit';
-            var isRefund=isPayment&&e.amount<0;
-            var payTxt=(isPayment||isCredit)?(isRefund?'−'+fm(Math.abs(e.amount)):fm(e.amount)):'';
             h+='<tr><td style="font-size:.75rem;color:var(--s500)">'+esc(e.date||'')+'</td>';
             h+='<td>'+_flatStatus(e.category||e.type,isCharge?'err':isRefund?'err':isPayment?'ok':'warn')+'</td>';
             h+='<td style="font-size:.8rem">'+esc(e.desc||'')+'</td>';
             h+='<td style="text-align:right;font-weight:600;color:var(--s800)">'+(isCharge?fm(e.amount):'')+'</td>';
-            h+='<td style="text-align:right;font-weight:600;color:'+(isRefund?'var(--err)':'var(--ok)')+'">'+payTxt+'</td></tr>';
+            h+='<td style="text-align:right;font-weight:600;color:var(--ok)">'+(isPayment?fm(e.amount):'')+'</td>';
+            h+='<td style="text-align:right;font-weight:600;color:var(--purple)">'+(isCredit?fm(e.amount):'')+'</td>';
+            h+='<td style="text-align:right;font-weight:600;color:var(--err)">'+(isRefund?fm(Math.abs(e.amount)):'')+'</td></tr>';
         });
         h+='</tbody></table></div>';
     }
