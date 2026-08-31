@@ -892,6 +892,76 @@ window.refundCanteenDeposit = function() {
         });
 };
 
+// ── Refund All — every camper's leftover Stripe-paid balance in one go ─────
+// Client-side preview mirrors the edge function's own math exactly (walletAvailable
+// vs stripeCapacity) so the confirm screen shows a real number, not a guess —
+// the server is still the one that actually decides/executes it.
+function _refundAllPreview() {
+    var total = 0, count = 0;
+    (camperList || []).forEach(function(c) {
+        var a = getAccount(c.name);
+        var walletAvailable = Math.max(0, Math.round((a.balance - (a.balanceFloor || 0)) * 100) / 100);
+        var capacity = _stripeRefundCapacity(c.name);
+        var amt = Math.round(Math.min(walletAvailable, capacity) * 100) / 100;
+        if (amt > 0) { total = Math.round((total + amt) * 100) / 100; count++; }
+    });
+    return { total: total, count: count };
+}
+
+window.openRefundAllModal = function() {
+    if (!_secEdit('accounts', 'Refunding all canteen balances')) return;
+    var body = document.getElementById('refundAllBody');
+    var btn = document.getElementById('refundAllBtn');
+    var resultEl = document.getElementById('refundAllResult');
+    if (resultEl) resultEl.style.display = 'none';
+    var preview = _refundAllPreview();
+    if (!body) return;
+    if (!preview.count) {
+        body.innerHTML = '<p>No campers currently have a Stripe-paid balance to refund.</p>';
+        if (btn) btn.style.display = 'none';
+    } else {
+        body.innerHTML =
+            '<p>This will refund <strong>' + preview.count + ' camper' + (preview.count === 1 ? '' : 's') +
+            '</strong>, totaling approximately <strong>$' + preview.total.toFixed(2) + '</strong> — sent back to whatever each parent originally paid with.</p>' +
+            '<p style="color:var(--text-muted);">Only Stripe-paid deposits are included. A balance that came entirely from a cash/manual deposit is skipped — refund that by hand.</p>' +
+            '<p style="color:var(--red-600);font-weight:600;">This cannot be undone.</p>';
+        if (btn) { btn.style.display = ''; btn.disabled = false; btn.textContent = 'Refund All ($' + preview.total.toFixed(2) + ')'; }
+    }
+    openM('refundall');
+};
+
+window.refundAllCanteenDeposits = function() {
+    if (!_secEdit('accounts', 'Refunding all canteen balances')) return;
+    var btn = document.getElementById('refundAllBtn');
+    var resultEl = document.getElementById('refundAllResult');
+    var db = window.CampistryDB;
+    var client = db && db.client;
+    if (!client) { toast('Not signed in', 1); return; }
+    if (btn) { btn.disabled = true; btn.textContent = 'Refunding everyone…'; }
+    if (resultEl) resultEl.style.display = 'none';
+    client.functions.invoke('stripe-canteen-refund-all', { body: {} })
+        .then(async function(res) {
+            var data = res && res.data;
+            var hasError = !!(res && res.error) || !!(data && data.error);
+            var err = hasError ? await _edgeFnErrorMessage(res) : null;
+            if (err) {
+                if (btn) { btn.disabled = false; btn.textContent = 'Try Again'; }
+                if (resultEl) { resultEl.style.display = ''; resultEl.style.color = 'var(--red-600)'; resultEl.textContent = err; }
+                return;
+            }
+            if (btn) btn.style.display = 'none';
+            var msg = 'Refunded $' + Number(data.totalRefunded).toFixed(2) + ' across ' + data.refundedCount + ' camper' + (data.refundedCount === 1 ? '' : 's') + '.';
+            if (data.skippedCount) msg += ' ' + data.skippedCount + ' skipped (no Stripe-paid balance).';
+            if (data.failedCount) msg += ' ' + data.failedCount + ' hit an error — check with the parent or try that camper individually.';
+            if (resultEl) { resultEl.style.display = ''; resultEl.style.color = data.failedCount ? 'var(--red-600)' : '#16A34A'; resultEl.textContent = msg; }
+            _refreshSnacksFromCloud();
+        }, function(e) {
+            if (btn) { btn.disabled = false; btn.textContent = 'Try Again'; }
+            var msg = (e && e.message) || 'Could not process refunds.';
+            if (resultEl) { resultEl.style.display = ''; resultEl.style.color = 'var(--red-600)'; resultEl.textContent = msg; }
+        });
+};
+
 // The refund's balance/transaction change happens server-side (the RPC), not
 // via saveSnacksData's push-and-merge path — pull the fresh row directly so
 // the UI reflects it immediately instead of waiting on whatever polling/
