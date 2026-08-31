@@ -1,22 +1,21 @@
 -- =============================================================================
--- Migration 094: get_my_balance uses the session's CURRENT price, not the
+-- Migration 095: get_my_balance uses the session's CURRENT price, not the
 -- tuition snapshot frozen onto the enrollment at application time.
 --
--- Mirrors the same fix just made client-side in buildFamilyLedgers()
--- (campistry_me.js) — that function was trusting e.sessionTuition
--- unconditionally, so editing a session's price in Sessions & Pricing (or
--- moving an already-accepted camper to a different session) never re-billed
--- the family. get_my_balance (migration 070) has the identical bug on the
--- parent-portal side: it read (e->>'sessionTuition')::numeric directly with
--- no live lookup against the camp's current sessions list, so a parent's
--- portal balance could disagree with what Billing shows after a price
--- change.
+-- Builds on migration 094 (which added family-ledger charges/credits to this
+-- same function) rather than replacing it blind — this CREATE OR REPLACE
+-- carries that fix forward unchanged and adds one more: get_my_balance read
+-- (e->>'sessionTuition')::numeric directly with no live lookup against the
+-- camp's current sessions list, so editing a session's price in Sessions &
+-- Pricing (or moving an already-accepted camper to a different session)
+-- never re-billed the family — the parent portal's balance could disagree
+-- with what Billing shows after a price change. Mirrors the identical fix
+-- just made client-side in buildFamilyLedgers() (campistry_me.js).
 --
 -- Fix: look up the session by name in campistryMe.sessions (the same array
 -- Sessions & Pricing/dashboard.js writes to) and prefer ITS tuition; only
 -- fall back to the frozen e->>'sessionTuition' when no session with that
--- name exists anymore (renamed or deleted since the camper applied) — same
--- fallback rule as the client-side fix.
+-- name exists anymore (renamed or deleted since the camper applied).
 -- =============================================================================
 
 CREATE OR REPLACE FUNCTION public.get_my_balance(p_camp_id uuid DEFAULT NULL)
@@ -30,14 +29,19 @@ DECLARE
     inv       link_parent_invites;
     me        jsonb;
     enr       jsonb;
+    fams      jsonb;
     pays      jsonb;
     sess_list jsonb;
     v_names   jsonb;
     rec       record;
     e         jsonb;
     p         jsonb;
+    fam       jsonb;
+    ch        jsonb;
+    cr        jsonb;
     v_billed  numeric := 0;
     v_paid    numeric := 0;
+    v_credits numeric := 0;
     v_tuition numeric;
     v_disc    numeric;
     v_amt     numeric;
@@ -45,6 +49,7 @@ DECLARE
     v_family  text;
     v_enrIds  jsonb := '[]'::jsonb;
     v_history jsonb := '[]'::jsonb;
+    v_belongs boolean;
 BEGIN
     IF caller IS NULL THEN
         RETURN jsonb_build_object('success', false, 'error', 'not_authenticated');
@@ -67,6 +72,7 @@ BEGIN
     WHERE camp_id = inv.camp_id AND key = 'campistryMe';
     IF me IS NULL THEN me := '{}'::jsonb; END IF;
     enr       := COALESCE(me->'enrollments', '{}'::jsonb);
+    fams      := COALESCE(me->'families', '{}'::jsonb);
     pays      := COALESCE(me->'finance'->'payments', '[]'::jsonb);
     sess_list := COALESCE(me->'sessions', '[]'::jsonb);
 
@@ -92,6 +98,39 @@ BEGIN
             v_billed := v_billed + (v_tuition - v_disc);
             v_enrIds := v_enrIds || to_jsonb(rec.key);
         END IF;
+    END LOOP;
+
+    -- Manual family-ledger charges and credits (Me → Billing → Add Charge /
+    -- Issue Credit) — matched by camperIds overlap, the same key
+    -- buildFamilyLedgers() itself uses. (Unchanged from migration 094.)
+    FOR fam IN SELECT value FROM jsonb_each(fams) LOOP
+        v_belongs := EXISTS (
+            SELECT 1 FROM jsonb_array_elements_text(COALESCE(fam->'camperIds', '[]'::jsonb)) ci
+            WHERE v_names ? ci
+        );
+        IF NOT v_belongs THEN CONTINUE; END IF;
+
+        FOR ch IN SELECT * FROM jsonb_array_elements(COALESCE(fam->'charges', '[]'::jsonb)) LOOP
+            v_amt := COALESCE((ch->>'amount')::numeric, 0);
+            v_billed := v_billed + v_amt;
+            v_history := v_history || jsonb_build_object(
+                'date',   COALESCE(ch->>'date', ''),
+                'desc',   COALESCE(NULLIF(ch->>'description', ''), COALESCE(ch->>'category', 'Charge')),
+                'amt',    v_amt,
+                'status', 'charge'
+            );
+        END LOOP;
+
+        FOR cr IN SELECT * FROM jsonb_array_elements(COALESCE(fam->'credits', '[]'::jsonb)) LOOP
+            v_amt := COALESCE((cr->>'amount')::numeric, 0);
+            v_credits := v_credits + v_amt;
+            v_history := v_history || jsonb_build_object(
+                'date',   COALESCE(cr->>'date', ''),
+                'desc',   COALESCE(NULLIF(cr->>'reason', ''), 'Credit'),
+                'amt',    v_amt,
+                'status', 'credit'
+            );
+        END LOOP;
     END LOOP;
 
     -- Payments matched to those campers (by family name or enrollmentId).
@@ -122,7 +161,8 @@ BEGIN
         'campers',    v_names,
         'billed',     v_billed,
         'paid',       v_paid,
-        'balance',    v_billed - v_paid,
+        'credits',    v_credits,
+        'balance',    v_billed - v_paid - v_credits,
         'payments',   v_history
     );
 END;
@@ -131,6 +171,8 @@ REVOKE ALL ON FUNCTION public.get_my_balance(uuid) FROM public;
 GRANT EXECUTE ON FUNCTION public.get_my_balance(uuid) TO authenticated;
 
 -- ─── Sanity check ────────────────────────────────────────────────────────
--- select proname from pg_proc where proname = 'get_my_balance';
--- select get_my_balance(); -- as a signed-in parent with billing access
+-- select get_my_balance('<a real camp id>'::uuid); -- as that parent's own
+--   session — confirm the balance changes after editing that camper's
+--   session's tuition in Sessions & Pricing, without touching the
+--   enrollment record itself.
 -- =============================================================================
