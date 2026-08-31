@@ -304,10 +304,27 @@
             // deterministically: prefer the camp whose id == uid (signup
             // convention = the user's "real" camp). Copies are only entered
             // via the explicit active-camp selection handled in STEP 0.
-            const { data: ownedCamps, error: ownerError } = await _client
-                .from('camps')
-                .select('id, name')
-                .eq('owner', _userId);
+            //
+            // Retried up to 3 times with a short backoff: an owner account was
+            // observed getting an empty (not erroring) result here on the very
+            // first query right after boot, then the identical query returning
+            // all owned camps correctly a moment later when re-run by hand —
+            // classic session/JWT-propagation-not-fully-settled-yet symptom.
+            // The consequence of trusting that first empty read was severe (it
+            // silently fell through to STEP 4 and started treating a real
+            // camp owner as having no camp at all), so this is worth a few
+            // hundred ms of retry rather than resolving wrong with confidence.
+            let ownedCamps = null, ownerError = null;
+            for (let attempt = 0; attempt < 3; attempt++) {
+                const res = await _client.from('camps').select('id, name').eq('owner', _userId);
+                ownedCamps = res.data;
+                ownerError = res.error;
+                if (!ownerError && Array.isArray(ownedCamps) && ownedCamps.length > 0) break;
+                if (attempt < 2) {
+                    logError(`Owner-camp lookup came back empty on attempt ${attempt + 1}/3 (error=${ownerError ? ownerError.message : 'none'}) — retrying...`);
+                    await new Promise((r) => setTimeout(r, 300 * (attempt + 1)));
+                }
+            }
 
             const ownedCamp = (!ownerError && Array.isArray(ownedCamps) && ownedCamps.length > 0)
                 ? (ownedCamps.find(c => c.id === _userId) || ownedCamps[0])
@@ -329,7 +346,11 @@
             // New users will be redirected to create a camp in the auth flow
             // Invited users who fell through should NOT get owner access
             // =================================================================
-            log('⚠️ No camp association found - defaulting to VIEWER for safety');
+            // Always logged (not gated on DEBUG) — this is the fallback that
+            // silently masqueraded a real owner as a viewer with a fake
+            // campId before the retry above existed, so it needs to be
+            // impossible to miss in the console if it's ever hit for real.
+            logError('No camp association found after retries — defaulting to VIEWER. If this account should own or belong to a camp, this is a bug, not expected behavior.', { userId: _userId, ownerError });
             _campId = _userId;
             _role = 'viewer';  // ★★★ SAFE DEFAULT - NOT OWNER! ★★★
             _isTeamMember = false;
