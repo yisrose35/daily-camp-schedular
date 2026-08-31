@@ -161,6 +161,32 @@ body.sidebar-open .sidebar{transform:translateX(0)}
 .me-scroll{overflow-y:auto}
 .me-modal-footer{padding:14px 22px;border-top:1px solid var(--s100);display:flex;justify-content:flex-end;align-items:center;gap:8px;row-gap:10px;flex-wrap:wrap;flex-shrink:0}
 
+/* ── MODAL FORM FIELDS (generic) ───────
+   Base styling for .me-field/.me-input/.me-modal-form — used ~140 times
+   across every JS-built modal in this file (Record Payment, Add Charge,
+   Issue Credit, Pay Link, Monthly Plan, and dozens more), but until now
+   the only rules for these class names were scoped under .ps-config/
+   .ps-builder for the Payment Policy builder specifically. Every other
+   modal fell back to bare unstyled browser form controls — inline labels
+   crowding straight into the control with no spacing, no rounded corners,
+   no focus ring. This is the missing base case; the more specific
+   .ps-config/.ps-builder rules below still win inside that builder
+   (matching class-count beats this single-class one). */
+.me-modal-form{display:flex;flex-direction:column}
+.me-field{margin-bottom:14px}
+.me-field label{display:block;font-size:.78rem;font-weight:600;color:var(--s600);margin-bottom:5px}
+.me-input,.me-textarea{
+    width:100%;box-sizing:border-box;padding:9px 11px;
+    border:1.5px solid var(--s200);border-radius:var(--r);
+    font-size:.85rem;font-family:var(--font);color:var(--s800);background:#fff;
+    outline:none;transition:border-color .15s,box-shadow .15s;
+}
+select.me-input{cursor:pointer}
+.me-textarea{min-height:80px;resize:vertical;line-height:1.5}
+.me-input:focus,.me-textarea:focus{border-color:var(--me);box-shadow:0 0 0 3px rgba(217,119,6,.1)}
+.me-input::placeholder,.me-textarea::placeholder{color:var(--s400)}
+.me-input:disabled,.me-textarea:disabled{background:var(--s50);color:var(--s400);cursor:not-allowed}
+
 /* ── APPLICATION REVIEW MODAL ───────── */
 .av-sec{background:var(--s50);border:1px solid var(--s100);border-radius:10px;padding:12px 14px;margin-bottom:10px}
 .av-sec:last-child{margin-bottom:0}

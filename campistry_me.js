@@ -10368,9 +10368,14 @@ function openPaymentForFamily(famKey){
     h+='<div class="me-field"><label>Date</label><input type="date" id="payDate" class="me-input" value="'+today+'"></div>';
     h+='</div>';
     h+='<div style="display:grid;grid-template-columns:1fr 1fr;gap:10px">';
-    h+='<div class="me-field"><label>Method</label><select id="payMethod" class="me-input">'+_payOptions('tuition')+'</select>'+_payBlockedNote('tuition')+'</div>';
+    h+='<div class="me-field"><label>Method</label><select id="payMethod" class="me-input">'+_payOptions('tuition')+'</select></div>';
     h+='<div class="me-field"><label>Reference #</label><input type="text" id="payRef" class="me-input" placeholder="Check #, confirmation, etc."></div>';
     h+='</div>';
+    // Full-width, not crammed into the Method cell above — a multi-line
+    // blocked-method note there stretched that grid row far taller than its
+    // Reference # neighbor, which is what made the row look broken rather
+    // than just informative.
+    h+=_payBlockedNote('tuition');
     h+='<div class="me-field"><label>Notes (optional)</label><input type="text" id="payNotes" class="me-input" placeholder="e.g., June installment"></div>';
     h+='</div>';
     showModal('Record Payment',h,function(){
