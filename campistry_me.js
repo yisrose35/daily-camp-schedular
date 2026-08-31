@@ -10504,33 +10504,62 @@ function _crFamChanged(){
     if(sel) sel.innerHTML=_crPaymentOptionsHtml(document.getElementById('crFamKey').value);
     _crPaymentChanged();
 }
+// Three named refund/credit types (mirrors the standard camp-billing
+// vocabulary: gateway refund / ledger credit / offline refund). "Partial or
+// fee-adjusted" isn't a fourth type of its own — it's just entering an
+// amount less than the original on either refund type, which both already
+// support; the live "new balance" preview below is what makes that visible
+// instead of implicit.
 function _crToggleType(){
     var type=document.getElementById('crType').value;
     document.getElementById('crCreditFields').style.display=type==='credit'?'':'none';
-    document.getElementById('crRefundFields').style.display=type==='refund'?'':'none';
-    if(type==='refund') _crPaymentChanged();
+    document.getElementById('crRefundFields').style.display=type!=='credit'?'':'none';
+    if(type!=='credit') _crPaymentChanged();
 }
 function _crPaymentChanged(){
     var sel=document.getElementById('crPaymentId');
     var p=sel?finPayments.find(function(x){return String(x.id)===String(sel.value)}):null;
+    var type=document.getElementById('crType').value;
     var infoEl=document.getElementById('crPaymentInfo');
     var amtEl=document.getElementById('crRefundAmount');
-    var stripeWrap=document.getElementById('crStripeOptWrap');
+    var noteEl=document.getElementById('crStripeOptWrap');
+    var fk=document.getElementById('crFamKey').value;
+    var f=families[fk];
     if(!p){
         if(infoEl) infoEl.textContent='';
         if(amtEl){amtEl.value='';amtEl.removeAttribute('max')}
-        if(stripeWrap) stripeWrap.innerHTML='';
+        if(noteEl) noteEl.innerHTML='';
+        _crUpdateBalancePreview();
         return;
     }
     var priorRefunded=finPayments.filter(function(x){return x.refundOf!=null&&String(x.refundOf)===String(p.id)}).reduce(function(s,x){return s+Math.abs(x.amount||0)},0);
     var maxRefund=Math.round((p.amount-priorRefunded)*100)/100;
     if(infoEl) infoEl.innerHTML='Original: <strong>'+fm(p.amount)+'</strong> · '+esc(p.method||'')+(p.date?' · '+esc(p.date):'')+(priorRefunded>0?' · Already refunded: <strong>'+fm(priorRefunded)+'</strong>':'');
     if(amtEl){amtEl.value=maxRefund.toFixed(2);amtEl.setAttribute('max',maxRefund)}
-    if(stripeWrap){
-        stripeWrap.innerHTML=p.stripePaymentIntentId
-            ?'<label style="display:flex;align-items:center;gap:8px;font-size:.85rem;margin-top:4px"><input type="checkbox" id="crStripeCheck" checked> Return the money to the card through Stripe</label><div style="font-size:.72rem;color:var(--s400);margin-top:4px">Leave unchecked to record the refund only (e.g. you refunded by cash or check).</div>'
-            :'<div style="font-size:.75rem;color:var(--s400);margin-top:6px">No Stripe charge is on record for this payment, so this records the refund in the ledger only.</div>';
+    if(noteEl){
+        if(type==='refund_gateway'){
+            noteEl.innerHTML=p.stripePaymentIntentId
+                ?'<div style="font-size:.72rem;color:var(--s400);margin-top:4px">Sends the money back to the original card/bank through Stripe. Enter less than the full amount to keep a deposit or cover a processing fee — the family\'s balance updates automatically either way.</div>'
+                :'<div style="font-size:.78rem;color:#DC2626;margin-top:4px">This payment has no Stripe charge on record, so it can\'t be refunded through the gateway — use <strong>Offline Refund</strong> instead.</div>';
+        } else {
+            noteEl.innerHTML='<div style="font-size:.72rem;color:var(--s400);margin-top:4px">Records that money was sent back outside Campistry (check, cash, or a card that\'s since expired) — no gateway call is made, this only balances the ledger.</div>';
+        }
     }
+    _crUpdateBalancePreview();
+}
+// Live "what will the family owe after this" preview — makes the partial/
+// fee-adjusted case visible instead of only discovering the new balance
+// after saving.
+function _crUpdateBalancePreview(){
+    var previewEl=document.getElementById('crBalancePreview');
+    if(!previewEl) return;
+    var fk=(document.getElementById('crFamKey')||{}).value;
+    var f=families[fk];
+    var amtEl=document.getElementById('crRefundAmount');
+    var amt=amtEl?parseFloat(amtEl.value)||0:0;
+    if(!f||!amt){previewEl.textContent='';return}
+    var newBalance=(f.balance||0)+amt;
+    previewEl.innerHTML='Balance owed after this refund: <strong>'+fm(newBalance)+'</strong> (currently '+fm(f.balance||0)+')';
 }
 function issueCredit(){issueCreditForFamily(null)}
 function issueCreditForFamily(famKey){
@@ -10546,9 +10575,13 @@ function issueCreditForFamily(famKey){
     }
     var h='<div class="me-modal-form">';
     h+='<div class="me-field"><label>Family</label><select id="crFamKey" class="me-input" onchange="CampistryMe._crFamChanged()">'+famOpts+'</select></div>';
-    h+='<div class="me-field"><label>Type</label><select id="crType" class="me-input" onchange="CampistryMe._crToggleType()"><option value="credit">Issue a credit</option><option value="refund">Refund a payment</option></select></div>';
+    h+='<div class="me-field"><label>Type</label><select id="crType" class="me-input" onchange="CampistryMe._crToggleType()">';
+    h+='<option value="credit">Ledger Credit — keep the cash</option>';
+    h+='<option value="refund_gateway">Direct Refund — back to card/bank</option>';
+    h+='<option value="refund_offline">Offline Refund — check/cash</option>';
+    h+='</select></div>';
     h+='<div id="crCreditFields">';
-    h+='<div style="background:var(--s50);padding:10px 14px;border-radius:var(--r);margin-bottom:14px;font-size:.8rem;color:var(--s600)">A credit only adjusts what the family owes in Campistry — no money is returned to a card. To actually send money back to a parent, use <strong>Refund a payment</strong> instead.</div>';
+    h+='<div style="background:var(--s50);padding:10px 14px;border-radius:var(--r);margin-bottom:14px;font-size:.8rem;color:var(--s600)">A credit only adjusts what the family owes in Campistry — no money is returned to a card. It stays on the household account for next summer, a sibling, or a canteen top-up. To actually send money back to a parent, use one of the Refund types instead.</div>';
     h+='<div style="display:grid;grid-template-columns:2fr 1fr;gap:10px">';
     h+='<div class="me-field"><label>Reason</label><input type="text" id="crReason" class="me-input" placeholder="e.g., Referral credit, adjustment"></div>';
     h+='<div class="me-field"><label>Amount ($)</label><input type="number" id="crAmount" class="me-input" placeholder="0.00" step="0.01" min="0"></div>';
@@ -10558,15 +10591,15 @@ function issueCreditForFamily(famKey){
     h+='<div id="crPaymentInfo" style="font-size:.78rem;color:var(--s500);margin:-4px 0 8px"></div>';
     h+='<div style="display:grid;grid-template-columns:2fr 1fr;gap:10px">';
     h+='<div class="me-field"><label>Reason</label><select id="crRefundReason" class="me-input"><option value="requested_by_customer">Requested by customer</option><option value="cancellation">Cancellation / withdrawal</option><option value="adjustment">Billing adjustment</option><option value="duplicate">Duplicate charge</option><option value="fraudulent">Fraudulent</option></select></div>';
-    h+='<div class="me-field"><label>Amount ($)</label><input type="number" id="crRefundAmount" class="me-input" step="0.01" min="0.01"></div>';
-    h+='</div><div id="crStripeOptWrap"></div></div>';
+    h+='<div class="me-field"><label>Amount ($) — partial is fine</label><input type="number" id="crRefundAmount" class="me-input" step="0.01" min="0.01" oninput="CampistryMe._crUpdateBalancePreview()"></div>';
+    h+='</div><div id="crStripeOptWrap"></div><div id="crBalancePreview" style="font-size:.78rem;color:var(--s600);margin-top:8px"></div></div>';
     h+='</div>';
     showModal('Issue Credit/Refund',h,async function(){
         var fk=document.getElementById('crFamKey').value;
         var f=families[fk];
         if(!fk||!f){toast('Select a family','error');return}
         var type=document.getElementById('crType').value;
-        if(type==='refund'){
+        if(type==='refund_gateway'||type==='refund_offline'){
             var p=finPayments.find(function(x){return String(x.id)===String(document.getElementById('crPaymentId').value)});
             if(!p){toast('Select a payment to refund','error');return}
             var priorRefunded=finPayments.filter(function(x){return x.refundOf!=null&&String(x.refundOf)===String(p.id)}).reduce(function(s,x){return s+Math.abs(x.amount||0)},0);
@@ -10575,9 +10608,8 @@ function issueCreditForFamily(famKey){
             var refundAmt=parseFloat(document.getElementById('crRefundAmount').value)||0;
             if(refundAmt<=0||refundAmt>maxRefund+0.001){toast('Enter an amount up to '+fm(maxRefund),'error');return}
             var reasonSel=document.getElementById('crRefundReason').value;
-            var canStripe=!!p.stripePaymentIntentId;
-            var stripeCheck=document.getElementById('crStripeCheck');
-            var doStripe=canStripe&&stripeCheck&&stripeCheck.checked;
+            var doStripe=type==='refund_gateway'&&!!p.stripePaymentIntentId;
+            if(type==='refund_gateway'&&!p.stripePaymentIntentId){toast('No Stripe charge on record for this payment — use Offline Refund instead','error');return}
             var stripeRefundId=null;
             if(doStripe){
                 var stripeReason=(reasonSel==='requested_by_customer'||reasonSel==='duplicate'||reasonSel==='fraudulent')?reasonSel:'requested_by_customer';
@@ -10596,8 +10628,8 @@ function issueCreditForFamily(famKey){
                 id:'ref_'+Date.now(),
                 family:p.family,familyKey:fk,enrollmentId:p.enrollmentId||null,
                 amount:-refundAmt,date:today(),method:'Refund',
-                reference:stripeRefundId||'',notes:'Refund — '+reasonLabel+(doStripe?' (Stripe)':''),
-                reason:reasonSel,refundOf:p.id,stripeRefundId:stripeRefundId,timestamp:Date.now()
+                reference:stripeRefundId||'',notes:'Refund — '+reasonLabel+(doStripe?' (Stripe)':' (Offline — check/cash)'),
+                reason:reasonSel,refundOf:p.id,stripeRefundId:stripeRefundId,offline:!doStripe,timestamp:Date.now()
             };
             finPayments.push(refundEntry);
             f.totalPaid=Math.max(0,(f.totalPaid||0)-refundAmt);f.balance=(f.balance||0)+refundAmt;
@@ -10611,7 +10643,7 @@ function issueCreditForFamily(famKey){
                 console.error('[Me] Re-render after refund failed:',e);
                 toast('Refund recorded, but the page failed to refresh (see console) — reload to see it.','error');
             }
-            toast('Refunded '+fm(refundAmt)+(doStripe?' to card':'')+' for '+(p.family||'family'));
+            toast('Refunded '+fm(refundAmt)+(doStripe?' to card':' (offline)')+' for '+(p.family||'family'));
             return;
         }
         var amt=parseFloat(document.getElementById('crAmount').value)||0;
@@ -13117,7 +13149,7 @@ window.CampistryMe={
     openPaymentModal:openPaymentModal,openPaymentForFamily:openPaymentForFamily,removePayment:removePayment,
     addCharge:addCharge,addChargeForFamily:addChargeForFamily,
     issueCredit:issueCredit,issueCreditForFamily:issueCreditForFamily,
-    _crFamChanged:_crFamChanged,_crToggleType:_crToggleType,_crPaymentChanged:_crPaymentChanged,
+    _crFamChanged:_crFamChanged,_crToggleType:_crToggleType,_crPaymentChanged:_crPaymentChanged,_crUpdateBalancePreview:_crUpdateBalancePreview,
     setBillFilter:setBillFilter,printStatement:printStatement,
     requestCardSetup:requestCardSetup,chargeStoredCard:chargeStoredCard,batchCharge:batchCharge,
     // Broadcasts
