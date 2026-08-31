@@ -110,8 +110,12 @@
         m.className = 'modal-overlay';
         m.style.cssText = 'position:fixed;inset:0;z-index:10000;background:rgba(15,23,42,.55);' +
             'display:flex;align-items:center;justify-content:center;padding:18px;';
+        // As large as the viewport reasonably allows — this is a dense
+        // multi-app/multi-section matrix, and a small modal made it hard to
+        // scan. Capped at 1300px so it doesn't stretch absurdly wide on huge
+        // monitors, but otherwise fills nearly the whole screen.
         m.innerHTML =
-            '<div style="background:#fff;border-radius:16px;width:min(760px,100%);max-height:92vh;' +
+            '<div style="background:#fff;border-radius:16px;width:min(1300px,96vw);height:92vh;' +
             'display:flex;flex-direction:column;box-shadow:0 24px 70px rgba(0,0,0,.28);">' +
                 '<div style="display:flex;align-items:center;justify-content:space-between;gap:10px;' +
                 'padding:16px 22px;border-bottom:1px solid #E2E8F0;">' +

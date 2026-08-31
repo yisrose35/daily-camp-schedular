@@ -548,7 +548,7 @@
         modal.className = 'modal-overlay';
         modal.id = 'edit-member-modal';
         modal.innerHTML = `
-            <div class="modal-content">
+            <div class="modal-content" style="max-width:900px;width:94vw;max-height:92vh;">
                 <div class="modal-header"><h3>Edit Team Member</h3><button class="modal-close" id="modal-close">&times;</button></div>
                 <p style="color: var(--slate-600); margin-bottom: 16px;">${member.email}</p>
                 <form id="edit-member-form">
@@ -749,7 +749,7 @@
             .color-picker-row{display:flex;align-items:center;gap:12px}.color-presets{display:flex;flex-wrap:wrap;gap:6px}
             .color-preset{width:28px;height:28px;border-radius:6px;border:2px solid transparent;cursor:pointer;transition:all .15s}.color-preset:hover{transform:scale(1.1)}.color-preset.selected{border-color:var(--slate-800);box-shadow:0 0 0 2px #fff,0 0 0 4px var(--slate-300)}
             .checkbox-item{display:flex;align-items:center;gap:8px;padding:8px 0}.checkbox-item input[type="checkbox"]{width:18px;height:18px}
-            .division-checkboxes,.subdivision-checkboxes{max-height:200px;overflow-y:auto;padding:4px}
+            .division-checkboxes,.subdivision-checkboxes{max-height:260px;overflow-y:auto;padding:4px;display:grid;grid-template-columns:repeat(auto-fill,minmax(230px,1fr));gap:2px 18px;align-content:start}
             .empty-state{text-align:center;padding:24px;background:var(--slate-50);border-radius:12px;border:2px dashed var(--slate-200)}
             .form-group{margin-bottom:16px}.form-group label{display:block;font-weight:500;color:var(--slate-700);margin-bottom:6px}
             .form-group input[type="text"],.form-group input[type="email"],.form-group select{width:100%;padding:10px 14px;border:2px solid var(--slate-200);border-radius:8px;font-size:.95rem;transition:border-color .15s}
