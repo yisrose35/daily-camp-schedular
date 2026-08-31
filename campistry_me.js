@@ -8504,8 +8504,7 @@ function renderAnalytics(){
                 var _amtTxt=_isRef?'−'+fm(Math.abs(p.amount)):fm(p.amount);
                 var _amtCol=_isRef?'var(--err)':_pend?'var(--s400)':'var(--ok)';
                 var _stBadge=_st==='pending'?' '+bdg('pending','warn'):_st==='failed'?' '+bdg('failed','err'):'';
-                var _canRefund=!_isRef&&!_pend&&(p.amount||0)>0;
-                var _acts=(_canRefund?'<button class="me-btn me-btn--ghost me-btn--sm" onclick="CampistryMe.finRefund(\''+je(String(p.id))+'\')">↩ Refund</button>':'')+'<button class="me-btn me-btn--ghost me-btn--sm" style="color:var(--err)" onclick="CampistryMe.finRemovePayment(\''+je(String(p.id))+'\')">✕</button>';
+                var _acts='<button class="me-btn me-btn--ghost me-btn--sm" style="color:var(--err)" onclick="CampistryMe.finRemovePayment(\''+je(String(p.id))+'\')">✕</button>';
                 h+='<tr><td style="font-size:.75rem;color:var(--s400)">'+esc(p.date||'—')+'</td><td class="bold">'+esc(p.family)+(_isRef&&p.notes?' <span style="font-size:.7rem;font-weight:400;color:var(--s400)">'+esc(p.notes)+'</span>':'')+'</td><td style="font-weight:700;color:'+_amtCol+'">'+_amtTxt+'</td><td>'+bdg((_payLabel(p.method)||p.method||'—'),_isRef?'err':_st==='failed'?'err':_st==='pending'?'warn':'ok')+_stBadge+'</td><td style="text-align:right;white-space:nowrap">'+_acts+'</td></tr>';
             });
             h+='</tbody></table>'+_pagerHtml(sortedPayments.length,PAGE_SIZE,_analyticsPaymentPage,'setAnalyticsPaymentPage')+'</div></div>';
@@ -8794,77 +8793,6 @@ function finRemovePayment(id){
     finPayments.splice(idx,1);save();renderAnalytics();toast('Removed');
 }
 
-// ═══════════════════════════════════════════════════════════════
-// REFUNDS — record a refund (and optionally return money via Stripe)
-// A refund is stored as a NEGATIVE payment, so every total that sums
-// finPayments (both the Billing ledger and the Analytics invoices)
-// reflects it automatically. If the original payment carries a Stripe
-// PaymentIntent, the money can be returned to the card via stripe-refund.
-// ═══════════════════════════════════════════════════════════════
-function finRefund(id){
-    var p=finPayments.find(function(x){return String(x.id)===String(id)});
-    if(!p){toast('Payment not found','error');return}
-    if((p.amount||0)<=0){toast('That entry is already a refund','error');return}
-    var priorRefunded=finPayments.filter(function(x){return x.refundOf!=null&&String(x.refundOf)===String(p.id)})
-        .reduce(function(s,x){return s+Math.abs(x.amount||0)},0);
-    var maxRefund=Math.round((p.amount-priorRefunded)*100)/100;
-    if(maxRefund<=0){toast('This payment is already fully refunded','error');return}
-    var canStripe=!!p.stripePaymentIntentId;
-    var h='<div class="me-modal-form">';
-    h+='<div style="background:var(--s50);padding:10px 14px;border-radius:var(--r);margin-bottom:14px;font-size:.82rem">Refunding payment to <strong>'+esc(p.family||'')+'</strong><br>Original: <strong>'+fm(p.amount)+'</strong> · '+esc(p.method||'')+(p.date?' · '+esc(p.date):'')+(priorRefunded>0?'<br>Already refunded: <strong>'+fm(priorRefunded)+'</strong>':'')+'</div>';
-    h+='<div style="display:grid;grid-template-columns:2fr 1fr;gap:10px">';
-    h+='<div class="me-field"><label>Reason</label><select id="rfReason" class="me-input"><option value="requested_by_customer">Requested by customer</option><option value="cancellation">Cancellation / withdrawal</option><option value="adjustment">Billing adjustment</option><option value="duplicate">Duplicate charge</option><option value="fraudulent">Fraudulent</option></select></div>';
-    h+='<div class="me-field"><label>Amount ($)</label><input type="number" id="rfAmount" class="me-input" value="'+maxRefund.toFixed(2)+'" step="0.01" min="0.01" max="'+maxRefund+'"></div>';
-    h+='</div>';
-    if(canStripe){
-        h+='<label style="display:flex;align-items:center;gap:8px;font-size:.85rem;margin-top:4px"><input type="checkbox" id="rfStripe" checked> Return the money to the card through Stripe</label>';
-        h+='<div style="font-size:.72rem;color:var(--s400);margin-top:4px">Leave unchecked to record the refund only (e.g. you refunded by cash or check).</div>';
-    } else {
-        h+='<div style="font-size:.75rem;color:var(--s400);margin-top:6px">No Stripe charge is on record for this payment, so this records the refund in the ledger only.</div>';
-    }
-    h+='</div>';
-    showModal('Refund Payment',h,async function(){
-        var amt=parseFloat(document.getElementById('rfAmount').value)||0;
-        if(amt<=0||amt>maxRefund+0.001){toast('Enter an amount up to '+fm(maxRefund),'error');return}
-        var reasonSel=document.getElementById('rfReason').value;
-        var doStripe=canStripe&&document.getElementById('rfStripe')&&document.getElementById('rfStripe').checked;
-        var stripeRefundId=null;
-        if(doStripe){
-            var stripeReason=(reasonSel==='requested_by_customer'||reasonSel==='duplicate'||reasonSel==='fraudulent')?reasonSel:'requested_by_customer';
-            toast('Processing Stripe refund…');
-            try{
-                var res=await callEdgeFunction('stripe-refund',{paymentIntentId:p.stripePaymentIntentId,amount:amt,reason:stripeReason,metadata:{campId:getCampId(),family:p.family||''}});
-                stripeRefundId=res.refundId;
-            }catch(err){
-                console.error('[Me] Stripe refund error:',err);
-                toast('Stripe refund failed: '+err.message,'error');
-                return;
-            }
-        }
-        var reasonLabel={requested_by_customer:'Requested by customer',cancellation:'Cancellation / withdrawal',adjustment:'Billing adjustment',duplicate:'Duplicate charge',fraudulent:'Fraudulent'}[reasonSel]||reasonSel;
-        var refundEntry={
-            id:'ref_'+Date.now(),
-            family:p.family,familyKey:p.familyKey||null,enrollmentId:p.enrollmentId||null,
-            amount:-amt,date:today(),method:'Refund',
-            reference:stripeRefundId||'',notes:'Refund — '+reasonLabel+(doStripe?' (Stripe)':''),
-            reason:reasonSel,refundOf:p.id,stripeRefundId:stripeRefundId,timestamp:Date.now()
-        };
-        finPayments.push(refundEntry);
-        var f=(p.familyKey&&families[p.familyKey])||Object.values(families).find(function(x){return x.name===p.family});
-        if(f){f.totalPaid=Math.max(0,(f.totalPaid||0)-amt);f.balance=(f.balance||0)+amt;}
-        save();closeModal('dynModal');
-        // The refund itself (finPayments push + save) is already done at this
-        // point — a rendering failure below must never look like the refund
-        // silently vanished, so surface it loudly instead of swallowing it.
-        try{renderAnalytics()}catch(e){console.error('[Me] renderAnalytics after refund failed:',e)}
-        try{if(curPage==='familydetail')renderFamilyDetailPage();else renderBilling()}
-        catch(e){
-            console.error('[Me] Re-render after refund failed:',e);
-            toast('Refund recorded, but the page failed to refresh (see console) — reload to see it.','error');
-        }
-        toast('Refunded '+fm(amt)+(doStripe?' to card':'')+' for '+(p.family||'family'));
-    });
-}
 function finSetBudget(){
     var rev=prompt('Revenue target ($):',finBudget.revenue||'');
     var pay=prompt('Payroll budget ($):',finBudget.payroll||'');
@@ -10203,7 +10131,7 @@ function renderBilling(){
         +'<div class="me-more-menu" id="'+billMoreId+'">'
         +'<button onclick="CampistryMe.addFamily()">Add Household</button>'
         +'<button onclick="CampistryMe.addCharge()">Add Charge</button>'
-        +'<button onclick="CampistryMe.issueCredit()">Issue Credit</button>'
+        +'<button onclick="CampistryMe.issueCredit()">Issue Credit/Refund</button>'
         +'<button onclick="CampistryMe.printFamilies()">Print all households</button>'
         +'<button onclick="CampistryMe.exportFamilyReport()">Export all households</button>'
         +'</div></div></div></div>';
@@ -10323,7 +10251,7 @@ function renderFamilyDetailPage(){
     if(!(_fam&&_fam.plan&&_fam.plan.installments&&_fam.plan.installments.length)) moreItems+='<button onclick="CampistryMe.monthlyPlan(\''+je(l.famKey)+'\')">Set up Payment Plan</button>';
     moreItems+=hasCard?'<button onclick="CampistryMe.requestCardSetup(\''+je(l.famKey)+'\')">Replace payment method</button>':'<button onclick="CampistryMe.requestCardSetup(\''+je(l.famKey)+'\')">Set up payment method</button>';
     moreItems+='<button onclick="CampistryMe.addChargeForFamily(\''+je(l.famKey)+'\')">Add Charge</button>';
-    moreItems+='<button onclick="CampistryMe.issueCreditForFamily(\''+je(l.famKey)+'\')">Issue Credit</button>';
+    moreItems+='<button onclick="CampistryMe.issueCreditForFamily(\''+je(l.famKey)+'\')">Issue Credit/Refund</button>';
     moreItems+='<button onclick="CampistryMe.printStatement(\''+je(l.famKey)+'\')">Print Statement</button>';
     moreItems+='<button onclick="CampistryMe.editFamily(\''+je(l.famKey)+'\')">Edit Household</button>';
     moreItems+='<button onclick="CampistryMe.toggleBillingAccess(\''+je(l.famKey)+'\')">'+(families[l.famKey]?.billingAccessClosed?'Reopen billing access':'Close billing access')+'</button>';
@@ -10347,7 +10275,7 @@ function renderFamilyDetailPage(){
     if(l.entries.length){
         h+='<div style="padding:16px 0;border-bottom:1px solid var(--s100)">';
         h+='<div style="font-size:.7rem;font-weight:700;color:var(--s500);text-transform:uppercase;letter-spacing:.05em;margin-bottom:8px">Account Activity</div>';
-        h+='<table class="me-t" style="margin:0"><thead><tr><th>Date</th><th>Type</th><th>Description</th><th style="text-align:right">Charge</th><th style="text-align:right">Payment</th><th></th></tr></thead><tbody>';
+        h+='<table class="me-t" style="margin:0"><thead><tr><th>Date</th><th>Type</th><th>Description</th><th style="text-align:right">Charge</th><th style="text-align:right">Payment</th></tr></thead><tbody>';
         l.entries.forEach(function(e){
             if(e.type==='installment') return; // shown in Monthly Plan below
             var isCharge=e.type==='charge';
@@ -10355,13 +10283,11 @@ function renderFamilyDetailPage(){
             var isCredit=e.type==='credit';
             var isRefund=isPayment&&e.amount<0;
             var payTxt=(isPayment||isCredit)?(isRefund?'−'+fm(Math.abs(e.amount)):fm(e.amount)):'';
-            var refBtn=(isPayment&&e.amount>0&&e.ref)?'<button class="me-btn me-btn--ghost me-btn--sm" title="Refund this payment" onclick="CampistryMe.finRefund(\''+je(String(e.ref))+'\')">↩</button>':'';
             h+='<tr><td style="font-size:.75rem;color:var(--s500)">'+esc(e.date||'')+'</td>';
             h+='<td>'+_flatStatus(e.category||e.type,isCharge?'err':isRefund?'err':isPayment?'ok':'warn')+'</td>';
             h+='<td style="font-size:.8rem">'+esc(e.desc||'')+'</td>';
             h+='<td style="text-align:right;font-weight:600;color:var(--s800)">'+(isCharge?fm(e.amount):'')+'</td>';
-            h+='<td style="text-align:right;font-weight:600;color:'+(isRefund?'var(--err)':'var(--ok)')+'">'+payTxt+'</td>';
-            h+='<td style="text-align:right">'+refBtn+'</td></tr>';
+            h+='<td style="text-align:right;font-weight:600;color:'+(isRefund?'var(--err)':'var(--ok)')+'">'+payTxt+'</td></tr>';
         });
         h+='</tbody></table></div>';
     }
@@ -10523,6 +10449,59 @@ function addChargeForFamily(famKey){
     });
 }
 
+// Every payment (amount > 0) belonging to this family that still has
+// unrefunded money left on it — the candidate list for the Refund side of
+// Issue Credit/Refund.
+function _famRefundablePayments(f){
+    return finPayments.filter(function(p){
+        if((p.amount||0)<=0) return false;
+        if(!(f.name===p.family||f.name===p.camper||(f.camperIds||[]).indexOf(p.family)>=0||(f.camperIds||[]).indexOf(p.camper)>=0)) return false;
+        var priorRefunded=finPayments.filter(function(x){return x.refundOf!=null&&String(x.refundOf)===String(p.id)}).reduce(function(s,x){return s+Math.abs(x.amount||0)},0);
+        return Math.round((p.amount-priorRefunded)*100)/100>0;
+    });
+}
+function _crPaymentOptionsHtml(famKey){
+    var f=families[famKey];
+    if(!f) return '<option value="">— Select a family first —</option>';
+    var pays=_famRefundablePayments(f);
+    if(!pays.length) return '<option value="">No refundable payments for this family</option>';
+    return pays.map(function(p){
+        return '<option value="'+esc(String(p.id))+'">'+fm(p.amount)+' · '+esc(_payLabel(p.method)||p.method||'')+(p.date?' · '+esc(p.date):'')+'</option>';
+    }).join('');
+}
+function _crFamChanged(){
+    var sel=document.getElementById('crPaymentId');
+    if(sel) sel.innerHTML=_crPaymentOptionsHtml(document.getElementById('crFamKey').value);
+    _crPaymentChanged();
+}
+function _crToggleType(){
+    var type=document.getElementById('crType').value;
+    document.getElementById('crCreditFields').style.display=type==='credit'?'':'none';
+    document.getElementById('crRefundFields').style.display=type==='refund'?'':'none';
+    if(type==='refund') _crPaymentChanged();
+}
+function _crPaymentChanged(){
+    var sel=document.getElementById('crPaymentId');
+    var p=sel?finPayments.find(function(x){return String(x.id)===String(sel.value)}):null;
+    var infoEl=document.getElementById('crPaymentInfo');
+    var amtEl=document.getElementById('crRefundAmount');
+    var stripeWrap=document.getElementById('crStripeOptWrap');
+    if(!p){
+        if(infoEl) infoEl.textContent='';
+        if(amtEl){amtEl.value='';amtEl.removeAttribute('max')}
+        if(stripeWrap) stripeWrap.innerHTML='';
+        return;
+    }
+    var priorRefunded=finPayments.filter(function(x){return x.refundOf!=null&&String(x.refundOf)===String(p.id)}).reduce(function(s,x){return s+Math.abs(x.amount||0)},0);
+    var maxRefund=Math.round((p.amount-priorRefunded)*100)/100;
+    if(infoEl) infoEl.innerHTML='Original: <strong>'+fm(p.amount)+'</strong> · '+esc(p.method||'')+(p.date?' · '+esc(p.date):'')+(priorRefunded>0?' · Already refunded: <strong>'+fm(priorRefunded)+'</strong>':'');
+    if(amtEl){amtEl.value=maxRefund.toFixed(2);amtEl.setAttribute('max',maxRefund)}
+    if(stripeWrap){
+        stripeWrap.innerHTML=p.stripePaymentIntentId
+            ?'<label style="display:flex;align-items:center;gap:8px;font-size:.85rem;margin-top:4px"><input type="checkbox" id="crStripeCheck" checked> Return the money to the card through Stripe</label><div style="font-size:.72rem;color:var(--s400);margin-top:4px">Leave unchecked to record the refund only (e.g. you refunded by cash or check).</div>'
+            :'<div style="font-size:.75rem;color:var(--s400);margin-top:6px">No Stripe charge is on record for this payment, so this records the refund in the ledger only.</div>';
+    }
+}
 function issueCredit(){issueCreditForFamily(null)}
 function issueCreditForFamily(famKey){
     var famOpts='';
@@ -10536,15 +10515,73 @@ function issueCreditForFamily(famKey){
         });
     }
     var h='<div class="me-modal-form">';
-    h+='<div class="me-field"><label>Family</label><select id="crFamKey" class="me-input">'+famOpts+'</select></div>';
-    h+='<div style="display:grid;grid-template-columns:2fr 1fr;gap:10px">';
+    h+='<div class="me-field"><label>Family</label><select id="crFamKey" class="me-input" onchange="CampistryMe._crFamChanged()">'+famOpts+'</select></div>';
+    h+='<div class="me-field"><label>Type</label><select id="crType" class="me-input" onchange="CampistryMe._crToggleType()"><option value="credit">Issue a credit</option><option value="refund">Refund a payment</option></select></div>';
+    h+='<div id="crCreditFields"><div style="display:grid;grid-template-columns:2fr 1fr;gap:10px">';
     h+='<div class="me-field"><label>Reason</label><input type="text" id="crReason" class="me-input" placeholder="e.g., Referral credit, adjustment"></div>';
     h+='<div class="me-field"><label>Amount ($)</label><input type="number" id="crAmount" class="me-input" placeholder="0.00" step="0.01" min="0"></div>';
     h+='</div></div>';
-    showModal('Issue Credit',h,function(){
+    h+='<div id="crRefundFields" style="display:none">';
+    h+='<div class="me-field"><label>Payment to refund</label><select id="crPaymentId" class="me-input" onchange="CampistryMe._crPaymentChanged()">'+(famKey?_crPaymentOptionsHtml(famKey):'<option value="">— Select a family first —</option>')+'</select></div>';
+    h+='<div id="crPaymentInfo" style="font-size:.78rem;color:var(--s500);margin:-4px 0 8px"></div>';
+    h+='<div style="display:grid;grid-template-columns:2fr 1fr;gap:10px">';
+    h+='<div class="me-field"><label>Reason</label><select id="crRefundReason" class="me-input"><option value="requested_by_customer">Requested by customer</option><option value="cancellation">Cancellation / withdrawal</option><option value="adjustment">Billing adjustment</option><option value="duplicate">Duplicate charge</option><option value="fraudulent">Fraudulent</option></select></div>';
+    h+='<div class="me-field"><label>Amount ($)</label><input type="number" id="crRefundAmount" class="me-input" step="0.01" min="0.01"></div>';
+    h+='</div><div id="crStripeOptWrap"></div></div>';
+    h+='</div>';
+    showModal('Issue Credit/Refund',h,async function(){
         var fk=document.getElementById('crFamKey').value;
         var f=families[fk];
         if(!fk||!f){toast('Select a family','error');return}
+        var type=document.getElementById('crType').value;
+        if(type==='refund'){
+            var p=finPayments.find(function(x){return String(x.id)===String(document.getElementById('crPaymentId').value)});
+            if(!p){toast('Select a payment to refund','error');return}
+            var priorRefunded=finPayments.filter(function(x){return x.refundOf!=null&&String(x.refundOf)===String(p.id)}).reduce(function(s,x){return s+Math.abs(x.amount||0)},0);
+            var maxRefund=Math.round((p.amount-priorRefunded)*100)/100;
+            if(maxRefund<=0){toast('This payment is already fully refunded','error');return}
+            var refundAmt=parseFloat(document.getElementById('crRefundAmount').value)||0;
+            if(refundAmt<=0||refundAmt>maxRefund+0.001){toast('Enter an amount up to '+fm(maxRefund),'error');return}
+            var reasonSel=document.getElementById('crRefundReason').value;
+            var canStripe=!!p.stripePaymentIntentId;
+            var stripeCheck=document.getElementById('crStripeCheck');
+            var doStripe=canStripe&&stripeCheck&&stripeCheck.checked;
+            var stripeRefundId=null;
+            if(doStripe){
+                var stripeReason=(reasonSel==='requested_by_customer'||reasonSel==='duplicate'||reasonSel==='fraudulent')?reasonSel:'requested_by_customer';
+                toast('Processing Stripe refund…');
+                try{
+                    var res=await callEdgeFunction('stripe-refund',{paymentIntentId:p.stripePaymentIntentId,amount:refundAmt,reason:stripeReason,metadata:{campId:getCampId(),family:p.family||''}});
+                    stripeRefundId=res.refundId;
+                }catch(err){
+                    console.error('[Me] Stripe refund error:',err);
+                    toast('Stripe refund failed: '+err.message,'error');
+                    return;
+                }
+            }
+            var reasonLabel={requested_by_customer:'Requested by customer',cancellation:'Cancellation / withdrawal',adjustment:'Billing adjustment',duplicate:'Duplicate charge',fraudulent:'Fraudulent'}[reasonSel]||reasonSel;
+            var refundEntry={
+                id:'ref_'+Date.now(),
+                family:p.family,familyKey:fk,enrollmentId:p.enrollmentId||null,
+                amount:-refundAmt,date:today(),method:'Refund',
+                reference:stripeRefundId||'',notes:'Refund — '+reasonLabel+(doStripe?' (Stripe)':''),
+                reason:reasonSel,refundOf:p.id,stripeRefundId:stripeRefundId,timestamp:Date.now()
+            };
+            finPayments.push(refundEntry);
+            f.totalPaid=Math.max(0,(f.totalPaid||0)-refundAmt);f.balance=(f.balance||0)+refundAmt;
+            save();closeModal('dynModal');
+            // The refund itself (finPayments push + save) is already done at this
+            // point — a rendering failure below must never look like the refund
+            // silently vanished, so surface it loudly instead of swallowing it.
+            try{renderAnalytics()}catch(e){console.error('[Me] renderAnalytics after refund failed:',e)}
+            try{if(curPage==='familydetail')renderFamilyDetailPage();else renderBilling()}
+            catch(e){
+                console.error('[Me] Re-render after refund failed:',e);
+                toast('Refund recorded, but the page failed to refresh (see console) — reload to see it.','error');
+            }
+            toast('Refunded '+fm(refundAmt)+(doStripe?' to card':'')+' for '+(p.family||'family'));
+            return;
+        }
         var amt=parseFloat(document.getElementById('crAmount').value)||0;
         if(!amt){toast('Enter an amount','error');return}
         if(!f.credits) f.credits=[];
@@ -10552,6 +10589,7 @@ function issueCreditForFamily(famKey){
         f.balance=Math.max(0,(f.balance||0)-amt);
         save();closeModal('dynModal');if(curPage==='familydetail')renderFamilyDetailPage();else renderBilling();toast('Credit of '+fm(amt)+' issued to '+f.name);
     });
+    if(famKey) _crPaymentChanged();
 }
 
 function printStatement(famKey){
@@ -13028,7 +13066,7 @@ window.CampistryMe={
     ptDownloadTemplate:ptDownloadTemplate,ptUploadTemplate:ptUploadTemplate,
     finSetTab:finSetTab,finAddStaff:finAddStaff,finEditStaff:finEditStaff,finStaffModal:finStaffModal,_staffPhotoPick:_staffPhotoPick,_staffPhotoClear:_staffPhotoClear,finRemoveStaff:finRemoveStaff,
     finAddExpense:finAddExpense,finRemoveExpense:finRemoveExpense,
-    finAddPayment:finAddPayment,finRemovePayment:finRemovePayment,finRefund:finRefund,
+    finAddPayment:finAddPayment,finRemovePayment:finRemovePayment,
     sendPayLink:sendPayLink,copyPayLink:copyPayLink,toggleBillingAccess:toggleBillingAccess,
     monthlyPlan:monthlyPlan,toggleFamilyAutopay:toggleFamilyAutopay,cancelMonthlyPlan:cancelMonthlyPlan,
     viewStaffApp:viewStaffApp,setStaffStatus:setStaffStatus,saveStaffNotes:saveStaffNotes,openAssignPositionModal:openAssignPositionModal,
@@ -13047,6 +13085,7 @@ window.CampistryMe={
     openPaymentModal:openPaymentModal,openPaymentForFamily:openPaymentForFamily,removePayment:removePayment,
     addCharge:addCharge,addChargeForFamily:addChargeForFamily,
     issueCredit:issueCredit,issueCreditForFamily:issueCreditForFamily,
+    _crFamChanged:_crFamChanged,_crToggleType:_crToggleType,_crPaymentChanged:_crPaymentChanged,
     setBillFilter:setBillFilter,printStatement:printStatement,
     requestCardSetup:requestCardSetup,chargeStoredCard:chargeStoredCard,batchCharge:batchCharge,
     // Broadcasts
