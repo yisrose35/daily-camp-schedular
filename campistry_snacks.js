@@ -657,11 +657,18 @@ function loadPosPinStatus() {
     if (!client || !campId) { box.textContent = ''; return; }
     client.rpc('get_camp_pos_login_status', { p_camp_id: campId }).then(res => {
         const data = res && res.data;
-        if (!data || !data.success) { box.textContent = ''; return; }
+        if (res.error || !data || !data.success) {
+            console.error('[Snacks Settings] get_camp_pos_login_status failed:', res.error, data);
+            box.innerHTML = '<span style="color:var(--red-600)">Could not check the register login status — see console.</span>';
+            return;
+        }
         box.innerHTML = data.pinSet
             ? '<span style="color:var(--green-600);font-weight:600">✓ A register PIN is set.</span> Saving a new one below replaces it.'
             : '<span style="color:var(--amber-600);font-weight:600">No PIN set yet</span> — the register login is inactive until you set one.';
-    }).catch(() => { box.textContent = ''; });
+    }).catch(e => {
+        console.error('[Snacks Settings] get_camp_pos_login_status threw:', e);
+        box.innerHTML = '<span style="color:var(--red-600)">Could not check the register login status — see console.</span>';
+    });
 }
 
 window.savePosPin = function() {
@@ -679,15 +686,23 @@ window.savePosPin = function() {
         if (btn) { btn.disabled = false; btn.textContent = 'Save PIN'; }
         const data = res && res.data;
         if (res.error || !data || !data.success) {
-            toast((data && data.error === 'invalid_pin') ? 'PIN must be 4–8 digits' : 'Could not save the PIN', 1);
+            console.error('[Snacks Settings] set_camp_pos_pin failed:', res.error, data);
+            const reason = (data && data.error) || (res.error && res.error.message) || 'unknown_error';
+            const msgs = {
+                invalid_pin: 'PIN must be 4–8 digits',
+                not_authorized: 'Only the camp owner or an admin can set the register PIN',
+                not_authenticated: 'Not signed in — try reloading the page'
+            };
+            toast(msgs[reason] || ('Could not save the PIN (' + reason + ')'), 1);
             return;
         }
         if (input) input.value = '';
         toast('Register PIN saved');
         loadPosPinStatus();
-    }, () => {
+    }, (e) => {
         if (btn) { btn.disabled = false; btn.textContent = 'Save PIN'; }
-        toast('Could not save the PIN', 1);
+        console.error('[Snacks Settings] set_camp_pos_pin threw:', e);
+        toast('Could not save the PIN (' + ((e && e.message) || 'network error') + ')', 1);
     });
 };
 
