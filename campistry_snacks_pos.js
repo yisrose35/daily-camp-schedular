@@ -553,8 +553,45 @@ window.CampistrySnacksPOS = {
 window.addEventListener('campistry-cloud-hydrated', function() {
     console.log('[Snacks POS] Cloud hydrated — reloading roster + snacks data');
     snacks = loadSnacksData();
-    init();
+    _hydratePosRoster().then(init, init);
 });
+
+// The generic cloud_bootstrap fetch reads camp_state_kv's app1 key like
+// every other page — but a PIN-login register runs as the hidden shadow
+// counselor account (see pos-pin-login), and camp_state_kv's RLS
+// deliberately blocks 'counselor' from reading app1 (a real, intentional
+// privacy carve-out for actual bunk counselors on Campistry Lite, who
+// shouldn't see the whole camp's roster/finance/health data). That's why
+// snacks inventory hydrates fine but the camper list stays empty. Fetch
+// just the roster through get_pos_roster (migration 104) instead — a
+// narrowly-scoped RPC that returns only {camperName: {division,bunk,team}},
+// nothing else app1 holds — and merge it into the same local cache
+// getRoster()/getCamperList() already read from, so nothing else here
+// needs to change.
+function _hydratePosRoster() {
+    const db = window.CampistryDB;
+    const client = db && db.getClient && db.getClient();
+    const campId = db && db.getCampId && db.getCampId();
+    if (!client || !campId) return Promise.resolve();
+    return client.rpc('get_pos_roster', { p_camp_id: campId }).then(res => {
+        const data = res && res.data;
+        if (res.error || !data || !data.success) {
+            console.warn('[Snacks POS] get_pos_roster failed:', res.error, data);
+            return;
+        }
+        try {
+            const raw = localStorage.getItem(STORE_KEY);
+            const g = raw ? JSON.parse(raw) : {};
+            g.app1 = g.app1 || {};
+            g.app1.camperRoster = data.camperRoster || {};
+            localStorage.setItem(STORE_KEY, JSON.stringify(g));
+        } catch (e) {
+            console.warn('[Snacks POS] Could not merge roster into local cache:', e);
+        }
+    }, e => {
+        console.warn('[Snacks POS] get_pos_roster threw:', e);
+    });
+}
 window.addEventListener('storage', function(e) {
     if (e.key === STORE_KEY || e.key === 'CAMPISTRY_LOCAL_CACHE') {
         snacks = loadSnacksData();
