@@ -8,9 +8,9 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=DM+Sans:opsz,wght@9..40,400;9..40,500;9..40,600;9..40,700&family=Fraunces:opsz,wght@9..144,400;9..144,500;9..144,600;9..144,700&display=swap" rel="stylesheet">
-<link rel="stylesheet" href="campistry-unified.css?v=20260901-02">
-<link rel="stylesheet" href="campistry_snacks.css?v=20260901-02">
-<link rel="stylesheet" href="campistry_ops.css?v=20260901-02">
+<link rel="stylesheet" href="campistry-unified.css?v=20260901-03">
+<link rel="stylesheet" href="campistry_snacks.css?v=20260901-03">
+<link rel="stylesheet" href="campistry_ops.css?v=20260901-03">
 <!-- Splash screen — inline so it appears before any external CSS -->
 <style>
     #snacks-splash {
@@ -22,53 +22,47 @@
     #snacks-splash.hide { opacity: 0; pointer-events: none; }
     #snacks-splash-wrap {
         position: relative;
+        display: inline-flex;
         flex-shrink: 0;
     }
-    #snacks-splash-word {
-        display: flex;
-        font-family: 'Fraunces', Georgia, 'Times New Roman', serif;
-        font-weight: 700;
-        font-size: 56px;
-        line-height: 1;
-        letter-spacing: -0.01em;
-        color: #C2410C;
-    }
-    #snacks-splash-word .ltr {
-        display: inline-block;
-        transform-origin: 50% 100%;
-        opacity: 0;
-        transform: translateY(-52px);
-        animation: letter-drop 0.6s cubic-bezier(.34,1.56,.64,1) forwards;
-    }
-    @keyframes letter-drop {
-        0%   { transform: translateY(-52px) scale(1,1);     opacity: 0; }
-        55%  { transform: translateY(3px)   scale(1.06,.88); opacity: 1; }
-        75%  { transform: translateY(-5px)  scale(.98,1.03); }
-        100% { transform: translateY(0)     scale(1,1); }
+    #snacks-splash-logo {
+        height: 72px;
+        width: auto;
+        clip-path: inset(0 100% 0 0);
     }
 </style>
 </head>
 <body>
 
-<!-- SPLASH -->
+<!-- SPLASH — same 2s ease-in-out reveal timing as Flow's/Me's splash (see
+     flow.html's #flow-logo-draw and campistry_me.html's #me-logo-draw) -->
 <div id="snacks-splash">
     <div id="snacks-splash-wrap">
-        <div id="snacks-splash-word">
-            <span class="ltr" style="animation-delay:.00s">S</span>
-            <span class="ltr" style="animation-delay:.07s">N</span>
-            <span class="ltr" style="animation-delay:.14s">A</span>
-            <span class="ltr" style="animation-delay:.21s">C</span>
-            <span class="ltr" style="animation-delay:.28s">K</span>
-            <span class="ltr" style="animation-delay:.35s">S</span>
-        </div>
+        <img id="snacks-splash-logo" src="Snacks_clean.png" alt="">
     </div>
     <script>
     (function() {
         var ov = document.getElementById('snacks-splash');
+        var img = document.getElementById('snacks-splash-logo');
+        function runDraw() {
+            var totalMs = 2000;
+            var start = null;
+            function tick(ts) {
+                if (!start) start = ts;
+                var elapsed = ts - start;
+                var pct = Math.min(elapsed / totalMs, 1);
+                var ease = pct < 0.5 ? 2 * pct * pct : 1 - Math.pow(-2 * pct + 2, 2) / 2;
+                img.style.clipPath = 'inset(0 ' + ((1 - ease) * 100).toFixed(2) + '% 0 0)';
+                if (pct < 1) requestAnimationFrame(tick);
+            }
+            requestAnimationFrame(tick);
+        }
+        if (img.complete) runDraw();
+        else img.onload = runDraw;
         setTimeout(function() {
             ov.classList.add('hide');
             setTimeout(function() { if (ov) ov.style.display = 'none'; }, 500);
-        }, 2200);
+        }, 2000);
     })();
     </script>
 </div>
@@ -84,7 +78,7 @@
     </div>
     <div class="app-header-center">
         <div data-quick-switch-mount="snacks"></div>
-        <script src="campistry_app_switcher.js?v=20260901-02"></script>
+        <script src="campistry_app_switcher.js?v=20260901-03"></script>
     </div>
     <div class="header-right">
         <div class="sync-badge"><div class="sync-dot"></div><span>Synced</span></div>
@@ -454,28 +448,28 @@ function snacksNav(page, btn) {
 }
 </script>
 
-<script src="config.js?v=20260901-02"></script>
-<script src="supabase-js@2.js?v=20260901-02"></script>
-<script src="supabase_client.js?v=20260901-02"></script>
-<script src="campistry_cloud_bootstrap.js?v=20260901-02"></script>
-<script src="campistry_payments.js?v=20260901-02"></script>
-<script src="campistry_snacks_cash.js?v=20260901-02"></script>
-<script src="campistry_snacks.js?v=20260901-02"></script>
-<script src="campistry_shop_core.js?v=20260901-02"></script>
-<script src="campistry_snacks_shop.js?v=20260901-02"></script>
+<script src="config.js?v=20260901-03"></script>
+<script src="supabase-js@2.js?v=20260901-03"></script>
+<script src="supabase_client.js?v=20260901-03"></script>
+<script src="campistry_cloud_bootstrap.js?v=20260901-03"></script>
+<script src="campistry_payments.js?v=20260901-03"></script>
+<script src="campistry_snacks_cash.js?v=20260901-03"></script>
+<script src="campistry_snacks.js?v=20260901-03"></script>
+<script src="campistry_shop_core.js?v=20260901-03"></script>
+<script src="campistry_snacks_shop.js?v=20260901-03"></script>
 <script>
 // Re-render Snacks when cloud data arrives
 window.addEventListener('campistry-cloud-hydrated', function(){
     if (typeof init === 'function') init();
 });
 </script>
-<script src="campistry_notes_quick.js?v=20260901-02"></script>
+<script src="campistry_notes_quick.js?v=20260901-03"></script>
 <script>window.__CAMPISTRY_PRODUCT__='snacks';</script>
-<script src="parent_lockout_guard.js?v=20260901-02"></script>
-<script src="product_access_guard.js?v=20260901-02"></script>
+<script src="parent_lockout_guard.js?v=20260901-03"></script>
+<script src="product_access_guard.js?v=20260901-03"></script>
 <!-- Per-SECTION access: limits which parts of THIS app the user can open.
      Loads after the product gate, which decides whether they get in at all. -->
-<script src="campistry_capabilities.js?v=20260901-02"></script>
-<script src="campistry_access_sections.js?v=20260901-02"></script>
+<script src="campistry_capabilities.js?v=20260901-03"></script>
+<script src="campistry_access_sections.js?v=20260901-03"></script>
 </body>
 </html>
