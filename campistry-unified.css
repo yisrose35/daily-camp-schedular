@@ -160,6 +160,15 @@
     --product-700: var(--violet-700);
 }
 
+[data-product="notes"] {
+    /* Warm gold — matches Notes script logo */
+    --product-50:  #FEF9EE; --product-100: #FBF0D3;
+    --product-200: #F6E0A8; --product-400: #E5B54A;
+    --product-500: #C4891A; --product-600: #9A6710;
+    --product-700: #7A500C;
+    --notes-color: #C4891A;
+}
+
 /* ==================== BASE RESET ==================== */
 *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
 
@@ -566,7 +575,6 @@ body {
     display: flex;
     align-items: center;
     gap: 4px;
-    margin-left: 14px;
     padding: 4px;
     background: rgba(255, 255, 255, 0.6);
     backdrop-filter: blur(12px);
@@ -574,7 +582,26 @@ body {
     border: 1px solid rgba(0, 0, 0, 0.06);
     border-radius: 14px;
     box-shadow: 0 2px 8px rgba(0, 0, 0, 0.04), 0 0 0 1px rgba(255,255,255,0.7) inset;
+    /* Now lists every owner app (8, up from 3) — some headers have less
+       room to spare than others, so let the bar scroll horizontally
+       rather than wrap or force the rest of the header to reflow. */
+    overflow-x: auto;
+    scrollbar-width: none;
+    max-width: calc(100% - 24px);
+    flex-shrink: 1;
+    /* Centered in the header regardless of how wide the back-button/logo
+       on the left or the avatar/sync-badge on the right happen to be —
+       every header this mounts into (.app-header, .nav, .nt-header,
+       .lk-header) is `position: sticky`, which is a valid positioning
+       context, so this centers on THAT element without needing each
+       page's own header markup restructured into left/center/right
+       zones. */
+    position: absolute;
+    left: 50%;
+    top: 50%;
+    transform: translate(-50%, -50%);
 }
+.quick-switch-bar::-webkit-scrollbar { display: none; }
 
 /* ── Shared base for both active + link ── */
 .quick-switch-link,
@@ -587,6 +614,7 @@ body {
     position: relative;
     border: none;
     outline: none;
+    flex-shrink: 0;
 }
 
 /* ── Inactive link ── */
@@ -639,6 +667,31 @@ body {
     --qs-glow: rgba(16, 185, 129, 0.15);
 }
 
+.quick-switch-link[data-app="health"] {
+    --qs-bg-hover: rgba(95, 27, 140, 0.10);
+    --qs-glow: rgba(95, 27, 140, 0.15);
+}
+
+.quick-switch-link[data-app="live"] {
+    --qs-bg-hover: rgba(33, 81, 181, 0.10);
+    --qs-glow: rgba(33, 81, 181, 0.15);
+}
+
+.quick-switch-link[data-app="notes"] {
+    --qs-bg-hover: rgba(99, 102, 241, 0.10);
+    --qs-glow: rgba(99, 102, 241, 0.15);
+}
+
+.quick-switch-link[data-app="snacks"] {
+    --qs-bg-hover: rgba(106, 50, 15, 0.10);
+    --qs-glow: rgba(106, 50, 15, 0.15);
+}
+
+.quick-switch-link[data-app="link"] {
+    --qs-bg-hover: rgba(42, 122, 53, 0.10);
+    --qs-glow: rgba(42, 122, 53, 0.15);
+}
+
 /* ── Active app (current page) ── */
 .quick-switch-active {
     background: var(--qs-active-bg, rgba(0,0,0,0.05));
@@ -686,6 +739,41 @@ body {
     --qs-dot: #10B981;
 }
 
+.quick-switch-active[data-app="health"] {
+    --qs-active-bg: rgba(95, 27, 140, 0.10);
+    --qs-active-shadow: rgba(95, 27, 140, 0.12);
+    --qs-active-ring: rgba(95, 27, 140, 0.18);
+    --qs-dot: #5F1B8C;
+}
+
+.quick-switch-active[data-app="live"] {
+    --qs-active-bg: rgba(33, 81, 181, 0.10);
+    --qs-active-shadow: rgba(33, 81, 181, 0.12);
+    --qs-active-ring: rgba(33, 81, 181, 0.18);
+    --qs-dot: #2151B5;
+}
+
+.quick-switch-active[data-app="notes"] {
+    --qs-active-bg: rgba(99, 102, 241, 0.10);
+    --qs-active-shadow: rgba(99, 102, 241, 0.12);
+    --qs-active-ring: rgba(99, 102, 241, 0.18);
+    --qs-dot: #6366F1;
+}
+
+.quick-switch-active[data-app="snacks"] {
+    --qs-active-bg: rgba(106, 50, 15, 0.10);
+    --qs-active-shadow: rgba(106, 50, 15, 0.12);
+    --qs-active-ring: rgba(106, 50, 15, 0.18);
+    --qs-dot: #6A320F;
+}
+
+.quick-switch-active[data-app="link"] {
+    --qs-active-bg: rgba(42, 122, 53, 0.10);
+    --qs-active-shadow: rgba(42, 122, 53, 0.12);
+    --qs-active-ring: rgba(42, 122, 53, 0.18);
+    --qs-dot: #2A7A35;
+}
+
 /* ==================== RESPONSIVE ==================== */
 @media (max-width: 768px) {
     .c-main { padding: var(--space-4) var(--space-3) var(--space-10); }
@@ -695,7 +783,7 @@ body {
     .c-modal { width: 95vw; max-width: 95vw; border-radius: var(--radius-lg); }
     .c-btn { min-height: 44px; }
     .c-page-title { font-size: 1.5rem; }
-    .quick-switch-bar { margin-left: 8px; padding: 3px; gap: 2px; border-radius: 10px; }
+    .quick-switch-bar { padding: 3px; gap: 2px; border-radius: 10px; }
     .quick-switch-link { padding: 4px 7px; border-radius: 8px; }
     .quick-switch-link img { height: 22px; }
     .quick-switch-active { padding: 4px 7px; border-radius: 8px; }

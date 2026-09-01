@@ -1,0 +1,9 @@
+{
+  "redirects": [
+    { "source": "/", "has": [{ "type": "host", "value": "snacks.campistry.org" }], "destination": "/pos", "permanent": false },
+    { "source": "/((?!campistry_snacks_pos|campistry_reset).*\\.html)", "has": [{ "type": "host", "value": "snacks.campistry.org" }], "destination": "/pos", "permanent": false }
+  ],
+  "rewrites": [
+    { "source": "/pos", "destination": "/campistry_snacks_pos.html" }
+  ]
+}

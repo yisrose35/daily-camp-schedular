@@ -1,0 +1,96 @@
+<!DOCTYPE html>
+<html lang="en" data-product="snacks">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Campistry Snacks — Selling Console</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=DM+Sans:opsz,wght@9..40,400;9..40,500;9..40,600;9..40,700&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="campistry-unified.css?v=20260901-07">
+<link rel="stylesheet" href="campistry_snacks_pos.css?v=20260901-07">
+</head>
+<body>
+<div class="app">
+
+<!-- TOPBAR — standalone selling console: no links back into the rest of
+     Campistry. Counselors use this at snacks.campistry.org (see vercel.json)
+     with no path out to the manager-only apps. -->
+<div class="topbar">
+<div class="topbar-left">
+<button class="camper-toggle-btn" id="camperToggleBtn" onclick="toggleCamperPanel()" aria-label="Select camper" title="Select camper">
+<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 0 0-3-3.87M16 3.13a4 4 0 0 1 0 7.75"/></svg>
+</button>
+<img src="Snacks_clean.png" alt="Campistry Snacks" class="topbar-snacks-logo">
+<div class="topbar-badge">Selling Console</div>
+</div>
+<div class="topbar-right">
+<span class="topbar-time" id="clock"></span>
+</div>
+</div>
+
+<!-- Backdrop for the camper panel when it's a slide-in drawer (tablet
+     portrait / phone widths — see the responsive rules in
+     campistry_snacks_pos.css) -->
+<div class="camper-backdrop" id="camperBackdrop" onclick="toggleCamperPanel()"></div>
+
+<!-- LEFT: Camper Selector -->
+<div class="camper-panel" id="camperPanel">
+<div class="camper-search"><input type="text" placeholder="Search camper…" id="camperSearch" oninput="renderCampers()" autofocus></div>
+<div class="camper-list" id="camperList"></div>
+</div>
+
+<!-- CENTER: Items -->
+<div class="items-panel">
+<div class="items-toolbar">
+<input type="text" placeholder="Search items…" id="itemSearch" oninput="renderItems()">
+<button class="cat-btn active" onclick="setCat(this,'all')">All</button>
+<button class="cat-btn" onclick="setCat(this,'drink')">Drinks</button>
+<button class="cat-btn" onclick="setCat(this,'snack')">Snacks</button>
+<button class="cat-btn" onclick="setCat(this,'treat')">Treats</button>
+</div>
+<div class="items-scroll">
+<div class="section-label">⚡ Quick Push — Top Sellers</div>
+<div class="quick-grid" id="quickGrid"></div>
+<div class="section-label">☰ All Items</div>
+<div class="all-grid" id="allGrid"></div>
+</div>
+</div>
+
+<!-- RIGHT: Cart -->
+<div class="cart-panel">
+<div class="cart-header"><h3>Cart</h3><button class="cart-clear" onclick="clearCart()">Clear All</button></div>
+<div class="cart-camper-bar" id="cartCamperBar"><span class="cart-camper-empty">← Select a camper</span></div>
+<div class="cart-body" id="cartBody"><div class="cart-empty">Tap items to start</div></div>
+<div class="cart-footer">
+<div class="cart-total-row"><span>Total</span><span class="val" id="cartTotal">$0.00</span></div>
+<div class="cart-remaining" id="cartRemaining"></div>
+<button class="charge-btn" id="chargeBtn" disabled onclick="charge()">Charge</button>
+</div>
+</div>
+
+</div>
+<div class="toast" id="toast"></div>
+
+<script src="config.js?v=20260901-07"></script>
+<script src="supabase-js@2.js?v=20260901-07"></script>
+<script src="supabase_client.js?v=20260901-07"></script>
+<script src="campistry_cloud_bootstrap.js?v=20260901-07"></script>
+<script src="campistry_payments.js?v=20260901-07"></script>
+<script src="campistry_snacks_cash.js?v=20260901-07"></script>
+<script src="campistry_snacks_pos.js?v=20260901-07"></script>
+<script>
+// Re-render POS when cloud data arrives
+window.addEventListener('campistry-cloud-hydrated', function(){
+    if (window.CampistrySnacksPOS) window.CampistrySnacksPOS.reinit();
+});
+</script>
+<script src="campistry_notes_quick.js?v=20260901-07"></script>
+<script>window.__CAMPISTRY_PRODUCT__='snacks';</script>
+<!-- The POS is its own page, so it declares the section it represents. -->
+<script src="campistry_capabilities.js?v=20260901-07"></script>
+<script src="campistry_access_sections.js?v=20260901-07" data-guard-section="pos"></script>
+<script src="parent_lockout_guard.js?v=20260901-07"></script>
+<script src="product_access_guard.js?v=20260901-07"></script>
+</body>
+</html>

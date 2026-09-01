@@ -1,0 +1,233 @@
+/* =============================================================================
+   campistry_snacks_pos.css — Campistry Snacks Selling Console Styles
+   Real-checkout white theme: white product cards on a soft gray canvas,
+   bold orange CTA, same Snacks brand accent as the Manager Dashboard.
+   ============================================================================= */
+
+:root {
+    /* Snacks Brand — same orange used across the rest of the Snacks app */
+    --snacks: #EA580C;
+    --snacks-dark: #C2410C;
+    --snacks-darker: #9A3412;
+    --snacks-light: #F97316;
+    --snacks-50: #FFF7ED;
+    --snacks-100: #FFEDD5;
+    --snacks-200: #FED7AA;
+    --snacks-glow: rgba(234,88,12,.16);
+
+    /* Light theme */
+    --bg: #F1F5F9;
+    --bg-panel: #FFFFFF;
+    --bg-card: #FFFFFF;
+    --bg-card-hover: #FFF7ED;
+    --border: #E2E8F0;
+    --border-strong: #CBD5E1;
+    --text: #0F172A;
+    --text-dim: #475569;
+    --text-muted: #94A3B8;
+    --red: #DC2626;
+    --red-bg: #FEF2F2;
+    --amber: #D97706;
+    --green: #16A34A;
+
+    --radius: 12px;
+    --radius-sm: 8px;
+    --radius-lg: 16px;
+    --radius-full: 999px;
+    --ease: cubic-bezier(.16, 1, .3, 1);
+    --shadow-sm: 0 1px 2px rgba(15,23,42,.05);
+    --shadow-md: 0 6px 16px rgba(15,23,42,.08), 0 1px 3px rgba(15,23,42,.06);
+}
+
+*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+html, body { height: 100%; overflow: hidden; }
+body { font-family: 'DM Sans', system-ui, sans-serif; background: var(--bg); color: var(--text); font-size: 15px; -webkit-font-smoothing: antialiased; }
+button { font-family: inherit; cursor: pointer; border: none; background: none; color: inherit; }
+
+/* === LAYOUT: full viewport, 3 columns === */
+.app { display: grid; grid-template-columns: 280px 1fr 340px; grid-template-rows: auto 1fr; height: 100vh; }
+
+/* === TOPBAR === */
+.topbar { grid-column: 1/-1; display: flex; align-items: center; justify-content: space-between; padding: 0 1.25rem; height: 56px; background: rgba(255,255,255,.92); border-bottom: 1px solid var(--border); backdrop-filter: blur(12px); box-shadow: var(--shadow-sm); z-index: 10; }
+.topbar-left { display: flex; align-items: center; gap: 12px; }
+.topbar-snacks-logo { height: 30px; width: auto; object-fit: contain; display: block; flex-shrink: 0; }
+.topbar-badge { padding: 3px 10px; font-size: .65rem; font-weight: 700; text-transform: uppercase; letter-spacing: .06em; background: var(--snacks); color: white; border-radius: var(--radius-full); white-space: nowrap; }
+.topbar-right { display: flex; align-items: center; gap: 12px; }
+.topbar-time { font-size: .8rem; color: var(--text-dim); font-variant-numeric: tabular-nums; font-family: 'DM Mono', ui-monospace, 'SFMono-Regular', Menlo, monospace; white-space: nowrap; flex-shrink: 0; }
+
+/* Camper-panel toggle — only shown once the camper panel becomes a
+   slide-in drawer instead of a fixed column (tablet portrait and below,
+   see the responsive rules at the bottom of this file). */
+.camper-toggle-btn { display: none; align-items: center; justify-content: center; width: 36px; height: 36px; border-radius: var(--radius-sm); border: 1px solid var(--border); background: #fff; color: var(--text-dim); flex-shrink: 0; }
+.camper-toggle-btn:hover { border-color: var(--snacks); color: var(--snacks-dark); background: var(--snacks-50); }
+.camper-backdrop { display: none; position: fixed; inset: 0; top: 56px; background: rgba(2,6,23,.35); z-index: 55; }
+body.camper-open .camper-backdrop { display: block; }
+
+/* === LEFT: Camper Selector === */
+.camper-panel { grid-row: 2; display: flex; flex-direction: column; border-right: 1px solid var(--border); background: var(--bg-panel); }
+.camper-search { padding: .75rem; border-bottom: 1px solid var(--border); }
+.camper-search input { width: 100%; padding: .6rem .75rem; background: var(--bg); border: 1px solid var(--border); border-radius: var(--radius-sm); color: var(--text); font-size: .875rem; outline: none; transition: border-color .15s; }
+.camper-search input:focus { border-color: var(--snacks); background: #fff; }
+.camper-search input::placeholder { color: var(--text-muted); }
+.camper-list { flex: 1; overflow-y: auto; padding: .5rem; }
+.camper-item { display: flex; align-items: center; gap: .75rem; padding: .65rem .75rem; border-radius: var(--radius); cursor: pointer; transition: all .12s; margin-bottom: 2px; }
+.camper-item:hover { background: var(--bg-card-hover); }
+.camper-item.selected { background: var(--snacks); color: white; box-shadow: var(--shadow-sm); }
+.camper-item.selected .camper-meta { color: rgba(255,255,255,.75); }
+.camper-item.selected .camper-balance { color: white; }
+.camper-item.limit-hit { opacity: .55; }
+.camper-avatar { width: 36px; height: 36px; border-radius: var(--radius-full); background: var(--snacks-50); display: flex; align-items: center; justify-content: center; font-size: .7rem; font-weight: 700; color: var(--snacks-dark); flex-shrink: 0; }
+.camper-item.selected .camper-avatar { background: rgba(255,255,255,.25); color: white; }
+.camper-info { flex: 1; min-width: 0; }
+.camper-name { font-size: .8125rem; font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.camper-meta { font-size: .65rem; color: var(--text-muted); }
+.camper-balance { font-size: .875rem; font-weight: 700; color: var(--text); white-space: nowrap; }
+.camper-balance.low { color: var(--amber); }
+.camper-balance.empty { color: var(--red); }
+
+/* === CENTER: Item Grid === */
+.items-panel { grid-row: 2; display: flex; flex-direction: column; overflow: hidden; background: var(--bg); }
+.items-toolbar { display: flex; align-items: center; flex-wrap: wrap; gap: .5rem; padding: .75rem 1rem; background: var(--bg-panel); border-bottom: 1px solid var(--border); }
+.items-toolbar input { flex: 1 1 140px; min-width: 100px; padding: .55rem .75rem; background: var(--bg); border: 1px solid var(--border); border-radius: var(--radius-sm); color: var(--text); font-size: .8125rem; outline: none; }
+.items-toolbar input:focus { border-color: var(--snacks); background: #fff; }
+.cat-btn { padding: .4rem .8rem; border-radius: var(--radius-full); font-size: .7rem; font-weight: 600; background: var(--bg); color: var(--text-dim); border: 1px solid var(--border); transition: all .12s; }
+.cat-btn:hover { background: var(--snacks-50); border-color: var(--snacks-200); color: var(--snacks-dark); }
+.cat-btn.active { background: var(--snacks); color: white; border-color: var(--snacks); }
+.items-scroll { flex: 1; overflow-y: auto; padding: 1rem; }
+.section-label { font-size: .65rem; font-weight: 700; text-transform: uppercase; letter-spacing: .1em; color: var(--text-muted); margin-bottom: .6rem; display: flex; align-items: center; gap: 5px; }
+
+/* Quick Push grid — popularity scaled */
+.quick-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(100px, 1fr)); gap: .6rem; margin-bottom: 1.5rem; }
+.item-tile { background: var(--bg-card); border: 1px solid var(--border); border-radius: var(--radius); padding: .65rem .5rem; text-align: center; cursor: pointer; transition: all .15s var(--ease); position: relative; user-select: none; box-shadow: var(--shadow-sm); }
+.item-tile:hover { border-color: var(--snacks-200); background: var(--bg-card-hover); transform: translateY(-2px); box-shadow: var(--shadow-md); }
+.item-tile:active { transform: scale(.96) translateY(0); }
+.item-tile.out { opacity: .35; pointer-events: none; }
+
+/* Popularity tiers */
+.item-tile.hot { grid-column: span 2; grid-row: span 2; padding: 1rem; border-color: var(--snacks-200); background: linear-gradient(135deg, var(--bg-card) 55%, var(--snacks-50)); }
+.item-tile.hot .tile-emoji { font-size: 3rem; }
+.item-tile.hot .tile-name { font-size: .9rem; }
+.item-tile.hot .tile-price { font-size: .85rem; }
+.item-tile.warm { grid-column: span 2; padding: .85rem; border-color: var(--snacks-100); }
+.item-tile.warm .tile-emoji { font-size: 2.25rem; }
+.item-tile.warm .tile-name { font-size: .8125rem; }
+.tile-emoji { font-size: 1.6rem; margin-bottom: .2rem; transition: transform .15s; }
+.item-tile:hover .tile-emoji { transform: scale(1.12); }
+.tile-name { font-size: .7rem; font-weight: 600; line-height: 1.2; margin-bottom: .1rem; color: var(--text); }
+.tile-price { font-size: .65rem; color: var(--snacks-dark); font-weight: 700; }
+.tile-stock { font-size: .55rem; color: var(--text-muted); margin-top: .1rem; }
+.tile-rank { position: absolute; top: 4px; right: 4px; background: var(--snacks); color: white; font-size: .5rem; font-weight: 800; padding: 1px 5px; border-radius: var(--radius-full); line-height: 1.4; }
+
+/* All items grid (smaller) */
+.all-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(90px, 1fr)); gap: .5rem; }
+.all-grid .item-tile { padding: .5rem .35rem; }
+.all-grid .tile-emoji { font-size: 1.35rem; margin-bottom: .1rem; }
+.all-grid .tile-name { font-size: .65rem; }
+.all-grid .tile-price { font-size: .6rem; }
+
+/* === RIGHT: Cart === */
+.cart-panel { grid-row: 2; display: flex; flex-direction: column; border-left: 1px solid var(--border); background: var(--bg-panel); }
+.cart-header { padding: 1rem 1.25rem; border-bottom: 1px solid var(--border); display: flex; align-items: center; justify-content: space-between; }
+.cart-header h3 { font-size: .9375rem; font-weight: 700; }
+.cart-clear { font-size: .7rem; color: var(--text-muted); transition: color .15s; }
+.cart-clear:hover { color: var(--red); }
+.cart-camper-bar { padding: .75rem 1rem; border-bottom: 1px solid var(--border); display: flex; align-items: center; gap: .5rem; background: var(--snacks-50); min-height: 52px; }
+.cart-camper-name { font-size: .8125rem; font-weight: 700; flex: 1; color: var(--text); }
+.cart-camper-bal { font-size: .8125rem; font-weight: 700; color: var(--snacks-dark); }
+.cart-camper-empty { font-size: .75rem; color: var(--text-muted); font-style: italic; }
+.cart-body { flex: 1; overflow-y: auto; padding: .75rem 1rem; }
+.cart-empty { text-align: center; padding: 2.5rem 1rem; color: var(--text-muted); font-size: .8rem; }
+.cart-line { display: flex; align-items: center; gap: .6rem; padding: .6rem 0; border-bottom: 1px solid var(--border); font-size: .8125rem; }
+.cart-line:last-child { border-bottom: none; }
+.cart-line-info { flex: 1; }
+.cart-line-name { font-weight: 600; color: var(--text); }
+.cart-line-sub { font-size: .7rem; color: var(--text-muted); }
+.cart-line-qty { display: flex; align-items: center; gap: 4px; }
+.cart-line-qty button { width: 24px; height: 24px; border-radius: 6px; border: 1px solid var(--border); display: flex; align-items: center; justify-content: center; font-size: .75rem; font-weight: 700; color: var(--text-dim); transition: all .12s; }
+.cart-line-qty button:hover { border-color: var(--snacks); background: var(--snacks-50); color: var(--snacks-dark); }
+.cart-line-qty span { min-width: 18px; text-align: center; font-weight: 700; font-size: .8rem; }
+.cart-line-total { font-weight: 700; min-width: 48px; text-align: right; color: var(--text); }
+.cart-footer { border-top: 1px solid var(--border); padding: 1rem 1.25rem; background: var(--bg); }
+.cart-total-row { display: flex; justify-content: space-between; align-items: baseline; font-size: 1rem; font-weight: 600; color: var(--text-dim); margin-bottom: .25rem; }
+.cart-total-row .val { color: var(--text); font-size: 1.5rem; font-weight: 800; font-family: 'DM Mono', ui-monospace, 'SFMono-Regular', Menlo, monospace; }
+.cart-remaining { font-size: .7rem; color: var(--text-muted); margin-bottom: .85rem; text-align: right; }
+.charge-btn { width: 100%; padding: .9rem; font-size: 1rem; font-weight: 700; color: white; background: var(--snacks); border-radius: var(--radius); transition: all .15s; letter-spacing: .01em; box-shadow: 0 2px 8px var(--snacks-glow); }
+.charge-btn:hover:not(:disabled) { background: var(--snacks-dark); box-shadow: 0 6px 20px var(--snacks-glow); transform: translateY(-1px); }
+.charge-btn:disabled { opacity: .35; cursor: not-allowed; box-shadow: none; }
+.charge-btn:active:not(:disabled) { transform: scale(.98); }
+
+/* Toast */
+.toast { position: fixed; bottom: 20px; left: 50%; transform: translateX(-50%) translateY(60px); background: var(--snacks-darker); color: white; padding: .7rem 1.5rem; border-radius: var(--radius-full); font-size: .8rem; font-weight: 600; box-shadow: 0 12px 28px rgba(15,23,42,.25); z-index: 300; opacity: 0; transition: all .3s var(--ease); pointer-events: none; }
+.toast.show { opacity: 1; transform: translateX(-50%) translateY(0); }
+.toast.err { background: var(--red); }
+
+/* Success flash */
+@keyframes successFlash { 0% { background: var(--snacks-50); } 100% { background: transparent; } }
+.flash { animation: successFlash .6s var(--ease); }
+
+/* =============================================================================
+   RESPONSIVE — this runs on whatever's at the register: a desktop, a laptop,
+   or a counselor's iPad/Android tablet of any size, portrait or landscape.
+   Two independent axes:
+     1. WIDTH tiers control the grid layout (how many columns, whether the
+        camper panel is a fixed column or a slide-in drawer).
+     2. `pointer: coarse` controls touch-target sizing everywhere a finger
+        (not a mouse) is doing the tapping — this fires on a touchscreen at
+        ANY width, including a large iPad Pro landscape that's wide enough
+        to still get the full 3-column desktop layout.
+   ============================================================================= */
+
+/* Small laptop / tablet landscape (iPad landscape is 1024-1366px) —
+   still 3 columns, just narrower side panels so more of the item grid
+   is visible. */
+@media (max-width: 1180px) {
+    .app { grid-template-columns: 230px 1fr 300px; }
+}
+
+/* Tablet portrait (iPad portrait is 768-1024px) and phones — the camper
+   panel no longer fits as a fixed column, so it becomes a slide-in
+   drawer (same open/close pattern as the Manager Dashboard's sidebar)
+   instead of just disappearing with no way to select a camper. */
+@media (max-width: 900px) {
+    .app { grid-template-columns: 1fr 300px; }
+    .camper-toggle-btn { display: flex; }
+    .camper-panel {
+        position: fixed; top: 56px; left: 0; bottom: 0; width: 300px;
+        z-index: 60; box-shadow: var(--shadow-md);
+        transform: translateX(-100%);
+        transition: transform .25s var(--ease);
+    }
+    body.camper-open .camper-panel { transform: translateX(0); }
+}
+
+/* Phone-width — cart moves below the item grid instead of beside it.
+   .items-panel/.cart-panel both hardcode grid-row:2 in the base 3-column
+   layout — with only 1 column left here (the camper panel's already a
+   drawer, out of grid flow) they need their OWN distinct rows or the
+   grid auto-placement algorithm shoves them into new implicit COLUMNS
+   instead of stacking, silently reproducing the side-by-side layout this
+   breakpoint exists to replace. */
+@media (max-width: 620px) {
+    .app { grid-template-columns: 1fr; grid-template-rows: auto 1fr auto; }
+    .items-panel { grid-row: 2; grid-column: 1; }
+    .cart-panel { grid-row: 3; grid-column: 1; max-height: 42vh; border-left: none; border-top: 1px solid var(--border); }
+    .topbar { padding: 0 .75rem; gap: .5rem; }
+    .topbar-left { gap: 8px; }
+    .topbar-snacks-logo { height: 24px; }
+    .topbar-badge { padding: 2px 8px; font-size: .6rem; }
+    .topbar-time { font-size: .7rem; }
+}
+
+/* Touch targets — bumped up on any touchscreen (tablet or touch-laptop),
+   independent of screen width, so nothing depends on precise mouse
+   pointing at a register counselors are tapping all day. */
+@media (pointer: coarse) {
+    .camper-item { padding: .8rem .85rem; }
+    .cat-btn { padding: .55rem 1rem; font-size: .78rem; }
+    .item-tile { padding: .85rem .6rem; }
+    .cart-line { padding: .75rem 0; }
+    .cart-line-qty button { width: 34px; height: 34px; font-size: .85rem; border-radius: 8px; }
+    .cart-line-qty span { min-width: 24px; }
+    .charge-btn { padding: 1.05rem; font-size: 1.05rem; }
+    .camper-toggle-btn { width: 40px; height: 40px; }
+}
