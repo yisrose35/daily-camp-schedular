@@ -86,14 +86,33 @@ async function callerCampId(req: Request): Promise<string | null> {
   const uid = userData?.user?.id;
   if (!uid) return null;
 
-  const { data: owned } = await asUser.from("camps").select("id").eq("owner", uid).maybeSingle();
+  // .maybeSingle() throws/returns null on >1 rows — an account can
+  // legitimately own more than one camp (debug copies, multiple real
+  // camps), and that silently broke this whole check for any such
+  // account: a genuine owner fell through to the camp_users check below
+  // and, finding nothing there either, got rejected as "not owner/admin"
+  // on their own camp. Mirrors detectCampAndRole()'s own tie-break in
+  // supabase_client.js: prefer the camp whose id equals the owner's own
+  // uid (the original signup convention), else just the first one.
+  const { data: ownedCamps } = await asUser.from("camps").select("id").eq("owner", uid);
+  const owned = Array.isArray(ownedCamps) && ownedCamps.length
+    ? (ownedCamps.find((c: { id: string }) => c.id === uid) || ownedCamps[0])
+    : null;
   if (owned?.id) return owned.id;
 
-  const { data: membership } = await asUser
+  // Same fix here — .maybeSingle() also broke for anyone belonging to more
+  // than one camp_users row. Most-recently-accepted wins, matching
+  // detectCampAndRole()'s STEP 1 rule (and only an ACCEPTED invite counts,
+  // same as that rule — a still-pending one shouldn't grant refund
+  // authority).
+  const { data: memberships } = await asUser
     .from("camp_users")
     .select("camp_id, role")
     .eq("user_id", uid)
-    .maybeSingle();
+    .not("accepted_at", "is", null)
+    .order("accepted_at", { ascending: false })
+    .limit(1);
+  const membership = Array.isArray(memberships) && memberships.length ? memberships[0] : null;
   if (membership?.camp_id && SENDER_ROLES.includes(membership.role)) return membership.camp_id;
   return null;
 }
