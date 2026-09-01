@@ -639,15 +639,14 @@ window.saveSettingsForm = function() {
 // ── Register PIN login (snacks.campistry.org) ──────────────────────────────
 // Gives the canteen runner a login that's genuinely separate from the
 // owner's real Campistry account — a shared PIN, scoped only to the
-// register — instead of handing out the office's own password. The PIN
-// itself is verified server-side by the pos-pin-login edge function; this
-// UI only ever sets it (set_camp_pos_pin RPC) and reads whether one's set
+// register — instead of handing out the office's own password. There's no
+// link to share anymore: any device can go straight to
+// snacks.campistry.org and type the PIN cold — the server figures out
+// which camp it belongs to (see migration 102), which is also why the PIN
+// has to be unique across every camp, not just this one. The PIN itself is
+// verified server-side by the pos-pin-login edge function; this UI only
+// ever sets it (set_camp_pos_pin RPC) and reads whether one's set
 // (get_camp_pos_login_status RPC). Neither RPC ever returns the PIN itself.
-function _posLoginUrl() {
-    const campId = (window.CampistryDB && window.CampistryDB.getCampId && window.CampistryDB.getCampId()) || '';
-    return 'https://snacks.campistry.org/pos?camp=' + encodeURIComponent(campId);
-}
-
 function loadPosPinStatus() {
     const box = document.getElementById('posPinStatus');
     const unlockBtn = document.getElementById('posPinUnlockBtn');
@@ -724,6 +723,7 @@ window.savePosPin = function() {
             const reason = (data && data.error) || (res.error && res.error.message) || 'unknown_error';
             const msgs = {
                 invalid_pin: 'PIN must be 4–8 digits',
+                pin_taken: 'That PIN is already used by another camp on Campistry — pick a different one',
                 not_authorized: 'Only the camp owner or an admin can set the register PIN',
                 not_authenticated: 'Not signed in — try reloading the page'
             };
@@ -738,15 +738,6 @@ window.savePosPin = function() {
         console.error('[Snacks Settings] set_camp_pos_pin threw:', e);
         toast('Could not save the PIN (' + ((e && e.message) || 'network error') + ')', 1);
     });
-};
-
-window.copyPosLoginLink = function() {
-    const url = _posLoginUrl();
-    if (navigator.clipboard && navigator.clipboard.writeText) {
-        navigator.clipboard.writeText(url).then(() => toast('Register link copied')).catch(() => toast(url));
-    } else {
-        toast(url);
-    }
 };
 
 // ==========================================================================
