@@ -723,7 +723,6 @@ window.savePosPin = function() {
             const reason = (data && data.error) || (res.error && res.error.message) || 'unknown_error';
             const msgs = {
                 invalid_pin: 'PIN must be 4–8 digits',
-                pin_taken: 'That PIN is already used by another camp on Campistry — pick a different one',
                 not_authorized: 'Only the camp owner or an admin can set the register PIN',
                 not_authenticated: 'Not signed in — try reloading the page'
             };

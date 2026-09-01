@@ -8,9 +8,9 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=DM+Sans:opsz,wght@9..40,400;9..40,500;9..40,600;9..40,700&display=swap" rel="stylesheet">
-<link rel="stylesheet" href="campistry-unified.css?v=20260901-16">
-<link rel="stylesheet" href="campistry_snacks_pos.css?v=20260901-16">
-<script src="config.js?v=20260901-16"></script>
+<link rel="stylesheet" href="campistry-unified.css?v=20260901-17">
+<link rel="stylesheet" href="campistry_snacks_pos.css?v=20260901-17">
+<script src="config.js?v=20260901-17"></script>
 <style>
 /* ── PIN overlay ─────────────────────────────────────────────────────────
    Default state assumes LOCKED (overlay visible, register hidden) so there
@@ -35,22 +35,15 @@ html.pos-locked #pinOverlay { display: flex; }
 #pinOverlay .pin-brand img { height: 40px; width: auto; }
 #pinOverlay .pin-brand-title { font-size: 1.05rem; font-weight: 700; color: #0F172A; }
 #pinOverlay .pin-brand-sub { font-size: .82rem; color: #64748B; text-align: center; }
-#pinOverlay label { display: block; font-size: .78rem; font-weight: 600; color: #475569; margin-bottom: 12px; text-align: center; letter-spacing: .02em; text-transform: uppercase; }
-/* Segmented PIN boxes — 4 to 8 digits, decorative boxes reflect what's
-   typed into the real (invisible, full-size) input layered on top, so
-   mobile keyboards and paste still work normally. */
-#pinOverlay .pin-boxes { position: relative; display: flex; gap: 6px; justify-content: center; }
-#pinOverlay .pin-box {
-    width: 32px; height: 42px; border: 2px solid #E2E8F0; border-radius: 10px;
-    display: flex; align-items: center; justify-content: center;
-    font-size: 1.3rem; font-weight: 700; color: #0F172A; background: #F8FAFC;
+#pinOverlay .pin-field { margin-bottom: 14px; }
+#pinOverlay label { display: block; font-size: .74rem; font-weight: 600; color: #475569; margin-bottom: 6px; letter-spacing: .02em; text-transform: uppercase; }
+#pinOverlay input {
+    width: 100%; box-sizing: border-box; font-size: 1rem;
+    padding: 12px 14px; border: 2px solid #E2E8F0; border-radius: 12px;
+    font-weight: 600; color: #0F172A; background: #F8FAFC; font-family: inherit;
 }
-#pinOverlay .pin-box.filled { border-color: #147D91; background: #fff; }
-#pinOverlay .pin-box.cursor { border-color: #147D91; }
-#pinOverlay .pin-boxes input {
-    position: absolute; inset: 0; width: 100%; height: 100%;
-    opacity: 0; border: 0; padding: 0; margin: 0; font-size: 16px; /* 16px avoids iOS auto-zoom */
-}
+#pinOverlay input#pinInputEl { letter-spacing: .4rem; text-align: center; font-size: 1.3rem; font-variant-numeric: tabular-nums; }
+#pinOverlay input:focus { outline: none; border-color: #147D91; background: #fff; }
 #pinOverlay .pin-err {
     display: none; margin-top: 14px; padding: 10px 12px; border-radius: 10px;
     background: #FEF2F2; color: #DC2626; font-size: .85rem; line-height: 1.4; text-align: center;
@@ -108,21 +101,17 @@ document.documentElement.classList.add('pos-locked');
         <div class="pin-brand">
             <img src="Campistry_logo.png" alt="Campistry">
             <div class="pin-brand-title">Snacks — Register Login</div>
-            <div class="pin-brand-sub">Enter the register PIN to open the selling console.</div>
+            <div class="pin-brand-sub">Sign in with the camp's Campistry email and the register PIN.</div>
         </div>
 
         <div id="pinForm">
-            <label for="pinInputEl">Register PIN</label>
-            <div class="pin-boxes" id="pinBoxes">
-                <span class="pin-box" data-i="0"></span>
-                <span class="pin-box" data-i="1"></span>
-                <span class="pin-box" data-i="2"></span>
-                <span class="pin-box" data-i="3"></span>
-                <span class="pin-box" data-i="4"></span>
-                <span class="pin-box" data-i="5"></span>
-                <span class="pin-box" data-i="6"></span>
-                <span class="pin-box" data-i="7"></span>
-                <input type="text" inputmode="numeric" pattern="[0-9]*" maxlength="8" id="pinInputEl" autocomplete="off">
+            <div class="pin-field">
+                <label for="pinEmailEl">Campistry Email</label>
+                <input type="email" id="pinEmailEl" autocomplete="username" placeholder="owner@example.com">
+            </div>
+            <div class="pin-field">
+                <label for="pinInputEl">Register PIN</label>
+                <input type="password" inputmode="numeric" pattern="[0-9]*" maxlength="8" id="pinInputEl" autocomplete="current-password">
             </div>
             <div class="pin-err" id="pinErrBox"></div>
             <button id="pinSubmitBtn">Unlock Register</button>
@@ -193,65 +182,59 @@ document.documentElement.classList.add('pos-locked');
 </div>
 <div class="toast" id="toast"></div>
 
-<script src="supabase-js@2.js?v=20260901-16"></script>
-<script src="supabase_client.js?v=20260901-16"></script>
-<script src="campistry_cloud_bootstrap.js?v=20260901-16"></script>
-<script src="campistry_payments.js?v=20260901-16"></script>
-<script src="campistry_snacks_cash.js?v=20260901-16"></script>
-<script src="campistry_snacks_pos.js?v=20260901-16"></script>
+<script src="supabase-js@2.js?v=20260901-17"></script>
+<script src="supabase_client.js?v=20260901-17"></script>
+<script src="campistry_cloud_bootstrap.js?v=20260901-17"></script>
+<script src="campistry_payments.js?v=20260901-17"></script>
+<script src="campistry_snacks_cash.js?v=20260901-17"></script>
+<script src="campistry_snacks_pos.js?v=20260901-17"></script>
 <script>
 // Re-render POS when cloud data arrives
 window.addEventListener('campistry-cloud-hydrated', function(){
     if (window.CampistrySnacksPOS) window.CampistrySnacksPOS.reinit();
 });
 </script>
-<script src="campistry_notes_quick.js?v=20260901-16"></script>
+<script src="campistry_notes_quick.js?v=20260901-17"></script>
 <script>window.__CAMPISTRY_PRODUCT__='snacks';</script>
 <!-- The POS is its own page, so it declares the section it represents. -->
-<script src="campistry_capabilities.js?v=20260901-16"></script>
-<script src="campistry_access_sections.js?v=20260901-16" data-guard-section="pos"></script>
-<script src="parent_lockout_guard.js?v=20260901-16"></script>
-<script src="product_access_guard.js?v=20260901-16"></script>
+<script src="campistry_capabilities.js?v=20260901-17"></script>
+<script src="campistry_access_sections.js?v=20260901-17" data-guard-section="pos"></script>
+<script src="parent_lockout_guard.js?v=20260901-17"></script>
+<script src="product_access_guard.js?v=20260901-17"></script>
 <script>
-// ── PIN overlay logic — same page as the register, no separate route,
-// no camp-scoped link required. Any device can land here cold and type
-// the PIN; the server figures out which camp it belongs to. A device that
-// has logged in before remembers its camp locally purely as a speed hint
-// (see pos-pin-login's comment header) — nothing the user ever sees or
-// needs to share.
+// ── PIN overlay logic — same page as the register, no separate route.
+// Login is the same email used for the camp's real Campistry account,
+// plus the register PIN standing in for a password (see pos-pin-login's
+// comment header — this is NOT the real account password and can never
+// reach the real account). The email field is remembered locally purely
+// as a typing convenience — it isn't a secret, and the PIN is still
+// required every single time.
 (function () {
     'use strict';
 
-    function rememberedCampId() {
-        try { return localStorage.getItem('campistry_pos_last_camp') || ''; } catch (e) { return ''; }
-    }
+    var REMEMBERED_EMAIL_KEY = 'campistry_pos_last_email';
 
-    var input = document.getElementById('pinInputEl');
-    var boxes = Array.prototype.slice.call(document.querySelectorAll('#pinBoxes .pin-box'));
+    var emailInput = document.getElementById('pinEmailEl');
+    var pinInput = document.getElementById('pinInputEl');
     var errBox = document.getElementById('pinErrBox');
     var submitBtn = document.getElementById('pinSubmitBtn');
+
+    try {
+        var rememberedEmail = localStorage.getItem(REMEMBERED_EMAIL_KEY);
+        if (rememberedEmail) emailInput.value = rememberedEmail;
+    } catch (e) {}
 
     function showErr(msg) { errBox.textContent = msg; errBox.classList.add('show'); }
     function clearErr() { errBox.classList.remove('show'); errBox.textContent = ''; }
 
-    function renderBoxes() {
-        var val = input.value || '';
-        boxes.forEach(function (box, i) {
-            var filled = i < val.length;
-            box.textContent = filled ? '•' : '';
-            box.classList.toggle('filled', filled);
-            box.classList.toggle('cursor', i === val.length);
-        });
-    }
-
-    input.addEventListener('input', function () {
+    pinInput.addEventListener('input', function () {
         this.value = this.value.replace(/[^0-9]/g, '').slice(0, 8);
         clearErr();
-        renderBoxes();
-        if (this.value.length === 8) submitPin();
     });
-    input.addEventListener('keydown', function (e) { if (e.key === 'Enter') submitPin(); });
-    document.getElementById('pinBoxes').addEventListener('click', function () { input.focus(); });
+    [emailInput, pinInput].forEach(function (el) {
+        el.addEventListener('keydown', function (e) { if (e.key === 'Enter') submitPin(); });
+        el.addEventListener('input', clearErr);
+    });
 
     // supabase-js's functions.invoke() collapses every non-2xx response into
     // a generic error — the real { error: "..." } body pos-pin-login returns
@@ -271,35 +254,37 @@ window.addEventListener('campistry-cloud-hydrated', function(){
         var db = window.CampistryDB;
         var client = db && db.getClient && db.getClient();
         if (!client) { showErr('Not ready yet — try again in a moment.'); return; }
-        var pin = (input.value || '').trim();
-        if (pin.length < 4) { showErr('Enter the PIN.'); return; }
+        var email = (emailInput.value || '').trim();
+        var pin = (pinInput.value || '').trim();
+        if (!email) { showErr('Enter the email address.'); emailInput.focus(); return; }
+        if (pin.length < 4) { showErr('Enter the PIN.'); pinInput.focus(); return; }
         clearErr();
         submitBtn.disabled = true;
         submitBtn.textContent = 'Checking…';
 
-        client.functions.invoke('pos-pin-login', { body: { campId: rememberedCampId(), pin: pin } })
+        client.functions.invoke('pos-pin-login', { body: { email: email, pin: pin } })
             .then(unwrap)
             .then(function (data) {
                 if (!data || !data.access_token) throw new Error((data && data.error) || 'Could not log in.');
                 return client.auth.setSession({ access_token: data.access_token, refresh_token: data.refresh_token })
                     .then(function () {
-                        try { if (data.campId) localStorage.setItem('campistry_pos_last_camp', data.campId); } catch (e) {}
+                        try { localStorage.setItem(REMEMBERED_EMAIL_KEY, email); } catch (e) {}
                         window.location.reload();
                     });
             })
             .catch(function (e) {
                 submitBtn.disabled = false;
                 submitBtn.textContent = 'Unlock Register';
-                input.value = '';
-                renderBoxes();
-                input.focus();
+                pinInput.value = '';
+                pinInput.focus();
                 showErr((e && e.message) || 'Could not log in. Try again.');
             });
     }
 
     submitBtn.addEventListener('click', submitPin);
-    renderBoxes();
-    if (document.documentElement.classList.contains('pos-locked')) input.focus();
+    if (document.documentElement.classList.contains('pos-locked')) {
+        (emailInput.value ? pinInput : emailInput).focus();
+    }
 })();
 </script>
 </body>
