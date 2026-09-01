@@ -283,33 +283,47 @@
                 items.push({ bunk, division: divName, field: hasField ? fName : null, activity, startMin, endMin, isSpecial: isSpecialByName(activity) });
 
                 // ★ Custom pinned tiles (and Swim+Elective blocks) RESERVE real fields,
-                //   but store them on _reservedFields/_location while entry.field holds
-                //   the tile's event NAME. The push above therefore credits usage to the
-                //   event name (which isn't a real field), leaving the actual reserved
-                //   field looking FREE in the availability report. Surface every reserved
-                //   field as its own "taken" usage so the report marks it occupied.
-                //   Gate: only when entry.field is NOT itself a real configured field —
-                //   a normal sport/special already credits its real field above, and may
-                //   carry stray candidate fields we must NOT mark as booked.
+                //   but store them on _reservedFields/_specialLocation/_customField/etc.
+                //   while entry.field holds the tile's event NAME. The push above therefore
+                //   credits usage to the event name (which isn't a real field), leaving the
+                //   actual reserved field looking FREE in the availability report. Surface
+                //   every reserved field as its own "taken" usage so the report marks it
+                //   occupied. These mirror the canonical resolver in
+                //   unified_schedule_system.js resolveEntryLocation().
                 const _fieldIsReal = hasField && _realFieldSet.size > 0 && _realFieldSet.has(fName.trim().toLowerCase());
-                if (!_fieldIsReal) {
-                    const _resvSrc = [];
-                    const _rfArr = entry._reservedFields || entry.reservedFields || entry._allReservedFields;
-                    if (Array.isArray(_rfArr)) _rfArr.forEach(x => _resvSrc.push(x));
-                    if (entry._swimElective && entry._swimLocation) _resvSrc.push(entry._swimLocation);
-                    if (typeof entry._location === 'string' && entry._location.trim()) _resvSrc.push(entry._location);
-                    _resvSrc.forEach(raw => {
-                        let n = (typeof raw === 'object' ? (raw?.name || '') : (raw || '')).trim();
-                        if (n.includes(' – ')) n = n.split(' – ')[0].trim();
-                        else if (n.includes(' - ')) n = n.split(' - ')[0].trim();
-                        if (!n || n === 'Free' || n === 'No Field') return;
-                        if (fName && n.toLowerCase() === fName.toLowerCase()) return; // already credited above
-                        const k = `${divName}|${n.toLowerCase()}|${startMin}|${endMin}`;
-                        if (_reservedSeen.has(k)) return;
-                        _reservedSeen.add(k);
-                        items.push({ bunk: divName, division: divName, field: n, activity, startMin, endMin, isSpecial: false });
-                    });
-                }
+                const _resvSrc = [];
+                // GENUINE reservation sources — always surfaced, even when entry.field is
+                // ITSELF a real field. A pinned tile can reserve a real field in .field AND
+                // additionally reserve OTHER courts (e.g. .field='Court 1' plus
+                // _reservedFields=['Court 2']); those extra reservations would otherwise look
+                // FREE in the report. The per-source dedup below (skip when n === fName, plus
+                // the div|field|start|end _reservedSeen key) keeps the real .field from being
+                // double-booked. These properties are only ever set on pinned / elective /
+                // special reservation blocks — never as stale artifacts on a normal sport —
+                // so surfacing them unconditionally is safe.
+                const _rfArr = entry._reservedFields || entry.reservedFields || entry._allReservedFields;
+                if (Array.isArray(_rfArr)) _rfArr.forEach(x => _resvSrc.push(x));
+                if (entry._swimElective && entry._swimLocation) _resvSrc.push(entry._swimLocation);
+                if (typeof entry._specialLocation === 'string' && entry._specialLocation.trim()) _resvSrc.push(entry._specialLocation);
+                if (typeof entry._customField === 'string' && entry._customField.trim()) _resvSrc.push(entry._customField);
+                if (typeof entry._partLocation === 'string' && entry._partLocation.trim()) _resvSrc.push(entry._partLocation);
+                // _location is DELIBERATELY gated behind !_fieldIsReal: field-quality re-opt
+                // rewrites .field but leaves a STALE pre-move _location behind (see
+                // resolveEntryLocation), so surfacing it for a real-field sport would
+                // phantom-book the bunk's PREVIOUS field. Only trust _location when .field
+                // isn't itself a real field.
+                if (!_fieldIsReal && typeof entry._location === 'string' && entry._location.trim()) _resvSrc.push(entry._location);
+                _resvSrc.forEach(raw => {
+                    let n = (typeof raw === 'object' ? (raw?.name || '') : (raw || '')).trim();
+                    if (n.includes(' – ')) n = n.split(' – ')[0].trim();
+                    else if (n.includes(' - ')) n = n.split(' - ')[0].trim();
+                    if (!n || n === 'Free' || n === 'No Field') return;
+                    if (fName && n.toLowerCase() === fName.toLowerCase()) return; // already credited above
+                    const k = `${divName}|${n.toLowerCase()}|${startMin}|${endMin}`;
+                    if (_reservedSeen.has(k)) return;
+                    _reservedSeen.add(k);
+                    items.push({ bunk: divName, division: divName, field: n, activity, startMin, endMin, isSpecial: false });
+                });
             });
         });
 
@@ -351,6 +365,66 @@
                 });
             });
         });
+
+        // ═══════════════════════════════════════════════════════════════
+        // Manual-skeleton facility RESERVATIONS (custom/pinned tiles).
+        // ───────────────────────────────────────────────────────────────
+        // A manual custom/pinned tile that reserves a field (reservedFields /
+        // location) is the DISPLAY source of truth on the bunk grid — the grid
+        // reads it straight off the skeleton block (see scheduler_core_main.js
+        // ~L5035). But the reservation only gets stamped into scheduleAssignments
+        // (_reservedFields) when the schedule is (re)generated. So a freshly
+        // dragged "Grandslam Park reserved for 8th grade" tile shows on the grid
+        // AND is honored by the solver, yet — before regeneration — is absent from
+        // scheduleAssignments, leaving the field looking FREE in this report.
+        // Surface reservations straight from the skeleton so the availability
+        // report matches the grid immediately. Dedup shares _reservedSeen with the
+        // scheduleAssignments pass above, so a post-generation reservation isn't
+        // drawn twice.
+        // For historical dates read that day's saved manualSkeleton (only present
+        // for days built in manual mode). For the live date use the in-memory
+        // dailyOverrideSkeleton, but ONLY in manual mode — in auto mode it can hold
+        // a stale manual skeleton from a prior session that would draw phantom
+        // reservations.
+        const _skeleton = (dateKey && dateKey !== liveDate)
+            ? (allDaily[dateKey]?.manualSkeleton || [])
+            : (window._daBuilderMode === 'auto'
+                ? []
+                : (window.dailyOverrideSkeleton || window.loadCurrentDailyData?.()?.manualSkeleton || []));
+        if (Array.isArray(_skeleton)) {
+            _skeleton.forEach(block => {
+                if (!block || block.continuation) return;
+                const divName = Array.isArray(block.division)
+                    ? (block.division[0] || 'Unknown') : (block.division || 'Unknown');
+                // Resolve the block's time window (numeric minutes preferred, else parse the strings).
+                let startMin = (typeof block.startMin === 'number') ? block.startMin
+                    : parseTimeToMinutes(block.startTime);
+                let endMin = (typeof block.endMin === 'number') ? block.endMin
+                    : parseTimeToMinutes(block.endTime);
+                if (startMin == null || endMin == null || isNaN(startMin) || isNaN(endMin)) return;
+
+                // Collect every reserved facility: the reservedFields array plus a
+                // single-field `location` (custom pins with one reserved field store
+                // it on both). The event NAME itself is never a facility, so it's not
+                // collected — only real reserved locations.
+                const _skSrc = [];
+                if (Array.isArray(block.reservedFields)) block.reservedFields.forEach(x => _skSrc.push(x));
+                if (typeof block.location === 'string' && block.location.trim()) _skSrc.push(block.location);
+                if (!_skSrc.length) return;
+
+                const activity = block.event || block.type || 'Reserved';
+                _skSrc.forEach(raw => {
+                    let n = (typeof raw === 'object' ? (raw?.name || '') : (raw || '')).trim();
+                    if (n.includes(' – ')) n = n.split(' – ')[0].trim();
+                    else if (n.includes(' - ')) n = n.split(' - ')[0].trim();
+                    if (!n || n === 'Free' || n === 'No Field') return;
+                    const k = `${divName}|${n.toLowerCase()}|${startMin}|${endMin}`;
+                    if (_reservedSeen.has(k)) return;
+                    _reservedSeen.add(k);
+                    items.push({ bunk: divName, division: divName, field: n, activity, startMin, endMin, isSpecial: false });
+                });
+            });
+        }
 
         return items;
     }
@@ -1235,8 +1309,9 @@
                         <label style="font-size:0.75rem;font-weight:600;color:#6b7280;text-transform:uppercase;display:block;margin-bottom:4px;">Activity</label>
                         <input id="rotation-activity-filter" type="text" placeholder="e.g. Basketball" style="width:100%;padding:8px 12px;border-radius:999px;border:1px solid #d1d5db;font-size:0.85rem;box-sizing:border-box;" />
                     </div>
-                    <div style="display:flex;align-items:flex-end;">
+                    <div style="display:flex;align-items:flex-end;gap:8px;">
                         <button id="rotation-refresh-btn" title="Re-read schedule data" style="padding:8px 14px;border:1px solid #d1d5db;border-radius:999px;background:#fff;color:#374151;font-size:0.8rem;font-weight:600;cursor:pointer;">↻ Refresh</button>
+                        <button id="rotation-heal-btn" title="Verify rotation memory against every saved schedule and repair any gaps" style="padding:8px 14px;border:1px solid #d1d5db;border-radius:999px;background:#fff;color:#374151;font-size:0.8rem;font-weight:600;cursor:pointer;">🔧 Verify Memory</button>
                     </div>
                 </div>
             </div>
@@ -1258,6 +1333,39 @@
             if (window.RotationCloud?.invalidateCache) window.RotationCloud.invalidateCache();
             const cur = divSelect.value;
             if (cur) renderRotationTable(cur, true); // ★ force cloud refresh
+        };
+
+        // ★ Rotation memory verify/heal — no-console access to the reconciler
+        // (Brain trace download stays console-only: downloadGenTrace())
+        const rotHeal = document.getElementById('rotation-heal-btn');
+        if (rotHeal) rotHeal.onclick = async () => {
+            if (!window.backfillRotationMemory) { alert('Memory verify is unavailable on this page.'); return; }
+            rotHeal.disabled = true;
+            const origLabel = rotHeal.textContent;
+            rotHeal.textContent = '🔧 Verifying…';
+            try {
+                const rep = await window.backfillRotationMemory();
+                if (rep) {
+                    const healed = (rep.healed || []).length;
+                    const skipped = (rep.skippedDegraded || []).length;
+                    const errs = (rep.errors || []).length;
+                    alert('Rotation memory verified.\n\n' +
+                        '• Dates in sync: ' + (rep.ok || []).length + '\n' +
+                        '• Dates repaired: ' + healed + (healed ? ' (' + rep.healed.join(', ') + ')' : '') + '\n' +
+                        (skipped ? '• Skipped (degraded local copy): ' + skipped + '\n' : '') +
+                        (errs ? '• Errors: ' + errs + ' — see console\n' : ''));
+                    if (window.RotationCloud?.invalidateCache) window.RotationCloud.invalidateCache();
+                    const cur2 = divSelect.value;
+                    if (cur2) renderRotationTable(cur2, true);
+                } else {
+                    alert('Memory verify could not run (not signed in, or cloud unavailable).');
+                }
+            } catch (e) {
+                alert('Memory verify failed: ' + (e.message || e));
+            } finally {
+                rotHeal.disabled = false;
+                rotHeal.textContent = origLabel;
+            }
         };
 
         // Show the "Select a division" placeholder so the report area isn't
@@ -1527,8 +1635,21 @@
         }
 
         // Step 3: Build lastDone from allDaily + rotationHistory (merged below)
+        // ★ HR-40: rotation-epoch watermark (complete half reset) — the report
+        // shows fresh-half numbers, so pre-epoch days are invisible to lastDone
+        // just like they are to counts (cloud + historicalCounts are already
+        // epoch-scoped upstream).
+        const _hrEpAn = (function() {
+            try {
+                const U = window.SchedulerCoreUtils || window.Utils;
+                if (U && typeof U.getRotationEpoch === 'function') return U.getRotationEpoch();
+                const e = window.loadGlobalSettings ? window.loadGlobalSettings('rotationEpoch') : null;
+                const d = (typeof e === 'string') ? e : (e && e.date);
+                return (d && /^\d{4}-\d{2}-\d{2}$/.test(d)) ? d : null;
+            } catch (_) { return null; }
+        })();
         Object.keys(allDaily)
-            .filter(k => /^\d{4}-\d{2}-\d{2}$/.test(k))
+            .filter(k => /^\d{4}-\d{2}-\d{2}$/.test(k) && (!_hrEpAn || k >= _hrEpAn))
             .sort()
             .forEach(dateKey => {
                 const sched = (dateKey === liveDate) ? todaySched

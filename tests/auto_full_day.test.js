@@ -131,6 +131,7 @@ function campConfig(opts) {
       swimGAShare: !!opts.swimGAShare,
       swimRotated: !!opts.swimRotated,
       swimAsGA: !!opts.swimAsGA,
+      swimNoFacility: !!opts.swimNoFacility,
     };
   }
   if (opts.swimWalls) {
@@ -935,7 +936,11 @@ function buildSandbox(opts) {
   // SWIM-REAL: a high-capacity, cross-grade-shared Pool so all 14 bunks can swim
   // in the 09:45-10:30 band without pool-capacity starvation. The pool is free
   // after 10:30 so swim CAN stretch over a swim|gap|Main sliver if one appears.
-  if (cfg.swimReal) {
+  // SWIM-NO-FACILITY: NO Pool field and NO Swim general activity anywhere — the
+  // camp never modeled a pool. Swim must then be UNLIMITED (no cap): all 14 bunks
+  // swim concurrently in the one legal band. Pre-fix, canUsePoolAtTime's default
+  // capacity of 12 starved bunks 13-14 ("could not place swim").
+  if (cfg.swimReal && !cfg.swimNoFacility) {
     // SWIM-GA-SHARE: model the user's real config — the Pool FIELD is restrictive
     // (not_sharable → capacity 1), but pool sharing is configured on the "Swim"
     // GENERAL ACTIVITY instead (added to globalSettings.facilities below). Without
@@ -1373,6 +1378,23 @@ async function runScenario(label, opts) {
     if (opts.requireSubFloor && !r.pass.subFloor) failures.push(`${bunk}: snack-subcategory count = ${r.subFloorCount} (want >=2 — layer floor not met)`);
   }
 
+  // requireSwimUncappedResolved: assert the engine RESOLVED the pool capacity as
+  //   UNLIMITED when no facility is assigned to swim (the [STEP 1.5] diag line
+  //   prints the same resolution chain canUsePoolAtTime uses). This is the
+  //   binding pre/post-fix observable: the old code resolved "default
+  //   capacity=12" here. End-of-day swim coverage alone can't bind — the
+  //   fullGrade pin registers pool usage per GRADE (2 grades ≪ 12), and the
+  //   per-bunk heal pass (poolSwimPairFreeAt) was already unrestricted with no
+  //   config, so the old phantom cap surfaced as per-bunk deferrals/stagger,
+  //   not necessarily as missing swim in this small harness.
+  if (opts.requireSwimUncappedResolved) {
+    const resolvedUnlimited = (sandbox.__logs || []).some(l =>
+      l.includes('[STEP 1.5] Pool sharing config:') && l.includes('UNLIMITED (no facility assigned to swim'));
+    assert.ok(resolvedUnlimited,
+      '[' + label + '] expected [STEP 1.5] to resolve pool capacity as UNLIMITED (no facility assigned to swim); got: '
+      + ((sandbox.__logs || []).find(l => l.includes('[STEP 1.5] Pool sharing config:')) || '(no pool-config line)'));
+  }
+
   // requireSwimReservedBeforeSpecials: assert Phase 2.3 actually pre-placed swim
   //   as walls (count > 0) on EVERY iteration. This is the behavior the
   //   no-bell-periods fix changes: pre-fix it logged "PRE-PLACED 0" (silent
@@ -1640,6 +1662,27 @@ test('auto scheduler honors pool sharing set on the Swim general activity (not t
     // type:'all' is honored). The unrealistic not_sharable field also poisons
     // the gap-absorber's pool-stretch, leaving a 20-min Main-adjacent gap that
     // is NOT what this scenario tests — so assert swim coverage, skip gaps.
+    requireSwim: true,
+    skipGapCheck: true,
+  });
+});
+
+// TEST 8b — SWIM-NO-FACILITY: NO facility is assigned to swim at all — no Pool
+// FIELD in the catalog, no Swim GENERAL ACTIVITY in globalSettings.facilities,
+// no legacy poolLaneCapacity. The rule: with no facility assigned, swim is
+// UNLIMITED (no cap). All 14 bunks (8 Auto + 6 Chair) share ONE legal 45-min
+// swim band (09:45-10:30), so pre-fix the phantom default capacity of 12 in
+// canUsePoolAtTime starved bunks 13-14 ("could not place swim"). Post-fix the
+// no-config default is unlimited (kill-switch: window.__swimNoFacilityUnlimited
+// = false restores 12), so every bunk swims.
+test('auto scheduler leaves swim UNCAPPED when no facility is assigned to swim', async (t) => {
+  await runScenario('SWIM-NO-FACILITY (no Pool field, no Swim general activity → unlimited)', {
+    swimReal: true,
+    swimNoFacility: true,
+    // Binding observable: the resolved pool capacity must be UNLIMITED (the old
+    // code resolved a phantom default of 12 here — fails pre-fix).
+    requireSwimUncappedResolved: true,
+    // Umbrella: every bunk still swims (14 concurrent, facility-less).
     requireSwim: true,
     skipGapCheck: true,
   });

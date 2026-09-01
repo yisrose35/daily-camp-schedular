@@ -114,3 +114,64 @@ describe('rotation_engine calculateLimitScore — fair-share hard cap', () => {
         assert.notEqual(score, Infinity);
     });
 });
+
+// ★ Division-scoped floor (2026-07-08/09 live finding): the camp-wide pool let one
+//   light-skeleton bunk anywhere (count 1) pin the floor at 1 for the whole camp,
+//   capping every division's bunks at 3 and emptying whole candidate pools → Free
+//   slots. The peer group is now the bunk's OWN division (same skeleton = same
+//   opportunity count); other divisions' counts are ignored.
+function scenarioMulti(win, divisionsMap, counts) {
+    win.divisions = {};
+    Object.keys(divisionsMap).forEach(d => { win.divisions[d] = { bunks: divisionsMap[d] }; });
+    win.RotationEngine.getActivityCount = (b, a) => (counts[b] || 0);
+    win.RotationEngine.clearHistoryCache();
+    return win.RotationEngine.calculateLimitScore;
+}
+
+describe('rotation_engine fair-share cap — division-scoped floor', () => {
+    it('a floor-1 bunk in ANOTHER division no longer caps this division', () => {
+        const win = boot();
+        // X's own floor is 3 → A(4) < 3+2 → allowed. Camp-wide floor would be 1 → blocked.
+        const limit = scenarioMulti(win, { X: ['A', 'B'], Y: ['C'] }, { A: 4, B: 3, C: 1 });
+        assert.notEqual(limit('A', ACT, {}, 'X'), Infinity, 'peer floor is 3, not the other division\'s 1');
+    });
+
+    it('a division-mate holding the low floor still blocks (real intra-division lapping)', () => {
+        const win = boot();
+        const limit = scenarioMulti(win, { X: ['A', 'B'], Y: ['C'] }, { A: 4, B: 1, C: 9 });
+        assert.equal(limit('A', ACT, {}, 'X'), Infinity, 'A(4) vs own-division floor 1 → blocked');
+    });
+
+    it('<2 doers within the division → no cap, even with doers elsewhere', () => {
+        const win = boot();
+        const limit = scenarioMulti(win, { X: ['A'], Y: ['C', 'D'] }, { A: 9, C: 1, D: 1 });
+        assert.notEqual(limit('A', ACT, {}, 'X'), Infinity, 'no peer group in X → no cap');
+    });
+
+    it('no divisionName (legacy caller) → camp-wide pool preserved', () => {
+        const win = boot();
+        const limit = scenarioMulti(win, { X: ['A', 'B'], Y: ['C'] }, { A: 4, B: 3, C: 1 });
+        assert.equal(limit('A', ACT, {}, null), Infinity, 'camp-wide floor 1 → A(4) blocked');
+    });
+
+    it('unknown divisionName falls back to camp-wide (not a crash, not a free pass)', () => {
+        const win = boot();
+        const limit = scenarioMulti(win, { X: ['A', 'B'], Y: ['C'] }, { A: 4, B: 3, C: 1 });
+        assert.equal(limit('A', ACT, {}, 'NoSuchDiv'), Infinity, 'unresolvable division → camp-wide floor 1');
+    });
+
+    it('kill switch __fairShareDivisionScope=false restores the camp-wide pool', () => {
+        const win = boot();
+        win.__fairShareDivisionScope = false;
+        const limit = scenarioMulti(win, { X: ['A', 'B'], Y: ['C'] }, { A: 4, B: 3, C: 1 });
+        assert.equal(limit('A', ACT, {}, 'X'), Infinity, 'scope off → camp-wide floor 1 → blocked');
+    });
+
+    it('per-division floors are cached independently (no cross-division bleed)', () => {
+        const win = boot();
+        // Same activity, same gen: X's floor is 3 (A allowed), Y's floor is 1 (C blocked).
+        const limit = scenarioMulti(win, { X: ['A', 'B'], Y: ['C', 'D'] }, { A: 4, B: 3, C: 3, D: 1 });
+        assert.notEqual(limit('A', ACT, {}, 'X'), Infinity, 'X floor 3 → A(4) allowed');
+        assert.equal(limit('C', ACT, {}, 'Y'), Infinity, 'Y floor 1 → C(3) blocked');
+    });
+});

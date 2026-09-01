@@ -389,6 +389,8 @@
                         gameLabel: gameLabel,
                         leagueName: leagueName,
                         sport:     sport,
+                        // Post-edit custom text (league note) — shown under the matchups.
+                        customText: (entry && entry.customText) || '',
                         // ★ For the post-edit field-change modal: where this game
                         //   lives (leagueAssignments key) + whether it's a specialty.
                         slotIdx:   idx,
@@ -1073,6 +1075,14 @@
                 });
             }
             overlay.appendChild(muList);
+            // Post-edit custom text (league note) — a line under the matchups.
+            if (ls.customText) {
+                var lNote = document.createElement('div');
+                lNote.style.cssText = 'margin:4px 6px 5px;padding:3px 7px;background:#fef9c3;border-radius:4px;font-size:0.72rem;color:#713f12;font-weight:600;overflow:hidden;text-overflow:ellipsis;';
+                lNote.textContent = ls.customText;
+                lNote.title = ls.customText;
+                overlay.appendChild(lNote);
+            }
             inner.appendChild(overlay);
         });
 
@@ -1653,6 +1663,14 @@
             }
 
             overlay.appendChild(muGrid);
+            // Post-edit custom text (league note) — a line under the matchups.
+            if (ls.customText) {
+                var lNote2 = document.createElement('div');
+                lNote2.style.cssText = 'margin:2px 8px 4px;padding:3px 8px;background:#fef9c3;border-radius:4px;font-size:11px;color:#713f12;font-weight:600;overflow:hidden;text-overflow:ellipsis;';
+                lNote2.textContent = ls.customText;
+                lNote2.title = ls.customText;
+                overlay.appendChild(lNote2);
+            }
             bodyRow.appendChild(overlay);
         });
 

@@ -679,6 +679,26 @@ function onTouchResizeMove(touch, module, wrapper) {
   }
 }
 
+// ★ Multi-grade span helpers (touch): resolve an event's span members from
+// the right module's skeleton and keep their times in lockstep.
+function _touchSpanMembers(event, module) {
+  try {
+    const internal = module === 'ms' ? window.MasterSchedulerInternal : window.DailyAdjustmentsInternal;
+    return (internal && typeof internal.spanMembers === 'function') ? internal.spanMembers(event) : null;
+  } catch (_) { return null; }
+}
+
+function _touchSyncSpanTimes(event, module) {
+  if (!event || !event.spanGroup) return;
+  try {
+    const members = _touchSpanMembers(event, module);
+    if (!members) return;
+    members.forEach(m => {
+      if (m.id !== event.id) { m.startTime = event.startTime; m.endTime = event.endTime; }
+    });
+  } catch (_) {}
+}
+
 function finishTouchResize(module, wrapper) {
   if (!resizeState) { isResizing = false; return; }
 
@@ -701,6 +721,10 @@ function finishTouchResize(module, wrapper) {
       
       event.startTime = minutesToTime(Math.max(divStartMin, Math.round(newStartMin / SNAP_MINS) * SNAP_MINS));
       event.endTime = minutesToTime(Math.min(divEndMin, Math.round(newEndMin / SNAP_MINS) * SNAP_MINS));
+
+      // ★ Multi-grade span: every grade's copy keeps the same times (mirrors
+      //   the desktop resize handlers).
+      _touchSyncSpanTimes(event, 'ms');
 
       // Trigger save and re-render through the module's methods
       if (window.MasterSchedulerInternal?.markUnsavedChanges) window.MasterSchedulerInternal.markUnsavedChanges();
@@ -733,6 +757,9 @@ function finishTouchResize(module, wrapper) {
         event.startTime = minutesToTime(Math.max(divStartMin, Math.round(newStartMin / SNAP_MINS) * SNAP_MINS));
         event.endTime = minutesToTime(Math.min(divEndMin, Math.round(newEndMin / SNAP_MINS) * SNAP_MINS));
       }
+
+      // ★ Multi-grade span: every grade's copy keeps the same times.
+      _touchSyncSpanTimes(event, 'da');
 
       // ★★★ CB-124: reconcile overlaps after the resize, exactly as the DESKTOP
       // DA resize was patched to (daily_adjustments onMouseUp). Without this the
@@ -904,9 +931,27 @@ async function finishTouchReposition(touch, module, wrapper) {
       }
     }
 
-    event.division = divName;
-    event.startTime = minutesToTime(_newStartMin121);
-    event.endTime = minutesToTime(_newStartMin121 + duration);
+    // ★ Multi-grade span: the span moves together in TIME and keeps its
+    //   grades — membership only changes via the horizontal resize grips.
+    //   Mutating event.division here would corrupt the span geometry.
+    let _spanMoved = false;
+    if (event.spanGroup) {
+      try {
+        const _members = _touchSpanMembers(event, module);
+        if (_members && _members.length > 1) {
+          const _ns = minutesToTime(_newStartMin121);
+          const _ne = minutesToTime(_newStartMin121 + duration);
+          _members.forEach(m => { m.startTime = _ns; m.endTime = _ne; });
+          _spanMoved = true;
+        }
+      } catch (_) {}
+    }
+
+    if (!_spanMoved) {
+      event.division = divName;
+      event.startTime = minutesToTime(_newStartMin121);
+      event.endTime = minutesToTime(_newStartMin121 + duration);
+    }
     // Re-tag based on the new position (set in night zone, clear back in hours).
     if (module !== 'ms') event.isNightActivity = _isNight121;
 
@@ -916,7 +961,7 @@ async function finishTouchReposition(touch, module, wrapper) {
     // and NEVER remapped, so the moved tile still pointed at the SOURCE grade's
     // league (e.g. Minors bunks scheduled against a Majors game). No-op for
     // non-league tiles and same-grade moves.
-    if (_prevDiv121 !== divName && typeof window._mbRemapLeagueForGrade === 'function') {
+    if (!_spanMoved && _prevDiv121 !== divName && typeof window._mbRemapLeagueForGrade === 'function') {
       try { window._mbRemapLeagueForGrade(event, divName); } catch (_) {}
     }
 
@@ -931,9 +976,18 @@ async function finishTouchReposition(touch, module, wrapper) {
         }));
       }
     } else {
-      // DA: also bump overlapping tiles
+      // DA: also bump overlapping tiles. A moved span keeps its divisions, so
+      // each member reconciles overlaps in its OWN column; a normal move
+      // reconciles in the drop column as before.
       if (window.DailyAdjustmentsInternal?.bumpOverlappingTiles) {
-        window.DailyAdjustmentsInternal.bumpOverlappingTiles(event, divName);
+        if (_spanMoved) {
+          try {
+            (_touchSpanMembers(event, 'da') || [event]).forEach(m =>
+              window.DailyAdjustmentsInternal.bumpOverlappingTiles(m, m.division));
+          } catch (_) {}
+        } else {
+          window.DailyAdjustmentsInternal.bumpOverlappingTiles(event, divName);
+        }
       }
       if (window.DailyAdjustmentsInternal?.saveDailySkeleton) window.DailyAdjustmentsInternal.saveDailySkeleton();
       if (window.DailyAdjustmentsInternal?.renderGrid) window.DailyAdjustmentsInternal.renderGrid();

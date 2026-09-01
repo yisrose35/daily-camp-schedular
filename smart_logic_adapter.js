@@ -127,6 +127,69 @@
     }
 
     // =========================================================================
+    // HOST-FACILITY LOCK HELPERS (see the host-facility block in
+    // canDivisionUseSpecial for why these exist)
+    // =========================================================================
+
+    const _lcName = (v) => String(v == null ? '' : v).toLowerCase().trim();
+
+    // The room a special physically occupies. '' when it can't be resolved, in
+    // which case the host-facility check is skipped (fail open — a special that
+    // can't be located has no room to double-book).
+    function _resolveSpecialHost(specialName, props) {
+        try {
+            if (props && props.location) return props.location;
+            // Case-duplicated specials: the copy carrying the location may not be
+            // the one `props` came from, so fall back to the canonical lookups.
+            if (typeof window.getSpecialActivityByName === 'function') {
+                const s = window.getSpecialActivityByName(specialName);
+                if (s && s.location) return s.location;
+            }
+            if (typeof window.getLocationForActivity === 'function') {
+                const l = window.getLocationForActivity(specialName);
+                if (l) return (typeof l === 'object' ? l.name : l) || '';
+            }
+        } catch (_e) { /* fail open */ }
+        return '';
+    }
+
+    // Slot indices mean different clock times in each division's grid, so ask by
+    // TIME whenever this division's grid can give us one (the same correction the
+    // league and specialty-league pools use). Slot-index lookup is the fallback.
+    function _lockOnHostFacility(hostLoc, slots, divisionName) {
+        const GFL = window.GlobalFieldLocks;
+        if (!GFL) return null;
+        try {
+            const grid = (divisionName && window.divisionTimes && window.divisionTimes[divisionName]) || null;
+            if (grid && typeof GFL.isFieldLockedByTime === 'function') {
+                const s = grid[slots[0]] && grid[slots[0]].startMin;
+                const e = grid[slots[slots.length - 1]] && grid[slots[slots.length - 1]].endMin;
+                if (s != null && e != null) return GFL.isFieldLockedByTime(hostLoc, s, e, divisionName) || null;
+            }
+            return GFL.isFieldLocked(hostLoc, slots, divisionName) || null;
+        } catch (_e) { return null; }
+    }
+
+    // Is this lock the special's OWN placement holding its own room? Every path
+    // that seats a special stamps the special's name into `activity`:
+    //   "Basketball Clinic (smart tile @ Gym 1)"   smart_tile_special_location
+    //   "Basketball Clinic (multi-guarantee)"      smart_tile_multi_guarantee
+    //   "Basketball Clinic (special @ Gym 1)"      special_activity_location
+    //   "Special: Basketball Clinic"               placed_special_facility (6.95)
+    // Matched exactly rather than by substring so "Swim" can't be mistaken for a
+    // lock belonging to "Swimming". A DIFFERENT special's lock is a real conflict
+    // (one room, one special) and is deliberately NOT exempted.
+    function _lockIsSameSpecial(lock, specialName) {
+        const a = _lcName(lock && lock.activity);
+        const n = _lcName(specialName);
+        if (!a || !n) return false;
+        if (a === n) return true;
+        if (a === 'special: ' + n) return true;
+        if (a.startsWith(n + ' (')) return true;
+        return false;
+    }
+
+    // =========================================================================
     // CORE: CHECK IF DIVISION CAN USE A SPECIAL (WITH LOCK CHECK)
     // =========================================================================
     
@@ -144,12 +207,12 @@
      */
     function canDivisionUseSpecial(divisionName, props, specialName, slots) {
         if (!props) return true; // No props = no restrictions
-        
+
         // CHECK GLOBAL FIELD LOCKS (Elective locks) - CRITICAL!
         if (window.GlobalFieldLocks && slots && slots.length > 0) {
             // Check the activity name
             let lockInfo = window.GlobalFieldLocks.isFieldLocked(specialName, slots, divisionName);
-            
+
             // Also check swim/pool aliases
             if (!lockInfo && isSwimOrPool(specialName)) {
                 for (const alias of SWIM_POOL_ALIASES) {
@@ -157,13 +220,41 @@
                     if (lockInfo) break;
                 }
             }
-            
+
             if (lockInfo) {
                 log(`    [LOCK] ${specialName} is locked for ${divisionName}: ${lockInfo.reason || lockInfo.lockedBy}`);
                 return false;
             }
+
+            // ★★★ HOST-FACILITY LOCK ★★★
+            // The checks above ask "is anything locked under this special's NAME?".
+            // But a special is PHYSICALLY in a room — "Basketball Clinic" runs in
+            // "Gym 1" — and everything that competes for that room locks it under
+            // the ROOM's name: leagues, specialty leagues, pinned tiles, preserved
+            // multi-scheduler placements. None of those are visible to a name-only
+            // check, so the clinic could be dropped into a room a league was
+            // already sitting in — a physical double-book neither engine sees.
+            //
+            // The room's OWN special must still be able to fill it: several paths
+            // lock the room the moment the first bunk is seated there
+            // (smart_tile_special_location / smart_tile_multi_guarantee /
+            // special_activity_location / placed_special_facility), and blocking on
+            // those would stop the second bunk joining and silently shrink every
+            // shared special. So a lock is only a conflict when it belongs to
+            // SOMETHING ELSE — see _lockIsSameSpecial.
+            // Killswitch: window.__specialHostLockCheck = false.
+            if (window.__specialHostLockCheck !== false) {
+                const hostLoc = _resolveSpecialHost(specialName, props);
+                if (hostLoc && _lcName(hostLoc) !== _lcName(specialName)) {
+                    const hostLock = _lockOnHostFacility(hostLoc, slots, divisionName);
+                    if (hostLock && !_lockIsSameSpecial(hostLock, specialName)) {
+                        log(`    [LOCK] ${specialName}: its room "${hostLoc}" is taken by ${hostLock.activity || hostLock.leagueName || hostLock.lockedBy}`);
+                        return false;
+                    }
+                }
+            }
         }
-        
+
         // Check accessRestrictions restrictions
         if (props.accessRestrictions?.enabled) {
             const allowedDivisions = props.accessRestrictions.divisions || {};
@@ -394,6 +485,35 @@
                 return;
             }
 
+            // 2a. FIELD RESERVATIONS (skeleton pins + electives) — robust wall-clock,
+            //     cross-division-safe. Uses the REAL block times (startMin/endMin) of
+            //     this pool query, NOT slot indices — so it never suffers the per-grade
+            //     slot-index misalignment that lets a foreign division miss an elective's
+            //     GlobalFieldLocks lock. This is the special-pool parity for what
+            //     canBlockFit does for sports (see scheduler_core_main STEP 2.45 note):
+            //     an elective reserves its facilities for its OWN grade only, a pin
+            //     reserves against everyone. Without this, an elective's reserved special
+            //     (e.g. Pizza Making) leaks to another division's SmartTile special.
+            if (window.fieldReservations && startMin != null && endMin != null) {
+                const _isElectiveOwn = (r) =>
+                    (r.type === 'elective' || r.type === 'swim_elective') &&
+                    r.division && String(r.division) === String(divisionName);
+                const _resvHit = (nm) => {
+                    const list = nm && window.fieldReservations[nm];
+                    if (!Array.isArray(list)) return null;
+                    return list.find(r => r && r.startMin < endMin && r.endMin > startMin && !_isElectiveOwn(r)) || null;
+                };
+                let _rz = _resvHit(specialName);
+                if (!_rz) _rz = _resvHit(_resolveHostLoc(specialName));
+                if (!_rz && isSwimOrPool(specialName)) {
+                    for (const _a of SWIM_POOL_ALIASES) { _rz = _resvHit(_a); if (_rz) break; }
+                }
+                if (_rz) {
+                    log(`    ❌ ${specialName}: reserved for ${_rz.division} ("${_rz.event}") — blocked for ${divisionName}`);
+                    return;
+                }
+            }
+
             // 2. CHECK DIVISION RESTRICTIONS + LOCKS (UPDATED!)
             if (!canDivisionUseSpecial(divisionName, props, specialName, slots)) {
                 log(`    ❌ ${specialName}: NOT ALLOWED for division "${divisionName}" (restriction or lock)`);
@@ -440,21 +560,53 @@
                 : [];
             const dailyRules = [..._nameRules, ..._locRules];
 
-           // 4. Check time rules (daily override takes precedence over global)
+           // 4. Check time rules — TWO SCOPES, AND-combined (the block is open only
+            //    if BOTH the special's own rules AND any per-date facility rules allow it).
             // ★ Rainy day: bypass time rules if rainyDayAvailableAllDay is set
+            //
+            // ★ BUG FIX: the old code did `dailyRules.length > 0 ? dailyRules : ownRules`,
+            //   so ANY per-date rule keyed to the special's ROOM (_locRules, resolved from
+            //   the special's location) WHOLESALE REPLACED the special's own timeRules —
+            //   silently discarding the special's own Unavailable window. Real case:
+            //   "Cap Making behind Masmidim BM" is closed 12:20–1:25 in its own config, but
+            //   its room "Cap Making" had a per-date availability rule in Resources, so the
+            //   special's Unavailable window was thrown away and it leaked into 12:20–1:25.
+            //   Fix: evaluate each scope separately and block if EITHER says closed. This
+            //   also keeps each scope's Available windows correctly scoped — they are OR'd
+            //   only WITHIN a scope, never merged across scopes (which would loosen one
+            //   scope's availability using the other's window).
+            //
+            //   Scope precedence:
+            //   (a) SPECIAL scope — a per-date override keyed to the special's own NAME
+            //       (_nameRules) REPLACES its config timeRules (intended per-date
+            //       precedence); otherwise the special's config rules apply. Config rules
+            //       are read from BOTH copies (props = activityProperties, special =
+            //       getGlobalSpecialActivities) since they can diverge.
+            //   (b) FACILITY scope — a per-date override keyed to the special's ROOM
+            //       (_locRules) is an ADDITIONAL constraint (room closed today → special
+            //       can't run). It never relaxes the special's own availability.
             const bypassTimeRules = isRainyMode && props.rainyDayAvailableAllDay === true;
-            const effectiveRules = dailyRules.length > 0 ? dailyRules : (props.timeRules || []);
-            
-            if (effectiveRules.length > 0 && !bypassTimeRules) {
-                const isOpen = checkTimeRulesForBlock(startMin, endMin, effectiveRules, slots, divisionName);
-                
-                if (!isOpen) {
-                    log(`    ❌ ${specialName}: closed during ${startMin}-${endMin} (time rules)`);
-                    return;
+            const _ownTimeRules = (props === special)
+                ? (Array.isArray(props.timeRules) ? props.timeRules : [])
+                : [
+                    ...(Array.isArray(props.timeRules) ? props.timeRules : []),
+                    ...((special && Array.isArray(special.timeRules)) ? special.timeRules : [])
+                  ];
+            const _specialScopeRules = _nameRules.length > 0 ? _nameRules : _ownTimeRules;
+            const _ruleScopes = [];
+            if (_specialScopeRules.length > 0) _ruleScopes.push(_specialScopeRules);
+            if (_locRules.length > 0) _ruleScopes.push(_locRules);
+
+            if (_ruleScopes.length > 0 && !bypassTimeRules) {
+                for (const _scopeRules of _ruleScopes) {
+                    if (!checkTimeRulesForBlock(startMin, endMin, _scopeRules, slots, divisionName)) {
+                        log(`    ❌ ${specialName}: closed during ${startMin}-${endMin} (time rules)`);
+                        return;
+                    }
                 }
             }
-            if (bypassTimeRules && effectiveRules.length > 0) {
-                log(`    🌧️ ${specialName}: bypassing ${effectiveRules.length} time rule(s) (rainy day override)`);
+            if (bypassTimeRules && _ruleScopes.length > 0) {
+                log(`    🌧️ ${specialName}: bypassing time rule(s) (rainy day override)`);
             }
 
             // 5. Calculate capacity from special_activities.js / fields.js
@@ -702,14 +854,28 @@
                 : 0;
         });
 
+        // ★ Avoid-unless-needed (Rules tab): a special on the grade's avoid list is
+        //   pushed to the very bottom of the ranking with a huge additive term, so a
+        //   Smart Tile only lands it when it is the sole usable special (better than
+        //   an empty tile). It stays in usableSpecials — this is a rank-down, never a
+        //   veto — so "give it rather than a Free tile" holds. Sports never route
+        //   through here (Smart Tiles place specials), so this only bites a special
+        //   whose name the user avoid-listed. Resolved once per special.
+        const _AVOID = 1e9;
+        const _avoidOf = {};
+        const _divForAvoid = (typeof window.getDivisionForBunk === 'function') ? window.getDivisionForBunk(bunk) : null;
+        usableSpecials.forEach(sp => {
+            _avoidOf[sp.name] = (_divForAvoid && window.SchedulerCoreUtils?.isSportAvoidedUnlessNeeded?.(_divForAvoid, sp.name)) ? _AVOID : 0;
+        });
+
         const sorted = [...usableSpecials].sort((a, b) => {
             // Base score = all-time usage (least-used-first = variety). Below-floor
             // specials get a strong negative escalation pull (period-scoped) so they
             // sort ahead of every non-floor special — floors are near-mandatory.
             const countA = bunkHistory[a.name] || 0;
             const countB = bunkHistory[b.name] || 0;
-            const scoreA = countA - (_floorEsc[a.name] || 0);
-            const scoreB = countB - (_floorEsc[b.name] || 0);
+            const scoreA = countA - (_floorEsc[a.name] || 0) + (_avoidOf[a.name] || 0);
+            const scoreB = countB - (_floorEsc[b.name] || 0) + (_avoidOf[b.name] || 0);
             if (scoreA !== scoreB) return scoreA - scoreB;
             return Math.random() - 0.5;
         });
@@ -1027,8 +1193,10 @@
 
             function getSpecialUsageCount(bunk) {
                 // ★ Within-division fairness = specials this bunk has had THIS PERIOD (default
-                //   this week), not lifetime — matches the cross-division need-first ordering so
-                //   a bunk well-served earlier doesn't stay deprioritized all week. Kill switch
+                //   this week) counting EVERY special alike — not lifetime, and never scoped to
+                //   the special on offer. Matches the cross-division need-first ordering so a
+                //   bunk that had a DIFFERENT special yesterday still ranks behind one that had
+                //   none. (Shared helper also folds in specials already placed today.) Kill switch
                 //   window.__smartTileNeedFirst = false → lifetime (legacy). Period tunable via
                 //   window.__smartTileNeedPeriod (default '1week').
                 // ★ PERF: reuse the ONE memoized period count exposed by scheduler_core_main
@@ -1377,7 +1545,11 @@
         isSwimOrPool: isSwimOrPool,
         getCanonicalSwimName: getCanonicalSwimName,
         // ★ V44.3: Exposed for camp-wide budget calculation
-        getAvailableSpecialsForTimeBlock: getAvailableSpecialsForTimeBlock
+        getAvailableSpecialsForTimeBlock: getAvailableSpecialsForTimeBlock,
+        // Access gate + host-facility lock helpers — diagnostics + tests
+        canDivisionUseSpecial: canDivisionUseSpecial,
+        _resolveSpecialHost: _resolveSpecialHost,
+        _lockIsSameSpecial: _lockIsSameSpecial
     };
 
     // =========================================================================

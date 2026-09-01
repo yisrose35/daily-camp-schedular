@@ -620,6 +620,7 @@
         } catch (e) { /* fall back to row timestamps */ }
         const _bunkEff = {};
         const _segEff = {};
+        const _lgEff = {};   // leagueAssignments winner per division (same MS-3 stamps)
         // ★ MS-4c: the division's GRID (divisionTimes + _perBunkSlotsData)
         // must come from the SAME row that wins the division's CONTENT.
         // The old "keep the version with more slots" rule could pair one
@@ -684,10 +685,20 @@
                 });
             }
             
-            // Merge leagueAssignments
+            // Merge leagueAssignments — ★ MS-3 parity: the map is DIVISION-
+            // keyed, so arbitrate each division by its _divStamps recency
+            // (falling back to the row's updated_at) exactly like
+            // scheduleAssignments above. The old unconditional overwrite let a
+            // scoped generation's re-saved STALE copy of another division's
+            // league games (fresh row timestamp, old content) shadow the
+            // other scheduler's newer matchups.
             if (data.leagueAssignments) {
                 Object.entries(data.leagueAssignments).forEach(([div, slots]) => {
-                    mergedLeagues[div] = slots;
+                    const eff = (_stamps && _stamps[div] != null) ? _stamps[div] : _rowMs;
+                    if (_lgEff[div] == null || eff > _lgEff[div]) {
+                        _lgEff[div] = eff;
+                        mergedLeagues[div] = slots;
+                    }
                 });
             }
             
@@ -754,7 +765,14 @@
             // Still GUARDED below: skip when the structure isn't loaded (_divs empty) or
             // yields no valid bunks (_valid.size === 0) — never wipe a racing/early load.
             const _gs = window.loadGlobalSettings ? window.loadGlobalSettings() : null;
-            const _divs = (_gs && _gs.app1 && _gs.app1.divisions) || null;
+            // ★ Prefer the LIVE registry (window.divisions, built from campStructure):
+            //   the app1.divisions blob is only rewritten when app1 itself saves, so a
+            //   bunk added mid-season in Campistry Me is missing from it — pruning
+            //   against the stale blob would DELETE that bunk's freshly generated
+            //   entries on every load. Blob stays as fallback for non-Flow contexts.
+            const _liveDivs = (window.divisions && !Array.isArray(window.divisions)
+                && Object.keys(window.divisions).length > 0) ? window.divisions : null;
+            const _divs = _liveDivs || (_gs && _gs.app1 && _gs.app1.divisions) || null;
             if (_divs && Object.keys(_divs).length > 0) {
                 const _valid = new Set();
                 Object.values(_divs).forEach(d => { if (d && Array.isArray(d.bunks)) d.bunks.forEach(b => _valid.add(String(b))); });
@@ -837,7 +855,12 @@
         if (!assignmentsObj || typeof assignmentsObj !== 'object') return 0;
         let gs = null;
         try { gs = window.loadGlobalSettings ? window.loadGlobalSettings() : null; } catch (_) { return 0; }
-        const divs = (gs && gs.app1 && gs.app1.divisions) || null;
+        // ★ Prefer the LIVE registry (window.divisions) over the app1.divisions blob —
+        //   the blob goes stale between app1 saves (bunk added mid-season in Campistry
+        //   Me), and pruning against it would strip that bunk's real schedule.
+        const _liveDivs = (window.divisions && !Array.isArray(window.divisions)
+            && Object.keys(window.divisions).length > 0) ? window.divisions : null;
+        const divs = _liveDivs || (gs && gs.app1 && gs.app1.divisions) || null;
         if (!divs || Object.keys(divs).length === 0) return 0;
         const valid = new Set();
         Object.values(divs).forEach(d => { if (d && Array.isArray(d.bunks)) d.bunks.forEach(b => valid.add(String(b))); });
@@ -1334,13 +1357,16 @@
                 await new Promise(r => setTimeout(r, delay));
                 
                 try {
+                    // maybeSingle: .single() throws a 406 network error into the
+                    // console when the row hasn't replicated yet — the retry loop
+                    // handles the miss either way, so ask politely.
                     const { data: verifyData, error: verifyError } = await client
                         .from(CONFIG.TABLE_NAME)
                         .select('updated_at, schedule_data')
                         .eq('camp_id', campId)
                         .eq('date_key', dateKey)
                         .eq('scheduler_id', userId)
-                        .single();
+                        .maybeSingle();
 
                     if (!verifyError && verifyData) {
                         const cloudBunks = Object.keys(verifyData.schedule_data?.scheduleAssignments || {}).length;

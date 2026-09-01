@@ -155,7 +155,17 @@ LOW_COVERAGE_BONUS: -3500,             // Bunk has tried <50% of activities
         // TIE-BREAKER CONFIGURATION
         // =====================================================================
         TIE_BREAKER_RANGE: 500,
-        TIE_BREAKER_RANDOMNESS: 300
+        TIE_BREAKER_RANDOMNESS: 300,
+
+        // =====================================================================
+        // AVOID-UNLESS-NEEDED (Rules tab "Don't Give Unless Needed")
+        // =====================================================================
+        // Huge FINITE penalty: ranks the sport below every organic candidate
+        // (worst realistic combined score is ~150k) but keeps it feasible, so
+        // it is chosen only when the alternative is a Free slot. Kept below the
+        // auto engine's 999999 Infinity-mapping so hard-blocked candidates
+        // still rank worse than avoided-but-allowed ones.
+        AVOID_UNLESS_NEEDED_PENALTY: 500000
     };
 
     // Expose config for external access and tuning
@@ -197,9 +207,13 @@ var _todayCacheGeneration = 0;
             const today = window.currentScheduleDate || new Date().toISOString().split('T')[0];
             
             // Get sorted dates (most recent first), excluding today
+            // ★ HR-14: COMPLETE reset — bunks get new campers at the half, so
+            // even the 14-day recency/streak/coverage window must not look
+            // across the rotation epoch. Pre-epoch days are invisible here.
+            const _hrEp14 = _hrRotationEpoch();
             const _dateRe = /^\d{4}-\d{2}-\d{2}$/;
             const sortedDates = Object.keys(allDaily)
-                .filter(function(d) { return _dateRe.test(d) && d < today; })
+                .filter(function(d) { return _dateRe.test(d) && d < today && (!_hrEp14 || d >= _hrEp14); })
                 .sort(function(a, b) { return b.localeCompare(a); });
             
             // Process last 14 days
@@ -332,6 +346,36 @@ RotationEngine.invalidateBunkTodayCache = function(bunkName) {
         _todayActivityCache.delete(keysToDelete[i]);
     }
 };
+
+    /**
+     * ★ Re-apply the cloud rotation overlay after a cache wipe.
+     *
+     * The generation preamble (scheduler_core_main.js / scheduler_core_auto.js)
+     * loads RotationCloud and merges counts+lastDone into the history cache via
+     * mergeCloudData — that is what makes recency scoring work on devices whose
+     * localStorage allDailyData is incomplete. Any clearHistoryCache() call
+     * AFTER that merge (e.g. TotalSolver.solveSchedule's fresh-start clear)
+     * silently destroys the overlay, and every activity the local scan can't
+     * see scores as "never done" (-5000) — observed live 2026-07-08: 259/400
+     * scored pairs claimed never-done while the count store had them done.
+     * This helper re-merges from RotationCloud's in-memory cache (sync, no
+     * network). Call it immediately after any mid-pipeline cache clear.
+     *
+     * @returns {boolean} true if cached cloud data existed and was merged
+     */
+    RotationEngine.reoverlayCloudCache = function() {
+        try {
+            var data = window.RotationCloud && window.RotationCloud.getCachedData
+                ? window.RotationCloud.getCachedData() : null;
+            if (data && (data.counts || data.lastDone)) {
+                RotationEngine.mergeCloudData(data);
+                return true;
+            }
+        } catch (e) {
+            console.warn('[RotationEngine] reoverlayCloudCache failed:', e);
+        }
+        return false;
+    };
 
     // ★★★ EXPOSE buildBunkActivityHistory on RotationEngine object ★★★
     RotationEngine.buildBunkActivityHistory = buildBunkActivityHistory;
@@ -469,6 +513,11 @@ window.invalidateBunkRotationCache = RotationEngine.invalidateBunkTodayCache;
                 String(yesterday.getMonth() + 1).padStart(2, '0') + '-' + 
                 String(yesterday.getDate()).padStart(2, '0');
 
+            // ★ HR-15: COMPLETE reset — a pre-epoch yesterday is treated as
+            // empty (mirrors Utils.getActivitiesDoneYesterday HR-13).
+            var _hrEp15 = _hrRotationEpoch();
+            if (_hrEp15 && yesterdayStr < _hrEp15) return activities;
+
             var yesterdayData = allDaily[yesterdayStr];
             if (!yesterdayData || !yesterdayData.scheduleAssignments || !yesterdayData.scheduleAssignments[bunkName]) {
                 return activities;
@@ -486,6 +535,22 @@ window.invalidateBunkRotationCache = RotationEngine.invalidateBunkTodayCache;
         }
         return activities;
     };
+
+    // ★ HR-9: rotation-epoch reader (Half Reset watermark). COMPLETE reset:
+    // bunks get new campers at the half, so ALL history — cooldowns, counts,
+    // multiPart gaps, AND the 14-day recency/streak/yesterday heuristics —
+    // ignores pre-epoch dates (HR-13/14/15).
+    // Local fallback because load order may precede scheduler_core_utils.
+    function _hrRotationEpoch() {
+        try {
+            if (window.SchedulerCoreUtils && typeof window.SchedulerCoreUtils.getRotationEpoch === 'function') {
+                return window.SchedulerCoreUtils.getRotationEpoch();
+            }
+            var e = window.loadGlobalSettings ? window.loadGlobalSettings('rotationEpoch') : null;
+            var d = (typeof e === 'string') ? e : (e && e.date);
+            return (d && /^\d{4}-\d{2}-\d{2}$/.test(d)) ? d : null;
+        } catch (_) { return null; }
+    }
 
     /**
      * Get the last time a bunk did a specific activity (days ago)
@@ -508,29 +573,137 @@ window.invalidateBunkRotationCache = RotationEngine.invalidateBunkTodayCache;
             return actHistory.daysSinceLast;
         }
         
-        // Fallback to SchedulerCoreUtils
+        // Fallback to SchedulerCoreUtils — but do NOT trust its null verbatim:
+        // it only checks exact-key historicalCounts, so counts living under a
+        // different key casing or in manualUsageOffsets read as "never done".
+        // Keep walking our own fallbacks when it comes back empty.
         if (window.SchedulerCoreUtils && window.SchedulerCoreUtils.getDaysSinceActivity) {
-            return window.SchedulerCoreUtils.getDaysSinceActivity(bunkName, activityName, beforeSlotIndex);
+            var utilsDays = window.SchedulerCoreUtils.getDaysSinceActivity(bunkName, activityName, beforeSlotIndex);
+            if (utilsDays !== null && utilsDays !== undefined) return utilsDays;
         }
-        
+
         // Final fallback - check rotation history timestamps
         var rotationHistory = window.loadRotationHistory ? window.loadRotationHistory() : { bunks: {} };
         var bunkHistory = rotationHistory.bunks && rotationHistory.bunks[bunkName];
         var lastTimestamp = bunkHistory && (bunkHistory[activityName] || bunkHistory[actLower]);
+        // ★ HR-9: a rotationHistory timestamp from before epoch midnight is
+        // invisible (bookkeeping resets at the epoch; the schedule-scan path
+        // above is the recency source and stays unfiltered).
+        try {
+            var _hrEp9 = _hrRotationEpoch();
+            if (_hrEp9 && lastTimestamp && lastTimestamp < new Date(_hrEp9 + 'T00:00:00').getTime()) {
+                lastTimestamp = null;
+            }
+        } catch (_) {}
         if (lastTimestamp) {
             var now = Date.now();
             var daysSince = Math.floor((now - lastTimestamp) / (1000 * 60 * 60 * 24));
             return Math.max(1, daysSince);
         }
-        
-        // Check historical counts
-        var globalSettings = window.loadGlobalSettings ? window.loadGlobalSettings() : {};
-        var historicalCounts = globalSettings.historicalCounts || {};
-        if (historicalCounts[bunkName] && historicalCounts[bunkName][activityName] > 0) {
+
+        // Check counts (getActivityCount is case-insensitive and includes
+        // manualUsageOffsets — wider than the exact-key check above)
+        if (RotationEngine.getActivityCount(bunkName, activityName) > 0) {
             return 14; // Assume 2 weeks if count exists but no timestamp
         }
-        
+
         return null; // Never done
+    };
+
+    /**
+     * ★ HR-10: epoch-floored daysSince for COOLDOWN/GAP gates.
+     * Cooldowns (frequencyDays) and multiPart daysBetween reset at the
+     * rotation epoch — a pre-epoch occurrence must never block placement.
+     * (Since HR-14 the shared 14-day history is itself epoch-filtered, so
+     * this is belt-and-braces for cached histories built pre-filter; the
+     * per-date entries carry dateKeys, so we can filter them here without
+     * touching the shared history cache.)
+     */
+    RotationEngine.getDaysSinceActivityForCooldown = function(bunkName, activityName, beforeSlotIndex) {
+        // ★ The epoch (if any) only floors WHICH prior dates are visible — it does
+        //   NOT decide calendar-vs-schedule counting. The gap is always measured in
+        //   SCHEDULE-days (see below), so this runs whether or not an epoch is set.
+        var epoch = _hrRotationEpoch();
+
+        var actLower = (activityName || '').toLowerCase().trim();
+
+        // Today's draft occurrences are the active generation — never pre-epoch.
+        var todayActivities = RotationEngine.getActivitiesDoneToday(bunkName, beforeSlotIndex);
+        if (todayActivities.has(actLower)) return 0;
+
+        // 14-day schedule scan: only post-epoch dates may trigger a cooldown.
+        var history = RotationEngine.getBunkHistory(bunkName);
+        var actHistory = history.byActivity[actLower];
+        if (actHistory) {
+            var best = null, minAll = null, bestKey = null;
+            var dates = actHistory.dates || [];
+            for (var i = 0; i < dates.length; i++) {
+                var d = dates[i];
+                if (!d || typeof d.daysAgo !== 'number') continue;
+                if (minAll === null || d.daysAgo < minAll) minAll = d.daysAgo;
+                // Epoch floor applies only when an epoch is configured.
+                if ((!epoch || (d.dateKey && String(d.dateKey) >= epoch)) && (best === null || d.daysAgo < best)) {
+                    best = d.daysAgo;
+                    bestKey = d.dateKey ? String(d.dateKey) : null;
+                }
+            }
+            // A daysSinceLast fresher than every scanned date came from the
+            // cloud lastDone overlay (mergeCloudData) — post-epoch by
+            // construction, since RotationCloud.load is epoch-filtered (HR-7).
+            var dsl = actHistory.daysSinceLast;
+            var _dslWins = false;
+            if (dsl != null && (minAll === null || dsl < minAll) && (best === null || dsl < best)) { best = dsl; _dslWins = true; }
+            if (best !== null) {
+                // ★ Cooldown gap is measured in SCHEDULE-days, not calendar days:
+                //   a day the grade isn't at camp (no schedule) must not count
+                //   toward "min N days between visits". Convert the most-recent
+                //   occurrence's dateKey to a schedule-day gap. The cloud-overlay
+                //   dsl has no dateKey to anchor from, so it falls through to its
+                //   raw (calendar) value.
+                if (bestKey && !_dslWins && window.SchedulerCoreUtils && window.SchedulerCoreUtils.scheduledDaysBetween) {
+                    var _todayCD = window.currentScheduleDate
+                        ? (typeof window.currentScheduleDate === 'string' ? window.currentScheduleDate : window.currentScheduleDate.toISOString().slice(0, 10))
+                        : new Date().toISOString().split('T')[0];
+                    var _gapCD = window.SchedulerCoreUtils.scheduledDaysBetween(bunkName, bestKey, _todayCD, null);
+                    if (typeof _gapCD === 'number' && _gapCD > 0) return _gapCD;
+                }
+                return best;
+            }
+        }
+
+        // No schedule-scan anchor to convert. When there is NO epoch, defer to
+        // the plain recency source (RotationEngine.getDaysSinceActivity — which
+        // already blends history / utils / timestamp / count). There is no epoch
+        // to protect against here, and this preserves the original no-epoch
+        // behavior (the schedule-day conversion above still wins whenever the
+        // history scan finds a dateKey to anchor from). When an epoch IS set we
+        // keep the epoch-safe fallbacks below so a pre-epoch occurrence can't leak.
+        if (!epoch && typeof RotationEngine.getDaysSinceActivity === 'function') {
+            var _plainDays = RotationEngine.getDaysSinceActivity(bunkName, activityName, beforeSlotIndex);
+            if (_plainDays !== null && _plainDays !== undefined) return _plainDays;
+        }
+
+        // Utils fallback — HR-6 already epoch-floors its timestamp and its
+        // count fallback reads epoch-scoped historicalCounts.
+        if (window.SchedulerCoreUtils && window.SchedulerCoreUtils.getDaysSinceActivity) {
+            var utilsDays = window.SchedulerCoreUtils.getDaysSinceActivity(bunkName, activityName, beforeSlotIndex);
+            if (utilsDays !== null && utilsDays !== undefined) return utilsDays;
+        }
+
+        // rotationHistory timestamp fallback — epoch-floored (HR-9 semantics)
+        // only when an epoch is set; otherwise any prior timestamp counts.
+        var rotationHistory = window.loadRotationHistory ? window.loadRotationHistory() : { bunks: {} };
+        var bunkHistory = rotationHistory.bunks && rotationHistory.bunks[bunkName];
+        var lastTimestamp = bunkHistory && (bunkHistory[activityName] || bunkHistory[actLower]);
+        if (lastTimestamp && (!epoch || lastTimestamp >= new Date(epoch + 'T00:00:00').getTime())) {
+            return Math.max(1, Math.floor((Date.now() - lastTimestamp) / (1000 * 60 * 60 * 24)));
+        }
+
+        // Count fallback — epoch-scoped after HR-4/HR-7, so a positive count
+        // means a real post-epoch occurrence.
+        if (RotationEngine.getActivityCount(bunkName, activityName) > 0) return 14;
+
+        return null; // Never done (since the epoch)
     };
 
     /**
@@ -597,16 +770,30 @@ window.invalidateBunkRotationCache = RotationEngine.invalidateBunkTodayCache;
      *   the existing NEVER_DONE bonus. Returns null when fewer than 2 bunks have done
      *   it (no real distribution yet) or when disabled. Cached per generation.
      *   Kill switch: window.__fairShareHardCap = false.
+     *
+     * ★ Scope: when divisionName is given, the pool is ONLY that division's bunks.
+     *   Division-mates share a skeleton, so they have comparable opportunity counts —
+     *   the camp-wide pool compared apples to oranges: one light-skeleton bunk
+     *   anywhere holding count 1 pinned the floor at 1 for the WHOLE camp (observed
+     *   live 2026-07-08/09: every blocked activity had floor=1, capping all 19
+     *   Basketball doers at 3 and emptying one bunk's entire candidate pool → Free
+     *   slots). <2 doers within the division → null (no peer group, no cap).
+     *   Camp-wide pool only when the caller has no division (legacy callers).
+     *   Kill switch back to camp-wide: window.__fairShareDivisionScope = false.
      */
-    RotationEngine.getFairShareFloor = function(activityName) {
+    RotationEngine.getFairShareFloor = function(activityName, divisionName) {
         if (window.__fairShareHardCap === false) return null;
         var key = (activityName || '').toLowerCase().trim();
         if (!key) return null;
-        if (_fairShareFloorCache.has(key)) return _fairShareFloorCache.get(key);
         var divisions = window.divisions || {};
+        var scopeDiv = (window.__fairShareDivisionScope !== false &&
+                        divisionName != null && divisions[divisionName]) ? String(divisionName) : null;
+        var cacheKey = (scopeDiv || '*') + '||' + key;
+        if (_fairShareFloorCache.has(cacheKey)) return _fairShareFloorCache.get(cacheKey);
         var min = Infinity, doers = 0;
         for (var dn in divisions) {
             if (!Object.prototype.hasOwnProperty.call(divisions, dn)) continue;
+            if (scopeDiv && dn !== scopeDiv) continue;
             var dv = divisions[dn];
             var bunks = (dv && dv.bunks) || [];
             for (var i = 0; i < bunks.length; i++) {
@@ -615,7 +802,7 @@ window.invalidateBunkRotationCache = RotationEngine.invalidateBunkTodayCache;
             }
         }
         var floor = (doers >= 2 && min !== Infinity) ? min : null;
-        _fairShareFloorCache.set(key, floor);
+        _fairShareFloorCache.set(cacheKey, floor);
         return floor;
     };
 
@@ -678,7 +865,19 @@ window.invalidateBunkRotationCache = RotationEngine.invalidateBunkTodayCache;
         var actHistory = history.byActivity[actLower];
 
         // Never done at all - HUGE bonus! (no recency conflict possible)
+        // ★ SPLIT-BRAIN GUARD: "absent from the history scan" is NOT proof of
+        //   "never done" — the scan only sees local allDailyData (+ whatever
+        //   cloud overlay survived), while the count store (historicalCounts /
+        //   rotation_counts) is cumulative. Live trace 2026-07-08: 65% of scored
+        //   pairs got this -5000 bonus while their own frequency component
+        //   proved count > 0 — recency was rewarding activities done days ago.
+        //   Before granting the novelty bonus, check the count store; if it says
+        //   the bunk HAS done this, score recency via the fallback chain
+        //   (rotation timestamps → counts ⇒ assume 14d) instead.
         if (!actHistory || actHistory.count === 0) {
+            if (RotationEngine.getActivityCount(bunkName, activityName) > 0) {
+                return RotationEngine.calculateRecencyScoreFallback(bunkName, activityName, beforeSlotIndex);
+            }
             return CONFIG.NEVER_DONE_BONUS;
         }
         
@@ -804,7 +1003,15 @@ window.invalidateBunkRotationCache = RotationEngine.invalidateBunkTodayCache;
 
     if (deviation <= -3) return CONFIG.UNDER_UTILIZED_BONUS;
     if (deviation <= -1) return CONFIG.SLIGHTLY_UNDER_BONUS;
-    if (deviation === 0) return 0;
+    // ★ FLOAT-GAP FIX (2026-07-08 brain trace): deviation is a float (count −
+    //   mean). The old `=== 0` check only caught exact zero, so a NEVER-DONE
+    //   activity on a bunk whose average was fractional (e.g. count 0, avg 0.3
+    //   → deviation −0.3) fell through to the `<= 1` branch and ate the +1500
+    //   "slightly above average" PENALTY. Observed live: every zero-count
+    //   activity in a sparse-history camp scored +1500 — an anti-rotation
+    //   signal punishing exactly the activities the bunk needed most. Anything
+    //   at or below the average is now neutral; only genuinely-above pays.
+    if (deviation <= 0) return 0;
     if (deviation <= 1) return CONFIG.SLIGHTLY_ABOVE_PENALTY;
     if (deviation <= 2) return CONFIG.ABOVE_AVERAGE_PENALTY;
 
@@ -940,7 +1147,11 @@ window.invalidateBunkRotationCache = RotationEngine.invalidateBunkTodayCache;
         var coverageRatio = triedActivities / allActivities.length;
 
         // Has this bunk ever tried this activity? (keys are normalized)
-        var hasTriedThis = history.byActivity[actLower] && history.byActivity[actLower].count > 0;
+        // ★ SPLIT-BRAIN GUARD (same as calculateRecencyScore): the history scan
+        //   missing an activity is not proof it was never tried — consult the
+        //   cumulative count store before granting the missing-activity bonus.
+        var hasTriedThis = (history.byActivity[actLower] && history.byActivity[actLower].count > 0)
+            || RotationEngine.getActivityCount(bunkName, activityName) > 0;
 
         if (!hasTriedThis) {
             var needRatio = 1 - coverageRatio;
@@ -960,9 +1171,25 @@ window.invalidateBunkRotationCache = RotationEngine.invalidateBunkTodayCache;
     };
 
     /**
+     * ★ GenTrace helper: record WHY an activity was hard-blocked for a bunk.
+     *   Stores the reason on RotationEngine._lastBlockReason (read by
+     *   calculateRotationScore for its score-breakdown trace) and feeds the
+     *   generation brain trace when one is recording. Always returns Infinity
+     *   so call sites read `return _blk(...)`.
+     */
+    function _blk(bunkName, activityName, reason, detail) {
+        RotationEngine._lastBlockReason = reason;
+        if (window.GenTrace && window.GenTrace.active) {
+            window.GenTrace.block(bunkName, activityName, reason, detail);
+        }
+        return Infinity;
+    }
+
+    /**
      * Calculate LIMIT score - for activities with usage limits
      */
     RotationEngine.calculateLimitScore = function(bunkName, activityName, activityProperties, divisionName) {
+        RotationEngine._lastBlockReason = null;
         var props = (activityProperties && activityProperties[activityName]) || {};
         // ★ available=false hard gate: a globally-disabled special must never be
         //   scheduled. canBlockFit also rejects available===false, but some manual
@@ -971,11 +1198,11 @@ window.invalidateBunkRotationCache = RotationEngine.invalidateBunkTodayCache;
         //   written. Block it here (the shared rotation-scoring choke point) so a
         //   disabled special is never picked. activityProperties carries `available`
         //   for every special (buildActivityProperties copies it), so props is reliable.
-        if (props.available === false) return Infinity;
+        if (props.available === false) return _blk(bunkName, activityName, 'special-disabled');
         // ★ PER-DATE BUNK-ONLY RESTRICTION — "only available for these bunk(s) today".
         //   Auto rotation gate for special/sport targets (matches by activity name).
         //   Facility targets are enforced in the field gate (isFieldAvailable).
-        if (window.SchedulerCoreUtils?.isBunkRestrictedFromTarget?.(bunkName, activityName, null, divisionName)) return Infinity;
+        if (window.SchedulerCoreUtils?.isBunkRestrictedFromTarget?.(bunkName, activityName, null, divisionName)) return _blk(bunkName, activityName, 'per-date-bunk-restriction');
         var _getPeriodCount = window.SchedulerCoreUtils?.getPeriodActivityCount;
         var _cdForEsc = parseInt(props.frequencyDays) || 0;
 
@@ -991,14 +1218,16 @@ window.invalidateBunkRotationCache = RotationEngine.invalidateBunkTodayCache;
         // Skip daysSince=0 (same-day; variety score handles intra-day dup).
         // Skip null/undefined (never done; nothing to cooldown from).
         if (_cdForEsc > 0) {
-            var _daysSinceCD = RotationEngine.getDaysSinceActivity(bunkName, activityName);
+            // ★ HR-11: cooldowns reset at the rotation epoch — use the
+            // epoch-floored variant so a pre-epoch visit can never block.
+            var _daysSinceCD = RotationEngine.getDaysSinceActivityForCooldown(bunkName, activityName);
             // ★ A cooldown requires an ACTUAL prior occurrence. Guard on getActivityCount > 0
             //   (the schedule-derived count the user sees) so a stale lastDone with a zero
             //   count — cloud rotation_counts diverging from the rebuilt history — can never
             //   block a special the bunk has never done and force it to the Swim fallback.
             if (typeof _daysSinceCD === 'number' && _daysSinceCD > 0 && _daysSinceCD < _cdForEsc
                 && RotationEngine.getActivityCount(bunkName, activityName) > 0) {
-                return Infinity;
+                return _blk(bunkName, activityName, 'frequencyDays-cooldown', { daysSince: _daysSinceCD, cooldownDays: _cdForEsc });
             }
         }
 
@@ -1026,12 +1255,14 @@ window.invalidateBunkRotationCache = RotationEngine.invalidateBunkTodayCache;
             var _mpPrior = (typeof RotationEngine.getActivityCount === 'function')
                 ? (RotationEngine.getActivityCount(bunkName, activityName) || 0) : 0;
             // All parts already placed → never schedule this special again.
-            if (_mpTotal > 0 && _mpPrior >= _mpTotal) return Infinity;
+            if (_mpTotal > 0 && _mpPrior >= _mpTotal) return _blk(bunkName, activityName, 'multiPart-complete', { partsDone: _mpPrior, totalParts: _mpTotal });
             // daysBetween: minimum gap since the previous part must elapse.
             var _mpGap = parseInt(_mp.daysBetween) || 0;
             if (_mpGap > 0) {
-                var _mpSince = RotationEngine.getDaysSinceActivity(bunkName, activityName);
-                if (typeof _mpSince === 'number' && _mpSince > 0 && _mpSince < _mpGap) return Infinity;
+                // ★ HR-12: multiPart sequences restart at part 1 at the epoch —
+                // the gap gate must not see pre-epoch parts.
+                var _mpSince = RotationEngine.getDaysSinceActivityForCooldown(bunkName, activityName);
+                if (typeof _mpSince === 'number' && _mpSince > 0 && _mpSince < _mpGap) return _blk(bunkName, activityName, 'multiPart-daysBetween', { daysSince: _mpSince, daysBetween: _mpGap });
             }
         }
 
@@ -1055,7 +1286,7 @@ window.invalidateBunkRotationCache = RotationEngine.invalidateBunkTodayCache;
                         var _avFull = ['sunday', 'monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday'][_avDow];
                         var _avAllowed = props.availableDays.map(function (d) { return String(d).toLowerCase(); });
                         if (_avAllowed.indexOf(_avAbbr) < 0 && _avAllowed.indexOf(_avFull) < 0) {
-                            return Infinity;
+                            return _blk(bunkName, activityName, 'availableDays-weekday', { today: _avFull, allowed: props.availableDays });
                         }
                     }
                 }
@@ -1104,7 +1335,7 @@ window.invalidateBunkRotationCache = RotationEngine.invalidateBunkTodayCache;
                         var _cc = RotationEngine.getActivityCount(_cohortBunks[_rci], activityName);
                         if (_cc < _cohortMin) _cohortMin = _cc;
                     }
-                    if (_myCohortCount > _cohortMin) return Infinity;
+                    if (_myCohortCount > _cohortMin) return _blk(bunkName, activityName, 'rotationCohort-waiting', { myCount: _myCohortCount, cohortMin: _cohortMin });
                 }
             }
         }
@@ -1122,7 +1353,7 @@ window.invalidateBunkRotationCache = RotationEngine.invalidateBunkTodayCache;
 
         // Hard ceiling
         if (maxUsage > 0) {
-            if (maxCount >= maxUsage) return Infinity;
+            if (maxCount >= maxUsage) return _blk(bunkName, activityName, 'maxUsage-cap', { count: maxCount, maxUsage: maxUsage, period: maxPeriod });
             if (maxCount >= maxUsage - 1) return CONFIG.NEAR_LIMIT_PENALTY;
             if (maxCount >= maxUsage - 2) return CONFIG.LIMITED_ACTIVITY_PENALTY;
         }
@@ -1135,7 +1366,7 @@ window.invalidateBunkRotationCache = RotationEngine.invalidateBunkTodayCache;
         if (exactFreq > 0) {
             var exactPeriod = props.exactFrequencyPeriod || '1week';
             var exactCount = _getPeriodCount ? _getPeriodCount(bunkName, activityName, exactPeriod) : RotationEngine.getActivityCount(bunkName, activityName);
-            if (exactCount >= exactFreq) return Infinity;
+            if (exactCount >= exactFreq) return _blk(bunkName, activityName, 'exactFrequency-reached', { count: exactCount, exactFrequency: exactFreq, period: exactPeriod });
             if (exactCount >= exactFreq - 1) return CONFIG.NEAR_LIMIT_PENALTY;
             var exactShortage = exactFreq - exactCount;
             if (exactShortage > 0) {
@@ -1165,13 +1396,17 @@ window.invalidateBunkRotationCache = RotationEngine.invalidateBunkTodayCache;
         //   contention. Placed LAST so an explicit maxUsage/exactFrequency ceiling or
         //   a below-floor min-frequency pull always wins; this only governs activities
         //   no per-bunk limit rule already decided. Counts are from saved history
-        //   (stable within a gen). Trade-off: a capped bunk with no other feasible
-        //   option gets a Free slot. Kill switch: window.__fairShareHardCap = false;
+        //   (stable within a gen). Floor is division-scoped (see getFairShareFloor).
+        //   Trade-off: a capped bunk with no other feasible option gets a Free slot —
+        //   softened by the last-resort relax pass in auto_fill_slot.js scoreAndPick,
+        //   which may re-admit ONLY fair-share-capped candidates before leaving a
+        //   slot Free. Kill switch: window.__fairShareHardCap = false;
         //   gap override: window.__fairShareGap (default 2).
-        var _fsFloor = RotationEngine.getFairShareFloor(activityName);
+        var _fsFloor = RotationEngine.getFairShareFloor(activityName, divisionName);
         if (_fsFloor !== null) {
             var _fsGap = (typeof window.__fairShareGap === 'number' && window.__fairShareGap > 0) ? window.__fairShareGap : 2;
-            if (RotationEngine.getActivityCount(bunkName, activityName) >= _fsFloor + _fsGap) return Infinity;
+            var _fsMyCount = RotationEngine.getActivityCount(bunkName, activityName);
+            if (_fsMyCount >= _fsFloor + _fsGap) return _blk(bunkName, activityName, 'fairShare-cap', { myCount: _fsMyCount, floor: _fsFloor, gap: _fsGap });
         }
 
         return 0;
@@ -1210,10 +1445,16 @@ window.invalidateBunkRotationCache = RotationEngine.invalidateBunkTodayCache;
         var actLower = (activityName || '').toLowerCase().trim();
         if (actLower === 'free' || actLower === 'free play' || actLower === 'no field') return 0;
 
+        // ★ GenTrace: capture the full component breakdown (or block cause) for
+        //   the brain trace. Deduped per bunk|activity|slot inside GenTrace, so
+        //   repeated scoring calls are cheap and the trace holds the latest view.
+        var _gt = (window.GenTrace && window.GenTrace.active) ? window.GenTrace : null;
+
         // RECENCY - primary factor
         var recencyScore = RotationEngine.calculateRecencyScore(bunkName, activityName, beforeSlotIndex);
 
         if (recencyScore === Infinity) {
+            if (_gt) _gt.score({ bunk: bunkName, activity: activityName, slot: beforeSlotIndex, blocked: true, blockReason: 'already-done-today' });
             return Infinity;
         }
 
@@ -1221,6 +1462,7 @@ window.invalidateBunkRotationCache = RotationEngine.invalidateBunkTodayCache;
         var varietyScore = RotationEngine.calculateVarietyScore(bunkName, activityName, beforeSlotIndex);
 
         if (varietyScore === Infinity) {
+            if (_gt) _gt.score({ bunk: bunkName, activity: activityName, slot: beforeSlotIndex, blocked: true, blockReason: 'already-done-today' });
             return Infinity;
         }
 
@@ -1240,8 +1482,21 @@ window.invalidateBunkRotationCache = RotationEngine.invalidateBunkTodayCache;
         var limitScore = RotationEngine.calculateLimitScore(bunkName, activityName, activityProperties, divisionName);
 
         if (limitScore === Infinity) {
+            if (_gt) _gt.score({ bunk: bunkName, activity: activityName, slot: beforeSlotIndex, blocked: true, blockReason: RotationEngine._lastBlockReason || 'limit' });
             return Infinity;
         }
+
+        // ★ AVOID-UNLESS-NEEDED (Rules tab): soft "don't give unless needed" rule.
+        //   A huge finite penalty — NOT Infinity — so the sport ranks below every
+        //   normal candidate but stays feasible; it is placed only when the
+        //   alternative would be a Free slot. All engines rank through this
+        //   function, so the penalty steers auto, manual, fills and suggestions.
+        var avoidPenalty = 0;
+        try {
+            if (window.SchedulerCoreUtils?.isSportAvoidedUnlessNeeded?.(divisionName, activityName)) {
+                avoidPenalty = CONFIG.AVOID_UNLESS_NEEDED_PENALTY;
+            }
+        } catch (e) { /* fail open */ }
 
         // Combine with weights
         var totalScore = (
@@ -1251,8 +1506,18 @@ window.invalidateBunkRotationCache = RotationEngine.invalidateBunkTodayCache;
             varietyScore * CONFIG.WEIGHTS.variety +
             distributionScore * CONFIG.WEIGHTS.distribution +
             coverageScore * CONFIG.WEIGHTS.coverage +
-            limitScore
+            limitScore +
+            avoidPenalty
         );
+
+        if (_gt) {
+            _gt.score({
+                bunk: bunkName, activity: activityName, slot: beforeSlotIndex, division: divisionName,
+                recency: recencyScore, streak: streakScore, frequency: frequencyScore,
+                variety: varietyScore, distribution: distributionScore, coverage: coverageScore,
+                limit: limitScore, avoid: avoidPenalty, total: Math.round(totalScore)
+            });
+        }
 
         return totalScore;
     };
@@ -1345,6 +1610,21 @@ window.invalidateBunkRotationCache = RotationEngine.invalidateBunkTodayCache;
                     scored.unshift(tieGroup[tieGroup.length - 1 - i]);
                 }
             }
+        }
+
+        // ★ GenTrace: record the ranked list the engine handed back — this is
+        //   the "what did it think was best for this bunk at this slot" record.
+        if (window.GenTrace && window.GenTrace.active) {
+            var _allowed = [], _blocked = [];
+            for (var _gi = 0; _gi < scored.length; _gi++) {
+                var _p = scored[_gi];
+                if (_p.allowed) _allowed.push({ name: _p.activityName, score: Math.round(_p.score) });
+                else if (_blocked.length < 20) _blocked.push(_p.activityName);
+            }
+            window.GenTrace.rank({
+                bunk: bunkName, division: divisionName, slot: beforeSlotIndex,
+                ranked: _allowed, blocked: _blocked
+            });
         }
 
         return scored;
@@ -1580,6 +1860,11 @@ window.invalidateBunkRotationCache = RotationEngine.invalidateBunkTodayCache;
 
         if (merged > 0) {
             console.log('[RotationEngine] Merged ' + merged + ' cloud-only activity records into history cache');
+        }
+        // ★ GenTrace: make the overlay visible in the brain trace so a future
+        //   trace proves whether recency scoring had cloud history available.
+        if (window.GenTrace && window.GenTrace.active) {
+            window.GenTrace.event('rotation', 'cloud rotation overlay merged into history cache', { bunks: allBunks.size, newRecords: merged });
         }
     };
 

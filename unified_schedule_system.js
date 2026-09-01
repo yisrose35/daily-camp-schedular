@@ -191,12 +191,12 @@
             if (fld && fld.accessRestrictions && fld.accessRestrictions.enabled) {
                 const divs = fld.accessRestrictions.divisions || {};
                 if (gradeKey != null && !(gradeKey in divs) && !(grade in divs)) {
-                    return { ok: false, soft: false, reason: 'Field ' + location + ' is not allowed for ' + grade };
+                    return { ok: false, soft: true, reason: 'Field ' + location + ' is not normally allowed for ' + grade };
                 }
                 const bunkList = divs[gradeKey] || divs[grade];
                 if (Array.isArray(bunkList) && bunkList.length > 0
                     && !bunkList.map(String).includes(String(bunk))) {
-                    return { ok: false, soft: false, reason: 'Bunk ' + bunk + ' is not in the allowed list for ' + location };
+                    return { ok: false, soft: true, reason: 'Bunk ' + bunk + ' is not in the allowed list for ' + location };
                 }
             }
 
@@ -204,12 +204,12 @@
             if (spByName && spByName.accessRestrictions && spByName.accessRestrictions.enabled) {
                 const divs = spByName.accessRestrictions.divisions || {};
                 if (gradeKey != null && !(gradeKey in divs) && !(grade in divs)) {
-                    return { ok: false, soft: false, reason: 'Special ' + activity + ' is not allowed for ' + grade };
+                    return { ok: false, soft: true, reason: 'Special ' + activity + ' is not normally allowed for ' + grade };
                 }
                 const bunkList = divs[gradeKey] || divs[grade];
                 if (Array.isArray(bunkList) && bunkList.length > 0
                     && !bunkList.map(String).includes(String(bunk))) {
-                    return { ok: false, soft: false, reason: 'Bunk ' + bunk + ' is not in the allowed list for ' + activity };
+                    return { ok: false, soft: true, reason: 'Bunk ' + bunk + ' is not in the allowed list for ' + activity };
                 }
             }
 
@@ -228,7 +228,7 @@
                     const rDivs = Array.isArray(r.divisions) ? r.divisions.map(String) : [];
                     if (rDivs.length > 0 && gradeKey && !rDivs.includes(gradeKey)) continue;
                     if (isUnavail && rs < endMin && re > startMin) {
-                        return { ok: false, soft: false, reason: 'Field ' + location + ' is Unavailable in this time window' };
+                        return { ok: false, soft: true, reason: 'Field ' + location + ' is marked Unavailable in this time window' };
                     }
                     if (isAvail) {
                         hasGradeAvail = true;
@@ -236,7 +236,7 @@
                     }
                 }
                 if (hasGradeAvail && !insideAvail) {
-                    return { ok: false, soft: false, reason: 'Field ' + location + ' is outside its Available windows for ' + grade };
+                    return { ok: false, soft: true, reason: 'Field ' + location + ' is outside its Available windows for ' + grade };
                 }
             }
 
@@ -246,7 +246,7 @@
                 || [];
             if (location && Array.isArray(disabledFields)
                 && disabledFields.map(String).indexOf(String(location)) >= 0) {
-                return { ok: false, soft: false, reason: 'Field ' + location + ' is disabled for today' };
+                return { ok: false, soft: true, reason: 'Field ' + location + ' is disabled for today' };
             }
             const dsByField = window.dailyDisabledSportsByField || {};
             const ds = location ? dsByField[location] : null;
@@ -254,7 +254,7 @@
                 const blocked = (typeof ds.has === 'function') ? ds.has(activity)
                               : (Array.isArray(ds) ? ds.indexOf(activity) >= 0 : false);
                 if (blocked) {
-                    return { ok: false, soft: false, reason: activity + ' is disabled on ' + location + ' for today' };
+                    return { ok: false, soft: true, reason: activity + ' is disabled on ' + location + ' for today' };
                 }
             }
 
@@ -264,16 +264,15 @@
                 const want = String(activity).toLowerCase();
                 const inList = fld.activities.some(function (a) { return String(a).toLowerCase() === want; });
                 if (!inList) {
-                    return { ok: false, soft: false, reason: activity + ' is not configured for ' + location };
+                    return { ok: false, soft: true, reason: activity + ' is not configured for ' + location };
                 }
             }
 
-            // 6a. FieldCombos exclusivity — HARD. Two fields can't be
-            // physically used at once when they share space (e.g. Full
-            // Gym + Gym 1 + Gym 2). Earlier the SchedulingRules call
-            // below classified this with cooldowns under SOFT, letting
-            // the user confirm-through and double-book a physical
-            // court. Split out as a hard check.
+            // 6a. FieldCombos exclusivity — SOFT (warn only). Two fields that
+            // share physical space (e.g. Full Gym + Gym 1 + Gym 2) can't really
+            // be used at once, but per product decision a manual post-edit must
+            // never be hard-blocked — surface it as a "Place anyway?" warning so
+            // the user stays in control (they may be knowingly overriding).
             if (location && window.FieldCombos
                 && typeof window.FieldCombos.isBlockedByCombo === 'function'
                 && startMin != null && endMin != null) {
@@ -281,8 +280,8 @@
                     const _combo = window.FieldCombos.isBlockedByCombo(location, startMin, endMin, bunk);
                     if (_combo && _combo.blocked) {
                         return {
-                            ok: false, soft: false,
-                            reason: 'Field ' + location + ' conflicts with ' + (_combo.blockingField || 'a combined field') + ' (FieldCombos)'
+                            ok: false, soft: true,
+                            reason: 'Field ' + location + ' overlaps ' + (_combo.blockingField || 'a combined field') + ' (shared space)'
                         };
                     }
                 } catch (_) {}
@@ -1042,6 +1041,8 @@ function shouldHighlightBunk(bunkName) {
         
         // Get capacity
         const activityProps = getActivityProperties();
+        // ★ Facility-less uncapped label (Swim etc.): nothing to cap → no conflict.
+        if (isUncappedFacilitylessLabel(fieldName, activityProps)) return { conflict: false, conflicts: [] };
         const fieldInfo = activityProps[fieldName] || {};
         let maxCapacity = 1;
         if (fieldInfo.sharableWith?.capacity) {
@@ -1186,34 +1187,51 @@ function shouldHighlightBunk(bunkName) {
     }
 
     // ★ Build a Set of "special activity" names (e.g. Gameroom, Canteen, Arts & Crafts)
-    //   so we can exclude them from the sharers display. Re-read each call so updates
-    //   in settings appear immediately.
+    //   so the sharers display can tell a special apart from a sports field.
+    //   Re-read each call so updates in settings appear immediately.
+    //   ⚠ Special config lives in more than one place — the canonical registry
+    //   (getAllSpecialActivities = specialActivities + rainyDayActivities) and the
+    //   persisted app1 copy can diverge. Union every source: a name missed here
+    //   makes a special render as a sports "vs" matchup.
     function _specialNamesSet() {
         const out = new Set();
+        const add = list => (list || []).forEach(s => {
+            if (s && s.name) out.add(String(s.name).toLowerCase().trim());
+        });
+        try {
+            if (typeof window.getAllSpecialActivities === 'function') add(window.getAllSpecialActivities());
+            else { add(window.specialActivities); add(window.rainyDayActivities); }
+        } catch (e) { /* ignore */ }
         try {
             const g = window.loadGlobalSettings ? window.loadGlobalSettings() : {};
-            const specials = (g.app1 && g.app1.specialActivities) || [];
-            specials.forEach(s => {
-                if (s && s.name) out.add(String(s.name).toLowerCase().trim());
-            });
+            add(g.app1 && g.app1.specialActivities);
+            add(g.specialActivities);
         } catch (e) { /* ignore */ }
         return out;
     }
 
-    // ★ Find OTHER bunks (any division) that share this bunk's field at this time.
-    //   Sports only — pinned events, electives, leagues, transitions, and special
-    //   activities (Gameroom, Canteen, Arts & Crafts, etc.) are skipped.
+    function _noSharers() { return { kind: 'sport', bunks: [] }; }
+
+    // ★ Find OTHER bunks (any division) that are on this bunk's facility at this
+    //   time. The two shapes read differently to a counselor, so they are labelled
+    //   differently by the caller:
+    //     • sport   — both bunks are on one FIELD, which normally means they are
+    //                 playing each other        → "vs Bunk 2, Bunk 3"
+    //     • special — both bunks are AT the same special activity, which is a group,
+    //                 not a contest             → "with Bunks 2, 3, & 4"
+    //   Pinned events, electives, leagues, transitions and trips are skipped.
+    //   Returns { kind: 'sport' | 'special', bunks: [...] }.
     function findFieldSharers(bunk, slotIdx, divName) {
         const myEntry = window.scheduleAssignments?.[bunk]?.[slotIdx];
-        if (!myEntry) return [];
-        if (myEntry._swimElective || myEntry._isTransition || myEntry.continuation) return [];
-        if (myEntry._h2h || myEntry._isSpecialtyLeague || myEntry._allMatchups) return [];
-        if (myEntry._isDismissal || myEntry._isSnack) return [];
-        if (myEntry._pinned) return [];
+        if (!myEntry) return _noSharers();
+        if (myEntry._swimElective || myEntry._isTransition || myEntry.continuation) return _noSharers();
+        if (myEntry._h2h || myEntry._isSpecialtyLeague || myEntry._allMatchups) return _noSharers();
+        if (myEntry._isDismissal || myEntry._isSnack) return _noSharers();
+        if (myEntry._pinned) return _noSharers();
         // Trips are off-site events, not a shared field — never annotate "vs Bunk X".
         // The trip's "field" is just its name, so co-attending bunks would otherwise
         // get treated as field-sharers and read "Trip – vs Bunk 2, Bunk 3".
-        if (myEntry._isTrip || myEntry._trip || (myEntry.type || '').toLowerCase() === 'trip') return [];
+        if (myEntry._isTrip || myEntry._trip || (myEntry.type || '').toLowerCase() === 'trip') return _noSharers();
         const _myAct = (myEntry._activity || myEntry.sport || '').toLowerCase().trim();
         const _myField = (typeof myEntry.field === 'string' ? myEntry.field
             : (myEntry.field && myEntry.field.name) || '').toLowerCase().trim();
@@ -1221,16 +1239,28 @@ function shouldHighlightBunk(bunkName) {
                             'dismissal', 'change', 'free', 'free play', 'free time', 'rest',
                             'regroup', 'flagpole', 'assembly', 'davening', 'shacharis', 'mincha',
                             'maariv', 'tefillah', 'learning', 'shiur'];
-        if (NON_SPORTS.some(n => _myAct === n || _myAct.includes(n))) return [];
-        // Skip if either the activity or the field is a configured special activity.
+        if (NON_SPORTS.some(n => _myAct === n || _myAct.includes(n))) return _noSharers();
         const _specials = _specialNamesSet();
-        if (_specials.has(_myAct) || _specials.has(_myField)) return [];
-        const myField = (typeof myEntry.field === 'string') ? myEntry.field
-            : (myEntry.field && myEntry.field.name ? myEntry.field.name : '');
-        if (!myField) return [];
-        const myFieldKey = myField.toLowerCase().trim();
+        const isSpecial = _specials.has(_myAct) || _specials.has(_myField);
+        // What counts as "the same thing at the same time":
+        //   sport   → the FIELD name (the authoritative placement).
+        //   special → the ACTIVITY name, because a special stores field = its own
+        //             name and keeps its real room in _specialLocation/_customField;
+        //             narrowed by room only when BOTH sides resolve a real one, so
+        //             one special running in two rooms stays two separate groups.
+        let myKey, myRoom = '';
+        if (isSpecial) {
+            if (!_myAct) return _noSharers();
+            myKey = _myAct;
+            myRoom = (resolveEntryLocation(myEntry) || '').toLowerCase().trim();
+        } else {
+            const myField = (typeof myEntry.field === 'string') ? myEntry.field
+                : (myEntry.field && myEntry.field.name ? myEntry.field.name : '');
+            if (!myField) return _noSharers();
+            myKey = myField.toLowerCase().trim();
+        }
         const mySlot = window.divisionTimes?.[divName]?.[slotIdx];
-        if (!mySlot || mySlot.startMin == null) return [];
+        if (!mySlot || mySlot.startMin == null) return _noSharers();
         const myStart = mySlot.startMin, myEnd = mySlot.endMin;
         const sharers = [];
         const seen = new Set();
@@ -1249,10 +1279,20 @@ function shouldHighlightBunk(bunkName) {
                 if (oslot.startMin >= myEnd || oslot.endMin <= myStart) continue;
                 const oentry = otherEntries[si];
                 if (!oentry || oentry.continuation) continue;
-                const ofield = (typeof oentry.field === 'string') ? oentry.field
-                    : (oentry.field && oentry.field.name ? oentry.field.name : '');
-                if (!ofield) continue;
-                if (ofield.toLowerCase().trim() === myFieldKey) {
+                let match;
+                if (isSpecial) {
+                    const oact = (oentry._activity || oentry.sport || '').toLowerCase().trim();
+                    if (oact !== myKey) continue;
+                    const oroom = (resolveEntryLocation(oentry) || '').toLowerCase().trim();
+                    if (myRoom && oroom && myRoom !== oroom) continue;
+                    match = true;
+                } else {
+                    const ofield = (typeof oentry.field === 'string') ? oentry.field
+                        : (oentry.field && oentry.field.name ? oentry.field.name : '');
+                    if (!ofield) continue;
+                    match = ofield.toLowerCase().trim() === myKey;
+                }
+                if (match) {
                     sharers.push(otherBunk);
                     seen.add(otherBunk);
                     break;
@@ -1262,7 +1302,23 @@ function shouldHighlightBunk(bunkName) {
         // Natural sort if available, else default
         if (typeof window.naturalSort === 'function') sharers.sort(window.naturalSort);
         else sharers.sort();
-        return sharers;
+        return { kind: isSpecial ? 'special' : 'sport', bunks: sharers };
+    }
+
+    // ★ Render a sharer list as prose: "Bunk 2" / "Bunks 2 & 3" / "Bunks 2, 3, & 4".
+    //   Bunks attending a special TOGETHER are a group, so they get "&", never the
+    //   "vs" that reads as a matchup. Bare-number bunk names collapse under one
+    //   "Bunks" prefix; anything else (e.g. "Majors 1") is listed verbatim.
+    function _formatSharerGroup(bunks) {
+        if (!bunks.length) return '';
+        const allNumeric = bunks.every(b => /^\d/.test(String(b)));
+        const parts = allNumeric
+            ? bunks.map(String)
+            : bunks.map(b => /^\d/.test(String(b)) ? 'Bunk ' + b : String(b));
+        const list = parts.length === 1 ? parts[0]
+            : parts.length === 2 ? parts[0] + ' & ' + parts[1]
+            : parts.slice(0, -1).join(', ') + ', & ' + parts[parts.length - 1];
+        return allNumeric ? (parts.length === 1 ? 'Bunk ' : 'Bunks ') + list : list;
     }
 
     // ★ Resolve the location/room to DISPLAY next to an activity name. Sports keep
@@ -1280,7 +1336,19 @@ function shouldHighlightBunk(bunkName) {
         //   field (and read as "playing another bunk on a different field" when
         //   it's really sharing the new one). A special stores field = its NAME, so
         //   only override for a REAL field (present, not 'Free', ≠ the activity name).
-        const _fieldReal = fieldLabel(entry.field);
+        let _fieldReal = fieldLabel(entry.field);
+        // ★ entry.field is sometimes stored as a composite "Location – Activity"
+        //   (post-edit applyDirectEdit + some solver write paths). Strip the trailing
+        //   activity so the location resolves to just "Location" — otherwise
+        //   formatEntry prepends the activity and renders "Activity – Location –
+        //   Activity" (the duplicated-name bug). Only strip when the tail actually
+        //   equals this entry's activity, so real field names are never truncated.
+        if (_fieldReal && name && _fieldReal.indexOf(' – ') !== -1) {
+            const _parts = _fieldReal.split(' – ');
+            if (_parts[_parts.length - 1].trim().toLowerCase() === String(name).toLowerCase()) {
+                _fieldReal = _parts.slice(0, -1).join(' – ').trim();
+            }
+        }
         if (_fieldReal && _fieldReal !== 'Free' && _fieldReal.toLowerCase() !== String(name).toLowerCase()) {
             return _fieldReal;
         }
@@ -1328,6 +1396,83 @@ function shouldHighlightBunk(bunkName) {
         return name || loc || '';
     }
 
+    // ── APPEND TEXT ("keep the name, add more to it") ────────────────────────
+    // The label a cell would show WITHOUT any appended suffix. Strips a previous
+    // append from the alias; otherwise the alias itself; otherwise the normal
+    // "Activity – Location" label from formatEntry.
+    function _usAppendBase(entry) {
+        if (!entry) return '';
+        if (entry._displayName && entry._appendText) {
+            const suf = ' — ' + entry._appendText;
+            if (String(entry._displayName).endsWith(suf)) {
+                const base = String(entry._displayName).slice(0, -suf.length);
+                // _appendOnly = the alias exists purely to carry the suffix; with
+                // the suffix stripped there is no real alias underneath.
+                return entry._appendOnly ? (base || '') : base;
+            }
+        }
+        if (entry._displayName) return entry._displayName;
+        return formatEntry(entry) || '';
+    }
+
+    // In-place decorate: append `text` to what the cell already shows, across the
+    // slot range, WITHOUT rewriting the entry (activity, field, rotation counts,
+    // pins and solver metadata all stay untouched). Empty text removes a previous
+    // append. Rides the _displayName pipeline so the schedule grid, print center
+    // and live view all show the suffix with no renderer changes.
+    async function applyAppendTextEdit(bunk, startMin, endMin, text) {
+        const divName = getDivisionForBunk(bunk);
+        const hasPerBunk = !!window.divisionTimes?.[divName]?._perBunkSlots;
+        const slots = findSlotsForRange(startMin, endMin, divName, hasPerBunk ? bunk : null);
+        const row = window.scheduleAssignments?.[bunk];
+        if (!slots.length || !row) { alert('Error: Could not find this block to update.'); return false; }
+        const clean = String(text || '').trim();
+
+        // Undo snapshot BEFORE mutating (counts untouched — label-only edit).
+        if (typeof window.peiSnapshotTransaction === 'function') {
+            window.peiSnapshotTransaction([bunk], 'Added text "' + clean + '" to ' + bunk, { counts: [] });
+        }
+
+        markPostEditInProgress();
+        let touched = 0;
+        slots.forEach(idx => {
+            const entry = row[idx];
+            if (!entry || entry.continuation) return;
+            const base = _usAppendBase(entry);
+            const hadRealAlias = !!entry._displayName && !entry._appendOnly;
+            if (clean) {
+                entry._appendText = clean;
+                entry._displayName = base ? base + ' — ' + clean : clean;
+                entry._appendOnly = !hadRealAlias;
+            } else {
+                // Clearing: restore the pre-append state.
+                if (entry._appendOnly) entry._displayName = null;
+                else if (entry._appendText) entry._displayName = base || null;
+                entry._appendText = null;
+                delete entry._appendOnly;
+            }
+            entry._postEdit = true;
+            entry._editedAt = Date.now();
+            touched++;
+        });
+        if (!touched) { alert('Nothing to add text to in this slot.'); return false; }
+
+        const currentDate = window.currentScheduleDate || window.currentDate || document.getElementById('datePicker')?.value || new Date().toISOString().split('T')[0];
+        try {
+            const allDailyData = JSON.parse(localStorage.getItem('campDailyData_v1') || '{}');
+            if (!allDailyData[currentDate]) allDailyData[currentDate] = {};
+            allDailyData[currentDate].scheduleAssignments = window.scheduleAssignments;
+            allDailyData[currentDate]._postEditAt = Date.now();
+            localStorage.setItem('campDailyData_v1', JSON.stringify(allDailyData));
+        } catch (e) { console.error('[UnifiedSchedule] append-text local save failed:', e); }
+        document.dispatchEvent(new CustomEvent('campistry-post-edit-complete', { detail: { bunk, slots, date: currentDate, source: 'append-text' } }));
+        if (typeof bypassSaveAllBunks === 'function') await bypassSaveAllBunks([bunk]);
+        else saveSchedule();
+        updateTable();
+        return true;
+    }
+    window.applyAppendTextEdit = applyAppendTextEdit;
+
     function getEntryBackground(entry, blockEvent) {
         if (!entry) return blockEvent && isFixedBlockType(blockEvent) ? '#fff8e1' : '#f9fafb';
         if (entry._isDismissal) return '#ffebee';
@@ -1344,9 +1489,95 @@ function shouldHighlightBunk(bunkName) {
     function isFixedBlockType(eventName) {
         if (!eventName) return false;
         const lower = eventName.toLowerCase();
-        return lower.includes('lunch') || lower.includes('snack') || lower.includes('swim') || 
+        return lower.includes('lunch') || lower.includes('snack') || lower.includes('swim') ||
                lower.includes('dismissal') || lower.includes('rest') || lower.includes('free');
     }
+
+    // ★ UNCAPPED FACILITY-LESS LABELS (Swim & friends) ————————————————————————
+    //   Swim / Lunch / Snacks / Dinner / Dismissal are division-wide LABELS,
+    //   not bookable facilities: the generator direct-fills them with no field
+    //   and EVERY bunk can hold them at once. When the camp has NOT configured
+    //   a real facility under the name there is nothing physical to cap — the
+    //   rule is "no facility assigned to swim → swim is unlimited". Without
+    //   this, every post-edit capacity gate fell through to its capacity-1
+    //   default (unconfigured name → not_sharable), so the moment ONE other
+    //   bunk was swimming, an edit to Swim read "in use / conflict".
+    //   A camp that DOES configure the name (a real Pool field, a Swim special)
+    //   keeps its real sharing rules — this only fires when the name resolves
+    //   to no activity-properties config at all.
+    //   Kill-switch: window.__postEditUncappedLabels = false restores capacity 1.
+    const _UNCAPPED_LABELS = new Set(['swim', 'pool', 'swimming', 'swimming pool',
+        'lunch', 'snack', 'snacks', 'dinner', 'dismissal']);
+    const _SWIM_LABELS = new Set(['swim', 'pool', 'swimming', 'swimming pool']);
+    // Resolve what governs a direct-fill LABEL's capacity:
+    //   null           → not a label, or the exact name IS configured (a real
+    //                    field/special under that name) — normal rules apply.
+    //   {sharableWith} → a facility is assigned OFF the exact name, so ITS
+    //                    limits govern the label. For the swim family this
+    //                    mirrors the engine's canUsePoolAtTime chain exactly:
+    //                    Swim GENERAL ACTIVITY sharing (preferred) → pool-named
+    //                    field's sharing → legacy app1.poolLaneCapacity.
+    //   'unlimited'    → a label with NO facility assigned anywhere → no cap.
+    function resolveLabelSharing(name, activityProps) {
+        if (!name) return null;
+        if (window.__postEditUncappedLabels === false) return null;
+        const n = String(name).toLowerCase().trim();
+        if (!_UNCAPPED_LABELS.has(n)) return null;
+        let props = activityProps;
+        if (!props) { try { props = getActivityProperties(); } catch (_e) { props = {}; } }
+        // Configured under this exact name (any casing) → that config governs.
+        if (props && Object.keys(props).some(k => String(k).toLowerCase().trim() === n)) return null;
+        try {
+            const gs = window.loadGlobalSettings?.() || {};
+            const app1 = gs.app1 || {};
+            // (1) A general activity of this name on a facility — for the swim
+            //     family also quickType:'swim' (the shape the engine prefers).
+            for (const fac of (gs.facilities || [])) {
+                for (const ga of ((fac && fac.generalActivities) || [])) {
+                    if (!ga || !ga.sharableWith) continue;
+                    const gaN = String(ga.name || '').toLowerCase().trim();
+                    const gaQt = String(ga.quickType || '').toLowerCase().trim();
+                    if (gaN === n || (_SWIM_LABELS.has(n) && (gaQt === 'swim' || gaN === 'swim'))) {
+                        return { sharableWith: ga.sharableWith };
+                    }
+                }
+            }
+            // (2) A field hosting the label as an activity — for the swim family
+            //     also any pool-named field (engine parity) — with sharing config.
+            const fields = app1.fields || gs.fields || [];
+            for (const f of fields) {
+                if (!f || !f.name || !f.sharableWith) continue;
+                const fn = String(f.name).toLowerCase();
+                const hosts = (f.activities || []).some(a => {
+                    const aN = String(a).toLowerCase().trim();
+                    return aN === n || (_SWIM_LABELS.has(n) && _SWIM_LABELS.has(aN));
+                });
+                if (hosts || (_SWIM_LABELS.has(n) && fn.indexOf('pool') !== -1)) {
+                    return { sharableWith: f.sharableWith };
+                }
+            }
+            // (3) Legacy explicit pool cap.
+            if (_SWIM_LABELS.has(n) && typeof app1.poolLaneCapacity === 'number' && app1.poolLaneCapacity > 0) {
+                return { sharableWith: { type: 'all', capacity: app1.poolLaneCapacity } };
+            }
+        } catch (_e) {}
+        return 'unlimited';
+    }
+    function isUncappedFacilitylessLabel(name, activityProps) {
+        return resolveLabelSharing(name, activityProps) === 'unlimited';
+    }
+    // Shared capacity math for a resolved label sharing config (engine parity:
+    // not_sharable → 1; explicit capacity; type 'all' w/o capacity → unlimited).
+    function labelSharingCapacity(sharableWith, fallback) {
+        const t = String(sharableWith.type || sharableWith.shareType || 'all').toLowerCase();
+        if (t === 'not_sharable') return 1;
+        const c = parseInt(sharableWith.capacity);
+        if (c > 0) return c;
+        return t === 'all' ? 999999 : fallback;
+    }
+    window.resolveLabelSharing = resolveLabelSharing;
+    window.isUncappedFacilitylessLabel = isUncappedFacilitylessLabel;
+    window.labelSharingCapacity = labelSharingCapacity;
 
     // True iff `name` exactly matches a configured league (regular or specialty).
     // Used to distinguish a real league slot from a custom pin whose name merely
@@ -1479,6 +1710,14 @@ function checkLocationConflict(locationName, slots, excludeBunk) {
     const activityProps = getActivityProperties();
     const locationInfo = activityProps[locationName] || {};
     let maxCapacity = locationInfo.sharableWith?.capacity ? parseInt(locationInfo.sharableWith.capacity) || 1 : (locationInfo.sharable ? 2 : 1);
+    // ★ Direct-fill label resolution (Swim & friends): NO facility assigned
+    //   anywhere → unlimited (usage still reported, co-holding bunks are never
+    //   conflicts). Facility assigned OFF the exact name (Swim general
+    //   activity / pool-named field / legacy poolLaneCapacity) → THAT
+    //   facility's limits govern the label.
+    const _lblShare = resolveLabelSharing(locationName, activityProps);
+    if (_lblShare === 'unlimited') maxCapacity = Infinity;
+    else if (_lblShare && _lblShare.sharableWith) maxCapacity = labelSharingCapacity(_lblShare.sharableWith, maxCapacity);
    // ★ MS-4b: for CONFLICT CLASSIFICATION, "mine" = bunks in my GENERATION
    // scope (assigned divisions). v3.13 gave schedulers edit access to ALL
    // bunks, so every cross-user conflict looked "editable" and other users'
@@ -1733,6 +1972,9 @@ const editBunks = _conflictOwnScope || (editBunksResult instanceof Set ? editBun
     }
 
     function isFieldAvailable(fName, slots, bunk, fieldUsageBySlot, activityProps, timeWindow = null) {
+        // ★ Facility-less uncapped label (Swim etc.): always available — there
+        //   is no physical facility to fill up.
+        if (isUncappedFacilitylessLabel(fName, activityProps)) return true;
         const divName = getDivisionForBunk(bunk);
         if (!divName || slots.length === 0) return false;
 
@@ -1970,8 +2212,9 @@ async function resolveConflictsAndApply(bunk, slots, activity, location, editDat
     
     console.log(`[resolveConflictsAndApply] Claiming ${location} for ${bunk} (${editingDiv}) at ${claimedStartMin}-${claimedEndMin}min`);
     
-    // Apply the primary edit first
-    applyDirectEdit(bunk, slots, activity, location, false, true, { displayName: editData.displayName });
+    // Apply the primary edit first. Carry the soft-override the caller may have
+    // already approved via the in-app gate so applyDirectEdit doesn't re-prompt.
+    applyDirectEdit(bunk, slots, activity, location, false, true, { displayName: editData.displayName, customText: !!editData.customText, appendText: editData.appendText || null, allowSoftOverride: !!editData._allowSoftOverride });
     
     // Lock the field
     if (window.GlobalFieldLocks) {
@@ -2417,8 +2660,19 @@ function _resolveSlotWindow(bunk, divName, slots) {
 // =========================================================================
 function checkFieldAvailableByTime(fieldName, startMin, endMin, excludeBunk, activityProperties) {
     if (startMin === null || endMin === null) return true;
-    
-    const props = activityProperties?.[fieldName] || {};
+
+    // ★ Direct-fill label resolution (Swim etc.): NO facility assigned
+    //   anywhere → unlimited, other bunks holding the same label never make
+    //   it "unavailable" (pre-fix, an unconfigured name fell to the
+    //   not_sharable/capacity-1 default below). A facility assigned OFF the
+    //   exact name (Swim general activity / pool-named field / legacy
+    //   poolLaneCapacity) → the label follows THAT facility's sharing rules.
+    const _lblShare = resolveLabelSharing(fieldName, activityProperties);
+    if (_lblShare === 'unlimited') return true;
+
+    const props = (_lblShare && _lblShare.sharableWith)
+        ? { sharableWith: _lblShare.sharableWith }
+        : (activityProperties?.[fieldName] || {});
     const sharableWith = props.sharableWith || {};
     const sharingType = sharableWith.type || (props.sharable ? 'same_division' : 'not_sharable');
     let maxCapacity = 1;
@@ -2756,32 +3010,67 @@ if (window.showToast) window.showToast(`-> ${bunk}: Moved to ${bestPick.activity
         const leagues = window.leagueAssignments || {};
         if (leagues[divName]?.[slotIdx]) {
             const data = leagues[divName][slotIdx];
-            return { matchups: data.matchups || [], gameLabel: data.gameLabel || '', sport: data.sport || '', leagueName: data.leagueName || '' };
+            return { matchups: data.matchups || [], gameLabel: data.gameLabel || '', sport: data.sport || '', leagueName: data.leagueName || '', customText: data.customText || '', _didNotPlay: data._didNotPlay || [] };
         }
         if (leagues[divName]) {
+            // ★ Fuzzy ±2-slot lookup lets a league game that spans a few grid
+            //   columns share its matchups. But a DIFFERENT league period up to 2
+            //   slots away must NOT borrow them — that renders a phantom duplicate
+            //   game (e.g. a rain-dropped 5:10 State League tile inheriting the
+            //   1:25 game's matchups on already-closed outdoor fields). Only
+            //   inherit when the stored game's OWN time actually covers this slot.
+            //   Times come from the game's stamped _startMin/_endMin (falling back
+            //   to each slot's divisionTimes), so this holds for legacy data too.
+            const _dt = (window.divisionTimes && window.divisionTimes[divName]) || null;
+            const _qs = _dt && _dt[slotIdx];
+            const qStart = (_qs && _qs.startMin != null) ? _qs.startMin : null;
+            const qEnd = (_qs && _qs.endMin != null) ? _qs.endMin : null;
             const divSlotKeys = Object.keys(leagues[divName]).map(Number).sort((a, b) => a - b);
             for (const storedSlot of divSlotKeys) {
                 if (Math.abs(storedSlot - slotIdx) <= 2) {
                     const data = leagues[divName][storedSlot];
-                    if (data && (data.matchups?.length > 0 || data.gameLabel)) return { matchups: data.matchups || [], gameLabel: data.gameLabel || '', sport: data.sport || '', leagueName: data.leagueName || '' };
+                    if (!(data && (data.matchups?.length > 0 || data.gameLabel))) continue;
+                    const gStart = (data._startMin != null) ? data._startMin
+                                 : (_dt && _dt[storedSlot] && _dt[storedSlot].startMin != null ? _dt[storedSlot].startMin : null);
+                    const gEnd = (data._endMin != null) ? data._endMin
+                               : (_dt && _dt[storedSlot] && _dt[storedSlot].endMin != null ? _dt[storedSlot].endMin : null);
+                    // Times known on both sides and disjoint → different period, skip.
+                    if (qStart != null && qEnd != null && gStart != null && gEnd != null && !(gStart < qEnd && gEnd > qStart)) continue;
+                    return { matchups: data.matchups || [], gameLabel: data.gameLabel || '', sport: data.sport || '', leagueName: data.leagueName || '', customText: data.customText || '', _didNotPlay: data._didNotPlay || [] };
                 }
             }
         }
-        const rawMasterLeagues = window.masterLeagues || window.loadGlobalSettings?.()?.app1?.leagues || [];
-        let masterLeaguesList = Array.isArray(rawMasterLeagues) ? rawMasterLeagues : Object.values(rawMasterLeagues);
-        const applicableLeagues = masterLeaguesList.filter(l => l?.name && l?.divisions?.includes(divName));
-        if (applicableLeagues.length > 0) {
-            const league = applicableLeagues[0], teams = league.teams || [];
-            if (teams.length >= 2) {
-                const displayMatchups = [];
-                for (let i = 0; i < teams.length - 1; i += 2) { 
-                    if (teams[i + 1]) displayMatchups.push({ teamA: teams[i], teamB: teams[i + 1], display: `${teams[i]} vs ${teams[i + 1]}` }); 
+        // Master-league DEFAULT matchups: only when this division has NO stored
+        // league games at all (never generated). If it HAS games but not for this
+        // slot, the slot legitimately has none (e.g. a rained-out post-cut period)
+        // — fabricating defaults here would just be another phantom.
+        const _hasStored = leagues[divName] && Object.keys(leagues[divName]).length > 0;
+        if (!_hasStored) {
+            const rawMasterLeagues = window.masterLeagues || window.loadGlobalSettings?.()?.app1?.leagues || [];
+            let masterLeaguesList = Array.isArray(rawMasterLeagues) ? rawMasterLeagues : Object.values(rawMasterLeagues);
+            const applicableLeagues = masterLeaguesList.filter(l => l?.name && l?.divisions?.includes(divName));
+            if (applicableLeagues.length > 0) {
+                const league = applicableLeagues[0], teams = league.teams || [];
+                if (teams.length >= 2) {
+                    const displayMatchups = [];
+                    for (let i = 0; i < teams.length - 1; i += 2) {
+                        if (teams[i + 1]) displayMatchups.push({ teamA: teams[i], teamB: teams[i + 1], display: `${teams[i]} vs ${teams[i + 1]}` });
+                    }
+                    if (teams.length % 2 === 1) displayMatchups.push({ teamA: teams[teams.length - 1], teamB: 'BYE', display: `${teams[teams.length - 1]} (BYE)` });
+                    return { matchups: displayMatchups, gameLabel: `${league.name} Game`, sport: league.sports?.[0] || 'League', leagueName: league.name };
                 }
-                if (teams.length % 2 === 1) displayMatchups.push({ teamA: teams[teams.length - 1], teamB: 'BYE', display: `${teams[teams.length - 1]} (BYE)` });
-                return { matchups: displayMatchups, gameLabel: `${league.name} Game`, sport: league.sports?.[0] || 'League', leagueName: league.name };
             }
         }
         return { matchups: [], gameLabel: '', sport: '', leagueName: '' };
+    }
+
+    // A league tile only renders as a GAME when there's a real scheduled game for
+    // its slot. A rain-dropped (or never-scheduled-this-slot) league tile yields
+    // nothing here, so the grid renders the underlying activity instead of an
+    // empty/phantom league cell.
+    function hasScheduledLeagueGame(divName, slotIdx) {
+        const li = getLeagueMatchups(divName, slotIdx);
+        return !!(li && ((li.matchups && li.matchups.length > 0) || li.gameLabel));
     }
 
     // =========================================================================
@@ -3107,11 +3396,22 @@ if (window.showToast) window.showToast(`-> ${bunk}: Moved to ${bestPick.activity
                 var _tf = (m && typeof m === 'object' && m.field) ? m.field
                         : _usFieldFromLine(typeof m === 'string' ? m : line);
                 if (_tf) _tFields.push(_tf);
-                html += '<div style="background: #fff; padding: 3px 7px; border-radius: 4px; font-size: 0.74rem; color: #1e3a5f; box-shadow: 0 1px 1px rgba(0,0,0,0.04); white-space: nowrap; overflow: hidden; text-overflow: ellipsis;">' + escapeHtml(line) + '</div>';
+                // "Did not play" — keep the matchup visible but struck-through with a red ✗.
+                var _dnp = (window.PostEditFieldChange && typeof window.PostEditFieldChange.isDidNotPlay === 'function')
+                    ? window.PostEditFieldChange.isDidNotPlay({ _didNotPlay: leagueInfo._didNotPlay }, m) : false;
+                if (_dnp) {
+                    html += '<div title="Did not play" style="background: #fef2f2; padding: 3px 7px; border-radius: 4px; font-size: 0.74rem; color: #b91c1c; box-shadow: 0 1px 1px rgba(0,0,0,0.04); white-space: nowrap; overflow: hidden; text-overflow: ellipsis;"><span style="font-weight:700;">✗</span> <span style="text-decoration: line-through; text-decoration-color:#dc2626;">' + escapeHtml(line) + '</span></div>';
+                } else {
+                    html += '<div style="background: #fff; padding: 3px 7px; border-radius: 4px; font-size: 0.74rem; color: #1e3a5f; box-shadow: 0 1px 1px rgba(0,0,0,0.04); white-space: nowrap; overflow: hidden; text-overflow: ellipsis;">' + escapeHtml(line) + '</div>';
+                }
             });
             html += '</div>';
         } else {
             html += '<div style="color: #64748b; font-size: 0.74rem; font-style: italic;">No matchups yet</div>';
+        }
+        // Custom text (post-edit league note) — shown under the matchups.
+        if (leagueInfo.customText) {
+            html += '<div style="margin-top: 5px; padding: 3px 7px; background: #fef9c3; border-radius: 4px; font-size: 0.74rem; color: #713f12; font-weight: 600;">' + escapeHtml(leagueInfo.customText) + '</div>';
         }
         // ★ Off-campus travel layer (mirrors swim Change). Transposed view → time
         //   runs left→right, so the strips sit on the LEFT/RIGHT of the cell. Plus an
@@ -3484,7 +3784,7 @@ if (window.showToast) window.showToast(`-> ${bunk}: Moved to ${bestPick.activity
                         _postChangeMin: slot._postChangeMin
                     };
                     var td;
-                    if (isLeagueBlockType(blockObj.event, blockObj.type)) {
+                    if (isLeagueBlockType(blockObj.event, blockObj.type) && hasScheduledLeagueGame(divName, slotIdx)) {
                         td = _renderTransposedLeagueCell(blockObj, bunk, divName, slotIdx, isEditable);
                     } else {
                         // When this slot is a full-division merge, this single cell
@@ -3757,9 +4057,15 @@ divBlocks.forEach((block, blockIdx) => {
     tr.appendChild(tdTime);
     
     if (isLeagueBlockType(block.event, block.type)) {
-        tr.appendChild(renderLeagueCell(block, bunks, divName, isEditable));
-        tbody.appendChild(tr);
-        return;
+        // Only render a league GAME cell when a real game exists for this slot.
+        // A rain-dropped league tile has none → fall through to the normal
+        // activity render instead of a phantom/empty league cell.
+        const _lgSlot = block.slotIndex !== undefined ? block.slotIndex : findFirstSlotForTime(block.startMin, divName);
+        if (hasScheduledLeagueGame(divName, _lgSlot)) {
+            tr.appendChild(renderLeagueCell(block, bunks, divName, isEditable));
+            tbody.appendChild(tr);
+            return;
+        }
     }
 
     if (block.type === 'elective' || block.type === 'swim_elective' || (block.type === 'pinned' && !isFixedBlockType(block.event))) {
@@ -3897,7 +4203,14 @@ divBlocks.forEach((block, blockIdx) => {
                 const _tf = (m && typeof m === 'object' && m.field) ? m.field
                           : _usFieldFromLine(typeof m === 'string' ? m : matchText);
                 if (_tf) _tFields.push(_tf);
-                html += `<div style="background: #fff; padding: 6px 12px; border-radius: 6px; font-size: 0.875rem; color: #1e3a5f; box-shadow: 0 1px 2px rgba(0,0,0,0.05);">${escapeHtml(matchText)}</div>`;
+                // "Did not play" — keep the matchup visible but struck-through with a red ✗.
+                const _dnp = (window.PostEditFieldChange && typeof window.PostEditFieldChange.isDidNotPlay === 'function')
+                    ? window.PostEditFieldChange.isDidNotPlay({ _didNotPlay: leagueInfo._didNotPlay }, m) : false;
+                if (_dnp) {
+                    html += `<div title="Did not play" style="background: #fef2f2; padding: 6px 12px; border-radius: 6px; font-size: 0.875rem; color: #b91c1c; box-shadow: 0 1px 2px rgba(0,0,0,0.05);"><span style="font-weight:700;">✗</span> <span style="text-decoration: line-through; text-decoration-color:#dc2626;">${escapeHtml(matchText)}</span></div>`;
+                } else {
+                    html += `<div style="background: #fff; padding: 6px 12px; border-radius: 6px; font-size: 0.875rem; color: #1e3a5f; box-shadow: 0 1px 2px rgba(0,0,0,0.05);">${escapeHtml(matchText)}</div>`;
+                }
             });
             html += '</div>';
         } else {
@@ -4098,12 +4411,18 @@ divBlocks.forEach((block, blockIdx) => {
             bgColor = '#fff8e1';
         } else if (entry && !entry.continuation) {
             displayText = formatEntry(entry);
-            // ★ Sports only: if other bunks share this field at this time, show
-            //   "Activity – Location – vs Bunk 2, Bunk 3".
+            // ★ If other bunks are on this facility at this time, name them. A shared
+            //   SPORTS field normally means a game between the bunks → "vs Bunk 2,
+            //   Bunk 3". A shared SPECIAL is just a group attending together, so it
+            //   reads "with Bunks 2, 3, & 4" — never "vs".
             const _sharers = findFieldSharers(bunk, slotIdx, divName);
-            if (_sharers.length) {
-                const _names = _sharers.map(b => /^\d/.test(String(b)) ? 'Bunk ' + b : b);
-                displayText += ' – vs ' + _names.join(', ');
+            if (_sharers.bunks.length) {
+                if (_sharers.kind === 'special') {
+                    displayText += ' – with ' + _formatSharerGroup(_sharers.bunks);
+                } else {
+                    const _names = _sharers.bunks.map(b => /^\d/.test(String(b)) ? 'Bunk ' + b : b);
+                    displayText += ' – vs ' + _names.join(', ');
+                }
             }
             bgColor = getEntryBackground(entry, block.event);
             // pinned state tracked internally, no visual prefix needed
@@ -4245,8 +4564,10 @@ if (bypassStatus.highlight) {
         // auto pipeline would then preserve via _pinned. The auto
         // pipeline's commitWriteIfLegal stops at the manual entry
         // point; this is the manual-side equivalent. Free-writes are
-        // exempt (they release a slot).
-        if (!isClear && activity && slots.length > 0) {
+        // exempt (they release a slot). Custom-text writes are exempt
+        // too — the text is a label, not a real activity/field claim,
+        // so there is nothing for the gate to check.
+        if (!isClear && activity && slots.length > 0 && !opts.customText) {
             const _pbsArr = window.divisionTimes?.[divName]?._perBunkSlots?.[String(bunk)] || [];
             const _firstSlotMeta = _pbsArr[slots[0]] || divSlots[slots[0]];
             const _lastSlotMeta = _pbsArr[slots[slots.length - 1]] || divSlots[slots[slots.length - 1]];
@@ -4309,9 +4630,13 @@ if (bypassStatus.highlight) {
         // instead of the real activity (e.g. "Shirt Making" for a Caps Making slot).
         // _activity stays the real activity so rotation/counting are unaffected.
         // Kept only when it's a non-empty value that actually differs from the activity.
-        const _dn = (!isClear && opts.displayName && String(opts.displayName).trim()
-            && String(opts.displayName).trim().toLowerCase() !== String(activity).trim().toLowerCase())
-            ? String(opts.displayName).trim() : null;
+        // CUSTOM TEXT: a free-text block (no real activity behind it) always keeps
+        // its text as the display name — every view (grid, print, live) shows it verbatim.
+        const _dn = (!isClear && opts.customText)
+            ? String(opts.displayName || activity || '').trim() || null
+            : ((!isClear && opts.displayName && String(opts.displayName).trim()
+                && String(opts.displayName).trim().toLowerCase() !== String(activity).trim().toLowerCase())
+                ? String(opts.displayName).trim() : null);
         slots.forEach((idx, i) => {
             window.scheduleAssignments[bunk][idx] = {
                 field: isClear ? 'Free' : fieldValue,
@@ -4320,6 +4645,11 @@ if (bypassStatus.highlight) {
                 _fixed: !isClear,
                 _activity: isClear ? 'Free' : activity,
                 _displayName: _dn,
+                _customText: !isClear && !!opts.customText,
+                // Raw APPEND suffix ("keep the name, add text after it") — _displayName
+                // above already carries the composed "base — suffix" label; this keeps
+                // the suffix on its own so re-editing can prefill just the added part.
+                _appendText: (!isClear && opts.appendText && String(opts.appendText).trim()) ? String(opts.appendText).trim() : null,
                 _location: location,
                 _postEdit: true,
                 _pinned: shouldPin && !isClear,
@@ -4681,7 +5011,8 @@ if (bypassStatus.highlight) {
         overlay.style.cssText = 'position: fixed; top: 0; left: 0; right: 0; bottom: 0; background: rgba(0, 0, 0, 0.5); z-index: 10000; display: flex; align-items: center; justify-content: center;';
         const modal = document.createElement('div'); 
         modal.id = MODAL_ID;
-        modal.style.cssText = 'background: white; border-radius: 12px; padding: 24px; min-width: 400px; max-width: 500px; box-shadow: 0 20px 60px rgba(0, 0, 0, 0.3); font-family: -apple-system, BlinkMacSystemFont, sans-serif; max-height: 90vh; overflow-y: auto;';
+        // Match post_edit_system's roomier modal (this is its legacy fallback).
+        modal.style.cssText = 'background: white; border-radius: 12px; padding: 26px 28px; width: min(760px, 94vw); box-sizing: border-box; box-shadow: 0 20px 60px rgba(0, 0, 0, 0.3); font-family: -apple-system, BlinkMacSystemFont, sans-serif; max-height: 92vh; overflow-y: auto;';
         overlay.appendChild(modal); 
         document.body.appendChild(overlay);
         let _mdOverlayUnified = false;
@@ -4799,14 +5130,78 @@ if (bypassStatus.highlight) {
         } catch (e) { console.error('[UnifiedSchedule] Notification error:', e); }
     }
 
-   
+    // =========================================================================
+    // IN-APP CONFIRM / ALERT (styled — replaces the browser's window.confirm /
+    // window.alert for edit-gate warnings so they render inside the app).
+    // Self-contained inline styles — no dependency on any page's stylesheet.
+    // =========================================================================
+    function _usEscHtml(s) {
+        return String(s == null ? '' : s)
+            .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+            .replace(/"/g, '&quot;').replace(/'/g, '&#39;');
+    }
+    function _usModalShell(bodyHtml, buttonsHtml) {
+        try { document.getElementById('us-editgate-overlay')?.remove(); } catch (_) {}
+        const overlay = document.createElement('div');
+        overlay.id = 'us-editgate-overlay';
+        overlay.style.cssText = 'position:fixed;inset:0;background:rgba(15,23,42,0.55);z-index:100001;display:flex;align-items:center;justify-content:center;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;';
+        overlay.innerHTML =
+            '<div role="dialog" aria-modal="true" style="background:#fff;border-radius:14px;max-width:430px;width:90%;box-shadow:0 24px 64px rgba(0,0,0,0.32);overflow:hidden;">'
+          + '<div style="padding:22px 24px 6px;display:flex;gap:13px;align-items:flex-start;">'
+          + '<div style="flex:0 0 auto;width:38px;height:38px;border-radius:50%;background:#fef3c7;display:flex;align-items:center;justify-content:center;font-size:1.2rem;">⚠️</div>'
+          + '<div style="flex:1;min-width:0;">' + bodyHtml + '</div></div>'
+          + '<div style="display:flex;gap:10px;justify-content:flex-end;padding:16px 24px 20px;">' + buttonsHtml + '</div></div>';
+        document.body.appendChild(overlay);
+        return overlay;
+    }
+    // Returns a Promise<boolean>: true = "Place anyway", false = cancel.
+    function usSoftConfirm(reason) {
+        return new Promise(function (resolve) {
+            const body =
+                '<div style="font-weight:700;color:#1f2937;font-size:1.02rem;margin-bottom:5px;">Heads up</div>'
+              + '<div style="color:#4b5563;font-size:0.9rem;line-height:1.45;">' + _usEscHtml(reason)
+              + '.<br>This is a manual override — you can place it anyway.</div>';
+            const buttons =
+                '<button id="us-eg-cancel" style="padding:9px 16px;border:1px solid #d1d5db;border-radius:8px;background:#fff;color:#374151;font-size:0.9rem;font-weight:600;cursor:pointer;">Cancel</button>'
+              + '<button id="us-eg-ok" style="padding:9px 18px;border:none;border-radius:8px;background:#2563eb;color:#fff;font-size:0.9rem;font-weight:600;cursor:pointer;">Place anyway</button>';
+            const overlay = _usModalShell(body, buttons);
+            function done(v) { try { overlay.remove(); } catch (_) {} document.removeEventListener('keydown', escH); resolve(v); }
+            overlay.querySelector('#us-eg-cancel').onclick = function () { done(false); };
+            overlay.querySelector('#us-eg-ok').onclick = function () { done(true); };
+            let downOnOverlay = false;
+            overlay.addEventListener('mousedown', function (e) { downOnOverlay = (e.target === overlay); });
+            overlay.onclick = function (e) { if (e.target === overlay && downOnOverlay) done(false); };
+            function escH(e) { if (e.key === 'Escape') done(false); }
+            document.addEventListener('keydown', escH);
+            try { overlay.querySelector('#us-eg-ok').focus(); } catch (_) {}
+        });
+    }
+    // Returns a Promise (resolves when dismissed). Hard block — single OK.
+    function usSoftAlert(message) {
+        return new Promise(function (resolve) {
+            const body =
+                '<div style="font-weight:700;color:#1f2937;font-size:1.02rem;margin-bottom:5px;">Can’t place here</div>'
+              + '<div style="color:#4b5563;font-size:0.9rem;line-height:1.45;">' + _usEscHtml(message) + '</div>';
+            const buttons =
+                '<button id="us-eg-ok" style="padding:9px 18px;border:none;border-radius:8px;background:#2563eb;color:#fff;font-size:0.9rem;font-weight:600;cursor:pointer;">OK</button>';
+            const overlay = _usModalShell(body, buttons);
+            function done() { try { overlay.remove(); } catch (_) {} document.removeEventListener('keydown', escH); resolve(); }
+            overlay.querySelector('#us-eg-ok').onclick = done;
+            let downOnOverlay = false;
+            overlay.addEventListener('mousedown', function (e) { downOnOverlay = (e.target === overlay); });
+            overlay.onclick = function (e) { if (e.target === overlay && downOnOverlay) done(); };
+            function escH(e) { if (e.key === 'Escape') done(); }
+            document.addEventListener('keydown', escH);
+            try { overlay.querySelector('#us-eg-ok').focus(); } catch (_) {}
+        });
+    }
 
     // =========================================================================
     // APPLY EDIT
     // =========================================================================
 
     async function applyEdit(bunk, editData) {
-        const { activity, location, startMin, endMin, hasConflict, resolutionChoice, displayName } = editData;
+        const { activity, location, startMin, endMin, hasConflict, resolutionChoice, displayName, customText, appendText } = editData;
         const divName = getDivisionForBunk(bunk);
 
         if (window.__CAMPISTRY_DEMO_MODE__ && !activity && activity !== '') {
@@ -4820,13 +5215,35 @@ if (bypassStatus.highlight) {
         const slots = findSlotsForRange(startMin, endMin, divName, hasPerBunk ? bunk : null);
         if (slots.length === 0) { alert('Error: Could not find time slots.'); return; }
 
-        if (!isClear && window.checkSequenceViolation && slots.length > 0) {
+        if (!isClear && !customText && window.checkSequenceViolation && slots.length > 0) {
             const _seqCheck = window.checkSequenceViolation(bunk, activity, slots[0], divName);
-            if (_seqCheck?.violated) { if (!confirm('Sequence Warning:\n\n' + _seqCheck.reason + '\n\nPlace anyway?')) return; }
+            if (_seqCheck?.violated) { if (!(await usSoftConfirm('Sequence warning: ' + _seqCheck.reason))) return; }
         }
-        if (!isClear && window.isLocationInCooldown && location && slots.length > 0) {
+        if (!isClear && !customText && window.isLocationInCooldown && location && slots.length > 0) {
             const _coolCheck = window.isLocationInCooldown(location, slots[0], bunk, divName);
-            if (_coolCheck?.blocked) { if (!confirm('Location Cooldown:\n\n' + _coolCheck.reason + '\n\nPlace anyway?')) return; }
+            if (_coolCheck?.blocked) { if (!(await usSoftConfirm('Location cooldown: ' + _coolCheck.reason))) return; }
+        }
+
+        // Manual legality gate surfaced as an IN-APP dialog (not a browser
+        // confirm/alert). Dry-run the same gate applyDirectEdit uses; a SOFT
+        // violation (e.g. access restriction for this bunk/grade) becomes a
+        // "Place anyway?" in-app prompt and, on accept, passes allowSoftOverride
+        // so applyDirectEdit won't re-prompt with window.confirm. A HARD block
+        // (physical conflict, disabled, time window) shows an in-app alert.
+        if (!isClear && !customText && activity && slots.length > 0 && typeof window.commitManualWriteIfLegal === 'function') {
+            const _gate = window.commitManualWriteIfLegal(
+                bunk, slots[0], activity, location, divName, startMin, endMin,
+                { allowSoftOverride: false, slotRange: slots }
+            );
+            if (_gate && !_gate.ok) {
+                if (_gate.soft) {
+                    if (!(await usSoftConfirm(_gate.reason))) return;
+                    editData._allowSoftOverride = true;
+                } else {
+                    await usSoftAlert(_gate.reason);
+                    return;
+                }
+            }
         }
 
         markPostEditInProgress();
@@ -4849,15 +5266,16 @@ if (bypassStatus.highlight) {
         if (hasConflict) {
             await resolveConflictsAndApply(bunk, slots, activity, location, editData);
         } else {
+            const _softOv = !!editData._allowSoftOverride;
             if (hasPerBunk && !isClear && startMin != null && endMin != null) {
                 const reshaped = ensurePerBunkSlotForRange(bunk, divName, startMin, endMin);
                 if (reshaped.length > 0) {
-                    applyDirectEdit(bunk, reshaped, activity, location, isClear, true, { displayName });
+                    applyDirectEdit(bunk, reshaped, activity, location, isClear, true, { displayName, customText, appendText, allowSoftOverride: _softOv });
                 } else {
-                    applyDirectEdit(bunk, slots, activity, location, isClear, true, { displayName });
+                    applyDirectEdit(bunk, slots, activity, location, isClear, true, { displayName, customText, appendText, allowSoftOverride: _softOv });
                 }
             } else {
-                applyDirectEdit(bunk, slots, activity, location, isClear, true, { displayName });
+                applyDirectEdit(bunk, slots, activity, location, isClear, true, { displayName, customText, appendText, allowSoftOverride: _softOv });
             }
         }
 
@@ -4893,8 +5311,10 @@ if (bypassStatus.highlight) {
         }
 
         // Post-edit counts + rotation history (single shared implementation)
+        // Custom text is a label, not a real activity — credit nothing for it
+        // (old activities are still debited since the slot was overwritten).
         if (window.SchedulerCoreUtils?.applyPostEditCounts) {
-            window.SchedulerCoreUtils.applyPostEditCounts(bunk, _oldActivities, (!isClear && activity) ? activity : null, slots);
+            window.SchedulerCoreUtils.applyPostEditCounts(bunk, _oldActivities, (!isClear && activity && !customText) ? activity : null, slots);
         }
 
         updateTable();
@@ -5462,7 +5882,7 @@ if (bypassStatus.highlight) {
         const locations = getAllLocations();
         const divName = getDivisionForBunk(bunk);
         const _hasPerBunk = !!window.divisionTimes?.[divName]?._perBunkSlots;
-        let currentActivity = currentValue || '', currentField = '', currentDisplayName = '', resolutionChoice = 'notify';
+        let currentActivity = currentValue || '', currentField = '', currentDisplayName = '', currentAppendText = '', resolutionChoice = 'notify';
         // ★ Pass the bunk in auto mode. Without it findSlotsForRange falls through
         //   to DIVISION-level slots and returns an index that points at the WRONG
         //   per-bunk entry — pre-filling the activity box with a stale/foreign
@@ -5476,6 +5896,14 @@ if (bypassStatus.highlight) {
                 currentField = fieldLabel(entry.field);
                 currentActivity = entry._activity || currentField || currentValue;
                 currentDisplayName = entry._displayName || '';
+                // Appended suffix: show ONLY the added part in the text box (with the
+                // append checkbox pre-checked below) — not the composed alias.
+                currentAppendText = entry._appendText || '';
+                if (currentAppendText) currentDisplayName = currentAppendText;
+                // Custom-text block: the "activity" is just the typed text — keep the
+                // dropdown empty and let the custom text box carry it, so re-saving
+                // stays a custom-text write instead of a fake-activity write.
+                if (entry._customText) { currentActivity = ''; currentField = ''; }
             }
         }
         const allActivities = [...new Set(locations.flatMap(l => l.activities || []))].sort();
@@ -5527,11 +5955,15 @@ if (bypassStatus.highlight) {
                     <div style="font-size:0.75rem;color:#9ca3af;margin-top:3px;">Pick an activity — the system will find a free court.</div>
                 </div>
                 <div>
-                    <label style="display:block;font-weight:600;color:#374151;margin-bottom:6px;">Display name <span style="font-weight:400;color:#9ca3af;">(optional)</span></label>
+                    <label style="display:block;font-weight:600;color:#374151;margin-bottom:6px;">Custom text <span style="font-weight:400;color:#9ca3af;">(optional)</span></label>
                     <input id="post-edit-display-name" type="text" value="${escapeHtml(currentDisplayName)}"
-                        placeholder="e.g. Shirt Making"
+                        placeholder="Type anything — e.g. Color War Breakout!"
                         style="width:100%;padding:10px 12px;border:1.5px solid #d1d5db;border-radius:8px;font-size:1rem;box-sizing:border-box;outline:none;background:white;" />
-                    <div style="font-size:0.75rem;color:#9ca3af;margin-top:3px;">Shown on the schedule instead of the activity name. Still counts as the chosen activity. Leave blank to use the real name.</div>
+                    <div style="font-size:0.75rem;color:#9ca3af;margin-top:3px;">Shows on the schedule, print &amp; live view exactly as typed. With an activity picked above it just renames it (still counts as that activity); with no activity it becomes a free-text block.</div>
+                    <label style="display:flex;align-items:center;gap:8px;margin-top:8px;font-size:0.82rem;color:#374151;cursor:pointer;user-select:none;">
+                        <input type="checkbox" id="post-edit-append-mode" ${currentAppendText ? 'checked' : ''} style="width:15px;height:15px;cursor:pointer;">
+                        Add to the existing name instead of replacing it <span style="color:#9ca3af;">(e.g. "Basketball – Court 1 — bring water")</span>
+                    </label>
                 </div>
                 <div id="post-edit-field-result" style="display:none;"></div>
                 <details id="post-edit-location-wrap" style="border:1px solid #e5e7eb;border-radius:8px;padding:10px;">
@@ -5622,6 +6054,26 @@ if (bypassStatus.highlight) {
             fieldResult.style.display = 'block';
             locationSelect.value = '';
 
+            // A busy/restricted field is never hard-hidden — it's still offered as
+            // an amber "override" button. Picking it surfaces the conflict/warning
+            // and the soft gate confirms on save (product decision: never block,
+            // only warn). Reason is shown so the user knows what they're overriding.
+            const _busyReason = (b) => b.reason === 'access_restricted' ? 'no access'
+                : b.reason === 'league_locked' ? 'league game'
+                : b.reason === 'pinned_reserved' ? 'reserved' : 'in use';
+            const _busyBtnHtml = (b) => `<button class="pe-field-pick-busy" data-field="${escapeHtml(b.name)}" style="padding:8px 14px;background:#fffbeb;border:1.5px dashed #f59e0b;border-radius:8px;font-size:0.85rem;cursor:pointer;font-weight:500;color:#92400e;">${escapeHtml(b.name)} <span style="opacity:0.75;font-size:0.72rem;">(${_busyReason(b)} — override)</span></button>`;
+            const _wireBusyPicks = () => {
+                fieldResult.querySelectorAll('.pe-field-pick-busy').forEach(btn => {
+                    btn.addEventListener('click', () => {
+                        fieldResult.querySelectorAll('.pe-field-pick').forEach(b => { b.style.background = '#f0fdf4'; b.style.borderColor = '#86efac'; b.style.color = '#065f46'; });
+                        fieldResult.querySelectorAll('.pe-field-pick-busy').forEach(b => { b.style.background = '#fffbeb'; b.style.borderStyle = 'dashed'; b.style.borderColor = '#f59e0b'; });
+                        btn.style.background = '#fde68a'; btn.style.borderStyle = 'solid'; btn.style.borderColor = '#d97706';
+                        locationSelect.value = btn.dataset.field;
+                        renderConflictArea(btn.dataset.field);
+                    });
+                });
+            };
+
             if (open.length > 0) {
                 const fieldButtons = open.map(l => {
                     const bg = l.shared ? '#fffbeb' : '#f0fdf4';
@@ -5630,33 +6082,40 @@ if (bypassStatus.highlight) {
                     const label = escapeHtml(l.name) + (l.shared ? ' <span style="font-size:0.72rem;opacity:0.8;">! shared</span>' : '') + (l.capacity > 1 ? ' <span style="opacity:0.6;font-size:0.75rem;">(cap:' + l.capacity + ')</span>' : '');
                     return `<button class="pe-field-pick" data-field="${escapeHtml(l.name)}" style="padding:8px 14px;background:${bg};border:1.5px solid ${border};border-radius:8px;font-size:0.85rem;cursor:pointer;font-weight:500;color:${color};transition:all 0.15s;">${label}</button>`;
                 }).join('');
-                const busyNote = busy.length > 0
-                    ? `<div style="margin-top:8px;font-size:0.78rem;color:#9ca3af;">Unavailable: ${busy.map(b => {
-                        const reason = b.reason === 'access_restricted' ? 'no access' : b.reason === 'league_locked' ? 'league' : b.reason === 'pinned_reserved' ? 'reserved' : 'in use';
-                        return escapeHtml(b.name) + ' <span style="opacity:0.7">(' + reason + ')</span>';
-                    }).join(', ')}</div>`
+                const busyBlock = busy.length > 0
+                    ? `<div style="margin-top:10px;">
+                        <div style="font-size:0.75rem;color:#9ca3af;margin-bottom:6px;">In use / restricted — pick to override:</div>
+                        <div style="display:flex;flex-wrap:wrap;gap:8px;">${busy.map(_busyBtnHtml).join('')}</div>
+                       </div>`
                     : '';
                 fieldResult.innerHTML = `<div style="background:#f0fdf4;border:1px solid #bbf7d0;border-radius:8px;padding:12px;">
                     <div style="font-weight:600;font-size:0.85rem;color:#166534;margin-bottom:8px;">Available fields for ${escapeHtml(actVal)}:</div>
                     <div style="display:flex;flex-wrap:wrap;gap:8px;">${fieldButtons}</div>
-                    ${busyNote}
+                    ${busyBlock}
                 </div>`;
                 fieldResult.querySelectorAll('.pe-field-pick').forEach(btn => {
                     btn.addEventListener('click', () => {
                         fieldResult.querySelectorAll('.pe-field-pick').forEach(b => { b.style.background = '#f0fdf4'; b.style.borderColor = '#86efac'; b.style.color = '#065f46'; });
+                        fieldResult.querySelectorAll('.pe-field-pick-busy').forEach(b => { b.style.background = '#fffbeb'; b.style.borderStyle = 'dashed'; b.style.borderColor = '#f59e0b'; });
                         btn.style.background = '#dcfce7'; btn.style.borderColor = '#16a34a'; btn.style.color = '#14532d';
                         locationSelect.value = btn.dataset.field;
                         renderConflictArea(btn.dataset.field);
                     });
                 });
+                _wireBusyPicks();
             } else {
+                const busyBlock = busy.length > 0
+                    ? `<div style="font-size:0.82rem;color:#78350f;margin-bottom:6px;">No free field for <strong>${escapeHtml(actVal)}</strong> right now — pick one to use anyway (you'll get a warning):</div>
+                       <div style="display:flex;flex-wrap:wrap;gap:8px;margin-bottom:10px;">${busy.map(_busyBtnHtml).join('')}</div>`
+                    : `<div style="font-size:0.82rem;color:#78350f;margin-bottom:6px;">No field configured for <strong>${escapeHtml(actVal)}</strong>.</div>`;
                 fieldResult.innerHTML = `<div style="background:#fef3c7;border:1px solid #fbbf24;border-radius:8px;padding:10px;font-size:0.875rem;color:#78350f;">
-                    All fields for <strong>${escapeHtml(actVal)}</strong> are unavailable.
-                    <div style="display:flex;gap:8px;margin-top:10px;flex-wrap:wrap;">
+                    ${busyBlock}
+                    <div style="display:flex;gap:8px;margin-top:2px;flex-wrap:wrap;">
                         <button id="pe-ignore-field" style="padding:7px 14px;background:#fff;border:1px solid #d1d5db;border-radius:6px;font-size:0.82rem;cursor:pointer;font-weight:500;">Place Anyway (no field)</button>
                         <button id="pe-make-room" style="padding:7px 14px;background:#1d4ed8;color:#fff;border:none;border-radius:6px;font-size:0.82rem;cursor:pointer;font-weight:600;">Make Room</button>
                     </div>
                 </div>`;
+                _wireBusyPicks();
                 fieldResult.querySelector('#pe-ignore-field')?.addEventListener('click', () => {
                     locationSelect.value = '';
                     fieldResult.innerHTML = `<div style="background:#eff6ff;border:1px solid #bfdbfe;border-radius:8px;padding:10px;font-size:0.85rem;color:#1e40af;">Will place <strong>${escapeHtml(actVal)}</strong> without a specific field.</div>`;
@@ -5705,18 +6164,45 @@ if (bypassStatus.highlight) {
         document.getElementById('post-edit-save').onclick = () => {
             const activity = actInput.value.trim();
             const location = locationSelect.value;
-            const displayName = document.getElementById('post-edit-display-name')?.value.trim() || '';
-            if (!activity) { alert('Please enter an activity name.'); return; }
+            let displayName = document.getElementById('post-edit-display-name')?.value.trim() || '';
+            const appendMode = !!document.getElementById('post-edit-append-mode')?.checked;
+            let appendText = '';
+            // APPEND mode: keep what the cell already says and add the text after it.
+            if (appendMode && (displayName || currentAppendText)) {
+                const activityChanged = activity && activity.toLowerCase() !== String(currentActivity || '').toLowerCase();
+                const locationChanged = location && location.toLowerCase() !== String(currentField || '').toLowerCase();
+                if (!activityChanged && !locationChanged) {
+                    // Nothing else changed → safe in-place decorate (entry, field,
+                    // rotation counts and solver metadata all stay untouched).
+                    // An emptied box with a previous suffix removes the suffix.
+                    applyAppendTextEdit(bunk, startMin, endMin, displayName);
+                    closeModal();
+                    return;
+                }
+                // Activity/field changed too → normal rewrite, with the composed
+                // "Activity – Location — text" label carried as the alias.
+                appendText = displayName;
+                const base = (location && location.toLowerCase() !== activity.toLowerCase()) ? activity + ' – ' + location : activity;
+                displayName = displayName ? base + ' — ' + displayName : '';
+            }
+            // Custom-text-only save: no activity chosen, just free text — place it
+            // as a custom text block (no field claim, no rotation credit).
+            if (!activity && displayName) {
+                onSave({ activity: displayName, displayName, customText: true, location: '', startMin, endMin, hasConflict: false, conflicts: [] });
+                closeModal();
+                return;
+            }
+            if (!activity) { alert('Pick an activity — or type custom text below to place free text.'); return; }
             const targetSlots = findSlotsForRange(startMin, endMin, divName, _hasPerBunk ? bunk : null);
             const conflictCheck = location ? checkLocationConflict(location, targetSlots, bunk) : null;
             if (conflictCheck?.hasConflict) {
-                onSave({ activity, location, displayName, startMin, endMin, hasConflict: true,
+                onSave({ activity, location, displayName, appendText, startMin, endMin, hasConflict: true,
                     conflicts: conflictCheck.conflicts,
                     editableConflicts: conflictCheck.editableConflicts || [],
                     nonEditableConflicts: conflictCheck.nonEditableConflicts || [],
                     resolutionChoice });
             } else {
-                onSave({ activity, location, displayName, startMin, endMin, hasConflict: false, conflicts: [] });
+                onSave({ activity, location, displayName, appendText, startMin, endMin, hasConflict: false, conflicts: [] });
             }
             closeModal();
         };
@@ -6045,6 +6531,8 @@ if (bypassStatus.highlight) {
 
         // Check if a field is available considering capacity AND sharing rules
         function _isFieldAvailableForBunk(fName) {
+            // ★ Facility-less uncapped label (Swim etc.) → always has room.
+            if (isUncappedFacilitylessLabel(fName, activityProps)) return true;
             const props = activityProps[fName] || activityProps[fName.toLowerCase()] || {};
             const maxCapacity = props.sharableWith?.capacity || (props.sharable ? 2 : 1);
             const shareType = props.sharableWith?.type || (props.sharable ? 'all' : 'not_sharable');
@@ -6275,6 +6763,8 @@ if (isRainyMode && (fieldProps.rainyDayAvailable === false || fieldProps.availab
     function checkIfMoveCreatesConflict(bunk, slot, newField, simulatedUsage, alreadyProcessed) {
         const newConflicts = [];
         const activityProps = getActivityProperties();
+        // ★ Facility-less uncapped label (Swim etc.) → a move there never conflicts.
+        if (isUncappedFacilitylessLabel(newField, activityProps)) return [];
         const props = activityProps[newField] || {};
         const maxCapacity = props.sharableWith?.capacity || (props.sharable ? 2 : 1);
 
@@ -6587,6 +7077,16 @@ function minutesToTimeString(mins) {
                     </select>
                     <div style="font-size:0.75rem;color:#9ca3af;margin-top:3px;">Pick an activity — the system will find a free court for all bunks.</div>
                 </div>
+                <div>
+                    <label style="display: block; font-weight: 600; margin-bottom: 6px; color: #374151;">Custom text <span style="font-weight:400;color:#9ca3af;">(optional)</span></label>
+                    <input id="multi-edit-custom-text" type="text" placeholder="Type anything — e.g. Color War Breakout!"
+                        style="width: 100%; padding: 10px; border: 1.5px solid #d1d5db; border-radius: 8px; box-sizing: border-box; font-size: 0.95rem;">
+                    <div style="font-size:0.75rem;color:#9ca3af;margin-top:3px;">Shows on the schedule, print &amp; live view exactly as typed. Leave the activity empty to place just this text on all selected bunks.</div>
+                    <label style="display:flex;align-items:center;gap:8px;margin-top:8px;font-size:0.82rem;color:#374151;cursor:pointer;user-select:none;">
+                        <input type="checkbox" id="multi-edit-append-mode" style="width:15px;height:15px;cursor:pointer;">
+                        Add to each bunk's existing name instead of replacing it <span style="color:#9ca3af;">(keeps every activity as-is, adds this text after it)</span>
+                    </label>
+                </div>
                 <div id="multi-field-result" style="display:none;"></div>
                 <details id="multi-location-wrap" style="border:1px solid #e5e7eb;border-radius:8px;padding:10px;">
                     <summary style="font-weight:500;color:#6b7280;cursor:pointer;font-size:0.875rem;">Override field manually</summary>
@@ -6655,35 +7155,58 @@ function minutesToTimeString(mins) {
                 document.getElementById('multi-conflict-preview').style.display = 'none';
                 if (multiLocSel) multiLocSel.value = '';
 
+                // Busy/restricted fields stay pickable as amber "override" buttons
+                // (never hard-hidden); picking one previews + the soft gate warns
+                // on submit. Consistent with the single-bunk picker.
+                const _mBusyReason = (b) => b.reason === 'access_restricted' ? 'no access'
+                    : b.reason === 'league_locked' ? 'league game'
+                    : b.reason === 'pinned_reserved' ? 'reserved' : 'in use';
+                const _mBusyBtnHtml = (b) => `<button class="multi-field-pick-busy" data-field="${escapeHtml(b.name)}" style="padding:8px 14px;background:#fffbeb;border:1.5px dashed #f59e0b;border-radius:8px;font-size:0.85rem;cursor:pointer;font-weight:500;color:#92400e;">${escapeHtml(b.name)} <span style="opacity:0.75;font-size:0.72rem;">(${_mBusyReason(b)} — override)</span></button>`;
+                const _wireMultiBusyPicks = () => {
+                    multiFieldResult.querySelectorAll('.multi-field-pick-busy').forEach(btn => {
+                        btn.addEventListener('click', () => {
+                            multiFieldResult.querySelectorAll('.multi-field-pick').forEach(b => { b.style.background = '#f0fdf4'; b.style.borderColor = '#86efac'; b.style.color = '#065f46'; });
+                            multiFieldResult.querySelectorAll('.multi-field-pick-busy').forEach(b => { b.style.background = '#fffbeb'; b.style.borderStyle = 'dashed'; b.style.borderColor = '#f59e0b'; });
+                            btn.style.background = '#fde68a'; btn.style.borderStyle = 'solid'; btn.style.borderColor = '#d97706';
+                            if (multiLocSel) multiLocSel.value = btn.dataset.field;
+                            previewMultiBunkEdit();
+                        });
+                    });
+                };
+
                 if (open.length > 0) {
                     const fieldButtons = open.map(l =>
                         `<button class="multi-field-pick" data-field="${escapeHtml(l.name)}" style="padding:8px 14px;background:#f0fdf4;border:1.5px solid #86efac;border-radius:8px;font-size:0.85rem;cursor:pointer;font-weight:500;color:#065f46;transition:all 0.15s;">${escapeHtml(l.name)}${l.capacity > 1 ? ' <span style="opacity:0.6;font-size:0.75rem;">(cap:' + l.capacity + ')</span>' : ''}</button>`
                     ).join('');
-                    const busyNote = busy.length > 0
-                        ? `<div style="margin-top:8px;font-size:0.78rem;color:#9ca3af;">Unavailable: ${busy.map(b => escapeHtml(b.name)).join(', ')}</div>`
+                    const busyBlock = busy.length > 0
+                        ? `<div style="margin-top:10px;"><div style="font-size:0.75rem;color:#9ca3af;margin-bottom:6px;">In use / restricted — pick to override:</div><div style="display:flex;flex-wrap:wrap;gap:8px;">${busy.map(_mBusyBtnHtml).join('')}</div></div>`
                         : '';
                     multiFieldResult.innerHTML = `<div style="background:#f0fdf4;border:1px solid #bbf7d0;border-radius:8px;padding:12px;">
                         <div style="font-weight:600;font-size:0.85rem;color:#166534;margin-bottom:8px;">Available fields for ${escapeHtml(actVal)}:</div>
                         <div style="display:flex;flex-wrap:wrap;gap:8px;">${fieldButtons}</div>
-                        ${busyNote}
+                        ${busyBlock}
                     </div>`;
                     multiFieldResult.querySelectorAll('.multi-field-pick').forEach(btn => {
                         btn.addEventListener('click', () => {
                             multiFieldResult.querySelectorAll('.multi-field-pick').forEach(b => { b.style.background = '#f0fdf4'; b.style.borderColor = '#86efac'; b.style.color = '#065f46'; });
+                            multiFieldResult.querySelectorAll('.multi-field-pick-busy').forEach(b => { b.style.background = '#fffbeb'; b.style.borderStyle = 'dashed'; b.style.borderColor = '#f59e0b'; });
                             btn.style.background = '#dcfce7'; btn.style.borderColor = '#16a34a'; btn.style.color = '#14532d';
                             if (multiLocSel) multiLocSel.value = btn.dataset.field;
                             // Auto-preview immediately after field selection
                             previewMultiBunkEdit();
                         });
                     });
+                    _wireMultiBusyPicks();
                 } else if (busy.length > 0) {
                     multiFieldResult.innerHTML = `<div style="background:#fef3c7;border:1px solid #fbbf24;border-radius:8px;padding:10px;font-size:0.875rem;color:#78350f;">
-                        All fields for <strong>${escapeHtml(actVal)}</strong> are unavailable.
-                        <div style="display:flex;gap:8px;margin-top:10px;flex-wrap:wrap;">
+                        <div style="font-size:0.82rem;color:#78350f;margin-bottom:6px;">No free field for <strong>${escapeHtml(actVal)}</strong> right now — pick one to use anyway (you'll get a warning):</div>
+                        <div style="display:flex;flex-wrap:wrap;gap:8px;margin-bottom:10px;">${busy.map(_mBusyBtnHtml).join('')}</div>
+                        <div style="display:flex;gap:8px;margin-top:2px;flex-wrap:wrap;">
                             <button id="multi-ignore-field" style="padding:7px 14px;background:#fff;border:1px solid #d1d5db;border-radius:6px;font-size:0.82rem;cursor:pointer;">Place Anyway (no field)</button>
                             <button id="multi-make-room" style="padding:7px 14px;background:#1d4ed8;color:#fff;border:none;border-radius:6px;font-size:0.82rem;cursor:pointer;font-weight:600;">Make Room</button>
                         </div>
                     </div>`;
+                    _wireMultiBusyPicks();
                     multiFieldResult.querySelector('#multi-ignore-field')?.addEventListener('click', () => {
                         if (multiLocSel) multiLocSel.value = '';
                         multiFieldResult.innerHTML = `<div style="background:#eff6ff;border:1px solid #bfdbfe;border-radius:8px;padding:10px;font-size:0.85rem;color:#1e40af;">Will place <strong>${escapeHtml(actVal)}</strong> without a specific field.</div>`;
@@ -6713,6 +7236,27 @@ function minutesToTimeString(mins) {
                     document.getElementById('multi-conflict-preview').style.display = 'none';
                 }
             });
+        }
+
+        // Custom-text-only mode: free text with no activity needs no field search
+        // or conflict preview — enable Apply as soon as there's text to place.
+        // Append mode likewise: it decorates each bunk's existing entry in place,
+        // so no activity, field search or preview is needed either.
+        const multiCustomText = document.getElementById('multi-edit-custom-text');
+        const multiAppendChk = document.getElementById('multi-edit-append-mode');
+        if (multiCustomText) {
+            const _syncMultiSubmit = () => {
+                const submitBtn = document.getElementById('multi-edit-submit');
+                if (!submitBtn) return;
+                const hasText = !!multiCustomText.value.trim();
+                const hasActivity = !!(multiActInput && multiActInput.value.trim());
+                const append = !!(multiAppendChk && multiAppendChk.checked);
+                if (hasText && (append || !hasActivity)) submitBtn.disabled = false;
+                else if (!_multiBunkPreviewResult) submitBtn.disabled = true;
+            };
+            multiCustomText.addEventListener('input', _syncMultiSubmit);
+            if (multiAppendChk) multiAppendChk.addEventListener('change', _syncMultiSubmit);
+            if (multiActInput) multiActInput.addEventListener('change', _syncMultiSubmit);
         }
     }
 
@@ -6802,9 +7346,27 @@ if (softBlocks.length > 0) {
     }
 
     async function submitMultiBunkEdit() {
+        const _mCustomText = document.getElementById('multi-edit-custom-text')?.value.trim() || '';
+        const _mActivity = document.getElementById('multi-edit-activity')?.value.trim() || '';
+        // APPEND apply: keep every bunk's existing activity and add the text after
+        // it — pure in-place decorate, no cascade plan, no activity needed.
+        if (_mCustomText && document.getElementById('multi-edit-append-mode')?.checked) {
+            await applyMultiBunkAppendText(_mCustomText);
+            closeIntegratedEditModal();
+            return;
+        }
+        // Custom-text-only apply: free text with no activity — no cascade plan needed.
+        if (_mCustomText && !_mActivity) {
+            await applyMultiBunkCustomText(_mCustomText);
+            closeIntegratedEditModal();
+            return;
+        }
+
         if (!_multiBunkPreviewResult) { alert('Please preview first'); return; }
 
         const result = _multiBunkPreviewResult;
+        // Activity + custom text together = display alias on the primary writes.
+        result.displayName = _mCustomText || null;
         const mode = document.querySelector('input[name="multi-mode"]:checked')?.value || 'notify';
         const myDivisions = new Set(getMyDivisions());
         const otherMoves = result.plan.filter(p => !myDivisions.has(p.division));
@@ -7135,6 +7697,13 @@ if (softBlocks.length > 0) {
             );
         }
 
+        // Optional display alias (custom text typed alongside a real activity):
+        // shown verbatim on the schedule/print/live view; rotation still credits
+        // the real activity. Only kept when it actually differs from the activity.
+        const _mbDn = (result.displayName && String(result.displayName).trim()
+            && String(result.displayName).trim().toLowerCase() !== String(activity || '').trim().toLowerCase())
+            ? String(result.displayName).trim() : null;
+
         for (const bunk of _committedBunks) {
             const bunkSlots = _bunkSlotsByBunk[bunk];
             const perBunk = window.divisionTimes?.[divName]?._perBunkSlots?.[String(bunk)];
@@ -7144,6 +7713,7 @@ if (softBlocks.length > 0) {
             for (let i = 0; i < bunkSlots.length; i++) {
                 window.scheduleAssignments[bunk][bunkSlots[i]] = {
                     field: location, sport: null, _activity: activity,
+                    _displayName: _mbDn,
                     _fixed: true, _pinned: true, _multiBunkEdit: true,
                     continuation: i > 0,
                     _startMin: result.timeStartMin,
@@ -7253,12 +7823,178 @@ if (softBlocks.length > 0) {
     }
 
     // =========================================================================
+    // APPLY MULTI-BUNK CUSTOM TEXT
+    // =========================================================================
+    // Free-text block placed across many bunks at once (e.g. "Color War
+    // Breakout!" for a whole division). The text is a label, not an activity:
+    // no field is claimed, no legality gate applies, and rotation credits
+    // nothing new (old activities are still debited since they're overwritten).
+    // _displayName makes every view — grid, print center, live view — show the
+    // text verbatim.
+    async function applyMultiBunkCustomText(text) {
+        const ctx = _multiBunkEditContext;
+        if (!ctx) { alert('Edit context lost. Please try again.'); return; }
+        const { bunks, slots, divName, perBunkSlots, isAutoMode, timeStartMin, timeEndMin } = ctx;
+        const divSlots = window.divisionTimes?.[divName] || [];
+
+        const bunkSlotsByBunk = {};
+        const oldActivitiesByBunk = {};
+        for (const bunk of bunks) {
+            let bunkSlots;
+            if (isAutoMode && timeStartMin != null && timeEndMin != null) {
+                bunkSlots = ensurePerBunkSlotForRange(bunk, divName, timeStartMin, timeEndMin);
+            } else if (isAutoMode && perBunkSlots && perBunkSlots[String(bunk)]) {
+                bunkSlots = perBunkSlots[String(bunk)];
+            } else {
+                bunkSlots = slots;
+            }
+            if (!bunkSlots || bunkSlots.length === 0) {
+                console.warn('[applyMultiBunkCustomText] No slots resolved for ' + bunk + ', skipping');
+                continue;
+            }
+            bunkSlotsByBunk[bunk] = bunkSlots;
+            oldActivitiesByBunk[bunk] = bunkSlots
+                .filter(idx => window.scheduleAssignments?.[bunk]?.[idx] && !window.scheduleAssignments[bunk][idx].continuation)
+                .map(idx => window.scheduleAssignments[bunk][idx]._activity || window.scheduleAssignments[bunk][idx].field)
+                .filter(Boolean);
+        }
+        const targets = Object.keys(bunkSlotsByBunk);
+        if (targets.length === 0) { alert('No time slots resolved for the selected bunks.'); return; }
+
+        await createAutoBackup(text, divName);
+
+        // Undo transaction (counts payload debits-only: newAct = null)
+        if (typeof window.peiSnapshotTransaction === 'function') {
+            window.peiSnapshotTransaction(
+                targets,
+                'Custom text "' + text + '" → ' + targets.length + ' bunks',
+                { counts: targets.map(b => ({ bunk: b, newAct: null, oldActs: oldActivitiesByBunk[b] || [], slots: bunkSlotsByBunk[b] })) }
+            );
+        }
+
+        if (!window.scheduleAssignments) window.scheduleAssignments = {};
+        for (const bunk of targets) {
+            const bunkSlots = bunkSlotsByBunk[bunk];
+            const perBunk = window.divisionTimes?.[divName]?._perBunkSlots?.[String(bunk)];
+            const slotCount = perBunk ? perBunk.length : (divSlots.length || 50);
+            if (!window.scheduleAssignments[bunk]) window.scheduleAssignments[bunk] = new Array(slotCount);
+            for (let i = 0; i < bunkSlots.length; i++) {
+                window.scheduleAssignments[bunk][bunkSlots[i]] = {
+                    field: text, sport: null, _activity: text,
+                    _displayName: text, _customText: true,
+                    _fixed: true, _pinned: true, _postEdit: true, _multiBunkEdit: true,
+                    continuation: i > 0,
+                    _startMin: timeStartMin, _endMin: timeEndMin,
+                    _editedAt: Date.now()
+                };
+            }
+            if (window.SchedulerCoreUtils?.applyPostEditCounts) {
+                window.SchedulerCoreUtils.applyPostEditCounts(bunk, oldActivitiesByBunk[bunk] || [], null, bunkSlots);
+            }
+        }
+
+        markPostEditInProgress();
+        if (typeof bypassSaveAllBunks === 'function') await bypassSaveAllBunks(targets);
+        else saveSchedule();
+
+        try {
+            const _rcDate = window.currentScheduleDate || new Date().toISOString().split('T')[0];
+            document.dispatchEvent(new CustomEvent('campistry-post-edit-complete', {
+                detail: { bunks: targets, date: _rcDate, source: 'multi-bunk-custom-text' }
+            }));
+        } catch (_e) { /* non-fatal */ }
+
+        if (typeof renderStaggeredView === 'function') renderStaggeredView();
+        showIntegratedToast('Custom text placed on ' + targets.length + ' bunk(s).', 'success');
+    }
+
+    // =========================================================================
+    // APPLY MULTI-BUNK APPEND TEXT
+    // =========================================================================
+    // "Keep what's there, add more to it" across many bunks at once: every
+    // selected bunk's existing entry in the time range keeps its activity /
+    // field / rotation state, and the text is appended to its displayed label
+    // (e.g. "Basketball – Court 1 — wear white"). Pure in-place decorate — no
+    // legality gates, no rotation changes, no field claims.
+    async function applyMultiBunkAppendText(text) {
+        const ctx = _multiBunkEditContext;
+        if (!ctx) { alert('Edit context lost. Please try again.'); return; }
+        const { bunks, slots, divName, perBunkSlots, isAutoMode, timeStartMin, timeEndMin } = ctx;
+        const clean = String(text || '').trim();
+
+        // Resolve which bunks/slots actually have entries to decorate FIRST, so
+        // the undo snapshot below captures genuinely pre-edit state.
+        const decorable = [];
+        for (const bunk of bunks) {
+            let bunkSlots;
+            if (isAutoMode && timeStartMin != null && timeEndMin != null) {
+                bunkSlots = findSlotsForRange(timeStartMin, timeEndMin, divName, bunk);
+            } else if (isAutoMode && perBunkSlots && perBunkSlots[String(bunk)]) {
+                bunkSlots = perBunkSlots[String(bunk)];
+            } else {
+                bunkSlots = slots;
+            }
+            const row = window.scheduleAssignments?.[bunk];
+            if (!bunkSlots || !bunkSlots.length || !row) continue;
+            const hits = bunkSlots.filter(idx => row[idx] && !row[idx].continuation);
+            if (hits.length) decorable.push({ bunk, row, hits });
+        }
+        if (!decorable.length) { alert('Nothing to add text to — no activities found in that time range.'); return; }
+        const targets = decorable.map(d => d.bunk);
+
+        // Undo snapshot BEFORE mutating (no rotation-count payload — counts are untouched).
+        if (typeof window.peiSnapshotTransaction === 'function') {
+            window.peiSnapshotTransaction(targets, 'Added text "' + clean + '" to ' + targets.length + ' bunks', { counts: [] });
+        }
+
+        markPostEditInProgress();
+        decorable.forEach(({ row, hits }) => {
+            hits.forEach(idx => {
+                const entry = row[idx];
+                const base = _usAppendBase(entry);
+                const hadRealAlias = !!entry._displayName && !entry._appendOnly;
+                if (clean) {
+                    entry._appendText = clean;
+                    entry._displayName = base ? base + ' — ' + clean : clean;
+                    entry._appendOnly = !hadRealAlias;
+                } else {
+                    if (entry._appendOnly) entry._displayName = null;
+                    else if (entry._appendText) entry._displayName = base || null;
+                    entry._appendText = null;
+                    delete entry._appendOnly;
+                }
+                entry._postEdit = true;
+                entry._editedAt = Date.now();
+            });
+        });
+
+        const currentDate = window.currentScheduleDate || window.currentDate || document.getElementById('datePicker')?.value || new Date().toISOString().split('T')[0];
+        try {
+            const allDailyData = JSON.parse(localStorage.getItem('campDailyData_v1') || '{}');
+            if (!allDailyData[currentDate]) allDailyData[currentDate] = {};
+            allDailyData[currentDate].scheduleAssignments = window.scheduleAssignments;
+            allDailyData[currentDate]._postEditAt = Date.now();
+            localStorage.setItem('campDailyData_v1', JSON.stringify(allDailyData));
+        } catch (e) { console.error('[UnifiedSchedule] multi append-text local save failed:', e); }
+        document.dispatchEvent(new CustomEvent('campistry-post-edit-complete', {
+            detail: { bunks: targets, date: currentDate, source: 'multi-bunk-append-text' }
+        }));
+        if (typeof bypassSaveAllBunks === 'function') await bypassSaveAllBunks(targets);
+        else saveSchedule();
+
+        if (typeof renderStaggeredView === 'function') renderStaggeredView();
+        showIntegratedToast((clean ? 'Text added to ' : 'Text removed from ') + targets.length + ' bunk(s).', 'success');
+    }
+
+    // =========================================================================
     // AUTO MODE REBALANCING (post-edit capacity conflict resolution)
     // =========================================================================
 
     function autoModeRebalanceCheck(divName, editedBunks, location, activity, timeStartMin, timeEndMin) {
         if (!location) return;
         const activityProps = getActivityProperties();
+        // ★ Facility-less uncapped label (Swim etc.) → nothing to rebalance.
+        if (isUncappedFacilitylessLabel(location, activityProps)) return;
         const locProps = activityProps[location] || {};
         const fieldCap = locProps.sharableWith?.capacity ? parseInt(locProps.sharableWith.capacity) || 1 : (locProps.sharable ? 2 : 1);
 

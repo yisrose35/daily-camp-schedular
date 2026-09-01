@@ -169,10 +169,14 @@
     for (let i = 0; i < skeleton.length; i++) {
       for (let j = i + 1; j < skeleton.length; j++) {
         const a = skeleton[i], b = skeleton[j];
-        
+
         // Must be different divisions
         if (a.division === b.division) continue;
-        
+
+        // ★ Multi-grade span members are ONE joint activity shared across
+        //   grades on purpose — never a conflict with each other.
+        if (a.spanGroup && a.spanGroup === b.spanGroup) continue;
+
         // Must overlap in time
         if (!timesOverlap(a, b)) continue;
         
@@ -203,8 +207,10 @@
     for (let i = 0; i < skeleton.length; i++) {
       for (let j = i + 1; j < skeleton.length; j++) {
         const a = skeleton[i], b = skeleton[j];
-        
+
         if (a.division === b.division) continue;
+        // ★ Span members share fields on purpose — one joint activity.
+        if (a.spanGroup && a.spanGroup === b.spanGroup) continue;
         if (!timesOverlap(a, b)) continue;
         
         // Check reserved fields overlap

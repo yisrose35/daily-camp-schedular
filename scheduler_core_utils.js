@@ -220,26 +220,48 @@
         }
 
         skeleton.forEach(block => {
-            if (block.reservedFields && Array.isArray(block.reservedFields) && block.reservedFields.length > 0) {
-                const startMin = Utils.parseTimeToMinutes(block.startTime);
-                const endMin = Utils.parseTimeToMinutes(block.endTime);
-
-                if (startMin === null || endMin === null) return;
-
-                block.reservedFields.forEach(fieldName => {
-                    if (!reservations[fieldName]) {
-                        reservations[fieldName] = [];
-                    }
-
-                    reservations[fieldName].push({
-                        startMin,
-                        endMin,
-                        division: block.division,
-                        event: block.event,
-                        id: block.id
-                    });
-                });
+            // Collect every facility this block reserves for its whole window.
+            //   • Custom pinned / other tiles reserve via reservedFields[].
+            //   • Electives (and swim+elective hybrids) reserve the activities /
+            //     locations the division picked. An elective is a fancy custom-pinned
+            //     tile — its facilities must be held against EVERYTHING else exactly
+            //     like a pin. A DA-created elective sets only electiveActivities (no
+            //     reservedFields), so without this it never reaches
+            //     window.fieldReservations, and the sports solver (canBlockFit, which
+            //     gates on fieldReservations — see scheduler_core_main STEP 2.45 note)
+            //     would happily drop another division's activity onto the reserved
+            //     facility at the same time. Including electiveActivities here gives
+            //     electives the same robust wall-clock reservation that pins already
+            //     get, for BOTH the master-builder and daily-adjustments paths.
+            const fields = new Set();
+            const _add = (f) => { if (f && typeof f === 'string' && f.trim() && f !== 'Free') fields.add(f.trim()); };
+            if (Array.isArray(block.reservedFields)) block.reservedFields.forEach(_add);
+            if (block.type === 'elective' || block.type === 'swim_elective') {
+                if (Array.isArray(block.electiveActivities)) block.electiveActivities.forEach(_add);
+                _add(block.swimLocation);
             }
+
+            if (fields.size === 0) return;
+
+            const startMin = Utils.parseTimeToMinutes(block.startTime);
+            const endMin = Utils.parseTimeToMinutes(block.endTime);
+
+            if (startMin === null || endMin === null) return;
+
+            fields.forEach(fieldName => {
+                if (!reservations[fieldName]) {
+                    reservations[fieldName] = [];
+                }
+
+                reservations[fieldName].push({
+                    startMin,
+                    endMin,
+                    division: block.division,
+                    event: block.event,
+                    id: block.id,
+                    type: block.type
+                });
+            });
         });
 
         console.log("[FieldReservations] Scanned skeleton, found reservations:", reservations);
@@ -707,6 +729,49 @@
         }
         return false;
     };
+
+    /**
+     * ★ AVOID-UNLESS-NEEDED (Rules tab → "Don't Give Unless Needed") — SOFT rule:
+     * the user picks a grade and sport(s) the scheduler should try very hard NOT
+     * to give that grade. Unlike the league-reserve rule this is NOT a hard block:
+     * the rotation engine applies a huge finite score penalty instead, so the
+     * sport is picked only when the alternative is a Free slot.
+     *
+     * This helper is only the RULE LOOKUP (does a rule match this grade+activity).
+     * Consumers: rotation_engine (score penalty), rules.js repair filler
+     * (second-pass only), post_edit auto-fill (rank last), validator (warning).
+     * Rules live in settings.schedulingRules.avoidUnlessNeeded:
+     *   [{ id, grade, sports: [] }]
+     * Cached for 3s — this runs inside scoring hot loops and loadGlobalSettings
+     * parses the whole settings blob. Fail-open on any read error.
+     */
+    let _aunCache = { t: 0, rules: null };
+    Utils.isSportAvoidedUnlessNeeded = function (divName, activityName) {
+        if (!divName || !activityName) return false;
+        const now = Date.now();
+        if (!_aunCache.rules || (now - _aunCache.t) > 3000) {
+            let rules = [];
+            try {
+                const sr = (window.loadGlobalSettings?.() || {}).schedulingRules || {};
+                if (Array.isArray(sr.avoidUnlessNeeded)) rules = sr.avoidUnlessNeeded;
+            } catch (e) { /* fail open */ }
+            _aunCache = { t: now, rules: rules };
+        }
+        const rules = _aunCache.rules;
+        if (!rules.length) return false;
+        const div = String(divName).toLowerCase().trim();
+        const act = String(activityName).toLowerCase().trim();
+        if (!div || !act) return false;
+        for (let i = 0; i < rules.length; i++) {
+            const r = rules[i];
+            if (!r || !r.grade || !Array.isArray(r.sports)) continue;
+            if (String(r.grade).toLowerCase().trim() !== div) continue;
+            if (r.sports.some(s => s && String(s).toLowerCase().trim() === act)) return true;
+        }
+        return false;
+    };
+    // Invalidate the cache immediately when the Rules tab saves a change.
+    Utils.invalidateAvoidRulesCache = function () { _aunCache = { t: 0, rules: null }; };
 
     /**
      * =========================================================================
@@ -2246,6 +2311,16 @@
         const activity = entry._activity || entry.sport || '';
         const field = Utils.fieldLabel(entry.field) || '';
 
+        // ★ entry.field may already be a composite "Location – Activity" (post-edit /
+        //   some solver writes). If so it already reads correctly — don't append the
+        //   activity again, which produced "Location – Activity – Activity".
+        if (field && activity && field.indexOf(' – ') !== -1) {
+            const _p = field.split(' – ');
+            if (_p[_p.length - 1].trim().toLowerCase() === String(activity).toLowerCase()) {
+                return field;
+            }
+        }
+
         if (activity && field && activity !== field) {
             return `${field} – ${activity}`;
         }
@@ -2282,6 +2357,78 @@
         const dt = window.divisionTimes || {};
         if (grade == null) return null;
         return dt[grade] || dt[String(grade)] || null;
+    };
+
+    // =========================================================================
+    // ★★★ KEEP-IN-USE FACILITIES ★★★
+    // A facility flagged "Keep in use" (Facilities → the field → Keep In Use)
+    // must never sit idle while the camp has activities running: as long as
+    // SOMEONE is in there the camp is happy — it does not matter who. This is
+    // the single source of truth both consumers read:
+    //   • scheduler_core_leagues.js — forces one league matchup onto a sport the
+    //     facility hosts when the day's rotation didn't hand that sport out.
+    //   • scheduler_core_main.js (STEP 7.96) — fills any remaining idle period
+    //     from a regular (non-league) bunk.
+    // Returns [] unless a facility opts in → exact no-op for every other camp.
+    // Fields that are globally unavailable, closed for TODAY in Daily
+    // Adjustments, or host no activities are dropped (nothing could fill them).
+    // =========================================================================
+    Utils.getKeepInUseFields = function () {
+        try {
+            const gs = (typeof window.loadGlobalSettings === 'function')
+                ? window.loadGlobalSettings() : (window.globalSettings || {});
+            const all = (gs && gs.app1 && gs.app1.fields) || (gs && gs.fields) || window.fields || [];
+            if (!Array.isArray(all) || all.length === 0) return [];
+
+            // Per-date closures (Daily Adjustments) — a field turned off for today
+            // can't be kept in use, and forcing it would be a real double-book.
+            let _dailyOff = {}, _disabled = [];
+            try {
+                const dd = (typeof window.loadCurrentDailyData === 'function') ? window.loadCurrentDailyData() : null;
+                if (dd) {
+                    _dailyOff = dd.dailyFieldAvailability || {};
+                    _disabled = (dd.overrides && dd.overrides.fields) || [];
+                }
+            } catch (_eDd) {}
+
+            const out = [];
+            all.forEach(f => {
+                if (!f || !f.name) return;
+                const cfg = f.keepInUse;
+                if (!cfg || cfg.enabled !== true) return;
+                if (f.available === false) return;
+                if (_dailyOff[f.name] === false) return;
+                if (Array.isArray(_disabled) && _disabled.includes(f.name)) return;
+                const acts = (f.activities || []).filter(Boolean);
+                if (acts.length === 0) return;
+                out.push({
+                    name: f.name,
+                    activities: acts,
+                    // Optional window — blank means "the whole camp day".
+                    startMin: (cfg.startMin != null && !isNaN(Number(cfg.startMin))) ? Number(cfg.startMin) : null,
+                    endMin: (cfg.endMin != null && !isNaN(Number(cfg.endMin))) ? Number(cfg.endMin) : null,
+                    // Spread the facility around between grades instead of letting
+                    // the earliest-starting grade hold it all day. Only bites when
+                    // grade periods are STAGGERED, where handing over costs a short
+                    // gap. Default ON; turn it off to keep coverage seamless.
+                    rotateGrades: cfg.rotateGrades !== false,
+                    fieldObj: f
+                });
+            });
+            return out;
+        } catch (_e) {
+            return [];
+        }
+    };
+
+    // True when [startMin,endMin) falls inside the keep-in-use entry's own
+    // required window (no window configured → always true).
+    Utils.keepInUseCoversWindow = function (entry, startMin, endMin) {
+        if (!entry) return false;
+        if (startMin == null || endMin == null) return false;
+        if (entry.startMin != null && endMin <= entry.startMin) return false;
+        if (entry.endMin != null && startMin >= entry.endMin) return false;
+        return true;
     };
 
     // =================================================================
@@ -2379,6 +2526,12 @@
 
             const yesterdayStr = `${yesterday.getFullYear()}-${String(yesterday.getMonth() + 1).padStart(2, '0')}-${String(yesterday.getDate()).padStart(2, '0')}`;
 
+            // ★ HR-13: COMPLETE reset — bunks get new campers at the half, so
+            // even the yesterday-repeat variety check must not look across the
+            // rotation epoch. A pre-epoch yesterday is treated as empty.
+            const _hrEpY = Utils.getRotationEpoch ? Utils.getRotationEpoch() : null;
+            if (_hrEpY && yesterdayStr < _hrEpY) return activities;
+
             const yesterdayData = allDaily[yesterdayStr];
             if (!yesterdayData?.scheduleAssignments?.[bunkName]) return activities;
 
@@ -2415,7 +2568,18 @@
         // Check rotation history for timestamps
         const rotationHistory = window.loadRotationHistory?.() || { bunks: {} };
         const bunkHistory = rotationHistory.bunks?.[bunkName] || {};
-        const lastTimestamp = bunkHistory[activityName] || bunkHistory[actLower];
+        let lastTimestamp = bunkHistory[activityName] || bunkHistory[actLower];
+
+        // ★ HR-6: cooldowns reset at the rotation epoch — a timestamp from
+        // before epoch midnight is invisible (pre-epoch visits never block).
+        // The historicalCounts fallback below stays unfiltered: HR-4 makes
+        // those counts epoch-scoped, so it can't leak pre-epoch usage.
+        try {
+            const _hrEp = Utils.getRotationEpoch ? Utils.getRotationEpoch() : null;
+            if (_hrEp && lastTimestamp && lastTimestamp < new Date(_hrEp + 'T00:00:00').getTime()) {
+                lastTimestamp = null;
+            }
+        } catch (_) {}
 
         if (lastTimestamp) {
             const now = Date.now();
@@ -2494,6 +2658,66 @@
     };
 
     /**
+     * ★ HR-1: canonical rotation-epoch reader (Half Reset watermark).
+     * Returns the ISO dateKey ('YYYY-MM-DD') before which all rotation
+     * bookkeeping (counts, caps, cooldowns, multiPart, fair-share) is
+     * invisible — schedules themselves are never deleted. Tolerates both
+     * the object form { date, setAt, prevEpoch } and the legacy plain
+     * string form. Returns null when no epoch is set.
+     */
+    // ★ HR-71: multi-source with a short cache. Live verification showed the
+    // settings-blob copy can lose a hydration race while the league blobs'
+    // verified-pushed _epochDate stamps survive — so the epoch is resolved as
+    // the MAX of: the KV key, the dedicated localStorage backstop written at
+    // reset time, and the two league-history stamps. Cached ~10s because this
+    // sits inside per-candidate scoring loops (blob JSON.parse is not free).
+    var _hrEpochCache = { at: 0, val: null };
+    Utils.getRotationEpoch = function() {
+        var now = Date.now();
+        if (now - _hrEpochCache.at < 10000) return _hrEpochCache.val;
+        // ★ HR-41 v2: among all surviving copies of the stamp, the one from the
+        // NEWEST reset action (setAt) wins — so a deliberate re-run of Start
+        // New Half can move the epoch backward (test/mistake recovery) while
+        // stale devices still lose. Legacy stamps without setAt rank at 0 and
+        // tie-break by max date.
+        var bestDate = '', bestAt = -1;
+        var _consider = function (d, at) {
+            if (typeof d !== 'string' || !/^\d{4}-\d{2}-\d{2}$/.test(d)) return;
+            at = Number(at) || 0;
+            if (at > bestAt || (at === bestAt && d > bestDate)) { bestAt = at; bestDate = d; }
+        };
+        try {
+            var e = window.loadGlobalSettings ? window.loadGlobalSettings('rotationEpoch') : null;
+            if (typeof e === 'string') _consider(e, 0);
+            else if (e) _consider(e.date, e.setAt);
+        } catch (_) {}
+        try {
+            var ls = localStorage.getItem('campistry_rotationEpoch');
+            if (ls && ls[0] === '{') { var lsp = JSON.parse(ls); _consider(lsp.date, lsp.setAt); }
+            else _consider(ls, 0);
+        } catch (_) {}
+        try {
+            var lh = JSON.parse(localStorage.getItem('campLeagueHistory_v2') || 'null');
+            if (lh) _consider(lh._epochDate, lh._epochSetAt);
+            var sh = JSON.parse(localStorage.getItem('campSpecialtyLeagueHistory_v1') || 'null');
+            if (sh) _consider(sh._epochDate, sh._epochSetAt);
+            var gs = window.loadGlobalSettings ? window.loadGlobalSettings() : {};
+            if (gs.leagueHistory) _consider(gs.leagueHistory._epochDate, gs.leagueHistory._epochSetAt);
+            if (gs.specialtyLeagueHistory) _consider(gs.specialtyLeagueHistory._epochDate, gs.specialtyLeagueHistory._epochSetAt);
+        } catch (_) {}
+        _hrEpochCache = { at: now, val: bestDate || null, setAt: Math.max(0, bestAt) };
+        return _hrEpochCache.val;
+    };
+    // ★ HR-41 v2: winning stamp WITH its reset-action time — lets the league
+    // engines' _effectiveEpoch compare blob vs global by recency, not max-date.
+    Utils.getRotationEpochInfo = function () {
+        var d = Utils.getRotationEpoch();
+        return { date: d, setAt: d ? (_hrEpochCache.setAt || 0) : 0 };
+    };
+    // Reset paths / tests can drop the cache after changing the epoch.
+    Utils.invalidateRotationEpochCache = function () { _hrEpochCache = { at: 0, val: null }; };
+
+    /**
      * Compute the start date of the current N-week period, anchored to camp
      * start date if configured, else rolling calendar windows.
      * @param {string} period - '1week','2weeks','3weeks','4weeks','half'
@@ -2505,12 +2729,22 @@
             ? (typeof window.currentScheduleDate === 'string' ? window.currentScheduleDate : window.currentScheduleDate.toISOString().slice(0, 10))
             : new Date().toISOString().slice(0, 10));
         var cd = Utils.getCampDates();
+        // ★ HR-2: rotation-epoch floor — every period start is clamped to the
+        // epoch so per-period counts/caps never look before the watermark.
+        // A null (= lifetime) result becomes the epoch itself when one is set.
+        // ISO dateKeys compare lexicographically, so max() is a string compare.
+        var _hrEpoch = Utils.getRotationEpoch ? Utils.getRotationEpoch() : null;
+        var _hrClamp = function(v) {
+            if (!_hrEpoch) return v;
+            if (!v) return _hrEpoch;
+            return (v >= _hrEpoch) ? v : _hrEpoch;
+        };
 
         if (period === 'half' || (!period)) {
             if (cd) {
                 var curParts = today.split('-').map(Number);
                 var curD = new Date(curParts[0], curParts[1] - 1, curParts[2]);
-                if (cd.half2Start && curD >= new Date(cd.half2Start + 'T00:00:00')) return cd.half2Start;
+                if (cd.half2Start && curD >= new Date(cd.half2Start + 'T00:00:00')) return _hrClamp(cd.half2Start);
                 // ★ FIX: if refDate is BEFORE camp startDate (e.g. pre-camp
                 // staging/test runs), returning cd.startDate causes
                 // getPeriodActivityCount to filter out ALL historical dates
@@ -2522,13 +2756,15 @@
                 // history, which is the conservative, safe behavior).
                 if (cd.startDate) {
                     var _startD = new Date(cd.startDate + 'T00:00:00');
-                    if (curD >= _startD) return cd.startDate;
+                    if (curD >= _startD) return _hrClamp(cd.startDate);
                     // fall through to local settings fallback below
                 }
             }
             var gs = window.loadGlobalSettings ? window.loadGlobalSettings() : {};
             var s = gs.app1 || gs;
-            return s.halfStartDate || s.currentHalfStart || s.sessionHalfStart || null;
+            // ★ HR-2: the null branch means "lifetime" — with an epoch set that
+            // must become the epoch, or lifetime caps would count pre-epoch days.
+            return _hrClamp(s.halfStartDate || s.currentHalfStart || s.sessionHalfStart || null);
         }
 
         // ★ FIX: accept 'week' as an alias for '1week'. Several specials in
@@ -2542,7 +2778,8 @@
                    : period === '3weeks' ? 3
                    : period === '4weeks' ? 4
                    : 0;
-        if (nWeeks === 0) return null;
+        // ★ HR-2: unknown period = lifetime → epoch floor when set.
+        if (nWeeks === 0) return _hrClamp(null);
 
         if (cd && cd.startDate) {
             var campStart = new Date(cd.startDate + 'T00:00:00');
@@ -2555,7 +2792,7 @@
                 var periodStartDay = periodIndex * nWeeks * 7;
                 var periodDate = new Date(campStart);
                 periodDate.setDate(periodDate.getDate() + periodStartDay);
-                return periodDate.getFullYear() + '-' + String(periodDate.getMonth() + 1).padStart(2, '0') + '-' + String(periodDate.getDate()).padStart(2, '0');
+                return _hrClamp(periodDate.getFullYear() + '-' + String(periodDate.getMonth() + 1).padStart(2, '0') + '-' + String(periodDate.getDate()).padStart(2, '0'));
             }
         }
 
@@ -2565,7 +2802,7 @@
         var dow = d.getDay();
         var daysToMon = dow === 0 ? 6 : dow - 1;
         d.setDate(d.getDate() - daysToMon - ((nWeeks - 1) * 7));
-        return d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0') + '-' + String(d.getDate()).padStart(2, '0');
+        return _hrClamp(d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0') + '-' + String(d.getDate()).padStart(2, '0'));
     };
 
     /**
@@ -2582,10 +2819,14 @@
             ? (typeof window.currentScheduleDate === 'string' ? window.currentScheduleDate : window.currentScheduleDate.toISOString().slice(0, 10))
             : new Date().toISOString().slice(0, 10));
         var periodStart = Utils.getPeriodStartDate(period, today);
+        // ★ HR-3: belt-and-braces epoch skip — HR-2 already floors periodStart,
+        // but the periodStart==null path counts everything, so filter here too.
+        var _hrEpoch3 = Utils.getRotationEpoch ? Utils.getRotationEpoch() : null;
         var allDaily = window.loadAllDailyData ? window.loadAllDailyData() : {};
         var count = 0;
         Object.keys(allDaily).forEach(function(dateKey) {
             if (dateKey >= today) return;
+            if (_hrEpoch3 && dateKey < _hrEpoch3) return;
             if (periodStart && dateKey < periodStart) return;
             var slots = allDaily[dateKey]?.scheduleAssignments?.[bunk];
             if (!Array.isArray(slots)) return;
@@ -2606,6 +2847,7 @@
                 var _cloudCount66 = 0;
                 Object.keys(_cbd66).forEach(function(dateKey) {
                     if (dateKey >= today) return;
+                    if (_hrEpoch3 && dateKey < _hrEpoch3) return; // ★ HR-3: cloud overlay must not reintroduce pre-epoch dates
                     if (periodStart && dateKey < periodStart) return;
                     var _byB = _cbd66[dateKey] && _cbd66[dateKey][bunk];
                     if (_byB && (_byB[activityName] || 0) > 0) _cloudCount66++;
@@ -2614,6 +2856,44 @@
             }
         } catch (_e66) { /* non-fatal — local count stands */ }
         return count;
+    };
+
+    /**
+     * Count how many of THIS bunk's real schedule-days fall in (fromKey, toKey].
+     *
+     * Used by the frequencyDays "minimum days between visits" cooldown gates so
+     * the gap is measured in DAYS THE GRADE/BUNK IS ACTUALLY AT CAMP — not raw
+     * calendar days. A day on which the bunk has no schedule (e.g. a grade that
+     * isn't in camp on Sundays) does NOT count toward the gap, matching the
+     * expectation that "6 days between" means 6 days of SCHEDULES, not 6 dates.
+     *
+     * `toKey` (today) is mid-generation and not yet in allDaily, so it is counted
+     * as one schedule-day: we are actively placing an activity for this bunk now,
+     * so it is present today by definition. The return value is directly
+     * comparable to frequencyDays — a gap of 1 == two consecutive schedule-days,
+     * which is exactly what the old calendar diff produced for back-to-back days.
+     *
+     * "Present" == the bunk has at least one real (non-transition, non-
+     * continuation) slot that day. A Free slot still counts (the grade is at camp,
+     * just idle that period); a missing/empty bunk array means the grade is not in
+     * camp that day and the day is skipped.
+     */
+    Utils.scheduledDaysBetween = function(bunkName, fromKey, toKey, allDaily) {
+        if (!fromKey || !toKey) return 0;
+        var all = allDaily || (window.loadAllDailyData ? window.loadAllDailyData() : {});
+        if (!all || typeof all !== 'object') return 1;
+        var bunkKey = String(bunkName);
+        var dateRe = /^\d{4}-\d{2}-\d{2}$/;
+        var between = 0;
+        Object.keys(all).forEach(function(dk) {
+            if (!dateRe.test(dk)) return;
+            if (dk <= fromKey || dk >= toKey) return; // strictly between prior visit and today
+            var slots = all[dk] && all[dk].scheduleAssignments && all[dk].scheduleAssignments[bunkKey];
+            if (Array.isArray(slots) && slots.some(function(e) {
+                return e && e._activity && !e.continuation && !e._isTransition;
+            })) between++;
+        });
+        return between + 1; // +1 for today (toKey): the bunk is present now
     };
 
     /**
@@ -2751,12 +3031,18 @@
         const validActivities = Utils.getValidActivityNames();
         const allDaily = window.loadAllDailyData?.() || {};
         const counts = {};
+        const countsByDate = {}; // per-date breakdown → lets a regen authoritatively replace one date
         let totalActivities = 0;
         let datesProcessed = 0;
+        // ★ HR-4: rotation-epoch fence — pre-epoch schedules stay saved but are
+        // invisible to the count rebuild, so kept history can't resurrect counts.
+        const _hrEpoch4 = Utils.getRotationEpoch ? Utils.getRotationEpoch() : null;
 
         Object.entries(allDaily).forEach(([dateKey, dayData]) => {
+            if (_hrEpoch4 && dateKey < _hrEpoch4) return; // ★ HR-4
             const sched = dayData?.scheduleAssignments || {};
             datesProcessed++;
+            const dayCounts = (countsByDate[dateKey] = {});
 
             Object.keys(sched).forEach(bunk => {
                 const bunkSchedule = sched[bunk] || [];
@@ -2775,6 +3061,8 @@
                         if (!validActivities.has(actName)) return;
                         counts[bunk] = counts[bunk] || {};
                         counts[bunk][actName] = (counts[bunk][actName] || 0) + 1;
+                        dayCounts[bunk] = dayCounts[bunk] || {};
+                        dayCounts[bunk][actName] = (dayCounts[bunk][actName] || 0) + 1;
                         totalActivities++;
                     }
                 });
@@ -2797,29 +3085,96 @@
             // counted-dates set. Decrements are the job of the explicit
             // erase / New-Half paths, not this passive rebuild.
             let _finalCounts = counts;
+            let _finalByDate = countsByDate; // full scan → per-date is authoritative
             const _countedDates = {};
-            Object.keys(allDaily).forEach(function (dk) { _countedDates[dk] = true; });
+            Object.keys(allDaily).forEach(function (dk) {
+                if (_hrEpoch4 && dk < _hrEpoch4) return; // ★ HR-4: pre-epoch dates are never "counted"
+                _countedDates[dk] = true;
+            });
             try {
                 const _gs = window.loadGlobalSettings?.() || {};
                 const _prevCounts = _gs.historicalCounts || {};
                 const _prevDates = _gs.historicalCountedDates || {};
+                const _prevByDate = _gs.historicalCountsByDate || {};
                 const _scanned = new Set(Object.keys(allDaily));
-                const _partial = Object.keys(_prevDates).some(dk => !_scanned.has(dk));
+                // ★ HR-4: raise-only merge is only safe when the stored baselines
+                // were built under the SAME epoch — otherwise the previous counts
+                // carry pre-epoch floors that this rebuild must not preserve.
+                // On epoch change, prefer full-recount semantics (fresh scan wins).
+                const _hrPrevEpoch = _prevByDate._epochUsed || null;
+                const _hrEpochChanged = (_hrPrevEpoch !== (_hrEpoch4 || null));
+                const _partial = !_hrEpochChanged &&
+                    Object.keys(_prevDates).some(dk => !_scanned.has(dk) && !(_hrEpoch4 && dk < _hrEpoch4));
                 if (_partial && Object.keys(_prevCounts).length > 0) {
-                    console.warn('📊 [SchedulerCoreUtils] PARTIAL local scan (cloud knew dates absent locally) — merging raise-only to avoid dropping rotation history');
-                    const _merged = JSON.parse(JSON.stringify(_prevCounts));
-                    Object.keys(counts).forEach(function (bunk) {
-                        _merged[bunk] = _merged[bunk] || {};
-                        Object.keys(counts[bunk]).forEach(function (act) {
-                            _merged[bunk][act] = Math.max(_merged[bunk][act] || 0, counts[bunk][act]);
+                    // A partial local scan (near-quota browser keeps most dates in the
+                    // cloud) can't lower the shared totals for the dates it can't see —
+                    // hence raise-only. BUT the date we just (re)generated IS local and
+                    // MUST be authoritative, or a mid-day rain erase (or any edit-down)
+                    // stays frozen high. Using the stored per-date breakdown, remove the
+                    // active date's OLD contribution from the floor and add its FRESH one;
+                    // absent dates keep their raise-only protection.
+                    const _activeDate = window._activeGenDate || window.currentScheduleDate || null;
+                    const _oldActive = (_activeDate && _prevByDate[_activeDate]) || null;
+                    if (_oldActive) {
+                        console.warn('📊 [SchedulerCoreUtils] PARTIAL scan — raise-only floor for absent dates, AUTHORITATIVE for active date ' + _activeDate);
+                        const _newActive = (_activeDate && countsByDate[_activeDate]) || {};
+                        // floor = prev cumulative minus the active date's OLD contribution
+                        const _floor = JSON.parse(JSON.stringify(_prevCounts));
+                        Object.keys(_oldActive).forEach(function (b) {
+                            Object.keys(_oldActive[b]).forEach(function (a) {
+                                if (_floor[b] && _floor[b][a] != null) _floor[b][a] = Math.max(0, _floor[b][a] - _oldActive[b][a]);
+                            });
                         });
-                    });
-                    _finalCounts = _merged;
+                        // fresh cumulative minus the active date (raise-only compares the rest)
+                        const _freshRest = JSON.parse(JSON.stringify(counts));
+                        Object.keys(_newActive).forEach(function (b) {
+                            Object.keys(_newActive[b]).forEach(function (a) {
+                                if (_freshRest[b] && _freshRest[b][a] != null) _freshRest[b][a] = Math.max(0, _freshRest[b][a] - _newActive[b][a]);
+                            });
+                        });
+                        const _merged = JSON.parse(JSON.stringify(_floor));
+                        Object.keys(_freshRest).forEach(function (b) {
+                            _merged[b] = _merged[b] || {};
+                            Object.keys(_freshRest[b]).forEach(function (a) {
+                                _merged[b][a] = Math.max(_merged[b][a] || 0, _freshRest[b][a]);
+                            });
+                        });
+                        // add the active date back, authoritatively
+                        Object.keys(_newActive).forEach(function (b) {
+                            _merged[b] = _merged[b] || {};
+                            Object.keys(_newActive[b]).forEach(function (a) {
+                                _merged[b][a] = (_merged[b][a] || 0) + _newActive[b][a];
+                            });
+                        });
+                        _finalCounts = _merged;
+                    } else {
+                        // No per-date baseline for the active date yet (first rebuild after
+                        // this ships) → keep the safe raise-only behavior and seed the
+                        // per-date store so the NEXT regen of this date is authoritative.
+                        console.warn('📊 [SchedulerCoreUtils] PARTIAL local scan — merging raise-only (seeding per-date baseline)');
+                        const _merged = JSON.parse(JSON.stringify(_prevCounts));
+                        Object.keys(counts).forEach(function (bunk) {
+                            _merged[bunk] = _merged[bunk] || {};
+                            Object.keys(counts[bunk]).forEach(function (act) {
+                                _merged[bunk][act] = Math.max(_merged[bunk][act] || 0, counts[bunk][act]);
+                            });
+                        });
+                        _finalCounts = _merged;
+                    }
                     // keep previously-counted dates too
-                    Object.keys(_prevDates).forEach(function (dk) { _countedDates[dk] = true; });
+                    Object.keys(_prevDates).forEach(function (dk) {
+                        if (_hrEpoch4 && dk < _hrEpoch4) return; // ★ HR-4: never re-adopt pre-epoch dates
+                        _countedDates[dk] = true;
+                    });
                 }
             } catch (_e) { /* fall back to authoritative overwrite */ }
             window.saveGlobalSettings('historicalCounts', _finalCounts);
+            // Per-date breakdown of the locally-scanned dates — the baseline that lets
+            // the NEXT regen of any of these dates be authoritative (bounded to local dates).
+            // ★ HR-4: stamp the epoch these baselines were built under, so a future
+            // rebuild after an epoch change forces full-recount semantics.
+            try { _finalByDate._epochUsed = _hrEpoch4 || null; } catch (_) {}
+            window.saveGlobalSettings('historicalCountsByDate', _finalByDate);
             // Rebuild historicalCountedDates to match so incrementHistoricalCounts
             // guards stay consistent after a full rebuild.
             window.saveGlobalSettings('historicalCountedDates', _countedDates);
@@ -2951,6 +3306,11 @@
 
             if (window.RotationEngine?.clearHistoryCache) {
                 window.RotationEngine.clearHistoryCache();
+                // ★ Restore the cloud rotation overlay the clear just wiped —
+                //   if a hydrate lands mid-generation, recency scoring must not
+                //   silently fall back to local-only history (see
+                //   RotationEngine.reoverlayCloudCache).
+                if (window.RotationEngine.reoverlayCloudCache) window.RotationEngine.reoverlayCloudCache();
                 console.log('📊 [Hydrate] Cleared rotation cache for fresh history');
             }
 
@@ -3098,7 +3458,11 @@ const validActivities = Utils.getValidActivityNames();
 
         const allDaily = window.loadAllDailyData?.() || {};
         const countedDates = {};
+        // ★ HR-5: cloud rebuild honors the rotation epoch too — hydrated
+        // pre-epoch schedules must not be marked as counted.
+        const _hrEpoch5 = Utils.getRotationEpoch ? Utils.getRotationEpoch() : null;
         Object.keys(allDaily).forEach(dk => {
+            if (_hrEpoch5 && dk < _hrEpoch5) return; // ★ HR-5
             if (/^\d{4}-\d{2}-\d{2}$/.test(dk) && allDaily[dk]?.scheduleAssignments) {
                 countedDates[dk] = Date.now();
             }
@@ -3113,6 +3477,120 @@ const validActivities = Utils.getValidActivityNames();
     window.incrementHistoricalCounts = Utils.incrementHistoricalCounts;
     window.reIncrementHistoricalCounts = Utils.reIncrementHistoricalCounts;
     window.rebuildHistoricalCountsFromCloud = Utils.rebuildHistoricalCountsFromCloud;
+
+    // =================================================================
+    // SURVIVING LEAGUE GAME LABELS — ground truth from the saved grid
+    // =================================================================
+    // Every stored league block carries leagueName + gameLabel; specialty
+    // blocks additionally carry isSpecialtyLeague:true (regular blocks don't).
+    // The league engines' rollbackCutGames / reconcileDayWithSchedule subtract
+    // exactly the day-records whose label is NOT in these sets, so the
+    // persistent gameLog / matchup + sport variety / game count always follow
+    // what the schedule actually shows.
+    // Returns { regular: { leagueName: Set<label> }, specialty: { … } }.
+    Utils.survivingLeagueLabels = function (leagueAssignments) {
+        const regular = {}, specialty = {};
+        Object.keys(leagueAssignments || {}).forEach(function (dv) {
+            const map = leagueAssignments[dv];
+            if (!map || typeof map !== 'object') return;
+            Object.keys(map).forEach(function (k) {
+                const e = map[k];
+                if (!e || !e.leagueName || !e.gameLabel) return;
+                const bucket = e.isSpecialtyLeague ? specialty : regular;
+                (bucket[e.leagueName] = bucket[e.leagueName] || new Set()).add(e.gameLabel);
+            });
+        });
+        return { regular: regular, specialty: specialty };
+    };
+
+    // =================================================================
+    // ROTATION HISTORY REBUILD — last-done timestamps from saved days
+    // =================================================================
+    // rotationHistory.bunks[bunk][activity] = timestamp of the last day the
+    // bunk did it. Every writer (generation STEP 8, applyPostEditCounts) only
+    // ever STAMPS what is on the grid now — nothing ever removes the stamp for
+    // an activity that was replaced. Regenerate a tile (or edit it) and the
+    // activity that was dropped keeps today's timestamp forever, so the
+    // rotation engine and the analytics "last done" column both keep believing
+    // the bunk did an activity it never did.
+    //
+    // Rebuild instead: for the given bunks, re-derive every timestamp from the
+    // saved daily schedules (ground truth), so a replaced activity falls back
+    // to the last day it REALLY happened — or disappears if it never did.
+    // Scoped to `bunks` on purpose (CB-72): a scheduler's local daily cache
+    // holds only their own bunks, so an unscoped rebuild would truncate every
+    // other scheduler's history and then save the truncated map globally.
+    Utils.rebuildRotationHistoryForBunks = function (bunks) {
+        try {
+            const list = Array.from(bunks || []).map(String).filter(Boolean);
+            if (!list.length) return 0;
+            const scope = new Set(list);
+            const rotHist = window.loadRotationHistory?.() || { bunks: {}, leagues: {} };
+            rotHist.bunks = rotHist.bunks || {};
+
+            // ★ HR: pre-epoch days are archive — invisible to recency, the same
+            //   fence rebuildHistoricalCounts applies.
+            const epoch = Utils.getRotationEpoch ? Utils.getRotationEpoch() : null;
+            const fresh = {};   // bunk -> { activity: latest ts } built from scratch
+
+            // Union of every skip list the writers this replaces used, so no
+            // filler name that was previously excluded starts showing up.
+            const SKIP = new Set(['free', 'free play', 'free (timeout)',
+                'transition/buffer', 'regroup', 'lineup', 'bus', 'buffer']);
+            const stamp = function (bunk, sched, ts) {
+                (sched[bunk] || []).forEach(function (entry) {
+                    if (!entry || !entry._activity || entry.continuation || entry._isTransition) return;
+                    const a = String(entry._activity);
+                    const aLower = a.toLowerCase();
+                    if (SKIP.has(aLower) || aLower.includes('transition')) return;
+                    if (!fresh[bunk]) fresh[bunk] = {};
+                    if (!fresh[bunk][a] || fresh[bunk][a] < ts) fresh[bunk][a] = ts;
+                });
+            };
+
+            const allDaily = window.loadAllDailyData?.() || {};
+            Object.keys(allDaily).forEach(function (dk) {
+                if (!/^\d{4}-\d{2}-\d{2}$/.test(dk)) return;
+                if (epoch && dk < epoch) return;
+                const ts = new Date(dk + 'T12:00:00').getTime() || 0;
+                if (!ts) return;
+                const sched = (allDaily[dk] && allDaily[dk].scheduleAssignments) || {};
+                scope.forEach(function (b) { stamp(b, sched, ts); });
+            });
+
+            // The live grid is the truth for the date being worked on — a
+            // post-edit calls this before its save lands in the daily store.
+            const liveDate = window.currentScheduleDate;
+            if (liveDate && /^\d{4}-\d{2}-\d{2}$/.test(liveDate) && !(epoch && liveDate < epoch)) {
+                const liveTs = new Date(liveDate + 'T12:00:00').getTime() || 0;
+                const live = window.scheduleAssignments || {};
+                if (liveTs) scope.forEach(function (b) { stamp(b, live, liveTs); });
+            }
+
+            // Replace, but never truncate what we simply couldn't see: a bunk
+            // that scanned to NOTHING while it already had timestamps means the
+            // local daily cache doesn't hold that bunk's days (a scheduler's
+            // cache holds only their own bunks — CB-72). Leave those alone.
+            let rebuilt = 0;
+            scope.forEach(function (b) {
+                const had = rotHist.bunks[b] && Object.keys(rotHist.bunks[b]).length > 0;
+                if (!fresh[b]) {
+                    if (had) return;               // nothing scanned + had data → not ours to clear
+                    delete rotHist.bunks[b];
+                    return;
+                }
+                rotHist.bunks[b] = fresh[b];
+                rebuilt++;
+            });
+
+            window.saveRotationHistory?.(rotHist);
+            return rebuilt;
+        } catch (e) {
+            console.warn('[SchedulerCoreUtils] rotationHistory rebuild failed:', e);
+            return 0;
+        }
+    };
+    window.rebuildRotationHistoryForBunks = Utils.rebuildRotationHistoryForBunks;
 
     // =================================================================
     // POST-EDIT COUNTS + ROTATION HISTORY — shared by all edit paths
@@ -3170,26 +3648,13 @@ const validActivities = Utils.getValidActivityNames();
         } catch (e) { console.error('[PostEditCounts] historicalCounts delta failed:', e); }
 
         // ── rotationHistory rebuild for this bunk ─────────────────────
+        // Full re-derive from the saved days + the live grid, NOT a merge of
+        // today's activities on top of whatever was there. The old merge could
+        // only ever ADD stamps, so an activity this edit just replaced kept
+        // today's "last done" timestamp forever — the rotation engine and the
+        // analytics last-done column both went on believing the bunk did it.
         try {
-            const _rotHist = window.loadRotationHistory?.() || { bunks: {}, leagues: {} };
-            _rotHist.bunks = _rotHist.bunks || {};
-            const _bunkSlots = window.scheduleAssignments?.[bunk] || [];
-            const _schedDate = window.currentScheduleDate ? new Date(window.currentScheduleDate + 'T12:00:00').getTime() : Date.now();
-            const _now = _schedDate || Date.now();
-            // Merge today's activities into existing timestamps instead of
-            // wiping the bunk — preserves previous-day recency data.
-            if (!_rotHist.bunks[bunk]) _rotHist.bunks[bunk] = {};
-            const _todayActs = new Set();
-            _bunkSlots.forEach(entry => {
-                if (entry?._activity && !entry.continuation && !entry._isTransition) {
-                    const _aLower = entry._activity.toLowerCase();
-                    if (_aLower !== 'free' && !_aLower.includes('transition')) {
-                        _rotHist.bunks[bunk][entry._activity] = _now;
-                        _todayActs.add(entry._activity);
-                    }
-                }
-            });
-            window.saveRotationHistory?.(_rotHist);
+            Utils.rebuildRotationHistoryForBunks([bunk]);
         } catch (e) { console.error('[PostEditCounts] rotationHistory rebuild failed:', e); }
 
         // ── Sync rotation counts to cloud (debounced) ────────────────

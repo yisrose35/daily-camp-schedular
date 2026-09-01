@@ -496,11 +496,17 @@
                 
                 const slotIdx = block.slots[0];
                 if (!window.leagueAssignments[block.divName][slotIdx]) {
+                    // ★ Stamp the game's own time (mirrors schedule entries' _startMin/_endMin)
+                    //   so mid-day rain league split/restore never has to re-derive it from a
+                    //   drifting slot index against a possibly-stale window.divisionTimes.
+                    const _lgT = (window.divisionTimes && window.divisionTimes[block.divName] && window.divisionTimes[block.divName][slotIdx]) || {};
                     window.leagueAssignments[block.divName][slotIdx] = {
                         matchups: pick._allMatchups || [],
                         gameLabel: pick._gameLabel || block.event || 'League Game',
                         sport: pick.sport || '',
-                        leagueName: pick._leagueName || ''
+                        leagueName: pick._leagueName || '',
+                        _startMin: (_lgT.startMin != null) ? _lgT.startMin : null,
+                        _endMin: (_lgT.endMin != null) ? _lgT.endMin : null
                     };
                     console.log(`[fillBlock] ✅ Stored league matchups for ${block.divName} at slot ${slotIdx}: ${(pick._allMatchups || []).length} matchups`);
                 }
@@ -784,11 +790,16 @@
             
             mainSlots.forEach(slotIndex => {
                 if (!window.leagueAssignments[block.divName][slotIndex]) {
+                    // ★ Stamp the game's own time (see the slot-0 store above) so the
+                    //   mid-day rain league split/restore is index-drift-proof.
+                    const _lgT = (window.divisionTimes && window.divisionTimes[block.divName] && window.divisionTimes[block.divName][slotIndex]) || {};
                     window.leagueAssignments[block.divName][slotIndex] = {
                         matchups: pick._allMatchups || [],
                         gameLabel: pick._gameLabel || '',
                         sport: pick.sport || '',
-                        leagueName: pick._leagueName || ''
+                        leagueName: pick._leagueName || '',
+                        _startMin: (_lgT.startMin != null) ? _lgT.startMin : null,
+                        _endMin: (_lgT.endMin != null) ? _lgT.endMin : null
                     };
                     console.log(`[fillBlock] ✅ Stored league matchups for ${block.divName} at slot ${slotIndex}: ${(pick._allMatchups || []).length} matchups`);
                 }
@@ -1113,6 +1124,55 @@
             return true;
         }
 
+        // ★ PARTIAL-REGEN cross-division seed for the claim tracker.
+        //   When only some divisions are regenerated, the OUT-OF-SCOPE divisions keep
+        //   their PRESERVED schedules (restored at STEP 1.5) and already occupy shared
+        //   cap-1 special ROOMS. _specialClaims starts EMPTY, so without this the
+        //   in-scope division happily re-claims a room a preserved division already
+        //   holds → both land on the same cap-1 room in the FINAL schedule → STEP 7.55
+        //   room-capacity sweep demotes the surplus → Free → STEP 7.6 refills with
+        //   GENERIC SPORTS. That is the live "8th grade got sports" bug: a partial regen
+        //   of div 8 re-grabbed Gaming Center / Pizza Making / Sushi Making that div 9's
+        //   preserved tile already held at the same window, so 3 bunks were demoted and
+        //   refilled with sports instead of falling to their Swim fallback.
+        //   Seeding those preserved specials makes _canClaim / _reserveRotationSpecials
+        //   see them, so the in-scope tile skips the taken room and falls through to
+        //   Swim. Only OUT-OF-SCOPE divisions are seeded (in-scope divisions re-place and
+        //   register their own claims). Genuinely shareable specials (type 'all' / custom
+        //   cap>1) are unaffected — _canClaim still allows them under their own cap.
+        if (allowedDivisions) {
+            const _seedScope = (allowedDivisions instanceof Set)
+                ? allowedDivisions
+                : new Set((allowedDivisions || []).map(String));
+            const _seedSA = window.scheduleAssignments || {};
+            const _seedDivs = window.divisions || {};
+            const _seedB2G = {};
+            Object.keys(_seedDivs).forEach(g => (((_seedDivs[g] && _seedDivs[g].bunks) || []).forEach(b => { _seedB2G[String(b)] = g; })));
+            const _seedDT = window.divisionTimes || {};
+            let _seededClaims = 0;
+            Object.keys(_seedSA).forEach(bunk => {
+                const g = _seedB2G[String(bunk)];
+                if (g == null || _seedScope.has(String(g))) return; // in-scope divs re-place + register their own
+                const slots = _seedSA[bunk];
+                if (!Array.isArray(slots)) return;
+                slots.forEach((e, idx) => {
+                    if (!e || e.continuation || e._noRoomCap) return;
+                    const nm = e._activity || e._assignedSpecial || e.field;
+                    if (!nm || !knownSpecialNames.has(String(nm).toLowerCase().trim())) return; // only shared special rooms
+                    const ds = _seedDT[g];
+                    const s = (e._startMin != null) ? e._startMin : (ds && ds[idx] && ds[idx].startMin);
+                    const en = (e._endMin != null) ? e._endMin : (ds && ds[idx] && ds[idx].endMin);
+                    if (s == null || en == null) return;
+                    const _existing = _specialClaims[_claimKey(nm)];
+                    if (_existing && _existing.some(c => c.startMin === s && c.endMin === en
+                        && c.divName === g && c.actLower === String(nm).toLowerCase())) return;
+                    _registerClaim(nm, s, en, g);
+                    _seededClaims++;
+                });
+            });
+            if (_seededClaims) console.log(`[SmartTile] Partial-regen: seeded ${_seededClaims} preserved cross-division special claim(s) → in-scope tiles skip taken rooms and fall to fallback (not demoted to Sports)`);
+        }
+
         // ★ BUNK-LEVEL ROTATION GATE — single source of truth (rotation_engine.js).
         //   Every OTHER manual special-placement path scores candidates through
         //   RotationEngine.calculateLimitScore; the Smart Tile budget pre-pass,
@@ -1214,6 +1274,110 @@
         } catch (_e) { /* fail-open: an unreadable schedule just means no pre-seed */ }
         const _todayCount = b => (_bunkSpecialsToday[b] ? _bunkSpecialsToday[b].size : 0);
 
+        // =====================================================================
+        // ★ SPECIAL-AGNOSTIC NEED — the one metric every "who gets a special today"
+        //   decision ranks on.
+        //   POLICY (user, camp-owner's rule): the specials themselves are all different,
+        //   but the QUESTION "whose turn is it to get one today" treats them as ONE
+        //   interchangeable prize. If bunk 1 had a special yesterday and bunk 2 didn't,
+        //   bunk 2 goes first today — even though today's open room is a DIFFERENT
+        //   special than the one bunk 1 had. So need is always summed across ALL
+        //   specials (_allSpecialNames) and never scoped to the special on offer.
+        //   (Which special a bunk then receives is still per-special: least-used first,
+        //   gated by access / cooldown / maxUsage — that part is intentionally not equal.)
+        //   Defined HERE, above the guarantee pre-pass, so the guarantee / reservation /
+        //   budget passes all share it (it used to live below the guarantee pass, which
+        //   therefore ranked on lifetime counts alone and could re-hand a special to a
+        //   bunk that already had one yesterday).
+        // ★ NEED-FIRST allocation (shared-window specials) — kill switch
+        //   window.__smartTileNeedFirst = false restores pure seniority. When ON, a deprived
+        //   bunk in a YOUNGER grade can win a scarce special over a well-served bunk in an
+        //   OLDER grade: rank by need (fewest specials so far, then longest since any special)
+        //   with SENIORITY as the TIEBREAK — so oldest still goes first when need is equal, and
+        //   the deprived catch up over the week. Applies WITHIN the guarantee pre-pass, the
+        //   rotation reservation (cross rotation-division) and the budget pre-allocation.
+        // =====================================================================
+        const _needFirst = (window.__smartTileNeedFirst !== false);
+        const _scCache = {};
+        // ★ "Need" = how many specials the bunk has had THIS PERIOD (default this week), NOT
+        //   lifetime — so each period everyone starts ~even and a bunk that's gone days without
+        //   a special rises to the top and catches up. (A lifetime count let a bunk that was
+        //   well-served earlier sit at 0 for a whole week despite being eligible.) Falls back to
+        //   lifetime counts only if the period-count helper isn't loaded. Tunable:
+        //   window.__smartTileNeedPeriod ('1week' | 'half' | …); default '1week'. The unreliable
+        //   getDaysSinceActivity tiebreak was dropped (it reported "1 day ago" for never-done
+        //   specials, which mis-ranked need).
+        const _gpc = window.SchedulerCoreUtils && window.SchedulerCoreUtils.getPeriodActivityCount;
+        const _needPeriod = window.__smartTileNeedPeriod || '1week';
+        const _bunkSpecialCount = (bunk) => {
+            if (bunk in _scCache) return _scCache[bunk];
+            let c = 0;
+            if (typeof _gpc === 'function') {
+                for (const n of _allSpecialNames) { try { c += _gpc(bunk, n, _needPeriod) || 0; } catch (_) {} }
+            } else {
+                const h = historicalCounts[bunk] || {};
+                for (const n of _allSpecialNames) c += (h[n] || 0);
+            }
+            return (_scCache[bunk] = c);
+        };
+        // ★ PERF: expose the MEMOIZED period count so the adapter (a separate module) reuses ONE
+        //   computed value per bunk. The adapter's getSpecialUsageCount runs inside sort
+        //   comparators; calling getPeriodActivityCount there per-comparator re-scanned history
+        //   tens of thousands of times and blew generation up to ~45s (the call is cheap when the
+        //   rotation cache is warm but costly mid-generation while it's rebuilding). Sharing this
+        //   memo caps it to one compute per bunk (~bunks×specials total).
+        // ★ INCLUDE TODAY. getPeriodActivityCount only scans dates BEFORE today, so a bunk
+        //   that already picked up a special earlier in THIS generation (elective tile,
+        //   pinned special, an earlier smart-tile window) still read as "0 so far". Adding
+        //   the live today-count makes the metric "specials this period INCLUDING today",
+        //   so the same rule holds within a day: a bunk that already has one today yields
+        //   the next window to a bunk that doesn't. _bunkSpecialsToday is updated as rooms
+        //   are claimed, so later windows see the earlier ones.
+        const _needOf = (bunk) => _bunkSpecialCount(bunk) + _todayCount(bunk);
+        // Shared with the adapter's within-division fairness sort so BOTH modules rank on
+        // the identical special-agnostic score (the memo above keeps it one compute/bunk).
+        window.__smartTileNeedCount = _needOf;
+        // ★ RECENCY TIEBREAK (kill switch window.__smartTileRecencyTiebreak = false):
+        //   days since the bunk's LAST special of any kind — with equal week-counts the
+        //   bunk that's gone longest without a special wins the room. Without this,
+        //   seniority decided every tie, and with few rooms shared by many bunks the
+        //   counts tie CONSTANTLY — so the senior division won a room nearly every day
+        //   (9th grade got specials daily, never Swim/Pickleball; 8th got squeezed out).
+        //   Recency makes bunks CYCLE through special → pickleball/swim across days,
+        //   like a head counselor would rotate them. Safe against the old phantom-
+        //   daysSince bug: a special only counts toward recency when the bunk has
+        //   ACTUALLY done it (schedule-derived getActivityCount > 0); a bunk that has
+        //   never had any special ranks neediest (gap 99999).
+        //   ALSO the Monday guard: the period count resets at the week boundary, so on the
+        //   first day of a period every bunk ties at 0 and this gap is the ONLY thing that
+        //   remembers who had one yesterday.
+        const _dsCache = {};
+        const _bunkLastSpecialGap = (bunk) => {
+            if (bunk in _dsCache) return _dsCache[bunk];
+            const RE = window.RotationEngine;
+            let gap = 99999;
+            if (RE && typeof RE.getDaysSinceActivity === 'function' && typeof RE.getActivityCount === 'function') {
+                for (const n of _allSpecialNames) {
+                    try {
+                        if ((RE.getActivityCount(bunk, n) || 0) <= 0) continue;
+                        const d = RE.getDaysSinceActivity(bunk, n);
+                        if (typeof d === 'number' && d >= 0 && d < gap) gap = d;
+                    } catch (_) {}
+                }
+            }
+            return (_dsCache[bunk] = gap);
+        };
+        const _recencyTiebreak = (window.__smartTileRecencyTiebreak !== false);
+        // ★ The shared bunk-vs-bunk order for every special hand-out: neediest first
+        //   (fewest specials THIS PERIOD including today), then longest-since-ANY-special,
+        //   then seniority. Used as-is cross-division; the within-division passes reuse
+        //   the same two keys.
+        const _needSenCmp = (bunkA, divA, bunkB, divB) =>
+            (_needOf(bunkA) - _needOf(bunkB)) ||
+            (_recencyTiebreak ? (_bunkLastSpecialGap(bunkB) - _bunkLastSpecialGap(bunkA)) : 0) ||
+            (_senOf(divA) - _senOf(divB)) ||
+            (Math.random() - 0.5);
+
         // ★ GUARANTEED SWAP (kill-switch: window.__smartTileGuaranteeSwap = false).
         //   For a TWO-period Smart pair the user ticked "Guarantee each bunk gets
         //   both" on (smartData.guaranteeSwap) — Main 1 = the limited/special side,
@@ -1277,7 +1441,12 @@
             const bunks = (divisions[div] && divisions[div].bunks) || [];
             if (!bunks.length) return Infinity;
             let tot = 0;
-            bunks.forEach(b => { const h = historicalCounts[b] || {}; tot += _allSpecialNames.reduce((s, n) => s + (h[n] || 0), 0); });
+            // ★ Same special-agnostic need as every other pass (specials of ANY kind this
+            //   period, including today) rather than the lifetime tally this used to sum —
+            //   a division served yesterday drops behind one that wasn't, regardless of
+            //   which specials each got. Lifetime remains the fallback inside _needOf when
+            //   the period helper isn't loaded.
+            bunks.forEach(b => { tot += _needFirst ? _needOf(b) : _allSpecialNames.reduce((s, n) => s + ((historicalCounts[b] || {})[n] || 0), 0); });
             return tot / bunks.length;
         };
         const _guaranteeUnits = [];
@@ -1300,11 +1469,20 @@
             if (N === 0) return;
             // Rank bunks by fairness (least special usage first); the configured
             // per-division priority only BREAKS TIES, not overrides fairness.
+            // ★ Fairness = the SPECIAL-AGNOSTIC need above (specials of any kind this
+            //   period incl. today, then longest-since-any-special). This pass used to
+            //   sort on the LIFETIME tally alone, which ignores yesterday: two bunks with
+            //   equal lifetime totals tied and were ordered at RANDOM, so the bunk that
+            //   had a special yesterday could win today's — the exact case the rule
+            //   forbids. Lifetime stays as a late tiebreak.
             const divPriority = _globalPriority[divName] || [];
             const ordered = [...bunkList].map(b => {
                 const h = historicalCounts[b] || {};
                 return { b, usage: _allSpecialNames.reduce((s, n) => s + (h[n] || 0), 0), prioRank: divPriority.includes(b) ? 0 : 1 };
-            }).sort((x, y) => (x.usage - y.usage) || (x.prioRank - y.prioRank) || (Math.random() - 0.5)).map(r => r.b);
+            }).sort((x, y) =>
+                (_needFirst ? (_needOf(x.b) - _needOf(y.b)) : 0) ||
+                (_needFirst && _recencyTiebreak ? (_bunkLastSpecialGap(y.b) - _bunkLastSpecialGap(x.b)) : 0) ||
+                (x.usage - y.usage) || (x.prioRank - y.prioRank) || (Math.random() - 0.5)).map(r => r.b);
 
             if (unit.kind === 'pair') {
                 const job = unit.job;
@@ -1447,78 +1625,9 @@
         //   quota) reserve — uncontended is a strict no-op. The rotation placement loop
         //   later CONSUMES these reservations (they are already claimed for the division).
         const _rotReserved = {}; // `${div}|${start}|${end}` -> [specialName,...] pre-claimed rooms
-        // ★ NEED-FIRST allocation (shared-window specials) — kill switch
-        //   window.__smartTileNeedFirst = false restores pure seniority. When ON, a deprived
-        //   bunk in a YOUNGER grade can win a scarce special over a well-served bunk in an
-        //   OLDER grade: rank by need (fewest specials so far, then longest since any special)
-        //   with SENIORITY as the TIEBREAK — so oldest still goes first when need is equal, and
-        //   the deprived catch up over the week. Applies WITHIN the rotation reservation (cross
-        //   rotation-division) and WITHIN the budget pre-allocation (cross budget-division).
-        const _needFirst = (window.__smartTileNeedFirst !== false);
-        const _scCache = {};
-        // ★ "Need" = how many specials the bunk has had THIS PERIOD (default this week), NOT
-        //   lifetime — so each period everyone starts ~even and a bunk that's gone days without
-        //   a special rises to the top and catches up. (A lifetime count let a bunk that was
-        //   well-served earlier sit at 0 for a whole week despite being eligible.) Falls back to
-        //   lifetime counts only if the period-count helper isn't loaded. Tunable:
-        //   window.__smartTileNeedPeriod ('1week' | 'half' | …); default '1week'. The unreliable
-        //   getDaysSinceActivity tiebreak was dropped (it reported "1 day ago" for never-done
-        //   specials, which mis-ranked need).
-        const _gpc = window.SchedulerCoreUtils && window.SchedulerCoreUtils.getPeriodActivityCount;
-        const _needPeriod = window.__smartTileNeedPeriod || '1week';
-        const _bunkSpecialCount = (bunk) => {
-            if (bunk in _scCache) return _scCache[bunk];
-            let c = 0;
-            if (typeof _gpc === 'function') {
-                for (const n of _allSpecialNames) { try { c += _gpc(bunk, n, _needPeriod) || 0; } catch (_) {} }
-            } else {
-                const h = historicalCounts[bunk] || {};
-                for (const n of _allSpecialNames) c += (h[n] || 0);
-            }
-            return (_scCache[bunk] = c);
-        };
-        // ★ PERF: expose the MEMOIZED period count so the adapter (a separate module) reuses ONE
-        //   computed value per bunk. The adapter's getSpecialUsageCount runs inside sort
-        //   comparators; calling getPeriodActivityCount there per-comparator re-scanned history
-        //   tens of thousands of times and blew generation up to ~45s (the call is cheap when the
-        //   rotation cache is warm but costly mid-generation while it's rebuilding). Sharing this
-        //   memo caps it to one compute per bunk (~bunks×specials total).
-        window.__smartTileNeedCount = _bunkSpecialCount;
-        // ★ RECENCY TIEBREAK (kill switch window.__smartTileRecencyTiebreak = false):
-        //   days since the bunk's LAST special of any kind — with equal week-counts the
-        //   bunk that's gone longest without a special wins the room. Without this,
-        //   seniority decided every tie, and with few rooms shared by many bunks the
-        //   counts tie CONSTANTLY — so the senior division won a room nearly every day
-        //   (9th grade got specials daily, never Swim/Pickleball; 8th got squeezed out).
-        //   Recency makes bunks CYCLE through special → pickleball/swim across days,
-        //   like a head counselor would rotate them. Safe against the old phantom-
-        //   daysSince bug: a special only counts toward recency when the bunk has
-        //   ACTUALLY done it (schedule-derived getActivityCount > 0); a bunk that has
-        //   never had any special ranks neediest (gap 99999).
-        const _dsCache = {};
-        const _bunkLastSpecialGap = (bunk) => {
-            if (bunk in _dsCache) return _dsCache[bunk];
-            const RE = window.RotationEngine;
-            let gap = 99999;
-            if (RE && typeof RE.getDaysSinceActivity === 'function' && typeof RE.getActivityCount === 'function') {
-                for (const n of _allSpecialNames) {
-                    try {
-                        if ((RE.getActivityCount(bunk, n) || 0) <= 0) continue;
-                        const d = RE.getDaysSinceActivity(bunk, n);
-                        if (typeof d === 'number' && d >= 0 && d < gap) gap = d;
-                    } catch (_) {}
-                }
-            }
-            return (_dsCache[bunk] = gap);
-        };
-        const _recencyTiebreak = (window.__smartTileRecencyTiebreak !== false);
-        // neediest first (fewest specials THIS PERIOD), then longest-since-any-special,
-        // then seniority.
-        const _needSenCmp = (bunkA, divA, bunkB, divB) =>
-            (_bunkSpecialCount(bunkA) - _bunkSpecialCount(bunkB)) ||
-            (_recencyTiebreak ? (_bunkLastSpecialGap(bunkB) - _bunkLastSpecialGap(bunkA)) : 0) ||
-            (_senOf(divA) - _senOf(divB)) ||
-            (Math.random() - 0.5);
+        // (The need-first metric — _needOf / _bunkLastSpecialGap / _needSenCmp — is defined
+        //  ABOVE the guarantee pre-pass so EVERY pass that decides "who gets a special today"
+        //  ranks on the same special-agnostic score. See "SPECIAL-AGNOSTIC NEED" there.)
 
         (function _reserveRotationSpecials() {
             if (_needFirst) {
@@ -1674,7 +1783,7 @@
             // decides the cross-division order; fairness still rotates specials
             // among bunks of the SAME division across the week.
             _bunkRankings.sort((a, b) =>
-                (_needFirst ? (_bunkSpecialCount(a.bunk) - _bunkSpecialCount(b.bunk)) : 0) ||  // ★ need first across grades (this-period special count)
+                (_needFirst ? (_needOf(a.bunk) - _needOf(b.bunk)) : 0) ||  // ★ need first across grades (specials of ANY kind this period, incl. today)
                 (_needFirst && _recencyTiebreak ? (_bunkLastSpecialGap(b.bunk) - _bunkLastSpecialGap(a.bunk)) : 0) ||  // ★ longest-since-any-special next (cycles bunks day to day)
                 (_senOf(a.divName) - _senOf(b.divName)) ||     //   seniority is the tiebreak
                 (_todayCount(a.bunk) - _todayCount(b.bunk)) ||
@@ -1800,7 +1909,7 @@
             // priority list as a final tiebreak. Seniority decides the cross-division
             // order; fairness rotates specials among same-division bunks over the week.
             allBunkEntries.sort((a, b) =>
-                (_needFirst ? (_bunkSpecialCount(a.bunk) - _bunkSpecialCount(b.bunk)) : 0) ||  // ★ need first across grades (this-period special count)
+                (_needFirst ? (_needOf(a.bunk) - _needOf(b.bunk)) : 0) ||  // ★ need first across grades (specials of ANY kind this period, incl. today)
                 (_needFirst && _recencyTiebreak ? (_bunkLastSpecialGap(b.bunk) - _bunkLastSpecialGap(a.bunk)) : 0) ||  // ★ longest-since-any-special next (cycles bunks day to day)
                 (_senOf(a.divName) - _senOf(b.divName)) ||     //   seniority is the tiebreak
                 (a.usage - b.usage) ||
@@ -1857,8 +1966,21 @@
         (function _allocCampWideCappedQueue() {
             const _allDaily = (window.loadAllDailyData && window.loadAllDailyData()) || {};
             const _todayKey = window.currentScheduleDate || '';
+            // ★ HR-36: rotation-epoch watermark (non-deleting half reset) —
+            //   COMPLETE reset: pre-epoch days are invisible to both the counts
+            //   AND the `ago` recency tiebreak (new campers at the half).
+            const _lrEpoch = (function() {
+                try {
+                    const U = window.SchedulerCoreUtils || window.Utils;
+                    if (U && typeof U.getRotationEpoch === 'function') return U.getRotationEpoch();
+                    const e = window.loadGlobalSettings ? window.loadGlobalSettings('rotationEpoch') : null;
+                    const d = (typeof e === 'string') ? e : (e && e.date);
+                    return (d && /^\d{4}-\d{2}-\d{2}$/.test(d)) ? d : null;
+                } catch (_) { return null; }
+            })();
             const _pastDatesDesc = Object.keys(_allDaily)
-                .filter(d => /^\d{4}-\d{2}-\d{2}$/.test(d) && (!_todayKey || d < _todayKey))
+                .filter(d => /^\d{4}-\d{2}-\d{2}$/.test(d) && (!_todayKey || d < _todayKey)
+                    && (!_lrEpoch || d >= _lrEpoch)) // ★ HR-36: pre-epoch days invisible
                 .sort((a, b) => b.localeCompare(a)); // most recent first → index = days-ago
             const _lrStats = (bunk, labelNorm) => {
                 let n = 0, ago = 1e9;
@@ -1868,7 +1990,11 @@
                     for (let i = 0; i < sched.length; i++) {
                         const e = sched[i];
                         if (!e || e.continuation || e._isTransition) continue;
-                        if (String(e._activity || '').toLowerCase().trim() === labelNorm) { n++; if (di < ago) ago = di; break; }
+                        if (String(e._activity || '').toLowerCase().trim() === labelNorm) {
+                            n++;
+                            if (di < ago) ago = di;
+                            break;
+                        }
                     }
                 }
                 return { count: n, ago };
@@ -2133,7 +2259,16 @@
                             //   every bunk whose rotation touches Pickleball floods the solver with
                             //   court requests and the same 2 get booked every day). Uncapped sports are
                             //   unaffected (_mayTakeCapped → true).
-                            if (_spFits && _mayTakeCapped(opt, optNorm, bunk)) {
+                            // ★ CAPPED sports NEVER take the solver-restricted route below: even when a
+                            //   court passes canBlockFit HERE, the 2-net cap can be consumed by another
+                            //   division between this pre-check and the solve, and the solver then DROPS
+                            //   the restriction → a GENERIC "Sports" pick (the regression: div 8/9 got
+                            //   Sports instead of falling to their Swim fallback). Capped winners are
+                            //   placed FIELD-LESS in the branch below (the cap is enforced by the queue +
+                            //   _canClaimDirectFill, so no court booking is needed); non-winners fall
+                            //   through to the next option (Swim). Only UNCAPPED named sports keep the
+                            //   solver-restricted path (they carry the _o===0 field-less fallback).
+                            if (_spFits && _mayTakeCapped(opt, optNorm, bunk) && _directFillCap(opt) === Infinity) {
                                 console.log(`[SmartTile] ${bunk} -> ROTATION specific sport: ${opt} (solver-restricted)`);
                                 schedulableSlotBlocks.push({ divName, bunk, event: opt, startTime: _rStart, endTime: _rEnd, slots: _rotSlots, fromSmartTile: true, allowedActivities: [opt] });
                                 _placed = true;
@@ -2739,22 +2874,49 @@
         // Resolve the leagues config (name → league object with .divisions).
         let leaguesCfg = window.masterLeagues || window.leaguesByName ||
             window.loadGlobalSettings?.()?.app1?.leagues || [];
-        const leagues = Array.isArray(leaguesCfg) ? leaguesCfg : Object.values(leaguesCfg || {});
-        if (!leagues.length) return warnings;
+        const leagues = (Array.isArray(leaguesCfg) ? leaguesCfg : Object.values(leaguesCfg || {}))
+            .filter(l => l && l.enabled !== false);
+        // Specialty leagues live in a SEPARATE store — they are a different
+        // system and must never be time-compared against a regular league.
+        const specialtyLeagues = Object.values(window.loadGlobalSettings?.()?.specialtyLeagues || {})
+            .filter(l => l && l.name && l.enabled !== false);
+        if (!leagues.length && !specialtyLeagues.length) return warnings;
 
-        // Every league tile in the skeleton, with its parsed time span. (In this
-        // app "division" IS the grade — window.divisions is grade-keyed.)
-        const leagueTiles = manualSkeleton
-            .filter(it => it && (it.type === 'league' ||
-                (typeof normalizeLeague === 'function' && normalizeLeague(it.event || ''))))
-            .map(it => ({
+        // Every league tile in the skeleton, split by system. (In this app
+        // "division" IS the grade — window.divisions is grade-keyed.) A
+        // specialty tile whose event merely contains the word "league" (e.g.
+        // "State Leagues") must not be pulled into the regular-league pool.
+        const regTiles = [], specTiles = [];
+        // ★ Span-linked tiles (one tile spread across grade columns) are
+        // processed by the league engine as ONE game period anchored at the
+        // group's earliest time — normalize every member to that window so a
+        // member whose time drifted isn't flagged as a mismatch the engine
+        // already heals.
+        const spanCanon = {};
+        manualSkeleton.forEach(it => {
+            if (!it || !it.spanGroup) return;
+            const s = parse(it.startTime), e = parse(it.endTime);
+            if (s == null || e == null || e <= s) return;
+            const cur = spanCanon[it.spanGroup];
+            if (!cur || s < cur.startMin) spanCanon[it.spanGroup] = { startMin: s, endMin: e };
+        });
+        manualSkeleton.forEach(it => {
+            if (!it) return;
+            const isSpec = it.type === 'specialty_league';
+            const isReg = !isSpec && (it.type === 'league' ||
+                (typeof normalizeLeague === 'function' && normalizeLeague(it.event || '')));
+            if (!isSpec && !isReg) return;
+            const canon = it.spanGroup ? spanCanon[it.spanGroup] : null;
+            const t = {
                 div: String(it.division),
                 leagueName: it.leagueName || null,
-                startMin: parse(it.startTime),
-                endMin: parse(it.endTime)
-            }))
-            .filter(t => t.startMin != null && t.endMin != null && t.endMin > t.startMin);
-        if (!leagueTiles.length) return warnings;
+                startMin: canon ? canon.startMin : parse(it.startTime),
+                endMin: canon ? canon.endMin : parse(it.endTime)
+            };
+            if (t.startMin == null || t.endMin == null || t.endMin <= t.startMin) return;
+            (isSpec ? specTiles : regTiles).push(t);
+        });
+        if (!regTiles.length && !specTiles.length) return warnings;
 
         const spanKey = (t) => `${t.startMin}-${t.endMin}`;
         const spanLabel = (k) => {
@@ -2762,41 +2924,577 @@
             return `${fmt(s)}-${fmt(e)}`;
         };
 
-        leagues.forEach(league => {
-            if (!league || !Array.isArray(league.divisions) || league.divisions.length < 2) return;
-            const divSet = new Set(league.divisions.map(String));
-            // Tiles for THIS league: in one of its grades, and either unnamed
-            // (auto-bound) or explicitly naming this league.
-            const tiles = leagueTiles.filter(t =>
-                divSet.has(t.div) && (!t.leagueName || t.leagueName === league.name));
-
-            // Group each grade's tile time-spans.
-            const byGrade = {}; // grade → Set(spanKey)
-            tiles.forEach(t => { (byGrade[t.div] = byGrade[t.div] || new Set()).add(spanKey(t)); });
-
-            const grades = Object.keys(byGrade);
-            if (grades.length < 2) return; // need 2+ grades to be "together"
-
-            // Aligned when every grade has the identical set of time spans.
-            const refKey = [...byGrade[grades[0]]].sort().join('|');
-            const allAligned = grades.every(g => [...byGrade[g]].sort().join('|') === refKey);
-            if (allAligned) return;
-
-            // Build "Grade (10:00am-10:45am) vs Grade (10:00am-11:00am)".
-            const parts = grades
-                .sort()
-                .map(g => {
-                    const spans = [...byGrade[g]]
-                        .sort((a, b) => Number(a.split('-')[0]) - Number(b.split('-')[0]))
-                        .map(spanLabel);
-                    return `${g} (${spans.join(', ')})`;
+        const checkSystem = (cfgList, tiles) => {
+            // How many leagues in this system cover each grade. An UNNAMED tile
+            // can only be attributed to a league when it's the grade's ONLY
+            // league here — with 2+ leagues the tile is ambiguous, and counting
+            // it toward every league fabricates mismatches (e.g. the grade's
+            // second game window belongs to its OTHER league, not this one).
+            const leagueCountByGrade = {};
+            cfgList.forEach(l => {
+                if (!l || !Array.isArray(l.divisions)) return;
+                l.divisions.forEach(d => {
+                    const k = String(d);
+                    leagueCountByGrade[k] = (leagueCountByGrade[k] || 0) + 1;
                 });
-            warnings.push(`${league.name}: ${parts.join(' vs ')}`);
-        });
+            });
+
+            cfgList.forEach(league => {
+                if (!league || !Array.isArray(league.divisions) || league.divisions.length < 2) return;
+                const divSet = new Set(league.divisions.map(String));
+                // Tiles for THIS league: in one of its grades, and either
+                // explicitly naming this league, or unnamed AND unambiguous.
+                const mine = tiles.filter(t => {
+                    if (!divSet.has(t.div)) return false;
+                    if (t.leagueName) return t.leagueName === league.name;
+                    return (leagueCountByGrade[t.div] || 0) <= 1;
+                });
+
+                // Group each grade's tile time-spans.
+                const byGrade = {}; // grade → Set(spanKey)
+                mine.forEach(t => { (byGrade[t.div] = byGrade[t.div] || new Set()).add(spanKey(t)); });
+
+                const grades = Object.keys(byGrade);
+                if (grades.length < 2) return; // need 2+ grades to be "together"
+
+                // The grades play together when they share an IDENTICAL game
+                // window. Two real mistakes to catch:
+                //  (1) two grades' windows overlap but aren't identical — a
+                //      broken shared game (1:25-2:30 vs 1:30-2:30);
+                //  (2) no window is present in EVERY grade — they never play
+                //      together at all.
+                // An EXTRA window in one grade that doesn't collide with any
+                // other grade's window (e.g. a second, later game) is fine —
+                // requiring identical SETS flagged that as a false mismatch.
+                const bounds = (k) => k.split('-').map(Number);
+                let broken = false;
+                for (let i = 0; i < grades.length && !broken; i++) {
+                    for (let j = i + 1; j < grades.length && !broken; j++) {
+                        for (const ka of byGrade[grades[i]]) {
+                            if (broken) break;
+                            const [as, ae] = bounds(ka);
+                            for (const kb of byGrade[grades[j]]) {
+                                if (ka === kb) continue;
+                                const [bs, be] = bounds(kb);
+                                if (as < be && ae > bs) { broken = true; break; }
+                            }
+                        }
+                    }
+                }
+                const hasCommonSpan = [...byGrade[grades[0]]]
+                    .some(k => grades.every(g => byGrade[g].has(k)));
+                if (!broken && hasCommonSpan) return;
+
+                // Build "Grade (10:00am-10:45am) vs Grade (10:00am-11:00am)".
+                const parts = grades
+                    .sort()
+                    .map(g => {
+                        const spans = [...byGrade[g]]
+                            .sort((a, b) => Number(a.split('-')[0]) - Number(b.split('-')[0]))
+                            .map(spanLabel);
+                        return `${g} (${spans.join(', ')})`;
+                    });
+                warnings.push(`${league.name}: ${parts.join(' vs ')}`);
+            });
+        };
+
+        checkSystem(leagues, regTiles);
+        checkSystem(specialtyLeagues, specTiles);
 
         return warnings;
     }
     window._detectLeagueTileTimeMismatch = detectLeagueTileTimeMismatch;
+
+    // =========================================================================
+    // ★ CROSS-DAY REPEAT HEAL (STEP 7.95 body — exposed for tests)
+    // The solver's yesterday policy is SOFT (finite YESTERDAY_PENALTY, best-of-3
+    // passes + RECENCY-SWAP), so a did-it-yesterday placement can survive when
+    // the winning pass carried it and no swap partner existed — observed live
+    // 2026-07-09: single-bunk division לב got Dodgeball @740-805 two days
+    // running; RECENCY-SWAP had no same-window peer to trade with. Every FILLER
+    // is already yesterday-gated; this sweep closes the last path (main solver
+    // commits) by re-running each repeat through the gated fallback filler.
+    // IMPROVE-ONLY: the filler can only return a non-repeat (its yesterday gate
+    // excludes the current activity) — if it returns nothing, the original is
+    // restored, so a repeat is never traded for a Free.
+    // Must run BEFORE STEP 8 (history update), so recency still measures
+    // yesterday. Killswitch: window.__repeatHealSweep = false.
+    // =========================================================================
+    function healCrossDayRepeats() {
+        if (window.__repeatHealSweep === false) return null;
+        const RE = window.RotationEngine;
+        if (!RE || typeof RE.calculateRecencyScore !== 'function') return null;
+        if (!window.AutoFillSlot || typeof window.AutoFillSlot.autoFillSlotSilent !== 'function') return null;
+        const yp = (RE.CONFIG && RE.CONFIG.YESTERDAY_PENALTY) || 50000;
+        const sa = window.scheduleAssignments || {};
+        const rss = window.__regenSlotScope || null; // per-tile regen: only touch regenerated slots
+        const skip = { 'free': 1, 'lunch': 1, 'snacks': 1, 'dismissal': 1, 'swim': 1, 'pool': 1,
+            'change': 1, 'cleanup': 1, 'lineup': 1, 'transition': 1, 'buffer': 1, 'davening': 1,
+            'mincha': 1, 'main activity': 1, 'sports slot': 1, 'special activity': 1 };
+        let healed = 0, kept = 0;
+        Object.keys(sa).forEach(bunk => {
+            const arr = sa[bunk];
+            if (!Array.isArray(arr)) return;
+            if (rss && !rss[bunk]) return;
+            const scRegen = rss && rss[bunk] ? rss[bunk].regen : null;
+            arr.forEach((e, idx) => {
+                if (rss && (!scRegen || !scRegen.has(idx))) return;
+                if (!e || e.continuation || e._pinned || e._bunkOverride || e._postEdit) return;
+                if (e._isLeague || e._leagueMatchups || e.matchups || e._leagueName || e._h2h || e._isSpecialtyLeague) return;
+                if (e._isTransition || e._isTrip) return;
+                // Multi-slot spans and structured specials: replacing just the lead
+                // slot would orphan continuations / part+prep metadata — skip.
+                if (arr[idx + 1] && arr[idx + 1].continuation) return;
+                if (e._partLabel || e._prepDuration || e._durationBestFit) return;
+                const act = e._activity || e.sport || e.field;
+                if (!act || skip[String(act).toLowerCase().trim()]) return;
+                let rec;
+                try { rec = RE.calculateRecencyScore(bunk, act, idx); } catch (_x) { return; }
+                // Finite ≥ YESTERDAY = did it yesterday (or an active streak). An
+                // Infinity here would be a SAME-DAY duplicate — that's the
+                // validator's domain, leave it visible rather than mask it.
+                if (!(rec >= yp) || !isFinite(rec)) return;
+                // Keep the tile's intent: a sport is only replaced by a sport,
+                // a configured special only by a special.
+                let kind;
+                if (e.sport && e.sport !== 'Free') kind = 'sport';
+                else {
+                    try {
+                        const sp = (typeof window.getSpecialActivities === 'function') ? window.getSpecialActivities() : [];
+                        if (Array.isArray(sp) && sp.some(s => s && String(s.name) === String(act))) kind = 'special';
+                    } catch (_x3) {}
+                }
+                const orig = e;
+                arr[idx] = null; // release the slot (and its field) for the filler's scan
+                let ok = false;
+                try { ok = window.AutoFillSlot.autoFillSlotSilent(bunk, idx, kind); } catch (_x2) { ok = false; }
+                if (ok) {
+                    healed++;
+                    const chosen = arr[idx] && arr[idx]._activity;
+                    console.log('[STEP 7.95] repeat-heal: ' + bunk + ' "' + act + '" (done yesterday) → "' + chosen + '" @slot ' + idx);
+                    if (window.GenTrace && window.GenTrace.active) {
+                        window.GenTrace.decision({
+                            kind: 'repeat-heal', bunk: bunk,
+                            window: (orig._startMin != null ? orig._startMin + '-' + orig._endMin : 'slot:' + idx),
+                            chosen: { name: chosen || null, field: (arr[idx] && arr[idx]._location) || null },
+                            from: act
+                        });
+                    }
+                } else {
+                    arr[idx] = orig; // no legal non-repeat — repeat beats Free
+                    kept++;
+                }
+            });
+        });
+        return { healed: healed, kept: kept };
+    }
+    window._healCrossDayRepeats = healCrossDayRepeats;
+
+    // =========================================================================
+    // ★ KEEP-IN-USE FACILITY SWEEP (STEP 7.96 body — exposed for tests)
+    // A facility flagged "Keep in use" in Facilities must never sit idle while
+    // the camp has activities running: as long as SOMEBODY is in there the camp
+    // is happy — it does not matter who. Rotation alone can't promise that, and
+    // neither can leagues: the league engine covers a period only when a league
+    // running then plays a sport the facility hosts (see _keepInUsePass in
+    // scheduler_core_leagues.js). This is the backstop for every OTHER period —
+    // and for league periods no league could cover.
+    //
+    // For each required facility we walk the day's activity windows; a window is
+    // already covered when any bunk is on the facility then, or when it's locked
+    // (pinned reservation / league game / specialty league — all of which mean
+    // somebody is in there). An uncovered window is filled by moving ONE bunk
+    // onto it: a Free slot first, else a plain sport slot. Never a special, a
+    // league game, a trip, a pinned/overridden/post-edited cell, or lunch —
+    // those are commitments, not spare capacity. All the normal field gates
+    // still apply (access, time rules, today's Resource shut-offs, global
+    // locks) and the bunk never gets an activity it already has today.
+    //
+    // Runs AFTER STEP 7.95 so the repeat-heal can't undo the placement, and
+    // BEFORE STEP 8 so rotation history records what actually happened.
+    // No-op unless a facility opts in. Killswitch: window.__keepInUseSweep = false.
+    // =========================================================================
+    function keepFacilitiesInUse() {
+        if (window.__keepInUseSweep === false) return null;
+        const Utils = window.SchedulerCoreUtils;
+        const KIU = (Utils && typeof Utils.getKeepInUseFields === 'function') ? Utils.getKeepInUseFields() : [];
+        if (!KIU || !KIU.length) return null;
+
+        const sa = window.scheduleAssignments || {};
+        if (!Object.keys(sa).length) return null;
+        const _divs = window.divisions || {};
+        const _dt = window.divisionTimes || {};
+        const _b2g = {};
+        Object.keys(_divs).forEach(g => ((_divs[g] && _divs[g].bunks) || []).forEach(b => { _b2g[String(b)] = g; }));
+
+        // Same per-bunk → entry → division time resolution as STEP 7.6's _stime76.
+        const _stime = (bunk, grade, idx, e) => {
+            const pbs = (window._perBunkSlots && window._perBunkSlots[grade] && window._perBunkSlots[grade][bunk])
+                || (_dt[grade] && _dt[grade]._perBunkSlots && _dt[grade]._perBunkSlots[bunk]);
+            if (pbs && pbs[idx] && pbs[idx].startMin != null) return { s: pbs[idx].startMin, e: pbs[idx].endMin };
+            if (e && e._startMin != null && e._endMin != null) return { s: e._startMin, e: e._endMin };
+            const ds = _dt[grade]; if (ds && ds[idx] && ds[idx].startMin != null) return { s: ds[idx].startMin, e: ds[idx].endMin };
+            return null;
+        };
+        const _slotEvent = (bunk, grade, idx, e) => {
+            const pbs = (window._perBunkSlots && window._perBunkSlots[grade] && window._perBunkSlots[grade][bunk])
+                || (_dt[grade] && _dt[grade]._perBunkSlots && _dt[grade]._perBunkSlots[bunk]);
+            if (pbs && pbs[idx] && pbs[idx].event != null) return pbs[idx].event;
+            const ds = _dt[grade]; if (ds && ds[idx] && ds[idx].event != null) return ds[idx].event;
+            return (e && e.event) || '';
+        };
+
+        const _skip = { 'free': 1, 'free play': 1, 'free (timeout)': 1, 'no field': 1, 'lunch': 1, 'snacks': 1,
+            'dismissal': 1, 'swim': 1, 'pool': 1, 'change': 1, 'cleanup': 1, 'main activity': 1, 'lineup': 1,
+            'transition': 1, 'buffer': 1, 'davening': 1, 'mincha': 1 };
+        const _isFreeAct = (e) => {
+            const a = String((e && (e._activity || e.field || e.sport)) || '').toLowerCase().trim();
+            return a === '' || a === 'free' || a === 'free play' || a === 'free (timeout)';
+        };
+
+        // Today's Resource shut-offs (same sources STEP 7.6 uses).
+        const _curDaily = (typeof window.loadCurrentDailyData === 'function' && window.loadCurrentDailyData()) || {};
+        const _disabledLc = new Set([
+            ...(window.currentDisabledFields || []),
+            ...(((_curDaily.overrides || {}).disabledFields) || [])
+        ].map(n => String(n).toLowerCase().trim()));
+        const _disSportsByField = _curDaily.dailyDisabledSportsByField || {};
+
+        // Occupancy of every field (with WHO, so a same-activity redirect can tell
+        // a lone bunk from a shared game) + each bunk's activities today.
+        const _occ = {}, _done = {};
+        Object.keys(sa).forEach(b => {
+            const g = _b2g[String(b)] || '?'; _done[b] = {};
+            (sa[b] || []).forEach((e, idx) => {
+                if (!e || e.continuation) return;
+                const a = e._activity || e.sport;
+                if (a && String(a).toLowerCase() !== 'free') _done[b][String(a).toLowerCase().trim()] = 1;
+                const fl = String(e.field || e._specialLocation || '').toLowerCase().trim();
+                if (!fl || _skip[fl]) return;
+                const t = _stime(b, g, idx, e); if (!t) return;
+                (_occ[fl] = _occ[fl] || []).push({ s: t.s, e: t.e, bunk: String(b), idx: idx });
+            });
+        });
+        const _fieldBusy = (fl, s, e) => {
+            const arr = _occ[fl] || [];
+            for (let i = 0; i < arr.length; i++) if (arr[i].s < e && arr[i].e > s) return true;
+            return false;
+        };
+        const _occupantCount = (fl, s, e) => {
+            const arr = _occ[fl] || [];
+            let n = 0;
+            for (let i = 0; i < arr.length; i++) if (arr[i].s < e && arr[i].e > s) n++;
+            return n;
+        };
+        // Every keep-in-use facility, so a redirect never empties one to fill another.
+        const _allTargetsLc = new Set(KIU.map(k => String(k.name).toLowerCase().trim()));
+        // Can this facility hold the whole group we want to move into it? Mirrors
+        // the sharing gate STEP 7.64 uses: capacity, and for a real share the
+        // facility must be sharable, the bunks same-grade, and (for a
+        // cross_division facility) same-grade sharing explicitly allowed.
+        const _groupFits = (f, group) => {
+            if (group.length === 1) return true;
+            // No sharing config at all = the app's default, not-sharable.
+            const sw = (f && f.sharableWith) || null;
+            if (!sw) return false;
+            const cap = (sw.type === 'not_sharable') ? 1 : (parseInt(sw.capacity, 10) || 2);
+            if (group.length > cap) return false;
+            {
+                if (sw.type === 'not_sharable') return false;
+                const grades = new Set(group.map(c => c.grade));
+                if (grades.size > 1) return false;
+                if (sw.type === 'cross_division') {
+                    const g = group[0].grade;
+                    if (((sw.allowedPairs || {})[[g, g].sort().join('|')]) !== true) return false;
+                }
+            }
+            return true;
+        };
+        // A global lock means a league game / pinned reservation / specialty
+        // league / a placed special's room (STEP 6.95) owns the facility right
+        // then — somebody IS in there, and we must not place a second thing on
+        // top of it either way. isFieldLockedByTime also covers combined-field
+        // mutual exclusion, so claiming Gym 1 while "Full Gym" is in use is
+        // blocked too. Passing division `null` deliberately: a DIVISION-scoped
+        // lock (elective) exempts its own grade, and we do NOT want that
+        // exemption here — the reserving tile is already using the facility.
+        const _fieldLocked = (name, s, e, g) => {
+            try {
+                return !!(window.GlobalFieldLocks && window.GlobalFieldLocks.isFieldLockedByTime
+                    && window.GlobalFieldLocks.isFieldLockedByTime(name, s, e, g));
+            } catch (_) { return false; }
+        };
+        // ★ Skeleton field RESERVATIONS (Daily-Adjustments reservation tiles,
+        //   electives) are a SEPARATE store from GlobalFieldLocks — the solver's
+        //   sport path gates on them via canBlockFit, but the free-fill passes
+        //   only ever consulted the lock table. That is exactly the blind spot
+        //   that once handed a league a reserved court (see the same guard in
+        //   scheduler_core_leagues buildAvailableFieldSportPool). Block on ANY
+        //   overlapping reservation regardless of whose it is: leaving a period
+        //   uncovered is now visible in the validator, a double-book is not.
+        const _fieldReserved = (name, s, e) => {
+            try {
+                const list = window.fieldReservations && window.fieldReservations[name];
+                if (!Array.isArray(list) || !list.length) return false;
+                return list.some(r => r && r.startMin < e && r.endMin > s);
+            } catch (_) { return false; }
+        };
+        const _fieldTaken = (name, s, e, g) => _fieldLocked(name, s, e, g) || _fieldReserved(name, s, e);
+        const _accessOk = (f, grade) => {
+            const ar = f && f.accessRestrictions;
+            if (!ar || !ar.enabled) return true;
+            const dvs = ar.divisions || {};
+            if (Object.keys(dvs).length === 0) return true;
+            return !!dvs[grade];
+        };
+        // Mirrors STEP 7.6's _fieldTimeOk76 (CB-39 gate).
+        const _timeOk = (f, s, e) => {
+            const rules = Array.isArray(f && f.timeRules) ? f.timeRules : null;
+            if (!rules || rules.length === 0) return true;
+            let hasAvail = false, insideAvail = false;
+            for (let i = 0; i < rules.length; i++) {
+                const r = rules[i]; if (!r) continue;
+                const rs = (r.startMin != null) ? r.startMin : null;
+                const re = (r.endMin != null) ? r.endMin : null;
+                const isUnavail = String(r.type).toLowerCase() === 'unavailable' || r.available === false;
+                if (isUnavail) { if (rs != null && re != null && rs < e && re > s) return false; }
+                else { hasAvail = true; if (rs != null && re != null && s >= rs && e <= re) insideAvail = true; }
+            }
+            return !(hasAvail && !insideAvail);
+        };
+        // Same rotation gate the free-fills use — a hard engine block (fair-share
+        // cap, cooldown, cohort, availableDays) or a yesterday repeat is a
+        // TIER-2 candidate: taken only if nothing clean can cover the window.
+        const _rotOk = (bunk, act, slotIdx) => {
+            if (window.__freeFillRotationGate === false) return true;
+            const RE = window.RotationEngine;
+            if (!RE) return true;
+            try {
+                if (typeof RE.calculateRotationScore === 'function') {
+                    const rot = RE.calculateRotationScore({
+                        bunkName: bunk, activityName: act,
+                        divisionName: _b2g[String(bunk)] || null,
+                        beforeSlotIndex: (typeof slotIdx === 'number' ? slotIdx : 0),
+                        allActivities: null,
+                        activityProperties: window.activityProperties || {}
+                    });
+                    if (rot === Infinity) return false;
+                }
+                if (typeof RE.calculateRecencyScore === 'function') {
+                    const yp = (RE.CONFIG && RE.CONFIG.YESTERDAY_PENALTY) || 50000;
+                    if (RE.calculateRecencyScore(bunk, act, (typeof slotIdx === 'number' ? slotIdx : 0)) >= yp) return false;
+                }
+            } catch (_) { /* fail-open */ }
+            return true;
+        };
+        const _daysSince = (b, name) => {
+            try {
+                const d = (window.RotationEngine && typeof window.RotationEngine.getDaysSinceActivity === 'function')
+                    ? window.RotationEngine.getDaysSinceActivity(b, name) : null;
+                return (typeof d === 'number') ? d : 9999;
+            } catch (_) { return 9999; }
+        };
+
+        const _usedCell = {};   // bunk|idx already consumed by this sweep
+        let filled = 0, covered = 0, unfillable = 0;
+
+        KIU.forEach(function (K) {
+            const fl = String(K.name).toLowerCase().trim();
+            if (_disabledLc.has(fl)) return;                     // closed today
+            const blockedSports = _disSportsByField[K.name] || null;
+            const playable = K.activities.filter(a =>
+                !(blockedSports && blockedSports.indexOf(a) !== -1));
+            if (!playable.length) return;
+
+            // Every distinct activity window in the day that COULD host something
+            // here — i.e. at least one bunk has a slot the sweep is allowed to use.
+            const _cands = {};   // "s-e" → [{bunk, idx, grade, free}]
+            Object.keys(sa).forEach(b => {
+                const g = _b2g[String(b)] || '?';
+                (sa[b] || []).forEach((e, idx) => {
+                    if (!e || e.continuation || e._isTransition || e._isTrip) return;
+                    if (e._league || e._h2h || e._leagueName || e._leagueMatchups || e.matchups || e._isSpecialtyLeague) return;
+                    if (e._pinned || e._bunkOverride || e._postEdit) return;
+                    if (e._assignedSpecial || e._partLabel || e._prepDuration) return;   // a special is a commitment
+                    if (sa[b][idx + 1] && sa[b][idx + 1].continuation) return;           // don't orphan a span
+                    const free = _isFreeAct(e);
+                    if (!free) {
+                        // Only a plain sport may be displaced.
+                        if (!e.sport || String(e.sport).toLowerCase() === 'free') return;
+                        if (_skip[String(e.field || '').toLowerCase().trim()]) return;
+                    }
+                    if (slotKindOf(_slotEvent(b, g, idx, e)) === 'special') return;
+                    const t = _stime(b, g, idx, e);
+                    if (!t || t.s == null || t.e == null) return;
+                    if (!Utils.keepInUseCoversWindow(K, t.s, t.e)) return;
+                    (_cands[t.s + '-' + t.e] = _cands[t.s + '-' + t.e] || []).push({
+                        bunk: b, idx: idx, grade: g, s: t.s, e: t.e, free: free,
+                        act: String((e._activity || e.sport) || '').trim(),
+                        fieldLc: String(e.field || '').toLowerCase().trim()
+                    });
+                });
+            });
+
+            const windows = Object.keys(_cands)
+                .map(k => ({ key: k, s: Number(k.split('-')[0]), e: Number(k.split('-')[1]) }))
+                .sort((a, b) => a.s - b.s || a.e - b.e);
+
+            // ★ GRADE ROTATION. Grade grids are often STAGGERED (Grade 1 10-11,
+            //   Grade 2 10:15-11:15, …). Once the earliest grade's period is
+            //   covered, every later grade's period overlaps it and is therefore
+            //   "already busy" — so left alone, the earliest-starting grade takes
+            //   the facility for the WHOLE day, every day (measured: 7/7 slots).
+            //   Fix: when several overlapping periods compete for the same idle
+            //   stretch, weigh a grade DOWN for each slot it already holds here
+            //   today, and weigh a later start down by the idle minutes it would
+            //   leave in front. So a 15-minute stagger is traded for rotation
+            //   after one slot, a 30-minute one only after two, and an hour-long
+            //   hole is never traded — coverage still wins when the cost is real.
+            const KIU_GRADE_PENALTY = 20000;   // per slot this grade already holds here
+            const KIU_IDLE_PER_MIN = 1000;     // per minute of front idle introduced
+            const _gradeUse = {};
+            (_occ[fl] || []).forEach(function (o) {
+                const g = _b2g[String(o.bunk)] || '?';
+                _gradeUse[g] = (_gradeUse[g] || 0) + 1;
+            });
+            const _rotScore = (grade, idleMin) =>
+                -((_gradeUse[grade] || 0) * KIU_GRADE_PENALTY) - (idleMin * KIU_IDLE_PER_MIN);
+            const _noteUse = (grade) => { _gradeUse[grade] = (_gradeUse[grade] || 0) + 1; };
+
+            windows.forEach(function (W) {
+                // Covered already? (a bunk on it, a lock, or a placement this sweep
+                // just made whose window overlaps this one — divisions' grids differ,
+                // so two windows can overlap without being identical.)
+                if (_fieldBusy(fl, W.s, W.e)) { covered++; return; }
+                if (_fieldTaken(K.name, W.s, W.e, null)) { covered++; return; }
+
+                // Every period that could cover this idle stretch — W itself plus
+                // any later-starting period that overlaps it. Only one of them can
+                // have the facility (they overlap), so they compete. With grade
+                // rotation off we only ever consider W, which always covers the
+                // stretch from its very start — seamless, but the earliest grade
+                // keeps the facility.
+                const cluster = (K.rotateGrades === false)
+                    ? [W]
+                    : windows.filter(W2 => W2.s >= W.s && W2.s < W.e);
+
+                // ── FIRST: is somebody ALREADY doing one of this facility's
+                //    activities on a different court right now? Then just switch
+                //    their court. Same activity, different room — the rotation is
+                //    untouched and nobody loses the activity they were given.
+                //    A SHARED game moves as a whole (never split): every bunk on
+                //    that court in that window has to be movable and the facility
+                //    has to be able to hold them all under its own sharing rules.
+                let redirect = null;
+                cluster.forEach(function (W2) {
+                    const idle = W2.s - W.s;
+                    const groupsByCourt = {};
+                    (_cands[W2.key] || []).forEach(function (c) {
+                        if (!c.act || playable.indexOf(c.act) === -1) return;
+                        if (!c.fieldLc || c.fieldLc === fl || _allTargetsLc.has(c.fieldLc)) return;
+                        (groupsByCourt[c.fieldLc] = groupsByCourt[c.fieldLc] || []).push(c);
+                    });
+                    Object.keys(groupsByCourt).forEach(function (court) {
+                        const group = groupsByCourt[court];
+                        // Everybody on that court in that window must be in the group —
+                        // otherwise moving it would break up a game (or strand a bunk
+                        // whose slot the sweep isn't allowed to touch).
+                        if (_occupantCount(court, W2.s, W2.e) !== group.length) return;
+                        if (group.some(c => _usedCell[c.bunk + '|' + c.idx])) return;
+                        if (group.some(c => c.act !== group[0].act)) return;
+                        if (!_groupFits(K.fieldObj, group)) return;
+                        if (group.some(c => !_accessOk(K.fieldObj, c.grade) || !_timeOk(K.fieldObj, c.s, c.e)
+                            || _fieldTaken(K.name, c.s, c.e, null))) return;
+                        const score = _rotScore(group[0].grade, idle);
+                        if (!redirect || score > redirect.score) {
+                            redirect = { court: court, group: group, score: score, idle: idle, win: W2 };
+                        }
+                    });
+                });
+                if (redirect) {
+                    const from = sa[redirect.group[0].bunk][redirect.group[0].idx].field;
+                    redirect.group.forEach(function (c) {
+                        sa[c.bunk][c.idx].field = K.name;
+                        sa[c.bunk][c.idx]._keepInUseRedirected = true;
+                        _usedCell[c.bunk + '|' + c.idx] = 1;
+                        (_occ[fl] = _occ[fl] || []).push({ s: c.s, e: c.e, bunk: c.bunk, idx: c.idx });
+                    });
+                    _noteUse(redirect.group[0].grade);
+                    filled++;
+                    const who = redirect.group.map(c => c.bunk).join(' + ');
+                    console.log('[STEP 7.96] keep-in-use: "' + K.name + '" was idle at ' + W.s + '-' + W.e +
+                        ' → ' + who + ' already had "' + redirect.group[0].act + '", moved ' + from + ' → ' + K.name +
+                        ' (same activity, nothing else changes)' +
+                        (redirect.idle ? ' — starts ' + redirect.idle + ' min later (grade rotation)' : ''));
+                    if (window.GenTrace && window.GenTrace.active) {
+                        window.GenTrace.decision({
+                            kind: 'keep-in-use-redirect', bunk: who, division: redirect.group[0].grade,
+                            window: redirect.win.s + '-' + redirect.win.e,
+                            chosen: { name: redirect.group[0].act, field: K.name }, from: from
+                        });
+                    }
+                    return;
+                }
+
+                // ── ELSE: give the facility's activity to somebody new. Free
+                //    slots cost nothing, then the least-represented grade, then
+                //    the bunk most overdue for it.
+                let best = null;
+                cluster.forEach(function (W2) {
+                    const idle = W2.s - W.s;
+                    (_cands[W2.key] || []).forEach(function (c) {
+                        if (_usedCell[c.bunk + '|' + c.idx]) return;
+                        if (!_accessOk(K.fieldObj, c.grade)) return;
+                        if (!_timeOk(K.fieldObj, c.s, c.e)) return;
+                        if (_fieldTaken(K.name, c.s, c.e, null)) return;
+                        playable.forEach(function (act) {
+                            if (_done[c.bunk][String(act).toLowerCase().trim()]) return;   // already has it today
+                            const clean = _rotOk(c.bunk, act, c.idx);
+                            const score = (clean ? 100000000 : 0) + (c.free ? 10000000 : 0)
+                                + _rotScore(c.grade, idle) + _daysSince(c.bunk, act);
+                            if (!best || score > best.score) best = { c: c, act: act, clean: clean, score: score, idle: idle };
+                        });
+                    });
+                });
+
+                if (!best) {
+                    unfillable++;
+                    console.warn('[STEP 7.96] keep-in-use: "' + K.name + '" idle at ' +
+                        W.s + '-' + W.e + ' — no bunk could be moved onto it (access / time rules / already did it today)');
+                    return;
+                }
+                _noteUse(best.c.grade);
+
+                const c = best.c;
+                const prev = sa[c.bunk][c.idx];
+                const prevLabel = (prev && (prev._activity || prev.sport)) || 'Free';
+                sa[c.bunk][c.idx] = {
+                    field: K.name, sport: best.act, _activity: best.act,
+                    _startMin: c.s, _endMin: c.e, _fixed: true,
+                    _freeFilled: c.free || undefined,
+                    _keepInUseForced: true, continuation: false
+                };
+                _usedCell[c.bunk + '|' + c.idx] = 1;
+                _done[c.bunk][String(best.act).toLowerCase().trim()] = 1;
+                (_occ[fl] = _occ[fl] || []).push({ s: c.s, e: c.e, bunk: c.bunk, idx: c.idx });
+                filled++;
+                console.log('[STEP 7.96] keep-in-use: "' + K.name + '" was idle at ' + c.s + '-' + c.e +
+                    ' → ' + c.bunk + ' "' + prevLabel + '" → "' + best.act + '" @ ' + K.name +
+                    (best.clean ? '' : ' (last resort — rotation gate relaxed)') +
+                    (best.idle ? ' — starts ' + best.idle + ' min later (grade rotation)' : ''));
+                if (window.GenTrace && window.GenTrace.active) {
+                    window.GenTrace.decision({
+                        kind: 'keep-in-use', bunk: c.bunk, division: c.grade,
+                        window: c.s + '-' + c.e,
+                        chosen: { name: best.act, field: K.name }, from: prevLabel
+                    });
+                }
+            });
+        });
+
+        return { filled: filled, covered: covered, unfillable: unfillable };
+    }
+    window._keepFacilitiesInUse = keepFacilitiesInUse;
 
     // =========================================================================
     // ★★★ MAIN ENTRY POINT ★★★
@@ -3304,6 +4002,16 @@
                 console.warn('[MANUAL] RotationCloud load failed: ' + e.message);
             }
         }
+
+        // ★★★ LEAGUE HISTORY: pull the authoritative cross-session record from the
+        // cloud before generating (parity with auto mode — scheduler_core_auto.js
+        // does the same at generation entry). Without this, manual generation read
+        // whatever leagueHistory was hydrated at page load: a stale copy from
+        // another device/session made the pairing optimizer restage the same
+        // matchups it had already scheduled. Best-effort + time-boxed inside
+        // refreshHistoryFromCloud; any failure keeps the existing copy.
+        try { if (window.SchedulerCoreLeagues?.refreshHistoryFromCloud) await window.SchedulerCoreLeagues.refreshHistoryFromCloud(); } catch (_eLgRefresh) {}
+        try { if (window.SchedulerCoreSpecialtyLeagues?.refreshHistoryFromCloud) await window.SchedulerCoreSpecialtyLeagues.refreshHistoryFromCloud(); } catch (_eSpRefresh) {}
 
         let {
             divisions,
@@ -3966,6 +4674,9 @@ console.log(`[Generation] Rainy Day Mode: ${window.isRainyDay ? 'ACTIVE 🌧️'
         // =========================================================================
 
         console.log("\n[STEP 2] Processing bunk overrides...");
+        // Placeholder written into slots the user deleted for a single bunk; see the
+        // delete branch below and STEP 7.97, which converts these back to empty.
+        const _DELETED_SENTINEL = '— deleted —';
         // ★ BUNK-OVERRIDE WIPE FIX: prefer the overrides passed in externalOverrides (daily_adjustments
         //   sets currentOverrides.bunkActivityOverrides in its restore-after-wipe, then passes it here).
         //   loadCurrentDailyData() gets clobbered mid-run by the partial-mode force-load-from-cloud
@@ -4099,6 +4810,15 @@ console.log(`[Generation] Rainy Day Mode: ${window.isRainyDay ? 'ACTIVE 🌧️'
         bunkOverrides.forEach(override => {
             let activityName = override.activity;
             let overrideType = override.type;
+            // ★ Fixed-tile overrides (Lunch/Snacks/Swim/Dinner/Dismissal picked in
+            //   the bunk-override UI) carry their behavior type — in manual mode
+            //   they place through the 'pinned' lane, which resolves the picked
+            //   location (override.location → pinned defaults → activity lookup)
+            //   and pins field=location, _activity=tile name. Previously they fell
+            //   into the generic-pin fallback and lost their location.
+            if ({ swim: 1, lunch: 1, snacks: 1, snack: 1, dinner: 1, dismissal: 1 }[String(overrideType || '').toLowerCase()]) {
+                overrideType = 'pinned';
+            }
             let _poolChosenLocation = null; // set when a sportPool override resolves to a chosen candidate
             const startMin = override.startMin ?? Utils.parseTimeToMinutes(override.startTime);
             const endMin = override.endMin ?? Utils.parseTimeToMinutes(override.endTime);
@@ -4112,6 +4832,39 @@ console.log(`[Generation] Rainy Day Mode: ${window.isRainyDay ? 'ACTIVE 🌧️'
             }
 
             if (allowedDivisionsSet && !allowedDivisionsSet.has(String(divName))) {
+                return;
+            }
+
+            // ── delete: this bunk gets NOTHING in the window (the 🗑 button on a
+            //   bunk-override tile). Auto already honours this in Phase 0 + its
+            //   final enforcement pass; manual had no handling at all, so the
+            //   override was silently ignored and the solver filled the slot.
+            //   We pin a SENTINEL rather than leaving the slot null, because a
+            //   null is exactly what every backfill pass hunts for (STEP 7.5's
+            //   `if (!e)`, STEP 7.6's empty-activity scan, STEP 7.65/7.67 …).
+            //   The sentinel carries _bunkOverride (respected almost everywhere)
+            //   AND _layerDeleted (checked by the passes that match on activity
+            //   instead of flags). STEP 7.97 turns the sentinels into real empty
+            //   slots once every fill pass has run.
+            if (override.overrideMode === 'delete') {
+                slots.forEach((slotIndex, i) => {
+                    window.scheduleAssignments[bunk][slotIndex] = {
+                        field: null,
+                        sport: null,
+                        continuation: i > 0,
+                        _fixed: true,
+                        // Deliberately NON-empty: half a dozen backfill passes decide
+                        // "is this slot Free?" from the activity string alone, so an
+                        // empty/null activity would be refilled no matter which flags
+                        // the entry carries. STEP 7.97 clears it to a real empty slot.
+                        _activity: _DELETED_SENTINEL,
+                        _bunkOverride: true,
+                        _layerDeleted: true,
+                        _startMin: startMin,
+                        _endMin: endMin
+                    };
+                });
+                console.log(`[BunkOverride] ${bunk}: DELETED ${override.startTime}-${override.endTime} (${slots.length} slot(s)) — left empty`);
                 return;
             }
 
@@ -4133,6 +4886,17 @@ console.log(`[Generation] Rainy Day Mode: ${window.isRainyDay ? 'ACTIVE 🌧️'
             }
 
             console.log(`[BunkOverride] ${bunk}: ${activityName} (${overrideType}) @ ${override.startTime}-${override.endTime}`);
+            // ★ GenTrace: bunk overrides bypass the solver (user's explicit choice),
+            //   so without this record the trace shows their placements with no
+            //   explaining decision. Recorded at resolution; the finalSchedule
+            //   snapshot's o:'override' flag marks the surviving entry.
+            if (window.GenTrace && window.GenTrace.active) {
+                window.GenTrace.decision({
+                    kind: 'override-fill', bunk: bunk, division: divName || undefined,
+                    window: startMin + '-' + endMin,
+                    chosen: { name: activityName, type: overrideType || 'sport' }
+                });
+            }
 
             if (overrideType === 'trip') {
                 slots.forEach((slotIndex, i) => {
@@ -4599,7 +5363,24 @@ console.log(`[Generation] Rainy Day Mode: ${window.isRainyDay ? 'ACTIVE 🌧️'
         electiveTiles.forEach(elective => {
             const electiveDivision = elective.division;
 
-            if (allowedDivisionsSet && !allowedDivisionsSet.has(String(electiveDivision))) {
+            // ★ Electives lock their facilities UNCONDITIONALLY — regardless of regen
+            //   scope — exactly like the STEP 2.45 pinned pre-lock. An elective is a
+            //   fancy custom-pinned tile: its facility must stay reserved for its whole
+            //   [startMin,endMin] window in FULL *and* PARTIAL regens. In a partial regen
+            //   the elective's OWN division is often out of scope (its schedule is
+            //   preserved via STEP 1.5, not re-solved) — but the SmartTile specials and
+            //   free-fill passes for the IN-SCOPE divisions gate on
+            //   GlobalFieldLocks.isFieldLockedByTime, NOT window.fieldReservations. If we
+            //   skipped an out-of-scope elective's lock, an in-scope division's special /
+            //   free-fill could land on the reserved facility. window.divisionTimes is
+            //   built from the FULL skeleton (STEP 1), so findSlotsForRange resolves for
+            //   out-of-scope divisions too, and the division lock exempts the elective's
+            //   OWN grade so a partial regen of that grade is never self-blocked. (The
+            //   sport path is already protected in both cases because
+            //   window.fieldReservations is built from the FULL skeleton.)
+            //   Previously this early-returned on allowedDivisionsSet, leaving a partial
+            //   regen able to poach an out-of-scope elective's facility with a special.
+            if (!((divisions[electiveDivision] && divisions[electiveDivision].bunks) || []).length) {
                 return;
             }
 
@@ -5136,6 +5917,11 @@ console.log(`[Generation] Rainy Day Mode: ${window.isRainyDay ? 'ACTIVE 🌧️'
                     bunks: bunkList,
                     type: 'league',
                     leagueName: item.leagueName || null,
+                    // ★ Multi-grade tile spanning: members of one spanned tile carry a
+                    //   shared spanGroup — the league engine uses it to process them as
+                    //   ONE game period (same matchups, same game number) even when the
+                    //   per-grade copies' times drift apart.
+                    spanGroup: item.spanGroup || null,
                     _doubleHeaderPairId: item._doubleHeaderPairId || null,
                     _isAway: item.isAway === true,
                     _awayZone: item.isAway === true ? (item.awayZone || null) : null,
@@ -5312,11 +6098,16 @@ console.log(`[Generation] Rainy Day Mode: ${window.isRainyDay ? 'ACTIVE 🌧️'
                 }
                 for (const slotIdx of slots) {
                     if (!window.leagueAssignments[divName][slotIdx]) {
+                        // ★ Stamp the game's own time (see fillBlock's league store) so the
+                        //   mid-day rain league split/restore is index-drift-proof.
+                        const _lgT = (window.divisionTimes && window.divisionTimes[divName] && window.divisionTimes[divName][slotIdx]) || {};
                         window.leagueAssignments[divName][slotIdx] = {
                             matchups: matchups || [],
                             gameLabel: gameLabel || '',
                             sport: sport || '',
-                            leagueName: leagueName || ''
+                            leagueName: leagueName || '',
+                            _startMin: (_lgT.startMin != null) ? _lgT.startMin : null,
+                            _endMin: (_lgT.endMin != null) ? _lgT.endMin : null
                         };
                         console.log(`[storeLeagueMatchups] ✅ Stored ${(matchups || []).length} matchups for ${divName} at slot ${slotIdx}`);
                     }
@@ -5341,20 +6132,35 @@ console.log(`[Generation] Rainy Day Mode: ${window.isRainyDay ? 'ACTIVE 🌧️'
             window.SchedulerCoreLeagues.processRegularLeagues(leagueContext);
         }
 
-        // ★ Partial (per-tile) regen: restore league matchups for the divisions whose
-        //   league period the user did NOT select (block was skipped above). Belt-and-
-        //   suspenders on top of the skip — guarantees the pre-run matchups/fields carry
-        //   through the save untouched.
+        // ★ Partial (per-tile) regen: restore league matchups for the league periods
+        //   the user did NOT select (their blocks were skipped above).
+        //   MERGE per slot — never replace the whole division: a division can have a
+        //   SELECTED league period (the engine just wrote its fresh game this run) AND
+        //   a non-selected one (preserved). The old wholesale restore clobbered the
+        //   fresh game with the pre-run snapshot (the "morning league at slot 0
+        //   disappears" bug). Each preserved game is re-keyed to the CURRENT geometry
+        //   by its own _startMin, so it also lands correctly after earlier periods
+        //   were added to the day.
         if (window.__regenLeaguePreservedDivs && _preservedLeagueAssignments) {
             if (!window.leagueAssignments || typeof window.leagueAssignments !== 'object') window.leagueAssignments = {};
             let _rlp = 0;
+            const _mergeLg = window.DivisionTimesSystem && window.DivisionTimesSystem.mergePreservedLeagueDivision;
             window.__regenLeaguePreservedDivs.forEach(dv => {
-                if (_preservedLeagueAssignments[dv] !== undefined) {
+                if (_preservedLeagueAssignments[dv] === undefined) return;
+                if (_mergeLg) {
+                    window.leagueAssignments[dv] = _mergeLg(
+                        window.leagueAssignments[dv],
+                        _preservedLeagueAssignments[dv],
+                        (window.divisionTimes && window.divisionTimes[dv]) || []
+                    );
+                } else if (window.leagueAssignments[dv] === undefined) {
+                    // Helper unavailable → old behavior, but only when the engine wrote
+                    // nothing for the division (never clobber a fresh game).
                     window.leagueAssignments[dv] = _preservedLeagueAssignments[dv];
-                    _rlp++;
                 }
+                _rlp++;
             });
-            if (_rlp > 0) console.log(`[STEP 5] ★ Per-tile regen: preserved league matchups for ${_rlp} non-selected division(s)`);
+            if (_rlp > 0) console.log(`[STEP 5] ★ Per-tile regen: preserved league matchups for ${_rlp} non-selected division(s) (per-slot merge)`);
         }
 
         // ★★★ CHINUCH (manual mode) — matchup-display level, NOT per-bunk ★★★
@@ -5458,12 +6264,17 @@ console.log(`[Generation] Rainy Day Mode: ${window.isRainyDay ? 'ACTIVE 🌧️'
                 }
                 
                 if (foundMatchups.length > 0) {
+                    // ★ Stamp the game's own time (see fillBlock's league store) so the
+                    //   mid-day rain league split/restore is index-drift-proof.
+                    const _lgT = (window.divisionTimes && window.divisionTimes[divName] && window.divisionTimes[divName][slotIdx]) || {};
                     window.leagueAssignments[divName][slotIdx] = {
                         matchups: foundMatchups,
                         gameLabel: foundGameLabel,
                         sport: foundSport,
                         leagueName: league.name,
-                        teams: leagueTeams
+                        teams: leagueTeams,
+                        _startMin: (_lgT.startMin != null) ? _lgT.startMin : null,
+                        _endMin: (_lgT.endMin != null) ? _lgT.endMin : null
                     };
                     console.log(`   ✅ League "${league.name}" for ${divName} @ slot ${slotIdx}: ${foundMatchups.length} matchups`);
                 }
@@ -5683,9 +6494,22 @@ console.log(`[Generation] Rainy Day Mode: ${window.isRainyDay ? 'ACTIVE 🌧️'
         // overwrite those fills. Remove any block whose slot is already occupied.
         {
             const preFilt = schedulableSlotBlocks.length;
+            let _scopeDropped65 = 0;
             for (let _fi = schedulableSlotBlocks.length - 1; _fi >= 0; _fi--) {
                 const _fb = schedulableSlotBlocks[_fi];
                 if (!_fb.bunk || !_fb.slots?.length) continue;
+                // ★ Slot-scope gate: when a per-slot regen scope is active for this
+                //   bunk (per-tile regen OR the mid-day rain cut), the solver may fill
+                //   ONLY the scoped regen slots. An EMPTY out-of-scope slot (e.g. an
+                //   unscheduled slot before the rain cut) must stay empty — without
+                //   this gate it reads as "free" and gets backfilled, rewriting the
+                //   part of the day the scope promised to leave alone.
+                const _rsg = window.__regenSlotScope && window.__regenSlotScope[_fb.bunk];
+                if (_rsg && _rsg.regen && typeof _rsg.regen.has === 'function' && !_rsg.regen.has(_fb.slots[0])) {
+                    schedulableSlotBlocks.splice(_fi, 1);
+                    _scopeDropped65++;
+                    continue;
+                }
                 const _ex = window.scheduleAssignments[_fb.bunk]?.[_fb.slots[0]];
                 if (_ex && !_ex.continuation && !_ex._isTransition) {
                     const _act = (_ex._activity || _ex.field || '').toLowerCase().trim();
@@ -5695,7 +6519,8 @@ console.log(`[Generation] Rainy Day Mode: ${window.isRainyDay ? 'ACTIVE 🌧️'
                 }
             }
             const removed = preFilt - schedulableSlotBlocks.length;
-            if (removed > 0) console.log(`[STEP 6.5] Filtered ${removed} blocks already filled by smart tiles / pinned events`);
+            if (removed > 0) console.log(`[STEP 6.5] Filtered ${removed} blocks already filled by smart tiles / pinned events` +
+                (_scopeDropped65 > 0 ? ` (${_scopeDropped65} outside the active slot scope)` : ''));
         }
 
         // =========================================================================
@@ -5806,14 +6631,35 @@ console.log(`[Generation] Rainy Day Mode: ${window.isRainyDay ? 'ACTIVE 🌧️'
                     const la = window.leagueAssignments?.[d]?.[si];
                     return !!(la && Array.isArray(la.matchups) && la.matchups.length > 0);
                 };
+                // ★ Electives are a camper-choice MENU: STEP 2.5 reserves the elective's
+                //   rooms but never assigns one activity per bunk, so these cells are
+                //   Free BY DESIGN (the bunk picks e.g. Gaming Center vs Pizza Making).
+                //   Same rationale as the league skip above — don't let the silent
+                //   fallback stuff a random activity into the menu tile.
+                const _isElectiveSlot75 = (bunk, si) => {
+                    const d = _b2d75[String(bunk)];
+                    if (!d) return false;
+                    const ds = window.divisionTimes?.[d];
+                    const sl = Array.isArray(ds) ? ds[si] : null;
+                    if (!sl) return false;
+                    const t = String(sl.type || '').toLowerCase();
+                    if (t === 'elective' || t === 'swim_elective') return true;
+                    return Array.isArray(sl.electiveActivities) && sl.electiveActivities.length > 0;
+                };
                 const _freeFills = [];
-                let _lgSkipped75 = 0;
+                let _lgSkipped75 = 0, _elSkipped75 = 0;
                 Object.keys(window.scheduleAssignments || {}).forEach(bunk => {
                     if (_allowedBunks && !_allowedBunks.has(bunk)) return;
                     const arr = window.scheduleAssignments[bunk] || [];
+                    // ★ Slot-scope gate (mirrors STEP 6.5): with an active per-slot
+                    //   regen scope, this fallback may only touch the scoped regen
+                    //   slots — never backfill an out-of-scope empty (e.g. pre-rain-cut).
+                    const _rs75 = window.__regenSlotScope && window.__regenSlotScope[bunk];
                     for (let si = 0; si < arr.length; si++) {
                         const e = arr[si];
+                        if (_rs75 && _rs75.regen && typeof _rs75.regen.has === 'function' && !_rs75.regen.has(si)) continue;
                         if (_isLeagueSlot75(bunk, si)) { _lgSkipped75++; continue; }
+                        if (_isElectiveSlot75(bunk, si)) { _elSkipped75++; continue; }
                         if (!e) { _freeFills.push({ bunk, si }); continue; }
                         if (e.continuation || e._isTransition || e._fixed || e._pinned || e._h2h || e._bunkOverride) continue;
                         const actLower = String(e._activity || e.field || e.sport || '').toLowerCase().trim();
@@ -5823,6 +6669,7 @@ console.log(`[Generation] Rainy Day Mode: ${window.isRainyDay ? 'ACTIVE 🌧️'
                     }
                 });
                 if (_lgSkipped75 > 0) console.log(`[STEP 7.5] FN-56: left ${_lgSkipped75} league-period slot(s) alone`);
+                if (_elSkipped75 > 0) console.log(`[STEP 7.5] left ${_elSkipped75} elective menu slot(s) alone`);
                 // ★ Build a reliable (bunk|slotIdx) → tile-kind map from the schedulable
                 //   blocks. The solver stamps _slotKind on these from the raw skeleton
                 //   event, so it is authoritative — divisionTimes' slot.event is not
@@ -5841,7 +6688,16 @@ console.log(`[Generation] Rainy Day Mode: ${window.isRainyDay ? 'ACTIVE 🌧️'
                     for (const ff of _freeFills) {
                         try {
                             const _ffKind = _kindByCell75[String(ff.bunk) + '|' + ff.si];
-                            const ok = window.AutoFillSlot.autoFillSlotSilent(ff.bunk, ff.si, _ffKind);
+                            let ok = window.AutoFillSlot.autoFillSlotSilent(ff.bunk, ff.si, _ffKind);
+                            // ★ Rainy fallback: rain shrinks the sport pool to the few
+                            //   indoor fields (often all pinned by league events), so a
+                            //   Sports tile can have ZERO legal sport candidates. Rather
+                            //   than leave the bunk Free, retry kind-unrestricted so an
+                            //   indoor special can take the slot — the realistic indoor
+                            //   alternative when the gyms are taken.
+                            if (!ok && _ffKind === 'sport' && window.isRainyDay === true) {
+                                ok = window.AutoFillSlot.autoFillSlotSilent(ff.bunk, ff.si, undefined);
+                            }
                             if (ok) _ffOk++; else _ffSkip++;
                         } catch (e) {
                             _ffSkip++;
@@ -6305,12 +7161,51 @@ console.log(`[Generation] Rainy Day Mode: ${window.isRainyDay ? 'ACTIVE 🌧️'
                 if (hasAvail && !insideAvail) return false;
                 return true;
             };
+            // ★ ROTATION GATE for the last-resort free-fills (7.6 / 7.62 / 7.67).
+            //   These pickers only know "not done TODAY" — observed live 2026-07-09
+            //   via the trace origin tags: bunk לב's leftover slot got Basketball
+            //   from STEP 7.6 three days running (fair-share capped by the engine,
+            //   once back-to-back), because 7.6 runs AFTER the gated STEP 7.5
+            //   fallback and re-fills what 7.5 correctly left Free. Same policy as
+            //   auto_fill_slot.js scoreAndPick: skip a candidate the engine
+            //   hard-blocks (fair-share cap, frequencyDays cooldown, cohort,
+            //   availableDays, per-grade caps) or that the bunk did YESTERDAY —
+            //   the slot stays Free rather than lapping the field or repeating
+            //   back-to-back. Fail-open when the engine is absent.
+            //   Killswitch: window.__freeFillRotationGate = false.
+            const _rotOk76 = (bunk, act, slotIdx) => {
+                if (window.__freeFillRotationGate === false) return true;
+                const RE = window.RotationEngine;
+                if (!RE) return true;
+                try {
+                    if (typeof RE.calculateRotationScore === 'function') {
+                        const rot = RE.calculateRotationScore({
+                            bunkName: bunk, activityName: act,
+                            divisionName: _b2g76[String(bunk)] || null,
+                            beforeSlotIndex: (typeof slotIdx === 'number' ? slotIdx : 0),
+                            allActivities: null,
+                            activityProperties: window.activityProperties || {}
+                        });
+                        if (rot === Infinity) return false;
+                    }
+                    if (typeof RE.calculateRecencyScore === 'function') {
+                        const yp = (RE.CONFIG && RE.CONFIG.YESTERDAY_PENALTY) || 50000;
+                        if (RE.calculateRecencyScore(bunk, act,
+                            (typeof slotIdx === 'number' ? slotIdx : 0)) >= yp) return false;
+                    }
+                } catch (_) { /* fail-open */ }
+                return true;
+            };
             let _filled76 = 0;
             Object.keys(_sa76).forEach(b => {
                 if (_allowed76 && !_allowed76.has(String(b))) return;
                 const g = _b2g76[String(b)] || '?'; const arr = _sa76[b] || [];
                 arr.forEach((e, idx) => {
                     if (!e || e.continuation || e._isTransition || e._league || e._h2h) return;
+                    // ★ A per-bunk DELETED block is empty ON PURPOSE. This pass matches on
+                    //   activity rather than flags, so without this guard it would treat the
+                    //   deletion sentinel as a Free slot and immediately refill it.
+                    if (e._layerDeleted) return;
                     const a = String((e._activity || e.field || e.sport || '')).toLowerCase().trim();
                     // Free detected by ACTIVITY, regardless of _fixed/_pinned/_bunkOverride flags.
                     if (!(a === '' || a === 'free' || a === 'free play' || a === 'free (timeout)')) return;
@@ -6324,11 +7219,14 @@ console.log(`[Generation] Rainy Day Mode: ${window.isRainyDay ? 'ACTIVE 🌧️'
                         if (_skip76[fl] || !_fieldFree76(fl, t.s, t.e) || !_access76(f, g) || !_fieldTimeOk76(f, t.s, t.e) || _fieldPinLocked76(f.name, t.s, t.e, g)) continue;
                         let act = null;
                         const _blockedOnField76 = _disSportsByField76[f.name] || null;
-                        for (let ai = 0; ai < f.activities.length; ai++) { const c = f.activities[ai]; if (c && !_done76[b][String(c).toLowerCase()] && !(_blockedOnField76 && _blockedOnField76.indexOf(c) !== -1)) { act = c; break; } }
+                        for (let ai = 0; ai < f.activities.length; ai++) { const c = f.activities[ai]; if (c && !_done76[b][String(c).toLowerCase()] && !(_blockedOnField76 && _blockedOnField76.indexOf(c) !== -1) && _rotOk76(b, c, idx)) { act = c; break; } }
                         if (!act) continue;
                         _sa76[b][idx] = { field: f.name, sport: act, _activity: act, _startMin: t.s, _endMin: t.e, _fixed: true, _freeFilled: true, continuation: false };
                         (_occ76[fl] = _occ76[fl] || []).push({ s: t.s, e: t.e });
                         _done76[b][String(act).toLowerCase()] = 1; _filled76++;
+                        if (window.GenTrace && window.GenTrace.active) {
+                            window.GenTrace.decision({ kind: 'free-fill', bunk: b, division: g, window: t.s + '-' + t.e, chosen: { name: act, field: f.name } });
+                        }
                         break;
                     }
                 });
@@ -6392,7 +7290,7 @@ console.log(`[Generation] Rainy Day Mode: ${window.isRainyDay ? 'ACTIVE 🌧️'
                             if (blocked && blocked.indexOf(act) !== -1) continue;
                             const req = _reqOf62(act);
                             if (!req.min) continue; // only sports with a real min require forced pairing
-                            const elig = pool.filter(p => !(_done76[p.bunk] && _done76[p.bunk][String(act).toLowerCase()]));
+                            const elig = pool.filter(p => !(_done76[p.bunk] && _done76[p.bunk][String(act).toLowerCase()]) && _rotOk76(p.bunk, act, p.idx));
                             if (elig.length < 2) continue;
                             elig.sort((a, b2) => b2.size - a.size); // largest first to reach min fast
                             let chosen = [], sum = 0;
@@ -6585,11 +7483,37 @@ console.log(`[Generation] Rainy Day Mode: ${window.isRainyDay ? 'ACTIVE 🌧️'
                     const sw = s.sharableWith || {};
                     const cap = (sw.type === 'not_sharable') ? 1 : (parseInt(sw.capacity, 10) || 2);
                     let floor = parseInt(sw.minBunks, 10) || 0; if (floor < 2) floor = 1; floor = Math.min(floor, cap);
-                    _forced64[String(s.name).toLowerCase().trim()] = { name: s.name, floor: floor, cap: cap, type: sw.type || 'not_sharable', pairs: sw.allowedPairs || {}, loc: s.location || null };
+                    _forced64[String(s.name).toLowerCase().trim()] = { name: s.name, floor: floor, cap: cap, type: sw.type || 'not_sharable', pairs: sw.allowedPairs || {}, loc: s.location || null, timeRules: Array.isArray(s.timeRules) ? s.timeRules : [] };
                 });
                 if (Object.keys(_forced64).length) {
                     const _isFree64 = (e) => { const a = String((e && (e._activity || e.field || e.sport)) || '').toLowerCase().trim(); return a === '' || a === 'free' || a === 'free play' || a === 'free (timeout)'; };
                     const _winOf64 = (b, g, idx, e) => (e && e._startMin != null && e._endMin != null) ? { s: e._startMin, e: e._endMin } : _stime76(b, g, idx, e);
+                    // ★ Special's own time rules — force-placement must still respect the
+                    //   special's Available/Unavailable windows (it picks a LEGAL window
+                    //   instead; previously no time check ran on this seeding path at all,
+                    //   so a forced special could seat inside its own closed window).
+                    //   Same semantics as the SmartTile pool gate: division-scoped rules,
+                    //   Unavailable = no overlap, Available (when any apply) = must fit
+                    //   inside one. Case-insensitive type match.
+                    const _trBlocked64 = (rules, ws, we, g) => {
+                        if (!Array.isArray(rules) || rules.length === 0) return false;
+                        const _pm = window.SchedulerCoreUtils?.parseTimeToMinutes;
+                        let hasAvail = false, inAvail = false;
+                        for (const r of rules) {
+                            const rDivs = Array.isArray(r.divisions) ? r.divisions.map(String) : [];
+                            if (rDivs.length > 0 && g != null && !rDivs.includes(String(g))) continue;
+                            const rs = r.startMin ?? (_pm ? _pm(r.start || r.startTime) : null);
+                            const re = r.endMin ?? (_pm ? _pm(r.end || r.endTime) : null);
+                            if (rs == null || re == null) continue;
+                            const rt = String(r.type || '').toLowerCase();
+                            if ((rt === 'unavailable' || r.available === false) && rs < we && re > ws) return true;
+                            if (rt === 'available' || r.available === true) {
+                                hasAvail = true;
+                                if (ws >= rs && we <= re) inAvail = true;
+                            }
+                        }
+                        return hasAvail && !inAvail;
+                    };
                     const _daysOf64 = (b, name) => { try { const d = (window.RotationEngine && typeof window.RotationEngine.getDaysSinceActivity === 'function') ? window.RotationEngine.getDaysSinceActivity(b, name) : null; return (typeof d === 'number') ? d : 9999; } catch (_e) { return 9999; } };
                     let _forcedSeeded64 = 0, _forcedFail64 = 0;
                     Object.keys(_forced64).forEach(actLC => {
@@ -6620,6 +7544,7 @@ console.log(`[Generation] Rainy Day Mode: ${window.isRainyDay ? 'ACTIVE 🌧️'
                                 const e = arr[idx];
                                 if (!e || e.continuation || e._isTransition || e._league || e._h2h || e._postEdit || e._pinned || e._bunkOverride) continue;
                                 const t = _winOf64(b, g, idx, e); if (!t || t.s == null || t.e == null) continue;
+                                if (_trBlocked64(F.timeRules, t.s, t.e, g)) continue; // ★ window violates the special's own time rules
                                 const ck = _kindByCell76[String(b) + '|' + idx];
                                 const kind = (ck && ck !== 'any') ? ck : slotKindOf(_slotEvent76(b, g, idx, e));
                                 if (kind === 'sport') continue;
@@ -6917,6 +7842,7 @@ console.log(`[Generation] Rainy Day Mode: ${window.isRainyDay ? 'ACTIVE 🌧️'
                     const g = _b2g76[String(b)] || '?';
                     (_sa76[b] || []).forEach((e, idx) => {
                         if (!e || e.continuation || e._isTransition || e._league || e._h2h) return;
+                        if (e._layerDeleted) return; // per-bunk deletion — empty on purpose
                         const a = String((e._activity || e.field || e.sport || '')).toLowerCase().trim();
                         if (!(a === '' || a === 'free' || a === 'free play' || a === 'free (timeout)')) return;
                         const _ck = _kindByCell76[String(b) + '|' + idx];
@@ -6927,11 +7853,14 @@ console.log(`[Generation] Rainy Day Mode: ${window.isRainyDay ? 'ACTIVE 🌧️'
                             if (_skip76[fl] || !_free67(fl, t.s, t.e) || !_access76(f, g) || !_fieldTimeOk76(f, t.s, t.e) || _fieldPinLocked76(f.name, t.s, t.e, g)) continue;
                             const blocked = _disSportsByField76[f.name] || null;
                             let act = null;
-                            for (let ai = 0; ai < f.activities.length; ai++) { const c = f.activities[ai]; if (c && !(_done76[b] && _done76[b][String(c).toLowerCase()]) && !(blocked && blocked.indexOf(c) !== -1)) { act = c; break; } }
+                            for (let ai = 0; ai < f.activities.length; ai++) { const c = f.activities[ai]; if (c && !(_done76[b] && _done76[b][String(c).toLowerCase()]) && !(blocked && blocked.indexOf(c) !== -1) && _rotOk76(b, c, idx)) { act = c; break; } }
                             if (!act) continue;
                             _sa76[b][idx] = { field: f.name, sport: act, _activity: act, _startMin: t.s, _endMin: t.e, _fixed: true, _freeFilled: true, continuation: false };
                             (_occ67[fl] = _occ67[fl] || []).push({ s: t.s, e: t.e });
                             (_done76[b] = _done76[b] || {})[String(act).toLowerCase()] = 1; _filled67++;
+                            if (window.GenTrace && window.GenTrace.active) {
+                                window.GenTrace.decision({ kind: 'free-fill', bunk: b, division: g, window: t.s + '-' + t.e, chosen: { name: act, field: f.name } });
+                            }
                             break;
                         }
                     });
@@ -7033,6 +7962,7 @@ console.log(`[Generation] Rainy Day Mode: ${window.isRainyDay ? 'ACTIVE 🌧️'
                 const _rss79 = window.__regenSlotScope || null;
                 const _rssBunks79 = _rss79 ? new Set(Object.keys(_rss79)) : null;
                 let _evicted = 0;
+                const _evReheal = []; // slots demoted to Free here → retry a reservation-safe fill
                 Object.keys(_evSA).forEach(bunk => {
                     const arr = _evSA[bunk];
                     if (!Array.isArray(arr)) return;
@@ -7073,9 +8003,32 @@ console.log(`[Generation] Rainy Day Mode: ${window.isRainyDay ? 'ACTIVE 🌧️'
                         if (String(act || '').toLowerCase().trim() === String(hit.resv.event || '').toLowerCase().trim()) return;
                         // Per-tile regen: prefer restoring the slot's ORIGINAL pre-regen
                         //   activity (which respected pins) over leaving it Free — unless
-                        //   the original sat on the SAME reserved facility.
+                        //   the original ALSO sits on a reserved facility. Checking only
+                        //   "different field than the current conflict" is not enough: an
+                        //   elective reserves SEVERAL facilities (e.g. Gaming Center +
+                        //   Pizza Making), so a bunk whose current slot conflicts on
+                        //   "Gaming Center" could have an ORIGINAL of "Pizza Making" —
+                        //   restoring it just swaps one reserved facility for another and
+                        //   the conflict silently persists (the confirmed live symptom).
+                        //   So reject the restore whenever the original occupies ANY
+                        //   reserved facility overlapping this window, and fall to Free.
                         const _o79 = (_rss79 && _rss79[bunk] && _rss79[bunk].orig) ? _rss79[bunk].orig[idx] : null;
-                        if (_o79 && _o79.field && String(_o79.field).toLowerCase().trim() !== String(hit.field).toLowerCase().trim()) {
+                        let _origReserved = false;
+                        if (_o79) {
+                            const _oCands = new Set();
+                            const _oAdd = f => { if (f && typeof f === 'string' && f.trim() && f !== 'Free') _oCands.add(f.trim()); };
+                            _oAdd(_o79.field);
+                            _oAdd(_o79._location);
+                            if (Array.isArray(_o79._reservedFields)) _o79._reservedFields.forEach(_oAdd);
+                            const _oAct = _o79._activity || _o79.field;
+                            _oAdd(_evSpecLoc[String(_oAct || '').toLowerCase().trim()]);
+                            try { _oAdd(_evResolve && _evResolve(_oAct)); } catch (_ig2) {}
+                            for (const _ocf of _oCands) {
+                                const _okey = _resvKeyLc[String(_ocf).toLowerCase().trim()];
+                                if (_okey && Utils.isFieldReserved(_okey, sM, eM, _resv)) { _origReserved = true; break; }
+                            }
+                        }
+                        if (_o79 && _o79.field && !_origReserved && String(_o79.field).toLowerCase().trim() !== String(hit.field).toLowerCase().trim()) {
                             console.warn('[STEP 7.9] 🚫 Pinned-facility conflict: ' + bunk + ' "' + act + '" @' + sM + '-' + eM +
                                 ' sits on "' + hit.field + '" reserved by pinned "' + hit.resv.event + '" → restored original "' + (_o79._activity || _o79.field) + '"');
                             arr[idx] = Object.assign({}, _o79, { _fixed: true, _regenOriginalRestored: true, continuation: false });
@@ -7083,15 +8036,146 @@ console.log(`[Generation] Rainy Day Mode: ${window.isRainyDay ? 'ACTIVE 🌧️'
                             console.warn('[STEP 7.9] 🚫 Pinned-facility conflict: ' + bunk + ' "' + act + '" @' + sM + '-' + eM +
                                 ' sits on "' + hit.field + '" reserved by pinned "' + hit.resv.event + '" (' + hit.resv.division + ') → Free');
                             arr[idx] = { field: 'Free', _activity: 'Free', _startMin: sM, _endMin: eM, _pinnedFacilityEvicted: true };
+                            _evReheal.push({ bunk: bunk, idx: idx });
                         }
                         _evicted++;
                     });
                 });
                 if (_evicted) console.log('[STEP 7.9] Pinned-facility exclusion sweep: demoted ' + _evicted + ' conflicting placement(s) → Free');
                 else console.log('[STEP 7.9] Pinned-facility exclusion sweep: ✅ no conflicts');
+
+                // ★ RE-HEAL: a slot demoted to Free above ran AFTER every fill pass
+                //   (7.5/7.6/7.65), so nothing downstream would refill it — the eviction
+                //   just leaves a bare Free. Retry each freed slot through the same
+                //   reservation-aware fallback the STEP 7.5 fill uses (buildCandidates now
+                //   honors fieldReservations, so it can't re-pick the reserved court), so
+                //   an eviction lands a real activity when the window has any open field
+                //   instead of a Free. No-op when the window is genuinely saturated.
+                //   Killswitch: window.__pinnedEvictReheal = false.
+                if (_evReheal.length && window.__pinnedEvictReheal !== false
+                    && window.AutoFillSlot && typeof window.AutoFillSlot.autoFillSlotSilent === 'function') {
+                    let _rh = 0;
+                    _evReheal.forEach(function (s) {
+                        try {
+                            const _cur = (_evSA[s.bunk] || [])[s.idx];
+                            // Only refill the Free we just created — never clobber a restore.
+                            if (_cur && _cur._pinnedFacilityEvicted
+                                && window.AutoFillSlot.autoFillSlotSilent(s.bunk, s.idx)) _rh++;
+                        } catch (_eRh) {}
+                    });
+                    if (_rh) console.log('[STEP 7.9] Re-heal: refilled ' + _rh + ' / ' + _evReheal.length + ' evicted slot(s) with a reservation-safe activity');
+                    else console.log('[STEP 7.9] Re-heal: ' + _evReheal.length + ' evicted slot(s) had no reservation-safe fill (left Free)');
+                }
             }
         } catch (_e79) {
             console.warn('[STEP 7.9] pinned-facility exclusion sweep failed:', _e79);
+        }
+
+        // =========================================================================
+        // STEP 7.95: CROSS-DAY REPEAT HEAL (improve-only)
+        // The solver's yesterday policy is SOFT (finite YESTERDAY_PENALTY, best-of-3
+        // passes + RECENCY-SWAP), so a did-it-yesterday placement can survive when
+        // the winning pass carried it and no swap partner existed — observed live
+        // 2026-07-09: single-bunk division לב got Dodgeball @740-805 two days
+        // running; RECENCY-SWAP had no same-window peer to trade with. Every FILLER
+        // is already yesterday-gated; this sweep closes the last path (main solver
+        // commits) by re-running each repeat through the gated fallback filler.
+        // IMPROVE-ONLY: the filler can only return a non-repeat (its yesterday gate
+        // excludes the current activity) — if it returns nothing, the original is
+        // restored, so a repeat is never traded for a Free.
+        // Runs BEFORE STEP 8 (history update), so recency still measures yesterday.
+        // Killswitch: window.__repeatHealSweep = false.
+        // =========================================================================
+        try {
+            const _res95 = (typeof window._healCrossDayRepeats === 'function') ? window._healCrossDayRepeats() : null;
+            if (_res95) {
+                if (_res95.healed + _res95.kept === 0) console.log('[STEP 7.95] cross-day repeat heal: ✅ no solver repeats');
+                else console.log('[STEP 7.95] cross-day repeat heal: ' + _res95.healed + ' healed, ' + _res95.kept + ' kept (no legal alternative)');
+            }
+        } catch (_e95) {
+            console.warn('[STEP 7.95] cross-day repeat heal failed:', _e95);
+        }
+
+        // =========================================================================
+        // STEP 7.96: KEEP-IN-USE FACILITY SWEEP
+        // A facility flagged "Keep in use" in Facilities must never sit idle
+        // while activities are running — whoever fills it is fine. Leagues cover
+        // the periods they can (scheduler_core_leagues _keepInUsePass); this
+        // sweep covers every remaining period from a regular bunk. See
+        // keepFacilitiesInUse above. Runs AFTER the repeat heal (so it can't be
+        // undone) and BEFORE STEP 8 (so history records what really happened).
+        // Killswitch: window.__keepInUseSweep = false.
+        // =========================================================================
+        try {
+            const _res96 = (typeof window._keepFacilitiesInUse === 'function') ? window._keepFacilitiesInUse() : null;
+            if (_res96) {
+                if (_res96.filled === 0 && _res96.unfillable === 0) {
+                    console.log('[STEP 7.96] keep-in-use: ✅ all required facilities already busy every period (' + _res96.covered + ' window(s))');
+                } else {
+                    console.log('[STEP 7.96] keep-in-use: filled ' + _res96.filled + ' idle period(s), ' +
+                        _res96.covered + ' already covered' +
+                        (_res96.unfillable ? ', ' + _res96.unfillable + ' could not be covered' : ''));
+                }
+            }
+        } catch (_e96) {
+            console.warn('[STEP 7.96] keep-in-use sweep failed:', _e96);
+        }
+
+        // =========================================================================
+        // STEP 7.97: PER-BUNK DELETION ENFORCEMENT (manual analog of the auto pass)
+        // The 🗑 button on a bunk-override tile writes an overrideMode:'delete'
+        // override. STEP 2 pinned a sentinel so no backfill pass could claim the
+        // slot; now that every fill pass has run, turn those sentinels into real
+        // empty slots. We ALSO re-read the overrides and evict anything that still
+        // occupies a delete window — a later pass may have written into the slot
+        // through a path that doesn't consult the pin (mirrors the auto builder's
+        // "re-derive from saved overrides" belt-and-braces enforcement).
+        // Runs BEFORE STEP 8 so rotation history never counts a deleted block.
+        // =========================================================================
+        try {
+            // Re-derive from the saved overrides rather than closing over STEP 2's
+            // local — same reasoning as the auto builder's enforcement pass. Prefer
+            // `externalOverrides` (a live reference that survives the mid-run cloud
+            // re-hydrate that clobbers loadCurrentDailyData during partial regen).
+            const _srcOvs97 = (externalOverrides && Array.isArray(externalOverrides.bunkActivityOverrides) && externalOverrides.bunkActivityOverrides.length)
+                ? externalOverrides.bunkActivityOverrides
+                : (window.loadCurrentDailyData?.().bunkActivityOverrides || []);
+            const _delOvs = {};
+            _srcOvs97.forEach(ov => {
+                if (!ov || ov.overrideMode !== 'delete' || !ov.bunk) return;
+                const _p97 = window.SchedulerCoreUtils?.parseTimeToMinutes;
+                const s = ov.startMin ?? (_p97 ? _p97(ov.startTime) : null);
+                const e = ov.endMin ?? (_p97 ? _p97(ov.endTime) : null);
+                if (s == null || e == null || e <= s) return;
+                (_delOvs[ov.bunk] = _delOvs[ov.bunk] || []).push({ s, e });
+            });
+            let _cleared97 = 0, _evicted97 = 0;
+            Object.keys(window.scheduleAssignments || {}).forEach(bunk => {
+                const arr = window.scheduleAssignments[bunk];
+                if (!Array.isArray(arr)) return;
+                const wins = _delOvs[bunk] || [];
+                for (let i = 0; i < arr.length; i++) {
+                    const e = arr[i];
+                    if (!e) continue;
+                    if (e._layerDeleted) { arr[i] = null; _cleared97++; continue; }
+                    if (!wins.length) continue;
+                    // League/head-to-head blocks belong to the division, not the bunk —
+                    // a per-bunk deletion must never dissolve a scheduled game.
+                    if (e._league || e._h2h) continue;
+                    const s = e._startMin, en = e._endMin;
+                    if (s == null || en == null) continue;
+                    // CONTAINMENT, not overlap: only evict a block that lives inside the
+                    // deleted window. A longer neighbouring block that merely straddles
+                    // the edge was never the thing the user deleted.
+                    if (wins.some(w => s >= w.s && en <= w.e)) { arr[i] = null; _evicted97++; }
+                }
+            });
+            if (_cleared97 || _evicted97) {
+                console.log(`[STEP 7.97] Per-bunk deletions: ${_cleared97} slot(s) left empty` +
+                    (_evicted97 ? `, ${_evicted97} late placement(s) evicted` : ''));
+            }
+        } catch (_e97) {
+            console.warn('[STEP 7.97] per-bunk deletion enforcement failed:', _e97);
         }
 
         // =========================================================================
@@ -7100,27 +8184,17 @@ console.log(`[Generation] Rainy Day Mode: ${window.isRainyDay ? 'ACTIVE 🌧️'
 
         // ★★★ UPDATE ROTATION HISTORY (timestamps) AND HISTORICAL COUNTS ★★★
         try {
-            const newHistory = window.loadRotationHistory?.() || { bunks: {}, leagues: {} };
-            newHistory.bunks = newHistory.bunks || {};
-            newHistory.leagues = newHistory.leagues || {};
-
-            const timestamp = Date.now();
-
+            // ★ Scope for the rotation-history rebuild: the bunks THIS run
+            //   generated. A scheduler's local daily cache only holds their own
+            //   bunks, so re-deriving timestamps for someone else's bunks would
+            //   truncate their history (CB-72).
+            const _rotScopeBunks = [];
             Object.keys(window.scheduleAssignments || {}).forEach(bunk => {
-                (window.scheduleAssignments[bunk] || []).forEach(entry => {
-                    if (!entry || entry.continuation || entry._isTransition) return;
-                    const actName = entry._activity || entry.sport || '';
-                    if (!actName) return;
-
-                    const actLower = actName.toLowerCase();
-                    if (actLower === 'free' || actLower.includes('transition')) return;
-
-                    newHistory.bunks[bunk] = newHistory.bunks[bunk] || {};
-                    newHistory.bunks[bunk][actName] = timestamp;
-                });
+                if (!allowedDivisionsSet) { _rotScopeBunks.push(bunk); return; }
+                const dn = Object.keys(divisions || {}).find(d =>
+                    ((divisions[d] || {}).bunks || []).some(b => String(b) === String(bunk)));
+                if (dn && allowedDivisionsSet.has(String(dn))) _rotScopeBunks.push(bunk);
             });
-
-            window.saveRotationHistory?.(newHistory);
 
             // ★★★ REBUILD HISTORICAL COUNTS FROM ALL SCHEDULES ★★★
             // saveSchedule (below) writes localStorage synchronously, so a rebuild
@@ -7138,15 +8212,55 @@ console.log(`[Generation] Rainy Day Mode: ${window.isRainyDay ? 'ACTIVE 🌧️'
                     if (window.RotationCloud?.save) {
                         window.RotationCloud.save(schedDateKey, window.scheduleAssignments || {});
                     }
+                    // ★ Last-done timestamps: RE-DERIVE, never merge. The old
+                    //   code stamped every activity on the fresh grid and left
+                    //   everything else alone, so an activity a partial regen (or
+                    //   a tile edit) replaced kept today's timestamp forever —
+                    //   the engine and the analytics last-done column both went
+                    //   on treating it as done today. Re-deriving from the saved
+                    //   days drops it back to the last day it really happened.
+                    if (window.SchedulerCoreUtils?.rebuildRotationHistoryForBunks) {
+                        window.SchedulerCoreUtils.rebuildRotationHistoryForBunks(_rotScopeBunks);
+                    }
                 } catch (e) { console.warn('[Optimizer] post-gen counts rebuild failed:', e); }
             };
             // Defer just past saveSchedule (called below) so allDaily has today.
             setTimeout(_runCountsRebuild, 0);
 
-            console.log('📊 Rotation history updated, historical counts rebuild scheduled');
+            console.log('📊 Rotation history rebuild + historical counts rebuild scheduled for ' + _rotScopeBunks.length + ' bunk(s)');
 
         } catch (e) {
             console.error("History update failed:", e);
+        }
+
+        // =========================================================================
+        // STEP 8.5: LEAGUE HISTORY ↔ SCHEDULE RECONCILE (per-tile regen only)
+        // =========================================================================
+        // A per-tile regen decides which league day-records to preserve BEFORE the
+        // run, from the geometry of the selected tiles (buildTimeRegenScope's
+        // preservedLeagueLabels). When the edit moved the league period out from
+        // under that selection — the league tile was deleted and a neighbour was
+        // regenerated, the replacement tile starts at a different time, or a bunk
+        // fell back to a whole-day re-roll — the prediction and the schedule
+        // disagree, and the old matchup keeps counting as played even though the
+        // grid no longer shows it. The grid is final here, so reconcile against it.
+        //
+        // Scoped to the per-tile regen: a full or division-scoped generation rolls
+        // the day back and re-records exactly what it schedules, so it is already
+        // consistent (and this would be a no-op). Skipped under rain, where the
+        // league engines never ran and the mid-day cut path owns the rollback.
+        try {
+            const _regenActive = !!window.__regenSlotScope;
+            const _leaguesRan = !(isRainyDayModeActive() || window.isRainyDay === true);
+            if (_regenActive && _leaguesRan && window.SchedulerCoreUtils?.survivingLeagueLabels) {
+                const _rcDate = window._activeGenDate || window.currentScheduleDate;
+                const _rcDivs = allowedDivisionsSet ? Array.from(allowedDivisionsSet) : null;
+                const _surv = window.SchedulerCoreUtils.survivingLeagueLabels(window.leagueAssignments || {});
+                window.SchedulerCoreLeagues?.reconcileDayWithSchedule?.(_rcDivs, _rcDate, _surv.regular);
+                window.SchedulerCoreSpecialtyLeagues?.reconcileDayWithSchedule?.(_rcDivs, _rcDate, _surv.specialty);
+            }
+        } catch (e) {
+            console.warn('[STEP 8.5] league history reconcile failed:', e);
         }
 
         window.saveCurrentDailyData?.("unifiedTimes", window.unifiedTimes);
@@ -7201,6 +8315,6 @@ console.log(`[Generation] Rainy Day Mode: ${window.isRainyDay ? 'ACTIVE 🌧️'
     // ★★★ FIX v17.11: Expose core optimizer for division_times_integration.js ★★★
     window._coreRunSkeletonOptimizer = window.runSkeletonOptimizer;
 
-    console.log('⚙️ Scheduler Core Main v17.11 loaded (RBAC + CAPACITY FIX)');
+    console.log('⚙️ Scheduler Core Main v17.12 loaded (RBAC + CAPACITY FIX + league mismatch common-window check)');
 
 })();

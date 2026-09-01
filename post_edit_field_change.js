@@ -44,7 +44,8 @@
   PEFC.parseMatchup = function (raw) {
     var text = String(raw == null ? '' : raw).trim();
     if (!text) return { kind: 'unknown', raw: text };
-    if (/[—-]\s*bye\s*$/i.test(text)) return { kind: 'bye', raw: text };
+    // "T — Bye" and "T — Bye: <activity>" (the league's Bye Activity setting).
+    if (/[—-]\s*bye\b/i.test(text)) return { kind: 'bye', raw: text };
     if (/[—-]\s*chinuch/i.test(text)) return { kind: 'chinuch', raw: text };
 
     // "A vs B @ Field (Sport)"
@@ -232,7 +233,8 @@
     return Object.keys(set).sort();
   }
 
-  // Teams / sports configured for a league (drives the matchup-editor dropdowns).
+  // Teams / sports configured for a league (drives the matchup-editor dropdowns
+  // and the sport auto-suggest).
   function leagueConfig(leagueName) {
     var byName = window.leaguesByName ||
       (typeof window.loadGlobalSettings === 'function' && (window.loadGlobalSettings() || {}).leaguesByName) || {};
@@ -241,7 +243,105 @@
       var k = Object.keys(byName || {}).filter(function (n) { return norm(n) === norm(leagueName); })[0];
       lg = k ? byName[k] : null;
     }
-    return { teams: (lg && Array.isArray(lg.teams)) ? lg.teams.slice() : [] };
+    return {
+      teams: (lg && Array.isArray(lg.teams)) ? lg.teams.slice() : [],
+      sports: (lg && Array.isArray(lg.sports)) ? lg.sports.slice() : []
+    };
+  }
+
+  // Short labels for WHAT occupies a field during the game's window — mirrors
+  // the regular post-edit report's in-use chips ("League game", "Basketball").
+  // Same three sources fieldHasTimeConflict checks, but collecting names.
+  function fieldOccupants(fieldName, ctx) {
+    var out = [], seen = {};
+    function add(lbl) {
+      lbl = String(lbl == null ? '' : lbl).trim();
+      var k = norm(lbl);
+      if (!lbl || seen[k]) return;
+      seen[k] = 1; out.push(lbl);
+    }
+    if (!fieldName || ctx.startMin == null || ctx.endMin == null) return out;
+    var nf = norm(fieldName);
+    var GFL = window.GlobalFieldLocks;
+    if (GFL && typeof GFL.isFieldLockedByTime === 'function') {
+      try {
+        var lock = GFL.isFieldLockedByTime(fieldName, ctx.startMin, ctx.endMin, ctx.divName);
+        if (lock) {
+          var by = String(lock.lockedBy || '');
+          if (lock.leagueName || by.indexOf('league') !== -1) add('League game');
+          else add(lock.activity || by || 'Reserved');
+        }
+      } catch (e) { /* labels are advisory */ }
+    }
+    var sa = window.scheduleAssignments || {};
+    for (var bunk in sa) {
+      if (!Object.prototype.hasOwnProperty.call(sa, bunk)) continue;
+      var row = sa[bunk]; if (!Array.isArray(row)) continue;
+      for (var i = 0; i < row.length; i++) {
+        var e = row[i]; if (!e) continue;
+        var s = e._startMin, en = e._endMin;
+        if (s == null || en == null || !(s < ctx.endMin && en > ctx.startMin)) continue;
+        var label = (typeof window.fieldLabel === 'function') ? window.fieldLabel(e.field) : e.field;
+        if (label && norm(label) === nf) add(e._activity || bunk);
+        if (Array.isArray(e._allMatchups)) {
+          for (var k = 0; k < e._allMatchups.length; k++) {
+            var p = PEFC.parseMatchup(e._allMatchups[k]);
+            if (p.field && norm(p.field) === nf) add('League game');
+          }
+        }
+        if (Array.isArray(e._assignments)) {
+          for (var j = 0; j < e._assignments.length; j++) {
+            var a = e._assignments[j];
+            if (a && a.field && norm(a.field) === nf) add('League game');
+          }
+        }
+      }
+    }
+    return out;
+  }
+
+  // Does ANY field host this sport free & clear at the game's time?
+  function sportHasFreeField(sport, ctx) {
+    var probe = Object.assign({}, ctx, { selectedSport: sport });
+    var rows = candidateFields(probe);
+    for (var i = 0; i < rows.length; i++) if (rows[i].free) return true;
+    return false;
+  }
+
+  // Auto-suggest: rank the league's sports for the CURRENT pair the way the
+  // scheduler would — a sport with an open field that neither team has played
+  // yet first, then least-played-by-both. Returns up to 3 {sport, reason, free}.
+  function sportSuggestions(ctx, teamA, teamB, curSport) {
+    var LPR = window.LeaguePlayReport;
+    if (!ctx.leagueName || !teamA || !teamB || !LPR || typeof LPR.buildData !== 'function') return [];
+    var data;
+    try { data = LPR.buildData(ctx.leagueName, 'regular'); } catch (e) { return []; }
+    var cfg = leagueConfig(ctx.leagueName);
+    var sports = (cfg.sports && cfg.sports.length) ? cfg.sports : allSports();
+    function cnt(team, sport) {
+      var lt = norm(team);
+      for (var t in data.byTeam) {
+        if (norm(t) !== lt) continue;
+        var rec = data.byTeam[t].sports || {};
+        for (var sName in rec) if (norm(sName) === norm(sport)) return rec[sName];
+        return 0;
+      }
+      return 0;
+    }
+    var scored = [];
+    sports.forEach(function (s) {
+      if (!s || norm(s) === norm(curSport)) return;
+      var cA = cnt(teamA, s), cB = cnt(teamB, s);
+      scored.push({ sport: s, cA: cA, cB: cB, total: cA + cB, free: sportHasFreeField(s, ctx) });
+    });
+    scored.sort(function (a, b) {
+      return (b.free - a.free) || (a.total - b.total) || a.sport.localeCompare(b.sport);
+    });
+    return scored.slice(0, 3).map(function (r) {
+      var reason = (!r.cA && !r.cB) ? 'new for both'
+        : esc(teamA) + ' ' + r.cA + '× · ' + esc(teamB) + ' ' + r.cB + '×';
+      return { sport: r.sport, reason: reason, free: r.free };
+    });
   }
 
   // ── context builder ──────────────────────────────────────────────────────
@@ -275,6 +375,14 @@
 
     if (!games.length) return null;
 
+    // Flag each game that's currently marked "did not play" (tag lives on the
+    // leagueAssignments slot record and/or the per-bunk entry) so the editor
+    // shows Undo instead of Mark and the picker can badge it.
+    games.forEach(function (g) {
+      g._didNotPlay = (laEntry && PEFC.isDidNotPlay(laEntry, g)) ||
+        (entryHint && PEFC.isDidNotPlay(entryHint, g)) || false;
+    });
+
     // Specialty fallback: when the league flag wasn't carried on the hint/entry,
     // the matchup STRING format reveals it — specialty uses "A vs B — Field"
     // (dash), regular uses "A vs B @ Field (Sport)" (at). This keeps the gameLog
@@ -288,9 +396,125 @@
       leagueName: leagueName, sportFallback: sportFallback,
       slots: slotIndicesForRange(divName, startMin, endMin, slotIdx),
       games: games,
-      game: null // chosen later
+      game: null, // chosen later
+      // Post-edit CUSTOM TEXT (a free note shown under the game on the schedule,
+      // print & live view). Lives on the leagueAssignments slot record.
+      customText: (laEntry && laEntry.customText) || '',
+      // "Game N" for this league PERIOD (not this one matchup) — what the
+      // schedule, the print header and the Leagues results page all call it.
+      gameLabel: (laEntry && laEntry.gameLabel) || (entryHint && entryHint._gameLabel) || ''
     };
   }
+
+  // ── GAME NUMBER ───────────────────────────────────────────────────────────
+  // The number belongs to the whole league period. It lives in four stores that
+  // don't derive from each other — the engine's gameLog (which the Leagues
+  // results page is built from), the day's leagueAssignments, the per-bunk
+  // copy, and the live in-memory assignments — so editing it here hands off to
+  // SchedulerCoreLeagues.renumberGame, which moves all four together and
+  // re-pushes the results list. Anything less and the number reverts on reload
+  // or disagrees with the Leagues page.
+  // Returns { ok, message }.
+  PEFC.applyGameNumber = function (ctx, newNumber) {
+    if (!ctx || ctx.kind !== 'regular') return { ok: false, message: 'Only regular league games are numbered.' };
+    var n = parseInt(newNumber, 10);
+    if (!isFinite(n) || n < 1) return { ok: false, message: 'Enter a game number of 1 or more.' };
+    var oldLabel = ctx.gameLabel || '';
+    var newLabel = 'Game ' + n;
+    if (!/^Game\s+\d+$/i.test(oldLabel)) return { ok: false, message: 'This period has no game number to change.' };
+    if (oldLabel === newLabel) return { ok: false, message: 'Nothing changed.' };
+
+    var core = window.SchedulerCoreLeagues;
+    if (!core || typeof core.renumberGame !== 'function') {
+      return { ok: false, message: 'The league engine is not loaded — reload the page and try again.' };
+    }
+    var date = window._scheduleAssignmentsDate || window.currentScheduleDate;
+    if (!date) return { ok: false, message: 'No schedule date — reload the page and try again.' };
+
+    var res = core.renumberGame(ctx.leagueName, date, oldLabel, newLabel);
+    if (!res || !res.ok) return { ok: false, message: (res && res.reason) || 'Could not renumber this game.' };
+    ctx.gameLabel = newLabel;
+
+    // renumberGame already wrote the stored day; push it through THIS page's
+    // save path too so the live view and other sessions pick it up the same way
+    // a custom-text edit does. Both are idempotent.
+    try {
+      if (typeof window.saveCurrentDailyData === 'function') {
+        window.saveCurrentDailyData('leagueAssignments', window.leagueAssignments || {});
+      }
+      var divBunks = ((window.divisions || {})[ctx.divName] || {}).bunks || [];
+      if (typeof window.bypassSaveAllBunks === 'function' && divBunks.length) {
+        Promise.resolve(window.bypassSaveAllBunks(divBunks.map(String))).catch(function (e) { console.warn('[PEFC] renumber cloud save:', e); });
+      }
+    } catch (e) { console.warn('[PEFC] renumber persist:', e); }
+    if (typeof window.updateTable === 'function') { try { window.updateTable(); } catch (e) {} }
+
+    return {
+      ok: true,
+      message: res.swappedWith
+        ? ('Renumbered to ' + newLabel + ' — swapped with the other game on this date.')
+        : ('Renumbered to ' + newLabel + '.')
+    };
+  };
+
+  // The shared markup + wiring for the game-number row, used by both modals.
+  function gameNumberHtml(ctx) {
+    if (ctx.kind !== 'regular' || !/^Game\s+\d+$/i.test(ctx.gameLabel || '')) return '';
+    var cur = String(ctx.gameLabel).replace(/[^0-9]/g, '');
+    return '<div style="margin-top:14px;padding-top:14px;border-top:1px solid #f0f0f2;">' +
+      '<label style="display:block;font-weight:600;font-size:0.82rem;color:#374151;margin-bottom:6px;">Game number ' +
+      '<span style="font-weight:400;color:#9ca3af;">(this whole league period)</span></label>' +
+      '<div style="display:flex;gap:8px;align-items:center;">' +
+      '<span style="font-size:0.9rem;color:#374151;">Game</span>' +
+      '<input id="pefc-game-number" type="number" min="1" value="' + esc(cur) + '"' +
+      ' style="width:90px;padding:9px 11px;border:1.5px solid #d1d5db;border-radius:8px;font-size:0.9rem;box-sizing:border-box;background:#fff;">' +
+      '<button id="pefc-save-game-number" style="flex:1;padding:9px;border:none;border-radius:8px;background:#2563eb;color:#fff;font-size:0.85rem;font-weight:600;cursor:pointer;">Save game number</button>' +
+      '</div>' +
+      '<div style="font-size:0.72rem;color:#9ca3af;margin-top:3px;">Updates the schedule, the printout and the Leagues results page. ' +
+      'If another game on this date already has that number, the two swap.</div></div>';
+  }
+
+  function wireGameNumber(box, ctx) {
+    var btn = box.querySelector('#pefc-save-game-number');
+    if (!btn) return;
+    btn.onclick = function () {
+      var el = box.querySelector('#pefc-game-number');
+      var res = PEFC.applyGameNumber(ctx, el ? el.value : '');
+      if (!res.ok) { toast(res.message, res.message === 'Nothing changed.' ? 'info' : 'warning'); return; }
+      closeModal();
+      toast(res.message, 'success');
+    };
+  }
+
+  // ── CUSTOM TEXT (league note) ─────────────────────────────────────────────
+  // Writes/clears the note on the leagueAssignments slot record and persists.
+  // Returns true when the stored value actually changed.
+  PEFC.applyCustomText = function (ctx, text) {
+    if (!ctx || !ctx.divName) return false;
+    var la = window.leagueAssignments && window.leagueAssignments[ctx.divName];
+    if (!la) return false;
+    var laEntry = la[ctx.slotIdx] || la[String(ctx.slotIdx)];
+    if (!laEntry) return false;
+    var clean = String(text == null ? '' : text).trim();
+    var prev = laEntry.customText || '';
+    if (clean === prev) return false;
+    if (clean) laEntry.customText = clean;
+    else delete laEntry.customText;
+    ctx.customText = clean;
+    try {
+      if (typeof window.saveCurrentDailyData === 'function') {
+        window.saveCurrentDailyData('leagueAssignments', window.leagueAssignments || {});
+      }
+      // Cloud: leagueAssignments rides the bunk save payload — push the
+      // division's bunks so the note syncs to other sessions / the live view.
+      var divBunks = ((window.divisions || {})[ctx.divName] || {}).bunks || [];
+      if (typeof window.bypassSaveAllBunks === 'function' && divBunks.length) {
+        Promise.resolve(window.bypassSaveAllBunks(divBunks.map(String))).catch(function (e) { console.warn('[PEFC] note cloud save:', e); });
+      }
+    } catch (e) { console.warn('[PEFC] note persist:', e); }
+    if (typeof window.updateTable === 'function') { try { window.updateTable(); } catch (e) {} }
+    return true;
+  };
 
   // ── APPLY ────────────────────────────────────────────────────────────────
   // Rewrites the field of ctx.game across every store, swaps the field lock,
@@ -477,6 +701,184 @@
     if (hit) window.saveGlobalSettings('specialtyLeagueHistory', history);
   }
 
+  // Remove a specialty game's entry from its gameLog so the bracket / variety /
+  // print history no longer thinks it happened. Mirrors updateSpecialtyGameLog's
+  // lookup (league id → date → matching tA/tB/field) but SPLICES the entry.
+  function removeSpecialtyGameLog(ctx) {
+    if (typeof window.loadGlobalSettings !== 'function' || typeof window.saveGlobalSettings !== 'function') return;
+    var gs = window.loadGlobalSettings() || {};
+    var history = gs.specialtyLeagueHistory;
+    if (!history || !history.gameLog) return;
+    // specialtyLeagues can be an ARRAY or an object map keyed by id — normalize.
+    var raw = gs.specialtyLeagues || [];
+    var list = Array.isArray(raw) ? raw : Object.keys(raw).map(function (k) { return raw[k]; });
+    var league = list.filter(function (l) { return l && norm(l.name) === norm(ctx.leagueName); })[0];
+    var id = league ? league.id : null;
+    var date = window._scheduleAssignmentsDate || window.currentScheduleDate;
+    if (!id || !date || !history.gameLog[id] || !history.gameLog[id][date]) return;
+    var entries = history.gameLog[id][date];
+    var kept = entries.filter(function (g) {
+      var match = sameTeams({ teamA: g.tA, teamB: g.tB }, ctx.game) && norm(g.field) === norm(ctx.game.field);
+      return !match;
+    });
+    if (kept.length !== entries.length) {
+      history.gameLog[id][date] = kept;
+      window.saveGlobalSettings('specialtyLeagueHistory', history);
+    }
+  }
+
+  function addSpecialtyGameLog(ctx) {
+    if (typeof window.loadGlobalSettings !== 'function' || typeof window.saveGlobalSettings !== 'function') return;
+    var gs = window.loadGlobalSettings() || {};
+    var history = gs.specialtyLeagueHistory;
+    if (!history || !history.gameLog) return;
+    var raw = gs.specialtyLeagues || [];
+    var list = Array.isArray(raw) ? raw : Object.keys(raw).map(function (k) { return raw[k]; });
+    var league = list.filter(function (l) { return l && norm(l.name) === norm(ctx.leagueName); })[0];
+    var id = league ? league.id : null;
+    var date = window._scheduleAssignmentsDate || window.currentScheduleDate;
+    if (!id || !date) return;
+    history.gameLog[id] = history.gameLog[id] || {};
+    history.gameLog[id][date] = history.gameLog[id][date] || [];
+    var entries = history.gameLog[id][date];
+    var g = ctx.game;
+    var exists = entries.some(function (e) { return sameTeams({ teamA: e.tA, teamB: e.tB }, g) && norm(e.field) === norm(g.field); });
+    if (!exists) {
+      entries.push({ tA: g.teamA, tB: g.teamB, field: g.field, sport: g.sport || null, g: 'Game' });
+      window.saveGlobalSettings('specialtyLeagueHistory', history);
+    }
+  }
+
+  // ── DID NOT PLAY (mark a game as cancelled — keep it visible) ──────────────
+  // A "did not play" game STAYS ON EVERY SURFACE (grid / print / live view) but
+  // is drawn struck-through with a red ✗ — it was supposed to happen and didn't.
+  // We tag the game with a stable key on every store record that holds it AND
+  // roll back the rotation / matchup / sport history so the variety logic knows
+  // it never happened. Toggle: opts.undo restores it (untag + re-add history).
+  // The field lock is deliberately left as-is — the game still visually sits on
+  // its field.
+
+  // Stable, order-independent identifier for a matchup within a slot.
+  PEFC.dnpKey = function (teamA, teamB, field) {
+    var a = norm(teamA), b = norm(teamB);
+    var pair = (a < b) ? (a + '~' + b) : (b + '~' + a);
+    return pair + '@' + norm(field == null ? '' : field);
+  };
+
+  // Renderer hook: is this matchup (string OR object) flagged did-not-play on
+  // the store entry that holds it? Every render site calls this per drawn game.
+  PEFC.isDidNotPlay = function (entry, matchup) {
+    if (!entry || !Array.isArray(entry._didNotPlay) || !entry._didNotPlay.length) return false;
+    var g = (matchup && typeof matchup === 'object') ? PEFC.normalizeGame(matchup) : PEFC.parseMatchup(matchup);
+    if (!g || (!g.teamA && !g.teamB)) return false;
+    return entry._didNotPlay.indexOf(PEFC.dnpKey(g.teamA, g.teamB, g.field)) !== -1;
+  };
+
+  PEFC.markDidNotPlay = function (ctx, opts) {
+    if (!ctx || !ctx.game) return { ok: false, message: 'Nothing to change.' };
+    var undo = !!(opts && opts.undo);
+    var g = ctx.game;
+    var field = g.field, A = g.teamA, B = g.teamB, sport = g.sport;
+    var key = PEFC.dnpKey(A, B, field);
+
+    // Match ONLY this specific game: same unordered team pair AND on the field it
+    // sits on (so a double-header — same teams twice on two fields — is precise).
+    function isTarget(p) { return PEFC.isEditableMatchup(p) && sameTeams(p, g) && norm(p.field) === norm(field); }
+    function isTargetObj(o) { var t = { teamA: o.teamA || o.team1, teamB: o.teamB || o.team2 }; return sameTeams(t, g) && norm(o.field) === norm(field); }
+    function entryHasGame(entry) {
+      if (Array.isArray(entry._allMatchups) && entry._allMatchups.some(function (it) { return isTarget(PEFC.parseMatchup(it)); })) return true;
+      if (Array.isArray(entry.matchups) && entry.matchups.some(function (it) {
+        return (typeof it === 'string') ? isTarget(PEFC.parseMatchup(it)) : (it && (it.teamA || it.team1) && isTargetObj(it));
+      })) return true;
+      if (Array.isArray(entry._assignments) && entry._assignments.some(function (a) { return a && isTargetObj(a); })) return true;
+      return false;
+    }
+    // Add / remove the key on an entry's _didNotPlay tag list. Returns true when
+    // the entry actually changed.
+    function tag(entry) {
+      if (!entry) return false;
+      var arr = Array.isArray(entry._didNotPlay) ? entry._didNotPlay : (entry._didNotPlay = []);
+      var at = arr.indexOf(key);
+      if (undo) { if (at !== -1) { arr.splice(at, 1); if (!arr.length) delete entry._didNotPlay; return true; } return false; }
+      if (at === -1) { arr.push(key); return true; }
+      return false;
+    }
+
+    var touchedBunks = [];
+    var changedAny = false, foundAny = false;
+
+    // (1) Per-bunk scheduleAssignments — tag every entry that holds this game.
+    var sa = window.scheduleAssignments || {};
+    for (var bunk in sa) {
+      if (!Object.prototype.hasOwnProperty.call(sa, bunk)) continue;
+      var row = sa[bunk]; if (!Array.isArray(row)) continue;
+      var changed = false;
+      for (var si = 0; si < row.length; si++) {
+        var entry = row[si]; if (!entry) continue;
+        if (entryHasGame(entry)) { foundAny = true; if (tag(entry)) changed = true; }
+      }
+      if (changed) { touchedBunks.push(bunk); changedAny = true; }
+    }
+
+    // (2) leagueAssignments — every division (connected grades share the game).
+    var laAll = window.leagueAssignments || {};
+    Object.keys(laAll).forEach(function (dn) {
+      var la = laAll[dn]; if (!la) return;
+      Object.keys(la).forEach(function (slotKey) {
+        var laEntry = la[slotKey]; if (!laEntry) return;
+        if (entryHasGame(laEntry)) { foundAny = true; if (tag(laEntry)) changedAny = true; }
+      });
+    });
+
+    if (!foundAny) return { ok: false, message: 'Game not found.' };
+    if (!changedAny) return { ok: true, noop: true, message: undo ? 'Already marked as played.' : 'Already marked as did not play.' };
+
+    // (3) Rotation / variety history: mark → subtract, undo → re-add. Date is the
+    //     schedule actually loaded/edited (see note in applyFieldChange).
+    var dateKey = window._scheduleAssignmentsDate || window.currentScheduleDate;
+    if (ctx.kind === 'specialty') {
+      try { if (undo) addSpecialtyGameLog(ctx); else removeSpecialtyGameLog(ctx); }
+      catch (e) { console.warn('[PEFC] specialty gameLog toggle skipped:', e); }
+    } else {
+      try {
+        if (window.SchedulerCoreLeagues && typeof window.SchedulerCoreLeagues.editGameRecord === 'function') {
+          if (undo) window.SchedulerCoreLeagues.editGameRecord(ctx.leagueName, dateKey, null, { teamA: A, teamB: B, sport: sport });
+          else window.SchedulerCoreLeagues.editGameRecord(ctx.leagueName, dateKey, { teamA: A, teamB: B, sport: sport }, null);
+        }
+      } catch (e) { console.warn('[PEFC] league rotation toggle skipped:', e); }
+    }
+
+    // Reflect on the in-session game so the modal + picker show the new state.
+    g._didNotPlay = !undo;
+
+    // (4) Persist + re-render. Same channels as applyFieldChange, PLUS a
+    //     whole-object ScheduleDB save so the DIVISION-keyed _didNotPlay flag
+    //     lands in the cloud record — the per-bunk bypass overlay is a no-op for
+    //     division keys, so without this the mark could be lost on reload (the
+    //     grid reads leagueAssignments). scheduleAssignments is filtered to my
+    //     bunks (multi-scheduler safe); leagueAssignments is saved wholesale.
+    try {
+      if (typeof window.saveCurrentDailyData === 'function') {
+        window.saveCurrentDailyData('scheduleAssignments', window.scheduleAssignments);
+        window.saveCurrentDailyData('leagueAssignments', window.leagueAssignments || {});
+      }
+      if (typeof window.bypassSaveAllBunks === 'function' && touchedBunks.length) {
+        Promise.resolve(window.bypassSaveAllBunks(touchedBunks)).catch(function (e) { console.warn('[PEFC] cloud save:', e); });
+      }
+      if (window.ScheduleDB && typeof window.ScheduleDB.saveSchedule === 'function' && dateKey) {
+        Promise.resolve(window.ScheduleDB.saveSchedule(dateKey, {
+          scheduleAssignments: window.scheduleAssignments,
+          leagueAssignments: window.leagueAssignments || {},
+          divisionTimes: (window.DivisionTimesSystem && typeof window.DivisionTimesSystem.serialize === 'function')
+            ? window.DivisionTimesSystem.serialize(window.divisionTimes) : window.divisionTimes
+        }, { immediate: true, forceSync: true })).catch(function (e) { console.warn('[PEFC] league cloud save:', e); });
+      }
+    } catch (e) { console.warn('[PEFC] persist:', e); }
+    if (typeof window.updateTable === 'function') { try { window.updateTable(); } catch (e) {} }
+
+    return { ok: true, message: g.teams + (undo ? ' — restored (played)' : ' — marked as did not play') };
+  };
+
   // ── MODAL UI ─────────────────────────────────────────────────────────────
   var OVERLAY_ID = 'pefc-overlay';
   function closeModal() { var el = document.getElementById(OVERLAY_ID); if (el) el.remove(); }
@@ -490,7 +892,9 @@
     ov.addEventListener('mousedown', function (e) { _mdFieldChangeOv = (e.target === ov); });
     ov.onclick = function (e) { if (e.target === ov && _mdFieldChangeOv) closeModal(); };
     var box = document.createElement('div');
-    box.style.cssText = 'background:#fff;border-radius:12px;padding:22px;min-width:380px;max-width:460px;box-shadow:0 20px 60px rgba(0,0,0,0.3);max-height:80vh;overflow:auto;';
+    // Roomy on desktop (field buttons + play report need the width), shrinks
+    // cleanly on small screens.
+    box.style.cssText = 'background:#fff;border-radius:12px;padding:24px 26px;width:min(620px,94vw);box-sizing:border-box;box-shadow:0 20px 60px rgba(0,0,0,0.3);max-height:88vh;overflow:auto;';
     box.onclick = function (e) { e.stopPropagation(); };
     box.innerHTML = innerHtml;
     ov.appendChild(box);
@@ -504,29 +908,102 @@
       '<button id="pefc-close" style="background:none;border:none;font-size:1.5rem;cursor:pointer;color:#9ca3af;">&times;</button></div>';
   }
 
+  // League play-history mini report (who played what & when) shown inside the
+  // edit modal — compact: matchup + sport notes for the game being edited,
+  // full history behind a collapsed toggle. Rendered by league_play_report.js.
+  function miniReportHtml(ctx, highlightTeams, selectedSport) {
+    if (!ctx || !ctx.leagueName) return '';
+    var LPR = window.LeaguePlayReport;
+    if (!LPR || typeof LPR.renderMiniCard !== 'function') return '';
+    try {
+      return LPR.renderMiniCard(ctx.leagueName, ctx.kind === 'specialty' ? 'specialty' : 'regular',
+        { highlightTeams: highlightTeams || [], selectedSport: selectedSport || '' });
+    } catch (e) { return ''; }
+  }
+
   function showGamePicker(ctx) {
+    // Tiny per-game history note ("First meeting" / "Played 2× · last Jul 6")
+    // instead of a full report — the picker stays a simple list.
+    var lprData = null;
+    var LPR = window.LeaguePlayReport;
+    if (ctx.leagueName && LPR && typeof LPR.buildData === 'function') {
+      try { lprData = LPR.buildData(ctx.leagueName, ctx.kind === 'specialty' ? 'specialty' : 'regular'); }
+      catch (e) { lprData = null; }
+    }
     var rows = ctx.games.map(function (g, i) {
+      var histNote = '';
+      if (lprData && typeof LPR.pairNoteHtml === 'function') {
+        var n = LPR.pairNoteHtml(null, ctx.kind, g.teamA, g.teamB, lprData);
+        if (n) histNote = '<div style="font-size:0.72rem;margin-top:2px;">' + n + '</div>';
+      }
+      var dnpBadge = g._didNotPlay ? ' <span style="color:#b91c1c;font-weight:700;font-size:0.78rem;">✗ did not play</span>' : '';
       return '<button class="pefc-game" data-i="' + i + '" style="display:block;width:100%;text-align:left;padding:11px 13px;margin-bottom:8px;border:1.5px solid #e5e7eb;border-radius:9px;background:#f9fafb;cursor:pointer;font-size:0.92rem;">' +
-        '<div style="font-weight:600;color:#1f2937;">' + esc(g.teams) + '</div>' +
+        '<div style="font-weight:600;color:#1f2937;">' + esc(g.teams) + dnpBadge + '</div>' +
         '<div style="font-size:0.8rem;color:#6b7280;margin-top:2px;">' +
-        (g.sport ? esc(g.sport) + ' · ' : '') + 'Currently: <strong>' + esc(g.field || '—') + '</strong></div></button>';
+        (g.sport ? esc(g.sport) + ' · ' : '') + 'Currently: <strong>' + esc(g.field || '—') + '</strong></div>' +
+        histNote + '</button>';
     }).join('');
+    // Custom text for the WHOLE league period — editable right here, no need
+    // to drill into a specific game. Shows as a line under the matchups on the
+    // schedule, print center and live view.
+    var pickerNote = (ctx.pendingCustomText != null) ? ctx.pendingCustomText : (ctx.customText || '');
+    var pickerNoteHtml = '<div style="margin-top:14px;padding-top:14px;border-top:1px solid #f0f0f2;">' +
+      '<label style="display:block;font-weight:600;font-size:0.82rem;color:#374151;margin-bottom:6px;">Custom text <span style="font-weight:400;color:#9ca3af;">(optional — for this whole league period)</span></label>' +
+      '<input id="pefc-picker-custom-text" type="text" value="' + esc(pickerNote) + '" placeholder="Type anything — e.g. Championship round, wear team colors!"' +
+      ' style="width:100%;padding:9px 11px;border:1.5px solid #d1d5db;border-radius:8px;font-size:0.9rem;box-sizing:border-box;background:#fff;">' +
+      '<div style="font-size:0.72rem;color:#9ca3af;margin-top:3px;">Shows under the matchups on the schedule, print &amp; live view. Clear it to remove.</div>' +
+      '<button id="pefc-picker-save-note" style="width:100%;margin-top:10px;padding:9px;border:none;border-radius:8px;background:#2563eb;color:#fff;font-size:0.85rem;font-weight:600;cursor:pointer;">Save custom text</button></div>';
+
     var box = shell(header('Edit a league game') +
       '<div style="font-size:0.85rem;color:#6b7280;margin-bottom:12px;">' + esc(ctx.leagueName || 'League') + ' — pick the game to edit:</div>' +
-      rows);
+      rows + pickerNoteHtml + gameNumberHtml(ctx));
     box.querySelector('#pefc-close').onclick = closeModal;
+    wireGameNumber(box, ctx);
+    function readPickerNote() {
+      var el = box.querySelector('#pefc-picker-custom-text');
+      return el ? String(el.value || '') : '';
+    }
     box.querySelectorAll('.pefc-game').forEach(function (btn) {
       btn.onclick = function () {
+        // Carry any typed-but-unsaved text into the per-game editor's box.
+        ctx.pendingCustomText = readPickerNote();
         ctx.game = ctx.games[parseInt(btn.dataset.i, 10)];
         showFieldPicker(ctx);
       };
     });
+    var saveNoteBtn = box.querySelector('#pefc-picker-save-note');
+    if (saveNoteBtn) saveNoteBtn.onclick = function () {
+      var changed = PEFC.applyCustomText(ctx, readPickerNote().trim());
+      ctx.pendingCustomText = null;
+      if (!changed) { toast('Nothing changed.', 'info'); return; }
+      closeModal();
+      toast('Custom text saved.', 'success');
+    };
   }
 
   function showFieldPicker(ctx) {
+    // GENERAL PICTURE: every configured field, open or in use at this time —
+    // not just the ones hosting the selected sport. Sport-hosting fields come
+    // from the solver-aware candidateFields (capacity/access/lock rules);
+    // the rest are added with a plain time-overlap check and marked hosts:false
+    // so they render as informational (clickable only under Override).
     var cands = candidateFields(ctx);
-    var freeOnes = cands.filter(function (c) { return c.free; });
-    var busyOnes = cands.filter(function (c) { return !c.free; });
+    cands.forEach(function (c) { c.hosts = true; });
+    var hostByKey = {};
+    cands.forEach(function (c) { hostByKey[norm(c.name)] = c; });
+    var allLocs = (typeof window.getAllLocations === 'function') ? (window.getAllLocations() || []) : [];
+    allLocs.forEach(function (l) {
+      if (!l || l.type !== 'field' || hostByKey[norm(l.name)]) return;
+      var isCur = norm(l.name) === norm(ctx.game ? ctx.game.field : '');
+      cands.push({
+        name: l.name, capacity: l.capacity || 1, current: isCur,
+        free: isCur ? false : !fieldHasTimeConflict(l.name, ctx), hosts: false
+      });
+    });
+    var freeOnes = cands.filter(function (c) { return c.free; })
+      .sort(function (a, b) { return a.name.localeCompare(b.name); });
+    var busyOnes = cands.filter(function (c) { return !c.free; })
+      .sort(function (a, b) { return a.name.localeCompare(b.name); });
 
     // Sport editor — only for regular-league matchups, whose string carries the
     // sport ("A vs B @ Field (Sport)"). Specialty ("A vs B — Field") has none.
@@ -572,29 +1049,75 @@
     // clickable and busy ones show as plain greyed text (conflict-safe default).
     var override = !!ctx.override;
 
-    // Render one field as a button. `busy` fields are only clickable under
-    // override; the current field is never re-rendered as a button (it's shown
-    // in the summary header above).
+    // Auto-suggest for THIS matchup: what should these two teams play, given
+    // their sport history and which fields are actually open right now.
+    var suggestHtml = '';
+    if (canEditSport) {
+      var sugs = sportSuggestions(ctx, curA, curB, curSport);
+      if (sugs.length) {
+        suggestHtml = '<div style="background:#f5f6ff;border:1px solid #e0e3fb;border-radius:10px;padding:9px 11px;margin-bottom:14px;">' +
+          '<div style="font-weight:700;color:#4338ca;font-size:0.7rem;text-transform:uppercase;letter-spacing:0.04em;margin-bottom:6px;">Suggested for ' + esc(curA) + ' vs ' + esc(curB) + '</div>' +
+          '<div style="display:flex;flex-wrap:wrap;gap:6px;">' +
+          sugs.map(function (s) {
+            return '<button class="pefc-suggest" data-sport="' + esc(s.sport) + '" style="display:inline-flex;align-items:center;gap:6px;padding:6px 12px;border:1px solid ' + (s.free ? '#c7d2fe' : '#e5e7eb') + ';border-radius:20px;background:#fff;cursor:pointer;font-size:0.8rem;color:#312e81;font-weight:600;">' +
+              esc(s.sport) +
+              '<span style="font-weight:400;color:#6366f1;font-size:0.7rem;">' + s.reason + (s.free ? ' · field open' : ' · no field free') + '</span></button>';
+          }).join('') + '</div></div>';
+      }
+    }
+
+    // Section header — same look as the regular post-edit report's
+    // "OPEN FIELDS NOW / IN USE NOW" rows.
+    function sectionHdr(t, n) {
+      return '<div style="display:flex;align-items:center;gap:6px;margin:12px 0 7px 0;">' +
+        '<span style="font-weight:700;color:#6b7280;font-size:0.7rem;text-transform:uppercase;letter-spacing:0.05em;">' + t + '</span>' +
+        (n != null ? '<span style="background:#eef2ff;color:#4338ca;font-size:0.65rem;font-weight:700;border-radius:10px;padding:1px 7px;">' + n + '</span>' : '') +
+        '<span style="flex:1;height:1px;background:#f0f0f2;"></span></div>';
+    }
+
+    // Render one pickable field as a clean pill button (no cap / sport
+    // annotations — the user knows what plays where):
+    //   open → green, always clickable (a non-hosting field just confirms
+    //     "isn't set up for <sport> — move anyway?" on click).
+    //   busy → red; clickable only under Override (double-book confirm).
     function fieldBtn(c, busy) {
       var isCur = norm(c.name) === norm(ctx.game.field);
+      var nohost = c.hosts === false;
       var clickable = !isCur && (!busy || override);
-      var border = isCur ? '#cbd5e1' : (busy ? (override ? '#fca5a5' : '#e5e7eb') : '#86efac');
-      var bg = isCur ? '#f1f5f9' : (busy ? (override ? '#fef2f2' : '#f9fafb') : '#f0fdf4');
-      var color = isCur ? '#94a3b8' : (busy ? (override ? '#b91c1c' : '#9ca3af') : '#065f46');
-      return '<button class="pefc-field" data-f="' + esc(c.name) + '" data-busy="' + (busy ? '1' : '') + '" ' + (clickable ? '' : 'disabled') +
-        ' style="padding:8px 13px;margin:0 8px 8px 0;border:1.5px solid ' + border + ';border-radius:8px;background:' + bg + ';color:' + color + ';font-size:0.85rem;font-weight:500;cursor:' + (clickable ? 'pointer' : 'default') + ';">' +
-        (busy && override ? '⚠ ' : '') + esc(c.name) + (isCur ? ' (current)' : '') +
-        (c.capacity > 1 ? ' <span style="opacity:0.6;font-size:0.75rem;">(cap:' + c.capacity + ')</span>' : '') +
-        (busy && override ? ' <span style="opacity:0.75;font-size:0.72rem;">in use</span>' : '') + '</button>';
+      var border = isCur ? '#cbd5e1' : (busy ? '#fca5a5' : '#bbf7d0');
+      var bg = isCur ? '#f1f5f9' : (busy ? '#fef2f2' : '#dcfce7');
+      var color = isCur ? '#94a3b8' : (busy ? '#b91c1c' : '#166534');
+      return '<button class="pefc-field" data-f="' + esc(c.name) + '" data-busy="' + (busy ? '1' : '') + '" data-nohost="' + (nohost ? '1' : '') + '" ' + (clickable ? '' : 'disabled') +
+        ' style="padding:6px 14px;margin:0 8px 8px 0;border:1px solid ' + border + ';border-radius:20px;background:' + bg + ';color:' + color + ';font-size:0.82rem;font-weight:500;cursor:' + (clickable ? 'pointer' : 'default') + ';">' +
+        (busy && override ? '⚠ ' : '') + esc(c.name) + (isCur ? ' (current)' : '') + '</button>';
+    }
+
+    // Non-clickable red chip for an in-use field, labeled with WHAT is on it
+    // ("League game", "Basketball", a bunk) like the regular post-edit report.
+    function busyChip(c) {
+      var occ = fieldOccupants(c.name, ctx);
+      var lbl = occ.length
+        ? ' <span style="opacity:0.75;font-weight:400;margin-left:4px;">' + esc(occ.slice(0, 2).join(', ')) + (occ.length > 2 ? ' +' + (occ.length - 2) : '') + '</span>'
+        : '';
+      return '<span style="display:inline-flex;align-items:center;background:#fee2e2;color:#991b1b;border-radius:20px;padding:6px 14px;font-size:0.82rem;font-weight:500;margin:0 8px 8px 0;">' + esc(c.name) + lbl + '</span>';
     }
 
     // Don't list the game's own current field (it's just where the game already
     // is). Everything else busy is genuinely occupied/blocked.
     var busyReal = busyOnes.filter(function (c) { return !c.current; });
-    var freeHtml = freeOnes.map(function (c) { return fieldBtn(c, false); }).join('');
+    var freeHtml = freeOnes.length
+      ? freeOnes.map(function (c) { return fieldBtn(c, false); }).join('')
+      : '<div style="color:#9ca3af;font-size:0.78rem;font-style:italic;margin-bottom:6px;">No open fields at this time</div>';
+
+    var openCaption = freeOnes.length
+      ? '<div style="font-size:0.7rem;color:#9ca3af;margin:-2px 0 6px;">Click a field to move this game there</div>'
+      : '';
+    var openSection =
+      sectionHdr('Open fields now', freeOnes.length) + openCaption +
+      '<div style="display:flex;flex-wrap:wrap;">' + freeHtml + '</div>';
 
     var noFreeNote = (!freeOnes.length && !override)
-      ? '<div style="background:#fef3c7;border:1px solid #fbbf24;border-radius:8px;padding:10px;font-size:0.85rem;color:#78350f;">No free fields for this game at this time. Turn on Override below to place it anyway, or free up a field first.</div>'
+      ? '<div style="background:#fef3c7;border:1px solid #fbbf24;border-radius:8px;padding:10px;font-size:0.85rem;color:#78350f;">No open fields at this time. Turn on Override below to double-book a field, or free one up first.</div>'
       : '';
 
     var overrideHtml =
@@ -602,33 +1125,66 @@
       '<input type="checkbox" id="pefc-override"' + (override ? ' checked' : '') + ' style="width:16px;height:16px;cursor:pointer;">' +
       'Override — let me pick <strong>any</strong> field (may double-book)</label>';
 
-    // Busy fields: clickable warning buttons under override, plain text otherwise.
-    var busyHtml = override
-      ? (busyReal.length ? '<div style="margin-top:6px;"><div style="font-weight:600;font-size:0.8rem;color:#b91c1c;margin-bottom:6px;">In use — pick to place anyway:</div><div style="display:flex;flex-wrap:wrap;">' + busyReal.map(function (c) { return fieldBtn(c, true); }).join('') + '</div></div>' : '')
-      : (busyReal.length ? '<div style="margin-top:12px;font-size:0.78rem;color:#9ca3af;">In use: ' + busyReal.map(function (c) { return esc(c.name); }).join(', ') + '</div>' : '');
+    // In-use fields: labeled red chips; under override they become clickable
+    // warning buttons so the game can be deliberately double-booked.
+    var busyHtml = busyReal.length
+      ? sectionHdr('In use now', busyReal.length) +
+        (override ? '<div style="font-size:0.7rem;color:#b91c1c;margin:-2px 0 6px;">Pick one to place the game anyway (double-books the field)</div>' : '') +
+        '<div style="display:flex;flex-wrap:wrap;">' +
+        busyReal.map(function (c) { return override ? fieldBtn(c, true) : busyChip(c); }).join('') + '</div>'
+      : '';
+
+    // Custom text (league note): free text shown under the game on the schedule,
+    // print center and live view. Survives re-renders via ctx.pendingCustomText.
+    var curNote = (ctx.pendingCustomText != null) ? ctx.pendingCustomText : (ctx.customText || '');
+    var noteHtml = '<div style="margin-bottom:14px;">' +
+      '<label style="display:block;font-weight:600;font-size:0.82rem;color:#374151;margin-bottom:6px;">Custom text <span style="font-weight:400;color:#9ca3af;">(optional)</span></label>' +
+      '<input id="pefc-custom-text" type="text" value="' + esc(curNote) + '" placeholder="Type anything — e.g. Championship game, wear white!"' +
+      ' style="width:100%;padding:9px 11px;border:1.5px solid #d1d5db;border-radius:8px;font-size:0.9rem;box-sizing:border-box;background:#fff;">' +
+      '<div style="font-size:0.72rem;color:#9ca3af;margin-top:3px;">Adds a line under this game on the schedule, print &amp; live view. Clear it to remove.</div></div>';
 
     // "Save changes" is ALWAYS available so a teams / sport edit can be committed
     // WITHOUT moving fields (field buttons MOVE the game; this keeps it put).
     // Highlighted when an edit is actually pending.
     var sportChanged = canEditSport && norm(curSport) !== norm(ctx.game.sport || '');
-    var pendingChange = sportChanged || teamsChanged;
+    var pendingChange = sportChanged || teamsChanged || norm(curNote) !== norm(ctx.customText || '');
     var keepFieldHtml =
       '<button id="pefc-keep-field" style="width:100%;margin-top:14px;padding:9px;border:1.5px solid ' + (pendingChange ? '#6366f1' : '#d1d5db') + ';border-radius:8px;background:' + (pendingChange ? '#eef2ff' : '#fff') + ';color:' + (pendingChange ? '#4338ca' : '#6b7280') + ';font-size:0.85rem;font-weight:600;cursor:pointer;">Save changes — keep ' + esc(ctx.game.field || 'current field') + '</button>';
+
+    // "Did not play" — the game STAYS on the schedule but is drawn struck-through
+    // with a red ✗ (it was supposed to happen and didn't). Rolls back the
+    // rotation / matchup / sport history so it doesn't count. Toggles to Undo
+    // when already marked.
+    var isDnp = !!(ctx.game && ctx.game._didNotPlay);
+    var dnpHtml =
+      '<div style="margin-top:16px;padding-top:14px;border-top:1px solid #f0f0f2;">' +
+      '<button id="pefc-dnp" style="width:100%;padding:9px;border:1.5px solid ' + (isDnp ? '#86efac' : '#fca5a5') + ';border-radius:8px;background:' + (isDnp ? '#f0fdf4' : '#fef2f2') + ';color:' + (isDnp ? '#166534' : '#b91c1c') + ';font-size:0.85rem;font-weight:600;cursor:pointer;">' + (isDnp ? '↩ Undo — this game DID play' : '❌ Did not play') + '</button>' +
+      '<div style="font-size:0.72rem;color:#9ca3af;margin-top:5px;text-align:center;">' +
+      (isDnp
+        ? 'Currently marked did-not-play (shown with a red ✗). Restores it and re-counts it toward rotation.'
+        : 'Keeps the game visible with a red ✗ and tells the program it didn’t happen (won’t count toward rotation or variety).') +
+      '</div></div>';
 
     var box = shell(header('Edit league game') +
       '<div style="background:#f3f4f6;padding:9px 12px;border-radius:8px;margin-bottom:14px;font-size:0.85rem;">' +
       '<div style="font-weight:600;color:#374151;">' + esc(ctx.game.teams) + '</div>' +
       '<div style="color:#6b7280;margin-top:2px;">' + (ctx.game.sport ? esc(ctx.game.sport) + ' · ' : '') + 'now on <strong>' + esc(ctx.game.field || '—') + '</strong></div></div>' +
+      miniReportHtml(ctx, [curA, curB], canEditSport ? curSport : (ctx.game.sport || '')) +
       teamsHtml +
+      suggestHtml +
       sportHtml +
-      '<div style="font-weight:600;font-size:0.82rem;color:#166534;margin-bottom:8px;">Available fields' + (canEditSport ? ' for ' + esc(curSport) : '') + ':</div>' +
-      '<div style="display:flex;flex-wrap:wrap;">' + freeHtml + '</div>' + noFreeNote + overrideHtml + busyHtml + keepFieldHtml +
+      noteHtml +
+      openSection + noFreeNote + overrideHtml + busyHtml + keepFieldHtml + dnpHtml +
+      // Period-level, same as the note above it — and it has to live here too,
+      // because a period holding a single game skips the picker entirely.
+      gameNumberHtml(ctx) +
       '<div style="display:flex;gap:10px;margin-top:18px;">' +
       (ctx.games.length > 1 ? '<button id="pefc-back" style="flex:1;padding:10px;border:1px solid #d1d5db;border-radius:8px;background:#fff;color:#374151;cursor:pointer;font-weight:500;">← Back</button>' : '') +
       '<button id="pefc-cancel" style="flex:1;padding:10px;border:1px solid #d1d5db;border-radius:8px;background:#fff;color:#374151;cursor:pointer;font-weight:500;">Cancel</button></div>');
 
     box.querySelector('#pefc-close').onclick = closeModal;
     box.querySelector('#pefc-cancel').onclick = closeModal;
+    wireGameNumber(box, ctx);
     var back = box.querySelector('#pefc-back');
     if (back) back.onclick = function () { showGamePicker(ctx); };
 
@@ -638,11 +1194,18 @@
       return { teamA: a ? String(a.value || '').trim() : curA, teamB: b ? String(b.value || '').trim() : curB };
     }
 
-    // Capture any pending team / sport edits before a re-render so they survive
-    // it (changing sport re-filters the field list; toggling override re-renders).
+    // Capture any pending team / sport / note edits before a re-render so they
+    // survive it (changing sport re-filters the field list; toggling override
+    // re-renders).
     function captureEdits() {
       var t = readTeams(); ctx.selectedTeamA = t.teamA; ctx.selectedTeamB = t.teamB;
       if (sportSel) ctx.selectedSport = sportSel.value;
+      var noteEl = box.querySelector('#pefc-custom-text');
+      if (noteEl) ctx.pendingCustomText = String(noteEl.value || '');
+    }
+    function readNote() {
+      var noteEl = box.querySelector('#pefc-custom-text');
+      return noteEl ? String(noteEl.value || '').trim() : (ctx.pendingCustomText || '');
     }
 
     var sportSel = box.querySelector('#pefc-sport');
@@ -650,18 +1213,66 @@
       captureEdits(); ctx.selectedSport = sportSel.value; showFieldPicker(ctx);
     };
 
+    // Suggestion chips: adopt the sport and re-render (field list re-filters
+    // to that sport; matchup notes update).
+    box.querySelectorAll('.pefc-suggest').forEach(function (btn) {
+      btn.onclick = function () {
+        captureEdits();
+        ctx.selectedSport = btn.dataset.sport;
+        showFieldPicker(ctx);
+      };
+    });
+
+    // Team change → full re-render so the suggestions, matchup notes and
+    // report highlight all follow the new pair. While typing in a free-text
+    // team box, live-tint just the mini report (cheap) until blur commits.
+    function refreshMiniReport() {
+      var LPR = window.LeaguePlayReport;
+      if (!LPR || typeof LPR.refreshMiniBody !== 'function' || !ctx.leagueName) return;
+      var t = readTeams();
+      var sp = sportSel ? sportSel.value : (ctx.game.sport || '');
+      try {
+        LPR.refreshMiniBody(ctx.leagueName, ctx.kind === 'specialty' ? 'specialty' : 'regular',
+          { highlightTeams: [t.teamA, t.teamB], selectedSport: sp });
+      } catch (e) { /* report is advisory — never block the edit */ }
+    }
+    ['#pefc-teamA', '#pefc-teamB'].forEach(function (id) {
+      var el = box.querySelector(id);
+      if (!el) return;
+      el.addEventListener('change', function () { captureEdits(); showFieldPicker(ctx); });
+      if (el.tagName === 'INPUT') el.addEventListener('input', refreshMiniReport);
+    });
+
     // Override toggle re-renders so busy fields become clickable warning buttons.
     var ovChk = box.querySelector('#pefc-override');
     if (ovChk) ovChk.onchange = function () {
       captureEdits(); ctx.override = ovChk.checked; showFieldPicker(ctx);
     };
 
-    var keepBtn = box.querySelector('#pefc-keep-field');
-    if (keepBtn) keepBtn.onclick = function () {
-      var res = PEFC.applyFieldChange(ctx, ctx.game.field, canEditSport ? curSport : null, readTeams());
+    var dnpBtn = box.querySelector('#pefc-dnp');
+    if (dnpBtn) dnpBtn.onclick = function () {
+      var undo = !!(ctx.game && ctx.game._didNotPlay);
+      var teams = (ctx.game && ctx.game.teams) || 'this game';
+      var msg = undo
+        ? 'Mark "' + teams + '" as PLAYED again?\n\nThe red ✗ is removed and it counts toward rotation / variety again.'
+        : 'Mark "' + teams + '" as DID NOT PLAY?\n\nThe game stays on the schedule with a red ✗, and the program treats it as never having happened (won’t count toward rotation or variety).';
+      var ok = (typeof window.confirm === 'function') ? window.confirm(msg) : true;
+      if (!ok) return;
+      var res = PEFC.markDidNotPlay(ctx, { undo: undo });
       if (!res.ok) { toast(res.message, 'warning'); return; }
       closeModal();
-      toast('Updated: ' + res.message, 'success');
+      toast(res.message, res.noop ? 'info' : 'success');
+    };
+
+    var keepBtn = box.querySelector('#pefc-keep-field');
+    if (keepBtn) keepBtn.onclick = function () {
+      // The note saves independently — a note-only edit must commit even though
+      // applyFieldChange reports "Nothing changed."
+      var noteChanged = PEFC.applyCustomText(ctx, readNote());
+      var res = PEFC.applyFieldChange(ctx, ctx.game.field, canEditSport ? curSport : null, readTeams());
+      if (!res.ok && !noteChanged) { toast(res.message, 'warning'); return; }
+      closeModal();
+      toast('Updated: ' + (res.ok ? res.message : 'custom text saved'), 'success');
     };
 
     box.querySelectorAll('.pefc-field').forEach(function (btn) {
@@ -669,16 +1280,19 @@
       btn.onclick = function () {
         var pickSport = canEditSport ? curSport : null;
         var busy = btn.dataset.busy === '1';
-        if (busy) {
-          var ok = (typeof window.confirm === 'function')
-            ? window.confirm(btn.dataset.f + ' is already in use at this time.\n\nPlace this game there anyway? This will double-book the field.')
-            : true;
+        var nohost = btn.dataset.nohost === '1';
+        if (busy || nohost) {
+          var msg = busy
+            ? btn.dataset.f + ' is already in use at this time.\n\nPlace this game there anyway? This will double-book the field.'
+            : btn.dataset.f + ' isn’t set up for ' + (curSport || 'this sport') + '.\n\nMove the game there anyway?';
+          var ok = (typeof window.confirm === 'function') ? window.confirm(msg) : true;
           if (!ok) return;
         }
+        var noteChanged = PEFC.applyCustomText(ctx, readNote());
         var res = PEFC.applyFieldChange(ctx, btn.dataset.f, pickSport, readTeams(), { override: busy });
-        if (!res.ok) { toast(res.message, 'warning'); return; }
+        if (!res.ok && !noteChanged) { toast(res.message, 'warning'); return; }
         closeModal();
-        toast('Updated: ' + res.message, 'success');
+        toast('Updated: ' + (res.ok ? res.message : 'custom text saved'), 'success');
       };
     });
   }

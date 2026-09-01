@@ -787,6 +787,41 @@
                 }
             }
 
+            // ★ LG-8: league histories get a REAL (league, date)-granular merge
+            // at upsert time, not a shallow spread. This batched write used to
+            // replace the whole leagueHistory row last-writer-wins — a stale
+            // queued blob from one device could clobber days another device
+            // had just pushed (the divergent-lineage bug observed live). The
+            // engines expose their merge functions; when a page hasn't loaded
+            // the engine (e.g. Me page), fall back to replacement — the
+            // engines' own direct verified push and merge-on-load re-unify.
+            const HISTORY_MERGERS = {
+                leagueHistory: () => window.SchedulerCoreLeagues?.mergeLeagueHistories,
+                specialtyLeagueHistory: () => window.SchedulerCoreSpecialtyLeagues?.mergeSpecialtyHistories,
+            };
+            for (const histKey of Object.keys(HISTORY_MERGERS)) {
+                const mergeFn = HISTORY_MERGERS[histKey]();
+                if (typeof mergeFn !== 'function') continue;
+                if (!keys.includes(histKey) ||
+                    !changesToSync[histKey] ||
+                    typeof changesToSync[histKey] !== 'object' ||
+                    Array.isArray(changesToSync[histKey])) continue;
+                try {
+                    const { data: cur, error: curErr } = await client
+                        .from('camp_state_kv')
+                        .select('value')
+                        .eq('camp_id', campId)
+                        .eq('key', histKey)
+                        .maybeSingle();
+                    if (!curErr && cur && cur.value && typeof cur.value === 'object' &&
+                        (cur.value.gameLog || cur.value.gamesPerDate)) {
+                        changesToSync[histKey] = mergeFn(changesToSync[histKey], cur.value);
+                    }
+                } catch (mergeErr) {
+                    log(`${histKey} history-merge failed (will replace wholesale):`, mergeErr?.message || mergeErr);
+                }
+            }
+
             const rows = keys.map(k => ({
                 camp_id:    campId,
                 key:        k,
@@ -1917,6 +1952,33 @@
                     log('Using cloud state (newer)');
                 }
 
+                // ★ LG-8 (hydrate leg): league histories must NEVER be resolved
+                // by picking one lineage wholesale — every branch above does
+                // exactly that per key, so a realtime-triggered hydrate could
+                // clobber the in-memory/IDB copy holding games the other
+                // lineage lacks (the localStorage backup is the only safety
+                // net, and it is quota-fallible). Apply the engines' own
+                // (league, date)-granular merge whenever both copies exist;
+                // tombstones keep deliberate deletions deleted.
+                try {
+                    const HYDRATE_HISTORY_MERGERS = {
+                        leagueHistory: window.SchedulerCoreLeagues?.mergeLeagueHistories,
+                        specialtyLeagueHistory: window.SchedulerCoreSpecialtyLeagues?.mergeSpecialtyHistories,
+                    };
+                    for (const hk of Object.keys(HYDRATE_HISTORY_MERGERS)) {
+                        const mergeFn = HYDRATE_HISTORY_MERGERS[hk];
+                        if (typeof mergeFn !== 'function') continue;
+                        const c = cloudState[hk], l = localState[hk];
+                        if (c && l && typeof c === 'object' && typeof l === 'object' &&
+                            (c.gameLog || c.gamesPerDate) && (l.gameLog || l.gamesPerDate)) {
+                            mergedState[hk] = mergeFn(c, l);
+                            log(`${hk}: merged cloud + local lineages at (league, date) granularity`);
+                        }
+                    }
+                } catch (eHistMerge) {
+                    log('League history hydrate-merge skipped:', eHistMerge?.message || eHistMerge);
+                }
+
                 // When IDB preload succeeded, local has trustworthy data.
                 // Fill any top-level keys present locally but missing from
                 // cloud — these were saved to IDB but never synced (e.g.
@@ -2668,27 +2730,17 @@
                 }
             }, 2000);
 
-            // ★★★ Update rotation history for ALL bunks ★★★
+            // ★★★ Rebuild rotation history ("last done") for ALL bunks ★★★
             // Manual edits call peiUpdateRotationHistory per bunk, but auto-gen never did.
-            // This stamps every scheduled activity with the current timestamp so next-day
-            // variety scoring knows what was done today.
+            // RE-DERIVE from the saved days rather than stamping what's on the grid:
+            // the old stamp-only pass could never REMOVE the timestamp of an activity
+            // this run replaced, so a regenerated (or partially regenerated) slot left
+            // the dropped activity reading as "done today" forever — in next-day
+            // variety scoring and in the analytics last-done column alike.
             try {
                 const newSched = window.scheduleAssignments || {};
-                const history = window.loadRotationHistory?.() || { bunks: {}, leagues: {} };
-                history.bunks = history.bunks || {};
-                const timestamp = Date.now();
-                const SKIP = new Set(['free', 'free play', 'free (timeout)', 'transition/buffer', 'regroup', 'lineup', 'bus', 'buffer']);
-                Object.keys(newSched).forEach(bunk => {
-                    history.bunks[bunk] = history.bunks[bunk] || {};
-                    (newSched[bunk] || []).forEach(entry => {
-                        if (!entry || entry.continuation || entry._isTransition) return;
-                        const actName = entry._activity || '';
-                        if (!actName || SKIP.has(actName.toLowerCase())) return;
-                        history.bunks[bunk][actName] = timestamp;
-                    });
-                });
-                window.saveRotationHistory?.(history);
-                console.log('🔗 ✅ Rotation history updated for', Object.keys(newSched).length, 'bunks');
+                const n = window.SchedulerCoreUtils?.rebuildRotationHistoryForBunks?.(Object.keys(newSched)) || 0;
+                console.log('🔗 ✅ Rotation history rebuilt for', n, 'of', Object.keys(newSched).length, 'bunks');
             } catch (rhErr) {
                 console.error('🔗 Rotation history update failed:', rhErr);
             }

@@ -26,6 +26,21 @@
         return window.CampistryDB?.getCampId?.();
     }
 
+    // ★ HR-7: rotation-epoch reader (Half Reset watermark). Pre-epoch
+    // rotation_counts rows stay in the table as history but are invisible
+    // to every aggregate consumer — a non-deleting, reversible reset.
+    // Local fallback because this module may load before scheduler_core_utils.
+    function getRotationEpoch() {
+        try {
+            if (window.SchedulerCoreUtils && typeof window.SchedulerCoreUtils.getRotationEpoch === 'function') {
+                return window.SchedulerCoreUtils.getRotationEpoch();
+            }
+            var e = window.loadGlobalSettings ? window.loadGlobalSettings('rotationEpoch') : null;
+            var d = (typeof e === 'string') ? e : (e && e.date);
+            return (d && /^\d{4}-\d{2}-\d{2}$/.test(d)) ? d : null;
+        } catch (_) { return null; }
+    }
+
     function getValidActivityNames() {
         if (window.SchedulerCoreUtils?.getValidActivityNames) {
             return window.SchedulerCoreUtils.getValidActivityNames();
@@ -43,16 +58,13 @@
     }
 
     // =====================================================================
-    // SAVE: Extract counts from scheduleAssignments and upsert to cloud
+    // DERIVE: Extract rotation counts from a day's scheduleAssignments.
+    // Single source of truth for what "counts" as a rotation activity —
+    // used by saveRotationCounts AND the backfill/reconcile utility, so a
+    // comparison between derived and stored counts can never drift.
+    // Returns { 'bunk|activity': count }.
     // =====================================================================
-    function saveRotationCounts(dateKey, scheduleAssignments) {
-        var client = getClient();
-        var campId = getCampId();
-        if (!client || !campId || !dateKey) {
-            console.warn('[RotationCloud] Missing client/campId/dateKey — skipping save');
-            return Promise.resolve(false);
-        }
-
+    function deriveCounts(scheduleAssignments) {
         var sched = scheduleAssignments || {};
         var validActivities = getValidActivityNames();
         var counts = {};
@@ -83,6 +95,22 @@
                 counts[key] = (counts[key] || 0) + 1;
             });
         });
+
+        return counts;
+    }
+
+    // =====================================================================
+    // SAVE: Extract counts from scheduleAssignments and upsert to cloud
+    // =====================================================================
+    function saveRotationCounts(dateKey, scheduleAssignments) {
+        var client = getClient();
+        var campId = getCampId();
+        if (!client || !campId || !dateKey) {
+            console.warn('[RotationCloud] Missing client/campId/dateKey — skipping save');
+            return Promise.resolve(false);
+        }
+
+        var counts = deriveCounts(scheduleAssignments);
 
         var rows = [];
         Object.keys(counts).forEach(function(key) {
@@ -181,13 +209,20 @@
         //
         // We fetch 1000 rows at a time, ordered by id, and concatenate.
         var PAGE_SIZE = 1000;
+        // ★ HR-7: with an epoch set, fetch only post-epoch rows. Pre-epoch rows
+        // stay in the table (never deleted) but drop out of counts/lastDone/
+        // countsByDate, so every downstream aggregate (gen preamble overlays,
+        // mergeCloudData, analytics seeding, period caps) restarts at the epoch.
+        var _hrEpoch = getRotationEpoch();
         function fetchAll(allRows, page) {
             var from = page * PAGE_SIZE;
             var to = from + PAGE_SIZE - 1;
-            return client
+            var q = client
                 .from(TABLE)
                 .select('bunk, activity, count, date_key')
-                .eq('camp_id', campId)
+                .eq('camp_id', campId);
+            if (_hrEpoch) q = q.gte('date_key', _hrEpoch); // ★ HR-7
+            return q
                 // Order by the composite PK so pagination is deterministic.
                 // rotation_counts has no surrogate `id` column — its PK is
                 // (camp_id, date_key, bunk, activity). camp_id is already
@@ -212,6 +247,9 @@
                 var lastDone = {};
                 var countsByDate = {}; // ★ Per-date breakdown for smart merging
                 allData.forEach(function(row) {
+                    // ★ HR-7: belt-and-braces — never aggregate a pre-epoch row
+                    // even if the query-side .gte filter was bypassed.
+                    if (_hrEpoch && String(row.date_key).substring(0, 10) < _hrEpoch) return;
                     counts[row.bunk] = counts[row.bunk] || {};
                     counts[row.bunk][row.activity] = (counts[row.bunk][row.activity] || 0) + row.count;
 
@@ -490,6 +528,14 @@
         return (_cache && _cache.countsByDate) ? _cache.countsByDate : null;
     }
 
+    // ★ Synchronous read of the WHOLE cached payload ({counts, lastDone,
+    //   countsByDate}) for RotationEngine.reoverlayCloudCache — lets a solver
+    //   that just wiped the rotation history cache re-apply the cloud overlay
+    //   without an async load. Returns null if nothing is cached.
+    function getCachedData() {
+        return _cache || null;
+    }
+
     // =====================================================================
     // EXPOSE
     // =====================================================================
@@ -503,7 +549,9 @@
         clearAll: clearAllRotationCounts,
         clearForBunks: clearForBunks,
         invalidateCache: invalidateCache,
-        getCachedCountsByDate: getCachedCountsByDate // ★ CB-66: sync per-date counts for period-cap enforcement
+        getCachedCountsByDate: getCachedCountsByDate, // ★ CB-66: sync per-date counts for period-cap enforcement
+        getCachedData: getCachedData, // ★ sync full payload for RotationEngine.reoverlayCloudCache
+        deriveCounts: deriveCounts // ★ shared counting rules for the backfill/reconcile utility
     };
 
     console.log('[RotationCloud] Module ready');

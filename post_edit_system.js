@@ -278,12 +278,22 @@
         const activityProperties = window.SchedulerCoreUtils?.getActivityProperties?.() ||
                                    window.activityProperties || {};
         const locationInfo = activityProperties[locationName] || {};
-        
+
         let maxCapacity = 1;
         if (locationInfo.sharableWith?.capacity) {
             maxCapacity = parseInt(locationInfo.sharableWith.capacity) || 1;
         } else if (locationInfo.sharable) {
             maxCapacity = 2;
+        }
+        // ★ Direct-fill label resolution (Swim etc.) — shared helpers live in
+        //   unified_schedule_system.js: NO facility assigned anywhere →
+        //   unlimited; facility assigned off the exact name (Swim general
+        //   activity / pool-named field / legacy poolLaneCapacity) → that
+        //   facility's limits govern the label.
+        const _lblShare = window.resolveLabelSharing?.(locationName, activityProperties);
+        if (_lblShare === 'unlimited') maxCapacity = Infinity;
+        else if (_lblShare && _lblShare.sharableWith && window.labelSharingCapacity) {
+            maxCapacity = window.labelSharingCapacity(_lblShare.sharableWith, maxCapacity);
         }
         
         // ★ MS-4b: conflict classification uses GENERATION scope — see
@@ -372,17 +382,27 @@
     // APPLY DIRECT EDIT
     // =========================================================================
 
-    function applyDirectEdit(bunk, slots, activity, location, isClear) {
-        const divName = window.SchedulerCoreUtils?.getDivisionForBunk?.(bunk) || 
+    function applyDirectEdit(bunk, slots, activity, location, isClear, opts = {}) {
+        const divName = window.SchedulerCoreUtils?.getDivisionForBunk?.(bunk) ||
                         window.getDivisionForBunk?.(bunk);
         const divTimes = window.divisionTimes?.[divName] || [];
-        
+
         if (!window.scheduleAssignments) window.scheduleAssignments = {};
         if (!window.scheduleAssignments[bunk]) {
             window.scheduleAssignments[bunk] = new Array(divTimes.length || 50);
         }
 
         const fieldValue = location ? `${location} – ${activity}` : activity;
+
+        // Per-cell display-name ALIAS / CUSTOM TEXT: shown on the schedule (and
+        // print / live view) instead of the real activity name. Custom-text
+        // blocks (free text, no real activity behind them) always keep their
+        // text; an alias is kept only when it differs from the activity.
+        const _dn = (!isClear && opts.customText)
+            ? String(opts.displayName || activity || '').trim() || null
+            : ((!isClear && opts.displayName && String(opts.displayName).trim()
+                && String(opts.displayName).trim().toLowerCase() !== String(activity).trim().toLowerCase())
+                ? String(opts.displayName).trim() : null);
 
         // Manual edits always use deduct mode for travel-time (user sets the times)
         const _travelInfo = (!isClear && location)
@@ -396,6 +416,9 @@
                 continuation: i > 0,
                 _fixed: !isClear,
                 _activity: isClear ? 'Free' : activity,
+                _displayName: _dn,
+                _customText: !isClear && !!opts.customText,
+                _appendText: (!isClear && opts.appendText && String(opts.appendText).trim()) ? String(opts.appendText).trim() : null,
                 _location: location,
                 _postEdit: true,
                 _editedAt: Date.now(),
@@ -430,6 +453,61 @@
                 window.registerLocationUsage(idx, location, activity, divName2);
             });
         }
+    }
+
+    // =========================================================================
+    // APPEND TEXT ("keep the name, add more to it")
+    // =========================================================================
+    // In-place decorate of the existing entry — nothing else about it changes
+    // (activity, field, rotation, pins). Delegates to the unified system's
+    // implementation when it's loaded; otherwise does the same thing locally.
+    function peiApplyAppendText(bunk, startMin, endMin, text) {
+        if (typeof window.applyAppendTextEdit === 'function') {
+            return window.applyAppendTextEdit(bunk, startMin, endMin, text);
+        }
+        const unifiedTimes = window.unifiedTimes || [];
+        const slots = window.SchedulerCoreUtils?.findSlotsForRange?.(startMin, endMin, unifiedTimes) || [];
+        const row = window.scheduleAssignments?.[bunk];
+        if (!slots.length || !row) { alert('Error: Could not find this block to update.'); return false; }
+        const clean = String(text || '').trim();
+
+        function baseLabel(entry) {
+            if (entry._displayName && entry._appendText) {
+                const suf = ' — ' + entry._appendText;
+                if (String(entry._displayName).endsWith(suf)) {
+                    const b = String(entry._displayName).slice(0, -suf.length);
+                    return entry._appendOnly ? (b || '') : b;
+                }
+            }
+            if (entry._displayName) return entry._displayName;
+            return window.SchedulerCoreUtils?.formatEntry?.(entry) || entry._activity || entry.field || '';
+        }
+
+        if (typeof window.markPostEditInProgress === 'function') window.markPostEditInProgress();
+        let touched = 0;
+        slots.forEach(idx => {
+            const entry = row[idx];
+            if (!entry || entry.continuation) return;
+            const base = baseLabel(entry);
+            const hadRealAlias = !!entry._displayName && !entry._appendOnly;
+            if (clean) {
+                entry._appendText = clean;
+                entry._displayName = base ? base + ' — ' + clean : clean;
+                entry._appendOnly = !hadRealAlias;
+            } else {
+                if (entry._appendOnly) entry._displayName = null;
+                else if (entry._appendText) entry._displayName = base || null;
+                entry._appendText = null;
+                delete entry._appendOnly;
+            }
+            entry._postEdit = true;
+            entry._editedAt = Date.now();
+            touched++;
+        });
+        if (!touched) { alert('Nothing to add text to in this slot.'); return false; }
+        window.saveSchedule?.();
+        if (typeof window.updateTable === 'function') window.updateTable();
+        return true;
     }
 
     // =========================================================================
@@ -551,11 +629,64 @@
     }
 
     // =========================================================================
+    // ACCESS-RESTRICTION CHECK (soft — WARN, never hard-block a post-edit)
+    // =========================================================================
+    // Mirrors the generator's two access gates so a post-edit warning matches
+    // what the solver would have refused:
+    //   • specials → isSpecialAvailableForBunk (scheduler_core_auto.js)
+    //   • fields   → accessRestrictions (canBlockFit, scheduler_core_utils.js)
+    // Returns { allowed, label } where label is the restricted name to name in
+    // the warning. Fails OPEN (allowed) on any error — this must never block.
+    function peiIsActivityAllowedForBunk(activity, location, bunk) {
+        const div = peiGetDivForBunk(bunk);
+        if (!div) return { allowed: true };
+        const gs = window.globalSettings || null;
+
+        // The restriction lives on the chosen field/special; a special can also be
+        // typed straight into the activity box with no location. Check both names.
+        const names = [];
+        if (location) names.push(location);
+        if (activity && String(activity).toLowerCase() !== String(location || '').toLowerCase()) names.push(activity);
+
+        const specials = window.getGlobalSpecialActivities?.() ||
+            (window.loadGlobalSettings?.() || {}).app1?.specialActivities || [];
+        const props = window.SchedulerCoreUtils?.getActivityProperties?.() || window.activityProperties || {};
+
+        for (const name of names) {
+            const lname = String(name).toLowerCase();
+            const isSpecial = specials.some(s => s && String(s.name).toLowerCase() === lname);
+            if (isSpecial) {
+                if (typeof window.isSpecialAvailableForBunk === 'function') {
+                    try {
+                        if (!window.isSpecialAvailableForBunk(name, div, bunk, gs)) return { allowed: false, label: name };
+                    } catch (_) { /* fail open */ }
+                }
+                continue;
+            }
+            // Field accessRestrictions (replicates canBlockFit's division/bunk gate).
+            const ar = props[name]?.accessRestrictions;
+            if (ar?.enabled) {
+                const divRules = ar.divisions || {};
+                if (Object.keys(divRules).length > 0) {
+                    const divStr = String(div);
+                    if (!(divStr in divRules) && !(div in divRules)) return { allowed: false, label: name };
+                    const divRule = divRules[divStr] || divRules[div];
+                    if (Array.isArray(divRule) && divRule.length > 0) {
+                        const bStr = String(bunk), bNum = parseInt(bunk, 10);
+                        if (!divRule.some(b => String(b) === bStr || parseInt(b, 10) === bNum)) return { allowed: false, label: name };
+                    }
+                }
+            }
+        }
+        return { allowed: true };
+    }
+
+    // =========================================================================
     // APPLY EDIT (Main entry point)
     // =========================================================================
 
     async function applyEdit(bunk, editData) {
-        const { activity, location, startMin, endMin, hasConflict, resolutionChoice } = editData;
+        const { activity, location, startMin, endMin, hasConflict, resolutionChoice, displayName, customText, appendText } = editData;
         const unifiedTimes = window.unifiedTimes || [];
 
         if (window.__CAMPISTRY_DEMO_MODE__ && !activity && activity !== '') {
@@ -590,7 +721,8 @@
         console.log(`[PostEdit] Applying edit for ${bunk}:`, { activity, location, startMin, endMin, slots, hasConflict, resolutionChoice, isClear });
 
         // ★ Manual-mode cooldown check — soft confirm if the edit would violate a rule
-        if (!isClear && window.SchedulingRules && !editData._cooldownChecked) {
+        //   (skipped for custom text: free text is a label, not a real activity)
+        if (!isClear && !customText && window.SchedulingRules && !editData._cooldownChecked) {
             try {
                 const tmpl = window.SchedulingRules.buildTemplateFromBunkSlots(bunk, slots);
                 const candidate = {
@@ -606,6 +738,24 @@
                     editData._cooldownChecked = true;
                 }
             } catch (e) { console.warn('[PostEdit] cooldown check failed:', e); }
+        }
+
+        // ★ Access-restriction soft warning — if the chosen activity/field/special
+        //   is not allowed for this bunk/grade, WARN but let the user place it
+        //   anyway. Post-edits are intentional overrides; we never hard-block them.
+        if (!isClear && !customText && !editData._accessChecked) {
+            try {
+                const acc = peiIsActivityAllowedForBunk(activity, location, bunk);
+                if (!acc.allowed) {
+                    const _div = peiGetDivForBunk(bunk) || 'this division';
+                    const proceed = window.confirm(
+                        '"' + acc.label + '" is not normally allowed for ' + bunk + ' (' + _div + ') — it has an access restriction.\n\n' +
+                        'This is a manual override, so you can still place it here.\n\nPlace anyway?'
+                    );
+                    if (!proceed) return;
+                    editData._accessChecked = true;
+                }
+            } catch (e) { console.warn('[PostEdit] access check failed:', e); }
         }
 
         if (!window.scheduleAssignments) window.scheduleAssignments = {};
@@ -628,7 +778,7 @@
                 alert('System Error: Conflict resolution module not loaded.');
             }
         } else {
-            applyDirectEdit(bunk, slots, activity, location, isClear);
+            applyDirectEdit(bunk, slots, activity, location, isClear, { displayName, customText, appendText });
         }
         
         console.log(`[PostEdit] ✅ After edit, bunk ${bunk} slot ${slots[0]}:`, window.scheduleAssignments[bunk][slots[0]]);
@@ -670,8 +820,10 @@
         window.saveSchedule?.();
 
         // Post-edit counts + rotation history (single shared implementation)
+        // Custom text is a label, not a real activity — credit nothing for it
+        // (old activities are still debited since the slot was overwritten).
         if (window.SchedulerCoreUtils?.applyPostEditCounts) {
-            window.SchedulerCoreUtils.applyPostEditCounts(bunk, _oldActivities, (!isClear && activity) ? activity : null, slots);
+            window.SchedulerCoreUtils.applyPostEditCounts(bunk, _oldActivities, (!isClear && activity && !customText) ? activity : null, slots);
         }
         
         // Render
@@ -693,7 +845,9 @@
         
         const modal = document.createElement('div');
         modal.id = MODAL_ID;
-        modal.style.cssText = 'background:white;border-radius:12px;padding:24px;min-width:400px;max-width:500px;box-shadow:0 20px 60px rgba(0,0,0,0.3);font-family:-apple-system,BlinkMacSystemFont,sans-serif;max-height:90vh;overflow-y:auto;';
+        // width:min(...,94vw) — roomy on desktop so the report sections aren't
+        // bunched together, still shrinks cleanly on small screens.
+        modal.style.cssText = 'background:white;border-radius:12px;padding:26px 28px;width:min(760px,94vw);box-sizing:border-box;box-shadow:0 20px 60px rgba(0,0,0,0.3);font-family:-apple-system,BlinkMacSystemFont,sans-serif;max-height:92vh;overflow-y:auto;';
         
         overlay.appendChild(modal);
         document.body.appendChild(overlay);
@@ -1176,14 +1330,24 @@
         
         let currentActivity = currentValue || '';
         let currentField = '';
+        let currentCustomText = '';
+        let currentAppendText = '';
         let resolutionChoice = 'notify';
-        
+
         const slots = window.SchedulerCoreUtils?.findSlotsForRange?.(startMin, endMin, unifiedTimes) || [];
         if (slots.length > 0) {
             const entry = window.scheduleAssignments?.[bunk]?.[slots[0]];
             if (entry) {
                 currentField = typeof entry.field === 'object' ? entry.field?.name : (entry.field || '');
                 currentActivity = entry._activity || currentField || currentValue;
+                currentCustomText = entry._displayName || '';
+                // Appended suffix: show ONLY the added part in the text box (the
+                // append checkbox below is pre-checked for it).
+                currentAppendText = entry._appendText || '';
+                if (currentAppendText) currentCustomText = currentAppendText;
+                // Custom-text block: the "activity" is just the typed text — keep
+                // the activity box empty so re-saving stays a custom-text write.
+                if (entry._customText) { currentActivity = ''; currentField = ''; }
             }
         }
 
@@ -1250,6 +1414,16 @@
                     <input type="text" id="post-edit-activity" value="${escHtml(currentActivity)}" placeholder="e.g., Basketball"
                         style="width:100%;padding:10px 12px;border:1px solid #d1d5db;border-radius:8px;font-size:1rem;box-sizing:border-box;">
                     <div style="font-size:0.75rem;color:#9ca3af;margin-top:4px;">Enter CLEAR or FREE to empty this slot</div>
+                </div>
+                <div>
+                    <label style="display:block;font-weight:500;color:#374151;margin-bottom:6px;">Custom text <span style="font-weight:400;color:#9ca3af;">(optional)</span></label>
+                    <input type="text" id="post-edit-custom-text" value="${escHtml(currentCustomText)}" placeholder="Type anything — e.g. Color War Breakout!"
+                        style="width:100%;padding:10px 12px;border:1px solid #d1d5db;border-radius:8px;font-size:1rem;box-sizing:border-box;">
+                    <div style="font-size:0.75rem;color:#9ca3af;margin-top:4px;">Shows on the schedule, print &amp; live view exactly as typed. With an activity above it just renames it; with no activity it becomes a free-text block.</div>
+                    <label style="display:flex;align-items:center;gap:8px;margin-top:8px;font-size:0.82rem;color:#374151;cursor:pointer;user-select:none;">
+                        <input type="checkbox" id="post-edit-append-mode" ${currentAppendText ? 'checked' : ''} style="width:15px;height:15px;cursor:pointer;">
+                        Add to the existing name instead of replacing it <span style="color:#9ca3af;">(e.g. "Basketball – Court 1 — bring water")</span>
+                    </label>
                 </div>
                 <div>
                     <label style="display:block;font-weight:500;color:#374151;margin-bottom:6px;">Location / Field</label>
@@ -1406,22 +1580,53 @@
         document.getElementById('post-edit-save').onclick = () => {
             const activity = document.getElementById('post-edit-activity').value.trim();
             const location = locationSelect.value;
+            let customTextVal = document.getElementById('post-edit-custom-text')?.value.trim() || '';
+            const appendMode = !!document.getElementById('post-edit-append-mode')?.checked;
+            let appendTextVal = '';
             const times = getEffectiveTimes();
-            
-            if (!activity) { alert('Please enter an activity name.'); return; }
+
             if (times.endMin <= times.startMin) { alert('End time must be after start time.'); return; }
-            
+
+            // APPEND mode: keep what the cell already says and add the text after it.
+            if (appendMode && (customTextVal || currentAppendText)) {
+                const activityChanged = activity && activity.toLowerCase() !== String(currentActivity || '').toLowerCase();
+                const locationChanged = location && location.toLowerCase() !== String(currentField || '').toLowerCase();
+                if (!activityChanged && !locationChanged) {
+                    // Nothing else changed → safe in-place decorate.
+                    peiApplyAppendText(bunk, times.startMin, times.endMin, customTextVal);
+                    closeModal();
+                    return;
+                }
+                // Activity/field changed too → normal rewrite with composed label.
+                appendTextVal = customTextVal;
+                if (activity) {
+                    const base = (location && location.toLowerCase() !== activity.toLowerCase()) ? activity + ' – ' + location : activity;
+                    customTextVal = customTextVal ? base + ' — ' + customTextVal : '';
+                }
+            }
+
+            // Custom-text-only save: no activity typed, just free text — place it
+            // as a custom text block (no field claim, no rotation credit).
+            if (!activity && customTextVal) {
+                onSave({ activity: customTextVal, displayName: customTextVal, customText: true,
+                    location: '', startMin: times.startMin, endMin: times.endMin,
+                    hasConflict: false, conflicts: [] });
+                closeModal();
+                return;
+            }
+            if (!activity) { alert('Enter an activity name — or type custom text below to place free text.'); return; }
+
             const targetSlots = window.SchedulerCoreUtils?.findSlotsForRange?.(times.startMin, times.endMin, unifiedTimes) || [];
             const conflictCheck = location ? checkLocationConflict(location, targetSlots, bunk) : null;
-            
+
             if (conflictCheck?.hasConflict) {
-                onSave({ activity, location, startMin: times.startMin, endMin: times.endMin,
+                onSave({ activity, location, displayName: customTextVal, appendText: appendTextVal, startMin: times.startMin, endMin: times.endMin,
                     hasConflict: true, conflicts: conflictCheck.conflicts,
                     editableConflicts: conflictCheck.editableConflicts || [],
                     nonEditableConflicts: conflictCheck.nonEditableConflicts || [],
                     resolutionChoice });
             } else {
-                onSave({ activity, location, startMin: times.startMin, endMin: times.endMin, hasConflict: false, conflicts: [] });
+                onSave({ activity, location, displayName: customTextVal, appendText: appendTextVal, startMin: times.startMin, endMin: times.endMin, hasConflict: false, conflicts: [] });
             }
             closeModal();
         };
@@ -1588,7 +1793,12 @@
             if (fieldName && fieldName !== 'Free' && fieldName.toLowerCase() !== 'free') {
                 let fieldOnly = fieldName;
                 if (fieldName.includes(' – ')) fieldOnly = fieldName.split(' – ')[0].trim();
-                if (window.TimeBasedFieldUsage?.checkAvailability) {
+                // ★ Direct-fill label resolution (Swim etc., shared helper in
+                //   unified_schedule_system.js): no facility anywhere →
+                //   unlimited (skip the capacity check); facility assigned off
+                //   the exact name → use THAT facility's capacity.
+                const _lblAv = window.resolveLabelSharing?.(fieldOnly, window.activityProperties);
+                if (window.TimeBasedFieldUsage?.checkAvailability && _lblAv !== 'unlimited') {
                     const allProps = window.activityProperties || {};
                     let actProps = allProps[fieldOnly];
                     if (!actProps) {
@@ -1598,7 +1808,10 @@
                         }
                     }
                     actProps = actProps || {};
-                    const capacity = actProps.sharableWith?.capacity ? parseInt(actProps.sharableWith.capacity) || 1 : (actProps.sharable ? 2 : 1);
+                    let capacity = actProps.sharableWith?.capacity ? parseInt(actProps.sharableWith.capacity) || 1 : (actProps.sharable ? 2 : 1);
+                    if (_lblAv && _lblAv.sharableWith && window.labelSharingCapacity) {
+                        capacity = window.labelSharingCapacity(_lblAv.sharableWith, capacity);
+                    }
                     const avail = window.TimeBasedFieldUsage.checkAvailability(fieldOnly, proposedStart, proposedEnd, capacity, bunk);
                     if (!avail.available) { result.fieldConflicts = avail.conflicts || []; result.hasConflict = true; }
                 }
@@ -2054,6 +2267,51 @@
         else if (c.fieldConflicts.length > 0) { el.style.display = 'block'; el.style.cssText = 'padding:10px 14px;border-radius:8px;background:#fef2f2;border:1px solid #fca5a5;color:#991b1b;font-size:0.85rem;display:block;'; el.innerHTML = '⚠️ ' + escHtml(location) + ' in use by: ' + c.fieldConflicts.map(x => escHtml(x.bunk)).join(', '); }
     }
 
+    // ── Grade-usability gate for suggestions ──
+    // A Quick-Pick / Auto-fill suggestion must be BOTH currently available AND
+    // actually usable by this bunk's grade (division). These mirror the solver's
+    // own gates — canBlockFit's accessRestrictions logic (scheduler_core_utils.js)
+    // and isSpecialAvailableForBunk (scheduler_core_auto.js) — so we never offer
+    // an activity that generation itself would reject.
+    function peiAccessRestrictionsAllow(rules, divName, bunk) {
+        if (!rules || !rules.enabled) return true;
+        const divisions = rules.divisions || {};
+        // Toggle on but no grades picked = misconfig → treat as NO restriction
+        // (matches canBlockFit / auto+total solver parity).
+        if (Object.keys(divisions).length === 0) return true;
+        const divNameStr = String(divName);
+        if (!(divNameStr in divisions) && !(divName in divisions)) return false;
+        const divRule = divisions[divNameStr] || divisions[divName];
+        // Non-empty per-bunk list = only those bunks in this grade may use it.
+        if (Array.isArray(divRule) && divRule.length > 0) {
+            const bunkStr = String(bunk);
+            const bunkNum = parseInt(bunk);
+            if (!divRule.some(b => String(b) === bunkStr || parseInt(b) === bunkNum)) return false;
+        }
+        return true;
+    }
+
+    function peiFieldUsableByGrade(field, sportName, divName, bunk) {
+        // Per-date "only these bunk(s) today" restriction (field- or sport-scoped).
+        if (window.SchedulerCoreUtils?.isBunkRestrictedFromTarget?.(bunk, sportName, field.name, divName)) return false;
+        // Per-date sport-disabled-on-this-field ("Kickball off Baseball Field 1 today").
+        const dd = (window.loadCurrentDailyData?.() || {}).dailyDisabledSportsByField || {};
+        const blocked = dd[field.name];
+        if (Array.isArray(blocked) && sportName && blocked.includes(sportName)) return false;
+        // Field access restrictions (division + per-bunk), read straight off the
+        // raw field config so this holds even when activityProperties isn't built.
+        return peiAccessRestrictionsAllow(field.accessRestrictions, divName, bunk);
+    }
+
+    function peiSpecialUsableByGrade(special, divName, bunk, settings) {
+        // Canonical gate: honors division access + per-bunk + per-date bunk-only.
+        if (typeof window.isSpecialAvailableForBunk === 'function') {
+            try { return window.isSpecialAvailableForBunk(special.name, divName, bunk, settings); } catch (_) { /* fall through */ }
+        }
+        if (window.SchedulerCoreUtils?.isBunkRestrictedFromTarget?.(bunk, special.name, null, divName)) return false;
+        return peiAccessRestrictionsAllow(special.accessRestrictions, divName, bunk);
+    }
+
     // ── Auto-fill (constraint-aware) ──
     function peiAutoFillCandidates(bunk, divName, startMin, endMin) {
         // 1) What has this bunk already done today (activities AND fields)?
@@ -2093,6 +2351,8 @@
             (f.activities || f.sports || []).forEach(sport => {
                 const sn = typeof sport === 'string' ? sport : sport.name;
                 if (!sn || todayActivities.has(sn.toLowerCase())) return;
+                // Only suggest what this bunk's grade may actually use.
+                if (!peiFieldUsableByGrade(f, sn, divName, bunk)) return;
                 const cap = f.sharableWith?.capacity ? parseInt(f.sharableWith.capacity) || 1 : 1;
                 if (window.TimeBasedFieldUsage?.checkAvailability) {
                     if (!window.TimeBasedFieldUsage.checkAvailability(f.name, startMin, endMin, cap, bunk).available) return;
@@ -2105,6 +2365,9 @@
                 if (daysSince === null) score += 20;
                 else if (daysSince >= 7) score += 10;
                 else if (daysSince >= 3) score += 5;
+                // ★ Avoid-unless-needed (soft rule): keep it available but rank it
+                //   dead last so auto-fill only reaches for it when nothing else fits.
+                if (window.SchedulerCoreUtils?.isSportAvoidedUnlessNeeded?.(divName, sn)) score -= 100000;
                 candidates.push({ activity: sn, field: f.name, score });
             });
         });
@@ -2113,6 +2376,8 @@
             if (!s.name || todayActivities.has(s.name.toLowerCase())) return;
             if (s.rainyDayOnly && !isRainyDay) return;
             if (s.outdoors && isRainyDay && !s.rainyDayOnly) return;
+            // Only suggest specials this bunk's grade may actually use.
+            if (!peiSpecialUsableByGrade(s, divName, bunk, settings)) return;
             const cap = s.sharableWith?.capacity ? parseInt(s.sharableWith.capacity) || 1 : 1;
             if (window.TimeBasedFieldUsage?.checkAvailability) {
                 if (!window.TimeBasedFieldUsage.checkAvailability(s.name, startMin, endMin, cap, bunk).available) return;
@@ -2137,6 +2402,8 @@
             if (daysSince === null) score += 20;
             else if (daysSince >= 7) score += 10;
             else if (daysSince >= 3) score += 5;
+            // ★ Avoid-unless-needed parity for a special sharing a rule-listed name.
+            if (window.SchedulerCoreUtils?.isSportAvoidedUnlessNeeded?.(divName, s.name)) score -= 100000;
             candidates.push({ activity: s.name, field: s.name, score });
         });
 
@@ -2760,19 +3027,12 @@
 
     function peiUpdateRotationHistory(bunk) {
         try {
-            const history = window.loadRotationHistory?.() || { bunks: {}, leagues: {} };
-            history.bunks = history.bunks || {};
-            history.bunks[bunk] = history.bunks[bunk] || {};
-            const assignments = window.scheduleAssignments?.[bunk] || [];
-            const timestamp = Date.now();
-            const SKIP = new Set(['free', 'free play', 'free (timeout)', 'transition/buffer', 'regroup', 'lineup', 'bus', 'buffer']);
-            for (const entry of assignments) {
-                if (!entry || entry.continuation || entry._isTransition) continue;
-                const actName = entry._activity || '';
-                if (!actName || SKIP.has(actName.toLowerCase())) continue;
-                history.bunks[bunk][actName] = timestamp;
-            }
-            window.saveRotationHistory?.(history);
+            // RE-DERIVE the bunk's last-done timestamps from the saved days plus
+            // the live grid. The old pass only ever STAMPED what the grid holds
+            // now, so the activity an edit just replaced kept today's timestamp
+            // forever and went on reading as "done today" in rotation scoring
+            // and in the analytics last-done column.
+            window.SchedulerCoreUtils?.rebuildRotationHistoryForBunks?.([bunk]);
             // historicalCounts are already updated synchronously by
             // SchedulerCoreUtils.applyPostEditCounts (called from submitEdit).
             // The previous setTimeout(reIncrement) here ran on top of that delta

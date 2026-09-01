@@ -1342,18 +1342,26 @@ function pcLeagueInfoAt(divName, startMin) {
     var label = entry.gameLabel || entry.leagueName || 'League Game';
     var matchups = [];
     (entry.matchups || []).forEach(function (m) {
-        if (typeof m === 'string') matchups.push(m);
-        else if (m.display) matchups.push(m.display);
+        var s = null;
+        if (typeof m === 'string') s = m;
+        else if (m.display) s = m.display;
         else {
             var tA = m.teamA || m.team1 || '', tB = m.teamB || m.team2 || '';
             if (tA && tB) {
-                var s = tA + ' vs ' + tB;
+                s = tA + ' vs ' + tB;
                 if (m.sport) s += ' - ' + (m.sport.charAt(0).toUpperCase() + m.sport.slice(1));
                 if (m.field) s += ' - ' + m.field;
-                matchups.push(s);
             }
         }
+        if (s == null) return;
+        // "Did not play" → prefix a red ✗ marker that pcCellHtml strikes through.
+        if (window.PostEditFieldChange && typeof window.PostEditFieldChange.isDidNotPlay === 'function'
+            && window.PostEditFieldChange.isDidNotPlay(entry, m)) s = '✗ ' + s;
+        matchups.push(s);
     });
+    // Post-edit custom text (league note) rides along as an extra line so every
+    // consumer (slot print, live view) shows it under the matchups.
+    if (entry.customText) matchups.push(String(entry.customText));
     return { label: label, matchups: matchups };
 }
 
@@ -1378,12 +1386,14 @@ function buildLeagueMatchups(eventBlock, divName, bunk) {
     });
     allSlotEntries.sort(function (a, b) { return a.dist - b.dist; });
 
-    var slotSport = '', slotField = '';
+    var slotSport = '', slotField = '', slotNote = '', slotEntry = null;
     if (allSlotEntries.length > 0 && allSlotEntries[0].data) {
         var best = allSlotEntries[0].data;
+        slotEntry = best;
         if (best.matchups) raw = best.matchups;
         slotSport = (best.sport || '').toString().trim();
         slotField = (best.field || '').toString().trim();
+        slotNote = (best.customText || '').toString().trim();
     }
     if (!raw.length) {
         var llm = window.lastLeagueMatchups;
@@ -1391,6 +1401,8 @@ function buildLeagueMatchups(eventBlock, divName, bunk) {
     }
 
     var parsed = (raw || []).map(pcParseMatchup).filter(function (p) { return p.a && p.b; });
+    // Chinuch / Bye lines live in the same array — keep them so they print too.
+    var infoLines = (raw || []).map(pcInfoLineText).filter(Boolean);
     // Backfill sport/field from the slot record when the matchup lacks them.
     parsed.forEach(function (p) {
         if (!p.sport && slotSport) p.sport = slotSport;
@@ -1404,9 +1416,28 @@ function buildLeagueMatchups(eventBlock, divName, bunk) {
                    String(p.b).replace(/^bunk\s*/i, '').trim() === bn;
         });
         if (mine.length) parsed = mine;
+        // Narrow the bye/chinuch lines the same way: show this bunk's own line
+        // when it has one; if the bunk had its own game, drop others' info lines;
+        // otherwise (league teams are separate entities) keep all of them.
+        // Per-team lines (bye/chinuch) narrow to this bunk; section rows
+        // (Electives / Open fields lists) apply to everyone, so they stay.
+        var sectionInfo = infoLines.filter(function (l) { return !/\b(chinuch|bye)\b/i.test(l); });
+        var teamInfo = infoLines.filter(function (l) { return /\b(chinuch|bye)\b/i.test(l); });
+        var mineInfo = teamInfo.filter(function (l) {
+            return pcInfoLineTeam(l).replace(/^bunk\s*/i, '').trim() === bn;
+        });
+        infoLines = (mineInfo.length ? mineInfo : (mine.length ? [] : teamInfo)).concat(sectionInfo);
     }
 
-    return parsed.map(pcFormatMatchupLine);
+    // Post-edit custom text (league note) — an extra line under the matchups,
+    // for every bunk (it's a note on the whole game block, not one team).
+    return parsed.map(function (p) {
+        var line = pcFormatMatchupLine(p);
+        // "Did not play" → prefix a red ✗ marker that pcCellHtml strikes through.
+        if (slotEntry && window.PostEditFieldChange && typeof window.PostEditFieldChange.isDidNotPlay === 'function'
+            && window.PostEditFieldChange.isDidNotPlay(slotEntry, { teamA: p.a, teamB: p.b, field: p.field })) line = '✗ ' + line;
+        return line;
+    }).concat(infoLines).concat(slotNote ? [slotNote] : []);
 }
 
 // Parse one matchup (object or string) into { a, b, sport, field }.
@@ -1455,6 +1486,35 @@ function pcFormatMatchupLine(p) {
     return [a + ' vs ' + b, sport, p.field].filter(Boolean).join(' - ');
 }
 
+// Chinuch / Bye lines ride in the SAME matchups array as real games
+// (e.g. "Team A — Chinuch (Court)" or "Team A — Bye" — see the writeback in
+// scheduler_core_leagues.js). They are not "X vs Y" games, so the
+// pcParseMatchup + `p.a && p.b` filter silently dropped them and they never
+// printed. These two helpers recognize such lines so byes and chinuch
+// assignments still show up on the printed schedule.
+function pcInfoLineText(m) {
+    var s = (m && typeof m === 'object')
+        ? String(m.display || m.matchup || m.text || '').trim()
+        : String(m == null ? '' : m).trim();
+    if (!s) return '';
+    if (/\s+vs\.?\s+/i.test(s)) return '';        // a real matchup — not an info line
+    if (/\b(chinuch|bye)\b/i.test(s)) return s;   // preserve verbatim (already nicely formatted)
+    // Playoff tile section rows ride in the same array: "Electives:" + its
+    // "• Field" bullets (fields reserved for teams that are out), and the TBD
+    // round's "Open fields:" list / "Round N — winners TBD" header.
+    if (/^(electives|open fields):?\s*$/i.test(s)) return s;
+    if (/^•/.test(s)) return s;
+    if (/winners\s+tbd/i.test(s)) return s;
+    return '';
+}
+// Team/bunk name at the front of an info line ("Team A — Bye" → "Team A"),
+// used to keep a bunk's own bye/chinuch in its per-bunk cell.
+function pcInfoLineTeam(s) {
+    var str = String(s == null ? '' : s);
+    var idx = str.search(/\s+[–—-]\s+/);          // en/em dash or hyphen separator
+    return (idx >= 0 ? str.slice(0, idx) : str).trim();
+}
+
 // Build a league/specialty-league cell for the live view: the game/league label
 // on the first line, then each matchup on its OWN line — far easier to read than
 // one long comma-separated run. Cells must use white-space:pre-line to honor the
@@ -1471,10 +1531,22 @@ function pcLeagueCellText(label, matchups) {
 // matchup is clearly separated. Single-line cells render as plain escaped text.
 function pcCellHtml(text) {
     text = text == null ? '' : String(text);
-    if (text.indexOf('\n') === -1) return escHtml(text);
-    return text.split('\n').map(function (l, i) {
-        return '<div class="pc3-mu' + (i === 0 ? ' pc3-mu-head' : '') + '">' + escHtml(l) + '</div>';
-    }).join('');
+    if (text.indexOf('\n') === -1) {
+        // A lone "did not play" line still gets the struck-through treatment.
+        return (text.indexOf('✗ ') === 0) ? _pcMuHtml(text, false) : escHtml(text);
+    }
+    return text.split('\n').map(function (l, i) { return _pcMuHtml(l, i === 0); }).join('');
+}
+
+// Render one matchup line. A line prefixed with "✗ " was marked did-not-play →
+// keep it visible but strike it through in red (the ✗ itself stays un-struck).
+function _pcMuHtml(l, isHead) {
+    var cls = 'pc3-mu' + (isHead ? ' pc3-mu-head' : '');
+    if (!isHead && typeof l === 'string' && l.indexOf('✗ ') === 0) {
+        return '<div class="' + cls + '" style="color:#b91c1c;"><span style="font-weight:700;">✗</span> ' +
+            '<span style="text-decoration:line-through;text-decoration-color:#dc2626;">' + escHtml(l.slice(2)) + '</span></div>';
+    }
+    return '<div class="' + cls + '">' + escHtml(l) + '</div>';
 }
 
 // Pull the raw leagueAssignments slot record for a division/time (sport, field, matchups).
@@ -1504,6 +1576,8 @@ function pcLeagueLabel(entry, bunk, divName, startMin) {
     if (!sport && rec && rec.sport) sport = String(rec.sport).trim();
     if (!field && rec && rec.field) field = String(rec.field).trim();
     var parsed = (raw || []).map(pcParseMatchup).filter(function (p) { return p.a && p.b; });
+    // Chinuch / Bye lines share the array — keep them so they print too.
+    var infoLines = (raw || []).map(pcInfoLineText).filter(Boolean);
 
     var mine = null;
     if (bunk != null) {
@@ -1513,6 +1587,15 @@ function pcLeagueLabel(entry, bunk, divName, startMin) {
             var nb = String(p.b).replace(/^bunk\s*/i, '').trim();
             return na === bn || nb === bn;
         });
+        // Narrow bye/chinuch lines to this bunk the same way matchups are.
+        // Per-team lines (bye/chinuch) narrow to this bunk; section rows
+        // (Electives / Open fields lists) apply to everyone, so they stay.
+        var sectionInfo = infoLines.filter(function (l) { return !/\b(chinuch|bye)\b/i.test(l); });
+        var teamInfo = infoLines.filter(function (l) { return /\b(chinuch|bye)\b/i.test(l); });
+        var mineInfo = teamInfo.filter(function (l) {
+            return pcInfoLineTeam(l).replace(/^bunk\s*/i, '').trim() === bn;
+        });
+        infoLines = (mineInfo.length ? mineInfo : (mine.length ? [] : teamInfo)).concat(sectionInfo);
     }
     var chosen = (mine && mine.length) ? mine : parsed;
 
@@ -1522,7 +1605,7 @@ function pcLeagueLabel(entry, bunk, divName, startMin) {
         var b = /^\d+$/.test(String(p.b).trim()) ? 'Team ' + p.b : p.b;
         return a + ' vs ' + b;
     };
-    var matchStrs = chosen.map(fmtPair);
+    var matchStrs = chosen.map(fmtPair).concat(infoLines);
 
     if (chosen.length === 1) {
         if (chosen[0].sport) sport = chosen[0].sport;
@@ -5387,6 +5470,13 @@ function _liveContentSignature(nowMin) {
         var bunks = (divs[divName] && divs[divName].bunks ? divs[divName].bunks : []).slice();
         if (!bunks.length) return;
         parts.push('§' + divName + '#' + bunks.join(','));
+        // League custom text (post-edit note) lives on leagueAssignments, not the
+        // per-bunk entries — fold it in so an edited note refreshes the live view.
+        var _laDivSig = (window.leagueAssignments || {})[divName] || {};
+        Object.keys(_laDivSig).forEach(function (k) {
+            var _n = _laDivSig[k] && _laDivSig[k].customText;
+            if (_n) parts.push('n' + k + ':' + _n);
+        });
         if (isAutoMode()) {
             bunks.forEach(function (bunk) {
                 var slots = getPerBunkSchedule(bunk, divName);

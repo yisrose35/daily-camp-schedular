@@ -220,25 +220,67 @@
 
     // ★ UI-ONLY column reorder (app1.viewColumnOrder). The user can drag grade
     //   columns in Daily Adjustments / the Manual (Master Schedule) Builder to set
-    //   how the schedule LOOKS, independent of the Me priority order. Given a list
-    //   already in Me order, re-sequence it to follow the saved view order; columns
-    //   absent from the view order keep their Me-relative position at the end (so a
-    //   newly-added grade still shows up). Empty/absent view order → returns the Me
-    //   order unchanged, so a camp that never touches this is byte-identical to before.
+    //   how the schedule LOOKS, independent of the Me priority order. Empty/absent
+    //   view order → returns the Me order unchanged, so a camp that never touches
+    //   this is byte-identical to before.
+    //
+    //   ★ DIVISION-ANCHORED — every grade is pinned to its Me division. The view
+    //   order re-sequences (a) the DIVISION blocks and (b) the grades WITHIN each
+    //   block, but it can NEVER pull a grade out of its division into another one.
+    //   This is what stops a STALE view order from scattering columns: when the
+    //   camp structure changes (a grade added/removed, or a name collision turns
+    //   "5" into the qualified key "Day Camp > 5"), the saved order holds keys that
+    //   no longer exist. The OLD flat sort let those stale positions drop a grade
+    //   like Day Camp "4" into the middle of another division's number range
+    //   ("DC 4 between 8 and 9"), so Daily Adjustments diverged from the Me order
+    //   even though Me was correct. Anchoring to the division keeps every grade in
+    //   its own block, so the display can only ever be a re-sequencing of the Me
+    //   order — never a scramble of it. Orphan keys in the view order (no current
+    //   column) simply never match, so they're pruned implicitly; grades not named
+    //   in the view order keep their Me-relative position (a newly-added grade
+    //   still shows up, at its Me spot within its division).
     window._applyViewColumnOrder = function (meOrdered) {
         if (!Array.isArray(meOrdered) || meOrdered.length === 0) return meOrdered || [];
         var gs = (typeof window.loadGlobalSettings === 'function') ? (window.loadGlobalSettings() || {}) : {};
         var vco = (gs.app1 && Array.isArray(gs.app1.viewColumnOrder)) ? gs.app1.viewColumnOrder : [];
         if (!vco.length) return meOrdered;
+        var divs = window.divisions || {};
+
+        // Position of each key in the saved view order (first occurrence wins).
         var posV = {};
         vco.forEach(function (k, i) { if (posV[k] == null) posV[k] = i; });
-        return meOrdered.map(function (k, i) { return { k: k, i: i }; }).sort(function (a, b) {
-            var pa = posV[a.k], pb = posV[b.k];
-            if (pa != null && pb != null) return pa !== pb ? pa - pb : a.i - b.i;
-            if (pa != null) return -1;   // columns the user explicitly ordered lead
-            if (pb != null) return 1;
-            return a.i - b.i;            // both absent → keep Me order
-        }).map(function (o) { return o.k; });
+
+        // Me-order index (stable base) + group grades by their Me division, in the
+        // Me order each division first appears.
+        var parentOf = function (k) { return (divs[k] && divs[k].parentDivision) || k; };
+        var meIdx = {};
+        var groupOrderIdx = {};      // division -> Me-order rank of its first grade
+        var groupPos = {};           // division -> earliest view-order position of ITS grades
+        meOrdered.forEach(function (k, i) {
+            meIdx[k] = i;
+            var p = parentOf(k);
+            if (groupOrderIdx[p] == null) { groupOrderIdx[p] = i; groupPos[p] = Infinity; }
+            if (posV[k] != null && posV[k] < groupPos[p]) groupPos[p] = posV[k];
+        });
+
+        // Single stable sort: order DIVISION blocks by their earliest view position
+        // (Me order as the tiebreak), and grades WITHIN a block by their own view
+        // position (Me order as the tiebreak). A grade never leaves its division, so
+        // a stale/partial view order can only re-sequence the Me order, never scramble
+        // it. Sorting a copy of meOrdered (not a fresh literal) keeps the caller's
+        // array identity.
+        return meOrdered.slice().sort(function (a, b) {
+            var ga = parentOf(a), gb = parentOf(b);
+            if (ga !== gb) {
+                var gpa = groupPos[ga], gpb = groupPos[gb];
+                if (gpa !== gpb) return gpa - gpb;                   // positioned divisions lead, in view order
+                return groupOrderIdx[ga] - groupOrderIdx[gb];        // else keep Me order
+            }
+            var pa = posV[a] == null ? Infinity : posV[a];
+            var pb = posV[b] == null ? Infinity : posV[b];
+            if (pa !== pb) return pa - pb;                           // positioned grades lead, in view order
+            return meIdx[a] - meIdx[b];                              // else keep Me order
+        });
     };
 
     // ★ DISPLAY column order = Me order + the UI-only view reorder on top. Single
@@ -1251,6 +1293,50 @@
             // (saveGlobalSettings → cloud sync → hydrated event → refresh → repeat).
             if (!_opts.skipSync) {
                 syncSpine();
+            }
+
+            // ★ RECONCILE THE STALE app1 BLOB FROM campStructure.
+            //   campStructure is authoritative for structure; loadData rebuilds
+            //   state.divisions/bunks from it every load and pushes them to
+            //   window.* — but the PERSISTED app1.divisions/app1.bunks blob is
+            //   only rewritten by an explicit saveData() (user action). So a bunk
+            //   added in Campistry Me lives in campStructure + window.* yet stays
+            //   MISSING from the saved blob until the next manual save. Every
+            //   downstream blob reader (solver loader, prune, panels) then omits
+            //   it — and the grid flickers it in (from window.*) then out (a load
+            //   that reads the blob). Persist the fresh derived structure now, on
+            //   the initial/user-driven load, whenever it drifts from the blob, so
+            //   the bunk is part of the camp from the very first render.
+            //   Drift-gated → a no-op (no write, no cloud loop) once reconciled.
+            //   Runs on EVERY load path, including the skipSync cross-tab/cloud
+            //   refresh: the drift gate makes it a one-shot, self-terminating
+            //   write (after it persists once, the blob matches campStructure, so
+            //   the re-entrant refresh finds no drift and writes nothing). This is
+            //   why it's safe here even though the full-state syncSpine above must
+            //   stay gated behind !skipSync — syncSpine always writes and would
+            //   loop; this only writes on a genuine structural mismatch.
+            try {
+                if (Object.keys(campStructure).length > 0) {
+                    const _blobBunks = Array.isArray(data.bunks) ? data.bunks.map(String) : [];
+                    const _liveBunkSet = new Set((state.bunks || []).map(String));
+                    const _blobBunkSet = new Set(_blobBunks);
+                    const _drift = _liveBunkSet.size !== _blobBunkSet.size
+                        || [..._liveBunkSet].some(b => !_blobBunkSet.has(b))
+                        || [..._blobBunkSet].some(b => !_liveBunkSet.has(b));
+                    if (_drift && typeof window.saveGlobalSettings === 'function') {
+                        const _gs = window.loadGlobalSettings?.() || {};
+                        const _app1 = Object.assign({}, _gs.app1 || {}, {
+                            bunks: state.bunks,
+                            divisions: state.divisions,
+                            availableDivisions: state.availableDivisions
+                        });
+                        window.saveGlobalSettings('app1', _app1);
+                        console.log('[app1 v5.2] ★ reconciled stale app1 blob from campStructure (bunk drift: '
+                            + _blobBunkSet.size + ' → ' + _liveBunkSet.size + ')');
+                    }
+                }
+            } catch (_reconErr) {
+                console.warn('[app1 v5.2] blob reconcile skipped:', _reconErr && _reconErr.message);
             }
 
             console.log(`[app1 v5.2] Loaded ${state.availableDivisions.length} grades as scheduling units:`, state.availableDivisions);

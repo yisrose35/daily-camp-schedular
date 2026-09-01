@@ -92,7 +92,15 @@ try { window._mbLeaguesForGradeByType = _mbLeaguesForGradeByType; } catch (_) {}
 // leagueName + reverts event label so the schedule remains valid.
 function _mbRemapLeagueForGrade(ev, newGrade) {
   if (!ev || (ev.type !== 'league' && ev.type !== 'specialty_league')) return ev;
-  const newLeague = _mbFirstLeagueForGrade(newGrade);
+  // Leagues valid for the new grade, from the store matching the tile type
+  // (specialty tiles must check gs.specialtyLeagues, not leaguesByName).
+  const gradeLeagues = _mbLeaguesForGradeByType(newGrade, ev.type);
+  // If the tile's current league ALSO covers the new grade, keep it. A tile
+  // spanned/copied across two grades of one league is a single shared game —
+  // remapping to the grade's "first" league would split the span into two
+  // different leagues, giving each grade different matchups and game numbers.
+  if (ev.leagueName && gradeLeagues.includes(ev.leagueName)) return ev;
+  const newLeague = gradeLeagues[0] || null;
   if (newLeague) {
     if (ev.leagueName && ev.event === ev.leagueName) ev.event = newLeague;
     ev.leagueName = newLeague;
@@ -124,6 +132,103 @@ function _mbIsBackToBack(ev) {
     if (Math.abs(oStart - evEnd) <= 5 || Math.abs(evStart - oEnd) <= 5) return true;
   }
   return false;
+}
+
+// =========================================================================
+// ★ MULTI-GRADE TILE SPANNING
+// One logical tile stretched across adjacent grade columns (drag the tile's
+// left/right edge, mirroring the top/bottom time resize). Under the hood each
+// spanned grade keeps its OWN skeleton event — generation, saving, printing
+// and every other consumer that filters by ev.division keeps working
+// unchanged. The per-grade events are linked by a shared `spanGroup` id plus
+// a `spanDivisions` list (stamped on every member), and the grid renders them
+// as a single merged tile whenever their columns sit next to each other.
+// Validation (e.g. pinned-tile facility checks) can treat members of one
+// spanGroup as the same joint activity rather than two conflicting tiles.
+// =========================================================================
+function _mbSpanMembers(ev, skeleton) {
+  const src = skeleton || dailySkeleton || [];
+  if (!ev) return [];
+  if (!ev.spanGroup) return [ev];
+  return src.filter(m => m && m.spanGroup === ev.spanGroup);
+}
+try { window._mbSpanMembers = _mbSpanMembers; } catch (_) {}
+
+// Deep-clone a span source event into another grade. Keeps everything the
+// grades share (times, activity, location, league) but strips the per-grade
+// fields: the id, the division, and split-tile bunk groups (those reference
+// the SOURCE grade's bunks).
+function _mbMakeSpanMirror(srcEv, targetDiv) {
+  const copy = JSON.parse(JSON.stringify(srcEv));
+  copy.id = Date.now().toString() + '_' + Math.random().toString(36).slice(2, 5);
+  copy.division = targetDiv;
+  delete copy.group1Bunks;
+  _mbRemapLeagueForGrade(copy, targetDiv);
+  return copy;
+}
+
+// Propagate a tile edit to its span siblings so the whole span stays one
+// logical activity. Copies every field except the per-grade ones.
+function _mbSyncSpanSiblings(ev) {
+  if (!ev || !ev.spanGroup) return;
+  _mbSpanMembers(ev).forEach(m => {
+    if (m === ev || m.id === ev.id) return;
+    const ownId = m.id, ownDiv = m.division, ownGroup1 = m.group1Bunks;
+    Object.keys(m).forEach(k => { if (!(k in ev)) delete m[k]; });
+    Object.keys(ev).forEach(k => {
+      m[k] = (ev[k] !== null && typeof ev[k] === 'object') ? JSON.parse(JSON.stringify(ev[k])) : ev[k];
+    });
+    m.id = ownId;
+    m.division = ownDiv;
+    if (ownGroup1) m.group1Bunks = ownGroup1; else delete m.group1Bunks;
+    _mbRemapLeagueForGrade(m, ownDiv);
+  });
+}
+
+// Repair span metadata after events were added/removed outside the resize
+// path (copy-grade overwrites, template edits). Groups reduced to a single
+// survivor lose their span fields; larger groups get spanDivisions rebuilt
+// from the members that actually exist.
+function _mbRepairSpans(skeleton) {
+  const groups = {};
+  (skeleton || []).forEach(ev => {
+    if (ev && ev.spanGroup) (groups[ev.spanGroup] = groups[ev.spanGroup] || []).push(ev);
+  });
+  const order = (typeof getColumnOrder === 'function') ? getColumnOrder() : [];
+  Object.values(groups).forEach(members => {
+    if (members.length <= 1) {
+      members.forEach(m => { delete m.spanGroup; delete m.spanDivisions; });
+    } else {
+      const divs = [...new Set(members.map(m => m.division))]
+        .sort((a, b) => order.indexOf(a) - order.indexOf(b));
+      members.forEach(m => { m.spanDivisions = divs.slice(); });
+      // ★ Heal mirrors created before the shared-league remap fix: they were
+      // remapped to their own grade's FIRST league, so one spanned tile could
+      // reference two different leagues (→ two different games at generation).
+      // If any member's league covers EVERY spanned grade, the whole span
+      // adopts it.
+      const t0 = members[0].type;
+      if (t0 === 'league' || t0 === 'specialty_league') {
+        const names = [...new Set(members.map(m => m.leagueName).filter(Boolean))];
+        const shared = names.find(n => divs.every(d => _mbLeaguesForGradeByType(d, t0).includes(n)));
+        if (shared) {
+          members.forEach(m => {
+            if (m.leagueName === shared) return;
+            if (m.leagueName && m.event === m.leagueName) m.event = shared;
+            m.leagueName = shared;
+          });
+        }
+      }
+    }
+  });
+  return skeleton;
+}
+
+// Is this DOM node one of the resize grips (vertical time grips or the
+// horizontal multi-grade grips)? Used to keep click/drag handlers off them.
+function _mbIsResizeTarget(t) {
+  return !!(t && t.classList &&
+    (t.classList.contains('resize-handle') || t.classList.contains('resize-handle-h')));
 }
 
 // --- UNIVERSAL BUILDER MODE ---
@@ -263,6 +368,9 @@ async function tryMergeSwimElective(newEvent, divName, skeleton) {
   const overlap = skeleton.find(ex => {
     if (ex.division !== divName) return false;
     if (ex.id === newEvent.id) return false;
+    // Never merge into a multi-grade span member — the hybrid would apply to
+    // one grade while its span siblings keep the old tile.
+    if (ex.spanGroup) return false;
     const xs = parseTimeToMinutes(ex.startTime);
     const xe = parseTimeToMinutes(ex.endTime);
     if (xs === null || xe === null) return false;
@@ -795,10 +903,16 @@ function showCopyGradeModal(skeleton, onApply) {
           division: targetDiv,
           id: 'evt_' + Math.random().toString(36).slice(2, 9)
         };
+        // Copies are independent tiles, never new members of the source's span.
+        delete _copy.spanGroup; delete _copy.spanDivisions;
         _mbRemapLeagueForGrade(_copy, targetDiv);
         updated.push(_copy);
       });
     });
+
+    // Overwriting target grades may have removed members of multi-grade
+    // spans — rebuild span metadata so no tile points at a gone sibling.
+    _mbRepairSpans(updated);
 
     overlay.remove();
     onApply(updated);
@@ -886,8 +1000,12 @@ function getConflictingFacilities(startTime, endTime, excludeId) {
   const s = parseTimeToMinutes(startTime), e = parseTimeToMinutes(endTime);
   if (s === null || e === null) return new Set();
   const taken = new Set();
+  const _exEv = excludeId ? (dailySkeleton || []).find(x => x && x.id === excludeId) : null;
+  const _exGroup = _exEv && _exEv.spanGroup;
   (dailySkeleton || []).forEach(ev => {
     if (ev.id === excludeId || ev.type !== 'elective') return;
+    // Span siblings are the same logical tile — not a conflict with itself.
+    if (_exGroup && ev.spanGroup === _exGroup) return;
     const es = parseTimeToMinutes(ev.startTime), ee = parseTimeToMinutes(ev.endTime);
     if (es === null || ee === null) return;
     if (s < ee && e > es) (ev.electiveActivities || []).forEach(a => taken.add(a));
@@ -1005,7 +1123,7 @@ function init(targetElement = null){
     const savedDraftName = localStorage.getItem(SKELETON_DRAFT_NAME_KEY);
     if (savedDraft) {
       try {
-        dailySkeleton = JSON.parse(savedDraft);
+        dailySkeleton = _mbRepairSpans(JSON.parse(savedDraft));
         if(savedDraftName) currentLoadedTemplate = savedDraftName;
         // Draft means there might be unsaved changes
         hasUnsavedChanges = true;
@@ -1113,9 +1231,15 @@ function deselectAllTiles() {
 }
 
 async function deleteTile(id) {
-  const confirmed = await showConfirm('Delete this block?');
+  const ev = dailySkeleton.find(x => x.id === id);
+  const members = ev ? _mbSpanMembers(ev) : [];
+  const msg = members.length > 1
+    ? `Delete this block? It spans ${members.length} grades (${members.map(m => m.division).join(', ')}) — it will be removed from all of them.`
+    : 'Delete this block?';
+  const confirmed = await showConfirm(msg);
   if (confirmed) {
-    dailySkeleton = dailySkeleton.filter(x => x.id !== id);
+    const ids = new Set(members.length ? members.map(m => m.id) : [id]);
+    dailySkeleton = dailySkeleton.filter(x => !ids.has(x.id));
     selectedTileId = null;
     markUnsavedChanges();
     saveDraftToLocalStorage();
@@ -1398,6 +1522,9 @@ async function editTile(id) {
     }
   }
 
+  // ★ Multi-grade span: an edit to any member applies to the whole span.
+  _mbSyncSpanSiblings(ev);
+
   markUnsavedChanges();
   saveDraftToLocalStorage();
   renderGrid();
@@ -1415,7 +1542,10 @@ async function copyTile(id) {
   });
   if (!result || !result.targets?.length) return;
   result.targets.forEach(div => {
-    dailySkeleton.push({ ...ev, id: Date.now().toString() + '_' + Math.random().toString(36).slice(2, 5), division: div });
+    const _copy = { ...ev, id: Date.now().toString() + '_' + Math.random().toString(36).slice(2, 5), division: div };
+    // A copy is an independent tile — never a new member of the source's span.
+    delete _copy.spanGroup; delete _copy.spanDivisions;
+    dailySkeleton.push(_copy);
   });
   markUnsavedChanges();
   saveDraftToLocalStorage();
@@ -1739,7 +1869,10 @@ function renderDAWPalette() {
     </div>`;
   });
 
-  DAW_LAYER_TYPES.filter(t => t.anchor && !t.hidden).forEach(t => {
+  // ★ A built-in anchor steps aside once a General Activity of the same kind is
+  //   configured — that one is listed below, bound to its facility.
+  const _dawCovered = (window.getGeneralActivityCoveredFixedTypes?.() || {});
+  DAW_LAYER_TYPES.filter(t => t.anchor && !t.hidden && !_dawCovered[t.type]).forEach(t => {
     html += `<div class="ms-daw-tile" draggable="true" data-type="${t.type}">
       <span class="ms-daw-tile-dot" style="background:${DAW_DOTS[t.type] || '#64748b'};"></span>
       <span class="ms-daw-tile-name">${t.name}</span>
@@ -1756,8 +1889,11 @@ function renderDAWPalette() {
   if (_gaItems.length) {
     html += '<div class="ms-daw-tile-divider"></div><div class="ms-daw-tile-label">General Activities</div>';
     _gaItems.forEach(ga => {
+      // ★ Each general activity carries its own colour (facilities.js) so a long
+      //   list reads apart instead of being a wall of identical amber dots.
+      const _gc = window.getGeneralActivityColor?.(ga.name);
       html += `<div class="ms-daw-tile" draggable="true" data-type="custom" data-ga-name="${_esc(ga.name)}" data-ga-facility="${_esc(ga.facility)}" data-ga-quicktype="${_esc(ga.quickType || 'custom')}" title="${_esc(ga.name + ' @ ' + ga.facility)}">
-        <span class="ms-daw-tile-dot" style="background:#d97706;"></span>
+        <span class="ms-daw-tile-dot" style="background:${_gc ? _gc.dot : '#d97706'};"></span>
         <span class="ms-daw-tile-name">${_esc(ga.name)}</span>
         <span class="ms-daw-tile-badge">PIN</span>
       </div>`;
@@ -2301,6 +2437,15 @@ function renderDAWGrid(externalEl, externalLayers, externalCallbacks) {
       // ★ Grade connection glow: linked custom activities (shared connectionId)
       //   get a colored inner ring + 🔗 marker so the cross-grade "same time"
       //   link is visible. Hue is derived from the group id so groups read apart.
+      // ★ A general-activity band wears that activity's colour instead of the
+      //   generic grey every custom layer used to share. Inline, so it beats the
+      //   .ms-daw-band[data-type="custom"] rule in styles.css.
+      const _gaBandColor = layer.customActivity
+        ? window.getGeneralActivityColor?.(layer.customActivity) : null;
+      const _gaBandStyle = _gaBandColor
+        ? ` background:linear-gradient(180deg,${_gaBandColor.bg},${_gaBandColor.bg2}); color:${_gaBandColor.text};`
+        : '';
+
       let _connRing = '', _connClass = '', _connVar = '';
       if (layer.connectionId) {
         _connClass = ' ms-daw-band-connected';
@@ -2310,7 +2455,7 @@ function renderDAWGrid(externalEl, externalLayers, externalCallbacks) {
 
       html += `<div class="ms-daw-band${_connClass} ${dawSelectedBand === layer.id ? 'selected' : ''}"
         data-id="${layer.id}" data-type="${layer.type}" data-grade="${_mbEsc(gradeKey)}"${layer.connectionId ? ' data-conn="' + _mbEsc(layer.connectionId) + '"' : ''}
-        style="top:${top}px; height:${height}px; left:${left}px; width:${BAND_WIDTH}px;${clipStyle}${_connVar}"
+        style="top:${top}px; height:${height}px; left:${left}px; width:${BAND_WIDTH}px;${clipStyle}${_connVar}${_gaBandStyle}"
         draggable="true">
         <div class="band-resize band-resize-top"></div>
         ${_connRing}
@@ -3943,11 +4088,20 @@ function renderExpandSection() {
 function renderPalette() {
   palette.innerHTML = '';
   
+  // ★ A built-in Fixed tile steps aside once the camp configures a General
+  //   Activity of the same kind — the configured one carries the facility and
+  //   sharing rules, so showing both would offer two Lunch tiles that behave
+  //   differently. With no matching general activity the built-in tile stays.
+  //   'custom' (Custom Pinned) is never a general activity, so it always shows.
+  const _gaCovered = (window.getGeneralActivityCoveredFixedTypes?.() || {});
+  const _fixedTypes = ['swim', 'lunch', 'snacks', 'dismissal', 'custom']
+    .filter(t => t === 'custom' || !_gaCovered[t]);
+
   const categories = [
     { label: 'Slots', types: ['activity', 'sports', 'special'] },
     { label: 'Advanced', types: ['smart', 'split', 'elective', 'swim_elective'] },
     { label: 'Leagues', types: ['league', 'specialty_league'] },
-    { label: 'Fixed', types: ['swim', 'lunch', 'snacks', 'dismissal', 'custom'] }
+    { label: 'Fixed', types: _fixedTypes }
   ];
 
   // ★ FN-48: every custom general activity (facilities registry) gets its own
@@ -3958,14 +4112,20 @@ function renderPalette() {
   if (_gaItems.length) {
     categories.push({
       label: 'General Activities',
-      tiles: _gaItems.map(ga => ({
-        type: 'custom',
-        name: ga.name,
-        style: 'background:#fef3c7;color:#92400e;',
-        description: 'Pinned general activity at ' + ga.facility + '. Drop on a division and set the times.',
-        gaName: ga.name,
-        gaFacility: ga.facility
-      }))
+      // ★ Each general activity carries its own colour (facilities.js). The
+      //   palette derives the tile's dot from `background:`, so setting the
+      //   style here colours both the swatch and the tile.
+      tiles: _gaItems.map(ga => {
+        const _gc = window.getGeneralActivityColor?.(ga.name);
+        return {
+          type: 'custom',
+          name: ga.name,
+          style: _gc ? `background:${_gc.bg};color:${_gc.text};` : 'background:#fef3c7;color:#92400e;',
+          description: 'Pinned general activity at ' + ga.facility + '. Drop on a division and set the times.',
+          gaName: ga.name,
+          gaFacility: ga.facility
+        };
+      })
     });
   }
 
@@ -4207,6 +4367,32 @@ function renderGrid() {
 
   const totalHeight = (latestMin - earliestMin) * PIXELS_PER_MINUTE;
 
+  // ★ Multi-grade spans: render each span group as ONE merged tile when its
+  //   grades sit in adjacent columns and share times; otherwise fall back to
+  //   individual tiles with a link badge (e.g. after a column reorder).
+  const _spanPlan = {};
+  {
+    const _groups = {};
+    dailySkeleton.forEach(ev => {
+      if (ev && ev.spanGroup && ev.id) (_groups[ev.spanGroup] = _groups[ev.spanGroup] || []).push(ev);
+    });
+    Object.values(_groups).forEach(members => {
+      const idxOf = m => availableDivisions.indexOf(m.division);
+      const visible = members.filter(m => idxOf(m) !== -1).sort((a, b) => idxOf(a) - idxOf(b));
+      let merged = visible.length === members.length && visible.length > 1;
+      for (let i = 1; i < visible.length && merged; i++) {
+        if (idxOf(visible[i]) !== idxOf(visible[i - 1]) + 1) merged = false;
+        else if (visible[i].startTime !== visible[0].startTime || visible[i].endTime !== visible[0].endTime) merged = false;
+      }
+      if (merged) {
+        _spanPlan[visible[0].id] = { cols: visible.length, divs: visible.map(m => m.division) };
+        visible.slice(1).forEach(m => { _spanPlan[m.id] = { skip: true }; });
+      } else {
+        members.forEach(m => { _spanPlan[m.id] = { linked: true, divs: members.map(x => x.division) }; });
+      }
+    });
+  }
+
   let html = `<div style="display:grid; grid-template-columns:50px repeat(${availableDivisions.length}, 1fr); position:relative; min-width:700px;">`;
     
   // Header
@@ -4241,12 +4427,14 @@ function renderGrid() {
     }
 
     dailySkeleton.filter(ev => ev.division === divName).forEach(ev => {
+      const _plan = _spanPlan[ev.id];
+      if (_plan && _plan.skip) return; // drawn by its span anchor (leftmost member)
       const start = parseTimeToMinutes(ev.startTime);
       const end = parseTimeToMinutes(ev.endTime);
       if (start != null && end != null && end > start) {
         const top = (start - earliestMin) * PIXELS_PER_MINUTE;
         const height = (end - start) * PIXELS_PER_MINUTE;
-        html += renderEventTile(ev, top, height);
+        html += renderEventTile(ev, top, height, _plan);
       }
     });
     
@@ -4257,11 +4445,13 @@ function renderGrid() {
   html += `</div>`;
   grid.innerHTML = html;
   grid.dataset.earliestMin = earliestMin;
+  grid.dataset.columns = JSON.stringify(availableDivisions);
 
   addColumnReorderListeners(grid);
   addDropListeners('.grid-cell');
   addDragToRepositionListeners(grid);
   addResizeListeners(grid);
+  addHorizontalResizeListeners(grid);
   addClickToSelectListeners();
 }
 
@@ -4322,7 +4512,7 @@ function addClickToSelectListeners() {
     el.addEventListener('mousedown', e => { _downX = e.clientX; _downY = e.clientY; });
 
     el.onclick = (e) => {
-      if (e.target.classList.contains('resize-handle')) return;
+      if (_mbIsResizeTarget(e.target)) return;
       e.stopPropagation();
       const dist = Math.hypot(e.clientX - (_downX ?? e.clientX), e.clientY - (_downY ?? e.clientY));
       if (dist > 5) { selectTile(el.dataset.id); return; }
@@ -4333,7 +4523,7 @@ function addClickToSelectListeners() {
     el.ondblclick = (e) => {
       e.stopPropagation();
       clearTimeout(_clickTimer);
-      if (e.target.classList.contains('resize-handle')) return;
+      if (_mbIsResizeTarget(e.target)) return;
       _msShowTileActionBar(el);
     };
   });
@@ -4383,7 +4573,13 @@ function addColumnReorderListeners(containerEl) {
 }
 
 // --- Render Tile ---
-function renderEventTile(ev, top, height) {
+// spanInfo (optional, from renderGrid's span plan):
+//   { cols, divs }   → this tile is the anchor of a merged multi-grade span;
+//                      draw it stretched across `cols` adjacent columns.
+//   { linked, divs } → span members whose columns aren't adjacent right now
+//                      (e.g. after a column reorder); draw individually with
+//                      a link badge.
+function renderEventTile(ev, top, height, spanInfo) {
   let tile = TILES.find(t => t.name === ev.event);
   if (!tile && ev.type) tile = TILES.find(t => t.type === ev.type);
   // ★ v2.5: Match DA's fallback logic for slot-type events that don't match by name/type
@@ -4394,6 +4590,12 @@ function renderEventTile(ev, top, height) {
     else tile = TILES.find(t => t.type === 'custom');
   }
   let style = tile ? tile.style : 'background:#d1d5db;color:#374151;';
+  // ★ A placed general activity keeps the colour of the tile it was dragged
+  //   from, instead of falling through to the generic Custom Pinned grey.
+  if (ev.type === 'pinned' || ev.type === 'custom') {
+    const _gc = window.getGeneralActivityColor?.(ev.customActivity || ev.event);
+    if (_gc) style = `background:${_gc.bg};color:${_gc.text};`;
+  }
   // ★ Guaranteed-swap Smart tiles get a distinct teal (unused by any other tile)
   //   so the mode is obvious and doesn't clash with the Split tile's purple (#c4b5fd).
   if (ev.type === 'smart' && ev.smartData && ev.smartData.guaranteeSwap) {
@@ -4408,13 +4610,26 @@ function renderEventTile(ev, top, height) {
   
   // Add 1px gap at bottom to prevent overlap with next tile
   const adjustedHeight = Math.max(height - 1, 10);
-  
+
+  // ★ Multi-grade span geometry: the anchor tile stretches across N adjacent
+  //   equal-width columns (columns are 1fr each, so 100% per column).
+  const _spanCols = (spanInfo && spanInfo.cols > 1) ? spanInfo.cols : 1;
+  const _spanWidthStyle = _spanCols > 1 ? `width:calc(${_spanCols * 100}% - 4%)` : 'width:96%';
+  const _spanClass = _spanCols > 1 ? ' span-multi' : '';
+
   let innerHtml = `
     <div class="tile-header">
       <strong style="font-size:11px;">${_mbEsc(ev.event)}</strong>
       <div style="font-size:10px;opacity:0.9;">${_mbEsc(ev.startTime)}-${_mbEsc(ev.endTime)}</div>
     </div>
   `;
+
+  if (_spanCols > 1 && spanInfo.divs) {
+    innerHtml += `<div title="These grades do this activity together" style="font-size:9px;font-weight:600;color:#3730a3;background:#e0e7ff;display:inline-block;padding:1px 5px;border-radius:4px;margin-top:2px;">↔ ${spanInfo.divs.map(_mbEsc).join(' + ')}</div>`;
+  } else if (spanInfo && spanInfo.linked) {
+    const _others = (spanInfo.divs || []).filter(d => d !== ev.division);
+    innerHtml += `<div title="Linked with ${_mbEsc(_others.join(', '))} — these grades do this activity together (columns not adjacent, so tiles are drawn separately)" style="font-size:9px;font-weight:600;color:#3730a3;background:#e0e7ff;display:inline-block;padding:1px 5px;border-radius:4px;margin-top:2px;">🔗 with ${_others.map(_mbEsc).join(', ')}</div>`;
+  }
 
   if (ev.location) {
     innerHtml += `<div style="font-size:9px;opacity:0.85;margin-top:2px;">📍 ${_mbEsc(ev.location)}</div>`;
@@ -4502,12 +4717,19 @@ function renderEventTile(ev, top, height) {
     return html;
   })();
 
-  return `<div class="grid-event${selectedClass}" data-id="${ev.id}" draggable="true" title="Click to select, Delete key to remove"
-          style="${style}; position:absolute; top:${top}px; height:${adjustedHeight}px; width:96%; left:2%; padding:5px 7px; font-size:11px; overflow:hidden; border-radius:5px; cursor:pointer; display:flex; flex-direction:column; box-sizing:border-box;">
+  // Horizontal grips: drag left/right to stretch the tile across neighboring
+  // grade columns. Hidden for non-adjacent linked tiles — their geometry is
+  // ambiguous until the columns sit together again.
+  const _hHandles = (spanInfo && spanInfo.linked) ? '' :
+    `<div class="resize-handle-h resize-handle-h-left"></div><div class="resize-handle-h resize-handle-h-right"></div>`;
+
+  return `<div class="grid-event${_spanClass}${selectedClass}" data-id="${ev.id}" draggable="true" title="Click to select, Delete key to remove"
+          style="${style}; position:absolute; top:${top}px; height:${adjustedHeight}px; ${_spanWidthStyle}; left:2%; padding:5px 7px; font-size:11px; overflow:hidden; border-radius:5px; cursor:pointer; display:flex; flex-direction:column; box-sizing:border-box;">
           <div class="resize-handle resize-handle-top"></div>
           ${innerHtml}
           ${_travelStrips}
           <div class="resize-handle resize-handle-bottom"></div>
+          ${_hHandles}
           </div>`;
 }
 
@@ -4536,11 +4758,18 @@ function addDropListeners(selector) {
         const newStart = minutesToTime(cellStartMin + snapMin);
         const newEnd = minutesToTime(cellStartMin + snapMin + duration);
 
-        if (divName !== event.division) {
+        const _spanMembers = event.spanGroup ? _mbSpanMembers(event) : null;
+        if (_spanMembers && _spanMembers.length > 1 && _spanMembers.some(m => m.division === divName)) {
+          // Multi-grade tile dropped anywhere inside its own span: the whole
+          // group moves together in time (grades stay as they are).
+          _spanMembers.forEach(m => { m.startTime = newStart; m.endTime = newEnd; });
+        } else if (divName !== event.division) {
           // Cross-grade drop. Clone the event, retarget the division, and
           // remap any league reference to one assigned to the new grade so
           // it doesn't keep pointing at the source grade's league.
           const _crossEv = { ...event, id: Date.now().toString() + '_' + Math.random().toString(36).slice(2, 5), division: divName, startTime: newStart, endTime: newEnd };
+          // A cross-grade copy is an independent tile, not a new span member.
+          delete _crossEv.spanGroup; delete _crossEv.spanDivisions;
           _mbRemapLeagueForGrade(_crossEv, divName);
           dailySkeleton.push(_crossEv);
         } else {
@@ -4882,8 +5111,11 @@ function addDropListeners(selector) {
             { name: 'postChangeMin', label: 'Post-Change (minutes, optional)', type: 'text', placeholder: 'e.g., 10' }
           );
         }
-        // Grade Mode toggle for swim / lunch / snacks
-        if (['swim', 'lunch', 'snacks'].includes(tileData.type)) {
+        // Grade Mode toggle — swim only.
+        // NOT lunch / snacks: a manual meal tile is pinned to one fixed start/end
+        // for the whole grade, so "Staggered" has nothing to stagger. The flag it
+        // wrote (fullGrade) was never read back by the manual generator anyway.
+        if (['swim'].includes(tileData.type)) {
           swimModalFields.push({
             name: 'gradeMode',
             label: 'Grade Mode',
@@ -5307,7 +5539,14 @@ function addResizeListeners(gridEl) {
         
         event.startTime = minutesToTime(Math.max(divStartMin, Math.round(newStartMin / SNAP_MINS) * SNAP_MINS));
         event.endTime = minutesToTime(Math.min(divEndMin, Math.round(newEndMin / SNAP_MINS) * SNAP_MINS));
-        
+
+        // ★ Multi-grade span: every grade's copy keeps the same times.
+        if (event.spanGroup) {
+          _mbSpanMembers(event).forEach(m => {
+            if (m.id !== event.id) { m.startTime = event.startTime; m.endTime = event.endTime; }
+          });
+        }
+
         markUnsavedChanges();
         saveDraftToLocalStorage();
         renderGrid();
@@ -5316,6 +5555,138 @@ function addResizeListeners(gridEl) {
       handle.addEventListener('dragstart', (e) => { e.preventDefault(); e.stopPropagation(); });
     });
   });
+}
+
+// =================================================================
+// ★ HORIZONTAL (MULTI-GRADE) RESIZE
+// Drag a tile's left/right edge to stretch it across neighboring grade
+// columns — the horizontal twin of the top/bottom time resize. Committing
+// the drag adds a linked mirror event for each newly covered grade (and
+// removes the mirrors of grades dragged back out). See the span helpers
+// near the top of this file for the data model.
+// =================================================================
+function addHorizontalResizeListeners(gridEl) {
+  let columns = [];
+  try { columns = JSON.parse(gridEl.dataset.columns || '[]'); } catch (_) { columns = []; }
+  if (!Array.isArray(columns) || columns.length === 0) return;
+
+  let tooltip = document.getElementById('resize-tooltip');
+  if (!tooltip) {
+    tooltip = document.createElement('div');
+    tooltip.id = 'resize-tooltip';
+    document.body.appendChild(tooltip);
+  }
+
+  gridEl.querySelectorAll('.grid-event').forEach(tile => {
+    tile.querySelectorAll('.resize-handle-h').forEach(handle => {
+      const isLeft = handle.classList.contains('resize-handle-h-left');
+
+      // Keep the HTML5 drag machinery off the grips.
+      handle.addEventListener('dragstart', (e) => { e.preventDefault(); e.stopPropagation(); });
+
+      handle.addEventListener('mousedown', (e) => {
+        e.preventDefault();
+        e.stopPropagation();
+
+        const ev = dailySkeleton.find(x => x.id === tile.dataset.id);
+        if (!ev) return;
+        const cell = tile.closest('.grid-cell');
+        const colWidth = cell ? cell.offsetWidth : 0;
+        if (!colWidth) return;
+
+        // Current span geometry. The rendered tile is the anchor — the span's
+        // leftmost member in display order (or a plain single-grade tile).
+        const members = _mbSpanMembers(ev);
+        const spanDivs = members.map(m => m.division)
+          .sort((a, b) => columns.indexOf(a) - columns.indexOf(b));
+        const leftIdx = columns.indexOf(spanDivs[0]);
+        const rightIdx = columns.indexOf(spanDivs[spanDivs.length - 1]);
+        const anchorIdx = columns.indexOf(ev.division);
+        if (leftIdx === -1 || rightIdx === -1 || anchorIdx === -1) return;
+
+        const startX = e.clientX;
+        let newLeftIdx = leftIdx, newRightIdx = rightIdx;
+        tile.classList.add('resizing-h');
+
+        const onMove = (e2) => {
+          const deltaCols = Math.round((e2.clientX - startX) / colWidth);
+          if (isLeft) {
+            newLeftIdx = Math.min(Math.max(0, leftIdx + deltaCols), rightIdx);
+            newRightIdx = rightIdx;
+          } else {
+            newRightIdx = Math.max(Math.min(columns.length - 1, rightIdx + deltaCols), leftIdx);
+            newLeftIdx = leftIdx;
+          }
+          const cols = newRightIdx - newLeftIdx + 1;
+          tile.style.left = `calc(${(newLeftIdx - anchorIdx) * 100}% + 2%)`;
+          tile.style.width = `calc(${cols * 100}% - 4%)`;
+
+          const covered = columns.slice(newLeftIdx, newRightIdx + 1);
+          tooltip.innerHTML = covered.length > 1
+            ? `↔ ${covered.join(' + ')} — together`
+            : `${covered[0]} only`;
+          tooltip.style.display = 'block';
+          tooltip.style.left = (e2.clientX + 12) + 'px';
+          tooltip.style.top = (e2.clientY - 30) + 'px';
+        };
+
+        const onUp = () => {
+          document.removeEventListener('mousemove', onMove);
+          document.removeEventListener('mouseup', onUp);
+          tile.classList.remove('resizing-h');
+          tooltip.style.display = 'none';
+          _mbCommitSpanResize(ev, columns.slice(newLeftIdx, newRightIdx + 1));
+        };
+
+        document.addEventListener('mousemove', onMove);
+        document.addEventListener('mouseup', onUp);
+      });
+    });
+  });
+}
+
+// Commit a horizontal resize: make `ev`'s span cover exactly `newDivs`
+// (ordered, adjacent display columns). Grades entering the span get a linked
+// mirror of the dragged tile; grades leaving it lose their copy; span
+// metadata is stamped on every survivor (or cleared when one grade remains).
+function _mbCommitSpanResize(ev, newDivs) {
+  if (!ev || !Array.isArray(newDivs) || newDivs.length === 0) { renderGrid(); return; }
+  const members = _mbSpanMembers(ev);
+  const oldDivs = members.map(m => m.division);
+  const keepSet = new Set(newDivs);
+  if (oldDivs.length === newDivs.length && oldDivs.every(d => keepSet.has(d))) {
+    renderGrid(); // geometry preview may have moved the tile — repaint
+    return;
+  }
+
+  const byDiv = {};
+  members.forEach(m => { byDiv[m.division] = m; });
+
+  const removeIds = new Set(members.filter(m => !keepSet.has(m.division)).map(m => m.id));
+  if (removeIds.size) {
+    dailySkeleton = dailySkeleton.filter(m => !removeIds.has(m.id));
+    if (removeIds.has(selectedTileId)) selectedTileId = null;
+  }
+
+  const groupId = ev.spanGroup || ('span_' + Date.now().toString(36) + Math.random().toString(36).slice(2, 6));
+  const finalMembers = newDivs.map(d => {
+    let m = byDiv[d];
+    if (!m) {
+      m = _mbMakeSpanMirror(ev, d);
+      dailySkeleton.push(m);
+    }
+    return m;
+  });
+
+  if (finalMembers.length > 1) {
+    finalMembers.forEach(m => { m.spanGroup = groupId; m.spanDivisions = newDivs.slice(); });
+  } else {
+    finalMembers.forEach(m => { delete m.spanGroup; delete m.spanDivisions; });
+  }
+
+  markUnsavedChanges();
+  saveDraftToLocalStorage();
+  renderGrid();
 }
 
 // =================================================================
@@ -5335,7 +5706,7 @@ function addDragToRepositionListeners(gridEl) {
   
   gridEl.querySelectorAll('.grid-event').forEach(tile => {
     tile.addEventListener('dragstart', (e) => {
-      if (e.target.classList.contains('resize-handle')) { e.preventDefault(); return; }
+      if (_mbIsResizeTarget(e.target)) { e.preventDefault(); return; }
       
       const eventId = tile.dataset.id;
       const event = dailySkeleton.find(ev => ev.id === eventId);
@@ -5425,13 +5796,13 @@ function loadDailySkeleton() {
       currentLoadedTemplate = tmpl;
   }
   
-  dailySkeleton = (tmpl && skeletons[tmpl]) ? JSON.parse(JSON.stringify(skeletons[tmpl])) : [];
+  dailySkeleton = (tmpl && skeletons[tmpl]) ? _mbRepairSpans(JSON.parse(JSON.stringify(skeletons[tmpl]))) : [];
 }
 
 function loadSkeletonToBuilder(name) {
   const all = window.getSavedSkeletons?.() || {};
   if (all[name]) {
-    dailySkeleton = JSON.parse(JSON.stringify(all[name]));
+    dailySkeleton = _mbRepairSpans(JSON.parse(JSON.stringify(all[name])));
     currentLoadedTemplate = name;
     hasUnsavedChanges = false;
     const savedOrders = (window.loadGlobalSettings?.() || {})?.app1?.skeletonColumnOrders || {};
@@ -5468,6 +5839,12 @@ window.MasterSchedulerInternal = {
   renderPalette: typeof renderPalette === 'function' ? renderPalette : function(){},
   renderToolbar: typeof renderToolbar === 'function' ? renderToolbar : function(){},
   showModal: typeof showModal === 'function' ? showModal : null,
+  // ★ Multi-grade span helpers (tests + future validation/mobile integration)
+  spanMembers: _mbSpanMembers,
+  commitSpanResize: _mbCommitSpanResize,
+  syncSpanSiblings: _mbSyncSpanSiblings,
+  repairSpans: _mbRepairSpans,
+  makeSpanMirror: _mbMakeSpanMirror,
   parseTimeToMinutes: typeof parseTimeToMinutes === 'function' ? parseTimeToMinutes : function(){ return null; },
   minutesToTime: typeof minutesToTime === 'function' ? minutesToTime : function(){ return ''; },
   // ★★★ AUTO BUILD integration ★★★

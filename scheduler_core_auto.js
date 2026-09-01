@@ -47,15 +47,35 @@
     const VERSION = '4.0.0';
     const TAG = '[AutoCore]';
 
-    function log(msg, ...args) { console.log(TAG + ' ' + msg, ...args); }
-    function warn(msg, ...args) { console.warn(TAG + ' ⚠️ ' + msg, ...args); }
-    function err(msg, ...args) { console.error(TAG + ' ❌ ' + msg, ...args); }
+    // ★ GenTrace: every narrative line also lands in the generation brain
+    //   trace (when one is recording) so the full run can be exported and
+    //   analyzed offline via downloadGenTrace().
+    function _gtLog(lv, msg) { if (window.GenTrace && window.GenTrace.active) window.GenTrace.solverLog(TAG, lv, msg); }
+    function log(msg, ...args) { console.log(TAG + ' ' + msg, ...args); _gtLog('log', msg); }
+    function warn(msg, ...args) { console.warn(TAG + ' ⚠️ ' + msg, ...args); _gtLog('warn', msg); }
+    function err(msg, ...args) { console.error(TAG + ' ❌ ' + msg, ...args); _gtLog('error', msg); }
 
     // =========================================================================
     // UTILITIES
     // =========================================================================
 
     function uid() { return 'ac_' + Math.random().toString(36).slice(2, 9); }
+
+    // ★ HR-20: rotation-epoch watermark reader (non-deleting half reset).
+    //   Returns the ISO dateKey before which history-COUNTING scans must not
+    //   look — schedules are never deleted. Prefers the canonical
+    //   Utils.getRotationEpoch; inline fallback tolerates load order and the
+    //   legacy bare-string form. COMPLETE reset: yesterday-repeat, recency and
+    //   league back-to-back checks are epoch-filtered too (new campers).
+    function _getRotationEpoch() {
+        try {
+            const U = window.SchedulerCoreUtils || window.Utils;
+            if (U && typeof U.getRotationEpoch === 'function') return U.getRotationEpoch();
+            const e = window.loadGlobalSettings ? window.loadGlobalSettings('rotationEpoch') : null;
+            const d = (typeof e === 'string') ? e : (e && e.date);
+            return (d && /^\d{4}-\d{2}-\d{2}$/.test(d)) ? d : null;
+        } catch (_) { return null; }
+    }
 
     // Unified scheduling-rules check. Every phase that places or extends a
     // block should call this before committing. Returns true if placement is
@@ -666,6 +686,7 @@
         //   today's matchups + sports come from the true cross-session record. Best-
         //   effort + time-boxed (see SchedulerCoreLeagues.refreshHistoryFromCloud).
         try { if (window.SchedulerCoreLeagues?.refreshHistoryFromCloud) await window.SchedulerCoreLeagues.refreshHistoryFromCloud(); } catch (_eLgRefresh) {}
+        try { if (window.SchedulerCoreSpecialtyLeagues?.refreshHistoryFromCloud) await window.SchedulerCoreSpecialtyLeagues.refreshHistoryFromCloud(); } catch (_eSpRefresh) {}
 
         // ★ SPORT-LEAK GATE: a grade that has NO sport/sports layer must never
         //   receive a field-catalog sport. Open time in such a grade is filled
@@ -1293,6 +1314,9 @@
             d.setDate(d.getDate() - daysToMon - (weeksBack * 7));
             return d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0') + '-' + String(d.getDate()).padStart(2, '0');
         }
+        // ★ HR-21: per-run rotation epoch — all history-counting helpers below
+        //   ignore schedule dates before this watermark (schedules stay saved).
+        const _rotEpoch = _getRotationEpoch();
         function getHalfStartDate() {
             const cd = _campDates;
             if (cd) {
@@ -1305,7 +1329,11 @@
                 if (cd.startDate) return cd.startDate;
             }
             const s = globalSettings.app1 || globalSettings;
-            return s.halfStartDate || s.currentHalfStart || s.sessionHalfStart || (Object.keys(allDailyData).sort()[0] || null);
+            // ★ HR-22: epoch precedes the settings keys, and the earliest-schedule
+            //   fallback only considers post-epoch keys — otherwise a non-deleting
+            //   reset would pin "half start" to camp day 1 forever.
+            return _rotEpoch || s.halfStartDate || s.currentHalfStart || s.sessionHalfStart ||
+                (Object.keys(allDailyData).filter(k => !_rotEpoch || k >= _rotEpoch).sort()[0] || null);
         }
 
         const _campDates = (function() {
@@ -1328,19 +1356,28 @@
             const periodStartDay = periodIndex * nWeeks * 7;
             const periodDate = new Date(campStart);
             periodDate.setDate(periodDate.getDate() + periodStartDay);
-            return periodDate.getFullYear() + '-' + String(periodDate.getMonth() + 1).padStart(2, '0') + '-' + String(periodDate.getDate()).padStart(2, '0');
+            const _cdRes = periodDate.getFullYear() + '-' + String(periodDate.getMonth() + 1).padStart(2, '0') + '-' + String(periodDate.getDate()).padStart(2, '0');
+            // ★ HR-23: clamp camp-date period starts to the epoch (null stays
+            //   null — it is the fall-through sentinel to the Monday windows).
+            return (_rotEpoch && _cdRes < _rotEpoch) ? _rotEpoch : _cdRes;
         }
 
         function getPeriodStartDate(period) {
             const campDateStart = _getCampDatePeriodStart(period);
-            if (campDateStart) return campDateStart;
-            switch (period) {
-                case '1week': return getMondayOfWeek(currentDate, 0);
-                case '2weeks': return getMondayOfWeek(currentDate, 1);
-                case '3weeks': return getMondayOfWeek(currentDate, 2);
-                case '4weeks': return getMondayOfWeek(currentDate, 3);
-                default: return getHalfStartDate();
+            let _psResult;
+            if (campDateStart) _psResult = campDateStart;
+            else switch (period) {
+                case '1week': _psResult = getMondayOfWeek(currentDate, 0); break;
+                case '2weeks': _psResult = getMondayOfWeek(currentDate, 1); break;
+                case '3weeks': _psResult = getMondayOfWeek(currentDate, 2); break;
+                case '4weeks': _psResult = getMondayOfWeek(currentDate, 3); break;
+                default: _psResult = getHalfStartDate();
             }
+            // ★ HR-24: epoch floor on every period start (mirrors the clamp in
+            //   Utils.getPeriodStartDate); a null (= lifetime) result becomes
+            //   the epoch itself so counts never look before the watermark.
+            if (_rotEpoch && (!_psResult || _psResult < _rotEpoch)) return _rotEpoch;
+            return _psResult;
         }
         function getPeriodCount(bunk, specialName, maxUsagePeriod) {
             const periodStart = getPeriodStartDate(maxUsagePeriod || 'half');
@@ -1348,6 +1385,7 @@
             Object.entries(allDailyData).forEach(([dateKey, dayData]) => {
                 if (dateKey >= currentDate) return;
                 if (periodStart && dateKey < periodStart) return;
+                if (_rotEpoch && dateKey < _rotEpoch) return; // ★ HR-25: belt-and-braces epoch skip
                 const slots = dayData?.scheduleAssignments?.[bunk];
                 if (!Array.isArray(slots)) return;
                 if (slots.some(e => e && !e.continuation && (e._activity === specialName || e.field === specialName))) count++;
@@ -1369,6 +1407,7 @@
             let priorCount = 0;
             for (const dk in allDailyData) {
                 if (dk >= currentDate) continue;
+                if (_rotEpoch && dk < _rotEpoch) continue; // ★ HR-26: pre-epoch parts invisible — sequence restarts at part 1
                 const slots = allDailyData[dk]?.scheduleAssignments?.[String(bunk)];
                 if (Array.isArray(slots) && slots.some(e =>
                     e && !e.continuation && (e._activity === specialName || e.field === specialName))) {
@@ -1397,6 +1436,7 @@
             let count = 0;
             Object.entries(allDailyData).forEach(([dateKey, dayData]) => {
                 if (dateKey >= currentDate) return;
+                if (_rotEpoch && dateKey < _rotEpoch) return; // ★ HR-27: cohort "lifetime" counts are epoch-scoped
                 const slots = dayData?.scheduleAssignments?.[bunk];
                 if (!Array.isArray(slots)) return;
                 if (slots.some(e => e && !e.continuation &&
@@ -1927,7 +1967,9 @@
                 log('[STEP 1.5] Pool sharing config: type="' + _st + '" capacity=' + _cap + ' (counts BUNKS) allowedPairs=' + (Object.keys(_swEff.allowedPairs || {}).length) + ' [source=' + (_swimGASW ? ('swim-activity ' + _swimGASrc) : 'pool-field') + ']');
             } else {
                 const _legacy = (window.globalSettings?.app1?.poolLaneCapacity);
-                log('[STEP 1.5] Pool sharing config: NO Pool field OR Swim-activity sharableWith found → default capacity=' + (typeof _legacy === 'number' && _legacy > 0 ? _legacy : 12) + ' (counts BUNKS, type="all")');
+                const _capLbl = (typeof _legacy === 'number' && _legacy > 0) ? ('legacy poolLaneCapacity=' + _legacy)
+                    : (window.__swimNoFacilityUnlimited !== false ? 'UNLIMITED (no facility assigned to swim → no cap)' : '12 (kill-switch legacy default)');
+                log('[STEP 1.5] Pool sharing config: NO Pool field OR Swim-activity sharableWith found → ' + _capLbl + ' (counts BUNKS, type="all")');
             }
         } catch (_epc) {}
 
@@ -2440,9 +2482,10 @@
             // New rule: pool is shared across grades up to LANE CAPACITY.
             // The human camp scheduler clearly does this — same-day PDF shows
             // Trios bunks swimming concurrently with Majors, Quartet, Quints,
-            // and Minors throughout the day, never all together. Default
-            // capacity 12 lanes matches a typical camp pool; configurable
-            // via globalSettings.app1.poolLaneCapacity.
+            // and Minors throughout the day, never all together. Capacity is
+            // configurable on the Swim activity / Pool field (or the legacy
+            // globalSettings.app1.poolLaneCapacity); with NO facility assigned
+            // to swim at all, swim is UNLIMITED (no cap — see below).
             //
             // TODO (future): per-grade-pair sharing config. The user should
             // be able to say "Trios may share pool with Quartet" or "Majors
@@ -2507,12 +2550,20 @@
                         if (_cap > 0) _poolCap = _cap;
                         else if (_poolShareType === 'all') _poolCap = 999;
                     }
-                }
-                // Fallback: legacy poolLaneCapacity setting (only if no field config)
-                if (_poolCap === 12 && _poolShareType === 'all' && window.globalSettings && window.globalSettings.app1 &&
+                } else if (window.globalSettings && window.globalSettings.app1 &&
                     typeof window.globalSettings.app1.poolLaneCapacity === 'number' &&
                     window.globalSettings.app1.poolLaneCapacity > 0) {
+                    // Legacy explicit cap (only consulted when no field/activity config).
                     _poolCap = window.globalSettings.app1.poolLaneCapacity;
+                } else if (window.__swimNoFacilityUnlimited !== false) {
+                    // ★ NO FACILITY ASSIGNED TO SWIM (no Swim general-activity
+                    //   sharing, no Pool field, no legacy poolLaneCapacity):
+                    //   swim is UNLIMITED. The old default silently capped a
+                    //   facility-less swim at 12 bunks, starving every bunk past
+                    //   the 12th concurrent swimmer in camps that never modeled a
+                    //   Pool. Matches poolSwimPairFreeAt (no config → unrestricted).
+                    //   Kill-switch: window.__swimNoFacilityUnlimited=false → 12.
+                    _poolCap = 999999;
                 }
             } catch (_e) {}
 
@@ -3651,8 +3702,9 @@
 
                     // Mirror canUsePoolAtTime (L1431) EXACTLY so the plan and the
                     //   placer never disagree: capture shareType + allowedPairs too,
-                    //   default cap 12, honor not_sharable/all/cross_division + the
-                    //   legacy poolLaneCapacity fallback.
+                    //   honor not_sharable/all/cross_division + the legacy
+                    //   poolLaneCapacity fallback; NO facility assigned to swim →
+                    //   UNLIMITED (no cap; kill-switch __swimNoFacilityUnlimited).
                     var _poolCap = 12, _poolShareType = 'all', _poolAllowedPairs = {};
                     try {
                         var _gs = (typeof globalSettings !== 'undefined' && globalSettings) ? globalSettings : (window.globalSettings || {});
@@ -3671,9 +3723,10 @@
                             _poolAllowedPairs = _sw.allowedPairs || {};
                             if (_poolShareType === 'not_sharable') _poolCap = 1;
                             else { var _c = parseInt(_sw.capacity); if (_c > 0) _poolCap = _c; else if (_poolShareType === 'all') _poolCap = 999; }
-                        }
-                        if (_poolCap === 12 && _poolShareType === 'all' && _gs.app1 && typeof _gs.app1.poolLaneCapacity === 'number' && _gs.app1.poolLaneCapacity > 0) {
+                        } else if (_gs.app1 && typeof _gs.app1.poolLaneCapacity === 'number' && _gs.app1.poolLaneCapacity > 0) {
                             _poolCap = _gs.app1.poolLaneCapacity;
+                        } else if (window.__swimNoFacilityUnlimited !== false) {
+                            _poolCap = 999999;   // no facility assigned to swim → no cap
                         }
                     } catch (_eP) {}
 
@@ -3898,6 +3951,12 @@
             //   zero-trims the later one (same failure family as FN-33). With the
             //   substitution inside the derivation, every wall rebuild re-applies
             //   the override instead of fighting it. Window stays the wall's own.
+            // ★ FIXED walls too (lunch/snacks/swim/dinner/dismissal): a per-bunk
+            //   location override on a fixed tile rides the same source-
+            //   substitution lane — the old injection path lost to the wall for
+            //   exactly the reason above, so the picked location never survived
+            //   generation.
+            var _P0_FIXED_WALL_TYPES = { swim: 1, lunch: 1, snacks: 1, snack: 1, dinner: 1, dismissal: 1 };
             var _p0CustomForceOvs = [];
             try {
                 var _fddOv = (typeof loadCurrentDailyData === 'function' ? loadCurrentDailyData() : null) || {};
@@ -3910,7 +3969,8 @@
             _p0CustomForceOvs = _p0CustomForceOvs.filter(function (o) {
                 if (!o || !o.bunk || !o.activity) return false;
                 if ((o.overrideMode || 'force') !== 'force') return false;
-                if (String(o.layerType || '').toLowerCase() !== 'custom') return false;
+                var _olt = String(o.layerType || '').toLowerCase();
+                if (_olt !== 'custom' && !_P0_FIXED_WALL_TYPES[_olt]) return false;
                 if (o.activity === '+ added layer' || o.activity === '⇕ resized' || o.activity === '— deleted —') return false;
                 return true;
             });
@@ -4811,15 +4871,19 @@
                         let _fldBunk = isCustom
                             ? (layer.customField || _p0GAFieldMap[String(eventName).toLowerCase().trim()] || null)
                             : null;
+                        let _ovApplied = false;
                         if (isCustom && _p0CustomForceOvs.length) {
                             const _co = _p0CustomForceOvs.find(o => {
                                 if (String(o.bunk) !== String(bunk)) return false;
+                                // Fixed-typed overrides belong to fixed walls, not custom ones.
+                                if (_P0_FIXED_WALL_TYPES[String(o.layerType || '').toLowerCase()]) return false;
                                 const os = o.startMin != null ? o.startMin : parseTimeToMinutes(o.startTime);
                                 const oe = o.endMin != null ? o.endMin : parseTimeToMinutes(o.endTime);
                                 return (os === layer.startMin && oe === layer.endMin) ||
                                        (os === blockStart && oe === blockEnd);
                             });
                             if (_co) {
+                                _ovApplied = true;
                                 _evBunk = _co.activity;
                                 if (_co.location) {
                                     _fldBunk = _co.location;
@@ -4843,7 +4907,36 @@
                                     (_fldBunk && _fldBunk !== layer.customField ? ' @ ' + _fldBunk : '') + ' (bunk override)');
                             }
                         }
-                        const _isOvWall = _evBunk !== eventName;
+                        // ★ FIXED walls (lunch/snacks/swim/dinner/dismissal): a force
+                        //   override substitutes this bunk's LOCATION (and, if the user
+                        //   picked one, the display name) at the source — same FN-37b
+                        //   lane. The wall keeps its native type/window, so meal/swim
+                        //   semantics are untouched; only this bunk's location moves.
+                        const _wallT = String(layer.type || '').toLowerCase();
+                        const _isFixedWall = !isCustom && !!_P0_FIXED_WALL_TYPES[_wallT];
+                        if (_isFixedWall && _p0CustomForceOvs.length) {
+                            const _fo = _p0CustomForceOvs.find(o => {
+                                if (String(o.bunk) !== String(bunk)) return false;
+                                const olt = String(o.layerType || '').toLowerCase();
+                                // Native fixed-typed overrides + legacy saves (which
+                                // carried layerType 'custom' for GA-backed fixed bands).
+                                if (olt !== _wallT && !(olt === 'snack' && _wallT === 'snacks') && olt !== 'custom') return false;
+                                const os = o.startMin != null ? o.startMin : parseTimeToMinutes(o.startTime);
+                                const oe = o.endMin != null ? o.endMin : parseTimeToMinutes(o.endTime);
+                                return (os === layer.startMin && oe === layer.endMin) ||
+                                       (os === blockStart && oe === blockEnd);
+                            });
+                            if (_fo) {
+                                _ovApplied = true;
+                                if (_fo.location) _fldBunk = _fo.location;
+                                // Legacy location-picks stored the facility name as the
+                                // activity — keep the wall's own name in that case.
+                                if (_fo.activity && _fo.activity !== _fo.location) _evBunk = _fo.activity;
+                                log('[Phase0] Fixed wall "' + eventName + '" (' + _wallT + ') override for ' + bunk +
+                                    (_fldBunk ? ' @ ' + _fldBunk : '') + (_evBunk !== eventName ? ' as "' + _evBunk + '"' : ''));
+                            }
+                        }
+                        const _isOvWall = _ovApplied || _evBunk !== eventName;
                         bunkTimelines[bunk].push({
                             startMin: blockStart, endMin: blockEnd,
                             type: isCustom ? 'custom' : (layer.type || 'pinned'),
@@ -4851,13 +4944,15 @@
                             // ★ FN-37c: block.field is the durable claim carrier — Phase 3's
                             //   pre-register pass claims it in the rebuilt fieldLedger, which
                             //   keeps other bunks off the auto-assigned field at this window.
-                            field: (isCustom && _isOvWall && _fldBunk) ? _fldBunk : undefined,
+                            field: ((isCustom || _isFixedWall) && _isOvWall && _fldBunk) ? _fldBunk : undefined,
                             _classification: 'pinned', _committed: true, _fixed: true,
                             _gradeWide: isGradeWide && !isCustom, _activityLocked: true,
                             _noBacktrack: isGradeWide,
                             _bunkOverride: _isOvWall ? true : undefined,
-                            _customActivity: isCustom ? (_isOvWall ? _evBunk : layer.customActivity) : null,
-                            _customField: isCustom ? _fldBunk : null,
+                            _customActivity: isCustom ? (_isOvWall ? _evBunk : layer.customActivity)
+                                : ((_isFixedWall && _isOvWall) ? _evBunk : null),
+                            _customField: isCustom ? _fldBunk
+                                : ((_isFixedWall && _isOvWall) ? _fldBunk : null),
                             _customBunks: isCustom ? layer.customBunks : null
                         });
                     }
@@ -5357,6 +5452,14 @@
                 if (a.rotationScore !== b.rotationScore) return a.rotationScore - b.rotationScore;
                 return (a.fields?.length || 0) - (b.fields?.length || 0);
             });
+            // ★ GenTrace: record this bunk's sport shopping list — the rotation-
+            //   ordered menu the placement phases pick from.
+            if (window.GenTrace && window.GenTrace.active) {
+                window.GenTrace.decision({
+                    kind: 'sport-priority-list', bunk: bunk, division: grade,
+                    candidates: sportPriorityList.map(s => ({ name: s.name, score: Math.round(s.rotationScore) }))
+                });
+            }
             // Slice 3 audit fix (Deferred-1): expose a re-rank closure on the
             // list itself so iterating consumers can refresh rotation scores
             // before each slot pick. Earlier the list was built with
@@ -5528,6 +5631,7 @@
                     let lastDone = null;
                     for (let _dk = sortedKeys.length - 1; _dk >= 0; _dk--) {
                         if (sortedKeys[_dk] >= currentDate) continue;
+                        if (_rotEpoch && sortedKeys[_dk] < _rotEpoch) break; // ★ HR-28: descending scan — everything below is pre-epoch (parts restart at 1)
                         const _slots = allDailyData[sortedKeys[_dk]]?.scheduleAssignments?.[String(bunk)];
                         if (Array.isArray(_slots) && _slots.some(e => e && !e.continuation && (e._activity === s.name || e.field === s.name))) {
                             priorCount++;
@@ -5559,11 +5663,16 @@
                         const _cdKeys = Object.keys(allDailyData).sort();
                         for (let _cdk = _cdKeys.length - 1; _cdk >= 0; _cdk--) {
                             if (_cdKeys[_cdk] >= currentDate) continue;
+                            if (_rotEpoch && _cdKeys[_cdk] < _rotEpoch) break; // ★ HR-29: cooldowns reset at the epoch — pre-epoch visits invisible
                             const _cdSlots = allDailyData[_cdKeys[_cdk]]?.scheduleAssignments?.[String(bunk)];
                             if (Array.isArray(_cdSlots) && _cdSlots.some(function(e) {
                                 return e && !e.continuation && (e._activity === s.name || e.field === s.name);
                             })) {
-                                const _cdDiff = Math.floor((new Date(currentDate) - new Date(_cdKeys[_cdk])) / 86400000);
+                                // Gap in SCHEDULE-days, not calendar days: a day the
+                                // grade isn't at camp (no schedule) doesn't count.
+                                const _cdDiff = window.SchedulerCoreUtils?.scheduledDaysBetween
+                                    ? window.SchedulerCoreUtils.scheduledDaysBetween(bunk, _cdKeys[_cdk], currentDate, allDailyData)
+                                    : Math.floor((new Date(currentDate) - new Date(_cdKeys[_cdk])) / 86400000);
                                 if (_cdDiff < _cdDays) {
                                     log('[cooldown] skip ' + s.name + ' for ' + bunk + ' (' + _cdDiff + 'd since last, need ' + _cdDays + 'd)');
                                     return;
@@ -5658,6 +5767,16 @@
            //   tier, the escalating floor-deficit score (strong negative) sorts the most
            //   urgent first. Scarce specials stay in the tier (not starved).
            specialPriorityList.sort((a, b) => { const aU = a.isScarce || a._belowFloor, bU = b.isScarce || b._belowFloor; if (aU !== bU) return aU ? -1 : 1; return a.rotationScore - b.rotationScore; });
+            // ★ GenTrace: record this bunk's special shopping list (urgent tier first).
+            if (window.GenTrace && window.GenTrace.active) {
+                window.GenTrace.decision({
+                    kind: 'special-priority-list', bunk: bunk, division: grade,
+                    candidates: specialPriorityList.map(s => ({
+                        name: s.name, score: Math.round(s.rotationScore),
+                        urgent: !!(s.isScarce || s._belowFloor) || undefined
+                    }))
+                });
+            }
             specialPriorityList._rerank = function() {
                 if (!window.RotationEngine?.calculateRotationScore) return;
                 for (let _i = 0; _i < specialPriorityList.length; _i++) {
@@ -10300,7 +10419,21 @@
                     }
                 }
 
-                if (candidates.length === 0) return null;
+                // ★ GenTrace: record this sport-pick decision — the candidates the
+                //   engine weighed (score = rotation-dominant composite computed
+                //   above) and which one won. `note` explains no-pick outcomes.
+                var _gtPick = function (chosen, note) {
+                    if (window.GenTrace && window.GenTrace.active) {
+                        window.GenTrace.decision({
+                            kind: 'sport-pick', bunk: bunk, division: grade,
+                            window: startMin + '-' + endMin,
+                            candidates: candidates.map(function (c) { return { name: c.name, field: c.field, score: Math.round(c.score) }; }),
+                            chosen: chosen, note: note
+                        });
+                    }
+                    return chosen;
+                };
+                if (candidates.length === 0) return _gtPick(null, 'no-feasible-sport-field-combo');
                 // Pick the highest-scoring candidate
                 candidates.sort(function(a, b) { return b.score - a.score; });
                 // ★ Variety guard: if any unused sport is available, skip already-used
@@ -10316,7 +10449,7 @@
                             { startMin: startMin, endMin: endMin, type: 'sport',
                               event: cand.name, field: cand.field },
                             meta.template, { mode: "auto" });
-                        if (ok) return { name: cand.name, field: cand.field };
+                        if (ok) return _gtPick({ name: cand.name, field: cand.field }, ci > 0 ? (ci + ' higher-scored candidates blocked by cooldown rules') : undefined);
                     }
                     // All unused candidates blocked by cooldown — try used as last resort
                     if (unusedCandidates.length > 0) {
@@ -10326,12 +10459,12 @@
                                 { startMin: startMin, endMin: endMin, type: 'sport',
                                   event: cand2.name, field: cand2.field },
                                 meta.template, { mode: "auto" });
-                            if (ok2) return { name: cand2.name, field: cand2.field };
+                            if (ok2) return _gtPick({ name: cand2.name, field: cand2.field }, 'reused sport — all unused candidates blocked by cooldown rules');
                         }
                     }
-                    return null; // all candidates blocked by cooldown
+                    return _gtPick(null, 'all candidates blocked by cooldown rules');
                 }
-                return { name: candidatePool[0].name, field: candidatePool[0].field };
+                return _gtPick({ name: candidatePool[0].name, field: candidatePool[0].field });
             }
 
             // Compute optimal split plan for a gap — returns array of {start, end}
@@ -14903,7 +15036,8 @@
                     if (!window._bunkDeletedLayers[bunk]) window._bunkDeletedLayers[bunk] = [];
                     window._bunkDeletedLayers[bunk].push({
                         startMin: tStart, endMin: tEnd,
-                        layerType: ov.layerType || 'custom'
+                        layerType: ov.layerType || 'custom',
+                        layerName: ov.layerName || null
                     });
                     if (totalIters < 1) log('[P0] Layer delete override recorded for ' + bunk + ' (' + tStart + '-' + tEnd + ', layer=' + (ov.layerType || 'custom') + ')');
                     return;
@@ -14938,17 +15072,24 @@
                 if (!ov.activity) return;
                 // Defense-in-depth: never pin a UI placeholder string as an activity.
                 if (ov.activity === '+ added layer' || ov.activity === '⇕ resized' || ov.activity === '— deleted —') return;
-                // ★ FN-37b: custom-layer force overrides are applied at the SOURCE —
-                //   the Phase-0 wall push substitutes the bunk's activity name. If
-                //   that wall exists, don't inject a competing fixed block here
-                //   (the duplicate just gets zero-trimmed by integrity anyway).
-                if (String(ov.layerType || '').toLowerCase() === 'custom') {
-                    const _wall = bunkTimelines[bunk].find(b =>
-                        b && (b.type || '').toLowerCase() === 'custom' &&
-                        b.startMin === tStart && b.endMin === tEnd &&
-                        b.event === ov.activity);
+                // ★ FN-37b: custom-layer AND fixed-wall force overrides are applied
+                //   at the SOURCE — the Phase-0 wall push substitutes the bunk's
+                //   activity/location. If a wall block already carries this
+                //   override (marked _bunkOverride, and walls carry their layer),
+                //   don't inject a competing fixed block here (the duplicate just
+                //   gets zero-trimmed by integrity anyway). Overlap-matched, not
+                //   window-equal: full-grade lunch walls centre-snap to bell
+                //   periods, so the wall's window can differ from the layer's.
+                {
+                    const _wall = bunkTimelines[bunk].find(b => b && (
+                        (b._bunkOverride === true && b.layer &&
+                            b.startMin < tEnd && b.endMin > tStart) ||
+                        ((b.type || '').toLowerCase() === 'custom' &&
+                            b.startMin === tStart && b.endMin === tEnd &&
+                            b.event === ov.activity)
+                    ));
                     if (_wall) {
-                        if (totalIters < 1) log('[P0] Custom-layer override for ' + bunk + ' already applied at the wall ("' + ov.activity + '") — injection skipped');
+                        if (totalIters < 1) log('[P0] Override for ' + bunk + ' ("' + ov.activity + '") already applied at the wall — injection skipped');
                         return;
                     }
                 }
@@ -14958,18 +15099,34 @@
                 ) || '';
                 const sportName = ov.activity;
 
+                // ★ Fixed-tile overrides (Lunch/Snacks/Swim/Dinner/Dismissal picked
+                //   in the bunk-override UI) keep their NATIVE behavior type so every
+                //   type-keyed branch in the solver (meal handling, rainy-day, print,
+                //   preservation sweeps) treats them exactly like the grade tile —
+                //   previously they collapsed to a generic 'custom' block.
+                const _FIXED_BEHAVIOR_TYPES = { swim: 1, lunch: 1, snacks: 1, snack: 1, dinner: 1, dismissal: 1 };
+                let fixedType = null;
+                const _ovTypeLc = String(ov.type || '').toLowerCase();
+                const _ovLayerLc = String(ov.layerType || '').toLowerCase();
+                if (_FIXED_BEHAVIOR_TYPES[_ovTypeLc]) fixedType = _ovTypeLc;
+                else if (_FIXED_BEHAVIOR_TYPES[_ovLayerLc]) fixedType = _ovLayerLc;
+                if (fixedType === 'snack') fixedType = 'snacks';
+
                 // Check if ANY field hosts this activity (case-insensitive) → it's a sport
                 const sportNameLower = sportName.toLowerCase().trim();
                 let isSport = false;
-                for (const fn of Object.keys(fieldLedger)) {
-                    if (fieldLedger[fn].activities.some(a => a.toLowerCase().trim() === sportNameLower)) {
-                        isSport = true;
-                        break;
+                if (!fixedType) {
+                    for (const fn of Object.keys(fieldLedger)) {
+                        if (fieldLedger[fn].activities.some(a => a.toLowerCase().trim() === sportNameLower)) {
+                            isSport = true;
+                            break;
+                        }
                     }
                 }
-                const blockType = isSport ? 'sport' : (ov.type === 'special' ? 'special' : 'custom');
+                const blockType = fixedType || (isSport ? 'sport' : (ov.type === 'special' ? 'special' : 'custom'));
 
-                // Auto-assign field if not specified
+                // Auto-assign field if not specified (sports only — a fixed tile
+                // without a picked location stays location-less like its grade twin)
                 let assignedField = ov.location || null;
                 if (!assignedField && isSport) {
                     for (const fn of Object.keys(fieldLedger)) {
@@ -14990,6 +15147,11 @@
                     layer: null, _classification: 'pinned', _committed: true, _fixed: true,
                     _bunkOverride: true, _activityLocked: true, _noBacktrack: true,
                     _assignedSport: isSport ? ov.activity : null,
+                    // Mirror the grade pinned-tile block shape (custom + fixed tiles
+                    // carry the activity/facility pairing the wall push sets).
+                    ...(fixedType || blockType === 'custom'
+                        ? { _customActivity: ov.activity, _customField: assignedField }
+                        : {}),
                     _source: 'capacity_checked'
                 });
                 // ★ FLAG #1: the override is authoritative — reserve the field EXCLUSIVELY
@@ -23909,6 +24071,20 @@
             const _specials = _app1.specialActivities || [];
             const fld = _fields.find(f => f && f.name === fieldName);
             const spByName = activityName ? _specials.find(s => s && s.name === activityName) : null;
+            // ★ Sport/facility limits (maxUsage / exactFrequency / frequencyDays)
+            //   live in activityProperties — buildActivityProperties builds a
+            //   type:'sport' entry for any sport that has a cap configured — NOT
+            //   in _specials. The rotation gate below only knew about _specials,
+            //   so a SPORT's cooldown was never enforced at this write choke point:
+            //   observed live — a facility/sport set to "min 6 days between" landed
+            //   twice in 4 days because this validator skipped it entirely. Fall
+            //   back to the sport's props so the gate fires for sports too. (Special
+            //   access restrictions below still key off spByName — sports have none.)
+            const _limitCfg = spByName
+                || (activityName && window.activityProperties
+                    && (window.activityProperties[activityName]
+                        || window.activityProperties[String(activityName).toLowerCase().trim()]))
+                || null;
             // ★ DA Resources: field disabled for today → no placement allowed
             //   (FQ-REOPT, active-pairing, time-reloc, drop-refill, and the write
             //   step all flow through this validator — adding the check here
@@ -24079,7 +24255,7 @@
             // Out of scope here: rotationCohort (needs lifetime counts),
             // availableDays (caller already filters), same-day duplicate
             // protection (different bug class).
-            if (spByName && activityName && bunk != null) {
+            if (_limitCfg && activityName && bunk != null) {
                 try {
                     const _ru = window.SchedulerCoreUtils;
                     const _today = (typeof currentDate !== 'undefined' && currentDate)
@@ -24089,11 +24265,15 @@
                         ? allDailyData
                         : (window.loadAllDailyData ? window.loadAllDailyData() : {});
                     const _bunkKey = String(bunk);
+                    // ★ HR-30: write-gate epoch floor — reuse the per-run watermark
+                    //   (in scope; avoids a settings read on every commit attempt).
+                    const _wgEpoch = _rotEpoch;
                     function _crossDayCount(periodStart) {
                         let c = 0;
                         for (const dk of Object.keys(_all)) {
                             if (dk >= _today) continue;
                             if (periodStart && dk < periodStart) continue;
+                            if (_wgEpoch && dk < _wgEpoch) continue; // ★ HR-31: pre-epoch days never count toward caps
                             const sl = _all[dk] && _all[dk].scheduleAssignments && _all[dk].scheduleAssignments[_bunkKey];
                             if (Array.isArray(sl) && sl.some(function (e) {
                                 return e && !e.continuation && (e._activity === activityName || e.field === activityName);
@@ -24102,14 +24282,14 @@
                         return c;
                     }
                     // maxUsage gate (+ per-grade override)
-                    const _maxUsage = parseInt(spByName.maxUsage) || 0;
-                    const _maxPeriod = spByName.maxUsagePeriod || 'half';
+                    const _maxUsage = parseInt(_limitCfg.maxUsage) || 0;
+                    const _maxPeriod = _limitCfg.maxUsagePeriod || 'half';
                     const _periodStart = (_ru && _ru.getPeriodStartDate)
                         ? _ru.getPeriodStartDate(_maxPeriod, _today)
                         : null;
                     if (_maxUsage > 0) {
                         let _cap = _maxUsage;
-                        const _perGrade = parseInt((spByName.maxUsagePerGrade || {})[grade]) || 0;
+                        const _perGrade = parseInt((_limitCfg.maxUsagePerGrade || {})[grade]) || 0;
                         if (_perGrade > 0) _cap = _perGrade;
                         if (_crossDayCount(_periodStart) >= _cap) {
                             return 'rotation: maxUsage ' + _cap + '/' + _maxPeriod + ' exceeded';
@@ -24117,10 +24297,10 @@
                     }
                     // exactFrequency ceiling (also a floor, but floor is rewarded by
                     // rotation scoring elsewhere — here we only block the ceiling).
-                    const _exact = parseInt((spByName.exactFrequencyPerGrade || {})[grade])
-                        || parseInt(spByName.exactFrequency) || 0;
+                    const _exact = parseInt((_limitCfg.exactFrequencyPerGrade || {})[grade])
+                        || parseInt(_limitCfg.exactFrequency) || 0;
                     if (_exact > 0) {
-                        const _exPeriod = spByName.exactFrequencyPeriod || '1week';
+                        const _exPeriod = _limitCfg.exactFrequencyPeriod || '1week';
                         const _exPS = (_ru && _ru.getPeriodStartDate)
                             ? _ru.getPeriodStartDate(_exPeriod, _today)
                             : null;
@@ -24128,18 +24308,24 @@
                             return 'rotation: exactFrequency ' + _exact + '/' + _exPeriod + ' exceeded';
                         }
                     }
-                    // frequencyDays cooldown — minimum days between visits
-                    const _cd = parseInt(spByName.frequencyDays) || 0;
+                    // frequencyDays cooldown — minimum SCHEDULE-days between visits.
+                    // The gap counts only days the bunk is actually at camp (see
+                    // Utils.scheduledDaysBetween): an off-day for the grade (e.g. no
+                    // Sunday schedule) does not count toward "6 days between".
+                    const _cd = parseInt(_limitCfg.frequencyDays) || 0;
                     if (_cd > 0) {
                         const _keys = Object.keys(_all).sort();
                         for (let i = _keys.length - 1; i >= 0; i--) {
                             if (_keys[i] >= _today) continue;
+                            if (_wgEpoch && _keys[i] < _wgEpoch) break; // ★ HR-32: cooldown resets at the epoch (descending scan — rest is pre-epoch)
                             const sl = _all[_keys[i]] && _all[_keys[i]].scheduleAssignments
                                 && _all[_keys[i]].scheduleAssignments[_bunkKey];
                             if (Array.isArray(sl) && sl.some(function (e) {
                                 return e && !e.continuation && (e._activity === activityName || e.field === activityName);
                             })) {
-                                const _dDiff = Math.floor((new Date(_today) - new Date(_keys[i])) / 86400000);
+                                const _dDiff = (_ru && _ru.scheduledDaysBetween)
+                                    ? _ru.scheduledDaysBetween(_bunkKey, _keys[i], _today, _all)
+                                    : Math.floor((new Date(_today) - new Date(_keys[i])) / 86400000);
                                 if (_dDiff < _cd) {
                                     return 'rotation: cooldown ' + _dDiff + 'd/' + _cd + 'd';
                                 }
@@ -25161,6 +25347,10 @@
             const d = new Date(parts[0], parts[1] - 1, parts[2]);
             d.setDate(d.getDate() - 1);
             const yk = d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0') + '-' + String(d.getDate()).padStart(2, '0');
+            // ★ HR-38: COMPLETE reset — a pre-epoch yesterday is invisible to the
+            //   league engines' back-to-back/away detection (new campers at the half).
+            const _hrEpY = _getRotationEpoch();
+            if (_hrEpY && yk < _hrEpY) return {};
             return allDailyData[yk]?.scheduleAssignments || {};
         })();
 
@@ -25275,6 +25465,18 @@
             // it wants (e.g. Trios block says "Day20 Test"); only honor matchups
             // that came from that league. If block has no hint, accept any.
             let leagueWriteCount = 0;
+            // ★ BYE ACTIVITY: window.leagueByeSchedule[league][team] is a list of
+            //   { startMin, activity } — one entry per period that team sat out
+            //   (a league can run more than one game a day). In auto mode a team
+            //   IS a bunk, so a hit here means this bunk's row should show the
+            //   activity instead of the league tile. Published by
+            //   scheduler_core_leagues.js; absent when the feature is off.
+            const _byeActivityFor = function (leagueName, bunkKey, startMin) {
+                const entries = window.leagueByeSchedule?.[leagueName]?.[bunkKey];
+                if (!Array.isArray(entries) || entries.length === 0) return null;
+                const hit = entries.find(e => e && Number(e.startMin) === Number(startMin));
+                return (hit && hit.activity) ? hit.activity : null;
+            };
             leagueBlocks.forEach(lb => {
                 const matchups = lb._allMatchups || [];
                 const sport = lb._sport || lb.sport || '';
@@ -25341,6 +25543,26 @@
                         return;
                     }
 
+                    // ★ BYE ACTIVITY: this bunk's team has no game this period and
+                    //   the user picked something for it to do instead. Same model
+                    //   as chinuch — the bunk gets the real activity on its row
+                    //   rather than a league tile whose only news is "you're out".
+                    const _byeAct = _byeActivityFor(leagueName, bk, lb.startMin);
+                    if (_byeAct) {
+                        window.scheduleAssignments[bk][fi] = {
+                            field: _byeAct,
+                            _activity: _byeAct,
+                            _isByeActivity: true,
+                            _leagueName: leagueName,
+                            sport: null,
+                            _startMin: slotMeta?.startMin ?? lb.startMin,
+                            _endMin: slotMeta?.endMin ?? lb.endMin,
+                            _fixed: true, continuation: false
+                        };
+                        leagueWriteCount++;
+                        return;
+                    }
+
                     window.scheduleAssignments[bk][fi] = {
                         // ★ Day 20 fix #5: don't put gameLabel in `field`.
                         // sport here is often the gameLabel (e.g. "Game 1"); use
@@ -25376,6 +25598,21 @@
                         // ★ CHINUCH: also honor chinuch in fallback writeback path
                         const _lnFb = asgn.leagueName || '';
                         const _smFb = parseInt(startMinStr);
+                        // ★ BYE ACTIVITY: same, in the fallback path
+                        const _byeActFb = _byeActivityFor(_lnFb, bk, _smFb);
+                        if (_byeActFb) {
+                            window.scheduleAssignments[bk][fi] = {
+                                field: _byeActFb,
+                                _activity: _byeActFb,
+                                _isByeActivity: true,
+                                _leagueName: _lnFb,
+                                sport: null,
+                                _startMin: _smFb,
+                                _fixed: true, continuation: false
+                            };
+                            leagueWriteCount++;
+                            return;
+                        }
                         if (window.chinuchSchedule?.[_lnFb]?.[bk] != null &&
                             Number(window.chinuchSchedule[_lnFb][bk]) === _smFb) {
                             const _leagueObjFb = (Array.isArray(mla) ? mla : Object.values(mla || {})).find(l => l.name === _lnFb);
@@ -25957,10 +26194,14 @@
                     let _cdSkip = false;
                     for (let _cdk = _cdKeys.length - 1; _cdk >= 0; _cdk--) {
                         if (_cdKeys[_cdk] >= _p49Today) continue;
+                        if (_rotEpoch && _cdKeys[_cdk] < _rotEpoch) break; // ★ HR-33: Phase-4.9 cooldown resets at the epoch (descending scan)
                         const _cdSlots = _p49AllDaily[_cdKeys[_cdk]]?.scheduleAssignments?.[String(def.bunk)];
                         if (Array.isArray(_cdSlots) && _cdSlots.some(e =>
                             e && !e.continuation && (e._activity === def.name || e.field === def.name))) {
-                            const _cdDiff = Math.floor((new Date(_p49Today) - new Date(_cdKeys[_cdk])) / 86400000);
+                            // Gap in SCHEDULE-days (skip the grade's off-days), not calendar days.
+                            const _cdDiff = window.SchedulerCoreUtils?.scheduledDaysBetween
+                                ? window.SchedulerCoreUtils.scheduledDaysBetween(def.bunk, _cdKeys[_cdk], _p49Today, _p49AllDaily)
+                                : Math.floor((new Date(_p49Today) - new Date(_cdKeys[_cdk])) / 86400000);
                             if (_cdDiff < _p49Cd) {
                                 log('[Phase4.9] skip ' + def.name + ' for ' + def.bunk + ' — cooldown ' + _cdDiff + 'd < ' + _p49Cd + 'd');
                                 _cdSkip = true;
@@ -29927,15 +30168,23 @@
         try {
             var _del = window._bunkDeletedLayers || {};
             var _delEvicted = 0;
-            var _slotIsLayerType = function (slot, lt) {
+            var _slotIsLayerType = function (slot, lt, layerName) {
                 lt = String(lt || '').toLowerCase();
                 var act = String(slot._activity || '').toLowerCase();
                 var fld = String(slot.field || '').toLowerCase();
+                // GA-backed fixed tiles can carry a custom name ("Milk & Cookies",
+                // quickType snacks) — the delete override records the band's real
+                // name so the evictor can match the placed block by name too.
+                var nm = String(layerName || '').toLowerCase().trim();
+                var nameMatch = !!nm && (act === nm ||
+                    String(slot._customActivity || '').toLowerCase().trim() === nm);
                 if (lt === 'sport' || lt === 'sports') return !!slot.sport;
                 if (lt === 'special') return slot._autoSpecial === true;
-                if (lt === 'swim') return act === 'swim' || fld === 'swim';
-                if (lt === 'lunch') return act === 'lunch';
-                if (lt === 'snack' || lt === 'snacks') return act === 'snack' || act === 'snacks';
+                if (lt === 'swim') return act === 'swim' || fld === 'swim' || nameMatch;
+                if (lt === 'lunch') return act === 'lunch' || nameMatch;
+                if (lt === 'dinner') return act === 'dinner' || nameMatch;
+                if (lt === 'dismissal') return act === 'dismissal' || nameMatch;
+                if (lt === 'snack' || lt === 'snacks') return act === 'snack' || act === 'snacks' || nameMatch;
                 if (lt === 'custom') return !!(slot._customActivity || slot._customField);
                 return false;
             };
@@ -29960,7 +30209,7 @@
                             || (s._source && /trip/i.test(String(s._source)));
                         var ev = false;
                         if (overlaps && !protectedSlot) {
-                            if (_slotIsLayerType(s, lt)) ev = true;
+                            if (_slotIsLayerType(s, lt, d.layerName)) ev = true;
                             else if (s.continuation === true && prevEvicted) ev = true; // tail of an evicted block
                         }
                         if (ev) {
@@ -34863,6 +35112,17 @@
                 if (window.SchedulerCoreUtils?.rebuildHistoricalCounts) {
                     try { window.SchedulerCoreUtils.rebuildHistoricalCounts(true); log('[6.95] 🧮 Rebuilt historicalCounts from TRUE final grid (post-gate)'); }
                     catch (_e695c) { warn('[6.95] historicalCounts rebuild: ' + (_e695c && _e695c.message)); }
+                }
+                // ★ Last-done timestamps: RE-DERIVE, never merge. Stamping only
+                //   what is on the fresh grid leaves the previous run's activity
+                //   dated today forever, so a regenerated slot keeps reading as
+                //   "did that activity today" in scoring and in analytics.
+                if (window.SchedulerCoreUtils?.rebuildRotationHistoryForBunks) {
+                    try {
+                        const _rhBunks = Object.keys(window.scheduleAssignments || {});
+                        const _n = window.SchedulerCoreUtils.rebuildRotationHistoryForBunks(_rhBunks);
+                        log('[6.95] 🕒 Rebuilt rotation last-done timestamps for ' + _n + ' bunk(s)');
+                    } catch (_e695d) { warn('[6.95] rotationHistory rebuild: ' + (_e695d && _e695d.message)); }
                 }
             }
         } catch (_e695) { try { warn('[6.95] final rotation-count error: ' + (_e695 && _e695.message)); } catch (_x) {} }

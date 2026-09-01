@@ -105,3 +105,59 @@ test('a grade missing from viewColumnOrder still appears (appended in Me order)'
   assert.ok(out.includes('2'), '2 must still appear');
   assert.strictEqual(out.length, 3);
 });
+
+// --- Multi-division camp: a STALE view order must NOT scatter grades across
+//     division boundaries. Regression for the "DC 4 between 8 and 9" bug.
+//   Day Camp 1-6, Camp Agudah 5-7, Agudah Max 8-10. Grades 5 & 6 collide across
+//   Day Camp / Camp Agudah, so they become qualified keys ("Day Camp > 5", …).
+//   A view order saved BEFORE the collision still holds bare "5"/"6" (now orphan)
+//   and misplaces "4"; the display must keep every grade inside its own division.
+const MULTI_SETTINGS = {
+  campStructure: {
+    'Day Camp':    { grades: { '1': {}, '2': {}, '3': {}, '4': {}, '5': {}, '6': {} }, gradeOrder: ['1', '2', '3', '4', '5', '6'] },
+    'Camp Agudah': { grades: { '5': {}, '6': {}, '7': {} }, gradeOrder: ['5', '6', '7'] },
+    'Agudah Max':  { grades: { '8': {}, '9': {}, '10': {} }, gradeOrder: ['8', '9', '10'] },
+  },
+  app1: { divisionOrder: ['Day Camp', 'Camp Agudah', 'Agudah Max'] },
+};
+// window.divisions keys, qualifying the collided grade names exactly like app1 does.
+const MULTI_DIVS = {
+  '1': { parentDivision: 'Day Camp' }, '2': { parentDivision: 'Day Camp' },
+  '3': { parentDivision: 'Day Camp' }, '4': { parentDivision: 'Day Camp' },
+  'Day Camp > 5': { parentDivision: 'Day Camp' }, 'Day Camp > 6': { parentDivision: 'Day Camp' },
+  'Camp Agudah > 5': { parentDivision: 'Camp Agudah' }, 'Camp Agudah > 6': { parentDivision: 'Camp Agudah' },
+  '7': { parentDivision: 'Camp Agudah' },
+  '8': { parentDivision: 'Agudah Max' }, '9': { parentDivision: 'Agudah Max' }, '10': { parentDivision: 'Agudah Max' },
+};
+const MULTI_KEYS = Object.keys(MULTI_DIVS);
+
+test('stale view order does not scatter a grade into another division (DC 4 stays in Day Camp)', () => {
+  const s = clone(MULTI_SETTINGS);
+  // Stale drag order from before the 5/6 collision — bare "5"/"6" are now orphans,
+  // and "4" sits late (would land between "8" and "9" under the old flat sort).
+  s.app1.viewColumnOrder = ['1', '2', '3', '5', '6', '7', '8', '4', '9', '10'];
+  const w = loadOrderFns(s, MULTI_DIVS);
+  const out = w.getUserDivisionOrder(MULTI_KEYS.slice());
+
+  const i = (k) => out.indexOf(k);
+  // Every Day Camp grade precedes every Agudah Max grade — no cross-division scatter.
+  ['1', '2', '3', '4', 'Day Camp > 5', 'Day Camp > 6'].forEach((dc) => {
+    ['8', '9', '10'].forEach((am) => {
+      assert.ok(i(dc) < i(am), `${dc} (Day Camp) must come before ${am} (Agudah Max)`);
+    });
+  });
+  // The reported symptom specifically: DC 4 is NOT between 8 and 9.
+  assert.ok(i('4') < i('8'), 'DC 4 must not land after Agudah Max 8');
+  // Division blocks stay contiguous and in Me order.
+  assert.deepStrictEqual(out.slice(0, 6), ['1', '2', '3', '4', 'Day Camp > 5', 'Day Camp > 6']);
+  assert.deepStrictEqual(out.slice(-3), ['8', '9', '10']);
+});
+
+test('with no view order, a multi-division camp shows the Me order exactly', () => {
+  const s = clone(MULTI_SETTINGS);
+  const w = loadOrderFns(s, MULTI_DIVS);
+  assert.deepStrictEqual(
+    w.getUserDivisionOrder(MULTI_KEYS.slice()),
+    ['1', '2', '3', '4', 'Day Camp > 5', 'Day Camp > 6', 'Camp Agudah > 5', 'Camp Agudah > 6', '7', '8', '9', '10']
+  );
+});

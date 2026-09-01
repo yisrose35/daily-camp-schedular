@@ -14,6 +14,19 @@
     // HELPERS — fall back to locally-computed values when SDK utils are absent
     // ========================================================================
 
+    // ★ HR-34: rotation-epoch watermark reader (non-deleting half reset) —
+    //   COMPLETE reset: bunks get new campers at the half, so counts, lastDone
+    //   AND recency/yesterday checks all ignore dates before this dateKey.
+    function _getRotationEpoch() {
+        try {
+            const U = window.SchedulerCoreUtils || window.Utils;
+            if (U && typeof U.getRotationEpoch === 'function') return U.getRotationEpoch();
+            const e = window.loadGlobalSettings ? window.loadGlobalSettings('rotationEpoch') : null;
+            const d = (typeof e === 'string') ? e : (e && e.date);
+            return (d && /^\d{4}-\d{2}-\d{2}$/.test(d)) ? d : null;
+        } catch (_) { return null; }
+    }
+
     function getDivision(bunk) {
         if (window.SchedulerCoreUtils?.getDivisionForBunk) return window.SchedulerCoreUtils.getDivisionForBunk(bunk);
         const divs = window.divisions || {};
@@ -52,6 +65,21 @@
 
     function isFreeEntry(entry) {
         return !entry || entry.field === 'Free' || entry._activity === 'Free' || (!entry.field && !entry._activity);
+    }
+
+    // An elective (or swim+elective hybrid) tile is a camper-choice MENU, not a
+    // solver-assigned slot. STEP 2.5 of the generator (scheduler_core_main.js) only
+    // RESERVES the elective's rooms — it never writes one chosen activity into each
+    // bunk's cell, so the per-bunk entry stays "Free" ON PURPOSE (the bunk picks e.g.
+    // Gaming Center vs Pizza Making itself). We detect it off the divisionTimes slot
+    // so the ⚡ Auto Fill button skips these tiles — clicking it would clobber the menu
+    // with a single auto-picked activity. Genuinely-failed empty slots (no elective
+    // menu) are unaffected and still get the button.
+    function isElectiveSlot(slot) {
+        if (!slot) return false;
+        const t = String(slot.type || '').toLowerCase();
+        if (t === 'elective' || t === 'swim_elective') return true;
+        return Array.isArray(slot.electiveActivities) && slot.electiveActivities.length > 0;
     }
 
     function toast(msg, type) {
@@ -156,8 +184,9 @@
         return !allowed.includes(divName);
     }
 
-    function isFieldBlockedByTimeRules(fieldName, slotStart, slotEnd, actProps, divName) {
-        const rules = actProps?.[fieldName]?.timeRules;
+    // Core rule evaluation on a rules ARRAY — shared by the field-keyed check
+    // below and the special's-own-rules gate in the candidate builder.
+    function areTimeRulesBlocking(rules, slotStart, slotEnd, divName) {
         if (!Array.isArray(rules) || rules.length === 0) return false;
         const parseMin = window.SchedulerCoreUtils?.parseTimeToMinutes;
         const myDiv = divName != null ? String(divName) : null;
@@ -184,6 +213,10 @@
         return false;
     }
 
+    function isFieldBlockedByTimeRules(fieldName, slotStart, slotEnd, actProps, divName) {
+        return areTimeRulesBlocking(actProps?.[fieldName]?.timeRules, slotStart, slotEnd, divName);
+    }
+
     // Returns true if GlobalFieldLocks blocks this field/time/division
     function isFieldGloballyLocked(fieldName, slotStart, slotEnd, divName) {
         try {
@@ -191,6 +224,26 @@
             if (typeof window.GlobalFieldLocks.isFieldLockedByTime === 'function') {
                 const info = window.GlobalFieldLocks.isFieldLockedByTime(fieldName, slotStart, slotEnd, divName);
                 return !!info;
+            }
+        } catch (_) {}
+        return false;
+    }
+
+    // ★ Skeleton field reservations: a pinned event / league reserves a facility for a
+    //   window via window.fieldReservations WITHOUT a GlobalFieldLock or a
+    //   scheduleAssignments block (e.g. a "Max Leagues" pin on Slam Plex 1 @740-810 —
+    //   which shows in fieldReservations but NOT in GlobalFieldLocks). canBlockFit
+    //   (scheduler_core_utils.js:835) and the STEP 7.9 evict sweep both honor it; this
+    //   raw-config fill path must too, or it re-fills a reserved court — leaving a real
+    //   double-book (7.9, having already run, won't re-catch a post-7.9 re-heal) or a
+    //   placement 7.9 later demotes to Free. Mirrors canBlockFit's check. Fail-open.
+    function isFieldPinReserved(fieldName, slotStart, slotEnd) {
+        try {
+            const resv = window.fieldReservations;
+            if (!resv || slotStart == null || slotEnd == null) return false;
+            const U = window.SchedulerCoreUtils;
+            if (U && typeof U.isFieldReserved === 'function') {
+                return !!U.isFieldReserved(fieldName, slotStart, slotEnd, resv);
             }
         } catch (_) {}
         return false;
@@ -345,6 +398,8 @@
             if (isFieldBlockedByTimeRules(f.name, slotStart, slotEnd, actProps, divName)) return;
             // ★ GlobalFieldLocks — skip if locked by another league/event
             if (isFieldGloballyLocked(f.name, slotStart, slotEnd, divName)) return;
+            // ★ Skeleton field reservations (pinned event / league) — canBlockFit parity
+            if (isFieldPinReserved(f.name, slotStart, slotEnd)) return;
             // ★ Cross-bunk capacity (incl. combo partners)
             if (!isFieldAvailable(f.name, bunk, divName, slotStart, slotEnd, actProps)) return;
             // ★ Specific sports disabled on THIS field today (dailyDisabledSportsByField)
@@ -416,9 +471,25 @@
                 if (loc && _disabledLc.has(String(loc).toLowerCase().trim())) return;
                 // ★ Facility-existence gate
                 if (_validLocs && loc && String(loc).trim() && !_validLocs.has(String(loc).trim().toLowerCase())) return;
+                // ★ Special's OWN config time rules. A HOSTED special (location ≠ name,
+                //   e.g. "Cap Making behind Masmidim BM" in room "Cap Making") only had
+                //   its ROOM's rules checked below (isFieldBlockedByTimeRules keyed by
+                //   loc) — its own Available/Unavailable windows were never consulted on
+                //   this leftover-fill path, so the filler could seat it inside its own
+                //   closed window (e.g. Unavailable 12:20–1:25). Check the special's own
+                //   rules here; fall back to its activityProperties entry (dual-keyed by
+                //   name) when the settings row carries none.
+                {
+                    const _ownTR = (Array.isArray(s.timeRules) && s.timeRules.length)
+                        ? s.timeRules
+                        : (actProps?.[s.name]?.timeRules || null);
+                    if (areTimeRulesBlocking(_ownTR, slotStart, slotEnd, divName)) return;
+                }
                 if (loc) {
                     if (isFieldBlockedByTimeRules(loc, slotStart, slotEnd, actProps, divName)) return;
                     if (isFieldGloballyLocked(loc, slotStart, slotEnd, divName)) return;
+                    // ★ Skeleton field reservations (pinned event / league) — canBlockFit parity
+                    if (isFieldPinReserved(loc, slotStart, slotEnd)) return;
                     // ★ wantActivity = s.name: reject this special if its room is already
                     //   held by a DIFFERENT activity (a different special, or a sport that
                     //   shares the room) — a shared room hosts one activity at a time.
@@ -449,8 +520,12 @@
         });
 
         // Historical data (skip today — we use live data above)
+        // ★ HR-35: COMPLETE reset — bunks get new campers at the half, so
+        //   pre-epoch days are invisible to counts AND lastDone/recency alike.
+        const _epoch = _getRotationEpoch();
         Object.keys(allDaily).sort().forEach(dateKey => {
             if (dateKey === today) return;
+            if (_epoch && dateKey < _epoch) return; // ★ HR-35
             const sched = allDaily[dateKey]?.scheduleAssignments?.[bunk] || [];
             sched.forEach(e => {
                 if (!e || e.continuation || e._isTransition) return;
@@ -467,6 +542,7 @@
         Object.keys(bh).forEach(act => {
             try {
                 const d = new Date(bh[act]).toISOString().split('T')[0];
+                if (_epoch && d < _epoch) return; // ★ HR-35: pre-epoch timestamps invisible
                 if (!lastDoneByAct[act] || d > lastDoneByAct[act]) lastDoneByAct[act] = d;
             } catch (_) {}
         });
@@ -478,14 +554,51 @@
     // SCORE & PICK — lower score = better candidate
     // ========================================================================
 
-    function scoreAndPick(bunk, candidates, today) {
+    function scoreAndPick(bunk, candidates, today, divName, slotIdx) {
         const { countsByAct, lastDoneByAct, todayActs } = buildHistory(bunk, today);
 
-        const scored = candidates.map(c => {
+        const scorePass = () => candidates.map(c => {
             const act = c.activity;
 
             // ── HARD DISQUALIFIERS ──────────────────────────────────────────
             if (todayActs.has(act)) return null;     // already doing it today
+            // ★ Rotation-engine hard gates (fair-share cap, frequencyDays
+            //   cooldown, rotation cohort, per-grade caps, availableDays).
+            //   This filler's local scorer knows recency and per-period caps but
+            //   NOT the engine's hard blocks — observed live 2026-07-09: bunk
+            //   לב's leftover Free slot was filled with fair-share-BLOCKED
+            //   Basketball. Gate here so the last-resort fill obeys the same
+            //   rules as every other placement path. When this strict pass
+            //   empties the pool, the relax pass below may re-admit ONLY
+            //   fair-share-capped candidates (never yesterday-repeats or real
+            //   caps) so the slot fills instead of going Free.
+            if (window.RotationEngine?.calculateRotationScore) {
+                const rot = window.RotationEngine.calculateRotationScore({
+                    bunkName: bunk, activityName: act,
+                    divisionName: divName || null,
+                    beforeSlotIndex: (typeof slotIdx === 'number' ? slotIdx : 0),
+                    allActivities: null,
+                    activityProperties: window.activityProperties || {}
+                });
+                if (rot === Infinity) return null;   // hard-blocked by the engine
+            }
+            // ★ Back-to-back gate (kill switch: window.__fallbackYesterdayGate = false).
+            //   YESTERDAY_PENALTY (50000, "MUST NOT REPEAT") is finite, so the
+            //   Infinity gate above lets a did-it-yesterday candidate through when
+            //   it's the only legal one left — observed live 2026-07-09: bunk לב's
+            //   accessible pool was {Basketball, Hockey, Dodgeball: fair-share
+            //   capped; Baseball: done yesterday} and the fill repeated Baseball
+            //   two days running. Same policy as the fair-share gate: the
+            //   last-resort fill leaves the slot Free rather than hand a bunk the
+            //   same activity on consecutive days. Recency >= YESTERDAY_PENALTY
+            //   also covers same-day (Infinity) and active streaks.
+            if (window.__fallbackYesterdayGate !== false &&
+                window.RotationEngine?.calculateRecencyScore) {
+                const _yp = window.RotationEngine.CONFIG?.YESTERDAY_PENALTY || 50000;
+                const rec = window.RotationEngine.calculateRecencyScore(
+                    bunk, act, (typeof slotIdx === 'number' ? slotIdx : 0));
+                if (rec >= _yp) return null;         // did it yesterday — stay Free
+            }
             // ★ FN-4: maxUsage / exactFrequency are PER-PERIOD caps. Compare them
             //   against a period-windowed count, NOT the lifetime countsByAct — else
             //   the cap silently degrades into a lifetime cap and permanently blocks
@@ -527,15 +640,51 @@
                 }
             }
 
+            // ★ Avoid-unless-needed (Rules tab soft rule): keep the candidate but
+            //   rank it below every normal one — this last-resort fill only hands
+            //   it out when the alternative is leaving the slot Free. Mirrors the
+            //   rotation engine's AVOID_UNLESS_NEEDED_PENALTY, scaled to this
+            //   scorer's local range (±9000).
+            if (window.SchedulerCoreUtils?.isSportAvoidedUnlessNeeded?.(divName, act)) {
+                score += 1000000;
+            }
+
             // Small random tie-breaker so repeated calls vary
             score += Math.random() * 50;
 
             return { ...c, score, count, last };
         }).filter(Boolean);
 
+        let scored = scorePass();
+
+        // ★ LAST-RESORT FAIR-SHARE RELAX (observed live 2026-07-08/09: bunk לב's
+        //   entire pool was fair-share-capped + cooldown-blocked, so the gates
+        //   above left the slot Free two days running). Policy order is
+        //   no-back-to-back > no-Free > fair-share bookkeeping: when the strict
+        //   pass yields NOTHING, re-score once with the fair-share cap switched
+        //   off. Everything else stays hard — same-day dupes, the yesterday
+        //   gate, maxUsage/exactFrequency ceilings, frequencyDays cooldowns,
+        //   cohort waits and availableDays all still block (they live outside
+        //   the __fairShareHardCap switch), so only "you're ahead of the
+        //   laggards" candidates come back. A slot whose sole relaxed candidate
+        //   was done yesterday STILL stays Free.
+        //   Kill switch: window.__fallbackFairShareRelax = false.
+        let relaxed = false;
+        if (!scored.length &&
+            window.__fallbackFairShareRelax !== false &&
+            window.__fairShareHardCap !== false &&
+            window.RotationEngine?.calculateRotationScore) {
+            const _prevCap = window.__fairShareHardCap;
+            window.__fairShareHardCap = false;
+            try { scored = scorePass(); } finally { window.__fairShareHardCap = _prevCap; }
+            relaxed = scored.length > 0;
+        }
+
         if (!scored.length) return null;
         scored.sort((a, b) => a.score - b.score);
-        return scored[0];
+        const best = scored[0];
+        if (relaxed) best._fairShareRelaxed = true;
+        return best;
     }
 
     // ========================================================================
@@ -595,7 +744,7 @@
 
         // 4. Score and pick
         const today = window.currentScheduleDate || new Date().toLocaleDateString('en-CA');
-        const best = scoreAndPick(bunk, candidates, today);
+        const best = scoreAndPick(bunk, candidates, today, divName, slotIdx);
         if (!best) { toast('All candidates disqualified by constraints — nothing to fill', 'warning'); return; }
 
         // 5. Write + save + refresh
@@ -610,7 +759,8 @@
         window.updateTable?.();
 
         const where = best.field ? ` @ ${best.field}` : '';
-        toast(`✓ Auto-filled: ${best.activity}${where}`, 'success');
+        const note = best._fairShareRelaxed ? ' (fair-share relaxed)' : '';
+        toast(`✓ Auto-filled: ${best.activity}${where}${note}`, 'success');
     }
 
     // ========================================================================
@@ -625,6 +775,14 @@
 
             const entry = window.scheduleAssignments?.[bunk]?.[slotIdx];
             if (!isFreeEntry(entry)) return;
+
+            // ★ Skip elective / swim-elective "choice menu" tiles: they're Free by
+            //   design (see isElectiveSlot). Killswitch: window.__autoFillSkipElectives = false
+            if (window.__autoFillSkipElectives !== false) {
+                const divName = getDivision(bunk);
+                const slot = divName ? getSlotInfo(divName, slotIdx, bunk) : null;
+                if (isElectiveSlot(slot)) return;
+            }
 
             if (td.querySelector('.afs-btn')) return; // already injected
 
@@ -719,7 +877,7 @@
         if (!candidates.length) return false;
 
         const today = window.currentScheduleDate || new Date().toLocaleDateString('en-CA');
-        const best = scoreAndPick(bunk, candidates, today);
+        const best = scoreAndPick(bunk, candidates, today, divName, slotIdx);
         if (!best) return false;
 
         // Write straight to memory — no save, no toast, no updateTable.
@@ -755,15 +913,31 @@
             if (_afFeat._endMin) { _afEntry._startMin = slotStart; _afEntry._endMin = _afFeat._endMin; _afEntry._durationBestFit = _afFeat._durationBestFit; }
         }
         window.scheduleAssignments[bunk][slotIdx] = _afEntry;
+        // ★ GenTrace: fallback fills happen AFTER the solver's commits, so
+        //   without this record they are invisible in the brain trace — the
+        //   final schedule showed activities no decision explained.
+        if (window.GenTrace && window.GenTrace.active) {
+            const _dec = {
+                kind: 'fallback-fill', bunk: bunk, division: divName || undefined,
+                window: slotStart + '-' + slotEnd,
+                chosen: { name: best.activity, field: best.field || null }
+            };
+            if (best._fairShareRelaxed) _dec.relaxed = 'fairShare';
+            window.GenTrace.decision(_dec);
+        }
         return true;
     }
 
-    window.AutoFillSlot = { autoFillSlot, autoFillSlotSilent, injectButtons };
+    // _scoreAndPick exposed for headless tests (rotation hard-gate coverage)
+    window.AutoFillSlot = { autoFillSlot, autoFillSlotSilent, injectButtons, _scoreAndPick: scoreAndPick };
 
-    if (document.readyState === 'loading') {
-        document.addEventListener('DOMContentLoaded', setupInjection);
-    } else {
-        setupInjection();
+    // Browser-only UI wiring (headless test loads have no document)
+    if (typeof document !== 'undefined') {
+        if (document.readyState === 'loading') {
+            document.addEventListener('DOMContentLoaded', setupInjection);
+        } else {
+            setupInjection();
+        }
     }
 
 })();

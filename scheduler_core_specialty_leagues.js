@@ -25,64 +25,356 @@
     // LOAD/SAVE HISTORY (NOW CLOUD-SYNCED)
     // =========================================================================
 
-    function loadSpecialtyHistory() {
+    // =========================================================================
+    // ★ LG-8 (specialty port): (LEAGUE, DATE)-GRANULAR HISTORY MERGE
+    // =========================================================================
+    // Same failure class as the regular engine: the specialty history rode the
+    // debounced camp_state_kv sync as a whole blob, and the loader let a cloud
+    // copy shadow local WHOLESALE — two writers (devices/tabs/roles) diverged
+    // into lineages and generation ran blind to whichever copy lost. The merge
+    // treats each (leagueId, date) as the unit: fresher copy wins conflicts,
+    // tombstones make deletions stick, and the derived stores (matchupHistory
+    // date-arrays, teamFieldRotation, slotDebt) are REBUILT from the merged
+    // gameLog for leagues that have one, so they can never diverge from it.
+    // Flat overwrite-only stores (lastSlotOrder, conferenceRounds) come from
+    // the fresher copy.
+    // ★ HR-55: rotation epoch (non-deleting half reset) — mirrors the regular
+    // engine's HR-41. history._epochDate is an ISO dateKey; every read treats
+    // dates before it as nonexistent while the records stay as archive. The
+    // field is merge-surviving (adopt-max).
+    function _getGlobalEpoch() {
         try {
-            // ★ First try to load from cloud-synced global settings
-            const global = window.loadGlobalSettings?.() || {};
-            if (global.specialtyLeagueHistory && Object.keys(global.specialtyLeagueHistory).length > 0) {
-                const history = global.specialtyLeagueHistory;
-                // Ensure all fields exist
-                history.teamFieldRotation = history.teamFieldRotation || {};
-                history.lastSlotOrder = history.lastSlotOrder || {};
-                history.conferenceRounds = history.conferenceRounds || {};
-                history.matchupHistory = history.matchupHistory || {};
-                history.gamesPerDate = history.gamesPerDate || {};  // ★ NEW
-                history.gameLog = history.gameLog || {};            // ★ FN-55
-                console.log("[SpecialtyLeagues] ✅ Loaded history from cloud");
-                return history;
+            if (window.SchedulerCoreUtils && typeof window.SchedulerCoreUtils.getRotationEpoch === 'function') {
+                return window.SchedulerCoreUtils.getRotationEpoch();
             }
-            
-            // Fallback to localStorage
-            const raw = localStorage.getItem(SPECIALTY_HISTORY_KEY);
-            if (!raw) return {
-                teamFieldRotation: {},
-                lastSlotOrder: {},
-                conferenceRounds: {},
-                matchupHistory: {},
-                gamesPerDate: {},  // ★ NEW: { leagueId: { "2025-01-01": 2, "2025-01-02": 3 } }
-                gameLog: {}        // ★ FN-55
-            };
+            const e = window.loadGlobalSettings ? window.loadGlobalSettings('rotationEpoch') : null;
+            const d = (typeof e === 'string') ? e : (e && e.date);
+            return (d && /^\d{4}-\d{2}-\d{2}$/.test(d)) ? d : null;
+        } catch (_) { return null; }
+    }
+    function _effectiveEpoch(history) {
+        const blobEpoch = (history && typeof history._epochDate === 'string'
+            && /^\d{4}-\d{2}-\d{2}$/.test(history._epochDate)) ? history._epochDate : '';
+        const blobSetAt = Number(history && history._epochSetAt) || 0;
+        // ★ HR-55 v2: prefer the stamp from the NEWEST reset action (mirrors
+        // HR-41 v2); legacy stamps keep the original max-date behavior.
+        let globalEpoch = '', globalSetAt = 0;
+        try {
+            const U = window.SchedulerCoreUtils;
+            if (U && typeof U.getRotationEpochInfo === 'function') {
+                const gi = U.getRotationEpochInfo();
+                globalEpoch = gi.date || '';
+                globalSetAt = Number(gi.setAt) || 0;
+            } else {
+                globalEpoch = _getGlobalEpoch() || '';
+            }
+        } catch (_) { globalEpoch = _getGlobalEpoch() || ''; }
+        let eff;
+        if (blobSetAt || globalSetAt) {
+            eff = (blobSetAt >= globalSetAt) ? (blobEpoch || globalEpoch) : (globalEpoch || blobEpoch);
+        } else {
+            eff = blobEpoch >= globalEpoch ? blobEpoch : globalEpoch;
+        }
+        return eff || null;
+    }
+    SpecialtyLeagues.getEffectiveEpoch = _effectiveEpoch; // diagnostics + tests
 
-            const history = JSON.parse(raw);
-            // Ensure new fields exist
+    function mergeSpecialtyHistories(a, b) {
+        const norm = (h) => {
+            const out = {
+                teamFieldRotation: (h && h.teamFieldRotation) || {},
+                lastSlotOrder: (h && h.lastSlotOrder) || {},
+                conferenceRounds: (h && h.conferenceRounds) || {},
+                matchupHistory: (h && h.matchupHistory) || {},
+                gamesPerDate: (h && h.gamesPerDate) || {},
+                gameLog: (h && h.gameLog) || {},
+                slotDebt: (h && h.slotDebt) || {},
+                _tombstones: (h && h._tombstones) || {},
+                _savedAt: Number(h && h._savedAt) || 0
+            };
+            if (h && h._resetAt) out._resetAt = Number(h._resetAt) || 0;
+            if (h && h._countersResetAt) out._countersResetAt = Number(h._countersResetAt) || 0;
+            // ★ HR-55: the epoch stamp must survive normalization
+            if (h && typeof h._epochDate === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(h._epochDate)) {
+                out._epochDate = h._epochDate;
+                out._epochSetAt = Number(h._epochSetAt) || 0;
+            }
+            return out;
+        };
+        if (!a) return b ? norm(b) : norm(null);
+        if (!b) return norm(a);
+        const A = norm(a), B = norm(b);
+        const F = (A._savedAt >= B._savedAt) ? A : B;   // fresher copy
+        const O = (A._savedAt >= B._savedAt) ? B : A;   // older copy
+
+        const merged = {
+            teamFieldRotation: {},
+            lastSlotOrder: F.lastSlotOrder,
+            conferenceRounds: F.conferenceRounds,
+            matchupHistory: {},
+            gamesPerDate: {},
+            gameLog: {},
+            slotDebt: {},
+            _tombstones: {},
+            _savedAt: Math.max(A._savedAt, B._savedAt)
+        };
+        [F, O].forEach(function (h) {
+            Object.keys(h._tombstones).forEach(function (k) {
+                const ts = Number(h._tombstones[k]) || 0;
+                if (!(merged._tombstones[k] >= ts)) merged._tombstones[k] = ts;
+            });
+        });
+        merged._resetAt = Math.max(Number(a && a._resetAt) || 0, Number(b && b._resetAt) || 0) || undefined;
+        if (merged._resetAt === undefined) delete merged._resetAt;
+        const countersResetAt = Math.max(Number(a && a._countersResetAt) || 0, Number(b && b._countersResetAt) || 0);
+        if (countersResetAt) merged._countersResetAt = countersResetAt;
+        // ★ HR-55 (v2): rotation epoch — adopt the stamp from the NEWEST reset
+        // action (mirrors HR-41 v2); legacy stamps fall back to max-date.
+        (function () {
+            const sa = A._epochSetAt || 0, sb = B._epochSetAt || 0;
+            let pick = null;
+            if (sa || sb) pick = (sa >= sb) ? A : B;
+            else {
+                const ea = (A._epochDate || ''), eb = (B._epochDate || '');
+                pick = (ea >= eb) ? A : B;
+            }
+            if (pick && pick._epochDate) {
+                merged._epochDate = pick._epochDate;
+                if (pick._epochSetAt) merged._epochSetAt = pick._epochSetAt;
+            }
+        })();
+        const tombTs = function (lg, d) {
+            return Math.max(
+                merged._tombstones[lg + '|' + d] || 0,
+                merged._tombstones['*|' + d] || 0,
+                Number(merged._resetAt) || 0
+            );
+        };
+        [F, O].forEach(function (src) {
+            Object.keys(src.gameLog).forEach(function (lg) {
+                Object.keys(src.gameLog[lg] || {}).forEach(function (d) {
+                    if (merged.gameLog[lg] && merged.gameLog[lg][d]) return;
+                    if (!(src.gameLog[lg][d] || []).length) return;
+                    if (tombTs(lg, d) > src._savedAt) return;
+                    (merged.gameLog[lg] = merged.gameLog[lg] || {})[d] = src.gameLog[lg][d];
+                });
+            });
+            Object.keys(src.gamesPerDate).forEach(function (lg) {
+                if (!merged.gamesPerDate[lg]) merged.gamesPerDate[lg] = {};
+                Object.keys(src.gamesPerDate[lg] || {}).forEach(function (d) {
+                    if (merged.gamesPerDate[lg][d] !== undefined) return;
+                    if (tombTs(lg, d) > src._savedAt) return;
+                    if (countersResetAt > src._savedAt) return;
+                    merged.gamesPerDate[lg][d] = src.gamesPerDate[lg][d];
+                });
+            });
+        });
+        if (!countersResetAt) {
+            Object.keys(merged.gameLog).forEach(function (lg) {
+                Object.keys(merged.gameLog[lg]).forEach(function (d) {
+                    if (merged.gamesPerDate[lg] && merged.gamesPerDate[lg][d] !== undefined) return;
+                    const labels = new Set();
+                    (merged.gameLog[lg][d] || []).forEach(function (e) { if (e && e.g) labels.add(e.g); });
+                    (merged.gamesPerDate[lg] = merged.gamesPerDate[lg] || {})[d] = Math.max(labels.size, 1);
+                });
+            });
+        }
+        // Rebuild derived stores from the merged log; leagues with no gameLog
+        // at all (pure legacy) keep the fresher copy's entries.
+        const loggedLeagues = new Set(Object.keys(merged.gameLog));
+        const keepLegacy = function (srcMap, destMap) {
+            Object.keys(srcMap).forEach(function (k) {
+                if (!loggedLeagues.has(k.split('|')[0])) destMap[k] = srcMap[k];
+            });
+        };
+        keepLegacy(F.teamFieldRotation, merged.teamFieldRotation);
+        keepLegacy(F.matchupHistory, merged.matchupHistory);
+        keepLegacy(F.slotDebt, merged.slotDebt);
+        // ★ HR-56: derived-store rebuild is EPOCH-SCOPED (mirrors HR-42) — the
+        // pre-epoch gameLog stays as archive but never re-inflates matchup
+        // recency, field rotation or slot debt after the half reset.
+        const _hrEpM = merged._epochDate || _getGlobalEpoch() || '';
+        loggedLeagues.forEach(function (lg) {
+            Object.keys(merged.gameLog[lg]).sort().forEach(function (d) {
+                if (_hrEpM && d < _hrEpM) return; // ★ HR-56
+                (merged.gameLog[lg][d] || []).forEach(function (e) {
+                    if (!e || !e.tA || !e.tB) return;
+                    const mk = `${lg}|${[e.tA, e.tB].sort().join('|')}`;
+                    (merged.matchupHistory[mk] = merged.matchupHistory[mk] || []).push(d);
+                    if (e.field) {
+                        [e.tA, e.tB].forEach(function (t) {
+                            const fk = `${lg}|${t}`;
+                            (merged.teamFieldRotation[fk] = merged.teamFieldRotation[fk] || []).push(e.field);
+                        });
+                    }
+                    if (e.s != null) {
+                        const w = Math.max(0, (e.s || 1) - 1);
+                        if (w > 0) {
+                            [e.tA, e.tB].forEach(function (t) {
+                                const sk = `${lg}|${t}`;
+                                merged.slotDebt[sk] = (merged.slotDebt[sk] || 0) + w;
+                            });
+                        }
+                    }
+                });
+            });
+        });
+        return merged;
+    }
+    SpecialtyLeagues.mergeSpecialtyHistories = mergeSpecialtyHistories;   // diagnostics + batched-sync merge + tests
+
+    function loadSpecialtyHistory() {
+        const EMPTY = () => ({
+            teamFieldRotation: {}, lastSlotOrder: {}, conferenceRounds: {},
+            matchupHistory: {}, gamesPerDate: {}, gameLog: {}, _tombstones: {}
+        });
+        try {
+            // Cloud-synced copy (hydrated into global settings)
+            const global = window.loadGlobalSettings?.() || {};
+            const cloud = (global.specialtyLeagueHistory && Object.keys(global.specialtyLeagueHistory).length > 0)
+                ? global.specialtyLeagueHistory : null;
+
+            // localStorage backup
+            let local = null;
+            try {
+                const raw = localStorage.getItem(SPECIALTY_HISTORY_KEY);
+                if (raw) local = JSON.parse(raw);
+            } catch (_) {}
+
+            // ★ LG-8: MERGE the copies at (league, date) granularity — the old
+            // cloud-wholesale-wins load let a stale cloud row shadow newer
+            // local days (and vice versa via the backup), so generation ran
+            // blind to the losing lineage's games.
+            let history;
+            if (cloud && local) {
+                history = mergeSpecialtyHistories(cloud, local);
+                console.log('[SpecialtyLeagues] ✅ Loaded history (merged cloud + local)');
+            } else if (cloud) {
+                history = cloud;
+                console.log("[SpecialtyLeagues] ✅ Loaded history from cloud");
+            } else if (local) {
+                history = local;
+                // Migrate old format if needed
+                if (history.roundCounters && !history.gamesPerDate) {
+                    console.log("[SpecialtyLeagues] Migrating old history format...");
+                    history.gamesPerDate = {};
+                }
+            } else {
+                return EMPTY();
+            }
+
+            // Ensure all fields exist
             history.teamFieldRotation = history.teamFieldRotation || {};
             history.lastSlotOrder = history.lastSlotOrder || {};
             history.conferenceRounds = history.conferenceRounds || {};
             history.matchupHistory = history.matchupHistory || {};
             history.gamesPerDate = history.gamesPerDate || {};
             history.gameLog = history.gameLog || {};
-            
-            // Migrate old format if needed
-            if (history.roundCounters && !history.gamesPerDate) {
-                console.log("[SpecialtyLeagues] Migrating old history format...");
-                history.gamesPerDate = {};
-            }
-            
+            history._tombstones = history._tombstones || {};
+            // ★ TEAM RENAME: fold records written under a former team name into
+            //   the team's current name (see _foldSpecialtyHistoryAliases).
+            _foldSpecialtyHistoryAliases(history);
             return history;
         } catch (e) {
             console.error("[SpecialtyLeagues] Failed to load history:", e);
-            return {
-                teamFieldRotation: {},
-                lastSlotOrder: {},
-                conferenceRounds: {},
-                matchupHistory: {},
-                gamesPerDate: {},
-                gameLog: {}
-            };
+            return EMPTY();
         }
     }
 
+    // ★ LG-8: DIRECT VERIFIED CLOUD PUSH — specialty analog of the regular
+    // engine's push (see _pushLeagueHistoryToCloud there): write the row
+    // immediately with read-merge-write, retry 3× with backoff, warn loudly
+    // on a permissions rejection, coalesce concurrent saves.
+    let _spHistoryPushInFlight = false;
+    let _spHistoryPushQueued = null;
+    function _pushSpecialtyHistoryToCloud(history) {
+        try {
+            const sb = (typeof window !== 'undefined') && window.supabase;
+            const campId = (typeof window !== 'undefined') && window.CampistryDB && window.CampistryDB.getCampId && window.CampistryDB.getCampId();
+            if (!sb || !campId) return;
+            if (_spHistoryPushInFlight) { _spHistoryPushQueued = history; return; }
+            _spHistoryPushInFlight = true;
+            const baseDelay = (typeof window !== 'undefined' && Number(window.__leagueHistoryPushRetryMs)) || 2000;
+            (async function () {
+                let delay = baseDelay;
+                for (let attempt = 1; attempt <= 3; attempt++) {
+                    try {
+                        let payload = history;
+                        try {
+                            const r = await sb.from('camp_state_kv').select('value')
+                                .eq('camp_id', campId).eq('key', 'specialtyLeagueHistory').maybeSingle();
+                            const cur = r && !r.error && r.data && r.data.value;
+                            if (cur && typeof cur === 'object' && (cur.gameLog || cur.gamesPerDate)) {
+                                payload = mergeSpecialtyHistories(history, cur);
+                            }
+                        } catch (_e) {}
+                        const res = await sb.from('camp_state_kv').upsert({
+                            camp_id: campId, key: 'specialtyLeagueHistory', value: payload,
+                            updated_at: new Date().toISOString()
+                        }, { onConflict: 'camp_id,key' });
+                        const err = res && res.error;
+                        if (!err) {
+                            console.log('[SpecialtyLeagues] ☁️ History pushed to cloud (verified)');
+                            break;
+                        }
+                        if (String(err.code) === '42501' || /permission|policy|row-level|violates/i.test(err.message || '')) {
+                            console.warn('[SpecialtyLeagues] 🚨 History cloud write BLOCKED by permissions — '
+                                + 'games recorded in this session exist only on this device. Generate from an '
+                                + 'owner/admin account, or apply the scheduler camp_state_kv write migration.', err.message || err);
+                            break;
+                        }
+                        throw err;
+                    } catch (e) {
+                        if (attempt >= 3) {
+                            console.warn('[SpecialtyLeagues] ⚠️ History cloud push failed after 3 attempts — '
+                                + 'relying on the batched sync/localStorage backup:', (e && e.message) || e);
+                            break;
+                        }
+                        await new Promise(function (res) { setTimeout(res, delay); });
+                        delay *= 2;
+                    }
+                }
+                _spHistoryPushInFlight = false;
+                if (_spHistoryPushQueued) {
+                    const next = _spHistoryPushQueued;
+                    _spHistoryPushQueued = null;
+                    _pushSpecialtyHistoryToCloud(next);
+                }
+            })();
+        } catch (_e) {}
+    }
+
+    // ★ LG-8: pre-generation cloud refresh — specialty analog of
+    // SchedulerCoreLeagues.refreshHistoryFromCloud. Fetches the authoritative
+    // row and MERGES it with this device's copy so today's matchups are chosen
+    // from the true cross-session record. Best-effort + time-boxed.
+    SpecialtyLeagues.refreshHistoryFromCloud = async function () {
+        try {
+            const sb = (typeof window !== 'undefined') && window.supabase;
+            const campId = (typeof window !== 'undefined') && window.CampistryDB && window.CampistryDB.getCampId && window.CampistryDB.getCampId();
+            if (!sb || !campId) { console.log('[SpecialtyLeagues] cloud refresh skipped (no client/camp)'); return false; }
+            const q = sb.from('camp_state_kv').select('value').eq('camp_id', campId).eq('key', 'specialtyLeagueHistory').maybeSingle();
+            const timeout = new Promise(function (res) { setTimeout(function () { res({ _timedOut: true }); }, 6000); });
+            const r = await Promise.race([q, timeout]);
+            if (r && r._timedOut) { console.warn('[SpecialtyLeagues] cloud history refresh timed out — using existing copy'); return false; }
+            if (r && r.error) { console.warn('[SpecialtyLeagues] cloud history refresh error — using existing copy:', r.error); return false; }
+            const cloud = r && r.data && r.data.value;
+            if (!cloud || typeof cloud !== 'object' || !cloud.gameLog) { console.log('[SpecialtyLeagues] no cloud history to refresh'); return false; }
+            const merged = mergeSpecialtyHistories(cloud, loadSpecialtyHistory());
+            if (typeof window.saveGlobalSettings === 'function') { try { window.saveGlobalSettings('specialtyLeagueHistory', merged); } catch (_) {} }
+            try { localStorage.setItem(SPECIALTY_HISTORY_KEY, JSON.stringify(merged)); } catch (_) {}
+            console.log('[SpecialtyLeagues] ☁️ Refreshed history from cloud (merged; ' +
+                Object.keys(merged.gameLog || {}).length + ' league(s))');
+            return true;
+        } catch (e) {
+            console.warn('[SpecialtyLeagues] cloud history refresh failed — using existing copy:', e);
+            return false;
+        }
+    };
+
     function saveSpecialtyHistory(history) {
+        // ★ LG-8: stamp the save so merges can order the copies.
+        try { if (history && typeof history === 'object') history._savedAt = Date.now(); } catch (_) {}
         // ★ Cloud save FIRST and in its OWN try — see saveLeagueHistory: a full
         //   localStorage must never block the cloud write. Previously a quota error
         //   on the localStorage backup skipped saveGlobalSettings, so the day's games
@@ -90,11 +382,13 @@
         if (typeof window.saveGlobalSettings === 'function') {
             try {
                 window.saveGlobalSettings('specialtyLeagueHistory', history);
-                console.log("[SpecialtyLeagues] ✅ History saved to cloud");
+                console.log("[SpecialtyLeagues] ✅ History saved (queued for cloud sync)");
             } catch (e) {
                 console.error("[SpecialtyLeagues] Failed to save history to cloud:", e);
             }
         }
+        // ★ LG-8: immediate verified push, independent of the debounced batch.
+        _pushSpecialtyHistoryToCloud(history);
         // localStorage backup — best-effort; a quota failure here is non-fatal.
         try {
             localStorage.setItem(SPECIALTY_HISTORY_KEY, JSON.stringify(history));
@@ -116,15 +410,20 @@
         if (!history.gamesPerDate[leagueId]) history.gamesPerDate[leagueId] = {};
         
         const gamesMap = history.gamesPerDate[leagueId];
-        
+
         // Sum games from all dates BEFORE currentDate (chronologically)
+        // ★ HR-57: game numbering restarts at the rotation epoch (mirrors
+        // HR-43) — and since specialty matchups are round-robin off the game
+        // number, this IS the specialty matchup-history restart.
+        const _hrEp = _effectiveEpoch(history);
         let total = 0;
         for (const date of Object.keys(gamesMap)) {
+            if (_hrEp && date < _hrEp) continue; // ★ HR-57
             if (date < currentDate) {
                 total += gamesMap[date];
             }
         }
-        
+
         console.log(`[SpecialtyLeagues] Starting game# for league ${leagueId} on ${currentDate}: ${total + 1} (${total} games on earlier dates)`);
         return total;
     }
@@ -159,10 +458,13 @@
         const specialtyLeaguesConfig = loadSpecialtyLeagues();
         
         // Load all daily data
+        // ★ HR-58: never renumber pre-epoch archived schedules (mirrors HR-44).
+        const _hrEpUF = _effectiveEpoch(history);
         const allDailyData = window.loadAllDailyData?.() || {};
         const futureDates = Object.keys(allDailyData)
             .filter(date => {
                 if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) return false;
+                if (_hrEpUF && date < _hrEpUF) return false; // ★ HR-58
                 return date > currentDate;
             })
             .sort();
@@ -193,8 +495,9 @@
                 // ★★★ CRITICAL: Count games from all dates BEFORE this future date ★★★
                 const gamesPerDateMap = history.gamesPerDate[leagueId] || {};
                 let gamesBeforeThisDate = 0;
-                
+
                 for (const histDate of Object.keys(gamesPerDateMap)) {
+                    if (_hrEpUF && histDate < _hrEpUF) continue; // ★ HR-58: pre-epoch games never count
                     if (histDate < futureDate) {
                         gamesBeforeThisDate += gamesPerDateMap[histDate];
                     }
@@ -554,6 +857,40 @@
         // ★★★ FILTER OUT DISABLED AND ALREADY-LOCKED FIELDS ★★★
         const _disabledSet = new Set(window.currentDisabledFields || []);
         let availableFields = fields.filter(f => !_disabledSet.has(f));
+
+        // ★ SPECIAL-ACTIVITY ROOMS ARE SPECIAL-ONLY (parity with RegularLeagues'
+        //   _leagueSpecialRooms in buildAvailableFieldSportPool).
+        //   A court that is a special's physical room (e.g. "Gym 1" is the
+        //   "Basketball Clinic" room) must not be handed to a league game.
+        //   Specialty leagues run at STEP 4, BEFORE Smart Tiles at STEP 6, and
+        //   they lock what they take — but the Smart Tile gate
+        //   (smart_logic_adapter canDivisionUseSpecial) tests GlobalFieldLocks
+        //   under the SPECIAL'S NAME, never its host facility. So a specialty
+        //   league sitting on "Gym 1" is invisible to the special that lives
+        //   there, and both end up in the same room at the same time — a
+        //   physical double-book neither engine can see. Regular leagues have
+        //   been excluding special rooms for exactly this reason; specialty
+        //   leagues never did.
+        //   Self-named specials (location == own name) aren't sport courts, so
+        //   excluding them is a harmless no-op.
+        //   Killswitch: window.__specLeagueSpecialRoomGuard = false.
+        if (window.__specLeagueSpecialRoomGuard !== false) {
+            try {
+                const _gsRooms = (window.loadGlobalSettings && window.loadGlobalSettings()) || window.globalSettings || {};
+                const _roomSet = new Set();
+                (((_gsRooms.app1 && _gsRooms.app1.specialActivities) || _gsRooms.specialActivities || []) || [])
+                    .forEach(sp => { if (sp && sp.location) _roomSet.add(String(sp.location).toLowerCase().trim()); });
+                if (_roomSet.size) {
+                    const _beforeRooms = availableFields;
+                    availableFields = availableFields.filter(f => !_roomSet.has(String(f).toLowerCase().trim()));
+                    const _dropped = _beforeRooms.filter(f => !availableFields.includes(f));
+                    if (_dropped.length) {
+                        console.log('[SpecialtyLeagues] ⚠️ Court(s) reserved for special activities — not available to "' +
+                            league.name + '": ' + _dropped.join(', '));
+                    }
+                }
+            } catch (_eRooms) { /* fail open — never drop every court on a read error */ }
+        }
         // ★ FN-29: field-config map so specialty leagues honor the same facility configs
         //   sports do — access restrictions, weather availability, and canonical
         //   field.timeRules (fallback when the merged activityProperties copy is empty).
@@ -785,8 +1122,16 @@
             }
 
             if (!bestField) {
+                // ★ Playoff: reserved fields (saved for teams that are out) are
+                //   off-limits to the games' auto-pick; only an explicit
+                //   user-chosen field (handled above) may land on one.
+                const _resFieldSet = new Set(
+                    (league && Array.isArray(league._playoffReservedNow))
+                        ? league._playoffReservedNow.map(String) : []
+                );
                 let bestRot = -Infinity;
                 for (const field of availableFields) {
+                    if (_resFieldSet.has(field)) continue;
                     const currentGames = _effectiveGames(field);
                     const maxGames = gamesPerFieldSlot || 3;
                     if (currentGames >= maxGames) continue;   // court already full this period
@@ -897,9 +1242,23 @@
     // slotDebt is cumulative, so it IS rolled back here (FN-55) using the
     // per-game slotOrder now stored on each gameLog entry.
 
-    function rollbackDayRecords(leagueId, date, history) {
-        const entries = history.gameLog?.[leagueId]?.[date];
-        if (!entries || !entries.length) return 0;
+    function rollbackDayRecords(leagueId, date, history, preservedLabels, keepUnlabeled) {
+        const all = history.gameLog?.[leagueId]?.[date];
+        if (!all || !all.length) return 0;
+        // ★ Mid-day cut: keep the games whose label survived the cut, roll back
+        //   only the rest (mirrors the regular engine's preservedLabels path).
+        // ★ keepUnlabeled: the post-generation schedule reconcile matches records
+        //   to saved tiles BY LABEL, so an unlabelled record can't be matched and
+        //   is left alone rather than guessed at.
+        const _keepFn = function (e) {
+            if (!e) return false;
+            if (!e.g) return keepUnlabeled === true;
+            return !!(preservedLabels && preservedLabels.has(e.g));
+        };
+        const keep = (keepUnlabeled === true || (preservedLabels && preservedLabels.size))
+            ? all.filter(_keepFn)
+            : [];
+        const entries = (keep.length) ? all.filter(function (e) { return keep.indexOf(e) < 0; }) : all;
         entries.forEach(function (e) {
             if (e.field) {
                 [e.tA, e.tB].forEach(function (team) {
@@ -936,10 +1295,284 @@
             }
         });
         const n = entries.length;
-        delete history.gameLog[leagueId][date];
-        console.log(`[SpecialtyLeagues] ↩️ Rolled back ${n} logged game record(s) for league ${leagueId} on ${date}`);
+        if (keep.length) history.gameLog[leagueId][date] = keep;
+        else delete history.gameLog[leagueId][date];
+        console.log(`[SpecialtyLeagues] ↩️ Rolled back ${n} logged game record(s) for league ${leagueId} on ${date}` +
+            (keep.length ? ` (kept ${keep.length} preserved record(s))` : ''));
         return n;
     }
+
+    // =========================================================================
+    // ★ TEAM RENAME — specialty analog (see league_team_rename.js)
+    // =========================================================================
+    // Same identity problem as the regular engine, different stores. Everything
+    // here is keyed by the league's ID (not its name) plus the team NAME:
+    //   teamFieldRotation["<id>|<team>"] → [field, …]   (field variety)
+    //   lastSlotOrder["<id>|<team>"]     → slot order   (wait fairness)
+    //   slotDebt["<id>|<team>"]          → cumulative late-slot wait
+    //   matchupHistory["<id>|<a>|<b>"]   → [date, …]    (meeting recency)
+    //   gameLog[id][date]                → [{tA, tB, field, g, s}, …]
+
+    function _spRemapPairKey(pair, mapFn) {
+        for (let i = pair.indexOf('|'); i !== -1; i = pair.indexOf('|', i + 1)) {
+            const a = pair.slice(0, i), b = pair.slice(i + 1);
+            const na = mapFn(a), nb = mapFn(b);
+            if (na !== a || nb !== b) return [na, nb].sort().join('|');
+        }
+        return null;
+    }
+
+    function _mapSpecialtyHistoryTeams(history, leagueId, mapFn) {
+        if (!history || !leagueId || typeof mapFn !== 'function') return 0;
+        let changed = 0;
+        const prefix = leagueId + '|';
+
+        // Per-team stores. teamFieldRotation concatenates (both are play
+        // records), lastSlotOrder takes the existing value when present (it is
+        // overwrite-only), slotDebt sums (it is cumulative).
+        [
+            ['teamFieldRotation', function (dst, src) {
+                return Array.isArray(dst) ? dst.concat(Array.isArray(src) ? src : []) : src;
+            }],
+            ['lastSlotOrder', function (dst) { return dst; }],
+            ['slotDebt', function (dst, src) { return (Number(dst) || 0) + (Number(src) || 0); }]
+        ].forEach(function (pair) {
+            const store = history[pair[0]], merge = pair[1];
+            if (!store || typeof store !== 'object') return;
+            Object.keys(store).forEach(function (k) {
+                if (k.indexOf(prefix) !== 0) return;
+                const team = k.slice(prefix.length);
+                const next = mapFn(team);
+                if (next === team) return;
+                const nk = prefix + next;
+                const src = store[k];
+                delete store[k];
+                store[nk] = (store[nk] !== undefined) ? merge(store[nk], src) : src;
+                changed++;
+            });
+        });
+
+        // matchupHistory — "<id>|<a>|<b>" → array of dates. The pair is sorted,
+        // so the key can flip order on rename. On collision the date lists are
+        // concatenated and re-sorted, NOT deduped: a repeated date is a real
+        // second meeting that day, and recency reads count entries.
+        if (history.matchupHistory && typeof history.matchupHistory === 'object') {
+            Object.keys(history.matchupHistory).forEach(function (k) {
+                if (k.indexOf(prefix) !== 0) return;
+                const nextPair = _spRemapPairKey(k.slice(prefix.length), mapFn);
+                if (nextPair === null) return;
+                const nk = prefix + nextPair;
+                if (nk === k) return;
+                const src = Array.isArray(history.matchupHistory[k]) ? history.matchupHistory[k] : [];
+                delete history.matchupHistory[k];
+                const dst = Array.isArray(history.matchupHistory[nk]) ? history.matchupHistory[nk] : [];
+                history.matchupHistory[nk] = dst.concat(src).sort();
+                changed++;
+            });
+        }
+
+        // gameLog
+        const gl = history.gameLog && history.gameLog[leagueId];
+        if (gl && typeof gl === 'object') {
+            Object.keys(gl).forEach(function (d) {
+                (Array.isArray(gl[d]) ? gl[d] : []).forEach(function (e) {
+                    if (!e) return;
+                    ['tA', 'tB'].forEach(function (f) {
+                        if (typeof e[f] !== 'string') return;
+                        const next = mapFn(e[f]);
+                        if (next !== e[f]) { e[f] = next; changed++; }
+                    });
+                });
+            });
+        }
+
+        return changed;
+    }
+
+    // Fold former-name records into the current team on every history load —
+    // covers old-name data that arrives after the rename (a stale device's
+    // lineage unioned in by mergeSpecialtyHistories, or a day reconciled from an
+    // un-migrated saved schedule).
+    function _foldSpecialtyHistoryAliases(history) {
+        try {
+            const LTR = (typeof window !== 'undefined') && window.LeagueTeamRename;
+            if (!LTR || !history) return 0;
+            let total = 0;
+            Object.values(loadSpecialtyLeagues() || {}).forEach(function (league) {
+                if (!league || !league.id) return;
+                const resolve = LTR.resolverFor(league);
+                if (!resolve) return;
+                total += _mapSpecialtyHistoryTeams(history, league.id, resolve);
+            });
+            if (total > 0) {
+                console.log('[SpecialtyLeagues] 🔗 Folded ' + total + ' record(s) written under a former team name '
+                    + 'into the current team (rename aliases)');
+            }
+            return total;
+        } catch (e) {
+            console.warn('[SpecialtyLeagues] alias fold skipped:', e);
+            return 0;
+        }
+    }
+
+    SpecialtyLeagues.renameTeamInHistory = function (leagueId, oldName, newName) {
+        if (!leagueId || !oldName || !newName || oldName === newName) {
+            return { ok: false, changed: 0, reason: 'missing/identical names' };
+        }
+        try {
+            const history = loadSpecialtyHistory();
+            const norm = function (s) { return String(s == null ? '' : s).trim().toLowerCase(); };
+            const target = norm(oldName);
+            const changed = _mapSpecialtyHistoryTeams(history, leagueId, function (name) {
+                return norm(name) === target ? newName : name;
+            });
+            // Save unconditionally — see the regular engine's renameTeamInHistory:
+            // when the alias is recorded first, the load-time fold already did the
+            // remap in memory and `changed` is 0.
+            saveSpecialtyHistory(history);
+            console.log('[SpecialtyLeagues] ✏️ Team rename "' + oldName + '" → "' + newName + '" in league ' + leagueId
+                + ': ' + changed + ' history record(s) migrated');
+            return { ok: true, changed: changed };
+        } catch (e) {
+            console.error('[SpecialtyLeagues] renameTeamInHistory error:', e);
+            return { ok: false, changed: 0, reason: String((e && e.message) || e) };
+        }
+    };
+
+    // =========================================================================
+    // ★ LG-9: HISTORY ⇄ SAVED-SCHEDULE RECONCILIATION (specialty)
+    // =========================================================================
+    // Mirror of the regular engine's reconcileHistoryFromSchedules: rebuild
+    // any (league, date) the gameLog has NO record of from the saved daily
+    // schedules' leagueAssignments (specialty uiEntries store structured
+    // matchups {teamA, teamB, field, slotOrder} under the league's NAME; the
+    // history is keyed by the league's ID). Tombstone-aware; derived stores
+    // (matchup date-arrays, field rotation, slotDebt) and per-date counters
+    // are backfilled alongside; persisted + verified-pushed on change.
+    // Killswitch: window.__leagueHistoryReconcile = false.
+    function _spDailyDataGames(leagueName, date) {
+        try {
+            const all = (typeof window !== 'undefined' && window.loadAllDailyData) ? window.loadAllDailyData() : null;
+            const la = all && all[date] && all[date].leagueAssignments;
+            if (!la) return [];
+            // ★ TEAM RENAME: a saved schedule that was never migrated must not
+            //   reconstruct a phantom team here (see the regular engine's
+            //   _teamResolverFor for the full rationale).
+            let _resolve = null;
+            try {
+                const LTR = (typeof window !== 'undefined') && window.LeagueTeamRename;
+                if (LTR) {
+                    const cfg = Object.values(loadSpecialtyLeagues() || {})
+                        .find(function (l) { return l && l.name === leagueName; });
+                    if (cfg) _resolve = LTR.resolverFor(cfg);
+                }
+            } catch (_) {}
+            const out = [];
+            const seen = new Set();
+            Object.keys(la).forEach(function (dv) {
+                const map = la[dv] || {};
+                Object.keys(map).forEach(function (k) {
+                    const g = map[k];
+                    if (!g || (g.leagueName || '') !== leagueName) return;
+                    (g.matchups || []).forEach(function (m) {
+                        if (!m || typeof m !== 'object') return;
+                        let a = m.teamA != null ? m.teamA : m.team1;
+                        let b = m.teamB != null ? m.teamB : m.team2;
+                        if (!a || !b || a === 'BYE' || b === 'BYE' || a === 'TBD' || b === 'TBD') return;
+                        if (_resolve) { a = _resolve(String(a)); b = _resolve(String(b)); }
+                        const key = (g.gameLabel || '') + '::' + [String(a), String(b)].sort().join('|');
+                        if (seen.has(key)) return;
+                        seen.add(key);
+                        out.push({
+                            tA: String(a), tB: String(b),
+                            field: m.field || null,
+                            g: g.gameLabel || null,
+                            s: (m.slotOrder != null) ? m.slotOrder : null
+                        });
+                    });
+                });
+            });
+            return out;
+        } catch (_e) { return []; }
+    }
+    function reconcileHistoryFromSchedules(history, specialtyLeaguesConfig, skipDate) {
+        if (typeof window !== 'undefined' && window.__leagueHistoryReconcile === false) return 0;
+        let backfilled = 0;
+        try {
+            const leagues = Object.values(specialtyLeaguesConfig || {}).filter(function (l) { return l && l.id && l.name; });
+            if (!leagues.length) return 0;
+            const all = (typeof window !== 'undefined' && window.loadAllDailyData) ? window.loadAllDailyData() : null;
+            if (!all) return 0;
+            const dates = Object.keys(all).filter(function (d) { return /^\d{4}-\d{2}-\d{2}$/.test(d); }).sort();
+            if (!dates.length) return 0;
+            history.gameLog = history.gameLog || {};
+            history.gamesPerDate = history.gamesPerDate || {};
+            history.matchupHistory = history.matchupHistory || {};
+            history.teamFieldRotation = history.teamFieldRotation || {};
+            const tombs = history._tombstones || {};
+            const resetAt = Number(history._resetAt) || 0;
+            // ★ HR-59: reconcile fence (mirrors HR-47) — pre-epoch saved
+            // schedules are archive; rebuilding them would resurrect last
+            // half's matchup recency, field rotation, slot debt and counters.
+            // Post-epoch days keep healing normally.
+            const _hrEpRec = _effectiveEpoch(history);
+            leagues.forEach(function (league) {
+                const teamSet = new Set(league.teams || []);
+                if (teamSet.size < 2) return;
+                dates.forEach(function (d) {
+                    if (_hrEpRec && d < _hrEpRec) return;  // ★ HR-59
+                    if (d === skipDate) return;
+                    if ((history.gameLog[league.id] || {})[d] && history.gameLog[league.id][d].length) return;
+                    if ((tombs[`${league.id}|${d}`] || 0) > 0 || (tombs[`*|${d}`] || 0) > 0 || resetAt > 0) return;
+                    const games = _spDailyDataGames(league.name, d)
+                        .filter(function (g) { return teamSet.has(g.tA) && teamSet.has(g.tB); });
+                    if (!games.length) return;
+                    if (!history.gameLog[league.id]) history.gameLog[league.id] = {};
+                    if (!history.gameLog[league.id][d]) history.gameLog[league.id][d] = [];
+                    games.forEach(function (g) {
+                        history.gameLog[league.id][d].push({ tA: g.tA, tB: g.tB, field: g.field, g: g.g, s: g.s });
+                        const mk = `${league.id}|${[g.tA, g.tB].sort().join('|')}`;
+                        (history.matchupHistory[mk] = history.matchupHistory[mk] || []).push(d);
+                        if (g.field) {
+                            [g.tA, g.tB].forEach(function (t) {
+                                const fk = `${league.id}|${t}`;
+                                (history.teamFieldRotation[fk] = history.teamFieldRotation[fk] || []).push(g.field);
+                            });
+                        }
+                        if (g.s != null) {
+                            const w = Math.max(0, (g.s || 1) - 1);
+                            if (w > 0) {
+                                if (!history.slotDebt) history.slotDebt = {};
+                                [g.tA, g.tB].forEach(function (t) {
+                                    const sk = `${league.id}|${t}`;
+                                    history.slotDebt[sk] = (history.slotDebt[sk] || 0) + w;
+                                });
+                            }
+                        }
+                        backfilled++;
+                    });
+                    if (history.gamesPerDate[league.id]?.[d] === undefined) {
+                        const labels = new Set(games.map(function (g) { return g.g; }).filter(Boolean));
+                        if (!history.gamesPerDate[league.id]) history.gamesPerDate[league.id] = {};
+                        history.gamesPerDate[league.id][d] = Math.max(labels.size, 1);
+                    }
+                    console.log(`[SpecialtyLeagues] 🩹 Reconstructed ${games.length} game(s) for "${league.name}" on ${d} from the saved schedule (history had no record)`);
+                });
+            });
+            if (backfilled > 0) {
+                console.warn(`[SpecialtyLeagues] 🩹 History reconciliation backfilled ${backfilled} game(s) from saved schedules`);
+                saveSpecialtyHistory(history);
+            }
+        } catch (e) {
+            console.warn('[SpecialtyLeagues] history reconciliation skipped:', e);
+        }
+        return backfilled;
+    }
+    SpecialtyLeagues.reconcileHistoryFromSchedules = function (specialtyLeaguesConfig) {
+        const cfg = specialtyLeaguesConfig || loadSpecialtyLeagues();
+        const history = loadSpecialtyHistory();
+        return reconcileHistoryFromSchedules(history, cfg, null);
+    };
 
     // =========================================================================
     // ★★★ MAIN PROCESSOR: PROCESSES FIRST, LOCKS FIELDS GLOBALLY ★★★
@@ -969,8 +1602,17 @@
         const history = loadSpecialtyHistory();
         
         // ★★★ GET CURRENT DAY IDENTIFIER ★★★
-        const currentDate = window.currentScheduleDate || new Date().toISOString().split('T')[0];
+        // ★ FN-14: prefer the authoritative gen-date over the global picker —
+        //   the picker can transiently revert to the PREVIOUS date mid-gen,
+        //   which keyed the day-reset + gameLog to the wrong day (see the
+        //   matching note in processRegularLeagues). Local-date fallback:
+        //   toISOString() is UTC and flips to tomorrow during evening sessions.
+        const currentDate = window._activeGenDate || window.currentScheduleDate || new Date().toLocaleDateString('en-CA');
         console.log(`[SpecialtyLeagues] Current day: "${currentDate}"`);
+
+        // ★ LG-9: rebuild gameLog days the history has NO record of from the
+        // saved schedules before any decision reads it (see the function).
+        reconcileHistoryFromSchedules(history, specialtyLeaguesConfig, currentDate);
 
         // ★★★ TRACK GAMES PER LEAGUE FOR THIS DAY ★★★
         const leagueGameCounters = {};
@@ -998,6 +1640,12 @@
                 if (history.gamesPerDate?.[l.id]?.[currentDate] !== undefined) {
                     delete history.gamesPerDate[l.id][currentDate];
                 }
+                // ★ LG-8 tombstone: this generation REPLACES the league's day —
+                // a stale copy's version must lose in any later merge (this
+                // run's end-of-gen save is stamped after this, so its own
+                // re-logged games survive).
+                history._tombstones = history._tombstones || {};
+                history._tombstones[`${l.id}|${currentDate}`] = Date.now();
             });
         })();
 
@@ -1131,12 +1779,58 @@
             let _playoffRoundNum = null;
             let _playoffIsTBD = false;
             const _PM_S = window.PlayoffMode;
+            // ★ AUTOMATIC ROUND TRACKING: with playoff.startGameCount set
+            //   (stamped by the Playoff Hub when playoffs are turned on), every
+            //   league tile after that point plays the next round in sequence —
+            //   tile #1 = Round 1, tile #2 = Round 2, … — derived from the same
+            //   chronological game counter: round = gameNumber - startGameCount.
+            //   Legacy playoffs without the anchor fall back to
+            //   currentRound + todayGameIndex.
+            let _playoffPreseason = false;   // playoff enabled, but this tile predates the start anchor
+            league._playoffReservedNow = null;   // set below when a playoff round plays
             if (_PM_S && _PM_S.isLeagueInPlayoff(league)) {
-                const liveMatchups = _PM_S.getActiveMatchups(league);
-                if (liveMatchups.length > 0) {
-                    if (todayGameIndex === 0) {
-                        _playoffRoundNum = league.playoff.currentRound;
-                        matchups = liveMatchups.map(function (m) {
+                const _startCnt = league.playoff.startGameCount;
+                const derivedRound = (typeof _startCnt === 'number')
+                    ? (gameNumber - _startCnt)
+                    : (league.playoff.currentRound + todayGameIndex);
+                if (derivedRound < 1) {
+                    console.log('[SpecialtyLeagues] 🏆 PLAYOFF: tile #' + gameNumber + ' predates the playoff start anchor (' + _startCnt + ') — regular league play');
+                    _playoffPreseason = true;
+                } else {
+                    // ★ Rounds whose winners are already all marked never need a
+                    //   tile (e.g. results entered by hand before the round's slot
+                    //   ran). Walk forward to the first round that still needs
+                    //   games — otherwise the tile would skip, never get counted,
+                    //   and the tracker would point at the decided round forever.
+                    let roundToPlay = derivedRound;
+                    if (typeof _PM_S.getRoundByNumber === 'function') {
+                        let _guard = 0;
+                        while (_guard++ < 100) {
+                            const _r = _PM_S.getRoundByNumber(league, roundToPlay);
+                            if (_r && _PM_S.isRoundComplete(_r)) roundToPlay++;
+                            else break;
+                        }
+                    }
+                    const _reanchor = function () {
+                        if (roundToPlay !== derivedRound && typeof _startCnt === 'number') {
+                            league.playoff.startGameCount = gameNumber - roundToPlay;
+                            console.log('[SpecialtyLeagues] 🏆 PLAYOFF: Round ' + derivedRound + (roundToPlay - derivedRound > 1 ? '–' + (roundToPlay - 1) : '') + ' already decided — tile #' + gameNumber + ' plays Round ' + roundToPlay + ' (anchor re-aligned to ' + league.playoff.startGameCount + ')');
+                        }
+                    };
+                    // ★ The round's reserved fields are for the kids who are OUT —
+                    //   the field assigner must not auto-pick them for games.
+                    league._playoffReservedNow = _PM_S.getReservedForRound
+                        ? _PM_S.getReservedForRound(league, roundToPlay) : null;
+                    const userRound = (typeof _PM_S.getRoundByNumber === 'function')
+                        ? _PM_S.getRoundByNumber(league, roundToPlay) : null;
+                    const userRoundMatchups = (userRound && Array.isArray(userRound.matchups)) ? userRound.matchups : [];
+                    const userActive = userRoundMatchups.filter(function (m) {
+                        return m && m.teamA && m.teamB && m.teamA !== 'BYE' && m.teamB !== 'BYE' && !m.winner;
+                    });
+                    if (userActive.length > 0) {
+                        _reanchor();
+                        _playoffRoundNum = roundToPlay;
+                        matchups = userActive.map(function (m) {
                             return {
                                 teamA: m.teamA,
                                 teamB: m.teamB,
@@ -1146,26 +1840,43 @@
                                 _playoffField: m.field || null
                             };
                         });
-                        console.log('[SpecialtyLeagues] 🏆 PLAYOFF Round ' + _playoffRoundNum + ': ' + liveMatchups.length + ' active matchup(s)');
+                        // Keep the hub's display cache in sync with the tracked round
+                        league.playoff.currentRound = roundToPlay;
+                        console.log('[SpecialtyLeagues] 🏆 PLAYOFF Round ' + roundToPlay + ' (tile #' + gameNumber + '): ' + userActive.length + ' matchup(s)');
+                    } else if (!userRound && _PM_S.getChampion && _PM_S.getChampion(league)) {
+                        console.log('[SpecialtyLeagues] 🏆 PLAYOFF: tournament decided (champion: ' + _PM_S.getChampion(league) + ') and no Round ' + roundToPlay + ' exists — skipping');
+                        continue;
                     } else {
-                        // Game 2+ same day: emit TBD placeholders for forecast next round.
-                        const tbdRoundNum = league.playoff.currentRound + todayGameIndex;
-                        const tbdCount = Math.max(1, Math.ceil(liveMatchups.length / Math.pow(2, todayGameIndex)));
-                        const sportsPool = liveMatchups
+                        // Round not built yet, or built but teams not filled in —
+                        // reserve the slot with TBD placeholders sized from the
+                        // user's round (or half the previous round).
+                        _reanchor();
+                        const prevRound = (typeof _PM_S.getRoundByNumber === 'function')
+                            ? _PM_S.getRoundByNumber(league, roundToPlay - 1) : null;
+                        const prevFilled = prevRound
+                            ? (prevRound.matchups || []).filter(function (m) {
+                                return m && m.teamA && m.teamB && m.teamA !== 'BYE' && m.teamB !== 'BYE';
+                            }) : [];
+                        const tbdCount = userRoundMatchups.length > 0
+                            ? userRoundMatchups.length
+                            : Math.max(1, Math.ceil((prevFilled.length || 2) / 2));
+                        const sportsPool = (userRoundMatchups.length ? userRoundMatchups : prevFilled)
                             .map(function (m) { return m.sport || null; })
                             .filter(Boolean);
                         const fallbackSport = league.sport || null;
-                        _playoffRoundNum = tbdRoundNum;
+                        _playoffRoundNum = roundToPlay;
                         _playoffIsTBD = true;
                         matchups = [];
                         for (let k = 0; k < tbdCount; k++) {
+                            const um = userRoundMatchups[k];
                             matchups.push({
                                 teamA: 'TBD',
                                 teamB: 'TBD',
                                 conference: null,
                                 isInterConference: false,
-                                _playoffSport: sportsPool.length ? sportsPool[k % sportsPool.length] : fallbackSport,
-                                _playoffField: null,
+                                _playoffSport: (um && um.sport)
+                                    || (sportsPool.length ? sportsPool[k % sportsPool.length] : fallbackSport),
+                                _playoffField: (um && um.field) || null,
                                 _playoffTBD: true,
                                 // ★ FN-9: unique per-placeholder id so the field-assignment
                                 //   dedup doesn't collapse every "TBD-TBD" matchup into one
@@ -1174,13 +1885,12 @@
                                 _tbdIndex: k
                             });
                         }
-                        console.log('[SpecialtyLeagues] 🏆 PLAYOFF Round ' + tbdRoundNum + ' TBD: ' + tbdCount + ' placeholder matchup(s)');
+                        console.log('[SpecialtyLeagues] 🏆 PLAYOFF Round ' + roundToPlay + ' TBD: ' + tbdCount + ' placeholder matchup(s)'
+                            + (userRound ? ' (round built, teams not filled in yet)' : ' (round not built yet — add it in the Playoff Hub)'));
                     }
-                } else {
-                    console.log('[SpecialtyLeagues] 🏆 PLAYOFF: no active matchups in current round — skipping');
-                    continue;
                 }
-            } else {
+            }
+            if (!(_PM_S && _PM_S.isLeagueInPlayoff(league)) || _playoffPreseason) {
                 matchups = getLeagueMatchupsForToday(league, history, gameNumber);
             }
 
@@ -1212,6 +1922,21 @@
                 continue;
             }
 
+            // ★ Playoff court shortage: the round asked for more games than the
+            //   league's courts could hold this period — say WHICH matchups got
+            //   dropped instead of losing them silently (the validator's
+            //   playoff-field-shortage check reports the same thing post-gen).
+            if (_playoffRoundNum && !_playoffIsTBD && assignments.length < matchups.length) {
+                const _placedPairs = new Set(assignments.map(a => a.teamA + '|' + a.teamB));
+                matchups
+                    .filter(m => !_placedPairs.has(m.teamA + '|' + m.teamB) && !_placedPairs.has(m.teamB + '|' + m.teamA))
+                    .forEach(m => console.warn('[SpecialtyLeagues] 🚨 PLAYOFF R' + _playoffRoundNum + ' ('
+                        + league.name + '): ' + m.teamA + ' vs ' + m.teamB + ' did not get a court — '
+                        + matchups.length + ' games scheduled but the league\'s ' + ((league.fields || []).length)
+                        + ' court(s) hold at most ' + (((league.fields || []).length) * (league.gamesPerFieldSlot || 3))
+                        + ' simultaneous games. The matchup was dropped from the schedule.'));
+            }
+
             // ★★★ INCREMENT TODAY'S GAME COUNTER ★★★
             leagueGameCounters[league.id]++;
 
@@ -1238,16 +1963,30 @@ window.GlobalFieldLocks.lockMultipleFields(usedFields, uniqueSlots, {
 });
 
 // ★★★ PLAYOFF: lock reserved activities for non-playoff kids ★★★
-if (_playoffRoundNum && league.playoff && Array.isArray(league.playoff.reservedActivities) && league.playoff.reservedActivities.length > 0) {
-    const reservedReason = `Playoff reserve (${league.name} R${_playoffRoundNum}` + (_playoffIsTBD ? ' TBD)' : ')');
-    league.playoff.reservedActivities.forEach(function (act) {
-        try {
-            window.GlobalFieldLocks.lockFieldForDivision(act, uniqueSlots, divName, reservedReason);
-        } catch (e) {
-            console.warn('[PLAYOFF specialty] failed to reserve "' + act + '" for ' + divName + ':', e);
-        }
-    });
-    console.log('[SpecialtyLeagues] 🎯 PLAYOFF: reserved [' + league.playoff.reservedActivities.join(', ') + '] for ' + divName);
+// Per-round list — later rounds usually reserve more fields as more teams
+// are knocked out (legacy league-wide list as fallback).
+if (_playoffRoundNum) {
+    const _roundReserved = _PM_S.getReservedForRound
+        ? _PM_S.getReservedForRound(league, _playoffRoundNum)
+        : ((league.playoff && league.playoff.reservedActivities) || []);
+    if (_roundReserved.length > 0) {
+        const reservedReason = `Playoff reserve (${league.name} R${_playoffRoundNum}` + (_playoffIsTBD ? ' TBD)' : ')');
+        // ★ ONE division lock per field allowing ALL the league's divisions
+        //   (comma list — GlobalFieldLocks.divisionAllowed). Per-division calls
+        //   overwrote each other across processing passes, leaving only the
+        //   last division allowed. Explicit time window for cross-grade checks.
+        const _resDivs = (Array.isArray(league.divisions) && league.divisions.length > 0)
+            ? league.divisions.join(', ') : divName;
+        _roundReserved.forEach(function (act) {
+            try {
+                window.GlobalFieldLocks.lockFieldForDivision(act, uniqueSlots, _resDivs, reservedReason,
+                    (_specLockStart != null ? { startMin: _specLockStart, endMin: _specLockEnd } : undefined));
+            } catch (e) {
+                console.warn('[PLAYOFF specialty] failed to reserve "' + act + '" for ' + _resDivs + ':', e);
+            }
+        });
+        console.log('[SpecialtyLeagues] 🎯 PLAYOFF R' + _playoffRoundNum + ': reserved [' + _roundReserved.join(', ') + '] for ' + _resDivs);
+    }
 }
 }
 
@@ -1271,10 +2010,33 @@ if (_playoffRoundNum && league.playoff && Array.isArray(league.playoff.reservedA
                 console.log(`   ✅ ${a.teamA} vs ${a.teamB} @ ${a.field} (Slot ${a.slotOrder})`);
             });
 
-            // Build matchup display strings
-            const matchupStrings = assignments.map(a =>
+            // Build matchup display strings. For playoff rounds, list the
+            // round's user-marked byes underneath the games ("Team — Bye":
+            // sitting out this round, still in the playoffs), then the round's
+            // reserved fields as "Electives" — where the teams that are out go
+            // during this period. Eliminated (knocked-out) teams themselves are
+            // never listed.
+            let matchupStrings = assignments.map(a =>
                 `${a.teamA} vs ${a.teamB} — ${a.field}`
             );
+            if (_playoffRoundNum) {
+                const _dispRound = _PM_S.getRoundByNumber ? _PM_S.getRoundByNumber(league, _playoffRoundNum) : null;
+                const _playingTeams = new Set();
+                assignments.forEach(a => { if (a.teamA) _playingTeams.add(a.teamA); if (a.teamB) _playingTeams.add(a.teamB); });
+                const _byeRows = ((_dispRound && _dispRound.byes) || [])
+                    .filter(t => !_playingTeams.has(t))
+                    .map(t => `${t} — Bye`);
+                matchupStrings = matchupStrings.concat(_byeRows);
+                const _dispReserved = (_PM_S.getReservedForRound
+                    ? _PM_S.getReservedForRound(league, _playoffRoundNum)
+                    : ((league.playoff && league.playoff.reservedActivities) || []));
+                if (_dispReserved.length > 0) {
+                    matchupStrings = matchupStrings.concat(
+                        ['Electives:'],
+                        _dispReserved.map(f => `  • ${f}`)
+                    );
+                }
+            }
 
             const gameLabel = _playoffRoundNum
                 ? (`${league.name} Playoff R${_playoffRoundNum}` + (_playoffIsTBD ? ' TBD' : ''))
@@ -1394,7 +2156,8 @@ if (_playoffRoundNum && league.playoff && Array.isArray(league.playoff.reservedA
         if (!league) return null;
 
         const history = loadSpecialtyHistory();
-        const currentDate = window.currentScheduleDate || new Date().toISOString().split('T')[0];
+        // ★ FN-14: same date-authority order as the engine entry point above.
+        const currentDate = window._activeGenDate || window.currentScheduleDate || new Date().toLocaleDateString('en-CA');
         const gameNumber = calculateStartingGameNumber(leagueId, currentDate, history) + 1;
         
         const matchups = getLeagueMatchupsForToday(league, history, gameNumber);
@@ -1523,6 +2286,13 @@ if (_playoffRoundNum && league.playoff && Array.isArray(league.playoff.reservedA
                 }
             }
 
+            // ★ LG-8 tombstone: the whole date was deleted (all leagues) —
+            // stamped even when nothing existed locally, because a divergent
+            // copy on another device may still carry games for this date.
+            history._tombstones = history._tombstones || {};
+            history._tombstones[`*|${dateKey}`] = Date.now();
+            changed = true;
+
             if (!changed) return;
 
             saveSpecialtyHistory(history);
@@ -1558,6 +2328,12 @@ if (_playoffRoundNum && league.playoff && Array.isArray(league.playoff.reservedA
                     delete history.gamesPerDate[l.id][dateKey];
                     changed = true;
                 }
+                // ★ LG-8 tombstone: deliberate per-league day reset — a stale
+                // copy must not resurrect it in a merge; a later regen (saved
+                // after this stamp) survives.
+                history._tombstones = history._tombstones || {};
+                history._tombstones[`${l.id}|${dateKey}`] = Date.now();
+                changed = true;
             });
             if (affected.length > 0) {
                 try { window.SpecialtyLeaguesAPI?.removeAutoGamesForDate?.(dateKey, affected); } catch (e) {}
@@ -1570,6 +2346,68 @@ if (_playoffRoundNum && league.playoff && Array.isArray(league.playoff.reservedA
             console.error('[SpecialtyLeagues] resetDayRecords error:', e);
         }
     };
+
+    // ★ Mid-day weather cut — partial rollback of the games the cut REMOVED
+    //   (mirror of the regular engine's Leagues.rollbackCutGames). Survivors are
+    //   keyed by league NAME in leagueAssignments; specialty history is keyed by
+    //   league ID, so resolve via config. A league absent from the surviving map
+    //   lost ALL its games that day (full rollback). divisionNames null/[] → all.
+    SpecialtyLeagues.rollbackCutGames = function (divisionNames, dateKey, survivingLabelsByLeagueName) {
+        return _rollbackToSurvivors(divisionNames, dateKey, survivingLabelsByLeagueName,
+            { keepUnlabeled: false, logTag: '[SpecialtyLeagues] 🌧️ Mid-day cut:' });
+    };
+
+    // ★ Post-generation reconcile — history must match the final grid. See the
+    //   long note on Leagues.reconcileDayWithSchedule in scheduler_core_leagues.js:
+    //   a per-tile regen predicts which day-records to preserve from the selected
+    //   tiles' geometry, and that prediction breaks whenever the edit moved the
+    //   league period out from under the selection. Reconciling after the grid is
+    //   final can't be fooled. Idempotent on a full generation.
+    SpecialtyLeagues.reconcileDayWithSchedule = function (divisionNames, dateKey, survivingLabelsByLeagueName) {
+        return _rollbackToSurvivors(divisionNames, dateKey, survivingLabelsByLeagueName,
+            { keepUnlabeled: true, logTag: '[SpecialtyLeagues] 🔄 Schedule reconcile:' });
+    };
+
+    function _rollbackToSurvivors(divisionNames, dateKey, survivingLabelsByLeagueName, opts) {
+        opts = opts || {};
+        try {
+            if (!dateKey) return;
+            const cfg = loadSpecialtyLeagues();
+            const history = loadSpecialtyHistory();
+            const divSet = (Array.isArray(divisionNames) && divisionNames.length) ? new Set(divisionNames) : null;
+            const surv = survivingLabelsByLeagueName || {};
+            let changed = false;
+            Object.values(cfg || {}).forEach(function (l) {
+                if (!l || !l.id) return;
+                if (divSet && !(l.divisions || []).some(function (d) { return divSet.has(d); })) return;
+                const dayRecs = history.gameLog?.[l.id]?.[dateKey];
+                if (!dayRecs || !dayRecs.length) return;
+                const rawSurv = surv[l.name];
+                const preserved = (rawSurv instanceof Set) ? (rawSurv.size ? rawSurv : null)
+                                : (Array.isArray(rawSurv) && rawSurv.length) ? new Set(rawSurv) : null;
+                const removed = rollbackDayRecords(l.id, dateKey, history, preserved, opts.keepUnlabeled === true);
+                if (removed <= 0) return;
+                changed = true;
+                const keptRecs = history.gameLog?.[l.id]?.[dateKey] || [];
+                const keptGames = new Set(keptRecs.map(function (r) { return r && r.g; }).filter(Boolean)).size;
+                if (keptGames > 0) {
+                    if (!history.gamesPerDate[l.id]) history.gamesPerDate[l.id] = {};
+                    history.gamesPerDate[l.id][dateKey] = keptGames;
+                } else if (history.gamesPerDate?.[l.id]?.[dateKey] !== undefined) {
+                    delete history.gamesPerDate[l.id][dateKey];
+                }
+                if (keptGames === 0) {
+                    try { window.SpecialtyLeaguesAPI?.removeAutoGamesForDate?.(dateKey, [l.id]); } catch (e) {}
+                }
+            });
+            if (!changed) return;
+            saveSpecialtyHistory(history);
+            updateFutureSchedules(dateKey, history);
+            console.log((opts.logTag || '[SpecialtyLeagues] ↩️') + ' rolled back games no longer on the schedule for', dateKey);
+        } catch (e) {
+            console.error('[SpecialtyLeagues] survivor rollback error:', e);
+        }
+    }
 
     /**
      * Wipe all gamesPerDate entries across every specialty league.
@@ -1584,12 +2422,102 @@ if (_playoffRoundNum && league.playoff && Array.isArray(league.playoff.reservedA
                 history.gamesPerDate[leagueId] = {};
             }
 
+            // ★ LG-8: mark the wipe so merges don't resurrect counters from a
+            // stale copy or heal them back from the retained gameLog —
+            // erase-all restarts game numbering by design.
+            history._countersResetAt = Date.now();
+
             saveSpecialtyHistory(history);
             console.log('[SpecialtyLeagues] 🗑️ Cleared all gamesPerDate entries (all schedules deleted)');
         } catch (e) {
             console.error('[SpecialtyLeagues] clearAllGamesPerDate error:', e);
         }
     };
+
+    // Wipe every specialty-league record, unprompted. The mirror of
+    // Leagues.resetAllHistory: erasing every schedule used to clear only the
+    // game counters here too, leaving a gameLog that referenced days which no
+    // longer exist to drive the next generation's matchups and fields.
+    SpecialtyLeagues.resetAllHistory = function () {
+        try {
+            const reset = {
+                gamesPerDate: {}, gameLog: {}, matchupHistory: {}, teamFields: {},
+                _tombstones: {}, _resetAt: Date.now(), _countersResetAt: Date.now(),
+                _savedAt: Date.now()
+            };
+            saveSpecialtyHistory(reset);
+            console.log('[SpecialtyLeagues] 🗑️ History reset (reset marker synced)');
+            return reset;
+        } catch (e) {
+            console.error('[SpecialtyLeagues] resetAllHistory error:', e);
+        }
+    };
+
+    // Read-only history snapshot for UI consumers (league_play_report.js) so
+    // they get the same cloud-first resolution the engine uses.
+    SpecialtyLeagues.getHistorySnapshot = function () {
+        return loadSpecialtyHistory();
+    };
+
+    // Mirrors Leagues.loadHistory / Leagues.saveHistory on the regular engine —
+    // the merged cloud+local copy with the rename alias fold applied.
+    SpecialtyLeagues.loadHistory = loadSpecialtyHistory;
+    SpecialtyLeagues.saveHistory = saveSpecialtyHistory;
+
+    // ★ HR-60a: EPOCH STAMP — specialty mirror of the regular engine's HR-54.
+    // Called by startNewHalf (calendar.js). Stamps the merge-surviving
+    // _epochDate and rebuilds the derived fairness stores (matchup date-arrays,
+    // field rotation, slot debt) epoch-scoped; gameLog/gamesPerDate stay as
+    // archive and every read is epoch-filtered.
+    SpecialtyLeagues.setHistoryEpoch = function (dateKey) {
+        try {
+            if (!dateKey || !/^\d{4}-\d{2}-\d{2}$/.test(String(dateKey))) return false;
+            const h = loadSpecialtyHistory();
+            // ★ HR-55 v2: deliberate reset is authoritative (exact date + setAt).
+            h._epochDate = String(dateKey);
+            h._epochSetAt = Date.now();
+            // Rebuild derived stores epoch-scoped (mirrors the HR-56 merge
+            // rebuild). Pure-legacy leagues without a gameLog have undated
+            // entries that cannot be filtered — a complete reset zeroes them.
+            h.matchupHistory = {};
+            h.teamFieldRotation = {};
+            h.slotDebt = {};
+            Object.keys(h.gameLog || {}).forEach(function (lg) {
+                Object.keys(h.gameLog[lg] || {}).sort().forEach(function (d) {
+                    if (d < h._epochDate) return;
+                    (h.gameLog[lg][d] || []).forEach(function (e) {
+                        if (!e || !e.tA || !e.tB) return;
+                        const mk = lg + '|' + [e.tA, e.tB].sort().join('|');
+                        (h.matchupHistory[mk] = h.matchupHistory[mk] || []).push(d);
+                        if (e.field) {
+                            [e.tA, e.tB].forEach(function (t) {
+                                const fk = lg + '|' + t;
+                                (h.teamFieldRotation[fk] = h.teamFieldRotation[fk] || []).push(e.field);
+                            });
+                        }
+                        if (e.s != null) {
+                            const w = Math.max(0, (e.s || 1) - 1);
+                            if (w > 0) {
+                                [e.tA, e.tB].forEach(function (t) {
+                                    const sk = lg + '|' + t;
+                                    h.slotDebt[sk] = (h.slotDebt[sk] || 0) + w;
+                                });
+                            }
+                        }
+                    });
+                });
+            });
+            h.lastSlotOrder = {};
+            saveSpecialtyHistory(h);
+            console.log('[SpecialtyLeagues] ★ HR-60a: rotation epoch stamped at ' + h._epochDate + ' — game numbering (and thus round-robin matchups), field rotation and slot debt restart there (records kept as archive).');
+            return true;
+        } catch (e) {
+            console.error('[SpecialtyLeagues] setHistoryEpoch failed:', e);
+            return false;
+        }
+    };
+
+    SpecialtyLeagues._assignMatchupsToFieldsAndSlots = assignMatchupsToFieldsAndSlots; // diagnostics + tests
 
     window.SchedulerCoreSpecialtyLeagues = SpecialtyLeagues;
 

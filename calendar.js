@@ -259,6 +259,25 @@
                 });
             }
         } catch (_eRes) { /* ignore — non-fatal enrichment */ }
+        // ★ CROSS-DEVICE BUNK OVERRIDES (pair of the mirror in saveCurrentDailyData):
+        // adopt the cloud copy when its stamp is NEWER than this device's, so a
+        // teammate's per-bunk overrides land here — including a teammate CLEARING
+        // them (empty array with a newer stamp wins, instead of the stale local list
+        // surviving forever). We also refresh the dedicated localStorage key on adopt
+        // so loadCurrentOverrides' fallback can't resurrect what was just deleted.
+        try {
+            var _bgs2 = _rgs || (window.loadGlobalSettings && window.loadGlobalSettings());
+            var _bmir = _bgs2 && _bgs2.app1 && _bgs2.app1.dailyBunkOverridesByDate && _bgs2.app1.dailyBunkOverridesByDate[date];
+            if (_bmir && Array.isArray(_bmir.v)) {
+                var _localBoTs = String(all[date]._boTs || '');
+                var _cloudBoTs = String(_bmir.t || '');
+                if (_cloudBoTs && _cloudBoTs > _localBoTs) {
+                    all[date].bunkActivityOverrides = _bmir.v;
+                    all[date]._boTs = _cloudBoTs;
+                    try { localStorage.setItem('campBunkOverrides_' + date, JSON.stringify(_bmir.v)); } catch (_eLs) {}
+                }
+            }
+        } catch (_eBoLoad) { /* ignore — non-fatal enrichment */ }
         window.currentDailyData = all[date];
         return window.currentDailyData;
     };
@@ -342,6 +361,26 @@ all[date].updated_at = new Date().toISOString();
                     window.saveGlobalSettings('app1', _sgs.app1);
                 }
             } catch (_eResSave) { /* ignore — daily_schedules path above is the fallback */ }
+
+            // ★ CROSS-DEVICE BUNK OVERRIDES: per-bunk overrides used to be strictly
+            // LOCAL — they sit in every _LOCAL_ONLY carry-forward list (realtime merge,
+            // orchestrator, scheduler) AND the daily_schedules bundle above is skipped
+            // for any date without a materialized schedule, which is exactly when
+            // overrides are authored. Result: a second user/device never saw them.
+            // Mirror through app1 → camp_state_kv — the same proven lane the per-date
+            // skeleton, trips and resource closures use — with a last-write-wins stamp
+            // so the newest author wins on the receiving device.
+            try {
+                if (key === 'bunkActivityOverrides' && typeof window.loadGlobalSettings === 'function' && typeof window.saveGlobalSettings === 'function') {
+                    var _bgs = window.loadGlobalSettings() || {};
+                    if (!_bgs.app1) _bgs.app1 = {};
+                    if (!_bgs.app1.dailyBunkOverridesByDate) _bgs.app1.dailyBunkOverridesByDate = {};
+                    var _boTs = all[date].updated_at || new Date().toISOString();
+                    all[date]._boTs = _boTs;
+                    _bgs.app1.dailyBunkOverridesByDate[date] = { v: Array.isArray(value) ? value : [], t: _boTs };
+                    window.saveGlobalSettings('app1', _bgs.app1);
+                }
+            } catch (_eBoSave) { /* ignore — local copy above still holds */ }
         } catch (e) {
             console.error("Failed to save daily data:", e);
         }
@@ -502,228 +541,437 @@ all[date].updated_at = new Date().toISOString();
             alert("Error resetting history. Check console.");
         }
     };
-    
     // ==========================================================
-    // START NEW HALF
+    // START NEW HALF — ★ HR-60: non-deleting epoch reset.
+    // Concept: schedules are NEVER deleted. A rotation epoch (ISO
+    // dateKey) is stamped instead, and every counting system ignores
+    // dates before it: rotation/usage counters, per-period caps,
+    // frequencyDays cooldowns, multiPart sequences, cohort counts,
+    // league game numbering (back to Game 1), matchup history,
+    // standings and playoffs. This is a COMPLETE reset — bunks get
+    // new campers at the half, so even the short-term variety checks
+    // (yesterday-repeat, 14-day recency, league back-to-back guards)
+    // treat pre-epoch days as nonexistent. Owner-only by product decision.
+    //
+    // What is deliberately NOT touched:
+    //   • daily_schedules (Supabase) and campDailyData_v1 — archive
+    //   • rotation_counts table — pre-epoch rows stay; reads filter
+    //   • league gameLog / league.games — kept as archive; reads and
+    //     standings recalcs filter by the epoch
+    // This also makes the reset reversible: restoring the previous
+    // epoch date restores all history exactly.
     // ==========================================================
-    window.startNewHalf = async function() {
-        var _role = window.AccessControl?.getCurrentRole?.();
-        if (!window.AccessControl?.canEraseData?.()) {
-            window.AccessControl?.showPermissionDenied?.('start new half');
-            return;
-        }
 
-        // ═══════════════════════════════════════════════════════════════
-        // SCHEDULER: Scoped new half — only their assigned divisions
-        // ═══════════════════════════════════════════════════════════════
-        if (_role === 'scheduler') {
-            var myDivisions = window.AccessControl?.getGeneratableDivisions?.() || [];
-            if (myDivisions.length === 0) { alert("You don't have any divisions assigned."); return; }
-            var myBunks = getBunksForDivisions(myDivisions);
-            var confirmed = confirm(
-                "🏕️ START NEW HALF for your divisions (" + myDivisions.join(', ') + ")\n\n" +
-                "This will reset:\n" +
-                "  ✓ Activity usage counters for your bunks\n" +
-                "  ✓ Rotation history for your bunks\n" +
-                "  ✓ Daily schedules for your divisions\n\n" +
-                "Other divisions will NOT be affected.\n\n" +
-                "Are you sure?"
-            );
-            if (!confirmed) return;
-
-            logAuditEvent('start_new_half_partial', { divisions: myDivisions });
+    function _hrTodayKey() {
+        var d = new Date();
+        return d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0') + '-' + String(d.getDate()).padStart(2, '0');
+    }
+    function _hrAddDays(iso, n) {
+        var p = iso.split('-').map(Number);
+        var d = new Date(p[0], p[1] - 1, p[2]);
+        d.setDate(d.getDate() + n);
+        return d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0') + '-' + String(d.getDate()).padStart(2, '0');
+    }
+    // ★ HR-61 (v2 — GOING-FORWARD rule, supersedes the boundary snap):
+    // resets happen either the NIGHT before the new half's first day (today's
+    // schedule already ran — it belongs to the OLD half) or on the first
+    // MORNING (today has no schedule yet — the new half starts today). So:
+    //   • a schedule exists for today (local or cloud) → epoch = TOMORROW,
+    //     today's schedule is pushed back into the previous half;
+    //   • no schedule for today → epoch = TODAY.
+    async function _hrComputeEpochDate() {
+        var todayKey = _hrTodayKey();
+        var hasToday = false;
+        // Local check
+        try {
+            var _td = (window.loadAllDailyData?.() || {})[todayKey];
+            var _sa = _td && _td.scheduleAssignments;
+            var _la = _td && _td.leagueAssignments;
+            hasToday = !!((_sa && Object.keys(_sa).some(function (b) {
+                var s = _sa[b]; return Array.isArray(s) && s.some(Boolean);
+            })) || (_la && Object.keys(_la).length > 0));
+        } catch (_) {}
+        // Cloud check — another device/scheduler may have generated today
+        // without this device having synced it yet.
+        if (!hasToday) {
             try {
-                console.log('⭐ SCHEDULER NEW HALF for:', myDivisions);
-
-                // 1. Delete our bunks from all schedule records
                 var client = window.CampistryDB?.getClient?.() || window.supabase;
                 var campId = window.CampistryDB?.getCampId?.() || window.getCampId?.();
-                if (client && campId && myBunks.length > 0) {
-                    var { data: allRecords } = await client.from('daily_schedules').select('*').eq('camp_id', campId);
-                    for (var record of (allRecords || [])) {
-                        var scheduleData = record.schedule_data || {};
-                        var assignments = { ...(scheduleData.scheduleAssignments || {}) };
-                        var leagues = { ...(scheduleData.leagueAssignments || {}) };
-                        var modified = false;
-                        myBunks.forEach(function(bunk) {
-                            if (assignments[bunk] !== undefined) { delete assignments[bunk]; modified = true; }
-                            if (leagues[bunk] !== undefined) { delete leagues[bunk]; }
-                        });
-                        if (!modified) continue;
-                        if (Object.keys(assignments).length === 0) {
-                            await client.from('daily_schedules').delete().eq('id', record.id);
-                        } else {
-                            await client.from('daily_schedules')
-                                .update({ schedule_data: { ...scheduleData, scheduleAssignments: assignments, leagueAssignments: leagues }, updated_at: new Date().toISOString() })
-                                .eq('id', record.id);
-                        }
+                if (client && campId) {
+                    var r = await client.from('daily_schedules').select('*')
+                        .eq('camp_id', campId).eq('date_key', todayKey);
+                    hasToday = !!(r && !r.error && Array.isArray(r.data) && r.data.length > 0);
+                }
+            } catch (_) {}
+        }
+        if (hasToday) {
+            return {
+                date: _hrAddDays(todayKey, 1),
+                reason: "today already has a schedule — it stays in the previous half; counting restarts tomorrow"
+            };
+        }
+        return { date: todayKey, reason: 'no schedule for today yet — the new half starts today' };
+    }
+
+    // ★ HR-70: DIRECT VERIFIED KV PUSH for the reset's critical keys.
+    // Live verification (2026-07-12) showed the reset's saveGlobalSettings
+    // writes ride the DEBOUNCED batch sync and can silently lose the reload
+    // race (forceSyncToCloud returns true without syncing pre-hydration, and
+    // batch upsert failures are swallowed) — after reload, hydration restored
+    // the old cloud values and the epoch read null, which also disarmed every
+    // epoch fence. The league blobs survived the same reset because their
+    // savers push camp_state_kv rows directly and verify — so the reset now
+    // does the same for every key it owns: upsert, read back, compare, retry.
+    // ★ HR-73: ORDER-INSENSITIVE canonical stringify for the read-back compare.
+    // Postgres jsonb normalizes object key order, so a byte-for-byte
+    // JSON.stringify comparison false-flags every large payload (observed
+    // live 2026-07-13: app1 + leaguesByName reported "not verified" while the
+    // rows had in fact stored correctly — the small payloads only passed
+    // because their key order coincidentally survived normalization).
+    function _hrCanon(v) {
+        if (v === undefined) return 'null';
+        if (Array.isArray(v)) return '[' + v.map(_hrCanon).join(',') + ']';
+        if (v && typeof v === 'object') {
+            return '{' + Object.keys(v).filter(function (k) { return v[k] !== undefined; }).sort()
+                .map(function (k) { return JSON.stringify(k) + ':' + _hrCanon(v[k]); }).join(',') + '}';
+        }
+        return JSON.stringify(v);
+    }
+
+    async function _hrPushKvVerified(client, campId, key, value) {
+        for (var attempt = 1; attempt <= 3; attempt++) {
+            try {
+                var res = await client.from('camp_state_kv').upsert({
+                    camp_id: campId, key: key, value: value,
+                    updated_at: new Date().toISOString()
+                }, { onConflict: 'camp_id,key' });
+                if (!res || !res.error) {
+                    var r = await client.from('camp_state_kv').select('value')
+                        .eq('camp_id', campId).eq('key', key).maybeSingle();
+                    if (r && !r.error && _hrCanon(r.data && r.data.value) === _hrCanon(value)) { // ★ HR-73
+                        return true;
                     }
                 }
+            } catch (_e) { /* retry */ }
+            await new Promise(function (r2) { setTimeout(r2, 500 * attempt); });
+        }
+        return false;
+    }
 
-                // 2. Clear localStorage — remove only our bunks from each date
-                var allData = window.loadAllDailyData?.() || {};
-                Object.keys(allData).forEach(function(dk) {
-                    var dateData = allData[dk];
-                    if (!dateData) return;
-                    myBunks.forEach(function(bunk) {
-                        if (dateData.scheduleAssignments) delete dateData.scheduleAssignments[bunk];
-                        if (dateData.leagueAssignments) delete dateData.leagueAssignments[bunk];
-                    });
-                });
-                safeLocalStorageSet(DAILY_DATA_KEY, JSON.stringify(allData));
-
-                // 3. Clear rotation counts for our bunks
-                await window.RotationCloud?.clearForBunks?.(myBunks);
-
-                // ★★★ CB-90: clear rotation-event completions for our bunks (scheduler scope)
-                try { window.RotationEvents?.clearAllCompleted?.(null, myBunks); } catch (e) { /* non-fatal */ }
-
-                // 4. Scrub local rotation history for our bunks
-                var bunkSet = new Set(myBunks);
-                var _rotHist = window.loadRotationHistory?.() || { bunks: {}, leagues: {} };
-                Object.keys(_rotHist.bunks || {}).forEach(function(bk) { if (bunkSet.has(bk)) delete _rotHist.bunks[bk]; });
-                window.saveRotationHistory?.(_rotHist);
-
-                var _hist = window.loadGlobalSettings?.('historicalCounts') || {};
-                Object.keys(_hist).forEach(function(bk) { if (bunkSet.has(bk)) delete _hist[bk]; });
-                window.saveGlobalSettings?.('historicalCounts', _hist);
-
-                var _smartHist = JSON.parse(localStorage.getItem(SMART_TILE_HISTORY_KEY) || '{}');
-                Object.keys(_smartHist).forEach(function(bk) { if (bunkSet.has(bk)) delete _smartHist[bk]; });
-                safeLocalStorageSet(SMART_TILE_HISTORY_KEY, JSON.stringify(_smartHist));
-                window.saveGlobalSettings?.('smartTileHistory', _smartHist);
-
-                // ★★★ CB-71: scrub manualUsageOffsets for our bunks (owner branch
-                // clears it; scheduler branch omitted it → stale offset carried into
-                // the new half).
-                var _muoNH = window.loadGlobalSettings?.('manualUsageOffsets') || {};
-                Object.keys(_muoNH).forEach(function(bk) { if (bunkSet.has(bk)) delete _muoNH[bk]; });
-                window.saveGlobalSettings?.('manualUsageOffsets', _muoNH);
-
-                clearBunksFromGlobals(myBunks);
-
-                console.log('⭐ SCHEDULER NEW HALF COMPLETE');
-                alert('New half started for your divisions!\n\nReloading page...');
-                window.location.reload();
-            } catch (e) {
-                console.error('Failed to start new half:', e);
-                alert('Error starting new half. Check console.');
+    // ★ HR-72: in-app reset dialog — confirmation, LIVE PROGRESS and results
+    // render inside the app instead of browser popups (the verified cloud
+    // pushes take a few seconds; a silent native confirm reads as a hang).
+    // Returns null when no real DOM exists (node test harness) — callers then
+    // fall back to native confirm/alert, which keeps the test suite exact.
+    function _hrModal() {
+        try {
+            if (typeof document === 'undefined' || !document.documentElement || !document.body || !document.createElement) return null;
+            var _stale = document.getElementById && document.getElementById('hrResetOverlay');
+            if (_stale) { try { _stale.remove(); } catch (_) {} }
+            if (!document.getElementById('hrResetStyle')) {
+                var st = document.createElement('style');
+                st.id = 'hrResetStyle';
+                st.textContent = '@keyframes hrspin{to{transform:rotate(360deg)}}' +
+                    '#hrResetOverlay{position:fixed;inset:0;background:rgba(15,23,42,.55);z-index:99999;display:flex;align-items:center;justify-content:center;padding:16px;}' +
+                    '#hrResetCard{background:#fff;color:#1e293b;max-width:470px;width:100%;border-radius:14px;box-shadow:0 24px 64px rgba(0,0,0,.35);padding:22px 24px;font-family:inherit;max-height:85vh;overflow:auto;}' +
+                    '#hrResetCard h3{margin:0 0 10px;font-size:1.15em;}' +
+                    '#hrResetCard ul{margin:6px 0 12px;padding-left:8px;list-style:none;}' +
+                    '#hrResetCard li{margin:2px 0;font-size:.92em;}' +
+                    '.hr-btn{border:none;border-radius:8px;padding:9px 16px;font-size:.95em;cursor:pointer;font-weight:600;}' +
+                    '.hr-btn-go{background:#0d9488;color:#fff;}' +
+                    '.hr-btn-cancel{background:#e2e8f0;color:#334155;margin-right:8px;}' +
+                    '.hr-spin{width:24px;height:24px;border:3px solid #ccfbf1;border-top-color:#0d9488;border-radius:50%;animation:hrspin .8s linear infinite;display:inline-block;flex:none;}';
+                (document.head || document.documentElement).appendChild(st);
             }
+            var overlay = document.createElement('div');
+            overlay.id = 'hrResetOverlay';
+            var card = document.createElement('div');
+            card.id = 'hrResetCard';
+            overlay.appendChild(card);
+            document.body.appendChild(overlay);
+            var esc = function (s) { return String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;'); };
+            var api = {
+                loading: function (text) {
+                    card.innerHTML = '<h3>🏕️ Start New Half</h3>' +
+                        '<div style="display:flex;align-items:center;gap:12px;padding:8px 0 4px;">' +
+                        '<span class="hr-spin"></span><span id="hrResetStatus">' + esc(text) + '</span></div>' +
+                        '<div style="font-size:.85em;color:#94a3b8;margin-top:10px;">Please keep this page open — saving &amp; verifying in the cloud takes a few seconds.</div>';
+                },
+                status: function (text) {
+                    var el = document.getElementById('hrResetStatus');
+                    if (el) el.textContent = text; else api.loading(text);
+                },
+                confirm: function (epoch, reason) {
+                    return new Promise(function (resolve) {
+                        card.innerHTML = '<h3>🏕️ Start New Half</h3>' +
+                            '<p style="margin:4px 0 10px;">Counting will restart from <b>' + esc(epoch) + '</b><br>' +
+                            '<span style="color:#64748b;font-size:.9em;">(' + esc(reason) + ')</span></p>' +
+                            '<div style="font-weight:600;margin-top:6px;">From that date the camp behaves like day 1:</div>' +
+                            '<ul>' +
+                            '<li>✓ Activity rotation &amp; usage counters restart</li>' +
+                            '<li>✓ Cooldowns and multi-part sequences restart</li>' +
+                            '<li>✓ League games renumber from Game 1</li>' +
+                            '<li>✓ Matchup history, standings &amp; playoffs reset</li>' +
+                            '</ul>' +
+                            '<div style="font-weight:600;">Nothing is deleted:</div>' +
+                            '<ul>' +
+                            '<li>• All previous schedules stay saved &amp; viewable</li>' +
+                            '<li>• Past game results remain as an archive</li>' +
+                            '<li>• Fields, activities, divisions &amp; templates unchanged</li>' +
+                            '</ul>' +
+                            '<div style="text-align:right;margin-top:14px;">' +
+                            '<button class="hr-btn hr-btn-cancel" id="hrResetCancel">Cancel</button>' +
+                            '<button class="hr-btn hr-btn-go" id="hrResetGo">Start New Half</button></div>';
+                        document.getElementById('hrResetCancel').onclick = function () { api.close(); resolve(false); };
+                        document.getElementById('hrResetGo').onclick = function () { resolve(true); };
+                    });
+                },
+                success: function (epoch) {
+                    card.innerHTML = '<h3>✅ New Half Started</h3>' +
+                        '<p>Counting restarts from <b>' + esc(epoch) + '</b>.<br>' +
+                        'The next league game generated will be Game 1.<br>' +
+                        'All previous schedules remain saved as an archive.</p>' +
+                        '<div style="display:flex;align-items:center;gap:10px;color:#64748b;"><span class="hr-spin"></span> Reloading…</div>';
+                },
+                warnings: function (epoch, failures) {
+                    return new Promise(function (resolve) {
+                        card.innerHTML = '<h3>⚠️ New Half started — with warnings</h3>' +
+                            '<p>Counting restarts from <b>' + esc(epoch) + '</b>. No schedules were deleted.</p>' +
+                            '<ul style="color:#b45309;">' + failures.map(function (f) { return '<li>' + esc(f) + '</li>'; }).join('') + '</ul>' +
+                            '<p style="font-size:.9em;color:#64748b;">If these persist after the reload, run Start New Half again.</p>' +
+                            '<div style="text-align:right;margin-top:12px;"><button class="hr-btn hr-btn-go" id="hrResetReload">Reload now</button></div>';
+                        document.getElementById('hrResetReload').onclick = function () { resolve(true); };
+                    });
+                },
+                error: function (msg) {
+                    return new Promise(function (resolve) {
+                        card.innerHTML = '<h3>❌ Error starting new half</h3>' +
+                            '<p>' + esc(msg) + '</p>' +
+                            '<p style="font-size:.9em;color:#64748b;">No schedules were deleted. Check the console for details.</p>' +
+                            '<div style="text-align:right;margin-top:12px;"><button class="hr-btn hr-btn-cancel" id="hrResetClose">Close</button></div>';
+                        document.getElementById('hrResetClose').onclick = function () { api.close(); resolve(); };
+                    });
+                },
+                close: function () {
+                    try { overlay.remove(); } catch (_) { try { document.body.removeChild(overlay); } catch (__) {} }
+                }
+            };
+            return api;
+        } catch (_) { return null; }
+    }
+
+    window.startNewHalf = async function() {
+        // ★ HR-62: owner/admin only (product decision — schedulers never; the
+        // old scheduler-scoped destructive variant is retired along with
+        // schedule deletion).
+        var _role = window.AccessControl?.getCurrentRole?.();
+        if (_role !== 'owner' && _role !== 'admin') {
+            window.AccessControl?.showPermissionDenied?.('start a new half (owner/admin only)');
             return;
         }
+        if (window._newHalfInProgress) return; // ★ HR-63: re-entrancy guard
+        // ★ HR-72: a dialog is already open (double-click on the button)
+        try { if (typeof document !== 'undefined' && document.getElementById && document.getElementById('hrResetOverlay')) return; } catch (_) {}
 
-        // ═══════════════════════════════════════════════════════════════
-        // OWNER/ADMIN: Full new half
-        // ═══════════════════════════════════════════════════════════════
-        if (!confirm(
-            "🏕️ START NEW HALF\n\n" +
-            "This will reset:\n" +
-            "  ✓ Bunk activity usage counters\n" +
-            "  ✓ Smart Tile rotation history\n" +
-            "  ✓ Regular League game counters (back to Game 1)\n" +
-            "  ✓ Specialty League game counters (back to Game 1)\n" +
-            "  ✓ All generated daily schedules\n\n" +
-            "This will NOT change:\n" +
-            "  • Fields configuration\n" +
-            "  • Special Activities setup\n" +
-            "  • Master Schedule templates\n" +
-            "  • Divisions and Bunks\n\n" +
-            "Are you sure you want to start a new half?"
-        )) return;
+        // ★ HR-72: in-app dialog when a real DOM exists; native fallback keeps
+        // the node test harness behavior identical.
+        var _ui = _hrModal();
+        if (_ui) _ui.loading("Checking today's schedule…");
+        var picked = await _hrComputeEpochDate();
+        var epoch = picked.date;
 
-        logAuditEvent('start_new_half');
+        var _confirmed;
+        if (_ui) {
+            _confirmed = await _ui.confirm(epoch, picked.reason);
+        } else {
+            _confirmed = confirm(
+                "🏕️ START NEW HALF\n\n" +
+                "Counting will restart from " + epoch + "\n(" + picked.reason + ").\n\n" +
+                "From that date the camp behaves like day 1:\n" +
+                "  ✓ Activity rotation & usage counters restart\n" +
+                "  ✓ Cooldowns and multi-part sequences restart\n" +
+                "  ✓ League games renumber from Game 1\n" +
+                "  ✓ Matchup history, standings & playoffs reset\n\n" +
+                "Nothing is deleted:\n" +
+                "  • All previous schedules stay saved & viewable\n" +
+                "  • Past game results remain as an archive\n" +
+                "  • Fields, activities, divisions & templates unchanged\n\n" +
+                "Start the new half?"
+            );
+        }
+        if (!_confirmed) { if (_ui) _ui.close(); return; }
+        if (_ui) _ui.loading('Starting the new half…');
+
+        window._newHalfInProgress = true;
+        logAuditEvent('start_new_half_epoch', { epoch: epoch });
+        var failures = [];
         try {
-            console.log("=".repeat(50));
-            console.log("⭐ STARTING NEW HALF - Resetting Counters ⭐");
-            console.log("=".repeat(50));
+            console.log('⭐ STARTING NEW HALF — epoch reset at', epoch);
 
-            // Clear localStorage
+            // 1) Write the epoch: canonical KV key + the app1.halfStartDate
+            //    hook that getPeriodStartDate('half')/getHalfStartDate read.
+            if (_ui) _ui.status('Stamping the new half date (' + epoch + ')…');
+            var prevE = null;
+            try { prevE = window.loadGlobalSettings?.('rotationEpoch') || null; } catch (_) {}
+            var prevDate = (typeof prevE === 'string') ? prevE : ((prevE && prevE.date) || null);
+            try {
+                window.saveGlobalSettings?.('rotationEpoch', { date: epoch, setAt: Date.now(), prevEpoch: prevDate });
+            } catch (e) { failures.push('epoch key: ' + (e.message || e)); }
+            try {
+                var _gsAll = window.loadGlobalSettings?.() || {};
+                var _app1 = _gsAll.app1 || {};
+                _app1.halfStartDate = epoch;
+                // ★ HR-69: the auto solver's swim/week ledgers keep a THIRD copy
+                // inside the app1 blob (loadSwimHistory/loadWeekHistory fall back
+                // to gs.app1.*) — scrub it here or a stale mirror could reseed
+                // the cleared top-level keys.
+                delete _app1.swimRotationHistory;
+                delete _app1.activityHistory;
+                window.saveGlobalSettings?.('app1', _app1);
+            } catch (e) { failures.push('halfStartDate hook: ' + (e.message || e)); }
+
+            // 2) Stamp the merge-surviving _epochDate into BOTH league history
+            //    blobs (a bare {} clear loses newest-wins merges to stale
+            //    devices — the F2 bug class; the stamp wins them instead).
+            if (_ui) _ui.status('Restarting league history & game numbering…');
+            try {
+                if (window.SchedulerCoreLeagues?.setHistoryEpoch) {
+                    if (!window.SchedulerCoreLeagues.setHistoryEpoch(epoch)) failures.push('regular league history epoch stamp');
+                } else failures.push('regular league engine not loaded — history epoch not stamped');
+            } catch (e) { failures.push('regular league epoch: ' + (e.message || e)); }
+            try {
+                if (window.SchedulerCoreSpecialtyLeagues?.setHistoryEpoch) {
+                    if (!window.SchedulerCoreSpecialtyLeagues.setHistoryEpoch(epoch)) failures.push('specialty league history epoch stamp');
+                } else failures.push('specialty league engine not loaded — history epoch not stamped');
+            } catch (e) { failures.push('specialty league epoch: ' + (e.message || e)); }
+
+            // 3) Standings + playoffs (modules hydrate on demand and persist
+            //    themselves — fixes the empty-registry and lost-save bugs).
+            if (_ui) _ui.status('Resetting standings & playoffs…');
+            try { window.LeaguesAPI?.resetStandingsAndPlayoffs?.(); }
+            catch (e) { failures.push('league standings reset: ' + (e.message || e)); }
+            try { window.SpecialtyLeaguesAPI?.resetStandingsAndPlayoffs?.(); }
+            catch (e) { failures.push('specialty standings reset: ' + (e.message || e)); }
+
+            // 4) One-time clears of the counter stores that have no usable
+            //    date keys. Post-epoch days re-derive via the epoch-filtered
+            //    rebuilders; pre-epoch days stay out by the read filters.
+            //    NOTE: leagueHistory/specialtyLeagueHistory localStorage keys
+            //    are deliberately NOT removed — they now carry the epoch stamp.
+            if (_ui) _ui.status('Clearing rotation counters & ledgers…');
+            try {
+                window.saveGlobalSettings?.('rotationHistory', { bunks: {}, leagues: {} });
+                ['historicalCounts', 'historicalCountedDates', 'historicalCountsByDate',
+                 'manualUsageOffsets', 'smartTileHistory', 'swimRotationHistory',
+                 'activityHistory'].forEach(function (k) {
+                    try { window.saveGlobalSettings?.(k, {}); } catch (_) {}
+                });
+            } catch (e) { failures.push('counter clears: ' + (e.message || e)); }
             localStorage.removeItem(ROTATION_HISTORY_KEY);
             localStorage.removeItem(SMART_TILE_HISTORY_KEY);
             localStorage.removeItem(SMART_TILE_SPECIAL_HISTORY_KEY);
-            localStorage.removeItem(LEAGUE_HISTORY_KEY);
-            localStorage.removeItem(SPECIALTY_LEAGUE_HISTORY_KEY);
-            localStorage.removeItem(DAILY_DATA_KEY);
+            localStorage.removeItem('campistry_swimRotationHistory');
+            localStorage.removeItem('campistry_activityHistory');
+            localStorage.removeItem('camp_league_round_state');
+            localStorage.removeItem('camp_league_sport_rotation');
 
-            // ★★★ CRITICAL: Directly delete all daily_schedules records from Supabase ★★★
-            {
-                const client = window.CampistryDB?.getClient?.() || window.supabase;
-                const campId = window.CampistryDB?.getCampId?.() || window.getCampId?.();
-                if (client && campId) {
-                    console.log("🗑️ New half: deleting all daily_schedules from Supabase...");
-                    const { error } = await client
-                        .from('daily_schedules')
-                        .delete()
-                        .eq('camp_id', campId);
-                    if (error) console.error('🗑️ New half: Supabase delete error:', error);
-                    else console.log("🗑️ New half: Supabase daily_schedules cleared");
-                }
-            }
+            // Round pointers restart (in memory too — F6 bug class).
+            window.leagueRoundState = {};
+            try { window.saveGlobalSettings?.('leagueRoundState', {}); } catch (_) {}
+            try { window.RotationEngine?.clearAllHistory?.(); } catch (_) {}
+            // ★ CB-90 carried over: completion stamps are counter-like state
+            // that nothing re-derives from schedules — clear for the new half.
+            try { window.RotationEvents?.clearAllCompleted?.(); } catch (e) { failures.push('rotation-event completions: ' + (e.message || e)); }
 
-            // ★★★ CRITICAL: Clear ALL cloud keys including new league history keys ★★★
-            if (typeof window.clearCloudKeys === 'function') {
-                console.log("☁️ Clearing cloud keys for new half...");
-                await window.clearCloudKeys([
-                    'leagueRoundState',
-                    'leagueHistory',
-                    'specialtyLeagueHistory',
-                    'daily_schedules',
-                    'manualUsageOffsets',
-                    'historicalCounts',
-                    'historicalCountedDates',
-                    'smartTileHistory',
-                    'rotationHistory'
-                ]);
-                console.log("☁️ Cloud keys cleared");
-            } else {
-                window.saveGlobalSettings?.('leagueRoundState', {});
-                window.saveGlobalSettings?.('leagueHistory', {});
-                window.saveGlobalSettings?.('specialtyLeagueHistory', {});
-                window.saveGlobalSettings?.('daily_schedules', {});
-                window.saveGlobalSettings?.('manualUsageOffsets', {});
-                window.saveGlobalSettings?.('historicalCounts', {});
-                window.saveGlobalSettings?.('historicalCountedDates', {});
-                window.saveGlobalSettings?.('smartTileHistory', {});
-                window.saveGlobalSettings?.('rotationHistory', { bunks: {}, leagues: {} });
+            // NOT done here (on purpose): no daily_schedules deletion, no
+            // campDailyData_v1 removal, no RotationCloud.clearAll() — the
+            // rotation_counts rows stay as pre-epoch history behind the
+            // epoch-filtered loader; clearing them would be both destructive
+            // and pointless (the daily backfill would re-derive them).
 
-                if (typeof window.forceSyncToCloud === 'function') {
-                    await window.forceSyncToCloud();
-                }
-            }
-
-            // Clear rotation_counts table in Supabase
-            await window.RotationCloud?.clearAll?.();
-
-            // ★★★ CB-90: wipe rotation-event completion stamps for the new half too
-            // (otherwise a regenerated event skips every bunk marked done last half).
-            try { window.RotationEvents?.clearAllCompleted?.(); } catch (e) { /* non-fatal */ }
-
-            // Reset league standings and playoff state
+            // 5) ★ HR-70: DIRECT VERIFIED cloud pushes for every reset-owned key
+            //    (the batch queue provably loses the reload race — see helper).
+            //    The queue writes above still handle the local mirrors; these
+            //    land the cloud rows immediately and read them back.
             try {
-                const _leagues = window.leaguesByName || {};
-                Object.values(_leagues).forEach(function(lg) {
-                    if (lg) { lg.standings = {}; if (lg.playoff) lg.playoff = { enabled: false, rounds: [] }; }
-                });
-                if (typeof window.saveLeaguesData === 'function') window.saveLeaguesData();
-                const _specLeagues = window.specialtyLeagues || {};
-                Object.values(_specLeagues).forEach(function(lg) {
-                    if (lg) { lg.standings = {}; if (lg.playoff) lg.playoff = { enabled: false, rounds: [] }; }
-                });
-                if (typeof window.saveSpecialtyLeaguesData === 'function') window.saveSpecialtyLeaguesData();
-            } catch (e) { console.warn('[startNewHalf] league standings reset failed:', e); }
+                var _hrClient = window.CampistryDB?.getClient?.() || window.supabase;
+                var _hrCampId = window.CampistryDB?.getCampId?.() || window.getCampId?.();
+                if (_hrClient && _hrCampId) {
+                    var _hrGsNow = window.loadGlobalSettings?.() || {};
+                    var _hrLeaguesClean = null;
+                    try {
+                        _hrLeaguesClean = JSON.parse(JSON.stringify(window.leaguesByName || _hrGsNow.leaguesByName || {}));
+                        Object.keys(_hrLeaguesClean).forEach(function (k) { if (_hrLeaguesClean[k] && _hrLeaguesClean[k]._h2h) delete _hrLeaguesClean[k]._h2h; });
+                    } catch (_) { _hrLeaguesClean = null; }
+                    var _hrSpecClean = null;
+                    try { _hrSpecClean = JSON.parse(JSON.stringify(window.specialtyLeagues || {})); } catch (_) { _hrSpecClean = null; }
+                    var _hrPushes = [
+                        ['rotationEpoch', { date: epoch, setAt: Date.now(), prevEpoch: prevDate }],
+                        ['rotationHistory', { bunks: {}, leagues: {} }],
+                        ['historicalCounts', {}],
+                        ['historicalCountedDates', {}],
+                        ['historicalCountsByDate', {}],
+                        ['manualUsageOffsets', {}],
+                        ['smartTileHistory', {}],
+                        ['swimRotationHistory', {}],
+                        ['activityHistory', {}],
+                        ['leagueRoundState', {}]
+                    ];
+                    // app1 carries the whole camp config — only push the copy we
+                    // just stamped (never a synthesized fallback that could
+                    // clobber the cloud blob).
+                    if (_hrGsNow.app1 && _hrGsNow.app1.halfStartDate === epoch) _hrPushes.push(['app1', _hrGsNow.app1]);
+                    else failures.push('app1.halfStartDate not verified (local blob unavailable)');
+                    if (_hrLeaguesClean && Object.keys(_hrLeaguesClean).length) _hrPushes.push(['leaguesByName', _hrLeaguesClean]);
+                    if (_hrSpecClean && Object.keys(_hrSpecClean).length) _hrPushes.push(['specialtyLeagues', _hrSpecClean]);
+                    for (var _pi = 0; _pi < _hrPushes.length; _pi++) {
+                        if (_ui) _ui.status('Saving to cloud & verifying (' + (_pi + 1) + ' of ' + _hrPushes.length + ')…');
+                        var _pOk = await _hrPushKvVerified(_hrClient, _hrCampId, _hrPushes[_pi][0], _hrPushes[_pi][1]);
+                        if (!_pOk) failures.push('cloud write not verified: ' + _hrPushes[_pi][0]);
+                    }
+                } else {
+                    failures.push('no cloud client — reset is LOCAL ONLY until next sync');
+                }
+            } catch (e) { failures.push('verified cloud push: ' + (e.message || e)); }
+            // ★ HR-70: device-local epoch backstop that no hydration merge can
+            // clobber (plain key outside the settings blob). JSON form carries
+            // setAt so newest-reset-wins resolution (HR-41 v2) ranks it.
+            try { localStorage.setItem('campistry_rotationEpoch', JSON.stringify({ date: epoch, setAt: Date.now() })); } catch (_) {}
 
-            console.log("⭐ NEW HALF RESET COMPLETE ⭐");
+            // 6) Flush the batched queue too (local mirrors / non-critical keys).
+            if (_ui) _ui.status('Finishing sync…');
+            if (typeof window.forceSyncToCloud === 'function') {
+                try { await window.forceSyncToCloud(); } catch (e) { failures.push('cloud sync: ' + (e.message || e)); }
+            }
 
-            alert(
-                "✅ New Half Started!\n\n" +
-                "All activity and league counters have been reset.\n" +
-                "The first game generated will now be Game 1.\n\n" +
-                "Reloading page..."
-            );
+            console.log('⭐ NEW HALF RESET COMPLETE ⭐ epoch =', epoch, failures.length ? ('warnings: ' + failures.join('; ')) : '');
+            if (failures.length) {
+                // ★ HR-72: warnings render in the app; the user acknowledges
+                // before the reload so they can actually be read.
+                if (_ui) await _ui.warnings(epoch, failures);
+                else alert(
+                    '⚠️ New Half started from ' + epoch + ' — with warnings:\n\n- ' + failures.join('\n- ') +
+                    '\n\nNo schedules were deleted. Reloading; if warnings persist, run Start New Half again.'
+                );
+            } else {
+                if (_ui) {
+                    _ui.success(epoch);
+                    await new Promise(function (r) { setTimeout(r, 1400); });
+                } else alert(
+                    '✅ New Half Started!\n\n' +
+                    'Counting restarts from ' + epoch + '.\n' +
+                    'The next league game generated will be Game 1.\n' +
+                    'All previous schedules remain saved as an archive.\n\n' +
+                    'Reloading page...'
+                );
+            }
             window.location.reload();
         } catch (e) {
-            console.error("Failed to start new half:", e);
-            alert("Error starting new half. Check console for details.");
+            console.error('Failed to start new half:', e);
+            if (_ui) await _ui.error(e.message || e);
+            else alert('Error starting new half: ' + (e.message || e) + '\n\nNo schedules were deleted. Check console for details.');
+        } finally {
+            window._newHalfInProgress = false;
         }
     };
     
@@ -1237,6 +1485,16 @@ all[date].updated_at = new Date().toISOString();
             if (window.RotationCloud?.save) {
                 window.RotationCloud.save(dateKey, window.scheduleAssignments || {});
             }
+
+            // ★ SCOPED league-history reconcile: roll back this date's records
+            // for leagues in THIS scheduler's divisions only (resetDayRecords
+            // is division-scoped, unlike the owner-only unscoped cleanup
+            // below). Without it, the deleted day's games kept counting in the
+            // scheduler's leagues' game numbering and matchup/sport fairness
+            // until the next regeneration of that date — and never, if the
+            // date was simply left deleted.
+            try { window.SchedulerCoreLeagues?.resetDayRecords?.(myDivisions, dateKey); } catch (e) { /* non-fatal */ }
+            try { window.SchedulerCoreSpecialtyLeagues?.resetDayRecords?.(myDivisions, dateKey); } catch (e) { /* non-fatal */ }
         }
         // ═══════════════════════════════════════════════════════════════
         // OWNER/ADMIN: Delete everything
@@ -1532,9 +1790,19 @@ all[date].updated_at = new Date().toISOString();
             window.scheduleAssignments = {};
             window.leagueAssignments = {};
 
-            // Clear league gamesPerDate — all schedule-derived game counts are now stale
-            window.SchedulerCoreLeagues?.clearAllGamesPerDate?.();
-            window.SchedulerCoreSpecialtyLeagues?.clearAllGamesPerDate?.();
+            // ★ Clear the league history OUTRIGHT, not just the game counters.
+            //   Deleting ONE date rolls back that date's league records
+            //   (cleanupDateFromHistory, above). Deleting EVERY date used to
+            //   clear only gamesPerDate, so the gameLog, sport/matchup fairness,
+            //   chinuch attendance and bye record all survived — every one of
+            //   them still referencing days that no longer exist, and every one
+            //   of them an input to the next generation. Observed live: a camp
+            //   that erased all schedules still had a team credited with byes on
+            //   deleted days, which sent the next day's bye to the wrong team.
+            //   resetAllHistory writes a merge-surviving reset marker, so a stale
+            //   copy on another device cannot bring the deleted days back.
+            window.SchedulerCoreLeagues?.resetAllHistory?.();
+            window.SchedulerCoreSpecialtyLeagues?.resetAllHistory?.();
 
             // Clear cloud rotation counts
             window.RotationCloud?.clearAll?.();

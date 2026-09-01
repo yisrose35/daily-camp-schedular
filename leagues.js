@@ -37,7 +37,15 @@
     // Held outside the render so re-rendering on each checkbox doesn't collapse
     // the list the user is still working through.
     const _captainOpen = new Set();
+    // Which Advanced Settings cards are expanded, as "<league name>|<card key>".
+    // Enabling a rule opens its card; disabling closes it.
+    const _advOpenCards = new Set();
     const _chinuchOverrideOpenLeagues = new Set();
+    // Whether the Game Results "History (N)" disclosure is open, per league.
+    // Held across re-renders: editing a past game (a score, a game number)
+    // re-renders the list, and collapsing the section the user was working in
+    // hides the very row they just changed.
+    const _gameHistoryOpenLeagues = new Set();
     let _isInitialized = false;
     let _refreshTimeout = null;
     let _saveInProgress = 0;  // ★ Counter: >0 means save in flight (prevents refresh)
@@ -279,6 +287,8 @@
                 name: leagueName,
                 teams: [],
                 sports: [],
+                sportDailyLimits: {},
+                roundRobin: { enabled: false, size: 3, rounds: 1 },
                 divisions: [],
                 standings: {},
                 games: [],
@@ -294,6 +304,13 @@
         const validated = {
             name: league.name || leagueName,
             teams: Array.isArray(league.teams) ? league.teams.filter(t => typeof t === 'string') : [],
+            // ★ TEAM RENAME: { "<former name>": "<current name>" }. Must survive
+            //   validation — it is what lets the engine recognize records written
+            //   under a team's old name (see league_team_rename.js). Dropping it
+            //   here would silently re-fork the phantom team on the next save.
+            teamAliases: (league.teamAliases && typeof league.teamAliases === 'object' && !Array.isArray(league.teamAliases))
+                ? league.teamAliases
+                : undefined,
             sports: Array.isArray(league.sports) ? league.sports.filter(s => typeof s === 'string') : [],
             divisions: Array.isArray(league.divisions) ? league.divisions.filter(d => typeof d === 'string') : [],
             standings: (league.standings && typeof league.standings === 'object') ? league.standings : {},
@@ -334,10 +351,77 @@
                             .map(function (n) { return Number.isFinite(Number(n)) ? Math.max(0, Math.floor(Number(n))) : null; })
                             .filter(function (n) { return n !== null; })
                         : null,
-                    bunkFacilities: (league.chinuch.bunkFacilities && typeof league.chinuch.bunkFacilities === 'object') ? league.chinuch.bunkFacilities : {}
+                    bunkFacilities: (league.chinuch.bunkFacilities && typeof league.chinuch.bunkFacilities === 'object') ? league.chinuch.bunkFacilities : {},
+                    // ★ How many teams each chinuch room holds AT ONCE. Teams
+                    //   sharing a room are spread across separate sessions when
+                    //   it can't take them together. Blank per room = fall back
+                    //   to the room's capacity from the Facilities tab.
+                    roomCapacity: (league.chinuch.roomCapacity && typeof league.chinuch.roomCapacity === 'object' && !Array.isArray(league.chinuch.roomCapacity))
+                        ? league.chinuch.roomCapacity
+                        : {}
                   }
-                : { enabled: false, timesPerDay: null, teamsPerRound: null, perSessionCounts: null, bunkFacilities: {} }
+                : { enabled: false, timesPerDay: null, teamsPerRound: null, perSessionCounts: null, bunkFacilities: {}, roomCapacity: {} },
+            // ★ BYE ACTIVITY: what a team DOES when it sits out a game. With an
+            //   odd number of teams (or fewer fields than pairings) somebody is
+            //   always benched; instead of a bare "Team — Bye" the user names
+            //   the activities those teams get. `activities` is the shared pool
+            //   (rotated so a benched team doesn't get the same thing twice in
+            //   a row and two benched teams never collide on one facility);
+            //   `teamActivities` pins one team to one activity, always.
+            byeActivity: (league.byeActivity && typeof league.byeActivity === 'object')
+                ? {
+                    enabled: league.byeActivity.enabled === true,
+                    activities: Array.isArray(league.byeActivity.activities)
+                        ? league.byeActivity.activities.filter(function (a) { return typeof a === 'string' && a.trim(); })
+                        : [],
+                    teamActivities: (league.byeActivity.teamActivities && typeof league.byeActivity.teamActivities === 'object' && !Array.isArray(league.byeActivity.teamActivities))
+                        ? league.byeActivity.teamActivities
+                        : {}
+                  }
+                : { enabled: false, activities: [], teamActivities: {} },
+            // ★ SPORT DAILY LIMIT: { "<sport>": <max games of it per TEAM per day> }.
+            //   A camp can have a sport that is fine to offer in the league but
+            //   must not be played twice by the same team in one day (a long or
+            //   physically heavy game — swim, football, a rented facility). The
+            //   generic same-day repeat guard is only a preference (it yields
+            //   when nothing else is open); this is a HARD cap the engine never
+            //   trades away. Absent key = no limit, which is the default for
+            //   every sport, so existing leagues are unaffected.
+            // ★ ROUND-ROBIN GROUPS: with an odd number of teams playing, one
+            //   team is benched every period. Instead, `size` teams share one
+            //   field and play a round robin (every pair in the group meets).
+            //   Only ODD sizes absorb the odd team out — an even group would
+            //   leave the remainder odd again — so the size is snapped to the
+            //   next odd number, minimum 3.
+            //   `rounds` is how many times the group plays through its pairings
+            //   — one round of 3 teams is only 3 short games, which rarely
+            //   fills a league period.
+            roundRobin: (function (raw) {
+                const on = !!(raw && raw.enabled === true);
+                let size = parseInt(raw && raw.size, 10);
+                if (!Number.isFinite(size) || size < 3) size = 3;
+                if (size % 2 === 0) size += 1;
+                let rounds = parseInt(raw && raw.rounds, 10);
+                if (!Number.isFinite(rounds) || rounds < 1) rounds = 1;
+                return { enabled: on, size: size, rounds: rounds };
+            })(league.roundRobin),
+            sportDailyLimits: (function (raw) {
+                const out = {};
+                if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return out;
+                Object.keys(raw).forEach(function (sport) {
+                    if (typeof sport !== 'string' || !sport.trim()) return;
+                    const n = parseInt(raw[sport], 10);
+                    if (Number.isFinite(n) && n >= 1) out[sport] = n;
+                });
+                return out;
+            })(league.sportDailyLimits)
         };
+
+        // Drop limits for sports this league no longer plays — a stale key would
+        // silently re-apply if the sport were re-selected later.
+        Object.keys(validated.sportDailyLimits).forEach(function (sport) {
+            if (!validated.sports.includes(sport)) delete validated.sportDailyLimits[sport];
+        });
 
         // ★ ORPHAN CLEANUP: Remove references to deleted divisions
         if (validDivisions && validDivisions.size > 0) {
@@ -843,6 +927,8 @@
                 name: name,
                 teams: [],
                 sports: [],
+                sportDailyLimits: {},
+                roundRobin: { enabled: false, size: 3, rounds: 1 },
                 divisions: [],
                 standings: {},
                 games: [],
@@ -1060,6 +1146,242 @@
     }
 
     // =========================================================================
+    // ★ TEAM RENAME (see league_team_rename.js for the identity model)
+    // =========================================================================
+    // A camp starts its league with placeholder names ("Team 1" … "Team 18") and
+    // by game 2 the campers have picked real ones ("The Pancakes", "The
+    // Waffles"). Team identity in this app IS the name string, so deleting and
+    // re-adding lost everything that made the scheduler fair: the standings, the
+    // entered scores, and — worst — the record that Team 1 already played Team 2
+    // at basketball. Renaming carries all of it across.
+
+    /** current team name → [former names], for the "(was …)" chip hint. */
+    function _formerNamesByTeam(league) {
+        const out = {};
+        try {
+            const LTR = window.LeagueTeamRename;
+            if (!LTR) return out;
+            LTR.aliasMap(league).forEach(function (current, formerKey) {
+                const raw = Object.keys(league.teamAliases || {}).find(function (k) {
+                    return LTR.normKey(k) === formerKey;
+                }) || formerKey;
+                (out[current] = out[current] || []).push(raw);
+            });
+        } catch (_) {}
+        return out;
+    }
+
+    /**
+     * Rename a team everywhere it is stored. Returns
+     * { ok, reason, newName, config, history, schedules }.
+     */
+    function renameTeam(league, oldName, rawNewName) {
+        const LTR = window.LeagueTeamRename;
+        if (!LTR) return { ok: false, reason: 'Rename support is not loaded — reload the page and try again.' };
+        if (window.AccessControl?.canEditSetup && !window.AccessControl.canEditSetup()) {
+            return { ok: false, reason: 'You do not have permission to edit league setup.' };
+        }
+
+        const v = LTR.validateRename(league, oldName, rawNewName);
+        if (!v.ok) return v;
+        const newName = v.newName;
+
+        // (1) League config: roster, standings, entered results, playoff bracket,
+        //     chinuch facilities. Then record the alias and persist — the alias
+        //     must be saved BEFORE the history migration, because the engine's
+        //     load-time fold reads it.
+        const config = LTR.applyToLeagueConfig(league, oldName, newName);
+        LTR.recordAlias(league, oldName, newName);
+        recalcStandings(league);                 // rebuilds the _h2h table under the new name
+        saveLeaguesData();
+
+        // (2) League history — matchup counts, sport cycles, away-trip counters,
+        //     chinuch attendance and the date-keyed gameLog every variety
+        //     decision reads.
+        let history = { ok: false, changed: 0 };
+        try {
+            history = window.SchedulerCoreLeagues?.renameTeamInHistory?.(league.name, oldName, newName) || history;
+        } catch (e) {
+            console.error('[LEAGUES] history rename failed:', e);
+        }
+
+        // (3) Saved daily schedules for every date — what the grid, print center
+        //     and the LG-9 reconcile read.
+        let schedules = { ok: false, dates: [], entries: 0 };
+        try {
+            schedules = LTR.applyToDailySchedules(league.name, oldName, newName) || schedules;
+        } catch (e) {
+            console.error('[LEAGUES] schedule rename failed:', e);
+        }
+
+        console.log('[LEAGUES] ✏️ Renamed "' + oldName + '" → "' + newName + '" in league "' + league.name + '"', {
+            config: config, historyRecords: history.changed, scheduleEntries: schedules.entries,
+            datesTouched: (schedules.dates || []).length
+        });
+
+        try {
+            window.dispatchEvent(new CustomEvent('campistry-league-team-renamed', {
+                detail: { league: league.name, oldName: oldName, newName: newName, scope: 'regular' }
+            }));
+        } catch (_) {}
+        try { _refreshGamesUIIfShowing(league.name); } catch (_) {}
+
+        return { ok: true, newName: newName, config: config, history: history, schedules: schedules };
+    }
+
+    /** Swap a team chip for an inline text input. Enter/blur commits, Esc cancels. */
+    function _startTeamRenameEditor(league, container, chip, team) {
+        if (!chip || chip.dataset.editing === '1') return;
+        chip.dataset.editing = '1';
+        const prior = Array.from(chip.childNodes);
+        prior.forEach(function (n) { n.remove(); });
+
+        const input = document.createElement('input');
+        input.type = 'text';
+        input.value = team;
+        input.setAttribute('aria-label', 'Rename team ' + team);
+        input.style.cssText = 'width:' + Math.max(90, team.length * 9 + 24) + 'px; padding:2px 6px; border:1px solid #94A3B8; '
+            + 'border-radius:5px; font-size:inherit; font-family:inherit; background:#fff; color:#0F172A;';
+        chip.appendChild(input);
+
+        let done = false, busy = false;
+        const restore = function () {
+            if (done) return;
+            done = true;
+            renderConfigSections(league, container);
+        };
+        const commit = function () {
+            // `busy` guards re-entry: alert() can itself blur the input in some
+            // browsers, and blur is one of the two commit triggers.
+            if (done || busy) return;
+            busy = true;
+            try {
+                const res = renameTeam(league, team, input.value);
+                if (res.ok || res.unchanged) { done = true; renderConfigSections(league, container); return; }
+                // Invalid (empty / duplicate / reserved): tell the user and keep
+                // the editor open so the typed value isn't lost.
+                alert(res.reason || 'That name cannot be used.');
+                input.focus();
+                input.select();
+            } finally {
+                busy = false;
+            }
+        };
+
+        input.onkeydown = function (e) {
+            if (e.key === 'Enter') { e.preventDefault(); commit(); }
+            else if (e.key === 'Escape') { e.preventDefault(); restore(); }
+        };
+        input.onblur = function () { commit(); };
+        input.focus();
+        input.select();
+    }
+
+    // =========================================================================
+    // ADVANCED SETTINGS — SHARED CARD CHROME
+    // =========================================================================
+    // Every Advanced card used to render its body in full the moment its rule
+    // was switched on, so a league using three of them was one long wall with
+    // nothing foldable and no way to see what the other rules were set to
+    // without scrolling through the one you weren't editing.
+    //
+    // This makes each card an accordion with a one-line STATUS of its current
+    // configuration in the header ("4 teams → Lakeside", "≥ 1 indoor
+    // game/day"). All five rules are readable at a glance and only the card
+    // being edited is open. The body is built by the caller and only when the
+    // card is actually open — collapsing re-renders, same as every other
+    // interaction in this file.
+    //
+    // opts: { key, title, subtitle, accent, tint, tintBorder,
+    //         enabled?  — omit for a card with no on/off switch,
+    //         onToggle? — (checked) => void, called before save + re-render,
+    //         status?   — string shown as the header pill }
+    // Returns { card, body, open }: append content to `body` only when `open`,
+    // then append `card` to the advanced container.
+    function makeAdvancedCard(league, container, opts) {
+        const hasSwitch = typeof opts.enabled === 'boolean';
+        const isOn = hasSwitch ? opts.enabled : true;
+        const openKey = league.name + '|' + opts.key;
+        // A switched-off rule has nothing to configure, so its card is a header
+        // only — no chevron, nothing to expand into.
+        const expandable = isOn;
+        const open = expandable && _advOpenCards.has(openKey);
+        const accent = opts.accent || '#16A34A';
+        const tint = opts.tint || '#F0FDF4';
+        const tintBorder = opts.tintBorder || '#BBF7D0';
+
+        const card = document.createElement('div');
+        card.style.cssText = 'border:1px solid ' + (isOn ? tintBorder : '#E2E8F0') + '; border-radius:12px; overflow:hidden; margin-top:8px;';
+
+        const header = document.createElement('div');
+        header.style.cssText = 'display:flex; align-items:center; gap:10px; padding:12px 14px; background:'
+            + (isOn ? tint : '#F9FAFB') + '; border-bottom:' + (open ? '1px solid ' + tintBorder : 'none') + ';';
+
+        if (hasSwitch) {
+            const cb = document.createElement('input');
+            cb.type = 'checkbox';
+            cb.checked = isOn;
+            cb.style.cssText = 'width:16px; height:16px; accent-color:' + accent + '; cursor:pointer; flex:none;';
+            // The checkbox is inside the header but must not also expand it.
+            cb.onclick = function (ev) { ev.stopPropagation(); };
+            cb.onchange = function () {
+                if (opts.onToggle) opts.onToggle(cb.checked);
+                // Turning a rule on drops you straight into its settings;
+                // turning it off folds it away.
+                if (cb.checked) _advOpenCards.add(openKey); else _advOpenCards.delete(openKey);
+                saveLeaguesData();
+                renderConfigSections(league, container);
+            };
+            header.appendChild(cb);
+        }
+
+        const titleWrap = document.createElement('div');
+        titleWrap.style.cssText = 'flex:1; min-width:0;' + (expandable ? ' cursor:pointer;' : '');
+        const titleEl = document.createElement('div');
+        titleEl.style.cssText = 'font-size:0.85rem; font-weight:600; color:#1E293B;';
+        titleEl.textContent = opts.title;          // Safe: textContent auto-escapes
+        titleWrap.appendChild(titleEl);
+        if (opts.subtitle) {
+            const subEl = document.createElement('div');
+            subEl.style.cssText = 'font-size:0.75rem; color:#64748B;';
+            subEl.textContent = opts.subtitle;     // Safe: textContent auto-escapes
+            titleWrap.appendChild(subEl);
+        }
+        header.appendChild(titleWrap);
+
+        if (opts.status) {
+            const pill = document.createElement('span');
+            pill.textContent = opts.status;        // Safe: textContent auto-escapes
+            pill.style.cssText = 'flex:none; font-size:0.7rem; font-weight:600; color:' + accent
+                + '; background:white; border:1px solid ' + tintBorder + '; border-radius:10px; padding:2px 8px; white-space:nowrap;';
+            header.appendChild(pill);
+        }
+
+        if (expandable) {
+            const chevron = document.createElement('span');
+            chevron.textContent = open ? '▾' : '▸';
+            chevron.style.cssText = 'flex:none; width:12px; color:#9CA3AF; font-size:0.85rem; cursor:pointer;';
+            header.appendChild(chevron);
+
+            const toggleOpen = function () {
+                if (_advOpenCards.has(openKey)) _advOpenCards.delete(openKey);
+                else _advOpenCards.add(openKey);
+                renderConfigSections(league, container);
+            };
+            titleWrap.onclick = toggleOpen;
+            chevron.onclick = toggleOpen;
+        }
+
+        card.appendChild(header);
+
+        const body = document.createElement('div');
+        body.style.cssText = 'padding:14px;';
+        if (open) card.appendChild(body);
+
+        return { card: card, body: body, open: open };
+    }
+
+    // =========================================================================
     // CONFIG SECTIONS (Cards)
     // =========================================================================
     function renderConfigSections(league, container) {
@@ -1166,9 +1488,22 @@
             const chip = document.createElement('span');
             chip.className = 'chip' + (isActive ? ' active' : '');
             chip.textContent = act; // Safe: textContent auto-escapes
+            // The daily cap is set in Advanced Settings → Sport Daily Limits, but
+            // it's a rule ABOUT this sport — showing it on the chip means a user
+            // reading the sport list can't miss that one of them is capped.
+            if (isActive && league.sportDailyLimits && league.sportDailyLimits[act]) {
+                const capTag = document.createElement('span');
+                capTag.textContent = ' ' + league.sportDailyLimits[act] + '×/day';
+                capTag.title = 'Max ' + league.sportDailyLimits[act] + ' game(s) of ' + act
+                    + ' per team per day — change it in Advanced Settings → Sport Daily Limits';
+                capTag.style.cssText = 'margin-left:4px; font-size:0.7rem; opacity:0.75; font-weight:600;';
+                chip.appendChild(capTag);
+            }
             chip.onclick = function () {
-                if (isActive) league.sports = league.sports.filter(s => s !== act);
-                else league.sports.push(act);
+                if (isActive) {
+                    league.sports = league.sports.filter(s => s !== act);
+                    if (league.sportDailyLimits) delete league.sportDailyLimits[act];
+                } else league.sports.push(act);
                 saveLeaguesData();
                 renderConfigSections(league, container);
             };
@@ -1191,15 +1526,41 @@
         // captain control or one would trigger the other.
         const teamList = document.createElement('div');
         const eligible = eligibleCaptains(league);
+        // ★ TEAM RENAME: clicking the NAME renames the team (keeping its record);
+        //   only the × removes it. Previously the whole chip was the delete
+        //   button, so the only way to fix a placeholder name was to delete the
+        //   team and re-add it — which is exactly what lost the season's record.
+        const _formerNames = _formerNamesByTeam(league);
         league.teams.forEach(function (team) {
             const row = document.createElement('div');
             row.style.cssText = 'padding:8px 0;border-bottom:1px solid #F1F1F1;';
 
             const head = document.createElement('div');
             head.style.cssText = 'display:flex;align-items:center;gap:8px;';
+
+            const nameWrap = document.createElement('span');
+            nameWrap.style.cssText = 'flex:1;min-width:0;';
             const nameEl = document.createElement('span');
-            nameEl.style.cssText = 'font-weight:600;font-size:0.9rem;flex:1;min-width:0;';
-            nameEl.textContent = team;
+            nameEl.style.cssText = 'font-weight:600;font-size:0.9rem;cursor:text;border-bottom:1px dashed rgba(0,0,0,0.28);';
+            nameEl.textContent = team;   // Safe: textContent auto-escapes
+            nameEl.title = 'Click to rename — the team keeps its games, standings and matchup history';
+            nameEl.onclick = function (ev) {
+                ev.stopPropagation();
+                _startTeamRenameEditor(league, container, nameWrap, team);
+            };
+            nameWrap.appendChild(nameEl);
+
+            // Show what this team used to be called, so the user can see the
+            // record followed the rename instead of guessing.
+            const former = _formerNames[team];
+            if (former && former.length) {
+                const wasTag = document.createElement('span');
+                wasTag.textContent = ' (was ' + former.join(', ') + ')';
+                wasTag.title = 'Games recorded under ' + (former.length === 1 ? 'this name' : 'these names')
+                    + ' still count for this team';
+                wasTag.style.cssText = 'margin-left:4px; font-size:0.72rem; opacity:0.7; font-weight:400;';
+                nameWrap.appendChild(wasTag);
+            }
 
             const capBtn = document.createElement('button');
             capBtn.type = 'button';
@@ -1227,7 +1588,7 @@
                 renderConfigSections(league, container);
             };
 
-            head.appendChild(nameEl);
+            head.appendChild(nameWrap);
             head.appendChild(capBtn);
             head.appendChild(removeBtn);
             row.appendChild(head);
@@ -1293,6 +1654,10 @@
                 if (!league.teams.includes(t)) {
                     league.teams.push(t);
                     league.standings[t] = { w: 0, l: 0, t: 0 };
+                    // A team CREATED with a previously-retired name is a genuinely
+                    // new team — drop the stale alias so it doesn't inherit the
+                    // renamed team's record.
+                    try { window.LeagueTeamRename?.dropAliasFor(league, t); } catch (_) {}
                     saveLeaguesData();
                     renderConfigSections(league, container);
                     const newInput = container.querySelectorAll('input');
@@ -1301,6 +1666,13 @@
             }
         };
       teamCard.appendChild(teamInput);
+
+        const renameHint = document.createElement('div');
+        renameHint.textContent = 'Tip: click a team’s name to rename it. Renaming keeps its standings, '
+            + 'results and who-played-who history — so "Team 1" becoming "The Pancakes" is still the same team.';
+        renameHint.style.cssText = 'margin-top:8px; font-size:0.72rem; color:#6B7280; line-height:1.45;';
+        teamCard.appendChild(renameHint);
+
         container.appendChild(teamCard);
 
         // \u2500\u2500\u2500 Advanced Settings Collapsible \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500
@@ -1323,7 +1695,10 @@
         const _summaryBits = [];
         if (league.offCampus?.enabled) _summaryBits.push('Away Games');
         if (league.chinuch?.enabled) _summaryBits.push('Chinuch');
+        if (league.byeActivity?.enabled) _summaryBits.push('Bye Activity');
         if (league.indoorRequirement?.enabled) _summaryBits.push('Indoor Rule');
+        if (Object.keys(league.sportDailyLimits || {}).length > 0) _summaryBits.push('Sport Daily Limits');
+        if (league.roundRobin?.enabled) _summaryBits.push('Round-Robin Groups');
         if (_summaryBits.length > 0) {
             const summary = document.createElement('span');
             summary.textContent = _summaryBits.join(' \u00b7 ');
@@ -1352,26 +1727,24 @@
         const locationZones = settings.locationZones || settings.global?.locationZones || {};
         const totalTeams = (league.teams || []).length;
 
-        const awayCard = document.createElement('div');
-        awayCard.style.cssText = 'border:1px solid #E2E8F0; border-radius:12px; overflow:hidden; margin-top:8px;';
+        const _awayStatus = !league.offCampus.enabled ? null
+            : (league.offCampus.teamsPerDay > 0 && league.offCampus.zone)
+                ? league.offCampus.teamsPerDay + ' teams \u2192 ' + league.offCampus.zone
+                : 'Not set up yet';
 
-        // Header bar \u2014 toggle lives here
-        const awayHeader = document.createElement('label');
-        awayHeader.style.cssText = 'display:flex; align-items:center; gap:10px; padding:12px 14px; cursor:pointer; background:' + (league.offCampus.enabled ? '#EFF6FF' : '#F9FAFB') + '; border-bottom:' + (league.offCampus.enabled ? '1px solid #BFDBFE' : 'none') + ';';
-        const awayCb = document.createElement('input');
-        awayCb.type = 'checkbox';
-        awayCb.checked = league.offCampus.enabled === true;
-        awayCb.style.cssText = 'width:16px; height:16px; accent-color:#2563EB;';
-        awayCb.onchange = function () { league.offCampus.enabled = awayCb.checked; saveLeaguesData(); renderConfigSections(league, container); };
-        awayHeader.appendChild(awayCb);
-        const awayTitle = document.createElement('div');
-        awayTitle.innerHTML = '<div style="font-size:0.85rem; font-weight:600; color:#1E293B;">Away Games</div><div style="font-size:0.75rem; color:#64748B;">Some teams travel off-campus for back-to-back games</div>';
-        awayHeader.appendChild(awayTitle);
-        awayCard.appendChild(awayHeader);
+        const _away = makeAdvancedCard(league, container, {
+            key: 'away',
+            title: 'Away Games',
+            subtitle: 'Some teams travel off-campus for back-to-back games',
+            accent: '#2563EB', tint: '#EFF6FF', tintBorder: '#BFDBFE',
+            enabled: league.offCampus.enabled === true,
+            onToggle: function (checked) { league.offCampus.enabled = checked; },
+            status: _awayStatus
+        });
+        const awayCard = _away.card;
 
-        if (league.offCampus.enabled) {
-            const awayBody = document.createElement('div');
-            awayBody.style.cssText = 'padding:14px;';
+        if (_away.open) {
+            const awayBody = _away.body;
 
             // Inline sentence: "[X] teams go to [Zone \u25BC] each game day"
             const sentenceRow = document.createElement('div');
@@ -1447,38 +1820,38 @@
                 awayBody.appendChild(tripsLabel);
                 awayBody.appendChild(tripsRow);
             }
-
-            awayCard.appendChild(awayBody);
         }
 
         advancedBody.appendChild(awayCard);
 
         // ─── CARD: CHINUCH ──────────────────────────────────────────────────
-        if (!league.chinuch) league.chinuch = { enabled: false, timesPerDay: null, teamsPerRound: null, perSessionCounts: null, bunkFacilities: {} };
+        if (!league.chinuch) league.chinuch = { enabled: false, timesPerDay: null, teamsPerRound: null, perSessionCounts: null, bunkFacilities: {}, roomCapacity: {} };
 
-        const chinuchCard = document.createElement('div');
-        chinuchCard.style.cssText = 'border:1px solid #E2E8F0; border-radius:12px; overflow:hidden; margin-top:8px;';
+        const _chinuchStatus = (function () {
+            if (!league.chinuch.enabled) return null;
+            const arr = Array.isArray(league.chinuch.perSessionCounts)
+                ? league.chinuch.perSessionCounts.filter(function (n) { return Number.isFinite(n) && n >= 0; })
+                : [];
+            if (arr.length) return 'Per session: ' + arr.join('/');
+            const bits = [];
+            if (league.chinuch.timesPerDay > 0) bits.push(league.chinuch.timesPerDay + '×/day');
+            if (league.chinuch.teamsPerRound > 0) bits.push(league.chinuch.teamsPerRound + ' teams/session');
+            return bits.length ? bits.join(' · ') : 'Auto distribution';
+        })();
 
-        const chinuchHeader = document.createElement('label');
-        chinuchHeader.style.cssText = 'display:flex; align-items:center; gap:10px; padding:12px 14px; cursor:pointer; background:' + (league.chinuch.enabled ? '#F0FDF4' : '#F9FAFB') + '; border-bottom:' + (league.chinuch.enabled ? '1px solid #BBF7D0' : 'none') + ';';
-        const chinuchCb = document.createElement('input');
-        chinuchCb.type = 'checkbox';
-        chinuchCb.checked = league.chinuch.enabled === true;
-        chinuchCb.style.cssText = 'width:16px; height:16px; accent-color:#16A34A;';
-        chinuchCb.onchange = function () {
-            league.chinuch.enabled = chinuchCb.checked;
-            saveLeaguesData();
-            renderConfigSections(league, container);
-        };
-        chinuchHeader.appendChild(chinuchCb);
-        const chinuchTitle = document.createElement('div');
-        chinuchTitle.innerHTML = '<div style="font-size:0.85rem; font-weight:600; color:#1E293B;">Chinuch</div><div style="font-size:0.75rem; color:#64748B;">Teams rotate through chinuch class during league time</div>';
-        chinuchHeader.appendChild(chinuchTitle);
-        chinuchCard.appendChild(chinuchHeader);
+        const _chinuch = makeAdvancedCard(league, container, {
+            key: 'chinuch',
+            title: 'Chinuch',
+            subtitle: 'Teams rotate through chinuch class during league time',
+            accent: '#16A34A', tint: '#F0FDF4', tintBorder: '#BBF7D0',
+            enabled: league.chinuch.enabled === true,
+            onToggle: function (checked) { league.chinuch.enabled = checked; },
+            status: _chinuchStatus
+        });
+        const chinuchCard = _chinuch.card;
 
-        if (league.chinuch.enabled) {
-            const chinuchBody = document.createElement('div');
-            chinuchBody.style.cssText = 'padding:14px;';
+        if (_chinuch.open) {
+            const chinuchBody = _chinuch.body;
 
             // ── Auto-distribution info chip ─────────────────────────────────
             const customArr = Array.isArray(league.chinuch.perSessionCounts) ? league.chinuch.perSessionCounts.filter(function (n) { return Number.isFinite(n) && n >= 0; }) : [];
@@ -1664,6 +2037,7 @@
                     if (!league.chinuch.bunkFacilities) league.chinuch.bunkFacilities = {};
                     league.chinuch.bunkFacilities[team] = facSelect.value;
                     saveLeaguesData();
+                    renderConfigSections(league, container);   // refresh the room-capacity list
                 };
 
                 row.appendChild(label);
@@ -1678,37 +2052,258 @@
                 chinuchBody.appendChild(empty);
             }
 
-            chinuchCard.appendChild(chinuchBody);
+            // ── Room capacity: how many teams fit in each room AT ONCE ──────
+            // Several teams usually name the same room. The scheduler will not
+            // send more of them there in one period than it holds, so this is
+            // where the user says how big a shiur that room can take.
+            if (!league.chinuch.roomCapacity || typeof league.chinuch.roomCapacity !== 'object') league.chinuch.roomCapacity = {};
+            const teamsByRoom = {};
+            (league.teams || []).forEach(function (team) {
+                const r = (league.chinuch.bunkFacilities && league.chinuch.bunkFacilities[team]) || '';
+                if (r) (teamsByRoom[r] = teamsByRoom[r] || []).push(team);
+            });
+            const roomNames = Object.keys(teamsByRoom);
+
+            if (roomNames.length > 0) {
+                const capHeader = document.createElement('div');
+                capHeader.style.cssText = 'font-size:0.78rem; font-weight:600; text-transform:uppercase; letter-spacing:0.05em; color:#6B7280; margin:16px 0 6px;';
+                capHeader.textContent = 'Teams per Room at Once';
+                chinuchBody.appendChild(capHeader);
+
+                const capHint = document.createElement('div');
+                capHint.style.cssText = 'font-size:0.72rem; color:#6B7280; margin-bottom:8px;';
+                capHint.textContent = 'Teams sharing a room are spread across separate sessions when it can\'t hold them all together. '
+                    + 'Blank uses the room\'s capacity from the Facilities tab.';
+                chinuchBody.appendChild(capHint);
+
+                roomNames.forEach(function (room) {
+                    const members = teamsByRoom[room];
+                    // What the scheduler will actually use — same resolution order.
+                    const resolved = (window.SchedulerCoreLeagues && window.SchedulerCoreLeagues.chinuchRoomCapacity)
+                        ? window.SchedulerCoreLeagues.chinuchRoomCapacity(league, room, null)
+                        : (Number(league.chinuch.roomCapacity[room]) || 1);
+                    const sessions = (Number.isFinite(resolved) && resolved > 0)
+                        ? Math.ceil(members.length / resolved) : 1;
+
+                    const row = document.createElement('div');
+                    row.style.cssText = 'display:flex; align-items:center; gap:10px; margin-bottom:6px;';
+
+                    const nameEl = document.createElement('span');
+                    nameEl.style.cssText = 'font-size:0.83rem; font-weight:500; color:#374151; min-width:110px; flex:1;';
+                    nameEl.textContent = room;
+
+                    const capIn = document.createElement('input');
+                    capIn.type = 'number'; capIn.min = '1'; capIn.max = '50';
+                    capIn.value = league.chinuch.roomCapacity[room] || '';
+                    capIn.placeholder = String(Number.isFinite(resolved) ? resolved : 1);
+                    capIn.style.cssText = 'width:64px; padding:5px 8px; border:1px solid #D1D5DB; border-radius:6px; font-size:0.83rem; text-align:center; background:white;';
+                    capIn.title = 'How many teams can learn in "' + room + '" at the same time';
+                    capIn.onchange = function () {
+                        const v = parseInt(capIn.value, 10);
+                        if (v > 0) league.chinuch.roomCapacity[room] = Math.min(50, v);
+                        else delete league.chinuch.roomCapacity[room];
+                        saveLeaguesData();
+                        renderConfigSections(league, container);
+                    };
+
+                    const note = document.createElement('span');
+                    note.style.cssText = 'font-size:0.75rem; flex:2; color:' + (sessions > 1 ? '#B45309' : '#6B7280') + ';';
+                    note.textContent = members.length + ' team' + (members.length === 1 ? '' : 's')
+                        + (sessions > 1 ? ' · needs ' + sessions + ' separate sessions' : ' · fits in one session');
+
+                    row.appendChild(nameEl);
+                    row.appendChild(capIn);
+                    row.appendChild(note);
+                    chinuchBody.appendChild(row);
+                });
+
+                const worst = roomNames.reduce(function (m, room) {
+                    const resolved = (window.SchedulerCoreLeagues && window.SchedulerCoreLeagues.chinuchRoomCapacity)
+                        ? window.SchedulerCoreLeagues.chinuchRoomCapacity(league, room, null)
+                        : (Number(league.chinuch.roomCapacity[room]) || 1);
+                    const s = (Number.isFinite(resolved) && resolved > 0) ? Math.ceil(teamsByRoom[room].length / resolved) : 1;
+                    return Math.max(m, s);
+                }, 1);
+                if (worst > 1) {
+                    const warn = document.createElement('div');
+                    warn.style.cssText = 'font-size:0.75rem; color:#B45309; background:#FFFBEB; border:1px solid #FDE68A; border-radius:8px; padding:8px 10px; margin-top:8px;';
+                    warn.textContent = 'This league needs at least ' + worst + ' league periods a day for everyone to learn. '
+                        + 'With fewer, the teams that don\'t fit play their game instead — and rotate in on other days.';
+                    chinuchBody.appendChild(warn);
+                }
+            }
+
         }
 
         advancedBody.appendChild(chinuchCard);
 
+        // ─── CARD: BYE ACTIVITY ─────────────────────────────────────────────
+        // With 5 teams and 2 games somebody sits out every round. Instead of a
+        // bare "Team — Bye" the user names what the benched team does instead.
+        if (!league.byeActivity) league.byeActivity = { enabled: false, activities: [], teamActivities: {} };
+        if (!Array.isArray(league.byeActivity.activities)) league.byeActivity.activities = [];
+        if (!league.byeActivity.teamActivities || typeof league.byeActivity.teamActivities !== 'object') league.byeActivity.teamActivities = {};
+
+        const _byeStatus = (function () {
+            if (!league.byeActivity.enabled) return null;
+            const nAct = league.byeActivity.activities.length;
+            const nPin = Object.keys(league.byeActivity.teamActivities).length;
+            if (!nAct && !nPin) return 'Nothing picked';
+            const bits = [];
+            if (nAct) bits.push(nAct + ' activit' + (nAct === 1 ? 'y' : 'ies'));
+            if (nPin) bits.push(nPin + ' pinned');
+            return bits.join(' \u00b7 ');
+        })();
+
+        const _bye = makeAdvancedCard(league, container, {
+            key: 'bye',
+            title: 'Bye Activity',
+            subtitle: 'A team with no game gets a real activity instead of a bye',
+            accent: '#16A34A', tint: '#F0FDF4', tintBorder: '#BBF7D0',
+            enabled: league.byeActivity.enabled === true,
+            onToggle: function (checked) { league.byeActivity.enabled = checked; },
+            status: _byeStatus
+        });
+        const byeCard = _bye.card;
+
+        if (_bye.open) {
+            const byeBody = _bye.body;
+
+            const byeInfo = document.createElement('div');
+            byeInfo.style.cssText = 'font-size:0.78rem; color:#374151; background:#F0F9FF; border:1px solid #BAE6FD; border-radius:8px; padding:8px 10px; margin-bottom:12px;';
+            byeInfo.textContent = 'Whenever a team sits out a round — odd team count, or more pairings than open fields — it gets one of these instead of a bye. '
+                + 'The facility is reserved for the league\'s grades during that period, and it rotates so the same team does not get the same thing every time.';
+            byeBody.appendChild(byeInfo);
+
+            const byeFacilities = (typeof window.getFacilities === 'function') ? window.getFacilities() : [];
+
+            if (byeFacilities.length === 0) {
+                const noFac = document.createElement('div');
+                noFac.style.cssText = 'font-size:0.8rem; color:#F59E0B; background:#FFFBEB; border:1px solid #FDE68A; border-radius:8px; padding:8px 10px;';
+                noFac.textContent = 'No facilities found — add fields or rooms in the Facilities tab first, then come back here.';
+                byeBody.appendChild(noFac);
+            } else {
+                // ── Shared pool (chips, multi-select) ───────────────────────
+                const poolHeader = document.createElement('div');
+                poolHeader.style.cssText = 'font-size:0.78rem; font-weight:600; text-transform:uppercase; letter-spacing:0.05em; color:#6B7280; margin-bottom:6px;';
+                poolHeader.textContent = 'Activities for teams on a bye';
+                byeBody.appendChild(poolHeader);
+
+                const poolHint = document.createElement('div');
+                poolHint.style.cssText = 'font-size:0.72rem; color:#6B7280; margin-bottom:8px;';
+                poolHint.textContent = 'Pick one or more. With more than one, benched teams rotate through them and never double-book the same facility.';
+                byeBody.appendChild(poolHint);
+
+                const chipWrap = document.createElement('div');
+                chipWrap.style.cssText = 'display:flex; flex-wrap:wrap; gap:6px; margin-bottom:14px;';
+                byeFacilities.forEach(function (fac) {
+                    const on = league.byeActivity.activities.indexOf(fac.name) >= 0;
+                    const chip = document.createElement('button');
+                    chip.type = 'button';
+                    chip.textContent = fac.name;
+                    chip.style.cssText = 'padding:5px 10px; border-radius:999px; font-size:0.78rem; cursor:pointer; border:1px solid '
+                        + (on ? '#16A34A' : '#D1D5DB') + '; background:' + (on ? '#DCFCE7' : 'white') + '; color:' + (on ? '#166534' : '#374151') + ';';
+                    chip.onclick = function () {
+                        if (on) {
+                            league.byeActivity.activities = league.byeActivity.activities.filter(function (x) { return x !== fac.name; });
+                        } else {
+                            league.byeActivity.activities.push(fac.name);
+                        }
+                        saveLeaguesData();
+                        renderConfigSections(league, container);
+                    };
+                    chipWrap.appendChild(chip);
+                });
+                byeBody.appendChild(chipWrap);
+
+                // ── Per-team pin ────────────────────────────────────────────
+                const perTeamHeader = document.createElement('div');
+                perTeamHeader.style.cssText = 'font-size:0.78rem; font-weight:600; text-transform:uppercase; letter-spacing:0.05em; color:#6B7280; margin-bottom:8px;';
+                perTeamHeader.textContent = 'Always give this team';
+                byeBody.appendChild(perTeamHeader);
+
+                const perTeamHint = document.createElement('div');
+                perTeamHint.style.cssText = 'font-size:0.72rem; color:#6B7280; margin-bottom:8px;';
+                perTeamHint.textContent = 'Optional — pin one team to one activity for every bye it gets. Everyone else draws from the list above.';
+                byeBody.appendChild(perTeamHint);
+
+                (league.teams || []).forEach(function (team) {
+                    const row = document.createElement('div');
+                    row.style.cssText = 'display:flex; align-items:center; gap:10px; margin-bottom:8px;';
+
+                    const label = document.createElement('span');
+                    label.style.cssText = 'font-size:0.83rem; font-weight:500; color:#374151; min-width:110px; flex:1;';
+                    label.textContent = team;
+
+                    const sel = document.createElement('select');
+                    sel.style.cssText = 'flex:2; padding:5px 8px; border:1px solid #D1D5DB; border-radius:6px; font-size:0.83rem; background:white; max-width:220px;';
+
+                    const blankOpt = document.createElement('option');
+                    blankOpt.value = '';
+                    blankOpt.textContent = '— rotate through the list —';
+                    sel.appendChild(blankOpt);
+
+                    const cur = league.byeActivity.teamActivities[team] || '';
+                    byeFacilities.forEach(function (fac) {
+                        const opt = document.createElement('option');
+                        opt.value = fac.name;
+                        opt.textContent = fac.name;
+                        if (fac.name === cur) opt.selected = true;
+                        sel.appendChild(opt);
+                    });
+
+                    sel.onchange = function () {
+                        if (sel.value) league.byeActivity.teamActivities[team] = sel.value;
+                        else delete league.byeActivity.teamActivities[team];
+                        saveLeaguesData();
+                    };
+
+                    row.appendChild(label);
+                    row.appendChild(sel);
+                    byeBody.appendChild(row);
+                });
+
+                if ((league.teams || []).length === 0) {
+                    const empty = document.createElement('div');
+                    empty.style.cssText = 'font-size:0.8rem; color:#9CA3AF; text-align:center; padding:8px;';
+                    empty.textContent = 'Add teams above to pin a team to its own bye activity.';
+                    byeBody.appendChild(empty);
+                }
+
+                if (league.byeActivity.activities.length === 0
+                    && Object.keys(league.byeActivity.teamActivities).length === 0) {
+                    const warn = document.createElement('div');
+                    warn.style.cssText = 'font-size:0.78rem; color:#B45309; background:#FFFBEB; border:1px solid #FDE68A; border-radius:8px; padding:8px 10px; margin-top:6px;';
+                    warn.textContent = 'Nothing picked yet — benched teams will still show a plain bye until you choose at least one activity.';
+                    byeBody.appendChild(warn);
+                }
+            }
+        }
+
+        advancedBody.appendChild(byeCard);
+
         // ─── CARD: INDOOR REQUIREMENT ───────────────────────────────────────
         if (!league.indoorRequirement) league.indoorRequirement = { enabled: false, op: '>=', count: 1 };
 
-        const indoorCard = document.createElement('div');
-        indoorCard.style.cssText = 'border:1px solid #E2E8F0; border-radius:12px; overflow:hidden; margin-top:8px;';
+        const _indoorOpSym = { '>=': '\u2265', '=': '=', '<=': '\u2264' };
+        const _indoorStatus = league.indoorRequirement.enabled
+            ? (_indoorOpSym[league.indoorRequirement.op] || '\u2265') + ' ' + league.indoorRequirement.count
+                + ' indoor game' + (league.indoorRequirement.count === 1 ? '' : 's') + '/day'
+            : null;
 
-        const indoorHeader = document.createElement('label');
-        indoorHeader.style.cssText = 'display:flex; align-items:center; gap:10px; padding:12px 14px; cursor:pointer; background:' + (league.indoorRequirement.enabled ? '#F0FDF4' : '#F9FAFB') + '; border-bottom:' + (league.indoorRequirement.enabled ? '1px solid #BBF7D0' : 'none') + ';';
-        const indoorCb = document.createElement('input');
-        indoorCb.type = 'checkbox';
-        indoorCb.checked = league.indoorRequirement.enabled === true;
-        indoorCb.style.cssText = 'width:16px; height:16px; accent-color:#16A34A;';
-        indoorCb.onchange = function () {
-            league.indoorRequirement.enabled = indoorCb.checked;
-            saveLeaguesData();
-            renderConfigSections(league, container);
-        };
-        indoorHeader.appendChild(indoorCb);
-        const indoorTitle = document.createElement('div');
-        indoorTitle.innerHTML = '<div style="font-size:0.85rem; font-weight:600; color:#1E293B;">Indoor Court Requirement</div><div style="font-size:0.75rem; color:#64748B;">Steer each team toward a target number of indoor games per day</div>';
-        indoorHeader.appendChild(indoorTitle);
-        indoorCard.appendChild(indoorHeader);
+        const _indoor = makeAdvancedCard(league, container, {
+            key: 'indoor',
+            title: 'Indoor Court Requirement',
+            subtitle: 'Steer each team toward a target number of indoor games per day',
+            accent: '#16A34A', tint: '#F0FDF4', tintBorder: '#BBF7D0',
+            enabled: league.indoorRequirement.enabled === true,
+            onToggle: function (checked) { league.indoorRequirement.enabled = checked; },
+            status: _indoorStatus
+        });
+        const indoorCard = _indoor.card;
 
-        if (league.indoorRequirement.enabled) {
-            const indoorBody = document.createElement('div');
-            indoorBody.style.cssText = 'padding:14px;';
+        if (_indoor.open) {
+            const indoorBody = _indoor.body;
 
             const ruleRow = document.createElement('div');
             ruleRow.style.cssText = 'display:flex; align-items:center; gap:8px; font-size:0.88rem; color:#374151; flex-wrap:wrap;';
@@ -1753,11 +2348,170 @@
             hint.style.cssText = 'font-size:0.72rem; color:#6B7280; margin-top:10px; line-height:1.4;';
             hint.textContent = 'Indoor courts come from facilities marked Indoor in the Facilities tab. The solver biases assignments to meet the rule and runs a post-pass that swaps outdoor matchups for free indoor ones when teams are short.';
             indoorBody.appendChild(hint);
-
-            indoorCard.appendChild(indoorBody);
         }
 
         advancedBody.appendChild(indoorCard);
+
+        // ─── CARD: ROUND-ROBIN GROUPS ───────────────────────────────────────
+        // An odd number of teams means somebody is benched every period. This
+        // puts `size` teams on ONE field for a round robin instead — every pair
+        // in the group plays, so nobody sits out.
+        if (!league.roundRobin) league.roundRobin = { enabled: false, size: 3, rounds: 1 };
+        if (!(league.roundRobin.rounds >= 1)) league.roundRobin.rounds = 1;
+
+        const _rrPairings = (function (n) { return n * (n - 1) / 2; })(league.roundRobin.size);
+        const _rrRounds = league.roundRobin.rounds;
+        const _rrGames = _rrPairings * _rrRounds;
+        const _rr = makeAdvancedCard(league, container, {
+            key: 'roundrobin',
+            title: 'Round-Robin Groups',
+            subtitle: 'Odd team out plays a round robin instead of sitting on a bye',
+            accent: '#16A34A', tint: '#F0FDF4', tintBorder: '#BBF7D0',
+            enabled: league.roundRobin.enabled === true,
+            onToggle: function (checked) { league.roundRobin.enabled = checked; },
+            status: league.roundRobin.enabled
+                ? ('Groups of ' + league.roundRobin.size + (_rrRounds > 1 ? ' \u00b7 ' + _rrRounds + ' rounds' : ''))
+                : null
+        });
+
+        if (_rr.open) {
+            const rrBody = _rr.body;
+
+            const rrRow = document.createElement('div');
+            rrRow.style.cssText = 'display:flex; align-items:center; gap:8px; font-size:0.88rem; color:#374151; flex-wrap:wrap;';
+            rrRow.appendChild(document.createTextNode('Group'));
+
+            const rrSize = document.createElement('input');
+            rrSize.type = 'number'; rrSize.min = '3'; rrSize.step = '2';
+            rrSize.value = league.roundRobin.size;
+            rrSize.style.cssText = 'width:64px; padding:6px 8px; border:1px solid #D1D5DB; border-radius:6px; font-size:0.88rem; text-align:center; background:white;';
+            rrSize.onchange = function () {
+                let v = parseInt(rrSize.value, 10);
+                if (!Number.isFinite(v) || v < 3) v = 3;
+                if (v % 2 === 0) v += 1;          // only an odd group absorbs the odd team out
+                league.roundRobin.size = v;
+                saveLeaguesData();
+                renderConfigSections(league, container);
+            };
+            rrRow.appendChild(rrSize);
+            rrRow.appendChild(document.createTextNode('teams together on one field, playing'));
+
+            // One round of 3 teams is 3 short games — usually not enough to fill
+            // a league period, so the camp says how many times through.
+            const rrRoundsInput = document.createElement('input');
+            rrRoundsInput.type = 'number'; rrRoundsInput.min = '1'; rrRoundsInput.step = '1';
+            rrRoundsInput.value = _rrRounds;
+            rrRoundsInput.style.cssText = 'width:64px; padding:6px 8px; border:1px solid #D1D5DB; border-radius:6px; font-size:0.88rem; text-align:center; background:white;';
+            rrRoundsInput.onchange = function () {
+                let v = parseInt(rrRoundsInput.value, 10);
+                if (!Number.isFinite(v) || v < 1) v = 1;
+                league.roundRobin.rounds = v;
+                saveLeaguesData();
+                renderConfigSections(league, container);
+            };
+            rrRow.appendChild(rrRoundsInput);
+            rrRow.appendChild(document.createTextNode(_rrRounds === 1 ? 'round' : 'rounds'));
+            rrBody.appendChild(rrRow);
+
+            const rrCount = document.createElement('div');
+            rrCount.style.cssText = 'font-size:0.78rem; color:#374151; background:#F0F9FF; border:1px solid #BAE6FD; border-radius:8px; padding:8px 10px; margin-top:10px;';
+            rrCount.textContent = 'A group of ' + league.roundRobin.size + ' plays ' + _rrGames + ' short game'
+                + (_rrGames === 1 ? '' : 's') + ' — every pair in the group meets'
+                + (_rrRounds > 1 ? ' ' + _rrRounds + ' times (' + _rrRounds + ' \u00d7 ' + _rrPairings + ')' : '')
+                + ', all on the same field and sport. Make sure that fits the period.';
+            rrBody.appendChild(rrCount);
+
+            const rrHint = document.createElement('div');
+            rrHint.style.cssText = 'font-size:0.72rem; color:#6B7280; margin-top:10px; line-height:1.4;';
+            rrHint.textContent = 'Only kicks in when the teams playing this period can’t pair up evenly — with '
+                + 'an even number (including days chinuch takes one team out) everyone pairs off normally and nothing changes. '
+                + 'Group size must be odd, so it’s rounded up. The schedule lists each game in the group, and all of them '
+                + 'show on the Leagues page for scores. Sport rotation counts the group once per team — they played that '
+                + 'sport today, so tomorrow they get a different one — but the games do NOT count as matchups, so a group '
+                + 'never uses up who-played-who variety.';
+            rrBody.appendChild(rrHint);
+        }
+
+        advancedBody.appendChild(_rr.card);
+
+        // ─── CARD: SPORT DAILY LIMITS ───────────────────────────────────────
+        // Per-sport hard cap on how many times ONE TEAM may play that sport in
+        // a single day. No enable checkbox like the cards above: a blank box
+        // already means "no limit" for every sport, so a separate on/off flag
+        // would only add a way to have limits configured and silently inactive.
+        if (!league.sportDailyLimits || typeof league.sportDailyLimits !== 'object') league.sportDailyLimits = {};
+
+        const _cappedSports = league.sports.filter(function (s) { return league.sportDailyLimits[s]; });
+        const _limitStatus = _cappedSports.length === 0 ? null
+            : _cappedSports.length === 1
+                ? _cappedSports[0] + ' max ' + league.sportDailyLimits[_cappedSports[0]] + '/day'
+                : _cappedSports.length + ' sports capped';
+
+        const _limit = makeAdvancedCard(league, container, {
+            key: 'sportlimits',
+            title: 'Sport Daily Limits',
+            subtitle: 'Cap how many times one team can play a sport in a single day',
+            accent: '#16A34A', tint: '#F0FDF4', tintBorder: '#BBF7D0',
+            status: _limitStatus
+        });
+
+        if (_limit.open) {
+            const limitBody = _limit.body;
+
+            if (league.sports.length === 0) {
+                const empty = document.createElement('div');
+                empty.style.cssText = 'font-size:0.8rem; color:#9CA3AF; text-align:center; padding:8px;';
+                empty.textContent = 'Pick this league\u2019s sports above to set a daily limit on one.';
+                limitBody.appendChild(empty);
+            } else {
+                league.sports.forEach(function (sport) {
+                    const row = document.createElement('div');
+                    row.style.cssText = 'display:flex; align-items:center; gap:8px; padding:5px 0;';
+
+                    const label = document.createElement('span');
+                    label.textContent = sport;   // Safe: textContent auto-escapes
+                    label.style.cssText = 'flex:1; min-width:0; font-size:0.85rem; color:#374151;';
+                    row.appendChild(label);
+
+                    // Free-form number rather than a fixed list of choices: a
+                    // camp running five league periods a day may well want a cap
+                    // of 4. Blank IS the "no limit" state, so clearing the box is
+                    // how you remove a cap.
+                    const numInput = document.createElement('input');
+                    numInput.type = 'number';
+                    numInput.min = '1';
+                    numInput.step = '1';
+                    numInput.value = league.sportDailyLimits[sport] || '';
+                    numInput.placeholder = '\u2014';
+                    numInput.title = 'Max games of ' + sport + ' one team can play in a day. Leave blank for no limit.';
+                    numInput.style.cssText = 'width:60px; padding:5px 8px; border:1px solid #D1D5DB; border-radius:6px; font-size:0.82rem; text-align:center; background:white;';
+                    numInput.onchange = function () {
+                        const v = parseInt(numInput.value, 10);
+                        if (Number.isFinite(v) && v >= 1) league.sportDailyLimits[sport] = v;
+                        else delete league.sportDailyLimits[sport];
+                        saveLeaguesData();
+                        renderConfigSections(league, container);
+                    };
+                    row.appendChild(numInput);
+
+                    const unit = document.createElement('span');
+                    unit.style.cssText = 'font-size:0.78rem; color:' + (league.sportDailyLimits[sport] ? '#374151' : '#9CA3AF') + '; white-space:nowrap;';
+                    unit.textContent = league.sportDailyLimits[sport] ? 'per team per day' : 'no limit';
+                    row.appendChild(unit);
+
+                    limitBody.appendChild(row);
+                });
+
+                const limitHint = document.createElement('div');
+                limitHint.style.cssText = 'font-size:0.72rem; color:#6B7280; margin-top:10px; line-height:1.4;';
+                limitHint.textContent = 'Leave blank for no limit. Only bites on days with more than one league game. '
+                    + 'This is a hard rule: the scheduler picks another sport instead, and if the cap leaves a matchup '
+                    + 'nothing else to play, that matchup gets a bye (with the reason spelled out) rather than breaking it.';
+                limitBody.appendChild(limitHint);
+            }
+        }
+
+        advancedBody.appendChild(_limit.card);
     }
 
     // =========================================================================
@@ -1772,40 +2526,52 @@
         tabNav.className = 'league-tab-nav';
         tabNav.innerHTML =
             '<button id="tab-standings" class="league-tab-btn active">Current Standings</button>' +
-            '<button id="tab-games" class="league-tab-btn">Game Results / History</button>';
+            '<button id="tab-games" class="league-tab-btn">Game Results / History</button>' +
+            '<button id="tab-playhistory" class="league-tab-btn">Play History</button>';
         container.appendChild(tabNav);
 
         const standingsDiv = document.createElement('div');
         const gamesDiv = document.createElement('div');
+        const playHistDiv = document.createElement('div');
         gamesDiv.style.display = 'none';
+        playHistDiv.style.display = 'none';
         container.appendChild(standingsDiv);
         container.appendChild(gamesDiv);
+        container.appendChild(playHistDiv);
 
         const btnStd = tabNav.querySelector('#tab-standings');
         const btnGms = tabNav.querySelector('#tab-games');
+        const btnHist = tabNav.querySelector('#tab-playhistory');
 
         // ★ FIX: Null checks for tab buttons
-        if (!btnStd || !btnGms) return;
+        if (!btnStd || !btnGms || !btnHist) return;
 
-        const setTab = function (activeBtn, inactiveBtn) {
-            activeBtn.className = 'league-tab-btn active';
-            inactiveBtn.className = 'league-tab-btn';
+        const allBtns = [btnStd, btnGms, btnHist];
+        const allDivs = [standingsDiv, gamesDiv, playHistDiv];
+        const setTab = function (activeBtn, activeDiv) {
+            allBtns.forEach(function (b) { b.className = 'league-tab-btn' + (b === activeBtn ? ' active' : ''); });
+            allDivs.forEach(function (d) { d.style.display = d === activeDiv ? 'block' : 'none'; });
         };
 
-        setTab(btnStd, btnGms);
-
         btnStd.onclick = function () {
-            standingsDiv.style.display = 'block';
-            gamesDiv.style.display = 'none';
-            setTab(btnStd, btnGms);
+            setTab(btnStd, standingsDiv);
             renderStandingsTable(league, standingsDiv);
         };
 
         btnGms.onclick = function () {
-            standingsDiv.style.display = 'none';
-            gamesDiv.style.display = 'block';
-            setTab(btnGms, btnStd);
+            setTab(btnGms, gamesDiv);
             renderGameEntryUI(league, gamesDiv);
+        };
+
+        // ★ Play History — who played who, what sport, and when, straight from
+        //   the scheduler's date-keyed game log (post-edit changes included).
+        btnHist.onclick = function () {
+            setTab(btnHist, playHistDiv);
+            if (window.LeaguePlayReport && typeof window.LeaguePlayReport.renderFullView === 'function') {
+                window.LeaguePlayReport.renderFullView(league, playHistDiv, 'regular');
+            } else {
+                playHistDiv.innerHTML = '<p class="league-empty-state">Play history module not loaded.</p>';
+            }
         };
 
         renderStandingsTable(league, standingsDiv);
@@ -2021,6 +2787,87 @@
     /**
      * Render the main game entry UI with professional styling
      */
+    // =========================================================================
+    // ★ RENUMBER A GAME (in place on its card)
+    // =========================================================================
+    // Auto-numbering is chronological across dates, so this is for the cases it
+    // can't know about — a camp that skipped a day, or a sequence that drifted.
+    // The number is pushed through SchedulerCoreLeagues.renumberGame so the
+    // schedule, the grid and this list all agree; if the number is already used
+    // on the same date the two games swap rather than collide.
+    function _startGameRenumberEditor(league, card, game, titleEl) {
+        const current = parseInt(String(game.gameLabel || '').replace(/[^0-9]/g, ''), 10);
+        const input = document.createElement('input');
+        input.type = 'number';
+        input.min = '1';
+        input.value = Number.isFinite(current) ? current : '';
+        // Distinct from the score boxes, which are also number inputs.
+        input.setAttribute('data-game-renumber', '1');
+        input.setAttribute('aria-label', 'Game number');
+        input.style.cssText = 'width:72px; font:inherit; padding:2px 6px; border:1px solid #93C5FD; border-radius:6px;';
+
+        const wrap = document.createElement('span');
+        wrap.style.cssText = 'display:inline-flex; align-items:center; gap:6px;';
+        const lbl = document.createElement('span');
+        lbl.textContent = 'Game';
+        wrap.appendChild(lbl);
+        wrap.appendChild(input);
+
+        // ONE-SHOT. Escape pulls the input out of the DOM, which fires blur —
+        // and blur commits. Without this guard, cancelling saved whatever had
+        // been typed, which is the exact opposite of cancelling.
+        let done = false;
+        const finish = function (commit) {
+            if (done) return;
+            done = true;
+            const n = parseInt(input.value, 10);
+            wrap.replaceWith(titleEl);
+            if (!commit || !Number.isFinite(n) || n < 1 || n === current) return;
+            _applyGameRenumber(league, card, game, 'Game ' + n);
+        };
+        input.onkeydown = function (ev) {
+            if (ev.key === 'Enter') { ev.preventDefault(); finish(true); }
+            else if (ev.key === 'Escape') { ev.preventDefault(); finish(false); }
+        };
+        input.onblur = function () { finish(true); };
+
+        titleEl.replaceWith(wrap);
+        input.focus();
+        input.select();
+    }
+
+    function _applyGameRenumber(league, card, game, newLabel) {
+        const oldLabel = game.gameLabel;
+        const core = window.SchedulerCoreLeagues;
+        // Games imported from a generated schedule live in the engine's history
+        // too; hand-added ones exist only here, so only the former need the
+        // cross-store move.
+        if (game.date && core && typeof core.renumberGame === 'function' && _isAutoGame(game)) {
+            const res = core.renumberGame(league.name, game.date, oldLabel, newLabel);
+            if (!res || !res.ok) {
+                alert('Could not renumber this game: ' + ((res && res.reason) || 'unknown error'));
+                return;
+            }
+            // renumberGame re-pushes the results list, which rewrites
+            // league.games for that date — so re-render from the fresh data.
+            if (res.swappedWith) {
+                console.log('[LEAGUES] ' + oldLabel + ' \u21c4 ' + newLabel + ' (numbers swapped on ' + game.date + ')');
+            }
+        } else {
+            // Manually added game: it is only in this list.
+            const clash = (league.games || []).find(function (g) {
+                return g !== game && g.date === game.date && g.gameLabel === newLabel;
+            });
+            if (clash) clash.gameLabel = oldLabel;      // swap, never duplicate
+            game.gameLabel = newLabel;
+        }
+        const m = String(newLabel).match(/Game\s*(\d+)/i);
+        if (m) game.gameNumber = parseInt(m[1], 10);
+        saveLeaguesData();
+        const gamesContainer = card.closest('[data-section="games"]') || card.parentElement;
+        renderGameEntryUI(league, gamesContainer);
+    }
+
     function renderGameEntryUI(league, container) {
         renderGameEntryUIWithSelection(league, container, null);
     }
@@ -2098,17 +2945,22 @@
             const pastSection = document.createElement('div');
             pastSection.style.marginBottom = '24px';
             
+            const pastOpen = _gameHistoryOpenLeagues.has(league.name);
+
             const pastHeader = document.createElement('div');
             pastHeader.className = 'league-past-header';
-            pastHeader.innerHTML = '<span id="past-arrow" style="font-size:0.65rem;">▶</span> History (' + pastGames.length + ')';
-            
+            pastHeader.innerHTML = '<span id="past-arrow" style="font-size:0.65rem;">' + (pastOpen ? '▼' : '▶')
+                + '</span> History (' + pastGames.length + ')';
+
             const pastContent = document.createElement('div');
-            pastContent.style.display = 'none';
-            
+            pastContent.style.display = pastOpen ? 'block' : 'none';
+
             pastHeader.onclick = () => {
                 const isHidden = pastContent.style.display === 'none';
                 pastContent.style.display = isHidden ? 'block' : 'none';
                 pastHeader.querySelector('#past-arrow').textContent = isHidden ? '▼' : '▶';
+                if (isHidden) _gameHistoryOpenLeagues.add(league.name);
+                else _gameHistoryOpenLeagues.delete(league.name);
             };
             
             pastGames.forEach(game => {
@@ -2166,6 +3018,18 @@
         const gameTitle = document.createElement('div');
         gameTitle.className = 'league-card-title';
         gameTitle.textContent = game.gameLabel || ('Game ' + (league.games.indexOf(game) + 1));
+        // ★ RENUMBER: the number is editable in place. It has to move in four
+        //   stores at once (game log, league tiles, the per-bunk copy, the
+        //   results list) — SchedulerCoreLeagues.renumberGame does all of them,
+        //   so a change here survives a reload and shows on the grid too.
+        if (/^Game\s+\d+$/i.test(game.gameLabel || '')) {
+            gameTitle.title = 'Click to change this game\u2019s number — updates the schedule, the grid and this list';
+            gameTitle.style.cssText = 'cursor:text; border-bottom:1px dashed rgba(0,0,0,0.25);';
+            gameTitle.onclick = function (ev) {
+                ev.stopPropagation();
+                _startGameRenumberEditor(league, card, game, gameTitle);
+            };
+        }
         
         const headerRight = document.createElement('div');
         headerRight.style.cssText = 'display:flex; align-items:center; gap:12px;';
@@ -2478,6 +3342,33 @@
             const leagueAssignments = window.leagueAssignments || {};
             const currentDate = window.currentScheduleDate || new Date().toISOString().split('T')[0];
 
+            // ★ HR-62: pre-epoch (archive) dates must not be imported into the
+            // results store — their games belong to the previous half.
+            const _hrEpImp = (function () {
+                try {
+                    const U = window.SchedulerCoreUtils || window.Utils;
+                    if (U && typeof U.getRotationEpoch === 'function') return U.getRotationEpoch();
+                    const e = window.loadGlobalSettings ? window.loadGlobalSettings('rotationEpoch') : null;
+                    const d = (typeof e === 'string') ? e : (e && e.date);
+                    return (d && /^\d{4}-\d{2}-\d{2}$/.test(d)) ? d : null;
+                } catch (_) { return null; }
+            })();
+            if (_hrEpImp && currentDate < _hrEpImp) {
+                alert('This date is before the current half (counting restarted ' + _hrEpImp + ').\nIts games are archive and cannot be imported into the results.');
+                console.warn('[LEAGUES] Import blocked: ' + currentDate + ' predates the rotation epoch ' + _hrEpImp);
+                return;
+            }
+
+            // ★ TEAM RENAME: a saved schedule may still spell a team by its FORMER
+            //   name (written before the rename, or by a device that hadn't synced
+            //   it). Resolve every imported name through the alias map, or the
+            //   games would import under a name that has no standings row and
+            //   recalcStandings would silently drop them.
+            const _resolveTeam = (function () {
+                try { return window.LeagueTeamRename?.resolverFor(league) || null; } catch (_) { return null; }
+            })();
+            const _canon = function (t) { return (_resolveTeam && t) ? _resolveTeam(t) : t; };
+
             console.log('[LEAGUES] Import: Looking for games for league "' + league.name + '"');
             console.log('[LEAGUES] Import: League divisions:', league.divisions);
             console.log('[LEAGUES] Import: Available leagueAssignments keys:', Object.keys(leagueAssignments));
@@ -2518,13 +3409,13 @@
                         const matchupTeams = new Set();
                         matchups.forEach(m => {
                             if (typeof m === 'object') {
-                                if (m.teamA) matchupTeams.add(m.teamA);
-                                if (m.teamB) matchupTeams.add(m.teamB);
+                                if (m.teamA) matchupTeams.add(_canon(m.teamA));
+                                if (m.teamB) matchupTeams.add(_canon(m.teamB));
                             } else if (typeof m === 'string') {
                                 const vsMatch = m.match(/^(.+?)\s+vs\s+(.+?)(?:\s+@|\s*—|$)/i);
                                 if (vsMatch) {
-                                    matchupTeams.add(vsMatch[1].trim());
-                                    matchupTeams.add(vsMatch[2].trim());
+                                    matchupTeams.add(_canon(vsMatch[1].trim()));
+                                    matchupTeams.add(_canon(vsMatch[2].trim()));
                                 }
                             }
                         });
@@ -2581,6 +3472,9 @@
                                 teamB = vsMatch[2].trim();
                             }
                         }
+
+                        teamA = _canon(teamA);
+                        teamB = _canon(teamB);
 
                         if (teamA && teamB && teamA !== 'BYE' && teamB !== 'BYE') {
                             const key = [teamA, teamB].sort().join('|');
@@ -2644,11 +3538,16 @@
                 );
 
                 if (existingIdx >= 0) {
-                    // Merge: add new matchups but preserve existing scores
+                    // Merge: add new matchups but preserve existing scores.
+                    // ★ Pair match is ORDER-INDEPENDENT — the schedule can emit
+                    // "B vs A" for an existing "A vs B" match; an ordered-only
+                    // compare appended a duplicate row that double-counted the
+                    // matchup in standings.
                     const existing = league.games[existingIdx];
+                    const pairKey = m => [m.teamA, m.teamB].sort().join('|');
                     newGame.matches.forEach(nm => {
                         const found = (existing.matches || []).find(em =>
-                            em.teamA === nm.teamA && em.teamB === nm.teamB
+                            pairKey(em) === pairKey(nm)
                         );
                         if (!found) {
                             if (!existing.matches) existing.matches = [];
@@ -2744,7 +3643,21 @@
         });
 
         // Calculate from games
+        // ★ HR-61: rotation epoch (non-deleting half reset) — standings show
+        // the new half only. Pre-epoch games stay in league.games as the
+        // results archive but never count toward W/L/T. Games without a date
+        // (manual entries) count conservatively — they can't be dated.
+        var _hrEpSt = (function () {
+            try {
+                var U = window.SchedulerCoreUtils || window.Utils;
+                if (U && typeof U.getRotationEpoch === 'function') return U.getRotationEpoch();
+                var e = window.loadGlobalSettings ? window.loadGlobalSettings('rotationEpoch') : null;
+                var d = (typeof e === 'string') ? e : (e && e.date);
+                return (d && /^\d{4}-\d{2}-\d{2}$/.test(d)) ? d : null;
+            } catch (_) { return null; }
+        })();
         (league.games || []).forEach(function (g) {
+            if (_hrEpSt && g && typeof g.date === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(g.date) && g.date < _hrEpSt) return; // ★ HR-61
             (g.matches || []).forEach(function (m) {
                 if (!m.teamA || !m.teamB) return;
                 if (!league.standings[m.teamA] || !league.standings[m.teamB]) return;
@@ -2966,6 +3879,65 @@
             });
             return out;
         } catch (e) { return {}; }
+    };
+
+    // ★ HR-63: expose the module-private saver. calendar.js (startNewHalf) and
+    // playoff_hub.js have always called window.saveLeaguesData behind typeof
+    // guards that silently no-op'd because it was never assigned — league
+    // standings/playoff resets never persisted (audit finding F3).
+    window.saveLeaguesData = saveLeaguesData;
+
+    // ★ TEAM RENAME: rename a team while keeping its record. Exposed for the
+    // Playoff Hub, other modules, and console repair
+    // (LeaguesAPI.renameTeam('Majors', 'Team 1', 'The Pancakes')).
+    window.LeaguesAPI.renameTeam = function (leagueName, oldName, newName) {
+        const league = leaguesByName[leagueName];
+        if (!league) return { ok: false, reason: 'No league named "' + leagueName + '".' };
+        const res = renameTeam(league, oldName, newName);
+        if (res.ok) {
+            try {
+                const c = detailPaneEl?.querySelector('.league-config-container');
+                if (c && selectedLeagueName === leagueName) renderConfigSections(league, c);
+            } catch (_) {}
+        }
+        return res;
+    };
+
+    /** Former name → current name for a league, or null when never renamed. */
+    window.LeaguesAPI.getTeamAliases = function (leagueName) {
+        const league = leaguesByName[leagueName];
+        if (!league || !league.teamAliases) return null;
+        const out = {};
+        try {
+            window.LeagueTeamRename?.aliasMap(league).forEach(function (current, formerKey) {
+                out[formerKey] = current;
+            });
+        } catch (_) { return null; }
+        return Object.keys(out).length ? out : null;
+    };
+
+    // ★ HR-64: standings + playoff reset for the non-deleting half reset.
+    // league.games is KEPT (results archive) — recalcStandings is epoch-
+    // filtered (HR-61), so the rebuilt standings reflect only the new half.
+    window.LeaguesAPI.resetStandingsAndPlayoffs = function () {
+        let n = 0;
+        try {
+            Object.values(leaguesByName || {}).forEach(function (lg) {
+                if (!lg) return;
+                Object.keys(lg.standings || {}).forEach(function (t) {
+                    if (lg.standings[t]) delete lg.standings[t]._manual;
+                });
+                lg.standings = {};
+                lg.playoff = { enabled: false, rounds: [] };
+                recalcStandings(lg);   // epoch-filtered → new-half W/L/T only
+                n++;
+            });
+            saveLeaguesData();
+            console.log('[LEAGUES] ★ HR-64: standings + playoffs reset for ' + n + ' league(s) (games kept as archive).');
+        } catch (e) {
+            console.error('[LEAGUES] resetStandingsAndPlayoffs failed:', e);
+        }
+        return n;
     };
 
     window.LeaguesAPI.syncGamesFromGeneration = function (leagueName, dateKey, gameEntries) {

@@ -72,8 +72,9 @@
     // MAIN VALIDATION FUNCTION
     // =========================================================================
 
-    function validateSchedule() {
-        console.log('🛡️ Running comprehensive schedule validation v3.2...');
+    function validateSchedule(opts) {
+        const silent = !!(opts && opts.silent);
+        console.log('🛡️ Running comprehensive schedule validation v3.8...' + (silent ? ' (silent)' : ''));
         
         const assignments = window.scheduleAssignments || {};
         const divisions = window.divisions || {};
@@ -159,11 +160,8 @@
                                     const key = [fn, exField, bunk, ob].sort().join('|') + '|' + slot.startMin;
                                     if (comboSeen.has(key)) return;
                                     comboSeen.add(key);
-                                    const timeLabel = formatTime(slot.startMin) + ' - ' + formatTime(slot.endMin);
                                     errors.push(
-                                        `<strong>Combined Field Conflict:</strong> <u>${fn}</u> (${bunk}) and ` +
-                                        `<u>${exField}</u> (${ob}) share the same physical space and cannot be ` +
-                                        `used simultaneously at ${timeLabel}`
+                                        `[[Same space]] <strong>${fn}</strong> (${bunk}) + ${exField} (${ob}) ${_ctr(slot.startMin, slot.endMin)} - same physical space`
                                     );
                                 });
                             });
@@ -187,8 +185,14 @@
 
         // =====================================================================
         // 10. ★★★ v3.1: DISABLED (TURNED-OFF) SPECIALS & FIELDS ★★★
+        //     v3.4: covers Daily Adjustments' per-day disables + PINNED tiles
+        //     (pinned hits are warnings — user-placed, but worth a heads-up)
         // =====================================================================
-        try { checkDisabledResources(assignments, bunkDivMap, divisionTimes).forEach(e => errors.push(e)); }
+        try {
+            const disRes = checkDisabledResources(assignments, bunkDivMap, divisionTimes);
+            disRes.errors.forEach(e => errors.push(e));
+            disRes.warnings.forEach(w => warnings.push(w));
+        }
         catch (e) { console.warn('🛡️ disabled-resource check failed:', e); }
 
         // =====================================================================
@@ -197,17 +201,30 @@
         try { checkBunkOnlyAccess(assignments, bunkDivMap, divisionTimes).forEach(e => errors.push(e)); }
         catch (e) { console.warn('🛡️ bunk-only check failed:', e); }
 
+        // 11b. Avoid-unless-needed sports (SOFT rule → warning, not error: the
+        //      scheduler may legitimately place these when the slot would
+        //      otherwise be Free — surface it so the user can double-check).
+        try { checkAvoidUnlessNeededSports(assignments, bunkDivMap, divisionTimes).forEach(w => warnings.push(w)); }
+        catch (e) { console.warn('🛡️ avoid-unless-needed check failed:', e); }
+
         // =====================================================================
         // 12+13. ★★★ v3.1: LEAGUE/EVENT-AWARE TIMELINE + FIELD QUALITY ★★★
         // 15.    ★★★ v3.2: SPORT PLAYER COUNTS (min/max players) ★★★
         // =====================================================================
         try {
             const timedUsages = collectTimedUsages(assignments, divisions, divisionTimes, bunkDivMap);
+            annotatePinSpans(timedUsages);
             checkLeagueFieldConflicts(timedUsages).forEach(e => errors.push(e));
+            // ★ CHECK 17: pin-vs-pin facility conflicts — span-linked ("together")
+            //   tiles pass as one shared reservation, unlinked collisions flag.
+            checkPinnedTileConflicts(timedUsages, activityProperties).forEach(e => errors.push(e));
             checkFieldQuality(timedUsages).forEach(w => warnings.push(w));
             const sportRules = checkSportPlayerRules(timedUsages);
             sportRules.errors.forEach(e => errors.push(e));
             sportRules.warnings.forEach(w => warnings.push(w));
+            // ★ CHECK 18: a "Keep in use" facility left sitting empty
+            checkKeepInUseIdle(timedUsages, assignments, bunkDivMap, divisionTimes)
+                .forEach(w => warnings.push(w));
         } catch (e) { console.warn('🛡️ v3.1/v3.2 timeline checks failed:', e); }
 
         // =====================================================================
@@ -216,11 +233,86 @@
         try { checkCooldownRules(assignments, bunkDivMap, divisionTimes).forEach(e => errors.push(e)); }
         catch (e) { console.warn('🛡️ spacing-rule check failed:', e); }
 
+        // =====================================================================
+        // 16. ★★★ v3.3: ELECTIVE FACILITY RESERVATIONS ★★★
+        // =====================================================================
+        try { checkElectiveReservations(assignments, bunkDivMap, divisionTimes).forEach(e => errors.push(e)); }
+        catch (e) { console.warn('🛡️ elective-reservation check failed:', e); }
+
+        // =====================================================================
+        // 17. ★★★ PLAYOFF RESERVED FIELDS (saved for teams that are out) ★★★
+        // =====================================================================
+        try { checkPlayoffReservations(assignments, bunkDivMap, divisionTimes).forEach(e => errors.push(e)); }
+        catch (e) { console.warn('playoff-reservation check failed:', e); }
+
+        // =====================================================================
+        // 18. ★★★ PLAYOFF FIELD SHORTAGE (more games than fields — dropped) ★★★
+        // =====================================================================
+        try { checkPlayoffFieldShortages(assignments).forEach(e => errors.push(e)); }
+        catch (e) { console.warn('playoff-field-shortage check failed:', e); }
+
         // Show results
         console.log(`🛡️ Validation complete: ${errors.length} errors, ${warnings.length} warnings`);
-        showValidationModal(errors, warnings);
+        if (!silent) showValidationModal(errors, warnings);
         return { errors, warnings };
     }
+
+    // =========================================================================
+    // ★ v3.8: AUTO-OPEN AFTER GENERATION (opt-in toggle, default OFF)
+    // When enabled, every generation is followed by a silent validation run;
+    // if any RED conflicts exist the results modal opens by itself. Toggle
+    // lives in the modal footer and persists (settings + localStorage).
+    // =========================================================================
+    const VAL_AUTO_OPEN_KEY = 'validatorAutoOpenOnRed';
+
+    function getValidatorAutoOpen() {
+        try {
+            const app1 = window.loadGlobalSettings?.()?.app1;
+            if (app1 && typeof app1.validatorAutoOpenOnRed === 'boolean') return app1.validatorAutoOpenOnRed;
+        } catch (e) { /* fall through */ }
+        try { return localStorage.getItem(VAL_AUTO_OPEN_KEY) === 'true'; } catch (e) { return false; }
+    }
+
+    function setValidatorAutoOpen(on) {
+        try {
+            const gs = window.loadGlobalSettings?.() || {};
+            if (!gs.app1) gs.app1 = {};
+            gs.app1.validatorAutoOpenOnRed = !!on;
+            window.saveGlobalSettings?.('app1', gs.app1);
+            window.forceSyncToCloud?.();
+        } catch (e) { /* localStorage below still persists locally */ }
+        try { localStorage.setItem(VAL_AUTO_OPEN_KEY, on ? 'true' : 'false'); } catch (e) {}
+    }
+
+    let _valAutoTimer = null;
+    function _valAutoOpenAfterGen() {
+        if (!getValidatorAutoOpen()) return;
+        clearTimeout(_valAutoTimer);
+        // Let the post-generation passes (capacity repair gate, slot fixes)
+        // settle before judging the schedule.
+        _valAutoTimer = setTimeout(() => {
+            try {
+                if (window._daBuilderMode === 'auto' && typeof window.validateAutoSchedule === 'function') {
+                    // Auto builder → its own validator: silent probe, then modal.
+                    const res = window.validateAutoSchedule({ silent: true });
+                    if (res && Array.isArray(res.errors) && res.errors.length > 0) {
+                        console.log('🛡️ Auto-open (auto mode): ' + res.errors.length + ' red conflict(s) after generation');
+                        window.validateAutoSchedule();
+                    }
+                    return;
+                }
+                const res = validateSchedule({ silent: true });
+                if (res && Array.isArray(res.errors) && res.errors.length > 0) {
+                    console.log('🛡️ Auto-open: ' + res.errors.length + ' red conflict(s) found after generation');
+                    showValidationModal(res.errors, res.warnings);
+                }
+            } catch (e) { console.warn('🛡️ auto-open validation failed:', e); }
+        }, 1400);
+    }
+    try {
+        document.addEventListener('campistry-schedule-generated', _valAutoOpenAfterGen);
+        window.addEventListener('campistry-generation-complete', _valAutoOpenAfterGen);
+    } catch (e) { /* non-fatal */ }
 
     // =========================================================================
     // HELPERS
@@ -346,6 +438,19 @@
     }
 
     /**
+     * Compact time for the terse one-line messages: 170 → "2:50pm".
+     */
+    function _ct(minutes) {
+        return String(formatTime(minutes)).replace(/\s?(AM|PM)/i, (m) => m.trim().toLowerCase());
+    }
+    /**
+     * Compact time range: "2:50pm-4:00pm".
+     */
+    function _ctr(startMin, endMin) {
+        return _ct(startMin) + '-' + _ct(endMin);
+    }
+
+    /**
      * Format time from minutes
      */
     function formatTime(minutes) {
@@ -394,7 +499,22 @@
         // Resolve the leagues config (name → league object with .divisions).
         let leaguesCfg = window.masterLeagues || window.leaguesByName ||
             window.loadGlobalSettings?.()?.app1?.leagues || [];
-        const leagues = Array.isArray(leaguesCfg) ? leaguesCfg : Object.values(leaguesCfg || {});
+        const leagues = (Array.isArray(leaguesCfg) ? leaguesCfg : Object.values(leaguesCfg || {}))
+            .filter(l => l && l.enabled !== false);
+
+        // How many leagues cover each grade. An UNNAMED block can only be
+        // attributed to a league when it's the grade's ONLY league — with 2+
+        // leagues the block is ambiguous, and counting it toward every league
+        // fabricates mismatches (the grade's second game window belongs to its
+        // OTHER league, not this one).
+        const leagueCountByGrade = {};
+        leagues.forEach(l => {
+            if (!l || !Array.isArray(l.divisions)) return;
+            l.divisions.forEach(d => {
+                const k = String(d);
+                leagueCountByGrade[k] = (leagueCountByGrade[k] || 0) + 1;
+            });
+        });
 
         leagues.forEach(league => {
             if (!league || !Array.isArray(league.divisions) || league.divisions.length < 2) return;
@@ -408,8 +528,13 @@
                 Object.entries(slots).forEach(([slotIdxStr, entry]) => {
                     if (!entry) return;
                     // A named block that belongs to a *different* league isn't this
-                    // league's tile; unnamed blocks (auto-bound) are accepted.
-                    if (entry.leagueName && entry.leagueName !== league.name) return;
+                    // league's tile; unnamed blocks count only when this grade has
+                    // exactly one league (unambiguous auto-bind).
+                    if (entry.leagueName) {
+                        if (entry.leagueName !== league.name) return;
+                    } else if ((leagueCountByGrade[String(divName)] || 0) > 1) {
+                        return;
+                    }
                     const slot = divSlots[Number(slotIdxStr)];
                     if (!slot || slot.startMin == null || slot.endMin == null) return;
                     (byGrade[divName] = byGrade[divName] || new Set()).add(slot.startMin + '-' + slot.endMin);
@@ -419,9 +544,28 @@
             const grades = Object.keys(byGrade);
             if (grades.length < 2) return; // need 2+ grades to be "together"
 
-            // Aligned when every grade has the identical set of time spans.
-            const refKey = [...byGrade[grades[0]]].sort().join('|');
-            if (grades.every(g => [...byGrade[g]].sort().join('|') === refKey)) return;
+            // The grades play together when they share an IDENTICAL game window.
+            // Warn only for (1) overlapping-but-unequal windows (a broken shared
+            // game) or (2) no window common to every grade (never together).
+            // An extra non-colliding window in one grade is NOT a mismatch.
+            const bounds = (k) => k.split('-').map(Number);
+            let broken = false;
+            for (let i = 0; i < grades.length && !broken; i++) {
+                for (let j = i + 1; j < grades.length && !broken; j++) {
+                    for (const ka of byGrade[grades[i]]) {
+                        if (broken) break;
+                        const [as, ae] = bounds(ka);
+                        for (const kb of byGrade[grades[j]]) {
+                            if (ka === kb) continue;
+                            const [bs, be] = bounds(kb);
+                            if (as < be && ae > bs) { broken = true; break; }
+                        }
+                    }
+                }
+            }
+            const hasCommonSpan = [...byGrade[grades[0]]]
+                .some(k => grades.every(g => byGrade[g].has(k)));
+            if (!broken && hasCommonSpan) return;
 
             const spanLabel = (k) => {
                 const [s, e] = k.split('-').map(Number);
@@ -434,9 +578,7 @@
                 return `<u>${g}</u> (${spans.join(', ')})`;
             });
             warnings.push(
-                `<strong>League Time Mismatch:</strong> In league <u>${league.name}</u>, ` +
-                `grades that play together have different league game times: ${parts.join(' vs ')}. ` +
-                `Set them to the same start and end time so they share one game.`
+                `[[League times]] <strong>${league.name}</strong> - ${parts.join(' vs ')} - no shared game time`
             );
         });
 
@@ -560,51 +702,43 @@
                 // =====================================================
                 if (uniqueDivisions.length > 1) {
                     
+                    const ctLabel = _ctr(timeStart, timeEnd);
+
                     // --- not_sharable: NO sharing at all ---
                     if (sharingType === 'not_sharable') {
-                        const bunkList = group.map(g => `${g.bunk} (Div ${g.divName})`).join(', ');
+                        const bunkList = group.map(g => `${g.bunk} (Div. ${g.divName})`).join(', ');
                         errors.push(
-                            `<strong>Cross-Division Conflict:</strong> <u>${fieldName}</u> is <strong>not sharable</strong> ` +
-                            `but used by <strong>${group.length}</strong> bunks from different divisions during ${timeLabel}<br>` +
-                            `<small style="color:#666;">Divisions: ${uniqueDivisions.join(', ')} | Bunks: ${bunkList}</small>`
+                            `[[Field conflict]] <strong>${fieldName}</strong> ${ctLabel} - ${bunkList} - not sharable across divisions`
                         );
                         return; // Don't also report capacity for this group
                     }
-                    
+
                     // --- same_division: only same div can share ---
                     if (sharingType === 'same_division') {
-                        const bunkList = group.map(g => `${g.bunk} (Div ${g.divName})`).join(', ');
+                        const bunkList = group.map(g => `${g.bunk} (Div. ${g.divName})`).join(', ');
                         errors.push(
-                            `<strong>Cross-Division Conflict:</strong> <u>${fieldName}</u> can only be shared within ` +
-                            `the <strong>same division</strong>, but used by divisions ${uniqueDivisions.join(', ')} during ${timeLabel}<br>` +
-                            `<small style="color:#666;">Bunks: ${bunkList}</small>`
+                            `[[Field conflict]] <strong>${fieldName}</strong> ${ctLabel} - ${bunkList} - same-division sharing only`
                         );
                         return;
                     }
-                    
+
                     // --- custom: only allowed divisions can share ---
                     if (sharingType === 'custom' && allowedDivisions.length > 0) {
                         const disallowedDivs = uniqueDivisions.filter(d => !allowedDivisions.includes(d));
                         if (disallowedDivs.length > 0) {
-                            const bunkList = group.map(g => `${g.bunk} (Div ${g.divName})`).join(', ');
                             errors.push(
-                                `<strong>Cross-Division Conflict:</strong> <u>${fieldName}</u> shared by divisions not in its allowed list during ${timeLabel}<br>` +
-                                `<small style="color:#666;">Allowed: ${allowedDivisions.join(', ')} | Found: ${uniqueDivisions.join(', ')}</small><br>` +
-                                `<small style="color:#666;">Bunks: ${bunkList}</small>`
+                                `[[Field conflict]] <strong>${fieldName}</strong> ${ctLabel} - Div. ${disallowedDivs.join(', Div. ')} - not on the field's allowed sharing list`
                             );
                             return;
                         }
                     }
-                    
+
                     // --- type='all': cross-div is OK, but still check global capacity ---
                     if (sharingType === 'all' && maxCapacity < 999) {
                         if (group.length > maxCapacity) {
-                            const bunkList = group.map(g => `${g.bunk} (Div ${g.divName})`).join(', ');
+                            const bunkList = group.map(g => `${g.bunk} (Div. ${g.divName})`).join(', ');
                             errors.push(
-                                `<strong>Capacity Exceeded:</strong> <u>${fieldName}</u> used by ` +
-                                `<strong>${group.length}</strong> bunks across divisions during ${timeLabel} ` +
-                                `(Max: ${maxCapacity})<br>` +
-                                `<small style="color:#666;">Bunks: ${bunkList}</small>`
+                                `[[Over capacity]] <strong>${fieldName}</strong> ${ctLabel} - ${group.length} bunks (${bunkList}) - over capacity (max ${maxCapacity})`
                             );
                         }
                         return;
@@ -623,14 +757,10 @@
                     if (divUsages.length > maxCapacity) {
                         const divTimeStart = Math.min(...divUsages.map(g => g.startMin));
                         const divTimeEnd = Math.max(...divUsages.map(g => g.endMin));
-                        const divTimeLabel = `${formatTime(divTimeStart)} - ${formatTime(divTimeEnd)}`;
                         const bunkList = divUsages.map(g => g.bunk).join(', ');
-                        
+
                         errors.push(
-                            `<strong>Capacity Exceeded:</strong> <u>${fieldName}</u> used by ` +
-                            `<strong>${divUsages.length}</strong> bunks in Division ${divName} at ${divTimeLabel} ` +
-                            `(Max Capacity: ${maxCapacity})<br>` +
-                            `<small style="color:#666;">Bunks: ${bunkList}</small>`
+                            `[[Over capacity]] <strong>${fieldName}</strong> ${_ctr(divTimeStart, divTimeEnd)} - ${divUsages.length} bunks in Div. ${divName} (${bunkList}) - over capacity (max ${maxCapacity})`
                         );
                     }
                 });
@@ -722,9 +852,7 @@
                 if (occurrences.length > 1) {
                     const timeLabels = occurrences.map(o => o.timeLabel).join(', ');
                     errors.push(
-                        `<strong>Same-Day Repetition:</strong> <u>${bunk}</u>${divName ? ` (Div ${divName})` : ''} has ` +
-                        `<strong>"${activity}"</strong> scheduled <strong>${occurrences.length} times</strong> ` +
-                        `(at: ${timeLabels})`
+                        `[[Repeat]] <strong>${bunk}</strong>${divName ? ` (Div. ${divName})` : ''} - ${activity} ${occurrences.length}× today (${timeLabels})`
                     );
                 }
             });
@@ -769,12 +897,9 @@
                     // Check if the activities are different (which means different activities at same field — might be intentional)
                     const uniqueActivities = [...new Set(occurrences.map(o => o.activity?.toLowerCase()))];
                     
-                    const timeLabels = occurrences.map(o => `${o.timeLabel} (${o.activity})`).join(', ');
+                    const timeLabels = occurrences.map(o => `${o.timeLabel} ${o.activity}`).join(', ');
                     warnings.push(
-                        `<strong>Field Reuse:</strong> <u>${bunk}</u>${divName ? ` (Div ${divName})` : ''} uses ` +
-                        `field <strong>"${field}"</strong> ${occurrences.length} times today` +
-                        `${uniqueActivities.length > 1 ? ' (different activities)' : ''}<br>` +
-                        `<small style="color:#666;">At: ${timeLabels}</small>`
+                        `[[Field reuse]] <strong>${bunk}</strong>${divName ? ` (Div. ${divName})` : ''} - ${field} ${occurrences.length}× today (${timeLabels})`
                     );
                 }
             });
@@ -826,8 +951,7 @@
                     
                     if (!hasActivity) {
                         warnings.push(
-                            `<strong>Missing Activity:</strong> <u>${bunk}</u> (Div ${divName}) ` +
-                            `may be missing <strong>${required}</strong>`
+                            `[[Missing]] <strong>${bunk}</strong> (Div. ${divName}) - no ${required} today`
                         );
                     }
                 });
@@ -875,12 +999,11 @@
                 // Only warn if ALL bunks are empty for this slot
                 if (emptyCount === totalBunks && totalBunks > 0) {
                     const timeLabel = (slotInfo.startMin !== undefined)
-                        ? `${formatTime(slotInfo.startMin)} - ${formatTime(slotInfo.endMin)}`
-                        : `Slot ${slotIdx}`;
-                    
+                        ? _ctr(slotInfo.startMin, slotInfo.endMin)
+                        : `slot ${slotIdx}`;
+
                     warnings.push(
-                        `<strong>Empty Slot:</strong> Division ${divName} slot ${slotIdx} ` +
-                        `(${timeLabel}) has <strong>all ${totalBunks} bunks empty</strong>`
+                        `[[Empty]] <strong>Div. ${divName}</strong> ${timeLabel} - all ${totalBunks} bunks empty`
                     );
                 }
             });
@@ -908,8 +1031,7 @@
                 // Bunk completely missing from assignments
                 if (!slots) {
                     warnings.push(
-                        `<strong>Unassigned Bunk:</strong> <u>${bunk}</u> (Div ${divName}) ` +
-                        `has <strong>no schedule data at all</strong>`
+                        `[[Empty]] <strong>${bunk}</strong> (Div. ${divName}) - no schedule at all`
                     );
                     return;
                 }
@@ -921,8 +1043,7 @@
                 
                 if (filledSlots.length === 0 && !hasAnyLeague) {
                     warnings.push(
-                        `<strong>Empty Bunk:</strong> <u>${bunk}</u> (Div ${divName}) ` +
-                        `has <strong>all ${divSlots.length} slots empty</strong>`
+                        `[[Empty]] <strong>${bunk}</strong> (Div. ${divName}) - all ${divSlots.length} slots empty`
                     );
                 }
             });
@@ -1112,11 +1233,9 @@
                 try { allowed = window.isSpecialAvailableForBunk(actName, divName, bunk, gs) !== false; } catch (e) { /* fail open */ }
                 if (allowed) return;
                 const si = divSlots[idx];
-                const when = entry._startMin != null ? formatTime(entry._startMin) : (si ? formatTime(si.startMin) : 'slot ' + idx);
+                const when = entry._startMin != null ? _ct(entry._startMin) : (si ? _ct(si.startMin) : 'slot ' + idx);
                 errors.push(
-                    `<strong>Special Access Violation:</strong> <u>${bunk}</u> (Div ${divName}) received ` +
-                    `<strong>${actName}</strong> at ${when}, but this special is not allowed for this grade/bunk ` +
-                    `(access restriction or per-date bunk-only rule)`
+                    `[[No access]] <strong>${bunk}</strong> (Div. ${divName}) ${when} - ${actName} - not allowed for this grade/bunk`
                 );
             });
         });
@@ -1124,16 +1243,49 @@
     }
 
     /**
-     * ★ v3.1 CHECK 10: specials/fields toggled OFF in Facilities
-     * (available === false) must never appear in the generated schedule.
+     * ★ v3.1 CHECK 10 (extended v3.4): specials/fields toggled OFF — either in
+     * Facilities (available === false) or for TODAY in Daily Adjustments'
+     * Resources panel (overrides.disabledFields / disabledSpecials) — must not
+     * appear in the schedule. Regular placements are ERRORS (the generator
+     * should never have used them). PINNED tiles are scanned too: a pinned
+     * tile that names or reserves a turned-off resource raises a WARNING
+     * (user-placed, so it's a heads-up, deduped per division+tile+resource).
      */
+    function getDayDisabledResources() {
+        let ov = null;
+        try { ov = (window.loadCurrentDailyData?.() || {}).overrides || null; } catch (e) { /* fall through */ }
+        if (!ov) {
+            try {
+                const raw = localStorage.getItem('campResourceOverrides_' + (window.currentScheduleDate || ''));
+                if (raw) ov = JSON.parse(raw)?.overrides || null;
+            } catch (e) { /* no fallback */ }
+        }
+        return {
+            fields: (ov?.disabledFields || []).map(String),
+            specials: (ov?.disabledSpecials || []).map(String)
+        };
+    }
+
     function checkDisabledResources(assignments, bunkDivMap, divisionTimes) {
         const errors = [];
+        const warnings = [];
+
+        // Master Facilities toggles
         const offSpecials = new Map();
-        getSpecialsConfig().forEach(s => { if (s.available === false) offSpecials.set(_lc(s.name), s.name); });
+        getSpecialsConfig().forEach(s => { if (s.available === false) offSpecials.set(_lc(s.name), { name: s.name, why: 'turned off in Facilities' }); });
         const offFields = new Map();
-        getFieldsConfig().forEach(f => { if (f.available === false) offFields.set(_lc(f.name), f.name); });
-        if (!offSpecials.size && !offFields.size) return errors;
+        getFieldsConfig().forEach(f => { if (f.available === false) offFields.set(_lc(f.name), { name: f.name, why: 'turned off in Facilities' }); });
+
+        // Per-day toggles (Daily Adjustments → Resources)
+        const day = getDayDisabledResources();
+        day.fields.forEach(n => { if (!offFields.has(_lc(n))) offFields.set(_lc(n), { name: n, why: 'turned off in Resources (today)' }); });
+        day.specials.forEach(n => { if (!offSpecials.has(_lc(n))) offSpecials.set(_lc(n), { name: n, why: 'turned off in Resources (today)' }); });
+
+        if (!offSpecials.size && !offFields.size) return { errors, warnings };
+
+        const offAny = (key) => offFields.get(key) || offSpecials.get(key) || null;
+        const pinSeen = new Set();
+
         Object.entries(assignments).forEach(([bunk, slots]) => {
             const divName = bunkDivMap[String(bunk)] || '?';
             if (!Array.isArray(slots)) return;
@@ -1143,22 +1295,54 @@
                 const actName = entry._activity || entry.sport;
                 const fName = normalizeFieldName(entry.field);
                 const si = divSlots[idx];
-                const when = entry._startMin != null ? formatTime(entry._startMin) : (si ? formatTime(si.startMin) : 'slot ' + idx);
-                if (actName && offSpecials.has(_lc(actName))) {
-                    errors.push(
-                        `<strong>Disabled Resource:</strong> <u>${bunk}</u> (Div ${divName}) is scheduled for ` +
-                        `<strong>${offSpecials.get(_lc(actName))}</strong> at ${when}, but that special is turned OFF in Facilities`
-                    );
+                const when = entry._startMin != null ? _ct(entry._startMin) : (si ? _ct(si.startMin) : 'slot ' + idx);
+
+                // Pinned reservation surface: real facilities live in
+                // _reservedFields/_location (entry.field is the EVENT name).
+                const reserved = [];
+                if (Array.isArray(entry._reservedFields)) entry._reservedFields.forEach(x => { if (x) reserved.push(String(x)); });
+                if (typeof entry._location === 'string' && entry._location.trim()) reserved.push(entry._location);
+                const isPin = entry._pinned === true || reserved.length > 0;
+
+                if (!isPin) {
+                    if (actName && offSpecials.has(_lc(actName))) {
+                        const h = offSpecials.get(_lc(actName));
+                        errors.push(
+                            `[[Turned off]] <strong>${bunk}</strong> (Div. ${divName}) ${when} - ${h.name} - ${h.why}`
+                        );
+                    }
+                    if (fName && offFields.has(fName)) {
+                        const h = offFields.get(fName);
+                        errors.push(
+                            `[[Turned off]] <strong>${bunk}</strong> (Div. ${divName}) ${when} - ${h.name} - ${h.why}`
+                        );
+                    }
+                    return;
                 }
-                if (fName && offFields.has(fName)) {
+
+                // ── Pinned tile: warn (user-placed) — once per division+tile+resource ──
+                const label = actName || (typeof entry.field === 'string' ? entry.field : '') || 'pinned event';
+                const hits = [];
+                if (actName && offSpecials.has(_lc(actName))) hits.push(offSpecials.get(_lc(actName)));
+                if (fName && offAny(fName)) hits.push(offAny(fName));
+                reserved.forEach(r => {
+                    const h = offAny(_lc(r));
+                    if (h) hits.push(h);
+                });
+                hits.forEach(h => {
+                    const key = divName + '|' + _lc(label) + '|' + _lc(h.name) + '|' + (entry._startMin != null ? entry._startMin : idx);
+                    if (pinSeen.has(key)) return;
+                    pinSeen.add(key);
+                    // ★ v3.5 severity re-tier (user decision): a pinned tile on
+                    //   a turned-off resource is a MUST-FIX, same as regular
+                    //   placements.
                     errors.push(
-                        `<strong>Disabled Resource:</strong> <u>${bunk}</u> (Div ${divName}) is placed on ` +
-                        `<strong>${offFields.get(fName)}</strong> at ${when}, but that field is turned OFF in Facilities`
+                        `[[Turned off]] <strong>${label}</strong> (Div. ${divName}) ${when} - ${h.name} - ${h.why}`
                     );
-                }
+                });
             });
         });
-        return errors;
+        return { errors, warnings };
     }
 
     /**
@@ -1198,16 +1382,48 @@
                 try { blocked = U.isBunkRestrictedFromTarget(bunk, actName, rawField || null, divName) === true; } catch (e) { /* fail open */ }
                 if (!blocked) return;
                 const si = divSlots[idx];
-                const when = entry._startMin != null ? formatTime(entry._startMin) : (si ? formatTime(si.startMin) : 'slot ' + idx);
+                const when = entry._startMin != null ? _ct(entry._startMin) : (si ? _ct(si.startMin) : 'slot ' + idx);
                 const target = actName && rawField && _lc(actName) !== _lc(rawField)
-                    ? `${actName} on <u>${rawField}</u>` : (actName || rawField);
+                    ? `${actName} on ${rawField}` : (actName || rawField);
                 errors.push(
-                    `<strong>Bunk-Only Violation:</strong> <u>${bunk}</u> (Div ${divName}) is scheduled for ` +
-                    `<strong>${target}</strong> at ${when}, but today's Bunk-Only Access rule reserves it for other bunk(s)`
+                    `[[Bunk-only]] <strong>${bunk}</strong> (Div. ${divName}) ${when} - ${target} - bunk-only access reserves it for other bunks today`
                 );
             });
         });
         return errors;
+    }
+
+    /**
+     * ★ CHECK 11b: AVOID-UNLESS-NEEDED SPORTS (Rules tab → "Don't Give Unless
+     * Needed"). SOFT rule — placement is legal when the alternative was a Free
+     * slot, so this reports a WARNING (not an error) wherever a rule-listed
+     * sport landed on the rule's grade as a regular activity. League entries
+     * are exempt.
+     */
+    function checkAvoidUnlessNeededSports(assignments, bunkDivMap, divisionTimes) {
+        const warnings = [];
+        const U = window.SchedulerCoreUtils;
+        if (!U || typeof U.isSportAvoidedUnlessNeeded !== 'function') return warnings;
+        Object.entries(assignments).forEach(([bunk, slots]) => {
+            const divName = bunkDivMap[String(bunk)];
+            if (!divName || !Array.isArray(slots)) return;
+            const divSlots = divisionTimes[divName] || [];
+            slots.forEach((entry, idx) => {
+                if (!entry || entry.continuation || isTransitionEntry(entry) || isLeagueEntry(entry)) return;
+                const act = entry._activity || entry.sport || null;
+                const actName = typeof act === 'string' ? act : act?.name;
+                if (!actName) return;
+                let avoided = false;
+                try { avoided = U.isSportAvoidedUnlessNeeded(divName, actName) === true; } catch (e) { /* fail open */ }
+                if (!avoided) return;
+                const si = divSlots[idx];
+                const when = entry._startMin != null ? _ct(entry._startMin) : (si ? _ct(si.startMin) : 'slot ' + idx);
+                warnings.push(
+                    `[[Avoid-listed]] <strong>${bunk}</strong> (Div. ${divName}) ${when} - ${actName} - on the "Don't Give Unless Needed" list; placed only when nothing else fit`
+                );
+            });
+        });
+        return warnings;
     }
 
     /**
@@ -1228,19 +1444,460 @@
                 if (group.length < 2) return;
                 const kinds = new Set(group.map(g => g.kind));
                 if (kinds.size === 1 && kinds.has('bunk')) return;   // CHECK 1 covers it
-                if (kinds.size === 1 && kinds.has('event')) return;  // pinned-vs-pinned: by design
+                if (kinds.size === 1 && kinds.has('event')) return;  // pin-vs-pin: CHECK 17 (span-aware)
                 const owners = [...new Set(group.map(g => g.owner))];
                 if (owners.length < 2) return;
                 const sig = group[0].fkey + '|' + owners.sort().join(',') + '|' + Math.min(...group.map(g => g.startMin));
                 if (seen.has(sig)) return;
                 seen.add(sig);
-                const timeLabel = formatTime(Math.min(...group.map(g => g.startMin))) + ' - ' +
-                                  formatTime(Math.max(...group.map(g => g.endMin)));
-                const occ = group.map(g => `${g.owner} [${g.kind}] ${formatTime(g.startMin)}-${formatTime(g.endMin)}`).join(' · ');
+                const timeLabel = _ctr(Math.min(...group.map(g => g.startMin)), Math.max(...group.map(g => g.endMin)));
                 errors.push(
-                    `<strong>League/Event Field Conflict:</strong> <u>${group[0].facility}</u> is double-booked during ${timeLabel}<br>` +
-                    `<small style="color:#666;">${occ}</small>`
+                    `[[Double-booked]] <strong>${group[0].facility}</strong> ${timeLabel} - ${owners.join(' + ')} - double-booked`
                 );
+            });
+        });
+        return errors;
+    }
+
+    /**
+     * ★ CHECK 17: PINNED-vs-PINNED facility conflicts (span-aware).
+     * Two pinned tiles reserving the same facility at overlapping times used to
+     * be exempt ("user-placed, by design"). With multi-grade tile spanning the
+     * intent is now expressible: tiles linked into one span (shared spanGroup)
+     * are ONE joint activity and pass; unlinked colliding pins are flagged.
+     * Facility capacity still applies — a facility that allows N simultaneous
+     * groups passes with up to N occupants (e.g. an open/sharable facility).
+     */
+    function annotatePinSpans(usages) {
+        // The generated entries don't carry spanGroup — read it off the day's
+        // skeleton tiles (Daily Adjustments' live skeleton, falling back to the
+        // builder's) by matching division + overlapping time + facility/event.
+        const skelRaw = (Array.isArray(window.dailyOverrideSkeleton) && window.dailyOverrideSkeleton.length)
+            ? window.dailyOverrideSkeleton
+            : (window.MasterSchedulerInternal?.dailySkeleton || []);
+        const spanTiles = (skelRaw || []).filter(t => t && t.spanGroup);
+        if (!spanTiles.length) return usages;
+        const parse = (t) => window.SchedulerCoreUtils?.parseTimeToMinutes?.(t) ?? null;
+
+        usages.forEach(u => {
+            if (u.kind !== 'event') return;
+            const hit = spanTiles.find(t => {
+                if (String(t.division) !== String(u.divName)) return false;
+                const ts = parse(t.startTime), te = parse(t.endTime);
+                if (ts == null || te == null) return false;
+                if (!(ts < u.endMin && te > u.startMin)) return false;
+                const locs = [];
+                if (t.location) locs.push(t.location);
+                if (t.swimLocation) locs.push(t.swimLocation);
+                if (Array.isArray(t.reservedFields)) locs.push(...t.reservedFields);
+                if (locs.some(l => normalizeFieldName(l) === u.fkey)) return true;
+                // Fallback: same event name (pin whose facility came from defaults)
+                const evName = _lc(t.event || '');
+                return !!evName && evName === _lc(u.activity || '');
+            });
+            if (hit) u.spanGroup = hit.spanGroup;
+        });
+        return usages;
+    }
+
+    function checkPinnedTileConflicts(usages, activityProperties) {
+        const errors = [];
+        const events = usages.filter(u => u.kind === 'event');
+        if (events.length < 2) return errors;
+
+        const byF = {};
+        events.forEach(u => { (byF[u.fkey] = byF[u.fkey] || []).push(u); });
+        const seen = new Set();
+
+        Object.values(byF).forEach(list => {
+            if (list.length < 2) return;
+            buildOverlapGroups(list).forEach(group => {
+                if (group.length < 2) return;
+
+                // Members sharing a spanGroup are ONE joint reservation
+                // ("together" — the grades do this activity as one).
+                const occupants = new Map(); // occupant key → members
+                group.forEach((g, i) => {
+                    const k = g.spanGroup ? ('span:' + g.spanGroup) : ('u:' + i);
+                    if (!occupants.has(k)) occupants.set(k, []);
+                    occupants.get(k).push(g);
+                });
+                if (occupants.size < 2) return; // all linked → together → pass
+
+                // Sharing-config exemption — the TYPE matters, not just the
+                // number: 'all' facilities are open to everyone; 'custom' only
+                // to its listed divisions; 'same_division' only within one
+                // grade. A plain capacity of 2 (meant for bunks of one grade
+                // sharing a court) must NOT excuse two different grades' pins.
+                const rules = getSharingRules(group[0].fkey, activityProperties);
+                const occDivs = [...new Set(group.map(g => String(g.divName)))];
+                let allowedByConfig = false;
+                if (rules.sharingType === 'all') {
+                    allowedByConfig = occupants.size <= rules.maxCapacity;
+                } else if (rules.sharingType === 'same_division') {
+                    allowedByConfig = occDivs.length === 1 && occupants.size <= rules.maxCapacity;
+                } else if (rules.sharingType === 'custom') {
+                    const allowed = new Set((rules.allowedDivisions || []).map(String));
+                    allowedByConfig = occDivs.every(d => allowed.has(d)) && occupants.size <= rules.maxCapacity;
+                }
+                if (allowedByConfig) return;
+
+                const owners = [...new Set(group.map(g => g.owner))];
+                if (owners.length < 2) return;
+                const sig = group[0].fkey + '|' + owners.sort().join(',') + '|' + Math.min(...group.map(g => g.startMin));
+                if (seen.has(sig)) return;
+                seen.add(sig);
+
+                const timeLabel = _ctr(Math.min(...group.map(g => g.startMin)), Math.max(...group.map(g => g.endMin)));
+                errors.push(
+                    `[[Pinned overlap]] <strong>${group[0].facility}</strong> ${timeLabel} - pinned by ${owners.join(' + ')} - not linked (stretch one tile across the grades to share)`
+                );
+            });
+        });
+        return errors;
+    }
+
+    /**
+     * ★ v3.3 CHECK 16: ELECTIVE facility reservations. An elective tile is a
+     * fancy custom-pinned tile — once it reserves its activities/locations for a
+     * division's window, nothing from ANOTHER division may sit on those facilities
+     * at that time. Electives are invisible to every other check because they
+     * create NO schedule entry (they render from the skeleton block and only
+     * reserve their facilities), so CHECK 1 / CHECK 12 never see them. This check
+     * rebuilds the elective reservations straight from the skeleton (the same
+     * getFieldReservationsFromSkeleton the generator uses) and flags any bunk in a
+     * DIFFERENT division whose activity occupies a reserved facility during the
+     * elective's window. The elective's OWN grade is exempt (division-lock
+     * semantics). Pinned-tile reservations are NOT re-checked here — those tiles
+     * DO fill entries (with _reservedFields) so CHECK 12 already covers them.
+     */
+
+    // ★ PLAYOFF reserved fields. Each playoff round reserves fields for the
+    //   teams that are OUT — locked exclusively for the league's divisions
+    //   during the league period (a pinned-elective-style hold). Nothing from
+    //   any OTHER division, and no OTHER league's game, may sit on those
+    //   fields at that time. The league's own divisions are exempt: that's
+    //   where the not-playing kids get routed. Reservations are rebuilt from
+    //   today's playoff league tiles (_playoffRound + _leagueName) + the
+    //   league's playoff config, so the check works on reload too.
+    function checkPlayoffReservations(assignments, bunkDivMap, divisionTimes) {
+        const errors = [];
+        const PM = window.PlayoffMode;
+        if (!PM || !PM.getReservedForRound) return errors;
+
+        const leagues = [];
+        const lbn = window.leaguesByName || {};
+        Object.keys(lbn).forEach(k => { if (lbn[k] && lbn[k].name) leagues.push(lbn[k]); });
+        const slz = window.specialtyLeagues || {};
+        Object.keys(slz).forEach(k => { if (slz[k] && slz[k].name) leagues.push(slz[k]); });
+        if (!leagues.length) return errors;
+
+        const _fmt = m => Math.floor(m / 60) + ':' + String(m % 60).padStart(2, '0');
+
+        // 1. Today's playoff league tiles -> active reservations per field
+        const resMap = {};   // field(lc) -> [{fieldName, league, round, divisions[], startMin, endMin}]
+        Object.keys(assignments).forEach(bunk => {
+            const arr = assignments[bunk];
+            if (!Array.isArray(arr)) return;
+            const grade = bunkDivMap[String(bunk)];
+            const gSlots = (divisionTimes && divisionTimes[grade]) || [];
+            arr.forEach((entry, idx) => {
+                if (!entry || entry.continuation) return;
+                const rnd = entry._playoffRound;
+                const lgName = entry._leagueName;
+                if (!rnd || !lgName) return;
+                const lg = leagues.find(l => l.name === lgName);
+                if (!lg || !lg.playoff || !lg.playoff.enabled) return;
+                const reserved = PM.getReservedForRound(lg, rnd) || [];
+                if (!reserved.length) return;
+                let sM = entry._startMin, eM = entry._endMin;
+                if (sM == null || eM == null) { const sl = gSlots[idx]; if (sl) { sM = sl.startMin; eM = sl.endMin; } }
+                if (sM == null || eM == null) return;
+                const divs = (lg.divisions || []).map(String);
+                reserved.forEach(f => {
+                    const key = String(f).toLowerCase().trim();
+                    if (!resMap[key]) resMap[key] = [];
+                    if (resMap[key].some(r => r.league === lgName && r.startMin === sM)) return;
+                    resMap[key].push({ fieldName: String(f), league: lgName, round: rnd, divisions: divs, startMin: sM, endMin: eM });
+                });
+            });
+        });
+        if (!Object.keys(resMap).length) return errors;
+
+        // Resolve special-activity rooms so a special placed on a reserved room hits.
+        const specLoc = {};
+        const gs = (window.loadGlobalSettings && window.loadGlobalSettings()) || window.globalSettings || {};
+        (((gs.app1 && gs.app1.specialActivities) || gs.specialActivities || [])).forEach(s => {
+            if (s && s.name && s.location) { const n = String(s.name).toLowerCase().trim(); if (!specLoc[n]) specLoc[n] = s.location; }
+        });
+        const IGN = { 'free': 1, 'free play': 1, 'lunch': 1, 'snacks': 1, 'dismissal': 1, 'transition': 1, 'buffer': 1 };
+
+        const seen = new Set();
+        Object.keys(assignments).forEach(bunk => {
+            const arr = assignments[bunk];
+            if (!Array.isArray(arr)) return;
+            const grade = bunkDivMap[String(bunk)];
+            const gSlots = (divisionTimes && divisionTimes[grade]) || [];
+            arr.forEach((entry, idx) => {
+                if (!entry || entry.continuation) return;
+                let sM = entry._startMin, eM = entry._endMin;
+                if (sM == null || eM == null) { const sl = gSlots[idx]; if (sl) { sM = sl.startMin; eM = sl.endMin; } }
+                if (sM == null || eM == null) return;
+
+                // (a) another league's GAME on a reserved field — game fields
+                //     live in the tile's matchup strings ("A vs B @ Field (sport)")
+                if (entry._leagueName && Array.isArray(entry._allMatchups)) {
+                    entry._allMatchups.forEach(line => {
+                        const m = /@\s*([^()]+?)(?:\s*\(|\s*$)/.exec(String(line));
+                        if (!m) return;
+                        const f = m[1].trim().toLowerCase();
+                        (resMap[f] || []).forEach(r => {
+                            if (r.league === entry._leagueName) return;   // its own reservation
+                            if (!(r.startMin < eM && r.endMin > sM)) return;
+                            const sig = 'lg|' + f + '|' + entry._leagueName + '|' + sM;
+                            if (seen.has(sig)) return;
+                            seen.add(sig);
+                            errors.push({
+                                type: 'playoff_reservation',
+                                message: 'Playoff Reserved Field Conflict: league "' + entry._leagueName + '" has a game on ' +
+                                    r.fieldName + ' at ' + _fmt(sM) + '-' + _fmt(eM) + ', but that field is reserved by ' +
+                                    r.league + ' (Playoff R' + r.round + ') for its teams that are out'
+                            });
+                        });
+                    });
+                    return;   // league tile handled — no per-bunk field to check
+                }
+
+                const act = entry._activity || entry.field;
+                if (!act || IGN[String(act).toLowerCase().trim()]) return;
+                const cands = new Set();
+                const add = f => { if (f && typeof f === 'string' && f.trim() && f !== 'Free') cands.add(f.trim()); };
+                add(entry.field); add(entry._location);
+                if (Array.isArray(entry._reservedFields)) entry._reservedFields.forEach(add);
+                add(specLoc[String(act).toLowerCase().trim()]);
+                try { if (window.getLocationForActivity) add(window.getLocationForActivity(act)); } catch (e) { /* ignore */ }
+                for (const cf of cands) {
+                    const list = resMap[String(cf).toLowerCase().trim()];
+                    if (!list) continue;
+                    const overlapping = list.filter(r => r.startMin < eM && r.endMin > sM);
+                    if (!overlapping.length) continue;
+                    // Admitted when ANY overlapping reservation lists this division —
+                    // two leagues may legitimately reserve the same field/period,
+                    // and each league's own divisions belong there.
+                    if (overlapping.some(r => r.divisions.some(d => String(d) === String(grade)))) continue;
+                    const r = overlapping[0];
+                    const sig = cf + '|' + bunk + '|' + sM;
+                    if (seen.has(sig)) continue;
+                    seen.add(sig);
+                    errors.push({
+                        type: 'playoff_reservation',
+                        message: 'Playoff Reserved Field Conflict: ' + bunk + ' (' + grade + ') has "' + act + '" on ' + cf +
+                            ' at ' + _fmt(sM) + '-' + _fmt(eM) + ', but that field is reserved by ' + r.league +
+                            ' (Playoff R' + r.round + ') for its teams that are out'
+                    });
+                }
+            });
+        });
+        return errors;
+    }
+
+    // ★ PLAYOFF FIELD SHORTAGE — "you scheduled 6 Baseball games but only 5
+    //   fields host Baseball". When a playoff round asks for more simultaneous
+    //   games of a sport than there are fields to hold them, the league engine
+    //   drops the extra matchups with only a console note. Re-derive the drop
+    //   here: every playoff tile placed today is compared against its round's
+    //   definition in the Playoff Hub; any still-undecided matchup that never
+    //   made it onto the tile is reported, with the field math that explains it.
+    function checkPlayoffFieldShortages(assignments) {
+        const errors = [];
+        const PM = window.PlayoffMode;
+        if (!PM || !PM.getRoundByNumber) return errors;
+
+        const leagues = [];
+        const lbn = window.leaguesByName || {};
+        Object.keys(lbn).forEach(k => { if (lbn[k] && lbn[k].name) leagues.push({ lg: lbn[k], specialty: false }); });
+        const slz = window.specialtyLeagues || {};
+        Object.keys(slz).forEach(k => { if (slz[k] && slz[k].name) leagues.push({ lg: slz[k], specialty: true }); });
+        if (!leagues.length) return errors;
+
+        // Global fields config → which fields can host a sport (message math).
+        const gsPF = (window.loadGlobalSettings && window.loadGlobalSettings()) || window.globalSettings || {};
+        const fieldsCfg = ((gsPF.app1 && gsPF.app1.fields) || gsPF.fields || []).filter(f => f && f.name);
+
+        // One representative tile per league+round (every bunk holds a copy).
+        const tiles = {};
+        Object.keys(assignments).forEach(bunk => {
+            const arr = assignments[bunk];
+            if (!Array.isArray(arr)) return;
+            arr.forEach(entry => {
+                if (!entry || entry.continuation) return;
+                if (!entry._playoffRound || !entry._leagueName) return;
+                if (entry._playoffTBD) return;                                 // regular TBD tile — places no games
+                if (/\bTBD\b/.test(String(entry._gameLabel || ''))) return;    // specialty TBD tile
+                if ((entry._allMatchups || []).some(l => /winners TBD/i.test(String(l)))) return;
+                const key = entry._leagueName + '|' + entry._playoffRound;
+                if (!tiles[key]) tiles[key] = entry;
+            });
+        });
+
+        Object.keys(tiles).forEach(key => {
+            const entry = tiles[key];
+            const rec = leagues.find(x => x.lg.name === entry._leagueName);
+            if (!rec || !rec.lg.playoff || !rec.lg.playoff.enabled) return;
+            const lg = rec.lg;
+            const round = PM.getRoundByNumber(lg, entry._playoffRound);
+            if (!round || !Array.isArray(round.matchups)) return;
+
+            // What the user asked this round to play (fully filled, undecided).
+            const expected = round.matchups.filter(m =>
+                m && m.teamA && m.teamB && m.teamA !== 'BYE' && m.teamB !== 'BYE' && !m.winner);
+            if (!expected.length) return;
+
+            // What actually landed on the tile: "A vs B @ Field (Sport)" (regular)
+            // or "A vs B — Field" (specialty). Bye/Electives rows don't match.
+            const placed = new Set();
+            (entry._allMatchups || []).forEach(line => {
+                const m = /^(.+?)\s+vs\s+(.+?)\s+(?:@|—)\s/.exec(String(line));
+                if (m) placed.add(m[1].trim().toLowerCase() + '|' + m[2].trim().toLowerCase());
+            });
+
+            const missing = expected.filter(mu =>
+                !placed.has(mu.teamA.toLowerCase() + '|' + mu.teamB.toLowerCase()) &&
+                !placed.has(mu.teamB.toLowerCase() + '|' + mu.teamA.toLowerCase()));
+            if (!missing.length) return;
+
+            const reserved = new Set((PM.getReservedForRound ? (PM.getReservedForRound(lg, entry._playoffRound) || []) : []).map(String));
+            const bySport = {};
+            missing.forEach(mu => { const s = mu.sport || ''; (bySport[s] = bySport[s] || []).push(mu); });
+
+            Object.keys(bySport).forEach(sport => {
+                const dropped = bySport[sport].map(mu => mu.teamA + ' vs ' + mu.teamB).join(', ');
+                let why;
+                if (!sport) {
+                    why = 'no sport is picked for ' + (bySport[sport].length === 1 ? 'it' : 'them') + ' in the Playoff Hub';
+                } else if (rec.specialty) {
+                    const courts = Array.isArray(lg.fields) ? lg.fields.length : 0;
+                    const per = lg.gamesPerFieldSlot || 3;
+                    why = 'you scheduled ' + expected.length + ' game' + (expected.length === 1 ? '' : 's')
+                        + ', but this league\'s ' + courts + ' court' + (courts === 1 ? '' : 's')
+                        + ' can hold at most ' + (courts * per) + ' simultaneous games'
+                        + ' (courts already in use by other activities at that time don\'t count)';
+                } else {
+                    const wanted = expected.filter(mu => mu.sport === sport).length;
+                    const hosts = fieldsCfg.filter(f => Array.isArray(f.activities) && f.activities.indexOf(sport) >= 0).map(f => String(f.name));
+                    const usable = hosts.filter(f => !reserved.has(f));
+                    why = 'you scheduled ' + wanted + ' ' + sport + ' game' + (wanted === 1 ? '' : 's')
+                        + ', but only ' + usable.length + ' field' + (usable.length === 1 ? '' : 's')
+                        + ' can host ' + sport
+                        + (hosts.length !== usable.length ? ' (' + (hosts.length - usable.length) + ' more reserved for the teams that are out)' : '')
+                        + (usable.length ? ' — and fields already taken by other leagues or divisions at that time don\'t count' : '');
+                }
+                errors.push({
+                    type: 'playoff_field_shortage',
+                    message: 'Playoff Game Dropped: "' + entry._leagueName + '" Round ' + entry._playoffRound + ' — '
+                        + dropped + ' never got a field: ' + why
+                        + '. Fix it in the Playoff Hub (different sport or field for the matchup, fewer games this round, or un-reserve a field) and regenerate.'
+                });
+            });
+        });
+        return errors;
+    }
+
+    function checkElectiveReservations(assignments, bunkDivMap, divisionTimes) {
+        const errors = [];
+        const Utils = window.SchedulerCoreUtils;
+
+        // Reservations: rebuild from the skeleton (accurate even without a fresh
+        // gen); fall back to the live window.fieldReservations.
+        let resv = null;
+        try {
+            const skel = (typeof window.getSkeletonFromAnySource === 'function' && window.getSkeletonFromAnySource())
+                || window.manualSkeleton || window.dailyOverrideSkeleton;
+            if (Array.isArray(skel) && Utils && Utils.getFieldReservationsFromSkeleton) {
+                resv = Utils.getFieldReservationsFromSkeleton(skel);
+            }
+        } catch (e) { /* fall through */ }
+        if (!resv || !Object.keys(resv).length) resv = window.fieldReservations || null;
+        if (!resv || !Object.keys(resv).length) return errors;
+
+        // Keep only ELECTIVE reservations (pins are covered by CHECK 12).
+        const keyLc = {};                       // lc facility → original key
+        let anyElective = false;
+        Object.keys(resv).forEach(k => {
+            const list = (resv[k] || []).filter(r => r && (r.type === 'elective' || r.type === 'swim_elective'));
+            if (list.length) { keyLc[String(k).toLowerCase().trim()] = { key: k, list: list }; anyElective = true; }
+        });
+        if (!anyElective) return errors;
+
+        // special name (lc) → host location (a special may sit in a room whose
+        // name differs from the special's).
+        const specLoc = {};
+        const gs = (window.loadGlobalSettings && window.loadGlobalSettings()) || window.globalSettings || {};
+        (((gs.app1 && gs.app1.specialActivities) || gs.specialActivities || [])).forEach(s => {
+            if (s && s.name && s.location) { const n = String(s.name).toLowerCase().trim(); if (!specLoc[n]) specLoc[n] = s.location; }
+        });
+        const resolveLoc = window.getLocationForActivity;
+
+        // Divisions actually generated today. An elective tile lives in the shared
+        // skeleton even for a division that was NOT part of this generation (e.g. a
+        // learning division with no schedule today). Its reservation then holds
+        // rooms that nobody from that division occupies, so flagging another
+        // division on those rooms is a false positive. Only honor an elective
+        // reservation whose division has a live (non-empty) schedule today.
+        const liveDivisions = new Set();
+        Object.entries(assignments).forEach(([bunk, slots]) => {
+            if (!Array.isArray(slots)) return;
+            const dv = bunkDivMap[String(bunk)];
+            if (dv == null) return;
+            if (slots.some(e => e && !e.continuation && (e._activity || (e.field && e.field !== 'Free'))))
+                liveDivisions.add(String(dv));
+        });
+
+        const seen = new Set();
+        Object.entries(assignments).forEach(([bunk, slots]) => {
+            if (!Array.isArray(slots)) return;
+            const div = bunkDivMap[String(bunk)];
+            const divSlots = divisionTimes[div] || [];
+            slots.forEach((entry, idx) => {
+                if (!entry || entry.continuation) return;
+                if (entry._pinned) return;
+                if (isLeagueEntry(entry)) return;
+                if (isTransitionEntry(entry)) return;
+                const act = entry._activity || entry.field;
+                if (!act || IGNORED_FIELDS.includes(String(act).toLowerCase().trim())) return;
+
+                let sM = entry._startMin, eM = entry._endMin;
+                if (sM == null || eM == null) { const sl = divSlots[idx]; if (sl) { sM = sl.startMin; eM = sl.endMin; } }
+                if (sM == null || eM == null) return;
+
+                // Physical facilities this entry occupies.
+                const cands = new Set();
+                const add = f => { if (f && typeof f === 'string' && f.trim() && f !== 'Free') cands.add(f.trim()); };
+                add(entry.field); add(entry._location);
+                if (Array.isArray(entry._reservedFields)) entry._reservedFields.forEach(add);
+                add(specLoc[String(act).toLowerCase().trim()]);
+                try { add(resolveLoc && resolveLoc(act)); } catch (e) { /* ignore */ }
+
+                for (const cf of cands) {
+                    const rec = keyLc[String(cf).toLowerCase().trim()];
+                    if (!rec) continue;
+                    for (const r of rec.list) {
+                        if (!(r.startMin < eM && r.endMin > sM)) continue;
+                        // Own grade is exempt (elective division-lock semantics).
+                        if (r.division && String(r.division) === String(div)) continue;
+                        // Reserving division wasn't generated today → phantom reservation.
+                        if (r.division && !liveDivisions.has(String(r.division))) continue;
+                        // Edge: the entry IS the elective's own event label.
+                        if (String(act).toLowerCase().trim() === String(r.event || '').toLowerCase().trim()) continue;
+                        const sig = rec.key + '|' + bunk + '|' + sM;
+                        if (seen.has(sig)) continue;
+                        seen.add(sig);
+                        errors.push(
+                            `[[Elective clash]] <strong>${bunk}</strong> (Div. ${div}) ${_ctr(sM, eM)} - ${act} on ${rec.key} - reserved by ${r.division}'s elective`
+                        );
+                        break;
+                    }
+                }
             });
         });
         return errors;
@@ -1362,9 +2019,7 @@
                 if (seenMiss.has(sig)) break;
                 seenMiss.add(sig);
                 warnings.push(
-                    `<strong>Field Quality:</strong> ${u.owner} (Div ${u.divName}) is on #${info.rank} <u>${info.name}</u> at ` +
-                    `${formatTime(u.startMin)} - ${formatTime(u.endMin)} while better-ranked <u>${m.name}</u> (#${m.rank}) ` +
-                    `appears free, enabled and usable by this grade`
+                    `[[Better field free]] <strong>${u.owner}</strong> (Div. ${u.divName}) ${_ctr(u.startMin, u.endMin)} - #${info.rank} ${info.name} - better field free (#${m.rank} ${m.name})`
                 );
                 break;
             }
@@ -1389,11 +2044,118 @@
                 if (seenInv.has(sig)) continue;
                 seenInv.add(sig);
                 warnings.push(
-                    `<strong>Field Quality:</strong> seniority inversion — senior Div ${a.divName} (${a.owner}) is on ` +
-                    `#${ra} <u>${keyInfo[a.fkey].name}</u> while junior Div ${b.divName} (${b.owner}) holds better-ranked ` +
-                    `#${rb} <u>${keyInfo[b.fkey].name}</u> at the same time (${formatTime(Math.max(a.startMin, b.startMin))})`
+                    `[[Seniority]] <strong>Div. ${a.divName}</strong> (${a.owner}) ${_ct(Math.max(a.startMin, b.startMin))} - #${ra} ${keyInfo[a.fkey].name} - junior Div. ${b.divName} holds better #${rb} ${keyInfo[b.fkey].name}`
                 );
             }
+        });
+
+        return warnings;
+    }
+
+    // =========================================================================
+    // ★ CHECK 18: KEEP-IN-USE FACILITY LEFT IDLE
+    // A facility flagged "Keep in use" in Facilities is meant to have somebody
+    // in it whenever the camp is running activities — the camp does not care
+    // who, only that it is not sitting empty. The generator covers what it can
+    // (leagues + STEP 7.96), but with STAGGERED grade periods it cannot always
+    // reach every minute: if Grade 1 runs 10-11/11-12 and Grade 2 runs
+    // 10:15-11:15/11:15-12:15, no bunk's period starts at 12:00, so 12:00-12:30
+    // is unreachable. That is not a bug, but the user should SEE it rather than
+    // assume the facility is busy all day.
+    //
+    // "Idle" is only reported inside time the camp could actually have used:
+    // windows where at least one bunk has a real activity or a Free slot.
+    // Lunch / dismissal / davening and the facility's own Unavailable windows
+    // are excluded, so a legitimately empty gym at lunchtime never warns.
+    // No-op unless a facility opts in.
+    // =========================================================================
+    const KIU_STRUCTURAL = [
+        'lunch', 'snacks', 'snack', 'dismissal', 'davening', 'mincha', 'cleanup',
+        'change', 'lineup', 'regroup', 'rest', 'rest period', 'transition',
+        'buffer', 'travel', 'trip', 'bus'
+    ];
+    const KIU_MIN_GAP_MIN = 5;   // ignore rounding slivers
+
+    function checkKeepInUseIdle(usages, assignments, bunkDivMap, divisionTimes) {
+        const warnings = [];
+        const KIU = window.SchedulerCoreUtils?.getKeepInUseFields?.() || [];
+        if (!KIU.length) return warnings;
+
+        // Time the camp is actually running activities (a facility can only be
+        // "wasted" while somebody could have been sent there).
+        const coverable = [];
+        Object.entries(assignments || {}).forEach(([bunk, slots]) => {
+            const divName = bunkDivMap[String(bunk)];
+            if (!divName || !Array.isArray(slots)) return;
+            const divSlots = divisionTimes[divName] || [];
+            slots.forEach((entry, idx) => {
+                if (!entry || entry.continuation) return;
+                const act = _lc(entry._activity || entry.sport || entry.field);
+                if (KIU_STRUCTURAL.indexOf(act) >= 0) return;
+                if (isTransitionEntry(entry)) return;
+                if (entry._isTrip) return;
+                let s = entry._startMin, e = entry._endMin;
+                const si = divSlots[idx];
+                if (s == null && si) s = si.startMin;
+                if (e == null && si) e = si.endMin;
+                if (s == null || e == null || isNaN(s) || isNaN(e) || e <= s) return;
+                coverable.push([s, e]);
+            });
+        });
+        if (!coverable.length) return warnings;
+
+        const merge = (list) => {
+            const sorted = list.slice().sort((a, b) => a[0] - b[0]);
+            const out = [];
+            sorted.forEach(iv => {
+                const last = out[out.length - 1];
+                if (last && iv[0] <= last[1]) last[1] = Math.max(last[1], iv[1]);
+                else out.push([iv[0], iv[1]]);
+            });
+            return out;
+        };
+        const coverableSpans = merge(coverable);
+
+        KIU.forEach(K => {
+            const key = _lc(K.name);
+            const busy = merge((usages || [])
+                .filter(u => u && u.fkey === key)
+                .map(u => [u.startMin, u.endMin]));
+
+            // The facility's own closed windows are not "idle" — it's shut.
+            const closed = [];
+            (Array.isArray(K.fieldObj && K.fieldObj.timeRules) ? K.fieldObj.timeRules : []).forEach(r => {
+                if (!r) return;
+                const isUnavail = _lc(r.type) === 'unavailable' || r.available === false;
+                if (!isUnavail) return;
+                if (r.startMin == null || r.endMin == null) return;
+                closed.push([r.startMin, r.endMin]);
+            });
+            const blocked = merge(busy.concat(closed));
+
+            coverableSpans.forEach(span => {
+                // Clip the span to the facility's own required window.
+                let s = span[0], e = span[1];
+                if (K.startMin != null) s = Math.max(s, K.startMin);
+                if (K.endMin != null) e = Math.min(e, K.endMin);
+                if (e - s < KIU_MIN_GAP_MIN) return;
+
+                let cursor = s;
+                blocked.forEach(b => {
+                    if (b[1] <= cursor || b[0] >= e) return;
+                    if (b[0] - cursor >= KIU_MIN_GAP_MIN) {
+                        warnings.push(
+                            `[[Idle facility]] <strong>${K.name}</strong> ${_ctr(cursor, b[0])} - set to stay in use, but nobody is in it`
+                        );
+                    }
+                    cursor = Math.max(cursor, b[1]);
+                });
+                if (e - cursor >= KIU_MIN_GAP_MIN) {
+                    warnings.push(
+                        `[[Idle facility]] <strong>${K.name}</strong> ${_ctr(cursor, e)} - set to stay in use, but nobody is in it`
+                    );
+                }
+            });
         });
 
         return warnings;
@@ -1459,9 +2221,7 @@
                 try { res = SR.checkCandidateDetailed(cand, template, { mode }); } catch (e2) { return; }
                 (res.violated || []).forEach(rule => {
                     errors.push(
-                        `<strong>Spacing Rule Violation:</strong> <u>${bunk}</u> (Div ${divName}) has ` +
-                        `<strong>${cand.event || cand.field}</strong> at ${formatTime(cand.startMin)} in violation of: ` +
-                        `${describe(rule)}`
+                        `[[Spacing rule]] <strong>${bunk}</strong> (Div. ${divName}) ${_ct(cand.startMin)} - ${cand.event || cand.field} - spacing rule: ${describe(rule)}`
                     );
                 });
             });
@@ -1516,14 +2276,14 @@
                     const max = parseInt(meta.maxPlayers) || 0;
                     const min = parseInt(meta.minPlayers) || 0;
                     if (max > 0 && total > max + 2) {
-                        errors.push(
-                            `<strong>Sport Player Cap:</strong> <u>${us[0].facility}</u> at ${formatTime(t0)}: ` +
-                            `<strong>${us[0].activity}</strong> has ${total} campers (${bunksLabel}) — sport max is ${max} (+2 grace)`
+                        // ★ v3.5 severity re-tier (user decision): player-cap
+                        //   overflows are a REVIEW item, not a hard error.
+                        warnings.push(
+                            `[[Too many]] <strong>${us[0].facility}</strong> ${_ct(t0)} - ${us[0].activity} ${total} campers (${bunksLabel}) - over sport max ${max} (+2)`
                         );
                     } else if (min > 0 && total < min) {
                         warnings.push(
-                            `<strong>Sport Under Min:</strong> <u>${us[0].facility}</u> at ${formatTime(t0)}: ` +
-                            `<strong>${us[0].activity}</strong> has only ${total} campers (${bunksLabel}) — sport min is ${min}`
+                            `[[Too few]] <strong>${us[0].facility}</strong> ${_ct(t0)} - ${us[0].activity} ${total} campers (${bunksLabel}) - under sport min ${min}`
                         );
                     }
                 });
@@ -1544,172 +2304,91 @@
         const overlay = document.createElement('div');
         overlay.id = 'validator-overlay';
         overlay.style.cssText = `
-            position: fixed; top: 0; left: 0; width: 100%; height: 100%;
-            background: rgba(0,0,0,0.6); z-index: 9999;
+            position: fixed; inset: 0;
+            background: rgba(15,23,42,0.55); z-index: 9999;
             display: flex; justify-content: center; align-items: center;
-            animation: fadeIn 0.2s;
+            animation: fadeIn 0.15s;
         `;
-        
-        let content = `
-            <div style="background:white; padding:25px; border-radius:12px; width:750px; max-width:90vw; max-height:85vh; overflow-y:auto; box-shadow:0 10px 25px rgba(0,0,0,0.5); font-family: system-ui, -apple-system, sans-serif;">
-                <div style="display:flex; justify-content:space-between; align-items:center; border-bottom:1px solid #eee; padding-bottom:10px; margin-bottom:15px;">
-                    <h2 style="margin:0; color:#333; display:flex; align-items:center; gap:8px;">
-                        🛡️ Schedule Validator
-                        <span style="font-size:0.6em; background:#e0e0e0; padding:2px 8px; border-radius:4px;">v3.2</span>
-                    </h2>
-                    <button id="val-close-x" style="background:none; border:none; font-size:1.5em; cursor:pointer; color:#888; padding:0 8px;">&times;</button>
-                </div>
-        `;
-        
-        if (errors.length === 0 && warnings.length === 0) {
-            content += `
-                <div style="text-align:center; padding:40px 20px; color:#2e7d32;">
-                    <div style="font-size:4em; margin-bottom:15px;">✅</div>
-                    <h3 style="margin:0 0 10px 0; font-size:1.5em;">All Clear!</h3>
-                    <p style="color:#666; margin:0;">No conflicts or issues detected in your schedule.</p>
+
+        const clean = errors.length === 0 && warnings.length === 0;
+
+        let body = '';
+        if (clean) {
+            body = `
+                <div style="text-align:center; padding:48px 20px; color:#166534; width:100%;">
+                    <div style="font-size:3.5em; margin-bottom:12px;">✅</div>
+                    <h3 style="margin:0 0 8px 0; font-size:1.4em;">All clear!</h3>
+                    <p style="color:#64748b; margin:0;">No problems found in this schedule.</p>
                 </div>
             `;
         } else {
-            // Summary bar
-            content += `
-                <div style="display:flex; gap:15px; margin-bottom:20px;">
-                    <div style="flex:1; background:${errors.length > 0 ? '#FFEBEE' : '#E8F5E9'}; padding:12px 16px; border-radius:8px; text-align:center;">
-                        <div style="font-size:2em; font-weight:bold; color:${errors.length > 0 ? '#C62828' : '#2E7D32'};">${errors.length}</div>
-                        <div style="font-size:0.85em; color:#666;">Error${errors.length !== 1 ? 's' : ''}</div>
-                    </div>
-                    <div style="flex:1; background:${warnings.length > 0 ? '#FFF3E0' : '#E8F5E9'}; padding:12px 16px; border-radius:8px; text-align:center;">
-                        <div style="font-size:2em; font-weight:bold; color:${warnings.length > 0 ? '#E65100' : '#2E7D32'};">${warnings.length}</div>
-                        <div style="font-size:0.85em; color:#666;">Warning${warnings.length !== 1 ? 's' : ''}</div>
-                    </div>
-                </div>
-            `;
-            
-            // ★★★ v3.0: Categorize errors for better readability ★★★
-            if (errors.length > 0) {
-                const crossDivErrors = errors.filter(e => e.includes('Cross-Division'));
-                const capacityErrors = errors.filter(e => e.includes('Capacity Exceeded'));
-                const repetitionErrors = errors.filter(e => e.includes('Same-Day Repetition'));
-                const comboErrors = errors.filter(e => e.includes('Combined Field Conflict'));
-                const accessErrors = errors.filter(e =>
-                    e.includes('Special Access Violation') || e.includes('Disabled Resource') || e.includes('Bunk-Only Violation'));
-                const leagueFieldErrors = errors.filter(e => e.includes('League/Event Field Conflict'));
-                const sportsRuleErrors = errors.filter(e =>
-                    e.includes('Spacing Rule Violation') || e.includes('Sport Player Cap'));
-                const otherErrors = errors.filter(e =>
-                    !e.includes('Cross-Division') && !e.includes('Capacity Exceeded') &&
-                    !e.includes('Same-Day Repetition') && !e.includes('Combined Field Conflict') &&
-                    !e.includes('Special Access Violation') && !e.includes('Disabled Resource') &&
-                    !e.includes('Bunk-Only Violation') && !e.includes('League/Event Field Conflict') &&
-                    !e.includes('Spacing Rule Violation') && !e.includes('Sport Player Cap')
-                );
-
-                content += `<div style="margin-bottom:15px;">
-                    <h3 style="margin:0 0 10px 0; color:#C62828; font-size:1.1em; display:flex; align-items:center; gap:8px;">
-                        <span>🚫</span> Errors (Must Fix)
-                    </h3>`;
-                
-                if (crossDivErrors.length > 0) {
-                    content += buildCategorySection('Cross-Division Conflicts', crossDivErrors, '#FFCDD2', '#C62828', '#EF5350');
-                }
-                if (capacityErrors.length > 0) {
-                    content += buildCategorySection('Capacity Violations', capacityErrors, '#FFCDD2', '#C62828', '#EF5350');
-                }
-                if (repetitionErrors.length > 0) {
-                    content += buildCategorySection('Same-Day Repetitions', repetitionErrors, '#FFCDD2', '#C62828', '#EF5350');
-                }
-                if (comboErrors.length > 0) {
-                    content += buildCategorySection('Combined Field Conflicts', comboErrors, '#FFCDD2', '#C62828', '#EF5350');
-                }
-                if (accessErrors.length > 0) {
-                    content += buildCategorySection('Access & Resource Rules', accessErrors, '#FFCDD2', '#C62828', '#EF5350');
-                }
-                if (leagueFieldErrors.length > 0) {
-                    content += buildCategorySection('League/Event Field Conflicts', leagueFieldErrors, '#FFCDD2', '#C62828', '#EF5350');
-                }
-                if (sportsRuleErrors.length > 0) {
-                    content += buildCategorySection('Sports & Spacing Rules', sportsRuleErrors, '#FFCDD2', '#C62828', '#EF5350');
-                }
-                if (otherErrors.length > 0) {
-                    content += buildCategorySection('Other Errors', otherErrors, '#FFCDD2', '#C62828', '#EF5350');
-                }
-                
-                content += `</div>`;
-            }
-            
-            if (warnings.length > 0) {
-                const fieldReuseWarnings = warnings.filter(w => w.includes('Field Reuse'));
-                const missingWarnings = warnings.filter(w => w.includes('Missing Activity'));
-                const emptyWarnings = warnings.filter(w => w.includes('Empty Slot') || w.includes('Empty Bunk') || w.includes('Unassigned Bunk'));
-                const fieldQualityWarnings = warnings.filter(w => w.includes('Field Quality'));
-                const sportsRuleWarnings = warnings.filter(w => w.includes('Sport Under Min'));
-                const otherWarnings = warnings.filter(w =>
-                    !w.includes('Field Reuse') && !w.includes('Missing Activity') &&
-                    !w.includes('Empty Slot') && !w.includes('Empty Bunk') && !w.includes('Unassigned Bunk') &&
-                    !w.includes('Field Quality') && !w.includes('Sport Under Min')
-                );
-                
-                content += `<div style="margin-bottom:15px;">
-                    <h3 style="margin:0 0 10px 0; color:#EF6C00; font-size:1.1em; display:flex; align-items:center; gap:8px;">
-                        <span>⚠️</span> Warnings (Review)
-                    </h3>`;
-                
-                if (fieldReuseWarnings.length > 0) {
-                    content += buildCategorySection('Field Reuse', fieldReuseWarnings, '#FFF3E0', '#E65100', '#FF9800');
-                }
-                if (missingWarnings.length > 0) {
-                    content += buildCategorySection('Missing Activities', missingWarnings, '#FFF3E0', '#E65100', '#FF9800');
-                }
-                if (emptyWarnings.length > 0) {
-                    content += buildCategorySection('Empty / Unassigned', emptyWarnings, '#FFF3E0', '#E65100', '#FF9800');
-                }
-                if (fieldQualityWarnings.length > 0) {
-                    content += buildCategorySection('Field Quality', fieldQualityWarnings, '#FFF3E0', '#E65100', '#FF9800');
-                }
-                if (sportsRuleWarnings.length > 0) {
-                    content += buildCategorySection('Sports Rules', sportsRuleWarnings, '#FFF3E0', '#E65100', '#FF9800');
-                }
-                if (otherWarnings.length > 0) {
-                    content += buildCategorySection('Other Warnings', otherWarnings, '#FFF3E0', '#E65100', '#FF9800');
-                }
-                
-                content += `</div>`;
-            }
+            // Two flat columns, red left / yellow right. A missing side lets
+            // the other take the full width.
+            body = buildSeverityColumn('red', errors) + buildSeverityColumn('yellow', warnings);
         }
-        
-        content += `
-            <div style="text-align:right; margin-top:20px; border-top:1px solid #eee; padding-top:15px;">
-                <button id="val-close-btn" style="padding:12px 24px; background:#333; color:white; border:none; border-radius:6px; cursor:pointer; font-weight:600; font-size:1em;">
-                    Close
-                </button>
+
+        const chips = clean
+            ? `<span style="background:#dcfce7;color:#166534;border-radius:99px;padding:3px 12px;font-size:0.8em;font-weight:700;">All clear</span>`
+            : `${errors.length > 0 ? `<span style="background:#fee2e2;color:#b91c1c;border-radius:99px;padding:3px 12px;font-size:0.8em;font-weight:700;">🚫 ${errors.length} must fix</span>` : ''}
+               ${warnings.length > 0 ? `<span style="background:#fef3c7;color:#92400e;border-radius:99px;padding:3px 12px;font-size:0.8em;font-weight:700;">⚠️ ${warnings.length} review</span>` : ''}`;
+
+        overlay.innerHTML = `
+            <div style="background:#fff; border-radius:14px; width:1250px; max-width:94vw; height:88vh; display:flex; flex-direction:column; box-shadow:0 20px 50px rgba(0,0,0,0.35); font-family: system-ui, -apple-system, sans-serif; overflow:hidden;">
+                <div style="padding:14px 20px; border-bottom:1px solid #e2e8f0; display:flex; align-items:center; gap:10px; flex-wrap:wrap;">
+                    <h2 style="margin:0; font-size:1.1em; color:#0f172a; display:flex; align-items:center; gap:8px;">🛡️ Schedule Check</h2>
+                    ${chips}
+                    <div style="flex:1;"></div>
+                    ${clean ? '' : `<input id="val-search" type="text" placeholder="Filter — bunk, grade, field, activity…"
+                        style="width:280px; max-width:40vw; padding:7px 12px; border:1px solid #e2e8f0; border-radius:8px; font-size:0.88em; outline:none;">`}
+                    <button id="val-close-x" style="background:none; border:none; font-size:1.5em; cursor:pointer; color:#94a3b8; padding:0 6px; line-height:1;">&times;</button>
+                </div>
+                <div id="val-body" style="display:flex; gap:0; overflow:hidden; flex:1; align-items:stretch;">${body}</div>
+                <div style="padding:12px 20px; border-top:1px solid #e2e8f0; display:flex; gap:8px; align-items:center; background:#f8fafc;">
+                    <label style="display:flex; align-items:center; gap:8px; font-size:0.85em; color:#475569; cursor:pointer; user-select:none; margin-right:auto;">
+                        <input type="checkbox" id="val-auto-open" ${getValidatorAutoOpen() ? 'checked' : ''}
+                            style="width:16px; height:16px; cursor:pointer; accent-color:#dc2626;">
+                        Open automatically after generation when there are red conflicts
+                    </label>
+                    <button id="val-rerun-btn" class="val-mini-btn">↻ Re-check</button>
+                    <button id="val-close-btn" style="padding:10px 22px; background:#0f172a; color:#fff; border:none; border-radius:8px; cursor:pointer; font-weight:600; font-size:0.95em;">Close</button>
+                </div>
             </div>
-        </div>`;
-        
-        overlay.innerHTML = content;
+        `;
         document.body.appendChild(overlay);
 
-        // Wire up collapsible sections
-        overlay.querySelectorAll('.val-category-header').forEach(header => {
-            header.onclick = () => {
-                const list = header.nextElementSibling;
-                const arrow = header.querySelector('.val-arrow');
-                if (list.style.display === 'none') {
-                    list.style.display = 'block';
-                    if (arrow) arrow.textContent = '▼';
-                } else {
-                    list.style.display = 'none';
-                    if (arrow) arrow.textContent = '▶';
-                }
+        // ── Live filter: type a bunk / grade / field / activity ──
+        const search = overlay.querySelector('#val-search');
+        if (search) {
+            search.oninput = () => {
+                const q = search.value.toLowerCase().trim();
+                overlay.querySelectorAll('.val-sev').forEach(col => {
+                    let visible = 0;
+                    col.querySelectorAll('.val-item').forEach(li => {
+                        const hit = !q || li.textContent.toLowerCase().includes(q);
+                        li.style.display = hit ? '' : 'none';
+                        if (hit) visible++;
+                    });
+                    const total = col.querySelectorAll('.val-item').length;
+                    const count = col.querySelector('.val-sev-count');
+                    if (count) count.textContent = q ? `${visible}/${total}` : String(total);
+                });
             };
-        });
+        }
 
-        // Close handlers
+        // ── Auto-open toggle ──
+        const autoOpenCb = overlay.querySelector('#val-auto-open');
+        if (autoOpenCb) autoOpenCb.onchange = () => setValidatorAutoOpen(autoOpenCb.checked);
+
+        // ── Close / re-run ──
         const close = () => overlay.remove();
-        document.getElementById('val-close-btn').onclick = close;
-        document.getElementById('val-close-x').onclick = close;
+        overlay.querySelector('#val-close-btn').onclick = close;
+        overlay.querySelector('#val-close-x').onclick = close;
+        const rerunBtn = overlay.querySelector('#val-rerun-btn');
+        if (rerunBtn) rerunBtn.onclick = () => { close(); try { validateSchedule(); } catch (e) { console.warn('🛡️ re-check failed:', e); } };
         let _mdOverlayVal = false;
         overlay.addEventListener('mousedown', (e) => { _mdOverlayVal = (e.target === overlay); });
         overlay.onclick = (e) => { if (e.target === overlay && _mdOverlayVal) close(); };
-        
+
         // ESC key to close
         const escHandler = (e) => {
             if (e.key === 'Escape') {
@@ -1718,6 +2397,53 @@
             }
         };
         document.addEventListener('keydown', escHandler);
+    }
+
+    /**
+     * One severity column: sticky heading + a flat list of one-line items.
+     * Red (must fix) sits left, yellow (review) right. Empty side is skipped
+     * so the other takes the full width.
+     */
+    function buildSeverityColumn(kind, items) {
+        if (!items || !items.length) return '';
+        const red = kind === 'red';
+        const dot = red ? '#dc2626' : '#f59e0b';
+        const label = red ? 'Must fix' : 'Review';
+        const labelColor = red ? '#b91c1c' : '#92400e';
+        const bg = red ? '#fef2f2' : '#fffbeb';
+        const fg = red ? '#991b1b' : '#92400e';
+        const tagBg = red ? '#fecaca' : '#fde68a';
+        const tagFg = red ? '#7f1d1d' : '#78350f';
+        const borderSide = red ? 'border-right:1px solid #e2e8f0;' : '';
+
+        // Each message starts with a "[[Issue type]]" tag — render it as a
+        // small pill so the problem is named at a glance.
+        const renderItem = (item) => {
+            const m = String(item).match(/^\[\[([^\]]+)\]\]\s*/);
+            const tag = m ? m[1] : '';
+            const rest = m ? String(item).slice(m[0].length) : String(item);
+            const pill = tag
+                ? `<span style="display:inline-block; background:${tagBg}; color:${tagFg}; border-radius:5px; padding:1px 7px; font-size:0.78em; font-weight:800; letter-spacing:0.02em; text-transform:uppercase; margin-right:8px; vertical-align:1px; white-space:nowrap;">${_valEsc(tag)}</span>`
+                : '';
+            return pill + escMsg(rest);
+        };
+
+        return `
+            <div class="val-sev" data-sev="${kind}" style="flex:1; min-width:0; display:flex; flex-direction:column; ${borderSide}">
+                <div style="display:flex; align-items:center; gap:8px; padding:12px 20px 10px 20px; border-bottom:1px solid #f1f5f9; background:#fcfcfd; flex:none;">
+                    <span style="width:10px; height:10px; border-radius:50%; background:${dot}; flex:none;"></span>
+                    <h3 style="margin:0; color:${labelColor}; font-size:0.95em;">${label}</h3>
+                    <span class="val-sev-count" style="margin-left:auto; background:${bg}; color:${fg}; border-radius:99px; padding:1px 10px; font-weight:700; font-size:0.85em;">${items.length}</span>
+                </div>
+                <ul style="list-style:none; padding:10px 14px; margin:0; overflow-y:auto; flex:1;">
+                    ${items.map(item => `
+                        <li class="val-item" style="background:${bg}; color:${fg}; padding:8px 12px; margin-bottom:4px; border-radius:8px; border-left:3px solid ${dot}; font-size:0.88em; line-height:1.45;">
+                            ${renderItem(item)}
+                        </li>
+                    `).join('')}
+                </ul>
+            </div>
+        `;
     }
 
     // ★★★ CB-58: violation messages embed user-controlled field / bunk /
@@ -1741,42 +2467,23 @@
         return e;
     }
 
-    /**
-     * Build a collapsible category section for the modal
-     */
-    function buildCategorySection(title, items, bgColor, textColor, borderColor) {
-        // Auto-collapse if more than 5 items
-        const collapsed = items.length > 5;
-        
-        return `
-            <div style="margin-bottom:8px;">
-                <div class="val-category-header" style="cursor:pointer; display:flex; align-items:center; gap:6px; padding:6px 10px; background:#f5f5f5; border-radius:4px; font-size:0.9em; font-weight:600; color:#555; user-select:none;">
-                    <span class="val-arrow">${collapsed ? '▶' : '▼'}</span>
-                    ${title} <span style="font-weight:normal; color:#999;">(${items.length})</span>
-                </div>
-                <ul style="list-style:none; padding:0; margin:4px 0 0 0; display:${collapsed ? 'none' : 'block'}; max-height:250px; overflow-y:auto;">
-                    ${items.map(item => `
-                        <li style="background:${bgColor}; color:${textColor}; padding:10px 12px; margin-bottom:4px; border-radius:6px; border-left:4px solid ${borderColor}; font-size:0.9em;">
-                            ${escMsg(item)}
-                        </li>
-                    `).join('')}
-                </ul>
-            </div>
-        `;
-    }
-
-    // Add animation style
+    // Add animation + shared button styles
     if (!document.getElementById('validator-style')) {
         const style = document.createElement('style');
         style.id = 'validator-style';
         style.innerHTML = `
-            @keyframes fadeIn { 
-                from { opacity: 0; transform: scale(0.95); } 
-                to { opacity: 1; transform: scale(1); } 
+            @keyframes fadeIn {
+                from { opacity: 0; transform: scale(0.97); }
+                to { opacity: 1; transform: scale(1); }
             }
-            .val-category-header:hover {
-                background: #eee !important;
+            .val-mini-btn {
+                padding: 7px 12px; background: #fff; color: #334155;
+                border: 1px solid #e2e8f0; border-radius: 8px; cursor: pointer;
+                font-weight: 600; font-size: 0.85em; font-family: inherit;
+                white-space: nowrap;
             }
+            .val-mini-btn:hover { background: #f1f5f9; }
+            #val-search:focus { border-color: #6366f1; box-shadow: 0 0 0 3px rgba(99,102,241,0.12); }
         `;
         document.head.appendChild(style);
     }
@@ -1790,6 +2497,9 @@
         // Standalone league-time-mismatch check so the generator can warn the
         // user immediately after a manual build (without popping the full modal).
         checkLeagueTimeMismatch: () => checkLeagueTimeMismatch(window.divisionTimes || {}),
+        // ★ v3.8: auto-open-after-generation toggle (persisted)
+        getAutoOpenOnRed: getValidatorAutoOpen,
+        setAutoOpenOnRed: setValidatorAutoOpen,
         // ★ v3.1 checks exposed individually (console use + node sims)
         _v31: {
             collectTimedUsages,
@@ -1805,10 +2515,15 @@
             isPinnedEventEntry,
             // v3.2: sports rules
             checkCooldownRules,
-            checkSportPlayerRules
+            checkSportPlayerRules,
+            // CHECK 17: span-aware pin-vs-pin facility conflicts
+            annotatePinSpans,
+            checkPinnedTileConflicts,
+            // CHECK 18: a "Keep in use" facility left sitting empty
+            checkKeepInUseIdle
         }
     };
 
-    console.log('🛡️ Validator v3.2 loaded — conflicts + capacity + access rules + league/event timeline + field quality + sports/spacing rules');
+    console.log('🛡️ Validator v3.8 loaded — auto-open-on-red toggle (default off) + tagged findings, red|yellow side-by-side');
 
 })();

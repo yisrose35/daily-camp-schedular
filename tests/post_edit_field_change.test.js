@@ -399,3 +399,262 @@ test('applyFieldChange — pure field move does NOT call rotation sync', () => {
   assert.strictEqual(res.ok, true);
   assert.strictEqual(edits.length, 0); // teams + sport unchanged → no rotation churn
 });
+
+test('dnpKey / isDidNotPlay — order-independent teams + field, matches string and object', () => {
+  const k = PEFC.dnpKey('Lions', 'Tigers', 'Field A');
+  assert.strictEqual(k, PEFC.dnpKey('Tigers', 'Lions', 'field a'), 'order + case independent');
+  const entry = { _didNotPlay: [k] };
+  assert.strictEqual(PEFC.isDidNotPlay(entry, 'Lions vs Tigers @ Field A (Soccer)'), true);
+  assert.strictEqual(PEFC.isDidNotPlay(entry, { teamA: 'Tigers', teamB: 'Lions', field: 'Field A' }), true);
+  assert.strictEqual(PEFC.isDidNotPlay(entry, 'Lions vs Tigers @ Field B (Soccer)'), false, 'different field ≠ match');
+  assert.strictEqual(PEFC.isDidNotPlay({}, 'Lions vs Tigers @ Field A (Soccer)'), false);
+});
+
+test('markDidNotPlay — regular: TAGS the game (keeps it visible) + rolls back history (newGame=null)', () => {
+  const edits = [];
+  global.window.scheduleAssignments = {
+    BunkA: [null, { _h2h: true, _allMatchups: ['Lions vs Tigers @ Field A (Soccer)', 'Bears vs Wolves @ Field C (Soccer)'] }],
+  };
+  global.window.leagueAssignments = {
+    Majors: { 1: { leagueName: 'Majors League', _allMatchups: ['Lions vs Tigers @ Field A (Soccer)', 'Bears vs Wolves @ Field C (Soccer)'] } },
+  };
+  global.window.GlobalFieldLocks = { unlockField: () => {}, lockField: () => true, isFieldLockedByTime: () => null };
+  global.window._scheduleAssignmentsDate = '2026-07-01';
+  global.window.SchedulerCoreLeagues = { editGameRecord: (...a) => { edits.push(a); return { ok: true }; } };
+
+  const ctx = {
+    kind: 'regular', divName: 'Majors', slotIdx: 1, startMin: 600, endMin: 645,
+    leagueName: 'Majors League', slots: [1],
+    game: { teamA: 'Lions', teamB: 'Tigers', teams: 'Lions vs Tigers', field: 'Field A', sport: 'Soccer' },
+  };
+  ctx.games = [ctx.game];
+  const res = PEFC.markDidNotPlay(ctx);
+  const key = PEFC.dnpKey('Lions', 'Tigers', 'Field A');
+
+  assert.strictEqual(res.ok, true);
+  // BOTH matchups STAY visible — nothing removed.
+  assert.deepStrictEqual(window.leagueAssignments.Majors[1]._allMatchups, ['Lions vs Tigers @ Field A (Soccer)', 'Bears vs Wolves @ Field C (Soccer)']);
+  assert.strictEqual(window.scheduleAssignments.BunkA[1]._allMatchups.length, 2);
+  // The Lions/Tigers game is TAGGED did-not-play on both stores; Bears/Wolves is not.
+  assert.deepStrictEqual(window.leagueAssignments.Majors[1]._didNotPlay, [key]);
+  assert.deepStrictEqual(window.scheduleAssignments.BunkA[1]._didNotPlay, [key]);
+  assert.strictEqual(PEFC.isDidNotPlay(window.leagueAssignments.Majors[1], 'Bears vs Wolves @ Field C (Soccer)'), false);
+  // History rolled back: editGameRecord called with the OLD game and newGame=null.
+  assert.strictEqual(edits.length, 1);
+  assert.strictEqual(edits[0][1], '2026-07-01', 'rollback targets the edited schedule date');
+  assert.deepStrictEqual(edits[0][2], { teamA: 'Lions', teamB: 'Tigers', sport: 'Soccer' });
+  assert.strictEqual(edits[0][3], null, 'newGame must be null to SUBTRACT the game');
+  // ctx.game reflects the new state (drives the modal's Undo button).
+  assert.strictEqual(ctx.game._didNotPlay, true);
+  delete global.window._scheduleAssignmentsDate;
+});
+
+test('markDidNotPlay — UNDO: untags the game + re-adds history (newGame set)', () => {
+  const edits = [];
+  const key = PEFC.dnpKey('Lions', 'Tigers', 'Field A');
+  global.window.scheduleAssignments = {
+    BunkA: [null, { _h2h: true, _allMatchups: ['Lions vs Tigers @ Field A (Soccer)'], _didNotPlay: [key] }],
+  };
+  global.window.leagueAssignments = {
+    Majors: { 1: { leagueName: 'Majors League', _allMatchups: ['Lions vs Tigers @ Field A (Soccer)'], _didNotPlay: [key] } },
+  };
+  global.window.GlobalFieldLocks = { unlockField: () => {}, lockField: () => true, isFieldLockedByTime: () => null };
+  global.window._scheduleAssignmentsDate = '2026-07-01';
+  global.window.SchedulerCoreLeagues = { editGameRecord: (...a) => { edits.push(a); return { ok: true }; } };
+
+  const ctx = {
+    kind: 'regular', divName: 'Majors', slotIdx: 1, slots: [1], leagueName: 'Majors League',
+    game: { teamA: 'Lions', teamB: 'Tigers', teams: 'Lions vs Tigers', field: 'Field A', sport: 'Soccer', _didNotPlay: true },
+  };
+  ctx.games = [ctx.game];
+  const res = PEFC.markDidNotPlay(ctx, { undo: true });
+
+  assert.strictEqual(res.ok, true);
+  // Tag cleared everywhere (empty _didNotPlay is dropped).
+  assert.ok(!window.leagueAssignments.Majors[1]._didNotPlay);
+  assert.ok(!window.scheduleAssignments.BunkA[1]._didNotPlay);
+  assert.strictEqual(ctx.game._didNotPlay, false);
+  // History re-added: editGameRecord(oldGame=null, newGame=the game).
+  assert.strictEqual(edits.length, 1);
+  assert.strictEqual(edits[0][2], null);
+  assert.deepStrictEqual(edits[0][3], { teamA: 'Lions', teamB: 'Tigers', sport: 'Soccer' });
+  delete global.window._scheduleAssignmentsDate;
+});
+
+test('markDidNotPlay — already marked → no-op (idempotent), does not double-roll-back history', () => {
+  const edits = [];
+  const key = PEFC.dnpKey('Lions', 'Tigers', 'Field A');
+  global.window.scheduleAssignments = { BunkA: [null, { _h2h: true, _allMatchups: ['Lions vs Tigers @ Field A (Soccer)'], _didNotPlay: [key] }] };
+  global.window.leagueAssignments = { Majors: { 1: { _allMatchups: ['Lions vs Tigers @ Field A (Soccer)'], _didNotPlay: [key] } } };
+  global.window.SchedulerCoreLeagues = { editGameRecord: (...a) => { edits.push(a); return { ok: true }; } };
+
+  const ctx = {
+    kind: 'regular', divName: 'Majors', slotIdx: 1, slots: [1], leagueName: 'L',
+    game: { teamA: 'Lions', teamB: 'Tigers', teams: 'Lions vs Tigers', field: 'Field A', sport: 'Soccer' },
+  };
+  ctx.games = [ctx.game];
+  const res = PEFC.markDidNotPlay(ctx);
+  assert.strictEqual(res.ok, true);
+  assert.strictEqual(res.noop, true);
+  assert.strictEqual(edits.length, 0, 'no history churn on a repeat mark');
+});
+
+test('markDidNotPlay — specialty: TAGS the game + splices its gameLog entry (object-map leagues)', () => {
+  const saved = {};
+  global.window.scheduleAssignments = {
+    BunkA: [{ _isSpecialtyLeague: true,
+      _allMatchups: ['Red vs Blue — Court 1', 'Green vs Yellow — Court 2'],
+      _assignments: [{ teamA: 'Red', teamB: 'Blue', field: 'Court 1' }, { teamA: 'Green', teamB: 'Yellow', field: 'Court 2' }] }],
+  };
+  global.window.leagueAssignments = {
+    DivX: { 0: { isSpecialtyLeague: true, matchups: [{ teamA: 'Red', teamB: 'Blue', field: 'Court 1' }, { teamA: 'Green', teamB: 'Yellow', field: 'Court 2' }] } },
+  };
+  global.window.GlobalFieldLocks = { unlockField: () => {}, lockField: () => true, isFieldLockedByTime: () => null };
+  global.window.currentScheduleDate = '2026-07-01';
+  delete global.window._scheduleAssignmentsDate;
+  // specialtyLeagues as an OBJECT MAP keyed by id (real storage shape).
+  global.window.loadGlobalSettings = () => ({
+    specialtyLeagues: { L9: { id: 'L9', name: 'Hoops League' } },
+    specialtyLeagueHistory: { gameLog: { L9: { '2026-07-01': [
+      { tA: 'Red', tB: 'Blue', field: 'Court 1', g: 'Game 1' },
+      { tA: 'Green', tB: 'Yellow', field: 'Court 2', g: 'Game 1' },
+    ] } } },
+  });
+  global.window.saveGlobalSettings = (k, v) => { saved[k] = v; };
+
+  const ctx = {
+    kind: 'specialty', divName: 'DivX', slotIdx: 0, startMin: 700, endMin: 745,
+    leagueName: 'Hoops League', slots: [0],
+    game: { teamA: 'Red', teamB: 'Blue', teams: 'Red vs Blue', field: 'Court 1', sport: 'Basketball' },
+  };
+  ctx.games = [ctx.game];
+  const res = PEFC.markDidNotPlay(ctx);
+
+  assert.strictEqual(res.ok, true);
+  // Both matchups STAY; Red/Blue is tagged, Green/Yellow is not.
+  assert.strictEqual(window.scheduleAssignments.BunkA[0]._allMatchups.length, 2);
+  assert.strictEqual(window.leagueAssignments.DivX[0].matchups.length, 2);
+  assert.deepStrictEqual(window.leagueAssignments.DivX[0]._didNotPlay, [PEFC.dnpKey('Red', 'Blue', 'Court 1')]);
+  // gameLog entry spliced (so specialty variety knows it didn't happen) + persisted.
+  assert.ok(saved.specialtyLeagueHistory, 'specialty history should be saved');
+  const log = saved.specialtyLeagueHistory.gameLog.L9['2026-07-01'];
+  assert.strictEqual(log.length, 1);
+  assert.strictEqual(log[0].tA, 'Green');
+});
+
+test('markDidNotPlay — the _didNotPlay tag is written to the cloud (survives reload)', () => {
+  const cloudSaves = [];
+  const bunkSaves = [];
+  global.window.scheduleAssignments = {
+    BunkA: [null, { _h2h: true, _allMatchups: ['Lions vs Tigers @ Field A (Soccer)', 'Bears vs Wolves @ Field C (Soccer)'] }],
+  };
+  global.window.leagueAssignments = {
+    Majors: { 1: { leagueName: 'Majors League', _allMatchups: ['Lions vs Tigers @ Field A (Soccer)', 'Bears vs Wolves @ Field C (Soccer)'] } },
+  };
+  global.window.GlobalFieldLocks = { unlockField: () => {}, lockField: () => true, isFieldLockedByTime: () => null };
+  global.window._scheduleAssignmentsDate = '2026-07-01';
+  delete global.window.SchedulerCoreLeagues;
+  global.window.saveCurrentDailyData = () => {};
+  global.window.bypassSaveAllBunks = (b) => { bunkSaves.push(b); return Promise.resolve(); };
+  global.window.ScheduleDB = { saveSchedule: (dk, data, opts) => { cloudSaves.push({ dk, data, opts }); return Promise.resolve({ success: true }); } };
+
+  const ctx = {
+    kind: 'regular', divName: 'Majors', slotIdx: 1, slots: [1], leagueName: 'Majors League',
+    game: { teamA: 'Lions', teamB: 'Tigers', teams: 'Lions vs Tigers', field: 'Field A', sport: 'Soccer' },
+  };
+  ctx.games = [ctx.game];
+  const res = PEFC.markDidNotPlay(ctx);
+  const key = PEFC.dnpKey('Lions', 'Tigers', 'Field A');
+
+  assert.strictEqual(res.ok, true);
+  // The whole-object cloud save fired for the edited date...
+  assert.strictEqual(cloudSaves.length, 1);
+  assert.strictEqual(cloudSaves[0].dk, '2026-07-01');
+  // ...carrying the DIVISION-keyed _didNotPlay tag (so the mark can't be lost on reload)...
+  assert.deepStrictEqual(cloudSaves[0].data.leagueAssignments.Majors[1]._didNotPlay, [key]);
+  // ...while both matchups remain in the payload.
+  assert.strictEqual(cloudSaves[0].data.leagueAssignments.Majors[1]._allMatchups.length, 2);
+  // Per-bunk surgical save still fired for multi-scheduler correctness.
+  assert.deepStrictEqual(bunkSaves, [['BunkA']]);
+  delete global.window.ScheduleDB;
+  delete global.window._scheduleAssignmentsDate;
+});
+
+test('markDidNotPlay — no matching game leaves stores untouched and reports not-found', () => {
+  global.window.scheduleAssignments = { BunkA: [null, { _h2h: true, _allMatchups: ['Bears vs Wolves @ Field C (Soccer)'] }] };
+  global.window.leagueAssignments = { Majors: { 1: { _allMatchups: ['Bears vs Wolves @ Field C (Soccer)'] } } };
+  global.window.GlobalFieldLocks = { unlockField: () => {}, lockField: () => true, isFieldLockedByTime: () => null };
+  delete global.window.SchedulerCoreLeagues;
+
+  const ctx = {
+    kind: 'regular', divName: 'Majors', slotIdx: 1, slots: [1], leagueName: 'L',
+    game: { teamA: 'Lions', teamB: 'Tigers', teams: 'Lions vs Tigers', field: 'Field A', sport: 'Soccer' },
+  };
+  ctx.games = [ctx.game];
+  const res = PEFC.markDidNotPlay(ctx);
+  assert.strictEqual(res.ok, false);
+  assert.ok(!window.leagueAssignments.Majors[1]._didNotPlay);
+});
+
+// ── GAME NUMBER (post edit) ─────────────────────────────────────────────────
+// The number belongs to the whole league period and lives in four stores that
+// don't derive from each other, so the post-edit control hands off to
+// SchedulerCoreLeagues.renumberGame rather than writing any of them itself.
+// These tests pin the hand-off and the guards around it.
+
+function ctxFor(over) {
+  return Object.assign({
+    kind: 'regular', divName: 'Juniors', slotIdx: 0,
+    leagueName: 'Majors', gameLabel: 'Game 10',
+  }, over || {});
+}
+
+test('applyGameNumber — hands the change to the engine and reports the new number', () => {
+  const calls = [];
+  window.SchedulerCoreLeagues = {
+    renumberGame: (lg, date, oldL, newL) => { calls.push([lg, date, oldL, newL]); return { ok: true, swappedWith: null }; },
+  };
+  window.currentScheduleDate = '2026-08-02';
+  window.leagueAssignments = {};
+  const ctx = ctxFor();
+  const res = PEFC.applyGameNumber(ctx, '9');
+  assert.strictEqual(res.ok, true, res.message);
+  assert.deepStrictEqual(calls, [['Majors', '2026-08-02', 'Game 10', 'Game 9']]);
+  assert.strictEqual(ctx.gameLabel, 'Game 9', 'ctx follows so a re-render shows the new number');
+  assert.match(res.message, /Game 9/);
+});
+
+test('applyGameNumber — a swap is reported as one', () => {
+  window.SchedulerCoreLeagues = { renumberGame: () => ({ ok: true, swappedWith: 'Game 10' }) };
+  window.currentScheduleDate = '2026-08-02';
+  const res = PEFC.applyGameNumber(ctxFor(), '11');
+  assert.strictEqual(res.ok, true);
+  assert.match(res.message, /swapped/i, 'the user is told the other game moved, got: ' + res.message);
+});
+
+test('applyGameNumber — engine refusal is surfaced, not swallowed', () => {
+  window.SchedulerCoreLeagues = { renumberGame: () => ({ ok: false, reason: 'no games recorded' }) };
+  window.currentScheduleDate = '2026-08-02';
+  const ctx = ctxFor();
+  const res = PEFC.applyGameNumber(ctx, '9');
+  assert.strictEqual(res.ok, false);
+  assert.strictEqual(res.message, 'no games recorded');
+  assert.strictEqual(ctx.gameLabel, 'Game 10', 'ctx is untouched when the engine refused');
+});
+
+test('applyGameNumber — guards: bad number, specialty, unlabelled period, no engine', () => {
+  window.SchedulerCoreLeagues = { renumberGame: () => ({ ok: true, swappedWith: null }) };
+  window.currentScheduleDate = '2026-08-02';
+  assert.strictEqual(PEFC.applyGameNumber(ctxFor(), '0').ok, false, '0 is not a game number');
+  assert.strictEqual(PEFC.applyGameNumber(ctxFor(), 'abc').ok, false, 'junk is refused');
+  assert.strictEqual(PEFC.applyGameNumber(ctxFor({ kind: 'specialty' }), '9').ok, false,
+    'specialty leagues are not numbered this way');
+  assert.strictEqual(PEFC.applyGameNumber(ctxFor({ gameLabel: 'Chinuch' }), '9').ok, false,
+    'a period with no Game N label has nothing to renumber');
+  assert.strictEqual(PEFC.applyGameNumber(ctxFor(), '10').ok, false, 'renumbering to the same number is a no-op');
+
+  window.SchedulerCoreLeagues = null;
+  const res = PEFC.applyGameNumber(ctxFor(), '9');
+  assert.strictEqual(res.ok, false);
+  assert.match(res.message, /engine is not loaded/i, 'a missing engine says so rather than silently failing');
+});

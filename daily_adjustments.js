@@ -169,6 +169,269 @@ function _daSmartSwapPostRender(overlay, defaultOn) {
   _gsSync();
 }
 
+// ═════════════════════════════════════════════════════════════════════════
+// ★ REMOVE A TILE FROM AN ALREADY-GENERATED DAY
+// ═════════════════════════════════════════════════════════════════════════
+// Deleting a tile only ever edited the skeleton. The generated day renders
+// from window.divisionTimes + scheduleAssignments — both saved per date and
+// both rebuilt only by a generation — so a removed period kept showing its
+// activity, and a removed LEAGUE period kept its matchups on the books
+// (counting as played, feeding sport variety, holding its game number and its
+// bye/away-trip charges), until someone regenerated the day. "Delete the tile
+// and put nothing in its place" was therefore not actually expressible.
+//
+// This applies the removal: the day's geometry is rebuilt from the post-delete
+// skeleton, every surviving entry is re-keyed onto it by its own _startMin
+// (nothing is re-rolled, nothing shifts by index), and whatever lived in the
+// removed window is dropped. The freed time is simply unscheduled.
+//
+// Then the records that described the removed content are brought back in
+// line: league history is reconciled against the new grid (releasing the
+// matchups, sport variety, game count, byes, away trips and chinuch, and
+// renumbering later days' game labels), and rotation counts + last-done
+// timestamps are re-derived.
+//
+// Call with the tiles as they were BEFORE the skeleton was filtered; returns
+// true when the generated day was changed. A day that was never generated, or
+// a plan the re-key can't apply cleanly, leaves the schedule untouched — the
+// skeleton edit still stands, and the caller is told to regenerate.
+// ═════════════════════════════════════════════════════════════════════════
+async function _daApplyTileRemovalToGeneratedDay(removedTiles) {
+  try {
+    if (window._daBuilderMode === 'auto') return false;
+    if (!Array.isArray(removedTiles) || !removedTiles.length) return false;
+
+    const DTS = window.DivisionTimesSystem;
+    if (!DTS || !DTS.buildTimeRemovalPlan) return false;
+
+    const divisions = window.divisions || masterSettings.app1?.divisions || {};
+    const sa = window.scheduleAssignments || {};
+
+    // Only meaningful on a day that has actually been generated: at least one
+    // bunk of an affected division holds a real entry.
+    const tiles = removedTiles
+      .map(t => ({
+        division: t && t.division,
+        startMin: parseTimeToMinutes(t && t.startTime),
+        endMin: parseTimeToMinutes(t && t.endTime)
+      }))
+      .filter(t => t.division && t.startMin != null);
+    if (!tiles.length) return false;
+
+    const divSet = new Set(tiles.map(t => String(t.division)));
+    const anyGenerated = [...divSet].some(dn =>
+      ((divisions[dn] || {}).bunks || []).some(b => {
+        const arr = sa[String(b)];
+        return Array.isArray(arr) && arr.some(e => e && (e._activity || e.field));
+      }));
+    if (!anyGenerated) return false;   // nothing generated yet — the skeleton edit is all there is
+
+    const plan = DTS.buildTimeRemovalPlan({
+      removedTiles: tiles,
+      skeleton: dailyOverrideSkeleton,
+      divisions,
+      scheduleAssignments: sa,
+      leagueAssignments: window.leagueAssignments || {}
+    });
+
+    if (!plan.ok) {
+      // Never half-apply. The tile is gone from the skeleton either way; the
+      // generated day is left exactly as it was.
+      const why = plan.reason === 'no-geometry'
+        ? (plan.emptyDivs || []).join(', ') + ' would have no periods left'
+        : plan.reason === 'unsafe-bunks'
+          ? (plan.unsafeBunks || []).join(', ') + ' could not be matched to the new period structure'
+          : 'the day could not be remapped';
+      console.warn('[DA-Remove] plan refused (' + plan.reason + ') — schedule left untouched');
+      await daShowAlert('The tile was removed from the day\'s layout, but the already-generated ' +
+        'schedule was left as it is — ' + why + '.<br><br>Regenerate to bring the schedule in line.');
+      return false;
+    }
+
+    // ── Commit ────────────────────────────────────────────────────────────
+    window.divisionTimes = plan.newDT;
+    Object.keys(plan.assignments).forEach(b => { window.scheduleAssignments[b] = plan.assignments[b]; });
+    window.leagueAssignments = plan.leagueAssignments;
+
+    window.saveCurrentDailyData?.('unifiedTimes', window.unifiedTimes);
+    window.saveSchedule?.();          // scheduleAssignments + leagueAssignments + divisionTimes
+    window.updateTable?.();
+
+    // ── League history follows the grid ───────────────────────────────────
+    try {
+      const dateKey = window.currentScheduleDate;
+      const surv = window.SchedulerCoreUtils?.survivingLeagueLabels?.(window.leagueAssignments || {});
+      if (dateKey && surv) {
+        window.SchedulerCoreLeagues?.reconcileDayWithSchedule?.(plan.affectedDivs, dateKey, surv.regular);
+        window.SchedulerCoreSpecialtyLeagues?.reconcileDayWithSchedule?.(plan.affectedDivs, dateKey, surv.specialty);
+      }
+    } catch (e) { console.warn('[DA-Remove] league reconcile failed:', e); }
+
+    // ── Rotation counts + last-done follow the grid ───────────────────────
+    // Deferred so the daily store already holds the trimmed schedule (the
+    // rebuild scans it), mirroring the post-generation pass.
+    setTimeout(() => {
+      try {
+        window.SchedulerCoreUtils?.rebuildHistoricalCounts?.(true);
+        const dk = window.currentScheduleDate;
+        if (dk && window.RotationCloud?.save) window.RotationCloud.save(dk, window.scheduleAssignments || {});
+        window.SchedulerCoreUtils?.rebuildRotationHistoryForBunks?.(plan.affectedBunks);
+      } catch (e) { console.warn('[DA-Remove] rotation rebuild failed:', e); }
+    }, 0);
+
+    console.log('[DA-Remove] applied to the generated day: dropped ' + plan.droppedEntries +
+      ' entry(ies) and ' + plan.droppedLeagueGames + ' league game(s) across ' +
+      plan.affectedBunks.length + ' bunk(s)');
+    return true;
+  } catch (e) {
+    console.error('[DA-Remove] failed:', e);
+    return false;
+  }
+}
+
+// ── "Don't ask again" preference (per device, not camp-wide) ──────────────
+const DA_SKIP_REMOVE_CONFIRM = 'campistry_da_skipRemoveConfirm';
+function daConfirmSuppressed(key) {
+  try { return localStorage.getItem(key) === '1'; } catch (_e) { return false; }
+}
+// Escape hatch — a hidden preference with no way back is a trap. Exposed on
+// window so it can be cleared from the console, and called by the Daily
+// Adjustments reset paths.
+window.daResetRemoveConfirm = function () {
+  try { localStorage.removeItem(DA_SKIP_REMOVE_CONFIRM); } catch (_e) {}
+  console.log('[DailyAdj] Tile-removal confirmation re-enabled on this device.');
+  return true;
+};
+
+// What will actually be lost if these tiles are deleted from the GENERATED day.
+// Returns { generated, bunkCount, activities:[…], leagueGames:[{label, league,
+// matchupCount}] } — `generated` false means the day has nothing there yet and
+// the delete is a pure layout edit (no confirmation warranted).
+//
+// Pure — mirrored verbatim in tests/tile_removal_confirm_sim.js; keep in sync.
+// `tiles` carry ALREADY-PARSED minutes: [{ division, startMin, endMin }].
+function _daRemovalImpact(tiles, divisions, sa, la) {
+  const out = { generated: false, bunkCount: 0, activities: [], leagueGames: [] };
+  const acts = new Set();
+  const seenGames = new Set();
+  const isGameLine = (m) => {
+    const line = (m && typeof m === 'object') ? String(m.display || m.matchup || m.text || '') : String(m == null ? '' : m);
+    return /\s+vs\.?\s+/i.test(line);
+  };
+
+  (tiles || []).forEach(t => {
+    const dn = t && t.division != null ? String(t.division) : null;
+    const s = t && t.startMin;
+    if (!dn || s == null) return;
+    // Entries are addressed by their own start time. A tile with no end time
+    // (or a zero-length one) still matches whatever starts at its own start —
+    // deriving the upper bound from `s` rather than a bogus end keeps that
+    // from collapsing into an empty window that matches nothing.
+    const lo = s - 2;
+    const hi = (t.endMin != null && t.endMin > s) ? t.endMin - 2 : s + 2;
+    const inWindow = (v) => v != null && v >= lo && v < hi;
+
+    ((divisions[dn] || {}).bunks || []).forEach(b => {
+      const arr = sa[String(b)];
+      if (!Array.isArray(arr)) return;
+      let hit = false;
+      arr.forEach(en => {
+        if (!en || en.continuation || en._isTransition) return;
+        if (!inWindow(en._startMin)) return;
+        const name = en._activity || en.field;
+        if (!name) return;
+        acts.add(String(name));
+        hit = true;
+      });
+      if (hit) out.bunkCount++;
+    });
+
+    const map = la[dn];
+    if (map && typeof map === 'object') {
+      Object.keys(map).forEach(k => {
+        const g = map[k];
+        if (!g || !g.leagueName || !inWindow(g._startMin)) return;
+        const key = g.leagueName + '|' + (g.gameLabel || k);
+        if (seenGames.has(key)) return;
+        seenGames.add(key);
+        out.leagueGames.push({
+          label: g.gameLabel || 'League game',
+          league: g.leagueName,
+          matchupCount: (g.matchups || []).filter(isGameLine).length
+        });
+      });
+    }
+  });
+
+  out.activities = [...acts];
+  out.generated = out.bunkCount > 0 || out.leagueGames.length > 0;
+  return out;
+}
+
+// Production wrapper: parse the snapshot's times and read the live day.
+function _daDescribeRemovalImpact(tiles) {
+  try {
+    const parsed = (tiles || []).map(t => ({
+      division: t && t.division,
+      startMin: parseTimeToMinutes(t && t.startTime),
+      endMin: parseTimeToMinutes(t && t.endTime)
+    }));
+    return _daRemovalImpact(
+      parsed,
+      window.divisions || masterSettings.app1?.divisions || {},
+      window.scheduleAssignments || {},
+      window.leagueAssignments || {}
+    );
+  } catch (e) {
+    console.warn('[DA-Remove] impact scan failed:', e);
+    return { generated: false, bunkCount: 0, activities: [], leagueGames: [] };
+  }
+}
+
+// Gate a delete that would drop already-generated content. Returns true to go
+// ahead. A tile with nothing generated under it needs no prompt — this only
+// speaks up when something real is about to be dropped, which is also what
+// keeps "don't ask again" from being a foot-gun: the prompt was never noise.
+async function _daConfirmTileRemoval(tiles) {
+  const impact = _daDescribeRemovalImpact(tiles);
+  if (!impact.generated) return true;                       // pure layout edit
+  if (daConfirmSuppressed(DA_SKIP_REMOVE_CONFIRM)) return true;
+
+  const esc = (s) => _escHtml(String(s == null ? '' : s));
+  const lines = [];
+  impact.leagueGames.forEach(g => {
+    lines.push('<li style="margin:2px 0;"><strong>' + esc(g.league) + ' — ' + esc(g.label) + '</strong>' +
+      (g.matchupCount ? ' (' + g.matchupCount + ' matchup' + (g.matchupCount === 1 ? '' : 's') + ')' : '') +
+      ' — the games stop counting as played</li>');
+  });
+  if (impact.bunkCount > 0) {
+    const shown = impact.activities.slice(0, 3).map(esc).join(', ');
+    lines.push('<li style="margin:2px 0;">' + impact.bunkCount + ' bunk' + (impact.bunkCount === 1 ? "'s" : "s'") +
+      ' scheduled activity' + (shown ? ' <span style="color:#64748b;">(' + shown +
+      (impact.activities.length > 3 ? ', …' : '') + ')</span>' : '') + '</li>');
+  }
+
+  const msg = 'This period is already scheduled. Removing it will drop:' +
+    '<ul style="margin:10px 0 0;padding-left:20px;">' + lines.join('') + '</ul>' +
+    '<div style="margin-top:12px;color:#64748b;font-size:13px;">The time will be left unscheduled — nothing takes its place.</div>';
+
+  return daShowConfirm(msg, {
+    danger: true,
+    confirmText: 'Remove',
+    cancelText: 'Keep it',
+    dontAskKey: DA_SKIP_REMOVE_CONFIRM
+  });
+}
+
+// Snapshot the tiles a delete is about to remove (id set → time windows), so
+// the removal can be applied to the generated day after the skeleton is cut.
+function _daSnapshotRemovedTiles(ids) {
+  const want = (ids instanceof Set) ? ids : new Set(ids || []);
+  return (dailyOverrideSkeleton || [])
+    .filter(x => x && want.has(x.id))
+    .map(x => ({ division: x.division, startTime: x.startTime, endTime: x.endTime }));
+}
+
 // ★ Delete button for the Smart Tile EDIT dialog in Daily Adjustments (matches the
 //   skeleton builder). Removes the tile from the daily override skeleton, saves,
 //   re-renders, and closes the dialog.
@@ -180,13 +443,23 @@ function _daInjectDeleteButton(overlay, tileId) {
   btn.className = 'da-btn da-modal-delete';
   btn.textContent = '🗑 Delete';
   btn.style.cssText = 'background:#fef2f2;color:#dc2626;border:1px solid #fecaca;margin-right:auto;';
-  btn.onclick = function () {
-    dailyOverrideSkeleton = dailyOverrideSkeleton.filter(function (x) { return x.id !== tileId; });
+  btn.onclick = async function () {
+    // ★ Multi-grade span: deleting any member removes the whole span.
+    const _ev = dailyOverrideSkeleton.find(function (x) { return x.id === tileId; });
+    const _ids = new Set((_ev ? _daSpanMembers(_ev) : []).map(function (m) { return m.id; }));
+    _ids.add(tileId);
+    const _snap = _daSnapshotRemovedTiles(_ids);
+    // ★ Gate on what the delete would drop from the GENERATED day (no prompt
+    //   when there is nothing generated under the tile).
+    if (!(await _daConfirmTileRemoval(_snap))) return;
+    dailyOverrideSkeleton = dailyOverrideSkeleton.filter(function (x) { return !_ids.has(x.id); });
     selectedTileId = null;
     saveDailySkeleton();
     renderGrid();
     const c = overlay.querySelector('.da-modal-cancel-x');
     if (c) c.click(); else overlay.remove();
+    // ★ Apply the removal to an already-generated day (see the function).
+    await _daApplyTileRemovalToGeneratedDay(_snap);
   };
   footer.insertBefore(btn, footer.firstChild);
 }
@@ -421,6 +694,9 @@ async function daTryMergeSwimElective(newEvent, divName, skeleton) {
   const overlap = skeleton.find(ex => {
     if (ex.division !== divName) return false;
     if (ex.id === newEvent.id) return false;
+    // Never merge into a multi-grade span member — the hybrid would apply to
+    // one grade while its span siblings keep the old tile.
+    if (ex.spanGroup) return false;
     const xs = parseTimeToMinutes(ex.startTime);
     const xe = parseTimeToMinutes(ex.endTime);
     if (xs === null || xe === null) return false;
@@ -456,6 +732,13 @@ function daShowConfirm(message, opts) {
     var existing = document.getElementById('da-modal-input-overlay--confirm');
     if (existing) existing.remove();
 
+    // ★ opts.dontAskKey — render a "Don't ask again" checkbox and, when it is
+    //   ticked at the moment the user confirms, remember the choice under that
+    //   localStorage key (per device, never camp-wide: one head counselor
+    //   silencing a prompt must not silence it for everyone). Callers gate on
+    //   daConfirmSuppressed(key) themselves; this only records the choice.
+    var _dontAskKey = opts.dontAskKey || null;
+
     var overlay = document.createElement('div');
     overlay.id = 'da-modal-input-overlay--confirm';
     overlay.className = 'da-modal-overlay';
@@ -466,6 +749,12 @@ function daShowConfirm(message, opts) {
           // is rendered raw; callers MUST escape any user-data they interpolate (see #V2-26).
           '<p style="margin:0;font-size:14px;color:#334155;line-height:1.6;">' + message + '</p>' +
         '</div>' +
+        (_dontAskKey
+          ? '<label class="da-confirm-dontask-row" style="display:flex;align-items:center;gap:8px;margin:0 24px 4px;padding:10px 12px;background:#f8fafc;border:1px solid #e2e8f0;border-radius:8px;font-size:12px;color:#475569;cursor:pointer;user-select:none;">' +
+              '<input type="checkbox" class="da-confirm-dontask" style="cursor:pointer;margin:0;">' +
+              'Don\'t ask again on this device' +
+            '</label>'
+          : '') +
         '<div class="da-modal-footer">' +
           '<button class="da-btn da-btn-ghost da-confirm-no">' + (opts.cancelText || 'Cancel') + '</button>' +
           '<button class="da-btn ' + (opts.danger ? 'da-btn-danger' : 'da-btn-primary') + ' da-confirm-yes">' + (opts.confirmText || 'Confirm') + '</button>' +
@@ -473,13 +762,26 @@ function daShowConfirm(message, opts) {
       '</div>';
 
     document.body.appendChild(overlay);
+    // One accept path for the button AND the Enter key, so confirming with the
+    // keyboard honors the checkbox exactly like clicking does.
+    var _accept = function() {
+      if (_dontAskKey) {
+        try {
+          var _cb = overlay.querySelector('.da-confirm-dontask');
+          if (_cb && _cb.checked) localStorage.setItem(_dontAskKey, '1');
+        } catch (_e) { /* private mode / quota — just don't remember it */ }
+      }
+      overlay.remove();
+      resolve(true);
+    };
     overlay.querySelector('.da-confirm-no').onclick = function() { overlay.remove(); resolve(false); };
-    overlay.querySelector('.da-confirm-yes').onclick = function() { overlay.remove(); resolve(true); };
+    overlay.querySelector('.da-confirm-yes').onclick = _accept;
     let _mdOverlayB = false;
     overlay.addEventListener('mousedown', function(e) { _mdOverlayB = (e.target === overlay); });
     overlay.onclick = function(e) { if (e.target === overlay && _mdOverlayB) { overlay.remove(); resolve(false); } };
     overlay.addEventListener('keydown', function(e) {
-      if (e.key === 'Enter') { overlay.remove(); resolve(true); }
+      // Space/Enter on the checkbox itself must toggle it, not accept the dialog.
+      if (e.key === 'Enter' && !(e.target && e.target.classList && e.target.classList.contains('da-confirm-dontask'))) { _accept(); }
       if (e.key === 'Escape') { overlay.remove(); resolve(false); }
     });
     setTimeout(function() { overlay.querySelector('.da-confirm-yes').focus(); }, 50);
@@ -1096,17 +1398,36 @@ function renderRainyDayPanel() {
   // Get mid-day analysis if available
   const dailyData = window.loadCurrentDailyData?.() || {};
   const midDayAnalysis = dailyData.midDayRainAnalysis || null;
+
+  // ★ Weather timeline notice — shown on a REGULAR day that carries cuts
+  //   (e.g. after Sun's Out): the schedule before the last cut is locked, and
+  //   Generate only refills after it. Offers a reset for the timeline.
+  const _wCuts = _rainyGetCuts();
+  let weatherTimelineNotice = '';
+  if (!isActive && _wCuts.length > 0) {
+    const _wLast = _wCuts[_wCuts.length - 1].min;
+    const _wPath = _wCuts.map(c => (c.type === 'sun' ? '☀️' : '🌧️') + ' ' + minutesToTime(c.min)).join(' → ');
+    weatherTimelineNotice = `
+      <div style="margin:10px 12px 0;background:#fffbeb;border:1px solid #fcd34d;border-radius:8px;padding:10px 12px;display:flex;align-items:center;gap:10px;flex-wrap:wrap;">
+        <div style="flex:1;min-width:200px;font-size:12px;color:#92400e;">
+          <strong>✂️ Weather timeline:</strong> ${_wPath}<br>
+          The schedule before <strong>${minutesToTime(_wLast)}</strong> is locked — Generate only refills after it.
+        </div>
+        <button id="da-clear-cuts-btn" class="da-btn da-btn-secondary da-btn-sm" style="white-space:nowrap;">Clear timeline</button>
+      </div>
+    `;
+  }
      
   // Mid-day info
   let midDayInfo = '';
   if (isMidDay) {
     midDayInfo = `
       <div class="da-rainy-midday-info">
-        <span class="da-rainy-midday-badge">⏰ Rain started at ${minutesToTime(midDayStartTime)}</span>
-        <span class="da-rainy-preserved-badge">✅ ${preservedSlots} kept</span>
+        <span class="da-rainy-midday-badge">Rain started at ${minutesToTime(midDayStartTime)}</span>
+        <span class="da-rainy-preserved-badge">${preservedSlots} kept</span>
         ${midDayAnalysis ? `
-          <span class="da-rainy-cutshort-badge">⚠️ ${midDayAnalysis.inProgressCount || 0} cut short</span>
-          <span class="da-rainy-cleared-badge">🗑️ ${midDayAnalysis.futureCount || 0} cleared</span>
+          <span class="da-rainy-cutshort-badge">${midDayAnalysis.inProgressCount || 0} cut short</span>
+          <span class="da-rainy-cleared-badge">${midDayAnalysis.futureCount || 0} cleared</span>
         ` : ''}
       </div>
     `;
@@ -1158,60 +1479,60 @@ function renderRainyDayPanel() {
             ${isActive ? `
               <!-- RAINY DAY STATS -->
               <div class="da-rainy-stat available">
-                <span>🏠</span>
                 <strong>${stats.indoorFields}</strong>
                 <span>Indoor Fields</span>
               </div>
               <div class="da-rainy-stat available">
-                <span>🎨</span>
                 <strong>${stats.indoorSpecials}</strong>
                 <span>Indoor Specials</span>
               </div>
               <div class="da-rainy-stat highlight">
-                <span>🌧️</span>
                 <strong>${stats.rainySpecials}</strong>
                 <span>Rainy-Only Activities</span>
               </div>
              <div class="da-rainy-stat disabled">
-                <span>🚫</span>
                 <strong>${stats.outdoorFields}</strong>
                 <span>Outdoor (Disabled)</span>
               </div>
-            ` + (isMidDay ? `
+            ` + `
               </div>
               <div style="margin-top:12px; padding:0 12px 12px;">
                 <button id="da-rain-clears-btn" class="da-btn da-btn-warning da-btn-sm" style="width:100%;">
-                  ☀️ Rain Cleared — Switch Back to Regular
+                  Sun's Out — Rain Cleared
                 </button>
               </div>
               <div class="da-rainy-stats" style="display:none;">
-            ` : '') + `
+            ` + `
             ` : `
               <!-- REGULAR DAY STATS -->
               <div class="da-rainy-stat">
-                <span>🏠</span>
                 <strong>${stats.indoorFields}</strong>
                 <span>Indoor Fields</span>
               </div>
               <div class="da-rainy-stat">
-                <span>🌳</span>
                 <strong>${stats.outdoorFields}</strong>
                 <span>Outdoor Fields</span>
               </div>
               <div class="da-rainy-stat">
-                <span>🎨</span>
                 <strong>${stats.indoorSpecials + stats.rainySpecials}</strong>
                 <span>Special Activities</span>
               </div>
-              <div class="da-rainy-stat" style="margin-left:auto;">
-                <button id="da-rainy-midday-btn" class="da-btn da-btn-warning da-btn-sm">⏰ Mid-Day Mode</button>
-              </div>
             `}
           </div>
-          
+
+          ${!isActive ? `
+          <!-- Mid-Day Mode trigger — prominent, so it's easy to find when rain starts mid-day -->
+          <div class="da-rainy-midday-cta">
+            <button id="da-rainy-midday-btn" class="da-btn da-btn-warning da-rainy-midday-cta-btn">Mid-Day Mode</button>
+            <p class="da-rainy-midday-cta-hint">Rain started partway through the day? Keep this morning's schedule and switch only the afternoon indoors.</p>
+          </div>
+          ` : ''}
+
+          ${weatherTimelineNotice}
+
           <!-- Settings Toggle -->
           <div class="da-rainy-settings-toggle">
-            <button id="da-rainy-settings-btn" class="da-rainy-settings-btn">⚙️ Settings</button>
+            <button id="da-rainy-settings-btn" class="da-rainy-settings-btn">Settings</button>
           </div>
             
           <!-- Settings Panel -->
@@ -1282,14 +1603,14 @@ function bindRainyDayEvents() {
       e.stopPropagation();
       const isOpen = settingsPanel.style.display !== 'none';
       settingsPanel.style.display = isOpen ? 'none' : 'block';
-      settingsBtn.textContent = isOpen ? '⚙️ Settings' : '⚙️ Close';
+      settingsBtn.textContent = isOpen ? 'Settings' : 'Close';
     };
   }
      
   if (toggle) {
-    toggle.onchange = function(e) {
+    toggle.onchange = async function(e) {
       e.stopPropagation();
-      
+
       // Debounce to prevent double-triggering
       if (_rainyToggleDebounce) {
         console.log("[RainyDay] Toggle debounced - ignoring duplicate");
@@ -1297,17 +1618,20 @@ function bindRainyDayEvents() {
       }
       _rainyToggleDebounce = true;
       setTimeout(() => { _rainyToggleDebounce = false; }, 500);
-      
+
       console.log("[RainyDay] Toggle changed, checked =", this.checked);
-      
-      if (this.checked) {
-        activateFullDayRainyMode();
-      } else {
-        deactivateRainyDayMode();
-      }
+
+      const activated = this.checked;
+      // result is undefined when activation was refused (access control)
+      const result = activated ? activateFullDayRainyMode() : deactivateRainyDayMode();
       renderRainyDayPanel();
       renderResourceOverridesUI();
       renderGrid();
+
+      // ★ Finish the job on an already-generated schedule: offer to re-roll
+      //   ONLY the weather-invalidated tiles (or a full gen after a skeleton
+      //   structure change). See _rainyOfferScheduleFix.
+      if (result) await _rainyOfferScheduleFix(activated, !!result.structureChanged);
     };
   }
      
@@ -1340,11 +1664,22 @@ function bindRainyDayEvents() {
   if (rainClearsBtn) {
     rainClearsBtn.onclick = function(e) {
       e.stopPropagation();
-      if (window.MidDayRainStacker?.showRainClearsModal) {
-        window.MidDayRainStacker.showRainClearsModal();
-      } else {
-        alert('Rain stacker module not loaded.');
-      }
+      // ★ Sun's Out (v3): split-based reverse transition — replaces the
+      //   retired stacker rebuild (showRainClearsModal).
+      showSunsOutModal();
+    };
+  }
+  const clearCutsBtn = document.getElementById('da-clear-cuts-btn');
+  if (clearCutsBtn) {
+    clearCutsBtn.onclick = async function(e) {
+      e.stopPropagation();
+      const ok = await daShowConfirm(
+        'Clear the weather timeline?<br><br>The cut lines disappear and Generate goes back to regenerating the <strong>whole day</strong>. The schedule itself is not changed.',
+        { confirmText: 'Clear timeline', cancelText: 'Cancel' });
+      if (!ok) return;
+      _rainyClearCuts();
+      renderRainyDayPanel();
+      renderGrid();
     };
   }
 }
@@ -1397,42 +1732,14 @@ function activateFullDayRainyMode() {
   }
   
   showRainyDayNotification(true, stats.outdoorFieldNames.length, false, skeletonSwitched);
+
+  // ★ Rainy tile-regen: tell the caller whether the day's slot STRUCTURE changed
+  //   (skeleton swap → per-tile regen can't map old tiles → needs a full gen).
+  return { structureChanged: skeletonSwitched };
 }
-// ★★★ Build resource overrides for the stacker ★★★
-function buildRainyDayResourceOverrides() {
-  const g = window.loadGlobalSettings?.() || {};
-  const fields = g.app1?.fields || [];
-  const specials = window.getGlobalSpecialActivities?.() || g.app1?.specialActivities || [];
-  const overrides = {};
-  
-  // Fields
-  fields.forEach(f => {
-    if (!f?.name) return;
-    if (f.rainyDayCapacity > 0) {
-      if (!overrides[f.name]) overrides[f.name] = {};
-      overrides[f.name].capacity = f.rainyDayCapacity;
-    }
-    if (f.rainyDayAvailableAllDay) {
-      if (!overrides[f.name]) overrides[f.name] = {};
-      overrides[f.name].ignoreTimeRules = true;
-    }
-  });
-  
-  // Special Activities
-  specials.forEach(s => {
-    if (!s?.name) return;
-    if (s.rainyDayCapacity > 0) {
-      if (!overrides[s.name]) overrides[s.name] = {};
-      overrides[s.name].capacity = s.rainyDayCapacity;
-    }
-    if (s.rainyDayAvailableAllDay) {
-      if (!overrides[s.name]) overrides[s.name] = {};
-      overrides[s.name].ignoreTimeRules = true;
-    }
-  });
-  
-  return overrides;
-}
+// NOTE: buildRainyDayResourceOverrides used to live here for the retired
+// mid-day stacker call; the stacker keeps its own copy (midday_rain_stacker.js)
+// for the rain-clears path.
 function activateMidDayRainyMode(customStartTime = null) {
   if (!window.AccessControl?.checkEditAccess?.('activate mid-day rainy mode')) return;
   
@@ -1449,8 +1756,16 @@ function activateMidDayRainyMode(customStartTime = null) {
     rainStartMin = now.getHours() * 60 + now.getMinutes();
   }
   
+  // ★ Weather timeline: a new cut can never fall BEFORE an earlier cut — that
+  //   would unlock schedule the previous cut already sealed. Clamp forward.
+  const _lastCutMin = _rainyGetLastCutMin();
+  if (_lastCutMin != null && rainStartMin < _lastCutMin) {
+    console.warn(`[RainyDay] Rain cut ${minutesToTime(rainStartMin)} is before the last weather cut ${minutesToTime(_lastCutMin)} — clamping forward`);
+    rainStartMin = _lastCutMin;
+  }
+
   console.log(`[RainyDay] Mid-day mode starting at ${minutesToTime(rainStartMin)}`);
-  
+
   // Backup pre-rainy state
   if (!dailyData.preRainyDayDisabledFields) {
     window.saveCurrentDailyData?.("preRainyDayDisabledFields", overrides.disabledFields || []);
@@ -1467,43 +1782,56 @@ function activateMidDayRainyMode(customStartTime = null) {
   const regularSkeletonName = assignments[dayNames[dow]] || assignments["Default"];
   window.saveCurrentDailyData?.("_preRainySkeletonName", regularSkeletonName);
   
-  // ★★★ NEW: Use the stacking algorithm instead of just clearing ★★★
-  if (window.MidDayRainStacker) {
-    // Build resource overrides from settings
-    const resourceOverrides = buildRainyDayResourceOverrides();
-    
-    // Run the stacking algorithm
-    const result = window.MidDayRainStacker.handleMidDayRainStart(rainStartMin, resourceOverrides);
-    
-    if (result.success) {
-      console.log("[RainyDay] ✅ Stacker rebuilt schedule successfully");
-      console.log("[RainyDay] Summary:", result.summary);
-      
-      // Update module state AND persist via saveDailySkeleton
-      dailyOverrideSkeleton = result.rebuiltSkeleton;
-      window.dailyOverrideSkeleton = dailyOverrideSkeleton;
-      saveDailySkeleton();
-    } else {
-      console.error("[RainyDay] ❌ Stacker failed:", result.error);
-      // Fall back to old behavior (clear and switch)
-      backupPreservedSchedule(rainStartMin);
-      const activityAnalysis = analyzeActivitiesForMidDayRain(rainStartMin);
-      clearActivitiesFromRainStart(rainStartMin, activityAnalysis);
-      if (isAutoSkeletonSwitchEnabled()) {
-        switchToRainySkeleton();
-      }
-    }
-  } else {
-    // Fallback: old behavior if stacker not loaded
-    console.warn("[RainyDay] MidDayRainStacker not available, using legacy mode");
-    backupPreservedSchedule(rainStartMin);
-    const activityAnalysis = analyzeActivitiesForMidDayRain(rainStartMin);
-    clearActivitiesFromRainStart(rainStartMin, activityAnalysis);
-    if (isAutoSkeletonSwitchEnabled()) {
-      switchToRainySkeleton();
-    }
-  }
-  
+  // ★★★ SPLIT & CLEAR (v3) — no stacker rebuild, no auto-generation ★★★
+  // The day is CUT at the rain-start time: everything already done stays
+  // exactly as it was (pinned, keeps rotation credit); everything from the
+  // cut onward is ERASED — from the schedule AND the rotation counts (both
+  // count paths derive from scheduleAssignments, so the erase + recount
+  // below uncounts them). A block in progress at the cut follows the
+  // RAIN_KEEP_FRACTION rule (≥75% done → kept + counted; less → erased +
+  // not counted). The user then builds the indoor rest-of-day themselves —
+  // manual tiles, per-tile regen, or Generate (PinnedPreservation protects
+  // the kept morning; rainy mode restricts new fills to indoor).
+  const sa = window.scheduleAssignments || {};
+
+  // Safety net: snapshot the pre-split schedule for manual recovery.
+  try {
+    window.saveCurrentDailyData?.("preMidDayRainSchedule", JSON.parse(JSON.stringify(sa)));
+  } catch (_eSnap) { /* non-fatal */ }
+
+  const split = _rainySplitScheduleAt(sa, window.divisionTimes || {}, _rainyScopedDivisions(), rainStartMin);
+  Object.keys(split.assignments).forEach(b => { sa[b] = split.assignments[b]; });
+  window.scheduleAssignments = sa;
+  window.saveCurrentDailyData?.("scheduleAssignments", sa);
+
+  const st = split.stats;
+  console.log(`[RainyDay] ✂️ Split at ${minutesToTime(rainStartMin)}: kept ${st.keptDone} done + ${st.keptInProgress} in-progress (≥75%), erased ${st.erasedInProgress} in-progress (<75%) + ${st.erasedFuture} future` +
+              (st.unknown ? `, ${st.unknown} untouched (no time info)` : ''));
+
+  // League games live only in leagueAssignments — split them at the cut too
+  // (keep the games already played, drop the rained-out afternoon fixtures).
+  try { _rainySplitLeagueAssignmentsAt(rainStartMin); } catch (_eLgSplit) { console.warn('[RainyDay] league split failed:', _eLgSplit); }
+
+  // Persist the split schedule + recount rotation. Both rotation stores are
+  // DERIVED from scheduleAssignments (RotationCloud.save delete-then-upserts
+  // the date's rows; rebuildHistoricalCounts rescans local dailies), so the
+  // erased blocks lose their credit and the kept ones keep it — including
+  // the ≥75% in-progress block, with no special-case marker needed.
+  const _splitDateKey = window.currentScheduleDate;
+  try {
+    if (window.verifiedScheduleSave) window.verifiedScheduleSave(_splitDateKey);
+    else window.ScheduleDB?.saveSchedule?.(_splitDateKey, { scheduleAssignments: sa, leagueAssignments: window.leagueAssignments || {} });
+  } catch (_eSave) { console.warn('[RainyDay] split save failed:', _eSave); }
+  try { window.SchedulerCoreUtils?.rebuildHistoricalCounts?.(true); } catch (_eRC) { /* non-fatal */ }
+  try { window.RotationCloud?.save?.(_splitDateKey, sa); } catch (_eRCl) { /* non-fatal */ }
+
+  // League game COUNT rollback — the schedule/matchup split above removed the
+  // rained-out afternoon games, but league rotation/variety records live in a
+  // SEPARATE persistent gameLog that the split never touches. Subtract exactly
+  // the removed games (keep the ones that survived) so "rain = it never
+  // happened" holds for league counts, standings and the play report too.
+  try { _rainyRollbackLeagueCountsAt(_splitDateKey); } catch (_eLgCnt) { console.warn('[RainyDay] league count rollback failed:', _eLgCnt); }
+
   // Disable outdoor fields
   const existingDisabled = overrides.disabledFields || [];
   const newDisabled = [...new Set([...existingDisabled, ...stats.outdoorFieldNames])];
@@ -1513,109 +1841,540 @@ function activateMidDayRainyMode(customStartTime = null) {
   // Set window.isRainyDay
   window.isRainyDay = true;
   window.rainyDayStartTime = rainStartMin;
-  
+
   window.saveCurrentDailyData?.("rainyDayMode", true);
   window.saveCurrentDailyData?.("rainyDayStartTime", rainStartMin);
   window.saveCurrentDailyData?.("isRainyDay", true);
-  
- 
-  
-  // ★★★ FIX: Clear stale league data (same as full-day mode) ★★★
-  window.leagueAssignments = {};
 
-  let skeletonSwitched = true; // Stacker handles this
-  showRainyDayNotification(true, stats.outdoorFieldNames.length, true, skeletonSwitched);
+  // ★ Weather timeline: record the rain cut (grid line + Generate lock).
+  _rainyAppendCut(rainStartMin, 'rain');
+
+  // NOTE: leagueAssignments is intentionally NOT wiped (unlike full-day mode):
+  // pre-rain league games already played keep their matchup data; post-rain
+  // league ENTRIES were erased with everything else, and rainy generation
+  // skips league placement, so nothing stale can come back.
+
+  showRainyDayNotification(true, stats.outdoorFieldNames.length, true, false, st.keptDone + st.keptInProgress);
   console.log("[RainyDay] Activated mid-day mode at", minutesToTime(rainStartMin));
-  
-  // Trigger generation now — all rainy state is configured above
-  // (isRainyDay, disabled fields, cleared leagues). No setTimeout
-  // so the optimizer sees the correct state immediately.
-  if (window.MidDayRainStacker?.triggerMidDayGeneration) {
-    window.MidDayRainStacker.triggerMidDayGeneration();
-    renderGrid();
-  }
+  return { rainStartMin, stats: st };
 }
 
-// Analyze activities relative to rain start time
-function analyzeActivitiesForMidDayRain(rainStartMin) {
-  const times = window.unifiedTimes || [];
-  const schedules = window.scheduleAssignments || {};
-  
-  const analysis = {
-    completed: [],      // Slots that finished before rain (KEEP)
-    inProgress: [],     // Slots that were in progress when rain started (CUT SHORT)
-    future: [],         // Slots that hadn't started yet (CLEAR)
-    completedCount: 0,
-    inProgressCount: 0,
-    futureCount: 0,
-    rainStartTime: rainStartMin,
-    rainStartFormatted: minutesToTime(rainStartMin)
+// ─────────────────────────────────────────────────────────────────────────
+// SUN'S OUT — the reverse mid-day transition (rain → sunny), and the second
+// half of the sunny→rainy→sunny sequence. Same split machinery as the rain
+// cut, in the other direction:
+//   • everything up to the clear time stays — INCLUDING the rainy indoor
+//     segment that already ran, which keeps its rotation credit (the 75% rule
+//     decides the activity in progress at the clear, same as the rain cut)
+//   • everything after the clear time is erased (schedule + rotation credit)
+//   • outdoor fields come back, rainy mode turns off, and Generate refills
+//     only from the clear onward with the FULL (outdoor-allowed) pool.
+// The skeleton is intentionally NOT switched back mid-day: the kept slots were
+// built on the current structure, and swapping it would misalign them. The
+// full-day toggle OFF remains the "undo everything" path.
+// ─────────────────────────────────────────────────────────────────────────
+function activateSunsOutAt(clearMin) {
+  if (!window.AccessControl?.checkEditAccess?.('clear rainy day mode')) return;
+
+  const dailyData = window.loadCurrentDailyData?.() || {};
+  const overrides = dailyData.overrides || {};
+
+  // A cut can never fall before the previous cut (mirrors the rain cut).
+  const _lastCutMin = _rainyGetLastCutMin();
+  if (_lastCutMin != null && clearMin < _lastCutMin) {
+    console.warn(`[RainyDay] Sun cut ${minutesToTime(clearMin)} is before the last weather cut ${minutesToTime(_lastCutMin)} — clamping forward`);
+    clearMin = _lastCutMin;
+  }
+
+  // Safety net: snapshot the pre-split schedule for manual recovery.
+  const sa = window.scheduleAssignments || {};
+  try {
+    window.saveCurrentDailyData?.("preMidDayRainSchedule", JSON.parse(JSON.stringify(sa)));
+  } catch (_eSnap) { /* non-fatal */ }
+
+  const split = _rainySplitScheduleAt(sa, window.divisionTimes || {}, _rainyScopedDivisions(), clearMin);
+  Object.keys(split.assignments).forEach(b => { sa[b] = split.assignments[b]; });
+  window.scheduleAssignments = sa;
+  window.saveCurrentDailyData?.("scheduleAssignments", sa);
+
+  const st = split.stats;
+  console.log(`[RainyDay] ☀️ Sun's out at ${minutesToTime(clearMin)}: kept ${st.keptDone} done + ${st.keptInProgress} in-progress (≥75%), erased ${st.erasedInProgress} in-progress (<75%) + ${st.erasedFuture} future`);
+
+  // Split the league map at the clear time too (mirrors the rain cut).
+  try { _rainySplitLeagueAssignmentsAt(clearMin); } catch (_eLgSplit) { console.warn('[RainyDay] league split failed:', _eLgSplit); }
+
+  // Persist + recount — the kept sunny morning AND the kept rainy segment both
+  // stay in the rotation counts (both count stores derive from the entries).
+  const _clearDateKey = window.currentScheduleDate;
+  try {
+    if (window.verifiedScheduleSave) window.verifiedScheduleSave(_clearDateKey);
+    else window.ScheduleDB?.saveSchedule?.(_clearDateKey, { scheduleAssignments: sa, leagueAssignments: window.leagueAssignments || {} });
+  } catch (_eSave) { console.warn('[RainyDay] sun-cut save failed:', _eSave); }
+  try { window.SchedulerCoreUtils?.rebuildHistoricalCounts?.(true); } catch (_eRC) { /* non-fatal */ }
+  try { window.RotationCloud?.save?.(_clearDateKey, sa); } catch (_eRCl) { /* non-fatal */ }
+
+  // League game COUNT rollback — mirror the rain-cut path: the split dropped the
+  // post-clear games from leagueAssignments; subtract their persistent records
+  // so the removed games stop counting toward variety / standings / game count.
+  try { _rainyRollbackLeagueCountsAt(_clearDateKey); } catch (_eLgCnt) { console.warn('[RainyDay] league count rollback failed:', _eLgCnt); }
+
+  // Re-enable outdoor fields (restore the pre-rain disabled set).
+  const preRainyDisabled = dailyData.preRainyDayDisabledFields || [];
+  overrides.disabledFields = preRainyDisabled;
+  currentOverrides.disabledFields = preRainyDisabled;
+  window.saveCurrentDailyData?.("overrides", overrides);
+  window.saveCurrentDailyData?.("preRainyDayDisabledFields", null);
+
+  // Rainy mode ends at the cut.
+  window.isRainyDay = false;
+  window.rainyDayStartTime = null;
+  window.saveCurrentDailyData?.("rainyDayMode", false);
+  window.saveCurrentDailyData?.("rainyDayStartTime", null);
+  window.saveCurrentDailyData?.("isRainyDay", false);
+
+  // ★ Weather timeline: record the sun cut (grid line + Generate lock).
+  _rainyAppendCut(clearMin, 'sun');
+
+  showRainyDayNotification(false);
+  return { clearMin, stats: st };
+}
+
+// Sun's-out time picker modal — mirror of the mid-day rain modal.
+function showSunsOutModal() {
+  const existingModal = document.getElementById('da-suns-out-modal');
+  if (existingModal) existingModal.remove();
+
+  const now = new Date();
+  const currentTimeStr = `${String(now.getHours()).padStart(2, '0')}:${String(Math.floor(now.getMinutes() / 5) * 5).padStart(2, '0')}`;
+  const lastCutMin = _rainyGetLastCutMin();
+
+  const modal = document.createElement('div');
+  modal.id = 'da-suns-out-modal';
+  modal.className = 'da-modal-overlay';
+  modal.innerHTML = `
+    <div class="da-modal" style="max-width:450px;">
+      <div class="da-modal-header">
+        <h3>☀️ Sun's Out — Rain Cleared</h3>
+        <button class="da-modal-close" onclick="this.closest('.da-modal-overlay').remove()">×</button>
+      </div>
+      <div class="da-modal-body">
+        <p style="margin-bottom:16px;color:#64748b;">
+          The day is <strong>split again</strong> at the clear time: everything before it —
+          including the rainy-day activities that already ran — stays and keeps its rotation
+          credit. Everything after is <strong>cleared</strong>, outdoor fields come back, and
+          you can rebuild the rest of the day with the full activity pool.
+        </p>
+
+        <div class="da-form-field" style="margin-bottom:16px;">
+          <label style="font-weight:600;margin-bottom:6px;display:block;">When did the rain clear?</label>
+          <div style="display:flex;gap:12px;align-items:center;">
+            <input type="time" id="da-suns-out-time" class="da-input" value="${currentTimeStr}" style="flex:1;font-size:16px;padding:10px;">
+            <button id="da-suns-out-use-now-btn" class="da-btn da-btn-secondary" style="white-space:nowrap;">Use Current Time</button>
+          </div>
+          ${lastCutMin != null ? `<div style="font-size:0.75rem;color:#64748b;margin-top:4px;">Must be at or after the last weather cut (${minutesToTime(lastCutMin)}).</div>` : ''}
+        </div>
+
+        <div id="da-suns-out-preview" style="background:#f8fafc;border:1px solid #e2e8f0;border-radius:8px;padding:12px;margin-bottom:16px;">
+          <div style="font-weight:600;margin-bottom:8px;">Preview:</div>
+          <div id="da-suns-out-preview-content">Calculating...</div>
+        </div>
+
+        <div style="background:#fef3c7;border:1px solid #fcd34d;border-radius:8px;padding:12px;margin-bottom:16px;">
+          <div style="font-weight:600;color:#92400e;margin-bottom:4px;">⚠️ Activity in progress at the cut</div>
+          <div style="font-size:13px;color:#a16207;">
+            If it's at least <strong>75% done</strong> it stays and counts toward rotation;
+            if less, it's cleared and does <strong>not</strong> count.
+          </div>
+        </div>
+      </div>
+      <div class="da-modal-footer">
+        <button class="da-btn da-btn-secondary" onclick="this.closest('.da-modal-overlay').remove()">Cancel</button>
+        <button id="da-suns-out-confirm-btn" class="da-btn da-btn-primary">☀️ Switch Back to Regular</button>
+      </div>
+    </div>
+  `;
+
+  document.body.appendChild(modal);
+
+  const updatePreview = () => {
+    const timeInput = document.getElementById('da-suns-out-time');
+    const previewContent = document.getElementById('da-suns-out-preview-content');
+    if (!timeInput || !previewContent) return;
+
+    const [hours, mins] = timeInput.value.split(':').map(Number);
+    const clearMin = hours * 60 + mins;
+
+    const st = _rainySplitScheduleAt(
+      window.scheduleAssignments || {},
+      window.divisionTimes || {},
+      _rainyScopedDivisions(),
+      clearMin
+    ).stats;
+
+    previewContent.innerHTML = `
+      <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:8px;text-align:center;">
+        <div style="background:#d1fae5;padding:8px;border-radius:6px;">
+          <div style="font-size:20px;font-weight:700;color:#065f46;">${st.keptDone + st.keptInProgress}</div>
+          <div style="font-size:11px;color:#047857;">✅ Keep</div>
+        </div>
+        <div style="background:#fef3c7;padding:8px;border-radius:6px;">
+          <div style="font-size:20px;font-weight:700;color:#92400e;">${st.erasedInProgress}</div>
+          <div style="font-size:11px;color:#a16207;">⚠️ Cut (&lt;75%)</div>
+        </div>
+        <div style="background:#fee2e2;padding:8px;border-radius:6px;">
+          <div style="font-size:20px;font-weight:700;color:#991b1b;">${st.erasedFuture}</div>
+          <div style="font-size:11px;color:#dc2626;">🗑️ Clear</div>
+        </div>
+      </div>
+    `;
   };
-  
-  for (let i = 0; i < times.length; i++) {
-    const slot = times[i];
-    if (!slot || !slot.start || !slot.end) continue;
-    
-    const slotStart = new Date(slot.start).getHours() * 60 + new Date(slot.start).getMinutes();
-    const slotEnd = new Date(slot.end).getHours() * 60 + new Date(slot.end).getMinutes();
-    
-    const slotInfo = {
-      index: i,
-      startTime: minutesToTime(slotStart),
-      endTime: minutesToTime(slotEnd),
-      startMin: slotStart,
-      endMin: slotEnd
-    };
-    
-    if (slotEnd <= rainStartMin) {
-      // Slot ended before rain started → COMPLETED (keep)
-      analysis.completed.push(slotInfo);
-      analysis.completedCount++;
-    } else if (slotStart < rainStartMin && slotEnd > rainStartMin) {
-      // Slot was in progress when rain started → CUT SHORT (discard)
-      slotInfo.cutAt = minutesToTime(rainStartMin);
-      analysis.inProgress.push(slotInfo);
-      analysis.inProgressCount++;
-    } else if (slotStart >= rainStartMin) {
-      // Slot hadn't started yet → FUTURE (clear)
-      analysis.future.push(slotInfo);
-      analysis.futureCount++;
+
+  document.getElementById('da-suns-out-time').addEventListener('change', updatePreview);
+  document.getElementById('da-suns-out-time').addEventListener('input', updatePreview);
+  document.getElementById('da-suns-out-use-now-btn').onclick = () => {
+    const n = new Date();
+    document.getElementById('da-suns-out-time').value =
+      `${String(n.getHours()).padStart(2, '0')}:${String(Math.floor(n.getMinutes() / 5) * 5).padStart(2, '0')}`;
+    updatePreview();
+  };
+
+  document.getElementById('da-suns-out-confirm-btn').onclick = async () => {
+    const timeInput = document.getElementById('da-suns-out-time');
+    const [hours, mins] = timeInput.value.split(':').map(Number);
+    const clearMin = hours * 60 + mins;
+
+    if (lastCutMin != null && clearMin < lastCutMin) {
+      await daShowAlert('The clear time can\'t be before the last weather cut (' + minutesToTime(lastCutMin) + ').');
+      return;
     }
-  }
-  
-  return analysis;
+
+    modal.remove();
+    activateSunsOutAt(clearMin);
+    renderRainyDayPanel();
+    renderResourceOverridesUI();
+    renderGrid();
+  };
+
+  let _soOverlayF = false;
+  modal.addEventListener('mousedown', (e) => { _soOverlayF = (e.target === modal); });
+  modal.onclick = (e) => { if (e.target === modal && _soOverlayF) modal.remove(); };
+
+  updatePreview();
 }
 
-// Clear schedule assignments from rain start onwards
-function clearActivitiesFromRainStart(rainStartMin, analysis) {
-  const schedules = window.scheduleAssignments || {};
-  
-  // Get slot indices to clear (in-progress + future)
-  const slotsToClear = new Set();
-  analysis.inProgress.forEach(slot => slotsToClear.add(slot.index));
-  analysis.future.forEach(slot => slotsToClear.add(slot.index));
-  
-  if (slotsToClear.size === 0) {
-    console.log("[RainyDay] No slots to clear");
-    return;
-  }
-  
-  // Clear assignments for these slots across all bunks
-  let clearedCount = 0;
-  Object.keys(schedules).forEach(bunk => {
-    slotsToClear.forEach(slotIdx => {
-      if (schedules[bunk] && schedules[bunk][slotIdx]) {
-        schedules[bunk][slotIdx] = null;
-        clearedCount++;
+// ─────────────────────────────────────────────────────────────────────────
+// MID-DAY RAIN SPLIT — the day is cut at the rain-start minute.
+// A block in progress at the cut is decided by how much of it already ran:
+// ≥ RAIN_KEEP_FRACTION done → treat as happened (keep + rotation credit);
+// less → treat as not-happened (erase + no credit).
+// ─────────────────────────────────────────────────────────────────────────
+const RAIN_KEEP_FRACTION = 0.75;
+
+// Pure — mirrored verbatim in tests/rainy_midday_split_sim.js; keep in sync.
+// Walks every bunk of the passed divisions, groups multi-slot blocks (spanned
+// specials) via _blockStart/_startMin — the same rule as the per-tile regen
+// multi-period guard — and decides each block AS ONE UNIT against tMin:
+//   • block ends at/before tMin   → keep (stamped _pinned/_fixed so a later
+//                                   Generate can't overwrite the morning)
+//   • block starts at/after tMin  → erase (slot → null)
+//   • straddling block            → done-fraction ≥ keepFraction ? keep : erase
+// Block spans come from divisionTimes slot times, falling back to the entry's
+// own _startMin/_endMin; blocks with no resolvable time are left untouched.
+// Returns { assignments, stats } — assignments holds ONLY the scanned bunks,
+// each a NEW array; stats counts BLOCKS (continuation slots aren't re-counted,
+// matching how rotation counting skips continuations).
+function _rainySplitScheduleAt(assignments, divisionTimes, divisions, tMin, keepFraction) {
+  const kf = (typeof keepFraction === 'number') ? keepFraction : RAIN_KEEP_FRACTION;
+  const toMin = v => {
+    if (typeof v === 'number' && isFinite(v)) return v;
+    if (typeof v === 'string') {
+      const m = v.match(/^(\d{1,2}):(\d{2})$/);
+      if (m) return (+m[1]) * 60 + (+m[2]);
+      const d = new Date(v);
+      if (!isNaN(d)) return d.getHours() * 60 + d.getMinutes();
+    }
+    return null;
+  };
+  const out = {};
+  const stats = { keptDone: 0, keptInProgress: 0, erasedInProgress: 0, erasedFuture: 0, unknown: 0 };
+  Object.entries(divisions || {}).forEach(([divName, divData]) => {
+    const slots = (divisionTimes || {})[divName] || [];
+    (((divData || {}).bunks) || []).forEach(b => {
+      const bunk = String(b);
+      const arr = (assignments || {})[bunk];
+      if (!Array.isArray(arr)) return;
+
+      // 1. Group slot indices into blocks (a spanned special = one block).
+      const groups = new Map();
+      for (let i = 0; i < arr.length; i++) {
+        const e = arr[i];
+        if (!e) continue;
+        const bs = (e._blockStart != null) ? e._blockStart
+                 : (e._startMin != null) ? e._startMin : null;
+        const key = (bs != null) ? ('b:' + bs) : ('i:' + i);
+        if (!groups.has(key)) groups.set(key, []);
+        groups.get(key).push(i);
+      }
+
+      // 2. Decide each block's fate from its real time span.
+      const res = arr.map(e => e ? JSON.parse(JSON.stringify(e)) : null);
+      groups.forEach(indices => {
+        let start = null, end = null;
+        indices.forEach(i => {
+          const s = slots[i] || {};
+          const e = arr[i] || {};
+          const ss = toMin((s.startMin != null) ? s.startMin : ((s.start != null) ? s.start : e._startMin));
+          const se = toMin((s.endMin != null) ? s.endMin : ((s.end != null) ? s.end : e._endMin));
+          if (ss != null && (start == null || ss < start)) start = ss;
+          if (se != null && (end == null || se > end)) end = se;
+        });
+        if (start == null || end == null || end <= start) {
+          stats.unknown += indices.length;
+          return; // no resolvable time — leave the entries untouched
+        }
+        let keep, inProgress = false;
+        if (end <= tMin) keep = true;
+        else if (start >= tMin) keep = false;
+        else { inProgress = true; keep = ((tMin - start) / (end - start)) >= kf; }
+        indices.forEach(i => {
+          const isHead = res[i] && !res[i].continuation;
+          if (keep) {
+            res[i] = Object.assign({}, res[i], { _pinned: true, _fixed: true, _midDayPreserved: true });
+            if (isHead) stats[inProgress ? 'keptInProgress' : 'keptDone']++;
+          } else {
+            if (isHead) stats[inProgress ? 'erasedInProgress' : 'erasedFuture']++;
+            res[i] = null;
+          }
+        });
+      });
+      out[bunk] = res;
+    });
+  });
+  return { assignments: out, stats };
+}
+
+// Pure — mirrored verbatim in tests/rainy_midday_split_sim.js; keep in sync.
+// Builds the __regenSlotScope for a Generate while the mid-day rain cut is
+// active, so ONLY the day from the cut onward regenerates:
+//   • regen = slots whose time window ends AFTER the cut and that don't hold a
+//     pinned/fixed entry (kept-morning stamps, user pins, bunk overrides).
+//     The STEP 6.5 / 7.5 slot-scope gates make this authoritative — the solver
+//     cannot fill any slot outside regen, including EMPTY pre-cut slots.
+//   • keep  = every existing entry outside regen, snapshotted byte-for-byte
+//     (scheduler_core_main STEP 1 re-inserts them pinned after the wipe).
+//   • orig  = pre-regen content of regen slots (no-blank fallback parity with
+//     the per-tile regen core).
+// Slots with no resolvable end time are treated as pre-cut (left alone).
+function _rainyBuildMidDayRegenScope(assignments, divisionTimes, divisions, tMin) {
+  const toMin = v => {
+    if (typeof v === 'number' && isFinite(v)) return v;
+    if (typeof v === 'string') {
+      const m = v.match(/^(\d{1,2}):(\d{2})$/);
+      if (m) return (+m[1]) * 60 + (+m[2]);
+      const d = new Date(v);
+      if (!isNaN(d)) return d.getHours() * 60 + d.getMinutes();
+    }
+    return null;
+  };
+  const scope = {};
+  let regenTotal = 0;
+  Object.entries(divisions || {}).forEach(([divName, divData]) => {
+    const slots = (divisionTimes || {})[divName] || [];
+    (((divData || {}).bunks) || []).forEach(b => {
+      const bunk = String(b);
+      const arr = (assignments || {})[bunk] || [];
+      const n = Math.max(arr.length, slots.length);
+      const regen = new Set();
+      const keep = {};
+      const orig = {};
+      for (let i = 0; i < n; i++) {
+        const e = arr[i];
+        const s = slots[i] || {};
+        const se = toMin((s.endMin != null) ? s.endMin : ((s.end != null) ? s.end : (e ? e._endMin : null)));
+        const postCut = (se != null) && (se > tMin);
+        const pinnedByUser = !!(e && (e._pinned || e._fixed));
+        if (postCut && !pinnedByUser) {
+          regen.add(i);
+          if (e) orig[i] = JSON.parse(JSON.stringify(e));
+        } else if (e) {
+          keep[i] = JSON.parse(JSON.stringify(e));
+        }
+      }
+      scope[bunk] = { regen, keep, orig };
+      regenTotal += regen.size;
+    });
+  });
+  return { scope, regenTotal };
+}
+
+// Pure — mirrored verbatim in tests/rainy_midday_split_sim.js; keep in sync.
+// League games live ONLY in leagueAssignments (league periods keep their
+// per-bunk schedule slots EMPTY by design — the grid overlays the matchups),
+// so the schedule split can't see them. Split the league map with the same
+// block-fate rule: game over by the cut → keep; not started → drop;
+// in progress → keep iff ≥ keepFraction done. Keys are division names (or
+// bunk names for specialty leagues — resolved to their division's slots).
+// Returns { map, dropped } — map is a NEW object.
+function _rainySplitLeagueMapAt(leagueAssignments, divisionTimes, bunkToDiv, tMin, keepFraction) {
+  const kf = (typeof keepFraction === 'number') ? keepFraction : RAIN_KEEP_FRACTION;
+  const out = {};
+  let dropped = 0;
+  Object.keys(leagueAssignments || {}).forEach(key => {
+    const src = leagueAssignments[key];
+    if (!src || typeof src !== 'object') { out[key] = src; return; }
+    const divName = (divisionTimes || {})[key] ? key : ((bunkToDiv || {})[key] || null);
+    const slots = (divName && divisionTimes[divName]) || [];
+    const dst = Array.isArray(src) ? [] : {};
+    Object.keys(src).forEach(k => {
+      const v = src[k];
+      if (v == null) return;
+      const si = parseInt(k, 10);
+      const s = (!isNaN(si) && slots[si]) || {};
+      // Prefer the slot's time, but fall back to the game's OWN stamped time
+      // (_startMin/_endMin, written at storage) — the slot-index→divisionTimes
+      // lookup drifts across regens and can be stale at apply time, which let
+      // rained-out afternoon games slip through as "no time info → keep".
+      const ss = (s.startMin != null) ? s.startMin : ((v && v._startMin != null) ? v._startMin : null);
+      const se = (s.endMin != null) ? s.endMin : ((v && v._endMin != null) ? v._endMin : null);
+      let keep;
+      if (se == null) keep = true;                 // no time info — leave alone
+      else if (se <= tMin) keep = true;            // game finished before the cut
+      else if (ss == null || ss >= tMin) keep = false; // hadn't started
+      else keep = ((tMin - ss) / (se - ss)) >= kf; // in progress at the cut
+      if (keep) dst[k] = JSON.parse(JSON.stringify(v));
+      else dropped++;
+    });
+    out[key] = dst;
+  });
+  return { map: out, dropped };
+}
+
+// Production wrapper: split window.leagueAssignments at the cut.
+function _rainySplitLeagueAssignmentsAt(tMin) {
+  const divisions = window.divisions || {};
+  const bunkToDiv = {};
+  Object.entries(divisions).forEach(([dn, di]) =>
+    (((di || {}).bunks) || []).forEach(b => { bunkToDiv[String(b)] = dn; }));
+  const r = _rainySplitLeagueMapAt(window.leagueAssignments || {}, window.divisionTimes || {}, bunkToDiv, tMin);
+  window.leagueAssignments = r.map;
+  if (r.dropped) console.log(`[RainyDay] ✂️ dropped ${r.dropped} post-cut league game(s) from leagueAssignments`);
+  return r.dropped;
+}
+
+// Pure — mirrored verbatim in tests/rainy_league_count_sim.js; keep in sync.
+// From the POST-split leagueAssignments, collect the game LABELS that survived
+// the cut, split by engine. Every stored league block carries leagueName +
+// gameLabel; specialty blocks additionally carry isSpecialtyLeague:true (regular
+// blocks don't). The league engines' rollbackCutGames() subtract exactly the
+// games NOT in these sets, so the persistent gameLog / matchup+sport variety /
+// game count follow "rain means it never happened" for leagues too.
+// Returns { regular: { leagueName: Set<label> }, specialty: { leagueName: Set<label> } }.
+function _rainySurvivingLeagueLabels(leagueAssignments) {
+  const regular = {}, specialty = {};
+  Object.keys(leagueAssignments || {}).forEach(function (key) {
+    const map = leagueAssignments[key];
+    if (!map || typeof map !== 'object') return;
+    Object.keys(map).forEach(function (k) {
+      const e = map[k];
+      if (!e || !e.leagueName || !e.gameLabel) return;
+      const bucket = e.isSpecialtyLeague ? specialty : regular;
+      (bucket[e.leagueName] = bucket[e.leagueName] || new Set()).add(e.gameLabel);
+    });
+  });
+  return { regular: regular, specialty: specialty };
+}
+
+// Roll the league game COUNT back to match the matchup split: the split already
+// dropped the rained-out games from leagueAssignments; this subtracts their
+// persistent records (matchupHistory / teamSports / gameLog / gamesPerDate +
+// Leagues results page) so nothing that "never happened" keeps counting.
+// divisionNames = null → all leagues (mirrors the split, which is not scoped).
+function _rainyRollbackLeagueCountsAt(dateKey) {
+  if (!dateKey) return;
+  const surv = _rainySurvivingLeagueLabels(window.leagueAssignments || {});
+  try { window.SchedulerCoreLeagues?.rollbackCutGames?.(null, dateKey, surv.regular); }
+  catch (e) { console.warn('[RainyDay] regular league count rollback failed:', e); }
+  try { window.SchedulerCoreSpecialtyLeagues?.rollbackCutGames?.(null, dateKey, surv.specialty); }
+  catch (e) { console.warn('[RainyDay] specialty league count rollback failed:', e); }
+}
+
+// Restore PRE-CUT league games after a cut-scoped generate. The pre-gen wipe
+// clears leagueAssignments and the solver (which skips leagues under rain, and
+// only re-rolls post-cut periods otherwise) doesn't put the morning games
+// back — without this, an afternoon Generate erased the games already played.
+// Only slots that START before the cut are restored, and only when the gen
+// didn't write its own entry there.
+function _rainyRestorePreCutLeagues(snapshot, tMin) {
+  const divisions = window.divisions || {};
+  const bunkToDiv = {};
+  Object.entries(divisions).forEach(([dn, di]) =>
+    (((di || {}).bunks) || []).forEach(b => { bunkToDiv[String(b)] = dn; }));
+  const dt = window.divisionTimes || {};
+  const la = window.leagueAssignments = window.leagueAssignments || {};
+  let restored = 0;
+  Object.keys(snapshot || {}).forEach(key => {
+    const src = snapshot[key];
+    if (!src || typeof src !== 'object') return;
+    const divName = dt[key] ? key : (bunkToDiv[key] || null);
+    const slots = (divName && dt[divName]) || [];
+    Object.keys(src).forEach(k => {
+      const v = src[k];
+      if (v == null) return;
+      const si = parseInt(k, 10);
+      const s = (!isNaN(si) && slots[si]) || {};
+      // Prefer the slot's time, fall back to the game's OWN stamped _startMin
+      // (see _rainySplitLeagueMapAt) so a post-cut game whose slot index no
+      // longer resolves isn't wrongly restored.
+      const ss = (s.startMin != null) ? s.startMin : ((v && v._startMin != null) ? v._startMin : null);
+      if (ss != null && ss >= tMin) return; // post-cut → the gen owns it
+      if (!la[key]) la[key] = Array.isArray(src) ? [] : {};
+      if (la[key][k] == null) {
+        la[key][k] = JSON.parse(JSON.stringify(v));
+        restored++;
       }
     });
   });
-  
-  // Save the updated schedule
-  window.scheduleAssignments = schedules;
-  window.saveCurrentDailyData?.("scheduleAssignments", schedules);
-  
-  console.log(`[RainyDay] Cleared ${clearedCount} assignments from ${slotsToClear.size} slots`);
+  return restored;
+}
+
+// ─────────────────────────────────────────────────────────────────────────
+// WEATHER TIMELINE — the day's mid-day cuts, in order.
+// midDayCuts = [{min, type:'rain'|'sun'}] (per-date daily data). Every cut was
+// applied with the same split machinery (_rainySplitScheduleAt): the schedule
+// before the LAST cut is locked history — the grid draws a line per cut, and
+// Generate only refills from the last cut onward (via the cut-scoped
+// __regenSlotScope). This is what makes sunny→rainy→sunny (and any longer
+// sequence) work: each transition appends a cut and re-splits.
+// ─────────────────────────────────────────────────────────────────────────
+function _rainyGetCuts() {
+  const daily = window.loadCurrentDailyData?.() || {};
+  const cuts = daily.midDayCuts || window.midDayCuts || [];
+  return Array.isArray(cuts)
+    ? cuts.filter(c => c && typeof c.min === 'number' && isFinite(c.min))
+    : [];
+}
+
+function _rainyGetLastCutMin() {
+  const cuts = _rainyGetCuts();
+  if (cuts.length) return cuts[cuts.length - 1].min;
+  // Legacy: a mid-day rain activated before the timeline existed.
+  if (window.isRainyDay === true && typeof window.rainyDayStartTime === 'number' && window.rainyDayStartTime > 0) {
+    return window.rainyDayStartTime;
+  }
+  return null;
+}
+
+function _rainyAppendCut(min, type) {
+  const cuts = _rainyGetCuts();
+  cuts.push({ min, type });
+  window.midDayCuts = cuts;
+  window.saveCurrentDailyData?.("midDayCuts", cuts);
+  return cuts;
+}
+
+function _rainyClearCuts() {
+  window.midDayCuts = [];
+  window.saveCurrentDailyData?.("midDayCuts", null);
 }
 
 // Show mid-day rain start time picker modal
@@ -1640,9 +2399,9 @@ function showMidDayRainModal() {
       </div>
       <div class="da-modal-body">
         <p style="margin-bottom:16px;color:#64748b;">
-          This will preserve activities that <strong>completed before</strong> the rain start time, 
-          discard any activities that were <strong>in progress</strong> (cut short by rain), 
-          and clear all <strong>future</strong> activities for you to reschedule with indoor options.
+          The day is <strong>split</strong> at the rain start time: everything before it stays
+          exactly as it is, and everything after is <strong>cleared</strong> — from the schedule
+          and the rotation counts — so you can build the indoor rest of the day.
         </p>
         
         <div class="da-form-field" style="margin-bottom:16px;">
@@ -1659,9 +2418,10 @@ function showMidDayRainModal() {
         </div>
         
         <div style="background:#fef3c7;border:1px solid #fcd34d;border-radius:8px;padding:12px;margin-bottom:16px;">
-          <div style="font-weight:600;color:#92400e;margin-bottom:4px;">⚠️ Warning</div>
+          <div style="font-weight:600;color:#92400e;margin-bottom:4px;">⚠️ Activity in progress at the cut</div>
           <div style="font-size:13px;color:#a16207;">
-            Activities that were <strong>in progress</strong> when rain started will be marked as incomplete and won't count toward rotation.
+            If it's at least <strong>75% done</strong> it stays and counts toward rotation;
+            if less, it's cleared and does <strong>not</strong> count.
           </div>
         </div>
       </div>
@@ -1683,27 +2443,35 @@ function showMidDayRainModal() {
     
     const [hours, mins] = timeInput.value.split(':').map(Number);
     const rainStartMin = hours * 60 + mins;
-    
-    const analysis = analyzeActivitiesForMidDayRain(rainStartMin);
-    
+
+    // Dry-run of the REAL split (pure function) so the preview always matches
+    // what confirming will actually do — counts are per BLOCK, per bunk.
+    const st = _rainySplitScheduleAt(
+      window.scheduleAssignments || {},
+      window.divisionTimes || {},
+      _rainyScopedDivisions(),
+      rainStartMin
+    ).stats;
+
     previewContent.innerHTML = `
       <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:8px;text-align:center;">
         <div style="background:#d1fae5;padding:8px;border-radius:6px;">
-          <div style="font-size:20px;font-weight:700;color:#065f46;">${analysis.completedCount}</div>
+          <div style="font-size:20px;font-weight:700;color:#065f46;">${st.keptDone + st.keptInProgress}</div>
           <div style="font-size:11px;color:#047857;">✅ Keep</div>
         </div>
         <div style="background:#fef3c7;padding:8px;border-radius:6px;">
-          <div style="font-size:20px;font-weight:700;color:#92400e;">${analysis.inProgressCount}</div>
-          <div style="font-size:11px;color:#a16207;">⚠️ Cut Short</div>
+          <div style="font-size:20px;font-weight:700;color:#92400e;">${st.erasedInProgress}</div>
+          <div style="font-size:11px;color:#a16207;">⚠️ Cut (&lt;75%)</div>
         </div>
         <div style="background:#fee2e2;padding:8px;border-radius:6px;">
-          <div style="font-size:20px;font-weight:700;color:#991b1b;">${analysis.futureCount}</div>
+          <div style="font-size:20px;font-weight:700;color:#991b1b;">${st.erasedFuture}</div>
           <div style="font-size:11px;color:#dc2626;">🗑️ Clear</div>
         </div>
       </div>
-      ${analysis.inProgressCount > 0 ? `
+      ${(st.keptInProgress + st.erasedInProgress) > 0 ? `
         <div style="margin-top:10px;font-size:12px;color:#64748b;">
-          <strong>Cut short slots:</strong> ${analysis.inProgress.map(s => s.startTime + '-' + s.endTime).join(', ')}
+          In progress at the cut: <strong>${st.keptInProgress}</strong> ≥75% done (kept &amp; counted),
+          <strong>${st.erasedInProgress}</strong> under 75% (cleared, not counted)
         </div>
       ` : ''}
     `;
@@ -1721,13 +2489,20 @@ function showMidDayRainModal() {
     updatePreview();
   };
   
-  document.getElementById('da-midday-confirm-btn').onclick = () => {
+  document.getElementById('da-midday-confirm-btn').onclick = async () => {
     const timeInput = document.getElementById('da-midday-rain-time');
     const [hours, mins] = timeInput.value.split(':').map(Number);
     const rainStartMin = hours * 60 + mins;
-    
+
+    // ★ Weather timeline: a new cut can't precede the last one.
+    const _lastCut = _rainyGetLastCutMin();
+    if (_lastCut != null && rainStartMin < _lastCut) {
+      await daShowAlert('The rain time can\'t be before the last weather cut (' + minutesToTime(_lastCut) + ').');
+      return;
+    }
+
     modal.remove();
-    
+
     activateMidDayRainyMode(rainStartMin);
     renderRainyDayPanel();
     renderResourceOverridesUI();
@@ -1743,38 +2518,6 @@ function showMidDayRainModal() {
   
   // Initial preview
   updatePreview();
-}
-
-function backupPreservedSchedule(startTimeMin) {
-  const times = window.unifiedTimes || [];
-  const schedules = window.scheduleAssignments || {};
-  const preserved = [];
-  
-  for (let i = 0; i < times.length; i++) {
-    const slot = times[i];
-    if (slot && slot.start) {
-      const slotStart = new Date(slot.start).getHours() * 60 + new Date(slot.start).getMinutes();
-      if (slotStart < startTimeMin) {
-        preserved.push(i);
-      }
-    }
-  }
-  
-  if (preserved.length === 0) return null;
-  
-  const backup = {};
-  Object.keys(schedules).forEach(bunk => {
-    backup[bunk] = {};
-    preserved.forEach(slotIdx => {
-      if (schedules[bunk]?.[slotIdx]) {
-        backup[bunk][slotIdx] = JSON.parse(JSON.stringify(schedules[bunk][slotIdx]));
-      }
-    });
-  });
-  
-  window.saveCurrentDailyData?.("preservedScheduleBackup", backup);
-  console.log(`[RainyDay] Backed up ${preserved.length} preserved slots`);
-  return backup;
 }
 
 function switchToRainySkeleton() {
@@ -1824,11 +2567,19 @@ function deactivateRainyDayMode() {
   window.saveCurrentDailyData?.("rainyDayMode", false);
   window.saveCurrentDailyData?.("rainyDayStartTime", null);
   window.saveCurrentDailyData?.("preservedScheduleBackup", null);
+  window.saveCurrentDailyData?.("preMidDayRainSchedule", null);
   window.saveCurrentDailyData?.("isRainyDay", false);
+
+  // ★ Weather timeline: the toggle OFF is the full "undo" path — drop the
+  //   day's cuts so Generate goes back to regenerating the whole day.
+  //   (Sun's Out is the transition path and KEEPS the timeline.)
+  _rainyClearCuts();
   
+  let skeletonRestored = false;
   if (isAutoSkeletonSwitchEnabled()) {
     const restored = restorePreRainySkeleton();
-    
+    skeletonRestored = !!restored;
+
     // ★ Rebuild divisionTimes from restored skeleton (mirrors activate logic)
     if (restored) {
       const restoredDaily = window.loadCurrentDailyData?.() || {};
@@ -1845,7 +2596,12 @@ function deactivateRainyDayMode() {
   window.leagueAssignments = {};
   
   showRainyDayNotification(false);
-  console.log("[RainyDay] Deactivated rainy mode, window.isRainyDay =", window.isRainyDay);}
+  console.log("[RainyDay] Deactivated rainy mode, window.isRainyDay =", window.isRainyDay);
+
+  // ★ Rainy tile-regen: mirror activate — a restored skeleton means the slot
+  //   structure changed back, so per-tile regen can't map (needs a full gen).
+  return { structureChanged: skeletonRestored };
+}
 
 function restorePreRainySkeleton() {
   const dailyData = window.loadCurrentDailyData?.() || {};
@@ -1895,8 +2651,159 @@ function restorePreRainySkeleton() {
   console.log(`[RainyDay] ✅ Restored skeleton from ${source} (${skeletonToRestore.length} blocks)`);
   return true;
 }
-  
- 
+
+// ─────────────────────────────────────────────────────────────────────────
+// RAINY TILE-REGEN — finish the full-day rainy flow with per-tile regeneration.
+//
+// Activating full-day rain reconfigures state (outdoor fields disabled, rainy
+// specials enabled) but never touched an ALREADY-GENERATED schedule: every
+// outdoor tile sat there until the user regenerated the WHOLE day, discarding
+// the indoor tiles that were perfectly valid. These helpers reuse the shared
+// per-tile regen core (_daPartialRegenerate → __regenSlotScope) to re-roll ONLY
+// the tiles the weather invalidated:
+//   • rain:  tiles on outdoor fields (rainyDayAvailable !== true) + specials
+//            the solver drops in rain (rainyDayAvailable/availableOnRainyDay
+//            === false) — mirrors the scheduler_core_main masterSpecials filter.
+//   • sun:   tiles holding rainy-only specials (rainyDayOnly/rainyDayExclusive)
+//            — the ones the solver would never place on a regular day.
+// When the rainy skeleton swap changed the day's SLOT STRUCTURE, old tiles
+// can't be time-mapped, so we offer a full generation instead. Mid-day rain is
+// untouched — the stacker already owns that path.
+// ─────────────────────────────────────────────────────────────────────────
+
+// Which activity/field names are invalid under the new weather. Rain rules
+// mirror scheduler_core_main.js (getRainyDayFieldFilter + the masterSpecials
+// filter); sun rules mirror its !isRainyMode branch.
+function _rainyBuildInvalidSets(mode) {
+  const g = window.loadGlobalSettings?.() || {};
+  const fields = g.app1?.fields || [];
+  const specials = window.getGlobalSpecialActivities?.() || g.app1?.specialActivities || [];
+  const norm = n => String(n || '').toLowerCase().trim();
+  const fieldSet = new Set();
+  const specialSet = new Set();
+  if (mode === 'rain') {
+    fields.forEach(f => { if (f && f.name && f.rainyDayAvailable !== true) fieldSet.add(norm(f.name)); });
+    specials.forEach(s => {
+      if (s && s.name && (s.rainyDayAvailable === false || s.availableOnRainyDay === false)) specialSet.add(norm(s.name));
+    });
+  } else {
+    specials.forEach(s => {
+      if (s && s.name && (s.rainyDayOnly === true || s.rainyDayExclusive === true)) specialSet.add(norm(s.name));
+    });
+  }
+  return { fields: fieldSet, specials: specialSet };
+}
+
+// Pure scanner — mirrored verbatim in tests/rainy_tile_regen_sim.js; keep in sync.
+// Walks every bunk's generated entries and returns [{bunk, startMin, endMin}]
+// selections (the shared regen core's input) for each tile whose field or
+// activity is in the invalid sets. Continuations/transitions are skipped — the
+// regen core's multi-period guard expands a block head to its whole span.
+function _rainyScanInvalidTiles(assignments, divisionTimes, divisions, invalid) {
+  const norm = n => String(n || '').toLowerCase().trim();
+  const toMin = v => {
+    if (typeof v === 'number' && isFinite(v)) return v;
+    if (typeof v === 'string') {
+      const m = v.match(/^(\d{1,2}):(\d{2})$/);
+      if (m) return (+m[1]) * 60 + (+m[2]);
+      const d = new Date(v);
+      if (!isNaN(d)) return d.getHours() * 60 + d.getMinutes();
+    }
+    return null;
+  };
+  const selections = [];
+  Object.entries(divisions || {}).forEach(([divName, divData]) => {
+    const slots = (divisionTimes || {})[divName] || [];
+    (((divData || {}).bunks) || []).forEach(b => {
+      const bunk = String(b);
+      const arr = (assignments || {})[bunk] || [];
+      for (let i = 0; i < arr.length && i < slots.length; i++) {
+        const e = arr[i];
+        if (!e || e.continuation || e._isTransition) continue;
+        const act = norm(e._activity || e.activityName || e.sport);
+        const fld = norm(e.field);
+        if (!act && !fld) continue;
+        if (act === 'free' || act === 'free play') continue;
+        if (!((fld && invalid.fields.has(fld)) || (act && invalid.specials.has(act)))) continue;
+        const s = slots[i] || {};
+        const startMin = toMin((s.startMin != null) ? s.startMin : s.start);
+        const endMin = toMin((s.endMin != null) ? s.endMin : s.end);
+        if (startMin == null) continue;
+        selections.push({ bunk, startMin, endMin });
+      }
+    });
+  });
+  return selections;
+}
+
+// Divisions this account may generate for — mirrors runOptimizer's MS-1 role
+// clamp so a scheduler's rainy toggle never re-rolls another scheduler's tiles.
+function _rainyScopedDivisions() {
+  const divisions = window.divisions || masterSettings.app1?.divisions || {};
+  try {
+    const gd = window.AccessControl?.getGeneratableDivisions?.();
+    if (Array.isArray(gd) && gd.length > 0 && gd.length < Object.keys(divisions).length) {
+      const allow = new Set(gd.map(String));
+      const scoped = {};
+      Object.entries(divisions).forEach(([dn, di]) => { if (allow.has(String(dn))) scoped[dn] = di; });
+      return scoped;
+    }
+  } catch (_e) { /* non-fatal — fall through unclamped */ }
+  return divisions;
+}
+
+// Called by the full-day toggle AFTER activate/deactivate + re-render. Offers
+// the smallest fix for an already-generated schedule: per-tile regen of the
+// weather-invalidated tiles, or a full gen when the slot structure changed.
+async function _rainyOfferScheduleFix(activated, structureChanged) {
+  try {
+    // Per-tile regen is a Manual-builder feature (matches _daPartialRegenerate);
+    // in Auto mode the activation notification already points at Generate.
+    if (window._daBuilderMode === 'auto') return;
+
+    const sa = window.scheduleAssignments || {};
+    const hasSchedule = Object.keys(sa).some(b =>
+      Array.isArray(sa[b]) && sa[b].some(e => e && (e._activity || e.field)));
+    if (!hasSchedule) return; // nothing generated yet — the next gen handles it
+
+    if (structureChanged) {
+      const ok = await daShowConfirm(
+        (activated
+          ? '🌧️ The day was switched to the rainy skeleton, so the schedule structure changed.'
+          : '☀️ The regular skeleton was restored, so the schedule structure changed.') +
+        '<br><br>Generate the schedule for the new structure now?',
+        { confirmText: 'Generate', cancelText: 'Not yet' });
+      if (ok && typeof runOptimizer === 'function') await runOptimizer();
+      return;
+    }
+
+    const invalid = _rainyBuildInvalidSets(activated ? 'rain' : 'sun');
+    if (invalid.fields.size === 0 && invalid.specials.size === 0) return;
+    let selections = _rainyScanInvalidTiles(sa, window.divisionTimes || {}, _rainyScopedDivisions(), invalid);
+    // ★ Weather timeline: tiles before the last cut are locked history — a
+    //   full-day toggle mid-sequence must never re-roll them.
+    const _lockCut = _rainyGetLastCutMin();
+    if (_lockCut != null) selections = selections.filter(s => s.startMin >= _lockCut);
+    if (selections.length === 0) {
+      console.log('[RainyDay] Schedule already valid for the new weather — no tiles to re-roll');
+      return;
+    }
+    const n = selections.length;
+    const msg = activated
+      ? ('🌧️ ' + n + (n === 1 ? ' scheduled tile uses' : ' scheduled tiles use') +
+         ' outdoor fields or activities that can\'t run in the rain.<br><br>' +
+         'Re-roll just ' + (n === 1 ? 'that tile' : 'those tiles') +
+         ' indoors? Everything already indoor stays exactly as it is.')
+      : ('☀️ ' + n + (n === 1 ? ' tile holds' : ' tiles hold') +
+         ' rainy-day-only activities.<br><br>Re-roll just ' +
+         (n === 1 ? 'that tile' : 'those tiles') +
+         ' for a regular day? Everything else stays exactly as it is.');
+    await _daPartialRegenerate(selections, { confirmMessage: msg });
+  } catch (e) {
+    console.warn('[RainyDay] tile re-roll offer failed:', e);
+  }
+}
+
 function showRainyDayNotification(activated, disabledCount = 0, isMidDay = false, skeletonSwitched = false, preservedCount = 0) {
   const existing = document.getElementById('da-rainy-notification');
   if (existing) existing.remove();
@@ -2055,8 +2962,91 @@ function bumpOverlappingTiles(newEvent, divName) {
       ev.startTime = minutesToTime(newStart);
       ev.endTime = minutesToTime(newEnd);
       currentEndMin = newEnd;
+      // ★ Multi-grade span: a bumped member drags its grade-mates with it so
+      //   the span keeps one time. One level deep — the guard stops bump
+      //   chains from ping-ponging between divisions.
+      if (ev.spanGroup && !_daBumpingSpan) {
+        _daBumpingSpan = true;
+        try {
+          _daSpanMembers(ev).forEach(m => {
+            if (m.id === ev.id) return;
+            m.startTime = ev.startTime; m.endTime = ev.endTime;
+            bumpOverlappingTiles(m, m.division);
+          });
+        } finally { _daBumpingSpan = false; }
+      }
     }
   });
+}
+
+// =========================================================================
+// ★ MULTI-GRADE TILE SPANNING (Daily Adjustments)
+// Same data model as the skeleton builder (master_schedule_builder.js): each
+// covered grade keeps its OWN tile — generation and saving are untouched —
+// linked by a shared `spanGroup` id + `spanDivisions` list. Adjacent members
+// render as one merged tile with left/right stretch grips; edits, moves and
+// deletes apply to the whole span.
+// =========================================================================
+let _daBumpingSpan = false;
+
+function _daSpanMembers(ev) {
+  if (!ev) return [];
+  if (!ev.spanGroup) return [ev];
+  return (dailyOverrideSkeleton || []).filter(m => m && m.spanGroup === ev.spanGroup);
+}
+
+function _daMakeSpanMirror(srcEv, targetDiv) {
+  const copy = JSON.parse(JSON.stringify(srcEv));
+  copy.id = 'evt_' + Math.random().toString(36).slice(2, 9);
+  copy.division = targetDiv;
+  delete copy.group1Bunks; // split-tile groups reference the SOURCE grade's bunks
+  if (typeof window._mbRemapLeagueForGrade === 'function') window._mbRemapLeagueForGrade(copy, targetDiv);
+  return copy;
+}
+
+// Propagate a tile edit to its span siblings — copies every field except the
+// per-grade ones (id, division, split-tile bunk groups).
+function _daSyncSpanSiblings(ev) {
+  if (!ev || !ev.spanGroup) return;
+  _daSpanMembers(ev).forEach(m => {
+    if (m === ev || m.id === ev.id) return;
+    const ownId = m.id, ownDiv = m.division, ownGroup1 = m.group1Bunks;
+    Object.keys(m).forEach(k => { if (!(k in ev)) delete m[k]; });
+    Object.keys(ev).forEach(k => {
+      m[k] = (ev[k] !== null && typeof ev[k] === 'object') ? JSON.parse(JSON.stringify(ev[k])) : ev[k];
+    });
+    m.id = ownId;
+    m.division = ownDiv;
+    if (ownGroup1) m.group1Bunks = ownGroup1; else delete m.group1Bunks;
+    if (typeof window._mbRemapLeagueForGrade === 'function') window._mbRemapLeagueForGrade(m, ownDiv);
+  });
+}
+
+// Heal span metadata after members were displaced/deleted outside the resize
+// path: single survivors lose their span fields, larger groups get
+// spanDivisions rebuilt from what actually exists.
+function _daRepairSpans() {
+  const groups = {};
+  (dailyOverrideSkeleton || []).forEach(ev => {
+    if (ev && ev.spanGroup) (groups[ev.spanGroup] = groups[ev.spanGroup] || []).push(ev);
+  });
+  const order = getColumnOrder();
+  Object.values(groups).forEach(members => {
+    if (members.length <= 1) {
+      members.forEach(m => { delete m.spanGroup; delete m.spanDivisions; });
+    } else {
+      const divs = [...new Set(members.map(m => m.division))]
+        .sort((a, b) => order.indexOf(a) - order.indexOf(b));
+      members.forEach(m => { m.spanDivisions = divs.slice(); });
+    }
+  });
+}
+
+// Is this DOM node one of the resize grips (vertical time grips or the
+// horizontal multi-grade grips)? Keeps click/drag handlers off them.
+function _daIsResizeTarget(t) {
+  return !!(t && t.classList &&
+    (t.classList.contains('da-resize-handle') || t.classList.contains('da-resize-h')));
 }
 
 // =================================================================
@@ -2130,7 +3120,10 @@ function renderPalette() {
     });
     html += '<div class="da-tile-divider"></div>';
     html += '<div class="da-tile-label">Anchors</div>';
-    DAW_TYPES.filter(t => t.anchor && !t.hidden).forEach(t => {
+    // ★ A built-in anchor steps aside once a General Activity of the same kind
+    //   is configured — that one is listed under General Activities below.
+    const _dawCovered = (window.getGeneralActivityCoveredFixedTypes?.() || {});
+    DAW_TYPES.filter(t => t.anchor && !t.hidden && !_dawCovered[t.type]).forEach(t => {
       const dotColor = getDotColor(t.style);
       html += `<div class="da-tile ms-daw-tile" draggable="true" data-type="${t.type}"><span class="da-tile-dot ms-daw-tile-dot" style="background:${dotColor};"></span><span class="da-tile-name ms-daw-tile-name">${_escHtml(t.name)}</span></div>`;
     });
@@ -2142,7 +3135,10 @@ function renderPalette() {
       html += '<div class="da-tile-divider"></div>';
       html += '<div class="da-tile-label">General Activities</div>';
       _gaItems.forEach(ga => {
-        html += `<div class="da-tile ms-daw-tile" draggable="true" data-type="custom" data-ga-name="${_escHtml(ga.name)}" data-ga-facility="${_escHtml(ga.facility)}" data-ga-quicktype="${_escHtml(ga.quickType || 'custom')}" title="${_escHtml(ga.name + ' @ ' + ga.facility)}"><span class="da-tile-dot ms-daw-tile-dot" style="background:#d97706;"></span><span class="da-tile-name ms-daw-tile-name">${_escHtml(ga.name)}</span></div>`;
+        // ★ Each general activity carries its own colour (facilities.js), so the
+        //   list reads apart instead of being a wall of identical amber dots.
+        const _gc = window.getGeneralActivityColor?.(ga.name);
+        html += `<div class="da-tile ms-daw-tile" draggable="true" data-type="custom" data-ga-name="${_escHtml(ga.name)}" data-ga-facility="${_escHtml(ga.facility)}" data-ga-quicktype="${_escHtml(ga.quickType || 'custom')}" title="${_escHtml(ga.name + ' @ ' + ga.facility)}"><span class="da-tile-dot ms-daw-tile-dot" style="background:${_gc ? _gc.dot : '#d97706'};"></span><span class="da-tile-name ms-daw-tile-name">${_escHtml(ga.name)}</span></div>`;
       });
     }
 
@@ -2167,11 +3163,18 @@ function renderPalette() {
   
   paletteEl.innerHTML = '';
   
+  // ★ Same rule as the Master Scheduler palette: a built-in Fixed tile is
+  //   suppressed once a General Activity of that kind exists, so the camp sees
+  //   exactly one Lunch / Swim / Snacks / Dismissal tile — the configured one.
+  const _gaCovered = (window.getGeneralActivityCoveredFixedTypes?.() || {});
+  const _fixedTypes = ['swim', 'lunch', 'snacks', 'dismissal', 'custom']
+    .filter(t => t === 'custom' || !_gaCovered[t]);
+
   const categories = [
     { label: 'Slots', types: ['activity', 'sports', 'special'] },
     { label: 'Advanced', types: ['smart', 'split', 'elective', 'swim_elective'] },
     { label: 'Leagues', types: ['league', 'specialty_league'] },
-    { label: 'Fixed', types: ['swim', 'lunch', 'snacks', 'dismissal', 'custom'] }
+    { label: 'Fixed', types: _fixedTypes }
   ];
 
   // ★ FN-48: custom general activities (facilities registry) as pinned tiles
@@ -2181,14 +3184,20 @@ function renderPalette() {
   if (_gaItemsM.length) {
     categories.push({
       label: 'General Activities',
-      tiles: _gaItemsM.map(ga => ({
-        type: 'custom',
-        name: ga.name,
-        style: 'background:#fef3c7;color:#92400e;',
-        description: 'Pinned general activity at ' + ga.facility + '. Drop on a division and set the times.',
-        gaName: ga.name,
-        gaFacility: ga.facility
-      }))
+      // ★ Each general activity carries its own colour (facilities.js). The
+      //   palette derives the tile's dot from `background:`, so setting the
+      //   style here colours both the swatch and the tile.
+      tiles: _gaItemsM.map(ga => {
+        const _gc = window.getGeneralActivityColor?.(ga.name);
+        return {
+          type: 'custom',
+          name: ga.name,
+          style: _gc ? `background:${_gc.bg};color:${_gc.text};` : 'background:#fef3c7;color:#92400e;',
+          description: 'Pinned general activity at ' + ga.facility + '. Drop on a division and set the times.',
+          gaName: ga.name,
+          gaFacility: ga.facility
+        };
+      })
     });
   }
 
@@ -2360,6 +3369,8 @@ function renderGrid() {
   daCleanupOrphanChangeTiles();
   // ★ Day 27: drop tiles whose division no longer exists in the camp structure
   daPruneOrphanDivisionTiles();
+  // ★ Multi-grade spans: heal groups whose members were displaced/deleted
+  _daRepairSpans();
 
   // AUTO MODE: render DAW layer timeline instead of stacking grid
   if (window._daBuilderMode === 'auto') {
@@ -2405,7 +3416,34 @@ function renderGrid() {
   
   const totalHeight = (latestMin - earliestMin) * PIXELS_PER_MINUTE;
   gridEl.dataset.earliestMin = earliestMin;
-  
+  gridEl.dataset.columns = JSON.stringify(availableDivisions);
+
+  // ★ Multi-grade spans: render each span group as ONE merged tile when its
+  //   grades sit in adjacent columns and share times; otherwise fall back to
+  //   individual tiles with a link badge (e.g. after a column reorder).
+  const _daSpanPlan = {};
+  {
+    const _groups = {};
+    dailyOverrideSkeleton.forEach(ev => {
+      if (ev && ev.spanGroup && ev.id) (_groups[ev.spanGroup] = _groups[ev.spanGroup] || []).push(ev);
+    });
+    Object.values(_groups).forEach(members => {
+      const idxOf = m => availableDivisions.indexOf(m.division);
+      const visible = members.filter(m => idxOf(m) !== -1).sort((a, b) => idxOf(a) - idxOf(b));
+      let merged = visible.length === members.length && visible.length > 1;
+      for (let i = 1; i < visible.length && merged; i++) {
+        if (idxOf(visible[i]) !== idxOf(visible[i - 1]) + 1) merged = false;
+        else if (visible[i].startTime !== visible[0].startTime || visible[i].endTime !== visible[0].endTime) merged = false;
+      }
+      if (merged) {
+        _daSpanPlan[visible[0].id] = { cols: visible.length, divs: visible.map(m => m.division) };
+        visible.slice(1).forEach(m => { _daSpanPlan[m.id] = { skip: true }; });
+      } else {
+        members.forEach(m => { _daSpanPlan[m.id] = { linked: true, divs: members.map(x => x.division) }; });
+      }
+    });
+  }
+
  const gridEl_isMS = gridEl.closest('.ms-container') !== null;
   const G = gridEl_isMS ? 'ms' : 'da';
   let html = `<div class="${G}-grid" style="grid-template-columns:70px repeat(${availableDivisions.length}, 1fr); column-gap:4px;">`;
@@ -2417,12 +3455,34 @@ function renderGrid() {
     html += `<div data-col-header="${divName}" draggable="true" class="da-grid-header" style="background:${color};color:#fff;border-radius:6px 6px 0 0; cursor:grab; user-select:none;">${divName}</div>`;
   });
   
+  // ★ Weather timeline: draw a line across the whole grid at every cut.
+  //   🌧️ rain cut (blue) — rainy from here; ☀️ sun cut (amber) — regular from
+  //   here. Above the LAST cut is kept history; below it is the wiped,
+  //   editable rest-of-day that a Generate re-rolls.
+  const _weatherCuts = _rainyGetCuts().filter(c => c.min > earliestMin && c.min < latestMin);
+  if (_weatherCuts.length === 0 && window.isRainyDay === true &&
+      typeof window.rainyDayStartTime === 'number' &&
+      window.rainyDayStartTime > earliestMin && window.rainyDayStartTime < latestMin) {
+    // Legacy: active mid-day rain saved before the timeline existed.
+    _weatherCuts.push({ min: window.rainyDayStartTime, type: 'rain' });
+  }
+  const _cutColor = t => (t === 'sun' ? '#d97706' : '#2563eb');
+  const _cutIcon = t => (t === 'sun' ? '☀️' : '🌧️');
+
   // Time column
   html += `<div class="da-time-column" style="height:${totalHeight}px;">`;
   for (let m = earliestMin; m < latestMin; m += INCREMENT_MINS) {
     const top = (m - earliestMin) * PIXELS_PER_MINUTE;
     html += `<div class="da-time-marker" style="top:${top}px;">${minutesToTime(m)}</div>`;
   }
+  _weatherCuts.forEach(c => {
+    const _rcTop = (c.min - earliestMin) * PIXELS_PER_MINUTE;
+    const _rcTitle = c.type === 'sun'
+      ? `Sun's out at ${minutesToTime(c.min)} — regular schedule resumes below this line`
+      : `Mid-day rain started at ${minutesToTime(c.min)} — the schedule below this line was cleared`;
+    html += `<div title="${_rcTitle}" ` +
+            `style="position:absolute;top:${_rcTop - 9}px;left:1px;right:1px;background:${_cutColor(c.type)};color:#fff;font-size:9px;font-weight:700;text-align:center;border-radius:4px;padding:1px 2px;z-index:7;pointer-events:auto;">${_cutIcon(c.type)} ${minutesToTime(c.min)}</div>`;
+  });
   html += `</div>`;
   
   // Division columns
@@ -2439,14 +3499,21 @@ function renderGrid() {
     if (e !== null && e < latestMin) {
       html += `<div class="da-grid-disabled da-grid-night-zone" style="top:${(e - earliestMin) * PIXELS_PER_MINUTE}px;height:${(latestMin - e) * PIXELS_PER_MINUTE}px;"></div>`;
     }
-    
+
+    _weatherCuts.forEach(c => {
+      html += `<div class="da-rain-cut-line" style="position:absolute;left:0;right:0;top:${(c.min - earliestMin) * PIXELS_PER_MINUTE}px;border-top:3px dashed ${_cutColor(c.type)};z-index:6;pointer-events:none;"></div>`;
+    });
+
     dailyOverrideSkeleton.filter(ev => ev.division === divName).forEach(ev => {
       const start = parseTimeToMinutes(ev.startTime);
       const end = parseTimeToMinutes(ev.endTime);
       if (start != null && end != null && end > start) {
         const top = (start - earliestMin) * PIXELS_PER_MINUTE;
         const height = (end - start) * PIXELS_PER_MINUTE;
-        html += renderEventTile(ev, top, height);
+        const _plan = _daSpanPlan[ev.id];
+        // Span mirrors are drawn by their anchor (leftmost member) — but the
+        // override badge below still applies to this column.
+        if (!_plan || !_plan.skip) html += renderEventTile(ev, top, height, _plan);
         // Override indicator: show a subtle badge if any bunk in this division has an override at this time
         const _ovForSlot = (currentOverrides.bunkActivityOverrides || []).filter(o => {
           const bunkDiv = Object.keys(divisions).find(d => divisions[d]?.bunks?.includes(o.bunk));
@@ -2469,6 +3536,7 @@ function renderGrid() {
   addDropListeners(gridEl);
   addDragToRepositionListeners(gridEl);
   addResizeListeners(gridEl);
+  addHorizontalResizeListeners(gridEl);
   addRemoveListeners(gridEl);
   applyConflictHighlighting(gridEl);
 }
@@ -2703,7 +3771,12 @@ function daConvertSkeletonToLayers(skeleton) {
 
 
 
-function renderEventTile(ev, top, height) {
+// spanInfo (optional, from renderGrid's span plan):
+//   { cols, divs }   → anchor of a merged multi-grade span; draw stretched
+//                      across `cols` adjacent columns (grid column-gap: 4px).
+//   { linked, divs } → span members whose columns aren't adjacent right now;
+//                      draw individually with a link badge.
+function renderEventTile(ev, top, height, spanInfo) {
   let tile = TILES.find(t => t.name === ev.event);
   if (!tile && ev.type) tile = TILES.find(t => t.type === ev.type);
   if (!tile) {
@@ -2714,6 +3787,12 @@ function renderEventTile(ev, top, height) {
   }
   
   let style = tile ? tile.style : 'background:#d1d5db;color:#374151;';
+  // ★ A placed general activity keeps the colour of the tile it was dragged
+  //   from, instead of falling through to the generic Custom Pinned grey.
+  if (ev.type === 'pinned' || ev.type === 'custom') {
+    const _gc = window.getGeneralActivityColor?.(ev.customActivity || ev.event);
+    if (_gc) style = `background:${_gc.bg};color:${_gc.text};`;
+  }
   // ★ Guaranteed-swap Smart tiles get a distinct teal (unused by any other tile)
   //   so the mode is obvious and doesn't clash with the Split tile's purple (#c4b5fd).
   if (ev.type === 'smart' && ev.smartData && ev.smartData.guaranteeSwap) {
@@ -2818,6 +3897,13 @@ function renderEventTile(ev, top, height) {
     if (ev.type === 'split' && ev.group1Bunks?.length) {
       content += `<div style="font-size:9px;font-weight:600;color:#1e40af;background:#dbeafe;display:inline-block;padding:1px 5px;border-radius:4px;margin-top:2px;">custom groups</div>`;
     }
+    // ★ Multi-grade span badge
+    if (spanInfo && spanInfo.cols > 1 && spanInfo.divs) {
+      content += `<div title="These grades do this activity together" style="font-size:9px;font-weight:600;color:#3730a3;background:#e0e7ff;display:inline-block;padding:1px 5px;border-radius:4px;margin-top:2px;">↔ ${spanInfo.divs.map(_escHtml).join(' + ')}</div>`;
+    } else if (spanInfo && spanInfo.linked) {
+      const _others = (spanInfo.divs || []).filter(d => d !== ev.division);
+      content += `<div title="Linked with ${_escHtml(_others.join(', '))} — these grades do this activity together (columns not adjacent, so tiles are drawn separately)" style="font-size:9px;font-weight:600;color:#3730a3;background:#e0e7ff;display:inline-block;padding:1px 5px;border-radius:4px;margin-top:2px;">🔗 with ${_others.map(_escHtml).join(', ')}</div>`;
+    }
   }
 
   // Travel strips (off-campus). Prefer stamped values; fall back to live zone lookup (manual = deduct mode).
@@ -2841,13 +3927,27 @@ function renderEventTile(ev, top, height) {
     return html;
   })();
 
-  return `<div class="da-event${selectedClass}${nightClass}" data-id="${ev.id}" draggable="true"
+  // ★ Multi-grade span geometry: the anchor stretches across N adjacent
+  //   equal-width columns; the grid uses column-gap:4px so add the gaps too.
+  //   (.da-event default is width:94%; left:3% from the stylesheet.)
+  const _spanCols = (spanInfo && spanInfo.cols > 1) ? spanInfo.cols : 1;
+  const _spanWidthStyle = _spanCols > 1 ? `width:calc(${_spanCols * 100}% + ${(_spanCols - 1) * 4}px - 6%);` : '';
+  const _spanClass = _spanCols > 1 ? ' da-span-multi' : '';
+
+  // Horizontal grips: drag left/right to stretch across neighboring grades.
+  // Hidden for non-adjacent linked tiles — their geometry is ambiguous until
+  // the columns sit together again.
+  const _hHandles = (spanInfo && spanInfo.linked) ? '' :
+    `<div class="da-resize-h da-resize-h-left"></div><div class="da-resize-h da-resize-h-right"></div>`;
+
+  return `<div class="da-event${_spanClass}${selectedClass}${nightClass}" data-id="${ev.id}" draggable="true"
           title="${_escHtml(eventName)} (${_escHtml(timeStr)})${isNight ? ' - Night Activity' : ''} - Double-click to remove"
-          style="${style}top:${top}px;height:${adjustedHeight}px;font-size:${fontSize};line-height:${lineHeight};padding:${padding};">
+          style="${style}top:${top}px;height:${adjustedHeight}px;font-size:${fontSize};line-height:${lineHeight};padding:${padding};${_spanWidthStyle}">
           <div class="da-resize-handle da-resize-top"></div>
           ${content}
           ${_travelStrips}
           <div class="da-resize-handle da-resize-bottom"></div>
+          ${_hHandles}
           </div>`;
 }
 
@@ -2982,6 +4082,17 @@ function addResizeListeners(gridEl) {
           event.endTime = minutesToTime(Math.min(divEndMin, Math.round(newEndMin / SNAP_MINS) * SNAP_MINS));
         }
 
+        // ★ Multi-grade span: every grade's copy keeps the same times, and
+        //   each covered grade reconciles its own overlaps.
+        if (event.spanGroup) {
+          _daSpanMembers(event).forEach(m => {
+            if (m.id !== event.id) {
+              m.startTime = event.startTime; m.endTime = event.endTime;
+              bumpOverlappingTiles(m, m.division);
+            }
+          });
+        }
+
         // ★ Day 25 fix (#1): reconcile overlaps after a resize, mirroring the
         //   move path. Resize previously wrote the new times without bumping
         //   neighbors, leaving a SILENT visual overlap that generation would
@@ -2992,6 +4103,145 @@ function addResizeListeners(gridEl) {
       }
     });
   });
+}
+
+// =================================================================
+// ★ HORIZONTAL (MULTI-GRADE) RESIZE
+// Drag a tile's left/right edge to stretch it across neighboring grade
+// columns — the horizontal twin of the top/bottom time resize (mirrors
+// the skeleton builder's implementation). Committing adds a linked mirror
+// tile per newly covered grade and removes the mirrors of grades dragged
+// back out.
+// =================================================================
+function addHorizontalResizeListeners(gridEl) {
+  let columns = [];
+  try { columns = JSON.parse(gridEl.dataset.columns || '[]'); } catch (_) { columns = []; }
+  if (!Array.isArray(columns) || columns.length === 0) return;
+  const COL_GAP = 4; // .da-grid / .ms-grid column-gap
+
+  let tooltip = document.getElementById('da-resize-tooltip');
+  if (!tooltip) {
+    tooltip = document.createElement('div');
+    tooltip.id = 'da-resize-tooltip';
+    document.body.appendChild(tooltip);
+  }
+
+  gridEl.querySelectorAll('.da-event').forEach(tile => {
+    tile.querySelectorAll('.da-resize-h').forEach(handle => {
+      const isLeft = handle.classList.contains('da-resize-h-left');
+
+      // Keep the HTML5 drag machinery off the grips.
+      handle.addEventListener('dragstart', (e) => { e.preventDefault(); e.stopPropagation(); });
+
+      handle.addEventListener('mousedown', (e) => {
+        e.preventDefault();
+        e.stopPropagation();
+
+        const ev = dailyOverrideSkeleton.find(x => x.id === tile.dataset.id);
+        if (!ev) return;
+        const cell = tile.closest('.da-grid-cell');
+        const colWidth = cell ? cell.offsetWidth : 0;
+        if (!colWidth) return;
+        const colStride = colWidth + COL_GAP;
+
+        // Current span geometry. The rendered tile is the anchor — the span's
+        // leftmost member in display order (or a plain single-grade tile).
+        const members = _daSpanMembers(ev);
+        const spanDivs = members.map(m => m.division)
+          .sort((a, b) => columns.indexOf(a) - columns.indexOf(b));
+        const leftIdx = columns.indexOf(spanDivs[0]);
+        const rightIdx = columns.indexOf(spanDivs[spanDivs.length - 1]);
+        const anchorIdx = columns.indexOf(ev.division);
+        if (leftIdx === -1 || rightIdx === -1 || anchorIdx === -1) return;
+
+        const startX = e.clientX;
+        let newLeftIdx = leftIdx, newRightIdx = rightIdx;
+        tile.classList.add('da-resizing-h');
+
+        const onMove = (e2) => {
+          const deltaCols = Math.round((e2.clientX - startX) / colStride);
+          if (isLeft) {
+            newLeftIdx = Math.min(Math.max(0, leftIdx + deltaCols), rightIdx);
+            newRightIdx = rightIdx;
+          } else {
+            newRightIdx = Math.max(Math.min(columns.length - 1, rightIdx + deltaCols), leftIdx);
+            newLeftIdx = leftIdx;
+          }
+          const cols = newRightIdx - newLeftIdx + 1;
+          const dcol = newLeftIdx - anchorIdx;
+          tile.style.left = `calc(${dcol * 100}% + ${dcol * COL_GAP}px + 3%)`;
+          tile.style.width = `calc(${cols * 100}% + ${(cols - 1) * COL_GAP}px - 6%)`;
+
+          const covered = columns.slice(newLeftIdx, newRightIdx + 1);
+          tooltip.innerHTML = covered.length > 1
+            ? `↔ ${covered.map(_escHtml).join(' + ')} — together`
+            : `${_escHtml(covered[0])} only`;
+          tooltip.style.display = 'block';
+          tooltip.style.left = (e2.clientX + 15) + 'px';
+          tooltip.style.top = (e2.clientY - 40) + 'px';
+        };
+
+        const onUp = () => {
+          document.removeEventListener('mousemove', onMove);
+          document.removeEventListener('mouseup', onUp);
+          tile.classList.remove('da-resizing-h');
+          tooltip.style.display = 'none';
+          _daCommitSpanResize(ev, columns.slice(newLeftIdx, newRightIdx + 1));
+        };
+
+        document.addEventListener('mousemove', onMove);
+        document.addEventListener('mouseup', onUp);
+      });
+    });
+  });
+}
+
+// Commit a horizontal resize: make `ev`'s span cover exactly `newDivs`
+// (ordered, adjacent display columns). Grades entering the span get a linked
+// mirror of the dragged tile (with DA's usual overlap bumping); grades
+// leaving it lose their copy; span metadata is stamped on every survivor.
+function _daCommitSpanResize(ev, newDivs) {
+  if (!ev || !Array.isArray(newDivs) || newDivs.length === 0) { renderGrid(); return; }
+  const members = _daSpanMembers(ev);
+  const oldDivs = members.map(m => m.division);
+  const keepSet = new Set(newDivs);
+  if (oldDivs.length === newDivs.length && oldDivs.every(d => keepSet.has(d))) {
+    renderGrid(); // geometry preview may have moved the tile — repaint
+    return;
+  }
+
+  const byDiv = {};
+  members.forEach(m => { byDiv[m.division] = m; });
+
+  const removeIds = new Set(members.filter(m => !keepSet.has(m.division)).map(m => m.id));
+  if (removeIds.size) {
+    dailyOverrideSkeleton = dailyOverrideSkeleton.filter(m => !removeIds.has(m.id));
+    if (removeIds.has(selectedTileId)) selectedTileId = null;
+  }
+
+  const groupId = ev.spanGroup || ('span_' + Date.now().toString(36) + Math.random().toString(36).slice(2, 6));
+  const added = [];
+  const finalMembers = newDivs.map(d => {
+    let m = byDiv[d];
+    if (!m) {
+      m = _daMakeSpanMirror(ev, d);
+      dailyOverrideSkeleton.push(m);
+      added.push(m);
+    }
+    return m;
+  });
+
+  if (finalMembers.length > 1) {
+    finalMembers.forEach(m => { m.spanGroup = groupId; m.spanDivisions = newDivs.slice(); });
+  } else {
+    finalMembers.forEach(m => { delete m.spanGroup; delete m.spanDivisions; });
+  }
+
+  // DA reconciles overlaps automatically — clear room in each newly covered grade.
+  added.forEach(m => bumpOverlappingTiles(m, m.division));
+
+  saveDailySkeleton();
+  renderGrid();
 }
 
 // =================================================================
@@ -3011,7 +4261,7 @@ function addDragToRepositionListeners(gridEl) {
   
   gridEl.querySelectorAll('.da-event').forEach(tile => {
     tile.addEventListener('dragstart', (e) => {
-      if (e.target.classList.contains('da-resize-handle')) { e.preventDefault(); return; }
+      if (_daIsResizeTarget(e.target)) { e.preventDefault(); return; }
       
       const eventId = tile.dataset.id;
       const event = dailyOverrideSkeleton.find(ev => ev.id === eventId);
@@ -3117,10 +4367,18 @@ function addDragToRepositionListeners(gridEl) {
           if (!isNight) return; // declined → abort the move, leave the tile where it was
         }
 
-        if (divName !== event.division) {
+        const _spanMembers = event.spanGroup ? _daSpanMembers(event) : null;
+        if (_spanMembers && _spanMembers.length > 1 && _spanMembers.some(m => m.division === divName)) {
+          // Multi-grade tile dropped anywhere inside its own span: the whole
+          // group moves together in time (grades stay as they are).
+          _spanMembers.forEach(m => { m.startTime = newStart; m.endTime = newEnd; m.isNightActivity = isNight; });
+          _spanMembers.forEach(m => bumpOverlappingTiles(m, m.division));
+        } else if (divName !== event.division) {
           // Cross-grade drop. Remap league reference so the copy points
           // at a league assigned to the new grade (not the source's).
           const copy = { ...event, id: 'evt_' + Math.random().toString(36).slice(2, 9), division: divName, startTime: newStart, endTime: newEnd, isNightActivity: isNight };
+          // A cross-grade copy is an independent tile, not a new span member.
+          delete copy.spanGroup; delete copy.spanDivisions;
           if (typeof window._mbRemapLeagueForGrade === 'function') {
             window._mbRemapLeagueForGrade(copy, divName);
           }
@@ -3908,7 +5166,7 @@ function addRemoveListeners(gridEl) {
     tile.addEventListener('mousedown', e => { _downX = e.clientX; _downY = e.clientY; });
 
     tile.onclick = (e) => {
-      if (e.target.classList.contains('da-resize-handle')) return;
+      if (_daIsResizeTarget(e.target)) return;
       e.stopPropagation();
       const dist = Math.hypot(e.clientX - (_downX ?? e.clientX), e.clientY - (_downY ?? e.clientY));
       if (dist > 5) { selectTile(tile.dataset.id); return; }
@@ -3921,7 +5179,7 @@ function addRemoveListeners(gridEl) {
     tile.ondblclick = (e) => {
       e.stopPropagation();
       if (_clickTimer) { clearTimeout(_clickTimer); _clickTimer = null; }
-      if (e.target.classList.contains('da-resize-handle')) return;
+      if (_daIsResizeTarget(e.target)) return;
       e.preventDefault();
       // Auto mode keeps the old behavior (Edit/Delete). Manual mode: double-click
       // SELECTS this whole period for partial regeneration.
@@ -3976,12 +5234,22 @@ function _showTileActionBar(tileEl) {
   delBtn.style.cssText = btnStyle + 'background:#fef2f2;color:#dc2626;';
   delBtn.onmouseenter = () => { delBtn.style.background = '#fee2e2'; };
   delBtn.onmouseleave = () => { delBtn.style.background = '#fef2f2'; };
-  delBtn.onclick = () => {
-    dailyOverrideSkeleton = dailyOverrideSkeleton.filter(x => x.id !== id);
+  delBtn.onclick = async () => {
+    // ★ Multi-grade span: deleting any member removes the whole span.
+    const _ev = dailyOverrideSkeleton.find(x => x.id === id);
+    const _ids = new Set((_ev ? _daSpanMembers(_ev) : []).map(m => m.id));
+    _ids.add(id);
+    const _snap = _daSnapshotRemovedTiles(_ids);
+    // ★ Gate on what the delete would drop from the GENERATED day (no prompt
+    //   when there is nothing generated under the tile).
+    if (!(await _daConfirmTileRemoval(_snap))) return;
+    dailyOverrideSkeleton = dailyOverrideSkeleton.filter(x => !_ids.has(x.id));
     selectedTileId = null;
     bar.remove();
     saveDailySkeleton();
     renderGrid();
+    // ★ Apply the removal to an already-generated day (see the function).
+    await _daApplyTileRemovalToGeneratedDay(_snap);
   };
 
   bar.appendChild(editBtn);
@@ -4326,6 +5594,10 @@ async function editTile(id) {
     try { (window.daShowAlert || window.alert)('The date changed while editing — your change was not saved. Re-open the tile on the correct date.'); } catch (_) {}
     return;
   }
+
+  // ★ Multi-grade span: an edit to any member applies to the whole span.
+  _daSyncSpanSiblings(ev);
+
   saveDailySkeleton();
   renderGrid();
 }
@@ -4350,7 +5622,10 @@ async function copyTile(id) {
     return;
   }
   result.targets.forEach(div => {
-    dailyOverrideSkeleton.push({ ...ev, id: 'evt_' + Math.random().toString(36).slice(2, 9), division: div });
+    const _copy = { ...ev, id: 'evt_' + Math.random().toString(36).slice(2, 9), division: div };
+    // A copy is an independent tile — never a new member of the source's span.
+    delete _copy.spanGroup; delete _copy.spanDivisions;
+    dailyOverrideSkeleton.push(_copy);
   });
   saveDailySkeleton();
   renderGrid();
@@ -4468,7 +5743,8 @@ function _pruneOldDailyDateMaps(app1, keepKey) {
     var hi = new Date(now.getTime() + KEEP_FUTURE_DAYS * 86400000).toISOString().slice(0, 10);
     var DATE = /^\d{4}-\d{2}-\d{2}$/;
     var maps = ['dailySkeletons', 'dailySkeletonsTs', 'dailyAutoLayers', 'dailyAutoLayersTs',
-                'dailyResourcesByDate', 'dailyColumnOrders', 'dailyTripsByDate'];
+                'dailyResourcesByDate', 'dailyColumnOrders', 'dailyTripsByDate',
+                'dailyBunkOverridesByDate'];
     var pruned = 0;
     maps.forEach(function (m) {
       var map = app1[m];
@@ -5146,6 +6422,7 @@ function _boToggleView() {
       delete _boPane.dataset.boPrevOverflowY;
     }
     if (boContainer) boContainer.style.display = 'none';
+    _boClearStickyOffsets();
     renderGrid();
   }
 }
@@ -5288,12 +6565,21 @@ async function runOptimizer() {
         }
     } catch (_eFn17) { /* non-fatal — proceed */ }
     _daOptimizerRunning = true;
+    // ★ Mid-day rain cut: set when THIS run installed the auto slot-scope, so
+    //   the outer finally only clears a scope it owns (per-tile regen manages
+    //   its own __regenSlotScope lifecycle). _cutLeagueSnapshot preserves the
+    //   pre-cut league games across the wipe (they live only in
+    //   leagueAssignments, which the schedule keep-snapshot can't protect).
+    let _midDayCutScopeApplied = false;
+    let _cutLeagueSnapshot = null;
+    let _cutMinForLeagues = null;
     try {
 
     // ★ Pull the authoritative LEAGUE HISTORY from the cloud right before generating,
     //   so today's matchups + sports are chosen from the true cross-session record
     //   (not a stale in-memory copy). Best-effort + time-boxed — never blocks the gen.
     try { if (window.SchedulerCoreLeagues?.refreshHistoryFromCloud) await window.SchedulerCoreLeagues.refreshHistoryFromCloud(); } catch (_eLgRefresh) {}
+    try { if (window.SchedulerCoreSpecialtyLeagues?.refreshHistoryFromCloud) await window.SchedulerCoreSpecialtyLeagues.refreshHistoryFromCloud(); } catch (_eSpRefresh) {}
 
     // ★ FN-14 (final): snapshot the gen date NOW. The txn-wait + FN-17 guard above just
     //   confirmed the date transition has settled and picker === window.currentScheduleDate,
@@ -5514,6 +6800,41 @@ async function runOptimizer() {
         // Manual mode: original check
         if (dailyOverrideSkeleton.length === 0) { await daShowAlert("Skeleton is empty."); return; }
 
+        // ★★★ WEATHER CUT — regenerate ONLY from the last cut onward ★★★
+        // While the day carries a weather cut (mid-day rain, or sunny again
+        // after Sun's Out), a plain Generate must respect the LAST cut line:
+        // everything before it is history and stays byte-for-byte; only slots
+        // from the cut onward are re-rolled (indoor-only while isRainyDay is
+        // set; the full pool after the sun cut). Reuses the per-tile regen
+        // plumbing: build a __regenSlotScope covering every scoped bunk
+        // (keep = pre-cut entries + user-pinned tiles; regen = the rest), which
+        // STEP 1 re-inserts after the wipe and the STEP 6.5/7.5 slot-scope
+        // gates enforce. Skipped when a per-tile regen already set its own scope.
+        const _weatherCutMin = _rainyGetLastCutMin();
+        if (!window.__regenSlotScope && _weatherCutMin != null) {
+            try {
+                const _cutScope = _rainyBuildMidDayRegenScope(
+                    window.scheduleAssignments || {},
+                    window.divisionTimes || {},
+                    _rainyScopedDivisions(),
+                    _weatherCutMin
+                );
+                window.__regenSlotScope = _cutScope.scope;
+                _midDayCutScopeApplied = true;
+                // League matchups live only in leagueAssignments — snapshot the
+                // (already-split, pre-cut-only) games so they survive the wipe.
+                try {
+                    _cutLeagueSnapshot = JSON.parse(JSON.stringify(window.leagueAssignments || {}));
+                    _cutMinForLeagues = _weatherCutMin;
+                } catch (_eLgSnap) { _cutLeagueSnapshot = null; }
+                console.log('[Optimizer] ✂️ Weather cut active at ' + minutesToTime(_weatherCutMin) +
+                            ' (' + (window.isRainyDay ? 'rainy' : 'regular') + ' from here) — regenerating ONLY ' +
+                            _cutScope.regenTotal + ' post-cut slot(s); everything before the cut is preserved');
+            } catch (_eCut) {
+                console.warn('[Optimizer] weather cut scope build failed (falling back to full gen):', _eCut);
+            }
+        }
+
         // ★ Day 32 (warn-then-discard, user decision 2026-06-01): a manual
         //   re-generation rebuilds from the skeleton and therefore DISCARDS
         //   cell-level daily adjustments (post-edits, `_postEdit:true`). Bunk
@@ -5534,9 +6855,17 @@ async function runOptimizer() {
                 _scopeDivsW.forEach(d => ((_divsW[d] || _divsW[String(d)] || {}).bunks || []).forEach(b => _wipeBunks.add(String(b))));
             }
             let _adjCount = 0; const _adjBunks = new Set();
+            // ★ Mid-day cut: post-edits OUTSIDE the regen slots survive (STEP 1
+            //   re-inserts them from the scope's keep snapshot) — don't warn
+            //   about edits this run won't actually clear.
+            const _cutRs = _midDayCutScopeApplied ? window.__regenSlotScope : null;
             Object.keys(_sa).forEach(b => {
                 if (_wipeBunks && !_wipeBunks.has(String(b))) return; // out of scope → not wiped
-                (_sa[b] || []).forEach(e => { if (e && e._postEdit === true && !e.continuation) { _adjCount++; _adjBunks.add(b); } });
+                const _bRs = _cutRs && _cutRs[b];
+                (_sa[b] || []).forEach((e, _ei) => {
+                    if (_bRs && _bRs.regen && typeof _bRs.regen.has === 'function' && !_bRs.regen.has(_ei)) return; // preserved by the cut
+                    if (e && e._postEdit === true && !e.continuation) { _adjCount++; _adjBunks.add(b); }
+                });
             });
             if (_adjCount > 0) {
                 const _msg = '⚠️ This day has ' + _adjCount + ' daily adjustment' + (_adjCount === 1 ? '' : 's')
@@ -5748,6 +7077,16 @@ async function runOptimizer() {
     window._generationInProgress = false;
     delete window.selectedDivisionsForGeneration;
     delete window.__allowedBunkSet;
+    // ★ Weather cut: put the PRE-CUT league games back before the post-gen
+    //   save. The wipe cleared leagueAssignments; the solver skips leagues
+    //   under rain and only re-rolls post-cut periods otherwise, so the
+    //   morning games already played would be lost without this.
+    if (_midDayCutScopeApplied && _cutLeagueSnapshot && _cutMinForLeagues != null) {
+      try {
+        const _lgRestored = _rainyRestorePreCutLeagues(_cutLeagueSnapshot, _cutMinForLeagues);
+        if (_lgRestored) console.log('[Optimizer] ✂️ restored ' + _lgRestored + ' pre-cut league game(s) after the scoped gen');
+      } catch (_eLgRest) { console.warn('[Optimizer] pre-cut league restore failed:', _eLgRest); }
+    }
   }
 
 if (success) {
@@ -5841,6 +7180,9 @@ if (success) {
       // ★ FN-14: clear the gen-date marker now that this generation (and its awaited
       //   verified save) is fully done, so it can never go stale between gens.
       try { window._activeGenDate = null; } catch (_e) {}
+      // ★ Mid-day rain cut: release the auto-installed slot scope (per-tile
+      //   regen owns and clears its own).
+      if (_midDayCutScopeApplied) { try { delete window.__regenSlotScope; } catch (_e) {} }
   }
 }
   // =================================================================
@@ -6213,10 +7555,38 @@ function _boGetActivityGroups() {
       facilities.push({ name: loc, zone: zn, displayName: loc + ' (' + zn + ')' });
     });
   });
+  // ★ Fixed tiles (Lunch / Snacks / Swim / Dinner / Dismissal) — the pinned
+  //   behavior tiles a bunk can be given directly. GA-backed entries come from
+  //   the facility editor (they carry the real facility so capacity/sharing
+  //   connect); built-in fallbacks cover types with no GA configured. Picking
+  //   one saves type:'lunch'/… so generation places it NATIVELY (not as a
+  //   generic custom block).
+  const fixedTiles = [];
+  try {
+    const _QT_NORM = { swim: 'swim', lunch: 'lunch', snacks: 'snacks', snack: 'snacks', dinner: 'dinner', dismissal: 'dismissal' };
+    const _seenFixed = new Set();
+    (window.getGeneralActivityPaletteItems?.() || []).forEach(ga => {
+      const qt = _QT_NORM[String(ga?.quickType || '').toLowerCase()];
+      if (!ga?.name || !qt) return;
+      const key = (ga.name + '|' + (ga.facility || '')).toLowerCase();
+      if (_seenFixed.has(key)) return;
+      _seenFixed.add(key);
+      fixedTiles.push({
+        name: ga.name, location: ga.facility || null, type: qt,
+        label: ga.name + (ga.facility ? ' → ' + ga.facility : '')
+      });
+    });
+    [['Lunch','lunch'], ['Snacks','snacks'], ['Swim','swim'], ['Dinner','dinner'], ['Dismissal','dismissal']].forEach(([nm, t]) => {
+      if (fixedTiles.some(ft => ft.type === t)) return;   // a GA-backed version exists
+      fixedTiles.push({ name: nm, location: null, type: t, label: nm });
+    });
+  } catch (e) { /* palette helper unavailable — group stays minimal */ }
+
   return {
     pinned: Object.entries(pinnedDefaults).sort(([a],[b]) => a.localeCompare(b)).map(([act, fac]) => ({
       name: act, location: fac, type: 'pinned', label: act + ' → ' + fac
     })),
+    fixedTiles,
     facilities: facilities.sort((a,b) => a.name.localeCompare(b.name)).map(f => ({
       name: f.name, location: f.name, type: 'pinned', label: f.displayName
     })),
@@ -6237,6 +7607,11 @@ function _boGetTileStyle(ev) {
     else if (ev.event === 'Special Activity') tile = TILES.find(t => t.type === 'special');
     else tile = TILES.find(t => t.type === 'custom');
   }
+  // ★ Bunk-override rows show general activities in their own colour too.
+  if (ev.type === 'pinned' || ev.type === 'custom') {
+    const _gc = window.getGeneralActivityColor?.(ev.customActivity || ev.event);
+    if (_gc) return `background:${_gc.bg};color:${_gc.text};`;
+  }
   return tile ? tile.style : 'background:#d1d5db;color:#374151;';
 }
 
@@ -6247,13 +7622,31 @@ function _boSaveOverrides(overrides) {
   currentOverrides.bunkActivityOverrides = overrides;
 }
 
+// ★ Fixed-tile normalization: GA-backed fixed tiles (Lunch/Snacks/Swim/Dinner
+//   from the facility editor) are saved as `custom` layers carrying a
+//   `quickType`. Normalize to the BEHAVIOR type exactly like the solver does
+//   (scheduler_core_auto STEP 1.5) so the bunk grid renders them as what they
+//   are — previously they showed as generic custom bands and the user
+//   "couldn't see the fixed tiles" in the per-bunk view.
+const _BO_GA_QT = { swim: 'swim', lunch: 'lunch', snacks: 'snacks', snack: 'snacks', dinner: 'dinner' };
+const _BO_FIXED_SET = { swim: 1, lunch: 1, snacks: 1, dinner: 1, dismissal: 1 };
+function _boLayerKey(layer) {
+  const t = String(layer?.type || 'custom').toLowerCase();
+  const qt = _BO_GA_QT[String(layer?.quickType || '').toLowerCase()];
+  return (t === 'custom' && qt) ? qt : t;
+}
+
 // ★ FN-33: does override `o` belong to the layer band (sm-em, ltKey)?
 //   Direct match on the band's window — OR, for resize overrides (which store
 //   their NEW window in startMin/endMin), match on the ORIGINAL layer window
 //   they were created from. Without the second clause a resized band's override
 //   would detach from its layer and render as a duplicate orphan band.
 function _boOvMatchesLayer(o, sm, em, ltKey) {
-  if (!o || o.layerType !== ltKey) return false;
+  if (!o) return false;
+  // GA-backed fixed bands were historically saved with layerType 'custom' —
+  // accept either key so pre-normalization overrides stay attached.
+  const oLt = String(o.layerType || '');
+  if (oLt !== ltKey && !(oLt === 'custom' && _BO_FIXED_SET[ltKey])) return false;
   if (o.startMin === sm && o.endMin === em) return true;
   return o.overrideMode === 'resize' && o.originalStartMin === sm && o.originalEndMin === em;
 }
@@ -6272,8 +7665,12 @@ function renderBunkOverridesUI() {
   const container = document.getElementById('da-bunk-overrides-container');
   if (!container) return;
 
-  const divisions = masterSettings.app1?.divisions || {};
-  const _rawAvail = masterSettings.app1?.availableDivisions || window.availableDivisions || [];
+  // ★ Prefer the LIVE registry (window.divisions, built from campStructure) —
+  //   the app1 settings-blob copy goes stale when the camp structure changes
+  //   (e.g. a bunk added in Campistry Me is missing from the blob until app1
+  //   itself re-saves, so it never appeared in these per-bunk panels).
+  const divisions = window.divisions || masterSettings.app1?.divisions || {};
+  const _rawAvail = window.availableDivisions || masterSettings.app1?.availableDivisions || [];
   // Order by the user's Campistry Me drag order via getUserDivisionOrder.
   // Falls back to the raw list if the helper isn't loaded yet.
   const availableDivisions = (typeof window.getUserDivisionOrder === 'function')
@@ -6286,7 +7683,17 @@ function renderBunkOverridesUI() {
   }
 
   // Build header + grade selector
-  let html = '<div class="da-section">';
+  // ★ STICKY CHROME: while this view is active the DA pane is the scroll
+  //   container (see _boToggleView), so the title, the grade selector and the
+  //   override-count bar scrolled out of sight — the user had to scroll all the
+  //   way back up just to switch grade or clear overrides. Everything down to
+  //   the count bar lives in a sticky stack; `top` is measured after render by
+  //   _boApplyStickyOffsets so it sits directly under the pinned toolbar.
+  //   (padding:1px 0 stops the child .da-section's 16px margins from COLLAPSING
+  //   out of the sticky box — without it the pinned band sits 16px low and grid
+  //   rows show through the gap above it.)
+  let html = `<div id="bo-sticky-head" style="position:sticky;top:0;z-index:${_BO_Z.head};background:#fff;box-shadow:0 1px 0 #e2e8f0;padding:1px 0;">`;
+  html += '<div class="da-section">';
   html += '<h3 class="da-section-title">Bunk-Level Overrides</h3>';
   html += '<p class="da-section-desc">Select a grade to see its skeleton expanded per-bunk. Click any block to change it for that specific bunk.</p>';
   html += '<div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:10px;">';
@@ -6314,6 +7721,7 @@ function renderBunkOverridesUI() {
     html += '<button type="button" id="bo-clear-all" class="da-btn da-btn-danger da-btn-sm">Clear All Overrides</button>';
     html += '</div>';
   }
+  html += '</div>'; // /#bo-sticky-head
 
   // Bunk grid (only if a division is selected)
   html += '<div id="bo-bunk-grid-wrap"></div>';
@@ -6348,6 +7756,108 @@ function renderBunkOverridesUI() {
       _boRenderBunkGrid(container.querySelector('#bo-bunk-grid-wrap'), _boSelectedDiv);
     }
   }
+
+  _boApplyStickyOffsets();
+}
+
+// ★ Freeze the bunk-override chrome to the top of the scrolling DA pane.
+//   Three bands stack, each pinned directly below the previous one:
+//     1. #da-skeleton-toolbar  — template actions + Generate Schedule
+//     2. #bo-sticky-head       — title, grade selector, override count / Clear All
+//     3. .bo-sticky-row        — the per-bunk column header row
+//   Heights are MEASURED rather than hard-coded because the toolbar wraps to two
+//   rows on narrow windows and the count bar only exists when overrides exist.
+//   No-op when the view isn't showing, so the normal skeleton view is untouched.
+// Stacking scale for the pinned bunk-override chrome. Every value MUST stay
+// below .sidebar-backdrop (40) and .sidebar (50) from styles.css — see the note
+// in _boApplyStickyOffsets — and above the grid's own tiles (2-5) and column
+// headers (.da-grid-header, 10).
+const _BO_Z = { toolbar: 22, head: 20, selBar: 18 };
+let _boStickyResizeBound = false;
+function _boApplyStickyOffsets() {
+  try {
+    const container = document.getElementById('da-bunk-overrides-container');
+    if (!container || container.style.display === 'none') return;
+
+    const pane = container.closest('.da-pane') || container.parentElement;
+
+    let top = 0;
+    const toolbar = document.getElementById('da-skeleton-toolbar');
+    if (toolbar && toolbar.offsetParent !== null) {
+      // ★ A sticky element can never escape its own containing block. In manual
+      //   mode the toolbar lives inside #da-view-skeleton, whose grid wrapper is
+      //   HIDDEN in this view — so that box is only as tall as the toolbar itself
+      //   and `sticky` would unstick immediately. Collapse the intermediate
+      //   wrappers with display:contents so the toolbar's containing block
+      //   becomes the scrolling pane. (Restored by _boClearStickyOffsets.)
+      for (let el = toolbar.parentElement; el && el !== pane; el = el.parentElement) {
+        if (el.dataset.boPrevDisplay == null) el.dataset.boPrevDisplay = el.style.display || '';
+        el.style.display = 'contents';
+      }
+      if (toolbar.dataset.boPrevPosition == null) {
+        toolbar.dataset.boPrevPosition = toolbar.style.position || '';
+        toolbar.dataset.boPrevTop = toolbar.style.top || '';
+        toolbar.dataset.boPrevZ = toolbar.style.zIndex || '';
+        toolbar.dataset.boPrevBg = toolbar.style.background || '';
+      }
+      toolbar.style.position = 'sticky';
+      toolbar.style.top = '0px';
+      // ★ Must stay UNDER the off-canvas nav: .sidebar-backdrop is z-index 40 and
+      //   .sidebar is 50 (styles.css). At 40 the pinned toolbar TIED with the
+      //   backdrop and, being later in paint order, drew a white bar straight
+      //   across the open navigation drawer. Everything in this sticky stack now
+      //   sits in the low 20s — above the grid (tiles 2-5, headers 10), below the
+      //   nav — so opening the drawer dims it like the rest of the page.
+      toolbar.style.zIndex = String(_BO_Z.toolbar);
+      toolbar.style.background = '#fff';
+      top += toolbar.getBoundingClientRect().height;
+    }
+
+    const head = container.querySelector('#bo-sticky-head');
+    if (head) {
+      head.style.top = top + 'px';
+      top += head.getBoundingClientRect().height;
+    }
+
+    // The bulk-selection bar sits above the grid and is sticky too — when it's
+    // showing it takes the next slot and the column headers move below it.
+    const selBar = container.querySelector('#bo-sel-bar');
+    if (selBar) {
+      selBar.style.top = top + 'px';
+      if (selBar.style.display !== 'none') top += selBar.getBoundingClientRect().height;
+    }
+
+    container.querySelectorAll('.bo-sticky-row').forEach(el => { el.style.top = top + 'px'; });
+
+    // The toolbar wraps to a second row on narrow windows, which changes every
+    // offset below it — re-measure on resize (installed once).
+    if (!_boStickyResizeBound) {
+      _boStickyResizeBound = true;
+      window.addEventListener('resize', () => { _boApplyStickyOffsets(); });
+    }
+  } catch (_e) { /* sticky chrome is cosmetic — never break the render */ }
+}
+
+// Restore the toolbar's own positioning when the override view is dismissed, so
+// the normal skeleton view keeps its original (non-sticky) toolbar behaviour.
+function _boClearStickyOffsets() {
+  try {
+    // Undo the display:contents lift on every wrapper we collapsed.
+    document.querySelectorAll('[data-bo-prev-display]').forEach(el => {
+      el.style.display = el.dataset.boPrevDisplay || '';
+      delete el.dataset.boPrevDisplay;
+    });
+    const toolbar = document.getElementById('da-skeleton-toolbar');
+    if (!toolbar || toolbar.dataset.boPrevPosition == null) return;
+    toolbar.style.position = toolbar.dataset.boPrevPosition;
+    toolbar.style.top = toolbar.dataset.boPrevTop || '';
+    toolbar.style.zIndex = toolbar.dataset.boPrevZ || '';
+    toolbar.style.background = toolbar.dataset.boPrevBg || '';
+    delete toolbar.dataset.boPrevPosition;
+    delete toolbar.dataset.boPrevTop;
+    delete toolbar.dataset.boPrevZ;
+    delete toolbar.dataset.boPrevBg;
+  } catch (_e) {}
 }
 
 // ★ Day 24: Auto-mode per-bunk grid — mirrors _boRenderBunkGrid layout (time
@@ -6356,7 +7866,11 @@ function renderBunkOverridesUI() {
 //   a full-width tile in each bunk's column. Click a tile to override.
 function _boRenderAutoBunkGrid(wrap, divName) {
   if (!wrap) return;
-  const divisions = masterSettings.app1?.divisions || {};
+  // ★ Prefer the LIVE registry (window.divisions, built from campStructure) —
+  //   the app1 settings-blob copy goes stale when the camp structure changes
+  //   (e.g. a bunk added in Campistry Me is missing from the blob until app1
+  //   itself re-saves, so it never appeared in these per-bunk panels).
+  const divisions = window.divisions || masterSettings.app1?.divisions || {};
   const div = divisions[divName];
   if (!div) { wrap.innerHTML = '<p style="color:#94a3b8;">Division not found.</p>'; return; }
 
@@ -6467,14 +7981,14 @@ function _boRenderAutoBunkGrid(wrap, divName) {
   // Layer-type → tile background colour (matches the auto builder palette)
   const TYPE_BG = {
     sport: '#bbf7d0', special: '#e9d5ff', activity: '#dbeafe',
-    swim: '#cffafe', lunch: '#fecaca', snacks: '#fef3c7',
+    swim: '#cffafe', lunch: '#fecaca', snacks: '#fef3c7', dinner: '#fed7aa',
     dismissal: '#fbcfe8', custom: '#e5e7eb',
     league: '#fee2e2', specialty_league: '#fce7f3', elective: '#f5d0fe'
   };
   const _typeLabel = (l) => {
     const t = String(l.type || 'custom').toLowerCase();
     const map = { sport: 'Sport', special: 'Special Activity', activity: 'Activity',
-                  swim: 'Swim', lunch: 'Lunch', snacks: 'Snacks', dismissal: 'Dismissal',
+                  swim: 'Swim', lunch: 'Lunch', snacks: 'Snacks', dinner: 'Dinner', dismissal: 'Dismissal',
                   custom: 'Custom Pinned', league: 'League Game', specialty_league: 'Specialty League',
                   elective: 'Elective' };
     // ★ FN-37: custom pinned layers carry their real activity name
@@ -6497,7 +8011,7 @@ function _boRenderAutoBunkGrid(wrap, divName) {
   //   the grade layers — so a freshly added band landed past the column's
   //   right edge, clipped under the next bunk's column ("blocked"-looking).
   //   Width every column for the widest bunk (layers + its extra bands).
-  const _ovOnAnyLayer = (o) => layers.some(l => _boOvMatchesLayer(o, l.startMin, l.endMin, String(l.type || 'custom')));
+  const _ovOnAnyLayer = (o) => layers.some(l => _boOvMatchesLayer(o, l.startMin, l.endMin, _boLayerKey(l)));
   let _maxExtraBands = 0;
   bunks.forEach(b => {
     const n = overrides.filter(o => String(o.bunk) === String(b) && !_ovOnAnyLayer(o)).length;
@@ -6558,7 +8072,9 @@ function _boRenderAutoBunkGrid(wrap, divName) {
       const height = (em - sm) * PX;
       const left = BAND_PAD + idx * (BAND_WIDTH + BAND_GAP);
 
-      const _ltKey = (layer.type || 'custom');
+      // ★ GA-backed fixed tiles normalize to their behavior type (lunch/swim/…)
+      //   so they render with the fixed-tile colour + the right popover.
+      const _ltKey = _boLayerKey(layer);
       const override = overrides.find(o => o.bunk === bunk && _boOvMatchesLayer(o, sm, em, _ltKey));
 
       const opSymbol = layer.op === '=' ? '=' : layer.op === '<=' ? '≤' : '≥';
@@ -6896,6 +8412,10 @@ function _boShowAutoLayerPopover(anchorEl, bunk, startMin, endMin, layerType) {
   let curEnd   = existing?.endMin   ?? endMin;
   let pickedActivity = (existing && !isPoolType && existing.activity && !PLACEHOLDER_ACTS[existing.activity])
     ? { name: existing.activity, location: existing.location, type: existing.type } : null;
+  // ★ Custom Pinned (per-bunk): remembered location for the free-typed
+  //   activity — same "name @ facility" pairing a grade custom pinned layer
+  //   carries (customActivity + customField), scoped to this bunk.
+  let freeLocPick = (existing && existing.location) || null;
 
   const pop = document.createElement('div');
   pop.id = 'bo-auto-popover';
@@ -6905,7 +8425,7 @@ function _boShowAutoLayerPopover(anchorEl, bunk, startMin, endMin, layerType) {
   pop.style.top  = Math.min(rect.bottom + 6, window.innerHeight - 540) + 'px';
   pop.style.left = Math.min(rect.left, window.innerWidth - 370) + 'px';
 
-  const labelMap = { sport: 'Sport', special: 'Special Activity', activity: 'Activity', swim: 'Swim', lunch: 'Lunch', snacks: 'Snacks', dismissal: 'Dismissal', custom: 'Custom Pinned', league: 'League Game', specialty_league: 'Specialty League', elective: 'Elective' };
+  const labelMap = { sport: 'Sport', special: 'Special Activity', activity: 'Activity', swim: 'Swim', lunch: 'Lunch', snacks: 'Snacks', dinner: 'Dinner', dismissal: 'Dismissal', custom: 'Custom Pinned', league: 'League Game', specialty_league: 'Specialty League', elective: 'Elective' };
   const layerLabel = labelMap[(layerType || '').toLowerCase()] || (layerType || 'Layer');
   // ★ FN-37: the band stamps the layer's real activity name (custom layers) so
   //   the popover can show it instead of the generic type label.
@@ -6981,12 +8501,23 @@ function _boShowAutoLayerPopover(anchorEl, bunk, startMin, endMin, layerType) {
       const icon = opts.icon || '🎯';
       // ★ FN-37: custom layers (and added bands) accept a typed activity name —
       //   same as typing a custom pinned layer's name in the Master Scheduler.
+      // ★ Custom Pinned (per-bunk): the typed name + optional location save as
+      //   a force pin with type:'custom' — generation treats it exactly like a
+      //   grade-level Custom Pinned tile, scoped to this one bunk.
+      const _freeLocOptions = [...(groups.facilities || []), ...(groups.fields || [])]
+        .map(it => it.name)
+        .filter((n, i, arr) => n && arr.indexOf(n) === i)
+        .sort((a, b) => a.localeCompare(b));
       const freeHtml = opts.freeText ? `
         <div style="margin-bottom:10px;">
-          <div style="font-size:11px;color:#64748b;font-weight:600;margin-bottom:4px;">✏️ Type any activity name:</div>
+          <div style="font-size:11px;color:#64748b;font-weight:600;margin-bottom:4px;">📌 Custom Pinned — type any activity name:</div>
           <input id="bo-pop-freename" type="text" value="${_escHtml(pickedActivity?.name || '')}"
             placeholder="${_escHtml(opts.freePlaceholder || 'e.g. Learning, Rest Hour, Carnival')}"
             style="width:100%;box-sizing:border-box;font-size:12px;padding:6px 8px;border:1px solid #cbd5e1;border-radius:6px;" />
+          <select id="bo-pop-freeloc" style="width:100%;box-sizing:border-box;font-size:12px;padding:5px 6px;border:1px solid #cbd5e1;border-radius:6px;margin-top:6px;background:#fff;color:#475569;">
+            <option value="">📍 Location (optional)</option>
+            ${_freeLocOptions.map(n => `<option value="${_escHtml(n)}"${freeLocPick === n ? ' selected' : ''}>${_escHtml(n)}</option>`).join('')}
+          </select>
           <div style="font-size:10px;color:#94a3b8;margin-top:6px;">…or pick from the lists below:</div>
         </div>` : '';
       body.innerHTML = `${freeHtml}
@@ -6999,7 +8530,14 @@ function _boShowAutoLayerPopover(anchorEl, bunk, startMin, endMin, layerType) {
         // No re-render on input — rebuilding the body would steal focus per keystroke.
         freeInput.oninput = () => {
           const v = freeInput.value.trim();
-          pickedActivity = v ? { name: v, location: null, type: 'custom' } : null;
+          pickedActivity = v ? { name: v, location: freeLocPick, type: 'custom' } : null;
+        };
+      }
+      const freeLocSel = body.querySelector('#bo-pop-freeloc');
+      if (freeLocSel) {
+        freeLocSel.onchange = () => {
+          freeLocPick = freeLocSel.value || null;
+          if (pickedActivity && pickedActivity.type === 'custom') pickedActivity.location = freeLocPick;
         };
       }
       const root = body.querySelector('#bo-pop-options');
@@ -7030,6 +8568,7 @@ function _boShowAutoLayerPopover(anchorEl, bunk, startMin, endMin, layerType) {
         desc: 'Pick the activity to ADD for ' + bunk + ' at this time',
         freeText: true,
         cats: [
+          { label: '🔒 Fixed Tiles (Lunch / Snacks / Swim / Dismissal…)', items: groups.fixedTiles },
           { label: '📌 Pinned Activities', items: groups.pinned },
           { label: '🏢 Facilities', items: groups.facilities },
           { label: '🏟️ Fields', items: groups.fields },
@@ -7077,6 +8616,16 @@ function _boShowAutoLayerPopover(anchorEl, bunk, startMin, endMin, layerType) {
           ]
         });
         break;
+      case 'dinner':
+        renderSinglePick({
+          icon: '🍽️',
+          desc: 'Pick a custom Dinner location for ' + bunk,
+          cats: [
+            { label: '📌 Common', items: (groups.pinned || []).filter(p => /dinner|lunch|medrash|hall|dining/i.test(p.name)) },
+            { label: '🏢 Facilities', items: groups.facilities }
+          ]
+        });
+        break;
       case 'dismissal':
         renderSinglePick({
           icon: '🚌',
@@ -7103,6 +8652,7 @@ function _boShowAutoLayerPopover(anchorEl, bunk, startMin, endMin, layerType) {
             ? 'e.g. a replacement for ' + layerName
             : 'e.g. Learning, Rest Hour, Carnival',
           cats: [
+            { label: '🔒 Fixed Tiles (Lunch / Snacks / Swim / Dismissal…)', items: groups.fixedTiles },
             { label: '📌 Pinned Activities', items: groups.pinned },
             { label: '🏢 Facilities', items: groups.facilities },
             { label: '🏟️ Fields', items: groups.fields },
@@ -7130,6 +8680,9 @@ function _boShowAutoLayerPopover(anchorEl, bunk, startMin, endMin, layerType) {
           id: uid(), bunk, startMin, endMin,
           startTime: minutesToTime(startMin), endTime: minutesToTime(endMin),
           layerType: layerType || 'custom',
+          // The band's real activity name (GA-backed tiles can be custom-named,
+          // e.g. "Milk & Cookies") — the delete evictor matches on it too.
+          layerName: (anchorEl?.dataset?.layerName || '').trim() || null,
           overrideMode: 'delete',
           activity: '— deleted —', location: null, type: 'delete'
         });
@@ -7169,8 +8722,32 @@ function _boShowAutoLayerPopover(anchorEl, bunk, startMin, endMin, layerType) {
       renderBunkOverridesUI();
     };
 
-    pop.querySelector('#bo-pop-save').onclick = () => {
+    pop.querySelector('#bo-pop-save').onclick = async () => {
       if (curEnd <= curStart) { alert('End time must be after start time.'); return; }
+
+      // Same setup-conflict pre-flight the manual grid runs (_boApplyOverrideBulk):
+      // warn when the pick is switched off for the date, closed by a time rule, or
+      // breaks the facility's sharing rule. Warn only — the user may accept.
+      try {
+        const _chkItems = isPoolType
+          ? [...selectedSports].map(n => ({ name: n, type: 'sport', location: null }))
+          : (pickedActivity && pickedActivity.name
+              ? [{ name: pickedActivity.name, type: pickedActivity.type, location: pickedActivity.location || null }]
+              : []);
+        if (_chkItems.length) {
+          const _w = _boCheckOverrideConflicts([{ bunk, startMin: curStart, endMin: curEnd }], _chkItems);
+          if (_w.length) {
+            const ok = await daShowConfirm(
+              'This override conflicts with your setup:<br><br>' +
+              _w.map(x => '• ' + x).join('<br>') +
+              '<br><br>Apply it anyway?',
+              { danger: true, confirmText: 'Apply anyway', cancelText: 'Cancel' }
+            );
+            if (!ok) return;
+          }
+        }
+      } catch (_eChk) { /* pre-check must never block the save */ }
+
       // Remove any existing override matching original time + layer
       let list = (currentOverrides.bunkActivityOverrides || []).filter(o =>
         !(o.bunk === bunk && _boOvMatchesLayer(o, startMin, endMin, layerType || 'custom'))
@@ -7198,15 +8775,28 @@ function _boShowAutoLayerPopover(anchorEl, bunk, startMin, endMin, layerType) {
         if (!pickedActivity || !String(pickedActivity.name || '').trim()) { alert('Type or pick an activity, or click Cancel.'); return; }
         // Reserved UI placeholder strings must never become a real pin.
         if (PLACEHOLDER_ACTS[pickedActivity.name]) { alert('That name is reserved — type the real activity name.'); return; }
+        // ★ Fixed bands (lunch/snacks/dinner/swim/dismissal): their pickers
+        //   offer LOCATIONS — keep the tile's own identity as the activity and
+        //   carry the pick as the location, typed with the fixed type so
+        //   generation places it NATIVELY (previously it pinned a generic
+        //   custom block named after the facility).
+        let _saveAct = pickedActivity.name;
+        let _saveLoc = pickedActivity.location || null;
+        let _saveType = pickedActivity.type;
+        if (_BO_FIXED_SET[_lt] && pickedActivity.type === 'pinned') {
+          _saveLoc = pickedActivity.location || pickedActivity.name;
+          _saveAct = labelMap[_lt] || _lt;
+          _saveType = _lt;
+        }
         list.push({
           id: uid(), bunk,
           startMin: curStart, endMin: curEnd,
           startTime: minutesToTime(curStart), endTime: minutesToTime(curEnd),
           layerType: _lt,
           overrideMode: 'force',
-          activity: pickedActivity.name,
-          location: pickedActivity.location || null,
-          type: pickedActivity.type
+          activity: _saveAct,
+          location: _saveLoc,
+          type: _saveType
         });
       }
       _boSaveOverrides(list);
@@ -7240,9 +8830,147 @@ function _inputTimeToMinutes(s) {
   return (h || 0) * 60 + (m || 0);
 }
 
+// ★ Per-tile action cluster for the bunk-override grid.
+//   `kind` is one of:
+//     'skeleton' — the grade's own block, not yet overridden for this bunk
+//     'override' — a per-bunk replacement activity
+//     'deleted'  — a per-bunk "nothing here" (overrideMode:'delete')
+//   Grips: top/bottom resize, left/right extend across bunks, body moves.
+//   These carry the SKELETON GRID's own handle classes (.da-resize-handle /
+//   .da-resize-h) so they inherit that styling verbatim — the pale blue edge
+//   band with the darker grip pill — instead of a look-alike that would drift.
+//   `.bo-h` is only a hook for this grid's drag binding.
+function _boTileActionsHTML(draggable) {
+  if (!draggable) return '';
+  return '<div class="bo-h da-resize-handle da-resize-top" data-edge="top"></div>' +
+         '<div class="bo-h da-resize-handle da-resize-bottom" data-edge="bottom"></div>' +
+         '<div class="bo-h da-resize-h da-resize-h-left" data-edge="left"></div>' +
+         '<div class="bo-h da-resize-h da-resize-h-right" data-edge="right"></div>';
+}
+
+// ─────────────────────────────────────────────────────────────────────────
+// What does a SKELETON tile actually represent, and can a per-bunk drag of it
+// be expressed as an override?
+// ─────────────────────────────────────────────────────────────────────────
+// A drag only survives generation if it becomes an override, and an override
+// has to name something concrete for STEP 2 to pin. So:
+//   • concrete  — the tile already names a real thing (Swim, Lunch, a pinned
+//     activity, a custom block). Dragging writes a force override carrying that
+//     identity, plus a delete override on the vacated window so the block really
+//     MOVES rather than being duplicated.
+//   • generic   — the tile is a placeholder the solver fills later ("Sports
+//     Slot", "Special Activity", an elective menu). There is nothing to pin
+//     until the user says what this bunk should do, so a drag opens the picker
+//     for the destination window and that writes the override.
+//   • not draggable — league tiles. A league game belongs to the whole
+//     division; moving it for one bunk is not a thing.
+const _BO_GENERIC_EVENTS = {
+  'general activity slot': 1, 'sports slot': 1, 'special activity': 1,
+  'main activity': 1, 'activity slot': 1, 'free': 1
+};
+function _boTileIdentity(ev) {
+  const type = String(ev?.type || '').toLowerCase();
+  if (type === 'league' || type === 'specialty_league') return { draggable: false };
+  const name = String(ev?.customActivity || ev?.event || '').trim();
+  const key = _boLayerKey(ev);
+  if (_BO_FIXED_SET[key]) {
+    return { draggable: true, concrete: true, activity: name || key, type: key, location: ev?.location || null };
+  }
+  const generic = !name || _BO_GENERIC_EVENTS[name.toLowerCase()] ||
+    type === 'activity' || type === 'sports' || type === 'special' ||
+    type === 'elective' || type === 'swim_elective';
+  if (generic) return { draggable: true, concrete: false };
+  return {
+    draggable: true, concrete: true, activity: name,
+    type: (type === 'trip') ? 'trip' : 'pinned',
+    location: ev?.location || null
+  };
+}
+
+// ─────────────────────────────────────────────────────────────────────────
+// Tile selection + Edit/Delete action bar (mirrors the skeleton grid's
+// _showTileActionBar so both grids behave the same: click a tile to select it,
+// then act on it from the little bar that pops up underneath).
+// ─────────────────────────────────────────────────────────────────────────
+let _boSelectedTile = null; // { bunk, startMin, endMin }
+
+function _boClearTileSelection() {
+  _boSelectedTile = null;
+  document.querySelectorAll('.bo-block.bo-selected').forEach(el => el.classList.remove('bo-selected'));
+  document.getElementById('bo-tile-action-bar')?.remove();
+}
+
+function _boShowTileActionBar(block) {
+  document.getElementById('bo-tile-action-bar')?.remove();
+  document.querySelectorAll('.bo-block.bo-selected').forEach(el => el.classList.remove('bo-selected'));
+  if (!block) return;
+
+  block.classList.add('bo-selected');
+  const bunk = block.dataset.bunk;
+  const startMin = parseInt(block.dataset.start);
+  const endMin = parseInt(block.dataset.end);
+  const ovId = block.dataset.ovId || null;
+  const isDeleted = block.dataset.mode === 'delete';
+  _boSelectedTile = { bunk, startMin, endMin };
+
+  const bar = document.createElement('div');
+  bar.id = 'bo-tile-action-bar';
+  bar.style.cssText = 'position:fixed;z-index:10000;display:flex;gap:4px;background:#fff;border:1px solid #d1d5db;border-radius:8px;box-shadow:0 4px 12px rgba(0,0,0,0.15);padding:4px;';
+  const rect = block.getBoundingClientRect();
+  bar.style.top = Math.min(rect.bottom + 4, window.innerHeight - 40) + 'px';
+  bar.style.left = Math.max(rect.left, 8) + 'px';
+
+  const btnStyle = 'padding:5px 12px;border:none;border-radius:6px;font-size:11px;font-weight:600;cursor:pointer;font-family:inherit;';
+  const mkBtn = (label, css, onClick) => {
+    const b = document.createElement('button');
+    b.type = 'button';
+    b.textContent = label;
+    b.style.cssText = btnStyle + css;
+    b.onclick = onClick;
+    return b;
+  };
+
+  bar.appendChild(mkBtn('Edit', 'background:#f1f5f9;color:#374151;', () => {
+    bar.remove();
+    _boShowPicker(block, bunk, startMin, endMin);
+  }));
+
+  // An override can go back to the grade skeleton; that is a different action
+  // from Delete, which leaves the bunk with nothing scheduled.
+  if (ovId) {
+    bar.appendChild(mkBtn(isDeleted ? 'Restore' : 'Revert', 'background:#eff6ff;color:#1d4ed8;', () => {
+      bar.remove();
+      _boClearTileSelection();
+      _boSaveOverrides((currentOverrides.bunkActivityOverrides || []).filter(o => o.id !== ovId));
+      renderBunkOverridesUI();
+    }));
+  }
+
+  if (!isDeleted) {
+    bar.appendChild(mkBtn('Delete', 'background:#fef2f2;color:#dc2626;', async () => {
+      bar.remove();
+      _boClearTileSelection();
+      await _boDeleteTileForBunk(bunk, startMin, endMin, block.dataset.layerType || null);
+    }));
+  }
+
+  document.body.appendChild(bar);
+
+  const closeHandler = (e) => {
+    if (bar.contains(e.target) || block.contains(e.target) || e.target === block) return;
+    document.removeEventListener('mousedown', closeHandler);
+    _boClearTileSelection();
+  };
+  setTimeout(() => document.addEventListener('mousedown', closeHandler), 0);
+}
+
 function _boRenderBunkGrid(wrap, divName) {
   if (!wrap) return;
-  const divisions = masterSettings.app1?.divisions || {};
+  // ★ Prefer the LIVE registry (window.divisions, built from campStructure) —
+  //   the app1 settings-blob copy goes stale when the camp structure changes
+  //   (e.g. a bunk added in Campistry Me is missing from the blob until app1
+  //   itself re-saves, so it never appeared in these per-bunk panels).
+  const divisions = window.divisions || masterSettings.app1?.divisions || {};
   const div = divisions[divName];
   if (!div) { wrap.innerHTML = '<p style="color:#94a3b8;">Division not found.</p>'; return; }
 
@@ -7277,7 +9005,7 @@ function _boRenderBunkGrid(wrap, divName) {
   _boSelectedCells.clear();
 
   // Bulk-selection action bar (hidden until the user double-clicks ≥1 slot).
-  let html = `<div id="bo-sel-bar" style="display:none;align-items:center;gap:10px;position:sticky;top:0;z-index:20;background:#eff6ff;border:1px solid #bfdbfe;border-radius:8px;padding:8px 12px;margin-bottom:8px;">
+  let html = `<div id="bo-sel-bar" style="display:none;align-items:center;gap:10px;position:sticky;top:0;z-index:${_BO_Z.selBar};background:#eff6ff;border:1px solid #bfdbfe;border-radius:8px;padding:8px 12px;margin-bottom:8px;">
     <span style="font-size:16px;">🎯</span>
     <strong id="bo-sel-count" style="font-size:13px;color:#1e40af;">0 slots selected</strong>
     <span style="font-size:11px;color:#3b82f6;">— double-click slots to (de)select, then Assign or Regenerate</span>
@@ -7289,11 +9017,16 @@ function _boRenderBunkGrid(wrap, divName) {
   html += `<div class="bo-grid" style="display:grid;grid-template-columns:70px repeat(${bunks.length}, 1fr);column-gap:3px;margin-top:4px;">`;
 
   // Header row
-  html += '<div class="da-grid-header da-time-header" style="font-size:11px;">Time</div>';
+  // ★ `.da-grid-header` is already `position:sticky; top:0` — but so is the
+  //   toolbar/grade-selector stack above it, so both competed for y=0 and the
+  //   bunk names ended up UNDER the pinned chrome. `bo-sticky-row` marks them
+  //   for _boApplyStickyOffsets, which pushes their `top` down by the measured
+  //   height of that chrome so the whole stack reads as one frozen header.
+  html += '<div class="da-grid-header da-time-header bo-sticky-row" style="font-size:11px;">Time</div>';
   bunks.forEach(bunk => {
     const bunkOverrides = overrides.filter(o => o.bunk === bunk);
     const badge = bunkOverrides.length > 0 ? ` <span style="background:#ef4444;color:#fff;border-radius:99px;padding:1px 5px;font-size:9px;font-weight:700;">${bunkOverrides.length}</span>` : '';
-    html += `<div class="da-grid-header" style="background:${color};color:#fff;border-radius:6px 6px 0 0;font-size:11px;padding:6px 4px;text-align:center;">${_escHtml(bunk)}${badge}</div>`;
+    html += `<div class="da-grid-header bo-sticky-row" style="background:${color};color:#fff;border-radius:6px 6px 0 0;font-size:11px;padding:6px 4px;text-align:center;">${_escHtml(bunk)}${badge}</div>`;
   });
 
   // Time column
@@ -7321,27 +9054,39 @@ function _boRenderBunkGrid(wrap, divName) {
       const top = (evStart - earliestMin) * PX;
       const height = Math.max((evEnd - evStart) * PX - 2, 24);
 
+      const shortCls = height < 35 ? ' bo-short' : '';
+
       if (override) {
         // Render the override block (highlighted). A pool ("either/or") override
-        // gets a distinct green treatment so it reads as "solver picks one of N".
+        // gets a distinct green treatment so it reads as "solver picks one of N";
+        // a DELETED block gets the same grey hatch the auto grid uses so "this
+        // bunk has nothing here" is unmistakable at a glance.
         const isPool = override.overrideMode === 'sportPool' || override.type === 'sportPool';
-        const oStyle = isPool
-          ? 'background:#dcfce7;color:#065f46;border:2px solid #10b981;'
-          : 'background:#fef3c7;color:#92400e;border:2px solid #f59e0b;';
-        const typeIcon = isPool ? '🔀 ' : (override.type === 'pinned' ? '📌 ' : (override.type === 'sport' ? '⚽ ' : (override.type === 'field' ? '🏟️ ' : '🎨 ')));
+        const isDeleted = override.overrideMode === 'delete';
+        const oStyle = isDeleted
+          ? 'background:repeating-linear-gradient(45deg,#e5e7eb,#e5e7eb 6px,#cbd5e1 6px,#cbd5e1 12px);color:#475569;border:2px solid #94a3b8;'
+          : isPool
+            ? 'background:#dcfce7;color:#065f46;border:2px solid #10b981;'
+            : 'background:#fef3c7;color:#92400e;border:2px solid #f59e0b;';
+        const typeIcon = isDeleted ? '🚫 ' : (isPool ? '🔀 ' : (override.type === 'pinned' ? '📌 ' : (override.type === 'sport' ? '⚽ ' : (override.type === 'field' ? '🏟️ ' : '🎨 '))));
+        const label = isDeleted ? 'Deleted' : override.activity;
         let fontSize = height < 35 ? '10px' : (height < 50 ? '11px' : '12px');
         let content;
         if (height < 35) {
-          content = `<span style="font-weight:600;font-size:${fontSize};">${typeIcon}${_escHtml(override.activity)}</span>`;
+          content = `<span style="font-weight:600;font-size:${fontSize};">${typeIcon}${_escHtml(label)}</span>`;
         } else {
-          content = `<strong style="font-size:${fontSize};">${typeIcon}${_escHtml(override.activity)}</strong>`;
-          if (override.location) content += `<div style="font-size:9px;opacity:0.8;">📍 ${_escHtml(override.location)}</div>`;
+          content = `<strong style="font-size:${fontSize};">${typeIcon}${_escHtml(label)}</strong>`;
+          if (isDeleted) content += `<div style="font-size:9px;opacity:0.8;">nothing scheduled</div>`;
+          else if (override.location) content += `<div style="font-size:9px;opacity:0.8;">📍 ${_escHtml(override.location)}</div>`;
         }
-        html += `<div class="da-event bo-block bo-override" data-bunk="${_escHtml(bunk)}" data-start="${evStart}" data-end="${evEnd}" data-ov-id="${_escHtml(override.id)}"
-          title="OVERRIDE: ${_escHtml(override.activity)} (${minutesToTime(evStart)}-${minutesToTime(evEnd)}) — Click to edit, right-click to revert"
+        const _titleTxt = isDeleted
+          ? `DELETED for ${bunk} (${minutesToTime(evStart)}-${minutesToTime(evEnd)}) — nothing will be scheduled`
+          : `OVERRIDE: ${override.activity} (${minutesToTime(evStart)}-${minutesToTime(evEnd)})`;
+        html += `<div class="da-event bo-block bo-override${shortCls}" data-bunk="${_escHtml(bunk)}" data-start="${evStart}" data-end="${evEnd}" data-ov-id="${_escHtml(override.id)}" data-mode="${_escHtml(override.overrideMode || 'force')}" data-span-group="${_escHtml(override._spanGroup || '')}"
+          title="${_escHtml(_titleTxt)}"
           style="${oStyle}top:${top}px;height:${height}px;font-size:${fontSize};padding:3px 6px;cursor:pointer;position:absolute;left:2px;right:2px;border-radius:6px;overflow:hidden;">
           ${content}
-          <div style="position:absolute;top:2px;right:4px;font-size:9px;cursor:pointer;" class="bo-revert-btn" title="Revert to original">✕</div>
+          ${_boTileActionsHTML(true)}
         </div>`;
       } else {
         // Render the skeleton block (normal)
@@ -7356,10 +9101,16 @@ function _boRenderBunkGrid(wrap, divName) {
           const locDisplay = ev.location || (ev.reservedFields?.length > 0 ? ev.reservedFields.join(', ') : null);
           if (locDisplay) content += `<div style="font-size:9px;opacity:0.8;">📍 ${_escHtml(locDisplay)}</div>`;
         }
-        html += `<div class="da-event bo-block bo-skeleton" data-bunk="${_escHtml(bunk)}" data-start="${evStart}" data-end="${evEnd}" data-ev-type="${ev.type || 'slot'}"
+        // Identity travels on the tile so a drag knows whether it can write a
+        // concrete override or has to ask the user first (see _boTileIdentity).
+        const ident = _boTileIdentity(ev);
+        const identAttrs = ` data-drag="${ident.draggable ? 1 : 0}" data-concrete="${ident.concrete ? 1 : 0}"` +
+          (ident.concrete ? ` data-act="${_escHtml(ident.activity)}" data-act-type="${_escHtml(ident.type)}" data-act-loc="${_escHtml(ident.location || '')}"` : '');
+        html += `<div class="da-event bo-block bo-skeleton${shortCls}" data-bunk="${_escHtml(bunk)}" data-start="${evStart}" data-end="${evEnd}" data-ev-type="${ev.type || 'slot'}"${identAttrs}
           title="${_escHtml(evName)} (${minutesToTime(evStart)}-${minutesToTime(evEnd)}) — Click to override for ${_escHtml(bunk)}"
           style="${style}top:${top}px;height:${height}px;font-size:${fontSize};padding:3px 6px;cursor:pointer;position:absolute;left:2px;right:2px;border-radius:6px;overflow:hidden;">
           ${content}
+          ${_boTileActionsHTML(ident.draggable)}
         </div>`;
       }
     });
@@ -7370,31 +9121,34 @@ function _boRenderBunkGrid(wrap, divName) {
   html += '</div>';
   wrap.innerHTML = html;
 
-  // Attach handlers on blocks. Single-click opens the picker (for the active
-  // multi-selection if any, else just this slot); DOUBLE-click toggles this slot
-  // in/out of the multi-selection. A short timer disambiguates the two so a
-  // double-click never also fires the single-click picker.
+  // Attach handlers on blocks. Single-click SELECTS the tile and pops the
+  // Edit/Delete bar (same gesture as the skeleton grid); DOUBLE-click toggles
+  // this slot in/out of the bulk multi-selection. A short timer disambiguates
+  // the two so a double-click never also fires the single-click bar.
   let _boClickTimer = null;
+  const _fromHandle = (e) => !!(e.target.closest && e.target.closest('.bo-h'));
   wrap.querySelectorAll('.bo-block').forEach(block => {
     block.style.userSelect = 'none';
     block.onclick = (e) => {
-      if (e.target.classList.contains('bo-revert-btn')) return;
+      if (_fromHandle(e)) return;
+      if (block.dataset.boDragged === '1') { delete block.dataset.boDragged; return; } // drag, not a click
       if (_boClickTimer) return; // a double-click is unfolding — let ondblclick handle it
       _boClickTimer = setTimeout(() => {
         _boClickTimer = null;
-        const bunk = block.dataset.bunk;
-        const startMin = parseInt(block.dataset.start);
-        const endMin = parseInt(block.dataset.end);
-        _boShowPicker(block, bunk, startMin, endMin);
+        _boShowTileActionBar(block);
       }, 350);
     };
     block.ondblclick = (e) => {
-      if (e.target.classList.contains('bo-revert-btn')) return;
+      if (_fromHandle(e)) return;
       if (_boClickTimer) { clearTimeout(_boClickTimer); _boClickTimer = null; }
       e.preventDefault();
+      _boClearTileSelection();
       _boToggleCellSelection(block);
     };
   });
+
+  // Drag: move / resize / span. Snapped to the grade's own tile boundaries.
+  _boBindTileDrag(wrap, bunks, divEvents, earliestMin, PX);
 
   // Selection action bar buttons.
   const _assignBtn = wrap.querySelector('#bo-sel-assign');
@@ -7406,20 +9160,338 @@ function _boRenderBunkGrid(wrap, divName) {
   if (_clearBtn) _clearBtn.onclick = () => { _boSelectedCells.clear(); renderBunkOverridesUI(); };
   const _regenBtn = wrap.querySelector('#bo-sel-regen');
   if (_regenBtn) _regenBtn.onclick = () => { _boRegenerateSelectedCells(); };
+  // (Revert lives in the per-tile ↩ button now — see .bo-tile-revert above.)
+}
 
-  // Revert buttons on overrides
-  wrap.querySelectorAll('.bo-revert-btn').forEach(btn => {
-    btn.onclick = (e) => {
-      e.stopPropagation();
-      const block = btn.closest('.bo-override');
-      if (!block) return;
-      const ovId = block.dataset.ovId;
-      let list = currentOverrides.bunkActivityOverrides || [];
-      list = list.filter(o => o.id !== ovId);
-      _boSaveOverrides(list);
-      renderBunkOverridesUI();
-    };
+// Delete one block for ONE bunk. Writes an overrideMode:'delete' override at the
+// block's window, replacing whatever override was already there. Both solvers
+// treat that as "this bunk has nothing scheduled in this window" — auto in its
+// Phase-0 / final enforcement pass, manual in STEP 2 (see scheduler_core_main).
+async function _boDeleteTileForBunk(bunk, startMin, endMin, layerType) {
+  if (!bunk || !(startMin >= 0) || !(endMin > startMin)) return;
+  const lt = layerType || null;
+  let list = (currentOverrides.bunkActivityOverrides || []).slice();
+  const existing = list.find(o => o.bunk === bunk && o.startMin === startMin && o.endMin === endMin && (o.layerType || null) === lt);
+  if (existing && existing.overrideMode === 'delete') return; // already deleted
+
+  // NOTE: daShowConfirm renders its message as RAW HTML — escape interpolations.
+  const ok = await daShowConfirm(
+    `Delete this block for <strong>${_escHtml(bunk)}</strong> only?<br><br>` +
+    `${_escHtml(minutesToTime(startMin))}–${_escHtml(minutesToTime(endMin))} will be left empty for this bunk. Every other bunk keeps the block.`,
+    { danger: true, confirmText: 'Delete' }
+  );
+  if (!ok) return;
+
+  list = list.filter(o => !(o.bunk === bunk && o.startMin === startMin && o.endMin === endMin && (o.layerType || null) === lt));
+  list.push({
+    id: uid(),
+    bunk,
+    activity: '— deleted —',
+    location: null,
+    startTime: minutesToTime(startMin),
+    endTime: minutesToTime(endMin),
+    startMin, endMin,
+    type: 'delete',
+    overrideMode: 'delete',
+    layerType: lt
   });
+  _boSaveOverrides(list);
+  renderBunkOverridesUI();
+}
+
+// ─────────────────────────────────────────────────────────────────────────
+// TILE DRAG — move (body / top+bottom edges) and span (left+right edges)
+// ─────────────────────────────────────────────────────────────────────────
+// Everything a per-bunk drag does has to end up as an OVERRIDE, because that is
+// the only per-bunk thing generation reads (STEP 2 pins it via
+// findSlotsForRange). An override tile already is one; a skeleton tile becomes
+// one on first drag — see _boTileIdentity for how its identity is resolved and
+// what happens when the tile is only a placeholder.
+//
+// Vertical movement SNAPS to the grade's own tile boundaries. That's honest
+// about the grid's real granularity: the manual builder gives a grade ONE slot
+// per skeleton tile (no per-bunk geometry — _perBunkSlots is auto-only), so the
+// pin lands on whichever slots the window overlaps and a free-form window would
+// silently round anyway.
+function _boBindTileDrag(wrap, bunks, divEvents, earliestMin, PX) {
+  const bounds = [...new Set(divEvents.flatMap(ev => {
+    const s = parseTimeToMinutes(ev.startTime), e = parseTimeToMinutes(ev.endTime);
+    return (s == null || e == null) ? [] : [s, e];
+  }))].sort((a, b) => a - b);
+  if (bounds.length < 2) return;
+  const snap = (m) => bounds.reduce((best, b) => (Math.abs(b - m) < Math.abs(best - m) ? b : best), bounds[0]);
+
+  wrap.querySelectorAll('.bo-block').forEach(block => {
+    if (block.dataset.drag === '0') return;         // league tiles
+    block.addEventListener('mousedown', (e) => {
+      if (e.button !== 0) return;
+      const handle = e.target.closest && e.target.closest('.bo-h');
+      const edge = handle ? handle.dataset.edge : 'move';
+      _boStartTileDrag(e, block, edge, { wrap, bunks, bounds, snap, earliestMin, PX });
+    });
+  });
+}
+
+function _boStartTileDrag(ev0, block, edge, ctx) {
+  // preventDefault kills text-selection while dragging. Deliberately NOT
+  // stopPropagation: the picker / action bar close themselves on a document
+  // mousedown, and swallowing it would strand them open on the previous tile.
+  ev0.preventDefault();
+  const ovId = block.dataset.ovId || null;
+
+  const origStart = parseInt(block.dataset.start);
+  const origEnd = parseInt(block.dataset.end);
+  const origTop = parseFloat(block.style.top || '0');
+  const track = block.parentElement;               // .bo-bunk-col
+  if (!track) return;
+
+  const horizontal = (edge === 'left' || edge === 'right');
+  let newStart = origStart, newEnd = origEnd;
+  let spanBunks = [block.dataset.bunk];
+  let moved = false;
+
+  // Ghost preview — vertical drags draw a dashed box in the column, horizontal
+  // drags tint the bunk columns that would receive a copy.
+  const ghost = document.createElement('div');
+  ghost.style.cssText = 'position:absolute;left:2px;right:2px;background:rgba(37,99,235,0.16);' +
+    'border:2px dashed #2563eb;border-radius:6px;pointer-events:none;z-index:40;' +
+    'display:flex;align-items:center;justify-content:center;font-size:10px;font-weight:700;color:#1e3a8a;';
+  ghost.style.top = block.style.top;
+  ghost.style.height = block.style.height;
+  ghost.textContent = minutesToTime(origStart) + '–' + minutesToTime(origEnd);
+  if (!horizontal) track.appendChild(ghost);
+
+  const cols = Array.from(ctx.wrap.querySelectorAll('.bo-bunk-col[data-bunk]'));
+  const myIdx = cols.findIndex(c => c.dataset.bunk === block.dataset.bunk);
+  const paintSpan = (idxs) => {
+    cols.forEach((c, i) => { c.style.background = idxs.includes(i) ? 'rgba(37,99,235,0.10)' : ''; });
+  };
+
+  const onMove = (e) => {
+    // A plain click always jitters a pixel or two. Without a threshold that
+    // would register as a drag and swallow the click that opens the action bar.
+    if (!moved) {
+      if (Math.abs(e.clientX - ev0.clientX) < 4 && Math.abs(e.clientY - ev0.clientY) < 4) return;
+      moved = true;
+    }
+    if (horizontal) {
+      // Which columns does the pointer cover, counting outward from this bunk?
+      let hit = cols.findIndex(c => {
+        const r = c.getBoundingClientRect();
+        return e.clientX >= r.left && e.clientX <= r.right;
+      });
+      if (hit < 0) hit = e.clientX < cols[0].getBoundingClientRect().left ? 0 : cols.length - 1;
+      const lo = Math.min(myIdx, hit), hi = Math.max(myIdx, hit);
+      const idxs = [];
+      for (let i = lo; i <= hi; i++) idxs.push(i);
+      spanBunks = idxs.map(i => cols[i].dataset.bunk);
+      paintSpan(idxs);
+      return;
+    }
+    const dMin = (e.clientY - ev0.clientY) / ctx.PX;
+    if (edge === 'top') {
+      newStart = Math.min(ctx.snap(origStart + dMin), origEnd - 1);
+      newEnd = origEnd;
+    } else if (edge === 'bottom') {
+      newStart = origStart;
+      newEnd = Math.max(ctx.snap(origEnd + dMin), origStart + 1);
+    } else {
+      const s = ctx.snap(origStart + dMin);
+      newStart = s;
+      newEnd = s + (origEnd - origStart);
+      // Keep the tail on a real boundary too, so a moved block still lines up.
+      const snappedEnd = ctx.snap(newEnd);
+      if (Math.abs(snappedEnd - newEnd) <= 10 && snappedEnd > newStart) newEnd = snappedEnd;
+    }
+    ghost.style.top = ((newStart - ctx.earliestMin) * ctx.PX) + 'px';
+    ghost.style.height = Math.max((newEnd - newStart) * ctx.PX - 2, 18) + 'px';
+    ghost.textContent = minutesToTime(newStart) + '–' + minutesToTime(newEnd);
+  };
+
+  const onUp = async () => {
+    document.removeEventListener('mousemove', onMove);
+    document.removeEventListener('mouseup', onUp);
+    ghost.remove();
+    paintSpan([]);
+    if (!moved) return;
+    block.dataset.boDragged = '1'; // suppress the click that follows a drag
+    _boClearTileSelection();
+    if (horizontal) {
+      if (spanBunks.length < 2 && !String(block.dataset.spanGroup || '')) return;
+      if (ovId) await _boCommitOverrideSpan(ovId, spanBunks);
+      else await _boCommitSkeletonSpan(block, spanBunks);
+    } else if (newStart !== origStart || newEnd !== origEnd) {
+      if (ovId) await _boCommitOverrideMove(ovId, newStart, newEnd);
+      else await _boCommitSkeletonMove(block, origStart, origEnd, newStart, newEnd);
+    }
+  };
+
+  document.addEventListener('mousemove', onMove);
+  document.addEventListener('mouseup', onUp);
+}
+
+// Dragging a tile that has no override yet. A CONCRETE tile (Swim, Lunch, a
+// pinned or custom block) is turned into a real override at the new window, and
+// — when the new window doesn't overlap the old one — a delete override is put
+// on the vacated slot so the block genuinely MOVES for this bunk instead of
+// being duplicated. A PLACEHOLDER tile has nothing to pin, so the picker opens
+// on the destination and writes the override once the user names the activity.
+async function _boCommitSkeletonMove(block, origStart, origEnd, newStart, newEnd) {
+  const bunk = block.dataset.bunk;
+  const lt = block.dataset.layerType || null;
+
+  if (block.dataset.concrete !== '1') {
+    // A stale bulk selection would hijack the picker's targets.
+    _boSelectedCells.clear();
+    _boShowPicker(block, bunk, newStart, newEnd);
+    return;
+  }
+
+  const item = {
+    name: block.dataset.act,
+    type: block.dataset.actType || 'pinned',
+    location: block.dataset.actLoc || null
+  };
+  const conflicts = _boCheckOverrideConflicts([{ bunk, startMin: newStart, endMin: newEnd, layerType: lt }], [item]);
+  if (conflicts.length && !(await _boConfirmConflicts(conflicts))) return;
+
+  const vacates = !(newStart < origEnd && newEnd > origStart);
+  let list = (currentOverrides.bunkActivityOverrides || []).filter(o =>
+    !(o.bunk === bunk && o.startMin === newStart && o.endMin === newEnd && (o.layerType || null) === lt) &&
+    !(vacates && o.bunk === bunk && o.startMin === origStart && o.endMin === origEnd && (o.layerType || null) === lt)
+  );
+  if (vacates) {
+    list.push({
+      id: uid(), bunk,
+      activity: '— deleted —', location: null,
+      startTime: minutesToTime(origStart), endTime: minutesToTime(origEnd),
+      startMin: origStart, endMin: origEnd,
+      type: 'delete', overrideMode: 'delete', layerType: lt
+    });
+  }
+  list.push({
+    id: uid(), bunk,
+    activity: item.name, location: item.location,
+    startTime: minutesToTime(newStart), endTime: minutesToTime(newEnd),
+    startMin: newStart, endMin: newEnd,
+    type: item.type, overrideMode: 'force', layerType: lt
+  });
+  _boSaveOverrides(list);
+  renderBunkOverridesUI();
+}
+
+// Extending a not-yet-overridden tile sideways. Concrete tiles write one force
+// override per covered bunk; a placeholder loads the covered cells into the bulk
+// selection and opens the picker, so one choice lands on all of them.
+async function _boCommitSkeletonSpan(block, bunkNames) {
+  const startMin = parseInt(block.dataset.start);
+  const endMin = parseInt(block.dataset.end);
+  const lt = block.dataset.layerType || null;
+
+  if (block.dataset.concrete !== '1') {
+    _boSelectedCells.clear();
+    bunkNames.forEach(b => _boSelectedCells.set(b + '||' + startMin + '||' + endMin + '||', { bunk: b, startMin, endMin, layerType: lt }));
+    _boShowPicker(block, bunkNames[0], startMin, endMin);
+    return;
+  }
+
+  const item = {
+    name: block.dataset.act,
+    type: block.dataset.actType || 'pinned',
+    location: block.dataset.actLoc || null
+  };
+  const targets = bunkNames.map(b => ({ bunk: b, startMin, endMin, layerType: lt }));
+  const conflicts = _boCheckOverrideConflicts(targets, [item]);
+  if (conflicts.length && !(await _boConfirmConflicts(conflicts))) return;
+
+  const group = bunkNames.length > 1 ? uid() : null;
+  const keep = new Set(bunkNames);
+  let list = (currentOverrides.bunkActivityOverrides || []).filter(o =>
+    !(keep.has(o.bunk) && o.startMin === startMin && o.endMin === endMin && (o.layerType || null) === lt)
+  );
+  bunkNames.forEach(b => {
+    list.push({
+      id: uid(), bunk: b,
+      activity: item.name, location: item.location,
+      startTime: minutesToTime(startMin), endTime: minutesToTime(endMin),
+      startMin, endMin,
+      type: item.type, overrideMode: 'force', layerType: lt,
+      _spanGroup: group || undefined
+    });
+  });
+  _boSaveOverrides(list);
+  renderBunkOverridesUI();
+}
+
+// Move / resize an override (and every member of its span) to a new window.
+async function _boCommitOverrideMove(ovId, newStart, newEnd) {
+  const list = (currentOverrides.bunkActivityOverrides || []).slice();
+  const me = list.find(o => o.id === ovId);
+  if (!me) return;
+  const group = me._spanGroup || null;
+  const members = group ? list.filter(o => o._spanGroup === group) : [me];
+
+  const conflicts = _boCheckOverrideConflicts(
+    members.map(m => ({ bunk: m.bunk, startMin: newStart, endMin: newEnd, layerType: m.layerType || null })),
+    [{ name: me.activity, type: me.type, location: me.location || null }]
+  );
+  if (conflicts.length && !(await _boConfirmConflicts(conflicts))) return;
+
+  const memberIds = new Set(members.map(m => m.id));
+  // Anything already sitting on the destination window for these bunks loses.
+  const bunkSet = new Set(members.map(m => m.bunk));
+  const next = list.filter(o => memberIds.has(o.id) ||
+    !(bunkSet.has(o.bunk) && o.startMin === newStart && o.endMin === newEnd));
+  next.forEach(o => {
+    if (!memberIds.has(o.id)) return;
+    o.startMin = newStart; o.endMin = newEnd;
+    o.startTime = minutesToTime(newStart); o.endTime = minutesToTime(newEnd);
+  });
+  _boSaveOverrides(next);
+  renderBunkOverridesUI();
+}
+
+// Extend (or shrink) an override across a contiguous run of bunks. Members share
+// a `_spanGroup` so a later move/resize/span of any one of them moves the set.
+async function _boCommitOverrideSpan(ovId, bunkNames) {
+  const list = (currentOverrides.bunkActivityOverrides || []).slice();
+  const me = list.find(o => o.id === ovId);
+  if (!me) return;
+  const group = me._spanGroup || uid();
+  const targets = bunkNames.map(b => ({ bunk: b, startMin: me.startMin, endMin: me.endMin, layerType: me.layerType || null }));
+
+  const conflicts = _boCheckOverrideConflicts(targets, [{ name: me.activity, type: me.type, location: me.location || null }]);
+  if (conflicts.length && !(await _boConfirmConflicts(conflicts))) return;
+
+  const keep = new Set(bunkNames);
+  // Drop the previous span members and anything occupying the same window on a
+  // bunk we're about to write, then lay the group down fresh.
+  let next = list.filter(o =>
+    !(o._spanGroup && o._spanGroup === group) &&
+    !(keep.has(o.bunk) && o.startMin === me.startMin && o.endMin === me.endMin && (o.layerType || null) === (me.layerType || null))
+  );
+  const single = bunkNames.length === 1;
+  bunkNames.forEach(b => {
+    next.push(Object.assign({}, me, {
+      id: uid(),
+      bunk: b,
+      // A one-bunk "span" is just a plain override again — don't leave a group
+      // marker behind or the next drag would think it still has partners.
+      _spanGroup: single ? undefined : group
+    }));
+  });
+  _boSaveOverrides(next);
+  renderBunkOverridesUI();
+}
+
+// Shared accept/deny prompt for the drag paths.
+function _boConfirmConflicts(conflicts) {
+  return daShowConfirm(
+    'This override conflicts with your setup:<br><br>' +
+    conflicts.map(w => '• ' + w).join('<br>') +
+    '<br><br>Apply it anyway?',
+    { danger: true, confirmText: 'Apply anyway', cancelText: 'Cancel' }
+  );
 }
 
 // Toggle one slot in/out of the bulk multi-selection (driven by double-click).
@@ -7450,10 +9522,12 @@ function _boUpdateSelBar() {
   const bar = document.getElementById('bo-sel-bar');
   if (!bar) return;
   const n = _boSelectedCells.size;
-  if (n === 0) { bar.style.display = 'none'; return; }
+  if (n === 0) { bar.style.display = 'none'; _boApplyStickyOffsets(); return; }
   bar.style.display = 'flex';
   const cnt = bar.querySelector('#bo-sel-count');
   if (cnt) cnt.textContent = n + (n === 1 ? ' slot selected' : ' slots selected');
+  // The bar joins the pinned stack, so the column headers shift down under it.
+  _boApplyStickyOffsets();
 }
 
 // ★ Partial (per-tile) regeneration — Manual builder only.
@@ -7483,13 +9557,15 @@ async function _boRegenerateSelectedCells() {
 //   • Bunk-Level Overrides grid (per-bunk cells)   → _boRegenerateSelectedCells
 //   • Main schedule grid (whole division period)   → _daRegenerateSelectedTiles
 // `selections` = [{ bunk, startMin, endMin }]. Returns true if a regen actually ran.
+// `opts.confirmMessage` replaces the default confirm text (still exactly one
+// dialog) — used by the rainy-day flow to explain WHY tiles are being re-rolled.
 //
 // Re-rolls ONLY the selected (bunk, slot) tiles, preserving every other already-
 // generated cell. Builds window.__regenSlotScope (consumed by scheduler_core_main
 // STEP 1) covering EVERY bunk of the affected divisions, so sibling bunks (no
 // selected tiles) are fully preserved and pinned — immune to STEP 0's wipe.
 // ─────────────────────────────────────────────────────────────────────────
-async function _daPartialRegenerate(selections) {
+async function _daPartialRegenerate(selections, opts = {}) {
   if (window._daBuilderMode === 'auto') {
     await daShowAlert('Partial tile regeneration is available in Manual builder mode only.');
     return false;
@@ -7504,94 +9580,63 @@ async function _daPartialRegenerate(selections) {
   }
 
   const divisions = window.divisions || masterSettings.app1?.divisions || {};
-  const bunkToDiv = {};
-  Object.entries(divisions).forEach(([dn, di]) =>
-    ((di && di.bunks) || []).forEach(b => { bunkToDiv[String(b)] = dn; }));
 
-  // Map a tile's time window to its division slot index (small tolerance).
-  function _mapTileToSlot(divName, startMin, endMin) {
-    const slots = window.divisionTimes?.[divName] || [];
-    for (let i = 0; i < slots.length; i++) {
-      const s = slots[i] || {};
-      const ss = (s.startMin != null) ? s.startMin : s.start;
-      const se = (s.endMin != null) ? s.endMin : s.end;
-      if (ss != null && Math.abs(ss - startMin) <= 2 &&
-          (se == null || endMin == null || Math.abs(se - endMin) <= 2)) return i;
-    }
-    let best = Infinity, bestIdx = -1;
-    for (let i = 0; i < slots.length; i++) {
-      const s = slots[i] || {};
-      const ss = (s.startMin != null) ? s.startMin : s.start;
-      if (ss == null) continue;
-      const d = Math.abs(ss - startMin);
-      if (d < best) { best = d; bestIdx = i; }
-    }
-    return best <= 30 ? bestIdx : -1;
-  }
-
-  // 1. Resolve selections → per-bunk regen index sets.
-  const regenByBunk = {};
-  const affectedDivs = new Set();
-  let unmapped = 0;
-  selections.forEach(sel => {
-    const bunk = String(sel.bunk);
-    const divName = bunkToDiv[bunk];
-    if (!divName) { unmapped++; return; }
-    const idx = _mapTileToSlot(divName, sel.startMin, sel.endMin);
-    if (idx < 0) { unmapped++; return; }
-    if (!regenByBunk[bunk]) regenByBunk[bunk] = new Set();
-    regenByBunk[bunk].add(idx);
-    affectedDivs.add(divName);
-
-    // Multi-period guard: spanned activity → regenerate the whole block.
-    const arr = window.scheduleAssignments?.[bunk] || [];
-    const entry = arr[idx];
-    const bs = entry && (entry._blockStart != null ? entry._blockStart
-                         : (entry._startMin != null ? entry._startMin : null));
-    if (entry && bs != null) {
-      for (let j = 0; j < arr.length; j++) {
-        const e = arr[j];
-        if (!e) continue;
-        const ebs = (e._blockStart != null ? e._blockStart
-                     : (e._startMin != null ? e._startMin : null));
-        if (ebs === bs) regenByBunk[bunk].add(j);
-      }
-    }
-  });
-
-  const selectedSlotCount = Object.values(regenByBunk).reduce((n, s) => n + s.size, 0);
-  if (affectedDivs.size === 0 || selectedSlotCount === 0) {
-    await daShowAlert('Could not map the selected tiles to schedule slots. Try regenerating the full schedule instead.');
+  // 1+2. TIME-BASED scope build (extend-day-earlier). The schedule + league
+  //   stores are index-keyed while the skeleton's geometry is time-sorted, so a
+  //   newly-added EARLIER tile shifts every later index. buildTimeRegenScope maps
+  //   the selected tiles against the CURRENT skeleton's geometry (so brand-new
+  //   tiles map) and re-keys every preserved entry to its new index by the
+  //   entry's own _startMin — a bunk that can't be re-keyed safely re-rolls in
+  //   full rather than ever shifting partially. It also lists the league games
+  //   whose day-log must survive the engine's rollback (non-selected games).
+  const DTS = window.DivisionTimesSystem;
+  if (!DTS || !DTS.buildTimeRegenScope) {
+    await daShowAlert('Error: the schedule system is not fully loaded.');
     return false;
   }
-
-  // 2. Snapshot covering EVERY bunk of the affected divisions.
-  const regenScope = {};
-  const scopeBunks = new Set();
-  affectedDivs.forEach(dn => {
-    (divisions[dn]?.bunks || []).forEach(b => {
-      const bunk = String(b);
-      scopeBunks.add(bunk);
-      const regen = regenByBunk[bunk] || new Set();
-      const arr = window.scheduleAssignments?.[bunk] || [];
-      const keep = {};
-      const orig = {};   // pre-regen activity of each SELECTED slot — no-blank fallback
-      for (let i = 0; i < arr.length; i++) {
-        if (regen.has(i)) { if (arr[i]) orig[i] = JSON.parse(JSON.stringify(arr[i])); continue; }
-        if (arr[i]) keep[i] = JSON.parse(JSON.stringify(arr[i]));
-      }
-      regenScope[bunk] = { regen, keep, orig };
-    });
+  const scope = DTS.buildTimeRegenScope({
+    selections,
+    skeleton: dailyOverrideSkeleton,
+    divisions,
+    scheduleAssignments: window.scheduleAssignments || {},
+    leagueAssignments: window.leagueAssignments || {}
   });
+  if (!scope.ok) {
+    if (scope.reason === 'misaligned-divisions') {
+      await daShowAlert('The period structure of ' + scope.misalignedDivs.join(', ') +
+        ' changed too, but no tiles were selected there.<br><br>Select the new tiles in ' +
+        (scope.misalignedDivs.length === 1 ? 'that grade' : 'those grades') +
+        ' as well (or regenerate them), so their schedules stay aligned.');
+    } else {
+      await daShowAlert('Could not map the selected tiles to schedule slots. Try regenerating the full schedule instead.');
+    }
+    return false;
+  }
+  const regenScope = scope.regenScope;
+  const scopeBunks = new Set(scope.scopeBunks);
+  const affectedDivs = new Set(scope.affectedDivs);
+  const selectedSlotCount = scope.selectedSlotCount;
+  const unmapped = scope.unmapped;
 
   // 3. Confirm.
-  const affectedBunkCount = Object.values(regenByBunk).filter(s => s.size > 0).length;
-  let msg = 'Regenerate ' + selectedSlotCount + (selectedSlotCount === 1 ? ' tile' : ' tiles') +
+  const affectedBunkCount = Object.values(regenScope).filter(s => s.regen && s.regen.size > 0).length;
+  let msg = opts.confirmMessage ||
+            ('Regenerate ' + selectedSlotCount + (selectedSlotCount === 1 ? ' tile' : ' tiles') +
             ' across ' + affectedBunkCount + (affectedBunkCount === 1 ? ' bunk' : ' bunks') +
-            '?<br><br>Only the selected tiles will be re-rolled — every other activity stays exactly as it is.';
+            '?<br><br>Only the selected tiles will be re-rolled — every other activity stays exactly as it is.');
+  if (scope.fullRerollBunks && scope.fullRerollBunks.length) {
+    msg += '<br><br><span style="color:#b45309;">' + scope.fullRerollBunks.length +
+      ' bunk(s) (' + scope.fullRerollBunks.join(', ') + ') will re-roll their whole day — their existing activities could not be safely matched to the new period structure.</span>';
+  }
   if (unmapped > 0) msg += '<br><br><span style="color:#b45309;">(' + unmapped + ' selected tile(s) could not be mapped and will be skipped.)</span>';
   const ok = await daShowConfirm(msg, { confirmText: 'Regenerate', cancelText: 'Cancel' });
   if (!ok) return false;
+
+  // Adopt the skeleton's geometry NOW (post-confirm) so every pre-optimizer
+  // consumer sees the same slot structure the regen scope is keyed to. The
+  // optimizer's own STEP 1 rebuilds the identical geometry from the skeleton.
+  window.divisionTimes = scope.newDT;
+  window.__regenPreservedLeagueLabels = scope.preservedLeagueLabels || {};
 
   // 4. Drive generation through the existing scope plumbing; always restore the
   //    user's prior generation scope afterward.
@@ -7645,6 +9690,7 @@ async function _daPartialRegenerate(selections) {
   } finally {
     delete window.__regenSlotScope;
     delete window.__regenLeaguePreservedDivs;
+    delete window.__regenPreservedLeagueLabels;
     _generationScope = _savedScope;
     _generationBunkScope = _savedBunkScope;
   }
@@ -7661,12 +9707,20 @@ function _daToggleTileRegenSelect(tile) {
   const startMin = parseTimeToMinutes(ev.startTime);
   const endMin = parseTimeToMinutes(ev.endTime);
   if (startMin == null) return;
+  // ★ Multi-grade span: a merged tile is one logical period across several
+  //   grades — selecting it for regen selects EVERY member's slot, so the
+  //   partial regen covers all covered grades, not just the anchor column.
+  const _members = _daSpanMembers(ev);
   if (_daRegenTiles.has(id)) {
-    _daRegenTiles.delete(id);
+    _members.forEach(m => _daRegenTiles.delete(m.id));
     tile.style.outline = ''; tile.style.outlineOffset = '';
     tile.classList.remove('da-regen-selected');
   } else {
-    _daRegenTiles.set(id, { division: ev.division, startMin, endMin });
+    _members.forEach(m => {
+      const ms = parseTimeToMinutes(m.startTime);
+      const me = parseTimeToMinutes(m.endTime);
+      if (ms != null) _daRegenTiles.set(m.id, { division: m.division, startMin: ms, endMin: me });
+    });
     tile.style.outline = '3px solid #16a34a'; tile.style.outlineOffset = '-2px';
     tile.classList.add('da-regen-selected');
   }
@@ -7791,6 +9845,7 @@ function _boShowPicker(anchorEl, bunk, startMin, endMin, layerType) {
   picker.appendChild(body);
 
   const categoryDefs = [
+    { key: 'fixedTiles', label: '🔒 Fixed Tiles (Lunch / Snacks / Swim / Dismissal…)', items: groups.fixedTiles || [] },
     { key: 'pinned', label: '📌 Pinned Activities', items: groups.pinned },
     { key: 'facilities', label: '🏢 Facilities', items: groups.facilities },
     { key: 'fields', label: '🏟️ Fields', items: groups.fields },
@@ -7904,10 +9959,432 @@ function _boShowPicker(anchorEl, bunk, startMin, endMin, layerType) {
   setTimeout(() => document.addEventListener('mousedown', closeHandler), 0);
 }
 
+// =================================================================
+// BUNK-OVERRIDE PRE-FLIGHT: does this pick fight the camp's own config?
+// =================================================================
+// A bunk override is a manual instruction, so it BYPASSES the solver's own fit
+// checks — which means the user can silently hand a bunk a facility that is
+// switched off for the day, or hand one not-sharable room to three bunks at
+// once, and only discover it in the generated schedule. These helpers surface
+// that at pick time. They WARN, they don't block: the head counselor is allowed
+// to knowingly override their own configuration, so the caller asks and obeys.
+
+// Which facility does this picker item actually occupy?
+//   • fields / facilities carry it directly
+//   • pinned + fixed tiles carry the resolved location
+//   • specials resolve through their configured location
+//   • plain sports don't — the solver picks the field at generation time, so
+//     there is nothing to check yet (returns null).
+function _boItemFacility(item) {
+  if (!item) return null;
+  if (item.location) return item.location;
+  if (item.type === 'field' || item.type === 'facility') return item.name;
+  if (item.type === 'special') {
+    const s = (masterSettings.app1?.specialActivities || []).find(x => x && x.name === item.name);
+    if (s && s.location) return s.location;
+  }
+  return null;
+}
+
+function _boFieldByName(name) {
+  if (!name) return null;
+  const want = String(name).toLowerCase().trim();
+  return (masterSettings.app1?.fields || []).find(f => f && String(f.name).toLowerCase().trim() === want) || null;
+}
+
+// Mirrors SchedulerCoreUtils.getFieldCapacity's resolution of sharableWith so the
+// warning quotes the same number the solver would enforce.
+function _boFieldCapacity(field) {
+  const sw = field && field.sharableWith;
+  if (!sw) return 1;
+  const n = parseInt(sw.capacity);
+  switch (String(sw.type || '')) {
+    case 'all': return n || 999;
+    case 'not_sharable': return 1;
+    case 'same_division': return n || 2;
+    case 'cross_division': return n || 2;
+    case 'custom': return n || 2;
+    default: return n || 1;
+  }
+}
+
+function _boDivisionOfBunk(bunk) {
+  const divisions = window.divisions || masterSettings.app1?.divisions || {};
+  return Object.keys(divisions).find(d => (divisions[d]?.bunks || []).includes(bunk)) || null;
+}
+
+// Per-date time rules (Resources → Details & Time Rules) fall back to the
+// facility's own setup windows, and are evaluated exactly like the iron gate:
+// an `unavailable` rule that OVERLAPS the window closes it, and when only
+// `available` windows exist the block must sit fully inside one.
+function _boFacilityClosedDuring(facName, startMin, endMin, division) {
+  const daRules = (currentOverrides.dailyFieldAvailability || {})[facName];
+  let rules = (Array.isArray(daRules) && daRules.length) ? daRules : null;
+  if (!rules) {
+    const f = _boFieldByName(facName);
+    if (f && Array.isArray(f.timeRules) && f.timeRules.length) rules = f.timeRules;
+  }
+  if (!Array.isArray(rules) || rules.length === 0) return false;
+  const parse = window.SchedulerCoreUtils?.parseTimeToMinutes;
+  let hasAvail = false, inside = false;
+  for (const r of rules) {
+    if (!r) continue;
+    if (Array.isArray(r.divisions) && r.divisions.length > 0 && division != null
+        && !r.divisions.map(String).includes(String(division))) continue;
+    const rs = (r.startMin != null) ? r.startMin : (parse ? parse(r.start || r.startTime) : null);
+    const re = (r.endMin != null) ? r.endMin : (parse ? parse(r.end || r.endTime) : null);
+    if (rs == null || re == null) continue;
+    const t = String(r.type || '').toLowerCase();
+    const isUnavail = t === 'unavailable' || r.available === false;
+    const isAvail = t === 'available' || r.available === true;
+    if (isUnavail && rs < endMin && re > startMin) return true;
+    if (isAvail) { hasAvail = true; if (startMin >= rs && endMin <= re) inside = true; }
+  }
+  return hasAvail && !inside;
+}
+
+// What else does this bunk already have on this day, OUTSIDE the windows we are
+// about to write? Two sources, because both matter:
+//   • the GENERATED schedule, when the day has already been built — this is the
+//     "they're re-doing just that one bunk and it already has it today" case;
+//   • the bunk's other overrides, so the checks still work before generation.
+// Returns rule-engine block shapes {startMin, endMin, type, event, field} so the
+// list can be handed straight to SchedulingRules as a template.
+function _boBunkDayBlocks(bunk, targets) {
+  const out = [];
+  const inTarget = (s, e) => (targets || []).some(t => s < t.endMin && e > t.startMin);
+  const infer = window.SchedulingRules?.inferTypeFromActivity || (() => 'activity');
+  try {
+    const slots = (window.scheduleAssignments || {})[bunk] || [];
+    const times = window.unifiedTimes || [];
+    slots.forEach((s, i) => {
+      if (!s || s.continuation || s._isTransition) return;
+      const act = s._activity || s.sport;
+      if (!act) return;
+      const a = String(act).toLowerCase().trim();
+      if (a === 'free' || a === 'free play' || a === 'free (timeout)') return;
+      const t = times[i] || {};
+      const sm = (s._startMin != null) ? s._startMin : (t.startMin != null ? t.startMin : null);
+      const em = (s._endMin != null) ? s._endMin : (t.endMin != null ? t.endMin : null);
+      if (sm == null || em == null || inTarget(sm, em)) return;
+      out.push({ startMin: sm, endMin: em, type: infer(act), event: act, field: s._location || s.field || null });
+    });
+  } catch (_e) { /* no generated day — overrides below still apply */ }
+  try {
+    (currentOverrides.bunkActivityOverrides || []).forEach(o => {
+      if (!o || o.bunk !== bunk || o.overrideMode === 'delete') return;
+      if (o.startMin == null || o.endMin == null || inTarget(o.startMin, o.endMin)) return;
+      const act = o.activity;
+      if (!act) return;
+      out.push({ startMin: o.startMin, endMin: o.endMin, type: infer(act), event: act, field: o.location || null });
+    });
+  } catch (_e) {}
+  return out;
+}
+
+// calculateLimitScore returns Infinity plus a machine reason; turn that into
+// something a head counselor can act on.
+const _BO_ROT_REASON = {
+  'special-disabled': 'it is switched off in the activity setup',
+  'per-date-bunk-restriction': 'a per-date bunk restriction excludes this bunk',
+  'frequencyDays-cooldown': 'the minimum number of days between visits has not passed',
+  'multiPart-complete': 'the bunk has already completed every part of it',
+  'multiPart-daysBetween': 'the next part is not due yet',
+  'availableDays-weekday': 'it is not offered on this weekday',
+  'rotationCohort-waiting': 'other bunks in its rotation group are still behind',
+  'maxUsage-cap': 'the bunk is already at its maximum-usage cap',
+  'exactFrequency-reached': 'the bunk has already hit its exact-frequency target',
+  'fairShare-cap': 'the bunk is already at its fair-share cap'
+};
+
+// Access gates, mirroring the generator (and post_edit_system's soft warning):
+// specials go through isSpecialAvailableForBunk, fields through accessRestrictions.
+// Fails OPEN on any error — a warning must never be manufactured from a bug.
+function _boAccessBlockedLabel(item, facility, bunk, division) {
+  try {
+    if (!division) return null;
+    const names = [];
+    if (facility) names.push(facility);
+    if (item.name && String(item.name).toLowerCase() !== String(facility || '').toLowerCase()) names.push(item.name);
+    const specials = window.getGlobalSpecialActivities?.() || masterSettings.app1?.specialActivities || [];
+    const props = window.SchedulerCoreUtils?.getActivityProperties?.() || window.activityProperties || {};
+    for (const name of names) {
+      const lname = String(name).toLowerCase();
+      if (specials.some(s => s && String(s.name).toLowerCase() === lname)) {
+        if (typeof window.isSpecialAvailableForBunk === 'function') {
+          if (!window.isSpecialAvailableForBunk(name, division, bunk, window.globalSettings || null)) return name;
+        }
+        continue;
+      }
+      const ar = props[name]?.accessRestrictions;
+      if (!ar || ar.enabled !== true) continue;
+      const divRules = ar.divisions || {};
+      if (Object.keys(divRules).length === 0) continue;
+      const divStr = String(division);
+      if (!(divStr in divRules) && !(division in divRules)) return name;
+      const rule = divRules[divStr] || divRules[division];
+      if (Array.isArray(rule) && rule.length > 0) {
+        const bStr = String(bunk), bNum = parseInt(bunk, 10);
+        if (!rule.some(b => String(b) === bStr || parseInt(b, 10) === bNum)) return name;
+      }
+    }
+  } catch (_e) { /* fail open */ }
+  return null;
+}
+
+// Returns a list of human-readable problems with applying `items` to `targets`.
+// Empty list ⇒ nothing to warn about.
+function _boCheckOverrideConflicts(targets, items) {
+  const warnings = [];
+  try {
+    const disabledFields = currentOverrides.disabledFields || [];
+    const disabledSpecials = currentOverrides.disabledSpecials || [];
+    const disabledSportsByField = currentOverrides.dailyDisabledSportsByField || {};
+    const existing = currentOverrides.bunkActivityOverrides || [];
+
+    // ── 1. Switched off for this date in Resources ──────────────────────────
+    items.forEach(item => {
+      if (item.type === 'special' && disabledSpecials.includes(item.name)) {
+        warnings.push(`<strong>${_escHtml(item.name)}</strong> is turned OFF for this date in Resources.`);
+        return;
+      }
+      const fac = _boItemFacility(item);
+      if (fac && disabledFields.includes(fac)) {
+        warnings.push(`<strong>${_escHtml(fac)}</strong> is turned OFF for this date in Resources.`);
+      }
+      // A sport has no facility yet, but if every field that hosts it is off
+      // today the solver will have nowhere to put it.
+      if (item.type === 'sport') {
+        const hosts = (masterSettings.app1?.fields || []).filter(f => (f.activities || []).includes(item.name));
+        if (hosts.length > 0 && hosts.every(f => disabledFields.includes(f.name))) {
+          warnings.push(`Every field that hosts <strong>${_escHtml(item.name)}</strong> is turned OFF for this date.`);
+        }
+      }
+    });
+
+    // ── 2. Closed during the requested window (per-date or setup time rules),
+    //       and sports explicitly disabled at that field for the day ─────────
+    items.forEach(item => {
+      const fac = _boItemFacility(item);
+      if (!fac) return;
+      const seen = new Set();
+      targets.forEach(t => {
+        const key = t.startMin + '-' + t.endMin;
+        if (seen.has(key)) return;
+        seen.add(key);
+        if (_boFacilityClosedDuring(fac, t.startMin, t.endMin, _boDivisionOfBunk(t.bunk))) {
+          warnings.push(`<strong>${_escHtml(fac)}</strong> is closed at ${_escHtml(minutesToTime(t.startMin))}–${_escHtml(minutesToTime(t.endMin))} by a time rule.`);
+        }
+      });
+      const blocked = disabledSportsByField[fac] || [];
+      if (blocked.includes(item.name)) {
+        warnings.push(`<strong>${_escHtml(item.name)}</strong> is disabled at <strong>${_escHtml(fac)}</strong> for this date.`);
+      }
+    });
+
+    // ── 3. Sharing rules ────────────────────────────────────────────────────
+    // Count every bunk that would end up on the facility in the same window:
+    // the cells being assigned now, plus overrides already pointing at it that
+    // this apply is not replacing.
+    const replacedKeys = new Set(targets.map(t => `${t.bunk}|${t.startMin}|${t.endMin}`));
+    items.forEach(item => {
+      const fac = _boItemFacility(item);
+      if (!fac) return;
+      const field = _boFieldByName(fac);
+      if (!field) return; // facility isn't a configured field — no sharing model
+      const shareType = String(field.sharableWith?.type || 'not_sharable');
+      const baseCap = _boFieldCapacity(field);
+
+      // Group the target cells by time window — sharing is per moment in time.
+      const byWindow = new Map();
+      targets.forEach(t => {
+        const key = t.startMin + '|' + t.endMin;
+        if (!byWindow.has(key)) byWindow.set(key, { startMin: t.startMin, endMin: t.endMin, bunks: new Set() });
+        byWindow.get(key).bunks.add(t.bunk);
+      });
+
+      byWindow.forEach(win => {
+        const bunks = new Set(win.bunks);
+        existing.forEach(o => {
+          if (!o || o.bunk == null) return;
+          if (replacedKeys.has(`${o.bunk}|${o.startMin}|${o.endMin}`)) return; // being overwritten
+          if (o.startMin == null || o.endMin == null) return;
+          if (!(o.startMin < win.endMin && o.endMin > win.startMin)) return;   // different time
+          const oFac = o.location || ((o.type === 'field') ? o.activity : null);
+          if (oFac && String(oFac).toLowerCase().trim() === String(fac).toLowerCase().trim()) bunks.add(o.bunk);
+        });
+
+        const n = bunks.size;
+        if (n <= 1) return; // one bunk can always use a facility it's allowed on
+        const when = `${minutesToTime(win.startMin)}–${minutesToTime(win.endMin)}`;
+
+        // A per-grade rule (Facilities → per-grade sharing) beats the default.
+        const divs = [...new Set([...bunks].map(_boDivisionOfBunk).filter(Boolean))];
+        const gradeRule = divs.length === 1 ? field.gradeShareRules?.[divs[0]] : null;
+        const effType = gradeRule ? String(gradeRule.type || 'not_sharable') : shareType;
+        const effCap = gradeRule
+          ? (parseInt(gradeRule.capacity) || (gradeRule.type === 'not_sharable' ? 1 : 2))
+          : baseCap;
+
+        if (effType === 'not_sharable') {
+          warnings.push(`<strong>${_escHtml(fac)}</strong> is set to <em>not shareable</em>, but you are giving it to <strong>${n}</strong> bunks at ${_escHtml(when)}.`);
+        } else if (effType === 'same_division' && divs.length > 1) {
+          warnings.push(`<strong>${_escHtml(fac)}</strong> may only be shared within one grade, but the ${n} bunks at ${_escHtml(when)} span ${_escHtml(divs.join(', '))}.`);
+        } else if (n > effCap) {
+          warnings.push(`<strong>${_escHtml(fac)}</strong> allows <strong>${effCap}</strong> bunk(s) at a time, but you are giving it to <strong>${n}</strong> at ${_escHtml(when)}.`);
+        }
+      });
+    });
+    // ── 4. Outside the grade's own day ──────────────────────────────────────
+    const divisionsMap = window.divisions || masterSettings.app1?.divisions || {};
+    targets.forEach(t => {
+      const dn = _boDivisionOfBunk(t.bunk);
+      const info = dn ? divisionsMap[dn] : null;
+      if (!info) return;
+      const ds = parseTimeToMinutes(info.startTime), de = parseTimeToMinutes(info.endTime);
+      if (ds == null || de == null) return;
+      if (t.startMin < ds || t.endMin > de) {
+        warnings.push(`${_escHtml(minutesToTime(t.startMin))}–${_escHtml(minutesToTime(t.endMin))} falls outside <strong>${_escHtml(dn)}</strong>'s day (${_escHtml(minutesToTime(ds))}–${_escHtml(minutesToTime(de))}).`);
+      }
+    });
+
+    // ── 5. The bunk already has this today ──────────────────────────────────
+    // Covers the case the user called out: the day is already generated and
+    // they're redoing one bunk that has the activity elsewhere on the day.
+    targets.forEach(t => {
+      const day = _boBunkDayBlocks(t.bunk, targets);
+      items.forEach(item => {
+        const want = String(item.name).toLowerCase().trim();
+        const clash = day.find(b => String(b.event).toLowerCase().trim() === want);
+        if (clash) {
+          warnings.push(`<strong>${_escHtml(t.bunk)}</strong> already has <strong>${_escHtml(item.name)}</strong> today at ${_escHtml(minutesToTime(clash.startMin))}–${_escHtml(minutesToTime(clash.endMin))}.`);
+        }
+      });
+    });
+
+    // ── 6. Cooldown / spacing rules ─────────────────────────────────────────
+    // Same engine + mode the solver and the post-edit gate use, so the wording
+    // and the verdict match what generation would have refused.
+    if (window.SchedulingRules?.checkCandidateDetailed) {
+      const mode = (window._daBuilderMode === 'auto') ? 'auto' : 'manual';
+      targets.forEach(t => {
+        const day = _boBunkDayBlocks(t.bunk, targets);
+        items.forEach(item => {
+          try {
+            const candidate = {
+              startMin: t.startMin, endMin: t.endMin,
+              type: window.SchedulingRules.inferTypeFromActivity(item.name),
+              event: item.name,
+              field: _boItemFacility(item)
+            };
+            const res = window.SchedulingRules.checkCandidateDetailed(candidate, day, { mode });
+            if (res && res.allowed === false) {
+              (res.violated || []).forEach(r => {
+                warnings.push(`<strong>${_escHtml(t.bunk)}</strong> breaks a spacing rule: ${_escHtml(window.SchedulingRules.describeRule(r))}.`);
+              });
+            }
+          } catch (_e) { /* fail open */ }
+        });
+      });
+    }
+
+    // ── 7. Access restrictions ──────────────────────────────────────────────
+    targets.forEach(t => {
+      const dn = _boDivisionOfBunk(t.bunk);
+      items.forEach(item => {
+        const blocked = _boAccessBlockedLabel(item, _boItemFacility(item), t.bunk, dn);
+        if (blocked) {
+          warnings.push(`<strong>${_escHtml(blocked)}</strong> is not normally allowed for <strong>${_escHtml(t.bunk)}</strong>${dn ? ' (' + _escHtml(dn) + ')' : ''} — it has an access restriction.`);
+        }
+      });
+    });
+
+    // ── 8. Rotation / frequency limits ──────────────────────────────────────
+    // available=false, availableDays, frequencyDays, maxUsage, exactFrequency,
+    // rotation cohort, multi-part gating — all live behind one scorer. Props come
+    // from the live map when a generation has built it, otherwise straight from
+    // the special's own config so the check still works before the first run.
+    if (window.RotationEngine?.calculateLimitScore) {
+      const liveProps = window.SchedulerCoreUtils?.getActivityProperties?.() || window.activityProperties || {};
+      targets.forEach(t => {
+        const dn = _boDivisionOfBunk(t.bunk);
+        items.forEach(item => {
+          try {
+            let props = liveProps[item.name] ? liveProps : null;
+            if (!props) {
+              const cfg = (masterSettings.app1?.specialActivities || []).find(s => s && s.name === item.name);
+              if (cfg) props = { [item.name]: cfg };
+            }
+            if (!props) return; // nothing configured to violate
+            const score = window.RotationEngine.calculateLimitScore(t.bunk, item.name, props, dn);
+            if (score === Infinity) {
+              const why = _BO_ROT_REASON[window.RotationEngine._lastBlockReason] || 'a rotation limit blocks it';
+              warnings.push(`<strong>${_escHtml(item.name)}</strong> would not normally be given to <strong>${_escHtml(t.bunk)}</strong> — ${_escHtml(why)}.`);
+            }
+          } catch (_e) { /* fail open */ }
+        });
+      });
+    }
+
+    // ── 9. Sport headcount (min / max players) ──────────────────────────────
+    // Inert unless BOTH camper counts and the sport's min/max are configured —
+    // the same guard the solver uses.
+    try {
+      const meta = window.getBunkMetaData?.() || window.bunkMetaData || {};
+      const sizeOf = (b) => (meta[b]?.size || meta[String(b)]?.size || 0);
+      const reqOf = window.SchedulerCoreUtils?.getSportPlayerRequirements;
+      if (reqOf) {
+        items.forEach(item => {
+          if (item.type !== 'sport') return;
+          const req = reqOf(item.name) || {};
+          if (!req.minPlayers && !req.maxPlayers) return;
+          const byWindow = new Map();
+          targets.forEach(t => {
+            const k = t.startMin + '|' + t.endMin;
+            if (!byWindow.has(k)) byWindow.set(k, { startMin: t.startMin, endMin: t.endMin, bunks: new Set() });
+            byWindow.get(k).bunks.add(t.bunk);
+          });
+          byWindow.forEach(win => {
+            let total = 0, known = 0;
+            win.bunks.forEach(b => { const s = sizeOf(b); if (s > 0) { total += s; known++; } });
+            if (known === 0) return; // no camper counts configured — nothing to judge
+            const when = `${minutesToTime(win.startMin)}–${minutesToTime(win.endMin)}`;
+            if (req.maxPlayers && total > req.maxPlayers) {
+              warnings.push(`<strong>${_escHtml(item.name)}</strong> takes at most <strong>${req.maxPlayers}</strong> players, but these bunks bring <strong>${total}</strong> at ${_escHtml(when)}.`);
+            } else if (req.minPlayers && total < req.minPlayers) {
+              warnings.push(`<strong>${_escHtml(item.name)}</strong> needs at least <strong>${req.minPlayers}</strong> players, but only <strong>${total}</strong> are on it at ${_escHtml(when)}.`);
+            }
+          });
+        });
+      }
+    } catch (_e) { /* fail open */ }
+  } catch (e) {
+    console.warn('[BunkOverride] conflict pre-check failed (allowing the change):', e);
+    return [];
+  }
+  // Same problem can be reported once per item/window — collapse duplicates.
+  return [...new Set(warnings)];
+}
+
 // Write one override per target cell. items.length === 1 ⇒ concrete override;
 // items.length >= 2 ⇒ an "either/or" sportPool the solver resolves at gen time.
-function _boApplyOverrideBulk(targets, items, layerTypeFallback) {
+async function _boApplyOverrideBulk(targets, items, layerTypeFallback) {
   if (!targets || !targets.length || !items || !items.length) return;
+
+  // Warn (don't block) when the pick contradicts the camp's configuration —
+  // a facility switched off for the day, closed by a time rule, or a sharing
+  // rule this assignment would break. The user accepts or backs out.
+  const _conflicts = _boCheckOverrideConflicts(targets, items);
+  if (_conflicts.length) {
+    const ok = await daShowConfirm(
+      'This override conflicts with your setup:<br><br>' +
+      _conflicts.map(w => '• ' + w).join('<br>') +
+      '<br><br>Apply it anyway?',
+      { danger: true, confirmText: 'Apply anyway', cancelText: 'Cancel' }
+    );
+    if (!ok) return;
+  }
+
   let overrides = currentOverrides.bunkActivityOverrides || [];
   const isPool = items.length >= 2;
   const names = items.map(it => it.name);
@@ -7959,7 +10436,8 @@ function _boApplyOverrideBulk(targets, items, layerTypeFallback) {
 
 // Back-compat single-cell apply (window-exposed; delegates to the bulk writer).
 function _boApplyOverride(bunk, startMin, endMin, item, layerType) {
-  _boApplyOverrideBulk([{ bunk, startMin, endMin, layerType: layerType || null }], [item], layerType || null);
+  // Returns the promise so callers can await the (possibly confirmed) apply.
+  return _boApplyOverrideBulk([{ bunk, startMin, endMin, layerType: layerType || null }], [item], layerType || null);
 }
 
 function createChip(name, color) {
@@ -8175,8 +10653,12 @@ function renderFacilityBunkAccess(containerEl, facilityName, rows) {
   if (!containerEl) return;
   containerEl.innerHTML = '';
 
-  const divisions = masterSettings.app1?.divisions || {};
-  const _rawAvail = masterSettings.app1?.availableDivisions || window.availableDivisions || [];
+  // ★ Prefer the LIVE registry (window.divisions, built from campStructure) —
+  //   the app1 settings-blob copy goes stale when the camp structure changes
+  //   (e.g. a bunk added in Campistry Me is missing from the blob until app1
+  //   itself re-saves, so it never appeared in these per-bunk panels).
+  const divisions = window.divisions || masterSettings.app1?.divisions || {};
+  const _rawAvail = window.availableDivisions || masterSettings.app1?.availableDivisions || [];
   const availableDivisions = (typeof window.getUserDivisionOrder === 'function')
     ? window.getUserDivisionOrder(_rawAvail.slice())
     : _rawAvail.slice();
@@ -8616,6 +11098,18 @@ function getStyles() {
     .da-resize-top { top:-2px; }
     .da-resize-bottom { bottom:-2px; }
     .da-event:hover .da-resize-handle { opacity:1; background:rgba(59,130,246,0.3); }
+    /* ★ Multi-grade span: horizontal grips — same glow as the top/bottom handles */
+    .da-resize-h { position:absolute; top:0; bottom:0; width:10px; cursor:ew-resize; z-index:6; opacity:0; transition:opacity 0.15s; display:flex; align-items:center; justify-content:center; }
+    .da-resize-h-left { left:0; border-radius:6px 0 0 6px; }
+    .da-resize-h-right { right:0; border-radius:0 6px 6px 0; }
+    .da-event:hover .da-resize-h { opacity:1; background:rgba(59,130,246,0.3); }
+    .da-resize-h::after { content:''; width:3px; height:26px; max-height:55%; border-radius:2px; background:rgba(30,64,175,0.5); }
+    .da-resize-h:hover { background:rgba(59,130,246,0.5) !important; }
+    .da-event.da-resizing-h { box-shadow:0 0 0 2px var(--da-accent) !important; z-index:100 !important; }
+    /* merged span tile paints over neighbor columns' gridlines/disabled zones */
+    .da-event.da-span-multi { z-index:3; }
+    .da-event.da-span-multi:hover { z-index:4; }
+    .da-event.da-span-multi.selected { z-index:5; }
     
     /* Drop Preview */
     .da-drop-preview { display:none; position:absolute; left:3%; width:94%; background:rgba(59,130,246,0.15); border:2px dashed var(--da-accent); border-radius:6px; pointer-events:none; z-index:5; }
@@ -8780,6 +11274,10 @@ function getStyles() {
     
     .da-rainy-midday-info { display:flex; gap:8px; padding:0 18px 12px; position:relative; z-index:1; flex-wrap:wrap; }
     .da-rainy-midday-badge { padding:4px 10px; background:rgba(245,158,11,0.2); border:1px solid rgba(245,158,11,0.3); border-radius:999px; font-size:11px; font-weight:600; color:#fbbf24; }
+    .da-rainy-midday-cta { padding:0 18px 16px; position:relative; z-index:1; }
+    .da-rainy-midday-cta-btn { width:100%; justify-content:center; padding:12px 16px; font-size:14px; border-radius:10px; box-shadow:0 2px 8px rgba(217,119,6,0.35); }
+    .da-rainy-midday-cta-btn:hover { transform:translateY(-1px); box-shadow:0 4px 12px rgba(217,119,6,0.45); }
+    .da-rainy-midday-cta-hint { margin:8px 2px 0; font-size:12px; line-height:1.4; color:#78350f; text-align:center; }
     .da-rainy-preserved-badge { padding:4px 10px; background:rgba(34,197,94,0.2); border:1px solid rgba(34,197,94,0.3); border-radius:999px; font-size:11px; font-weight:600; color:#4ade80; }
     .da-rainy-cutshort-badge { padding:4px 10px; background:rgba(251,191,36,0.2); border:1px solid rgba(251,191,36,0.3); border-radius:999px; font-size:11px; font-weight:600; color:#fbbf24; }
     .da-rainy-cleared-badge { padding:4px 10px; background:rgba(239,68,68,0.2); border:1px solid rgba(239,68,68,0.3); border-radius:999px; font-size:11px; font-weight:600; color:#f87171; }
@@ -8943,6 +11441,18 @@ function getStyles() {
     .ms-container #da-bunk-overrides-container { padding:16px; }
     .ms-container #da-resources-container { padding:16px; }
    
+    /* === Bunk-override tile selection + drag handles === */
+    /* The grips themselves are the skeleton grid's .da-resize-handle /
+       .da-resize-h, which these tiles already inherit through .da-event — so
+       the pale-blue edge band and its darker grip pill are literally the same
+       rules, not a copy. All that's added here is revealing them while a tile
+       is SELECTED (the base rules only reveal on :hover) and matching the
+       selected ring to .da-event.selected. */
+    .bo-block.bo-selected { box-shadow:0 0 0 2px var(--da-accent), 0 4px 12px rgba(59,130,246,0.3) !important; z-index:12; }
+    .bo-block.bo-selected .da-resize-handle,
+    .bo-block.bo-selected .da-resize-h { opacity:1; background:rgba(59,130,246,0.3); }
+    .bo-block[data-span-group]:not([data-span-group=""]) { border-style:dashed !important; }
+
     #da-skeleton-grid .al-toolbar { display: none !important; }
     #da-skeleton-grid .al-palette { display: none !important; }
   </style>`;
@@ -9063,12 +11573,26 @@ function setupKeyboardHandler() {
     if ((e.key === 'Delete' || e.key === 'Backspace') && selectedTileId) {
       e.preventDefault();      e.preventDefault();
       (async () => {
-        const ok = await daShowConfirm("Delete this block?", { danger: true, confirmText: 'Delete' });
+        // ★ Multi-grade span: deleting any member removes the whole span
+        //   (matches the Delete button and the edit dialog).
+        const _ev = dailyOverrideSkeleton.find(x => x.id === selectedTileId);
+        const _ids = new Set((_ev ? _daSpanMembers(_ev) : []).map(m => m.id));
+        _ids.add(selectedTileId);
+        const _snap = _daSnapshotRemovedTiles(_ids);
+        // ★ When the tile has generated content under it, the removal-impact
+        //   confirm REPLACES the plain one — it says strictly more, and two
+        //   stacked dialogs for one keypress is worse than either alone.
+        const _impact = _daDescribeRemovalImpact(_snap);
+        const ok = _impact.generated
+          ? await _daConfirmTileRemoval(_snap)
+          : await daShowConfirm("Delete this block?", { danger: true, confirmText: 'Delete' });
         if (ok) {
-          dailyOverrideSkeleton = dailyOverrideSkeleton.filter(x => x.id !== selectedTileId);
+          dailyOverrideSkeleton = dailyOverrideSkeleton.filter(x => !_ids.has(x.id));
           selectedTileId = null;
           saveDailySkeleton();
           renderGrid();
+          // ★ Apply the removal to an already-generated day (see the function).
+          await _daApplyTileRemovalToGeneratedDay(_snap);
         }
       })();
     }
@@ -9665,6 +12189,11 @@ window._boApplyOverride = _boApplyOverride;
 window._boGetActivityGroups = _boGetActivityGroups;
 window._boSaveOverrides = _boSaveOverrides;
 window._boGetCurrentOverrides = function() { return (currentOverrides.bunkActivityOverrides || []).slice(); };
+// Exposed for live verification: returns the setup conflicts (disabled facility,
+// closed time window, sharing-rule breach) a pick would introduce, without
+// applying it. Empty array = clean.
+window._boCheckOverrideConflicts = _boCheckOverrideConflicts;
+window._boDeleteTileForBunk = _boDeleteTileForBunk;
 window.parseTimeToMinutes = parseTimeToMinutes;
 window.minutesToTime = minutesToTime;
 window.isRainyDayActive = isRainyDayActive;
@@ -9681,7 +12210,11 @@ window.DailyAdjustmentsInternal = {
   get dailyOverrideSkeleton() { return dailyOverrideSkeleton; },
   saveDailySkeleton: typeof saveDailySkeleton === 'function' ? saveDailySkeleton : function(){},
   renderGrid: typeof renderGrid === 'function' ? renderGrid : function(){},
-  bumpOverlappingTiles: typeof bumpOverlappingTiles === 'function' ? bumpOverlappingTiles : function(){}
+  bumpOverlappingTiles: typeof bumpOverlappingTiles === 'function' ? bumpOverlappingTiles : function(){},
+  // ★ Multi-grade span helpers (mobile touch + future validation integration)
+  spanMembers: typeof _daSpanMembers === 'function' ? _daSpanMembers : function(ev){ return ev ? [ev] : []; },
+  commitSpanResize: typeof _daCommitSpanResize === 'function' ? _daCommitSpanResize : function(){},
+  syncSpanSiblings: typeof _daSyncSpanSiblings === 'function' ? _daSyncSpanSiblings : function(){}
 };
  
 

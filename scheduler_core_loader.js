@@ -489,11 +489,35 @@
     // ------------------------------------------------------------------------
     function loadAndFilterData() {
         const app1 = getApp1Settings();
-        const bunks = app1.bunks || [];
+        // ★ BUNK SOURCE: same staleness story as divisions below — app1.bunks is
+        //   the legacy settings-blob copy, only rewritten when app1 itself saves.
+        //   A bunk added in Campistry Me lands in campStructure + the live
+        //   registry (window.bunks) immediately, but NOT in the blob — and a bunk
+        //   missing here gets ZERO schedulable blocks, so the generator silently
+        //   skips it (observed live: bunk added mid-season appeared in the DA
+        //   grid but was omitted from every generated day). Prefer the live
+        //   registry; fall back to the blob (early boot / headless).
+        const _liveBunks = (typeof window !== 'undefined'
+            && Array.isArray(window.bunks)
+            && window.bunks.length > 0) ? window.bunks : null;
+        const bunks = _liveBunks || app1.bunks || [];
         const fields = app1.fields || [];
         const specials = getSpecialActivities();
 
-        const rawDivs = app1.divisions || {};
+        // ★ DIVISION SOURCE: prefer the LIVE registry (window.divisions, built by
+        //   app1 from campStructure — the divisions/hours the user actually sees
+        //   and edits, and the same source the wipe, scope picker, DA grid and
+        //   render already use). app1.divisions is the legacy settings-blob copy
+        //   and goes STALE when hours change: after the user extends a division's
+        //   day earlier, buildFromSkeleton (STEP 1) kept clipping the new morning
+        //   tiles against the blob's old afternoon-only hours — the tiles produced
+        //   no slots and could never generate. Falls back to the blob when the
+        //   registry isn't loaded (early boot / headless).
+        const _liveDivs = (typeof window !== 'undefined'
+            && window.divisions
+            && !Array.isArray(window.divisions)
+            && Object.keys(window.divisions).length > 0) ? window.divisions : null;
+        const rawDivs = _liveDivs || app1.divisions || {};
         const divisionsArray = Array.isArray(rawDivs)
             ? rawDivs
             : Object.keys(rawDivs).map(name => ({ name, ...rawDivs[name] }));

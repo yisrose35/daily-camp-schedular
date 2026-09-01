@@ -1113,6 +1113,513 @@ function buildUnifiedTimesFromDivisionTimes(divisionTimes) {
     }
 
     // =========================================================================
+    // TIME-BASED PARTIAL-REGEN SCOPE (extend-day-earlier)
+    //
+    // The per-bunk schedule and league assignments are stored by SLOT INDEX,
+    // while divisionTimes is sorted by start time — so adding an EARLIER period
+    // shifts every later slot's index. These pure helpers let the per-tile
+    // regeneration work by TIME instead:
+    //   • buildTimeRegenScope: maps the user's selected tiles + the existing
+    //     schedule onto the CURRENT skeleton's geometry (so newly-added tiles
+    //     map, and preserved entries land at their correct new indices).
+    //   • mergePreservedLeagueDivision: restores a division's non-selected
+    //     league games per-slot (re-keyed by each game's own _startMin) WITHOUT
+    //     clobbering games the engine just wrote (the slot-0 league eater).
+    // Pure functions: no window access, no mutation of inputs (clones out).
+    // =========================================================================
+    function _trSlotStart(s) { return s ? (s.startMin != null ? s.startMin : (s.start != null ? s.start : null)) : null; }
+    function _trSlotEnd(s) { return s ? (s.endMin != null ? s.endMin : (s.end != null ? s.end : null)) : null; }
+    function _trFindByTime(list, t, tol) {
+        if (t == null) return -1;
+        tol = tol == null ? 2 : tol;
+        for (var i = 0; i < list.length; i++) {
+            var st = _trSlotStart(list[i]);
+            if (st != null && Math.abs(st - t) <= tol) return i;
+        }
+        return -1;
+    }
+
+    // ── SHARED RE-KEY CORE ────────────────────────────────────────────────
+    // Map ONE bunk's stored entries onto a NEW slot geometry by each fill's own
+    // _startMin, so a schedule stored against the old index grid survives a
+    // skeleton change. Used by both partial-regen callers:
+    //   • buildTimeRegenScope   — regen = the slots being re-rolled
+    //   • buildTimeRemovalPlan  — regen = empty (nothing re-rolls; a fill whose
+    //                             window no longer exists is simply dropped)
+    // Returns { safe, keep, orig, dropped }:
+    //   keep    — { newIdx: entry } to preserve (pinned facility stamps refreshed
+    //             from the current skeleton tile)
+    //   orig    — { newIdx: entry } that fell inside `regen` (pre-regen content)
+    //   dropped — entries whose time window is gone from the new geometry
+    //   safe    — false when the bunk can't be re-keyed 1:1 (orphan continuation,
+    //             un-addressable entry, reshaped span). Callers decide: the regen
+    //             path re-rolls the whole bunk, the removal path refuses.
+    // NOTE: mutates `regen` — a fill straddling it is pulled in whole.
+    function _trRekeyBunk(arr, slots, regen) {
+        var droppedCount = 0;
+        var keep = {}, orig = {}, safe = true, seen = {};
+
+        // ── Group entries into per-fill units before re-keying ──
+        // fillBlock stamps every CONTINUATION slot of a multi-slot fill
+        // with the BLOCK's own _startMin (all members share one start),
+        // and travel TRANSITION glue carries NO _startMin at all. The old
+        // per-entry re-key saw the continuation as "two entries, one
+        // slot" and the transition as "un-addressable" — both degraded
+        // the bunk to a FULL re-roll, so regenerating one tile silently
+        // re-rolled the whole day (observed live: partial regen after
+        // editing a pinned tile's reserved fields changed tiles at other
+        // times). Group each fill instead — [pre-travel…] lead [cont…]
+        // [post-travel…] — and map the group onto the slots fully inside
+        // the lead's [_startMin, _endMin] window (which spans the travel,
+        // since _startMin/_endMin are the original tile times).
+        var _grpList = [];
+        var _cur = null;
+        var _flushGrp = function () { if (_cur) { _grpList.push(_cur); _cur = null; } };
+        for (var i = 0; i < arr.length && safe; i++) {
+            var e = arr[i];
+            if (!e) { _flushGrp(); continue; }
+            var _isGlue = e._isTransition === true && e._startMin == null;
+            var _adjacent = _cur && _cur.lastIdx === i - 1;
+            if (e.continuation) {
+                // a continuation extends the unit directly before it
+                if (_adjacent) { _cur.members.push({ i: i, e: e }); _cur.lastIdx = i; }
+                else safe = false;                       // orphan continuation
+            } else if (_isGlue) {
+                var _dir = String(e._transitionType || '').toLowerCase();
+                if (_adjacent && _cur.lead && _dir !== 'pre') {
+                    // post-travel of the current fill
+                    _cur.members.push({ i: i, e: e }); _cur.lastIdx = i;
+                } else {
+                    // pre-travel of the NEXT fill → opens a new group
+                    _flushGrp();
+                    _cur = { members: [{ i: i, e: e }], lead: null, lastIdx: i };
+                }
+            } else if (e._startMin == null) {
+                safe = false;                            // un-addressable → full re-roll
+            } else {
+                if (_cur && !_cur.lead && _adjacent) {
+                    // lead arriving after its pre-travel glue
+                    _cur.members.push({ i: i, e: e }); _cur.lead = e; _cur.lastIdx = i;
+                } else {
+                    _flushGrp();
+                    _cur = { members: [{ i: i, e: e }], lead: e, lastIdx: i };
+                }
+            }
+        }
+        _flushGrp();
+
+        // Map each group onto the NEW geometry.
+        for (var g = 0; g < _grpList.length && safe; g++) {
+            var grp = _grpList[g];
+            if (!grp.lead) { safe = false; break; }      // dangling glue → full re-roll
+            var Ls = grp.lead._startMin, Le = grp.lead._endMin;
+            if (grp.members.length === 1) {
+                var j = _trFindByTime(slots, Ls, 2);
+                if (j < 0) { grp.dropped = true; droppedCount++; continue; }
+                if (seen[j]) { safe = false; break; }    // two fills, one slot → ambiguous
+                seen[j] = true;
+                grp.newIdxs = [j];
+            } else {
+                if (Le == null) { safe = false; break; }
+                var win = [];
+                for (var q = 0; q < slots.length; q++) {
+                    var qs = _trSlotStart(slots[q]), qe = _trSlotEnd(slots[q]);
+                    if (qs != null && qe != null && qs >= Ls - 2 && qe <= Le + 2) win.push(q);
+                }
+                if (win.length === 0) {
+                    // the fill's whole window no longer exists → drop it
+                    grp.dropped = true; droppedCount += grp.members.length; continue;
+                }
+                // the window must fit the fill exactly — a reshaped span
+                // (boundary added/removed inside it) can't be re-keyed
+                if (win.length !== grp.members.length
+                    || Math.abs(_trSlotStart(slots[win[0]]) - Ls) > 2) { safe = false; break; }
+                for (var m = 0; m < win.length; m++) {
+                    if (seen[win[m]]) { safe = false; break; }
+                    seen[win[m]] = true;
+                }
+                if (!safe) break;
+                grp.newIdxs = win;
+            }
+        }
+
+
+        if (safe) {
+            _grpList.forEach(function (grp2) {
+                if (grp2.dropped || !grp2.newIdxs) return;
+                // A fill straddling the selection regenerates as a whole
+                // (its travel glue re-rolls with it, so stale travel from
+                // a replaced fill never survives).
+                if (grp2.newIdxs.some(function (x) { return regen.has(x); })) {
+                    grp2.newIdxs.forEach(function (x) { regen.add(x); });
+                }
+                grp2.members.forEach(function (mm, k) {
+                    var nj = grp2.newIdxs[k];
+                    var cp = JSON.parse(JSON.stringify(mm.e));
+                    if (regen.has(nj)) { orig[nj] = cp; return; }
+                    // ★ Refresh a KEPT skeleton-pinned fill's facility stamps
+                    //   from the CURRENT skeleton tile. The availability report
+                    //   and post-edit field picker read reservations off the
+                    //   ENTRY's _reservedFields — so when the user switches a
+                    //   pinned tile's reserved field and then partial-regens
+                    //   OTHER tiles, the kept entries would keep advertising
+                    //   the OLD field while STEP 2.45 locks the NEW one
+                    //   (observed live: "the changed reserved field was not
+                    //   being used"). The pin's placement isn't re-solved —
+                    //   only its metadata is brought in line with the skeleton
+                    //   this very regen enforces.
+                    var meta = slots[nj];
+                    if (cp._pinned === true && meta
+                        && (cp._activity === meta.event || cp.field === meta.event)) {
+                        var mt = String(meta.type || '');
+                        if (mt === 'pinned' || mt === 'swim_elective') {
+                            var mrf = Array.isArray(meta.reservedFields)
+                                ? meta.reservedFields.filter(Boolean) : [];
+                            if (mrf.length) cp._reservedFields = mrf.slice();
+                            else if (cp._reservedFields) delete cp._reservedFields;
+                            if (mt === 'pinned') {
+                                if (typeof meta.location === 'string' && meta.location.trim()) cp._location = meta.location.trim();
+                                else if (cp._location) delete cp._location;
+                            } else {
+                                if (Array.isArray(meta.electiveActivities)) cp._electiveActivities = meta.electiveActivities.slice();
+                                if (meta.swimLocation) cp._swimLocation = meta.swimLocation;
+                            }
+                        }
+                    }
+                    keep[nj] = cp;
+                });
+            });
+        }
+
+        return { safe: safe, keep: keep, orig: orig, dropped: droppedCount };
+    }
+
+    function buildTimeRegenScope(args) {
+        var selections = args.selections || [];
+        var divisions = args.divisions || {};
+        var sa = args.scheduleAssignments || {};
+        var la = args.leagueAssignments || {};
+        var newDT = buildDivisionTimesFromSkeleton(args.skeleton || [], divisions) || {};
+
+        var bunkToDiv = {};
+        Object.keys(divisions).forEach(function (dn) {
+            ((divisions[dn] && divisions[dn].bunks) || []).forEach(function (b) { bunkToDiv[String(b)] = dn; });
+        });
+
+        // ---- 1. Map selections → NEW slot indices by time --------------------
+        var regenByBunk = {};          // bunk -> Set(newIdx)
+        var affectedDivs = new Set();
+        var unmapped = 0;
+        var _selMapped = new Set();    // "bunk#idx" — one entry per mapped selection (stable count)
+        selections.forEach(function (sel) {
+            var bunk = String(sel.bunk);
+            var dn = bunkToDiv[bunk];
+            var slots = dn && newDT[dn];
+            if (!dn || !Array.isArray(slots)) { unmapped++; return; }
+            var idx = _trFindByTime(slots, sel.startMin, 2);
+            if (idx < 0) {
+                // nearest-start fallback (≤30 min) — mirrors the legacy mapper's tolerance
+                var best = Infinity, bi = -1;
+                for (var i = 0; i < slots.length; i++) {
+                    var st = _trSlotStart(slots[i]);
+                    if (st == null) continue;
+                    var d = Math.abs(st - sel.startMin);
+                    if (d < best) { best = d; bi = i; }
+                }
+                idx = best <= 30 ? bi : -1;
+            }
+            if (idx < 0) { unmapped++; return; }
+            if (!regenByBunk[bunk]) regenByBunk[bunk] = new Set();
+            regenByBunk[bunk].add(idx);
+            _selMapped.add(bunk + '#' + idx);
+            affectedDivs.add(dn);
+
+            // ★ Whole-tile window: a selected skeleton tile can cover SEVERAL
+            //   boundary-union slots (overlapping tiles — e.g. a pinned trip over
+            //   regular periods — slice the grid at every boundary). Mapping only
+            //   the tile's START slot left the rest of its window out of the regen
+            //   set, so "regenerate this tile" only re-rolled its first sub-slot.
+            //   Include every slot fully inside [startMin, endMin] so a selected
+            //   tile always regenerates as a whole.
+            if (sel.endMin != null) {
+                for (var w = 0; w < slots.length; w++) {
+                    if (w === idx) continue;
+                    var ws = _trSlotStart(slots[w]), we = _trSlotEnd(slots[w]);
+                    if (ws != null && we != null && ws >= sel.startMin - 2 && we <= sel.endMin + 2) {
+                        regenByBunk[bunk].add(w);
+                    }
+                }
+            }
+
+            // Multi-period guard: a spanned activity regenerates as a whole block.
+            var arr = sa[bunk] || [];
+            var selT = _trSlotStart(slots[idx]);
+            var anchor = null;
+            for (var k = 0; k < arr.length; k++) {
+                var e = arr[k];
+                if (e && e._startMin != null && Math.abs(e._startMin - selT) <= 2) { anchor = e; break; }
+            }
+            var bs = anchor && (anchor._blockStart != null ? anchor._blockStart : null);
+            if (bs != null) {
+                arr.forEach(function (e2) {
+                    if (!e2) return;
+                    var ebs = (e2._blockStart != null) ? e2._blockStart : null;
+                    if (ebs === bs && e2._startMin != null) {
+                        var j2 = _trFindByTime(slots, e2._startMin, 2);
+                        if (j2 >= 0) {
+                            regenByBunk[bunk].add(j2);
+                        }
+                    }
+                });
+            }
+        });
+
+        // Count mapped SELECTIONS (deduped), not raw regen slots — the whole-tile
+        // window above can add several sub-slots per selected tile, and the count
+        // is shown to the user as "Regenerate N tiles".
+        var selectedSlotCount = _selMapped.size;
+        if (affectedDivs.size === 0 || selectedSlotCount === 0) {
+            return { ok: false, reason: 'none-mapped', unmapped: unmapped, selectedSlotCount: 0 };
+        }
+
+        // ---- 2. Pre-check: another division's structure changed too? ---------
+        // A division whose stored entries no longer sit at the indices its NEW
+        // geometry implies — but which is NOT being regenerated — would be
+        // preserved index-based and misalign. Refuse with guidance instead.
+        var misaligned = [];
+        Object.keys(divisions).forEach(function (dn) {
+            if (affectedDivs.has(dn)) return;
+            var slots = newDT[dn];
+            if (!Array.isArray(slots) || !slots.length) return;
+            var bunks = (divisions[dn] && divisions[dn].bunks) || [];
+            for (var bi2 = 0; bi2 < bunks.length; bi2++) {
+                var arr2 = sa[String(bunks[bi2])];
+                if (!Array.isArray(arr2)) continue;
+                for (var i2 = 0; i2 < arr2.length; i2++) {
+                    var e3 = arr2[i2];
+                    if (!e3 || e3.continuation || e3._startMin == null) continue;
+                    var st3 = _trSlotStart(slots[i2]);
+                    if (st3 == null || Math.abs(st3 - e3._startMin) > 2) {
+                        if (misaligned.indexOf(dn) < 0) misaligned.push(dn);
+                        i2 = arr2.length; bi2 = bunks.length; // break out
+                    }
+                }
+            }
+        });
+        if (misaligned.length) {
+            return { ok: false, reason: 'misaligned-divisions', misalignedDivs: misaligned, unmapped: unmapped, selectedSlotCount: selectedSlotCount };
+        }
+
+        // ---- 3. Build the regen scope, re-keyed to NEW indices by time -------
+        var regenScope = {};
+        var scopeBunks = [];
+        var fullRerollBunks = [];
+        var droppedEntries = 0;
+        affectedDivs.forEach(function (dn) {
+            var slots = newDT[dn] || [];
+            ((divisions[dn] && divisions[dn].bunks) || []).forEach(function (b) {
+                var bunk = String(b);
+                scopeBunks.push(bunk);
+                var regen = regenByBunk[bunk] || new Set();
+                var rk = _trRekeyBunk(sa[bunk] || [], slots, regen);
+                droppedEntries += rk.dropped;
+                if (!rk.safe) {
+                    // Whole-bunk regeneration: valid schedule guaranteed (pinned tiles
+                    // refill from the skeleton) — never a partial index shift.
+                    var all = new Set();
+                    for (var s2 = 0; s2 < slots.length; s2++) all.add(s2);
+                    regenScope[bunk] = { regen: all, keep: {}, orig: {} };
+                    fullRerollBunks.push(bunk);
+                } else {
+                    regenScope[bunk] = { regen: regen, keep: rk.keep, orig: rk.orig };
+                }
+            });
+        });
+
+        // ---- 4. League games in affected divisions that are NOT re-rolled ----
+        // Their log records must survive the engine's day-rollback (else the game
+        // counter drops and the Leagues results page loses the game).
+        //
+        // Keyed off the FINAL regen sets, not the user's raw selection. Step 3
+        // can widen `regen` after the fact — a fill straddling the selection
+        // pulls its whole window in, and a bunk whose entries can't be safely
+        // re-keyed re-rolls its ENTIRE day (fullRerollBunks). scheduler_core_main
+        // STEP 3 decides whether to re-roll a league period from exactly these
+        // sets (`_leagueTargeted`), so preserving off the raw selection let a
+        // whole-day re-roll log a fresh game for a period whose OLD record had
+        // been preserved — the day ended up with both, and the old matchup kept
+        // counting as played.
+        var regenTimesByDiv = {};
+        affectedDivs.forEach(function (dn) {
+            var dSlots = newDT[dn] || [];
+            var times = new Set();
+            ((divisions[dn] && divisions[dn].bunks) || []).forEach(function (b) {
+                var rs = regenScope[String(b)];
+                if (!rs || !rs.regen) return;
+                rs.regen.forEach(function (i) {
+                    var st = _trSlotStart(dSlots[i]);
+                    if (st != null) times.add(st);
+                });
+            });
+            regenTimesByDiv[dn] = times;
+        });
+        var preservedLeagueLabels = {};
+        affectedDivs.forEach(function (dn) {
+            var map = la[dn];
+            if (!map || typeof map !== 'object') return;
+            var selT2 = regenTimesByDiv[dn] || new Set();
+            Object.keys(map).forEach(function (k) {
+                var g = map[k];
+                if (!g || !g.leagueName || !g.gameLabel) return;
+                var t = (g._startMin != null) ? g._startMin : null;
+                var isSelected = false;
+                if (t != null) {
+                    selT2.forEach(function (st) { if (Math.abs(st - t) <= 2) isSelected = true; });
+                }
+                if (!isSelected) {
+                    (preservedLeagueLabels[g.leagueName] = preservedLeagueLabels[g.leagueName] || []).push(g.gameLabel);
+                }
+            });
+        });
+
+        return {
+            ok: true,
+            newDT: newDT,
+            regenScope: regenScope,
+            scopeBunks: scopeBunks,
+            affectedDivs: Array.from(affectedDivs),
+            selectedSlotCount: selectedSlotCount,
+            unmapped: unmapped,
+            fullRerollBunks: fullRerollBunks,
+            droppedEntries: droppedEntries,
+            preservedLeagueLabels: preservedLeagueLabels
+        };
+    }
+
+    // =========================================================================
+    // TILE REMOVAL PLAN — apply a deleted skeleton tile to a GENERATED day
+    // =========================================================================
+    // Deleting a tile only edits the skeleton. The generated day renders from
+    // window.divisionTimes + scheduleAssignments (both saved per date), so the
+    // removed period kept showing its activity — and its league game kept
+    // counting — until someone regenerated. This builds the whole "apply the
+    // removal" result as a pure value, so the caller can validate it before
+    // committing anything:
+    //
+    //   • the day's geometry is rebuilt from the POST-delete skeleton, so the
+    //     removed window simply has no slot (the freed time is unscheduled);
+    //   • every surviving entry is re-keyed onto that geometry by its own
+    //     _startMin — nothing is re-rolled, nothing shifts by index;
+    //   • whatever lived in the removed window is dropped, per bunk and in
+    //     leagueAssignments.
+    //
+    // Refuses (ok:false) rather than half-applying: `unsafe-bunks` when a bunk
+    // can't be re-keyed 1:1 (the removal path has no solver to fall back on),
+    // `no-geometry` when the division has no tiles left at all.
+    //
+    // Returns { ok, newDT, assignments:{bunk:[…]}, leagueAssignments,
+    //           affectedDivs, affectedBunks, droppedEntries, droppedLeagueGames }.
+    // droppedEntries is a total across every affected bunk, not per bunk.
+    function buildTimeRemovalPlan(args) {
+        var divisions = args.divisions || {};
+        var sa = args.scheduleAssignments || {};
+        var la = args.leagueAssignments || {};
+        var removed = args.removedTiles || [];        // [{ division, startMin, endMin }]
+        var newDT = buildDivisionTimesFromSkeleton(args.skeleton || [], divisions) || {};
+
+        var affectedDivs = [];
+        removed.forEach(function (t) {
+            var dn = t && t.division != null ? String(t.division) : null;
+            if (dn && affectedDivs.indexOf(dn) < 0) affectedDivs.push(dn);
+        });
+        if (!affectedDivs.length) return { ok: false, reason: 'no-divisions' };
+
+        // A division that lost its LAST tile has no timeline left. Re-keying
+        // into an empty grid would silently erase the whole day, so refuse.
+        var emptyDivs = affectedDivs.filter(function (dn) {
+            return !Array.isArray(newDT[dn]) || newDT[dn].length === 0;
+        });
+        if (emptyDivs.length) return { ok: false, reason: 'no-geometry', emptyDivs: emptyDivs };
+
+        var assignments = {};
+        var affectedBunks = [];
+        var unsafeBunks = [];
+        var droppedEntries = 0;
+        affectedDivs.forEach(function (dn) {
+            var slots = newDT[dn] || [];
+            ((divisions[dn] && divisions[dn].bunks) || []).forEach(function (b) {
+                var bunk = String(b);
+                var arr = sa[bunk];
+                if (!Array.isArray(arr) || !arr.length) return;   // nothing generated for this bunk
+                affectedBunks.push(bunk);
+                // Empty regen set: re-key everything, re-roll nothing. A fill
+                // whose window no longer exists comes back as `dropped`.
+                var rk = _trRekeyBunk(arr, slots, new Set());
+                if (!rk.safe) { unsafeBunks.push(bunk); return; }
+                droppedEntries += rk.dropped;
+                var out = new Array(slots.length).fill(null);
+                Object.keys(rk.keep).forEach(function (k) {
+                    var i = parseInt(k, 10);
+                    if (i >= 0 && i < out.length) out[i] = rk.keep[k];
+                });
+                assignments[bunk] = out;
+            });
+        });
+        if (unsafeBunks.length) return { ok: false, reason: 'unsafe-bunks', unsafeBunks: unsafeBunks };
+
+        // League store: same treatment, keyed by each game's own _startMin.
+        var newLA = {};
+        var droppedLeagueGames = 0;
+        Object.keys(la || {}).forEach(function (dn) {
+            var map = la[dn];
+            if (!map || typeof map !== 'object') return;
+            if (affectedDivs.indexOf(String(dn)) < 0) { newLA[dn] = map; return; }
+            var slots = newDT[dn] || [];
+            var kept = {};
+            Object.keys(map).forEach(function (k) {
+                var g = map[k];
+                if (!g) return;
+                var t = (g._startMin != null) ? g._startMin : null;
+                // No stamp → can't be placed on the new grid; keep it at its
+                // original key rather than guessing it away.
+                var idx = (t != null) ? _trFindByTime(slots, t, 2) : parseInt(k, 10);
+                if (idx == null || isNaN(idx) || idx < 0) { droppedLeagueGames++; return; }
+                kept[idx] = g;
+            });
+            newLA[dn] = kept;
+        });
+
+        return {
+            ok: true,
+            newDT: newDT,
+            assignments: assignments,
+            leagueAssignments: newLA,
+            affectedDivs: affectedDivs,
+            affectedBunks: affectedBunks,
+            droppedEntries: droppedEntries,
+            droppedLeagueGames: droppedLeagueGames
+        };
+    }
+
+    // Per-slot, time-aware restore of a division's preserved league games.
+    // freshMap (what the engine wrote THIS run) wins per slot; each snapshot game
+    // is re-keyed by its own _startMin against the division's CURRENT slots.
+    function mergePreservedLeagueDivision(freshMap, snapshotMap, divSlots) {
+        var merged = {};
+        Object.keys(freshMap || {}).forEach(function (k) { merged[k] = freshMap[k]; });
+        Object.keys(snapshotMap || {}).forEach(function (k) {
+            var g = snapshotMap[k];
+            if (!g) return;
+            var idx = (g._startMin != null && Array.isArray(divSlots)) ? _trFindByTime(divSlots, g._startMin, 2) : -1;
+            if (idx < 0) idx = parseInt(k, 10);            // legacy game with no stamp → original key
+            if (isNaN(idx) || idx < 0) return;
+            if (merged[idx] != null) return;               // engine's fresh game wins
+            merged[idx] = g;
+        });
+        return merged;
+    }
+
+    // =========================================================================
     // EXPORTS
     // =========================================================================
 
@@ -1121,6 +1628,11 @@ function buildUnifiedTimesFromDivisionTimes(divisionTimes) {
 
         // Core building
         buildFromSkeleton: buildDivisionTimesFromSkeleton,
+
+        // ★ Time-based partial-regen scope (extend-day-earlier)
+        buildTimeRegenScope: buildTimeRegenScope,
+        buildTimeRemovalPlan: buildTimeRemovalPlan,
+        mergePreservedLeagueDivision: mergePreservedLeagueDivision,
         
         // ★★★ v1.2: Expose split tile expansion ★★★
         expandSplitTiles: expandSplitTiles,

@@ -276,32 +276,174 @@ function saveFacilitiesMetadata() {
 //   bound to the activity + its facility (customActivity/customField), the
 //   same lane hand-made Custom Pinned layers use. Each item carries its
 //   `quickType` so the drop can tag the layer (swim/lunch/snacks/dinner →
-//   the solver applies that behavior). Only `dismissal` is excluded — it
-//   keeps its native hard-coded tile.
+//   the solver applies that behavior). Nothing is excluded — a configured
+//   Dismissal is a general activity like any other, and the built-in
+//   Dismissal tile steps aside for it (see getGeneralActivityCoveredFixedTypes).
 window.getGeneralActivityPaletteItems = function () {
     try {
         const out = [], seen = {};
-        const _exclude = { dismissal: 1 };
-        // The module-local `facilities` array only populates when the
-        // Facilities tab initializes — fall back to the persisted registry so
-        // the palettes work on a fresh page load too.
-        let _src = facilities;
-        if (!Array.isArray(_src) || _src.length === 0) {
-            const _gs = window.loadGlobalSettings?.() || {};
-            _src = _gs.facilities || [];
-        }
-        (_src || []).forEach(f => {
+        (_gaFacilitySource() || []).forEach(f => {
             if (!f || !f.name) return;
             (f.generalActivities || []).forEach(ga => {
                 if (!ga || !ga.name) return;
                 const qt = String(ga.quickType || '').toLowerCase();
-                if (_exclude[qt]) return;
                 const k = String(ga.name).toLowerCase() + '|' + String(f.name).toLowerCase();
                 if (!seen[k]) { seen[k] = 1; out.push({ name: ga.name, facility: f.name, quickType: qt || 'custom' }); }
             });
         });
         return out;
     } catch (e) { return []; }
+};
+
+// The module-local `facilities` array only populates when the Facilities tab
+// initializes — fall back to the persisted registry so the palettes work on a
+// fresh page load too.
+function _gaFacilitySource() {
+    let _src = facilities;
+    if (!Array.isArray(_src) || _src.length === 0) {
+        const _gs = window.loadGlobalSettings?.() || {};
+        _src = _gs.facilities || [];
+    }
+    return _src || [];
+}
+
+// ★ Which built-in "Fixed" pinned tiles are already covered by a configured
+//   General Activity. A camp that creates its own Lunch general activity should
+//   see exactly ONE Lunch tile — the configured one, wired to its facility — so
+//   the palettes drop the hard-coded Lunch from the Fixed row. A camp that never
+//   configured Lunch keeps the built-in tile, so nothing is lost.
+const _GA_FIXED_ALIASES = {
+    swim: 'swim',
+    lunch: 'lunch',
+    snacks: 'snacks', snack: 'snacks',
+    dismissal: 'dismissal'
+};
+window.getGeneralActivityCoveredFixedTypes = function () {
+    const covered = {};
+    try {
+        _gaFacilitySource().forEach(f => {
+            ((f && f.generalActivities) || []).forEach(ga => {
+                if (!ga || !ga.name) return;
+                // Match on the stored quickType AND on the literal name: a GA
+                //   renamed after creation keeps its original quickType, and
+                //   "Dismissal" never gets one (it isn't in the add-time name map).
+                const byType = _GA_FIXED_ALIASES[String(ga.quickType || '').toLowerCase()];
+                const byName = _GA_FIXED_ALIASES[String(ga.name).trim().toLowerCase()];
+                if (byType) covered[byType] = true;
+                if (byName) covered[byName] = true;
+            });
+        });
+    } catch (e) { /* no facilities yet — nothing is covered */ }
+    return covered;
+};
+
+// =========================================================================
+// GENERAL ACTIVITY TILE COLORS
+// Every general activity gets its own color so a palette full of them reads
+// apart at a glance (they were all the same amber). One resolver feeds every
+// surface — the Master Scheduler and Daily Adjustments palettes, the manual
+// grid tiles, and the auto-mode layer bands — so an activity is the same
+// color everywhere.
+//
+// Assignment: the four kinds that have a built-in tile keep that tile's
+// familiar color (Swim stays cyan, Lunch red, Snacks yellow, Dismissal pink)
+// and do NOT consume a palette slot. Everything else takes a slot by its
+// position in the alphabetically sorted list of custom activity names, which
+// is stable across reloads and independent of facility ordering. Past the end
+// of the palette, hues step by the golden angle so any number of activities
+// still comes out distinct.
+//
+// Trade-off worth knowing: because slots are assigned by sort position,
+// adding a new activity shifts the colors of the ones that sort after it.
+// Activities are set up once and rarely change, and this is what buys the
+// guarantee that no two are ever the same.
+// =========================================================================
+const _GA_FIXED_COLORS = {
+    swim:      { bg: '#a5f3fc', bg2: '#67e8f9', text: '#155e75', dot: '#06b6d4' },
+    lunch:     { bg: '#fecaca', bg2: '#fca5a5', text: '#7f1d1d', dot: '#ef4444' },
+    snacks:    { bg: '#fef08a', bg2: '#fde047', text: '#713f12', dot: '#eab308' },
+    dismissal: { bg: '#fbcfe8', bg2: '#f9a8d4', text: '#831843', dot: '#ec4899' }
+};
+
+const _GA_TILE_PALETTE = [
+    { bg: '#fde68a', bg2: '#fcd34d', text: '#78350f', dot: '#f59e0b' }, // amber
+    { bg: '#99f6e4', bg2: '#5eead4', text: '#134e4a', dot: '#14b8a6' }, // teal
+    { bg: '#c7d2fe', bg2: '#a5b4fc', text: '#312e81', dot: '#6366f1' }, // indigo
+    { bg: '#d9f99d', bg2: '#bef264', text: '#365314', dot: '#84cc16' }, // lime
+    { bg: '#fecdd3', bg2: '#fda4af', text: '#881337', dot: '#f43f5e' }, // rose
+    { bg: '#bae6fd', bg2: '#7dd3fc', text: '#0c4a6e', dot: '#0ea5e9' }, // sky
+    { bg: '#fed7aa', bg2: '#fdba74', text: '#7c2d12', dot: '#f97316' }, // orange
+    { bg: '#ddd6fe', bg2: '#c4b5fd', text: '#4c1d95', dot: '#8b5cf6' }, // violet
+    { bg: '#a7f3d0', bg2: '#6ee7b7', text: '#064e3b', dot: '#10b981' }, // emerald
+    { bg: '#f5d0fe', bg2: '#f0abfc', text: '#701a75', dot: '#d946ef' }, // fuchsia
+    { bg: '#e2e8f0', bg2: '#cbd5e1', text: '#1e293b', dot: '#64748b' }, // slate
+    { bg: '#fbcfe8', bg2: '#f9a8d4', text: '#9d174d', dot: '#db2777' }, // pink
+    { bg: '#bbf7d0', bg2: '#86efac', text: '#14532d', dot: '#22c55e' }, // green
+    { bg: '#bfdbfe', bg2: '#93c5fd', text: '#1e3a5f', dot: '#3b82f6' }  // blue
+];
+
+// Past the curated palette, walk the hue circle by the golden angle so even a
+// long list keeps neighbouring entries far apart.
+function _gaGoldenColor(i) {
+    const h = Math.round((i * 137.508) % 360);
+    return {
+        bg:  `hsl(${h},85%,84%)`,
+        bg2: `hsl(${h},78%,73%)`,
+        text: `hsl(${h},72%,24%)`,
+        dot: `hsl(${h},68%,45%)`
+    };
+}
+
+let _gaColorMapCache = null;
+let _gaColorMapKey = '';
+
+// lowercase activity name -> color. Rebuilt whenever the set of names changes.
+function _gaColorMap() {
+    const items = window.getGeneralActivityPaletteItems?.() || [];
+    // The same activity can be configured at two facilities; colour is keyed on
+    // the NAME, so both copies read as the same activity.
+    const kindByName = {};
+    items.forEach(ga => {
+        const low = String(ga.name || '').trim().toLowerCase();
+        if (!low) return;
+        const kind = _GA_FIXED_ALIASES[String(ga.quickType || '').toLowerCase()]
+                  || _GA_FIXED_ALIASES[low] || null;
+        // A fixed kind wins over a plain custom duplicate of the same name.
+        if (!(low in kindByName) || (kind && !kindByName[low])) kindByName[low] = kind;
+    });
+
+    const names = Object.keys(kindByName).sort();
+    const key = JSON.stringify(names);
+    if (_gaColorMapCache && _gaColorMapKey === key) return _gaColorMapCache;
+
+    const map = {};
+    let slot = 0;
+    names.forEach(low => {
+        const kind = kindByName[low];
+        if (kind && _GA_FIXED_COLORS[kind]) {
+            map[low] = _GA_FIXED_COLORS[kind];   // keeps its built-in tile colour
+            return;                              // …and does not consume a slot
+        }
+        map[low] = slot < _GA_TILE_PALETTE.length
+            ? _GA_TILE_PALETTE[slot]
+            : _gaGoldenColor(slot);
+        slot++;
+    });
+
+    _gaColorMapCache = map;
+    _gaColorMapKey = key;
+    return map;
+}
+
+// Public resolver. Returns { bg, bg2, text, dot } for a configured general
+// activity, or null for anything else — every caller falls back to whatever it
+// rendered before, so non-GA tiles are untouched.
+window.getGeneralActivityColor = function (name) {
+    try {
+        const low = String(name || '').trim().toLowerCase();
+        if (!low) return null;
+        return _gaColorMap()[low] || null;
+    } catch (e) { return null; }
 };
 
 function saveData() {
@@ -919,11 +1061,21 @@ function renderSportsConfig(container, fac) {
     container.appendChild(section("Activities", summaryActivities(fieldData),
         () => renderActivities(fieldData, allSports)));
 
-    container.appendChild(section("Durations", summaryFieldDurations(fieldData),
-        () => renderFieldDurations(fieldData)));
+    // Per-sport durations only matter to the auto-scheduler (it keeps a sport to
+    //   a fixed length / best-fits it into a layer block). In manual mode a bunk's
+    //   slot length comes from the skeleton tile, so this config has no effect —
+    //   hide it to avoid a misleading setting.
+    const _durIsAutoMode = (window.getCampBuilderMode?.() === 'auto') || (window._daBuilderMode === 'auto');
+    if (_durIsAutoMode) {
+        container.appendChild(section("Durations", summaryFieldDurations(fieldData),
+            () => renderFieldDurations(fieldData)));
+    }
 
     container.appendChild(section("Usage Limits", summaryFieldLimits(fieldData),
         () => renderFieldLimits(fieldData)));
+
+    container.appendChild(section("Keep In Use", summaryKeepInUse(fieldData),
+        () => renderKeepInUse(fieldData)));
 
     container.appendChild(section("Access & Restrictions", summaryAccess(fieldData),
         () => renderAccess(fieldData)));
@@ -1167,8 +1319,15 @@ function renderSpecialConfig(container, fac) {
         saBody.appendChild(section("Access", summarySpecialAccess(saData),
             () => renderSpecialAccess(saData)));
 
-        saBody.appendChild(section("Duration", summarySpecialDuration(saData),
-            () => renderSpecialDuration(saData)));
+        // Duration (activity length / best-fit) is an auto-scheduler concept — in
+        //   manual mode the special's length comes from the skeleton block, so this
+        //   config does nothing. Hide it in manual mode. (Prep Duration below is a
+        //   separate feature that IS honored in manual, so it stays.)
+        const _saDurIsAutoMode = (window.getCampBuilderMode?.() === 'auto') || (window._daBuilderMode === 'auto');
+        if (_saDurIsAutoMode) {
+            saBody.appendChild(section("Duration", summarySpecialDuration(saData),
+                () => renderSpecialDuration(saData)));
+        }
 
         saBody.appendChild(section("Time Availability", summarySpecialTime(saData),
             () => renderSpecialTimeRules(saData)));
@@ -2111,6 +2270,162 @@ function sportHasAnyLimit(sport) {
     const l = getSportLimit(sport);
     return l.maxUsage > 0 || l.frequencyDays > 0 || _sportPerGradeCount(sport) > 0;
 }
+// =========================================================================
+// KEEP IN USE — "this facility must never sit idle"
+// Some camps have a facility they always want busy: the New Gym should have
+// somebody in it every period, and it does not matter who. Rotation can't
+// promise that (it hands out sports by who's due), and neither can leagues on
+// their own (if nobody is due for basketball the gym gets no game). Turning
+// this on makes the generator cover every period:
+//   • during leagues → one matchup is forced onto a sport this facility hosts
+//   • every other period → a bunk is moved onto it (Free slots first)
+// Stored as fieldData.keepInUse = { enabled, startMin, endMin }. Read by
+// SchedulerCoreUtils.getKeepInUseFields (the single source of truth for both
+// the league engine and the manual solver's STEP 7.96 sweep).
+// =========================================================================
+// min → "9:00am" (scheduler_core_utils owns the canonical formatter; the
+// fallback keeps this panel usable if it hasn't loaded yet).
+function _kiuTimeLabel(mins) {
+    if (mins == null || isNaN(Number(mins))) return "";
+    if (typeof window.minutesToTimeString === 'function') return window.minutesToTimeString(Number(mins));
+    const m = Number(mins), h = Math.floor(m / 60), mm = String(m % 60).padStart(2, '0');
+    const ap = h >= 12 ? 'pm' : 'am', h12 = (h % 12) || 12;
+    return `${h12}:${mm}${ap}`;
+}
+
+function summaryKeepInUse(f) {
+    const k = f.keepInUse;
+    if (!k || k.enabled !== true) return "Off (may sit idle)";
+    const acts = (f.activities || []).filter(Boolean);
+    const when = (k.startMin != null || k.endMin != null)
+        ? `${_kiuTimeLabel(k.startMin != null ? k.startMin : 0)}–${_kiuTimeLabel(k.endMin != null ? k.endMin : 1439)}`
+        : "all day";
+    return `Always in use, ${when}` + (acts.length ? ` (${acts.slice(0, 2).join(', ')}${acts.length > 2 ? '…' : ''})` : ' — no sports set!');
+}
+
+function renderKeepInUse(f) {
+    const box = document.createElement("div");
+    const cfg = f.keepInUse || {};
+
+    const desc = document.createElement("p");
+    desc.style.cssText = "font-size:0.85rem; color:#6B7280; margin:0 0 12px 0;";
+    desc.textContent = "Never leave this facility empty. Every period, the generator makes sure somebody is using it — during leagues it forces one matchup onto a sport played here, and outside leagues it moves a bunk in. It doesn't matter who's in there, only that it isn't sitting idle.";
+    box.appendChild(desc);
+
+    const acts = (f.activities || []).filter(Boolean);
+    if (!acts.length) {
+        const warn = document.createElement("div");
+        warn.style.cssText = "font-size:0.85rem; color:#991B1B; background:#FEF2F2; border:1px solid #FECACA; border-radius:6px; padding:8px; margin-bottom:12px;";
+        warn.textContent = "This facility has no sports yet — add them in the Activities section first, otherwise there's nothing to schedule here.";
+        box.appendChild(warn);
+    }
+
+    const updateSummary = () => {
+        const el = box.closest('.detail-section')?.querySelector('.detail-section-summary');
+        if (el) el.textContent = summaryKeepInUse(f);
+    };
+    const commit = () => {
+        f.keepInUse = {
+            enabled: !!cb.checked,
+            startMin: cfg.startMin != null ? cfg.startMin : null,
+            endMin: cfg.endMin != null ? cfg.endMin : null,
+            rotateGrades: !!rotCb.checked
+        };
+        saveFieldData();
+        updateSummary();
+    };
+
+    const tog = document.createElement("label");
+    tog.style.cssText = "display:inline-flex; align-items:center; gap:10px; cursor:pointer; margin-bottom:12px;";
+    const cb = document.createElement("input");
+    cb.type = "checkbox";
+    cb.checked = cfg.enabled === true;
+    const lbl = document.createElement("span");
+    lbl.style.cssText = "font-size:0.9rem; color:#374151; font-weight:600;";
+    lbl.textContent = "Keep this facility in use every period";
+    tog.appendChild(cb); tog.appendChild(lbl);
+    box.appendChild(tog);
+
+    // Optional window — blank means the whole camp day.
+    const winWrap = document.createElement("div");
+    winWrap.style.cssText = "display:flex; align-items:center; gap:8px; flex-wrap:wrap; margin-left:4px;";
+    winWrap.style.display = cb.checked ? "flex" : "none";
+
+    const winLbl = document.createElement("span");
+    winLbl.style.cssText = "font-size:0.8rem; color:#6B7280;";
+    winLbl.textContent = "Only between (optional):";
+    winWrap.appendChild(winLbl);
+
+    const inStyle = "width:80px; padding:5px 8px; border:1px solid #D1D5DB; border-radius:6px; text-align:center; font-size:0.85rem;";
+    const fromIn = document.createElement("input");
+    fromIn.placeholder = "9:00am"; fromIn.style.cssText = inStyle;
+    if (cfg.startMin != null) fromIn.value = _kiuTimeLabel(cfg.startMin);
+    const toIn = document.createElement("input");
+    toIn.placeholder = "4:00pm"; toIn.style.cssText = inStyle;
+    if (cfg.endMin != null) toIn.value = _kiuTimeLabel(cfg.endMin);
+
+    const commitWindow = () => {
+        const s = fromIn.value.trim() ? parseTimeToMinutes(fromIn.value) : null;
+        const e = toIn.value.trim() ? parseTimeToMinutes(toIn.value) : null;
+        cfg.startMin = (s == null || isNaN(s)) ? null : s;
+        cfg.endMin = (e == null || isNaN(e)) ? null : e;
+        // An inverted window would silently disable the rule — drop it instead.
+        if (cfg.startMin != null && cfg.endMin != null && cfg.endMin <= cfg.startMin) {
+            alert("The end time has to be after the start time — leaving the window open (all day).");
+            cfg.startMin = null; cfg.endMin = null;
+        }
+        fromIn.value = cfg.startMin != null ? _kiuTimeLabel(cfg.startMin) : "";
+        toIn.value = cfg.endMin != null ? _kiuTimeLabel(cfg.endMin) : "";
+        commit();
+    };
+    fromIn.onchange = commitWindow;
+    toIn.onchange = commitWindow;
+
+    winWrap.appendChild(fromIn);
+    winWrap.appendChild(document.createTextNode("to"));
+    winWrap.appendChild(toIn);
+    box.appendChild(winWrap);
+
+    // Grade rotation. Only matters when grades run on STAGGERED clocks — then
+    // the earliest-starting grade would otherwise hold this facility all day
+    // (every period after the first overlaps it), so handing it over costs a
+    // short gap. Same clock for everyone → this changes nothing.
+    const rotWrap = document.createElement("div");
+    rotWrap.style.cssText = "margin-top:12px; margin-left:4px;";
+    rotWrap.style.display = cb.checked ? "block" : "none";
+    const rotTog = document.createElement("label");
+    rotTog.style.cssText = "display:inline-flex; align-items:flex-start; gap:8px; cursor:pointer;";
+    const rotCb = document.createElement("input");
+    rotCb.type = "checkbox";
+    rotCb.checked = cfg.rotateGrades !== false;   // default on
+    rotCb.style.marginTop = "3px";
+    const rotLbl = document.createElement("span");
+    rotLbl.style.cssText = "font-size:0.85rem; color:#374151;";
+    rotLbl.innerHTML = "Share it around between grades" +
+        "<div style='font-size:0.78rem; color:#9CA3AF; margin-top:2px; line-height:1.45;'>" +
+        "Only matters if your grades run on different clocks (e.g. one starts 10:00, the next 10:15). " +
+        "Without this the earliest grade keeps the facility all day, because every later period overlaps theirs. " +
+        "With it, grades take turns — but each handover leaves a short gap while the next grade's period starts." +
+        "</div>";
+    rotTog.appendChild(rotCb); rotTog.appendChild(rotLbl);
+    rotWrap.appendChild(rotTog);
+    box.appendChild(rotWrap);
+    rotCb.onchange = commit;
+
+    cb.onchange = () => {
+        winWrap.style.display = cb.checked ? "flex" : "none";
+        rotWrap.style.display = cb.checked ? "block" : "none";
+        commit();
+    };
+
+    const note = document.createElement("div");
+    note.style.cssText = "font-size:0.78rem; color:#9CA3AF; margin-top:12px; line-height:1.5;";
+    note.textContent = "Only periods that actually have activities running count — lunch, dismissal and trips are left alone. A bunk is never pulled out of a special, a league game or anything you pinned by hand.";
+    box.appendChild(note);
+
+    return box;
+}
+
 function summaryFieldLimits(f) {
     const sports = (f.activities || []).filter(Boolean);
     if (!sports.length) return "No sports selected";

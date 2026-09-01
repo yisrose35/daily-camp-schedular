@@ -44,8 +44,11 @@
     const VERSION = '11.0.0'; // ★ v11.0: regret-ordering, BFS augmenting, SA-guided elite pool, depth-5 ejection
     const TAG = '[AutoSolver]';
 
-    function log(msg, ...args) { console.log(TAG + ' ' + msg, ...args); }
-    function warn(msg, ...args) { console.warn(TAG + ' ⚠️ ' + msg, ...args); }
+    // ★ GenTrace: narrative lines also land in the generation brain trace
+    //   (when recording) so runs can be exported via downloadGenTrace().
+    function _gtLog(lv, msg) { if (window.GenTrace && window.GenTrace.active) window.GenTrace.solverLog(TAG, lv, msg); }
+    function log(msg, ...args) { console.log(TAG + ' ' + msg, ...args); _gtLog('log', msg); }
+    function warn(msg, ...args) { console.warn(TAG + ' ⚠️ ' + msg, ...args); _gtLog('warn', msg); }
 
     function normName(str) {
         if (!str) return '';

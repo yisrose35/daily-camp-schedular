@@ -75,7 +75,12 @@
             // Preserve any additional properties
             ...(f.transition ? { transition: f.transition } : {}),
             ...(f.preferences ? { preferences: f.preferences } : {}),
-            ...(f.minDurationMin ? { minDurationMin: f.minDurationMin } : {})
+            ...(f.minDurationMin ? { minDurationMin: f.minDurationMin } : {}),
+            // ★ "Keep in use" — this facility must never sit idle. This
+            //   normalizer is a WHITELIST, so an unlisted key is silently
+            //   dropped on every cloud round-trip; without this line the
+            //   setting would appear to save and then vanish on reload.
+            ...(f.keepInUse ? { keepInUse: f.keepInUse } : {})
         };
     }
 
