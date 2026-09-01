@@ -527,14 +527,16 @@ function toast(msg, err) {
 
 // Signs the register out of the shadow PIN-login session and returns to the
 // PIN screen — lets a runner lock the register when stepping away without
-// anyone else touching their session.
+// anyone else touching their session. The PIN screen lives on this same
+// page (see campistry_snacks_pos.html's pinOverlay), so locking is just a
+// reload: with no session left, the page comes back up already locked.
 window.posLockRegister = function() {
     const db = window.CampistryDB;
     const client = db && db.getClient && db.getClient();
     if (client && client.auth && client.auth.signOut) {
-        client.auth.signOut().finally(() => { window.location.href = '/login'; });
+        client.auth.signOut().finally(() => { window.location.reload(); });
     } else {
-        window.location.href = '/login';
+        window.location.reload();
     }
 };
 

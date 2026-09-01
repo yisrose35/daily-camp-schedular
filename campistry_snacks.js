@@ -645,11 +645,12 @@ window.saveSettingsForm = function() {
 // (get_camp_pos_login_status RPC). Neither RPC ever returns the PIN itself.
 function _posLoginUrl() {
     const campId = (window.CampistryDB && window.CampistryDB.getCampId && window.CampistryDB.getCampId()) || '';
-    return 'https://snacks.campistry.org/login?camp=' + encodeURIComponent(campId);
+    return 'https://snacks.campistry.org/pos?camp=' + encodeURIComponent(campId);
 }
 
 function loadPosPinStatus() {
     const box = document.getElementById('posPinStatus');
+    const unlockBtn = document.getElementById('posPinUnlockBtn');
     if (!box) return;
     const db = window.CampistryDB;
     const client = db && db.getClient && db.getClient();
@@ -660,16 +661,49 @@ function loadPosPinStatus() {
         if (res.error || !data || !data.success) {
             console.error('[Snacks Settings] get_camp_pos_login_status failed:', res.error, data);
             box.innerHTML = '<span style="color:var(--red-600)">Could not check the register login status — see console.</span>';
+            if (unlockBtn) unlockBtn.style.display = 'none';
             return;
         }
-        box.innerHTML = data.pinSet
-            ? '<span style="color:var(--green-600);font-weight:600">✓ A register PIN is set.</span> Saving a new one below replaces it.'
-            : '<span style="color:var(--amber-600);font-weight:600">No PIN set yet</span> — the register login is inactive until you set one.';
+        if (data.locked) {
+            box.innerHTML = '<span style="color:var(--red-600);font-weight:600">🔒 Register locked</span> — 5 wrong PIN attempts in a row. It stays locked until you unlock it below.';
+            if (unlockBtn) unlockBtn.style.display = '';
+        } else {
+            box.innerHTML = data.pinSet
+                ? '<span style="color:var(--green-600);font-weight:600">✓ A register PIN is set.</span> Saving a new one below replaces it.'
+                : '<span style="color:var(--amber-600);font-weight:600">No PIN set yet</span> — the register login is inactive until you set one.';
+            if (unlockBtn) unlockBtn.style.display = 'none';
+        }
     }).catch(e => {
         console.error('[Snacks Settings] get_camp_pos_login_status threw:', e);
         box.innerHTML = '<span style="color:var(--red-600)">Could not check the register login status — see console.</span>';
+        if (unlockBtn) unlockBtn.style.display = 'none';
     });
 }
+
+window.unlockPosPin = function() {
+    if (!_secEdit('settings', 'Unlocking the register')) return;
+    const db = window.CampistryDB;
+    const client = db && db.getClient && db.getClient();
+    const campId = db && db.getCampId && db.getCampId();
+    if (!client || !campId) { toast('Not signed in', 1); return; }
+    const btn = document.getElementById('posPinUnlockBtn');
+    if (btn) { btn.disabled = true; btn.textContent = 'Unlocking…'; }
+    client.rpc('unlock_camp_pos_pin', { p_camp_id: campId }).then(res => {
+        if (btn) { btn.disabled = false; btn.textContent = 'Unlock Register'; }
+        const data = res && res.data;
+        if (res.error || !data || !data.success) {
+            console.error('[Snacks Settings] unlock_camp_pos_pin failed:', res.error, data);
+            toast('Could not unlock the register', 1);
+            return;
+        }
+        toast('Register unlocked');
+        loadPosPinStatus();
+    }, (e) => {
+        if (btn) { btn.disabled = false; btn.textContent = 'Unlock Register'; }
+        console.error('[Snacks Settings] unlock_camp_pos_pin threw:', e);
+        toast('Could not unlock the register', 1);
+    });
+};
 
 window.savePosPin = function() {
     if (!_secEdit('settings', 'Setting the register PIN')) return;

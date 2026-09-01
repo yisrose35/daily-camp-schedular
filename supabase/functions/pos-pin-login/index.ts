@@ -75,12 +75,16 @@ serve(async (req) => {
       }
       if (verifyData?.reason === "locked") {
         return json({
-          error: "Too many wrong PIN attempts. Try again in a few minutes.",
+          error: "Too many wrong PIN attempts. The register is locked — ask the office to unlock it from the Manager Dashboard.",
           locked: true,
-          retryAfterSeconds: verifyData.retryAfterSeconds || 900,
         }, 429);
       }
-      return json({ error: "Incorrect PIN." }, 401);
+      const remaining = verifyData?.attemptsRemaining;
+      return json({
+        error: "Incorrect PIN." + (typeof remaining === "number"
+          ? (remaining > 0 ? ` ${remaining} attempt${remaining === 1 ? "" : "s"} left before the register locks.` : " The register is now locked.")
+          : ""),
+      }, 401);
     }
 
     let shadowUserId: string | null = verifyData.shadowUserId || null;

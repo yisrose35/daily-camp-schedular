@@ -8,9 +8,9 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=DM+Sans:opsz,wght@9..40,400;9..40,500;9..40,600;9..40,700&family=Fraunces:opsz,wght@9..144,400;9..144,500;9..144,600;9..144,700&display=swap" rel="stylesheet">
-<link rel="stylesheet" href="campistry-unified.css?v=20260901-14">
-<link rel="stylesheet" href="campistry_snacks.css?v=20260901-14">
-<link rel="stylesheet" href="campistry_ops.css?v=20260901-14">
+<link rel="stylesheet" href="campistry-unified.css?v=20260901-15">
+<link rel="stylesheet" href="campistry_snacks.css?v=20260901-15">
+<link rel="stylesheet" href="campistry_ops.css?v=20260901-15">
 <!-- Splash screen — inline so it appears before any external CSS -->
 <style>
     #snacks-splash {
@@ -97,7 +97,7 @@
     </div>
     <div class="app-header-center">
         <div data-quick-switch-mount="snacks"></div>
-        <script src="campistry_app_switcher.js?v=20260901-14"></script>
+        <script src="campistry_app_switcher.js?v=20260901-15"></script>
     </div>
     <div class="header-right">
         <div class="sync-badge"><div class="sync-dot"></div><span>Synced</span></div>
@@ -315,7 +315,9 @@
                 Give the canteen runner a login that only opens the register —
                 not your full Campistry account. Set a shared PIN below, then
                 share the register link so they can log in themselves on any
-                device, without your regular Campistry password.
+                device, without your regular Campistry password. 5 wrong
+                attempts in a row locks the register — it stays locked until
+                you unlock it here, no time-based auto-unlock.
             </p>
             <div id="posPinStatus" style="font-size:.85rem;color:var(--text-muted);margin-bottom:.9rem"></div>
             <div class="form-grid" style="grid-template-columns:repeat(auto-fit,minmax(200px,1fr))">
@@ -327,6 +329,7 @@
             <div style="display:flex;gap:.5rem;margin-top:.9rem;flex-wrap:wrap">
                 <button class="btn btn-primary" onclick="savePosPin()" id="posPinSaveBtn">Save PIN</button>
                 <button class="btn" onclick="copyPosLoginLink()">Copy Register Link</button>
+                <button class="btn" onclick="unlockPosPin()" id="posPinUnlockBtn" style="display:none;color:var(--red-600)">Unlock Register</button>
             </div>
         </div>
     </div>
@@ -498,29 +501,29 @@ function snacksNav(page, btn) {
 }
 </script>
 
-<script src="config.js?v=20260901-14"></script>
-<script src="supabase-js@2.js?v=20260901-14"></script>
-<script src="supabase_client.js?v=20260901-14"></script>
-<script src="campistry_cloud_bootstrap.js?v=20260901-14"></script>
-<script src="campistry_payments.js?v=20260901-14"></script>
-<script src="campistry_snacks_cash.js?v=20260901-14"></script>
-<script src="xlsx@0.18.5.js?v=20260901-14"></script>
-<script src="campistry_snacks.js?v=20260901-14"></script>
-<script src="campistry_shop_core.js?v=20260901-14"></script>
-<script src="campistry_snacks_shop.js?v=20260901-14"></script>
+<script src="config.js?v=20260901-15"></script>
+<script src="supabase-js@2.js?v=20260901-15"></script>
+<script src="supabase_client.js?v=20260901-15"></script>
+<script src="campistry_cloud_bootstrap.js?v=20260901-15"></script>
+<script src="campistry_payments.js?v=20260901-15"></script>
+<script src="campistry_snacks_cash.js?v=20260901-15"></script>
+<script src="xlsx@0.18.5.js?v=20260901-15"></script>
+<script src="campistry_snacks.js?v=20260901-15"></script>
+<script src="campistry_shop_core.js?v=20260901-15"></script>
+<script src="campistry_snacks_shop.js?v=20260901-15"></script>
 <script>
 // Re-render Snacks when cloud data arrives
 window.addEventListener('campistry-cloud-hydrated', function(){
     if (typeof init === 'function') init();
 });
 </script>
-<script src="campistry_notes_quick.js?v=20260901-14"></script>
+<script src="campistry_notes_quick.js?v=20260901-15"></script>
 <script>window.__CAMPISTRY_PRODUCT__='snacks';</script>
-<script src="parent_lockout_guard.js?v=20260901-14"></script>
-<script src="product_access_guard.js?v=20260901-14"></script>
+<script src="parent_lockout_guard.js?v=20260901-15"></script>
+<script src="product_access_guard.js?v=20260901-15"></script>
 <!-- Per-SECTION access: limits which parts of THIS app the user can open.
      Loads after the product gate, which decides whether they get in at all. -->
-<script src="campistry_capabilities.js?v=20260901-14"></script>
-<script src="campistry_access_sections.js?v=20260901-14"></script>
+<script src="campistry_capabilities.js?v=20260901-15"></script>
+<script src="campistry_access_sections.js?v=20260901-15"></script>
 </body>
 </html>

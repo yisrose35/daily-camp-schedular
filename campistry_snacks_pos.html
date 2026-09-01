@@ -8,22 +8,70 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=DM+Sans:opsz,wght@9..40,400;9..40,500;9..40,600;9..40,700&display=swap" rel="stylesheet">
-<link rel="stylesheet" href="campistry-unified.css?v=20260901-14">
-<link rel="stylesheet" href="campistry_snacks_pos.css?v=20260901-14">
-<script src="config.js?v=20260901-14"></script>
+<link rel="stylesheet" href="campistry-unified.css?v=20260901-15">
+<link rel="stylesheet" href="campistry_snacks_pos.css?v=20260901-15">
+<script src="config.js?v=20260901-15"></script>
+<style>
+/* ── PIN overlay ─────────────────────────────────────────────────────────
+   Default state assumes LOCKED (overlay visible, register hidden) so there
+   is never a flash of the selling console before the synchronous check
+   below runs. The check removes html.pos-locked the moment it finds a
+   usable session, before the body paints. */
+html.pos-locked .app { display: none; }
+#pinOverlay { display: none; }
+html.pos-locked #pinOverlay { display: flex; }
+#pinOverlay {
+    position: fixed; inset: 0; z-index: 999999;
+    align-items: center; justify-content: center;
+    background: linear-gradient(180deg,#0F172A,#1E293B);
+    font-family: 'DM Sans', -apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, sans-serif;
+    padding: 24px;
+}
+#pinOverlay .pin-card {
+    width: 100%; max-width: 380px; background: #fff; border-radius: 20px;
+    box-shadow: 0 20px 60px rgba(0,0,0,.35); padding: 34px 30px 30px; box-sizing: border-box;
+}
+#pinOverlay .pin-brand { display: flex; flex-direction: column; align-items: center; gap: 10px; margin-bottom: 22px; }
+#pinOverlay .pin-brand img { height: 40px; width: auto; }
+#pinOverlay .pin-brand-title { font-size: 1.05rem; font-weight: 700; color: #0F172A; }
+#pinOverlay .pin-brand-sub { font-size: .82rem; color: #64748B; text-align: center; }
+#pinOverlay label { display: block; font-size: .78rem; font-weight: 600; color: #475569; margin-bottom: 8px; text-align: center; letter-spacing: .02em; text-transform: uppercase; }
+#pinOverlay input {
+    width: 100%; font-size: 2.1rem; letter-spacing: .5rem; text-align: center; box-sizing: border-box;
+    padding: 16px 10px; border: 2px solid #E2E8F0; border-radius: 14px;
+    font-weight: 700; color: #0F172A; background: #F8FAFC; font-variant-numeric: tabular-nums;
+}
+#pinOverlay input:focus { outline: none; border-color: #147D91; background: #fff; }
+#pinOverlay .pin-err {
+    display: none; margin-top: 14px; padding: 10px 12px; border-radius: 10px;
+    background: #FEF2F2; color: #DC2626; font-size: .85rem; line-height: 1.4; text-align: center;
+}
+#pinOverlay .pin-err.show { display: block; }
+#pinOverlay button {
+    width: 100%; margin-top: 18px; padding: 14px; border: none; border-radius: 12px;
+    background: #0F5F6E; color: #fff; font-size: 1rem; font-weight: 700;
+    font-family: inherit; cursor: pointer; transition: background .15s;
+}
+#pinOverlay button:hover:not(:disabled) { background: #0A4A56; }
+#pinOverlay button:disabled { opacity: .55; cursor: default; }
+#pinOverlay .pin-foot { margin-top: 18px; text-align: center; font-size: .75rem; color: #94A3B8; }
+#pinOverlay .pin-setup { display: none; text-align: center; color: #64748B; font-size: .88rem; line-height: 1.6; }
+#pinOverlay .pin-setup.show { display: block; }
+</style>
 <script>
 // ── Login gate ───────────────────────────────────────────────────────────
 // snacks.campistry.org has no path back into the rest of Campistry, so a
 // real session is required here on its own — nothing carries over from
 // another Campistry subdomain (separate origin, separate localStorage).
-// This runs synchronously in <head>, before the body ever paints, and
-// redirects to /login (campistry_snacks_login.html, the PIN-code login)
-// the moment no usable session is found — fails CLOSED, deliberately
-// unlike the fail-open product/section guards later in this file, since
-// the whole point here is "people can't just get on." The real security
-// boundary is still Supabase RLS on the other side of that session, not
-// this check — this only stops a stale/absent session from silently
-// rendering the console UI on an unattended device.
+// This runs synchronously in <head>, before the body ever paints. Instead
+// of redirecting to a separate page, it just decides whether html carries
+// pos-locked — the CSS above hides the selling console and shows the PIN
+// overlay (built inline below) until a usable session shows up. Fails
+// CLOSED, deliberately unlike the fail-open product/section guards later
+// in this file, since the whole point here is "people can't just get on."
+// The real security boundary is still Supabase RLS on the other side of
+// that session, not this check.
+document.documentElement.classList.add('pos-locked');
 (function () {
     try {
         var cfg = window.__CAMPISTRY_SUPABASE__;
@@ -38,18 +86,40 @@
                 ok = !!(session && session.access_token && (!expiresAt || expiresAt * 1000 > Date.now()));
             }
         }
-        if (!ok) {
-            var campId = '';
-            try { campId = localStorage.getItem('campistry_pos_last_camp') || ''; } catch (e) {}
-            window.location.replace('/login' + (campId ? ('?camp=' + encodeURIComponent(campId)) : ''));
-        }
-    } catch (e) {
-        window.location.replace('/login');
-    }
+        if (ok) document.documentElement.classList.remove('pos-locked');
+    } catch (e) { /* stay locked */ }
 })();
 </script>
 </head>
 <body>
+
+<!-- PIN LOGIN OVERLAY — covers the register until a real session exists.
+     Lives on this same page (no separate login page/route): the register
+     itself is what a runner sees the moment the right PIN is entered. -->
+<div id="pinOverlay">
+    <div class="pin-card">
+        <div class="pin-brand">
+            <img src="Campistry_logo.png" alt="Campistry">
+            <div class="pin-brand-title">Snacks — Register Login</div>
+            <div class="pin-brand-sub" id="pinCampHint">Enter the register PIN to open the selling console.</div>
+        </div>
+
+        <div id="pinForm">
+            <label for="pinInputEl">Register PIN</label>
+            <input type="password" inputmode="numeric" pattern="[0-9]*" maxlength="8" id="pinInputEl" autocomplete="off">
+            <div class="pin-err" id="pinErrBox"></div>
+            <button id="pinSubmitBtn">Unlock Register</button>
+        </div>
+
+        <div class="pin-setup" id="pinNoCampBox">
+            This device isn't linked to a camp yet. Ask the office for the
+            register link from the Manager Dashboard's Settings page.
+        </div>
+
+        <div class="pin-foot">Only for staff running the canteen register.</div>
+    </div>
+</div>
+
 <div class="app">
 
 <!-- TOPBAR — standalone selling console: no links back into the rest of
@@ -111,24 +181,104 @@
 </div>
 <div class="toast" id="toast"></div>
 
-<script src="supabase-js@2.js?v=20260901-14"></script>
-<script src="supabase_client.js?v=20260901-14"></script>
-<script src="campistry_cloud_bootstrap.js?v=20260901-14"></script>
-<script src="campistry_payments.js?v=20260901-14"></script>
-<script src="campistry_snacks_cash.js?v=20260901-14"></script>
-<script src="campistry_snacks_pos.js?v=20260901-14"></script>
+<script src="supabase-js@2.js?v=20260901-15"></script>
+<script src="supabase_client.js?v=20260901-15"></script>
+<script src="campistry_cloud_bootstrap.js?v=20260901-15"></script>
+<script src="campistry_payments.js?v=20260901-15"></script>
+<script src="campistry_snacks_cash.js?v=20260901-15"></script>
+<script src="campistry_snacks_pos.js?v=20260901-15"></script>
 <script>
 // Re-render POS when cloud data arrives
 window.addEventListener('campistry-cloud-hydrated', function(){
     if (window.CampistrySnacksPOS) window.CampistrySnacksPOS.reinit();
 });
 </script>
-<script src="campistry_notes_quick.js?v=20260901-14"></script>
+<script src="campistry_notes_quick.js?v=20260901-15"></script>
 <script>window.__CAMPISTRY_PRODUCT__='snacks';</script>
 <!-- The POS is its own page, so it declares the section it represents. -->
-<script src="campistry_capabilities.js?v=20260901-14"></script>
-<script src="campistry_access_sections.js?v=20260901-14" data-guard-section="pos"></script>
-<script src="parent_lockout_guard.js?v=20260901-14"></script>
-<script src="product_access_guard.js?v=20260901-14"></script>
+<script src="campistry_capabilities.js?v=20260901-15"></script>
+<script src="campistry_access_sections.js?v=20260901-15" data-guard-section="pos"></script>
+<script src="parent_lockout_guard.js?v=20260901-15"></script>
+<script src="product_access_guard.js?v=20260901-15"></script>
+<script>
+// ── PIN overlay logic — same page as the register, no separate route ──────
+(function () {
+    'use strict';
+
+    function getCampId() {
+        var m = /[?&]camp=([^&]+)/.exec(window.location.search);
+        if (m) return decodeURIComponent(m[1]);
+        try { return localStorage.getItem('campistry_pos_last_camp') || ''; } catch (e) { return ''; }
+    }
+
+    var campId = getCampId();
+    var form = document.getElementById('pinForm');
+    var noCampBox = document.getElementById('pinNoCampBox');
+    var input = document.getElementById('pinInputEl');
+    var errBox = document.getElementById('pinErrBox');
+    var submitBtn = document.getElementById('pinSubmitBtn');
+
+    if (!campId) {
+        form.style.display = 'none';
+        noCampBox.classList.add('show');
+        return;
+    }
+
+    function showErr(msg) { errBox.textContent = msg; errBox.classList.add('show'); }
+    function clearErr() { errBox.classList.remove('show'); errBox.textContent = ''; }
+
+    input.addEventListener('input', function () {
+        this.value = this.value.replace(/[^0-9]/g, '');
+        clearErr();
+    });
+    input.addEventListener('keydown', function (e) { if (e.key === 'Enter') submitPin(); });
+
+    // supabase-js's functions.invoke() collapses every non-2xx response into
+    // a generic error — the real { error: "..." } body pos-pin-login returns
+    // lives on res.error.context instead. Same unwrap pattern used elsewhere
+    // in this app (campistry_snacks.js's _edgeFnErrorMessage).
+    function unwrap(res) {
+        var data = res && res.data;
+        if (data && (data.access_token || data.error)) return Promise.resolve(data);
+        var err = res && res.error;
+        if (err && err.context && typeof err.context.json === 'function') {
+            return err.context.json().catch(function () { return { error: (err && err.message) || 'Could not log in.' }; });
+        }
+        return Promise.resolve({ error: (err && err.message) || 'Could not log in.' });
+    }
+
+    function submitPin() {
+        var db = window.CampistryDB;
+        var client = db && db.getClient && db.getClient();
+        if (!client) { showErr('Not ready yet — try again in a moment.'); return; }
+        var pin = (input.value || '').trim();
+        if (!pin) { showErr('Enter the PIN.'); return; }
+        clearErr();
+        submitBtn.disabled = true;
+        submitBtn.textContent = 'Checking…';
+
+        client.functions.invoke('pos-pin-login', { body: { campId: campId, pin: pin } })
+            .then(unwrap)
+            .then(function (data) {
+                if (!data || !data.access_token) throw new Error((data && data.error) || 'Could not log in.');
+                return client.auth.setSession({ access_token: data.access_token, refresh_token: data.refresh_token })
+                    .then(function () {
+                        try { localStorage.setItem('campistry_pos_last_camp', campId); } catch (e) {}
+                        window.location.reload();
+                    });
+            })
+            .catch(function (e) {
+                submitBtn.disabled = false;
+                submitBtn.textContent = 'Unlock Register';
+                input.value = '';
+                input.focus();
+                showErr((e && e.message) || 'Could not log in. Try again.');
+            });
+    }
+
+    submitBtn.addEventListener('click', submitPin);
+    if (document.documentElement.classList.contains('pos-locked')) input.focus();
+})();
+</script>
 </body>
 </html>
