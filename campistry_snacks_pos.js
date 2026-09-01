@@ -124,9 +124,18 @@ function _cloudUpsertSnacks(data) {
         if (!db || !db.client) return;
         const campId = db.getCampId && db.getCampId();
         if (!campId) return;
+        // .select() forces Postgrest to report which rows the write actually
+        // touched — without it, a row-level-security policy that silently
+        // excludes this write (no matching role/key) comes back as a plain
+        // success with 0 rows changed, and a sale never reaches the cloud
+        // with nothing in the console or on screen to say so.
         db.client.from('camp_state_kv')
             .upsert({ camp_id: campId, key: 'campistrySnacks', value: data, updated_at: new Date().toISOString() }, { onConflict: 'camp_id,key' })
-            .then(res => { if (res.error) console.warn('[Snacks POS] Cloud save failed:', res.error.message); });
+            .select('camp_id')
+            .then(res => {
+                if (res.error) { console.warn('[Snacks POS] Cloud save failed:', res.error.message); toast('Sale saved locally, but didn’t reach the cloud — tell the office', true); return; }
+                if (!res.data || !res.data.length) { console.warn('[Snacks POS] Cloud save silently blocked (0 rows) — check camp_state_kv RLS for this account’s role.'); toast('Sale saved locally, but didn’t reach the cloud — tell the office', true); }
+            });
     } catch (e) { console.warn('[Snacks POS] Cloud save error:', e); }
 }
 
