@@ -350,10 +350,10 @@ function renderStats() {
     document.getElementById('sB').textContent = '$' + totalBal.toFixed(0);
     document.getElementById('sI').textContent = snacks.inventory.filter(i => i.stock > 0).length;
     // Sales = purchases only. A cash withdrawal moves money out of the account
-    // without selling anything, so counting it as revenue would overstate the
-    // day's take.
+    // without selling anything, and a deposit refund reverses money that was
+    // never a sale in the first place — neither should count as revenue.
     const salesToday = (snacks.transactions || [])
-        .filter(t => t.date === todayStr() && t.type !== 'credit' && t.kind !== 'cash_out')
+        .filter(t => t.date === todayStr() && t.type !== 'credit' && t.kind !== 'cash_out' && t.kind !== 'refund')
         .reduce((s, t) => s + (parseFloat(t.amount) || 0), 0);
     document.getElementById('sS').textContent = '$' + salesToday.toFixed(0);
     const cashEl = document.getElementById('sC');
@@ -431,9 +431,11 @@ function rInventory() {
 function rAnalytics() {
     const todayTx = (snacks.transactions || []).filter(t => t.date === todayStr());
     // Revenue and the "avg transaction" metric are about SALES. Deposits
-    // (credits) and cash withdrawals both move money but sell nothing, so they
-    // are excluded from both the total and the count that divides it.
-    const saleTx = todayTx.filter(t => t.type !== 'credit' && t.kind !== 'cash_out');
+    // (credits), cash withdrawals, and deposit refunds all move money but
+    // sell nothing — a refund is a debit (money leaving the camp's ledger
+    // back to the parent, same sign as a purchase) but it's the opposite of
+    // a sale, so it has to be excluded here just like credits/cash-outs are.
+    const saleTx = todayTx.filter(t => t.type !== 'credit' && t.kind !== 'cash_out' && t.kind !== 'refund');
     const sal = saleTx.reduce((s, t) => s + (parseFloat(t.amount) || 0), 0);
     const tc = saleTx.length;
     const I = snacks.inventory;
@@ -502,9 +504,22 @@ function rAnalytics() {
         }).join('') + '</div>' :
         '<div style="text-align:center;padding:1rem;color:var(--text-muted);font-size:.8rem">Process sales to see hourly patterns</div>';
 
-    // Weekly chart
-    const WK = snacks.weeklyRevenue || [];
-    if (WK.length) {
+    // Weekly chart — computed live from the transaction ledger. snacks.weeklyRevenue
+    // was never actually written by anything (POS/RPC only ever touch accounts/
+    // transactions/inventory), so it stayed permanently empty; derive it the same
+    // way saleTx/salesToday already derive today's numbers instead.
+    const DOW = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
+    const WK = [];
+    for (let i = 6; i >= 0; i--) {
+        const d = new Date();
+        d.setDate(d.getDate() - i);
+        const key = d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0') + '-' + String(d.getDate()).padStart(2, '0');
+        const amt = (snacks.transactions || [])
+            .filter(t => t.date === key && t.type !== 'credit' && t.kind !== 'cash_out' && t.kind !== 'refund')
+            .reduce((s, t) => s + (parseFloat(t.amount) || 0), 0);
+        WK.push({ day: DOW[d.getDay()], amount: Math.round(amt * 100) / 100 });
+    }
+    if (WK.some(d => d.amount > 0)) {
         const mx = Math.max(...WK.map(d => d.amount), 1);
         document.getElementById('wChart').innerHTML = WK.map(d =>
             '<div class="bar-col"><div class="bar-value">$' + d.amount + '</div><div class="bar" style="height:' +
@@ -520,10 +535,12 @@ function rAnalytics() {
         const amt = Math.abs(parseFloat(t.amount) || 0);
         const credit = t.type === 'credit';
         const cashOut = t.kind === 'cash_out';
-        const kind = cashOut ? '<span class="badge badge-amber">Cash out</span>'
+        const refund = t.kind === 'refund';
+        const kind = refund  ? '<span class="badge badge-amber">Refund</span>'
+                   : cashOut ? '<span class="badge badge-amber">Cash out</span>'
                    : credit  ? '<span class="badge badge-green">Deposit</span>'
                              : '<span class="badge badge-neutral">Purchase</span>';
-        const color = credit ? 'var(--green-600)' : cashOut ? 'var(--amber-600)' : 'var(--text-primary)';
+        const color = credit ? 'var(--green-600)' : (cashOut || refund) ? 'var(--amber-600)' : 'var(--text-primary)';
         return '<tr><td style="white-space:nowrap">' + esc(t.time || '') + '</td><td style="font-weight:600">' + esc(t.camper || '') +
             '</td><td>' + esc(t.items || '') + '</td><td>' + kind +
             '</td><td style="font-weight:700;color:' + color + '">' + (credit ? '+' : '−') + '$' + amt.toFixed(2) + '</td></tr>';
