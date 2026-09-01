@@ -240,6 +240,17 @@ function _cloudUpsertSnacks(data) {
 
 let snacks = loadSnacksData();
 let camperList = [];
+// init() runs once immediately on page load (for instant UI, before this
+// page's own cloud hydration has landed) and again after 'campistry-cloud-
+// hydrated' fires with the real data. On that FIRST call the roster/snacks
+// data can be empty or stale — real bug found live: ensureAccountsForRoster()
+// saw an empty pre-hydration roster, deleted every account as "orphaned",
+// and auto-saved that stale snapshot. cloudSaveSnacks's fetch-merge unions
+// transactions/accounts but replaces inventory wholesale, so that one
+// pre-hydration save silently wiped out inventory counters (soldToday/
+// totalSold) a POS register had *just* correctly written to the cloud
+// moments earlier. Block any auto-save until real data has loaded once.
+let _hydratedOnce = false;
 
 function ensureAccountsForRoster() {
     // Create snacks accounts for any campers in the roster that don't have one
@@ -258,7 +269,10 @@ function ensureAccountsForRoster() {
     Object.keys(snacks.accounts).forEach(name => {
         if (!rosterNames.has(name)) { delete snacks.accounts[name]; changed = true; }
     });
-    if (changed) saveSnacksData(snacks);
+    // Guarded by _hydratedOnce — see its declaration for why: saving here
+    // before real cloud data has loaded once can wholesale-overwrite fresh
+    // inventory counters another device just wrote.
+    if (changed && _hydratedOnce) saveSnacksData(snacks);
 }
 
 function getAccount(name) {
@@ -1330,6 +1344,7 @@ window.addEventListener('campistry-cloud-hydrated', function () {
             .map(function (i) { return i.name + ':' + i.soldToday + '/' + i.totalSold; });
         console.log('[Snacks Manager DEBUG] loadSnacksData() returned inventory deltas:', afterSummary);
     } catch (e) {}
+    _hydratedOnce = true;
     init();
 });
 })();
