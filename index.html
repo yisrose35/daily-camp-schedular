@@ -13,8 +13,8 @@
         html:not(.css-ready) body { opacity: 0; }
         html.css-ready body { transition: opacity 0.15s ease; }
     </style>
-    <link rel="stylesheet" href="landing.css?v=20260901-08" onload="document.documentElement.classList.add('css-ready')">
-<link rel="stylesheet" href="mobile-responsive.css?v=20260901-08">
+    <link rel="stylesheet" href="landing.css" onload="document.documentElement.classList.add('css-ready')">
+<link rel="stylesheet" href="mobile-responsive.css">
     <noscript><style>html body { opacity: 1 !important; }</style></noscript>
 </head>
 <body>
@@ -281,26 +281,6 @@
                     <li>Multi-channel delivery</li>
                 </ul>
             </div>
-            <!-- NOTES -->
-            <div class="product-card product-notes">
-                <div class="product-badge coming-soon">Coming Soon</div>
-                <div class="product-icon-wrapper">
-                    <img src="Notes_clean.png" alt="Campistry Notes" class="product-logo-img">
-                </div>
-                <h3 class="product-name">Campistry <span>Notes</span></h3>
-                <p class="product-tagline">Notes, Reminders &amp; Collaboration</p>
-                <p class="product-desc">
-                    Capture ideas, set reminders, and share notes across your entire team. Press Shift+N from anywhere in Campistry to jot something down instantly.
-                </p>
-                <ul class="product-features">
-                    <li>Shift+N quick-capture from any page</li>
-                    <li>Color-coded sticky notes</li>
-                    <li>Pin, tag &amp; organize</li>
-                    <li>Share notes with teammates</li>
-                    <li>Date &amp; time reminders</li>
-                    <li>Trash &amp; restore</li>
-                </ul>
-            </div>
             <!-- LITE -->
             <div class="product-card product-lite">
                 <div class="product-badge coming-soon">Coming Soon</div>
@@ -346,6 +326,26 @@
                 <button class="product-cta disabled" disabled>
                     Coming Soon
                 </button>
+            </div>
+            <!-- NOTES -->
+            <div class="product-card product-notes">
+                <div class="product-badge coming-soon">Coming Soon</div>
+                <div class="product-icon-wrapper">
+                    <img src="Notes_clean.png" alt="Campistry Notes" class="product-logo-img">
+                </div>
+                <h3 class="product-name">Campistry <span>Notes</span></h3>
+                <p class="product-tagline">Notes, Reminders &amp; Collaboration</p>
+                <p class="product-desc">
+                    Capture ideas, set reminders, and share notes across your entire team. Press Shift+N from anywhere in Campistry to jot something down instantly.
+                </p>
+                <ul class="product-features">
+                    <li>Shift+N quick-capture from any page</li>
+                    <li>Color-coded sticky notes</li>
+                    <li>Pin, tag &amp; organize</li>
+                    <li>Share notes with teammates</li>
+                    <li>Date &amp; time reminders</li>
+                    <li>Trash &amp; restore</li>
+                </ul>
             </div>
         </div>
     </section>
@@ -689,24 +689,24 @@
     <!-- SCRIPTS -->
     <!-- ========================================= -->
     
-    <script src="demo_mode.js?v=20260901-08"></script>
-    <script src="config.js?v=20260901-08"></script>
+    <script src="demo_mode.js"></script>
+    <script src="config.js"></script>
     <script>
 if (window.location.protocol === 'file:') {
-    document.write('<script src="supabase-js-local.js?v=20260901-08"><\/script>');
+    document.write('<script src="supabase-js-local.js"><\/script>');
 } else {
     document.write('<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"><\/script>');
 }
 </script>
-    <script src="supabase_client.js?v=20260901-08"></script>
-    <script src="campistry_utils.js?v=20260901-08"></script>
-    <script src="campistry_security.js?v=20260901-08"></script>
-    <script src="landing.js?v=20260901-08"></script>
+    <script src="supabase_client.js"></script>
+    <script src="campistry_utils.js"></script>
+    <script src="campistry_security.js"></script>
+    <script src="landing.js"></script>
     <script>setTimeout(function(){ document.documentElement.classList.add('css-ready'); }, 3000);</script>
     <script>
   window.va = window.va || function () { (window.vaq = window.vaq || []).push(arguments); };
 </script>
-<script defer src="/_vercel/insights/script.js?v=20260901-08"></script>
+<script defer src="/_vercel/insights/script.js"></script>
 <!-- ========================================= -->
 <!-- BUILD YOUR BUNDLE — pricing calculator -->
 <!-- ========================================= -->
