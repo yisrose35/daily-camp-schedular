@@ -26,7 +26,15 @@
 -- SECURITY DEFINER RPC (owner/admin only) or a service-role-only RPC that
 -- only the edge function can call.
 --
--- Idempotent — safe to re-run.
+-- Idempotent — safe to re-run. If you already pasted an earlier version of
+-- this file, paste this one again — CREATE OR REPLACE on every function
+-- means re-running it is a straight upgrade, no data loss. (This revision
+-- fixes a real bug: Supabase installs pgcrypto into the `extensions`
+-- schema, not `public`, so the earlier version's SECURITY DEFINER
+-- functions — whose SET search_path deliberately omits `extensions` for
+-- safety — couldn't see crypt()/gen_salt() and set_camp_pos_pin failed
+-- with "function gen_salt(unknown) does not exist". Fixed by adding
+-- `extensions` to those functions' search_path.)
 -- ============================================================================
 
 CREATE EXTENSION IF NOT EXISTS pgcrypto;
@@ -69,7 +77,7 @@ CREATE OR REPLACE FUNCTION public.set_camp_pos_pin(p_camp_id uuid, p_pin text)
 RETURNS jsonb
 LANGUAGE plpgsql
 SECURITY DEFINER
-SET search_path = public, pg_catalog
+SET search_path = public, extensions, pg_catalog
 AS $$
 DECLARE
     caller     uuid := auth.uid();
@@ -120,7 +128,7 @@ RETURNS jsonb
 LANGUAGE plpgsql
 SECURITY DEFINER
 STABLE
-SET search_path = public, pg_catalog
+SET search_path = public, extensions, pg_catalog
 AS $$
 DECLARE
     caller     uuid := auth.uid();
@@ -168,7 +176,7 @@ CREATE OR REPLACE FUNCTION public.verify_camp_pos_pin(p_camp_id uuid, p_pin text
 RETURNS jsonb
 LANGUAGE plpgsql
 SECURITY DEFINER
-SET search_path = public, pg_catalog
+SET search_path = public, extensions, pg_catalog
 AS $$
 DECLARE
     v_row       camp_pos_credentials%ROWTYPE;
@@ -234,7 +242,7 @@ CREATE OR REPLACE FUNCTION public.set_camp_pos_shadow_account(
 RETURNS jsonb
 LANGUAGE plpgsql
 SECURITY DEFINER
-SET search_path = public, pg_catalog
+SET search_path = public, extensions, pg_catalog
 AS $$
 DECLARE
     v_row camp_pos_credentials%ROWTYPE;
