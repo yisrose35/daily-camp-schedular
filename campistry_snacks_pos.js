@@ -93,14 +93,20 @@ function _reconcileBalances(data) {
 // server-side purchase (submit_canteen_purchase) that hit the cloud after this
 // tab cached its copy — union the transaction ledgers and recompute balances
 // from the union (the ledger is the source of truth).
+function _dbg() { try { console.log.apply(console, ['[Snacks POS DEBUG]'].concat(Array.prototype.slice.call(arguments))); } catch (_) {} }
+function _invSummary(data) { try { return (data.inventory || []).filter(function(i){ return (i.soldToday||0) > 0 || (i.totalSold||0) > 0; }).map(function(i){ return i.name + ':' + i.soldToday + '/' + i.totalSold; }); } catch (_) { return 'n/a'; } }
+
 function cloudSaveSnacks(data) {
+    _dbg('cloudSaveSnacks called, outgoing inventory deltas:', _invSummary(data));
     try {
         const db = window.CampistryDB;
         const client = db && db.getClient ? db.getClient() : (db && db.client);
         const campId = db && db.getCampId && db.getCampId();
-        if (!client || !campId || !client.from) { _cloudUpsertSnacks(data); return; }
+        _dbg('resolved db=', !!db, 'client=', !!client, 'campId=', campId);
+        if (!client || !campId || !client.from) { _dbg('no client/campId — going straight to _cloudUpsertSnacks fallback'); _cloudUpsertSnacks(data); return; }
         client.from('camp_state_kv').select('value').eq('camp_id', campId).eq('key', 'campistrySnacks').maybeSingle()
             .then(function(res) {
+                _dbg('cloud SELECT result: error=', res && res.error, 'hasValue=', !!(res && res.data && res.data.value));
                 var cloud = (res && res.data && res.data.value) || null;
                 var merged = data;
                 if (cloud && typeof cloud === 'object') {
@@ -111,19 +117,21 @@ function cloudSaveSnacks(data) {
                     merged.transactions = tx;
                     _reconcileBalances(merged);
                 }
+                _dbg('about to upsert merged inventory deltas:', _invSummary(merged));
                 _cloudUpsertSnacks(merged);
                 try { var g = JSON.parse(localStorage.getItem(STORE_KEY) || '{}'); g.campistrySnacks = merged; localStorage.setItem(STORE_KEY, JSON.stringify(g)); } catch (_) {}
                 snacks = merged;
-            }, function() { _cloudUpsertSnacks(data); });
-    } catch (e) { console.warn('[Snacks POS] Cloud save error:', e); _cloudUpsertSnacks(data); }
+            }, function(err) { _dbg('cloud SELECT rejected:', err); _cloudUpsertSnacks(data); });
+    } catch (e) { console.warn('[Snacks POS] Cloud save error:', e); _dbg('cloudSaveSnacks threw synchronously:', e); _cloudUpsertSnacks(data); }
 }
 function _cloudUpsertSnacks(data) {
-    if (window.saveGlobalSettings && window.saveGlobalSettings._isAuthoritativeHandler) { window.saveGlobalSettings('campistrySnacks', data); return; }
+    if (window.saveGlobalSettings && window.saveGlobalSettings._isAuthoritativeHandler) { _dbg('routed through window.saveGlobalSettings authoritative handler instead of direct upsert'); window.saveGlobalSettings('campistrySnacks', data); return; }
     try {
         const db = window.CampistryDB;
-        if (!db || !db.client) return;
+        if (!db || !db.client) { _dbg('_cloudUpsertSnacks bailed: db=', !!db, 'db.client=', !!(db && db.client)); return; }
         const campId = db.getCampId && db.getCampId();
-        if (!campId) return;
+        if (!campId) { _dbg('_cloudUpsertSnacks bailed: no campId'); return; }
+        _dbg('sending upsert for camp', campId, 'inventory deltas:', _invSummary(data));
         // .select() forces Postgrest to report which rows the write actually
         // touched — without it, a row-level-security policy that silently
         // excludes this write (no matching role/key) comes back as a plain
@@ -133,9 +141,10 @@ function _cloudUpsertSnacks(data) {
             .upsert({ camp_id: campId, key: 'campistrySnacks', value: data, updated_at: new Date().toISOString() }, { onConflict: 'camp_id,key' })
             .select('camp_id')
             .then(res => {
+                _dbg('upsert response: error=', res.error, 'rowsReturned=', res.data && res.data.length);
                 if (res.error) { console.warn('[Snacks POS] Cloud save failed:', res.error.message); toast('Sale saved locally, but didn’t reach the cloud — tell the office', true); return; }
                 if (!res.data || !res.data.length) { console.warn('[Snacks POS] Cloud save silently blocked (0 rows) — check camp_state_kv RLS for this account’s role.'); toast('Sale saved locally, but didn’t reach the cloud — tell the office', true); }
-            });
+            }, err => { _dbg('upsert PROMISE REJECTED (not the normal .then error path):', err); console.warn('[Snacks POS] Cloud save threw:', err); toast('Sale saved locally, but didn’t reach the cloud — tell the office', true); });
     } catch (e) { console.warn('[Snacks POS] Cloud save error:', e); }
 }
 

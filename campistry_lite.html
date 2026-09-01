@@ -23,8 +23,8 @@
          one. Mirrors colorSchemePref() in campistry_lite.js. -->
     <script>(function(){try{var p=JSON.parse(localStorage.getItem('campistry_lite_prefs')||'{}');var c=p.colorScheme||'auto';var r=document.documentElement;if(c!=='auto')r.setAttribute('data-theme',c);r.style.colorScheme=c==='auto'?'light dark':c;}catch(e){}})();</script>
     <style>html:not(.css-ready) body { opacity: 0; } html.css-ready body { transition: opacity 0.15s ease; }</style>
-    <link rel="stylesheet" href="campistry-unified.css?v=20260901-09">
-    <link rel="stylesheet" href="campistry_lite.css?v=20260901-09" onload="document.documentElement.classList.add('css-ready')">
+    <link rel="stylesheet" href="campistry-unified.css?v=20260901-10">
+    <link rel="stylesheet" href="campistry_lite.css?v=20260901-10" onload="document.documentElement.classList.add('css-ready')">
     <noscript><style>html body { opacity: 1 !important; }</style></noscript>
 </head>
 <body>
@@ -128,7 +128,7 @@
     <div id="litePickupAlerts" class="lite-pickup-alerts"></div>
 
     <!-- ===== Core stack (order matters: config → SDK → client → RBAC → data) ===== -->
-    <script src="config.js?v=20260901-09"></script>
+    <script src="config.js?v=20260901-10"></script>
     <script>
         // Non-blocking SDK loader (same pattern as flow.html): load the Supabase
         // SDK, then supabase_client.js in its onload so init order is guaranteed.
