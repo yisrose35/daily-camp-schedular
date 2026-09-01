@@ -51,9 +51,17 @@ button { font-family: inherit; cursor: pointer; border: none; background: none; 
 .topbar { grid-column: 1/-1; display: flex; align-items: center; justify-content: space-between; padding: 0 1.25rem; height: 56px; background: rgba(255,255,255,.92); border-bottom: 1px solid var(--border); backdrop-filter: blur(12px); box-shadow: var(--shadow-sm); z-index: 10; }
 .topbar-left { display: flex; align-items: center; gap: 12px; }
 .topbar-snacks-logo { height: 30px; width: auto; object-fit: contain; display: block; flex-shrink: 0; }
-.topbar-badge { padding: 3px 10px; font-size: .65rem; font-weight: 700; text-transform: uppercase; letter-spacing: .06em; background: var(--snacks); color: white; border-radius: var(--radius-full); }
+.topbar-badge { padding: 3px 10px; font-size: .65rem; font-weight: 700; text-transform: uppercase; letter-spacing: .06em; background: var(--snacks); color: white; border-radius: var(--radius-full); white-space: nowrap; }
 .topbar-right { display: flex; align-items: center; gap: 12px; }
-.topbar-time { font-size: .8rem; color: var(--text-dim); font-variant-numeric: tabular-nums; font-family: 'DM Mono', ui-monospace, 'SFMono-Regular', Menlo, monospace; }
+.topbar-time { font-size: .8rem; color: var(--text-dim); font-variant-numeric: tabular-nums; font-family: 'DM Mono', ui-monospace, 'SFMono-Regular', Menlo, monospace; white-space: nowrap; flex-shrink: 0; }
+
+/* Camper-panel toggle — only shown once the camper panel becomes a
+   slide-in drawer instead of a fixed column (tablet portrait and below,
+   see the responsive rules at the bottom of this file). */
+.camper-toggle-btn { display: none; align-items: center; justify-content: center; width: 36px; height: 36px; border-radius: var(--radius-sm); border: 1px solid var(--border); background: #fff; color: var(--text-dim); flex-shrink: 0; }
+.camper-toggle-btn:hover { border-color: var(--snacks); color: var(--snacks-dark); background: var(--snacks-50); }
+.camper-backdrop { display: none; position: fixed; inset: 0; top: 56px; background: rgba(2,6,23,.35); z-index: 55; }
+body.camper-open .camper-backdrop { display: block; }
 
 /* === LEFT: Camper Selector === */
 .camper-panel { grid-row: 2; display: flex; flex-direction: column; border-right: 1px solid var(--border); background: var(--bg-panel); }
@@ -79,8 +87,8 @@ button { font-family: inherit; cursor: pointer; border: none; background: none; 
 
 /* === CENTER: Item Grid === */
 .items-panel { grid-row: 2; display: flex; flex-direction: column; overflow: hidden; background: var(--bg); }
-.items-toolbar { display: flex; align-items: center; gap: .5rem; padding: .75rem 1rem; background: var(--bg-panel); border-bottom: 1px solid var(--border); }
-.items-toolbar input { flex: 1; padding: .55rem .75rem; background: var(--bg); border: 1px solid var(--border); border-radius: var(--radius-sm); color: var(--text); font-size: .8125rem; outline: none; }
+.items-toolbar { display: flex; align-items: center; flex-wrap: wrap; gap: .5rem; padding: .75rem 1rem; background: var(--bg-panel); border-bottom: 1px solid var(--border); }
+.items-toolbar input { flex: 1 1 140px; min-width: 100px; padding: .55rem .75rem; background: var(--bg); border: 1px solid var(--border); border-radius: var(--radius-sm); color: var(--text); font-size: .8125rem; outline: none; }
 .items-toolbar input:focus { border-color: var(--snacks); background: #fff; }
 .cat-btn { padding: .4rem .8rem; border-radius: var(--radius-full); font-size: .7rem; font-weight: 600; background: var(--bg); color: var(--text-dim); border: 1px solid var(--border); transition: all .12s; }
 .cat-btn:hover { background: var(--snacks-50); border-color: var(--snacks-200); color: var(--snacks-dark); }
@@ -157,6 +165,69 @@ button { font-family: inherit; cursor: pointer; border: none; background: none; 
 @keyframes successFlash { 0% { background: var(--snacks-50); } 100% { background: transparent; } }
 .flash { animation: successFlash .6s var(--ease); }
 
-/* Responsive */
-@media (max-width: 900px) { .app { grid-template-columns: 1fr 300px; } .camper-panel { display: none; } }
-@media (max-width: 600px) { .app { grid-template-columns: 1fr; grid-template-rows: auto 1fr auto; } .cart-panel { max-height: 40vh; border-left: none; border-top: 1px solid var(--border); } }
+/* =============================================================================
+   RESPONSIVE — this runs on whatever's at the register: a desktop, a laptop,
+   or a counselor's iPad/Android tablet of any size, portrait or landscape.
+   Two independent axes:
+     1. WIDTH tiers control the grid layout (how many columns, whether the
+        camper panel is a fixed column or a slide-in drawer).
+     2. `pointer: coarse` controls touch-target sizing everywhere a finger
+        (not a mouse) is doing the tapping — this fires on a touchscreen at
+        ANY width, including a large iPad Pro landscape that's wide enough
+        to still get the full 3-column desktop layout.
+   ============================================================================= */
+
+/* Small laptop / tablet landscape (iPad landscape is 1024-1366px) —
+   still 3 columns, just narrower side panels so more of the item grid
+   is visible. */
+@media (max-width: 1180px) {
+    .app { grid-template-columns: 230px 1fr 300px; }
+}
+
+/* Tablet portrait (iPad portrait is 768-1024px) and phones — the camper
+   panel no longer fits as a fixed column, so it becomes a slide-in
+   drawer (same open/close pattern as the Manager Dashboard's sidebar)
+   instead of just disappearing with no way to select a camper. */
+@media (max-width: 900px) {
+    .app { grid-template-columns: 1fr 300px; }
+    .camper-toggle-btn { display: flex; }
+    .camper-panel {
+        position: fixed; top: 56px; left: 0; bottom: 0; width: 300px;
+        z-index: 60; box-shadow: var(--shadow-md);
+        transform: translateX(-100%);
+        transition: transform .25s var(--ease);
+    }
+    body.camper-open .camper-panel { transform: translateX(0); }
+}
+
+/* Phone-width — cart moves below the item grid instead of beside it.
+   .items-panel/.cart-panel both hardcode grid-row:2 in the base 3-column
+   layout — with only 1 column left here (the camper panel's already a
+   drawer, out of grid flow) they need their OWN distinct rows or the
+   grid auto-placement algorithm shoves them into new implicit COLUMNS
+   instead of stacking, silently reproducing the side-by-side layout this
+   breakpoint exists to replace. */
+@media (max-width: 620px) {
+    .app { grid-template-columns: 1fr; grid-template-rows: auto 1fr auto; }
+    .items-panel { grid-row: 2; grid-column: 1; }
+    .cart-panel { grid-row: 3; grid-column: 1; max-height: 42vh; border-left: none; border-top: 1px solid var(--border); }
+    .topbar { padding: 0 .75rem; gap: .5rem; }
+    .topbar-left { gap: 8px; }
+    .topbar-snacks-logo { height: 24px; }
+    .topbar-badge { padding: 2px 8px; font-size: .6rem; }
+    .topbar-time { font-size: .7rem; }
+}
+
+/* Touch targets — bumped up on any touchscreen (tablet or touch-laptop),
+   independent of screen width, so nothing depends on precise mouse
+   pointing at a register counselors are tapping all day. */
+@media (pointer: coarse) {
+    .camper-item { padding: .8rem .85rem; }
+    .cat-btn { padding: .55rem 1rem; font-size: .78rem; }
+    .item-tile { padding: .85rem .6rem; }
+    .cart-line { padding: .75rem 0; }
+    .cart-line-qty button { width: 34px; height: 34px; font-size: .85rem; border-radius: 8px; }
+    .cart-line-qty span { min-width: 24px; }
+    .charge-btn { padding: 1.05rem; font-size: 1.05rem; }
+    .camper-toggle-btn { width: 40px; height: 40px; }
+}

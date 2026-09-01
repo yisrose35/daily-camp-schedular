@@ -416,7 +416,7 @@ function rInventory() {
             '</td><td><span class="badge badge-neutral">' + i.cat + '</span></td><td style="font-weight:600">$' + i.price.toFixed(2) +
             '</td><td style="font-weight:600;color:' + (i.stock === 0 ? 'var(--red-600)' : i.stock <= 10 ? 'var(--amber-600)' : 'var(--text-primary)') +
             '">' + i.stock + '</td><td>' + (i.soldToday || 0) + '</td><td>' + (i.totalSold || 0) + '</td><td>' + st +
-            '</td><td><button class="btn btn-sm btn-secondary">Edit</button></td></tr>';
+            '</td><td><button class="btn btn-sm btn-secondary" onclick="openEditItem(' + i.id + ')">Edit</button></td></tr>';
     }).join('');
 }
 
@@ -996,21 +996,71 @@ window.setLimit = function() {
     toast('Limit set to $' + amt.toFixed(2) + ' for ' + name);
 };
 
-window.addItem = function() {
-    if (!_secEdit('menu', 'Adding an item')) return;
+// _editingItemId is null while the modal is in "Add Item" mode, or the id
+// of the item being edited when opened via openEditItem(). Both open the
+// same modal/form — saveItem() branches on this instead of duplicating it.
+let _editingItemId = null;
+
+window.openAddItem = function() {
+    _editingItemId = null;
+    ['niName', 'niBarcode', 'niEmoji', 'niPrice', 'niStock'].forEach(id => { const el = document.getElementById(id); if (el) el.value = ''; });
+    document.getElementById('niCat').value = 'snack';
+    document.getElementById('itemModalTitle').textContent = 'Add Item';
+    document.getElementById('itemSaveBtn').textContent = 'Add Item';
+    openM('item');
+};
+
+window.openEditItem = function(id) {
+    if (!_secEdit('menu', 'Editing an item')) return;
+    const item = snacks.inventory.find(i => i.id === id);
+    if (!item) return;
+    _editingItemId = id;
+    document.getElementById('niName').value = item.name;
+    document.getElementById('niBarcode').value = item.barcode || '';
+    document.getElementById('niCat').value = item.cat;
+    document.getElementById('niEmoji').value = item.emoji;
+    document.getElementById('niPrice').value = item.price;
+    document.getElementById('niStock').value = item.stock;
+    document.getElementById('itemModalTitle').textContent = 'Edit Item';
+    document.getElementById('itemSaveBtn').textContent = 'Save Changes';
+    openM('item');
+};
+
+window.saveItem = function() {
+    if (!_secEdit('menu', _editingItemId ? 'Editing an item' : 'Adding an item')) return;
     const name = document.getElementById('niName').value.trim();
+    const barcode = document.getElementById('niBarcode').value.trim();
     const cat = document.getElementById('niCat').value;
     const emoji = document.getElementById('niEmoji').value.trim() || '📦';
     const price = parseFloat(document.getElementById('niPrice').value);
     const stock = parseInt(document.getElementById('niStock').value) || 0;
     if (!name || !price) { toast('Fill required fields', 1); return; }
-    const maxId = snacks.inventory.reduce((m, i) => Math.max(m, i.id || 0), 0);
-    snacks.inventory.push({ id: maxId + 1, name, cat, emoji, price, stock, soldToday: 0, totalSold: 0 });
-    saveSnacksData(snacks);
-    closeM('item');
-    rInventory(); renderStats(); rAnalytics();
-    toast('Added ' + emoji + ' ' + name);
-    ['niName', 'niEmoji', 'niPrice', 'niStock'].forEach(id => document.getElementById(id).value = '');
+    if (barcode && snacks.inventory.some(i => i.barcode === barcode && i.id !== _editingItemId)) {
+        toast('That barcode is already assigned to another item', 1);
+        return;
+    }
+
+    if (_editingItemId) {
+        const item = snacks.inventory.find(i => i.id === _editingItemId);
+        if (!item) return;
+        item.name = name; item.cat = cat; item.emoji = emoji; item.price = price; item.stock = stock;
+        if (barcode) item.barcode = barcode; else delete item.barcode;
+        saveSnacksData(snacks);
+        closeM('item');
+        rInventory(); renderStats(); rAnalytics();
+        toast('Updated ' + emoji + ' ' + name);
+    } else {
+        const maxId = snacks.inventory.reduce((m, i) => Math.max(m, i.id || 0), 0);
+        const newItem = { id: maxId + 1, name, cat, emoji, price, stock, soldToday: 0, totalSold: 0 };
+        if (barcode) newItem.barcode = barcode;
+        snacks.inventory.push(newItem);
+        saveSnacksData(snacks);
+        closeM('item');
+        rInventory(); renderStats(); rAnalytics();
+        toast('Added ' + emoji + ' ' + name);
+    }
+    _editingItemId = null;
+    ['niName', 'niBarcode', 'niEmoji', 'niPrice', 'niStock'].forEach(id => document.getElementById(id).value = '');
 };
 
 window.restock = function() {

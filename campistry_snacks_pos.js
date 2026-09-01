@@ -218,6 +218,19 @@ window.pickCamper = function(name) {
     renderCampers();
     updateCamperBar();
     updateChargeBtn();
+    // On tablet/phone widths the camper panel is a slide-in drawer (see
+    // campistry_snacks_pos.css) — picking a camper is the natural "done"
+    // moment, so close it back to the items+cart view automatically.
+    document.body.classList.remove('camper-open');
+};
+
+// ==========================================================================
+// CAMPER PANEL DRAWER (tablet portrait / phone widths only — a no-op CSS
+// class toggle at desktop/laptop widths where the panel is a fixed column)
+// ==========================================================================
+
+window.toggleCamperPanel = function() {
+    document.body.classList.toggle('camper-open');
 };
 
 function updateCamperBar() {
@@ -408,6 +421,65 @@ window.charge = function() {
 
     localCharge();
 };
+
+// ==========================================================================
+// BARCODE SCANNER SUPPORT
+// A USB/Bluetooth barcode scanner acts as a keyboard — no driver or pairing
+// UI needed beyond what the OS already does for any keyboard. It "types"
+// the scanned code character-by-character, far faster than a human can,
+// then sends Enter. This listens globally (not tied to any one input) so
+// scanning works no matter what's focused, matching how items get their
+// barcode assigned in the Manager Dashboard's Menu Items editor.
+// ==========================================================================
+
+(function() {
+    var buf = '';
+    var lastAt = 0;
+    var MAX_GAP_MS = 50; // scanner keystrokes land well under this; sustained human typing rarely does
+    var MIN_LEN = 3;      // ignore stray 1-2 char "scans"
+
+    document.addEventListener('keydown', function(e) {
+        var now = Date.now();
+        if (e.key === 'Enter') {
+            var code = buf;
+            var looksScanned = code.length >= MIN_LEN && (now - lastAt) <= MAX_GAP_MS;
+            buf = '';
+            if (looksScanned) {
+                var t = e.target;
+                if (t && (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA') && t.value.slice(-code.length) === code) {
+                    // The scan just typed the code (+ Enter) into whatever field
+                    // had focus, usually one of the search boxes — strip it back
+                    // out so it doesn't sit there as a bogus filter.
+                    t.value = t.value.slice(0, -code.length);
+                    if (t.id === 'itemSearch') renderItems();
+                    if (t.id === 'camperSearch') renderCampers();
+                }
+                e.preventDefault();
+                scanBarcode(code);
+            }
+            lastAt = now;
+            return;
+        }
+        // Only plausible barcode characters extend the buffer (covers
+        // Code128/EAN/UPC and QR-as-text). Anything else — Tab, arrows,
+        // modifier keys — resets it without disturbing the gap timing.
+        if (e.key.length === 1 && /[a-zA-Z0-9]/.test(e.key)) {
+            if (now - lastAt > MAX_GAP_MS) buf = '';
+            buf += e.key;
+            lastAt = now;
+        } else if (e.key !== 'Shift') {
+            buf = '';
+        }
+    });
+})();
+
+function scanBarcode(code) {
+    const item = (snacks.inventory || []).find(i => i.barcode && i.barcode === code);
+    if (!item) { toast('Unrecognized barcode: ' + code, true); return; }
+    if (item.stock === 0) { toast(item.emoji + ' ' + item.name + ' is out of stock', true); return; }
+    addItem(item.id);
+    toast('✓ Scanned ' + item.emoji + ' ' + item.name);
+}
 
 // ==========================================================================
 // UTILS
