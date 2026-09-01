@@ -169,6 +169,7 @@ function init() {
         if (!snacks.accounts[c.name]) snacks.accounts[c.name] = { balance: 0, dailyLimit: 10, spentToday: 0 };
     });
 
+    renderCatButtons();
     renderCampers();
     renderItems();
     renderCart();
@@ -248,6 +249,18 @@ function updateCamperBar() {
 
 window.setCat = function(btn, c) { cat = c; document.querySelectorAll('.cat-btn').forEach(b => b.classList.remove('active')); btn.classList.add('active'); renderItems(); };
 
+// Categories are free text (set per item in the Manager Dashboard, or via
+// bulk upload) rather than a fixed enum, so the filter pills are built from
+// whatever's actually in the inventory instead of being hardcoded.
+function renderCatButtons() {
+    const cats = Array.from(new Set((snacks.inventory || []).map(i => i.cat).filter(Boolean))).sort((a, b) => a.localeCompare(b));
+    let html = '<button class="cat-btn' + (cat === 'all' ? ' active' : '') + '" onclick="setCat(this,\'all\')">All</button>';
+    cats.forEach(c => {
+        html += '<button class="cat-btn' + (cat === c ? ' active' : '') + '" onclick="setCat(this,\'' + c.replace(/'/g, "\\'") + '\')">' + esc(c) + '</button>';
+    });
+    document.getElementById('catBtns').innerHTML = html;
+}
+
 window.renderItems = function() {
     const I = snacks.inventory;
     if (!I.length) return;
@@ -257,23 +270,23 @@ window.renderItems = function() {
     const sorted = [...fil].sort((a, b) => (b.totalSold || 0) - (a.totalSold || 0));
     const maxT = Math.max(...I.map(i => i.totalSold || 0), 1);
 
-    // Quick push: top 5 in stock
-    const quick = sorted.filter(i => i.stock > 0).slice(0, 5);
+    // Quick push: top 5 in stock (untracked items — stock == null — always count as "in stock")
+    const quick = sorted.filter(i => i.stock == null || i.stock > 0).slice(0, 5);
     document.getElementById('quickGrid').innerHTML = quick.map((i, idx) => {
         let tier = '';
         if (idx === 0) tier = 'hot';
         else if ((i.totalSold || 0) / maxT > .4) tier = 'warm';
-        const rank = idx < 3 ? '<div class="tile-rank">🔥 #' + (idx + 1) + '</div>' : '';
+        const rank = idx < 3 ? '<div class="tile-rank">#' + (idx + 1) + '</div>' : '';
+        const stockHtml = i.stock == null ? '' : '<div class="tile-stock">' + (i.stock === 0 ? 'OUT' : i.stock + ' left') + '</div>';
         return '<div class="item-tile ' + tier + (i.stock === 0 ? ' out' : '') + '" onclick="addItem(' + i.id + ')">' +
-            rank + '<div class="tile-emoji">' + i.emoji + '</div><div class="tile-name">' + esc(i.name) +
-            '</div><div class="tile-price">$' + i.price.toFixed(2) + '</div><div class="tile-stock">' +
-            (i.stock === 0 ? 'OUT' : i.stock + ' left') + '</div></div>';
+            rank + '<div class="tile-name">' + esc(i.name) +
+            '</div><div class="tile-price">$' + i.price.toFixed(2) + '</div>' + stockHtml + '</div>';
     }).join('') || '<div style="text-align:center;padding:1rem;color:var(--text-muted);font-size:.75rem;grid-column:1/-1">No items in stock</div>';
 
     // All
     document.getElementById('allGrid').innerHTML = sorted.map(i =>
         '<div class="item-tile ' + (i.stock === 0 ? 'out' : '') + '" onclick="addItem(' + i.id + ')">' +
-        '<div class="tile-emoji">' + i.emoji + '</div><div class="tile-name">' + esc(i.name) +
+        '<div class="tile-name">' + esc(i.name) +
         '</div><div class="tile-price">$' + i.price.toFixed(2) + '</div></div>'
     ).join('');
 };
@@ -282,7 +295,8 @@ window.addItem = function(id) {
     const item = snacks.inventory.find(i => i.id === id);
     if (!item || item.stock === 0) return;
     const ex = cart.find(c => c.id === id);
-    if (ex) { if (ex.qty >= item.stock) return; ex.qty++; } else cart.push({ id, qty: 1 });
+    // item.stock == null means untracked — never caps the cart quantity.
+    if (ex) { if (item.stock != null && ex.qty >= item.stock) return; ex.qty++; } else cart.push({ id, qty: 1 });
     renderCart();
 };
 
@@ -315,7 +329,7 @@ function renderCart() {
         const item = snacks.inventory.find(i => i.id === ci.id);
         if (!item) return '';
         const lt = item.price * ci.qty; total += lt;
-        return '<div class="cart-line"><div class="cart-line-info"><div class="cart-line-name">' + item.emoji + ' ' + esc(item.name) +
+        return '<div class="cart-line"><div class="cart-line-info"><div class="cart-line-name">' + esc(item.name) +
             '</div><div class="cart-line-sub">$' + item.price.toFixed(2) + ' ea</div></div>' +
             '<div class="cart-line-qty"><button onclick="changeQty(' + ci.id + ',-1)">−</button><span>' + ci.qty +
             '</span><button onclick="changeQty(' + ci.id + ',1)">+</button></div>' +
@@ -373,7 +387,7 @@ window.charge = function() {
     const finish = () => {
         // Inventory + activity are POS-local; the RPC already logged the debit
         // transaction and the new balance, so we do NOT add a transaction here.
-        cart.forEach(ci => { const item = snacks.inventory.find(i => i.id === ci.id); if (item) { item.stock -= ci.qty; item.soldToday = (item.soldToday || 0) + ci.qty; item.totalSold = (item.totalSold || 0) + ci.qty; } });
+        cart.forEach(ci => { const item = snacks.inventory.find(i => i.id === ci.id); if (item) { if (item.stock != null) item.stock -= ci.qty; item.soldToday = (item.soldToday || 0) + ci.qty; item.totalSold = (item.totalSold || 0) + ci.qty; } });
         if (!snacks.hourlyActivity) snacks.hourlyActivity = {};
         const hr = new Date().getHours(); snacks.hourlyActivity[hr] = (snacks.hourlyActivity[hr] || 0) + 1;
         saveSnacksData(snacks); // fetch-merges: pulls the RPC's debit into the ledger, reconciles balance
@@ -476,9 +490,9 @@ window.charge = function() {
 function scanBarcode(code) {
     const item = (snacks.inventory || []).find(i => i.barcode && i.barcode === code);
     if (!item) { toast('Unrecognized barcode: ' + code, true); return; }
-    if (item.stock === 0) { toast(item.emoji + ' ' + item.name + ' is out of stock', true); return; }
+    if (item.stock === 0) { toast(item.name + ' is out of stock', true); return; }
     addItem(item.id);
-    toast('✓ Scanned ' + item.emoji + ' ' + item.name);
+    toast('✓ Scanned ' + item.name);
 }
 
 // ==========================================================================

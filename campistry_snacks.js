@@ -408,14 +408,18 @@ function rInventory() {
     const I = snacks.inventory;
     document.getElementById('iCount').textContent = I.length + ' items';
     document.getElementById('iBody').innerHTML = I.map(i => {
+        // stock == null means "not tracked" — always sellable, no count to
+        // read as low/out. Only a real number gets the Out/Low/OK badge.
+        const tracked = i.stock != null;
         let st;
-        if (i.stock === 0) st = '<span class="badge badge-red">Out</span>';
+        if (!tracked) st = '<span class="badge badge-neutral">Untracked</span>';
+        else if (i.stock === 0) st = '<span class="badge badge-red">Out</span>';
         else if (i.stock <= 10) st = '<span class="badge badge-amber">Low</span>';
         else st = '<span class="badge badge-green">OK</span>';
-        return '<tr><td style="font-size:1.2rem;text-align:center;width:36px">' + i.emoji + '</td><td style="font-weight:600">' + esc(i.name) +
-            '</td><td><span class="badge badge-neutral">' + i.cat + '</span></td><td style="font-weight:600">$' + i.price.toFixed(2) +
-            '</td><td style="font-weight:600;color:' + (i.stock === 0 ? 'var(--red-600)' : i.stock <= 10 ? 'var(--amber-600)' : 'var(--text-primary)') +
-            '">' + i.stock + '</td><td>' + (i.soldToday || 0) + '</td><td>' + (i.totalSold || 0) + '</td><td>' + st +
+        return '<tr><td style="font-weight:600">' + esc(i.name) +
+            '</td><td><span class="badge badge-neutral">' + esc(i.cat) + '</span></td><td style="font-weight:600">$' + i.price.toFixed(2) +
+            '</td><td style="font-weight:600;color:' + (!tracked ? 'var(--text-muted)' : i.stock === 0 ? 'var(--red-600)' : i.stock <= 10 ? 'var(--amber-600)' : 'var(--text-primary)') +
+            '">' + (tracked ? i.stock : '—') + '</td><td>' + (i.soldToday || 0) + '</td><td>' + (i.totalSold || 0) + '</td><td>' + st +
             '</td><td><button class="btn btn-sm btn-secondary" onclick="openEditItem(' + i.id + ')">Edit</button></td></tr>';
     }).join('');
 }
@@ -434,24 +438,26 @@ function rAnalytics() {
     const tc = saleTx.length;
     const I = snacks.inventory;
     const units = I.reduce((s, i) => s + (i.soldToday || 0), 0);
-    const openStock = I.reduce((s, i) => s + i.stock + (i.soldToday || 0), 0);
+    // Untracked items (stock == null) don't count toward either side of
+    // sell-through — there's no capacity number to measure against.
+    const openStock = I.reduce((s, i) => s + (i.stock != null ? i.stock + (i.soldToday || 0) : 0), 0);
 
     document.getElementById('mRev').textContent = '$' + sal.toFixed(2);
     document.getElementById('mTxn').textContent = tc + ' txns';
     document.getElementById('mAvg').textContent = tc ? '$' + (sal / tc).toFixed(2) : '$0';
     document.getElementById('mUnits').textContent = units;
-    document.getElementById('mLow').textContent = I.filter(i => i.stock <= 10).length;
+    document.getElementById('mLow').textContent = I.filter(i => i.stock != null && i.stock <= 10).length;
     document.getElementById('mST').textContent = (openStock ? Math.round(units / openStock * 100) : 0) + '%';
 
     const top = [...I].sort((a, b) => (b.soldToday || 0) - (a.soldToday || 0))[0];
-    document.getElementById('mTop').textContent = top ? top.emoji + ' ' + top.name : '—';
+    document.getElementById('mTop').textContent = top ? top.name : '—';
     document.getElementById('mTopN').textContent = top ? (top.soldToday || 0) + ' today · ' + (top.totalSold || 0) + ' all-time' : '';
 
     // Popularity
     const ranked = [...I].sort((a, b) => (b.totalSold || 0) - (a.totalSold || 0));
     const maxT = ranked[0]?.totalSold || 1;
     document.getElementById('popList').innerHTML = ranked.length ? ranked.map((i, x) =>
-        '<div class="rank-item"><div class="rank-pos">' + (x + 1) + '</div><div class="rank-emoji">' + i.emoji +
+        '<div class="rank-item"><div class="rank-pos">' + (x + 1) +
         '</div><div class="rank-info"><div class="rank-name">' + esc(i.name) +
         '</div><div class="rank-bar-track"><div class="rank-bar-fill" style="width:' + Math.round((i.totalSold || 0) / maxT * 100) +
         '%"></div></div></div><div style="text-align:right"><div class="rank-count">' + (i.totalSold || 0) +
@@ -622,7 +628,7 @@ function popSelects() {
 
     const s3 = document.getElementById('rItem');
     if (s3) s3.innerHTML = '<option value="">— Select —</option>' + snacks.inventory.map(i =>
-        '<option value="' + i.id + '">' + i.emoji + ' ' + esc(i.name) + ' (' + i.stock + ' in stock)</option>'
+        '<option value="' + i.id + '">' + esc(i.name) + (i.stock == null ? '' : ' (' + i.stock + ' in stock)') + '</option>'
     ).join('');
 
     // Deposit methods come from Settings — debit is never in this list.
@@ -1001,10 +1007,37 @@ window.setLimit = function() {
 // same modal/form — saveItem() branches on this instead of duplicating it.
 let _editingItemId = null;
 
+// Category is free text, not a fixed enum — offices can create their own
+// categories (e.g. "Merch", "Candy") on top of the Snack/Drink/Treat
+// starting suggestions. The datalist is just autocomplete; any string typed
+// is accepted, both here and in the bulk upload template.
+function _refreshCatSuggestions() {
+    const dl = document.getElementById('niCatList');
+    if (!dl) return;
+    const seen = new Set();
+    const cats = [];
+    ['Snack', 'Drink', 'Treat'].concat(snacks.inventory.map(i => i.cat).filter(Boolean)).forEach(c => {
+        const key = c.toLowerCase();
+        if (!seen.has(key)) { seen.add(key); cats.push(c); }
+    });
+    dl.innerHTML = cats.map(c => '<option value="' + esc(c) + '">').join('');
+}
+
+// Stock is optional — blank means "not tracked" (always sellable, no count
+// shown), not zero (which would read as out-of-stock). Stored as `null`
+// rather than omitted so every read site has one consistent check
+// (`item.stock == null`) instead of guessing at a missing key.
+function _readStockField(id) {
+    const raw = document.getElementById(id).value.trim();
+    if (raw === '') return null;
+    const n = parseInt(raw);
+    return isNaN(n) ? null : n;
+}
+
 window.openAddItem = function() {
     _editingItemId = null;
-    ['niName', 'niBarcode', 'niEmoji', 'niPrice', 'niStock'].forEach(id => { const el = document.getElementById(id); if (el) el.value = ''; });
-    document.getElementById('niCat').value = 'snack';
+    ['niName', 'niBarcode', 'niCat', 'niPrice', 'niStock'].forEach(id => { const el = document.getElementById(id); if (el) el.value = ''; });
+    _refreshCatSuggestions();
     document.getElementById('itemModalTitle').textContent = 'Add Item';
     document.getElementById('itemSaveBtn').textContent = 'Add Item';
     openM('item');
@@ -1015,12 +1048,12 @@ window.openEditItem = function(id) {
     const item = snacks.inventory.find(i => i.id === id);
     if (!item) return;
     _editingItemId = id;
+    _refreshCatSuggestions();
     document.getElementById('niName').value = item.name;
     document.getElementById('niBarcode').value = item.barcode || '';
     document.getElementById('niCat').value = item.cat;
-    document.getElementById('niEmoji').value = item.emoji;
     document.getElementById('niPrice').value = item.price;
-    document.getElementById('niStock').value = item.stock;
+    document.getElementById('niStock').value = item.stock == null ? '' : item.stock;
     document.getElementById('itemModalTitle').textContent = 'Edit Item';
     document.getElementById('itemSaveBtn').textContent = 'Save Changes';
     openM('item');
@@ -1030,11 +1063,10 @@ window.saveItem = function() {
     if (!_secEdit('menu', _editingItemId ? 'Editing an item' : 'Adding an item')) return;
     const name = document.getElementById('niName').value.trim();
     const barcode = document.getElementById('niBarcode').value.trim();
-    const cat = document.getElementById('niCat').value;
-    const emoji = document.getElementById('niEmoji').value.trim() || '📦';
+    const cat = document.getElementById('niCat').value.trim();
     const price = parseFloat(document.getElementById('niPrice').value);
-    const stock = parseInt(document.getElementById('niStock').value) || 0;
-    if (!name || !price) { toast('Fill required fields', 1); return; }
+    const stock = _readStockField('niStock');
+    if (!name || !price || !cat) { toast('Fill required fields', 1); return; }
     if (barcode && snacks.inventory.some(i => i.barcode === barcode && i.id !== _editingItemId)) {
         toast('That barcode is already assigned to another item', 1);
         return;
@@ -1043,24 +1075,26 @@ window.saveItem = function() {
     if (_editingItemId) {
         const item = snacks.inventory.find(i => i.id === _editingItemId);
         if (!item) return;
-        item.name = name; item.cat = cat; item.emoji = emoji; item.price = price; item.stock = stock;
+        item.name = name; item.cat = cat; item.price = price;
+        if (stock == null) delete item.stock; else item.stock = stock;
         if (barcode) item.barcode = barcode; else delete item.barcode;
         saveSnacksData(snacks);
         closeM('item');
         rInventory(); renderStats(); rAnalytics();
-        toast('Updated ' + emoji + ' ' + name);
+        toast('Updated ' + name);
     } else {
         const maxId = snacks.inventory.reduce((m, i) => Math.max(m, i.id || 0), 0);
-        const newItem = { id: maxId + 1, name, cat, emoji, price, stock, soldToday: 0, totalSold: 0 };
+        const newItem = { id: maxId + 1, name, cat, price, soldToday: 0, totalSold: 0 };
+        if (stock != null) newItem.stock = stock;
         if (barcode) newItem.barcode = barcode;
         snacks.inventory.push(newItem);
         saveSnacksData(snacks);
         closeM('item');
         rInventory(); renderStats(); rAnalytics();
-        toast('Added ' + emoji + ' ' + name);
+        toast('Added ' + name);
     }
     _editingItemId = null;
-    ['niName', 'niBarcode', 'niEmoji', 'niPrice', 'niStock'].forEach(id => document.getElementById(id).value = '');
+    ['niName', 'niBarcode', 'niCat', 'niPrice', 'niStock'].forEach(id => document.getElementById(id).value = '');
 };
 
 window.restock = function() {
@@ -1070,11 +1104,145 @@ window.restock = function() {
     if (!iid || !qty) { toast('Select item and quantity', 1); return; }
     const item = snacks.inventory.find(i => i.id === iid);
     if (!item) return;
-    item.stock += qty;
+    // Restocking an untracked (stock: null) item starts tracking it from 0.
+    item.stock = (item.stock || 0) + qty;
     saveSnacksData(snacks);
     closeM('restock');
     rInventory(); renderStats(); rAnalytics();
-    toast('Restocked ' + item.emoji + ' ' + item.name + ' +' + qty);
+    toast('Restocked ' + item.name + ' +' + qty);
+};
+
+// ==========================================================================
+// BULK UPLOAD — Excel/CSV import for menu items (Name, Category, Price,
+// Stock). Matches by name (case-insensitive) to decide add vs. update, so
+// re-uploading the same sheet after editing prices is safe and idempotent.
+// ==========================================================================
+
+let _uploadParsedRows = null;
+
+window.openUploadModal = function() {
+    if (!_secEdit('menu', 'Uploading items')) return;
+    document.getElementById('uploadFile').value = '';
+    document.getElementById('uploadPreview').innerHTML = '';
+    document.getElementById('uploadConfirmBtn').disabled = true;
+    _uploadParsedRows = null;
+    openM('upload');
+};
+
+window.downloadItemTemplate = function() {
+    const ws = XLSX.utils.aoa_to_sheet([
+        ['Name', 'Category', 'Price', 'Stock'],
+        ['Gatorade', 'Drink', 2, 100],
+        ['Chips', 'Snack', 1.5, ''],
+        ['Candy Bar', 'Custom', 1, ''],
+    ]);
+    const wb = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(wb, ws, 'Items');
+    XLSX.writeFile(wb, 'campistry-menu-items-template.xlsx');
+};
+
+window.handleUploadFile = function(input) {
+    const file = input.files && input.files[0];
+    if (!file) return;
+    const reader = new FileReader();
+    reader.onload = function(e) {
+        try {
+            const wb = XLSX.read(e.target.result, { type: 'array' });
+            const ws = wb.Sheets[wb.SheetNames[0]];
+            const rows = XLSX.utils.sheet_to_json(ws, { header: 1, raw: true, defval: '' });
+            _processUploadRows(rows);
+        } catch (err) {
+            toast('Could not read that file — make sure it\'s a valid Excel or CSV file', 1);
+        }
+    };
+    reader.readAsArrayBuffer(file);
+};
+
+function _processUploadRows(rows) {
+    // Skip a header row if the first cell reads like "Name".
+    let startIdx = 0;
+    if (rows.length && String(rows[0][0] || '').trim().toLowerCase() === 'name') startIdx = 1;
+
+    const parsed = [];
+    for (let r = startIdx; r < rows.length; r++) {
+        const row = rows[r];
+        if (!row || !row.length || row.every(c => c === '' || c == null)) continue;
+        const name = String(row[0] || '').trim();
+        const cat = String(row[1] || '').trim();
+        const priceRaw = row[2];
+        const stockRaw = row[3];
+
+        let error = null;
+        if (!name) error = 'Missing name';
+        if (!error && !cat) error = 'Missing category';
+        const price = parseFloat(priceRaw);
+        if (!error && (isNaN(price) || price <= 0)) error = 'Invalid price';
+        let stock = null;
+        if (stockRaw !== '' && stockRaw != null) {
+            const n = parseInt(stockRaw);
+            stock = isNaN(n) ? null : n;
+        }
+
+        const existing = snacks.inventory.find(i => i.name.toLowerCase() === name.toLowerCase());
+        parsed.push({
+            row: r + 1, name, cat, price, stock, error,
+            action: error ? 'error' : (existing ? 'update' : 'add'),
+            existingId: existing ? existing.id : null,
+        });
+    }
+    _uploadParsedRows = parsed;
+    _renderUploadPreview(parsed);
+}
+
+function _renderUploadPreview(parsed) {
+    if (!parsed.length) {
+        document.getElementById('uploadPreview').innerHTML = '<div style="text-align:center;padding:1.5rem;color:var(--text-muted)">No rows found in that file.</div>';
+        document.getElementById('uploadConfirmBtn').disabled = true;
+        return;
+    }
+    const errs = parsed.filter(r => r.error).length;
+    const adds = parsed.filter(r => r.action === 'add').length;
+    const upds = parsed.filter(r => r.action === 'update').length;
+    const rowsHtml = parsed.map(r => {
+        const statusHtml = r.error
+            ? '<span class="badge badge-red">' + esc(r.error) + '</span>'
+            : (r.action === 'update' ? '<span class="badge badge-amber">Update</span>' : '<span class="badge badge-green">New</span>');
+        return '<tr><td>' + r.row + '</td><td>' + esc(r.name || '—') + '</td><td>' + esc(r.cat || '—') + '</td><td>' +
+            (isNaN(r.price) ? '—' : '$' + r.price.toFixed(2)) + '</td><td>' + (r.stock == null ? '—' : r.stock) +
+            '</td><td>' + statusHtml + '</td></tr>';
+    }).join('');
+    document.getElementById('uploadPreview').innerHTML =
+        '<div style="font-size:.8rem;color:var(--text-secondary);margin-bottom:.5rem">' + adds + ' new, ' + upds + ' to update' +
+        (errs ? ', ' + errs + ' with errors (skipped)' : '') + '</div>' +
+        '<div class="table-wrapper" style="max-height:280px;overflow-y:auto"><table class="data-table"><thead><tr><th>Row</th><th>Name</th><th>Category</th><th>Price</th><th>Stock</th><th>Status</th></tr></thead><tbody>' + rowsHtml + '</tbody></table></div>';
+    document.getElementById('uploadConfirmBtn').disabled = (adds + upds) === 0;
+}
+
+window.confirmUploadImport = function() {
+    if (!_secEdit('menu', 'Uploading items')) return;
+    if (!_uploadParsedRows) return;
+    let maxId = snacks.inventory.reduce((m, i) => Math.max(m, i.id || 0), 0);
+    let added = 0, updated = 0;
+    _uploadParsedRows.forEach(r => {
+        if (r.error) return;
+        if (r.action === 'update') {
+            const item = snacks.inventory.find(i => i.id === r.existingId);
+            if (!item) return;
+            item.name = r.name; item.cat = r.cat; item.price = r.price;
+            if (r.stock == null) delete item.stock; else item.stock = r.stock;
+            updated++;
+        } else {
+            maxId++;
+            const newItem = { id: maxId, name: r.name, cat: r.cat, price: r.price, soldToday: 0, totalSold: 0 };
+            if (r.stock != null) newItem.stock = r.stock;
+            snacks.inventory.push(newItem);
+            added++;
+        }
+    });
+    saveSnacksData(snacks);
+    closeM('upload');
+    rInventory(); renderStats(); rAnalytics();
+    toast('Imported ' + added + ' new, updated ' + updated + ' item' + ((added + updated) === 1 ? '' : 's'));
 };
 
 // ==========================================================================

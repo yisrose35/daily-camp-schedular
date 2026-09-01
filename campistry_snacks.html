@@ -8,9 +8,9 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=DM+Sans:opsz,wght@9..40,400;9..40,500;9..40,600;9..40,700&family=Fraunces:opsz,wght@9..144,400;9..144,500;9..144,600;9..144,700&display=swap" rel="stylesheet">
-<link rel="stylesheet" href="campistry-unified.css?v=20260901-07">
-<link rel="stylesheet" href="campistry_snacks.css?v=20260901-07">
-<link rel="stylesheet" href="campistry_ops.css?v=20260901-07">
+<link rel="stylesheet" href="campistry-unified.css?v=20260901-08">
+<link rel="stylesheet" href="campistry_snacks.css?v=20260901-08">
+<link rel="stylesheet" href="campistry_ops.css?v=20260901-08">
 <!-- Splash screen — inline so it appears before any external CSS -->
 <style>
     #snacks-splash {
@@ -97,7 +97,7 @@
     </div>
     <div class="app-header-center">
         <div data-quick-switch-mount="snacks"></div>
-        <script src="campistry_app_switcher.js?v=20260901-07"></script>
+        <script src="campistry_app_switcher.js?v=20260901-08"></script>
     </div>
     <div class="header-right">
         <div class="sync-badge"><div class="sync-dot"></div><span>Synced</span></div>
@@ -248,12 +248,13 @@
             <div style="display:flex;gap:.5rem;align-items:center">
                 <span class="card-count" id="iCount">0</span>
                 <button class="btn btn-primary btn-sm" onclick="openAddItem()">+ Add Item</button>
+                <button class="btn btn-secondary btn-sm" onclick="openUploadModal()">Upload Items</button>
                 <button class="btn btn-secondary btn-sm" onclick="openM('restock')">Restock</button>
             </div>
         </div>
         <div class="table-wrapper">
             <table class="data-table">
-                <thead><tr><th></th><th>Item</th><th>Category</th><th>Price</th><th>Stock</th><th>Sold Today</th><th>All-Time</th><th>Status</th><th></th></tr></thead>
+                <thead><tr><th>Item</th><th>Category</th><th>Price</th><th>Stock</th><th>Sold Today</th><th>All-Time</th><th>Status</th><th></th></tr></thead>
                 <tbody id="iBody"></tbody>
             </table>
         </div>
@@ -404,7 +405,14 @@
     <div id="refundAllBody" style="font-size:.86rem;line-height:1.6;color:var(--text-primary)"></div>
     <div id="refundAllResult" style="display:none;margin-top:.7rem;font-size:.85rem;font-weight:600;"></div>
 </div><div class="modal-footer"><button class="btn btn-secondary" onclick="closeM('refundall')">Cancel</button><button class="btn btn-primary" id="refundAllBtn" onclick="refundAllCanteenDeposits()">Refund All</button></div></div></div>
-<div class="modal-overlay" id="m-item"><div class="modal"><div class="modal-header"><h2 id="itemModalTitle">Add Item</h2><button class="modal-close" onclick="closeM('item')"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg></button></div><div class="modal-body"><div class="form-grid" style="grid-template-columns:1fr 1fr"><div class="form-group" style="grid-column:1/-1"><label class="form-label">Name</label><input type="text" class="form-input" id="niName" placeholder="e.g. Gatorade"></div><div class="form-group" style="grid-column:1/-1"><label class="form-label">Barcode (optional)</label><input type="text" class="form-input" id="niBarcode" placeholder="Click here, then scan — or type it manually"></div><div class="form-group"><label class="form-label">Category</label><select class="form-select" id="niCat"><option value="drink">Drink</option><option value="snack">Snack</option><option value="treat">Treat</option></select></div><div class="form-group"><label class="form-label">Emoji</label><input type="text" class="form-input" id="niEmoji" placeholder="🥤" maxlength="4" style="font-size:1.5rem;text-align:center"></div><div class="form-group"><label class="form-label">Price ($)</label><input type="number" class="form-input" id="niPrice" min=".25" step=".25" placeholder="2.00"></div><div class="form-group"><label class="form-label">Stock</label><input type="number" class="form-input" id="niStock" min="0" placeholder="100"></div></div></div><div class="modal-footer"><button class="btn btn-secondary" onclick="closeM('item')">Cancel</button><button class="btn btn-primary" id="itemSaveBtn" onclick="saveItem()">Add Item</button></div></div></div>
+<div class="modal-overlay" id="m-item"><div class="modal"><div class="modal-header"><h2 id="itemModalTitle">Add Item</h2><button class="modal-close" onclick="closeM('item')"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg></button></div><div class="modal-body"><div class="form-grid" style="grid-template-columns:1fr 1fr"><div class="form-group" style="grid-column:1/-1"><label class="form-label">Name</label><input type="text" class="form-input" id="niName" placeholder="e.g. Gatorade"></div><div class="form-group" style="grid-column:1/-1"><label class="form-label">Barcode (optional)</label><input type="text" class="form-input" id="niBarcode" placeholder="Click here, then scan — or type it manually"></div><div class="form-group"><label class="form-label">Category</label><input type="text" class="form-input" id="niCat" list="niCatList" placeholder="e.g. Snack"><datalist id="niCatList"></datalist></div><div class="form-group"><label class="form-label">Price ($)</label><input type="number" class="form-input" id="niPrice" min=".25" step=".25" placeholder="2.00"></div><div class="form-group" style="grid-column:1/-1"><label class="form-label">Stock (optional)</label><input type="number" class="form-input" id="niStock" min="0" placeholder="Leave blank for unlimited / untracked"></div></div></div><div class="modal-footer"><button class="btn btn-secondary" onclick="closeM('item')">Cancel</button><button class="btn btn-primary" id="itemSaveBtn" onclick="saveItem()">Add Item</button></div></div></div>
+
+<div class="modal-overlay" id="m-upload"><div class="modal" style="max-width:640px"><div class="modal-header"><h2>Upload Items</h2><button class="modal-close" onclick="closeM('upload')"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg></button></div><div class="modal-body">
+<p style="font-size:.85rem;color:var(--text-secondary);margin-bottom:.75rem">Upload an Excel (.xlsx) or CSV file with columns <b>Name</b>, <b>Category</b>, <b>Price</b>, <b>Stock</b> (optional — leave blank for unlimited). Category can be anything you want — it doesn't have to match an existing one. An item whose name matches an existing item updates it instead of creating a duplicate.</p>
+<button class="btn btn-secondary btn-sm" onclick="downloadItemTemplate()" style="margin-bottom:1rem">Download Template</button>
+<input type="file" id="uploadFile" accept=".xlsx,.xls,.csv" onchange="handleUploadFile(this)" class="form-input" style="margin-bottom:1rem">
+<div id="uploadPreview"></div>
+</div><div class="modal-footer"><button class="btn btn-secondary" onclick="closeM('upload')">Cancel</button><button class="btn btn-primary" id="uploadConfirmBtn" disabled onclick="confirmUploadImport()">Confirm Import</button></div></div></div>
 <div class="modal-overlay" id="m-limit"><div class="modal"><div class="modal-header"><h2>Set Daily Limits</h2><button class="modal-close" onclick="closeM('limit')"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg></button></div><div class="modal-body"><div class="form-grid" style="grid-template-columns:1fr"><div class="form-group"><label class="form-label">Camper</label><select class="form-select" id="limCamper"></select></div><div class="form-group"><label class="form-label">New Daily Limit ($)</label><input type="number" class="form-input" id="limAmt" min="1" step="1" placeholder="10"></div></div></div><div class="modal-footer"><button class="btn btn-secondary" onclick="closeM('limit')">Cancel</button><button class="btn btn-primary" onclick="setLimit()">Save</button></div></div></div>
 <div class="modal-overlay" id="m-restock"><div class="modal"><div class="modal-header"><h2>Restock Item</h2><button class="modal-close" onclick="closeM('restock')"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg></button></div><div class="modal-body"><div class="form-grid" style="grid-template-columns:1fr"><div class="form-group"><label class="form-label">Item</label><select class="form-select" id="rItem"></select></div><div class="form-group"><label class="form-label">Add Quantity</label><input type="number" class="form-input" id="rQty" min="1" placeholder="50"></div></div></div><div class="modal-footer"><button class="btn btn-secondary" onclick="closeM('restock')">Cancel</button><button class="btn btn-primary" onclick="restock()">Restock</button></div></div></div>
 
@@ -467,28 +475,29 @@ function snacksNav(page, btn) {
 }
 </script>
 
-<script src="config.js?v=20260901-07"></script>
-<script src="supabase-js@2.js?v=20260901-07"></script>
-<script src="supabase_client.js?v=20260901-07"></script>
-<script src="campistry_cloud_bootstrap.js?v=20260901-07"></script>
-<script src="campistry_payments.js?v=20260901-07"></script>
-<script src="campistry_snacks_cash.js?v=20260901-07"></script>
-<script src="campistry_snacks.js?v=20260901-07"></script>
-<script src="campistry_shop_core.js?v=20260901-07"></script>
-<script src="campistry_snacks_shop.js?v=20260901-07"></script>
+<script src="config.js?v=20260901-08"></script>
+<script src="supabase-js@2.js?v=20260901-08"></script>
+<script src="supabase_client.js?v=20260901-08"></script>
+<script src="campistry_cloud_bootstrap.js?v=20260901-08"></script>
+<script src="campistry_payments.js?v=20260901-08"></script>
+<script src="campistry_snacks_cash.js?v=20260901-08"></script>
+<script src="xlsx@0.18.5.js?v=20260901-08"></script>
+<script src="campistry_snacks.js?v=20260901-08"></script>
+<script src="campistry_shop_core.js?v=20260901-08"></script>
+<script src="campistry_snacks_shop.js?v=20260901-08"></script>
 <script>
 // Re-render Snacks when cloud data arrives
 window.addEventListener('campistry-cloud-hydrated', function(){
     if (typeof init === 'function') init();
 });
 </script>
-<script src="campistry_notes_quick.js?v=20260901-07"></script>
+<script src="campistry_notes_quick.js?v=20260901-08"></script>
 <script>window.__CAMPISTRY_PRODUCT__='snacks';</script>
-<script src="parent_lockout_guard.js?v=20260901-07"></script>
-<script src="product_access_guard.js?v=20260901-07"></script>
+<script src="parent_lockout_guard.js?v=20260901-08"></script>
+<script src="product_access_guard.js?v=20260901-08"></script>
 <!-- Per-SECTION access: limits which parts of THIS app the user can open.
      Loads after the product gate, which decides whether they get in at all. -->
-<script src="campistry_capabilities.js?v=20260901-07"></script>
-<script src="campistry_access_sections.js?v=20260901-07"></script>
+<script src="campistry_capabilities.js?v=20260901-08"></script>
+<script src="campistry_access_sections.js?v=20260901-08"></script>
 </body>
 </html>

@@ -333,7 +333,6 @@ body.sidebar-open .sidebar { transform: translateX(0); }
 .rank-item { display: flex; align-items: center; gap: .75rem; padding: .6rem 0; border-bottom: 1px solid var(--border-light); }
 .rank-item:last-child { border-bottom: none; }
 .rank-pos { font-size: .8rem; font-weight: 800; color: var(--text-muted); min-width: 20px; text-align: center; }
-.rank-emoji { font-size: 1.25rem; }
 .rank-info { flex: 1; min-width: 0; }
 .rank-name { font-size: .8125rem; font-weight: 600; }
 .rank-bar-track { height: 6px; background: var(--snacks-50); border-radius: 3px; margin-top: 3px; overflow: hidden; }
