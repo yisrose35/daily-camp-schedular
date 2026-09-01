@@ -175,11 +175,14 @@ function init() {
     console.log('[Snacks POS] Ready —', campers.length, 'campers,', snacks.inventory.length, 'items');
 
     // Show empty state if no campers
+    // Plain text, not links — this is the standalone counselor console
+    // (snacks.campistry.org) and deliberately has no path back into the
+    // rest of Campistry for setup.
     if (campers.length === 0) {
-        document.getElementById('camperList').innerHTML = '<div style="text-align:center;padding:2rem 1rem;color:var(--text-muted);font-size:.8rem">No campers found.<br>Add campers in <a href="campistry_me.html" style="color:var(--snacks)">Campistry Me</a> first.</div>';
+        document.getElementById('camperList').innerHTML = '<div style="text-align:center;padding:2rem 1rem;color:var(--text-muted);font-size:.8rem">No campers found.<br>Ask your camp office to add campers.</div>';
     }
     if (snacks.inventory.length === 0) {
-        document.getElementById('quickGrid').innerHTML = '<div style="text-align:center;padding:2rem;color:var(--text-muted);font-size:.8rem;grid-column:1/-1">No inventory items.<br>Add items in the <a href="campistry_snacks.html" style="color:var(--snacks)">Manager Dashboard</a>.</div>';
+        document.getElementById('quickGrid').innerHTML = '<div style="text-align:center;padding:2rem;color:var(--text-muted);font-size:.8rem;grid-column:1/-1">No inventory items.<br>Ask your camp office to add items.</div>';
         document.getElementById('allGrid').innerHTML = '';
     }
 }
