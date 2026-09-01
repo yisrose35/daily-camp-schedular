@@ -525,6 +525,19 @@ function toast(msg, err) {
     setTimeout(() => el.className = 'toast', 2200);
 }
 
+// Signs the register out of the shadow PIN-login session and returns to the
+// PIN screen — lets a runner lock the register when stepping away without
+// anyone else touching their session.
+window.posLockRegister = function() {
+    const db = window.CampistryDB;
+    const client = db && db.getClient && db.getClient();
+    if (client && client.auth && client.auth.signOut) {
+        client.auth.signOut().finally(() => { window.location.href = '/login'; });
+    } else {
+        window.location.href = '/login';
+    }
+};
+
 document.addEventListener('DOMContentLoaded', init);
 
 // Re-init after cloud hydration or when another tab (admin / parent portal) writes

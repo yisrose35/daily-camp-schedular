@@ -610,6 +610,8 @@ function rSettings() {
                   '</tbody></table></div>'
                 : '<div style="font-size:.82rem;color:var(--text-muted)">No cash paid out today.</div>');
     }
+
+    loadPosPinStatus();
 }
 
 window.saveSettingsForm = function() {
@@ -632,6 +634,70 @@ window.saveSettingsForm = function() {
     saveSnacksData(snacks);
     rSettings(); popSelects();
     toast('Settings saved');
+};
+
+// ── Register PIN login (snacks.campistry.org) ──────────────────────────────
+// Gives the canteen runner a login that's genuinely separate from the
+// owner's real Campistry account — a shared PIN, scoped only to the
+// register — instead of handing out the office's own password. The PIN
+// itself is verified server-side by the pos-pin-login edge function; this
+// UI only ever sets it (set_camp_pos_pin RPC) and reads whether one's set
+// (get_camp_pos_login_status RPC). Neither RPC ever returns the PIN itself.
+function _posLoginUrl() {
+    const campId = (window.CampistryDB && window.CampistryDB.getCampId && window.CampistryDB.getCampId()) || '';
+    return 'https://snacks.campistry.org/login?camp=' + encodeURIComponent(campId);
+}
+
+function loadPosPinStatus() {
+    const box = document.getElementById('posPinStatus');
+    if (!box) return;
+    const db = window.CampistryDB;
+    const client = db && db.getClient && db.getClient();
+    const campId = db && db.getCampId && db.getCampId();
+    if (!client || !campId) { box.textContent = ''; return; }
+    client.rpc('get_camp_pos_login_status', { p_camp_id: campId }).then(res => {
+        const data = res && res.data;
+        if (!data || !data.success) { box.textContent = ''; return; }
+        box.innerHTML = data.pinSet
+            ? '<span style="color:var(--green-600);font-weight:600">✓ A register PIN is set.</span> Saving a new one below replaces it.'
+            : '<span style="color:var(--amber-600);font-weight:600">No PIN set yet</span> — the register login is inactive until you set one.';
+    }).catch(() => { box.textContent = ''; });
+}
+
+window.savePosPin = function() {
+    if (!_secEdit('settings', 'Setting the register PIN')) return;
+    const db = window.CampistryDB;
+    const client = db && db.getClient && db.getClient();
+    const campId = db && db.getCampId && db.getCampId();
+    if (!client || !campId) { toast('Not signed in', 1); return; }
+    const input = document.getElementById('posPinInput');
+    const pin = ((input && input.value) || '').trim();
+    if (!/^[0-9]{4,8}$/.test(pin)) { toast('PIN must be 4–8 digits', 1); return; }
+    const btn = document.getElementById('posPinSaveBtn');
+    if (btn) { btn.disabled = true; btn.textContent = 'Saving…'; }
+    client.rpc('set_camp_pos_pin', { p_camp_id: campId, p_pin: pin }).then(res => {
+        if (btn) { btn.disabled = false; btn.textContent = 'Save PIN'; }
+        const data = res && res.data;
+        if (res.error || !data || !data.success) {
+            toast((data && data.error === 'invalid_pin') ? 'PIN must be 4–8 digits' : 'Could not save the PIN', 1);
+            return;
+        }
+        if (input) input.value = '';
+        toast('Register PIN saved');
+        loadPosPinStatus();
+    }, () => {
+        if (btn) { btn.disabled = false; btn.textContent = 'Save PIN'; }
+        toast('Could not save the PIN', 1);
+    });
+};
+
+window.copyPosLoginLink = function() {
+    const url = _posLoginUrl();
+    if (navigator.clipboard && navigator.clipboard.writeText) {
+        navigator.clipboard.writeText(url).then(() => toast('Register link copied')).catch(() => toast(url));
+    } else {
+        toast(url);
+    }
 };
 
 // ==========================================================================

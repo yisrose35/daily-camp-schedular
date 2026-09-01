@@ -4,11 +4,50 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Campistry Snacks — Selling Console</title>
+<link rel="icon" type="image/png" href="Campistry_logo.png">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=DM+Sans:opsz,wght@9..40,400;9..40,500;9..40,600;9..40,700&display=swap" rel="stylesheet">
-<link rel="stylesheet" href="campistry-unified.css?v=20260901-12">
-<link rel="stylesheet" href="campistry_snacks_pos.css?v=20260901-12">
+<link rel="stylesheet" href="campistry-unified.css?v=20260901-13">
+<link rel="stylesheet" href="campistry_snacks_pos.css?v=20260901-13">
+<script src="config.js?v=20260901-13"></script>
+<script>
+// ── Login gate ───────────────────────────────────────────────────────────
+// snacks.campistry.org has no path back into the rest of Campistry, so a
+// real session is required here on its own — nothing carries over from
+// another Campistry subdomain (separate origin, separate localStorage).
+// This runs synchronously in <head>, before the body ever paints, and
+// redirects to /login (campistry_snacks_login.html, the PIN-code login)
+// the moment no usable session is found — fails CLOSED, deliberately
+// unlike the fail-open product/section guards later in this file, since
+// the whole point here is "people can't just get on." The real security
+// boundary is still Supabase RLS on the other side of that session, not
+// this check — this only stops a stale/absent session from silently
+// rendering the console UI on an unattended device.
+(function () {
+    try {
+        var cfg = window.__CAMPISTRY_SUPABASE__;
+        var ref = cfg && cfg.url && (cfg.url.match(/^https?:\/\/([^.]+)\./) || [])[1];
+        var ok = false;
+        if (ref) {
+            var raw = localStorage.getItem('sb-' + ref + '-auth-token');
+            if (raw) {
+                var parsed = JSON.parse(raw);
+                var session = (parsed && (parsed.currentSession || parsed)) || null;
+                var expiresAt = session && session.expires_at;
+                ok = !!(session && session.access_token && (!expiresAt || expiresAt * 1000 > Date.now()));
+            }
+        }
+        if (!ok) {
+            var campId = '';
+            try { campId = localStorage.getItem('campistry_pos_last_camp') || ''; } catch (e) {}
+            window.location.replace('/login' + (campId ? ('?camp=' + encodeURIComponent(campId)) : ''));
+        }
+    } catch (e) {
+        window.location.replace('/login');
+    }
+})();
+</script>
 </head>
 <body>
 <div class="app">
@@ -26,6 +65,9 @@
 </div>
 <div class="topbar-right">
 <span class="topbar-time" id="clock"></span>
+<button class="camper-toggle-btn" id="posLockBtn" onclick="posLockRegister()" aria-label="Lock register" title="Lock register">
+<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="11" width="18" height="11" rx="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg>
+</button>
 </div>
 </div>
 
@@ -69,25 +111,24 @@
 </div>
 <div class="toast" id="toast"></div>
 
-<script src="config.js?v=20260901-12"></script>
-<script src="supabase-js@2.js?v=20260901-12"></script>
-<script src="supabase_client.js?v=20260901-12"></script>
-<script src="campistry_cloud_bootstrap.js?v=20260901-12"></script>
-<script src="campistry_payments.js?v=20260901-12"></script>
-<script src="campistry_snacks_cash.js?v=20260901-12"></script>
-<script src="campistry_snacks_pos.js?v=20260901-12"></script>
+<script src="supabase-js@2.js?v=20260901-13"></script>
+<script src="supabase_client.js?v=20260901-13"></script>
+<script src="campistry_cloud_bootstrap.js?v=20260901-13"></script>
+<script src="campistry_payments.js?v=20260901-13"></script>
+<script src="campistry_snacks_cash.js?v=20260901-13"></script>
+<script src="campistry_snacks_pos.js?v=20260901-13"></script>
 <script>
 // Re-render POS when cloud data arrives
 window.addEventListener('campistry-cloud-hydrated', function(){
     if (window.CampistrySnacksPOS) window.CampistrySnacksPOS.reinit();
 });
 </script>
-<script src="campistry_notes_quick.js?v=20260901-12"></script>
+<script src="campistry_notes_quick.js?v=20260901-13"></script>
 <script>window.__CAMPISTRY_PRODUCT__='snacks';</script>
 <!-- The POS is its own page, so it declares the section it represents. -->
-<script src="campistry_capabilities.js?v=20260901-12"></script>
-<script src="campistry_access_sections.js?v=20260901-12" data-guard-section="pos"></script>
-<script src="parent_lockout_guard.js?v=20260901-12"></script>
-<script src="product_access_guard.js?v=20260901-12"></script>
+<script src="campistry_capabilities.js?v=20260901-13"></script>
+<script src="campistry_access_sections.js?v=20260901-13" data-guard-section="pos"></script>
+<script src="parent_lockout_guard.js?v=20260901-13"></script>
+<script src="product_access_guard.js?v=20260901-13"></script>
 </body>
 </html>

@@ -3,12 +3,13 @@
     { "source": "/", "has": [{ "type": "host", "value": "link.campistry.org" }], "destination": "/link", "permanent": false },
     { "source": "/((?!campistry_link_parent|campistry_reset).*\\.html)", "has": [{ "type": "host", "value": "link.campistry.org" }], "destination": "/link", "permanent": false },
     { "source": "/", "has": [{ "type": "host", "value": "snacks.campistry.org" }], "destination": "/pos", "permanent": false },
-    { "source": "/((?!campistry_snacks_pos|campistry_reset).*\\.html)", "has": [{ "type": "host", "value": "snacks.campistry.org" }], "destination": "/pos", "permanent": false }
+    { "source": "/((?!campistry_snacks_pos|campistry_snacks_login|campistry_reset).*\\.html)", "has": [{ "type": "host", "value": "snacks.campistry.org" }], "destination": "/pos", "permanent": false }
   ],
   "rewrites": [
     { "source": "/link", "destination": "/campistry_link_parent.html" },
     { "source": "/parents", "destination": "/campistry_link_parent.html" },
     { "source": "/pos", "destination": "/campistry_snacks_pos.html" },
+    { "source": "/login", "destination": "/campistry_snacks_login.html" },
     { "source": "/reset", "destination": "/campistry_reset.html" },
     { "source": "/privacy", "destination": "/campistry_privacy.html" },
     { "source": "/delete-account", "destination": "/campistry_delete_account.html" }
