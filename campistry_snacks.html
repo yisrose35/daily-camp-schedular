@@ -8,9 +8,9 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=DM+Sans:opsz,wght@9..40,400;9..40,500;9..40,600;9..40,700&family=Fraunces:opsz,wght@9..144,400;9..144,500;9..144,600;9..144,700&display=swap" rel="stylesheet">
-<link rel="stylesheet" href="campistry-unified.css?v=20260830-23">
-<link rel="stylesheet" href="campistry_snacks.css?v=20260830-23">
-<link rel="stylesheet" href="campistry_ops.css?v=20260830-23">
+<link rel="stylesheet" href="campistry-unified.css?v=20260901-02">
+<link rel="stylesheet" href="campistry_snacks.css?v=20260901-02">
+<link rel="stylesheet" href="campistry_ops.css?v=20260901-02">
 <!-- Splash screen — inline so it appears before any external CSS -->
 <style>
     #snacks-splash {
@@ -22,37 +22,29 @@
     #snacks-splash.hide { opacity: 0; pointer-events: none; }
     #snacks-splash-wrap {
         position: relative;
-        width: 220px; height: 72px;
         flex-shrink: 0;
-        overflow: hidden;
     }
-    #snacks-splash-logo {
-        position: absolute; top: 0; left: 0;
-        width: 220px; height: auto;
+    #snacks-splash-word {
+        display: flex;
+        font-family: 'Fraunces', Georgia, 'Times New Roman', serif;
+        font-weight: 700;
+        font-size: 56px;
+        line-height: 1;
+        letter-spacing: -0.01em;
+        color: #C2410C;
+    }
+    #snacks-splash-word .ltr {
+        display: inline-block;
+        transform-origin: 50% 100%;
         opacity: 0;
-        animation: logo-rise 0.85s cubic-bezier(0.16,1,0.3,1) 0.15s forwards;
+        transform: translateY(-52px);
+        animation: letter-drop 0.6s cubic-bezier(.34,1.56,.64,1) forwards;
     }
-    @keyframes logo-rise {
-        0%   { transform: translateY(30px); opacity: 0; }
-        100% { transform: translateY(0);    opacity: 1; }
-    }
-    .shimmer {
-        position: absolute;
-        top: 0; left: 0;
-        width: 220px; height: 72px;
-        background: linear-gradient(
-            108deg,
-            transparent 15%,
-            rgba(255,235,170,0.7) 50%,
-            transparent 85%
-        );
-        mix-blend-mode: screen;
-        pointer-events: none;
-        animation: shimmer-sweep 0.75s ease-in-out 1.1s both;
-    }
-    @keyframes shimmer-sweep {
-        0%   { transform: translateX(-250px); }
-        100% { transform: translateX(250px);  }
+    @keyframes letter-drop {
+        0%   { transform: translateY(-52px) scale(1,1);     opacity: 0; }
+        55%  { transform: translateY(3px)   scale(1.06,.88); opacity: 1; }
+        75%  { transform: translateY(-5px)  scale(.98,1.03); }
+        100% { transform: translateY(0)     scale(1,1); }
     }
 </style>
 </head>
@@ -61,8 +53,14 @@
 <!-- SPLASH -->
 <div id="snacks-splash">
     <div id="snacks-splash-wrap">
-        <img id="snacks-splash-logo" src="Snacks_clean.png" alt="">
-        <div class="shimmer"></div>
+        <div id="snacks-splash-word">
+            <span class="ltr" style="animation-delay:.00s">S</span>
+            <span class="ltr" style="animation-delay:.07s">N</span>
+            <span class="ltr" style="animation-delay:.14s">A</span>
+            <span class="ltr" style="animation-delay:.21s">C</span>
+            <span class="ltr" style="animation-delay:.28s">K</span>
+            <span class="ltr" style="animation-delay:.35s">S</span>
+        </div>
     </div>
     <script>
     (function() {
@@ -86,7 +84,7 @@
     </div>
     <div class="app-header-center">
         <div data-quick-switch-mount="snacks"></div>
-        <script src="campistry_app_switcher.js?v=20260830-23"></script>
+        <script src="campistry_app_switcher.js?v=20260901-02"></script>
     </div>
     <div class="header-right">
         <div class="sync-badge"><div class="sync-dot"></div><span>Synced</span></div>
@@ -456,28 +454,28 @@ function snacksNav(page, btn) {
 }
 </script>
 
-<script src="config.js?v=20260830-23"></script>
-<script src="supabase-js@2.js?v=20260830-23"></script>
-<script src="supabase_client.js?v=20260830-23"></script>
-<script src="campistry_cloud_bootstrap.js?v=20260830-23"></script>
-<script src="campistry_payments.js?v=20260830-23"></script>
-<script src="campistry_snacks_cash.js?v=20260830-23"></script>
-<script src="campistry_snacks.js?v=20260830-23"></script>
-<script src="campistry_shop_core.js?v=20260830-23"></script>
-<script src="campistry_snacks_shop.js?v=20260830-23"></script>
+<script src="config.js?v=20260901-02"></script>
+<script src="supabase-js@2.js?v=20260901-02"></script>
+<script src="supabase_client.js?v=20260901-02"></script>
+<script src="campistry_cloud_bootstrap.js?v=20260901-02"></script>
+<script src="campistry_payments.js?v=20260901-02"></script>
+<script src="campistry_snacks_cash.js?v=20260901-02"></script>
+<script src="campistry_snacks.js?v=20260901-02"></script>
+<script src="campistry_shop_core.js?v=20260901-02"></script>
+<script src="campistry_snacks_shop.js?v=20260901-02"></script>
 <script>
 // Re-render Snacks when cloud data arrives
 window.addEventListener('campistry-cloud-hydrated', function(){
     if (typeof init === 'function') init();
 });
 </script>
-<script src="campistry_notes_quick.js?v=20260830-23"></script>
+<script src="campistry_notes_quick.js?v=20260901-02"></script>
 <script>window.__CAMPISTRY_PRODUCT__='snacks';</script>
-<script src="parent_lockout_guard.js?v=20260830-23"></script>
-<script src="product_access_guard.js?v=20260830-23"></script>
+<script src="parent_lockout_guard.js?v=20260901-02"></script>
+<script src="product_access_guard.js?v=20260901-02"></script>
 <!-- Per-SECTION access: limits which parts of THIS app the user can open.
      Loads after the product gate, which decides whether they get in at all. -->
-<script src="campistry_capabilities.js?v=20260830-23"></script>
-<script src="campistry_access_sections.js?v=20260830-23"></script>
+<script src="campistry_capabilities.js?v=20260901-02"></script>
+<script src="campistry_access_sections.js?v=20260901-02"></script>
 </body>
 </html>
