@@ -1314,7 +1314,22 @@ document.addEventListener('DOMContentLoaded', init);
 // (nothing ever re-ran init() afterward). Re-run once hydration completes.
 window.addEventListener('campistry-cloud-hydrated', function () {
     console.log('[Snacks Manager] Cloud hydrated — reloading roster + snacks data');
+    try {
+        var db = window.CampistryDB;
+        var campId = db && db.getCampId && db.getCampId();
+        var stored = JSON.parse(localStorage.getItem('campGlobalSettings_v1') || '{}');
+        var invSummary = ((stored.campistrySnacks && stored.campistrySnacks.inventory) || [])
+            .filter(function (i) { return (i.soldToday || 0) > 0 || (i.totalSold || 0) > 0; })
+            .map(function (i) { return i.name + ':' + i.soldToday + '/' + i.totalSold; });
+        console.log('[Snacks Manager DEBUG] campId=', campId, 'campGlobalSettings_v1.campistrySnacks.inventory deltas:', invSummary);
+    } catch (e) { console.log('[Snacks Manager DEBUG] inspection failed:', e); }
     snacks = loadSnacksData();
+    try {
+        var afterSummary = (snacks.inventory || [])
+            .filter(function (i) { return (i.soldToday || 0) > 0 || (i.totalSold || 0) > 0; })
+            .map(function (i) { return i.name + ':' + i.soldToday + '/' + i.totalSold; });
+        console.log('[Snacks Manager DEBUG] loadSnacksData() returned inventory deltas:', afterSummary);
+    } catch (e) {}
     init();
 });
 })();
