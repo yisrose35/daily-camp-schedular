@@ -117,6 +117,9 @@ serve(async (req) => {
         role: "counselor",
         accepted_at: new Date().toISOString(),
         invite_token: crypto.randomUUID(),
+        // product_access_guard.js blocks any page not listed here — the
+        // shadow account exists for exactly one thing, this page.
+        product_access: ["snacks"],
       });
       if (cuErr) {
         await admin.auth.admin.deleteUser(newUserId);
@@ -153,6 +156,16 @@ serve(async (req) => {
 
     if (!shadowEmail || !shadowPassword) {
       return json({ error: "Could not sign in to the register right now. Try again, or ask the office to reset the PIN." }, 500);
+    }
+
+    // Self-heal: a shadow account provisioned before product_access was
+    // added to the insert above would otherwise be stuck forever with an
+    // empty product_access array (product_access_guard.js blocks it from
+    // ever opening the Snacks POS). Unconditionally re-assert it on every
+    // login — cheap, idempotent, and this account only ever needs one
+    // product, so there's nothing to preserve by conditioning the write.
+    if (shadowUserId) {
+      await admin.from("camp_users").update({ product_access: ["snacks"] }).eq("user_id", shadowUserId);
     }
 
     const anon = createClient(SUPABASE_URL, SUPABASE_ANON_KEY, { auth: { persistSession: false } });
