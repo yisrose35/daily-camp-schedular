@@ -870,6 +870,10 @@
                 syncCampStripeConnectStatus(campData.id);
             }
         }
+        // Which Link programs (Photos/Canteen/Shop/Tips/Camper Mail/Pickup)
+        // this camp actually offers — read-only for non-owner/admin roles,
+        // set_link_program_settings itself is the real (server-side) gate.
+        if (campData?.id) loadLinkProgramSettings(campData.id);
     }
 
     // ========================================
@@ -1196,6 +1200,74 @@
     };
 
     function escTelnyx(s) { return String(s == null ? '' : s).replace(/[<>&"]/g, function(c) { return { '<': '&lt;', '>': '&gt;', '&': '&amp;', '"': '&quot;' }[c]; }); }
+
+    // ========================================
+    // LINK PROGRAMS — per-camp on/off switches for parent-facing Link
+    // features (migration 106). Any authenticated user can read them
+    // (get_link_program_settings), but only owner/admin can flip one
+    // (set_link_program_settings enforces that server-side regardless of
+    // what this UI shows) — so a non-owner/admin viewer just sees the
+    // current state as disabled checkboxes rather than this card being
+    // hidden outright.
+    // ========================================
+    var LINK_PROGRAMS = [
+        { key: 'photos', label: 'Photos', desc: 'Facial-recognition folders + HD downloads' },
+        { key: 'canteen', label: 'Canteen', desc: 'Add Funds / prepaid camper wallet' },
+        { key: 'shop', label: 'Camp Shop', desc: 'Swag & merch store' },
+        { key: 'tips', label: 'Tips', desc: 'Parents tipping staff' },
+        { key: 'camperMail', label: 'Camper Mail', desc: 'Parents sending mail to their camper' },
+        { key: 'pickup', label: 'Pickup & Arrival', desc: 'Bus/dismissal tracking and requests' }
+    ];
+    var _linkProgramsCampId = null;
+
+    window.loadLinkProgramSettings = async function(campId) {
+        _linkProgramsCampId = campId;
+        var box = document.getElementById('linkProgramsBox');
+        if (!box) return;
+        try {
+            var canWrite = (typeof userRole === 'string')
+                ? ['owner', 'admin'].indexOf(userRole) !== -1
+                : true; // unknown role: let the RPC be the real gate, don't hide the control
+            var res = await window.supabase.rpc('get_link_program_settings', { p_camp_id: campId });
+            var data = res && res.data;
+            if (res.error || !data || !data.success) {
+                box.textContent = 'Could not load Link program settings.';
+                return;
+            }
+            box.innerHTML = LINK_PROGRAMS.map(function(p) {
+                var on = data[p.key] !== false;
+                return '<label style="display:flex;align-items:center;justify-content:space-between;gap:12px;padding:9px 0;border-bottom:1px solid var(--slate-100,#f1f5f9);cursor:' + (canWrite ? 'pointer' : 'default') + ';">' +
+                    '<span><strong style="font-size:0.86rem;">' + p.label + '</strong><br><span style="font-size:0.76rem;color:var(--slate-400);">' + p.desc + '</span></span>' +
+                    '<input type="checkbox" ' + (on ? 'checked' : '') + (canWrite ? '' : ' disabled') + ' style="width:18px;height:18px;flex-shrink:0;" onchange="toggleLinkProgram(\'' + p.key + '\', this.checked, this)">' +
+                    '</label>';
+            }).join('') + '<div id="linkProgramsStatus" style="font-size:0.78rem;color:var(--slate-400);margin-top:8px;"></div>';
+        } catch (e) {
+            box.textContent = 'Could not load Link program settings.';
+        }
+    };
+
+    window.toggleLinkProgram = async function(key, enabled, checkboxEl) {
+        var statusEl = document.getElementById('linkProgramsStatus');
+        if (checkboxEl) checkboxEl.disabled = true;
+        if (statusEl) statusEl.textContent = 'Saving…';
+        try {
+            var settings = {}; settings[key] = enabled;
+            var res = await window.supabase.rpc('set_link_program_settings', { p_camp_id: _linkProgramsCampId, p_settings: settings });
+            var data = res && res.data;
+            if (res.error || !data || !data.success) {
+                if (statusEl) statusEl.textContent = 'Could not save — ' + ((data && data.error) || (res.error && res.error.message) || 'try again.');
+                if (checkboxEl) { checkboxEl.checked = !enabled; checkboxEl.disabled = false; }
+                return;
+            }
+            if (statusEl) statusEl.textContent = 'Saved.';
+            setTimeout(function() { if (statusEl) statusEl.textContent = ''; }, 2000);
+        } catch (e) {
+            if (statusEl) statusEl.textContent = 'Could not save — try again.';
+            if (checkboxEl) checkboxEl.checked = !enabled;
+        } finally {
+            if (checkboxEl) checkboxEl.disabled = false;
+        }
+    };
 
     window.openTelnyxRequestModal = function() {
         const overlay = document.getElementById('telnyxRequestOverlay');

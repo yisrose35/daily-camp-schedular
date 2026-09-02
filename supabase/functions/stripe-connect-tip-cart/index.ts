@@ -55,6 +55,19 @@ const corsHeaders = {
   "Access-Control-Allow-Headers": "authorization, x-client-info, apikey, content-type",
 };
 
+// Camp-wide "does this camp even do staff tipping" gate (migration 106) —
+// no row for the camp means the program defaults on.
+async function tipsProgramEnabled(campId: string): Promise<boolean> {
+  if (!SUPABASE_URL || !SUPABASE_SERVICE_KEY) return true;
+  const service = createClient(SUPABASE_URL, SUPABASE_SERVICE_KEY);
+  const { data } = await service
+    .from("camp_link_program_settings")
+    .select("tips_enabled")
+    .eq("camp_id", campId)
+    .maybeSingle();
+  return !data || data.tips_enabled !== false;
+}
+
 async function stripePost(endpoint: string, body: Record<string, string>) {
   const resp = await fetch(`${STRIPE_API}${endpoint}`, {
     method: "POST",
@@ -140,6 +153,12 @@ serve(async (req) => {
       if (!invite) {
         return new Response(JSON.stringify({ error: "no_active_invite", campId }), {
           status: 403,
+          headers: { ...corsHeaders, "Content-Type": "application/json" },
+        });
+      }
+      if (!(await tipsProgramEnabled(campId))) {
+        return new Response(JSON.stringify({ error: "One of these camps isn't accepting tips right now.", campId }), {
+          status: 400,
           headers: { ...corsHeaders, "Content-Type": "application/json" },
         });
       }

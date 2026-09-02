@@ -118,6 +118,20 @@ async function campOwnsCamper(campId: string | undefined, camperName: string | u
   return !!(roster && typeof roster === "object" && Object.prototype.hasOwnProperty.call(roster, camperName));
 }
 
+// Camp-wide "does this camp even run a canteen" gate (migration 106) — no
+// row for the camp means every program defaults on, same as everywhere
+// else this settings table is read.
+async function canteenProgramEnabled(campId: string | undefined): Promise<boolean> {
+  if (!campId || !SUPABASE_URL || !SUPABASE_SERVICE_KEY) return true;
+  const supabase = createClient(SUPABASE_URL, SUPABASE_SERVICE_KEY);
+  const { data } = await supabase
+    .from("camp_link_program_settings")
+    .select("canteen_enabled")
+    .eq("camp_id", campId)
+    .maybeSingle();
+  return !data || data.canteen_enabled !== false;
+}
+
 async function lookupCampDestinationForCamper(campId: string | undefined, camperName: string | undefined): Promise<string | null> {
   if (!campId || !SUPABASE_URL || !SUPABASE_SERVICE_KEY) return null;
   const supabase = createClient(SUPABASE_URL, SUPABASE_SERVICE_KEY);
@@ -176,6 +190,12 @@ serve(async (req) => {
     const isCanteenDeposit = checkoutSource === "campistry-canteen-deposit";
 
     if (isCanteenDeposit) {
+      if (!(await canteenProgramEnabled(campId))) {
+        return new Response(JSON.stringify({ error: "This camp isn't offering online canteen funding." }), {
+          status: 400,
+          headers: { ...corsHeaders, "Content-Type": "application/json" },
+        });
+      }
       if (!camperName || !(await campOwnsCamper(campId, camperName))) {
         return new Response(JSON.stringify({ error: "Camper not found for this camp" }), {
           status: 400,

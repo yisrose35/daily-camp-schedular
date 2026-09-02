@@ -88,6 +88,15 @@ serve(async (req) => {
     const parentUserId = userData?.user?.id;
     if (!parentUserId) return json({ error: "unauthorized" }, 401);
 
+    // Camp-wide "does this camp even run a photos program" gate (migration
+    // 106) — checked before any ownership/Stripe work so a camp that never
+    // uploads photos can't have parents buying folders for photos that will
+    // never exist.
+    const { data: programSettings } = await asUser.rpc("get_link_program_settings", { p_camp_id: campId });
+    if (programSettings?.success && programSettings.photos === false) {
+      return json({ error: "This camp isn't offering Link Photos right now." }, 400);
+    }
+
     // Ownership check, per kind — never trust the client's claim. For
     // facial_recognition, EVERY name in the batch must check out; one
     // camper that isn't really this parent's fails the whole request
