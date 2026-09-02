@@ -85,7 +85,16 @@ serve(async (req) => {
     const tokenData = await tokenResp.json().catch(() => ({} as any));
 
     if (tokenResp.ok && tokenData?.access_token) {
-      await admin.rpc("clear_login_failures", { p_email: email }).catch(() => {});
+      // admin.rpc(...) returns a Postgrest query builder, not a native
+      // Promise — it's thenable (awaitable) but has no real .catch()
+      // method, so chaining .catch() directly on it throws "catch is not
+      // a function" before the request is even sent. try/catch instead.
+      try {
+        await admin.rpc("clear_login_failures", { p_email: email });
+      } catch (_) {
+        // Best-effort cleanup only — a failure here must never block a
+        // successful login.
+      }
       return json({ access_token: tokenData.access_token, refresh_token: tokenData.refresh_token });
     }
 
