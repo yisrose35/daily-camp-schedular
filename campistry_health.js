@@ -219,7 +219,7 @@
 
         var tbody = document.getElementById('camperDirBody'); if (!tbody) return;
         if (!people.length) {
-            tbody.innerHTML = '<tr><td colspan="7" class="empty-state">No one yet. Add campers or staff in <a href="campistry_me.html" style="color:var(--health);font-weight:600">Campistry Me</a>.</td></tr>';
+            tbody.innerHTML = '<tr><td colspan="6" class="empty-state">No one yet. Add campers or staff in <a href="campistry_me.html" style="color:var(--health);font-weight:600">Campistry Me</a>.</td></tr>';
             setText('statDirCount','0'); return;
         }
         var q = (filterText||'').toLowerCase();
@@ -232,7 +232,7 @@
             return haystack.join(' ').toLowerCase().includes(q);
         });
         setText('statDirCount', String(filtered.length));
-        if (!filtered.length) { tbody.innerHTML = '<tr><td colspan="7" class="empty-state">No matches.</td></tr>'; return; }
+        if (!filtered.length) { tbody.innerHTML = '<tr><td colspan="6" class="empty-state">No matches.</td></tr>'; return; }
         var h = '';
         filtered.forEach(function(p) {
             var c = p.rec, name = p.name;
@@ -259,7 +259,6 @@
             }
             var typeBadge = p.type === 'camper' ? bdg('Camper','blue') : bdg('Staff','purple');
             h += '<tr class="click" onclick="CampistryHealth.viewPerson(\''+p.type+'\',\''+je(p.key)+'\')">'
-               + '<td><div class="med-avatar" style="background:'+avc(name)+';width:30px;height:30px;font-size:.6rem">'+ini(name)+'</div></td>'
                + '<td style="font-weight:700">'+esc(name)+'</td>'
                + '<td>'+typeBadge+'</td>'
                + '<td>'+ageRole+'</td>'

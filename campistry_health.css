@@ -112,7 +112,39 @@ body.sidebar-open .sidebar { transform:translateX(0); }
 .data-table tr:last-child td { border-bottom:none; }
 .data-table tr:hover td { background:#F8FAFC; }
 
-.med-avatar { display:flex; align-items:center; justify-content:center; border-radius:50%; color:#fff; font-weight:700; flex-shrink:0; }
+.med-avatar { display:flex; align-items:center; justify-content:center; width:40px; height:40px; font-size:.75rem; border-radius:50%; color:#fff; font-weight:700; flex-shrink:0; }
+
+/* ══ MEDICATION QUEUE (Dashboard) ════════════════════════════ */
+.med-item { display:flex; align-items:center; gap:12px; padding:10px 0; border-bottom:1px solid #F1F5F9; }
+.med-item:last-child { border-bottom:none; }
+.med-item.upcoming { border-left:3px solid var(--health); padding-left:10px; margin-left:-13px; }
+.med-info { flex:1; min-width:0; }
+.med-name { font-size:.85rem; font-weight:700; color:var(--slate-900); }
+.med-detail { font-size:.75rem; color:var(--slate-500); margin-top:2px; }
+.med-actions { display:flex; gap:8px; flex-shrink:0; }
+.btn-give, .btn-skip { padding:6px 12px; border-radius:999px; font-size:.72rem; font-weight:700; cursor:pointer; border:1px solid transparent; font-family:var(--font); }
+.btn-give { background:#F0FDF4; color:#16A34A; }
+.btn-give:hover { background:#DCFCE7; }
+.btn-skip { background:var(--slate-100); color:var(--slate-500); }
+.btn-skip:hover { background:var(--slate-200); }
+
+/* ══ VISIT CARDS (Dashboard recent visits + Nighttime Care) ═══ */
+.visit-card { display:flex; gap:12px; padding:10px 0; border-bottom:1px solid #F1F5F9; }
+.visit-card:last-child { border-bottom:none; }
+.visit-time { flex-shrink:0; width:64px; font-size:.72rem; font-weight:600; color:var(--slate-500); }
+.visit-body { flex:1; min-width:0; }
+.visit-header { display:flex; align-items:center; justify-content:space-between; gap:8px; }
+.visit-camper { font-size:.85rem; font-weight:700; color:var(--slate-900); }
+.visit-complaint { font-size:.8rem; color:var(--slate-600); margin-top:2px; }
+.visit-treatment { display:flex; align-items:center; gap:4px; font-size:.75rem; color:var(--health); margin-top:4px; }
+
+/* ══ ALLERGY ALERT CARDS (Dashboard) ══════════════════════════ */
+.allergy-card { padding:10px 12px; border-radius:var(--r); border-left:3px solid var(--slate-300); background:var(--slate-50); margin-bottom:8px; }
+.allergy-card:last-child { margin-bottom:0; }
+.allergy-card.severe { border-left-color:#DC2626; background:#FEF2F2; }
+.allergy-card.moderate { border-left-color:#D97706; background:#FFFBEB; }
+.allergy-camper { display:flex; align-items:center; gap:8px; font-size:.85rem; font-weight:700; color:var(--slate-900); }
+.allergy-detail { font-size:.8rem; color:var(--slate-600); margin-top:4px; }
 
 /* ══ BADGES ══════════════════════════════════════════════════ */
 .badge { display:inline-flex; align-items:center; padding:2px 9px; border-radius:999px; font-size:.68rem; font-weight:700; }
