@@ -19,12 +19,23 @@ are untouched — they have their own separate logins.
    that camp, owner + staff, not just the one being guessed at). No more
    self-service unlock link at that point, someone has to clear it by hand
    in the SQL Editor (exact query at the bottom of migration 105, and in
-   step 5 below).
+   step 5 below). The office also gets its own heads-up email the moment
+   this happens (`campistryoffice@gmail.com`, separate from the message
+   shown to whoever got locked out) — so a real attack shows up in your
+   inbox proactively instead of only surfacing when the camp calls in
+   confused.
 
 ## 1. Run the migration
 
 Paste `migrations/105_account_lockouts.sql` into the SQL Editor. Idempotent
-— safe to paste again if you're not sure whether it already ran.
+— safe to paste again if you're not sure whether it already ran (including
+if you already ran an earlier version of it before the camp-wide-lock and
+office-alert additions — re-pasting the current version picks those up,
+nothing needs to be dropped first).
+
+If you already deployed `secure-login` before these additions, redeploy it
+with the current `supabase/functions/secure-login/index.ts` too — the office
+alert email (step 5 below) is new code in that function, not just the SQL.
 
 ## 2. Deploy the edge function — and set the ONE setting that's easy to miss
 
@@ -122,6 +133,14 @@ SELECT * FROM account_lockouts
 only ever affects that one row, and is meant to self-clear via the emailed
 link rather than needing this.)
 
+**You'll know before the camp tells you.** The moment a camp crosses into
+this tier, `secure-login` sends `campistryoffice@gmail.com` its own alert —
+subject "Camp locked out: 10 failed sign-ins on \<email\>" — listing every
+login that got locked. It fires exactly once per lockout event (not once
+per subsequent attempt, since a locked camp's further tries never even
+reach the code that would resend it), via the same Resend setup as
+`stripe-risk-volume-monitor`'s spike alerts — no separate secret needed.
+
 ## 6. Verify end to end
 
 **Signup verification:**
@@ -155,6 +174,11 @@ link rather than needing this.)
   signing in with its correct password — confirm it's ALSO rejected with
   the office-lock message, even though it never failed a single attempt
   itself. That's the camp-wide part working.
+- Check `campistryoffice@gmail.com`'s inbox — confirm the "Camp locked out"
+  alert arrived and lists both logins. Fail the password a few more times
+  on either (still locked, so these are rejected before ever reaching the
+  database) — confirm NO additional alert emails come in for the same
+  incident.
 - Run the `SELECT` from step 5 — confirm every login at the camp shows
   `lock_level = 'office'` — then run the `UPDATE` from step 5 and confirm
   BOTH logins work again immediately with their correct passwords.

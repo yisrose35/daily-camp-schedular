@@ -193,6 +193,7 @@ DECLARE
     v_new_level   text;
     v_token       text;
     v_just_locked boolean := false;
+    v_camp_emails text[];
 BEGIN
     INSERT INTO login_failed_events (email) VALUES (v_email);
 
@@ -215,10 +216,16 @@ BEGIN
         IF v_new_level = 'office' THEN
             -- Escalation is camp-wide: lock every login at this camp, not
             -- just the one email that hit 10. No token for this tier —
-            -- office has to clear it by hand.
+            -- office has to clear it by hand. Captured into an array (not
+            -- just inserted straight from the SETOF) so the same list can
+            -- also go out in the return value — secure-login uses it to
+            -- send the office its own heads-up alert, separate from the
+            -- "contact the office" message shown to whoever was locked out.
+            SELECT array_agg(camp_email) INTO v_camp_emails
+            FROM public._camp_lock_emails(v_email) AS camp_email;
+
             INSERT INTO account_lockouts (email, lock_level, locked_at, unlock_token, unlock_token_expires_at, updated_at)
-            SELECT camp_email, 'office', now(), NULL, NULL, now()
-            FROM public._camp_lock_emails(v_email) AS camp_email
+            SELECT unnest(v_camp_emails), 'office', now(), NULL, NULL, now()
             ON CONFLICT (email) DO UPDATE
                 SET lock_level              = 'office',
                     locked_at               = now(),
@@ -243,6 +250,7 @@ BEGIN
         'lockLevel', v_new_level,
         'justLocked', v_just_locked,
         'unlockToken', CASE WHEN v_just_locked AND v_new_level = 'email' THEN v_token ELSE NULL END,
+        'campEmails', CASE WHEN v_just_locked AND v_new_level = 'office' THEN to_jsonb(v_camp_emails) ELSE NULL END,
         'attemptsRemaining', GREATEST(0, 5 - v_count_24h)
     );
 END;

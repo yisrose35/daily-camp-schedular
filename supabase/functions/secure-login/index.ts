@@ -32,6 +32,13 @@ const resend = new Resend(Deno.env.get("RESEND_API_KEY"));
 // than someone else's email address and a few wrong guesses).
 const APP_ORIGIN = "https://campistry.org";
 
+// Where the office's OWN heads-up alert goes when a camp gets office-locked
+// (10-in-24h) — separate from LOCKED_MESSAGE.office, which is what the
+// locked-out person sees. Same address, same convention as
+// stripe-risk-volume-monitor's RISK_ALERT_EMAIL: the office should hear
+// about this proactively, not only when the camp calls in confused.
+const OFFICE_ALERT_EMAIL = "campistryoffice@gmail.com";
+
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
   "Access-Control-Allow-Headers": "authorization, x-client-info, apikey, content-type",
@@ -39,6 +46,42 @@ const corsHeaders = {
 
 function json(body: unknown, status = 200) {
   return new Response(JSON.stringify(body), { status, headers: { ...corsHeaders, "Content-Type": "application/json" } });
+}
+
+// Fires once per escalation (record_login_failure only ever sets
+// justLocked=true on the transition into 'office' — a locked camp's further
+// attempts never reach record_login_failure at all, since check_login_lock_
+// status rejects them first) — so this can't turn into a flood of alerts
+// for one ongoing incident. Best-effort: a failure here must never surface
+// to the person who triggered the lockout, so it's swallowed, same as the
+// unlock-email send above.
+async function sendOfficeLockAlert(triggeringEmail: string, campEmails: string[]) {
+  try {
+    const emailList = campEmails.length
+      ? `<ul>${campEmails.map((e) => `<li>${e}</li>`).join("")}</ul>`
+      : "<p>(could not resolve the camp's other logins)</p>";
+    const { error } = await resend.emails.send({
+      from: "Campistry Platform Alerts <onboarding@resend.dev>",
+      to: [OFFICE_ALERT_EMAIL],
+      subject: `Camp locked out: 10 failed sign-ins on ${triggeringEmail}`,
+      html: `
+        <div style="font-family: sans-serif; max-width: 600px; margin: 0 auto;">
+          <h2 style="color:#B91C1C;">A camp just got locked out</h2>
+          <p><strong>${triggeringEmail}</strong> hit 10 failed password attempts within a rolling 24 hours, which escalates to an office-only lock.</p>
+          <p>Every login at that camp is now locked out until it's cleared by hand:</p>
+          ${emailList}
+          <p style="margin-top:20px;color:#64748B;font-size:13px;">
+            This could be a real credential-guessing attempt, or just someone who
+            forgot their password and kept retrying past the self-service reopen
+            step. Verify with the camp owner before clearing it — see
+            EMAIL_VERIFICATION_LOCKOUT_SETUP.md step 5 for the unlock query.
+          </p>
+        </div>`,
+    });
+    if (error) console.error("[secure-login] office alert email failed:", error);
+  } catch (mailErr) {
+    console.error("[secure-login] office alert email threw:", mailErr);
+  }
 }
 
 const LOCKED_MESSAGE: Record<string, string> = {
@@ -144,6 +187,15 @@ serve(async (req) => {
     }
 
     if (failResult?.lockLevel === "office") {
+      if (failResult.justLocked) {
+        // Awaited (not fire-and-forget) — an edge function's isolate can be
+        // torn down right after the response is returned, which would drop
+        // an un-awaited send before it ever reaches Resend. sendOfficeLockAlert
+        // itself swallows its own errors, so this can't turn a mail hiccup
+        // into a failed sign-in response.
+        const campEmails: string[] = Array.isArray(failResult.campEmails) ? failResult.campEmails : [];
+        await sendOfficeLockAlert(email, campEmails);
+      }
       return json({ error: LOCKED_MESSAGE.office, locked: true, lockLevel: "office" }, 423);
     }
 
