@@ -9,11 +9,11 @@
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@300;400;500;600;700;800&family=Fraunces:wght@600;700&display=swap" rel="stylesheet">
-    <link rel="stylesheet" href="design-system.css?v=20260901-29" />
-    <link rel="stylesheet" href="styles.css?v=20260901-29" />
-    <link rel="stylesheet" href="mobile-responsive.css?v=20260901-29" />
-    <link rel="stylesheet" href="auto_schedule_styles.css?v=20260901-29">
-    <link rel="stylesheet" href="campistry-unified.css?v=20260901-29">
+    <link rel="stylesheet" href="design-system.css?v=20260901-30" />
+    <link rel="stylesheet" href="styles.css?v=20260901-30" />
+    <link rel="stylesheet" href="mobile-responsive.css?v=20260901-30" />
+    <link rel="stylesheet" href="auto_schedule_styles.css?v=20260901-30">
+    <link rel="stylesheet" href="campistry-unified.css?v=20260901-30">
     
     
     <!-- FIX: Hide app container initially to prevent flash -->
@@ -208,7 +208,7 @@
             <div class="app-header-center">
                 <!-- Quick-Switch Bar (shared component — see campistry_app_switcher.js) -->
                 <div data-quick-switch-mount="flow"></div>
-                <script src="campistry_app_switcher.js?v=20260901-29"></script>
+                <script src="campistry_app_switcher.js?v=20260901-30"></script>
             </div>
             <div class="header-right">
                 <label class="header-date-label" for="calendar-date-picker">
@@ -469,9 +469,9 @@
 
 <!-- CLOUD FOUNDATION (MUST LOAD FIRST) -->
     
-<script src="demo_mode.js?v=20260901-29"></script>
+<script src="demo_mode.js?v=20260901-30"></script>
 <!-- Optional: config.js (gitignored) sets window.__CAMPISTRY_SUPABASE__ so keys stay out of repo -->
-<script src="config.js?v=20260901-29"></script>
+<script src="config.js?v=20260901-30"></script>
 <script>
 // ★ v7.1: Non-blocking Supabase loader (fixes Chrome document.write warning)
 (function() {
@@ -492,18 +492,18 @@
     document.head.appendChild(s);
 })();
 </script>
-    <script src="campistry_utils.js?v=20260901-29"></script>
-    <script src="campistry_security.js?v=20260901-29"></script>
-<script src="supabase_permissions.js?v=20260901-29"></script>
-<script src="supabase_schedules.js?v=20260901-29"></script>
-<script src="supabase_sync.js?v=20260901-29"></script>
-<script src="local_cache_idb.js?v=20260901-29"></script>
-<script src="integration_hooks.js?v=20260901-29"></script>
+    <script src="campistry_utils.js?v=20260901-30"></script>
+    <script src="campistry_security.js?v=20260901-30"></script>
+<script src="supabase_permissions.js?v=20260901-30"></script>
+<script src="supabase_schedules.js?v=20260901-30"></script>
+<script src="supabase_sync.js?v=20260901-30"></script>
+<script src="local_cache_idb.js?v=20260901-30"></script>
+<script src="integration_hooks.js?v=20260901-30"></script>
 
-<script src="schedule_versions_db.js?v=20260901-29"></script>
-<script src="schedule_snapshot_ui.js?v=20260901-29"></script>
-<script src="global_authority.js?v=20260901-29"></script>
-<script src="cloud_sync_helpers.js?v=20260901-29"></script>
+<script src="schedule_versions_db.js?v=20260901-30"></script>
+<script src="schedule_snapshot_ui.js?v=20260901-30"></script>
+<script src="global_authority.js?v=20260901-30"></script>
+<script src="cloud_sync_helpers.js?v=20260901-30"></script>
 
 <!-- AUTH CHECK - Must run before app loads -->
 <script>
@@ -649,107 +649,107 @@
 </script>
 
 <!-- CORE APP -->
-<script src="welcome.js?v=20260901-29"></script>
-<script src="calendar.js?v=20260901-29"></script>
-<script src="app1.js?v=20260901-29"></script>
-<script src="skeleton_sandbox.js?v=20260901-29"></script>
-<script src="daily_adjustments.js?v=20260901-29"></script>
-    <script src="rotation_events.js?v=20260901-29"></script>
-<script src="rainy_day_manager.js?v=20260901-29"></script>
-<script src="midday_rain_stacker.js?v=20260901-29"></script>
-<script src="special_activities.js?v=20260901-29"></script>
-<script src="facilities.js?v=20260901-29"></script>
-<script src="zones.js?v=20260901-29"></script>
-<script src="rules.js?v=20260901-29"></script>
-<script src="playoff_mode.js?v=20260901-29"></script>
-<script src="playoff_hub.js?v=20260901-29"></script>
-<script src="league_play_report.js?v=20260901-29"></script>
-<script src="league_bye_audit.js?v=20260901-29"></script>
-<script src="league_team_rename.js?v=20260901-29"></script>
-<script src="leagues.js?v=20260901-29"></script>
-<script src="specialty_leagues.js?v=20260901-29"></script>
-<script src="master_schedule_builder.js?v=20260901-29"></script>
-    <script src="auto_field_locks.js?v=20260901-29"></script>
-<script src="period_editor.js?v=20260901-29"></script>
-<script src="auto_segment_model.js?v=20260901-29"></script>
-<script src="period_packer.js?v=20260901-29"></script>
-<script src="generation_trace.js?v=20260901-29"></script>
-<script src="auto_solver_engine.js?v=20260901-29"></script>
-    <script src="feasibility_oracle.js?v=20260901-29"></script>
-    <script src="period_tiler.js?v=20260901-29"></script>
-    <script src="day_packer.js?v=20260901-29"></script>
-    <script src="period_orchestrator.js?v=20260901-29"></script>
-    <script src="period_layout.js?v=20260901-29"></script>
-    <script src="gl_stagger.js?v=20260901-29"></script>
-    <script src="gl_bandplan.js?v=20260901-29"></script>
-    <script src="gl_align.js?v=20260901-29"></script>
-    <script src="scheduler_core_auto.js?v=20260901-29"></script>
+<script src="welcome.js?v=20260901-30"></script>
+<script src="calendar.js?v=20260901-30"></script>
+<script src="app1.js?v=20260901-30"></script>
+<script src="skeleton_sandbox.js?v=20260901-30"></script>
+<script src="daily_adjustments.js?v=20260901-30"></script>
+    <script src="rotation_events.js?v=20260901-30"></script>
+<script src="rainy_day_manager.js?v=20260901-30"></script>
+<script src="midday_rain_stacker.js?v=20260901-30"></script>
+<script src="special_activities.js?v=20260901-30"></script>
+<script src="facilities.js?v=20260901-30"></script>
+<script src="zones.js?v=20260901-30"></script>
+<script src="rules.js?v=20260901-30"></script>
+<script src="playoff_mode.js?v=20260901-30"></script>
+<script src="playoff_hub.js?v=20260901-30"></script>
+<script src="league_play_report.js?v=20260901-30"></script>
+<script src="league_bye_audit.js?v=20260901-30"></script>
+<script src="league_team_rename.js?v=20260901-30"></script>
+<script src="leagues.js?v=20260901-30"></script>
+<script src="specialty_leagues.js?v=20260901-30"></script>
+<script src="master_schedule_builder.js?v=20260901-30"></script>
+    <script src="auto_field_locks.js?v=20260901-30"></script>
+<script src="period_editor.js?v=20260901-30"></script>
+<script src="auto_segment_model.js?v=20260901-30"></script>
+<script src="period_packer.js?v=20260901-30"></script>
+<script src="generation_trace.js?v=20260901-30"></script>
+<script src="auto_solver_engine.js?v=20260901-30"></script>
+    <script src="feasibility_oracle.js?v=20260901-30"></script>
+    <script src="period_tiler.js?v=20260901-30"></script>
+    <script src="day_packer.js?v=20260901-30"></script>
+    <script src="period_orchestrator.js?v=20260901-30"></script>
+    <script src="period_layout.js?v=20260901-30"></script>
+    <script src="gl_stagger.js?v=20260901-30"></script>
+    <script src="gl_bandplan.js?v=20260901-30"></script>
+    <script src="gl_align.js?v=20260901-30"></script>
+    <script src="scheduler_core_auto.js?v=20260901-30"></script>
     <!-- v2 SOLVER (un-parked X2f-17): SA local-search optimizer with bucket-grid
          mutations. Gated by globalSettings.app1.solverVersion = 'v2'. v1 stays
          live as default + as v2's seed builder. Goal: validate v2 closes sliver
          gaps via moveAddBucket; if parity holds, flip default and retire v1. -->
-    <script src="scheduler_core_solver_v2.js?v=20260901-29"></script>
-    <script src="solver_version_switch.js?v=20260901-29"></script>
-<script src="swim_debug.js?v=20260901-29"></script>
+    <script src="scheduler_core_solver_v2.js?v=20260901-30"></script>
+    <script src="solver_version_switch.js?v=20260901-30"></script>
+<script src="swim_debug.js?v=20260901-30"></script>
 
 
-<script src="smart_logic_adapter.js?v=20260901-29"></script>
+<script src="smart_logic_adapter.js?v=20260901-30"></script>
 
 <!-- PERMISSIONS & VERSIONING SYSTEM -->
-<script src="permissions_guard.js?v=20260901-29"></script>
+<script src="permissions_guard.js?v=20260901-30"></script>
 
 <!-- RBAC & MULTI-SCHEDULER SYSTEM (LOAD BEFORE SCHEDULER CORE) -->
-<script src="access_control.js?v=20260901-29"></script>
-<script src="subdivision_schedule_manager.js?v=20260901-29"></script>
-<script src="rbac_init.js?v=20260901-29"></script>
+<script src="access_control.js?v=20260901-30"></script>
+<script src="subdivision_schedule_manager.js?v=20260901-30"></script>
+<script src="rbac_init.js?v=20260901-30"></script>
 
-<script src="division_times_system.js?v=20260901-29"></script>
-<script src="division_times_integration.js?v=20260901-29"></script>
-<script src="plan_limits.js?v=20260901-29"></script>
-<script src="trial_guard.js?v=20260901-29"></script>
+<script src="division_times_system.js?v=20260901-30"></script>
+<script src="division_times_integration.js?v=20260901-30"></script>
+<script src="plan_limits.js?v=20260901-30"></script>
+<script src="trial_guard.js?v=20260901-30"></script>
 <!-- SCHEDULER CORE -->
 
 
-<script src="scheduler_core_loader.js?v=20260901-29"></script>
-<script src="global_field_locks.js?v=20260901-29"></script>
-<script src="scheduler_core_utils.js?v=20260901-29"></script>
-<script src="rotation_cloud.js?v=20260901-29"></script>
-<script src="rotation_engine.js?v=20260901-29"></script>
-<script src="rotation_backfill.js?v=20260901-29"></script>
-<script src="tests/rotation_audit.js?v=20260901-29"></script>
-<script src="total_solver_engine.js?v=20260901-29"></script>
-<script src="scheduler_core_specialty_leagues.js?v=20260901-29"></script>
-<script src="scheduler_core_leagues.js?v=20260901-29"></script>
-<script src="scheduler_logic_fillers.js?v=20260901-29"></script>
-<script src="field_quality_reopt.js?v=20260901-29"></script>
-<script src="scheduler_core_main.js?v=20260901-29"></script>
-<script src="schedule_orchestrator.js?v=20260901-29"></script>
+<script src="scheduler_core_loader.js?v=20260901-30"></script>
+<script src="global_field_locks.js?v=20260901-30"></script>
+<script src="scheduler_core_utils.js?v=20260901-30"></script>
+<script src="rotation_cloud.js?v=20260901-30"></script>
+<script src="rotation_engine.js?v=20260901-30"></script>
+<script src="rotation_backfill.js?v=20260901-30"></script>
+<script src="tests/rotation_audit.js?v=20260901-30"></script>
+<script src="total_solver_engine.js?v=20260901-30"></script>
+<script src="scheduler_core_specialty_leagues.js?v=20260901-30"></script>
+<script src="scheduler_core_leagues.js?v=20260901-30"></script>
+<script src="scheduler_logic_fillers.js?v=20260901-30"></script>
+<script src="field_quality_reopt.js?v=20260901-30"></script>
+<script src="scheduler_core_main.js?v=20260901-30"></script>
+<script src="schedule_orchestrator.js?v=20260901-30"></script>
 
 <!-- UNIFIED SCHEDULE SYSTEM -->
-    <script src="auto_schedule_grid.js?v=20260901-29"></script>
-<script src="unified_schedule_system.js?v=20260901-29"></script>
-    <script src="schedule_calendar_views.js?v=20260901-29"></script>
-<script src="post_edit_field_change.js?v=20260901-29"></script>
-<script src="post_edit_system.js?v=20260901-29"></script>
-<script src="auto_fill_slot.js?v=20260901-29"></script>
+    <script src="auto_schedule_grid.js?v=20260901-30"></script>
+<script src="unified_schedule_system.js?v=20260901-30"></script>
+    <script src="schedule_calendar_views.js?v=20260901-30"></script>
+<script src="post_edit_field_change.js?v=20260901-30"></script>
+<script src="post_edit_system.js?v=20260901-30"></script>
+<script src="auto_fill_slot.js?v=20260901-30"></script>
 
 <!-- Pinned preservation (must come after scheduler_core_main.js) -->
-<script src="pinned_activity_preservation.js?v=20260901-29"></script>
+<script src="pinned_activity_preservation.js?v=20260901-30"></script>
 
 <!-- OUTPUT / HELP -->
-<script src="analytics.js?v=20260901-29"></script>
-<script src="coverage_warning.js?v=20260901-29"></script>
-<script src="camper_locator.js?v=20260901-29"></script>
-<script src="validator.js?v=20260901-29"></script>
-<script src="auto_validator.js?v=20260901-29"></script>
-<script src="print_center.js?v=20260901-29"></script>
-<script src="helper.js?v=20260901-29"></script>
-<script src="updates.js?v=20260901-29"></script>
-    <script src="rbac_diagnostics.js?v=20260901-29"></script>
-<script src="campistry_diagnostics.js?v=20260901-29"></script>
-<script src="mobile_touch_drag.js?v=20260901-29"></script>
-<script src="badges.js?v=20260901-29"></script>
-<script src="easter_egg.js?v=20260901-29"></script>
+<script src="analytics.js?v=20260901-30"></script>
+<script src="coverage_warning.js?v=20260901-30"></script>
+<script src="camper_locator.js?v=20260901-30"></script>
+<script src="validator.js?v=20260901-30"></script>
+<script src="auto_validator.js?v=20260901-30"></script>
+<script src="print_center.js?v=20260901-30"></script>
+<script src="helper.js?v=20260901-30"></script>
+<script src="updates.js?v=20260901-30"></script>
+    <script src="rbac_diagnostics.js?v=20260901-30"></script>
+<script src="campistry_diagnostics.js?v=20260901-30"></script>
+<script src="mobile_touch_drag.js?v=20260901-30"></script>
+<script src="badges.js?v=20260901-30"></script>
+<script src="easter_egg.js?v=20260901-30"></script>
     
 <!-- TAB NAVIGATION & SIDEBAR HANDLING -->
 <script>
@@ -828,7 +828,7 @@ function showTab(id) {
     <script>
   window.va = window.va || function () { (window.vaq = window.vaq || []).push(arguments); };
 </script>
-<script defer src="/_vercel/insights/script.js?v=20260901-29"></script>
+<script defer src="/_vercel/insights/script.js?v=20260901-30"></script>
 
 <!-- Live View pop-out detector — when ?view=live is set, take over the page
      and run the schedule fullscreen with a live time cursor. -->
@@ -859,13 +859,13 @@ function showTab(id) {
     } catch (e) { console.error('[LiveView] bootstrap failed', e); }
 })();
 </script>
-<script src="campistry_notes_quick.js?v=20260901-29"></script>
+<script src="campistry_notes_quick.js?v=20260901-30"></script>
 <script>window.__CAMPISTRY_PRODUCT__='flow';</script>
-<script src="parent_lockout_guard.js?v=20260901-29"></script>
-<script src="product_access_guard.js?v=20260901-29"></script>
+<script src="parent_lockout_guard.js?v=20260901-30"></script>
+<script src="product_access_guard.js?v=20260901-30"></script>
 <!-- Per-SECTION access: limits which parts of THIS app the user can open.
      Loads after the product gate, which decides whether they get in at all. -->
-<script src="campistry_capabilities.js?v=20260901-29"></script>
-<script src="campistry_access_sections.js?v=20260901-29"></script>
+<script src="campistry_capabilities.js?v=20260901-30"></script>
+<script src="campistry_access_sections.js?v=20260901-30"></script>
 </body>
 </html>

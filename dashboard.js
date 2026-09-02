@@ -1231,7 +1231,8 @@
             var res = await window.supabase.rpc('get_link_program_settings', { p_camp_id: campId });
             var data = res && res.data;
             if (res.error || !data || !data.success) {
-                box.textContent = 'Could not load Link program settings.';
+                var reason = (res.error && res.error.message) || (data && data.error) || '';
+                box.textContent = 'Could not load Link program settings.' + (reason ? ' (' + reason + ')' : '');
                 return;
             }
             box.innerHTML = LINK_PROGRAMS.map(function(p) {
