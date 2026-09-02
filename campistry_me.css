@@ -378,6 +378,8 @@ select.me-input{cursor:pointer}
 .rb-fields-count{font-weight:400;text-transform:none;letter-spacing:0;color:var(--s400)}
 .rb-fields-list{border:1px solid var(--s200);border-radius:var(--r);background:var(--s50);min-height:60px;max-height:340px;overflow:auto;padding:6px}
 .rb-fields-empty{font-size:.75rem;color:var(--s400);text-align:center;padding:16px 8px}
+.rb-fields-group-hd{font-size:.66rem;font-weight:700;text-transform:uppercase;letter-spacing:.4px;color:var(--s400);padding:8px 4px 4px}
+.rb-fields-group-hd:first-child{padding-top:2px}
 .rb-field-row{display:flex;align-items:center;gap:8px;background:#fff;border:1px solid var(--s200);border-radius:var(--r);padding:8px 10px;margin-bottom:6px;cursor:pointer;font-size:.82rem;color:var(--s700);border-top:2px solid transparent;border-bottom:2px solid transparent}
 .rb-field-row:last-child{margin-bottom:0}
 .rb-field-row:hover{border-color:var(--me);background:rgba(217,119,6,.04)}

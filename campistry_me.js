@@ -11560,30 +11560,38 @@ function renderReports(){
 // ═══════════════════════════════════════════════════════════════
 
 // Field registry: how to turn each record type into flat report rows.
+// Splits a full-name string into {first,last} the same way Print Sheets'
+// psValue already does (first word / everything else) — used wherever a
+// source only stores a combined name but a report still wants First/Last
+// as separate columns.
+function _rbSplitName(full){
+    var parts=String(full||'').trim().split(/\s+/).filter(Boolean);
+    return {first:parts[0]||'',last:parts.slice(1).join(' ')||''};
+}
 function _reportSources(){
     if(typeof loadCustomFields==='function'){ try{ loadCustomFields(); }catch(e){} }
     var cf=(typeof customFields!=='undefined'&&customFields)?customFields:[];
-    var cfFields=cf.map(function(f){ return {key:'cf_'+f.id,label:f.label}; });
+    var cfFields=cf.map(function(f){ return {key:'cf_'+f.id,label:f.label,group:'Custom Fields'}; });
     return {
         campers:{ key:'campers', label:'Campers',
             fields:[
-                {key:'name',label:'Name'},{key:'camperId',label:'Camper ID'},
-                {key:'division',label:'Division'},{key:'grade',label:'Grade'},{key:'bunk',label:'Bunk'},
-                {key:'schoolGrade',label:'School Grade'},{key:'teacher',label:'Teacher'},{key:'school',label:'School'},
-                {key:'age',label:'Age'},{key:'dob',label:'DOB'},{key:'gender',label:'Gender'},
-                {key:'allergies',label:'Allergies'},{key:'medications',label:'Medications'},{key:'dietary',label:'Dietary'},{key:'medicalNotes',label:'Medical Notes'},
-                {key:'physician',label:'Physician'},{key:'insuranceProvider',label:'Insurance'},
-                {key:'camperType',label:'Camper Type'},{key:'swimLevel',label:'Swim Level'},{key:'shirtSize',label:'Shirt Size'},
-                {key:'bunkmateRequest',label:'Bunkmate Request'},{key:'separateFrom',label:'Do Not Bunk With'},
-                {key:'emergencyName',label:'Emergency Contact'},{key:'emergencyPhone',label:'Emergency Phone'},
-                {key:'parent1Name',label:'Parent'},{key:'parent1Phone',label:'Parent Phone'},{key:'parent1Email',label:'Parent Email'},
-                {key:'altFirstName',label:'Alt. First Name'},{key:'altLastName',label:'Alt. Last Name'},
-                {key:'street',label:'Street'},{key:'city',label:'City'},{key:'state',label:'State'},{key:'zip',label:'ZIP'}
+                {key:'name',label:'Name',group:'Basic Info'},{key:'firstName',label:'First Name',group:'Basic Info'},{key:'lastName',label:'Last Name',group:'Basic Info'},
+                {key:'camperId',label:'Camper ID',group:'Basic Info'},{key:'age',label:'Age',group:'Basic Info'},{key:'dob',label:'DOB',group:'Basic Info'},{key:'gender',label:'Gender',group:'Basic Info'},
+                {key:'division',label:'Division',group:'Camp Assignment'},{key:'grade',label:'Grade',group:'Camp Assignment'},{key:'bunk',label:'Bunk',group:'Camp Assignment'},
+                {key:'schoolGrade',label:'School Grade',group:'Camp Assignment'},{key:'teacher',label:'Teacher',group:'Camp Assignment'},{key:'school',label:'School',group:'Camp Assignment'},
+                {key:'camperType',label:'Camper Type',group:'Camp Assignment'},{key:'swimLevel',label:'Swim Level',group:'Camp Assignment'},{key:'shirtSize',label:'Shirt Size',group:'Camp Assignment'},
+                {key:'bunkmateRequest',label:'Bunkmate Request',group:'Camp Assignment'},{key:'separateFrom',label:'Do Not Bunk With',group:'Camp Assignment'},
+                {key:'allergies',label:'Allergies',group:'Medical'},{key:'medications',label:'Medications',group:'Medical'},{key:'dietary',label:'Dietary',group:'Medical'},{key:'medicalNotes',label:'Medical Notes',group:'Medical'},
+                {key:'physician',label:'Physician',group:'Medical'},{key:'insuranceProvider',label:'Insurance',group:'Medical'},
+                {key:'emergencyName',label:'Emergency Contact',group:'Contact'},{key:'emergencyPhone',label:'Emergency Phone',group:'Contact'},
+                {key:'parent1Name',label:'Parent',group:'Contact'},{key:'parent1Phone',label:'Parent Phone',group:'Contact'},{key:'parent1Email',label:'Parent Email',group:'Contact'},
+                {key:'altFirstName',label:'Alt. First Name',group:'Contact'},{key:'altLastName',label:'Alt. Last Name',group:'Contact'},
+                {key:'street',label:'Street',group:'Address'},{key:'city',label:'City',group:'Address'},{key:'state',label:'State',group:'Address'},{key:'zip',label:'ZIP',group:'Address'}
             ].concat(cfFields),
             rows:function(){
                 return Object.keys(roster).map(function(n){
-                    var c=roster[n]||{};
-                    var row={name:n,camperId:c.camperId||'',division:c.division||'',grade:c.grade||'',bunk:c.bunk||'',
+                    var c=roster[n]||{}; var nm=_rbSplitName(n);
+                    var row={name:n,firstName:nm.first,lastName:nm.last,camperId:c.camperId||'',division:c.division||'',grade:c.grade||'',bunk:c.bunk||'',
                         schoolGrade:c.schoolGrade||'',teacher:c.teacher||'',school:c.school||'',
                         age:c.dob?age(c.dob):'',dob:c.dob||'',gender:c.gender||'',
                         allergies:c.allergies||'',medications:c.medications||'',dietary:c.dietary||'',medicalNotes:c.medicalNotes||'',
@@ -11599,9 +11607,9 @@ function _reportSources(){
                 });
             } },
         families:{ key:'families', label:'Families',
-            fields:[{key:'name',label:'Family'},{key:'campers',label:'Campers'},{key:'camperCount',label:'# Campers'},
-                {key:'parent',label:'Primary Parent'},{key:'phone',label:'Phone'},{key:'email',label:'Email'},
-                {key:'address',label:'Address'},{key:'totalPaid',label:'Total Paid'},{key:'balance',label:'Balance'},{key:'status',label:'Status'}],
+            fields:[{key:'name',label:'Family',group:'Basic Info'},{key:'campers',label:'Campers',group:'Basic Info'},{key:'camperCount',label:'# Campers',group:'Basic Info'},{key:'status',label:'Status',group:'Basic Info'},
+                {key:'parent',label:'Primary Parent',group:'Contact'},{key:'phone',label:'Phone',group:'Contact'},{key:'email',label:'Email',group:'Contact'},{key:'address',label:'Address',group:'Contact'},
+                {key:'totalPaid',label:'Total Paid',group:'Billing'},{key:'balance',label:'Balance',group:'Billing'}],
             rows:function(){
                 // Derived from buildFamilyLedgers(), not families[k].balance/
                 // .totalPaid — that stored pair is a separate hand-maintained
@@ -11617,10 +11625,10 @@ function _reportSources(){
                 });
             } },
         enrollments:{ key:'enrollments', label:'Enrollments',
-            fields:[{key:'camperName',label:'Camper'},{key:'session',label:'Session/Term'},{key:'status',label:'Status'},
-                {key:'appliedDate',label:'Applied'},{key:'sessionTuition',label:'Tuition'},{key:'paymentStatus',label:'Payment'},
-                {key:'formsCompleted',label:'Forms Done'},{key:'formsRequired',label:'Forms Required'},
-                {key:'parentName',label:'Parent'},{key:'parentEmail',label:'Parent Email'}],
+            fields:[{key:'camperName',label:'Camper',group:'Basic Info'},{key:'session',label:'Session/Term',group:'Basic Info'},{key:'status',label:'Status',group:'Basic Info'},{key:'appliedDate',label:'Applied',group:'Basic Info'},
+                {key:'sessionTuition',label:'Tuition',group:'Billing'},{key:'paymentStatus',label:'Payment',group:'Billing'},
+                {key:'formsCompleted',label:'Forms Done',group:'Forms'},{key:'formsRequired',label:'Forms Required',group:'Forms'},
+                {key:'parentName',label:'Parent',group:'Contact'},{key:'parentEmail',label:'Parent Email',group:'Contact'}],
             rows:function(){
                 return Object.keys(enrollments).map(function(k){
                     var e=enrollments[k]||{};
@@ -11630,13 +11638,14 @@ function _reportSources(){
                 });
             } },
         staff:{ key:'staff', label:'Staff (Finance Tab)',
-            fields:[{key:'name',label:'Name'},{key:'role',label:'Role'},{key:'type',label:'Type'},{key:'salary',label:'Salary'},{key:'bunk',label:'Bunk'}],
-            rows:function(){ return (finStaff||[]).map(function(s){ return {name:s.name||'',role:s.role||'',type:s.type||'',salary:s.salary||0,bunk:s.bunk||''}; }); } },
+            fields:[{key:'name',label:'Name',group:'Basic Info'},{key:'firstName',label:'First Name',group:'Basic Info'},{key:'lastName',label:'Last Name',group:'Basic Info'},{key:'role',label:'Role',group:'Basic Info'},{key:'type',label:'Type',group:'Basic Info'},
+                {key:'bunk',label:'Bunk',group:'Camp Assignment'},{key:'salary',label:'Salary',group:'Pay'}],
+            rows:function(){ return (finStaff||[]).map(function(s){ var nm=_rbSplitName(s.name); return {name:s.name||'',firstName:nm.first,lastName:nm.last,role:s.role||'',type:s.type||'',salary:s.salary||0,bunk:s.bunk||''}; }); } },
         // Normalizes the 3 heterogeneous finance stores (payments/expenses/
         // finStaff) into one common shape — same logic exportFinancialReport()
         // already used, just returning objects instead of a CSV string.
         financial:{ key:'financial', label:'Financial',
-            fields:[{key:'type',label:'Type'},{key:'date',label:'Date'},{key:'description',label:'Description'},{key:'amount',label:'Amount'},{key:'category',label:'Category'}],
+            fields:[{key:'type',label:'Type',group:'Transaction'},{key:'date',label:'Date',group:'Transaction'},{key:'description',label:'Description',group:'Transaction'},{key:'amount',label:'Amount',group:'Transaction'},{key:'category',label:'Category',group:'Transaction'}],
             rows:function(){
                 var rows=[];
                 (finPayments||[]).forEach(function(p){ rows.push({type:'Payment',date:p.date||'',description:p.family||'',amount:p.amount||0,category:p.method||''}); });
@@ -11649,14 +11658,16 @@ function _reportSources(){
         // above. Added alongside `staff`, not replacing it, so existing
         // reports built off `staff` (finStaff) keep working unchanged.
         payroll:{ key:'payroll', label:'Payroll (Staff Records)',
-            fields:[{key:'name',label:'Name'},{key:'role',label:'Role'},{key:'department',label:'Department'},{key:'bunk',label:'Bunk'},
-                {key:'employmentType',label:'Employment Type'},{key:'startDate',label:'Start Date'},{key:'endDate',label:'End Date'},
-                {key:'payType',label:'Pay Type'},{key:'payRate',label:'Pay Rate'},{key:'expectedWeeklyHours',label:'Expected Weekly Hours'},
-                {key:'i9OnFile',label:'I-9 On File'},{key:'w4OnFile',label:'W-4 On File'},{key:'backgroundCheck',label:'Background Check'}],
+            fields:[{key:'name',label:'Name',group:'Basic Info'},{key:'firstName',label:'First Name',group:'Basic Info'},{key:'lastName',label:'Last Name',group:'Basic Info'},
+                {key:'role',label:'Role',group:'Basic Info'},{key:'department',label:'Department',group:'Basic Info'},{key:'bunk',label:'Bunk',group:'Camp Assignment'},
+                {key:'employmentType',label:'Employment Type',group:'Employment'},{key:'startDate',label:'Start Date',group:'Employment'},{key:'endDate',label:'End Date',group:'Employment'},
+                {key:'payType',label:'Pay Type',group:'Pay'},{key:'payRate',label:'Pay Rate',group:'Pay'},{key:'expectedWeeklyHours',label:'Expected Weekly Hours',group:'Pay'},
+                {key:'i9OnFile',label:'I-9 On File',group:'Compliance'},{key:'w4OnFile',label:'W-4 On File',group:'Compliance'},{key:'backgroundCheck',label:'Background Check',group:'Compliance'}],
             rows:function(){
                 var list=(typeof payroll!=='undefined'&&payroll&&payroll.staff)?payroll.staff:[];
                 return list.map(function(s){
-                    return {name:s.name||'',role:s.role||'',department:s.department||'',bunk:s.bunk||'',
+                    var nm=_rbSplitName(s.name);
+                    return {name:s.name||'',firstName:nm.first,lastName:nm.last,role:s.role||'',department:s.department||'',bunk:s.bunk||'',
                         employmentType:s.employmentType||'',startDate:s.startDate||'',endDate:s.endDate||'',
                         payType:s.payType||'',payRate:s.payRate||0,expectedWeeklyHours:s.expectedWeeklyHours||0,
                         i9OnFile:s.i9OnFile?'Yes':'No',w4OnFile:s.w4OnFile?'Yes':'No',backgroundCheck:s.backgroundCheck?'Yes':'No'};
@@ -11668,21 +11679,22 @@ function _reportSources(){
         // Type-specific gaps (a camper's bunk vs a staff member's role) are
         // simply blank on the other type's rows, same as CampMinder's.
         people:{ key:'people', label:'People (Campers + Staff)',
-            fields:[{key:'personType',label:'Type'},{key:'name',label:'Name'},{key:'division',label:'Division'},{key:'bunk',label:'Bunk'},
-                {key:'role',label:'Role / Position'},{key:'dob',label:'DOB'},{key:'phone',label:'Phone'},{key:'email',label:'Email'},
-                {key:'allergies',label:'Allergies'},{key:'parent1Name',label:'Parent / Guardian'},{key:'parent1Phone',label:'Parent Phone'},
-                {key:'address',label:'Address'}],
+            fields:[{key:'personType',label:'Type',group:'Basic Info'},{key:'name',label:'Name',group:'Basic Info'},{key:'firstName',label:'First Name',group:'Basic Info'},{key:'lastName',label:'Last Name',group:'Basic Info'},{key:'dob',label:'DOB',group:'Basic Info'},
+                {key:'division',label:'Division',group:'Camp Assignment'},{key:'bunk',label:'Bunk',group:'Camp Assignment'},{key:'role',label:'Role / Position',group:'Camp Assignment'},
+                {key:'phone',label:'Phone',group:'Contact'},{key:'email',label:'Email',group:'Contact'},{key:'parent1Name',label:'Parent / Guardian',group:'Contact'},{key:'parent1Phone',label:'Parent Phone',group:'Contact'},{key:'address',label:'Address',group:'Contact'},
+                {key:'allergies',label:'Allergies',group:'Medical'}],
             rows:function(){
                 var rows=[];
                 Object.keys(roster).forEach(function(n){
-                    var c=roster[n]||{};
-                    rows.push({personType:'Camper',name:n,division:c.division||'',bunk:c.bunk||'',role:'',dob:c.dob||'',
+                    var c=roster[n]||{}; var nm=_rbSplitName(n);
+                    rows.push({personType:'Camper',name:n,firstName:nm.first,lastName:nm.last,division:c.division||'',bunk:c.bunk||'',role:'',dob:c.dob||'',
                         phone:'',email:'',allergies:c.allergies||'',parent1Name:c.parent1Name||'',parent1Phone:c.parent1Phone||'',
                         address:[c.street,c.city,c.state,c.zip].filter(Boolean).join(', ')});
                 });
                 hiredStaff().forEach(function(s){
                     var name=s.name||((s.first||'')+' '+(s.last||'')).trim();
-                    rows.push({personType:'Staff',name:name,division:'',bunk:s.bunk||'',role:(s.positions||[]).join(', '),dob:s.dob||'',
+                    rows.push({personType:'Staff',name:name,firstName:s.first||_rbSplitName(name).first,lastName:s.last||_rbSplitName(name).last,
+                        division:'',bunk:s.bunk||'',role:(s.positions||[]).join(', '),dob:s.dob||'',
                         phone:s.phone||'',email:s.email||'',allergies:'',parent1Name:s.parentName||'',parent1Phone:s.parentPhone||'',
                         address:[s.street,s.city,s.state,s.zip].filter(Boolean).join(', ')});
                 });
@@ -11805,9 +11817,8 @@ function _rbInner(){
     (_rbDraft.filters||[]).forEach(function(f,i){ h+=_rbFilterRow(f,i); });
     h+='</div><button class="me-btn me-btn--sec me-btn--sm" style="margin-top:6px" onclick="CampistryMe.rbAddFilter()">+ Add Filter</button></div>';
     // Group by
-    h+='<div class="fg"><label class="fl">Group by</label><select class="fi" id="rbGroup"><option value="">— No grouping —</option>';
-    src.fields.forEach(function(f){ h+='<option value="'+esc(f.key)+'"'+(_rbDraft.groupBy===f.key?' selected':'')+'>'+esc(f.label)+'</option>'; });
-    h+='</select></div>';
+    h+='<div class="fg"><label class="fl">Group by</label><select class="fi" id="rbGroup"><option value="">— No grouping —</option>'
+        +_rbFieldOptionsHtml(src.fields,_rbDraft.groupBy)+'</select></div>';
     // Mode
     h+='<div class="fg"><label class="fl">Save as</label><div style="display:flex;gap:14px;flex-wrap:wrap">'
         +'<label style="display:flex;align-items:center;gap:6px;font-size:.82rem"><input type="radio" name="rbMode" value="live"'+(_rbDraft.mode!=='snapshot'?' checked':'')+' style="accent-color:var(--me)"> <span><strong>Live</strong> — re-runs on fresh data each time</span></label>'
@@ -11824,11 +11835,27 @@ function _rbInner(){
     return h;
 }
 
+// <optgroup>-wrapped <option> list for a source's fields, grouped by
+// f.group — shared by the Group-by select and each filter row's field
+// select, so both stay organized the same way the field picker is.
+function _rbFieldOptionsHtml(fields,selectedKey){
+    var order=[],byGroup={};
+    fields.forEach(function(f){
+        var g=f.group||'Other';
+        if(!byGroup[g]){byGroup[g]=[];order.push(g);}
+        byGroup[g].push(f);
+    });
+    return order.map(function(g){
+        return '<optgroup label="'+esc(g)+'">'+byGroup[g].map(function(f){
+            return '<option value="'+esc(f.key)+'"'+(selectedKey===f.key?' selected':'')+'>'+esc(f.label)+'</option>';
+        }).join('')+'</optgroup>';
+    }).join('');
+}
 function _rbFilterRow(f,i){
     var sources=_reportSources(); var src=sources[_rbDraft.source]||sources.campers;
     var RB=window.ReportBuilderCore;
     f=f||{};
-    var fieldOpts=src.fields.map(function(x){return '<option value="'+esc(x.key)+'"'+(f.field===x.key?' selected':'')+'>'+esc(x.label)+'</option>';}).join('');
+    var fieldOpts=_rbFieldOptionsHtml(src.fields,f.field);
     var opOpts=(RB?RB.OPERATORS:[]).map(function(o){return '<option value="'+o.op+'"'+(f.op===o.op?' selected':'')+'>'+esc(o.label)+'</option>';}).join('');
     return '<div class="rbFilter" style="display:flex;gap:6px;align-items:center;margin-bottom:5px">'
         +'<select class="fi rbfField" style="flex:1;font-size:.8rem;padding:5px 6px">'+fieldOpts+'</select>'
@@ -11848,9 +11875,20 @@ function _rbFieldsSplitHtml(){
     var selSet={}; selected.forEach(function(k){selSet[k]=true;});
     var byKey={}; src.fields.forEach(function(f){byKey[f.key]=f;});
     var avail=src.fields.filter(function(f){return !selSet[f.key];});
+    // Grouped instead of one long flat list — groups appear in the order
+    // their first field appears in the source's own field list, so no
+    // separate group-order table to keep in sync.
+    var groupOrder=[],groupRows={};
+    avail.forEach(function(f){
+        var g=f.group||'Other';
+        if(!groupRows[g]){groupRows[g]=[];groupOrder.push(g);}
+        groupRows[g].push(f);
+    });
     var h='<div class="rb-fields-col"><div class="rb-fields-col-hd">Available</div><div class="rb-fields-list">';
-    h+=avail.length?avail.map(function(f){
-        return '<div class="rb-field-row" onclick="CampistryMe.rbAddField(\''+je(f.key)+'\')"><span class="rb-field-label">'+esc(f.label)+'</span><span class="rb-field-add">+ Add</span></div>';
+    h+=avail.length?groupOrder.map(function(g){
+        return '<div class="rb-fields-group-hd">'+esc(g)+'</div>'+groupRows[g].map(function(f){
+            return '<div class="rb-field-row" onclick="CampistryMe.rbAddField(\''+je(f.key)+'\')"><span class="rb-field-label">'+esc(f.label)+'</span><span class="rb-field-add">+</span></div>';
+        }).join('');
     }).join(''):'<div class="rb-fields-empty">All fields added</div>';
     h+='</div></div>';
     h+='<div class="rb-fields-col"><div class="rb-fields-col-hd">Selected <span class="rb-fields-count">'+selected.length+'</span></div><div class="rb-fields-list" id="rbSelList">';
