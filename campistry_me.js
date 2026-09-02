@@ -11733,6 +11733,7 @@ var _rbQuickTemplates={
 };
 
 function openReportBuilder(existingId,templateKey){
+    _rbFieldSearch='';
     var existing=existingId?savedReports.filter(function(r){return r.id===existingId;})[0]:null;
     var sources=_reportSources();
     var tmpl=(!existing&&templateKey)?_rbQuickTemplates[templateKey]:null;
@@ -11817,7 +11818,8 @@ function _rbInner(){
     (_rbDraft.filters||[]).forEach(function(f,i){ h+=_rbFilterRow(f,i); });
     h+='</div><button class="me-btn me-btn--sec me-btn--sm" style="margin-top:6px" onclick="CampistryMe.rbAddFilter()">+ Add Filter</button></div>';
     // Group by
-    h+='<div class="fg"><label class="fl">Group by</label><select class="fi" id="rbGroup"><option value="">— No grouping —</option>'
+    h+='<div class="fg"><label class="fl">Group by <span style="font-weight:400;color:var(--s400);font-size:.7rem">(splits the report into a separate table per value, e.g. one table per bunk)</span></label>'
+        +'<select class="fi" id="rbGroup"><option value="">— No grouping —</option>'
         +_rbFieldOptionsHtml(src.fields,_rbDraft.groupBy)+'</select></div>';
     // Mode
     h+='<div class="fg"><label class="fl">Save as</label><div style="display:flex;gap:14px;flex-wrap:wrap">'
@@ -11855,12 +11857,18 @@ function _rbFilterRow(f,i){
     var sources=_reportSources(); var src=sources[_rbDraft.source]||sources.campers;
     var RB=window.ReportBuilderCore;
     f=f||{};
+    var ops=RB?RB.OPERATORS:[];
     var fieldOpts=_rbFieldOptionsHtml(src.fields,f.field);
-    var opOpts=(RB?RB.OPERATORS:[]).map(function(o){return '<option value="'+o.op+'"'+(f.op===o.op?' selected':'')+'>'+esc(o.label)+'</option>';}).join('');
+    // "is empty" / "is not empty" don't take a value — a blank text box next
+    // to them just reads as unfinished. Hide it, and toggle live if the
+    // operator changes, instead of leaving a dead input for those two.
+    var curOp=ops.filter(function(o){return o.op===(f.op||ops[0].op);})[0];
+    var valHidden=curOp&&curOp.unary;
     return '<div class="rbFilter" style="display:flex;gap:6px;align-items:center;margin-bottom:5px">'
         +'<select class="fi rbfField" style="flex:1;font-size:.8rem;padding:5px 6px">'+fieldOpts+'</select>'
-        +'<select class="fi rbfOp" style="flex:0 0 130px;font-size:.8rem;padding:5px 6px">'+opOpts+'</select>'
-        +'<input class="fi rbfVal" style="flex:1;font-size:.8rem;padding:5px 8px" value="'+esc(f.value||'')+'" placeholder="value">'
+        +'<select class="fi rbfOp" style="flex:0 0 130px;font-size:.8rem;padding:5px 6px" onchange="var u=this.options[this.selectedIndex].dataset.unary===\'1\';this.closest(\'.rbFilter\').querySelector(\'.rbfVal\').style.display=u?\'none\':\'\';">'
+        +ops.map(function(o){return '<option value="'+o.op+'" data-unary="'+(o.unary?'1':'0')+'"'+(f.op===o.op?' selected':'')+'>'+esc(o.label)+'</option>';}).join('')+'</select>'
+        +'<input class="fi rbfVal" style="flex:1;font-size:.8rem;padding:5px 8px'+(valHidden?';display:none':'')+'" value="'+esc(f.value||'')+'" placeholder="value">'
         +'<button class="me-btn me-btn--ghost" style="color:var(--err);font-size:.7rem" onclick="this.closest(\'.rbFilter\').remove()">✕</button></div>';
 }
 
@@ -11868,13 +11876,20 @@ function _rbFilterRow(f,i){
 // left to add it, drag rows in the right column to reorder (same native
 // HTML5 drag pattern Print Sheets' column list already uses). _rbDraft.fields
 // IS the order — this is just a friendlier editor over that same array.
+var _rbFieldSearch=''; // live filter text over the Available column
+
 function _rbFieldsSplitHtml(){
     var sources=_reportSources();
     var src=sources[_rbDraft.source]||sources.campers;
     var selected=_rbDraft.fields||[];
     var selSet={}; selected.forEach(function(k){selSet[k]=true;});
     var byKey={}; src.fields.forEach(function(f){byKey[f.key]=f;});
-    var avail=src.fields.filter(function(f){return !selSet[f.key];});
+    var q=_rbFieldSearch.trim().toLowerCase();
+    var avail=src.fields.filter(function(f){
+        if(selSet[f.key])return false;
+        if(q&&f.label.toLowerCase().indexOf(q)<0)return false;
+        return true;
+    });
     // Grouped instead of one long flat list — groups appear in the order
     // their first field appears in the source's own field list, so no
     // separate group-order table to keep in sync.
@@ -11884,12 +11899,18 @@ function _rbFieldsSplitHtml(){
         if(!groupRows[g]){groupRows[g]=[];groupOrder.push(g);}
         groupRows[g].push(f);
     });
-    var h='<div class="rb-fields-col"><div class="rb-fields-col-hd">Available</div><div class="rb-fields-list">';
-    h+=avail.length?groupOrder.map(function(g){
-        return '<div class="rb-fields-group-hd">'+esc(g)+'</div>'+groupRows[g].map(function(f){
-            return '<div class="rb-field-row" onclick="CampistryMe.rbAddField(\''+je(f.key)+'\')"><span class="rb-field-label">'+esc(f.label)+'</span><span class="rb-field-add">+</span></div>';
+    var h='<div class="rb-fields-col"><div class="rb-fields-col-hd">Available</div>';
+    h+='<input class="me-input me-input--sm rb-fields-search" id="rbFieldSearch" type="text" placeholder="Search fields..." value="'+esc(_rbFieldSearch)+'" oninput="CampistryMe.rbFilterFields(this.value)">';
+    h+='<div class="rb-fields-list">';
+    if(avail.length){
+        h+=groupOrder.map(function(g){
+            return '<div class="rb-fields-group-hd">'+esc(g)+'</div>'+groupRows[g].map(function(f){
+                return '<div class="rb-field-row" onclick="CampistryMe.rbAddField(\''+je(f.key)+'\')"><span class="rb-field-label">'+esc(f.label)+'</span><span class="rb-field-add">+</span></div>';
+            }).join('');
         }).join('');
-    }).join(''):'<div class="rb-fields-empty">All fields added</div>';
+    }else{
+        h+='<div class="rb-fields-empty">'+(q?'No fields match "'+esc(_rbFieldSearch)+'"':'All fields added')+'</div>';
+    }
     h+='</div></div>';
     h+='<div class="rb-fields-col"><div class="rb-fields-col-hd">Selected <span class="rb-fields-count">'+selected.length+'</span></div><div class="rb-fields-list" id="rbSelList">';
     h+=selected.length?selected.map(function(k){
@@ -11898,8 +11919,7 @@ function _rbFieldsSplitHtml(){
             +' ondragstart="CampistryMe.rbFieldDragStart(event,\''+je(k)+'\')"'
             +' ondragend="CampistryMe.rbFieldDragEnd(event)"'
             +' ondragover="CampistryMe.rbFieldDragOver(event)"'
-            +' ondragleave="CampistryMe.rbFieldDragLeave(event)"'
-            +' ondrop="CampistryMe.rbFieldDrop(event,\''+je(k)+'\')">'
+            +' ondrop="CampistryMe.rbFieldDrop(event)">'
             +'<span class="rb-field-drag" title="Drag to reorder" onmousedown="CampistryMe.rbFieldDragHandle(event)">⋮⋮</span>'
             +'<span class="rb-field-label">'+esc(f.label)+'</span>'
             +'<button type="button" class="rb-field-remove" title="Remove" onclick="event.stopPropagation();CampistryMe.rbRemoveField(\''+je(k)+'\')">✕</button>'
@@ -11912,6 +11932,14 @@ function _rbRefreshFields(){
     var host=document.getElementById('rbFieldsSplit');
     if(host) host.innerHTML=_rbFieldsSplitHtml();
 }
+function rbFilterFields(q){
+    _rbFieldSearch=q||'';
+    _rbRefreshFields();
+    // The search box gets rebuilt along with the rest of the column —
+    // put focus (and the cursor position) back so typing isn't interrupted.
+    var el=document.getElementById('rbFieldSearch');
+    if(el){ el.focus(); var p=el.value.length; el.setSelectionRange(p,p); }
+}
 function rbAddField(key){
     if(!_rbDraft)return;
     if(_rbDraft.fields.indexOf(key)<0)_rbDraft.fields.push(key);
@@ -11922,49 +11950,37 @@ function rbRemoveField(key){
     _rbDraft.fields=_rbDraft.fields.filter(function(k){return k!==key;});
     _rbRefreshFields();_rbLiveUpdate();
 }
-var _rbDragFieldKey=null;
-function _rbClearFieldDropCues(){
-    document.querySelectorAll('#rbSelList .rb-field-row.rb-drop-above,#rbSelList .rb-field-row.rb-drop-below').forEach(function(r){r.classList.remove('rb-drop-above','rb-drop-below');});
-}
+// Live drag-to-reorder: the dragged row actually moves in the DOM as soon
+// as you drag over another row (not just a border cue that jumps on drop),
+// so the list re-orders in real time under the cursor — feels like a real
+// reorderable list instead of a two-step "hover, then commit on release."
+// _rbDraft.fields is read back from the DOM order on drag END (which always
+// fires, even if the final drop lands somewhere invalid), not from index
+// math on drop, so the array can never drift out of sync with what's shown.
+var _rbDragFieldEl=null;
 function rbFieldDragHandle(e){var row=e.target.closest('.rb-field-row');if(row)row.setAttribute('draggable','true');}
 function rbFieldDragStart(e,key){
-    _rbDragFieldKey=key;
+    _rbDragFieldEl=e.target.closest('.rb-field-row');
     try{e.dataTransfer.effectAllowed='move';e.dataTransfer.setData('text/plain',key);}catch(_){}
-    var row=e.target.closest('.rb-field-row');if(row)row.classList.add('rb-dragging');
-}
-function rbFieldDragEnd(e){
-    var row=e.target.closest('.rb-field-row');if(row){row.classList.remove('rb-dragging');row.setAttribute('draggable','false');}
-    _rbClearFieldDropCues();_rbDragFieldKey=null;
+    if(_rbDragFieldEl)_rbDragFieldEl.classList.add('rb-dragging');
 }
 function rbFieldDragOver(e){
-    if(!_rbDragFieldKey)return;
+    if(!_rbDragFieldEl)return;
     e.preventDefault();try{e.dataTransfer.dropEffect='move';}catch(_){}
     var row=e.target.closest('.rb-field-row');
-    if(!row||row.dataset.key===_rbDragFieldKey){_rbClearFieldDropCues();return;}
-    var rect=row.getBoundingClientRect();var after=(e.clientY-rect.top)>rect.height/2;
-    _rbClearFieldDropCues();row.classList.add(after?'rb-drop-below':'rb-drop-above');
+    if(!row||row===_rbDragFieldEl)return;
+    var rect=row.getBoundingClientRect();
+    var after=(e.clientY-rect.top)>rect.height/2;
+    row.parentNode.insertBefore(_rbDragFieldEl,after?row.nextSibling:row);
 }
-function rbFieldDragLeave(e){
-    var row=e.target.closest('.rb-field-row');
-    if(row&&!row.contains(e.relatedTarget))row.classList.remove('rb-drop-above','rb-drop-below');
-}
-function rbFieldDrop(e,targetKey){
-    e.preventDefault();
-    var dragKey=_rbDragFieldKey;
-    _rbClearFieldDropCues();
-    if(!_rbDraft||!dragKey||dragKey===targetKey){_rbDragFieldKey=null;return;}
-    var fields=_rbDraft.fields;
-    var from=fields.indexOf(dragKey);
-    if(from<0){_rbDragFieldKey=null;return;}
-    var row=e.target.closest('.rb-field-row');
-    var after=false;
-    if(row){var rect=row.getBoundingClientRect();after=(e.clientY-rect.top)>rect.height/2;}
-    var moved=fields.splice(from,1)[0];
-    var insertIdx=fields.indexOf(targetKey);
-    if(insertIdx<0)insertIdx=fields.length;else if(after)insertIdx+=1;
-    fields.splice(insertIdx,0,moved);
-    _rbDragFieldKey=null;
-    _rbRefreshFields();_rbLiveUpdate();
+function rbFieldDrop(e){ e.preventDefault(); }
+function rbFieldDragEnd(){
+    if(_rbDragFieldEl){_rbDragFieldEl.classList.remove('rb-dragging');_rbDragFieldEl.setAttribute('draggable','false');}
+    _rbDragFieldEl=null;
+    if(!_rbDraft)return;
+    var list=document.getElementById('rbSelList');
+    if(list) _rbDraft.fields=Array.prototype.map.call(list.querySelectorAll('.rb-field-row'),function(r){return r.dataset.key;});
+    _rbLiveUpdate();
 }
 
 function _rbSyncFromDom(){
@@ -11989,7 +12005,7 @@ function rbSourceChange(v){
     _rbDraft.source=v;
     // Reset fields to a sensible default and clear now-invalid filters/group.
     _rbDraft.fields=(sources[v]||sources.campers).fields.slice(0,6).map(function(f){return f.key;});
-    _rbDraft.filters=[]; _rbDraft.groupBy='';
+    _rbDraft.filters=[]; _rbDraft.groupBy=''; _rbFieldSearch='';
     var panel=document.getElementById('rbConfigPanel');
     if(panel) panel.innerHTML=_rbInner();
 }
@@ -13482,8 +13498,8 @@ window.CampistryMe={
     // Reports
     exportRosterReport:exportRosterReport,exportFamilyReport:exportFamilyReport,printFamilies:printFamilies,
     openReportBuilder:openReportBuilder,rbCancelEdit:rbCancelEdit,rbSourceChange:rbSourceChange,rbAddFilter:rbAddFilter,
-    rbAddField:rbAddField,rbRemoveField:rbRemoveField,
-    rbFieldDragHandle:rbFieldDragHandle,rbFieldDragStart:rbFieldDragStart,rbFieldDragEnd:rbFieldDragEnd,rbFieldDragOver:rbFieldDragOver,rbFieldDragLeave:rbFieldDragLeave,rbFieldDrop:rbFieldDrop,
+    rbAddField:rbAddField,rbRemoveField:rbRemoveField,rbFilterFields:rbFilterFields,
+    rbFieldDragHandle:rbFieldDragHandle,rbFieldDragStart:rbFieldDragStart,rbFieldDragEnd:rbFieldDragEnd,rbFieldDragOver:rbFieldDragOver,rbFieldDrop:rbFieldDrop,
     saveCurrentReport:saveCurrentReport,runSavedReport:runSavedReport,exportSavedReport:exportSavedReport,printSavedReport:printSavedReport,printReportDraft:printReportDraft,deleteSavedReport:deleteSavedReport,
     exportEnrollmentReport:exportEnrollmentReport,exportDivisionReport:exportDivisionReport,
     exportMedicalReport:exportMedicalReport,exportFinancialReport:exportFinancialReport,
