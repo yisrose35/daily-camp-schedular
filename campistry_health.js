@@ -395,10 +395,80 @@
         saveHealth(hd); closeModal('medModal'); toast('Dispensing logged','ok'); renderDashboard(); renderMedications();
     }
 
+    // Read-only camper profile — same info the Roster/People page in Me
+    // shows, minus everything a nurse doesn't need at a glance (no editing,
+    // documents, financial aid, notes/timeline, or attendance history —
+    // those stay in Me, this is the Health-scoped medical view).
+    function _cpRow(label, val) {
+        return '<div class="cp-row"><div class="cp-row-label">'+esc(label)+'</div><div class="cp-row-val">'+(val?esc(val):'<span style="color:var(--slate-300)">—</span>')+'</div></div>';
+    }
     function viewCamper(name) {
         var c = getRoster()[name]; if (!c) return;
-        var lines = ['CAMPER: '+name+(c.camperId?' (#'+String(c.camperId).padStart(4,'0')+')':''),'','Division: '+(c.division||'—'),'Bunk: '+(c.bunk||'—'),'Age: '+(c.dob?age(c.dob):'—'),'DOB: '+(c.dob||'—'),'Gender: '+(c.gender||'—'),'School: '+(c.school||'—'),'','── PARENT / GUARDIAN ──','Parent: '+(c.parent1Name||'—'),'Phone: '+(c.parent1Phone||'—'),'Email: '+(c.parent1Email||'—'),'','── EMERGENCY CONTACT ──','Name: '+(c.emergencyName||'—'),'Phone: '+(c.emergencyPhone||'—'),'Relation: '+(c.emergencyRel||'—'),'','── ADDRESS ──',[c.street,c.city,c.state,c.zip].filter(Boolean).join(', ')||'—','','── MEDICAL (from Me) ──','Allergies: '+(c.allergies||'None'),'Medications: '+(c.medications||'None'),'Dietary: '+(c.dietary||'None')];
-        alert(lines.join('\n'));
+        var titleEl = document.getElementById('camperModalName');
+        if (titleEl) titleEl.textContent = name + (c.camperId ? ' (#'+String(c.camperId).padStart(4,'0')+')' : '');
+
+        var flags = '';
+        if (c.allergies) flags += bdg(c.allergies,'red')+' ';
+        if (c.medications) flags += bdg(c.medications,'purple')+' ';
+        if (c.dietary) flags += bdg(c.dietary,'amber')+' ';
+        if (!flags) flags = '<span style="color:var(--slate-300)">None on file</span>';
+
+        var h = '';
+        h += '<div style="display:flex;align-items:center;gap:12px;margin-bottom:18px">'
+           + '<div class="med-avatar" style="background:'+avc(name)+';width:48px;height:48px;font-size:.9rem">'+ini(name)+'</div>'
+           + '<div>'+(c.division?bdg(c.division,'purple')+' ':'')+(c.bunk?bdg(c.bunk,'blue'):'')
+           + '<div style="font-size:.78rem;color:var(--slate-500);margin-top:3px">'+(c.dob?age(c.dob)+' yrs old · ':'')+esc(c.gender||'')+'</div></div>'
+           + '</div>';
+
+        h += '<div class="cp-section"><div class="cp-section-title">Medical</div>'
+           + '<div style="margin-bottom:8px">'+flags+'</div>'
+           + '<div class="cp-grid">'
+           + _cpRow('Medical Notes', c.medicalNotes)
+           + _cpRow('Physician', c.physician)
+           + _cpRow('Physician Phone', c.physicianPhone)
+           + _cpRow('Insurance Provider', c.insuranceProvider)
+           + _cpRow('Insurance Policy #', c.insurancePolicy)
+           + '</div></div>';
+
+        // Documents uploaded at registration (immunization records, health
+        // forms, insurance card, etc.) — the same files a parent attached
+        // on the public registration form, carried onto the camper record
+        // at Enroll time so they don't stay stranded on the application.
+        var docs = c.documents || [];
+        h += '<div class="cp-section"><div class="cp-section-title">Documents from Registration</div>';
+        if (!docs.length) {
+            h += '<div style="font-size:.8rem;color:var(--slate-300);font-style:italic">None uploaded</div>';
+        } else {
+            h += docs.map(function(d) {
+                return '<div style="display:flex;align-items:center;gap:6px;padding:3px 0;font-size:.82rem">📄 <strong>'+esc(d.name||'Document')+'</strong>'
+                     + (d.data ? ' <a href="'+esc(d.data)+'" download="'+esc(d.name||'document')+'" style="color:var(--health);font-weight:600;font-size:.75rem">Download</a>' : '')
+                     + '</div>';
+            }).join('');
+        }
+        h += '</div>';
+
+        h += '<div class="cp-section"><div class="cp-section-title">Camp Assignment</div><div class="cp-grid">'
+           + _cpRow('Division', c.division) + _cpRow('Bunk', c.bunk)
+           + _cpRow('School', c.school) + _cpRow('DOB', c.dob)
+           + '</div></div>';
+
+        h += '<div class="cp-section"><div class="cp-section-title">Parent / Guardian</div><div class="cp-grid">'
+           + _cpRow('Name', c.parent1Name) + _cpRow('Phone', c.parent1Phone)
+           + _cpRow('Email', c.parent1Email)
+           + '</div></div>';
+
+        h += '<div class="cp-section"><div class="cp-section-title">Emergency Contact</div><div class="cp-grid">'
+           + _cpRow('Name', c.emergencyName) + _cpRow('Phone', c.emergencyPhone)
+           + _cpRow('Relation', c.emergencyRel)
+           + '</div></div>';
+
+        var addr = [c.street,c.city,c.state,c.zip].filter(Boolean).join(', ');
+        h += '<div class="cp-section"><div class="cp-section-title">Address</div>'
+           + '<div class="cp-row-val">'+(addr?esc(addr):'<span style="color:var(--slate-300)">—</span>')+'</div></div>';
+
+        var body = document.getElementById('camperModalBody');
+        if (body) body.innerHTML = h;
+        openModal('camperModal');
     }
 
     // ── Camper Search Autocomplete ────────────────────────────────────────

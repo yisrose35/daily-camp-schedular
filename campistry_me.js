@@ -8202,7 +8202,8 @@ function enrollCamper(id){
             parent1Name:e.parentName||'',parent1Phone:e.parentPhone||'',parent1Email:e.parentEmail||'',
             parent2Name:e.parent2Name||'',parent2Phone:e.parent2Phone||'',parent2Email:e.parent2Email||'',parent2Relation:e.parent2Relation||'',
             emergencyName:e.emergencyName||'',emergencyPhone:e.emergencyPhone||'',emergencyRel:e.emergencyRel||'',
-            allergies:e.allergies||'',medications:e.medications||'',dietary:e.dietary||'',
+            allergies:e.allergies||'',medications:e.medications||'',dietary:e.dietary||'',medicalNotes:e.medicalNotes||'',
+            documents:e.documents||[],
             smsEmailConsent:!!e.smsEmailConsent
         };
         // Sync address to Go
@@ -8235,6 +8236,8 @@ function enrollCamper(id){
         if(!c.allergies&&e.allergies)c.allergies=e.allergies;
         if(!c.medications&&e.medications)c.medications=e.medications;
         if(!c.dietary&&e.dietary)c.dietary=e.dietary;
+        if(!c.medicalNotes&&e.medicalNotes)c.medicalNotes=e.medicalNotes;
+        if((!c.documents||!c.documents.length)&&e.documents&&e.documents.length)c.documents=e.documents;
         toast('Enrolled — updated existing camper');
     }
     // Auto-family: join an EXISTING family only on a 3-of-4 match (last name,

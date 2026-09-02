@@ -44,8 +44,8 @@
             100% { transform: scale(1.0); opacity: 1; }
         }
     </style>
-    <link rel="stylesheet" href="campistry-unified.css?v=20260901-19">
-    <link rel="stylesheet" href="campistry_health.css?v=20260901-19">
+    <link rel="stylesheet" href="campistry-unified.css?v=20260901-20">
+    <link rel="stylesheet" href="campistry_health.css?v=20260901-20">
     <noscript><style>html body{opacity:1!important}</style></noscript>
 </head>
 <body>
@@ -80,7 +80,7 @@
     <div class="app-header-center">
         <!-- Quick-Switch Bar (shared component — see campistry_app_switcher.js) -->
         <div data-quick-switch-mount="health"></div>
-        <script src="campistry_app_switcher.js?v=20260901-19"></script>
+        <script src="campistry_app_switcher.js?v=20260901-20"></script>
     </div>
     <div class="header-right">
         <div class="sync-badge"><span class="sync-dot"></span> Synced</div>
@@ -244,6 +244,12 @@
     <div class="form-group"><label class="form-label">Notes</label><input type="text" class="form-input" id="medNotes" placeholder="Optional..."></div>
 </div><div class="modal-footer"><button class="btn btn-secondary" onclick="CampistryHealth.closeModal('medModal')">Cancel</button><button class="btn btn-primary" onclick="CampistryHealth.saveDispensing()">Log Dispensing</button></div></div></div>
 
+<!-- Read-only camper profile — Camper Directory row click. Same info a
+     nurse needs at a glance; no editing, no documents/financial
+     aid/notes/attendance-history extras that Campistry Me's own camper
+     profile carries — those stay in Me. -->
+<div class="modal-overlay" id="camperModal"><div class="modal modal-lg"><div class="modal-header"><h3 id="camperModalName">Camper</h3><button class="modal-close" onclick="CampistryHealth.closeModal('camperModal')">&times;</button></div><div class="modal-body" id="camperModalBody"></div></div></div>
+
 <!-- ═══ BOTTOM NAV (mobile) ═══ -->
 <div class="cs-bnav" id="healthBnav">
     <button class="cs-bnav-item active" onclick="triggerPage('dashboard', this)">
@@ -277,11 +283,11 @@ function triggerPage(p, btn) {
     if (btn) btn.classList.add('active');
 }
 </script>
-<script src="config.js?v=20260901-19"></script>
-<script src="supabase-js@2.js?v=20260901-19"></script>
-<script src="supabase_client.js?v=20260901-19"></script>
-<script src="campistry_cloud_bootstrap.js?v=20260901-19"></script>
-<script src="campistry_health.js?v=20260901-19"></script>
+<script src="config.js?v=20260901-20"></script>
+<script src="supabase-js@2.js?v=20260901-20"></script>
+<script src="supabase_client.js?v=20260901-20"></script>
+<script src="campistry_cloud_bootstrap.js?v=20260901-20"></script>
+<script src="campistry_health.js?v=20260901-20"></script>
 <script>
 // Sidebar (hamburger toggle — matches Flow/Me)
 (function(){
@@ -321,7 +327,7 @@ window.addEventListener('campistry-cloud-hydrated', function(){
 });
 </script>
 <script>setTimeout(function(){document.documentElement.classList.add('css-ready')},3000)</script>
-<script src="campistry_notes_quick.js?v=20260901-19"></script>
+<script src="campistry_notes_quick.js?v=20260901-20"></script>
 <script>window.__CAMPISTRY_PRODUCT__='health';</script>
 <script>
 // ── Health data ↔ cloud sync ──────────────────────────────────────────────────
@@ -378,11 +384,11 @@ window.addEventListener('campistry-cloud-hydrated', function(){
     window.addEventListener('storage', function(e){ if(e.key===GKEY) sync(); });
 })();
 </script>
-<script src="parent_lockout_guard.js?v=20260901-19"></script>
-<script src="product_access_guard.js?v=20260901-19"></script>
+<script src="parent_lockout_guard.js?v=20260901-20"></script>
+<script src="product_access_guard.js?v=20260901-20"></script>
 <!-- Per-SECTION access: limits which parts of THIS app the user can open.
      Loads after the product gate, which decides whether they get in at all. -->
-<script src="campistry_capabilities.js?v=20260901-19"></script>
-<script src="campistry_access_sections.js?v=20260901-19"></script>
+<script src="campistry_capabilities.js?v=20260901-20"></script>
+<script src="campistry_access_sections.js?v=20260901-20"></script>
 </body>
 </html>
