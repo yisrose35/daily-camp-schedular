@@ -11507,7 +11507,7 @@ function renderReports(){
     }else{
         h+='<div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(300px,1fr));gap:14px;margin-bottom:18px">';
         savedReports.forEach(function(r){
-            var srcLabel=({campers:'Campers',families:'Families',enrollments:'Enrollments',staff:'Staff',financial:'Financial',payroll:'Payroll'})[r.source]||r.source;
+            var srcLabel=({campers:'Campers',families:'Families',enrollments:'Enrollments',staff:'Staff',financial:'Financial',payroll:'Payroll',people:'People'})[r.source]||r.source;
             var meta=srcLabel+' · '+(r.fields||[]).length+' fields'+((r.filters||[]).length?' · '+r.filters.length+' filter'+(r.filters.length>1?'s':''):'')+(r.groupBy?' · grouped':'')+(r.schedule?' · 📧 '+(r.schedule.freq==='weekly'?'Weekly':'Monthly'):'');
             var badgeCss='font-size:.62rem;font-weight:700;padding:2px 8px;border-radius:999px;white-space:nowrap;';
             var modeBadge=r.mode==='snapshot'?'<span style="'+badgeCss+'background:var(--s100);color:var(--s500)">Snapshot</span>':'<span style="'+badgeCss+'background:rgba(217,119,6,.1);color:var(--me)">Live</span>';
@@ -11661,6 +11661,32 @@ function _reportSources(){
                         payType:s.payType||'',payRate:s.payRate||0,expectedWeeklyHours:s.expectedWeeklyHours||0,
                         i9OnFile:s.i9OnFile?'Yes':'No',w4OnFile:s.w4OnFile?'Yes':'No',backgroundCheck:s.backgroundCheck?'Yes':'No'};
                 });
+            } },
+        // Cross-partition report — campers and hired staff on ONE report,
+        // matching CampMinder's Cross Partition Person Reporter (staff,
+        // alumni, campers, etc. all together via shared "person" fields).
+        // Type-specific gaps (a camper's bunk vs a staff member's role) are
+        // simply blank on the other type's rows, same as CampMinder's.
+        people:{ key:'people', label:'People (Campers + Staff)',
+            fields:[{key:'personType',label:'Type'},{key:'name',label:'Name'},{key:'division',label:'Division'},{key:'bunk',label:'Bunk'},
+                {key:'role',label:'Role / Position'},{key:'dob',label:'DOB'},{key:'phone',label:'Phone'},{key:'email',label:'Email'},
+                {key:'allergies',label:'Allergies'},{key:'parent1Name',label:'Parent / Guardian'},{key:'parent1Phone',label:'Parent Phone'},
+                {key:'address',label:'Address'}],
+            rows:function(){
+                var rows=[];
+                Object.keys(roster).forEach(function(n){
+                    var c=roster[n]||{};
+                    rows.push({personType:'Camper',name:n,division:c.division||'',bunk:c.bunk||'',role:'',dob:c.dob||'',
+                        phone:'',email:'',allergies:c.allergies||'',parent1Name:c.parent1Name||'',parent1Phone:c.parent1Phone||'',
+                        address:[c.street,c.city,c.state,c.zip].filter(Boolean).join(', ')});
+                });
+                hiredStaff().forEach(function(s){
+                    var name=s.name||((s.first||'')+' '+(s.last||'')).trim();
+                    rows.push({personType:'Staff',name:name,division:'',bunk:s.bunk||'',role:(s.positions||[]).join(', '),dob:s.dob||'',
+                        phone:s.phone||'',email:s.email||'',allergies:'',parent1Name:s.parentName||'',parent1Phone:s.parentPhone||'',
+                        address:[s.street,s.city,s.state,s.zip].filter(Boolean).join(', ')});
+                });
+                return rows;
             } }
     };
 }
@@ -11724,7 +11750,7 @@ function rbCancelEdit(){
 }
 
 function _rbEditorHtml(){
-    var h='<div class="sec-hd"><div style="display:flex;align-items:center;gap:10px"><button class="me-btn me-btn--ghost me-btn--sm" onclick="CampistryMe.rbCancelEdit()">← Back</button><h2 class="sec-title" style="margin:0">'+(_rbDraft.id?'Edit Report':'Build Report')+'</h2></div><div class="sec-actions"><button class="me-btn me-btn--pri" onclick="CampistryMe.saveCurrentReport()">Save Report</button></div></div>';
+    var h='<div class="sec-hd"><div style="display:flex;align-items:center;gap:10px"><button class="me-btn me-btn--ghost me-btn--sm" onclick="CampistryMe.rbCancelEdit()">← Back</button><h2 class="sec-title" style="margin:0">'+(_rbDraft.id?'Edit Report':'Build Report')+'</h2></div><div class="sec-actions"><button class="me-btn me-btn--sec" onclick="CampistryMe.printReportDraft()">🖨 Print</button><button class="me-btn me-btn--pri" onclick="CampistryMe.saveCurrentReport()">Save Report</button></div></div>';
     h+='<div class="split-builder">';
     h+='<div class="split-config" id="rbConfigPanel">'+_rbInner()+'</div>';
     h+='<div class="split-preview-wrap"><div class="split-preview-hd">Live Preview <span id="rbPreviewCount" style="font-weight:400;text-transform:none;letter-spacing:0"></span></div><div id="rbPreview" class="split-preview"></div></div>';
@@ -11771,14 +11797,9 @@ function _rbInner(){
     h+='<div class="fg"><label class="fl">Data source</label><select class="fi" id="rbSource" onchange="CampistryMe.rbSourceChange(this.value)">';
     Object.keys(sources).forEach(function(k){ h+='<option value="'+k+'"'+(_rbDraft.source===k?' selected':'')+'>'+esc(sources[k].label)+'</option>'; });
     h+='</select></div>';
-    // Fields
-    h+='<div class="fg"><label class="fl">Fields <span style="font-weight:400;color:var(--s400);font-size:.7rem">(columns, in order shown)</span></label>';
-    h+='<div style="display:flex;gap:6px 14px;flex-wrap:wrap;border:1px solid var(--s200);border-radius:var(--r);padding:10px 12px;max-height:150px;overflow:auto">';
-    src.fields.forEach(function(f){
-        var on=_rbDraft.fields.indexOf(f.key)>=0;
-        h+='<label style="display:flex;align-items:center;gap:5px;font-size:.8rem;color:var(--s700);white-space:nowrap"><input type="checkbox" class="rbField" value="'+esc(f.key)+'"'+(on?' checked':'')+' style="accent-color:var(--me)">'+esc(f.label)+'</label>';
-    });
-    h+='</div></div>';
+    // Fields — click to add, drag to reorder in Selected
+    h+='<div class="fg"><label class="fl">Fields <span style="font-weight:400;color:var(--s400);font-size:.7rem">(click to add, drag to reorder — this is the column order on the report)</span></label>';
+    h+='<div class="rb-fields-split" id="rbFieldsSplit">'+_rbFieldsSplitHtml()+'</div></div>';
     // Filters
     h+='<div class="fg"><label class="fl">Filters <span style="font-weight:400;color:var(--s400);font-size:.7rem">(all must match)</span></label><div id="rbFilters">';
     (_rbDraft.filters||[]).forEach(function(f,i){ h+=_rbFilterRow(f,i); });
@@ -11816,10 +11837,104 @@ function _rbFilterRow(f,i){
         +'<button class="me-btn me-btn--ghost" style="color:var(--err);font-size:.7rem" onclick="this.closest(\'.rbFilter\').remove()">✕</button></div>';
 }
 
+// Two-column field picker (Available / Selected) — click a field on the
+// left to add it, drag rows in the right column to reorder (same native
+// HTML5 drag pattern Print Sheets' column list already uses). _rbDraft.fields
+// IS the order — this is just a friendlier editor over that same array.
+function _rbFieldsSplitHtml(){
+    var sources=_reportSources();
+    var src=sources[_rbDraft.source]||sources.campers;
+    var selected=_rbDraft.fields||[];
+    var selSet={}; selected.forEach(function(k){selSet[k]=true;});
+    var byKey={}; src.fields.forEach(function(f){byKey[f.key]=f;});
+    var avail=src.fields.filter(function(f){return !selSet[f.key];});
+    var h='<div class="rb-fields-col"><div class="rb-fields-col-hd">Available</div><div class="rb-fields-list">';
+    h+=avail.length?avail.map(function(f){
+        return '<div class="rb-field-row" onclick="CampistryMe.rbAddField(\''+je(f.key)+'\')"><span class="rb-field-label">'+esc(f.label)+'</span><span class="rb-field-add">+ Add</span></div>';
+    }).join(''):'<div class="rb-fields-empty">All fields added</div>';
+    h+='</div></div>';
+    h+='<div class="rb-fields-col"><div class="rb-fields-col-hd">Selected <span class="rb-fields-count">'+selected.length+'</span></div><div class="rb-fields-list" id="rbSelList">';
+    h+=selected.length?selected.map(function(k){
+        var f=byKey[k]||{key:k,label:k};
+        return '<div class="rb-field-row rb-field-row--sel" data-key="'+esc(k)+'" draggable="false"'
+            +' ondragstart="CampistryMe.rbFieldDragStart(event,\''+je(k)+'\')"'
+            +' ondragend="CampistryMe.rbFieldDragEnd(event)"'
+            +' ondragover="CampistryMe.rbFieldDragOver(event)"'
+            +' ondragleave="CampistryMe.rbFieldDragLeave(event)"'
+            +' ondrop="CampistryMe.rbFieldDrop(event,\''+je(k)+'\')">'
+            +'<span class="rb-field-drag" title="Drag to reorder" onmousedown="CampistryMe.rbFieldDragHandle(event)">⋮⋮</span>'
+            +'<span class="rb-field-label">'+esc(f.label)+'</span>'
+            +'<button type="button" class="rb-field-remove" title="Remove" onclick="event.stopPropagation();CampistryMe.rbRemoveField(\''+je(k)+'\')">✕</button>'
+            +'</div>';
+    }).join(''):'<div class="rb-fields-empty">Click a field on the left to add it</div>';
+    h+='</div></div>';
+    return h;
+}
+function _rbRefreshFields(){
+    var host=document.getElementById('rbFieldsSplit');
+    if(host) host.innerHTML=_rbFieldsSplitHtml();
+}
+function rbAddField(key){
+    if(!_rbDraft)return;
+    if(_rbDraft.fields.indexOf(key)<0)_rbDraft.fields.push(key);
+    _rbRefreshFields();_rbLiveUpdate();
+}
+function rbRemoveField(key){
+    if(!_rbDraft)return;
+    _rbDraft.fields=_rbDraft.fields.filter(function(k){return k!==key;});
+    _rbRefreshFields();_rbLiveUpdate();
+}
+var _rbDragFieldKey=null;
+function _rbClearFieldDropCues(){
+    document.querySelectorAll('#rbSelList .rb-field-row.rb-drop-above,#rbSelList .rb-field-row.rb-drop-below').forEach(function(r){r.classList.remove('rb-drop-above','rb-drop-below');});
+}
+function rbFieldDragHandle(e){var row=e.target.closest('.rb-field-row');if(row)row.setAttribute('draggable','true');}
+function rbFieldDragStart(e,key){
+    _rbDragFieldKey=key;
+    try{e.dataTransfer.effectAllowed='move';e.dataTransfer.setData('text/plain',key);}catch(_){}
+    var row=e.target.closest('.rb-field-row');if(row)row.classList.add('rb-dragging');
+}
+function rbFieldDragEnd(e){
+    var row=e.target.closest('.rb-field-row');if(row){row.classList.remove('rb-dragging');row.setAttribute('draggable','false');}
+    _rbClearFieldDropCues();_rbDragFieldKey=null;
+}
+function rbFieldDragOver(e){
+    if(!_rbDragFieldKey)return;
+    e.preventDefault();try{e.dataTransfer.dropEffect='move';}catch(_){}
+    var row=e.target.closest('.rb-field-row');
+    if(!row||row.dataset.key===_rbDragFieldKey){_rbClearFieldDropCues();return;}
+    var rect=row.getBoundingClientRect();var after=(e.clientY-rect.top)>rect.height/2;
+    _rbClearFieldDropCues();row.classList.add(after?'rb-drop-below':'rb-drop-above');
+}
+function rbFieldDragLeave(e){
+    var row=e.target.closest('.rb-field-row');
+    if(row&&!row.contains(e.relatedTarget))row.classList.remove('rb-drop-above','rb-drop-below');
+}
+function rbFieldDrop(e,targetKey){
+    e.preventDefault();
+    var dragKey=_rbDragFieldKey;
+    _rbClearFieldDropCues();
+    if(!_rbDraft||!dragKey||dragKey===targetKey){_rbDragFieldKey=null;return;}
+    var fields=_rbDraft.fields;
+    var from=fields.indexOf(dragKey);
+    if(from<0){_rbDragFieldKey=null;return;}
+    var row=e.target.closest('.rb-field-row');
+    var after=false;
+    if(row){var rect=row.getBoundingClientRect();after=(e.clientY-rect.top)>rect.height/2;}
+    var moved=fields.splice(from,1)[0];
+    var insertIdx=fields.indexOf(targetKey);
+    if(insertIdx<0)insertIdx=fields.length;else if(after)insertIdx+=1;
+    fields.splice(insertIdx,0,moved);
+    _rbDragFieldKey=null;
+    _rbRefreshFields();_rbLiveUpdate();
+}
+
 function _rbSyncFromDom(){
     if(!_rbDraft) return;
     _rbDraft.name=(document.getElementById('rbName')||{}).value||'';
-    _rbDraft.fields=Array.prototype.map.call(document.querySelectorAll('.rbField:checked'),function(cb){return cb.value;});
+    // Fields are no longer a DOM-derived list — rbAddField/rbRemoveField/
+    // rbFieldDrop already keep _rbDraft.fields (and its order) up to date
+    // directly, so there's nothing to read back here.
     _rbDraft.groupBy=(document.getElementById('rbGroup')||{}).value||'';
     var mode=document.querySelector('input[name="rbMode"]:checked');
     _rbDraft.mode=mode?mode.value:'live';
@@ -11944,6 +12059,23 @@ function exportSavedReport(id){
 
 function printSavedReport(id){
     var rep=savedReports.filter(function(r){return r.id===id;})[0]; if(!rep) return;
+    _printReportObject(rep);
+}
+// Print an in-progress, unsaved builder draft directly — no need to save
+// first and hop back out to the report list, same as Print Sheets' editor
+// always having its own Print button.
+function printReportDraft(){
+    if(!_rbDraft) return;
+    _rbSyncFromDom();
+    if(!_rbDraft.fields.length){ toast('Pick at least one field first'); return; }
+    _printReportObject({name:_rbDraft.name.trim()||'Untitled Report',source:_rbDraft.source,
+        fields:_rbDraft.fields,filters:_rbDraft.filters,groupBy:_rbDraft.groupBy,mode:_rbDraft.mode});
+}
+// Shared print-window builder for both a saved report and a live draft —
+// _computeReport already falls back to computing live when there's no
+// snapshotRows yet (an unsaved draft never has any), so nothing here needs
+// to know or care whether rep came from savedReports[] or _rbDraft.
+function _printReportObject(rep){
     var res=_computeReport(rep);
     var campName=''; try{ campName=(JSON.parse(localStorage.getItem('campGlobalSettings_v1')||'{}').campName)||''; }catch(e){}
     var grouped=!(res.groups.length===1&&res.groups[0].key==='');
@@ -12703,6 +12835,7 @@ var psEditingId=null; // id of the sheet open in the builder, or null for the li
 function psFields(){
     loadCustomFields();
     var f=[
+        {key:'personType',label:'Type (Camper/Staff)'},
         {key:'firstName',label:'First Name'},
         {key:'lastName',label:'Last Name'},
         {key:'fullName',label:'Full Name'},
@@ -12712,6 +12845,10 @@ function psFields(){
         {key:'grade',label:'Grade'},
         {key:'bunk',label:'Bunk'},
         {key:'team',label:'League Team'},
+        {key:'role',label:'Role / Position (Staff)'},
+        {key:'department',label:'Department (Staff)'},
+        {key:'phone',label:'Phone (Staff)'},
+        {key:'email',label:'Email (Staff)'},
         {key:'dob',label:'Date of Birth'},
         {key:'age',label:'Age'},
         {key:'gender',label:'Gender'},
@@ -12759,6 +12896,7 @@ function psValue(field,name,c){
     c=c||{};
     var parts=(name||'').split(' ');
     switch(field){
+        case'personType':return c.personType||'Camper';
         case'firstName':return parts[0]||'';
         case'lastName':return parts.slice(1).join(' ')||'';
         case'fullName':return name||'';
@@ -12859,8 +12997,28 @@ function psActiveColumns(sheet,rows){
 }
 
 // ── camper selection, sorting, grouping ──
+// Normalizes a hired staff record into a camper-shaped [name, record] row so
+// it can flow through the same psValue/psGroupVal/psTableHtml pipeline as a
+// camper. Fields that don't apply to staff (division/allergies/school...)
+// are simply blank, same as CampMinder's cross-partition person fields.
+function _psStaffAsRow(s){
+    var name=s.name||((s.first||'')+' '+(s.last||'')).trim();
+    return [name,{
+        personType:'Staff',camperId:s.staffId||'',
+        division:'',grade:'',bunk:s.bunk||'',team:'',
+        dob:s.dob||'',gender:'',school:s.school||'',schoolGrade:s.schoolGrade||'',teacher:'',
+        role:(s.positions||[]).join(', '),department:'',phone:s.phone||'',email:s.email||'',
+        parent1Name:s.parentName||'',parent1Phone:s.parentPhone||'',parent1Email:s.parentEmail||'',
+        street:s.street||'',city:s.city||'',state:s.state||'',zip:s.zip||'',
+        allergies:'',medications:'',dietary:'',
+        emergencyName:s.parentName||'',emergencyPhone:s.parentPhone||'',emergencyRel:s.parentRelation||''
+    }];
+}
 function psFilteredCampers(sheet){
-    var rows=Object.entries(roster);
+    var who=sheet.whoScope||'campers';
+    var rows=[];
+    if(who!=='staff')rows=rows.concat(Object.entries(roster));
+    if(who!=='campers')rows=rows.concat(hiredStaff().map(_psStaffAsRow));
     if(sheet.scopeDiv)rows=rows.filter(function(r){return r[1].division===sheet.scopeDiv});
     var sortKey=sheet.sortBy||'lastName';
     rows.sort(function(a,b){
@@ -12930,7 +13088,7 @@ function psSaveSoon(){clearTimeout(_psSaveT);_psSaveT=setTimeout(save,600)}
 function psNew(){
     var s={id:'ps_'+Date.now()+'_'+Math.floor(Math.random()*1e4),name:'Untitled Sheet',
         columns:[{id:'c1',field:'firstName',header:''},{id:'c2',field:'lastName',header:''},{id:'c3',field:'bunk',header:''}],
-        groupBy:'',scopeDiv:'',sortBy:'lastName',hideEmptyCols:true};
+        groupBy:'',scopeDiv:'',whoScope:'campers',sortBy:'lastName',hideEmptyCols:true};
     printSheets.push(s);psSave();psEditingId=s.id;renderPrintSheets();
 }
 function psEdit(id){psEditingId=id;renderPrintSheets()}
@@ -13138,7 +13296,8 @@ function renderPrintSheets(){
     printSheets.forEach(function(s){
         var cols=(s.columns||[]).filter(psColPrints);
         var grpLabel={'':'One combined sheet',division:'One sheet per division',grade:'One sheet per grade',bunk:'One sheet per bunk',team:'One sheet per team'}[s.groupBy||'']||'';
-        var scope=s.scopeDiv?('Division: '+s.scopeDiv):'All campers';
+        var whoLabel={staff:'Staff only',both:'Campers + Staff'}[s.whoScope]||'';
+        var scope=(s.scopeDiv?('Division: '+s.scopeDiv):'All campers')+(whoLabel?' · '+whoLabel:'');
         h+='<div class="me-card" style="padding:16px;display:flex;flex-direction:column;gap:8px">'
             +'<div style="font-size:.95rem;font-weight:700">'+esc(s.name||'Untitled Sheet')+'</div>'
             +'<div style="font-size:.72rem;color:var(--s400)">'+cols.length+' column'+(cols.length===1?'':'s')+' · '+esc(grpLabel)+'</div>'
@@ -13160,8 +13319,11 @@ function psEditorHtml(s){
     h+='<div class="split-config">';
     h+='<div class="me-field"><label>Sheet Name</label><input type="text" class="me-input" value="'+esc(s.name||'')+'" oninput="CampistryMe.psRename(\''+je(s.id)+'\',this.value)" onchange="CampistryMe.psRename(\''+je(s.id)+'\',this.value)" placeholder="e.g. Bunk Sign-In Sheet"></div>';
 
+    var whoOpts=[['campers','Campers only'],['staff','Staff only'],['both','Campers + Staff']];
+    h+='<div class="me-field"><label>Who</label><select class="me-input" onchange="CampistryMe.psSetProp(\''+je(s.id)+'\',\'whoScope\',this.value)">'+whoOpts.map(function(o){return'<option value="'+o[0]+'"'+(o[0]===(s.whoScope||'campers')?' selected':'')+'>'+o[1]+'</option>'}).join('')+'</select></div>';
+
     var divOpts='<option value="">All campers</option>'+Object.keys(structure).sort().map(function(d){return'<option value="'+esc(d)+'"'+(d===s.scopeDiv?' selected':'')+'>'+esc(d)+'</option>'}).join('');
-    h+='<div class="me-field"><label>Include</label><select class="me-input" onchange="CampistryMe.psSetProp(\''+je(s.id)+'\',\'scopeDiv\',this.value)">'+divOpts+'</select></div>';
+    h+='<div class="me-field"><label>Include (division scope — campers only)</label><select class="me-input" onchange="CampistryMe.psSetProp(\''+je(s.id)+'\',\'scopeDiv\',this.value)">'+divOpts+'</select></div>';
 
     var groupOpts=[['','One combined sheet (no split)'],['division','A separate sheet per division'],['grade','A separate sheet per grade'],['bunk','A separate sheet per bunk'],['team','A separate sheet per league team']];
     h+='<div class="me-field"><label>Print</label><select class="me-input" onchange="CampistryMe.psSetProp(\''+je(s.id)+'\',\'groupBy\',this.value)">'+groupOpts.map(function(g){return'<option value="'+g[0]+'"'+(g[0]===(s.groupBy||'')?' selected':'')+'>'+g[1]+'</option>'}).join('')+'</select></div>';
@@ -13281,7 +13443,10 @@ window.CampistryMe={
     editLinkItem:editLinkItem,deleteLinkItem:deleteLinkItem,
     // Reports
     exportRosterReport:exportRosterReport,exportFamilyReport:exportFamilyReport,printFamilies:printFamilies,
-    openReportBuilder:openReportBuilder,rbCancelEdit:rbCancelEdit,rbSourceChange:rbSourceChange,rbAddFilter:rbAddFilter,saveCurrentReport:saveCurrentReport,runSavedReport:runSavedReport,exportSavedReport:exportSavedReport,printSavedReport:printSavedReport,deleteSavedReport:deleteSavedReport,
+    openReportBuilder:openReportBuilder,rbCancelEdit:rbCancelEdit,rbSourceChange:rbSourceChange,rbAddFilter:rbAddFilter,
+    rbAddField:rbAddField,rbRemoveField:rbRemoveField,
+    rbFieldDragHandle:rbFieldDragHandle,rbFieldDragStart:rbFieldDragStart,rbFieldDragEnd:rbFieldDragEnd,rbFieldDragOver:rbFieldDragOver,rbFieldDragLeave:rbFieldDragLeave,rbFieldDrop:rbFieldDrop,
+    saveCurrentReport:saveCurrentReport,runSavedReport:runSavedReport,exportSavedReport:exportSavedReport,printSavedReport:printSavedReport,printReportDraft:printReportDraft,deleteSavedReport:deleteSavedReport,
     exportEnrollmentReport:exportEnrollmentReport,exportDivisionReport:exportDivisionReport,
     exportMedicalReport:exportMedicalReport,exportFinancialReport:exportFinancialReport,
     // Broadcast delivery

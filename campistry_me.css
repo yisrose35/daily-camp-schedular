@@ -330,9 +330,11 @@ select.me-input{cursor:pointer}
     .fr{flex-direction:column}
 }
 
-/* ── SPLIT-VIEW BUILDER SHELL (shared: Print Sheets + Reports) ── */
-.split-builder{display:grid;grid-template-columns:minmax(320px,420px) 1fr;gap:18px;align-items:start}
-.split-config{background:#fff;border:1px solid var(--s200);border-radius:var(--r2);padding:16px}
+/* ── SPLIT-VIEW BUILDER SHELL (shared: Print Sheets + Reports) ──
+   Config column gets real room (up to 640px) instead of being capped at
+   420px and forced to cram everything into scrollable mini-boxes. */
+.split-builder{display:grid;grid-template-columns:minmax(360px,640px) 1fr;gap:22px;align-items:start}
+.split-config{background:#fff;border:1px solid var(--s200);border-radius:var(--r2);padding:20px}
 .split-config .me-field{margin-bottom:12px}
 .split-config .me-field label{display:block;font-size:.72rem;font-weight:600;color:var(--s600);margin-bottom:4px}
 .split-builder .me-input{width:100%;padding:8px 10px;border:1.5px solid var(--s200);border-radius:var(--r);font-size:.85rem;color:var(--s800);background:#fff;outline:none;transition:border .15s}
@@ -365,8 +367,28 @@ select.me-input{cursor:pointer}
 .ps-tbl td.ps-write{height:22px}
 .ps-tbl .ps-empty{text-align:center;color:var(--s300)}
 
-/* ── REPORT BUILDER (fields/filters, uses .split-* shell above) ── */
-.rb-field-grid{display:grid;grid-template-columns:1fr 1fr;gap:4px 10px;margin-bottom:4px}
-.rb-field-chk{display:flex;align-items:center;gap:6px;font-size:.8rem;color:var(--s700)}
-.rb-filter-row{display:flex;align-items:center;gap:6px;margin-bottom:6px}
-.rb-filter-row select,.rb-filter-row input{flex:1;min-width:0}
+/* ── REPORT BUILDER (fields/filters, uses .split-* shell above) ──
+   Two-column Available/Selected field picker — CampMinder-style, but
+   drag-to-reorder in Selected instead of up/down arrow buttons. Reuses the
+   exact same native HTML5 drag interaction Print Sheets' column list uses
+   (.ps-col-drag/.ps-dragging/.ps-drop-above/.ps-drop-below), just under
+   rb- prefixed class names since the row markup differs. */
+.rb-fields-split{display:grid;grid-template-columns:1fr 1fr;gap:14px}
+.rb-fields-col-hd{font-size:.7rem;font-weight:700;text-transform:uppercase;letter-spacing:.4px;color:var(--s400);margin-bottom:6px}
+.rb-fields-count{font-weight:400;text-transform:none;letter-spacing:0;color:var(--s400)}
+.rb-fields-list{border:1px solid var(--s200);border-radius:var(--r);background:var(--s50);min-height:60px;max-height:340px;overflow:auto;padding:6px}
+.rb-fields-empty{font-size:.75rem;color:var(--s400);text-align:center;padding:16px 8px}
+.rb-field-row{display:flex;align-items:center;gap:8px;background:#fff;border:1px solid var(--s200);border-radius:var(--r);padding:8px 10px;margin-bottom:6px;cursor:pointer;font-size:.82rem;color:var(--s700);border-top:2px solid transparent;border-bottom:2px solid transparent}
+.rb-field-row:last-child{margin-bottom:0}
+.rb-field-row:hover{border-color:var(--me);background:rgba(217,119,6,.04)}
+.rb-field-label{flex:1;min-width:0}
+.rb-field-add{font-size:.7rem;font-weight:700;color:var(--me)}
+.rb-field-row--sel{cursor:default}
+.rb-field-row--sel:hover{border-color:var(--s200);background:#fff}
+.rb-field-drag{flex-shrink:0;cursor:grab;color:var(--s400);font-size:1rem;line-height:1;user-select:none}
+.rb-field-drag:active{cursor:grabbing}
+.rb-field-remove{flex-shrink:0;border:none;background:none;color:var(--err);font-size:.75rem;cursor:pointer;padding:2px 4px}
+.rb-field-row.rb-dragging{opacity:.45}
+.rb-field-row.rb-drop-above{border-top-color:var(--me)}
+.rb-field-row.rb-drop-below{border-bottom-color:var(--me)}
+@media(max-width:640px){.rb-fields-split{grid-template-columns:1fr}}
