@@ -10,22 +10,29 @@
 -- new secure-login edge function (never by the client itself, which could
 -- just skip the check).
 --
--- Rule, exactly as asked for: 5 wrong attempts within a rolling 24-hour
--- window locks the account pending a self-service "reopen" email; if
--- failures keep accumulating and hit 10 within that SAME 24-hour window,
--- the account escalates to an office-only lock (no more self-service
--- unlock token issued — someone has to clear it by hand in the SQL
--- Editor, see the sanity-check block at the bottom).
+-- Rule, exactly as asked for: 5 wrong attempts on ONE email within a
+-- rolling 24-hour window locks just that email, pending a self-service
+-- "reopen" link sent to it. If failures on that same email keep
+-- accumulating and hit 10 within that SAME 24-hour window, it escalates —
+-- and the escalation is camp-wide: every login at that camp (the owner
+-- plus every accepted team member) gets office-only locked, not just the
+-- one email that was being guessed at. No more self-service unlock token
+-- is issued for any of them — someone has to clear it by hand in the SQL
+-- Editor, see the sanity-check block at the bottom. This is intentional:
+-- 5 failed guesses on one login is routine (forgotten password), but 10 in
+-- a day is treated as a real attack on the camp, worth pausing everyone's
+-- access until a human confirms it's safe to reopen — rather than leaving
+-- other staff logins reachable while one is clearly under attack.
 --
 -- The 24h window is a real rolling window, not a counter that resets on a
 -- timer: login_failed_events is an append-only event log, and every check
 -- recomputes "how many failures for this email in the last 24 hours"
--- straight from it. Reopening the account via the emailed link clears the
--- lock_level so login attempts can happen again, but it does NOT clear
--- that rolling count — one more wrong guess after reopening re-locks
--- immediately (self-service, until the 10-in-24h threshold is hit), which
--- is deliberate: a real attacker doesn't get a free reset out of the
--- email-unlock step.
+-- straight from it. Reopening an email-locked account via the emailed link
+-- clears its lock_level so login attempts can happen again, but it does
+-- NOT clear that rolling count — one more wrong guess after reopening
+-- re-locks immediately (self-service, until the 10-in-24h threshold is
+-- hit), which is deliberate: a real attacker doesn't get a free reset out
+-- of the email-unlock step.
 --
 -- Same convention as every other secret-bearing table in this app: RLS
 -- enabled, ZERO client-facing policies, every access funneled through a
@@ -78,7 +85,63 @@ ALTER TABLE account_lockouts ENABLE ROW LEVEL SECURITY;
 -- No client-side policies — every access goes through the RPCs below.
 
 COMMENT ON TABLE account_lockouts IS
-    'Password-attempt lockout for the main Campistry login. lock_level=email is self-service (unlock_token emailed to the account); lock_level=office requires a manual clear in the SQL Editor. RLS-locked; access only via RPC.';
+    'Password-attempt lockout for the main Campistry login. lock_level=email is self-service (unlock_token emailed to the account) and only ever affects that one email. lock_level=office requires a manual clear in the SQL Editor and is applied camp-wide (every login at the camp, not just the one that triggered it). RLS-locked; access only via RPC.';
+
+
+-- ─── 2b. _camp_lock_emails ──────────────────────────────────────────────────
+-- Given the email that just crossed the 10-in-24h threshold, returns every
+-- email that should be office-locked alongside it: the camp owner (camps.
+-- owner) plus every accepted camp_users row for that same camp_id. Looks up
+-- the triggering email's own camp membership first (owner, else camp_users)
+-- to find camp_id, then expands back out to every email in it.
+--
+-- Falls back to just the triggering email alone if it can't be resolved to
+-- any camp (e.g. a stale/deleted account) — never errors, never returns an
+-- empty set, so record_login_failure below always has at least one email to
+-- lock.
+CREATE OR REPLACE FUNCTION public._camp_lock_emails(p_email text)
+RETURNS SETOF text
+LANGUAGE plpgsql
+SECURITY DEFINER
+STABLE
+SET search_path = public, auth, pg_catalog
+AS $$
+DECLARE
+    v_email   text := lower(p_email);
+    v_user_id uuid;
+    v_camp_id uuid;
+BEGIN
+    SELECT id INTO v_user_id FROM auth.users WHERE lower(email) = v_email;
+    IF v_user_id IS NULL THEN
+        RETURN QUERY SELECT v_email;
+        RETURN;
+    END IF;
+
+    SELECT id INTO v_camp_id FROM camps WHERE owner = v_user_id;
+    IF v_camp_id IS NULL THEN
+        SELECT camp_id INTO v_camp_id FROM camp_users WHERE user_id = v_user_id LIMIT 1;
+    END IF;
+
+    IF v_camp_id IS NULL THEN
+        RETURN QUERY SELECT v_email;
+        RETURN;
+    END IF;
+
+    RETURN QUERY
+        SELECT lower(u.email)
+        FROM camps c
+        JOIN auth.users u ON u.id = c.owner
+        WHERE c.id = v_camp_id
+        UNION
+        SELECT lower(u.email)
+        FROM camp_users cu
+        JOIN auth.users u ON u.id = cu.user_id
+        WHERE cu.camp_id = v_camp_id AND cu.accepted_at IS NOT NULL;
+END;
+$$;
+
+REVOKE ALL ON FUNCTION public._camp_lock_emails(text) FROM public, anon, authenticated;
+GRANT EXECUTE ON FUNCTION public._camp_lock_emails(text) TO service_role;
 
 
 -- ─── 3. check_login_lock_status ─────────────────────────────────────────────
@@ -148,20 +211,32 @@ BEGIN
 
     IF v_new_level IS DISTINCT FROM v_prev_level THEN
         v_just_locked := true;
-        v_token := CASE WHEN v_new_level = 'email' THEN encode(gen_random_bytes(24), 'hex') ELSE NULL END;
 
-        INSERT INTO account_lockouts (email, lock_level, locked_at, unlock_token, unlock_token_expires_at, updated_at)
-        VALUES (
-            v_email, v_new_level, now(), v_token,
-            CASE WHEN v_token IS NOT NULL THEN now() + interval '24 hours' ELSE NULL END,
-            now()
-        )
-        ON CONFLICT (email) DO UPDATE
-            SET lock_level              = EXCLUDED.lock_level,
-                locked_at               = EXCLUDED.locked_at,
-                unlock_token            = EXCLUDED.unlock_token,
-                unlock_token_expires_at = EXCLUDED.unlock_token_expires_at,
-                updated_at              = now();
+        IF v_new_level = 'office' THEN
+            -- Escalation is camp-wide: lock every login at this camp, not
+            -- just the one email that hit 10. No token for this tier —
+            -- office has to clear it by hand.
+            INSERT INTO account_lockouts (email, lock_level, locked_at, unlock_token, unlock_token_expires_at, updated_at)
+            SELECT camp_email, 'office', now(), NULL, NULL, now()
+            FROM public._camp_lock_emails(v_email) AS camp_email
+            ON CONFLICT (email) DO UPDATE
+                SET lock_level              = 'office',
+                    locked_at               = now(),
+                    unlock_token            = NULL,
+                    unlock_token_expires_at = NULL,
+                    updated_at              = now();
+        ELSE
+            v_token := encode(gen_random_bytes(24), 'hex');
+
+            INSERT INTO account_lockouts (email, lock_level, locked_at, unlock_token, unlock_token_expires_at, updated_at)
+            VALUES (v_email, v_new_level, now(), v_token, now() + interval '24 hours', now())
+            ON CONFLICT (email) DO UPDATE
+                SET lock_level              = EXCLUDED.lock_level,
+                    locked_at               = EXCLUDED.locked_at,
+                    unlock_token            = EXCLUDED.unlock_token,
+                    unlock_token_expires_at = EXCLUDED.unlock_token_expires_at,
+                    updated_at              = now();
+        END IF;
     END IF;
 
     RETURN jsonb_build_object(
@@ -245,23 +320,38 @@ REVOKE ALL ON FUNCTION public.unlock_account_via_token(text) FROM public;
 GRANT EXECUTE ON FUNCTION public.unlock_account_via_token(text) TO anon, authenticated;
 
 
--- ─── Manually clearing an office-only lock (Campistry office action) ──────
--- There is no self-service or in-app path for this on purpose — run this
--- directly in the Supabase SQL Editor once you've verified with the camp
--- owner that it's really them:
+-- ─── Manually clearing a lock (Campistry office action) ───────────────────
+-- There is no self-service or in-app path for an office-only lock, on
+-- purpose — run this directly in the Supabase SQL Editor once you've
+-- verified with the camp owner that it's really them.
+--
+-- An office-only lock is camp-wide (see migration header), so clear it for
+-- every login at that camp in one go — pass ANY email from that camp, it
+-- resolves the rest on its own:
 --
 --   UPDATE account_lockouts SET lock_level = NULL, unlock_token = NULL,
 --       unlock_token_expires_at = NULL, updated_at = now()
---     WHERE email = 'the-persons-email@example.com';
+--     WHERE email IN (SELECT public._camp_lock_emails('any-email-from-that-camp@example.com'));
+--
+-- To check who's currently locked and at what level before clearing anything:
+--
+--   SELECT * FROM account_lockouts
+--    WHERE email IN (SELECT public._camp_lock_emails('any-email-from-that-camp@example.com'));
+--
+-- (A single email-tier lock — reached one person at 5 fails, camp never hit
+-- 10 — can still be cleared for just that one row the same way as before:
+-- UPDATE account_lockouts SET lock_level = NULL, ... WHERE email = 'x@example.com';
+-- though in practice that tier is meant to self-clear via the emailed link.)
 
 
 -- ─── Sanity checks (run manually after applying) ───────────────────────────
 --   SELECT proname, proacl FROM pg_proc
 --   WHERE proname IN ('check_login_lock_status','record_login_failure',
---                      'clear_login_failures','unlock_account_via_token');
+--                      'clear_login_failures','unlock_account_via_token',
+--                      '_camp_lock_emails');
 --   -- expect: check_login_lock_status + record_login_failure +
---   -- clear_login_failures grant to service_role only; unlock_account_via_token
---   -- grants to anon + authenticated.
+--   -- clear_login_failures + _camp_lock_emails grant to service_role only;
+--   -- unlock_account_via_token grants to anon + authenticated.
 --
 --   SELECT * FROM pg_policies WHERE tablename IN ('login_failed_events','account_lockouts');
 --   -- expect ZERO rows — no client-facing policy exists on either table.

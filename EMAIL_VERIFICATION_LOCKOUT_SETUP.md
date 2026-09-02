@@ -11,12 +11,15 @@ are untouched — they have their own separate logins.
    to a 6-digit code (not a click-through link) entered right in the same
    modal — no new page, no custom email-sending code needed for this part,
    it's all built into Supabase Auth.
-2. **Password lockout.** 5 wrong passwords within a rolling 24 hours locks
-   the account with a self-service "reopen my account" link emailed to it;
-   if wrong attempts keep piling up and hit 10 within that same 24-hour
-   window, it escalates to an office-only lock — no more self-service
-   unlock link, someone has to clear it by hand in the SQL Editor (exact
-   query at the bottom of migration 105, and in step 5 below).
+2. **Password lockout.** 5 wrong passwords on ONE login within a rolling 24
+   hours locks just that email, with a self-service "reopen my account"
+   link emailed to it; if wrong attempts on that same login keep piling up
+   and hit 10 within that same 24-hour window, it escalates to an
+   office-only lock — and that escalation is camp-wide (every login at
+   that camp, owner + staff, not just the one being guessed at). No more
+   self-service unlock link at that point, someone has to clear it by hand
+   in the SQL Editor (exact query at the bottom of migration 105, and in
+   step 5 below).
 
 ## 1. Run the migration
 
@@ -95,20 +98,29 @@ only one signup email template in the project, shared by every account.
 
 There's no button for this on purpose — it only happens after 10 wrong
 attempts in 24 hours, which should be rare and worth a human actually
-looking at it before clearing it. Once you've confirmed with the camp
-owner that it's really them, run this in the SQL Editor:
+looking at it before clearing it. It's also **camp-wide**: it locks every
+login at that camp (owner + every accepted staff account), not just the
+one that was being guessed at, so unlocking should clear all of them at
+once too. Once you've confirmed with the camp owner that it's really them,
+run this in the SQL Editor — you can pass ANY email from that camp, it
+resolves the rest of the camp's logins on its own:
 
 ```sql
 UPDATE account_lockouts SET lock_level = NULL, unlock_token = NULL,
     unlock_token_expires_at = NULL, updated_at = now()
-  WHERE email = 'the-persons-email@example.com';
+  WHERE email IN (SELECT public._camp_lock_emails('any-email-from-that-camp@example.com'));
 ```
 
-To just check whether/how an account is currently locked:
+To check who's currently locked and at what level before clearing anything:
 
 ```sql
-SELECT * FROM account_lockouts WHERE email = 'the-persons-email@example.com';
+SELECT * FROM account_lockouts
+ WHERE email IN (SELECT public._camp_lock_emails('any-email-from-that-camp@example.com'));
 ```
+
+(An email-tier lock — one person hit 5 fails, the camp never reached 10 —
+only ever affects that one row, and is meant to self-clear via the emailed
+link rather than needing this.)
 
 ## 6. Verify end to end
 
@@ -137,10 +149,14 @@ SELECT * FROM account_lockouts WHERE email = 'the-persons-email@example.com';
 - Click the link — confirm it lands on `index.html` with "Your account has
   been reopened" and that signing in with the correct password now works.
 - Fail the password 5 more times in the same 24-hour window (10 total) —
-  confirm this time the message says to contact the Campistry office, and
-  no unlock email is sent.
-- Run the `SELECT` from step 5 — confirm `lock_level = 'office'` — then
-  run the `UPDATE` from step 5 and confirm sign-in with the correct
-  password works again immediately.
+  confirm this time the message says the camp's sign-in is locked and to
+  contact the Campistry office, and no unlock email is sent.
+- With a second staff login on the same camp (invite one if needed), try
+  signing in with its correct password — confirm it's ALSO rejected with
+  the office-lock message, even though it never failed a single attempt
+  itself. That's the camp-wide part working.
+- Run the `SELECT` from step 5 — confirm every login at the camp shows
+  `lock_level = 'office'` — then run the `UPDATE` from step 5 and confirm
+  BOTH logins work again immediately with their correct passwords.
 - Confirm a correct password on the first try (no prior failures) still
   signs in normally with no extra step.

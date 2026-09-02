@@ -43,7 +43,7 @@ function json(body: unknown, status = 200) {
 
 const LOCKED_MESSAGE: Record<string, string> = {
   email: "This account is locked due to repeated failed sign-in attempts. Check your email for a link to reopen it.",
-  office: "This account has been locked due to repeated failed sign-in attempts. Contact the Campistry office at campistryoffice@gmail.com to reopen it.",
+  office: "Sign-in for your entire camp has been locked due to repeated failed attempts. Contact the Campistry office at campistryoffice@gmail.com to reopen it.",
 };
 
 serve(async (req) => {
