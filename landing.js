@@ -19,6 +19,27 @@
 // ========================================
 let authMode = 'login';
 
+// Carries what's needed to finish signup/login across the verification-code
+// step: { email, campName, accessCode, from: 'signup'|'login' }. 'from'
+// decides which post-verify setup path runs — creating a camp (new signup)
+// vs. just resolving an existing account's camp/invite (an existing but
+// never-confirmed account signing in).
+let _pendingAuth = null;
+
+// supabase-js's functions.invoke() collapses every non-2xx response into a
+// generic error — the real { error: "..." } body secure-login returns lives
+// on res.error.context instead. Same unwrap pattern used for pos-pin-login
+// in campistry_snacks_pos.html.
+function unwrapFnResult(res) {
+    const data = res && res.data;
+    if (data && (data.access_token || data.error)) return Promise.resolve(data);
+    const err = res && res.error;
+    if (err && err.context && typeof err.context.json === 'function') {
+        return err.context.json().catch(() => ({ error: (err && err.message) || 'Could not sign in.' }));
+    }
+    return Promise.resolve({ error: (err && err.message) || 'Could not sign in.' });
+}
+
 // ========================================
 // SUPABASE HELPER
 // ========================================
@@ -37,11 +58,27 @@ function openAuthModal(mode = 'login') {
     const authModal = document.getElementById('authModal');
     if (authModal) {
         authModal.style.display = 'flex';
+
+        // Always start on the normal sign-in/sign-up view, never mid-way
+        // through a leftover verification-code step from a previous open.
+        const modalToggle = document.getElementById('modalToggle');
+        const authForm = document.getElementById('authForm');
+        const verifyCodeForm = document.getElementById('verifyCodeForm');
+        const verifyCodeFooter = document.getElementById('verifyCodeFooter');
+        const authFooterDefault = document.getElementById('authFooterDefault');
+        if (modalToggle) modalToggle.style.display = 'flex';
+        if (authForm) authForm.style.display = 'block';
+        if (verifyCodeForm) verifyCodeForm.style.display = 'none';
+        if (verifyCodeFooter) verifyCodeFooter.style.display = 'none';
+        if (authFooterDefault) authFooterDefault.style.display = 'block';
+        _pendingAuth = null;
+
         updateModalUI();
-        
+
         const authError = document.getElementById('authError');
         if (authError) authError.textContent = '';
-        
+        showAuthInfo('');
+
         setTimeout(() => {
             if (mode === 'signup') {
                 document.getElementById('campName')?.focus();
@@ -208,6 +245,264 @@ function showAuthError(message) {
 }
 
 // ========================================
+// POST-AUTH SETUP — shared by "signup with an immediate session" (only
+// possible if Confirm Email is somehow off) and "signup, then verify the
+// emailed code" (the normal path once it's on). Creates the camp, or
+// accepts a pending invite if this email was invited to an existing camp.
+// ========================================
+async function finishAccountSetup(supabase, user, campName, accessCode) {
+    const email = user.email.toLowerCase();
+    try {
+        // Query WITHOUT .is('user_id', null) — catches invites that
+        // supabase_client.js may have already accepted via race
+        const { data: existingInvite } = await supabase
+            .from('camp_users')
+            .select('id, role, camp_id, subdivision_ids, user_id')
+            .eq('email', email)
+            .maybeSingle();
+
+        if (existingInvite) {
+            // Accept if not yet accepted (may already be done by race)
+            if (!existingInvite.user_id) {
+                await supabase
+                    .from('camp_users')
+                    .update({
+                        user_id: user.id,
+                        accepted_at: new Date().toISOString()
+                    })
+                    .eq('id', existingInvite.id);
+            }
+            localStorage.setItem('campistry_camp_id', existingInvite.camp_id);
+            localStorage.setItem('campistry_user_id', existingInvite.camp_id);
+            localStorage.setItem('campistry_auth_user_id', user.id);
+            localStorage.setItem('campistry_role', existingInvite.role);
+            localStorage.setItem('campistry_is_team_member', 'true');
+            console.log('[Landing] Invite detected, role:', existingInvite.role);
+        } else {
+            // No invite — create camp (camp ID = user ID for owners)
+
+            // ★★★ ACCESS CODE VALIDATION — ALL SERVER-SIDE ★★★
+            if (!accessCode) {
+                throw new Error('An access code is required to create a camp. Contact campistryoffice@gmail.com for access.');
+            }
+
+            let planStatus = null;
+            let trialStartedAt = null;
+            let trialHours = null;
+
+            // Validate via Supabase RPC — codes stored in promo_codes table
+            try {
+                const { data: codeResult, error: codeError } = await supabase
+                    .rpc('validate_access_code', { input_code: accessCode });
+
+                console.log('[Landing] Access code check:', codeResult, 'error:', codeError);
+
+                if (codeError) {
+                    console.error('[Landing] Access code RPC error:', codeError);
+                    throw new Error('Could not verify access code. Please try again.');
+                }
+
+                if (!codeResult || !codeResult.valid) {
+                    throw new Error('Invalid access code. Contact campistryoffice@gmail.com for access.');
+                }
+
+                planStatus = codeResult.plan_status || 'active';
+                if (codeResult.trial_hours) {
+                    trialStartedAt = new Date().toISOString();
+                    trialHours = codeResult.trial_hours;
+                }
+                console.log('[Landing] ✅ Code accepted →', planStatus, trialHours ? '(' + trialHours + 'h)' : '(no time limit)');
+            } catch (codeErr) {
+                if (codeErr.message.includes('access code') || codeErr.message.includes('Contact')) {
+                    throw codeErr; // Re-throw our own errors
+                }
+                console.error('[Landing] Code validation failed:', codeErr);
+                throw new Error('Could not verify access code. Please try again.');
+            }
+
+            const { data: campData, error: campError } = await supabase
+                .from('camps')
+                .insert([{
+                    id: user.id,
+                    owner: user.id,
+                    name: campName,
+                    address: '',
+                    plan_status: planStatus,
+                    trial_started_at: trialStartedAt,
+                    trial_hours: trialHours
+                }])
+                .select()
+                .single();
+
+            if (campError) {
+                console.error('[Landing] Camp creation failed:', campError);
+                if (campError.code === '23505') {
+                    // Duplicate key — camp already exists, that's fine
+                    console.log('[Landing] Camp already exists (23505), proceeding');
+                } else if (campError.message?.includes('access code')) {
+                    throw new Error('Invalid access code. Contact campistryoffice@gmail.com for access.');
+                } else {
+                    throw new Error('Could not create camp. Please try again.');
+                }
+            } else {
+                console.log('[Landing] ✅ Camp created:', campData);
+            }
+
+            localStorage.setItem('campistry_camp_id', user.id);
+            localStorage.setItem('campistry_user_id', user.id);
+            localStorage.setItem('campistry_auth_user_id', user.id);
+            localStorage.setItem('campistry_role', 'owner');
+            localStorage.setItem('campistry_is_team_member', 'false');
+            console.log('[Landing] Camp created for owner:', user.id);
+        }
+    } catch (setupErr) {
+        console.error('[Landing] Post-signup setup error:', setupErr);
+        throw setupErr;
+    }
+}
+
+// ========================================
+// LOGIN SETUP — detect invite/camp/membership for an existing account
+// that just authenticated (either via secure-login directly, or after
+// finishing email verification on a previously-unconfirmed account).
+// ========================================
+async function finishLoginSetup(supabase, user) {
+    const email = user.email.toLowerCase();
+    try {
+        const { data: pendingInvite } = await supabase
+            .from('camp_users')
+            .select('id, role, camp_id, subdivision_ids, user_id')
+            .eq('email', email)
+            .is('user_id', null)
+            .maybeSingle();
+
+        if (pendingInvite) {
+            await supabase.from('camp_users').update({
+                user_id: user.id,
+                accepted_at: new Date().toISOString()
+            }).eq('id', pendingInvite.id);
+
+            localStorage.setItem('campistry_camp_id', pendingInvite.camp_id);
+            localStorage.setItem('campistry_user_id', pendingInvite.camp_id);
+            localStorage.setItem('campistry_auth_user_id', user.id);
+            localStorage.setItem('campistry_role', pendingInvite.role);
+            localStorage.setItem('campistry_is_team_member', 'true');
+        } else {
+            // Multi-camp owners (super-admin debug copies): fetch
+            // all, pick the real camp (id == uid). Avoid
+            // .maybeSingle() which throws on >1 row.
+            const { data: ownedCamps } = await supabase
+                .from('camps').select('id, name')
+                .eq('owner', user.id);
+            const ownedCamp = (Array.isArray(ownedCamps) && ownedCamps.length > 0)
+                ? (ownedCamps.find(c => c.id === user.id) || ownedCamps[0])
+                : null;
+
+            if (ownedCamp) {
+                localStorage.setItem('campistry_camp_id', ownedCamp.id);
+                localStorage.setItem('campistry_user_id', ownedCamp.id);
+                localStorage.setItem('campistry_auth_user_id', user.id);
+                localStorage.setItem('campistry_role', 'owner');
+                localStorage.setItem('campistry_is_team_member', 'false');
+            } else {
+                const { data: membership } = await supabase
+                    .from('camp_users').select('camp_id, role')
+                    .eq('user_id', user.id)
+                    .not('accepted_at', 'is', null)
+                    .maybeSingle();
+
+                if (membership) {
+                    localStorage.setItem('campistry_camp_id', membership.camp_id);
+                    localStorage.setItem('campistry_user_id', membership.camp_id);
+                    localStorage.setItem('campistry_auth_user_id', user.id);
+                    localStorage.setItem('campistry_role', membership.role);
+                    localStorage.setItem('campistry_is_team_member', 'true');
+                } else {
+                    localStorage.removeItem('campistry_camp_id');
+                    localStorage.removeItem('campistry_role');
+                    localStorage.removeItem('campistry_is_team_member');
+                    localStorage.setItem('campistry_auth_user_id', user.id);
+                }
+            }
+        }
+    } catch (loginSetupErr) {
+        console.error('[Landing] Login setup error:', loginSetupErr);
+    }
+}
+
+// ========================================
+// Shared tail: force supabase_client.js to re-detect, then redirect.
+// ========================================
+async function completeAuthFlow() {
+    if (window.CampistryDB?.refresh) {
+        try { await window.CampistryDB.refresh(); } catch (e) {}
+    }
+    showAuthLoading(true, 'Success! Redirecting...');
+    closeAuthModal();
+    setTimeout(() => { window.location.href = 'dashboard.html'; }, 500);
+}
+
+function showAuthInfo(message) {
+    const authInfo = document.getElementById('authInfo');
+    if (authInfo) {
+        authInfo.textContent = message;
+        authInfo.style.display = message ? 'block' : 'none';
+    }
+}
+
+// ========================================
+// VERIFICATION CODE STEP
+// (shown after signup, or when an existing-but-unconfirmed account tries
+// to log in — same modal, swapped content, no page navigation)
+// ========================================
+function showVerifyCodeStep(email) {
+    const modalToggle = document.getElementById('modalToggle');
+    const authForm = document.getElementById('authForm');
+    const verifyCodeForm = document.getElementById('verifyCodeForm');
+    const verifyCodeFooter = document.getElementById('verifyCodeFooter');
+    const authFooterDefault = document.getElementById('authFooterDefault');
+    const modalTitle = document.getElementById('modalTitle');
+    const modalSubtitle = document.getElementById('modalSubtitle');
+    const verifyCodeEmail = document.getElementById('verifyCodeEmail');
+
+    if (modalToggle) modalToggle.style.display = 'none';
+    if (authForm) authForm.style.display = 'none';
+    if (verifyCodeForm) verifyCodeForm.style.display = 'block';
+    if (verifyCodeFooter) verifyCodeFooter.style.display = 'block';
+    if (authFooterDefault) authFooterDefault.style.display = 'none';
+    if (modalTitle) modalTitle.textContent = 'Check Your Email';
+    if (modalSubtitle) modalSubtitle.textContent = 'One more step to secure your account.';
+    if (verifyCodeEmail) verifyCodeEmail.textContent = email;
+
+    showAuthError('');
+    showAuthInfo('');
+    showAuthLoading(false);
+    const verifyError = document.getElementById('verifyCodeError');
+    if (verifyError) verifyError.textContent = '';
+    const codeInput = document.getElementById('verifyCodeInput');
+    if (codeInput) { codeInput.value = ''; setTimeout(() => codeInput.focus(), 100); }
+
+    const authModal = document.getElementById('authModal');
+    if (authModal) authModal.style.display = 'flex';
+}
+
+function hideVerifyCodeStep() {
+    const modalToggle = document.getElementById('modalToggle');
+    const authForm = document.getElementById('authForm');
+    const verifyCodeForm = document.getElementById('verifyCodeForm');
+    const verifyCodeFooter = document.getElementById('verifyCodeFooter');
+    const authFooterDefault = document.getElementById('authFooterDefault');
+
+    if (modalToggle) modalToggle.style.display = 'flex';
+    if (authForm) authForm.style.display = 'block';
+    if (verifyCodeForm) verifyCodeForm.style.display = 'none';
+    if (verifyCodeFooter) verifyCodeFooter.style.display = 'none';
+    if (authFooterDefault) authFooterDefault.style.display = 'block';
+    _pendingAuth = null;
+    updateModalUI();
+}
+
+// ========================================
 // MOBILE MENU
 // ========================================
 function toggleMobileMenu() {
@@ -335,6 +630,7 @@ document.addEventListener('DOMContentLoaded', function() {
             const formSubmit = document.getElementById('formSubmit');
 
             showAuthError('');
+            showAuthInfo('');
             showAuthLoading(false);
 
             if (!email || !password) {
@@ -361,246 +657,79 @@ document.addEventListener('DOMContentLoaded', function() {
                     throw new Error('Authentication service is not available. Please refresh the page.');
                 }
 
-                let result;
                 if (authMode === 'signup') {
                     showAuthLoading(true, 'Creating your account...');
-                    result = await supabase.auth.signUp({
+                    const { data, error } = await supabase.auth.signUp({
                         email,
                         password,
                         options: { data: { camp_name: campName, access_code: accessCode } }
                     });
-                } else {
-                    showAuthLoading(true, 'Verifying credentials...');
-                    result = await supabase.auth.signInWithPassword({ email, password });
-                }
 
-                let { data, error } = result;
+                    if (error) {
+                        let errorMessage = error.message;
+                        if (error.message.includes('User already registered')) {
+                            errorMessage = 'An account with this email already exists. Try signing in instead.';
+                        }
+                        throw new Error(errorMessage);
+                    }
 
-if (error) {
-    let errorMessage = error.message;
-    if (error.message.includes('Invalid login credentials')) {
-        errorMessage = 'Invalid email or password. Please try again.';
-    } else if (error.message.includes('Email not confirmed')) {
-        errorMessage = 'Please check your email to confirm your account before signing in.';
-    } else if (error.message.includes('User already registered')) {
-        errorMessage = 'An account with this email already exists. Try signing in instead.';
-    }
-    throw new Error(errorMessage);
-}
+                    if (data?.user && !data?.session) {
+                        // Confirm Email is on (the expected setup) — GoTrue
+                        // emailed a verification code instead of returning a
+                        // session directly. Hand off to the code-entry step;
+                        // finishAccountSetup runs after a correct code, not
+                        // here.
+                        _pendingAuth = { email, campName, accessCode, from: 'signup' };
+                        resetFormButton();
+                        showVerifyCodeStep(email);
+                        return;
+                    }
 
-// ★ v3.2 FIX: Owner signup — if no session returned (email confirmation is on),
-// auto-sign-in immediately so owners go straight to dashboard.
-// Email confirmation stays enabled for invited schedulers/admins via invite.html.
-if (authMode === 'signup' && data?.user && !data?.session) {
-    console.log('[Landing] Owner signup: no session — auto-signing in...');
-    showAuthLoading(true, 'Finalizing your account...');
-    const { data: signInData, error: signInError } = await supabase.auth.signInWithPassword({
-        email,
-        password
-    });
-    if (signInError) {
-        throw new Error('Account created but sign-in failed. Please try signing in.');
-    }
-    data = signInData;
-}
-
-
-
-                let user = data?.user;
-
-                if (!user) {
-                    throw new Error('Authentication failed. Please try again.');
-                }
-
-                // =============================================================
-                // SIGNUP: Create camp or accept invite
-                // =============================================================
-                if (authMode === 'signup') {
+                    // A session came back directly — only happens if
+                    // Confirm Email is somehow off. Finish immediately,
+                    // same setup the code-verification path runs.
+                    const user = data?.user;
+                    if (!user) throw new Error('Authentication failed. Please try again.');
                     showAuthLoading(true, 'Setting up your camp...');
-                    try {
-                        // Query WITHOUT .is('user_id', null) — catches invites
-                        // that supabase_client.js may have already accepted via race
-                        const { data: existingInvite } = await supabase
-                            .from('camp_users')
-                            .select('id, role, camp_id, subdivision_ids, user_id')
-                            .eq('email', email.toLowerCase())
-                            .maybeSingle();
-
-                        if (existingInvite) {
-                            // Accept if not yet accepted (may already be done by race)
-                            if (!existingInvite.user_id) {
-                                await supabase
-                                    .from('camp_users')
-                                    .update({
-                                        user_id: user.id,
-                                        accepted_at: new Date().toISOString()
-                                    })
-                                    .eq('id', existingInvite.id);
-                            }
-                            localStorage.setItem('campistry_camp_id', existingInvite.camp_id);
-                            localStorage.setItem('campistry_user_id', existingInvite.camp_id);
-                            localStorage.setItem('campistry_auth_user_id', user.id);
-                            localStorage.setItem('campistry_role', existingInvite.role);
-                            localStorage.setItem('campistry_is_team_member', 'true');
-                            console.log('[Landing] Invite detected, role:', existingInvite.role);
-                        } else {
-                            // No invite — create camp (camp ID = user ID for owners)
-                            
-                            // ★★★ ACCESS CODE VALIDATION — ALL SERVER-SIDE ★★★
-                            if (!accessCode) {
-                                throw new Error('An access code is required to create a camp. Contact campistryoffice@gmail.com for access.');
-                            }
-
-                            let planStatus = null;
-                            let trialStartedAt = null;
-                            let trialHours = null;
-
-                            // Validate via Supabase RPC — codes stored in promo_codes table
-                            try {
-                                const { data: codeResult, error: codeError } = await supabase
-                                    .rpc('validate_access_code', { input_code: accessCode });
-
-                                console.log('[Landing] Access code check:', codeResult, 'error:', codeError);
-
-                                if (codeError) {
-                                    console.error('[Landing] Access code RPC error:', codeError);
-                                    throw new Error('Could not verify access code. Please try again.');
-                                }
-
-                                if (!codeResult || !codeResult.valid) {
-                                    throw new Error('Invalid access code. Contact campistryoffice@gmail.com for access.');
-                                }
-
-                                planStatus = codeResult.plan_status || 'active';
-                                if (codeResult.trial_hours) {
-                                    trialStartedAt = new Date().toISOString();
-                                    trialHours = codeResult.trial_hours;
-                                }
-                                console.log('[Landing] ✅ Code accepted →', planStatus, trialHours ? '(' + trialHours + 'h)' : '(no time limit)');
-                            } catch (codeErr) {
-                                if (codeErr.message.includes('access code') || codeErr.message.includes('Contact')) {
-                                    throw codeErr; // Re-throw our own errors
-                                }
-                                console.error('[Landing] Code validation failed:', codeErr);
-                                throw new Error('Could not verify access code. Please try again.');
-                            }
-
-                            const { data: campData, error: campError } = await supabase
-                                .from('camps')
-                                .insert([{
-                                    id: user.id,
-                                    owner: user.id,
-                                    name: campName,
-                                    address: '',
-                                    plan_status: planStatus,
-                                    trial_started_at: trialStartedAt,
-                                    trial_hours: trialHours
-                                }])
-                                .select()
-                                .single();
-
-                            if (campError) {
-                                console.error('[Landing] Camp creation failed:', campError);
-                                if (campError.code === '23505') {
-                                    // Duplicate key — camp already exists, that's fine
-                                    console.log('[Landing] Camp already exists (23505), proceeding');
-                                } else if (campError.message?.includes('access code')) {
-                                    throw new Error('Invalid access code. Contact campistryoffice@gmail.com for access.');
-                                } else {
-                                    throw new Error('Could not create camp. Please try again.');
-                                }
-                            } else {
-                                console.log('[Landing] ✅ Camp created:', campData);
-                            }
-
-                            localStorage.setItem('campistry_camp_id', user.id);
-                            localStorage.setItem('campistry_user_id', user.id);
-                            localStorage.setItem('campistry_auth_user_id', user.id);
-                            localStorage.setItem('campistry_role', 'owner');
-                            localStorage.setItem('campistry_is_team_member', 'false');
-                            console.log('[Landing] Camp created for owner:', user.id);
-                        }
-                    } catch (setupErr) {
-                        console.error('[Landing] Post-signup setup error:', setupErr);
-                        throw setupErr;
-                    }
-
-                // =============================================================
-                // LOGIN: Detect invite/camp/membership
-                // =============================================================
-                } else {
-                    showAuthLoading(true, 'Loading your camp...');
-                    try {
-                        const { data: pendingInvite } = await supabase
-                            .from('camp_users')
-                            .select('id, role, camp_id, subdivision_ids, user_id')
-                            .eq('email', email.toLowerCase())
-                            .is('user_id', null)
-                            .maybeSingle();
-
-                        if (pendingInvite) {
-                            await supabase.from('camp_users').update({
-                                user_id: user.id,
-                                accepted_at: new Date().toISOString()
-                            }).eq('id', pendingInvite.id);
-
-                            localStorage.setItem('campistry_camp_id', pendingInvite.camp_id);
-                            localStorage.setItem('campistry_user_id', pendingInvite.camp_id);
-                            localStorage.setItem('campistry_auth_user_id', user.id);
-                            localStorage.setItem('campistry_role', pendingInvite.role);
-                            localStorage.setItem('campistry_is_team_member', 'true');
-                        } else {
-                            // Multi-camp owners (super-admin debug copies): fetch
-                            // all, pick the real camp (id == uid). Avoid
-                            // .maybeSingle() which throws on >1 row.
-                            const { data: ownedCamps } = await supabase
-                                .from('camps').select('id, name')
-                                .eq('owner', user.id);
-                            const ownedCamp = (Array.isArray(ownedCamps) && ownedCamps.length > 0)
-                                ? (ownedCamps.find(c => c.id === user.id) || ownedCamps[0])
-                                : null;
-
-                            if (ownedCamp) {
-                                localStorage.setItem('campistry_camp_id', ownedCamp.id);
-                                localStorage.setItem('campistry_user_id', ownedCamp.id);
-                                localStorage.setItem('campistry_auth_user_id', user.id);
-                                localStorage.setItem('campistry_role', 'owner');
-                                localStorage.setItem('campistry_is_team_member', 'false');
-                            } else {
-                                const { data: membership } = await supabase
-                                    .from('camp_users').select('camp_id, role')
-                                    .eq('user_id', user.id)
-                                    .not('accepted_at', 'is', null)
-                                    .maybeSingle();
-
-                                if (membership) {
-                                    localStorage.setItem('campistry_camp_id', membership.camp_id);
-                                    localStorage.setItem('campistry_user_id', membership.camp_id);
-                                    localStorage.setItem('campistry_auth_user_id', user.id);
-                                    localStorage.setItem('campistry_role', membership.role);
-                                    localStorage.setItem('campistry_is_team_member', 'true');
-                                } else {
-                                    localStorage.removeItem('campistry_camp_id');
-                                    localStorage.removeItem('campistry_role');
-                                    localStorage.removeItem('campistry_is_team_member');
-                                    localStorage.setItem('campistry_auth_user_id', user.id);
-                                }
-                            }
-                        }
-                    } catch (loginSetupErr) {
-                        console.error('[Landing] Login setup error:', loginSetupErr);
-                    }
+                    await finishAccountSetup(supabase, user, campName, accessCode);
+                    await completeAuthFlow();
+                    return;
                 }
 
-                // Force supabase_client.js to re-detect (fixes race condition
-                // where onAuthStateChange set stale _role='viewer')
-                if (window.CampistryDB?.refresh) {
-                    try { await window.CampistryDB.refresh(); } catch(e) {}
+                // =========================================================
+                // LOGIN — proxied through the secure-login edge function so
+                // the account-lockout in migration 105 is actually
+                // enforced. A direct signInWithPassword() call here could
+                // just skip that check, so every password attempt has to
+                // go through the server-side function instead.
+                // =========================================================
+                showAuthLoading(true, 'Verifying credentials...');
+                const fnResult = await supabase.functions
+                    .invoke('secure-login', { body: { email, password } })
+                    .then(unwrapFnResult);
+
+                if (fnResult?.emailNotConfirmed) {
+                    _pendingAuth = { email, from: 'login' };
+                    resetFormButton();
+                    showVerifyCodeStep(email);
+                    return;
                 }
 
-                showAuthLoading(true, 'Success! Redirecting...');
-                closeAuthModal();
-                setTimeout(() => { window.location.href = 'dashboard.html'; }, 500);
+                if (fnResult?.error || !fnResult?.access_token) {
+                    throw new Error(fnResult?.error || 'Invalid email or password. Please try again.');
+                }
+
+                const { data: sessionData, error: sessionError } = await supabase.auth.setSession({
+                    access_token: fnResult.access_token,
+                    refresh_token: fnResult.refresh_token
+                });
+                if (sessionError || !sessionData?.user) {
+                    throw new Error('Sign-in succeeded but the session could not be established. Please try again.');
+                }
+
+                showAuthLoading(true, 'Loading your camp...');
+                await finishLoginSetup(supabase, sessionData.user);
+                await completeAuthFlow();
 
             } catch (e) {
                 showAuthLoading(false);
@@ -609,6 +738,130 @@ if (authMode === 'signup' && data?.user && !data?.session) {
             }
         });
     }
+
+    // =====================================================================
+    // VERIFICATION CODE SUBMISSION
+    // =====================================================================
+    const verifyCodeForm = document.getElementById('verifyCodeForm');
+    if (verifyCodeForm) {
+        verifyCodeForm.addEventListener('submit', async (e) => {
+            e.preventDefault();
+            const code = document.getElementById('verifyCodeInput')?.value?.trim();
+            const verifyBtn = document.getElementById('verifyCodeSubmit');
+            const verifyError = document.getElementById('verifyCodeError');
+            const verifyLoading = document.getElementById('verifyCodeLoading');
+
+            if (verifyError) verifyError.textContent = '';
+
+            if (!_pendingAuth?.email) {
+                if (verifyError) verifyError.textContent = 'Something went wrong — please start over.';
+                return;
+            }
+            if (!code || code.length !== 6) {
+                if (verifyError) verifyError.textContent = 'Enter the 6-digit code from your email.';
+                return;
+            }
+
+            if (verifyBtn) { verifyBtn.disabled = true; verifyBtn.textContent = 'Verifying...'; }
+            if (verifyLoading) verifyLoading.style.display = 'flex';
+
+            try {
+                const supabase = getSupabase();
+                if (!supabase) throw new Error('Authentication service is not available. Please refresh the page.');
+
+                const { data, error } = await supabase.auth.verifyOtp({
+                    email: _pendingAuth.email,
+                    token: code,
+                    type: 'signup'
+                });
+                if (error) throw error;
+
+                const user = data?.user;
+                if (!user) throw new Error('Verification failed. Please try again.');
+
+                const pending = _pendingAuth;
+                _pendingAuth = null;
+
+                if (pending.from === 'signup') {
+                    showAuthLoading(true, 'Setting up your camp...');
+                    await finishAccountSetup(supabase, user, pending.campName, pending.accessCode);
+                } else {
+                    showAuthLoading(true, 'Loading your camp...');
+                    await finishLoginSetup(supabase, user);
+                }
+                await completeAuthFlow();
+
+            } catch (err) {
+                if (verifyLoading) verifyLoading.style.display = 'none';
+                if (verifyBtn) { verifyBtn.disabled = false; verifyBtn.textContent = 'Verify & Continue'; }
+                if (verifyError) verifyError.textContent = err.message || 'Invalid or expired code. Please try again.';
+            }
+        });
+    }
+
+    const resendCodeLink = document.getElementById('resendCodeLink');
+    if (resendCodeLink) {
+        resendCodeLink.addEventListener('click', async (e) => {
+            e.preventDefault();
+            if (!_pendingAuth?.email) return;
+            const verifyError = document.getElementById('verifyCodeError');
+            const original = resendCodeLink.textContent;
+            resendCodeLink.textContent = 'Sending...';
+            try {
+                const supabase = getSupabase();
+                if (!supabase) throw new Error('Authentication service is not available.');
+                const { error } = await supabase.auth.resend({ type: 'signup', email: _pendingAuth.email });
+                if (error) throw error;
+                if (verifyError) { verifyError.textContent = ''; }
+                showAuthInfo('A new code has been sent to ' + _pendingAuth.email + '.');
+            } catch (err) {
+                if (verifyError) verifyError.textContent = err.message || 'Could not resend the code. Please try again.';
+            } finally {
+                resendCodeLink.textContent = original;
+            }
+        });
+    }
+
+    const verifyCodeBackLink = document.getElementById('verifyCodeBackLink');
+    if (verifyCodeBackLink) {
+        verifyCodeBackLink.addEventListener('click', (e) => {
+            e.preventDefault();
+            hideVerifyCodeStep();
+        });
+    }
+
+    // =====================================================================
+    // UNLOCK-LINK LANDING — ?unlock=<token> from the account-lockout email
+    // =====================================================================
+    (async function checkForUnlockToken(retriesLeft) {
+        const params = new URLSearchParams(window.location.search);
+        const token = params.get('unlock');
+        if (!token) return;
+
+        const supabase = getSupabase();
+        if (!supabase) {
+            if (retriesLeft === undefined) retriesLeft = 10;
+            if (retriesLeft > 0) setTimeout(() => checkForUnlockToken(retriesLeft - 1), 300);
+            return;
+        }
+
+        // Strip it from the URL immediately so a refresh/share doesn't
+        // re-submit the same token.
+        const cleanUrl = window.location.pathname + window.location.hash;
+        window.history.replaceState({}, document.title, cleanUrl);
+
+        try {
+            const { data, error } = await supabase.rpc('unlock_account_via_token', { p_token: token });
+            openAuthModal('login');
+            if (!error && data?.success) {
+                showAuthInfo('Your account has been reopened — you can sign in below.');
+            } else {
+                showAuthError('That unlock link is invalid or has expired. If your account is still locked, request a new one by trying to sign in again.');
+            }
+        } catch (e) {
+            console.error('[Landing] Unlock token check failed:', e);
+        }
+    })();
 
     // =====================================================================
     // PASSWORD RESET REQUEST

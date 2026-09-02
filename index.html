@@ -579,44 +579,75 @@
             <h2 class="auth-modal-title" id="modalTitle">Welcome Back</h2>
             <p class="auth-modal-subtitle" id="modalSubtitle">Sign in to your Campistry account</p>
             
-            <div class="modal-toggle">
+            <div class="modal-toggle" id="modalToggle">
                 <button class="modal-toggle-btn active" data-mode="login">Sign In</button>
                 <button class="modal-toggle-btn" data-mode="signup">Create Account</button>
             </div>
-            
+
+            <div id="authInfo" class="auth-success" style="display:none;"></div>
+
             <form id="authForm" class="auth-form">
                 <div class="form-group" id="campNameGroup" style="display: none;">
                     <label for="campName">Camp Name</label>
                     <input type="text" id="campName" placeholder="e.g. Camp Sunshine" />
                 </div>
-                
+
                 <div class="form-group">
                     <label for="authEmail">Email Address</label>
                     <input type="email" id="authEmail" placeholder="your@email.com" required />
                 </div>
-                
+
                 <div class="form-group">
                     <label for="authPassword">Password</label>
                     <input type="password" id="authPassword" placeholder="••••••••" required minlength="6" />
                     <a href="#" class="forgot-password-link" id="forgotPasswordLink" onclick="closeAuthModal(); openResetModal(); return false;">Forgot Password?</a>
                 </div>
-                
+
                 <div class="form-group" id="accessCodeGroup" style="display: none;">
                     <label for="accessCode">Access Code</label>
                     <input type="text" id="accessCode" placeholder="Enter your access code" />
                     <p class="form-hint">Contact us at campistryoffice@gmail.com for an access code</p>
                 </div>
-                
+
                 <div id="authError" class="auth-error"></div>
                 <div id="authLoading" class="auth-loading" style="display: none;">
                     <span class="loading-spinner"></span>
                     <span id="authLoadingText">Connecting...</span>
                 </div>
-                
+
                 <button type="submit" id="formSubmit" class="btn-primary btn-block">Sign In</button>
             </form>
-            
-            <p class="auth-footer">
+
+            <!-- ========================================= -->
+            <!-- VERIFICATION CODE VIEW — shown after signup, or when an  -->
+            <!-- existing account tries to log in before finishing        -->
+            <!-- verification. Same modal, swapped content, no page nav.  -->
+            <!-- ========================================= -->
+            <form id="verifyCodeForm" class="auth-form" style="display:none;">
+                <p class="auth-modal-subtitle" style="margin-top:-8px;">
+                    Enter the 6-digit code we sent to <strong id="verifyCodeEmail">your email</strong>.
+                </p>
+                <div class="form-group">
+                    <label for="verifyCodeInput">Verification Code</label>
+                    <input type="text" id="verifyCodeInput" inputmode="numeric" pattern="[0-9]*" maxlength="6" placeholder="123456" autocomplete="one-time-code" required />
+                </div>
+
+                <div id="verifyCodeError" class="auth-error"></div>
+                <div id="verifyCodeLoading" class="auth-loading" style="display: none;">
+                    <span class="loading-spinner"></span>
+                    <span>Verifying...</span>
+                </div>
+
+                <button type="submit" id="verifyCodeSubmit" class="btn-primary btn-block">Verify & Continue</button>
+            </form>
+            <p class="auth-footer" id="verifyCodeFooter" style="display:none;">
+                Didn't get a code?
+                <a href="#" id="resendCodeLink">Resend Code</a>
+                &middot;
+                <a href="#" id="verifyCodeBackLink">Use a different email</a>
+            </p>
+
+            <p class="auth-footer" id="authFooterDefault">
                 By continuing, you agree to our <a href="#">Terms</a> and <a href="#">Privacy Policy</a>.
             </p>
         </div>

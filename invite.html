@@ -337,8 +337,30 @@
                     Sign In & Join
                 </button>
                 <p class="auth-toggle">
-                    Need an account? 
+                    Need an account?
                     <a href="#" onclick="toggleAuthMode(event)">Create Account</a>
+                </p>
+            </div>
+
+            <!-- Verify Code Form — shown after signup, or when an existing
+                 but never-confirmed account tries to sign in -->
+            <div id="verify-code-form" class="auth-form hidden">
+                <div class="email-notice">
+                    Enter the 6-digit code we sent to <strong id="verify-code-email">your email</strong>.
+                </div>
+                <div id="verify-code-resent-msg" class="success-message hidden" style="margin-bottom:16px;">
+                    A new code has been sent.
+                </div>
+                <div class="form-group">
+                    <label for="verify-code-input">Verification Code</label>
+                    <input type="text" id="verify-code-input" inputmode="numeric" pattern="[0-9]*" maxlength="6" placeholder="123456" autocomplete="one-time-code" required>
+                </div>
+                <button type="button" class="btn-primary" id="verify-code-btn" onclick="handleVerifyCode()">
+                    Verify & Join
+                </button>
+                <p class="auth-toggle">
+                    Didn't get a code?
+                    <a href="#" onclick="handleResendCode(event)">Resend Code</a>
                 </p>
             </div>
         </div>
@@ -389,12 +411,12 @@
         </div>
     </div>
     
-    <script src="config.js?v=20260901-27"></script>
+    <script src="config.js?v=20260901-28"></script>
     <!-- Supabase SDK — self-hosted to match campistry_register.html and
          avoid CDN supply-chain risk on the auth path. The auth token is
          the actual privilege-escalation vector; a jsdelivr compromise
          would otherwise let an attacker exfiltrate it at sign-in. -->
-    <script src="supabase-js@2.js?v=20260901-27"></script>
+    <script src="supabase-js@2.js?v=20260901-28"></script>
     
     <script>
         // =====================================================================
@@ -410,6 +432,31 @@
         let currentUser = null;
         let campName = 'Your Camp';
         let subdivisionNames = [];
+        let _pendingVerifyName = null;
+
+        // supabase-js's functions.invoke() collapses every non-2xx response
+        // into a generic error — the real { error: "..." } body secure-login
+        // returns lives on res.error.context instead.
+        function unwrapFnResult(res) {
+            const data = res && res.data;
+            if (data && (data.access_token || data.error)) return Promise.resolve(data);
+            const err = res && res.error;
+            if (err && err.context && typeof err.context.json === 'function') {
+                return err.context.json().catch(() => ({ error: (err && err.message) || 'Could not sign in.' }));
+            }
+            return Promise.resolve({ error: (err && err.message) || 'Could not sign in.' });
+        }
+
+        function showVerifyCodeForm(email) {
+            document.getElementById('signup-form').classList.add('hidden');
+            document.getElementById('signin-form').classList.add('hidden');
+            document.getElementById('verify-code-form').classList.remove('hidden');
+            document.getElementById('verify-code-email').textContent = email;
+            document.getElementById('verify-code-resent-msg').classList.add('hidden');
+            document.getElementById('auth-error').classList.add('hidden');
+            const input = document.getElementById('verify-code-input');
+            if (input) { input.value = ''; setTimeout(() => input.focus(), 100); }
+        }
         
         // =====================================================================
         // INITIALIZATION
@@ -737,11 +784,13 @@
                 if (error) throw error;
                 
                 console.log('[Invite] Account created, checking confirmation...');
-                
+
                 // Check if email confirmation is required
                 if (data.user && !data.session) {
-                    showAuthError('Please check your email to confirm your account, then return to this page and sign in.');
-                    btn.textContent = 'Check Email';
+                    _pendingVerifyName = name;
+                    showVerifyCodeForm(safeEmail);
+                    btn.disabled = false;
+                    btn.textContent = 'Create Account & Join';
                     return;
                 }
                 
@@ -771,40 +820,121 @@
         async function handleSignIn() {
             const password = document.getElementById('password').value;
             const btn = document.getElementById('signin-btn');
-            
+
             document.getElementById('auth-error').classList.add('hidden');
-            
+
             if (!password) {
                 showAuthError('Please enter your password.');
                 return;
             }
-            
+
             btn.disabled = true;
             btn.textContent = 'Signing in...';
-            
+
             // ★ SECURITY: Always use inviteData.email — NEVER trust the DOM input
             const safeEmail = getInviteEmail();
             console.log('[Invite] Signing in with invite email (not DOM):', safeEmail);
-            
+
             try {
-                const { data, error } = await supabaseClient.auth.signInWithPassword({
-                    email: safeEmail,
-                    password: password
+                // Proxied through secure-login (not a direct
+                // signInWithPassword call) so the account-lockout added in
+                // migration 105 is actually enforced — see landing.js for
+                // the full rationale, this mirrors it exactly.
+                const res = await supabaseClient.functions.invoke('secure-login', {
+                    body: { email: safeEmail, password: password }
                 });
-                
-                if (error) throw error;
-                
-                currentUser = data.user;
+                const result = await unwrapFnResult(res);
+
+                if (result.emailNotConfirmed) {
+                    showVerifyCodeForm(safeEmail);
+                    btn.disabled = false;
+                    btn.textContent = 'Sign In & Join';
+                    return;
+                }
+                if (result.error || !result.access_token) {
+                    throw new Error(result.error || 'Invalid email or password.');
+                }
+
+                const { data: sessionData, error: sessionError } = await supabaseClient.auth.setSession({
+                    access_token: result.access_token,
+                    refresh_token: result.refresh_token
+                });
+                if (sessionError || !sessionData || !sessionData.user) {
+                    throw new Error('Sign-in succeeded but the session could not be established. Please try again.');
+                }
+
+                currentUser = sessionData.user;
                 console.log('[Invite] Signed in:', currentUser.email);
-                
+
                 // Accept the invite
                 await acceptInviteAndRedirect();
-                
+
             } catch (e) {
                 console.error('[Invite] Signin error:', e);
                 showAuthError(e.message || 'Failed to sign in. Please check your password.');
                 btn.disabled = false;
                 btn.textContent = 'Sign In & Join';
+            }
+        }
+
+        async function handleVerifyCode() {
+            const code = (document.getElementById('verify-code-input').value || '').trim();
+            const btn = document.getElementById('verify-code-btn');
+
+            document.getElementById('auth-error').classList.add('hidden');
+
+            if (!code || code.length !== 6) {
+                showAuthError('Enter the 6-digit code from your email.');
+                return;
+            }
+
+            btn.disabled = true;
+            btn.textContent = 'Verifying...';
+
+            const safeEmail = getInviteEmail();
+
+            try {
+                const { data, error } = await supabaseClient.auth.verifyOtp({
+                    email: safeEmail,
+                    token: code,
+                    type: 'signup'
+                });
+                if (error) throw error;
+
+                currentUser = data.user;
+                if (!currentUser) throw new Error('Verification failed. Please try again.');
+
+                // ★ SECURITY: Verify the created account email matches the invite
+                if (currentUser.email.toLowerCase() !== safeEmail) {
+                    console.error('[Invite] CRITICAL: Verified account email does not match invite!');
+                    showAuthError('Account email mismatch. Please contact support.');
+                    btn.disabled = false;
+                    btn.textContent = 'Verify & Join';
+                    return;
+                }
+
+                await acceptInviteAndRedirect(_pendingVerifyName);
+
+            } catch (e) {
+                console.error('[Invite] Verify error:', e);
+                showAuthError(e.message || 'Invalid or expired code. Please try again.');
+                btn.disabled = false;
+                btn.textContent = 'Verify & Join';
+            }
+        }
+
+        async function handleResendCode(e) {
+            e.preventDefault();
+            const safeEmail = getInviteEmail();
+            const resentMsg = document.getElementById('verify-code-resent-msg');
+            try {
+                const { error } = await supabaseClient.auth.resend({ type: 'signup', email: safeEmail });
+                if (error) throw error;
+                document.getElementById('auth-error').classList.add('hidden');
+                if (resentMsg) resentMsg.classList.remove('hidden');
+            } catch (err) {
+                console.error('[Invite] Resend error:', err);
+                showAuthError(err.message || 'Could not resend the code. Please try again.');
             }
         }
         
