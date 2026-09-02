@@ -11490,6 +11490,12 @@ async function deleteLinkItem(type,idx){
 // ═══════════════════════════════════════════════════════════════
 function renderReports(){
     var c=document.getElementById('page-reports');
+    if(_rbEditing){
+        c.innerHTML=_rbEditorHtml();
+        _rbWireLive();
+        _rbLiveUpdate();
+        return;
+    }
     var highlightId=_repHighlight; _repHighlight=null;
     var h=_reportsTabsHtml('reports');
     h+='<div class="sec-hd"><div><h2 class="sec-title">Reports & Export</h2><p class="sec-desc">Build any report you want, or grab a quick one below</p></div><div class="sec-actions"><button class="me-btn me-btn--pri" onclick="CampistryMe.openReportBuilder()">+ Build Report</button></div></div>';
@@ -11501,7 +11507,7 @@ function renderReports(){
     }else{
         h+='<div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(300px,1fr));gap:14px;margin-bottom:18px">';
         savedReports.forEach(function(r){
-            var srcLabel=({campers:'Campers',families:'Families',enrollments:'Enrollments',staff:'Staff'})[r.source]||r.source;
+            var srcLabel=({campers:'Campers',families:'Families',enrollments:'Enrollments',staff:'Staff',financial:'Financial',payroll:'Payroll'})[r.source]||r.source;
             var meta=srcLabel+' · '+(r.fields||[]).length+' fields'+((r.filters||[]).length?' · '+r.filters.length+' filter'+(r.filters.length>1?'s':''):'')+(r.groupBy?' · grouped':'')+(r.schedule?' · 📧 '+(r.schedule.freq==='weekly'?'Weekly':'Monthly'):'');
             var badgeCss='font-size:.62rem;font-weight:700;padding:2px 8px;border-radius:999px;white-space:nowrap;';
             var modeBadge=r.mode==='snapshot'?'<span style="'+badgeCss+'background:var(--s100);color:var(--s500)">Snapshot</span>':'<span style="'+badgeCss+'background:rgba(217,119,6,.1);color:var(--me)">Live</span>';
@@ -11524,22 +11530,22 @@ function renderReports(){
     h+='<div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(280px,1fr));gap:14px">';
 
     // Roster report
-    h+='<div class="me-card" style="padding:18px"><div style="font-size:.9rem;font-weight:700;margin-bottom:4px">Camper Roster</div><div style="font-size:.75rem;color:var(--s400);margin-bottom:12px">Complete roster with divisions, bunks, medical info, contacts</div><button class="me-btn me-btn--pri me-btn--sm" onclick="CampistryMe.exportRosterReport()">Download CSV</button></div>';
+    h+='<div class="me-card" style="padding:18px"><div style="font-size:.9rem;font-weight:700;margin-bottom:4px">Camper Roster</div><div style="font-size:.75rem;color:var(--s400);margin-bottom:12px">Complete roster with divisions, bunks, medical info, contacts</div><button class="me-btn me-btn--pri me-btn--sm" onclick="CampistryMe.openReportBuilder(null,\'roster\')">Open in Builder</button></div>';
 
     // Family directory
-    h+='<div class="me-card" style="padding:18px"><div style="font-size:.9rem;font-weight:700;margin-bottom:4px">Family Directory</div><div style="font-size:.75rem;color:var(--s400);margin-bottom:12px">All families with parent contacts, addresses, billing status</div><button class="me-btn me-btn--pri me-btn--sm" onclick="CampistryMe.exportFamilyReport()">Download CSV</button></div>';
+    h+='<div class="me-card" style="padding:18px"><div style="font-size:.9rem;font-weight:700;margin-bottom:4px">Family Directory</div><div style="font-size:.75rem;color:var(--s400);margin-bottom:12px">All families with parent contacts, addresses, billing status</div><button class="me-btn me-btn--pri me-btn--sm" onclick="CampistryMe.openReportBuilder(null,\'familyDirectory\')">Open in Builder</button></div>';
 
     // Enrollment pipeline
-    h+='<div class="me-card" style="padding:18px"><div style="font-size:.9rem;font-weight:700;margin-bottom:4px">Enrollment Pipeline</div><div style="font-size:.75rem;color:var(--s400);margin-bottom:12px">All applications with status, payment, forms completion</div><button class="me-btn me-btn--pri me-btn--sm" onclick="CampistryMe.exportEnrollmentReport()">Download CSV</button></div>';
+    h+='<div class="me-card" style="padding:18px"><div style="font-size:.9rem;font-weight:700;margin-bottom:4px">Enrollment Pipeline</div><div style="font-size:.75rem;color:var(--s400);margin-bottom:12px">All applications with status, payment, forms completion</div><button class="me-btn me-btn--pri me-btn--sm" onclick="CampistryMe.openReportBuilder(null,\'enrollmentPipeline\')">Open in Builder</button></div>';
 
     // Division breakdown
-    h+='<div class="me-card" style="padding:18px"><div style="font-size:.9rem;font-weight:700;margin-bottom:4px">Division Breakdown</div><div style="font-size:.75rem;color:var(--s400);margin-bottom:12px">Camper counts by division, grade, and bunk</div><button class="me-btn me-btn--pri me-btn--sm" onclick="CampistryMe.exportDivisionReport()">Download CSV</button></div>';
+    h+='<div class="me-card" style="padding:18px"><div style="font-size:.9rem;font-weight:700;margin-bottom:4px">Division Breakdown</div><div style="font-size:.75rem;color:var(--s400);margin-bottom:12px">Camper counts by division, grade, and bunk</div><button class="me-btn me-btn--pri me-btn--sm" onclick="CampistryMe.openReportBuilder(null,\'divisionBreakdown\')">Open in Builder</button></div>';
 
     // Medical summary
-    h+='<div class="me-card" style="padding:18px"><div style="font-size:.9rem;font-weight:700;margin-bottom:4px">Medical Summary</div><div style="font-size:.75rem;color:var(--s400);margin-bottom:12px">All campers with allergies, medications, dietary restrictions</div><button class="me-btn me-btn--pri me-btn--sm" onclick="CampistryMe.exportMedicalReport()">Download CSV</button></div>';
+    h+='<div class="me-card" style="padding:18px"><div style="font-size:.9rem;font-weight:700;margin-bottom:4px">Medical Summary</div><div style="font-size:.75rem;color:var(--s400);margin-bottom:12px">All campers with allergies, medications, dietary restrictions</div><button class="me-btn me-btn--pri me-btn--sm" onclick="CampistryMe.openReportBuilder(null,\'medicalSummary\')">Open in Builder</button></div>';
 
     // Financial summary
-    h+='<div class="me-card" style="padding:18px"><div style="font-size:.9rem;font-weight:700;margin-bottom:4px">Financial Summary</div><div style="font-size:.75rem;color:var(--s400);margin-bottom:12px">Revenue, payments, outstanding balances, payroll, expenses</div><button class="me-btn me-btn--pri me-btn--sm" onclick="CampistryMe.exportFinancialReport()">Download CSV</button></div>';
+    h+='<div class="me-card" style="padding:18px"><div style="font-size:.9rem;font-weight:700;margin-bottom:4px">Financial Summary</div><div style="font-size:.75rem;color:var(--s400);margin-bottom:12px">Revenue, payments, outstanding balances, payroll, expenses</div><button class="me-btn me-btn--pri me-btn--sm" onclick="CampistryMe.openReportBuilder(null,\'financialSummary\')">Open in Builder</button></div>';
 
     h+='</div>';
     c.innerHTML=h;
@@ -11571,7 +11577,8 @@ function _reportSources(){
                 {key:'bunkmateRequest',label:'Bunkmate Request'},{key:'separateFrom',label:'Do Not Bunk With'},
                 {key:'emergencyName',label:'Emergency Contact'},{key:'emergencyPhone',label:'Emergency Phone'},
                 {key:'parent1Name',label:'Parent'},{key:'parent1Phone',label:'Parent Phone'},{key:'parent1Email',label:'Parent Email'},
-                {key:'city',label:'City'},{key:'state',label:'State'},{key:'zip',label:'ZIP'}
+                {key:'altFirstName',label:'Alt. First Name'},{key:'altLastName',label:'Alt. Last Name'},
+                {key:'street',label:'Street'},{key:'city',label:'City'},{key:'state',label:'State'},{key:'zip',label:'ZIP'}
             ].concat(cfFields),
             rows:function(){
                 return Object.keys(roster).map(function(n){
@@ -11585,7 +11592,8 @@ function _reportSources(){
                         bunkmateRequest:c.bunkmateRequest||'',separateFrom:c.separateFrom||'',
                         emergencyName:c.emergencyName||'',emergencyPhone:c.emergencyPhone||'',
                         parent1Name:c.parent1Name||'',parent1Phone:c.parent1Phone||'',parent1Email:c.parent1Email||'',
-                        city:c.city||'',state:c.state||'',zip:c.zip||''};
+                        altFirstName:c.altFirstName||'',altLastName:c.altLastName||'',
+                        street:c.street||'',city:c.city||'',state:c.state||'',zip:c.zip||''};
                     cf.forEach(function(f){ row['cf_'+f.id]=c['cf_'+f.id]||''; });
                     return row;
                 });
@@ -11621,31 +11629,137 @@ function _reportSources(){
                         formsRequired:e.formsRequired||0,parentName:e.parentName||'',parentEmail:e.parentEmail||''};
                 });
             } },
-        staff:{ key:'staff', label:'Staff',
+        staff:{ key:'staff', label:'Staff (Finance Tab)',
             fields:[{key:'name',label:'Name'},{key:'role',label:'Role'},{key:'type',label:'Type'},{key:'salary',label:'Salary'},{key:'bunk',label:'Bunk'}],
-            rows:function(){ return (finStaff||[]).map(function(s){ return {name:s.name||'',role:s.role||'',type:s.type||'',salary:s.salary||0,bunk:s.bunk||''}; }); } }
+            rows:function(){ return (finStaff||[]).map(function(s){ return {name:s.name||'',role:s.role||'',type:s.type||'',salary:s.salary||0,bunk:s.bunk||''}; }); } },
+        // Normalizes the 3 heterogeneous finance stores (payments/expenses/
+        // finStaff) into one common shape — same logic exportFinancialReport()
+        // already used, just returning objects instead of a CSV string.
+        financial:{ key:'financial', label:'Financial',
+            fields:[{key:'type',label:'Type'},{key:'date',label:'Date'},{key:'description',label:'Description'},{key:'amount',label:'Amount'},{key:'category',label:'Category'}],
+            rows:function(){
+                var rows=[];
+                (finPayments||[]).forEach(function(p){ rows.push({type:'Payment',date:p.date||'',description:p.family||'',amount:p.amount||0,category:p.method||''}); });
+                (finExpenses||[]).forEach(function(e){ rows.push({type:'Expense',date:e.date||'',description:e.desc||'',amount:-(e.amount||0),category:e.cat||''}); });
+                (finStaff||[]).forEach(function(s){ rows.push({type:'Payroll',date:'',description:(s.name||'')+' ('+(s.role||'')+')',amount:-(s.salary||0),category:s.type||''}); });
+                return rows;
+            } },
+        // The real payroll module's staff records (pay type/rate, employment
+        // dates, compliance flags) — richer than the simple finStaff list
+        // above. Added alongside `staff`, not replacing it, so existing
+        // reports built off `staff` (finStaff) keep working unchanged.
+        payroll:{ key:'payroll', label:'Payroll (Staff Records)',
+            fields:[{key:'name',label:'Name'},{key:'role',label:'Role'},{key:'department',label:'Department'},{key:'bunk',label:'Bunk'},
+                {key:'employmentType',label:'Employment Type'},{key:'startDate',label:'Start Date'},{key:'endDate',label:'End Date'},
+                {key:'payType',label:'Pay Type'},{key:'payRate',label:'Pay Rate'},{key:'expectedWeeklyHours',label:'Expected Weekly Hours'},
+                {key:'i9OnFile',label:'I-9 On File'},{key:'w4OnFile',label:'W-4 On File'},{key:'backgroundCheck',label:'Background Check'}],
+            rows:function(){
+                var list=(typeof payroll!=='undefined'&&payroll&&payroll.staff)?payroll.staff:[];
+                return list.map(function(s){
+                    return {name:s.name||'',role:s.role||'',department:s.department||'',bunk:s.bunk||'',
+                        employmentType:s.employmentType||'',startDate:s.startDate||'',endDate:s.endDate||'',
+                        payType:s.payType||'',payRate:s.payRate||0,expectedWeeklyHours:s.expectedWeeklyHours||0,
+                        i9OnFile:s.i9OnFile?'Yes':'No',w4OnFile:s.w4OnFile?'Yes':'No',backgroundCheck:s.backgroundCheck?'Yes':'No'};
+                });
+            } }
     };
 }
 
-var _rbDraft=null; // in-progress report spec while the builder modal is open
+var _rbDraft=null; // in-progress report spec while the builder is open
+var _rbEditing=false; // true while the in-page editor (not the report list) is showing
+var _rbObserver=null; // MutationObserver on the config panel — catches filter add/remove
+var _rbLiveTimer=null; // debounce handle for the live preview
 
-function openReportBuilder(existingId){
+// Quick Reports, re-expressed as builder starting points — one click still
+// gets you the report, now it's also editable/filterable/schedulable.
+// Field lists mirror the old hand-rolled export*Report() CSV columns
+// (still kept, they have other call sites outside this page — see
+// exportFamilyReport/exportEnrollmentReport usages elsewhere in Families
+// and Applications). exportDivisionReport's aggregated bunk-count shape is
+// expressed here as campers grouped by bunk; exportMedicalReport's OR
+// filter (allergies/medications/dietary) isn't expressible with the
+// engine's AND-only filters, so this template ships unfiltered instead.
+var _rbQuickTemplates={
+    roster:{ name:'Camper Roster', source:'campers',
+        fields:['name','altFirstName','altLastName','camperId','division','grade','bunk','dob','gender','school','parent1Name','parent1Phone','parent1Email','street','city','state','zip','allergies','medications','dietary'] },
+    familyDirectory:{ name:'Family Directory', source:'families',
+        fields:['name','campers','camperCount','parent','phone','email','address','totalPaid','balance','status'] },
+    enrollmentPipeline:{ name:'Enrollment Pipeline', source:'enrollments',
+        fields:['camperName','session','status','appliedDate','sessionTuition','paymentStatus','formsCompleted'] },
+    divisionBreakdown:{ name:'Division Breakdown', source:'campers',
+        fields:['division','grade','bunk'], groupBy:'bunk' },
+    medicalSummary:{ name:'Medical Summary', source:'campers',
+        fields:['name','division','bunk','allergies','medications','dietary','emergencyName','emergencyPhone'] },
+    financialSummary:{ name:'Financial Summary', source:'financial',
+        fields:['type','date','description','amount','category'] }
+};
+
+function openReportBuilder(existingId,templateKey){
     var existing=existingId?savedReports.filter(function(r){return r.id===existingId;})[0]:null;
     var sources=_reportSources();
+    var tmpl=(!existing&&templateKey)?_rbQuickTemplates[templateKey]:null;
     if(existing){
         _rbDraft={id:existing.id,name:existing.name,source:existing.source,
             fields:(existing.fields||[]).slice(),filters:(existing.filters||[]).map(function(f){return Object.assign({},f);}),
             groupBy:existing.groupBy||'',mode:existing.mode||'live',
             schedule:existing.schedule?Object.assign({},existing.schedule):{freq:'off',recipients:''}};
+    }else if(tmpl){
+        _rbDraft={id:null,name:tmpl.name,source:tmpl.source,
+            fields:tmpl.fields.slice(),filters:(tmpl.filters||[]).map(function(f){return Object.assign({},f);}),
+            groupBy:tmpl.groupBy||'',mode:'live',schedule:{freq:'off',recipients:''}};
     }else{
         var first=sources.campers;
         _rbDraft={id:null,name:'',source:'campers',
             fields:first.fields.slice(0,6).map(function(f){return f.key;}),
             filters:[],groupBy:'',mode:'live',schedule:{freq:'off',recipients:''}};
     }
-    showModal(existing?'Edit Report':'Build Report','<div id="rbBody">'+_rbInner()+'</div>',saveCurrentReport);
-    // Relabel the modal Save button
-    var sv=document.getElementById('dynModalSave'); if(sv) sv.textContent='Save Report';
+    _rbEditing=true;
+    renderReports();
+}
+
+function rbCancelEdit(){
+    _rbDraft=null; _rbEditing=false;
+    if(_rbObserver){ _rbObserver.disconnect(); _rbObserver=null; }
+    renderReports();
+}
+
+function _rbEditorHtml(){
+    var h='<div class="sec-hd"><div style="display:flex;align-items:center;gap:10px"><button class="me-btn me-btn--ghost me-btn--sm" onclick="CampistryMe.rbCancelEdit()">← Back</button><h2 class="sec-title" style="margin:0">'+(_rbDraft.id?'Edit Report':'Build Report')+'</h2></div><div class="sec-actions"><button class="me-btn me-btn--pri" onclick="CampistryMe.saveCurrentReport()">Save Report</button></div></div>';
+    h+='<div class="split-builder">';
+    h+='<div class="split-config" id="rbConfigPanel">'+_rbInner()+'</div>';
+    h+='<div class="split-preview-wrap"><div class="split-preview-hd">Live Preview <span id="rbPreviewCount" style="font-weight:400;text-transform:none;letter-spacing:0"></span></div><div id="rbPreview" class="split-preview"></div></div>';
+    h+='</div>';
+    return h;
+}
+
+// Same live-refresh wiring the Form Builder uses: input/change on the panel
+// (bubbles from every field inside it) plus a MutationObserver for DOM
+// changes that don't fire those events — a filter row being added or
+// removed (rbAddFilter / the row's own ✕ button).
+function _rbWireLive(){
+    var panel=document.getElementById('rbConfigPanel');
+    if(!panel) return;
+    panel.oninput=_rbLiveUpdate;
+    panel.onchange=_rbLiveUpdate;
+    if(_rbObserver) _rbObserver.disconnect();
+    _rbObserver=new MutationObserver(_rbLiveUpdate);
+    _rbObserver.observe(panel,{childList:true,subtree:true});
+}
+
+function _rbLiveUpdate(){
+    clearTimeout(_rbLiveTimer);
+    _rbLiveTimer=setTimeout(function(){
+        if(!_rbDraft) return;
+        _rbSyncFromDom();
+        var RB=window.ReportBuilderCore; if(!RB) return;
+        var res=_computeReport(_rbDraft);
+        var host=document.getElementById('rbPreview');
+        var cnt=document.getElementById('rbPreviewCount');
+        if(cnt) cnt.textContent=res.total+' row'+(res.total===1?'':'s')+(_rbDraft.groupBy?' · '+res.groups.length+' groups':'');
+        if(!host) return;
+        if(!_rbDraft.fields.length){ host.innerHTML='<div style="font-size:.78rem;color:var(--err)">Pick at least one field.</div>'; return; }
+        host.innerHTML=_reportTablesHtml(res,8);
+    },150);
 }
 
 function _rbInner(){
@@ -11686,9 +11800,6 @@ function _rbInner(){
     h+='</select>';
     h+='<div id="rbSchedRecipWrap" style="margin-top:6px;'+(sch.freq==='off'?'display:none':'')+'"><input class="fi" id="rbSchedRecipients" value="'+esc(sch.recipients||'')+'" placeholder="Recipient emails, comma-separated"></div>';
     h+='</div>';
-    // Preview
-    h+='<div style="display:flex;justify-content:space-between;align-items:center;margin-top:6px"><button class="me-btn me-btn--sec me-btn--sm" onclick="CampistryMe.rbPreview()">Preview</button><span id="rbPreviewCount" style="font-size:.78rem;color:var(--s400)"></span></div>';
-    h+='<div id="rbPreview" style="margin-top:10px"></div>';
     return h;
 }
 
@@ -11726,7 +11837,8 @@ function rbSourceChange(v){
     // Reset fields to a sensible default and clear now-invalid filters/group.
     _rbDraft.fields=(sources[v]||sources.campers).fields.slice(0,6).map(function(f){return f.key;});
     _rbDraft.filters=[]; _rbDraft.groupBy='';
-    document.getElementById('rbBody').innerHTML=_rbInner();
+    var panel=document.getElementById('rbConfigPanel');
+    if(panel) panel.innerHTML=_rbInner();
 }
 function rbAddFilter(){
     _rbSyncFromDom();
@@ -11734,16 +11846,6 @@ function rbAddFilter(){
     var div=document.createElement('div');
     div.innerHTML=_rbFilterRow({},_rbDraft.filters.length);
     wrap.appendChild(div.firstChild);
-}
-function rbPreview(){
-    _rbSyncFromDom();
-    var RB=window.ReportBuilderCore; if(!RB){ toast('Report engine not loaded'); return; }
-    var res=_computeReport(_rbDraft);
-    var host=document.getElementById('rbPreview');
-    var cnt=document.getElementById('rbPreviewCount');
-    if(cnt) cnt.textContent=res.total+' row'+(res.total===1?'':'s')+(_rbDraft.groupBy?' · '+res.groups.length+' groups':'');
-    if(!_rbDraft.fields.length){ host.innerHTML='<div style="font-size:.78rem;color:var(--err)">Pick at least one field.</div>'; return; }
-    host.innerHTML=_reportTablesHtml(res,8);
 }
 
 function _computeReport(rep){
@@ -11816,7 +11918,8 @@ function saveCurrentReport(){
     }
     else { rep.createdAt=new Date().toISOString(); savedReports.unshift(rep); }
     _rbDraft=null;
-    closeModal('dynModal');
+    _rbEditing=false;
+    if(_rbObserver){ _rbObserver.disconnect(); _rbObserver=null; }
     save(); renderReports();
     toast('Report saved');
 }
@@ -12847,24 +12950,27 @@ function psDuplicate(id){
     printSheets.push(copy);psSave();renderPrintSheets();toast('Sheet duplicated');
 }
 function psRename(id,v){var s=psGet(id);if(!s)return;s.name=v;psSaveSoon()}
-function psSetProp(id,prop,v){var s=psGet(id);if(!s)return;s[prop]=v;psSave();renderPrintSheets()}
-function psToggleHideEmpty(id,checked){var s=psGet(id);if(!s)return;s.hideEmptyCols=!!checked;psSave();renderPrintSheets()}
+// Props/checkbox already reflect their own new value natively (native
+// select/checkbox behavior) — only the preview pane needs a refresh, no
+// full editor rebuild.
+function psSetProp(id,prop,v){var s=psGet(id);if(!s)return;s[prop]=v;psSave();psRefreshPreview(id)}
+function psToggleHideEmpty(id,checked){var s=psGet(id);if(!s)return;s.hideEmptyCols=!!checked;psSave();psRefreshPreview(id)}
 function psAddColumn(id){
     var s=psGet(id);if(!s)return;
     (s.columns=s.columns||[]).push({id:'c'+Date.now(),field:'',header:''});
-    psSave();renderPrintSheets();
+    psSave();_psRefreshColsList(id);psRefreshPreview(id);
 }
 function psRemoveColumn(id,colId){
     var s=psGet(id);if(!s)return;
     s.columns=(s.columns||[]).filter(function(c){return c.id!==colId});
-    psSave();renderPrintSheets();
+    psSave();_psRefreshColsList(id);psRefreshPreview(id);
 }
 function psMoveColumn(id,colId,dir){
     var s=psGet(id);if(!s)return;
     var cols=s.columns||[],i=cols.findIndex(function(c){return c.id===colId}),j=i+dir;
     if(i<0||j<0||j>=cols.length)return;
     var t=cols[i];cols[i]=cols[j];cols[j]=t;
-    psSave();renderPrintSheets();
+    psSave();_psRefreshColsList(id);psRefreshPreview(id);
 }
 // ── column drag-and-drop reordering ──
 var _psDragColId=null;
@@ -12910,12 +13016,12 @@ function psColDrop(e,sheetId,targetColId){
     if(insertIdx<0)insertIdx=cols.length;else if(after)insertIdx+=1;
     cols.splice(insertIdx,0,moved);
     _psDragColId=null;
-    psSave();renderPrintSheets();
+    psSave();_psRefreshColsList(sheetId);psRefreshPreview(sheetId);
 }
 function psSetColField(id,colId,v){
     var s=psGet(id);if(!s)return;
     var col=(s.columns||[]).filter(function(c){return c.id===colId})[0];
-    if(col){col.field=v;psSave();renderPrintSheets()}
+    if(col){col.field=v;psSave();_psRefreshColsList(id);psRefreshPreview(id);}
 }
 function psSetColHeader(id,colId,v){
     var s=psGet(id);if(!s)return;
@@ -12927,12 +13033,50 @@ function psRefreshPreview(id){
     var s=psGet(id),el=document.getElementById('psPreview');
     if(s&&el)el.innerHTML=psPreviewHtml(s);
 }
+// Column row markup + the two targeted-refresh helpers below let every
+// column-list mutation (add/remove/reorder/field change) patch just the
+// column list + preview panes instead of renderPrintSheets()'s full
+// editor rebuild — same smooth, no-flash live feel the Report Builder has.
+function _psColRowHtml(s,col){
+    var fieldOpts=psFields();
+    var o='<option value="">— empty (won\'t print) —</option>';
+    fieldOpts.forEach(function(f){o+='<option value="'+esc(f.key)+'"'+(f.key===col.field?' selected':'')+'>'+esc(f.label)+'</option>'});
+    return '<div class="ps-col-row" data-colid="'+je(col.id)+'" draggable="false"'
+        +' ondragstart="CampistryMe.psColDragStart(event,\''+je(col.id)+'\')"'
+        +' ondragend="CampistryMe.psColDragEnd(event)"'
+        +' ondragover="CampistryMe.psColDragOver(event)"'
+        +' ondragleave="CampistryMe.psColDragLeave(event)"'
+        +' ondrop="CampistryMe.psColDrop(event,\''+je(s.id)+'\',\''+je(col.id)+'\')">'
+        +'<span class="ps-col-drag" title="Drag to reorder" onmousedown="CampistryMe.psColDragHandle(event)">⋮⋮</span>'
+        +'<div class="ps-col-fields">'
+        +'<select class="me-input me-input--sm" onchange="CampistryMe.psSetColField(\''+je(s.id)+'\',\''+je(col.id)+'\',this.value)">'+o+'</select>'
+        +'<input type="text" class="me-input me-input--sm" value="'+esc(col.header||'')+'" placeholder="'+esc(col.field?('Header: '+psFieldLabel(col.field)):'Column header')+'" oninput="CampistryMe.psSetColHeader(\''+je(s.id)+'\',\''+je(col.id)+'\',this.value)">'
+        +'</div>'
+        +'<button class="me-btn me-btn--ghost me-btn--sm" title="Remove column" style="color:var(--err)" onclick="CampistryMe.psRemoveColumn(\''+je(s.id)+'\',\''+je(col.id)+'\')">✕</button>'
+        +'</div>';
+}
+function _psColsRowsHtml(s){
+    return (s.columns||[]).map(function(col){ return _psColRowHtml(s,col); }).join('');
+}
+// A bus column with no route data behind it prints blank and looks like a
+// bug. Say so here rather than letting them find out at the printer.
+function _psBusWarningHtml(s){
+    var usesBus=(s.columns||[]).some(function(col){return col.field&&col.field.indexOf('bus')===0});
+    if(!usesBus||_busHasData())return '';
+    return '<div style="margin-top:10px;padding:9px 11px;background:var(--warn-bg,#fff8e1);border:1px solid var(--warn-border,#ffe082);border-radius:var(--r);font-size:.72rem;color:var(--s600);line-height:1.55">'
+        +'<strong>No bus routes found yet.</strong> Bus columns fill in from <a href="campistry_go.html" style="color:var(--me);font-weight:600">Campistry Go</a> once routes have been generated and saved there. They\'ll print blank until then.</div>';
+}
+function _psRefreshColsList(id){
+    var s=psGet(id); if(!s) return;
+    var el=document.getElementById('psColsList'); if(el) el.innerHTML=_psColsRowsHtml(s);
+    var warnEl=document.getElementById('psBusWarning'); if(warnEl) warnEl.innerHTML=_psBusWarningHtml(s);
+}
 
 // ── preview + print output ──
 function psPreviewHtml(sheet){
     var groups=psGroups(sheet),allRows=groups.reduce(function(a,g){return a.concat(g.rows)},[]);
     var cols=psActiveColumns(sheet,allRows);
-    if(!cols.length)return'<div class="ps-hint">Add at least one column with a field selected to see a preview.</div>';
+    if(!cols.length)return'<div class="split-hint">Add at least one column with a field selected to see a preview.</div>';
     var h='';
     groups.forEach(function(g){
         var gcols=psActiveColumns(sheet,g.rows);
@@ -13010,16 +13154,10 @@ function renderPrintSheets(){
     c.innerHTML=h;
 }
 function psEditorHtml(s){
-    var fieldOpts=psFields();
-    function fieldSelect(col){
-        var o='<option value="">— empty (won\'t print) —</option>';
-        fieldOpts.forEach(function(f){o+='<option value="'+esc(f.key)+'"'+(f.key===col.field?' selected':'')+'>'+esc(f.label)+'</option>'});
-        return o;
-    }
     var h='<div class="sec-hd"><div style="display:flex;align-items:center;gap:10px"><button class="me-btn me-btn--ghost me-btn--sm" onclick="CampistryMe.psBack()">← Back</button><h2 class="sec-title" style="margin:0">Edit Sheet</h2></div><div class="sec-actions"><button class="me-btn me-btn--pri" onclick="CampistryMe.psPrint(\''+je(s.id)+'\')">Print</button></div></div>';
-    h+='<div class="ps-builder">';
+    h+='<div class="split-builder">';
     // ── config column ──
-    h+='<div class="ps-config">';
+    h+='<div class="split-config">';
     h+='<div class="me-field"><label>Sheet Name</label><input type="text" class="me-input" value="'+esc(s.name||'')+'" oninput="CampistryMe.psRename(\''+je(s.id)+'\',this.value)" onchange="CampistryMe.psRename(\''+je(s.id)+'\',this.value)" placeholder="e.g. Bunk Sign-In Sheet"></div>';
 
     var divOpts='<option value="">All campers</option>'+Object.keys(structure).sort().map(function(d){return'<option value="'+esc(d)+'"'+(d===s.scopeDiv?' selected':'')+'>'+esc(d)+'</option>'}).join('');
@@ -13036,36 +13174,14 @@ function psEditorHtml(s){
     // ── columns editor ──
     h+='<div class="ps-cols-hd">Columns</div>';
     h+='<p style="font-size:.68rem;color:var(--s400);margin:0 0 8px">Pick a field for each column. Leave a column empty and it simply won\'t print. Choose <em>Blank / write-in</em> for a handwriting column (give it a header).</p>';
-    h+='<div class="ps-cols">';
-    (s.columns||[]).forEach(function(col,i){
-        h+='<div class="ps-col-row" data-colid="'+je(col.id)+'" draggable="false"'
-            +' ondragstart="CampistryMe.psColDragStart(event,\''+je(col.id)+'\')"'
-            +' ondragend="CampistryMe.psColDragEnd(event)"'
-            +' ondragover="CampistryMe.psColDragOver(event)"'
-            +' ondragleave="CampistryMe.psColDragLeave(event)"'
-            +' ondrop="CampistryMe.psColDrop(event,\''+je(s.id)+'\',\''+je(col.id)+'\')">'
-            +'<span class="ps-col-drag" title="Drag to reorder" onmousedown="CampistryMe.psColDragHandle(event)">⋮⋮</span>'
-            +'<div class="ps-col-fields">'
-            +'<select class="me-input me-input--sm" onchange="CampistryMe.psSetColField(\''+je(s.id)+'\',\''+je(col.id)+'\',this.value)">'+fieldSelect(col)+'</select>'
-            +'<input type="text" class="me-input me-input--sm" value="'+esc(col.header||'')+'" placeholder="'+esc(col.field?('Header: '+psFieldLabel(col.field)):'Column header')+'" oninput="CampistryMe.psSetColHeader(\''+je(s.id)+'\',\''+je(col.id)+'\',this.value)">'
-            +'</div>'
-            +'<button class="me-btn me-btn--ghost me-btn--sm" title="Remove column" style="color:var(--err)" onclick="CampistryMe.psRemoveColumn(\''+je(s.id)+'\',\''+je(col.id)+'\')">✕</button>'
-            +'</div>';
-    });
-    h+='</div>';
+    h+='<div class="ps-cols" id="psColsList">'+_psColsRowsHtml(s)+'</div>';
     h+='<button class="me-btn me-btn--sec me-btn--sm" style="margin-top:8px" onclick="CampistryMe.psAddColumn(\''+je(s.id)+'\')">+ Add Column</button>';
-    // A bus column with no route data behind it prints blank and looks like a
-    // bug. Say so here rather than letting them find out at the printer.
-    var _usesBus=(s.columns||[]).some(function(col){return col.field&&col.field.indexOf('bus')===0});
-    if(_usesBus&&!_busHasData()){
-        h+='<div style="margin-top:10px;padding:9px 11px;background:var(--warn-bg,#fff8e1);border:1px solid var(--warn-border,#ffe082);border-radius:var(--r);font-size:.72rem;color:var(--s600);line-height:1.55">'
-            +'<strong>No bus routes found yet.</strong> Bus columns fill in from <a href="campistry_go.html" style="color:var(--me);font-weight:600">Campistry Go</a> once routes have been generated and saved there. They\'ll print blank until then.</div>';
-    }
-    h+='</div>'; // ps-config
+    h+='<div id="psBusWarning">'+_psBusWarningHtml(s)+'</div>';
+    h+='</div>'; // split-config
 
     // ── live preview ──
-    h+='<div class="ps-preview-wrap"><div class="ps-preview-hd">Live Preview</div><div id="psPreview" class="ps-preview">'+psPreviewHtml(s)+'</div></div>';
-    h+='</div>'; // ps-builder
+    h+='<div class="split-preview-wrap"><div class="split-preview-hd">Live Preview</div><div id="psPreview" class="split-preview">'+psPreviewHtml(s)+'</div></div>';
+    h+='</div>'; // split-builder
     return h;
 }
 
@@ -13165,7 +13281,7 @@ window.CampistryMe={
     editLinkItem:editLinkItem,deleteLinkItem:deleteLinkItem,
     // Reports
     exportRosterReport:exportRosterReport,exportFamilyReport:exportFamilyReport,printFamilies:printFamilies,
-    openReportBuilder:openReportBuilder,rbSourceChange:rbSourceChange,rbAddFilter:rbAddFilter,rbPreview:rbPreview,saveCurrentReport:saveCurrentReport,runSavedReport:runSavedReport,exportSavedReport:exportSavedReport,printSavedReport:printSavedReport,deleteSavedReport:deleteSavedReport,
+    openReportBuilder:openReportBuilder,rbCancelEdit:rbCancelEdit,rbSourceChange:rbSourceChange,rbAddFilter:rbAddFilter,saveCurrentReport:saveCurrentReport,runSavedReport:runSavedReport,exportSavedReport:exportSavedReport,printSavedReport:printSavedReport,deleteSavedReport:deleteSavedReport,
     exportEnrollmentReport:exportEnrollmentReport,exportDivisionReport:exportDivisionReport,
     exportMedicalReport:exportMedicalReport,exportFinancialReport:exportFinancialReport,
     // Broadcast delivery
