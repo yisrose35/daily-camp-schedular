@@ -66,13 +66,9 @@ body.sidebar-open .sidebar { transform:translateX(0); }
 .sb-badge { font-size:.65rem; font-weight:700; padding:1px 6px; border-radius:10px; background:rgba(139,92,246,.25); color:#C4B5FD; margin-left:auto; }
 .sb-badge.warn { background:rgba(220,38,38,.25); color:#FCA5A5; }
 
-/* ══ DESKTOP LAYOUT ══════════════════════════════════════════ */
-@media (min-width: 769px) {
-    .sidebar { transform:translateX(0); }
-    .app-content { margin-left:240px; }
-    .hamburger-btn { display:none; }
-    .sidebar-backdrop { display:none !important; }
-}
+/* The sidebar stays hamburger-triggered at every screen size — matches
+   Me/Live/Flow (there is deliberately no desktop auto-pin/@media override
+   here, same as campistry_snacks.css/campistry_me.css/campistry_live.css). */
 
 /* ══ MAIN CONTENT ════════════════════════════════════════════ */
 .app-content { padding:1.25rem 1.5rem 3rem; }

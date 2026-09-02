@@ -44,8 +44,8 @@
             100% { transform: scale(1.0); opacity: 1; }
         }
     </style>
-    <link rel="stylesheet" href="campistry-unified.css?v=20260901-20">
-    <link rel="stylesheet" href="campistry_health.css?v=20260901-20">
+    <link rel="stylesheet" href="campistry-unified.css?v=20260901-21">
+    <link rel="stylesheet" href="campistry_health.css?v=20260901-21">
     <noscript><style>html body{opacity:1!important}</style></noscript>
 </head>
 <body>
@@ -80,7 +80,7 @@
     <div class="app-header-center">
         <!-- Quick-Switch Bar (shared component — see campistry_app_switcher.js) -->
         <div data-quick-switch-mount="health"></div>
-        <script src="campistry_app_switcher.js?v=20260901-20"></script>
+        <script src="campistry_app_switcher.js?v=20260901-21"></script>
     </div>
     <div class="header-right">
         <div class="sync-badge"><span class="sync-dot"></span> Synced</div>
@@ -100,7 +100,7 @@
     <button class="sidebar-item" data-page="allergies"><span class="sidebar-dot"></span> Allergies &amp; Dietary</button>
     <button class="sidebar-item" data-page="nighttime"><span class="sidebar-dot"></span> Nighttime Care</button>
     <div class="sidebar-label">Directory</div>
-    <button class="sidebar-item" data-page="campers"><span class="sidebar-dot"></span> Camper Directory <span class="sb-badge" id="sbCamperCount">0</span></button>
+    <button class="sidebar-item" data-page="campers"><span class="sidebar-dot"></span> Directory <span class="sb-badge" id="sbCamperCount">0</span></button>
     <div class="sidebar-label">Pre-Camp</div>
     <button class="sidebar-item" data-page="intake"><span class="sidebar-dot"></span> Medical Forms <span class="sb-badge warn" id="sbFormCount">0</span></button>
     <div class="sidebar-label">Reports</div>
@@ -188,11 +188,25 @@
 <div id="page-campers" class="health-page">
     <div class="page-hero">
         <div class="page-hero-icon"><svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M17 21v-2a4 4 0 00-4-4H5a4 4 0 00-4 4v2"/><circle cx="9" cy="7" r="4"/></svg></div>
-        <div><h1>Camper Directory</h1><p>Real-time synced from Campistry Me — <span id="statDirCount">0</span> campers</p></div>
+        <div><h1>Directory</h1><p>Everyone in camp — campers and staff — real-time synced from Campistry Me — <span id="statDirCount">0</span> people</p></div>
     </div>
     <div style="display:flex;justify-content:flex-end;margin-bottom:10px"><div class="sync-badge" style="font-size:.73rem;padding:7px 12px"><span class="sync-dot"></span> Live sync with Me</div></div>
-    <div class="search-bar"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg><input type="text" id="camperDirSearch" placeholder="Search by name, bunk, division, or allergy..."></div>
-    <div class="card"><table class="data-table"><thead><tr><th></th><th>Camper</th><th>Age</th><th>Division</th><th>Bunk</th><th>Medical Flags</th><th>Emergency Contact</th></tr></thead><tbody id="camperDirBody"><tr><td colspan="7" class="empty-state">Loading...</td></tr></tbody></table></div>
+    <div class="search-bar"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg><input type="text" id="camperDirSearch" placeholder="Search by name, bunk, division, role, or allergy..."></div>
+    <div class="card"><table class="data-table"><thead><tr><th></th><th>Name</th><th>Type</th><th>Age / Role</th><th>Division / Bunk</th><th>Medical Flags</th><th>Emergency Contact</th></tr></thead><tbody id="camperDirBody"><tr><td colspan="7" class="empty-state">Loading...</td></tr></tbody></table></div>
+</div>
+
+<!-- Full-screen person profile — Directory row click. Same read-only,
+     medical-scoped view for both campers and staff; no editing, no
+     documents/financial-aid/notes/attendance-history extras — those stay
+     in Me. Matches the full-page (not modal) pattern Me's own Roster row
+     click uses. -->
+<div id="page-personProfile" class="health-page">
+    <button class="btn btn-secondary" style="margin-bottom:14px" onclick="showHealthPage('campers')">&larr; Back to Directory</button>
+    <div class="page-hero">
+        <div class="page-hero-icon"><svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M17 21v-2a4 4 0 00-4-4H5a4 4 0 00-4 4v2"/><circle cx="9" cy="7" r="4"/></svg></div>
+        <div><h1 id="personProfileName">Profile</h1><p id="personProfileSub"></p></div>
+    </div>
+    <div class="card"><div class="card-body" id="personProfileBody"></div></div>
 </div>
 
 <!-- ── MEDICAL FORMS INTAKE ── -->
@@ -244,12 +258,6 @@
     <div class="form-group"><label class="form-label">Notes</label><input type="text" class="form-input" id="medNotes" placeholder="Optional..."></div>
 </div><div class="modal-footer"><button class="btn btn-secondary" onclick="CampistryHealth.closeModal('medModal')">Cancel</button><button class="btn btn-primary" onclick="CampistryHealth.saveDispensing()">Log Dispensing</button></div></div></div>
 
-<!-- Read-only camper profile — Camper Directory row click. Same info a
-     nurse needs at a glance; no editing, no documents/financial
-     aid/notes/attendance-history extras that Campistry Me's own camper
-     profile carries — those stay in Me. -->
-<div class="modal-overlay" id="camperModal"><div class="modal modal-lg"><div class="modal-header"><h3 id="camperModalName">Camper</h3><button class="modal-close" onclick="CampistryHealth.closeModal('camperModal')">&times;</button></div><div class="modal-body" id="camperModalBody"></div></div></div>
-
 <!-- ═══ BOTTOM NAV (mobile) ═══ -->
 <div class="cs-bnav" id="healthBnav">
     <button class="cs-bnav-item active" onclick="triggerPage('dashboard', this)">
@@ -283,13 +291,22 @@ function triggerPage(p, btn) {
     if (btn) btn.classList.add('active');
 }
 </script>
-<script src="config.js?v=20260901-20"></script>
-<script src="supabase-js@2.js?v=20260901-20"></script>
-<script src="supabase_client.js?v=20260901-20"></script>
-<script src="campistry_cloud_bootstrap.js?v=20260901-20"></script>
-<script src="campistry_health.js?v=20260901-20"></script>
+<script src="config.js?v=20260901-21"></script>
+<script src="supabase-js@2.js?v=20260901-21"></script>
+<script src="supabase_client.js?v=20260901-21"></script>
+<script src="campistry_cloud_bootstrap.js?v=20260901-21"></script>
+<script src="campistry_health.js?v=20260901-21"></script>
 <script>
-// Sidebar (hamburger toggle — matches Flow/Me)
+// Switches which .health-page is visible without touching the sidebar's
+// active state — used by the sidebar click handler below AND by
+// click-through views (e.g. a Directory row opening a full-screen
+// profile) that aren't sidebar destinations of their own.
+window.showHealthPage = function(pageId){
+    document.querySelectorAll('.health-page').forEach(function(x){x.classList.remove('active')});
+    var t=document.getElementById('page-'+pageId); if(t) t.classList.add('active');
+};
+// Sidebar (hamburger toggle — matches Flow/Me: hidden behind the
+// hamburger at every screen size, never auto-pinned open on desktop)
 (function(){
     var h=document.getElementById('hamburgerBtn'),sb=document.getElementById('sidebar'),bd=document.getElementById('sidebarBackdrop'),sy=0;
     function open(){sy=window.scrollY;document.body.style.top=-sy+'px';document.body.classList.add('sidebar-open')}
@@ -301,8 +318,7 @@ function triggerPage(p, btn) {
             var p=b.dataset.page;
             sb.querySelectorAll('.sidebar-item').forEach(function(x){x.classList.remove('active')});
             b.classList.add('active');
-            document.querySelectorAll('.health-page').forEach(function(x){x.classList.remove('active')});
-            var t=document.getElementById('page-'+p); if(t) t.classList.add('active');
+            showHealthPage(p);
             close();
             // Tell JS engine to render the page
             if (window.CampistryHealth) CampistryHealth.onPageChange(p);
@@ -327,7 +343,7 @@ window.addEventListener('campistry-cloud-hydrated', function(){
 });
 </script>
 <script>setTimeout(function(){document.documentElement.classList.add('css-ready')},3000)</script>
-<script src="campistry_notes_quick.js?v=20260901-20"></script>
+<script src="campistry_notes_quick.js?v=20260901-21"></script>
 <script>window.__CAMPISTRY_PRODUCT__='health';</script>
 <script>
 // ── Health data ↔ cloud sync ──────────────────────────────────────────────────
@@ -384,11 +400,11 @@ window.addEventListener('campistry-cloud-hydrated', function(){
     window.addEventListener('storage', function(e){ if(e.key===GKEY) sync(); });
 })();
 </script>
-<script src="parent_lockout_guard.js?v=20260901-20"></script>
-<script src="product_access_guard.js?v=20260901-20"></script>
+<script src="parent_lockout_guard.js?v=20260901-21"></script>
+<script src="product_access_guard.js?v=20260901-21"></script>
 <!-- Per-SECTION access: limits which parts of THIS app the user can open.
      Loads after the product gate, which decides whether they get in at all. -->
-<script src="campistry_capabilities.js?v=20260901-20"></script>
-<script src="campistry_access_sections.js?v=20260901-20"></script>
+<script src="campistry_capabilities.js?v=20260901-21"></script>
+<script src="campistry_access_sections.js?v=20260901-21"></script>
 </body>
 </html>

@@ -31,6 +31,16 @@
     function getRoster()    { var g = readGlobal(); return (g.app1 && g.app1.camperRoster) || {}; }
     function getStructure() { return readGlobal().campStructure || {}; }
     function getFamilies()  { var g = readGlobal(); return (g.campistryMe && g.campistryMe.families) || {}; }
+    // Hired staff — head counselors, counselors, everyone on payroll — pulled
+    // the same way Me's own hiredStaff() does (status==='hired'), so the
+    // Directory can include them alongside campers for emergency lookup.
+    function getHiredStaff() {
+        var g = readGlobal();
+        var apps = (g.campistryMe && g.campistryMe.staffApplications) || {};
+        return Object.keys(apps)
+            .map(function(id) { return Object.assign({id:id}, apps[id] || {}); })
+            .filter(function(a) { return a.status === 'hired'; });
+    }
     function getCampName()  { var g = readGlobal(); return g.camp_name || g.campName || localStorage.getItem('campistry_camp_name') || 'Your Camp'; }
 
     // ── Health Data (read/write) ──────────────────────────────────────────
@@ -199,32 +209,63 @@
     }
 
     function renderCamperDirectory(filterText) {
-        var roster = getRoster(), names = Object.keys(roster).sort();
+        var roster = getRoster();
+        var people = Object.keys(roster).sort().map(function(n) {
+            return {type:'camper', key:n, name:n, rec:roster[n]};
+        });
+        getHiredStaff().sort(function(a,b){ return String(a.name||'').localeCompare(String(b.name||'')); }).forEach(function(s) {
+            people.push({type:'staff', key:s.id, name:s.name||((s.first||'')+' '+(s.last||'')).trim(), rec:s});
+        });
+
         var tbody = document.getElementById('camperDirBody'); if (!tbody) return;
-        if (!names.length) {
-            tbody.innerHTML = '<tr><td colspan="7" class="empty-state">No campers yet. Add campers in <a href="campistry_me.html" style="color:var(--health);font-weight:600">Campistry Me</a>.</td></tr>';
+        if (!people.length) {
+            tbody.innerHTML = '<tr><td colspan="7" class="empty-state">No one yet. Add campers or staff in <a href="campistry_me.html" style="color:var(--health);font-weight:600">Campistry Me</a>.</td></tr>';
             setText('statDirCount','0'); return;
         }
         var q = (filterText||'').toLowerCase();
-        var filtered = names.filter(function(n) {
+        var filtered = people.filter(function(p) {
             if (!q) return true;
-            var c = roster[n];
-            return [n,c.division,c.bunk,c.allergies,c.medications,c.dietary,c.parent1Name,c.emergencyName].join(' ').toLowerCase().includes(q);
+            var c = p.rec;
+            var haystack = p.type === 'camper'
+                ? [p.name,c.division,c.bunk,c.allergies,c.medications,c.dietary,c.parent1Name,c.emergencyName]
+                : [p.name,(c.positions||[]).join(' '),c.phone,c.email,c.parentName];
+            return haystack.join(' ').toLowerCase().includes(q);
         });
         setText('statDirCount', String(filtered.length));
         if (!filtered.length) { tbody.innerHTML = '<tr><td colspan="7" class="empty-state">No matches.</td></tr>'; return; }
         var h = '';
-        filtered.forEach(function(name) {
-            var c = roster[name];
-            var flags = '';
-            if (c.allergies) flags += bdg(c.allergies.split(',')[0].trim(),'red')+' ';
-            if (c.medications) flags += bdg(c.medications.split(',')[0].trim(),'purple')+' ';
-            if (c.dietary) flags += bdg(c.dietary.split(',')[0].trim(),'amber')+' ';
-            if (!flags) flags = '<span style="color:var(--slate-300)">None</span>';
-            var em = c.emergencyName||c.parent1Name||'—';
-            var ph = c.emergencyPhone||c.parent1Phone||'';
-            if (ph) em += ' · '+esc(ph);
-            h += '<tr class="click" onclick="CampistryHealth.viewCamper(\''+je(name)+'\')">'+'<td><div class="med-avatar" style="background:'+avc(name)+';width:30px;height:30px;font-size:.6rem">'+ini(name)+'</div></td><td style="font-weight:700">'+esc(name)+'</td><td>'+(c.dob?age(c.dob):'—')+'</td><td>'+(c.division?bdg(c.division,'purple'):'—')+'</td><td>'+esc(c.bunk||'—')+'</td><td>'+flags+'</td><td style="font-size:.75rem;color:var(--slate-500)">'+em+'</td></tr>';
+        filtered.forEach(function(p) {
+            var c = p.rec, name = p.name;
+            var flags, ageRole, divBunk, em;
+            if (p.type === 'camper') {
+                flags = '';
+                if (c.allergies) flags += bdg(c.allergies.split(',')[0].trim(),'red')+' ';
+                if (c.medications) flags += bdg(c.medications.split(',')[0].trim(),'purple')+' ';
+                if (c.dietary) flags += bdg(c.dietary.split(',')[0].trim(),'amber')+' ';
+                if (!flags) flags = '<span style="color:var(--slate-300)">None</span>';
+                ageRole = c.dob ? age(c.dob) : '—';
+                divBunk = (c.division?bdg(c.division,'purple'):'—') + (c.bunk?(' '+esc(c.bunk)):'');
+                em = c.emergencyName||c.parent1Name||'—';
+                var ph1 = c.emergencyPhone||c.parent1Phone||'';
+                if (ph1) em += ' · '+esc(ph1);
+            } else {
+                flags = '<span style="color:var(--slate-300)">—</span>';
+                ageRole = esc((c.positions||[]).join(', ')||'Staff');
+                divBunk = '<span style="color:var(--slate-300)">—</span>';
+                em = c.parentName || c.phone || '—';
+                var ph2 = c.parentPhone||(c.parentName?'':c.phone)||'';
+                if (ph2 && c.parentName) em += ' · '+esc(ph2);
+                else if (!c.parentName && c.phone) em = esc(c.phone)+' (self)';
+            }
+            var typeBadge = p.type === 'camper' ? bdg('Camper','blue') : bdg('Staff','purple');
+            h += '<tr class="click" onclick="CampistryHealth.viewPerson(\''+p.type+'\',\''+je(p.key)+'\')">'
+               + '<td><div class="med-avatar" style="background:'+avc(name)+';width:30px;height:30px;font-size:.6rem">'+ini(name)+'</div></td>'
+               + '<td style="font-weight:700">'+esc(name)+'</td>'
+               + '<td>'+typeBadge+'</td>'
+               + '<td>'+ageRole+'</td>'
+               + '<td>'+divBunk+'</td>'
+               + '<td>'+flags+'</td>'
+               + '<td style="font-size:.75rem;color:var(--slate-500)">'+em+'</td></tr>';
         });
         tbody.innerHTML = h;
     }
@@ -402,73 +443,126 @@
     function _cpRow(label, val) {
         return '<div class="cp-row"><div class="cp-row-label">'+esc(label)+'</div><div class="cp-row-val">'+(val?esc(val):'<span style="color:var(--slate-300)">—</span>')+'</div></div>';
     }
-    function viewCamper(name) {
-        var c = getRoster()[name]; if (!c) return;
-        var titleEl = document.getElementById('camperModalName');
-        if (titleEl) titleEl.textContent = name + (c.camperId ? ' (#'+String(c.camperId).padStart(4,'0')+')' : '');
+    // Full-screen profile — handles both a camper (from the roster) and a
+    // hired staff member (from staffApplications), same read-only,
+    // medical-scoped view for either. Matches the full-page (not modal)
+    // pattern Me's own Roster row click uses.
+    function viewPerson(type, key) {
+        var c = type === 'staff' ? getHiredStaff().filter(function(s){return s.id===key;})[0] : getRoster()[key];
+        if (!c) return;
+        var name = type === 'staff' ? (c.name||((c.first||'')+' '+(c.last||'')).trim()) : key;
 
-        var flags = '';
-        if (c.allergies) flags += bdg(c.allergies,'red')+' ';
-        if (c.medications) flags += bdg(c.medications,'purple')+' ';
-        if (c.dietary) flags += bdg(c.dietary,'amber')+' ';
-        if (!flags) flags = '<span style="color:var(--slate-300)">None on file</span>';
+        var titleEl = document.getElementById('personProfileName');
+        var idNum = type === 'staff' ? c.staffId : c.camperId;
+        if (titleEl) titleEl.textContent = name + (idNum ? ' (#'+String(idNum).padStart(4,'0')+')' : '');
+        var subEl = document.getElementById('personProfileSub');
+        if (subEl) subEl.textContent = type === 'staff' ? 'Staff' : 'Camper';
 
         var h = '';
-        h += '<div style="display:flex;align-items:center;gap:12px;margin-bottom:18px">'
-           + '<div class="med-avatar" style="background:'+avc(name)+';width:48px;height:48px;font-size:.9rem">'+ini(name)+'</div>'
-           + '<div>'+(c.division?bdg(c.division,'purple')+' ':'')+(c.bunk?bdg(c.bunk,'blue'):'')
-           + '<div style="font-size:.78rem;color:var(--slate-500);margin-top:3px">'+(c.dob?age(c.dob)+' yrs old · ':'')+esc(c.gender||'')+'</div></div>'
-           + '</div>';
+        if (type === 'camper') {
+            var flags = '';
+            if (c.allergies) flags += bdg(c.allergies,'red')+' ';
+            if (c.medications) flags += bdg(c.medications,'purple')+' ';
+            if (c.dietary) flags += bdg(c.dietary,'amber')+' ';
+            if (!flags) flags = '<span style="color:var(--slate-300)">None on file</span>';
 
-        h += '<div class="cp-section"><div class="cp-section-title">Medical</div>'
-           + '<div style="margin-bottom:8px">'+flags+'</div>'
-           + '<div class="cp-grid">'
-           + _cpRow('Medical Notes', c.medicalNotes)
-           + _cpRow('Physician', c.physician)
-           + _cpRow('Physician Phone', c.physicianPhone)
-           + _cpRow('Insurance Provider', c.insuranceProvider)
-           + _cpRow('Insurance Policy #', c.insurancePolicy)
-           + '</div></div>';
+            h += '<div style="display:flex;align-items:center;gap:12px;margin-bottom:18px">'
+               + '<div class="med-avatar" style="background:'+avc(name)+';width:48px;height:48px;font-size:.9rem">'+ini(name)+'</div>'
+               + '<div>'+(c.division?bdg(c.division,'purple')+' ':'')+(c.bunk?bdg(c.bunk,'blue'):'')
+               + '<div style="font-size:.78rem;color:var(--slate-500);margin-top:3px">'+(c.dob?age(c.dob)+' yrs old · ':'')+esc(c.gender||'')+'</div></div>'
+               + '</div>';
 
-        // Documents uploaded at registration (immunization records, health
-        // forms, insurance card, etc.) — the same files a parent attached
-        // on the public registration form, carried onto the camper record
-        // at Enroll time so they don't stay stranded on the application.
-        var docs = c.documents || [];
-        h += '<div class="cp-section"><div class="cp-section-title">Documents from Registration</div>';
-        if (!docs.length) {
-            h += '<div style="font-size:.8rem;color:var(--slate-300);font-style:italic">None uploaded</div>';
+            h += '<div class="cp-section"><div class="cp-section-title">Medical</div>'
+               + '<div style="margin-bottom:8px">'+flags+'</div>'
+               + '<div class="cp-grid">'
+               + _cpRow('Medical Notes', c.medicalNotes)
+               + _cpRow('Physician', c.physician)
+               + _cpRow('Physician Phone', c.physicianPhone)
+               + _cpRow('Insurance Provider', c.insuranceProvider)
+               + _cpRow('Insurance Policy #', c.insurancePolicy)
+               + '</div></div>';
+
+            // Documents uploaded at registration (immunization records, health
+            // forms, insurance card, etc.) — the same files a parent attached
+            // on the public registration form, carried onto the camper record
+            // at Enroll time so they don't stay stranded on the application.
+            var docs = c.documents || [];
+            h += '<div class="cp-section"><div class="cp-section-title">Documents from Registration</div>';
+            if (!docs.length) {
+                h += '<div style="font-size:.8rem;color:var(--slate-300);font-style:italic">None uploaded</div>';
+            } else {
+                h += docs.map(function(d) {
+                    return '<div style="display:flex;align-items:center;gap:6px;padding:3px 0;font-size:.82rem">📄 <strong>'+esc(d.name||'Document')+'</strong>'
+                         + (d.data ? ' <a href="'+esc(d.data)+'" download="'+esc(d.name||'document')+'" style="color:var(--health);font-weight:600;font-size:.75rem">Download</a>' : '')
+                         + '</div>';
+                }).join('');
+            }
+            h += '</div>';
+
+            h += '<div class="cp-section"><div class="cp-section-title">Camp Assignment</div><div class="cp-grid">'
+               + _cpRow('Division', c.division) + _cpRow('Bunk', c.bunk)
+               + _cpRow('School', c.school) + _cpRow('DOB', c.dob)
+               + '</div></div>';
+
+            h += '<div class="cp-section"><div class="cp-section-title">Parent / Guardian</div><div class="cp-grid">'
+               + _cpRow('Name', c.parent1Name) + _cpRow('Phone', c.parent1Phone)
+               + _cpRow('Email', c.parent1Email)
+               + '</div></div>';
+
+            h += '<div class="cp-section"><div class="cp-section-title">Emergency Contact</div><div class="cp-grid">'
+               + _cpRow('Name', c.emergencyName) + _cpRow('Phone', c.emergencyPhone)
+               + _cpRow('Relation', c.emergencyRel)
+               + '</div></div>';
+
+            var addr = [c.street,c.city,c.state,c.zip].filter(Boolean).join(', ');
+            h += '<div class="cp-section"><div class="cp-section-title">Address</div>'
+               + '<div class="cp-row-val">'+(addr?esc(addr):'<span style="color:var(--slate-300)">—</span>')+'</div></div>';
         } else {
-            h += docs.map(function(d) {
-                return '<div style="display:flex;align-items:center;gap:6px;padding:3px 0;font-size:.82rem">📄 <strong>'+esc(d.name||'Document')+'</strong>'
-                     + (d.data ? ' <a href="'+esc(d.data)+'" download="'+esc(d.name||'document')+'" style="color:var(--health);font-weight:600;font-size:.75rem">Download</a>' : '')
-                     + '</div>';
-            }).join('');
+            // Staff — no medical fields collected today; office/emergency
+            // contact info only. Role/position stands in for Division/Bunk.
+            h += '<div style="display:flex;align-items:center;gap:12px;margin-bottom:18px">'
+               + '<div class="med-avatar" style="background:'+avc(name)+';width:48px;height:48px;font-size:.9rem">'+ini(name)+'</div>'
+               + '<div>'+((c.positions||[]).length?(c.positions||[]).map(function(p){return bdg(p,'purple');}).join(' '):'')
+               + '<div style="font-size:.78rem;color:var(--slate-500);margin-top:3px">'+(c.dob?age(c.dob)+' yrs old':'')+'</div></div>'
+               + '</div>';
+
+            h += '<div class="cp-section"><div class="cp-section-title">Medical</div>'
+               + '<div style="font-size:.8rem;color:var(--slate-300);font-style:italic">Not collected for staff</div></div>';
+
+            h += '<div class="cp-section"><div class="cp-section-title">Contact</div><div class="cp-grid">'
+               + _cpRow('Phone', c.phone) + _cpRow('Email', c.email)
+               + _cpRow('School', c.school) + _cpRow('DOB', c.dob)
+               + '</div></div>';
+
+            h += '<div class="cp-section"><div class="cp-section-title">Parent / Guardian</div>';
+            if (c.parentName || c.parentPhone || c.parentEmail) {
+                h += '<div class="cp-grid">'
+                   + _cpRow('Name', c.parentName) + _cpRow('Relation', c.parentRelation)
+                   + _cpRow('Phone', c.parentPhone) + _cpRow('Email', c.parentEmail)
+                   + '</div>';
+            } else {
+                h += '<div style="font-size:.8rem;color:var(--slate-300);font-style:italic">None on file</div>';
+            }
+            h += '</div>';
+
+            h += '<div class="cp-section"><div class="cp-section-title">Emergency Contact</div>';
+            if (c.parentName || c.parentPhone) {
+                h += '<div class="cp-grid">' + _cpRow('Name', c.parentName) + _cpRow('Phone', c.parentPhone) + '</div>';
+            } else if (c.phone) {
+                h += '<div class="cp-grid">' + _cpRow('Phone (self)', c.phone) + '</div>';
+            } else {
+                h += '<div style="font-size:.8rem;color:var(--slate-300);font-style:italic">None on file</div>';
+            }
+            h += '</div>';
+
+            var addr2 = [c.street,c.city,c.state,c.zip].filter(Boolean).join(', ');
+            h += '<div class="cp-section"><div class="cp-section-title">Address</div>'
+               + '<div class="cp-row-val">'+(addr2?esc(addr2):'<span style="color:var(--slate-300)">—</span>')+'</div></div>';
         }
-        h += '</div>';
 
-        h += '<div class="cp-section"><div class="cp-section-title">Camp Assignment</div><div class="cp-grid">'
-           + _cpRow('Division', c.division) + _cpRow('Bunk', c.bunk)
-           + _cpRow('School', c.school) + _cpRow('DOB', c.dob)
-           + '</div></div>';
-
-        h += '<div class="cp-section"><div class="cp-section-title">Parent / Guardian</div><div class="cp-grid">'
-           + _cpRow('Name', c.parent1Name) + _cpRow('Phone', c.parent1Phone)
-           + _cpRow('Email', c.parent1Email)
-           + '</div></div>';
-
-        h += '<div class="cp-section"><div class="cp-section-title">Emergency Contact</div><div class="cp-grid">'
-           + _cpRow('Name', c.emergencyName) + _cpRow('Phone', c.emergencyPhone)
-           + _cpRow('Relation', c.emergencyRel)
-           + '</div></div>';
-
-        var addr = [c.street,c.city,c.state,c.zip].filter(Boolean).join(', ');
-        h += '<div class="cp-section"><div class="cp-section-title">Address</div>'
-           + '<div class="cp-row-val">'+(addr?esc(addr):'<span style="color:var(--slate-300)">—</span>')+'</div></div>';
-
-        var body = document.getElementById('camperModalBody');
+        var body = document.getElementById('personProfileBody');
         if (body) body.innerHTML = h;
-        openModal('camperModal');
+        if (window.showHealthPage) window.showHealthPage('personProfile');
     }
 
     // ── Camper Search Autocomplete ────────────────────────────────────────
@@ -543,7 +637,7 @@
         renderParentDocs:renderParentDocs, approveParentDoc:approveParentDoc, flagParentDoc:flagParentDoc,
         viewParentDoc:viewParentDoc, loadCloudHealthDocs:loadCloudHealthDocs,
         logDispensing:logDispensing, saveSickVisit:saveSickVisit, saveDispensing:saveDispensing,
-        viewCamper:viewCamper, getRoster:getRoster, getStructure:getStructure,
+        viewPerson:viewPerson, getRoster:getRoster, getStructure:getStructure, getHiredStaff:getHiredStaff,
         getHealth:getHealth, saveHealth:saveHealth,
         openModal:openModal, closeModal:closeModal, toast:toast
     };
