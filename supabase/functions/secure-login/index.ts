@@ -86,7 +86,7 @@ async function sendOfficeLockAlert(triggeringEmail: string, campEmails: string[]
 
 const LOCKED_MESSAGE: Record<string, string> = {
   email: "This account is locked due to repeated failed sign-in attempts. Check your email for a link to reopen it.",
-  office: "Sign-in for your entire camp has been locked due to repeated failed attempts. Contact the Campistry office at campistryoffice@gmail.com to reopen it.",
+  office: "You have been locked out due to repeated failed sign-in attempts. Please contact campistryoffice@gmail.com in order to unlock your account.",
 };
 
 serve(async (req) => {

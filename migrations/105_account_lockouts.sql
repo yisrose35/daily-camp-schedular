@@ -12,27 +12,33 @@
 --
 -- Rule, exactly as asked for: 5 wrong attempts on ONE email within a
 -- rolling 24-hour window locks just that email, pending a self-service
--- "reopen" link sent to it. If failures on that same email keep
--- accumulating and hit 10 within that SAME 24-hour window, it escalates —
--- and the escalation is camp-wide: every login at that camp (the owner
--- plus every accepted team member) gets office-only locked, not just the
--- one email that was being guessed at. No more self-service unlock token
--- is issued for any of them — someone has to clear it by hand in the SQL
--- Editor, see the sanity-check block at the bottom. This is intentional:
--- 5 failed guesses on one login is routine (forgotten password), but 10 in
--- a day is treated as a real attack on the camp, worth pausing everyone's
+-- "reopen" link sent to it — attempts 1-4 show "N attempts left" as they
+-- approach that. Clicking the link lets sign-in resume, but attempts 6-9
+-- do NOT re-lock or re-email — they show "N attempts left" again, this
+-- time counting down toward 10. If the count reaches 10 within that SAME
+-- 24-hour window, it escalates — and the escalation is camp-wide: every
+-- login at that camp (the owner plus every accepted team member) gets
+-- office-only locked, not just the one email that was being guessed at. No
+-- more self-service unlock token is issued for any of them — someone has
+-- to clear it by hand in the SQL Editor, see the sanity-check block at the
+-- bottom. This is intentional: 5 failed guesses on one login is routine
+-- (forgotten password) and worth only a one-time speed bump, but 10 in a
+-- day is treated as a real attack on the camp, worth pausing everyone's
 -- access until a human confirms it's safe to reopen — rather than leaving
 -- other staff logins reachable while one is clearly under attack.
 --
 -- The 24h window is a real rolling window, not a counter that resets on a
 -- timer: login_failed_events is an append-only event log, and every check
 -- recomputes "how many failures for this email in the last 24 hours"
--- straight from it. Reopening an email-locked account via the emailed link
--- clears its lock_level so login attempts can happen again, but it does
--- NOT clear that rolling count — one more wrong guess after reopening
--- re-locks immediately (self-service, until the 10-in-24h threshold is
--- hit), which is deliberate: a real attacker doesn't get a free reset out
--- of the email-unlock step.
+-- straight from it. account_lockouts.email_lock_used_at is what makes the
+-- email tier fire only once per 24h streak — set the first time it fires,
+-- deliberately NOT cleared by clicking the reopen link, and only treated
+-- as "already used" while under 24h old (a stale one from a long-expired
+-- streak doesn't permanently block the softer tier on some later day) —
+-- so a real attacker who somehow got past that one email step still can't
+-- guess forever within that streak; they're just counting down toward the
+-- harder 10-in-24h lock like everyone else past that point, not getting an
+-- infinite series of free resets.
 --
 -- Same convention as every other secret-bearing table in this app: RLS
 -- enabled, ZERO client-facing policies, every access funneled through a
@@ -70,22 +76,40 @@ ALTER TABLE login_failed_events ENABLE ROW LEVEL SECURITY;
 -- One row per email, created only once a lock is actually triggered (no
 -- row = never locked). lock_level is NULL (unlocked) | 'email' (self-
 -- service reopen) | 'office' (Campistry office must clear it by hand).
+--
+-- email_lock_used_at: set the first time this email's rolling-window count
+-- crosses 5 (unlock_account_via_token clears lock_level but deliberately
+-- does NOT touch this) — it's what keeps the email tier a ONE-TIME speed
+-- bump per 24h streak: after that first lock+reopen, attempts 6-9 count
+-- down toward 10 as plain "N attempts left" warnings instead of re-locking
+-- (and re-emailing) on every single subsequent guess. The VALUE itself is
+-- never reset except by a genuinely successful sign-in (clear_login_
+-- failures, which deletes the whole row) — but record_login_failure only
+-- ever treats it as "already used" while it's under 24h old, so a stale
+-- timestamp from a long-expired streak doesn't permanently block the
+-- softer tier from firing again on some later, unrelated day.
 CREATE TABLE IF NOT EXISTS account_lockouts (
     email                    text PRIMARY KEY,
     lock_level               text,
     locked_at                timestamptz,
     unlock_token             text,
     unlock_token_expires_at  timestamptz,
+    email_lock_used_at       timestamptz,
     updated_at               timestamptz NOT NULL DEFAULT now(),
     CONSTRAINT account_lockouts_lock_level_check
         CHECK (lock_level IS NULL OR lock_level IN ('email', 'office'))
 );
 
+-- Re-running this migration against a table created before email_lock_used_at
+-- existed — CREATE TABLE IF NOT EXISTS above is a no-op then, so the column
+-- has to be added separately.
+ALTER TABLE account_lockouts ADD COLUMN IF NOT EXISTS email_lock_used_at timestamptz;
+
 ALTER TABLE account_lockouts ENABLE ROW LEVEL SECURITY;
 -- No client-side policies — every access goes through the RPCs below.
 
 COMMENT ON TABLE account_lockouts IS
-    'Password-attempt lockout for the main Campistry login. lock_level=email is self-service (unlock_token emailed to the account) and only ever affects that one email. lock_level=office requires a manual clear in the SQL Editor and is applied camp-wide (every login at the camp, not just the one that triggered it). RLS-locked; access only via RPC.';
+    'Password-attempt lockout for the main Campistry login. lock_level=email is self-service (unlock_token emailed to the account), fires once per rolling-window streak (email_lock_used_at), and only ever affects that one email. lock_level=office requires a manual clear in the SQL Editor and is applied camp-wide (every login at the camp, not just the one that triggered it). RLS-locked; access only via RPC.';
 
 
 -- ─── 2b. _camp_lock_emails ──────────────────────────────────────────────────
@@ -180,6 +204,15 @@ GRANT EXECUTE ON FUNCTION public.check_login_lock_status(text) TO service_role;
 -- safe to call even if that assumption is ever wrong (e.g. two requests
 -- racing right at the threshold — worst case is one extra logged failure,
 -- not a stuck or double-sent unlock email).
+--
+-- The email tier only ever fires ONCE per streak (gated on
+-- email_lock_used_at, read below as v_prev_email_lock_used_at): reaching 5
+-- locks + emails a reopen link, same as before, but once that's been used
+-- attempts 6-9 do NOT re-lock or send another email — they fall through to
+-- the plain "N attempts left" response secure-login already shows for
+-- attempts 1-4, just counting down toward 10 instead of toward 5. Only 10
+-- locks again, this time camp-wide at the office tier. (User-specified
+-- behavior — attempts 6-9 warn, not re-lock.)
 CREATE OR REPLACE FUNCTION public.record_login_failure(p_email text)
 RETURNS jsonb
 LANGUAGE plpgsql
@@ -187,13 +220,15 @@ SECURITY DEFINER
 SET search_path = public, extensions, pg_catalog
 AS $$
 DECLARE
-    v_email       text := lower(p_email);
-    v_count_24h   integer;
-    v_prev_level  text;
-    v_new_level   text;
-    v_token       text;
-    v_just_locked boolean := false;
-    v_camp_emails text[];
+    v_email                    text := lower(p_email);
+    v_count_24h                integer;
+    v_prev_level               text;
+    v_prev_email_lock_used_at  timestamptz;
+    v_new_level                text;
+    v_token                    text;
+    v_just_locked              boolean := false;
+    v_camp_emails              text[];
+    v_next_threshold           integer;
 BEGIN
     INSERT INTO login_failed_events (email) VALUES (v_email);
 
@@ -201,12 +236,15 @@ BEGIN
     FROM login_failed_events
     WHERE email = v_email AND attempted_at > now() - interval '24 hours';
 
-    SELECT lock_level INTO v_prev_level FROM account_lockouts WHERE email = v_email;
+    SELECT lock_level, email_lock_used_at INTO v_prev_level, v_prev_email_lock_used_at
+    FROM account_lockouts WHERE email = v_email;
 
     v_new_level := v_prev_level;
     IF v_count_24h >= 10 THEN
         v_new_level := 'office';
-    ELSIF v_count_24h >= 5 AND COALESCE(v_prev_level, '') <> 'office' THEN
+    ELSIF v_count_24h >= 5
+      AND COALESCE(v_prev_level, '') <> 'office'
+      AND (v_prev_email_lock_used_at IS NULL OR v_prev_email_lock_used_at <= now() - interval '24 hours') THEN
         v_new_level := 'email';
     END IF;
 
@@ -235,23 +273,33 @@ BEGIN
         ELSE
             v_token := encode(gen_random_bytes(24), 'hex');
 
-            INSERT INTO account_lockouts (email, lock_level, locked_at, unlock_token, unlock_token_expires_at, updated_at)
-            VALUES (v_email, v_new_level, now(), v_token, now() + interval '24 hours', now())
+            INSERT INTO account_lockouts (email, lock_level, locked_at, unlock_token, unlock_token_expires_at, email_lock_used_at, updated_at)
+            VALUES (v_email, v_new_level, now(), v_token, now() + interval '24 hours', now(), now())
             ON CONFLICT (email) DO UPDATE
                 SET lock_level              = EXCLUDED.lock_level,
                     locked_at               = EXCLUDED.locked_at,
                     unlock_token            = EXCLUDED.unlock_token,
                     unlock_token_expires_at = EXCLUDED.unlock_token_expires_at,
+                    email_lock_used_at      = EXCLUDED.email_lock_used_at,
                     updated_at              = now();
         END IF;
     END IF;
+
+    -- Warn toward whichever threshold is still ahead: 5 until the email
+    -- tier has fired once IN THIS SAME 24h window, 10 after that. (Not
+    -- "ever" — a lock from a stale, already-aged-out window shouldn't
+    -- permanently block the softer tier from firing again on a later day.)
+    v_next_threshold := CASE
+        WHEN v_prev_email_lock_used_at IS NOT NULL AND v_prev_email_lock_used_at > now() - interval '24 hours'
+        THEN 10 ELSE 5
+    END;
 
     RETURN jsonb_build_object(
         'lockLevel', v_new_level,
         'justLocked', v_just_locked,
         'unlockToken', CASE WHEN v_just_locked AND v_new_level = 'email' THEN v_token ELSE NULL END,
         'campEmails', CASE WHEN v_just_locked AND v_new_level = 'office' THEN to_jsonb(v_camp_emails) ELSE NULL END,
-        'attemptsRemaining', GREATEST(0, 5 - v_count_24h)
+        'attemptsRemaining', GREATEST(0, v_next_threshold - v_count_24h)
     );
 END;
 $$;

@@ -13,9 +13,12 @@ are untouched — they have their own separate logins.
    it's all built into Supabase Auth.
 2. **Password lockout.** 5 wrong passwords on ONE login within a rolling 24
    hours locks just that email, with a self-service "reopen my account"
-   link emailed to it; if wrong attempts on that same login keep piling up
-   and hit 10 within that same 24-hour window, it escalates to an
-   office-only lock — and that escalation is camp-wide (every login at
+   link emailed to it — this is a ONE-TIME speed bump per streak: attempts
+   1-4 show "N attempts left," attempt 5 locks + emails the link, and once
+   you click it, attempts 6-9 do NOT re-lock or send another email — they
+   just resume the "N attempts left" warning, now counting down toward 10.
+   If the count reaches 10 within that same 24-hour window, it escalates to
+   an office-only lock — and that escalation is camp-wide (every login at
    that camp, owner + staff, not just the one being guessed at). No more
    self-service unlock link at that point, someone has to clear it by hand
    in the SQL Editor (exact query at the bottom of migration 105, and in
@@ -29,13 +32,17 @@ are untouched — they have their own separate logins.
 
 Paste `migrations/105_account_lockouts.sql` into the SQL Editor. Idempotent
 — safe to paste again if you're not sure whether it already ran (including
-if you already ran an earlier version of it before the camp-wide-lock and
-office-alert additions — re-pasting the current version picks those up,
-nothing needs to be dropped first).
+if you already ran an earlier version of it before the camp-wide-lock,
+office-alert, or one-time-email-tier additions — re-pasting the current
+version picks all of that up, nothing needs to be dropped first; it adds
+the `email_lock_used_at` column via `ALTER TABLE ... ADD COLUMN IF NOT
+EXISTS` since the earlier `CREATE TABLE IF NOT EXISTS` is a no-op on a
+table that already exists).
 
 If you already deployed `secure-login` before these additions, redeploy it
 with the current `supabase/functions/secure-login/index.ts` too — the office
-alert email (step 5 below) is new code in that function, not just the SQL.
+alert email (step 5 below) and the office-lock message wording are new code
+in that function, not just the SQL.
 
 ## 2. Deploy the edge function — and set the ONE setting that's easy to miss
 
@@ -167,9 +174,15 @@ reach the code that would resend it), via the same Resend setup as
   message, not a normal wrong-password error.
 - Click the link — confirm it lands on `index.html` with "Your account has
   been reopened" and that signing in with the correct password now works.
-- Fail the password 5 more times in the same 24-hour window (10 total) —
-  confirm this time the message says the camp's sign-in is locked and to
-  contact the Campistry office, and no unlock email is sent.
+- Fail the password once more (attempt 6) — confirm you get a normal
+  "Invalid email or password. 4 attempts left before your account locks."
+  message, NOT another lockout — and confirm no second unlock email arrives.
+- Fail 3 more times (attempts 7-9) — confirm the count keeps counting down
+  (3, 2, 1 attempts left) with no re-lock and no further emails.
+- Fail once more (attempt 10, still within the 24h window) — confirm THIS
+  time the message reads "You have been locked out due to repeated failed
+  sign-in attempts. Please contact campistryoffice@gmail.com in order to
+  unlock your account." and no unlock email is sent (office tier has none).
 - With a second staff login on the same camp (invite one if needed), try
   signing in with its correct password — confirm it's ALSO rejected with
   the office-lock message, even though it never failed a single attempt
