@@ -331,6 +331,76 @@ async function handleAutopaySetup(
   }
 }
 
+// Canteen auto-reload's card-save handler — the canteen analog of
+// handleAutopaySetup above. Same "just a saved payment method, no ledger
+// amount" shape, but writes onto campistrySnacks.accounts[camperName]
+// .autoReload instead of a campistryMe family record (canteen is per-camper,
+// not per-family). Only the card/attempt bookkeeping fields are touched here
+// — the parent's trigger config (enabled/threshold*/schedule*), set via
+// set_canteen_auto_reload (migration 109), is left untouched by merging
+// rather than overwriting the autoReload object.
+async function handleCanteenAutoReloadSetup(
+  supabase: ReturnType<typeof createClient>,
+  si: Record<string, any>,
+) {
+  const meta = si.metadata || {};
+  const campId = meta.campId;
+  const camperName = meta.camperName;
+  if (!campId || !camperName) {
+    console.error(`[stripe-webhook] canteen auto-reload setup ${si.id} missing campId/camperName in metadata — skipping`);
+    return;
+  }
+  const customerId = si.customer;
+  const paymentMethodId = si.payment_method;
+  if (!customerId || !paymentMethodId) {
+    console.error(`[stripe-webhook] canteen auto-reload setup ${si.id} missing customer/payment_method — skipping`);
+    return;
+  }
+
+  let pmType = "card";
+  let pmLabel = "";
+  if (STRIPE_SECRET) {
+    try {
+      const resp = await fetch(`${STRIPE_API}/payment_methods/${paymentMethodId}`, {
+        headers: { "Authorization": `Bearer ${STRIPE_SECRET}` },
+      });
+      const pm = await resp.json();
+      if (pm.type) pmType = pm.type;
+      if (pmType === "card" && pm.card) pmLabel = `${pm.card.brand || "Card"} ···· ${pm.card.last4 || ""}`.trim();
+      else if (pmType === "us_bank_account" && pm.us_bank_account) pmLabel = `${pm.us_bank_account.bank_name || "Bank"} ···· ${pm.us_bank_account.last4 || ""}`.trim();
+    } catch (e) {
+      console.warn(`[stripe-webhook] could not fetch payment_method ${paymentMethodId} for label: ${(e as Error).message}`);
+    }
+  }
+
+  for (let attempt = 0; attempt < 4; attempt++) {
+    const cur = await supabase.from("camp_state_kv").select("value")
+      .eq("camp_id", campId).eq("key", "campistrySnacks").maybeSingle();
+    const snacks: Record<string, any> = (cur.data && cur.data.value && typeof cur.data.value === "object")
+      ? cur.data.value : { accounts: {}, transactions: [] };
+    if (!snacks.accounts || typeof snacks.accounts !== "object") snacks.accounts = {};
+    const acct = snacks.accounts[camperName] || (snacks.accounts[camperName] = { balance: 0, dailyLimit: 10, spentToday: 0 });
+    const ar = acct.autoReload || (acct.autoReload = {});
+
+    ar.stripeCustomerId = customerId;
+    ar.stripePaymentMethodId = paymentMethodId;
+    ar.cardOnFile = true;
+    ar.paymentMethodType = pmType;
+    if (pmLabel) ar.paymentMethodLabel = pmLabel;
+    ar.cardSavedDate = new Date().toISOString();
+
+    const up = await supabase.from("camp_state_kv").upsert(
+      { camp_id: campId, key: "campistrySnacks", value: snacks, updated_at: new Date().toISOString() },
+      { onConflict: "camp_id,key" },
+    );
+    if (!up.error) {
+      console.log(`[stripe-webhook] canteen auto-reload setup complete for ${camperName}, camp ${campId} (${pmType})`);
+      return;
+    }
+    console.warn(`[stripe-webhook] canteen auto-reload setup upsert attempt ${attempt} failed: ${up.error.message}`);
+  }
+}
+
 // Best-effort — a failed alert email must never fail the webhook response
 // (Stripe retries on non-2xx, and we don't want risk-event handling to
 // become a source of duplicate/stuck webhook deliveries).
@@ -464,8 +534,14 @@ serve(async (req) => {
         console.log(`[stripe-webhook] ledger ${statusFor[event.type]} $${(pi.amount || 0) / 100} camp ${campId}: ${ok ? "ok" : "FAILED"}`);
       }
     } else if (event.type === "setup_intent.succeeded") {
-      // Not a payment at all — a saved card/bank account for future autopay.
-      await handleAutopaySetup(supabase, event.data.object);
+      // Not a payment at all — a saved card/bank account for future autopay
+      // (tuition) or auto-reload (canteen). Either/or, routed by source.
+      const si = event.data.object;
+      if (si.metadata?.source === "campistry-canteen-autoreload-setup") {
+        await handleCanteenAutoReloadSetup(supabase, si);
+      } else {
+        await handleAutopaySetup(supabase, si);
+      }
     } else if (RISK_EVENT_TYPES.has(event.type)) {
       // Platform-account risk signal — alert the operator, not any camp.
       await handleRiskEvent(event);

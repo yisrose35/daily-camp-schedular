@@ -417,8 +417,16 @@ window.charge = function() {
     };
 
     // Best-effort local charge (offline, or before the purchase RPC exists).
-    // Enforcement is the client pre-check above; the ledger reconciles later.
-    const localCharge = () => {
+    // Enforcement is the client pre-check above ONLY — the parent's daily
+    // limit / overdraft is NOT being verified server-side for this charge.
+    // Staff must know that in the moment (not just silently succeed exactly
+    // like an enforced charge) so a legitimate connectivity gap doesn't turn
+    // into an invisible cap bypass; `warnMsg` surfaces that, non-blocking —
+    // the sale still goes through (blocking sales on a wifi blip would be a
+    // worse regression than a rare unenforced charge) and the ledger
+    // reconciles once back online.
+    const localCharge = (warnMsg) => {
+        if (warnMsg) toast(warnMsg, true);
         a.balance = Math.round((a.balance - total) * 100) / 100;
         a.spentToday = Math.round((a.spentToday + total) * 100) / 100;
         a.lastSpendDate = todayStr();
@@ -435,7 +443,7 @@ window.charge = function() {
                 const emsg = (res.error && res.error.message) || '';
                 // Migration 026 not applied yet → RPC doesn't exist → don't break
                 // the register; fall back to the local path.
-                if (res.error && /PGRST202|could not find|schema cache|does not exist|no function/i.test(emsg)) { localCharge(); return; }
+                if (res.error && /PGRST202|could not find|schema cache|does not exist|no function/i.test(emsg)) { localCharge('⚠ Spending limits not synced yet — charge not verified against caps'); return; }
                 if (res.error || !d || !d.success) {
                     const err = (d && d.error) || emsg || 'charge_failed';
                     const msg = err === 'daily_limit_exceeded' ? 'Blocked — over daily limit ($' + (Number((d && d.remaining) || 0)).toFixed(2) + ' left today)'
@@ -451,7 +459,7 @@ window.charge = function() {
         return;
     }
 
-    localCharge();
+    localCharge('⚠ Offline — spending limits not checked, will reconcile when back online');
 };
 
 // ==========================================================================

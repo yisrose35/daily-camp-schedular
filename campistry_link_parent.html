@@ -345,7 +345,7 @@
             <span style="font-size:.82rem;font-weight:600;opacity:.85;">$</span>
             <input type="number" id="canteenCustomAmt" min="1" max="500" step="1" placeholder="Custom amount" oninput="selCustomAmt(this)" style="width:130px;padding:8px 10px;border-radius:8px;border:1px solid rgba(255,255,255,.4);background:rgba(255,255,255,.15);color:inherit;font-size:.85rem;text-align:center;">
         </div>
-        <div style="display:flex;gap:8px;justify-content:center;"><button class="btn btn-primary" id="canteenAddBtn" onclick="addFunds()">Add Funds</button><button class="btn btn-secondary" onclick="toast('Auto-reload enabled!')">Auto-Reload</button></div>
+        <div style="display:flex;gap:8px;justify-content:center;"><button class="btn btn-primary" id="canteenAddBtn" onclick="addFunds()">Add Funds</button><button class="btn btn-secondary" onclick="document.getElementById('autoReloadCard').scrollIntoView({behavior:'smooth',block:'start'})">Auto-Reload</button></div>
     </div>
     <div class="lk-card"><div class="lk-card-head"><h2>Spending Controls</h2></div>
         <div class="lk-field"><label>Daily Spending Limit</label>
@@ -361,6 +361,36 @@
             <div style="font-size:.72rem;color:var(--text-muted);margin-top:4px;">Stop spending when balance drops below this amount</div>
         </div>
         <button class="btn btn-primary btn-sm" style="margin-top:6px;" onclick="saveSpendingControls()">Save Controls</button>
+    </div>
+    <div class="lk-card" id="autoReloadCard"><div class="lk-card-head"><h2>Auto-Reload</h2></div>
+        <div id="arStatusMsg" style="font-size:.8rem;margin-bottom:12px;"></div>
+        <div class="lk-field">
+            <label><input type="checkbox" id="arThEnabled" onchange="document.getElementById('arThFields').style.display=this.checked?'flex':'none'"> Reload when balance drops below a threshold</label>
+            <div id="arThFields" style="display:none;gap:10px;align-items:center;margin-top:8px;flex-wrap:wrap;">
+                <span style="font-size:.8rem;color:var(--text-muted);">Reload</span>
+                <span style="display:flex;align-items:center;">$<input type="number" id="arThReload" min="1" max="500" step="1" value="20" style="width:70px;padding:6px 8px;border-radius:6px;border:1px solid var(--border-color,#E2E8F0);margin-left:2px;"></span>
+                <span style="font-size:.8rem;color:var(--text-muted);">when balance falls below</span>
+                <span style="display:flex;align-items:center;">$<input type="number" id="arThAmount" min="0" max="1000" step="1" value="5" style="width:70px;padding:6px 8px;border-radius:6px;border:1px solid var(--border-color,#E2E8F0);margin-left:2px;"></span>
+            </div>
+        </div>
+        <div class="lk-field" style="margin-top:14px;">
+            <label><input type="checkbox" id="arScEnabled" onchange="document.getElementById('arScFields').style.display=this.checked?'flex':'none'"> Reload on a fixed schedule</label>
+            <div id="arScFields" style="display:none;gap:10px;align-items:center;margin-top:8px;flex-wrap:wrap;">
+                <span style="font-size:.8rem;color:var(--text-muted);">Reload</span>
+                <span style="display:flex;align-items:center;">$<input type="number" id="arScReload" min="1" max="500" step="1" value="25" style="width:70px;padding:6px 8px;border-radius:6px;border:1px solid var(--border-color,#E2E8F0);margin-left:2px;"></span>
+                <span style="font-size:.8rem;color:var(--text-muted);">every</span>
+                <select id="arScFreq" onchange="_arRenderDayOptions()" style="padding:6px 8px;border-radius:6px;border:1px solid var(--border-color,#E2E8F0);">
+                    <option value="weekly">week, on</option>
+                    <option value="monthly">month, on the</option>
+                </select>
+                <select id="arScDay" style="padding:6px 8px;border-radius:6px;border:1px solid var(--border-color,#E2E8F0);"></select>
+            </div>
+        </div>
+        <div style="display:flex;gap:8px;margin-top:14px;flex-wrap:wrap;">
+            <button class="btn btn-primary btn-sm" onclick="saveAutoReload()">Save Auto-Reload</button>
+            <button class="btn btn-secondary btn-sm" id="arCardBtn" onclick="startCanteenAutoReloadSetup()" style="display:none;">Update card</button>
+            <button class="btn btn-ghost btn-sm" id="arOffBtn" onclick="turnOffAutoReload()" style="display:none;">Turn off</button>
+        </div>
     </div>
     <div class="lk-card"><div class="lk-card-head"><h2>Recent Transactions</h2></div><div id="txList"></div></div>
 </div>
@@ -943,8 +973,8 @@ function _handleStripeReturn(){
     if(!tag) return;
     history.replaceState(null,'',location.pathname);
     if(status==='cancelled'){ toast('Cancelled — no changes were made.'); return; }
-    var msgs={pay:'Payment received — thank you!',canteen:'Funds are on their way to the canteen account.',autopay:'Autopay is set up!'};
-    var pages={pay:'payments',canteen:'canteen',autopay:'payments'};
+    var msgs={pay:'Payment received — thank you!',canteen:'Funds are on their way to the canteen account.',autopay:'Autopay is set up!','canteen-autoreload':'Card saved — auto-reload is active!'};
+    var pages={pay:'payments',canteen:'canteen',autopay:'payments','canteen-autoreload':'canteen'};
     toast(msgs[tag]||'Done!');
     if(pages[tag]) nav(pages[tag]);
 }
@@ -1679,6 +1709,124 @@ function saveSpendingControls(){
     }
 }
 
+// ── AUTO-RELOAD ──────────────────────────────────────────────────────────
+// Reload the canteen balance automatically — when it drops below a
+// threshold, on a fixed weekly/monthly schedule, or both. Card save/charge
+// mirrors the existing tuition autopay flow (stripe-setup-checkout /
+// charge-due-installments) but keyed to the camper's own canteen account
+// instead of a family (migrations/109_canteen_auto_reload.sql,
+// stripe-canteen-autoreload-setup, canteen-auto-reload cron).
+function _arRenderDayOptions(){
+    var freq=(document.getElementById('arScFreq')||{}).value||'weekly';
+    var sel=document.getElementById('arScDay'); if(!sel) return;
+    var prev=sel.value;
+    var opts='';
+    if(freq==='weekly'){
+        ['Sunday','Monday','Tuesday','Wednesday','Thursday','Friday','Saturday'].forEach(function(d,i){ opts+='<option value="'+i+'">'+d+'</option>'; });
+    } else {
+        for(var d=1;d<=28;d++){ var suf=(d===1?'st':d===2?'nd':d===3?'rd':'th'); opts+='<option value="'+d+'">'+d+suf+'</option>'; }
+    }
+    sel.innerHTML=opts;
+    if(prev!=='' && sel.querySelector('option[value="'+prev+'"]')) sel.value=prev;
+}
+function _renderAutoReload(c){
+    var ar=(c&&c.autoReload)||{};
+    var thE=document.getElementById('arThEnabled');
+    if(thE){ thE.checked=!!ar.thresholdEnabled; document.getElementById('arThFields').style.display=ar.thresholdEnabled?'flex':'none'; }
+    var thReload=document.getElementById('arThReload'); if(thReload && ar.thresholdReloadAmount!=null) thReload.value=ar.thresholdReloadAmount;
+    var thAmt=document.getElementById('arThAmount'); if(thAmt && ar.thresholdAmount!=null) thAmt.value=ar.thresholdAmount;
+    var scE=document.getElementById('arScEnabled');
+    if(scE){ scE.checked=!!ar.scheduleEnabled; document.getElementById('arScFields').style.display=ar.scheduleEnabled?'flex':'none'; }
+    var scFreq=document.getElementById('arScFreq'); if(scFreq) scFreq.value=ar.scheduleFrequency||'weekly';
+    _arRenderDayOptions();
+    var scDay=document.getElementById('arScDay'); if(scDay && ar.scheduleDay!=null) scDay.value=ar.scheduleDay;
+    var scReload=document.getElementById('arScReload'); if(scReload && ar.scheduleReloadAmount!=null) scReload.value=ar.scheduleReloadAmount;
+
+    var msg=document.getElementById('arStatusMsg'), cardBtn=document.getElementById('arCardBtn'), offBtn=document.getElementById('arOffBtn');
+    if(!msg) return;
+    if(ar.enabled && ar.cardOnFile){
+        var last=ar.lastChargedDate?(' &middot; last topped up $'+Number(ar.lastChargeAmount||0).toFixed(2)+' on '+_escHtml(ar.lastChargedDate)):'';
+        msg.innerHTML='<span style="color:#0E7C4A;font-weight:600;">&#10003; Auto-reload is on</span>'+last+' &middot; charging '+_escHtml(ar.paymentMethodLabel||(ar.paymentMethodType==='us_bank_account'?'a bank account':'a card'));
+        cardBtn.style.display=''; cardBtn.textContent='Update card';
+        offBtn.style.display='';
+    } else if(ar.enabled && !ar.cardOnFile){
+        msg.innerHTML='<span style="color:var(--amber-600,#B45309);font-weight:600;">Almost there</span> — save a card to activate auto-reload.';
+        cardBtn.style.display=''; cardBtn.textContent='Add a card';
+        offBtn.style.display='';
+    } else if(!ar.enabled && (Number(ar.consecutiveFailures)||0)>=3){
+        msg.innerHTML='<span style="color:var(--red-600,#DC2626);font-weight:600;">Auto-reload paused</span> — your card was declined ('+_escHtml(ar.lastFailureReason||'payment failed')+'). Update your card to resume.';
+        cardBtn.style.display=''; cardBtn.textContent='Update card';
+        offBtn.style.display='none';
+    } else {
+        msg.innerHTML='<span style="color:var(--text-muted);">Auto-reload is off.</span>';
+        cardBtn.style.display='none';
+        offBtn.style.display='none';
+    }
+}
+function saveAutoReload(){
+    var c=_activeCanteenChild(); if(!c){toast('No canteen account yet');return;}
+    var thEnabled=!!(document.getElementById('arThEnabled')||{}).checked;
+    var scEnabled=!!(document.getElementById('arScEnabled')||{}).checked;
+    if(!thEnabled && !scEnabled){ toast('Turn on at least one trigger above, or use Turn off',1); return; }
+    var cfg={
+        enabled:true,
+        thresholdEnabled:thEnabled,
+        thresholdAmount:parseFloat((document.getElementById('arThAmount')||{}).value||'0'),
+        thresholdReloadAmount:parseFloat((document.getElementById('arThReload')||{}).value||'0'),
+        scheduleEnabled:scEnabled,
+        scheduleFrequency:(document.getElementById('arScFreq')||{}).value||'weekly',
+        scheduleDay:parseInt((document.getElementById('arScDay')||{}).value||'0',10),
+        scheduleReloadAmount:parseFloat((document.getElementById('arScReload')||{}).value||'0')
+    };
+    _saveAutoReloadConfig(c,cfg,true);
+}
+function turnOffAutoReload(){
+    var c=_activeCanteenChild(); if(!c){toast('No canteen account yet');return;}
+    var ar=c.autoReload||{};
+    var cfg={
+        enabled:false,
+        thresholdEnabled:!!ar.thresholdEnabled, thresholdAmount:ar.thresholdAmount, thresholdReloadAmount:ar.thresholdReloadAmount,
+        scheduleEnabled:!!ar.scheduleEnabled, scheduleFrequency:ar.scheduleFrequency||'weekly', scheduleDay:ar.scheduleDay, scheduleReloadAmount:ar.scheduleReloadAmount
+    };
+    _saveAutoReloadConfig(c,cfg,false);
+}
+function _saveAutoReloadConfig(c,cfg,promptCardIfMissing){
+    var db=window._parentDB;
+    if(!db||!db.rpc){ toast('Not connected — try again once online',1); return; }
+    var send = window._pRpc ? window._pRpc('set_canteen_auto_reload',{p_camper_name:c.name,p_config:cfg},c.campId)
+                            : db.rpc('set_canteen_auto_reload',{p_camp_id:c.campId||(parent&&parent.campId)||null,p_camper_name:c.name,p_config:cfg});
+    send.then(function(res){
+        if(res.error||!res.data||!res.data.success){
+            toast('Could not save auto-reload: '+(res.error?res.error.message:((res.data||{}).error||'error')),1);
+            return;
+        }
+        c.autoReload=res.data.autoReload||cfg;
+        _renderAutoReload(c);
+        if(cfg.enabled && !res.data.cardOnFile && promptCardIfMissing){
+            toast('Saved — now add a card to activate auto-reload');
+            startCanteenAutoReloadSetup();
+        } else {
+            toast(cfg.enabled?('Auto-reload saved for '+c.name.split(' ')[0]):('Auto-reload turned off for '+c.name.split(' ')[0]));
+        }
+    });
+}
+async function startCanteenAutoReloadSetup(){
+    var c=_activeCanteenChild(); if(!c){toast('No canteen account yet');return;}
+    try{
+        toast('Opening secure Stripe page…');
+        var s=_lkSupa(); if(!s.url) throw new Error('Payments are not set up for this camp yet.');
+        var resp=await fetch(s.url+'/functions/v1/stripe-canteen-autoreload-setup',{method:'POST',headers:{'Content-Type':'application/json','Authorization':'Bearer '+(s.anonKey||''),'apikey':s.anonKey||''},body:JSON.stringify({
+            campId:c.campId,
+            camperName:c.name,
+            email:(parent&&parent.email)||undefined,
+            successUrl:_lkReturnUrl('success','canteen-autoreload'),
+            cancelUrl:_lkReturnUrl('cancelled','canteen-autoreload')
+        })});
+        var data=await resp.json(); if(!resp.ok||data.error) throw new Error(data.error||'Could not start setup');
+        _lkGoToCheckout(data.url);
+    }catch(err){ console.error('[Parent] canteen auto-reload setup error:',err); toast('Could not start setup: '+(err&&err.message||'error')); }
+}
+
 // RENDER
 function init(){
     var h=new Date().getHours();
@@ -1820,6 +1968,7 @@ function switchCanteen(id){
     var cv=document.getElementById('creditVal');  if(cv)cv.textContent='$'+credit.toFixed(2);
     var fr=document.getElementById('floorRange'); if(fr)fr.value=Math.round(floor);
     var fv=document.getElementById('floorVal');   if(fv)fv.textContent='$'+floor.toFixed(2);
+    _renderAutoReload(c);
     var tl=document.getElementById('txList');tl.innerHTML='';
     var txs=canteenTxByChild[id]||[];
     if(!txs.length){tl.innerHTML='<div class="lk-empty" style="padding:24px 0;"><h3>No transactions yet</h3><p style="font-size:.8rem;color:var(--text-muted);">Purchases at the canteen will appear here.</p></div>';return;}
@@ -3346,6 +3495,7 @@ function _loadSnacksData(childrenList){
         if(a.dailyLimit  !=null)c.dailyLimit=a.dailyLimit;
         if(a.creditLimit !=null)c.creditLimit=a.creditLimit;
         if(a.balanceFloor!=null)c.balanceFloor=a.balanceFloor;
+        c.autoReload=a.autoReload||null;
         var childTx=txs.filter(function(t){return t.camper===c.name;});
         canteenTxByChild[c.id]=childTx.map(function(t){
             var credit=t.type==='credit';

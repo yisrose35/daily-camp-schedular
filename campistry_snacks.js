@@ -430,8 +430,13 @@ function rInventory() {
         else if (i.stock === 0) st = '<span class="badge badge-red">Out</span>';
         else if (i.stock <= 10) st = '<span class="badge badge-amber">Low</span>';
         else st = '<span class="badge badge-green">OK</span>';
+        const hasCost = i.cost != null && !isNaN(i.cost);
+        const marginCell = hasCost
+            ? '$' + (i.price - i.cost).toFixed(2) + ' <span style="color:var(--text-muted)">(' + Math.round((i.price - i.cost) / i.price * 100) + '%)</span>'
+            : '<span style="color:var(--text-muted)" title="Set a cost to see margin">—</span>';
         return '<tr><td style="font-weight:600">' + esc(i.name) +
             '</td><td><span class="badge badge-neutral">' + esc(i.cat) + '</span></td><td style="font-weight:600">$' + i.price.toFixed(2) +
+            '</td><td>' + marginCell +
             '</td><td style="font-weight:600;color:' + (!tracked ? 'var(--text-muted)' : i.stock === 0 ? 'var(--red-600)' : i.stock <= 10 ? 'var(--amber-600)' : 'var(--text-primary)') +
             '">' + (tracked ? i.stock : '—') + '</td><td>' + (i.soldToday || 0) + '</td><td>' + (i.totalSold || 0) + '</td><td>' + st +
             '</td><td><button class="btn btn-sm btn-secondary" onclick="openEditItem(' + i.id + ')">Edit</button></td></tr>';
@@ -465,6 +470,18 @@ function rAnalytics() {
     document.getElementById('mLow').textContent = I.filter(i => i.stock != null && i.stock <= 10).length;
     document.getElementById('mST').textContent = (openStock ? Math.round(units / openStock * 100) : 0) + '%';
 
+    // Margin/profit — aggregate from item.cost × totalSold (all-time), not
+    // per-sale history (transactions don't carry line items). Items with no
+    // cost set are excluded entirely (not treated as $0 cost, which would
+    // wildly overstate margin) rather than skewing the average.
+    const priced = I.filter(i => i.cost != null && !isNaN(i.cost) && i.price > 0);
+    const totalProfit = priced.reduce((s, i) => s + (i.totalSold || 0) * (i.price - i.cost), 0);
+    const pricedRevenue = priced.reduce((s, i) => s + (i.totalSold || 0) * i.price, 0);
+    const avgMargin = pricedRevenue > 0 ? (totalProfit / pricedRevenue * 100) : 0;
+    document.getElementById('mProfit').textContent = '$' + totalProfit.toFixed(2);
+    document.getElementById('mProfitN').textContent = priced.length + ' of ' + I.length + ' item' + (I.length === 1 ? '' : 's') + ' priced';
+    document.getElementById('mMargin').textContent = priced.length ? Math.round(avgMargin) + '%' : '—';
+
     const top = [...I].sort((a, b) => (b.soldToday || 0) - (a.soldToday || 0))[0];
     document.getElementById('mTop').textContent = top ? top.name : '—';
     document.getElementById('mTopN').textContent = top ? (top.soldToday || 0) + ' today · ' + (top.totalSold || 0) + ' all-time' : '';
@@ -495,6 +512,30 @@ function rAnalytics() {
             '<div style="flex:' + Math.max(Math.round(d.r / tr * 100), 1) + ';background:' + (cc[k] || 'gray') + '"></div>'
         ).join('') + '</div>';
     document.getElementById('catBrk').innerHTML = catHTML ? catHTML + barHTML : '<div style="text-align:center;padding:2rem;color:var(--text-muted)">No sales data yet</div>';
+
+    // Best Margin (by margin %) / Most Profitable (by total profit $) — both
+    // restricted to items with a cost set (see `priced` above).
+    const noCostMsg = '<div style="text-align:center;padding:2rem;color:var(--text-muted)">Set a cost on your items (Edit Item or Restock) to see margin data</div>';
+    const byMargin = [...priced].sort((a, b) => ((b.price - b.cost) / b.price) - ((a.price - a.cost) / a.price));
+    document.getElementById('marginList').innerHTML = byMargin.length ? byMargin.map((i, x) => {
+        const pct = Math.round((i.price - i.cost) / i.price * 100);
+        return '<div class="rank-item"><div class="rank-pos">' + (x + 1) +
+            '</div><div class="rank-info"><div class="rank-name">' + esc(i.name) +
+            '</div><div class="rank-bar-track"><div class="rank-bar-fill" style="width:' + Math.max(pct, 0) +
+            '%"></div></div></div><div style="text-align:right"><div class="rank-count">' + pct + '%' +
+            '</div><div class="rank-revenue">$' + (i.price - i.cost).toFixed(2) + '/unit</div></div></div>';
+    }).join('') : noCostMsg;
+
+    const byProfit = [...priced].sort((a, b) => (b.totalSold || 0) * (b.price - b.cost) - (a.totalSold || 0) * (a.price - a.cost));
+    const maxProfit = byProfit.length ? Math.max((byProfit[0].totalSold || 0) * (byProfit[0].price - byProfit[0].cost), 1) : 1;
+    document.getElementById('profitList').innerHTML = byProfit.length ? byProfit.map((i, x) => {
+        const p = (i.totalSold || 0) * (i.price - i.cost);
+        return '<div class="rank-item"><div class="rank-pos">' + (x + 1) +
+            '</div><div class="rank-info"><div class="rank-name">' + esc(i.name) +
+            '</div><div class="rank-bar-track"><div class="rank-bar-fill" style="width:' + Math.max(Math.round(p / maxProfit * 100), 0) +
+            '%"></div></div></div><div style="text-align:right"><div class="rank-count">$' + p.toFixed(0) +
+            '</div><div class="rank-revenue">' + (i.totalSold || 0) + ' sold</div></div></div>';
+    }).join('') : noCostMsg;
 
     // Top spenders
     const spenders = camperList.map(c => ({ ...c, spent: getAccount(c.name).spentToday })).filter(c => c.spent > 0).sort((a, b) => b.spent - a.spent);
@@ -1172,7 +1213,7 @@ function _readStockField(id) {
 
 window.openAddItem = function() {
     _editingItemId = null;
-    ['niName', 'niBarcode', 'niCat', 'niPrice', 'niStock'].forEach(id => { const el = document.getElementById(id); if (el) el.value = ''; });
+    ['niName', 'niBarcode', 'niCat', 'niPrice', 'niCost', 'niStock'].forEach(id => { const el = document.getElementById(id); if (el) el.value = ''; });
     _refreshCatSuggestions();
     document.getElementById('itemModalTitle').textContent = 'Add Item';
     document.getElementById('itemSaveBtn').textContent = 'Add Item';
@@ -1189,6 +1230,7 @@ window.openEditItem = function(id) {
     document.getElementById('niBarcode').value = item.barcode || '';
     document.getElementById('niCat').value = item.cat;
     document.getElementById('niPrice').value = item.price;
+    document.getElementById('niCost').value = item.cost == null ? '' : item.cost;
     document.getElementById('niStock').value = item.stock == null ? '' : item.stock;
     document.getElementById('itemModalTitle').textContent = 'Edit Item';
     document.getElementById('itemSaveBtn').textContent = 'Save Changes';
@@ -1201,6 +1243,8 @@ window.saveItem = function() {
     const barcode = document.getElementById('niBarcode').value.trim();
     const cat = document.getElementById('niCat').value.trim();
     const price = parseFloat(document.getElementById('niPrice').value);
+    const costRaw = document.getElementById('niCost').value.trim();
+    const cost = costRaw === '' ? null : parseFloat(costRaw);
     const stock = _readStockField('niStock');
     if (!name || !price || !cat) { toast('Fill required fields', 1); return; }
     if (barcode && snacks.inventory.some(i => i.barcode === barcode && i.id !== _editingItemId)) {
@@ -1212,6 +1256,7 @@ window.saveItem = function() {
         const item = snacks.inventory.find(i => i.id === _editingItemId);
         if (!item) return;
         item.name = name; item.cat = cat; item.price = price;
+        if (cost == null || isNaN(cost)) delete item.cost; else item.cost = cost;
         if (stock == null) delete item.stock; else item.stock = stock;
         if (barcode) item.barcode = barcode; else delete item.barcode;
         saveSnacksData(snacks);
@@ -1221,6 +1266,7 @@ window.saveItem = function() {
     } else {
         const maxId = snacks.inventory.reduce((m, i) => Math.max(m, i.id || 0), 0);
         const newItem = { id: maxId + 1, name, cat, price, soldToday: 0, totalSold: 0 };
+        if (cost != null && !isNaN(cost)) newItem.cost = cost;
         if (stock != null) newItem.stock = stock;
         if (barcode) newItem.barcode = barcode;
         snacks.inventory.push(newItem);
@@ -1230,7 +1276,7 @@ window.saveItem = function() {
         toast('Added ' + name);
     }
     _editingItemId = null;
-    ['niName', 'niBarcode', 'niCat', 'niPrice', 'niStock'].forEach(id => document.getElementById(id).value = '');
+    ['niName', 'niBarcode', 'niCat', 'niPrice', 'niCost', 'niStock'].forEach(id => document.getElementById(id).value = '');
 };
 
 window.restock = function() {
@@ -1242,6 +1288,16 @@ window.restock = function() {
     if (!item) return;
     // Restocking an untracked (stock: null) item starts tracking it from 0.
     item.stock = (item.stock || 0) + qty;
+    // Optional: total cost paid for this batch → cost-per-unit (e.g. 500
+    // bags for $500 = $1.00/bag). Overwrites the item's cost with the
+    // latest purchase price — this system tracks current state, not a
+    // FIFO/weighted-average cost history. Blank = keep the existing cost.
+    const totalCostRaw = document.getElementById('rTotalCost').value.trim();
+    if (totalCostRaw !== '') {
+        const totalCost = parseFloat(totalCostRaw);
+        if (!isNaN(totalCost) && totalCost >= 0) item.cost = Math.round((totalCost / qty) * 100) / 100;
+    }
+    document.getElementById('rTotalCost').value = '';
     saveSnacksData(snacks);
     closeM('restock');
     rInventory(); renderStats(); rAnalytics();
@@ -1267,10 +1323,10 @@ window.openUploadModal = function() {
 
 window.downloadItemTemplate = function() {
     const ws = XLSX.utils.aoa_to_sheet([
-        ['Name', 'Category', 'Price', 'Stock'],
-        ['Gatorade', 'Drink', 2, 100],
-        ['Chips', 'Snack', 1.5, ''],
-        ['Candy Bar', 'Custom', 1, ''],
+        ['Name', 'Category', 'Price', 'Stock', 'Cost'],
+        ['Gatorade', 'Drink', 2, 100, 1],
+        ['Chips', 'Snack', 1.5, '', 1],
+        ['Candy Bar', 'Custom', 1, '', ''],
     ]);
     const wb = XLSX.utils.book_new();
     XLSX.utils.book_append_sheet(wb, ws, 'Items');
@@ -1307,6 +1363,7 @@ function _processUploadRows(rows) {
         const cat = String(row[1] || '').trim();
         const priceRaw = row[2];
         const stockRaw = row[3];
+        const costRaw = row[4];
 
         let error = null;
         if (!name) error = 'Missing name';
@@ -1318,10 +1375,15 @@ function _processUploadRows(rows) {
             const n = parseInt(stockRaw);
             stock = isNaN(n) ? null : n;
         }
+        let cost = null;
+        if (costRaw !== '' && costRaw != null) {
+            const c = parseFloat(costRaw);
+            cost = isNaN(c) ? null : c;
+        }
 
         const existing = snacks.inventory.find(i => i.name.toLowerCase() === name.toLowerCase());
         parsed.push({
-            row: r + 1, name, cat, price, stock, error,
+            row: r + 1, name, cat, price, stock, cost, error,
             action: error ? 'error' : (existing ? 'update' : 'add'),
             existingId: existing ? existing.id : null,
         });
@@ -1344,13 +1406,13 @@ function _renderUploadPreview(parsed) {
             ? '<span class="badge badge-red">' + esc(r.error) + '</span>'
             : (r.action === 'update' ? '<span class="badge badge-amber">Update</span>' : '<span class="badge badge-green">New</span>');
         return '<tr><td>' + r.row + '</td><td>' + esc(r.name || '—') + '</td><td>' + esc(r.cat || '—') + '</td><td>' +
-            (isNaN(r.price) ? '—' : '$' + r.price.toFixed(2)) + '</td><td>' + (r.stock == null ? '—' : r.stock) +
+            (isNaN(r.price) ? '—' : '$' + r.price.toFixed(2)) + '</td><td>' + (r.cost == null ? '—' : '$' + r.cost.toFixed(2)) + '</td><td>' + (r.stock == null ? '—' : r.stock) +
             '</td><td>' + statusHtml + '</td></tr>';
     }).join('');
     document.getElementById('uploadPreview').innerHTML =
         '<div style="font-size:.8rem;color:var(--text-secondary);margin-bottom:.5rem">' + adds + ' new, ' + upds + ' to update' +
         (errs ? ', ' + errs + ' with errors (skipped)' : '') + '</div>' +
-        '<div class="table-wrapper" style="max-height:280px;overflow-y:auto"><table class="data-table"><thead><tr><th>Row</th><th>Name</th><th>Category</th><th>Price</th><th>Stock</th><th>Status</th></tr></thead><tbody>' + rowsHtml + '</tbody></table></div>';
+        '<div class="table-wrapper" style="max-height:280px;overflow-y:auto"><table class="data-table"><thead><tr><th>Row</th><th>Name</th><th>Category</th><th>Price</th><th>Cost</th><th>Stock</th><th>Status</th></tr></thead><tbody>' + rowsHtml + '</tbody></table></div>';
     document.getElementById('uploadConfirmBtn').disabled = (adds + upds) === 0;
 }
 
@@ -1366,11 +1428,13 @@ window.confirmUploadImport = function() {
             if (!item) return;
             item.name = r.name; item.cat = r.cat; item.price = r.price;
             if (r.stock == null) delete item.stock; else item.stock = r.stock;
+            if (r.cost == null) delete item.cost; else item.cost = r.cost;
             updated++;
         } else {
             maxId++;
             const newItem = { id: maxId, name: r.name, cat: r.cat, price: r.price, soldToday: 0, totalSold: 0 };
             if (r.stock != null) newItem.stock = r.stock;
+            if (r.cost != null) newItem.cost = r.cost;
             snacks.inventory.push(newItem);
             added++;
         }

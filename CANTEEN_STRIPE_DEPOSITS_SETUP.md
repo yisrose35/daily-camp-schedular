@@ -104,9 +104,8 @@ Use Stripe **test mode**.
   itself wasn't changed).
 - **Link photo purchases** — a separate, not-yet-built feature (next up
   after this).
-- **Auto-Reload** — the canteen page's "Auto-Reload" button is still a
-  decorative no-op (`toast('Auto-reload enabled!')` and nothing else) —
-  pre-existing, not addressed by this pass.
+- **Auto-Reload** — was a decorative no-op as of this pass; now built, see
+  `CANTEEN_AUTORELOAD_SETUP.md`.
 
 ## Migration SQL
 
