@@ -22,11 +22,15 @@ are untouched — they have their own separate logins.
    that camp, owner + staff, not just the one being guessed at). No more
    self-service unlock link at that point, someone has to clear it by hand
    in the SQL Editor (exact query at the bottom of migration 105, and in
-   step 5 below). The office also gets its own heads-up email the moment
-   this happens (`campistryoffice@gmail.com`, separate from the message
-   shown to whoever got locked out) — so a real attack shows up in your
-   inbox proactively instead of only surfacing when the camp calls in
-   confused.
+   step 5 below). Two separate proactive emails go out the moment this
+   happens: `campistryoffice@gmail.com` gets Campistry's own internal ops
+   alert, and the CAMP OWNER (specifically — resolved via `camps.owner`,
+   not just whoever triggered it) gets a customer-facing notice that their
+   camp's sign-in is locked and to reach out to campistryoffice@gmail.com
+   when ready to reopen it. Both are separate from `LOCKED_MESSAGE.office`,
+   the message shown to whoever is actually trying to sign in — so a real
+   attack (or a confused owner whose staff triggered it) surfaces
+   proactively instead of only when someone calls in.
 
 ## 1. Run the migration
 
@@ -140,13 +144,41 @@ SELECT * FROM account_lockouts
 only ever affects that one row, and is meant to self-clear via the emailed
 link rather than needing this.)
 
-**You'll know before the camp tells you.** The moment a camp crosses into
-this tier, `secure-login` sends `campistryoffice@gmail.com` its own alert —
-subject "Camp locked out: 10 failed sign-ins on \<email\>" — listing every
-login that got locked. It fires exactly once per lockout event (not once
-per subsequent attempt, since a locked camp's further tries never even
-reach the code that would resend it), via the same Resend setup as
-`stripe-risk-volume-monitor`'s spike alerts — no separate secret needed.
+**You'll know before the camp tells you — and so will they.** The moment a
+camp crosses into this tier, `secure-login` sends two emails:
+- `campistryoffice@gmail.com` — subject "Camp locked out: 10 failed
+  sign-ins on \<email\>" — listing every login that got locked. Internal,
+  ops-facing.
+- The camp **owner's** own email — subject "Your Campistry sign-in has
+  been locked" — a plain-language notice that their camp's sign-in is
+  paused and to reach out to campistryoffice@gmail.com when ready to
+  reopen it. Customer-facing, sent even if the owner personally never
+  failed a single attempt (a staff member's login triggering the lock
+  still notifies them).
+
+Both fire exactly once per lockout event (not once per subsequent attempt,
+since a locked camp's further tries never even reach the code that would
+resend them), via the same Resend setup as `stripe-risk-volume-monitor`'s
+spike alerts — no separate secret needed.
+
+**If either doesn't arrive**, in order of likelihood:
+1. **It already fired in an earlier test.** Both are one-time-per-lockout
+   by design — if the account was already at the office-lock level from a
+   prior test round (you didn't run `clear_login_failures` or sign in
+   successfully to reset it), this round's escalation isn't a NEW one, so
+   nothing sends even though the lock message still displays correctly.
+   Reset the test account between rounds to rule this out.
+2. **Spam.** Every email this app sends — these included — currently goes
+   out from `onboarding@resend.dev`, Resend's own shared testing domain,
+   not a domain Campistry has verified. Gmail in particular can be picky
+   about that. Worth checking spam before assuming it's broken, and worth
+   verifying a real sending domain in Resend (Resend Dashboard → Domains)
+   if this keeps happening — every `from:` in this codebase would benefit
+   from that, not just this feature.
+3. **A real send failure** — check Edge Functions → `secure-login` → Logs
+   around the time of the 10th attempt for `office alert email failed:` /
+   `office alert email threw:` (or the `owner lock notice` equivalents).
+   Their absence entirely (not even an error) points back to #1.
 
 ## 6. Verify end to end
 
@@ -188,10 +220,12 @@ reach the code that would resend it), via the same Resend setup as
   the office-lock message, even though it never failed a single attempt
   itself. That's the camp-wide part working.
 - Check `campistryoffice@gmail.com`'s inbox — confirm the "Camp locked out"
-  alert arrived and lists both logins. Fail the password a few more times
-  on either (still locked, so these are rejected before ever reaching the
-  database) — confirm NO additional alert emails come in for the same
-  incident.
+  alert arrived and lists both logins. Check the camp OWNER's inbox too —
+  confirm "Your Campistry sign-in has been locked" arrived there, even if
+  the owner wasn't the login that actually failed 10 times. Fail the
+  password a few more times on either login (still locked, so these are
+  rejected before ever reaching the database) — confirm NO additional
+  alert or notice emails come in for the same incident.
 - Run the `SELECT` from step 5 — confirm every login at the camp shows
   `lock_level = 'office'` — then run the `UPDATE` from step 5 and confirm
   BOTH logins work again immediately with their correct passwords.

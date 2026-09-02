@@ -112,17 +112,45 @@ COMMENT ON TABLE account_lockouts IS
     'Password-attempt lockout for the main Campistry login. lock_level=email is self-service (unlock_token emailed to the account), fires once per rolling-window streak (email_lock_used_at), and only ever affects that one email. lock_level=office requires a manual clear in the SQL Editor and is applied camp-wide (every login at the camp, not just the one that triggered it). RLS-locked; access only via RPC.';
 
 
--- ─── 2b. _camp_lock_emails ──────────────────────────────────────────────────
+-- ─── 2b. _resolve_camp_id ───────────────────────────────────────────────────
+-- Shared by _camp_lock_emails and _camp_owner_email below — given an email,
+-- finds its camp_id (owner via camps.owner, else camp_users.camp_id). NULL
+-- if the email can't be resolved to any camp (stale/deleted account).
+CREATE OR REPLACE FUNCTION public._resolve_camp_id(p_email text)
+RETURNS uuid
+LANGUAGE plpgsql
+SECURITY DEFINER
+STABLE
+SET search_path = public, auth, pg_catalog
+AS $$
+DECLARE
+    v_user_id uuid;
+    v_camp_id uuid;
+BEGIN
+    SELECT id INTO v_user_id FROM auth.users WHERE lower(email) = lower(p_email);
+    IF v_user_id IS NULL THEN RETURN NULL; END IF;
+
+    SELECT id INTO v_camp_id FROM camps WHERE owner = v_user_id;
+    IF v_camp_id IS NULL THEN
+        SELECT camp_id INTO v_camp_id FROM camp_users WHERE user_id = v_user_id LIMIT 1;
+    END IF;
+
+    RETURN v_camp_id;
+END;
+$$;
+
+REVOKE ALL ON FUNCTION public._resolve_camp_id(text) FROM public, anon, authenticated;
+GRANT EXECUTE ON FUNCTION public._resolve_camp_id(text) TO service_role;
+
+
+-- ─── 2c. _camp_lock_emails ──────────────────────────────────────────────────
 -- Given the email that just crossed the 10-in-24h threshold, returns every
 -- email that should be office-locked alongside it: the camp owner (camps.
--- owner) plus every accepted camp_users row for that same camp_id. Looks up
--- the triggering email's own camp membership first (owner, else camp_users)
--- to find camp_id, then expands back out to every email in it.
+-- owner) plus every accepted camp_users row for that same camp_id.
 --
 -- Falls back to just the triggering email alone if it can't be resolved to
--- any camp (e.g. a stale/deleted account) — never errors, never returns an
--- empty set, so record_login_failure below always has at least one email to
--- lock.
+-- any camp — never errors, never returns an empty set, so record_login_
+-- failure below always has at least one email to lock.
 CREATE OR REPLACE FUNCTION public._camp_lock_emails(p_email text)
 RETURNS SETOF text
 LANGUAGE plpgsql
@@ -132,20 +160,8 @@ SET search_path = public, auth, pg_catalog
 AS $$
 DECLARE
     v_email   text := lower(p_email);
-    v_user_id uuid;
-    v_camp_id uuid;
+    v_camp_id uuid := public._resolve_camp_id(p_email);
 BEGIN
-    SELECT id INTO v_user_id FROM auth.users WHERE lower(email) = v_email;
-    IF v_user_id IS NULL THEN
-        RETURN QUERY SELECT v_email;
-        RETURN;
-    END IF;
-
-    SELECT id INTO v_camp_id FROM camps WHERE owner = v_user_id;
-    IF v_camp_id IS NULL THEN
-        SELECT camp_id INTO v_camp_id FROM camp_users WHERE user_id = v_user_id LIMIT 1;
-    END IF;
-
     IF v_camp_id IS NULL THEN
         RETURN QUERY SELECT v_email;
         RETURN;
@@ -166,6 +182,39 @@ $$;
 
 REVOKE ALL ON FUNCTION public._camp_lock_emails(text) FROM public, anon, authenticated;
 GRANT EXECUTE ON FUNCTION public._camp_lock_emails(text) TO service_role;
+
+
+-- ─── 2d. _camp_owner_email ──────────────────────────────────────────────────
+-- Given the email that triggered an office lock, returns specifically the
+-- CAMP OWNER's email (not the whole camp list _camp_lock_emails returns) —
+-- so secure-login can send the owner their own personal heads-up, separate
+-- from the office's internal ops alert. NULL if it can't be resolved (the
+-- triggering email itself, a stale account, etc.) — secure-login treats
+-- that as "skip this send," never as an error.
+CREATE OR REPLACE FUNCTION public._camp_owner_email(p_email text)
+RETURNS text
+LANGUAGE plpgsql
+SECURITY DEFINER
+STABLE
+SET search_path = public, auth, pg_catalog
+AS $$
+DECLARE
+    v_camp_id uuid := public._resolve_camp_id(p_email);
+    v_owner_email text;
+BEGIN
+    IF v_camp_id IS NULL THEN RETURN NULL; END IF;
+
+    SELECT lower(u.email) INTO v_owner_email
+    FROM camps c
+    JOIN auth.users u ON u.id = c.owner
+    WHERE c.id = v_camp_id;
+
+    RETURN v_owner_email;
+END;
+$$;
+
+REVOKE ALL ON FUNCTION public._camp_owner_email(text) FROM public, anon, authenticated;
+GRANT EXECUTE ON FUNCTION public._camp_owner_email(text) TO service_role;
 
 
 -- ─── 3. check_login_lock_status ─────────────────────────────────────────────
@@ -228,6 +277,7 @@ DECLARE
     v_token                    text;
     v_just_locked              boolean := false;
     v_camp_emails              text[];
+    v_owner_email              text;
     v_next_threshold           integer;
 BEGIN
     INSERT INTO login_failed_events (email) VALUES (v_email);
@@ -261,6 +311,8 @@ BEGIN
             -- "contact the office" message shown to whoever was locked out.
             SELECT array_agg(camp_email) INTO v_camp_emails
             FROM public._camp_lock_emails(v_email) AS camp_email;
+
+            v_owner_email := public._camp_owner_email(v_email);
 
             INSERT INTO account_lockouts (email, lock_level, locked_at, unlock_token, unlock_token_expires_at, updated_at)
             SELECT unnest(v_camp_emails), 'office', now(), NULL, NULL, now()
@@ -299,6 +351,7 @@ BEGIN
         'justLocked', v_just_locked,
         'unlockToken', CASE WHEN v_just_locked AND v_new_level = 'email' THEN v_token ELSE NULL END,
         'campEmails', CASE WHEN v_just_locked AND v_new_level = 'office' THEN to_jsonb(v_camp_emails) ELSE NULL END,
+        'ownerEmail', CASE WHEN v_just_locked AND v_new_level = 'office' THEN v_owner_email ELSE NULL END,
         'attemptsRemaining', GREATEST(0, v_next_threshold - v_count_24h)
     );
 END;
@@ -404,10 +457,11 @@ GRANT EXECUTE ON FUNCTION public.unlock_account_via_token(text) TO anon, authent
 --   SELECT proname, proacl FROM pg_proc
 --   WHERE proname IN ('check_login_lock_status','record_login_failure',
 --                      'clear_login_failures','unlock_account_via_token',
---                      '_camp_lock_emails');
+--                      '_camp_lock_emails','_camp_owner_email','_resolve_camp_id');
 --   -- expect: check_login_lock_status + record_login_failure +
---   -- clear_login_failures + _camp_lock_emails grant to service_role only;
---   -- unlock_account_via_token grants to anon + authenticated.
+--   -- clear_login_failures + _camp_lock_emails + _camp_owner_email +
+--   -- _resolve_camp_id grant to service_role only; unlock_account_via_token
+--   -- grants to anon + authenticated.
 --
 --   SELECT * FROM pg_policies WHERE tablename IN ('login_failed_events','account_lockouts');
 --   -- expect ZERO rows — no client-facing policy exists on either table.

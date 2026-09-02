@@ -84,6 +84,34 @@ async function sendOfficeLockAlert(triggeringEmail: string, campEmails: string[]
   }
 }
 
+// Distinct from sendOfficeLockAlert above — that one is Campistry's OWN
+// internal ops alert; this is a customer-facing notice TO the camp owner
+// specifically, so they hear it from Campistry proactively instead of only
+// finding out the next time they (or a staff member) try to sign in. Same
+// once-per-escalation guarantee, same best-effort swallow. ownerEmail is
+// null when it couldn't be resolved (record_login_failure's
+// _camp_owner_email came back empty) — nothing to send in that case.
+async function sendOwnerLockNotice(ownerEmail: string, triggeringEmail: string) {
+  try {
+    const { error } = await resend.emails.send({
+      from: "Campistry <onboarding@resend.dev>",
+      to: [ownerEmail],
+      subject: "Your Campistry sign-in has been locked",
+      html: `
+        <div style="font-family: sans-serif; max-width: 600px; margin: 0 auto;">
+          <h2>Your camp's sign-in is locked</h2>
+          <p>There have been too many failed sign-in attempts on your Campistry account (${triggeringEmail}), so sign-in for your entire camp has been paused as a precaution — this affects every login at your camp, not just that one.</p>
+          <p>If this was you or your team just mistyping a password, no harm done — reach out to <a href="mailto:campistryoffice@gmail.com">campistryoffice@gmail.com</a> whenever you're ready and we'll reopen it.</p>
+          <p style="color: #666; font-size: 14px;">If this WASN'T you or your team, someone may have been trying to guess a password on your account — let us know that too when you reach out.</p>
+        </div>
+      `,
+    });
+    if (error) console.error("[secure-login] owner lock notice failed:", error);
+  } catch (mailErr) {
+    console.error("[secure-login] owner lock notice threw:", mailErr);
+  }
+}
+
 const LOCKED_MESSAGE: Record<string, string> = {
   email: "This account is locked due to repeated failed sign-in attempts. Check your email for a link to reopen it.",
   office: "You have been locked out due to repeated failed sign-in attempts. Please contact campistryoffice@gmail.com in order to unlock your account.",
@@ -190,11 +218,14 @@ serve(async (req) => {
       if (failResult.justLocked) {
         // Awaited (not fire-and-forget) — an edge function's isolate can be
         // torn down right after the response is returned, which would drop
-        // an un-awaited send before it ever reaches Resend. sendOfficeLockAlert
-        // itself swallows its own errors, so this can't turn a mail hiccup
-        // into a failed sign-in response.
+        // an un-awaited send before it ever reaches Resend. Both senders
+        // swallow their own errors, so this can't turn a mail hiccup into a
+        // failed sign-in response.
         const campEmails: string[] = Array.isArray(failResult.campEmails) ? failResult.campEmails : [];
         await sendOfficeLockAlert(email, campEmails);
+        if (typeof failResult.ownerEmail === "string" && failResult.ownerEmail) {
+          await sendOwnerLockNotice(failResult.ownerEmail, email);
+        }
       }
       return json({ error: LOCKED_MESSAGE.office, locked: true, lockLevel: "office" }, 423);
     }
