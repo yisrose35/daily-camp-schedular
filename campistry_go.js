@@ -3643,7 +3643,12 @@ function _routeLastDropMin(r, campLat, campLng, avgSpeedMph, avgStopMin) {
 }
 
 function _relieveLongRoutes(routes, campLat, campLng, isArrival, avgSpeedMph, avgStopMin) {
-    const MAX_MOVES = 10;
+    // Relief is cheap and each move must lower the fleet-worst ride, so allow a
+    // longer run: capping at 10 left two buses sharing a distant township still
+    // sitting at ~70min each. Require a move to buy at least 2 minutes so we do
+    // not churn districts for rounding.
+    const MAX_MOVES = 24;
+    const MIN_GAIN_MIN = 2;
     const MAX_HANDOFF_MI = 6.0;
     // Count from the stops rather than trusting route.camperCount: this pass runs
     // before the ETA/audit stage recomputes it, and a stale or missing count made
@@ -3708,7 +3713,7 @@ function _relieveLongRoutes(routes, campLat, campLng, isArrival, avgSpeedMph, av
                 // Must genuinely lower the fleet's worst ride, and must not turn
                 // the recipient into the new worst route.
                 if (dAfter > before - 5) continue;
-                if (after < before - 0.5) {
+                if (after < before - MIN_GAIN_MIN) {
                     bestMove = { after, idx: startIdx, n, dst, sOrd, dOrd, batched: len };
                     break;
                 }
@@ -3746,7 +3751,7 @@ function _relieveLongRoutes(routes, campLat, campLng, isArrival, avgSpeedMph, av
                 // are fixing — measuring against the fleet median instead was
                 // so strict that no handoff ever qualified.
                 if (dAfter > before - 5) continue;
-                if (after < before - 0.5 && (!bestMove || after < bestMove.after)) {
+                if (after < before - MIN_GAIN_MIN && (!bestMove || after < bestMove.after)) {
                     bestMove = { after, idx, n, dst, sOrd, dOrd };
                 }
             }
