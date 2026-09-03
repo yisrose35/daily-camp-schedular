@@ -3645,6 +3645,11 @@ function _routeLastDropMin(r, campLat, campLng, avgSpeedMph, avgStopMin) {
 function _relieveLongRoutes(routes, campLat, campLng, isArrival, avgSpeedMph, avgStopMin) {
     const MAX_MOVES = 10;
     const MAX_HANDOFF_MI = 6.0;
+    // Count from the stops rather than trusting route.camperCount: this pass runs
+    // before the ETA/audit stage recomputes it, and a stale or missing count made
+    // the capacity check pass when it should not have — one bus came out at 49
+    // children on a 48-seat bus.
+    const headcount = (r) => (r.stops || []).reduce((a, s) => a + ((s.campers || []).length), 0);
     const est = r => _routeLastDropMin(r, campLat, campLng, avgSpeedMph, avgStopMin);
     let moves = 0;
 
@@ -3680,7 +3685,7 @@ function _relieveLongRoutes(routes, campLat, campLng, isArrival, avgSpeedMph, av
                 if (dst === src || !dst.stops) continue;
                 const cap = dst._cap;
                 if (!Number.isFinite(cap)) continue;
-                if (cap - (dst.camperCount || 0) < n) continue;
+                if (cap - headcount(dst) < n) continue;
                 // every stop in the batch must be within reach of the recipient
                 let worstD = 0;
                 for (const s of batch) {
@@ -3721,7 +3726,7 @@ function _relieveLongRoutes(routes, campLat, campLng, isArrival, avgSpeedMph, av
                 if (dst === src || !dst.stops) continue;
                 const cap = dst._cap;
                 if (!Number.isFinite(cap)) continue;
-                if (cap - (dst.camperCount || 0) < n) continue;
+                if (cap - headcount(dst) < n) continue;
                 let d = Infinity;
                 for (const s of dst.stops) {
                     if (Number.isFinite(s.lat)) d = Math.min(d, drivingDist(stop.lat, stop.lng, s.lat, s.lng));
@@ -3750,8 +3755,10 @@ function _relieveLongRoutes(routes, campLat, campLng, isArrival, avgSpeedMph, av
 
         src.stops = bestMove.sOrd;
         bestMove.dst.stops = bestMove.dOrd;
-        src.camperCount = (src.camperCount || 0) - bestMove.n;
-        bestMove.dst.camperCount = (bestMove.dst.camperCount || 0) + bestMove.n;
+        // Recompute rather than add and subtract, so repeated moves can't drift
+        // the counts the capacity check depends on.
+        src.camperCount = headcount(src);
+        bestMove.dst.camperCount = headcount(bestMove.dst);
         src.stops.forEach((s, i) => s.stopNum = i + 1);
         bestMove.dst.stops.forEach((s, i) => s.stopNum = i + 1);
         moves++;
