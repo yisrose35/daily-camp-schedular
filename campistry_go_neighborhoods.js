@@ -1366,7 +1366,14 @@ window.CampistryGoNeighborhoods = (function () {
                 const rideOver = maxChildRideMin > 0
                     ? Math.max(0, estimateBusRideMinWith(bus, nh) - maxChildRideMin)
                     : 0;
-                const fbCost = newSpread + straddleCost(bus, nh.id) + rideOver * 0.25;
+                // A soft price on riding time was not enough: the fallback simply
+                // re-assembled the over-long bus the budget had just prevented, so
+                // the distant township came back at ~80 minutes no matter what the
+                // primary path did. Treat the budget as a real constraint here too.
+                // This is safe because a neighbourhood that fits NOWHERE still gets
+                // placed by the segment-wise spill below, which respects capacity.
+                if (rideOver > 0) continue;
+                const fbCost = newSpread + straddleCost(bus, nh.id);
                 if (fbCost < fallbackScore) {
                     fallbackScore = fbCost; fallbackTarget = bus;
                 }
@@ -1411,12 +1418,32 @@ window.CampistryGoNeighborhoods = (function () {
                              lat: n ? la / n : null, lng: n ? lo / n : null };
                 }).sort((a, b) => b.count - a.count);
 
+                // Register each segment as a point so the riding estimate below can
+                // locate it — it looks centroids up by id, and a raw segment id
+                // isn't in the neighbourhood tables.
+                for (const seg of segs) {
+                    if (seg.lat == null) continue;
+                    nhCentroids[seg.sid] = { lat: seg.lat, lng: seg.lng };
+                    nhInternalMi[seg.sid] = 0;
+                    nhHomeCount[seg.sid] = seg.count;
+                }
+
                 let spilled = 0, stranded = 0;
                 for (const seg of segs) {
                     const room = assignments.filter(b => b.camperCount + seg.count <= b.capacity);
                     if (!room.length) { stranded += seg.count; continue; }
-                    let best = room[0], bestD = Infinity;
-                    for (const b of room) {
+                    // Prefer buses that stay inside the riding budget. Without this
+                    // the spill quietly rebuilds the over-long bus that the budget
+                    // just refused. Fall back to any bus with room rather than
+                    // stranding a child.
+                    let pool = room;
+                    if (maxChildRideMin > 0) {
+                        const fits = room.filter(b => estimateBusRideMinWith(
+                            b, { id: seg.sid, camperCount: seg.count }) <= maxChildRideMin);
+                        if (fits.length) pool = fits;
+                    }
+                    let best = pool[0], bestD = Infinity;
+                    for (const b of pool) {
                         const c = busCentroid(b);
                         const d = (c && seg.lat != null)
                             ? haversineMi(seg.lat, seg.lng, c.lat, c.lng)
