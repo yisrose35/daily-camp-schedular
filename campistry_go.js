@@ -3647,7 +3647,13 @@ async function generateRoutes() {
     const googleKey    = D.setup.googleMapsKey || '';
     const googleProjId = D.setup.googleProjectId || '';
     const geoapifyKey  = D.setup.geoapifyKey || '';
-    const googleAvailable = !!(googleKey && googleProjId &&
+    // Cost guard: the keys are injected centrally from Supabase secrets, so they
+    // are present even when paid providers are blocked. Without this check
+    // googleAvailable stayed TRUE, the pipeline took the Google branch, the
+    // guarded call returned null, and `if (tspResult)` silently skipped — so no
+    // stop ordering ran at all and routes kept neighbourhood-spine order.
+    const _paidAllowed = !window.CampistryGoSandbox || window.CampistryGoSandbox.allowPaid();
+    const googleAvailable = !!(_paidAllowed && googleKey && googleProjId &&
                                window.GoGoogleOptimizer?.optimizeTours);
 
     // Supabase proxy token (for Google edge-function auth)
