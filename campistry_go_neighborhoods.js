@@ -1606,13 +1606,25 @@ window.CampistryGoNeighborhoods = (function () {
                 for (const src of overloaded) {
                     const nhId = outlierNh(src); if (!nhId) continue;
                     const workNh = workNhs.find(n => n.id === nhId); if (!workNh) continue;
-                    // Find best recipient: has capacity, passes spread cap (relaxed
-                    // slightly so we don't deadlock), lowest resulting centroid delta.
+                    // A bus that is over its RIDING budget is a different problem
+                    // from one that is merely wide, and the cure is different too.
+                    // A remote township has no neighbour inside the 2.5mi spread
+                    // cap, so requiring one leaves it stuck: the camp's 42-child
+                    // run sat at ~80 minutes while the fleet median was 18 and
+                    // near-camp buses had ~110 spare seats between them. Let a
+                    // near bus take a share and carry the wider spread, as long as
+                    // it stays inside the riding budget — a few extra minutes for
+                    // riders who currently have 18 buys back thirty for the worst.
+                    const srcOverRide = maxChildRideMin > 0 &&
+                        estimateBusRideMin(src) > maxRideMin;
                     let best = null, bestScore = Infinity;
                     for (const dst of assignments) {
                         if (dst === src) continue;
                         if (dst.camperCount + workNh.camperCount > dst.capacity) continue;
-                        if (wouldSpreadExceed(dst, workNh, MAX_BUS_SPREAD_MI)) continue;
+                        const spreadBlocked = wouldSpreadExceed(dst, workNh, MAX_BUS_SPREAD_MI);
+                        if (spreadBlocked && !srcOverRide) continue;
+                        if (spreadBlocked &&
+                            estimateBusRideMinWith(dst, workNh) > maxChildRideMin) continue;
                         const dstC = busCentroid(dst), nhC = nhCentroids[nhId];
                         const baseScore = (dstC && nhC) ? haversineMi(nhC.lat, nhC.lng, dstC.lat, dstC.lng) : EMPTY_BUS_START_COST_MI;
                         // Prefer a recipient that keeps the moved NH sectoral, not straddling.
@@ -1620,10 +1632,14 @@ window.CampistryGoNeighborhoods = (function () {
                         if (score < bestScore) { bestScore = score; best = dst; }
                     }
                     if (!best) continue;
-                    // Don't move if recipient would itself become over-spread after the move
+                    // Don't move if the recipient ends up over-spread — unless we
+                    // are relieving a riding-time violation, where accepting a
+                    // wider bus is the whole point and was already checked against
+                    // the riding budget above. Without this exemption the undo
+                    // reverts precisely the moves that fix the worst ride.
                     unassign(nhId, src);
                     assignToBus(workNh, best);
-                    if (busMaxSpreadMi(best) > MAX_BUS_SPREAD_MI) {
+                    if (!srcOverRide && busMaxSpreadMi(best) > MAX_BUS_SPREAD_MI) {
                         // undo
                         unassign(nhId, best);
                         assignToBus(workNh, src);
