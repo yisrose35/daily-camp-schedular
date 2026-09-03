@@ -1317,9 +1317,47 @@ window.CampistryGoNeighborhoods = (function () {
 
             if (!target) target = fallbackTarget;
             if (!target) {
-                target = assignments.reduce((a, b) => a.camperCount <= b.camperCount ? a : b);
-                console.warn('[Go-NH] Overflow: no bus had room for ' + nh.id + ' (' + nh.camperCount +
-                    ' campers) — placed on least-full bus ' + target.busId);
+                // No single bus can take the whole neighborhood. Dumping it on the
+                // "least-full" bus used to blow straight through capacity — the
+                // camp's real data ended with 61 and 63 campers on 48-seat buses,
+                // which no school can run. Spill it SEGMENT BY SEGMENT into the
+                // buses that still have seats, nearest bus first, so capacity is
+                // respected and the pieces still land somewhere sensible.
+                const segs = nh.segmentIds.map(sid => {
+                    const s = _segIndex[sid];
+                    let la = 0, lo = 0, n = 0;
+                    if (s && s.homes) for (const h of s.homes) {
+                        if (Number.isFinite(h.lat) && Number.isFinite(h.lng)) { la += h.lat; lo += h.lng; n++; }
+                    }
+                    return { sid, count: s && s.homes ? s.homes.length : 0,
+                             lat: n ? la / n : null, lng: n ? lo / n : null };
+                }).sort((a, b) => b.count - a.count);
+
+                let spilled = 0, stranded = 0;
+                for (const seg of segs) {
+                    const room = assignments.filter(b => b.camperCount + seg.count <= b.capacity);
+                    if (!room.length) { stranded += seg.count; continue; }
+                    let best = room[0], bestD = Infinity;
+                    for (const b of room) {
+                        const c = busCentroid(b);
+                        const d = (c && seg.lat != null)
+                            ? haversineMi(seg.lat, seg.lng, c.lat, c.lng)
+                            : (b.neighborhoodIds.length ? Infinity : EMPTY_BUS_START_COST_MI);
+                        if (d < bestD) { bestD = d; best = b; }
+                    }
+                    best.segmentIds.push(seg.sid);
+                    best.camperCount += seg.count;
+                    if (seg.lat != null) {
+                        best._centroidSum.lat += seg.lat * seg.count;
+                        best._centroidSum.lng += seg.lng * seg.count;
+                        best._centroidSum.w += seg.count;
+                    }
+                    spilled += seg.count;
+                }
+                console.warn('[Go-NH] Overflow: no single bus fit ' + nh.id + ' (' +
+                    nh.camperCount + ' campers) — spilled ' + spilled +
+                    ' across buses with room' + (stranded ? ', ' + stranded + ' STRANDED (fleet is full)' : ''));
+                continue; // already placed segment-wise
             }
             assignToBus(nh, target);
         }
