@@ -1274,7 +1274,7 @@ window.CampistryGoNeighborhoods = (function () {
         // --- 2a. Pass 1: prior-year preference (size-DESC for priority) ---
         const sortedBySize = [...workNhs].sort((a, b) => b.camperCount - a.camperCount);
         const assignedIds = new Set();
-        let priorHits = 0, priorSpreadSkips = 0;
+        let priorHits = 0, priorSpreadSkips = 0, priorRideSkips = 0;
         for (const nh of sortedBySize) {
             const pid = nh.parentId || nh.id;
             const preferredBusId = priorAssignments[pid];
@@ -1282,11 +1282,19 @@ window.CampistryGoNeighborhoods = (function () {
             const bus = busById[preferredBusId];
             if (!bus || bus.camperCount + nh.camperCount > bus.capacity) continue;
             if (wouldSpreadExceed(bus, nh, MAX_BUS_SPREAD_MI)) { priorSpreadSkips++; continue; }
+            // Last year's ROUTE-LENGTH mistakes must not stick either. This pass
+            // replays the stored mapping and then re-records it, so an over-long
+            // bus pins itself in place: the camp's distant 42-child run came back
+            // byte-identical at ~80 minutes through five different fixes to the
+            // passes below, because it was never reaching them.
+            if (maxChildRideMin > 0 &&
+                estimateBusRideMinWith(bus, nh) > maxChildRideMin) { priorRideSkips++; continue; }
             assignToBus(nh, bus);
             assignedIds.add(nh.id);
             priorHits++;
         }
         if (priorSpreadSkips) console.log('[Go-NH] Prior-year pass: skipped ' + priorSpreadSkips + ' NH(s) that would exceed spread cap');
+        if (priorRideSkips) console.log('[Go-NH] Prior-year pass: skipped ' + priorRideSkips + ' NH(s) that would exceed the ' + maxChildRideMin + 'min ride budget');
 
         // --- 2b. Pass 2: spatial-sweep + proximity-aware for the rest ---
         const unassigned = sortedBySize.filter(nh => !assignedIds.has(nh.id));
