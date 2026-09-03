@@ -12492,15 +12492,24 @@ function downloadTemplate(){
     toast('Template downloaded — fill it out and import');
 }
 
-// A row identifies the SAME camper as another row only when both the full
-// name AND the parent 1 email match (case-insensitive) — a shared name
-// alone (e.g. two unrelated "Kid Worcman"s) is not a duplicate.
-function _rowMatchKey(name,email){
-    return (name||'').trim().toLowerCase()+'|'+(email||'').trim().toLowerCase();
+// A row identifies the SAME camper as another row of the same name only
+// when there's actual EVIDENCE they're the same family — a matching
+// (non-blank) parent 1 email, or a matching (non-blank) home address AND
+// parent 1 name. A shared name alone (e.g. two unrelated "Kid Worcman"s
+// with different homes/parents, or simply no other info on file) is not a
+// duplicate; two siblings/re-entries in the SAME household with the same
+// name are.
+function _sameCamperSignal(a,b){
+    var emA=(a.parent1Email||'').trim().toLowerCase(),emB=(b.parent1Email||'').trim().toLowerCase();
+    if(emA&&emA===emB)return true;
+    var addrA=_famAddr(a.street||'',a.city||'',a.state||'',a.zip||'');
+    var addrB=_famAddr(b.street||'',b.city||'',b.state||'',b.zip||'');
+    var parA=(a.parent1Name||'').trim().toLowerCase(),parB=(b.parent1Name||'').trim().toLowerCase();
+    return !!(addrA&&addrA===addrB&&parA&&parA===parB);
 }
 // roster is keyed by full name alone, so two DIFFERENT campers who happen
-// to share a name (different parent email) would otherwise silently
-// collide — find the next free "Name (2)", "Name (3)"... key instead.
+// to share a name (different family) would otherwise silently collide —
+// find the next free "Name (2)", "Name (3)"... key instead.
 function _disambiguateRosterName(name){
     var n=2;
     while(roster[name+' ('+n+')'])n++;
@@ -12657,18 +12666,39 @@ function handleCsv(file){
                 //   families/bunks (and fans the wipe to cloud) — confirm first, and
                 //   let the office choose Update instead when they just want to
                 //   refresh/add campers without touching everything else.
-                //   A row is only a TRUE duplicate of another when both the name AND
-                //   the parent 1 email match — a shared name alone (two unrelated
-                //   "Kid Worcman"s) is not a duplicate and both are kept.
-                var byKey={},dupNames=[];
-                rows.forEach(function(r){ var k=_rowMatchKey(r.name,r.parent1Email); if(byKey[k])dupNames.push(r.name); byKey[k]=r; });
-                var uniqueRows=Object.keys(byKey).map(function(k){return byKey[k]});
+                //   A row is only a TRUE duplicate of another when the name matches
+                //   AND they're the same family (same parent email, or same home
+                //   address + same parent name) — a shared name alone (two unrelated
+                //   "Kid Worcman"s in different homes) is not a duplicate and both
+                //   are kept; two same-named rows in the SAME household are.
+                var byName={},dupNames=[];
+                rows.forEach(function(r){ var k=(r.name||'').trim().toLowerCase(); (byName[k]=byName[k]||[]).push(r); });
+                var uniqueRows=[];
+                Object.keys(byName).forEach(function(k){
+                    var grp=byName[k];
+                    if(grp.length===1){uniqueRows.push(grp[0]);return}
+                    // Cluster this name-group into families via the shared signal —
+                    // rows in the same cluster are true duplicates (last wins).
+                    var uf=grp.map(function(_,i){return i});
+                    function gfind(i){while(uf[i]!==i){uf[i]=uf[uf[i]];i=uf[i]}return i}
+                    for(var gi=0;gi<grp.length;gi++){
+                        for(var gj=gi+1;gj<grp.length;gj++){
+                            if(_sameCamperSignal(grp[gi],grp[gj]))uf[gfind(gi)]=gfind(gj);
+                        }
+                    }
+                    var clusters={};
+                    grp.forEach(function(r,i){var root=gfind(i);(clusters[root]=clusters[root]||[]).push(r)});
+                    Object.values(clusters).forEach(function(cluster){
+                        if(cluster.length>1)dupNames.push(cluster[0].name);
+                        uniqueRows.push(cluster[cluster.length-1]);
+                    });
+                });
                 var msg='This file has '+uniqueRows.length+' camper'+(uniqueRows.length===1?'':'s')+'.';
-                if(dupNames.length){var ex=dupNames.slice(0,3).join(', ');msg+='<br><br>⚠ '+dupNames.length+' duplicate row'+(dupNames.length===1?'':'s')+' — same name AND same parent email as another row ('+esc(ex)+(dupNames.length>3?'…':'')+') — only the last row of each will be kept.';}
+                if(dupNames.length){var ex=dupNames.slice(0,3).join(', ');msg+='<br><br>⚠ '+dupNames.length+' duplicate row'+(dupNames.length===1?'':'s')+' — same name AND same family (parent email, or home address + parent name) as another row ('+esc(ex)+(dupNames.length>3?'…':'')+') — only the last row of each will be kept.';}
                 msg+='<div style="margin-top:14px;text-align:left">'
                     +'<label style="font-size:.78rem;font-weight:600;color:var(--s600);display:block;margin-bottom:6px">Import mode:</label>'
                     +'<label style="display:flex;align-items:flex-start;gap:8px;margin-bottom:8px;cursor:pointer;font-weight:400"><input type="radio" name="csvImportMode" value="replace" checked style="margin-top:3px"><span><strong>Replace</strong> — wipe all current campers, divisions, grades, bunks, and families, and start fresh from this file. Cannot be undone.</span></label>'
-                    +'<label style="display:flex;align-items:flex-start;gap:8px;cursor:pointer;font-weight:400"><input type="radio" name="csvImportMode" value="update" style="margin-top:3px"><span><strong>Update</strong> — match campers by name + parent email and update them from this file; anyone new is added. Everything already in the roster that isn\'t in this file is left alone.</span></label>'
+                    +'<label style="display:flex;align-items:flex-start;gap:8px;cursor:pointer;font-weight:400"><input type="radio" name="csvImportMode" value="update" style="margin-top:3px"><span><strong>Update</strong> — match campers by name + family (parent email, or home address + parent name) and update them from this file; anyone new is added. Everything already in the roster that isn\'t in this file is left alone.</span></label>'
                     +'</div>';
                 // Import wipes the CURRENT roster/staff with zero history kept — the
                 // only "start fresh" action this app has. Snapshot who's here right
@@ -12889,19 +12919,19 @@ function importRows(rows,mode){
     rows.forEach(function(r){
         var targetName=r.name,camperId,oldBunk=null,isUpdate=false;
         var existing=roster[r.name];
-        if(mode==='update'&&existing&&_rowMatchKey(r.name,existing.parent1Email)===_rowMatchKey(r.name,r.parent1Email)){
-            // Same camper (name + parent email match) — update in place,
-            // keep their camperId, and move them off any OLD bunk they're
-            // no longer listed in.
+        if(mode==='update'&&existing&&_sameCamperSignal(existing,r)){
+            // Same camper (name + same family) — update in place, keep
+            // their camperId, and move them off any OLD bunk they're no
+            // longer listed in.
             isUpdate=true;
             camperId=existing.camperId;
             oldBunk=existing.bunk;
         }else if(existing){
             // A name collision that ISN'T the same camper: in Update mode
-            // this is a same-name-different-email camper already in the
+            // this is a same-name-different-family camper already in the
             // roster; in Replace mode it's two rows in THIS file sharing a
             // name (the earlier de-dupe pass only collapses TRUE duplicates
-            // — same name AND parent email). Either way, don't overwrite —
+            // — same name AND same family). Either way, don't overwrite —
             // give them their own roster slot.
             targetName=_disambiguateRosterName(r.name);
             _importDupeNames.push(r.name);
@@ -13025,8 +13055,8 @@ function importRows(rows,mode){
     summary+=mode==='update'?' — existing data preserved':' — previous data replaced';
     if(_importDupeNames.length>0){
         var uniqDupes=Array.from(new Set(_importDupeNames));
-        summary+=' — ⚠ '+uniqDupes.length+' camper'+(uniqDupes.length>1?'s':'')+' shared a name with someone else in the roster but had a different parent email, so '+(uniqDupes.length>1?'they were':'it was')+' kept separately and renamed with a "(2)" suffix to tell them apart ('+uniqDupes.join(', ')+')';
-        console.warn('[Me] CSV import: same-name-different-email camper(s) disambiguated in roster —',uniqDupes);
+        summary+=' — ⚠ '+uniqDupes.length+' camper'+(uniqDupes.length>1?'s':'')+' shared a name with someone else in the roster but were from a different family, so '+(uniqDupes.length>1?'they were':'it was')+' kept separately and renamed with a "(2)" suffix to tell them apart ('+uniqDupes.join(', ')+')';
+        console.warn('[Me] CSV import: same-name-different-family camper(s) disambiguated in roster —',uniqDupes);
     }
     toast(summary);
     console.log('[Me] CSV import ('+mode+'):',summary);
