@@ -3661,10 +3661,56 @@ function _relieveLongRoutes(routes, campLat, campLng, isArrival, avgSpeedMph, av
         const src = scored[0].r;
         const before = scored[0].t;
 
-        // Try several of the latest drops, not just the very last one — the final
-        // stop is often a big family that no nearby bus has the seats for.
-        const tailCount = Math.min(6, Math.max(1, src.stops.length - 2));
+        // Hand over a BATCH of late drops, not a single stop. The worst ride is
+        // essentially the route's length, so shifting one family off a 17-stop
+        // run barely dents it and the pass stalls having "improved" nothing. A
+        // nearby bus with real spare capacity (the camp has one with 23 free
+        // seats) can take a whole tail at once, which is what actually splits a
+        // distant township's work. Longest batch first, so we prefer the biggest
+        // relief that still fits.
         let bestMove = null;
+        const maxBatch = Math.max(1, Math.min(8, src.stops.length - 3));
+        for (let len = maxBatch; len >= 1 && !bestMove; len--) {
+            const startIdx = src.stops.length - len;
+            const batch = src.stops.slice(startIdx);
+            const n = batch.reduce((a, s) => a + ((s.campers || []).length), 0);
+            if (!n || batch.some(s => !Number.isFinite(s.lat))) continue;
+
+            for (const dst of routes) {
+                if (dst === src || !dst.stops) continue;
+                const cap = dst._cap;
+                if (!Number.isFinite(cap)) continue;
+                if (cap - (dst.camperCount || 0) < n) continue;
+                // every stop in the batch must be within reach of the recipient
+                let worstD = 0;
+                for (const s of batch) {
+                    let d = Infinity;
+                    for (const t of dst.stops) {
+                        if (Number.isFinite(t.lat)) d = Math.min(d, drivingDist(s.lat, s.lng, t.lat, t.lng));
+                    }
+                    worstD = Math.max(worstD, d);
+                }
+                if (worstD > MAX_HANDOFF_MI) continue;
+
+                const trySrc = src.stops.slice(0, startIdx);
+                if (trySrc.length < 2) continue;
+                const tryDst = dst.stops.concat(batch);
+                const sOrd = _localTspOrder(trySrc, campLat, campLng, isArrival);
+                const dOrd = _localTspOrder(tryDst, campLat, campLng, isArrival);
+                const sAfter = _routeLastDropMin({ stops: sOrd }, campLat, campLng, avgSpeedMph, avgStopMin);
+                const dAfter = _routeLastDropMin({ stops: dOrd }, campLat, campLng, avgSpeedMph, avgStopMin);
+                const after = Math.max(sAfter, dAfter);
+                // Must genuinely lower the fleet's worst ride, and must not turn
+                // the recipient into the new worst route.
+                if (dAfter > before - 5) continue;
+                if (after < before - 0.5) {
+                    bestMove = { after, idx: startIdx, n, dst, sOrd, dOrd, batched: len };
+                    break;
+                }
+            }
+        }
+        // Fall back to the original single-stop search if no batch worked.
+        const tailCount = bestMove ? 0 : Math.min(6, Math.max(1, src.stops.length - 2));
         for (let k = 0; k < tailCount; k++) {
             const idx = src.stops.length - 1 - k;
             const stop = src.stops[idx];
