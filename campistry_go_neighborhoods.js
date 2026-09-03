@@ -128,7 +128,30 @@ window.CampistryGoNeighborhoods = (function () {
             return entry.data;
         } catch (_) { return null; }
     }
+    // Overpass returns far more than the graph builder reads (version, timestamp,
+    // changeset, uid, user, every tag). A Lakewood-sized fetch is ~62k elements
+    // and many megabytes, so caching it whole always blew the ~5MB localStorage
+    // quota — the save threw, was swallowed, and NOTHING was ever cached. Every
+    // generation therefore re-hit Overpass, which is what rate-limits the camp
+    // and silently drops routing to the far worse fallback path.
+    // buildGraph needs only: node id/lat/lon, and way id/nodes/highway/name.
+    function _compactOverpass(data) {
+        if (!data || !Array.isArray(data.elements)) return data;
+        const out = [];
+        for (const el of data.elements) {
+            if (el.type === 'node' && el.lat != null && el.lon != null) {
+                out.push({ type: 'node', id: el.id, lat: el.lat, lon: el.lon });
+            } else if (el.type === 'way' && el.nodes && el.nodes.length >= 2 && el.tags && el.tags.highway) {
+                const tags = { highway: el.tags.highway };
+                if (el.tags.name) tags.name = el.tags.name;
+                out.push({ type: 'way', id: el.id, nodes: el.nodes, tags: tags });
+            }
+        }
+        return { elements: out };
+    }
+
     function _saveRoadGraphCache(key, data) {
+        data = _compactOverpass(data);
         try {
             // Roll the whole cache: drop expired entries on every save so the
             // file doesn't balloon.
@@ -143,6 +166,7 @@ window.CampistryGoNeighborhoods = (function () {
             }
             cache[key] = { savedAt: now, data: data };
             localStorage.setItem(ROAD_GRAPH_CACHE_KEY, JSON.stringify(cache));
+            console.log('[Go-NH] Road graph cached (' + (data.elements || []).length + ' elements)');
             return true;
         } catch (e) {
             // Quota exceeded: drop other entries and keep just this one.
@@ -150,8 +174,15 @@ window.CampistryGoNeighborhoods = (function () {
                 const fallback = {};
                 fallback[key] = { savedAt: Date.now(), data: data };
                 localStorage.setItem(ROAD_GRAPH_CACHE_KEY, JSON.stringify(fallback));
+                console.log('[Go-NH] Road graph cached alone after clearing older bboxes');
                 return true;
-            } catch (_) { return false; }
+            } catch (e2) {
+                // Say so. Silence here is why nobody noticed the cache never worked
+                // and every run went back to Overpass.
+                console.warn('[Go-NH] Road graph NOT cached (' + (e2 && e2.name || 'quota') +
+                    ') — every run will re-fetch from Overpass and risk rate limiting');
+                return false;
+            }
         }
     }
 
