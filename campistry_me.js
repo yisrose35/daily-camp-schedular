@@ -1124,9 +1124,8 @@ function _famSuggestionsBannerHtml(){
     return h;
 }
 // Household contact block (parents/address + camper chips) for one family
-// record — reused on the Billing account card and the camper profile's
-// Family & Emergency Contact card, so household details live wherever a
-// balance or a camper already does instead of a page of their own.
+// record — reused on the Billing account card, so household details live
+// wherever a balance already does instead of a page of their own.
 function _famHouseholdHtml(id,f){
     var h='';
     (f.households||[]).forEach(function(hh){
@@ -2145,19 +2144,22 @@ function renderCamperDetailPage(){
     if(bunkReq.avoid.length)camp+=cvR('Do not bunk with','<span class="cv-warn">'+esc(bunkReq.avoid.join(', '))+'</span>');
     g+=_dpCard('Camp Assignment',camp,{icon:'mapPin'});
 
-    var fam='';
+    // Parent / Guardian — shows BOTH parents in full right away, not just
+    // parent 1, since a second parent's info is just as often needed.
+    var par='';
     if(d.parent1Name){
-        fam+=cvR('Parent',d.parent1Name);
-        if(d.parent1Phone)fam+=cvR('Phone','<a href="tel:'+esc(d.parent1Phone)+'" style="color:var(--me);font-weight:600">'+esc(d.parent1Phone)+'</a>');
-        if(d.parent1Email)fam+=cvR('Email','<a href="mailto:'+esc(d.parent1Email)+'" style="color:var(--me)">'+esc(d.parent1Email)+'</a>');
-    }else{
-        fam+='<div style="font-size:.8rem;color:var(--s400);font-style:italic;padding:2px 0">No parent info on file</div>';
+        par+=cvR('Parent 1',d.parent1Name);
+        if(d.parent1Phone)par+=cvR('Phone','<a href="tel:'+esc(d.parent1Phone)+'" style="color:var(--me);font-weight:600">'+esc(d.parent1Phone)+'</a>');
+        if(d.parent1Email)par+=cvR('Email','<a href="mailto:'+esc(d.parent1Email)+'" style="color:var(--me)">'+esc(d.parent1Email)+'</a>');
     }
-    if(d.emergencyName){
-        fam+=cvR('Emergency',d.emergencyName+(d.emergencyRel?' ('+d.emergencyRel+')':''));
-        if(d.emergencyPhone)fam+=cvR('Phone','<a href="tel:'+esc(d.emergencyPhone)+'" style="color:var(--me);font-weight:600">'+esc(d.emergencyPhone)+'</a>');
-    }else{
-        fam+='<div style="font-size:.8rem;color:var(--err);font-style:italic;padding:2px 0">⚠ No emergency contact</div>';
+    if(d.parent2Name){
+        if(d.parent1Name)par+='<div style="margin-top:8px;padding-top:8px;border-top:1px solid var(--s100)"></div>';
+        par+=cvR('Parent 2',d.parent2Name+(d.parent2Relation?' ('+esc(d.parent2Relation)+')':''));
+        if(d.parent2Phone)par+=cvR('Phone','<a href="tel:'+esc(d.parent2Phone)+'" style="color:var(--me);font-weight:600">'+esc(d.parent2Phone)+'</a>');
+        if(d.parent2Email)par+=cvR('Email','<a href="mailto:'+esc(d.parent2Email)+'" style="color:var(--me)">'+esc(d.parent2Email)+'</a>');
+    }
+    if(!d.parent1Name&&!d.parent2Name){
+        par+='<div style="font-size:.8rem;color:var(--s400);font-style:italic;padding:2px 0">No parent info on file</div>';
     }
     // Siblings — same household, one click to the other camper's own
     // record (CampMinder's "Unified Person Record" links siblings the
@@ -2167,12 +2169,24 @@ function renderCamperDetailPage(){
     var famEntry=Object.entries(families).filter(function(pair){return(pair[1].camperIds||[]).indexOf(n)>=0;})[0];
     var siblings=famEntry?(famEntry[1].camperIds||[]).filter(function(cn){return cn!==n;}):[];
     if(siblings.length){
-        fam+='<div style="margin-top:8px;padding-top:8px;border-top:1px solid var(--s100)"><span class="cv-lbl" style="display:block;margin-bottom:4px">Siblings</span><div style="display:flex;flex-wrap:wrap;gap:5px">'
+        par+='<div style="margin-top:8px;padding-top:8px;border-top:1px solid var(--s100)"><span class="cv-lbl" style="display:block;margin-bottom:4px">Siblings</span><div style="display:flex;flex-wrap:wrap;gap:5px">'
             +siblings.map(function(sn){return '<span style="display:inline-flex;align-items:center;padding:3px 9px;border-radius:999px;background:var(--s50);border:1px solid var(--s200);font-size:.76rem;font-weight:600;color:var(--me);cursor:pointer" onclick="CampistryMe.viewCamper(\''+je(sn)+'\')">'+esc(sn)+'</span>';}).join('')
             +'</div></div>';
     }
     var famAction=famEntry?'<button class="me-btn me-btn--ghost me-btn--sm" onclick="CampistryMe.editFamily(\''+je(famEntry[0])+'\')">Edit Household</button>':'';
-    g+=_dpCard('Family & Emergency Contact',fam,{icon:'users',actionHtml:famAction});
+    g+=_dpCard('Parent / Guardian',par,{icon:'users',actionHtml:famAction});
+
+    // Emergency Contact — its own card so it's never squeezed out or
+    // overlooked alongside parent info.
+    var emg='';
+    if(d.emergencyName){
+        emg+=cvR('Name',d.emergencyName);
+        if(d.emergencyRel)emg+=cvR('Relationship',esc(d.emergencyRel));
+        if(d.emergencyPhone)emg+=cvR('Phone','<a href="tel:'+esc(d.emergencyPhone)+'" style="color:var(--me);font-weight:600">'+esc(d.emergencyPhone)+'</a>');
+    }else{
+        emg+='<div style="font-size:.8rem;color:var(--err);font-style:italic;padding:2px 0">⚠ No emergency contact</div>';
+    }
+    g+=_dpCard('Emergency Contact',emg,{icon:'users'});
 
     var addr='';
     if(d.street){
