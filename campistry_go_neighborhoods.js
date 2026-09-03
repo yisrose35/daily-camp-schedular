@@ -1194,7 +1194,20 @@ window.CampistryGoNeighborhoods = (function () {
         // produced 6mi mega-buses. Tie-break by size DESC so a big lonely
         // cluster outranks a tiny one.
         const _allForIsolation = unassigned.slice();
+        // Big neighborhoods FIRST (first-fit-decreasing), isolation only for the
+        // small ones. Isolation-first alone sprinkled a few campers from remote
+        // NHs onto every bus, so by the time a near-bus-sized piece was placed
+        // NO bus had room and it overflowed onto the "least-full" bus with no
+        // regard for geography — on the camp's real data three 44-46 camper
+        // pieces overflowed that way and produced the 13-mile buses. A piece
+        // that needs most of a bus has to be placed while buses are still empty.
+        const BIG_NH_FRACTION = 0.5;
+        const bigThreshold = maxCap * BIG_NH_FRACTION;
         unassigned.sort((a, b) => {
+            const aBig = a.camperCount >= bigThreshold;
+            const bBig = b.camperCount >= bigThreshold;
+            if (aBig !== bBig) return aBig ? -1 : 1;
+            if (aBig && bBig) return b.camperCount - a.camperCount;
             const ia = nhIsolation(a.id, _allForIsolation);
             const ib = nhIsolation(b.id, _allForIsolation);
             if (ia !== ib) return ib - ia;
