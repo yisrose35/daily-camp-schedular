@@ -5710,6 +5710,7 @@ function _rebalanceBusLoads(routes, shiftVehicles) {
     const MAX_PASSES = 6;       // bounded loop — each pass moves at most one stop
     const TARGET_RATIO = 1.4;   // stop once max/min camper ratio is under this
     const MIN_GAP = 8;          // and max-min difference is under this many campers
+    const MAX_TRANSFER_MI = 3.0; // a stop may only move to a bus it's genuinely near
 
     for (let pass = 0; pass < MAX_PASSES; pass++) {
         active.forEach(r => { r.camperCount = camperCount(r); });
@@ -5742,6 +5743,17 @@ function _rebalanceBusLoads(routes, shiftVehicles) {
             const projHeavy = heaviest.camperCount - stopCount;
             const projLight = lightest.camperCount + stopCount;
             if (projLight > projHeavy) return;
+
+            // Absolute proximity guard. "Closer to light than heavy" is only a
+            // RELATIVE test: a Toms River stop can be marginally closer to a
+            // near-camp bus and still sit 10 miles from it. Moving it there
+            // evens out the head-count but blows that bus's district apart —
+            // on the camp's real data this pass was turning a packer result
+            // whose worst bus spanned 6.9mi into finished routes spanning
+            // 13.7mi with 180-degree arcs. Only accept a transfer if the stop
+            // actually belongs near the receiving bus.
+            if (!Number.isFinite(st.lat) || !Number.isFinite(st.lng)) return;
+            if (haversineMi(st.lat, st.lng, lightC.lat, lightC.lng) > MAX_TRANSFER_MI) return;
 
             const dToLight = dist2({ lat: st.lat, lng: st.lng }, lightC);
             const dToHeavy = dist2({ lat: st.lat, lng: st.lng }, heavyC);
