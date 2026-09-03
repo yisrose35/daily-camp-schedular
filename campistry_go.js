@@ -3592,6 +3592,79 @@ function _localTspOrder(stops, campLat, campLng, isArrival) {
     return best;
 }
 
+// ─────────────────────────────────────────────────────────────────────────────
+// Ride-time relief. Compact districts alone don't guarantee a short ride: a
+// distant township can be perfectly compact and still leave its last children
+// on the bus far longer than the rest of the camp. Schools judge routes by the
+// WORST ride, so hand late-drop stops from the longest route to a nearby bus
+// that still has seats, then re-order both.
+// ─────────────────────────────────────────────────────────────────────────────
+function _routeLastDropMin(r, campLat, campLng, avgSpeedMph, avgStopMin) {
+    let t = 0, la = campLat, lo = campLng;
+    for (const s of (r.stops || [])) {
+        if (!Number.isFinite(s.lat) || !Number.isFinite(s.lng)) continue;
+        t += (drivingDist(la, lo, s.lat, s.lng) / Math.max(1, avgSpeedMph)) * 60 + avgStopMin;
+        la = s.lat; lo = s.lng;
+    }
+    return t;
+}
+
+function _relieveLongRoutes(routes, campLat, campLng, isArrival, avgSpeedMph, avgStopMin) {
+    const MAX_MOVES = 10;
+    const MAX_HANDOFF_MI = 3.0;
+    const est = r => _routeLastDropMin(r, campLat, campLng, avgSpeedMph, avgStopMin);
+    let moves = 0;
+
+    for (let pass = 0; pass < MAX_MOVES; pass++) {
+        const live = routes.filter(r => r.stops && r.stops.length > 2);
+        if (live.length < 2) break;
+        const times = live.map(est).sort((a, b) => a - b);
+        const median = times[Math.floor(times.length / 2)];
+        // Adaptive: only relieve a route that is a clear outlier against the fleet.
+        const target = Math.max(40, median * 1.35);
+        const scored = live.map(r => ({ r, t: est(r) })).sort((a, b) => b.t - a.t);
+        if (scored[0].t <= target) break;
+
+        const src = scored[0].r;
+        const stop = src.stops[src.stops.length - 1]; // the last child dropped
+        const n = (stop.campers || []).length;
+        if (!Number.isFinite(stop.lat) || !n) break;
+
+        let best = null, bestD = Infinity;
+        for (const dst of routes) {
+            if (dst === src || !dst.stops) continue;
+            const cap = dst._cap;
+            if (!Number.isFinite(cap)) continue;
+            if (cap - (dst.camperCount || 0) < n) continue;
+            let d = Infinity;
+            for (const s of dst.stops) {
+                if (Number.isFinite(s.lat)) d = Math.min(d, drivingDist(stop.lat, stop.lng, s.lat, s.lng));
+            }
+            if (d < bestD) { bestD = d; best = dst; }
+        }
+        if (!best || bestD > MAX_HANDOFF_MI) break;
+
+        const srcBefore = src.stops.slice(), dstBefore = best.stops.slice();
+        src.stops.pop();
+        best.stops.push(stop);
+        src.camperCount = (src.camperCount || 0) - n;
+        best.camperCount = (best.camperCount || 0) + n;
+        src.stops = _localTspOrder(src.stops, campLat, campLng, isArrival);
+        best.stops = _localTspOrder(best.stops, campLat, campLng, isArrival);
+
+        // Keep the move only if it actually lowers the fleet's worst ride.
+        if (Math.max(est(src), est(best)) >= scored[0].t - 0.5) {
+            src.stops = srcBefore; best.stops = dstBefore;
+            src.camperCount += n; best.camperCount -= n;
+            break;
+        }
+        src.stops.forEach((s, i) => s.stopNum = i + 1);
+        best.stops.forEach((s, i) => s.stopNum = i + 1);
+        moves++;
+    }
+    return moves;
+}
+
 async function generateRoutes() {
         if (!_secEdit('routes', 'Generating routes')) return;
     // -------------------------------------------------------------------------
@@ -4282,6 +4355,14 @@ async function _tryNeighborhoodPipeline({
             improvedBuses++;
         }
         console.log('[Go v5] Local TSP ordered stops on ' + improvedBuses + ' bus(es)');
+    }
+
+    // Even out the worst ride once stop order is settled.
+    if (routes.length > 1) {
+        const relieved = _relieveLongRoutes(routes, campLat, campLng, isArrival,
+                                            avgSpeedMph, avgStopMin);
+        if (relieved) console.log('[Go v5] Ride-time relief: moved ' + relieved +
+            ' late-drop stop(s) to a nearer bus with seats');
     }
 
     // ── Record year-over-year assignment state ──
