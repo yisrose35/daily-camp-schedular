@@ -959,15 +959,33 @@ window.CampistryGoNeighborhoods = (function () {
         }));
         const maxCap = Math.max(...vehicles.map(v => v.capacity));
 
-        // Neighborhood centroid = mean of its homes' coords
+        // Neighborhood centroid = mean of its homes' coords, plus how far the bus
+        // must drive WITHIN it. Treating a neighbourhood as a single point makes a
+        // sprawling one look free: the trip out to a township 6mi away scored ~37
+        // minutes while the real route was ~80, because the ~12mi loop among its
+        // own houses was never counted. Bounding-box diagonal is a cheap, stable
+        // proxy for that internal driving.
         const nhCentroids = {};
-        for (const nh of result.neighborhoods) {
-            const nhHomes = result.homes.filter(h => h.neighborhoodId === nh.id);
-            if (!nhHomes.length) continue;
-            nhCentroids[nh.id] = {
-                lat: nhHomes.reduce((s, h) => s + h.lat, 0) / nhHomes.length,
-                lng: nhHomes.reduce((s, h) => s + h.lng, 0) / nhHomes.length,
-            };
+        const nhInternalMi = {};
+        {
+            const byNh = {};
+            for (const h of result.homes) {
+                if (!Number.isFinite(h.lat) || !Number.isFinite(h.lng)) continue;
+                (byNh[h.neighborhoodId] || (byNh[h.neighborhoodId] = [])).push(h);
+            }
+            for (const nh of result.neighborhoods) {
+                const nhHomes = byNh[nh.id];
+                if (!nhHomes || !nhHomes.length) continue;
+                let mnLa = Infinity, mxLa = -Infinity, mnLo = Infinity, mxLo = -Infinity;
+                let sLa = 0, sLo = 0;
+                for (const h of nhHomes) {
+                    sLa += h.lat; sLo += h.lng;
+                    if (h.lat < mnLa) mnLa = h.lat; if (h.lat > mxLa) mxLa = h.lat;
+                    if (h.lng < mnLo) mnLo = h.lng; if (h.lng > mxLo) mxLo = h.lng;
+                }
+                nhCentroids[nh.id] = { lat: sLa / nhHomes.length, lng: sLo / nhHomes.length };
+                nhInternalMi[nh.id] = haversineMi(mnLa, mnLo, mxLa, mxLo);
+            }
         }
 
         // --- 1. Pre-split oversize neighborhoods GEOGRAPHICALLY ------------------
@@ -1081,12 +1099,19 @@ window.CampistryGoNeighborhoods = (function () {
                     }
                 }
                 if (pieceHomes.length) {
+                    let mnLa = Infinity, mxLa = -Infinity, mnLo = Infinity, mxLo = -Infinity;
+                    for (const h of pieceHomes) {
+                        if (h.lat < mnLa) mnLa = h.lat; if (h.lat > mxLa) mxLa = h.lat;
+                        if (h.lng < mnLo) mnLo = h.lng; if (h.lng > mxLo) mxLo = h.lng;
+                    }
                     nhCentroids[pieceId] = {
                         lat: pieceHomes.reduce((s, h) => s + h.lat, 0) / pieceHomes.length,
                         lng: pieceHomes.reduce((s, h) => s + h.lng, 0) / pieceHomes.length,
                     };
+                    nhInternalMi[pieceId] = haversineMi(mnLa, mnLo, mxLa, mxLo);
                 } else if (nhCentroids[nh.id]) {
                     nhCentroids[pieceId] = nhCentroids[nh.id];
+                    nhInternalMi[pieceId] = nhInternalMi[nh.id] || 0;
                 }
             });
         }
@@ -1457,6 +1482,9 @@ window.CampistryGoNeighborhoods = (function () {
                 miles += bd; la = remaining[bi].lat; lo = remaining[bi].lng;
                 remaining.splice(bi, 1);
             }
+            // ...plus the driving WITHIN each neighbourhood, which is most of the
+            // route for a dense one and is invisible if you only walk centroids.
+            for (const id of ids) miles += (nhInternalMi[id] || 0);
             const campers = (bus.camperCount || 0) + (nh.camperCount || 0);
             const stops = Math.max(ids.length, Math.round(campers / RIDE_CHILDREN_PER_STOP));
             const speed = Math.max(1, rideSpeedMph);
