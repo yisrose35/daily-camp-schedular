@@ -3654,9 +3654,12 @@ function _relieveLongRoutes(routes, campLat, campLng, isArrival, avgSpeedMph, av
                 const tryDst = dst.stops.concat([stop]);
                 const sOrd = _localTspOrder(trySrc, campLat, campLng, isArrival);
                 const dOrd = _localTspOrder(tryDst, campLat, campLng, isArrival);
-                const after = Math.max(
-                    _routeLastDropMin({ stops: sOrd }, campLat, campLng, avgSpeedMph, avgStopMin),
-                    _routeLastDropMin({ stops: dOrd }, campLat, campLng, avgSpeedMph, avgStopMin));
+                const sAfter = _routeLastDropMin({ stops: sOrd }, campLat, campLng, avgSpeedMph, avgStopMin);
+                const dAfter = _routeLastDropMin({ stops: dOrd }, campLat, campLng, avgSpeedMph, avgStopMin);
+                const after = Math.max(sAfter, dAfter);
+                // Don't relieve one bus by turning another into the new worst
+                // route: the recipient has to stay inside the fleet's target.
+                if (dAfter > target) continue;
                 if (after < before - 0.5 && (!bestMove || after < bestMove.after)) {
                     bestMove = { after, idx, n, dst, sOrd, dOrd };
                 }
