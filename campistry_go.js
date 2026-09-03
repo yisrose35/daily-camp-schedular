@@ -5848,8 +5848,16 @@ function _estimateFallbackTimeWindows(stops, vehicles, campLat, campLng,
 // our scale).
 // =============================================================================
 function _consolidateBusStops(stops) {
-    const SEG_RADIUS_MI = 0.25;
-    const ANY_RADIUS_MI = 0.10;
+    // Honour the camp's "Max Walk (ft)" setting. These were hardcoded, so the
+    // control on the Setup screen did nothing: changing it from 500ft to 1320ft
+    // produced byte-identical routes. Districts consolidate stops to a quarter-
+    // to-half-mile walk, and this camp's own historical routes were 100% corner
+    // stops at 3.14 children each, which needs a real walk allowance.
+    // People walk further ALONG their own street than across to a different one,
+    // so the same-street radius stays the wider of the two.
+    const _walkMi = ((D.setup && D.setup.maxWalkDistance) || 500) / 5280;
+    const ANY_RADIUS_MI = Math.max(0.05, _walkMi);
+    const SEG_RADIUS_MI = Math.max(0.25, _walkMi * 2.5);
     const MAX_STOP_CAP = 15;
 
     function manhDist(la1, lo1, la2, lo2) {
