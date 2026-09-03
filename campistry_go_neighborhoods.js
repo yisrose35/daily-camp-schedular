@@ -999,8 +999,30 @@ window.CampistryGoNeighborhoods = (function () {
                     camperCount: p.count,
                     splitReason: 'oversize',
                 });
-                // Inherit parent centroid so spatial sweep has a location
-                if (nhCentroids[nh.id]) nhCentroids[pieceId] = nhCentroids[nh.id];
+                // Centroid from THIS piece's own homes — never the parent's.
+                // Inheriting the parent centroid made every piece of a big
+                // neighborhood report the same location, so the packer measured
+                // ~0 distance between pieces that are actually miles apart and
+                // happily paired one with a far-away neighborhood. On the camp's
+                // real data one core neighborhood split into 12 pieces and a
+                // piece landed on every one of the worst (7-13mi) buses.
+                const pieceHomes = [];
+                for (const sid of p.segIds) {
+                    const seg = result.segments.find(x => x.id === sid);
+                    if (seg && seg.homes) {
+                        for (const h of seg.homes) {
+                            if (Number.isFinite(h.lat) && Number.isFinite(h.lng)) pieceHomes.push(h);
+                        }
+                    }
+                }
+                if (pieceHomes.length) {
+                    nhCentroids[pieceId] = {
+                        lat: pieceHomes.reduce((s, h) => s + h.lat, 0) / pieceHomes.length,
+                        lng: pieceHomes.reduce((s, h) => s + h.lng, 0) / pieceHomes.length,
+                    };
+                } else if (nhCentroids[nh.id]) {
+                    nhCentroids[pieceId] = nhCentroids[nh.id];
+                }
             });
         }
 
