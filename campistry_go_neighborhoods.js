@@ -986,9 +986,16 @@ window.CampistryGoNeighborhoods = (function () {
         const _segIndex = {};
         for (const s of result.segments) _segIndex[s.id] = s;
 
-        function _splitByGeography(items, cap) {
-            const total = items.reduce((a, x) => a + x.count, 0);
-            if (total <= cap || items.length <= 1) return [items];
+        // Split `items` into exactly `k` geographically-compact groups of roughly
+        // equal camper load. Splitting by "halve until it fits" instead overshoots
+        // badly: 509 campers against a 48-seat bus halves 509 -> 254 -> 127 -> 63
+        // -> 31, and pieces of 31 tile terribly into 48-seat buses (one piece
+        // wastes 17 seats, two won't fit). That left 5 pieces homeless, which the
+        // overflow path then force-dumped onto buses ALREADY FULL — producing
+        // 53-61 campers on 50-seat buses. Choosing k up front gives pieces of
+        // ~total/k that fill a bus properly.
+        function _splitByGeography(items, k) {
+            if (k <= 1 || items.length <= 1) return [items];
             const placed = items.filter(x => x.lat != null);
             if (placed.length < 2) return [items];
             let mnLa = Infinity, mxLa = -Infinity, mnLo = Infinity, mxLo = -Infinity;
@@ -1005,15 +1012,19 @@ window.CampistryGoNeighborhoods = (function () {
                 if (b[key] == null) return -1;
                 return a[key] - b[key];
             });
-            // cut at the camper-count median so both halves carry similar load
+            // Cut so each side gets its share of the k pieces (by camper load).
+            const total = sorted.reduce((a, x) => a + x.count, 0);
+            const kLeft = Math.floor(k / 2), kRight = k - kLeft;
+            const targetLeft = total * (kLeft / k);
             let acc = 0, cut = 0;
             for (let i = 0; i < sorted.length; i++) {
                 acc += sorted[i].count;
-                if (acc >= total / 2) { cut = i + 1; break; }
+                if (acc >= targetLeft) { cut = i + 1; break; }
             }
-            if (cut <= 0 || cut >= sorted.length) cut = Math.max(1, Math.floor(sorted.length / 2));
-            return _splitByGeography(sorted.slice(0, cut), cap)
-               .concat(_splitByGeography(sorted.slice(cut), cap));
+            if (cut <= 0) cut = 1;
+            if (cut >= sorted.length) cut = sorted.length - 1;
+            return _splitByGeography(sorted.slice(0, cut), kLeft)
+               .concat(_splitByGeography(sorted.slice(cut), kRight));
         }
 
         const workNhs = [];
@@ -1029,8 +1040,17 @@ window.CampistryGoNeighborhoods = (function () {
                 }
                 return { sid, lat: n ? la / n : null, lng: n ? lo / n : null, count: s.homes.length };
             });
-            const pieces = _splitByGeography(segPts, maxCap)
-                .filter(b => b.length)
+            // Aim for pieces that fill a bus. Grow k if a piece still overflows
+            // (uneven geography can make one side heavier than its share).
+            let k = Math.max(2, Math.ceil(nh.camperCount / maxCap));
+            let buckets = _splitByGeography(segPts, k).filter(b => b.length);
+            for (let guard = 0; guard < 8; guard++) {
+                const worst = buckets.reduce((m, b) => Math.max(m, b.reduce((a, x) => a + x.count, 0)), 0);
+                if (worst <= maxCap || k >= segPts.length) break;
+                k++;
+                buckets = _splitByGeography(segPts, k).filter(b => b.length);
+            }
+            const pieces = buckets
                 .map(b => ({ segIds: b.map(x => x.sid), count: b.reduce((a, x) => a + x.count, 0) }));
 
             pieces.forEach((p, i) => {
