@@ -11332,14 +11332,16 @@ function _linkFormsHTML(){
     h+='<div class="me-card" style="margin-bottom:14px;padding:16px;">';
     h+='<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px;">';
     h+='<div><div style="font-weight:700;font-size:.95rem;">Complete Online</div><div style="font-size:.75rem;color:var(--s400);">Forms parents fill out directly in the portal</div></div>';
-    h+='<button class="me-btn me-btn--pri me-btn--sm" onclick="CampistryMe.addLinkDigitalForm()">+ Add Form</button>';
+    h+='<div style="display:flex;gap:6px;"><button class="me-btn me-btn--sec me-btn--sm" onclick="CampistryMe.addLinkPdfForm()">+ Add PDF Form</button><button class="me-btn me-btn--pri me-btn--sm" onclick="CampistryMe.addLinkDigitalForm()">+ Add Form</button></div>';
     h+='</div>';
     if(linkForms.digital.length){
         linkForms.digital.forEach(function(f,i){
             h+='<div style="display:flex;align-items:center;gap:10px;padding:10px 0;border-top:1px solid var(--s100);">';
             h+='<div style="flex:1;"><div style="font-size:.88rem;font-weight:600;">'+esc(f.name)+'</div>';
             if(f.description)h+='<div style="font-size:.75rem;color:var(--s400);">'+esc(f.description)+'</div>';
+            if(f.sourceType==='pdf')h+='<div style="font-size:.7rem;color:var(--s400);margin-top:2px;">'+(f.fieldSchema||[]).length+' field'+((f.fieldSchema||[]).length===1?'':'s')+' detected · '+(f.pageCount||1)+' page'+(f.pageCount===1?'':'s')+'</div>';
             h+='</div>';
+            if(f.sourceType==='pdf')h+=bdg('PDF','gray');
             h+=bdg(f.required?'Required':'Optional',f.required?'err':'warn');
             h+='<button class="me-btn me-btn--ghost me-btn--sm" onclick="CampistryMe.editLinkItem(\'digital\','+i+')">Edit</button>';
             h+='<button class="me-btn me-btn--ghost me-btn--sm" style="color:var(--err);" onclick="CampistryMe.deleteLinkItem(\'digital\','+i+')">Delete</button>';
@@ -11489,8 +11491,218 @@ function addLinkDocument(){
     });
 }
 
+// ─── PDF Forms: upload → auto-detect AcroForm fields → review ──────────────
+// Extends the Digital Forms system above with sourceType:'pdf' entries.
+// Detection runs entirely client-side via the vendored pdf-lib (no server
+// round trip needed to know what fields a PDF has) — only the review step's
+// SAVE uploads the actual PDF bytes to Storage.
+var _pdfFormDraft=null; // {isNew, file?, itemType?, itemIndex?, name, description, required, fields, pageCount}
+
+function addLinkPdfForm(){
+    if(!window.PDFLib){toast('PDF library failed to load — refresh and try again','error');return;}
+    var h='<div class="me-modal-form">';
+    h+='<div class="fg"><label class="fl">PDF File</label><input type="file" id="lfpFile" class="fi" accept="application/pdf,.pdf"></div>';
+    h+='<p style="font-size:.75rem;color:var(--s400);margin-top:6px;line-height:1.5;">The PDF must already have fillable form fields (exported from Adobe, DocuSign, JotForm, etc.) — the app detects them automatically on the next step, where you can name the form and review each field. A flat/scanned PDF with no fields will be rejected; use <strong>Print &amp; Return</strong> for those instead.</p>';
+    h+='</div>';
+    showModal('Add PDF Form',h,function(){
+        var fileInput=document.getElementById('lfpFile');
+        var file=fileInput&&fileInput.files&&fileInput.files[0];
+        if(!file){toast('Choose a PDF file','error');return;}
+        if(!/\.pdf$/i.test(file.name)){toast('Please choose a .pdf file','error');return;}
+        var btn=document.getElementById('dynModalSave');
+        if(btn){btn.disabled=true;btn.textContent='Detecting fields…';}
+        _detectPdfFields(file).then(function(det){
+            if(!det.fields.length){
+                toast('No fillable fields found in that PDF — use Print & Return instead','error');
+                if(btn){btn.disabled=false;btn.textContent='Save';}
+                return;
+            }
+            _pdfFormDraft={isNew:true,file:file,name:_humanizePdfFileName(file.name),description:'',required:false,fields:det.fields,pageCount:det.pageCount};
+            closeModal('dynModal');
+            _openPdfFieldReview();
+        }).catch(function(e){
+            console.error('[PDF Forms] detect failed',e);
+            toast('Could not read that PDF — is it a valid, unencrypted PDF?','error');
+            if(btn){btn.disabled=false;btn.textContent='Save';}
+        });
+    });
+}
+
+function _humanizePdfFileName(fileName){
+    var base=(fileName||'').replace(/\.pdf$/i,'').replace(/[_-]+/g,' ').trim();
+    return base?base.charAt(0).toUpperCase()+base.slice(1):'PDF Form';
+}
+
+// Reads the AcroForm fields already embedded in the PDF (exported from
+// Adobe/DocuSign/JotForm/etc.) — never guesses at layout on a flat/scanned
+// PDF. Pushbuttons and other non-data widgets are skipped via _pdfFieldType
+// returning null.
+function _detectPdfFields(file){
+    return file.arrayBuffer().then(function(buf){
+        return window.PDFLib.PDFDocument.load(buf,{ignoreEncryption:true});
+    }).then(function(doc){
+        var PDFLib=window.PDFLib;
+        var form=doc.getForm();
+        var acroFields=form.getFields();
+        var pages=doc.getPages();
+        var fields=[];
+        acroFields.forEach(function(f){
+            var type=_pdfFieldType(f,PDFLib);
+            if(!type)return;
+            var name=f.getName();
+            var widgets=f.acroField.getWidgets();
+            var w0=widgets&&widgets[0];
+            var rect=w0?w0.getRectangle():null;
+            var pageIndex=0;
+            var pRef=w0&&w0.P&&w0.P();
+            if(pRef){
+                for(var pi=0;pi<pages.length;pi++){
+                    if(pages[pi].ref&&String(pages[pi].ref)===String(pRef)){pageIndex=pi;break;}
+                }
+            }
+            fields.push({
+                name:name,
+                label:_humanizePdfFieldName(name),
+                type:type,
+                page:pageIndex,
+                rect:rect?[rect.x,rect.y,rect.width,rect.height]:null,
+                required:false
+            });
+        });
+        return {fields:fields,pageCount:doc.getPageCount()};
+    });
+}
+
+// instanceof (not constructor.name) so this still works against the
+// minified vendored build, where internal class names get mangled but the
+// exported class references on window.PDFLib stay the real prototypes.
+function _pdfFieldType(f,PDFLib){
+    if(f instanceof PDFLib.PDFCheckBox)return'checkbox';
+    if(f instanceof PDFLib.PDFRadioGroup)return'radio';
+    if(f instanceof PDFLib.PDFDropdown)return'dropdown';
+    if(f instanceof PDFLib.PDFOptionList)return'dropdown';
+    if(f instanceof PDFLib.PDFTextField)return'text';
+    return null; // pushbuttons and other non-fillable widgets
+}
+
+function _humanizePdfFieldName(name){
+    if(!name)return'Field';
+    var s=String(name).split(/[._\[\]]/).pop()||name;
+    s=s.replace(/([a-z])([A-Z])/g,'$1 $2').replace(/[_-]+/g,' ').trim();
+    return s?s.charAt(0).toUpperCase()+s.slice(1):name;
+}
+
+function _pdfFieldRowHtml(field){
+    var types={text:'Text',checkbox:'Checkbox',dropdown:'Dropdown',radio:'Radio',signature:'Signature'};
+    var h='<div class="pdfFRow" style="border:1px solid var(--s200);border-radius:var(--r);padding:8px 10px;margin-bottom:6px;background:var(--s50);display:flex;gap:6px;align-items:center;">';
+    h+='<input class="fi pdfFRowLabel" style="flex:1;font-size:.82rem;padding:5px 8px" value="'+esc(field.label||'')+'" placeholder="Field label">';
+    h+='<select class="fs pdfFRowType" style="flex:0 0 110px;font-size:.78rem;padding:5px 6px">';
+    Object.entries(types).forEach(function(kv){h+='<option value="'+kv[0]+'"'+(field.type===kv[0]?' selected':'')+'>'+kv[1]+'</option>';});
+    h+='</select>';
+    h+='<label style="display:flex;align-items:center;gap:3px;font-size:.72rem;color:var(--s500);white-space:nowrap"><input type="checkbox" class="pdfFRowReq"'+(field.required?' checked':'')+' style="accent-color:var(--me)">Req</label>';
+    h+='<span style="font-size:.68rem;color:var(--s400);white-space:nowrap;max-width:110px;overflow:hidden;text-overflow:ellipsis;" title="'+esc(field.name||'')+'">p'+((field.page||0)+1)+' · '+esc(field.name||'')+'</span>';
+    h+='</div>';
+    return h;
+}
+
+// One modal handles both the post-upload review (isNew:true) and re-editing
+// an already-saved PDF form's fields later (isNew:false) — Name/Description/
+// Required live at the top either way, field rows below. This is metadata
+// review, not placement: no canvas, no dragging, the detected page/rect
+// stay exactly as pdf-lib found them.
+function _openPdfFieldReview(){
+    var d=_pdfFormDraft;if(!d)return;
+    var h='<div class="me-modal-form">';
+    h+=ff('Form Name','lfpRevName',d.name,'text');
+    h+=ff('Description (shown to parents)','lfpRevDesc',d.description,'textarea');
+    h+=ff('Required?','lfpRevReq',d.required?'Yes — required':'No — optional','select',['Yes — required','No — optional']);
+    h+='<p style="font-size:.8rem;color:var(--s500);margin:10px 0;line-height:1.5;">Detected '+d.fields.length+' field'+(d.fields.length===1?'':'s')+' across '+d.pageCount+' page'+(d.pageCount===1?'':'s')+'. Rename any field, reclassify a signature line as <strong>Signature</strong>, and mark which are required.</p>';
+    h+='<div id="pdfFieldReviewList">';
+    d.fields.forEach(function(f){h+=_pdfFieldRowHtml(f);});
+    h+='</div></div>';
+    showModal(d.isNew?'Review Detected Fields':'Edit PDF Form Fields',h,function(){
+        var name=document.getElementById('lfpRevName').value.trim();
+        if(!name){toast('Enter a form name','error');return;}
+        d.name=name;
+        d.description=document.getElementById('lfpRevDesc').value.trim();
+        d.required=document.getElementById('lfpRevReq').value.startsWith('Yes');
+        _readPdfFieldRowsInto(d.fields);
+        var btn=document.getElementById('dynModalSave');
+        if(btn){btn.disabled=true;btn.textContent='Saving…';}
+        _savePdfFormDraft(d).then(function(){
+            closeModal('dynModal');
+            renderForms();switchFormsTab('link');
+            toast(d.isNew?'PDF form added':'PDF form updated');
+            _pdfFormDraft=null;
+        }).catch(function(e){
+            console.error('[PDF Forms] save failed',e);
+            toast('Could not save that form — check your connection and try again','error');
+            if(btn){btn.disabled=false;btn.textContent='Save';}
+        });
+    });
+}
+
+function _readPdfFieldRowsInto(fields){
+    var rows=document.querySelectorAll('#pdfFieldReviewList .pdfFRow');
+    rows.forEach(function(row,i){
+        if(!fields[i])return;
+        var label=row.querySelector('.pdfFRowLabel');
+        var type=row.querySelector('.pdfFRowType');
+        var req=row.querySelector('.pdfFRowReq');
+        if(label&&label.value.trim())fields[i].label=label.value.trim();
+        if(type)fields[i].type=type.value;
+        if(req)fields[i].required=req.checked;
+    });
+}
+
+function _pdfStorageClient(){
+    return window.CampistryDB&&window.CampistryDB.getClient?window.CampistryDB.getClient():window.supabase;
+}
+
+// New forms upload the PDF bytes to Storage (camp-pdf-forms, staff-insert-only
+// RLS — migration 110) and push a fresh linkForms.digital[] entry. Re-editing
+// an existing PDF form's fields never re-uploads — the template's already in
+// Storage, only fieldSchema/name/description/required change.
+function _savePdfFormDraft(d){
+    var campId=window.CampistryDB&&window.CampistryDB.getCampId?window.CampistryDB.getCampId():(window.getCampId?window.getCampId():null);
+    if(!campId)return Promise.reject(new Error('no_camp_id'));
+    if(!d.isNew){
+        var item=linkForms[d.itemType][d.itemIndex];
+        if(!item)return Promise.reject(new Error('item_not_found'));
+        item.name=d.name;item.description=d.description;item.required=d.required;
+        item.fieldSchema=d.fields;
+        saveLinkForms();
+        return Promise.resolve();
+    }
+    var client=_pdfStorageClient();
+    if(!client||!client.storage)return Promise.reject(new Error('no_storage_client'));
+    var formId='lfd_'+Date.now();
+    var path=campId+'/templates/'+formId+'.pdf';
+    return d.file.arrayBuffer().then(function(buf){
+        return client.storage.from('camp-pdf-forms').upload(path,new Blob([buf],{type:'application/pdf'}),{contentType:'application/pdf',upsert:false});
+    }).then(function(res){
+        if(res&&res.error)throw new Error(res.error.message);
+        linkForms.digital.push({
+            id:formId,name:d.name,description:d.description,required:d.required,
+            sourceType:'pdf',templatePdfPath:path,fieldSchema:d.fields,pageCount:d.pageCount,
+            created:Date.now()
+        });
+        saveLinkForms();
+    });
+}
+
 function editLinkItem(type,idx){
     var item=linkForms[type][idx];if(!item)return;
+    if(type==='digital'&&item.sourceType==='pdf'){
+        _pdfFormDraft={
+            isNew:false,itemType:type,itemIndex:idx,
+            name:item.name,description:item.description||'',required:!!item.required,
+            fields:(item.fieldSchema||[]).map(function(f){return Object.assign({},f);}),
+            pageCount:item.pageCount||1
+        };
+        _openPdfFieldReview();
+        return;
+    }
     var isDoc=type==='documents';
     var isDigital=type==='digital';
     var h='<div class="me-modal-form">';
@@ -13704,6 +13916,7 @@ window.CampistryMe={
     addForm:addForm,deleteForm:deleteForm,viewFormResponses:viewFormResponses,
     switchFormsTab:switchFormsTab,
     addLinkDigitalForm:addLinkDigitalForm,addLinkPrintForm:addLinkPrintForm,addLinkDocument:addLinkDocument,
+    addLinkPdfForm:addLinkPdfForm,
     editLinkItem:editLinkItem,deleteLinkItem:deleteLinkItem,
     // Reports
     exportRosterReport:exportRosterReport,exportFamilyReport:exportFamilyReport,printFamilies:printFamilies,
