@@ -150,6 +150,61 @@ window.CampistryGoNeighborhoods = (function () {
         return { elements: out };
     }
 
+    // Even compacted, a Lakewood-sized graph is several megabytes — far past the
+    // ~5MB localStorage budget the camp already spends most of on its own data
+    // (measured: 2.7MB in use before the graph). IndexedDB has room for it. A
+    // tiny dedicated store keeps this away from the shared LocalCacheIDB schema.
+    const IDB_NAME = 'campistry_go_roadgraph';
+    const IDB_STORE = 'graphs';
+    function _idbOpen() {
+        return new Promise((resolve, reject) => {
+            if (typeof indexedDB === 'undefined') return reject(new Error('no indexedDB'));
+            const req = indexedDB.open(IDB_NAME, 1);
+            req.onupgradeneeded = (e) => {
+                const db = e.target.result;
+                if (!db.objectStoreNames.contains(IDB_STORE)) db.createObjectStore(IDB_STORE);
+            };
+            req.onsuccess = () => resolve(req.result);
+            req.onerror = () => reject(req.error);
+        });
+    }
+    async function _idbGet(key) {
+        try {
+            const db = await _idbOpen();
+            return await new Promise((resolve) => {
+                const r = db.transaction(IDB_STORE, 'readonly').objectStore(IDB_STORE).get(key);
+                r.onsuccess = () => resolve(r.result || null);
+                r.onerror = () => resolve(null);
+            });
+        } catch (_) { return null; }
+    }
+    async function _idbSet(key, value) {
+        try {
+            const db = await _idbOpen();
+            return await new Promise((resolve) => {
+                const r = db.transaction(IDB_STORE, 'readwrite').objectStore(IDB_STORE).put(value, key);
+                r.onsuccess = () => resolve(true);
+                r.onerror = () => resolve(false);
+            });
+        } catch (_) { return false; }
+    }
+    async function _loadRoadGraphCacheAsync(key) {
+        const entry = await _idbGet(key);
+        if (entry && entry.data && (Date.now() - (entry.savedAt || 0)) <= ROAD_GRAPH_TTL_MS) {
+            return entry.data;
+        }
+        return _loadRoadGraphCache(key); // legacy localStorage entries
+    }
+    async function _saveRoadGraphCacheAsync(key, data) {
+        const compact = _compactOverpass(data);
+        if (await _idbSet(key, { savedAt: Date.now(), data: compact })) {
+            console.log('[Go-NH] Road graph cached in IndexedDB (' +
+                (compact.elements || []).length + ' elements)');
+            return true;
+        }
+        return _saveRoadGraphCache(key, data);
+    }
+
     function _saveRoadGraphCache(key, data) {
         data = _compactOverpass(data);
         try {
@@ -223,7 +278,7 @@ window.CampistryGoNeighborhoods = (function () {
         //    month, so a 30-day-old cached graph is fine. This makes the
         //    pipeline survive Overpass outages — once cached, neighborhood
         //    mode keeps working even when the API is down.
-        const cached = _loadRoadGraphCache(cacheKey);
+        const cached = await _loadRoadGraphCacheAsync(cacheKey);
         if (cached) {
             console.log('[Go-NH] Road graph: using cached copy (' +
                 (cached.elements?.length || 0) + ' elements, bbox ' + cacheKey + ')');
@@ -238,7 +293,7 @@ window.CampistryGoNeighborhoods = (function () {
         //    server-side). Cache and return on success.
         const data = await fetchOverpassViaProxy(query, options);
         if (data) {
-            _saveRoadGraphCache(cacheKey, data);
+            await _saveRoadGraphCacheAsync(cacheKey, data);
             return data;
         }
 
@@ -252,10 +307,11 @@ window.CampistryGoNeighborhoods = (function () {
         // failure is right when we already hold a cached graph — but with no cache
         // the alternative isn't "slightly slower", it's silently routing the whole
         // camp on the much worse fallback path. Wait properly in that case.
-        const _haveAnyCache = (() => {
-            try { return !!localStorage.getItem(ROAD_GRAPH_CACHE_KEY); } catch (_) { return false; }
-        })();
-        const DIRECT_TIMEOUT_MS = _haveAnyCache ? 20000 : 60000;
+        // We only get here after the cache missed for this bbox, so there is no
+        // fallback to fail fast to: the alternative to waiting is routing the
+        // whole camp on the much worse path. Overpass under load answers in
+        // 30-60s, and a 20s abort was being reported as "all mirrors failed".
+        const DIRECT_TIMEOUT_MS = 60000;
         for (const url of endpoints) {
             try {
                 const controller = new AbortController();
@@ -265,7 +321,7 @@ window.CampistryGoNeighborhoods = (function () {
                 if (!resp.ok) continue;
                 const direct = await resp.json();
                 if (options.verbose) console.log('[Go-NH] Overpass (direct): ' + (direct.elements?.length || 0) + ' elements from ' + url);
-                _saveRoadGraphCache(cacheKey, direct);
+                await _saveRoadGraphCacheAsync(cacheKey, direct);
                 return direct;
             } catch (e) {
                 if (options.verbose) console.warn('[Go-NH] Overpass error at ' + url + ':', e.message);
