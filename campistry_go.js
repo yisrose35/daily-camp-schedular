@@ -1335,13 +1335,38 @@ let _toastTimer = null;
         return warnings;
     }
 
+    // Longest time any ONE child sits on each bus. This is the number a school is
+    // judged on, and it was previously only visible in the browser console — so a
+    // 70-minute route looked exactly like a 20-minute one on screen.
+    const RIDE_WARN_MIN = 60;
+    function getRideWarnings() {
+        if (!_generatedRoutes) return [];
+        const out = [];
+        _generatedRoutes.forEach(sr => {
+            (sr.routes || []).forEach(r => {
+                const rides = (r.stops || []).map(s => s._rideTimeMin).filter(Number.isFinite);
+                if (!rides.length) return;
+                const worst = Math.max(...rides);
+                if (worst <= RIDE_WARN_MIN) return;
+                const kids = (r.stops || []).reduce((a, s) =>
+                    a + ((s.campers || []).length && (s._rideTimeMin > RIDE_WARN_MIN) ? s.campers.length : 0), 0);
+                out.push({ busName: r.busName, busColor: r.busColor,
+                           shift: (sr.shift && sr.shift.label) || 'Shift', worst, kids });
+            });
+        });
+        return out.sort((a, b) => b.worst - a.worst);
+    }
+
     function renderCapacityWarnings() {
         const el = document.getElementById('capacityWarnings');
         if (!el) return;
         const warnings = getCapacityWarnings();
-        if (!warnings.length) { el.style.display = 'none'; return; }
+        const rides = getRideWarnings();
+        if (!warnings.length && !rides.length) { el.style.display = 'none'; return; }
         el.style.display = '';
-        el.innerHTML = warnings.map(w => '<div style="display:flex;align-items:center;gap:.5rem;padding:.5rem .75rem;background:var(--red-50);border:1px solid var(--red-100);border-radius:var(--radius-sm);margin-bottom:.375rem;font-size:.8125rem;"><span style="width:10px;height:10px;border-radius:50%;background:' + esc(w.busColor) + ';flex-shrink:0;"></span><strong style="color:var(--red-600);">⚠ ' + esc(w.busName) + '</strong> (' + esc(w.shift) + ') — <span>' + w.actual + ' campers, only ' + w.max + ' seats (' + w.over + ' over)</span></div>').join('');
+        const capHtml = warnings.map(w => '<div style="display:flex;align-items:center;gap:.5rem;padding:.5rem .75rem;background:var(--red-50);border:1px solid var(--red-100);border-radius:var(--radius-sm);margin-bottom:.375rem;font-size:.8125rem;"><span style="width:10px;height:10px;border-radius:50%;background:' + esc(w.busColor) + ';flex-shrink:0;"></span><strong style="color:var(--red-600);">⚠ ' + esc(w.busName) + '</strong> (' + esc(w.shift) + ') — <span>' + w.actual + ' campers, only ' + w.max + ' seats (' + w.over + ' over)</span></div>').join('');
+        const rideHtml = rides.map(w => '<div style="display:flex;align-items:center;gap:.5rem;padding:.5rem .75rem;background:var(--amber-50,#fffbeb);border:1px solid var(--amber-200,#fde68a);border-radius:var(--radius-sm);margin-bottom:.375rem;font-size:.8125rem;"><span style="width:10px;height:10px;border-radius:50%;background:' + esc(w.busColor) + ';flex-shrink:0;"></span><strong style="color:var(--amber-700,#b45309);">⏱ ' + esc(w.busName) + '</strong> (' + esc(w.shift) + ') — <span>longest ride ' + w.worst + ' min' + (w.kids ? ', ' + w.kids + ' child' + (w.kids === 1 ? '' : 'ren') + ' over ' + RIDE_WARN_MIN + ' min' : '') + '. A district far from camp needs either fewer children on the bus or another bus on that run.</span></div>').join('');
+        el.innerHTML = capHtml + rideHtml;
     }
 
     // =========================================================================
