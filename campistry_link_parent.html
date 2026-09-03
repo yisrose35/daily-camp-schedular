@@ -4976,6 +4976,22 @@ window.addEventListener('storage', function(e) {
         });
     };
 
+    // Where the "confirm your email" link should land. location.origin is
+    // correct on the web (whatever domain this page is actually being
+    // served from), but inside the native app it's the internal
+    // capacitor:// scheme — meaningless when the link is opened from a
+    // phone's email app in a real browser. Falls back to the same real
+    // web origin campistry_link_capacitor.js already uses for every
+    // other case of "native needs a genuine https:// URL."
+    function _lkEmailRedirect() {
+        try {
+            if (window.Capacitor && window.Capacitor.isNativePlatform && window.Capacitor.isNativePlatform()) {
+                return (window.__CAMPISTRY_WEB_URL__ || 'https://campistry.org') + '/campistry_link_parent.html';
+            }
+        } catch (_) {}
+        return location.origin + location.pathname;
+    }
+
     window.parentSignUp = function() {
         var email = (document.getElementById('paEmail')||{}).value||'';
         var pass  = (document.getElementById('paPass')||{}).value||'';
@@ -4984,7 +5000,7 @@ window.addEventListener('storage', function(e) {
         if (pass !== pass2) { _setMsg('Passwords do not match.'); return; }
         if (pass.length < 6) { _setMsg('Password must be at least 6 characters.'); return; }
         _setMsg('Creating account…', '#64748B');
-        db.auth.signUp({email:email, password:pass}).then(function(res) {
+        db.auth.signUp({email:email, password:pass, options:{emailRedirectTo:_lkEmailRedirect()}}).then(function(res) {
             if (res.error) {
                 var m = res.error.message || '';
                 if (m.toLowerCase().indexOf('already') !== -1) {

@@ -27,6 +27,22 @@
     const $ = id => document.getElementById(id);
     const Bio = window.CampistryLiteBio;
 
+    // Where the "confirm your email" link should land. location.origin is
+    // correct on the web (whatever domain this page is actually served
+    // from), but inside the native app it's the internal capacitor://
+    // scheme — meaningless once the link is opened from a phone's email
+    // app in a real browser. Falls back to the same real web origin
+    // campistry_lite_capacitor.js already uses for every other case of
+    // "native needs a genuine https:// URL."
+    function emailRedirectTo() {
+        try {
+            if (window.Capacitor?.isNativePlatform?.()) {
+                return (window.__CAMPISTRY_WEB_URL__ || 'https://campistry.org') + '/campistry_lite_login.html';
+            }
+        } catch (_) {}
+        return location.origin + location.pathname;
+    }
+
     // "Biometrics" rather than naming a sensor: the same phone may use a face,
     // a fingerprint or an iris, and WebAuthn never tells us which the platform
     // authenticator will actually ask for. Promising the wrong one is worse
@@ -293,7 +309,7 @@
 
                 busy(true);
                 try {
-                    const { data, error } = await sb.auth.signUp({ email, password });
+                    const { data, error } = await sb.auth.signUp({ email, password, options: { emailRedirectTo: emailRedirectTo() } });
                     if (error) throw error;
                     if (!data?.session) {
                         // This project's Auth settings require email confirmation —
