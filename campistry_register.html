@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <title>Camp Registration</title>
-    <link rel="stylesheet" href="campistry-unified.css?v=20260903-04">
+    <link rel="stylesheet" href="campistry-unified.css?v=20260903-03">
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <link href="https://fonts.googleapis.com/css2?family=DM+Sans:opsz,wght@9..40,400;9..40,500;9..40,600;9..40,700;9..40,800&display=swap" rel="stylesheet">
 <style>
@@ -130,6 +130,17 @@ body{font-family:var(--font);background:var(--s50);color:var(--s800);-webkit-fon
 <div class="fr3"><div class="fg"><label class="fl">City<span class="rq">*</span></label><input class="fi" id="rCi"></div><div class="fg"><label class="fl">State</label><input class="fi" id="rSa" value="NY"></div><div class="fg"><label class="fl">ZIP<span class="rq">*</span></label><input class="fi" id="rZp"></div></div>
 </div>
 
+<!-- Summer Address -->
+<div class="cd" id="summerAddrCard"><div class="ct"><svg viewBox="0 0 24 24"><path d="M21 10c0 7-9 13-9 13s-9-6-9-13a9 9 0 0118 0z"/><circle cx="12" cy="10" r="3"/></svg>Summer Address</div>
+<div class="fg"><label class="fl" style="display:flex;align-items:center;gap:7px;cursor:pointer;font-weight:400"><input type="checkbox" id="rSummerSame" checked onchange="regToggleSummer()"> Same as home address</label>
+<p style="font-size:.75rem;color:var(--s400);margin:2px 0 0">Where the family is during the season — a bungalow, a rental, or with relatives.</p></div>
+<div id="rSummerBlock" style="display:none">
+<div class="fg"><label class="fl">Summer Street</label><input class="fi" id="rSumSt"></div>
+<div class="fr3"><div class="fg"><label class="fl">Summer City</label><input class="fi" id="rSumCi"></div><div class="fg"><label class="fl">Summer State</label><input class="fi" id="rSumSa"></div><div class="fg"><label class="fl">Summer ZIP</label><input class="fi" id="rSumZp"></div></div>
+<div class="fg"><label class="fl">Summer Phone</label><input type="tel" class="fi" id="rSumPh"></div>
+</div>
+</div>
+
 <!-- Emergency -->
 <div class="cd" id="emCard"><div class="ct"><svg viewBox="0 0 24 24"><path d="M15.05 5A5 5 0 0119 8.95M15.05 1A9 9 0 0123 8.94"/><path d="M22 16.92v3a2 2 0 01-2.18 2A19.79 19.79 0 012.12 2.18 2 2 0 014.11 2h3"/></svg>Emergency Contact</div>
 <div class="fr"><div class="fg"><label class="fl">Name<span class="rq">*</span></label><input class="fi" id="rEmN"></div><div class="fg"><label class="fl">Relationship</label><input class="fi" id="rEmR" placeholder="e.g. Uncle"></div></div>
@@ -235,12 +246,12 @@ body{font-family:var(--font);background:var(--s50);color:var(--s800);-webkit-fon
 <!-- config.js injects window.__CAMPISTRY_SUPABASE__ (url + anon key). Without it
      supabase_client.js can't initialize a client, so the register page had NO
      cloud access at all and applications never left the device. -->
-<script src="config.js?v=20260903-04" onerror="console.log('[Register] Supabase config (config.js) not loaded — local only')"></script>
-<script src="supabase-js@2.js?v=20260903-04" onerror="console.log('[Register] Supabase client not loaded — local only')"></script>
-<script src="supabase_client.js?v=20260903-04" onerror="console.log('[Register] Supabase config not loaded — local only')"></script>
-<script src="local_cache_idb.js?v=20260903-04" onerror="console.log('[Register] LocalCacheIDB not loaded — falling back to localStorage')"></script>
-<script src="integration_hooks.js?v=20260903-04" onerror="console.log('[Register] Integration hooks not loaded — local only')"></script>
-<script src="campistry_payments.js?v=20260903-04" onerror="console.log('[Register] Payment policy not loaded — showing the built-in options')"></script>
+<script src="config.js?v=20260903-03" onerror="console.log('[Register] Supabase config (config.js) not loaded — local only')"></script>
+<script src="supabase-js@2.js?v=20260903-03" onerror="console.log('[Register] Supabase client not loaded — local only')"></script>
+<script src="supabase_client.js?v=20260903-03" onerror="console.log('[Register] Supabase config not loaded — local only')"></script>
+<script src="local_cache_idb.js?v=20260903-03" onerror="console.log('[Register] LocalCacheIDB not loaded — falling back to localStorage')"></script>
+<script src="integration_hooks.js?v=20260903-03" onerror="console.log('[Register] Integration hooks not loaded — local only')"></script>
+<script src="campistry_payments.js?v=20260903-03" onerror="console.log('[Register] Payment policy not loaded — showing the built-in options')"></script>
 <script>
 // Keep the payment options on this form in step with the camp's policy. The
 // markup above is the default (credit yes, debit no); this only has to do
@@ -302,6 +313,7 @@ var FIELD_ELEMENT_MAP={
     first:'rF',last:'rL',dob:'rDob',gender:'rGen',school:'rSch',schoolGrade:'rSchGr',teacher:'rTch',photo:'rPhotoData',
     parentName:'rPar',parentRelation:'rRel',parentPhone:'rPh',parentEmail:'rEm',parent2Name:'rP2',parent2Relation:'rP2Rel',parent2Phone:'rP2Ph',parent2Email:'rP2Em',
     street:'rSt',city:'rCi',state:'rSa',zip:'rZp',
+    summerStreet:'rSumSt',summerCity:'rSumCi',summerState:'rSumSa',summerZip:'rSumZp',summerPhone:'rSumPh',
     emName:'rEmN',emRelation:'rEmR',emPhone:'rEmPh',
     allergies:'rAlg',medications:'rMed',dietary:'rDit',medicalNotes:'rMdN',
     bunkmate:'rBnk',separate:'rSep',shirt:'rShirt',source:'rSrc',notes:'rNotes'
@@ -310,6 +322,7 @@ var FIELD_DEFAULT_LABEL={
     first:'First Name',last:'Last Name',dob:'Date of Birth',gender:'Gender',school:'School Name',schoolGrade:'School Grade',teacher:'Teacher',photo:'Camper Photo',
     parentName:'Parent / Guardian Name',parentRelation:'Relationship',parentPhone:'Phone',parentEmail:'Email',parent2Name:'Second Parent / Guardian',parent2Relation:'Relationship',parent2Phone:'Second Parent Phone',parent2Email:'Second Parent Email',
     street:'Street',city:'City',state:'State',zip:'ZIP',
+    summerStreet:'Summer Street',summerCity:'Summer City',summerState:'Summer State',summerZip:'Summer ZIP',summerPhone:'Summer Phone',
     emName:'Emergency Contact Name',emRelation:'Relationship',emPhone:'Phone',
     allergies:'Allergies',medications:'Medications',dietary:'Dietary Restrictions',medicalNotes:'Additional Medical Notes',
     bunkmate:'Bunkmate Request',separate:'Separation Request',shirt:'T-Shirt Size',source:'How did you hear about us?',notes:'Additional Notes'
@@ -320,6 +333,7 @@ var FIELD_REQUIRED_STATE={
     first:true,last:true,dob:true,gender:false,school:false,schoolGrade:false,teacher:false,photo:false,
     parentName:true,parentRelation:false,parentPhone:true,parentEmail:true,parent2Name:false,parent2Relation:false,parent2Phone:false,parent2Email:false,
     street:true,city:true,state:false,zip:true,
+    summerStreet:false,summerCity:false,summerState:false,summerZip:false,summerPhone:false,
     emName:true,emRelation:false,emPhone:true,
     allergies:false,medications:false,dietary:false,medicalNotes:false,
     bunkmate:false,separate:false,shirt:false,source:false,notes:false
@@ -334,6 +348,7 @@ var FIELD_TO_SECTION={
     first:'camper',last:'camper',dob:'camper',gender:'camper',school:'camper',schoolGrade:'camper',teacher:'camper',photo:'camper',
     parentName:'parent',parentRelation:'parent',parentPhone:'parent',parentEmail:'parent',parent2Name:'parent',parent2Relation:'parent',parent2Phone:'parent',parent2Email:'parent',
     street:'address',city:'address',state:'address',zip:'address',
+    summerStreet:'summerAddress',summerCity:'summerAddress',summerState:'summerAddress',summerZip:'summerAddress',summerPhone:'summerAddress',
     emName:'emergency',emRelation:'emergency',emPhone:'emergency',
     allergies:'medical',medications:'medical',dietary:'medical',medicalNotes:'medical',
     bunkmate:'preferences',separate:'preferences',shirt:'preferences',source:'preferences',notes:'preferences'
@@ -342,7 +357,7 @@ var FIELD_TO_SECTION={
 // Baseline required-state this page shipped with — applyFieldConfig resets
 // to this before applying overrides, so it's safe to call repeatedly with a
 // changing draft config (live preview) rather than only ever adding hides.
-var FIELD_REQUIRED_DEFAULT={first:true,last:true,dob:true,gender:false,school:false,schoolGrade:false,teacher:false,photo:false,parentName:true,parentRelation:false,parentPhone:true,parentEmail:true,parent2Name:false,parent2Relation:false,parent2Phone:false,parent2Email:false,street:true,city:true,state:false,zip:true,emName:true,emRelation:false,emPhone:true,allergies:false,medications:false,dietary:false,medicalNotes:false,bunkmate:false,separate:false,shirt:false,source:false,notes:false};
+var FIELD_REQUIRED_DEFAULT={first:true,last:true,dob:true,gender:false,school:false,schoolGrade:false,teacher:false,photo:false,parentName:true,parentRelation:false,parentPhone:true,parentEmail:true,parent2Name:false,parent2Relation:false,parent2Phone:false,parent2Email:false,street:true,city:true,state:false,zip:true,summerStreet:false,summerCity:false,summerState:false,summerZip:false,summerPhone:false,emName:true,emRelation:false,emPhone:true,allergies:false,medications:false,dietary:false,medicalNotes:false,bunkmate:false,separate:false,shirt:false,source:false,notes:false};
 function applyFieldConfig(fields,sectionsDisabled){
     fields=fields||{}; sectionsDisabled=sectionsDisabled||{};
     Object.keys(FIELD_ELEMENT_MAP).forEach(function(fid){
@@ -371,8 +386,8 @@ function applyFieldConfig(fields,sectionsDisabled){
 // (always pinned right before Signature) are not part of the reorderable
 // set. DEFAULT_SECTION_ORDER matches this page's shipped layout exactly
 // so applying it with no customization is a visual no-op.
-var SECTION_ORDER_MAP={camper:'camperCard',siblings:'sibCard',parent:'parentCard',address:'addrCard',emergency:'emCard',medical:'medCard',preferences:'prefCard',documents:'docCard',payment:'payCard',signature:'sigCard'};
-var DEFAULT_SECTION_ORDER=['camper','siblings','parent','address','emergency','medical','preferences','documents','payment','signature'];
+var SECTION_ORDER_MAP={camper:'camperCard',siblings:'sibCard',parent:'parentCard',address:'addrCard',summerAddress:'summerAddrCard',emergency:'emCard',medical:'medCard',preferences:'prefCard',documents:'docCard',payment:'payCard',signature:'sigCard'};
+var DEFAULT_SECTION_ORDER=['camper','siblings','parent','address','summerAddress','emergency','medical','preferences','documents','payment','signature'];
 function applySectionOrder(order){
     order=(order&&order.length)?order:DEFAULT_SECTION_ORDER;
     var anchor=document.getElementById('formErr');
@@ -416,6 +431,10 @@ function esc(s){
 }
 function v(id){return(document.getElementById(id)?.value||'').trim()}
 function fm(n){return'$'+Number(n||0).toLocaleString()}
+window.regToggleSummer=function(){
+    var on=document.getElementById('rSummerSame'),b=document.getElementById('rSummerBlock');
+    if(b)b.style.display=(on&&on.checked)?'none':'';
+};
 
 // ─── STATUS TRACKER ──────────────────────────────────────────
 var params=new URLSearchParams(window.location.search);
@@ -493,7 +512,7 @@ async function showStatus(id){
 
 // ─── LOAD DATA ───────────────────────────────────────────────
 var _baseCampNm=''; // camp name shown when no custom welcome message is set
-var SEC_MAP={camper:'camperCard',parent:'parentCard',address:'addrCard',emergency:'emCard',medical:'medCard',preferences:'prefCard',documents:'docCard',payment:'payCard',siblings:'sibCard',signature:'sigCard'};
+var SEC_MAP={camper:'camperCard',parent:'parentCard',address:'addrCard',summerAddress:'summerAddrCard',emergency:'emCard',medical:'medCard',preferences:'prefCard',documents:'docCard',payment:'payCard',siblings:'sibCard',signature:'sigCard'};
 // Which built-in sections a Custom Question can be attached to (any section
 // with its own labeled field group on the form) — documents/payment/
 // signature/siblings render structured blocks, not a plain fg loop, so a
@@ -947,6 +966,8 @@ window.submitApp=async function(){
     // Validate — data-driven off FIELD_REQUIRED_STATE/FIELD_ENABLED_STATE so a
     // camp's Advanced-tab required/hidden overrides are enforced here too.
     var first=v('rF'),last=v('rL'),dob=v('rDob'),par=v('rPar'),ph=v('rPh'),em=v('rEm'),st=v('rSt'),ci=v('rCi'),zp=v('rZp'),emN=v('rEmN'),emPh=v('rEmPh');
+    var _summerSameEl=document.getElementById('rSummerSame');
+    var _summerSame=_summerSameEl?!!_summerSameEl.checked:true;
     for(var _fid in FIELD_ELEMENT_MAP){
         if(FIELD_ENABLED_STATE[_fid]===false)continue;
         if(!FIELD_REQUIRED_STATE[_fid])continue;
@@ -1025,6 +1046,12 @@ window.submitApp=async function(){
                 parentName:par,parentRelation:v('rRel'),parentPhone:ph,parentEmail:em,
                 parent2Name:v('rP2'),parent2Relation:v('rP2Rel'),parent2Phone:v('rP2Ph'),parent2Email:v('rP2Em'),
                 street:st,city:ci,state:v('rSa'),zip:zp,
+                summerSameAsHome:_summerSame,
+                summerStreet:_summerSame?st:v('rSumSt'),
+                summerCity:_summerSame?ci:v('rSumCi'),
+                summerState:_summerSame?v('rSa'):v('rSumSa'),
+                summerZip:_summerSame?zp:v('rSumZp'),
+                summerPhone:v('rSumPh'),
                 emergencyName:emN,emergencyPhone:emPh,emergencyRel:v('rEmR'),
                 allergies:v('rAlg'),medications:v('rMed'),dietary:v('rDit'),medicalNotes:v('rMdN'),
                 bunkmate:v('rBnk'),separateFrom:v('rSep'),tshirtSize:v('rShirt'),source:v('rSrc'),notes:v('rNotes'),

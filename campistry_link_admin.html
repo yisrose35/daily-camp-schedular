@@ -8,8 +8,8 @@
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link href="https://fonts.googleapis.com/css2?family=Roboto:wght@400;500;700;900&family=Roboto+Flex:opsz,wght@8..144,400;8..144,500;8..144,700;8..144,900&display=swap" rel="stylesheet">
-    <link rel="stylesheet" href="campistry-unified.css?v=20260903-04">
-    <link rel="stylesheet" href="campistry_link.css?v=20260903-04">
+    <link rel="stylesheet" href="campistry-unified.css?v=20260903-03">
+    <link rel="stylesheet" href="campistry_link.css?v=20260903-03">
     <!-- Splash screen — inline so it appears before any external CSS -->
     <style>
         #link-splash {
@@ -226,7 +226,7 @@
         <div class="lk-avatar" id="adminAvatar">CA</div>
     </div>
 </header>
-<script src="campistry_app_switcher.js?v=20260903-04"></script>
+<script src="campistry_app_switcher.js?v=20260903-03"></script>
 
 <!-- SIDEBAR BACKDROP (mobile) -->
 <div class="lk-sidebar-backdrop" id="sidebarBackdrop"></div>
@@ -1088,24 +1088,24 @@
 </div>
 
 <!-- Scripts -->
-<script src="offline_data.js?v=20260903-04" onerror=""></script>
-<script src="demo_mode.js?v=20260903-04"></script>
-<script src="config.js?v=20260903-04"></script>
-<script src="supabase-js@2.js?v=20260903-04"></script>
-<script src="supabase_client.js?v=20260903-04"></script>
-<script src="campistry_security.js?v=20260903-04"></script>
-<script src="integration_hooks.js?v=20260903-04"></script>
-<script src="campistry_cloud_bootstrap.js?v=20260903-04"></script>
-<script src="campistry_broadcast_core.js?v=20260903-04"></script>
+<script src="offline_data.js?v=20260903-03" onerror=""></script>
+<script src="demo_mode.js?v=20260903-03"></script>
+<script src="config.js?v=20260903-03"></script>
+<script src="supabase-js@2.js?v=20260903-03"></script>
+<script src="supabase_client.js?v=20260903-03"></script>
+<script src="campistry_security.js?v=20260903-03"></script>
+<script src="integration_hooks.js?v=20260903-03"></script>
+<script src="campistry_cloud_bootstrap.js?v=20260903-03"></script>
+<script src="campistry_broadcast_core.js?v=20260903-03"></script>
 <!-- Branding/watermark renderer — must load BEFORE link_data, which seeds and
      normalizes settings.branding through it on store load. -->
-<script src="campistry_link_branding.js?v=20260903-04"></script>
-<script src="campistry_link_data.js?v=20260903-04"></script>
-<script src="face_match_core.js?v=20260903-04"></script>
-<script src="campistry_face_shared.js?v=20260903-04"></script>
-<script src="campistry_face_engine_v2.js?v=20260903-04"></script>
-<script src="campistry_link_photos.js?v=20260903-04"></script>
-<script src="campistry_link_export.js?v=20260903-04"></script>
+<script src="campistry_link_branding.js?v=20260903-03"></script>
+<script src="campistry_link_data.js?v=20260903-03"></script>
+<script src="face_match_core.js?v=20260903-03"></script>
+<script src="campistry_face_shared.js?v=20260903-03"></script>
+<script src="campistry_face_engine_v2.js?v=20260903-03"></script>
+<script src="campistry_link_photos.js?v=20260903-03"></script>
+<script src="campistry_link_export.js?v=20260903-03"></script>
 <script>
 'use strict';
 
@@ -3820,7 +3820,7 @@ function _loadCloudSubmissions(cb) {
     if (!db) { if (cb) cb(); return; }
     db.client
         .from('link_form_responses')
-        .select('id, form_id, form_name, mode, camper_name, camper_id, parent_name, parent_email, division, grade, bunk, answers, signature_data, file_name, created_at')
+        .select('id, form_id, form_name, mode, camper_name, camper_id, parent_name, parent_email, division, grade, bunk, answers, signature_data, file_name, filled_pdf_path, created_at')
         .eq('camp_id', db.campId)
         .order('created_at', { ascending: false })
         .limit(2000)
@@ -3847,6 +3847,7 @@ function _loadFormSubmissions() {
             date: _fmtSubDate(r.created_at), submittedAt: r.created_at,
             filename: r.mode === 'digital' ? null : (r.file_name || 'upload'),
             values: r.answers || {}, signatureDataUrl: r.signature_data || null,
+            filledPdfPath: r.filled_pdf_path || null,
             mode: r.mode || 'upload', _cloud: true
         };
     });
@@ -3867,6 +3868,30 @@ function _loadFormSubmissions() {
     docSubmissions.sort(function(a, b) { return new Date(b.submittedAt || 0) - new Date(a.submittedAt || 0); });
 }
 
+// Fillable PDF Forms: the parent's stamped-and-flattened PDF (migration
+// 110, filled_pdf_path). Storage is private (camp-pdf-forms, deny-all
+// direct read) — every fetch goes through get-pdf-form-urls, which
+// re-derives staff authorization itself (get_pdf_form_response_path,
+// migration 111) rather than trusting this id.
+function downloadFilledPdf(subId){
+    var s = docSubmissions.find(function(x){ return x.id === subId; });
+    if (!s || !s.filledPdfPath) { toast('No filled PDF for this submission'); return; }
+    var d = window.CampistryDB;
+    var session = d && d.getSession ? d.getSession() : null;
+    var token = session && session.access_token;
+    var cfg = window.__CAMPISTRY_SUPABASE__ || {};
+    if (!token || !cfg.url) { toast('Not signed in'); return; }
+    toast('Fetching filled PDF…');
+    fetch(cfg.url+'/functions/v1/get-pdf-form-urls', {
+        method: 'POST',
+        headers: { 'Content-Type':'application/json', 'Authorization':'Bearer '+token, 'apikey': cfg.anonKey||'' },
+        body: JSON.stringify({ kind:'submission', responseId: subId })
+    }).then(function(resp){ return resp.json(); }).then(function(data){
+        if (!data || !data.url) { toast('File not available'); return; }
+        window.open(data.url, '_blank');
+    }).catch(function(){ toast('Could not fetch the filled PDF'); });
+}
+
 function viewFormSubmission(subId) {
     var s = docSubmissions.find(function(x){ return x.id === subId; }); if (!s) return;
     s = Object.assign({}, s, { formName: s.name }); // render shape below
@@ -3878,9 +3903,10 @@ function viewFormSubmission(subId) {
         '</div>';
     }).join('');
     var sigHtml = s.signatureDataUrl ? '<div style="margin-top:14px;"><div style="font-size:.78rem;font-weight:600;color:var(--slate-700);margin-bottom:6px;">Signature</div><div style="border:1px solid var(--border-light);border-radius:var(--radius-sm);background:var(--slate-50);padding:4px;display:inline-block;"><img src="'+s.signatureDataUrl+'" style="max-width:300px;height:auto;display:block;"></div></div>' : '';
+    var pdfHtml = s.filledPdfPath ? '<div style="margin-top:14px;"><button class="btn btn-secondary btn-sm" onclick="downloadFilledPdf(\''+esc(s.id)+'\')"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg> Download filled PDF</button></div>' : '';
     var html = '<div style="font-size:.85rem;font-weight:700;margin-bottom:10px;color:var(--slate-900);">'+esc(s.formName)+' — '+esc(s.camper)+'</div>' +
                '<div style="font-size:.74rem;color:var(--text-muted);margin-bottom:12px;">Submitted '+esc(s.date)+(s.grade?' &nbsp;·&nbsp; '+esc(s.grade):'')+(s.bunk?' &nbsp;·&nbsp; '+esc(s.bunk):'')+'</div>' +
-               rows + sigHtml;
+               rows + sigHtml + pdfHtml;
     // Simple modal via overlay
     var el = document.createElement('div');
     el.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,.4);z-index:9100;display:flex;align-items:center;justify-content:center;padding:20px;';
@@ -4800,13 +4826,13 @@ function boot() {
 }
 if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', boot); else boot();
 </script>
-<script src="campistry_notes_quick.js?v=20260903-04"></script>
+<script src="campistry_notes_quick.js?v=20260903-03"></script>
 <script>window.__CAMPISTRY_PRODUCT__='link';</script>
-<script src="parent_lockout_guard.js?v=20260903-04"></script>
-<script src="product_access_guard.js?v=20260903-04"></script>
+<script src="parent_lockout_guard.js?v=20260903-03"></script>
+<script src="product_access_guard.js?v=20260903-03"></script>
 <!-- Per-SECTION access: limits which parts of THIS app the user can open.
      Loads after the product gate, which decides whether they get in at all. -->
-<script src="campistry_capabilities.js?v=20260903-04"></script>
-<script src="campistry_access_sections.js?v=20260903-04"></script>
+<script src="campistry_capabilities.js?v=20260903-03"></script>
+<script src="campistry_access_sections.js?v=20260903-03"></script>
 </body>
 </html>

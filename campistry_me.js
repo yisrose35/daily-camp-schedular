@@ -1124,9 +1124,8 @@ function _famSuggestionsBannerHtml(){
     return h;
 }
 // Household contact block (parents/address + camper chips) for one family
-// record — reused on the Billing account card and the camper profile's
-// Family & Emergency Contact card, so household details live wherever a
-// balance or a camper already does instead of a page of their own.
+// record — reused on the Billing account card, so household details live
+// wherever a balance already does instead of a page of their own.
 function _famHouseholdHtml(id,f){
     var h='';
     (f.households||[]).forEach(function(hh){
@@ -2145,19 +2144,24 @@ function renderCamperDetailPage(){
     if(bunkReq.avoid.length)camp+=cvR('Do not bunk with','<span class="cv-warn">'+esc(bunkReq.avoid.join(', '))+'</span>');
     g+=_dpCard('Camp Assignment',camp,{icon:'mapPin'});
 
-    var fam='';
+    // Parent / Guardian — shows BOTH parents in full right away, not just
+    // parent 1, since a second parent's info is just as often needed.
+    // Labeled by their actual relationship (Father/Mother/Guardian/...)
+    // when known, falling back to "Parent 1"/"Parent 2" when it isn't.
+    var par='';
     if(d.parent1Name){
-        fam+=cvR('Parent',d.parent1Name);
-        if(d.parent1Phone)fam+=cvR('Phone','<a href="tel:'+esc(d.parent1Phone)+'" style="color:var(--me);font-weight:600">'+esc(d.parent1Phone)+'</a>');
-        if(d.parent1Email)fam+=cvR('Email','<a href="mailto:'+esc(d.parent1Email)+'" style="color:var(--me)">'+esc(d.parent1Email)+'</a>');
-    }else{
-        fam+='<div style="font-size:.8rem;color:var(--s400);font-style:italic;padding:2px 0">No parent info on file</div>';
+        par+=cvR(d.parent1Relation||'Parent 1',d.parent1Name);
+        if(d.parent1Phone)par+=cvR('Phone','<a href="tel:'+esc(d.parent1Phone)+'" style="color:var(--me);font-weight:600">'+esc(d.parent1Phone)+'</a>');
+        if(d.parent1Email)par+=cvR('Email','<a href="mailto:'+esc(d.parent1Email)+'" style="color:var(--me)">'+esc(d.parent1Email)+'</a>');
     }
-    if(d.emergencyName){
-        fam+=cvR('Emergency',d.emergencyName+(d.emergencyRel?' ('+d.emergencyRel+')':''));
-        if(d.emergencyPhone)fam+=cvR('Phone','<a href="tel:'+esc(d.emergencyPhone)+'" style="color:var(--me);font-weight:600">'+esc(d.emergencyPhone)+'</a>');
-    }else{
-        fam+='<div style="font-size:.8rem;color:var(--err);font-style:italic;padding:2px 0">⚠ No emergency contact</div>';
+    if(d.parent2Name){
+        if(d.parent1Name)par+='<div style="margin-top:8px;padding-top:8px;border-top:1px solid var(--s100)"></div>';
+        par+=cvR(d.parent2Relation||'Parent 2',d.parent2Name);
+        if(d.parent2Phone)par+=cvR('Phone','<a href="tel:'+esc(d.parent2Phone)+'" style="color:var(--me);font-weight:600">'+esc(d.parent2Phone)+'</a>');
+        if(d.parent2Email)par+=cvR('Email','<a href="mailto:'+esc(d.parent2Email)+'" style="color:var(--me)">'+esc(d.parent2Email)+'</a>');
+    }
+    if(!d.parent1Name&&!d.parent2Name){
+        par+='<div style="font-size:.8rem;color:var(--s400);font-style:italic;padding:2px 0">No parent info on file</div>';
     }
     // Siblings — same household, one click to the other camper's own
     // record (CampMinder's "Unified Person Record" links siblings the
@@ -2167,12 +2171,24 @@ function renderCamperDetailPage(){
     var famEntry=Object.entries(families).filter(function(pair){return(pair[1].camperIds||[]).indexOf(n)>=0;})[0];
     var siblings=famEntry?(famEntry[1].camperIds||[]).filter(function(cn){return cn!==n;}):[];
     if(siblings.length){
-        fam+='<div style="margin-top:8px;padding-top:8px;border-top:1px solid var(--s100)"><span class="cv-lbl" style="display:block;margin-bottom:4px">Siblings</span><div style="display:flex;flex-wrap:wrap;gap:5px">'
+        par+='<div style="margin-top:8px;padding-top:8px;border-top:1px solid var(--s100)"><span class="cv-lbl" style="display:block;margin-bottom:4px">Siblings</span><div style="display:flex;flex-wrap:wrap;gap:5px">'
             +siblings.map(function(sn){return '<span style="display:inline-flex;align-items:center;padding:3px 9px;border-radius:999px;background:var(--s50);border:1px solid var(--s200);font-size:.76rem;font-weight:600;color:var(--me);cursor:pointer" onclick="CampistryMe.viewCamper(\''+je(sn)+'\')">'+esc(sn)+'</span>';}).join('')
             +'</div></div>';
     }
     var famAction=famEntry?'<button class="me-btn me-btn--ghost me-btn--sm" onclick="CampistryMe.editFamily(\''+je(famEntry[0])+'\')">Edit Household</button>':'';
-    g+=_dpCard('Family & Emergency Contact',fam,{icon:'users',actionHtml:famAction});
+    g+=_dpCard('Parent / Guardian',par,{icon:'users',actionHtml:famAction});
+
+    // Emergency Contact — its own card so it's never squeezed out or
+    // overlooked alongside parent info.
+    var emg='';
+    if(d.emergencyName){
+        emg+=cvR('Name',d.emergencyName);
+        if(d.emergencyRel)emg+=cvR('Relationship',esc(d.emergencyRel));
+        if(d.emergencyPhone)emg+=cvR('Phone','<a href="tel:'+esc(d.emergencyPhone)+'" style="color:var(--me);font-weight:600">'+esc(d.emergencyPhone)+'</a>');
+    }else{
+        emg+='<div style="font-size:.8rem;color:var(--err);font-style:italic;padding:2px 0">⚠ No emergency contact</div>';
+    }
+    g+=_dpCard('Emergency Contact',emg,{icon:'users'});
 
     var addr='';
     if(d.street){
@@ -2270,8 +2286,11 @@ function editCamper(n){
     }
 
     h+='<div class="fsec">Parent / Guardian</div>';
-    h+='<div class="fr">'+ff('Parent 1 Name','ceP1',d.parent1Name||'')+ff('Phone','ceP1Ph',d.parent1Phone||'')+'</div>';
-    h+=ff('Email','ceP1Em',d.parent1Email||'','email');
+    h+='<div class="fr">'+ff('Parent 1 Name','ceP1',d.parent1Name||'')+ff('Relationship','ceP1Rel',d.parent1Relation||'')+'</div>';
+    h+='<div class="fr">'+ff('Phone','ceP1Ph',d.parent1Phone||'')+ff('Email','ceP1Em',d.parent1Email||'','email')+'</div>';
+    h+='<p style="font-size:.68rem;color:var(--s400);margin:6px 0 4px">Second parent/guardian (optional):</p>';
+    h+='<div class="fr">'+ff('Full Name','ceP2',d.parent2Name||'')+ff('Relationship','ceP2Rel',d.parent2Relation||'')+'</div>';
+    h+='<div class="fr">'+ff('Phone','ceP2Ph',d.parent2Phone||'','tel')+ff('Email','ceP2Em',d.parent2Email||'','email')+'</div>';
 
     // Home vs summer address. Plenty of camp families spend the season at a
     // bungalow or a rental, so mail, transport and emergency contact all need
@@ -2370,8 +2389,10 @@ function saveCamper(){
         summerState:_summerSame?_v('ceState'):_v('ceSummerState'),
         summerZip:_summerSame?_v('ceZip'):_v('ceSummerZip'),
         summerPhone:_v('ceSummerPhone'),
-        parent1Name:_v('ceP1'),parent1Phone:_v('ceP1Ph'),
+        parent1Name:_v('ceP1'),parent1Relation:_v('ceP1Rel'),parent1Phone:_v('ceP1Ph'),
         parent1Email:_v('ceP1Em'),
+        parent2Name:_v('ceP2'),parent2Relation:_v('ceP2Rel'),
+        parent2Phone:_v('ceP2Ph'),parent2Email:_v('ceP2Em'),
         emergencyName:_v('ceEmN'),emergencyPhone:_v('ceEmPh'),
         emergencyRel:_v('ceEmR'),
         allergies:_v('ceAlg'),medications:_v('ceMed'),
@@ -5624,6 +5645,7 @@ var FC_SECTIONS=[
     {key:'camper',label:'Camper Information',desc:'Name, DOB, gender, school, grade, teacher',default:true},
     {key:'parent',label:'Parent / Guardian',desc:'Name, phone, email, second parent',default:true},
     {key:'address',label:'Home Address',desc:'Street, city, state, ZIP',default:true},
+    {key:'summerAddress',label:'Summer Address',desc:'Where the family is during the season — a bungalow, a rental, or with relatives.',default:true},
     {key:'emergency',label:'Emergency Contact',desc:'Name, relationship, phone',default:true},
     {key:'medical',label:'Medical Information',desc:'Allergies, medications, dietary, notes',default:true},
     {key:'preferences',label:'Preferences',desc:'Bunkmate request, separation, t-shirt, referral source',default:true},
@@ -5663,6 +5685,13 @@ var FC_FIELD_CATALOG={
         {id:'city',label:'City',required:true},
         {id:'state',label:'State'},
         {id:'zip',label:'ZIP',required:true}
+    ],
+    summerAddress:[
+        {id:'summerStreet',label:'Summer Street'},
+        {id:'summerCity',label:'Summer City'},
+        {id:'summerState',label:'Summer State'},
+        {id:'summerZip',label:'Summer ZIP'},
+        {id:'summerPhone',label:'Summer Phone'}
     ],
     emergency:[
         {id:'emName',label:'Emergency Contact Name',required:true},
@@ -8199,7 +8228,9 @@ function enrollCamper(id){
             school:e.school||'',schoolGrade:e.schoolGrade||'',teacher:e.teacher||'',
             division:'',grade:'',bunk:'',teams:{},team:'',
             street:e.street||'',city:e.city||'',state:e.state||'',zip:e.zip||'',
-            parent1Name:e.parentName||'',parent1Phone:e.parentPhone||'',parent1Email:e.parentEmail||'',
+            summerSameAsHome:e.summerSameAsHome!==false,
+            summerStreet:e.summerStreet||'',summerCity:e.summerCity||'',summerState:e.summerState||'',summerZip:e.summerZip||'',summerPhone:e.summerPhone||'',
+            parent1Name:e.parentName||'',parent1Relation:e.parentRelation||'',parent1Phone:e.parentPhone||'',parent1Email:e.parentEmail||'',
             parent2Name:e.parent2Name||'',parent2Phone:e.parent2Phone||'',parent2Email:e.parent2Email||'',parent2Relation:e.parent2Relation||'',
             emergencyName:e.emergencyName||'',emergencyPhone:e.emergencyPhone||'',emergencyRel:e.emergencyRel||'',
             allergies:e.allergies||'',medications:e.medications||'',dietary:e.dietary||'',medicalNotes:e.medicalNotes||'',
@@ -8229,7 +8260,8 @@ function enrollCamper(id){
         if(!c.schoolGrade&&e.schoolGrade)c.schoolGrade=e.schoolGrade;
         if(!c.teacher&&e.teacher)c.teacher=e.teacher;
         if(!c.street&&e.street){c.street=e.street;c.city=e.city;c.state=e.state;c.zip=e.zip;syncAddressToGo(e.camperName,c)}
-        if(!c.parent1Name&&e.parentName){c.parent1Name=e.parentName;c.parent1Phone=e.parentPhone;c.parent1Email=e.parentEmail}
+        if(!c.summerStreet&&e.summerStreet){c.summerSameAsHome=e.summerSameAsHome!==false;c.summerStreet=e.summerStreet;c.summerCity=e.summerCity;c.summerState=e.summerState;c.summerZip=e.summerZip;c.summerPhone=e.summerPhone}
+        if(!c.parent1Name&&e.parentName){c.parent1Name=e.parentName;c.parent1Relation=e.parentRelation;c.parent1Phone=e.parentPhone;c.parent1Email=e.parentEmail}
         if(!c.parent2Name&&e.parent2Name){c.parent2Name=e.parent2Name;c.parent2Phone=e.parent2Phone;c.parent2Email=e.parent2Email;c.parent2Relation=e.parent2Relation}
         if(!c.smsEmailConsent&&e.smsEmailConsent)c.smsEmailConsent=true; // never downgrade consent already captured
         if(!c.emergencyName&&e.emergencyName){c.emergencyName=e.emergencyName;c.emergencyPhone=e.emergencyPhone;c.emergencyRel=e.emergencyRel}
@@ -11300,14 +11332,16 @@ function _linkFormsHTML(){
     h+='<div class="me-card" style="margin-bottom:14px;padding:16px;">';
     h+='<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px;">';
     h+='<div><div style="font-weight:700;font-size:.95rem;">Complete Online</div><div style="font-size:.75rem;color:var(--s400);">Forms parents fill out directly in the portal</div></div>';
-    h+='<button class="me-btn me-btn--pri me-btn--sm" onclick="CampistryMe.addLinkDigitalForm()">+ Add Form</button>';
+    h+='<div style="display:flex;gap:6px;"><button class="me-btn me-btn--sec me-btn--sm" onclick="CampistryMe.addLinkPdfForm()">+ Add PDF Form</button><button class="me-btn me-btn--pri me-btn--sm" onclick="CampistryMe.addLinkDigitalForm()">+ Add Form</button></div>';
     h+='</div>';
     if(linkForms.digital.length){
         linkForms.digital.forEach(function(f,i){
             h+='<div style="display:flex;align-items:center;gap:10px;padding:10px 0;border-top:1px solid var(--s100);">';
             h+='<div style="flex:1;"><div style="font-size:.88rem;font-weight:600;">'+esc(f.name)+'</div>';
             if(f.description)h+='<div style="font-size:.75rem;color:var(--s400);">'+esc(f.description)+'</div>';
+            if(f.sourceType==='pdf')h+='<div style="font-size:.7rem;color:var(--s400);margin-top:2px;">'+(f.fieldSchema||[]).length+' field'+((f.fieldSchema||[]).length===1?'':'s')+' detected · '+(f.pageCount||1)+' page'+(f.pageCount===1?'':'s')+'</div>';
             h+='</div>';
+            if(f.sourceType==='pdf')h+=bdg('PDF','gray');
             h+=bdg(f.required?'Required':'Optional',f.required?'err':'warn');
             h+='<button class="me-btn me-btn--ghost me-btn--sm" onclick="CampistryMe.editLinkItem(\'digital\','+i+')">Edit</button>';
             h+='<button class="me-btn me-btn--ghost me-btn--sm" style="color:var(--err);" onclick="CampistryMe.deleteLinkItem(\'digital\','+i+')">Delete</button>';
@@ -11457,8 +11491,218 @@ function addLinkDocument(){
     });
 }
 
+// ─── PDF Forms: upload → auto-detect AcroForm fields → review ──────────────
+// Extends the Digital Forms system above with sourceType:'pdf' entries.
+// Detection runs entirely client-side via the vendored pdf-lib (no server
+// round trip needed to know what fields a PDF has) — only the review step's
+// SAVE uploads the actual PDF bytes to Storage.
+var _pdfFormDraft=null; // {isNew, file?, itemType?, itemIndex?, name, description, required, fields, pageCount}
+
+function addLinkPdfForm(){
+    if(!window.PDFLib){toast('PDF library failed to load — refresh and try again','error');return;}
+    var h='<div class="me-modal-form">';
+    h+='<div class="fg"><label class="fl">PDF File</label><input type="file" id="lfpFile" class="fi" accept="application/pdf,.pdf"></div>';
+    h+='<p style="font-size:.75rem;color:var(--s400);margin-top:6px;line-height:1.5;">The PDF must already have fillable form fields (exported from Adobe, DocuSign, JotForm, etc.) — the app detects them automatically on the next step, where you can name the form and review each field. A flat/scanned PDF with no fields will be rejected; use <strong>Print &amp; Return</strong> for those instead.</p>';
+    h+='</div>';
+    showModal('Add PDF Form',h,function(){
+        var fileInput=document.getElementById('lfpFile');
+        var file=fileInput&&fileInput.files&&fileInput.files[0];
+        if(!file){toast('Choose a PDF file','error');return;}
+        if(!/\.pdf$/i.test(file.name)){toast('Please choose a .pdf file','error');return;}
+        var btn=document.getElementById('dynModalSave');
+        if(btn){btn.disabled=true;btn.textContent='Detecting fields…';}
+        _detectPdfFields(file).then(function(det){
+            if(!det.fields.length){
+                toast('No fillable fields found in that PDF — use Print & Return instead','error');
+                if(btn){btn.disabled=false;btn.textContent='Save';}
+                return;
+            }
+            _pdfFormDraft={isNew:true,file:file,name:_humanizePdfFileName(file.name),description:'',required:false,fields:det.fields,pageCount:det.pageCount};
+            closeModal('dynModal');
+            _openPdfFieldReview();
+        }).catch(function(e){
+            console.error('[PDF Forms] detect failed',e);
+            toast('Could not read that PDF — is it a valid, unencrypted PDF?','error');
+            if(btn){btn.disabled=false;btn.textContent='Save';}
+        });
+    });
+}
+
+function _humanizePdfFileName(fileName){
+    var base=(fileName||'').replace(/\.pdf$/i,'').replace(/[_-]+/g,' ').trim();
+    return base?base.charAt(0).toUpperCase()+base.slice(1):'PDF Form';
+}
+
+// Reads the AcroForm fields already embedded in the PDF (exported from
+// Adobe/DocuSign/JotForm/etc.) — never guesses at layout on a flat/scanned
+// PDF. Pushbuttons and other non-data widgets are skipped via _pdfFieldType
+// returning null.
+function _detectPdfFields(file){
+    return file.arrayBuffer().then(function(buf){
+        return window.PDFLib.PDFDocument.load(buf,{ignoreEncryption:true});
+    }).then(function(doc){
+        var PDFLib=window.PDFLib;
+        var form=doc.getForm();
+        var acroFields=form.getFields();
+        var pages=doc.getPages();
+        var fields=[];
+        acroFields.forEach(function(f){
+            var type=_pdfFieldType(f,PDFLib);
+            if(!type)return;
+            var name=f.getName();
+            var widgets=f.acroField.getWidgets();
+            var w0=widgets&&widgets[0];
+            var rect=w0?w0.getRectangle():null;
+            var pageIndex=0;
+            var pRef=w0&&w0.P&&w0.P();
+            if(pRef){
+                for(var pi=0;pi<pages.length;pi++){
+                    if(pages[pi].ref&&String(pages[pi].ref)===String(pRef)){pageIndex=pi;break;}
+                }
+            }
+            fields.push({
+                name:name,
+                label:_humanizePdfFieldName(name),
+                type:type,
+                page:pageIndex,
+                rect:rect?[rect.x,rect.y,rect.width,rect.height]:null,
+                required:false
+            });
+        });
+        return {fields:fields,pageCount:doc.getPageCount()};
+    });
+}
+
+// instanceof (not constructor.name) so this still works against the
+// minified vendored build, where internal class names get mangled but the
+// exported class references on window.PDFLib stay the real prototypes.
+function _pdfFieldType(f,PDFLib){
+    if(f instanceof PDFLib.PDFCheckBox)return'checkbox';
+    if(f instanceof PDFLib.PDFRadioGroup)return'radio';
+    if(f instanceof PDFLib.PDFDropdown)return'dropdown';
+    if(f instanceof PDFLib.PDFOptionList)return'dropdown';
+    if(f instanceof PDFLib.PDFTextField)return'text';
+    return null; // pushbuttons and other non-fillable widgets
+}
+
+function _humanizePdfFieldName(name){
+    if(!name)return'Field';
+    var s=String(name).split(/[._\[\]]/).pop()||name;
+    s=s.replace(/([a-z])([A-Z])/g,'$1 $2').replace(/[_-]+/g,' ').trim();
+    return s?s.charAt(0).toUpperCase()+s.slice(1):name;
+}
+
+function _pdfFieldRowHtml(field){
+    var types={text:'Text',checkbox:'Checkbox',dropdown:'Dropdown',radio:'Radio',signature:'Signature'};
+    var h='<div class="pdfFRow" style="border:1px solid var(--s200);border-radius:var(--r);padding:8px 10px;margin-bottom:6px;background:var(--s50);display:flex;gap:6px;align-items:center;">';
+    h+='<input class="fi pdfFRowLabel" style="flex:1;font-size:.82rem;padding:5px 8px" value="'+esc(field.label||'')+'" placeholder="Field label">';
+    h+='<select class="fs pdfFRowType" style="flex:0 0 110px;font-size:.78rem;padding:5px 6px">';
+    Object.entries(types).forEach(function(kv){h+='<option value="'+kv[0]+'"'+(field.type===kv[0]?' selected':'')+'>'+kv[1]+'</option>';});
+    h+='</select>';
+    h+='<label style="display:flex;align-items:center;gap:3px;font-size:.72rem;color:var(--s500);white-space:nowrap"><input type="checkbox" class="pdfFRowReq"'+(field.required?' checked':'')+' style="accent-color:var(--me)">Req</label>';
+    h+='<span style="font-size:.68rem;color:var(--s400);white-space:nowrap;max-width:110px;overflow:hidden;text-overflow:ellipsis;" title="'+esc(field.name||'')+'">p'+((field.page||0)+1)+' · '+esc(field.name||'')+'</span>';
+    h+='</div>';
+    return h;
+}
+
+// One modal handles both the post-upload review (isNew:true) and re-editing
+// an already-saved PDF form's fields later (isNew:false) — Name/Description/
+// Required live at the top either way, field rows below. This is metadata
+// review, not placement: no canvas, no dragging, the detected page/rect
+// stay exactly as pdf-lib found them.
+function _openPdfFieldReview(){
+    var d=_pdfFormDraft;if(!d)return;
+    var h='<div class="me-modal-form">';
+    h+=ff('Form Name','lfpRevName',d.name,'text');
+    h+=ff('Description (shown to parents)','lfpRevDesc',d.description,'textarea');
+    h+=ff('Required?','lfpRevReq',d.required?'Yes — required':'No — optional','select',['Yes — required','No — optional']);
+    h+='<p style="font-size:.8rem;color:var(--s500);margin:10px 0;line-height:1.5;">Detected '+d.fields.length+' field'+(d.fields.length===1?'':'s')+' across '+d.pageCount+' page'+(d.pageCount===1?'':'s')+'. Rename any field, reclassify a signature line as <strong>Signature</strong>, and mark which are required.</p>';
+    h+='<div id="pdfFieldReviewList">';
+    d.fields.forEach(function(f){h+=_pdfFieldRowHtml(f);});
+    h+='</div></div>';
+    showModal(d.isNew?'Review Detected Fields':'Edit PDF Form Fields',h,function(){
+        var name=document.getElementById('lfpRevName').value.trim();
+        if(!name){toast('Enter a form name','error');return;}
+        d.name=name;
+        d.description=document.getElementById('lfpRevDesc').value.trim();
+        d.required=document.getElementById('lfpRevReq').value.startsWith('Yes');
+        _readPdfFieldRowsInto(d.fields);
+        var btn=document.getElementById('dynModalSave');
+        if(btn){btn.disabled=true;btn.textContent='Saving…';}
+        _savePdfFormDraft(d).then(function(){
+            closeModal('dynModal');
+            renderForms();switchFormsTab('link');
+            toast(d.isNew?'PDF form added':'PDF form updated');
+            _pdfFormDraft=null;
+        }).catch(function(e){
+            console.error('[PDF Forms] save failed',e);
+            toast('Could not save that form — check your connection and try again','error');
+            if(btn){btn.disabled=false;btn.textContent='Save';}
+        });
+    });
+}
+
+function _readPdfFieldRowsInto(fields){
+    var rows=document.querySelectorAll('#pdfFieldReviewList .pdfFRow');
+    rows.forEach(function(row,i){
+        if(!fields[i])return;
+        var label=row.querySelector('.pdfFRowLabel');
+        var type=row.querySelector('.pdfFRowType');
+        var req=row.querySelector('.pdfFRowReq');
+        if(label&&label.value.trim())fields[i].label=label.value.trim();
+        if(type)fields[i].type=type.value;
+        if(req)fields[i].required=req.checked;
+    });
+}
+
+function _pdfStorageClient(){
+    return window.CampistryDB&&window.CampistryDB.getClient?window.CampistryDB.getClient():window.supabase;
+}
+
+// New forms upload the PDF bytes to Storage (camp-pdf-forms, staff-insert-only
+// RLS — migration 110) and push a fresh linkForms.digital[] entry. Re-editing
+// an existing PDF form's fields never re-uploads — the template's already in
+// Storage, only fieldSchema/name/description/required change.
+function _savePdfFormDraft(d){
+    var campId=window.CampistryDB&&window.CampistryDB.getCampId?window.CampistryDB.getCampId():(window.getCampId?window.getCampId():null);
+    if(!campId)return Promise.reject(new Error('no_camp_id'));
+    if(!d.isNew){
+        var item=linkForms[d.itemType][d.itemIndex];
+        if(!item)return Promise.reject(new Error('item_not_found'));
+        item.name=d.name;item.description=d.description;item.required=d.required;
+        item.fieldSchema=d.fields;
+        saveLinkForms();
+        return Promise.resolve();
+    }
+    var client=_pdfStorageClient();
+    if(!client||!client.storage)return Promise.reject(new Error('no_storage_client'));
+    var formId='lfd_'+Date.now();
+    var path=campId+'/templates/'+formId+'.pdf';
+    return d.file.arrayBuffer().then(function(buf){
+        return client.storage.from('camp-pdf-forms').upload(path,new Blob([buf],{type:'application/pdf'}),{contentType:'application/pdf',upsert:false});
+    }).then(function(res){
+        if(res&&res.error)throw new Error(res.error.message);
+        linkForms.digital.push({
+            id:formId,name:d.name,description:d.description,required:d.required,
+            sourceType:'pdf',templatePdfPath:path,fieldSchema:d.fields,pageCount:d.pageCount,
+            created:Date.now()
+        });
+        saveLinkForms();
+    });
+}
+
 function editLinkItem(type,idx){
     var item=linkForms[type][idx];if(!item)return;
+    if(type==='digital'&&item.sourceType==='pdf'){
+        _pdfFormDraft={
+            isNew:false,itemType:type,itemIndex:idx,
+            name:item.name,description:item.description||'',required:!!item.required,
+            fields:(item.fieldSchema||[]).map(function(f){return Object.assign({},f);}),
+            pageCount:item.pageCount||1
+        };
+        _openPdfFieldReview();
+        return;
+    }
     var isDoc=type==='documents';
     var isDigital=type==='digital';
     var h='<div class="me-modal-form">';
@@ -12456,7 +12700,7 @@ function addScholarship(camperName){
 // DUPLICATE DETECTION
 // ═══════════════════════════════════════════════════════════════
 // ── CSV ──────────────────────────────────────────────────────────
-var CSV_HEADERS=['First Name','Last Name','Date of Birth','Gender','School Name','School Grade','Teacher','Division','Grade','Bunk','Street Address','City','State','ZIP','Parent 1 Name','Parent 1 Phone','Parent 1 Email','Emergency Name','Emergency Phone','Emergency Relation','Allergies','Medications','Dietary Restrictions'];
+var CSV_HEADERS=['First Name','Last Name','Date of Birth','Gender','School Name','School Grade','Teacher','Division','Grade','Bunk','Street Address','City','State','ZIP','Summer Street','Summer City','Summer State','Summer ZIP','Summer Phone','Parent 1 Name','Parent 1 Relationship','Parent 1 Phone','Parent 1 Email','Parent 2 Name','Parent 2 Relationship','Parent 2 Phone','Parent 2 Email','Emergency Name','Emergency Phone','Emergency Relation','Allergies','Medications','Dietary Restrictions'];
 
 function downloadTemplate(){
     // Build template with headers + league columns
@@ -12464,10 +12708,11 @@ function downloadTemplate(){
     var headers=CSV_HEADERS.slice();
     leagueNames.forEach(function(lg){headers.push('Team: '+lg)});
     var csv='\uFEFF'+headers.map(function(h){return'"'+h+'"'}).join(',')+'\n';
-    // Add 2 example rows
-    csv+='"John","Smith","2015-03-15","Male","PS 123","3rd","Mrs. Johnson","Juniors","3rd Grade","Bunk 1","123 Main St","Brooklyn","NY","11230","Jane Smith","555-123-4567","jane@email.com","Bob Smith","555-987-6543","Uncle","Peanuts","",""\n';
-    csv+='"Sarah","Cohen","2014-07-22","Female","Yeshiva Academy","4th","Rabbi Goldstein","Seniors","4th Grade","Bunk 7","456 Oak Ave","Woodmere","NY","11598","Rachel Cohen","555-222-3333","rachel@email.com","David Cohen","555-444-5555","Father","","Inhaler","Dairy-free"\n';
-    csv+='"","","","","","","","","","","","","","","","","","","","","","",""\n';
+    // Add 2 example rows. Row 1 has no summer address (stays home all season)
+    // and no second parent; row 2 shows both filled in.
+    csv+='"John","Smith","2015-03-15","Male","PS 123","3rd","Mrs. Johnson","Juniors","3rd Grade","Bunk 1","123 Main St","Brooklyn","NY","11230","","","","","","Jane Smith","Mother","555-123-4567","jane@email.com","","","","","Bob Smith","555-987-6543","Uncle","Peanuts","",""\n';
+    csv+='"Sarah","Cohen","2014-07-22","Female","Yeshiva Academy","4th","Rabbi Goldstein","Seniors","4th Grade","Bunk 7","456 Oak Ave","Woodmere","NY","11598","789 Lake Rd","Monticello","NY","12701","555-111-2222","Rachel Cohen","Mother","555-222-3333","rachel@email.com","David Cohen","Father","555-444-5555","david@email.com","Grandma Cohen","555-666-7777","Grandmother","","Inhaler","Dairy-free"\n';
+    csv+='"","","","","","","","","","","","","","","","","","","","","","","","","","","","","","","","",""\n';
     var a=document.createElement('a');
     a.href=URL.createObjectURL(new Blob([csv],{type:'text/csv'}));
     a.download='campistry_camper_template.csv';
@@ -12475,15 +12720,24 @@ function downloadTemplate(){
     toast('Template downloaded — fill it out and import');
 }
 
-// A row identifies the SAME camper as another row only when both the full
-// name AND the parent 1 email match (case-insensitive) — a shared name
-// alone (e.g. two unrelated "Kid Worcman"s) is not a duplicate.
-function _rowMatchKey(name,email){
-    return (name||'').trim().toLowerCase()+'|'+(email||'').trim().toLowerCase();
+// A row identifies the SAME camper as another row of the same name only
+// when there's actual EVIDENCE they're the same family — a matching
+// (non-blank) parent 1 email, or a matching (non-blank) home address AND
+// parent 1 name. A shared name alone (e.g. two unrelated "Kid Worcman"s
+// with different homes/parents, or simply no other info on file) is not a
+// duplicate; two siblings/re-entries in the SAME household with the same
+// name are.
+function _sameCamperSignal(a,b){
+    var emA=(a.parent1Email||'').trim().toLowerCase(),emB=(b.parent1Email||'').trim().toLowerCase();
+    if(emA&&emA===emB)return true;
+    var addrA=_famAddr(a.street||'',a.city||'',a.state||'',a.zip||'');
+    var addrB=_famAddr(b.street||'',b.city||'',b.state||'',b.zip||'');
+    var parA=(a.parent1Name||'').trim().toLowerCase(),parB=(b.parent1Name||'').trim().toLowerCase();
+    return !!(addrA&&addrA===addrB&&parA&&parA===parB);
 }
 // roster is keyed by full name alone, so two DIFFERENT campers who happen
-// to share a name (different parent email) would otherwise silently
-// collide — find the next free "Name (2)", "Name (3)"... key instead.
+// to share a name (different family) would otherwise silently collide —
+// find the next free "Name (2)", "Name (3)"... key instead.
 function _disambiguateRosterName(name){
     var n=2;
     while(roster[name+' ('+n+')'])n++;
@@ -12520,8 +12774,20 @@ function handleCsv(file){
 
         // Parse header row to find column indices
         var hdr=parseCsvLine(lines[0]).map(function(h){return h.toLowerCase().trim()});
-        var col=function(names){
-            for(var i=0;i<names.length;i++){var idx=hdr.findIndex(function(h){return h.includes(names[i])});if(idx>=0)return idx}
+        // `exclude` lets a bare term like 'street' or 'city' skip headers that
+        // are really a MORE specific sibling field — e.g. 'Summer Street'
+        // contains 'street' too, so without excluding 'summer' a reordered
+        // CSV could match the home-address lookup to the summer column
+        // instead (or vice versa) purely by which one happens to come first.
+        var col=function(names,exclude){
+            for(var i=0;i<names.length;i++){
+                var idx=hdr.findIndex(function(h){
+                    if(!h.includes(names[i]))return false;
+                    if(exclude)for(var j=0;j<exclude.length;j++){if(h.includes(exclude[j]))return false}
+                    return true;
+                });
+                if(idx>=0)return idx;
+            }
             return-1;
         };
 
@@ -12536,13 +12802,23 @@ function handleCsv(file){
         var iDiv=col(['division']);
         var iGrade=col(['grade']);
         var iBunk=col(['bunk','cabin']);
-        var iStreet=col(['street','address']);
-        var iCity=col(['city']);
-        var iState=col(['state']);
-        var iZip=col(['zip','postal']);
+        var iStreet=col(['street','address'],['summer']);
+        var iCity=col(['city'],['summer']);
+        var iState=col(['state'],['summer']);
+        var iZip=col(['zip','postal'],['summer']);
+        var iSumStreet=col(['summer street','summer address']);
+        var iSumCity=col(['summer city']);
+        var iSumState=col(['summer state']);
+        var iSumZip=col(['summer zip','summer postal']);
+        var iSumPhone=col(['summer phone']);
         var iP1=col(['parent 1 name','parent name','parent1','mother','father']);
+        var iP1Rel=col(['parent 1 relation','parent 1 relationship']);
         var iP1Ph=col(['parent 1 phone','parent phone','parent1 phone']);
         var iP1Em=col(['parent 1 email','parent email','parent1 email']);
+        var iP2=col(['parent 2 name','parent2','second parent']);
+        var iP2Rel=col(['parent 2 relation','parent 2 relationship','second parent relation']);
+        var iP2Ph=col(['parent 2 phone','parent2 phone','second parent phone']);
+        var iP2Em=col(['parent 2 email','parent2 email','second parent email']);
         var iEmN=col(['emergency name','emergency contact']);
         var iEmPh=col(['emergency phone']);
         var iEmR=col(['emergency relation']);
@@ -12588,9 +12864,19 @@ function handleCsv(file){
                 city:iCity>=0?(c[iCity]||'').trim():'',
                 state:iState>=0?(c[iState]||'').trim():'',
                 zip:iZip>=0?(c[iZip]||'').trim():'',
+                summerStreet:iSumStreet>=0?(c[iSumStreet]||'').trim():'',
+                summerCity:iSumCity>=0?(c[iSumCity]||'').trim():'',
+                summerState:iSumState>=0?(c[iSumState]||'').trim():'',
+                summerZip:iSumZip>=0?(c[iSumZip]||'').trim():'',
+                summerPhone:iSumPhone>=0?(c[iSumPhone]||'').trim():'',
                 parent1Name:iP1>=0?(c[iP1]||'').trim():'',
+                parent1Relation:iP1Rel>=0?(c[iP1Rel]||'').trim():'',
                 parent1Phone:iP1Ph>=0?(c[iP1Ph]||'').trim():'',
                 parent1Email:iP1Em>=0?(c[iP1Em]||'').trim():'',
+                parent2Name:iP2>=0?(c[iP2]||'').trim():'',
+                parent2Relation:iP2Rel>=0?(c[iP2Rel]||'').trim():'',
+                parent2Phone:iP2Ph>=0?(c[iP2Ph]||'').trim():'',
+                parent2Email:iP2Em>=0?(c[iP2Em]||'').trim():'',
                 emergencyName:iEmN>=0?(c[iEmN]||'').trim():'',
                 emergencyPhone:iEmPh>=0?(c[iEmPh]||'').trim():'',
                 emergencyRel:iEmR>=0?(c[iEmR]||'').trim():'',
@@ -12610,18 +12896,39 @@ function handleCsv(file){
                 //   families/bunks (and fans the wipe to cloud) — confirm first, and
                 //   let the office choose Update instead when they just want to
                 //   refresh/add campers without touching everything else.
-                //   A row is only a TRUE duplicate of another when both the name AND
-                //   the parent 1 email match — a shared name alone (two unrelated
-                //   "Kid Worcman"s) is not a duplicate and both are kept.
-                var byKey={},dupNames=[];
-                rows.forEach(function(r){ var k=_rowMatchKey(r.name,r.parent1Email); if(byKey[k])dupNames.push(r.name); byKey[k]=r; });
-                var uniqueRows=Object.keys(byKey).map(function(k){return byKey[k]});
+                //   A row is only a TRUE duplicate of another when the name matches
+                //   AND they're the same family (same parent email, or same home
+                //   address + same parent name) — a shared name alone (two unrelated
+                //   "Kid Worcman"s in different homes) is not a duplicate and both
+                //   are kept; two same-named rows in the SAME household are.
+                var byName={},dupNames=[];
+                rows.forEach(function(r){ var k=(r.name||'').trim().toLowerCase(); (byName[k]=byName[k]||[]).push(r); });
+                var uniqueRows=[];
+                Object.keys(byName).forEach(function(k){
+                    var grp=byName[k];
+                    if(grp.length===1){uniqueRows.push(grp[0]);return}
+                    // Cluster this name-group into families via the shared signal —
+                    // rows in the same cluster are true duplicates (last wins).
+                    var uf=grp.map(function(_,i){return i});
+                    function gfind(i){while(uf[i]!==i){uf[i]=uf[uf[i]];i=uf[i]}return i}
+                    for(var gi=0;gi<grp.length;gi++){
+                        for(var gj=gi+1;gj<grp.length;gj++){
+                            if(_sameCamperSignal(grp[gi],grp[gj]))uf[gfind(gi)]=gfind(gj);
+                        }
+                    }
+                    var clusters={};
+                    grp.forEach(function(r,i){var root=gfind(i);(clusters[root]=clusters[root]||[]).push(r)});
+                    Object.values(clusters).forEach(function(cluster){
+                        if(cluster.length>1)dupNames.push(cluster[0].name);
+                        uniqueRows.push(cluster[cluster.length-1]);
+                    });
+                });
                 var msg='This file has '+uniqueRows.length+' camper'+(uniqueRows.length===1?'':'s')+'.';
-                if(dupNames.length){var ex=dupNames.slice(0,3).join(', ');msg+='<br><br>⚠ '+dupNames.length+' duplicate row'+(dupNames.length===1?'':'s')+' — same name AND same parent email as another row ('+esc(ex)+(dupNames.length>3?'…':'')+') — only the last row of each will be kept.';}
+                if(dupNames.length){var ex=dupNames.slice(0,3).join(', ');msg+='<br><br>⚠ '+dupNames.length+' duplicate row'+(dupNames.length===1?'':'s')+' — same name AND same family (parent email, or home address + parent name) as another row ('+esc(ex)+(dupNames.length>3?'…':'')+') — only the last row of each will be kept.';}
                 msg+='<div style="margin-top:14px;text-align:left">'
                     +'<label style="font-size:.78rem;font-weight:600;color:var(--s600);display:block;margin-bottom:6px">Import mode:</label>'
                     +'<label style="display:flex;align-items:flex-start;gap:8px;margin-bottom:8px;cursor:pointer;font-weight:400"><input type="radio" name="csvImportMode" value="replace" checked style="margin-top:3px"><span><strong>Replace</strong> — wipe all current campers, divisions, grades, bunks, and families, and start fresh from this file. Cannot be undone.</span></label>'
-                    +'<label style="display:flex;align-items:flex-start;gap:8px;cursor:pointer;font-weight:400"><input type="radio" name="csvImportMode" value="update" style="margin-top:3px"><span><strong>Update</strong> — match campers by name + parent email and update them from this file; anyone new is added. Everything already in the roster that isn\'t in this file is left alone.</span></label>'
+                    +'<label style="display:flex;align-items:flex-start;gap:8px;cursor:pointer;font-weight:400"><input type="radio" name="csvImportMode" value="update" style="margin-top:3px"><span><strong>Update</strong> — match campers by name + family (parent email, or home address + parent name) and update them from this file; anyone new is added. Everything already in the roster that isn\'t in this file is left alone.</span></label>'
                     +'</div>';
                 // Import wipes the CURRENT roster/staff with zero history kept — the
                 // only "start fresh" action this app has. Snapshot who's here right
@@ -12786,7 +13093,22 @@ function importRows(rows,mode){
     // overwrites the first in roster with zero warning. Give the second one
     // its own disambiguated key ("Name (2)") instead, and report it.
     var _importDupeNames=[];
+    // No summer address given in the CSV at all → same as home, resolved to
+    // the real home values right here (same convention editCamper/saveCamper
+    // already use) so nothing downstream needs to know about the flag.
+    function _resolveSummer(r){
+        var hasSummer=!!(r.summerStreet||r.summerCity||r.summerState||r.summerZip);
+        return {
+            summerSameAsHome:!hasSummer,
+            summerStreet:hasSummer?r.summerStreet:r.street,
+            summerCity:hasSummer?r.summerCity:r.city,
+            summerState:hasSummer?r.summerState:r.state,
+            summerZip:hasSummer?r.summerZip:r.zip,
+            summerPhone:r.summerPhone||''
+        };
+    }
     function _buildCamperRecord(r,camperId){
+        var summer=_resolveSummer(r);
         return {
             camperId:camperId,
             dob:r.dob||'',
@@ -12801,9 +13123,20 @@ function importRows(rows,mode){
             city:r.city||'',
             state:r.state||'',
             zip:r.zip||'',
+            summerSameAsHome:summer.summerSameAsHome,
+            summerStreet:summer.summerStreet,
+            summerCity:summer.summerCity,
+            summerState:summer.summerState,
+            summerZip:summer.summerZip,
+            summerPhone:summer.summerPhone,
             parent1Name:r.parent1Name||'',
+            parent1Relation:r.parent1Relation||'',
             parent1Phone:r.parent1Phone||'',
             parent1Email:r.parent1Email||'',
+            parent2Name:r.parent2Name||'',
+            parent2Relation:r.parent2Relation||'',
+            parent2Phone:r.parent2Phone||'',
+            parent2Email:r.parent2Email||'',
             emergencyName:r.emergencyName||'',
             emergencyPhone:r.emergencyPhone||'',
             emergencyRel:r.emergencyRel||'',
@@ -12817,19 +13150,19 @@ function importRows(rows,mode){
     rows.forEach(function(r){
         var targetName=r.name,camperId,oldBunk=null,isUpdate=false;
         var existing=roster[r.name];
-        if(mode==='update'&&existing&&_rowMatchKey(r.name,existing.parent1Email)===_rowMatchKey(r.name,r.parent1Email)){
-            // Same camper (name + parent email match) — update in place,
-            // keep their camperId, and move them off any OLD bunk they're
-            // no longer listed in.
+        if(mode==='update'&&existing&&_sameCamperSignal(existing,r)){
+            // Same camper (name + same family) — update in place, keep
+            // their camperId, and move them off any OLD bunk they're no
+            // longer listed in.
             isUpdate=true;
             camperId=existing.camperId;
             oldBunk=existing.bunk;
         }else if(existing){
             // A name collision that ISN'T the same camper: in Update mode
-            // this is a same-name-different-email camper already in the
+            // this is a same-name-different-family camper already in the
             // roster; in Replace mode it's two rows in THIS file sharing a
             // name (the earlier de-dupe pass only collapses TRUE duplicates
-            // — same name AND parent email). Either way, don't overwrite —
+            // — same name AND same family). Either way, don't overwrite —
             // give them their own roster slot.
             targetName=_disambiguateRosterName(r.name);
             _importDupeNames.push(r.name);
@@ -12953,8 +13286,8 @@ function importRows(rows,mode){
     summary+=mode==='update'?' — existing data preserved':' — previous data replaced';
     if(_importDupeNames.length>0){
         var uniqDupes=Array.from(new Set(_importDupeNames));
-        summary+=' — ⚠ '+uniqDupes.length+' camper'+(uniqDupes.length>1?'s':'')+' shared a name with someone else in the roster but had a different parent email, so '+(uniqDupes.length>1?'they were':'it was')+' kept separately and renamed with a "(2)" suffix to tell them apart ('+uniqDupes.join(', ')+')';
-        console.warn('[Me] CSV import: same-name-different-email camper(s) disambiguated in roster —',uniqDupes);
+        summary+=' — ⚠ '+uniqDupes.length+' camper'+(uniqDupes.length>1?'s':'')+' shared a name with someone else in the roster but were from a different family, so '+(uniqDupes.length>1?'they were':'it was')+' kept separately and renamed with a "(2)" suffix to tell them apart ('+uniqDupes.join(', ')+')';
+        console.warn('[Me] CSV import: same-name-different-family camper(s) disambiguated in roster —',uniqDupes);
     }
     toast(summary);
     console.log('[Me] CSV import ('+mode+'):',summary);
@@ -13583,6 +13916,7 @@ window.CampistryMe={
     addForm:addForm,deleteForm:deleteForm,viewFormResponses:viewFormResponses,
     switchFormsTab:switchFormsTab,
     addLinkDigitalForm:addLinkDigitalForm,addLinkPrintForm:addLinkPrintForm,addLinkDocument:addLinkDocument,
+    addLinkPdfForm:addLinkPdfForm,
     editLinkItem:editLinkItem,deleteLinkItem:deleteLinkItem,
     // Reports
     exportRosterReport:exportRosterReport,exportFamilyReport:exportFamilyReport,printFamilies:printFamilies,
