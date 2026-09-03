@@ -63,18 +63,37 @@
     // dismissing Face ID in any other app leaves you on the screen
     // underneath it, not one more tap away from it.
     function showPane(name) {
-        const panes = { form: $('liteLoginForm'), offer: $('liteBioOffer') };
+        const panes = { form: $('liteLoginForm'), offer: $('liteBioOffer'), verify: $('liteVerifyForm') };
         Object.keys(panes).forEach(k => { if (panes[k]) panes[k].hidden = k !== name; });
         // The mode toggle and its footnotes belong to the form pane only —
         // they'd read as a stray extra choice sitting above the post-sign-in
-        // biometric offer.
+        // biometric offer or the verification-code pane.
         const formOnly = name === 'form';
         $('liteLoginModes').hidden = !formOnly;
         $('liteFootSignin').hidden = !formOnly || authMode === 'signup';
         $('liteFootSignup').hidden = !formOnly || authMode !== 'signup';
         const sub = $('liteLoginSub');
-        if (sub) { sub.hidden = false; sub.textContent = name === 'offer' ? 'You’re signed in' : (authMode === 'signup' ? 'Create your account' : 'Sign in to your camp'); }
+        if (sub) {
+            sub.hidden = false;
+            sub.textContent = name === 'offer' ? 'You’re signed in'
+                : name === 'verify' ? 'Check your email'
+                : (authMode === 'signup' ? 'Create your account' : 'Sign in to your camp');
+        }
         $('liteLogin').style.display = '';
+    }
+
+    let pendingVerifyEmail = null;   // whose code the verify pane is waiting on
+
+    function showVerifyPane(email) {
+        pendingVerifyEmail = email;
+        const label = $('liteVerifyEmail');
+        if (label) label.textContent = email;
+        const err = $('liteVerifyErr');
+        if (err) { err.hidden = true; err.textContent = ''; }
+        const code = $('liteVerifyCode');
+        if (code) code.value = '';
+        showPane('verify');
+        setTimeout(() => code && code.focus(), 100);
     }
 
 
@@ -248,6 +267,48 @@
         location.replace(HOME);
     }
 
+    // Shared tail for "we now have a real, usable session for a brand-new
+    // account" — reached either straight from signUp() (when this project's
+    // Auth settings don't require confirmation) or from a successful
+    // verifyOtp() code check (when they do). Mirrors landing.js's own
+    // "SIGNUP: accept invite" branch exactly — an admin must have already
+    // created this camp_users row (Team management, or campistry_me.js's
+    // "Invite to Lite" action) for there to be anything to claim. Query
+    // WITHOUT .is('user_id', null): a race with another tab/flow may have
+    // already accepted it.
+    async function claimInviteAndEnter(sb, email, user) {
+        if (user?.id) localStorage.setItem('campistry_auth_user_id', user.id);
+        try {
+            const { data: invite } = await sb
+                .from('camp_users')
+                .select('id, role, camp_id, user_id')
+                .eq('email', email.toLowerCase())
+                .maybeSingle();
+            if (invite) {
+                if (!invite.user_id) {
+                    await sb.from('camp_users')
+                        .update({ user_id: user.id, accepted_at: new Date().toISOString() })
+                        .eq('id', invite.id);
+                }
+                localStorage.setItem('campistry_camp_id', invite.camp_id);
+                localStorage.setItem('campistry_role', invite.role);
+                localStorage.setItem('campistry_is_team_member', 'true');
+            }
+            // No invite found: still proceed — campistry_lite.js's own
+            // boot() shows "No camp found for this account" clearly,
+            // rather than this screen guessing at a different message
+            // for what is ultimately the same unresolved-camp state.
+        } catch (claimErr) {
+            console.warn('[Lite] invite claim failed:', claimErr);
+        }
+
+        if (Bio) Bio.markVerified();
+        busy(false);
+        signedInUserId = user?.id || null;
+        if (maybeOfferBio(signedInUserId)) return;
+        location.replace(HOME);
+    }
+
     // Called after a successful password sign-in. Returns true if we're showing
     // the offer (so the caller must not navigate away).
     function maybeOfferBio(userId) {
@@ -297,50 +358,15 @@
                     if (error) throw error;
                     if (!data?.session) {
                         // This project's Auth settings require email confirmation —
-                        // the account exists but isn't usable yet. Nothing to claim
-                        // until they come back with a real session.
+                        // the account exists but isn't usable yet. Same code-entry
+                        // mechanism landing.js already uses for the main site (see
+                        // showVerifyPane above) rather than relying on the emailed
+                        // link, which a shared template can't guarantee shows.
                         busy(false);
-                        setAuthMode('signin');
-                        showErr('Account created — check your email to confirm it, then sign in.');
+                        showVerifyPane(email);
                         return;
                     }
-                    if (data.user?.id) localStorage.setItem('campistry_auth_user_id', data.user.id);
-
-                    // Mirrors landing.js's own "SIGNUP: accept invite" branch
-                    // exactly — an admin must have already created this
-                    // camp_users row (Team management, or campistry_me.js's
-                    // "Invite to Lite" action) for there to be anything to
-                    // claim. Query WITHOUT .is('user_id', null): a race with
-                    // another tab/flow may have already accepted it.
-                    try {
-                        const { data: invite } = await sb
-                            .from('camp_users')
-                            .select('id, role, camp_id, user_id')
-                            .eq('email', email.toLowerCase())
-                            .maybeSingle();
-                        if (invite) {
-                            if (!invite.user_id) {
-                                await sb.from('camp_users')
-                                    .update({ user_id: data.user.id, accepted_at: new Date().toISOString() })
-                                    .eq('id', invite.id);
-                            }
-                            localStorage.setItem('campistry_camp_id', invite.camp_id);
-                            localStorage.setItem('campistry_role', invite.role);
-                            localStorage.setItem('campistry_is_team_member', 'true');
-                        }
-                        // No invite found: still proceed — campistry_lite.js's own
-                        // boot() shows "No camp found for this account" clearly,
-                        // rather than this screen guessing at a different message
-                        // for what is ultimately the same unresolved-camp state.
-                    } catch (claimErr) {
-                        console.warn('[Lite] invite claim failed:', claimErr);
-                    }
-
-                    if (Bio) Bio.markVerified();
-                    busy(false);
-                    signedInUserId = data.user?.id || null;
-                    if (maybeOfferBio(signedInUserId)) return;
-                    location.replace(HOME);
+                    await claimInviteAndEnter(sb, email, data.user);
                 } catch (err) {
                     showErr(friendlyAuthError(err));
                     busy(false);
@@ -351,7 +377,14 @@
             busy(true);
             try {
                 const { data, error } = await sb.auth.signInWithPassword({ email, password });
-                if (error) throw error;
+                if (error) {
+                    if (/Email not confirmed/i.test(error.message || '')) {
+                        busy(false);
+                        showVerifyPane(email);
+                        return;
+                    }
+                    throw error;
+                }
                 if (!data?.session) throw new Error('Could not start a session. Please try again.');
                 // Same cache key the rest of Campistry reads, so Lite's auth gate
                 // can refresh a session instead of bouncing back here.
@@ -367,6 +400,55 @@
                 showErr(friendlyAuthError(err));
                 busy(false);
             }
+        });
+
+        $('liteVerifyForm').addEventListener('submit', async (e) => {
+            e.preventDefault();
+            const errEl = $('liteVerifyErr');
+            const say = (msg) => { if (errEl) { errEl.textContent = msg; errEl.hidden = !msg; } };
+            const code = ($('liteVerifyCode').value || '').trim();
+            if (!/^\d{6}$/.test(code)) { say('Enter the 6-digit code from your email.'); return; }
+            const sb = client();
+            if (!sb || !pendingVerifyEmail) { say('Something went wrong — go back and try again.'); return; }
+            const btn = $('liteVerifyBtn');
+            btn.disabled = true; btn.textContent = 'Verifying…';
+            try {
+                // type:'signup' is the OTP *type* (confirming a signup token),
+                // not a claim about when it was sent — correct both right
+                // after signup and for an existing unconfirmed account
+                // retrying login. Same call landing.js relies on.
+                const { data, error } = await sb.auth.verifyOtp({ email: pendingVerifyEmail, token: code, type: 'signup' });
+                if (error) throw error;
+                if (!data?.user) throw new Error('Verification failed. Please try again.');
+                await claimInviteAndEnter(sb, pendingVerifyEmail, data.user);
+            } catch (err) {
+                say(friendlyAuthError(err) || 'Invalid or expired code.');
+                btn.disabled = false; btn.textContent = 'Verify';
+            }
+        });
+
+        $('liteVerifyResend').addEventListener('click', async () => {
+            const sb = client();
+            if (!sb || !pendingVerifyEmail) return;
+            const btn = $('liteVerifyResend');
+            const original = btn.textContent;
+            btn.textContent = 'Sending…'; btn.disabled = true;
+            try {
+                const { error } = await sb.auth.resend({ type: 'signup', email: pendingVerifyEmail });
+                const errEl = $('liteVerifyErr');
+                if (error) { if (errEl) { errEl.textContent = friendlyAuthError(error); errEl.hidden = false; } }
+                else { toast('A new code has been sent to ' + pendingVerifyEmail + '.'); }
+            } catch (_) {
+                toast('Could not resend — check your connection.');
+            } finally {
+                btn.textContent = original; btn.disabled = false;
+            }
+        });
+
+        $('liteVerifyBack').addEventListener('click', () => {
+            pendingVerifyEmail = null;
+            setAuthMode('signin');
+            showPane('form');
         });
 
         $('liteBioGo').addEventListener('click', () => { showErr(''); runBio(); });
