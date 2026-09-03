@@ -3526,6 +3526,41 @@ function _localTspOrder(stops, campLat, campLng, isArrival) {
         return t;
     }
 
+    // Or-opt: lift a run of 1-3 consecutive stops and reinsert it elsewhere.
+    // 2-opt alone can't fix a single stop stranded in the wrong part of the
+    // sequence, which is the common case on a long dense route.
+    function orOpt(tour) {
+        const t = tour.slice();
+        let improved = true, guard = 0;
+        while (improved && guard++ < 30) {
+            improved = false;
+            for (let len = 1; len <= 3 && !improved; len++) {
+                for (let i = 0; i + len <= t.length && !improved; i++) {
+                    const seg = t.slice(i, i + len);
+                    const rest = t.slice(0, i).concat(t.slice(i + len));
+                    if (rest.length < 2) continue;
+                    const baseLen = tourLen(t);
+                    let bestPos = -1, bestLen = baseLen - 1e-9, bestRev = false;
+                    for (let j = 0; j <= rest.length; j++) {
+                        for (const rev of [false, true]) {
+                            const piece = rev ? seg.slice().reverse() : seg;
+                            const cand = rest.slice(0, j).concat(piece, rest.slice(j));
+                            const L = tourLen(cand);
+                            if (L < bestLen) { bestLen = L; bestPos = j; bestRev = rev; }
+                        }
+                    }
+                    if (bestPos >= 0) {
+                        const piece = bestRev ? seg.slice().reverse() : seg;
+                        const next = rest.slice(0, bestPos).concat(piece, rest.slice(bestPos));
+                        t.length = 0; Array.prototype.push.apply(t, next);
+                        improved = true;
+                    }
+                }
+            }
+        }
+        return t;
+    }
+
     // Try a bounded set of starts (the stop nearest camp, plus a spread of
     // others) so one bad seed can't decide the route.
     const seeds = new Set([0]);
@@ -3537,7 +3572,14 @@ function _localTspOrder(stops, campLat, campLng, isArrival) {
 
     let best = null, bestLen = Infinity;
     for (const s of seeds) {
-        const t = twoOpt(nearestFrom(s));
+        // alternate 2-opt and or-opt until neither helps
+        let t = nearestFrom(s), prev = Infinity;
+        for (let round = 0; round < 4; round++) {
+            t = orOpt(twoOpt(t));
+            const L = tourLen(t);
+            if (L >= prev - 1e-6) break;
+            prev = L;
+        }
         const len = tourLen(t);
         if (len < bestLen) { bestLen = len; best = t; }
     }
