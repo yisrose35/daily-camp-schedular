@@ -3516,11 +3516,15 @@ function _localTspOrder(stops, campLat, campLng, isArrival) {
             total += n * ride;
             if (ride > worst) worst = ride;
         }
-        // Minimising the TOTAL alone will happily strand one small family at the
-        // very end, so weight the worst ride too — a school judges a route by the
-        // child who sits on it longest, not by the average.
-        // Plus a gentle tie-break toward shorter driving.
-        return total + worst * headcount * 0.4 + tourLen(t) * Math.max(1, headcount / 40);
+        // A max-ride penalty was tried here and measured as pure loss on the
+        // camp's real data: identical worst ride and identical over-60/over-75
+        // counts, but ~300 more child-minutes overall. The worst route's ceiling
+        // is set by its district being far from camp, not by stop order, so it is
+        // fixed by handing stops to another bus (see _relieveLongRoutes), not by
+        // reordering. Keep the honest objective: total riding time, with a gentle
+        // tie-break toward shorter driving.
+        void worst;
+        return total + tourLen(t) * Math.max(1, headcount / 40);
     }
     function nearestFrom(startIdx) {
         const rem = stops.slice();
@@ -3640,7 +3644,7 @@ function _routeLastDropMin(r, campLat, campLng, avgSpeedMph, avgStopMin) {
 
 function _relieveLongRoutes(routes, campLat, campLng, isArrival, avgSpeedMph, avgStopMin) {
     const MAX_MOVES = 10;
-    const MAX_HANDOFF_MI = 4.0;
+    const MAX_HANDOFF_MI = 6.0;
     const est = r => _routeLastDropMin(r, campLat, campLng, avgSpeedMph, avgStopMin);
     let moves = 0;
 
