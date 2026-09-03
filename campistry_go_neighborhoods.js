@@ -969,25 +969,69 @@ window.CampistryGoNeighborhoods = (function () {
             };
         }
 
-        // --- 1. Pre-split oversize neighborhoods along spine ---
+        // --- 1. Pre-split oversize neighborhoods GEOGRAPHICALLY ------------------
+        // Community detection can hand back one enormous neighborhood: on the
+        // camp's real data a single NH held 509 of 744 campers (68%) across 5405
+        // segments with a 16-MILE bounding box, while every other NH was 0.3-2.3mi.
+        // The old split walked segmentIds in spine order and cut every time the
+        // running total hit a bus, so consecutive graph-traversal segments — which
+        // can be miles apart — landed in the same piece. Each piece was therefore
+        // smeared across the whole territory, and any bus receiving one instantly
+        // spanned 7-13mi. That, not the packer, was the real source of the
+        // map-crossing routes.
+        //
+        // Split on GEOGRAPHY instead: recursively cut the segment set at its
+        // camper-count median along whichever axis it is widest, until each piece
+        // fits a bus. That yields compact, bus-sized blocks.
+        const _segIndex = {};
+        for (const s of result.segments) _segIndex[s.id] = s;
+
+        function _splitByGeography(items, cap) {
+            const total = items.reduce((a, x) => a + x.count, 0);
+            if (total <= cap || items.length <= 1) return [items];
+            const placed = items.filter(x => x.lat != null);
+            if (placed.length < 2) return [items];
+            let mnLa = Infinity, mxLa = -Infinity, mnLo = Infinity, mxLo = -Infinity;
+            for (const x of placed) {
+                if (x.lat < mnLa) mnLa = x.lat; if (x.lat > mxLa) mxLa = x.lat;
+                if (x.lng < mnLo) mnLo = x.lng; if (x.lng > mxLo) mxLo = x.lng;
+            }
+            // compare spans in comparable units (lng shrinks with latitude)
+            const latSpan = mxLa - mnLa;
+            const lngSpan = (mxLo - mnLo) * Math.cos(((mnLa + mxLa) / 2) * Math.PI / 180);
+            const key = latSpan >= lngSpan ? 'lat' : 'lng';
+            const sorted = items.slice().sort((a, b) => {
+                if (a[key] == null) return 1;
+                if (b[key] == null) return -1;
+                return a[key] - b[key];
+            });
+            // cut at the camper-count median so both halves carry similar load
+            let acc = 0, cut = 0;
+            for (let i = 0; i < sorted.length; i++) {
+                acc += sorted[i].count;
+                if (acc >= total / 2) { cut = i + 1; break; }
+            }
+            if (cut <= 0 || cut >= sorted.length) cut = Math.max(1, Math.floor(sorted.length / 2));
+            return _splitByGeography(sorted.slice(0, cut), cap)
+               .concat(_splitByGeography(sorted.slice(cut), cap));
+        }
+
         const workNhs = [];
         for (const nh of result.neighborhoods) {
             if (nh.camperCount <= maxCap) { workNhs.push(nh); continue; }
-            const segCamperCounts = nh.segmentIds.map(sid => {
-                const s = result.segments.find(x => x.id === sid);
-                return { sid, count: s ? s.homes.length : 0 };
-            });
-            const pieces = [];
-            let cur = { segIds: [], count: 0 };
-            for (const sc of segCamperCounts) {
-                if (cur.count + sc.count > maxCap && cur.segIds.length) {
-                    pieces.push(cur);
-                    cur = { segIds: [], count: 0 };
+            // one point per segment = the mean of its homes
+            const segPts = nh.segmentIds.map(sid => {
+                const s = _segIndex[sid];
+                if (!s || !s.homes || !s.homes.length) return { sid, lat: null, lng: null, count: 0 };
+                let la = 0, lo = 0, n = 0;
+                for (const h of s.homes) {
+                    if (Number.isFinite(h.lat) && Number.isFinite(h.lng)) { la += h.lat; lo += h.lng; n++; }
                 }
-                cur.segIds.push(sc.sid);
-                cur.count += sc.count;
-            }
-            if (cur.segIds.length) pieces.push(cur);
+                return { sid, lat: n ? la / n : null, lng: n ? lo / n : null, count: s.homes.length };
+            });
+            const pieces = _splitByGeography(segPts, maxCap)
+                .filter(b => b.length)
+                .map(b => ({ segIds: b.map(x => x.sid), count: b.reduce((a, x) => a + x.count, 0) }));
 
             pieces.forEach((p, i) => {
                 const pieceId = nh.id + '_p' + i;
@@ -1008,7 +1052,7 @@ window.CampistryGoNeighborhoods = (function () {
                 // piece landed on every one of the worst (7-13mi) buses.
                 const pieceHomes = [];
                 for (const sid of p.segIds) {
-                    const seg = result.segments.find(x => x.id === sid);
+                    const seg = _segIndex[sid];
                     if (seg && seg.homes) {
                         for (const h of seg.homes) {
                             if (Number.isFinite(h.lat) && Number.isFinite(h.lng)) pieceHomes.push(h);
