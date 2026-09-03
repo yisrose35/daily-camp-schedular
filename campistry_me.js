@@ -2216,7 +2216,7 @@ function renderCamperDetailPage(){
     g+=_dpCard('Medical Summary',med,{flag:hasMedFlags,icon:'heart'});
 
     var docs=(d.documents||[]);
-    g+=_dpCard('Documents',renderDocuments(n),{icon:'fileText',badge:docs.length?String(docs.length):'',actionHtml:'<button class="me-btn me-btn--ghost me-btn--sm" onclick="CampistryMe.uploadDocument(\''+je(n)+'\')">+ Upload</button>'});
+    g+=_dpCard('Documents',renderDocuments(n),{icon:'fileText',badge:docs.length?String(docs.length):'',actionHtml:'<button class="me-btn me-btn--ghost me-btn--sm" onclick="CampistryMe.scanDocument(\''+je(n)+'\')">Scan</button><button class="me-btn me-btn--ghost me-btn--sm" onclick="CampistryMe.uploadDocument(\''+je(n)+'\')">+ Upload</button>'});
 
     var schols=d.scholarships||[];
     var aidBody=schols.length?schols.map(function(s){return cvR(s.type,fm(s.amount)+(s.source?' — '+s.source:'')+(s.date?' ('+s.date+')':''))}).join(''):'<div style="font-size:.8rem;color:var(--s400);font-style:italic">No aid on file</div>';
@@ -12672,8 +12672,20 @@ function _removeCustomField(i){customFields.splice(i,1);saveCustomFields();save(
 // ═══════════════════════════════════════════════════════════════
 function uploadDocument(camperName){
     var inp=document.createElement('input');inp.type='file';inp.accept='.pdf,.jpg,.jpeg,.png,.doc,.docx';
-    inp.onchange=function(){if(!inp.files[0])return;var file=inp.files[0];if(file.size>5*1024*1024){toast('Max 5MB','error');return}
-    var reader=new FileReader();reader.onload=function(e){if(!roster[camperName])return;if(!roster[camperName].documents)roster[camperName].documents=[];roster[camperName].documents.push({name:file.name,type:file.type,size:file.size,data:e.target.result,uploadDate:new Date().toISOString()});save();viewCamper(camperName);toast('Uploaded: '+file.name)};reader.readAsDataURL(file)};inp.click();
+    inp.onchange=function(){if(!inp.files[0])return;_storeDocumentFile(camperName,inp.files[0])};inp.click();
+}
+// "Scan" alternative — photograph one or more pages, pdf-lib turns them into
+// a real PDF client-side, then it's stored exactly like a normal upload.
+function scanDocument(camperName){
+    if(!window.CampistryScanToPdf){toast('Scanning isn\'t available right now — refresh and try again','error');return}
+    window.CampistryScanToPdf.open({
+        title:'Scan Document',
+        onDone:function(file){_storeDocumentFile(camperName,file)}
+    });
+}
+function _storeDocumentFile(camperName,file){
+    if(file.size>5*1024*1024){toast('Max 5MB','error');return}
+    var reader=new FileReader();reader.onload=function(e){if(!roster[camperName])return;if(!roster[camperName].documents)roster[camperName].documents=[];roster[camperName].documents.push({name:file.name,type:file.type,size:file.size,data:e.target.result,uploadDate:new Date().toISOString()});save();viewCamper(camperName);toast('Uploaded: '+file.name)};reader.readAsDataURL(file);
 }
 function renderDocuments(camperName){
     var docs=(roster[camperName]&&roster[camperName].documents)||[];if(!docs.length)return'<div style="font-size:.8rem;color:var(--s400);font-style:italic">No documents</div>';
@@ -13935,7 +13947,7 @@ window.CampistryMe={
     // Custom fields
     manageCustomFields:manageCustomFields,_addCustomField:_addCustomField,_removeCustomField:_removeCustomField,
     // Documents
-    uploadDocument:uploadDocument,_removeDoc:_removeDoc,
+    uploadDocument:uploadDocument,scanDocument:scanDocument,_removeDoc:_removeDoc,
     // Scholarships
     addScholarship:addScholarship,
     // Print Sheets

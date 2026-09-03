@@ -2039,6 +2039,21 @@ function handleFormReturn(rowId,camperName,formName,input,formId){
     input.value='';
 }
 
+// "Scan" alternative to the file picker above — photograph one or more
+// pages, pdf-lib turns them into a real PDF client-side, and the result
+// feeds into the exact same handleFormReturn() path as a normal upload
+// (a plain {files:[file]} object works fine — handleFormReturn only ever
+// reads input.files[0] and does a harmless input.value='' at the end).
+function scanFormReturn(rowId,camperName,formName,formId){
+    if (!window.CampistryScanToPdf) { toast('Scanning isn’t available right now — refresh and try again'); return; }
+    window.CampistryScanToPdf.open({
+        title: 'Scan ' + formName,
+        onDone: function(file){
+            handleFormReturn(rowId, camperName, formName, { files: [file], value: '' }, formId);
+        }
+    });
+}
+
 function switchHealth(id){
     // Active-chip toggling is handled by _renderCamperSwitch itself now.
     var c=children.find(function(k){return k.id===id});if(!c)return;
@@ -3845,6 +3860,9 @@ window.addEventListener('storage', function(e) {
 <script>
 if (window.pdfjsLib) { window.pdfjsLib.GlobalWorkerOptions.workerSrc = 'pdfjs-dist@3.11.174.worker.min.js?v=20260903-04'; }
 </script>
+<!-- Scan Document: photograph a physical page and turn it into a real PDF
+     client-side (Print & Return "Scan" button, camper Documents "Scan"). -->
+<script src="campistry_scan_to_pdf.js?v=20260903-05"></script>
 <script>
 // =============================================================================
 // Parent Portal — Auth layer
@@ -4513,6 +4531,7 @@ if (window.pdfjsLib) { window.pdfjsLib.GlobalWorkerOptions.workerSrc = 'pdfjs-di
         var dlSvg='<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>';
         var ulSvg='<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg>';
         var checkSvg='<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="20 6 9 17 4 12"/></svg>';
+        var camSvg='<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M23 19a2 2 0 0 1-2 2H3a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h4l2-3h6l2 3h4a2 2 0 0 1 2 2z"/><circle cx="12" cy="13" r="4"/></svg>';
         var emptyEl = '<div style="font-size:.8rem;color:var(--text-muted);padding:8px 0;">No forms assigned yet.</div>';
 
         // Get submissions for this parent to show submitted state —
@@ -4570,6 +4589,7 @@ if (window.pdfjsLib) { window.pdfjsLib.GlobalWorkerOptions.workerSrc = 'pdfjs-di
                         prh+='<div style="display:flex;gap:6px;">';
                         if(f.downloadUrl)prh+='<a class="btn btn-secondary btn-sm" href="'+_escHtml(f.downloadUrl)+'" target="_blank" download>'+dlSvg+' Download</a>';
                         prh+='<label class="btn '+(submitted?'btn-secondary':'btn-primary')+' btn-sm" style="cursor:pointer;">'+ulSvg+' '+(submitted?'Re-upload':'Upload')+'<input type="file" accept=".pdf,.jpg,.jpeg,.png" style="display:none;" onchange="handleFormReturn(\''+_escHtml(cid)+'\',\''+_escHtml(c.name)+'\',\''+_escHtml(f.name)+'\',this,\''+_escHtml(f.id||'')+'\')"></label>';
+                        prh+='<button type="button" class="btn btn-secondary btn-sm" onclick="scanFormReturn(\''+_escHtml(cid)+'\',\''+_escHtml(c.name)+'\',\''+_escHtml(f.name)+'\',\''+_escHtml(f.id||'')+'\')">'+camSvg+' Scan</button>';
                         prh+='</div></div>';
                     });
                 });
