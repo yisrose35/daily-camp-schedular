@@ -1046,9 +1046,28 @@ window.CampistryGoNeighborhoods = (function () {
                .concat(_splitByGeography(sorted.slice(cut), kRight));
         }
 
+        // Minutes for one bus to serve this neighbourhood alone from the depot.
+        // A tour through n scattered points runs roughly 0.5*sqrt(n) times the
+        // area's diagonal — the diagonal alone badly understates a dense loop.
+        function soloRideMin(camperCount, centroid, internalMi) {
+            if (!depot || !centroid) return 0;
+            const out = haversineMi(depot.lat, depot.lng, centroid.lat, centroid.lng);
+            const stops = Math.max(1, Math.round(camperCount / 2.5));
+            const inner = 0.5 * Math.sqrt(stops) * (internalMi || 0);
+            return ((out + inner) * 1.35 / Math.max(1, rideSpeedMph)) * 60 + stops * rideStopMin;
+        }
+
         const workNhs = [];
         for (const nh of result.neighborhoods) {
-            if (nh.camperCount <= maxCap) { workNhs.push(nh); continue; }
+            // Split on RIDE TIME as well as capacity. A township 6mi out with 42
+            // children fits a 48-seat bus, so it was never split — and the one bus
+            // covering it ran ~80 minutes while the fleet median was 18. Sharing it
+            // between two buses halves that, and capacity alone can never see it.
+            const solo = maxChildRideMin > 0
+                ? soloRideMin(nh.camperCount, nhCentroids[nh.id], nhInternalMi[nh.id])
+                : 0;
+            const needRideSplit = maxChildRideMin > 0 && solo > maxChildRideMin;
+            if (nh.camperCount <= maxCap && !needRideSplit) { workNhs.push(nh); continue; }
             // one point per segment = the mean of its homes
             const segPts = nh.segmentIds.map(sid => {
                 const s = _segIndex[sid];
@@ -1062,6 +1081,7 @@ window.CampistryGoNeighborhoods = (function () {
             // Aim for pieces that fill a bus. Grow k if a piece still overflows
             // (uneven geography can make one side heavier than its share).
             let k = Math.max(2, Math.ceil(nh.camperCount / maxCap));
+            if (needRideSplit) k = Math.max(k, Math.ceil(solo / maxChildRideMin));
             let buckets = _splitByGeography(segPts, k).filter(b => b.length);
             for (let guard = 0; guard < 8; guard++) {
                 const worst = buckets.reduce((m, b) => Math.max(m, b.reduce((a, x) => a + x.count, 0)), 0);
