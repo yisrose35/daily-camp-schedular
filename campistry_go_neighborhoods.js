@@ -1154,6 +1154,45 @@ window.CampistryGoNeighborhoods = (function () {
             return ((out + inner) * 1.35 / Math.max(1, rideSpeedMph)) * 60 + stops * rideStopMin;
         }
 
+        // Shift boundary segments out of an over-full piece into a neighbouring
+        // one. Buckets come out of _splitByGeography in spatial order, so a
+        // neighbour is genuinely adjacent on the ground.
+        //
+        // Growing k instead costs a WHOLE BUS: the camp's core neighbourhood
+        // wanted 10 buses of 50, overshot one bucket by a few children, and took
+        // 11 buses of ~45 — and that eleventh bus is exactly the one the distant
+        // township needed to split onto.
+        function _bucketCentroid(b) {
+            let la = 0, lo = 0, n = 0;
+            for (const p of b) { if (p.lat == null) continue; la += p.lat * p.count; lo += p.lng * p.count; n += p.count; }
+            return n ? { lat: la / n, lng: lo / n } : null;
+        }
+        function _rebalanceBuckets(buckets, cap) {
+            const sum = (b) => b.reduce((a, x) => a + x.count, 0);
+            for (let pass = 0; pass < 12; pass++) {
+                let moved = false;
+                for (let i = 0; i < buckets.length; i++) {
+                    if (sum(buckets[i]) <= cap || buckets[i].length < 2) continue;
+                    for (const j of [i - 1, i + 1]) {
+                        if (j < 0 || j >= buckets.length || !buckets[j]) continue;
+                        const cj = _bucketCentroid(buckets[j]);
+                        if (!cj) continue;
+                        let bi = -1, bd = Infinity;
+                        for (let s = 0; s < buckets[i].length; s++) {
+                            const p = buckets[i][s];
+                            if (p.lat == null) continue;
+                            if (sum(buckets[j]) + p.count > cap) continue;
+                            const d = haversineMi(p.lat, p.lng, cj.lat, cj.lng);
+                            if (d < bd) { bd = d; bi = s; }
+                        }
+                        if (bi >= 0) { buckets[j].push(buckets[i].splice(bi, 1)[0]); moved = true; break; }
+                    }
+                }
+                if (!moved) break;
+            }
+            return buckets.filter((b) => b.length);
+        }
+
         const workNhs = [];
         for (const nh of result.neighborhoods) {
             // Split on RIDE TIME as well as capacity. A township 6mi out with 42
@@ -1179,12 +1218,14 @@ window.CampistryGoNeighborhoods = (function () {
             // (uneven geography can make one side heavier than its share).
             let k = Math.max(2, Math.ceil(nh.camperCount / maxCap));
             if (needRideSplit) k = Math.max(k, Math.ceil(solo / maxChildRideMin));
-            let buckets = _splitByGeography(segPts, k).filter(b => b.length);
+            // Rebalance first; only add another piece (another bus) if shifting
+            // boundary segments genuinely can't bring every piece under a bus.
+            let buckets = _rebalanceBuckets(_splitByGeography(segPts, k).filter(b => b.length), maxCap);
             for (let guard = 0; guard < 8; guard++) {
                 const worst = buckets.reduce((m, b) => Math.max(m, b.reduce((a, x) => a + x.count, 0)), 0);
                 if (worst <= maxCap || k >= segPts.length) break;
                 k++;
-                buckets = _splitByGeography(segPts, k).filter(b => b.length);
+                buckets = _rebalanceBuckets(_splitByGeography(segPts, k).filter(b => b.length), maxCap);
             }
             const pieces = buckets
                 .map(b => ({ segIds: b.map(x => x.sid), count: b.reduce((a, x) => a + x.count, 0) }));
