@@ -1088,6 +1088,45 @@ window.CampistryGoNeighborhoods = (function () {
             return minD === Infinity ? 0 : minD;
         }
 
+        // --- Sector (depot-bearing) awareness -----------------------------------
+        // City-district model: buses radiate from the depot as sectors. A bus
+        // that must cover two areas should take ADJACENT ones (a narrow wedge),
+        // never OPPOSITE sides (north AND south through the depot), which forces
+        // an out-and-back straddle. We only use this on the FORCED paths
+        // (fallback + rebalance) where the spread cap can't be met — the clean
+        // under-cap path is unchanged. STRADDLE_PENALTY_MI is an effective-miles
+        // weight: a full 180° straddle costs this much extra vs a 0° alignment.
+        const STRADDLE_PENALTY_MI = 5.0;
+        function bearingFromDepot(c) {
+            if (!depot || !c) return null;
+            return Math.atan2(c.lng - depot.lng, c.lat - depot.lat); // radians
+        }
+        function angDiff(a, b) {
+            let d = Math.abs(a - b) % (2 * Math.PI);
+            return d > Math.PI ? 2 * Math.PI - d : d; // 0..π
+        }
+        // Max angular span (from depot) among a bus's NHs, optionally adding one.
+        function busAngularSpan(bus, extraNhId) {
+            const ids = extraNhId ? bus.neighborhoodIds.concat(extraNhId) : bus.neighborhoodIds;
+            const bearings = [];
+            for (const id of ids) {
+                const b = bearingFromDepot(nhCentroids[id]);
+                if (b != null) bearings.push(b);
+            }
+            if (bearings.length < 2) return 0;
+            let max = 0;
+            for (let i = 0; i < bearings.length; i++)
+                for (let j = i + 1; j < bearings.length; j++) {
+                    const d = angDiff(bearings[i], bearings[j]);
+                    if (d > max) max = d;
+                }
+            return max; // radians, 0..π
+        }
+        // Straddle cost in effective miles for putting nh on bus.
+        function straddleCost(bus, nhId) {
+            return STRADDLE_PENALTY_MI * (busAngularSpan(bus, nhId) / Math.PI);
+        }
+
         // --- 2a. Pass 1: prior-year preference (size-DESC for priority) ---
         const sortedBySize = [...workNhs].sort((a, b) => b.camperCount - a.camperCount);
         const assignedIds = new Set();
@@ -1149,9 +1188,14 @@ window.CampistryGoNeighborhoods = (function () {
                 if (bus.camperCount + nh.camperCount > bus.capacity) continue;
                 const newSpread = resultingSpread(bus, nh);
 
-                // Track best fallback (lowest resulting spread regardless of cap)
-                if (newSpread < fallbackScore) {
-                    fallbackScore = newSpread; fallbackTarget = bus;
+                // Track best fallback. When no bus can stay under the spread cap,
+                // prefer the one that keeps this bus SECTORAL (adjacent bearings)
+                // over one that would straddle the depot — a north+south bus and a
+                // compact blob can have the same raw spread, but only the straddle
+                // drives the "out and back for no reason" route.
+                const fbCost = newSpread + straddleCost(bus, nh.id);
+                if (fbCost < fallbackScore) {
+                    fallbackScore = fbCost; fallbackTarget = bus;
                 }
                 // Track best primary (must keep spread under cap)
                 if (newSpread > MAX_BUS_SPREAD_MI) continue;
@@ -1301,7 +1345,9 @@ window.CampistryGoNeighborhoods = (function () {
                         if (dst.camperCount + workNh.camperCount > dst.capacity) continue;
                         if (wouldSpreadExceed(dst, workNh, MAX_BUS_SPREAD_MI)) continue;
                         const dstC = busCentroid(dst), nhC = nhCentroids[nhId];
-                        const score = (dstC && nhC) ? haversineMi(nhC.lat, nhC.lng, dstC.lat, dstC.lng) : EMPTY_BUS_START_COST_MI;
+                        const baseScore = (dstC && nhC) ? haversineMi(nhC.lat, nhC.lng, dstC.lat, dstC.lng) : EMPTY_BUS_START_COST_MI;
+                        // Prefer a recipient that keeps the moved NH sectoral, not straddling.
+                        const score = baseScore + straddleCost(dst, nhId);
                         if (score < bestScore) { bestScore = score; best = dst; }
                     }
                     if (!best) continue;
