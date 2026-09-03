@@ -3658,8 +3658,10 @@ function _relieveLongRoutes(routes, campLat, campLng, isArrival, avgSpeedMph, av
                 const dAfter = _routeLastDropMin({ stops: dOrd }, campLat, campLng, avgSpeedMph, avgStopMin);
                 const after = Math.max(sAfter, dAfter);
                 // Don't relieve one bus by turning another into the new worst
-                // route: the recipient has to stay inside the fleet's target.
-                if (dAfter > target) continue;
+                // route. The recipient has to land clearly BELOW the route we
+                // are fixing — measuring against the fleet median instead was
+                // so strict that no handoff ever qualified.
+                if (dAfter > before - 5) continue;
                 if (after < before - 0.5 && (!bestMove || after < bestMove.after)) {
                     bestMove = { after, idx, n, dst, sOrd, dOrd };
                 }
