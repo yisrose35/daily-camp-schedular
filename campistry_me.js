@@ -2272,6 +2272,9 @@ function editCamper(n){
     h+='<div class="fsec">Parent / Guardian</div>';
     h+='<div class="fr">'+ff('Parent 1 Name','ceP1',d.parent1Name||'')+ff('Phone','ceP1Ph',d.parent1Phone||'')+'</div>';
     h+=ff('Email','ceP1Em',d.parent1Email||'','email');
+    h+='<p style="font-size:.68rem;color:var(--s400);margin:6px 0 4px">Second parent/guardian (optional):</p>';
+    h+='<div class="fr">'+ff('Full Name','ceP2',d.parent2Name||'')+ff('Relationship','ceP2Rel',d.parent2Relation||'')+'</div>';
+    h+='<div class="fr">'+ff('Phone','ceP2Ph',d.parent2Phone||'','tel')+ff('Email','ceP2Em',d.parent2Email||'','email')+'</div>';
 
     // Home vs summer address. Plenty of camp families spend the season at a
     // bungalow or a rental, so mail, transport and emergency contact all need
@@ -2372,6 +2375,8 @@ function saveCamper(){
         summerPhone:_v('ceSummerPhone'),
         parent1Name:_v('ceP1'),parent1Phone:_v('ceP1Ph'),
         parent1Email:_v('ceP1Em'),
+        parent2Name:_v('ceP2'),parent2Relation:_v('ceP2Rel'),
+        parent2Phone:_v('ceP2Ph'),parent2Email:_v('ceP2Em'),
         emergencyName:_v('ceEmN'),emergencyPhone:_v('ceEmPh'),
         emergencyRel:_v('ceEmR'),
         allergies:_v('ceAlg'),medications:_v('ceMed'),
@@ -5624,6 +5629,7 @@ var FC_SECTIONS=[
     {key:'camper',label:'Camper Information',desc:'Name, DOB, gender, school, grade, teacher',default:true},
     {key:'parent',label:'Parent / Guardian',desc:'Name, phone, email, second parent',default:true},
     {key:'address',label:'Home Address',desc:'Street, city, state, ZIP',default:true},
+    {key:'summerAddress',label:'Summer Address',desc:'Where the family is during the season — a bungalow, a rental, or with relatives.',default:true},
     {key:'emergency',label:'Emergency Contact',desc:'Name, relationship, phone',default:true},
     {key:'medical',label:'Medical Information',desc:'Allergies, medications, dietary, notes',default:true},
     {key:'preferences',label:'Preferences',desc:'Bunkmate request, separation, t-shirt, referral source',default:true},
@@ -5663,6 +5669,13 @@ var FC_FIELD_CATALOG={
         {id:'city',label:'City',required:true},
         {id:'state',label:'State'},
         {id:'zip',label:'ZIP',required:true}
+    ],
+    summerAddress:[
+        {id:'summerStreet',label:'Summer Street'},
+        {id:'summerCity',label:'Summer City'},
+        {id:'summerState',label:'Summer State'},
+        {id:'summerZip',label:'Summer ZIP'},
+        {id:'summerPhone',label:'Summer Phone'}
     ],
     emergency:[
         {id:'emName',label:'Emergency Contact Name',required:true},
@@ -8199,6 +8212,8 @@ function enrollCamper(id){
             school:e.school||'',schoolGrade:e.schoolGrade||'',teacher:e.teacher||'',
             division:'',grade:'',bunk:'',teams:{},team:'',
             street:e.street||'',city:e.city||'',state:e.state||'',zip:e.zip||'',
+            summerSameAsHome:e.summerSameAsHome!==false,
+            summerStreet:e.summerStreet||'',summerCity:e.summerCity||'',summerState:e.summerState||'',summerZip:e.summerZip||'',summerPhone:e.summerPhone||'',
             parent1Name:e.parentName||'',parent1Phone:e.parentPhone||'',parent1Email:e.parentEmail||'',
             parent2Name:e.parent2Name||'',parent2Phone:e.parent2Phone||'',parent2Email:e.parent2Email||'',parent2Relation:e.parent2Relation||'',
             emergencyName:e.emergencyName||'',emergencyPhone:e.emergencyPhone||'',emergencyRel:e.emergencyRel||'',
@@ -8229,6 +8244,7 @@ function enrollCamper(id){
         if(!c.schoolGrade&&e.schoolGrade)c.schoolGrade=e.schoolGrade;
         if(!c.teacher&&e.teacher)c.teacher=e.teacher;
         if(!c.street&&e.street){c.street=e.street;c.city=e.city;c.state=e.state;c.zip=e.zip;syncAddressToGo(e.camperName,c)}
+        if(!c.summerStreet&&e.summerStreet){c.summerSameAsHome=e.summerSameAsHome!==false;c.summerStreet=e.summerStreet;c.summerCity=e.summerCity;c.summerState=e.summerState;c.summerZip=e.summerZip;c.summerPhone=e.summerPhone}
         if(!c.parent1Name&&e.parentName){c.parent1Name=e.parentName;c.parent1Phone=e.parentPhone;c.parent1Email=e.parentEmail}
         if(!c.parent2Name&&e.parent2Name){c.parent2Name=e.parent2Name;c.parent2Phone=e.parent2Phone;c.parent2Email=e.parent2Email;c.parent2Relation=e.parent2Relation}
         if(!c.smsEmailConsent&&e.smsEmailConsent)c.smsEmailConsent=true; // never downgrade consent already captured
@@ -12456,7 +12472,7 @@ function addScholarship(camperName){
 // DUPLICATE DETECTION
 // ═══════════════════════════════════════════════════════════════
 // ── CSV ──────────────────────────────────────────────────────────
-var CSV_HEADERS=['First Name','Last Name','Date of Birth','Gender','School Name','School Grade','Teacher','Division','Grade','Bunk','Street Address','City','State','ZIP','Parent 1 Name','Parent 1 Phone','Parent 1 Email','Emergency Name','Emergency Phone','Emergency Relation','Allergies','Medications','Dietary Restrictions'];
+var CSV_HEADERS=['First Name','Last Name','Date of Birth','Gender','School Name','School Grade','Teacher','Division','Grade','Bunk','Street Address','City','State','ZIP','Summer Street','Summer City','Summer State','Summer ZIP','Summer Phone','Parent 1 Name','Parent 1 Phone','Parent 1 Email','Parent 2 Name','Parent 2 Relationship','Parent 2 Phone','Parent 2 Email','Emergency Name','Emergency Phone','Emergency Relation','Allergies','Medications','Dietary Restrictions'];
 
 function downloadTemplate(){
     // Build template with headers + league columns
@@ -12464,10 +12480,11 @@ function downloadTemplate(){
     var headers=CSV_HEADERS.slice();
     leagueNames.forEach(function(lg){headers.push('Team: '+lg)});
     var csv='\uFEFF'+headers.map(function(h){return'"'+h+'"'}).join(',')+'\n';
-    // Add 2 example rows
-    csv+='"John","Smith","2015-03-15","Male","PS 123","3rd","Mrs. Johnson","Juniors","3rd Grade","Bunk 1","123 Main St","Brooklyn","NY","11230","Jane Smith","555-123-4567","jane@email.com","Bob Smith","555-987-6543","Uncle","Peanuts","",""\n';
-    csv+='"Sarah","Cohen","2014-07-22","Female","Yeshiva Academy","4th","Rabbi Goldstein","Seniors","4th Grade","Bunk 7","456 Oak Ave","Woodmere","NY","11598","Rachel Cohen","555-222-3333","rachel@email.com","David Cohen","555-444-5555","Father","","Inhaler","Dairy-free"\n';
-    csv+='"","","","","","","","","","","","","","","","","","","","","","",""\n';
+    // Add 2 example rows. Row 1 has no summer address (stays home all season)
+    // and no second parent; row 2 shows both filled in.
+    csv+='"John","Smith","2015-03-15","Male","PS 123","3rd","Mrs. Johnson","Juniors","3rd Grade","Bunk 1","123 Main St","Brooklyn","NY","11230","","","","","","Jane Smith","555-123-4567","jane@email.com","","","","","Bob Smith","555-987-6543","Uncle","Peanuts","",""\n';
+    csv+='"Sarah","Cohen","2014-07-22","Female","Yeshiva Academy","4th","Rabbi Goldstein","Seniors","4th Grade","Bunk 7","456 Oak Ave","Woodmere","NY","11598","789 Lake Rd","Monticello","NY","12701","555-111-2222","Rachel Cohen","555-222-3333","rachel@email.com","David Cohen","Father","555-444-5555","david@email.com","Grandma Cohen","555-666-7777","Grandmother","","Inhaler","Dairy-free"\n';
+    csv+='"","","","","","","","","","","","","","","","","","","","","","","","","","","","","","","",""\n';
     var a=document.createElement('a');
     a.href=URL.createObjectURL(new Blob([csv],{type:'text/csv'}));
     a.download='campistry_camper_template.csv';
@@ -12486,8 +12503,20 @@ function handleCsv(file){
 
         // Parse header row to find column indices
         var hdr=parseCsvLine(lines[0]).map(function(h){return h.toLowerCase().trim()});
-        var col=function(names){
-            for(var i=0;i<names.length;i++){var idx=hdr.findIndex(function(h){return h.includes(names[i])});if(idx>=0)return idx}
+        // `exclude` lets a bare term like 'street' or 'city' skip headers that
+        // are really a MORE specific sibling field — e.g. 'Summer Street'
+        // contains 'street' too, so without excluding 'summer' a reordered
+        // CSV could match the home-address lookup to the summer column
+        // instead (or vice versa) purely by which one happens to come first.
+        var col=function(names,exclude){
+            for(var i=0;i<names.length;i++){
+                var idx=hdr.findIndex(function(h){
+                    if(!h.includes(names[i]))return false;
+                    if(exclude)for(var j=0;j<exclude.length;j++){if(h.includes(exclude[j]))return false}
+                    return true;
+                });
+                if(idx>=0)return idx;
+            }
             return-1;
         };
 
@@ -12502,13 +12531,22 @@ function handleCsv(file){
         var iDiv=col(['division']);
         var iGrade=col(['grade']);
         var iBunk=col(['bunk','cabin']);
-        var iStreet=col(['street','address']);
-        var iCity=col(['city']);
-        var iState=col(['state']);
-        var iZip=col(['zip','postal']);
+        var iStreet=col(['street','address'],['summer']);
+        var iCity=col(['city'],['summer']);
+        var iState=col(['state'],['summer']);
+        var iZip=col(['zip','postal'],['summer']);
+        var iSumStreet=col(['summer street','summer address']);
+        var iSumCity=col(['summer city']);
+        var iSumState=col(['summer state']);
+        var iSumZip=col(['summer zip','summer postal']);
+        var iSumPhone=col(['summer phone']);
         var iP1=col(['parent 1 name','parent name','parent1','mother','father']);
         var iP1Ph=col(['parent 1 phone','parent phone','parent1 phone']);
         var iP1Em=col(['parent 1 email','parent email','parent1 email']);
+        var iP2=col(['parent 2 name','parent2','second parent']);
+        var iP2Rel=col(['parent 2 relation','parent 2 relationship','second parent relation']);
+        var iP2Ph=col(['parent 2 phone','parent2 phone','second parent phone']);
+        var iP2Em=col(['parent 2 email','parent2 email','second parent email']);
         var iEmN=col(['emergency name','emergency contact']);
         var iEmPh=col(['emergency phone']);
         var iEmR=col(['emergency relation']);
@@ -12554,9 +12592,18 @@ function handleCsv(file){
                 city:iCity>=0?(c[iCity]||'').trim():'',
                 state:iState>=0?(c[iState]||'').trim():'',
                 zip:iZip>=0?(c[iZip]||'').trim():'',
+                summerStreet:iSumStreet>=0?(c[iSumStreet]||'').trim():'',
+                summerCity:iSumCity>=0?(c[iSumCity]||'').trim():'',
+                summerState:iSumState>=0?(c[iSumState]||'').trim():'',
+                summerZip:iSumZip>=0?(c[iSumZip]||'').trim():'',
+                summerPhone:iSumPhone>=0?(c[iSumPhone]||'').trim():'',
                 parent1Name:iP1>=0?(c[iP1]||'').trim():'',
                 parent1Phone:iP1Ph>=0?(c[iP1Ph]||'').trim():'',
                 parent1Email:iP1Em>=0?(c[iP1Em]||'').trim():'',
+                parent2Name:iP2>=0?(c[iP2]||'').trim():'',
+                parent2Relation:iP2Rel>=0?(c[iP2Rel]||'').trim():'',
+                parent2Phone:iP2Ph>=0?(c[iP2Ph]||'').trim():'',
+                parent2Email:iP2Em>=0?(c[iP2Em]||'').trim():'',
                 emergencyName:iEmN>=0?(c[iEmN]||'').trim():'',
                 emergencyPhone:iEmPh>=0?(c[iEmPh]||'').trim():'',
                 emergencyRel:iEmR>=0?(c[iEmR]||'').trim():'',
@@ -12733,10 +12780,25 @@ function importRows(rows){
     // name would otherwise silently collide: the second row overwrites the
     // first in roster with zero warning. Track and report it instead.
     var _importDupeNames=[];
+    // No summer address given in the CSV at all → same as home, resolved to
+    // the real home values right here (same convention editCamper/saveCamper
+    // already use) so nothing downstream needs to know about the flag.
+    function _resolveSummer(r){
+        var hasSummer=!!(r.summerStreet||r.summerCity||r.summerState||r.summerZip);
+        return {
+            summerSameAsHome:!hasSummer,
+            summerStreet:hasSummer?r.summerStreet:r.street,
+            summerCity:hasSummer?r.summerCity:r.city,
+            summerState:hasSummer?r.summerState:r.state,
+            summerZip:hasSummer?r.summerZip:r.zip,
+            summerPhone:r.summerPhone||''
+        };
+    }
     rows.forEach(function(r){
         if(roster[r.name])_importDupeNames.push(r.name);
         added++;
         var existingId=nextPersonId;nextPersonId++;
+        var summer=_resolveSummer(r);
 
         roster[r.name]={
             camperId:existingId,
@@ -12752,9 +12814,19 @@ function importRows(rows){
             city:r.city||'',
             state:r.state||'',
             zip:r.zip||'',
+            summerSameAsHome:summer.summerSameAsHome,
+            summerStreet:summer.summerStreet,
+            summerCity:summer.summerCity,
+            summerState:summer.summerState,
+            summerZip:summer.summerZip,
+            summerPhone:summer.summerPhone,
             parent1Name:r.parent1Name||'',
             parent1Phone:r.parent1Phone||'',
             parent1Email:r.parent1Email||'',
+            parent2Name:r.parent2Name||'',
+            parent2Relation:r.parent2Relation||'',
+            parent2Phone:r.parent2Phone||'',
+            parent2Email:r.parent2Email||'',
             emergencyName:r.emergencyName||'',
             emergencyPhone:r.emergencyPhone||'',
             emergencyRel:r.emergencyRel||'',
