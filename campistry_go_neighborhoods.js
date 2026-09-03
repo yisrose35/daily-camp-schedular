@@ -248,10 +248,18 @@ window.CampistryGoNeighborhoods = (function () {
             'https://overpass.kumi.systems/api/interpreter',
             'https://maps.mail.ru/osm/tools/overpass/api/interpreter'
         ];
+        // Overpass under load answers in 30-60s. Aborting at 20s and calling it a
+        // failure is right when we already hold a cached graph — but with no cache
+        // the alternative isn't "slightly slower", it's silently routing the whole
+        // camp on the much worse fallback path. Wait properly in that case.
+        const _haveAnyCache = (() => {
+            try { return !!localStorage.getItem(ROAD_GRAPH_CACHE_KEY); } catch (_) { return false; }
+        })();
+        const DIRECT_TIMEOUT_MS = _haveAnyCache ? 20000 : 60000;
         for (const url of endpoints) {
             try {
                 const controller = new AbortController();
-                const timeoutId = setTimeout(() => controller.abort(), 20000);
+                const timeoutId = setTimeout(() => controller.abort(), DIRECT_TIMEOUT_MS);
                 const resp = await fetch(url + '?data=' + encodeURIComponent(query), { signal: controller.signal });
                 clearTimeout(timeoutId);
                 if (!resp.ok) continue;
