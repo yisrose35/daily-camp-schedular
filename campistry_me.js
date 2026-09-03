@@ -12475,6 +12475,21 @@ function downloadTemplate(){
     toast('Template downloaded — fill it out and import');
 }
 
+// A row identifies the SAME camper as another row only when both the full
+// name AND the parent 1 email match (case-insensitive) — a shared name
+// alone (e.g. two unrelated "Kid Worcman"s) is not a duplicate.
+function _rowMatchKey(name,email){
+    return (name||'').trim().toLowerCase()+'|'+(email||'').trim().toLowerCase();
+}
+// roster is keyed by full name alone, so two DIFFERENT campers who happen
+// to share a name (different parent email) would otherwise silently
+// collide — find the next free "Name (2)", "Name (3)"... key instead.
+function _disambiguateRosterName(name){
+    var n=2;
+    while(roster[name+' ('+n+')'])n++;
+    return name+' ('+n+')';
+}
+
 function handleCsv(file){
     if(!file)return;
     // Accepts CSV/TXT/TSV as plain text, and Excel/ODS workbooks via the
@@ -12591,41 +12606,55 @@ function handleCsv(file){
             if(pvEl){pvEl.style.display='block';pvEl.innerHTML='<div style="font-weight:600;margin:8px 0 4px">'+rows.length+' campers found</div><div style="font-size:.75rem;color:var(--s400)">Columns detected: '+hdr.filter(function(h){return h}).length+'</div>'}
             var btn=document.getElementById('csvBtn');
             if(btn){btn.disabled=false;btn.onclick=async function(){
-                // ★ #3 + footgun: importRows WIPES all current campers/structure/families/bunks
-                //   (and fans the wipe to cloud) — confirm first. Also, roster is keyed by NAME,
-                //   so duplicate-name rows would silently overwrite each other; de-dupe (last
-                //   wins, matching the overwrite semantics) and warn so the count is honest.
-                var byName={},dupNames=[];
-                rows.forEach(function(r){ if(byName[r.name])dupNames.push(r.name); byName[r.name]=r; });
-                var uniqueRows=Object.keys(byName).map(function(n){return byName[n]});
-                var msg='Import will REPLACE all current campers, divisions, grades, bunks, and families with this file ('+uniqueRows.length+' camper'+(uniqueRows.length===1?'':'s')+'). This cannot be undone.';
-                if(dupNames.length){var ex=dupNames.slice(0,3).join(', ');msg+='<br><br>⚠ '+dupNames.length+' duplicate name'+(dupNames.length===1?'':'s')+' ('+esc(ex)+(dupNames.length>3?'…':'')+') — only the last row of each will be kept.';}
+                // ★ #3 + footgun: Replace mode WIPES all current campers/structure/
+                //   families/bunks (and fans the wipe to cloud) — confirm first, and
+                //   let the office choose Update instead when they just want to
+                //   refresh/add campers without touching everything else.
+                //   A row is only a TRUE duplicate of another when both the name AND
+                //   the parent 1 email match — a shared name alone (two unrelated
+                //   "Kid Worcman"s) is not a duplicate and both are kept.
+                var byKey={},dupNames=[];
+                rows.forEach(function(r){ var k=_rowMatchKey(r.name,r.parent1Email); if(byKey[k])dupNames.push(r.name); byKey[k]=r; });
+                var uniqueRows=Object.keys(byKey).map(function(k){return byKey[k]});
+                var msg='This file has '+uniqueRows.length+' camper'+(uniqueRows.length===1?'':'s')+'.';
+                if(dupNames.length){var ex=dupNames.slice(0,3).join(', ');msg+='<br><br>⚠ '+dupNames.length+' duplicate row'+(dupNames.length===1?'':'s')+' — same name AND same parent email as another row ('+esc(ex)+(dupNames.length>3?'…':'')+') — only the last row of each will be kept.';}
+                msg+='<div style="margin-top:14px;text-align:left">'
+                    +'<label style="font-size:.78rem;font-weight:600;color:var(--s600);display:block;margin-bottom:6px">Import mode:</label>'
+                    +'<label style="display:flex;align-items:flex-start;gap:8px;margin-bottom:8px;cursor:pointer;font-weight:400"><input type="radio" name="csvImportMode" value="replace" checked style="margin-top:3px"><span><strong>Replace</strong> — wipe all current campers, divisions, grades, bunks, and families, and start fresh from this file. Cannot be undone.</span></label>'
+                    +'<label style="display:flex;align-items:flex-start;gap:8px;cursor:pointer;font-weight:400"><input type="radio" name="csvImportMode" value="update" style="margin-top:3px"><span><strong>Update</strong> — match campers by name + parent email and update them from this file; anyone new is added. Everything already in the roster that isn\'t in this file is left alone.</span></label>'
+                    +'</div>';
                 // Import wipes the CURRENT roster/staff with zero history kept — the
                 // only "start fresh" action this app has. Snapshot who's here right
                 // now into camp_person_seasons first (see migration 088) so this
                 // season's attendance survives the wipe. Optional — clear the label
-                // to skip archiving for a plain data-correction re-import.
-                msg+='<div style="margin-top:14px;text-align:left"><label style="font-size:.78rem;font-weight:600;color:var(--s600);display:block;margin-bottom:4px">Archive the CURRENT roster as this season before replacing it (leave blank to skip):</label><input id="csvArchiveLabel" class="fi" value="'+esc(_defaultSeasonLabel())+'" style="width:100%;box-sizing:border-box"></div>';
-                var ok=await confirmDialog({title:'Replace All Camp Data?',message:msg,confirmLabel:'Import & Replace',danger:true});
+                // to skip archiving for a plain data-correction re-import. Shown for
+                // Update too since it's a handy free snapshot, but only Replace makes
+                // a failed archive a hard stop below (Update never destroys data).
+                msg+='<div style="margin-top:14px;text-align:left"><label style="font-size:.78rem;font-weight:600;color:var(--s600);display:block;margin-bottom:4px">Archive the CURRENT roster as this season first (leave blank to skip):</label><input id="csvArchiveLabel" class="fi" value="'+esc(_defaultSeasonLabel())+'" style="width:100%;box-sizing:border-box"></div>';
+                var ok=await confirmDialog({title:'Import Roster File?',message:msg,confirmLabel:'Import',danger:true});
                 if(!ok)return;
+                var modeEl=document.querySelector('input[name="csvImportMode"]:checked');
+                var mode=modeEl&&modeEl.value==='update'?'update':'replace';
                 var archiveLabelEl=document.getElementById('csvArchiveLabel');
                 var archiveLabel=(archiveLabelEl&&archiveLabelEl.value||'').trim();
                 if(archiveLabel){
                     toast('Archiving current season…');
                     var archiveRes=await archiveCurrentSeason(archiveLabel);
-                    // The import wipe below is irreversible. If the archive call
+                    // The Replace wipe below is irreversible. If the archive call
                     // didn't actually make it to the cloud (network error, RPC
                     // failure, migration 088 not yet run), silently continuing
                     // would wipe the roster while the office believes this
                     // season's history was saved. Make the failure loud and let
-                    // them choose, rather than lose data quietly.
-                    if(!archiveRes||archiveRes.success===false){
+                    // them choose, rather than lose data quietly. Update mode never
+                    // destroys existing data, so a failed archive there is just a
+                    // missed snapshot, not a data-loss risk — don't hard-block it.
+                    if(mode==='replace'&&(!archiveRes||archiveRes.success===false)){
                         var archErr=(archiveRes&&archiveRes.error)||'unknown error';
                         var proceedAnyway=await confirmDialog({title:'Archive Failed',message:'Could not save this season\'s attendance history to the cloud ('+esc(archErr)+'). If you continue, the current roster will be replaced and this season\'s history will be lost.<br><br>Continue with the import anyway?',confirmLabel:'Import Without Archiving',danger:true});
                         if(!proceedAnyway)return;
                     }
                 }
-                importRows(uniqueRows);
+                importRows(uniqueRows,mode);
             }}
         }
     };
@@ -12677,9 +12706,12 @@ async function archiveCurrentSeason(label){
     }catch(ex){console.error('[Me] archive_camp_season threw:',ex.message);return {success:false,error:ex.message};}
 }
 
-function importRows(rows){
+function importRows(rows,mode){
+    mode=mode==='update'?'update':'replace';
     var added=0,updated=0,newDivisions=0,newGrades=0,newBunks=0,newFamilies=0;
+    var _preservedGradeTimes={};
 
+    if(mode==='replace'){
     // ═══ WIPE EXISTING DATA — CSV is the new source of truth ═══
     roster={};
     structure={};
@@ -12696,7 +12728,6 @@ function importRows(rows){
     // ★ Preserve existing grade times (startTime/endTime) from app1.divisions
     //   so they survive re-imports. Times are configured in Flow and are
     //   independent of camper/roster data.
-    var _preservedGradeTimes={};
     try{
         var g=JSON.parse(localStorage.getItem('campGlobalSettings_v1')||'{}');
         // Snapshot grade times before wiping
@@ -12726,6 +12757,7 @@ function importRows(rows){
             window.saveGlobalSettings('campistryMe',g.campistryMe);
         }
     }catch(e){}
+    } // end mode==='replace' wipe
 
     // ═══ PASS 1: Build camp structure from CSV data ═══
     rows.forEach(function(r){
@@ -12745,21 +12777,18 @@ function importRows(rows){
         }
     });
 
-    // ═══ PASS 2: Create campers ═══
-    // roster is keyed by full name (wiped to {} above), and nearly every
-    // other system built on top of it — bunk assignment, bunk staff,
-    // families, enrollments, Link invites/tips/mail — joins on that SAME
-    // name string, not the numeric camperId. Two rows sharing an identical
-    // name would otherwise silently collide: the second row overwrites the
-    // first in roster with zero warning. Track and report it instead.
+    // ═══ PASS 2: Create/update campers ═══
+    // roster is keyed by full name, and nearly every other system built on
+    // top of it — bunk assignment, bunk staff, families, enrollments, Link
+    // invites/tips/mail — joins on that SAME name string, not the numeric
+    // camperId. Two DIFFERENT campers who happen to share a name (different
+    // parent email) would otherwise silently collide: the second row
+    // overwrites the first in roster with zero warning. Give the second one
+    // its own disambiguated key ("Name (2)") instead, and report it.
     var _importDupeNames=[];
-    rows.forEach(function(r){
-        if(roster[r.name])_importDupeNames.push(r.name);
-        added++;
-        var existingId=nextPersonId;nextPersonId++;
-
-        roster[r.name]={
-            camperId:existingId,
+    function _buildCamperRecord(r,camperId){
+        return {
+            camperId:camperId,
             dob:r.dob||'',
             gender:r.gender||'',
             school:r.school||'',
@@ -12784,18 +12813,56 @@ function importRows(rows){
             teams:r.teams||{},
             team:Object.values(r.teams)[0]||''
         };
+    }
+    rows.forEach(function(r){
+        var targetName=r.name,camperId,oldBunk=null,isUpdate=false;
+        var existing=roster[r.name];
+        if(mode==='update'&&existing&&_rowMatchKey(r.name,existing.parent1Email)===_rowMatchKey(r.name,r.parent1Email)){
+            // Same camper (name + parent email match) — update in place,
+            // keep their camperId, and move them off any OLD bunk they're
+            // no longer listed in.
+            isUpdate=true;
+            camperId=existing.camperId;
+            oldBunk=existing.bunk;
+        }else if(existing){
+            // A name collision that ISN'T the same camper: in Update mode
+            // this is a same-name-different-email camper already in the
+            // roster; in Replace mode it's two rows in THIS file sharing a
+            // name (the earlier de-dupe pass only collapses TRUE duplicates
+            // — same name AND parent email). Either way, don't overwrite —
+            // give them their own roster slot.
+            targetName=_disambiguateRosterName(r.name);
+            _importDupeNames.push(r.name);
+        }
+        if(isUpdate){updated++;}else{added++;camperId=nextPersonId;nextPersonId++;}
+
+        roster[targetName]=_buildCamperRecord(r,camperId);
+        if(oldBunk&&oldBunk!==r.bunk&&bunkAsgn[oldBunk]){
+            var oi=bunkAsgn[oldBunk].indexOf(targetName);
+            if(oi!==-1)bunkAsgn[oldBunk].splice(oi,1);
+        }
+        // PASS 3/4 below need the FINAL roster key, which can differ from
+        // r.name when a same-name-different-email collision was renamed.
+        r._resolvedName=targetName;
 
         // Sync address to Go
-        if(roster[r.name].street)syncAddressToGo(r.name,roster[r.name]);
+        if(roster[targetName].street)syncAddressToGo(targetName,roster[targetName]);
     });
 
     // ═══ PASS 3: Auto-generate families from parent data ═══
     // Cluster imported campers into families with the 3-of-4 rule (last name,
     // address, parent email, parent name) — never on a shared last name alone.
+    // Uses the FINAL roster key (r._resolvedName), which can differ from
+    // r.name when a same-name-different-email collision was renamed.
     var impItems=[];
     rows.forEach(function(r){
         if(!r.parent1Name)return;
-        impItems.push(_famItemRaw(r.name,r.street,r.city,r.state,r.zip,r.parent1Name,r.parent1Email));
+        // Derive last name from the ORIGINAL name (a "(2)" disambiguation
+        // suffix on the roster key would otherwise get picked up as the
+        // last name), then swap in the final roster key for camper linking.
+        var item=_famItemRaw(r.name,r.street,r.city,r.state,r.zip,r.parent1Name,r.parent1Email);
+        item.name=r._resolvedName||r.name;
+        impItems.push(item);
     });
     var impUf=impItems.map(function(_,i){return i});
     function impFind(i){while(impUf[i]!==i){impUf[i]=impUf[impUf[i]];i=impUf[i]}return i}
@@ -12836,9 +12903,10 @@ function importRows(rows){
 
     // ═══ PASS 4: Auto-populate bunk assignments ═══
     rows.forEach(function(r){
-        if(r.bunk&&r.name){
+        var rn=r._resolvedName||r.name;
+        if(r.bunk&&rn){
             if(!bunkAsgn[r.bunk])bunkAsgn[r.bunk]=[];
-            if(bunkAsgn[r.bunk].indexOf(r.name)===-1)bunkAsgn[r.bunk].push(r.name);
+            if(bunkAsgn[r.bunk].indexOf(rn)===-1)bunkAsgn[r.bunk].push(rn);
         }
     });
 
@@ -12876,19 +12944,20 @@ function importRows(rows){
     closeModal('csvModal');render(curPage);
 
     // Build summary
-    var summary=added+' campers imported';
+    var summary=added+' camper'+(added===1?'':'s')+' added';
+    if(mode==='update'&&updated>0)summary+=', '+updated+' updated';
     if(newDivisions>0)summary+=', '+newDivisions+' division'+(newDivisions>1?'s':'');
     if(newGrades>0)summary+=', '+newGrades+' grade'+(newGrades>1?'s':'');
     if(newBunks>0)summary+=', '+newBunks+' bunk'+(newBunks>1?'s':'');
     if(newFamilies>0)summary+=', '+newFamilies+' famil'+(newFamilies>1?'ies':'y');
-    summary+=' — previous data replaced';
+    summary+=mode==='update'?' — existing data preserved':' — previous data replaced';
     if(_importDupeNames.length>0){
         var uniqDupes=Array.from(new Set(_importDupeNames));
-        summary+=' — ⚠ '+uniqDupes.length+' duplicate name'+(uniqDupes.length>1?'s':'')+' in this file (only the last row for each was kept: '+uniqDupes.join(', ')+')';
-        console.warn('[Me] CSV import: duplicate camper name(s) collided in roster —',uniqDupes);
+        summary+=' — ⚠ '+uniqDupes.length+' camper'+(uniqDupes.length>1?'s':'')+' shared a name with someone else in the roster but had a different parent email, so '+(uniqDupes.length>1?'they were':'it was')+' kept separately and renamed with a "(2)" suffix to tell them apart ('+uniqDupes.join(', ')+')';
+        console.warn('[Me] CSV import: same-name-different-email camper(s) disambiguated in roster —',uniqDupes);
     }
     toast(summary);
-    console.log('[Me] CSV import (full overwrite):',summary);
+    console.log('[Me] CSV import ('+mode+'):',summary);
 }
 
 
