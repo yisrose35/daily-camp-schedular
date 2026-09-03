@@ -1405,14 +1405,14 @@ window.CampistryGoNeighborhoods = (function () {
                 const rideOver = maxChildRideMin > 0
                     ? Math.max(0, estimateBusRideMinWith(bus, nh) - maxChildRideMin)
                     : 0;
-                // A soft price on riding time was not enough: the fallback simply
-                // re-assembled the over-long bus the budget had just prevented, so
-                // the distant township came back at ~80 minutes no matter what the
-                // primary path did. Treat the budget as a real constraint here too.
-                // This is safe because a neighbourhood that fits NOWHERE still gets
-                // placed by the segment-wise spill below, which respects capacity.
-                if (rideOver > 0) continue;
-                const fbCost = newSpread + straddleCost(bus, nh.id);
+                // Keep this a PRICE, not a veto. Rejecting over-budget buses here
+                // outright was measured on the camp's real data and was worse on
+                // every count: worst ride 81->92min, worst spread 5.49->8.66mi,
+                // child-minutes 14756->15413. Vetoing pushes neighbourhoods into
+                // the segment-wise spill, which scatters their segments across
+                // whichever buses have room and shreds the districts. A bus a few
+                // minutes over budget beats a shredded neighbourhood.
+                const fbCost = newSpread + straddleCost(bus, nh.id) + rideOver * 0.25;
                 if (fbCost < fallbackScore) {
                     fallbackScore = fbCost; fallbackTarget = bus;
                 }
