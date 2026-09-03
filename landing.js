@@ -757,8 +757,13 @@ document.addEventListener('DOMContentLoaded', function() {
                 if (verifyError) verifyError.textContent = 'Something went wrong — please start over.';
                 return;
             }
-            if (!code || code.length !== 6) {
-                if (verifyError) verifyError.textContent = 'Enter the 6-digit code from your email.';
+            // Not hardcoded to 6: Supabase's email OTP length is a project
+            // setting (Authentication -> Emails), and this project's is
+            // actually 8 — a strict ===6 check silently rejected every
+            // correct code a real user typed in. Accept the range Supabase
+            // itself allows and let verifyOtp be the real authority.
+            if (!code || code.length < 6 || code.length > 10 || !/^\d+$/.test(code)) {
+                if (verifyError) verifyError.textContent = 'Enter the verification code from your email.';
                 return;
             }
 

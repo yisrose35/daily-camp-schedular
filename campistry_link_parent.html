@@ -16,8 +16,8 @@
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link href="https://fonts.googleapis.com/css2?family=Roboto:wght@400;500;700;900&family=Roboto+Flex:opsz,wght@8..144,400;8..144,500;8..144,700;8..144,900&display=swap" rel="stylesheet">
-    <link rel="stylesheet" href="campistry-unified.css?v=20260903-01">
-    <link rel="stylesheet" href="campistry_link.css?v=20260903-01">
+    <link rel="stylesheet" href="campistry-unified.css?v=20260903-03">
+    <link rel="stylesheet" href="campistry_link.css?v=20260903-03">
     <!-- Splash screen — inline so it appears before any external CSS -->
     <style>
         #link-splash {
@@ -3826,18 +3826,18 @@ window.addEventListener('storage', function(e) {
      namespace so the two apps never share or clobber an enrolment. Must be set
      before the module loads. -->
 <script>window.__CAMPISTRY_BIO_NS = 'link'; window.__CAMPISTRY_BIO_APP = 'Campistry Link';</script>
-<script src="campistry_lite_biometric.js?v=20260903-01"></script>
-<script src="campistry_bio_native.js?v=20260903-01"></script>
-<script src="campistry_haptics.js?v=20260903-01"></script>
-<script src="campistry_push.js?v=20260903-01"></script>
-<script src="campistry_keyboard.js?v=20260903-01"></script>
-<script src="campistry_notes_quick.js?v=20260903-01"></script>
-<script src="campistry_link_capacitor.js?v=20260903-01"></script>
-<script src="face_match_core.js?v=20260903-01"></script>
-<script src="campistry_face_shared.js?v=20260903-01"></script>
-<script src="campistry_face_engine_v2.js?v=20260903-01"></script>
-<script src="supabase-js@2.js?v=20260903-01"></script>
-<script src="config.js?v=20260903-01"></script>
+<script src="campistry_lite_biometric.js?v=20260903-03"></script>
+<script src="campistry_bio_native.js?v=20260903-03"></script>
+<script src="campistry_haptics.js?v=20260903-03"></script>
+<script src="campistry_push.js?v=20260903-03"></script>
+<script src="campistry_keyboard.js?v=20260903-03"></script>
+<script src="campistry_notes_quick.js?v=20260903-03"></script>
+<script src="campistry_link_capacitor.js?v=20260903-03"></script>
+<script src="face_match_core.js?v=20260903-03"></script>
+<script src="campistry_face_shared.js?v=20260903-03"></script>
+<script src="campistry_face_engine_v2.js?v=20260903-03"></script>
+<script src="supabase-js@2.js?v=20260903-03"></script>
+<script src="config.js?v=20260903-03"></script>
 <script>
 // =============================================================================
 // Parent Portal — Auth layer
@@ -4889,9 +4889,9 @@ window.addEventListener('storage', function(e) {
             '<div class="lk-login">' +
             '<div class="lk-login-badge"><span class="lk-login-mark" role="img" aria-label="Campistry"></span></div>' +
             '<h1 class="lk-login-title">Check your <span>email</span></h1>' +
-            '<p class="lk-login-sub">Enter the 6-digit code we sent to<br><strong>'+_esc(email)+'</strong></p>' +
+            '<p class="lk-login-sub">Enter the verification code we sent to<br><strong>'+_esc(email)+'</strong></p>' +
             '<div class="lk-login-field"><label for="paCodeInput">Verification code</label>' +
-            '<input class="lk-login-input" id="paCodeInput" type="text" inputmode="numeric" pattern="[0-9]*" maxlength="6" autocomplete="one-time-code" placeholder="123456" style="letter-spacing:.3em;text-align:center;font-size:1.3rem;font-weight:700;" onkeydown="if(event.key===\'Enter\')parentVerifyCode()"></div>' +
+            '<input class="lk-login-input" id="paCodeInput" type="text" inputmode="numeric" pattern="[0-9]*" maxlength="10" autocomplete="one-time-code" placeholder="123456" style="letter-spacing:.3em;text-align:center;font-size:1.3rem;font-weight:700;" onkeydown="if(event.key===\'Enter\')parentVerifyCode()"></div>' +
             '<button class="lk-login-go" onclick="parentVerifyCode()">Verify</button>' +
             '<div id="paMsg" class="lk-login-msg"></div>' +
             '<button class="lk-login-alt" id="paResendBtn" onclick="parentResendCode()">Resend code</button>' +
@@ -4905,7 +4905,12 @@ window.addEventListener('storage', function(e) {
     window.parentVerifyCode = function() {
         var email = window.__paVerifyEmail || '';
         var code = ((document.getElementById('paCodeInput')||{}).value||'').trim();
-        if (!code || code.length !== 6) { _setMsg('Enter the 6-digit code from your email.'); return; }
+        // Not hardcoded to 6: Supabase's email OTP length is a project
+        // setting, and this project's is actually 8 — a strict ===6 check
+        // silently rejected every correct code a real parent typed. Accept
+        // the range Supabase itself allows and let verifyOtp be the real
+        // authority on whether the code is right.
+        if (!code || code.length < 6 || code.length > 10 || !/^\d+$/.test(code)) { _setMsg('Enter the verification code from your email.'); return; }
         _setMsg('Verifying…', '#64748B');
         // type:'signup' is correct for both a fresh signup AND an existing
         // unconfirmed account retrying login — it's the OTP *type*
@@ -6314,6 +6319,6 @@ function _renderTipHistory(child) {
 })();
 </script>
 
-<script src="campistry_ota.js?v=20260903-01"></script>
+<script src="campistry_ota.js?v=20260903-03"></script>
 </body>
 </html>

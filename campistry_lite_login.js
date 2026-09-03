@@ -423,7 +423,12 @@
             const errEl = $('liteVerifyErr');
             const say = (msg) => { if (errEl) { errEl.textContent = msg; errEl.hidden = !msg; } };
             const code = ($('liteVerifyCode').value || '').trim();
-            if (!/^\d{6}$/.test(code)) { say('Enter the 6-digit code from your email.'); return; }
+            // Not hardcoded to 6: Supabase's email OTP length is a project
+            // setting, and this project's is actually 8 — a strict {6} check
+            // silently rejected every correct code a real user typed. Accept
+            // the range Supabase itself allows and let verifyOtp be the real
+            // authority on whether the code is right.
+            if (!/^\d{6,10}$/.test(code)) { say('Enter the verification code from your email.'); return; }
             const sb = client();
             if (!sb || !pendingVerifyEmail) { say('Something went wrong — go back and try again.'); return; }
             const btn = $('liteVerifyBtn');
