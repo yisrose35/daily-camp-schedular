@@ -1433,9 +1433,13 @@ window.CampistryGoNeighborhoods = (function () {
         // NEIGHBOURHOOD rather than per stop) are far off the real numbers and are
         // fine for a rebalance trigger but not as an assignment constraint.
         // Real roads are ~1.35x straight-line, and a stop serves ~2.5 children.
-        const RIDE_ROAD_FACTOR = 1.35;
-        const RIDE_CHILDREN_PER_STOP = 2.5;
+        // These live INSIDE the function on purpose: the declaration hoists but a
+        // const beside it would not, and the assignment loop above calls this
+        // before that point — which threw a temporal-dead-zone ReferenceError and
+        // silently dropped the whole pipeline to the old k-means fallback.
         function estimateBusRideMinWith(bus, nh) {
+            const RIDE_ROAD_FACTOR = 1.35;
+            const RIDE_CHILDREN_PER_STOP = 2.5;
             if (!depot) return 0;
             const ids = bus.neighborhoodIds.concat(nh.id);
             const pts = [];
