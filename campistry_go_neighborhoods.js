@@ -967,6 +967,7 @@ window.CampistryGoNeighborhoods = (function () {
         // proxy for that internal driving.
         const nhCentroids = {};
         const nhInternalMi = {};
+        const nhHomeCount = {};
         {
             const byNh = {};
             for (const h of result.homes) {
@@ -985,6 +986,7 @@ window.CampistryGoNeighborhoods = (function () {
                 }
                 nhCentroids[nh.id] = { lat: sLa / nhHomes.length, lng: sLo / nhHomes.length };
                 nhInternalMi[nh.id] = haversineMi(mnLa, mnLo, mxLa, mxLo);
+                nhHomeCount[nh.id] = nhHomes.length;
             }
         }
 
@@ -1129,9 +1131,11 @@ window.CampistryGoNeighborhoods = (function () {
                         lng: pieceHomes.reduce((s, h) => s + h.lng, 0) / pieceHomes.length,
                     };
                     nhInternalMi[pieceId] = haversineMi(mnLa, mnLo, mxLa, mxLo);
+                    nhHomeCount[pieceId] = pieceHomes.length;
                 } else if (nhCentroids[nh.id]) {
                     nhCentroids[pieceId] = nhCentroids[nh.id];
                     nhInternalMi[pieceId] = nhInternalMi[nh.id] || 0;
+                    nhHomeCount[pieceId] = p.count || 0;
                 }
             });
         }
@@ -1504,7 +1508,15 @@ window.CampistryGoNeighborhoods = (function () {
             }
             // ...plus the driving WITHIN each neighbourhood, which is most of the
             // route for a dense one and is invisible if you only walk centroids.
-            for (const id of ids) miles += (nhInternalMi[id] || 0);
+            // Scale it the way soloRideMin does — a tour through n scattered points
+            // runs ~0.5*sqrt(n) diagonals. Summing raw diagonals understated it
+            // enough that two halves of a far township still shared one bus.
+            for (const id of ids) {
+                const diag = nhInternalMi[id] || 0;
+                if (!diag) continue;
+                const nStops = Math.max(1, Math.round((nhHomeCount[id] || 0) / RIDE_CHILDREN_PER_STOP));
+                miles += 0.5 * Math.sqrt(nStops) * diag;
+            }
             const campers = (bus.camperCount || 0) + (nh.camperCount || 0);
             const stops = Math.max(ids.length, Math.round(campers / RIDE_CHILDREN_PER_STOP));
             const speed = Math.max(1, rideSpeedMph);
