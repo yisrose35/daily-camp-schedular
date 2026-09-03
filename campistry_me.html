@@ -172,10 +172,10 @@
 
 <!-- CSV IMPORT -->
 <div id="csvModal" class="me-overlay" style="display:none"><div class="me-modal">
-    <div class="me-modal-header"><h3>Import CSV</h3><button class="me-modal-x" onclick="CampistryMe.closeModal('csvModal')">&times;</button></div>
+    <div class="me-modal-header"><h3>Import Roster File</h3><button class="me-modal-x" onclick="CampistryMe.closeModal('csvModal')">&times;</button></div>
     <div class="me-modal-body">
-        <div class="me-dropzone" id="csvDZ" tabindex="0"><svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4"/><polyline points="7 10 12 5 17 10"/><line x1="12" y1="5" x2="12" y2="15"/></svg><p>Drop CSV or click to browse</p><small>Name, Division, Grade, Bunk, Team</small></div>
-        <input type="file" id="csvFI" accept=".csv,.txt" style="display:none"><div id="csvPV" style="display:none"></div>
+        <div class="me-dropzone" id="csvDZ" tabindex="0"><svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4"/><polyline points="7 10 12 5 17 10"/><line x1="12" y1="5" x2="12" y2="15"/></svg><p>Drop a CSV or Excel file, or click to browse</p><small>Name, Division, Grade, Bunk, Team</small></div>
+        <input type="file" id="csvFI" accept=".csv,.txt,.tsv,.xlsx,.xls,.xlsb,.xlsm,.ods" style="display:none"><div id="csvPV" style="display:none"></div>
     </div>
     <div class="me-modal-footer"><button class="me-btn me-btn--sec" onclick="CampistryMe.closeModal('csvModal')">Cancel</button><button class="me-btn me-btn--pri" id="csvBtn" disabled>Import</button></div>
 </div></div>
@@ -204,7 +204,10 @@
      policy is set) and by Lite (where it's enforced) — one list, so a field
      can't exist in one place and be forgotten in the other. -->
 <script src="campistry_visibility.js?v=20260901-30"></script>
-<script src="campistry_me.js?v=20260901-30"></script>
+<!-- SheetJS (vendored) — lets Roster CSV import also accept Excel workbooks
+     (.xlsx/.xls/.xlsb) and OpenDocument spreadsheets (.ods), not just CSV/TXT. -->
+<script src="xlsx@0.18.5.js?v=20260901-31"></script>
+<script src="campistry_me.js?v=20260901-31"></script>
 <script src="plan_limits.js?v=20260901-30"></script>
 <script src="trial_guard.js?v=20260901-30"></script>
 <script src="campistry_notes_quick.js?v=20260901-30"></script>

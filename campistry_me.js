@@ -12477,9 +12477,28 @@ function downloadTemplate(){
 
 function handleCsv(file){
     if(!file)return;
+    // Accepts CSV/TXT/TSV as plain text, and Excel/ODS workbooks via the
+    // vendored SheetJS build — the workbook's first sheet is converted to
+    // CSV text so every column-matching rule below stays a single source
+    // of truth regardless of which file type was uploaded.
+    var name=(file.name||'').toLowerCase();
+    var isSpreadsheet=/\.(xlsx|xls|xlsb|xlsm|ods)$/.test(name);
     var reader=new FileReader();
     reader.onload=function(e){
-        var text=e.target.result;
+        var text;
+        if(isSpreadsheet){
+            if(typeof XLSX==='undefined'){toast('Could not read this file — try saving it as CSV and importing that instead.');return}
+            try{
+                var wb=XLSX.read(e.target.result,{type:'array'});
+                var sheet=wb.Sheets[wb.SheetNames[0]];
+                text=XLSX.utils.sheet_to_csv(sheet);
+            }catch(err){
+                toast('Could not read this file — make sure it\'s a valid Excel spreadsheet.');
+                return;
+            }
+        }else{
+            text=e.target.result;
+        }
         if(text.charCodeAt(0)===0xFEFF)text=text.slice(1);
         var lines=text.split(/\r?\n/).filter(function(l){return l.trim()});
         if(!lines.length)return;
@@ -12610,7 +12629,8 @@ function handleCsv(file){
             }}
         }
     };
-    reader.readAsText(file);
+    if(isSpreadsheet)reader.readAsArrayBuffer(file);
+    else reader.readAsText(file);
 }
 
 function parseCsvLine(line){
