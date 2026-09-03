@@ -65,6 +65,35 @@ fi
 #   tests/  scripts/  .github/  .claude/  *.md  .gitignore  .gitattributes
 ignorable='^(tests/|scripts/|\.github/|\.claude/|\.gitignore$|\.gitattributes$)|\.md$'
 
+# --- Per-project: skip when only the OTHER app's files changed --------------
+# Both Vercel projects deploy this one repo from different branches, so they
+# cannot be merged -- but neither needs to rebuild for the other's code.
+# Set CAMPISTRY_APP in each project's Environment Variables:
+#     campistrylink        -> CAMPISTRY_APP=link
+#     daily-camp-schedular -> CAMPISTRY_APP=admin
+# Unset means "build for everything", so this stays inert until configured.
+#
+# The lists are deliberately narrow. Anything not listed still builds: the
+# parent portal and the admin app share a lot (config.js, campistry-unified.css,
+# the supabase client, the face/bio/push helpers) and a missed deploy is far
+# worse than a spare build.
+case "${CAMPISTRY_APP:-}" in
+  link)
+    # Admin-only surfaces the parent portal never loads. Checked against the
+    # script and link tags in campistry_link_parent.html.
+    other='^(campistry_go|campistry_snacks|campistry_shop|campistry_me|dashboard|flow\.html|scheduler_core_|auto_|total_solver_engine|rotation_|master_schedule_builder|print_center|daily_adjustments|schedule_calendar_views|leagues|specialty_leagues|special_activities|division_times_|unified_schedule_system|historical_route|view_historical_routes|campistry_ops\.css|campistry_payroll)'
+    ;;
+  admin)
+    # Parent-portal-only files. campistry_link_branding.js is deliberately NOT
+    # here -- the admin app uses it for message and email branding.
+    other='^(campistry_link_parent|campistry_link\.css|campistry_link\.webmanifest|campistry_link_data|campistry_link_photos|campistry_link_export|campistry_link_capacitor|mobile/campistry-link/)'
+    ;;
+  *) other='' ;;
+esac
+if [ -n "$other" ]; then
+    ignorable="$ignorable|$other"
+fi
+
 while IFS= read -r f; do
     [ -z "$f" ] && continue
     if ! printf '%s' "$f" | grep -qE "$ignorable"; then
