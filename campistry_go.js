@@ -3507,14 +3507,20 @@ function _localTspOrder(stops, campLat, campLng, isArrival) {
             time += (i === 0 ? campMin(t[0]) : legMin(t[i - 1], t[i])) + stopMin;
             arr[i] = time;
         }
+        let worst = 0;
         for (let i = 0; i < t.length; i++) {
             const n = (t[i].campers || []).length || 1;
             headcount += n;
             // dismissal: riding until dropped. arrival: riding from pickup to camp.
-            total += n * (isArrival ? (time - arr[i]) : arr[i]);
+            const ride = isArrival ? (time - arr[i]) : arr[i];
+            total += n * ride;
+            if (ride > worst) worst = ride;
         }
-        // gentle tie-break toward shorter driving (about one child-minute per mile)
-        return total + tourLen(t) * Math.max(1, headcount / 40);
+        // Minimising the TOTAL alone will happily strand one small family at the
+        // very end, so weight the worst ride too — a school judges a route by the
+        // child who sits on it longest, not by the average.
+        // Plus a gentle tie-break toward shorter driving.
+        return total + worst * headcount * 0.4 + tourLen(t) * Math.max(1, headcount / 40);
     }
     function nearestFrom(startIdx) {
         const rem = stops.slice();
