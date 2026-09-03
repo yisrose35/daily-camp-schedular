@@ -3611,7 +3611,7 @@ function _routeLastDropMin(r, campLat, campLng, avgSpeedMph, avgStopMin) {
 
 function _relieveLongRoutes(routes, campLat, campLng, isArrival, avgSpeedMph, avgStopMin) {
     const MAX_MOVES = 10;
-    const MAX_HANDOFF_MI = 3.0;
+    const MAX_HANDOFF_MI = 4.0;
     const est = r => _routeLastDropMin(r, campLat, campLng, avgSpeedMph, avgStopMin);
     let moves = 0;
 
@@ -3626,40 +3626,50 @@ function _relieveLongRoutes(routes, campLat, campLng, isArrival, avgSpeedMph, av
         if (scored[0].t <= target) break;
 
         const src = scored[0].r;
-        const stop = src.stops[src.stops.length - 1]; // the last child dropped
-        const n = (stop.campers || []).length;
-        if (!Number.isFinite(stop.lat) || !n) break;
+        const before = scored[0].t;
 
-        let best = null, bestD = Infinity;
-        for (const dst of routes) {
-            if (dst === src || !dst.stops) continue;
-            const cap = dst._cap;
-            if (!Number.isFinite(cap)) continue;
-            if (cap - (dst.camperCount || 0) < n) continue;
-            let d = Infinity;
-            for (const s of dst.stops) {
-                if (Number.isFinite(s.lat)) d = Math.min(d, drivingDist(stop.lat, stop.lng, s.lat, s.lng));
+        // Try several of the latest drops, not just the very last one — the final
+        // stop is often a big family that no nearby bus has the seats for.
+        const tailCount = Math.min(6, Math.max(1, src.stops.length - 2));
+        let bestMove = null;
+        for (let k = 0; k < tailCount; k++) {
+            const idx = src.stops.length - 1 - k;
+            const stop = src.stops[idx];
+            const n = (stop.campers || []).length;
+            if (!stop || !Number.isFinite(stop.lat) || !n) continue;
+
+            for (const dst of routes) {
+                if (dst === src || !dst.stops) continue;
+                const cap = dst._cap;
+                if (!Number.isFinite(cap)) continue;
+                if (cap - (dst.camperCount || 0) < n) continue;
+                let d = Infinity;
+                for (const s of dst.stops) {
+                    if (Number.isFinite(s.lat)) d = Math.min(d, drivingDist(stop.lat, stop.lng, s.lat, s.lng));
+                }
+                if (d > MAX_HANDOFF_MI) continue;
+
+                // simulate
+                const trySrc = src.stops.filter((_, i) => i !== idx);
+                const tryDst = dst.stops.concat([stop]);
+                const sOrd = _localTspOrder(trySrc, campLat, campLng, isArrival);
+                const dOrd = _localTspOrder(tryDst, campLat, campLng, isArrival);
+                const after = Math.max(
+                    _routeLastDropMin({ stops: sOrd }, campLat, campLng, avgSpeedMph, avgStopMin),
+                    _routeLastDropMin({ stops: dOrd }, campLat, campLng, avgSpeedMph, avgStopMin));
+                if (after < before - 0.5 && (!bestMove || after < bestMove.after)) {
+                    bestMove = { after, idx, n, dst, sOrd, dOrd };
+                }
             }
-            if (d < bestD) { bestD = d; best = dst; }
         }
-        if (!best || bestD > MAX_HANDOFF_MI) break;
+        if (!bestMove) break;
 
-        const srcBefore = src.stops.slice(), dstBefore = best.stops.slice();
-        src.stops.pop();
-        best.stops.push(stop);
-        src.camperCount = (src.camperCount || 0) - n;
-        best.camperCount = (best.camperCount || 0) + n;
-        src.stops = _localTspOrder(src.stops, campLat, campLng, isArrival);
-        best.stops = _localTspOrder(best.stops, campLat, campLng, isArrival);
-
-        // Keep the move only if it actually lowers the fleet's worst ride.
-        if (Math.max(est(src), est(best)) >= scored[0].t - 0.5) {
-            src.stops = srcBefore; best.stops = dstBefore;
-            src.camperCount += n; best.camperCount -= n;
-            break;
-        }
+        src.stops = bestMove.sOrd;
+        bestMove.dst.stops = bestMove.dOrd;
+        src.camperCount = (src.camperCount || 0) - bestMove.n;
+        bestMove.dst.camperCount = (bestMove.dst.camperCount || 0) + bestMove.n;
         src.stops.forEach((s, i) => s.stopNum = i + 1);
-        best.stops.forEach((s, i) => s.stopNum = i + 1);
+        bestMove.dst.stops.forEach((s, i) => s.stopNum = i + 1);
         moves++;
     }
     return moves;
