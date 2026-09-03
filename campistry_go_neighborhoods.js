@@ -1350,7 +1350,15 @@ window.CampistryGoNeighborhoods = (function () {
                 // over one that would straddle the depot — a north+south bus and a
                 // compact blob can have the same raw spread, but only the straddle
                 // drives the "out and back for no reason" route.
-                const fbCost = newSpread + straddleCost(bus, nh.id);
+                // The ride budget below is a HARD gate on the primary choice, so
+                // tightening it pushes more neighbourhoods down here. If the
+                // fallback stayed blind to riding time it would happily undo the
+                // budget — which is exactly what kept one far bus at ~80 minutes.
+                // Price a minute over budget at a quarter-mile of spread.
+                const rideOver = maxChildRideMin > 0
+                    ? Math.max(0, estimateBusRideMinWith(bus, nh) - maxChildRideMin)
+                    : 0;
+                const fbCost = newSpread + straddleCost(bus, nh.id) + rideOver * 0.25;
                 if (fbCost < fallbackScore) {
                     fallbackScore = fbCost; fallbackTarget = bus;
                 }
