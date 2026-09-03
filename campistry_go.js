@@ -355,6 +355,8 @@ let _toastTimer = null;
      *  Mirrors the major-roads query in fetchIntersections but doesn't
      *  also fetch the larger intersection set. Sets _majorRoadSegments. */
     async function _prefetchMajorRoads(campers) {
+        // Sandbox: no Overpass/OSM network call — skip major-road prefetch.
+        if (window.CampistryGoSandbox && CampistryGoSandbox.isSandbox()) return;
         const lats = campers.map(c => c.lat).filter(Boolean).sort((a, b) => a - b);
         const lngs = campers.map(c => c.lng).filter(Boolean).sort((a, b) => a - b);
         if (lats.length < 4 || lngs.length < 4) return;
@@ -2505,6 +2507,10 @@ let _toastTimer = null;
 
     // ── Google Address Validation API (primary — USPS-certified + geocoded) ──
     async function googleAddressValidationScored(street, city, state, zip) {
+        // Cost guard: Google Address Validation is PAID (per address). Never call
+        // it unless paid providers are explicitly opted in — a stale saved key
+        // must not be enough to start billing.
+        if (window.CampistryGoSandbox && !window.CampistryGoSandbox.allowPaid()) return null;
         const key = D.setup.googleMapsKey;
         if (!key) return null;
         try {
@@ -2626,6 +2632,12 @@ let _toastTimer = null;
     async function geocodeOne(name) {
         const a = D.addresses[name];
         if (!a?.street) return false;
+
+        // Sandbox: deterministic mock coordinates, zero network calls.
+        if (window.CampistryGoSandbox && CampistryGoSandbox.isSandbox()) {
+            applyBestGeocode(a, CampistryGoSandbox.mockGeocode(a.street, a.city, a.state, a.zip), name);
+            return true;
+        }
 
         // Run providers in priority order, stop early if high-confidence
         const results = [];
@@ -2865,6 +2877,11 @@ let _toastTimer = null;
         // For single address string (e.g. camp address), try structured Census → freeform Census → ORS
         const cleanAddr = (addr || '').replace(/\s*[,#]\s*(apt|suite|ste|unit|fl|floor|rm|room)\.?\s*\S*/gi, '').replace(/\s+/g, ' ').trim();
         if (!cleanAddr) return null;
+        // Sandbox: deterministic mock camp/base coordinates, zero network calls.
+        if (window.CampistryGoSandbox && CampistryGoSandbox.isSandbox()) {
+            const mk = CampistryGoSandbox.mockCampGeocode(cleanAddr);
+            return { lat: mk.lat, lng: mk.lng };
+        }
         // 0. Try structured Census first (much more accurate for "800 Rockaway Ave, Lakewood, NJ 08701")
         try {
             var parts = cleanAddr.split(/\s*,\s*/);
@@ -6793,6 +6810,9 @@ function findAnchorStop(campers, intersections, walkMi = 0.2) {
     //   Q1: Major roads only (primary/secondary/trunk) — small, fast, for crossing detection
     //   Q2: All named roads but nodes-only via `out center` — for intersection finding
     async function fetchIntersections(campers) {
+        // Sandbox: no Overpass/OSM network call — degrade to approximate
+        // intersections (nearest-kid coords), same as an Overpass miss.
+        if (window.CampistryGoSandbox && CampistryGoSandbox.isSandbox()) return null;
         // Use IQR-based outlier removal to build a tight bbox
         const lats = campers.map(c => c.lat).filter(Boolean).sort((a, b) => a - b);
         const lngs = campers.map(c => c.lng).filter(Boolean).sort((a, b) => a - b);
@@ -7789,6 +7809,11 @@ function findAnchorStop(campers, intersections, walkMi = 0.2) {
     // =========================================================================
     async function testGeoapify() {
         const L = (icon, msg) => console.log(icon + ' ' + msg);
+        // Cost guard: this diagnostic fires a real billable Geoapify request.
+        if (window.CampistryGoSandbox && !window.CampistryGoSandbox.allowPaid()) {
+            L('🛑', 'Geoapify test skipped — paid providers are blocked by the cost guard. Enable paid via the guard chip (bottom-right) to run this live test.');
+            return;
+        }
         console.log('\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
         console.log('   Campistry Go — Geoapify CVRP Live Test');
         console.log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n');

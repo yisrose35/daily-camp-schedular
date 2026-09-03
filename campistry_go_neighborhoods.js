@@ -160,6 +160,9 @@ window.CampistryGoNeighborhoods = (function () {
     // Reuses the same mirror + timeout strategy as campistry_go.js fetchIntersections().
     // -------------------------------------------------------------------------
     async function fetchRoadGraph(campers, options) {
+        // Sandbox: no Overpass/OSM network call — the router falls back to its
+        // haversine road-distance approximation, no road graph fetched.
+        if (window.CampistryGoSandbox && window.CampistryGoSandbox.isSandbox()) return null;
         const lats = campers.map(c => c.lat).filter(Number.isFinite).sort((a, b) => a - b);
         const lngs = campers.map(c => c.lng).filter(Number.isFinite).sort((a, b) => a - b);
         if (lats.length < 4 || lngs.length < 4) return null;

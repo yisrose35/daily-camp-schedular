@@ -66,56 +66,10 @@
 </div>
 
 <!-- ═══════════════════════════════════════════════════════
-     COMING SOON OVERLAY — remove this block to re-open Go
+     COMING SOON OVERLAY — DISABLED so the team can work inside Go.
+     To re-gate the app publicly, restore the <div id="go-coming-soon">
+     block from git history (campistry_go.html before this change).
      ═══════════════════════════════════════════════════════ -->
-<div id="go-coming-soon" style="
-    position:fixed; inset:0; z-index:99999;
-    background:#f8fafc;
-    font-family:'DM Sans',system-ui,sans-serif;
-    display:flex; align-items:center; justify-content:center;
-">
-    <div style="
-        background:#fff; border-radius:20px;
-        box-shadow:0 4px 32px rgba(0,0,0,0.08);
-        padding:56px 64px; max-width:480px; width:90%;
-        display:flex; flex-direction:column; align-items:center;
-        gap:20px; text-align:center;
-    ">
-        <img src="Go_clean.png" alt="Campistry Go" style="width:72px;height:auto;opacity:.85;">
-        <span style="
-            display:inline-flex;align-items:center;gap:6px;
-            background:#fff7ed;color:#ea580c;
-            border:1.5px solid #fed7aa;border-radius:999px;
-            font-size:.72rem;font-weight:700;letter-spacing:.08em;
-            text-transform:uppercase;padding:4px 14px;
-        ">
-            <span style="width:7px;height:7px;border-radius:50%;background:#ea580c;
-                animation:gcs-pulse 1.6s ease-in-out infinite;display:inline-block;"></span>
-            Coming Soon
-        </span>
-        <h1 style="font-size:2rem;font-weight:700;letter-spacing:-.02em;color:#0f172a;margin:0;">Campistry Go</h1>
-        <div style="width:40px;height:3px;border-radius:99px;background:linear-gradient(90deg,#f97316,#fb923c);"></div>
-        <p style="font-size:1rem;color:#64748b;line-height:1.6;margin:0;">
-            Bus routing &amp; transportation management is on its way.<br>Check back soon!
-        </p>
-        <a href="dashboard.html" style="
-            display:inline-flex;align-items:center;gap:8px;margin-top:8px;
-            padding:10px 22px;border-radius:10px;background:#f1f5f9;
-            color:#475569;font-size:.875rem;font-weight:600;text-decoration:none;
-        "
-        onmouseover="this.style.background='#e2e8f0';this.style.color='#1e293b';"
-        onmouseout="this.style.background='#f1f5f9';this.style.color='#475569';">
-            &#8592; Back to Dashboard
-        </a>
-    </div>
-    <style>
-        @keyframes gcs-pulse {
-            0%,100% { opacity:1; transform:scale(1); }
-            50%      { opacity:.4; transform:scale(.75); }
-        }
-    </style>
-</div>
-<!-- ══════════════════ END COMING SOON OVERLAY ══════════════════ -->
 
 <!-- Auth Loading Screen (matches other Campistry pages) -->
 <div id="auth-loading-screen" class="auth-loading">
@@ -235,7 +189,7 @@
                             <div style="border-top:1px solid var(--border-light);padding-top:1rem;margin-top:.5rem;">
                                 <h4 style="margin:0 0 .5rem;">API Integrations</h4>
                                 <p class="muted" style="margin:0 0 1rem;font-size:.8125rem;">
-                                    Geocoding (Google Address Validation), route optimization (Google OR-Tools), and turn-by-turn geometry (Geoapify) are configured centrally by the Campistry administrator — no keys needed here.
+                                    Campistry Go runs <strong>in-house by default</strong> — free geocoding (US Census) and a local road-graph router, with <strong>no paid API keys required</strong>. Paid providers (Google Address Validation / Route Optimization, Geoapify) are <strong>blocked</strong> by the cost guard unless you explicitly enable them via the guard chip (bottom-right). While <strong>Sandbox</strong> is on, addresses use mock coordinates and no external calls are made at all.
                                 </p>
                                 <div class="form-group full-width" style="margin-bottom:.25rem;">
                                     <button type="button" id="btnTestGoogleProxy" class="btn btn-secondary" style="font-size:.8125rem;padding:.35rem .9rem;">🔍 Test Google Connection</button>
@@ -561,6 +515,9 @@
 </script>
 
 <!-- CAMPISTRY GO ENGINE -->
+<!-- Cost guard FIRST: blocks paid providers + drives sandbox (mock) mode.
+     Must load before the provider scripts and the main engine. -->
+<script src="campistry_go_sandbox.js?v=20260901-30"></script>
 <script src="campistry_go_cloud.js?v=20260901-30"></script>
 <script src="campistry_go_google.js?v=20260901-30"></script>
 <script src="campistry_go_geoapify.js?v=20260901-30"></script>
