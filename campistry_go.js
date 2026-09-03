@@ -3483,12 +3483,38 @@ function _localTspOrder(stops, campLat, campLng, isArrival) {
     if (n < 3) return stops.slice();
     const D = (a, b) => drivingDist(a.lat, a.lng, b.lat, b.lng);
     const fromCamp = s => drivingDist(campLat, campLng, s.lat, s.lng);
-    const linkPrev = (t, i) => (i === 0 ? fromCamp(t[0]) : D(t[i - 1], t[i]));
 
     function tourLen(t) {
         let c = fromCamp(t[0]);
         for (let i = 0; i < t.length - 1; i++) c += D(t[i], t[i + 1]);
         return c;
+    }
+
+    // What a school actually cares about is CHILDREN-minutes, not miles. A pure
+    // shortest-distance tour is happy to drop a 9-child family last, so nine
+    // children ride the whole route; visiting them a little earlier costs a few
+    // tenths of a mile and saves each of them many minutes. Score a tour by
+    // passenger-weighted riding time (minimum-latency), with a small distance
+    // term so we don't buy a minute of riding with miles of driving.
+    const speed = Math.max(1, (D.setup && D.setup.avgSpeed) || 25);
+    const stopMin = (D.setup && D.setup.avgStopTime) || 1;
+    const legMin = (a, b) => (D(a, b) / speed) * 60;
+    const campMin = s => (fromCamp(s) / speed) * 60;
+    function riderCost(t) {
+        let time = 0, total = 0, headcount = 0;
+        const arr = new Array(t.length);
+        for (let i = 0; i < t.length; i++) {
+            time += (i === 0 ? campMin(t[0]) : legMin(t[i - 1], t[i])) + stopMin;
+            arr[i] = time;
+        }
+        for (let i = 0; i < t.length; i++) {
+            const n = (t[i].campers || []).length || 1;
+            headcount += n;
+            // dismissal: riding until dropped. arrival: riding from pickup to camp.
+            total += n * (isArrival ? (time - arr[i]) : arr[i]);
+        }
+        // gentle tie-break toward shorter driving (about one child-minute per mile)
+        return total + tourLen(t) * Math.max(1, headcount / 40);
     }
     function nearestFrom(startIdx) {
         const rem = stops.slice();
@@ -3504,22 +3530,20 @@ function _localTspOrder(stops, campLat, campLng, isArrival) {
         }
         return out;
     }
+    // Reversing a segment changes every downstream arrival time, so the rider
+    // objective has no local delta — evaluate candidates in full. Routes are a
+    // couple of dozen stops at most, so this stays cheap.
     function twoOpt(tour) {
-        const t = tour.slice();
+        let t = tour.slice();
+        let best = riderCost(t);
         let improved = true, guard = 0;
-        while (improved && guard++ < 40) {
+        while (improved && guard++ < 30) {
             improved = false;
-            for (let i = 0; i < t.length - 1; i++) {
-                for (let j = i + 1; j < t.length; j++) {
-                    const next = j + 1 < t.length ? t[j + 1] : null;
-                    const before = linkPrev(t, i) + (next ? D(t[j], next) : 0);
-                    const after = (i === 0 ? fromCamp(t[j]) : D(t[i - 1], t[j]))
-                                + (next ? D(t[i], next) : 0);
-                    if (after < before - 1e-9) {
-                        const seg = t.slice(i, j + 1).reverse();
-                        for (let k = 0; k < seg.length; k++) t[i + k] = seg[k];
-                        improved = true;
-                    }
+            for (let i = 0; i < t.length - 1 && !improved; i++) {
+                for (let j = i + 1; j < t.length && !improved; j++) {
+                    const cand = t.slice(0, i).concat(t.slice(i, j + 1).reverse(), t.slice(j + 1));
+                    const c = riderCost(cand);
+                    if (c < best - 1e-9) { t = cand; best = c; improved = true; }
                 }
             }
         }
@@ -3539,13 +3563,13 @@ function _localTspOrder(stops, campLat, campLng, isArrival) {
                     const seg = t.slice(i, i + len);
                     const rest = t.slice(0, i).concat(t.slice(i + len));
                     if (rest.length < 2) continue;
-                    const baseLen = tourLen(t);
+                    const baseLen = riderCost(t);
                     let bestPos = -1, bestLen = baseLen - 1e-9, bestRev = false;
                     for (let j = 0; j <= rest.length; j++) {
                         for (const rev of [false, true]) {
                             const piece = rev ? seg.slice().reverse() : seg;
                             const cand = rest.slice(0, j).concat(piece, rest.slice(j));
-                            const L = tourLen(cand);
+                            const L = riderCost(cand);
                             if (L < bestLen) { bestLen = L; bestPos = j; bestRev = rev; }
                         }
                     }
@@ -3576,19 +3600,18 @@ function _localTspOrder(stops, campLat, campLng, isArrival) {
         let t = nearestFrom(s), prev = Infinity;
         for (let round = 0; round < 4; round++) {
             t = orOpt(twoOpt(t));
-            const L = tourLen(t);
+            const L = riderCost(t);
             if (L >= prev - 1e-6) break;
             prev = L;
         }
-        const len = tourLen(t);
+        const len = riderCost(t);
         if (len < bestLen) { bestLen = len; best = t; }
     }
     if (!best) return stops.slice();
 
-    // Orient: dismissal drives outward from camp, arrival comes back toward it.
-    const fd = fromCamp(best[0]), ld = fromCamp(best[best.length - 1]);
-    if (isArrival && fd < ld) best.reverse();
-    if (!isArrival && fd > ld) best.reverse();
+    // No orientation flip here: riderCost already knows which end to finish at
+    // (dismissal drops big groups early, arrival collects them late). Forcing a
+    // near/far flip afterwards would undo exactly what it optimized for.
     return best;
 }
 
