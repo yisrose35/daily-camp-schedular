@@ -4231,7 +4231,13 @@ async function _tryNeighborhoodPipeline({
         buses: reducedBuses,
         priorAssignments,
         siblingGroups,
-        depot: { lat: campLat, lng: campLng }
+        depot: { lat: campLat, lng: campLng },
+        // Riding-time budget for districting: a district far from camp must not
+        // also be filled to the last seat, or its final drops ride far longer
+        // than the rest of the camp.
+        rideSpeedMph: D.setup.avgSpeed || 25,
+        rideStopMin: D.setup.avgStopTime || 1,
+        maxChildRideMin: 60
     });
 
     showProgress(shiftLabel + ': generating per-zone stops...', pctBase + 40);

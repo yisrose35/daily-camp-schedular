@@ -922,7 +922,8 @@ window.CampistryGoNeighborhoods = (function () {
     //   5. Overflow: if no bus fits, place on least-full (+warn) rather than
     //      silently dropping the neighborhood's campers.
     // -------------------------------------------------------------------------
-    function packIntoBuses({ result, buses, priorAssignments = {}, siblingGroups = {}, depot = null, maxRideMin = 45, avgStopMin = 2, paceMinPerMi = 6 }) {
+    function packIntoBuses({ result, buses, priorAssignments = {}, siblingGroups = {}, depot = null, maxRideMin = 45, avgStopMin = 2, paceMinPerMi = 6,
+                             rideSpeedMph = 25, rideStopMin = 1, maxChildRideMin = 0 }) {
         if (!result || !result.neighborhoods.length) return [];
 
         // Input audit: any duplicate nhIds in result.neighborhoods, or duplicate
@@ -1306,6 +1307,18 @@ window.CampistryGoNeighborhoods = (function () {
                 }
                 // Track best primary (must keep spread under cap)
                 if (newSpread > MAX_BUS_SPREAD_MI) continue;
+                // ...and must keep the bus inside its riding-time budget. A
+                // district far from camp burns most of its budget just getting
+                // there, so filling it to the last seat leaves the children
+                // dropped last sitting on the bus far longer than anyone else.
+                // Capacity alone can't see that — on the camp's real data one
+                // township 6mi out took 42 children on a single bus and its last
+                // drops rode 80 minutes while the fleet median was 18.
+                // Off unless the caller sets a budget, so existing callers and the
+                // synthetic benchmarks behave exactly as before. The fallback path
+                // below still places the NH, so this can never strand anyone.
+                if (maxChildRideMin > 0 &&
+                    estimateBusRideMinWith(bus, nh) > maxChildRideMin) continue;
                 // Among compliant buses, prefer the one already containing this
                 // NH's neighborhood — i.e. the smallest existing spread, breaks
                 // ties toward empty buses.
@@ -1415,6 +1428,37 @@ window.CampistryGoNeighborhoods = (function () {
             }
             return mi * paceMinPerMi + bus.neighborhoodIds.length * avgStopMin;
         }
+        // Riding time if this NH were added to the bus. Self-contained rather than
+        // reusing estimateBusRideMin, whose defaults (10mph, stop time counted per
+        // NEIGHBOURHOOD rather than per stop) are far off the real numbers and are
+        // fine for a rebalance trigger but not as an assignment constraint.
+        // Real roads are ~1.35x straight-line, and a stop serves ~2.5 children.
+        const RIDE_ROAD_FACTOR = 1.35;
+        const RIDE_CHILDREN_PER_STOP = 2.5;
+        function estimateBusRideMinWith(bus, nh) {
+            if (!depot) return 0;
+            const ids = bus.neighborhoodIds.concat(nh.id);
+            const pts = [];
+            for (const id of ids) { const c = nhCentroids[id]; if (c) pts.push(c); }
+            if (!pts.length) return 0;
+            // nearest-neighbour walk from the depot through the centroids
+            const remaining = pts.slice();
+            let miles = 0, la = depot.lat, lo = depot.lng;
+            while (remaining.length) {
+                let bi = 0, bd = Infinity;
+                for (let i = 0; i < remaining.length; i++) {
+                    const d = haversineMi(la, lo, remaining[i].lat, remaining[i].lng);
+                    if (d < bd) { bd = d; bi = i; }
+                }
+                miles += bd; la = remaining[bi].lat; lo = remaining[bi].lng;
+                remaining.splice(bi, 1);
+            }
+            const campers = (bus.camperCount || 0) + (nh.camperCount || 0);
+            const stops = Math.max(ids.length, Math.round(campers / RIDE_CHILDREN_PER_STOP));
+            const speed = Math.max(1, rideSpeedMph);
+            return (miles * RIDE_ROAD_FACTOR / speed) * 60 + stops * rideStopMin;
+        }
+
         function farthestNhFromDepot(bus) {
             let bestId = null, bestD = -1;
             for (const id of bus.neighborhoodIds) {
