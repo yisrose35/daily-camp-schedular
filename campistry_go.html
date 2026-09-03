@@ -44,10 +44,10 @@
         html:not(.css-ready) body { opacity: 0; }
         html.css-ready body { transition: opacity 0.15s ease; }
     </style>
-    <link rel="stylesheet" href="campistry-unified.css?v=20260901-36">
-    <link rel="stylesheet" href="campistry_go.css?v=20260901-36" onload="document.documentElement.classList.add('css-ready')">
-    <link rel="stylesheet" href="campistry_ops.css?v=20260901-36">
-    <link rel="stylesheet" href="mobile-responsive.css?v=20260901-36">
+    <link rel="stylesheet" href="campistry-unified.css?v=20260901-37">
+    <link rel="stylesheet" href="campistry_go.css?v=20260901-37" onload="document.documentElement.classList.add('css-ready')">
+    <link rel="stylesheet" href="campistry_ops.css?v=20260901-37">
+    <link rel="stylesheet" href="mobile-responsive.css?v=20260901-37">
     <noscript><style>html body { opacity: 1 !important; }</style></noscript>
 </head>
 <body>
@@ -89,7 +89,7 @@
             </div>
             <div class="nav-center">
                 <div data-quick-switch-mount="go"></div>
-                <script src="campistry_app_switcher.js?v=20260901-36"></script>
+                <script src="campistry_app_switcher.js?v=20260901-37"></script>
             </div>
             <div class="sync-badge">
                 <div class="sync-dot" id="syncDot"></div>
@@ -419,8 +419,8 @@
 
 <!-- CLOUD FOUNDATION -->
 
-<script src="demo_mode.js?v=20260901-36"></script>
-<script src="config.js?v=20260901-36"></script>
+<script src="demo_mode.js?v=20260901-37"></script>
+<script src="config.js?v=20260901-37"></script>
 <script>
 // Supabase SDK loader (same pattern as flow.html / campistry_me.html)
 (function() {
@@ -440,12 +440,12 @@
     document.head.appendChild(s);
 })();
 </script>
-<script src="campistry_utils.js?v=20260901-36"></script>
-<script src="campistry_security.js?v=20260901-36"></script>
-<script src="access_control.js?v=20260901-36"></script>
-<script src="local_cache_idb.js?v=20260901-36"></script>
-<script src="integration_hooks.js?v=20260901-36"></script>
-<script src="cloud_sync_helpers.js?v=20260901-36"></script>
+<script src="campistry_utils.js?v=20260901-37"></script>
+<script src="campistry_security.js?v=20260901-37"></script>
+<script src="access_control.js?v=20260901-37"></script>
+<script src="local_cache_idb.js?v=20260901-37"></script>
+<script src="integration_hooks.js?v=20260901-37"></script>
+<script src="cloud_sync_helpers.js?v=20260901-37"></script>
 
 <!-- AUTH CHECK (matches campistry_me.html / flow.html pattern) -->
 <script>
@@ -517,18 +517,18 @@
 <!-- CAMPISTRY GO ENGINE -->
 <!-- Cost guard FIRST: blocks paid providers + drives sandbox (mock) mode.
      Must load before the provider scripts and the main engine. -->
-<script src="campistry_go_sandbox.js?v=20260901-36"></script>
-<script src="campistry_go_cloud.js?v=20260901-36"></script>
-<script src="campistry_go_google.js?v=20260901-36"></script>
-<script src="campistry_go_geoapify.js?v=20260901-36"></script>
-<script src="campistry_go_ors_optimizer.js?v=20260901-36"></script>
-<script src="campistry_go_neighborhoods.js?v=20260901-36"></script>
-<script src="campistry_go_persistence.js?v=20260901-36"></script>
-<script src="campistry_go_stop_master.js?v=20260901-36"></script>
-<script src="campistry_go.js?v=20260901-36"></script>
-<script src="campistry_luggage_core.js?v=20260901-36"></script>
-<script src="campistry_go_luggage.js?v=20260901-36"></script>
-    <script src="campistry_go_map_editor.js?v=20260901-36"></script>
+<script src="campistry_go_sandbox.js?v=20260901-37"></script>
+<script src="campistry_go_cloud.js?v=20260901-37"></script>
+<script src="campistry_go_google.js?v=20260901-37"></script>
+<script src="campistry_go_geoapify.js?v=20260901-37"></script>
+<script src="campistry_go_ors_optimizer.js?v=20260901-37"></script>
+<script src="campistry_go_neighborhoods.js?v=20260901-37"></script>
+<script src="campistry_go_persistence.js?v=20260901-37"></script>
+<script src="campistry_go_stop_master.js?v=20260901-37"></script>
+<script src="campistry_go.js?v=20260901-37"></script>
+<script src="campistry_luggage_core.js?v=20260901-37"></script>
+<script src="campistry_go_luggage.js?v=20260901-37"></script>
+    <script src="campistry_go_map_editor.js?v=20260901-37"></script>
 <script>
 // Show ORS key card only if no platform key is configured
 (function() {
@@ -542,19 +542,19 @@
 </script>
 
 <!-- Analytics (optional, matches other pages) -->
-<script src="plan_limits.js?v=20260901-36"></script>
-<script src="trial_guard.js?v=20260901-36"></script>
+<script src="plan_limits.js?v=20260901-37"></script>
+<script src="trial_guard.js?v=20260901-37"></script>
 <script>
     window.va = window.va || function () { (window.vaq = window.vaq || []).push(arguments); };
 </script>
-<script defer src="/_vercel/insights/script.js?v=20260901-36"></script>
-<script src="campistry_notes_quick.js?v=20260901-36"></script>
+<script defer src="/_vercel/insights/script.js?v=20260901-37"></script>
+<script src="campistry_notes_quick.js?v=20260901-37"></script>
 <script>window.__CAMPISTRY_PRODUCT__='go';</script>
-<script src="parent_lockout_guard.js?v=20260901-36"></script>
-<script src="product_access_guard.js?v=20260901-36"></script>
+<script src="parent_lockout_guard.js?v=20260901-37"></script>
+<script src="product_access_guard.js?v=20260901-37"></script>
 <!-- Per-SECTION access: limits which parts of THIS app the user can open.
      Loads after the product gate, which decides whether they get in at all. -->
-<script src="campistry_capabilities.js?v=20260901-36"></script>
-<script src="campistry_access_sections.js?v=20260901-36"></script>
+<script src="campistry_capabilities.js?v=20260901-37"></script>
+<script src="campistry_access_sections.js?v=20260901-37"></script>
 </body>
 </html>

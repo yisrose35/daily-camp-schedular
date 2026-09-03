@@ -1005,7 +1005,7 @@ window.CampistryGoNeighborhoods = (function () {
         }
 
         // --- 2. Set up buses with running centroid tracking ---
-        const assignments = vehicles.map(v => ({
+        let assignments = vehicles.map(v => ({
             busId: v.busId, name: v.name, capacity: v.capacity,
             neighborhoodIds: [], segmentIds: [], camperCount: 0,
             _centroidSum: { lat: 0, lng: 0, w: 0 },
@@ -1366,6 +1366,95 @@ window.CampistryGoNeighborhoods = (function () {
                 if (!moved) break;
             }
             if (rebalanceMoves) console.log('[Go-NH] Spread/ride rebalance: ' + rebalanceMoves + ' NH move(s)');
+        }
+
+        // --- 2d. SWEEP candidate + pick the better districting ---------------
+        // The greedy passes above are excellent when the fleet has slack (they
+        // produce near-perfect 1-degree sectors), but they degrade badly when
+        // the fleet is tight: the forced-merge fallback can hand one bus two
+        // OPPOSITE sides of the depot (arcs up to 180deg), which is what draws a
+        // route line straight across the map.
+        //
+        // The classic sweep heuristic is the reverse: mediocre with slack, but
+        // it can't straddle, because it walks stops in bearing order around the
+        // depot and gives each bus one CONTIGUOUS arc.
+        //
+        // Neither wins everywhere, so build both and keep whichever districts
+        // better. This is what makes the result independent of how many buses
+        // the camp happens to own — no tuning required.
+        function districtScore(cands) {
+            let worstArc = 0, worstSpread = 0;
+            for (const bus of cands) {
+                if (!bus || bus.neighborhoodIds.length < 2) continue;
+                const arc = busAngularSpan(bus, null);
+                if (arc > worstArc) worstArc = arc;
+                const sp = busMaxSpreadMi(bus);
+                if (sp > worstSpread) worstSpread = sp;
+            }
+            // arc is radians (0..PI); weight it so a half-turn straddle (~9.4)
+            // outweighs a few extra miles of spread.
+            return worstArc * 3 + worstSpread;
+        }
+
+        function buildSweepCandidate() {
+            if (!depot || !vehicles.length) return null;
+            const ordered = workNhs
+                .map(nh => ({ nh, b: bearingFromDepot(nhCentroids[nh.id]) }))
+                .filter(x => x.b != null)
+                .sort((a, b) => a.b - b.b)
+                .map(x => x.nh);
+            // If any NH lacks a centroid we can't sweep reliably — skip.
+            if (ordered.length !== workNhs.length) return null;
+
+            const totalC = workNhs.reduce((s, n) => s + n.camperCount, 0);
+            const target = Math.ceil(totalC / vehicles.length);
+            // Try rotations of the starting bearing (where we "cut" the circle).
+            // Cap the number tried so a big camp stays fast.
+            const N = ordered.length;
+            const stride = Math.max(1, Math.ceil(N / 60));
+            let best = null;
+
+            for (let start = 0; start < N; start += stride) {
+                const order = ordered.slice(start).concat(ordered.slice(0, start));
+                const cand = vehicles.map(v => ({
+                    busId: v.busId, name: v.name, capacity: v.capacity,
+                    neighborhoodIds: [], segmentIds: [], camperCount: 0,
+                    _centroidSum: { lat: 0, lng: 0, w: 0 },
+                }));
+                let bi = 0, ok = true;
+                for (const nh of order) {
+                    // Move on once this bus has its fair share, so the final bus
+                    // doesn't get a tiny scrap arc.
+                    while (bi < cand.length - 1 && cand[bi].camperCount >= target) bi++;
+                    while (bi < cand.length &&
+                           cand[bi].camperCount + nh.camperCount > cand[bi].capacity) bi++;
+                    if (bi >= cand.length) { ok = false; break; }
+                    assignToBus(nh, cand[bi]);
+                }
+                if (!ok) continue; // this rotation didn't fit the fleet
+                const score = districtScore(cand);
+                if (!best || score < best.score) best = { score, cand };
+            }
+            return best;
+        }
+
+        {
+            const greedyScore = districtScore(assignments);
+            const sweep = buildSweepCandidate();
+            if (sweep) {
+                // Only switch on a clear win. The greedy pass carries the
+                // prior-year bus mapping (route stability year to year), so we
+                // don't churn it for a marginal gain.
+                if (sweep.score < greedyScore * 0.85) {
+                    console.log('[Go-NH] Districting: SWEEP wins (score ' +
+                        sweep.score.toFixed(2) + ' vs greedy ' + greedyScore.toFixed(2) +
+                        ') — using contiguous bearing arcs');
+                    assignments = sweep.cand;
+                } else {
+                    console.log('[Go-NH] Districting: greedy kept (score ' +
+                        greedyScore.toFixed(2) + ' vs sweep ' + sweep.score.toFixed(2) + ')');
+                }
+            }
         }
 
         // --- 3. Within-bus ordering: group segments by NH, order NHs via NN from depot ---
