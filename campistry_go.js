@@ -4349,7 +4349,10 @@ async function _tryNeighborhoodPipeline({
         assignment: nhAssignment,
         result: nhResult,
         isArrival,
-        dropoffMode
+        dropoffMode,
+        // How far a child may walk to a shared stop. Corner and optimized
+        // modes group by this; door-to-door ignores it.
+        maxWalkMi: ((D.setup && D.setup.maxWalkDistance) || 500) / 5280
     });
 
     // ── Append any unsnapped campers to their nearest bus as door drops ──
