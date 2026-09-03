@@ -1105,13 +1105,21 @@ window.CampistryGoNeighborhoods = (function () {
             let d = Math.abs(a - b) % (2 * Math.PI);
             return d > Math.PI ? 2 * Math.PI - d : d; // 0..π
         }
+        // Bearing is meaningless for stops sitting on top of the depot: two homes
+        // 0.3mi from camp on opposite sides read as a 180-degree "straddle" while
+        // being 0.6mi apart — a perfectly good compact route. Only stops that are
+        // genuinely far out can straddle, so ignore anything inside this radius.
+        const MIN_ARC_RADIUS_MI = 1.5;
         // Max angular span (from depot) among a bus's NHs, optionally adding one.
         function busAngularSpan(bus, extraNhId) {
             const ids = extraNhId ? bus.neighborhoodIds.concat(extraNhId) : bus.neighborhoodIds;
             const bearings = [];
             for (const id of ids) {
-                const b = bearingFromDepot(nhCentroids[id]);
-                if (b != null) bearings.push(b);
+                const c = nhCentroids[id];
+                const b = bearingFromDepot(c);
+                if (b == null) continue;
+                if (depot && haversineMi(depot.lat, depot.lng, c.lat, c.lng) < MIN_ARC_RADIUS_MI) continue;
+                bearings.push(b);
             }
             if (bearings.length < 2) return 0;
             let max = 0;
