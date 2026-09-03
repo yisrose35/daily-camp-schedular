@@ -3550,7 +3550,7 @@ function _localTspOrder(stops, campLat, campLng, isArrival) {
             // outcome a parent will never accept. Charge the time beyond a
             // generous allowance over their own direct trip.
             const floor = campMin(t[i]);
-            const allowance = floor * 2 + 15;
+            const allowance = floor * 2 + 25;
             if (ride > allowance) unfair += n * (ride - allowance);
         }
         // A max-ride penalty was tried here and measured as pure loss on the
@@ -3563,7 +3563,7 @@ function _localTspOrder(stops, campLat, campLng, isArrival) {
         void worst;
         // Unfairness is weighted heavily: a child riding far longer than their own
         // distance warrants is a complaint, where a few extra fleet-minutes is not.
-        return total + unfair * 3 + tourLen(t) * Math.max(1, headcount / 40);
+        return total + unfair * 2 + tourLen(t) * Math.max(1, headcount / 40);
     }
     function nearestFrom(startIdx) {
         const rem = stops.slice();
