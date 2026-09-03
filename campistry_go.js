@@ -3466,6 +3466,90 @@ let _toastTimer = null;
     let _slicedZones = null; // result of sliceRegionsIntoZones()
     let _zonePreviewLayers = []; // Leaflet layers for zone preview
 
+// ─────────────────────────────────────────────────────────────────────────────
+// _localTspOrder — in-house single-vehicle stop ordering.
+//
+// The per-bus TSP used to be Google-only, so with paid providers blocked no
+// ordering ran at all and stops stayed in neighbourhood-spine order. On the
+// camp's real data that drove 34.5mi on a bus where plain nearest-neighbour
+// was 20.4mi, pushing one route to 150 minutes.
+//
+// Multi-start nearest-neighbour + 2-opt on the open path camp -> stops, then
+// oriented the way the run actually goes: dismissal works outward from camp,
+// arrival works inward toward it.
+// ─────────────────────────────────────────────────────────────────────────────
+function _localTspOrder(stops, campLat, campLng, isArrival) {
+    const n = stops.length;
+    if (n < 3) return stops.slice();
+    const D = (a, b) => drivingDist(a.lat, a.lng, b.lat, b.lng);
+    const fromCamp = s => drivingDist(campLat, campLng, s.lat, s.lng);
+    const linkPrev = (t, i) => (i === 0 ? fromCamp(t[0]) : D(t[i - 1], t[i]));
+
+    function tourLen(t) {
+        let c = fromCamp(t[0]);
+        for (let i = 0; i < t.length - 1; i++) c += D(t[i], t[i + 1]);
+        return c;
+    }
+    function nearestFrom(startIdx) {
+        const rem = stops.slice();
+        const out = [rem.splice(startIdx, 1)[0]];
+        while (rem.length) {
+            const last = out[out.length - 1];
+            let bi = 0, bd = Infinity;
+            for (let i = 0; i < rem.length; i++) {
+                const d = D(last, rem[i]);
+                if (d < bd) { bd = d; bi = i; }
+            }
+            out.push(rem.splice(bi, 1)[0]);
+        }
+        return out;
+    }
+    function twoOpt(tour) {
+        const t = tour.slice();
+        let improved = true, guard = 0;
+        while (improved && guard++ < 40) {
+            improved = false;
+            for (let i = 0; i < t.length - 1; i++) {
+                for (let j = i + 1; j < t.length; j++) {
+                    const next = j + 1 < t.length ? t[j + 1] : null;
+                    const before = linkPrev(t, i) + (next ? D(t[j], next) : 0);
+                    const after = (i === 0 ? fromCamp(t[j]) : D(t[i - 1], t[j]))
+                                + (next ? D(t[i], next) : 0);
+                    if (after < before - 1e-9) {
+                        const seg = t.slice(i, j + 1).reverse();
+                        for (let k = 0; k < seg.length; k++) t[i + k] = seg[k];
+                        improved = true;
+                    }
+                }
+            }
+        }
+        return t;
+    }
+
+    // Try a bounded set of starts (the stop nearest camp, plus a spread of
+    // others) so one bad seed can't decide the route.
+    const seeds = new Set([0]);
+    let nearIdx = 0, nearD = Infinity;
+    stops.forEach((s, i) => { const d = fromCamp(s); if (d < nearD) { nearD = d; nearIdx = i; } });
+    seeds.add(nearIdx);
+    const step = Math.max(1, Math.floor(n / 6));
+    for (let i = 0; i < n; i += step) seeds.add(i);
+
+    let best = null, bestLen = Infinity;
+    for (const s of seeds) {
+        const t = twoOpt(nearestFrom(s));
+        const len = tourLen(t);
+        if (len < bestLen) { bestLen = len; best = t; }
+    }
+    if (!best) return stops.slice();
+
+    // Orient: dismissal drives outward from camp, arrival comes back toward it.
+    const fd = fromCamp(best[0]), ld = fromCamp(best[best.length - 1]);
+    if (isArrival && fd < ld) best.reverse();
+    if (!isArrival && fd > ld) best.reverse();
+    return best;
+}
+
 async function generateRoutes() {
         if (!_secEdit('routes', 'Generating routes')) return;
     // -------------------------------------------------------------------------
@@ -4133,10 +4217,23 @@ async function _tryNeighborhoodPipeline({
                 }
             } catch (e) {
                 console.warn('[Go v5] Per-bus TSP failed for ' + r.busName +
-                    ' — using NH-spine order (' + e.message + ')');
-                // Fall through with spine-order stops; still a valid route.
+                    ' — falling back to local TSP (' + e.message + ')');
+                r.stops = _localTspOrder(r.stops, campLat, campLng, isArrival);
+                r.stops.forEach((s, i) => s.stopNum = i + 1);
             }
         }
+    } else if (routes.length) {
+        // In-house ordering. Without this the stops keep neighbourhood-spine
+        // order, which is worse than plain nearest-neighbour.
+        showProgress(shiftLabel + ': optimizing stop order per bus...', pctBase + 60);
+        let improvedBuses = 0;
+        for (const r of routes) {
+            if (r.stops.length < 3) continue;
+            r.stops = _localTspOrder(r.stops, campLat, campLng, isArrival);
+            r.stops.forEach((s, i) => s.stopNum = i + 1);
+            improvedBuses++;
+        }
+        console.log('[Go v5] Local TSP ordered stops on ' + improvedBuses + ' bus(es)');
     }
 
     // ── Record year-over-year assignment state ──
