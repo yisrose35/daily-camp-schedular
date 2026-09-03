@@ -346,14 +346,14 @@
                  but never-confirmed account tries to sign in -->
             <div id="verify-code-form" class="auth-form hidden">
                 <div class="email-notice">
-                    Enter the 6-digit code we sent to <strong id="verify-code-email">your email</strong>.
+                    Enter the verification code we sent to <strong id="verify-code-email">your email</strong>.
                 </div>
                 <div id="verify-code-resent-msg" class="success-message hidden" style="margin-bottom:16px;">
                     A new code has been sent.
                 </div>
                 <div class="form-group">
                     <label for="verify-code-input">Verification Code</label>
-                    <input type="text" id="verify-code-input" inputmode="numeric" pattern="[0-9]*" maxlength="6" placeholder="123456" autocomplete="one-time-code" required>
+                    <input type="text" id="verify-code-input" inputmode="numeric" pattern="[0-9]*" maxlength="10" placeholder="123456" autocomplete="one-time-code" required>
                 </div>
                 <button type="button" class="btn-primary" id="verify-code-btn" onclick="handleVerifyCode()">
                     Verify & Join
@@ -411,12 +411,12 @@
         </div>
     </div>
     
-    <script src="config.js?v=20260903-02"></script>
+    <script src="config.js?v=20260903-04"></script>
     <!-- Supabase SDK — self-hosted to match campistry_register.html and
          avoid CDN supply-chain risk on the auth path. The auth token is
          the actual privilege-escalation vector; a jsdelivr compromise
          would otherwise let an attacker exfiltrate it at sign-in. -->
-    <script src="supabase-js@2.js?v=20260903-02"></script>
+    <script src="supabase-js@2.js?v=20260903-04"></script>
     
     <script>
         // =====================================================================
@@ -883,8 +883,13 @@
 
             document.getElementById('auth-error').classList.add('hidden');
 
-            if (!code || code.length !== 6) {
-                showAuthError('Enter the 6-digit code from your email.');
+            // Not hardcoded to 6: Supabase's email OTP length is a project
+            // setting, and this project's is actually 8 — a strict ===6
+            // check silently rejected every correct code a real user typed.
+            // Accept the range Supabase itself allows and let verifyOtp be
+            // the real authority.
+            if (!code || code.length < 6 || code.length > 10 || !/^\d+$/.test(code)) {
+                showAuthError('Enter the verification code from your email.');
                 return;
             }
 
