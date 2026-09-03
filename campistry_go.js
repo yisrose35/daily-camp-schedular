@@ -3521,10 +3521,14 @@ function _localTspOrder(stops, campLat, campLng, isArrival) {
     // tenths of a mile and saves each of them many minutes. Score a tour by
     // passenger-weighted riding time (minimum-latency), with a small distance
     // term so we don't buy a minute of riding with miles of driving.
-    const speed = Math.max(1, (D.setup && D.setup.avgSpeed) || 25);
     const stopMin = (D.setup && D.setup.avgStopTime) || 1;
-    const legMin = (a, b) => (D(a, b) / speed) * 60;
-    const campMin = s => (fromCamp(s) / speed) * 60;
+    // drivingDist returns SECONDS (see its docstring), not miles. Dividing by
+    // speed and multiplying by 60 made the driving term ~144x too large next to
+    // the per-stop minutes added below, which wrecked the children-minutes
+    // balance and let a child living 0.7mi from camp be dropped last after 61
+    // minutes on the bus.
+    const legMin = (a, b) => D(a, b) / 60;
+    const campMin = s => fromCamp(s) / 60;
     function riderCost(t) {
         let time = 0, total = 0, headcount = 0;
         const arr = new Array(t.length);
@@ -3532,7 +3536,7 @@ function _localTspOrder(stops, campLat, campLng, isArrival) {
             time += (i === 0 ? campMin(t[0]) : legMin(t[i - 1], t[i])) + stopMin;
             arr[i] = time;
         }
-        let worst = 0;
+        let worst = 0, unfair = 0;
         for (let i = 0; i < t.length; i++) {
             const n = (t[i].campers || []).length || 1;
             headcount += n;
@@ -3540,6 +3544,14 @@ function _localTspOrder(stops, campLat, campLng, isArrival) {
             const ride = isArrival ? (time - arr[i]) : arr[i];
             total += n * ride;
             if (ride > worst) worst = ride;
+            // Fairness against how far the child actually lives from camp. The
+            // plain total is happy to strand someone 0.7mi away until the very
+            // end (dropping them earlier detours everyone else), which is the one
+            // outcome a parent will never accept. Charge the time beyond a
+            // generous allowance over their own direct trip.
+            const floor = campMin(t[i]);
+            const allowance = floor * 2 + 15;
+            if (ride > allowance) unfair += n * (ride - allowance);
         }
         // A max-ride penalty was tried here and measured as pure loss on the
         // camp's real data: identical worst ride and identical over-60/over-75
@@ -3549,7 +3561,9 @@ function _localTspOrder(stops, campLat, campLng, isArrival) {
         // reordering. Keep the honest objective: total riding time, with a gentle
         // tie-break toward shorter driving.
         void worst;
-        return total + tourLen(t) * Math.max(1, headcount / 40);
+        // Unfairness is weighted heavily: a child riding far longer than their own
+        // distance warrants is a complaint, where a few extra fleet-minutes is not.
+        return total + unfair * 3 + tourLen(t) * Math.max(1, headcount / 40);
     }
     function nearestFrom(startIdx) {
         const rem = stops.slice();
@@ -3661,7 +3675,9 @@ function _routeLastDropMin(r, campLat, campLng, avgSpeedMph, avgStopMin) {
     let t = 0, la = campLat, lo = campLng;
     for (const s of (r.stops || [])) {
         if (!Number.isFinite(s.lat) || !Number.isFinite(s.lng)) continue;
-        t += (drivingDist(la, lo, s.lat, s.lng) / Math.max(1, avgSpeedMph)) * 60 + avgStopMin;
+        // drivingDist is SECONDS; the old form inflated it ~144x and made every
+        // threshold in the relief pass meaningless.
+        t += drivingDist(la, lo, s.lat, s.lng) / 60 + avgStopMin;
         la = s.lat; lo = s.lng;
     }
     return t;
