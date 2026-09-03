@@ -16,8 +16,8 @@
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link href="https://fonts.googleapis.com/css2?family=Roboto:wght@400;500;700;900&family=Roboto+Flex:opsz,wght@8..144,400;8..144,500;8..144,700;8..144,900&display=swap" rel="stylesheet">
-    <link rel="stylesheet" href="campistry-unified.css?v=20260901-36">
-    <link rel="stylesheet" href="campistry_link.css?v=20260901-36">
+    <link rel="stylesheet" href="campistry-unified.css?v=20260903-01">
+    <link rel="stylesheet" href="campistry_link.css?v=20260903-01">
     <!-- Splash screen — inline so it appears before any external CSS -->
     <style>
         #link-splash {
@@ -3826,18 +3826,18 @@ window.addEventListener('storage', function(e) {
      namespace so the two apps never share or clobber an enrolment. Must be set
      before the module loads. -->
 <script>window.__CAMPISTRY_BIO_NS = 'link'; window.__CAMPISTRY_BIO_APP = 'Campistry Link';</script>
-<script src="campistry_lite_biometric.js?v=20260901-36"></script>
-<script src="campistry_bio_native.js?v=20260901-36"></script>
-<script src="campistry_haptics.js?v=20260901-36"></script>
-<script src="campistry_push.js?v=20260901-36"></script>
-<script src="campistry_keyboard.js?v=20260901-36"></script>
-<script src="campistry_notes_quick.js?v=20260901-36"></script>
-<script src="campistry_link_capacitor.js?v=20260901-36"></script>
-<script src="face_match_core.js?v=20260901-36"></script>
-<script src="campistry_face_shared.js?v=20260901-36"></script>
-<script src="campistry_face_engine_v2.js?v=20260901-36"></script>
-<script src="supabase-js@2.js?v=20260901-36"></script>
-<script src="config.js?v=20260901-36"></script>
+<script src="campistry_lite_biometric.js?v=20260903-01"></script>
+<script src="campistry_bio_native.js?v=20260903-01"></script>
+<script src="campistry_haptics.js?v=20260903-01"></script>
+<script src="campistry_push.js?v=20260903-01"></script>
+<script src="campistry_keyboard.js?v=20260903-01"></script>
+<script src="campistry_notes_quick.js?v=20260903-01"></script>
+<script src="campistry_link_capacitor.js?v=20260903-01"></script>
+<script src="face_match_core.js?v=20260903-01"></script>
+<script src="campistry_face_shared.js?v=20260903-01"></script>
+<script src="campistry_face_engine_v2.js?v=20260903-01"></script>
+<script src="supabase-js@2.js?v=20260903-01"></script>
+<script src="config.js?v=20260903-01"></script>
 <script>
 // =============================================================================
 // Parent Portal — Auth layer
@@ -4875,6 +4875,73 @@ window.addEventListener('storage', function(e) {
         window._parentInviteData = inviteData || null;
     }
 
+    // Code-entry step for email confirmation. Supabase's "Confirm signup"
+    // email template is ONE project-wide setting shared with the main
+    // Campistry site's owner signup (landing.js), which requires a typed
+    // 6-digit code (auth.verifyOtp) rather than a clicked link — a link
+    // click there skips required account setup entirely. Rather than split
+    // the template (and risk that same silent-bypass race here too), Link
+    // uses the identical code-based mechanism: same email, same code, same
+    // verifyOtp call, just its own screen. Used both right after signup and
+    // when an existing-but-unconfirmed account retries sign-in.
+    function _showVerifyCode(email, mode) {
+        _showOverlay('parentAuthOverlay',
+            '<div class="lk-login">' +
+            '<div class="lk-login-badge"><span class="lk-login-mark" role="img" aria-label="Campistry"></span></div>' +
+            '<h1 class="lk-login-title">Check your <span>email</span></h1>' +
+            '<p class="lk-login-sub">Enter the 6-digit code we sent to<br><strong>'+_esc(email)+'</strong></p>' +
+            '<div class="lk-login-field"><label for="paCodeInput">Verification code</label>' +
+            '<input class="lk-login-input" id="paCodeInput" type="text" inputmode="numeric" pattern="[0-9]*" maxlength="6" autocomplete="one-time-code" placeholder="123456" style="letter-spacing:.3em;text-align:center;font-size:1.3rem;font-weight:700;" onkeydown="if(event.key===\'Enter\')parentVerifyCode()"></div>' +
+            '<button class="lk-login-go" onclick="parentVerifyCode()">Verify</button>' +
+            '<div id="paMsg" class="lk-login-msg"></div>' +
+            '<button class="lk-login-alt" id="paResendBtn" onclick="parentResendCode()">Resend code</button>' +
+            '<button class="lk-login-alt" onclick="parentShowSignin(\''+_esc(email)+'\')">Back to sign in</button>' +
+            '</div>', 'brand');
+        window.__paVerifyEmail = email;
+        window.__paVerifyMode = mode || 'signup';
+        setTimeout(function(){var f=document.getElementById('paCodeInput');if(f)f.focus();},100);
+    }
+
+    window.parentVerifyCode = function() {
+        var email = window.__paVerifyEmail || '';
+        var code = ((document.getElementById('paCodeInput')||{}).value||'').trim();
+        if (!code || code.length !== 6) { _setMsg('Enter the 6-digit code from your email.'); return; }
+        _setMsg('Verifying…', '#64748B');
+        // type:'signup' is correct for both a fresh signup AND an existing
+        // unconfirmed account retrying login — it's the OTP *type*
+        // (confirming a signup token), not a claim about when it was sent.
+        // Same call landing.js already relies on for the main site.
+        db.auth.verifyOtp({email:email, token:code, type:'signup'}).then(function(res) {
+            if (res.error) { _setMsg(res.error.message || 'Invalid or expired code.'); return; }
+            var user = res.data && res.data.user;
+            if (!user) { _setMsg('Verification failed. Please try again.'); return; }
+            _rememberEmail(email);
+            var session = (res.data && res.data.session) || null;
+            if (Bio) Bio.saveSession(session);
+            if (window.campistryPushRegister) window.campistryPushRegister();
+            console.log('[Parent] Email verified, setting up portal…');
+            _showLoading('Setting up your portal…');
+            if (urlToken) { _claimAndLoad(urlToken); }
+            else { _loadByUser(); }   // email-first path: auto-claims by matching email
+        });
+    };
+
+    window.parentResendCode = function() {
+        var email = window.__paVerifyEmail || '';
+        if (!email) return;
+        var btn = document.getElementById('paResendBtn');
+        var original = btn ? btn.textContent : '';
+        if (btn) btn.textContent = 'Sending…';
+        db.auth.resend({type:'signup', email:email}).then(function(res) {
+            if (btn) btn.textContent = original;
+            if (res.error) { _setMsg(res.error.message || 'Could not resend the code.'); return; }
+            _setMsg('A new code has been sent to ' + email + '.', '#0F172A');
+        }).catch(function() {
+            if (btn) btn.textContent = original;
+            _setMsg('Could not resend — check your connection.');
+        });
+    };
+
     function _showLinkAccount(errorMsg) {
         var err = errorMsg ? '<div style="background:#FEF2F2;border:1px solid #FECACA;border-radius:8px;padding:10px 14px;font-size:.82rem;color:#EF4444;margin-bottom:14px;">'+_esc(errorMsg)+'</div>' : '';
         _showOverlay('parentAuthOverlay',
@@ -4959,7 +5026,16 @@ window.addEventListener('storage', function(e) {
         if (!email || !pass) { _setMsg('Please enter your email and password.'); return; }
         _setMsg('Signing in…', '#64748B');
         db.auth.signInWithPassword({email:email, password:pass}).then(function(res) {
-            if (res.error) { console.error('[Parent] Sign in error:', res.error); _setMsg(res.error.message); return; }
+            if (res.error) {
+                console.error('[Parent] Sign in error:', res.error);
+                if (/email not confirmed/i.test(res.error.message||'')) {
+                    _setMsg('Please confirm your email first — enter the code we sent you.', '#0F172A');
+                    setTimeout(function(){ _showVerifyCode(email, 'login'); }, 1200);
+                    return;
+                }
+                _setMsg(res.error.message);
+                return;
+            }
             console.log('[Parent] Signed in OK');
             _rememberEmail(email);
             var session = (res.data && res.data.session) || null;
@@ -5011,8 +5087,7 @@ window.addEventListener('storage', function(e) {
             }
             _rememberEmail(email);
             if (!res.data.session) {
-                _setMsg('Check your email to confirm your account, then come back and sign in.', '#0F172A');
-                setTimeout(function(){ _showSignIn(email); }, 4000);
+                _showVerifyCode(email, 'signup');
                 return;
             }
             console.log('[Parent] Account created, claiming invite…');
@@ -6239,6 +6314,6 @@ function _renderTipHistory(child) {
 })();
 </script>
 
-<script src="campistry_ota.js?v=20260901-36"></script>
+<script src="campistry_ota.js?v=20260903-01"></script>
 </body>
 </html>

@@ -21,8 +21,8 @@
          one. Mirrors colorSchemePref() in campistry_lite.js. -->
     <script>(function(){try{var p=JSON.parse(localStorage.getItem('campistry_lite_prefs')||'{}');var c=p.colorScheme||'auto';var r=document.documentElement;if(c!=='auto')r.setAttribute('data-theme',c);r.style.colorScheme=c==='auto'?'light dark':c;}catch(e){}})();</script>
     <style>html:not(.css-ready) body { opacity: 0; } html.css-ready body { transition: opacity 0.15s ease; }</style>
-    <link rel="stylesheet" href="campistry-unified.css?v=20260901-36">
-    <link rel="stylesheet" href="campistry_lite.css?v=20260901-36" onload="document.documentElement.classList.add('css-ready')">
+    <link rel="stylesheet" href="campistry-unified.css?v=20260903-01">
+    <link rel="stylesheet" href="campistry_lite.css?v=20260903-01" onload="document.documentElement.classList.add('css-ready')">
     <noscript><style>html body { opacity: 1 !important; }</style></noscript>
 </head>
 <body class="lite-login-page">
@@ -111,6 +111,27 @@
             <button type="button" class="lite-login-alt" id="liteBioSkip">Not now</button>
         </div>
 
+        <!-- Email-confirmation code entry. Supabase's "Confirm signup" email
+             template is one project-wide setting shared with the main
+             Campistry site's owner signup (landing.js), which requires a
+             typed 6-digit code (auth.verifyOtp) rather than a clicked link —
+             so Lite uses that same code-based mechanism rather than relying
+             on the emailed link, whether right after signup or when an
+             existing-but-unconfirmed account retries sign-in. -->
+        <form id="liteVerifyForm" novalidate hidden>
+            <p class="lite-login-offer">Enter the 6-digit code we sent to <strong id="liteVerifyEmail"></strong>.</p>
+            <div class="lite-lf">
+                <label for="liteVerifyCode">Verification code</label>
+                <input class="lite-lf-input" type="text" id="liteVerifyCode" inputmode="numeric" pattern="[0-9]*"
+                       maxlength="6" autocomplete="one-time-code" placeholder="123456"
+                       style="letter-spacing:.3em;text-align:center;font-size:1.3rem;font-weight:700;">
+            </div>
+            <div class="lite-login-err" id="liteVerifyErr" role="alert" hidden></div>
+            <button class="lite-btn block lite-login-go" type="submit" id="liteVerifyBtn">Verify</button>
+            <button type="button" class="lite-login-alt" id="liteVerifyResend">Resend code</button>
+            <button type="button" class="lite-login-alt" id="liteVerifyBack">Back to sign in</button>
+        </form>
+
         <p class="lite-login-foot" id="liteFootSignin">
             New staff — <button type="button" class="lite-login-foot-link" id="liteFootToSignup">create your account</button> with the email your camp has on file.
         </p>
@@ -122,19 +143,19 @@
 
 <div id="liteToast" class="lite-toast" style="display:none;"></div>
 
-<script src="config.js?v=20260901-36"></script>
-<script src="supabase-js@2.js?v=20260901-36"></script>
-<script src="supabase_client.js?v=20260901-36"></script>
-<script src="campistry_lite_biometric.js?v=20260901-36"></script>
-<script src="campistry_bio_native.js?v=20260901-36"></script>
-<script src="campistry_haptics.js?v=20260901-36"></script>
-<script src="campistry_keyboard.js?v=20260901-36"></script>
-<script src="campistry_lite_capacitor.js?v=20260901-36"></script>
-<script src="campistry_lite_login.js?v=20260901-36"></script>
+<script src="config.js?v=20260903-01"></script>
+<script src="supabase-js@2.js?v=20260903-01"></script>
+<script src="supabase_client.js?v=20260903-01"></script>
+<script src="campistry_lite_biometric.js?v=20260903-01"></script>
+<script src="campistry_bio_native.js?v=20260903-01"></script>
+<script src="campistry_haptics.js?v=20260903-01"></script>
+<script src="campistry_keyboard.js?v=20260903-01"></script>
+<script src="campistry_lite_capacitor.js?v=20260903-01"></script>
+<script src="campistry_lite_login.js?v=20260903-01"></script>
 <!-- LAST, and load-bearing. This page IS index.html — the app's entry point —
      so it is where a live update has to confirm it booted. Without it the
      updater saw every launch that stopped at sign-in as a failed bundle and
      rolled the app back to the version built into the APK. -->
-<script src="campistry_ota.js?v=20260901-36"></script>
+<script src="campistry_ota.js?v=20260903-01"></script>
 </body>
 </html>
