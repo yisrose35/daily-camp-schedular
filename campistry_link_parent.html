@@ -3838,6 +3838,13 @@ window.addEventListener('storage', function(e) {
 <script src="campistry_face_engine_v2.js?v=20260903-03"></script>
 <script src="supabase-js@2.js?v=20260903-03"></script>
 <script src="config.js?v=20260903-03"></script>
+<!-- pdf-lib + pdf.js (vendored) — fill-in-browser + stamp/flatten for PDF
+     Forms (Forms & Documents → Complete Online → a sourceType:'pdf' form). -->
+<script src="pdf-lib@1.17.1.js?v=20260903-04"></script>
+<script src="pdfjs-dist@3.11.174.min.js?v=20260903-04"></script>
+<script>
+if (window.pdfjsLib) { window.pdfjsLib.GlobalWorkerOptions.workerSrc = 'pdfjs-dist@3.11.174.worker.min.js?v=20260903-04'; }
+</script>
 <script>
 // =============================================================================
 // Parent Portal — Auth layer
@@ -5414,6 +5421,7 @@ function _foGetMySubmissions(){
 function openFillOnline(formIdx, camperName, camperId){
     var formDef = _currentDigitalForms[formIdx];
     if (!formDef) { return; }
+    if (formDef.sourceType === 'pdf') { openFillOnlinePdf(formDef, camperName, camperId); return; }
     _foFormDef = formDef;
     _foCamper = camperName;
     _foCamperId = camperId || '';
@@ -5486,6 +5494,7 @@ function closeFillOnline(){
     document.getElementById('foBackdrop').classList.remove('open');
     document.getElementById('foDrawer').classList.remove('open');
     _foFormDef = null;
+    _foPdfState = null;
 }
 
 function _foInitSig(canvasId){
@@ -5512,6 +5521,257 @@ function _foSigEmpty(canvasId){
     var d = cv.getContext('2d').getImageData(0,0,cv.width,cv.height).data;
     for (var i=3; i<d.length; i+=4){ if (d[i]>0) return false; }
     return true;
+}
+
+// ─── PDF Forms: fill the real PDF in the drawer, sign, stamp+flatten, submit ──
+// The plain digital-form drawer above renders form-config fields into inputs;
+// this renders the REAL PDF (pdf.js) with real inputs absolutely-positioned
+// over each detected field's rect, then on submit uses pdf-lib to set each
+// field's value on a fresh copy of the template, draws the signature pad's
+// PNG onto the page (a signature isn't a native AcroForm value), flattens,
+// and uploads the result via submit-pdf-form-response — same drawer shell,
+// same badge/submission-tracking downstream, only the body + submit differ.
+var _foPdfState = null; // {formDef, campId, camperName, camperId, pdfBytes(Uint8Array), fieldEls:[...]}
+
+function openFillOnlinePdf(formDef, camperName, camperId){
+    _foFormDef = formDef;
+    _foCamper = camperName;
+    _foCamperId = camperId || '';
+    _foPdfState = null;
+
+    document.getElementById('foTitle').textContent = formDef.name || 'Form';
+    document.getElementById('foFor').textContent = 'For: ' + camperName;
+    document.getElementById('foBody').innerHTML = '<div style="padding:24px 0;text-align:center;color:#64748B;font-size:.85rem;">Loading form…</div>';
+    document.getElementById('foBackdrop').classList.add('open');
+    document.getElementById('foDrawer').classList.add('open');
+
+    if (!window.PDFLib || !window.pdfjsLib) {
+        document.getElementById('foBody').innerHTML = '<div style="padding:24px 0;text-align:center;color:#B91C1C;font-size:.85rem;">Could not load the PDF viewer. Please refresh and try again.</div>';
+        return;
+    }
+
+    var campId = formDef._campId;
+    _foPdfGetUrl('template', { campId: campId, path: formDef.templatePdfPath }).then(function(url){
+        if (!url) throw new Error('no_url');
+        return fetch(url);
+    }).then(function(r){
+        if (!r.ok) throw new Error('fetch_failed');
+        return r.arrayBuffer();
+    }).then(function(buf){
+        var bytes = new Uint8Array(buf);
+        _foPdfState = { formDef: formDef, campId: campId, camperName: camperName, camperId: camperId||'', pdfBytes: bytes, fieldEls: [] };
+        return window.pdfjsLib.getDocument({ data: bytes.slice() }).promise;
+    }).then(function(pdfDoc){
+        return _foPdfRenderAllPages(pdfDoc);
+    }).catch(function(e){
+        console.error('[Parent] PDF form load failed', e);
+        document.getElementById('foBody').innerHTML = '<div style="padding:24px 0;text-align:center;color:#B91C1C;font-size:.85rem;">Could not load this form right now. Please try again later.</div>';
+    });
+}
+
+// Mints a short-lived signed Storage URL via get-pdf-form-urls — templates
+// live in the private camp-pdf-forms bucket (migration 110), no direct read.
+async function _foPdfGetUrl(kind, args){
+    var s = _lkSupa(), db = window._parentDB;
+    if (!s.url || !db) return null;
+    var sessRes = await db.auth.getSession();
+    var token = sessRes && sessRes.data && sessRes.data.session && sessRes.data.session.access_token;
+    if (!token) return null;
+    var body = Object.assign({ kind: kind }, args || {});
+    var resp = await fetch(s.url+'/functions/v1/get-pdf-form-urls', { method:'POST', headers:{'Content-Type':'application/json','Authorization':'Bearer '+token,'apikey':s.anonKey||''}, body: JSON.stringify(body) });
+    var data = await resp.json();
+    if (!resp.ok || data.error) throw new Error(data.error || 'Could not load the PDF');
+    return data.url || null;
+}
+
+function _foPdfRenderAllPages(pdfDoc){
+    var fields = (_foPdfState.formDef.fieldSchema || []);
+    var byPage = {};
+    fields.forEach(function(f){ var p = f.page||0; (byPage[p] = byPage[p]||[]).push(f); });
+
+    var body = document.getElementById('foBody');
+    body.innerHTML = '';
+    var wrap = document.createElement('div');
+    wrap.id = 'foPdfPages';
+    wrap.style.cssText = 'display:flex;flex-direction:column;gap:14px;';
+    body.appendChild(wrap);
+
+    var targetWidth = Math.max(280, Math.min(520, body.clientWidth || 480));
+    var pageCount = pdfDoc.numPages;
+    var chain = Promise.resolve();
+    var renderOnePage = function(pageIndex){
+        return pdfDoc.getPage(pageIndex + 1).then(function(page){
+            var baseViewport = page.getViewport({ scale: 1 });
+            var scale = targetWidth / baseViewport.width;
+            var viewport = page.getViewport({ scale: scale });
+
+            var pageWrap = document.createElement('div');
+            pageWrap.style.cssText = 'position:relative;width:'+Math.round(viewport.width)+'px;height:'+Math.round(viewport.height)+'px;margin:0 auto;box-shadow:0 1px 4px rgba(0,0,0,.15);border-radius:4px;overflow:hidden;background:#fff;';
+            var canvas = document.createElement('canvas');
+            canvas.width = Math.round(viewport.width);
+            canvas.height = Math.round(viewport.height);
+            canvas.style.cssText = 'display:block;width:100%;height:100%;';
+            pageWrap.appendChild(canvas);
+            wrap.appendChild(pageWrap);
+
+            var ctx = canvas.getContext('2d');
+            return page.render({ canvasContext: ctx, viewport: viewport }).promise.then(function(){
+                (byPage[pageIndex]||[]).forEach(function(field, fi){
+                    _foPdfPlaceFieldOverlay(pageWrap, field, viewport, baseViewport, pageIndex+'_'+fi);
+                });
+            });
+        });
+    };
+    for (var p = 0; p < pageCount; p++) {
+        (function(pageIndex){ chain = chain.then(function(){ return renderOnePage(pageIndex); }); })(p);
+    }
+    return chain.then(function(){
+        var actions = document.createElement('div');
+        actions.style.cssText = 'padding-top:16px;border-top:1px solid #E2E8F0;display:flex;gap:8px;justify-content:flex-end;margin-top:8px;';
+        actions.innerHTML = '<button onclick="closeFillOnline()" style="background:none;border:1px solid #CBD5E1;border-radius:8px;padding:9px 18px;font-size:.85rem;font-weight:600;color:#64748B;cursor:pointer;">Cancel</button>'
+            + '<button onclick="submitFillOnlinePdf()" style="background:#3B82F6;color:#fff;border:none;border-radius:8px;padding:9px 22px;font-size:.85rem;font-weight:600;cursor:pointer;">Submit</button>';
+        body.appendChild(actions);
+    });
+}
+
+// rect is [x,y,width,height] in PDF user space (origin bottom-left) at
+// scale 1, captured during detection (campistry_me.js _detectPdfFields).
+// Convert to the rendered canvas's top-left-origin pixel space.
+function _foPdfPlaceFieldOverlay(pageWrap, field, viewport, baseViewport, uid){
+    if (!field.rect) return;
+    var scale = viewport.width / baseViewport.width;
+    var x = field.rect[0]*scale, w = Math.max(4, field.rect[2]*scale), h = Math.max(4, field.rect[3]*scale);
+    var yTop = (baseViewport.height - (field.rect[1] + field.rect[3])) * scale;
+    var elId = 'foPdf_' + uid;
+
+    if (field.type === 'signature') {
+        var sigWrap = document.createElement('div');
+        sigWrap.style.cssText = 'position:absolute;left:'+x+'px;top:'+yTop+'px;width:'+w+'px;height:'+h+'px;border:1px dashed #3B82F6;background:rgba(59,130,246,.06);';
+        var cv = document.createElement('canvas');
+        cv.id = elId + '_c';
+        cv.width = Math.max(60, Math.round(w));
+        cv.height = Math.max(24, Math.round(h));
+        cv.style.cssText = 'width:100%;height:100%;display:block;cursor:crosshair;';
+        sigWrap.appendChild(cv);
+        pageWrap.appendChild(sigWrap);
+        _foInitSig(cv.id);
+        _foPdfState.fieldEls.push({ field: field, kind: 'signature', canvasId: cv.id });
+        return;
+    }
+
+    var el;
+    if (field.type === 'checkbox' || field.type === 'radio') {
+        el = document.createElement('input');
+        el.type = 'checkbox';
+        el.style.cssText = 'position:absolute;left:'+x+'px;top:'+yTop+'px;width:'+w+'px;height:'+h+'px;margin:0;cursor:pointer;';
+    } else if (field.type === 'dropdown') {
+        el = document.createElement('select');
+        el.style.cssText = 'position:absolute;left:'+x+'px;top:'+yTop+'px;width:'+w+'px;height:'+h+'px;font-size:'+Math.max(10,Math.min(14,h*0.6))+'px;border:1px solid #94A3B8;border-radius:2px;background:#fff;padding:0 2px;box-sizing:border-box;';
+        el.innerHTML = '<option value=""></option>' + (field.options||[]).map(function(o){ return '<option value="'+_foEsc(o)+'">'+_foEsc(o)+'</option>'; }).join('');
+    } else {
+        el = document.createElement('input');
+        el.type = 'text';
+        el.style.cssText = 'position:absolute;left:'+x+'px;top:'+yTop+'px;width:'+w+'px;height:'+h+'px;font-size:'+Math.max(10,Math.min(14,h*0.6))+'px;border:1px solid #94A3B8;border-radius:2px;padding:0 3px;background:#fff;box-sizing:border-box;';
+    }
+    el.id = elId;
+    el.title = field.label || '';
+    pageWrap.appendChild(el);
+    _foPdfState.fieldEls.push({
+        field: field,
+        kind: (field.type === 'checkbox' || field.type === 'radio') ? 'checkbox' : (field.type === 'dropdown' ? 'dropdown' : 'text'),
+        elId: elId
+    });
+}
+
+function submitFillOnlinePdf(){
+    var st = _foPdfState; if (!st) return;
+
+    for (var i=0; i<st.fieldEls.length; i++){
+        var fe = st.fieldEls[i];
+        if (!fe.field.required) continue;
+        if (fe.kind === 'signature') {
+            if (_foSigEmpty(fe.canvasId)) { _foToast('Please sign: '+(fe.field.label||'Signature')); return; }
+        } else if (fe.kind === 'checkbox') {
+            var cb = document.getElementById(fe.elId);
+            if (!cb || !cb.checked) { _foToast((fe.field.label||'Field')+' is required'); return; }
+        } else {
+            var el = document.getElementById(fe.elId);
+            if (!el || !String(el.value||'').trim()) { _foToast((fe.field.label||'Field')+' is required'); return; }
+        }
+    }
+
+    var saveBtn = document.querySelector('#foBody button[onclick="submitFillOnlinePdf()"]');
+    if (saveBtn) { saveBtn.disabled = true; saveBtn.textContent = 'Submitting…'; }
+
+    window.PDFLib.PDFDocument.load(st.pdfBytes.slice()).then(function(doc){
+        var form = doc.getForm();
+        var pages = doc.getPages();
+        var sigPromises = [];
+        st.fieldEls.forEach(function(fe){
+            try {
+                if (fe.kind === 'signature') {
+                    if (!_foSigEmpty(fe.canvasId)) {
+                        var cv = document.getElementById(fe.canvasId);
+                        var b64 = cv.toDataURL('image/png').split(',')[1];
+                        var bytes = Uint8Array.from(atob(b64), function(c){ return c.charCodeAt(0); });
+                        sigPromises.push(doc.embedPng(bytes).then(function(pngImage){
+                            var page = pages[fe.field.page||0];
+                            var rect = fe.field.rect;
+                            if (page && rect) page.drawImage(pngImage, { x: rect[0], y: rect[1], width: rect[2], height: rect[3] });
+                        }));
+                    }
+                } else if (fe.kind === 'checkbox') {
+                    var cbEl = document.getElementById(fe.elId);
+                    var cbField = form.getCheckBox(fe.field.name);
+                    if (cbEl && cbEl.checked) cbField.check(); else cbField.uncheck();
+                } else if (fe.kind === 'dropdown') {
+                    var selEl = document.getElementById(fe.elId);
+                    if (selEl && selEl.value) form.getDropdown(fe.field.name).select(selEl.value);
+                } else {
+                    var txtEl = document.getElementById(fe.elId);
+                    form.getTextField(fe.field.name).setText(txtEl ? String(txtEl.value||'') : '');
+                }
+            } catch(fieldErr) { console.warn('[Parent] PDF field set failed for', fe.field && fe.field.name, fieldErr); }
+        });
+        return Promise.all(sigPromises).then(function(){
+            form.flatten();
+            return doc.save();
+        });
+    }).then(function(finalBytes){
+        var binary = '';
+        for (var bi=0; bi<finalBytes.length; bi++) binary += String.fromCharCode(finalBytes[bi]);
+        var pdfBase64 = btoa(binary);
+        var child = (typeof children !== 'undefined' && children.find) ? (children.find(function(c){ return c.name === st.camperName; }) || {}) : {};
+        var s = _lkSupa(), db = window._parentDB;
+        return db.auth.getSession().then(function(sessRes){
+            var token = sessRes && sessRes.data && sessRes.data.session && sessRes.data.session.access_token;
+            if (!token) throw new Error('not_signed_in');
+            return fetch(s.url+'/functions/v1/submit-pdf-form-response', {
+                method:'POST',
+                headers:{'Content-Type':'application/json','Authorization':'Bearer '+token,'apikey':s.anonKey||''},
+                body: JSON.stringify({
+                    campId: st.campId, formId: st.formDef.id||'', formName: st.formDef.name||'Form',
+                    camperName: st.camperName, camperId: st.camperId,
+                    division: child.division||'', grade: child.grade||'', bunk: child.bunk||'',
+                    pdfBase64: pdfBase64
+                })
+            });
+        }).then(function(resp){ return resp.json().then(function(data){ if (!resp.ok || data.error || !data.success) throw new Error(data.error||'submit_failed'); return data; }); });
+    }).then(function(){
+        try {
+            var subs = JSON.parse(localStorage.getItem(FORM_SUB_KEY_P)||'[]');
+            subs.push({ id:'sub_'+Date.now(), formId: st.formDef.id||'', camper: st.camperName, mode:'digital', submittedAt: new Date().toISOString() });
+            localStorage.setItem(FORM_SUB_KEY_P, JSON.stringify(subs));
+        } catch(e){}
+        closeFillOnline();
+        _foPdfState = null;
+        _foToast('Form submitted!');
+        if (window._refreshLinkForms) window._refreshLinkForms();
+    }).catch(function(e){
+        console.error('[Parent] PDF form submit failed', e);
+        _foToast('Could not submit — check your connection and try again');
+        if (saveBtn) { saveBtn.disabled = false; saveBtn.textContent = 'Submit'; }
+    });
 }
 
 function submitFillOnline(){
