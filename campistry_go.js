@@ -4358,11 +4358,20 @@ async function _tryNeighborhoodPipeline({
     }
 
     // Even out the worst ride once stop order is settled.
+    // NOTE: avgSpeedMph / avgStopMin are locals of generateRoutes and are NOT in
+    // scope here — reading them threw a ReferenceError that took down the whole
+    // neighborhood pipeline and silently fell back to the old k-means path.
     if (routes.length > 1) {
-        const relieved = _relieveLongRoutes(routes, campLat, campLng, isArrival,
-                                            avgSpeedMph, avgStopMin);
-        if (relieved) console.log('[Go v5] Ride-time relief: moved ' + relieved +
-            ' late-drop stop(s) to a nearer bus with seats');
+        try {
+            const relieved = _relieveLongRoutes(routes, campLat, campLng, isArrival,
+                                                D.setup.avgSpeed || 25, D.setup.avgStopTime || 2);
+            if (relieved) console.log('[Go v5] Ride-time relief: moved ' + relieved +
+                ' late-drop stop(s) to a nearer bus with seats');
+        } catch (e) {
+            // Never let a polish step sink the whole pipeline — the routes are
+            // already valid at this point, relief is an improvement on top.
+            console.warn('[Go v5] Ride-time relief skipped: ' + e.message);
+        }
     }
 
     // ── Record year-over-year assignment state ──
