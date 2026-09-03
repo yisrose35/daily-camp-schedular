@@ -4313,14 +4313,32 @@ async function _tryNeighborhoodPipeline({
     if (leftover.length) {
         console.warn('[Go v5] ' + leftover.length +
             ' un-snapped camper(s) — appending as door-drops to nearest bus');
+        // Nearest bus WITH ROOM. This used to pick the nearest bus outright and
+        // push the camper on regardless, which is how a 48-seat bus ended up
+        // carrying 49 children — a hard failure that had nothing to do with the
+        // districting. The fleet has ~113 spare seats, so a seat always exists.
+        const _capOf = (bus) => {
+            const v = shiftVehicles.find(x => x.busId === bus.busId);
+            return v && Number.isFinite(v.capacity) ? v.capacity : Infinity;
+        };
+        const _headOf = (bus) => (bus.stops || []).reduce((a, s) => a + ((s.campers || []).length), 0);
         for (const c of leftover) {
             let bestBus = null, bestDist = Infinity;
+            let fullestFallback = null, fallbackHead = Infinity;
             for (const bus of nhPhysical) {
                 if (!bus.stops?.length) continue;
+                const head = _headOf(bus);
+                if (head < fallbackHead) { fallbackHead = head; fullestFallback = bus; }
+                if (head + 1 > _capOf(bus)) continue; // no seat
                 for (const s of bus.stops) {
                     const d = haversineMi(c.lat, c.lng, s.lat, s.lng);
                     if (d < bestDist) { bestDist = d; bestBus = bus; }
                 }
+            }
+            if (!bestBus && fullestFallback) {
+                console.warn('[Go v5] No bus with a free seat for un-snapped camper ' +
+                    c.name + ' — placing on the least-full bus');
+                bestBus = fullestFallback;
             }
             if (bestBus) {
                 bestBus.stops.push({
