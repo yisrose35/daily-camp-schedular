@@ -72,7 +72,7 @@ body{font-family:var(--font);background:var(--s50);color:var(--s800);-webkit-fon
 
     <div class="cd" id="roleCard"><div class="ct">💼 Role &amp; Availability</div>
       <div class="fg"><label class="fl">Position(s) you're applying for<span class="rq">*</span></label><div class="chips" id="posChips"></div></div>
-      <div class="fr"><div class="fg"><label class="fl">Available from</label><input class="fi" id="aAvS" type="date"></div><div class="fg"><label class="fl">Available until</label><input class="fi" id="aAvE" type="date"></div></div>
+      <div class="fg" id="sessPickWrap" style="display:none"><label class="fl">Session(s) you're applying to work</label><div class="chips" id="sessChips"></div></div>
     </div>
 
     <div class="cd" id="expCard"><div class="ct">🎓 Experience &amp; Certifications</div>
@@ -140,6 +140,7 @@ var CERTS_DEFAULT=['CPR','First Aid','Lifeguard (WSI)','Food Handler','Wildernes
 var sigCtx=null,sigDrawing=false,sigHasData=false,resumeData=null,photoData=null;
 var customQuestions=[];
 var customSections=[];
+var sessions=[];
 function esc(s){if(s==null)return'';return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&#34;').replace(/'/g,'&#39;');}
 function v(id){return(document.getElementById(id)?.value||'').trim();}
 
@@ -150,8 +151,8 @@ var FIELD_ELEMENT_MAP={
     school:'aSch',schoolGrade:'aSchGr',
     parentName:'aPar',parentRelation:'aParRel',parentPhone:'aParPh',parentEmail:'aParEm',
     parent2Name:'aPar2',parent2Relation:'aPar2Rel',parent2Phone:'aPar2Ph',parent2Email:'aPar2Em',
-    availStart:'aAvS',availEnd:'aAvE',
     education:'aEdu',experience:'aExp'
+    // sessionsApplied (sessChips) is a checkbox group, not text-validated the same way — handled separately, like positions.
     // resume (aResume) is a file input, not text-validated the same way — handled separately.
 };
 var FIELD_DEFAULT_LABEL={
@@ -159,14 +160,13 @@ var FIELD_DEFAULT_LABEL={
     school:'School Name',schoolGrade:'School Grade',
     parentName:'Parent / Guardian Name',parentRelation:'Relationship',parentPhone:'Parent Phone',parentEmail:'Parent Email',
     parent2Name:'Second Parent / Guardian Name',parent2Relation:'Second Parent / Guardian Relationship',parent2Phone:'Second Parent / Guardian Phone',parent2Email:'Second Parent / Guardian Email',
-    availStart:'Available from',availEnd:'Available until',
     education:'Education',experience:'Relevant experience'
 };
 // Defaults match the hardcoded validation this page shipped with.
 var FIELD_REQUIRED_STATE={first:true,last:true,email:true,phone:true,dob:false,street:false,city:false,state:false,zip:false,
     school:false,schoolGrade:false,parentName:false,parentRelation:false,parentPhone:false,parentEmail:false,
     parent2Name:false,parent2Relation:false,parent2Phone:false,parent2Email:false,
-    availStart:false,availEnd:false,education:false,experience:false};
+    education:false,experience:false};
 var FIELD_ENABLED_STATE={};
 var RESUME_REQUIRED=false;
 var PHOTO_REQUIRED=false;
@@ -180,7 +180,6 @@ var FIELD_TO_SECTION={
     school:'about',schoolGrade:'about',
     parentName:'parent',parentRelation:'parent',parentPhone:'parent',parentEmail:'parent',
     parent2Name:'parent',parent2Relation:'parent',parent2Phone:'parent',parent2Email:'parent',
-    availStart:'role',availEnd:'role',
     education:'experience',experience:'experience'
 };
 
@@ -190,7 +189,7 @@ var FIELD_TO_SECTION={
 var FIELD_REQUIRED_DEFAULT={first:true,last:true,email:true,phone:true,dob:false,street:false,city:false,state:false,zip:false,
     school:false,schoolGrade:false,parentName:false,parentRelation:false,parentPhone:false,parentEmail:false,
     parent2Name:false,parent2Relation:false,parent2Phone:false,parent2Email:false,
-    availStart:false,availEnd:false,education:false,experience:false};
+    education:false,experience:false};
 function applyFieldConfig(fields,sectionsDisabled){
     fields=fields||{}; sectionsDisabled=sectionsDisabled||{};
     Object.keys(FIELD_ELEMENT_MAP).forEach(function(fid){
@@ -314,6 +313,18 @@ function applyFormConfig(sfc){
     var certs=(sfc.certifications&&sfc.certifications.length)?sfc.certifications:CERTS_DEFAULT;
     document.getElementById('posChips').innerHTML=positions.map(function(p){return '<label class="chip"><input type="checkbox" class="posCb" value="'+esc(p)+'"> '+esc(p)+'</label>';}).join('');
     document.getElementById('certChips').innerHTML=certs.map(function(cc){return '<label class="chip"><input type="checkbox" class="certCb" value="'+esc(cc)+'"> '+esc(cc)+'</label>';}).join('');
+    // Session(s) applying for — only shown once real session data is known
+    // (the local-cache fast path runs before any cloud data has loaded, so
+    // this can legitimately be empty on the very first render).
+    var sessWrap=document.getElementById('sessPickWrap');
+    if(sessWrap){
+        if(sessions&&sessions.length){
+            document.getElementById('sessChips').innerHTML=sessions.map(function(s){return '<label class="chip"><input type="checkbox" class="sessCb" value="'+esc(s.name)+'"> '+esc(s.name)+(s.dates?' — '+esc(s.dates):'')+'</label>';}).join('');
+            sessWrap.style.display='';
+        }else{
+            sessWrap.style.display='none';
+        }
+    }
     document.querySelectorAll('.chip input').forEach(function(cb){cb.addEventListener('change',function(){cb.closest('.chip').classList.toggle('sel',cb.checked);});});
 
     // Custom questions — a question tagged with a built-in section renders
@@ -394,6 +405,7 @@ try{
     var cn=g.campName||g.camp_name||me.campName||'';
     _baseCampNm=cn;
     if(cn){document.getElementById('campTitle').textContent=cn+' — Staff Application';document.getElementById('campNm').textContent=cn;}
+    sessions=me.sessions||[];
     applyFormConfig(me.staffFormConfig);
 }catch(e){ applyFormConfig(null); }
 
@@ -424,10 +436,16 @@ async function _loadFromCloud(campId){
         _resolvedCampId=campId;
         _baseCampNm=d.campName||'';
         if(_baseCampNm){document.getElementById('campTitle').textContent=_baseCampNm+' — Staff Application';document.getElementById('campNm').textContent=_baseCampNm;}
+        sessions=d.sessions||[];
         applyFormConfig(d.staffFormConfig||{});
     }catch(e){ console.warn('[StaffApply] Cloud bootstrap failed:',e&&e.message); }
 }
-if(campIdParam)_loadFromCloud(campIdParam);
+// Fall back through any campId this browser's own session/local cache
+// already knows (same fix as campistry_register.html) — otherwise the
+// Form Builder's preview iframe (?preview=1, no ?camp=) never fetches
+// real sessions and stays stuck on whatever _loadFromLocalCache found.
+var _bootCampId=campIdParam||(window.CampistryDB&&window.CampistryDB.getCampId&&window.CampistryDB.getCampId())||localStorage.getItem('campistry_camp_id');
+if(_bootCampId)_loadFromCloud(_bootCampId);
 
 // ─── LIVE PREVIEW MODE (embedded in the Me "Form Builder") ────────────
 if(new URLSearchParams(window.location.search).get('preview')==='1'){
@@ -558,6 +576,7 @@ window.submitApp=async function(){
     }
 
     var certs=[].map.call(document.querySelectorAll('.certCb:checked'),function(c){return c.value;});
+    var sessionsApplied=[].map.call(document.querySelectorAll('.sessCb:checked'),function(c){return c.value;});
     var refs=[];
     if(v('r1n'))refs.push({name:v('r1n'),relationship:v('r1r'),email:v('r1e'),phone:v('r1p'),status:'pending'});
     if(v('r2n'))refs.push({name:v('r2n'),relationship:v('r2r'),email:v('r2e'),phone:v('r2p'),status:'pending'});
@@ -595,7 +614,7 @@ window.submitApp=async function(){
         school:v('aSch'),schoolGrade:v('aSchGr'),
         parentName:v('aPar'),parentRelation:v('aParRel'),parentPhone:v('aParPh'),parentEmail:v('aParEm'),
         parent2Name:v('aPar2'),parent2Relation:v('aPar2Rel'),parent2Phone:v('aPar2Ph'),parent2Email:v('aPar2Em'),
-        positions:positions,availStart:v('aAvS'),availEnd:v('aAvE'),
+        positions:positions,sessionsApplied:sessionsApplied,
         education:v('aEdu'),experience:v('aExp'),certifications:certs,
         resume:resumeData,references:refs,source:v('aSrc'),
         bgCheckConsent:document.getElementById('agBg').checked,

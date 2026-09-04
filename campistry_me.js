@@ -1400,7 +1400,8 @@ function renderStaffDetailPage(){
     }
 
     var posBody=cvR('Role',row.role)+((row.positions||[]).length?cvR('Position(s)',esc(row.positions.join(', '))):'');
-    if(app&&(app.availStart||app.availEnd))posBody+=cvR('Availability',(app.availStart||'?')+' – '+(app.availEnd||'?'));
+    if(app&&app.sessionsApplied&&app.sessionsApplied.length)posBody+=cvR('Session(s)',esc(app.sessionsApplied.join(', ')));
+    else if(app&&(app.availStart||app.availEnd))posBody+=cvR('Availability',(app.availStart||'?')+' – '+(app.availEnd||'?'));
     if(row.payrollId!=null){
         var core=PC();
         var rl=(core&&(core.PAY_TYPES.filter(function(p){return p.id===row.payType})[0]||{}).rateLabel)||'Rate';
@@ -5135,7 +5136,8 @@ function viewStaffApp(id){
         },
         role:function(){
             var h=row('Position(s)',(a.positions||[]).join(', '));
-            if((sFieldOn('availStart')||sFieldOn('availEnd'))&&(a.availStart||a.availEnd))h+=row('Availability',(a.availStart||'?')+' – '+(a.availEnd||'?'));
+            if(sFieldOn('sessionsApplied')&&a.sessionsApplied&&a.sessionsApplied.length)h+=row('Session(s)',a.sessionsApplied.join(', '));
+            else if((sFieldOn('availStart')||sFieldOn('availEnd'))&&(a.availStart||a.availEnd))h+=row('Availability',(a.availStart||'?')+' – '+(a.availEnd||'?'));
             return {title:'Role & Availability',body:h,snapshot:true};
         },
         experience:function(){
@@ -5322,6 +5324,29 @@ function copyStaffContractLink(id){
     if(navigator.clipboard){navigator.clipboard.writeText(url).then(function(){toast('Contract link copied')});}
     else{prompt('Copy this link and send it to the candidate:',url);}
 }
+// Saving an offer used to stop at copying a link the office had to paste
+// into their own email/text — this actually emails the candidate,
+// mirroring the Post-Hire Form's auto-send (callEdgeFunctionAuthed →
+// send-broadcast, the real edge function, not a client-side toast).
+// Failure surfaces via toast rather than silently leaving the office
+// thinking an email went out when it didn't.
+async function _sendContractOfferNow(id){
+    var a=staffApplications[id]; if(!a||!a.email)return;
+    var url=_staffContractLink(id);
+    var campName='';try{var ss=JSON.parse(localStorage.getItem('campGlobalSettings_v1')||'{}');campName=ss.campName||ss.camp_name||'Camp';}catch(ex){}
+    var firstName=(a.first||(a.name||'').split(' ')[0]||'');
+    var subject='Your offer from '+(campName||'Camp');
+    var body='Hi '+firstName+',\n\nWe\'d like to offer you a position for the upcoming season! Please review and accept your offer here:\n\n'+url+'\n\nWe look forward to having you on the team.';
+    try{
+        await callEdgeFunctionAuthed('send-broadcast',{campId:getCampId(),to:[{email:a.email,name:a.name||''}],subject:subject,body:body,method:'email',campName:campName});
+        a.contract.emailSentAt=new Date().toISOString();
+        save();
+        toast('Contract offer emailed to '+a.email);
+    }catch(err){
+        toast('Contract offer save succeeded, but the email failed to send: '+(err&&err.message||'unknown error')+' — use Copy Link to send it yourself.','error');
+        copyStaffContractLink(id);
+    }
+}
 function openStaffContractModal(id){
     var a=staffApplications[id]; if(!a)return;
     var core=PC(); if(!core){toast('Payroll isn\'t available yet','error');return;}
@@ -5330,6 +5355,11 @@ function openStaffContractModal(id){
     h+='<div class="fr"><div class="fg"><label class="fl">Pay Type</label><select id="scPayType" class="fs" onchange="CampistryMe.scPayTypeHint()">'+
         core.PAY_TYPES.map(function(p){return '<option value="'+esc(p.id)+'"'+((ctr.payType||'hourly')===p.id?' selected':'')+'>'+esc(p.label)+'</option>'}).join('')+
         '</select></div><div class="fg"><label class="fl" id="scRateLbl">Rate</label><input type="number" min="0" step="0.01" id="scRate" class="fi" value="'+(ctr.payRate||'')+'"></div></div>';
+    if(sessions&&sessions.length){
+        h+='<div class="fg"><label class="fl">Quick-fill from Session</label><select id="scSessionPick" class="fs" onchange="CampistryMe.scFillFromSession(this.value)"><option value="">— Pick a session to fill in the dates below —</option>'+
+            sessions.map(function(s){return '<option value="'+esc(s.name)+'"'+(ctr.sessionName===s.name?' selected':'')+'>'+esc(s.name)+(s.dates?' — '+esc(s.dates):'')+'</option>'}).join('')+
+            '</select></div>';
+    }
     h+='<div class="fr">'+ff('Start Date','scStart',ctr.startDate||'','date')+ff('End Date','scEnd',ctr.endDate||'','date')+'</div>';
     h+='<div class="fg"><label class="fl">Terms</label><textarea id="scTerms" class="fi" style="min-height:90px;resize:vertical" placeholder="Duties, housing, time off, anything else the offer should spell out…">'+(ctr.terms?esc(ctr.terms):'')+'</textarea></div>';
     h+='<p style="font-size:.72rem;color:var(--s400);margin-top:-4px">Saving generates a link the candidate opens to review these terms and accept by typing their name — no account needed on their end.</p>';
@@ -5343,6 +5373,16 @@ function scPayTypeHint(){
     var t=core.PAY_TYPES.filter(function(p){return p.id===sel.value})[0];
     lbl.textContent=t?t.rateLabel:'Rate';
 }
+// Quick-fill Start/End from a picked session — same "one shared session
+// concept" the camper registration flow already keys tuition/dates off of,
+// instead of retyping dates by hand for every contract.
+function scFillFromSession(name){
+    var s=sessions.find(function(x){return x.name===name});
+    if(!s)return;
+    var st=document.getElementById('scStart'), en=document.getElementById('scEnd');
+    if(st)st.value=s.startDate||'';
+    if(en)en.value=s.endDate||'';
+}
 function saveStaffContract(id){
     var a=staffApplications[id]; if(!a)return;
     function v(fid){var e=document.getElementById(fid);return e?(e.value||'').trim():''}
@@ -5354,6 +5394,7 @@ function saveStaffContract(id){
     ctr.payRate=parseFloat(v('scRate'))||0;
     ctr.startDate=v('scStart');
     ctr.endDate=v('scEnd');
+    ctr.sessionName=v('scSessionPick');
     ctr.terms=v('scTerms');
     if(ctr.status!=='accepted'){
         ctr.status='sent';
@@ -5363,7 +5404,8 @@ function saveStaffContract(id){
     save();
     closeModal('dynModal');
     _refreshStaffView(id);
-    copyStaffContractLink(id);
+    if(ctr.status!=='accepted'&&a.email)_sendContractOfferNow(id);
+    else copyStaffContractLink(id);
 }
 // Runs on every Hiring page render — picks up contracts a candidate accepted
 // since the last render (accepted via campistry_contract.html, so this admin
@@ -5512,7 +5554,6 @@ var SAPP_FIELD_MAP={
     school:{},schoolGrade:{type:'select'},
     parentName:{},parentRelation:{},parentPhone:{type:'tel'},parentEmail:{type:'email'},
     parent2Name:{},parent2Relation:{},parent2Phone:{type:'tel'},parent2Email:{type:'email'},
-    availStart:{type:'date'},availEnd:{type:'date'},
     education:{},experience:{type:'textarea'}
 };
 
@@ -5522,6 +5563,7 @@ var SAPP_FIELD_MAP={
 // the real form instead of a fixed 5-field shortcut that can drift out of
 // sync with it.
 function addStaffApp(){
+    _freshSessions();
     var sfc=getStaffFormConfig();
     var order=(sfc.sectionOrder&&sfc.sectionOrder.length)?sfc.sectionOrder:SFC_SECTIONS.map(function(s){return s.key});
     var secEnabled={};
@@ -5537,6 +5579,12 @@ function addStaffApp(){
         var req=cfg.required!=null?cfg.required:!!f.required;
         var id='sapp_'+f.id;
         var star=req?' <span class="rq" style="color:var(--err)">*</span>':'';
+        if(f.id==='sessionsApplied'){
+            if(!sessions||!sessions.length)return '';
+            return '<div class="fg"><label class="fl">'+esc(label)+star+'</label><div style="display:flex;flex-wrap:wrap;gap:6px">'
+                +sessions.map(function(s){return '<label style="display:inline-flex;align-items:center;gap:5px;padding:6px 10px;border:1px solid var(--s200);border-radius:999px;font-size:.8rem;cursor:pointer"><input type="checkbox" class="sappSessCb" value="'+esc(s.name)+'">'+esc(s.name)+'</label>';}).join('')
+                +'</div></div>';
+        }
         if(map.type==='select'){var _opts=f.id==='schoolGrade'?_schoolGradeCatalog():(map.opts||[]);return '<div class="fg"><label class="fl">'+esc(label)+star+'</label><select id="'+id+'" class="fs"><option value="">—</option>'+_opts.map(function(o){return'<option>'+esc(o)+'</option>';}).join('')+'</select></div>';}
         if(map.type==='textarea')return '<div class="fg"><label class="fl">'+esc(label)+star+'</label><textarea id="'+id+'" class="fi" style="min-height:50px;resize:vertical"></textarea></div>';
         if(map.type==='file')return '<div class="fg"><label class="fl">'+esc(label)+star+'</label>'
@@ -5591,6 +5639,7 @@ function addStaffApp(){
             });
         });
         var positionsChecked=Array.prototype.map.call(document.querySelectorAll('.sappPosCb:checked'),function(c){return c.value;});
+        var sessionsChecked=Array.prototype.map.call(document.querySelectorAll('.sappSessCb:checked'),function(c){return c.value;});
         if(secEnabled.role&&!positionsChecked.length&&!missingLabel)missingLabel='Position(s)';
         var first=values.first||'',last=values.last||'';
         if(!first&&!last&&!missingLabel)missingLabel='Name';
@@ -5604,7 +5653,7 @@ function addStaffApp(){
             school:values.school||'',schoolGrade:values.schoolGrade||'',
             parentName:values.parentName||'',parentRelation:values.parentRelation||'',parentPhone:values.parentPhone||'',parentEmail:values.parentEmail||'',
             parent2Name:values.parent2Name||'',parent2Relation:values.parent2Relation||'',parent2Phone:values.parent2Phone||'',parent2Email:values.parent2Email||'',
-            positions:positionsChecked,availStart:values.availStart||'',availEnd:values.availEnd||'',
+            positions:positionsChecked,sessionsApplied:sessionsChecked,
             education:values.education||'',experience:values.experience||'',
             certifications:[],references:[],status:'applied',
             appliedDate:today(),appliedTime:new Date().toISOString(),onboarding:{}
@@ -6576,8 +6625,7 @@ var SFC_FIELD_CATALOG={
         {id:'parent2Email',label:'Second Parent / Guardian Email'}
     ],
     role:[
-        {id:'availStart',label:'Available From'},
-        {id:'availEnd',label:'Available Until'}
+        {id:'sessionsApplied',label:'Session(s) Applying For'}
     ],
     experience:[
         {id:'education',label:'Education'},
@@ -13941,7 +13989,7 @@ window.CampistryMe={
     monthlyPlan:monthlyPlan,toggleFamilyAutopay:toggleFamilyAutopay,cancelMonthlyPlan:cancelMonthlyPlan,
     _mpGenerate:_mpGenerate,_mpAddRow:_mpAddRow,_mpUpdateTotal:_mpUpdateTotal,
     viewStaffApp:viewStaffApp,setStaffStatus:setStaffStatus,saveStaffNotes:saveStaffNotes,openAssignPositionModal:openAssignPositionModal,
-    openStaffContractModal:openStaffContractModal,saveStaffContract:saveStaffContract,scPayTypeHint:scPayTypeHint,copyStaffContractLink:copyStaffContractLink,
+    openStaffContractModal:openStaffContractModal,saveStaffContract:saveStaffContract,scPayTypeHint:scPayTypeHint,scFillFromSession:scFillFromSession,copyStaffContractLink:copyStaffContractLink,
     toggleOnboard:toggleOnboard,cycleRef:cycleRef,deleteStaffApp:deleteStaffApp,addStaffApp:addStaffApp,
     copyStaffLink:copyStaffLink,exportStaffCSV:exportStaffCSV,
     setLeadFilter:setLeadFilter,viewLead:viewLead,setLeadStatus:setLeadStatus,saveLeadNotes:saveLeadNotes,
