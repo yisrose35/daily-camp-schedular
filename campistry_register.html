@@ -486,27 +486,28 @@ async function showStatus(id){
                 }
             }catch(_){}
         }
-        if(!enrollments||!enrollments[id]){
-            // Final fallback: query Supabase directly. CampistryDB resolves
-            // a campId from the URL / session; if it's not available yet
-            // the status panel surfaces the original "Not Found".
-            try{
-                var client=(window.CampistryDB&&window.CampistryDB.getClient&&window.CampistryDB.getClient())||(window.supabase&&typeof window.supabase.rpc==='function'?window.supabase:null);
-                var campId=_resolvedCampId||campIdParam||(window.CampistryDB&&window.CampistryDB.getCampId&&window.CampistryDB.getCampId())||localStorage.getItem('campistry_camp_id');
-                if(client&&campId){
-                    var res=await client
-                        .from('camp_state_kv')
-                        .select('value')
-                        .eq('camp_id',campId)
-                        .eq('key','campistryMe')
-                        .maybeSingle();
-                    if(!res?.error&&res?.data?.value?.enrollments){
-                        enrollments=res.data.value.enrollments;
-                    }
+        if(enrollments&&enrollments[id]){renderStatus(enrollments[id]);return;}
+        // Final fallback: an anon-safe RPC (get_public_application_status,
+        // migration 113) — NOT a direct table query. camp_state_kv's own
+        // SELECT policy requires camp_id = get_user_camp_id(), which only
+        // resolves for an authenticated staff session; a raw
+        // .from('camp_state_kv').select(...) here as an anonymous parent
+        // caller silently returns zero rows every time regardless of
+        // whether campId is correct — that used to be this fallback and it
+        // was dead code. This RPC is what actually makes the status link
+        // work from a different device / after the local cache is gone.
+        try{
+            var client=(window.CampistryDB&&window.CampistryDB.getClient&&window.CampistryDB.getClient())||(window.supabase&&typeof window.supabase.rpc==='function'?window.supabase:null);
+            var campId=_resolvedCampId||campIdParam||(window.CampistryDB&&window.CampistryDB.getCampId&&window.CampistryDB.getCampId())||localStorage.getItem('campistry_camp_id');
+            if(client&&campId){
+                var res=await client.rpc('get_public_application_status',{p_camp_id:campId,p_app_id:id});
+                if(!res?.error&&res?.data?.success){
+                    renderStatus(res.data);
+                    return;
                 }
-            }catch(_){}
-        }
-        renderStatus(enrollments&&enrollments[id]);
+            }
+        }catch(_){}
+        renderStatus(null);
     }catch(ex){document.getElementById('statusContent').innerHTML='<h2 style="color:var(--err)">Error</h2><p>Unable to load status.</p>'}
 }
 
