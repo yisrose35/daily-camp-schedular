@@ -2161,6 +2161,16 @@ function renderCamperDetailPage(){
     var bunkReq=_camperBunkRequests(n);
     if(bunkReq.friends.length)camp+=cvR('Wants to bunk with',esc(bunkReq.friends.join(', ')));
     if(bunkReq.avoid.length)camp+=cvR('Do not bunk with','<span class="cv-warn">'+esc(bunkReq.avoid.join(', '))+'</span>');
+    // Division/grade only auto-fill on enroll when Camp Structure has a real
+    // schoolGrade→division/grade mapping configured (an optional feature,
+    // set up per-grade in Camp Structure) — most camps that haven't set that
+    // up yet leave this card silently empty, which reads as "enrollment
+    // didn't actually assign anything" even though it worked correctly.
+    // Surface an explicit call to action instead of a blank card.
+    if(!d.division&&!d.grade&&!d.bunk){
+        camp+='<div style="font-size:.82rem;color:var(--s500);padding:4px 0;">Not assigned to a division/grade/bunk yet.</div>';
+        camp+='<button class="me-btn me-btn--sec me-btn--sm" onclick="CampistryMe.editCamper(\''+je(n)+'\')" style="margin-top:4px;">Assign now</button>';
+    }
     g+=_dpCard('Camp Assignment',camp,{icon:'mapPin'});
 
     // Parent / Guardian — shows BOTH parents in full right away, not just
@@ -8356,6 +8366,12 @@ function autoPromoteWaitlist(sessionName){
 function enrollCamper(id){
     var e=enrollments[id];if(!e)return;
     e.status='enrolled';
+    // addApplication()/addStaffApp()/reEnrollCamper() all call this before
+    // reading `sessions` — enrollCamper() didn't, so a Me tab left open since
+    // before (or during) a Dashboard price edit kept a stale, possibly
+    // out-of-date `sessions` array indefinitely (loadData()'s cross-tab
+    // storage listener doesn't fire same-tab).
+    _freshSessions();
     // Auto-create camper in roster with ALL application data
     if(!roster[e.camperName]){
         var newId=nextPersonId;nextPersonId++;
@@ -8421,13 +8437,16 @@ function enrollCamper(id){
     var addr=[e.street,e.city,e.state,e.zip].filter(Boolean).join(', ');
     var famKey=_resolveFamilyKey(e.camperName,_famItemRaw(e.camperName,e.street,e.city,e.state,e.zip,e.parentName,e.parentEmail));
     var sesObj=sessions.find(function(s){return s.name===e.session});
-    // Prefer the session's CURRENT price (matches buildFamilyLedgers, the
-    // source of truth for Billing) and only fall back to the frozen
-    // e.sessionTuition snapshot if the session no longer exists — the
-    // reverse order silently charged $0 for any enrollment record whose
-    // snapshot was never populated (e.g. campers added directly to the
-    // roster, or applications submitted before sessionTuition was wired up).
-    var tuition=(sesObj&&sesObj.tuition!=null)?Number(sesObj.tuition)||0:Number(e.sessionTuition)||0;
+    // Prefer the session's CURRENT price, but only when it's actually a real
+    // positive number — a session lookup that resolves to a $0 object (a
+    // duplicate/mis-synced "1st Half" auto-created with tuition:0 before Camp
+    // Dates was set, or any other zero-priced same-named entry) must NOT be
+    // trusted over a genuinely positive frozen e.sessionTuition snapshot
+    // captured correctly at application time. Only fall back to $0 when
+    // BOTH the live lookup and the snapshot are empty/zero.
+    var _liveTuition=(sesObj&&sesObj.tuition!=null)?Number(sesObj.tuition)||0:0;
+    var _snapTuition=Number(e.sessionTuition)||0;
+    var tuition=_liveTuition>0?_liveTuition:_snapTuition;
 
     // Sibling discount only when actually joining a matched family that
     // already has campers.
@@ -9216,12 +9235,16 @@ function buildFamilyLedgers(){
         // Prefer the session's CURRENT price over the tuition snapshot frozen
         // onto the enrollment at application time — otherwise editing a
         // session's price in Sessions & Pricing, or moving an accepted camper
-        // to a different session, never re-bills that family. Only fall back
-        // to the frozen e.sessionTuition when the named session no longer
-        // exists (renamed/deleted since they applied) — there's nothing
-        // current left to look up.
+        // to a different session, never re-bills that family. BUT only trust
+        // the live lookup when it's a real positive number — a same-named
+        // session object that resolves to $0 (e.g. a duplicate/mis-synced
+        // entry) must not silently override a genuinely positive frozen
+        // e.sessionTuition snapshot. Only fall back to $0 when both the live
+        // lookup and the snapshot are empty/zero.
         var sessObj=sessions.find(function(s){return s.name===e.session});
-        var tuition=(sessObj&&sessObj.tuition!=null)?Number(sessObj.tuition)||0:Number(e.sessionTuition)||0;
+        var _liveTuition=(sessObj&&sessObj.tuition!=null)?Number(sessObj.tuition)||0:0;
+        var _snapTuition=Number(e.sessionTuition)||0;
+        var tuition=_liveTuition>0?_liveTuition:_snapTuition;
         var discAmt=e.discount?Number(e.discount.amt)||0:0;
         if(e.discount&&e.discount.pct>0) discAmt=Math.round(tuition*e.discount.pct/100);
         var net=tuition-discAmt;

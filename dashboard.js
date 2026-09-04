@@ -1915,9 +1915,20 @@
         var changed = false;
         halves.forEach(function(h) {
             if (!h.start || !h.end) return;
-            var existing = _dashSessions.find(function(s) { return s.autoKey === h.key; });
+            // Match by autoKey first, but ALSO fall back to matching by name —
+            // a session manually named "1st Half"/"2nd Half" (typed in before
+            // Camp Dates halves were ever set, so it has no autoKey) would
+            // otherwise never be found here, and this would push a SECOND,
+            // zero-priced "1st Half" session alongside the real one. Any
+            // reader that does sessions.find(s => s.name === X) then risks
+            // resolving to whichever duplicate happens to come first —
+            // silently pricing an enrollment at $0 even though the real
+            // session has a real price.
+            var existing = _dashSessions.find(function(s) { return s.autoKey === h.key; })
+                || _dashSessions.find(function(s) { return !s.autoKey && (s.name||'').trim().toLowerCase() === h.label.toLowerCase(); });
             var dates = _dashFormatDateRange(h.start, h.end);
             if (existing) {
+                if (!existing.autoKey) { existing.autoKey = h.key; changed = true; } // link the manual entry so it's never duplicated again
                 if (existing.startDate !== h.start || existing.endDate !== h.end) {
                     existing.startDate = h.start;
                     existing.endDate = h.end;
