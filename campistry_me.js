@@ -1728,7 +1728,6 @@ function _renderHiringPane(){
         +'<div class="me-more-menu" id="pplLinkMenu" style="min-width:250px">'
         +'<button onclick="CampistryMe.copyStaffLink()">📋 Copy Link</button>'
         +'<button onclick="CampistryMe.openSendStaffLinkModal()">✉ Send Link</button>'
-        +'<button onclick="CampistryMe.showStaffQR()">▦ QR Code</button>'
         +'<div style="border-top:1px solid var(--s100);margin:4px 0"></div>'
         +'<button onclick="CampistryMe.exportStaffCSV()">↓ Export Applications</button>'
         +'</div></div>'
@@ -5379,17 +5378,29 @@ function _syncAcceptedContractsToPayroll(){
         var ctr=a.contract;
         if(!ctr||ctr.status!=='accepted'||ctr.syncedToPayroll)return;
         var payFields={payType:ctr.payType||'hourly',payRate:parseFloat(ctr.payRate)||0,startDate:ctr.startDate||'',endDate:ctr.endDate||''};
+        // DOB/address/bunk live on the application (dob/street/city/state/zip)
+        // and on bunkStaff (assignHiredToBunk) — not on the contract — so they
+        // never made it into payroll.staff before, leaving Payroll's own
+        // Edit Record fields (and the Age column, which is dob-driven) blank
+        // even though this same info is already correct on the staff profile.
+        var appAddr={street:a.street||'',city:a.city||'',state:a.state||'',zip:a.zip||''};
+        var appBunk=(typeof bunksForStaffEmail==='function'&&a.email)?(bunksForStaffEmail(a.email)[0]||''):'';
         var key=_staffJoinKey(a.email,a.name);
         var idx=key?payroll.staff.findIndex(function(s){return _staffJoinKey(s.email,s.name)===key}):-1;
         if(idx>=0){
             Object.assign(payroll.staff[idx],payFields);
+            var existing=payroll.staff[idx];
+            if(!existing.dob&&a.dob)existing.dob=a.dob;
+            if(!existing.bunk&&appBunk)existing.bunk=appBunk;
+            if((!existing.homeAddress||!existing.homeAddress.street)&&appAddr.street)existing.homeAddress=appAddr;
         }else{
             payroll.staff.push(Object.assign({
                 id:payroll.nextStaffId++,
                 name:a.name||((a.first||'')+' '+(a.last||'')),
                 email:a.email||'',phone:a.phone||'',role:ctr.position||(a.positions||[]).join(', '),
                 employmentType:'seasonal',isCampCounselor:true,
-                homeAddress:{},summerAddressSameAsHome:true,summerAddress:{},
+                dob:a.dob||'',bunk:appBunk,
+                homeAddress:appAddr,summerAddressSameAsHome:true,summerAddress:{},
                 expectedWeeklyHours:0,seasonWeeks:0,paymentMethod:'',
                 i9OnFile:false,w4OnFile:false,backgroundCheck:false,
                 youthCorps:{enrolled:false}
@@ -7366,7 +7377,6 @@ function showLinkQR(url,title){
     });
 }
 function showRegistrationQR(){ showLinkQR(window.location.origin+'/campistry_register.html?camp='+encodeURIComponent(getCampId()),'Registration Link QR Code'); }
-function showStaffQR(){ showLinkQR(window.location.origin+'/campistry_staff_apply.html?camp='+encodeURIComponent(getCampId()),'Staff Application Link QR Code'); }
 
 // Opens the "Send Link" modal for either the parent registration link
 // (kind='registration', with an audience picker sourced from families/
@@ -13913,10 +13923,10 @@ window.CampistryMe={
     _confirmPersonLink:_confirmPersonLink,_dismissPersonLink:_dismissPersonLink,
     addOtherCampToCamper:addOtherCampToCamper,removeOtherCampFromCamper:removeOtherCampFromCamper,
     addOtherCampToStaff:addOtherCampToStaff,removeOtherCampFromStaff:removeOtherCampFromStaff,
-    copyLinkText:copyLinkText,showLinkQR:showLinkQR,showRegistrationQR:showRegistrationQR,showStaffQR:showStaffQR,
+    copyLinkText:copyLinkText,showLinkQR:showLinkQR,showRegistrationQR:showRegistrationQR,
     openSendLinkModal:openSendLinkModal,openSendRegLinkModal:openSendRegLinkModal,openSendStaffLinkModal:openSendStaffLinkModal,
     // Payroll
-    prSetTab:prSetTab,prEditStaff:prEditStaff,prRemoveStaff:prRemoveStaff,
+    prSetTab:prSetTab,prEditStaff:prEditStaff,prRemoveStaff:prRemoveStaff,openPayrollStaff:openPayrollStaff,
     prToggleSummer:prToggleSummer,prToggleYc:prToggleYc,prPayTypeHint:prPayTypeHint,
     prWeekStep:prWeekStep,prWeekToday:prWeekToday,
     prSetHours:prSetHours,prSetSigned:prSetSigned,prSetSheetStatus:prSetSheetStatus,
