@@ -1591,8 +1591,20 @@
         
         // All other settings go through batched sync
         queueSettingChange(key, data);
-        
+
         return true;
+    };
+
+    // A one-off call to force the batched sync to run NOW instead of waiting
+    // out SYNC_DEBOUNCE_MS. For most edits the debounce is invisible and
+    // harmless, but a lone quick-edit field with no save confirmation (e.g.
+    // a single inline price input) invites a fast follow-up reload that can
+    // beat both the debounce timer and the beforeunload flush (which itself
+    // only guarantees delivery for payloads under the keepalive body cap) —
+    // callers with exactly that shape should await this after saveGlobalSettings
+    // instead of trusting the timing.
+    window.flushPendingSettingsSync = function () {
+        return executeBatchSync();
     };
 
     // Mark as the authoritative handler so other code doesn't re-patch

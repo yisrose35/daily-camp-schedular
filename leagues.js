@@ -1646,24 +1646,43 @@
         teamCard.appendChild(teamList);
 
         const teamInput = document.createElement('input');
-        teamInput.placeholder = 'Type team name & press Enter...';
+        // Splitting on comma/newline (not just a single name per Enter) means
+        // a roster copy-pasted from a spreadsheet or typed as one line
+        // ("Eagles, Hawks, Wolves") adds every team at once instead of
+        // forcing one add-and-wait-for-re-render round trip per name.
+        teamInput.placeholder = 'Type team name(s) & press Enter — separate multiple with commas';
         teamInput.className = 'league-team-input';
+        const addTeamsFromInput = function () {
+            const raw = teamInput.value;
+            if (!raw.trim()) return;
+            const names = raw.split(/[,\n]/).map(s => s.trim()).filter(Boolean);
+            let added = 0;
+            names.forEach(function (t) {
+                if (league.teams.includes(t)) return;
+                league.teams.push(t);
+                league.standings[t] = { w: 0, l: 0, t: 0 };
+                // A team CREATED with a previously-retired name is a genuinely
+                // new team — drop the stale alias so it doesn't inherit the
+                // renamed team's record.
+                try { window.LeagueTeamRename?.dropAliasFor(league, t); } catch (_) {}
+                added++;
+            });
+            if (!added) return;
+            saveLeaguesData();
+            renderConfigSections(league, container);
+            const newInput = container.querySelectorAll('input');
+            if (newInput.length) newInput[newInput.length - 1].focus();
+        };
         teamInput.onkeyup = function (e) {
-            if (e.key === 'Enter' && teamInput.value.trim()) {
-                const t = teamInput.value.trim();
-                if (!league.teams.includes(t)) {
-                    league.teams.push(t);
-                    league.standings[t] = { w: 0, l: 0, t: 0 };
-                    // A team CREATED with a previously-retired name is a genuinely
-                    // new team — drop the stale alias so it doesn't inherit the
-                    // renamed team's record.
-                    try { window.LeagueTeamRename?.dropAliasFor(league, t); } catch (_) {}
-                    saveLeaguesData();
-                    renderConfigSections(league, container);
-                    const newInput = container.querySelectorAll('input');
-                    if (newInput.length) newInput[newInput.length - 1].focus();
-                }
-            }
+            if (e.key === 'Enter') addTeamsFromInput();
+        };
+        // A multi-name paste (spreadsheet column, comma list) commits
+        // immediately instead of waiting on Enter — matches how the rest of
+        // this modal treats a paste as "the user is done typing this field."
+        teamInput.onpaste = function () {
+            setTimeout(function () {
+                if (/[,\n]/.test(teamInput.value)) addTeamsFromInput();
+            }, 0);
         };
       teamCard.appendChild(teamInput);
 

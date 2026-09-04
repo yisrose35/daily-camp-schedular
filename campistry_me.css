@@ -143,6 +143,12 @@ body.sidebar-open .sidebar{transform:translateX(0)}
 .me-modal{background:#fff;border-radius:var(--r3);width:100%;max-width:480px;max-height:calc(100vh - 48px);display:flex;flex-direction:column;box-shadow:0 20px 60px rgba(0,0,0,.2);animation:mIn .2s var(--ease)}
 .me-modal--lg{max-width:640px}
 .me-modal--xl{max-width:760px}
+/* Edit Camper's form alone runs 10 sections (name/dob/school/camp
+   assignment/league teams/2 parents/home+summer address/emergency/medical/
+   more details), mostly in 2-up .fr rows — at --lg's 640px each field gets
+   ~300px, visibly cramped. Its own size so family/other --lg modals are
+   unaffected. */
+.me-modal--2xl{max-width:900px}
 @keyframes mIn{from{opacity:0;transform:scale(.97)}to{opacity:1;transform:scale(1)}}
 /* Close animation — closeModal() adds .closing, waits for it, then hides.
    Targets any direct-child card (.me-modal OR the ad-hoc showModal()/
@@ -324,7 +330,7 @@ select.me-input{cursor:pointer}
     .header-right{flex:0 0 auto}
     .app-header-center{flex:1 1 auto;min-width:0}
     .app-content{padding:12px}
-    .me-modal,.me-modal--lg,.me-modal--xl{max-width:95vw;margin:8px}
+    .me-modal,.me-modal--lg,.me-modal--xl,.me-modal--2xl{max-width:95vw;margin:8px}
     .bb{flex-direction:column}.bb-pool{width:100%;max-height:180px}
     .bb-grid{grid-template-columns:1fr}
     .fr{flex-direction:column}

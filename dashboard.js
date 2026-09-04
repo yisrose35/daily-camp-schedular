@@ -1988,7 +1988,7 @@
             if (s.dates) html += '<div style="font-size:0.75rem; color:var(--slate-500); margin-top:4px;">📅 ' + _dashEsc(s.dates) + '</div>';
             html += '<div style="display:flex; align-items:center; gap:8px; margin-top:6px;">';
             html += '<label style="font-size:0.78rem; color:var(--slate-500);">Price: $</label>';
-            html += '<input type="number" step="0.01" min="0" value="' + (s.tuition || '') + '" placeholder="0.00" style="width:100px; padding:4px 8px; border-radius:6px; border:1px solid var(--slate-200); font-size:0.82rem;" onchange="updateSessionPriceInline(' + i + ', this.value)">';
+            html += '<input type="number" step="0.01" min="0" value="' + (s.tuition || '') + '" placeholder="0.00" style="width:100px; padding:4px 8px; border-radius:6px; border:1px solid var(--slate-200); font-size:0.82rem;" onchange="updateSessionPriceInline(' + i + ', this.value, this)">';
             var enrolledCount = enrolledBySession[s.name] || 0;
             if (s.capacity) {
                 var overCap = enrolledCount > s.capacity;
@@ -2026,12 +2026,33 @@
     // the list; since both live in one function/list now, it's just that.
     function renderBundlesList() { renderSessionsList(); }
 
-    window.updateSessionPriceInline = function(idx, value) {
+    window.updateSessionPriceInline = function(idx, value, inputEl) {
         if (isTeamMember) return;
         var s = _dashSessions[idx];
         if (!s) return;
         s.tuition = parseFloat(value) || 0;
         _dashSaveSessions();
+        // This field has no confirmation banner like the full Edit Session
+        // form does, which invited a "type it, then immediately reload to
+        // check" test pattern that can race the normal debounced cloud
+        // sync — force that sync to run right now instead of waiting, and
+        // show a quick inline confirmation so it's not a silent no-op
+        // either way.
+        if (window.flushPendingSettingsSync) window.flushPendingSettingsSync();
+        var el = inputEl || (typeof event !== 'undefined' ? event.target : null);
+        var wrap = el && el.parentElement;
+        if (wrap) {
+            var mark = wrap.querySelector('.ses-price-saved');
+            if (!mark) {
+                mark = document.createElement('span');
+                mark.className = 'ses-price-saved';
+                mark.style.cssText = 'font-size:0.72rem;color:#059669;font-weight:600;';
+                wrap.appendChild(mark);
+            }
+            mark.textContent = '✓ Saved';
+            clearTimeout(mark._hideTimer);
+            mark._hideTimer = setTimeout(function() { mark.textContent = ''; }, 2000);
+        }
     };
 
     function _dashFillSessionForm(s) {

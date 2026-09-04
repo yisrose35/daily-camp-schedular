@@ -250,7 +250,7 @@ body{font-family:var(--font);background:var(--s50);color:var(--s800);-webkit-fon
 <script src="supabase-js@2.js?v=20260903-03" onerror="console.log('[Register] Supabase client not loaded — local only')"></script>
 <script src="supabase_client.js?v=20260903-03" onerror="console.log('[Register] Supabase config not loaded — local only')"></script>
 <script src="local_cache_idb.js?v=20260903-03" onerror="console.log('[Register] LocalCacheIDB not loaded — falling back to localStorage')"></script>
-<script src="integration_hooks.js?v=20260903-03" onerror="console.log('[Register] Integration hooks not loaded — local only')"></script>
+<script src="integration_hooks.js?v=20260904-01" onerror="console.log('[Register] Integration hooks not loaded — local only')"></script>
 <script src="campistry_payments.js?v=20260903-03" onerror="console.log('[Register] Payment policy not loaded — showing the built-in options')"></script>
 <script>
 // Keep the payment options on this form in step with the camp's policy. The
@@ -491,8 +491,8 @@ async function showStatus(id){
             // a campId from the URL / session; if it's not available yet
             // the status panel surfaces the original "Not Found".
             try{
-                var client=window.CampistryDB?.getClient?.();
-                var campId=window.CampistryDB?.getCampId?.();
+                var client=(window.CampistryDB&&window.CampistryDB.getClient&&window.CampistryDB.getClient())||(window.supabase&&typeof window.supabase.rpc==='function'?window.supabase:null);
+                var campId=_resolvedCampId||campIdParam||(window.CampistryDB&&window.CampistryDB.getCampId&&window.CampistryDB.getCampId())||localStorage.getItem('campistry_camp_id');
                 if(client&&campId){
                     var res=await client
                         .from('camp_state_kv')
@@ -1123,7 +1123,8 @@ window.submitApp=async function(){
     if(syncNote){ syncNote.textContent='✓ Received by the camp'; syncNote.style.color='var(--ok)'; }
     var names=allCampers.map(function(c){return c.first+' '+c.last});
     document.getElementById('summaryOut').innerHTML='<strong>'+names.map(esc).join(', ')+'</strong><br>Session: '+esc(selSess||'—')+'<br>Parent: '+esc(par)+' ('+esc(ph)+')<br>Applied: '+new Date().toISOString().split('T')[0]+'<br>Payment: '+esc(selPM||'Not selected')+(discount.active?'<br>Discount: '+esc(discount.label):'')+(uploads.length?'<br>Documents: '+uploads.length+' uploaded':'');
-    var statusUrl=window.location.origin+window.location.pathname+'?status='+appIds[0];
+    var statusCampId=_resolvedCampId||campIdParam;
+    var statusUrl=window.location.origin+window.location.pathname+'?status='+appIds[0]+(statusCampId?'&camp='+encodeURIComponent(statusCampId):'');
     document.getElementById('statusLink').innerHTML='<a href="'+statusUrl+'" style="color:var(--me);word-break:break-all">'+esc(statusUrl)+'</a>';
     window.scrollTo(0,0);
 };
@@ -1164,7 +1165,15 @@ async function _flushEnrollmentsToCloud(campistryMe){
 }
 
 _loadFromLocalCache();
-if(campIdParam)_loadFromCloud(campIdParam);
+// campIdParam is the normal path (every real link embeds ?camp=), but a
+// bookmarked/typed URL or the builder's preview tab (?preview=1, no camp
+// param) has none — fall back to whatever campId this browser's own
+// session/local cache already knows, so the authoritative cloud fetch
+// (real sessions/pricing) still fires instead of silently staying on
+// whatever _loadFromLocalCache found (which can be stale/outdated, e.g.
+// from an old test setup done before real sessions were configured).
+var _bootCampId=campIdParam||(window.CampistryDB&&window.CampistryDB.getCampId&&window.CampistryDB.getCampId())||localStorage.getItem('campistry_camp_id');
+if(_bootCampId)_loadFromCloud(_bootCampId);
 })();
 </script>
 </body>

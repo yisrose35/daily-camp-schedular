@@ -7584,12 +7584,26 @@ function _onAppPhotoPick(input,targetId){
     });
 }
 
+// Re-reads sessions from the shared local cache right before a session
+// picker renders. loadData() normally keeps the module-level `sessions`
+// var current (re-run on cloud hydration and on cross-tab storage events),
+// but neither fires if this tab was already open before Dashboard's
+// Sessions & Pricing was edited in another tab — this closes that gap
+// cheaply instead of showing whatever was in memory at page-load time.
+function _freshSessions(){
+    try{
+        var g=(typeof window.loadGlobalSettings==='function')?window.loadGlobalSettings():null;
+        if(g&&g.campistryMe&&Array.isArray(g.campistryMe.sessions))sessions=g.campistryMe.sessions;
+    }catch(_){}
+    return sessions;
+}
 // Manual Entry mirrors whatever the camp has configured in Customize
 // Registration Form — same sections (in the same order, skipping any the
 // camp turned off), same field labels/required-ness, same custom questions
 // — so office staff see exactly what parents see on the real form instead
 // of a fixed set that can drift out of sync with it.
 function addApplication(){
+    _freshSessions();
     var fc=getFormConfig();
     var sesOpts=sessions.map(function(s){return'<option value="'+esc(s.name)+'">'+esc(s.name)+' — '+fm(s.tuition)+'</option>'}).join('');
     var order=(fc.sectionOrder&&fc.sectionOrder.length)?fc.sectionOrder:FC_SECTIONS.map(function(s){return s.key});
@@ -8145,9 +8159,15 @@ function _showInviteModal(enrollId,primary,secondary){
         var pFirst=pName.split(' ')[0];
         var h='';
         if(label)h+='<div style="font-size:.78rem;font-weight:700;color:var(--s600);text-transform:uppercase;letter-spacing:.05em;margin-bottom:8px;">'+esc(label)+' — '+esc(pName)+'</div>';
-        h+='<p style="font-size:.85rem;color:var(--s600);margin-bottom:14px;">Share <strong>either</strong> of these with <strong>'+esc(pFirst)+'</strong> — they only need one to get started.</p>';
 
+        // Access code is the only path offered when one exists — a bare,
+        // forwardable portal link is a general link-sharing capability the
+        // camp doesn't want (anyone holding it could open the portal, not
+        // just the intended parent). The link stays as an emergency
+        // fallback only when no code is available yet (Supabase not ready
+        // at invite time — see _syncParentInviteSnapshot's no-db branch).
         if(p.accessCode){
+            h+='<p style="font-size:.85rem;color:var(--s600);margin-bottom:14px;">Share this access code with <strong>'+esc(pFirst)+'</strong> — they create their own account in the parent portal, then enter it to link up.</p>';
             h+='<div style="background:#EFF6FF;border:2px solid #BFDBFE;border-radius:10px;padding:14px 16px;margin-bottom:14px;">';
             h+='<div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:4px;">';
             h+='<span style="font-size:.72rem;font-weight:700;color:#1D4ED8;text-transform:uppercase;letter-spacing:.06em;">Access Code</span>';
@@ -8156,21 +8176,26 @@ function _showInviteModal(enrollId,primary,secondary){
             h+='<div style="font-size:1.5rem;font-weight:800;letter-spacing:.2em;color:#1E40AF;font-family:monospace;">'+esc(p.accessCode)+'</div>';
             h+='<div style="font-size:.72rem;color:#3B82F6;margin-top:4px;">Parent goes to the portal URL and enters this code after creating an account</div>';
             h+='</div>';
+        }else{
+            h+='<p style="font-size:.85rem;color:var(--s600);margin-bottom:14px;">Share this link with <strong>'+esc(pFirst)+'</strong> to get started.</p>';
+            h+='<div style="margin-bottom:14px;">';
+            h+='<div style="font-size:.72rem;font-weight:700;color:var(--s500);text-transform:uppercase;letter-spacing:.06em;margin-bottom:6px;">Invite Link</div>';
+            h+='<div style="background:var(--s50);border:1px solid var(--s200);border-radius:8px;padding:10px 12px;display:flex;align-items:center;gap:8px;">';
+            h+='<span style="font-size:.72rem;color:var(--s600);flex:1;word-break:break-all;font-family:monospace;">'+esc(p.url)+'</span>';
+            h+='<button class="me-btn me-btn--sec me-btn--sm" onclick="var b=this;navigator.clipboard.writeText(\''+p.url.replace(/'/g,"\\'")+'\'||document.location).then(function(){b.textContent=\'Copied ✓\';toast(\'Link copied!\');setTimeout(function(){b.textContent=\'Copy\'},2500)})" style="white-space:nowrap;flex-shrink:0;font-size:.72rem;padding:4px 10px;">Copy</button>';
+            h+='</div></div>';
         }
-
-        h+='<div style="margin-bottom:14px;">';
-        h+='<div style="font-size:.72rem;font-weight:700;color:var(--s500);text-transform:uppercase;letter-spacing:.06em;margin-bottom:6px;">Or — One-click Invite Link</div>';
-        h+='<div style="background:var(--s50);border:1px solid var(--s200);border-radius:8px;padding:10px 12px;display:flex;align-items:center;gap:8px;">';
-        h+='<span style="font-size:.72rem;color:var(--s600);flex:1;word-break:break-all;font-family:monospace;">'+esc(p.url)+'</span>';
-        h+='<button class="me-btn me-btn--sec me-btn--sm" onclick="var b=this;navigator.clipboard.writeText(\''+p.url.replace(/'/g,"\\'")+'\'||document.location).then(function(){b.textContent=\'Copied ✓\';toast(\'Link copied!\');setTimeout(function(){b.textContent=\'Copy\'},2500)})" style="white-space:nowrap;flex-shrink:0;font-size:.72rem;padding:4px 10px;">Copy</button>';
-        h+='</div></div>';
 
         h+='<details style="margin-bottom:14px;">';
         h+='<summary style="font-size:.8rem;font-weight:600;color:var(--s600);cursor:pointer;user-select:none;">Preview email message</summary>';
         h+='<div style="margin-top:10px;background:#fff;border:1px solid var(--s200);border-radius:8px;padding:14px;font-size:.82rem;line-height:1.7;color:var(--s700);white-space:pre-wrap;">';
         h+='Dear '+esc(pFirst)+',\n\nWe\'re excited to let you know that <strong>'+esc(firstName)+'</strong> has been accepted to camp!\n\n';
-        if(p.accessCode)h+='Your access code for the Campistry Link parent portal is: <strong>'+esc(p.accessCode)+'</strong>\n\nOr click the link below to get started directly:\n\n';
-        h+='<a href="'+esc(p.url)+'" style="color:#3B82F6;">'+esc(p.url)+'</a>\n\nWe look forward to a wonderful summer!\n\nCamp Office';
+        if(p.accessCode){
+            h+='Your access code for the Campistry Link parent portal is: <strong>'+esc(p.accessCode)+'</strong>\n\nGo to the portal, create your account, and enter this code to get started.';
+        }else{
+            h+='Click the link below to get started:\n\n<a href="'+esc(p.url)+'" style="color:#3B82F6;">'+esc(p.url)+'</a>';
+        }
+        h+='\n\nWe look forward to a wonderful summer!\n\nCamp Office';
         h+='</div></details>';
 
         if(p.email){
@@ -12631,6 +12656,7 @@ function renderCamperHistory(camperName){
 // ═══════════════════════════════════════════════════════════════
 function reEnrollCamper(camperName){
     var d=roster[camperName];if(!d)return;
+    _freshSessions();
     var sesOpts=sessions.map(function(s){return'<option value="'+esc(s.name)+'">'+esc(s.name)+' — '+fm(s.tuition)+'</option>'}).join('');
     var h='<div class="me-modal-form"><p style="font-size:.85rem;color:var(--s600);margin-bottom:14px">Re-enroll <strong>'+esc(camperName)+'</strong> for a new session. All info carried over.</p><div style="background:var(--s50);padding:12px;border-radius:var(--r);margin-bottom:14px;font-size:.8rem"><strong>'+esc(d.division||'')+'/'+esc(d.bunk||'')+'</strong> · Parent: '+esc(d.parent1Name||'')+'</div><div class="me-field"><label>Session</label><select id="reSession" class="me-input">'+sesOpts+'</select></div></div>';
     showModal('Re-Enroll Camper',h,function(){
@@ -13903,6 +13929,7 @@ window.CampistryMe={
     finAddPayment:finAddPayment,finRemovePayment:finRemovePayment,
     sendPayLink:sendPayLink,copyPayLink:copyPayLink,toggleBillingAccess:toggleBillingAccess,
     monthlyPlan:monthlyPlan,toggleFamilyAutopay:toggleFamilyAutopay,cancelMonthlyPlan:cancelMonthlyPlan,
+    _mpGenerate:_mpGenerate,_mpAddRow:_mpAddRow,_mpUpdateTotal:_mpUpdateTotal,
     viewStaffApp:viewStaffApp,setStaffStatus:setStaffStatus,saveStaffNotes:saveStaffNotes,openAssignPositionModal:openAssignPositionModal,
     openStaffContractModal:openStaffContractModal,saveStaffContract:saveStaffContract,scPayTypeHint:scPayTypeHint,copyStaffContractLink:copyStaffContractLink,
     toggleOnboard:toggleOnboard,cycleRef:cycleRef,deleteStaffApp:deleteStaffApp,addStaffApp:addStaffApp,
