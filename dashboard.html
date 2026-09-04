@@ -776,6 +776,19 @@ if (window.location.protocol === 'file:') {
     <script src="supabase_client.js?v=20260903-03"></script>
     <script src="campistry_utils.js?v=20260903-03"></script>
     <script src="campistry_security.js?v=20260903-03"></script>
+    <!-- Dashboard's own saves (Sessions & Pricing, Bundles, etc.) go through
+         the shared window.saveGlobalSettings/loadGlobalSettings helpers —
+         these were never loaded on this page, so every _dashSaveSessions()/
+         _dashSaveBundles() call was a silent no-op (the `if
+         (window.saveGlobalSettings)` guard was always false): nothing
+         persisted anywhere, not even to local cache, even though the UI
+         toasted "saved". Camp Dates only ever worked because it does its
+         own direct Supabase upsert as the real save path and treats
+         saveGlobalSettings as an optional local-cache mirror. Loaded here
+         in the same order campistry_me.html/flow.html already use. -->
+    <script src="local_cache_idb.js?v=20260903-03"></script>
+    <script src="integration_hooks.js?v=20260904-02"></script>
+    <script src="cloud_sync_helpers.js?v=20260903-03"></script>
     <script src="dashboard.js?v=20260904-01"></script>
     <script src="campistry_birthdays.js?v=20260903-03"></script>
     <script src="badges.js?v=20260903-03"></script>
