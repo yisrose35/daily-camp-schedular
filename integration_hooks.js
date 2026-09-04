@@ -2041,6 +2041,40 @@
                     } catch (_eRosterGuard) {}
                 }
 
+                // ★ Same class of bug as the camperRoster guard above, for
+                //   campistryMe.sessions/sessionBundles (Dashboard's Dates &
+                //   Pricing). The trustLocal branch above can replace the
+                //   WHOLE campistryMe blob wholesale whenever local's overall
+                //   updated_at is newer — which can be true for reasons
+                //   unrelated to sessions (any other key saved bumps it).
+                //   campistry_me.js's save() only re-derives `sessions` from
+                //   a module-level var that's still its pre-hydration []
+                //   default until loadData() has run against real cloud
+                //   data — if a save fires before then, that empty array
+                //   gets promoted to "trusted" and silently wipes a cloud
+                //   copy that genuinely has priced sessions (reported bug:
+                //   sessions/bundles configured on Dashboard vanish the
+                //   moment the owner navigates away). Never let an empty
+                //   local sessions/sessionBundles array override a
+                //   non-empty cloud one.
+                if (trustLocal && (localState.campistryMe || cloudState.campistryMe)) {
+                    try {
+                        const _cloudMe = cloudState.campistryMe || {};
+                        const _localMe = localState.campistryMe || {};
+                        if (!mergedState.campistryMe || typeof mergedState.campistryMe !== 'object') mergedState.campistryMe = {};
+                        const _cloudSessions = Array.isArray(_cloudMe.sessions) ? _cloudMe.sessions : [];
+                        const _localSessions = Array.isArray(_localMe.sessions) ? _localMe.sessions : [];
+                        if (_cloudSessions.length > 0 && _localSessions.length === 0) {
+                            mergedState.campistryMe.sessions = _cloudSessions;
+                        }
+                        const _cloudBundles = Array.isArray(_cloudMe.sessionBundles) ? _cloudMe.sessionBundles : [];
+                        const _localBundles = Array.isArray(_localMe.sessionBundles) ? _localMe.sessionBundles : [];
+                        if (_cloudBundles.length > 0 && _localBundles.length === 0) {
+                            mergedState.campistryMe.sessionBundles = _cloudBundles;
+                        }
+                    } catch (_eSessionsGuard) {}
+                }
+
                 // ★ Preserve special-activity SUBCATEGORY tags across the cross-device
                 //   merge. app1 syncs as ONE blob (last-write-wins), so a device that
                 //   never tagged specials can clobber a device that did — specialActivities

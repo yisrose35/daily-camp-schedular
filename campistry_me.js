@@ -371,6 +371,16 @@ function save(){
         // hydrated (they were scrubbed after load). Writing g back as-is would
         // blank them in the cloud, so put the untouched branches back first.
         try{ if(window.CampistrySections)window.CampistrySections.preserveOnSave(g); }catch(_){}
+        // ★ sessions is a module-level var only populated once loadData() has
+        // run against real hydrated data — if save() fires (e.g. from an
+        // unrelated edit) before that first hydration completes, `sessions`
+        // is still its pre-load [] default. Writing that unconditionally
+        // (as every other field here does) would silently wipe Dashboard's
+        // Sessions & Pricing the moment this page saves anything at all —
+        // reported bug: sessions/bundles vanish the instant the owner
+        // navigates away from Dashboard. Never let an empty in-memory copy
+        // override a non-empty one already sitting in the local cache.
+        var _savedSessions=(sessions&&sessions.length)?sessions:((g.campistryMe&&Array.isArray(g.campistryMe.sessions))?g.campistryMe.sessions:sessions);
         g.campistryMe=Object.assign({},(g.campistryMe&&typeof g.campistryMe==='object')?g.campistryMe:{},{
             families:families,
             payments:payments,
@@ -385,7 +395,7 @@ function save(){
             staffApplications:staffApplications,
             leads:leads,
             counselorVisibility:counselorVisibility,
-            sessions:sessions,
+            sessions:_savedSessions,
             enrollSettings:enrollSettings,
             formConfig:formConfig,
             staffFormConfig:staffFormConfig,
