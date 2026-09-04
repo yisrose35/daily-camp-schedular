@@ -10528,6 +10528,14 @@ function renderFamilyDetailPage(){
         +'</div>';
     h+='<div style="font-size:.7rem;color:var(--s400);padding-bottom:14px;border-bottom:1px solid var(--s100)">Balance = Charges − Payments − Credits'+(l.totalRefunds>0?' + Refunds':'')+'</div>';
 
+    // Payment Plan(s) — right under the balance, before anything else. This
+    // is the single most actionable thing on the page (what's due next, is
+    // autopay on) — burying it at the bottom below the full ledger and
+    // Household made it easy to miss. No accordion here: it should always
+    // be visible, not something you have to know to expand.
+    var planHtml=_planCardHtml(l);
+    if(planHtml) h+='<div style="padding-bottom:2px">'+planHtml+'</div>';
+
     // Action bar — one primary action plus a single "More" menu, instead of
     // 8 buttons in a row. Payment-method status is plain text, not a pill.
     var moreItems='<button onclick="CampistryMe.sendPayLink(\''+je(l.famKey)+'\')">Send Pay Link</button>';
@@ -10548,56 +10556,53 @@ function renderFamilyDetailPage(){
         +'<div class="me-more-menu" id="'+moreId+'">'+moreItems+'</div></div>'
         +'</div>';
 
-    // Household — parents/address/siblings, folded into the same panel.
-    h+='<div style="padding:16px 0;border-bottom:1px solid var(--s100)">';
-    h+='<div style="font-size:.7rem;font-weight:700;color:var(--s500);text-transform:uppercase;letter-spacing:.05em;margin-bottom:8px">Household</div>';
-    h+=_famHouseholdHtml(l.famKey,l.family);
-    h+='</div>';
+    // Everything below here is reference material, not something you need
+    // on every visit — Household, the full transaction ledger, and any
+    // one-off installment schedule are now collapsible accordions (same
+    // pattern as the Form Customizer) instead of one long undifferentiated
+    // scroll. Nothing is hidden by default; this just gives each section a
+    // clear heading you can collapse once you've seen it.
+    h+='<div style="padding-top:14px">';
+    h+=_accCard('Household',_famHouseholdHtml(l.famKey,l.family),{key:'famDetailHousehold_'+l.famKey,open:true});
 
     // Ledger entries table
     if(l.entries.length){
-        h+='<div style="padding:16px 0;border-bottom:1px solid var(--s100)">';
-        h+='<div style="font-size:.7rem;font-weight:700;color:var(--s500);text-transform:uppercase;letter-spacing:.05em;margin-bottom:8px">Account Activity</div>';
         // Four separate money columns instead of collapsing Payment/Credit/
         // Refund into one "Payment" column distinguished only by the Type
         // badge — each entry fills exactly one column, so reading down (or
         // summing) any column matches the totals in the line above.
-        h+='<table class="me-t" style="margin:0"><thead><tr><th>Date</th><th>Type</th><th>Description</th><th style="text-align:right">Charge</th><th style="text-align:right">Payment</th><th style="text-align:right">Credit</th><th style="text-align:right">Refund</th></tr></thead><tbody>';
+        var activityHtml='<table class="me-t" style="margin:0"><thead><tr><th>Date</th><th>Type</th><th>Description</th><th style="text-align:right">Charge</th><th style="text-align:right">Payment</th><th style="text-align:right">Credit</th><th style="text-align:right">Refund</th></tr></thead><tbody>';
         l.entries.forEach(function(e){
-            if(e.type==='installment') return; // shown in Monthly Plan below
+            if(e.type==='installment') return; // shown in Payment Schedule / Payment Plan
             var isCharge=e.type==='charge';
             var isRefund=e.type==='payment'&&e.amount<0;
             var isPayment=e.type==='payment'&&!isRefund;
             var isCredit=e.type==='credit';
-            h+='<tr><td style="font-size:.75rem;color:var(--s500)">'+esc(e.date||'')+'</td>';
-            h+='<td>'+_flatStatus(e.category||e.type,isCharge?'err':isRefund?'err':isPayment?'ok':'warn')+'</td>';
-            h+='<td style="font-size:.8rem">'+esc(e.desc||'')+'</td>';
-            h+='<td style="text-align:right;font-weight:600;color:var(--s800)">'+(isCharge?fm(e.amount):'')+'</td>';
-            h+='<td style="text-align:right;font-weight:600;color:var(--ok)">'+(isPayment?fm(e.amount):'')+'</td>';
-            h+='<td style="text-align:right;font-weight:600;color:var(--purple)">'+(isCredit?fm(e.amount):'')+'</td>';
-            h+='<td style="text-align:right;font-weight:600;color:var(--err)">'+(isRefund?fm(Math.abs(e.amount)):'')+'</td></tr>';
+            activityHtml+='<tr><td style="font-size:.75rem;color:var(--s500)">'+esc(e.date||'')+'</td>';
+            activityHtml+='<td>'+_flatStatus(e.category||e.type,isCharge?'err':isRefund?'err':isPayment?'ok':'warn')+'</td>';
+            activityHtml+='<td style="font-size:.8rem">'+esc(e.desc||'')+'</td>';
+            activityHtml+='<td style="text-align:right;font-weight:600;color:var(--s800)">'+(isCharge?fm(e.amount):'')+'</td>';
+            activityHtml+='<td style="text-align:right;font-weight:600;color:var(--ok)">'+(isPayment?fm(e.amount):'')+'</td>';
+            activityHtml+='<td style="text-align:right;font-weight:600;color:var(--purple)">'+(isCredit?fm(e.amount):'')+'</td>';
+            activityHtml+='<td style="text-align:right;font-weight:600;color:var(--err)">'+(isRefund?fm(Math.abs(e.amount)):'')+'</td></tr>';
         });
-        h+='</tbody></table></div>';
+        activityHtml+='</tbody></table>';
+        h+=_accCard('Account Activity',activityHtml,{key:'famDetailActivity_'+l.famKey,open:true});
     }
 
     // Installment schedule if any (non-Monthly-Plan installments, e.g. a
     // manual payment plan attached at enrollment) — same plain table as
-    // Monthly Plan below, not a separate visual style.
+    // the Payment Plan cards above, not a separate visual style.
     var installments=l.entries.filter(function(e){return e.type==='installment'});
     if(installments.length){
         var today=new Date().toISOString().split('T')[0];
-        h+='<div style="padding:16px 0;border-bottom:1px solid var(--s100)">';
-        h+='<div style="font-size:.7rem;font-weight:700;color:var(--s500);text-transform:uppercase;letter-spacing:.05em;margin-bottom:8px">Payment Schedule</div>';
-        h+=_installmentTableHtml(installments.map(function(inst){
+        var scheduleHtml=_installmentTableHtml(installments.map(function(inst){
             var isPastDue=inst.status==='pending'&&inst.date&&inst.date<today;
             return {amount:inst.amount,dueDate:inst.date,status:isPastDue?'failed':inst.status,label:inst.desc||inst.category};
         }));
-        h+='</div>';
+        h+=_accCard('Payment Schedule',scheduleHtml,{key:'famDetailSchedule_'+l.famKey,open:true});
     }
-
-    // Monthly plan / autopay
-    var planHtml=_planCardHtml(l);
-    if(planHtml) h+='<div style="padding-top:16px">'+planHtml+'</div>';
+    h+='</div>';
 
     h+='</div>'; // close outer .me-card
     c.innerHTML=h;
