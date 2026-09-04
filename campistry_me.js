@@ -381,6 +381,16 @@ function save(){
         // navigates away from Dashboard. Never let an empty in-memory copy
         // override a non-empty one already sitting in the local cache.
         var _savedSessions=(sessions&&sessions.length)?sessions:((g.campistryMe&&Array.isArray(g.campistryMe.sessions))?g.campistryMe.sessions:sessions);
+        // ★ Same class of bug as the sessions guard above, for the two records
+        // that hold submitted applications: enrollments/staffApplications are
+        // module-level vars only populated once loadData() has hydrated real
+        // cloud data. A save() that fires before that first hydration (or in
+        // a stale/partial tab) would otherwise overwrite a parent's just-submitted
+        // application with an empty {} — the application looked successful to
+        // the parent, then silently vanished from the office's list. Never let
+        // an empty in-memory copy override a non-empty one already cached.
+        var _savedEnrollments=(enrollments&&Object.keys(enrollments).length)?enrollments:((g.campistryMe&&g.campistryMe.enrollments&&typeof g.campistryMe.enrollments==='object'&&Object.keys(g.campistryMe.enrollments).length)?g.campistryMe.enrollments:enrollments);
+        var _savedStaffApps=(staffApplications&&Object.keys(staffApplications).length)?staffApplications:((g.campistryMe&&g.campistryMe.staffApplications&&typeof g.campistryMe.staffApplications==='object'&&Object.keys(g.campistryMe.staffApplications).length)?g.campistryMe.staffApplications:staffApplications);
         g.campistryMe=Object.assign({},(g.campistryMe&&typeof g.campistryMe==='object')?g.campistryMe:{},{
             families:families,
             payments:payments,
@@ -391,8 +401,8 @@ function save(){
             bunkStaff:bunkStaff,
             divisionHeads:divisionHeads,
             nextPersonId:nextPersonId,
-            enrollments:enrollments,
-            staffApplications:staffApplications,
+            enrollments:_savedEnrollments,
+            staffApplications:_savedStaffApps,
             leads:leads,
             counselorVisibility:counselorVisibility,
             sessions:_savedSessions,
@@ -1694,7 +1704,6 @@ function _renderRegistrationPane(){
         +'<div class="me-more-menu" id="pplLinkMenu" style="min-width:250px">'
         +'<button onclick="CampistryMe.copyRegLink()">📋 Copy Link</button>'
         +'<button onclick="CampistryMe.openSendRegLinkModal()">✉ Send Link</button>'
-        +'<button onclick="CampistryMe.showRegistrationQR()">▦ QR Code</button>'
         +'<div style="border-top:1px solid var(--s100);margin:4px 0"></div>'
         +'<button onclick="CampistryMe.exportEnrollmentReport()">↓ Export Applications</button>'
         +'</div></div>'
@@ -7434,8 +7443,6 @@ function showLinkQR(url,title){
         document.getElementById('qrBody').innerHTML='<div style="color:var(--err);font-size:.85rem">Could not load the QR library — check your connection.</div>';
     });
 }
-function showRegistrationQR(){ showLinkQR(window.location.origin+'/campistry_register.html?camp='+encodeURIComponent(getCampId()),'Registration Link QR Code'); }
-
 // Opens the "Send Link" modal for either the parent registration link
 // (kind='registration', with an audience picker sourced from families/
 // divisions) or the staff application link (kind='staff', which has no
@@ -8221,8 +8228,14 @@ function _syncParentInviteSnapshot(enrollId,silent){
 function _showInviteModal(enrollId,primary,secondary){
     var e=enrollments[enrollId]||{};
     var firstName=(e.camperName||'').split(' ')[0]||'your child';
+    // Copy-only left the office with no actual way to notify a parent short
+    // of pasting the code/link into their own email client by hand — stash
+    // the modal's data so the Send Email button (added below) can build and
+    // fire the real email via send-broadcast, same pattern as
+    // _sendContractOfferNow/_sendPostAcceptNow.
+    window._inviteModalCtx={enrollId:enrollId,camperFirst:firstName,primary:primary,secondary:secondary};
 
-    function renderParentBlock(p,label){
+    function renderParentBlock(p,label,which){
         var pName=p.name||p.email||'Parent';
         var pFirst=pName.split(' ')[0];
         var h='';
@@ -8267,9 +8280,12 @@ function _showInviteModal(enrollId,primary,secondary){
         h+='</div></details>';
 
         if(p.email){
+            h+='<div style="display:flex;align-items:center;justify-content:space-between;gap:10px;">';
             h+='<div style="font-size:.75rem;color:var(--s400);">';
             h+='<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="vertical-align:-2px;margin-right:4px;"><path d="M4 4h16c1.1 0 2 .9 2 2v12c0 1.1-.9 2-2 2H4c-1.1 0-2-.9-2-2V6c0-1.1.9-2 2-2z"/><polyline points="22,6 12,13 2,6"/></svg>';
             h+=esc(p.email)+'</div>';
+            h+='<button class="me-btn me-btn--pri me-btn--sm" id="inviteSendBtn'+which+'" onclick="CampistryMe._sendInviteEmailNow('+which+',this)" style="font-size:.72rem;padding:4px 10px;">✉ Send Email</button>';
+            h+='</div>';
         }
         return h;
     }
@@ -8282,14 +8298,42 @@ function _showInviteModal(enrollId,primary,secondary){
     h+='<div><div style="font-size:1rem;font-weight:700;color:var(--s800);">Parent Portal Invite'+(secondary?'s':'')+' Ready</div>';
     h+='<div style="font-size:.8rem;color:var(--s500);">'+esc(e.camperName||'')+'\'s acceptance</div></div></div>';
 
-    h+=renderParentBlock(primary,secondary?'Parent 1':'');
+    h+=renderParentBlock(primary,secondary?'Parent 1':'',1);
     if(secondary){
         h+='<hr style="border:none;border-top:1px solid var(--s200);margin:4px 0 18px;">';
-        h+=renderParentBlock(secondary,'Parent 2');
+        h+=renderParentBlock(secondary,'Parent 2',2);
     }
 
     h+='</div>';
     showModal('Parent Portal Invite',h);
+}
+// Fires the actual email for one parent from the Parent Portal Invite modal
+// (window._inviteModalCtx, stashed by _showInviteModal) — mirrors
+// _sendContractOfferNow's real-send-vs-toast-and-fall-back-to-copy shape.
+async function _sendInviteEmailNow(which,btnEl){
+    var ctx=window._inviteModalCtx; if(!ctx)return;
+    var p=which===2?ctx.secondary:ctx.primary; if(!p||!p.email)return;
+    var pFirst=(p.name||p.email||'Parent').split(' ')[0];
+    var campName='';try{var ss=JSON.parse(localStorage.getItem('campGlobalSettings_v1')||'{}');campName=ss.campName||ss.camp_name||'Camp';}catch(ex){}
+    var subject='Welcome to '+(campName||'Camp')+' — '+ctx.camperFirst+'\'s Parent Portal';
+    var body='Dear '+pFirst+',\n\nWe\'re excited to let you know that '+ctx.camperFirst+' has been accepted to camp!\n\n';
+    if(p.accessCode){
+        body+='Your access code for the Campistry Link parent portal is: '+p.accessCode+'\n\nGo to the portal, create your account, and enter this code to get started.';
+    }else{
+        body+='Click the link below to get started:\n\n'+p.url;
+    }
+    body+='\n\nWe look forward to a wonderful summer!\n\n'+(campName||'Camp')+' Office';
+    var btn=btnEl||document.getElementById('inviteSendBtn'+which);
+    var origLabel=btn?btn.textContent:'';
+    if(btn){btn.disabled=true;btn.textContent='Sending…';}
+    try{
+        await callEdgeFunctionAuthed('send-broadcast',{campId:getCampId(),to:[{email:p.email,name:p.name||''}],subject:subject,body:body,method:'email',campName:campName});
+        toast('Invite emailed to '+p.email);
+        if(btn){btn.textContent='Sent ✓';}
+    }catch(err){
+        toast('Email failed to send: '+(err&&err.message||'unknown error')+' — use Copy to send it yourself.','error');
+        if(btn){btn.disabled=false;btn.textContent=origLabel;}
+    }
 }
 
 function autoPromoteWaitlist(sessionName){
@@ -8337,12 +8381,6 @@ function enrollCamper(id){
         // Enroll was clicked, this camper would otherwise show no bunk
         // requests until the next full page load.
         _syncPostAcceptBunkRequests();
-        // If Camp Structure has a bunk group mapped to this camper's real
-        // school grade, place them in it right away instead of leaving
-        // division/grade blank until someone runs Auto-Generate — Bunk
-        // Builder's Unassigned pool then already shows the right grade.
-        var resolvedCohort=_resolveCohortBySchoolGrade(roster[e.camperName].schoolGrade);
-        if(resolvedCohort){ roster[e.camperName].division=resolvedCohort.div; roster[e.camperName].grade=resolvedCohort.gr; }
         toast('Enrolled — camper added to roster with all info');
     }else{
         // Update existing camper with any missing data from application
@@ -8365,13 +8403,31 @@ function enrollCamper(id){
         if((!c.documents||!c.documents.length)&&e.documents&&e.documents.length)c.documents=e.documents;
         toast('Enrolled — updated existing camper');
     }
+    // If Camp Structure has a bunk group mapped to this camper's real
+    // school grade, place them in it right away instead of leaving
+    // division/grade blank until someone runs Auto-Generate — Bunk
+    // Builder's Unassigned pool then already shows the right grade.
+    // Runs for BOTH branches above (new camper AND an existing roster
+    // record enrolled for the first time) — previously this only ran on
+    // the new-camper path, leaving the Camp Assignment card blank for any
+    // camper added to the roster before their application was enrolled.
+    if(!roster[e.camperName].division||!roster[e.camperName].grade){
+        var resolvedCohort=_resolveCohortBySchoolGrade(roster[e.camperName].schoolGrade);
+        if(resolvedCohort){ roster[e.camperName].division=resolvedCohort.div; roster[e.camperName].grade=resolvedCohort.gr; }
+    }
     // Auto-family: join an EXISTING family only on a 3-of-4 match (last name,
     // address, parent email, parent name) — not on a shared last name alone.
     var lastName=e.camperName.split(' ').pop();
     var addr=[e.street,e.city,e.state,e.zip].filter(Boolean).join(', ');
     var famKey=_resolveFamilyKey(e.camperName,_famItemRaw(e.camperName,e.street,e.city,e.state,e.zip,e.parentName,e.parentEmail));
     var sesObj=sessions.find(function(s){return s.name===e.session});
-    var tuition=e.sessionTuition||sesObj?.tuition||0;
+    // Prefer the session's CURRENT price (matches buildFamilyLedgers, the
+    // source of truth for Billing) and only fall back to the frozen
+    // e.sessionTuition snapshot if the session no longer exists — the
+    // reverse order silently charged $0 for any enrollment record whose
+    // snapshot was never populated (e.g. campers added directly to the
+    // roster, or applications submitted before sessionTuition was wired up).
+    var tuition=(sesObj&&sesObj.tuition!=null)?Number(sesObj.tuition)||0:Number(e.sessionTuition)||0;
 
     // Sibling discount only when actually joining a matched family that
     // already has campers.
@@ -13963,7 +14019,7 @@ window.CampistryMe={
     getStaffForDivision:getStaffForDivision,getBunksForDivision:getBunksForDivision,
     findStaffByEmail:findStaffByEmail,getAllStaff:getAllStaff,
     copyRegLink:copyRegLink,addDocRow:addDocRow,addApplication:addApplication,_onAppPhotoPick:_onAppPhotoPick,autoPromoteWaitlist:autoPromoteWaitlist,
-    viewApplication:viewApplication,updateEnrollStatus:updateEnrollStatus,bulkEnrollStatus:bulkEnrollStatus,toggleAllEnroll:toggleAllEnroll,_updateRegBulkBar:_updateRegBulkBar,enrollCamper:enrollCamper,generateParentInvite:generateParentInvite,rescindEnrollment:rescindEnrollment,
+    viewApplication:viewApplication,updateEnrollStatus:updateEnrollStatus,bulkEnrollStatus:bulkEnrollStatus,toggleAllEnroll:toggleAllEnroll,_updateRegBulkBar:_updateRegBulkBar,enrollCamper:enrollCamper,generateParentInvite:generateParentInvite,_sendInviteEmailNow:_sendInviteEmailNow,rescindEnrollment:rescindEnrollment,
     saveAppNote:saveAppNote,printApplication:printApplication,
     openFormConfig:openFormConfig,saveFormConfig:saveFormConfig,addCustomQ:addCustomQ,addPromoRow:addPromoRow,
     openStaffFormConfig:openStaffFormConfig,saveStaffFormConfig:saveStaffFormConfig,addStaffCustomQ:addStaffCustomQ,
@@ -13981,7 +14037,7 @@ window.CampistryMe={
     _confirmPersonLink:_confirmPersonLink,_dismissPersonLink:_dismissPersonLink,
     addOtherCampToCamper:addOtherCampToCamper,removeOtherCampFromCamper:removeOtherCampFromCamper,
     addOtherCampToStaff:addOtherCampToStaff,removeOtherCampFromStaff:removeOtherCampFromStaff,
-    copyLinkText:copyLinkText,showLinkQR:showLinkQR,showRegistrationQR:showRegistrationQR,
+    copyLinkText:copyLinkText,showLinkQR:showLinkQR,
     openSendLinkModal:openSendLinkModal,openSendRegLinkModal:openSendRegLinkModal,openSendStaffLinkModal:openSendStaffLinkModal,
     // Payroll
     prSetTab:prSetTab,prEditStaff:prEditStaff,prRemoveStaff:prRemoveStaff,openPayrollStaff:openPayrollStaff,
