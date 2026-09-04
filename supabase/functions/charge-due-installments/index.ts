@@ -3,7 +3,10 @@
 //
 // Meant to be called once a day by pg_cron (see BILLING_PAYMENTS_SETUP.md). For
 // every camp it scans campistryMe.families for families that have:
-//   - a monthly plan with autopay on           (f.plan.autopay === true)
+//   - one or more payment plans with autopay on (f.plans[].autopay === true —
+//     a family can have MULTIPLE plans, e.g. one per enrolled camper; see
+//     migrations/116_multi_payment_plans.sql. A pre-116 family with only the
+//     legacy singular f.plan is read the same way, one-plan-in-a-list.)
 //   - a saved card                              (f.cardOnFile + f.stripeCustomerId)
 //   - at least one installment due today/overdue (status 'pending', dueDate<=today)
 // and charges each due installment off-session via Stripe, marks it paid, and
@@ -111,46 +114,54 @@ serve(async (req) => {
 
     for (const [famKey, fRaw] of Object.entries(me.families)) {
       const f = fRaw as Record<string, any>;
-      const plan = f.plan;
-      if (!plan || !plan.autopay || !Array.isArray(plan.installments)) continue;
       if (!f.cardOnFile || !f.stripeCustomerId) continue;
+      // A family can have MULTIPLE plans (migration 116) — normalize the
+      // legacy singular f.plan into a one-item list so a pre-116 family
+      // charges exactly as it always did.
+      const plans: Record<string, any>[] = Array.isArray(f.plans)
+        ? f.plans
+        : (f.plan && Array.isArray(f.plan.installments) ? [f.plan] : []);
 
-      for (const inst of plan.installments) {
-        if (inst.status !== "pending") continue;
-        if (!inst.dueDate || inst.dueDate > today) continue; // not due yet
-        const amount = Number(inst.amount) || 0;
-        if (amount <= 0) { inst.status = "paid"; dirty = true; continue; }
+      for (const plan of plans) {
+        if (!plan || !plan.autopay || !Array.isArray(plan.installments)) continue;
 
-        const camperName = (Array.isArray(f.camperIds) && f.camperIds[0]) ? f.camperIds[0] : (f.name || "");
-        const pi = await stripeCharge(
-          f.stripeCustomerId, f.stripePaymentMethodId || null, amount,
-          `Autopay installment — ${f.name || famKey}`,
-          { campId: String(row.camp_id), familyKey: famKey, familyName: camperName, source: "autopay" },
-          campDestinations.get(String(row.camp_id)) || null,
-        );
+        for (const inst of plan.installments) {
+          if (inst.status !== "pending") continue;
+          if (!inst.dueDate || inst.dueDate > today) continue; // not due yet
+          const amount = Number(inst.amount) || 0;
+          if (amount <= 0) { inst.status = "paid"; dirty = true; continue; }
 
-        if (pi.error || pi.status === "requires_action") {
-          inst.status = "failed";
-          inst.failReason = pi.error?.message || "requires_authentication";
-          failed++;
-          details.push({ camp: row.camp_id, family: f.name, amount, result: "failed", reason: inst.failReason });
-        } else if (pi.status === "succeeded") {
-          inst.status = "paid";
-          inst.paidDate = today;
-          inst.stripePaymentIntentId = pi.id;
-          me.finance.payments.push({
-            id: "auto_" + pi.id, family: camperName, familyKey: famKey,
-            amount: amount, date: today, method: "Autopay (card)",
-            reference: pi.id, notes: "Monthly autopay installment",
-            stripePaymentIntentId: pi.id, status: "succeeded", timestamp: Date.now(),
-          });
-          charged++;
-          details.push({ camp: row.camp_id, family: f.name, amount, result: "charged" });
-        } else {
-          // processing (e.g. slower method) — leave pending-ish but note it
-          details.push({ camp: row.camp_id, family: f.name, amount, result: pi.status });
+          const camperName = (Array.isArray(f.camperIds) && f.camperIds[0]) ? f.camperIds[0] : (f.name || "");
+          const pi = await stripeCharge(
+            f.stripeCustomerId, f.stripePaymentMethodId || null, amount,
+            `Autopay installment — ${f.name || famKey}`,
+            { campId: String(row.camp_id), familyKey: famKey, familyName: camperName, planId: plan.id || "", source: "autopay" },
+            campDestinations.get(String(row.camp_id)) || null,
+          );
+
+          if (pi.error || pi.status === "requires_action") {
+            inst.status = "failed";
+            inst.failReason = pi.error?.message || "requires_authentication";
+            failed++;
+            details.push({ camp: row.camp_id, family: f.name, amount, result: "failed", reason: inst.failReason });
+          } else if (pi.status === "succeeded") {
+            inst.status = "paid";
+            inst.paidDate = today;
+            inst.stripePaymentIntentId = pi.id;
+            me.finance.payments.push({
+              id: "auto_" + pi.id, family: camperName, familyKey: famKey,
+              amount: amount, date: today, method: "Autopay (card)",
+              reference: pi.id, notes: "Monthly autopay installment",
+              stripePaymentIntentId: pi.id, status: "succeeded", timestamp: Date.now(),
+            });
+            charged++;
+            details.push({ camp: row.camp_id, family: f.name, amount, result: "charged" });
+          } else {
+            // processing (e.g. slower method) — leave pending-ish but note it
+            details.push({ camp: row.camp_id, family: f.name, amount, result: pi.status });
+          }
+          dirty = true;
         }
-        dirty = true;
       }
     }
 
