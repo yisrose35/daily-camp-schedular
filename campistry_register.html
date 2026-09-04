@@ -1128,6 +1128,23 @@ window.submitApp=async function(){
     var statusUrl=window.location.origin+window.location.pathname+'?status='+appIds[0]+(statusCampId?'&camp='+encodeURIComponent(statusCampId):'');
     document.getElementById('statusLink').innerHTML='<a href="'+statusUrl+'" style="color:var(--me);word-break:break-all">'+esc(statusUrl)+'</a>';
     window.scrollTo(0,0);
+
+    // Fire-and-forget: flag the office when this parent's stated payment
+    // preference actually needs a human follow-up (a payment_plan request
+    // while self-serve is off, or an offline zelle/check payment to watch
+    // for) — never blocks the success screen already shown above.
+    // flag_application_payment_followup (migration 115) re-reads the
+    // submitted payment method AND the camp's own allowParentPaymentPlans
+    // setting server-side, so it's a no-op (not an error) for credit_card/
+    // ach or when self-serve payment plans are on.
+    try{
+        var _followupClient=(window.CampistryDB&&window.CampistryDB.getClient&&window.CampistryDB.getClient())||(window.supabase&&typeof window.supabase.rpc==='function'?window.supabase:null);
+        if(_followupClient&&statusCampId){
+            appIds.forEach(function(aid){
+                _followupClient.rpc('flag_application_payment_followup',{p_camp_id:statusCampId,p_app_id:aid}).catch(function(){});
+            });
+        }
+    }catch(_){}
 };
 
 function showErr(m){var el=document.getElementById('formErr');el.textContent=m;el.style.display='block';el.scrollIntoView({behavior:'smooth',block:'center'})}

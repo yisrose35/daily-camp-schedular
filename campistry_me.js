@@ -7035,6 +7035,18 @@ function saveFormConfig(){
 }
 
 // View full application (review modal)
+// Lightweight per-application "we got the check/Zelle" flag — paymentStatus
+// otherwise just defaults to 'pending' at creation and is never touched
+// again. This is intentionally a single toggle, not itemized amounts/dates
+// (openPaymentForFamily's full ledger entry, offered alongside this once a
+// family record exists, is the real record-keeping for that).
+function _markAppPaymentReceived(id){
+    var e=enrollments[id];if(!e)return;
+    e.paymentStatus=e.paymentStatus==='received'?'pending':'received';
+    save();
+    toast(e.paymentStatus==='received'?'Marked as received':'Marked as pending');
+    viewApplication(id);
+}
 function viewApplication(id){
     var e=enrollments[id];if(!e)return;
     var sc=e.status==='enrolled'?'ok':e.status==='accepted'?'ok':e.status==='waitlisted'?'warn':e.status==='declined'||e.status==='withdrawn'?'err':'gray';
@@ -7182,6 +7194,24 @@ function viewApplication(id){
             b+=row('Payment Method',e.paymentMethod?_payLabel(e.paymentMethod):'Not selected');
             b+=row('Payment Status',e.paymentStatus||'pending');
             if(e.discount&&e.discount.active!==false&&e.discount.code)b+=row('Discount',(e.discount.label||'')+' ('+e.discount.code+')');
+            // Contextual next-step per what the parent actually said they
+            // want, instead of just showing the label and leaving staff to
+            // remember what to do about it.
+            var famKeyForApp=_resolveFamilyKey(e.camperName,_famItemRaw(e.camperName,e.street,e.city,e.state,e.zip,e.parentName,e.parentEmail));
+            if(e.paymentMethod==='payment_plan'){
+                if(enrollSettings.allowParentPaymentPlans){
+                    b+='<div style="font-size:.8rem;color:var(--s500);margin-top:6px;">Self-serve payment plans are on — once accepted, this family can build their own plan from their Link portal.</div>';
+                }else if(famKeyForApp){
+                    b+='<button class="me-btn me-btn--sec me-btn--sm" style="margin-top:6px;" onclick="CampistryMe.monthlyPlan(\''+je(famKeyForApp)+'\')">Set Up Payment Plan</button>';
+                }else{
+                    b+='<div style="font-size:.8rem;color:var(--s500);margin-top:6px;">Accept &amp; enroll this application, then set up a payment plan from Billing.</div>';
+                }
+            }else if(e.paymentMethod==='credit_card'||e.paymentMethod==='ach'){
+                b+='<div style="font-size:.8rem;color:var(--s500);margin-top:6px;">Parent can pay directly from their Link portal (card or bank transfer) once invited — no setup needed here.</div>';
+            }else if(e.paymentMethod==='zelle'||e.paymentMethod==='check'){
+                b+='<button class="me-btn me-btn--sec me-btn--sm" style="margin-top:6px;" onclick="CampistryMe._markAppPaymentReceived(\''+je(id)+'\')">'+(e.paymentStatus==='received'?'✓ Marked Received (click to undo)':'Mark as Received')+'</button>';
+                if(famKeyForApp)b+=' <button class="me-btn me-btn--ghost me-btn--sm" style="margin-top:6px;" onclick="CampistryMe.openPaymentForFamily(\''+je(famKeyForApp)+'\')">Record Payment…</button>';
+            }
         },
         siblings:function(){
             if(!e.siblingGroup)return;
@@ -14042,7 +14072,7 @@ window.CampistryMe={
     getStaffForDivision:getStaffForDivision,getBunksForDivision:getBunksForDivision,
     findStaffByEmail:findStaffByEmail,getAllStaff:getAllStaff,
     copyRegLink:copyRegLink,addDocRow:addDocRow,addApplication:addApplication,_onAppPhotoPick:_onAppPhotoPick,autoPromoteWaitlist:autoPromoteWaitlist,
-    viewApplication:viewApplication,updateEnrollStatus:updateEnrollStatus,bulkEnrollStatus:bulkEnrollStatus,toggleAllEnroll:toggleAllEnroll,_updateRegBulkBar:_updateRegBulkBar,enrollCamper:enrollCamper,generateParentInvite:generateParentInvite,_sendInviteEmailNow:_sendInviteEmailNow,rescindEnrollment:rescindEnrollment,
+    viewApplication:viewApplication,_markAppPaymentReceived:_markAppPaymentReceived,updateEnrollStatus:updateEnrollStatus,bulkEnrollStatus:bulkEnrollStatus,toggleAllEnroll:toggleAllEnroll,_updateRegBulkBar:_updateRegBulkBar,enrollCamper:enrollCamper,generateParentInvite:generateParentInvite,_sendInviteEmailNow:_sendInviteEmailNow,rescindEnrollment:rescindEnrollment,
     saveAppNote:saveAppNote,printApplication:printApplication,
     openFormConfig:openFormConfig,saveFormConfig:saveFormConfig,addCustomQ:addCustomQ,addPromoRow:addPromoRow,
     openStaffFormConfig:openStaffFormConfig,saveStaffFormConfig:saveStaffFormConfig,addStaffCustomQ:addStaffCustomQ,

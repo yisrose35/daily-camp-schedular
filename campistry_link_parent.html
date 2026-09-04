@@ -1095,7 +1095,20 @@ function _payCardHtml(cid,campName,d){
 // it via get_my_balance's cardOnFile/paymentMethodType fields.
 function _autopaySectionHtml(cid,d){
     var insts=(d.plan&&Array.isArray(d.plan.installments))?d.plan.installments:[];
-    if(!insts.length) return '';
+    if(!insts.length){
+        // No plan exists yet — offer to build one only when this camp has
+        // turned on self-serve (allowParentPaymentPlans, migration 115) and
+        // there's actually a balance to schedule. Office-built plans still
+        // work exactly as before (the branch above this one, unchanged).
+        if(d.allowParentPaymentPlans&&Number(d.balance)>0.005){
+            return '<div style="border-top:1px solid var(--border-color,#E2E8F0);margin-top:16px;padding-top:16px;">'
+                +'<div style="font-size:.72rem;font-weight:700;color:var(--link-color);text-transform:uppercase;letter-spacing:.04em;margin-bottom:8px;">Payment Plan</div>'
+                +'<div style="font-size:.78rem;color:var(--text-muted);margin-bottom:10px;">Want to spread this out? Build your own payment schedule.</div>'
+                +'<button class="btn btn-secondary" style="width:100%;font-size:.85rem;" onclick="openPlanBuilder(\''+cid+'\')">Build a payment plan</button>'
+                +'</div>';
+        }
+        return '';
+    }
     var next=insts.filter(function(i){return i.status==='pending'||i.status==='failed';})
         .sort(function(a,b){return String(a.dueDate||'').localeCompare(String(b.dueDate||''));})[0];
     var onFile=!!d.cardOnFile;
@@ -1131,6 +1144,89 @@ async function startAutopaySetup(cid){
         _lkGoToCheckout(data.url);
     }catch(err){ console.error('[Parent] autopay setup error:',err); toast('Could not start setup: '+(err&&err.message||'error')); }
 }
+// Self-serve payment-plan builder — only reachable when a camp turned on
+// allowParentPaymentPlans and no plan exists yet for this family. The math
+// here (even split, remainder folded into the first payment) mirrors
+// _mpGenRows/_buildInstallmentSchedule in campistry_me.js; the actual
+// balance/eligibility/total checks all happen SERVER-SIDE in
+// set_my_payment_plan (migration 115) — this client-side generation is only
+// a preview, never trusted for the real write.
+var _lkPlanCid=null;
+function openPlanBuilder(cid){
+    var d=_balByCamp[cid]; if(!d){toast('Balance not loaded yet');return;}
+    var bal=Number(d.balance)||0; if(bal<=0.005){toast('Nothing to pay');return;}
+    _lkPlanCid=cid;
+    var sub=document.getElementById('lkPlanSub'); if(sub) sub.textContent='Balance due: '+_lkMoney(bal);
+    var startEl=document.getElementById('lkPlanStart');
+    if(startEl&&!startEl.value){
+        var d1=new Date(); d1.setDate(1); d1.setMonth(d1.getMonth()+1);
+        startEl.value=d1.toISOString().split('T')[0];
+    }
+    _lkPlanRefreshPreview();
+    var ov=document.getElementById('lkPlanOverlay'); if(ov) ov.classList.add('open');
+}
+function lkPlanClose(){ var ov=document.getElementById('lkPlanOverlay'); if(ov) ov.classList.remove('open'); _lkPlanCid=null; }
+function _lkPlanBuildRows(){
+    var cid=_lkPlanCid; var d=cid&&_balByCamp[cid]; if(!d) return [];
+    var bal=Number(d.balance)||0;
+    var countEl=document.getElementById('lkPlanCount');
+    var count=Math.max(1,Math.min(24,parseInt(countEl&&countEl.value,10)||1));
+    var cadence=(document.getElementById('lkPlanCadence')||{}).value||'monthly';
+    var startVal=(document.getElementById('lkPlanStart')||{}).value;
+    var stepDays=cadence==='weekly'?7:cadence==='biweekly'?14:30;
+    var start=startVal?new Date(startVal+'T12:00:00'):new Date();
+    var per=Math.floor(bal/count*100)/100;
+    var remainder=Math.round((bal-per*count)*100)/100;
+    var rows=[];
+    for(var i=0;i<count;i++){
+        var due=new Date(start); due.setDate(due.getDate()+stepDays*i);
+        var amt=per+(i===0?remainder:0);
+        rows.push({amount:Math.round(amt*100)/100,dueDate:due.toISOString().split('T')[0]});
+    }
+    return rows;
+}
+function _lkPlanRefreshPreview(){
+    var rows=_lkPlanBuildRows();
+    var el=document.getElementById('lkPlanPreview'); if(!el) return;
+    el.innerHTML=rows.map(function(r){
+        return '<div style="display:flex;justify-content:space-between;padding:6px 0;border-bottom:1px solid var(--border-color,#E2E8F0);">'
+            +'<span style="color:var(--text-muted);">'+String(r.dueDate||'').replace(/[<>&]/g,'')+'</span>'
+            +'<span style="font-weight:700;">'+_lkMoney(r.amount)+'</span></div>';
+    }).join('');
+}
+async function _lkPlanSave(){
+    var cid=_lkPlanCid; var d=cid&&_balByCamp[cid]; if(!d){toast('Balance not loaded yet');return;}
+    var rows=_lkPlanBuildRows();
+    if(!rows.length){toast('Add at least one payment');return;}
+    lkPlanClose();
+    try{
+        toast('Saving your payment plan…');
+        var call=window._pRpc?window._pRpc('set_my_payment_plan',{p_installments:rows},cid):null;
+        if(!call) throw new Error('Not available right now');
+        var res=await call;
+        var r=res&&res.data;
+        if(!r||!r.success){
+            var msgs={
+                self_serve_not_enabled:'This camp hasn\'t turned on self-serve payment plans.',
+                plan_already_exists:'A payment plan already exists for your family — contact the camp to change it.',
+                nothing_owed:'Nothing is currently owed.',
+                total_mismatch:'Your balance changed since this loaded — please try again.',
+                no_family_on_file:'We couldn\'t find your family record — contact the camp office.'
+            };
+            throw new Error((r&&msgs[r.error])||(r&&r.error)||'Could not save plan');
+        }
+        toast('Payment plan saved!');
+        loadPayments();
+    }catch(err){ console.error('[Parent] plan save error:',err); toast('Could not save plan: '+(err&&err.message||'error')); }
+}
+(function _wirePlanOverlay(){
+    function wire(){
+        var ov=document.getElementById('lkPlanOverlay');
+        if(ov)ov.addEventListener('click',function(e){ if(e.target===ov) lkPlanClose(); });
+        document.addEventListener('keydown',function(e){ if(e.key==='Escape'&&ov&&ov.classList.contains('open')) lkPlanClose(); });
+    }
+    if(document.readyState==='loading') document.addEventListener('DOMContentLoaded',wire); else wire();
+})();
 function _renderPayHistory(pt,history){
     if(!pt) return;
     history.sort(function(a,b){return String(b.date||'').localeCompare(String(a.date||''));});
@@ -5420,6 +5516,36 @@ if (window.pdfjsLib) { window.pdfjsLib.GlobalWorkerOptions.workerSrc = 'pdfjs-di
         <div class="lk-confirm-foot">
             <button class="btn btn-ghost" type="button" onclick="lkPayClose()">Cancel</button>
             <button class="btn btn-primary" type="button" onclick="_lkPayConfirm()">Continue to payment</button>
+        </div>
+    </div>
+</div>
+
+<!-- Self-serve payment plan builder — only offered when the camp has turned
+     on allowParentPaymentPlans (get_my_balance) and no plan exists yet. -->
+<div class="lk-confirm-overlay" id="lkPlanOverlay">
+    <div class="lk-confirm-card" style="max-width:420px;">
+        <h3>Build your payment plan</h3>
+        <p id="lkPlanSub">Balance due: $0.00</p>
+        <div class="lk-field" style="text-align:left;margin-bottom:12px;">
+            <label style="font-size:.78rem;font-weight:600;color:var(--slate-600);display:block;margin-bottom:6px;">How often</label>
+            <select id="lkPlanCadence" class="lk-input" onchange="_lkPlanRefreshPreview()">
+                <option value="monthly" selected>Monthly</option>
+                <option value="biweekly">Every 2 weeks</option>
+                <option value="weekly">Weekly</option>
+            </select>
+        </div>
+        <div class="lk-field" style="text-align:left;margin-bottom:12px;">
+            <label style="font-size:.78rem;font-weight:600;color:var(--slate-600);display:block;margin-bottom:6px;">Number of payments</label>
+            <input type="number" id="lkPlanCount" class="lk-input" value="3" min="1" max="24" oninput="_lkPlanRefreshPreview()">
+        </div>
+        <div class="lk-field" style="text-align:left;margin-bottom:14px;">
+            <label style="font-size:.78rem;font-weight:600;color:var(--slate-600);display:block;margin-bottom:6px;">First payment date</label>
+            <input type="date" id="lkPlanStart" class="lk-input" onchange="_lkPlanRefreshPreview()">
+        </div>
+        <div id="lkPlanPreview" style="text-align:left;font-size:.85rem;margin-bottom:18px;max-height:180px;overflow-y:auto;"></div>
+        <div class="lk-confirm-foot">
+            <button class="btn btn-ghost" type="button" onclick="lkPlanClose()">Cancel</button>
+            <button class="btn btn-primary" type="button" onclick="_lkPlanSave()">Save plan</button>
         </div>
     </div>
 </div>

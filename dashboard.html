@@ -447,6 +447,10 @@
                         <button class="btn-edit" type="button" onclick="addSessionForm()">+ Add Session</button>
                     </div>
                 </div>
+                <label style="display:flex; align-items:center; gap:8px; font-size:0.82rem; color:var(--slate-600); margin-top:2px; margin-bottom:10px; cursor:pointer;">
+                    <input type="checkbox" id="allowParentPaymentPlans" onchange="saveAllowParentPaymentPlans()">
+                    Let parents set up their own payment plan in Link (once accepted) — when off, an application requesting a payment plan flags the office to set one up instead
+                </label>
                 <div id="sessionsList" style="display:flex; flex-direction:column; gap:10px; margin-top:10px;"></div>
 
                 <div id="bundleEditForm" style="display:none; margin-top:16px; padding:14px 16px; border-radius:10px; background:#f5f3ff; border:1px solid #ddd6fe;">
@@ -788,7 +792,7 @@ if (window.location.protocol === 'file:') {
     <script src="local_cache_idb.js?v=20260903-03"></script>
     <script src="integration_hooks.js?v=20260904-02"></script>
     <script src="cloud_sync_helpers.js?v=20260903-03"></script>
-    <script src="dashboard.js?v=20260904-02"></script>
+    <script src="dashboard.js?v=20260904-03"></script>
     <script src="campistry_birthdays.js?v=20260903-03"></script>
     <script src="badges.js?v=20260903-03"></script>
     <script src="access_control.js?v=20260903-03"></script>

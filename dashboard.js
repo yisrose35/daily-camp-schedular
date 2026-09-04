@@ -1872,6 +1872,21 @@
         if (window.saveGlobalSettings) window.saveGlobalSettings('campistryMe', gs.campistryMe);
     }
 
+    // Whether an accepted/enrolled family can build their own installment
+    // schedule from Link (set_my_payment_plan RPC, migration 115) instead of
+    // the office building one manually via Me -> Billing -> Monthly Plan.
+    // Spread the existing enrollSettings first — it also holds promoCodes,
+    // which this must never clobber.
+    window.saveAllowParentPaymentPlans = function() {
+        var el = document.getElementById('allowParentPaymentPlans');
+        var gs = window.loadGlobalSettings ? (window.loadGlobalSettings() || {}) : {};
+        if (!gs.campistryMe) gs.campistryMe = {};
+        gs.campistryMe.enrollSettings = Object.assign({}, gs.campistryMe.enrollSettings || {}, {
+            allowParentPaymentPlans: !!(el && el.checked)
+        });
+        if (window.saveGlobalSettings) window.saveGlobalSettings('campistryMe', gs.campistryMe);
+    };
+
     function _dashFormatDateRange(startDate, endDate) {
         if (!startDate || !endDate) return '';
         return new Date(startDate + 'T12:00:00').toLocaleDateString('en-US', { month: 'long', day: 'numeric' })
@@ -1892,6 +1907,8 @@
             if (idsAdded) _dashSaveSessions();
             renderSessionsList();
             renderBundlesList();
+            var allowPPEl = document.getElementById('allowParentPaymentPlans');
+            if (allowPPEl) allowPPEl.checked = !!(gs.campistryMe && gs.campistryMe.enrollSettings && gs.campistryMe.enrollSettings.allowParentPaymentPlans);
             var form = document.getElementById('sessionEditForm');
             if (form) form.style.display = 'none';
             var bform = document.getElementById('bundleEditForm');
