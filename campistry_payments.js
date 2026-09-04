@@ -47,7 +47,11 @@
         { id: 'cash',    label: 'Cash',             contexts: ['tuition', 'canteen', 'shop', 'luggage'], default: true },
         { id: 'check',   label: 'Check',            contexts: ['tuition', 'canteen', 'shop', 'luggage'], default: true },
         { id: 'ach',     label: 'ACH / bank transfer', contexts: ['tuition', 'canteen', 'shop', 'luggage'], default: true },
-        { id: 'zelle',   label: 'Zelle',            contexts: ['tuition', 'canteen', 'shop', 'luggage'], default: false },
+        // default:true for tuition — the registration form's own payment
+        // picker already offers Zelle as a first-class choice, so a parent
+        // who picks it there must have a matching option when staff record
+        // the payment in Billing's ledger.
+        { id: 'zelle',   label: 'Zelle',            contexts: ['tuition', 'canteen', 'shop', 'luggage'], default: true },
         { id: 'paypal',  label: 'PayPal',           contexts: ['tuition'],                                default: false },
         { id: 'plan',    label: 'Payment plan',     contexts: ['tuition'],                                default: true },
         { id: 'canteen', label: 'Charge to canteen account', contexts: ['shop'],                          default: false },

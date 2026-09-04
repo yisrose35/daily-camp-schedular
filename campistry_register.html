@@ -251,7 +251,7 @@ body{font-family:var(--font);background:var(--s50);color:var(--s800);-webkit-fon
 <script src="supabase_client.js?v=20260903-03" onerror="console.log('[Register] Supabase config not loaded — local only')"></script>
 <script src="local_cache_idb.js?v=20260903-03" onerror="console.log('[Register] LocalCacheIDB not loaded — falling back to localStorage')"></script>
 <script src="integration_hooks.js?v=20260904-02" onerror="console.log('[Register] Integration hooks not loaded — local only')"></script>
-<script src="campistry_payments.js?v=20260903-03" onerror="console.log('[Register] Payment policy not loaded — showing the built-in options')"></script>
+<script src="campistry_payments.js?v=20260904-01" onerror="console.log('[Register] Payment policy not loaded — showing the built-in options')"></script>
 <script>
 // Keep the payment options on this form in step with the camp's policy. The
 // markup above is the default (credit yes, debit no); this only has to do
@@ -1141,7 +1141,9 @@ window.submitApp=async function(){
         var _followupClient=(window.CampistryDB&&window.CampistryDB.getClient&&window.CampistryDB.getClient())||(window.supabase&&typeof window.supabase.rpc==='function'?window.supabase:null);
         if(_followupClient&&statusCampId){
             appIds.forEach(function(aid){
-                _followupClient.rpc('flag_application_payment_followup',{p_camp_id:statusCampId,p_app_id:aid}).catch(function(){});
+                _followupClient.rpc('flag_application_payment_followup',{p_camp_id:statusCampId,p_app_id:aid}).then(function(res){
+                    if(res&&res.error)console.warn('[Register] flag_application_payment_followup failed (has migration 115 been pasted into the SQL Editor?):',res.error.message);
+                }).catch(function(err){console.warn('[Register] flag_application_payment_followup error:',err&&err.message);});
             });
         }
     }catch(_){}

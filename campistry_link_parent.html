@@ -1070,18 +1070,46 @@ function _togglePastCamps(btn){
     box.style.display=open?'none':'';
     var arrow=btn.querySelector('span[aria-hidden]'); if(arrow) arrow.textContent=open?'▾':'▴';
 }
+function _lkToggleDetails(id){
+    var el=document.getElementById(id); if(!el) return;
+    el.style.display=el.style.display==='none'?'':'none';
+}
 function _payCardHtml(cid,campName,d){
     var bal=Number(d.balance)||0; var owed=bal>0.005;
+    var hasPlan=!!(d.plan&&Array.isArray(d.plan.installments)&&d.plan.installments.length);
     var head=(campName?'<div style="font-size:.72rem;font-weight:700;color:var(--link-color);text-transform:uppercase;letter-spacing:.04em;margin-bottom:6px;">'+String(campName).replace(/[<>&]/g,'')+'</div>':'');
-    var payBtn=owed?'<button class="btn btn-primary" style="width:100%;margin-top:14px;" onclick="payNow(\''+cid+'\')">Pay '+_lkMoney(bal)+' now</button>':'';
-    return '<div class="lk-card" style="padding:20px;margin-bottom:12px;">'+head+
-        '<div style="display:flex;align-items:baseline;justify-content:space-between;gap:12px;">'+
-        '<div><div style="font-size:.75rem;color:var(--text-muted);">Balance due</div><div style="font-size:1.9rem;font-weight:800;color:'+(owed?'#DC2626':'#0E7C4A')+';font-variant-numeric:tabular-nums;">'+_lkMoney(bal)+'</div></div>'+
-        '<div style="text-align:right;font-size:.75rem;color:var(--text-muted);line-height:1.7;">Billed '+_lkMoney(d.billed)+'<br>Paid '+_lkMoney(d.paid)+(Number(d.credits)>0.005?'<br>Credits '+_lkMoney(d.credits):'')+'</div>'+
-        '</div>'+payBtn+
-        (owed?'<div style="font-size:.7rem;color:var(--text-muted);margin-top:8px;text-align:center;">Pay securely by card, bank (ACH), Cash App, PayPal &amp; more.</div>':'<div style="font-size:.72rem;color:#0E7C4A;margin-top:6px;text-align:center;font-weight:600;">You\'re all paid up. Thank you!</div>')+
-        _autopaySectionHtml(cid,d)+
-        '</div>';
+
+    // Billed/paid/credits is useful but competes with the one number that
+    // actually matters at a glance (the balance) — tuck it behind a small
+    // toggle instead of always showing three extra figures.
+    var detailsId='payDetails_'+cid;
+    var detailsToggle=(owed&&(Number(d.billed)>0.005||Number(d.paid)>0.005))
+        ?'<button type="button" onclick="_lkToggleDetails(\''+detailsId+'\')" style="background:none;border:none;padding:0;margin-top:4px;font-size:.72rem;color:var(--link-color);cursor:pointer;text-decoration:underline;">Billed/paid details</button>'
+        +'<div id="'+detailsId+'" style="display:none;font-size:.75rem;color:var(--text-muted);line-height:1.7;margin-top:4px;">Billed '+_lkMoney(d.billed)+' · Paid '+_lkMoney(d.paid)+(Number(d.credits)>0.005?' · Credits '+_lkMoney(d.credits):'')+'</div>'
+        :'';
+    var balanceBlock='<div><div style="font-size:.75rem;color:var(--text-muted);">Balance due</div>'
+        +'<div style="font-size:1.9rem;font-weight:800;color:'+(owed?'#DC2626':'#0E7C4A')+';font-variant-numeric:tabular-nums;">'+_lkMoney(bal)+'</div>'
+        +detailsToggle+'</div>';
+
+    var body='<div class="lk-card" style="padding:20px;margin-bottom:12px;">'+head+balanceBlock;
+
+    if(hasPlan){
+        // A family already on a plan sees THEIR PLAN as the primary thing to
+        // look at — a big "pay it all now" button sitting above an active
+        // autopay schedule read as contradictory (why pay in full if it's
+        // already scheduled?). Paying in full is still offered, just as a
+        // plain secondary link underneath the plan instead of competing
+        // with it for attention.
+        body+=_autopaySectionHtml(cid,d);
+        if(owed) body+='<div style="text-align:center;margin-top:14px;"><button type="button" onclick="payNow(\''+cid+'\')" style="background:none;border:none;padding:0;font-size:.8rem;color:var(--text-muted);text-decoration:underline;cursor:pointer;">Or pay the full balance now instead</button></div>';
+    }else{
+        var payBtn=owed?'<button class="btn btn-primary" style="width:100%;margin-top:14px;" onclick="payNow(\''+cid+'\')">Pay '+_lkMoney(bal)+' now</button>':'';
+        body+=payBtn;
+        body+=owed?'<div style="font-size:.7rem;color:var(--text-muted);margin-top:8px;text-align:center;">Pay securely by card, bank (ACH), Cash App, PayPal &amp; more.</div>':'<div style="font-size:.72rem;color:#0E7C4A;margin-top:6px;text-align:center;font-weight:600;">You\'re all paid up. Thank you!</div>';
+        body+=_autopaySectionHtml(cid,d); // the self-serve "build a plan" offer, when eligible
+    }
+    body+='</div>';
+    return body;
 }
 // Monthly Plan / autopay — lives INSIDE the same balance card (not a
 // separate one below it), only appears when the camp office has actually

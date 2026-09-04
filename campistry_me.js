@@ -7726,6 +7726,15 @@ function addApplication(){
     FC_SECTIONS.forEach(function(s){ secEnabled[s.key]=fc.sections&&fc.sections[s.key]?fc.sections[s.key].enabled:s.default; });
 
     var h='<div class="fg"><label class="fl">Session</label><select id="appSession" class="fs"><option value="">— Select —</option>'+sesOpts+'</select></div>';
+    // Manual Entry is how a phone-intake application gets recorded — it had
+    // no way to capture how the family wants to pay at all, so a phone
+    // applicant never got the same payment-preference follow-through
+    // (office notification, Set Up Payment Plan shortcut, etc.) a real
+    // public-form applicant gets. Same 5 options/values as the public
+    // registration form's payment picker.
+    h+='<div class="fg"><label class="fl">How do they want to pay?</label><select id="appPaymentMethod" class="fs"><option value="">— Not selected —</option>'
+        +['credit_card','ach','zelle','check','payment_plan'].map(function(pm){return '<option value="'+pm+'">'+esc(_payLabel(pm))+'</option>';}).join('')
+        +'</select></div>';
 
     function fieldHtml(f){
         var cfg=(fc.fields&&fc.fields[f.id])||{};
@@ -7837,6 +7846,7 @@ function addApplication(){
             allergies:values.allergies||'',medications:values.medications||'',dietary:values.dietary||'',medicalNotes:values.medicalNotes||'',
             bunkmate:values.bunkmate||'',separateFrom:values.separate||'',tshirtSize:values.shirt||'',source:values.source||'',notes:values.notes||'',
             session:session,sessionTuition:tuition,
+            paymentMethod:document.getElementById('appPaymentMethod').value||'',
             status:isWaitlist?'waitlisted':'applied',
             appliedDate:new Date().toISOString().split('T')[0],
             formsRequired:3,formsCompleted:0,
@@ -7846,6 +7856,16 @@ function addApplication(){
         enrollments[id]=rec;
         save();closeModal('dynModal');_refreshPplIfActive();
         toast(isWaitlist?camperName+' added to waitlist':camperName+' application received');
+        // Same office follow-up a public-form submission already gets
+        // (flag_application_payment_followup, migration 115) — a phone
+        // intake shouldn't get worse treatment than the public form just
+        // because staff typed it in instead of the parent.
+        try{
+            if(rec.paymentMethod&&window.CampistryDB&&window.CampistryDB.getClient){
+                var _mc=window.CampistryDB.getClient();
+                if(_mc)_mc.rpc('flag_application_payment_followup',{p_camp_id:getCampId(),p_app_id:id}).catch(function(err){console.warn('[Me] flag_application_payment_followup:',err&&err.message);});
+            }
+        }catch(_){}
     },{maxWidth:720});
 }
 
