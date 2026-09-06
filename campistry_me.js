@@ -1127,16 +1127,112 @@ function acceptAddToFamily(famKey,camperName){
 
 // Two family records that turn out to be the same household (same parent
 // email, or 3-of-4 on name/address/parent) — folds B's campers into A and
-// removes B. Keeps A's own name/household/balance; only camperIds merge.
-function mergeFamilies(keyA,keyB){
+// removes B. `reconciled` (from the guided merge tool below) carries the
+// office's field-by-field picks; pass null to keep everything from A
+// wholesale (today's original, unconditional behavior — still used when a
+// suggestion is accepted without opening the guided tool).
+function mergeFamiliesReconciled(keyA,keyB,reconciled){
     var a=families[keyA],b=families[keyB];
     if(!a||!b)return;
+    if(reconciled){
+        if(reconciled.name) a.name=reconciled.name;
+        a.households=(a.households&&a.households.length)?a.households:[{}];
+        var hhA=a.households[0];
+        if(reconciled.householdLabel!=null) hhA.label=reconciled.householdLabel;
+        if(reconciled.address!=null) hhA.address=reconciled.address;
+        hhA.parents=hhA.parents||[];
+        [0,1].forEach(function(pi){
+            var pField=reconciled['parent'+pi];
+            if(!pField)return;
+            hhA.parents[pi]=hhA.parents[pi]||{};
+            ['name','phone','email','relation'].forEach(function(k){
+                if(pField[k]!=null) hhA.parents[pi][k]=pField[k];
+            });
+        });
+        if(reconciled.notes!=null) a.notes=reconciled.notes;
+    }
     a.camperIds=a.camperIds||[];
     (b.camperIds||[]).forEach(function(n){ if(a.camperIds.indexOf(n)<0)a.camperIds.push(n); });
     a.balance=(a.balance||0)+(b.balance||0);
     a.totalPaid=(a.totalPaid||0)+(b.totalPaid||0);
     delete families[keyB];
     save();render(curPage);toast(b.name+' merged into '+a.name);
+}
+function mergeFamilies(keyA,keyB){ mergeFamiliesReconciled(keyA,keyB,null); }
+
+// Guided side-by-side merge tool — an on-demand entry point (Billing's
+// ⋯ menu) for picking ANY two family records, or a pre-filled call from
+// the auto-suggestion banner below, so a suggested merge and a manual one
+// go through the identical reconciliation screen instead of two
+// implementations. No args → a two-family picker; both keys → straight to
+// the compare screen.
+function openMergeFamiliesTool(keyA,keyB){
+    if(keyA&&keyB&&families[keyA]&&families[keyB]){
+        showModal('Merge Families',_mfCompareHtml(keyA,keyB),function(){_mfConfirmMerge(keyA,keyB)},{maxWidth:640});
+        var saveBtn=document.getElementById('dynModalSave'); if(saveBtn) saveBtn.textContent='Merge';
+        return;
+    }
+    var keys=Object.keys(families).sort(function(x,y){return(families[x].name||'').localeCompare(families[y].name||'')});
+    if(keys.length<2){ toast('You need at least 2 family records to merge','error'); return; }
+    var opts=keys.map(function(k){return'<option value="'+esc(k)+'">'+esc(families[k].name||k)+'</option>'}).join('');
+    var h='<div class="me-field"><label>Keep this family\'s record (A)</label><select id="mfPickA" class="me-input">'+opts+'</select></div>';
+    h+='<div class="me-field" style="margin-top:10px"><label>Merge in this family (B) — this record will be removed</label><select id="mfPickB" class="me-input">'+opts+'</select></div>';
+    showModal('Merge Families',h,function(){
+        var ka=document.getElementById('mfPickA').value, kb=document.getElementById('mfPickB').value;
+        if(!ka||!kb||ka===kb){ toast('Pick two different families','error'); return; }
+        openMergeFamiliesTool(ka,kb);
+    },{maxWidth:480});
+    var saveBtn2=document.getElementById('dynModalSave'); if(saveBtn2) saveBtn2.textContent='Compare';
+}
+function _mfFieldRowHtml(id,label,valA,valB){
+    valA=valA||''; valB=valB||'';
+    var same=valA===valB;
+    var def=valA||valB;
+    var h='<div style="display:grid;grid-template-columns:110px 1fr;gap:8px;align-items:start;margin-bottom:10px">';
+    h+='<div style="font-size:.78rem;font-weight:700;color:var(--s600);padding-top:8px">'+esc(label)+'</div><div>';
+    if(!same){
+        h+='<div style="display:flex;gap:6px;margin-bottom:4px;flex-wrap:wrap">';
+        h+='<button type="button" class="me-btn me-btn--ghost me-btn--sm" onclick="document.getElementById(\''+id+'\').value=\''+je(valA)+'\'">A: '+(valA?esc(valA):'<span style="color:var(--s400)">(blank)</span>')+'</button>';
+        h+='<button type="button" class="me-btn me-btn--ghost me-btn--sm" onclick="document.getElementById(\''+id+'\').value=\''+je(valB)+'\'">B: '+(valB?esc(valB):'<span style="color:var(--s400)">(blank)</span>')+'</button>';
+        h+='</div>';
+    }
+    h+='<input type="text" class="me-input" id="'+id+'" value="'+esc(def)+'"></div></div>';
+    return h;
+}
+function _mfCompareHtml(keyA,keyB){
+    var a=families[keyA],b=families[keyB];
+    if(!a||!b) return '<div>Family record not found.</div>';
+    var hhA=(a.households||[])[0]||{}, hhB=(b.households||[])[0]||{};
+    var pA0=(hhA.parents||[])[0]||{}, pA1=(hhA.parents||[])[1]||{};
+    var pB0=(hhB.parents||[])[0]||{}, pB1=(hhB.parents||[])[1]||{};
+    var union=(a.camperIds||[]).concat((b.camperIds||[]).filter(function(n){return(a.camperIds||[]).indexOf(n)<0}));
+    var balSum=(a.balance||0)+(b.balance||0);
+    var h='<div style="font-size:.8rem;color:var(--s600);margin-bottom:12px">Pick which record\'s details to keep for each field below. <strong>'+esc(b.name)+'</strong> will be removed once merged; its campers and balance carry onto <strong>'+esc(a.name)+'</strong>.</div>';
+    h+='<div style="background:var(--s50);padding:8px 12px;border-radius:var(--r);margin-bottom:14px;font-size:.8rem">Campers after merge: '+(union.length?union.map(function(n){return'<strong>'+esc(n)+'</strong>'}).join(', '):'<span style="color:var(--s400)">none</span>')+'<br>Balances will be summed: '+fm(a.balance||0)+' + '+fm(b.balance||0)+' = <strong>'+fm(balSum)+'</strong> (Total Paid summed the same way)</div>';
+    h+=_mfFieldRowHtml('mfName','Family Name',a.name,b.name);
+    h+=_mfFieldRowHtml('mfHhLabel','Household',hhA.label,hhB.label);
+    h+=_mfFieldRowHtml('mfAddress','Address',hhA.address,hhB.address);
+    h+=_mfFieldRowHtml('mfP1Name','Parent 1 Name',pA0.name,pB0.name);
+    h+=_mfFieldRowHtml('mfP1Phone','Parent 1 Phone',pA0.phone,pB0.phone);
+    h+=_mfFieldRowHtml('mfP1Email','Parent 1 Email',pA0.email,pB0.email);
+    h+=_mfFieldRowHtml('mfP1Rel','Parent 1 Relation',pA0.relation,pB0.relation);
+    h+=_mfFieldRowHtml('mfP2Name','Parent 2 Name',pA1.name,pB1.name);
+    h+=_mfFieldRowHtml('mfP2Phone','Parent 2 Phone',pA1.phone,pB1.phone);
+    h+=_mfFieldRowHtml('mfP2Email','Parent 2 Email',pA1.email,pB1.email);
+    h+=_mfFieldRowHtml('mfP2Rel','Parent 2 Relation',pA1.relation,pB1.relation);
+    h+=_mfFieldRowHtml('mfNotes','Notes',a.notes,b.notes);
+    return h;
+}
+function _mfConfirmMerge(keyA,keyB){
+    function v(id){var el=document.getElementById(id);return el?el.value.trim():''}
+    var reconciled={
+        name:v('mfName'),householdLabel:v('mfHhLabel'),address:v('mfAddress'),
+        parent0:{name:v('mfP1Name'),phone:v('mfP1Phone'),email:v('mfP1Email'),relation:v('mfP1Rel')},
+        parent1:{name:v('mfP2Name'),phone:v('mfP2Phone'),email:v('mfP2Email'),relation:v('mfP2Rel')},
+        notes:v('mfNotes')
+    };
+    mergeFamiliesReconciled(keyA,keyB,reconciled);
+    closeModal('dynModal');
 }
 
 // Households form automatically in the background (every camper add/edit
@@ -1193,7 +1289,7 @@ function _famSuggestionsBannerHtml(){
     mergeFams.forEach(function(s){
         h+='<div style="display:flex;align-items:center;gap:12px;padding:10px 14px;background:#fff;border-radius:var(--r);margin-bottom:6px;border:1px solid var(--s200)">';
         h+='<div style="flex:1"><div style="font-size:.8rem"><strong>'+esc(s.nameA)+'</strong> ('+s.campersA.map(esc).join(', ')+') and <strong>'+esc(s.nameB)+'</strong> ('+s.campersB.map(esc).join(', ')+') look like the same family</div></div>';
-        h+='<button class="me-btn me-btn--pri me-btn--sm" onclick="CampistryMe.mergeFamilies(\''+je(s.keyA)+'\',\''+je(s.keyB)+'\')">Merge</button>';
+        h+='<button class="me-btn me-btn--pri me-btn--sm" onclick="CampistryMe.openMergeFamiliesTool(\''+je(s.keyA)+'\',\''+je(s.keyB)+'\')">Merge</button>';
         h+='<button class="me-btn me-btn--ghost me-btn--sm" style="color:var(--s400)" onclick="CampistryMe.dismissMergeFamilies(\''+je(s.keyA)+'\',\''+je(s.keyB)+'\')">Dismiss</button>';
         h+='</div>';
     });
@@ -10474,6 +10570,7 @@ function renderBilling(){
         +'<button onclick="CampistryMe.addFamily()">Add Household</button>'
         +'<button onclick="CampistryMe.addCharge()">Add Charge</button>'
         +'<button onclick="CampistryMe.issueCredit()">Issue Credit/Refund</button>'
+        +'<button onclick="CampistryMe.openMergeFamiliesTool()">Merge Families</button>'
         // Printing/exporting the household list moved to Reports (a
         // "Family Directory" template, filterable/groupable/printable) —
         // no need for a second, less capable copy of that feature here.
