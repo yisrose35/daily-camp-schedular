@@ -509,8 +509,15 @@ function _globalSearchIndex(query){
     });
     Object.keys(families).forEach(function(fk){
         var f=families[fk]||{};
-        if(!f.name||f.name.toLowerCase().indexOf(q)<0) return;
-        pushIfRoom('family',{type:'family',label:f.name,sublabel:(f.camperIds||[]).length+' camper'+((f.camperIds||[]).length!==1?'s':''),
+        // Match on the household name OR any camper in it — a parent typing
+        // their kid's first name (e.g. "chana") on Billing had no way to find
+        // "Rosenfeld Family" before, since only the household name was checked.
+        var camperIds=f.camperIds||[];
+        var matchedCamper=camperIds.find(function(cn){return cn&&cn.toLowerCase().indexOf(q)>=0});
+        var nameMatches=f.name&&f.name.toLowerCase().indexOf(q)>=0;
+        if(!nameMatches&&!matchedCamper) return;
+        pushIfRoom('family',{type:'family',label:f.name||matchedCamper,
+            sublabel:matchedCamper&&!nameMatches?'Camper: '+matchedCamper:camperIds.length+' camper'+(camperIds.length!==1?'s':''),
             open:function(){nav('billing');setTimeout(function(){viewFamily(fk)},50);}});
     });
     (payroll.staff||[]).forEach(function(s){
@@ -10409,8 +10416,9 @@ function renderBilling(){
         +'<button onclick="CampistryMe.addFamily()">Add Household</button>'
         +'<button onclick="CampistryMe.addCharge()">Add Charge</button>'
         +'<button onclick="CampistryMe.issueCredit()">Issue Credit/Refund</button>'
-        +'<button onclick="CampistryMe.printFamilies()">Print all households</button>'
-        +'<button onclick="CampistryMe.exportFamilyReport()">Export all households</button>'
+        // Printing/exporting the household list moved to Reports (a
+        // "Family Directory" template, filterable/groupable/printable) —
+        // no need for a second, less capable copy of that feature here.
         +'</div></div></div></div>';
 
     // Households form automatically in the background as campers are added
@@ -10447,11 +10455,6 @@ function renderBilling(){
     if(!filtered.length){
         h+='<div class="me-empty"><h3>No accounts match this filter</h3></div>';
     } else {
-        h+='<div id="billingBulkBar" style="display:none;align-items:center;gap:8px;padding:8px 12px;background:var(--me-bg,#eef2ff);border:1px solid var(--s200);border-radius:8px;margin-bottom:8px">'
-            +'<span id="billingBulkCount" style="font-weight:700;font-size:.8rem;color:var(--s700)"></span>'
-            +'<span style="flex:1"></span>'
-            +'<button class="me-btn me-btn--sec me-btn--sm" onclick="CampistryMe.bulkExportBilling()">↓ Export Selected</button>'
-            +'</div>';
         var billPaged=_paginate(filtered,PAGE_SIZE,_billingPage);
         billPaged.items.forEach(function(l){
             // A single scannable row per family — click anywhere on it to open
@@ -10462,11 +10465,24 @@ function renderBilling(){
             var statusBadge=l.status==='paid'?_flatStatus('Paid','ok'):l.status==='overdue'?_flatStatus('Overdue','err'):l.status==='partial'?_flatStatus('Partial','warn'):_flatStatus('Pending','warn');
             var camperNames=(l.family.camperIds||[]).concat((l.pendingCamperIds||[]).map(function(n){return n+' (pending)'})).join(', ');
 
+            // A quick "N x $amount" tag when this family is on an even
+            // installment plan — so a plan's shape is scannable from the
+            // list without opening the family, same as the family-detail
+            // page's Payment Plan card.
+            var planTag='';
+            var famPlans=_famPlans(families[l.famKey]||{}).filter(function(p){return p.installments&&p.installments.length>1});
+            if(famPlans.length){
+                var pInsts=famPlans[0].installments;
+                var pAmts=pInsts.map(function(i){return Math.round((Number(i.amount)||0)*100)});
+                if(pAmts.every(function(a){return a===pAmts[0]})&&pAmts[0]>0){
+                    planTag='<span style="font-size:.72rem;color:var(--s400)">'+pInsts.length+' &times; '+fm(pAmts[0]/100)+'</span>';
+                }
+            }
+
             h+='<div class="me-card" id="billfam-'+je(l.famKey)+'" style="margin-bottom:10px;cursor:pointer" onclick="CampistryMe.viewFamily(\''+je(l.famKey)+'\')">';
             h+='<div style="display:flex;align-items:center;gap:12px">';
-            h+='<input type="checkbox" class="billing-check" data-famkey="'+esc(l.famKey)+'" onclick="event.stopPropagation();CampistryMe._updateBillingBulkBar()">';
-            h+='<div style="flex:1;min-width:0"><h3 style="margin:0">'+esc(l.family.name||'')+'</h3><span style="font-size:.75rem;color:var(--s400)">'+esc(camperNames)+'</span>'+(l.pendingEnrollment?' · '+_flatStatus('Accepted — pending enrollment','warn'):'')+'</div>';
-            h+='<div style="display:flex;align-items:center;gap:10px;flex-shrink:0">'+statusBadge;
+            h+='<div style="flex:1;min-width:0"><h3 style="margin:0;font-size:.95rem;font-weight:700;color:var(--s800)">'+esc(l.family.name||'')+'</h3><span style="font-size:.75rem;color:var(--s400)">'+esc(camperNames)+'</span>'+(l.pendingEnrollment?' · '+_flatStatus('Accepted — pending enrollment','warn'):'')+'</div>';
+            h+='<div style="display:flex;align-items:center;gap:10px;flex-shrink:0">'+planTag+statusBadge;
             h+='<span style="font-size:1rem;font-weight:800;color:'+(l.balance>0?'var(--err)':'var(--ok)')+'">'+fm(l.balance)+'</span>';
             h+='<span style="font-size:1rem;color:var(--s300)">›</span></div>';
             h+='</div></div>';
@@ -10640,30 +10656,6 @@ function _installmentTableHtml(items,fontSize){
 }
 
 function setBillFilter(f){_billFilter=f;_billingPage=1;renderBilling()}
-function _updateBillingBulkBar(){
-    var n=document.querySelectorAll('.billing-check:checked').length;
-    var bar=document.getElementById('billingBulkBar'); if(bar) bar.style.display=n?'flex':'none';
-    var lbl=document.getElementById('billingBulkCount'); if(lbl) lbl.textContent=n+' selected';
-}
-function bulkExportBilling(){
-    var famKeys=Array.prototype.map.call(document.querySelectorAll('.billing-check:checked'), function(cb){ return cb.dataset.famkey; });
-    if(!famKeys.length){ toast('Select at least one account'); return; }
-    var ledgers=buildFamilyLedgers();
-    var headers=['Family','Campers','Charges','Payments','Balance','Status'];
-    var csv='﻿'+headers.map(function(h){return'"'+h+'"'}).join(',')+'\n';
-    var count=0;
-    famKeys.forEach(function(fk){
-        var l=ledgers[fk]; if(!l)return; count++;
-        var camperNames=(l.family.camperIds||[]).concat((l.pendingCamperIds||[]).map(function(n){return n+' (pending)'})).join('; ');
-        var row=[l.family.name||'',camperNames,l.totalCharges||0,l.totalPayments||0,l.balance||0,l.status||''];
-        csv+=row.map(function(v){return'"'+String(v).replace(/"/g,'""')+'"'}).join(',')+'\n';
-    });
-    var a=document.createElement('a');
-    a.href=URL.createObjectURL(new Blob([csv],{type:'text/csv'}));
-    a.download='billing_'+new Date().toISOString().split('T')[0]+'.csv';
-    a.click();
-    toast('Exported '+count+' account'+(count!==1?'s':''));
-}
 
 function openPaymentModal(){openPaymentForFamily(null)}
 
@@ -11406,6 +11398,20 @@ function _planCardHtml(l){
         var pend=plan.installments.filter(function(i){return i.status!=='paid'}).sort(function(a,b){return(a.dueDate||'').localeCompare(b.dueDate||'')});
         var next=pend[0];
         var table='<div style="background:#fff;border-radius:var(--r);overflow:hidden">'+_installmentTableHtml(plan.installments.map(function(i){return{amount:i.amount,dueDate:i.dueDate,status:i.status};}),'.88rem')+'</div>';
+        // A quick "N x $amount" read at a glance — the installment table
+        // below has the full schedule, but a manager scanning this card
+        // shouldn't have to add up rows to know the shape of the plan.
+        // Only worth showing when the plan is actually even (equal
+        // installments) — an uneven plan (first payment absorbing a
+        // remainder, manual edits) would make "8 x $287.50" a lie.
+        var summaryLine='';
+        if(plan.installments.length>1){
+            var amts=plan.installments.map(function(i){return Math.round((Number(i.amount)||0)*100)});
+            var allEqual=amts.every(function(a){return a===amts[0]});
+            if(allEqual&&amts[0]>0){
+                summaryLine='<div style="font-size:.8rem;color:var(--s500);margin-bottom:6px">'+plan.installments.length+' payments of '+fm(amts[0]/100)+' each</div>';
+            }
+        }
         var nextLine=next
             ?'<div style="font-size:.92rem;color:var(--s700);margin-bottom:14px">Next payment <strong style="font-size:1.05rem;color:var(--s900)">'+fm(next.amount)+'</strong> on '+esc(next.dueDate)+(plan.autopay&&f.cardOnFile?' <span style="color:var(--ok);font-weight:600">— auto-charges the card on file</span>':(plan.autopay?' <span style="color:var(--warn);font-weight:600">— autopay on, no card on file yet</span>':''))+'</div>'
             :'<div style="font-size:.95rem;color:var(--ok);font-weight:700;margin-bottom:14px">✓ All installments paid</div>';
@@ -11429,7 +11435,7 @@ function _planCardHtml(l){
             :'';
         return '<div style="background:var(--s50);border:1px solid var(--s200);border-radius:var(--r2);padding:16px 18px;margin-bottom:10px">'
             +'<div style="font-size:.8rem;font-weight:700;color:var(--s600);text-transform:uppercase;letter-spacing:.05em;margin-bottom:10px">Payment Plan'+sourceTag+'</div>'
-            +nextLine+table+actions+'</div>';
+            +summaryLine+nextLine+table+actions+'</div>';
     }).join('');
     return out;
 }
@@ -14139,7 +14145,6 @@ window.CampistryMe={
     mergeFamilies:mergeFamilies,dismissMergeFamilies:dismissMergeFamilies,
     addDiv:function(){openDivForm(null)},editDiv:function(n){openDivForm(n)},deleteDiv:deleteDiv,
     openCsv:function(){openModal('csvModal')},downloadTemplate:downloadTemplate,
-    _updateBillingBulkBar:_updateBillingBulkBar,bulkExportBilling:bulkExportBilling,
     setRosterPage:setRosterPage,setBillingPage:setBillingPage,setAnalyticsInvoicePage:setAnalyticsInvoicePage,setAnalyticsPaymentPage:setAnalyticsPaymentPage,
     _runSetupChecklistAction:_runSetupChecklistAction,dismissSetupChecklist:dismissSetupChecklist,
     bbDrop:bbDrop,autoAssign:autoAssign,autoGenerateBunks:autoGenerateBunks,openBunkGenSettings:openBunkGenSettings,showCamperBunkRequests:showCamperBunkRequests,clearBunks:clearBunks,setBunkCount:setBunkCount,openBunkCountModal:openBunkCountModal,_clearBunkCount:_clearBunkCount,
