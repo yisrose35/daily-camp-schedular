@@ -501,63 +501,85 @@ function _globalSearchIndex(query){
         if(results.filter(function(r){return r.type===type}).length>=5) return;
         results.push(item);
     }
-    Object.keys(roster).forEach(function(name){
-        if(name.toLowerCase().indexOf(q)<0) return;
-        var c=roster[name]||{};
-        pushIfRoom('camper',{type:'camper',label:name,sublabel:[c.division,c.bunk].filter(Boolean).join(' · ')||'Camper',
-            open:function(){nav('campers');setTimeout(function(){viewCamper(name)},50)}});
-    });
-    // Search over LEDGERS, not just families{} — a camper who's been
-    // accepted but not yet enrolled shows up as its own row on Billing
-    // (buildFamilyLedgers() synthesizes a "pending_..." ledger entry for
-    // them, flagged pendingEnrollment) but that entry is never written into
-    // families{}, so searching families{} alone made anyone in that state
-    // completely unfindable — exactly the "search doesn't work on Billing"
-    // gap. Ledgers already cover both real and pending households.
-    var _searchLedgers=buildFamilyLedgers();
-    Object.keys(_searchLedgers).forEach(function(fk){
-        var l=_searchLedgers[fk]; var f=l.family||{};
-        // Match on the household name OR any camper in it — a parent typing
-        // their kid's first name (e.g. "chana") on Billing had no way to find
-        // "Rosenfeld Family" before, since only the household name was checked.
-        var camperIds=(f.camperIds||[]).concat(l.pendingCamperIds||[]);
-        var matchedCamper=camperIds.find(function(cn){return cn&&cn.toLowerCase().indexOf(q)>=0});
-        var nameMatches=f.name&&f.name.toLowerCase().indexOf(q)>=0;
-        if(!nameMatches&&!matchedCamper) return;
-        pushIfRoom('family',{type:'family',label:f.name||matchedCamper,
-            sublabel:matchedCamper&&!nameMatches?'Camper: '+matchedCamper:camperIds.length+' camper'+(camperIds.length!==1?'s':''),
-            open:function(){nav('billing');setTimeout(function(){viewFamily(fk)},50);}});
-    });
-    (payroll.staff||[]).forEach(function(s){
-        if(!s||!s.name||s.name.toLowerCase().indexOf(q)<0) return;
-        pushIfRoom('staff',{type:'staff',label:s.name,sublabel:s.role||'Staff',
-            open:function(){nav('payroll');setTimeout(function(){prEditStaff(s.id)},50)}});
-    });
-    finPayments.forEach(function(p){
-        if(!p||!p.family||p.family.toLowerCase().indexOf(q)<0) return;
-        pushIfRoom('payment',{type:'payment',label:p.family+' — '+fm(p.amount||0),sublabel:[p.date,p.method].filter(Boolean).join(' · ')||'Payment',
-            open:function(){
-                // Prefer the stored familyKey (most payments carry one) over
-                // re-deriving it from a plain name-string match — a household
-                // rename after the payment was recorded would silently break
-                // the name lookup and leave this click doing nothing.
-                var fk=(p.familyKey&&families[p.familyKey])?p.familyKey
-                    :Object.keys(families).find(function(k){return families[k].name===p.family})||null;
-                if(fk){nav('billing');setTimeout(function(){viewFamily(fk)},50);}else nav('billing');
-            }});
-    });
-    savedReports.forEach(function(r){
-        if(!r||!r.name||r.name.toLowerCase().indexOf(q)<0) return;
-        pushIfRoom('report',{type:'report',label:r.name,sublabel:'Saved report',
-            open:function(){_repHighlight=r.id;nav('reports');}});
-    });
-    Object.keys(leads).forEach(function(id){
-        var l=leads[id]||{};
-        var nm=l.parentName||l.camperName||'';
-        if(!nm||nm.toLowerCase().indexOf(q)<0) return;
-        pushIfRoom('lead',{type:'lead',label:nm,sublabel:l.camperName&&l.camperName!==nm?('Camper: '+l.camperName):'Lead',
-            open:function(){nav('leads');setTimeout(function(){viewLead(id)},50)}});
-    });
+    // Each category is its own try/catch — one malformed record in, say,
+    // savedReports must never blank out every other category's results.
+    try{
+        Object.keys(roster).forEach(function(name){
+            if(name.toLowerCase().indexOf(q)<0) return;
+            var c=roster[name]||{};
+            // viewCamper() already navigates itself (nav('camperdetail')) —
+            // calling nav('campers') first and hoping a 50ms setTimeout wins
+            // the race against that page's own render was needless and
+            // occasionally just lost the race, especially on a slower device.
+            pushIfRoom('camper',{type:'camper',label:name,sublabel:[c.division,c.bunk].filter(Boolean).join(' · ')||'Camper',
+                open:function(){viewCamper(name)}});
+        });
+    }catch(e){console.error('[Me] search: camper index failed',e)}
+    try{
+        // Search over LEDGERS, not just families{} — a camper who's been
+        // accepted but not yet enrolled shows up as its own row on Billing
+        // (buildFamilyLedgers() synthesizes a "pending_..." ledger entry for
+        // them, flagged pendingEnrollment) but that entry is never written
+        // into families{}, so searching families{} alone made anyone in
+        // that state completely unfindable. Ledgers already cover both real
+        // and pending households.
+        var _searchLedgers=buildFamilyLedgers();
+        Object.keys(_searchLedgers).forEach(function(fk){
+            var l=_searchLedgers[fk]; var f=l.family||{};
+            // Match on the household name OR any camper in it — a parent
+            // typing their kid's first name (e.g. "chana") on Billing had no
+            // way to find "Rosenfeld Family" before, since only the
+            // household name was checked.
+            var camperIds=(f.camperIds||[]).concat(l.pendingCamperIds||[]);
+            var matchedCamper=camperIds.find(function(cn){return cn&&cn.toLowerCase().indexOf(q)>=0});
+            var nameMatches=f.name&&f.name.toLowerCase().indexOf(q)>=0;
+            if(!nameMatches&&!matchedCamper) return;
+            // viewFamily() self-navigates (nav('familydetail')) — same race
+            // fixed as above, no separate nav('billing')+setTimeout needed.
+            pushIfRoom('family',{type:'family',label:f.name||matchedCamper,
+                sublabel:matchedCamper&&!nameMatches?'Camper: '+matchedCamper:camperIds.length+' camper'+(camperIds.length!==1?'s':''),
+                open:function(){viewFamily(fk)}});
+        });
+    }catch(e){console.error('[Me] search: family index failed',e)}
+    try{
+        (payroll.staff||[]).forEach(function(s){
+            if(!s||!s.name||s.name.toLowerCase().indexOf(q)<0) return;
+            pushIfRoom('staff',{type:'staff',label:s.name,sublabel:s.role||'Staff',
+                open:function(){nav('payroll');setTimeout(function(){prEditStaff(s.id)},50)}});
+        });
+    }catch(e){console.error('[Me] search: staff index failed',e)}
+    try{
+        finPayments.forEach(function(p){
+            if(!p||!p.family||p.family.toLowerCase().indexOf(q)<0) return;
+            pushIfRoom('payment',{type:'payment',label:p.family+' — '+fm(p.amount||0),sublabel:[p.date,p.method].filter(Boolean).join(' · ')||'Payment',
+                open:function(){
+                    // Prefer the stored familyKey (most payments carry one)
+                    // over re-deriving it from a plain name-string match —
+                    // a household rename after the payment was recorded
+                    // would silently break the name lookup and leave this
+                    // click doing nothing.
+                    var fk=(p.familyKey&&families[p.familyKey])?p.familyKey
+                        :Object.keys(families).find(function(k){return families[k].name===p.family})||null;
+                    if(fk) viewFamily(fk); else nav('billing');
+                }});
+        });
+    }catch(e){console.error('[Me] search: payment index failed',e)}
+    try{
+        savedReports.forEach(function(r){
+            if(!r||!r.name||r.name.toLowerCase().indexOf(q)<0) return;
+            pushIfRoom('report',{type:'report',label:r.name,sublabel:'Saved report',
+                open:function(){_repHighlight=r.id;nav('reports');}});
+        });
+    }catch(e){console.error('[Me] search: report index failed',e)}
+    try{
+        Object.keys(leads).forEach(function(id){
+            var l=leads[id]||{};
+            var nm=l.parentName||l.camperName||'';
+            if(!nm||nm.toLowerCase().indexOf(q)<0) return;
+            pushIfRoom('lead',{type:'lead',label:nm,sublabel:l.camperName&&l.camperName!==nm?('Camper: '+l.camperName):'Lead',
+                open:function(){nav('leads');setTimeout(function(){viewLead(id)},50)}});
+        });
+    }catch(e){console.error('[Me] search: lead index failed',e)}
     return results;
 }
 function _globalSearchResultsHtml(results){
@@ -578,18 +600,34 @@ function setupSearch(){
     var dd=document.getElementById('globalSearchResults');
     var t,lastResults=[];
     function closeDD(){if(dd)dd.style.display='none'}
-    function openDD(){if(dd)dd.style.display='block'}
+    // position:fixed (see the CSS comment on .gs-dropdown) means this box is
+    // no longer laid out by its parent at all — it has to be placed by hand,
+    // from the search input's own on-screen position, every time it opens.
+    function openDD(){
+        if(!dd)return;
+        var r=inp.getBoundingClientRect();
+        dd.style.top=(r.bottom+6)+'px';
+        dd.style.left=r.left+'px';
+        dd.style.width=Math.max(280,r.width)+'px';
+        dd.style.display='block';
+    }
     inp.oninput=function(){
         clearTimeout(t);
         var val=inp.value.trim();
         if(curPage==='campers'){_rosterPage=1;renderCampers(val);}
         t=setTimeout(function(){
             if(!val){lastResults=[];closeDD();return}
-            lastResults=_globalSearchIndex(val);
+            // A bad shape in any ONE data source (a malformed saved report, a
+            // payment with no family, whatever) used to be able to throw and
+            // blank the WHOLE dropdown with zero feedback. Never let a single
+            // broken record take the rest of search down with it.
+            try{ lastResults=_globalSearchIndex(val); }
+            catch(e){ console.error('[Me] global search failed:',e); lastResults=[]; }
             if(dd){dd.innerHTML=_globalSearchResultsHtml(lastResults);openDD()}
         },200);
     };
     inp.onfocus=function(){if(inp.value.trim()&&lastResults.length)openDD()};
+    window.addEventListener('resize',function(){if(dd&&dd.style.display==='block')openDD()});
     if(dd)dd.onclick=function(ev){
         var row=ev.target.closest('.gs-result');if(!row)return;
         var type=row.dataset.type;
