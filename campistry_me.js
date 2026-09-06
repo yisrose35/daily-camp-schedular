@@ -7202,7 +7202,7 @@ function viewApplication(id){
                 if(enrollSettings.allowParentPaymentPlans){
                     b+='<div style="font-size:.8rem;color:var(--s500);margin-top:6px;">Self-serve payment plans are on — once accepted, this family can build their own plan from their Link portal.</div>';
                 }else if(famKeyForApp){
-                    b+='<button class="me-btn me-btn--sec me-btn--sm" style="margin-top:6px;" onclick="CampistryMe.monthlyPlan(\''+je(famKeyForApp)+'\')">Set Up Payment Plan</button>';
+                    b+='<button class="me-btn me-btn--sec me-btn--sm" style="margin-top:6px;" onclick="CampistryMe.openPlanCart(\''+je(famKeyForApp)+'\')">Set Up Payment Plan</button>';
                 }else{
                     b+='<div style="font-size:.8rem;color:var(--s500);margin-top:6px;">Accept &amp; enroll this application, then set up a payment plan from Billing.</div>';
                 }
@@ -10522,7 +10522,7 @@ function renderFamilyDetailPage(){
     // it means (the plan, the breakdown) — one primary action plus a
     // single "More" menu, instead of 8 buttons in a row.
     var moreItems='<button onclick="CampistryMe.sendPayLink(\''+je(l.famKey)+'\')">Send Pay Link</button>';
-    if(_fam&&_uncoveredEnrollments(l.famKey).length) moreItems+='<button onclick="CampistryMe.monthlyPlan(\''+je(l.famKey)+'\')">Set up Payment Plan</button>';
+    if(_fam&&_uncoveredEnrollments(l.famKey).length) moreItems+='<button onclick="CampistryMe.openPlanCart(\''+je(l.famKey)+'\')">Set up Payment Plan'+(_uncoveredEnrollments(l.famKey).length>1?'s':'')+'</button>';
     moreItems+=hasCard?'<button onclick="CampistryMe.requestCardSetup(\''+je(l.famKey)+'\')">Replace payment method</button>':'<button onclick="CampistryMe.requestCardSetup(\''+je(l.famKey)+'\')">Set up payment method</button>';
     moreItems+='<button onclick="CampistryMe.addChargeForFamily(\''+je(l.famKey)+'\')">Add Charge</button>';
     moreItems+='<button onclick="CampistryMe.issueCreditForFamily(\''+je(l.famKey)+'\')">Issue Credit/Refund</button>';
@@ -11473,8 +11473,110 @@ function _planCardHtml(l){
             +nextLine+table+actions+'</div>';
     }).join('');
     var uncovered=_uncoveredEnrollments(l.famKey);
-    if(uncovered.length) out+='<div style="padding-bottom:2px"><button class="me-btn me-btn--sec me-btn--sm" onclick="CampistryMe.monthlyPlan(\''+je(l.famKey)+'\')">+ Set up a plan for '+esc(uncovered.map(function(e){return e.camperName.split(' ')[0]}).join(' & '))+'</button></div>';
+    if(uncovered.length){
+        var _ucLabel=uncovered.length>1?'+ Set up plans for '+esc(uncovered.map(function(e){return e.camperName.split(' ')[0]}).join(', ')):'+ Set up a plan for '+esc(uncovered[0].camperName.split(' ')[0]);
+        out+='<div style="padding-bottom:2px"><button class="me-btn me-btn--sec me-btn--sm" onclick="CampistryMe.openPlanCart(\''+je(l.famKey)+'\')">'+_ucLabel+'</button></div>';
+    }
     return out;
+}
+
+// Payment Plan Cart — set up a separate plan per camper in one sitting,
+// each with its own amount/cadence/payment count (like scheduling several
+// student loans at once, instead of opening "Set up Payment Plan" once per
+// kid). Only used when there's more than one uncovered enrollment — with
+// just one, there's nothing to "cart" and monthlyPlan()'s single-plan
+// modal already handles it. Each line still generates its schedule via
+// the same _mpGenRows() the single-plan modal uses; this trades the
+// single modal's per-installment row editing for reviewing every camper
+// at once — fine-tuning one plan's individual payments after the fact
+// still goes through "Edit plan" (monthlyPlan with a planId).
+var _pcFamKey=null, _pcLines=[];
+function openPlanCart(famKey){
+    var f=families[famKey]; if(!f){toast('Family not found','error');return}
+    var uncovered=_uncoveredEnrollments(famKey);
+    if(!uncovered.length){toast('Nothing left to set up a plan for','error');return}
+    if(uncovered.length===1){ monthlyPlan(famKey); return; }
+    var hasCard=!!f.cardOnFile;
+    var d=new Date(); var defStart=new Date(d.getFullYear(),d.getMonth()+1,1).toISOString().split('T')[0];
+    _pcFamKey=famKey;
+    _pcLines=uncovered.map(function(e){return{id:e.id,camperName:e.camperName,net:e.net}});
+
+    var h='<div class="me-modal-form">';
+    h+='<p style="font-size:.82rem;color:var(--s500);margin:0 0 14px">Each camper below gets their own plan — set the amount, cadence, and start date for each separately, then save all of them at once. Uncheck a camper to skip them for now.</p>';
+
+    h+='<div style="background:var(--s50);border-radius:var(--r);padding:10px 12px;margin-bottom:14px;display:flex;gap:8px;align-items:flex-end;flex-wrap:wrap">';
+    h+='<div class="me-field" style="margin:0"><label style="font-size:.7rem">Cadence</label><select id="pcBulkCadence" class="me-input" style="min-width:110px"><option value="weekly">Weekly</option><option value="biweekly">Biweekly</option><option value="monthly" selected>Monthly</option></select></div>';
+    h+='<div class="me-field" style="margin:0"><label style="font-size:.7rem"># payments</label><input type="number" id="pcBulkCount" class="me-input" value="3" min="1" max="60" style="width:70px"></div>';
+    h+='<div class="me-field" style="margin:0"><label style="font-size:.7rem">First payment</label><input type="date" id="pcBulkStart" class="me-input" value="'+defStart+'" style="width:150px"></div>';
+    h+='<button type="button" class="me-btn me-btn--sec me-btn--sm" onclick="CampistryMe._pcApplyToAll()">Apply to all</button>';
+    h+='</div>';
+
+    h+='<div id="pcRows">'+_pcLines.map(function(ln,i){return _pcRowHtml(ln,i,defStart)}).join('')+'</div>';
+
+    if(hasCard) h+='<label style="display:flex;align-items:center;gap:8px;font-size:.85rem;margin-top:6px"><input type="checkbox" id="pcAutoAll" checked> Auto-charge the payment method on file for all plans below</label>';
+    else h+='<div style="font-size:.75rem;color:var(--me);margin-top:6px">No payment method on file yet — the parent can set up autopay themselves from Link, or turn it on per plan later once a card is saved.</div>';
+
+    h+='<div style="text-align:right;font-size:.8rem;color:var(--s500);margin-top:10px">Total scheduled: <strong id="pcGrandTotal" style="color:var(--s800)">'+fm(_pcLines.reduce(function(s,ln){return s+ln.net},0))+'</strong> across <span id="pcIncludedCount">'+_pcLines.length+'</span> plan'+(_pcLines.length!==1?'s':'')+'</div>';
+    h+='</div>';
+    showModal('Set Up Payment Plans',h,function(){_pcSave()});
+}
+function _pcRowHtml(line,i,defStart){
+    return '<div class="pc-row" style="border:1px solid var(--s200);border-radius:var(--r);padding:12px 14px;margin-bottom:10px" data-idx="'+i+'">'
+        +'<label style="display:flex;align-items:center;gap:8px;font-weight:700;font-size:.9rem;margin-bottom:10px"><input type="checkbox" class="pc-include" checked onchange="CampistryMe._pcUpdateTotals()"> '+esc(line.camperName)+' <span style="font-weight:600;color:var(--s400);font-size:.78rem">('+fm(line.net)+' tuition)</span></label>'
+        +'<div style="display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:8px">'
+        +'<div class="me-field" style="margin:0"><label style="font-size:.68rem">Total ($)</label><input type="number" class="me-input pc-total" value="'+line.net.toFixed(2)+'" step="0.01" min="0.5" oninput="CampistryMe._pcUpdateTotals()"></div>'
+        +'<div class="me-field" style="margin:0"><label style="font-size:.68rem">Cadence</label><select class="me-input pc-cadence"><option value="weekly">Weekly</option><option value="biweekly">Biweekly</option><option value="monthly" selected>Monthly</option></select></div>'
+        +'<div class="me-field" style="margin:0"><label style="font-size:.68rem"># payments</label><input type="number" class="me-input pc-count" value="3" min="1" max="60"></div>'
+        +'<div class="me-field" style="margin:0"><label style="font-size:.68rem">First payment</label><input type="date" class="me-input pc-start" value="'+defStart+'"></div>'
+        +'</div></div>';
+}
+function _pcApplyToAll(){
+    var cadence=(document.getElementById('pcBulkCadence')||{}).value||'monthly';
+    var count=(document.getElementById('pcBulkCount')||{}).value||3;
+    var start=(document.getElementById('pcBulkStart')||{}).value||'';
+    document.querySelectorAll('.pc-row').forEach(function(row){
+        var cSel=row.querySelector('.pc-cadence'); if(cSel)cSel.value=cadence;
+        var cnt=row.querySelector('.pc-count'); if(cnt)cnt.value=count;
+        var st=row.querySelector('.pc-start'); if(st)st.value=start;
+    });
+}
+function _pcUpdateTotals(){
+    var sum=0,n=0;
+    document.querySelectorAll('.pc-row').forEach(function(row){
+        var inc=row.querySelector('.pc-include');
+        if(inc&&inc.checked){n++;sum+=parseFloat(row.querySelector('.pc-total').value)||0}
+    });
+    var totEl=document.getElementById('pcGrandTotal'); if(totEl)totEl.textContent=fm(sum);
+    var cntEl=document.getElementById('pcIncludedCount'); if(cntEl)cntEl.textContent=n;
+}
+function _pcSave(){
+    var famKey=_pcFamKey; var f=famKey&&families[famKey]; if(!f){toast('Family not found','error');return}
+    var plans=_famPlans(f);
+    var hasCard=!!f.cardOnFile;
+    var autoAllEl=document.getElementById('pcAutoAll');
+    var autoAll=hasCard&&autoAllEl&&autoAllEl.checked;
+    var rows=document.querySelectorAll('.pc-row');
+    var toCreate=[];
+    for(var i=0;i<rows.length;i++){
+        var row=rows[i];
+        var inc=row.querySelector('.pc-include'); if(!inc||!inc.checked) continue;
+        var idx=parseInt(row.getAttribute('data-idx'),10);
+        var line=_pcLines[idx]; if(!line) continue;
+        var total=parseFloat(row.querySelector('.pc-total').value)||0;
+        var count=Math.max(1,Math.min(60,parseInt(row.querySelector('.pc-count').value,10)||1));
+        var cadence=row.querySelector('.pc-cadence').value;
+        var start=row.querySelector('.pc-start').value;
+        if(total<0.5){toast('Enter a total of at least $0.50 for '+line.camperName,'error');return}
+        if(!start){toast('Pick a first payment date for '+line.camperName,'error');return}
+        toCreate.push({line:line,total:total,count:count,cadence:cadence,start:start});
+    }
+    if(!toCreate.length){toast('Select at least one camper','error');return}
+    toCreate.forEach(function(c){
+        var insts=_mpGenRows(c.total,c.count,c.start,c.cadence).map(function(r,n){return{n:n+1,amount:r.amount,dueDate:r.dueDate,status:'pending',paymentId:null}});
+        plans.push({id:'plan_'+Date.now().toString(36)+Math.random().toString(36).slice(2,6),enrollmentIds:[c.line.id],installments:insts,autopay:!!autoAll,total:Math.round(c.total*100)/100,createdAt:new Date().toISOString(),source:'office'});
+    });
+    save();closeModal('dynModal');if(curPage==='familydetail')renderFamilyDetailPage();else renderBilling();
+    toast(toCreate.length+' payment plan'+(toCreate.length!==1?'s':'')+' created');
 }
 
 // ═══════════════════════════════════════════════════════════════
@@ -14241,6 +14343,7 @@ window.CampistryMe={
     finAddPayment:finAddPayment,finRemovePayment:finRemovePayment,
     sendPayLink:sendPayLink,copyPayLink:copyPayLink,toggleBillingAccess:toggleBillingAccess,
     monthlyPlan:monthlyPlan,toggleFamilyAutopay:toggleFamilyAutopay,cancelMonthlyPlan:cancelMonthlyPlan,_mpEnrChanged:_mpEnrChanged,
+    openPlanCart:openPlanCart,_pcApplyToAll:_pcApplyToAll,_pcUpdateTotals:_pcUpdateTotals,
     _mpGenerate:_mpGenerate,_mpAddRow:_mpAddRow,_mpUpdateTotal:_mpUpdateTotal,
     viewStaffApp:viewStaffApp,setStaffStatus:setStaffStatus,saveStaffNotes:saveStaffNotes,openAssignPositionModal:openAssignPositionModal,
     openStaffContractModal:openStaffContractModal,saveStaffContract:saveStaffContract,scPayTypeHint:scPayTypeHint,scFillFromSession:scFillFromSession,copyStaffContractLink:copyStaffContractLink,
