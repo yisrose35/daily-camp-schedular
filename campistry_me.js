@@ -11420,9 +11420,15 @@ function _planCardHtml(l){
             '</div>';
         // A distinct, lightly-tinted card — not just plain text between two
         // hairline dividers — so the single most actionable section on the
-        // page actually looks like the highlight it is.
+        // page actually looks like the highlight it is. The source tag is
+        // the round-trip: whether the family built this themselves in Link
+        // or the office set it up should be visible at a glance either way
+        // — either party can still edit/cancel it from here regardless.
+        var sourceTag=plan.source==='parent'
+            ?'<span style="font-weight:600;color:var(--s400);font-size:.68rem;text-transform:none;letter-spacing:0"> · set up by the family in Link</span>'
+            :'';
         return '<div style="background:var(--s50);border:1px solid var(--s200);border-radius:var(--r2);padding:16px 18px;margin-bottom:10px">'
-            +'<div style="font-size:.8rem;font-weight:700;color:var(--s600);text-transform:uppercase;letter-spacing:.05em;margin-bottom:10px">Payment Plan</div>'
+            +'<div style="font-size:.8rem;font-weight:700;color:var(--s600);text-transform:uppercase;letter-spacing:.05em;margin-bottom:10px">Payment Plan'+sourceTag+'</div>'
             +nextLine+table+actions+'</div>';
     }).join('');
     return out;

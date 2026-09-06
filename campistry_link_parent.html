@@ -1150,6 +1150,15 @@ function _autopaySectionHtml(cid,d,plan){
     var onFile=!!d.cardOnFile;
     var methodTxt=d.paymentMethodLabel||(d.paymentMethodType==='us_bank_account'?'a bank account':'a card');
     var body='<div style="font-size:.72rem;font-weight:700;color:var(--link-color);text-transform:uppercase;letter-spacing:.04em;margin-bottom:8px;">Payment Plan</div>';
+    // The round trip: a plan the camp office set up is visible here exactly
+    // as they built it, and there's no edit/cancel control on this page for
+    // it — changes to an office-built plan go through the camp. A plan the
+    // family built themselves in Link is editable/cancelable from the
+    // office side any time (see campistry_me.js's Payment Plan card), so
+    // this note is purely informational, not a permission gate on its own.
+    body+=plan.source==='parent'
+        ?'<div style="font-size:.72rem;color:var(--text-muted);margin-bottom:8px;">You set this plan up.</div>'
+        :'<div style="font-size:.72rem;color:var(--text-muted);margin-bottom:8px;">Set up by the camp office — contact them to change it.</div>';
     if(next){
         body+='<div style="font-size:.75rem;color:var(--text-muted);margin-bottom:2px;">Next payment</div>';
         body+='<div style="font-size:1.1rem;font-weight:700;margin-bottom:10px;">'+_lkMoney(next.amount)+' due '+String(next.dueDate||'').replace(/[<>&]/g,'')+'</div>';
