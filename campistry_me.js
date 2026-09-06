@@ -507,12 +507,20 @@ function _globalSearchIndex(query){
         pushIfRoom('camper',{type:'camper',label:name,sublabel:[c.division,c.bunk].filter(Boolean).join(' · ')||'Camper',
             open:function(){nav('campers');setTimeout(function(){viewCamper(name)},50)}});
     });
-    Object.keys(families).forEach(function(fk){
-        var f=families[fk]||{};
+    // Search over LEDGERS, not just families{} — a camper who's been
+    // accepted but not yet enrolled shows up as its own row on Billing
+    // (buildFamilyLedgers() synthesizes a "pending_..." ledger entry for
+    // them, flagged pendingEnrollment) but that entry is never written into
+    // families{}, so searching families{} alone made anyone in that state
+    // completely unfindable — exactly the "search doesn't work on Billing"
+    // gap. Ledgers already cover both real and pending households.
+    var _searchLedgers=buildFamilyLedgers();
+    Object.keys(_searchLedgers).forEach(function(fk){
+        var l=_searchLedgers[fk]; var f=l.family||{};
         // Match on the household name OR any camper in it — a parent typing
         // their kid's first name (e.g. "chana") on Billing had no way to find
         // "Rosenfeld Family" before, since only the household name was checked.
-        var camperIds=f.camperIds||[];
+        var camperIds=(f.camperIds||[]).concat(l.pendingCamperIds||[]);
         var matchedCamper=camperIds.find(function(cn){return cn&&cn.toLowerCase().indexOf(q)>=0});
         var nameMatches=f.name&&f.name.toLowerCase().indexOf(q)>=0;
         if(!nameMatches&&!matchedCamper) return;
@@ -529,7 +537,12 @@ function _globalSearchIndex(query){
         if(!p||!p.family||p.family.toLowerCase().indexOf(q)<0) return;
         pushIfRoom('payment',{type:'payment',label:p.family+' — '+fm(p.amount||0),sublabel:[p.date,p.method].filter(Boolean).join(' · ')||'Payment',
             open:function(){
-                var fk=Object.keys(families).find(function(k){return families[k].name===p.family})||null;
+                // Prefer the stored familyKey (most payments carry one) over
+                // re-deriving it from a plain name-string match — a household
+                // rename after the payment was recorded would silently break
+                // the name lookup and leave this click doing nothing.
+                var fk=(p.familyKey&&families[p.familyKey])?p.familyKey
+                    :Object.keys(families).find(function(k){return families[k].name===p.family})||null;
                 if(fk){nav('billing');setTimeout(function(){viewFamily(fk)},50);}else nav('billing');
             }});
     });
@@ -10369,7 +10382,14 @@ function prExportCSV(){
 }
 
 function viewFamily(famKey){
-    if(!families[famKey])return;
+    // Checked against LEDGERS, not families{} — an accepted-but-not-yet-
+    // enrolled camper's household only ever exists as a synthesized
+    // "pending_..." ledger entry (buildFamilyLedgers()), never written to
+    // families{}. Guarding on families{} here silently no-op'd every click
+    // into one of those rows (from Billing, from search, anywhere), even
+    // though renderFamilyDetailPage() itself already handles a pending key
+    // correctly — this was the only broken link in the chain.
+    if(!famKey||!buildFamilyLedgers()[famKey])return;
     _familyDetailKey=famKey;
     nav('familydetail');
 }
