@@ -1242,11 +1242,21 @@ function _lkPlanRefreshPreview(){
             +'<span style="font-weight:700;">'+_lkMoney(r.amount)+'</span></div>';
     }).join('');
 }
+// A double-tap on mobile (or a slow-network retry) could fire this twice
+// before either request resolved -- both hit set_my_payment_plan's row
+// lock, one creates the plan, the other then correctly sees it and
+// rejects with plan_already_exists. The plan itself was fine either way,
+// but the rejection toast landing after/on top of the success one made a
+// perfectly good save look like a failure. Guard against the race itself
+// rather than just explaining it away.
+var _lkPlanSaving=false;
 async function _lkPlanSave(){
+    if(_lkPlanSaving) return;
     var cid=_lkPlanCid; var d=cid&&_balByCamp[cid]; if(!d){toast('Balance not loaded yet');return;}
     var rows=_lkPlanBuildRows();
     if(!rows.length){toast('Add at least one payment');return;}
     lkPlanClose();
+    _lkPlanSaving=true;
     try{
         toast('Saving your payment plan…');
         var call=window._pRpc?window._pRpc('set_my_payment_plan',{p_enrollment_ids:null,p_installments:rows},cid):null;
@@ -1266,6 +1276,7 @@ async function _lkPlanSave(){
         toast('Payment plan saved!');
         loadPayments();
     }catch(err){ console.error('[Parent] plan save error:',err); toast('Could not save plan: '+(err&&err.message||'error')); }
+    finally{ _lkPlanSaving=false; }
 }
 (function _wirePlanOverlay(){
     function wire(){
