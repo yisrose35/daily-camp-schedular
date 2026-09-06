@@ -12446,6 +12446,8 @@ var _rbDraft=null; // in-progress report spec while the builder is open
 var _rbEditing=false; // true while the in-page editor (not the report list) is showing
 var _rbObserver=null; // MutationObserver on the config panel — catches filter add/remove
 var _rbLiveTimer=null; // debounce handle for the live preview
+var _rbColPrefKey=null; // per-user column layout pref key for the report currently open
+var _rbColPrefs=null; // {order,widths} loaded from getUiPref() for _rbColPrefKey, or null until loaded
 
 // Quick Reports, re-expressed as builder starting points — one click still
 // gets you the report, now it's also editable/filterable/schedulable.
@@ -12492,11 +12494,14 @@ function openReportBuilder(existingId,templateKey){
             filters:[],groupBy:'',mode:'live',schedule:{freq:'off',recipients:''}};
     }
     _rbEditing=true;
+    _rbColPrefs=null;
+    _rbColPrefKey='cols:'+(getCampId()||'camp')+':report:'+(_rbDraft.id||'draft');
+    getUiPref(_rbColPrefKey).then(function(pref){ _rbColPrefs=pref; if(_rbEditing) _rbLiveUpdate(); });
     renderReports();
 }
 
 function rbCancelEdit(){
-    _rbDraft=null; _rbEditing=false;
+    _rbDraft=null; _rbEditing=false; _rbColPrefKey=null; _rbColPrefs=null;
     if(_rbObserver){ _rbObserver.disconnect(); _rbObserver=null; }
     renderReports();
 }
@@ -12536,7 +12541,7 @@ function _rbLiveUpdate(){
         if(cnt) cnt.textContent=res.total+' row'+(res.total===1?'':'s')+(_rbDraft.groupBy?' · '+res.groups.length+' groups':'');
         if(!host) return;
         if(!_rbDraft.fields.length){ host.innerHTML='<div style="font-size:.78rem;color:var(--err)">Pick at least one field.</div>'; return; }
-        host.innerHTML=_reportTablesHtml(res,8);
+        host.innerHTML=_reportTablesHtml(res,8,{editable:true,prefKey:_rbColPrefKey,pref:_rbColPrefs});
     },150);
 }
 
@@ -12771,21 +12776,154 @@ function _computeReport(rep){
     return {fields:fields,groups:groups,total:rows.length,sourceLabel:src.label,rows:rows};
 }
 
+// ── Per-user column layout (resizable/reorderable columns, Reports Builder
+// & Print Sheets preview tables) ────────────────────────────────────────
+// The first per-USER (not per-camp) preference store in Campistry — lets a
+// staff member's own column order/widths follow them across devices
+// without touching the camp-shared report/print-sheet definition anyone
+// else on the team sees. Backed by user_ui_prefs (migration 120), RLS-gated
+// (a user can only ever read/write their own rows), so no RPC layer needed.
+var _uiPrefsCache={};
+function _uiPrefsClient(){ return window.CampistryDB&&window.CampistryDB.getClient?window.CampistryDB.getClient():window.supabase; }
+async function _uiPrefsUserId(){
+    try{
+        var client=_uiPrefsClient(); if(!client||!client.auth) return null;
+        var sess=await client.auth.getSession();
+        return (sess&&sess.data&&sess.data.session&&sess.data.session.user&&sess.data.session.user.id)||null;
+    }catch(e){ return null; }
+}
+async function getUiPref(key){
+    if(Object.prototype.hasOwnProperty.call(_uiPrefsCache,key)) return _uiPrefsCache[key];
+    try{
+        var client=_uiPrefsClient(); var uid=await _uiPrefsUserId();
+        if(!client||!uid){ _uiPrefsCache[key]=null; return null; }
+        var res=await client.from('user_ui_prefs').select('value').eq('user_id',uid).eq('pref_key',key).maybeSingle();
+        var val=(res&&!res.error&&res.data)?res.data.value:null;
+        _uiPrefsCache[key]=val;
+        return val;
+    }catch(e){ _uiPrefsCache[key]=null; return null; }
+}
+var _uiPrefSaveTimers={};
+function setUiPref(key,value){
+    _uiPrefsCache[key]=value;
+    clearTimeout(_uiPrefSaveTimers[key]);
+    _uiPrefSaveTimers[key]=setTimeout(async function(){
+        try{
+            var client=_uiPrefsClient(); var uid=await _uiPrefsUserId();
+            if(!client||!uid) return;
+            await client.from('user_ui_prefs').upsert({user_id:uid,pref_key:key,value:value,updated_at:new Date().toISOString()},{onConflict:'user_id,pref_key'});
+        }catch(e){ console.warn('[Me] setUiPref failed:',e); }
+    },400);
+}
+// Reorders a {key,...} column list to match a saved pref's order — unknown/
+// new columns (added to the report after the pref was saved) append at the
+// end in their original position rather than disappearing.
+function _applyColPrefOrder(cols,pref){
+    if(!pref||!Array.isArray(pref.order)||!pref.order.length) return cols;
+    var byKey={}; cols.forEach(function(c){byKey[c.key]=c;});
+    var out=[],seen={};
+    pref.order.forEach(function(k){ if(byKey[k]&&!seen[k]){out.push(byKey[k]);seen[k]=true;} });
+    cols.forEach(function(c){ if(!seen[c.key]){out.push(c);seen[c.key]=true;} });
+    return out;
+}
+// Drag-to-resize a <th> — mirrors the plain mousedown/mousemove pattern
+// already used for the form-builder split-panel resizer
+// (campistry_fbPanelWidth), just persisted through setUiPref instead of
+// localStorage so it follows the user across devices.
+var _colResize=null;
+function _colResizeStart(e,prefKey,colKey){
+    e.preventDefault(); e.stopPropagation();
+    var th=e.target.closest('th'); if(!th) return;
+    _colResize={prefKey:prefKey,colKey:colKey,th:th,startX:e.clientX,startW:th.getBoundingClientRect().width,width:null};
+    document.addEventListener('mousemove',_colResizeMove);
+    document.addEventListener('mouseup',_colResizeEnd);
+}
+function _colResizeMove(e){
+    if(!_colResize) return;
+    var w=Math.max(50,Math.round(_colResize.startW+(e.clientX-_colResize.startX)));
+    _colResize.th.style.width=w+'px';
+    _colResize.width=w;
+}
+function _colResizeEnd(){
+    if(!_colResize) return;
+    var r=_colResize; _colResize=null;
+    document.removeEventListener('mousemove',_colResizeMove);
+    document.removeEventListener('mouseup',_colResizeEnd);
+    if(!r.width) return;
+    getUiPref(r.prefKey).then(function(pref){
+        pref=pref||{order:[],widths:{}}; pref.widths=pref.widths||{};
+        pref.widths[r.colKey]=r.width;
+        setUiPref(r.prefKey,pref);
+    });
+}
+// Drag-to-reorder a <th> — same "move the row live under the cursor" feel
+// as the editor's own field-list reorder (rbFieldDragStart/psColDragStart),
+// but reads the final order back from the RENDERED header row and persists
+// it as a per-user override rather than mutating the camp-shared
+// report/print-sheet definition.
+var _colDrag=null;
+function _colHeaderDragStart(e,prefKey,colKey){
+    _colDrag={prefKey:prefKey,colKey:colKey,th:e.target.closest('th')};
+    try{e.dataTransfer.effectAllowed='move';e.dataTransfer.setData('text/plain',colKey);}catch(_){}
+}
+function _colHeaderDragOver(e){
+    if(!_colDrag) return;
+    e.preventDefault();
+    var th=e.target.closest('th'); if(!th||th===_colDrag.th) return;
+    var rect=th.getBoundingClientRect();
+    var after=(e.clientX-rect.left)>rect.width/2;
+    th.parentNode.insertBefore(_colDrag.th,after?th.nextSibling:th);
+}
+function _colHeaderDragEnd(){ _colDrag=null; }
+function _colHeaderDrop(e){
+    e.preventDefault();
+    if(!_colDrag) return;
+    var row=_colDrag.th.parentNode;
+    var order=Array.prototype.map.call(row.querySelectorAll('th[data-colkey]'),function(t){return t.getAttribute('data-colkey');});
+    var prefKey=_colDrag.prefKey;
+    _colDrag=null;
+    getUiPref(prefKey).then(function(pref){
+        pref=pref||{order:[],widths:{}};
+        pref.order=order;
+        setUiPref(prefKey,pref);
+    });
+}
+function _colHeaderHtml(f,w,opts){
+    if(!opts||!opts.editable){ return '<th'+(w?' style="width:'+w+'px"':'')+'>'+esc(f.label)+'</th>'; }
+    var thStyle='position:relative;cursor:grab;'+(w?('width:'+w+'px;'):'');
+    return '<th data-colkey="'+esc(f.key)+'" style="'+thStyle+'" draggable="true" '
+        +'ondragstart="CampistryMe._colHeaderDragStart(event,\''+je(opts.prefKey)+'\',\''+je(f.key)+'\')" '
+        +'ondragover="CampistryMe._colHeaderDragOver(event)" '
+        +'ondrop="CampistryMe._colHeaderDrop(event)" '
+        +'ondragend="CampistryMe._colHeaderDragEnd()">'
+        +esc(f.label)
+        +'<span onmousedown="CampistryMe._colResizeStart(event,\''+je(opts.prefKey)+'\',\''+je(f.key)+'\')" title="Drag to resize" style="position:absolute;right:0;top:0;bottom:0;width:7px;cursor:col-resize;user-select:none"></span>'
+        +'</th>';
+}
+
 // Render grouped result tables. limit>0 truncates rows per group (preview).
-function _reportTablesHtml(res,limit){
+// opts (optional): {editable:true, prefKey, pref} — enables per-user
+// drag-resize/drag-reorder on the rendered headers, reading/writing through
+// getUiPref/setUiPref above. Omitted (e.g. the print/export path) renders
+// exactly as before — no drag handles, no width overrides beyond a
+// previously-saved pref's widths.
+function _reportTablesHtml(res,limit,opts){
     if(!res.total) return '<div style="font-size:.82rem;color:var(--s400);padding:10px 0">No rows match.</div>';
+    opts=opts||{};
+    var fields=(opts.editable&&opts.pref)?_applyColPrefOrder(res.fields,opts.pref):res.fields;
+    var widths=(opts.pref&&opts.pref.widths)||{};
     var grouped=!(res.groups.length===1&&res.groups[0].key==='');
     var h='';
     res.groups.forEach(function(g){
         if(grouped) h+='<div style="font-size:.8rem;font-weight:700;color:var(--s700);margin:10px 0 4px">'+esc(g.key)+' <span style="color:var(--s400);font-weight:500">('+g.count+')</span></div>';
         h+='<div class="me-tw"><table class="me-t"><thead><tr>';
-        res.fields.forEach(function(f){ h+='<th>'+esc(f.label)+'</th>'; });
+        fields.forEach(function(f){ h+=_colHeaderHtml(f,widths[f.key],opts); });
         h+='</tr></thead><tbody>';
         var rws=(limit&&limit>0)?g.rows.slice(0,limit):g.rows;
         rws.forEach(function(r){
-            h+='<tr>'+res.fields.map(function(f){return '<td>'+esc(String(r[f.key]==null?'':r[f.key]))+'</td>';}).join('')+'</tr>';
+            h+='<tr>'+fields.map(function(f){var w=widths[f.key];return '<td'+(w?' style="width:'+w+'px"':'')+'>'+esc(String(r[f.key]==null?'':r[f.key]))+'</td>';}).join('')+'</tr>';
         });
-        if(limit&&g.rows.length>limit) h+='<tr><td colspan="'+res.fields.length+'" style="color:var(--s400);font-size:.75rem">…'+(g.rows.length-limit)+' more</td></tr>';
+        if(limit&&g.rows.length>limit) h+='<tr><td colspan="'+fields.length+'" style="color:var(--s400);font-size:.75rem">…'+(g.rows.length-limit)+' more</td></tr>';
         h+='</tbody></table></div>';
     });
     return h;
@@ -14046,16 +14184,27 @@ function psGroups(sheet){
 }
 
 // ── shared table renderer (preview + print use the same output) ──
-function psTableHtml(cols,rows){
+// opts (optional): {editable:true, prefKey, pref} — same per-user column
+// layout mechanism as _reportTablesHtml above. Only the live-preview call
+// site (psPreviewHtml) passes it; psPrint's actual print output always
+// renders plain (no drag handles, no per-viewer override — everyone should
+// print the sheet's real, shared column order).
+function psTableHtml(cols,rows,opts){
+    opts=opts||{};
+    var keyed=cols.map(function(c){return{key:c.id,label:psColHeader(c),_col:c};});
+    if(opts.editable&&opts.pref) keyed=_applyColPrefOrder(keyed,opts.pref);
+    var widths=(opts.pref&&opts.pref.widths)||{};
+    var orderedCols=keyed.map(function(k){return k._col;});
     var h='<table class="ps-tbl"><thead><tr>';
-    cols.forEach(function(col){h+='<th>'+esc(psColHeader(col))+'</th>'});
+    keyed.forEach(function(k){h+=_colHeaderHtml(k,widths[k.key],opts)});
     h+='</tr></thead><tbody>';
-    if(!rows.length){h+='<tr><td colspan="'+(cols.length||1)+'" class="ps-empty">No campers</td></tr>'}
+    if(!rows.length){h+='<tr><td colspan="'+(orderedCols.length||1)+'" class="ps-empty">No campers</td></tr>'}
     rows.forEach(function(r){
         h+='<tr>';
-        cols.forEach(function(col){
+        orderedCols.forEach(function(col){
             var v=col.field==='__blank'?'':psValue(col.field,r[0],r[1]);
-            h+='<td'+(col.field==='__blank'?' class="ps-write"':'')+'>'+esc(v)+'</td>';
+            var w=widths[col.id];
+            h+='<td'+(col.field==='__blank'?' class="ps-write"':'')+(w?' style="width:'+w+'px"':'')+'>'+esc(v)+'</td>';
         });
         h+='</tr>';
     });
@@ -14075,7 +14224,13 @@ function psNew(){
         groupBy:'',scopeDiv:'',whoScope:'campers',sortBy:'lastName',hideEmptyCols:true};
     printSheets.push(s);psSave();psEditingId=s.id;renderPrintSheets();
 }
-function psEdit(id){psEditingId=id;renderPrintSheets()}
+function psEdit(id){
+    psEditingId=id;
+    if(!(id in _psColPrefs)){
+        getUiPref(_psColPrefKey(id)).then(function(pref){ _psColPrefs[id]=pref; if(psEditingId===id) psRefreshPreview(id); });
+    }
+    renderPrintSheets();
+}
 function psBack(){psEditingId=null;renderPrintSheets()}
 async function psDelete(id){
     var ok=await confirmDialog({title:'Delete Sheet Template?',message:'Delete this sheet template?',confirmLabel:'Delete',danger:true});
@@ -14215,17 +14370,24 @@ function _psRefreshColsList(id){
 }
 
 // ── preview + print output ──
+// Per-user column layout cache for Print Sheets' live preview — same
+// mechanism as the Report Builder's _rbColPrefs, just keyed per sheet id
+// (a sheet id in _psColPrefs but with value undefined means "not loaded
+// yet"; null means "loaded, nothing saved").
+var _psColPrefs={};
+function _psColPrefKey(sheetId){ return 'cols:'+(getCampId()||'camp')+':printsheet:'+sheetId; }
 function psPreviewHtml(sheet){
     var groups=psGroups(sheet),allRows=groups.reduce(function(a,g){return a.concat(g.rows)},[]);
     var cols=psActiveColumns(sheet,allRows);
     if(!cols.length)return'<div class="split-hint">Add at least one column with a field selected to see a preview.</div>';
+    var opts={editable:true,prefKey:_psColPrefKey(sheet.id),pref:_psColPrefs[sheet.id]||null};
     var h='';
     groups.forEach(function(g){
         var gcols=psActiveColumns(sheet,g.rows);
         if(!gcols.length)gcols=cols;
         h+='<div class="ps-sheet">';
         if(sheet.groupBy)h+='<div class="ps-sheet-title">'+esc(g.label||'(Unassigned)')+' <span class="ps-count">'+g.rows.length+'</span></div>';
-        h+=psTableHtml(gcols,g.rows);
+        h+=psTableHtml(gcols,g.rows,opts);
         h+='</div>';
     });
     return h;
