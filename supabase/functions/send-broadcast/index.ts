@@ -2,7 +2,12 @@
 // send-broadcast — Deliver broadcast emails/SMS to camp families
 //
 // Request: { campId, to: [{email, name, phone, consent}], subject, body,
-//            method, campName, eventKey? }
+//            method, campName, branding?, eventKey? }
+// `branding` (optional) is the camp's Link message/email branding object
+// (logo/brandColor/footer/watermark) — when the client passes it, the sent
+// email matches the composer's live preview exactly (see
+// campistry_link_branding.js and buildBrandedEmailHtml below). Omitted
+// (existing callers that predate this) → falls back to default branding.
 // Methods: 'email', 'sms', 'all'
 //
 // Security: JWT-verified (Supabase default) + re-checks the caller's camp
@@ -44,6 +49,95 @@ const CORS = {
 
 function json(body: unknown, status = 200) {
   return new Response(JSON.stringify(body), { status, headers: { "Content-Type": "application/json", ...CORS } });
+}
+
+// ── Branding-aware email template — mirrors campistry_link_branding.js's
+// buildEmailHtml()/headerHtml()/footerHtml()/watermarkStyle() so the
+// Broadcast composer's live preview (built client-side from the exact same
+// `branding` object) matches what recipients actually receive. Ported here
+// rather than imported — a Deno edge function can't import a browser
+// <script> file directly, no supabase/functions/_shared/ exists in this
+// project — so keep this structurally in sync with campistry_link_branding.js
+// if either changes.
+function escHtml(s: unknown): string {
+  return String(s == null ? "" : s)
+    .replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;").replace(/'/g, "&#39;");
+}
+function isSafeImage(s: unknown): boolean {
+  return typeof s === "string" && /^data:image\/(png|jpeg|jpg|gif|webp);base64,[A-Za-z0-9+/=]+$/.test(s);
+}
+function isColorStr(s: unknown): boolean {
+  return typeof s === "string" && /^#[0-9a-fA-F]{3,8}$/.test(s);
+}
+type Branding = { logo: string; brandColor: string; footer: string; header: string; watermark: any };
+function normalizeBranding(raw: any): Branding {
+  const b = (raw && typeof raw === "object") ? raw : {};
+  const w = (b.watermark && typeof b.watermark === "object") ? b.watermark : {};
+  const size = Number(w.size);
+  return {
+    logo: isSafeImage(b.logo) ? b.logo : "",
+    brandColor: isColorStr(b.brandColor) ? b.brandColor : "#2A7A35",
+    footer: typeof b.footer === "string" ? b.footer : "",
+    header: (b.header === "plain" || b.header === "none") ? b.header : "bar",
+    watermark: {
+      enabled: !!w.enabled,
+      rendered: isSafeImage(w.rendered) ? w.rendered : "",
+      image: isSafeImage(w.image) ? w.image : "",
+      source: (w.source === "custom" || w.source === "text") ? w.source : "logo",
+      size: Number.isFinite(size) ? Math.min(100, Math.max(15, size)) : 55,
+      position: (w.position === "tile" || w.position === "corner") ? w.position : "center",
+    },
+  };
+}
+function watermarkStyle(b: Branding): string {
+  const w = b.watermark;
+  if (!w?.enabled) return "";
+  const img = w.rendered || (w.source === "custom" ? w.image : b.logo);
+  if (!isSafeImage(img)) return "";
+  let css = `background-image:url(${img});`;
+  if (w.position === "tile") css += `background-repeat:repeat;background-position:center;background-size:${Math.max(12, Math.round(w.size / 2))}% auto;`;
+  else if (w.position === "corner") css += `background-repeat:no-repeat;background-position:right bottom;background-size:${w.size}% auto;`;
+  else css += `background-repeat:no-repeat;background-position:center center;background-size:${w.size}% auto;`;
+  return css;
+}
+function brandHeaderHtml(b: Branding, campName: string): string {
+  if (b.header === "none") return "";
+  const logo = isSafeImage(b.logo)
+    ? `<img src="${b.logo}" alt="" width="170" style="max-height:52px;max-width:170px;width:auto;height:auto;object-fit:contain;display:block;margin:0 auto 6px;border:0;">`
+    : "";
+  if (b.header === "plain") {
+    return `<div style="padding:14px 0 10px;text-align:center;border-bottom:2px solid ${b.brandColor};">${logo}<div style="font-weight:700;font-size:15px;color:${b.brandColor};">${escHtml(campName)}</div></div>`;
+  }
+  return `<div style="background:${b.brandColor};padding:14px 18px;text-align:center;">${logo}<div style="font-weight:700;font-size:15px;color:#ffffff;letter-spacing:.01em;">${escHtml(campName)}</div></div>`;
+}
+function brandFooterHtml(b: Branding): string {
+  if (!b.footer) return "";
+  return `<div style="margin-top:18px;padding-top:12px;border-top:1px solid #e2e8f0;font-size:12px;line-height:1.55;color:#64748b;white-space:pre-wrap;">${escHtml(b.footer)}</div>`;
+}
+function buildBrandedEmailHtml(o: { subject?: string; body?: string; branding?: any; campName?: string; unsubLink?: string; campAddress?: string }): string {
+  const b = normalizeBranding(o.branding);
+  const campName = o.campName || "Camp";
+  const wm = watermarkStyle(b);
+  const bodyBg = wm ? `background-color:#ffffff;${wm}` : "background-color:#ffffff;";
+  const extras = [
+    o.unsubLink ? `<a href="${o.unsubLink}" style="color:#94a3b8;">Unsubscribe</a>` : "",
+    o.campAddress ? escHtml(o.campAddress) : "",
+  ].filter(Boolean).join(" · ");
+  return `<!DOCTYPE html>
+<html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>${escHtml(o.subject || campName)}</title></head>
+<body style="margin:0;padding:0;background:#f1f5f9;">
+<table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="background:#f1f5f9;">
+<tr><td align="center" style="padding:22px 12px;">
+<table role="presentation" width="600" cellpadding="0" cellspacing="0" border="0" style="width:600px;max-width:100%;background:#ffffff;border-radius:12px;overflow:hidden;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;">
+<tr><td>${brandHeaderHtml(b, campName)}</td></tr>
+<tr><td style="${bodyBg}padding:26px 28px 30px;">
+${o.subject ? `<div style="font-size:17px;font-weight:700;color:#0f172a;margin:0 0 12px;">${escHtml(o.subject)}</div>` : ""}
+<div style="font-size:14.5px;line-height:1.65;color:#334155;white-space:pre-wrap;">${escHtml(o.body || "")}</div>
+${brandFooterHtml(b)}
+</td></tr>
+<tr><td style="padding:14px 20px;background:#f8fafc;text-align:center;font-size:11px;color:#94a3b8;">Sent by ${escHtml(campName)} via Campistry${extras ? ` · ${extras}` : ""}</td></tr>
+</table></td></tr></table></body></html>`;
 }
 
 function phoneKey(raw: unknown): string | null {
@@ -135,7 +229,7 @@ serve(async (req) => {
   if (req.method === "OPTIONS") return new Response("ok", { headers: CORS });
 
   try {
-    const { campId, to, subject, body, method, campName, eventKey } = await req.json();
+    const { campId, to, subject, body, method, campName, branding, eventKey } = await req.json();
     if (!campId) return json({ error: "campId required" }, 400);
     if (!to?.length || !body) return json({ error: "to and body required" }, 400);
 
@@ -218,16 +312,7 @@ serve(async (req) => {
         else {
           try {
             const link = await unsubLink(recipient.email);
-            const htmlBody = `
-              <div style="font-family:sans-serif;max-width:600px;margin:0 auto;">
-                <div style="background:#2563EB;color:#fff;padding:16px 24px;border-radius:8px 8px 0 0;"><strong>${campName || "Camp"}</strong></div>
-                <div style="padding:24px;border:1px solid #e2e8f0;border-top:none;border-radius:0 0 8px 8px;">
-                  ${rSubject ? `<h2 style="margin:0 0 12px;font-size:18px;">${rSubject}</h2>` : ""}
-                  <div style="font-size:15px;line-height:1.6;color:#334155;white-space:pre-wrap;">${rBody}</div>
-                  <hr style="border:none;border-top:1px solid #e2e8f0;margin:24px 0;">
-                  <p style="font-size:12px;color:#94a3b8;">Sent via Campistry.${link ? ` <a href="${link}" style="color:#94a3b8;">Unsubscribe</a>` : ""}${campAddress ? ` ${campAddress}` : ""}</p>
-                </div>
-              </div>`;
+            const htmlBody = buildBrandedEmailHtml({ subject: rSubject, body: rBody, branding, campName, unsubLink: link, campAddress });
             const { error } = await resend.emails.send({
               from: FROM_EMAIL, to: [recipient.email],
               subject: rSubject || `Message from ${campName || "Camp"}`, html: htmlBody,

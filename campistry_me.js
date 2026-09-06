@@ -11631,13 +11631,39 @@ function renderBroadcasts(){
     c.innerHTML=h;
 }
 
+// The camp's Link message/email branding (logo/brand color/footer/
+// watermark) — same config Link's parent messaging already saves under
+// campistryLink.settings.branding in camp_state_kv. Reading it here (Link
+// doesn't need to be open) is what lets the Broadcast composer's preview
+// and the actual sent email look identical instead of two disconnected
+// templates.
+function _getLinkBranding(){
+    try{
+        var gs=(typeof window.loadGlobalSettings==='function')?window.loadGlobalSettings():JSON.parse(localStorage.getItem('campGlobalSettings_v1')||'{}');
+        var raw=gs&&gs.campistryLink&&gs.campistryLink.settings&&gs.campistryLink.settings.branding;
+        return window.LinkBranding?window.LinkBranding.normalize(raw):(raw||{logo:'',brandColor:'#2A7A35',footer:''});
+    }catch(e){ return window.LinkBranding?window.LinkBranding.defaults():{logo:'',brandColor:'#2A7A35',footer:''}; }
+}
+function _bcRefreshPreview(){
+    var wrap=document.getElementById('bcPreviewWrap');if(!wrap)return;
+    if(!window.LinkBranding){wrap.innerHTML='<div style="font-size:.8rem;color:var(--s400)">Preview unavailable</div>';return}
+    var method=document.getElementById('bcMethod');
+    var subject=document.getElementById('bcSubject');
+    var body=document.getElementById('bcBody');
+    var campName='';try{var ss=JSON.parse(localStorage.getItem('campGlobalSettings_v1')||'{}');campName=ss.camp_name||ss.campName||'Camp'}catch(e){}
+    var variant=(method&&/sms/i.test(method.value))?'sms':'email';
+    wrap.innerHTML=window.LinkBranding.buildPreviewHtml({variant:variant,campName:campName,branding:_getLinkBranding(),subject:subject?subject.value:'',body:body?body.value:''});
+}
 function openBroadcastModal(){
     var divOpts=Object.keys(structure).map(function(d){return'<option value="'+esc(d)+'">'+esc(d)+'</option>'}).join('');
-    var h='<div class="me-modal-form"><div class="me-field"><label>To</label><select id="bcTo" class="me-input" onchange="document.getElementById(\'bcDivWrap\').style.display=this.value===\'division\'?\'block\':\'none\'"><option value="all">All Families</option><option value="division">Specific Division</option><option value="enrolled">Enrolled Families Only</option><option value="staff">Staff Only</option></select></div>';
+    var h='<div class="me-modal-form" style="display:grid;grid-template-columns:1fr 1fr;gap:18px;align-items:start">';
+    h+='<div><div class="me-field"><label>To</label><select id="bcTo" class="me-input" onchange="document.getElementById(\'bcDivWrap\').style.display=this.value===\'division\'?\'block\':\'none\'"><option value="all">All Families</option><option value="division">Specific Division</option><option value="enrolled">Enrolled Families Only</option><option value="staff">Staff Only</option></select></div>';
     h+='<div id="bcDivWrap" style="display:none"><div class="me-field"><label>Division</label><select id="bcDiv" class="me-input">'+divOpts+'</select></div></div>';
-    h+='<div class="me-field"><label>Method</label><select id="bcMethod" class="me-input"><option value="In-App">In-App (Parent Portal)</option><option value="Email">Email</option><option value="SMS">SMS</option><option value="All Channels">All Channels</option></select></div>';
-    h+='<div class="me-field"><label>Subject</label><input type="text" id="bcSubject" class="me-input" placeholder="Message subject..."></div>';
-    h+='<div class="me-field"><label>Message</label><textarea id="bcBody" class="me-input" rows="6" placeholder="Type your message here..." style="resize:vertical"></textarea></div></div>';
+    h+='<div class="me-field"><label>Method</label><select id="bcMethod" class="me-input" oninput="CampistryMe._bcRefreshPreview()"><option value="In-App">In-App (Parent Portal)</option><option value="Email">Email</option><option value="SMS">SMS</option><option value="All Channels">All Channels</option></select></div>';
+    h+='<div class="me-field"><label>Subject</label><input type="text" id="bcSubject" class="me-input" placeholder="Message subject..." oninput="CampistryMe._bcRefreshPreview()"></div>';
+    h+='<div class="me-field"><label>Message</label><textarea id="bcBody" class="me-input" rows="6" placeholder="Type your message here..." style="resize:vertical" oninput="CampistryMe._bcRefreshPreview()"></textarea></div></div>';
+    h+='<div><div style="font-size:.7rem;font-weight:700;color:var(--s500);text-transform:uppercase;letter-spacing:.05em;margin-bottom:6px">Live Preview — what recipients will actually see</div><div id="bcPreviewWrap"></div></div>';
+    h+='</div>';
     showModal('New Broadcast',h,async function(){
         var to=document.getElementById('bcTo').value;
         var div=document.getElementById('bcDiv')?.value||'';
@@ -11669,7 +11695,8 @@ function openBroadcastModal(){
         }else{
             toast('Broadcast posted to the parent portal ('+count+' recipient'+(count!==1?'s':'')+')');
         }
-    });
+    },{maxWidth:820});
+    _bcRefreshPreview();
 }
 function viewBroadcast(idx){
     var sorted=[...broadcasts].sort(function(a,b){return(b.timestamp||0)-(a.timestamp||0)});
@@ -11677,9 +11704,14 @@ function viewBroadcast(idx){
     var d=b.timestamp?new Date(b.timestamp).toLocaleString():(b.date||'');
     var h='<div style="margin-bottom:12px"><div style="font-size:.7rem;color:var(--s400);text-transform:uppercase;font-weight:600">Sent</div><div>'+esc(d)+'</div></div>';
     h+='<div style="margin-bottom:12px"><div style="font-size:.7rem;color:var(--s400);text-transform:uppercase;font-weight:600">To</div><div>'+esc(b.to||'All')+' · '+esc(b.method||'In-App')+' · '+(b.recipientCount||'?')+' recipients</div></div>';
-    h+='<div style="margin-bottom:12px"><div style="font-size:.7rem;color:var(--s400);text-transform:uppercase;font-weight:600">Subject</div><div style="font-weight:600;font-size:1rem">'+esc(b.subject||'')+'</div></div>';
-    h+='<div style="background:var(--s50);padding:14px;border-radius:var(--r);font-size:.85rem;line-height:1.6;white-space:pre-wrap">'+esc(b.body||'(no body)')+'</div>';
-    showModal('Broadcast',h);
+    h+='<div style="font-size:.7rem;color:var(--s400);text-transform:uppercase;font-weight:600;margin-bottom:6px">What was sent</div>';
+    if(window.LinkBranding){
+        var campName='';try{var ss=JSON.parse(localStorage.getItem('campGlobalSettings_v1')||'{}');campName=ss.camp_name||ss.campName||'Camp'}catch(e){}
+        h+=window.LinkBranding.buildPreviewHtml({variant:/sms/i.test(b.method||'')?'sms':'email',campName:campName,branding:_getLinkBranding(),subject:b.subject||'',body:b.body||''});
+    }else{
+        h+='<div style="background:var(--s50);padding:14px;border-radius:var(--r);font-size:.85rem;line-height:1.6;white-space:pre-wrap">'+esc(b.body||'(no body)')+'</div>';
+    }
+    showModal('Broadcast',h,null,{maxWidth:520});
 }
 async function removeBroadcast(idx){
     var sorted=[...broadcasts].sort(function(a,b){return(b.timestamp||0)-(a.timestamp||0)});
@@ -12981,7 +13013,7 @@ async function sendBroadcastNow(broadcast){
     // consent (smsEmailConsent, captured on the registration/staff-apply
     // forms) — a recipient added before that consent flow existed is
     // correctly skipped rather than texted/emailed without consent on file.
-    try{return await callEdgeFunctionAuthed('send-broadcast',{campId:getCampId(),to:recipients,subject:broadcast.subject||'',body:broadcast.body||'',method:broadcast.method||'Email',campName:campName,eventKey:'me-broadcast:'+(broadcast.timestamp||Date.now())})}
+    try{return await callEdgeFunctionAuthed('send-broadcast',{campId:getCampId(),to:recipients,subject:broadcast.subject||'',body:broadcast.body||'',method:broadcast.method||'Email',campName:campName,branding:_getLinkBranding(),eventKey:'me-broadcast:'+(broadcast.timestamp||Date.now())})}
     catch(err){toast('Send failed: '+err.message,'error');return{sent:0,failed:0}}
 }
 
