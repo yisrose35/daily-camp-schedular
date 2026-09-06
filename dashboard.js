@@ -1916,6 +1916,11 @@
             allowParentPaymentPlans: !!(el && el.checked)
         });
         if (window.saveGlobalSettings) window.saveGlobalSettings('campistryMe', gs.campistryMe);
+        // Force the cloud sync now instead of waiting on the normal 500ms
+        // debounce — a camp owner flips this then immediately checks Link
+        // to confirm it worked, which is exactly the race that dropped
+        // saves elsewhere in this file (see updateSessionPriceInline).
+        if (window.flushPendingSettingsSync) window.flushPendingSettingsSync();
     };
 
     function _dashFormatDateRange(startDate, endDate) {
