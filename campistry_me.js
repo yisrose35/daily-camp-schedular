@@ -10517,6 +10517,37 @@ function renderFamilyDetailPage(){
         +'<div style="font-size:2rem;font-weight:800;line-height:1.1;color:'+(l.balance>0?'var(--err)':'var(--ok)')+'">'+fm(l.balance)+'</div></div>';
     h+='</div>';
 
+    // Action bar — moved above everything else. What you can DO on this
+    // page (record a payment, charge the card on file) belongs before what
+    // it means (the plan, the breakdown) — one primary action plus a
+    // single "More" menu, instead of 8 buttons in a row.
+    var moreItems='<button onclick="CampistryMe.sendPayLink(\''+je(l.famKey)+'\')">Send Pay Link</button>';
+    if(_fam&&_uncoveredEnrollments(l.famKey).length) moreItems+='<button onclick="CampistryMe.monthlyPlan(\''+je(l.famKey)+'\')">Set up Payment Plan</button>';
+    moreItems+=hasCard?'<button onclick="CampistryMe.requestCardSetup(\''+je(l.famKey)+'\')">Replace payment method</button>':'<button onclick="CampistryMe.requestCardSetup(\''+je(l.famKey)+'\')">Set up payment method</button>';
+    moreItems+='<button onclick="CampistryMe.addChargeForFamily(\''+je(l.famKey)+'\')">Add Charge</button>';
+    moreItems+='<button onclick="CampistryMe.issueCreditForFamily(\''+je(l.famKey)+'\')">Issue Credit/Refund</button>';
+    moreItems+='<button onclick="CampistryMe.printStatement(\''+je(l.famKey)+'\')">Print Statement</button>';
+    moreItems+='<button onclick="CampistryMe.editFamily(\''+je(l.famKey)+'\')">Edit Household</button>';
+    moreItems+='<button onclick="CampistryMe.toggleBillingAccess(\''+je(l.famKey)+'\')">'+(families[l.famKey]?.billingAccessClosed?'Reopen billing access':'Close billing access')+'</button>';
+    moreItems+='<button onclick="CampistryMe.deleteFamily(\''+je(l.famKey)+'\')" style="color:var(--err)">Delete Household</button>';
+    h+='<div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;padding-bottom:16px;margin-bottom:16px;border-bottom:1px solid var(--s100)">'
+        +'<button class="me-btn me-btn--pri" onclick="CampistryMe.openPaymentForFamily(\''+je(l.famKey)+'\')">Record Payment</button>'
+        +(hasCard&&l.balance>0?'<button class="me-btn me-btn--sec" onclick="CampistryMe.chargeStoredCard(\''+je(l.famKey)+'\')">Charge Card</button>':'')
+        +'<span style="font-size:.8rem;color:'+(hasCard?'var(--ok)':'var(--s400)')+'">'+(hasCard?esc(_fam.paymentMethodLabel||(_fam.paymentMethodType==='us_bank_account'?'Bank account on file':'Card on file')):'No payment method on file')+'</span>'
+        +'<span style="flex:1"></span>'
+        +'<div class="me-more-wrap"><button class="me-btn me-btn--sec" onclick="CampistryMe._toggleMenu(\''+moreId+'\')">More ⋯</button>'
+        +'<div class="me-more-menu" id="'+moreId+'">'+moreItems+'</div></div>'
+        +'</div>';
+
+    // Payment Plan(s) — right under the action bar. This is the single
+    // most actionable thing on the page besides recording a payment
+    // (what's due next, is autopay on) — burying it at the bottom below
+    // the full ledger and Household made it easy to miss. No accordion
+    // here: it should always be visible, not something you have to know
+    // to expand.
+    var planHtml=_planCardHtml(l);
+    if(planHtml) h+='<div style="padding-bottom:16px">'+planHtml+'</div>';
+
     // Charges / Payments (gross, before any refund) / Credits / Refunds as
     // a row of plain label-over-value tiles instead of a dense run-on
     // sentence plus a separate "Balance = ..." formula line underneath —
@@ -10528,39 +10559,11 @@ function renderFamilyDetailPage(){
     var _stats=[{label:'Charges',value:l.totalCharges,color:'var(--s800)'},{label:'Payments',value:l.totalGrossPayments,color:'var(--ok)'}];
     if(l.totalCredits>0) _stats.push({label:'Credits',value:l.totalCredits,color:'var(--purple)'});
     if(l.totalRefunds>0) _stats.push({label:'Refunds',value:l.totalRefunds,color:'var(--err)'});
-    h+='<div style="display:flex;gap:26px;flex-wrap:wrap;padding-bottom:16px;margin-bottom:16px;border-bottom:1px solid var(--s100)">'
+    h+='<div style="display:flex;gap:26px;flex-wrap:wrap;padding-bottom:2px">'
         +_stats.map(function(s){
             return '<div><div style="font-size:.68rem;font-weight:700;color:var(--s400);text-transform:uppercase;letter-spacing:.05em;margin-bottom:2px">'+s.label+'</div>'
                 +'<div style="font-size:1.1rem;font-weight:700;color:'+s.color+'">'+fm(s.value)+'</div></div>';
         }).join('')
-        +'</div>';
-
-    // Payment Plan(s) — right under the balance, before anything else. This
-    // is the single most actionable thing on the page (what's due next, is
-    // autopay on) — burying it at the bottom below the full ledger and
-    // Household made it easy to miss. No accordion here: it should always
-    // be visible, not something you have to know to expand.
-    var planHtml=_planCardHtml(l);
-    if(planHtml) h+='<div style="padding-bottom:2px">'+planHtml+'</div>';
-
-    // Action bar — one primary action plus a single "More" menu, instead of
-    // 8 buttons in a row. Payment-method status is plain text, not a pill.
-    var moreItems='<button onclick="CampistryMe.sendPayLink(\''+je(l.famKey)+'\')">Send Pay Link</button>';
-    if(_fam&&_uncoveredEnrollments(l.famKey).length) moreItems+='<button onclick="CampistryMe.monthlyPlan(\''+je(l.famKey)+'\')">Set up Payment Plan</button>';
-    moreItems+=hasCard?'<button onclick="CampistryMe.requestCardSetup(\''+je(l.famKey)+'\')">Replace payment method</button>':'<button onclick="CampistryMe.requestCardSetup(\''+je(l.famKey)+'\')">Set up payment method</button>';
-    moreItems+='<button onclick="CampistryMe.addChargeForFamily(\''+je(l.famKey)+'\')">Add Charge</button>';
-    moreItems+='<button onclick="CampistryMe.issueCreditForFamily(\''+je(l.famKey)+'\')">Issue Credit/Refund</button>';
-    moreItems+='<button onclick="CampistryMe.printStatement(\''+je(l.famKey)+'\')">Print Statement</button>';
-    moreItems+='<button onclick="CampistryMe.editFamily(\''+je(l.famKey)+'\')">Edit Household</button>';
-    moreItems+='<button onclick="CampistryMe.toggleBillingAccess(\''+je(l.famKey)+'\')">'+(families[l.famKey]?.billingAccessClosed?'Reopen billing access':'Close billing access')+'</button>';
-    moreItems+='<button onclick="CampistryMe.deleteFamily(\''+je(l.famKey)+'\')" style="color:var(--err)">Delete Household</button>';
-    h+='<div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;padding:14px 0;border-bottom:1px solid var(--s100)">'
-        +'<button class="me-btn me-btn--pri me-btn--sm" onclick="CampistryMe.openPaymentForFamily(\''+je(l.famKey)+'\')">Record Payment</button>'
-        +(hasCard&&l.balance>0?'<button class="me-btn me-btn--sec me-btn--sm" onclick="CampistryMe.chargeStoredCard(\''+je(l.famKey)+'\')">Charge Card</button>':'')
-        +'<span style="font-size:.75rem;color:'+(hasCard?'var(--ok)':'var(--s400)')+'">'+(hasCard?esc(_fam.paymentMethodLabel||(_fam.paymentMethodType==='us_bank_account'?'Bank account on file':'Card on file')):'No payment method on file')+'</span>'
-        +'<span style="flex:1"></span>'
-        +'<div class="me-more-wrap"><button class="me-btn me-btn--sec me-btn--sm" onclick="CampistryMe._toggleMenu(\''+moreId+'\')">More ⋯</button>'
-        +'<div class="me-more-menu" id="'+moreId+'">'+moreItems+'</div></div>'
         +'</div>';
 
     // Everything below here is reference material, not something you need
@@ -10569,7 +10572,7 @@ function renderFamilyDetailPage(){
     // pattern as the Form Customizer) instead of one long undifferentiated
     // scroll. Nothing is hidden by default; this just gives each section a
     // clear heading you can collapse once you've seen it.
-    h+='<div style="padding-top:14px">';
+    h+='<div style="padding-top:16px;margin-top:16px;border-top:1px solid var(--s100)">';
     h+=_accCard('Household',_famHouseholdHtml(l.famKey,l.family),{key:'famDetailHousehold_'+l.famKey,open:false});
 
     // Ledger entries table
