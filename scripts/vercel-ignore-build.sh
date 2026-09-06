@@ -42,19 +42,34 @@ fi
 # this script -- would skip its own deploy.
 subject="$(git log -1 --pretty=%s 2>/dev/null || echo '')"
 
+# Computed here (rather than at step 3) so the [skip ci] exception below can
+# see it too. If we cannot tell what changed (first commit, shallow clone,
+# force push), build.
+if ! changed="$(git diff --name-only HEAD^ HEAD 2>/dev/null)"; then
+    echo "BUILD: cannot diff against HEAD^ (shallow or first commit)"
+    exit 1
+fi
+
 # ── 2. Explicit opt-out in the commit message ────────────────────────────────
-# Covers the OTA release commits, which never change the web app.
-if printf '%s' "$subject" | grep -qiE '\[(skip ci|ci skip|skip vercel|vercel skip)\]'; then
+# Covers the OTA release TRIGGER commit (bumping ota/RELEASE), which never
+# changes the web app.
+#
+# EXCEPT the OTA workflow's own manifest-writeback commit ("OTA: publish
+# link 1.0.NN [skip ci]") -- it carries this same marker but must NOT be
+# skipped: api/ota.js does `require('../ota/link.json')`, so that file's
+# content is baked into the Vercel function at BUILD time. Skipping this
+# commit's build means /api/ota keeps serving the OLD version forever, no
+# matter how many times a phone checks -- the update-check endpoint itself
+# never learns a new version exists. Confirmed live: 1.0.71 was published
+# and the manifest committed, but every device stayed on 1.0.69 because
+# this exact skip silently ate the rebuild that would have served it.
+if printf '%s' "$subject" | grep -qiE '\[(skip ci|ci skip|skip vercel|vercel skip)\]' \
+    && ! printf '%s' "$changed" | grep -qE '^ota/(lite|link)\.json$'; then
     echo "SKIP: commit message opts out of CI"
     exit 0
 fi
 
 # ── 3. Otherwise decide on the files actually touched ────────────────────────
-# If we cannot tell what changed (first commit, shallow clone, force push), build.
-if ! changed="$(git diff --name-only HEAD^ HEAD 2>/dev/null)"; then
-    echo "BUILD: cannot diff against HEAD^ (shallow or first commit)"
-    exit 1
-fi
 if [ -z "$changed" ]; then
     echo "BUILD: no diff reported, not risking a skip"
     exit 1

@@ -11,6 +11,15 @@
 // "Mobile — OTA release" workflow. So publishing an update is a git push, same
 // as publishing a change to the website.
 //
+// Because these are require()'d, whatever they say is frozen into THIS
+// function at Vercel's build time — a manifest commit does nothing here
+// until Vercel actually rebuilds. The workflow's manifest-writeback commit
+// carries [skip ci] (it never touches the web bundle a browser loads), and
+// scripts/vercel-ignore-build.sh used to treat that as "safe to skip" —
+// which meant this endpoint kept serving the OLD version forever, no
+// matter how many times a device checked in. Fixed there: an ota/*.json
+// change is now exempt from the [skip ci] skip.
+//
 // What this can and cannot ship:
 //   CAN  — anything in the web bundle: HTML, CSS, JS, images.
 //   CANNOT — native changes (plugins, permissions, app icon, native config).
