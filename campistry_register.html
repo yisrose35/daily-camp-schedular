@@ -430,6 +430,51 @@ function esc(s){
         .replace(/'/g,'&#39;');
 }
 function v(id){return(document.getElementById(id)?.value||'').trim()}
+// Strict allowlist sanitizer for a camp-authored "Text Block" custom-section
+// field (bold/list/link only — see Me → Customize Form → Custom Sections).
+// Runs a detached <template>'s content through a tag/attribute walk rather
+// than a regex — this content came from the office's own save, already
+// sanitized once there, but is sanitized AGAIN here since this is a public,
+// unauthenticated page and defense in depth costs nothing.
+var RICH_ALLOWED_TAGS={B:1,STRONG:1,I:1,EM:1,UL:1,OL:1,LI:1,BR:1,P:1,A:1,DIV:1};
+function sanitizeRichHtml(html){
+    if(!html)return'';
+    var tpl=document.createElement('template');
+    tpl.innerHTML=String(html);
+    (function walk(node){
+        var child=node.firstChild;
+        while(child){
+            var next=child.nextSibling;
+            if(child.nodeType===1){
+                var tag=child.tagName;
+                if(!RICH_ALLOWED_TAGS[tag]){
+                    while(child.firstChild)node.insertBefore(child.firstChild,child);
+                    node.removeChild(child);
+                    child=next;continue;
+                }
+                Array.prototype.slice.call(child.attributes).forEach(function(a){
+                    if(tag==='A'&&a.name==='href'){
+                        if(!/^(https?:|mailto:)/i.test(a.value))child.removeAttribute('href');
+                    }else{child.removeAttribute(a.name);}
+                });
+                if(tag==='A'){
+                    if(!child.getAttribute('href')){
+                        while(child.firstChild)node.insertBefore(child.firstChild,child);
+                        node.removeChild(child);
+                        child=next;continue;
+                    }
+                    child.setAttribute('target','_blank');
+                    child.setAttribute('rel','noopener noreferrer');
+                }
+                walk(child);
+            }else if(child.nodeType!==3){
+                node.removeChild(child);
+            }
+            child=next;
+        }
+    })(tpl.content);
+    return tpl.innerHTML;
+}
 function fm(n){return'$'+Number(n||0).toLocaleString()}
 window.regToggleSummer=function(){
     var on=document.getElementById('rSummerSame'),b=document.getElementById('rSummerBlock');
@@ -605,6 +650,11 @@ function applyFormConfig(fc){
     // markup mirrors the customQuestions loop above exactly, just keyed
     // data-sec/data-f instead of data-q so answers can be collected per
     // section on submit without colliding with the flat customAnswers bag.
+    // A 'richtext' field is display-only camp-authored text (bold/list/link)
+    // — no input, nothing to submit — so it's sanitized again here
+    // (defense in depth on top of the sanitizing already done when the
+    // office saved it) and rendered directly, skipping the .fg/label wrapper
+    // every other field type uses.
     var secHolderEl=document.getElementById('customSectionsHolder');
     if(secHolderEl){
         var secsHtml='';
@@ -612,6 +662,10 @@ function applyFormConfig(fc){
             if(!sec||!sec.label)return;
             secsHtml+='<div class="cd"><div class="ct"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="10"/><path d="M9.09 9a3 3 0 015.83 1c0 2-3 3-3 3"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg>'+esc(sec.label)+'</div>';
             (sec.fields||[]).forEach(function(f,fi){
+                if(f.type==='richtext'){
+                    secsHtml+='<div class="fg" style="margin-bottom:10px"><div style="font-size:.9rem;line-height:1.6;color:#334155">'+sanitizeRichHtml(f.html||'')+'</div></div>';
+                    return;
+                }
                 secsHtml+='<div class="fg">';
                 secsHtml+='<label class="fl">'+esc(f.label)+(f.required?'<span class="rq">*</span>':'')+'</label>';
                 if(f.type==='text')secsHtml+='<input class="fi secInput" data-sec="'+si+'" data-f="'+fi+'">';

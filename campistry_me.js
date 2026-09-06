@@ -6692,27 +6692,135 @@ function renderCustomSection(sec,sid,prefix){
     h+='<div style="display:flex;gap:6px;align-items:center;margin-bottom:8px">';
     h+='<input class="fi '+secCls+'Label" style="flex:1;font-weight:600;font-size:.85rem;padding:6px 8px" value="'+esc(sec.label||'')+'" placeholder="Section name, e.g. Dad\'s Info">';
     h+='<button type="button" class="me-btn me-btn--ghost" style="color:var(--err);font-size:.7rem;white-space:nowrap" onclick="this.closest(\'.'+secCls+'\').remove()">✕ Remove Section</button></div>';
-    h+='<div id="'+listId+'">'+fields.map(function(f){return renderCustomQ(f,-1,prefix);}).join('')+'</div>';
+    h+='<div id="'+listId+'">'+fields.map(function(f){return f.type==='richtext'?renderTextBlockRow(f,prefix):renderCustomQ(f,-1,prefix);}).join('')+'</div>';
+    h+='<div style="display:flex;gap:6px">';
     h+='<button type="button" class="me-btn me-btn--sec me-btn--sm" onclick="CampistryMe.addSectionField(\''+prefix+'\',\''+sid+'\')">+ Add Field</button>';
+    h+='<button type="button" class="me-btn me-btn--sec me-btn--sm" onclick="CampistryMe.addSectionTextBlock(\''+prefix+'\',\''+sid+'\')">+ Add Text Block</button>';
+    h+='</div>';
     h+='</div>';
     return h;
 }
+// A "Text Block" — camp-authored, display-only text (bold/list/link, no
+// input) shown to whoever fills out the public form, e.g. a welcome
+// paragraph or a policy blurb inside a Custom Section. Unlike every other
+// field type (renderCustomQ), it collects nothing on submit — its own
+// distinct row/class (qCls+'Rich') so it never gets mixed up with an
+// actual input field by _readCustomSections below.
+function renderTextBlockRow(tb,prefix){
+    prefix=prefix||'fc';
+    tb=tb||{};
+    var cls=prefix+'QRich';
+    var h='<div class="'+cls+'" style="border:1px solid var(--s200);border-radius:var(--r);padding:10px 12px;margin-bottom:6px;background:#fff">';
+    h+='<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px">';
+    h+='<span style="font-size:.68rem;font-weight:700;color:var(--s500);text-transform:uppercase;letter-spacing:.04em">Text Block — shown to whoever fills out this form</span>';
+    h+='<button type="button" class="me-btn me-btn--ghost" style="color:var(--err);font-size:.7rem" onclick="this.closest(\'.'+cls+'\').remove()">✕</button></div>';
+    h+=_richTextToolbarHtml(cls);
+    h+='<div class="'+cls+'Html" contenteditable="true" style="min-height:64px;border:1px solid var(--s300);border-radius:var(--r);padding:8px 10px;font-size:.85rem;line-height:1.55;background:var(--s50)">'+_sanitizeRichHtml(tb.html||'')+'</div>';
+    h+='</div>';
+    return h;
+}
+// A minimal 3-button toolbar (Bold / Bullet List / Link) over a
+// contenteditable div — deliberately not a full rich-text editor, matching
+// the ask. Uses document.execCommand: legacy, but still supported in every
+// shipping browser and the pragmatic fit for a "no build step, no
+// framework" codebase — hand-rolling Range-based bold/list wrapping that's
+// robust across arbitrary partial selections is a much bigger, riskier
+// undertaking than 3 buttons warrant. onmousedown preventDefault keeps the
+// contenteditable's selection alive through the button click.
+function _richTextToolbarHtml(cls){
+    return '<div style="display:flex;gap:4px;margin-bottom:6px">'
+        +'<button type="button" class="me-btn me-btn--ghost me-btn--sm" style="font-weight:700" onmousedown="event.preventDefault()" onclick="CampistryMe._richTextExec(event,\''+cls+'\',\'bold\')">B</button>'
+        +'<button type="button" class="me-btn me-btn--ghost me-btn--sm" onmousedown="event.preventDefault()" onclick="CampistryMe._richTextExec(event,\''+cls+'\',\'list\')">• List</button>'
+        +'<button type="button" class="me-btn me-btn--ghost me-btn--sm" onmousedown="event.preventDefault()" onclick="CampistryMe._richTextExec(event,\''+cls+'\',\'link\')">🔗 Link</button>'
+        +'</div>';
+}
+function _richTextExec(e,cls,cmd){
+    if(e&&e.preventDefault)e.preventDefault();
+    var wrap=e.target.closest('.'+cls);
+    var div=wrap&&wrap.querySelector('.'+cls+'Html');
+    if(!div)return;
+    div.focus();
+    if(cmd==='bold') document.execCommand('bold');
+    else if(cmd==='list') document.execCommand('insertUnorderedList');
+    else if(cmd==='link'){
+        var url=prompt('Link URL (must start with http://, https://, or mailto:)','https://');
+        if(!url)return;
+        if(!/^(https?:\/\/|mailto:)/i.test(url)){toast('Link must start with http://, https://, or mailto:','error');return}
+        document.execCommand('createLink',false,url);
+    }
+}
+// Strict allowlist sanitizer — a Text Block's HTML is admin-authored but
+// still runs through this before it's ever stored or rendered anywhere
+// (the builder's own contenteditable, and again on every public form
+// before .innerHTML — see campistry_register.html etc.). A detached
+// <template>'s content is walked tag-by-tag rather than matched with a
+// regex (regex HTML sanitization is exactly the kind of thing that quietly
+// breaks): anything not in the allowlist is unwrapped (its children kept,
+// the element itself dropped), every attribute is stripped except a
+// verified http(s)/mailto href on <a>, and target/rel are forced on links.
+var _RICH_ALLOWED_TAGS={B:1,STRONG:1,I:1,EM:1,UL:1,OL:1,LI:1,BR:1,P:1,A:1,DIV:1};
+function _sanitizeRichHtml(html){
+    if(!html)return'';
+    var tpl=document.createElement('template');
+    tpl.innerHTML=String(html);
+    (function walk(node){
+        var child=node.firstChild;
+        while(child){
+            var next=child.nextSibling;
+            if(child.nodeType===1){
+                var tag=child.tagName;
+                if(!_RICH_ALLOWED_TAGS[tag]){
+                    while(child.firstChild)node.insertBefore(child.firstChild,child);
+                    node.removeChild(child);
+                    child=next;continue;
+                }
+                Array.prototype.slice.call(child.attributes).forEach(function(a){
+                    if(tag==='A'&&a.name==='href'){
+                        if(!/^(https?:|mailto:)/i.test(a.value))child.removeAttribute('href');
+                    }else{child.removeAttribute(a.name);}
+                });
+                if(tag==='A'){
+                    if(!child.getAttribute('href')){
+                        while(child.firstChild)node.insertBefore(child.firstChild,child);
+                        node.removeChild(child);
+                        child=next;continue;
+                    }
+                    child.setAttribute('target','_blank');
+                    child.setAttribute('rel','noopener noreferrer');
+                }
+                walk(child);
+            }else if(child.nodeType!==3){
+                node.removeChild(child);
+            }
+            child=next;
+        }
+    })(tpl.content);
+    return tpl.innerHTML;
+}
 // Reads back every .{prefix}Sec container under #{prefix}SecList — each
-// one's fields are read the SAME way _readCustomQuestions reads a flat
-// list, just scoped to that one section's own nested container instead of
-// the document (querySelectorAll on a subtree naturally can't cross into a
-// sibling section's fields, so no extra bookkeeping is needed to keep
-// sections from bleeding into each other after an Add/Remove).
+// one's fields (input fields AND Text Blocks, in DOM order) are read the
+// SAME way _readCustomQuestions reads a flat list, just scoped to that one
+// section's own nested container instead of the document (querySelectorAll
+// on a subtree naturally can't cross into a sibling section's fields, so
+// no extra bookkeeping is needed to keep sections from bleeding into each
+// other after an Add/Remove).
 function _readCustomSections(prefix){
     prefix=prefix||'fc';
     var secCls=prefix+'Sec';
     var qCls=prefix+'Q';
+    var richCls=qCls+'Rich';
     var out=[];
     document.querySelectorAll('#'+prefix+'SecList .'+secCls).forEach(function(secEl){
         var label=secEl.querySelector('.'+secCls+'Label')?.value?.trim();
         if(!label)return;
         var fields=[];
-        secEl.querySelectorAll('.'+qCls).forEach(function(el){
+        secEl.querySelectorAll('.'+qCls+', .'+richCls).forEach(function(el){
+            if(el.classList.contains(richCls)){
+                var htmlEl=el.querySelector('.'+richCls+'Html');
+                var html=_sanitizeRichHtml(htmlEl?htmlEl.innerHTML:'');
+                if(html.replace(/<[^>]*>/g,'').trim()||/<img|<a /i.test(html)) fields.push({type:'richtext',html:html});
+                return;
+            }
             var flabel=el.querySelector('.'+qCls+'Label')?.value?.trim();
             var type=el.querySelector('.'+qCls+'Type')?.value||'text';
             var required=el.querySelector('.'+qCls+'Req')?.checked||false;
@@ -6738,6 +6846,14 @@ function addSectionField(prefix,sid){
     if(!list)return;
     var div=document.createElement('div');
     div.innerHTML=renderCustomQ({label:'',type:'text',required:false,options:[]},-1,prefix);
+    list.appendChild(div.firstChild);
+}
+function addSectionTextBlock(prefix,sid){
+    prefix=prefix||'fc';
+    var list=document.getElementById(prefix+'Sec_'+sid+'List');
+    if(!list)return;
+    var div=document.createElement('div');
+    div.innerHTML=renderTextBlockRow({html:''},prefix);
     list.appendChild(div.firstChild);
 }
 
@@ -14499,7 +14615,10 @@ window.CampistryMe={
     addFamily:function(){openFamilyForm(null)},editFamily:function(id){openFamilyForm(id)},deleteFamily:deleteFamily,removeCamperFromFamily:removeCamperFromFamily,
     setPplStaffSubTab:setPplStaffSubTab,viewStaffMember:viewStaffMember,openEditStaffModal:openEditStaffModal,saveStaffMember:saveStaffMember,
     acceptFamilySuggestion:acceptFamilySuggestion,dismissFamilySuggestion:dismissFamilySuggestion,acceptAddToFamily:acceptAddToFamily,
-    mergeFamilies:mergeFamilies,dismissMergeFamilies:dismissMergeFamilies,
+    mergeFamilies:mergeFamilies,dismissMergeFamilies:dismissMergeFamilies,openMergeFamiliesTool:openMergeFamiliesTool,
+    _bcRefreshPreview:_bcRefreshPreview,
+    _colResizeStart:_colResizeStart,_colHeaderDragStart:_colHeaderDragStart,_colHeaderDragOver:_colHeaderDragOver,_colHeaderDrop:_colHeaderDrop,_colHeaderDragEnd:_colHeaderDragEnd,
+    addSectionTextBlock:addSectionTextBlock,_richTextExec:_richTextExec,
     addDiv:function(){openDivForm(null)},editDiv:function(n){openDivForm(n)},deleteDiv:deleteDiv,
     openCsv:function(){openModal('csvModal')},downloadTemplate:downloadTemplate,
     setRosterPage:setRosterPage,setBillingPage:setBillingPage,setAnalyticsInvoicePage:setAnalyticsInvoicePage,setAnalyticsPaymentPage:setAnalyticsPaymentPage,
