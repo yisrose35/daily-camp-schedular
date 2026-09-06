@@ -1927,6 +1927,20 @@
                     const ld = Object.keys(localState.divisions || {}).length;
                     const cd = Object.keys(cloudState.divisions || {}).length;
                     if (cd > ld) cloudHasMoreData = true;
+                    // Sessions & Pricing / bundles: a Dashboard page can run
+                    // its own auto-sync (half-session creation, id backfill)
+                    // against a pre-hydration local snapshot and save it
+                    // before this hydration ever completes, leaving local
+                    // with FEWER (not zero) sessions/bundles than cloud
+                    // actually has — the narrow empty-array guard further
+                    // below only catches the zero case. Catch "meaningfully
+                    // fewer" here too, same as roster/bunks/divisions above.
+                    const ls = (localState.campistryMe && localState.campistryMe.sessions) || [];
+                    const cs = (cloudState.campistryMe && cloudState.campistryMe.sessions) || [];
+                    if (cs.length > ls.length) cloudHasMoreData = true;
+                    const lsb = (localState.campistryMe && localState.campistryMe.sessionBundles) || [];
+                    const csb = (cloudState.campistryMe && cloudState.campistryMe.sessionBundles) || [];
+                    if (csb.length > lsb.length) cloudHasMoreData = true;
                 } catch (_) {}
 
                 let mergedState;

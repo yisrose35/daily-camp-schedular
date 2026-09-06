@@ -1854,6 +1854,37 @@
     // page loads.
     var _dashEnrollments = {};
 
+    // ★ FIX: Sessions & Pricing (prices, bundles) silently reverting/
+    // resetting. Root cause: setupDashboardForRole() calls
+    // loadSessionsSection()/loadCampDates() synchronously on page load,
+    // well before integration_hooks.js's cloud hydration (a real Supabase
+    // round trip) has finished — so both can run against a stale/partial
+    // pre-hydration local snapshot. loadSessionsSection()'s id-backfill and
+    // _dashSyncHalfSessions()'s half-session sync each auto-SAVE whenever
+    // they detect a change, and that save's freshly-bumped updated_at then
+    // wins hydrateFromCloud()'s "which is newer" merge — silently writing
+    // the incomplete pre-hydration sessions/bundles back over the real
+    // cloud data (same failure shape as the earlier $0-tuition bug, via a
+    // new path). Gate: automatic/programmatic saves from those two paths
+    // are held until cloud hydration has actually completed at least
+    // once; explicit user saves (Add/Edit Session, bundle editor, inline
+    // price edit) are NEVER gated by this — they're intentional and must
+    // always go through.
+    var _dashSessionsCloudHydrated = false;
+    window.addEventListener('campistry-cloud-hydrated', function _dashOnCloudHydrated() {
+        _dashSessionsCloudHydrated = true;
+        // Re-read from the now-hydrated cache and re-run the half-session
+        // sync against real data, so any correction that was skipped pre-
+        // hydration still happens — just safely, against the real numbers.
+        if (document.getElementById('sessionsList')) {
+            loadSessionsSection();
+            if (userRole === 'owner') loadCampDates(false);
+        }
+    });
+    // Safety fallback — a camp with no cloud config, or a failed/unusually
+    // slow hydration, must not permanently block legitimate auto-saves.
+    setTimeout(function() { _dashSessionsCloudHydrated = true; }, 8000);
+
     function _dashGenId() {
         return 's_' + Date.now().toString(36) + Math.random().toString(36).slice(2, 8);
     }
@@ -1904,7 +1935,11 @@
             // it shifts on delete/reorder).
             var idsAdded = false;
             _dashSessions.forEach(function(s) { if (!s.id) { s.id = _dashGenId(); idsAdded = true; } });
-            if (idsAdded) _dashSaveSessions();
+            // Never auto-save from a pre-hydration snapshot — see the
+            // _dashSessionsCloudHydrated comment above. Once hydration
+            // fires, this whole function re-runs against the real cloud
+            // data and backfills/saves correctly then.
+            if (idsAdded && _dashSessionsCloudHydrated) _dashSaveSessions();
             renderSessionsList();
             renderBundlesList();
             var allowPPEl = document.getElementById('allowParentPaymentPlans');
@@ -1974,9 +2009,13 @@
             }
         });
         if (changed) {
-            _dashSaveSessions();
             renderSessionsList();
             renderBundlesList();
+            // Never auto-save from a pre-hydration snapshot — see the
+            // _dashSessionsCloudHydrated comment above _dashGenId(). Once
+            // hydration fires, loadCampDates() re-runs this whole function
+            // against the real cloud sessions and saves correctly then.
+            if (_dashSessionsCloudHydrated) _dashSaveSessions();
         }
     }
 
@@ -2193,6 +2232,10 @@
             if (existing) _dashSessions[idx] = obj;
             else _dashSessions.push(obj);
             _dashSaveSessions();
+            // Force the cloud sync now instead of waiting on the normal
+            // debounce — same reasoning as updateSessionPriceInline above:
+            // navigating away inside the debounce window drops the save.
+            if (window.flushPendingSettingsSync) window.flushPendingSettingsSync();
             renderSessionsList();
             window.cancelSessionForm();
             if (status) { status.textContent = (existing ? 'Session updated.' : 'Session created.'); status.style.color = '#059669'; setTimeout(function() { status.textContent = ''; }, 3000); }
@@ -2209,6 +2252,7 @@
         s.registrationOpen = s.registrationOpen === false;
         try {
             _dashSaveSessions();
+            if (window.flushPendingSettingsSync) window.flushPendingSettingsSync();
             renderSessionsList();
         } catch (e) {
             console.error('Error toggling session registration:', e);
@@ -2234,6 +2278,7 @@
                 renderBundlesList();
             }
             renderSessionsList();
+            if (window.flushPendingSettingsSync) window.flushPendingSettingsSync();
         } catch (e) {
             console.error('Error deleting session:', e);
         }
@@ -2330,6 +2375,7 @@
             if (idx != null && _dashBundles[idx]) _dashBundles[idx] = obj;
             else _dashBundles.push(obj);
             _dashSaveBundles();
+            if (window.flushPendingSettingsSync) window.flushPendingSettingsSync();
             renderBundlesList();
             window.cancelBundleForm();
             if (status) { status.textContent = (idx != null ? 'Bundle updated.' : 'Bundle created.'); status.style.color = '#059669'; setTimeout(function() { status.textContent = ''; }, 3000); }
@@ -2347,6 +2393,7 @@
         try {
             _dashBundles.splice(idx, 1);
             _dashSaveBundles();
+            if (window.flushPendingSettingsSync) window.flushPendingSettingsSync();
             renderBundlesList();
         } catch (e) {
             console.error('Error deleting bundle:', e);
