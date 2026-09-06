@@ -63,10 +63,13 @@
     const profileCampName = document.getElementById('profileCampName');
     const profileAddress = document.getElementById('profileAddress');
     const profileContactEmail = document.getElementById('profileContactEmail');
+    const profileTaxId = document.getElementById('profileTaxId');
     const profileEmail = document.getElementById('profileEmail');
     const editCampName = document.getElementById('editCampName');
     const editAddress = document.getElementById('editAddress');
     const editContactEmail = document.getElementById('editContactEmail');
+    const editTaxId = document.getElementById('editTaxId');
+    const editShowTaxId = document.getElementById('editShowTaxId');
     const profileError = document.getElementById('profileError');
     const profileSuccess = document.getElementById('profileSuccess');
     
@@ -821,6 +824,8 @@
         let displayCampName = campName || currentUser.user_metadata?.camp_name || 'Your Camp';
         let campAddress = campData?.address || '';
         let campContactEmail = campData?.contact_email || '';
+        let campTaxId = campData?.tax_id || '';
+        let campShowTaxId = !!campData?.show_tax_id_on_statements;
 
         console.log('📊 Final display values:', { displayCampName, userName, campAddress, campContactEmail });
 
@@ -837,6 +842,9 @@
         if (profileContactEmail) {
             profileContactEmail.textContent = campContactEmail || 'Not set';
         }
+        if (profileTaxId) {
+            profileTaxId.textContent = campTaxId ? (campTaxId + (campShowTaxId ? ' (shown on statements)' : ' (not shown on statements)')) : 'Not set';
+        }
 
         // Pre-fill edit form (only relevant for owners)
         if (editCampName) {
@@ -847,6 +855,12 @@
         }
         if (editContactEmail) {
             editContactEmail.value = campContactEmail;
+        }
+        if (editTaxId) {
+            editTaxId.value = campTaxId;
+        }
+        if (editShowTaxId) {
+            editShowTaxId.checked = campShowTaxId;
         }
 
         // Load stats from cloud storage — deliberately NOT awaited. This reads
@@ -1032,6 +1046,8 @@
         const newCampName = editCampName?.value.trim();
         const newAddress = editAddress?.value.trim();
         const newContactEmail = editContactEmail?.value.trim() || null;
+        const newTaxId = editTaxId?.value.trim() || null;
+        const newShowTaxId = !!editShowTaxId?.checked;
 
         if (!newCampName) {
             if (profileError) profileError.textContent = 'Camp name is required.';
@@ -1053,7 +1069,7 @@
                 // request is approved), never a manually-edited profile field.
                 const { error } = await window.supabase
                     .from('camps')
-                    .update({ name: newCampName, address: newAddress, contact_email: newContactEmail })
+                    .update({ name: newCampName, address: newAddress, contact_email: newContactEmail, tax_id: newTaxId, show_tax_id_on_statements: newShowTaxId })
                     .eq('id', campData.id);
 
                 if (error) throw error;
@@ -1069,6 +1085,8 @@
                         const _gs = window.loadGlobalSettings() || {};
                         if (!_gs.app1) _gs.app1 = {};
                         _gs.app1.campName = newCampName;
+                        _gs.app1.taxId = newTaxId;
+                        _gs.app1.showTaxIdOnStatements = newShowTaxId;
                         window.saveGlobalSettings('app1', _gs.app1);
                         window.saveGlobalSettings('campName', newCampName);
                         window.saveGlobalSettings('camp_name', newCampName);
@@ -1113,7 +1131,9 @@
                         owner: currentUser.id,
                         name: newCampName,
                         address: newAddress,
-                        contact_email: newContactEmail
+                        contact_email: newContactEmail,
+                        tax_id: newTaxId,
+                        show_tax_id_on_statements: newShowTaxId
                     }])
                     .select()
                     .single();
@@ -1129,6 +1149,7 @@
             if (profileCampName) profileCampName.textContent = newCampName;
             if (profileAddress) profileAddress.textContent = newAddress || 'Not set';
             if (profileContactEmail) profileContactEmail.textContent = newContactEmail || 'Not set';
+            if (profileTaxId) profileTaxId.textContent = newTaxId ? (newTaxId + (newShowTaxId ? ' (shown on statements)' : ' (not shown on statements)')) : 'Not set';
             if (campNameDisplay) campNameDisplay.textContent = newCampName;
             
             updateWelcomeMessage();

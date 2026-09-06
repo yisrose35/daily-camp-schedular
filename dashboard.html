@@ -285,6 +285,10 @@
                         <span class="profile-value" id="profileContactEmail">Not set</span>
                     </div>
                     <div class="profile-row">
+                        <span class="profile-label">Tax ID / EIN</span>
+                        <span class="profile-value" id="profileTaxId">Not set</span>
+                    </div>
+                    <div class="profile-row">
                         <span class="profile-label">Account Email</span>
                         <span class="profile-value" id="profileEmail">Loading...</span>
                     </div>
@@ -302,6 +306,14 @@
                         <label for="editContactEmail">Camp Contact Email</label>
                         <input type="email" id="editContactEmail" placeholder="office@yourcamp.com">
                         <small style="color:var(--text-muted,#64748b);font-size:.75rem;">Shown as the reply-to address on automated emails sent to parents — a parent's reply reaches this inbox, not Campistry.</small>
+                    </div>
+                    <div class="form-group">
+                        <label for="editTaxId">Tax ID / EIN</label>
+                        <input type="text" id="editTaxId" placeholder="12-3456789">
+                        <label style="display:flex;align-items:center;gap:6px;margin-top:6px;font-weight:400;">
+                            <input type="checkbox" id="editShowTaxId" style="width:auto;margin:0;">
+                            Show on printed statements
+                        </label>
                     </div>
                     <div class="form-actions">
                         <button type="button" class="btn-secondary" onclick="cancelEdit()">Cancel</button>
@@ -792,7 +804,7 @@ if (window.location.protocol === 'file:') {
     <script src="local_cache_idb.js?v=20260903-03"></script>
     <script src="integration_hooks.js?v=20260904-03"></script>
     <script src="cloud_sync_helpers.js?v=20260903-03"></script>
-    <script src="dashboard.js?v=20260904-05"></script>
+    <script src="dashboard.js?v=20260906-01"></script>
     <script src="campistry_birthdays.js?v=20260903-03"></script>
     <script src="badges.js?v=20260903-03"></script>
     <script src="access_control.js?v=20260903-03"></script>
