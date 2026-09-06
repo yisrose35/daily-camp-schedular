@@ -11010,8 +11010,14 @@ function printStatement(famKey){
     // Installment schedule
     var insts=l.entries.filter(function(e){return e.type==='installment'});
     if(insts.length){
-        h+='<h2>Payment Schedule</h2><table><thead><tr><th>Installment</th><th>Due Date</th><th class="right">Amount</th><th>Status</th></tr></thead><tbody>';
-        insts.forEach(function(i){h+='<tr><td>'+esc(i.category||i.desc)+'</td><td>'+esc(i.date||'')+'</td><td class="right bold">'+fm(i.amount)+'</td><td>'+esc(i.status||'pending')+'</td></tr>'});
+        var _plan=(_famPlans(l.family)||[])[0];
+        var _autopayOn=!!(_plan&&_plan.autopay);
+        if(_autopayOn){
+            var _hasCard=!!l.family.cardOnFile;
+            h+='<div style="background:'+(_hasCard?'#F0FDF4':'#FFFBEB')+';border:1px solid '+(_hasCard?'#BBF7D0':'#FDE68A')+';padding:9px 12px;border-radius:4px;margin-bottom:8px;font-size:9pt;color:'+(_hasCard?'#166534':'#92400E')+'">'+(_hasCard?'Autopay is ON — these installments will be charged automatically to the card on file on each due date.':'Autopay is ON, but no card is on file yet — installments will not be charged automatically until a card is added.')+'</div>';
+        }
+        h+='<h2>Payment Schedule</h2><table><thead><tr><th>Installment</th><th>Due Date</th><th class="right">Amount</th><th>Status</th><th>Autopay</th></tr></thead><tbody>';
+        insts.forEach(function(i){h+='<tr><td>'+esc(i.category||i.desc)+'</td><td>'+esc(i.date||'')+'</td><td class="right bold">'+fm(i.amount)+'</td><td>'+esc(i.status||'pending')+'</td><td>'+(_autopayOn?'Yes':'—')+'</td></tr>'});
         h+='</tbody></table>';
     }
     h+='<div style="margin-top:30px;text-align:center;color:#999;font-size:9pt">Powered by Campistry</div>';
