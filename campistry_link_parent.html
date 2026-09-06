@@ -17,7 +17,7 @@
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link href="https://fonts.googleapis.com/css2?family=Roboto:wght@400;500;700;900&family=Roboto+Flex:opsz,wght@8..144,400;8..144,500;8..144,700;8..144,900&display=swap" rel="stylesheet">
     <link rel="stylesheet" href="campistry-unified.css?v=20260903-03">
-    <link rel="stylesheet" href="campistry_link.css?v=20260903-03">
+    <link rel="stylesheet" href="campistry_link.css?v=20260903-04">
     <!-- Splash screen — inline so it appears before any external CSS -->
     <style>
         #link-splash {
@@ -228,22 +228,22 @@
                 <div class="lk-home-tile-sub" id="homeMsgSub"></div>
             </div>
         </button>
-        <button class="lk-home-tile featured" data-page="canteen" data-accent="gold" onclick="nav('canteen')">
+        <button class="lk-home-tile featured" data-page="payments" data-accent="gold" onclick="nav('payments')">
+            <div class="lk-home-tile-icon">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><rect x="1" y="4" width="22" height="16" rx="2"/><line x1="1" y1="10" x2="23" y2="10"/></svg>
+            </div>
+            <div class="lk-home-tile-body">
+                <div class="lk-home-tile-label">Payments</div>
+                <div class="lk-home-tile-sub" id="homePaymentsSub">Tuition & balance</div>
+            </div>
+        </button>
+        <button class="lk-home-tile" data-page="canteen" data-accent="teal" onclick="nav('canteen')">
             <div class="lk-home-tile-icon">
                 <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><path d="M18 8h1a4 4 0 0 1 0 8h-1"/><path d="M2 8h16v9a4 4 0 0 1-4 4H6a4 4 0 0 1-4-4V8z"/></svg>
             </div>
             <div class="lk-home-tile-body">
                 <div class="lk-home-tile-label">Canteen</div>
                 <div class="lk-home-tile-sub" id="homeCanteenSub"></div>
-            </div>
-        </button>
-        <button class="lk-home-tile" data-page="lists" data-accent="teal" onclick="nav('lists')">
-            <div class="lk-home-tile-icon">
-                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><line x1="8" y1="6" x2="21" y2="6"/><line x1="8" y1="12" x2="21" y2="12"/><line x1="8" y1="18" x2="21" y2="18"/><polyline points="3 6 4 7 6 5"/><polyline points="3 12 4 13 6 11"/><polyline points="3 18 4 19 6 17"/></svg>
-            </div>
-            <div class="lk-home-tile-body">
-                <div class="lk-home-tile-label">Lists</div>
-                <div class="lk-home-tile-sub" id="homeListsSub">Packing &amp; checklists</div>
             </div>
         </button>
         <button class="lk-home-tile" data-page="forms" data-accent="azure" onclick="nav('forms')">
@@ -301,6 +301,15 @@
                 <div class="lk-home-tile-sub" id="homePhotosSub">Coming soon</div>
             </div>
         </button>
+        <button class="lk-home-tile" data-page="lists" data-accent="rose" onclick="nav('lists')">
+            <div class="lk-home-tile-icon">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><line x1="8" y1="6" x2="21" y2="6"/><line x1="8" y1="12" x2="21" y2="12"/><line x1="8" y1="18" x2="21" y2="18"/><polyline points="3 6 4 7 6 5"/><polyline points="3 12 4 13 6 11"/><polyline points="3 18 4 19 6 17"/></svg>
+            </div>
+            <div class="lk-home-tile-body">
+                <div class="lk-home-tile-label">Lists</div>
+                <div class="lk-home-tile-sub" id="homeListsSub">Packing &amp; checklists</div>
+            </div>
+        </button>
     </div>
     <div id="homeMessages" style="display:none;"></div>
 </div>
@@ -324,6 +333,7 @@
     <div class="lk-page-hero-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="1" y="4" width="22" height="16" rx="2"/><line x1="1" y1="10" x2="23" y2="10"/></svg></div>
     <div><h1>Payments</h1><p>Your tuition and payment history</p></div>
 </div>
+    <div id="paymentsCampTabs"></div>
     <div id="payBalanceCards"></div>
     <div class="lk-card"><div class="lk-card-head"><h2>Payment History</h2></div>
         <table class="lk-table"><thead><tr><th>Date</th><th>Description</th><th>Amount</th><th>Status</th></tr></thead><tbody id="payTable"></tbody></table>
@@ -1003,72 +1013,77 @@ async function _lkPhotoUrls(photoIds){
     var resp=await fetch(s.url+'/functions/v1/get-photo-urls',{method:'POST',headers:{'Content-Type':'application/json','Authorization':'Bearer '+token,'apikey':s.anonKey||''},body:JSON.stringify({photoIds:photoIds})});
     var data=await resp.json(); if(!resp.ok||data.error) throw new Error(data.error||'Could not load photos'); return data.urls||{};
 }
+// Which camp's card is showing on the Payments page right now — a family
+// with kids at more than one camp gets a chip row (same pattern as the
+// camper switch on Canteen/Camp Shop) instead of every camp's card stacked
+// vertically; only one camp's balance/history is on screen at a time.
+var _payCamps={};
+var _payActiveCid=null;
 function loadPayments(){
     var host=document.getElementById('payBalanceCards'); var pt=document.getElementById('payTable'); if(!host) return;
     // isCurrent per camp, not just the name — used below only as a tie-break
-    // for which single paid-up camp to show when nothing is owed anywhere
-    // (an owed balance always shows regardless of isCurrent — see the
-    // owed/clear split further down). Uses parent.billingCamps (set in
-    // _augmentOtherCamps), not `children` — billing access can outlive a
-    // closed portal (migration 070), and a billing-only camp never gets its
-    // campers merged into `children` since that would also resurrect
-    // messaging/forms entry points that are supposed to stay closed. A
-    // billing-only camp (portal_active===false) is never "current".
+    // for which camp is active by default when nothing is owed anywhere.
+    // Uses parent.billingCamps (set in _augmentOtherCamps), not `children` —
+    // billing access can outlive a closed portal (migration 070), and a
+    // billing-only camp never gets its campers merged into `children` since
+    // that would also resurrect messaging/forms entry points that are
+    // supposed to stay closed. A billing-only camp (portal_active===false)
+    // is never "current".
     var campList=(typeof parent!=='undefined'&&parent&&parent.billingCamps&&parent.billingCamps.length)
         ? parent.billingCamps
         : (children||[]).map(function(c){ return {camp_id:c.campId, camp_name:c.campName, isCurrent:c.campIsCurrent!==false, portal_active:true}; });
     var camps={}; campList.forEach(function(cp){ var cid=cp.camp_id; if(cid) camps[cid]={name:cp.camp_name||'', isCurrent:cp.isCurrent!==false && cp.portal_active!==false}; });
     var ids=Object.keys(camps);
     if(!ids.length && parent && parent.campId){ camps[parent.campId]={name:'',isCurrent:true}; ids=[parent.campId]; }
-    if(!ids.length){ host.innerHTML=''; if(pt)_renderPayHistory(pt,[]); return; }
+    _payCamps=camps;
+    var tabsHost=document.getElementById('paymentsCampTabs');
+    if(!ids.length){ host.innerHTML=''; if(pt)_renderPayHistory(pt,[]); if(tabsHost)tabsHost.innerHTML=''; return; }
     host.innerHTML='<div class="lk-card" style="padding:18px;text-align:center;color:var(--text-muted);">Loading your balance…</div>';
-    var cards={}, allHistory=[], done=0;
+    var done=0;
     ids.forEach(function(cid){
         var call=window._pRpc?window._pRpc('get_my_balance',{},cid):(window._parentDB&&window._parentDB.rpc('get_my_balance',{p_camp_id:cid}));
         Promise.resolve(call).then(function(res){
             var d=(res&&res.data)?res.data:null;
-            if(d&&d.success){ _balByCamp[cid]=d; cards[cid]=_payCardHtml(cid,camps[cid].name,d); (d.payments||[]).forEach(function(p){allHistory.push(p);}); }
+            if(d&&d.success) _balByCamp[cid]=d;
         }).catch(function(){}).then(function(){
             done++; if(done===ids.length){
-                // Group by whether money is actually owed, not by "current
-                // camp" — burying a real balance behind a collapsed "other
-                // camps" toggle just because it isn't this family's active
-                // camp is backwards for a page whose whole job is showing
-                // what you owe. Only fully-paid-up camps get tucked away.
+                _paintPaymentsHomeSub();
                 var owedIds=ids.filter(function(id){ var d=_balByCamp[id]; return d && Number(d.balance)>0.005; });
-                var clearIds=ids.filter(function(id){ return owedIds.indexOf(id)<0; });
-                var shownIds=owedIds, collapsedIds=clearIds;
-                if(!owedIds.length){
-                    // Nothing owed anywhere — still show one paid-up card
-                    // directly (the current camp, if there is one) rather
-                    // than an empty page behind a toggle; only collapse the
-                    // rest if there's more than one.
-                    var firstClear=clearIds.filter(function(id){return camps[id].isCurrent;})[0]||clearIds[0];
-                    shownIds=firstClear?[firstClear]:[];
-                    collapsedIds=clearIds.filter(function(id){return id!==firstClear;});
+                if(!_payActiveCid || !_balByCamp[_payActiveCid]){
+                    _payActiveCid = owedIds[0] || ids.filter(function(id){return camps[id].isCurrent;})[0] || ids[0];
                 }
-                var shownHtml=shownIds.map(function(id){return cards[id]||'';}).join('');
-                var collapsedHtml=collapsedIds.map(function(id){return cards[id]||'';}).join('');
-                var html=shownHtml || '<div class="lk-card" style="padding:20px;text-align:center;color:var(--text-muted);">No balance on file. If you expect one, contact the camp office.</div>';
-                if(collapsedIds.length){
-                    html+='<div style="margin-top:16px;">'+
-                        '<button type="button" onclick="_togglePastCamps(this)" style="width:100%;display:flex;align-items:center;justify-content:space-between;gap:10px;padding:12px 16px;background:none;border:1px solid var(--line,#e5e7eb);border-radius:12px;color:var(--text-muted);font-size:.85rem;font-weight:600;cursor:pointer;">'+
-                        '<span>Other camps ('+collapsedIds.length+') — paid up</span>'+
-                        '<span aria-hidden="true">▾</span></button>'+
-                        '<div style="display:none;margin-top:10px;">'+collapsedHtml+'</div>'+
-                        '</div>';
-                }
-                host.innerHTML=html;
-                _renderPayHistory(pt,allHistory);
+                if(ids.length>1){
+                    _renderCampSwitch('paymentsCampTabs', ids.map(function(id){
+                        return {id:id, name:camps[id].name||'Camp', owed:owedIds.indexOf(id)>=0};
+                    }), function(c){ _showPaymentsCamp(c.id); }, _payActiveCid);
+                } else if(tabsHost){ tabsHost.innerHTML=''; }
+                _showPaymentsCamp(_payActiveCid);
             }
         });
     });
 }
-function _togglePastCamps(btn){
-    var box=btn.nextElementSibling; if(!box) return;
-    var open=box.style.display!=='none';
-    box.style.display=open?'none':'';
-    var arrow=btn.querySelector('span[aria-hidden]'); if(arrow) arrow.textContent=open?'▾':'▴';
+function _showPaymentsCamp(cid){
+    _payActiveCid=cid;
+    var host=document.getElementById('payBalanceCards'); if(!host) return;
+    var d=cid&&_balByCamp[cid];
+    host.innerHTML = d ? _payCardHtml(cid,(_payCamps[cid]||{}).name||'',d)
+        : '<div class="lk-card" style="padding:20px;text-align:center;color:var(--text-muted);">No balance on file. If you expect one, contact the camp office.</div>';
+    var pt=document.getElementById('payTable');
+    if(pt) _renderPayHistory(pt,(d&&d.payments)||[]);
+}
+// Sums outstanding balance across every camp already fetched this session —
+// runs after loadPayments()'s own fetch, and also opportunistically once at
+// boot (see the pre-warm call in init()) so the Home tile isn't stuck on its
+// static placeholder until the parent actually opens Payments once.
+function _paintPaymentsHomeSub(){
+    var sub=document.getElementById('homePaymentsSub'); if(!sub) return;
+    var ids=Object.keys(_payCamps);
+    if(!ids.length){ ids=Object.keys(_balByCamp); }
+    if(!ids.length) return;
+    var total=0, any=false;
+    ids.forEach(function(id){ var d=_balByCamp[id]; if(d){ any=true; total+=Math.max(0,Number(d.balance)||0); } });
+    if(!any) return;
+    sub.textContent = total>0.005 ? _lkMoney(total)+' due' : 'All paid up';
 }
 function _lkToggleDetails(id){
     var el=document.getElementById(id); if(!el) return;
@@ -1421,6 +1436,31 @@ function _renderCamperSwitch(containerId, onSelect, activeId, skipInitialFire){
         // tap should count as "switched." Such pages read the active chip
         // themselves for the initial render instead.
         if (isActive && !skipInitialFire) onSelect(c, chip);
+    });
+}
+
+// Same chip-row pattern as _renderCamperSwitch above, generalized for
+// camps instead of children — a family with kids at more than one camp
+// needed a way to flip between camps on Payments the same way they already
+// flip between kids on Canteen. Takes an explicit list ({id,name,owed}) since
+// there's no global `camps` array the way there's a global `children`.
+function _renderCampSwitch(containerId, camps, onSelect, activeId){
+    var el = document.getElementById(containerId); if(!el) return;
+    el.classList.add('lk-camper-switch');
+    el.innerHTML = '';
+    camps.forEach(function(c,i){
+        var isActive = activeId ? (c.id === activeId) : (i === 0);
+        var chip = document.createElement('button');
+        chip.type = 'button';
+        chip.className = 'lk-camper-chip lk-camp-chip' + (isActive ? ' active' : '');
+        chip.dataset.campId = c.id;
+        chip.innerHTML = '<span class="lk-camper-chip-name">'+_escHtml(c.name)+'</span>'+(c.owed?'<span class="lk-camp-chip-dot" aria-label="Balance due"></span>':'');
+        chip.onclick = function(){
+            el.querySelectorAll('.lk-camper-chip').forEach(function(b){ b.classList.remove('active'); });
+            chip.classList.add('active');
+            onSelect(c, chip);
+        };
+        el.appendChild(chip);
     });
 }
 
@@ -2030,6 +2070,11 @@ function init(){
         if(children.length){ _renderCamperSwitch('canteenTabs', function(c){ switchCanteen(c.id); }); }
         else{ct.innerHTML='';var ca=document.getElementById('canteenAmt');if(ca)ca.textContent='$0.00';var tl=document.getElementById('txList');if(tl)tl.innerHTML='<div class="lk-empty" style="padding:24px 0;"><h3>No canteen accounts yet</h3></div>';}
     }
+
+    // Payments — pre-fetch once at boot (not just when the page is opened)
+    // so the Home tile's balance subtitle isn't stuck on its placeholder
+    // text until the parent visits Payments directly.
+    if(typeof loadPayments==='function') setTimeout(loadPayments,300);
 
     // Schedule date label
     var today=new Date(schedBaseDateMs+schedDateOffset*86400000);
