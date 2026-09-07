@@ -92,7 +92,13 @@ for (const entry of FILES) {
 }
 
 // ── Bundle-completeness check ────────────────────────────────────────────────
-const REF_RE = /['"]([A-Za-z0-9_@.\-]+\.(?:js|css|png|svg|webmanifest|html))['"]/g;
+// Every <script src> in this codebase uses a cache-bust query string (e.g.
+// "campistry_ota.js?v=20260903-04") — the closing quote never sits right
+// after the extension, so a pattern requiring the extension to be immediately
+// followed by a quote would silently match almost nothing. This optional,
+// non-capturing group eats the query string before the closing quote while
+// still capturing just the bare filename in group 1.
+const REF_RE = /['"]([A-Za-z0-9_@.\-]+\.(?:js|css|png|svg|webmanifest|html))(?:\?[^'"]*)?['"]/g;
 // Third-party bundles: nothing in them refers to a repo file, and their
 // minified strings ("Node.js") trip the reference scan.
 const SKIP_SCAN = new Set(['supabase-js@2.js', 'jsqr@1.4.0.js']);
