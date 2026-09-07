@@ -4229,7 +4229,12 @@ if (window.pdfjsLib) { window.pdfjsLib.GlobalWorkerOptions.workerSrc = 'pdfjs-di
         parent.name   = d.parent_name  || 'Parent';
         parent.email  = d.parent_email || '';
         parent.campId = d.camp_id      || null;
-        var names = (d.camper_names && d.camper_names.length) ? d.camper_names : Object.keys(d.camper_data || {});
+        // A disconnected invite (migration 122 — this parent's last camper
+        // left the roster) keeps camper_names/camper_data frozen forever so
+        // billing/photos keep matching by name, but that's not a normal
+        // "My Children" card anymore — show none rather than a phantom kid
+        // who isn't actually enrolled anywhere.
+        var names = (d.camp_connected === false) ? [] : ((d.camper_names && d.camper_names.length) ? d.camper_names : Object.keys(d.camper_data || {}));
         var realChildren = names.map(function(name, idx) {
             var c = (d.camper_data && d.camper_data[name]) || {};
             var initials = name.split(' ').map(function(p){return p[0]||''}).join('').toUpperCase().slice(0,2);
@@ -4351,6 +4356,13 @@ if (window.pdfjsLib) { window.pdfjsLib.GlobalWorkerOptions.workerSrc = 'pdfjs-di
             var others = parent.camps.filter(function(cp){ return cp.camp_id !== primaryCampId; });
             if (!others.length) { init(); initPickupTabs(); _afterMergeReloadCloud(); _checkConnectableCamps(); return; } // single connected camp — but still check for pending invites on OTHER camps
             others.forEach(function(cp){
+                // A disconnected camp (migration 122 — this parent's last
+                // camper left that camp's roster) keeps its camper_names/
+                // camper_data frozen for billing/photos, but shouldn't add
+                // a phantom "My Children" card for a kid who isn't actually
+                // enrolled anywhere — same guard as _applyData's primary-camp
+                // build above.
+                if (cp.camp_connected === false) return;
                 var cnames = (cp.camper_names && cp.camper_names.length) ? cp.camper_names : Object.keys(cp.camper_data || {});
                 cnames.forEach(function(name){
                     var c = (cp.camper_data && cp.camper_data[name]) || {};
