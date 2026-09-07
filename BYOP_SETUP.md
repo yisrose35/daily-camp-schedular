@@ -20,27 +20,37 @@ nothing changes unless a camp is explicitly walked through the setup below.
 
 ## What's built right now
 
-- **Migration `126_byop_processor_framework.sql`** — the extensible
-  processor catalog, `camps.payment_processor_key`, the (Vault-backed,
-  never-plaintext) credential storage table, and the processor-agnostic
-  transaction log. Paste this into the Supabase SQL Editor.
-  - If `CREATE EXTENSION supabase_vault` fails with a permissions error,
-    enable it once via **Dashboard → Database → Extensions → search
-    "supabase_vault" → Enable**, then re-run the migration.
+- **Migrations `126_byop_processor_framework.sql` and
+  `127_add_banquest_processor.sql`** — the extensible processor catalog,
+  `camps.payment_processor_key`, the (Vault-backed, never-plaintext)
+  credential storage table, the processor-agnostic transaction log, and the
+  catalog row registering Banquest. Paste both into the Supabase SQL
+  Editor, in order.
+  - If `CREATE EXTENSION supabase_vault` (in 126) fails with a permissions
+    error, enable it once via **Dashboard → Database → Extensions →
+    search "supabase_vault" → Enable**, then re-run that migration.
 - **A real, extensible adapter framework**
   (`supabase/functions/_shared/processor_adapter.ts`) — adding processor #4
   later means writing one new file that implements `ProcessorAdapter`
   (`charge`/`refund`/`testConnection`) and registering it in that file's
   `ADAPTERS` map, plus one `INSERT` into `payment_processor_catalog`. No
   other code changes, ever, for a new processor.
-- **One reference adapter: Cardknox / Sola Payments**
-  (`supabase/functions/_shared/adapters/cardknox_adapter.ts`) — written
-  against Cardknox's long-documented gateway API shape.
-  **⚠️ Not yet tested against a live account** — this environment has no
-  Cardknox/Sola developer credentials. Before connecting a real camp: get a
-  **sandbox** API key from Cardknox/Sola, run the test-connection step
-  below against it, and do one real charge + refund round-trip before ever
-  pointing this at a real camp's production key.
+- **Two adapters: Cardknox / Sola Payments, and Banquest**
+  (`supabase/functions/_shared/adapters/cardknox_adapter.ts` and
+  `banquest_adapter.ts`) — written against each gateway's documented API
+  shape (Cardknox's own xWeb API; Banquest's underlying NMI gateway's
+  classic Direct Post/Query API — Banquest is a white-label reseller on
+  NMI, confirmed this session).
+  **⚠️ Neither is tested against a live account yet** — this environment
+  has no Cardknox/Sola or Banquest/NMI developer credentials. Before
+  connecting a real camp: get a **sandbox** credential from that
+  processor, run the test-connection step below against it, and do one
+  real charge + refund round-trip before ever pointing either adapter at a
+  real camp's production key. Banquest specifically: white-label NMI
+  resellers often issue their own branded gateway hostname rather than
+  using `secure.nmi.com` directly — the adapter's `gatewayUrl` credential
+  field is exactly for that; confirm the real one with Banquest/the camp
+  during onboarding rather than assuming the default.
 - **Three edge functions**: `payments-charge`, `payments-refund` (the BYOP
   equivalents of `stripe-charge`/`stripe-refund` — same auth model, camp
   always derived from the caller's own session, never a client-supplied
@@ -67,9 +77,9 @@ nothing changes unless a camp is explicitly walked through the setup below.
   way yet to get a BYOP family INTO that state.
 - **Canteen deposits/refunds and autopay installments** for BYOP camps —
   only tuition charge/refund are wired. Same "explicitly deferred" pattern.
-- **Banquest and Accept Blue adapters** — the catalog/framework supports
-  them the moment someone writes the adapter file; neither exists yet.
-  Pick whichever the actual at-risk camp/prospect uses first.
+- **Accept Blue adapter** — the catalog/framework supports it the moment
+  someone writes the adapter file; not built yet (Banquest and Cardknox/
+  Sola were prioritized since those are what the actual at-risk camp uses).
 
 ## How to connect a camp (human-assisted, on purpose)
 
@@ -84,22 +94,27 @@ curl -X POST "https://<your-project>.supabase.co/functions/v1/admin-connect-proc
   -H "Content-Type: application/json" \
   -d '{
     "campId": "<the camp'"'"'s id>",
-    "processorKey": "cardknox",
-    "credentials": { "apiKey": "<the camp'"'"'s Cardknox/Sola API key>" },
+    "processorKey": "banquest",
+    "credentials": { "securityKey": "<the camp'"'"'s Banquest security key>" },
     "notes": "Confirmed via call with <name>, <date>"
   }'
 ```
+
+(For Cardknox/Sola instead: `"processorKey": "cardknox"`,
+`"credentials": { "apiKey": "..." }`. If Banquest gave the camp their own
+branded gateway hostname rather than the shared NMI one, add it as
+`"gatewayUrl": "https://secure.example.com"` inside `credentials`.)
 
 The `SUPABASE_SERVICE_ROLE_KEY` is the same key already in **Supabase
 Dashboard → Settings → API** — the same one cron jobs use internally. It's
 the only thing authorized to call this function; nothing new to create or
 distribute.
 
-This call **tests the credential for real** against Cardknox's API before
-storing anything — a bad/typo'd key is rejected immediately with a clear
-error, never silently saved. On success, the camp's
-`payment_processor_key` flips from `stripe` to `cardknox` and the Dashboard
-status card updates on next load.
+This call **tests the credential for real** against the processor's own
+API before storing anything — a bad/typo'd key is rejected immediately with
+a clear error, never silently saved. On success, the camp's
+`payment_processor_key` flips from `stripe` to `banquest` (or `cardknox`)
+and the Dashboard status card updates on next load.
 
 To disconnect a camp back to Stripe, run in the SQL Editor:
 

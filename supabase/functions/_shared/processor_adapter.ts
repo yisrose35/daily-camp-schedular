@@ -84,9 +84,11 @@ export interface ProcessorAdapter {
 // Adapters register themselves here — adding processor #4 means adding one
 // import + one entry, nothing else in this file changes.
 import { cardknoxAdapter } from "./adapters/cardknox_adapter.ts";
+import { banquestAdapter } from "./adapters/banquest_adapter.ts";
 
 const ADAPTERS: Record<string, ProcessorAdapter> = {
   cardknox: cardknoxAdapter,
+  banquest: banquestAdapter,
 };
 
 export function getAdapter(processorKey: string): ProcessorAdapter | null {
