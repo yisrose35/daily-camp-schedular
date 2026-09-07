@@ -599,7 +599,12 @@
 
                 <div class="form-group">
                     <label for="authPassword">Password</label>
-                    <input type="password" id="authPassword" placeholder="••••••••" required minlength="6" />
+                    <div class="password-field">
+                        <input type="password" id="authPassword" placeholder="••••••••" required minlength="6" />
+                        <button type="button" class="password-toggle" aria-label="Show password" aria-pressed="false" onclick="togglePasswordVisibility('authPassword', this)">
+                            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M2 12s3.6-7 10-7 10 7 10 7-3.6 7-10 7-10-7-10-7z"/><circle cx="12" cy="12" r="3"/></svg>
+                        </button>
+                    </div>
                     <a href="#" class="forgot-password-link" id="forgotPasswordLink" onclick="closeAuthModal(); openResetModal(); return false;">Forgot Password?</a>
                 </div>
 
@@ -700,11 +705,21 @@
                 <form id="updatePasswordForm" class="auth-form">
                     <div class="form-group">
                         <label for="newPassword">New Password</label>
-                        <input type="password" id="newPassword" placeholder="••••••••" required minlength="6" />
+                        <div class="password-field">
+                            <input type="password" id="newPassword" placeholder="••••••••" required minlength="6" />
+                            <button type="button" class="password-toggle" aria-label="Show password" aria-pressed="false" onclick="togglePasswordVisibility('newPassword', this)">
+                                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M2 12s3.6-7 10-7 10 7 10 7-3.6 7-10 7-10-7-10-7z"/><circle cx="12" cy="12" r="3"/></svg>
+                            </button>
+                        </div>
                     </div>
                     <div class="form-group">
                         <label for="confirmPassword">Confirm Password</label>
-                        <input type="password" id="confirmPassword" placeholder="••••••••" required minlength="6" />
+                        <div class="password-field">
+                            <input type="password" id="confirmPassword" placeholder="••••••••" required minlength="6" />
+                            <button type="button" class="password-toggle" aria-label="Show password" aria-pressed="false" onclick="togglePasswordVisibility('confirmPassword', this)">
+                                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M2 12s3.6-7 10-7 10 7 10 7-3.6 7-10 7-10-7-10-7z"/><circle cx="12" cy="12" r="3"/></svg>
+                            </button>
+                        </div>
                     </div>
                     <div id="updateError" class="auth-error"></div>
                     <div id="updateSuccess" class="auth-success"></div>

@@ -99,8 +99,25 @@ function closeAuthModal() {
     if (authForm) authForm.reset();
     if (authError) authError.textContent = '';
     if (authLoading) authLoading.style.display = 'none';
-    
+    resetPasswordVisibility('authPassword');
+
     resetFormButton();
+}
+
+// form.reset() clears input VALUES but not the `type` attribute a password
+// toggle switched to 'text' — without this a field left revealed stays
+// revealed (empty, but still unmasked) the next time the modal opens.
+function resetPasswordVisibility(inputId) {
+    const input = document.getElementById(inputId);
+    if (input) input.type = 'password';
+}
+
+function togglePasswordVisibility(inputId, btn) {
+    const input = document.getElementById(inputId);
+    if (!input) return;
+    const showing = input.type === 'text';
+    input.type = showing ? 'password' : 'text';
+    if (btn) btn.setAttribute('aria-pressed', showing ? 'false' : 'true');
 }
 
 function openResetModal() {
@@ -135,6 +152,8 @@ function openResetModal() {
 function closeResetModal() {
     const resetModal = document.getElementById('resetPasswordModal');
     if (resetModal) resetModal.style.display = 'none';
+    resetPasswordVisibility('newPassword');
+    resetPasswordVisibility('confirmPassword');
 }
 
 // =========================================================================
@@ -914,8 +933,8 @@ document.addEventListener('DOMContentLoaded', function() {
         updatePasswordForm.addEventListener('submit', async (e) => {
             e.preventDefault();
             const newPassword = document.getElementById('newPassword')?.value;
-            const confirmPassword = document.getElementById('confirmNewPassword')?.value;
-            const submitBtn = document.getElementById('updatePasswordSubmit');
+            const confirmPassword = document.getElementById('confirmPassword')?.value;
+            const submitBtn = document.getElementById('updateSubmit');
             const updateError = document.getElementById('updateError');
             const updateSuccess = document.getElementById('updateSuccess');
             
