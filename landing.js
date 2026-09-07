@@ -911,6 +911,23 @@ document.addEventListener('DOMContentLoaded', function() {
             try {
                 const supabase = getSupabase();
                 if (!supabase) throw new Error('Authentication service not available. Please refresh the page.');
+
+                // Check the email actually has an account before sending a
+                // reset link — resetPasswordForEmail() itself never reveals
+                // this (it always "succeeds" whether or not the email
+                // exists), so without this check a typo'd email just looks
+                // like a sent email that never arrives.
+                const { data: hasAccount, error: checkErr } = await supabase.rpc('email_has_account', { p_email: email });
+                if (checkErr) {
+                    console.error('[Landing] email_has_account check failed:', checkErr);
+                    // Fail open — don't block a real reset just because the
+                    // lookup itself errored (e.g. migration not applied yet).
+                } else if (hasAccount === false) {
+                    if (resetError) resetError.textContent = "We couldn't find an account with that email. Double-check the spelling or try a different email.";
+                    if (submitBtn) { submitBtn.disabled = false; submitBtn.textContent = 'Send Reset Link'; }
+                    return;
+                }
+
                 const { error } = await supabase.auth.resetPasswordForEmail(email, {
                     redirectTo: window.location.origin + '/index.html#reset-password'
                 });
