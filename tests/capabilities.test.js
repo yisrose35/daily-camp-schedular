@@ -328,3 +328,37 @@ test('every section of Snacks, Go and Live is individually addressable', () => {
         });
     });
 });
+
+// ── the analytics/finance split ─────────────────────────────────────────────
+// 'me.finance' used to be part of one combined 'me.analytics' capability
+// ("Analytics & Finance"). Splitting the page must not change what anyone's
+// already-saved access grants them — 'finance' inherits 'analytics' until an
+// owner explicitly sets 'finance' on its own.
+
+test('finance falls back to whatever analytics resolves to, via an override', () => {
+    const restricted = staff({ overrides: { 'me.analytics': 'view' } });
+    assert.strictEqual(C.resolve('me.finance', restricted), 'view');
+    assert.strictEqual(C.resolve('me.analytics', restricted), 'view');
+
+    const blocked = staff({ overrides: { 'me.analytics': 'none' } });
+    assert.strictEqual(C.resolve('me.finance', blocked), 'none');
+});
+
+test('finance falls back to whatever analytics resolves to, via a preset', () => {
+    const bk = staff({ preset: 'bookkeeper' });
+    // Bookkeeper explicitly grants both now, but the fallback path is what's
+    // under test here — a preset that only names 'analytics' must still hand
+    // 'finance' the same level.
+    assert.strictEqual(C.resolve('me.finance', bk), C.resolve('me.analytics', bk));
+});
+
+test('an explicit finance override wins over the analytics fallback', () => {
+    const u = staff({ overrides: { 'me.analytics': 'view', 'me.finance': 'none' } });
+    assert.strictEqual(C.resolve('me.finance', u), 'none');
+    assert.strictEqual(C.resolve('me.analytics', u), 'view');
+});
+
+test('a preset that names finance directly does not need the fallback', () => {
+    const p = C.preset('bookkeeper');
+    assert.strictEqual(p.grants['me.finance'], 'view');
+});

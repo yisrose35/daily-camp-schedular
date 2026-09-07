@@ -48,6 +48,7 @@ var _familyDetailKey=null; // famKey currently shown on the full-page family/bil
 var _repHighlight=null;  // saved report id to scroll-to/highlight next time Reports renders (set by global search)
 var PAGE_SIZE=50;
 var _rosterPage=1, _billingPage=1, _analyticsInvoicePage=1, _analyticsPaymentPage=1;
+var _rosterSubTab='enrolled';  // Roster page's own top tab: enrolled | unenrolled
 // Slice an array to one page. Clamps pageNum into range so a stale page
 // number (filter shrank the result set) never renders an empty page.
 function _paginate(array,pageSize,pageNum){
@@ -72,9 +73,10 @@ function _pagerHtml(total,pageSize,pageNum,onChangeFnName){
     return h;
 }
 function setRosterPage(n){_rosterPage=n;var inp=document.getElementById('globalSearch');renderCampers(inp?inp.value.trim():'');}
+function setRosterSubTab(t){_rosterSubTab=t;_rosterPage=1;var inp=document.getElementById('globalSearch');renderCampers(inp?inp.value.trim():'');}
 function setBillingPage(n){_billingPage=n;renderBilling();}
-function setAnalyticsInvoicePage(n){_analyticsInvoicePage=n;renderAnalytics();}
-function setAnalyticsPaymentPage(n){_analyticsPaymentPage=n;renderAnalytics();}
+function setAnalyticsInvoicePage(n){_analyticsInvoicePage=n;renderFinance();}
+function setAnalyticsPaymentPage(n){_analyticsPaymentPage=n;renderFinance();}
 var pplStaffSubTab='applicants';  // Hiring page's own top tab: applicants | hired
 var staffApplications={};   // Staff hiring: applicant id → application record
 var staffFormConfig=null;   // Staff application form config — mirrors formConfig, drives campistry_staff_apply.html
@@ -681,6 +683,114 @@ function avc(n){var h=0;for(var i=0;i<n.length;i++)h+=n.charCodeAt(i);return AV_
 function av(n,sz){var w=sz==='l'?52:sz==='m'?38:28,fs=sz==='l'?17:sz==='m'?13:10;return'<div class="av av-'+(sz||'s')+'" style="background:'+avc(n)+'">'+esc(ini(n))+'</div>'}
 function bdg(l,t){return'<span class="badge badge-'+t+'">'+esc(l)+'</span>'}
 
+// ═══ CHARTS ══════════════════════════════════════════════════════
+// Small, dependency-free inline-SVG chart primitives — no charting
+// library or real chart existed anywhere in this codebase before this
+// (Analytics used plain width% divs). Every chart direct-labels its
+// data in real text (name + value), so a viewer never has to decode a
+// color to read a number; hover adds an exact-value tooltip via a
+// native SVG <title>, which needs no extra JS and works everywhere.
+//
+// Categorical palette — 8 hues in FIXED order (never reassigned when
+// a filter changes which rows are visible), colorblind-safe adjacent
+// contrast confirmed via the dataviz skill's validator (light mode
+// only — this app has no dark theme). Never reuse it for status —
+// var(--ok)/--err/--warn already own that meaning everywhere else.
+var CHART_PALETTE=['#2a78d6','#eb6834','#1baf7a','#eda100','#e87ba4','#008300','#4a3aa7','#e34948'];
+function chartColor(i){return CHART_PALETTE[i%CHART_PALETTE.length]}
+
+/**
+ * Horizontal bar list — one row per category, each self-labeled with
+ * its own name and value. rows:[{label,value,color?}] opts:{money,emptyText}
+ */
+function chartBarH(rows,opts){
+    opts=opts||{};
+    rows=(rows||[]).filter(function(r){return r&&isFinite(r.value)});
+    if(!rows.length)return'<div class="chart-empty">'+esc(opts.emptyText||'No data yet')+'</div>';
+    var max=Math.max.apply(null,rows.map(function(r){return Math.abs(r.value)}))||1;
+    var fmtV=opts.money?fm:function(n){return Number(n||0).toLocaleString()};
+    return'<div class="chart-barh">'+rows.map(function(r,i){
+        var pct=Math.max(2,Math.round(Math.abs(r.value)/max*100));
+        var col=r.color||chartColor(i);
+        return'<div class="chart-barh-row">'+
+            '<div class="chart-barh-label" title="'+esc(r.label)+'">'+esc(r.label)+'</div>'+
+            '<div class="chart-barh-track"><div class="chart-barh-fill" style="width:'+pct+'%;background:'+col+'"></div></div>'+
+            '<div class="chart-barh-val">'+esc(fmtV(r.value))+'</div>'+
+        '</div>';
+    }).join('')+'</div>';
+}
+
+/**
+ * Donut chart for share-of-whole. Always paired with a legend — a
+ * thin slice has no room for an inline label — and every legend row
+ * carries its own value and percent as real text. slices:[{label,value,color?}]
+ * opts:{money,centerLabel,centerSub,emptyText}
+ */
+function chartDonut(slices,opts){
+    opts=opts||{};
+    slices=(slices||[]).filter(function(s){return s&&s.value>0});
+    if(!slices.length)return'<div class="chart-empty">'+esc(opts.emptyText||'No data yet')+'</div>';
+    var total=slices.reduce(function(s,x){return s+x.value},0)||1;
+    var fmtV=opts.money?fm:function(n){return Number(n||0).toLocaleString()};
+    var R=44,C=2*Math.PI*R,gap=Math.max(1,C*0.008),off=0;
+    var arcs=slices.map(function(s,i){
+        var col=s.color||chartColor(i);
+        var len=Math.max(0,(s.value/total)*C-gap);
+        var arc='<circle cx="60" cy="60" r="'+R+'" fill="none" stroke="'+col+'" stroke-width="16" '+
+            'stroke-dasharray="'+len+' '+(C-len)+'" stroke-dashoffset="'+(-off)+'" transform="rotate(-90 60 60)">'+
+            '<title>'+esc(s.label)+': '+esc(fmtV(s.value))+' ('+Math.round(s.value/total*100)+'%)</title></circle>';
+        off+=(s.value/total)*C;
+        return arc;
+    }).join('');
+    var legend=slices.map(function(s,i){
+        var col=s.color||chartColor(i);
+        return'<div class="chart-legend-row"><span class="chart-legend-dot" style="background:'+col+'"></span>'+
+            '<span class="chart-legend-label">'+esc(s.label)+'</span>'+
+            '<span class="chart-legend-val">'+esc(fmtV(s.value))+'</span>'+
+            '<span class="chart-legend-pct">'+Math.round(s.value/total*100)+'%</span></div>';
+    }).join('');
+    return'<div class="chart-donut-wrap"><svg viewBox="0 0 120 120" width="120" height="120" class="chart-donut">'+arcs+
+        (opts.centerLabel?'<text x="60" y="57" text-anchor="middle" class="chart-donut-center-v">'+esc(opts.centerLabel)+'</text>':'')+
+        (opts.centerSub?'<text x="60" y="72" text-anchor="middle" class="chart-donut-center-s">'+esc(opts.centerSub)+'</text>':'')+
+        '</svg><div class="chart-legend">'+legend+'</div></div>';
+}
+
+/**
+ * Simple line/area trend chart, single series — one series needs no
+ * legend, the card title already names it. Each point gets a native
+ * tooltip marker for the exact value on hover. points:[{label,value}]
+ * opts:{money,emptyText}
+ */
+function chartLine(points,opts){
+    opts=opts||{};
+    points=(points||[]).filter(function(p){return p&&isFinite(p.value)});
+    if(points.length<2)return'<div class="chart-empty">'+esc(opts.emptyText||'Not enough data yet')+'</div>';
+    var fmtV=opts.money?fm:function(n){return Number(n||0).toLocaleString()};
+    var W=560,H=160,padL=8,padR=8,padT=12,padB=22;
+    var vals=points.map(function(p){return p.value});
+    var min=Math.min(0,Math.min.apply(null,vals)),max=Math.max.apply(null,vals)||1;
+    if(max===min)max=min+1;
+    var x=function(i){return padL+(i/(points.length-1))*(W-padL-padR)};
+    var y=function(v){return padT+(1-(v-min)/(max-min))*(H-padT-padB)};
+    var linePts=points.map(function(p,i){return x(i)+','+y(p.value)}).join(' ');
+    var areaPts=linePts+' '+x(points.length-1)+','+y(min)+' '+x(0)+','+y(min);
+    var col=chartColor(0);
+    var dots=points.map(function(p,i){
+        return'<circle cx="'+x(i)+'" cy="'+y(p.value)+'" r="3.5" fill="'+col+'" stroke="#fff" stroke-width="1.5">'+
+            '<title>'+esc(p.label)+': '+esc(fmtV(p.value))+'</title></circle>';
+    }).join('');
+    var skip=points.length>8?Math.ceil(points.length/8):1;
+    var labels=points.map(function(p,i){
+        if(i%skip)return'';
+        return'<text x="'+x(i)+'" y="'+(H-6)+'" text-anchor="middle" class="chart-line-axis">'+esc(p.label)+'</text>';
+    }).join('');
+    return'<svg viewBox="0 0 '+W+' '+H+'" class="chart-line">'+
+        '<polygon points="'+areaPts+'" fill="'+col+'" opacity=".08"></polygon>'+
+        '<polyline points="'+linePts+'" fill="none" stroke="'+col+'" stroke-width="2" stroke-linejoin="round" stroke-linecap="round"></polyline>'+
+        dots+labels+
+    '</svg>';
+}
+
 // Small inline icon set for the Registration row/Review-modal action
 // buttons (Review/Enroll/Invite/Rescind) — replaces emoji-as-text, which
 // renders inconsistently across platforms and reads as a placeholder
@@ -709,6 +819,26 @@ var _ICO={
 function ico(name){return _ICO[name]||'';}
 function dtag(d){var c=(structure[d]&&structure[d].color)||'#94A3B8';return'<span class="div-tag" style="background:'+c+'10;color:'+c+'"><span class="div-dot" style="background:'+c+'"></span>'+esc(d)+'</span>'}
 function fm(n){return'$'+Number(n||0).toLocaleString()}
+
+// ── Shared stat-tile row + underline tab strip ──────────────────────────
+// Billing, Analytics and Finance each hand-rolled the same "plain bordered
+// box with a colored accent" stat tile and the same "ghost button with an
+// underline" tab strip as one-off inline styles — three near-identical
+// copies that could quietly drift apart. One shared pair here instead.
+function statTile(label,value,sub,color){
+    return'<div class="stat-tile" style="border-left-color:'+(color||'var(--s200)')+'">'+
+        '<div class="stat-tile-label">'+esc(label)+'</div>'+
+        '<div class="stat-tile-value">'+value+'</div>'+
+        (sub?'<div class="stat-tile-sub">'+esc(sub)+'</div>':'')+
+    '</div>';
+}
+function statRow(tilesHtml){return'<div class="stat-row">'+tilesHtml+'</div>'}
+/** tabs:[{k,l}] active:string onClick:'CampistryMe.someFn' — passed the tab key as its one argument. */
+function tabStrip(tabs,active,onClick){
+    return'<div class="tab-strip">'+tabs.map(function(t){
+        return'<button class="tab-strip-btn'+(active===t.k?' active':'')+'" onclick="'+onClick+'(\''+t.k+'\')">'+esc(t.l)+'</button>';
+    }).join('')+'</div>';
+}
 // opts: {actionLabel, onAction} — an optional action button (e.g. "Undo").
 // Gets a longer on-screen window than a plain toast so a real click can land.
 function toast(m,t,opts){
@@ -929,7 +1059,7 @@ function ff(label,id,val,type,opts){
 
 // ═══ RENDERERS ═══════════════════════════════════════════════════
 function render(p){
-    var m={campers:renderCampers,camperdetail:renderCamperDetailPage,staffdetail:renderStaffDetailPage,structure:renderStructure,bunkbuilder:renderBB,registration:renderRegistrationPage,hiring:renderHiringPage,leads:renderLeads,billing:renderBilling,familydetail:renderFamilyDetailPage,payroll:renderPayroll,analytics:renderAnalytics,reports:renderReports,printsheets:renderPrintSheets};
+    var m={campers:renderCampers,camperdetail:renderCamperDetailPage,staffdetail:renderStaffDetailPage,structure:renderStructure,bunkbuilder:renderBB,registration:renderRegistrationPage,hiring:renderHiringPage,leads:renderLeads,billing:renderBilling,familydetail:renderFamilyDetailPage,payroll:renderPayroll,analytics:renderAnalytics,finance:renderFinance,reports:renderReports,printsheets:renderPrintSheets};
     if(m[p])m[p]();else renderSoon(p);
 }
 
@@ -1785,7 +1915,7 @@ function buildPipelineList(){
 function _pplStatusMeta(type,status){
     if(type==='staff')return {label:_staffLabel(status),color:_staffStatusType(status)};
     var label=status?(status.charAt(0).toUpperCase()+status.slice(1)):'Applied';
-    var color=status==='enrolled'||status==='accepted'?'ok':status==='waitlisted'?'warn':(status==='declined'||status==='withdrawn')?'err':'gray';
+    var color=status==='enrolled'||status==='accepted'?'ok':(status==='waitlisted'||status==='unenrolled')?'warn':(status==='declined'||status==='withdrawn')?'err':'gray';
     return {label:label,color:color};
 }
 function _pplCamperRowActions(id,status){
@@ -1809,6 +1939,10 @@ function _pplCamperRowActions(id,status){
         h+='<button class="me-btn me-btn--sec me-btn--sm" onclick="CampistryMe.updateEnrollStatus(\''+je(id)+'\',\'accepted\')">Accept</button>';
     }else if(status==='withdrawn'||status==='declined'){
         h+='<button class="me-btn me-btn--sec me-btn--sm" onclick="CampistryMe.updateEnrollStatus(\''+je(id)+'\',\'waitlisted\')">Re-add to waitlist</button>';
+        h+='<button class="me-btn me-btn--ghost me-btn--sm" style="color:var(--err)" onclick="CampistryMe.deleteApplication(\''+je(id)+'\')" title="Permanently delete this application">Delete</button>';
+    }else if(status==='unenrolled'){
+        h+='<button class="me-btn me-btn--ghost me-btn--sm" onclick="CampistryMe.nav(\'campers\')" title="Re-enroll or permanently delete the camper from the Roster’s Unenrolled tab">Manage in Roster</button>';
+        h+='<button class="me-btn me-btn--ghost me-btn--sm" style="color:var(--err)" onclick="CampistryMe.deleteApplication(\''+je(id)+'\')" title="Permanently delete this application">Delete</button>';
     }
     h+='</div>';
     return h;
@@ -1858,6 +1992,7 @@ function _renderRegistrationPane(){
         +'<div class="me-more-menu" id="pplLinkMenu" style="min-width:250px">'
         +'<button onclick="CampistryMe.copyRegLink()">📋 Copy Link</button>'
         +'<button onclick="CampistryMe.openSendRegLinkModal()">✉ Send Link</button>'
+        +'<button onclick="CampistryMe.openEmbedLinkModal(\'register\')">🌐 Embed on Your Website</button>'
         +'<div style="border-top:1px solid var(--s100);margin:4px 0"></div>'
         +'<button onclick="CampistryMe.exportEnrollmentReport()">↓ Export Applications</button>'
         +'</div></div>'
@@ -1902,6 +2037,7 @@ function _renderHiringPane(){
         +'<div class="me-more-menu" id="pplLinkMenu" style="min-width:250px">'
         +'<button onclick="CampistryMe.copyStaffLink()">📋 Copy Link</button>'
         +'<button onclick="CampistryMe.openSendStaffLinkModal()">✉ Send Link</button>'
+        +'<button onclick="CampistryMe.openEmbedLinkModal(\'staff\')">🌐 Embed on Your Website</button>'
         +'<div style="border-top:1px solid var(--s100);margin:4px 0"></div>'
         +'<button onclick="CampistryMe.exportStaffCSV()">↓ Export Applications</button>'
         +'</div></div>'
@@ -2001,8 +2137,14 @@ function renderCampers(filter){
     // to anyone with plain me.campers access would leak it to roles that were
     // never granted either (Division Head, Nurse, Canteen, Bus Coordinator…).
     var canStaff=_secCan('me.staffing')||_secCan('me.payroll');
-    var camperEntries=Object.entries(roster);
-    var staffRows=canStaff?buildStaffRoster():[];
+    var allCamperEntries=Object.entries(roster);
+    var enrolledEntries=allCamperEntries.filter(function(pair){return !pair[1].unenrolled;});
+    var unenrolledEntries=allCamperEntries.filter(function(pair){return pair[1].unenrolled;});
+    var showUnenrolled=_rosterSubTab==='unenrolled';
+    var camperEntries=showUnenrolled?unenrolledEntries:enrolledEntries;
+    var allStaffRows=canStaff?buildStaffRoster():[];
+    // Unenrolled campers are a parked, camper-only state — no staff shown there.
+    var staffRows=showUnenrolled?[]:allStaffRows;
     if(filter){
         var q=filter.toLowerCase();
         camperEntries=camperEntries.filter(function([n,d]){var altN=[d.altFirstName,d.altLastName].filter(Boolean).join(' ').toLowerCase();return n.toLowerCase().includes(q)||altN.includes(q)||(d.division||'').toLowerCase().includes(q)||(d.bunk||'').toLowerCase().includes(q)||(d.school||'').toLowerCase().includes(q)});
@@ -2011,14 +2153,32 @@ function renderCampers(filter){
     camperEntries.sort(function(a,b){return a[0].localeCompare(b[0])});
     var total=camperEntries.length+staffRows.length;
 
-    var h='<div class="sec-hd"><div><h2 class="sec-title">Roster</h2><p class="sec-desc">'+camperEntries.length+' camper'+(camperEntries.length!==1?'s':'')+(canStaff?' · '+staffRows.length+' staff':'')+'</p></div><div class="sec-actions"><button class="me-btn me-btn--ghost me-btn--sm" onclick="CampistryMe.manageCustomFields()" title="Define custom fields">⚙ Custom Fields</button><button class="me-btn me-btn--sec me-btn--sm" onclick="CampistryMe.downloadTemplate()">Template</button><button class="me-btn me-btn--sec me-btn--sm" onclick="CampistryMe.openCsv()">Import</button><button class="me-btn me-btn--pri" onclick="CampistryMe.addCamper()">+ Add Camper</button></div></div>';
+    var h='<div class="sec-hd"><div><h2 class="sec-title">Roster</h2><p class="sec-desc">'+enrolledEntries.length+' camper'+(enrolledEntries.length!==1?'s':'')+(canStaff?' · '+allStaffRows.length+' staff':'')+(unenrolledEntries.length?' · '+unenrolledEntries.length+' unenrolled':'')+'</p></div><div class="sec-actions"><button class="me-btn me-btn--ghost me-btn--sm" onclick="CampistryMe.manageCustomFields()" title="Define custom fields">⚙ Custom Fields</button><button class="me-btn me-btn--sec me-btn--sm" onclick="CampistryMe.downloadTemplate()">Template</button><button class="me-btn me-btn--sec me-btn--sm" onclick="CampistryMe.openCsv()">Import</button><button class="me-btn me-btn--pri" onclick="CampistryMe.addCamper()">+ Add Camper</button></div></div>';
     h+=_setupChecklistHtml();
 
-    var unplaced=canStaff?hiredStaff().filter(function(a){return !String(a.email||'').trim()||!bunksForStaffEmail(a.email).length;}):[];
+    var unplaced=(canStaff&&!showUnenrolled)?hiredStaff().filter(function(a){return !String(a.email||'').trim()||!bunksForStaffEmail(a.email).length;}):[];
     if(unplaced.length){
         h+='<div style="background:#FFF7ED;border:1px solid #FED7AA;border-radius:var(--r);padding:10px 14px;margin-bottom:14px;font-size:.83rem;color:#9A3412">'
           +'<strong>'+unplaced.length+' hired '+(unplaced.length===1?'person is':'people are')+' not set up yet.</strong> '
           +'Open them from Registration &amp; Hiring to add an email and put them on a bunk — until then they can\'t sign in to Campistry Lite or receive notifications.</div>';
+    }
+
+    // Unenrolled is a tucked-away second tab — off by default unless there's
+    // actually someone parked there, so a camp that's never used it doesn't
+    // see an extra empty tab cluttering the Roster header.
+    if(unenrolledEntries.length||showUnenrolled){
+        h+='<div style="display:flex;gap:2px;border-bottom:1px solid var(--s200);margin-bottom:16px">';
+        [{k:'enrolled',l:'Enrolled',c:enrolledEntries.length},{k:'unenrolled',l:'Unenrolled',c:unenrolledEntries.length}].forEach(function(s){
+            var active=_rosterSubTab===s.k;
+            h+='<button onclick="CampistryMe.setRosterSubTab(\''+s.k+'\')" style="padding:9px 12px;border:none;background:none;font-size:.8rem;font-weight:600;cursor:pointer;white-space:nowrap;font-family:inherit;display:flex;align-items:center;gap:6px;border-bottom:2px solid '+(active?'var(--me)':'transparent')+';color:'+(active?'var(--me)':'var(--s500)')+'">'
+                +esc(s.l)+'<span style="font-size:.68rem;font-weight:700;border-radius:9px;padding:1px 6px;background:'+(active?'var(--me)':'var(--s100)')+';color:'+(active?'#fff':'var(--s600)')+'">'+s.c+'</span></button>';
+        });
+        h+='</div>';
+    }
+    if(showUnenrolled&&!unenrolledEntries.length){
+        h+='<div class="me-empty"><h3>Nobody unenrolled</h3><p>Unenroll a camper from the Enrolled tab to park them here — their record stays, they just drop off the active roster.</p></div>';
+        c.innerHTML=h;
+        return;
     }
 
     if(!total){
@@ -2026,7 +2186,7 @@ function renderCampers(filter){
     }else{
         var combined=camperEntries.map(function(pair){return{kind:'camper',n:pair[0],d:pair[1]}}).concat(staffRows.map(function(r){return{kind:'staff',r:r}}));
         var paged=_paginate(combined,PAGE_SIZE,_rosterPage);
-        h+='<div class="me-card"><div class="me-tw"><table class="me-t"><thead><tr><th style="width:76px">Type</th><th>Name</th><th>Details</th><th>Placement</th><th>Contact</th><th style="width:120px"></th></tr></thead><tbody>';
+        h+='<div class="me-card"><div class="me-tw"><table class="me-t"><thead><tr><th style="width:76px">Type</th><th>Name</th><th>Details</th><th>Placement</th><th>Contact</th><th style="width:'+(showUnenrolled?'170':'120')+'px"></th></tr></thead><tbody>';
         paged.items.forEach(function(item){
             if(item.kind==='camper'){
                 var n=item.n,d=item.d;
@@ -2034,9 +2194,12 @@ function renderCampers(filter){
                 var altN=[d.altFirstName,d.altLastName].filter(Boolean).join(' ');
                 var nameCell=esc(n)+(altN&&getCampSettings().showAltNames!==false?'<div style="font-size:.7rem;color:var(--s400);font-weight:400">'+esc(altN)+'</div>':'');
                 var details=(d.schoolGrade?esc(d.schoolGrade):'<span style="color:var(--s300)">—</span>')+(hasMed?' <span style="color:var(--err);font-size:.7rem;font-weight:600">⚠ Medical</span>':'');
-                var placement=(d.division?dtag(d.division):'<span style="color:var(--s300)">—</span>')+(d.bunk?' '+bdg(d.bunk,'gray'):'');
+                var placement=(d.division?dtag(d.division):'<span style="color:var(--s300)">—</span>')+(d.bunk?' '+bdg(d.bunk,'gray'):(d._priorBunk?' '+bdg(d._priorBunk+' (prior)','gray'):''));
                 var contact=(d.parent1Phone||d.parent1Email)?'<span style="font-size:.78rem;color:var(--s500)">'+esc(d.parent1Name||'')+'</span>':'<span style="color:var(--s300)">—</span>';
-                h+='<tr class="click" onclick="CampistryMe.viewCamper(\''+je(n)+'\')"><td>'+_typeBadge('camper')+'</td><td class="bold">'+nameCell+'</td><td style="font-size:.8rem">'+details+'</td><td>'+placement+'</td><td>'+contact+'</td><td style="text-align:right;white-space:nowrap" onclick="event.stopPropagation()"><button class="me-btn me-btn--ghost me-btn--sm" onclick="CampistryMe.editCamper(\''+je(n)+'\')">Edit</button> <button class="me-btn me-btn--ghost me-btn--sm" style="color:var(--err)" onclick="CampistryMe.deleteCamper(\''+je(n)+'\')" title="Delete camper">Delete</button></td></tr>';
+                var rowActions=showUnenrolled
+                    ?'<button class="me-btn me-btn--sec me-btn--sm" onclick="CampistryMe.reenrollCamper(\''+je(n)+'\')">Re-enroll</button> <button class="me-btn me-btn--ghost me-btn--sm" style="color:var(--err)" onclick="CampistryMe.deleteCamper(\''+je(n)+'\')" title="Delete permanently">Delete</button>'
+                    :'<button class="me-btn me-btn--ghost me-btn--sm" onclick="CampistryMe.editCamper(\''+je(n)+'\')">Edit</button> <button class="me-btn me-btn--ghost me-btn--sm" onclick="CampistryMe.unenrollCamper(\''+je(n)+'\')" title="Keep their record, drop them off the active roster">Unenroll</button> <button class="me-btn me-btn--ghost me-btn--sm" style="color:var(--err)" onclick="CampistryMe.deleteCamper(\''+je(n)+'\')" title="Delete camper">Delete</button>';
+                h+='<tr class="click" onclick="CampistryMe.viewCamper(\''+je(n)+'\')"><td>'+_typeBadge('camper')+'</td><td class="bold">'+nameCell+'</td><td style="font-size:.8rem">'+details+'</td><td>'+placement+'</td><td>'+contact+'</td><td style="text-align:right;white-space:nowrap" onclick="event.stopPropagation()">'+rowActions+'</td></tr>';
             }else{
                 var r=item.r;
                 var grade=_pplGradeForBunks(r.bunks);
@@ -2716,6 +2879,37 @@ function cascadeCamperDelete(name){
         });
     }catch(_){}
     try{Object.keys(bunkAsgn).forEach(function(b){if(Array.isArray(bunkAsgn[b]))bunkAsgn[b]=bunkAsgn[b].filter(function(c){return c!==name})});}catch(_){}
+    // A camper added directly via "+ Add Camper" gets a matching accepted
+    // enrollment auto-created (_autoCreateAcceptedEnrollment) so Billing/
+    // Pipeline treat them the same as a real registration. Deleting the
+    // camper without closing out that application left it sitting at
+    // whatever non-terminal status it was in forever — buildFamilyLedgers()
+    // scans every accepted/enrolled application on every render, independent
+    // of roster/families, so an un-terminated one kept resurrecting a
+    // phantom "pending" Billing/tuition card tied to a camper that no longer
+    // exists. Originally only checked accepted/enrolled, but Unenroll (a
+    // later feature) introduced a THIRD live-backed status — 'unenrolled' —
+    // that this same check missed entirely: unenroll→delete left the
+    // enrollment stuck at 'unenrolled' forever, with no camper behind it and
+    // none of the withdrawn/declined row actions available on it. Anything
+    // not already at a terminal status (withdrawn/declined) gets closed out
+    // here, covering that gap and any future non-terminal status the same
+    // way, instead of re-special-casing each one by name. Mirrors
+    // rescindEnrollment's own cleanup below (flip to 'withdrawn' + audit
+    // entry) — that's what actually disqualifies a record from that Billing
+    // scan. A camper can have more than one enrollment record
+    // (reEnrollCamper has no dedup guard against an existing one), so this
+    // closes out all of them, not just the first.
+    try{
+        Object.values(enrollments).forEach(function(e){
+            if(!e||e.camperName!==name)return;
+            if(e.status==='withdrawn'||e.status==='declined')return;
+            var prev=e.status;
+            e.status='withdrawn';
+            e.statusHistory=e.statusHistory||[];
+            e.statusHistory.push({from:prev,to:'withdrawn',date:new Date().toISOString(),by:'office',rescinded:true});
+        });
+    }catch(_){}
     // payments are intentionally KEPT — silently erasing billing history when a camper
     // is removed is worse than leaving the (now-deleted) name on the financial record.
     try{var raw=localStorage.getItem('campistry_go_data');if(raw){var go=JSON.parse(raw);if(go&&go.addresses&&go.addresses[name]){delete go.addresses[name];localStorage.setItem('campistry_go_data',JSON.stringify(go))}}}catch(_){}
@@ -2739,6 +2933,15 @@ async function deleteCamper(n){
     });
     var capturedBunks=[];
     Object.entries(bunkAsgn).forEach(function(pair){if(Array.isArray(pair[1])&&pair[1].indexOf(n)>=0)capturedBunks.push(pair[0])});
+    // cascadeCamperDelete is about to flip any accepted/enrolled application
+    // for this camper to 'withdrawn' — snapshot each one first so Undo can
+    // restore its exact prior status/statusHistory, not just re-link roster/family.
+    var capturedEnrollments={};
+    Object.entries(enrollments).forEach(function(pair){
+        if(pair[1]&&pair[1].camperName===n){
+            try{capturedEnrollments[pair[0]]=JSON.parse(JSON.stringify(pair[1]));}catch(_){}
+        }
+    });
     delete roster[n];
     cascadeCamperDelete(n);
     save();
@@ -2754,8 +2957,78 @@ async function deleteCamper(n){
             if(families[fk].camperIds.indexOf(n)<0)families[fk].camperIds.push(n);
         });
         capturedBunks.forEach(function(b){if(!bunkAsgn[b])bunkAsgn[b]=[];if(bunkAsgn[b].indexOf(n)<0)bunkAsgn[b].push(n)});
+        Object.keys(capturedEnrollments).forEach(function(eid){
+            if(enrollments[eid])enrollments[eid]=capturedEnrollments[eid];
+        });
         save();render(curPage);toast('Camper restored');
     }});
+}
+// Unenroll: keep the camper's record (billing history, health info, custom
+// fields, everything) but park it in the Roster's tucked-away Unenrolled
+// tab — the reversible middle ground between editing them and deleteCamper's
+// permanent removal. roster[name].bunk is the single source of truth every
+// bunk count, the Bunk Builder's placement pool, print sheets, and Health/
+// Snacks all read directly (see the backfill comment near nextPersonId) —
+// clearing it here is what actually makes an unenrolled camper stop looking
+// placed/active everywhere else, not a separate flag those call sites would
+// each need to know about. The prior value is stashed on d._priorBunk so
+// reenrollCamper can restore it. Also closes out any accepted/enrolled
+// application so Billing's auto-invoice scan stops billing them, but leaves
+// families/payments/health data completely untouched — same "keep the money
+// trail, just stop treating them as active" split cascadeCamperDelete
+// already draws for payments on a real delete.
+function unenrollCamper(n){
+    var d=roster[n]; if(!d)return;
+    d.unenrolled=true;
+    d.unenrolledAt=new Date().toISOString();
+    var priorBunk=d.bunk||'';
+    d._priorBunk=priorBunk;
+    d.bunk='';
+    if(priorBunk&&bunkAsgn[priorBunk]) bunkAsgn[priorBunk]=bunkAsgn[priorBunk].filter(function(c){return c!==n});
+    var flipped=[];
+    Object.keys(enrollments).forEach(function(id){
+        var e=enrollments[id];
+        if(!e||e.camperName!==n)return;
+        if(e.status!=='accepted'&&e.status!=='enrolled')return;
+        var prev=e.status;
+        e.status='unenrolled';
+        e.statusHistory=e.statusHistory||[];
+        e.statusHistory.push({from:prev,to:'unenrolled',date:new Date().toISOString(),by:'office'});
+        flipped.push({id:id,prev:prev});
+        if(e.session&&prev!=='waitlisted') autoPromoteWaitlist(e.session);
+    });
+    save();render(curPage);
+    toast(n+' unenrolled — moved to the Unenrolled tab','ok',{actionLabel:'Undo',onAction:function(){
+        delete d.unenrolled;delete d.unenrolledAt;delete d._priorBunk;
+        d.bunk=priorBunk;
+        if(priorBunk){bunkAsgn[priorBunk]=bunkAsgn[priorBunk]||[];if(bunkAsgn[priorBunk].indexOf(n)<0)bunkAsgn[priorBunk].push(n);}
+        flipped.forEach(function(f){if(enrollments[f.id])enrollments[f.id].status=f.prev;});
+        save();render(curPage);toast(n+' restored to the active roster');
+    }});
+}
+// Reverse of unenrollCamper — re-adds them to their last bunk if that bunk
+// still exists in the current camp structure (a rename/deletion while they
+// were parked leaves them unplaced rather than silently landing in a
+// resurrected bunk name), and reopens the matching application(s).
+function reenrollCamper(n){
+    var d=roster[n]; if(!d)return;
+    delete d.unenrolled;delete d.unenrolledAt;
+    var priorBunk=d._priorBunk||'';
+    delete d._priorBunk;
+    if(priorBunk&&allBunkNames().indexOf(priorBunk)>=0){
+        d.bunk=priorBunk;
+        bunkAsgn[priorBunk]=bunkAsgn[priorBunk]||[];
+        if(bunkAsgn[priorBunk].indexOf(n)<0)bunkAsgn[priorBunk].push(n);
+    }
+    Object.keys(enrollments).forEach(function(id){
+        var e=enrollments[id];
+        if(!e||e.camperName!==n||e.status!=='unenrolled')return;
+        e.status='enrolled';
+        e.statusHistory=e.statusHistory||[];
+        e.statusHistory.push({from:'unenrolled',to:'enrolled',date:new Date().toISOString(),by:'office'});
+    });
+    save();render(curPage);
+    toast(n+' re-enrolled');
 }
 function grOpts(div){var o=[''];if(div&&structure[div]){var ord=structure[div].gradeOrder,keys=Object.keys(structure[div].grades||{});(Array.isArray(ord)&&ord.length?ord.filter(function(g){return g in(structure[div].grades||{})}):keys.sort()).forEach(function(g){o.push(g)})}return o}
 function bkOpts(div,gr){var o=[''];if(div&&gr&&structure[div]&&structure[div].grades&&structure[div].grades[gr])(structure[div].grades[gr].bunks||[]).forEach(function(b){o.push(b)});return o}
@@ -4436,7 +4709,7 @@ function autoGenerateBunks(){
     var ambiguousSkipped={};
     Object.keys(roster).forEach(function(n){
         var c=roster[n];
-        if(c.bunk)return;
+        if(c.bunk||c.unenrolled)return;
         var key=String(c.schoolGrade||'').trim().toLowerCase();
         if(key&&sgAmbiguous[key])ambiguousSkipped[n]=true;
     });
@@ -4448,7 +4721,7 @@ function autoGenerateBunks(){
         var mapped=_cohortSchoolGrades(div,gr).length>0;
         var pool=Object.keys(roster).filter(function(n){
             var c=roster[n];
-            if(c.bunk)return false;
+            if(c.bunk||c.unenrolled)return false;
             if(mapped){
                 var resolved=sgToCohort[String(c.schoolGrade||'').trim().toLowerCase()];
                 return resolved&&resolved.div===div&&resolved.gr===gr;
@@ -4460,7 +4733,7 @@ function autoGenerateBunks(){
         pool.forEach(function(n){if(roster[n].bunk)handled[n]=true;});
     });
 
-    var leftover=Object.keys(roster).filter(function(n){return !roster[n].bunk&&!handled[n]&&!ambiguousSkipped[n];});
+    var leftover=Object.keys(roster).filter(function(n){return !roster[n].bunk&&!roster[n].unenrolled&&!handled[n]&&!ambiguousSkipped[n];});
     if(leftover.length)_bunkGenFallback(leftover,allBunksFlat,cfg,report);
 
     report.placed=Object.keys(roster).filter(function(n){return roster[n].bunk;}).length;
@@ -5689,10 +5962,82 @@ function _syncAcceptedContractsToPayroll(){
 // opts.fromRow skips reopening the modal — a row's Advance/Decline button
 // should just update the table in place, the same way Registration's row
 // actions never pop the Review modal open.
+// Shared by deleteStaffApp (removes the whole application) and
+// setStaffStatus's hired→non-hired transition below (keeps the application
+// for the audit trail, just unwinds the live assignments a hired staff
+// member picked up along the way). A hired person can be on a bunk, a
+// Division Head slot, and in Payroll, and none of those are keyed off
+// staffApplications[id] — flipping status alone left all three dangling
+// active (bug: Decline didn't clean up what a hard Delete already did).
+// Returns what it removed so a caller can offer Undo.
+function _cascadeStaffOffboard(a){
+    var out={bunks:[],divisions:[],payrollStaff:[],payrollTimesheets:[]};
+    var delEmail=String((a&&a.email)||'').trim().toLowerCase();
+    if(!delEmail)return out;
+    bunksForStaffEmail(delEmail).forEach(function(b){
+        var before=(bunkStaff[b]||[]).slice();
+        var after=before.filter(function(s){return staffKey(s)!==delEmail});
+        if(after.length!==before.length)out.bunks.push({bunk:b,entries:before});
+        if(after.length)bunkStaff[b]=after;else delete bunkStaff[b];
+    });
+    divisionsForStaffEmail(delEmail).forEach(function(d){
+        var idx=(divisionHeads[d]||[]).findIndex(function(s){return staffKey(s)===delEmail});
+        if(idx>=0){ out.divisions.push({div:d,idx:idx,entry:divisionHeads[d][idx]}); removeDivisionHead(d,idx); }
+    });
+    var pkey=_staffJoinKey(a.email,a.name);
+    if(pkey){
+        var removed=(payroll.staff||[]).filter(function(s){return _staffJoinKey(s.email,s.name)===pkey});
+        if(removed.length){
+            var removedIds=removed.map(function(s){return String(s.id)});
+            payroll.staff=(payroll.staff||[]).filter(function(s){return _staffJoinKey(s.email,s.name)!==pkey});
+            var removedTs=(payroll.timesheets||[]).filter(function(t){return removedIds.indexOf(String(t.staffId))>=0});
+            payroll.timesheets=(payroll.timesheets||[]).filter(function(t){return removedIds.indexOf(String(t.staffId))<0});
+            out.payrollStaff=removed;out.payrollTimesheets=removedTs;
+        }
+    }
+    return out;
+}
+function _restoreStaffOffboard(cap){
+    (cap.bunks||[]).forEach(function(x){bunkStaff[x.bunk]=x.entries;});
+    (cap.divisions||[]).forEach(function(x){ if(!divisionHeads[x.div])divisionHeads[x.div]=[]; divisionHeads[x.div].splice(x.idx,0,x.entry); });
+    if((cap.payrollStaff||[]).length)payroll.staff=(payroll.staff||[]).concat(cap.payrollStaff);
+    if((cap.payrollTimesheets||[]).length)payroll.timesheets=(payroll.timesheets||[]).concat(cap.payrollTimesheets);
+}
+// Leaving "hired" (Decline being the one real-world way this happens) is
+// destructive to live assignments now, so it gets its own confirm+cascade
+// path instead of the instant flip pre-hire statuses use — split out async
+// so setStaffStatus itself can stay a plain sync function for every other
+// transition, matching how rescindEnrollment/deleteCamper already gate
+// their own destructive side effects behind a confirmDialog.
+async function _declineHiredStaff(id,status,opts){
+    var a=staffApplications[id]; if(!a)return;
+    var prevStatus=a.status;
+    var nm=a.name||((a.first||'')+' '+(a.last||''))||'this staff member';
+    var ok=await confirmDialog({
+        title:'Move to '+esc(_staffLabel(status))+'?',
+        message:'<strong>'+esc(nm)+'</strong> will be taken off any bunk, Division Head slot, and Payroll they were assigned to. Their application stays here marked <strong>'+esc(_staffLabel(status))+'</strong> for the audit trail.',
+        confirmLabel:_staffLabel(status),
+        danger:true
+    });
+    if(!ok)return;
+    var cap=_cascadeStaffOffboard(a);
+    a.status=status;
+    save();
+    _refreshPplIfActive();
+    closeModal('appViewModal');
+    if(curPage==='staffdetail')nav('hiring');else _refreshStaffView(id,opts);
+    var changed=cap.bunks.length||cap.divisions.length||cap.payrollStaff.length;
+    toast('Moved to '+_staffLabel(status)+(changed?' — removed from bunk/division/payroll assignments':''),'ok',{actionLabel:'Undo',onAction:function(){
+        a.status=prevStatus;
+        _restoreStaffOffboard(cap);
+        save();render(curPage);toast(nm+' restored to '+_staffLabel(prevStatus));
+    }});
+}
 function setStaffStatus(id,status,opts){
     opts=opts||{};
     var a=staffApplications[id]; if(!a)return;
     var prevStatus=a.status;
+    if(prevStatus==='hired'&&status!=='hired'){ _declineHiredStaff(id,status,opts); return; }
     a.status=status;
     // Reaching "hired" for the first time assigns a permanent Staff ID —
     // same rule as camperId: sequential, assigned once, never reused or
@@ -5707,13 +6052,6 @@ function setStaffStatus(id,status,opts){
         // reopening the modal they were just reviewed in.
         closeModal('appViewModal');
         if(!opts.fromRow)viewStaffMember(_staffJoinKey(a.email,a.name));
-    }else if(prevStatus==='hired'&&status!=='hired'&&curPage==='staffdetail'){
-        // Leaving "hired" while viewing their full profile page — they can
-        // drop out of buildStaffRoster()'s joined view entirely (it only
-        // includes hired applicants, unless this person is separately on
-        // payroll/a bunk), so head back to Hiring instead of risking a
-        // "Staff member not found" dead end.
-        nav('hiring');
     }else{
         _refreshStaffView(id,opts);
     }
@@ -5769,28 +6107,11 @@ async function deleteStaffApp(id){
     });
     if(!ok)return;
     var wasOnDetailPage=curPage==='staffdetail';
-    // Cascade: a hired staff member can also be on a bunk, a division-head
-    // slot, and in Payroll — deleting only staffApplications[id] left all
-    // three dangling. Do this before the delete below since bunksForStaffEmail
-    // etc. don't need the record, but removeDivisionHead's confirm-free splice
-    // is safest run while `a` (used for name/email) is still around.
-    var delEmail=String(a.email||'').trim().toLowerCase();
-    if(delEmail){
-        bunksForStaffEmail(delEmail).forEach(function(b){
-            bunkStaff[b]=(bunkStaff[b]||[]).filter(function(s){return staffKey(s)!==delEmail});
-            if(!bunkStaff[b].length)delete bunkStaff[b];
-        });
-        divisionsForStaffEmail(delEmail).forEach(function(d){
-            var idx=(divisionHeads[d]||[]).findIndex(function(s){return staffKey(s)===delEmail});
-            if(idx>=0)removeDivisionHead(d,idx);
-        });
-    }
-    var pkey=_staffJoinKey(a.email,a.name);
-    if(pkey){
-        var removedIds=(payroll.staff||[]).filter(function(s){return _staffJoinKey(s.email,s.name)===pkey}).map(function(s){return String(s.id)});
-        payroll.staff=(payroll.staff||[]).filter(function(s){return _staffJoinKey(s.email,s.name)!==pkey});
-        if(removedIds.length)payroll.timesheets=(payroll.timesheets||[]).filter(function(t){return removedIds.indexOf(String(t.staffId))<0});
-    }
+    // A hired staff member can also be on a bunk, a Division Head slot, and
+    // in Payroll — do this before the delete below since bunksForStaffEmail
+    // etc. don't need the record, but removeDivisionHead's confirm-free
+    // splice is safest run while `a` (used for name/email) is still around.
+    _cascadeStaffOffboard(a);
     delete staffApplications[id];
     save();
     closeModal('appViewModal');
@@ -5940,12 +6261,49 @@ async function rescindEnrollment(id){
         danger:true
     });
     if(!ok)return;
+    var prev=e.status;
+    // Captured BEFORE cascadeCamperDelete: it now also flips any accepted/
+    // enrolled application matching this camperName (including this very
+    // record) to 'withdrawn' itself, so `e.status` may already be
+    // 'withdrawn' by the time we get here — reading prev first keeps the
+    // audit entry below accurate instead of logging a no-op 'withdrawn'→'withdrawn'.
     if(e.camperName && roster[e.camperName]){ delete roster[e.camperName]; cascadeCamperDelete(e.camperName); }
-    var prev=e.status; e.status='withdrawn';
-    e.statusHistory=e.statusHistory||[];
-    e.statusHistory.push({from:prev,to:'withdrawn',date:new Date().toISOString(),by:'office',rescinded:true});
+    if(e.status!=='withdrawn'){
+        e.status='withdrawn';
+        e.statusHistory=e.statusHistory||[];
+        e.statusHistory.push({from:prev,to:'withdrawn',date:new Date().toISOString(),by:'office',rescinded:true});
+    }
     if(e.session && prev!=='waitlisted') autoPromoteWaitlist(e.session);
     save(); render(curPage); toast(nm+' rescinded — removed from the Campers list');
+}
+// A withdrawn/declined application (left behind by rescindEnrollment or a
+// deleteCamper cascade) had NO way to ever be removed — row actions only
+// offered "Re-add to waitlist" and the detail modal only offered Print/
+// Close, so it sat in the pipeline forever, tuition/payment-status card and
+// all, tied to a camper that may no longer exist. This is purely a record
+// deletion — it never touches roster/families/payments, which are already
+// whatever they should be by the time an application reaches a terminal
+// status; this only cleans up the leftover application row itself.
+async function deleteApplication(id){
+    var e=enrollments[id]; if(!e)return;
+    var nm=e.camperName||'this application';
+    var ok=await confirmDialog({
+        title:'Delete Application?',
+        message:'<strong>'+esc(nm)+'</strong>\'s application will be permanently removed. This does not affect any camper, family, or payment record already in the system.',
+        confirmLabel:'Delete',
+        danger:true
+    });
+    if(!ok)return;
+    var captured;
+    try{captured=JSON.parse(JSON.stringify(e));}catch(_){captured=e;}
+    delete enrollments[id];
+    save();
+    closeModal('appViewModal');
+    _refreshPplIfActive();
+    toast('Application deleted','ok',{actionLabel:'Undo',onAction:function(){
+        enrollments[id]=captured;
+        save();render(curPage);toast('Application restored');
+    }});
 }
 
 // ── FORM CUSTOMIZER ───────────────────────────────────────────
@@ -7645,6 +8003,13 @@ function viewApplication(id){
         f+='<button class="me-btn me-btn--sec" onclick="CampistryMe.generateParentInvite(\''+esc(id)+'\')">'+ico('invite')+'Get Invite Link</button>';
         f+='<button class="me-btn me-btn--sec" onclick="CampistryMe.openSendPostAcceptModal(\''+esc(id)+'\')" title="Bunkmate requests and other post-acceptance choices">'+(e.postAccept?'✓ ':'')+'Post-Acceptance Form</button>';
         f+='<button class="me-btn me-btn--sec" onclick="CampistryMe.updateEnrollStatus(\''+esc(id)+'\',\'withdrawn\');CampistryMe.closeModal(\'appViewModal\')">Withdraw</button>';
+    }else{
+        // Withdrawn/declined (or any other terminal status) — no forward
+        // action applies here, but there was previously no way to ever
+        // remove the record either, so it sat in the pipeline forever with
+        // this same tuition/payment-status card attached. Doesn't touch any
+        // camper/family/payment data — only removes this leftover row.
+        f+='<button class="me-btn me-btn--danger" onclick="CampistryMe.deleteApplication(\''+esc(id)+'\')">Delete Application</button>';
     }
     f+='<button class="me-btn me-btn--sec" onclick="CampistryMe.closeModal(\'appViewModal\')">Close</button>';
     document.getElementById('avFooter').innerHTML=f;
@@ -7775,6 +8140,36 @@ function copyRegLink(){
         navigator.clipboard.writeText(url).then(function(){toast('Registration link copied!')});
     }else{
         prompt('Copy this link and share with parents:',url);
+    }
+}
+
+// ── EMBED ON WEBSITE ─────────────────────────────────────────────────────
+// A camp's own external website can't host our forms inline, but the public
+// register/staff-apply pages already work fine linked-to from anywhere (the
+// ?camp= bootstrap RPC, migration 084) — so this just hands the office a
+// copy-paste HTML button pointed at that same URL.
+function openEmbedLinkModal(kind){
+    var isStaff=(kind==='staff');
+    var url=window.location.origin+'/'+(isStaff?'campistry_staff_apply.html':'campistry_register.html')+'?camp='+encodeURIComponent(getCampId());
+    var label=isStaff?'Apply to Join Our Team':'Register for Camp';
+    var color='#2A7A35';
+    try{ color=(_getLinkBranding().brandColor)||color; }catch(e){}
+    var snippet='<a href="'+url+'" target="_blank" rel="noopener" style="display:inline-block;padding:14px 28px;background:'+color+';color:#ffffff;font-family:Arial,Helvetica,sans-serif;font-size:16px;font-weight:bold;text-decoration:none;border-radius:8px">'+label+'</a>';
+    var h='<p style="font-size:.85rem;color:var(--s500);margin:0 0 14px">Paste this into your website\'s HTML (most site builders — Wix, Squarespace, WordPress — have a "Custom HTML," "Embed," or "Code" block). It adds a button that sends parents straight to your '+(isStaff?'staff application':'registration form')+' — no login required.</p>';
+    h+='<div style="border:1px solid var(--s200);border-radius:8px;padding:20px;text-align:center;margin-bottom:14px;background:var(--s50)">'+snippet+'</div>';
+    h+='<div class="fg"><label class="fl">Embed Code</label><textarea class="fi" id="embedSnippetTa" readonly onclick="this.select()" style="min-height:90px;resize:vertical;font-family:monospace;font-size:.75rem">'+esc(snippet)+'</textarea></div>';
+    h+='<div style="display:flex;justify-content:flex-end"><button class="me-btn me-btn--pri" onclick="CampistryMe.copyEmbedSnippet()">📋 Copy Code</button></div>';
+    showModal(isStaff?'Embed Staff Application on Your Website':'Embed Registration on Your Website',h,null,{maxWidth:560});
+}
+function copyEmbedSnippet(){
+    var ta=document.getElementById('embedSnippetTa');
+    if(!ta)return;
+    ta.select();
+    if(navigator.clipboard){
+        navigator.clipboard.writeText(ta.value).then(function(){toast('Embed code copied!')});
+    }else{
+        document.execCommand('copy');
+        toast('Embed code copied!');
     }
 }
 
@@ -8363,20 +8758,25 @@ function _autoProvisionParentInvites(){
             var key=String(p0.email).toLowerCase();
             if(!fams[key])fams[key]={parentName:p0.name||'',parentEmail:p0.email,campers:[]};
             (fam.camperIds||[]).forEach(function(cn){
-                if(roster[cn]&&fams[key].campers.indexOf(cn)<0){fams[key].campers.push(cn);inFamily[cn]=1;}
+                if(roster[cn]&&!roster[cn].unenrolled&&fams[key].campers.indexOf(cn)<0){fams[key].campers.push(cn);inFamily[cn]=1;}
             });
         }
         if(p1&&p1.email&&String(p1.email).toLowerCase()!==String((p0&&p0.email)||'').toLowerCase()){
             var key2=String(p1.email).toLowerCase();
             if(!fams[key2])fams[key2]={parentName:p1.name||'',parentEmail:p1.email,campers:[]};
             (fam.camperIds||[]).forEach(function(cn){
-                if(roster[cn]&&fams[key2].campers.indexOf(cn)<0){fams[key2].campers.push(cn);inFamily[cn]=1;}
+                if(roster[cn]&&!roster[cn].unenrolled&&fams[key2].campers.indexOf(cn)<0){fams[key2].campers.push(cn);inFamily[cn]=1;}
             });
         }
     });
+    // Unenrolled campers (Me's own "Unenroll" action) are treated the same
+    // as a deleted one here — excluded from every family grouping below so
+    // the offboarding sweep further down sees them as gone from the roster
+    // and disconnects a parent whose only camper was unenrolled, same as
+    // one who was hard-deleted.
     Object.keys(roster).forEach(function(cn){
         if(inFamily[cn])return;
-        var c=roster[cn];if(!c)return;
+        var c=roster[cn];if(!c||c.unenrolled)return;
         if(c.parent1Email){
             var key=String(c.parent1Email).toLowerCase();
             if(!fams[key])fams[key]={parentName:c.parent1Name||'',parentEmail:c.parent1Email,campers:[]};
@@ -8397,8 +8797,11 @@ function _autoProvisionParentInvites(){
     // — or whose deletion didn't change the provisioning signature — never
     // ran the sweep at all, so that parent's invite stayed fully connected
     // forever. Safe to call every time: it's a single idempotent UPDATE,
-    // and the server no-ops on an empty roster.
-    var rosterNames=Object.keys(roster);
+    // and the server no-ops on an empty roster. Unenrolled campers count as
+    // gone here too (see the loop above) — an unenrolled camper's name stays
+    // a real roster key (their record is kept, not deleted), so this must
+    // filter the flag explicitly rather than relying on the key being absent.
+    var rosterNames=Object.keys(roster).filter(function(n){return !roster[n].unenrolled;});
     function _sweep(){
         db.rpc('revoke_orphaned_parent_invites',{p_camp_id:campId,p_roster_names:rosterNames}).then(function(res){
             var rev=res&&res.data&&res.data.revoked;
@@ -8910,14 +9313,53 @@ function _buildInstallmentSchedule(sesObj,tuition){
     return out;
 }
 
-// ── ANALYTICS & FINANCE ──────────────────────────────────────
+// ── ANALYTICS ─────────────────────────────────────────────────
+// Enrollment and camp-wide operational metrics — no money on this page at
+// all (that split out into Finance). What used to be this page's own
+// "Enrollment Funnel" div-bar block now lives here as a real chart.
+function renderAnalytics(){
+    var c=document.getElementById('page-analytics');
+    if(!c)return;
+
+    var eArr=Object.entries(enrollments);
+    var funnel=[
+        {name:'Applied',count:eArr.length},
+        {name:'Accepted',count:eArr.filter(function(pair){return pair[1].status==='accepted'||pair[1].status==='enrolled'}).length},
+        {name:'Enrolled',count:eArr.filter(function(pair){return pair[1].status==='enrolled'}).length},
+        {name:'Waitlisted',count:eArr.filter(function(pair){return pair[1].status==='waitlisted'}).length},
+        {name:'Declined',count:eArr.filter(function(pair){return pair[1].status==='declined'}).length}
+    ];
+
+    var divisions=Object.keys(structure||{});
+    var bunkCount=0;
+    divisions.forEach(function(d){
+        Object.values((structure[d]||{}).grades||{}).forEach(function(g){bunkCount+=(g.bunks||[]).length});
+    });
+
+    var h='<div class="sec-hd"><div><h2 class="sec-title">Analytics</h2><p class="sec-desc">Enrollment and camp-wide operational metrics</p></div></div>';
+
+    h+=statRow(
+        statTile('Campers on Roster',String(roster?Object.keys(roster).length:0))+
+        statTile('Staff',String(hiredStaff().length))+
+        statTile('Divisions',String(divisions.length))+
+        statTile('Bunks',String(bunkCount))
+    );
+
+    h+='<div class="me-card" style="padding:16px"><h4 style="font-size:.85rem;font-weight:700;color:var(--s700);margin:0 0 10px">Enrollment Funnel</h4>';
+    h+=chartBarH(funnel.map(function(f){return{label:f.name,value:f.count}}),{emptyText:'No applications yet'});
+    h+='</div>';
+
+    c.innerHTML=h;
+}
+
+// ── FINANCE ───────────────────────────────────────────────────
 var _finTab='overview';
 var FIN_CATS=['Food & Catering','Supplies & Equipment','Facilities & Rent','Insurance','Transportation','Activities & Trips','Marketing','Utilities','Miscellaneous'];
 var FIN_ROLES=['Head Counselor','Counselor','Junior Counselor','Specialist','Nurse','Kitchen Staff','Bus Driver','Office Staff','Director','Maintenance'];
 var BAR_COLORS=['#D97706','#3B82F6','#10B981','#8B5CF6','#EF4444','#0EA5E9','#F59E0B','#EC4899','#6366F1','#14B8A6'];
 
-function renderAnalytics(){
-    var c=document.getElementById('page-analytics');
+function renderFinance(){
+    var c=document.getElementById('page-finance');
 
     // ═══ AUTO-GENERATE INVOICES FROM ENROLLMENTS ═══
     // Every enrolled camper = an invoice. No manual entry needed.
@@ -8981,22 +9423,17 @@ function renderAnalytics(){
 
     var tabs=[{k:'overview',l:'Overview'},{k:'revenue',l:'Revenue'},{k:'payroll',l:'Payroll'},{k:'expenses',l:'Expenses'},{k:'budget',l:'Budget'},{k:'integrations',l:'Integrations'}];
 
-    var h='<div class="sec-hd"><div><h2 class="sec-title">Analytics & Finance</h2><p class="sec-desc">Financial command center</p></div>';
+    var h='<div class="sec-hd"><div><h2 class="sec-title">Finance</h2><p class="sec-desc">Revenue, payroll, expenses and budget</p></div>';
     h+='<div class="sec-actions">';
     h+='<button class="me-btn me-btn--sec me-btn--sm" onclick="CampistryMe.finExportCSV()">↓ Export CSV</button>';
     h+='<button class="me-btn me-btn--sec me-btn--sm" onclick="CampistryMe.finExportQB()">↓ QuickBooks</button>';
     h+='<button class="me-btn me-btn--sec me-btn--sm" onclick="CampistryMe.finSetBudget()">Set Budget</button>';
     h+='</div></div>';
 
-    // Sub-tabs
-    h+='<div style="display:flex;gap:0;border-bottom:1px solid var(--s200);margin-bottom:14px">';
-    tabs.forEach(function(t){
-        h+='<button class="me-btn me-btn--ghost" style="padding:8px 16px;font-size:.8rem;font-weight:600;border-bottom:2px solid '+(_finTab===t.k?'var(--me)':'transparent')+';color:'+(_finTab===t.k?'var(--me)':'var(--s400)')+';border-radius:0" onclick="CampistryMe.finSetTab(\''+t.k+'\')">'+t.l+'</button>';
-    });
-    h+='</div>';
+    // Sub-tabs — the shared underline tab strip Reports/Billing also use.
+    h+=tabStrip(tabs,_finTab,'CampistryMe.finSetTab');
 
-    function stat(label,value,sub,color){return'<div style="flex:1;min-width:140px;background:#fff;border-radius:var(--r);padding:12px 14px;border:1px solid var(--s200);border-left:3px solid '+color+'"><div style="font-size:.65rem;font-weight:700;color:var(--s400);text-transform:uppercase;letter-spacing:.04em">'+label+'</div><div style="font-size:1.2rem;font-weight:800;color:var(--s800);margin-top:2px">'+value+'</div>'+(sub?'<div style="font-size:.72rem;color:var(--s400);margin-top:1px">'+sub+'</div>':'')+'</div>'}
-    function bar(items,maxVal){var bh='';items.forEach(function(item,i){var pct=maxVal>0?Math.round(item.value/maxVal*100):0;var color=BAR_COLORS[i%BAR_COLORS.length];bh+='<div style="display:flex;align-items:center;gap:8px;margin-bottom:4px"><div style="width:90px;font-size:.75rem;font-weight:600;color:var(--s500);text-align:right;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">'+esc(item.name)+'</div><div style="flex:1;height:20px;background:var(--s100);border-radius:4px;overflow:hidden"><div style="width:'+pct+'%;height:100%;background:'+color+';border-radius:4px;transition:width .3s"></div></div><div style="width:60px;font-size:.75rem;font-weight:700;color:var(--s700);text-align:right">'+fm(item.value)+'</div></div>'});return bh}
+    function stat(label,value,sub,color){return statTile(label,value,sub,color)}
 
     if(_finTab==='overview'){
         // Overdue alert banner
@@ -9016,7 +9453,7 @@ function renderAnalytics(){
         h+='</div>';
 
         // ═══ A/R AGING — outstanding balance bucketed by age of the invoice ═══
-        var aging=[{l:'Current (0–30 days)',v:0,c:'var(--ok)'},{l:'31–60 days',v:0,c:'var(--me)'},{l:'61–90 days',v:0,c:'#F97316'},{l:'90+ days',v:0,c:'var(--err)'}];
+        var aging=[{l:'Current (0–30 days)',v:0},{l:'31–60 days',v:0},{l:'61–90 days',v:0},{l:'90+ days',v:0}];
         autoInvoices.forEach(function(inv){
             if(inv.balance<=0)return;
             var days=Math.floor((todayMs-new Date(inv.enrollDate||todayStr).getTime())/86400000);
@@ -9024,35 +9461,25 @@ function renderAnalytics(){
         });
         var agingTotal=aging.reduce(function(s,b){return s+b.v},0);
         h+='<div class="me-card" style="margin-bottom:14px;padding:16px"><div style="display:flex;justify-content:space-between;align-items:baseline;margin-bottom:10px"><h4 style="font-size:.85rem;font-weight:700;color:var(--s700);margin:0">Accounts Receivable — Aging</h4><span style="font-size:.72rem;color:var(--s400)">Total outstanding '+fm(agingTotal)+'</span></div>';
-        h+='<div style="display:flex;height:10px;border-radius:5px;overflow:hidden;background:var(--s100);margin-bottom:12px">';
-        aging.forEach(function(b){var pct=agingTotal>0?b.v/agingTotal*100:0;if(pct>0)h+='<div style="width:'+pct+'%;background:'+b.c+'" title="'+esc(b.l)+': '+fm(b.v)+'"></div>';});
-        h+='</div><div style="display:grid;grid-template-columns:repeat(4,1fr);gap:8px">';
-        aging.forEach(function(b){h+='<div style="text-align:center;padding:8px 6px;border:1px solid var(--s200);border-radius:var(--r);border-top:3px solid '+b.c+'"><div style="font-size:1.05rem;font-weight:800;color:var(--s800)">'+fm(b.v)+'</div><div style="font-size:.68rem;color:var(--s400);font-weight:600;margin-top:2px">'+esc(b.l)+'</div></div>';});
-        h+='</div></div>';
-
-        // Enrollment funnel
-        var eArr=Object.entries(enrollments);
-        var funnel=[{name:'Applied',count:eArr.length,color:'var(--s400)'},{name:'Accepted',count:eArr.filter(function([,e]){return e.status==='accepted'||e.status==='enrolled'}).length,color:'#3B82F6'},{name:'Enrolled',count:eArr.filter(function([,e]){return e.status==='enrolled'}).length,color:'var(--ok)'},{name:'Waitlisted',count:eArr.filter(function([,e]){return e.status==='waitlisted'}).length,color:'var(--me)'},{name:'Declined',count:eArr.filter(function([,e]){return e.status==='declined'}).length,color:'var(--err)'}];
-        var maxFunnel=funnel[0].count||1;
-        h+='<div style="display:flex;gap:14px;flex-wrap:wrap">';
-        h+='<div class="me-card" style="flex:1;min-width:280px;padding:16px"><h4 style="font-size:.85rem;font-weight:700;color:var(--s700);margin:0 0 10px">Enrollment Funnel</h4>';
-        funnel.forEach(function(f){var pct=Math.round(f.count/maxFunnel*100);h+='<div style="display:flex;align-items:center;gap:8px;margin-bottom:4px"><div style="width:70px;font-size:.75rem;font-weight:600;color:var(--s500);text-align:right">'+f.name+'</div><div style="flex:1;height:22px;background:var(--s100);border-radius:4px;overflow:hidden;position:relative"><div style="width:'+pct+'%;height:100%;background:'+f.color+';border-radius:4px"></div><span style="position:absolute;right:6px;top:3px;font-size:.7rem;font-weight:700;color:var(--s600)">'+f.count+'</span></div></div>'});
+        h+=chartBarH(aging.map(function(b){return{label:b.l,value:b.v}}),{money:true,emptyText:'Nothing outstanding'});
         h+='</div>';
 
         // Payment status
-        h+='<div class="me-card" style="flex:1;min-width:200px;padding:16px"><h4 style="font-size:.85rem;font-weight:700;color:var(--s700);margin:0 0 10px">Payment Status</h4>';
-        var payStats=[{name:'Paid',count:paidCount,color:'var(--ok)'},{name:'Partial',count:partialCount,color:'var(--me)'},{name:'Overdue',count:overdueCount,color:'var(--err)'},{name:'Pending',count:pendingCount,color:'var(--s400)'}];
-        var totalPayCount=autoInvoices.length||1;
-        payStats.forEach(function(p){var pct=Math.round(p.count/totalPayCount*100);h+='<div style="display:flex;align-items:center;gap:8px;margin-bottom:6px"><div style="width:10px;height:10px;border-radius:3px;background:'+p.color+';flex-shrink:0"></div><div style="flex:1;font-size:.82rem;font-weight:600;color:var(--s700)">'+p.name+'</div><div style="font-size:.82rem;font-weight:700;color:var(--s800)">'+p.count+'</div><div style="font-size:.72rem;color:var(--s400);width:35px;text-align:right">'+pct+'%</div></div>'});
-        h+='</div></div>';
+        h+='<div class="me-card" style="margin-bottom:14px;padding:16px"><h4 style="font-size:.85rem;font-weight:700;color:var(--s700);margin:0 0 10px">Payment Status</h4>';
+        h+=chartDonut([
+            {label:'Paid',value:paidCount,color:'#008300'},
+            {label:'Partial',value:partialCount,color:chartColor(3)},
+            {label:'Overdue',value:overdueCount,color:'#e34948'},
+            {label:'Pending',value:pendingCount,color:'#94A3B8'}
+        ],{centerLabel:String(autoInvoices.length),centerSub:'accounts'});
+        h+='</div>';
 
         // Expense breakdown
         var expByCat={};finExpenses.forEach(function(e){expByCat[e.cat]=(expByCat[e.cat]||0)+e.amount});
         var expItems=Object.entries(expByCat).map(function([name,value]){return{name:name,value:value}}).sort(function(a,b){return b.value-a.value});
-        var maxExp=expItems.length?expItems[0].value:1;
         if(expItems.length){
-            h+='<div class="me-card" style="margin-top:14px;padding:16px"><h4 style="font-size:.85rem;font-weight:700;color:var(--s700);margin:0 0 10px">Expense Categories</h4>';
-            h+=bar(expItems,maxExp);
+            h+='<div class="me-card" style="padding:16px"><h4 style="font-size:.85rem;font-weight:700;color:var(--s700);margin:0 0 10px">Expense Categories</h4>';
+            h+=chartBarH(expItems.map(function(x){return{label:x.name,value:x.value}}),{money:true});
             h+='</div>';
         }
     }
@@ -9067,6 +9494,31 @@ function renderAnalytics(){
 
         // Auto-invoice explanation
         h+='<div style="background:#FFF7ED;border:1px solid #FDBA74;border-radius:var(--r);padding:10px 14px;margin-bottom:10px;font-size:.78rem;color:var(--s600)"><strong style="color:var(--me)">Auto-Generated Invoices</strong> — Each enrolled camper automatically creates an invoice based on their session tuition. Record payments below to update balances.</div>';
+
+        // Revenue trend — real payments (positive amounts, not pending/failed)
+        // bucketed by the ISO week they landed, so the office can see whether
+        // collections are picking up or stalling, not just a single total.
+        (function(){
+            var byWeek={};
+            finPayments.forEach(function(p){
+                if(!p||!p.date||(p.amount||0)<=0)return;
+                if(p.status==='pending'||p.status==='failed')return;
+                var d=new Date(p.date+'T12:00:00');
+                if(isNaN(d.getTime()))return;
+                var wk=new Date(d);wk.setDate(d.getDate()-d.getDay());
+                var key=wk.toISOString().slice(0,10);
+                byWeek[key]=(byWeek[key]||0)+p.amount;
+            });
+            var weeks=Object.keys(byWeek).sort();
+            if(weeks.length>=2){
+                var pts=weeks.slice(-10).map(function(k){
+                    return{label:new Date(k+'T12:00:00').toLocaleDateString('en-US',{month:'short',day:'numeric'}),value:byWeek[k]};
+                });
+                h+='<div class="me-card" style="margin-bottom:14px;padding:16px"><h4 style="font-size:.85rem;font-weight:700;color:var(--s700);margin:0 0 10px">Revenue Collected by Week</h4>';
+                h+=chartLine(pts,{money:true});
+                h+='</div>';
+            }
+        })();
 
         // Overdue threshold setting
         h+='<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px;flex-wrap:wrap;gap:6px">';
@@ -9127,7 +9579,7 @@ function renderAnalytics(){
         var roleItems=Object.entries(roleCost).map(function([name,value]){return{name:name,value:value}}).sort(function(a,b){return b.value-a.value});
         if(roleItems.length){
             h+='<div class="me-card" style="margin-bottom:14px;padding:16px"><h4 style="font-size:.85rem;font-weight:700;color:var(--s700);margin:0 0 10px">Cost by Role</h4>';
-            h+=bar(roleItems,roleItems[0].value);
+            h+=chartBarH(roleItems.map(function(x){return{label:x.name,value:x.value}}),{money:true});
             h+='</div>';
         }
         h+='<div style="display:flex;justify-content:flex-end;margin-bottom:8px"><button class="me-btn me-btn--pri me-btn--sm" onclick="CampistryMe.finAddStaff()">+ Add Staff</button></div>';
@@ -9156,7 +9608,7 @@ function renderAnalytics(){
         var expItems2=Object.entries(expByCat2).map(function([name,value]){return{name:name,value:value}}).sort(function(a,b){return b.value-a.value});
         if(expItems2.length){
             h+='<div class="me-card" style="margin-bottom:14px;padding:16px"><h4 style="font-size:.85rem;font-weight:700;color:var(--s700);margin:0 0 10px">Expenses by Category</h4>';
-            h+=bar(expItems2,expItems2[0].value);
+            h+=chartBarH(expItems2.map(function(x){return{label:x.name,value:x.value}}),{money:true});
             h+='</div>';
         }
         h+='<div style="display:flex;justify-content:flex-end;margin-bottom:8px"><button class="me-btn me-btn--pri me-btn--sm" onclick="CampistryMe.finAddExpense()">+ Add Expense</button></div>';
@@ -9235,7 +9687,7 @@ function renderAnalytics(){
 }
 
 // Finance actions
-function finSetTab(t){_finTab=t;_analyticsInvoicePage=1;_analyticsPaymentPage=1;renderAnalytics()}
+function finSetTab(t){_finTab=t;_analyticsInvoicePage=1;_analyticsPaymentPage=1;renderFinance()}
 // All bunk names across the camp structure (for staff bunk assignment).
 function _allBunkNames(){
     var out={};
@@ -9336,7 +9788,7 @@ function finStaffModal(i){
         else finStaff.push(rec);
         _staffPhotoBuf=null;
         closeModal('dynModal');
-        save();renderAnalytics();toast(editing?'Staff updated':'Staff added');
+        save();renderFinance();toast(editing?'Staff updated':'Staff added');
     });
 }
 function _staffPhotoPick(input){
@@ -9352,18 +9804,18 @@ function _staffPhotoClear(){
     var prev=document.getElementById('staffPhotoPrev');
     if(prev) prev.innerHTML=_staffAvatar({},64);
 }
-function finRemoveStaff(i){finStaff.splice(i,1);save();renderAnalytics();toast('Removed')}
+function finRemoveStaff(i){finStaff.splice(i,1);save();renderFinance();toast('Removed')}
 function finAddExpense(){
     var desc=prompt('Description:');if(!desc)return;
     var cat=prompt('Category ('+FIN_CATS.join(', ')+'):','Miscellaneous');
     var amount=prompt('Amount ($):','');if(!amount)return;
     var date=prompt('Date (YYYY-MM-DD):',new Date().toISOString().split('T')[0]);
     finExpenses.push({id:Date.now(),desc:desc.trim(),cat:(cat||'Miscellaneous').trim(),amount:parseFloat(amount)||0,date:(date||'').trim()});
-    save();renderAnalytics();toast('Expense added');
+    save();renderFinance();toast('Expense added');
 }
-function finRemoveExpense(i){finExpenses.splice(i,1);save();renderAnalytics();toast('Removed')}
+function finRemoveExpense(i){finExpenses.splice(i,1);save();renderFinance();toast('Removed')}
 function finAddPayment(){
-    if(!_secEdit('analytics','Recording a payment'))return;
+    if(!_secEdit('finance','Recording a payment'))return;
 
     // A modal rather than a prompt chain, so the method comes from the camp's
     // payment policy instead of whatever the user types into a text box.
@@ -9386,7 +9838,7 @@ function finAddPayment(){
         finPayments.push({id:Date.now(),family:family,amount:amount,method:method,
                           date:document.getElementById('fapDate').value||today,status:'paid'});
         closeModal('dynModal');
-        save();renderAnalytics();toast('Payment recorded');
+        save();renderFinance();toast('Payment recorded');
     });
 }
 function finRemovePayment(id){
@@ -9394,7 +9846,7 @@ function finRemovePayment(id){
     //   index would target the wrong row; identical rows were also indistinguishable).
     var idx=finPayments.findIndex(function(p){return String(p.id)===String(id)});
     if(idx<0){toast('Payment not found','error');return}
-    finPayments.splice(idx,1);save();renderAnalytics();toast('Removed');
+    finPayments.splice(idx,1);save();renderFinance();toast('Removed');
 }
 
 function finSetBudget(){
@@ -9402,13 +9854,13 @@ function finSetBudget(){
     var pay=prompt('Payroll budget ($):',finBudget.payroll||'');
     var exp=prompt('Expense budget ($):',finBudget.expenses||'');
     finBudget={revenue:parseFloat(rev)||0,payroll:parseFloat(pay)||0,expenses:parseFloat(exp)||0,overdueDays:finBudget.overdueDays||30};
-    save();renderAnalytics();toast('Budget targets saved');
+    save();renderFinance();toast('Budget targets saved');
 }
 function finSetOverdue(){
     var days=prompt('Mark accounts overdue after how many days?',finBudget.overdueDays||30);
     if(days===null)return;
     finBudget.overdueDays=parseInt(days)||30;
-    save();renderAnalytics();toast('Overdue threshold set to '+finBudget.overdueDays+' days');
+    save();renderFinance();toast('Overdue threshold set to '+finBudget.overdueDays+' days');
 }
 
 // ── EXPORT FUNCTIONS ─────────────────────────────────────────
@@ -9548,7 +10000,7 @@ function finImportCSV(){
                     imported++;
                 }
             }
-            save();renderAnalytics();toast(imported+' transactions imported');
+            save();renderFinance();toast(imported+' transactions imported');
             inp.value='';
         };
         reader.readAsText(file);
@@ -9783,11 +10235,7 @@ function renderPayroll(){
     }
     h+='</div></div>';
 
-    h+='<div style="display:flex;gap:0;border-bottom:1px solid var(--s200);margin-bottom:14px;flex-wrap:wrap">';
-    tabs.forEach(function(t){
-        h+='<button class="me-btn me-btn--ghost" style="padding:8px 16px;font-size:.8rem;font-weight:600;border-bottom:2px solid '+(_prTab===t.k?'var(--me)':'transparent')+';color:'+(_prTab===t.k?'var(--me)':'var(--s400)')+';border-radius:0" onclick="CampistryMe.prSetTab(\''+t.k+'\')">'+t.l+'</button>';
-    });
-    h+='</div>';
+    h+=tabStrip(tabs,_prTab,'CampistryMe.prSetTab');
 
     if(_prTab==='overview') h+=_prOverview();
     else if(_prTab==='staff') h+=_prStaffTab();
@@ -10465,12 +10913,12 @@ function _prTimesheetsTab(){
                'style="width:52px;padding:4px;text-align:center;border:1px solid var(--s200);border-radius:5px;font-size:.78rem" '+
                'onchange="CampistryMe.prSetHours('+s.id+',\''+k+'\',this.value)"></td>';
         });
-        h+='<td style="text-align:center;font-weight:700">'+chk.total+'</td>';
+        h+='<td id="pr-total-'+s.id+'" style="text-align:center;font-weight:700">'+chk.total+'</td>';
         h+='<td><label style="cursor:pointer"><input type="checkbox"'+(sheet.supervisorSigned?' checked':'')+' onchange="CampistryMe.prSetSigned('+s.id+',this.checked)"></label></td>';
         h+='<td><select class="fs" style="font-size:.74rem;padding:3px 6px" onchange="CampistryMe.prSetSheetStatus('+s.id+',this.value)">'+
             ['draft','submitted','approved'].map(function(st){return'<option value="'+st+'"'+((sheet.status||'draft')===st?' selected':'')+'>'+st.charAt(0).toUpperCase()+st.slice(1)+'</option>'}).join('')+
             '</select></td>';
-        h+='<td style="font-size:.72rem">'+(chk.issues.length
+        h+='<td id="pr-flags-'+s.id+'" style="font-size:.72rem">'+(chk.issues.length
             ? chk.issues.map(function(i){return'<div style="color:'+(i.severity==='blocker'?'var(--err)':'var(--me)')+'">'+esc(i.message)+'</div>'}).join('')
             : '<span style="color:var(--ok)">✓</span>')+'</td>';
         h+='</tr>';
@@ -10495,10 +10943,36 @@ function prSetHours(staffId,day,val){
     var sh=_prEnsureSheet(staffId);
     if(!isFinite(n)||n<=0) delete sh.days[day];
     else sh.days[day]=Math.min(24,n);
-    save(); renderPayroll();
+    save();
+    // A full renderPayroll() here used to blow away and rebuild every input in
+    // the table on every single cell's onchange (which fires as part of Tab's
+    // own blur-then-focus-next sequence) — the browser was mid-way through
+    // moving focus to the next day's cell when that cell's element got
+    // replaced out from under it, so Tab-through-a-row could silently drop
+    // keystrokes into whatever the freshly-rendered DOM happened to focus
+    // instead, or lose focus off the table entirely. Patch just the one
+    // row's Total/Flags cells (the only two things checkTimesheet's result
+    // actually changes) so every other input is left alone.
+    _prPatchTimesheetRow(staffId);
 }
-function prSetSigned(staffId,on){ _prEnsureSheet(staffId).supervisorSigned=!!on; save(); renderPayroll() }
-function prSetSheetStatus(staffId,st){ _prEnsureSheet(staffId).status=st; save(); renderPayroll() }
+function _prPatchTimesheetRow(staffId){
+    var core=PC(),s=payroll.staff.find(function(x){return String(x.id)===String(staffId)});
+    if(!s)return;
+    var sheet=_prSheet(s.id,_prWeek)||{staffId:s.id,weekOf:_prWeek,days:{},status:'draft',supervisorSigned:false};
+    var chk=core.checkTimesheet(sheet,s,{program:payroll.youthCorps,today:_prToday()});
+    var totalEl=document.getElementById('pr-total-'+s.id);
+    if(totalEl)totalEl.textContent=chk.total;
+    var flagsEl=document.getElementById('pr-flags-'+s.id);
+    if(flagsEl)flagsEl.innerHTML=(chk.issues.length
+        ? chk.issues.map(function(i){return'<div style="color:'+(i.severity==='blocker'?'var(--err)':'var(--me)')+'">'+esc(i.message)+'</div>'}).join('')
+        : '<span style="color:var(--ok)">✓</span>');
+}
+// Signing/status don't feed into checkTimesheet's total or flags, and the
+// checkbox/select already reflect the click that triggered them — nothing
+// else on the row needs to change, so there's nothing to re-render at all
+// (avoids the same full-table-rebuild-mid-interaction risk as hours).
+function prSetSigned(staffId,on){ _prEnsureSheet(staffId).supervisorSigned=!!on; save() }
+function prSetSheetStatus(staffId,st){ _prEnsureSheet(staffId).status=st; save() }
 
 // ── Youth Corps ──────────────────────────────────────────────────
 function _prYouthTab(){
@@ -10777,25 +11251,21 @@ function renderBilling(){
     // couldn't safely decide on its own.
     h+=_famSuggestionsBannerHtml();
 
-    // Stats — plain borders, only the number itself is colored, so this
-    // reads as a data summary rather than a row of colorful tiles.
-    h+='<div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(155px,1fr));gap:10px;margin-bottom:18px">';
-    h+='<div style="background:#fff;border-radius:var(--r);padding:14px 16px;border:1px solid var(--s200)"><div style="font-size:1.2rem;font-weight:700;color:var(--s800)">'+fm(totalCharged)+'</div><div style="font-size:.7rem;color:var(--s400);font-weight:600;text-transform:uppercase">Total Charged</div></div>';
-    h+='<div style="background:#fff;border-radius:var(--r);padding:14px 16px;border:1px solid var(--s200)"><div style="font-size:1.2rem;font-weight:700;color:var(--ok)">'+fm(totalCollected)+'</div><div style="font-size:.7rem;color:var(--s400);font-weight:600;text-transform:uppercase">Collected</div></div>';
-    h+='<div style="background:#fff;border-radius:var(--r);padding:14px 16px;border:1px solid var(--s200)"><div style="font-size:1.2rem;font-weight:700;color:var(--err)">'+fm(totalOutstanding)+'</div><div style="font-size:.7rem;color:var(--s400);font-weight:600;text-transform:uppercase">Outstanding</div></div>';
-    h+='<div style="background:#fff;border-radius:var(--r);padding:14px 16px;border:1px solid var(--s200)"><div style="font-size:1.2rem;font-weight:700;color:var(--s800)">'+rate+'%</div><div style="font-size:.7rem;color:var(--s400);font-weight:600;text-transform:uppercase">Collection Rate</div></div>';
-    h+='<div style="background:#fff;border-radius:var(--r);padding:14px 16px;border:1px solid var(--s200)"><div style="font-size:1.2rem;font-weight:700;color:'+(overdueCount>0?'var(--err)':'var(--s800)')+'">'+overdueCount+'</div><div style="font-size:.7rem;color:var(--s400);font-weight:600;text-transform:uppercase">Overdue</div></div>';
-    if(_unmatchedTotal>0)h+='<div style="background:#fff;border-radius:var(--r);padding:14px 16px;border:1px solid var(--s200)" title="Payments not linked to any family. Included in Analytics revenue but NOT in the family ledgers above. Collected + Unmatched = Analytics revenue."><div style="font-size:1.2rem;font-weight:700;color:var(--me)">'+fm(_unmatchedTotal)+'</div><div style="font-size:.7rem;color:var(--s400);font-weight:600;text-transform:uppercase">Unmatched ('+_unmatchedPays.length+')</div></div>';
-    h+='</div>';
+    // Stats — same shared stat-tile Analytics and Finance use, so Billing
+    // reads as one visual system with the rest of the app instead of its
+    // own one-off "plain bordered box" styling.
+    h+=statRow(
+        statTile('Total Charged',fm(totalCharged))+
+        statTile('Collected',fm(totalCollected),'','var(--ok)')+
+        statTile('Outstanding',fm(totalOutstanding),'','var(--err)')+
+        statTile('Collection Rate',rate+'%')+
+        statTile('Overdue',String(overdueCount),'',overdueCount>0?'var(--err)':undefined)+
+        (_unmatchedTotal>0?statTile('Unmatched ('+_unmatchedPays.length+')',fm(_unmatchedTotal),'Included in Analytics revenue, not in the ledgers below','var(--me)'):'')
+    );
 
-    // Filter tabs
-    h+='<div style="display:flex;gap:6px;margin-bottom:14px;flex-wrap:wrap">';
+    // Filter tabs — same underline tab strip used throughout Finance/Reports.
     var filters=[['all','All Accounts',famList.length],['outstanding','Outstanding',famWithBalance],['overdue','Overdue',overdueCount],['paid','Paid In Full',famList.filter(function(l){return l.status==='paid'}).length]];
-    filters.forEach(function(f){
-        var active=_billFilter===f[0];
-        h+='<button class="me-btn '+(active?'me-btn--pri':'me-btn--sec')+' me-btn--sm" onclick="CampistryMe.setBillFilter(\''+f[0]+'\')">'+f[1]+' ('+f[2]+')</button>';
-    });
-    h+='</div>';
+    h+=tabStrip(filters.map(function(f){return{k:f[0],l:f[1]+' ('+f[2]+')'}}),_billFilter,'CampistryMe.setBillFilter');
 
     // Family accounts
     var filtered=famList;
@@ -11257,7 +11727,7 @@ function issueCreditForFamily(famKey){
             // The refund itself (finPayments push + save) is already done at this
             // point — a rendering failure below must never look like the refund
             // silently vanished, so surface it loudly instead of swallowing it.
-            try{renderAnalytics()}catch(e){console.error('[Me] renderAnalytics after refund failed:',e)}
+            try{renderFinance()}catch(e){console.error('[Me] renderFinance after refund failed:',e)}
             try{if(curPage==='familydetail')renderFamilyDetailPage();else renderBilling()}
             catch(e){
                 console.error('[Me] Re-render after refund failed:',e);
@@ -12542,7 +13012,7 @@ function _reportSources(){
                 {key:'street',label:'Street',group:'Address'},{key:'city',label:'City',group:'Address'},{key:'state',label:'State',group:'Address'},{key:'zip',label:'ZIP',group:'Address'}
             ].concat(cfFields),
             rows:function(){
-                return Object.keys(roster).map(function(n){
+                return Object.keys(roster).filter(function(n){return !roster[n].unenrolled;}).map(function(n){
                     var c=roster[n]||{}; var nm=_rbSplitName(n);
                     var row={name:n,firstName:nm.first,lastName:nm.last,camperId:c.camperId||'',division:c.division||'',grade:c.grade||'',bunk:c.bunk||'',
                         schoolGrade:c.schoolGrade||'',teacher:c.teacher||'',school:c.school||'',
@@ -12638,7 +13108,7 @@ function _reportSources(){
                 {key:'allergies',label:'Allergies',group:'Medical'}],
             rows:function(){
                 var rows=[];
-                Object.keys(roster).forEach(function(n){
+                Object.keys(roster).filter(function(n){return !roster[n].unenrolled;}).forEach(function(n){
                     var c=roster[n]||{}; var nm=_rbSplitName(n);
                     rows.push({personType:'Camper',name:n,firstName:nm.first,lastName:nm.last,division:c.division||'',bunk:c.bunk||'',role:'',dob:c.dob||'',
                         phone:'',email:'',allergies:c.allergies||'',parent1Name:c.parent1Name||'',parent1Phone:c.parent1Phone||'',
@@ -14353,7 +14823,7 @@ function _psStaffAsRow(s){
 function psFilteredCampers(sheet){
     var who=sheet.whoScope||'campers';
     var rows=[];
-    if(who!=='staff')rows=rows.concat(Object.entries(roster));
+    if(who!=='staff')rows=rows.concat(Object.entries(roster).filter(function(r){return !r[1].unenrolled;}));
     if(who!=='campers')rows=rows.concat(hiredStaff().map(_psStaffAsRow));
     if(sheet.scopeDiv)rows=rows.filter(function(r){return r[1].division===sheet.scopeDiv});
     var sortKey=sheet.sortBy||'lastName';
@@ -14709,7 +15179,7 @@ function psEditorHtml(s){
 
 window.CampistryMe={
     nav:nav,closeModal:closeModal,
-    viewCamper:viewCamper,editCamper:editCamper,addCamper:addCamper,deleteCamper:deleteCamper,ceToggleSummer:ceToggleSummer,
+    viewCamper:viewCamper,editCamper:editCamper,addCamper:addCamper,deleteCamper:deleteCamper,unenrollCamper:unenrollCamper,reenrollCamper:reenrollCamper,ceToggleSummer:ceToggleSummer,
     addFamily:function(){openFamilyForm(null)},editFamily:function(id){openFamilyForm(id)},deleteFamily:deleteFamily,removeCamperFromFamily:removeCamperFromFamily,
     setPplStaffSubTab:setPplStaffSubTab,viewStaffMember:viewStaffMember,openEditStaffModal:openEditStaffModal,saveStaffMember:saveStaffMember,
     acceptFamilySuggestion:acceptFamilySuggestion,dismissFamilySuggestion:dismissFamilySuggestion,acceptAddToFamily:acceptAddToFamily,
@@ -14719,7 +15189,7 @@ window.CampistryMe={
     addSectionTextBlock:addSectionTextBlock,_richTextExec:_richTextExec,
     addDiv:function(){openDivForm(null)},editDiv:function(n){openDivForm(n)},deleteDiv:deleteDiv,
     openCsv:function(){openModal('csvModal')},downloadTemplate:downloadTemplate,
-    setRosterPage:setRosterPage,setBillingPage:setBillingPage,setAnalyticsInvoicePage:setAnalyticsInvoicePage,setAnalyticsPaymentPage:setAnalyticsPaymentPage,
+    setRosterPage:setRosterPage,setRosterSubTab:setRosterSubTab,setBillingPage:setBillingPage,setAnalyticsInvoicePage:setAnalyticsInvoicePage,setAnalyticsPaymentPage:setAnalyticsPaymentPage,
     _runSetupChecklistAction:_runSetupChecklistAction,dismissSetupChecklist:dismissSetupChecklist,
     bbDrop:bbDrop,autoAssign:autoAssign,autoGenerateBunks:autoGenerateBunks,openBunkGenSettings:openBunkGenSettings,showCamperBunkRequests:showCamperBunkRequests,clearBunks:clearBunks,setBunkCount:setBunkCount,openBunkCountModal:openBunkCountModal,_clearBunkCount:_clearBunkCount,
     openBunkStaffModal:openBunkStaffModal,addBunkStaff:addBunkStaff,removeBunkStaff:removeBunkStaff,
@@ -14742,8 +15212,8 @@ window.CampistryMe={
     getStaffForBunk:getStaffForBunk,getStaffForBunks:getStaffForBunks,
     getStaffForDivision:getStaffForDivision,getBunksForDivision:getBunksForDivision,
     findStaffByEmail:findStaffByEmail,getAllStaff:getAllStaff,
-    copyRegLink:copyRegLink,addDocRow:addDocRow,addApplication:addApplication,_onAppPhotoPick:_onAppPhotoPick,autoPromoteWaitlist:autoPromoteWaitlist,
-    viewApplication:viewApplication,_markAppPaymentReceived:_markAppPaymentReceived,updateEnrollStatus:updateEnrollStatus,bulkEnrollStatus:bulkEnrollStatus,toggleAllEnroll:toggleAllEnroll,_updateRegBulkBar:_updateRegBulkBar,enrollCamper:enrollCamper,generateParentInvite:generateParentInvite,_sendInviteEmailNow:_sendInviteEmailNow,rescindEnrollment:rescindEnrollment,
+    copyRegLink:copyRegLink,openEmbedLinkModal:openEmbedLinkModal,copyEmbedSnippet:copyEmbedSnippet,addDocRow:addDocRow,addApplication:addApplication,_onAppPhotoPick:_onAppPhotoPick,autoPromoteWaitlist:autoPromoteWaitlist,
+    viewApplication:viewApplication,_markAppPaymentReceived:_markAppPaymentReceived,updateEnrollStatus:updateEnrollStatus,bulkEnrollStatus:bulkEnrollStatus,toggleAllEnroll:toggleAllEnroll,_updateRegBulkBar:_updateRegBulkBar,enrollCamper:enrollCamper,generateParentInvite:generateParentInvite,_sendInviteEmailNow:_sendInviteEmailNow,rescindEnrollment:rescindEnrollment,deleteApplication:deleteApplication,
     saveAppNote:saveAppNote,printApplication:printApplication,
     openFormConfig:openFormConfig,saveFormConfig:saveFormConfig,addCustomQ:addCustomQ,addPromoRow:addPromoRow,
     openStaffFormConfig:openStaffFormConfig,saveStaffFormConfig:saveStaffFormConfig,addStaffCustomQ:addStaffCustomQ,

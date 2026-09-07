@@ -99,8 +99,25 @@ function closeAuthModal() {
     if (authForm) authForm.reset();
     if (authError) authError.textContent = '';
     if (authLoading) authLoading.style.display = 'none';
-    
+    resetPasswordVisibility('authPassword');
+
     resetFormButton();
+}
+
+// form.reset() clears input VALUES but not the `type` attribute a password
+// toggle switched to 'text' — without this a field left revealed stays
+// revealed (empty, but still unmasked) the next time the modal opens.
+function resetPasswordVisibility(inputId) {
+    const input = document.getElementById(inputId);
+    if (input) input.type = 'password';
+}
+
+function togglePasswordVisibility(inputId, btn) {
+    const input = document.getElementById(inputId);
+    if (!input) return;
+    const showing = input.type === 'text';
+    input.type = showing ? 'password' : 'text';
+    if (btn) btn.setAttribute('aria-pressed', showing ? 'false' : 'true');
 }
 
 function openResetModal() {
@@ -135,6 +152,8 @@ function openResetModal() {
 function closeResetModal() {
     const resetModal = document.getElementById('resetPasswordModal');
     if (resetModal) resetModal.style.display = 'none';
+    resetPasswordVisibility('newPassword');
+    resetPasswordVisibility('confirmPassword');
 }
 
 // =========================================================================
@@ -892,11 +911,28 @@ document.addEventListener('DOMContentLoaded', function() {
             try {
                 const supabase = getSupabase();
                 if (!supabase) throw new Error('Authentication service not available. Please refresh the page.');
+
+                // Check the email actually has an account before sending a
+                // reset link — resetPasswordForEmail() itself never reveals
+                // this (it always "succeeds" whether or not the email
+                // exists), so without this check a typo'd email just looks
+                // like a sent email that never arrives.
+                const { data: hasAccount, error: checkErr } = await supabase.rpc('email_has_account', { p_email: email });
+                if (checkErr) {
+                    console.error('[Landing] email_has_account check failed:', checkErr);
+                    // Fail open — don't block a real reset just because the
+                    // lookup itself errored (e.g. migration not applied yet).
+                } else if (hasAccount === false) {
+                    if (resetError) resetError.textContent = "We couldn't find an account with that email. Double-check the spelling or try a different email.";
+                    if (submitBtn) { submitBtn.disabled = false; submitBtn.textContent = 'Send Reset Link'; }
+                    return;
+                }
+
                 const { error } = await supabase.auth.resetPasswordForEmail(email, {
                     redirectTo: window.location.origin + '/index.html#reset-password'
                 });
                 if (error) throw error;
-                if (resetSuccess) { resetSuccess.textContent = 'Reset link sent! Check your email.'; resetSuccess.style.display = 'block'; }
+                if (resetSuccess) { resetSuccess.textContent = 'Reset link sent! Check your email — including your spam/junk folder, since it can land there.'; resetSuccess.style.display = 'block'; }
                 if (emailInput) emailInput.disabled = true;
                 if (submitBtn) submitBtn.textContent = 'Email Sent';
             } catch (err) {
@@ -914,8 +950,8 @@ document.addEventListener('DOMContentLoaded', function() {
         updatePasswordForm.addEventListener('submit', async (e) => {
             e.preventDefault();
             const newPassword = document.getElementById('newPassword')?.value;
-            const confirmPassword = document.getElementById('confirmNewPassword')?.value;
-            const submitBtn = document.getElementById('updatePasswordSubmit');
+            const confirmPassword = document.getElementById('confirmPassword')?.value;
+            const submitBtn = document.getElementById('updateSubmit');
             const updateError = document.getElementById('updateError');
             const updateSuccess = document.getElementById('updateSuccess');
             

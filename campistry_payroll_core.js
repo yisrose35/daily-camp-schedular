@@ -103,7 +103,10 @@
         var rate = parseFloat(staff.payRate) || 0;
         var hours = parseFloat(o.hours) || 0;
         var periods = parseFloat(o.periodsInSeason) || 1;
-        var weeks = parseFloat(o.weeks) || 1;
+        // Like hours, 0 weeks worked must stay 0 — "|| 1" here used to turn a
+        // legitimate zero (a weekly-pay person with no timesheet entries in
+        // the pay period) into a full week's pay for nothing.
+        var weeks = parseFloat(o.weeks) || 0;
         switch (staff.payType) {
             case 'hourly':  return round2(rate * hours);
             case 'weekly':  return round2(rate * weeks);
@@ -484,8 +487,12 @@
         (staffList || []).forEach(function (s) {
             if (!s) return;
             var t = totals[String(s.id)] || { hours: 0, weeks: 0, unsigned: 0, unsubmitted: 0 };
+            // t.weeks is already a real, always-defined count (0 when nobody
+            // submitted a timesheet this period) — "|| 1" here was the other
+            // half of the same bug as grossPay's own fallback: it silently
+            // paid a full week to a weekly-pay person with zero entries.
             var gross = P.grossPay(s, {
-                hours: t.hours, weeks: t.weeks || 1,
+                hours: t.hours, weeks: t.weeks,
                 periodsInSeason: o.periodsInSeason, finalPeriod: o.finalPeriod
             });
             if (s.payType === 'program') { programHours = round2(programHours + t.hours); programPeople++; }

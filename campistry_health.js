@@ -28,7 +28,10 @@
         try { return JSON.parse(localStorage.getItem(STORAGE_KEY) || '{}'); }
         catch(e) { return {}; }
     }
-    function getRoster()    { var g = readGlobal(); return (g.app1 && g.app1.camperRoster) || {}; }
+    // Unenrolled campers (Me's "Unenroll" action — kept in the record for
+    // billing/audit history but no longer active) are dropped here so a kid
+    // who's left camp never shows up in a live medical/directory list.
+    function getRoster()    { var g = readGlobal(), all = (g.app1 && g.app1.camperRoster) || {}, out = {}; Object.keys(all).forEach(function(n){ if(!all[n].unenrolled) out[n] = all[n]; }); return out; }
     function getStructure() { return readGlobal().campStructure || {}; }
     function getFamilies()  { var g = readGlobal(); return (g.campistryMe && g.campistryMe.families) || {}; }
     // Hired staff — head counselors, counselors, everyone on payroll — pulled
