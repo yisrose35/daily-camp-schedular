@@ -3367,13 +3367,23 @@ function renderCamperMail(){
 
 function _renderMyMail(){
     var el=document.getElementById('myMailList'); if(!el)return;
-    // Cloud letters (any device) merged with local mirror (this device), cloud wins by id
+    // Cloud letters (any device) merged with local mirror (this device), cloud wins by id.
+    // The local mirror is written with a client-generated id ("mail_...") before the
+    // cloud call resolves; the cloud row gets its own server-assigned id once accepted
+    // — those never match, so id-only dedupe let every successfully-synced letter show
+    // twice forever. Fall back to a content match (same camper+subject+body) to catch
+    // the ones already stuck duplicated in localStorage too.
     var cloud=window._myCamperMail||[];
     var seen={}; cloud.forEach(function(m){seen[m.id]=1;});
+    var seenContent={}; cloud.forEach(function(m){seenContent[(m.camper_name||'')+'|'+(m.subject||'')+'|'+(m.body||'')]=1;});
     var all=cloud.map(function(m){
         return {id:m.id,camper:m.camper_name,subject:m.subject,body:m.body,status:m.status,date:m.created_at};
     });
-    _mailLocal().forEach(function(m){ if(!seen[m.id])all.push(m); });
+    _mailLocal().forEach(function(m){
+        if(seen[m.id])return;
+        if(seenContent[(m.camper||'')+'|'+(m.subject||'')+'|'+(m.body||'')])return;
+        all.push(m);
+    });
     all.sort(function(a,b){return new Date(b.date||0)-new Date(a.date||0);});
     if(!all.length){
         el.innerHTML='<div class="lk-empty" style="padding:20px 0;"><h3>No letters yet</h3><p>Letters you send appear here with their delivery status.</p></div>';
@@ -4153,6 +4163,13 @@ if (window.pdfjsLib) { window.pdfjsLib.GlobalWorkerOptions.workerSrc = 'pdfjs-di
                     if (typeof toast === 'function') toast('Daily letter limit reached — try again tomorrow.');
                 }
             } else {
+                // Cloud now has this letter under its own row id — drop the client-side
+                // optimistic mirror entry so it doesn't linger forever (the render-time
+                // content match above already hides it, this just keeps storage tidy).
+                try{
+                    var kept=_mailLocal().filter(function(m){ return m.id!==letter.id; });
+                    localStorage.setItem(MAIL_LOCAL_KEY, JSON.stringify(kept));
+                }catch(e){}
                 _loadMyMail(); // refresh statuses with the cloud row
             }
         });
