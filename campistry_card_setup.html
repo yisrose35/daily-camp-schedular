@@ -1,0 +1,193 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>Save a Payment Method — Campistry</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <link rel="icon" type="image/png" href="Campistry_logo.png">
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600;700&family=Fraunces:wght@600;700&display=swap" rel="stylesheet">
+    <style>
+        *{box-sizing:border-box;margin:0;padding:0}
+        body{font-family:'DM Sans',system-ui,sans-serif;background:#F8FAFC;color:#1E293B;min-height:100vh;display:flex;align-items:center;justify-content:center;padding:24px}
+        .card{background:#fff;border:1px solid #E2E8F0;border-radius:18px;box-shadow:0 12px 40px rgba(15,23,42,.08);max-width:440px;width:100%;padding:36px 32px}
+        h1{font-family:'Fraunces',serif;font-size:1.4rem;margin-bottom:6px;text-align:center}
+        .sub{color:#64748B;font-size:.88rem;line-height:1.55;text-align:center;margin-bottom:22px}
+        .field-label{font-size:.78rem;font-weight:600;color:#475569;margin-bottom:6px;display:block}
+        .field-group{margin-bottom:14px}
+        .cc-field{border:1px solid #CBD5E1;border-radius:10px;padding:11px 12px;background:#fff;min-height:42px}
+        .cc-field.focused{border-color:#147D91}
+        .row{display:flex;gap:10px}
+        .row .field-group{flex:1}
+        button#saveBtn{width:100%;background:#147D91;color:#fff;border:none;border-radius:10px;padding:13px;font-size:.95rem;font-weight:600;cursor:pointer;margin-top:6px}
+        button#saveBtn:disabled{opacity:.6;cursor:default}
+        .msg{font-size:.85rem;text-align:center;margin-top:14px;min-height:1.2em}
+        .msg.err{color:#DC2626}
+        .msg.ok{color:#0E7C4A}
+        .icon{width:56px;height:56px;border-radius:50%;display:flex;align-items:center;justify-content:center;margin:0 auto 14px;background:#ECFDF5;color:#0E7C4A}
+        .note{margin-top:18px;font-size:.75rem;color:#94A3B8;text-align:center}
+    </style>
+</head>
+<body>
+    <div class="card" id="card">
+        <h1>Loading…</h1>
+    </div>
+
+    <!-- Same 3-script cloud config pattern every other public Campistry page
+         uses (campistry_register.html, etc.) — config.js injects
+         window.__CAMPISTRY_SUPABASE__, supabase_client.js builds the client
+         from it. -->
+    <script src="config.js"></script>
+    <script src="supabase-js@2.js"></script>
+    <script src="supabase_client.js"></script>
+
+    <script>
+    (function() {
+        var params = new URLSearchParams(location.search);
+        var campId = params.get('campId');
+        var familyKey = params.get('familyKey');
+        var familyName = params.get('familyName') || 'your family';
+        var cardEl = document.getElementById('card');
+
+        function getClient() {
+            return (window.CampistryDB && window.CampistryDB.getClient && window.CampistryDB.getClient()) ||
+                   (window.supabase && typeof window.supabase.rpc === 'function' ? window.supabase : null);
+        }
+
+        function renderError(msg) {
+            cardEl.innerHTML = '<h1>Something went wrong</h1><p class="sub">' + msg + '</p>' +
+                '<div class="note">Contact your camp\'s office if this keeps happening.</div>';
+        }
+
+        function renderSuccess() {
+            cardEl.innerHTML =
+                '<div class="icon"><svg width="26" height="26" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="20 6 9 17 4 12"/></svg></div>' +
+                '<h1 style="text-align:center">Saved!</h1>' +
+                '<p class="sub">A payment method is now on file for ' + escapeHtml(familyName) + '. You can close this window.</p>';
+        }
+
+        function escapeHtml(s) {
+            return String(s == null ? '' : s).replace(/[<>&"]/g, function(c) {
+                return { '<': '&lt;', '>': '&gt;', '&': '&amp;', '"': '&quot;' }[c];
+            });
+        }
+
+        if (!campId || !familyKey) {
+            renderError('This link is missing information and can\'t be used.');
+            return;
+        }
+
+        var client = getClient();
+        if (!client) {
+            renderError('Could not reach Campistry\'s servers. Check your connection and reload.');
+            return;
+        }
+
+        client.rpc('get_camp_public_tokenization_key', { p_camp_id: campId }).then(function(res) {
+            var data = res.data;
+            if (res.error || !data || !data.success) {
+                renderError('This camp hasn\'t finished setting up online payments yet.');
+                return;
+            }
+            if (data.processorKey === 'banquest') {
+                renderBanquestForm(data.tokenizationKey);
+            } else {
+                // Cardknox/iFields (or anything else) not built yet — flagged
+                // in BYOP_SETUP.md, Banquest was the immediate priority.
+                renderError('Online card setup for this camp\'s payment processor isn\'t available yet — please contact the office.');
+            }
+        }).catch(function() {
+            renderError('Could not reach Campistry\'s servers. Check your connection and reload.');
+        });
+
+        // ─── NMI Collect.js (Banquest) ──────────────────────────────────────
+        // *** NOT YET VERIFIED AGAINST A LIVE SANDBOX *** — written from
+        // NMI's long-documented Collect.js integration pattern (inline
+        // variant: field selectors + a paymentSelector button + a callback
+        // receiving {token}), not tested against a real tokenization key in
+        // this environment. Diff this against NMI's own current docs before
+        // going live with a real camp.
+        function renderBanquestForm(tokenizationKey) {
+            cardEl.innerHTML =
+                '<h1>Save a payment method</h1>' +
+                '<p class="sub">For ' + escapeHtml(familyName) + ' — used for future camp charges. Your card details go directly to the payment processor and never touch Campistry\'s servers.</p>' +
+                '<div class="field-group"><span class="field-label">Card Number</span><div class="cc-field" id="ccnumber"></div></div>' +
+                '<div class="row">' +
+                    '<div class="field-group"><span class="field-label">Expiration (MM/YY)</span><div class="cc-field" id="ccexp"></div></div>' +
+                    '<div class="field-group"><span class="field-label">CVV</span><div class="cc-field" id="cvv"></div></div>' +
+                '</div>' +
+                '<button id="saveBtn" type="button">Save Payment Method</button>' +
+                '<div class="msg" id="msg"></div>';
+
+            var script = document.createElement('script');
+            script.src = 'https://secure.nmi.com/token/Collect.js';
+            script.setAttribute('data-tokenization-key', tokenizationKey);
+            script.onload = function() {
+                if (!window.CollectJS) {
+                    setMsg('Could not load the payment form. Reload and try again.', true);
+                    return;
+                }
+                window.CollectJS.configure({
+                    paymentSelector: '#saveBtn',
+                    variant: 'inline',
+                    styleSniffer: true,
+                    fields: {
+                        ccnumber: { selector: '#ccnumber', placeholder: 'Card Number' },
+                        ccexp: { selector: '#ccexp', placeholder: 'MM/YY' },
+                        cvv: { selector: '#cvv', placeholder: 'CVV' }
+                    },
+                    callback: function(response) {
+                        if (!response || !response.token) {
+                            setMsg('Could not process the card — check the details and try again.', true);
+                            setSaving(false);
+                            return;
+                        }
+                        submitToken(response.token);
+                    }
+                });
+            };
+            script.onerror = function() {
+                setMsg('Could not load the payment form. Reload and try again.', true);
+            };
+            document.head.appendChild(script);
+
+            document.getElementById('saveBtn').addEventListener('click', function() {
+                setSaving(true);
+                setMsg('');
+            });
+        }
+
+        function setSaving(saving) {
+            var btn = document.getElementById('saveBtn');
+            if (!btn) return;
+            btn.disabled = saving;
+            btn.textContent = saving ? 'Saving…' : 'Save Payment Method';
+        }
+
+        function setMsg(text, isErr) {
+            var el = document.getElementById('msg');
+            if (!el) return;
+            el.textContent = text;
+            el.className = 'msg' + (text ? (isErr ? ' err' : ' ok') : '');
+        }
+
+        function submitToken(token) {
+            client.functions.invoke('payments-save-method', {
+                body: { campId: campId, familyKey: familyKey, token: token }
+            }).then(function(res) {
+                setSaving(false);
+                var data = res.data;
+                if (res.error || !data || !data.success) {
+                    setMsg((data && data.error) || 'Could not save the payment method. Try again.', true);
+                    return;
+                }
+                renderSuccess();
+            }).catch(function() {
+                setSaving(false);
+                setMsg('Could not reach Campistry\'s servers. Try again.', true);
+            });
+        }
+    })();
+    </script>
+</body>
+</html>

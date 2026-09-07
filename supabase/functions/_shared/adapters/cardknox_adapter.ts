@@ -25,13 +25,16 @@
 //   { apiKey: string }   -- Cardknox/Sola calls this "xKey" on their side.
 //
 // customerRef (as passed into charge()) is a Cardknox-issued PAYMENT TOKEN
-// (their xToken, created via their own hosted "iFields" tokenization
-// component client-side — never a raw card number, same PCI-scope-reduction
-// role Stripe.js/Elements already plays for the existing Stripe flows).
-// Wiring up iFields client-side tokenization itself is a separate,
-// not-yet-built piece — see BYOP_SETUP.md's "still to wire up" list.
+// (their xToken, created via saveMethod() below from an iFields-issued
+// token — iFields is Cardknox's own hosted tokenization component,
+// client-side, never a raw card number, same PCI-scope-reduction role
+// Stripe.js/Elements already plays for the existing Stripe flows).
+// campistry_card_setup.html currently only implements the Collect.js
+// (Banquest/NMI) side of the client-side tokenization page — an iFields
+// variant for Cardknox is flagged in BYOP_SETUP.md as not yet built, since
+// Banquest was the immediate priority (the actual at-risk camp uses it).
 // =============================================================================
-import type { ProcessorAdapter, ChargeResult, RefundResult, TestConnectionResult } from "../processor_adapter.ts";
+import type { ProcessorAdapter, ChargeResult, RefundResult, TestConnectionResult, SaveMethodResult } from "../processor_adapter.ts";
 
 const GATEWAY_URL = "https://x1.cardknox.com/gateway";
 const SOFTWARE_NAME = "Campistry";
@@ -74,6 +77,31 @@ export const cardknoxAdapter: ProcessorAdapter = {
       });
       if (result.xError) return { success: false, error: String(result.xError) };
       return { success: true };
+    } catch (err) {
+      return { success: false, error: (err as Error).message };
+    }
+  },
+
+  async saveMethod(
+    credentials: Record<string, string>,
+    token: string,
+  ): Promise<SaveMethodResult> {
+    const apiKey = credentials.apiKey;
+    try {
+      // An iFields-issued token is often already reusable directly per
+      // Cardknox's own model, but cc:save explicitly converts it into a
+      // long-lived vault token — the safer, explicit choice so this
+      // adapter never depends on a temporary token outliving its expiry
+      // between "save" and some later charge.
+      const result = await post({
+        ...baseFields(apiKey),
+        xCommand: "cc:save",
+        xToken: token,
+      });
+      if (result.xResult !== "A" || !result.xToken) {
+        return { success: false, error: result.xError || "Could not save payment method", raw: result };
+      }
+      return { success: true, customerRef: result.xToken, raw: result };
     } catch (err) {
       return { success: false, error: (err as Error).message };
     }

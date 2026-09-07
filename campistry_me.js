@@ -11869,10 +11869,46 @@ async function callEdgeFunctionAuthed(fnName,body){
 // Link does (see stripe-setup-checkout). Nothing typed there ever reaches
 // Campistry's servers. On completion, stripe-webhook writes the result back
 // onto this family automatically — no further action needed here.
+// BYOP — which processor this camp is actually on. Cached per page load
+// (owner/admin-gated RPC, same one Dashboard's status card reads) so every
+// "Get Card" click doesn't re-fetch it; falls back to 'stripe' on any
+// error so a BYOP-lookup hiccup never blocks the existing, working Stripe
+// flow for camps that never touched BYOP.
+var _campPaymentProcessorKey=null;
+async function _getCampPaymentProcessorKey(){
+    if(_campPaymentProcessorKey) return _campPaymentProcessorKey;
+    try{
+        var client=window.CampistryDB&&window.CampistryDB.getClient?window.CampistryDB.getClient():null;
+        if(!client) return 'stripe';
+        var res=await client.rpc('get_camp_payment_processor_status',{p_camp_id:getCampId()});
+        _campPaymentProcessorKey=(res.data&&res.data.success&&res.data.processorKey)||'stripe';
+    }catch(e){
+        console.warn('[Me] Could not resolve payment processor, defaulting to stripe:',e);
+        _campPaymentProcessorKey='stripe';
+    }
+    return _campPaymentProcessorKey;
+}
+
 async function requestCardSetup(famKey){
     var f=families[famKey];if(!f)return;
     var email='';
     (f.households||[]).forEach(function(hh){(hh.parents||[]).forEach(function(p){if(p.email&&!email)email=p.email})});
+
+    var processorKey=await _getCampPaymentProcessorKey();
+
+    // BYOP camps have no hosted-checkout equivalent — they get a
+    // Campistry-hosted page embedding that processor's own client-side
+    // tokenizer instead (campistry_card_setup.html; NMI Collect.js for
+    // Banquest today, see BYOP_SETUP.md for what's still not built).
+    if(processorKey&&processorKey!=='stripe'){
+        toast('Opening secure card setup for '+f.name+'…');
+        var url='campistry_card_setup.html?campId='+encodeURIComponent(getCampId())+
+            '&familyKey='+encodeURIComponent(famKey)+
+            '&familyName='+encodeURIComponent(f.name||'');
+        window.open(url,'_blank');
+        toast('Opened in a new tab — once '+f.name+' completes it there, this page will show it on file.');
+        return;
+    }
 
     toast('Opening secure Stripe page for '+f.name+'…');
     try{
@@ -11895,7 +11931,7 @@ async function requestCardSetup(famKey){
 // Charge a family's stored card
 async function chargeStoredCard(famKey,amount,description){
     var f=families[famKey];
-    if(!f||!f.stripeCustomerId){toast('No payment method on file yet','error');return}
+    if(!f||(!f.stripeCustomerId&&!f.byopCustomerRef)){toast('No payment method on file yet','error');return}
 
     if(!amount){
         // Ask for amount
@@ -11917,23 +11953,37 @@ async function chargeStoredCard(famKey,amount,description){
         return;
     }
 
+    var isBYOP=!f.stripeCustomerId&&!!f.byopCustomerRef;
+
     toast('Charging '+fm(amount)+' to '+f.name+'...');
     try{
-        var result=await callEdgeFunctionAuthed('stripe-charge',{
-            customerId:f.stripeCustomerId,
-            paymentMethodId:f.stripePaymentMethodId||null,
-            amount:amount,
-            currency:'usd',
-            description:description||'Campistry payment',
-            metadata:{campId:getCampId(),familyName:f.name,familyKey:famKey}
-        });
+        var result=isBYOP
+            ? await callEdgeFunctionAuthed('payments-charge',{
+                customerRef:f.byopCustomerRef,
+                amount:amount,
+                description:description||'Campistry payment'
+            })
+            : await callEdgeFunctionAuthed('stripe-charge',{
+                customerId:f.stripeCustomerId,
+                paymentMethodId:f.stripePaymentMethodId||null,
+                amount:amount,
+                currency:'usd',
+                description:description||'Campistry payment',
+                metadata:{campId:getCampId(),familyName:f.name,familyKey:famKey}
+            });
 
-        if(result.status==='requires_action'){
+        if(!isBYOP&&result.status==='requires_action'){
             toast('Card requires authentication — parent must approve','error');
             return;
         }
 
-        if(result.status==='succeeded'){
+        // payments-charge only ever resolves (without throwing) on a real
+        // adapter success — see that function's own comments — so reaching
+        // here for a BYOP charge already means it succeeded, unlike
+        // stripe-charge which needs the explicit status==='succeeded' check
+        // (Stripe's off-session PaymentIntents can resolve into other
+        // states like requires_action, handled above).
+        if(isBYOP||result.status==='succeeded'){
             // Record payment locally
             finPayments.push({
                 id:'pay_'+Date.now(),
@@ -11941,10 +11991,12 @@ async function chargeStoredCard(famKey,amount,description){
                 familyKey:famKey,
                 amount:amount,
                 date:new Date().toISOString().split('T')[0],
-                method:'Stripe (auto)',
-                reference:result.paymentIntentId,
-                notes:'Auto-charged via Stripe',
-                stripePaymentIntentId:result.paymentIntentId,
+                method:isBYOP?(f.byopProcessor||'BYOP')+' (auto)':'Stripe (auto)',
+                reference:isBYOP?result.externalTransactionId:result.paymentIntentId,
+                notes:isBYOP?'Auto-charged via '+(f.byopProcessor||'BYOP processor'):'Auto-charged via Stripe',
+                stripePaymentIntentId:isBYOP?null:result.paymentIntentId,
+                byopTransactionId:isBYOP?result.externalTransactionId:null,
+                byopProcessor:isBYOP?f.byopProcessor:null,
                 timestamp:Date.now()
             });
             f.totalPaid=(f.totalPaid||0)+amount;
@@ -11955,7 +12007,7 @@ async function chargeStoredCard(famKey,amount,description){
             toast('Payment status: '+result.status,'error');
         }
     }catch(err){
-        console.error('[Me] Stripe charge error:',err);
+        console.error('[Me] Charge error:',err);
         toast('Charge failed: '+err.message,'error');
     }
 }

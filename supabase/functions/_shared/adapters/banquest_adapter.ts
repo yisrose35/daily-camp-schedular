@@ -30,12 +30,13 @@
 //   { securityKey: string, gatewayUrl?: string }
 //
 // customerRef (as passed into charge()) is an NMI "Customer Vault ID" —
-// created via NMI's own hosted tokenizer (Collect.js), the same
+// created via saveMethod() below from a Collect.js single-use payment_token
+// (Collect.js is NMI's hosted client-side tokenizer, the same
 // PCI-scope-reduction role Stripe.js/iFields play for the other two
-// processors. Wiring up Collect.js client-side tokenization is not yet
-// built — see BYOP_SETUP.md's "still to wire up" list, same gap as Cardknox.
+// processors — see campistry_card_setup.html for where that token actually
+// comes from).
 // =============================================================================
-import type { ProcessorAdapter, ChargeResult, RefundResult, TestConnectionResult } from "../processor_adapter.ts";
+import type { ProcessorAdapter, ChargeResult, RefundResult, TestConnectionResult, SaveMethodResult } from "../processor_adapter.ts";
 
 const DEFAULT_GATEWAY_URL = "https://secure.nmi.com";
 
@@ -82,6 +83,29 @@ export const banquestAdapter: ProcessorAdapter = {
         return { success: false, error: result.error_message || result.error_response };
       }
       return { success: true };
+    } catch (err) {
+      return { success: false, error: (err as Error).message };
+    }
+  },
+
+  async saveMethod(
+    credentials: Record<string, string>,
+    token: string,
+  ): Promise<SaveMethodResult> {
+    try {
+      // NMI's Collect.js issues a single-use payment_token (expires in a
+      // few minutes) — type=add_customer exchanges it for a permanent
+      // Customer Vault id, exactly the "turn an ephemeral tokenization
+      // result into a durable reference" step this method exists for.
+      const result = await postForm(`${gatewayBase(credentials)}/api/transact.php`, {
+        security_key: credentials.securityKey,
+        type: "add_customer",
+        payment_token: token,
+      });
+      if (result.response !== "1" || !result.customer_vault_id) {
+        return { success: false, error: result.responsetext || "Could not save payment method", raw: result };
+      }
+      return { success: true, customerRef: result.customer_vault_id, raw: result };
     } catch (err) {
       return { success: false, error: (err as Error).message };
     }

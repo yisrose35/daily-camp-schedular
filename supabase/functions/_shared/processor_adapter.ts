@@ -48,6 +48,14 @@ export interface TestConnectionResult {
   error?: string;
 }
 
+export interface SaveMethodResult {
+  success: boolean;
+  /** The durable, reusable reference to hand back into charge()/refund() as customerRef. */
+  customerRef?: string;
+  error?: string;
+  raw?: unknown;
+}
+
 export interface ProcessorAdapter {
   /** The catalog `key` this adapter implements — must match payment_processor_catalog.key. */
   readonly key: string;
@@ -59,6 +67,21 @@ export interface ProcessorAdapter {
    * a real charge. Called once by admin-connect-processor at setup time.
    */
   testConnection(credentials: Record<string, string>): Promise<TestConnectionResult>;
+
+  /**
+   * Turn a short-lived, client-side tokenization result (NMI Collect.js /
+   * Cardknox iFields — never a raw card number, that never reaches this
+   * server at all) into a DURABLE reference this adapter's own charge()/
+   * refund() can use later. Some gateways' client-side tokens are already
+   * durable on their own (in which case this can just validate/passthrough);
+   * others (NMI in particular) issue a single-use token that must be
+   * exchanged for a permanent vault id via one more server call — that
+   * exchange is exactly what this method does.
+   */
+  saveMethod(
+    credentials: Record<string, string>,
+    token: string,
+  ): Promise<SaveMethodResult>;
 
   /**
    * Charge amountCents to whatever payment method customerRef identifies.
