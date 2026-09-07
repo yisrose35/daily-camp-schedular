@@ -896,7 +896,7 @@ document.addEventListener('DOMContentLoaded', function() {
                     redirectTo: window.location.origin + '/index.html#reset-password'
                 });
                 if (error) throw error;
-                if (resetSuccess) { resetSuccess.textContent = 'Reset link sent! Check your email.'; resetSuccess.style.display = 'block'; }
+                if (resetSuccess) { resetSuccess.textContent = 'Reset link sent! Check your email — including your spam/junk folder, since it can land there.'; resetSuccess.style.display = 'block'; }
                 if (emailInput) emailInput.disabled = true;
                 if (submitBtn) submitBtn.textContent = 'Email Sent';
             } catch (err) {
