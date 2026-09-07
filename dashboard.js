@@ -906,6 +906,11 @@
                 syncCampStripeConnectStatus(campData.id);
             }
         }
+        // BYOP — which processor this camp is actually on (Stripe by default,
+        // or a bring-your-own processor connected via the human-assisted
+        // setup — see BYOP_SETUP.md). Read-only: connecting a different
+        // processor is deliberately not a self-serve action from here.
+        if (campData?.id) loadCampPaymentProcessorStatus(campData.id);
         // Which Link programs (Photos/Canteen/Shop/Tips/Camper Mail/Pickup)
         // this camp actually offers — read-only for non-owner/admin roles,
         // set_link_program_settings itself is the real (server-side) gate.
@@ -1472,6 +1477,34 @@
         } catch (e) {
             console.error('[Dashboard] loadCampStripeConnectStatus threw:', e);
             box.innerHTML = '<p style="margin:0;color:#dc2626;">Could not load Stripe Connect status: ' + escTelnyx(e && e.message ? e.message : String(e)) + '</p>';
+        }
+    };
+
+    // BYOP status — read-only. Connecting a non-Stripe processor is a
+    // human-assisted action (BYOP_SETUP.md), never a self-serve button here
+    // — see migration 126's own header for why (a live processor API key is
+    // a materially higher-trust secret than a Stripe Connect account id).
+    window.loadCampPaymentProcessorStatus = async function(campId) {
+        const box = document.getElementById('campPaymentProcessorBox');
+        if (!box) return;
+        try {
+            const { data, error } = await window.supabase.rpc('get_camp_payment_processor_status', { p_camp_id: campId });
+            if (error || !data || !data.success) {
+                console.error('[Dashboard] get_camp_payment_processor_status error:', error || data);
+                box.innerHTML = '<p style="margin:0;color:#dc2626;">Could not load payment processor status.</p>';
+                return;
+            }
+            if (data.processorKey === 'stripe') {
+                box.innerHTML = '<p style="margin:0;">On <strong>Stripe</strong> (the default) — the "Where tuition money lands" card above covers this.</p>';
+            } else if (data.status === 'verified') {
+                box.innerHTML = '<p style="margin:0;color:#059669;">Connected to your own <strong>' + escTelnyx(data.processorLabel || data.processorKey) + '</strong> account' +
+                    (data.connectedAt ? ' since ' + new Date(data.connectedAt).toLocaleDateString() : '') + '. Payments run through your own processor, not Stripe.</p>';
+            } else {
+                box.innerHTML = '<p style="margin:0;color:#dc2626;">Connected to <strong>' + escTelnyx(data.processorLabel || data.processorKey) + '</strong> but not yet verified (status: ' + escTelnyx(data.status) + '). Contact Campistry support.</p>';
+            }
+        } catch (e) {
+            console.error('[Dashboard] loadCampPaymentProcessorStatus threw:', e);
+            box.innerHTML = '<p style="margin:0;color:#dc2626;">Could not load payment processor status: ' + escTelnyx(e && e.message ? e.message : String(e)) + '</p>';
         }
     };
 
