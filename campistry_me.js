@@ -48,6 +48,7 @@ var _familyDetailKey=null; // famKey currently shown on the full-page family/bil
 var _repHighlight=null;  // saved report id to scroll-to/highlight next time Reports renders (set by global search)
 var PAGE_SIZE=50;
 var _rosterPage=1, _billingPage=1, _analyticsInvoicePage=1, _analyticsPaymentPage=1;
+var _rosterSubTab='enrolled';  // Roster page's own top tab: enrolled | unenrolled
 // Slice an array to one page. Clamps pageNum into range so a stale page
 // number (filter shrank the result set) never renders an empty page.
 function _paginate(array,pageSize,pageNum){
@@ -72,6 +73,7 @@ function _pagerHtml(total,pageSize,pageNum,onChangeFnName){
     return h;
 }
 function setRosterPage(n){_rosterPage=n;var inp=document.getElementById('globalSearch');renderCampers(inp?inp.value.trim():'');}
+function setRosterSubTab(t){_rosterSubTab=t;_rosterPage=1;var inp=document.getElementById('globalSearch');renderCampers(inp?inp.value.trim():'');}
 function setBillingPage(n){_billingPage=n;renderBilling();}
 function setAnalyticsInvoicePage(n){_analyticsInvoicePage=n;renderFinance();}
 function setAnalyticsPaymentPage(n){_analyticsPaymentPage=n;renderFinance();}
@@ -1913,7 +1915,7 @@ function buildPipelineList(){
 function _pplStatusMeta(type,status){
     if(type==='staff')return {label:_staffLabel(status),color:_staffStatusType(status)};
     var label=status?(status.charAt(0).toUpperCase()+status.slice(1)):'Applied';
-    var color=status==='enrolled'||status==='accepted'?'ok':status==='waitlisted'?'warn':(status==='declined'||status==='withdrawn')?'err':'gray';
+    var color=status==='enrolled'||status==='accepted'?'ok':(status==='waitlisted'||status==='unenrolled')?'warn':(status==='declined'||status==='withdrawn')?'err':'gray';
     return {label:label,color:color};
 }
 function _pplCamperRowActions(id,status){
@@ -2131,8 +2133,14 @@ function renderCampers(filter){
     // to anyone with plain me.campers access would leak it to roles that were
     // never granted either (Division Head, Nurse, Canteen, Bus Coordinator…).
     var canStaff=_secCan('me.staffing')||_secCan('me.payroll');
-    var camperEntries=Object.entries(roster);
-    var staffRows=canStaff?buildStaffRoster():[];
+    var allCamperEntries=Object.entries(roster);
+    var enrolledEntries=allCamperEntries.filter(function(pair){return !pair[1].unenrolled;});
+    var unenrolledEntries=allCamperEntries.filter(function(pair){return pair[1].unenrolled;});
+    var showUnenrolled=_rosterSubTab==='unenrolled';
+    var camperEntries=showUnenrolled?unenrolledEntries:enrolledEntries;
+    var allStaffRows=canStaff?buildStaffRoster():[];
+    // Unenrolled campers are a parked, camper-only state — no staff shown there.
+    var staffRows=showUnenrolled?[]:allStaffRows;
     if(filter){
         var q=filter.toLowerCase();
         camperEntries=camperEntries.filter(function([n,d]){var altN=[d.altFirstName,d.altLastName].filter(Boolean).join(' ').toLowerCase();return n.toLowerCase().includes(q)||altN.includes(q)||(d.division||'').toLowerCase().includes(q)||(d.bunk||'').toLowerCase().includes(q)||(d.school||'').toLowerCase().includes(q)});
@@ -2141,14 +2149,32 @@ function renderCampers(filter){
     camperEntries.sort(function(a,b){return a[0].localeCompare(b[0])});
     var total=camperEntries.length+staffRows.length;
 
-    var h='<div class="sec-hd"><div><h2 class="sec-title">Roster</h2><p class="sec-desc">'+camperEntries.length+' camper'+(camperEntries.length!==1?'s':'')+(canStaff?' · '+staffRows.length+' staff':'')+'</p></div><div class="sec-actions"><button class="me-btn me-btn--ghost me-btn--sm" onclick="CampistryMe.manageCustomFields()" title="Define custom fields">⚙ Custom Fields</button><button class="me-btn me-btn--sec me-btn--sm" onclick="CampistryMe.downloadTemplate()">Template</button><button class="me-btn me-btn--sec me-btn--sm" onclick="CampistryMe.openCsv()">Import</button><button class="me-btn me-btn--pri" onclick="CampistryMe.addCamper()">+ Add Camper</button></div></div>';
+    var h='<div class="sec-hd"><div><h2 class="sec-title">Roster</h2><p class="sec-desc">'+enrolledEntries.length+' camper'+(enrolledEntries.length!==1?'s':'')+(canStaff?' · '+allStaffRows.length+' staff':'')+(unenrolledEntries.length?' · '+unenrolledEntries.length+' unenrolled':'')+'</p></div><div class="sec-actions"><button class="me-btn me-btn--ghost me-btn--sm" onclick="CampistryMe.manageCustomFields()" title="Define custom fields">⚙ Custom Fields</button><button class="me-btn me-btn--sec me-btn--sm" onclick="CampistryMe.downloadTemplate()">Template</button><button class="me-btn me-btn--sec me-btn--sm" onclick="CampistryMe.openCsv()">Import</button><button class="me-btn me-btn--pri" onclick="CampistryMe.addCamper()">+ Add Camper</button></div></div>';
     h+=_setupChecklistHtml();
 
-    var unplaced=canStaff?hiredStaff().filter(function(a){return !String(a.email||'').trim()||!bunksForStaffEmail(a.email).length;}):[];
+    var unplaced=(canStaff&&!showUnenrolled)?hiredStaff().filter(function(a){return !String(a.email||'').trim()||!bunksForStaffEmail(a.email).length;}):[];
     if(unplaced.length){
         h+='<div style="background:#FFF7ED;border:1px solid #FED7AA;border-radius:var(--r);padding:10px 14px;margin-bottom:14px;font-size:.83rem;color:#9A3412">'
           +'<strong>'+unplaced.length+' hired '+(unplaced.length===1?'person is':'people are')+' not set up yet.</strong> '
           +'Open them from Registration &amp; Hiring to add an email and put them on a bunk — until then they can\'t sign in to Campistry Lite or receive notifications.</div>';
+    }
+
+    // Unenrolled is a tucked-away second tab — off by default unless there's
+    // actually someone parked there, so a camp that's never used it doesn't
+    // see an extra empty tab cluttering the Roster header.
+    if(unenrolledEntries.length||showUnenrolled){
+        h+='<div style="display:flex;gap:2px;border-bottom:1px solid var(--s200);margin-bottom:16px">';
+        [{k:'enrolled',l:'Enrolled',c:enrolledEntries.length},{k:'unenrolled',l:'Unenrolled',c:unenrolledEntries.length}].forEach(function(s){
+            var active=_rosterSubTab===s.k;
+            h+='<button onclick="CampistryMe.setRosterSubTab(\''+s.k+'\')" style="padding:9px 12px;border:none;background:none;font-size:.8rem;font-weight:600;cursor:pointer;white-space:nowrap;font-family:inherit;display:flex;align-items:center;gap:6px;border-bottom:2px solid '+(active?'var(--me)':'transparent')+';color:'+(active?'var(--me)':'var(--s500)')+'">'
+                +esc(s.l)+'<span style="font-size:.68rem;font-weight:700;border-radius:9px;padding:1px 6px;background:'+(active?'var(--me)':'var(--s100)')+';color:'+(active?'#fff':'var(--s600)')+'">'+s.c+'</span></button>';
+        });
+        h+='</div>';
+    }
+    if(showUnenrolled&&!unenrolledEntries.length){
+        h+='<div class="me-empty"><h3>Nobody unenrolled</h3><p>Unenroll a camper from the Enrolled tab to park them here — their record stays, they just drop off the active roster.</p></div>';
+        c.innerHTML=h;
+        return;
     }
 
     if(!total){
@@ -2156,7 +2182,7 @@ function renderCampers(filter){
     }else{
         var combined=camperEntries.map(function(pair){return{kind:'camper',n:pair[0],d:pair[1]}}).concat(staffRows.map(function(r){return{kind:'staff',r:r}}));
         var paged=_paginate(combined,PAGE_SIZE,_rosterPage);
-        h+='<div class="me-card"><div class="me-tw"><table class="me-t"><thead><tr><th style="width:76px">Type</th><th>Name</th><th>Details</th><th>Placement</th><th>Contact</th><th style="width:120px"></th></tr></thead><tbody>';
+        h+='<div class="me-card"><div class="me-tw"><table class="me-t"><thead><tr><th style="width:76px">Type</th><th>Name</th><th>Details</th><th>Placement</th><th>Contact</th><th style="width:'+(showUnenrolled?'170':'120')+'px"></th></tr></thead><tbody>';
         paged.items.forEach(function(item){
             if(item.kind==='camper'){
                 var n=item.n,d=item.d;
@@ -2164,9 +2190,12 @@ function renderCampers(filter){
                 var altN=[d.altFirstName,d.altLastName].filter(Boolean).join(' ');
                 var nameCell=esc(n)+(altN&&getCampSettings().showAltNames!==false?'<div style="font-size:.7rem;color:var(--s400);font-weight:400">'+esc(altN)+'</div>':'');
                 var details=(d.schoolGrade?esc(d.schoolGrade):'<span style="color:var(--s300)">—</span>')+(hasMed?' <span style="color:var(--err);font-size:.7rem;font-weight:600">⚠ Medical</span>':'');
-                var placement=(d.division?dtag(d.division):'<span style="color:var(--s300)">—</span>')+(d.bunk?' '+bdg(d.bunk,'gray'):'');
+                var placement=(d.division?dtag(d.division):'<span style="color:var(--s300)">—</span>')+(d.bunk?' '+bdg(d.bunk,'gray'):(d._priorBunk?' '+bdg(d._priorBunk+' (prior)','gray'):''));
                 var contact=(d.parent1Phone||d.parent1Email)?'<span style="font-size:.78rem;color:var(--s500)">'+esc(d.parent1Name||'')+'</span>':'<span style="color:var(--s300)">—</span>';
-                h+='<tr class="click" onclick="CampistryMe.viewCamper(\''+je(n)+'\')"><td>'+_typeBadge('camper')+'</td><td class="bold">'+nameCell+'</td><td style="font-size:.8rem">'+details+'</td><td>'+placement+'</td><td>'+contact+'</td><td style="text-align:right;white-space:nowrap" onclick="event.stopPropagation()"><button class="me-btn me-btn--ghost me-btn--sm" onclick="CampistryMe.editCamper(\''+je(n)+'\')">Edit</button> <button class="me-btn me-btn--ghost me-btn--sm" style="color:var(--err)" onclick="CampistryMe.deleteCamper(\''+je(n)+'\')" title="Delete camper">Delete</button></td></tr>';
+                var rowActions=showUnenrolled
+                    ?'<button class="me-btn me-btn--sec me-btn--sm" onclick="CampistryMe.reenrollCamper(\''+je(n)+'\')">Re-enroll</button> <button class="me-btn me-btn--ghost me-btn--sm" style="color:var(--err)" onclick="CampistryMe.deleteCamper(\''+je(n)+'\')" title="Delete permanently">Delete</button>'
+                    :'<button class="me-btn me-btn--ghost me-btn--sm" onclick="CampistryMe.editCamper(\''+je(n)+'\')">Edit</button> <button class="me-btn me-btn--ghost me-btn--sm" onclick="CampistryMe.unenrollCamper(\''+je(n)+'\')" title="Keep their record, drop them off the active roster">Unenroll</button> <button class="me-btn me-btn--ghost me-btn--sm" style="color:var(--err)" onclick="CampistryMe.deleteCamper(\''+je(n)+'\')" title="Delete camper">Delete</button>';
+                h+='<tr class="click" onclick="CampistryMe.viewCamper(\''+je(n)+'\')"><td>'+_typeBadge('camper')+'</td><td class="bold">'+nameCell+'</td><td style="font-size:.8rem">'+details+'</td><td>'+placement+'</td><td>'+contact+'</td><td style="text-align:right;white-space:nowrap" onclick="event.stopPropagation()">'+rowActions+'</td></tr>';
             }else{
                 var r=item.r;
                 var grade=_pplGradeForBunks(r.bunks);
@@ -2921,6 +2950,73 @@ async function deleteCamper(n){
         });
         save();render(curPage);toast('Camper restored');
     }});
+}
+// Unenroll: keep the camper's record (billing history, health info, custom
+// fields, everything) but park it in the Roster's tucked-away Unenrolled
+// tab — the reversible middle ground between editing them and deleteCamper's
+// permanent removal. roster[name].bunk is the single source of truth every
+// bunk count, the Bunk Builder's placement pool, print sheets, and Health/
+// Snacks all read directly (see the backfill comment near nextPersonId) —
+// clearing it here is what actually makes an unenrolled camper stop looking
+// placed/active everywhere else, not a separate flag those call sites would
+// each need to know about. The prior value is stashed on d._priorBunk so
+// reenrollCamper can restore it. Also closes out any accepted/enrolled
+// application so Billing's auto-invoice scan stops billing them, but leaves
+// families/payments/health data completely untouched — same "keep the money
+// trail, just stop treating them as active" split cascadeCamperDelete
+// already draws for payments on a real delete.
+function unenrollCamper(n){
+    var d=roster[n]; if(!d)return;
+    d.unenrolled=true;
+    d.unenrolledAt=new Date().toISOString();
+    var priorBunk=d.bunk||'';
+    d._priorBunk=priorBunk;
+    d.bunk='';
+    if(priorBunk&&bunkAsgn[priorBunk]) bunkAsgn[priorBunk]=bunkAsgn[priorBunk].filter(function(c){return c!==n});
+    var flipped=[];
+    Object.keys(enrollments).forEach(function(id){
+        var e=enrollments[id];
+        if(!e||e.camperName!==n)return;
+        if(e.status!=='accepted'&&e.status!=='enrolled')return;
+        var prev=e.status;
+        e.status='unenrolled';
+        e.statusHistory=e.statusHistory||[];
+        e.statusHistory.push({from:prev,to:'unenrolled',date:new Date().toISOString(),by:'office'});
+        flipped.push({id:id,prev:prev});
+        if(e.session&&prev!=='waitlisted') autoPromoteWaitlist(e.session);
+    });
+    save();render(curPage);
+    toast(n+' unenrolled — moved to the Unenrolled tab','ok',{actionLabel:'Undo',onAction:function(){
+        delete d.unenrolled;delete d.unenrolledAt;delete d._priorBunk;
+        d.bunk=priorBunk;
+        if(priorBunk){bunkAsgn[priorBunk]=bunkAsgn[priorBunk]||[];if(bunkAsgn[priorBunk].indexOf(n)<0)bunkAsgn[priorBunk].push(n);}
+        flipped.forEach(function(f){if(enrollments[f.id])enrollments[f.id].status=f.prev;});
+        save();render(curPage);toast(n+' restored to the active roster');
+    }});
+}
+// Reverse of unenrollCamper — re-adds them to their last bunk if that bunk
+// still exists in the current camp structure (a rename/deletion while they
+// were parked leaves them unplaced rather than silently landing in a
+// resurrected bunk name), and reopens the matching application(s).
+function reenrollCamper(n){
+    var d=roster[n]; if(!d)return;
+    delete d.unenrolled;delete d.unenrolledAt;
+    var priorBunk=d._priorBunk||'';
+    delete d._priorBunk;
+    if(priorBunk&&allBunkNames().indexOf(priorBunk)>=0){
+        d.bunk=priorBunk;
+        bunkAsgn[priorBunk]=bunkAsgn[priorBunk]||[];
+        if(bunkAsgn[priorBunk].indexOf(n)<0)bunkAsgn[priorBunk].push(n);
+    }
+    Object.keys(enrollments).forEach(function(id){
+        var e=enrollments[id];
+        if(!e||e.camperName!==n||e.status!=='unenrolled')return;
+        e.status='enrolled';
+        e.statusHistory=e.statusHistory||[];
+        e.statusHistory.push({from:'unenrolled',to:'enrolled',date:new Date().toISOString(),by:'office'});
+    });
+    save();render(curPage);
+    toast(n+' re-enrolled');
 }
 function grOpts(div){var o=[''];if(div&&structure[div]){var ord=structure[div].gradeOrder,keys=Object.keys(structure[div].grades||{});(Array.isArray(ord)&&ord.length?ord.filter(function(g){return g in(structure[div].grades||{})}):keys.sort()).forEach(function(g){o.push(g)})}return o}
 function bkOpts(div,gr){var o=[''];if(div&&gr&&structure[div]&&structure[div].grades&&structure[div].grades[gr])(structure[div].grades[gr].bunks||[]).forEach(function(b){o.push(b)});return o}
@@ -4601,7 +4697,7 @@ function autoGenerateBunks(){
     var ambiguousSkipped={};
     Object.keys(roster).forEach(function(n){
         var c=roster[n];
-        if(c.bunk)return;
+        if(c.bunk||c.unenrolled)return;
         var key=String(c.schoolGrade||'').trim().toLowerCase();
         if(key&&sgAmbiguous[key])ambiguousSkipped[n]=true;
     });
@@ -4613,7 +4709,7 @@ function autoGenerateBunks(){
         var mapped=_cohortSchoolGrades(div,gr).length>0;
         var pool=Object.keys(roster).filter(function(n){
             var c=roster[n];
-            if(c.bunk)return false;
+            if(c.bunk||c.unenrolled)return false;
             if(mapped){
                 var resolved=sgToCohort[String(c.schoolGrade||'').trim().toLowerCase()];
                 return resolved&&resolved.div===div&&resolved.gr===gr;
@@ -4625,7 +4721,7 @@ function autoGenerateBunks(){
         pool.forEach(function(n){if(roster[n].bunk)handled[n]=true;});
     });
 
-    var leftover=Object.keys(roster).filter(function(n){return !roster[n].bunk&&!handled[n]&&!ambiguousSkipped[n];});
+    var leftover=Object.keys(roster).filter(function(n){return !roster[n].bunk&&!roster[n].unenrolled&&!handled[n]&&!ambiguousSkipped[n];});
     if(leftover.length)_bunkGenFallback(leftover,allBunksFlat,cfg,report);
 
     report.placed=Object.keys(roster).filter(function(n){return roster[n].bunk;}).length;
@@ -12812,7 +12908,7 @@ function _reportSources(){
                 {key:'street',label:'Street',group:'Address'},{key:'city',label:'City',group:'Address'},{key:'state',label:'State',group:'Address'},{key:'zip',label:'ZIP',group:'Address'}
             ].concat(cfFields),
             rows:function(){
-                return Object.keys(roster).map(function(n){
+                return Object.keys(roster).filter(function(n){return !roster[n].unenrolled;}).map(function(n){
                     var c=roster[n]||{}; var nm=_rbSplitName(n);
                     var row={name:n,firstName:nm.first,lastName:nm.last,camperId:c.camperId||'',division:c.division||'',grade:c.grade||'',bunk:c.bunk||'',
                         schoolGrade:c.schoolGrade||'',teacher:c.teacher||'',school:c.school||'',
@@ -12908,7 +13004,7 @@ function _reportSources(){
                 {key:'allergies',label:'Allergies',group:'Medical'}],
             rows:function(){
                 var rows=[];
-                Object.keys(roster).forEach(function(n){
+                Object.keys(roster).filter(function(n){return !roster[n].unenrolled;}).forEach(function(n){
                     var c=roster[n]||{}; var nm=_rbSplitName(n);
                     rows.push({personType:'Camper',name:n,firstName:nm.first,lastName:nm.last,division:c.division||'',bunk:c.bunk||'',role:'',dob:c.dob||'',
                         phone:'',email:'',allergies:c.allergies||'',parent1Name:c.parent1Name||'',parent1Phone:c.parent1Phone||'',
@@ -14623,7 +14719,7 @@ function _psStaffAsRow(s){
 function psFilteredCampers(sheet){
     var who=sheet.whoScope||'campers';
     var rows=[];
-    if(who!=='staff')rows=rows.concat(Object.entries(roster));
+    if(who!=='staff')rows=rows.concat(Object.entries(roster).filter(function(r){return !r[1].unenrolled;}));
     if(who!=='campers')rows=rows.concat(hiredStaff().map(_psStaffAsRow));
     if(sheet.scopeDiv)rows=rows.filter(function(r){return r[1].division===sheet.scopeDiv});
     var sortKey=sheet.sortBy||'lastName';
@@ -14979,7 +15075,7 @@ function psEditorHtml(s){
 
 window.CampistryMe={
     nav:nav,closeModal:closeModal,
-    viewCamper:viewCamper,editCamper:editCamper,addCamper:addCamper,deleteCamper:deleteCamper,ceToggleSummer:ceToggleSummer,
+    viewCamper:viewCamper,editCamper:editCamper,addCamper:addCamper,deleteCamper:deleteCamper,unenrollCamper:unenrollCamper,reenrollCamper:reenrollCamper,ceToggleSummer:ceToggleSummer,
     addFamily:function(){openFamilyForm(null)},editFamily:function(id){openFamilyForm(id)},deleteFamily:deleteFamily,removeCamperFromFamily:removeCamperFromFamily,
     setPplStaffSubTab:setPplStaffSubTab,viewStaffMember:viewStaffMember,openEditStaffModal:openEditStaffModal,saveStaffMember:saveStaffMember,
     acceptFamilySuggestion:acceptFamilySuggestion,dismissFamilySuggestion:dismissFamilySuggestion,acceptAddToFamily:acceptAddToFamily,
@@ -14989,7 +15085,7 @@ window.CampistryMe={
     addSectionTextBlock:addSectionTextBlock,_richTextExec:_richTextExec,
     addDiv:function(){openDivForm(null)},editDiv:function(n){openDivForm(n)},deleteDiv:deleteDiv,
     openCsv:function(){openModal('csvModal')},downloadTemplate:downloadTemplate,
-    setRosterPage:setRosterPage,setBillingPage:setBillingPage,setAnalyticsInvoicePage:setAnalyticsInvoicePage,setAnalyticsPaymentPage:setAnalyticsPaymentPage,
+    setRosterPage:setRosterPage,setRosterSubTab:setRosterSubTab,setBillingPage:setBillingPage,setAnalyticsInvoicePage:setAnalyticsInvoicePage,setAnalyticsPaymentPage:setAnalyticsPaymentPage,
     _runSetupChecklistAction:_runSetupChecklistAction,dismissSetupChecklist:dismissSetupChecklist,
     bbDrop:bbDrop,autoAssign:autoAssign,autoGenerateBunks:autoGenerateBunks,openBunkGenSettings:openBunkGenSettings,showCamperBunkRequests:showCamperBunkRequests,clearBunks:clearBunks,setBunkCount:setBunkCount,openBunkCountModal:openBunkCountModal,_clearBunkCount:_clearBunkCount,
     openBunkStaffModal:openBunkStaffModal,addBunkStaff:addBunkStaff,removeBunkStaff:removeBunkStaff,
