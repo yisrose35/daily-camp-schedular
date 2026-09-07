@@ -8389,8 +8389,25 @@ function _autoProvisionParentInvites(){
         }
     });
 
+    // Offboarding sweep: disconnects any invite whose children are ALL gone
+    // from the roster (last child un-enrolled/deleted) — pulled out to its
+    // own function so it always runs, even on the two early-returns below.
+    // It used to live only inside _finish(), which meant deleting a camper
+    // who was the ONLY family left with a parent email (keys.length===0)
+    // — or whose deletion didn't change the provisioning signature — never
+    // ran the sweep at all, so that parent's invite stayed fully connected
+    // forever. Safe to call every time: it's a single idempotent UPDATE,
+    // and the server no-ops on an empty roster.
+    var rosterNames=Object.keys(roster);
+    function _sweep(){
+        db.rpc('revoke_orphaned_parent_invites',{p_camp_id:campId,p_roster_names:rosterNames}).then(function(res){
+            var rev=res&&res.data&&res.data.revoked;
+            if(rev)console.log('[Me] Parent sign-up: disconnected '+rev+' invite'+(rev===1?'':'s')+' (children no longer enrolled)');
+        }).catch(function(){});
+    }
+
     var keys=Object.keys(fams).filter(function(k){return fams[k].campers.length;});
-    if(!keys.length){console.log('[Me] Parent sign-up: skipped — no families with a parent email yet');return;}
+    if(!keys.length){console.log('[Me] Parent sign-up: no families with a parent email to (re)provision — running the offboarding sweep only');_sweep();return;}
 
     // Skip entirely when nothing invite-relevant changed since the last run.
     // Include each camper's access window so editing SESSION DATES (not just
@@ -8415,24 +8432,17 @@ function _autoProvisionParentInvites(){
             return cn+'@'+w.accessStart+'-'+w.accessEnd+'#'+(r.bunk||'')+'/'+(r.division||'')+'/'+(r.grade||'')+'~'+staffSig;
         }).join('|');
     }).join(';');
-    if(sig===_apiLastSig){console.log('[Me] Parent sign-up: skipped — nothing invite-relevant changed since last sync');return;}
+    if(sig===_apiLastSig){console.log('[Me] Parent sign-up: nothing invite-relevant changed since last sync — running the offboarding sweep only');_sweep();return;}
     console.log('[Me] Parent sign-up: syncing '+keys.length+' famil'+(keys.length===1?'y':'ies')+' —',sig);
 
     _apiRunning=true;
     var expires=new Date();expires.setFullYear(expires.getFullYear()+1);
-    var rosterNames=Object.keys(roster);   // for the offboarding sweep (fix a)
     var i=0,done=0,failed=0;
     function _finish(){
         _apiRunning=false;
         if(!failed)_apiLastSig=sig;   // retry failures on the next save
         if(done)console.log('[Me] Parent sign-up: '+done+' famil'+(done===1?'y':'ies')+' provisioned/refreshed'+(failed?(' ('+failed+' failed)'):''));
-        // Offboarding: revoke any active invite whose children are ALL gone from
-        // the roster (last child un-enrolled). Safe — keeps access while any
-        // child remains; server no-ops on an empty roster.
-        db.rpc('revoke_orphaned_parent_invites',{p_camp_id:campId,p_roster_names:rosterNames}).then(function(res){
-            var rev=res&&res.data&&res.data.revoked;
-            if(rev)console.log('[Me] Parent sign-up: revoked '+rev+' orphaned invite'+(rev===1?'':'s')+' (children no longer enrolled)');
-        }).catch(function(){});
+        _sweep();
     }
     (function next(){
         if(i>=keys.length){ _finish(); return; }
