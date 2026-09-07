@@ -31,6 +31,14 @@ const FILES = [
     'campistry_face_engine_v2.js',
     'supabase-js@2.js',
     'config.js',
+    // PDF Forms (fill/sign) + Scan Document (camera-to-PDF). pdfjs-dist's
+    // worker isn't a <script src> tag — pdf.js loads it itself at runtime
+    // via a string path (GlobalWorkerOptions.workerSrc) — so the reference
+    // check below only started catching it after the query-string fix.
+    'campistry_scan_to_pdf.js',
+    'pdf-lib@1.17.1.js',
+    'pdfjs-dist@3.11.174.min.js',
+    'pdfjs-dist@3.11.174.worker.min.js',
     'campistry_link.webmanifest',
     'Campistry_logo.png',
     'Link_clean.png',
@@ -69,7 +77,13 @@ for (const entry of FILES) {
 // file that didn't get copied is a broken feature (or a white screen) on a real
 // phone with nothing in a console to see. Three face-matching scripts shipped
 // missing this way before this check existed.
-const REF_RE = /['"]([A-Za-z0-9_@.\-]+\.(?:js|css|png|svg|webmanifest|html))['"]/g;
+// Every <script src> in this codebase uses a cache-bust query string
+// (e.g. "campistry_ota.js?v=20260903-04") — the closing quote never sits
+// right after the extension, so the old pattern (extension immediately
+// followed by a quote) silently matched almost nothing. This optional,
+// non-capturing group eats the query string before the closing quote
+// while still capturing just the bare filename in group 1.
+const REF_RE = /['"]([A-Za-z0-9_@.\-]+\.(?:js|css|png|svg|webmanifest|html))(?:\?[^'"]*)?['"]/g;
 // Third-party bundles: nothing in them refers to a repo file, and their
 // minified strings ("Node.js") trip the scan.
 const SKIP_SCAN = new Set(['supabase-js@2.js']);
