@@ -681,6 +681,114 @@ function avc(n){var h=0;for(var i=0;i<n.length;i++)h+=n.charCodeAt(i);return AV_
 function av(n,sz){var w=sz==='l'?52:sz==='m'?38:28,fs=sz==='l'?17:sz==='m'?13:10;return'<div class="av av-'+(sz||'s')+'" style="background:'+avc(n)+'">'+esc(ini(n))+'</div>'}
 function bdg(l,t){return'<span class="badge badge-'+t+'">'+esc(l)+'</span>'}
 
+// ═══ CHARTS ══════════════════════════════════════════════════════
+// Small, dependency-free inline-SVG chart primitives — no charting
+// library or real chart existed anywhere in this codebase before this
+// (Analytics used plain width% divs). Every chart direct-labels its
+// data in real text (name + value), so a viewer never has to decode a
+// color to read a number; hover adds an exact-value tooltip via a
+// native SVG <title>, which needs no extra JS and works everywhere.
+//
+// Categorical palette — 8 hues in FIXED order (never reassigned when
+// a filter changes which rows are visible), colorblind-safe adjacent
+// contrast confirmed via the dataviz skill's validator (light mode
+// only — this app has no dark theme). Never reuse it for status —
+// var(--ok)/--err/--warn already own that meaning everywhere else.
+var CHART_PALETTE=['#2a78d6','#eb6834','#1baf7a','#eda100','#e87ba4','#008300','#4a3aa7','#e34948'];
+function chartColor(i){return CHART_PALETTE[i%CHART_PALETTE.length]}
+
+/**
+ * Horizontal bar list — one row per category, each self-labeled with
+ * its own name and value. rows:[{label,value,color?}] opts:{money,emptyText}
+ */
+function chartBarH(rows,opts){
+    opts=opts||{};
+    rows=(rows||[]).filter(function(r){return r&&isFinite(r.value)});
+    if(!rows.length)return'<div class="chart-empty">'+esc(opts.emptyText||'No data yet')+'</div>';
+    var max=Math.max.apply(null,rows.map(function(r){return Math.abs(r.value)}))||1;
+    var fmtV=opts.money?fm:function(n){return Number(n||0).toLocaleString()};
+    return'<div class="chart-barh">'+rows.map(function(r,i){
+        var pct=Math.max(2,Math.round(Math.abs(r.value)/max*100));
+        var col=r.color||chartColor(i);
+        return'<div class="chart-barh-row">'+
+            '<div class="chart-barh-label" title="'+esc(r.label)+'">'+esc(r.label)+'</div>'+
+            '<div class="chart-barh-track"><div class="chart-barh-fill" style="width:'+pct+'%;background:'+col+'"></div></div>'+
+            '<div class="chart-barh-val">'+esc(fmtV(r.value))+'</div>'+
+        '</div>';
+    }).join('')+'</div>';
+}
+
+/**
+ * Donut chart for share-of-whole. Always paired with a legend — a
+ * thin slice has no room for an inline label — and every legend row
+ * carries its own value and percent as real text. slices:[{label,value,color?}]
+ * opts:{money,centerLabel,centerSub,emptyText}
+ */
+function chartDonut(slices,opts){
+    opts=opts||{};
+    slices=(slices||[]).filter(function(s){return s&&s.value>0});
+    if(!slices.length)return'<div class="chart-empty">'+esc(opts.emptyText||'No data yet')+'</div>';
+    var total=slices.reduce(function(s,x){return s+x.value},0)||1;
+    var fmtV=opts.money?fm:function(n){return Number(n||0).toLocaleString()};
+    var R=44,C=2*Math.PI*R,gap=Math.max(1,C*0.008),off=0;
+    var arcs=slices.map(function(s,i){
+        var col=s.color||chartColor(i);
+        var len=Math.max(0,(s.value/total)*C-gap);
+        var arc='<circle cx="60" cy="60" r="'+R+'" fill="none" stroke="'+col+'" stroke-width="16" '+
+            'stroke-dasharray="'+len+' '+(C-len)+'" stroke-dashoffset="'+(-off)+'" transform="rotate(-90 60 60)">'+
+            '<title>'+esc(s.label)+': '+esc(fmtV(s.value))+' ('+Math.round(s.value/total*100)+'%)</title></circle>';
+        off+=(s.value/total)*C;
+        return arc;
+    }).join('');
+    var legend=slices.map(function(s,i){
+        var col=s.color||chartColor(i);
+        return'<div class="chart-legend-row"><span class="chart-legend-dot" style="background:'+col+'"></span>'+
+            '<span class="chart-legend-label">'+esc(s.label)+'</span>'+
+            '<span class="chart-legend-val">'+esc(fmtV(s.value))+'</span>'+
+            '<span class="chart-legend-pct">'+Math.round(s.value/total*100)+'%</span></div>';
+    }).join('');
+    return'<div class="chart-donut-wrap"><svg viewBox="0 0 120 120" width="120" height="120" class="chart-donut">'+arcs+
+        (opts.centerLabel?'<text x="60" y="57" text-anchor="middle" class="chart-donut-center-v">'+esc(opts.centerLabel)+'</text>':'')+
+        (opts.centerSub?'<text x="60" y="72" text-anchor="middle" class="chart-donut-center-s">'+esc(opts.centerSub)+'</text>':'')+
+        '</svg><div class="chart-legend">'+legend+'</div></div>';
+}
+
+/**
+ * Simple line/area trend chart, single series — one series needs no
+ * legend, the card title already names it. Each point gets a native
+ * tooltip marker for the exact value on hover. points:[{label,value}]
+ * opts:{money,emptyText}
+ */
+function chartLine(points,opts){
+    opts=opts||{};
+    points=(points||[]).filter(function(p){return p&&isFinite(p.value)});
+    if(points.length<2)return'<div class="chart-empty">'+esc(opts.emptyText||'Not enough data yet')+'</div>';
+    var fmtV=opts.money?fm:function(n){return Number(n||0).toLocaleString()};
+    var W=560,H=160,padL=8,padR=8,padT=12,padB=22;
+    var vals=points.map(function(p){return p.value});
+    var min=Math.min(0,Math.min.apply(null,vals)),max=Math.max.apply(null,vals)||1;
+    if(max===min)max=min+1;
+    var x=function(i){return padL+(i/(points.length-1))*(W-padL-padR)};
+    var y=function(v){return padT+(1-(v-min)/(max-min))*(H-padT-padB)};
+    var linePts=points.map(function(p,i){return x(i)+','+y(p.value)}).join(' ');
+    var areaPts=linePts+' '+x(points.length-1)+','+y(min)+' '+x(0)+','+y(min);
+    var col=chartColor(0);
+    var dots=points.map(function(p,i){
+        return'<circle cx="'+x(i)+'" cy="'+y(p.value)+'" r="3.5" fill="'+col+'" stroke="#fff" stroke-width="1.5">'+
+            '<title>'+esc(p.label)+': '+esc(fmtV(p.value))+'</title></circle>';
+    }).join('');
+    var skip=points.length>8?Math.ceil(points.length/8):1;
+    var labels=points.map(function(p,i){
+        if(i%skip)return'';
+        return'<text x="'+x(i)+'" y="'+(H-6)+'" text-anchor="middle" class="chart-line-axis">'+esc(p.label)+'</text>';
+    }).join('');
+    return'<svg viewBox="0 0 '+W+' '+H+'" class="chart-line">'+
+        '<polygon points="'+areaPts+'" fill="'+col+'" opacity=".08"></polygon>'+
+        '<polyline points="'+linePts+'" fill="none" stroke="'+col+'" stroke-width="2" stroke-linejoin="round" stroke-linecap="round"></polyline>'+
+        dots+labels+
+    '</svg>';
+}
+
 // Small inline icon set for the Registration row/Review-modal action
 // buttons (Review/Enroll/Invite/Rescind) — replaces emoji-as-text, which
 // renders inconsistently across platforms and reads as a placeholder
