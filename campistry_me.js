@@ -2716,6 +2716,29 @@ function cascadeCamperDelete(name){
         });
     }catch(_){}
     try{Object.keys(bunkAsgn).forEach(function(b){if(Array.isArray(bunkAsgn[b]))bunkAsgn[b]=bunkAsgn[b].filter(function(c){return c!==name})});}catch(_){}
+    // A camper added directly via "+ Add Camper" gets a matching accepted
+    // enrollment auto-created (_autoCreateAcceptedEnrollment) so Billing/
+    // Pipeline treat them the same as a real registration. Deleting the
+    // camper without closing out that application left it sitting at
+    // status:'accepted'/'enrolled' forever — buildFamilyLedgers() scans
+    // EVERY accepted/enrolled application on every render, independent of
+    // roster/families, so it kept resurrecting a phantom $0 "Accepted —
+    // pending enrollment" Billing card. Mirrors rescindEnrollment's own
+    // cleanup below (flip to 'withdrawn' + audit entry) — that's what
+    // actually disqualifies a record from that Billing scan. A camper can
+    // have more than one enrollment record (reEnrollCamper has no dedup
+    // guard against an existing one), so this closes out all of them, not
+    // just the first.
+    try{
+        Object.values(enrollments).forEach(function(e){
+            if(!e||e.camperName!==name)return;
+            if(e.status!=='accepted'&&e.status!=='enrolled')return;
+            var prev=e.status;
+            e.status='withdrawn';
+            e.statusHistory=e.statusHistory||[];
+            e.statusHistory.push({from:prev,to:'withdrawn',date:new Date().toISOString(),by:'office',rescinded:true});
+        });
+    }catch(_){}
     // payments are intentionally KEPT — silently erasing billing history when a camper
     // is removed is worse than leaving the (now-deleted) name on the financial record.
     try{var raw=localStorage.getItem('campistry_go_data');if(raw){var go=JSON.parse(raw);if(go&&go.addresses&&go.addresses[name]){delete go.addresses[name];localStorage.setItem('campistry_go_data',JSON.stringify(go))}}}catch(_){}
@@ -2739,6 +2762,15 @@ async function deleteCamper(n){
     });
     var capturedBunks=[];
     Object.entries(bunkAsgn).forEach(function(pair){if(Array.isArray(pair[1])&&pair[1].indexOf(n)>=0)capturedBunks.push(pair[0])});
+    // cascadeCamperDelete is about to flip any accepted/enrolled application
+    // for this camper to 'withdrawn' — snapshot each one first so Undo can
+    // restore its exact prior status/statusHistory, not just re-link roster/family.
+    var capturedEnrollments={};
+    Object.entries(enrollments).forEach(function(pair){
+        if(pair[1]&&pair[1].camperName===n){
+            try{capturedEnrollments[pair[0]]=JSON.parse(JSON.stringify(pair[1]));}catch(_){}
+        }
+    });
     delete roster[n];
     cascadeCamperDelete(n);
     save();
@@ -2754,6 +2786,9 @@ async function deleteCamper(n){
             if(families[fk].camperIds.indexOf(n)<0)families[fk].camperIds.push(n);
         });
         capturedBunks.forEach(function(b){if(!bunkAsgn[b])bunkAsgn[b]=[];if(bunkAsgn[b].indexOf(n)<0)bunkAsgn[b].push(n)});
+        Object.keys(capturedEnrollments).forEach(function(eid){
+            if(enrollments[eid])enrollments[eid]=capturedEnrollments[eid];
+        });
         save();render(curPage);toast('Camper restored');
     }});
 }
@@ -5940,10 +5975,18 @@ async function rescindEnrollment(id){
         danger:true
     });
     if(!ok)return;
+    var prev=e.status;
+    // Captured BEFORE cascadeCamperDelete: it now also flips any accepted/
+    // enrolled application matching this camperName (including this very
+    // record) to 'withdrawn' itself, so `e.status` may already be
+    // 'withdrawn' by the time we get here — reading prev first keeps the
+    // audit entry below accurate instead of logging a no-op 'withdrawn'→'withdrawn'.
     if(e.camperName && roster[e.camperName]){ delete roster[e.camperName]; cascadeCamperDelete(e.camperName); }
-    var prev=e.status; e.status='withdrawn';
-    e.statusHistory=e.statusHistory||[];
-    e.statusHistory.push({from:prev,to:'withdrawn',date:new Date().toISOString(),by:'office',rescinded:true});
+    if(e.status!=='withdrawn'){
+        e.status='withdrawn';
+        e.statusHistory=e.statusHistory||[];
+        e.statusHistory.push({from:prev,to:'withdrawn',date:new Date().toISOString(),by:'office',rescinded:true});
+    }
     if(e.session && prev!=='waitlisted') autoPromoteWaitlist(e.session);
     save(); render(curPage); toast(nm+' rescinded — removed from the Campers list');
 }
