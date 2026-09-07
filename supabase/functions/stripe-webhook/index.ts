@@ -325,6 +325,20 @@ async function handleAutopaySetup(
     );
     if (!up.error) {
       console.log(`[stripe-webhook] autopay setup complete for family ${familyKey}, camp ${campId} (${pmType})`);
+      // Owner-facing feed notification — mirrors check-notes-reminders' insert
+      // shape (migration 056). This is the only signal an owner previously
+      // had that a parent finished setting up a payment plan on their end;
+      // idempotent on (camp_id, source, source_id=si.id) so a webhook retry
+      // never double-notifies.
+      const { error: notifErr } = await supabase.from("notifications").upsert({
+        camp_id: campId,
+        source: "autopay_setup",
+        source_id: si.id,
+        title: "Payment plan set up",
+        body: `${f.name || familyKey} saved a ${pmType === "us_bank_account" ? "bank account" : "card"} for autopay${pmLabel ? " (" + pmLabel + ")" : ""}.`,
+        link_target: "campistry_me.html",
+      }, { onConflict: "camp_id,source,source_id", ignoreDuplicates: true });
+      if (notifErr) console.warn(`[stripe-webhook] autopay setup notification insert failed: ${notifErr.message}`);
       return;
     }
     console.warn(`[stripe-webhook] autopay setup upsert attempt ${attempt} failed: ${up.error.message}`);

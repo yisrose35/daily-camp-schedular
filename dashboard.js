@@ -63,10 +63,13 @@
     const profileCampName = document.getElementById('profileCampName');
     const profileAddress = document.getElementById('profileAddress');
     const profileContactEmail = document.getElementById('profileContactEmail');
+    const profileTaxId = document.getElementById('profileTaxId');
     const profileEmail = document.getElementById('profileEmail');
     const editCampName = document.getElementById('editCampName');
     const editAddress = document.getElementById('editAddress');
     const editContactEmail = document.getElementById('editContactEmail');
+    const editTaxId = document.getElementById('editTaxId');
+    const editShowTaxId = document.getElementById('editShowTaxId');
     const profileError = document.getElementById('profileError');
     const profileSuccess = document.getElementById('profileSuccess');
     
@@ -282,9 +285,13 @@
             // ACTIVE one: prefer the camp CampistryDB already resolved (which
             // honors the active-camp selection / debug-copy switch), then the
             // camp whose id == uid (signup convention), then the first.
+            // tax_id/show_tax_id_on_statements are deliberately excluded —
+            // those two columns have column-level SELECT revoked for every
+            // client role (migration 121); a `select('*')` here would fail
+            // outright. Read them only through get_camp_tax_id() below.
             const { data: ownedCamps, error: campError } = await window.supabase
                 .from('camps')
-                .select('*')
+                .select('id, name, address, contact_email, owner_name, owner')
                 .eq('owner', currentUser.id);
 
             let ownedCamp = null;
@@ -795,9 +802,11 @@
         if (!campData && !isTeamMember) {
             try {
                 // Multi-camp owners: fetch all, prefer the real camp (id==uid).
+                // Same column exclusion as the STEP 3 fetch above — tax_id/
+                // show_tax_id_on_statements are select-locked (migration 121).
                 const { data: campsList, error } = await window.supabase
                     .from('camps')
-                    .select('*')
+                    .select('id, name, address, contact_email, owner_name, owner')
                     .eq('owner', currentUser.id);
                 const camps = (Array.isArray(campsList) && campsList.length > 0)
                     ? (campsList.find(c => c.id === currentUser.id) || campsList[0])
@@ -822,6 +831,24 @@
         let campAddress = campData?.address || '';
         let campContactEmail = campData?.contact_email || '';
 
+        // Tax ID/EIN is select-locked at the column level (migration 121) —
+        // campData never carries it. The only read path is this owner-only
+        // RPC; a team member's campData.id is unset (their own fetch above
+        // only ever selects name/address), so this naturally no-ops for them.
+        let campTaxId = '';
+        let campShowTaxId = false;
+        if (campData?.id) {
+            try {
+                const { data: taxRes } = await window.supabase.rpc('get_camp_tax_id', { p_camp_id: campData.id });
+                if (taxRes && taxRes.success) {
+                    campTaxId = taxRes.tax_id || '';
+                    campShowTaxId = !!taxRes.show_tax_id_on_statements;
+                }
+            } catch (e) {
+                console.warn('[Dashboard] get_camp_tax_id failed:', e);
+            }
+        }
+
         console.log('📊 Final display values:', { displayCampName, userName, campAddress, campContactEmail });
 
         // Update the personalized welcome message
@@ -837,6 +864,9 @@
         if (profileContactEmail) {
             profileContactEmail.textContent = campContactEmail || 'Not set';
         }
+        if (profileTaxId) {
+            profileTaxId.textContent = campTaxId ? (campTaxId + (campShowTaxId ? ' (shown on statements)' : ' (not shown on statements)')) : 'Not set';
+        }
 
         // Pre-fill edit form (only relevant for owners)
         if (editCampName) {
@@ -847,6 +877,12 @@
         }
         if (editContactEmail) {
             editContactEmail.value = campContactEmail;
+        }
+        if (editTaxId) {
+            editTaxId.value = campTaxId;
+        }
+        if (editShowTaxId) {
+            editShowTaxId.checked = campShowTaxId;
         }
 
         // Load stats from cloud storage — deliberately NOT awaited. This reads
@@ -1032,6 +1068,8 @@
         const newCampName = editCampName?.value.trim();
         const newAddress = editAddress?.value.trim();
         const newContactEmail = editContactEmail?.value.trim() || null;
+        const newTaxId = editTaxId?.value.trim() || null;
+        const newShowTaxId = !!editShowTaxId?.checked;
 
         if (!newCampName) {
             if (profileError) profileError.textContent = 'Camp name is required.';
@@ -1053,7 +1091,7 @@
                 // request is approved), never a manually-edited profile field.
                 const { error } = await window.supabase
                     .from('camps')
-                    .update({ name: newCampName, address: newAddress, contact_email: newContactEmail })
+                    .update({ name: newCampName, address: newAddress, contact_email: newContactEmail, tax_id: newTaxId, show_tax_id_on_statements: newShowTaxId })
                     .eq('id', campData.id);
 
                 if (error) throw error;
@@ -1066,6 +1104,13 @@
                 try {
                     if (typeof window.loadGlobalSettings === 'function' &&
                         typeof window.saveGlobalSettings === 'function') {
+                        // tax_id/show_tax_id_on_statements deliberately do NOT
+                        // go into app1/camp_state_kv — that blob syncs to the
+                        // cloud and is readable by any staff member with
+                        // Billing access (camp_state_kv's own broad RLS), which
+                        // would undo the column-level lockdown in migration
+                        // 121. printStatement() reads the real value through
+                        // get_camp_tax_id() instead, at print time.
                         const _gs = window.loadGlobalSettings() || {};
                         if (!_gs.app1) _gs.app1 = {};
                         _gs.app1.campName = newCampName;
@@ -1113,9 +1158,14 @@
                         owner: currentUser.id,
                         name: newCampName,
                         address: newAddress,
-                        contact_email: newContactEmail
+                        contact_email: newContactEmail,
+                        tax_id: newTaxId,
+                        show_tax_id_on_statements: newShowTaxId
                     }])
-                    .select()
+                    // Explicit column list — tax_id/show_tax_id_on_statements
+                    // are select-locked (migration 121), so a bare .select()
+                    // (which defaults to "*") would fail on the RETURNING here.
+                    .select('id, name, address, contact_email, owner_name, owner')
                     .single();
 
                 if (error) throw error;
@@ -1129,6 +1179,7 @@
             if (profileCampName) profileCampName.textContent = newCampName;
             if (profileAddress) profileAddress.textContent = newAddress || 'Not set';
             if (profileContactEmail) profileContactEmail.textContent = newContactEmail || 'Not set';
+            if (profileTaxId) profileTaxId.textContent = newTaxId ? (newTaxId + (newShowTaxId ? ' (shown on statements)' : ' (not shown on statements)')) : 'Not set';
             if (campNameDisplay) campNameDisplay.textContent = newCampName;
             
             updateWelcomeMessage();
@@ -1854,6 +1905,37 @@
     // page loads.
     var _dashEnrollments = {};
 
+    // ★ FIX: Sessions & Pricing (prices, bundles) silently reverting/
+    // resetting. Root cause: setupDashboardForRole() calls
+    // loadSessionsSection()/loadCampDates() synchronously on page load,
+    // well before integration_hooks.js's cloud hydration (a real Supabase
+    // round trip) has finished — so both can run against a stale/partial
+    // pre-hydration local snapshot. loadSessionsSection()'s id-backfill and
+    // _dashSyncHalfSessions()'s half-session sync each auto-SAVE whenever
+    // they detect a change, and that save's freshly-bumped updated_at then
+    // wins hydrateFromCloud()'s "which is newer" merge — silently writing
+    // the incomplete pre-hydration sessions/bundles back over the real
+    // cloud data (same failure shape as the earlier $0-tuition bug, via a
+    // new path). Gate: automatic/programmatic saves from those two paths
+    // are held until cloud hydration has actually completed at least
+    // once; explicit user saves (Add/Edit Session, bundle editor, inline
+    // price edit) are NEVER gated by this — they're intentional and must
+    // always go through.
+    var _dashSessionsCloudHydrated = false;
+    window.addEventListener('campistry-cloud-hydrated', function _dashOnCloudHydrated() {
+        _dashSessionsCloudHydrated = true;
+        // Re-read from the now-hydrated cache and re-run the half-session
+        // sync against real data, so any correction that was skipped pre-
+        // hydration still happens — just safely, against the real numbers.
+        if (document.getElementById('sessionsList')) {
+            loadSessionsSection();
+            if (userRole === 'owner') loadCampDates(false);
+        }
+    });
+    // Safety fallback — a camp with no cloud config, or a failed/unusually
+    // slow hydration, must not permanently block legitimate auto-saves.
+    setTimeout(function() { _dashSessionsCloudHydrated = true; }, 8000);
+
     function _dashGenId() {
         return 's_' + Date.now().toString(36) + Math.random().toString(36).slice(2, 8);
     }
@@ -1872,6 +1954,26 @@
         if (window.saveGlobalSettings) window.saveGlobalSettings('campistryMe', gs.campistryMe);
     }
 
+    // Whether an accepted/enrolled family can build their own installment
+    // schedule from Link (set_my_payment_plan RPC, migration 115) instead of
+    // the office building one manually via Me -> Billing -> Monthly Plan.
+    // Spread the existing enrollSettings first — it also holds promoCodes,
+    // which this must never clobber.
+    window.saveAllowParentPaymentPlans = function() {
+        var el = document.getElementById('allowParentPaymentPlans');
+        var gs = window.loadGlobalSettings ? (window.loadGlobalSettings() || {}) : {};
+        if (!gs.campistryMe) gs.campistryMe = {};
+        gs.campistryMe.enrollSettings = Object.assign({}, gs.campistryMe.enrollSettings || {}, {
+            allowParentPaymentPlans: !!(el && el.checked)
+        });
+        if (window.saveGlobalSettings) window.saveGlobalSettings('campistryMe', gs.campistryMe);
+        // Force the cloud sync now instead of waiting on the normal 500ms
+        // debounce — a camp owner flips this then immediately checks Link
+        // to confirm it worked, which is exactly the race that dropped
+        // saves elsewhere in this file (see updateSessionPriceInline).
+        if (window.flushPendingSettingsSync) window.flushPendingSettingsSync();
+    };
+
     function _dashFormatDateRange(startDate, endDate) {
         if (!startDate || !endDate) return '';
         return new Date(startDate + 'T12:00:00').toLocaleDateString('en-US', { month: 'long', day: 'numeric' })
@@ -1889,9 +1991,15 @@
             // it shifts on delete/reorder).
             var idsAdded = false;
             _dashSessions.forEach(function(s) { if (!s.id) { s.id = _dashGenId(); idsAdded = true; } });
-            if (idsAdded) _dashSaveSessions();
+            // Never auto-save from a pre-hydration snapshot — see the
+            // _dashSessionsCloudHydrated comment above. Once hydration
+            // fires, this whole function re-runs against the real cloud
+            // data and backfills/saves correctly then.
+            if (idsAdded && _dashSessionsCloudHydrated) _dashSaveSessions();
             renderSessionsList();
             renderBundlesList();
+            var allowPPEl = document.getElementById('allowParentPaymentPlans');
+            if (allowPPEl) allowPPEl.checked = !!(gs.campistryMe && gs.campistryMe.enrollSettings && gs.campistryMe.enrollSettings.allowParentPaymentPlans);
             var form = document.getElementById('sessionEditForm');
             if (form) form.style.display = 'none';
             var bform = document.getElementById('bundleEditForm');
@@ -1915,9 +2023,20 @@
         var changed = false;
         halves.forEach(function(h) {
             if (!h.start || !h.end) return;
-            var existing = _dashSessions.find(function(s) { return s.autoKey === h.key; });
+            // Match by autoKey first, but ALSO fall back to matching by name —
+            // a session manually named "1st Half"/"2nd Half" (typed in before
+            // Camp Dates halves were ever set, so it has no autoKey) would
+            // otherwise never be found here, and this would push a SECOND,
+            // zero-priced "1st Half" session alongside the real one. Any
+            // reader that does sessions.find(s => s.name === X) then risks
+            // resolving to whichever duplicate happens to come first —
+            // silently pricing an enrollment at $0 even though the real
+            // session has a real price.
+            var existing = _dashSessions.find(function(s) { return s.autoKey === h.key; })
+                || _dashSessions.find(function(s) { return !s.autoKey && (s.name||'').trim().toLowerCase() === h.label.toLowerCase(); });
             var dates = _dashFormatDateRange(h.start, h.end);
             if (existing) {
+                if (!existing.autoKey) { existing.autoKey = h.key; changed = true; } // link the manual entry so it's never duplicated again
                 if (existing.startDate !== h.start || existing.endDate !== h.end) {
                     existing.startDate = h.start;
                     existing.endDate = h.end;
@@ -1946,9 +2065,13 @@
             }
         });
         if (changed) {
-            _dashSaveSessions();
             renderSessionsList();
             renderBundlesList();
+            // Never auto-save from a pre-hydration snapshot — see the
+            // _dashSessionsCloudHydrated comment above _dashGenId(). Once
+            // hydration fires, loadCampDates() re-runs this whole function
+            // against the real cloud sessions and saves correctly then.
+            if (_dashSessionsCloudHydrated) _dashSaveSessions();
         }
     }
 
@@ -1988,7 +2111,7 @@
             if (s.dates) html += '<div style="font-size:0.75rem; color:var(--slate-500); margin-top:4px;">📅 ' + _dashEsc(s.dates) + '</div>';
             html += '<div style="display:flex; align-items:center; gap:8px; margin-top:6px;">';
             html += '<label style="font-size:0.78rem; color:var(--slate-500);">Price: $</label>';
-            html += '<input type="number" step="0.01" min="0" value="' + (s.tuition || '') + '" placeholder="0.00" style="width:100px; padding:4px 8px; border-radius:6px; border:1px solid var(--slate-200); font-size:0.82rem;" onchange="updateSessionPriceInline(' + i + ', this.value)">';
+            html += '<input type="number" step="0.01" min="0" value="' + (s.tuition || '') + '" placeholder="0.00" style="width:100px; padding:4px 8px; border-radius:6px; border:1px solid var(--slate-200); font-size:0.82rem;" onchange="updateSessionPriceInline(' + i + ', this.value, this)">';
             var enrolledCount = enrolledBySession[s.name] || 0;
             if (s.capacity) {
                 var overCap = enrolledCount > s.capacity;
@@ -2026,12 +2149,33 @@
     // the list; since both live in one function/list now, it's just that.
     function renderBundlesList() { renderSessionsList(); }
 
-    window.updateSessionPriceInline = function(idx, value) {
+    window.updateSessionPriceInline = function(idx, value, inputEl) {
         if (isTeamMember) return;
         var s = _dashSessions[idx];
         if (!s) return;
         s.tuition = parseFloat(value) || 0;
         _dashSaveSessions();
+        // This field has no confirmation banner like the full Edit Session
+        // form does, which invited a "type it, then immediately reload to
+        // check" test pattern that can race the normal debounced cloud
+        // sync — force that sync to run right now instead of waiting, and
+        // show a quick inline confirmation so it's not a silent no-op
+        // either way.
+        if (window.flushPendingSettingsSync) window.flushPendingSettingsSync();
+        var el = inputEl || (typeof event !== 'undefined' ? event.target : null);
+        var wrap = el && el.parentElement;
+        if (wrap) {
+            var mark = wrap.querySelector('.ses-price-saved');
+            if (!mark) {
+                mark = document.createElement('span');
+                mark.className = 'ses-price-saved';
+                mark.style.cssText = 'font-size:0.72rem;color:#059669;font-weight:600;';
+                wrap.appendChild(mark);
+            }
+            mark.textContent = '✓ Saved';
+            clearTimeout(mark._hideTimer);
+            mark._hideTimer = setTimeout(function() { mark.textContent = ''; }, 2000);
+        }
     };
 
     function _dashFillSessionForm(s) {
@@ -2144,6 +2288,10 @@
             if (existing) _dashSessions[idx] = obj;
             else _dashSessions.push(obj);
             _dashSaveSessions();
+            // Force the cloud sync now instead of waiting on the normal
+            // debounce — same reasoning as updateSessionPriceInline above:
+            // navigating away inside the debounce window drops the save.
+            if (window.flushPendingSettingsSync) window.flushPendingSettingsSync();
             renderSessionsList();
             window.cancelSessionForm();
             if (status) { status.textContent = (existing ? 'Session updated.' : 'Session created.'); status.style.color = '#059669'; setTimeout(function() { status.textContent = ''; }, 3000); }
@@ -2160,6 +2308,7 @@
         s.registrationOpen = s.registrationOpen === false;
         try {
             _dashSaveSessions();
+            if (window.flushPendingSettingsSync) window.flushPendingSettingsSync();
             renderSessionsList();
         } catch (e) {
             console.error('Error toggling session registration:', e);
@@ -2185,6 +2334,7 @@
                 renderBundlesList();
             }
             renderSessionsList();
+            if (window.flushPendingSettingsSync) window.flushPendingSettingsSync();
         } catch (e) {
             console.error('Error deleting session:', e);
         }
@@ -2281,6 +2431,7 @@
             if (idx != null && _dashBundles[idx]) _dashBundles[idx] = obj;
             else _dashBundles.push(obj);
             _dashSaveBundles();
+            if (window.flushPendingSettingsSync) window.flushPendingSettingsSync();
             renderBundlesList();
             window.cancelBundleForm();
             if (status) { status.textContent = (idx != null ? 'Bundle updated.' : 'Bundle created.'); status.style.color = '#059669'; setTimeout(function() { status.textContent = ''; }, 3000); }
@@ -2298,6 +2449,7 @@
         try {
             _dashBundles.splice(idx, 1);
             _dashSaveBundles();
+            if (window.flushPendingSettingsSync) window.flushPendingSettingsSync();
             renderBundlesList();
         } catch (e) {
             console.error('Error deleting bundle:', e);

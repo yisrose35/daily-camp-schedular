@@ -371,6 +371,26 @@ function save(){
         // hydrated (they were scrubbed after load). Writing g back as-is would
         // blank them in the cloud, so put the untouched branches back first.
         try{ if(window.CampistrySections)window.CampistrySections.preserveOnSave(g); }catch(_){}
+        // ★ sessions is a module-level var only populated once loadData() has
+        // run against real hydrated data — if save() fires (e.g. from an
+        // unrelated edit) before that first hydration completes, `sessions`
+        // is still its pre-load [] default. Writing that unconditionally
+        // (as every other field here does) would silently wipe Dashboard's
+        // Sessions & Pricing the moment this page saves anything at all —
+        // reported bug: sessions/bundles vanish the instant the owner
+        // navigates away from Dashboard. Never let an empty in-memory copy
+        // override a non-empty one already sitting in the local cache.
+        var _savedSessions=(sessions&&sessions.length)?sessions:((g.campistryMe&&Array.isArray(g.campistryMe.sessions))?g.campistryMe.sessions:sessions);
+        // ★ Same class of bug as the sessions guard above, for the two records
+        // that hold submitted applications: enrollments/staffApplications are
+        // module-level vars only populated once loadData() has hydrated real
+        // cloud data. A save() that fires before that first hydration (or in
+        // a stale/partial tab) would otherwise overwrite a parent's just-submitted
+        // application with an empty {} — the application looked successful to
+        // the parent, then silently vanished from the office's list. Never let
+        // an empty in-memory copy override a non-empty one already cached.
+        var _savedEnrollments=(enrollments&&Object.keys(enrollments).length)?enrollments:((g.campistryMe&&g.campistryMe.enrollments&&typeof g.campistryMe.enrollments==='object'&&Object.keys(g.campistryMe.enrollments).length)?g.campistryMe.enrollments:enrollments);
+        var _savedStaffApps=(staffApplications&&Object.keys(staffApplications).length)?staffApplications:((g.campistryMe&&g.campistryMe.staffApplications&&typeof g.campistryMe.staffApplications==='object'&&Object.keys(g.campistryMe.staffApplications).length)?g.campistryMe.staffApplications:staffApplications);
         g.campistryMe=Object.assign({},(g.campistryMe&&typeof g.campistryMe==='object')?g.campistryMe:{},{
             families:families,
             payments:payments,
@@ -381,11 +401,11 @@ function save(){
             bunkStaff:bunkStaff,
             divisionHeads:divisionHeads,
             nextPersonId:nextPersonId,
-            enrollments:enrollments,
-            staffApplications:staffApplications,
+            enrollments:_savedEnrollments,
+            staffApplications:_savedStaffApps,
             leads:leads,
             counselorVisibility:counselorVisibility,
-            sessions:sessions,
+            sessions:_savedSessions,
             enrollSettings:enrollSettings,
             formConfig:formConfig,
             staffFormConfig:staffFormConfig,
@@ -481,43 +501,85 @@ function _globalSearchIndex(query){
         if(results.filter(function(r){return r.type===type}).length>=5) return;
         results.push(item);
     }
-    Object.keys(roster).forEach(function(name){
-        if(name.toLowerCase().indexOf(q)<0) return;
-        var c=roster[name]||{};
-        pushIfRoom('camper',{type:'camper',label:name,sublabel:[c.division,c.bunk].filter(Boolean).join(' · ')||'Camper',
-            open:function(){nav('campers');setTimeout(function(){viewCamper(name)},50)}});
-    });
-    Object.keys(families).forEach(function(fk){
-        var f=families[fk]||{};
-        if(!f.name||f.name.toLowerCase().indexOf(q)<0) return;
-        pushIfRoom('family',{type:'family',label:f.name,sublabel:(f.camperIds||[]).length+' camper'+((f.camperIds||[]).length!==1?'s':''),
-            open:function(){nav('billing');setTimeout(function(){viewFamily(fk)},50);}});
-    });
-    (payroll.staff||[]).forEach(function(s){
-        if(!s||!s.name||s.name.toLowerCase().indexOf(q)<0) return;
-        pushIfRoom('staff',{type:'staff',label:s.name,sublabel:s.role||'Staff',
-            open:function(){nav('payroll');setTimeout(function(){prEditStaff(s.id)},50)}});
-    });
-    finPayments.forEach(function(p){
-        if(!p||!p.family||p.family.toLowerCase().indexOf(q)<0) return;
-        pushIfRoom('payment',{type:'payment',label:p.family+' — '+fm(p.amount||0),sublabel:[p.date,p.method].filter(Boolean).join(' · ')||'Payment',
-            open:function(){
-                var fk=Object.keys(families).find(function(k){return families[k].name===p.family})||null;
-                if(fk){nav('billing');setTimeout(function(){viewFamily(fk)},50);}else nav('billing');
-            }});
-    });
-    savedReports.forEach(function(r){
-        if(!r||!r.name||r.name.toLowerCase().indexOf(q)<0) return;
-        pushIfRoom('report',{type:'report',label:r.name,sublabel:'Saved report',
-            open:function(){_repHighlight=r.id;nav('reports');}});
-    });
-    Object.keys(leads).forEach(function(id){
-        var l=leads[id]||{};
-        var nm=l.parentName||l.camperName||'';
-        if(!nm||nm.toLowerCase().indexOf(q)<0) return;
-        pushIfRoom('lead',{type:'lead',label:nm,sublabel:l.camperName&&l.camperName!==nm?('Camper: '+l.camperName):'Lead',
-            open:function(){nav('leads');setTimeout(function(){viewLead(id)},50)}});
-    });
+    // Each category is its own try/catch — one malformed record in, say,
+    // savedReports must never blank out every other category's results.
+    try{
+        Object.keys(roster).forEach(function(name){
+            if(name.toLowerCase().indexOf(q)<0) return;
+            var c=roster[name]||{};
+            // viewCamper() already navigates itself (nav('camperdetail')) —
+            // calling nav('campers') first and hoping a 50ms setTimeout wins
+            // the race against that page's own render was needless and
+            // occasionally just lost the race, especially on a slower device.
+            pushIfRoom('camper',{type:'camper',label:name,sublabel:[c.division,c.bunk].filter(Boolean).join(' · ')||'Camper',
+                open:function(){viewCamper(name)}});
+        });
+    }catch(e){console.error('[Me] search: camper index failed',e)}
+    try{
+        // Search over LEDGERS, not just families{} — a camper who's been
+        // accepted but not yet enrolled shows up as its own row on Billing
+        // (buildFamilyLedgers() synthesizes a "pending_..." ledger entry for
+        // them, flagged pendingEnrollment) but that entry is never written
+        // into families{}, so searching families{} alone made anyone in
+        // that state completely unfindable. Ledgers already cover both real
+        // and pending households.
+        var _searchLedgers=buildFamilyLedgers();
+        Object.keys(_searchLedgers).forEach(function(fk){
+            var l=_searchLedgers[fk]; var f=l.family||{};
+            // Match on the household name OR any camper in it — a parent
+            // typing their kid's first name (e.g. "chana") on Billing had no
+            // way to find "Rosenfeld Family" before, since only the
+            // household name was checked.
+            var camperIds=(f.camperIds||[]).concat(l.pendingCamperIds||[]);
+            var matchedCamper=camperIds.find(function(cn){return cn&&cn.toLowerCase().indexOf(q)>=0});
+            var nameMatches=f.name&&f.name.toLowerCase().indexOf(q)>=0;
+            if(!nameMatches&&!matchedCamper) return;
+            // viewFamily() self-navigates (nav('familydetail')) — same race
+            // fixed as above, no separate nav('billing')+setTimeout needed.
+            pushIfRoom('family',{type:'family',label:f.name||matchedCamper,
+                sublabel:matchedCamper&&!nameMatches?'Camper: '+matchedCamper:camperIds.length+' camper'+(camperIds.length!==1?'s':''),
+                open:function(){viewFamily(fk)}});
+        });
+    }catch(e){console.error('[Me] search: family index failed',e)}
+    try{
+        (payroll.staff||[]).forEach(function(s){
+            if(!s||!s.name||s.name.toLowerCase().indexOf(q)<0) return;
+            pushIfRoom('staff',{type:'staff',label:s.name,sublabel:s.role||'Staff',
+                open:function(){nav('payroll');setTimeout(function(){prEditStaff(s.id)},50)}});
+        });
+    }catch(e){console.error('[Me] search: staff index failed',e)}
+    try{
+        finPayments.forEach(function(p){
+            if(!p||!p.family||p.family.toLowerCase().indexOf(q)<0) return;
+            pushIfRoom('payment',{type:'payment',label:p.family+' — '+fm(p.amount||0),sublabel:[p.date,p.method].filter(Boolean).join(' · ')||'Payment',
+                open:function(){
+                    // Prefer the stored familyKey (most payments carry one)
+                    // over re-deriving it from a plain name-string match —
+                    // a household rename after the payment was recorded
+                    // would silently break the name lookup and leave this
+                    // click doing nothing.
+                    var fk=(p.familyKey&&families[p.familyKey])?p.familyKey
+                        :Object.keys(families).find(function(k){return families[k].name===p.family})||null;
+                    if(fk) viewFamily(fk); else nav('billing');
+                }});
+        });
+    }catch(e){console.error('[Me] search: payment index failed',e)}
+    try{
+        savedReports.forEach(function(r){
+            if(!r||!r.name||r.name.toLowerCase().indexOf(q)<0) return;
+            pushIfRoom('report',{type:'report',label:r.name,sublabel:'Saved report',
+                open:function(){_repHighlight=r.id;nav('reports');}});
+        });
+    }catch(e){console.error('[Me] search: report index failed',e)}
+    try{
+        Object.keys(leads).forEach(function(id){
+            var l=leads[id]||{};
+            var nm=l.parentName||l.camperName||'';
+            if(!nm||nm.toLowerCase().indexOf(q)<0) return;
+            pushIfRoom('lead',{type:'lead',label:nm,sublabel:l.camperName&&l.camperName!==nm?('Camper: '+l.camperName):'Lead',
+                open:function(){nav('leads');setTimeout(function(){viewLead(id)},50)}});
+        });
+    }catch(e){console.error('[Me] search: lead index failed',e)}
     return results;
 }
 function _globalSearchResultsHtml(results){
@@ -538,18 +600,34 @@ function setupSearch(){
     var dd=document.getElementById('globalSearchResults');
     var t,lastResults=[];
     function closeDD(){if(dd)dd.style.display='none'}
-    function openDD(){if(dd)dd.style.display='block'}
+    // position:fixed (see the CSS comment on .gs-dropdown) means this box is
+    // no longer laid out by its parent at all — it has to be placed by hand,
+    // from the search input's own on-screen position, every time it opens.
+    function openDD(){
+        if(!dd)return;
+        var r=inp.getBoundingClientRect();
+        dd.style.top=(r.bottom+6)+'px';
+        dd.style.left=r.left+'px';
+        dd.style.width=Math.max(280,r.width)+'px';
+        dd.style.display='block';
+    }
     inp.oninput=function(){
         clearTimeout(t);
         var val=inp.value.trim();
         if(curPage==='campers'){_rosterPage=1;renderCampers(val);}
         t=setTimeout(function(){
             if(!val){lastResults=[];closeDD();return}
-            lastResults=_globalSearchIndex(val);
+            // A bad shape in any ONE data source (a malformed saved report, a
+            // payment with no family, whatever) used to be able to throw and
+            // blank the WHOLE dropdown with zero feedback. Never let a single
+            // broken record take the rest of search down with it.
+            try{ lastResults=_globalSearchIndex(val); }
+            catch(e){ console.error('[Me] global search failed:',e); lastResults=[]; }
             if(dd){dd.innerHTML=_globalSearchResultsHtml(lastResults);openDD()}
         },200);
     };
     inp.onfocus=function(){if(inp.value.trim()&&lastResults.length)openDD()};
+    window.addEventListener('resize',function(){if(dd&&dd.style.display==='block')openDD()});
     if(dd)dd.onclick=function(ev){
         var row=ev.target.closest('.gs-result');if(!row)return;
         var type=row.dataset.type;
@@ -1049,16 +1127,112 @@ function acceptAddToFamily(famKey,camperName){
 
 // Two family records that turn out to be the same household (same parent
 // email, or 3-of-4 on name/address/parent) — folds B's campers into A and
-// removes B. Keeps A's own name/household/balance; only camperIds merge.
-function mergeFamilies(keyA,keyB){
+// removes B. `reconciled` (from the guided merge tool below) carries the
+// office's field-by-field picks; pass null to keep everything from A
+// wholesale (today's original, unconditional behavior — still used when a
+// suggestion is accepted without opening the guided tool).
+function mergeFamiliesReconciled(keyA,keyB,reconciled){
     var a=families[keyA],b=families[keyB];
     if(!a||!b)return;
+    if(reconciled){
+        if(reconciled.name) a.name=reconciled.name;
+        a.households=(a.households&&a.households.length)?a.households:[{}];
+        var hhA=a.households[0];
+        if(reconciled.householdLabel!=null) hhA.label=reconciled.householdLabel;
+        if(reconciled.address!=null) hhA.address=reconciled.address;
+        hhA.parents=hhA.parents||[];
+        [0,1].forEach(function(pi){
+            var pField=reconciled['parent'+pi];
+            if(!pField)return;
+            hhA.parents[pi]=hhA.parents[pi]||{};
+            ['name','phone','email','relation'].forEach(function(k){
+                if(pField[k]!=null) hhA.parents[pi][k]=pField[k];
+            });
+        });
+        if(reconciled.notes!=null) a.notes=reconciled.notes;
+    }
     a.camperIds=a.camperIds||[];
     (b.camperIds||[]).forEach(function(n){ if(a.camperIds.indexOf(n)<0)a.camperIds.push(n); });
     a.balance=(a.balance||0)+(b.balance||0);
     a.totalPaid=(a.totalPaid||0)+(b.totalPaid||0);
     delete families[keyB];
     save();render(curPage);toast(b.name+' merged into '+a.name);
+}
+function mergeFamilies(keyA,keyB){ mergeFamiliesReconciled(keyA,keyB,null); }
+
+// Guided side-by-side merge tool — an on-demand entry point (Billing's
+// ⋯ menu) for picking ANY two family records, or a pre-filled call from
+// the auto-suggestion banner below, so a suggested merge and a manual one
+// go through the identical reconciliation screen instead of two
+// implementations. No args → a two-family picker; both keys → straight to
+// the compare screen.
+function openMergeFamiliesTool(keyA,keyB){
+    if(keyA&&keyB&&families[keyA]&&families[keyB]){
+        showModal('Merge Families',_mfCompareHtml(keyA,keyB),function(){_mfConfirmMerge(keyA,keyB)},{maxWidth:640});
+        var saveBtn=document.getElementById('dynModalSave'); if(saveBtn) saveBtn.textContent='Merge';
+        return;
+    }
+    var keys=Object.keys(families).sort(function(x,y){return(families[x].name||'').localeCompare(families[y].name||'')});
+    if(keys.length<2){ toast('You need at least 2 family records to merge','error'); return; }
+    var opts=keys.map(function(k){return'<option value="'+esc(k)+'">'+esc(families[k].name||k)+'</option>'}).join('');
+    var h='<div class="me-field"><label>Keep this family\'s record (A)</label><select id="mfPickA" class="me-input">'+opts+'</select></div>';
+    h+='<div class="me-field" style="margin-top:10px"><label>Merge in this family (B) — this record will be removed</label><select id="mfPickB" class="me-input">'+opts+'</select></div>';
+    showModal('Merge Families',h,function(){
+        var ka=document.getElementById('mfPickA').value, kb=document.getElementById('mfPickB').value;
+        if(!ka||!kb||ka===kb){ toast('Pick two different families','error'); return; }
+        openMergeFamiliesTool(ka,kb);
+    },{maxWidth:480});
+    var saveBtn2=document.getElementById('dynModalSave'); if(saveBtn2) saveBtn2.textContent='Compare';
+}
+function _mfFieldRowHtml(id,label,valA,valB){
+    valA=valA||''; valB=valB||'';
+    var same=valA===valB;
+    var def=valA||valB;
+    var h='<div style="display:grid;grid-template-columns:110px 1fr;gap:8px;align-items:start;margin-bottom:10px">';
+    h+='<div style="font-size:.78rem;font-weight:700;color:var(--s600);padding-top:8px">'+esc(label)+'</div><div>';
+    if(!same){
+        h+='<div style="display:flex;gap:6px;margin-bottom:4px;flex-wrap:wrap">';
+        h+='<button type="button" class="me-btn me-btn--ghost me-btn--sm" onclick="document.getElementById(\''+id+'\').value=\''+je(valA)+'\'">A: '+(valA?esc(valA):'<span style="color:var(--s400)">(blank)</span>')+'</button>';
+        h+='<button type="button" class="me-btn me-btn--ghost me-btn--sm" onclick="document.getElementById(\''+id+'\').value=\''+je(valB)+'\'">B: '+(valB?esc(valB):'<span style="color:var(--s400)">(blank)</span>')+'</button>';
+        h+='</div>';
+    }
+    h+='<input type="text" class="me-input" id="'+id+'" value="'+esc(def)+'"></div></div>';
+    return h;
+}
+function _mfCompareHtml(keyA,keyB){
+    var a=families[keyA],b=families[keyB];
+    if(!a||!b) return '<div>Family record not found.</div>';
+    var hhA=(a.households||[])[0]||{}, hhB=(b.households||[])[0]||{};
+    var pA0=(hhA.parents||[])[0]||{}, pA1=(hhA.parents||[])[1]||{};
+    var pB0=(hhB.parents||[])[0]||{}, pB1=(hhB.parents||[])[1]||{};
+    var union=(a.camperIds||[]).concat((b.camperIds||[]).filter(function(n){return(a.camperIds||[]).indexOf(n)<0}));
+    var balSum=(a.balance||0)+(b.balance||0);
+    var h='<div style="font-size:.8rem;color:var(--s600);margin-bottom:12px">Pick which record\'s details to keep for each field below. <strong>'+esc(b.name)+'</strong> will be removed once merged; its campers and balance carry onto <strong>'+esc(a.name)+'</strong>.</div>';
+    h+='<div style="background:var(--s50);padding:8px 12px;border-radius:var(--r);margin-bottom:14px;font-size:.8rem">Campers after merge: '+(union.length?union.map(function(n){return'<strong>'+esc(n)+'</strong>'}).join(', '):'<span style="color:var(--s400)">none</span>')+'<br>Balances will be summed: '+fm(a.balance||0)+' + '+fm(b.balance||0)+' = <strong>'+fm(balSum)+'</strong> (Total Paid summed the same way)</div>';
+    h+=_mfFieldRowHtml('mfName','Family Name',a.name,b.name);
+    h+=_mfFieldRowHtml('mfHhLabel','Household',hhA.label,hhB.label);
+    h+=_mfFieldRowHtml('mfAddress','Address',hhA.address,hhB.address);
+    h+=_mfFieldRowHtml('mfP1Name','Parent 1 Name',pA0.name,pB0.name);
+    h+=_mfFieldRowHtml('mfP1Phone','Parent 1 Phone',pA0.phone,pB0.phone);
+    h+=_mfFieldRowHtml('mfP1Email','Parent 1 Email',pA0.email,pB0.email);
+    h+=_mfFieldRowHtml('mfP1Rel','Parent 1 Relation',pA0.relation,pB0.relation);
+    h+=_mfFieldRowHtml('mfP2Name','Parent 2 Name',pA1.name,pB1.name);
+    h+=_mfFieldRowHtml('mfP2Phone','Parent 2 Phone',pA1.phone,pB1.phone);
+    h+=_mfFieldRowHtml('mfP2Email','Parent 2 Email',pA1.email,pB1.email);
+    h+=_mfFieldRowHtml('mfP2Rel','Parent 2 Relation',pA1.relation,pB1.relation);
+    h+=_mfFieldRowHtml('mfNotes','Notes',a.notes,b.notes);
+    return h;
+}
+function _mfConfirmMerge(keyA,keyB){
+    function v(id){var el=document.getElementById(id);return el?el.value.trim():''}
+    var reconciled={
+        name:v('mfName'),householdLabel:v('mfHhLabel'),address:v('mfAddress'),
+        parent0:{name:v('mfP1Name'),phone:v('mfP1Phone'),email:v('mfP1Email'),relation:v('mfP1Rel')},
+        parent1:{name:v('mfP2Name'),phone:v('mfP2Phone'),email:v('mfP2Email'),relation:v('mfP2Rel')},
+        notes:v('mfNotes')
+    };
+    mergeFamiliesReconciled(keyA,keyB,reconciled);
+    closeModal('dynModal');
 }
 
 // Households form automatically in the background (every camper add/edit
@@ -1115,7 +1289,7 @@ function _famSuggestionsBannerHtml(){
     mergeFams.forEach(function(s){
         h+='<div style="display:flex;align-items:center;gap:12px;padding:10px 14px;background:#fff;border-radius:var(--r);margin-bottom:6px;border:1px solid var(--s200)">';
         h+='<div style="flex:1"><div style="font-size:.8rem"><strong>'+esc(s.nameA)+'</strong> ('+s.campersA.map(esc).join(', ')+') and <strong>'+esc(s.nameB)+'</strong> ('+s.campersB.map(esc).join(', ')+') look like the same family</div></div>';
-        h+='<button class="me-btn me-btn--pri me-btn--sm" onclick="CampistryMe.mergeFamilies(\''+je(s.keyA)+'\',\''+je(s.keyB)+'\')">Merge</button>';
+        h+='<button class="me-btn me-btn--pri me-btn--sm" onclick="CampistryMe.openMergeFamiliesTool(\''+je(s.keyA)+'\',\''+je(s.keyB)+'\')">Merge</button>';
         h+='<button class="me-btn me-btn--ghost me-btn--sm" style="color:var(--s400)" onclick="CampistryMe.dismissMergeFamilies(\''+je(s.keyA)+'\',\''+je(s.keyB)+'\')">Dismiss</button>';
         h+='</div>';
     });
@@ -1400,7 +1574,8 @@ function renderStaffDetailPage(){
     }
 
     var posBody=cvR('Role',row.role)+((row.positions||[]).length?cvR('Position(s)',esc(row.positions.join(', '))):'');
-    if(app&&(app.availStart||app.availEnd))posBody+=cvR('Availability',(app.availStart||'?')+' – '+(app.availEnd||'?'));
+    if(app&&app.sessionsApplied&&app.sessionsApplied.length)posBody+=cvR('Session(s)',esc(app.sessionsApplied.join(', ')));
+    else if(app&&(app.availStart||app.availEnd))posBody+=cvR('Availability',(app.availStart||'?')+' – '+(app.availEnd||'?'));
     if(row.payrollId!=null){
         var core=PC();
         var rl=(core&&(core.PAY_TYPES.filter(function(p){return p.id===row.payType})[0]||{}).rateLabel)||'Rate';
@@ -1683,7 +1858,6 @@ function _renderRegistrationPane(){
         +'<div class="me-more-menu" id="pplLinkMenu" style="min-width:250px">'
         +'<button onclick="CampistryMe.copyRegLink()">📋 Copy Link</button>'
         +'<button onclick="CampistryMe.openSendRegLinkModal()">✉ Send Link</button>'
-        +'<button onclick="CampistryMe.showRegistrationQR()">▦ QR Code</button>'
         +'<div style="border-top:1px solid var(--s100);margin:4px 0"></div>'
         +'<button onclick="CampistryMe.exportEnrollmentReport()">↓ Export Applications</button>'
         +'</div></div>'
@@ -1728,7 +1902,6 @@ function _renderHiringPane(){
         +'<div class="me-more-menu" id="pplLinkMenu" style="min-width:250px">'
         +'<button onclick="CampistryMe.copyStaffLink()">📋 Copy Link</button>'
         +'<button onclick="CampistryMe.openSendStaffLinkModal()">✉ Send Link</button>'
-        +'<button onclick="CampistryMe.showStaffQR()">▦ QR Code</button>'
         +'<div style="border-top:1px solid var(--s100);margin:4px 0"></div>'
         +'<button onclick="CampistryMe.exportStaffCSV()">↓ Export Applications</button>'
         +'</div></div>'
@@ -2142,6 +2315,16 @@ function renderCamperDetailPage(){
     var bunkReq=_camperBunkRequests(n);
     if(bunkReq.friends.length)camp+=cvR('Wants to bunk with',esc(bunkReq.friends.join(', ')));
     if(bunkReq.avoid.length)camp+=cvR('Do not bunk with','<span class="cv-warn">'+esc(bunkReq.avoid.join(', '))+'</span>');
+    // Division/grade only auto-fill on enroll when Camp Structure has a real
+    // schoolGrade→division/grade mapping configured (an optional feature,
+    // set up per-grade in Camp Structure) — most camps that haven't set that
+    // up yet leave this card silently empty, which reads as "enrollment
+    // didn't actually assign anything" even though it worked correctly.
+    // Surface an explicit call to action instead of a blank card.
+    if(!d.division&&!d.grade&&!d.bunk){
+        camp+='<div style="font-size:.82rem;color:var(--s500);padding:4px 0;">Not assigned to a division/grade/bunk yet.</div>';
+        camp+='<button class="me-btn me-btn--sec me-btn--sm" onclick="CampistryMe.editCamper(\''+je(n)+'\')" style="margin-top:4px;">Assign now</button>';
+    }
     g+=_dpCard('Camp Assignment',camp,{icon:'mapPin'});
 
     // Parent / Guardian — shows BOTH parents in full right away, not just
@@ -2216,7 +2399,7 @@ function renderCamperDetailPage(){
     g+=_dpCard('Medical Summary',med,{flag:hasMedFlags,icon:'heart'});
 
     var docs=(d.documents||[]);
-    g+=_dpCard('Documents',renderDocuments(n),{icon:'fileText',badge:docs.length?String(docs.length):'',actionHtml:'<button class="me-btn me-btn--ghost me-btn--sm" onclick="CampistryMe.uploadDocument(\''+je(n)+'\')">+ Upload</button>'});
+    g+=_dpCard('Documents',renderDocuments(n),{icon:'fileText',badge:docs.length?String(docs.length):'',actionHtml:'<button class="me-btn me-btn--ghost me-btn--sm" onclick="CampistryMe.scanDocument(\''+je(n)+'\')">Scan</button><button class="me-btn me-btn--ghost me-btn--sm" onclick="CampistryMe.uploadDocument(\''+je(n)+'\')">+ Upload</button>'});
 
     var schols=d.scholarships||[];
     var aidBody=schols.length?schols.map(function(s){return cvR(s.type,fm(s.amount)+(s.source?' — '+s.source:'')+(s.date?' ('+s.date+')':''))}).join(''):'<div style="font-size:.8rem;color:var(--s400);font-style:italic">No aid on file</div>';
@@ -2518,7 +2701,20 @@ function cascadeCamperRename(oldName,newName){
 }
 function cascadeCamperDelete(name){
     if(!name)return;
-    try{Object.values(families).forEach(function(f){if(Array.isArray(f.camperIds))f.camperIds=f.camperIds.filter(function(c){return c!==name})});}catch(_){}
+    try{
+        // A household that drops to zero campers is a dangling record —
+        // buildFamilyLedgers()/renderBilling() render ANY families[] entry
+        // regardless of camperIds, so an empty one sits there forever as a
+        // $0 "Paid" card if it's just left with camperIds:[]. Delete it
+        // outright once it has no campers left. Object.keys() snapshots the
+        // key list before the loop, so deleting keys mid-iteration is safe.
+        Object.keys(families).forEach(function(fk){
+            var f=families[fk];
+            if(!f||!Array.isArray(f.camperIds))return;
+            f.camperIds=f.camperIds.filter(function(c){return c!==name});
+            if(f.camperIds.length===0)delete families[fk];
+        });
+    }catch(_){}
     try{Object.keys(bunkAsgn).forEach(function(b){if(Array.isArray(bunkAsgn[b]))bunkAsgn[b]=bunkAsgn[b].filter(function(c){return c!==name})});}catch(_){}
     // payments are intentionally KEPT — silently erasing billing history when a camper
     // is removed is worse than leaving the (now-deleted) name on the financial record.
@@ -2530,7 +2726,17 @@ async function deleteCamper(n){
     if(!ok)return;
     var capturedRoster=roster[n];
     var capturedFamilyLinks=[];
-    Object.entries(families).forEach(function(pair){if((pair[1].camperIds||[]).indexOf(n)>=0)capturedFamilyLinks.push(pair[0])});
+    var capturedFamilies={};
+    Object.entries(families).forEach(function(pair){
+        if((pair[1].camperIds||[]).indexOf(n)>=0){
+            capturedFamilyLinks.push(pair[0]);
+            // cascadeCamperDelete now deletes a family record outright once
+            // it has no campers left — capture the full record (not just
+            // the key) so Undo can bring the whole household back, not just
+            // re-link the camper to a family that no longer exists.
+            try{capturedFamilies[pair[0]]=JSON.parse(JSON.stringify(pair[1]));}catch(_){}
+        }
+    });
     var capturedBunks=[];
     Object.entries(bunkAsgn).forEach(function(pair){if(Array.isArray(pair[1])&&pair[1].indexOf(n)>=0)capturedBunks.push(pair[0])});
     delete roster[n];
@@ -2541,7 +2747,12 @@ async function deleteCamper(n){
     if(curPage==='camperdetail'&&_camperDetailName===n)nav('campers');else render(curPage);
     toast('Camper deleted','ok',{actionLabel:'Undo',onAction:function(){
         roster[n]=capturedRoster;
-        capturedFamilyLinks.forEach(function(fk){if(families[fk]){if(!families[fk].camperIds)families[fk].camperIds=[];if(families[fk].camperIds.indexOf(n)<0)families[fk].camperIds.push(n)}});
+        capturedFamilyLinks.forEach(function(fk){
+            if(!families[fk]&&capturedFamilies[fk])families[fk]=capturedFamilies[fk];
+            if(!families[fk])return;
+            if(!families[fk].camperIds)families[fk].camperIds=[];
+            if(families[fk].camperIds.indexOf(n)<0)families[fk].camperIds.push(n);
+        });
         capturedBunks.forEach(function(b){if(!bunkAsgn[b])bunkAsgn[b]=[];if(bunkAsgn[b].indexOf(n)<0)bunkAsgn[b].push(n)});
         save();render(curPage);toast('Camper restored');
     }});
@@ -4404,6 +4615,7 @@ function addBunkStaff(bunkName){
     var rec={name:name,role:role||'Staff',email:email,phone:phone,smsOptIn:sms};
     if(idx>=0&&bunkStaff[bunkName][idx])bunkStaff[bunkName][idx]=rec;
     else bunkStaff[bunkName].push(rec);
+    if(email)_syncPayrollBunkForEmail(email);
     save();
     _syncInvitesForBunk(bunkName);
     renderBB();
@@ -4489,6 +4701,21 @@ function bunksForStaffEmail(email){
         return (bunkStaff[b]||[]).some(function(s){ return staffKey(s)===k; });
     });
 }
+// bunkStaff (Bunk Builder's own assignment list) and payroll.staff[].bunk
+// (a separate snapshot Payroll's "Edit Record" reads/writes, see
+// _syncAcceptedContractsToPayroll above) are two independent copies of the
+// same fact with nothing keeping them in sync — a bunk change in Bunk
+// Builder never touched the payroll copy, so Payroll kept showing whatever
+// bunk was set at hire time. Call this after ANY bunkStaff mutation for a
+// given person so their payroll.staff record reflects reality again.
+function _syncPayrollBunkForEmail(email){
+    var k=String(email||'').trim().toLowerCase();
+    if(!k)return;
+    var key=_staffJoinKey(k,null);
+    var idx=(payroll.staff||[]).findIndex(function(s){return _staffJoinKey(s.email,s.name)===key});
+    if(idx<0)return;
+    payroll.staff[idx].bunk=bunksForStaffEmail(k)[0]||'';
+}
 function assignHiredToBunk(appId,bunkName){
     var a=staffApplications[appId];
     if(!a||!bunkName)return;
@@ -4504,6 +4731,7 @@ function assignHiredToBunk(appId,bunkName){
         email:email, phone:a.phone||'', smsOptIn:false,
         smsEmailConsent:!!a.smsEmailConsent // the applicant's OWN consent from their form — distinct from smsOptIn (an admin-asserted flag for the separate manual Lite blast feature)
     });
+    _syncPayrollBunkForEmail(email);
     save();
     _syncInvitesForBunk(bunkName);
     renderBB();
@@ -4516,6 +4744,7 @@ function unassignHiredFromBunk(appId,bunkName){
     var k=String(a.email||'').trim().toLowerCase(); if(!k)return;
     bunkStaff[bunkName]=(bunkStaff[bunkName]||[]).filter(function(s){return staffKey(s)!==k});
     if(!bunkStaff[bunkName].length)delete bunkStaff[bunkName];
+    _syncPayrollBunkForEmail(k);
     save();
     _syncInvitesForBunk(bunkName);
     renderBB();
@@ -4580,7 +4809,9 @@ async function inviteBunkStaffToLite(bunkName,idx){
 }
 function removeBunkStaff(bunkName,idx){
     if(!bunkStaff[bunkName]||!bunkStaff[bunkName][idx])return;
+    var removedEmail=bunkStaff[bunkName][idx].email;
     bunkStaff[bunkName].splice(idx,1);
+    if(removedEmail)_syncPayrollBunkForEmail(removedEmail);
     save();
     _syncInvitesForBunk(bunkName);
     renderBB();
@@ -5136,7 +5367,8 @@ function viewStaffApp(id){
         },
         role:function(){
             var h=row('Position(s)',(a.positions||[]).join(', '));
-            if((sFieldOn('availStart')||sFieldOn('availEnd'))&&(a.availStart||a.availEnd))h+=row('Availability',(a.availStart||'?')+' – '+(a.availEnd||'?'));
+            if(sFieldOn('sessionsApplied')&&a.sessionsApplied&&a.sessionsApplied.length)h+=row('Session(s)',a.sessionsApplied.join(', '));
+            else if((sFieldOn('availStart')||sFieldOn('availEnd'))&&(a.availStart||a.availEnd))h+=row('Availability',(a.availStart||'?')+' – '+(a.availEnd||'?'));
             return {title:'Role & Availability',body:h,snapshot:true};
         },
         experience:function(){
@@ -5323,6 +5555,29 @@ function copyStaffContractLink(id){
     if(navigator.clipboard){navigator.clipboard.writeText(url).then(function(){toast('Contract link copied')});}
     else{prompt('Copy this link and send it to the candidate:',url);}
 }
+// Saving an offer used to stop at copying a link the office had to paste
+// into their own email/text — this actually emails the candidate,
+// mirroring the Post-Hire Form's auto-send (callEdgeFunctionAuthed →
+// send-broadcast, the real edge function, not a client-side toast).
+// Failure surfaces via toast rather than silently leaving the office
+// thinking an email went out when it didn't.
+async function _sendContractOfferNow(id){
+    var a=staffApplications[id]; if(!a||!a.email)return;
+    var url=_staffContractLink(id);
+    var campName='';try{var ss=JSON.parse(localStorage.getItem('campGlobalSettings_v1')||'{}');campName=ss.campName||ss.camp_name||'Camp';}catch(ex){}
+    var firstName=(a.first||(a.name||'').split(' ')[0]||'');
+    var subject='Your offer from '+(campName||'Camp');
+    var body='Hi '+firstName+',\n\nWe\'d like to offer you a position for the upcoming season! Please review and accept your offer here:\n\n'+url+'\n\nWe look forward to having you on the team.';
+    try{
+        await callEdgeFunctionAuthed('send-broadcast',{campId:getCampId(),to:[{email:a.email,name:a.name||''}],subject:subject,body:body,method:'email',campName:campName});
+        a.contract.emailSentAt=new Date().toISOString();
+        save();
+        toast('Contract offer emailed to '+a.email);
+    }catch(err){
+        toast('Contract offer save succeeded, but the email failed to send: '+(err&&err.message||'unknown error')+' — use Copy Link to send it yourself.','error');
+        copyStaffContractLink(id);
+    }
+}
 function openStaffContractModal(id){
     var a=staffApplications[id]; if(!a)return;
     var core=PC(); if(!core){toast('Payroll isn\'t available yet','error');return;}
@@ -5331,6 +5586,11 @@ function openStaffContractModal(id){
     h+='<div class="fr"><div class="fg"><label class="fl">Pay Type</label><select id="scPayType" class="fs" onchange="CampistryMe.scPayTypeHint()">'+
         core.PAY_TYPES.map(function(p){return '<option value="'+esc(p.id)+'"'+((ctr.payType||'hourly')===p.id?' selected':'')+'>'+esc(p.label)+'</option>'}).join('')+
         '</select></div><div class="fg"><label class="fl" id="scRateLbl">Rate</label><input type="number" min="0" step="0.01" id="scRate" class="fi" value="'+(ctr.payRate||'')+'"></div></div>';
+    if(sessions&&sessions.length){
+        h+='<div class="fg"><label class="fl">Quick-fill from Session</label><select id="scSessionPick" class="fs" onchange="CampistryMe.scFillFromSession(this.value)"><option value="">— Pick a session to fill in the dates below —</option>'+
+            sessions.map(function(s){return '<option value="'+esc(s.name)+'"'+(ctr.sessionName===s.name?' selected':'')+'>'+esc(s.name)+(s.dates?' — '+esc(s.dates):'')+'</option>'}).join('')+
+            '</select></div>';
+    }
     h+='<div class="fr">'+ff('Start Date','scStart',ctr.startDate||'','date')+ff('End Date','scEnd',ctr.endDate||'','date')+'</div>';
     h+='<div class="fg"><label class="fl">Terms</label><textarea id="scTerms" class="fi" style="min-height:90px;resize:vertical" placeholder="Duties, housing, time off, anything else the offer should spell out…">'+(ctr.terms?esc(ctr.terms):'')+'</textarea></div>';
     h+='<p style="font-size:.72rem;color:var(--s400);margin-top:-4px">Saving generates a link the candidate opens to review these terms and accept by typing their name — no account needed on their end.</p>';
@@ -5344,6 +5604,16 @@ function scPayTypeHint(){
     var t=core.PAY_TYPES.filter(function(p){return p.id===sel.value})[0];
     lbl.textContent=t?t.rateLabel:'Rate';
 }
+// Quick-fill Start/End from a picked session — same "one shared session
+// concept" the camper registration flow already keys tuition/dates off of,
+// instead of retyping dates by hand for every contract.
+function scFillFromSession(name){
+    var s=sessions.find(function(x){return x.name===name});
+    if(!s)return;
+    var st=document.getElementById('scStart'), en=document.getElementById('scEnd');
+    if(st)st.value=s.startDate||'';
+    if(en)en.value=s.endDate||'';
+}
 function saveStaffContract(id){
     var a=staffApplications[id]; if(!a)return;
     function v(fid){var e=document.getElementById(fid);return e?(e.value||'').trim():''}
@@ -5355,6 +5625,7 @@ function saveStaffContract(id){
     ctr.payRate=parseFloat(v('scRate'))||0;
     ctr.startDate=v('scStart');
     ctr.endDate=v('scEnd');
+    ctr.sessionName=v('scSessionPick');
     ctr.terms=v('scTerms');
     if(ctr.status!=='accepted'){
         ctr.status='sent';
@@ -5364,7 +5635,8 @@ function saveStaffContract(id){
     save();
     closeModal('dynModal');
     _refreshStaffView(id);
-    copyStaffContractLink(id);
+    if(ctr.status!=='accepted'&&a.email)_sendContractOfferNow(id);
+    else copyStaffContractLink(id);
 }
 // Runs on every Hiring page render — picks up contracts a candidate accepted
 // since the last render (accepted via campistry_contract.html, so this admin
@@ -5379,17 +5651,29 @@ function _syncAcceptedContractsToPayroll(){
         var ctr=a.contract;
         if(!ctr||ctr.status!=='accepted'||ctr.syncedToPayroll)return;
         var payFields={payType:ctr.payType||'hourly',payRate:parseFloat(ctr.payRate)||0,startDate:ctr.startDate||'',endDate:ctr.endDate||''};
+        // DOB/address/bunk live on the application (dob/street/city/state/zip)
+        // and on bunkStaff (assignHiredToBunk) — not on the contract — so they
+        // never made it into payroll.staff before, leaving Payroll's own
+        // Edit Record fields (and the Age column, which is dob-driven) blank
+        // even though this same info is already correct on the staff profile.
+        var appAddr={street:a.street||'',city:a.city||'',state:a.state||'',zip:a.zip||''};
+        var appBunk=(typeof bunksForStaffEmail==='function'&&a.email)?(bunksForStaffEmail(a.email)[0]||''):'';
         var key=_staffJoinKey(a.email,a.name);
         var idx=key?payroll.staff.findIndex(function(s){return _staffJoinKey(s.email,s.name)===key}):-1;
         if(idx>=0){
             Object.assign(payroll.staff[idx],payFields);
+            var existing=payroll.staff[idx];
+            if(!existing.dob&&a.dob)existing.dob=a.dob;
+            if(!existing.bunk&&appBunk)existing.bunk=appBunk;
+            if((!existing.homeAddress||!existing.homeAddress.street)&&appAddr.street)existing.homeAddress=appAddr;
         }else{
             payroll.staff.push(Object.assign({
                 id:payroll.nextStaffId++,
                 name:a.name||((a.first||'')+' '+(a.last||'')),
                 email:a.email||'',phone:a.phone||'',role:ctr.position||(a.positions||[]).join(', '),
                 employmentType:'seasonal',isCampCounselor:true,
-                homeAddress:{},summerAddressSameAsHome:true,summerAddress:{},
+                dob:a.dob||'',bunk:appBunk,
+                homeAddress:appAddr,summerAddressSameAsHome:true,summerAddress:{},
                 expectedWeeklyHours:0,seasonWeeks:0,paymentMethod:'',
                 i9OnFile:false,w4OnFile:false,backgroundCheck:false,
                 youthCorps:{enrolled:false}
@@ -5485,6 +5769,28 @@ async function deleteStaffApp(id){
     });
     if(!ok)return;
     var wasOnDetailPage=curPage==='staffdetail';
+    // Cascade: a hired staff member can also be on a bunk, a division-head
+    // slot, and in Payroll — deleting only staffApplications[id] left all
+    // three dangling. Do this before the delete below since bunksForStaffEmail
+    // etc. don't need the record, but removeDivisionHead's confirm-free splice
+    // is safest run while `a` (used for name/email) is still around.
+    var delEmail=String(a.email||'').trim().toLowerCase();
+    if(delEmail){
+        bunksForStaffEmail(delEmail).forEach(function(b){
+            bunkStaff[b]=(bunkStaff[b]||[]).filter(function(s){return staffKey(s)!==delEmail});
+            if(!bunkStaff[b].length)delete bunkStaff[b];
+        });
+        divisionsForStaffEmail(delEmail).forEach(function(d){
+            var idx=(divisionHeads[d]||[]).findIndex(function(s){return staffKey(s)===delEmail});
+            if(idx>=0)removeDivisionHead(d,idx);
+        });
+    }
+    var pkey=_staffJoinKey(a.email,a.name);
+    if(pkey){
+        var removedIds=(payroll.staff||[]).filter(function(s){return _staffJoinKey(s.email,s.name)===pkey}).map(function(s){return String(s.id)});
+        payroll.staff=(payroll.staff||[]).filter(function(s){return _staffJoinKey(s.email,s.name)!==pkey});
+        if(removedIds.length)payroll.timesheets=(payroll.timesheets||[]).filter(function(t){return removedIds.indexOf(String(t.staffId))<0});
+    }
     delete staffApplications[id];
     save();
     closeModal('appViewModal');
@@ -5501,7 +5807,6 @@ var SAPP_FIELD_MAP={
     school:{},schoolGrade:{type:'select'},
     parentName:{},parentRelation:{},parentPhone:{type:'tel'},parentEmail:{type:'email'},
     parent2Name:{},parent2Relation:{},parent2Phone:{type:'tel'},parent2Email:{type:'email'},
-    availStart:{type:'date'},availEnd:{type:'date'},
     education:{},experience:{type:'textarea'}
 };
 
@@ -5511,6 +5816,7 @@ var SAPP_FIELD_MAP={
 // the real form instead of a fixed 5-field shortcut that can drift out of
 // sync with it.
 function addStaffApp(){
+    _freshSessions();
     var sfc=getStaffFormConfig();
     var order=(sfc.sectionOrder&&sfc.sectionOrder.length)?sfc.sectionOrder:SFC_SECTIONS.map(function(s){return s.key});
     var secEnabled={};
@@ -5526,6 +5832,12 @@ function addStaffApp(){
         var req=cfg.required!=null?cfg.required:!!f.required;
         var id='sapp_'+f.id;
         var star=req?' <span class="rq" style="color:var(--err)">*</span>':'';
+        if(f.id==='sessionsApplied'){
+            if(!sessions||!sessions.length)return '';
+            return '<div class="fg"><label class="fl">'+esc(label)+star+'</label><div style="display:flex;flex-wrap:wrap;gap:6px">'
+                +sessions.map(function(s){return '<label style="display:inline-flex;align-items:center;gap:5px;padding:6px 10px;border:1px solid var(--s200);border-radius:999px;font-size:.8rem;cursor:pointer"><input type="checkbox" class="sappSessCb" value="'+esc(s.name)+'">'+esc(s.name)+'</label>';}).join('')
+                +'</div></div>';
+        }
         if(map.type==='select'){var _opts=f.id==='schoolGrade'?_schoolGradeCatalog():(map.opts||[]);return '<div class="fg"><label class="fl">'+esc(label)+star+'</label><select id="'+id+'" class="fs"><option value="">—</option>'+_opts.map(function(o){return'<option>'+esc(o)+'</option>';}).join('')+'</select></div>';}
         if(map.type==='textarea')return '<div class="fg"><label class="fl">'+esc(label)+star+'</label><textarea id="'+id+'" class="fi" style="min-height:50px;resize:vertical"></textarea></div>';
         if(map.type==='file')return '<div class="fg"><label class="fl">'+esc(label)+star+'</label>'
@@ -5580,6 +5892,7 @@ function addStaffApp(){
             });
         });
         var positionsChecked=Array.prototype.map.call(document.querySelectorAll('.sappPosCb:checked'),function(c){return c.value;});
+        var sessionsChecked=Array.prototype.map.call(document.querySelectorAll('.sappSessCb:checked'),function(c){return c.value;});
         if(secEnabled.role&&!positionsChecked.length&&!missingLabel)missingLabel='Position(s)';
         var first=values.first||'',last=values.last||'';
         if(!first&&!last&&!missingLabel)missingLabel='Name';
@@ -5593,7 +5906,7 @@ function addStaffApp(){
             school:values.school||'',schoolGrade:values.schoolGrade||'',
             parentName:values.parentName||'',parentRelation:values.parentRelation||'',parentPhone:values.parentPhone||'',parentEmail:values.parentEmail||'',
             parent2Name:values.parent2Name||'',parent2Relation:values.parent2Relation||'',parent2Phone:values.parent2Phone||'',parent2Email:values.parent2Email||'',
-            positions:positionsChecked,availStart:values.availStart||'',availEnd:values.availEnd||'',
+            positions:positionsChecked,sessionsApplied:sessionsChecked,
             education:values.education||'',experience:values.experience||'',
             certifications:[],references:[],status:'applied',
             appliedDate:today(),appliedTime:new Date().toISOString(),onboarding:{}
@@ -6449,27 +6762,135 @@ function renderCustomSection(sec,sid,prefix){
     h+='<div style="display:flex;gap:6px;align-items:center;margin-bottom:8px">';
     h+='<input class="fi '+secCls+'Label" style="flex:1;font-weight:600;font-size:.85rem;padding:6px 8px" value="'+esc(sec.label||'')+'" placeholder="Section name, e.g. Dad\'s Info">';
     h+='<button type="button" class="me-btn me-btn--ghost" style="color:var(--err);font-size:.7rem;white-space:nowrap" onclick="this.closest(\'.'+secCls+'\').remove()">✕ Remove Section</button></div>';
-    h+='<div id="'+listId+'">'+fields.map(function(f){return renderCustomQ(f,-1,prefix);}).join('')+'</div>';
+    h+='<div id="'+listId+'">'+fields.map(function(f){return f.type==='richtext'?renderTextBlockRow(f,prefix):renderCustomQ(f,-1,prefix);}).join('')+'</div>';
+    h+='<div style="display:flex;gap:6px">';
     h+='<button type="button" class="me-btn me-btn--sec me-btn--sm" onclick="CampistryMe.addSectionField(\''+prefix+'\',\''+sid+'\')">+ Add Field</button>';
+    h+='<button type="button" class="me-btn me-btn--sec me-btn--sm" onclick="CampistryMe.addSectionTextBlock(\''+prefix+'\',\''+sid+'\')">+ Add Text Block</button>';
+    h+='</div>';
     h+='</div>';
     return h;
 }
+// A "Text Block" — camp-authored, display-only text (bold/list/link, no
+// input) shown to whoever fills out the public form, e.g. a welcome
+// paragraph or a policy blurb inside a Custom Section. Unlike every other
+// field type (renderCustomQ), it collects nothing on submit — its own
+// distinct row/class (qCls+'Rich') so it never gets mixed up with an
+// actual input field by _readCustomSections below.
+function renderTextBlockRow(tb,prefix){
+    prefix=prefix||'fc';
+    tb=tb||{};
+    var cls=prefix+'QRich';
+    var h='<div class="'+cls+'" style="border:1px solid var(--s200);border-radius:var(--r);padding:10px 12px;margin-bottom:6px;background:#fff">';
+    h+='<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px">';
+    h+='<span style="font-size:.68rem;font-weight:700;color:var(--s500);text-transform:uppercase;letter-spacing:.04em">Text Block — shown to whoever fills out this form</span>';
+    h+='<button type="button" class="me-btn me-btn--ghost" style="color:var(--err);font-size:.7rem" onclick="this.closest(\'.'+cls+'\').remove()">✕</button></div>';
+    h+=_richTextToolbarHtml(cls);
+    h+='<div class="'+cls+'Html" contenteditable="true" style="min-height:64px;border:1px solid var(--s300);border-radius:var(--r);padding:8px 10px;font-size:.85rem;line-height:1.55;background:var(--s50)">'+_sanitizeRichHtml(tb.html||'')+'</div>';
+    h+='</div>';
+    return h;
+}
+// A minimal 3-button toolbar (Bold / Bullet List / Link) over a
+// contenteditable div — deliberately not a full rich-text editor, matching
+// the ask. Uses document.execCommand: legacy, but still supported in every
+// shipping browser and the pragmatic fit for a "no build step, no
+// framework" codebase — hand-rolling Range-based bold/list wrapping that's
+// robust across arbitrary partial selections is a much bigger, riskier
+// undertaking than 3 buttons warrant. onmousedown preventDefault keeps the
+// contenteditable's selection alive through the button click.
+function _richTextToolbarHtml(cls){
+    return '<div style="display:flex;gap:4px;margin-bottom:6px">'
+        +'<button type="button" class="me-btn me-btn--ghost me-btn--sm" style="font-weight:700" onmousedown="event.preventDefault()" onclick="CampistryMe._richTextExec(event,\''+cls+'\',\'bold\')">B</button>'
+        +'<button type="button" class="me-btn me-btn--ghost me-btn--sm" onmousedown="event.preventDefault()" onclick="CampistryMe._richTextExec(event,\''+cls+'\',\'list\')">• List</button>'
+        +'<button type="button" class="me-btn me-btn--ghost me-btn--sm" onmousedown="event.preventDefault()" onclick="CampistryMe._richTextExec(event,\''+cls+'\',\'link\')">🔗 Link</button>'
+        +'</div>';
+}
+function _richTextExec(e,cls,cmd){
+    if(e&&e.preventDefault)e.preventDefault();
+    var wrap=e.target.closest('.'+cls);
+    var div=wrap&&wrap.querySelector('.'+cls+'Html');
+    if(!div)return;
+    div.focus();
+    if(cmd==='bold') document.execCommand('bold');
+    else if(cmd==='list') document.execCommand('insertUnorderedList');
+    else if(cmd==='link'){
+        var url=prompt('Link URL (must start with http://, https://, or mailto:)','https://');
+        if(!url)return;
+        if(!/^(https?:\/\/|mailto:)/i.test(url)){toast('Link must start with http://, https://, or mailto:','error');return}
+        document.execCommand('createLink',false,url);
+    }
+}
+// Strict allowlist sanitizer — a Text Block's HTML is admin-authored but
+// still runs through this before it's ever stored or rendered anywhere
+// (the builder's own contenteditable, and again on every public form
+// before .innerHTML — see campistry_register.html etc.). A detached
+// <template>'s content is walked tag-by-tag rather than matched with a
+// regex (regex HTML sanitization is exactly the kind of thing that quietly
+// breaks): anything not in the allowlist is unwrapped (its children kept,
+// the element itself dropped), every attribute is stripped except a
+// verified http(s)/mailto href on <a>, and target/rel are forced on links.
+var _RICH_ALLOWED_TAGS={B:1,STRONG:1,I:1,EM:1,UL:1,OL:1,LI:1,BR:1,P:1,A:1,DIV:1};
+function _sanitizeRichHtml(html){
+    if(!html)return'';
+    var tpl=document.createElement('template');
+    tpl.innerHTML=String(html);
+    (function walk(node){
+        var child=node.firstChild;
+        while(child){
+            var next=child.nextSibling;
+            if(child.nodeType===1){
+                var tag=child.tagName;
+                if(!_RICH_ALLOWED_TAGS[tag]){
+                    while(child.firstChild)node.insertBefore(child.firstChild,child);
+                    node.removeChild(child);
+                    child=next;continue;
+                }
+                Array.prototype.slice.call(child.attributes).forEach(function(a){
+                    if(tag==='A'&&a.name==='href'){
+                        if(!/^(https?:|mailto:)/i.test(a.value))child.removeAttribute('href');
+                    }else{child.removeAttribute(a.name);}
+                });
+                if(tag==='A'){
+                    if(!child.getAttribute('href')){
+                        while(child.firstChild)node.insertBefore(child.firstChild,child);
+                        node.removeChild(child);
+                        child=next;continue;
+                    }
+                    child.setAttribute('target','_blank');
+                    child.setAttribute('rel','noopener noreferrer');
+                }
+                walk(child);
+            }else if(child.nodeType!==3){
+                node.removeChild(child);
+            }
+            child=next;
+        }
+    })(tpl.content);
+    return tpl.innerHTML;
+}
 // Reads back every .{prefix}Sec container under #{prefix}SecList — each
-// one's fields are read the SAME way _readCustomQuestions reads a flat
-// list, just scoped to that one section's own nested container instead of
-// the document (querySelectorAll on a subtree naturally can't cross into a
-// sibling section's fields, so no extra bookkeeping is needed to keep
-// sections from bleeding into each other after an Add/Remove).
+// one's fields (input fields AND Text Blocks, in DOM order) are read the
+// SAME way _readCustomQuestions reads a flat list, just scoped to that one
+// section's own nested container instead of the document (querySelectorAll
+// on a subtree naturally can't cross into a sibling section's fields, so
+// no extra bookkeeping is needed to keep sections from bleeding into each
+// other after an Add/Remove).
 function _readCustomSections(prefix){
     prefix=prefix||'fc';
     var secCls=prefix+'Sec';
     var qCls=prefix+'Q';
+    var richCls=qCls+'Rich';
     var out=[];
     document.querySelectorAll('#'+prefix+'SecList .'+secCls).forEach(function(secEl){
         var label=secEl.querySelector('.'+secCls+'Label')?.value?.trim();
         if(!label)return;
         var fields=[];
-        secEl.querySelectorAll('.'+qCls).forEach(function(el){
+        secEl.querySelectorAll('.'+qCls+', .'+richCls).forEach(function(el){
+            if(el.classList.contains(richCls)){
+                var htmlEl=el.querySelector('.'+richCls+'Html');
+                var html=_sanitizeRichHtml(htmlEl?htmlEl.innerHTML:'');
+                if(html.replace(/<[^>]*>/g,'').trim()||/<img|<a /i.test(html)) fields.push({type:'richtext',html:html});
+                return;
+            }
             var flabel=el.querySelector('.'+qCls+'Label')?.value?.trim();
             var type=el.querySelector('.'+qCls+'Type')?.value||'text';
             var required=el.querySelector('.'+qCls+'Req')?.checked||false;
@@ -6495,6 +6916,14 @@ function addSectionField(prefix,sid){
     if(!list)return;
     var div=document.createElement('div');
     div.innerHTML=renderCustomQ({label:'',type:'text',required:false,options:[]},-1,prefix);
+    list.appendChild(div.firstChild);
+}
+function addSectionTextBlock(prefix,sid){
+    prefix=prefix||'fc';
+    var list=document.getElementById(prefix+'Sec_'+sid+'List');
+    if(!list)return;
+    var div=document.createElement('div');
+    div.innerHTML=renderTextBlockRow({html:''},prefix);
     list.appendChild(div.firstChild);
 }
 
@@ -6565,8 +6994,7 @@ var SFC_FIELD_CATALOG={
         {id:'parent2Email',label:'Second Parent / Guardian Email'}
     ],
     role:[
-        {id:'availStart',label:'Available From'},
-        {id:'availEnd',label:'Available Until'}
+        {id:'sessionsApplied',label:'Session(s) Applying For'}
     ],
     experience:[
         {id:'education',label:'Education'},
@@ -6947,6 +7375,18 @@ function saveFormConfig(){
 }
 
 // View full application (review modal)
+// Lightweight per-application "we got the check/Zelle" flag — paymentStatus
+// otherwise just defaults to 'pending' at creation and is never touched
+// again. This is intentionally a single toggle, not itemized amounts/dates
+// (openPaymentForFamily's full ledger entry, offered alongside this once a
+// family record exists, is the real record-keeping for that).
+function _markAppPaymentReceived(id){
+    var e=enrollments[id];if(!e)return;
+    e.paymentStatus=e.paymentStatus==='received'?'pending':'received';
+    save();
+    toast(e.paymentStatus==='received'?'Marked as received':'Marked as pending');
+    viewApplication(id);
+}
 function viewApplication(id){
     var e=enrollments[id];if(!e)return;
     var sc=e.status==='enrolled'?'ok':e.status==='accepted'?'ok':e.status==='waitlisted'?'warn':e.status==='declined'||e.status==='withdrawn'?'err':'gray';
@@ -7094,6 +7534,24 @@ function viewApplication(id){
             b+=row('Payment Method',e.paymentMethod?_payLabel(e.paymentMethod):'Not selected');
             b+=row('Payment Status',e.paymentStatus||'pending');
             if(e.discount&&e.discount.active!==false&&e.discount.code)b+=row('Discount',(e.discount.label||'')+' ('+e.discount.code+')');
+            // Contextual next-step per what the parent actually said they
+            // want, instead of just showing the label and leaving staff to
+            // remember what to do about it.
+            var famKeyForApp=_resolveFamilyKey(e.camperName,_famItemRaw(e.camperName,e.street,e.city,e.state,e.zip,e.parentName,e.parentEmail));
+            if(e.paymentMethod==='payment_plan'){
+                if(enrollSettings.allowParentPaymentPlans){
+                    b+='<div style="font-size:.8rem;color:var(--s500);margin-top:6px;">Self-serve payment plans are on — once accepted, this family can build their own plan from their Link portal.</div>';
+                }else if(famKeyForApp){
+                    b+='<button class="me-btn me-btn--sec me-btn--sm" style="margin-top:6px;" onclick="CampistryMe.monthlyPlan(\''+je(famKeyForApp)+'\')">Set Up Payment Plan</button>';
+                }else{
+                    b+='<div style="font-size:.8rem;color:var(--s500);margin-top:6px;">Accept &amp; enroll this application, then set up a payment plan from Billing.</div>';
+                }
+            }else if(e.paymentMethod==='credit_card'||e.paymentMethod==='ach'){
+                b+='<div style="font-size:.8rem;color:var(--s500);margin-top:6px;">Parent can pay directly from their Link portal (card or bank transfer) once invited — no setup needed here.</div>';
+            }else if(e.paymentMethod==='zelle'||e.paymentMethod==='check'){
+                b+='<button class="me-btn me-btn--sec me-btn--sm" style="margin-top:6px;" onclick="CampistryMe._markAppPaymentReceived(\''+je(id)+'\')">'+(e.paymentStatus==='received'?'✓ Marked Received (click to undo)':'Mark as Received')+'</button>';
+                if(famKeyForApp)b+=' <button class="me-btn me-btn--ghost me-btn--sm" style="margin-top:6px;" onclick="CampistryMe.openPaymentForFamily(\''+je(famKeyForApp)+'\')">Record Payment…</button>';
+            }
         },
         siblings:function(){
             if(!e.siblingGroup)return;
@@ -7365,9 +7823,6 @@ function showLinkQR(url,title){
         document.getElementById('qrBody').innerHTML='<div style="color:var(--err);font-size:.85rem">Could not load the QR library — check your connection.</div>';
     });
 }
-function showRegistrationQR(){ showLinkQR(window.location.origin+'/campistry_register.html?camp='+encodeURIComponent(getCampId()),'Registration Link QR Code'); }
-function showStaffQR(){ showLinkQR(window.location.origin+'/campistry_staff_apply.html?camp='+encodeURIComponent(getCampId()),'Staff Application Link QR Code'); }
-
 // Opens the "Send Link" modal for either the parent registration link
 // (kind='registration', with an audience picker sourced from families/
 // divisions) or the staff application link (kind='staff', which has no
@@ -7584,12 +8039,26 @@ function _onAppPhotoPick(input,targetId){
     });
 }
 
+// Re-reads sessions from the shared local cache right before a session
+// picker renders. loadData() normally keeps the module-level `sessions`
+// var current (re-run on cloud hydration and on cross-tab storage events),
+// but neither fires if this tab was already open before Dashboard's
+// Sessions & Pricing was edited in another tab — this closes that gap
+// cheaply instead of showing whatever was in memory at page-load time.
+function _freshSessions(){
+    try{
+        var g=(typeof window.loadGlobalSettings==='function')?window.loadGlobalSettings():null;
+        if(g&&g.campistryMe&&Array.isArray(g.campistryMe.sessions))sessions=g.campistryMe.sessions;
+    }catch(_){}
+    return sessions;
+}
 // Manual Entry mirrors whatever the camp has configured in Customize
 // Registration Form — same sections (in the same order, skipping any the
 // camp turned off), same field labels/required-ness, same custom questions
 // — so office staff see exactly what parents see on the real form instead
 // of a fixed set that can drift out of sync with it.
 function addApplication(){
+    _freshSessions();
     var fc=getFormConfig();
     var sesOpts=sessions.map(function(s){return'<option value="'+esc(s.name)+'">'+esc(s.name)+' — '+fm(s.tuition)+'</option>'}).join('');
     var order=(fc.sectionOrder&&fc.sectionOrder.length)?fc.sectionOrder:FC_SECTIONS.map(function(s){return s.key});
@@ -7597,6 +8066,15 @@ function addApplication(){
     FC_SECTIONS.forEach(function(s){ secEnabled[s.key]=fc.sections&&fc.sections[s.key]?fc.sections[s.key].enabled:s.default; });
 
     var h='<div class="fg"><label class="fl">Session</label><select id="appSession" class="fs"><option value="">— Select —</option>'+sesOpts+'</select></div>';
+    // Manual Entry is how a phone-intake application gets recorded — it had
+    // no way to capture how the family wants to pay at all, so a phone
+    // applicant never got the same payment-preference follow-through
+    // (office notification, Set Up Payment Plan shortcut, etc.) a real
+    // public-form applicant gets. Same 5 options/values as the public
+    // registration form's payment picker.
+    h+='<div class="fg"><label class="fl">How do they want to pay?</label><select id="appPaymentMethod" class="fs"><option value="">— Not selected —</option>'
+        +['credit_card','ach','zelle','check','payment_plan'].map(function(pm){return '<option value="'+pm+'">'+esc(_payLabel(pm))+'</option>';}).join('')
+        +'</select></div>';
 
     function fieldHtml(f){
         var cfg=(fc.fields&&fc.fields[f.id])||{};
@@ -7708,6 +8186,7 @@ function addApplication(){
             allergies:values.allergies||'',medications:values.medications||'',dietary:values.dietary||'',medicalNotes:values.medicalNotes||'',
             bunkmate:values.bunkmate||'',separateFrom:values.separate||'',tshirtSize:values.shirt||'',source:values.source||'',notes:values.notes||'',
             session:session,sessionTuition:tuition,
+            paymentMethod:document.getElementById('appPaymentMethod').value||'',
             status:isWaitlist?'waitlisted':'applied',
             appliedDate:new Date().toISOString().split('T')[0],
             formsRequired:3,formsCompleted:0,
@@ -7717,6 +8196,16 @@ function addApplication(){
         enrollments[id]=rec;
         save();closeModal('dynModal');_refreshPplIfActive();
         toast(isWaitlist?camperName+' added to waitlist':camperName+' application received');
+        // Same office follow-up a public-form submission already gets
+        // (flag_application_payment_followup, migration 115) — a phone
+        // intake shouldn't get worse treatment than the public form just
+        // because staff typed it in instead of the parent.
+        try{
+            if(rec.paymentMethod&&window.CampistryDB&&window.CampistryDB.getClient){
+                var _mc=window.CampistryDB.getClient();
+                if(_mc)_mc.rpc('flag_application_payment_followup',{p_camp_id:getCampId(),p_app_id:id}).catch(function(err){console.warn('[Me] flag_application_payment_followup:',err&&err.message);});
+            }
+        }catch(_){}
     },{maxWidth:720});
 }
 
@@ -8149,15 +8638,27 @@ function _syncParentInviteSnapshot(enrollId,silent){
 function _showInviteModal(enrollId,primary,secondary){
     var e=enrollments[enrollId]||{};
     var firstName=(e.camperName||'').split(' ')[0]||'your child';
+    // Copy-only left the office with no actual way to notify a parent short
+    // of pasting the code/link into their own email client by hand — stash
+    // the modal's data so the Send Email button (added below) can build and
+    // fire the real email via send-broadcast, same pattern as
+    // _sendContractOfferNow/_sendPostAcceptNow.
+    window._inviteModalCtx={enrollId:enrollId,camperFirst:firstName,primary:primary,secondary:secondary};
 
-    function renderParentBlock(p,label){
+    function renderParentBlock(p,label,which){
         var pName=p.name||p.email||'Parent';
         var pFirst=pName.split(' ')[0];
         var h='';
         if(label)h+='<div style="font-size:.78rem;font-weight:700;color:var(--s600);text-transform:uppercase;letter-spacing:.05em;margin-bottom:8px;">'+esc(label)+' — '+esc(pName)+'</div>';
-        h+='<p style="font-size:.85rem;color:var(--s600);margin-bottom:14px;">Share <strong>either</strong> of these with <strong>'+esc(pFirst)+'</strong> — they only need one to get started.</p>';
 
+        // Access code is the only path offered when one exists — a bare,
+        // forwardable portal link is a general link-sharing capability the
+        // camp doesn't want (anyone holding it could open the portal, not
+        // just the intended parent). The link stays as an emergency
+        // fallback only when no code is available yet (Supabase not ready
+        // at invite time — see _syncParentInviteSnapshot's no-db branch).
         if(p.accessCode){
+            h+='<p style="font-size:.85rem;color:var(--s600);margin-bottom:14px;">Share this access code with <strong>'+esc(pFirst)+'</strong> — they create their own account in the parent portal, then enter it to link up.</p>';
             h+='<div style="background:#EFF6FF;border:2px solid #BFDBFE;border-radius:10px;padding:14px 16px;margin-bottom:14px;">';
             h+='<div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:4px;">';
             h+='<span style="font-size:.72rem;font-weight:700;color:#1D4ED8;text-transform:uppercase;letter-spacing:.06em;">Access Code</span>';
@@ -8166,27 +8667,35 @@ function _showInviteModal(enrollId,primary,secondary){
             h+='<div style="font-size:1.5rem;font-weight:800;letter-spacing:.2em;color:#1E40AF;font-family:monospace;">'+esc(p.accessCode)+'</div>';
             h+='<div style="font-size:.72rem;color:#3B82F6;margin-top:4px;">Parent goes to the portal URL and enters this code after creating an account</div>';
             h+='</div>';
+        }else{
+            h+='<p style="font-size:.85rem;color:var(--s600);margin-bottom:14px;">Share this link with <strong>'+esc(pFirst)+'</strong> to get started.</p>';
+            h+='<div style="margin-bottom:14px;">';
+            h+='<div style="font-size:.72rem;font-weight:700;color:var(--s500);text-transform:uppercase;letter-spacing:.06em;margin-bottom:6px;">Invite Link</div>';
+            h+='<div style="background:var(--s50);border:1px solid var(--s200);border-radius:8px;padding:10px 12px;display:flex;align-items:center;gap:8px;">';
+            h+='<span style="font-size:.72rem;color:var(--s600);flex:1;word-break:break-all;font-family:monospace;">'+esc(p.url)+'</span>';
+            h+='<button class="me-btn me-btn--sec me-btn--sm" onclick="var b=this;navigator.clipboard.writeText(\''+p.url.replace(/'/g,"\\'")+'\'||document.location).then(function(){b.textContent=\'Copied ✓\';toast(\'Link copied!\');setTimeout(function(){b.textContent=\'Copy\'},2500)})" style="white-space:nowrap;flex-shrink:0;font-size:.72rem;padding:4px 10px;">Copy</button>';
+            h+='</div></div>';
         }
-
-        h+='<div style="margin-bottom:14px;">';
-        h+='<div style="font-size:.72rem;font-weight:700;color:var(--s500);text-transform:uppercase;letter-spacing:.06em;margin-bottom:6px;">Or — One-click Invite Link</div>';
-        h+='<div style="background:var(--s50);border:1px solid var(--s200);border-radius:8px;padding:10px 12px;display:flex;align-items:center;gap:8px;">';
-        h+='<span style="font-size:.72rem;color:var(--s600);flex:1;word-break:break-all;font-family:monospace;">'+esc(p.url)+'</span>';
-        h+='<button class="me-btn me-btn--sec me-btn--sm" onclick="var b=this;navigator.clipboard.writeText(\''+p.url.replace(/'/g,"\\'")+'\'||document.location).then(function(){b.textContent=\'Copied ✓\';toast(\'Link copied!\');setTimeout(function(){b.textContent=\'Copy\'},2500)})" style="white-space:nowrap;flex-shrink:0;font-size:.72rem;padding:4px 10px;">Copy</button>';
-        h+='</div></div>';
 
         h+='<details style="margin-bottom:14px;">';
         h+='<summary style="font-size:.8rem;font-weight:600;color:var(--s600);cursor:pointer;user-select:none;">Preview email message</summary>';
         h+='<div style="margin-top:10px;background:#fff;border:1px solid var(--s200);border-radius:8px;padding:14px;font-size:.82rem;line-height:1.7;color:var(--s700);white-space:pre-wrap;">';
         h+='Dear '+esc(pFirst)+',\n\nWe\'re excited to let you know that <strong>'+esc(firstName)+'</strong> has been accepted to camp!\n\n';
-        if(p.accessCode)h+='Your access code for the Campistry Link parent portal is: <strong>'+esc(p.accessCode)+'</strong>\n\nOr click the link below to get started directly:\n\n';
-        h+='<a href="'+esc(p.url)+'" style="color:#3B82F6;">'+esc(p.url)+'</a>\n\nWe look forward to a wonderful summer!\n\nCamp Office';
+        if(p.accessCode){
+            h+='Your access code for the Campistry Link parent portal is: <strong>'+esc(p.accessCode)+'</strong>\n\nGo to the portal, create your account, and enter this code to get started.';
+        }else{
+            h+='Click the link below to get started:\n\n<a href="'+esc(p.url)+'" style="color:#3B82F6;">'+esc(p.url)+'</a>';
+        }
+        h+='\n\nWe look forward to a wonderful summer!\n\nCamp Office';
         h+='</div></details>';
 
         if(p.email){
+            h+='<div style="display:flex;align-items:center;justify-content:space-between;gap:10px;">';
             h+='<div style="font-size:.75rem;color:var(--s400);">';
             h+='<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="vertical-align:-2px;margin-right:4px;"><path d="M4 4h16c1.1 0 2 .9 2 2v12c0 1.1-.9 2-2 2H4c-1.1 0-2-.9-2-2V6c0-1.1.9-2 2-2z"/><polyline points="22,6 12,13 2,6"/></svg>';
             h+=esc(p.email)+'</div>';
+            h+='<button class="me-btn me-btn--pri me-btn--sm" id="inviteSendBtn'+which+'" onclick="CampistryMe._sendInviteEmailNow('+which+',this)" style="font-size:.72rem;padding:4px 10px;">✉ Send Email</button>';
+            h+='</div>';
         }
         return h;
     }
@@ -8199,14 +8708,42 @@ function _showInviteModal(enrollId,primary,secondary){
     h+='<div><div style="font-size:1rem;font-weight:700;color:var(--s800);">Parent Portal Invite'+(secondary?'s':'')+' Ready</div>';
     h+='<div style="font-size:.8rem;color:var(--s500);">'+esc(e.camperName||'')+'\'s acceptance</div></div></div>';
 
-    h+=renderParentBlock(primary,secondary?'Parent 1':'');
+    h+=renderParentBlock(primary,secondary?'Parent 1':'',1);
     if(secondary){
         h+='<hr style="border:none;border-top:1px solid var(--s200);margin:4px 0 18px;">';
-        h+=renderParentBlock(secondary,'Parent 2');
+        h+=renderParentBlock(secondary,'Parent 2',2);
     }
 
     h+='</div>';
     showModal('Parent Portal Invite',h);
+}
+// Fires the actual email for one parent from the Parent Portal Invite modal
+// (window._inviteModalCtx, stashed by _showInviteModal) — mirrors
+// _sendContractOfferNow's real-send-vs-toast-and-fall-back-to-copy shape.
+async function _sendInviteEmailNow(which,btnEl){
+    var ctx=window._inviteModalCtx; if(!ctx)return;
+    var p=which===2?ctx.secondary:ctx.primary; if(!p||!p.email)return;
+    var pFirst=(p.name||p.email||'Parent').split(' ')[0];
+    var campName='';try{var ss=JSON.parse(localStorage.getItem('campGlobalSettings_v1')||'{}');campName=ss.campName||ss.camp_name||'Camp';}catch(ex){}
+    var subject='Welcome to '+(campName||'Camp')+' — '+ctx.camperFirst+'\'s Parent Portal';
+    var body='Dear '+pFirst+',\n\nWe\'re excited to let you know that '+ctx.camperFirst+' has been accepted to camp!\n\n';
+    if(p.accessCode){
+        body+='Your access code for the Campistry Link parent portal is: '+p.accessCode+'\n\nGo to the portal, create your account, and enter this code to get started.';
+    }else{
+        body+='Click the link below to get started:\n\n'+p.url;
+    }
+    body+='\n\nWe look forward to a wonderful summer!\n\n'+(campName||'Camp')+' Office';
+    var btn=btnEl||document.getElementById('inviteSendBtn'+which);
+    var origLabel=btn?btn.textContent:'';
+    if(btn){btn.disabled=true;btn.textContent='Sending…';}
+    try{
+        await callEdgeFunctionAuthed('send-broadcast',{campId:getCampId(),to:[{email:p.email,name:p.name||''}],subject:subject,body:body,method:'email',campName:campName});
+        toast('Invite emailed to '+p.email);
+        if(btn){btn.textContent='Sent ✓';}
+    }catch(err){
+        toast('Email failed to send: '+(err&&err.message||'unknown error')+' — use Copy to send it yourself.','error');
+        if(btn){btn.disabled=false;btn.textContent=origLabel;}
+    }
 }
 
 function autoPromoteWaitlist(sessionName){
@@ -8229,6 +8766,12 @@ function autoPromoteWaitlist(sessionName){
 function enrollCamper(id){
     var e=enrollments[id];if(!e)return;
     e.status='enrolled';
+    // addApplication()/addStaffApp()/reEnrollCamper() all call this before
+    // reading `sessions` — enrollCamper() didn't, so a Me tab left open since
+    // before (or during) a Dashboard price edit kept a stale, possibly
+    // out-of-date `sessions` array indefinitely (loadData()'s cross-tab
+    // storage listener doesn't fire same-tab).
+    _freshSessions();
     // Auto-create camper in roster with ALL application data
     if(!roster[e.camperName]){
         var newId=nextPersonId;nextPersonId++;
@@ -8254,12 +8797,6 @@ function enrollCamper(id){
         // Enroll was clicked, this camper would otherwise show no bunk
         // requests until the next full page load.
         _syncPostAcceptBunkRequests();
-        // If Camp Structure has a bunk group mapped to this camper's real
-        // school grade, place them in it right away instead of leaving
-        // division/grade blank until someone runs Auto-Generate — Bunk
-        // Builder's Unassigned pool then already shows the right grade.
-        var resolvedCohort=_resolveCohortBySchoolGrade(roster[e.camperName].schoolGrade);
-        if(resolvedCohort){ roster[e.camperName].division=resolvedCohort.div; roster[e.camperName].grade=resolvedCohort.gr; }
         toast('Enrolled — camper added to roster with all info');
     }else{
         // Update existing camper with any missing data from application
@@ -8282,13 +8819,34 @@ function enrollCamper(id){
         if((!c.documents||!c.documents.length)&&e.documents&&e.documents.length)c.documents=e.documents;
         toast('Enrolled — updated existing camper');
     }
+    // If Camp Structure has a bunk group mapped to this camper's real
+    // school grade, place them in it right away instead of leaving
+    // division/grade blank until someone runs Auto-Generate — Bunk
+    // Builder's Unassigned pool then already shows the right grade.
+    // Runs for BOTH branches above (new camper AND an existing roster
+    // record enrolled for the first time) — previously this only ran on
+    // the new-camper path, leaving the Camp Assignment card blank for any
+    // camper added to the roster before their application was enrolled.
+    if(!roster[e.camperName].division||!roster[e.camperName].grade){
+        var resolvedCohort=_resolveCohortBySchoolGrade(roster[e.camperName].schoolGrade);
+        if(resolvedCohort){ roster[e.camperName].division=resolvedCohort.div; roster[e.camperName].grade=resolvedCohort.gr; }
+    }
     // Auto-family: join an EXISTING family only on a 3-of-4 match (last name,
     // address, parent email, parent name) — not on a shared last name alone.
     var lastName=e.camperName.split(' ').pop();
     var addr=[e.street,e.city,e.state,e.zip].filter(Boolean).join(', ');
     var famKey=_resolveFamilyKey(e.camperName,_famItemRaw(e.camperName,e.street,e.city,e.state,e.zip,e.parentName,e.parentEmail));
     var sesObj=sessions.find(function(s){return s.name===e.session});
-    var tuition=e.sessionTuition||sesObj?.tuition||0;
+    // Prefer the session's CURRENT price, but only when it's actually a real
+    // positive number — a session lookup that resolves to a $0 object (a
+    // duplicate/mis-synced "1st Half" auto-created with tuition:0 before Camp
+    // Dates was set, or any other zero-priced same-named entry) must NOT be
+    // trusted over a genuinely positive frozen e.sessionTuition snapshot
+    // captured correctly at application time. Only fall back to $0 when
+    // BOTH the live lookup and the snapshot are empty/zero.
+    var _liveTuition=(sesObj&&sesObj.tuition!=null)?Number(sesObj.tuition)||0:0;
+    var _snapTuition=Number(e.sessionTuition)||0;
+    var tuition=_liveTuition>0?_liveTuition:_snapTuition;
 
     // Sibling discount only when actually joining a matched family that
     // already has campers.
@@ -9077,12 +9635,16 @@ function buildFamilyLedgers(){
         // Prefer the session's CURRENT price over the tuition snapshot frozen
         // onto the enrollment at application time — otherwise editing a
         // session's price in Sessions & Pricing, or moving an accepted camper
-        // to a different session, never re-bills that family. Only fall back
-        // to the frozen e.sessionTuition when the named session no longer
-        // exists (renamed/deleted since they applied) — there's nothing
-        // current left to look up.
+        // to a different session, never re-bills that family. BUT only trust
+        // the live lookup when it's a real positive number — a same-named
+        // session object that resolves to $0 (e.g. a duplicate/mis-synced
+        // entry) must not silently override a genuinely positive frozen
+        // e.sessionTuition snapshot. Only fall back to $0 when both the live
+        // lookup and the snapshot are empty/zero.
         var sessObj=sessions.find(function(s){return s.name===e.session});
-        var tuition=(sessObj&&sessObj.tuition!=null)?Number(sessObj.tuition)||0:Number(e.sessionTuition)||0;
+        var _liveTuition=(sessObj&&sessObj.tuition!=null)?Number(sessObj.tuition)||0:0;
+        var _snapTuition=Number(e.sessionTuition)||0;
+        var tuition=_liveTuition>0?_liveTuition:_snapTuition;
         var discAmt=e.discount?Number(e.discount.amt)||0:0;
         if(e.discount&&e.discount.pct>0) discAmt=Math.round(tuition*e.discount.pct/100);
         var net=tuition-discAmt;
@@ -10150,7 +10712,14 @@ function prExportCSV(){
 }
 
 function viewFamily(famKey){
-    if(!families[famKey])return;
+    // Checked against LEDGERS, not families{} — an accepted-but-not-yet-
+    // enrolled camper's household only ever exists as a synthesized
+    // "pending_..." ledger entry (buildFamilyLedgers()), never written to
+    // families{}. Guarding on families{} here silently no-op'd every click
+    // into one of those rows (from Billing, from search, anywhere), even
+    // though renderFamilyDetailPage() itself already handles a pending key
+    // correctly — this was the only broken link in the chain.
+    if(!famKey||!buildFamilyLedgers()[famKey])return;
     _familyDetailKey=famKey;
     nav('familydetail');
 }
@@ -10197,8 +10766,10 @@ function renderBilling(){
         +'<button onclick="CampistryMe.addFamily()">Add Household</button>'
         +'<button onclick="CampistryMe.addCharge()">Add Charge</button>'
         +'<button onclick="CampistryMe.issueCredit()">Issue Credit/Refund</button>'
-        +'<button onclick="CampistryMe.printFamilies()">Print all households</button>'
-        +'<button onclick="CampistryMe.exportFamilyReport()">Export all households</button>'
+        +'<button onclick="CampistryMe.openMergeFamiliesTool()">Merge Families</button>'
+        // Printing/exporting the household list moved to Reports (a
+        // "Family Directory" template, filterable/groupable/printable) —
+        // no need for a second, less capable copy of that feature here.
         +'</div></div></div></div>';
 
     // Households form automatically in the background as campers are added
@@ -10235,11 +10806,6 @@ function renderBilling(){
     if(!filtered.length){
         h+='<div class="me-empty"><h3>No accounts match this filter</h3></div>';
     } else {
-        h+='<div id="billingBulkBar" style="display:none;align-items:center;gap:8px;padding:8px 12px;background:var(--me-bg,#eef2ff);border:1px solid var(--s200);border-radius:8px;margin-bottom:8px">'
-            +'<span id="billingBulkCount" style="font-weight:700;font-size:.8rem;color:var(--s700)"></span>'
-            +'<span style="flex:1"></span>'
-            +'<button class="me-btn me-btn--sec me-btn--sm" onclick="CampistryMe.bulkExportBilling()">↓ Export Selected</button>'
-            +'</div>';
         var billPaged=_paginate(filtered,PAGE_SIZE,_billingPage);
         billPaged.items.forEach(function(l){
             // A single scannable row per family — click anywhere on it to open
@@ -10250,11 +10816,24 @@ function renderBilling(){
             var statusBadge=l.status==='paid'?_flatStatus('Paid','ok'):l.status==='overdue'?_flatStatus('Overdue','err'):l.status==='partial'?_flatStatus('Partial','warn'):_flatStatus('Pending','warn');
             var camperNames=(l.family.camperIds||[]).concat((l.pendingCamperIds||[]).map(function(n){return n+' (pending)'})).join(', ');
 
+            // A quick "N x $amount" tag when this family is on an even
+            // installment plan — so a plan's shape is scannable from the
+            // list without opening the family, same as the family-detail
+            // page's Payment Plan card.
+            var planTag='';
+            var famPlans=_famPlans(families[l.famKey]||{}).filter(function(p){return p.installments&&p.installments.length>1});
+            if(famPlans.length){
+                var pInsts=famPlans[0].installments;
+                var pAmts=pInsts.map(function(i){return Math.round((Number(i.amount)||0)*100)});
+                if(pAmts.every(function(a){return a===pAmts[0]})&&pAmts[0]>0){
+                    planTag='<span style="font-size:.72rem;color:var(--s400)">'+pInsts.length+' &times; '+fm(pAmts[0]/100)+'</span>';
+                }
+            }
+
             h+='<div class="me-card" id="billfam-'+je(l.famKey)+'" style="margin-bottom:10px;cursor:pointer" onclick="CampistryMe.viewFamily(\''+je(l.famKey)+'\')">';
             h+='<div style="display:flex;align-items:center;gap:12px">';
-            h+='<input type="checkbox" class="billing-check" data-famkey="'+esc(l.famKey)+'" onclick="event.stopPropagation();CampistryMe._updateBillingBulkBar()">';
-            h+='<div style="flex:1;min-width:0"><h3 style="margin:0">'+esc(l.family.name||'')+'</h3><span style="font-size:.75rem;color:var(--s400)">'+esc(camperNames)+'</span>'+(l.pendingEnrollment?' · '+_flatStatus('Accepted — pending enrollment','warn'):'')+'</div>';
-            h+='<div style="display:flex;align-items:center;gap:10px;flex-shrink:0">'+statusBadge;
+            h+='<div style="flex:1;min-width:0"><h3 style="margin:0;font-size:.95rem;font-weight:700;color:var(--s800)">'+esc(l.family.name||'')+'</h3><span style="font-size:.75rem;color:var(--s400)">'+esc(camperNames)+'</span>'+(l.pendingEnrollment?' · '+_flatStatus('Accepted — pending enrollment','warn'):'')+'</div>';
+            h+='<div style="display:flex;align-items:center;gap:10px;flex-shrink:0">'+planTag+statusBadge;
             h+='<span style="font-size:1rem;font-weight:800;color:'+(l.balance>0?'var(--err)':'var(--ok)')+'">'+fm(l.balance)+'</span>';
             h+='<span style="font-size:1rem;color:var(--s300)">›</span></div>';
             h+='</div></div>';
@@ -10295,31 +10874,26 @@ function renderFamilyDetailPage(){
     h+='<div class="me-card" style="padding:22px 24px">';
 
     // Header — name, campers, status, balance. No avatar/color decoration;
-    // this is a ledger, not a profile.
-    h+='<div style="display:flex;justify-content:space-between;align-items:flex-start;gap:16px;flex-wrap:wrap;margin-bottom:14px">';
-    h+='<div><h2 style="font-size:1.15rem;font-weight:700;color:var(--s800);margin:0 0 2px">'+esc(l.family.name||'')+'</h2>';
-    h+='<p style="font-size:.83rem;color:var(--s500);margin:0">'+esc(camperNames)+' · '+statusBadge+(l.pendingEnrollment?' · '+_flatStatus('Accepted — pending enrollment','warn'):'')+'</p></div>';
-    h+='<div style="text-align:right"><div style="font-size:.68rem;font-weight:700;color:var(--s400);text-transform:uppercase;letter-spacing:.05em">Balance</div>'
-        +'<div style="font-size:1.5rem;font-weight:700;line-height:1.1;color:'+(l.balance>0?'var(--err)':'var(--ok)')+'">'+fm(l.balance)+'</div></div>';
+    // this is a ledger, not a profile. Sized up from the original pass —
+    // this is the first thing anyone reads on the page, it should read
+    // easily at a glance, not need squinting.
+    h+='<div style="display:flex;justify-content:space-between;align-items:flex-start;gap:16px;flex-wrap:wrap;margin-bottom:16px">';
+    h+='<div><h2 style="font-size:1.4rem;font-weight:800;color:var(--s800);margin:0 0 4px">'+esc(l.family.name||'')+'</h2>';
+    h+='<p style="font-size:.88rem;color:var(--s500);margin:0">'+esc(camperNames)+' · '+statusBadge+(l.pendingEnrollment?' · '+_flatStatus('Accepted — pending enrollment','warn'):'')+'</p></div>';
+    h+='<div style="text-align:right"><div style="font-size:.72rem;font-weight:700;color:var(--s400);text-transform:uppercase;letter-spacing:.05em">Balance</div>'
+        +'<div style="font-size:2rem;font-weight:800;line-height:1.1;color:'+(l.balance>0?'var(--err)':'var(--ok)')+'">'+fm(l.balance)+'</div></div>';
     h+='</div>';
 
-    // Plain summary line — Charges / Payments (gross, before any refund) /
-    // Credits / Refunds, no tinted tiles. Payments is shown GROSS here
-    // (what actually got charged) rather than net-of-refunds, with Refunds
-    // broken out as its own figure — netting them silently into one
-    // "Payments" number is exactly what made the balance hard to follow.
-    h+='<div style="font-size:.82rem;color:var(--s600)">'
-        +'Charges <strong style="color:var(--s800)">'+fm(l.totalCharges)+'</strong>'
-        +' &nbsp;·&nbsp; Payments <strong style="color:var(--ok)">'+fm(l.totalGrossPayments)+'</strong>'
-        +(l.totalCredits>0?' &nbsp;·&nbsp; Credits <strong style="color:var(--purple)">'+fm(l.totalCredits)+'</strong>':'')
-        +(l.totalRefunds>0?' &nbsp;·&nbsp; Refunds <strong style="color:var(--err)">'+fm(l.totalRefunds)+'</strong>':'')
-        +'</div>';
-    h+='<div style="font-size:.7rem;color:var(--s400);padding-bottom:14px;border-bottom:1px solid var(--s100)">Balance = Charges − Payments − Credits'+(l.totalRefunds>0?' + Refunds':'')+'</div>';
-
-    // Action bar — one primary action plus a single "More" menu, instead of
-    // 8 buttons in a row. Payment-method status is plain text, not a pill.
+    // Action bar — moved above everything else. What you can DO on this
+    // page (record a payment, charge the card on file) belongs before what
+    // it means (the plan, the breakdown) — one primary action plus a
+    // single "More" menu, instead of 8 buttons in a row.
     var moreItems='<button onclick="CampistryMe.sendPayLink(\''+je(l.famKey)+'\')">Send Pay Link</button>';
-    if(!(_fam&&_fam.plan&&_fam.plan.installments&&_fam.plan.installments.length)) moreItems+='<button onclick="CampistryMe.monthlyPlan(\''+je(l.famKey)+'\')">Set up Payment Plan</button>';
+    // A family owes one balance, full stop — no per-camper coverage check.
+    // If a plan already exists, this edits that same plan; otherwise it
+    // offers to set one up (only when there's actually something owed).
+    if(_fam&&_famPlans(_fam).length) moreItems+='<button onclick="CampistryMe.monthlyPlan(\''+je(l.famKey)+'\')">Edit Payment Plan</button>';
+    else if(l.balance>0.005) moreItems+='<button onclick="CampistryMe.monthlyPlan(\''+je(l.famKey)+'\')">Set up Payment Plan</button>';
     moreItems+=hasCard?'<button onclick="CampistryMe.requestCardSetup(\''+je(l.famKey)+'\')">Replace payment method</button>':'<button onclick="CampistryMe.requestCardSetup(\''+je(l.famKey)+'\')">Set up payment method</button>';
     moreItems+='<button onclick="CampistryMe.addChargeForFamily(\''+je(l.famKey)+'\')">Add Charge</button>';
     moreItems+='<button onclick="CampistryMe.issueCreditForFamily(\''+je(l.famKey)+'\')">Issue Credit/Refund</button>';
@@ -10327,65 +10901,89 @@ function renderFamilyDetailPage(){
     moreItems+='<button onclick="CampistryMe.editFamily(\''+je(l.famKey)+'\')">Edit Household</button>';
     moreItems+='<button onclick="CampistryMe.toggleBillingAccess(\''+je(l.famKey)+'\')">'+(families[l.famKey]?.billingAccessClosed?'Reopen billing access':'Close billing access')+'</button>';
     moreItems+='<button onclick="CampistryMe.deleteFamily(\''+je(l.famKey)+'\')" style="color:var(--err)">Delete Household</button>';
-    h+='<div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;padding:14px 0;border-bottom:1px solid var(--s100)">'
-        +'<button class="me-btn me-btn--pri me-btn--sm" onclick="CampistryMe.openPaymentForFamily(\''+je(l.famKey)+'\')">Record Payment</button>'
-        +(hasCard&&l.balance>0?'<button class="me-btn me-btn--sec me-btn--sm" onclick="CampistryMe.chargeStoredCard(\''+je(l.famKey)+'\')">Charge Card</button>':'')
-        +'<span style="font-size:.75rem;color:'+(hasCard?'var(--ok)':'var(--s400)')+'">'+(hasCard?esc(_fam.paymentMethodLabel||(_fam.paymentMethodType==='us_bank_account'?'Bank account on file':'Card on file')):'No payment method on file')+'</span>'
+    h+='<div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;padding-bottom:16px;margin-bottom:16px;border-bottom:1px solid var(--s100)">'
+        +'<button class="me-btn me-btn--pri" onclick="CampistryMe.openPaymentForFamily(\''+je(l.famKey)+'\')">Record Payment</button>'
+        +(hasCard&&l.balance>0?'<button class="me-btn me-btn--sec" onclick="CampistryMe.chargeStoredCard(\''+je(l.famKey)+'\')">Charge Card</button>':'')
+        +'<span style="font-size:.8rem;color:'+(hasCard?'var(--ok)':'var(--s400)')+'">'+(hasCard?esc(_fam.paymentMethodLabel||(_fam.paymentMethodType==='us_bank_account'?'Bank account on file':'Card on file')):'No payment method on file')+'</span>'
         +'<span style="flex:1"></span>'
-        +'<div class="me-more-wrap"><button class="me-btn me-btn--sec me-btn--sm" onclick="CampistryMe._toggleMenu(\''+moreId+'\')">More ⋯</button>'
+        +'<div class="me-more-wrap"><button class="me-btn me-btn--sec" onclick="CampistryMe._toggleMenu(\''+moreId+'\')">More ⋯</button>'
         +'<div class="me-more-menu" id="'+moreId+'">'+moreItems+'</div></div>'
         +'</div>';
 
-    // Household — parents/address/siblings, folded into the same panel.
-    h+='<div style="padding:16px 0;border-bottom:1px solid var(--s100)">';
-    h+='<div style="font-size:.7rem;font-weight:700;color:var(--s500);text-transform:uppercase;letter-spacing:.05em;margin-bottom:8px">Household</div>';
-    h+=_famHouseholdHtml(l.famKey,l.family);
-    h+='</div>';
+    // Payment Plan(s) — right under the action bar. This is the single
+    // most actionable thing on the page besides recording a payment
+    // (what's due next, is autopay on) — burying it at the bottom below
+    // the full ledger and Household made it easy to miss. No accordion
+    // here: it should always be visible, not something you have to know
+    // to expand.
+    var planHtml=_planCardHtml(l);
+    if(planHtml) h+='<div style="padding-bottom:16px">'+planHtml+'</div>';
+
+    // Charges / Payments (gross, before any refund) / Credits / Refunds as
+    // a row of plain label-over-value tiles instead of a dense run-on
+    // sentence plus a separate "Balance = ..." formula line underneath —
+    // same numbers, easier to scan, one less thing to parse. Payments is
+    // shown GROSS here (what actually got charged) rather than net-of-
+    // refunds, with Refunds broken out as its own figure — netting them
+    // silently into one "Payments" number is exactly what made the
+    // balance hard to follow.
+    var _stats=[{label:'Charges',value:l.totalCharges,color:'var(--s800)'},{label:'Payments',value:l.totalGrossPayments,color:'var(--ok)'}];
+    if(l.totalCredits>0) _stats.push({label:'Credits',value:l.totalCredits,color:'var(--purple)'});
+    if(l.totalRefunds>0) _stats.push({label:'Refunds',value:l.totalRefunds,color:'var(--err)'});
+    h+='<div style="display:flex;gap:26px;flex-wrap:wrap;padding-bottom:2px">'
+        +_stats.map(function(s){
+            return '<div><div style="font-size:.68rem;font-weight:700;color:var(--s400);text-transform:uppercase;letter-spacing:.05em;margin-bottom:2px">'+s.label+'</div>'
+                +'<div style="font-size:1.1rem;font-weight:700;color:'+s.color+'">'+fm(s.value)+'</div></div>';
+        }).join('')
+        +'</div>';
+
+    // Everything below here is reference material, not something you need
+    // on every visit — Household, the full transaction ledger, and any
+    // one-off installment schedule are now collapsible accordions (same
+    // pattern as the Form Customizer) instead of one long undifferentiated
+    // scroll. Nothing is hidden by default; this just gives each section a
+    // clear heading you can collapse once you've seen it.
+    h+='<div style="padding-top:16px;margin-top:16px;border-top:1px solid var(--s100)">';
+    h+=_accCard('Household',_famHouseholdHtml(l.famKey,l.family),{key:'famDetailHousehold_'+l.famKey,open:false});
 
     // Ledger entries table
     if(l.entries.length){
-        h+='<div style="padding:16px 0;border-bottom:1px solid var(--s100)">';
-        h+='<div style="font-size:.7rem;font-weight:700;color:var(--s500);text-transform:uppercase;letter-spacing:.05em;margin-bottom:8px">Account Activity</div>';
         // Four separate money columns instead of collapsing Payment/Credit/
         // Refund into one "Payment" column distinguished only by the Type
         // badge — each entry fills exactly one column, so reading down (or
         // summing) any column matches the totals in the line above.
-        h+='<table class="me-t" style="margin:0"><thead><tr><th>Date</th><th>Type</th><th>Description</th><th style="text-align:right">Charge</th><th style="text-align:right">Payment</th><th style="text-align:right">Credit</th><th style="text-align:right">Refund</th></tr></thead><tbody>';
+        var activityHtml='<table class="me-t" style="margin:0"><thead><tr><th>Date</th><th>Type</th><th>Description</th><th style="text-align:right">Charge</th><th style="text-align:right">Payment</th><th style="text-align:right">Credit</th><th style="text-align:right">Refund</th></tr></thead><tbody>';
         l.entries.forEach(function(e){
-            if(e.type==='installment') return; // shown in Monthly Plan below
+            if(e.type==='installment') return; // shown in Payment Schedule / Payment Plan
             var isCharge=e.type==='charge';
             var isRefund=e.type==='payment'&&e.amount<0;
             var isPayment=e.type==='payment'&&!isRefund;
             var isCredit=e.type==='credit';
-            h+='<tr><td style="font-size:.75rem;color:var(--s500)">'+esc(e.date||'')+'</td>';
-            h+='<td>'+_flatStatus(e.category||e.type,isCharge?'err':isRefund?'err':isPayment?'ok':'warn')+'</td>';
-            h+='<td style="font-size:.8rem">'+esc(e.desc||'')+'</td>';
-            h+='<td style="text-align:right;font-weight:600;color:var(--s800)">'+(isCharge?fm(e.amount):'')+'</td>';
-            h+='<td style="text-align:right;font-weight:600;color:var(--ok)">'+(isPayment?fm(e.amount):'')+'</td>';
-            h+='<td style="text-align:right;font-weight:600;color:var(--purple)">'+(isCredit?fm(e.amount):'')+'</td>';
-            h+='<td style="text-align:right;font-weight:600;color:var(--err)">'+(isRefund?fm(Math.abs(e.amount)):'')+'</td></tr>';
+            activityHtml+='<tr><td style="font-size:.75rem;color:var(--s500)">'+esc(e.date||'')+'</td>';
+            activityHtml+='<td>'+_flatStatus(e.category||e.type,isCharge?'err':isRefund?'err':isPayment?'ok':'warn')+'</td>';
+            activityHtml+='<td style="font-size:.8rem">'+esc(e.desc||'')+'</td>';
+            activityHtml+='<td style="text-align:right;font-weight:600;color:var(--s800)">'+(isCharge?fm(e.amount):'')+'</td>';
+            activityHtml+='<td style="text-align:right;font-weight:600;color:var(--ok)">'+(isPayment?fm(e.amount):'')+'</td>';
+            activityHtml+='<td style="text-align:right;font-weight:600;color:var(--purple)">'+(isCredit?fm(e.amount):'')+'</td>';
+            activityHtml+='<td style="text-align:right;font-weight:600;color:var(--err)">'+(isRefund?fm(Math.abs(e.amount)):'')+'</td></tr>';
         });
-        h+='</tbody></table></div>';
+        activityHtml+='</tbody></table>';
+        h+=_accCard('Account Activity',activityHtml,{key:'famDetailActivity_'+l.famKey,open:false});
     }
 
     // Installment schedule if any (non-Monthly-Plan installments, e.g. a
     // manual payment plan attached at enrollment) — same plain table as
-    // Monthly Plan below, not a separate visual style.
+    // the Payment Plan cards above, not a separate visual style.
     var installments=l.entries.filter(function(e){return e.type==='installment'});
     if(installments.length){
         var today=new Date().toISOString().split('T')[0];
-        h+='<div style="padding:16px 0;border-bottom:1px solid var(--s100)">';
-        h+='<div style="font-size:.7rem;font-weight:700;color:var(--s500);text-transform:uppercase;letter-spacing:.05em;margin-bottom:8px">Payment Schedule</div>';
-        h+=_installmentTableHtml(installments.map(function(inst){
+        var scheduleHtml=_installmentTableHtml(installments.map(function(inst){
             var isPastDue=inst.status==='pending'&&inst.date&&inst.date<today;
             return {amount:inst.amount,dueDate:inst.date,status:isPastDue?'failed':inst.status,label:inst.desc||inst.category};
         }));
-        h+='</div>';
+        h+=_accCard('Payment Schedule',scheduleHtml,{key:'famDetailSchedule_'+l.famKey,open:false});
     }
-
-    // Monthly plan / autopay
-    var planHtml=_planCardHtml(l);
-    if(planHtml) h+='<div style="padding-top:16px">'+planHtml+'</div>';
+    h+='</div>';
 
     h+='</div>'; // close outer .me-card
     c.innerHTML=h;
@@ -10395,44 +10993,20 @@ function renderFamilyDetailPage(){
 // other per-installment entries) — Date / Amount / Status columns, same
 // .me-t style as Account Activity, so a schedule reads as one more ledger
 // table rather than a differently-decorated visual element.
-function _installmentTableHtml(items){
+function _installmentTableHtml(items,fontSize){
     var today=new Date().toISOString().split('T')[0];
     var rows=items.map(function(it){
         var overdue=it.status==='failed'||(it.status!=='paid'&&it.dueDate&&it.dueDate<today);
         var paid=it.status==='paid';
         var status=paid?_flatStatus('Paid','ok'):overdue?_flatStatus('Overdue','err'):_flatStatus('Upcoming',null);
-        return '<tr><td style="font-size:.8rem;color:var(--s600)">'+esc(it.dueDate||'TBD')+(it.label?' · '+esc(it.label):'')+'</td>'
+        return '<tr><td style="color:var(--s600)">'+esc(it.dueDate||'TBD')+(it.label?' · '+esc(it.label):'')+'</td>'
             +'<td style="text-align:right;font-weight:600;color:'+(paid?'var(--s400)':overdue?'var(--err)':'var(--s800)')+(paid?';text-decoration:line-through':'')+'">'+fm(it.amount)+'</td>'
             +'<td style="text-align:right">'+status+'</td></tr>';
     }).join('');
-    return '<table class="me-t" style="margin:0"><thead><tr><th>Due</th><th style="text-align:right">Amount</th><th style="text-align:right">Status</th></tr></thead><tbody>'+rows+'</tbody></table>';
+    return '<table class="me-t" style="margin:0'+(fontSize?';font-size:'+fontSize:'')+'"><thead><tr><th>Due</th><th style="text-align:right">Amount</th><th style="text-align:right">Status</th></tr></thead><tbody>'+rows+'</tbody></table>';
 }
 
 function setBillFilter(f){_billFilter=f;_billingPage=1;renderBilling()}
-function _updateBillingBulkBar(){
-    var n=document.querySelectorAll('.billing-check:checked').length;
-    var bar=document.getElementById('billingBulkBar'); if(bar) bar.style.display=n?'flex':'none';
-    var lbl=document.getElementById('billingBulkCount'); if(lbl) lbl.textContent=n+' selected';
-}
-function bulkExportBilling(){
-    var famKeys=Array.prototype.map.call(document.querySelectorAll('.billing-check:checked'), function(cb){ return cb.dataset.famkey; });
-    if(!famKeys.length){ toast('Select at least one account'); return; }
-    var ledgers=buildFamilyLedgers();
-    var headers=['Family','Campers','Charges','Payments','Balance','Status'];
-    var csv='﻿'+headers.map(function(h){return'"'+h+'"'}).join(',')+'\n';
-    var count=0;
-    famKeys.forEach(function(fk){
-        var l=ledgers[fk]; if(!l)return; count++;
-        var camperNames=(l.family.camperIds||[]).concat((l.pendingCamperIds||[]).map(function(n){return n+' (pending)'})).join('; ');
-        var row=[l.family.name||'',camperNames,l.totalCharges||0,l.totalPayments||0,l.balance||0,l.status||''];
-        csv+=row.map(function(v){return'"'+String(v).replace(/"/g,'""')+'"'}).join(',')+'\n';
-    });
-    var a=document.createElement('a');
-    a.href=URL.createObjectURL(new Blob([csv],{type:'text/csv'}));
-    a.download='billing_'+new Date().toISOString().split('T')[0]+'.csv';
-    a.click();
-    toast('Exported '+count+' account'+(count!==1?'s':''));
-}
 
 function openPaymentModal(){openPaymentForFamily(null)}
 
@@ -10702,13 +11276,33 @@ function issueCreditForFamily(famKey){
     if(famKey) _crPaymentChanged();
 }
 
-function printStatement(famKey){
+async function printStatement(famKey){
     var ledgers=buildFamilyLedgers();
     var l=ledgers[famKey];if(!l)return;
     var campName='';try{var s=JSON.parse(localStorage.getItem('campGlobalSettings_v1')||'{}');campName=s.camp_name||s.campName||'Camp'}catch(e){}
+    // window.open() must happen synchronously, before any await, or some
+    // browsers' popup blockers stop treating it as tied to the click that
+    // triggered this handler.
     var w=window.open('','_blank');
+    // Tax ID/EIN is select-locked on the camps table (migration 121) — the
+    // only way to read it is this owner-only RPC, called fresh at print
+    // time. It is deliberately NOT cached in campGlobalSettings_v1/
+    // localStorage, which any staff member with Billing access can already
+    // inspect — that was the actual leak this replaced.
+    var campTaxId='',showCampTaxId=false;
+    try{
+        var client=window.CampistryDB&&window.CampistryDB.getClient?window.CampistryDB.getClient():window.supabase;
+        var campId=getCampId();
+        if(client&&campId){
+            var res=await client.rpc('get_camp_tax_id',{p_camp_id:campId});
+            var d=res&&res.data;
+            if(d&&d.success){campTaxId=d.tax_id||'';showCampTaxId=!!d.show_tax_id_on_statements;}
+        }
+    }catch(e){}
     var h='<!DOCTYPE html><html><head><title>Statement — '+esc(l.family.name)+'</title><style>body{font-family:Arial,sans-serif;font-size:10pt;margin:30px;color:#222}h1{font-size:16pt;margin-bottom:4px}h2{font-size:12pt;margin:20px 0 8px}table{width:100%;border-collapse:collapse;margin-bottom:16px}th{background:#f5f5f5;text-align:left;padding:6px;border:1px solid #ddd;font-size:9pt}td{padding:5px 6px;border:1px solid #ddd;font-size:9pt}.right{text-align:right}.bold{font-weight:bold}@media print{button{display:none}}</style></head><body>';
-    h+='<h1>'+esc(campName)+'</h1><p style="color:#666;margin-bottom:20px">Statement for <strong>'+esc(l.family.name)+'</strong> · Generated '+new Date().toLocaleDateString()+'</p>';
+    h+='<h1>'+esc(campName)+'</h1>';
+    if(showCampTaxId&&campTaxId) h+='<p style="color:#666;margin:0 0 4px">Tax ID: '+esc(campTaxId)+'</p>';
+    h+='<p style="color:#666;margin-bottom:20px">Statement for <strong>'+esc(l.family.name)+'</strong> · Generated '+new Date().toLocaleDateString()+'</p>';
     // Campers
     h+='<p>Campers: '+(l.family.camperIds||[]).map(function(n){return'<strong>'+esc(n)+'</strong>'}).join(', ')+'</p>';
     // Parent info
@@ -10729,8 +11323,14 @@ function printStatement(famKey){
     // Installment schedule
     var insts=l.entries.filter(function(e){return e.type==='installment'});
     if(insts.length){
-        h+='<h2>Payment Schedule</h2><table><thead><tr><th>Installment</th><th>Due Date</th><th class="right">Amount</th><th>Status</th></tr></thead><tbody>';
-        insts.forEach(function(i){h+='<tr><td>'+esc(i.category||i.desc)+'</td><td>'+esc(i.date||'')+'</td><td class="right bold">'+fm(i.amount)+'</td><td>'+esc(i.status||'pending')+'</td></tr>'});
+        var _plan=(_famPlans(l.family)||[])[0];
+        var _autopayOn=!!(_plan&&_plan.autopay);
+        if(_autopayOn){
+            var _hasCard=!!l.family.cardOnFile;
+            h+='<div style="background:'+(_hasCard?'#F0FDF4':'#FFFBEB')+';border:1px solid '+(_hasCard?'#BBF7D0':'#FDE68A')+';padding:9px 12px;border-radius:4px;margin-bottom:8px;font-size:9pt;color:'+(_hasCard?'#166534':'#92400E')+'">'+(_hasCard?'Autopay is ON — these installments will be charged automatically to the card on file on each due date.':'Autopay is ON, but no card is on file yet — installments will not be charged automatically until a card is added.')+'</div>';
+        }
+        h+='<h2>Payment Schedule</h2><table><thead><tr><th>Installment</th><th>Due Date</th><th class="right">Amount</th><th>Status</th><th>Autopay</th></tr></thead><tbody>';
+        insts.forEach(function(i){h+='<tr><td>'+esc(i.category||i.desc)+'</td><td>'+esc(i.date||'')+'</td><td class="right bold">'+fm(i.amount)+'</td><td>'+esc(i.status||'pending')+'</td><td>'+(_autopayOn?'Yes':'—')+'</td></tr>'});
         h+='</tbody></table>';
     }
     h+='<div style="margin-top:30px;text-align:center;color:#999;font-size:9pt">Powered by Campistry</div>';
@@ -11007,10 +11607,17 @@ async function toggleBillingAccess(famKey){
 
 // ═══════════════════════════════════════════════════════════════
 // MONTHLY BILLING (AUTOPAY) — split a balance into monthly payments and
-// auto-charge the saved card on each due date. The schedule lives on the
-// family (f.plan); a scheduled edge function (charge-due-installments) runs
-// daily and charges whatever is due for families with autopay + a card on
-// file, recording each payment into the ledger.
+// auto-charge the saved card on each due date. Schedules live in
+// families[fk].plans[] — a LIST, not a single slot — because a family with
+// two enrolled kids might want one combined plan, or a separate plan per
+// kid (e.g. kid A already has a plan/pays in full, kid B is accepted
+// later and needs their own). The saved payment METHOD stays one per
+// family (cardOnFile/stripeCustomerId/etc.) regardless of how many plans
+// exist — a parent only ever does ONE Stripe checkout to save a card, and
+// that one card can autopay any number of their plans. A scheduled edge
+// function (charge-due-installments) runs daily and charges whatever is
+// due across every plan for families with autopay + a card on file,
+// recording each payment into the ledger.
 // ═══════════════════════════════════════════════════════════════
 // Steps a date forward by a cadence. Weekly/biweekly step by exact days;
 // monthly steps by calendar month (handles month-length differences —
@@ -11065,27 +11672,48 @@ function _mpUpdateTotal(){
     document.querySelectorAll('.mp-row-amt').forEach(function(inp){sum+=parseFloat(inp.value)||0});
     var el=document.getElementById('mpRunningTotal'); if(el)el.textContent=fm(sum);
 }
-function monthlyPlan(famKey){
+// A family's plans live as a LIST (families[fk].plans[]), not one fixed
+// slot — a family with two enrolled kids might want one combined plan or
+// a separate plan per kid (e.g. kid A already pays in full, kid B is
+// accepted later and needs their own). Migrates the legacy singular
+// `plan` field (which only ever meant "covers the whole family") into a
+// one-item array tagged enrollmentIds:null, exactly once, in place.
+function _famPlans(f){
+    if(!f.plans){
+        f.plans=(f.plan&&f.plan.installments&&f.plan.installments.length)?[Object.assign({id:'plan_'+Date.now().toString(36)},f.plan,{enrollmentIds:null,source:f.plan.source||'office'})]:[];
+        delete f.plan;
+    }
+    return f.plans;
+}
+// A family owes ONE running balance regardless of how many kids it comes
+// from — no per-camper bookkeeping. A family gets AT MOST ONE plan at a
+// time; if the balance changes (a sibling enrolls, an add-on charge hits),
+// the office just edits that same plan (or cancels it and sets up a new
+// one) to match the current balance. Calling this with no planId when a
+// plan already exists edits that plan instead of creating a second one.
+function monthlyPlan(famKey,planId){
     var f=families[famKey]; if(!f){toast('Family not found','error');return}
-    var bal=buildFamilyLedgers()[famKey]?.balance||0;
+    var plans=_famPlans(f);
+    if(!planId&&plans.length) planId=plans[0].id;
+    var existingPlan=planId?plans.filter(function(p){return p.id===planId})[0]:null;
     var hasCard=!!f.cardOnFile;
-    var existing=f.plan&&f.plan.installments&&f.plan.installments.length;
+    var curBalance=(buildFamilyLedgers()[famKey]||{}).balance||0;
+    var targetTotal=existingPlan?existingPlan.total:curBalance;
     var d=new Date(); var defStart=new Date(d.getFullYear(),d.getMonth()+1,1).toISOString().split('T')[0];
-    var defTotal=bal>0?bal:0;
     // Starting rows: the existing plan's own installments when editing (so
     // the office sees exactly what's there and can tweak individual rows),
     // otherwise a 3-monthly scaffold from the current balance.
-    var startRows=existing?f.plan.installments.map(function(i){return{amount:i.amount,dueDate:i.dueDate}}):_mpGenRows(defTotal||1,3,defStart,'monthly');
+    var startRows=existingPlan?existingPlan.installments.map(function(i){return{amount:i.amount,dueDate:i.dueDate}}):_mpGenRows(targetTotal||1,3,defStart,'monthly');
 
     var h='<div class="me-modal-form">';
-    if(existing) h+='<div style="background:#FFFBEB;border:1px solid #FDE68A;padding:9px 12px;border-radius:var(--r);margin-bottom:12px;font-size:.8rem;color:#92400E">This family already has a payment plan ('+f.plan.installments.length+' payments). Saving replaces it.</div>';
-    h+='<div style="background:var(--s50);padding:10px 14px;border-radius:var(--r);margin-bottom:14px;font-size:.85rem">Balance to schedule: <strong style="color:var(--err)">'+fm(bal)+'</strong>'+(hasCard?' · <span style="color:var(--ok)">payment method on file</span>':'')+'</div>';
+    if(existingPlan) h+='<div style="background:#FFFBEB;border:1px solid #FDE68A;padding:9px 12px;border-radius:var(--r);margin-bottom:12px;font-size:.8rem;color:#92400E">Editing this plan replaces its schedule. Current balance: '+fm(curBalance)+(Math.abs(curBalance-existingPlan.total)>0.05?' — this has changed since the plan was set up.':'.')+'</div>';
+    else h+='<div style="background:var(--s50);padding:10px 14px;border-radius:var(--r);margin-bottom:14px;font-size:.85rem">Balance to schedule: <strong style="color:var(--err)">'+fm(curBalance)+'</strong>'+(hasCard?' · <span style="color:var(--ok)">payment method on file</span>':'')+'</div>';
 
     h+='<div style="font-size:.7rem;font-weight:700;color:var(--s500);text-transform:uppercase;letter-spacing:.05em;margin-bottom:6px">Generate a schedule</div>';
     h+='<div style="display:grid;grid-template-columns:1fr 1fr;gap:10px">';
     h+='<div class="me-field"><label>Cadence</label><select id="mpCadence" class="me-input"><option value="weekly">Weekly</option><option value="biweekly">Biweekly</option><option value="monthly" selected>Monthly</option><option value="custom">Custom (blank rows)</option></select></div>';
     h+='<div class="me-field"><label># of payments</label><input type="number" id="mpCount" class="me-input" value="3" min="1" max="60"></div>';
-    h+='<div class="me-field"><label>Total to schedule ($)</label><input type="number" id="mpTotal" class="me-input" value="'+(defTotal>0?defTotal.toFixed(2):'')+'" step="0.01" min="0.50"></div>';
+    h+='<div class="me-field"><label>Total to schedule ($)</label><input type="number" id="mpTotal" class="me-input" value="'+(targetTotal>0?targetTotal.toFixed(2):'')+'" step="0.01" min="0.50"></div>';
     h+='<div class="me-field"><label>First payment date</label><input type="date" id="mpStart" class="me-input" value="'+defStart+'"></div>';
     h+='</div>';
     h+='<button type="button" class="me-btn me-btn--sec me-btn--sm" onclick="CampistryMe._mpGenerate()" style="margin-bottom:14px">Generate schedule</button>';
@@ -11095,10 +11723,10 @@ function monthlyPlan(famKey){
     h+='<button type="button" class="me-btn me-btn--ghost me-btn--sm" onclick="CampistryMe._mpAddRow()">+ Add payment</button>';
     h+='<div style="text-align:right;font-size:.8rem;color:var(--s500);margin:8px 0 14px">Total scheduled: <strong id="mpRunningTotal" style="color:var(--s800)">'+fm(startRows.reduce(function(s,r){return s+(Number(r.amount)||0)},0))+'</strong></div>';
 
-    if(hasCard) h+='<label style="display:flex;align-items:center;gap:8px;font-size:.85rem"><input type="checkbox" id="mpAuto" '+((!existing||f.plan.autopay)?'checked':'')+'> Auto-charge the payment method on file on each due date</label>';
+    if(hasCard) h+='<label style="display:flex;align-items:center;gap:8px;font-size:.85rem"><input type="checkbox" id="mpAuto" '+((!existingPlan||existingPlan.autopay)?'checked':'')+'> Auto-charge the payment method on file on each due date</label>';
     else h+='<div style="font-size:.75rem;color:var(--me)">No payment method on file yet — the parent can set up autopay themselves from their Link portal (card or bank transfer), or use "Set Up in Stripe" above for this family. You can still create the schedule now; until then, the parent can pay each installment from their portal manually.</div>';
     h+='</div>';
-    showModal(existing?'Edit Payment Plan':'Set Up Payment Plan',h,function(){
+    showModal(existingPlan?'Edit Payment Plan':'Set Up Payment Plan',h,function(){
         var rowEls=document.querySelectorAll('.mp-row');
         var insts=[]; var n=0;
         rowEls.forEach(function(row){
@@ -11113,41 +11741,80 @@ function monthlyPlan(famKey){
         insts.forEach(function(inst,idx){inst.n=idx+1});
         var total=insts.reduce(function(s,i){return s+i.amount},0);
         var auto=hasCard&&document.getElementById('mpAuto')&&document.getElementById('mpAuto').checked;
-        f.plan={installments:insts,autopay:!!auto,total:Math.round(total*100)/100,createdAt:new Date().toISOString()};
+        var newPlan={id:existingPlan?existingPlan.id:('plan_'+Date.now().toString(36)+Math.random().toString(36).slice(2,6)),enrollmentIds:null,installments:insts,autopay:!!auto,total:Math.round(total*100)/100,createdAt:new Date().toISOString(),source:'office'};
+        if(existingPlan){ plans[plans.indexOf(existingPlan)]=newPlan; }
+        else{ plans.push(newPlan); }
         save();closeModal('dynModal');if(curPage==='familydetail')renderFamilyDetailPage();else renderBilling();
         toast('Payment plan saved — '+insts.length+' payment'+(insts.length>1?'s':'')+(auto?', autopay on':''));
     });
 }
-function toggleFamilyAutopay(famKey){
-    var f=families[famKey]; if(!f||!f.plan)return;
-    if(!f.cardOnFile&&!f.plan.autopay){toast('Save a card on file first','error');return}
-    f.plan.autopay=!f.plan.autopay; save();if(curPage==='familydetail')renderFamilyDetailPage();else renderBilling();
-    toast('Autopay '+(f.plan.autopay?'ON':'off')+' for '+f.name);
+function toggleFamilyAutopay(famKey,planId){
+    var f=families[famKey]; if(!f)return;
+    var plans=_famPlans(f);
+    var plan=planId?plans.filter(function(p){return p.id===planId})[0]:plans[0];
+    if(!plan)return;
+    if(!f.cardOnFile&&!plan.autopay){toast('Save a card on file first','error');return}
+    plan.autopay=!plan.autopay; save();if(curPage==='familydetail')renderFamilyDetailPage();else renderBilling();
+    toast('Autopay '+(plan.autopay?'ON':'off')+' for '+f.name);
 }
-async function cancelMonthlyPlan(famKey){
-    var f=families[famKey]; if(!f||!f.plan)return;
-    var ok=await confirmDialog({title:'Cancel Monthly Plan?',message:'Cancel the monthly plan for '+f.name+'? Payments already made stay on the ledger.',confirmLabel:'Cancel Plan',danger:true});
+async function cancelMonthlyPlan(famKey,planId){
+    var f=families[famKey]; if(!f)return;
+    var plans=_famPlans(f);
+    var plan=planId?plans.filter(function(p){return p.id===planId})[0]:plans[0];
+    if(!plan)return;
+    var ok=await confirmDialog({title:'Cancel Payment Plan?',message:'Cancel this payment plan for '+f.name+'? Payments already made stay on the ledger.',confirmLabel:'Cancel Plan',danger:true});
     if(!ok)return;
-    delete f.plan; save();if(curPage==='familydetail')renderFamilyDetailPage();else renderBilling();toast('Monthly plan cancelled');
+    plans.splice(plans.indexOf(plan),1);
+    save();if(curPage==='familydetail')renderFamilyDetailPage();else renderBilling();toast('Payment plan cancelled');
 }
 function _planCardHtml(l){
-    var f=families[l.famKey]; if(!f||!f.plan||!f.plan.installments||!f.plan.installments.length) return '';
-    var pend=f.plan.installments.filter(function(i){return i.status!=='paid'}).sort(function(a,b){return(a.dueDate||'').localeCompare(b.dueDate||'')});
-    var next=pend[0];
-    var table=_installmentTableHtml(f.plan.installments.map(function(i){return{amount:i.amount,dueDate:i.dueDate,status:i.status};}));
-    var autoText=f.plan.autopay
-        ?'<span style="font-size:.75rem;font-weight:700;color:var(--ok)">Autopay on</span>'
-        :'<span style="font-size:.75rem;font-weight:700;color:var(--s400)">Autopay off</span>';
-    var nextLine=next
-        ?'<div style="font-size:.78rem;color:var(--s500);margin-bottom:12px">Next: <strong style="color:var(--s800)">'+fm(next.amount)+'</strong> due '+esc(next.dueDate)+(f.plan.autopay&&f.cardOnFile?' — auto-charges the payment method on file':(f.plan.autopay?' — autopay on, but no payment method on file yet':''))+'</div>'
-        :'<div style="font-size:.78rem;color:var(--ok);font-weight:600;margin-bottom:12px">All installments paid</div>';
-    var actions='<div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin-top:12px">'+
-        autoText+
-        '<button class="me-btn me-btn--ghost me-btn--sm" onclick="CampistryMe.toggleFamilyAutopay(\''+je(l.famKey)+'\')">'+(f.plan.autopay?'Turn off':'Turn on')+'</button>'+
-        '<button class="me-btn me-btn--ghost me-btn--sm" onclick="CampistryMe.monthlyPlan(\''+je(l.famKey)+'\')">Edit plan</button>'+
-        '<button class="me-btn me-btn--ghost me-btn--sm" style="color:var(--err)" onclick="CampistryMe.cancelMonthlyPlan(\''+je(l.famKey)+'\')">Cancel plan</button>'+
-        '</div>';
-    return '<div style="font-size:.7rem;font-weight:700;color:var(--s500);text-transform:uppercase;letter-spacing:.05em;margin-bottom:8px">Payment Plan</div>'+nextLine+table+actions;
+    var f=families[l.famKey]; if(!f)return'';
+    var plans=_famPlans(f).filter(function(p){return p.installments&&p.installments.length});
+    if(!plans.length)return'';
+    var out=plans.map(function(plan){
+        var pend=plan.installments.filter(function(i){return i.status!=='paid'}).sort(function(a,b){return(a.dueDate||'').localeCompare(b.dueDate||'')});
+        var next=pend[0];
+        var table='<div style="background:#fff;border-radius:var(--r);overflow:hidden">'+_installmentTableHtml(plan.installments.map(function(i){return{amount:i.amount,dueDate:i.dueDate,status:i.status};}),'.88rem')+'</div>';
+        // A quick "N x $amount" read at a glance — the installment table
+        // below has the full schedule, but a manager scanning this card
+        // shouldn't have to add up rows to know the shape of the plan.
+        // Only worth showing when the plan is actually even (equal
+        // installments) — an uneven plan (first payment absorbing a
+        // remainder, manual edits) would make "8 x $287.50" a lie.
+        var summaryLine='';
+        if(plan.installments.length>1){
+            var amts=plan.installments.map(function(i){return Math.round((Number(i.amount)||0)*100)});
+            var allEqual=amts.every(function(a){return a===amts[0]});
+            if(allEqual&&amts[0]>0){
+                summaryLine='<div style="font-size:.8rem;color:var(--s500);margin-bottom:6px">'+plan.installments.length+' payments of '+fm(amts[0]/100)+' each</div>';
+            }
+        }
+        var nextLine=next
+            ?'<div style="font-size:.92rem;color:var(--s700);margin-bottom:14px">Next payment <strong style="font-size:1.05rem;color:var(--s900)">'+fm(next.amount)+'</strong> on '+esc(next.dueDate)+(plan.autopay&&f.cardOnFile?' <span style="color:var(--ok);font-weight:600">— auto-charges the card on file</span>':(plan.autopay?' <span style="color:var(--warn);font-weight:600">— autopay on, no card on file yet</span>':''))+'</div>'
+            :'<div style="font-size:.95rem;color:var(--ok);font-weight:700;margin-bottom:14px">✓ All installments paid</div>';
+        // The autopay status IS the toggle — a single pill you click — rather
+        // than a colored label plus a separate "Turn on/off" button sitting
+        // right next to it, which reads as two controls doing one job.
+        var autoPill='<button class="me-btn me-btn--sm" style="background:'+(plan.autopay?'rgba(16,185,129,.12)':'var(--s100)')+';color:'+(plan.autopay?'var(--ok)':'var(--s500)')+';border:1px solid '+(plan.autopay?'rgba(16,185,129,.3)':'var(--s200)')+'" onclick="CampistryMe.toggleFamilyAutopay(\''+je(l.famKey)+'\',\''+je(plan.id)+'\')">'+(plan.autopay?'✓ Autopay On':'Autopay Off')+'</button>';
+        var actions='<div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-top:14px">'+
+            autoPill+
+            '<button class="me-btn me-btn--ghost me-btn--sm" onclick="CampistryMe.monthlyPlan(\''+je(l.famKey)+'\',\''+je(plan.id)+'\')">Edit plan</button>'+
+            '<button class="me-btn me-btn--ghost-danger me-btn--sm" onclick="CampistryMe.cancelMonthlyPlan(\''+je(l.famKey)+'\',\''+je(plan.id)+'\')">Cancel plan</button>'+
+            '</div>';
+        // A distinct, lightly-tinted card — not just plain text between two
+        // hairline dividers — so the single most actionable section on the
+        // page actually looks like the highlight it is. The source tag is
+        // the round-trip: whether the family built this themselves in Link
+        // or the office set it up should be visible at a glance either way
+        // — either party can still edit/cancel it from here regardless.
+        var sourceTag=plan.source==='parent'
+            ?'<span style="font-weight:600;color:var(--s400);font-size:.68rem;text-transform:none;letter-spacing:0"> · set up by the family in Link</span>'
+            :'';
+        return '<div style="background:var(--s50);border:1px solid var(--s200);border-radius:var(--r2);padding:16px 18px;margin-bottom:10px">'
+            +'<div style="font-size:.8rem;font-weight:700;color:var(--s600);text-transform:uppercase;letter-spacing:.05em;margin-bottom:10px">Payment Plan'+sourceTag+'</div>'
+            +summaryLine+nextLine+table+actions+'</div>';
+    }).join('');
+    return out;
 }
 
 // ═══════════════════════════════════════════════════════════════
@@ -11178,13 +11845,39 @@ function renderBroadcasts(){
     c.innerHTML=h;
 }
 
+// The camp's Link message/email branding (logo/brand color/footer/
+// watermark) — same config Link's parent messaging already saves under
+// campistryLink.settings.branding in camp_state_kv. Reading it here (Link
+// doesn't need to be open) is what lets the Broadcast composer's preview
+// and the actual sent email look identical instead of two disconnected
+// templates.
+function _getLinkBranding(){
+    try{
+        var gs=(typeof window.loadGlobalSettings==='function')?window.loadGlobalSettings():JSON.parse(localStorage.getItem('campGlobalSettings_v1')||'{}');
+        var raw=gs&&gs.campistryLink&&gs.campistryLink.settings&&gs.campistryLink.settings.branding;
+        return window.LinkBranding?window.LinkBranding.normalize(raw):(raw||{logo:'',brandColor:'#2A7A35',footer:''});
+    }catch(e){ return window.LinkBranding?window.LinkBranding.defaults():{logo:'',brandColor:'#2A7A35',footer:''}; }
+}
+function _bcRefreshPreview(){
+    var wrap=document.getElementById('bcPreviewWrap');if(!wrap)return;
+    if(!window.LinkBranding){wrap.innerHTML='<div style="font-size:.8rem;color:var(--s400)">Preview unavailable</div>';return}
+    var method=document.getElementById('bcMethod');
+    var subject=document.getElementById('bcSubject');
+    var body=document.getElementById('bcBody');
+    var campName='';try{var ss=JSON.parse(localStorage.getItem('campGlobalSettings_v1')||'{}');campName=ss.camp_name||ss.campName||'Camp'}catch(e){}
+    var variant=(method&&/sms/i.test(method.value))?'sms':'email';
+    wrap.innerHTML=window.LinkBranding.buildPreviewHtml({variant:variant,campName:campName,branding:_getLinkBranding(),subject:subject?subject.value:'',body:body?body.value:''});
+}
 function openBroadcastModal(){
     var divOpts=Object.keys(structure).map(function(d){return'<option value="'+esc(d)+'">'+esc(d)+'</option>'}).join('');
-    var h='<div class="me-modal-form"><div class="me-field"><label>To</label><select id="bcTo" class="me-input" onchange="document.getElementById(\'bcDivWrap\').style.display=this.value===\'division\'?\'block\':\'none\'"><option value="all">All Families</option><option value="division">Specific Division</option><option value="enrolled">Enrolled Families Only</option><option value="staff">Staff Only</option></select></div>';
+    var h='<div class="me-modal-form" style="display:grid;grid-template-columns:1fr 1fr;gap:18px;align-items:start">';
+    h+='<div><div class="me-field"><label>To</label><select id="bcTo" class="me-input" onchange="document.getElementById(\'bcDivWrap\').style.display=this.value===\'division\'?\'block\':\'none\'"><option value="all">All Families</option><option value="division">Specific Division</option><option value="enrolled">Enrolled Families Only</option><option value="staff">Staff Only</option></select></div>';
     h+='<div id="bcDivWrap" style="display:none"><div class="me-field"><label>Division</label><select id="bcDiv" class="me-input">'+divOpts+'</select></div></div>';
-    h+='<div class="me-field"><label>Method</label><select id="bcMethod" class="me-input"><option value="In-App">In-App (Parent Portal)</option><option value="Email">Email</option><option value="SMS">SMS</option><option value="All Channels">All Channels</option></select></div>';
-    h+='<div class="me-field"><label>Subject</label><input type="text" id="bcSubject" class="me-input" placeholder="Message subject..."></div>';
-    h+='<div class="me-field"><label>Message</label><textarea id="bcBody" class="me-input" rows="6" placeholder="Type your message here..." style="resize:vertical"></textarea></div></div>';
+    h+='<div class="me-field"><label>Method</label><select id="bcMethod" class="me-input" oninput="CampistryMe._bcRefreshPreview()"><option value="In-App">In-App (Parent Portal)</option><option value="Email">Email</option><option value="SMS">SMS</option><option value="All Channels">All Channels</option></select></div>';
+    h+='<div class="me-field"><label>Subject</label><input type="text" id="bcSubject" class="me-input" placeholder="Message subject..." oninput="CampistryMe._bcRefreshPreview()"></div>';
+    h+='<div class="me-field"><label>Message</label><textarea id="bcBody" class="me-input" rows="6" placeholder="Type your message here..." style="resize:vertical" oninput="CampistryMe._bcRefreshPreview()"></textarea></div></div>';
+    h+='<div><div style="font-size:.7rem;font-weight:700;color:var(--s500);text-transform:uppercase;letter-spacing:.05em;margin-bottom:6px">Live Preview — what recipients will actually see</div><div id="bcPreviewWrap"></div></div>';
+    h+='</div>';
     showModal('New Broadcast',h,async function(){
         var to=document.getElementById('bcTo').value;
         var div=document.getElementById('bcDiv')?.value||'';
@@ -11216,7 +11909,8 @@ function openBroadcastModal(){
         }else{
             toast('Broadcast posted to the parent portal ('+count+' recipient'+(count!==1?'s':'')+')');
         }
-    });
+    },{maxWidth:820});
+    _bcRefreshPreview();
 }
 function viewBroadcast(idx){
     var sorted=[...broadcasts].sort(function(a,b){return(b.timestamp||0)-(a.timestamp||0)});
@@ -11224,9 +11918,14 @@ function viewBroadcast(idx){
     var d=b.timestamp?new Date(b.timestamp).toLocaleString():(b.date||'');
     var h='<div style="margin-bottom:12px"><div style="font-size:.7rem;color:var(--s400);text-transform:uppercase;font-weight:600">Sent</div><div>'+esc(d)+'</div></div>';
     h+='<div style="margin-bottom:12px"><div style="font-size:.7rem;color:var(--s400);text-transform:uppercase;font-weight:600">To</div><div>'+esc(b.to||'All')+' · '+esc(b.method||'In-App')+' · '+(b.recipientCount||'?')+' recipients</div></div>';
-    h+='<div style="margin-bottom:12px"><div style="font-size:.7rem;color:var(--s400);text-transform:uppercase;font-weight:600">Subject</div><div style="font-weight:600;font-size:1rem">'+esc(b.subject||'')+'</div></div>';
-    h+='<div style="background:var(--s50);padding:14px;border-radius:var(--r);font-size:.85rem;line-height:1.6;white-space:pre-wrap">'+esc(b.body||'(no body)')+'</div>';
-    showModal('Broadcast',h);
+    h+='<div style="font-size:.7rem;color:var(--s400);text-transform:uppercase;font-weight:600;margin-bottom:6px">What was sent</div>';
+    if(window.LinkBranding){
+        var campName='';try{var ss=JSON.parse(localStorage.getItem('campGlobalSettings_v1')||'{}');campName=ss.camp_name||ss.campName||'Camp'}catch(e){}
+        h+=window.LinkBranding.buildPreviewHtml({variant:/sms/i.test(b.method||'')?'sms':'email',campName:campName,branding:_getLinkBranding(),subject:b.subject||'',body:b.body||''});
+    }else{
+        h+='<div style="background:var(--s50);padding:14px;border-radius:var(--r);font-size:.85rem;line-height:1.6;white-space:pre-wrap">'+esc(b.body||'(no body)')+'</div>';
+    }
+    showModal('Broadcast',h,null,{maxWidth:520});
 }
 async function removeBroadcast(idx){
     var sorted=[...broadcasts].sort(function(a,b){return(b.timestamp||0)-(a.timestamp||0)});
@@ -11961,6 +12660,8 @@ var _rbDraft=null; // in-progress report spec while the builder is open
 var _rbEditing=false; // true while the in-page editor (not the report list) is showing
 var _rbObserver=null; // MutationObserver on the config panel — catches filter add/remove
 var _rbLiveTimer=null; // debounce handle for the live preview
+var _rbColPrefKey=null; // per-user column layout pref key for the report currently open
+var _rbColPrefs=null; // {order,widths} loaded from getUiPref() for _rbColPrefKey, or null until loaded
 
 // Quick Reports, re-expressed as builder starting points — one click still
 // gets you the report, now it's also editable/filterable/schedulable.
@@ -12007,11 +12708,14 @@ function openReportBuilder(existingId,templateKey){
             filters:[],groupBy:'',mode:'live',schedule:{freq:'off',recipients:''}};
     }
     _rbEditing=true;
+    _rbColPrefs=null;
+    _rbColPrefKey='cols:'+(getCampId()||'camp')+':report:'+(_rbDraft.id||'draft');
+    getUiPref(_rbColPrefKey).then(function(pref){ _rbColPrefs=pref; if(_rbEditing) _rbLiveUpdate(); });
     renderReports();
 }
 
 function rbCancelEdit(){
-    _rbDraft=null; _rbEditing=false;
+    _rbDraft=null; _rbEditing=false; _rbColPrefKey=null; _rbColPrefs=null;
     if(_rbObserver){ _rbObserver.disconnect(); _rbObserver=null; }
     renderReports();
 }
@@ -12051,7 +12755,7 @@ function _rbLiveUpdate(){
         if(cnt) cnt.textContent=res.total+' row'+(res.total===1?'':'s')+(_rbDraft.groupBy?' · '+res.groups.length+' groups':'');
         if(!host) return;
         if(!_rbDraft.fields.length){ host.innerHTML='<div style="font-size:.78rem;color:var(--err)">Pick at least one field.</div>'; return; }
-        host.innerHTML=_reportTablesHtml(res,8);
+        host.innerHTML=_reportTablesHtml(res,8,{editable:true,prefKey:_rbColPrefKey,pref:_rbColPrefs});
     },150);
 }
 
@@ -12286,21 +12990,154 @@ function _computeReport(rep){
     return {fields:fields,groups:groups,total:rows.length,sourceLabel:src.label,rows:rows};
 }
 
+// ── Per-user column layout (resizable/reorderable columns, Reports Builder
+// & Print Sheets preview tables) ────────────────────────────────────────
+// The first per-USER (not per-camp) preference store in Campistry — lets a
+// staff member's own column order/widths follow them across devices
+// without touching the camp-shared report/print-sheet definition anyone
+// else on the team sees. Backed by user_ui_prefs (migration 120), RLS-gated
+// (a user can only ever read/write their own rows), so no RPC layer needed.
+var _uiPrefsCache={};
+function _uiPrefsClient(){ return window.CampistryDB&&window.CampistryDB.getClient?window.CampistryDB.getClient():window.supabase; }
+async function _uiPrefsUserId(){
+    try{
+        var client=_uiPrefsClient(); if(!client||!client.auth) return null;
+        var sess=await client.auth.getSession();
+        return (sess&&sess.data&&sess.data.session&&sess.data.session.user&&sess.data.session.user.id)||null;
+    }catch(e){ return null; }
+}
+async function getUiPref(key){
+    if(Object.prototype.hasOwnProperty.call(_uiPrefsCache,key)) return _uiPrefsCache[key];
+    try{
+        var client=_uiPrefsClient(); var uid=await _uiPrefsUserId();
+        if(!client||!uid){ _uiPrefsCache[key]=null; return null; }
+        var res=await client.from('user_ui_prefs').select('value').eq('user_id',uid).eq('pref_key',key).maybeSingle();
+        var val=(res&&!res.error&&res.data)?res.data.value:null;
+        _uiPrefsCache[key]=val;
+        return val;
+    }catch(e){ _uiPrefsCache[key]=null; return null; }
+}
+var _uiPrefSaveTimers={};
+function setUiPref(key,value){
+    _uiPrefsCache[key]=value;
+    clearTimeout(_uiPrefSaveTimers[key]);
+    _uiPrefSaveTimers[key]=setTimeout(async function(){
+        try{
+            var client=_uiPrefsClient(); var uid=await _uiPrefsUserId();
+            if(!client||!uid) return;
+            await client.from('user_ui_prefs').upsert({user_id:uid,pref_key:key,value:value,updated_at:new Date().toISOString()},{onConflict:'user_id,pref_key'});
+        }catch(e){ console.warn('[Me] setUiPref failed:',e); }
+    },400);
+}
+// Reorders a {key,...} column list to match a saved pref's order — unknown/
+// new columns (added to the report after the pref was saved) append at the
+// end in their original position rather than disappearing.
+function _applyColPrefOrder(cols,pref){
+    if(!pref||!Array.isArray(pref.order)||!pref.order.length) return cols;
+    var byKey={}; cols.forEach(function(c){byKey[c.key]=c;});
+    var out=[],seen={};
+    pref.order.forEach(function(k){ if(byKey[k]&&!seen[k]){out.push(byKey[k]);seen[k]=true;} });
+    cols.forEach(function(c){ if(!seen[c.key]){out.push(c);seen[c.key]=true;} });
+    return out;
+}
+// Drag-to-resize a <th> — mirrors the plain mousedown/mousemove pattern
+// already used for the form-builder split-panel resizer
+// (campistry_fbPanelWidth), just persisted through setUiPref instead of
+// localStorage so it follows the user across devices.
+var _colResize=null;
+function _colResizeStart(e,prefKey,colKey){
+    e.preventDefault(); e.stopPropagation();
+    var th=e.target.closest('th'); if(!th) return;
+    _colResize={prefKey:prefKey,colKey:colKey,th:th,startX:e.clientX,startW:th.getBoundingClientRect().width,width:null};
+    document.addEventListener('mousemove',_colResizeMove);
+    document.addEventListener('mouseup',_colResizeEnd);
+}
+function _colResizeMove(e){
+    if(!_colResize) return;
+    var w=Math.max(50,Math.round(_colResize.startW+(e.clientX-_colResize.startX)));
+    _colResize.th.style.width=w+'px';
+    _colResize.width=w;
+}
+function _colResizeEnd(){
+    if(!_colResize) return;
+    var r=_colResize; _colResize=null;
+    document.removeEventListener('mousemove',_colResizeMove);
+    document.removeEventListener('mouseup',_colResizeEnd);
+    if(!r.width) return;
+    getUiPref(r.prefKey).then(function(pref){
+        pref=pref||{order:[],widths:{}}; pref.widths=pref.widths||{};
+        pref.widths[r.colKey]=r.width;
+        setUiPref(r.prefKey,pref);
+    });
+}
+// Drag-to-reorder a <th> — same "move the row live under the cursor" feel
+// as the editor's own field-list reorder (rbFieldDragStart/psColDragStart),
+// but reads the final order back from the RENDERED header row and persists
+// it as a per-user override rather than mutating the camp-shared
+// report/print-sheet definition.
+var _colDrag=null;
+function _colHeaderDragStart(e,prefKey,colKey){
+    _colDrag={prefKey:prefKey,colKey:colKey,th:e.target.closest('th')};
+    try{e.dataTransfer.effectAllowed='move';e.dataTransfer.setData('text/plain',colKey);}catch(_){}
+}
+function _colHeaderDragOver(e){
+    if(!_colDrag) return;
+    e.preventDefault();
+    var th=e.target.closest('th'); if(!th||th===_colDrag.th) return;
+    var rect=th.getBoundingClientRect();
+    var after=(e.clientX-rect.left)>rect.width/2;
+    th.parentNode.insertBefore(_colDrag.th,after?th.nextSibling:th);
+}
+function _colHeaderDragEnd(){ _colDrag=null; }
+function _colHeaderDrop(e){
+    e.preventDefault();
+    if(!_colDrag) return;
+    var row=_colDrag.th.parentNode;
+    var order=Array.prototype.map.call(row.querySelectorAll('th[data-colkey]'),function(t){return t.getAttribute('data-colkey');});
+    var prefKey=_colDrag.prefKey;
+    _colDrag=null;
+    getUiPref(prefKey).then(function(pref){
+        pref=pref||{order:[],widths:{}};
+        pref.order=order;
+        setUiPref(prefKey,pref);
+    });
+}
+function _colHeaderHtml(f,w,opts){
+    if(!opts||!opts.editable){ return '<th'+(w?' style="width:'+w+'px"':'')+'>'+esc(f.label)+'</th>'; }
+    var thStyle='position:relative;cursor:grab;'+(w?('width:'+w+'px;'):'');
+    return '<th data-colkey="'+esc(f.key)+'" style="'+thStyle+'" draggable="true" '
+        +'ondragstart="CampistryMe._colHeaderDragStart(event,\''+je(opts.prefKey)+'\',\''+je(f.key)+'\')" '
+        +'ondragover="CampistryMe._colHeaderDragOver(event)" '
+        +'ondrop="CampistryMe._colHeaderDrop(event)" '
+        +'ondragend="CampistryMe._colHeaderDragEnd()">'
+        +esc(f.label)
+        +'<span onmousedown="CampistryMe._colResizeStart(event,\''+je(opts.prefKey)+'\',\''+je(f.key)+'\')" title="Drag to resize" style="position:absolute;right:0;top:0;bottom:0;width:7px;cursor:col-resize;user-select:none"></span>'
+        +'</th>';
+}
+
 // Render grouped result tables. limit>0 truncates rows per group (preview).
-function _reportTablesHtml(res,limit){
+// opts (optional): {editable:true, prefKey, pref} — enables per-user
+// drag-resize/drag-reorder on the rendered headers, reading/writing through
+// getUiPref/setUiPref above. Omitted (e.g. the print/export path) renders
+// exactly as before — no drag handles, no width overrides beyond a
+// previously-saved pref's widths.
+function _reportTablesHtml(res,limit,opts){
     if(!res.total) return '<div style="font-size:.82rem;color:var(--s400);padding:10px 0">No rows match.</div>';
+    opts=opts||{};
+    var fields=(opts.editable&&opts.pref)?_applyColPrefOrder(res.fields,opts.pref):res.fields;
+    var widths=(opts.pref&&opts.pref.widths)||{};
     var grouped=!(res.groups.length===1&&res.groups[0].key==='');
     var h='';
     res.groups.forEach(function(g){
         if(grouped) h+='<div style="font-size:.8rem;font-weight:700;color:var(--s700);margin:10px 0 4px">'+esc(g.key)+' <span style="color:var(--s400);font-weight:500">('+g.count+')</span></div>';
         h+='<div class="me-tw"><table class="me-t"><thead><tr>';
-        res.fields.forEach(function(f){ h+='<th>'+esc(f.label)+'</th>'; });
+        fields.forEach(function(f){ h+=_colHeaderHtml(f,widths[f.key],opts); });
         h+='</tr></thead><tbody>';
         var rws=(limit&&limit>0)?g.rows.slice(0,limit):g.rows;
         rws.forEach(function(r){
-            h+='<tr>'+res.fields.map(function(f){return '<td>'+esc(String(r[f.key]==null?'':r[f.key]))+'</td>';}).join('')+'</tr>';
+            h+='<tr>'+fields.map(function(f){var w=widths[f.key];return '<td'+(w?' style="width:'+w+'px"':'')+'>'+esc(String(r[f.key]==null?'':r[f.key]))+'</td>';}).join('')+'</tr>';
         });
-        if(limit&&g.rows.length>limit) h+='<tr><td colspan="'+res.fields.length+'" style="color:var(--s400);font-size:.75rem">…'+(g.rows.length-limit)+' more</td></tr>';
+        if(limit&&g.rows.length>limit) h+='<tr><td colspan="'+fields.length+'" style="color:var(--s400);font-size:.75rem">…'+(g.rows.length-limit)+' more</td></tr>';
         h+='</tbody></table></div>';
     });
     return h;
@@ -12528,7 +13365,7 @@ async function sendBroadcastNow(broadcast){
     // consent (smsEmailConsent, captured on the registration/staff-apply
     // forms) — a recipient added before that consent flow existed is
     // correctly skipped rather than texted/emailed without consent on file.
-    try{return await callEdgeFunctionAuthed('send-broadcast',{campId:getCampId(),to:recipients,subject:broadcast.subject||'',body:broadcast.body||'',method:broadcast.method||'Email',campName:campName,eventKey:'me-broadcast:'+(broadcast.timestamp||Date.now())})}
+    try{return await callEdgeFunctionAuthed('send-broadcast',{campId:getCampId(),to:recipients,subject:broadcast.subject||'',body:broadcast.body||'',method:broadcast.method||'Email',campName:campName,branding:_getLinkBranding(),eventKey:'me-broadcast:'+(broadcast.timestamp||Date.now())})}
     catch(err){toast('Send failed: '+err.message,'error');return{sent:0,failed:0}}
 }
 
@@ -12641,6 +13478,7 @@ function renderCamperHistory(camperName){
 // ═══════════════════════════════════════════════════════════════
 function reEnrollCamper(camperName){
     var d=roster[camperName];if(!d)return;
+    _freshSessions();
     var sesOpts=sessions.map(function(s){return'<option value="'+esc(s.name)+'">'+esc(s.name)+' — '+fm(s.tuition)+'</option>'}).join('');
     var h='<div class="me-modal-form"><p style="font-size:.85rem;color:var(--s600);margin-bottom:14px">Re-enroll <strong>'+esc(camperName)+'</strong> for a new session. All info carried over.</p><div style="background:var(--s50);padding:12px;border-radius:var(--r);margin-bottom:14px;font-size:.8rem"><strong>'+esc(d.division||'')+'/'+esc(d.bunk||'')+'</strong> · Parent: '+esc(d.parent1Name||'')+'</div><div class="me-field"><label>Session</label><select id="reSession" class="me-input">'+sesOpts+'</select></div></div>';
     showModal('Re-Enroll Camper',h,function(){
@@ -12682,8 +13520,20 @@ function _removeCustomField(i){customFields.splice(i,1);saveCustomFields();save(
 // ═══════════════════════════════════════════════════════════════
 function uploadDocument(camperName){
     var inp=document.createElement('input');inp.type='file';inp.accept='.pdf,.jpg,.jpeg,.png,.doc,.docx';
-    inp.onchange=function(){if(!inp.files[0])return;var file=inp.files[0];if(file.size>5*1024*1024){toast('Max 5MB','error');return}
-    var reader=new FileReader();reader.onload=function(e){if(!roster[camperName])return;if(!roster[camperName].documents)roster[camperName].documents=[];roster[camperName].documents.push({name:file.name,type:file.type,size:file.size,data:e.target.result,uploadDate:new Date().toISOString()});save();viewCamper(camperName);toast('Uploaded: '+file.name)};reader.readAsDataURL(file)};inp.click();
+    inp.onchange=function(){if(!inp.files[0])return;_storeDocumentFile(camperName,inp.files[0])};inp.click();
+}
+// "Scan" alternative — photograph one or more pages, pdf-lib turns them into
+// a real PDF client-side, then it's stored exactly like a normal upload.
+function scanDocument(camperName){
+    if(!window.CampistryScanToPdf){toast('Scanning isn\'t available right now — refresh and try again','error');return}
+    window.CampistryScanToPdf.open({
+        title:'Scan Document',
+        onDone:function(file){_storeDocumentFile(camperName,file)}
+    });
+}
+function _storeDocumentFile(camperName,file){
+    if(file.size>5*1024*1024){toast('Max 5MB','error');return}
+    var reader=new FileReader();reader.onload=function(e){if(!roster[camperName])return;if(!roster[camperName].documents)roster[camperName].documents=[];roster[camperName].documents.push({name:file.name,type:file.type,size:file.size,data:e.target.result,uploadDate:new Date().toISOString()});save();viewCamper(camperName);toast('Uploaded: '+file.name)};reader.readAsDataURL(file);
 }
 function renderDocuments(camperName){
     var docs=(roster[camperName]&&roster[camperName].documents)||[];if(!docs.length)return'<div style="font-size:.8rem;color:var(--s400);font-style:italic">No documents</div>';
@@ -13548,16 +14398,27 @@ function psGroups(sheet){
 }
 
 // ── shared table renderer (preview + print use the same output) ──
-function psTableHtml(cols,rows){
+// opts (optional): {editable:true, prefKey, pref} — same per-user column
+// layout mechanism as _reportTablesHtml above. Only the live-preview call
+// site (psPreviewHtml) passes it; psPrint's actual print output always
+// renders plain (no drag handles, no per-viewer override — everyone should
+// print the sheet's real, shared column order).
+function psTableHtml(cols,rows,opts){
+    opts=opts||{};
+    var keyed=cols.map(function(c){return{key:c.id,label:psColHeader(c),_col:c};});
+    if(opts.editable&&opts.pref) keyed=_applyColPrefOrder(keyed,opts.pref);
+    var widths=(opts.pref&&opts.pref.widths)||{};
+    var orderedCols=keyed.map(function(k){return k._col;});
     var h='<table class="ps-tbl"><thead><tr>';
-    cols.forEach(function(col){h+='<th>'+esc(psColHeader(col))+'</th>'});
+    keyed.forEach(function(k){h+=_colHeaderHtml(k,widths[k.key],opts)});
     h+='</tr></thead><tbody>';
-    if(!rows.length){h+='<tr><td colspan="'+(cols.length||1)+'" class="ps-empty">No campers</td></tr>'}
+    if(!rows.length){h+='<tr><td colspan="'+(orderedCols.length||1)+'" class="ps-empty">No campers</td></tr>'}
     rows.forEach(function(r){
         h+='<tr>';
-        cols.forEach(function(col){
+        orderedCols.forEach(function(col){
             var v=col.field==='__blank'?'':psValue(col.field,r[0],r[1]);
-            h+='<td'+(col.field==='__blank'?' class="ps-write"':'')+'>'+esc(v)+'</td>';
+            var w=widths[col.id];
+            h+='<td'+(col.field==='__blank'?' class="ps-write"':'')+(w?' style="width:'+w+'px"':'')+'>'+esc(v)+'</td>';
         });
         h+='</tr>';
     });
@@ -13577,7 +14438,13 @@ function psNew(){
         groupBy:'',scopeDiv:'',whoScope:'campers',sortBy:'lastName',hideEmptyCols:true};
     printSheets.push(s);psSave();psEditingId=s.id;renderPrintSheets();
 }
-function psEdit(id){psEditingId=id;renderPrintSheets()}
+function psEdit(id){
+    psEditingId=id;
+    if(!(id in _psColPrefs)){
+        getUiPref(_psColPrefKey(id)).then(function(pref){ _psColPrefs[id]=pref; if(psEditingId===id) psRefreshPreview(id); });
+    }
+    renderPrintSheets();
+}
 function psBack(){psEditingId=null;renderPrintSheets()}
 async function psDelete(id){
     var ok=await confirmDialog({title:'Delete Sheet Template?',message:'Delete this sheet template?',confirmLabel:'Delete',danger:true});
@@ -13717,17 +14584,24 @@ function _psRefreshColsList(id){
 }
 
 // ── preview + print output ──
+// Per-user column layout cache for Print Sheets' live preview — same
+// mechanism as the Report Builder's _rbColPrefs, just keyed per sheet id
+// (a sheet id in _psColPrefs but with value undefined means "not loaded
+// yet"; null means "loaded, nothing saved").
+var _psColPrefs={};
+function _psColPrefKey(sheetId){ return 'cols:'+(getCampId()||'camp')+':printsheet:'+sheetId; }
 function psPreviewHtml(sheet){
     var groups=psGroups(sheet),allRows=groups.reduce(function(a,g){return a.concat(g.rows)},[]);
     var cols=psActiveColumns(sheet,allRows);
     if(!cols.length)return'<div class="split-hint">Add at least one column with a field selected to see a preview.</div>';
+    var opts={editable:true,prefKey:_psColPrefKey(sheet.id),pref:_psColPrefs[sheet.id]||null};
     var h='';
     groups.forEach(function(g){
         var gcols=psActiveColumns(sheet,g.rows);
         if(!gcols.length)gcols=cols;
         h+='<div class="ps-sheet">';
         if(sheet.groupBy)h+='<div class="ps-sheet-title">'+esc(g.label||'(Unassigned)')+' <span class="ps-count">'+g.rows.length+'</span></div>';
-        h+=psTableHtml(gcols,g.rows);
+        h+=psTableHtml(gcols,g.rows,opts);
         h+='</div>';
     });
     return h;
@@ -13839,10 +14713,12 @@ window.CampistryMe={
     addFamily:function(){openFamilyForm(null)},editFamily:function(id){openFamilyForm(id)},deleteFamily:deleteFamily,removeCamperFromFamily:removeCamperFromFamily,
     setPplStaffSubTab:setPplStaffSubTab,viewStaffMember:viewStaffMember,openEditStaffModal:openEditStaffModal,saveStaffMember:saveStaffMember,
     acceptFamilySuggestion:acceptFamilySuggestion,dismissFamilySuggestion:dismissFamilySuggestion,acceptAddToFamily:acceptAddToFamily,
-    mergeFamilies:mergeFamilies,dismissMergeFamilies:dismissMergeFamilies,
+    mergeFamilies:mergeFamilies,dismissMergeFamilies:dismissMergeFamilies,openMergeFamiliesTool:openMergeFamiliesTool,
+    _bcRefreshPreview:_bcRefreshPreview,
+    _colResizeStart:_colResizeStart,_colHeaderDragStart:_colHeaderDragStart,_colHeaderDragOver:_colHeaderDragOver,_colHeaderDrop:_colHeaderDrop,_colHeaderDragEnd:_colHeaderDragEnd,
+    addSectionTextBlock:addSectionTextBlock,_richTextExec:_richTextExec,
     addDiv:function(){openDivForm(null)},editDiv:function(n){openDivForm(n)},deleteDiv:deleteDiv,
     openCsv:function(){openModal('csvModal')},downloadTemplate:downloadTemplate,
-    _updateBillingBulkBar:_updateBillingBulkBar,bulkExportBilling:bulkExportBilling,
     setRosterPage:setRosterPage,setBillingPage:setBillingPage,setAnalyticsInvoicePage:setAnalyticsInvoicePage,setAnalyticsPaymentPage:setAnalyticsPaymentPage,
     _runSetupChecklistAction:_runSetupChecklistAction,dismissSetupChecklist:dismissSetupChecklist,
     bbDrop:bbDrop,autoAssign:autoAssign,autoGenerateBunks:autoGenerateBunks,openBunkGenSettings:openBunkGenSettings,showCamperBunkRequests:showCamperBunkRequests,clearBunks:clearBunks,setBunkCount:setBunkCount,openBunkCountModal:openBunkCountModal,_clearBunkCount:_clearBunkCount,
@@ -13867,7 +14743,7 @@ window.CampistryMe={
     getStaffForDivision:getStaffForDivision,getBunksForDivision:getBunksForDivision,
     findStaffByEmail:findStaffByEmail,getAllStaff:getAllStaff,
     copyRegLink:copyRegLink,addDocRow:addDocRow,addApplication:addApplication,_onAppPhotoPick:_onAppPhotoPick,autoPromoteWaitlist:autoPromoteWaitlist,
-    viewApplication:viewApplication,updateEnrollStatus:updateEnrollStatus,bulkEnrollStatus:bulkEnrollStatus,toggleAllEnroll:toggleAllEnroll,_updateRegBulkBar:_updateRegBulkBar,enrollCamper:enrollCamper,generateParentInvite:generateParentInvite,rescindEnrollment:rescindEnrollment,
+    viewApplication:viewApplication,_markAppPaymentReceived:_markAppPaymentReceived,updateEnrollStatus:updateEnrollStatus,bulkEnrollStatus:bulkEnrollStatus,toggleAllEnroll:toggleAllEnroll,_updateRegBulkBar:_updateRegBulkBar,enrollCamper:enrollCamper,generateParentInvite:generateParentInvite,_sendInviteEmailNow:_sendInviteEmailNow,rescindEnrollment:rescindEnrollment,
     saveAppNote:saveAppNote,printApplication:printApplication,
     openFormConfig:openFormConfig,saveFormConfig:saveFormConfig,addCustomQ:addCustomQ,addPromoRow:addPromoRow,
     openStaffFormConfig:openStaffFormConfig,saveStaffFormConfig:saveStaffFormConfig,addStaffCustomQ:addStaffCustomQ,
@@ -13885,10 +14761,10 @@ window.CampistryMe={
     _confirmPersonLink:_confirmPersonLink,_dismissPersonLink:_dismissPersonLink,
     addOtherCampToCamper:addOtherCampToCamper,removeOtherCampFromCamper:removeOtherCampFromCamper,
     addOtherCampToStaff:addOtherCampToStaff,removeOtherCampFromStaff:removeOtherCampFromStaff,
-    copyLinkText:copyLinkText,showLinkQR:showLinkQR,showRegistrationQR:showRegistrationQR,showStaffQR:showStaffQR,
+    copyLinkText:copyLinkText,showLinkQR:showLinkQR,
     openSendLinkModal:openSendLinkModal,openSendRegLinkModal:openSendRegLinkModal,openSendStaffLinkModal:openSendStaffLinkModal,
     // Payroll
-    prSetTab:prSetTab,prEditStaff:prEditStaff,prRemoveStaff:prRemoveStaff,
+    prSetTab:prSetTab,prEditStaff:prEditStaff,prRemoveStaff:prRemoveStaff,openPayrollStaff:openPayrollStaff,
     prToggleSummer:prToggleSummer,prToggleYc:prToggleYc,prPayTypeHint:prPayTypeHint,
     prWeekStep:prWeekStep,prWeekToday:prWeekToday,
     prSetHours:prSetHours,prSetSigned:prSetSigned,prSetSheetStatus:prSetSheetStatus,
@@ -13901,8 +14777,9 @@ window.CampistryMe={
     finAddPayment:finAddPayment,finRemovePayment:finRemovePayment,
     sendPayLink:sendPayLink,copyPayLink:copyPayLink,toggleBillingAccess:toggleBillingAccess,
     monthlyPlan:monthlyPlan,toggleFamilyAutopay:toggleFamilyAutopay,cancelMonthlyPlan:cancelMonthlyPlan,
+    _mpGenerate:_mpGenerate,_mpAddRow:_mpAddRow,_mpUpdateTotal:_mpUpdateTotal,
     viewStaffApp:viewStaffApp,setStaffStatus:setStaffStatus,saveStaffNotes:saveStaffNotes,openAssignPositionModal:openAssignPositionModal,
-    openStaffContractModal:openStaffContractModal,saveStaffContract:saveStaffContract,scPayTypeHint:scPayTypeHint,copyStaffContractLink:copyStaffContractLink,
+    openStaffContractModal:openStaffContractModal,saveStaffContract:saveStaffContract,scPayTypeHint:scPayTypeHint,scFillFromSession:scFillFromSession,copyStaffContractLink:copyStaffContractLink,
     toggleOnboard:toggleOnboard,cycleRef:cycleRef,deleteStaffApp:deleteStaffApp,addStaffApp:addStaffApp,
     copyStaffLink:copyStaffLink,exportStaffCSV:exportStaffCSV,
     setLeadFilter:setLeadFilter,viewLead:viewLead,setLeadStatus:setLeadStatus,saveLeadNotes:saveLeadNotes,
@@ -13945,7 +14822,7 @@ window.CampistryMe={
     // Custom fields
     manageCustomFields:manageCustomFields,_addCustomField:_addCustomField,_removeCustomField:_removeCustomField,
     // Documents
-    uploadDocument:uploadDocument,_removeDoc:_removeDoc,
+    uploadDocument:uploadDocument,scanDocument:scanDocument,_removeDoc:_removeDoc,
     // Scholarships
     addScholarship:addScholarship,
     // Print Sheets

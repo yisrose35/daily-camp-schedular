@@ -285,6 +285,10 @@
                         <span class="profile-value" id="profileContactEmail">Not set</span>
                     </div>
                     <div class="profile-row">
+                        <span class="profile-label">Tax ID / EIN</span>
+                        <span class="profile-value" id="profileTaxId">Not set</span>
+                    </div>
+                    <div class="profile-row">
                         <span class="profile-label">Account Email</span>
                         <span class="profile-value" id="profileEmail">Loading...</span>
                     </div>
@@ -302,6 +306,14 @@
                         <label for="editContactEmail">Camp Contact Email</label>
                         <input type="email" id="editContactEmail" placeholder="office@yourcamp.com">
                         <small style="color:var(--text-muted,#64748b);font-size:.75rem;">Shown as the reply-to address on automated emails sent to parents — a parent's reply reaches this inbox, not Campistry.</small>
+                    </div>
+                    <div class="form-group">
+                        <label for="editTaxId">Tax ID / EIN</label>
+                        <input type="text" id="editTaxId" placeholder="12-3456789">
+                        <label style="display:flex;align-items:center;gap:6px;margin-top:6px;font-weight:400;">
+                            <input type="checkbox" id="editShowTaxId" style="width:auto;margin:0;">
+                            Show on printed statements
+                        </label>
                     </div>
                     <div class="form-actions">
                         <button type="button" class="btn-secondary" onclick="cancelEdit()">Cancel</button>
@@ -447,7 +459,10 @@
                         <button class="btn-edit" type="button" onclick="addSessionForm()">+ Add Session</button>
                     </div>
                 </div>
-                <p class="card-desc">What parents pick when they register — dates, tuition, capacity. The 1st Half and 2nd Half sessions stay in sync with the halves above automatically. A bundle is a combined price across two or more sessions (e.g. both halves at $2,000 each, but "Full Summer" bundled at $3,500).</p>
+                <label style="display:flex; align-items:center; gap:8px; font-size:0.82rem; color:var(--slate-600); margin-top:2px; margin-bottom:10px; cursor:pointer;">
+                    <input type="checkbox" id="allowParentPaymentPlans" onchange="saveAllowParentPaymentPlans()">
+                    Let parents set up their own payment plan in Link (once accepted) — when off, an application requesting a payment plan flags the office to set one up instead
+                </label>
                 <div id="sessionsList" style="display:flex; flex-direction:column; gap:10px; margin-top:10px;"></div>
 
                 <div id="bundleEditForm" style="display:none; margin-top:16px; padding:14px 16px; border-radius:10px; background:#f5f3ff; border:1px solid #ddd6fe;">
@@ -532,6 +547,8 @@
                             <option value="2">2 installments (50/50)</option>
                             <option value="3">3 installments (34/33/33)</option>
                             <option value="4">4 installments (25 each)</option>
+                            <option value="monthly">Monthly (recurring)</option>
+                            <option value="12">12 monthly installments</option>
                             <option value="deposit">Down payment + remaining tuition</option>
                         </select>
                     </div>
@@ -774,7 +791,20 @@ if (window.location.protocol === 'file:') {
     <script src="supabase_client.js?v=20260903-03"></script>
     <script src="campistry_utils.js?v=20260903-03"></script>
     <script src="campistry_security.js?v=20260903-03"></script>
-    <script src="dashboard.js?v=20260903-03"></script>
+    <!-- Dashboard's own saves (Sessions & Pricing, Bundles, etc.) go through
+         the shared window.saveGlobalSettings/loadGlobalSettings helpers —
+         these were never loaded on this page, so every _dashSaveSessions()/
+         _dashSaveBundles() call was a silent no-op (the `if
+         (window.saveGlobalSettings)` guard was always false): nothing
+         persisted anywhere, not even to local cache, even though the UI
+         toasted "saved". Camp Dates only ever worked because it does its
+         own direct Supabase upsert as the real save path and treats
+         saveGlobalSettings as an optional local-cache mirror. Loaded here
+         in the same order campistry_me.html/flow.html already use. -->
+    <script src="local_cache_idb.js?v=20260903-03"></script>
+    <script src="integration_hooks.js?v=20260904-03"></script>
+    <script src="cloud_sync_helpers.js?v=20260903-03"></script>
+    <script src="dashboard.js?v=20260906-01"></script>
     <script src="campistry_birthdays.js?v=20260903-03"></script>
     <script src="badges.js?v=20260903-03"></script>
     <script src="access_control.js?v=20260903-03"></script>

@@ -41,6 +41,9 @@ window.GoGeoapifyOptimizer = (function () {
     // isConfigured() — true if API key is present
     // -------------------------------------------------------------------------
     function isConfigured() {
+        // Cost guard: Geoapify is PAID (credits). Never report configured unless
+        // paid providers are explicitly opted in.
+        if (window.CampistryGoSandbox && !window.CampistryGoSandbox.allowPaid()) return false;
         return !!(window._GoSetup?.()?.geoapifyKey);
     }
 
@@ -59,6 +62,12 @@ window.GoGeoapifyOptimizer = (function () {
     // Returns array of route objects (app format) or null on failure.
     // -------------------------------------------------------------------------
     async function optimizeTours(options) {
+        // Cost guard: PAID (credits). Abort to the free/in-house fallback unless
+        // paid providers are explicitly opted in.
+        if (window.CampistryGoSandbox && !window.CampistryGoSandbox.allowPaid()) {
+            console.warn('[Geoapify] Skipped — paid providers are blocked (cost guard). Using in-house routing.');
+            return null;
+        }
         const { stops, vehicles, campLat, campLng, isArrival, serviceTimeSec, apiKey } = options;
 
         if (!apiKey)             { console.warn('[Geoapify] No API key');         return null; }
@@ -396,6 +405,11 @@ window.GoGeoapifyOptimizer = (function () {
     // roadPts is [[lat,lng], ...] road-following geometry or null.
     // -------------------------------------------------------------------------
     async function optimizeSingleBus(options) {
+        // Cost guard: PAID (credits). Abort unless paid providers are opted in.
+        if (window.CampistryGoSandbox && !window.CampistryGoSandbox.allowPaid()) {
+            console.warn('[Geoapify] Skipped single-bus — paid providers are blocked (cost guard).');
+            return null;
+        }
         const { stops, vehicle, campLat, campLng, isArrival, serviceTimeSec, apiKey } = options;
 
         if (!apiKey)          { return null; }

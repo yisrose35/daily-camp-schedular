@@ -453,6 +453,12 @@ body {
 .lk-camper-chip.active { border-color: var(--link-color); background: var(--link-tint); }
 .lk-camper-chip.active .lk-camper-chip-name { color: var(--link-color); }
 
+/* Camp switcher on Payments — same chip row as the camper switch above, just
+   no avatar circle (a camp has no photo/initials) and a small dot instead
+   to flag which camps still have a balance due. */
+.lk-camper-chip.lk-camp-chip { padding: 8px 16px; }
+.lk-camp-chip-dot { width: 8px; height: 8px; border-radius: 50%; background: var(--red-500); flex-shrink: 0; }
+
 /* TABLE */
 .lk-table { width: 100%; border-collapse: collapse; }
 .lk-table th {

@@ -128,7 +128,85 @@ window.CampistryGoNeighborhoods = (function () {
             return entry.data;
         } catch (_) { return null; }
     }
+    // Overpass returns far more than the graph builder reads (version, timestamp,
+    // changeset, uid, user, every tag). A Lakewood-sized fetch is ~62k elements
+    // and many megabytes, so caching it whole always blew the ~5MB localStorage
+    // quota — the save threw, was swallowed, and NOTHING was ever cached. Every
+    // generation therefore re-hit Overpass, which is what rate-limits the camp
+    // and silently drops routing to the far worse fallback path.
+    // buildGraph needs only: node id/lat/lon, and way id/nodes/highway/name.
+    function _compactOverpass(data) {
+        if (!data || !Array.isArray(data.elements)) return data;
+        const out = [];
+        for (const el of data.elements) {
+            if (el.type === 'node' && el.lat != null && el.lon != null) {
+                out.push({ type: 'node', id: el.id, lat: el.lat, lon: el.lon });
+            } else if (el.type === 'way' && el.nodes && el.nodes.length >= 2 && el.tags && el.tags.highway) {
+                const tags = { highway: el.tags.highway };
+                if (el.tags.name) tags.name = el.tags.name;
+                out.push({ type: 'way', id: el.id, nodes: el.nodes, tags: tags });
+            }
+        }
+        return { elements: out };
+    }
+
+    // Even compacted, a Lakewood-sized graph is several megabytes — far past the
+    // ~5MB localStorage budget the camp already spends most of on its own data
+    // (measured: 2.7MB in use before the graph). IndexedDB has room for it. A
+    // tiny dedicated store keeps this away from the shared LocalCacheIDB schema.
+    const IDB_NAME = 'campistry_go_roadgraph';
+    const IDB_STORE = 'graphs';
+    function _idbOpen() {
+        return new Promise((resolve, reject) => {
+            if (typeof indexedDB === 'undefined') return reject(new Error('no indexedDB'));
+            const req = indexedDB.open(IDB_NAME, 1);
+            req.onupgradeneeded = (e) => {
+                const db = e.target.result;
+                if (!db.objectStoreNames.contains(IDB_STORE)) db.createObjectStore(IDB_STORE);
+            };
+            req.onsuccess = () => resolve(req.result);
+            req.onerror = () => reject(req.error);
+        });
+    }
+    async function _idbGet(key) {
+        try {
+            const db = await _idbOpen();
+            return await new Promise((resolve) => {
+                const r = db.transaction(IDB_STORE, 'readonly').objectStore(IDB_STORE).get(key);
+                r.onsuccess = () => resolve(r.result || null);
+                r.onerror = () => resolve(null);
+            });
+        } catch (_) { return null; }
+    }
+    async function _idbSet(key, value) {
+        try {
+            const db = await _idbOpen();
+            return await new Promise((resolve) => {
+                const r = db.transaction(IDB_STORE, 'readwrite').objectStore(IDB_STORE).put(value, key);
+                r.onsuccess = () => resolve(true);
+                r.onerror = () => resolve(false);
+            });
+        } catch (_) { return false; }
+    }
+    async function _loadRoadGraphCacheAsync(key) {
+        const entry = await _idbGet(key);
+        if (entry && entry.data && (Date.now() - (entry.savedAt || 0)) <= ROAD_GRAPH_TTL_MS) {
+            return entry.data;
+        }
+        return _loadRoadGraphCache(key); // legacy localStorage entries
+    }
+    async function _saveRoadGraphCacheAsync(key, data) {
+        const compact = _compactOverpass(data);
+        if (await _idbSet(key, { savedAt: Date.now(), data: compact })) {
+            console.log('[Go-NH] Road graph cached in IndexedDB (' +
+                (compact.elements || []).length + ' elements)');
+            return true;
+        }
+        return _saveRoadGraphCache(key, data);
+    }
+
     function _saveRoadGraphCache(key, data) {
+        data = _compactOverpass(data);
         try {
             // Roll the whole cache: drop expired entries on every save so the
             // file doesn't balloon.
@@ -143,6 +221,7 @@ window.CampistryGoNeighborhoods = (function () {
             }
             cache[key] = { savedAt: now, data: data };
             localStorage.setItem(ROAD_GRAPH_CACHE_KEY, JSON.stringify(cache));
+            console.log('[Go-NH] Road graph cached (' + (data.elements || []).length + ' elements)');
             return true;
         } catch (e) {
             // Quota exceeded: drop other entries and keep just this one.
@@ -150,8 +229,15 @@ window.CampistryGoNeighborhoods = (function () {
                 const fallback = {};
                 fallback[key] = { savedAt: Date.now(), data: data };
                 localStorage.setItem(ROAD_GRAPH_CACHE_KEY, JSON.stringify(fallback));
+                console.log('[Go-NH] Road graph cached alone after clearing older bboxes');
                 return true;
-            } catch (_) { return false; }
+            } catch (e2) {
+                // Say so. Silence here is why nobody noticed the cache never worked
+                // and every run went back to Overpass.
+                console.warn('[Go-NH] Road graph NOT cached (' + (e2 && e2.name || 'quota') +
+                    ') — every run will re-fetch from Overpass and risk rate limiting');
+                return false;
+            }
         }
     }
 
@@ -160,6 +246,9 @@ window.CampistryGoNeighborhoods = (function () {
     // Reuses the same mirror + timeout strategy as campistry_go.js fetchIntersections().
     // -------------------------------------------------------------------------
     async function fetchRoadGraph(campers, options) {
+        // Sandbox: no Overpass/OSM network call — the router falls back to its
+        // haversine road-distance approximation, no road graph fetched.
+        if (window.CampistryGoSandbox && window.CampistryGoSandbox.isSandbox()) return null;
         const lats = campers.map(c => c.lat).filter(Number.isFinite).sort((a, b) => a - b);
         const lngs = campers.map(c => c.lng).filter(Number.isFinite).sort((a, b) => a - b);
         if (lats.length < 4 || lngs.length < 4) return null;
@@ -189,7 +278,7 @@ window.CampistryGoNeighborhoods = (function () {
         //    month, so a 30-day-old cached graph is fine. This makes the
         //    pipeline survive Overpass outages — once cached, neighborhood
         //    mode keeps working even when the API is down.
-        const cached = _loadRoadGraphCache(cacheKey);
+        const cached = await _loadRoadGraphCacheAsync(cacheKey);
         if (cached) {
             console.log('[Go-NH] Road graph: using cached copy (' +
                 (cached.elements?.length || 0) + ' elements, bbox ' + cacheKey + ')');
@@ -204,7 +293,7 @@ window.CampistryGoNeighborhoods = (function () {
         //    server-side). Cache and return on success.
         const data = await fetchOverpassViaProxy(query, options);
         if (data) {
-            _saveRoadGraphCache(cacheKey, data);
+            await _saveRoadGraphCacheAsync(cacheKey, data);
             return data;
         }
 
@@ -214,16 +303,25 @@ window.CampistryGoNeighborhoods = (function () {
             'https://overpass.kumi.systems/api/interpreter',
             'https://maps.mail.ru/osm/tools/overpass/api/interpreter'
         ];
+        // Overpass under load answers in 30-60s. Aborting at 20s and calling it a
+        // failure is right when we already hold a cached graph — but with no cache
+        // the alternative isn't "slightly slower", it's silently routing the whole
+        // camp on the much worse fallback path. Wait properly in that case.
+        // We only get here after the cache missed for this bbox, so there is no
+        // fallback to fail fast to: the alternative to waiting is routing the
+        // whole camp on the much worse path. Overpass under load answers in
+        // 30-60s, and a 20s abort was being reported as "all mirrors failed".
+        const DIRECT_TIMEOUT_MS = 60000;
         for (const url of endpoints) {
             try {
                 const controller = new AbortController();
-                const timeoutId = setTimeout(() => controller.abort(), 20000);
+                const timeoutId = setTimeout(() => controller.abort(), DIRECT_TIMEOUT_MS);
                 const resp = await fetch(url + '?data=' + encodeURIComponent(query), { signal: controller.signal });
                 clearTimeout(timeoutId);
                 if (!resp.ok) continue;
                 const direct = await resp.json();
                 if (options.verbose) console.log('[Go-NH] Overpass (direct): ' + (direct.elements?.length || 0) + ' elements from ' + url);
-                _saveRoadGraphCache(cacheKey, direct);
+                await _saveRoadGraphCacheAsync(cacheKey, direct);
                 return direct;
             } catch (e) {
                 if (options.verbose) console.warn('[Go-NH] Overpass error at ' + url + ':', e.message);
@@ -919,7 +1017,8 @@ window.CampistryGoNeighborhoods = (function () {
     //   5. Overflow: if no bus fits, place on least-full (+warn) rather than
     //      silently dropping the neighborhood's campers.
     // -------------------------------------------------------------------------
-    function packIntoBuses({ result, buses, priorAssignments = {}, siblingGroups = {}, depot = null, maxRideMin = 45, avgStopMin = 2, paceMinPerMi = 6 }) {
+    function packIntoBuses({ result, buses, priorAssignments = {}, siblingGroups = {}, depot = null, maxRideMin = 45, avgStopMin = 2, paceMinPerMi = 6,
+                             rideSpeedMph = 25, rideStopMin = 1, maxChildRideMin = 0 }) {
         if (!result || !result.neighborhoods.length) return [];
 
         // Input audit: any duplicate nhIds in result.neighborhoods, or duplicate
@@ -955,36 +1054,140 @@ window.CampistryGoNeighborhoods = (function () {
         }));
         const maxCap = Math.max(...vehicles.map(v => v.capacity));
 
-        // Neighborhood centroid = mean of its homes' coords
+        // Neighborhood centroid = mean of its homes' coords, plus how far the bus
+        // must drive WITHIN it. Treating a neighbourhood as a single point makes a
+        // sprawling one look free: the trip out to a township 6mi away scored ~37
+        // minutes while the real route was ~80, because the ~12mi loop among its
+        // own houses was never counted. Bounding-box diagonal is a cheap, stable
+        // proxy for that internal driving.
         const nhCentroids = {};
-        for (const nh of result.neighborhoods) {
-            const nhHomes = result.homes.filter(h => h.neighborhoodId === nh.id);
-            if (!nhHomes.length) continue;
-            nhCentroids[nh.id] = {
-                lat: nhHomes.reduce((s, h) => s + h.lat, 0) / nhHomes.length,
-                lng: nhHomes.reduce((s, h) => s + h.lng, 0) / nhHomes.length,
-            };
+        const nhInternalMi = {};
+        const nhHomeCount = {};
+        {
+            const byNh = {};
+            for (const h of result.homes) {
+                if (!Number.isFinite(h.lat) || !Number.isFinite(h.lng)) continue;
+                (byNh[h.neighborhoodId] || (byNh[h.neighborhoodId] = [])).push(h);
+            }
+            for (const nh of result.neighborhoods) {
+                const nhHomes = byNh[nh.id];
+                if (!nhHomes || !nhHomes.length) continue;
+                let mnLa = Infinity, mxLa = -Infinity, mnLo = Infinity, mxLo = -Infinity;
+                let sLa = 0, sLo = 0;
+                for (const h of nhHomes) {
+                    sLa += h.lat; sLo += h.lng;
+                    if (h.lat < mnLa) mnLa = h.lat; if (h.lat > mxLa) mxLa = h.lat;
+                    if (h.lng < mnLo) mnLo = h.lng; if (h.lng > mxLo) mxLo = h.lng;
+                }
+                nhCentroids[nh.id] = { lat: sLa / nhHomes.length, lng: sLo / nhHomes.length };
+                nhInternalMi[nh.id] = haversineMi(mnLa, mnLo, mxLa, mxLo);
+                nhHomeCount[nh.id] = nhHomes.length;
+            }
         }
 
-        // --- 1. Pre-split oversize neighborhoods along spine ---
+        // --- 1. Pre-split oversize neighborhoods GEOGRAPHICALLY ------------------
+        // Community detection can hand back one enormous neighborhood: on the
+        // camp's real data a single NH held 509 of 744 campers (68%) across 5405
+        // segments with a 16-MILE bounding box, while every other NH was 0.3-2.3mi.
+        // The old split walked segmentIds in spine order and cut every time the
+        // running total hit a bus, so consecutive graph-traversal segments — which
+        // can be miles apart — landed in the same piece. Each piece was therefore
+        // smeared across the whole territory, and any bus receiving one instantly
+        // spanned 7-13mi. That, not the packer, was the real source of the
+        // map-crossing routes.
+        //
+        // Split on GEOGRAPHY instead: recursively cut the segment set at its
+        // camper-count median along whichever axis it is widest, until each piece
+        // fits a bus. That yields compact, bus-sized blocks.
+        const _segIndex = {};
+        for (const s of result.segments) _segIndex[s.id] = s;
+
+        // Split `items` into exactly `k` geographically-compact groups of roughly
+        // equal camper load. Splitting by "halve until it fits" instead overshoots
+        // badly: 509 campers against a 48-seat bus halves 509 -> 254 -> 127 -> 63
+        // -> 31, and pieces of 31 tile terribly into 48-seat buses (one piece
+        // wastes 17 seats, two won't fit). That left 5 pieces homeless, which the
+        // overflow path then force-dumped onto buses ALREADY FULL — producing
+        // 53-61 campers on 50-seat buses. Choosing k up front gives pieces of
+        // ~total/k that fill a bus properly.
+        function _splitByGeography(items, k) {
+            if (k <= 1 || items.length <= 1) return [items];
+            const placed = items.filter(x => x.lat != null);
+            if (placed.length < 2) return [items];
+            let mnLa = Infinity, mxLa = -Infinity, mnLo = Infinity, mxLo = -Infinity;
+            for (const x of placed) {
+                if (x.lat < mnLa) mnLa = x.lat; if (x.lat > mxLa) mxLa = x.lat;
+                if (x.lng < mnLo) mnLo = x.lng; if (x.lng > mxLo) mxLo = x.lng;
+            }
+            // compare spans in comparable units (lng shrinks with latitude)
+            const latSpan = mxLa - mnLa;
+            const lngSpan = (mxLo - mnLo) * Math.cos(((mnLa + mxLa) / 2) * Math.PI / 180);
+            const key = latSpan >= lngSpan ? 'lat' : 'lng';
+            const sorted = items.slice().sort((a, b) => {
+                if (a[key] == null) return 1;
+                if (b[key] == null) return -1;
+                return a[key] - b[key];
+            });
+            // Cut so each side gets its share of the k pieces (by camper load).
+            const total = sorted.reduce((a, x) => a + x.count, 0);
+            const kLeft = Math.floor(k / 2), kRight = k - kLeft;
+            const targetLeft = total * (kLeft / k);
+            let acc = 0, cut = 0;
+            for (let i = 0; i < sorted.length; i++) {
+                acc += sorted[i].count;
+                if (acc >= targetLeft) { cut = i + 1; break; }
+            }
+            if (cut <= 0) cut = 1;
+            if (cut >= sorted.length) cut = sorted.length - 1;
+            return _splitByGeography(sorted.slice(0, cut), kLeft)
+               .concat(_splitByGeography(sorted.slice(cut), kRight));
+        }
+
+        // Minutes for one bus to serve this neighbourhood alone from the depot.
+        // A tour through n scattered points runs roughly 0.5*sqrt(n) times the
+        // area's diagonal — the diagonal alone badly understates a dense loop.
+        function soloRideMin(camperCount, centroid, internalMi) {
+            if (!depot || !centroid) return 0;
+            const out = haversineMi(depot.lat, depot.lng, centroid.lat, centroid.lng);
+            const stops = Math.max(1, Math.round(camperCount / 2.5));
+            const inner = 0.5 * Math.sqrt(stops) * (internalMi || 0);
+            return ((out + inner) * 1.35 / Math.max(1, rideSpeedMph)) * 60 + stops * rideStopMin;
+        }
+
         const workNhs = [];
         for (const nh of result.neighborhoods) {
-            if (nh.camperCount <= maxCap) { workNhs.push(nh); continue; }
-            const segCamperCounts = nh.segmentIds.map(sid => {
-                const s = result.segments.find(x => x.id === sid);
-                return { sid, count: s ? s.homes.length : 0 };
-            });
-            const pieces = [];
-            let cur = { segIds: [], count: 0 };
-            for (const sc of segCamperCounts) {
-                if (cur.count + sc.count > maxCap && cur.segIds.length) {
-                    pieces.push(cur);
-                    cur = { segIds: [], count: 0 };
+            // Split on RIDE TIME as well as capacity. A township 6mi out with 42
+            // children fits a 48-seat bus, so it was never split — and the one bus
+            // covering it ran ~80 minutes while the fleet median was 18. Sharing it
+            // between two buses halves that, and capacity alone can never see it.
+            const solo = maxChildRideMin > 0
+                ? soloRideMin(nh.camperCount, nhCentroids[nh.id], nhInternalMi[nh.id])
+                : 0;
+            const needRideSplit = maxChildRideMin > 0 && solo > maxChildRideMin;
+            if (nh.camperCount <= maxCap && !needRideSplit) { workNhs.push(nh); continue; }
+            // one point per segment = the mean of its homes
+            const segPts = nh.segmentIds.map(sid => {
+                const s = _segIndex[sid];
+                if (!s || !s.homes || !s.homes.length) return { sid, lat: null, lng: null, count: 0 };
+                let la = 0, lo = 0, n = 0;
+                for (const h of s.homes) {
+                    if (Number.isFinite(h.lat) && Number.isFinite(h.lng)) { la += h.lat; lo += h.lng; n++; }
                 }
-                cur.segIds.push(sc.sid);
-                cur.count += sc.count;
+                return { sid, lat: n ? la / n : null, lng: n ? lo / n : null, count: s.homes.length };
+            });
+            // Aim for pieces that fill a bus. Grow k if a piece still overflows
+            // (uneven geography can make one side heavier than its share).
+            let k = Math.max(2, Math.ceil(nh.camperCount / maxCap));
+            if (needRideSplit) k = Math.max(k, Math.ceil(solo / maxChildRideMin));
+            let buckets = _splitByGeography(segPts, k).filter(b => b.length);
+            for (let guard = 0; guard < 8; guard++) {
+                const worst = buckets.reduce((m, b) => Math.max(m, b.reduce((a, x) => a + x.count, 0)), 0);
+                if (worst <= maxCap || k >= segPts.length) break;
+                k++;
+                buckets = _splitByGeography(segPts, k).filter(b => b.length);
             }
-            if (cur.segIds.length) pieces.push(cur);
+            const pieces = buckets
+                .map(b => ({ segIds: b.map(x => x.sid), count: b.reduce((a, x) => a + x.count, 0) }));
 
             pieces.forEach((p, i) => {
                 const pieceId = nh.id + '_p' + i;
@@ -996,13 +1199,44 @@ window.CampistryGoNeighborhoods = (function () {
                     camperCount: p.count,
                     splitReason: 'oversize',
                 });
-                // Inherit parent centroid so spatial sweep has a location
-                if (nhCentroids[nh.id]) nhCentroids[pieceId] = nhCentroids[nh.id];
+                // Centroid from THIS piece's own homes — never the parent's.
+                // Inheriting the parent centroid made every piece of a big
+                // neighborhood report the same location, so the packer measured
+                // ~0 distance between pieces that are actually miles apart and
+                // happily paired one with a far-away neighborhood. On the camp's
+                // real data one core neighborhood split into 12 pieces and a
+                // piece landed on every one of the worst (7-13mi) buses.
+                const pieceHomes = [];
+                for (const sid of p.segIds) {
+                    const seg = _segIndex[sid];
+                    if (seg && seg.homes) {
+                        for (const h of seg.homes) {
+                            if (Number.isFinite(h.lat) && Number.isFinite(h.lng)) pieceHomes.push(h);
+                        }
+                    }
+                }
+                if (pieceHomes.length) {
+                    let mnLa = Infinity, mxLa = -Infinity, mnLo = Infinity, mxLo = -Infinity;
+                    for (const h of pieceHomes) {
+                        if (h.lat < mnLa) mnLa = h.lat; if (h.lat > mxLa) mxLa = h.lat;
+                        if (h.lng < mnLo) mnLo = h.lng; if (h.lng > mxLo) mxLo = h.lng;
+                    }
+                    nhCentroids[pieceId] = {
+                        lat: pieceHomes.reduce((s, h) => s + h.lat, 0) / pieceHomes.length,
+                        lng: pieceHomes.reduce((s, h) => s + h.lng, 0) / pieceHomes.length,
+                    };
+                    nhInternalMi[pieceId] = haversineMi(mnLa, mnLo, mxLa, mxLo);
+                    nhHomeCount[pieceId] = pieceHomes.length;
+                } else if (nhCentroids[nh.id]) {
+                    nhCentroids[pieceId] = nhCentroids[nh.id];
+                    nhInternalMi[pieceId] = nhInternalMi[nh.id] || 0;
+                    nhHomeCount[pieceId] = p.count || 0;
+                }
             });
         }
 
         // --- 2. Set up buses with running centroid tracking ---
-        const assignments = vehicles.map(v => ({
+        let assignments = vehicles.map(v => ({
             busId: v.busId, name: v.name, capacity: v.capacity,
             neighborhoodIds: [], segmentIds: [], camperCount: 0,
             _centroidSum: { lat: 0, lng: 0, w: 0 },
@@ -1085,10 +1319,57 @@ window.CampistryGoNeighborhoods = (function () {
             return minD === Infinity ? 0 : minD;
         }
 
+        // --- Sector (depot-bearing) awareness -----------------------------------
+        // City-district model: buses radiate from the depot as sectors. A bus
+        // that must cover two areas should take ADJACENT ones (a narrow wedge),
+        // never OPPOSITE sides (north AND south through the depot), which forces
+        // an out-and-back straddle. We only use this on the FORCED paths
+        // (fallback + rebalance) where the spread cap can't be met — the clean
+        // under-cap path is unchanged. STRADDLE_PENALTY_MI is an effective-miles
+        // weight: a full 180° straddle costs this much extra vs a 0° alignment.
+        const STRADDLE_PENALTY_MI = 5.0;
+        function bearingFromDepot(c) {
+            if (!depot || !c) return null;
+            return Math.atan2(c.lng - depot.lng, c.lat - depot.lat); // radians
+        }
+        function angDiff(a, b) {
+            let d = Math.abs(a - b) % (2 * Math.PI);
+            return d > Math.PI ? 2 * Math.PI - d : d; // 0..π
+        }
+        // Bearing is meaningless for stops sitting on top of the depot: two homes
+        // 0.3mi from camp on opposite sides read as a 180-degree "straddle" while
+        // being 0.6mi apart — a perfectly good compact route. Only stops that are
+        // genuinely far out can straddle, so ignore anything inside this radius.
+        const MIN_ARC_RADIUS_MI = 1.5;
+        // Max angular span (from depot) among a bus's NHs, optionally adding one.
+        function busAngularSpan(bus, extraNhId) {
+            const ids = extraNhId ? bus.neighborhoodIds.concat(extraNhId) : bus.neighborhoodIds;
+            const bearings = [];
+            for (const id of ids) {
+                const c = nhCentroids[id];
+                const b = bearingFromDepot(c);
+                if (b == null) continue;
+                if (depot && haversineMi(depot.lat, depot.lng, c.lat, c.lng) < MIN_ARC_RADIUS_MI) continue;
+                bearings.push(b);
+            }
+            if (bearings.length < 2) return 0;
+            let max = 0;
+            for (let i = 0; i < bearings.length; i++)
+                for (let j = i + 1; j < bearings.length; j++) {
+                    const d = angDiff(bearings[i], bearings[j]);
+                    if (d > max) max = d;
+                }
+            return max; // radians, 0..π
+        }
+        // Straddle cost in effective miles for putting nh on bus.
+        function straddleCost(bus, nhId) {
+            return STRADDLE_PENALTY_MI * (busAngularSpan(bus, nhId) / Math.PI);
+        }
+
         // --- 2a. Pass 1: prior-year preference (size-DESC for priority) ---
         const sortedBySize = [...workNhs].sort((a, b) => b.camperCount - a.camperCount);
         const assignedIds = new Set();
-        let priorHits = 0, priorSpreadSkips = 0;
+        let priorHits = 0, priorSpreadSkips = 0, priorRideSkips = 0;
         for (const nh of sortedBySize) {
             const pid = nh.parentId || nh.id;
             const preferredBusId = priorAssignments[pid];
@@ -1096,11 +1377,19 @@ window.CampistryGoNeighborhoods = (function () {
             const bus = busById[preferredBusId];
             if (!bus || bus.camperCount + nh.camperCount > bus.capacity) continue;
             if (wouldSpreadExceed(bus, nh, MAX_BUS_SPREAD_MI)) { priorSpreadSkips++; continue; }
+            // Last year's ROUTE-LENGTH mistakes must not stick either. This pass
+            // replays the stored mapping and then re-records it, so an over-long
+            // bus pins itself in place: the camp's distant 42-child run came back
+            // byte-identical at ~80 minutes through five different fixes to the
+            // passes below, because it was never reaching them.
+            if (maxChildRideMin > 0 &&
+                estimateBusRideMinWith(bus, nh) > maxChildRideMin) { priorRideSkips++; continue; }
             assignToBus(nh, bus);
             assignedIds.add(nh.id);
             priorHits++;
         }
         if (priorSpreadSkips) console.log('[Go-NH] Prior-year pass: skipped ' + priorSpreadSkips + ' NH(s) that would exceed spread cap');
+        if (priorRideSkips) console.log('[Go-NH] Prior-year pass: skipped ' + priorRideSkips + ' NH(s) that would exceed the ' + maxChildRideMin + 'min ride budget');
 
         // --- 2b. Pass 2: spatial-sweep + proximity-aware for the rest ---
         const unassigned = sortedBySize.filter(nh => !assignedIds.has(nh.id));
@@ -1122,7 +1411,20 @@ window.CampistryGoNeighborhoods = (function () {
         // produced 6mi mega-buses. Tie-break by size DESC so a big lonely
         // cluster outranks a tiny one.
         const _allForIsolation = unassigned.slice();
+        // Big neighborhoods FIRST (first-fit-decreasing), isolation only for the
+        // small ones. Isolation-first alone sprinkled a few campers from remote
+        // NHs onto every bus, so by the time a near-bus-sized piece was placed
+        // NO bus had room and it overflowed onto the "least-full" bus with no
+        // regard for geography — on the camp's real data three 44-46 camper
+        // pieces overflowed that way and produced the 13-mile buses. A piece
+        // that needs most of a bus has to be placed while buses are still empty.
+        const BIG_NH_FRACTION = 0.5;
+        const bigThreshold = maxCap * BIG_NH_FRACTION;
         unassigned.sort((a, b) => {
+            const aBig = a.camperCount >= bigThreshold;
+            const bBig = b.camperCount >= bigThreshold;
+            if (aBig !== bBig) return aBig ? -1 : 1;
+            if (aBig && bBig) return b.camperCount - a.camperCount;
             const ia = nhIsolation(a.id, _allForIsolation);
             const ib = nhIsolation(b.id, _allForIsolation);
             if (ia !== ib) return ib - ia;
@@ -1146,12 +1448,44 @@ window.CampistryGoNeighborhoods = (function () {
                 if (bus.camperCount + nh.camperCount > bus.capacity) continue;
                 const newSpread = resultingSpread(bus, nh);
 
-                // Track best fallback (lowest resulting spread regardless of cap)
-                if (newSpread < fallbackScore) {
-                    fallbackScore = newSpread; fallbackTarget = bus;
+                // Track best fallback. When no bus can stay under the spread cap,
+                // prefer the one that keeps this bus SECTORAL (adjacent bearings)
+                // over one that would straddle the depot — a north+south bus and a
+                // compact blob can have the same raw spread, but only the straddle
+                // drives the "out and back for no reason" route.
+                // The ride budget below is a HARD gate on the primary choice, so
+                // tightening it pushes more neighbourhoods down here. If the
+                // fallback stayed blind to riding time it would happily undo the
+                // budget — which is exactly what kept one far bus at ~80 minutes.
+                // Price a minute over budget at a quarter-mile of spread.
+                const rideOver = maxChildRideMin > 0
+                    ? Math.max(0, estimateBusRideMinWith(bus, nh) - maxChildRideMin)
+                    : 0;
+                // Keep this a PRICE, not a veto. Rejecting over-budget buses here
+                // outright was measured on the camp's real data and was worse on
+                // every count: worst ride 81->92min, worst spread 5.49->8.66mi,
+                // child-minutes 14756->15413. Vetoing pushes neighbourhoods into
+                // the segment-wise spill, which scatters their segments across
+                // whichever buses have room and shreds the districts. A bus a few
+                // minutes over budget beats a shredded neighbourhood.
+                const fbCost = newSpread + straddleCost(bus, nh.id) + rideOver * 0.25;
+                if (fbCost < fallbackScore) {
+                    fallbackScore = fbCost; fallbackTarget = bus;
                 }
                 // Track best primary (must keep spread under cap)
                 if (newSpread > MAX_BUS_SPREAD_MI) continue;
+                // ...and must keep the bus inside its riding-time budget. A
+                // district far from camp burns most of its budget just getting
+                // there, so filling it to the last seat leaves the children
+                // dropped last sitting on the bus far longer than anyone else.
+                // Capacity alone can't see that — on the camp's real data one
+                // township 6mi out took 42 children on a single bus and its last
+                // drops rode 80 minutes while the fleet median was 18.
+                // Off unless the caller sets a budget, so existing callers and the
+                // synthetic benchmarks behave exactly as before. The fallback path
+                // below still places the NH, so this can never strand anyone.
+                if (maxChildRideMin > 0 &&
+                    estimateBusRideMinWith(bus, nh) > maxChildRideMin) continue;
                 // Among compliant buses, prefer the one already containing this
                 // NH's neighborhood — i.e. the smallest existing spread, breaks
                 // ties toward empty buses.
@@ -1163,9 +1497,67 @@ window.CampistryGoNeighborhoods = (function () {
 
             if (!target) target = fallbackTarget;
             if (!target) {
-                target = assignments.reduce((a, b) => a.camperCount <= b.camperCount ? a : b);
-                console.warn('[Go-NH] Overflow: no bus had room for ' + nh.id + ' (' + nh.camperCount +
-                    ' campers) — placed on least-full bus ' + target.busId);
+                // No single bus can take the whole neighborhood. Dumping it on the
+                // "least-full" bus used to blow straight through capacity — the
+                // camp's real data ended with 61 and 63 campers on 48-seat buses,
+                // which no school can run. Spill it SEGMENT BY SEGMENT into the
+                // buses that still have seats, nearest bus first, so capacity is
+                // respected and the pieces still land somewhere sensible.
+                const segs = nh.segmentIds.map(sid => {
+                    const s = _segIndex[sid];
+                    let la = 0, lo = 0, n = 0;
+                    if (s && s.homes) for (const h of s.homes) {
+                        if (Number.isFinite(h.lat) && Number.isFinite(h.lng)) { la += h.lat; lo += h.lng; n++; }
+                    }
+                    return { sid, count: s && s.homes ? s.homes.length : 0,
+                             lat: n ? la / n : null, lng: n ? lo / n : null };
+                }).sort((a, b) => b.count - a.count);
+
+                // Register each segment as a point so the riding estimate below can
+                // locate it — it looks centroids up by id, and a raw segment id
+                // isn't in the neighbourhood tables.
+                for (const seg of segs) {
+                    if (seg.lat == null) continue;
+                    nhCentroids[seg.sid] = { lat: seg.lat, lng: seg.lng };
+                    nhInternalMi[seg.sid] = 0;
+                    nhHomeCount[seg.sid] = seg.count;
+                }
+
+                let spilled = 0, stranded = 0;
+                for (const seg of segs) {
+                    const room = assignments.filter(b => b.camperCount + seg.count <= b.capacity);
+                    if (!room.length) { stranded += seg.count; continue; }
+                    // Prefer buses that stay inside the riding budget. Without this
+                    // the spill quietly rebuilds the over-long bus that the budget
+                    // just refused. Fall back to any bus with room rather than
+                    // stranding a child.
+                    let pool = room;
+                    if (maxChildRideMin > 0) {
+                        const fits = room.filter(b => estimateBusRideMinWith(
+                            b, { id: seg.sid, camperCount: seg.count }) <= maxChildRideMin);
+                        if (fits.length) pool = fits;
+                    }
+                    let best = pool[0], bestD = Infinity;
+                    for (const b of pool) {
+                        const c = busCentroid(b);
+                        const d = (c && seg.lat != null)
+                            ? haversineMi(seg.lat, seg.lng, c.lat, c.lng)
+                            : (b.neighborhoodIds.length ? Infinity : EMPTY_BUS_START_COST_MI);
+                        if (d < bestD) { bestD = d; best = b; }
+                    }
+                    best.segmentIds.push(seg.sid);
+                    best.camperCount += seg.count;
+                    if (seg.lat != null) {
+                        best._centroidSum.lat += seg.lat * seg.count;
+                        best._centroidSum.lng += seg.lng * seg.count;
+                        best._centroidSum.w += seg.count;
+                    }
+                    spilled += seg.count;
+                }
+                console.warn('[Go-NH] Overflow: no single bus fit ' + nh.id + ' (' +
+                    nh.camperCount + ' campers) — spilled ' + spilled +
+                    ' across buses with room' + (stranded ? ', ' + stranded + ' STRANDED (fleet is full)' : ''));
+                continue; // already placed segment-wise
             }
             assignToBus(nh, target);
         }
@@ -1223,6 +1615,52 @@ window.CampistryGoNeighborhoods = (function () {
             }
             return mi * paceMinPerMi + bus.neighborhoodIds.length * avgStopMin;
         }
+        // Riding time if this NH were added to the bus. Self-contained rather than
+        // reusing estimateBusRideMin, whose defaults (10mph, stop time counted per
+        // NEIGHBOURHOOD rather than per stop) are far off the real numbers and are
+        // fine for a rebalance trigger but not as an assignment constraint.
+        // Real roads are ~1.35x straight-line, and a stop serves ~2.5 children.
+        // These live INSIDE the function on purpose: the declaration hoists but a
+        // const beside it would not, and the assignment loop above calls this
+        // before that point — which threw a temporal-dead-zone ReferenceError and
+        // silently dropped the whole pipeline to the old k-means fallback.
+        function estimateBusRideMinWith(bus, nh) {
+            const RIDE_ROAD_FACTOR = 1.35;
+            const RIDE_CHILDREN_PER_STOP = 2.5;
+            if (!depot) return 0;
+            const ids = bus.neighborhoodIds.concat(nh.id);
+            const pts = [];
+            for (const id of ids) { const c = nhCentroids[id]; if (c) pts.push(c); }
+            if (!pts.length) return 0;
+            // nearest-neighbour walk from the depot through the centroids
+            const remaining = pts.slice();
+            let miles = 0, la = depot.lat, lo = depot.lng;
+            while (remaining.length) {
+                let bi = 0, bd = Infinity;
+                for (let i = 0; i < remaining.length; i++) {
+                    const d = haversineMi(la, lo, remaining[i].lat, remaining[i].lng);
+                    if (d < bd) { bd = d; bi = i; }
+                }
+                miles += bd; la = remaining[bi].lat; lo = remaining[bi].lng;
+                remaining.splice(bi, 1);
+            }
+            // ...plus the driving WITHIN each neighbourhood, which is most of the
+            // route for a dense one and is invisible if you only walk centroids.
+            // Scale it the way soloRideMin does — a tour through n scattered points
+            // runs ~0.5*sqrt(n) diagonals. Summing raw diagonals understated it
+            // enough that two halves of a far township still shared one bus.
+            for (const id of ids) {
+                const diag = nhInternalMi[id] || 0;
+                if (!diag) continue;
+                const nStops = Math.max(1, Math.round((nhHomeCount[id] || 0) / RIDE_CHILDREN_PER_STOP));
+                miles += 0.5 * Math.sqrt(nStops) * diag;
+            }
+            const campers = (bus.camperCount || 0) + (nh.camperCount || 0);
+            const stops = Math.max(ids.length, Math.round(campers / RIDE_CHILDREN_PER_STOP));
+            const speed = Math.max(1, rideSpeedMph);
+            return (miles * RIDE_ROAD_FACTOR / speed) * 60 + stops * rideStopMin;
+        }
+
         function farthestNhFromDepot(bus) {
             let bestId = null, bestD = -1;
             for (const id of bus.neighborhoodIds) {
@@ -1290,22 +1728,40 @@ window.CampistryGoNeighborhoods = (function () {
                 for (const src of overloaded) {
                     const nhId = outlierNh(src); if (!nhId) continue;
                     const workNh = workNhs.find(n => n.id === nhId); if (!workNh) continue;
-                    // Find best recipient: has capacity, passes spread cap (relaxed
-                    // slightly so we don't deadlock), lowest resulting centroid delta.
+                    // A bus that is over its RIDING budget is a different problem
+                    // from one that is merely wide, and the cure is different too.
+                    // A remote township has no neighbour inside the 2.5mi spread
+                    // cap, so requiring one leaves it stuck: the camp's 42-child
+                    // run sat at ~80 minutes while the fleet median was 18 and
+                    // near-camp buses had ~110 spare seats between them. Let a
+                    // near bus take a share and carry the wider spread, as long as
+                    // it stays inside the riding budget — a few extra minutes for
+                    // riders who currently have 18 buys back thirty for the worst.
+                    const srcOverRide = maxChildRideMin > 0 &&
+                        estimateBusRideMin(src) > maxRideMin;
                     let best = null, bestScore = Infinity;
                     for (const dst of assignments) {
                         if (dst === src) continue;
                         if (dst.camperCount + workNh.camperCount > dst.capacity) continue;
-                        if (wouldSpreadExceed(dst, workNh, MAX_BUS_SPREAD_MI)) continue;
+                        const spreadBlocked = wouldSpreadExceed(dst, workNh, MAX_BUS_SPREAD_MI);
+                        if (spreadBlocked && !srcOverRide) continue;
+                        if (spreadBlocked &&
+                            estimateBusRideMinWith(dst, workNh) > maxChildRideMin) continue;
                         const dstC = busCentroid(dst), nhC = nhCentroids[nhId];
-                        const score = (dstC && nhC) ? haversineMi(nhC.lat, nhC.lng, dstC.lat, dstC.lng) : EMPTY_BUS_START_COST_MI;
+                        const baseScore = (dstC && nhC) ? haversineMi(nhC.lat, nhC.lng, dstC.lat, dstC.lng) : EMPTY_BUS_START_COST_MI;
+                        // Prefer a recipient that keeps the moved NH sectoral, not straddling.
+                        const score = baseScore + straddleCost(dst, nhId);
                         if (score < bestScore) { bestScore = score; best = dst; }
                     }
                     if (!best) continue;
-                    // Don't move if recipient would itself become over-spread after the move
+                    // Don't move if the recipient ends up over-spread — unless we
+                    // are relieving a riding-time violation, where accepting a
+                    // wider bus is the whole point and was already checked against
+                    // the riding budget above. Without this exemption the undo
+                    // reverts precisely the moves that fix the worst ride.
                     unassign(nhId, src);
                     assignToBus(workNh, best);
-                    if (busMaxSpreadMi(best) > MAX_BUS_SPREAD_MI) {
+                    if (!srcOverRide && busMaxSpreadMi(best) > MAX_BUS_SPREAD_MI) {
                         // undo
                         unassign(nhId, best);
                         assignToBus(workNh, src);
@@ -1317,6 +1773,95 @@ window.CampistryGoNeighborhoods = (function () {
                 if (!moved) break;
             }
             if (rebalanceMoves) console.log('[Go-NH] Spread/ride rebalance: ' + rebalanceMoves + ' NH move(s)');
+        }
+
+        // --- 2d. SWEEP candidate + pick the better districting ---------------
+        // The greedy passes above are excellent when the fleet has slack (they
+        // produce near-perfect 1-degree sectors), but they degrade badly when
+        // the fleet is tight: the forced-merge fallback can hand one bus two
+        // OPPOSITE sides of the depot (arcs up to 180deg), which is what draws a
+        // route line straight across the map.
+        //
+        // The classic sweep heuristic is the reverse: mediocre with slack, but
+        // it can't straddle, because it walks stops in bearing order around the
+        // depot and gives each bus one CONTIGUOUS arc.
+        //
+        // Neither wins everywhere, so build both and keep whichever districts
+        // better. This is what makes the result independent of how many buses
+        // the camp happens to own — no tuning required.
+        function districtScore(cands) {
+            let worstArc = 0, worstSpread = 0;
+            for (const bus of cands) {
+                if (!bus || bus.neighborhoodIds.length < 2) continue;
+                const arc = busAngularSpan(bus, null);
+                if (arc > worstArc) worstArc = arc;
+                const sp = busMaxSpreadMi(bus);
+                if (sp > worstSpread) worstSpread = sp;
+            }
+            // arc is radians (0..PI); weight it so a half-turn straddle (~9.4)
+            // outweighs a few extra miles of spread.
+            return worstArc * 3 + worstSpread;
+        }
+
+        function buildSweepCandidate() {
+            if (!depot || !vehicles.length) return null;
+            const ordered = workNhs
+                .map(nh => ({ nh, b: bearingFromDepot(nhCentroids[nh.id]) }))
+                .filter(x => x.b != null)
+                .sort((a, b) => a.b - b.b)
+                .map(x => x.nh);
+            // If any NH lacks a centroid we can't sweep reliably — skip.
+            if (ordered.length !== workNhs.length) return null;
+
+            const totalC = workNhs.reduce((s, n) => s + n.camperCount, 0);
+            const target = Math.ceil(totalC / vehicles.length);
+            // Try rotations of the starting bearing (where we "cut" the circle).
+            // Cap the number tried so a big camp stays fast.
+            const N = ordered.length;
+            const stride = Math.max(1, Math.ceil(N / 60));
+            let best = null;
+
+            for (let start = 0; start < N; start += stride) {
+                const order = ordered.slice(start).concat(ordered.slice(0, start));
+                const cand = vehicles.map(v => ({
+                    busId: v.busId, name: v.name, capacity: v.capacity,
+                    neighborhoodIds: [], segmentIds: [], camperCount: 0,
+                    _centroidSum: { lat: 0, lng: 0, w: 0 },
+                }));
+                let bi = 0, ok = true;
+                for (const nh of order) {
+                    // Move on once this bus has its fair share, so the final bus
+                    // doesn't get a tiny scrap arc.
+                    while (bi < cand.length - 1 && cand[bi].camperCount >= target) bi++;
+                    while (bi < cand.length &&
+                           cand[bi].camperCount + nh.camperCount > cand[bi].capacity) bi++;
+                    if (bi >= cand.length) { ok = false; break; }
+                    assignToBus(nh, cand[bi]);
+                }
+                if (!ok) continue; // this rotation didn't fit the fleet
+                const score = districtScore(cand);
+                if (!best || score < best.score) best = { score, cand };
+            }
+            return best;
+        }
+
+        {
+            const greedyScore = districtScore(assignments);
+            const sweep = buildSweepCandidate();
+            if (sweep) {
+                // Only switch on a clear win. The greedy pass carries the
+                // prior-year bus mapping (route stability year to year), so we
+                // don't churn it for a marginal gain.
+                if (sweep.score < greedyScore * 0.85) {
+                    console.log('[Go-NH] Districting: SWEEP wins (score ' +
+                        sweep.score.toFixed(2) + ' vs greedy ' + greedyScore.toFixed(2) +
+                        ') — using contiguous bearing arcs');
+                    assignments = sweep.cand;
+                } else {
+                    console.log('[Go-NH] Districting: greedy kept (score ' +
+                        greedyScore.toFixed(2) + ' vs sweep ' + sweep.score.toFixed(2) + ')');
+                }
+            }
         }
 
         // --- 3. Within-bus ordering: group segments by NH, order NHs via NN from depot ---
@@ -1418,8 +1963,63 @@ window.CampistryGoNeighborhoods = (function () {
     //   ONE stop at the mean home location, with every camper on that segment
     //   bundled into its `campers` array. Mirrors createCornerStops() shape.
     // -------------------------------------------------------------------------
-    function expandToPhysicalStops({ assignment, result, isArrival = false, dropoffMode = 'door-to-door' }) {
-        const corner = dropoffMode === 'corner-stops';
+    function expandToPhysicalStops({ assignment, result, isArrival = false, dropoffMode = 'door-to-door', maxWalkMi = 0.25 }) {
+        // Three real modes. 'optimized-stops' previously fell through to the
+        // door-to-door branch, so picking it in the UI changed nothing at all.
+        const mode = dropoffMode === 'corner-stops' ? 'corner'
+                   : dropoffMode === 'optimized-stops' ? 'optimized'
+                   : 'door';
+        const corner = mode === 'corner';
+        const WALK = Math.max(0.03, maxWalkMi);
+        const MAX_PER_STOP = 15;
+
+        // Real intersections from the road graph. A node joining 3+ edges is a
+        // corner a child can actually be told to wait at; the camp's own
+        // historical stops are all named this way ("Lehigh Blvd@Drexel Dr").
+        const interNodes = [];
+        for (const id in (result.nodes || {})) {
+            const n = result.nodes[id];
+            if (n && n.degree >= 3 && Number.isFinite(n.lat)) interNodes.push(n);
+        }
+        function nearestCorner(cLat, cLng, streetName, homesArr) {
+            let best = null, bestScore = Infinity, bestNamed = null, bestNamedScore = Infinity;
+            const want = String(streetName || '').toLowerCase().trim();
+            for (const n of interNodes) {
+                const d = haversineMi(cLat, cLng, n.lat, n.lng);
+                if (d > WALK) continue;
+                // total walk from every child in the group, not just the centre
+                let tot = 0;
+                for (const h of homesArr) tot += haversineMi(h.lat, h.lng, n.lat, n.lng);
+                if (tot < bestScore) { bestScore = tot; best = n; }
+                if (want && (n.streets || []).some(x => String(x).toLowerCase().trim() === want)) {
+                    if (tot < bestNamedScore) { bestNamedScore = tot; bestNamed = n; }
+                }
+            }
+            // Prefer a corner that is actually ON the children's own street.
+            return bestNamed || best;
+        }
+        function cornerName(node, streetName) {
+            const main = streetName || (node && (node.streets || [])[0]) || 'Stop';
+            if (!node) return main + ' corner';
+            const cross = (node.streets || []).find(x =>
+                String(x).toLowerCase().trim() !== String(main).toLowerCase().trim());
+            return cross ? (main + ' @ ' + cross) : (main + ' corner');
+        }
+        // Split a list of homes into groups nobody has to walk too far within.
+        function walkGroups(homesArr) {
+            const sorted = [...homesArr].sort((a, b) => (a.lat - b.lat) || (a.lng - b.lng));
+            const out = [];
+            let cur = [];
+            for (const h of sorted) {
+                if (!cur.length) { cur.push(h); continue; }
+                const anchor = cur[0];
+                if (cur.length >= MAX_PER_STOP || haversineMi(anchor.lat, anchor.lng, h.lat, h.lng) > WALK) {
+                    out.push(cur); cur = [h];
+                } else cur.push(h);
+            }
+            if (cur.length) out.push(cur);
+            return out;
+        }
         // Diagnostic: detect homes attached to segments that appear on more
         // than one bus. This is the precise upstream cause of cross-bus
         // camper duplication.
@@ -1451,29 +2051,13 @@ window.CampistryGoNeighborhoods = (function () {
                 uniqueSegIds.push(sid);
             }
             const orderedSegIds = isArrival ? [...uniqueSegIds].reverse() : uniqueSegIds;
-            for (const sid of orderedSegIds) {
-                const seg = segById[sid];
-                if (!seg || seg.homes.length === 0) continue;
-                const ordered = [...seg.homes].sort((a, b) => (a.t - b.t) * (isArrival ? -1 : 1));
-                if (corner) {
-                    // Collapse all homes on this segment into one corner stop
-                    // at the mean home location. Campers array holds everyone.
-                    const meanLat = ordered.reduce((s, h) => s + h.lat, 0) / ordered.length;
-                    const meanLng = ordered.reduce((s, h) => s + h.lng, 0) / ordered.length;
-                    const addrCount = {};
-                    for (const h of ordered) {
-                        const a = h.address || (seg.name || 'unnamed');
-                        addrCount[a] = (addrCount[a] || 0) + 1;
-                    }
-                    const topAddr = Object.entries(addrCount).sort((a, b) => b[1] - a[1])[0][0];
-                    stops.push({
-                        lat: meanLat, lng: meanLng,
-                        address: (seg.name || topAddr) + ' corner',
-                        segmentId: sid,
-                        neighborhoodId: seg.neighborhoodId,
-                        campers: ordered.map(h => ({ name: h.camperName, division: h.division, bunk: h.bunk })),
-                    });
-                } else {
+
+            if (mode === 'door') {
+                // One stop per home, in order along each segment.
+                for (const sid of orderedSegIds) {
+                    const seg = segById[sid];
+                    if (!seg || seg.homes.length === 0) continue;
+                    const ordered = [...seg.homes].sort((a, b) => (a.t - b.t) * (isArrival ? -1 : 1));
                     for (const h of ordered) {
                         stops.push({
                             lat: h.lat, lng: h.lng,
@@ -1484,8 +2068,58 @@ window.CampistryGoNeighborhoods = (function () {
                         });
                     }
                 }
-            }
-            return {
+            } else {
+                // CORNER and OPTIMIZED both gather the bus's homes first and then
+                // group them by how far a child can walk. The old corner mode
+                // emitted one stop per ROAD SEGMENT, and the graph chops a single
+                // street into many short segments -- so it produced MORE stops
+                // than door-to-door (310 vs 199 on the camp's real data) and
+                // never used a real intersection. Grouping by street, then by
+                // walking distance, is what the camp's own historical routes do:
+                // 263 stops, 3.14 children each, every one named Street@Street.
+                const groupsOf = {};   // key -> {seg, homes:[]}
+                for (const sid of orderedSegIds) {
+                    const seg = segById[sid];
+                    if (!seg || seg.homes.length === 0) continue;
+                    // corner: one bucket per street name (segments rejoin).
+                    // optimized: one bucket for the whole bus -- walk distance is
+                    // the only thing that matters, streets do not constrain it.
+                    const key = corner ? ('st:' + String(seg.name || sid).toLowerCase().trim()) : 'all';
+                    (groupsOf[key] || (groupsOf[key] = { seg, homes: [] })).homes.push(
+                        ...seg.homes.map(h => ({ ...h, _segId: sid, _segName: seg.name, _nbId: seg.neighborhoodId })));
+                }
+                for (const key of Object.keys(groupsOf)) {
+                    const g = groupsOf[key];
+                    for (const grp of walkGroups(g.homes)) {
+                        const cLat = grp.reduce((a, h) => a + h.lat, 0) / grp.length;
+                        const cLng = grp.reduce((a, h) => a + h.lng, 0) / grp.length;
+                        const streetName = grp[0]._segName || g.seg.name || '';
+                        let lat = cLat, lng = cLng, address;
+                        if (corner) {
+                            const node = nearestCorner(cLat, cLng, streetName, grp);
+                            if (node) { lat = node.lat; lng = node.lng; }
+                            address = cornerName(node, streetName);
+                        } else {
+                            // Optimized: stand where the total walk is smallest.
+                            // The centroid can land off-road, so snap to whichever
+                            // child's own frontage minimises everyone's walk.
+                            let bt = Infinity;
+                            for (const cand of grp) {
+                                let tot = 0;
+                                for (const h of grp) tot += haversineMi(cand.lat, cand.lng, h.lat, h.lng);
+                                if (tot < bt) { bt = tot; lat = cand.lat; lng = cand.lng; }
+                            }
+                            address = (streetName ? streetName + ' — ' : '') + 'shared stop (' + grp.length + ')';
+                        }
+                        stops.push({
+                            lat, lng, address,
+                            segmentId: grp[0]._segId,
+                            neighborhoodId: grp[0]._nbId,
+                            campers: grp.map(h => ({ name: h.camperName, division: h.division, bunk: h.bunk })),
+                        });
+                    }
+                }
+            }            return {
                 busId: bus.busId, name: bus.name,
                 stops, camperCount: bus.camperCount,
                 segmentOrder: orderedSegIds,

@@ -17,7 +17,7 @@
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link href="https://fonts.googleapis.com/css2?family=Roboto:wght@400;500;700;900&family=Roboto+Flex:opsz,wght@8..144,400;8..144,500;8..144,700;8..144,900&display=swap" rel="stylesheet">
     <link rel="stylesheet" href="campistry-unified.css?v=20260903-03">
-    <link rel="stylesheet" href="campistry_link.css?v=20260903-03">
+    <link rel="stylesheet" href="campistry_link.css?v=20260903-04">
     <!-- Splash screen — inline so it appears before any external CSS -->
     <style>
         #link-splash {
@@ -228,22 +228,22 @@
                 <div class="lk-home-tile-sub" id="homeMsgSub"></div>
             </div>
         </button>
-        <button class="lk-home-tile featured" data-page="canteen" data-accent="gold" onclick="nav('canteen')">
+        <button class="lk-home-tile featured" data-page="payments" data-accent="gold" onclick="nav('payments')">
+            <div class="lk-home-tile-icon">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><rect x="1" y="4" width="22" height="16" rx="2"/><line x1="1" y1="10" x2="23" y2="10"/></svg>
+            </div>
+            <div class="lk-home-tile-body">
+                <div class="lk-home-tile-label">Payments</div>
+                <div class="lk-home-tile-sub" id="homePaymentsSub">Tuition & balance</div>
+            </div>
+        </button>
+        <button class="lk-home-tile" data-page="canteen" data-accent="teal" onclick="nav('canteen')">
             <div class="lk-home-tile-icon">
                 <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><path d="M18 8h1a4 4 0 0 1 0 8h-1"/><path d="M2 8h16v9a4 4 0 0 1-4 4H6a4 4 0 0 1-4-4V8z"/></svg>
             </div>
             <div class="lk-home-tile-body">
                 <div class="lk-home-tile-label">Canteen</div>
                 <div class="lk-home-tile-sub" id="homeCanteenSub"></div>
-            </div>
-        </button>
-        <button class="lk-home-tile" data-page="lists" data-accent="teal" onclick="nav('lists')">
-            <div class="lk-home-tile-icon">
-                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><line x1="8" y1="6" x2="21" y2="6"/><line x1="8" y1="12" x2="21" y2="12"/><line x1="8" y1="18" x2="21" y2="18"/><polyline points="3 6 4 7 6 5"/><polyline points="3 12 4 13 6 11"/><polyline points="3 18 4 19 6 17"/></svg>
-            </div>
-            <div class="lk-home-tile-body">
-                <div class="lk-home-tile-label">Lists</div>
-                <div class="lk-home-tile-sub" id="homeListsSub">Packing &amp; checklists</div>
             </div>
         </button>
         <button class="lk-home-tile" data-page="forms" data-accent="azure" onclick="nav('forms')">
@@ -301,6 +301,15 @@
                 <div class="lk-home-tile-sub" id="homePhotosSub">Coming soon</div>
             </div>
         </button>
+        <button class="lk-home-tile" data-page="lists" data-accent="rose" onclick="nav('lists')">
+            <div class="lk-home-tile-icon">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><line x1="8" y1="6" x2="21" y2="6"/><line x1="8" y1="12" x2="21" y2="12"/><line x1="8" y1="18" x2="21" y2="18"/><polyline points="3 6 4 7 6 5"/><polyline points="3 12 4 13 6 11"/><polyline points="3 18 4 19 6 17"/></svg>
+            </div>
+            <div class="lk-home-tile-body">
+                <div class="lk-home-tile-label">Lists</div>
+                <div class="lk-home-tile-sub" id="homeListsSub">Packing &amp; checklists</div>
+            </div>
+        </button>
     </div>
     <div id="homeMessages" style="display:none;"></div>
 </div>
@@ -324,6 +333,7 @@
     <div class="lk-page-hero-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="1" y="4" width="22" height="16" rx="2"/><line x1="1" y1="10" x2="23" y2="10"/></svg></div>
     <div><h1>Payments</h1><p>Your tuition and payment history</p></div>
 </div>
+    <div id="paymentsCampTabs"></div>
     <div id="payBalanceCards"></div>
     <div class="lk-card"><div class="lk-card-head"><h2>Payment History</h2></div>
         <table class="lk-table"><thead><tr><th>Date</th><th>Description</th><th>Amount</th><th>Status</th></tr></thead><tbody id="payTable"></tbody></table>
@@ -1003,85 +1013,139 @@ async function _lkPhotoUrls(photoIds){
     var resp=await fetch(s.url+'/functions/v1/get-photo-urls',{method:'POST',headers:{'Content-Type':'application/json','Authorization':'Bearer '+token,'apikey':s.anonKey||''},body:JSON.stringify({photoIds:photoIds})});
     var data=await resp.json(); if(!resp.ok||data.error) throw new Error(data.error||'Could not load photos'); return data.urls||{};
 }
+// Which camp's card is showing on the Payments page right now — a family
+// with kids at more than one camp gets a chip row (same pattern as the
+// camper switch on Canteen/Camp Shop) instead of every camp's card stacked
+// vertically; only one camp's balance/history is on screen at a time.
+var _payCamps={};
+var _payActiveCid=null;
 function loadPayments(){
     var host=document.getElementById('payBalanceCards'); var pt=document.getElementById('payTable'); if(!host) return;
     // isCurrent per camp, not just the name — used below only as a tie-break
-    // for which single paid-up camp to show when nothing is owed anywhere
-    // (an owed balance always shows regardless of isCurrent — see the
-    // owed/clear split further down). Uses parent.billingCamps (set in
-    // _augmentOtherCamps), not `children` — billing access can outlive a
-    // closed portal (migration 070), and a billing-only camp never gets its
-    // campers merged into `children` since that would also resurrect
-    // messaging/forms entry points that are supposed to stay closed. A
-    // billing-only camp (portal_active===false) is never "current".
+    // for which camp is active by default when nothing is owed anywhere.
+    // Uses parent.billingCamps (set in _augmentOtherCamps), not `children` —
+    // billing access can outlive a closed portal (migration 070), and a
+    // billing-only camp never gets its campers merged into `children` since
+    // that would also resurrect messaging/forms entry points that are
+    // supposed to stay closed. A billing-only camp (portal_active===false)
+    // is never "current".
     var campList=(typeof parent!=='undefined'&&parent&&parent.billingCamps&&parent.billingCamps.length)
         ? parent.billingCamps
         : (children||[]).map(function(c){ return {camp_id:c.campId, camp_name:c.campName, isCurrent:c.campIsCurrent!==false, portal_active:true}; });
     var camps={}; campList.forEach(function(cp){ var cid=cp.camp_id; if(cid) camps[cid]={name:cp.camp_name||'', isCurrent:cp.isCurrent!==false && cp.portal_active!==false}; });
     var ids=Object.keys(camps);
     if(!ids.length && parent && parent.campId){ camps[parent.campId]={name:'',isCurrent:true}; ids=[parent.campId]; }
-    if(!ids.length){ host.innerHTML=''; if(pt)_renderPayHistory(pt,[]); return; }
+    _payCamps=camps;
+    var tabsHost=document.getElementById('paymentsCampTabs');
+    if(!ids.length){ host.innerHTML=''; if(pt)_renderPayHistory(pt,[]); if(tabsHost)tabsHost.innerHTML=''; return; }
     host.innerHTML='<div class="lk-card" style="padding:18px;text-align:center;color:var(--text-muted);">Loading your balance…</div>';
-    var cards={}, allHistory=[], done=0;
+    var done=0;
     ids.forEach(function(cid){
         var call=window._pRpc?window._pRpc('get_my_balance',{},cid):(window._parentDB&&window._parentDB.rpc('get_my_balance',{p_camp_id:cid}));
         Promise.resolve(call).then(function(res){
             var d=(res&&res.data)?res.data:null;
-            if(d&&d.success){ _balByCamp[cid]=d; cards[cid]=_payCardHtml(cid,camps[cid].name,d); (d.payments||[]).forEach(function(p){allHistory.push(p);}); }
+            if(d&&d.success) _balByCamp[cid]=d;
         }).catch(function(){}).then(function(){
             done++; if(done===ids.length){
-                // Group by whether money is actually owed, not by "current
-                // camp" — burying a real balance behind a collapsed "other
-                // camps" toggle just because it isn't this family's active
-                // camp is backwards for a page whose whole job is showing
-                // what you owe. Only fully-paid-up camps get tucked away.
+                _paintPaymentsHomeSub();
                 var owedIds=ids.filter(function(id){ var d=_balByCamp[id]; return d && Number(d.balance)>0.005; });
-                var clearIds=ids.filter(function(id){ return owedIds.indexOf(id)<0; });
-                var shownIds=owedIds, collapsedIds=clearIds;
-                if(!owedIds.length){
-                    // Nothing owed anywhere — still show one paid-up card
-                    // directly (the current camp, if there is one) rather
-                    // than an empty page behind a toggle; only collapse the
-                    // rest if there's more than one.
-                    var firstClear=clearIds.filter(function(id){return camps[id].isCurrent;})[0]||clearIds[0];
-                    shownIds=firstClear?[firstClear]:[];
-                    collapsedIds=clearIds.filter(function(id){return id!==firstClear;});
+                if(!_payActiveCid || !_balByCamp[_payActiveCid]){
+                    _payActiveCid = owedIds[0] || ids.filter(function(id){return camps[id].isCurrent;})[0] || ids[0];
                 }
-                var shownHtml=shownIds.map(function(id){return cards[id]||'';}).join('');
-                var collapsedHtml=collapsedIds.map(function(id){return cards[id]||'';}).join('');
-                var html=shownHtml || '<div class="lk-card" style="padding:20px;text-align:center;color:var(--text-muted);">No balance on file. If you expect one, contact the camp office.</div>';
-                if(collapsedIds.length){
-                    html+='<div style="margin-top:16px;">'+
-                        '<button type="button" onclick="_togglePastCamps(this)" style="width:100%;display:flex;align-items:center;justify-content:space-between;gap:10px;padding:12px 16px;background:none;border:1px solid var(--line,#e5e7eb);border-radius:12px;color:var(--text-muted);font-size:.85rem;font-weight:600;cursor:pointer;">'+
-                        '<span>Other camps ('+collapsedIds.length+') — paid up</span>'+
-                        '<span aria-hidden="true">▾</span></button>'+
-                        '<div style="display:none;margin-top:10px;">'+collapsedHtml+'</div>'+
-                        '</div>';
-                }
-                host.innerHTML=html;
-                _renderPayHistory(pt,allHistory);
+                if(ids.length>1){
+                    _renderCampSwitch('paymentsCampTabs', ids.map(function(id){
+                        return {id:id, name:camps[id].name||'Camp', owed:owedIds.indexOf(id)>=0};
+                    }), function(c){ _showPaymentsCamp(c.id); }, _payActiveCid);
+                } else if(tabsHost){ tabsHost.innerHTML=''; }
+                _showPaymentsCamp(_payActiveCid);
             }
         });
     });
 }
-function _togglePastCamps(btn){
-    var box=btn.nextElementSibling; if(!box) return;
-    var open=box.style.display!=='none';
-    box.style.display=open?'none':'';
-    var arrow=btn.querySelector('span[aria-hidden]'); if(arrow) arrow.textContent=open?'▾':'▴';
+function _showPaymentsCamp(cid){
+    _payActiveCid=cid;
+    var host=document.getElementById('payBalanceCards'); if(!host) return;
+    var d=cid&&_balByCamp[cid];
+    host.innerHTML = d ? _payCardHtml(cid,(_payCamps[cid]||{}).name||'',d)
+        : '<div class="lk-card" style="padding:20px;text-align:center;color:var(--text-muted);">No balance on file. If you expect one, contact the camp office.</div>';
+    var pt=document.getElementById('payTable');
+    if(pt) _renderPayHistory(pt,(d&&d.payments)||[]);
+}
+// Sums outstanding balance across every camp already fetched this session —
+// runs after loadPayments()'s own fetch, and also opportunistically once at
+// boot (see the pre-warm call in init()) so the Home tile isn't stuck on its
+// static placeholder until the parent actually opens Payments once.
+function _paintPaymentsHomeSub(){
+    var sub=document.getElementById('homePaymentsSub'); if(!sub) return;
+    var ids=Object.keys(_payCamps);
+    if(!ids.length){ ids=Object.keys(_balByCamp); }
+    if(!ids.length) return;
+    var total=0, any=false;
+    ids.forEach(function(id){ var d=_balByCamp[id]; if(d){ any=true; total+=Math.max(0,Number(d.balance)||0); } });
+    if(!any) return;
+    sub.textContent = total>0.005 ? _lkMoney(total)+' due' : 'All paid up';
+}
+function _lkToggleDetails(id){
+    var el=document.getElementById(id); if(!el) return;
+    el.style.display=el.style.display==='none'?'':'none';
+}
+// A family owes ONE running balance regardless of how many kids it comes
+// from — no per-camper plan tracking. At most one plan exists per family
+// at a time, always covering the whole balance; _lkFamPlans just
+// normalizes the legacy singular d.plan shape into an array the rest of
+// this file already expects (still returns 0 or 1 entries).
+function _lkFamPlans(d){ return Array.isArray(d.plans)?d.plans:(d.plan&&Array.isArray(d.plan.installments)&&d.plan.installments.length?[d.plan]:[]); }
+function _lkPlanOfferHtml(cid,d){
+    if(!d.allowParentPaymentPlans) return '';
+    if((Number(d.balance)||0)<=0.005) return '';
+    if(_lkFamPlans(d).length) return ''; // already has a plan — nothing to offer
+    return '<div style="border-top:1px solid var(--border-color,#E2E8F0);margin-top:16px;padding-top:16px;">'
+        +'<div style="font-size:.72rem;font-weight:700;color:var(--link-color);text-transform:uppercase;letter-spacing:.04em;margin-bottom:8px;">Payment Plan</div>'
+        +'<div style="font-size:.78rem;color:var(--text-muted);margin-bottom:10px;">Want to spread this out? Build your own payment schedule.</div>'
+        +'<button class="btn btn-secondary" style="width:100%;font-size:.85rem;" onclick="openPlanBuilder(\''+cid+'\')">Build a payment plan</button>'
+        +'</div>';
 }
 function _payCardHtml(cid,campName,d){
     var bal=Number(d.balance)||0; var owed=bal>0.005;
+    var plans=_lkFamPlans(d);
+    var hasPlan=plans.length>0;
     var head=(campName?'<div style="font-size:.72rem;font-weight:700;color:var(--link-color);text-transform:uppercase;letter-spacing:.04em;margin-bottom:6px;">'+String(campName).replace(/[<>&]/g,'')+'</div>':'');
-    var payBtn=owed?'<button class="btn btn-primary" style="width:100%;margin-top:14px;" onclick="payNow(\''+cid+'\')">Pay '+_lkMoney(bal)+' now</button>':'';
-    return '<div class="lk-card" style="padding:20px;margin-bottom:12px;">'+head+
-        '<div style="display:flex;align-items:baseline;justify-content:space-between;gap:12px;">'+
-        '<div><div style="font-size:.75rem;color:var(--text-muted);">Balance due</div><div style="font-size:1.9rem;font-weight:800;color:'+(owed?'#DC2626':'#0E7C4A')+';font-variant-numeric:tabular-nums;">'+_lkMoney(bal)+'</div></div>'+
-        '<div style="text-align:right;font-size:.75rem;color:var(--text-muted);line-height:1.7;">Billed '+_lkMoney(d.billed)+'<br>Paid '+_lkMoney(d.paid)+(Number(d.credits)>0.005?'<br>Credits '+_lkMoney(d.credits):'')+'</div>'+
-        '</div>'+payBtn+
-        (owed?'<div style="font-size:.7rem;color:var(--text-muted);margin-top:8px;text-align:center;">Pay securely by card, bank (ACH), Cash App, PayPal &amp; more.</div>':'<div style="font-size:.72rem;color:#0E7C4A;margin-top:6px;text-align:center;font-weight:600;">You\'re all paid up. Thank you!</div>')+
-        _autopaySectionHtml(cid,d)+
-        '</div>';
+
+    // Billed/paid/credits is useful but competes with the one number that
+    // actually matters at a glance (the balance) — tuck it behind a small
+    // toggle instead of always showing three extra figures.
+    var detailsId='payDetails_'+cid;
+    var detailsToggle=(owed&&(Number(d.billed)>0.005||Number(d.paid)>0.005))
+        ?'<button type="button" onclick="_lkToggleDetails(\''+detailsId+'\')" style="background:none;border:none;padding:0;margin-top:4px;font-size:.72rem;color:var(--link-color);cursor:pointer;text-decoration:underline;">Billed/paid details</button>'
+        +'<div id="'+detailsId+'" style="display:none;font-size:.75rem;color:var(--text-muted);line-height:1.7;margin-top:4px;">Billed '+_lkMoney(d.billed)+' · Paid '+_lkMoney(d.paid)+(Number(d.credits)>0.005?' · Credits '+_lkMoney(d.credits):'')+'</div>'
+        :'';
+    var balanceBlock='<div><div style="font-size:.75rem;color:var(--text-muted);">Balance due</div>'
+        +'<div style="font-size:1.9rem;font-weight:800;color:'+(owed?'#DC2626':'#0E7C4A')+';font-variant-numeric:tabular-nums;">'+_lkMoney(bal)+'</div>'
+        +detailsToggle+'</div>';
+
+    var body='<div class="lk-card" style="padding:20px;margin-bottom:12px;">'+head+balanceBlock;
+
+    if(hasPlan){
+        // A family already on a plan sees THEIR PLAN(S) as the primary thing
+        // to look at — a big "pay it all now" button sitting above an active
+        // autopay schedule read as contradictory (why pay in full if it's
+        // already scheduled?). Paying in full is still offered, just as a
+        // plain secondary link underneath the plan(s) instead of competing
+        // with them for attention. One card per plan, each labeled by which
+        // camper(s) it covers — a family can have a combined plan, a
+        // per-kid plan, or a mix of a plan for one kid and nothing yet for
+        // another (the uncovered offer below still shows in that case).
+        plans.forEach(function(plan){ body+=_autopaySectionHtml(cid,d,plan); });
+        body+=_lkPlanOfferHtml(cid,d);
+        if(owed) body+='<div style="text-align:center;margin-top:14px;"><button type="button" onclick="payNow(\''+cid+'\')" style="background:none;border:none;padding:0;font-size:.8rem;color:var(--text-muted);text-decoration:underline;cursor:pointer;">Or pay the full balance now instead</button></div>';
+    }else{
+        var payBtn=owed?'<button class="btn btn-primary" style="width:100%;margin-top:14px;" onclick="payNow(\''+cid+'\')">Pay '+_lkMoney(bal)+' now</button>':'';
+        body+=payBtn;
+        body+=owed?'<div style="font-size:.7rem;color:var(--text-muted);margin-top:8px;text-align:center;">Pay securely by card, bank (ACH), Cash App, PayPal &amp; more.</div>':'<div style="font-size:.72rem;color:#0E7C4A;margin-top:6px;text-align:center;font-weight:600;">You\'re all paid up. Thank you!</div>';
+        body+=_lkPlanOfferHtml(cid,d); // the self-serve "build a plan" offer, when eligible
+    }
+    body+='</div>';
+    return body;
 }
 // Monthly Plan / autopay — lives INSIDE the same balance card (not a
 // separate one below it), only appears when the camp office has actually
@@ -1093,14 +1157,23 @@ function _payCardHtml(cid,campName,d){
 // nothing reaches Campistry's own site or servers. stripe-webhook writes
 // the result back once Stripe confirms it; next load of this page reflects
 // it via get_my_balance's cardOnFile/paymentMethodType fields.
-function _autopaySectionHtml(cid,d){
-    var insts=(d.plan&&Array.isArray(d.plan.installments))?d.plan.installments:[];
+function _autopaySectionHtml(cid,d,plan){
+    var insts=(plan&&Array.isArray(plan.installments))?plan.installments:[];
     if(!insts.length) return '';
     var next=insts.filter(function(i){return i.status==='pending'||i.status==='failed';})
         .sort(function(a,b){return String(a.dueDate||'').localeCompare(String(b.dueDate||''));})[0];
     var onFile=!!d.cardOnFile;
     var methodTxt=d.paymentMethodLabel||(d.paymentMethodType==='us_bank_account'?'a bank account':'a card');
     var body='<div style="font-size:.72rem;font-weight:700;color:var(--link-color);text-transform:uppercase;letter-spacing:.04em;margin-bottom:8px;">Payment Plan</div>';
+    // The round trip: a plan the camp office set up is visible here exactly
+    // as they built it, and there's no edit/cancel control on this page for
+    // it — changes to an office-built plan go through the camp. A plan the
+    // family built themselves in Link is editable/cancelable from the
+    // office side any time (see campistry_me.js's Payment Plan card), so
+    // this note is purely informational, not a permission gate on its own.
+    body+=plan.source==='parent'
+        ?'<div style="font-size:.72rem;color:var(--text-muted);margin-bottom:8px;">You set this plan up.</div>'
+        :'<div style="font-size:.72rem;color:var(--text-muted);margin-bottom:8px;">Set up by the camp office — contact them to change it.</div>';
     if(next){
         body+='<div style="font-size:.75rem;color:var(--text-muted);margin-bottom:2px;">Next payment</div>';
         body+='<div style="font-size:1.1rem;font-weight:700;margin-bottom:10px;">'+_lkMoney(next.amount)+' due '+String(next.dueDate||'').replace(/[<>&]/g,'')+'</div>';
@@ -1131,6 +1204,103 @@ async function startAutopaySetup(cid){
         _lkGoToCheckout(data.url);
     }catch(err){ console.error('[Parent] autopay setup error:',err); toast('Could not start setup: '+(err&&err.message||'error')); }
 }
+// Self-serve payment-plan builder — only reachable when a camp turned on
+// allowParentPaymentPlans and no plan exists yet for this family. A
+// family owes ONE running balance regardless of how many kids it comes
+// from, so this always targets the whole balance — no per-camper picker.
+// The math here (even split, remainder folded into the first payment)
+// mirrors _mpGenRows/_buildInstallmentSchedule in campistry_me.js; the
+// actual balance/eligibility/total checks all happen SERVER-SIDE in
+// set_my_payment_plan — this client-side generation is only a preview,
+// never trusted for the real write.
+var _lkPlanCid=null;
+function openPlanBuilder(cid){
+    var d=_balByCamp[cid]; if(!d){toast('Balance not loaded yet');return;}
+    var bal=Number(d.balance)||0; if(bal<=0.005){toast('Nothing to pay');return;}
+    _lkPlanCid=cid;
+    var sub=document.getElementById('lkPlanSub'); if(sub) sub.textContent='Balance due: '+_lkMoney(bal);
+    var startEl=document.getElementById('lkPlanStart');
+    if(startEl&&!startEl.value){
+        var d1=new Date(); d1.setDate(1); d1.setMonth(d1.getMonth()+1);
+        startEl.value=d1.toISOString().split('T')[0];
+    }
+    _lkPlanRefreshPreview();
+    var ov=document.getElementById('lkPlanOverlay'); if(ov) ov.classList.add('open');
+}
+function lkPlanClose(){ var ov=document.getElementById('lkPlanOverlay'); if(ov) ov.classList.remove('open'); _lkPlanCid=null; }
+function _lkPlanBuildRows(){
+    var cid=_lkPlanCid; var d=cid&&_balByCamp[cid]; if(!d) return [];
+    var bal=Number(d.balance)||0;
+    if(bal<=0.005) return [];
+    var countEl=document.getElementById('lkPlanCount');
+    var count=Math.max(1,Math.min(24,parseInt(countEl&&countEl.value,10)||1));
+    var cadence=(document.getElementById('lkPlanCadence')||{}).value||'monthly';
+    var startVal=(document.getElementById('lkPlanStart')||{}).value;
+    var stepDays=cadence==='weekly'?7:cadence==='biweekly'?14:30;
+    var start=startVal?new Date(startVal+'T12:00:00'):new Date();
+    var per=Math.floor(bal/count*100)/100;
+    var remainder=Math.round((bal-per*count)*100)/100;
+    var rows=[];
+    for(var i=0;i<count;i++){
+        var due=new Date(start); due.setDate(due.getDate()+stepDays*i);
+        var amt=per+(i===0?remainder:0);
+        rows.push({amount:Math.round(amt*100)/100,dueDate:due.toISOString().split('T')[0]});
+    }
+    return rows;
+}
+function _lkPlanRefreshPreview(){
+    var rows=_lkPlanBuildRows();
+    var el=document.getElementById('lkPlanPreview'); if(!el) return;
+    el.innerHTML=rows.map(function(r){
+        return '<div style="display:flex;justify-content:space-between;padding:6px 0;border-bottom:1px solid var(--border-color,#E2E8F0);">'
+            +'<span style="color:var(--text-muted);">'+String(r.dueDate||'').replace(/[<>&]/g,'')+'</span>'
+            +'<span style="font-weight:700;">'+_lkMoney(r.amount)+'</span></div>';
+    }).join('');
+}
+// A double-tap on mobile (or a slow-network retry) could fire this twice
+// before either request resolved -- both hit set_my_payment_plan's row
+// lock, one creates the plan, the other then correctly sees it and
+// rejects with plan_already_exists. The plan itself was fine either way,
+// but the rejection toast landing after/on top of the success one made a
+// perfectly good save look like a failure. Guard against the race itself
+// rather than just explaining it away.
+var _lkPlanSaving=false;
+async function _lkPlanSave(){
+    if(_lkPlanSaving) return;
+    var cid=_lkPlanCid; var d=cid&&_balByCamp[cid]; if(!d){toast('Balance not loaded yet');return;}
+    var rows=_lkPlanBuildRows();
+    if(!rows.length){toast('Add at least one payment');return;}
+    lkPlanClose();
+    _lkPlanSaving=true;
+    try{
+        toast('Saving your payment plan…');
+        var call=window._pRpc?window._pRpc('set_my_payment_plan',{p_enrollment_ids:null,p_installments:rows},cid):null;
+        if(!call) throw new Error('Not available right now');
+        var res=await call;
+        var r=res&&res.data;
+        if(!r||!r.success){
+            var msgs={
+                self_serve_not_enabled:'This camp hasn\'t turned on self-serve payment plans.',
+                plan_already_exists:'A payment plan already exists for your family — contact the camp to change it.',
+                nothing_owed:'Nothing is currently owed.',
+                total_mismatch:'Your balance changed since this loaded — please try again.',
+                no_family_on_file:'We couldn\'t find your family record — contact the camp office.'
+            };
+            throw new Error((r&&msgs[r.error])||(r&&r.error)||'Could not save plan');
+        }
+        toast('Payment plan saved!');
+        loadPayments();
+    }catch(err){ console.error('[Parent] plan save error:',err); toast('Could not save plan: '+(err&&err.message||'error')); }
+    finally{ _lkPlanSaving=false; }
+}
+(function _wirePlanOverlay(){
+    function wire(){
+        var ov=document.getElementById('lkPlanOverlay');
+        if(ov)ov.addEventListener('click',function(e){ if(e.target===ov) lkPlanClose(); });
+        document.addEventListener('keydown',function(e){ if(e.key==='Escape'&&ov&&ov.classList.contains('open')) lkPlanClose(); });
+    }
+    if(document.readyState==='loading') document.addEventListener('DOMContentLoaded',wire); else wire();
+})();
 function _renderPayHistory(pt,history){
     if(!pt) return;
     history.sort(function(a,b){return String(b.date||'').localeCompare(String(a.date||''));});
@@ -1266,6 +1436,31 @@ function _renderCamperSwitch(containerId, onSelect, activeId, skipInitialFire){
         // tap should count as "switched." Such pages read the active chip
         // themselves for the initial render instead.
         if (isActive && !skipInitialFire) onSelect(c, chip);
+    });
+}
+
+// Same chip-row pattern as _renderCamperSwitch above, generalized for
+// camps instead of children — a family with kids at more than one camp
+// needed a way to flip between camps on Payments the same way they already
+// flip between kids on Canteen. Takes an explicit list ({id,name,owed}) since
+// there's no global `camps` array the way there's a global `children`.
+function _renderCampSwitch(containerId, camps, onSelect, activeId){
+    var el = document.getElementById(containerId); if(!el) return;
+    el.classList.add('lk-camper-switch');
+    el.innerHTML = '';
+    camps.forEach(function(c,i){
+        var isActive = activeId ? (c.id === activeId) : (i === 0);
+        var chip = document.createElement('button');
+        chip.type = 'button';
+        chip.className = 'lk-camper-chip lk-camp-chip' + (isActive ? ' active' : '');
+        chip.dataset.campId = c.id;
+        chip.innerHTML = '<span class="lk-camper-chip-name">'+_escHtml(c.name)+'</span>'+(c.owed?'<span class="lk-camp-chip-dot" aria-label="Balance due"></span>':'');
+        chip.onclick = function(){
+            el.querySelectorAll('.lk-camper-chip').forEach(function(b){ b.classList.remove('active'); });
+            chip.classList.add('active');
+            onSelect(c, chip);
+        };
+        el.appendChild(chip);
     });
 }
 
@@ -1876,6 +2071,11 @@ function init(){
         else{ct.innerHTML='';var ca=document.getElementById('canteenAmt');if(ca)ca.textContent='$0.00';var tl=document.getElementById('txList');if(tl)tl.innerHTML='<div class="lk-empty" style="padding:24px 0;"><h3>No canteen accounts yet</h3></div>';}
     }
 
+    // Payments — pre-fetch once at boot (not just when the page is opened)
+    // so the Home tile's balance subtitle isn't stuck on its placeholder
+    // text until the parent visits Payments directly.
+    if(typeof loadPayments==='function') setTimeout(loadPayments,300);
+
     // Schedule date label
     var today=new Date(schedBaseDateMs+schedDateOffset*86400000);
     var sl2=document.getElementById('schedDateLabel');if(sl2)sl2.textContent=schedDays[today.getDay()]+', '+schedMonths[today.getMonth()]+' '+today.getDate();
@@ -2037,6 +2237,21 @@ function handleFormReturn(rowId,camperName,formName,input,formId){
     };
     reader.readAsDataURL(file);
     input.value='';
+}
+
+// "Scan" alternative to the file picker above — photograph one or more
+// pages, pdf-lib turns them into a real PDF client-side, and the result
+// feeds into the exact same handleFormReturn() path as a normal upload
+// (a plain {files:[file]} object works fine — handleFormReturn only ever
+// reads input.files[0] and does a harmless input.value='' at the end).
+function scanFormReturn(rowId,camperName,formName,formId){
+    if (!window.CampistryScanToPdf) { toast('Scanning isn’t available right now — refresh and try again'); return; }
+    window.CampistryScanToPdf.open({
+        title: 'Scan ' + formName,
+        onDone: function(file){
+            handleFormReturn(rowId, camperName, formName, { files: [file], value: '' }, formId);
+        }
+    });
 }
 
 function switchHealth(id){
@@ -3845,6 +4060,9 @@ window.addEventListener('storage', function(e) {
 <script>
 if (window.pdfjsLib) { window.pdfjsLib.GlobalWorkerOptions.workerSrc = 'pdfjs-dist@3.11.174.worker.min.js?v=20260903-04'; }
 </script>
+<!-- Scan Document: photograph a physical page and turn it into a real PDF
+     client-side (Print & Return "Scan" button, camper Documents "Scan"). -->
+<script src="campistry_scan_to_pdf.js?v=20260903-05"></script>
 <script>
 // =============================================================================
 // Parent Portal — Auth layer
@@ -4525,6 +4743,7 @@ if (window.pdfjsLib) { window.pdfjsLib.GlobalWorkerOptions.workerSrc = 'pdfjs-di
         var dlSvg='<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>';
         var ulSvg='<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg>';
         var checkSvg='<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="20 6 9 17 4 12"/></svg>';
+        var camSvg='<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M23 19a2 2 0 0 1-2 2H3a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h4l2-3h6l2 3h4a2 2 0 0 1 2 2z"/><circle cx="12" cy="13" r="4"/></svg>';
         var emptyEl = '<div style="font-size:.8rem;color:var(--text-muted);padding:8px 0;">No forms assigned yet.</div>';
 
         // Get submissions for this parent to show submitted state —
@@ -4582,6 +4801,7 @@ if (window.pdfjsLib) { window.pdfjsLib.GlobalWorkerOptions.workerSrc = 'pdfjs-di
                         prh+='<div style="display:flex;gap:6px;">';
                         if(f.downloadUrl)prh+='<a class="btn btn-secondary btn-sm" href="'+_escHtml(f.downloadUrl)+'" target="_blank" download>'+dlSvg+' Download</a>';
                         prh+='<label class="btn '+(submitted?'btn-secondary':'btn-primary')+' btn-sm" style="cursor:pointer;">'+ulSvg+' '+(submitted?'Re-upload':'Upload')+'<input type="file" accept=".pdf,.jpg,.jpeg,.png" style="display:none;" onchange="handleFormReturn(\''+_escHtml(cid)+'\',\''+_escHtml(c.name)+'\',\''+_escHtml(f.name)+'\',this,\''+_escHtml(f.id||'')+'\')"></label>';
+                        prh+='<button type="button" class="btn btn-secondary btn-sm" onclick="scanFormReturn(\''+_escHtml(cid)+'\',\''+_escHtml(c.name)+'\',\''+_escHtml(f.name)+'\',\''+_escHtml(f.id||'')+'\')">'+camSvg+' Scan</button>';
                         prh+='</div></div>';
                     });
                 });
@@ -5412,6 +5632,36 @@ if (window.pdfjsLib) { window.pdfjsLib.GlobalWorkerOptions.workerSrc = 'pdfjs-di
         <div class="lk-confirm-foot">
             <button class="btn btn-ghost" type="button" onclick="lkPayClose()">Cancel</button>
             <button class="btn btn-primary" type="button" onclick="_lkPayConfirm()">Continue to payment</button>
+        </div>
+    </div>
+</div>
+
+<!-- Self-serve payment plan builder — only offered when the camp has turned
+     on allowParentPaymentPlans (get_my_balance) and no plan exists yet. -->
+<div class="lk-confirm-overlay" id="lkPlanOverlay">
+    <div class="lk-confirm-card" style="max-width:420px;">
+        <h3>Build your payment plan</h3>
+        <p id="lkPlanSub">Balance due: $0.00</p>
+        <div class="lk-field" style="text-align:left;margin-bottom:12px;">
+            <label style="font-size:.78rem;font-weight:600;color:var(--slate-600);display:block;margin-bottom:6px;">How often</label>
+            <select id="lkPlanCadence" class="lk-input" onchange="_lkPlanRefreshPreview()">
+                <option value="monthly" selected>Monthly</option>
+                <option value="biweekly">Every 2 weeks</option>
+                <option value="weekly">Weekly</option>
+            </select>
+        </div>
+        <div class="lk-field" style="text-align:left;margin-bottom:12px;">
+            <label style="font-size:.78rem;font-weight:600;color:var(--slate-600);display:block;margin-bottom:6px;">Number of payments</label>
+            <input type="number" id="lkPlanCount" class="lk-input" value="3" min="1" max="24" oninput="_lkPlanRefreshPreview()">
+        </div>
+        <div class="lk-field" style="text-align:left;margin-bottom:14px;">
+            <label style="font-size:.78rem;font-weight:600;color:var(--slate-600);display:block;margin-bottom:6px;">First payment date</label>
+            <input type="date" id="lkPlanStart" class="lk-input" onchange="_lkPlanRefreshPreview()">
+        </div>
+        <div id="lkPlanPreview" style="text-align:left;font-size:.85rem;margin-bottom:18px;max-height:180px;overflow-y:auto;"></div>
+        <div class="lk-confirm-foot">
+            <button class="btn btn-ghost" type="button" onclick="lkPlanClose()">Cancel</button>
+            <button class="btn btn-primary" type="button" onclick="_lkPlanSave()">Save plan</button>
         </div>
     </div>
 </div>

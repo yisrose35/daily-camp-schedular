@@ -80,6 +80,9 @@ window.GoGoogleOptimizer = (function () {
     // isConfigured — unchanged from v4
     // -------------------------------------------------------------------------
     function isConfigured() {
+        // Cost guard: Google Route Optimization is PAID. Never report configured
+        // unless paid providers are explicitly opted in.
+        if (window.CampistryGoSandbox && !window.CampistryGoSandbox.allowPaid()) return false;
         const s = window._GoSetup?.();
         return !!(s?.googleMapsKey && s?.googleProjectId);
     }
@@ -142,6 +145,12 @@ window.GoGoogleOptimizer = (function () {
     //           totalDuration, _roadPts, _tspLegTimes, _source, ...}]
     // =========================================================================
     async function optimizeTours(options) {
+        // Cost guard: PAID (GMPRO, per-request). Abort to the free/in-house
+        // fallback unless paid providers are explicitly opted in.
+        if (window.CampistryGoSandbox && !window.CampistryGoSandbox.allowPaid()) {
+            console.warn('[GoGoogle] Skipped — paid providers are blocked (cost guard). Using in-house routing.');
+            return null;
+        }
         const {
             stops, vehicles, campLat, campLng,
             isArrival, serviceTime, departureTime,

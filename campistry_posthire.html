@@ -116,7 +116,7 @@ body{font-family:var(--font);background:var(--s50);color:var(--s800);-webkit-fon
 <script src="supabase-js@2.js?v=20260903-03" onerror="console.log('[PostHire] Supabase client not loaded — local only')"></script>
 <script src="supabase_client.js?v=20260903-03" onerror="console.log('[PostHire] Supabase config not loaded — local only')"></script>
 <script src="local_cache_idb.js?v=20260903-03" onerror="console.log('[PostHire] LocalCacheIDB not loaded — falling back to localStorage')"></script>
-<script src="integration_hooks.js?v=20260903-03" onerror="console.log('[PostHire] Integration hooks not loaded — local only')"></script>
+<script src="integration_hooks.js?v=20260904-03" onerror="console.log('[PostHire] Integration hooks not loaded — local only')"></script>
 
 <script>
 (function(){
@@ -216,6 +216,50 @@ function esc(s){
         .replace(/'/g,'&#39;');
 }
 function v(id){return(document.getElementById(id)?.value||'').trim()}
+// Strict allowlist sanitizer for a camp-authored "Text Block" custom-section
+// field (bold/list/link only). Runs a detached <template>'s content through
+// a tag/attribute walk rather than a regex — already sanitized once when
+// the office saved it, sanitized AGAIN here since this is a public,
+// unauthenticated page.
+var RICH_ALLOWED_TAGS={B:1,STRONG:1,I:1,EM:1,UL:1,OL:1,LI:1,BR:1,P:1,A:1,DIV:1};
+function sanitizeRichHtml(html){
+    if(!html)return'';
+    var tpl=document.createElement('template');
+    tpl.innerHTML=String(html);
+    (function walk(node){
+        var child=node.firstChild;
+        while(child){
+            var next=child.nextSibling;
+            if(child.nodeType===1){
+                var tag=child.tagName;
+                if(!RICH_ALLOWED_TAGS[tag]){
+                    while(child.firstChild)node.insertBefore(child.firstChild,child);
+                    node.removeChild(child);
+                    child=next;continue;
+                }
+                Array.prototype.slice.call(child.attributes).forEach(function(a){
+                    if(tag==='A'&&a.name==='href'){
+                        if(!/^(https?:|mailto:)/i.test(a.value))child.removeAttribute('href');
+                    }else{child.removeAttribute(a.name);}
+                });
+                if(tag==='A'){
+                    if(!child.getAttribute('href')){
+                        while(child.firstChild)node.insertBefore(child.firstChild,child);
+                        node.removeChild(child);
+                        child=next;continue;
+                    }
+                    child.setAttribute('target','_blank');
+                    child.setAttribute('rel','noopener noreferrer');
+                }
+                walk(child);
+            }else if(child.nodeType!==3){
+                node.removeChild(child);
+            }
+            child=next;
+        }
+    })(tpl.content);
+    return tpl.innerHTML;
+}
 
 var _baseCampNm='';
 var SEC_MAP={logistics:'logisticsCard',emergency:'emergencyCard',consent:'consentCard'};
@@ -310,6 +354,10 @@ function applyFormConfig(fc){
             if(!sec||!sec.label)return;
             secsHtml+='<div class="cd"><div class="ct"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="10"/><path d="M9.09 9a3 3 0 015.83 1c0 2-3 3-3 3"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg>'+esc(sec.label)+'</div>';
             (sec.fields||[]).forEach(function(f,fi){
+                if(f.type==='richtext'){
+                    secsHtml+='<div class="fg" style="margin-bottom:10px"><div style="font-size:.9rem;line-height:1.6;color:#334155">'+sanitizeRichHtml(f.html||'')+'</div></div>';
+                    return;
+                }
                 secsHtml+='<div class="fg">';
                 secsHtml+='<label class="fl">'+esc(f.label)+(f.required?'<span class="rq">*</span>':'')+'</label>';
                 if(f.type==='text')secsHtml+='<input class="fi secInput" data-sec="'+si+'" data-f="'+fi+'">';

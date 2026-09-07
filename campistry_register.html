@@ -250,8 +250,8 @@ body{font-family:var(--font);background:var(--s50);color:var(--s800);-webkit-fon
 <script src="supabase-js@2.js?v=20260903-03" onerror="console.log('[Register] Supabase client not loaded — local only')"></script>
 <script src="supabase_client.js?v=20260903-03" onerror="console.log('[Register] Supabase config not loaded — local only')"></script>
 <script src="local_cache_idb.js?v=20260903-03" onerror="console.log('[Register] LocalCacheIDB not loaded — falling back to localStorage')"></script>
-<script src="integration_hooks.js?v=20260903-03" onerror="console.log('[Register] Integration hooks not loaded — local only')"></script>
-<script src="campistry_payments.js?v=20260903-03" onerror="console.log('[Register] Payment policy not loaded — showing the built-in options')"></script>
+<script src="integration_hooks.js?v=20260904-03" onerror="console.log('[Register] Integration hooks not loaded — local only')"></script>
+<script src="campistry_payments.js?v=20260904-01" onerror="console.log('[Register] Payment policy not loaded — showing the built-in options')"></script>
 <script>
 // Keep the payment options on this form in step with the camp's policy. The
 // markup above is the default (credit yes, debit no); this only has to do
@@ -430,6 +430,51 @@ function esc(s){
         .replace(/'/g,'&#39;');
 }
 function v(id){return(document.getElementById(id)?.value||'').trim()}
+// Strict allowlist sanitizer for a camp-authored "Text Block" custom-section
+// field (bold/list/link only — see Me → Customize Form → Custom Sections).
+// Runs a detached <template>'s content through a tag/attribute walk rather
+// than a regex — this content came from the office's own save, already
+// sanitized once there, but is sanitized AGAIN here since this is a public,
+// unauthenticated page and defense in depth costs nothing.
+var RICH_ALLOWED_TAGS={B:1,STRONG:1,I:1,EM:1,UL:1,OL:1,LI:1,BR:1,P:1,A:1,DIV:1};
+function sanitizeRichHtml(html){
+    if(!html)return'';
+    var tpl=document.createElement('template');
+    tpl.innerHTML=String(html);
+    (function walk(node){
+        var child=node.firstChild;
+        while(child){
+            var next=child.nextSibling;
+            if(child.nodeType===1){
+                var tag=child.tagName;
+                if(!RICH_ALLOWED_TAGS[tag]){
+                    while(child.firstChild)node.insertBefore(child.firstChild,child);
+                    node.removeChild(child);
+                    child=next;continue;
+                }
+                Array.prototype.slice.call(child.attributes).forEach(function(a){
+                    if(tag==='A'&&a.name==='href'){
+                        if(!/^(https?:|mailto:)/i.test(a.value))child.removeAttribute('href');
+                    }else{child.removeAttribute(a.name);}
+                });
+                if(tag==='A'){
+                    if(!child.getAttribute('href')){
+                        while(child.firstChild)node.insertBefore(child.firstChild,child);
+                        node.removeChild(child);
+                        child=next;continue;
+                    }
+                    child.setAttribute('target','_blank');
+                    child.setAttribute('rel','noopener noreferrer');
+                }
+                walk(child);
+            }else if(child.nodeType!==3){
+                node.removeChild(child);
+            }
+            child=next;
+        }
+    })(tpl.content);
+    return tpl.innerHTML;
+}
 function fm(n){return'$'+Number(n||0).toLocaleString()}
 window.regToggleSummer=function(){
     var on=document.getElementById('rSummerSame'),b=document.getElementById('rSummerBlock');
@@ -486,27 +531,28 @@ async function showStatus(id){
                 }
             }catch(_){}
         }
-        if(!enrollments||!enrollments[id]){
-            // Final fallback: query Supabase directly. CampistryDB resolves
-            // a campId from the URL / session; if it's not available yet
-            // the status panel surfaces the original "Not Found".
-            try{
-                var client=window.CampistryDB?.getClient?.();
-                var campId=window.CampistryDB?.getCampId?.();
-                if(client&&campId){
-                    var res=await client
-                        .from('camp_state_kv')
-                        .select('value')
-                        .eq('camp_id',campId)
-                        .eq('key','campistryMe')
-                        .maybeSingle();
-                    if(!res?.error&&res?.data?.value?.enrollments){
-                        enrollments=res.data.value.enrollments;
-                    }
+        if(enrollments&&enrollments[id]){renderStatus(enrollments[id]);return;}
+        // Final fallback: an anon-safe RPC (get_public_application_status,
+        // migration 113) — NOT a direct table query. camp_state_kv's own
+        // SELECT policy requires camp_id = get_user_camp_id(), which only
+        // resolves for an authenticated staff session; a raw
+        // .from('camp_state_kv').select(...) here as an anonymous parent
+        // caller silently returns zero rows every time regardless of
+        // whether campId is correct — that used to be this fallback and it
+        // was dead code. This RPC is what actually makes the status link
+        // work from a different device / after the local cache is gone.
+        try{
+            var client=(window.CampistryDB&&window.CampistryDB.getClient&&window.CampistryDB.getClient())||(window.supabase&&typeof window.supabase.rpc==='function'?window.supabase:null);
+            var campId=_resolvedCampId||campIdParam||(window.CampistryDB&&window.CampistryDB.getCampId&&window.CampistryDB.getCampId())||localStorage.getItem('campistry_camp_id');
+            if(client&&campId){
+                var res=await client.rpc('get_public_application_status',{p_camp_id:campId,p_app_id:id});
+                if(!res?.error&&res?.data?.success){
+                    renderStatus(res.data);
+                    return;
                 }
-            }catch(_){}
-        }
-        renderStatus(enrollments&&enrollments[id]);
+            }
+        }catch(_){}
+        renderStatus(null);
     }catch(ex){document.getElementById('statusContent').innerHTML='<h2 style="color:var(--err)">Error</h2><p>Unable to load status.</p>'}
 }
 
@@ -604,6 +650,11 @@ function applyFormConfig(fc){
     // markup mirrors the customQuestions loop above exactly, just keyed
     // data-sec/data-f instead of data-q so answers can be collected per
     // section on submit without colliding with the flat customAnswers bag.
+    // A 'richtext' field is display-only camp-authored text (bold/list/link)
+    // — no input, nothing to submit — so it's sanitized again here
+    // (defense in depth on top of the sanitizing already done when the
+    // office saved it) and rendered directly, skipping the .fg/label wrapper
+    // every other field type uses.
     var secHolderEl=document.getElementById('customSectionsHolder');
     if(secHolderEl){
         var secsHtml='';
@@ -611,6 +662,10 @@ function applyFormConfig(fc){
             if(!sec||!sec.label)return;
             secsHtml+='<div class="cd"><div class="ct"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="10"/><path d="M9.09 9a3 3 0 015.83 1c0 2-3 3-3 3"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg>'+esc(sec.label)+'</div>';
             (sec.fields||[]).forEach(function(f,fi){
+                if(f.type==='richtext'){
+                    secsHtml+='<div class="fg" style="margin-bottom:10px"><div style="font-size:.9rem;line-height:1.6;color:#334155">'+sanitizeRichHtml(f.html||'')+'</div></div>';
+                    return;
+                }
                 secsHtml+='<div class="fg">';
                 secsHtml+='<label class="fl">'+esc(f.label)+(f.required?'<span class="rq">*</span>':'')+'</label>';
                 if(f.type==='text')secsHtml+='<input class="fi secInput" data-sec="'+si+'" data-f="'+fi+'">';
@@ -1123,9 +1178,29 @@ window.submitApp=async function(){
     if(syncNote){ syncNote.textContent='✓ Received by the camp'; syncNote.style.color='var(--ok)'; }
     var names=allCampers.map(function(c){return c.first+' '+c.last});
     document.getElementById('summaryOut').innerHTML='<strong>'+names.map(esc).join(', ')+'</strong><br>Session: '+esc(selSess||'—')+'<br>Parent: '+esc(par)+' ('+esc(ph)+')<br>Applied: '+new Date().toISOString().split('T')[0]+'<br>Payment: '+esc(selPM||'Not selected')+(discount.active?'<br>Discount: '+esc(discount.label):'')+(uploads.length?'<br>Documents: '+uploads.length+' uploaded':'');
-    var statusUrl=window.location.origin+window.location.pathname+'?status='+appIds[0];
+    var statusCampId=_resolvedCampId||campIdParam;
+    var statusUrl=window.location.origin+window.location.pathname+'?status='+appIds[0]+(statusCampId?'&camp='+encodeURIComponent(statusCampId):'');
     document.getElementById('statusLink').innerHTML='<a href="'+statusUrl+'" style="color:var(--me);word-break:break-all">'+esc(statusUrl)+'</a>';
     window.scrollTo(0,0);
+
+    // Fire-and-forget: flag the office when this parent's stated payment
+    // preference actually needs a human follow-up (a payment_plan request
+    // while self-serve is off, or an offline zelle/check payment to watch
+    // for) — never blocks the success screen already shown above.
+    // flag_application_payment_followup (migration 115) re-reads the
+    // submitted payment method AND the camp's own allowParentPaymentPlans
+    // setting server-side, so it's a no-op (not an error) for credit_card/
+    // ach or when self-serve payment plans are on.
+    try{
+        var _followupClient=(window.CampistryDB&&window.CampistryDB.getClient&&window.CampistryDB.getClient())||(window.supabase&&typeof window.supabase.rpc==='function'?window.supabase:null);
+        if(_followupClient&&statusCampId){
+            appIds.forEach(function(aid){
+                _followupClient.rpc('flag_application_payment_followup',{p_camp_id:statusCampId,p_app_id:aid}).then(function(res){
+                    if(res&&res.error)console.warn('[Register] flag_application_payment_followup failed (has migration 115 been pasted into the SQL Editor?):',res.error.message);
+                }).catch(function(err){console.warn('[Register] flag_application_payment_followup error:',err&&err.message);});
+            });
+        }
+    }catch(_){}
 };
 
 function showErr(m){var el=document.getElementById('formErr');el.textContent=m;el.style.display='block';el.scrollIntoView({behavior:'smooth',block:'center'})}
@@ -1164,7 +1239,15 @@ async function _flushEnrollmentsToCloud(campistryMe){
 }
 
 _loadFromLocalCache();
-if(campIdParam)_loadFromCloud(campIdParam);
+// campIdParam is the normal path (every real link embeds ?camp=), but a
+// bookmarked/typed URL or the builder's preview tab (?preview=1, no camp
+// param) has none — fall back to whatever campId this browser's own
+// session/local cache already knows, so the authoritative cloud fetch
+// (real sessions/pricing) still fires instead of silently staying on
+// whatever _loadFromLocalCache found (which can be stale/outdated, e.g.
+// from an old test setup done before real sessions were configured).
+var _bootCampId=campIdParam||(window.CampistryDB&&window.CampistryDB.getCampId&&window.CampistryDB.getCampId())||localStorage.getItem('campistry_camp_id');
+if(_bootCampId)_loadFromCloud(_bootCampId);
 })();
 </script>
 </body>

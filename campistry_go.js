@@ -355,6 +355,8 @@ let _toastTimer = null;
      *  Mirrors the major-roads query in fetchIntersections but doesn't
      *  also fetch the larger intersection set. Sets _majorRoadSegments. */
     async function _prefetchMajorRoads(campers) {
+        // Sandbox: no Overpass/OSM network call — skip major-road prefetch.
+        if (window.CampistryGoSandbox && CampistryGoSandbox.isSandbox()) return;
         const lats = campers.map(c => c.lat).filter(Boolean).sort((a, b) => a - b);
         const lngs = campers.map(c => c.lng).filter(Boolean).sort((a, b) => a - b);
         if (lats.length < 4 || lngs.length < 4) return;
@@ -1333,13 +1335,38 @@ let _toastTimer = null;
         return warnings;
     }
 
+    // Longest time any ONE child sits on each bus. This is the number a school is
+    // judged on, and it was previously only visible in the browser console — so a
+    // 70-minute route looked exactly like a 20-minute one on screen.
+    const RIDE_WARN_MIN = 60;
+    function getRideWarnings() {
+        if (!_generatedRoutes) return [];
+        const out = [];
+        _generatedRoutes.forEach(sr => {
+            (sr.routes || []).forEach(r => {
+                const rides = (r.stops || []).map(s => s._rideTimeMin).filter(Number.isFinite);
+                if (!rides.length) return;
+                const worst = Math.max(...rides);
+                if (worst <= RIDE_WARN_MIN) return;
+                const kids = (r.stops || []).reduce((a, s) =>
+                    a + ((s.campers || []).length && (s._rideTimeMin > RIDE_WARN_MIN) ? s.campers.length : 0), 0);
+                out.push({ busName: r.busName, busColor: r.busColor,
+                           shift: (sr.shift && sr.shift.label) || 'Shift', worst, kids });
+            });
+        });
+        return out.sort((a, b) => b.worst - a.worst);
+    }
+
     function renderCapacityWarnings() {
         const el = document.getElementById('capacityWarnings');
         if (!el) return;
         const warnings = getCapacityWarnings();
-        if (!warnings.length) { el.style.display = 'none'; return; }
+        const rides = getRideWarnings();
+        if (!warnings.length && !rides.length) { el.style.display = 'none'; return; }
         el.style.display = '';
-        el.innerHTML = warnings.map(w => '<div style="display:flex;align-items:center;gap:.5rem;padding:.5rem .75rem;background:var(--red-50);border:1px solid var(--red-100);border-radius:var(--radius-sm);margin-bottom:.375rem;font-size:.8125rem;"><span style="width:10px;height:10px;border-radius:50%;background:' + esc(w.busColor) + ';flex-shrink:0;"></span><strong style="color:var(--red-600);">⚠ ' + esc(w.busName) + '</strong> (' + esc(w.shift) + ') — <span>' + w.actual + ' campers, only ' + w.max + ' seats (' + w.over + ' over)</span></div>').join('');
+        const capHtml = warnings.map(w => '<div style="display:flex;align-items:center;gap:.5rem;padding:.5rem .75rem;background:var(--red-50);border:1px solid var(--red-100);border-radius:var(--radius-sm);margin-bottom:.375rem;font-size:.8125rem;"><span style="width:10px;height:10px;border-radius:50%;background:' + esc(w.busColor) + ';flex-shrink:0;"></span><strong style="color:var(--red-600);">⚠ ' + esc(w.busName) + '</strong> (' + esc(w.shift) + ') — <span>' + w.actual + ' campers, only ' + w.max + ' seats (' + w.over + ' over)</span></div>').join('');
+        const rideHtml = rides.map(w => '<div style="display:flex;align-items:center;gap:.5rem;padding:.5rem .75rem;background:var(--amber-50,#fffbeb);border:1px solid var(--amber-200,#fde68a);border-radius:var(--radius-sm);margin-bottom:.375rem;font-size:.8125rem;"><span style="width:10px;height:10px;border-radius:50%;background:' + esc(w.busColor) + ';flex-shrink:0;"></span><strong style="color:var(--amber-700,#b45309);">⏱ ' + esc(w.busName) + '</strong> (' + esc(w.shift) + ') — <span>longest ride ' + w.worst + ' min' + (w.kids ? ', ' + w.kids + ' child' + (w.kids === 1 ? '' : 'ren') + ' over ' + RIDE_WARN_MIN + ' min' : '') + '. A district far from camp needs either fewer children on the bus or another bus on that run.</span></div>').join('');
+        el.innerHTML = capHtml + rideHtml;
     }
 
     // =========================================================================
@@ -2505,6 +2532,10 @@ let _toastTimer = null;
 
     // ── Google Address Validation API (primary — USPS-certified + geocoded) ──
     async function googleAddressValidationScored(street, city, state, zip) {
+        // Cost guard: Google Address Validation is PAID (per address). Never call
+        // it unless paid providers are explicitly opted in — a stale saved key
+        // must not be enough to start billing.
+        if (window.CampistryGoSandbox && !window.CampistryGoSandbox.allowPaid()) return null;
         const key = D.setup.googleMapsKey;
         if (!key) return null;
         try {
@@ -2626,6 +2657,12 @@ let _toastTimer = null;
     async function geocodeOne(name) {
         const a = D.addresses[name];
         if (!a?.street) return false;
+
+        // Sandbox: deterministic mock coordinates, zero network calls.
+        if (window.CampistryGoSandbox && CampistryGoSandbox.isSandbox()) {
+            applyBestGeocode(a, CampistryGoSandbox.mockGeocode(a.street, a.city, a.state, a.zip), name);
+            return true;
+        }
 
         // Run providers in priority order, stop early if high-confidence
         const results = [];
@@ -2865,6 +2902,11 @@ let _toastTimer = null;
         // For single address string (e.g. camp address), try structured Census → freeform Census → ORS
         const cleanAddr = (addr || '').replace(/\s*[,#]\s*(apt|suite|ste|unit|fl|floor|rm|room)\.?\s*\S*/gi, '').replace(/\s+/g, ' ').trim();
         if (!cleanAddr) return null;
+        // Sandbox: deterministic mock camp/base coordinates, zero network calls.
+        if (window.CampistryGoSandbox && CampistryGoSandbox.isSandbox()) {
+            const mk = CampistryGoSandbox.mockCampGeocode(cleanAddr);
+            return { lat: mk.lat, lng: mk.lng };
+        }
         // 0. Try structured Census first (much more accurate for "800 Rockaway Ave, Lakewood, NJ 08701")
         try {
             var parts = cleanAddr.split(/\s*,\s*/);
@@ -3449,6 +3491,327 @@ let _toastTimer = null;
     let _slicedZones = null; // result of sliceRegionsIntoZones()
     let _zonePreviewLayers = []; // Leaflet layers for zone preview
 
+// ─────────────────────────────────────────────────────────────────────────────
+// _localTspOrder — in-house single-vehicle stop ordering.
+//
+// The per-bus TSP used to be Google-only, so with paid providers blocked no
+// ordering ran at all and stops stayed in neighbourhood-spine order. On the
+// camp's real data that drove 34.5mi on a bus where plain nearest-neighbour
+// was 20.4mi, pushing one route to 150 minutes.
+//
+// Multi-start nearest-neighbour + 2-opt on the open path camp -> stops, then
+// oriented the way the run actually goes: dismissal works outward from camp,
+// arrival works inward toward it.
+// ─────────────────────────────────────────────────────────────────────────────
+function _localTspOrder(stops, campLat, campLng, isArrival) {
+    const n = stops.length;
+    if (n < 3) return stops.slice();
+    const D = (a, b) => drivingDist(a.lat, a.lng, b.lat, b.lng);
+    const fromCamp = s => drivingDist(campLat, campLng, s.lat, s.lng);
+
+    function tourLen(t) {
+        let c = fromCamp(t[0]);
+        for (let i = 0; i < t.length - 1; i++) c += D(t[i], t[i + 1]);
+        return c;
+    }
+
+    // What a school actually cares about is CHILDREN-minutes, not miles. A pure
+    // shortest-distance tour is happy to drop a 9-child family last, so nine
+    // children ride the whole route; visiting them a little earlier costs a few
+    // tenths of a mile and saves each of them many minutes. Score a tour by
+    // passenger-weighted riding time (minimum-latency), with a small distance
+    // term so we don't buy a minute of riding with miles of driving.
+    const stopMin = (D.setup && D.setup.avgStopTime) || 1;
+    // drivingDist returns SECONDS (see its docstring), not miles. Dividing by
+    // speed and multiplying by 60 made the driving term ~144x too large next to
+    // the per-stop minutes added below, which wrecked the children-minutes
+    // balance and let a child living 0.7mi from camp be dropped last after 61
+    // minutes on the bus.
+    const legMin = (a, b) => D(a, b) / 60;
+    const campMin = s => fromCamp(s) / 60;
+    function riderCost(t) {
+        let time = 0, total = 0, headcount = 0;
+        const arr = new Array(t.length);
+        for (let i = 0; i < t.length; i++) {
+            time += (i === 0 ? campMin(t[0]) : legMin(t[i - 1], t[i])) + stopMin;
+            arr[i] = time;
+        }
+        let worst = 0, unfair = 0;
+        for (let i = 0; i < t.length; i++) {
+            const n = (t[i].campers || []).length || 1;
+            headcount += n;
+            // dismissal: riding until dropped. arrival: riding from pickup to camp.
+            const ride = isArrival ? (time - arr[i]) : arr[i];
+            total += n * ride;
+            if (ride > worst) worst = ride;
+            // Fairness against how far the child actually lives from camp. The
+            // plain total is happy to strand someone 0.7mi away until the very
+            // end (dropping them earlier detours everyone else), which is the one
+            // outcome a parent will never accept. Charge the time beyond a
+            // generous allowance over their own direct trip.
+            const floor = campMin(t[i]);
+            const allowance = floor * 2 + 25;
+            if (ride > allowance) unfair += n * (ride - allowance);
+        }
+        // A max-ride penalty was tried here and measured as pure loss on the
+        // camp's real data: identical worst ride and identical over-60/over-75
+        // counts, but ~300 more child-minutes overall. The worst route's ceiling
+        // is set by its district being far from camp, not by stop order, so it is
+        // fixed by handing stops to another bus (see _relieveLongRoutes), not by
+        // reordering. Keep the honest objective: total riding time, with a gentle
+        // tie-break toward shorter driving.
+        void worst;
+        // Unfairness is weighted heavily: a child riding far longer than their own
+        // distance warrants is a complaint, where a few extra fleet-minutes is not.
+        return total + unfair * 2 + tourLen(t) * Math.max(1, headcount / 40);
+    }
+    function nearestFrom(startIdx) {
+        const rem = stops.slice();
+        const out = [rem.splice(startIdx, 1)[0]];
+        while (rem.length) {
+            const last = out[out.length - 1];
+            let bi = 0, bd = Infinity;
+            for (let i = 0; i < rem.length; i++) {
+                const d = D(last, rem[i]);
+                if (d < bd) { bd = d; bi = i; }
+            }
+            out.push(rem.splice(bi, 1)[0]);
+        }
+        return out;
+    }
+    // Reversing a segment changes every downstream arrival time, so the rider
+    // objective has no local delta — evaluate candidates in full. Routes are a
+    // couple of dozen stops at most, so this stays cheap.
+    function twoOpt(tour) {
+        let t = tour.slice();
+        let best = riderCost(t);
+        let improved = true, guard = 0;
+        while (improved && guard++ < 30) {
+            improved = false;
+            for (let i = 0; i < t.length - 1 && !improved; i++) {
+                for (let j = i + 1; j < t.length && !improved; j++) {
+                    const cand = t.slice(0, i).concat(t.slice(i, j + 1).reverse(), t.slice(j + 1));
+                    const c = riderCost(cand);
+                    if (c < best - 1e-9) { t = cand; best = c; improved = true; }
+                }
+            }
+        }
+        return t;
+    }
+
+    // Or-opt: lift a run of 1-3 consecutive stops and reinsert it elsewhere.
+    // 2-opt alone can't fix a single stop stranded in the wrong part of the
+    // sequence, which is the common case on a long dense route.
+    function orOpt(tour) {
+        const t = tour.slice();
+        let improved = true, guard = 0;
+        while (improved && guard++ < 30) {
+            improved = false;
+            for (let len = 1; len <= 3 && !improved; len++) {
+                for (let i = 0; i + len <= t.length && !improved; i++) {
+                    const seg = t.slice(i, i + len);
+                    const rest = t.slice(0, i).concat(t.slice(i + len));
+                    if (rest.length < 2) continue;
+                    const baseLen = riderCost(t);
+                    let bestPos = -1, bestLen = baseLen - 1e-9, bestRev = false;
+                    for (let j = 0; j <= rest.length; j++) {
+                        for (const rev of [false, true]) {
+                            const piece = rev ? seg.slice().reverse() : seg;
+                            const cand = rest.slice(0, j).concat(piece, rest.slice(j));
+                            const L = riderCost(cand);
+                            if (L < bestLen) { bestLen = L; bestPos = j; bestRev = rev; }
+                        }
+                    }
+                    if (bestPos >= 0) {
+                        const piece = bestRev ? seg.slice().reverse() : seg;
+                        const next = rest.slice(0, bestPos).concat(piece, rest.slice(bestPos));
+                        t.length = 0; Array.prototype.push.apply(t, next);
+                        improved = true;
+                    }
+                }
+            }
+        }
+        return t;
+    }
+
+    // Try a bounded set of starts (the stop nearest camp, plus a spread of
+    // others) so one bad seed can't decide the route.
+    const seeds = new Set([0]);
+    let nearIdx = 0, nearD = Infinity;
+    stops.forEach((s, i) => { const d = fromCamp(s); if (d < nearD) { nearD = d; nearIdx = i; } });
+    seeds.add(nearIdx);
+    const step = Math.max(1, Math.floor(n / 6));
+    for (let i = 0; i < n; i += step) seeds.add(i);
+
+    let best = null, bestLen = Infinity;
+    for (const s of seeds) {
+        // alternate 2-opt and or-opt until neither helps
+        let t = nearestFrom(s), prev = Infinity;
+        for (let round = 0; round < 4; round++) {
+            t = orOpt(twoOpt(t));
+            const L = riderCost(t);
+            if (L >= prev - 1e-6) break;
+            prev = L;
+        }
+        const len = riderCost(t);
+        if (len < bestLen) { bestLen = len; best = t; }
+    }
+    if (!best) return stops.slice();
+
+    // No orientation flip here: riderCost already knows which end to finish at
+    // (dismissal drops big groups early, arrival collects them late). Forcing a
+    // near/far flip afterwards would undo exactly what it optimized for.
+    return best;
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Ride-time relief. Compact districts alone don't guarantee a short ride: a
+// distant township can be perfectly compact and still leave its last children
+// on the bus far longer than the rest of the camp. Schools judge routes by the
+// WORST ride, so hand late-drop stops from the longest route to a nearby bus
+// that still has seats, then re-order both.
+// ─────────────────────────────────────────────────────────────────────────────
+function _routeLastDropMin(r, campLat, campLng, avgSpeedMph, avgStopMin) {
+    let t = 0, la = campLat, lo = campLng;
+    for (const s of (r.stops || [])) {
+        if (!Number.isFinite(s.lat) || !Number.isFinite(s.lng)) continue;
+        // drivingDist is SECONDS; the old form inflated it ~144x and made every
+        // threshold in the relief pass meaningless.
+        t += drivingDist(la, lo, s.lat, s.lng) / 60 + avgStopMin;
+        la = s.lat; lo = s.lng;
+    }
+    return t;
+}
+
+function _relieveLongRoutes(routes, campLat, campLng, isArrival, avgSpeedMph, avgStopMin) {
+    // Relief is cheap and each move must lower the fleet-worst ride, so allow a
+    // longer run: capping at 10 left two buses sharing a distant township still
+    // sitting at ~70min each. Require a move to buy at least 2 minutes so we do
+    // not churn districts for rounding.
+    const MAX_MOVES = 24;
+    const MIN_GAIN_MIN = 2;
+    const MAX_HANDOFF_MI = 6.0;
+    // Count from the stops rather than trusting route.camperCount: this pass runs
+    // before the ETA/audit stage recomputes it, and a stale or missing count made
+    // the capacity check pass when it should not have — one bus came out at 49
+    // children on a 48-seat bus.
+    const headcount = (r) => (r.stops || []).reduce((a, s) => a + ((s.campers || []).length), 0);
+    const est = r => _routeLastDropMin(r, campLat, campLng, avgSpeedMph, avgStopMin);
+    let moves = 0;
+
+    for (let pass = 0; pass < MAX_MOVES; pass++) {
+        const live = routes.filter(r => r.stops && r.stops.length > 2);
+        if (live.length < 2) break;
+        const times = live.map(est).sort((a, b) => a - b);
+        const median = times[Math.floor(times.length / 2)];
+        // Adaptive: only relieve a route that is a clear outlier against the fleet.
+        const target = Math.max(40, median * 1.35);
+        const scored = live.map(r => ({ r, t: est(r) })).sort((a, b) => b.t - a.t);
+        if (scored[0].t <= target) break;
+
+        const src = scored[0].r;
+        const before = scored[0].t;
+
+        // Hand over a BATCH of late drops, not a single stop. The worst ride is
+        // essentially the route's length, so shifting one family off a 17-stop
+        // run barely dents it and the pass stalls having "improved" nothing. A
+        // nearby bus with real spare capacity (the camp has one with 23 free
+        // seats) can take a whole tail at once, which is what actually splits a
+        // distant township's work. Longest batch first, so we prefer the biggest
+        // relief that still fits.
+        let bestMove = null;
+        const maxBatch = Math.max(1, Math.min(8, src.stops.length - 3));
+        for (let len = maxBatch; len >= 1 && !bestMove; len--) {
+            const startIdx = src.stops.length - len;
+            const batch = src.stops.slice(startIdx);
+            const n = batch.reduce((a, s) => a + ((s.campers || []).length), 0);
+            if (!n || batch.some(s => !Number.isFinite(s.lat))) continue;
+
+            for (const dst of routes) {
+                if (dst === src || !dst.stops) continue;
+                const cap = dst._cap;
+                if (!Number.isFinite(cap)) continue;
+                if (cap - headcount(dst) < n) continue;
+                // every stop in the batch must be within reach of the recipient
+                let worstD = 0;
+                for (const s of batch) {
+                    let d = Infinity;
+                    for (const t of dst.stops) {
+                        if (Number.isFinite(t.lat)) d = Math.min(d, drivingDist(s.lat, s.lng, t.lat, t.lng));
+                    }
+                    worstD = Math.max(worstD, d);
+                }
+                if (worstD > MAX_HANDOFF_MI) continue;
+
+                const trySrc = src.stops.slice(0, startIdx);
+                if (trySrc.length < 2) continue;
+                const tryDst = dst.stops.concat(batch);
+                const sOrd = _localTspOrder(trySrc, campLat, campLng, isArrival);
+                const dOrd = _localTspOrder(tryDst, campLat, campLng, isArrival);
+                const sAfter = _routeLastDropMin({ stops: sOrd }, campLat, campLng, avgSpeedMph, avgStopMin);
+                const dAfter = _routeLastDropMin({ stops: dOrd }, campLat, campLng, avgSpeedMph, avgStopMin);
+                const after = Math.max(sAfter, dAfter);
+                // Must genuinely lower the fleet's worst ride, and must not turn
+                // the recipient into the new worst route.
+                if (dAfter > before - 5) continue;
+                if (after < before - MIN_GAIN_MIN) {
+                    bestMove = { after, idx: startIdx, n, dst, sOrd, dOrd, batched: len };
+                    break;
+                }
+            }
+        }
+        // Fall back to the original single-stop search if no batch worked.
+        const tailCount = bestMove ? 0 : Math.min(6, Math.max(1, src.stops.length - 2));
+        for (let k = 0; k < tailCount; k++) {
+            const idx = src.stops.length - 1 - k;
+            const stop = src.stops[idx];
+            const n = (stop.campers || []).length;
+            if (!stop || !Number.isFinite(stop.lat) || !n) continue;
+
+            for (const dst of routes) {
+                if (dst === src || !dst.stops) continue;
+                const cap = dst._cap;
+                if (!Number.isFinite(cap)) continue;
+                if (cap - headcount(dst) < n) continue;
+                let d = Infinity;
+                for (const s of dst.stops) {
+                    if (Number.isFinite(s.lat)) d = Math.min(d, drivingDist(stop.lat, stop.lng, s.lat, s.lng));
+                }
+                if (d > MAX_HANDOFF_MI) continue;
+
+                // simulate
+                const trySrc = src.stops.filter((_, i) => i !== idx);
+                const tryDst = dst.stops.concat([stop]);
+                const sOrd = _localTspOrder(trySrc, campLat, campLng, isArrival);
+                const dOrd = _localTspOrder(tryDst, campLat, campLng, isArrival);
+                const sAfter = _routeLastDropMin({ stops: sOrd }, campLat, campLng, avgSpeedMph, avgStopMin);
+                const dAfter = _routeLastDropMin({ stops: dOrd }, campLat, campLng, avgSpeedMph, avgStopMin);
+                const after = Math.max(sAfter, dAfter);
+                // Don't relieve one bus by turning another into the new worst
+                // route. The recipient has to land clearly BELOW the route we
+                // are fixing — measuring against the fleet median instead was
+                // so strict that no handoff ever qualified.
+                if (dAfter > before - 5) continue;
+                if (after < before - MIN_GAIN_MIN && (!bestMove || after < bestMove.after)) {
+                    bestMove = { after, idx, n, dst, sOrd, dOrd };
+                }
+            }
+        }
+        if (!bestMove) break;
+
+        src.stops = bestMove.sOrd;
+        bestMove.dst.stops = bestMove.dOrd;
+        // Recompute rather than add and subtract, so repeated moves can't drift
+        // the counts the capacity check depends on.
+        src.camperCount = headcount(src);
+        bestMove.dst.camperCount = headcount(bestMove.dst);
+        src.stops.forEach((s, i) => s.stopNum = i + 1);
+        bestMove.dst.stops.forEach((s, i) => s.stopNum = i + 1);
+        moves++;
+    }
+    return moves;
+}
+
 async function generateRoutes() {
         if (!_secEdit('routes', 'Generating routes')) return;
     // -------------------------------------------------------------------------
@@ -3546,7 +3909,13 @@ async function generateRoutes() {
     const googleKey    = D.setup.googleMapsKey || '';
     const googleProjId = D.setup.googleProjectId || '';
     const geoapifyKey  = D.setup.geoapifyKey || '';
-    const googleAvailable = !!(googleKey && googleProjId &&
+    // Cost guard: the keys are injected centrally from Supabase secrets, so they
+    // are present even when paid providers are blocked. Without this check
+    // googleAvailable stayed TRUE, the pipeline took the Google branch, the
+    // guarded call returned null, and `if (tspResult)` silently skipped — so no
+    // stop ordering ran at all and routes kept neighbourhood-spine order.
+    const _paidAllowed = !window.CampistryGoSandbox || window.CampistryGoSandbox.allowPaid();
+    const googleAvailable = !!(_paidAllowed && googleKey && googleProjId &&
                                window.GoGoogleOptimizer?.optimizeTours);
 
     // Supabase proxy token (for Google edge-function auth)
@@ -3961,7 +4330,13 @@ async function _tryNeighborhoodPipeline({
         buses: reducedBuses,
         priorAssignments,
         siblingGroups,
-        depot: { lat: campLat, lng: campLng }
+        depot: { lat: campLat, lng: campLng },
+        // Riding-time budget for districting: a district far from camp must not
+        // also be filled to the last seat, or its final drops ride far longer
+        // than the rest of the camp.
+        rideSpeedMph: D.setup.avgSpeed || 25,
+        rideStopMin: D.setup.avgStopTime || 1,
+        maxChildRideMin: 60
     });
 
     showProgress(shiftLabel + ': generating per-zone stops...', pctBase + 40);
@@ -3974,7 +4349,10 @@ async function _tryNeighborhoodPipeline({
         assignment: nhAssignment,
         result: nhResult,
         isArrival,
-        dropoffMode
+        dropoffMode,
+        // How far a child may walk to a shared stop. Corner and optimized
+        // modes group by this; door-to-door ignores it.
+        maxWalkMi: ((D.setup && D.setup.maxWalkDistance) || 500) / 5280
     });
 
     // ── Append any unsnapped campers to their nearest bus as door drops ──
@@ -3984,14 +4362,32 @@ async function _tryNeighborhoodPipeline({
     if (leftover.length) {
         console.warn('[Go v5] ' + leftover.length +
             ' un-snapped camper(s) — appending as door-drops to nearest bus');
+        // Nearest bus WITH ROOM. This used to pick the nearest bus outright and
+        // push the camper on regardless, which is how a 48-seat bus ended up
+        // carrying 49 children — a hard failure that had nothing to do with the
+        // districting. The fleet has ~113 spare seats, so a seat always exists.
+        const _capOf = (bus) => {
+            const v = shiftVehicles.find(x => x.busId === bus.busId);
+            return v && Number.isFinite(v.capacity) ? v.capacity : Infinity;
+        };
+        const _headOf = (bus) => (bus.stops || []).reduce((a, s) => a + ((s.campers || []).length), 0);
         for (const c of leftover) {
             let bestBus = null, bestDist = Infinity;
+            let fullestFallback = null, fallbackHead = Infinity;
             for (const bus of nhPhysical) {
                 if (!bus.stops?.length) continue;
+                const head = _headOf(bus);
+                if (head < fallbackHead) { fallbackHead = head; fullestFallback = bus; }
+                if (head + 1 > _capOf(bus)) continue; // no seat
                 for (const s of bus.stops) {
                     const d = haversineMi(c.lat, c.lng, s.lat, s.lng);
                     if (d < bestDist) { bestDist = d; bestBus = bus; }
                 }
+            }
+            if (!bestBus && fullestFallback) {
+                console.warn('[Go v5] No bus with a free seat for un-snapped camper ' +
+                    c.name + ' — placing on the least-full bus');
+                bestBus = fullestFallback;
             }
             if (bestBus) {
                 bestBus.stops.push({
@@ -4116,9 +4512,39 @@ async function _tryNeighborhoodPipeline({
                 }
             } catch (e) {
                 console.warn('[Go v5] Per-bus TSP failed for ' + r.busName +
-                    ' — using NH-spine order (' + e.message + ')');
-                // Fall through with spine-order stops; still a valid route.
+                    ' — falling back to local TSP (' + e.message + ')');
+                r.stops = _localTspOrder(r.stops, campLat, campLng, isArrival);
+                r.stops.forEach((s, i) => s.stopNum = i + 1);
             }
+        }
+    } else if (routes.length) {
+        // In-house ordering. Without this the stops keep neighbourhood-spine
+        // order, which is worse than plain nearest-neighbour.
+        showProgress(shiftLabel + ': optimizing stop order per bus...', pctBase + 60);
+        let improvedBuses = 0;
+        for (const r of routes) {
+            if (r.stops.length < 3) continue;
+            r.stops = _localTspOrder(r.stops, campLat, campLng, isArrival);
+            r.stops.forEach((s, i) => s.stopNum = i + 1);
+            improvedBuses++;
+        }
+        console.log('[Go v5] Local TSP ordered stops on ' + improvedBuses + ' bus(es)');
+    }
+
+    // Even out the worst ride once stop order is settled.
+    // NOTE: avgSpeedMph / avgStopMin are locals of generateRoutes and are NOT in
+    // scope here — reading them threw a ReferenceError that took down the whole
+    // neighborhood pipeline and silently fell back to the old k-means path.
+    if (routes.length > 1) {
+        try {
+            const relieved = _relieveLongRoutes(routes, campLat, campLng, isArrival,
+                                                D.setup.avgSpeed || 25, D.setup.avgStopTime || 2);
+            if (relieved) console.log('[Go v5] Ride-time relief: moved ' + relieved +
+                ' late-drop stop(s) to a nearer bus with seats');
+        } catch (e) {
+            // Never let a polish step sink the whole pipeline — the routes are
+            // already valid at this point, relief is an improvement on top.
+            console.warn('[Go v5] Ride-time relief skipped: ' + e.message);
         }
     }
 
@@ -5425,8 +5851,16 @@ function _estimateFallbackTimeWindows(stops, vehicles, campLat, campLng,
 // our scale).
 // =============================================================================
 function _consolidateBusStops(stops) {
-    const SEG_RADIUS_MI = 0.25;
-    const ANY_RADIUS_MI = 0.10;
+    // Honour the camp's "Max Walk (ft)" setting. These were hardcoded, so the
+    // control on the Setup screen did nothing: changing it from 500ft to 1320ft
+    // produced byte-identical routes. Districts consolidate stops to a quarter-
+    // to-half-mile walk, and this camp's own historical routes were 100% corner
+    // stops at 3.14 children each, which needs a real walk allowance.
+    // People walk further ALONG their own street than across to a different one,
+    // so the same-street radius stays the wider of the two.
+    const _walkMi = ((D.setup && D.setup.maxWalkDistance) || 500) / 5280;
+    const ANY_RADIUS_MI = Math.max(0.05, _walkMi);
+    const SEG_RADIUS_MI = Math.max(0.25, _walkMi * 2.5);
     const MAX_STOP_CAP = 15;
 
     function manhDist(la1, lo1, la2, lo2) {
@@ -5693,6 +6127,7 @@ function _rebalanceBusLoads(routes, shiftVehicles) {
     const MAX_PASSES = 6;       // bounded loop — each pass moves at most one stop
     const TARGET_RATIO = 1.4;   // stop once max/min camper ratio is under this
     const MIN_GAP = 8;          // and max-min difference is under this many campers
+    const MAX_TRANSFER_MI = 3.0; // a stop may only move to a bus it's genuinely near
 
     for (let pass = 0; pass < MAX_PASSES; pass++) {
         active.forEach(r => { r.camperCount = camperCount(r); });
@@ -5725,6 +6160,17 @@ function _rebalanceBusLoads(routes, shiftVehicles) {
             const projHeavy = heaviest.camperCount - stopCount;
             const projLight = lightest.camperCount + stopCount;
             if (projLight > projHeavy) return;
+
+            // Absolute proximity guard. "Closer to light than heavy" is only a
+            // RELATIVE test: a Toms River stop can be marginally closer to a
+            // near-camp bus and still sit 10 miles from it. Moving it there
+            // evens out the head-count but blows that bus's district apart —
+            // on the camp's real data this pass was turning a packer result
+            // whose worst bus spanned 6.9mi into finished routes spanning
+            // 13.7mi with 180-degree arcs. Only accept a transfer if the stop
+            // actually belongs near the receiving bus.
+            if (!Number.isFinite(st.lat) || !Number.isFinite(st.lng)) return;
+            if (haversineMi(st.lat, st.lng, lightC.lat, lightC.lng) > MAX_TRANSFER_MI) return;
 
             const dToLight = dist2({ lat: st.lat, lng: st.lng }, lightC);
             const dToHeavy = dist2({ lat: st.lat, lng: st.lng }, heavyC);
@@ -6793,6 +7239,9 @@ function findAnchorStop(campers, intersections, walkMi = 0.2) {
     //   Q1: Major roads only (primary/secondary/trunk) — small, fast, for crossing detection
     //   Q2: All named roads but nodes-only via `out center` — for intersection finding
     async function fetchIntersections(campers) {
+        // Sandbox: no Overpass/OSM network call — degrade to approximate
+        // intersections (nearest-kid coords), same as an Overpass miss.
+        if (window.CampistryGoSandbox && CampistryGoSandbox.isSandbox()) return null;
         // Use IQR-based outlier removal to build a tight bbox
         const lats = campers.map(c => c.lat).filter(Boolean).sort((a, b) => a - b);
         const lngs = campers.map(c => c.lng).filter(Boolean).sort((a, b) => a - b);
@@ -7789,6 +8238,11 @@ function findAnchorStop(campers, intersections, walkMi = 0.2) {
     // =========================================================================
     async function testGeoapify() {
         const L = (icon, msg) => console.log(icon + ' ' + msg);
+        // Cost guard: this diagnostic fires a real billable Geoapify request.
+        if (window.CampistryGoSandbox && !window.CampistryGoSandbox.allowPaid()) {
+            L('🛑', 'Geoapify test skipped — paid providers are blocked by the cost guard. Enable paid via the guard chip (bottom-right) to run this live test.');
+            return;
+        }
         console.log('\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
         console.log('   Campistry Go — Geoapify CVRP Live Test');
         console.log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n');

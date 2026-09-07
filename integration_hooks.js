@@ -1591,8 +1591,20 @@
         
         // All other settings go through batched sync
         queueSettingChange(key, data);
-        
+
         return true;
+    };
+
+    // A one-off call to force the batched sync to run NOW instead of waiting
+    // out SYNC_DEBOUNCE_MS. For most edits the debounce is invisible and
+    // harmless, but a lone quick-edit field with no save confirmation (e.g.
+    // a single inline price input) invites a fast follow-up reload that can
+    // beat both the debounce timer and the beforeunload flush (which itself
+    // only guarantees delivery for payloads under the keepalive body cap) —
+    // callers with exactly that shape should await this after saveGlobalSettings
+    // instead of trusting the timing.
+    window.flushPendingSettingsSync = function () {
+        return executeBatchSync();
     };
 
     // Mark as the authoritative handler so other code doesn't re-patch
@@ -1915,6 +1927,20 @@
                     const ld = Object.keys(localState.divisions || {}).length;
                     const cd = Object.keys(cloudState.divisions || {}).length;
                     if (cd > ld) cloudHasMoreData = true;
+                    // Sessions & Pricing / bundles: a Dashboard page can run
+                    // its own auto-sync (half-session creation, id backfill)
+                    // against a pre-hydration local snapshot and save it
+                    // before this hydration ever completes, leaving local
+                    // with FEWER (not zero) sessions/bundles than cloud
+                    // actually has — the narrow empty-array guard further
+                    // below only catches the zero case. Catch "meaningfully
+                    // fewer" here too, same as roster/bunks/divisions above.
+                    const ls = (localState.campistryMe && localState.campistryMe.sessions) || [];
+                    const cs = (cloudState.campistryMe && cloudState.campistryMe.sessions) || [];
+                    if (cs.length > ls.length) cloudHasMoreData = true;
+                    const lsb = (localState.campistryMe && localState.campistryMe.sessionBundles) || [];
+                    const csb = (cloudState.campistryMe && cloudState.campistryMe.sessionBundles) || [];
+                    if (csb.length > lsb.length) cloudHasMoreData = true;
                 } catch (_) {}
 
                 let mergedState;
@@ -2027,6 +2053,40 @@
                             mergedState.app1.camperRoster = _cloudRoster;
                         }
                     } catch (_eRosterGuard) {}
+                }
+
+                // ★ Same class of bug as the camperRoster guard above, for
+                //   campistryMe.sessions/sessionBundles (Dashboard's Dates &
+                //   Pricing). The trustLocal branch above can replace the
+                //   WHOLE campistryMe blob wholesale whenever local's overall
+                //   updated_at is newer — which can be true for reasons
+                //   unrelated to sessions (any other key saved bumps it).
+                //   campistry_me.js's save() only re-derives `sessions` from
+                //   a module-level var that's still its pre-hydration []
+                //   default until loadData() has run against real cloud
+                //   data — if a save fires before then, that empty array
+                //   gets promoted to "trusted" and silently wipes a cloud
+                //   copy that genuinely has priced sessions (reported bug:
+                //   sessions/bundles configured on Dashboard vanish the
+                //   moment the owner navigates away). Never let an empty
+                //   local sessions/sessionBundles array override a
+                //   non-empty cloud one.
+                if (trustLocal && (localState.campistryMe || cloudState.campistryMe)) {
+                    try {
+                        const _cloudMe = cloudState.campistryMe || {};
+                        const _localMe = localState.campistryMe || {};
+                        if (!mergedState.campistryMe || typeof mergedState.campistryMe !== 'object') mergedState.campistryMe = {};
+                        const _cloudSessions = Array.isArray(_cloudMe.sessions) ? _cloudMe.sessions : [];
+                        const _localSessions = Array.isArray(_localMe.sessions) ? _localMe.sessions : [];
+                        if (_cloudSessions.length > 0 && _localSessions.length === 0) {
+                            mergedState.campistryMe.sessions = _cloudSessions;
+                        }
+                        const _cloudBundles = Array.isArray(_cloudMe.sessionBundles) ? _cloudMe.sessionBundles : [];
+                        const _localBundles = Array.isArray(_localMe.sessionBundles) ? _localMe.sessionBundles : [];
+                        if (_cloudBundles.length > 0 && _localBundles.length === 0) {
+                            mergedState.campistryMe.sessionBundles = _cloudBundles;
+                        }
+                    } catch (_eSessionsGuard) {}
                 }
 
                 // ★ Preserve special-activity SUBCATEGORY tags across the cross-device
