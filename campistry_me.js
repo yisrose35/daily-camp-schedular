@@ -1940,6 +1940,9 @@ function _pplCamperRowActions(id,status){
     }else if(status==='withdrawn'||status==='declined'){
         h+='<button class="me-btn me-btn--sec me-btn--sm" onclick="CampistryMe.updateEnrollStatus(\''+je(id)+'\',\'waitlisted\')">Re-add to waitlist</button>';
         h+='<button class="me-btn me-btn--ghost me-btn--sm" style="color:var(--err)" onclick="CampistryMe.deleteApplication(\''+je(id)+'\')" title="Permanently delete this application">Delete</button>';
+    }else if(status==='unenrolled'){
+        h+='<button class="me-btn me-btn--ghost me-btn--sm" onclick="CampistryMe.nav(\'campers\')" title="Re-enroll or permanently delete the camper from the Roster’s Unenrolled tab">Manage in Roster</button>';
+        h+='<button class="me-btn me-btn--ghost me-btn--sm" style="color:var(--err)" onclick="CampistryMe.deleteApplication(\''+je(id)+'\')" title="Permanently delete this application">Delete</button>';
     }
     h+='</div>';
     return h;
@@ -2880,19 +2883,27 @@ function cascadeCamperDelete(name){
     // enrollment auto-created (_autoCreateAcceptedEnrollment) so Billing/
     // Pipeline treat them the same as a real registration. Deleting the
     // camper without closing out that application left it sitting at
-    // status:'accepted'/'enrolled' forever — buildFamilyLedgers() scans
-    // EVERY accepted/enrolled application on every render, independent of
-    // roster/families, so it kept resurrecting a phantom $0 "Accepted —
-    // pending enrollment" Billing card. Mirrors rescindEnrollment's own
-    // cleanup below (flip to 'withdrawn' + audit entry) — that's what
-    // actually disqualifies a record from that Billing scan. A camper can
-    // have more than one enrollment record (reEnrollCamper has no dedup
-    // guard against an existing one), so this closes out all of them, not
-    // just the first.
+    // whatever non-terminal status it was in forever — buildFamilyLedgers()
+    // scans every accepted/enrolled application on every render, independent
+    // of roster/families, so an un-terminated one kept resurrecting a
+    // phantom "pending" Billing/tuition card tied to a camper that no longer
+    // exists. Originally only checked accepted/enrolled, but Unenroll (a
+    // later feature) introduced a THIRD live-backed status — 'unenrolled' —
+    // that this same check missed entirely: unenroll→delete left the
+    // enrollment stuck at 'unenrolled' forever, with no camper behind it and
+    // none of the withdrawn/declined row actions available on it. Anything
+    // not already at a terminal status (withdrawn/declined) gets closed out
+    // here, covering that gap and any future non-terminal status the same
+    // way, instead of re-special-casing each one by name. Mirrors
+    // rescindEnrollment's own cleanup below (flip to 'withdrawn' + audit
+    // entry) — that's what actually disqualifies a record from that Billing
+    // scan. A camper can have more than one enrollment record
+    // (reEnrollCamper has no dedup guard against an existing one), so this
+    // closes out all of them, not just the first.
     try{
         Object.values(enrollments).forEach(function(e){
             if(!e||e.camperName!==name)return;
-            if(e.status!=='accepted'&&e.status!=='enrolled')return;
+            if(e.status==='withdrawn'||e.status==='declined')return;
             var prev=e.status;
             e.status='withdrawn';
             e.statusHistory=e.statusHistory||[];
