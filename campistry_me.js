@@ -2701,7 +2701,20 @@ function cascadeCamperRename(oldName,newName){
 }
 function cascadeCamperDelete(name){
     if(!name)return;
-    try{Object.values(families).forEach(function(f){if(Array.isArray(f.camperIds))f.camperIds=f.camperIds.filter(function(c){return c!==name})});}catch(_){}
+    try{
+        // A household that drops to zero campers is a dangling record —
+        // buildFamilyLedgers()/renderBilling() render ANY families[] entry
+        // regardless of camperIds, so an empty one sits there forever as a
+        // $0 "Paid" card if it's just left with camperIds:[]. Delete it
+        // outright once it has no campers left. Object.keys() snapshots the
+        // key list before the loop, so deleting keys mid-iteration is safe.
+        Object.keys(families).forEach(function(fk){
+            var f=families[fk];
+            if(!f||!Array.isArray(f.camperIds))return;
+            f.camperIds=f.camperIds.filter(function(c){return c!==name});
+            if(f.camperIds.length===0)delete families[fk];
+        });
+    }catch(_){}
     try{Object.keys(bunkAsgn).forEach(function(b){if(Array.isArray(bunkAsgn[b]))bunkAsgn[b]=bunkAsgn[b].filter(function(c){return c!==name})});}catch(_){}
     // payments are intentionally KEPT — silently erasing billing history when a camper
     // is removed is worse than leaving the (now-deleted) name on the financial record.
@@ -2713,7 +2726,17 @@ async function deleteCamper(n){
     if(!ok)return;
     var capturedRoster=roster[n];
     var capturedFamilyLinks=[];
-    Object.entries(families).forEach(function(pair){if((pair[1].camperIds||[]).indexOf(n)>=0)capturedFamilyLinks.push(pair[0])});
+    var capturedFamilies={};
+    Object.entries(families).forEach(function(pair){
+        if((pair[1].camperIds||[]).indexOf(n)>=0){
+            capturedFamilyLinks.push(pair[0]);
+            // cascadeCamperDelete now deletes a family record outright once
+            // it has no campers left — capture the full record (not just
+            // the key) so Undo can bring the whole household back, not just
+            // re-link the camper to a family that no longer exists.
+            try{capturedFamilies[pair[0]]=JSON.parse(JSON.stringify(pair[1]));}catch(_){}
+        }
+    });
     var capturedBunks=[];
     Object.entries(bunkAsgn).forEach(function(pair){if(Array.isArray(pair[1])&&pair[1].indexOf(n)>=0)capturedBunks.push(pair[0])});
     delete roster[n];
@@ -2724,7 +2747,12 @@ async function deleteCamper(n){
     if(curPage==='camperdetail'&&_camperDetailName===n)nav('campers');else render(curPage);
     toast('Camper deleted','ok',{actionLabel:'Undo',onAction:function(){
         roster[n]=capturedRoster;
-        capturedFamilyLinks.forEach(function(fk){if(families[fk]){if(!families[fk].camperIds)families[fk].camperIds=[];if(families[fk].camperIds.indexOf(n)<0)families[fk].camperIds.push(n)}});
+        capturedFamilyLinks.forEach(function(fk){
+            if(!families[fk]&&capturedFamilies[fk])families[fk]=capturedFamilies[fk];
+            if(!families[fk])return;
+            if(!families[fk].camperIds)families[fk].camperIds=[];
+            if(families[fk].camperIds.indexOf(n)<0)families[fk].camperIds.push(n);
+        });
         capturedBunks.forEach(function(b){if(!bunkAsgn[b])bunkAsgn[b]=[];if(bunkAsgn[b].indexOf(n)<0)bunkAsgn[b].push(n)});
         save();render(curPage);toast('Camper restored');
     }});
@@ -4587,6 +4615,7 @@ function addBunkStaff(bunkName){
     var rec={name:name,role:role||'Staff',email:email,phone:phone,smsOptIn:sms};
     if(idx>=0&&bunkStaff[bunkName][idx])bunkStaff[bunkName][idx]=rec;
     else bunkStaff[bunkName].push(rec);
+    if(email)_syncPayrollBunkForEmail(email);
     save();
     _syncInvitesForBunk(bunkName);
     renderBB();
@@ -4672,6 +4701,21 @@ function bunksForStaffEmail(email){
         return (bunkStaff[b]||[]).some(function(s){ return staffKey(s)===k; });
     });
 }
+// bunkStaff (Bunk Builder's own assignment list) and payroll.staff[].bunk
+// (a separate snapshot Payroll's "Edit Record" reads/writes, see
+// _syncAcceptedContractsToPayroll above) are two independent copies of the
+// same fact with nothing keeping them in sync — a bunk change in Bunk
+// Builder never touched the payroll copy, so Payroll kept showing whatever
+// bunk was set at hire time. Call this after ANY bunkStaff mutation for a
+// given person so their payroll.staff record reflects reality again.
+function _syncPayrollBunkForEmail(email){
+    var k=String(email||'').trim().toLowerCase();
+    if(!k)return;
+    var key=_staffJoinKey(k,null);
+    var idx=(payroll.staff||[]).findIndex(function(s){return _staffJoinKey(s.email,s.name)===key});
+    if(idx<0)return;
+    payroll.staff[idx].bunk=bunksForStaffEmail(k)[0]||'';
+}
 function assignHiredToBunk(appId,bunkName){
     var a=staffApplications[appId];
     if(!a||!bunkName)return;
@@ -4687,6 +4731,7 @@ function assignHiredToBunk(appId,bunkName){
         email:email, phone:a.phone||'', smsOptIn:false,
         smsEmailConsent:!!a.smsEmailConsent // the applicant's OWN consent from their form — distinct from smsOptIn (an admin-asserted flag for the separate manual Lite blast feature)
     });
+    _syncPayrollBunkForEmail(email);
     save();
     _syncInvitesForBunk(bunkName);
     renderBB();
@@ -4699,6 +4744,7 @@ function unassignHiredFromBunk(appId,bunkName){
     var k=String(a.email||'').trim().toLowerCase(); if(!k)return;
     bunkStaff[bunkName]=(bunkStaff[bunkName]||[]).filter(function(s){return staffKey(s)!==k});
     if(!bunkStaff[bunkName].length)delete bunkStaff[bunkName];
+    _syncPayrollBunkForEmail(k);
     save();
     _syncInvitesForBunk(bunkName);
     renderBB();
@@ -4763,7 +4809,9 @@ async function inviteBunkStaffToLite(bunkName,idx){
 }
 function removeBunkStaff(bunkName,idx){
     if(!bunkStaff[bunkName]||!bunkStaff[bunkName][idx])return;
+    var removedEmail=bunkStaff[bunkName][idx].email;
     bunkStaff[bunkName].splice(idx,1);
+    if(removedEmail)_syncPayrollBunkForEmail(removedEmail);
     save();
     _syncInvitesForBunk(bunkName);
     renderBB();
@@ -5721,6 +5769,28 @@ async function deleteStaffApp(id){
     });
     if(!ok)return;
     var wasOnDetailPage=curPage==='staffdetail';
+    // Cascade: a hired staff member can also be on a bunk, a division-head
+    // slot, and in Payroll — deleting only staffApplications[id] left all
+    // three dangling. Do this before the delete below since bunksForStaffEmail
+    // etc. don't need the record, but removeDivisionHead's confirm-free splice
+    // is safest run while `a` (used for name/email) is still around.
+    var delEmail=String(a.email||'').trim().toLowerCase();
+    if(delEmail){
+        bunksForStaffEmail(delEmail).forEach(function(b){
+            bunkStaff[b]=(bunkStaff[b]||[]).filter(function(s){return staffKey(s)!==delEmail});
+            if(!bunkStaff[b].length)delete bunkStaff[b];
+        });
+        divisionsForStaffEmail(delEmail).forEach(function(d){
+            var idx=(divisionHeads[d]||[]).findIndex(function(s){return staffKey(s)===delEmail});
+            if(idx>=0)removeDivisionHead(d,idx);
+        });
+    }
+    var pkey=_staffJoinKey(a.email,a.name);
+    if(pkey){
+        var removedIds=(payroll.staff||[]).filter(function(s){return _staffJoinKey(s.email,s.name)===pkey}).map(function(s){return String(s.id)});
+        payroll.staff=(payroll.staff||[]).filter(function(s){return _staffJoinKey(s.email,s.name)!==pkey});
+        if(removedIds.length)payroll.timesheets=(payroll.timesheets||[]).filter(function(t){return removedIds.indexOf(String(t.staffId))<0});
+    }
     delete staffApplications[id];
     save();
     closeModal('appViewModal');
