@@ -10508,12 +10508,12 @@ function _prTimesheetsTab(){
                'style="width:52px;padding:4px;text-align:center;border:1px solid var(--s200);border-radius:5px;font-size:.78rem" '+
                'onchange="CampistryMe.prSetHours('+s.id+',\''+k+'\',this.value)"></td>';
         });
-        h+='<td style="text-align:center;font-weight:700">'+chk.total+'</td>';
+        h+='<td id="pr-total-'+s.id+'" style="text-align:center;font-weight:700">'+chk.total+'</td>';
         h+='<td><label style="cursor:pointer"><input type="checkbox"'+(sheet.supervisorSigned?' checked':'')+' onchange="CampistryMe.prSetSigned('+s.id+',this.checked)"></label></td>';
         h+='<td><select class="fs" style="font-size:.74rem;padding:3px 6px" onchange="CampistryMe.prSetSheetStatus('+s.id+',this.value)">'+
             ['draft','submitted','approved'].map(function(st){return'<option value="'+st+'"'+((sheet.status||'draft')===st?' selected':'')+'>'+st.charAt(0).toUpperCase()+st.slice(1)+'</option>'}).join('')+
             '</select></td>';
-        h+='<td style="font-size:.72rem">'+(chk.issues.length
+        h+='<td id="pr-flags-'+s.id+'" style="font-size:.72rem">'+(chk.issues.length
             ? chk.issues.map(function(i){return'<div style="color:'+(i.severity==='blocker'?'var(--err)':'var(--me)')+'">'+esc(i.message)+'</div>'}).join('')
             : '<span style="color:var(--ok)">✓</span>')+'</td>';
         h+='</tr>';
@@ -10538,10 +10538,36 @@ function prSetHours(staffId,day,val){
     var sh=_prEnsureSheet(staffId);
     if(!isFinite(n)||n<=0) delete sh.days[day];
     else sh.days[day]=Math.min(24,n);
-    save(); renderPayroll();
+    save();
+    // A full renderPayroll() here used to blow away and rebuild every input in
+    // the table on every single cell's onchange (which fires as part of Tab's
+    // own blur-then-focus-next sequence) — the browser was mid-way through
+    // moving focus to the next day's cell when that cell's element got
+    // replaced out from under it, so Tab-through-a-row could silently drop
+    // keystrokes into whatever the freshly-rendered DOM happened to focus
+    // instead, or lose focus off the table entirely. Patch just the one
+    // row's Total/Flags cells (the only two things checkTimesheet's result
+    // actually changes) so every other input is left alone.
+    _prPatchTimesheetRow(staffId);
 }
-function prSetSigned(staffId,on){ _prEnsureSheet(staffId).supervisorSigned=!!on; save(); renderPayroll() }
-function prSetSheetStatus(staffId,st){ _prEnsureSheet(staffId).status=st; save(); renderPayroll() }
+function _prPatchTimesheetRow(staffId){
+    var core=PC(),s=payroll.staff.find(function(x){return String(x.id)===String(staffId)});
+    if(!s)return;
+    var sheet=_prSheet(s.id,_prWeek)||{staffId:s.id,weekOf:_prWeek,days:{},status:'draft',supervisorSigned:false};
+    var chk=core.checkTimesheet(sheet,s,{program:payroll.youthCorps,today:_prToday()});
+    var totalEl=document.getElementById('pr-total-'+s.id);
+    if(totalEl)totalEl.textContent=chk.total;
+    var flagsEl=document.getElementById('pr-flags-'+s.id);
+    if(flagsEl)flagsEl.innerHTML=(chk.issues.length
+        ? chk.issues.map(function(i){return'<div style="color:'+(i.severity==='blocker'?'var(--err)':'var(--me)')+'">'+esc(i.message)+'</div>'}).join('')
+        : '<span style="color:var(--ok)">✓</span>');
+}
+// Signing/status don't feed into checkTimesheet's total or flags, and the
+// checkbox/select already reflect the click that triggered them — nothing
+// else on the row needs to change, so there's nothing to re-render at all
+// (avoids the same full-table-rebuild-mid-interaction risk as hours).
+function prSetSigned(staffId,on){ _prEnsureSheet(staffId).supervisorSigned=!!on; save() }
+function prSetSheetStatus(staffId,st){ _prEnsureSheet(staffId).status=st; save() }
 
 // ── Youth Corps ──────────────────────────────────────────────────
 function _prYouthTab(){

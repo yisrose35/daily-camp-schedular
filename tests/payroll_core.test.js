@@ -351,3 +351,18 @@ test('buildPayRun: staff with no hours still appear, at zero', () => {
     assert.strictEqual(run.lines[0].hours, 0);
     assert.strictEqual(run.lines[0].gross, 0);
 });
+
+test('buildPayRun: a weekly-pay person with zero timesheets is not paid for a week', () => {
+    // "|| 1" fallbacks in grossPay and buildPayRun used to turn a genuine
+    // zero-weeks-worked into a paid week for a weekly-pay staffer who never
+    // submitted a timesheet in the pay period.
+    const run = P.buildPayRun([{ id: 11, name: 'NoShow', payType: 'weekly', payRate: 500 }], [], {});
+    assert.strictEqual(run.lines[0].weeks, 0);
+    assert.strictEqual(run.lines[0].gross, 0);
+    assert.strictEqual(run.campTotal, 0);
+});
+
+test('grossPay: weekly with zero (or omitted) weeks pays nothing', () => {
+    assert.strictEqual(P.grossPay({ payType: 'weekly', payRate: 500 }, { weeks: 0 }), 0);
+    assert.strictEqual(P.grossPay({ payType: 'weekly', payRate: 500 }, {}), 0);
+});
