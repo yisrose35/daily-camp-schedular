@@ -9140,7 +9140,7 @@ function renderAnalytics(){
 
     h+=statRow(
         statTile('Campers on Roster',String(roster?Object.keys(roster).length:0))+
-        statTile('Staff',String((payroll&&payroll.staff)?payroll.staff.length:0))+
+        statTile('Staff',String(hiredStaff().length))+
         statTile('Divisions',String(divisions.length))+
         statTile('Bunks',String(bunkCount))
     );
