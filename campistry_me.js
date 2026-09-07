@@ -1939,6 +1939,7 @@ function _pplCamperRowActions(id,status){
         h+='<button class="me-btn me-btn--sec me-btn--sm" onclick="CampistryMe.updateEnrollStatus(\''+je(id)+'\',\'accepted\')">Accept</button>';
     }else if(status==='withdrawn'||status==='declined'){
         h+='<button class="me-btn me-btn--sec me-btn--sm" onclick="CampistryMe.updateEnrollStatus(\''+je(id)+'\',\'waitlisted\')">Re-add to waitlist</button>';
+        h+='<button class="me-btn me-btn--ghost me-btn--sm" style="color:var(--err)" onclick="CampistryMe.deleteApplication(\''+je(id)+'\')" title="Permanently delete this application">Delete</button>';
     }
     h+='</div>';
     return h;
@@ -5950,10 +5951,82 @@ function _syncAcceptedContractsToPayroll(){
 // opts.fromRow skips reopening the modal — a row's Advance/Decline button
 // should just update the table in place, the same way Registration's row
 // actions never pop the Review modal open.
+// Shared by deleteStaffApp (removes the whole application) and
+// setStaffStatus's hired→non-hired transition below (keeps the application
+// for the audit trail, just unwinds the live assignments a hired staff
+// member picked up along the way). A hired person can be on a bunk, a
+// Division Head slot, and in Payroll, and none of those are keyed off
+// staffApplications[id] — flipping status alone left all three dangling
+// active (bug: Decline didn't clean up what a hard Delete already did).
+// Returns what it removed so a caller can offer Undo.
+function _cascadeStaffOffboard(a){
+    var out={bunks:[],divisions:[],payrollStaff:[],payrollTimesheets:[]};
+    var delEmail=String((a&&a.email)||'').trim().toLowerCase();
+    if(!delEmail)return out;
+    bunksForStaffEmail(delEmail).forEach(function(b){
+        var before=(bunkStaff[b]||[]).slice();
+        var after=before.filter(function(s){return staffKey(s)!==delEmail});
+        if(after.length!==before.length)out.bunks.push({bunk:b,entries:before});
+        if(after.length)bunkStaff[b]=after;else delete bunkStaff[b];
+    });
+    divisionsForStaffEmail(delEmail).forEach(function(d){
+        var idx=(divisionHeads[d]||[]).findIndex(function(s){return staffKey(s)===delEmail});
+        if(idx>=0){ out.divisions.push({div:d,idx:idx,entry:divisionHeads[d][idx]}); removeDivisionHead(d,idx); }
+    });
+    var pkey=_staffJoinKey(a.email,a.name);
+    if(pkey){
+        var removed=(payroll.staff||[]).filter(function(s){return _staffJoinKey(s.email,s.name)===pkey});
+        if(removed.length){
+            var removedIds=removed.map(function(s){return String(s.id)});
+            payroll.staff=(payroll.staff||[]).filter(function(s){return _staffJoinKey(s.email,s.name)!==pkey});
+            var removedTs=(payroll.timesheets||[]).filter(function(t){return removedIds.indexOf(String(t.staffId))>=0});
+            payroll.timesheets=(payroll.timesheets||[]).filter(function(t){return removedIds.indexOf(String(t.staffId))<0});
+            out.payrollStaff=removed;out.payrollTimesheets=removedTs;
+        }
+    }
+    return out;
+}
+function _restoreStaffOffboard(cap){
+    (cap.bunks||[]).forEach(function(x){bunkStaff[x.bunk]=x.entries;});
+    (cap.divisions||[]).forEach(function(x){ if(!divisionHeads[x.div])divisionHeads[x.div]=[]; divisionHeads[x.div].splice(x.idx,0,x.entry); });
+    if((cap.payrollStaff||[]).length)payroll.staff=(payroll.staff||[]).concat(cap.payrollStaff);
+    if((cap.payrollTimesheets||[]).length)payroll.timesheets=(payroll.timesheets||[]).concat(cap.payrollTimesheets);
+}
+// Leaving "hired" (Decline being the one real-world way this happens) is
+// destructive to live assignments now, so it gets its own confirm+cascade
+// path instead of the instant flip pre-hire statuses use — split out async
+// so setStaffStatus itself can stay a plain sync function for every other
+// transition, matching how rescindEnrollment/deleteCamper already gate
+// their own destructive side effects behind a confirmDialog.
+async function _declineHiredStaff(id,status,opts){
+    var a=staffApplications[id]; if(!a)return;
+    var prevStatus=a.status;
+    var nm=a.name||((a.first||'')+' '+(a.last||''))||'this staff member';
+    var ok=await confirmDialog({
+        title:'Move to '+esc(_staffLabel(status))+'?',
+        message:'<strong>'+esc(nm)+'</strong> will be taken off any bunk, Division Head slot, and Payroll they were assigned to. Their application stays here marked <strong>'+esc(_staffLabel(status))+'</strong> for the audit trail.',
+        confirmLabel:_staffLabel(status),
+        danger:true
+    });
+    if(!ok)return;
+    var cap=_cascadeStaffOffboard(a);
+    a.status=status;
+    save();
+    _refreshPplIfActive();
+    closeModal('appViewModal');
+    if(curPage==='staffdetail')nav('hiring');else _refreshStaffView(id,opts);
+    var changed=cap.bunks.length||cap.divisions.length||cap.payrollStaff.length;
+    toast('Moved to '+_staffLabel(status)+(changed?' — removed from bunk/division/payroll assignments':''),'ok',{actionLabel:'Undo',onAction:function(){
+        a.status=prevStatus;
+        _restoreStaffOffboard(cap);
+        save();render(curPage);toast(nm+' restored to '+_staffLabel(prevStatus));
+    }});
+}
 function setStaffStatus(id,status,opts){
     opts=opts||{};
     var a=staffApplications[id]; if(!a)return;
     var prevStatus=a.status;
+    if(prevStatus==='hired'&&status!=='hired'){ _declineHiredStaff(id,status,opts); return; }
     a.status=status;
     // Reaching "hired" for the first time assigns a permanent Staff ID —
     // same rule as camperId: sequential, assigned once, never reused or
@@ -5968,13 +6041,6 @@ function setStaffStatus(id,status,opts){
         // reopening the modal they were just reviewed in.
         closeModal('appViewModal');
         if(!opts.fromRow)viewStaffMember(_staffJoinKey(a.email,a.name));
-    }else if(prevStatus==='hired'&&status!=='hired'&&curPage==='staffdetail'){
-        // Leaving "hired" while viewing their full profile page — they can
-        // drop out of buildStaffRoster()'s joined view entirely (it only
-        // includes hired applicants, unless this person is separately on
-        // payroll/a bunk), so head back to Hiring instead of risking a
-        // "Staff member not found" dead end.
-        nav('hiring');
     }else{
         _refreshStaffView(id,opts);
     }
@@ -6030,28 +6096,11 @@ async function deleteStaffApp(id){
     });
     if(!ok)return;
     var wasOnDetailPage=curPage==='staffdetail';
-    // Cascade: a hired staff member can also be on a bunk, a division-head
-    // slot, and in Payroll — deleting only staffApplications[id] left all
-    // three dangling. Do this before the delete below since bunksForStaffEmail
-    // etc. don't need the record, but removeDivisionHead's confirm-free splice
-    // is safest run while `a` (used for name/email) is still around.
-    var delEmail=String(a.email||'').trim().toLowerCase();
-    if(delEmail){
-        bunksForStaffEmail(delEmail).forEach(function(b){
-            bunkStaff[b]=(bunkStaff[b]||[]).filter(function(s){return staffKey(s)!==delEmail});
-            if(!bunkStaff[b].length)delete bunkStaff[b];
-        });
-        divisionsForStaffEmail(delEmail).forEach(function(d){
-            var idx=(divisionHeads[d]||[]).findIndex(function(s){return staffKey(s)===delEmail});
-            if(idx>=0)removeDivisionHead(d,idx);
-        });
-    }
-    var pkey=_staffJoinKey(a.email,a.name);
-    if(pkey){
-        var removedIds=(payroll.staff||[]).filter(function(s){return _staffJoinKey(s.email,s.name)===pkey}).map(function(s){return String(s.id)});
-        payroll.staff=(payroll.staff||[]).filter(function(s){return _staffJoinKey(s.email,s.name)!==pkey});
-        if(removedIds.length)payroll.timesheets=(payroll.timesheets||[]).filter(function(t){return removedIds.indexOf(String(t.staffId))<0});
-    }
+    // A hired staff member can also be on a bunk, a Division Head slot, and
+    // in Payroll — do this before the delete below since bunksForStaffEmail
+    // etc. don't need the record, but removeDivisionHead's confirm-free
+    // splice is safest run while `a` (used for name/email) is still around.
+    _cascadeStaffOffboard(a);
     delete staffApplications[id];
     save();
     closeModal('appViewModal');
@@ -6215,6 +6264,35 @@ async function rescindEnrollment(id){
     }
     if(e.session && prev!=='waitlisted') autoPromoteWaitlist(e.session);
     save(); render(curPage); toast(nm+' rescinded — removed from the Campers list');
+}
+// A withdrawn/declined application (left behind by rescindEnrollment or a
+// deleteCamper cascade) had NO way to ever be removed — row actions only
+// offered "Re-add to waitlist" and the detail modal only offered Print/
+// Close, so it sat in the pipeline forever, tuition/payment-status card and
+// all, tied to a camper that may no longer exist. This is purely a record
+// deletion — it never touches roster/families/payments, which are already
+// whatever they should be by the time an application reaches a terminal
+// status; this only cleans up the leftover application row itself.
+async function deleteApplication(id){
+    var e=enrollments[id]; if(!e)return;
+    var nm=e.camperName||'this application';
+    var ok=await confirmDialog({
+        title:'Delete Application?',
+        message:'<strong>'+esc(nm)+'</strong>\'s application will be permanently removed. This does not affect any camper, family, or payment record already in the system.',
+        confirmLabel:'Delete',
+        danger:true
+    });
+    if(!ok)return;
+    var captured;
+    try{captured=JSON.parse(JSON.stringify(e));}catch(_){captured=e;}
+    delete enrollments[id];
+    save();
+    closeModal('appViewModal');
+    _refreshPplIfActive();
+    toast('Application deleted','ok',{actionLabel:'Undo',onAction:function(){
+        enrollments[id]=captured;
+        save();render(curPage);toast('Application restored');
+    }});
 }
 
 // ── FORM CUSTOMIZER ───────────────────────────────────────────
@@ -7914,6 +7992,13 @@ function viewApplication(id){
         f+='<button class="me-btn me-btn--sec" onclick="CampistryMe.generateParentInvite(\''+esc(id)+'\')">'+ico('invite')+'Get Invite Link</button>';
         f+='<button class="me-btn me-btn--sec" onclick="CampistryMe.openSendPostAcceptModal(\''+esc(id)+'\')" title="Bunkmate requests and other post-acceptance choices">'+(e.postAccept?'✓ ':'')+'Post-Acceptance Form</button>';
         f+='<button class="me-btn me-btn--sec" onclick="CampistryMe.updateEnrollStatus(\''+esc(id)+'\',\'withdrawn\');CampistryMe.closeModal(\'appViewModal\')">Withdraw</button>';
+    }else{
+        // Withdrawn/declined (or any other terminal status) — no forward
+        // action applies here, but there was previously no way to ever
+        // remove the record either, so it sat in the pipeline forever with
+        // this same tuition/payment-status card attached. Doesn't touch any
+        // camper/family/payment data — only removes this leftover row.
+        f+='<button class="me-btn me-btn--danger" onclick="CampistryMe.deleteApplication(\''+esc(id)+'\')">Delete Application</button>';
     }
     f+='<button class="me-btn me-btn--sec" onclick="CampistryMe.closeModal(\'appViewModal\')">Close</button>';
     document.getElementById('avFooter').innerHTML=f;
@@ -8662,20 +8747,25 @@ function _autoProvisionParentInvites(){
             var key=String(p0.email).toLowerCase();
             if(!fams[key])fams[key]={parentName:p0.name||'',parentEmail:p0.email,campers:[]};
             (fam.camperIds||[]).forEach(function(cn){
-                if(roster[cn]&&fams[key].campers.indexOf(cn)<0){fams[key].campers.push(cn);inFamily[cn]=1;}
+                if(roster[cn]&&!roster[cn].unenrolled&&fams[key].campers.indexOf(cn)<0){fams[key].campers.push(cn);inFamily[cn]=1;}
             });
         }
         if(p1&&p1.email&&String(p1.email).toLowerCase()!==String((p0&&p0.email)||'').toLowerCase()){
             var key2=String(p1.email).toLowerCase();
             if(!fams[key2])fams[key2]={parentName:p1.name||'',parentEmail:p1.email,campers:[]};
             (fam.camperIds||[]).forEach(function(cn){
-                if(roster[cn]&&fams[key2].campers.indexOf(cn)<0){fams[key2].campers.push(cn);inFamily[cn]=1;}
+                if(roster[cn]&&!roster[cn].unenrolled&&fams[key2].campers.indexOf(cn)<0){fams[key2].campers.push(cn);inFamily[cn]=1;}
             });
         }
     });
+    // Unenrolled campers (Me's own "Unenroll" action) are treated the same
+    // as a deleted one here — excluded from every family grouping below so
+    // the offboarding sweep further down sees them as gone from the roster
+    // and disconnects a parent whose only camper was unenrolled, same as
+    // one who was hard-deleted.
     Object.keys(roster).forEach(function(cn){
         if(inFamily[cn])return;
-        var c=roster[cn];if(!c)return;
+        var c=roster[cn];if(!c||c.unenrolled)return;
         if(c.parent1Email){
             var key=String(c.parent1Email).toLowerCase();
             if(!fams[key])fams[key]={parentName:c.parent1Name||'',parentEmail:c.parent1Email,campers:[]};
@@ -8696,8 +8786,11 @@ function _autoProvisionParentInvites(){
     // — or whose deletion didn't change the provisioning signature — never
     // ran the sweep at all, so that parent's invite stayed fully connected
     // forever. Safe to call every time: it's a single idempotent UPDATE,
-    // and the server no-ops on an empty roster.
-    var rosterNames=Object.keys(roster);
+    // and the server no-ops on an empty roster. Unenrolled campers count as
+    // gone here too (see the loop above) — an unenrolled camper's name stays
+    // a real roster key (their record is kept, not deleted), so this must
+    // filter the flag explicitly rather than relying on the key being absent.
+    var rosterNames=Object.keys(roster).filter(function(n){return !roster[n].unenrolled;});
     function _sweep(){
         db.rpc('revoke_orphaned_parent_invites',{p_camp_id:campId,p_roster_names:rosterNames}).then(function(res){
             var rev=res&&res.data&&res.data.revoked;
@@ -15109,7 +15202,7 @@ window.CampistryMe={
     getStaffForDivision:getStaffForDivision,getBunksForDivision:getBunksForDivision,
     findStaffByEmail:findStaffByEmail,getAllStaff:getAllStaff,
     copyRegLink:copyRegLink,openEmbedLinkModal:openEmbedLinkModal,copyEmbedSnippet:copyEmbedSnippet,addDocRow:addDocRow,addApplication:addApplication,_onAppPhotoPick:_onAppPhotoPick,autoPromoteWaitlist:autoPromoteWaitlist,
-    viewApplication:viewApplication,_markAppPaymentReceived:_markAppPaymentReceived,updateEnrollStatus:updateEnrollStatus,bulkEnrollStatus:bulkEnrollStatus,toggleAllEnroll:toggleAllEnroll,_updateRegBulkBar:_updateRegBulkBar,enrollCamper:enrollCamper,generateParentInvite:generateParentInvite,_sendInviteEmailNow:_sendInviteEmailNow,rescindEnrollment:rescindEnrollment,
+    viewApplication:viewApplication,_markAppPaymentReceived:_markAppPaymentReceived,updateEnrollStatus:updateEnrollStatus,bulkEnrollStatus:bulkEnrollStatus,toggleAllEnroll:toggleAllEnroll,_updateRegBulkBar:_updateRegBulkBar,enrollCamper:enrollCamper,generateParentInvite:generateParentInvite,_sendInviteEmailNow:_sendInviteEmailNow,rescindEnrollment:rescindEnrollment,deleteApplication:deleteApplication,
     saveAppNote:saveAppNote,printApplication:printApplication,
     openFormConfig:openFormConfig,saveFormConfig:saveFormConfig,addCustomQ:addCustomQ,addPromoRow:addPromoRow,
     openStaffFormConfig:openStaffFormConfig,saveStaffFormConfig:saveStaffFormConfig,addStaffCustomQ:addStaffCustomQ,
