@@ -1986,6 +1986,7 @@ function _renderRegistrationPane(){
         +'<div class="me-more-menu" id="pplLinkMenu" style="min-width:250px">'
         +'<button onclick="CampistryMe.copyRegLink()">📋 Copy Link</button>'
         +'<button onclick="CampistryMe.openSendRegLinkModal()">✉ Send Link</button>'
+        +'<button onclick="CampistryMe.openEmbedLinkModal(\'register\')">🌐 Embed on Your Website</button>'
         +'<div style="border-top:1px solid var(--s100);margin:4px 0"></div>'
         +'<button onclick="CampistryMe.exportEnrollmentReport()">↓ Export Applications</button>'
         +'</div></div>'
@@ -2030,6 +2031,7 @@ function _renderHiringPane(){
         +'<div class="me-more-menu" id="pplLinkMenu" style="min-width:250px">'
         +'<button onclick="CampistryMe.copyStaffLink()">📋 Copy Link</button>'
         +'<button onclick="CampistryMe.openSendStaffLinkModal()">✉ Send Link</button>'
+        +'<button onclick="CampistryMe.openEmbedLinkModal(\'staff\')">🌐 Embed on Your Website</button>'
         +'<div style="border-top:1px solid var(--s100);margin:4px 0"></div>'
         +'<button onclick="CampistryMe.exportStaffCSV()">↓ Export Applications</button>'
         +'</div></div>'
@@ -7946,6 +7948,36 @@ function copyRegLink(){
         navigator.clipboard.writeText(url).then(function(){toast('Registration link copied!')});
     }else{
         prompt('Copy this link and share with parents:',url);
+    }
+}
+
+// ── EMBED ON WEBSITE ─────────────────────────────────────────────────────
+// A camp's own external website can't host our forms inline, but the public
+// register/staff-apply pages already work fine linked-to from anywhere (the
+// ?camp= bootstrap RPC, migration 084) — so this just hands the office a
+// copy-paste HTML button pointed at that same URL.
+function openEmbedLinkModal(kind){
+    var isStaff=(kind==='staff');
+    var url=window.location.origin+'/'+(isStaff?'campistry_staff_apply.html':'campistry_register.html')+'?camp='+encodeURIComponent(getCampId());
+    var label=isStaff?'Apply to Join Our Team':'Register for Camp';
+    var color='#2A7A35';
+    try{ color=(_getLinkBranding().brandColor)||color; }catch(e){}
+    var snippet='<a href="'+url+'" target="_blank" rel="noopener" style="display:inline-block;padding:14px 28px;background:'+color+';color:#ffffff;font-family:Arial,Helvetica,sans-serif;font-size:16px;font-weight:bold;text-decoration:none;border-radius:8px">'+label+'</a>';
+    var h='<p style="font-size:.85rem;color:var(--s500);margin:0 0 14px">Paste this into your website\'s HTML (most site builders — Wix, Squarespace, WordPress — have a "Custom HTML," "Embed," or "Code" block). It adds a button that sends parents straight to your '+(isStaff?'staff application':'registration form')+' — no login required.</p>';
+    h+='<div style="border:1px solid var(--s200);border-radius:8px;padding:20px;text-align:center;margin-bottom:14px;background:var(--s50)">'+snippet+'</div>';
+    h+='<div class="fg"><label class="fl">Embed Code</label><textarea class="fi" id="embedSnippetTa" readonly onclick="this.select()" style="min-height:90px;resize:vertical;font-family:monospace;font-size:.75rem">'+esc(snippet)+'</textarea></div>';
+    h+='<div style="display:flex;justify-content:flex-end"><button class="me-btn me-btn--pri" onclick="CampistryMe.copyEmbedSnippet()">📋 Copy Code</button></div>';
+    showModal(isStaff?'Embed Staff Application on Your Website':'Embed Registration on Your Website',h,null,{maxWidth:560});
+}
+function copyEmbedSnippet(){
+    var ta=document.getElementById('embedSnippetTa');
+    if(!ta)return;
+    ta.select();
+    if(navigator.clipboard){
+        navigator.clipboard.writeText(ta.value).then(function(){toast('Embed code copied!')});
+    }else{
+        document.execCommand('copy');
+        toast('Embed code copied!');
     }
 }
 
@@ -14980,7 +15012,7 @@ window.CampistryMe={
     getStaffForBunk:getStaffForBunk,getStaffForBunks:getStaffForBunks,
     getStaffForDivision:getStaffForDivision,getBunksForDivision:getBunksForDivision,
     findStaffByEmail:findStaffByEmail,getAllStaff:getAllStaff,
-    copyRegLink:copyRegLink,addDocRow:addDocRow,addApplication:addApplication,_onAppPhotoPick:_onAppPhotoPick,autoPromoteWaitlist:autoPromoteWaitlist,
+    copyRegLink:copyRegLink,openEmbedLinkModal:openEmbedLinkModal,copyEmbedSnippet:copyEmbedSnippet,addDocRow:addDocRow,addApplication:addApplication,_onAppPhotoPick:_onAppPhotoPick,autoPromoteWaitlist:autoPromoteWaitlist,
     viewApplication:viewApplication,_markAppPaymentReceived:_markAppPaymentReceived,updateEnrollStatus:updateEnrollStatus,bulkEnrollStatus:bulkEnrollStatus,toggleAllEnroll:toggleAllEnroll,_updateRegBulkBar:_updateRegBulkBar,enrollCamper:enrollCamper,generateParentInvite:generateParentInvite,_sendInviteEmailNow:_sendInviteEmailNow,rescindEnrollment:rescindEnrollment,
     saveAppNote:saveAppNote,printApplication:printApplication,
     openFormConfig:openFormConfig,saveFormConfig:saveFormConfig,addCustomQ:addCustomQ,addPromoRow:addPromoRow,
