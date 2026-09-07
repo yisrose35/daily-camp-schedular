@@ -11196,11 +11196,29 @@ function issueCreditForFamily(famKey){
     if(famKey) _crPaymentChanged();
 }
 
-function printStatement(famKey){
+async function printStatement(famKey){
     var ledgers=buildFamilyLedgers();
     var l=ledgers[famKey];if(!l)return;
-    var campName='',campTaxId='',showCampTaxId=false;try{var s=JSON.parse(localStorage.getItem('campGlobalSettings_v1')||'{}');campName=s.camp_name||s.campName||'Camp';campTaxId=(s.app1&&s.app1.taxId)||'';showCampTaxId=!!(s.app1&&s.app1.showTaxIdOnStatements)}catch(e){}
+    var campName='';try{var s=JSON.parse(localStorage.getItem('campGlobalSettings_v1')||'{}');campName=s.camp_name||s.campName||'Camp'}catch(e){}
+    // window.open() must happen synchronously, before any await, or some
+    // browsers' popup blockers stop treating it as tied to the click that
+    // triggered this handler.
     var w=window.open('','_blank');
+    // Tax ID/EIN is select-locked on the camps table (migration 121) — the
+    // only way to read it is this owner-only RPC, called fresh at print
+    // time. It is deliberately NOT cached in campGlobalSettings_v1/
+    // localStorage, which any staff member with Billing access can already
+    // inspect — that was the actual leak this replaced.
+    var campTaxId='',showCampTaxId=false;
+    try{
+        var client=window.CampistryDB&&window.CampistryDB.getClient?window.CampistryDB.getClient():window.supabase;
+        var campId=getCampId();
+        if(client&&campId){
+            var res=await client.rpc('get_camp_tax_id',{p_camp_id:campId});
+            var d=res&&res.data;
+            if(d&&d.success){campTaxId=d.tax_id||'';showCampTaxId=!!d.show_tax_id_on_statements;}
+        }
+    }catch(e){}
     var h='<!DOCTYPE html><html><head><title>Statement — '+esc(l.family.name)+'</title><style>body{font-family:Arial,sans-serif;font-size:10pt;margin:30px;color:#222}h1{font-size:16pt;margin-bottom:4px}h2{font-size:12pt;margin:20px 0 8px}table{width:100%;border-collapse:collapse;margin-bottom:16px}th{background:#f5f5f5;text-align:left;padding:6px;border:1px solid #ddd;font-size:9pt}td{padding:5px 6px;border:1px solid #ddd;font-size:9pt}.right{text-align:right}.bold{font-weight:bold}@media print{button{display:none}}</style></head><body>';
     h+='<h1>'+esc(campName)+'</h1>';
     if(showCampTaxId&&campTaxId) h+='<p style="color:#666;margin:0 0 4px">Tax ID: '+esc(campTaxId)+'</p>';

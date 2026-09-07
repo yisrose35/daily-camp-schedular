@@ -285,9 +285,13 @@
             // ACTIVE one: prefer the camp CampistryDB already resolved (which
             // honors the active-camp selection / debug-copy switch), then the
             // camp whose id == uid (signup convention), then the first.
+            // tax_id/show_tax_id_on_statements are deliberately excluded —
+            // those two columns have column-level SELECT revoked for every
+            // client role (migration 121); a `select('*')` here would fail
+            // outright. Read them only through get_camp_tax_id() below.
             const { data: ownedCamps, error: campError } = await window.supabase
                 .from('camps')
-                .select('*')
+                .select('id, name, address, contact_email, owner_name, owner')
                 .eq('owner', currentUser.id);
 
             let ownedCamp = null;
@@ -798,9 +802,11 @@
         if (!campData && !isTeamMember) {
             try {
                 // Multi-camp owners: fetch all, prefer the real camp (id==uid).
+                // Same column exclusion as the STEP 3 fetch above — tax_id/
+                // show_tax_id_on_statements are select-locked (migration 121).
                 const { data: campsList, error } = await window.supabase
                     .from('camps')
-                    .select('*')
+                    .select('id, name, address, contact_email, owner_name, owner')
                     .eq('owner', currentUser.id);
                 const camps = (Array.isArray(campsList) && campsList.length > 0)
                     ? (campsList.find(c => c.id === currentUser.id) || campsList[0])
@@ -824,8 +830,24 @@
         let displayCampName = campName || currentUser.user_metadata?.camp_name || 'Your Camp';
         let campAddress = campData?.address || '';
         let campContactEmail = campData?.contact_email || '';
-        let campTaxId = campData?.tax_id || '';
-        let campShowTaxId = !!campData?.show_tax_id_on_statements;
+
+        // Tax ID/EIN is select-locked at the column level (migration 121) —
+        // campData never carries it. The only read path is this owner-only
+        // RPC; a team member's campData.id is unset (their own fetch above
+        // only ever selects name/address), so this naturally no-ops for them.
+        let campTaxId = '';
+        let campShowTaxId = false;
+        if (campData?.id) {
+            try {
+                const { data: taxRes } = await window.supabase.rpc('get_camp_tax_id', { p_camp_id: campData.id });
+                if (taxRes && taxRes.success) {
+                    campTaxId = taxRes.tax_id || '';
+                    campShowTaxId = !!taxRes.show_tax_id_on_statements;
+                }
+            } catch (e) {
+                console.warn('[Dashboard] get_camp_tax_id failed:', e);
+            }
+        }
 
         console.log('📊 Final display values:', { displayCampName, userName, campAddress, campContactEmail });
 
@@ -1082,11 +1104,16 @@
                 try {
                     if (typeof window.loadGlobalSettings === 'function' &&
                         typeof window.saveGlobalSettings === 'function') {
+                        // tax_id/show_tax_id_on_statements deliberately do NOT
+                        // go into app1/camp_state_kv — that blob syncs to the
+                        // cloud and is readable by any staff member with
+                        // Billing access (camp_state_kv's own broad RLS), which
+                        // would undo the column-level lockdown in migration
+                        // 121. printStatement() reads the real value through
+                        // get_camp_tax_id() instead, at print time.
                         const _gs = window.loadGlobalSettings() || {};
                         if (!_gs.app1) _gs.app1 = {};
                         _gs.app1.campName = newCampName;
-                        _gs.app1.taxId = newTaxId;
-                        _gs.app1.showTaxIdOnStatements = newShowTaxId;
                         window.saveGlobalSettings('app1', _gs.app1);
                         window.saveGlobalSettings('campName', newCampName);
                         window.saveGlobalSettings('camp_name', newCampName);
@@ -1135,7 +1162,10 @@
                         tax_id: newTaxId,
                         show_tax_id_on_statements: newShowTaxId
                     }])
-                    .select()
+                    // Explicit column list — tax_id/show_tax_id_on_statements
+                    // are select-locked (migration 121), so a bare .select()
+                    // (which defaults to "*") would fail on the RETURNING here.
+                    .select('id, name, address, contact_email, owner_name, owner')
                     .single();
 
                 if (error) throw error;
