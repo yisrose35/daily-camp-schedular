@@ -118,6 +118,17 @@ body.sidebar-open .sidebar{transform:translateX(0)}
 .me-card-head{padding:14px 18px;border-bottom:1px solid var(--s100);display:flex;justify-content:space-between;align-items:center}
 .me-card-head h3{font-size:.9rem;font-weight:600;color:var(--s800);margin:0}
 
+/* ── STAT TILES + TAB STRIP ─────────── */
+.stat-row{display:flex;gap:8px;flex-wrap:wrap;margin-bottom:14px}
+.stat-tile{flex:1;min-width:140px;background:#fff;border-radius:var(--r);padding:12px 14px;border:1px solid var(--s200);border-left:3px solid var(--s200)}
+.stat-tile-label{font-size:.65rem;font-weight:700;color:var(--s400);text-transform:uppercase;letter-spacing:.04em}
+.stat-tile-value{font-size:1.2rem;font-weight:800;color:var(--s800);margin-top:2px}
+.stat-tile-sub{font-size:.72rem;color:var(--s400);margin-top:1px}
+.tab-strip{display:flex;gap:0;border-bottom:1px solid var(--s200);margin-bottom:14px;flex-wrap:wrap}
+.tab-strip-btn{background:transparent;border:none;padding:8px 16px;font-size:.8rem;font-weight:600;font-family:var(--font);color:var(--s400);border-bottom:2px solid transparent;cursor:pointer;transition:color .12s,border-color .12s}
+.tab-strip-btn:hover{color:var(--s700)}
+.tab-strip-btn.active{color:var(--me);border-bottom-color:var(--me)}
+
 /* ── CHARTS ─────────────────────────── */
 .chart-empty{padding:24px 0;text-align:center;font-size:.8rem;color:var(--s400)}
 .chart-barh{display:flex;flex-direction:column;gap:10px}

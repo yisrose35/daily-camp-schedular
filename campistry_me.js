@@ -73,8 +73,8 @@ function _pagerHtml(total,pageSize,pageNum,onChangeFnName){
 }
 function setRosterPage(n){_rosterPage=n;var inp=document.getElementById('globalSearch');renderCampers(inp?inp.value.trim():'');}
 function setBillingPage(n){_billingPage=n;renderBilling();}
-function setAnalyticsInvoicePage(n){_analyticsInvoicePage=n;renderAnalytics();}
-function setAnalyticsPaymentPage(n){_analyticsPaymentPage=n;renderAnalytics();}
+function setAnalyticsInvoicePage(n){_analyticsInvoicePage=n;renderFinance();}
+function setAnalyticsPaymentPage(n){_analyticsPaymentPage=n;renderFinance();}
 var pplStaffSubTab='applicants';  // Hiring page's own top tab: applicants | hired
 var staffApplications={};   // Staff hiring: applicant id → application record
 var staffFormConfig=null;   // Staff application form config — mirrors formConfig, drives campistry_staff_apply.html
@@ -817,6 +817,26 @@ var _ICO={
 function ico(name){return _ICO[name]||'';}
 function dtag(d){var c=(structure[d]&&structure[d].color)||'#94A3B8';return'<span class="div-tag" style="background:'+c+'10;color:'+c+'"><span class="div-dot" style="background:'+c+'"></span>'+esc(d)+'</span>'}
 function fm(n){return'$'+Number(n||0).toLocaleString()}
+
+// ── Shared stat-tile row + underline tab strip ──────────────────────────
+// Billing, Analytics and Finance each hand-rolled the same "plain bordered
+// box with a colored accent" stat tile and the same "ghost button with an
+// underline" tab strip as one-off inline styles — three near-identical
+// copies that could quietly drift apart. One shared pair here instead.
+function statTile(label,value,sub,color){
+    return'<div class="stat-tile" style="border-left-color:'+(color||'var(--s200)')+'">'+
+        '<div class="stat-tile-label">'+esc(label)+'</div>'+
+        '<div class="stat-tile-value">'+value+'</div>'+
+        (sub?'<div class="stat-tile-sub">'+esc(sub)+'</div>':'')+
+    '</div>';
+}
+function statRow(tilesHtml){return'<div class="stat-row">'+tilesHtml+'</div>'}
+/** tabs:[{k,l}] active:string onClick:'CampistryMe.someFn' — passed the tab key as its one argument. */
+function tabStrip(tabs,active,onClick){
+    return'<div class="tab-strip">'+tabs.map(function(t){
+        return'<button class="tab-strip-btn'+(active===t.k?' active':'')+'" onclick="'+onClick+'(\''+t.k+'\')">'+esc(t.l)+'</button>';
+    }).join('')+'</div>';
+}
 // opts: {actionLabel, onAction} — an optional action button (e.g. "Undo").
 // Gets a longer on-screen window than a plain toast so a real click can land.
 function toast(m,t,opts){
@@ -1037,7 +1057,7 @@ function ff(label,id,val,type,opts){
 
 // ═══ RENDERERS ═══════════════════════════════════════════════════
 function render(p){
-    var m={campers:renderCampers,camperdetail:renderCamperDetailPage,staffdetail:renderStaffDetailPage,structure:renderStructure,bunkbuilder:renderBB,registration:renderRegistrationPage,hiring:renderHiringPage,leads:renderLeads,billing:renderBilling,familydetail:renderFamilyDetailPage,payroll:renderPayroll,analytics:renderAnalytics,reports:renderReports,printsheets:renderPrintSheets};
+    var m={campers:renderCampers,camperdetail:renderCamperDetailPage,staffdetail:renderStaffDetailPage,structure:renderStructure,bunkbuilder:renderBB,registration:renderRegistrationPage,hiring:renderHiringPage,leads:renderLeads,billing:renderBilling,familydetail:renderFamilyDetailPage,payroll:renderPayroll,analytics:renderAnalytics,finance:renderFinance,reports:renderReports,printsheets:renderPrintSheets};
     if(m[p])m[p]();else renderSoon(p);
 }
 
@@ -9061,14 +9081,53 @@ function _buildInstallmentSchedule(sesObj,tuition){
     return out;
 }
 
-// ── ANALYTICS & FINANCE ──────────────────────────────────────
+// ── ANALYTICS ─────────────────────────────────────────────────
+// Enrollment and camp-wide operational metrics — no money on this page at
+// all (that split out into Finance). What used to be this page's own
+// "Enrollment Funnel" div-bar block now lives here as a real chart.
+function renderAnalytics(){
+    var c=document.getElementById('page-analytics');
+    if(!c)return;
+
+    var eArr=Object.entries(enrollments);
+    var funnel=[
+        {name:'Applied',count:eArr.length},
+        {name:'Accepted',count:eArr.filter(function(pair){return pair[1].status==='accepted'||pair[1].status==='enrolled'}).length},
+        {name:'Enrolled',count:eArr.filter(function(pair){return pair[1].status==='enrolled'}).length},
+        {name:'Waitlisted',count:eArr.filter(function(pair){return pair[1].status==='waitlisted'}).length},
+        {name:'Declined',count:eArr.filter(function(pair){return pair[1].status==='declined'}).length}
+    ];
+
+    var divisions=Object.keys(structure||{});
+    var bunkCount=0;
+    divisions.forEach(function(d){
+        Object.values((structure[d]||{}).grades||{}).forEach(function(g){bunkCount+=(g.bunks||[]).length});
+    });
+
+    var h='<div class="sec-hd"><div><h2 class="sec-title">Analytics</h2><p class="sec-desc">Enrollment and camp-wide operational metrics</p></div></div>';
+
+    h+=statRow(
+        statTile('Campers on Roster',String(roster?Object.keys(roster).length:0))+
+        statTile('Staff',String((payroll&&payroll.staff)?payroll.staff.length:0))+
+        statTile('Divisions',String(divisions.length))+
+        statTile('Bunks',String(bunkCount))
+    );
+
+    h+='<div class="me-card" style="padding:16px"><h4 style="font-size:.85rem;font-weight:700;color:var(--s700);margin:0 0 10px">Enrollment Funnel</h4>';
+    h+=chartBarH(funnel.map(function(f){return{label:f.name,value:f.count}}),{emptyText:'No applications yet'});
+    h+='</div>';
+
+    c.innerHTML=h;
+}
+
+// ── FINANCE ───────────────────────────────────────────────────
 var _finTab='overview';
 var FIN_CATS=['Food & Catering','Supplies & Equipment','Facilities & Rent','Insurance','Transportation','Activities & Trips','Marketing','Utilities','Miscellaneous'];
 var FIN_ROLES=['Head Counselor','Counselor','Junior Counselor','Specialist','Nurse','Kitchen Staff','Bus Driver','Office Staff','Director','Maintenance'];
 var BAR_COLORS=['#D97706','#3B82F6','#10B981','#8B5CF6','#EF4444','#0EA5E9','#F59E0B','#EC4899','#6366F1','#14B8A6'];
 
-function renderAnalytics(){
-    var c=document.getElementById('page-analytics');
+function renderFinance(){
+    var c=document.getElementById('page-finance');
 
     // ═══ AUTO-GENERATE INVOICES FROM ENROLLMENTS ═══
     // Every enrolled camper = an invoice. No manual entry needed.
@@ -9132,22 +9191,17 @@ function renderAnalytics(){
 
     var tabs=[{k:'overview',l:'Overview'},{k:'revenue',l:'Revenue'},{k:'payroll',l:'Payroll'},{k:'expenses',l:'Expenses'},{k:'budget',l:'Budget'},{k:'integrations',l:'Integrations'}];
 
-    var h='<div class="sec-hd"><div><h2 class="sec-title">Analytics & Finance</h2><p class="sec-desc">Financial command center</p></div>';
+    var h='<div class="sec-hd"><div><h2 class="sec-title">Finance</h2><p class="sec-desc">Revenue, payroll, expenses and budget</p></div>';
     h+='<div class="sec-actions">';
     h+='<button class="me-btn me-btn--sec me-btn--sm" onclick="CampistryMe.finExportCSV()">↓ Export CSV</button>';
     h+='<button class="me-btn me-btn--sec me-btn--sm" onclick="CampistryMe.finExportQB()">↓ QuickBooks</button>';
     h+='<button class="me-btn me-btn--sec me-btn--sm" onclick="CampistryMe.finSetBudget()">Set Budget</button>';
     h+='</div></div>';
 
-    // Sub-tabs
-    h+='<div style="display:flex;gap:0;border-bottom:1px solid var(--s200);margin-bottom:14px">';
-    tabs.forEach(function(t){
-        h+='<button class="me-btn me-btn--ghost" style="padding:8px 16px;font-size:.8rem;font-weight:600;border-bottom:2px solid '+(_finTab===t.k?'var(--me)':'transparent')+';color:'+(_finTab===t.k?'var(--me)':'var(--s400)')+';border-radius:0" onclick="CampistryMe.finSetTab(\''+t.k+'\')">'+t.l+'</button>';
-    });
-    h+='</div>';
+    // Sub-tabs — the shared underline tab strip Reports/Billing also use.
+    h+=tabStrip(tabs,_finTab,'CampistryMe.finSetTab');
 
-    function stat(label,value,sub,color){return'<div style="flex:1;min-width:140px;background:#fff;border-radius:var(--r);padding:12px 14px;border:1px solid var(--s200);border-left:3px solid '+color+'"><div style="font-size:.65rem;font-weight:700;color:var(--s400);text-transform:uppercase;letter-spacing:.04em">'+label+'</div><div style="font-size:1.2rem;font-weight:800;color:var(--s800);margin-top:2px">'+value+'</div>'+(sub?'<div style="font-size:.72rem;color:var(--s400);margin-top:1px">'+sub+'</div>':'')+'</div>'}
-    function bar(items,maxVal){var bh='';items.forEach(function(item,i){var pct=maxVal>0?Math.round(item.value/maxVal*100):0;var color=BAR_COLORS[i%BAR_COLORS.length];bh+='<div style="display:flex;align-items:center;gap:8px;margin-bottom:4px"><div style="width:90px;font-size:.75rem;font-weight:600;color:var(--s500);text-align:right;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">'+esc(item.name)+'</div><div style="flex:1;height:20px;background:var(--s100);border-radius:4px;overflow:hidden"><div style="width:'+pct+'%;height:100%;background:'+color+';border-radius:4px;transition:width .3s"></div></div><div style="width:60px;font-size:.75rem;font-weight:700;color:var(--s700);text-align:right">'+fm(item.value)+'</div></div>'});return bh}
+    function stat(label,value,sub,color){return statTile(label,value,sub,color)}
 
     if(_finTab==='overview'){
         // Overdue alert banner
@@ -9167,7 +9221,7 @@ function renderAnalytics(){
         h+='</div>';
 
         // ═══ A/R AGING — outstanding balance bucketed by age of the invoice ═══
-        var aging=[{l:'Current (0–30 days)',v:0,c:'var(--ok)'},{l:'31–60 days',v:0,c:'var(--me)'},{l:'61–90 days',v:0,c:'#F97316'},{l:'90+ days',v:0,c:'var(--err)'}];
+        var aging=[{l:'Current (0–30 days)',v:0},{l:'31–60 days',v:0},{l:'61–90 days',v:0},{l:'90+ days',v:0}];
         autoInvoices.forEach(function(inv){
             if(inv.balance<=0)return;
             var days=Math.floor((todayMs-new Date(inv.enrollDate||todayStr).getTime())/86400000);
@@ -9175,35 +9229,25 @@ function renderAnalytics(){
         });
         var agingTotal=aging.reduce(function(s,b){return s+b.v},0);
         h+='<div class="me-card" style="margin-bottom:14px;padding:16px"><div style="display:flex;justify-content:space-between;align-items:baseline;margin-bottom:10px"><h4 style="font-size:.85rem;font-weight:700;color:var(--s700);margin:0">Accounts Receivable — Aging</h4><span style="font-size:.72rem;color:var(--s400)">Total outstanding '+fm(agingTotal)+'</span></div>';
-        h+='<div style="display:flex;height:10px;border-radius:5px;overflow:hidden;background:var(--s100);margin-bottom:12px">';
-        aging.forEach(function(b){var pct=agingTotal>0?b.v/agingTotal*100:0;if(pct>0)h+='<div style="width:'+pct+'%;background:'+b.c+'" title="'+esc(b.l)+': '+fm(b.v)+'"></div>';});
-        h+='</div><div style="display:grid;grid-template-columns:repeat(4,1fr);gap:8px">';
-        aging.forEach(function(b){h+='<div style="text-align:center;padding:8px 6px;border:1px solid var(--s200);border-radius:var(--r);border-top:3px solid '+b.c+'"><div style="font-size:1.05rem;font-weight:800;color:var(--s800)">'+fm(b.v)+'</div><div style="font-size:.68rem;color:var(--s400);font-weight:600;margin-top:2px">'+esc(b.l)+'</div></div>';});
-        h+='</div></div>';
-
-        // Enrollment funnel
-        var eArr=Object.entries(enrollments);
-        var funnel=[{name:'Applied',count:eArr.length,color:'var(--s400)'},{name:'Accepted',count:eArr.filter(function([,e]){return e.status==='accepted'||e.status==='enrolled'}).length,color:'#3B82F6'},{name:'Enrolled',count:eArr.filter(function([,e]){return e.status==='enrolled'}).length,color:'var(--ok)'},{name:'Waitlisted',count:eArr.filter(function([,e]){return e.status==='waitlisted'}).length,color:'var(--me)'},{name:'Declined',count:eArr.filter(function([,e]){return e.status==='declined'}).length,color:'var(--err)'}];
-        var maxFunnel=funnel[0].count||1;
-        h+='<div style="display:flex;gap:14px;flex-wrap:wrap">';
-        h+='<div class="me-card" style="flex:1;min-width:280px;padding:16px"><h4 style="font-size:.85rem;font-weight:700;color:var(--s700);margin:0 0 10px">Enrollment Funnel</h4>';
-        funnel.forEach(function(f){var pct=Math.round(f.count/maxFunnel*100);h+='<div style="display:flex;align-items:center;gap:8px;margin-bottom:4px"><div style="width:70px;font-size:.75rem;font-weight:600;color:var(--s500);text-align:right">'+f.name+'</div><div style="flex:1;height:22px;background:var(--s100);border-radius:4px;overflow:hidden;position:relative"><div style="width:'+pct+'%;height:100%;background:'+f.color+';border-radius:4px"></div><span style="position:absolute;right:6px;top:3px;font-size:.7rem;font-weight:700;color:var(--s600)">'+f.count+'</span></div></div>'});
+        h+=chartBarH(aging.map(function(b){return{label:b.l,value:b.v}}),{money:true,emptyText:'Nothing outstanding'});
         h+='</div>';
 
         // Payment status
-        h+='<div class="me-card" style="flex:1;min-width:200px;padding:16px"><h4 style="font-size:.85rem;font-weight:700;color:var(--s700);margin:0 0 10px">Payment Status</h4>';
-        var payStats=[{name:'Paid',count:paidCount,color:'var(--ok)'},{name:'Partial',count:partialCount,color:'var(--me)'},{name:'Overdue',count:overdueCount,color:'var(--err)'},{name:'Pending',count:pendingCount,color:'var(--s400)'}];
-        var totalPayCount=autoInvoices.length||1;
-        payStats.forEach(function(p){var pct=Math.round(p.count/totalPayCount*100);h+='<div style="display:flex;align-items:center;gap:8px;margin-bottom:6px"><div style="width:10px;height:10px;border-radius:3px;background:'+p.color+';flex-shrink:0"></div><div style="flex:1;font-size:.82rem;font-weight:600;color:var(--s700)">'+p.name+'</div><div style="font-size:.82rem;font-weight:700;color:var(--s800)">'+p.count+'</div><div style="font-size:.72rem;color:var(--s400);width:35px;text-align:right">'+pct+'%</div></div>'});
-        h+='</div></div>';
+        h+='<div class="me-card" style="margin-bottom:14px;padding:16px"><h4 style="font-size:.85rem;font-weight:700;color:var(--s700);margin:0 0 10px">Payment Status</h4>';
+        h+=chartDonut([
+            {label:'Paid',value:paidCount,color:'#008300'},
+            {label:'Partial',value:partialCount,color:chartColor(3)},
+            {label:'Overdue',value:overdueCount,color:'#e34948'},
+            {label:'Pending',value:pendingCount,color:'#94A3B8'}
+        ],{centerLabel:String(autoInvoices.length),centerSub:'accounts'});
+        h+='</div>';
 
         // Expense breakdown
         var expByCat={};finExpenses.forEach(function(e){expByCat[e.cat]=(expByCat[e.cat]||0)+e.amount});
         var expItems=Object.entries(expByCat).map(function([name,value]){return{name:name,value:value}}).sort(function(a,b){return b.value-a.value});
-        var maxExp=expItems.length?expItems[0].value:1;
         if(expItems.length){
-            h+='<div class="me-card" style="margin-top:14px;padding:16px"><h4 style="font-size:.85rem;font-weight:700;color:var(--s700);margin:0 0 10px">Expense Categories</h4>';
-            h+=bar(expItems,maxExp);
+            h+='<div class="me-card" style="padding:16px"><h4 style="font-size:.85rem;font-weight:700;color:var(--s700);margin:0 0 10px">Expense Categories</h4>';
+            h+=chartBarH(expItems.map(function(x){return{label:x.name,value:x.value}}),{money:true});
             h+='</div>';
         }
     }
@@ -9218,6 +9262,31 @@ function renderAnalytics(){
 
         // Auto-invoice explanation
         h+='<div style="background:#FFF7ED;border:1px solid #FDBA74;border-radius:var(--r);padding:10px 14px;margin-bottom:10px;font-size:.78rem;color:var(--s600)"><strong style="color:var(--me)">Auto-Generated Invoices</strong> — Each enrolled camper automatically creates an invoice based on their session tuition. Record payments below to update balances.</div>';
+
+        // Revenue trend — real payments (positive amounts, not pending/failed)
+        // bucketed by the ISO week they landed, so the office can see whether
+        // collections are picking up or stalling, not just a single total.
+        (function(){
+            var byWeek={};
+            finPayments.forEach(function(p){
+                if(!p||!p.date||(p.amount||0)<=0)return;
+                if(p.status==='pending'||p.status==='failed')return;
+                var d=new Date(p.date+'T12:00:00');
+                if(isNaN(d.getTime()))return;
+                var wk=new Date(d);wk.setDate(d.getDate()-d.getDay());
+                var key=wk.toISOString().slice(0,10);
+                byWeek[key]=(byWeek[key]||0)+p.amount;
+            });
+            var weeks=Object.keys(byWeek).sort();
+            if(weeks.length>=2){
+                var pts=weeks.slice(-10).map(function(k){
+                    return{label:new Date(k+'T12:00:00').toLocaleDateString('en-US',{month:'short',day:'numeric'}),value:byWeek[k]};
+                });
+                h+='<div class="me-card" style="margin-bottom:14px;padding:16px"><h4 style="font-size:.85rem;font-weight:700;color:var(--s700);margin:0 0 10px">Revenue Collected by Week</h4>';
+                h+=chartLine(pts,{money:true});
+                h+='</div>';
+            }
+        })();
 
         // Overdue threshold setting
         h+='<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px;flex-wrap:wrap;gap:6px">';
@@ -9278,7 +9347,7 @@ function renderAnalytics(){
         var roleItems=Object.entries(roleCost).map(function([name,value]){return{name:name,value:value}}).sort(function(a,b){return b.value-a.value});
         if(roleItems.length){
             h+='<div class="me-card" style="margin-bottom:14px;padding:16px"><h4 style="font-size:.85rem;font-weight:700;color:var(--s700);margin:0 0 10px">Cost by Role</h4>';
-            h+=bar(roleItems,roleItems[0].value);
+            h+=chartBarH(roleItems.map(function(x){return{label:x.name,value:x.value}}),{money:true});
             h+='</div>';
         }
         h+='<div style="display:flex;justify-content:flex-end;margin-bottom:8px"><button class="me-btn me-btn--pri me-btn--sm" onclick="CampistryMe.finAddStaff()">+ Add Staff</button></div>';
@@ -9307,7 +9376,7 @@ function renderAnalytics(){
         var expItems2=Object.entries(expByCat2).map(function([name,value]){return{name:name,value:value}}).sort(function(a,b){return b.value-a.value});
         if(expItems2.length){
             h+='<div class="me-card" style="margin-bottom:14px;padding:16px"><h4 style="font-size:.85rem;font-weight:700;color:var(--s700);margin:0 0 10px">Expenses by Category</h4>';
-            h+=bar(expItems2,expItems2[0].value);
+            h+=chartBarH(expItems2.map(function(x){return{label:x.name,value:x.value}}),{money:true});
             h+='</div>';
         }
         h+='<div style="display:flex;justify-content:flex-end;margin-bottom:8px"><button class="me-btn me-btn--pri me-btn--sm" onclick="CampistryMe.finAddExpense()">+ Add Expense</button></div>';
@@ -9386,7 +9455,7 @@ function renderAnalytics(){
 }
 
 // Finance actions
-function finSetTab(t){_finTab=t;_analyticsInvoicePage=1;_analyticsPaymentPage=1;renderAnalytics()}
+function finSetTab(t){_finTab=t;_analyticsInvoicePage=1;_analyticsPaymentPage=1;renderFinance()}
 // All bunk names across the camp structure (for staff bunk assignment).
 function _allBunkNames(){
     var out={};
@@ -9487,7 +9556,7 @@ function finStaffModal(i){
         else finStaff.push(rec);
         _staffPhotoBuf=null;
         closeModal('dynModal');
-        save();renderAnalytics();toast(editing?'Staff updated':'Staff added');
+        save();renderFinance();toast(editing?'Staff updated':'Staff added');
     });
 }
 function _staffPhotoPick(input){
@@ -9503,18 +9572,18 @@ function _staffPhotoClear(){
     var prev=document.getElementById('staffPhotoPrev');
     if(prev) prev.innerHTML=_staffAvatar({},64);
 }
-function finRemoveStaff(i){finStaff.splice(i,1);save();renderAnalytics();toast('Removed')}
+function finRemoveStaff(i){finStaff.splice(i,1);save();renderFinance();toast('Removed')}
 function finAddExpense(){
     var desc=prompt('Description:');if(!desc)return;
     var cat=prompt('Category ('+FIN_CATS.join(', ')+'):','Miscellaneous');
     var amount=prompt('Amount ($):','');if(!amount)return;
     var date=prompt('Date (YYYY-MM-DD):',new Date().toISOString().split('T')[0]);
     finExpenses.push({id:Date.now(),desc:desc.trim(),cat:(cat||'Miscellaneous').trim(),amount:parseFloat(amount)||0,date:(date||'').trim()});
-    save();renderAnalytics();toast('Expense added');
+    save();renderFinance();toast('Expense added');
 }
-function finRemoveExpense(i){finExpenses.splice(i,1);save();renderAnalytics();toast('Removed')}
+function finRemoveExpense(i){finExpenses.splice(i,1);save();renderFinance();toast('Removed')}
 function finAddPayment(){
-    if(!_secEdit('analytics','Recording a payment'))return;
+    if(!_secEdit('finance','Recording a payment'))return;
 
     // A modal rather than a prompt chain, so the method comes from the camp's
     // payment policy instead of whatever the user types into a text box.
@@ -9537,7 +9606,7 @@ function finAddPayment(){
         finPayments.push({id:Date.now(),family:family,amount:amount,method:method,
                           date:document.getElementById('fapDate').value||today,status:'paid'});
         closeModal('dynModal');
-        save();renderAnalytics();toast('Payment recorded');
+        save();renderFinance();toast('Payment recorded');
     });
 }
 function finRemovePayment(id){
@@ -9545,7 +9614,7 @@ function finRemovePayment(id){
     //   index would target the wrong row; identical rows were also indistinguishable).
     var idx=finPayments.findIndex(function(p){return String(p.id)===String(id)});
     if(idx<0){toast('Payment not found','error');return}
-    finPayments.splice(idx,1);save();renderAnalytics();toast('Removed');
+    finPayments.splice(idx,1);save();renderFinance();toast('Removed');
 }
 
 function finSetBudget(){
@@ -9553,13 +9622,13 @@ function finSetBudget(){
     var pay=prompt('Payroll budget ($):',finBudget.payroll||'');
     var exp=prompt('Expense budget ($):',finBudget.expenses||'');
     finBudget={revenue:parseFloat(rev)||0,payroll:parseFloat(pay)||0,expenses:parseFloat(exp)||0,overdueDays:finBudget.overdueDays||30};
-    save();renderAnalytics();toast('Budget targets saved');
+    save();renderFinance();toast('Budget targets saved');
 }
 function finSetOverdue(){
     var days=prompt('Mark accounts overdue after how many days?',finBudget.overdueDays||30);
     if(days===null)return;
     finBudget.overdueDays=parseInt(days)||30;
-    save();renderAnalytics();toast('Overdue threshold set to '+finBudget.overdueDays+' days');
+    save();renderFinance();toast('Overdue threshold set to '+finBudget.overdueDays+' days');
 }
 
 // ── EXPORT FUNCTIONS ─────────────────────────────────────────
@@ -9699,7 +9768,7 @@ function finImportCSV(){
                     imported++;
                 }
             }
-            save();renderAnalytics();toast(imported+' transactions imported');
+            save();renderFinance();toast(imported+' transactions imported');
             inp.value='';
         };
         reader.readAsText(file);
@@ -9934,11 +10003,7 @@ function renderPayroll(){
     }
     h+='</div></div>';
 
-    h+='<div style="display:flex;gap:0;border-bottom:1px solid var(--s200);margin-bottom:14px;flex-wrap:wrap">';
-    tabs.forEach(function(t){
-        h+='<button class="me-btn me-btn--ghost" style="padding:8px 16px;font-size:.8rem;font-weight:600;border-bottom:2px solid '+(_prTab===t.k?'var(--me)':'transparent')+';color:'+(_prTab===t.k?'var(--me)':'var(--s400)')+';border-radius:0" onclick="CampistryMe.prSetTab(\''+t.k+'\')">'+t.l+'</button>';
-    });
-    h+='</div>';
+    h+=tabStrip(tabs,_prTab,'CampistryMe.prSetTab');
 
     if(_prTab==='overview') h+=_prOverview();
     else if(_prTab==='staff') h+=_prStaffTab();
@@ -10954,25 +11019,21 @@ function renderBilling(){
     // couldn't safely decide on its own.
     h+=_famSuggestionsBannerHtml();
 
-    // Stats — plain borders, only the number itself is colored, so this
-    // reads as a data summary rather than a row of colorful tiles.
-    h+='<div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(155px,1fr));gap:10px;margin-bottom:18px">';
-    h+='<div style="background:#fff;border-radius:var(--r);padding:14px 16px;border:1px solid var(--s200)"><div style="font-size:1.2rem;font-weight:700;color:var(--s800)">'+fm(totalCharged)+'</div><div style="font-size:.7rem;color:var(--s400);font-weight:600;text-transform:uppercase">Total Charged</div></div>';
-    h+='<div style="background:#fff;border-radius:var(--r);padding:14px 16px;border:1px solid var(--s200)"><div style="font-size:1.2rem;font-weight:700;color:var(--ok)">'+fm(totalCollected)+'</div><div style="font-size:.7rem;color:var(--s400);font-weight:600;text-transform:uppercase">Collected</div></div>';
-    h+='<div style="background:#fff;border-radius:var(--r);padding:14px 16px;border:1px solid var(--s200)"><div style="font-size:1.2rem;font-weight:700;color:var(--err)">'+fm(totalOutstanding)+'</div><div style="font-size:.7rem;color:var(--s400);font-weight:600;text-transform:uppercase">Outstanding</div></div>';
-    h+='<div style="background:#fff;border-radius:var(--r);padding:14px 16px;border:1px solid var(--s200)"><div style="font-size:1.2rem;font-weight:700;color:var(--s800)">'+rate+'%</div><div style="font-size:.7rem;color:var(--s400);font-weight:600;text-transform:uppercase">Collection Rate</div></div>';
-    h+='<div style="background:#fff;border-radius:var(--r);padding:14px 16px;border:1px solid var(--s200)"><div style="font-size:1.2rem;font-weight:700;color:'+(overdueCount>0?'var(--err)':'var(--s800)')+'">'+overdueCount+'</div><div style="font-size:.7rem;color:var(--s400);font-weight:600;text-transform:uppercase">Overdue</div></div>';
-    if(_unmatchedTotal>0)h+='<div style="background:#fff;border-radius:var(--r);padding:14px 16px;border:1px solid var(--s200)" title="Payments not linked to any family. Included in Analytics revenue but NOT in the family ledgers above. Collected + Unmatched = Analytics revenue."><div style="font-size:1.2rem;font-weight:700;color:var(--me)">'+fm(_unmatchedTotal)+'</div><div style="font-size:.7rem;color:var(--s400);font-weight:600;text-transform:uppercase">Unmatched ('+_unmatchedPays.length+')</div></div>';
-    h+='</div>';
+    // Stats — same shared stat-tile Analytics and Finance use, so Billing
+    // reads as one visual system with the rest of the app instead of its
+    // own one-off "plain bordered box" styling.
+    h+=statRow(
+        statTile('Total Charged',fm(totalCharged))+
+        statTile('Collected',fm(totalCollected),'','var(--ok)')+
+        statTile('Outstanding',fm(totalOutstanding),'','var(--err)')+
+        statTile('Collection Rate',rate+'%')+
+        statTile('Overdue',String(overdueCount),'',overdueCount>0?'var(--err)':undefined)+
+        (_unmatchedTotal>0?statTile('Unmatched ('+_unmatchedPays.length+')',fm(_unmatchedTotal),'Included in Analytics revenue, not in the ledgers below','var(--me)'):'')
+    );
 
-    // Filter tabs
-    h+='<div style="display:flex;gap:6px;margin-bottom:14px;flex-wrap:wrap">';
+    // Filter tabs — same underline tab strip used throughout Finance/Reports.
     var filters=[['all','All Accounts',famList.length],['outstanding','Outstanding',famWithBalance],['overdue','Overdue',overdueCount],['paid','Paid In Full',famList.filter(function(l){return l.status==='paid'}).length]];
-    filters.forEach(function(f){
-        var active=_billFilter===f[0];
-        h+='<button class="me-btn '+(active?'me-btn--pri':'me-btn--sec')+' me-btn--sm" onclick="CampistryMe.setBillFilter(\''+f[0]+'\')">'+f[1]+' ('+f[2]+')</button>';
-    });
-    h+='</div>';
+    h+=tabStrip(filters.map(function(f){return{k:f[0],l:f[1]+' ('+f[2]+')'}}),_billFilter,'CampistryMe.setBillFilter');
 
     // Family accounts
     var filtered=famList;
@@ -11434,7 +11495,7 @@ function issueCreditForFamily(famKey){
             // The refund itself (finPayments push + save) is already done at this
             // point — a rendering failure below must never look like the refund
             // silently vanished, so surface it loudly instead of swallowing it.
-            try{renderAnalytics()}catch(e){console.error('[Me] renderAnalytics after refund failed:',e)}
+            try{renderFinance()}catch(e){console.error('[Me] renderFinance after refund failed:',e)}
             try{if(curPage==='familydetail')renderFamilyDetailPage();else renderBilling()}
             catch(e){
                 console.error('[Me] Re-render after refund failed:',e);

@@ -424,7 +424,10 @@
     var BRANCHES = {
         'me.billing':  [['campistryMe', 'families'], ['campistryMe', 'payments']],
         'me.payroll':  [['campistryMe', 'payroll'], ['campistryMe', 'youthCorps']],
-        'me.analytics': [['campistryMe', 'finExpenses'], ['campistryMe', 'finPayments']],
+        // Financial data moved under 'me.finance' when Analytics & Finance
+        // split into two pages — 'me.analytics' is now just the enrollment
+        // funnel, nothing sensitive to scrub there anymore.
+        'me.finance': [['campistryMe', 'finExpenses'], ['campistryMe', 'finPayments']],
         'snacks.accounts': [['campistrySnacks', 'accounts']],
         'link.tips':   [['campistryLink', 'tips']]
     };

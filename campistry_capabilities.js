@@ -75,7 +75,8 @@
                 { key: 'enrollment',  label: 'Registration',       desc: 'Applications, enrolment status, forms' },
                 { key: 'billing',     label: 'Billing',            desc: 'Tuition, family balances, payments', sensitive: true },
                 { key: 'payroll',     label: 'Payroll',            desc: 'Staff pay, rates and Youth Corps', sensitive: true },
-                { key: 'analytics',   label: 'Analytics & Finance', desc: 'Revenue, expenses, financial reports', viewOnly: true, sensitive: true },
+                { key: 'analytics',   label: 'Analytics',          desc: 'Enrollment funnel and camp-wide operational metrics', viewOnly: true },
+                { key: 'finance',     label: 'Finance',            desc: 'Revenue, expenses, payroll costs, budget', viewOnly: true, sensitive: true },
                 { key: 'reports',     label: 'Reports',            desc: 'Camper and roster reports', viewOnly: true },
                 { key: 'printsheets', label: 'Print Sheets',       desc: 'Custom printable sheets' },
                 { key: 'settings',    label: 'Settings',           desc: 'Camp-wide settings, custom fields, payment keys', sensitive: true }
@@ -246,7 +247,7 @@
             key: 'bookkeeper', label: 'Bookkeeper',
             desc: 'The money: billing, payroll, finance. Roster read-only.',
             grants: {
-                'me.billing': 'edit', 'me.payroll': 'edit', 'me.analytics': 'view',
+                'me.billing': 'edit', 'me.payroll': 'edit', 'me.finance': 'view', 'me.analytics': 'view',
                 'me.campers': 'view', 'me.reports': 'view',
                 'snacks.transactions': 'view', 'snacks.accounts': 'view', 'snacks.pos': 'none'
             }
@@ -343,7 +344,25 @@
             level = 'edit';                          // legacy behaviour
         } else {
             var overrides = access.overrides || {};
-            if (Object.prototype.hasOwnProperty.call(overrides, key)) {
+            var hasOwnOverride = Object.prototype.hasOwnProperty.call(overrides, key);
+            var presetObj = access.preset ? C.preset(access.preset) : null;
+            var hasOwnPresetGrant = !!(presetObj && Object.prototype.hasOwnProperty.call(presetObj.grants || {}, key));
+
+            // 'finance' was split out of what used to be one 'analytics'
+            // capability ("Analytics & Finance"). Access configured before
+            // that split only ever names 'analytics' (full key e.g.
+            // 'me.analytics') — resolving 'finance' as "just another
+            // unlisted key" (-> 'none' below) would silently hide financial
+            // data from people who already had it. Until an owner
+            // explicitly sets 'finance' on its own (a real override, or a
+            // preset that names it specifically), it just IS 'analytics' —
+            // recursing also correctly picks up that key's own
+            // wildcard/legacy fallbacks, not only a literal override.
+            if (cap.section === 'finance' && !hasOwnOverride && !hasOwnPresetGrant) {
+                return C.resolve(cap.app + '.analytics', access);
+            }
+
+            if (hasOwnOverride) {
                 level = overrides[key];
             } else if (access.preset) {
                 level = C.expandPreset(access.preset)[key];
