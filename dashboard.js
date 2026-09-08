@@ -1495,16 +1495,42 @@
                 return;
             }
             if (data.processorKey === 'stripe') {
-                box.innerHTML = '<p style="margin:0;">On <strong>Stripe</strong> (the default) — the "Where tuition money lands" card above covers this.</p>';
+                box.innerHTML = '<p style="margin:0 0 8px;">On <strong>Stripe</strong> (the default) — the "Where tuition money lands" card above covers this.</p>' +
+                    '<p style="margin:0;font-size:0.78rem;color:var(--slate-400);">Want to use your own processor (Banquest, Sola/Cardknox, etc.) instead? Contact the office — connecting a different processor needs a quick verification call.</p>';
             } else if (data.status === 'verified') {
-                box.innerHTML = '<p style="margin:0;color:#059669;">Connected to your own <strong>' + escTelnyx(data.processorLabel || data.processorKey) + '</strong> account' +
-                    (data.connectedAt ? ' since ' + new Date(data.connectedAt).toLocaleDateString() : '') + '. Payments run through your own processor, not Stripe.</p>';
+                box.innerHTML = '<p style="margin:0 0 10px;color:#059669;">Connected to your own <strong>' + escTelnyx(data.processorLabel || data.processorKey) + '</strong> account' +
+                    (data.connectedAt ? ' since ' + new Date(data.connectedAt).toLocaleDateString() : '') + '. Payments run through your own processor, not Stripe.</p>' +
+                    '<button type="button" class="btn-secondary" onclick="disconnectCampProcessor(this)">Disconnect &amp; switch back to Stripe</button>';
             } else {
-                box.innerHTML = '<p style="margin:0;color:#dc2626;">Connected to <strong>' + escTelnyx(data.processorLabel || data.processorKey) + '</strong> but not yet verified (status: ' + escTelnyx(data.status) + '). Contact Campistry support.</p>';
+                box.innerHTML = '<p style="margin:0 0 10px;color:#dc2626;">Connected to <strong>' + escTelnyx(data.processorLabel || data.processorKey) + '</strong> but not yet verified (status: ' + escTelnyx(data.status) + '). Contact Campistry support.</p>' +
+                    '<button type="button" class="btn-secondary" onclick="disconnectCampProcessor(this)">Disconnect &amp; switch back to Stripe</button>';
             }
         } catch (e) {
             console.error('[Dashboard] loadCampPaymentProcessorStatus threw:', e);
             box.innerHTML = '<p style="margin:0;color:#dc2626;">Could not load payment processor status: ' + escTelnyx(e && e.message ? e.message : String(e)) + '</p>';
+        }
+    };
+
+    // Self-serve disconnect (back to Stripe) — the one BYOP action a camp
+    // owner/admin can do themselves. Connecting a NEW non-Stripe processor
+    // deliberately stays office-assisted (see migration 126's own header) —
+    // this direction just tears down what's already there, so it's safe to
+    // self-serve.
+    window.disconnectCampProcessor = async function(btn) {
+        if (!confirm('Disconnect your current payment processor and switch tuition/canteen charges back to Stripe?')) return;
+        if (btn) { btn.disabled = true; btn.textContent = 'Disconnecting…'; }
+        try {
+            const campId = (window.CampistryDB && window.CampistryDB.getCampId) ? window.CampistryDB.getCampId() : null;
+            if (!campId) throw new Error('No camp id available');
+            const { data, error } = await window.supabase.rpc('disconnect_my_camp_processor', { p_camp_id: campId });
+            if (error || !data || !data.success) {
+                throw new Error((data && data.error) || (error && error.message) || 'Disconnect failed');
+            }
+            await loadCampPaymentProcessorStatus(campId);
+        } catch (e) {
+            console.error('[Dashboard] disconnectCampProcessor failed:', e);
+            alert('Could not disconnect: ' + (e && e.message ? e.message : String(e)));
+            if (btn) { btn.disabled = false; btn.textContent = 'Disconnect & switch back to Stripe'; }
         }
     };
 
