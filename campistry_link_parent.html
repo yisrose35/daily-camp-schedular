@@ -975,7 +975,13 @@ async function _lkCheckout(body){
 // instead of the generic standalone "you can close this window" thank-you
 // page, so the parent doesn't have to navigate back in manually.
 function _lkReturnUrl(status,tag){
-    return location.origin+location.pathname+'?linkback='+encodeURIComponent(tag)+'&status='+encodeURIComponent(status);
+    // location.origin/pathname are dead inside Capacitor (capacitor://localhost)
+    // — same reasoning as parentForgotPassword's redirectTo below. This return
+    // URL gets handed to an EXTERNAL browser tab/sheet (Stripe/BYOP checkout),
+    // which has no access to the app's local bundle at all, so it must always
+    // be the real public URL regardless of platform.
+    var base=(window.__CAMPISTRY_PARENT_URL__||'https://link.campistry.org').replace(/\/+$/,'');
+    return base+'/campistry_link_parent.html?linkback='+encodeURIComponent(tag)+'&status='+encodeURIComponent(status);
 }
 function _handleStripeReturn(){
     var params=new URLSearchParams(location.search);
@@ -1342,7 +1348,11 @@ async function _lkPayConfirm(){
         // campistry_me.js and addFunds()'s canteen equivalent above.
         if(processorKey&&processorKey!=='stripe'){
             if(!d.familyKey){toast('Could not start payment: family record not found — contact the camp office','error');return;}
-            var byopUrl=window.location.origin+'/campistry_card_setup.html?campId='+encodeURIComponent(cid)+
+            // window.location.origin is dead inside Capacitor (capacitor://localhost)
+            // — this opens in an external browser sheet, which can't resolve
+            // that scheme at all, so it must be the real public URL.
+            var _byopBase=(window.__CAMPISTRY_PARENT_URL__||'https://link.campistry.org').replace(/\/+$/,'');
+            var byopUrl=_byopBase+'/campistry_card_setup.html?campId='+encodeURIComponent(cid)+
                 '&familyKey='+encodeURIComponent(d.familyKey)+
                 '&familyName='+encodeURIComponent(d.familyName||'')+
                 '&amount='+encodeURIComponent(amt)+
@@ -1830,7 +1840,10 @@ async function addFunds(){
     // which mints a session server-side) — open the tokenizer page directly,
     // same pattern as sendPayLink()'s BYOP branch in campistry_me.js.
     if(processorKey&&processorKey!=='stripe'){
-        var byopUrl=window.location.origin+'/campistry_card_setup.html?campId='+encodeURIComponent(c.campId)+
+        // window.location.origin is dead inside Capacitor (capacitor://localhost)
+        // — same reasoning as the tuition Pay Now branch above.
+        var _byopBase2=(window.__CAMPISTRY_PARENT_URL__||'https://link.campistry.org').replace(/\/+$/,'');
+        var byopUrl=_byopBase2+'/campistry_card_setup.html?campId='+encodeURIComponent(c.campId)+
             '&camperName='+encodeURIComponent(c.name)+
             '&amount='+encodeURIComponent(amt)+
             '&desc='+encodeURIComponent('Canteen funds — '+c.name)+
