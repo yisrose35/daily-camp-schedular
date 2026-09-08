@@ -33,6 +33,14 @@
         <h1>Loading…</h1>
     </div>
 
+    <!-- pay-now note: an amount/description in the URL flips this page from
+         "save a card for later" into "pay this specific balance now" — the
+         BYOP equivalent of a Stripe Checkout payment link (sendPayLink() in
+         campistry_me.js sends a BYOP camp's family here instead of a Stripe
+         URL). Same tokenizer, same PCI-scope-reduction role; the only
+         difference is which edge function the resulting token is posted to
+         and what the button/copy say. -->
+
     <!-- Same 3-script cloud config pattern every other public Campistry page
          uses (campistry_register.html, etc.) — config.js injects
          window.__CAMPISTRY_SUPABASE__, supabase_client.js builds the client
@@ -47,7 +55,26 @@
         var campId = params.get('campId');
         var familyKey = params.get('familyKey');
         var familyName = params.get('familyName') || 'your family';
+        // camperName (no familyKey) is canteen mode — a parent's own "Add
+        // Funds" tap (addFunds() in campistry_link_parent.html) for a camp
+        // on a connected BYOP processor, always pay-now (no "save a canteen
+        // card for later" concept). familyKey is tuition mode — either
+        // "save a card" (office-initiated) or, with `amount`, a one-time pay
+        // link (sendPayLink() in campistry_me.js).
+        var camperName = params.get('camperName') || '';
+        var isCanteen = !!camperName && !familyKey;
+        // Presence of `amount` is what flips tuition mode from "save a card
+        // for later" into "pay this specific balance now" — the BYOP
+        // equivalent of a Stripe Checkout payment link. `amount` is
+        // display-only here; the edge function it's posted to never trusts
+        // a client-supplied amount for anything security-relevant beyond
+        // "how much to charge this specific token."
+        var amount = parseFloat(params.get('amount') || '');
+        var isPayNow = isCanteen || amount > 0;
+        var payDesc = params.get('desc') || (isCanteen ? ('Canteen funds — ' + camperName) : ('Camp payment — ' + familyName));
+        var returnUrl = params.get('return') || '';
         var cardEl = document.getElementById('card');
+        if (isPayNow) document.title = 'Make a Payment — Campistry';
 
         function getClient() {
             return (window.CampistryDB && window.CampistryDB.getClient && window.CampistryDB.getClient()) ||
@@ -59,11 +86,22 @@
                 '<div class="note">Contact your camp\'s office if this keeps happening.</div>';
         }
 
-        function renderSuccess() {
+        function renderSuccess(paidAmount) {
+            var closeNote = returnUrl ? 'Taking you back to your camp portal…' : 'You can close this window.';
+            var msg = isCanteen
+                ? 'Your payment of $' + Number(paidAmount || amount).toFixed(2) + ' was added to ' + escapeHtml(camperName) + '\'s canteen balance. ' + closeNote
+                : isPayNow
+                ? 'Your payment of $' + Number(paidAmount || amount).toFixed(2) + ' for ' + escapeHtml(familyName) + ' was received. ' + closeNote
+                : 'A payment method is now on file for ' + escapeHtml(familyName) + '. You can close this window.';
             cardEl.innerHTML =
                 '<div class="icon"><svg width="26" height="26" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="20 6 9 17 4 12"/></svg></div>' +
-                '<h1 style="text-align:center">Saved!</h1>' +
-                '<p class="sub">A payment method is now on file for ' + escapeHtml(familyName) + '. You can close this window.</p>';
+                '<h1 style="text-align:center">' + (isPayNow ? 'Payment received!' : 'Saved!') + '</h1>' +
+                '<p class="sub">' + msg + '</p>';
+            // Only meaningful when the parent tapped Add Funds from inside
+            // Link (addFunds() passes &return=...) — an office-generated pay
+            // link (sendPayLink()) has nothing to return to, so it never
+            // carries this param and the page just shows the static message.
+            if (returnUrl) setTimeout(function() { window.location.href = returnUrl; }, 1500);
         }
 
         function escapeHtml(s) {
@@ -72,7 +110,7 @@
             });
         }
 
-        if (!campId || !familyKey) {
+        if (!campId || !(familyKey || camperName)) {
             renderError('This link is missing information and can\'t be used.');
             return;
         }
@@ -91,9 +129,10 @@
             }
             if (data.processorKey === 'banquest') {
                 renderBanquestForm(data.tokenizationKey);
+            } else if (data.processorKey === 'cardknox') {
+                renderCardknoxForm(data.tokenizationKey);
             } else {
-                // Cardknox/iFields (or anything else) not built yet — flagged
-                // in BYOP_SETUP.md, Banquest was the immediate priority.
+                // Anything else not built yet — flagged in BYOP_SETUP.md.
                 renderError('Online card setup for this camp\'s payment processor isn\'t available yet — please contact the office.');
             }
         }).catch(function() {
@@ -108,15 +147,20 @@
         // this environment. Diff this against NMI's own current docs before
         // going live with a real camp.
         function renderBanquestForm(tokenizationKey) {
+            var title = isPayNow ? ('Pay $' + amount.toFixed(2)) : 'Save a payment method';
+            var sub = isPayNow
+                ? ('For ' + escapeHtml(familyName) + ' — ' + escapeHtml(payDesc) + '. Your card details go directly to the payment processor and never touch Campistry\'s servers.')
+                : ('For ' + escapeHtml(familyName) + ' — used for future camp charges. Your card details go directly to the payment processor and never touch Campistry\'s servers.');
+            var btnLabel = isPayNow ? ('Pay $' + amount.toFixed(2)) : 'Save Payment Method';
             cardEl.innerHTML =
-                '<h1>Save a payment method</h1>' +
-                '<p class="sub">For ' + escapeHtml(familyName) + ' — used for future camp charges. Your card details go directly to the payment processor and never touch Campistry\'s servers.</p>' +
+                '<h1>' + title + '</h1>' +
+                '<p class="sub">' + sub + '</p>' +
                 '<div class="field-group"><span class="field-label">Card Number</span><div class="cc-field" id="ccnumber"></div></div>' +
                 '<div class="row">' +
                     '<div class="field-group"><span class="field-label">Expiration (MM/YY)</span><div class="cc-field" id="ccexp"></div></div>' +
                     '<div class="field-group"><span class="field-label">CVV</span><div class="cc-field" id="cvv"></div></div>' +
                 '</div>' +
-                '<button id="saveBtn" type="button">Save Payment Method</button>' +
+                '<button id="saveBtn" type="button">' + btnLabel + '</button>' +
                 '<div class="msg" id="msg"></div>';
 
             var script = document.createElement('script');
@@ -157,11 +201,78 @@
             });
         }
 
+        // ─── Cardknox/Sola iFields ──────────────────────────────────────────
+        // *** NOT YET VERIFIED AGAINST A LIVE SANDBOX *** — written from
+        // Cardknox's own published iFields sample/docs (each sensitive field
+        // is its own hosted iframe, identified by a data-ifields-id
+        // attribute; ifields.min.js wires them up and getTokens() posts each
+        // field's resulting Secure Usage Token into a matching hidden
+        // input). Only the card-number field is tokenized here — the CVV
+        // field is skipped on purpose: cardknox_adapter.ts's saveMethod/
+        // charge only ever send a single xToken (never a separate CVV), so
+        // collecting one would be dead weight with nothing server-side to
+        // send it to. Confirm the CDN version below against
+        // https://cdn.cardknox.com/ifields/versions.htm and run one real
+        // tokenize+save round-trip before relying on this for a real camp —
+        // same disclaimer renderBanquestForm above already carries.
+        function renderCardknoxForm(ifieldsKey) {
+            var title = isCanteen ? ('Pay $' + amount.toFixed(2)) : isPayNow ? ('Pay $' + amount.toFixed(2)) : 'Save a payment method';
+            var whoFor = isCanteen ? ('for ' + escapeHtml(camperName) + '\'s canteen account') : ('for ' + escapeHtml(familyName));
+            var sub = isPayNow
+                ? (whoFor + ' — ' + escapeHtml(payDesc) + '. Your card details go directly to the payment processor and never touch Campistry\'s servers.')
+                : (whoFor + ' — used for future camp charges. Your card details go directly to the payment processor and never touch Campistry\'s servers.');
+            var btnLabel = isPayNow ? ('Pay $' + amount.toFixed(2)) : 'Save Payment Method';
+            cardEl.innerHTML =
+                '<h1>' + title + '</h1>' +
+                '<p class="sub">' + sub + '</p>' +
+                '<div class="field-group"><span class="field-label">Card Number</span>' +
+                    '<iframe data-ifields-id="ckCardNum" data-ifields-placeholder="Card Number" class="cc-field" style="width:100%;height:20px;border:none;display:block"></iframe>' +
+                    '<input data-ifields-id="ckCardNum-token" type="hidden">' +
+                '</div>' +
+                '<div class="field-group"><span class="field-label">Expiration (MM/YY)</span><input type="text" id="ckExp" class="cc-field" placeholder="MM/YY" maxlength="5" style="width:100%;border:none;outline:none;font:inherit"></div>' +
+                '<button id="saveBtn" type="button">' + btnLabel + '</button>' +
+                '<div class="msg" id="msg"></div>';
+
+            var script = document.createElement('script');
+            script.src = 'https://cdn.cardknox.com/ifields/2.6.2006.0102/ifields.min.js';
+            script.onload = function() {
+                if (typeof setAccount !== 'function' || typeof getTokens !== 'function') {
+                    setMsg('Could not load the payment form. Reload and try again.', true);
+                    return;
+                }
+                setAccount(ifieldsKey, 'Campistry', '1.0');
+                if (typeof enableAutoFormatting === 'function') enableAutoFormatting();
+            };
+            script.onerror = function() {
+                setMsg('Could not load the payment form. Reload and try again.', true);
+            };
+            document.head.appendChild(script);
+
+            document.getElementById('saveBtn').addEventListener('click', function() {
+                setSaving(true);
+                setMsg('');
+                getTokens(function() {
+                    var tokEl = document.querySelector("[data-ifields-id='ckCardNum-token']");
+                    var token = tokEl && tokEl.value;
+                    if (!token) {
+                        setMsg('Could not process the card — check the details and try again.', true);
+                        setSaving(false);
+                        return;
+                    }
+                    submitToken(token);
+                }, function() {
+                    setMsg('Could not process the card — check the details and try again.', true);
+                    setSaving(false);
+                }, 15000);
+            });
+        }
+
         function setSaving(saving) {
             var btn = document.getElementById('saveBtn');
             if (!btn) return;
+            var idleLabel = isPayNow ? ('Pay $' + amount.toFixed(2)) : 'Save Payment Method';
             btn.disabled = saving;
-            btn.textContent = saving ? 'Saving…' : 'Save Payment Method';
+            btn.textContent = saving ? (isPayNow ? 'Processing…' : 'Saving…') : idleLabel;
         }
 
         function setMsg(text, isErr) {
@@ -171,17 +282,26 @@
             el.className = 'msg' + (text ? (isErr ? ' err' : ' ok') : '');
         }
 
+        // Pay-now mode charges the card immediately — payments-canteen-checkout
+        // for a canteen deposit, payments-checkout for a tuition pay link
+        // (both: save + charge in one call, since this parent has no session
+        // for a separate authenticated charge step); save-for-later mode
+        // only tokenizes+saves it (payments-save-method), same as before.
         function submitToken(token) {
-            client.functions.invoke('payments-save-method', {
-                body: { campId: campId, familyKey: familyKey, token: token }
-            }).then(function(res) {
+            var fnName = isCanteen ? 'payments-canteen-checkout' : isPayNow ? 'payments-checkout' : 'payments-save-method';
+            var body = isCanteen
+                ? { campId: campId, camperName: camperName, token: token, amount: amount, description: payDesc }
+                : isPayNow
+                ? { campId: campId, familyKey: familyKey, familyName: familyName, token: token, amount: amount, description: payDesc }
+                : { campId: campId, familyKey: familyKey, token: token };
+            client.functions.invoke(fnName, { body: body }).then(function(res) {
                 setSaving(false);
                 var data = res.data;
                 if (res.error || !data || !data.success) {
-                    setMsg((data && data.error) || 'Could not save the payment method. Try again.', true);
+                    setMsg((data && data.error) || (isPayNow ? 'Could not process the payment. Try again.' : 'Could not save the payment method. Try again.'), true);
                     return;
                 }
-                renderSuccess();
+                renderSuccess(data.amount);
             }).catch(function() {
                 setSaving(false);
                 setMsg('Could not reach Campistry\'s servers. Try again.', true);

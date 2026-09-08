@@ -950,27 +950,55 @@ window.cashOut = function() {
 // rest of this tab already uses, not the security boundary.
 // ==========================================================================
 
-function _stripeDeposits(name) {
-    return (snacks.transactions || []).filter(t =>
-        t && t.camper === name && t.kind === 'deposit' && t.method === 'stripe' && t.stripePaymentIntentId
-    );
+// The camp's connected processor — 'stripe' or a BYOP key (cardknox/
+// banquest). Cached per page load, same reasoning as campistry_me.js's own
+// _getCampPaymentProcessorKey: a lookup hiccup falls back to 'stripe' so it
+// never blocks the existing, working Stripe refund flow for a camp that
+// never touched BYOP.
+var _snacksProcessorKey = null;
+async function _getSnacksProcessorKey() {
+    if (_snacksProcessorKey) return _snacksProcessorKey;
+    try {
+        const db = window.CampistryDB;
+        const campId = db && db.getCampId && db.getCampId();
+        const client = db && db.client;
+        if (!campId || !client) return 'stripe';
+        const res = await client.rpc('get_camp_payment_processor_status', { p_camp_id: campId });
+        _snacksProcessorKey = (res.data && res.data.success && res.data.processorKey) || 'stripe';
+    } catch (e) {
+        console.warn('[Snacks] Could not resolve payment processor, defaulting to stripe:', e);
+        _snacksProcessorKey = 'stripe';
+    }
+    return _snacksProcessorKey;
 }
 
-// How much of this camper's balance can actually be refunded THROUGH STRIPE
-// — mirrors the edge function's own math client-side, purely for display:
-// each Stripe deposit's original amount minus whatever's already been
-// refunded from that same PaymentIntent (a cash/manual deposit has no
-// PaymentIntent at all, so it can never contribute here).
-function _stripeRefundCapacity(name) {
+// Every online (non-cash/manual) deposit for this camper ON THE CAMP'S
+// CURRENT processor — a Stripe deposit has stripePaymentIntentId, a BYOP
+// one has byopTransactionId instead. A manual/cash deposit (addDep above)
+// has neither, so it never appears here — there's nothing for either
+// gateway to refund.
+function _onlineDeposits(name, processorKey) {
+    return (snacks.transactions || []).filter(t => {
+        if (!t || t.camper !== name || t.kind !== 'deposit' || t.method !== processorKey) return false;
+        return processorKey === 'stripe' ? !!t.stripePaymentIntentId : !!t.byopTransactionId;
+    });
+}
+
+// How much of this camper's balance can actually be refunded through the
+// camp's CURRENT processor — mirrors the edge function's own math client-
+// side, purely for display: each online deposit's original amount minus
+// whatever's already been refunded from that same charge.
+function _onlineRefundCapacity(name, processorKey) {
     const txs = snacks.transactions || [];
-    return Math.round(_stripeDeposits(name).reduce((sum, dep) => {
-        const refundedSoFar = txs.filter(t => t && t.kind === 'refund' && t.stripePaymentIntentId === dep.stripePaymentIntentId)
+    const idField = processorKey === 'stripe' ? 'stripePaymentIntentId' : 'byopTransactionId';
+    return Math.round(_onlineDeposits(name, processorKey).reduce((sum, dep) => {
+        const refundedSoFar = txs.filter(t => t && t.kind === 'refund' && t[idField] === dep[idField])
             .reduce((s, t) => s + (Number(t.amount) || 0), 0);
         return sum + Math.max(0, Number(dep.amount) - refundedSoFar);
     }, 0) * 100) / 100;
 }
 
-window.refundPickCamper = function() {
+window.refundPickCamper = async function() {
     const name = (document.getElementById('refundCamper') || {}).value || '';
     const box = document.getElementById('refundBox');
     const amtInput = document.getElementById('refundAmt');
@@ -982,16 +1010,18 @@ window.refundPickCamper = function() {
         if (btn) btn.disabled = true;
         return;
     }
+    const processorKey = await _getSnacksProcessorKey();
+    const gatewayLabel = processorKey === 'cardknox' ? 'Sola' : processorKey === 'stripe' ? 'Stripe' : processorKey;
     const a = getAccount(name);
     const walletAvailable = Math.max(0, Math.round((a.balance - (a.balanceFloor || 0)) * 100) / 100);
-    const capacity = _stripeRefundCapacity(name);
+    const capacity = _onlineRefundCapacity(name, processorKey);
     const max = Math.min(walletAvailable, capacity);
 
     box.style.display = '';
     box.innerHTML =
-        '<div>Available to refund via Stripe: <strong>$' + max.toFixed(2) + '</strong></div>' +
+        '<div>Available to refund via ' + esc(gatewayLabel) + ': <strong>$' + max.toFixed(2) + '</strong></div>' +
         (capacity < walletAvailable
-            ? '<div style="color:var(--text-muted);margin-top:2px;">$' + (walletAvailable - capacity).toFixed(2) + ' of this balance came from a cash/manual deposit — refund that portion separately, it can\'t go through Stripe.</div>'
+            ? '<div style="color:var(--text-muted);margin-top:2px;">$' + (walletAvailable - capacity).toFixed(2) + ' of this balance came from a cash/manual deposit (or a different processor) — refund that portion separately, it can\'t go through ' + esc(gatewayLabel) + '.</div>'
             : '');
     amtInput.max = String(max);
     amtInput.value = max > 0 ? max.toFixed(2) : '';
@@ -1038,7 +1068,7 @@ async function _edgeFnErrorMessage(res) {
     return err.message || String(err);
 }
 
-window.refundCanteenDeposit = function() {
+window.refundCanteenDeposit = async function() {
     if (!_secEdit('accounts', 'Refunding a deposit')) return;
     const name = (document.getElementById('refundCamper') || {}).value || '';
     const amount = Number((document.getElementById('refundAmt') || {}).value) || 0;
@@ -1048,9 +1078,11 @@ window.refundCanteenDeposit = function() {
     const db = window.CampistryDB;
     const client = db && db.client;
     if (!client) { toast('Not signed in', 1); return; }
+    const processorKey = await _getSnacksProcessorKey();
+    const fnName = processorKey === 'stripe' ? 'stripe-canteen-refund' : 'payments-canteen-refund';
     if (warn) warn.style.display = 'none';
     if (btn) { btn.disabled = true; btn.textContent = 'Refunding…'; }
-    client.functions.invoke('stripe-canteen-refund', { body: { camperName: name, amount: amount } })
+    client.functions.invoke(fnName, { body: { camperName: name, amount: amount } })
         .then(async function(res) {
             if (btn) { btn.disabled = false; btn.textContent = 'Refund'; }
             var data = res && res.data;
