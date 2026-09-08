@@ -398,6 +398,11 @@
         </div>
         <div class="lk-field" style="margin-top:14px;">
             <label>Active dates <span style="font-weight:400;color:var(--text-muted);">(optional)</span></label>
+            <div id="arSessionPickWrap" style="margin-top:8px;display:none;">
+                <select id="arSessionPick" onchange="_arApplySessionPreset()" style="padding:6px 8px;border-radius:6px;border:1px solid var(--border-color,#E2E8F0);max-width:100%;">
+                    <option value="">Quick-fill from a session…</option>
+                </select>
+            </div>
             <div style="display:flex;gap:10px;align-items:center;margin-top:8px;flex-wrap:wrap;">
                 <span style="font-size:.8rem;color:var(--text-muted);">From</span>
                 <input type="date" id="arStartDate" style="padding:6px 8px;border-radius:6px;border:1px solid var(--border-color,#E2E8F0);">
@@ -2011,6 +2016,72 @@ function _arRenderDayOptions(){
     sel.innerHTML=opts;
     if(prev!=='' && sel.querySelector('option[value="'+prev+'"]')) sel.value=prev;
 }
+// Camp Sessions & Pricing (Dashboard -> "1st Half"/"2nd Half"/bundles) reused
+// as quick-fill presets for the date window above — same public, camp_id-
+// scoped RPC the registration form already uses (get_public_form_config,
+// migrations 084/114), no new backend needed. Cached per camp, mirroring
+// _cloudTipsConfigByCamp's shape, since a multi-camp family's kids can be on
+// different camps with different sessions.
+window._campSessionsByCamp = window._campSessionsByCamp || {};
+function _loadCampSessionsCloud(campId){
+    if(!campId) return;
+    var db=window._parentDB; if(!db||!db.rpc) return;
+    db.rpc('get_public_form_config',{p_camp_id:campId,p_kind:'registration'}).then(function(res){
+        if(res.error||!res.data||!res.data.success) return;
+        window._campSessionsByCamp[campId]={sessions:res.data.sessions||[],sessionBundles:res.data.sessionBundles||[]};
+        var c=_activeCanteenChild();
+        if(c && c.campId===campId) _arRenderSessionPicker(c);
+    });
+}
+window._loadAllCampSessions=function(){
+    var camps=((typeof parent!=='undefined'&&parent&&parent.camps&&parent.camps.length)?parent.camps:[{camp_id:(typeof parent!=='undefined'&&parent)?parent.campId:null}]);
+    camps.forEach(function(cp){ var cid=cp.camp_id||cp.campId; if(cid) _loadCampSessionsCloud(cid); });
+};
+function _arRenderSessionPicker(c){
+    var wrap=document.getElementById('arSessionPickWrap'), sel=document.getElementById('arSessionPick');
+    if(!wrap||!sel||!c){ if(wrap) wrap.style.display='none'; return; }
+    var data=(window._campSessionsByCamp||{})[c.campId]||{sessions:[],sessionBundles:[]};
+    var sessions=data.sessions||[], bundles=data.sessionBundles||[];
+    if(!sessions.length && !bundles.length){ wrap.style.display='none'; return; }
+    var opts='<option value="">Quick-fill from a session…</option>';
+    sessions.forEach(function(s){
+        if(!s.id||(!s.startDate&&!s.endDate)) return;
+        opts+='<option value="s:'+_escHtml(s.id)+'">'+_escHtml(s.name||'Session')+(s.dates?' — '+_escHtml(s.dates):'')+'</option>';
+    });
+    bundles.forEach(function(b){
+        if(!b.id||!(b.sessionIds&&b.sessionIds.length)) return;
+        opts+='<option value="b:'+_escHtml(b.id)+'">'+_escHtml(b.name||'Bundle')+' (bundle)</option>';
+    });
+    sel.innerHTML=opts;
+    wrap.style.display='';
+}
+// A bundle has no dates of its own (just the sessions it groups) -- its
+// quick-fill window is the earliest session start through the latest
+// session end, so it covers every session in the bundle.
+function _arApplySessionPreset(){
+    var sel=document.getElementById('arSessionPick'); if(!sel||!sel.value) return;
+    var c=_activeCanteenChild(); if(!c) return;
+    var data=(window._campSessionsByCamp||{})[c.campId]||{sessions:[],sessionBundles:[]};
+    var sep=sel.value.indexOf(':'), kind=sel.value.slice(0,sep), id=sel.value.slice(sep+1);
+    var start=null, end=null;
+    if(kind==='s'){
+        var s=(data.sessions||[]).find(function(x){return x.id===id;});
+        if(s){ start=s.startDate||null; end=s.endDate||null; }
+    } else if(kind==='b'){
+        var b=(data.sessionBundles||[]).find(function(x){return x.id===id;});
+        if(b){
+            (b.sessionIds||[]).forEach(function(sid){
+                var s=(data.sessions||[]).find(function(x){return x.id===sid;});
+                if(s&&s.startDate&&(!start||s.startDate<start)) start=s.startDate;
+                if(s&&s.endDate&&(!end||s.endDate>end)) end=s.endDate;
+            });
+        }
+    }
+    var stD=document.getElementById('arStartDate'), spD=document.getElementById('arStopDate');
+    if(start&&stD) stD.value=start;
+    if(end&&spD) spD.value=end;
+    sel.value=''; // one-shot fill, same forgiving pattern as campistry_me.js's scFillFromSession
+}
 function _renderAutoReload(c){
     var ar=(c&&c.autoReload)||{};
     var thE=document.getElementById('arThEnabled');
@@ -2025,6 +2096,7 @@ function _renderAutoReload(c){
     var scReload=document.getElementById('arScReload'); if(scReload && ar.scheduleReloadAmount!=null) scReload.value=ar.scheduleReloadAmount;
     var stD=document.getElementById('arStartDate'); if(stD) stD.value=ar.startDate||'';
     var spD=document.getElementById('arStopDate'); if(spD) spD.value=ar.stopDate||'';
+    _arRenderSessionPicker(c);
 
     var msg=document.getElementById('arStatusMsg'), cardBtn=document.getElementById('arCardBtn'), offBtn=document.getElementById('arOffBtn');
     if(!msg) return;
@@ -4655,6 +4727,7 @@ if (window.pdfjsLib) { window.pdfjsLib.GlobalWorkerOptions.workerSrc = 'pdfjs-di
             _loadLinkLists(parent.campId);
             _loadTipsConfigCloud(parent.campId);
             _loadTipTargetsCloud(parent.campId);
+            _loadCampSessionsCloud(parent.campId);
         }
         _loadMyMail();
         _loadMyTips();
@@ -4766,6 +4839,7 @@ if (window.pdfjsLib) { window.pdfjsLib.GlobalWorkerOptions.workerSrc = 'pdfjs-di
                 if (typeof _loadLinkLists === 'function') _loadLinkLists(parent.campId);
                 if (typeof window._loadAllTipsConfig === 'function') window._loadAllTipsConfig();
                 else if (typeof _loadTipsConfigCloud === 'function') _loadTipsConfigCloud(parent.campId);
+                if (typeof window._loadAllCampSessions === 'function') window._loadAllCampSessions();
                 if (typeof window._loadAllTipTargets === 'function') window._loadAllTipTargets();
                 else if (typeof _loadTipTargetsCloud === 'function') _loadTipTargetsCloud(parent.campId);
             }
