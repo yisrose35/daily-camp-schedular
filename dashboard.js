@@ -1461,22 +1461,47 @@
             const canConnect = userRole === 'owner';
             const ownerNote = canConnect ? '' : '<p style="margin:6px 0 0;font-size:0.78rem;color:var(--slate-400);">Only the camp owner can connect Stripe.</p>';
 
+            const disconnectBtn = canConnect
+                ? '<button type="button" class="btn-secondary" style="margin-left:8px;" onclick="disconnectCampStripe(this)">Disconnect</button>' : '';
+
             if (!data.connected) {
                 box.innerHTML = '<p style="margin:0 0 10px;">Right now tuition payments deposit into Campistry\'s account. Connect your camp\'s own Stripe account so payments go straight to your bank.</p>' +
                     (canConnect ? '<button type="button" class="btn-primary" onclick="startCampStripeConnect(this)">Connect your Stripe account</button>' : '') + ownerNote;
             } else if (data.charges_enabled) {
-                box.innerHTML = '<p style="margin:0;color:#059669;"><strong>Connected</strong> — tuition payments go directly to your bank account' +
-                    (data.connected_at ? ' since ' + new Date(data.connected_at).toLocaleDateString() : '') + '.</p>';
+                box.innerHTML = '<p style="margin:0 0 10px;color:#059669;"><strong>Connected</strong> — tuition payments go directly to your bank account' +
+                    (data.connected_at ? ' since ' + new Date(data.connected_at).toLocaleDateString() : '') + '.</p>' + disconnectBtn;
             } else if (data.onboarding_status === 'pending') {
                 box.innerHTML = '<p style="margin:0 0 8px;">Onboarding started but not finished yet.</p>' +
-                    (canConnect ? '<button type="button" class="btn-primary" onclick="startCampStripeConnect(this)">Finish setup</button>' : '') + ownerNote;
+                    (canConnect ? '<button type="button" class="btn-primary" onclick="startCampStripeConnect(this)">Finish setup</button>' : '') + disconnectBtn + ownerNote;
             } else {
                 box.innerHTML = '<p style="margin:0 0 8px;color:#dc2626;">Your Stripe account needs attention before it can accept payments again.</p>' +
-                    (canConnect ? '<button type="button" class="btn-primary" onclick="startCampStripeConnect(this)">Review account</button>' : '') + ownerNote;
+                    (canConnect ? '<button type="button" class="btn-primary" onclick="startCampStripeConnect(this)">Review account</button>' : '') + disconnectBtn + ownerNote;
             }
         } catch (e) {
             console.error('[Dashboard] loadCampStripeConnectStatus threw:', e);
             box.innerHTML = '<p style="margin:0;color:#dc2626;">Could not load Stripe Connect status: ' + escTelnyx(e && e.message ? e.message : String(e)) + '</p>';
+        }
+    };
+
+    // Self-serve disconnect from Stripe Connect — safe because it only tears
+    // down Campistry's own record of the connection (see migration 130's own
+    // header); it never calls Stripe's API to deactivate the underlying
+    // Express account, same posture as disconnectCampProcessor below.
+    window.disconnectCampStripe = async function(btn) {
+        if (!confirm('Disconnect your Stripe account? Tuition payments will go back to depositing into Campistry\'s account until you reconnect.')) return;
+        if (btn) { btn.disabled = true; btn.textContent = 'Disconnecting…'; }
+        try {
+            const campId = (window.CampistryDB && window.CampistryDB.getCampId) ? window.CampistryDB.getCampId() : null;
+            if (!campId) throw new Error('No camp id available');
+            const { data, error } = await window.supabase.rpc('disconnect_my_camp_stripe', { p_camp_id: campId });
+            if (error || !data || !data.success) {
+                throw new Error((data && data.error) || (error && error.message) || 'Disconnect failed');
+            }
+            await loadCampStripeConnectStatus(campId);
+        } catch (e) {
+            console.error('[Dashboard] disconnectCampStripe failed:', e);
+            alert('Could not disconnect: ' + (e && e.message ? e.message : String(e)));
+            if (btn) { btn.disabled = false; btn.textContent = 'Disconnect'; }
         }
     };
 
