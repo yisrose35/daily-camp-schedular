@@ -1334,6 +1334,23 @@ async function _lkPayConfirm(){
     lkPayClose();
     var email=(parent&&parent.email)||'';
     try{
+        var info=await _getCampProcessorInfo(cid);
+        var processorKey=(info&&info.processorKey)||'stripe';
+        // BYOP has no hosted-checkout API to call ahead of time (unlike
+        // Stripe, which mints a session server-side) — open the tokenizer
+        // page directly, same pattern as sendPayLink()'s BYOP branch in
+        // campistry_me.js and addFunds()'s canteen equivalent above.
+        if(processorKey&&processorKey!=='stripe'){
+            if(!d.familyKey){toast('Could not start payment: family record not found — contact the camp office','error');return;}
+            var byopUrl=window.location.origin+'/campistry_card_setup.html?campId='+encodeURIComponent(cid)+
+                '&familyKey='+encodeURIComponent(d.familyKey)+
+                '&familyName='+encodeURIComponent(d.familyName||'')+
+                '&amount='+encodeURIComponent(amt)+
+                '&desc='+encodeURIComponent('Camp payment'+(d.familyName?' — '+d.familyName:''))+
+                '&return='+encodeURIComponent(_lkReturnUrl('success','pay'));
+            _lkGoToCheckout(byopUrl);
+            return;
+        }
         toast('Opening secure checkout…');
         var res=await _lkCheckout({campId:cid,familyName:d.familyName||'',email:email,amount:amt,description:'Camp payment'+(d.familyName?' — '+d.familyName:''),successUrl:_lkReturnUrl('success','pay'),cancelUrl:_lkReturnUrl('cancelled','pay')});
         if(res&&res.url){ _lkGoToCheckout(res.url); } else { throw new Error('No checkout link'); }
@@ -1807,7 +1824,7 @@ async function addFunds(){
     var c=_activeCanteenChild();if(!c){toast('No canteen account yet');return;}
     var amt=_selAmt||25;
     if(!(amt>0)){toast('Enter an amount first');return;}
-    var status=_canteenStripeByCamp[c.campId];
+    var status=_campPayStatusByCamp[c.campId];
     var processorKey=(status&&status.processorKey)||'stripe';
     // BYOP has no hosted-checkout API to call ahead of time (unlike Stripe,
     // which mints a session server-side) — open the tokenizer page directly,
@@ -1851,11 +1868,17 @@ async function addFunds(){
 // parent taps between kids. get_camp_canteen_stripe_status (despite its
 // Stripe-era name — kept to avoid a second RPC) now returns connected:true
 // for EITHER, plus processorKey so addFunds() knows which flow to use.
-var _canteenStripeByCamp={};
-async function _checkCanteenStripeStatus(campId){
-    if(!campId)return;
-    if(_canteenStripeByCamp[campId]!==undefined){ _applyCanteenStripeGate(_canteenStripeByCamp[campId]&&_canteenStripeByCamp[campId].connected); return; }
-    var db=window._parentDB; if(!db)return;
+var _campPayStatusByCamp={};
+// Shared by canteen (Add Funds) AND tuition (Pay Now, below) — both just
+// need "can this camp accept online money right now, and through which
+// processor." get_camp_canteen_stripe_status's name is canteen-era, kept
+// rather than adding a second near-identical RPC (same reasoning as
+// migration 132's own header comment). Returns null on any failure —
+// callers fall back to 'stripe'/not-connected rather than guessing.
+async function _getCampProcessorInfo(campId){
+    if(!campId)return null;
+    if(_campPayStatusByCamp[campId]!==undefined) return _campPayStatusByCamp[campId];
+    var db=window._parentDB; if(!db)return null;
     try{
         var res=await (window._pRpc?window._pRpc('get_camp_canteen_stripe_status',{p_camp_id:campId},campId):db.rpc('get_camp_canteen_stripe_status',{p_camp_id:campId}));
         var d=res&&res.data;
@@ -1864,24 +1887,25 @@ async function _checkCanteenStripeStatus(campId){
             // the SQL Editor, so this RPC doesn't exist yet or doesn't know
             // about BYOP — this used to fail completely silently, leaving
             // "Add Funds" grey with no clue why. Don't cache a transient/setup
-            // failure as permanently disconnected — retry on the next
-            // switchCanteen call.
+            // failure as permanently disconnected — retry on the next call.
             console.error('[Parent] get_camp_canteen_stripe_status RPC error (is migration 132 applied?):',res.error.message||res.error);
-            _applyCanteenStripeGate(false);
-            return;
+            return null;
         }
         if(!d||!d.success){
             console.warn('[Parent] get_camp_canteen_stripe_status returned failure:',d&&d.error);
-            _applyCanteenStripeGate(false);
-            return;
+            return null;
         }
-        var connected=!!(d.connected&&d.charges_enabled);
-        _canteenStripeByCamp[campId]={connected:connected,processorKey:d.processorKey||'stripe'}; // only cache a definitive answer
-        _applyCanteenStripeGate(connected);
+        var info={connected:!!(d.connected&&d.charges_enabled),processorKey:d.processorKey||'stripe'};
+        _campPayStatusByCamp[campId]=info; // only cache a definitive answer
+        return info;
     }catch(e){
         console.error('[Parent] get_camp_canteen_stripe_status threw:',e&&e.message);
-        _applyCanteenStripeGate(false);
+        return null;
     }
+}
+async function _checkCanteenStripeStatus(campId){
+    var info=await _getCampProcessorInfo(campId);
+    _applyCanteenStripeGate(!!(info&&info.connected));
 }
 function _applyCanteenStripeGate(connected){
     var btn=document.getElementById('canteenAddBtn');
