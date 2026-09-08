@@ -117,10 +117,12 @@ body{font-family:var(--font);background:var(--s50);color:var(--s800);-webkit-fon
 
 <!-- Parent -->
 <div class="cd" id="parentCard"><div class="ct"><svg viewBox="0 0 24 24"><path d="M22 16.92v3a2 2 0 01-2.18 2 19.79 19.79 0 01-8.63-3.07 19.5 19.5 0 01-6-6A19.79 19.79 0 012.12 2.18 2 2 0 014.11 2h3"/></svg>Parent / Guardian</div>
-<div class="fr"><div class="fg"><label class="fl">Full Name<span class="rq">*</span></label><input class="fi" id="rPar"></div><div class="fg"><label class="fl">Relationship</label><select class="fs" id="rRel"><option>Mother</option><option>Father</option><option>Guardian</option><option>Grandparent</option><option>Other</option></select></div></div>
+<div class="fr"><div class="fg"><label class="fl">First Name<span class="rq">*</span></label><input class="fi" id="rParFirst"></div><div class="fg"><label class="fl">Last Name<span class="rq">*</span></label><input class="fi" id="rParLast"></div></div>
+<div class="fr"><div class="fg"><label class="fl">Relationship</label><select class="fs" id="rRel"><option>Mother</option><option>Father</option><option>Guardian</option><option>Grandparent</option><option>Other</option></select></div><div class="fg"><label class="fl">Marital Status</label><select class="fs" id="rMarital" onchange="regMaritalChanged()"><option value=""></option><option>Married</option><option>Divorced</option><option>Separated</option><option>Single</option><option>Widowed</option></select></div></div>
 <div class="fr"><div class="fg"><label class="fl">Phone<span class="rq">*</span></label><input type="tel" class="fi" id="rPh"></div><div class="fg"><label class="fl">Email<span class="rq">*</span></label><input type="email" class="fi" id="rEm"></div></div>
 <p style="font-size:.75rem;color:var(--s400);margin:6px 0 4px">Second parent/guardian (optional):</p>
-<div class="fr"><div class="fg"><label class="fl">Full Name</label><input class="fi" id="rP2"></div><div class="fg"><label class="fl">Relationship</label><select class="fs" id="rP2Rel"><option>Mother</option><option>Father</option><option>Guardian</option><option>Grandparent</option><option>Other</option></select></div></div>
+<div class="fr"><div class="fg"><label class="fl">First Name</label><input class="fi" id="rP2First"></div><div class="fg"><label class="fl">Last Name</label><input class="fi" id="rP2Last"></div></div>
+<div class="fr"><div class="fg"><label class="fl">Relationship</label><select class="fs" id="rP2Rel"><option>Mother</option><option>Father</option><option>Guardian</option><option>Grandparent</option><option>Other</option></select></div></div>
 <div class="fr"><div class="fg"><label class="fl">Phone</label><input type="tel" class="fi" id="rP2Ph"></div><div class="fg"><label class="fl">Email</label><input type="email" class="fi" id="rP2Em"></div></div>
 </div>
 
@@ -138,6 +140,17 @@ body{font-family:var(--font);background:var(--s50);color:var(--s800);-webkit-fon
 <div class="fg"><label class="fl">Summer Street</label><input class="fi" id="rSumSt"></div>
 <div class="fr3"><div class="fg"><label class="fl">Summer City</label><input class="fi" id="rSumCi"></div><div class="fg"><label class="fl">Summer State</label><input class="fi" id="rSumSa"></div><div class="fg"><label class="fl">Summer ZIP</label><input class="fi" id="rSumZp"></div></div>
 <div class="fg"><label class="fl">Summer Phone</label><input type="tel" class="fi" id="rSumPh"></div>
+</div>
+</div>
+
+<!-- Other Parent's Address (divorced/separated only) -->
+<div class="cd" id="otherParentCard" style="display:none"><div class="ct"><svg viewBox="0 0 24 24"><path d="M21 10c0 7-9 13-9 13s-9-6-9-13a9 9 0 0118 0z"/><circle cx="12" cy="10" r="3"/></svg>Other Parent's Address</div>
+<div class="fg"><label class="fl">Street</label><input class="fi" id="rOpSt"></div>
+<div class="fr3"><div class="fg"><label class="fl">City</label><input class="fi" id="rOpCi"></div><div class="fg"><label class="fl">State</label><input class="fi" id="rOpSa"></div><div class="fg"><label class="fl">ZIP</label><input class="fi" id="rOpZp"></div></div>
+<div class="fg"><label class="fl" style="display:flex;align-items:center;gap:7px;cursor:pointer;font-weight:400"><input type="checkbox" id="rOpSummerSame" checked onchange="regToggleOtherParentSummer()"> Summer address same as above</label></div>
+<div id="rOpSummerBlock" style="display:none">
+<div class="fg"><label class="fl">Summer Street</label><input class="fi" id="rOpSumSt"></div>
+<div class="fr3"><div class="fg"><label class="fl">Summer City</label><input class="fi" id="rOpSumCi"></div><div class="fg"><label class="fl">Summer State</label><input class="fi" id="rOpSumSa"></div><div class="fg"><label class="fl">Summer ZIP</label><input class="fi" id="rOpSumZp"></div></div>
 </div>
 </div>
 
@@ -311,7 +324,7 @@ var sigCtx=null,sigDrawing=false,sigHasData=false;
 // documents stay whole-section toggles, handled by secMap in load()).
 var FIELD_ELEMENT_MAP={
     first:'rF',last:'rL',dob:'rDob',gender:'rGen',school:'rSch',schoolGrade:'rSchGr',teacher:'rTch',photo:'rPhotoData',
-    parentName:'rPar',parentRelation:'rRel',parentPhone:'rPh',parentEmail:'rEm',parent2Name:'rP2',parent2Relation:'rP2Rel',parent2Phone:'rP2Ph',parent2Email:'rP2Em',
+    parentFirst:'rParFirst',parentLast:'rParLast',parentRelation:'rRel',parentPhone:'rPh',parentEmail:'rEm',maritalStatus:'rMarital',parent2First:'rP2First',parent2Last:'rP2Last',parent2Relation:'rP2Rel',parent2Phone:'rP2Ph',parent2Email:'rP2Em',
     street:'rSt',city:'rCi',state:'rSa',zip:'rZp',
     summerStreet:'rSumSt',summerCity:'rSumCi',summerState:'rSumSa',summerZip:'rSumZp',summerPhone:'rSumPh',
     emName:'rEmN',emRelation:'rEmR',emPhone:'rEmPh',
@@ -320,7 +333,7 @@ var FIELD_ELEMENT_MAP={
 };
 var FIELD_DEFAULT_LABEL={
     first:'First Name',last:'Last Name',dob:'Date of Birth',gender:'Gender',school:'School Name',schoolGrade:'School Grade',teacher:'Teacher',photo:'Camper Photo',
-    parentName:'Parent / Guardian Name',parentRelation:'Relationship',parentPhone:'Phone',parentEmail:'Email',parent2Name:'Second Parent / Guardian',parent2Relation:'Relationship',parent2Phone:'Second Parent Phone',parent2Email:'Second Parent Email',
+    parentFirst:'Parent / Guardian First Name',parentLast:'Parent / Guardian Last Name',parentRelation:'Relationship',parentPhone:'Phone',parentEmail:'Email',maritalStatus:'Marital Status',parent2First:'Second Parent / Guardian First Name',parent2Last:'Second Parent / Guardian Last Name',parent2Relation:'Relationship',parent2Phone:'Second Parent Phone',parent2Email:'Second Parent Email',
     street:'Street',city:'City',state:'State',zip:'ZIP',
     summerStreet:'Summer Street',summerCity:'Summer City',summerState:'Summer State',summerZip:'Summer ZIP',summerPhone:'Summer Phone',
     emName:'Emergency Contact Name',emRelation:'Relationship',emPhone:'Phone',
@@ -331,7 +344,7 @@ var FIELD_DEFAULT_LABEL={
 // that never opens the Advanced tab sees byte-identical required-ness.
 var FIELD_REQUIRED_STATE={
     first:true,last:true,dob:true,gender:false,school:false,schoolGrade:false,teacher:false,photo:false,
-    parentName:true,parentRelation:false,parentPhone:true,parentEmail:true,parent2Name:false,parent2Relation:false,parent2Phone:false,parent2Email:false,
+    parentFirst:true,parentLast:true,parentRelation:false,parentPhone:true,parentEmail:true,maritalStatus:false,parent2First:false,parent2Last:false,parent2Relation:false,parent2Phone:false,parent2Email:false,
     street:true,city:true,state:false,zip:true,
     summerStreet:false,summerCity:false,summerState:false,summerZip:false,summerPhone:false,
     emName:true,emRelation:false,emPhone:true,
@@ -346,7 +359,7 @@ var FIELD_ENABLED_STATE={};
 // permanently stuck asking for a field nobody can see or fill in.
 var FIELD_TO_SECTION={
     first:'camper',last:'camper',dob:'camper',gender:'camper',school:'camper',schoolGrade:'camper',teacher:'camper',photo:'camper',
-    parentName:'parent',parentRelation:'parent',parentPhone:'parent',parentEmail:'parent',parent2Name:'parent',parent2Relation:'parent',parent2Phone:'parent',parent2Email:'parent',
+    parentFirst:'parent',parentLast:'parent',parentRelation:'parent',parentPhone:'parent',parentEmail:'parent',maritalStatus:'parent',parent2First:'parent',parent2Last:'parent',parent2Relation:'parent',parent2Phone:'parent',parent2Email:'parent',
     street:'address',city:'address',state:'address',zip:'address',
     summerStreet:'summerAddress',summerCity:'summerAddress',summerState:'summerAddress',summerZip:'summerAddress',summerPhone:'summerAddress',
     emName:'emergency',emRelation:'emergency',emPhone:'emergency',
@@ -357,7 +370,7 @@ var FIELD_TO_SECTION={
 // Baseline required-state this page shipped with — applyFieldConfig resets
 // to this before applying overrides, so it's safe to call repeatedly with a
 // changing draft config (live preview) rather than only ever adding hides.
-var FIELD_REQUIRED_DEFAULT={first:true,last:true,dob:true,gender:false,school:false,schoolGrade:false,teacher:false,photo:false,parentName:true,parentRelation:false,parentPhone:true,parentEmail:true,parent2Name:false,parent2Relation:false,parent2Phone:false,parent2Email:false,street:true,city:true,state:false,zip:true,summerStreet:false,summerCity:false,summerState:false,summerZip:false,summerPhone:false,emName:true,emRelation:false,emPhone:true,allergies:false,medications:false,dietary:false,medicalNotes:false,bunkmate:false,separate:false,shirt:false,source:false,notes:false};
+var FIELD_REQUIRED_DEFAULT={first:true,last:true,dob:true,gender:false,school:false,schoolGrade:false,teacher:false,photo:false,parentFirst:true,parentLast:true,parentRelation:false,parentPhone:true,parentEmail:true,maritalStatus:false,parent2First:false,parent2Last:false,parent2Relation:false,parent2Phone:false,parent2Email:false,street:true,city:true,state:false,zip:true,summerStreet:false,summerCity:false,summerState:false,summerZip:false,summerPhone:false,emName:true,emRelation:false,emPhone:true,allergies:false,medications:false,dietary:false,medicalNotes:false,bunkmate:false,separate:false,shirt:false,source:false,notes:false};
 function applyFieldConfig(fields,sectionsDisabled){
     fields=fields||{}; sectionsDisabled=sectionsDisabled||{};
     Object.keys(FIELD_ELEMENT_MAP).forEach(function(fid){
@@ -386,7 +399,7 @@ function applyFieldConfig(fields,sectionsDisabled){
 // (always pinned right before Signature) are not part of the reorderable
 // set. DEFAULT_SECTION_ORDER matches this page's shipped layout exactly
 // so applying it with no customization is a visual no-op.
-var SECTION_ORDER_MAP={camper:'camperCard',siblings:'sibCard',parent:'parentCard',address:'addrCard',summerAddress:'summerAddrCard',emergency:'emCard',medical:'medCard',preferences:'prefCard',documents:'docCard',payment:'payCard',signature:'sigCard'};
+var SECTION_ORDER_MAP={camper:'camperCard',siblings:'sibCard',parent:'parentCard',address:'addrCard',summerAddress:'summerAddrCard',otherParent:'otherParentCard',emergency:'emCard',medical:'medCard',preferences:'prefCard',documents:'docCard',payment:'payCard',signature:'sigCard'};
 var DEFAULT_SECTION_ORDER=['camper','siblings','parent','address','summerAddress','emergency','medical','preferences','documents','payment','signature'];
 function applySectionOrder(order){
     order=(order&&order.length)?order:DEFAULT_SECTION_ORDER;
@@ -480,6 +493,21 @@ window.regToggleSummer=function(){
     var on=document.getElementById('rSummerSame'),b=document.getElementById('rSummerBlock');
     if(b)b.style.display=(on&&on.checked)?'none':'';
 };
+window.regMaritalChanged=function(){
+    var sel=document.getElementById('rMarital');
+    var show=sel&&(sel.value==='Divorced'||sel.value==='Separated');
+    var card=document.getElementById('otherParentCard');
+    // Never show it if the camp disabled the whole section — checked via a
+    // data attribute the section-toggle logic in load() sets, since this
+    // card's default (unlike every other section) is OFF unless the camp
+    // explicitly turned it on.
+    if(card&&card.dataset.sectionOff==='1'){card.style.display='none';return;}
+    if(card)card.style.display=show?'':'none';
+};
+window.regToggleOtherParentSummer=function(){
+    var on=document.getElementById('rOpSummerSame'),b=document.getElementById('rOpSummerBlock');
+    if(b)b.style.display=(on&&on.checked)?'none':'';
+};
 
 // ─── STATUS TRACKER ──────────────────────────────────────────
 var params=new URLSearchParams(window.location.search);
@@ -558,7 +586,7 @@ async function showStatus(id){
 
 // ─── LOAD DATA ───────────────────────────────────────────────
 var _baseCampNm=''; // camp name shown when no custom welcome message is set
-var SEC_MAP={camper:'camperCard',parent:'parentCard',address:'addrCard',summerAddress:'summerAddrCard',emergency:'emCard',medical:'medCard',preferences:'prefCard',documents:'docCard',payment:'payCard',siblings:'sibCard',signature:'sigCard'};
+var SEC_MAP={camper:'camperCard',parent:'parentCard',address:'addrCard',summerAddress:'summerAddrCard',otherParent:'otherParentCard',emergency:'emCard',medical:'medCard',preferences:'prefCard',documents:'docCard',payment:'payCard',siblings:'sibCard',signature:'sigCard'};
 // Which built-in sections a Custom Question can be attached to (any section
 // with its own labeled field group on the form) — documents/payment/
 // signature/siblings render structured blocks, not a plain fg loop, so a
@@ -610,6 +638,19 @@ function applyFormConfig(fc){
             }
         });
     }
+    // Other Parent's Address defaults OFF (unlike every other section, which
+    // defaults on) — a camp that never touched this toggle has no
+    // fc.sections.otherParent entry at all, so the generic sweep above just
+    // left it visible. Force it off unless explicitly enabled, then let
+    // regMaritalChanged() layer its own conditional (Divorced/Separated
+    // only) on top.
+    (function(){
+        var opCard=document.getElementById('otherParentCard');
+        if(!opCard)return;
+        var opEnabled=!!(fc.sections&&fc.sections.otherParent&&fc.sections.otherParent.enabled);
+        opCard.dataset.sectionOff=opEnabled?'0':'1';
+        regMaritalChanged();
+    })();
 
     // Custom questions — a question tagged with a built-in section (set in
     // the Form Builder's Sections list via "+ Add Field") renders inline
@@ -1020,7 +1061,12 @@ window.submitApp=async function(){
 
     // Validate — data-driven off FIELD_REQUIRED_STATE/FIELD_ENABLED_STATE so a
     // camp's Advanced-tab required/hidden overrides are enforced here too.
-    var first=v('rF'),last=v('rL'),dob=v('rDob'),par=v('rPar'),ph=v('rPh'),em=v('rEm'),st=v('rSt'),ci=v('rCi'),zp=v('rZp'),emN=v('rEmN'),emPh=v('rEmPh');
+    var first=v('rF'),last=v('rL'),dob=v('rDob'),ph=v('rPh'),em=v('rEm'),st=v('rSt'),ci=v('rCi'),zp=v('rZp'),emN=v('rEmN'),emPh=v('rEmPh');
+    var parentName=[v('rParFirst'),v('rParLast')].filter(Boolean).join(' ');
+    var parent2Name=[v('rP2First'),v('rP2Last')].filter(Boolean).join(' ');
+    var maritalStatus=v('rMarital');
+    var _opSummerSameEl=document.getElementById('rOpSummerSame');
+    var _opSummerSame=_opSummerSameEl?!!_opSummerSameEl.checked:true;
     var _summerSameEl=document.getElementById('rSummerSame');
     var _summerSame=_summerSameEl?!!_summerSameEl.checked:true;
     for(var _fid in FIELD_ELEMENT_MAP){
@@ -1098,8 +1144,15 @@ window.submitApp=async function(){
             g.campistryMe.enrollments[id]={
                 camperName:cam.first+' '+cam.last,camperFirst:cam.first,camperLast:cam.last,
                 dob:cam.dob,gender:cam.gender,school:cam.school,schoolGrade:cam.schoolGrade,teacher:cam.teacher,camperPhoto:cam.photo||'',
-                parentName:par,parentRelation:v('rRel'),parentPhone:ph,parentEmail:em,
-                parent2Name:v('rP2'),parent2Relation:v('rP2Rel'),parent2Phone:v('rP2Ph'),parent2Email:v('rP2Em'),
+                parentName:parentName,parentRelation:v('rRel'),parentPhone:ph,parentEmail:em,
+                parent2Name:parent2Name,parent2Relation:v('rP2Rel'),parent2Phone:v('rP2Ph'),parent2Email:v('rP2Em'),
+                maritalStatus:maritalStatus,
+                otherParentStreet:v('rOpSt'),otherParentCity:v('rOpCi'),otherParentState:v('rOpSa'),otherParentZip:v('rOpZp'),
+                otherParentSummerSameAsHome:_opSummerSame,
+                otherParentSummerStreet:_opSummerSame?v('rOpSt'):v('rOpSumSt'),
+                otherParentSummerCity:_opSummerSame?v('rOpCi'):v('rOpSumCi'),
+                otherParentSummerState:_opSummerSame?v('rOpSa'):v('rOpSumSa'),
+                otherParentSummerZip:_opSummerSame?v('rOpZp'):v('rOpSumZp'),
                 street:st,city:ci,state:v('rSa'),zip:zp,
                 summerSameAsHome:_summerSame,
                 summerStreet:_summerSame?st:v('rSumSt'),

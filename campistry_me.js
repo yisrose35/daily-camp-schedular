@@ -2635,12 +2635,30 @@ function editCamper(n){
         h+='</div>';
     }
 
+    var p1Parts=(d.parent1Name||'').split(' ');
+    var p2Parts=(d.parent2Name||'').split(' ');
     h+='<div class="fsec">Parent / Guardian</div>';
-    h+='<div class="fr">'+ff('Parent 1 Name','ceP1',d.parent1Name||'')+ff('Relationship','ceP1Rel',d.parent1Relation||'')+'</div>';
+    h+='<div class="fr">'+ff('Parent 1 First Name','ceP1First',p1Parts[0]||'')+ff('Parent 1 Last Name','ceP1Last',p1Parts.slice(1).join(' ')||'')+'</div>';
+    h+='<div class="fr">'+ff('Relationship','ceP1Rel',d.parent1Relation||'')+ff('Marital Status','ceMarital',d.maritalStatus||'','select',['','Married','Divorced','Separated','Single','Widowed'])+'</div>';
     h+='<div class="fr">'+ff('Phone','ceP1Ph',d.parent1Phone||'')+ff('Email','ceP1Em',d.parent1Email||'','email')+'</div>';
     h+='<p style="font-size:.68rem;color:var(--s400);margin:6px 0 4px">Second parent/guardian (optional):</p>';
-    h+='<div class="fr">'+ff('Full Name','ceP2',d.parent2Name||'')+ff('Relationship','ceP2Rel',d.parent2Relation||'')+'</div>';
+    h+='<div class="fr">'+ff('Parent 2 First Name','ceP2First',p2Parts[0]||'')+ff('Parent 2 Last Name','ceP2Last',p2Parts.slice(1).join(' ')||'')+'</div>';
+    h+='<div class="fr">'+ff('Relationship','ceP2Rel',d.parent2Relation||'')+'</div>';
     h+='<div class="fr">'+ff('Phone','ceP2Ph',d.parent2Phone||'','tel')+ff('Email','ceP2Em',d.parent2Email||'','email')+'</div>';
+
+    // Only relevant for divorced/separated families — hidden unless Marital
+    // Status says so, toggled by ceMaritalChanged() wired below.
+    h+='<div class="fsec" id="ceOtherParentSec" style="'+(( d.maritalStatus==='Divorced'||d.maritalStatus==='Separated')?'':'display:none')+'">Other Parent\'s Address</div>';
+    h+='<div id="ceOtherParentBlock" style="'+((d.maritalStatus==='Divorced'||d.maritalStatus==='Separated')?'':'display:none')+'">';
+    h+=ff('Street Address','ceOpStreet',d.otherParentStreet||'');
+    h+='<div class="fr">'+ff('City','ceOpCity',d.otherParentCity||'')+ff('State','ceOpState',d.otherParentState||'')+ff('ZIP','ceOpZip',d.otherParentZip||'')+'</div>';
+    h+='<div class="fg"><label class="fl" style="display:flex;align-items:center;gap:7px;cursor:pointer">'+
+        '<input type="checkbox" id="ceOpSummerSame"'+(d.otherParentSummerSameAsHome!==false?' checked':'')+' onchange="CampistryMe.ceToggleOtherParentSummer()"> Summer address same as above</label></div>';
+    h+='<div id="ceOpSummerBlock" style="'+(d.otherParentSummerSameAsHome!==false?'display:none':'')+'">';
+    h+=ff('Summer Street Address','ceOpSummerStreet',d.otherParentSummerStreet||'');
+    h+='<div class="fr">'+ff('Summer City','ceOpSummerCity',d.otherParentSummerCity||'')+ff('Summer State','ceOpSummerState',d.otherParentSummerState||'')+ff('Summer ZIP','ceOpSummerZip',d.otherParentSummerZip||'')+'</div>';
+    h+='</div>';
+    h+='</div>';
 
     // Home vs summer address. Plenty of camp families spend the season at a
     // bungalow or a rental, so mail, transport and emergency contact all need
@@ -2681,12 +2699,25 @@ function editCamper(n){
     var divS=document.getElementById('ceDiv'),grS=document.getElementById('ceCGrade'),bkS=document.getElementById('ceBunk');
     if(divS)divS.onchange=function(){if(grS)grS.innerHTML=grOpts(divS.value).map(function(o){return'<option value="'+esc(o)+'">'+(o||'—')+'</option>'}).join('');if(bkS)bkS.innerHTML=bkOpts(divS.value,'').map(function(o){return'<option value="'+esc(o)+'">'+(o||'—')+'</option>'}).join('')};
     if(grS)grS.onchange=function(){if(bkS)bkS.innerHTML=bkOpts(divS.value,grS.value).map(function(o){return'<option value="'+esc(o)+'">'+(o||'—')+'</option>'}).join('')};
+    var maritalS=document.getElementById('ceMarital');
+    if(maritalS)maritalS.onchange=ceMaritalChanged;
     var saveBtn=document.getElementById('ceSave');
     if(saveBtn)saveBtn.onclick=saveCamper;
     openModal('camperEditModal');
 }
 function ceToggleSummer(){
     var on=document.getElementById('ceSummerSame'), b=document.getElementById('ceSummerBlock');
+    if(b)b.style.display=(on&&on.checked)?'none':'';
+}
+function ceMaritalChanged(){
+    var sel=document.getElementById('ceMarital');
+    var show=sel&&(sel.value==='Divorced'||sel.value==='Separated');
+    var sec=document.getElementById('ceOtherParentSec'), blk=document.getElementById('ceOtherParentBlock');
+    if(sec)sec.style.display=show?'':'none';
+    if(blk)blk.style.display=show?'':'none';
+}
+function ceToggleOtherParentSummer(){
+    var on=document.getElementById('ceOpSummerSame'), b=document.getElementById('ceOpSummerBlock');
     if(b)b.style.display=(on&&on.checked)?'none':'';
 }
 function addCamper(){editingCamper=null;editCamper('')}
@@ -2739,10 +2770,17 @@ function saveCamper(){
         summerState:_summerSame?_v('ceState'):_v('ceSummerState'),
         summerZip:_summerSame?_v('ceZip'):_v('ceSummerZip'),
         summerPhone:_v('ceSummerPhone'),
-        parent1Name:_v('ceP1'),parent1Relation:_v('ceP1Rel'),parent1Phone:_v('ceP1Ph'),
-        parent1Email:_v('ceP1Em'),
-        parent2Name:_v('ceP2'),parent2Relation:_v('ceP2Rel'),
+        parent1Name:(_v('ceP1First')+' '+_v('ceP1Last')).trim(),parent1Relation:_v('ceP1Rel'),parent1Phone:_v('ceP1Ph'),
+        parent1Email:_v('ceP1Em'),maritalStatus:_v('ceMarital'),
+        parent2Name:(_v('ceP2First')+' '+_v('ceP2Last')).trim(),parent2Relation:_v('ceP2Rel'),
         parent2Phone:_v('ceP2Ph'),parent2Email:_v('ceP2Em'),
+        otherParentStreet:_v('ceOpStreet'),otherParentCity:_v('ceOpCity'),
+        otherParentState:_v('ceOpState'),otherParentZip:_v('ceOpZip'),
+        otherParentSummerSameAsHome:document.getElementById('ceOpSummerSame')?!!document.getElementById('ceOpSummerSame').checked:true,
+        otherParentSummerStreet:document.getElementById('ceOpSummerSame')&&document.getElementById('ceOpSummerSame').checked?_v('ceOpStreet'):_v('ceOpSummerStreet'),
+        otherParentSummerCity:document.getElementById('ceOpSummerSame')&&document.getElementById('ceOpSummerSame').checked?_v('ceOpCity'):_v('ceOpSummerCity'),
+        otherParentSummerState:document.getElementById('ceOpSummerSame')&&document.getElementById('ceOpSummerSame').checked?_v('ceOpState'):_v('ceOpSummerState'),
+        otherParentSummerZip:document.getElementById('ceOpSummerSame')&&document.getElementById('ceOpSummerSame').checked?_v('ceOpZip'):_v('ceOpSummerZip'),
         emergencyName:_v('ceEmN'),emergencyPhone:_v('ceEmPh'),
         emergencyRel:_v('ceEmR'),
         allergies:_v('ceAlg'),medications:_v('ceMed'),
@@ -6338,6 +6376,7 @@ var FC_SECTIONS=[
     {key:'parent',label:'Parent / Guardian',desc:'Name, phone, email, second parent',default:true},
     {key:'address',label:'Home Address',desc:'Street, city, state, ZIP',default:true},
     {key:'summerAddress',label:'Summer Address',desc:'Where the family is during the season — a bungalow, a rental, or with relatives.',default:true},
+    {key:'otherParent',label:"Other Parent's Address",desc:'For divorced or separated families — appears only when Marital Status is set to Divorced or Separated.',default:false},
     {key:'emergency',label:'Emergency Contact',desc:'Name, relationship, phone',default:true},
     {key:'medical',label:'Medical Information',desc:'Allergies, medications, dietary, notes',default:true},
     {key:'preferences',label:'Preferences',desc:'Bunkmate request, separation, t-shirt, referral source',default:true},
@@ -6363,11 +6402,14 @@ var FC_FIELD_CATALOG={
         {id:'photo',label:'Camper Photo'}
     ],
     parent:[
-        {id:'parentName',label:'Parent / Guardian Name',required:true},
+        {id:'parentFirst',label:'Parent / Guardian First Name',required:true},
+        {id:'parentLast',label:'Parent / Guardian Last Name',required:true},
         {id:'parentRelation',label:'Relationship'},
         {id:'parentPhone',label:'Phone',required:true},
         {id:'parentEmail',label:'Email',required:true},
-        {id:'parent2Name',label:'Second Parent / Guardian Name'},
+        {id:'maritalStatus',label:'Marital Status'},
+        {id:'parent2First',label:'Second Parent / Guardian First Name'},
+        {id:'parent2Last',label:'Second Parent / Guardian Last Name'},
         {id:'parent2Relation',label:'Second Parent / Guardian Relationship'},
         {id:'parent2Phone',label:'Second Parent / Guardian Phone'},
         {id:'parent2Email',label:'Second Parent / Guardian Email'}
@@ -8430,9 +8472,10 @@ var APP_FIELD_MAP={
     first:{rec:'camperFirst'},last:{rec:'camperLast'},
     dob:{rec:'dob',type:'date'},gender:{rec:'gender',type:'select',opts:['Male','Female','Non-binary','Other']},
     school:{rec:'school'},schoolGrade:{rec:'schoolGrade',type:'select',opts:SCHOOL_GRADE_CATALOG},teacher:{rec:'teacher'},photo:{rec:'camperPhoto',type:'file'},
-    parentName:{rec:'parentName'},parentRelation:{rec:'parentRelation'},
+    parentFirst:{rec:'parentFirst'},parentLast:{rec:'parentLast'},parentRelation:{rec:'parentRelation'},
     parentPhone:{rec:'parentPhone',type:'tel'},parentEmail:{rec:'parentEmail',type:'email'},
-    parent2Name:{rec:'parent2Name'},parent2Relation:{rec:'parent2Relation'},
+    maritalStatus:{rec:'maritalStatus',type:'select',opts:['Married','Divorced','Separated','Single','Widowed']},
+    parent2First:{rec:'parent2First'},parent2Last:{rec:'parent2Last'},parent2Relation:{rec:'parent2Relation'},
     parent2Phone:{rec:'parent2Phone',type:'tel'},parent2Email:{rec:'parent2Email',type:'email'},
     street:{rec:'street'},city:{rec:'city'},state:{rec:'state'},zip:{rec:'zip'},
     emName:{rec:'emergencyName'},emRelation:{rec:'emergencyRel'},emPhone:{rec:'emergencyPhone',type:'tel'},
@@ -8455,6 +8498,17 @@ function _onAppPhotoPick(input,targetId){
     });
 }
 
+function appMaritalChanged(){
+    var sel=document.getElementById('app_maritalStatus');
+    var show=sel&&(sel.value==='Divorced'||sel.value==='Separated');
+    var sec=document.getElementById('appOtherParentSec'), blk=document.getElementById('appOtherParentBlock');
+    if(sec)sec.style.display=show?'':'none';
+    if(blk)blk.style.display=show?'':'none';
+}
+function appToggleOtherParentSummer(){
+    var on=document.getElementById('appOpSummerSame'), b=document.getElementById('appOpSummerBlock');
+    if(b)b.style.display=(on&&on.checked)?'none':'';
+}
 // Re-reads sessions from the shared local cache right before a session
 // picker renders. loadData() normally keeps the module-level `sessions`
 // var current (re-run on cloud hydration and on cross-tab storage events),
@@ -8500,7 +8554,7 @@ function addApplication(){
         var req=cfg.required!=null?cfg.required:!!f.required;
         var id='app_'+f.id;
         var star=req?' <span class="rq" style="color:var(--err)">*</span>':'';
-        if(map.type==='select'){var _opts=f.id==='schoolGrade'?_schoolGradeCatalog():map.opts;return '<div class="fg"><label class="fl">'+esc(label)+star+'</label><select id="'+id+'" class="fs"><option value="">—</option>'+_opts.map(function(o){return'<option>'+o+'</option>';}).join('')+'</select></div>';}
+        if(map.type==='select'){var _opts=f.id==='schoolGrade'?_schoolGradeCatalog():map.opts;var _onch=f.id==='maritalStatus'?' onchange="CampistryMe.appMaritalChanged()"':'';return '<div class="fg"><label class="fl">'+esc(label)+star+'</label><select id="'+id+'" class="fs"'+_onch+'><option value="">—</option>'+_opts.map(function(o){return'<option>'+o+'</option>';}).join('')+'</select></div>';}
         if(map.type==='textarea')return '<div class="fg"><label class="fl">'+esc(label)+star+'</label><textarea id="'+id+'" class="fi" style="min-height:50px;resize:vertical"></textarea></div>';
         if(map.type==='file')return '<div class="fg"><label class="fl">'+esc(label)+star+'</label>'
             +'<input type="hidden" id="'+id+'">'
@@ -8523,6 +8577,24 @@ function addApplication(){
             h+=rows[i+1]?('<div class="fr">'+rows[i]+rows[i+1]+'</div>'):rows[i];
         }
     });
+
+    // Other Parent's Address — not in FC_FIELD_CATALOG (like documents/
+    // payment/signature/siblings above), hand-rendered here instead since it
+    // needs real conditional show/hide tied to the Marital Status field
+    // rather than the generic flat-field loop. Starts hidden; appMaritalChanged()
+    // (wired via the maritalStatus select's onchange, see fieldHtml() above)
+    // reveals it only for Divorced/Separated.
+    if(secEnabled.otherParent){
+        h+='<div class="fsec" id="appOtherParentSec" style="display:none">Other Parent\'s Address</div>';
+        h+='<div id="appOtherParentBlock" style="display:none">';
+        h+='<div class="fg"><label class="fl">Street Address</label><input type="text" id="appOpStreet" class="fi"></div>';
+        h+='<div class="fr"><div class="fg"><label class="fl">City</label><input type="text" id="appOpCity" class="fi"></div><div class="fg"><label class="fl">State</label><input type="text" id="appOpState" class="fi"></div><div class="fg"><label class="fl">ZIP</label><input type="text" id="appOpZip" class="fi"></div></div>';
+        h+='<div class="fg"><label class="fl" style="display:flex;align-items:center;gap:7px;cursor:pointer"><input type="checkbox" id="appOpSummerSame" checked onchange="CampistryMe.appToggleOtherParentSummer()"> Summer address same as above</label></div>';
+        h+='<div id="appOpSummerBlock" style="display:none">';
+        h+='<div class="fg"><label class="fl">Summer Street Address</label><input type="text" id="appOpSummerStreet" class="fi"></div>';
+        h+='<div class="fr"><div class="fg"><label class="fl">Summer City</label><input type="text" id="appOpSummerCity" class="fi"></div><div class="fg"><label class="fl">Summer State</label><input type="text" id="appOpSummerState" class="fi"></div><div class="fg"><label class="fl">Summer ZIP</label><input type="text" id="appOpSummerZip" class="fi"></div></div>';
+        h+='</div></div>';
+    }
 
     if(fc.customQuestions&&fc.customQuestions.length){
         h+='<div class="fsec">Additional Information</div>';
@@ -8591,12 +8663,27 @@ function addApplication(){
             }
         });
 
+        var parentName=[values.parentFirst,values.parentLast].filter(Boolean).join(' ');
+        var parent2Name=[values.parent2First,values.parent2Last].filter(Boolean).join(' ');
+        var opSummerSame=document.getElementById('appOpSummerSame')?!!document.getElementById('appOpSummerSame').checked:true;
+        var opStreet=(document.getElementById('appOpStreet')&&document.getElementById('appOpStreet').value||'').trim();
+        var opCity=(document.getElementById('appOpCity')&&document.getElementById('appOpCity').value||'').trim();
+        var opState=(document.getElementById('appOpState')&&document.getElementById('appOpState').value||'').trim();
+        var opZip=(document.getElementById('appOpZip')&&document.getElementById('appOpZip').value||'').trim();
+
         var id='enr_'+Date.now()+'_'+Math.random().toString(36).substr(2,4);
         var rec={
             camperName:camperName,camperFirst:first,camperLast:last,
             dob:values.dob||'',gender:values.gender||'',school:values.school||'',schoolGrade:values.schoolGrade||'',teacher:values.teacher||'',camperPhoto:values.photo||'',
-            parentName:values.parentName||'',parentRelation:values.parentRelation||'',parentPhone:values.parentPhone||'',parentEmail:values.parentEmail||'',
-            parent2Name:values.parent2Name||'',parent2Relation:values.parent2Relation||'',parent2Phone:values.parent2Phone||'',parent2Email:values.parent2Email||'',
+            parentName:parentName,parentRelation:values.parentRelation||'',parentPhone:values.parentPhone||'',parentEmail:values.parentEmail||'',
+            maritalStatus:values.maritalStatus||'',
+            parent2Name:parent2Name,parent2Relation:values.parent2Relation||'',parent2Phone:values.parent2Phone||'',parent2Email:values.parent2Email||'',
+            otherParentStreet:opStreet,otherParentCity:opCity,otherParentState:opState,otherParentZip:opZip,
+            otherParentSummerSameAsHome:opSummerSame,
+            otherParentSummerStreet:opSummerSame?opStreet:(document.getElementById('appOpSummerStreet')&&document.getElementById('appOpSummerStreet').value||'').trim(),
+            otherParentSummerCity:opSummerSame?opCity:(document.getElementById('appOpSummerCity')&&document.getElementById('appOpSummerCity').value||'').trim(),
+            otherParentSummerState:opSummerSame?opState:(document.getElementById('appOpSummerState')&&document.getElementById('appOpSummerState').value||'').trim(),
+            otherParentSummerZip:opSummerSame?opZip:(document.getElementById('appOpSummerZip')&&document.getElementById('appOpSummerZip').value||'').trim(),
             street:values.street||'',city:values.city||'',state:values.state||'',zip:values.zip||'',
             emergencyName:values.emName||'',emergencyRel:values.emRelation||'',emergencyPhone:values.emPhone||'',
             allergies:values.allergies||'',medications:values.medications||'',dietary:values.dietary||'',medicalNotes:values.medicalNotes||'',
@@ -9217,7 +9304,11 @@ function enrollCamper(id){
             summerSameAsHome:e.summerSameAsHome!==false,
             summerStreet:e.summerStreet||'',summerCity:e.summerCity||'',summerState:e.summerState||'',summerZip:e.summerZip||'',summerPhone:e.summerPhone||'',
             parent1Name:e.parentName||'',parent1Relation:e.parentRelation||'',parent1Phone:e.parentPhone||'',parent1Email:e.parentEmail||'',
+            maritalStatus:e.maritalStatus||'',
             parent2Name:e.parent2Name||'',parent2Phone:e.parent2Phone||'',parent2Email:e.parent2Email||'',parent2Relation:e.parent2Relation||'',
+            otherParentStreet:e.otherParentStreet||'',otherParentCity:e.otherParentCity||'',otherParentState:e.otherParentState||'',otherParentZip:e.otherParentZip||'',
+            otherParentSummerSameAsHome:e.otherParentSummerSameAsHome!==false,
+            otherParentSummerStreet:e.otherParentSummerStreet||'',otherParentSummerCity:e.otherParentSummerCity||'',otherParentSummerState:e.otherParentSummerState||'',otherParentSummerZip:e.otherParentSummerZip||'',
             emergencyName:e.emergencyName||'',emergencyPhone:e.emergencyPhone||'',emergencyRel:e.emergencyRel||'',
             allergies:e.allergies||'',medications:e.medications||'',dietary:e.dietary||'',medicalNotes:e.medicalNotes||'',
             documents:e.documents||[],
@@ -9242,7 +9333,9 @@ function enrollCamper(id){
         if(!c.street&&e.street){c.street=e.street;c.city=e.city;c.state=e.state;c.zip=e.zip;syncAddressToGo(e.camperName,c)}
         if(!c.summerStreet&&e.summerStreet){c.summerSameAsHome=e.summerSameAsHome!==false;c.summerStreet=e.summerStreet;c.summerCity=e.summerCity;c.summerState=e.summerState;c.summerZip=e.summerZip;c.summerPhone=e.summerPhone}
         if(!c.parent1Name&&e.parentName){c.parent1Name=e.parentName;c.parent1Relation=e.parentRelation;c.parent1Phone=e.parentPhone;c.parent1Email=e.parentEmail}
+        if(!c.maritalStatus&&e.maritalStatus)c.maritalStatus=e.maritalStatus;
         if(!c.parent2Name&&e.parent2Name){c.parent2Name=e.parent2Name;c.parent2Phone=e.parent2Phone;c.parent2Email=e.parent2Email;c.parent2Relation=e.parent2Relation}
+        if(!c.otherParentStreet&&e.otherParentStreet){c.otherParentStreet=e.otherParentStreet;c.otherParentCity=e.otherParentCity;c.otherParentState=e.otherParentState;c.otherParentZip=e.otherParentZip;c.otherParentSummerSameAsHome=e.otherParentSummerSameAsHome!==false;c.otherParentSummerStreet=e.otherParentSummerStreet;c.otherParentSummerCity=e.otherParentSummerCity;c.otherParentSummerState=e.otherParentSummerState;c.otherParentSummerZip=e.otherParentSummerZip}
         if(!c.smsEmailConsent&&e.smsEmailConsent)c.smsEmailConsent=true; // never downgrade consent already captured
         if(!c.emergencyName&&e.emergencyName){c.emergencyName=e.emergencyName;c.emergencyPhone=e.emergencyPhone;c.emergencyRel=e.emergencyRel}
         if(!c.allergies&&e.allergies)c.allergies=e.allergies;
@@ -15367,7 +15460,7 @@ function psEditorHtml(s){
 
 window.CampistryMe={
     nav:nav,closeModal:closeModal,
-    viewCamper:viewCamper,editCamper:editCamper,addCamper:addCamper,deleteCamper:deleteCamper,unenrollCamper:unenrollCamper,reenrollCamper:reenrollCamper,ceToggleSummer:ceToggleSummer,
+    viewCamper:viewCamper,editCamper:editCamper,addCamper:addCamper,deleteCamper:deleteCamper,unenrollCamper:unenrollCamper,reenrollCamper:reenrollCamper,ceToggleSummer:ceToggleSummer,ceMaritalChanged:ceMaritalChanged,ceToggleOtherParentSummer:ceToggleOtherParentSummer,
     addFamily:function(){openFamilyForm(null)},editFamily:function(id){openFamilyForm(id)},deleteFamily:deleteFamily,removeCamperFromFamily:removeCamperFromFamily,
     setPplStaffSubTab:setPplStaffSubTab,viewStaffMember:viewStaffMember,openEditStaffModal:openEditStaffModal,saveStaffMember:saveStaffMember,
     acceptFamilySuggestion:acceptFamilySuggestion,dismissFamilySuggestion:dismissFamilySuggestion,acceptAddToFamily:acceptAddToFamily,
@@ -15401,7 +15494,7 @@ window.CampistryMe={
     getStaffForBunk:getStaffForBunk,getStaffForBunks:getStaffForBunks,
     getStaffForDivision:getStaffForDivision,getBunksForDivision:getBunksForDivision,
     findStaffByEmail:findStaffByEmail,getAllStaff:getAllStaff,
-    copyRegLink:copyRegLink,openEmbedLinkModal:openEmbedLinkModal,copyEmbedSnippet:copyEmbedSnippet,addDocRow:addDocRow,addApplication:addApplication,_onAppPhotoPick:_onAppPhotoPick,autoPromoteWaitlist:autoPromoteWaitlist,
+    copyRegLink:copyRegLink,openEmbedLinkModal:openEmbedLinkModal,copyEmbedSnippet:copyEmbedSnippet,addDocRow:addDocRow,addApplication:addApplication,_onAppPhotoPick:_onAppPhotoPick,autoPromoteWaitlist:autoPromoteWaitlist,appMaritalChanged:appMaritalChanged,appToggleOtherParentSummer:appToggleOtherParentSummer,
     viewApplication:viewApplication,_markAppPaymentReceived:_markAppPaymentReceived,updateEnrollStatus:updateEnrollStatus,bulkEnrollStatus:bulkEnrollStatus,toggleAllEnroll:toggleAllEnroll,_updateRegBulkBar:_updateRegBulkBar,enrollCamper:enrollCamper,generateParentInvite:generateParentInvite,_sendInviteEmailNow:_sendInviteEmailNow,rescindEnrollment:rescindEnrollment,deleteApplication:deleteApplication,
     saveAppNote:saveAppNote,printApplication:printApplication,
     openFormConfig:openFormConfig,saveFormConfig:saveFormConfig,addCustomQ:addCustomQ,addPromoRow:addPromoRow,
