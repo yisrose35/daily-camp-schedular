@@ -13,7 +13,7 @@
       "permanent": false
     },
     {
-      "source": "/((?!campistry_link_parent|campistry_reset).*\\.html)",
+      "source": "/((?!campistry_link_parent|campistry_reset|campistry_card_setup).*\\.html)",
       "has": [
         {
           "type": "host",
