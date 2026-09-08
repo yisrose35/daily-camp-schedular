@@ -291,7 +291,7 @@
             // outright. Read them only through get_camp_tax_id() below.
             const { data: ownedCamps, error: campError } = await window.supabase
                 .from('camps')
-                .select('id, name, address, contact_email, owner_name, owner')
+                .select('id, name, address, contact_email, owner')
                 .eq('owner', currentUser.id);
 
             let ownedCamp = null;
@@ -806,7 +806,7 @@
                 // show_tax_id_on_statements are select-locked (migration 121).
                 const { data: campsList, error } = await window.supabase
                     .from('camps')
-                    .select('id, name, address, contact_email, owner_name, owner')
+                    .select('id, name, address, contact_email, owner')
                     .eq('owner', currentUser.id);
                 const camps = (Array.isArray(campsList) && campsList.length > 0)
                     ? (campsList.find(c => c.id === currentUser.id) || campsList[0])
@@ -1170,7 +1170,7 @@
                     // Explicit column list — tax_id/show_tax_id_on_statements
                     // are select-locked (migration 121), so a bare .select()
                     // (which defaults to "*") would fail on the RETURNING here.
-                    .select('id, name, address, contact_email, owner_name, owner')
+                    .select('id, name, address, contact_email, owner')
                     .single();
 
                 if (error) throw error;
