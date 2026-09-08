@@ -84,6 +84,7 @@
     const statDivisions = document.getElementById('statDivisions');
     const statBunks = document.getElementById('statBunks');
     const statCampers = document.getElementById('statCampers');
+    const statStaff = document.getElementById('statStaff');
     
     // RBAC elements
     const teamAccessSection = document.getElementById('team-access-section');
@@ -1027,10 +1028,22 @@
                     });
                 }
 
+                // ★ Team/Staff: same definition Me's own Analytics tab uses
+                // (hiredStaff() — staffApplications entries with
+                // status==='hired') so this tile and Analytics' "Staff" tile
+                // can never silently disagree. This tile previously had NO
+                // data wired to it at all — #statStaff was declared in the
+                // HTML but never referenced anywhere in this file, so it
+                // permanently showed the placeholder "—" regardless of how
+                // many staff the camp actually had.
+                const staffApps = state.campistryMe?.staffApplications || {};
+                const staffCount = Object.values(staffApps).filter(a => a?.status === 'hired').length;
+
                 // Update UI
                 if (statDivisions) statDivisions.textContent = divisionCount || '—';
                 if (statBunks) statBunks.textContent = bunkCount || '—';
                 if (statCampers) statCampers.textContent = camperCount > 0 ? camperCount : '—';
+                if (statStaff) statStaff.textContent = staffCount > 0 ? staffCount : '—';
             }
         } catch (e) {
             console.warn('Could not load stats:', e);
