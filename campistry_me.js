@@ -12182,9 +12182,24 @@ async function sendPayLink(famKey){
         var desc=document.getElementById('plDesc').value.trim();
         var btn=document.getElementById('dynModalSave'); if(btn){btn.disabled=true;btn.textContent='Creating…';}
         try{
-            // BYOP has no hosted-checkout API to call ahead of time (unlike
-            // Stripe, which mints a session server-side) — the link IS the
-            // page; nothing to create, just build the URL.
+            // Cardknox/Sola has a real hosted checkout page
+            // (secure.cardknox.com/<slug>) that accepts a pre-filled amount
+            // via ?xAmount= — cardknox-checkout-start mints a link to it
+            // with our own reference as xInvoice so the async webhook can
+            // resolve it back to this family/amount once Sola confirms the
+            // charge (see cardknox-webhook — that's the actual source of
+            // truth, not this link itself).
+            if(processorKey==='cardknox'){
+                var ckRes=await callEdgeFunction('cardknox-checkout-start',{campId:getCampId(),kind:'tuition_charge',familyKey:famKey,familyName:f.name,amount:amt,description:desc||('Camp payment — '+f.name)});
+                if(!ckRes||!ckRes.url) throw new Error('No link returned');
+                _showPayLinkResult(f,ckRes.url,true);
+                if(btn){btn.disabled=false;btn.textContent='Save';}
+                return;
+            }
+            // Any other non-Stripe processor with no hosted-checkout support
+            // yet (e.g. Banquest) falls back to the embedded tokenizer page —
+            // no hosted-checkout API to call ahead of time there, the link
+            // IS the page, nothing to create, just build the URL.
             if(isBYOP){
                 var byopUrl=window.location.origin+'/campistry_card_setup.html?campId='+encodeURIComponent(getCampId())+
                     '&familyKey='+encodeURIComponent(famKey)+
