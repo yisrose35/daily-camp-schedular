@@ -373,45 +373,71 @@
         <button class="btn btn-primary btn-sm" style="margin-top:6px;" onclick="saveSpendingControls()">Save Controls</button>
     </div>
     <div class="lk-card" id="autoReloadCard"><div class="lk-card-head"><h2>Auto-Reload</h2></div>
-        <div id="arStatusMsg" style="font-size:.8rem;margin-bottom:12px;"></div>
-        <div class="lk-field">
-            <label><input type="checkbox" id="arThEnabled" onchange="document.getElementById('arThFields').style.display=this.checked?'flex':'none'"> Reload when balance drops below a threshold</label>
-            <div id="arThFields" style="display:none;gap:10px;align-items:center;margin-top:8px;flex-wrap:wrap;">
-                <span style="font-size:.8rem;color:var(--text-muted);">Reload</span>
-                <span style="display:flex;align-items:center;">$<input type="number" id="arThReload" min="1" max="500" step="1" value="20" style="width:70px;padding:6px 8px;border-radius:6px;border:1px solid var(--border-color,#E2E8F0);margin-left:2px;"></span>
-                <span style="font-size:.8rem;color:var(--text-muted);">when balance falls below</span>
-                <span style="display:flex;align-items:center;">$<input type="number" id="arThAmount" min="0" max="1000" step="1" value="5" style="width:70px;padding:6px 8px;border-radius:6px;border:1px solid var(--border-color,#E2E8F0);margin-left:2px;"></span>
+        <div id="arStatusMsg" class="ar-status off"><span class="ar-status-dot"></span><span>Auto-reload is off.</span></div>
+        <div class="ar-option" id="arThOption">
+            <label class="ar-option-head">
+                <input type="checkbox" id="arThEnabled" onchange="_arToggleOption('arThOption','arThFields',this.checked)">
+                <span class="ar-option-title">Reload when balance drops below a threshold</span>
+            </label>
+            <div id="arThFields" class="ar-option-body" style="display:none;">
+                <div class="lk-field">
+                    <label>Reload amount</label>
+                    <div class="ar-dollar-field"><input type="number" class="lk-input" id="arThReload" min="1" max="500" step="1" value="20"></div>
+                </div>
+                <div class="lk-field">
+                    <label>When balance falls below</label>
+                    <div class="ar-dollar-field"><input type="number" class="lk-input" id="arThAmount" min="0" max="1000" step="1" value="5"></div>
+                </div>
             </div>
         </div>
-        <div class="lk-field" style="margin-top:14px;">
-            <label><input type="checkbox" id="arScEnabled" onchange="document.getElementById('arScFields').style.display=this.checked?'flex':'none'"> Reload on a fixed schedule</label>
-            <div id="arScFields" style="display:none;gap:10px;align-items:center;margin-top:8px;flex-wrap:wrap;">
-                <span style="font-size:.8rem;color:var(--text-muted);">Reload</span>
-                <span style="display:flex;align-items:center;">$<input type="number" id="arScReload" min="1" max="500" step="1" value="25" style="width:70px;padding:6px 8px;border-radius:6px;border:1px solid var(--border-color,#E2E8F0);margin-left:2px;"></span>
-                <span style="font-size:.8rem;color:var(--text-muted);">every</span>
-                <select id="arScFreq" onchange="_arRenderDayOptions()" style="padding:6px 8px;border-radius:6px;border:1px solid var(--border-color,#E2E8F0);">
-                    <option value="weekly">week, on</option>
-                    <option value="monthly">month, on the</option>
-                </select>
-                <select id="arScDay" style="padding:6px 8px;border-radius:6px;border:1px solid var(--border-color,#E2E8F0);"></select>
+        <div class="ar-option" id="arScOption">
+            <label class="ar-option-head">
+                <input type="checkbox" id="arScEnabled" onchange="_arToggleOption('arScOption','arScFields',this.checked)">
+                <span class="ar-option-title">Reload on a fixed schedule</span>
+            </label>
+            <div id="arScFields" class="ar-option-body ar-grid-3" style="display:none;">
+                <div class="lk-field">
+                    <label>Reload amount</label>
+                    <div class="ar-dollar-field"><input type="number" class="lk-input" id="arScReload" min="1" max="500" step="1" value="25"></div>
+                </div>
+                <div class="lk-field">
+                    <label>Frequency</label>
+                    <select id="arScFreq" class="lk-select" onchange="_arRenderDayOptions()">
+                        <option value="weekly">Weekly</option>
+                        <option value="monthly">Monthly</option>
+                    </select>
+                </div>
+                <div class="lk-field">
+                    <label>On</label>
+                    <select id="arScDay" class="lk-select"></select>
+                </div>
             </div>
         </div>
-        <div class="lk-field" style="margin-top:14px;">
-            <label>Active dates <span style="font-weight:400;color:var(--text-muted);">(optional)</span></label>
-            <div id="arSessionPickWrap" style="margin-top:8px;display:none;">
-                <select id="arSessionPick" onchange="_arApplySessionPreset()" style="padding:6px 8px;border-radius:6px;border:1px solid var(--border-color,#E2E8F0);max-width:100%;">
-                    <option value="">Quick-fill from a session…</option>
-                </select>
+        <div class="ar-option" id="arDatesOption">
+            <div class="ar-option-head ar-option-head--static">
+                <span class="ar-option-title">Active dates <em>(optional)</em></span>
             </div>
-            <div style="display:flex;gap:10px;align-items:center;margin-top:8px;flex-wrap:wrap;">
-                <span style="font-size:.8rem;color:var(--text-muted);">From</span>
-                <input type="date" id="arStartDate" style="padding:6px 8px;border-radius:6px;border:1px solid var(--border-color,#E2E8F0);">
-                <span style="font-size:.8rem;color:var(--text-muted);">to</span>
-                <input type="date" id="arStopDate" style="padding:6px 8px;border-radius:6px;border:1px solid var(--border-color,#E2E8F0);">
+            <div class="ar-option-body ar-grid-1">
+                <div class="lk-field" id="arSessionPickWrap" style="display:none;">
+                    <label>Quick-fill from a session</label>
+                    <select id="arSessionPick" class="lk-select" onchange="_arApplySessionPreset()">
+                        <option value="">Quick-fill from a session…</option>
+                    </select>
+                </div>
+                <div class="ar-date-grid">
+                    <div class="lk-field">
+                        <label>Start date</label>
+                        <input type="date" class="lk-input" id="arStartDate">
+                    </div>
+                    <div class="lk-field">
+                        <label>End date</label>
+                        <input type="date" class="lk-input" id="arStopDate">
+                    </div>
+                </div>
+                <p class="ar-hint">Leave blank to run year-round. Otherwise auto-reload only charges within this window — e.g. just for the camp season.</p>
             </div>
-            <div style="font-size:.72rem;color:var(--text-muted);margin-top:4px;">Leave blank to run year-round. Otherwise auto-reload only charges within this window — e.g. just for the camp season.</div>
         </div>
-        <div style="display:flex;gap:8px;margin-top:14px;flex-wrap:wrap;">
+        <div class="ar-actions">
             <button class="btn btn-primary btn-sm" onclick="saveAutoReload()">Save Auto-Reload</button>
             <button class="btn btn-secondary btn-sm" id="arCardBtn" onclick="startCanteenAutoReloadSetup()" style="display:none;">Update card</button>
             <button class="btn btn-ghost btn-sm" id="arOffBtn" onclick="turnOffAutoReload()" style="display:none;">Turn off</button>
@@ -2003,6 +2029,12 @@ function saveSpendingControls(){
 // charge-due-installments) but keyed to the camper's own canteen account
 // instead of a family (migrations/109_canteen_auto_reload.sql,
 // stripe-canteen-autoreload-setup, canteen-auto-reload cron).
+// Panel tints + its fields show/hide together, so the card reads as "this
+// trigger is on" at a glance rather than just a ticked box.
+function _arToggleOption(optId, fieldsId, checked){
+    var opt=document.getElementById(optId); if(opt) opt.classList.toggle('on', !!checked);
+    var f=document.getElementById(fieldsId); if(f) f.style.display=checked?'grid':'none';
+}
 function _arRenderDayOptions(){
     var freq=(document.getElementById('arScFreq')||{}).value||'weekly';
     var sel=document.getElementById('arScDay'); if(!sel) return;
@@ -2085,11 +2117,11 @@ function _arApplySessionPreset(){
 function _renderAutoReload(c){
     var ar=(c&&c.autoReload)||{};
     var thE=document.getElementById('arThEnabled');
-    if(thE){ thE.checked=!!ar.thresholdEnabled; document.getElementById('arThFields').style.display=ar.thresholdEnabled?'flex':'none'; }
+    if(thE){ thE.checked=!!ar.thresholdEnabled; _arToggleOption('arThOption','arThFields',ar.thresholdEnabled); }
     var thReload=document.getElementById('arThReload'); if(thReload && ar.thresholdReloadAmount!=null) thReload.value=ar.thresholdReloadAmount;
     var thAmt=document.getElementById('arThAmount'); if(thAmt && ar.thresholdAmount!=null) thAmt.value=ar.thresholdAmount;
     var scE=document.getElementById('arScEnabled');
-    if(scE){ scE.checked=!!ar.scheduleEnabled; document.getElementById('arScFields').style.display=ar.scheduleEnabled?'flex':'none'; }
+    if(scE){ scE.checked=!!ar.scheduleEnabled; _arToggleOption('arScOption','arScFields',ar.scheduleEnabled); }
     var scFreq=document.getElementById('arScFreq'); if(scFreq) scFreq.value=ar.scheduleFrequency||'weekly';
     _arRenderDayOptions();
     var scDay=document.getElementById('arScDay'); if(scDay && ar.scheduleDay!=null) scDay.value=ar.scheduleDay;
@@ -2103,31 +2135,35 @@ function _renderAutoReload(c){
     // Charges only land inside [startDate,stopDate] (either end optional) —
     // the cron enforces this server-side too (canteen-auto-reload/index.ts),
     // this is just telling the parent what state that leaves them in today.
-    var todayStr=new Date().toISOString().slice(0,10), windowNote='';
+    var todayStr=new Date().toISOString().slice(0,10), windowNote='', windowEnded=false;
     if(ar.startDate || ar.stopDate){
         if(ar.startDate && todayStr<ar.startDate){
             windowNote=' &middot; starts '+_escHtml(ar.startDate);
         } else if(ar.stopDate && todayStr>ar.stopDate){
-            windowNote=' &middot; <span style="color:var(--amber-600,#B45309);">window ended '+_escHtml(ar.stopDate)+' — update the dates to resume</span>';
+            windowEnded=true;
+            windowNote=' &middot; window ended '+_escHtml(ar.stopDate)+' — update the dates to resume';
         } else {
             windowNote=' &middot; active '+_escHtml(ar.startDate||'now')+' – '+_escHtml(ar.stopDate||'ongoing');
         }
     }
+    function _arStatus(kind,html){ msg.className='ar-status '+kind; msg.innerHTML='<span class="ar-status-dot"></span><span>'+html+'</span>'; }
     if(ar.enabled && ar.cardOnFile){
         var last=ar.lastChargedDate?(' &middot; last topped up $'+Number(ar.lastChargeAmount||0).toFixed(2)+' on '+_escHtml(ar.lastChargedDate)):'';
-        msg.innerHTML='<span style="color:#0E7C4A;font-weight:600;">&#10003; Auto-reload is on</span>'+last+' &middot; charging '+_escHtml(ar.paymentMethodLabel||(ar.paymentMethodType==='us_bank_account'?'a bank account':'a card'))+windowNote;
+        // An ended window means enabled-but-dormant — amber, not a green "on".
+        _arStatus(windowEnded?'almost':'on',
+            (windowEnded?'':'&#10003; ')+'<strong>Auto-reload is on</strong>'+last+' &middot; charging '+_escHtml(ar.paymentMethodLabel||(ar.paymentMethodType==='us_bank_account'?'a bank account':'a card'))+windowNote);
         cardBtn.style.display=''; cardBtn.textContent='Update card';
         offBtn.style.display='';
     } else if(ar.enabled && !ar.cardOnFile){
-        msg.innerHTML='<span style="color:var(--amber-600,#B45309);font-weight:600;">Almost there</span> — save a card to activate auto-reload.'+windowNote;
+        _arStatus('almost','<strong>Almost there</strong> — save a card to activate auto-reload.'+windowNote);
         cardBtn.style.display=''; cardBtn.textContent='Add a card';
         offBtn.style.display='';
     } else if(!ar.enabled && (Number(ar.consecutiveFailures)||0)>=3){
-        msg.innerHTML='<span style="color:var(--red-600,#DC2626);font-weight:600;">Auto-reload paused</span> — your card was declined ('+_escHtml(ar.lastFailureReason||'payment failed')+'). Update your card to resume.';
+        _arStatus('paused','<strong>Auto-reload paused</strong> — your card was declined ('+_escHtml(ar.lastFailureReason||'payment failed')+'). Update your card to resume.');
         cardBtn.style.display=''; cardBtn.textContent='Update card';
         offBtn.style.display='none';
     } else {
-        msg.innerHTML='<span style="color:var(--text-muted);">Auto-reload is off.</span>';
+        _arStatus('off','Auto-reload is off.');
         cardBtn.style.display='none';
         offBtn.style.display='none';
     }

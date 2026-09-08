@@ -1001,6 +1001,69 @@ body {
 .canteen-bal .btn-secondary { background: rgba(255,255,255,0.12); border-color: rgba(255,255,255,0.3); color: #fff; backdrop-filter: blur(6px); }
 .canteen-bal .btn-secondary:hover { background: rgba(255,255,255,0.2); }
 
+/* AUTO-RELOAD — each trigger is a framed panel that fills the card width and
+   tints when it's on, instead of a bare checkbox with fields floating loose
+   beside it. Same border/tint-on-active language as .pickup-type-btn and
+   .channel-btn, and the fields inside use the standard .lk-field/.lk-input
+   form controls rather than one-off inline styles. */
+.ar-option {
+    border: 1.5px solid var(--slate-200);
+    border-radius: var(--radius-lg);
+    padding: 14px 16px;
+    margin-bottom: 12px;
+    transition: border-color 0.15s ease, background 0.15s ease;
+}
+.ar-option.on { border-color: var(--link-color); background: var(--link-tint-bg); }
+.ar-option-head { display: flex; align-items: center; gap: 10px; cursor: pointer; user-select: none; }
+.ar-option-head--static { cursor: default; }
+.ar-option-head input[type="checkbox"] {
+    width: 18px; height: 18px; flex-shrink: 0; cursor: pointer;
+    accent-color: var(--link-color);
+}
+.ar-option-title { font-size: 0.875rem; font-weight: 600; color: var(--slate-800); }
+.ar-option-title em { font-style: normal; font-weight: 400; color: var(--text-muted); }
+.ar-option-body {
+    display: grid; grid-template-columns: 1fr 1fr; gap: 12px 14px;
+    margin-top: 14px; padding-top: 14px;
+    border-top: 1px solid var(--slate-100);
+}
+.ar-option-body .lk-field { margin-bottom: 0; }
+.ar-option-body.ar-grid-3 { grid-template-columns: 1fr 1fr 1fr; }
+.ar-option-body.ar-grid-1 { grid-template-columns: 1fr; }
+.ar-date-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 12px 14px; }
+/* $ sits inside the field's left edge rather than as a separate character
+   floating next to a narrow box. */
+.ar-dollar-field { position: relative; }
+.ar-dollar-field::before {
+    content: '$'; position: absolute; left: 12px; top: 50%; transform: translateY(-50%);
+    color: var(--slate-400); font-size: 0.84rem; font-weight: 600; pointer-events: none;
+}
+.ar-dollar-field input { padding-left: 22px; }
+.ar-hint { font-size: 0.72rem; color: var(--text-muted); }
+.ar-actions { display: flex; gap: 8px; flex-wrap: wrap; }
+
+/* State banner — carries the whole state in one line at the top of the card:
+   a colored dot plus text, tinted to match. Replaces four different inline
+   hex colors previously set from JS. */
+.ar-status {
+    display: flex; align-items: center; gap: 10px;
+    padding: 11px 14px; border-radius: var(--radius-md);
+    font-size: 0.82rem; font-weight: 500; margin-bottom: 16px;
+}
+.ar-status-dot { width: 8px; height: 8px; border-radius: 50%; flex-shrink: 0; }
+.ar-status.on { background: var(--green-50); color: #0E7C4A; }
+.ar-status.on .ar-status-dot { background: var(--green-600); }
+.ar-status.almost { background: var(--amber-50); color: var(--amber-600); }
+.ar-status.almost .ar-status-dot { background: var(--amber-500); }
+.ar-status.paused { background: var(--red-50); color: var(--red-600); }
+.ar-status.paused .ar-status-dot { background: var(--red-500); }
+.ar-status.off { background: var(--slate-50); color: var(--text-muted); }
+.ar-status.off .ar-status-dot { background: var(--slate-300); }
+
+@media (max-width: 640px) {
+    .ar-option-body, .ar-option-body.ar-grid-3, .ar-date-grid { grid-template-columns: 1fr; }
+}
+
 /* SCHEDULE */
 .sched-item { display: flex; align-items: center; gap: 12px; padding: 10px 0; border-bottom: 1px solid var(--slate-100); }
 .sched-item:last-child { border-bottom: none; }
