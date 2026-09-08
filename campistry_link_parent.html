@@ -4570,9 +4570,20 @@ if (window.pdfjsLib) { window.pdfjsLib.GlobalWorkerOptions.workerSrc = 'pdfjs-di
         catch (e) { return true; }
     }
     function _augmentOtherCamps(primaryCampId) {
-        var call = window._pRpc ? window._pRpc('get_my_camps', {}) : db.rpc('get_my_camps');
-        Promise.resolve(call).then(function(res) {
-            if (!res || res.error || !res.data || !res.data.success) return;
+        // get_my_camps() takes NO parameters (migrations 041/069/070/124 all
+        // define it as get_my_camps() with an empty signature — it already
+        // returns every camp for the caller by user_id, unconditionally, so
+        // there's nothing to scope). Calling it through _pRpc used to route
+        // through that wrapper's p_camp_id-then-retry-without-it fallback,
+        // which means EVERY call here paid for a guaranteed-to-fail first
+        // round trip before the real one — real, needless fragility (two
+        // chances for a flaky/mobile connection to drop the request instead
+        // of one), not just wasted latency. Call it directly.
+        Promise.resolve(db.rpc('get_my_camps')).then(function(res) {
+            if (!res || res.error || !res.data || !res.data.success) {
+                console.warn('[Parent] get_my_camps failed — other camps/campers will not be merged in:', res && (res.error || res.data));
+                return;
+            }
             var camps = res.data.camps || [];
             camps.forEach(function(cp){ cp.isCurrent = _campIsCurrent(cp.camp_dates); if (cp.portal_active === undefined) cp.portal_active = true; });
             // Billing access (migration 070) can survive a closed portal — a
@@ -4631,7 +4642,7 @@ if (window.pdfjsLib) { window.pdfjsLib.GlobalWorkerOptions.workerSrc = 'pdfjs-di
             _afterMergeReloadCloud();
             console.log('[Parent] Multi-camp: '+camps.length+' camps, '+children.length+' children total');
             _checkConnectableCamps(); // a new camp may have added a child since sign-up
-        }).catch(function(){});
+        }).catch(function(e){ console.warn('[Parent] _augmentOtherCamps failed — other camps/campers will not be merged in:', e); });
     }
 
     // init() (re-run after the multi-camp merge) rebuilds the page shell and
