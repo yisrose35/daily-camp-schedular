@@ -95,7 +95,14 @@ serve(async (req) => {
       // A real, legitimately-signed webhook from a transaction that didn't
       // originate from cardknox-checkout-start (e.g. the office charged
       // someone directly through the Sola portal) — nothing for us to do.
-      console.log(`[cardknox-webhook] No xInvoice on signed webhook for camp ${campId}, xRefNum=${xRefNum} — ignoring (not ours)`);
+      // TEMPORARY DIAGNOSTIC: dumping every field Sola actually sent — live
+      // testing found xInvoice missing even for a transaction that DID
+      // originate from cardknox-checkout-start (which passes &xInvoice= in
+      // the checkout URL), so something about Sola's hosted-checkout webhook
+      // payload isn't carrying it through the way their Direct API docs
+      // describe. This log line is how we find the real field name instead
+      // of guessing — remove once that's confirmed.
+      console.log(`[cardknox-webhook] No xInvoice on signed webhook for camp ${campId}, xRefNum=${xRefNum} — ignoring (not ours). Full payload:`, JSON.stringify(Object.fromEntries(fields.entries())));
       return text("ok", 200);
     }
 
