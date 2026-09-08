@@ -154,6 +154,47 @@ nothing changes unless a camp is explicitly walked through the setup below.
   delivery has been received and verified yet. Run one real test payment
   before trusting this for a real camp.
 
+## Edge Function JWT verification settings (the step that's easy to miss)
+
+Every BYOP edge function that's called with **no session** (a parent/office
+page has nothing to authenticate with beyond the plain anon key) needs
+**JWT verification OFF** in the Supabase Dashboard, or the request never
+reaches the function's own code at all — Supabase's gateway-level JWT check
+rejects it first, including the browser's CORS preflight (`OPTIONS`)
+request, which has no way to carry a real bearer token either. This is
+exactly the failure this session hit live: `cardknox-checkout-start` was
+deployed with JWT verification still on (Supabase's default), so every
+preflight came back 401 with no CORS headers on it, and Chrome reported it
+as a generic "has been blocked by CORS policy... does not have HTTP ok
+status" — not an actual CORS bug, just JWT verification silently eating
+the request before CORS ever entered the picture. Same root cause and same
+fix as `pos-pin-login`/`secure-login` elsewhere in this codebase.
+
+Turn **JWT verification OFF** for each of these (Dashboard → Edge Functions
+→ `<name>` → Settings → toggle off "Enforce JWT Verification" → redeploy;
+on a first-time deploy there's usually the same toggle right on the
+create/deploy screen instead):
+- `payments-checkout`
+- `payments-canteen-checkout`
+- `payments-save-method`
+- `cardknox-checkout-start`
+- `cardknox-webhook` (Cardknox's own servers call this directly with no
+  Supabase auth at all — PIN verification inside the function is the real
+  security check here, same shape as `telnyx-sms-webhook`)
+
+Leave JWT verification **ON (the default)** for everything else in this
+feature — `payments-charge`, `payments-refund`, and
+`admin-connect-processor` are all called with a real owner/admin session
+(or the service-role key), and turning it off there would be a real
+security regression, not a fix.
+
+Turning it off for the functions above is safe: none of them trust the
+caller's JWT for anything — the real checks (does this camp own this
+family/camper, is the processor connected and verified, does the
+`ck-signature`/PIN check out) all run against the service-role client and
+the request body, completely independent of whatever's in the
+Authorization header.
+
 ## What's deliberately NOT built yet (flagged, not silently skipped)
 
 - **Autopay installments (`charge-due-installments`)** for BYOP camps —
