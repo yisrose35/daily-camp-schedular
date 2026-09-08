@@ -2905,13 +2905,20 @@ function cascadeCamperDelete(name){
     // (reEnrollCamper has no dedup guard against an existing one), so this
     // closes out all of them, not just the first.
     try{
-        Object.values(enrollments).forEach(function(e){
-            if(!e||e.camperName!==name)return;
-            if(e.status==='withdrawn'||e.status==='declined')return;
-            var prev=e.status;
-            e.status='withdrawn';
-            e.statusHistory=e.statusHistory||[];
-            e.statusHistory.push({from:prev,to:'withdrawn',date:new Date().toISOString(),by:'office',rescinded:true});
+        // Used to just flip status to 'withdrawn' rather than delete the
+        // record — that correctly excludes it from Billing's charge scan
+        // (buildFamilyLedgers only reads 'enrolled'/'accepted' status), but
+        // left a permanent dead application behind for every deleted camper,
+        // needing a manual "Delete Application" click every time to actually
+        // clean up. The camper record itself is gone for good here too, so
+        // there's nothing left for that application to refer to — delete it
+        // outright instead, same as deleteApplication() does one at a time.
+        // deleteCamper()'s own Undo already snapshots these enrollments
+        // before calling this function and restores them exactly, so
+        // nothing is lost if the delete itself is undone.
+        Object.keys(enrollments).forEach(function(eid){
+            var e=enrollments[eid];
+            if(e&&e.camperName===name)delete enrollments[eid];
         });
     }catch(_){}
     // payments are intentionally KEPT — silently erasing billing history when a camper
@@ -11679,7 +11686,9 @@ function _crPaymentChanged(){
         if(type==='refund_gateway'){
             noteEl.innerHTML=p.stripePaymentIntentId
                 ?'<div style="font-size:.72rem;color:var(--s400);margin-top:4px">Sends the money back to the original card/bank through Stripe. Enter less than the full amount to keep a deposit or cover a processing fee — the family\'s balance updates automatically either way.</div>'
-                :'<div style="font-size:.78rem;color:#DC2626;margin-top:4px">This payment has no Stripe charge on record, so it can\'t be refunded through the gateway — use <strong>Offline Refund</strong> instead.</div>';
+                :p.byopTransactionId
+                ?'<div style="font-size:.72rem;color:var(--s400);margin-top:4px">Sends the money back to the original card through '+esc(p.byopProcessor==='cardknox'?'Sola':(p.byopProcessor||'the connected processor'))+'. Enter less than the full amount to keep a deposit or cover a processing fee — the family\'s balance updates automatically either way.</div>'
+                :'<div style="font-size:.78rem;color:#DC2626;margin-top:4px">This payment has no online charge on record, so it can\'t be refunded through the gateway — use <strong>Offline Refund</strong> instead.</div>';
         } else {
             noteEl.innerHTML='<div style="font-size:.72rem;color:var(--s400);margin-top:4px">Records that money was sent back outside Campistry (check, cash, or a card that\'s since expired) — no gateway call is made, this only balances the ledger.</div>';
         }
@@ -11779,7 +11788,8 @@ function issueCreditForFamily(famKey){
             if(refundAmt<=0||refundAmt>maxRefund+0.001){toast('Enter an amount up to '+fm(maxRefund),'error');return}
             var reasonSel=document.getElementById('crRefundReason').value;
             var doStripe=type==='refund_gateway'&&!!p.stripePaymentIntentId;
-            if(type==='refund_gateway'&&!p.stripePaymentIntentId){toast('No Stripe charge on record for this payment — use Offline Refund instead','error');return}
+            var doBYOP=type==='refund_gateway'&&!p.stripePaymentIntentId&&!!p.byopTransactionId;
+            if(type==='refund_gateway'&&!p.stripePaymentIntentId&&!p.byopTransactionId){toast('No online charge on record for this payment — use Offline Refund instead','error');return}
             var stripeRefundId=null;
             if(doStripe){
                 var stripeReason=(reasonSel==='requested_by_customer'||reasonSel==='duplicate'||reasonSel==='fraudulent')?reasonSel:'requested_by_customer';
@@ -11792,14 +11802,24 @@ function issueCreditForFamily(famKey){
                     toast('Stripe refund failed: '+err.message,'error');
                     return;
                 }
+            } else if(doBYOP){
+                toast('Processing refund through '+(p.byopProcessor==='cardknox'?'Sola':(p.byopProcessor||'the connected processor'))+'…');
+                try{
+                    var byopRes=await callEdgeFunctionAuthed('payments-refund',{externalTransactionId:p.byopTransactionId,amount:refundAmt});
+                    stripeRefundId=byopRes.externalTransactionId;
+                }catch(err){
+                    console.error('[Me] BYOP refund error:',err);
+                    toast('Refund failed: '+err.message,'error');
+                    return;
+                }
             }
             var reasonLabel={requested_by_customer:'Requested by customer',cancellation:'Cancellation / withdrawal',adjustment:'Billing adjustment',duplicate:'Duplicate charge',fraudulent:'Fraudulent'}[reasonSel]||reasonSel;
             var refundEntry={
                 id:'ref_'+Date.now(),
                 family:p.family,familyKey:fk,enrollmentId:p.enrollmentId||null,
                 amount:-refundAmt,date:today(),method:'Refund',
-                reference:stripeRefundId||'',notes:'Refund — '+reasonLabel+(doStripe?' (Stripe)':' (Offline — check/cash)'),
-                reason:reasonSel,refundOf:p.id,stripeRefundId:stripeRefundId,offline:!doStripe,timestamp:Date.now()
+                reference:stripeRefundId||'',notes:'Refund — '+reasonLabel+(doStripe?' (Stripe)':doBYOP?' ('+(p.byopProcessor==='cardknox'?'Sola':(p.byopProcessor||'BYOP'))+')':' (Offline — check/cash)'),
+                reason:reasonSel,refundOf:p.id,stripeRefundId:stripeRefundId,byopProcessor:doBYOP?p.byopProcessor:null,offline:!doStripe&&!doBYOP,timestamp:Date.now()
             };
             finPayments.push(refundEntry);
             f.totalPaid=Math.max(0,(f.totalPaid||0)-refundAmt);f.balance=(f.balance||0)+refundAmt;
@@ -12132,18 +12152,26 @@ async function batchCharge(){
 }
 
 // ═══════════════════════════════════════════════════════════════
-// ONLINE PAYMENT LINK — a hosted Stripe Checkout the parent pays on.
-// Offers every method the camp enabled in Stripe (card, ACH bank debit,
-// Cash App, PayPal, Link, …). The payment records itself into the ledger
-// via stripe-webhook — no manual entry. (Venmo/Zelle can't be processed
-// by Stripe; those stay manual-entry methods.)
+// ONLINE PAYMENT LINK — a hosted page the parent pays on.
+// Stripe camps: a real Stripe Checkout session, offering every method the
+// camp enabled in Stripe (card, ACH bank debit, Cash App, PayPal, Link, …);
+// records itself into the ledger via stripe-webhook. BYOP camps (a
+// connected, verified non-Stripe processor — Banquest/Cardknox): a
+// Campistry-hosted page (campistry_card_setup.html in its "Pay Now" mode)
+// that tokenizes the card client-side through that processor's own widget
+// and charges it via payments-checkout — card only today (no ACH/Cash App/
+// PayPal equivalent built for BYOP yet). Either way the resulting payment
+// lands in the same Billing ledger the same way. (Venmo/Zelle can't be
+// processed by either path; those stay manual-entry methods.)
 // ═══════════════════════════════════════════════════════════════
 async function sendPayLink(famKey){
     var f=families[famKey]; if(!f){toast('Family not found','error');return}
     var bal=buildFamilyLedgers()[famKey]?.balance||0;
     var email='';(f.households||[]).forEach(function(hh){(hh.parents||[]).forEach(function(p){if(p.email&&!email)email=p.email})});
+    var processorKey=await _getCampPaymentProcessorKey();
+    var isBYOP=processorKey&&processorKey!=='stripe';
     var h='<div class="me-modal-form">';
-    h+='<p style="font-size:.85rem;color:var(--s600);margin-bottom:10px">Create a secure online payment link for <strong>'+esc(f.name)+'</strong>. Send it to the parent — they can pay by card, bank transfer (ACH), Cash App, PayPal or any other method you\'ve enabled in Stripe, and it records itself here automatically.</p>';
+    h+='<p style="font-size:.85rem;color:var(--s600);margin-bottom:10px">Create a secure online payment link for <strong>'+esc(f.name)+'</strong>. Send it to the parent — they can pay by '+(isBYOP?'card':'card, bank transfer (ACH), Cash App, PayPal or any other method you\'ve enabled in Stripe')+', and it records itself here automatically.</p>';
     h+='<div style="background:var(--s50);padding:10px 14px;border-radius:var(--r);margin-bottom:14px;font-size:.85rem">Balance due: <strong style="color:var(--err)">'+fm(bal)+'</strong>'+(email?' · '+esc(email):' · <span style="color:var(--err)">no parent email on file</span>')+'</div>';
     h+='<div class="me-field"><label>Amount ($)</label><input type="number" id="plAmt" class="me-input" value="'+(bal>0?bal.toFixed(2):'')+'" step="0.01" min="0.50"></div>';
     h+='<div class="me-field"><label>What\'s this for?</label><input type="text" id="plDesc" class="me-input" value="Camp tuition — '+esc(f.name)+'"></div>';
@@ -12154,6 +12182,19 @@ async function sendPayLink(famKey){
         var desc=document.getElementById('plDesc').value.trim();
         var btn=document.getElementById('dynModalSave'); if(btn){btn.disabled=true;btn.textContent='Creating…';}
         try{
+            // BYOP has no hosted-checkout API to call ahead of time (unlike
+            // Stripe, which mints a session server-side) — the link IS the
+            // page; nothing to create, just build the URL.
+            if(isBYOP){
+                var byopUrl=window.location.origin+'/campistry_card_setup.html?campId='+encodeURIComponent(getCampId())+
+                    '&familyKey='+encodeURIComponent(famKey)+
+                    '&familyName='+encodeURIComponent(f.name||'')+
+                    '&amount='+encodeURIComponent(amt)+
+                    '&desc='+encodeURIComponent(desc||('Camp payment — '+f.name));
+                _showPayLinkResult(f,byopUrl,true);
+                if(btn){btn.disabled=false;btn.textContent='Save';}
+                return;
+            }
             var res=await callEdgeFunction('stripe-checkout',{campId:getCampId(),familyKey:famKey,familyName:f.name,email:email,amount:amt,description:desc});
             if(!res.url) throw new Error('No link returned');
             _showPayLinkResult(f,res.url);
@@ -12164,9 +12205,9 @@ async function sendPayLink(famKey){
         }
     });
 }
-function _showPayLinkResult(f,url){
+function _showPayLinkResult(f,url,isBYOP){
     var h='<div class="me-modal-form">';
-    h+='<p style="font-size:.85rem;color:var(--s600);margin-bottom:10px">Payment link for <strong>'+esc(f.name)+'</strong> is ready. Copy it into a text or email — it opens a secure Stripe checkout with every payment method you offer, and the payment lands in Billing automatically.</p>';
+    h+='<p style="font-size:.85rem;color:var(--s600);margin-bottom:10px">Payment link for <strong>'+esc(f.name)+'</strong> is ready. Copy it into a text or email — it opens a secure '+(isBYOP?'card payment page':'Stripe checkout with every payment method you offer')+', and the payment lands in Billing automatically.</p>';
     h+='<div class="me-field"><label>Payment link</label><input type="text" id="plUrl" class="me-input" readonly value="'+esc(url)+'" onclick="this.select()"></div>';
     h+='<div style="display:flex;gap:8px;margin-top:6px">';
     h+='<button class="me-btn me-btn--pri me-btn--sm" onclick="CampistryMe.copyPayLink()">Copy link</button>';
