@@ -677,6 +677,24 @@ document.addEventListener('DOMContentLoaded', function() {
                 }
 
                 if (authMode === 'signup') {
+                    // Check for an existing account BEFORE ever calling
+                    // signUp() — Supabase's own duplicate-email behavior is
+                    // not a reliable signal on its own. For an existing
+                    // CONFIRMED account it often returns a non-erroring
+                    // response (an anti-enumeration measure: a user object
+                    // with an empty identities array, no thrown error) —
+                    // which this code used to treat exactly like a brand
+                    // new signup, sending the person to the verification-
+                    // code screen only to fail there with no real code ever
+                    // having been sent. email_has_account (migration 125)
+                    // was already built for exactly this population; it just
+                    // wasn't wired into the signup path itself yet.
+                    showAuthLoading(true, 'Checking your email...');
+                    const { data: exists, error: existsErr } = await supabase.rpc('email_has_account', { p_email: email });
+                    if (!existsErr && exists) {
+                        throw new Error('An account with this email already exists. Try signing in instead.');
+                    }
+
                     showAuthLoading(true, 'Creating your account...');
                     const { data, error } = await supabase.auth.signUp({
                         email,
