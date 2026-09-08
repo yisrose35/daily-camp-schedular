@@ -11,6 +11,9 @@ A parent can turn on either or both:
 - **Threshold**: "reload $Y whenever the balance drops below $X"
 - **Schedule**: "reload $Y every week/month"
 
+Both triggers optionally respect a **start/stop date window** (e.g. just the
+camp season) — added by migration 135, see step 1.
+
 Charges are off-session against a saved card, routed to the camp's own
 connected Stripe account (no platform fee, same as every other canteen/tuition
 charge). A card that fails 3 times in a row auto-disables auto-reload so it
@@ -22,16 +25,25 @@ paused" and offers to update the card.
 ### 1. Run the migration
 
 Dashboard → **SQL Editor** → paste the full contents of
-`migrations/109_canteen_auto_reload.sql` from this repo → **Run**.
+`migrations/109_canteen_auto_reload.sql` from this repo → **Run**. Then do
+the same with `migrations/135_canteen_auto_reload_date_range.sql` (if 109
+was already run previously, 135 is the only new one you need — it just
+extends the same RPC to also accept an optional `startDate`/`stopDate`).
 
 Adds `set_canteen_auto_reload()` — the parent-facing RPC that saves the
-trigger config (threshold/schedule amounts) onto
-`camp_state_kv.campistrySnacks.accounts[camperName].autoReload`. It only ever
-touches the parent-editable trigger fields; card/attempt bookkeeping
+trigger config (threshold/schedule amounts, plus the optional active-date
+window) onto `camp_state_kv.campistrySnacks.accounts[camperName].autoReload`.
+It only ever touches the parent-editable trigger fields; card/attempt bookkeeping
 (`cardOnFile`, `lastChargedDate`, `consecutiveFailures`, ...) is written
 exclusively by the webhook/cron below.
 
 ### 2. Create the two new Edge Functions
+
+If you already deployed `canteen-auto-reload` before (pre-135), just
+redeploy it with the current `supabase/functions/canteen-auto-reload/index.ts` —
+Dashboard → **Edge Functions** → click **canteen-auto-reload** → open its
+code editor → replace the contents → **Deploy**. That's what actually
+enforces the new start/stop window; the migration above only stores it.
 
 Dashboard → **Edge Functions** → **Create a new function** → name it exactly
 `stripe-canteen-autoreload-setup` → paste in the full contents of
@@ -136,3 +148,10 @@ Logs` to see what it saw on each run.
    threshold/schedule amounts (re-enabling later shouldn't require
    re-entering them).
 7. Confirm the pre-existing "Add Funds" manual deposit flow is unaffected.
+8. **Date window (135):** set "Active dates" → Stop to yesterday, Save.
+   Force the threshold condition and trigger the cron — confirm the response
+   has no entry for that camper (silently skipped, not failed) and the
+   portal shows "window ended ... — update the dates to resume". Change Stop
+   to a future date (or clear both fields) and trigger again — confirm it
+   charges normally. Also confirm Start in the future behaves the same way
+   ("starts <date>", no charge yet).

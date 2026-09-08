@@ -396,6 +396,16 @@
                 <select id="arScDay" style="padding:6px 8px;border-radius:6px;border:1px solid var(--border-color,#E2E8F0);"></select>
             </div>
         </div>
+        <div class="lk-field" style="margin-top:14px;">
+            <label>Active dates <span style="font-weight:400;color:var(--text-muted);">(optional)</span></label>
+            <div style="display:flex;gap:10px;align-items:center;margin-top:8px;flex-wrap:wrap;">
+                <span style="font-size:.8rem;color:var(--text-muted);">From</span>
+                <input type="date" id="arStartDate" style="padding:6px 8px;border-radius:6px;border:1px solid var(--border-color,#E2E8F0);">
+                <span style="font-size:.8rem;color:var(--text-muted);">to</span>
+                <input type="date" id="arStopDate" style="padding:6px 8px;border-radius:6px;border:1px solid var(--border-color,#E2E8F0);">
+            </div>
+            <div style="font-size:.72rem;color:var(--text-muted);margin-top:4px;">Leave blank to run year-round. Otherwise auto-reload only charges within this window — e.g. just for the camp season.</div>
+        </div>
         <div style="display:flex;gap:8px;margin-top:14px;flex-wrap:wrap;">
             <button class="btn btn-primary btn-sm" onclick="saveAutoReload()">Save Auto-Reload</button>
             <button class="btn btn-secondary btn-sm" id="arCardBtn" onclick="startCanteenAutoReloadSetup()" style="display:none;">Update card</button>
@@ -2013,16 +2023,31 @@ function _renderAutoReload(c){
     _arRenderDayOptions();
     var scDay=document.getElementById('arScDay'); if(scDay && ar.scheduleDay!=null) scDay.value=ar.scheduleDay;
     var scReload=document.getElementById('arScReload'); if(scReload && ar.scheduleReloadAmount!=null) scReload.value=ar.scheduleReloadAmount;
+    var stD=document.getElementById('arStartDate'); if(stD) stD.value=ar.startDate||'';
+    var spD=document.getElementById('arStopDate'); if(spD) spD.value=ar.stopDate||'';
 
     var msg=document.getElementById('arStatusMsg'), cardBtn=document.getElementById('arCardBtn'), offBtn=document.getElementById('arOffBtn');
     if(!msg) return;
+    // Charges only land inside [startDate,stopDate] (either end optional) —
+    // the cron enforces this server-side too (canteen-auto-reload/index.ts),
+    // this is just telling the parent what state that leaves them in today.
+    var todayStr=new Date().toISOString().slice(0,10), windowNote='';
+    if(ar.startDate || ar.stopDate){
+        if(ar.startDate && todayStr<ar.startDate){
+            windowNote=' &middot; starts '+_escHtml(ar.startDate);
+        } else if(ar.stopDate && todayStr>ar.stopDate){
+            windowNote=' &middot; <span style="color:var(--amber-600,#B45309);">window ended '+_escHtml(ar.stopDate)+' — update the dates to resume</span>';
+        } else {
+            windowNote=' &middot; active '+_escHtml(ar.startDate||'now')+' – '+_escHtml(ar.stopDate||'ongoing');
+        }
+    }
     if(ar.enabled && ar.cardOnFile){
         var last=ar.lastChargedDate?(' &middot; last topped up $'+Number(ar.lastChargeAmount||0).toFixed(2)+' on '+_escHtml(ar.lastChargedDate)):'';
-        msg.innerHTML='<span style="color:#0E7C4A;font-weight:600;">&#10003; Auto-reload is on</span>'+last+' &middot; charging '+_escHtml(ar.paymentMethodLabel||(ar.paymentMethodType==='us_bank_account'?'a bank account':'a card'));
+        msg.innerHTML='<span style="color:#0E7C4A;font-weight:600;">&#10003; Auto-reload is on</span>'+last+' &middot; charging '+_escHtml(ar.paymentMethodLabel||(ar.paymentMethodType==='us_bank_account'?'a bank account':'a card'))+windowNote;
         cardBtn.style.display=''; cardBtn.textContent='Update card';
         offBtn.style.display='';
     } else if(ar.enabled && !ar.cardOnFile){
-        msg.innerHTML='<span style="color:var(--amber-600,#B45309);font-weight:600;">Almost there</span> — save a card to activate auto-reload.';
+        msg.innerHTML='<span style="color:var(--amber-600,#B45309);font-weight:600;">Almost there</span> — save a card to activate auto-reload.'+windowNote;
         cardBtn.style.display=''; cardBtn.textContent='Add a card';
         offBtn.style.display='';
     } else if(!ar.enabled && (Number(ar.consecutiveFailures)||0)>=3){
@@ -2040,6 +2065,9 @@ function saveAutoReload(){
     var thEnabled=!!(document.getElementById('arThEnabled')||{}).checked;
     var scEnabled=!!(document.getElementById('arScEnabled')||{}).checked;
     if(!thEnabled && !scEnabled){ toast('Turn on at least one trigger above, or use Turn off',1); return; }
+    var startDate=(document.getElementById('arStartDate')||{}).value||null;
+    var stopDate=(document.getElementById('arStopDate')||{}).value||null;
+    if(startDate && stopDate && startDate>stopDate){ toast('The start date must be before the stop date',1); return; }
     var cfg={
         enabled:true,
         thresholdEnabled:thEnabled,
@@ -2048,7 +2076,9 @@ function saveAutoReload(){
         scheduleEnabled:scEnabled,
         scheduleFrequency:(document.getElementById('arScFreq')||{}).value||'weekly',
         scheduleDay:parseInt((document.getElementById('arScDay')||{}).value||'0',10),
-        scheduleReloadAmount:parseFloat((document.getElementById('arScReload')||{}).value||'0')
+        scheduleReloadAmount:parseFloat((document.getElementById('arScReload')||{}).value||'0'),
+        startDate:startDate,
+        stopDate:stopDate
     };
     _saveAutoReloadConfig(c,cfg,true);
 }
@@ -2058,7 +2088,8 @@ function turnOffAutoReload(){
     var cfg={
         enabled:false,
         thresholdEnabled:!!ar.thresholdEnabled, thresholdAmount:ar.thresholdAmount, thresholdReloadAmount:ar.thresholdReloadAmount,
-        scheduleEnabled:!!ar.scheduleEnabled, scheduleFrequency:ar.scheduleFrequency||'weekly', scheduleDay:ar.scheduleDay, scheduleReloadAmount:ar.scheduleReloadAmount
+        scheduleEnabled:!!ar.scheduleEnabled, scheduleFrequency:ar.scheduleFrequency||'weekly', scheduleDay:ar.scheduleDay, scheduleReloadAmount:ar.scheduleReloadAmount,
+        startDate:ar.startDate||null, stopDate:ar.stopDate||null
     };
     _saveAutoReloadConfig(c,cfg,false);
 }

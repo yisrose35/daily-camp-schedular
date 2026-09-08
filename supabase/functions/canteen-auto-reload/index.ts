@@ -78,11 +78,23 @@ async function stripeCharge(customerId: string, pmId: string | null, amount: num
 
 function todayISO() { return new Date().toISOString().split("T")[0]; }
 
+// Optional parent-set [startDate,stopDate] window (migration 135) — either
+// end may be null. Plain string comparison is safe since both `today` and
+// the stored bounds are always 'YYYY-MM-DD'. This is the ONLY place the
+// window is enforced — the RPC that saves it (set_canteen_auto_reload) just
+// validates and stores, it never blocks a charge itself.
+function inActiveWindow(ar: Record<string, any>, today: string): boolean {
+  if (ar.startDate && today < ar.startDate) return false;
+  if (ar.stopDate && today > ar.stopDate) return false;
+  return true;
+}
+
 // Whichever trigger is due, using UTC day-of-week/day-of-month — matches
 // submit_canteen_purchase's own `(now() AT TIME ZONE 'utc')::date` day
 // boundary, so "today" means the same thing everywhere in the canteen system.
 function dueAmount(ar: Record<string, any>, balance: number, today: string): { amount: number; kind: string } | null {
   if (ar.lastChargedDate === today) return null; // already reloaded today
+  if (!inActiveWindow(ar, today)) return null; // outside the parent's chosen date range
   if (ar.thresholdEnabled && typeof ar.thresholdAmount === "number" && balance < ar.thresholdAmount) {
     return { amount: Number(ar.thresholdReloadAmount) || 0, kind: "threshold" };
   }
