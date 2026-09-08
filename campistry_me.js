@@ -2178,7 +2178,11 @@ function renderCampers(filter){
     camperEntries.sort(function(a,b){return a[0].localeCompare(b[0])});
     var total=camperEntries.length+staffRows.length;
 
-    var h='<div class="sec-hd"><div><h2 class="sec-title">Roster</h2><p class="sec-desc">'+enrolledEntries.length+' camper'+(enrolledEntries.length!==1?'s':'')+(canStaff?' · '+allStaffRows.length+' staff':'')+(unenrolledEntries.length?' · '+unenrolledEntries.length+' unenrolled':'')+'</p></div><div class="sec-actions"><button class="me-btn me-btn--ghost me-btn--sm" onclick="CampistryMe.manageCustomFields()" title="Define custom fields">⚙ Custom Fields</button><button class="me-btn me-btn--sec me-btn--sm" onclick="CampistryMe.downloadTemplate()">Template</button><button class="me-btn me-btn--sec me-btn--sm" onclick="CampistryMe.openCsv()">Import</button><button class="me-btn me-btn--pri" onclick="CampistryMe.addCamper()">+ Add Camper</button></div></div>';
+    // Manual camper entry now lives only in Registration ("+ Manual Entry")
+    // — one entry point instead of two parallel ones that created a camper
+    // two different ways (Roster wrote straight to roster[], Registration
+    // staged an application). No "+ Add Camper" button here anymore.
+    var h='<div class="sec-hd"><div><h2 class="sec-title">Roster</h2><p class="sec-desc">'+enrolledEntries.length+' camper'+(enrolledEntries.length!==1?'s':'')+(canStaff?' · '+allStaffRows.length+' staff':'')+(unenrolledEntries.length?' · '+unenrolledEntries.length+' unenrolled':'')+'</p></div><div class="sec-actions"><button class="me-btn me-btn--ghost me-btn--sm" onclick="CampistryMe.manageCustomFields()" title="Define custom fields">⚙ Custom Fields</button><button class="me-btn me-btn--sec me-btn--sm" onclick="CampistryMe.downloadTemplate()">Template</button><button class="me-btn me-btn--sec me-btn--sm" onclick="CampistryMe.openCsv()">Import</button></div></div>';
     h+=_setupChecklistHtml();
 
     var unplaced=(canStaff&&!showUnenrolled)?hiredStaff().filter(function(a){return !String(a.email||'').trim()||!bunksForStaffEmail(a.email).length;}):[];
@@ -2207,7 +2211,7 @@ function renderCampers(filter){
     }
 
     if(!total){
-        h+='<div class="me-empty"><h3>No one here yet</h3><p>Add campers or import from CSV — or accept an application from Registration &amp; Hiring.</p><div style="display:flex;gap:6px;justify-content:center"><button class="me-btn me-btn--pri" onclick="CampistryMe.addCamper()">+ Add</button><button class="me-btn me-btn--sec" onclick="CampistryMe.openCsv()">Import</button></div></div>';
+        h+='<div class="me-empty"><h3>No one here yet</h3><p>Import from CSV, or add a camper via Registration\'s "+ Manual Entry" — they\'ll show up here once enrolled.</p><div style="display:flex;gap:6px;justify-content:center"><button class="me-btn me-btn--pri" onclick="CampistryMe.nav(\'registration\')">Go to Registration</button><button class="me-btn me-btn--sec" onclick="CampistryMe.openCsv()">Import</button></div></div>';
     }else{
         var combined=camperEntries.map(function(pair){return{kind:'camper',n:pair[0],d:pair[1]}}).concat(staffRows.map(function(r){return{kind:'staff',r:r}}));
         var paged=_paginate(combined,PAGE_SIZE,_rosterPage);
@@ -2247,7 +2251,7 @@ function renderCampers(filter){
 // the owner dismisses it.
 var SETUP_CHECKLIST=[
     {id:'structure',label:'Set up your camp structure — divisions, grades, and bunks',check:function(){return Object.keys(structure).length>0},action:function(){nav('structure')}},
-    {id:'camper',label:'Add your first camper',check:function(){return Object.keys(roster).length>0},action:function(){addCamper()}},
+    {id:'camper',label:'Add your first camper',check:function(){return Object.keys(roster).length>0},action:function(){nav('registration')}},
     {id:'session',label:'Create a session on the Dashboard',check:function(){return sessions.length>0},href:'dashboard.html'},
     {id:'family',label:'Add a family / billing account',check:function(){return Object.keys(families).length>0},action:function(){nav('billing')}}
 ];
@@ -2757,7 +2761,6 @@ function ceToggleOtherParentSummer(){
     var on=document.getElementById('ceOpSummerSame'), b=document.getElementById('ceOpSummerBlock');
     if(b)b.style.display=(on&&on.checked)?'none':'';
 }
-function addCamper(){editingCamper=null;editCamper('')}
 function saveCamper(){
     var first=(document.getElementById('ceFirst').value||'').trim(),last=(document.getElementById('ceLast').value||'').trim();
     if(!first){toast('First name required','error');try{document.getElementById('ceFirst').focus()}catch(_){}return}
@@ -8563,6 +8566,35 @@ function _freshSessions(){
     }catch(_){}
     return sessions;
 }
+// Session bundles (Dashboard's Sessions & Pricing) aren't held in a
+// module-level var here the way `sessions` is — read fresh straight from
+// the shared settings blob each time a picker needs them.
+function _freshBundles(){
+    var bundles=[];
+    try{
+        var g=(typeof window.loadGlobalSettings==='function')?window.loadGlobalSettings():null;
+        if(g&&g.campistryMe&&Array.isArray(g.campistryMe.sessionBundles))bundles=g.campistryMe.sessionBundles;
+    }catch(_){}
+    return bundles;
+}
+// Merges plain sessions with valid bundles into one picker list for Manual
+// Entry's session select — mirrors campistry_register.html's _pickerItems()
+// so office intake offers the same bundle options a parent sees on the
+// public form. Unlike the public form, this does NOT filter to
+// registrationOpen sessions — office staff can still manually add someone
+// to a session that's closed to public signup.
+function _officeSessionPickerItems(){
+    var byId={};sessions.forEach(function(s){if(s.id)byId[s.id]=s});
+    var items=sessions.map(function(s){return{kind:'session',name:s.name,tuition:s.tuition,capacity:s.capacity};});
+    _freshBundles().forEach(function(b){
+        var ids=b.sessionIds||[];
+        if(ids.length<2)return;
+        var names=ids.map(function(id){return byId[id]&&byId[id].name}).filter(Boolean);
+        if(names.length!==ids.length)return; // a bundle referencing a deleted session isn't offerable
+        items.push({kind:'bundle',name:b.name,tuition:b.price,capacity:0});
+    });
+    return items;
+}
 // Manual Entry mirrors whatever the camp has configured in Customize
 // Registration Form — same sections (in the same order, skipping any the
 // camp turned off), same field labels/required-ness, same custom questions
@@ -8571,7 +8603,8 @@ function _freshSessions(){
 function addApplication(){
     _freshSessions();
     var fc=getFormConfig();
-    var sesOpts=sessions.map(function(s){return'<option value="'+esc(s.name)+'">'+esc(s.name)+' — '+fm(s.tuition)+'</option>'}).join('');
+    var pickerItems=_officeSessionPickerItems();
+    var sesOpts=pickerItems.map(function(s,i){return'<option value="'+i+'">'+esc(s.name)+(s.kind==='bundle'?' (Bundle)':'')+' — '+fm(s.tuition)+'</option>'}).join('');
     var order=(fc.sectionOrder&&fc.sectionOrder.length)?fc.sectionOrder:FC_SECTIONS.map(function(s){return s.key});
     var secEnabled={};
     FC_SECTIONS.forEach(function(s){ secEnabled[s.key]=fc.sections&&fc.sections[s.key]?fc.sections[s.key].enabled:s.default; });
@@ -8680,17 +8713,22 @@ function addApplication(){
 
         var first=values.first||'',last=values.last||'';
         var camperName=(first+' '+last).trim()||'New Applicant';
-        var session=document.getElementById('appSession').value||'';
-        var sesObj=sessions.find(function(s){return s.name===session});
-        if(sesObj&&sesObj.capacity>0){
+        var selIdx=document.getElementById('appSession').value;
+        var selItem=selIdx!==''?pickerItems[parseInt(selIdx,10)]:null;
+        var session=selItem?selItem.name:'';
+        var sessionKind=selItem?selItem.kind:'';
+        // Capacity/waitlist only applies to a plain session — a bundle has no
+        // capacity concept of its own (it's a bundle OF sessions, each with
+        // whatever capacity they already have), same as the public form.
+        if(selItem&&selItem.kind==='session'&&selItem.capacity>0){
             var enrolled=Object.values(enrollments).filter(function(e){return e.session===session&&(e.status==='enrolled'||e.status==='accepted')}).length;
-            if(enrolled>=sesObj.capacity){
-                var okWl=await confirmDialog({title:'Session at Capacity',message:esc(session)+' is at capacity ('+enrolled+'/'+sesObj.capacity+'). Add this applicant to the waitlist instead?',confirmLabel:'Add to Waitlist',danger:false});
+            if(enrolled>=selItem.capacity){
+                var okWl=await confirmDialog({title:'Session at Capacity',message:esc(session)+' is at capacity ('+enrolled+'/'+selItem.capacity+'). Add this applicant to the waitlist instead?',confirmLabel:'Add to Waitlist',danger:false});
                 if(!okWl)return;
             }
         }
-        var isWaitlist=!!(sesObj&&sesObj.capacity>0&&Object.values(enrollments).filter(function(e){return e.session===session&&(e.status==='enrolled'||e.status==='accepted')}).length>=sesObj.capacity);
-        var tuition=sesObj?sesObj.tuition:0;
+        var isWaitlist=!!(selItem&&selItem.kind==='session'&&selItem.capacity>0&&Object.values(enrollments).filter(function(e){return e.session===session&&(e.status==='enrolled'||e.status==='accepted')}).length>=selItem.capacity);
+        var tuition=selItem?selItem.tuition:0;
 
         var customAnswers={},customQuestionLabels=[];
         (fc.customQuestions||[]).forEach(function(q,i){
@@ -8729,7 +8767,7 @@ function addApplication(){
             emergencyName:values.emName||'',emergencyRel:values.emRelation||'',emergencyPhone:values.emPhone||'',
             allergies:values.allergies||'',medications:values.medications||'',dietary:values.dietary||'',medicalNotes:values.medicalNotes||'',
             bunkmate:values.bunkmate||'',separateFrom:values.separate||'',tshirtSize:values.shirt||'',source:values.source||'',notes:values.notes||'',
-            session:session,sessionTuition:tuition,
+            session:session,sessionKind:sessionKind,sessionTuition:tuition,
             paymentMethod:document.getElementById('appPaymentMethod').value||'',
             status:isWaitlist?'waitlisted':'applied',
             appliedDate:new Date().toISOString().split('T')[0],
@@ -8738,8 +8776,15 @@ function addApplication(){
             customAnswers:customAnswers,customQuestionLabels:customQuestionLabels
         };
         enrollments[id]=rec;
-        save();closeModal('dynModal');_refreshPplIfActive();
-        toast(isWaitlist?camperName+' added to waitlist':camperName+' application received');
+        // Office manually adding a camper means the camp already decided to
+        // take them — this shouldn't be a separate "now go accept/enroll
+        // them" step the way a real public-form application is. A
+        // waitlisted entry is the one exception: there's no slot to enroll
+        // into yet, so it stays in the pipeline like a normal application
+        // until the office promotes it.
+        if(isWaitlist){save();}else{enrollCamper(id);}
+        closeModal('dynModal');_refreshPplIfActive();
+        toast(isWaitlist?camperName+' added to waitlist':camperName+' enrolled');
         // Same office follow-up a public-form submission already gets
         // (flag_application_payment_followup, migration 115) — a phone
         // intake shouldn't get worse treatment than the public form just
@@ -15501,7 +15546,7 @@ function psEditorHtml(s){
 
 window.CampistryMe={
     nav:nav,closeModal:closeModal,
-    viewCamper:viewCamper,editCamper:editCamper,addCamper:addCamper,deleteCamper:deleteCamper,unenrollCamper:unenrollCamper,reenrollCamper:reenrollCamper,ceToggleSummer:ceToggleSummer,ceMaritalChanged:ceMaritalChanged,ceToggleOtherParentSummer:ceToggleOtherParentSummer,
+    viewCamper:viewCamper,editCamper:editCamper,deleteCamper:deleteCamper,unenrollCamper:unenrollCamper,reenrollCamper:reenrollCamper,ceToggleSummer:ceToggleSummer,ceMaritalChanged:ceMaritalChanged,ceToggleOtherParentSummer:ceToggleOtherParentSummer,
     addFamily:function(){openFamilyForm(null)},editFamily:function(id){openFamilyForm(id)},deleteFamily:deleteFamily,removeCamperFromFamily:removeCamperFromFamily,
     setPplStaffSubTab:setPplStaffSubTab,viewStaffMember:viewStaffMember,openEditStaffModal:openEditStaffModal,saveStaffMember:saveStaffMember,
     acceptFamilySuggestion:acceptFamilySuggestion,dismissFamilySuggestion:dismissFamilySuggestion,acceptAddToFamily:acceptAddToFamily,
