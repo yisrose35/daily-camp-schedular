@@ -84,6 +84,7 @@
     const statDivisions = document.getElementById('statDivisions');
     const statBunks = document.getElementById('statBunks');
     const statCampers = document.getElementById('statCampers');
+    const statStaff = document.getElementById('statStaff');
     
     // RBAC elements
     const teamAccessSection = document.getElementById('team-access-section');
@@ -291,7 +292,7 @@
             // outright. Read them only through get_camp_tax_id() below.
             const { data: ownedCamps, error: campError } = await window.supabase
                 .from('camps')
-                .select('id, name, address, contact_email, owner_name, owner')
+                .select('id, name, address, contact_email, owner')
                 .eq('owner', currentUser.id);
 
             let ownedCamp = null;
@@ -806,7 +807,7 @@
                 // show_tax_id_on_statements are select-locked (migration 121).
                 const { data: campsList, error } = await window.supabase
                     .from('camps')
-                    .select('id, name, address, contact_email, owner_name, owner')
+                    .select('id, name, address, contact_email, owner')
                     .eq('owner', currentUser.id);
                 const camps = (Array.isArray(campsList) && campsList.length > 0)
                     ? (campsList.find(c => c.id === currentUser.id) || campsList[0])
@@ -906,6 +907,11 @@
                 syncCampStripeConnectStatus(campData.id);
             }
         }
+        // BYOP — which processor this camp is actually on (Stripe by default,
+        // or a bring-your-own processor connected via the human-assisted
+        // setup — see BYOP_SETUP.md). Read-only: connecting a different
+        // processor is deliberately not a self-serve action from here.
+        if (campData?.id) loadCampPaymentProcessorStatus(campData.id);
         // Which Link programs (Photos/Canteen/Shop/Tips/Camper Mail/Pickup)
         // this camp actually offers — read-only for non-owner/admin roles,
         // set_link_program_settings itself is the real (server-side) gate.
@@ -1022,10 +1028,22 @@
                     });
                 }
 
+                // ★ Team/Staff: same definition Me's own Analytics tab uses
+                // (hiredStaff() — staffApplications entries with
+                // status==='hired') so this tile and Analytics' "Staff" tile
+                // can never silently disagree. This tile previously had NO
+                // data wired to it at all — #statStaff was declared in the
+                // HTML but never referenced anywhere in this file, so it
+                // permanently showed the placeholder "—" regardless of how
+                // many staff the camp actually had.
+                const staffApps = state.campistryMe?.staffApplications || {};
+                const staffCount = Object.values(staffApps).filter(a => a?.status === 'hired').length;
+
                 // Update UI
                 if (statDivisions) statDivisions.textContent = divisionCount || '—';
                 if (statBunks) statBunks.textContent = bunkCount || '—';
                 if (statCampers) statCampers.textContent = camperCount > 0 ? camperCount : '—';
+                if (statStaff) statStaff.textContent = staffCount > 0 ? staffCount : '—';
             }
         } catch (e) {
             console.warn('Could not load stats:', e);
@@ -1165,7 +1183,7 @@
                     // Explicit column list — tax_id/show_tax_id_on_statements
                     // are select-locked (migration 121), so a bare .select()
                     // (which defaults to "*") would fail on the RETURNING here.
-                    .select('id, name, address, contact_email, owner_name, owner')
+                    .select('id, name, address, contact_email, owner')
                     .single();
 
                 if (error) throw error;
@@ -1422,6 +1440,35 @@
         }
     };
 
+    // Small in-page toast — used instead of the browser's native alert() for
+    // disconnect feedback (success or failure) so it reads as part of the
+    // app, not an OS-chrome popup. Self-contained (builds its own container
+    // on first use) rather than reusing the Quick Note widget's `#dn-toast`
+    // element further down this page, since that one's `dnToast()` is
+    // private to that widget's own closure and isn't exposed on `window`.
+    window.dashToast = function(msg, kind) {
+        var c = document.getElementById('dashToastBox');
+        if (!c) {
+            c = document.createElement('div');
+            c.id = 'dashToastBox';
+            c.style.cssText = 'position:fixed;bottom:28px;left:50%;transform:translateX(-50%);z-index:10600;display:flex;flex-direction:column;gap:8px;align-items:center;pointer-events:none';
+            document.body.appendChild(c);
+        }
+        var d = document.createElement('div');
+        d.style.cssText = 'background:' + (kind === 'error' ? '#dc2626' : '#0F172A') +
+            ';color:#fff;padding:10px 20px;border-radius:10px;font-size:.85rem;font-weight:500;' +
+            'box-shadow:0 8px 24px rgba(0,0,0,.18);max-width:380px;text-align:center;opacity:0;' +
+            'transform:translateY(6px);transition:opacity .2s,transform .2s;';
+        d.textContent = msg;
+        c.appendChild(d);
+        requestAnimationFrame(function() { d.style.opacity = '1'; d.style.transform = 'translateY(0)'; });
+        var hold = kind === 'error' ? 4200 : 2600;
+        setTimeout(function() {
+            d.style.opacity = '0';
+            setTimeout(function() { d.remove(); }, 200);
+        }, hold);
+    };
+
     // ========================================
     // STRIPE CONNECT (per-camp tuition billing)
     // ========================================
@@ -1456,22 +1503,104 @@
             const canConnect = userRole === 'owner';
             const ownerNote = canConnect ? '' : '<p style="margin:6px 0 0;font-size:0.78rem;color:var(--slate-400);">Only the camp owner can connect Stripe.</p>';
 
+            const disconnectBtn = canConnect
+                ? '<button type="button" class="btn-secondary" style="margin-left:8px;" onclick="disconnectCampStripe(this)">Disconnect</button>' : '';
+
             if (!data.connected) {
                 box.innerHTML = '<p style="margin:0 0 10px;">Right now tuition payments deposit into Campistry\'s account. Connect your camp\'s own Stripe account so payments go straight to your bank.</p>' +
-                    (canConnect ? '<button type="button" class="btn-primary" onclick="startCampStripeConnect(this)">Connect your Stripe account</button>' : '') + ownerNote;
+                    (canConnect ? '<button type="button" class="btn-primary" onclick="startCampStripeConnect(this)">Connect your Stripe account</button>' : '') + ownerNote +
+                    '<p style="margin:10px 0 0;font-size:0.78rem;color:var(--slate-400);">Want to bring your own processor (Banquest, Sola/Cardknox, etc.) instead of Stripe? Contact the office — connecting a different processor needs a quick verification call.</p>';
             } else if (data.charges_enabled) {
-                box.innerHTML = '<p style="margin:0;color:#059669;"><strong>Connected</strong> — tuition payments go directly to your bank account' +
-                    (data.connected_at ? ' since ' + new Date(data.connected_at).toLocaleDateString() : '') + '.</p>';
+                box.innerHTML = '<p style="margin:0 0 10px;color:#059669;"><strong>Connected</strong> — tuition payments go directly to your bank account' +
+                    (data.connected_at ? ' since ' + new Date(data.connected_at).toLocaleDateString() : '') + '.</p>' + disconnectBtn;
             } else if (data.onboarding_status === 'pending') {
                 box.innerHTML = '<p style="margin:0 0 8px;">Onboarding started but not finished yet.</p>' +
-                    (canConnect ? '<button type="button" class="btn-primary" onclick="startCampStripeConnect(this)">Finish setup</button>' : '') + ownerNote;
+                    (canConnect ? '<button type="button" class="btn-primary" onclick="startCampStripeConnect(this)">Finish setup</button>' : '') + disconnectBtn + ownerNote;
             } else {
                 box.innerHTML = '<p style="margin:0 0 8px;color:#dc2626;">Your Stripe account needs attention before it can accept payments again.</p>' +
-                    (canConnect ? '<button type="button" class="btn-primary" onclick="startCampStripeConnect(this)">Review account</button>' : '') + ownerNote;
+                    (canConnect ? '<button type="button" class="btn-primary" onclick="startCampStripeConnect(this)">Review account</button>' : '') + disconnectBtn + ownerNote;
             }
         } catch (e) {
             console.error('[Dashboard] loadCampStripeConnectStatus threw:', e);
             box.innerHTML = '<p style="margin:0;color:#dc2626;">Could not load Stripe Connect status: ' + escTelnyx(e && e.message ? e.message : String(e)) + '</p>';
+        }
+    };
+
+    // Self-serve disconnect from Stripe Connect — safe because it only tears
+    // down Campistry's own record of the connection (see migration 130's own
+    // header); it never calls Stripe's API to deactivate the underlying
+    // Express account, same posture as disconnectCampProcessor below.
+    window.disconnectCampStripe = async function(btn) {
+        if (!confirm('Disconnect your Stripe account? Tuition payments will go back to depositing into Campistry\'s account until you reconnect.')) return;
+        if (btn) { btn.disabled = true; btn.textContent = 'Disconnecting…'; }
+        try {
+            const campId = (window.CampistryDB && window.CampistryDB.getCampId) ? window.CampistryDB.getCampId() : null;
+            if (!campId) throw new Error('No camp id available');
+            const { data, error } = await window.supabase.rpc('disconnect_my_camp_stripe', { p_camp_id: campId });
+            if (error || !data || !data.success) {
+                throw new Error((data && data.error) || (error && error.message) || 'Disconnect failed');
+            }
+            await loadCampStripeConnectStatus(campId);
+            window.dashToast('Disconnected from Stripe. Tuition payments now deposit into Campistry\'s account.');
+        } catch (e) {
+            console.error('[Dashboard] disconnectCampStripe failed:', e);
+            window.dashToast('Could not disconnect: ' + (e && e.message ? e.message : String(e)), 'error');
+            if (btn) { btn.disabled = false; btn.textContent = 'Disconnect'; }
+        }
+    };
+
+    // BYOP status — read-only. Connecting a non-Stripe processor is a
+    // human-assisted action (BYOP_SETUP.md), never a self-serve button here
+    // — see migration 126's own header for why (a live processor API key is
+    // a materially higher-trust secret than a Stripe Connect account id).
+    window.loadCampPaymentProcessorStatus = async function(campId) {
+        const box = document.getElementById('campPaymentProcessorBox');
+        if (!box) return;
+        try {
+            const { data, error } = await window.supabase.rpc('get_camp_payment_processor_status', { p_camp_id: campId });
+            if (error || !data || !data.success) {
+                console.error('[Dashboard] get_camp_payment_processor_status error:', error || data);
+                box.innerHTML = '<p style="margin:0;color:#dc2626;">Could not load payment processor status.</p>';
+                return;
+            }
+            if (data.processorKey === 'stripe') {
+                box.innerHTML = '<p style="margin:0 0 8px;">On <strong>Stripe</strong> (the default) — the "Where tuition money lands" card above covers this.</p>' +
+                    '<p style="margin:0;font-size:0.78rem;color:var(--slate-400);">Want to use your own processor (Banquest, Sola/Cardknox, etc.) instead? Contact the office — connecting a different processor needs a quick verification call.</p>';
+            } else if (data.status === 'verified') {
+                box.innerHTML = '<p style="margin:0 0 10px;color:#059669;">Connected to your own <strong>' + escTelnyx(data.processorLabel || data.processorKey) + '</strong> account' +
+                    (data.connectedAt ? ' since ' + new Date(data.connectedAt).toLocaleDateString() : '') + '. Payments run through your own processor, not Stripe.</p>' +
+                    '<button type="button" class="btn-secondary" onclick="disconnectCampProcessor(this)">Disconnect &amp; switch back to Stripe</button>';
+            } else {
+                box.innerHTML = '<p style="margin:0 0 10px;color:#dc2626;">Connected to <strong>' + escTelnyx(data.processorLabel || data.processorKey) + '</strong> but not yet verified (status: ' + escTelnyx(data.status) + '). Contact Campistry support.</p>' +
+                    '<button type="button" class="btn-secondary" onclick="disconnectCampProcessor(this)">Disconnect &amp; switch back to Stripe</button>';
+            }
+        } catch (e) {
+            console.error('[Dashboard] loadCampPaymentProcessorStatus threw:', e);
+            box.innerHTML = '<p style="margin:0;color:#dc2626;">Could not load payment processor status: ' + escTelnyx(e && e.message ? e.message : String(e)) + '</p>';
+        }
+    };
+
+    // Self-serve disconnect (back to Stripe) — the one BYOP action a camp
+    // owner/admin can do themselves. Connecting a NEW non-Stripe processor
+    // deliberately stays office-assisted (see migration 126's own header) —
+    // this direction just tears down what's already there, so it's safe to
+    // self-serve.
+    window.disconnectCampProcessor = async function(btn) {
+        if (!confirm('Disconnect your current payment processor and switch tuition/canteen charges back to Stripe?')) return;
+        if (btn) { btn.disabled = true; btn.textContent = 'Disconnecting…'; }
+        try {
+            const campId = (window.CampistryDB && window.CampistryDB.getCampId) ? window.CampistryDB.getCampId() : null;
+            if (!campId) throw new Error('No camp id available');
+            const { data, error } = await window.supabase.rpc('disconnect_my_camp_processor', { p_camp_id: campId });
+            if (error || !data || !data.success) {
+                throw new Error((data && data.error) || (error && error.message) || 'Disconnect failed');
+            }
+            await loadCampPaymentProcessorStatus(campId);
+            window.dashToast('Disconnected. Tuition/canteen charges are back on Stripe.');
+        } catch (e) {
+            console.error('[Dashboard] disconnectCampProcessor failed:', e);
+            window.dashToast('Could not disconnect: ' + (e && e.message ? e.message : String(e)), 'error');
+            if (btn) { btn.disabled = false; btn.textContent = 'Disconnect & switch back to Stripe'; }
         }
     };
 
