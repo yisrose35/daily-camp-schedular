@@ -202,19 +202,20 @@
         }
 
         // ─── Cardknox/Sola iFields ──────────────────────────────────────────
-        // *** NOT YET VERIFIED AGAINST A LIVE SANDBOX *** — written from
-        // Cardknox's own published iFields sample/docs (each sensitive field
-        // is its own hosted iframe, identified by a data-ifields-id
-        // attribute; ifields.min.js wires them up and getTokens() posts each
-        // field's resulting Secure Usage Token into a matching hidden
-        // input). Only the card-number field is tokenized here — the CVV
-        // field is skipped on purpose: cardknox_adapter.ts's saveMethod/
-        // charge only ever send a single xToken (never a separate CVV), so
-        // collecting one would be dead weight with nothing server-side to
-        // send it to. Confirm the CDN version below against
-        // https://cdn.cardknox.com/ifields/versions.htm and run one real
-        // tokenize+save round-trip before relying on this for a real camp —
-        // same disclaimer renderBanquestForm above already carries.
+        // Version pinned to Cardknox's own published sample
+        // (github.com/Cardknox/cardknox-ifields-sample), confirmed working —
+        // both the JS library and the iframe's own hosted-field page must be
+        // the SAME version, and that page lives at .../ifield.htm (singular),
+        // not the ifields.min.js path.
+        var IFIELDS_VERSION = '2.5.1905.0801';
+        // *** Round-trip still not run against a live sandbox by us — this
+        // fixes a real bug (the card-number iframe had no `src`, so it never
+        // loaded Cardknox's field page at all and was just a blank, dead
+        // box) but the actual tokenize call itself is unverified. *** Only
+        // the card-number field is tokenized here — the CVV field is
+        // skipped on purpose: cardknox_adapter.ts's saveMethod/charge only
+        // ever send a single xToken (never a separate CVV), so collecting
+        // one would be dead weight with nothing server-side to send it to.
         function renderCardknoxForm(ifieldsKey) {
             var title = isCanteen ? ('Pay $' + amount.toFixed(2)) : isPayNow ? ('Pay $' + amount.toFixed(2)) : 'Save a payment method';
             var whoFor = isCanteen ? ('for ' + escapeHtml(camperName) + '\'s canteen account') : ('for ' + escapeHtml(familyName));
@@ -226,15 +227,30 @@
                 '<h1>' + title + '</h1>' +
                 '<p class="sub">' + sub + '</p>' +
                 '<div class="field-group"><span class="field-label">Card Number</span>' +
-                    '<iframe data-ifields-id="ckCardNum" data-ifields-placeholder="Card Number" class="cc-field" style="width:100%;height:20px;border:none;display:block"></iframe>' +
+                    // Border/padding/background live on this wrapper div (same
+                    // .cc-field box every other field uses) — the iframe itself
+                    // is borderless and just fills it, matching how
+                    // renderBanquestForm's Collect.js fields are styled (a
+                    // bordered wrapper hosting a plain injected field).
+                    '<div class="cc-field" id="ckCardNumWrap">' +
+                        '<iframe data-ifields-id="ckCardNum" data-ifields-placeholder="Card Number" ' +
+                            'src="https://cdn.cardknox.com/ifields/' + IFIELDS_VERSION + '/ifield.htm" ' +
+                            'style="width:100%;height:20px;border:none;display:block;background:transparent"></iframe>' +
+                    '</div>' +
                     '<input data-ifields-id="ckCardNum-token" type="hidden">' +
                 '</div>' +
-                '<div class="field-group"><span class="field-label">Expiration (MM/YY)</span><input type="text" id="ckExp" class="cc-field" placeholder="MM/YY" maxlength="5" style="width:100%;border:none;outline:none;font:inherit"></div>' +
+                '<div class="field-group"><span class="field-label">Expiration (MM/YY)</span><input type="text" id="ckExp" class="cc-field" placeholder="MM/YY" maxlength="5" style="width:100%;outline:none;font:inherit"></div>' +
                 '<button id="saveBtn" type="button">' + btnLabel + '</button>' +
                 '<div class="msg" id="msg"></div>';
 
+            var expEl = document.getElementById('ckExp');
+            if (expEl) {
+                expEl.addEventListener('focus', function() { expEl.classList.add('focused'); });
+                expEl.addEventListener('blur', function() { expEl.classList.remove('focused'); });
+            }
+
             var script = document.createElement('script');
-            script.src = 'https://cdn.cardknox.com/ifields/2.6.2006.0102/ifields.min.js';
+            script.src = 'https://cdn.cardknox.com/ifields/' + IFIELDS_VERSION + '/ifields.min.js';
             script.onload = function() {
                 if (typeof setAccount !== 'function' || typeof getTokens !== 'function') {
                     setMsg('Could not load the payment form. Reload and try again.', true);
