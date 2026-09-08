@@ -1807,6 +1807,20 @@ async function addFunds(){
     var c=_activeCanteenChild();if(!c){toast('No canteen account yet');return;}
     var amt=_selAmt||25;
     if(!(amt>0)){toast('Enter an amount first');return;}
+    var status=_canteenStripeByCamp[c.campId];
+    var processorKey=(status&&status.processorKey)||'stripe';
+    // BYOP has no hosted-checkout API to call ahead of time (unlike Stripe,
+    // which mints a session server-side) — open the tokenizer page directly,
+    // same pattern as sendPayLink()'s BYOP branch in campistry_me.js.
+    if(processorKey&&processorKey!=='stripe'){
+        var byopUrl=window.location.origin+'/campistry_card_setup.html?campId='+encodeURIComponent(c.campId)+
+            '&camperName='+encodeURIComponent(c.name)+
+            '&amount='+encodeURIComponent(amt)+
+            '&desc='+encodeURIComponent('Canteen funds — '+c.name)+
+            '&return='+encodeURIComponent(_lkReturnUrl('success','canteen'));
+        _lkGoToCheckout(byopUrl);
+        return;
+    }
     var btn=document.getElementById('canteenAddBtn');
     if(btn){btn.disabled=true;btn.textContent='Opening secure checkout…';}
     try{
@@ -1828,26 +1842,31 @@ async function addFunds(){
 }
 
 // Rollout gate: canteen deposits only make sense once the camp has
-// connected its own Stripe account (see migrations/077_camp_stripe_connect.sql,
-// 079_canteen_stripe_deposits.sql) — a deposit with nowhere real to land
-// would be a silent policy violation, not just bad UX, so this is hidden
-// entirely rather than left enabled to fail server-side. Cached per camp
-// since switchCanteen can run repeatedly as a parent taps between kids.
+// connected a real payment processor — its own Stripe account (see
+// migrations/077_camp_stripe_connect.sql, 079_canteen_stripe_deposits.sql)
+// OR a verified BYOP processor like Sola/Banquest (migration 132) — a
+// deposit with nowhere real to land would be a silent policy violation, not
+// just bad UX, so this is hidden entirely rather than left enabled to fail
+// server-side. Cached per camp since switchCanteen can run repeatedly as a
+// parent taps between kids. get_camp_canteen_stripe_status (despite its
+// Stripe-era name — kept to avoid a second RPC) now returns connected:true
+// for EITHER, plus processorKey so addFunds() knows which flow to use.
 var _canteenStripeByCamp={};
 async function _checkCanteenStripeStatus(campId){
     if(!campId)return;
-    if(_canteenStripeByCamp[campId]!==undefined){ _applyCanteenStripeGate(_canteenStripeByCamp[campId]); return; }
+    if(_canteenStripeByCamp[campId]!==undefined){ _applyCanteenStripeGate(_canteenStripeByCamp[campId]&&_canteenStripeByCamp[campId].connected); return; }
     var db=window._parentDB; if(!db)return;
     try{
         var res=await (window._pRpc?window._pRpc('get_camp_canteen_stripe_status',{p_camp_id:campId},campId):db.rpc('get_camp_canteen_stripe_status',{p_camp_id:campId}));
         var d=res&&res.data;
         if(res&&res.error){
-            // Most common cause: migrations/079_canteen_stripe_deposits.sql was
-            // never pasted into the SQL Editor, so this RPC doesn't exist yet —
-            // this used to fail completely silently, leaving "Add Funds" grey
-            // with no clue why. Don't cache a transient/setup failure as
-            // permanently disconnected — retry on the next switchCanteen call.
-            console.error('[Parent] get_camp_canteen_stripe_status RPC error (is migration 079 applied?):',res.error.message||res.error);
+            // Most common cause: the relevant migration was never pasted into
+            // the SQL Editor, so this RPC doesn't exist yet or doesn't know
+            // about BYOP — this used to fail completely silently, leaving
+            // "Add Funds" grey with no clue why. Don't cache a transient/setup
+            // failure as permanently disconnected — retry on the next
+            // switchCanteen call.
+            console.error('[Parent] get_camp_canteen_stripe_status RPC error (is migration 132 applied?):',res.error.message||res.error);
             _applyCanteenStripeGate(false);
             return;
         }
@@ -1857,7 +1876,7 @@ async function _checkCanteenStripeStatus(campId){
             return;
         }
         var connected=!!(d.connected&&d.charges_enabled);
-        _canteenStripeByCamp[campId]=connected; // only cache a definitive answer
+        _canteenStripeByCamp[campId]={connected:connected,processorKey:d.processorKey||'stripe'}; // only cache a definitive answer
         _applyCanteenStripeGate(connected);
     }catch(e){
         console.error('[Parent] get_camp_canteen_stripe_status threw:',e&&e.message);

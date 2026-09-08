@@ -85,25 +85,48 @@ nothing changes unless a camp is explicitly walked through the setup below.
   the same way it already recognized `stripePaymentIntentId` — "Direct
   Refund" on a BYOP-charged payment calls `payments-refund` (authenticated,
   owner/admin session) instead of `stripe-refund`.
+- **Cardknox/Sola's own client-side tokenizer (iFields)**, alongside
+  Banquest's Collect.js — `campistry_card_setup.html` now renders a real
+  form for either processor (`renderCardknoxForm`/`renderBanquestForm`,
+  picked by `get_camp_public_tokenization_key`'s `processorKey`).
+  **⚠️ NOT YET VERIFIED AGAINST A LIVE SANDBOX** — written from Cardknox's
+  published iFields sample/docs (each sensitive field is its own hosted
+  iframe; `ifields.min.js` wires them up and `getTokens()` returns each
+  field's Secure Usage Token), not tested against a real iFields key in
+  this environment. Confirm the pinned CDN version
+  (`cdn.cardknox.com/ifields/2.6.2006.0102/ifields.min.js`) against
+  `https://cdn.cardknox.com/ifields/versions.htm` and run one real
+  tokenize→save round-trip before relying on it for a real camp — same
+  disclaimer the Banquest widget already carried before it shipped.
+  **A camp connected to Cardknox/Sola BEFORE migration 133 needs one more
+  `admin-connect-processor` run** with `ifieldsKey` added to its
+  `credentials` (see the curl example below) — without it, this widget
+  shows "This camp hasn't finished setting up online payments yet." even
+  though the camp is genuinely connected and verified; the private `apiKey`
+  alone was never enough to power a client-side tokenizer.
+- **Canteen deposits ("Add Funds") and refunds**, mirroring the tuition
+  pay-link/refund pattern exactly: `payments-canteen-checkout` (parent-
+  facing, no session — tokenizes+saves+charges in one call, credits
+  `camp_state_kv.campistrySnacks` via `credit_canteen_balance_from_processor`,
+  migration 132) and `payments-canteen-refund` (owner/admin session,
+  apportions one requested dollar amount across as many of a camper's
+  BYOP-backed deposits as needed, mirroring `stripe-canteen-refund`'s own
+  multi-deposit logic). `addFunds()` in `campistry_link_parent.html` and
+  `refundCanteenDeposit()` in `campistry_snacks.js` both now check the
+  camp's processor and route accordingly — completely unchanged for a
+  Stripe camp. `get_camp_canteen_stripe_status` (despite its Stripe-era
+  name, kept rather than adding a second RPC) now returns `connected:true`
+  for EITHER a charges-enabled Stripe account OR a verified BYOP
+  credential, plus `processorKey`.
 - **Dashboard status card** ("Payment processor," next to the existing
   Stripe Connect card) — read-only, shows which processor a camp is on.
 
 ## What's deliberately NOT built yet (flagged, not silently skipped)
 
-- **Cardknox/iFields client-side tokenization page.** The adapter's
-  `saveMethod()` is implemented (via `cc:save`), but
-  `campistry_card_setup.html` only renders the Banquest/Collect.js variant
-  today (for both save-a-card and pay-now modes) — opening it for a
-  Cardknox-connected camp shows a clear "not available yet" message rather
-  than a broken form. Banquest was the priority since that's what the
-  actual at-risk camp uses.
-- **Canteen deposits/refunds and autopay installments (`charge-due-
-  installments`)** for BYOP camps — only tuition charge/refund + card
-  setup + pay-link are wired. A BYOP camp's canteen "Add Funds" and
-  autopay schedules still go nowhere until this is built — flagged
-  explicitly, not silently broken; canteen/autopay stay Stripe-only for
-  now, same deferred pattern as photos/tipping (which are staying
-  Stripe-only on purpose, not just unbuilt).
+- **Autopay installments (`charge-due-installments`)** for BYOP camps —
+  tuition charge/refund/pay-link, canteen deposits/refunds, and card setup
+  are all wired; a BYOP family's autopay schedule still has nowhere to
+  charge until this is built. Flagged explicitly, not silently broken.
 - **Accept Blue adapter** — the catalog/framework supports it the moment
   someone writes the adapter file; not built yet (Banquest and Cardknox/
   Sola were prioritized since those are what the actual at-risk camp uses).
@@ -128,9 +151,12 @@ curl -X POST "https://<your-project>.supabase.co/functions/v1/admin-connect-proc
 ```
 
 (For Cardknox/Sola instead: `"processorKey": "cardknox"`,
-`"credentials": { "apiKey": "..." }`. If Banquest gave the camp their own
-branded gateway hostname rather than the shared NMI one, add it as
-`"gatewayUrl": "https://secure.example.com"` inside `credentials`.)
+`"credentials": { "apiKey": "<the camp's private xKey>", "ifieldsKey":
+"<the camp's public iFields key>" }` — BOTH are needed: `apiKey` for the
+server-side charge/refund calls, `ifieldsKey` for the client-side card-entry
+widget (migration 133). If Banquest gave the camp their own branded gateway
+hostname rather than the shared NMI one, add it as `"gatewayUrl":
+"https://secure.example.com"` inside `credentials`.)
 
 The `SUPABASE_SERVICE_ROLE_KEY` is the same key already in **Supabase
 Dashboard → Settings → API** — the same one cron jobs use internally. It's
