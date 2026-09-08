@@ -89,13 +89,18 @@ nothing changes unless a camp is explicitly walked through the setup below.
   Banquest's Collect.js — `campistry_card_setup.html` now renders a real
   form for either processor (`renderCardknoxForm`/`renderBanquestForm`,
   picked by `get_camp_public_tokenization_key`'s `processorKey`).
-  **⚠️ NOT YET VERIFIED AGAINST A LIVE SANDBOX** — written from Cardknox's
-  published iFields sample/docs (each sensitive field is its own hosted
-  iframe; `ifields.min.js` wires them up and `getTokens()` returns each
-  field's Secure Usage Token), not tested against a real iFields key in
-  this environment. Confirm the pinned CDN version
-  (`cdn.cardknox.com/ifields/2.6.2006.0102/ifields.min.js`) against
-  `https://cdn.cardknox.com/ifields/versions.htm` and run one real
+  **⚠️ TOKENIZE→SAVE ROUND-TRIP NOT YET VERIFIED AGAINST A LIVE SANDBOX** —
+  written from Cardknox's own published sample
+  (`github.com/Cardknox/cardknox-ifields-sample`; each sensitive field is
+  its own hosted iframe; `ifields.min.js` wires them up and `getTokens()`
+  returns each field's Secure Usage Token). Live testing caught one real
+  bug already: the card-number iframe was missing its `src` attribute
+  entirely (Cardknox's field page lives at `.../ifield.htm`, a different
+  path than the `ifields.min.js` library) — without it the iframe never
+  loaded Cardknox's field page and was just a blank, non-interactive box.
+  Fixed, pinned to `2.5.1905.0801` (the exact version in Cardknox's own
+  sample, both for the script and the iframe `src` — they must match) for
+  both the script and iframe. Run one real
   tokenize→save round-trip before relying on it for a real camp — same
   disclaimer the Banquest widget already carried before it shipped.
   **A camp connected to Cardknox/Sola BEFORE migration 133 needs one more
