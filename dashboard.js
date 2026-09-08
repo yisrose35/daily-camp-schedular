@@ -1427,6 +1427,35 @@
         }
     };
 
+    // Small in-page toast — used instead of the browser's native alert() for
+    // disconnect feedback (success or failure) so it reads as part of the
+    // app, not an OS-chrome popup. Self-contained (builds its own container
+    // on first use) rather than reusing the Quick Note widget's `#dn-toast`
+    // element further down this page, since that one's `dnToast()` is
+    // private to that widget's own closure and isn't exposed on `window`.
+    window.dashToast = function(msg, kind) {
+        var c = document.getElementById('dashToastBox');
+        if (!c) {
+            c = document.createElement('div');
+            c.id = 'dashToastBox';
+            c.style.cssText = 'position:fixed;bottom:28px;left:50%;transform:translateX(-50%);z-index:10600;display:flex;flex-direction:column;gap:8px;align-items:center;pointer-events:none';
+            document.body.appendChild(c);
+        }
+        var d = document.createElement('div');
+        d.style.cssText = 'background:' + (kind === 'error' ? '#dc2626' : '#0F172A') +
+            ';color:#fff;padding:10px 20px;border-radius:10px;font-size:.85rem;font-weight:500;' +
+            'box-shadow:0 8px 24px rgba(0,0,0,.18);max-width:380px;text-align:center;opacity:0;' +
+            'transform:translateY(6px);transition:opacity .2s,transform .2s;';
+        d.textContent = msg;
+        c.appendChild(d);
+        requestAnimationFrame(function() { d.style.opacity = '1'; d.style.transform = 'translateY(0)'; });
+        var hold = kind === 'error' ? 4200 : 2600;
+        setTimeout(function() {
+            d.style.opacity = '0';
+            setTimeout(function() { d.remove(); }, 200);
+        }, hold);
+    };
+
     // ========================================
     // STRIPE CONNECT (per-camp tuition billing)
     // ========================================
@@ -1466,7 +1495,8 @@
 
             if (!data.connected) {
                 box.innerHTML = '<p style="margin:0 0 10px;">Right now tuition payments deposit into Campistry\'s account. Connect your camp\'s own Stripe account so payments go straight to your bank.</p>' +
-                    (canConnect ? '<button type="button" class="btn-primary" onclick="startCampStripeConnect(this)">Connect your Stripe account</button>' : '') + ownerNote;
+                    (canConnect ? '<button type="button" class="btn-primary" onclick="startCampStripeConnect(this)">Connect your Stripe account</button>' : '') + ownerNote +
+                    '<p style="margin:10px 0 0;font-size:0.78rem;color:var(--slate-400);">Want to bring your own processor (Banquest, Sola/Cardknox, etc.) instead of Stripe? Contact the office — connecting a different processor needs a quick verification call.</p>';
             } else if (data.charges_enabled) {
                 box.innerHTML = '<p style="margin:0 0 10px;color:#059669;"><strong>Connected</strong> — tuition payments go directly to your bank account' +
                     (data.connected_at ? ' since ' + new Date(data.connected_at).toLocaleDateString() : '') + '.</p>' + disconnectBtn;
@@ -1498,9 +1528,10 @@
                 throw new Error((data && data.error) || (error && error.message) || 'Disconnect failed');
             }
             await loadCampStripeConnectStatus(campId);
+            window.dashToast('Disconnected from Stripe. Tuition payments now deposit into Campistry\'s account.');
         } catch (e) {
             console.error('[Dashboard] disconnectCampStripe failed:', e);
-            alert('Could not disconnect: ' + (e && e.message ? e.message : String(e)));
+            window.dashToast('Could not disconnect: ' + (e && e.message ? e.message : String(e)), 'error');
             if (btn) { btn.disabled = false; btn.textContent = 'Disconnect'; }
         }
     };
@@ -1552,9 +1583,10 @@
                 throw new Error((data && data.error) || (error && error.message) || 'Disconnect failed');
             }
             await loadCampPaymentProcessorStatus(campId);
+            window.dashToast('Disconnected. Tuition/canteen charges are back on Stripe.');
         } catch (e) {
             console.error('[Dashboard] disconnectCampProcessor failed:', e);
-            alert('Could not disconnect: ' + (e && e.message ? e.message : String(e)));
+            window.dashToast('Could not disconnect: ' + (e && e.message ? e.message : String(e)), 'error');
             if (btn) { btn.disabled = false; btn.textContent = 'Disconnect & switch back to Stripe'; }
         }
     };
