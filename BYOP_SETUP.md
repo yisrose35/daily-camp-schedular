@@ -51,53 +51,59 @@ nothing changes unless a camp is explicitly walked through the setup below.
   using `secure.nmi.com` directly — the adapter's `gatewayUrl` credential
   field is exactly for that; confirm the real one with Banquest/the camp
   during onboarding rather than assuming the default.
-- **Four edge functions**: `payments-charge`, `payments-refund` (the BYOP
+- **Five edge functions**: `payments-charge`, `payments-refund` (the BYOP
   equivalents of `stripe-charge`/`stripe-refund` — same auth model, camp
   always derived from the caller's own session, never a client-supplied
   campId), `payments-save-method` (turns a client-side tokenization result
   into a durable saved payment method on a family's record — see below),
-  and `admin-connect-processor` (the human-assisted onboarding tool, see
-  further down).
-- **A real saved-payment-method flow for Banquest**: `campistry_card_setup
-  .html` is a new public page that loads NMI's Collect.js (Banquest's
-  client-side card tokenizer — raw card numbers never reach Campistry's
-  servers, same PCI-scope role Stripe.js already plays), tokenizes the
-  card, and posts the resulting token to `payments-save-method`, which
-  exchanges it for a permanent NMI Customer Vault id and writes it onto the
-  family record (`family.byopCustomerRef`, `family.cardOnFile`). The office
-  Billing page's "Get Card"/"Charge Card" buttons
-  (`requestCardSetup()`/`chargeStoredCard()` in `campistry_me.js`) now
-  check the camp's processor and route to this page (or `payments-charge`)
-  automatically for a BYOP camp — completely unchanged for a Stripe camp.
-  A new anon-safe RPC, `get_camp_public_tokenization_key` (migration 128),
-  lets that public page fetch ONLY the non-secret public tokenization key
-  needed by Collect.js — the private security key never leaves the server.
+  `payments-checkout` (the "Pay Link" equivalent — no session, since the
+  parent has none; tokenizes+saves+charges in one call and records the
+  result into `campistryMe.finance.payments`, the exact same array
+  `stripe-webhook` writes Stripe online payments into, so Billing's balance
+  math is identical regardless of processor), and `admin-connect-processor`
+  (the human-assisted onboarding tool, see further down).
+- **A real saved-payment-method AND pay-now flow for Banquest**:
+  `campistry_card_setup.html` is a public page that loads NMI's Collect.js
+  (Banquest's client-side card tokenizer — raw card numbers never reach
+  Campistry's servers, same PCI-scope role Stripe.js already plays),
+  tokenizes the card, and posts the resulting token to either
+  `payments-save-method` (default — saves a card for later) or
+  `payments-checkout` (when the URL carries an `amount` — a one-time
+  payment link, the BYOP equivalent of a Stripe Checkout session; the
+  token still gets saved along the way as a free bonus, same
+  `family.byopCustomerRef`/`family.cardOnFile` write). The office Billing
+  page's "Get Card"/"Charge Card"/"Send Payment Link" buttons
+  (`requestCardSetup()`/`chargeStoredCard()`/`sendPayLink()` in
+  `campistry_me.js`) all check the camp's processor and route to this page
+  (or `payments-charge`) automatically for a BYOP camp — completely
+  unchanged for a Stripe camp. A new anon-safe RPC,
+  `get_camp_public_tokenization_key` (migration 128), lets that public page
+  fetch ONLY the non-secret public tokenization key needed by Collect.js —
+  the private security key never leaves the server.
+- **The office "Issue Credit/Refund" modal** (`issueCreditForFamily()` in
+  `campistry_me.js`) now recognizes a payment tagged `byopTransactionId`
+  the same way it already recognized `stripePaymentIntentId` — "Direct
+  Refund" on a BYOP-charged payment calls `payments-refund` (authenticated,
+  owner/admin session) instead of `stripe-refund`.
 - **Dashboard status card** ("Payment processor," next to the existing
   Stripe Connect card) — read-only, shows which processor a camp is on.
 
 ## What's deliberately NOT built yet (flagged, not silently skipped)
 
-- **A hosted "Pay Link" equivalent** (`payments-checkout`, mirroring
-  `stripe-checkout`'s emailed/shareable payment link for a ONE-TIME
-  balance payment). What's built (`campistry_card_setup.html`) covers
-  SAVING a card for later auto-charges, not a one-off pay-now link — that's
-  still a gap, just a narrower one than before.
 - **Cardknox/iFields client-side tokenization page.** The adapter's
   `saveMethod()` is implemented (via `cc:save`), but
   `campistry_card_setup.html` only renders the Banquest/Collect.js variant
-  today — opening it for a Cardknox-connected camp shows a clear "not
-  available yet" message rather than a broken form. Banquest was the
-  priority since that's what the actual at-risk camp uses.
-- **The office "Issue Credit/Refund" modal doesn't know about BYOP
-  payments yet.** `payments-refund` (the API-level piece) is fully built
-  and callable; charged BYOP payments are tagged with `byopTransactionId`/
-  `byopProcessor` for exactly this reason, but the modal's own
-  gateway-refund path in `campistry_me.js` still only checks
-  `stripePaymentIntentId` — refunding a BYOP charge through that specific
-  UI isn't wired up yet, only charging one is.
-- **Canteen deposits/refunds and autopay installments** for BYOP camps —
-  only tuition charge/refund + card setup are wired. Same "explicitly
-  deferred" pattern.
+  today (for both save-a-card and pay-now modes) — opening it for a
+  Cardknox-connected camp shows a clear "not available yet" message rather
+  than a broken form. Banquest was the priority since that's what the
+  actual at-risk camp uses.
+- **Canteen deposits/refunds and autopay installments (`charge-due-
+  installments`)** for BYOP camps — only tuition charge/refund + card
+  setup + pay-link are wired. A BYOP camp's canteen "Add Funds" and
+  autopay schedules still go nowhere until this is built — flagged
+  explicitly, not silently broken; canteen/autopay stay Stripe-only for
+  now, same deferred pattern as photos/tipping (which are staying
+  Stripe-only on purpose, not just unbuilt).
 - **Accept Blue adapter** — the catalog/framework supports it the moment
   someone writes the adapter file; not built yet (Banquest and Cardknox/
   Sola were prioritized since those are what the actual at-risk camp uses).
