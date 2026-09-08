@@ -5,22 +5,18 @@
 // Cardknox's own consumer-facing rebrand, confirmed via docs.solapayments.com
 // this session).
 //
-// *** NOT YET VERIFIED AGAINST A LIVE SANDBOX — READ BEFORE ENABLING FOR A
-// REAL CAMP ***
+// *** VERIFIED LIVE against a real Sola sandbox key (Campistry DEV account,
+// 2026-09) — GATEWAY_URL is correct, request/response format fixed below.
 // Field names (xKey, xCommand, xAmount, xToken, xRefNum, xResult, xError)
-// were cross-checked directly against docs.solapayments.com's own
-// Introduction page (pasted into this session) — xResult/xRefNum/xToken/
-// xError/cc:sale/cc:refund/cc:save all match Sola's documented gateway
-// fields exactly, so the field shape itself is confirmed, not guessed.
-// What's still unconfirmed: whether GATEWAY_URL below (the long-standing
-// x1.cardknox.com/gateway endpoint) is still the right one to hit under
-// the Sola brand, vs. a distinct endpoint documented on
-// docs.solapayments.com/api/transaction (not fetched this session) — check
-// that page, or ask Sola support directly, before running testConnection()
-// against a real sandbox key. This environment has no Cardknox/Sola
-// developer credentials to test against directly (same category of
-// limitation as everywhere else in this codebase that a Dashboard/vendor-
-// portal walkthrough is handed to the user instead of run directly).
+// were cross-checked against docs.solapayments.com's own Introduction page
+// AND confirmed against a real response.
+//
+// The response format was the one thing gotten wrong initially: this
+// adapter originally sent/received JSON, but a live test call came back
+// as classic URL-encoded key=value pairs (e.g. "xResult=E&..."), the same
+// legacy "xWeb" wire format Banquest/NMI uses — NOT JSON. Fixed below to
+// POST x-www-form-urlencoded and parse the response the same way
+// banquest_adapter.ts's postForm() already does.
 //
 // Credential shape (from payment_processor_catalog.credential_fields):
 //   { apiKey: string }   -- Cardknox/Sola calls this "xKey" on their side.
@@ -41,13 +37,19 @@ const GATEWAY_URL = "https://x1.cardknox.com/gateway";
 const SOFTWARE_NAME = "Campistry";
 const SOFTWARE_VERSION = "1.0";
 
-async function post(body: Record<string, string>): Promise<Record<string, any>> {
+async function post(fields: Record<string, string>): Promise<Record<string, string>> {
   const resp = await fetch(GATEWAY_URL, {
     method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(body),
+    headers: { "Content-Type": "application/x-www-form-urlencoded" },
+    body: new URLSearchParams(fields).toString(),
   });
-  return resp.json();
+  const text = await resp.text();
+  // Sola's xWeb gateway returns url-encoded key=value pairs, not JSON —
+  // confirmed via a live sandbox response ("xResult=E&..."), same wire
+  // format as the Banquest/NMI adapter's postForm().
+  const parsed: Record<string, string> = {};
+  new URLSearchParams(text).forEach((v, k) => { parsed[k] = v; });
+  return parsed;
 }
 
 function baseFields(apiKey: string): Record<string, string> {
@@ -76,6 +78,14 @@ export const cardknoxAdapter: ProcessorAdapter = {
         xStartDate: today,
         xEndDate: today,
       });
+      // xResult carries the actual pass/fail signal on this gateway ('A' =
+      // approved/ok, 'E' = error, 'D' = declined — n/a for a reporting call
+      // but checked for completeness); xError/xErrorCode are the human-
+      // readable reason when it isn't 'A'. Checking xError alone isn't
+      // enough — a bad key can come back with xResult=E and no xError text.
+      if (result.xResult && result.xResult !== "A") {
+        return { success: false, error: result.xError || `Gateway returned xResult=${result.xResult}` };
+      }
       if (result.xError) return { success: false, error: String(result.xError) };
       return { success: true };
     } catch (err) {
