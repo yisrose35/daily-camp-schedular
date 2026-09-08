@@ -825,8 +825,12 @@ function fm(n){return'$'+Number(n||0).toLocaleString()}
 // box with a colored accent" stat tile and the same "ghost button with an
 // underline" tab strip as one-off inline styles — three near-identical
 // copies that could quietly drift apart. One shared pair here instead.
-function statTile(label,value,sub,color){
-    return'<div class="stat-tile" style="border-left-color:'+(color||'var(--s200)')+'">'+
+// onClickJs (optional): a raw JS expression string, e.g.
+// "CampistryMe.openUnmatchedPaymentsModal()" — used for tiles summing money
+// that should never be a dead end (see the Unmatched-revenue tile).
+function statTile(label,value,sub,color,onClickJs){
+    var clickable=!!onClickJs;
+    return'<div class="stat-tile"'+(clickable?' onclick="'+onClickJs+'" style="border-left-color:'+(color||'var(--s200)')+';cursor:pointer" title="Click for details"':' style="border-left-color:'+(color||'var(--s200)')+'"')+'>'+
         '<div class="stat-tile-label">'+esc(label)+'</div>'+
         '<div class="stat-tile-value">'+value+'</div>'+
         (sub?'<div class="stat-tile-sub">'+esc(sub)+'</div>':'')+
@@ -2945,6 +2949,12 @@ async function deleteCamper(n){
     delete roster[n];
     cascadeCamperDelete(n);
     save();
+    // Revoke this family's Link parent-portal invite NOW if this was their
+    // last active camper — previously this only happened whenever the
+    // debounced auto-provision sweep (save() → _scheduleAutoParentInvites,
+    // up to 4s later) next ran, so a parent could keep live portal access to
+    // a camper that had just been permanently deleted for several seconds.
+    try{_sweepOrphanedParentInvites();}catch(_){}
     // Deleting from their own profile page leaves nothing to show there —
     // head back to the list instead of rendering a "not found" page.
     if(curPage==='camperdetail'&&_camperDetailName===n)nav('campers');else render(curPage);
@@ -2998,6 +3008,10 @@ function unenrollCamper(n){
         if(e.session&&prev!=='waitlisted') autoPromoteWaitlist(e.session);
     });
     save();render(curPage);
+    // Same reasoning as deleteCamper: revoke this family's Link parent-portal
+    // invite NOW if this was their last active camper, rather than waiting
+    // on save()'s debounced auto-provision sweep.
+    try{_sweepOrphanedParentInvites();}catch(_){}
     toast(n+' unenrolled — moved to the Unenrolled tab','ok',{actionLabel:'Undo',onAction:function(){
         delete d.unenrolled;delete d.unenrolledAt;delete d._priorBunk;
         d.bunk=priorBunk;
@@ -8737,6 +8751,26 @@ function _scheduleAutoParentInvites(){
     clearTimeout(_apiTimer);
     _apiTimer=setTimeout(_autoProvisionParentInvites,4000);
 }
+// Offboarding sweep, pulled out to its own top-level function (previously
+// nested inside _autoProvisionParentInvites, only reachable via its 4-second
+// debounce) so deleteCamper/unenrollCamper can call it directly and revoke a
+// now-orphaned parent invite IMMEDIATELY instead of waiting on the debounce +
+// the rest of the provisioning loop. Disconnects any invite whose children
+// are ALL gone from the roster (last child un-enrolled/deleted). Safe to call
+// any time: it's a single idempotent UPDATE, and the server no-ops on an
+// empty roster. Unenrolled campers count as gone too — their name stays a
+// real roster key (the record is kept, not deleted), so this filters the
+// flag explicitly rather than relying on the key being absent.
+function _sweepOrphanedParentInvites(){
+    var db=window.CampistryDB&&window.CampistryDB.getClient?window.CampistryDB.getClient():null;
+    var campId=window.CampistryDB&&window.CampistryDB.getCampId?window.CampistryDB.getCampId():null;
+    if(!db||!campId)return;
+    var rosterNames=Object.keys(roster).filter(function(n){return !roster[n].unenrolled;});
+    db.rpc('revoke_orphaned_parent_invites',{p_camp_id:campId,p_roster_names:rosterNames}).then(function(res){
+        var rev=res&&res.data&&res.data.revoked;
+        if(rev)console.log('[Me] Parent sign-up: disconnected '+rev+' invite'+(rev===1?'':'s')+' (children no longer enrolled)');
+    }).catch(function(){});
+}
 function _autoProvisionParentInvites(){
     if(_apiRunning){console.log('[Me] Parent sign-up: skipped — a previous run is still in flight');return;}
     var db=window.CampistryDB&&window.CampistryDB.getClient?window.CampistryDB.getClient():null;
@@ -8789,25 +8823,14 @@ function _autoProvisionParentInvites(){
         }
     });
 
-    // Offboarding sweep: disconnects any invite whose children are ALL gone
-    // from the roster (last child un-enrolled/deleted) — pulled out to its
-    // own function so it always runs, even on the two early-returns below.
-    // It used to live only inside _finish(), which meant deleting a camper
-    // who was the ONLY family left with a parent email (keys.length===0)
-    // — or whose deletion didn't change the provisioning signature — never
-    // ran the sweep at all, so that parent's invite stayed fully connected
-    // forever. Safe to call every time: it's a single idempotent UPDATE,
-    // and the server no-ops on an empty roster. Unenrolled campers count as
-    // gone here too (see the loop above) — an unenrolled camper's name stays
-    // a real roster key (their record is kept, not deleted), so this must
-    // filter the flag explicitly rather than relying on the key being absent.
-    var rosterNames=Object.keys(roster).filter(function(n){return !roster[n].unenrolled;});
-    function _sweep(){
-        db.rpc('revoke_orphaned_parent_invites',{p_camp_id:campId,p_roster_names:rosterNames}).then(function(res){
-            var rev=res&&res.data&&res.data.revoked;
-            if(rev)console.log('[Me] Parent sign-up: disconnected '+rev+' invite'+(rev===1?'':'s')+' (children no longer enrolled)');
-        }).catch(function(){});
-    }
+    // Offboarding sweep — now just calls the shared top-level
+    // _sweepOrphanedParentInvites() (see its own comment above
+    // _autoProvisionParentInvites) so deleteCamper/unenrollCamper can trigger
+    // the exact same revoke logic immediately, without waiting on this
+    // function's debounce/signature-skip machinery. Kept as a local alias
+    // here so every existing call site below (_finish, the two early-returns)
+    // is unaffected.
+    function _sweep(){ _sweepOrphanedParentInvites(); }
 
     var keys=Object.keys(fams).filter(function(k){return fams[k].campers.length;});
     if(!keys.length){console.log('[Me] Parent sign-up: no families with a parent email to (re)provision — running the offboarding sweep only');_sweep();return;}
@@ -10027,8 +10050,21 @@ function fmtIIFDate(d){if(!d)return'';var p=d.split('-');return p[1]+'/'+p[2]+'/
 //   5. Add charges (tuition, add-ons, fees), record payments, issue credits
 // ═══════════════════════════════════════════════════════════════
 var _billFilter='all'; // all, outstanding, paid, overdue
+var _billUnmatchedPays=[]; // set by renderBilling(); read by openUnmatchedPaymentsModal()
 
 function buildFamilyLedgers(){
+    // Refresh `sessions` from the latest cloud-hydrated settings before
+    // reading any session's tuition below. enrollCamper() already does this
+    // before computing a NEW enrollment's tuition, but this function (which
+    // is what Billing actually renders from, on every render, independent of
+    // families[fk].balance) never did — so a Billing render on a tab that
+    // hadn't itself triggered a session refresh recently could read a stale
+    // (occasionally $0, e.g. a duplicate/mis-synced session entry) tuition
+    // number, then "self-correct" once something else refreshed `sessions`.
+    // That gap — not enrollCamper's own calculation, which was already
+    // synchronous and correct — is what produced the "$0 that later fixes
+    // itself with no visible signal" symptom.
+    _freshSessions();
     // Build a complete ledger for each family from all data sources
     // totalPayments is NET of refunds (a negative payment entry) — this is
     // the figure the balance formula and every other consumer (dashboard
@@ -10180,6 +10216,14 @@ function buildFamilyLedgers(){
             if(e.type==='installment'&&e.status==='pending'&&e.date&&e.date<today) l.status='overdue';
         });
         if(l.balance>0&&l.totalPayments===0) l.status='pending';
+        // A family with zero charges AND zero payments hits the same
+        // `balance<=0` branch as one that was billed and paid off in full —
+        // both render as a green "Paid $0" card, indistinguishable from each
+        // other. Those are very different states (never billed vs.
+        // billed-and-settled); flag the never-billed case as its own status
+        // so the UI can say so rather than implying settled money that was
+        // never actually charged.
+        if(l.totalCharges===0&&l.totalPayments===0&&l.totalCredits===0) l.status='unbilled';
     });
 
     return ledgers;
@@ -11229,6 +11273,11 @@ function renderBilling(){
     famList.forEach(function(l){(l.entries||[]).forEach(function(en){if(en.type==='payment'&&en.ref!=null)_matchedPayIds[String(en.ref)]=1})});
     var _unmatchedPays=finPayments.filter(function(p){return !_matchedPayIds[String(p.id)]});
     var _unmatchedTotal=_unmatchedPays.reduce(function(s,p){return s+(Number(p.amount)||0)},0);
+    // Stashed so openUnmatchedPaymentsModal() (triggered by clicking the tile
+    // below) doesn't need to recompute the match against every family's
+    // ledger a second time — this money should never be a dead end a user
+    // can see a total for but never actually click into.
+    _billUnmatchedPays=_unmatchedPays;
 
     var cardsOnFile=famList.filter(function(l){return families[l.famKey]?.cardOnFile}).length;
     var billMoreId='billHdMoreMenu';
@@ -11260,7 +11309,7 @@ function renderBilling(){
         statTile('Outstanding',fm(totalOutstanding),'','var(--err)')+
         statTile('Collection Rate',rate+'%')+
         statTile('Overdue',String(overdueCount),'',overdueCount>0?'var(--err)':undefined)+
-        (_unmatchedTotal>0?statTile('Unmatched ('+_unmatchedPays.length+')',fm(_unmatchedTotal),'Included in Analytics revenue, not in the ledgers below','var(--me)'):'')
+        (_unmatchedTotal>0?statTile('Unmatched ('+_unmatchedPays.length+')',fm(_unmatchedTotal),'Included in Analytics revenue — click to see which payments','var(--me)','CampistryMe.openUnmatchedPaymentsModal()'):'')
     );
 
     // Filter tabs — same underline tab strip used throughout Finance/Reports.
@@ -11283,7 +11332,7 @@ function renderBilling(){
             // same click-through pattern Roster uses for a camper. This used
             // to expand inline into the household + ledger + 8 action buttons
             // right here, which is what made the list feel crowded.
-            var statusBadge=l.status==='paid'?_flatStatus('Paid','ok'):l.status==='overdue'?_flatStatus('Overdue','err'):l.status==='partial'?_flatStatus('Partial','warn'):_flatStatus('Pending','warn');
+            var statusBadge=l.status==='unbilled'?_flatStatus('Not Billed'):l.status==='paid'?_flatStatus('Paid','ok'):l.status==='overdue'?_flatStatus('Overdue','err'):l.status==='partial'?_flatStatus('Partial','warn'):_flatStatus('Pending','warn');
             var camperNames=(l.family.camperIds||[]).concat((l.pendingCamperIds||[]).map(function(n){return n+' (pending)'})).join(', ');
 
             // A quick "N x $amount" tag when this family is on an even
@@ -11330,7 +11379,7 @@ function renderFamilyDetailPage(){
         c.innerHTML='<div class="me-empty"><h3>Family not found</h3><p>They may have been deleted or merged into another household.</p><button class="me-btn me-btn--sec" onclick="CampistryMe.nav(\'billing\')">← Back to Billing</button></div>';
         return;
     }
-    var statusBadge=l.status==='paid'?_flatStatus('Paid','ok'):l.status==='overdue'?_flatStatus('Overdue','err'):l.status==='partial'?_flatStatus('Partial','warn'):_flatStatus('Pending','warn');
+    var statusBadge=l.status==='unbilled'?_flatStatus('Not Billed'):l.status==='paid'?_flatStatus('Paid','ok'):l.status==='overdue'?_flatStatus('Overdue','err'):l.status==='partial'?_flatStatus('Partial','warn'):_flatStatus('Pending','warn');
     var camperNames=(l.family.camperIds||[]).concat((l.pendingCamperIds||[]).map(function(n){return n+' (pending)'})).join(', ');
     var hasCard=families[l.famKey]?.cardOnFile;
     var _fam=families[l.famKey];
@@ -11650,6 +11699,37 @@ function _crUpdateBalancePreview(){
     if(!f||!amt){previewEl.textContent='';return}
     var newBalance=(f.balance||0)+amt;
     previewEl.innerHTML='Balance owed after this refund: <strong>'+fm(newBalance)+'</strong> (currently '+fm(f.balance||0)+')';
+}
+// The "Unmatched" stat tile on Billing sums real money (payments recorded
+// with a family/camper name that never matched an actual family record) that
+// was, until now, invisible/unclickable — it counted toward Analytics
+// revenue but had nowhere in the UI you could see WHICH payments made it up.
+// This is a read-only reconciliation list, not a new edit surface: fixing
+// the mismatch (correcting the family/camper spelling on a payment, or
+// adding the missing family) still happens through the existing Record
+// Payment / Add Household flows — this just makes the gap visible and
+// actionable instead of a dead-end number.
+function openUnmatchedPaymentsModal(){
+    var pays=(_billUnmatchedPays||[]).slice().sort(function(a,b){return(b.date||'').localeCompare(a.date||'')});
+    var total=pays.reduce(function(s,p){return s+(Number(p.amount)||0)},0);
+    var rows=pays.map(function(p){
+        return '<tr>'
+            +'<td>'+esc(p.date||'—')+'</td>'
+            +'<td>'+esc(p.family||p.camper||'—')+'</td>'
+            +'<td>'+esc(_payLabel(p.method)||'—')+'</td>'
+            +'<td style="text-align:right;font-weight:600">'+fm(p.amount)+'</td>'
+            +'<td>'+esc(p.notes||'')+'</td>'
+            +'</tr>';
+    }).join('');
+    var body='<p style="margin:0 0 14px;color:var(--s500);font-size:.88rem">'
+        +'These '+pays.length+' payment'+(pays.length!==1?'s':'')+' (totaling '+fm(total)+') are counted in Analytics revenue but couldn\'t be matched to a family or camper name on file — usually a typo in the name at the time the payment was recorded, or the family/camper was later renamed or deleted. Fix the family/camper name on the payment (Billing → the family\'s Record Payment history) or add the missing household, and it will move into that family\'s ledger on the next load.'
+        +'</p>'
+        +(pays.length?
+            '<table style="width:100%;border-collapse:collapse;font-size:.85rem">'
+            +'<thead><tr style="text-align:left;border-bottom:1px solid var(--s100)"><th style="padding:6px 8px 6px 0">Date</th><th style="padding:6px 8px">Family/Camper (as recorded)</th><th style="padding:6px 8px">Method</th><th style="padding:6px 8px;text-align:right">Amount</th><th style="padding:6px 0">Notes</th></tr></thead>'
+            +'<tbody>'+rows+'</tbody></table>'
+            :'<p style="margin:0;color:var(--s400)">No unmatched payments right now.</p>');
+    showModal('Unmatched Payments',body,null,{maxWidth:700});
 }
 function issueCredit(){issueCreditForFamily(null)}
 function issueCreditForFamily(famKey){
@@ -15236,6 +15316,7 @@ window.CampistryMe={
     setPplStaffSubTab:setPplStaffSubTab,viewStaffMember:viewStaffMember,openEditStaffModal:openEditStaffModal,saveStaffMember:saveStaffMember,
     acceptFamilySuggestion:acceptFamilySuggestion,dismissFamilySuggestion:dismissFamilySuggestion,acceptAddToFamily:acceptAddToFamily,
     mergeFamilies:mergeFamilies,dismissMergeFamilies:dismissMergeFamilies,openMergeFamiliesTool:openMergeFamiliesTool,
+    openUnmatchedPaymentsModal:openUnmatchedPaymentsModal,
     _bcRefreshPreview:_bcRefreshPreview,
     _colResizeStart:_colResizeStart,_colHeaderDragStart:_colHeaderDragStart,_colHeaderDragOver:_colHeaderDragOver,_colHeaderDrop:_colHeaderDrop,_colHeaderDragEnd:_colHeaderDragEnd,
     addSectionTextBlock:addSectionTextBlock,_richTextExec:_richTextExec,
