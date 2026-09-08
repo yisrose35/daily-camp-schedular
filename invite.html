@@ -771,8 +771,19 @@
             // ★ SECURITY: Always use inviteData.email — NEVER trust the DOM input
             const safeEmail = getInviteEmail();
             console.log('[Invite] Signing up with invite email (not DOM):', safeEmail);
-            
+
             try {
+                // Check for an existing account BEFORE calling signUp() — same
+                // reasoning as landing.js: Supabase can return a non-erroring
+                // response for an existing CONFIRMED email (an anti-
+                // enumeration measure), which this code would otherwise treat
+                // like a brand new signup and send to the verification-code
+                // screen only to fail there with no real code ever sent.
+                const { data: exists, error: existsErr } = await supabaseClient.rpc('email_has_account', { p_email: safeEmail });
+                if (!existsErr && exists) {
+                    throw new Error('An account with this email already exists. Try signing in instead.');
+                }
+
                 const { data, error } = await supabaseClient.auth.signUp({
                     email: safeEmail,
                     password: password,
