@@ -989,12 +989,25 @@ function showModal(title,bodyHtml,onSave,opts){
     if(existing)existing.remove();
     var overlay=document.createElement('div');overlay.id='dynModal';
     overlay.className='me-overlay';overlay.style.cssText='position:fixed;inset:0;z-index:10000;background:rgba(0,0,0,.5);display:flex;align-items:center;justify-content:center;';
-    var footer=onSave?'<div style="display:flex;justify-content:flex-end;gap:8px;padding:12px 20px;border-top:1px solid var(--s100)"><button class="me-btn me-btn--sec" onclick="CampistryMe.closeModal(\'dynModal\')">Cancel</button><button class="me-btn me-btn--pri" id="dynModalSave">Save</button></div>':'';
+    // opts.onDelete puts a Delete button on the left of the same footer —
+    // lets a caller's edit modal carry its own delete action instead of
+    // that action living as a separate standalone button elsewhere in the
+    // page (see openEditStaffModal). Backward compatible: a caller that
+    // never passes onDelete gets the exact same right-aligned Cancel/Save
+    // footer as before.
+    var footer='';
+    if(onSave||opts.onDelete){
+        footer='<div style="display:flex;justify-content:space-between;align-items:center;gap:8px;padding:12px 20px;border-top:1px solid var(--s100)">'
+            +(opts.onDelete?'<button class="me-btn me-btn--ghost me-btn--sm" id="dynModalDelete" style="color:var(--err)">'+esc(opts.deleteLabel||'Delete')+'</button>':'<span></span>')
+            +'<div style="display:flex;gap:8px">'+(onSave?'<button class="me-btn me-btn--sec" onclick="CampistryMe.closeModal(\'dynModal\')">Cancel</button><button class="me-btn me-btn--pri" id="dynModalSave">Save</button>':'<button class="me-btn me-btn--sec" onclick="CampistryMe.closeModal(\'dynModal\')">Close</button>')+'</div>'
+            +'</div>';
+    }
     overlay.innerHTML='<div style="background:#fff;border-radius:12px;max-width:'+(opts.maxWidth||560)+'px;width:95%;max-height:85vh;overflow:auto;box-shadow:0 20px 60px rgba(0,0,0,.25)"><div style="display:flex;justify-content:space-between;align-items:center;padding:16px 20px;border-bottom:1px solid var(--s100)"><h3 style="margin:0;font-size:1.05rem;font-weight:700">'+esc(title)+'</h3><button style="background:none;border:none;font-size:1.5rem;cursor:pointer;color:var(--s400)" onclick="CampistryMe.closeModal(\'dynModal\')">&times;</button></div><div style="padding:18px 22px">'+bodyHtml+'</div>'+footer+'</div>';
     document.body.appendChild(overlay);
     overlay.addEventListener('mousedown',function(e){if(e.target===overlay)closeModal('dynModal')});
     _dynModalCb=onSave||null;
     if(onSave){document.getElementById('dynModalSave').addEventListener('click',function(){if(_dynModalCb)_dynModalCb()})}
+    if(opts.onDelete){document.getElementById('dynModalDelete').addEventListener('click',opts.onDelete)}
 }
 
 // Get all league names + teams from Flow
@@ -1672,10 +1685,15 @@ function renderStaffDetailPage(){
     if(st){
         h+=st==='declined'
             ?'<button class="me-btn me-btn--sec me-btn--sm" onclick="CampistryMe.setStaffStatus(\''+je(row.appId)+'\',\'applied\')">Reconsider</button>'
-            :'<button class="me-btn me-btn--sec me-btn--sm" onclick="CampistryMe.setStaffStatus(\''+je(row.appId)+'\',\'declined\')">Decline</button>';
+            // "Unhire" for someone currently hired reads very differently
+            // from "Decline" (a pre-hire rejection) even though both land on
+            // the same 'declined' status and reuse the same offboard cascade
+            // via setStaffStatus → _declineHiredStaff.
+            :'<button class="me-btn me-btn--sec me-btn--sm" onclick="CampistryMe.setStaffStatus(\''+je(row.appId)+'\',\'declined\')">'+(st==='hired'?'Unhire':'Decline')+'</button>';
     }
+    // Delete now lives inside the Edit modal's own footer (openEditStaffModal)
+    // instead of standing alone next to Edit here.
     h+='<button class="me-btn me-btn--sec" onclick="CampistryMe.openEditStaffModal(\''+je(key)+'\')">Edit</button>';
-    if(row.appId!=null)h+='<button class="me-btn me-btn--sm" style="background:var(--err);color:#fff;border:none" onclick="CampistryMe.deleteStaffApp(\''+je(row.appId)+'\')">Delete</button>';
     h+='</div></div>';
 
     var g='<div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(280px,1fr));gap:16px;align-items:start">';
@@ -1850,7 +1868,10 @@ function openEditStaffModal(key){
             +(core?core.PAY_TYPES.map(function(p){return '<option value="'+esc(p.id)+'"'+((row.payType||'hourly')===p.id?' selected':'')+'>'+esc(p.label)+'</option>';}).join(''):'')
             +'</select></div><div class="fg"><label class="fl">Rate</label><input type="number" min="0" step="0.01" id="esPayRate" class="fi" value="'+(row.payRate||'')+'"></div></div>';
     }
-    showModal('Edit '+(row.name||'Staff Member'),h,function(){ saveStaffMember(key); });
+    showModal('Edit '+(row.name||'Staff Member'),h,function(){ saveStaffMember(key); },
+        row.appId!=null?{onDelete:function(){
+            deleteStaffApp(row.appId).then(function(){ if(!staffApplications[row.appId])closeModal('dynModal'); });
+        }}:{});
 }
 // Writes to whichever of {payroll.staff, staffApplications} this person
 // actually has a record in, THEN pushes the same identity fields onto every
@@ -2099,7 +2120,7 @@ function _renderHiredStaffTable(hiredList,editStaff){
             +'<td style="font-size:.8rem;color:var(--s500)">'+(positions.length?esc(positions.join(', ')):'<span style="color:var(--s400)">Not set</span>')+'</td>'
             +'<td style="font-size:.8rem;color:var(--s500)">'+(bunks.length?esc(bunks.join(', ')):'<span style="color:var(--s400)">Unplaced</span>')+'</td>'
             +'<td style="font-size:.78rem;color:var(--s400)">'+esc(a.email||a.phone||'—')+'</td>'
-            +'<td style="text-align:right;white-space:nowrap" onclick="event.stopPropagation()">'+(editStaff?'<button class="me-btn me-btn--sec me-btn--sm" onclick="CampistryMe.openAssignPositionModal(\''+je(a.id)+'\')">Assign position</button>':'')+'</td>'
+            +'<td style="text-align:right;white-space:nowrap" onclick="event.stopPropagation()">'+(editStaff?'<button class="me-btn me-btn--sec me-btn--sm" onclick="CampistryMe.openAssignPositionModal(\''+je(a.id)+'\')">Assign position</button> <button class="me-btn me-btn--ghost me-btn--sm" onclick="CampistryMe.setStaffStatus(\''+je(a.id)+'\',\'declined\',{fromRow:true})">Unhire</button>':'')+'</td>'
             +'</tr>';
     });
     h+='</tbody></table></div></div>';
@@ -2200,9 +2221,12 @@ function renderCampers(filter){
                 var details=(d.schoolGrade?esc(d.schoolGrade):'<span style="color:var(--s300)">—</span>')+(hasMed?' <span style="color:var(--err);font-size:.7rem;font-weight:600">⚠ Medical</span>':'');
                 var placement=(d.division?dtag(d.division):'<span style="color:var(--s300)">—</span>')+(d.bunk?' '+bdg(d.bunk,'gray'):(d._priorBunk?' '+bdg(d._priorBunk+' (prior)','gray'):''));
                 var contact=(d.parent1Phone||d.parent1Email)?'<span style="font-size:.78rem;color:var(--s500)">'+esc(d.parent1Name||'')+'</span>':'<span style="color:var(--s300)">—</span>';
+                // Delete now lives inside the Edit modal's own footer
+                // (editCamper → ceDelete) instead of standing alone here —
+                // every row keeps an Edit affordance so Delete stays reachable.
                 var rowActions=showUnenrolled
-                    ?'<button class="me-btn me-btn--sec me-btn--sm" onclick="CampistryMe.reenrollCamper(\''+je(n)+'\')">Re-enroll</button> <button class="me-btn me-btn--ghost me-btn--sm" style="color:var(--err)" onclick="CampistryMe.deleteCamper(\''+je(n)+'\')" title="Delete permanently">Delete</button>'
-                    :'<button class="me-btn me-btn--ghost me-btn--sm" onclick="CampistryMe.editCamper(\''+je(n)+'\')">Edit</button> <button class="me-btn me-btn--ghost me-btn--sm" onclick="CampistryMe.unenrollCamper(\''+je(n)+'\')" title="Keep their record, drop them off the active roster">Unenroll</button> <button class="me-btn me-btn--ghost me-btn--sm" style="color:var(--err)" onclick="CampistryMe.deleteCamper(\''+je(n)+'\')" title="Delete camper">Delete</button>';
+                    ?'<button class="me-btn me-btn--sec me-btn--sm" onclick="CampistryMe.reenrollCamper(\''+je(n)+'\')">Re-enroll</button> <button class="me-btn me-btn--ghost me-btn--sm" onclick="CampistryMe.editCamper(\''+je(n)+'\')">Edit</button>'
+                    :'<button class="me-btn me-btn--ghost me-btn--sm" onclick="CampistryMe.editCamper(\''+je(n)+'\')">Edit</button> <button class="me-btn me-btn--ghost me-btn--sm" onclick="CampistryMe.unenrollCamper(\''+je(n)+'\')" title="Keep their record, drop them off the active roster">Unenroll</button>';
                 h+='<tr class="click" onclick="CampistryMe.viewCamper(\''+je(n)+'\')"><td>'+_typeBadge('camper')+'</td><td class="bold">'+nameCell+'</td><td style="font-size:.8rem">'+details+'</td><td>'+placement+'</td><td>'+contact+'</td><td style="text-align:right;white-space:nowrap" onclick="event.stopPropagation()">'+rowActions+'</td></tr>';
             }else{
                 var r=item.r;
@@ -2445,8 +2469,9 @@ function renderCamperDetailPage(){
         +'<p class="sec-desc">#'+esc(idStr)+(d.division?' · '+esc(d.division):'')+(d.bunk?' · '+esc(d.bunk):'')+'</p></div>'
         +'</div><div class="sec-actions">'
         +'<button class="me-btn me-btn--sec me-btn--sm" onclick="CampistryMe.reEnrollCamper(\''+je(n)+'\')">Re-Enroll</button>'
+        // Delete now lives inside the Edit modal's own footer (editCamper →
+        // ceDelete) instead of standing alone here.
         +'<button class="me-btn me-btn--sec" onclick="CampistryMe.editCamper(\''+je(n)+'\')">Edit</button>'
-        +'<button class="me-btn me-btn--sm" style="background:var(--err);color:#fff;border:none" onclick="CampistryMe.deleteCamper(\''+je(n)+'\')">Delete</button>'
         +'</div></div>';
 
     var hasMedFlags=!!(d.allergies||d.medications||d.dietary||d.medicalNotes);
@@ -2703,7 +2728,19 @@ function editCamper(n){
     if(maritalS)maritalS.onchange=ceMaritalChanged;
     var saveBtn=document.getElementById('ceSave');
     if(saveBtn)saveBtn.onclick=saveCamper;
+    var delBtn=document.getElementById('ceDelete');
+    if(delBtn){delBtn.style.display=n?'':'none';delBtn.onclick=deleteCamperFromEdit;}
     openModal('camperEditModal');
+}
+// Delete now lives inside the Edit modal's own footer instead of standing
+// alone next to Edit on the roster row/detail page — awaits deleteCamper's
+// own confirm+cascade and only closes the modal if the delete actually went
+// through (so cancelling the confirm leaves the edit form open).
+async function deleteCamperFromEdit(){
+    if(!editingCamper)return;
+    var n=editingCamper;
+    await deleteCamper(n);
+    if(!roster[n])closeModal('camperEditModal');
 }
 function ceToggleSummer(){
     var on=document.getElementById('ceSummerSame'), b=document.getElementById('ceSummerBlock');
@@ -5864,7 +5901,7 @@ function viewStaffApp(id){
         f+='<button class="me-btn me-btn--pri" onclick="CampistryMe.setStaffStatus(\''+je(id)+'\',\'applied\')">Reconsider</button>';
     }else{
         if(next)f+='<button class="me-btn me-btn--pri" onclick="CampistryMe.setStaffStatus(\''+je(id)+'\',\''+next+'\')">'+ico('enroll')+'Advance to '+esc(_staffLabel(next))+'</button>';
-        f+='<button class="me-btn me-btn--danger" onclick="CampistryMe.setStaffStatus(\''+je(id)+'\',\'declined\')">Decline</button>';
+        f+='<button class="me-btn me-btn--danger" onclick="CampistryMe.setStaffStatus(\''+je(id)+'\',\'declined\')">'+(st==='hired'?'Unhire':'Decline')+'</button>';
     }
     if(st==='hired')f+='<button class="me-btn me-btn--sec" onclick="CampistryMe.openSendPostHireModal(\''+je(id)+'\')" title="Onboarding logistics and other post-hire details">'+(a.postHire?'✓ ':'')+'Post-Hire Form</button>';
     f+='<button class="me-btn me-btn--ghost-danger" onclick="CampistryMe.deleteStaffApp(\''+je(id)+'\')">'+ico('rescind')+'Delete</button>';
@@ -6072,10 +6109,14 @@ async function _declineHiredStaff(id,status,opts){
     var a=staffApplications[id]; if(!a)return;
     var prevStatus=a.status;
     var nm=a.name||((a.first||'')+' '+(a.last||''))||'this staff member';
+    // This function only ever fires on a hired→non-hired transition (see
+    // setStaffStatus's guard below), so it's always genuinely "unhiring"
+    // someone currently on staff — worded that way regardless of which
+    // target status the caller passed.
     var ok=await confirmDialog({
-        title:'Move to '+esc(_staffLabel(status))+'?',
+        title:'Unhire '+esc(nm)+'?',
         message:'<strong>'+esc(nm)+'</strong> will be taken off any bunk, Division Head slot, and Payroll they were assigned to. Their application stays here marked <strong>'+esc(_staffLabel(status))+'</strong> for the audit trail.',
-        confirmLabel:_staffLabel(status),
+        confirmLabel:'Unhire',
         danger:true
     });
     if(!ok)return;
@@ -6086,7 +6127,7 @@ async function _declineHiredStaff(id,status,opts){
     closeModal('appViewModal');
     if(curPage==='staffdetail')nav('hiring');else _refreshStaffView(id,opts);
     var changed=cap.bunks.length||cap.divisions.length||cap.payrollStaff.length;
-    toast('Moved to '+_staffLabel(status)+(changed?' — removed from bunk/division/payroll assignments':''),'ok',{actionLabel:'Undo',onAction:function(){
+    toast('Unhired'+(changed?' — removed from bunk/division/payroll assignments':''),'ok',{actionLabel:'Undo',onAction:function(){
         a.status=prevStatus;
         _restoreStaffOffboard(cap);
         save();render(curPage);toast(nm+' restored to '+_staffLabel(prevStatus));
