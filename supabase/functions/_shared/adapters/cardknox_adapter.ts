@@ -7,19 +7,20 @@
 //
 // *** NOT YET VERIFIED AGAINST A LIVE SANDBOX — READ BEFORE ENABLING FOR A
 // REAL CAMP ***
-// This was written from the gateway's long-documented request/response
-// shape (xKey/xCommand/xRefNum-style fields), not from a live test account —
-// this environment has no Cardknox/Sola developer credentials to test
-// against (same category of limitation as everywhere else in this codebase
-// that a Dashboard/vendor-portal walkthrough is handed to the user instead
-// of run directly). Before connecting a real camp: get a Cardknox/Sola
-// SANDBOX API key, run testConnection() against it, and confirm a real
-// charge()/refund() round-trip end-to-end. Field names below (xKey, xCommand,
-// xAmount, xToken, xRefNum, xResult, xRefNum, xError) are Cardknox's
-// documented gateway fields, not guesses, but should still be diffed against
-// your own account's exact docs at docs.solapayments.com before production
-// use — gateway field sets occasionally vary slightly by account
-// configuration.
+// Field names (xKey, xCommand, xAmount, xToken, xRefNum, xResult, xError)
+// were cross-checked directly against docs.solapayments.com's own
+// Introduction page (pasted into this session) — xResult/xRefNum/xToken/
+// xError/cc:sale/cc:refund/cc:save all match Sola's documented gateway
+// fields exactly, so the field shape itself is confirmed, not guessed.
+// What's still unconfirmed: whether GATEWAY_URL below (the long-standing
+// x1.cardknox.com/gateway endpoint) is still the right one to hit under
+// the Sola brand, vs. a distinct endpoint documented on
+// docs.solapayments.com/api/transaction (not fetched this session) — check
+// that page, or ask Sola support directly, before running testConnection()
+// against a real sandbox key. This environment has no Cardknox/Sola
+// developer credentials to test against directly (same category of
+// limitation as everywhere else in this codebase that a Dashboard/vendor-
+// portal walkthrough is handed to the user instead of run directly).
 //
 // Credential shape (from payment_processor_catalog.credential_fields):
 //   { apiKey: string }   -- Cardknox/Sola calls this "xKey" on their side.
@@ -115,12 +116,20 @@ export const cardknoxAdapter: ProcessorAdapter = {
   ): Promise<ChargeResult> {
     const apiKey = credentials.apiKey;
     try {
+      // xInvoice must be unique PER CHARGE, not derived from the description —
+      // Sola's duplicate-transaction filter blocks any transaction whose
+      // Key+Card+Amount+Invoice match another within a 10-minute window
+      // (docs.solapayments.com's own "Duplicate Handling" section). Two
+      // genuinely different charges sharing a description and amount (e.g.
+      // two autopay installments of the same amount, back to back) would
+      // otherwise risk a false "Duplicate Transaction" decline.
+      const xInvoice = "CI-" + Date.now().toString(36) + Math.random().toString(36).slice(2, 6);
       const result = await post({
         ...baseFields(apiKey),
         xCommand: "cc:sale",
         xAmount: (amountCents / 100).toFixed(2),
         xToken: customerRef,
-        xInvoice: description.slice(0, 25), // gateway field length limits are tight; keep it short
+        xInvoice,
       });
       if (result.xResult !== "A") {
         return { success: false, status: result.xStatus, error: result.xError || "Declined", raw: result };
