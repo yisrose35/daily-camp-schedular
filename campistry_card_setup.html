@@ -258,6 +258,24 @@
                 }
                 setAccount(ifieldsKey, 'Campistry', '1.0');
                 if (typeof enableAutoFormatting === 'function') enableAutoFormatting();
+                // setIfieldStyle pushes real CSS into the hosted field via
+                // Cardknox's own API (confirmed against their published
+                // sample) — the field defaults to a bare browser input
+                // (visible number spinner arrows, no matching font) since
+                // our page's own stylesheet can't reach across the iframe.
+                if (typeof setIfieldStyle === 'function') {
+                    setIfieldStyle('ckCardNum', {
+                        border: 'none',
+                        background: 'transparent',
+                        padding: '0',
+                        width: '100%',
+                        height: '20px',
+                        'font-size': '15px',
+                        'font-family': "'DM Sans', system-ui, sans-serif",
+                        color: '#1E293B',
+                        '-moz-appearance': 'textfield'
+                    });
+                }
             };
             script.onerror = function() {
                 setMsg('Could not load the payment form. Reload and try again.', true);
