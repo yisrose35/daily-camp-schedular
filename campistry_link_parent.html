@@ -954,6 +954,14 @@ async function _lkCheckout(body){
     var resp=await fetch(s.url+'/functions/v1/stripe-checkout',{method:'POST',headers:{'Content-Type':'application/json','Authorization':'Bearer '+(s.anonKey||''),'apikey':s.anonKey||''},body:JSON.stringify(body)});
     var data=await resp.json(); if(!resp.ok||data.error) throw new Error(data.error||'Could not start checkout'); return data;
 }
+// Generic anon-key edge function caller — same shape as _lkCheckout above,
+// factored out since cardknox-checkout-start is invoked from two places
+// (tuition Pay Now, canteen Add Funds).
+async function _lkCallEdge(fnName,body){
+    var s=_lkSupa(); if(!s.url) throw new Error('Payments are not set up for this camp yet.');
+    var resp=await fetch(s.url+'/functions/v1/'+fnName,{method:'POST',headers:{'Content-Type':'application/json','Authorization':'Bearer '+(s.anonKey||''),'apikey':s.anonKey||''},body:JSON.stringify(body)});
+    var data=await resp.json(); if(!resp.ok||!data.success) throw new Error(data.error||('Could not reach '+fnName)); return data;
+}
 // Every Stripe Checkout redirect (billing, canteen, Link Photos, tips) goes
 // through here rather than a bare window.location.href assignment.
 // campistry_link_capacitor.js already routes payment-handoff <a href> CLICKS
@@ -1342,10 +1350,15 @@ async function _lkPayConfirm(){
     try{
         var info=await _getCampProcessorInfo(cid);
         var processorKey=(info&&info.processorKey)||'stripe';
-        // BYOP has no hosted-checkout API to call ahead of time (unlike
-        // Stripe, which mints a session server-side) — open the tokenizer
-        // page directly, same pattern as sendPayLink()'s BYOP branch in
-        // campistry_me.js and addFunds()'s canteen equivalent above.
+        if(processorKey==='cardknox'){
+            if(!d.familyKey){toast('Could not start payment: family record not found — contact the camp office','error');return;}
+            toast('Opening secure checkout…');
+            var ckRes=await _lkCallEdge('cardknox-checkout-start',{campId:cid,kind:'tuition_charge',familyKey:d.familyKey,familyName:d.familyName||'',amount:amt,description:'Camp payment'+(d.familyName?' — '+d.familyName:'')});
+            _lkGoToCheckout(ckRes.url);
+            return;
+        }
+        // Any other non-Stripe processor with no hosted-checkout support yet
+        // (e.g. Banquest) falls back to the embedded tokenizer page instead.
         if(processorKey&&processorKey!=='stripe'){
             if(!d.familyKey){toast('Could not start payment: family record not found — contact the camp office','error');return;}
             // window.location.origin is dead inside Capacitor (capacitor://localhost)
@@ -1836,9 +1849,17 @@ async function addFunds(){
     if(!(amt>0)){toast('Enter an amount first');return;}
     var status=_campPayStatusByCamp[c.campId];
     var processorKey=(status&&status.processorKey)||'stripe';
-    // BYOP has no hosted-checkout API to call ahead of time (unlike Stripe,
-    // which mints a session server-side) — open the tokenizer page directly,
-    // same pattern as sendPayLink()'s BYOP branch in campistry_me.js.
+    if(processorKey==='cardknox'){
+        var addBtn=document.getElementById('canteenAddBtn');
+        if(addBtn){addBtn.disabled=true;addBtn.textContent='Opening secure checkout…';}
+        try{
+            var ckRes2=await _lkCallEdge('cardknox-checkout-start',{campId:c.campId,kind:'canteen_deposit',camperName:c.name,amount:amt,description:'Canteen funds — '+c.name});
+            _lkGoToCheckout(ckRes2.url);
+        }catch(err){ toast('Could not start checkout: '+(err&&err.message||'error')); if(addBtn){addBtn.disabled=false;addBtn.textContent='Add Funds';} }
+        return;
+    }
+    // Any other non-Stripe processor with no hosted-checkout support yet
+    // (e.g. Banquest) falls back to the embedded tokenizer page instead.
     if(processorKey&&processorKey!=='stripe'){
         // window.location.origin is dead inside Capacitor (capacitor://localhost)
         // — same reasoning as the tuition Pay Now branch above.

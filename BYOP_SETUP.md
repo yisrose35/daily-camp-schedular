@@ -125,6 +125,34 @@ nothing changes unless a camp is explicitly walked through the setup below.
   credential, plus `processorKey`.
 - **Dashboard status card** ("Payment processor," next to the existing
   Stripe Connect card) — read-only, shows which processor a camp is on.
+- **Cardknox/Sola's real hosted checkout page** (their own product —
+  confirmed live at `https://secure.cardknox.com/<slug>`, and separately
+  configurable as "PaymentSITE"/"Sola Checkout" in their dashboard) for
+  tuition pay links and canteen deposits — used INSTEAD of the embedded
+  iFields widget for `payment_processor_key = 'cardknox'` specifically
+  (Banquest still uses the embedded Collect.js widget; it has no known
+  hosted-checkout equivalent). `cardknox-checkout-start` (no session, same
+  ownership checks as `payments-checkout`/`payments-canteen-checkout`)
+  mints a link to that page with the amount pre-filled (`?xAmount=`) and a
+  fresh reference passed as `?xInvoice=`; `cardknox-webhook` (public,
+  PIN-verified) is the actual source of truth — it receives Sola's async
+  notification once the parent completes payment on Sola's own page,
+  verifies the `ck-signature` header per Sola's documented algorithm
+  (`docs.solapayments.com/products/webhooks`), resolves `xInvoice` back to
+  a pending row in the new `cardknox_checkout_intents` table (migration
+  134), and credits the SAME downstream ledgers the synchronous iFields
+  path already writes to (canteen: `credit_canteen_balance_from_processor`;
+  tuition: `campistryMe.finance.payments`) — idempotent on `xRefNum`, same
+  as every other BYOP transaction id. The browser redirect (Sola's
+  "Redirect on success/error" dashboard fields) is cosmetic UX only, never
+  the thing that credits money — see the **per-camp webhook setup** section
+  below, this needs real configuration in each Cardknox-connected camp's
+  own Sola dashboard, not just Campistry's side.
+  **⚠️ NOT YET VERIFIED end-to-end against a live sandbox transaction** —
+  the `ck-signature` algorithm and payload shape are taken directly from
+  Sola's own docs (pasted in verbatim this session), but no real webhook
+  delivery has been received and verified yet. Run one real test payment
+  before trusting this for a real camp.
 
 ## What's deliberately NOT built yet (flagged, not silently skipped)
 
@@ -157,11 +185,37 @@ curl -X POST "https://<your-project>.supabase.co/functions/v1/admin-connect-proc
 
 (For Cardknox/Sola instead: `"processorKey": "cardknox"`,
 `"credentials": { "apiKey": "<the camp's private xKey>", "ifieldsKey":
-"<the camp's public iFields key>" }` — BOTH are needed: `apiKey` for the
-server-side charge/refund calls, `ifieldsKey` for the client-side card-entry
-widget (migration 133). If Banquest gave the camp their own branded gateway
-hostname rather than the shared NMI one, add it as `"gatewayUrl":
-"https://secure.example.com"` inside `credentials`.)
+"<the camp's public iFields key>", "checkoutSlug": "<the camp's
+secure.cardknox.com/ URL slug>", "webhookPin": "<a fresh 15+ character
+alphanumeric PIN you generate>" }` — `apiKey` for server-side charge/refund
+calls, `ifieldsKey` for the embedded card-entry widget (migration 133),
+`checkoutSlug` + `webhookPin` for the hosted-checkout flow (migration 134,
+see the **per-camp webhook setup** section below — `webhookPin` must be the
+EXACT same value you also paste into that camp's own Sola dashboard). If
+Banquest gave the camp their own branded gateway hostname rather than the
+shared NMI one, add it as `"gatewayUrl": "https://secure.example.com"`
+inside `credentials`.)
+
+### Per-camp webhook setup (Cardknox/Sola only — required for hosted checkout)
+
+Beyond the `admin-connect-processor` call above, each Cardknox-connected
+camp's OWN Sola dashboard needs three things configured by hand (their
+account, not Campistry's — walk the office through this, or do it together
+on a call):
+
+1. **Portal Settings → Gateway Settings → Webhook Settings** — set
+   **Postback URL** to:
+   `https://<your-project>.supabase.co/functions/v1/cardknox-webhook?campId=<the camp's id>`
+   and **PIN** to the exact same `webhookPin` value stored in `credentials`
+   above (15+ alphanumeric characters, no symbols — Sola's own rule).
+2. **Gateway Settings → Sola Checkout (or PaymentSITE)** — note the URL
+   slug shown (e.g. `secure.cardknox.com/campistrydev` → slug is
+   `campistrydev`) — that's the `checkoutSlug` value above.
+3. Same screen, **Redirect on success** / **Redirect on error** — set both
+   to `https://link.campistry.org/campistry_link_parent.html` (a single
+   static URL, not dynamic per-transaction — the actual crediting happens
+   via the webhook above regardless of what this redirect does; it only
+   brings the parent back into the app after they finish on Sola's page).
 
 The `SUPABASE_SERVICE_ROLE_KEY` is the same key already in **Supabase
 Dashboard → Settings → API** — the same one cron jobs use internally. It's
