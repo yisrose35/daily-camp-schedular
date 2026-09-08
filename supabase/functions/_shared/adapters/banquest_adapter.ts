@@ -118,11 +118,21 @@ export const banquestAdapter: ProcessorAdapter = {
     description: string,
   ): Promise<ChargeResult> {
     try {
+      // orderid must be unique PER CHARGE — same reasoning as the fix just
+      // applied to the Cardknox/Sola adapter's xInvoice: NMI (the gateway
+      // Banquest resells) supports account-level "duplicate transaction
+      // checking" keyed on card/vault + amount + orderid within a time
+      // window. Sending a fixed/absent orderid is harmless if that setting
+      // is off for a given camp's account, but would risk a false decline
+      // on two genuinely different same-amount charges (e.g. two autopay
+      // installments) if it's on — cheap to always send, so always send it.
+      const orderid = "CI-" + Date.now().toString(36) + Math.random().toString(36).slice(2, 6);
       const result = await postForm(`${gatewayBase(credentials)}/api/transact.php`, {
         security_key: credentials.securityKey,
         type: "sale",
         amount: (amountCents / 100).toFixed(2),
         customer_vault_id: customerRef,
+        orderid,
         orderdescription: description.slice(0, 255),
       });
       if (result.response !== "1") {
