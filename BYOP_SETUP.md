@@ -136,23 +136,35 @@ nothing changes unless a camp is explicitly walked through the setup below.
   mints a link to that page with the amount pre-filled (`?xAmount=`) and a
   fresh reference passed as `?xInvoice=`; `cardknox-webhook` (public,
   PIN-verified) is the actual source of truth — it receives Sola's async
-  notification once the parent completes payment on Sola's own page,
+  notification once the parent completes payment on Sola's own page and
   verifies the `ck-signature` header per Sola's documented algorithm
-  (`docs.solapayments.com/products/webhooks`), resolves `xInvoice` back to
-  a pending row in the new `cardknox_checkout_intents` table (migration
-  134), and credits the SAME downstream ledgers the synchronous iFields
-  path already writes to (canteen: `credit_canteen_balance_from_processor`;
-  tuition: `campistryMe.finance.payments`) — idempotent on `xRefNum`, same
-  as every other BYOP transaction id. The browser redirect (Sola's
-  "Redirect on success/error" dashboard fields) is cosmetic UX only, never
-  the thing that credits money — see the **per-camp webhook setup** section
-  below, this needs real configuration in each Cardknox-connected camp's
-  own Sola dashboard, not just Campistry's side.
-  **⚠️ NOT YET VERIFIED end-to-end against a live sandbox transaction** —
-  the `ck-signature` algorithm and payload shape are taken directly from
-  Sola's own docs (pasted in verbatim this session), but no real webhook
-  delivery has been received and verified yet. Run one real test payment
-  before trusting this for a real camp.
+  (`docs.solapayments.com/products/webhooks`).
+  **⚠️ Live-tested 2026-09-08, found a real gap**: `ck-signature`
+  verification works correctly (confirmed against a real payment), but
+  Sola's HOSTED CHECKOUT webhook does not echo `xInvoice` back at all — its
+  payload is a fixed small set of fields (`xAmount`/`xEnteredDate`/
+  `xMaskedCardNumber`/`xRefNum`/`xRequestAmount`/`xResponseResult`/
+  `xToken`), unlike what Sola's Direct API docs describe for a merchant
+  reference field. `cardknox-webhook` now falls back to matching the single
+  still-pending intent for that camp at the same dollar amount (within a
+  7-day lookback) when no `xInvoice` comes through — the only correlation
+  left, since Sola's hosted checkout doesn't carry anything else through.
+  Two pending intents at the same amount for the same camp is the one case
+  this can't resolve automatically; it's logged as ambiguous and left
+  pending for manual reconciliation rather than guessed at. Then credits
+  the SAME downstream ledgers the synchronous iFields path already writes
+  to (canteen: `credit_canteen_balance_from_processor`; tuition:
+  `campistryMe.finance.payments`) — idempotent on `xRefNum`, same as every
+  other BYOP transaction id. The browser redirect (Sola's "Redirect on
+  success/error" dashboard fields) is cosmetic UX only, never the thing
+  that credits money — see the **per-camp webhook setup** section below,
+  this needs real configuration in each Cardknox-connected camp's own Sola
+  dashboard, not just Campistry's side.
+  **⚠️ Verified signature + amount-fallback crediting path is live-tested;
+  NOT yet verified with two simultaneous same-amount pending intents for
+  one camp** (the ambiguous case) — that's a rare enough real-world
+  scenario that it wasn't worth manufacturing in this session, but worth
+  knowing about if it ever comes up.
 
 ## Edge Function JWT verification settings (the step that's easy to miss)
 

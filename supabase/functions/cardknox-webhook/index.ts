@@ -30,6 +30,20 @@
 // webhook with no matching intent (e.g. the office ran a charge directly
 // through the Sola portal) is expected and not an error; it's just ignored.
 //
+// CORRELATION (confirmed via live testing, 2026-09-08): the checkout URL
+// cardknox-checkout-start builds passes &xInvoice=<our reference>, but
+// Sola's HOSTED CHECKOUT webhook never echoes it back — its payload is a
+// fixed small set of fields (xAmount/xEnteredDate/xMaskedCardNumber/
+// xRefNum/xRequestAmount/xResponseResult/xToken) with no reference of any
+// kind, unlike what Sola's Direct API docs describe. get_cardknox_checkout_
+// intent-by-reference is still tried first (in case a future integration
+// path DOES carry it through), but the real path in production is the
+// amount-fallback below: match the single still-pending intent for this
+// camp (from ?campId=) with the same dollar amount, within a bounded
+// lookback window. Two pending intents at the same amount is the one case
+// this can't resolve — it's left alone rather than guessed at, since a
+// wrong guess means crediting the wrong family's payment.
+//
 // Response: always 200 unless the signature itself fails to verify — Sola
 // has no reason to retry a webhook we understood and (correctly) did
 // nothing with.
@@ -86,29 +100,58 @@ serve(async (req) => {
     }
 
     const fields = new URLSearchParams(rawBody);
-    const xInvoice = fields.get("xInvoice") || fields.get("xinvoice") || "";
+    // Mutable: the amount-fallback branch below fills this in from the
+    // matched intent's own reference when Sola's payload doesn't carry one.
+    let xInvoice = fields.get("xInvoice") || fields.get("xinvoice") || "";
     const xRefNum = fields.get("xRefNum") || fields.get("xrefnum") || "";
     const xResult = fields.get("xResponseResult") || fields.get("xresponseresult") || "";
     const xAmount = fields.get("xAmount") || fields.get("xamount") || "";
 
-    if (!xInvoice) {
-      // A real, legitimately-signed webhook from a transaction that didn't
-      // originate from cardknox-checkout-start (e.g. the office charged
-      // someone directly through the Sola portal) — nothing for us to do.
-      // TEMPORARY DIAGNOSTIC: dumping every field Sola actually sent — live
-      // testing found xInvoice missing even for a transaction that DID
-      // originate from cardknox-checkout-start (which passes &xInvoice= in
-      // the checkout URL), so something about Sola's hosted-checkout webhook
-      // payload isn't carrying it through the way their Direct API docs
-      // describe. This log line is how we find the real field name instead
-      // of guessing — remove once that's confirmed.
-      console.log(`[cardknox-webhook] No xInvoice on signed webhook for camp ${campId}, xRefNum=${xRefNum} — ignoring (not ours). Full payload:`, JSON.stringify(Object.fromEntries(fields.entries())));
-      return text("ok", 200);
+    type IntentMatch = { success: boolean; campId?: string; kind?: string; familyKey?: string; familyName?: string; camperName?: string; amountCents?: number; status?: string };
+    let intent: IntentMatch | null = null;
+
+    if (xInvoice) {
+      const { data } = await service.rpc("get_cardknox_checkout_intent", { p_reference: xInvoice });
+      if (data?.success) intent = data;
     }
 
-    const { data: intent } = await service.rpc("get_cardknox_checkout_intent", { p_reference: xInvoice });
+    if (!intent) {
+      // Sola's hosted-checkout webhook (confirmed via live testing,
+      // 2026-09-08) never echoes xInvoice back at all — its payload is a
+      // fixed small set of fields (xAmount/xEnteredDate/xMaskedCardNumber/
+      // xRefNum/xRequestAmount/xResponseResult/xToken), unlike what Sola's
+      // Direct API docs describe for a merchant reference. That leaves
+      // amount as the only correlation available, scoped to this camp (via
+      // ?campId= on the Postback URL, which Sola DOES preserve) within a
+      // bounded lookback window. Ambiguous (more than one pending intent at
+      // the same amount) is deliberately left alone rather than guessed —
+      // guessing wrong here means crediting the wrong family's payment.
+      const amountCents = Math.round(parseFloat(xAmount || "0") * 100);
+      if (amountCents > 0) {
+        const cutoff = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000).toISOString();
+        const { data: candidates } = await service.from("cardknox_checkout_intents")
+          .select("*")
+          .eq("camp_id", campId)
+          .eq("status", "pending")
+          .eq("amount_cents", amountCents)
+          .gte("created_at", cutoff);
+        if (candidates && candidates.length === 1) {
+          const row = candidates[0];
+          xInvoice = row.reference;
+          intent = {
+            success: true, campId: row.camp_id, kind: row.kind, familyKey: row.family_key,
+            familyName: row.family_name, camperName: row.camper_name, amountCents: row.amount_cents,
+            status: row.status,
+          };
+        } else if (candidates && candidates.length > 1) {
+          console.error(`[cardknox-webhook] Ambiguous amount match for camp ${campId}: ${candidates.length} pending intents at $${xAmount}, xRefNum=${xRefNum} — refusing to guess, needs manual reconciliation`);
+          return text("ok", 200);
+        }
+      }
+    }
+
     if (!intent?.success) {
-      console.log(`[cardknox-webhook] No intent found for reference ${xInvoice} (camp ${campId}) — ignoring`);
+      console.log(`[cardknox-webhook] No matching intent for camp ${campId}, xRefNum=${xRefNum}, amount=${xAmount} — ignoring (not ours). Full payload:`, JSON.stringify(Object.fromEntries(fields.entries())));
       return text("ok", 200);
     }
     if (intent.campId !== campId) {
