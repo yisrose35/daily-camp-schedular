@@ -149,6 +149,7 @@ serve(async (req) => {
     const xResult = fields.get("xResponseResult") || fields.get("xresponseresult") || "";
     const xAmount = fields.get("xAmount") || fields.get("xamount") || "";
     const xToken = fields.get("xToken") || fields.get("xtoken") || "";
+    const xMaskedCardNumber = fields.get("xMaskedCardNumber") || fields.get("xmaskedcardnumber") || "";
 
     type IntentMatch = { success: boolean; campId?: string; kind?: string; familyKey?: string; familyName?: string; camperName?: string; amountCents?: number; status?: string };
     let intent: IntentMatch | null = null;
@@ -254,6 +255,62 @@ serve(async (req) => {
       }
       await service.rpc("mark_cardknox_checkout_intent_status", { p_reference: xInvoice, p_status: "completed", p_xref_num: xRefNum || null });
       console.log(`[cardknox-webhook] Saved card for family ${intent.familyKey}, camp ${campId} (${xInvoice})`);
+      return text("ok", 200);
+    }
+
+    // Canteen auto-reload's card save (migration 136) — same cc:save/no-money
+    // shape as card_save above, but the token lands on the CAMPER's
+    // campistrySnacks.accounts[camperName].autoReload block instead of a
+    // family record, mirroring the field shape stripe-webhook's
+    // handleCanteenAutoReloadSetup already writes (cardOnFile/
+    // paymentMethodType/paymentMethodLabel/cardSavedDate) so
+    // canteen-auto-reload's cron and the parent-portal status display don't
+    // need to special-case which processor saved the card — only the
+    // presence of byopCustomerRef (Cardknox) vs stripeCustomerId (Stripe)
+    // tells the cron which charge path to use. Never touches
+    // enabled/threshold*/schedule* — that's the parent's own trigger config,
+    // set separately via set_canteen_auto_reload and merged into, not
+    // overwritten by, this block.
+    if (intent.kind === "canteen_autoreload_setup") {
+      if (!xToken) {
+        console.error(`[cardknox-webhook] canteen_autoreload_setup ${xInvoice} approved but carried no xToken — nothing to save`);
+        await service.rpc("mark_cardknox_checkout_intent_status", { p_reference: xInvoice, p_status: "failed", p_xref_num: xRefNum || null });
+        return text("ok", 200);
+      }
+      const vaulted = await vaultCardknoxToken(service, campId, xToken);
+      if (!vaulted) {
+        console.error(`[cardknox-webhook] canteen_autoreload_setup ${xInvoice}: could not vault token`);
+        return text("Vault failed", 500); // worth a retry from Sola's side
+      }
+      let savedCard = false;
+      for (let attempt = 0; attempt < 4 && !savedCard; attempt++) {
+        const cur = await service.from("camp_state_kv").select("value")
+          .eq("camp_id", campId).eq("key", "campistrySnacks").maybeSingle();
+        const snacks: Record<string, any> = (cur.data && cur.data.value && typeof cur.data.value === "object")
+          ? cur.data.value : { accounts: {}, transactions: [] };
+        if (!snacks.accounts || typeof snacks.accounts !== "object") snacks.accounts = {};
+        const camperName = intent.camperName as string;
+        const acct = snacks.accounts[camperName] || (snacks.accounts[camperName] = { balance: 0, dailyLimit: 10, spentToday: 0 });
+        const ar = acct.autoReload || (acct.autoReload = {});
+        ar.byopProcessor = "cardknox";
+        ar.byopCustomerRef = vaulted;
+        ar.cardOnFile = true;
+        ar.paymentMethodType = "card";
+        const last4 = xMaskedCardNumber.replace(/[^0-9]/g, "").slice(-4);
+        if (last4) ar.paymentMethodLabel = "Card ···· " + last4;
+        ar.cardSavedDate = new Date().toISOString();
+        const up = await service.from("camp_state_kv").upsert(
+          { camp_id: campId, key: "campistrySnacks", value: snacks, updated_at: new Date().toISOString() },
+          { onConflict: "camp_id,key" },
+        );
+        if (!up.error) savedCard = true;
+      }
+      if (!savedCard) {
+        console.error(`[cardknox-webhook] canteen_autoreload_setup ${xInvoice}: could not record token for camp ${campId}`);
+        return text("Record failed", 500);
+      }
+      await service.rpc("mark_cardknox_checkout_intent_status", { p_reference: xInvoice, p_status: "completed", p_xref_num: xRefNum || null });
+      console.log(`[cardknox-webhook] Saved auto-reload card for camper ${intent.camperName}, camp ${campId} (${xInvoice})`);
       return text("ok", 200);
     }
 

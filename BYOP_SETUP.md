@@ -217,12 +217,33 @@ family/camper, is the processor connected and verified, does the
 the request body, completely independent of whatever's in the
 Authorization header.
 
+## What's built, but only for Cardknox/Sola so far
+
+- **Autopay installments (`charge-due-installments`)** — a family's saved
+  card (`byopCustomerRef`, vaulted via `cardknox-webhook`'s card_save/
+  tuition-payment branches or `payments-save-method`) is charged with a
+  direct `cc:sale` gateway call, no webhook round trip needed since the
+  charge is synchronous. Live-tested end to end with a real $5 charge —
+  see `record_processor_transaction`/`me.finance.payments` for how it's
+  recorded. Banquest camps fall through to `skipped_no_processor` (stays
+  pending, retries next run) rather than erroring or guessing.
+- **Canteen auto-reload (`canteen-auto-reload`)** — same two-path shape as
+  every other canteen money-mover: a Stripe-saved card
+  (`autoReload.stripeCustomerId`) still goes through Stripe Checkout
+  (setup mode) + the async webhook credit; a Cardknox-saved card
+  (`autoReload.byopCustomerRef`, saved via `cardknox-checkout-start`'s
+  `canteen_autoreload_setup` kind — migration 136 — instead of
+  `stripe-canteen-autoreload-setup`) is charged directly and CREDITED
+  DIRECTLY by this function itself (`credit_canteen_balance_from_processor`),
+  since there's no webhook for a direct gateway charge to wait on. Both
+  "Add a card"/"Update card" (parent-initiated) and the threshold/schedule
+  cron trigger go through this — a Cardknox camp's parents were previously
+  silently routed to Stripe's setup page regardless of what the camp
+  actually connected, and the cron had no Cardknox branch at all. Fixed
+  together since neither half is useful without the other.
+
 ## What's deliberately NOT built yet (flagged, not silently skipped)
 
-- **Autopay installments (`charge-due-installments`)** for BYOP camps —
-  tuition charge/refund/pay-link, canteen deposits/refunds, and card setup
-  are all wired; a BYOP family's autopay schedule still has nowhere to
-  charge until this is built. Flagged explicitly, not silently broken.
 - **Accept Blue adapter** — the catalog/framework supports it the moment
   someone writes the adapter file; not built yet (Banquest and Cardknox/
   Sola were prioritized since those are what the actual at-risk camp uses).

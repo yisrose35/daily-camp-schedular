@@ -25,8 +25,12 @@
 // two functions — a money-moving action never proceeds off a client-supplied
 // campId/familyKey/camperName alone.
 //
-// Request:  { campId, kind: 'tuition_charge'|'canteen_deposit',
-//              familyKey?, familyName?, camperName?, amount, description? }
+// Request:  { campId, kind: 'tuition_charge'|'canteen_deposit'|'card_save'|
+//              'canteen_autoreload_setup', familyKey?, familyName?,
+//              camperName?, amount?, description? }
+//   - card_save / canteen_autoreload_setup carry no amount (Sola's cc:save,
+//     migration 136) — card_save saves a card for a FAMILY (tuition/
+//     autopay), canteen_autoreload_setup for a CAMPER (canteen auto-reload).
 // Response: { success: true, url } or { success: false, error }
 // =============================================================================
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
@@ -72,14 +76,19 @@ serve(async (req) => {
 
   try {
     const { campId, kind, familyKey, familyName, camperName, amount, description } = await req.json();
-    // card_save carries no amount — it's Sola's cc:save, which tokenizes a
-    // card without charging (migration 135). Everything else must have one.
-    const isCardSave = kind === "card_save";
+    // card_save and canteen_autoreload_setup carry no amount — both are
+    // Sola's cc:save, which tokenizes a card without charging (migration
+    // 136): card_save is keyed to a FAMILY (tuition/autopay),
+    // canteen_autoreload_setup to a CAMPER (canteen auto-reload's card lives
+    // on campistrySnacks.accounts[camperName].autoReload, not a family
+    // record). Everything else must carry a real amount.
+    const isCardSave = kind === "card_save" || kind === "canteen_autoreload_setup";
     if (!campId || !kind || (!amount && !isCardSave)) {
       return json({ success: false, error: "campId, kind, and amount are required" }, 400);
     }
-    if (kind !== "tuition_charge" && kind !== "canteen_deposit" && !isCardSave) {
-      return json({ success: false, error: "kind must be tuition_charge, canteen_deposit, or card_save" }, 400);
+    const VALID_KINDS = ["tuition_charge", "canteen_deposit", "card_save", "canteen_autoreload_setup"];
+    if (!VALID_KINDS.includes(kind)) {
+      return json({ success: false, error: "kind must be one of: " + VALID_KINDS.join(", ") }, 400);
     }
     const amountCents = isCardSave ? 0 : Math.round(Number(amount) * 100);
     if (!isCardSave && (!Number.isFinite(amountCents) || amountCents < 50)) {
@@ -88,13 +97,14 @@ serve(async (req) => {
 
     const service = createClient(SUPABASE_URL, SUPABASE_SERVICE_KEY);
 
-    if (kind === "tuition_charge" || isCardSave) {
+    if (kind === "tuition_charge" || kind === "card_save") {
       if (!familyKey) return json({ success: false, error: "familyKey is required" }, 400);
       if (!(await campOwnsFamily(service, campId, familyKey))) {
         return json({ success: false, error: "Family not found for this camp" }, 400);
       }
     } else {
-      if (!camperName) return json({ success: false, error: "camperName is required for a canteen deposit" }, 400);
+      // canteen_deposit or canteen_autoreload_setup — both per-camper.
+      if (!camperName) return json({ success: false, error: "camperName is required" }, 400);
       if (!(await canteenProgramEnabled(service, campId))) {
         return json({ success: false, error: "Canteen isn't available for this camp." }, 400);
       }
@@ -133,7 +143,8 @@ serve(async (req) => {
       p_family_name: familyName || null,
       p_camper_name: camperName || null,
       p_amount_cents: amountCents,
-      p_description: description || (isCardSave ? ("Save a card — " + (familyName || familyKey))
+      p_description: description || (kind === "card_save" ? ("Save a card — " + (familyName || familyKey))
+        : kind === "canteen_autoreload_setup" ? ("Save a card for auto-reload — " + camperName)
         : kind === "canteen_deposit" ? ("Canteen funds — " + camperName) : "Camp payment"),
     });
     if (intentErr || !intentResult?.success) {

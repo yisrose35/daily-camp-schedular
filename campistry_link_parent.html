@@ -2223,6 +2223,21 @@ function _saveAutoReloadConfig(c,cfg,promptCardIfMissing){
 }
 async function startCanteenAutoReloadSetup(){
     var c=_activeCanteenChild(); if(!c){toast('No canteen account yet');return;}
+    var status=_campPayStatusByCamp[c.campId];
+    var processorKey=(status&&status.processorKey)||'stripe';
+    // Cardknox camps save the card on Sola's own hosted cc:save page (same
+    // flow addFunds()/requestCardSetup() already use) instead of Stripe's
+    // setup-mode Checkout — canteen-auto-reload's cron only knows how to
+    // charge whichever processor actually holds the token, so this can't
+    // stay hardcoded to Stripe regardless of what the camp connected.
+    if(processorKey==='cardknox'){
+        try{
+            toast('Opening secure checkout…');
+            var ckRes=await _lkCallEdge('cardknox-checkout-start',{campId:c.campId,kind:'canteen_autoreload_setup',camperName:c.name,description:'Save a card for auto-reload — '+c.name});
+            _lkGoToCheckout(ckRes.url);
+        }catch(err){ console.error('[Parent] canteen auto-reload cardknox setup error:',err); toast('Could not start setup: '+(err&&err.message||'error')); }
+        return;
+    }
     try{
         toast('Opening secure Stripe page…');
         var s=_lkSupa(); if(!s.url) throw new Error('Payments are not set up for this camp yet.');

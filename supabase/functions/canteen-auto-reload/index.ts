@@ -5,32 +5,41 @@
 // CANTEEN_AUTORELOAD_SETUP.md) — every 30 minutes during camp hours is the
 // suggested cadence, since a low canteen balance should resolve same-day, not
 // wait for a once-a-day job. For every camp it scans
-// campistrySnacks.accounts for camper accounts that have:
-//   - autoReload.enabled === true
-//   - autoReload.cardOnFile + autoReload.stripeCustomerId (saved via
-//     stripe-canteen-autoreload-setup + stripe-webhook's
-//     handleCanteenAutoReloadSetup)
-// and, per account, charges AT MOST ONE reload per run, based on whichever
-// trigger is due:
+// campistrySnacks.accounts for camper accounts that have autoReload.enabled
+// === true and a saved card, then charges AT MOST ONE reload per run, based
+// on whichever trigger is due:
 //   - THRESHOLD: thresholdEnabled && balance < thresholdAmount
 //   - SCHEDULE:  scheduleEnabled && today matches scheduleFrequency/scheduleDay
 // both gated by `lastChargedDate !== today` so a camper is never charged
 // more than once per calendar day even if the cron fires every 30 minutes or
 // both triggers are due the same day.
 //
-// IMPORTANT: this function only CREATES the Stripe charge — it does NOT
-// credit the canteen balance itself. Each charge is tagged
-// metadata.source='campistry-canteen-deposit' (the same value a manual "Add
-// Funds" deposit uses), so the EXISTING stripe-webhook handleCanteenDeposit
-// handler credits the balance via credit_canteen_balance_from_stripe once
-// Stripe confirms payment_intent.succeeded — no new crediting RPC needed,
-// and no risk of this function and the webhook double-crediting the same
-// charge (this function only ever writes lastChargedDate/lastFailureDate/
-// consecutiveFailures, never `balance`).
+// TWO PROCESSOR PATHS, because the saved card can be either kind (migration
+// 136 added Cardknox/Sola card-save for auto-reload alongside the original
+// Stripe-only setup-mode Checkout):
+//   - Stripe (autoReload.stripeCustomerId, saved via
+//     stripe-canteen-autoreload-setup + stripe-webhook's
+//     handleCanteenAutoReloadSetup): this function only CREATES the
+//     PaymentIntent — it does NOT credit the balance itself. Each charge is
+//     tagged metadata.source='campistry-canteen-deposit' (the same value a
+//     manual "Add Funds" deposit uses), so the EXISTING stripe-webhook
+//     handleCanteenDeposit handler credits the balance via
+//     credit_canteen_balance_from_stripe once Stripe confirms
+//     payment_intent.succeeded.
+//   - Cardknox/Sola (autoReload.byopCustomerRef, saved via
+//     cardknox-checkout-start's canteen_autoreload_setup kind +
+//     cardknox-webhook): a direct gateway charge (cc:sale) is synchronous —
+//     its response IS the confirmation, there's no webhook round trip — so
+//     THIS function credits the balance itself, immediately, via
+//     credit_canteen_balance_from_processor (idempotent on the gateway's own
+//     xRefNum, same as every other Cardknox crediting path in this codebase).
+// Either way this function only ever writes lastChargedDate/lastFailureDate/
+// consecutiveFailures on the autoReload block itself — never double-credits,
+// and never touches the other processor's fields.
 //
-// A card that fails 3 times in a row (config.autoReload.consecutiveFailures
-// hits 3) has auto-reload auto-disabled (enabled:false) to avoid repeated
-// decline fees / spamming Stripe — the parent portal surfaces this as
+// A card that fails 3 times in a row (autoReload.consecutiveFailures hits 3)
+// has auto-reload auto-disabled (enabled:false) to avoid repeated decline
+// fees / spamming the gateway — the parent portal surfaces this as
 // "Auto-reload paused" and offers to update the card, which also resets the
 // failure count (migrations/109_canteen_auto_reload.sql, re-enable branch).
 //
@@ -76,6 +85,33 @@ async function stripeCharge(customerId: string, pmId: string | null, amount: num
   return resp.json();
 }
 
+// Inlined rather than imported — same "no shared module between Edge
+// Functions" convention charge-due-installments' own copy of this helper
+// documents; keep the two in sync by hand if the gateway call ever changes.
+const CARDKNOX_GATEWAY = "https://x1.cardknox.com/gateway";
+async function cardknoxCharge(apiKey: string, amountCents: number, cardToken: string) {
+  const resp = await fetch(CARDKNOX_GATEWAY, {
+    method: "POST",
+    headers: { "Content-Type": "application/x-www-form-urlencoded" },
+    body: new URLSearchParams({
+      xKey: apiKey,
+      xVersion: "4.5.9",
+      xSoftwareName: "Campistry",
+      xSoftwareVersion: "1.0",
+      xCommand: "cc:sale",
+      xAmount: (amountCents / 100).toFixed(2),
+      xToken: cardToken,
+      xInvoice: "AR-" + Date.now().toString(36) + Math.random().toString(36).slice(2, 6),
+    }).toString(),
+  });
+  const parsed: Record<string, string> = {};
+  new URLSearchParams(await resp.text()).forEach((v, k) => { parsed[k] = v; });
+  if (parsed.xResult !== "A") {
+    return { success: false, error: parsed.xError || "Declined", raw: parsed };
+  }
+  return { success: true, externalTransactionId: parsed.xRefNum, raw: parsed };
+}
+
 function todayISO() { return new Date().toISOString().split("T")[0]; }
 
 // Optional parent-set [startDate,stopDate] window (migration 135) — either
@@ -112,17 +148,27 @@ function dueAmount(ar: Record<string, any>, balance: number, today: string): { a
   return null;
 }
 
+function markFailure(ar: Record<string, any>, today: string, reason: string) {
+  ar.lastFailureDate = today;
+  ar.lastFailureReason = reason;
+  ar.consecutiveFailures = (Number(ar.consecutiveFailures) || 0) + 1;
+  if (ar.consecutiveFailures >= 3) ar.enabled = false; // stop retrying a dead/declining card
+}
+
+function markSuccess(ar: Record<string, any>, today: string, amount: number) {
+  ar.lastChargedDate = today;
+  ar.lastChargeAmount = amount;
+  ar.consecutiveFailures = 0;
+  delete ar.lastFailureDate;
+  delete ar.lastFailureReason;
+}
+
 serve(async (req) => {
   if (req.method === "OPTIONS") return new Response("ok", { headers: corsHeaders });
 
   if (!CRON_SECRET || req.headers.get("x-cron-secret") !== CRON_SECRET) {
     return new Response(JSON.stringify({ error: "unauthorized" }), {
       status: 401, headers: { ...corsHeaders, "Content-Type": "application/json" },
-    });
-  }
-  if (!STRIPE_SECRET) {
-    return new Response(JSON.stringify({ error: "Stripe not configured" }), {
-      status: 500, headers: { ...corsHeaders, "Content-Type": "application/json" },
     });
   }
 
@@ -141,12 +187,31 @@ serve(async (req) => {
 
   const { data: connectedCamps } = await supabase
     .from("camps")
-    .select("id, stripe_account_id, stripe_charges_enabled")
+    .select("id, stripe_account_id, stripe_charges_enabled, payment_processor_key")
     .not("stripe_account_id", "is", null)
     .eq("stripe_charges_enabled", true);
   const campDestinations = new Map<string, string>();
   for (const c of (connectedCamps || [])) {
     if (c.stripe_account_id) campDestinations.set(c.id, c.stripe_account_id);
+  }
+
+  // BYOP processor key per camp (only Cardknox/Sola is wired for auto-reload
+  // so far — same scoping decision charge-due-installments already made for
+  // autopay). Credentials fetched lazily and cached, one RPC call per camp
+  // regardless of how many campers on it have auto-reload enabled.
+  const { data: allCamps } = await supabase.from("camps").select("id, payment_processor_key");
+  const campProcessors = new Map<string, string>();
+  for (const c of (allCamps || [])) {
+    if (c.payment_processor_key && c.payment_processor_key !== "stripe") campProcessors.set(c.id, c.payment_processor_key);
+  }
+  const credCache = new Map<string, Record<string, string> | null>();
+  async function byopCredentials(campId: string): Promise<Record<string, string> | null> {
+    if (credCache.has(campId)) return credCache.get(campId) || null;
+    const { data: credResult } = await supabase.rpc("_admin_get_processor_credential", { p_camp_id: campId });
+    const creds = credResult?.success ? (credResult.credentials as Record<string, string>) : null;
+    if (!creds) console.warn(`[canteen-auto-reload] camp ${campId} is on a BYOP processor but has no verified credential — skipping its auto-reload`);
+    credCache.set(campId, creds);
+    return creds;
   }
 
   for (const row of (rows || [])) {
@@ -157,11 +222,66 @@ serve(async (req) => {
     for (const [camperName, acctRaw] of Object.entries(snacks.accounts)) {
       const acct = acctRaw as Record<string, any>;
       const ar = acct.autoReload;
-      if (!ar || !ar.enabled || !ar.cardOnFile || !ar.stripeCustomerId) continue;
+      if (!ar || !ar.enabled || !ar.cardOnFile) continue;
+      if (!ar.stripeCustomerId && !ar.byopCustomerRef) continue; // enabled but no card saved through either flow yet
 
       const due = dueAmount(ar, Number(acct.balance) || 0, today);
       if (!due || due.amount <= 0) continue;
 
+      if (ar.byopCustomerRef) {
+        // Cardknox/Sola path — a direct gateway charge, synchronous, so
+        // this function credits the balance itself instead of waiting on a
+        // webhook (there isn't one for cc:sale calls made directly like this).
+        const processorKey = campProcessors.get(String(row.camp_id));
+        if (processorKey !== "cardknox") {
+          // Card was saved on a processor auto-reload doesn't know how to
+          // charge yet (or the camp switched processors since saving it) —
+          // leave enabled, don't burn a failure on the family for something
+          // that isn't their fault. Flagged, not silently dropped.
+          details.push({ camp: row.camp_id, camper: camperName, amount: due.amount, kind: due.kind, result: "skipped_no_processor", processor: processorKey || "unknown" });
+          continue;
+        }
+        const creds = await byopCredentials(String(row.camp_id));
+        const apiKey = creds?.apiKey || null;
+        if (!apiKey) {
+          details.push({ camp: row.camp_id, camper: camperName, amount: due.amount, kind: due.kind, result: "skipped_no_processor", processor: "cardknox" });
+          continue;
+        }
+        const res = await cardknoxCharge(apiKey, Math.round(due.amount * 100), String(ar.byopCustomerRef));
+        if (!res.success || !res.externalTransactionId) {
+          markFailure(ar, today, res.error || "Declined");
+          failed++;
+          details.push({ camp: row.camp_id, camper: camperName, amount: due.amount, kind: due.kind, result: "failed", reason: res.error || "Declined" });
+          dirty = true;
+          continue;
+        }
+        const creditRes = await supabase.rpc("credit_canteen_balance_from_processor", {
+          p_camp_id: row.camp_id,
+          p_camper_name: camperName,
+          p_amount: due.amount,
+          p_processor_key: "cardknox",
+          p_external_transaction_id: res.externalTransactionId,
+        });
+        if (creditRes.error || !creditRes.data?.success) {
+          // Money was captured but the credit write failed — worth loud
+          // logging for office follow-up rather than silently losing the
+          // deposit; still record the charge as successful (it was) so
+          // lastChargedDate/consecutiveFailures reflect reality and the
+          // cron doesn't try to charge the card again today.
+          console.error(`[canteen-auto-reload] cardknox charge ${res.externalTransactionId} succeeded but credit failed for camp ${row.camp_id}/${camperName}:`, creditRes.error?.message || creditRes.data?.error);
+        }
+        markSuccess(ar, today, due.amount);
+        charged++;
+        details.push({ camp: row.camp_id, camper: camperName, amount: due.amount, kind: due.kind, result: "charged", processor: "cardknox" });
+        dirty = true;
+        continue;
+      }
+
+      // Stripe path (unchanged from before BYOP support was added).
+      if (!STRIPE_SECRET) {
+        details.push({ camp: row.camp_id, camper: camperName, amount: due.amount, kind: due.kind, result: "skipped_no_processor", processor: "stripe" });
+        continue;
+      }
       const pi = await stripeCharge(
         ar.stripeCustomerId, ar.stripePaymentMethodId || null, due.amount,
         `Canteen auto-reload (${due.kind}) — ${camperName}`,
@@ -171,21 +291,14 @@ serve(async (req) => {
 
       if (pi.error || pi.status === "requires_action") {
         const reason = pi.error?.message || "requires_authentication";
-        ar.lastFailureDate = today;
-        ar.lastFailureReason = reason;
-        ar.consecutiveFailures = (Number(ar.consecutiveFailures) || 0) + 1;
-        if (ar.consecutiveFailures >= 3) ar.enabled = false; // stop retrying a dead/declining card
+        markFailure(ar, today, reason);
         failed++;
         details.push({ camp: row.camp_id, camper: camperName, amount: due.amount, kind: due.kind, result: "failed", reason });
       } else if (pi.status === "succeeded" || pi.status === "processing") {
         // Balance crediting happens asynchronously via stripe-webhook's
         // handleCanteenDeposit once Stripe confirms payment_intent.succeeded
-        // — this function never touches `balance` itself.
-        ar.lastChargedDate = today;
-        ar.lastChargeAmount = due.amount;
-        ar.consecutiveFailures = 0;
-        delete ar.lastFailureDate;
-        delete ar.lastFailureReason;
+        // — this function never touches `balance` on the Stripe path.
+        markSuccess(ar, today, due.amount);
         charged++;
         details.push({ camp: row.camp_id, camper: camperName, amount: due.amount, kind: due.kind, result: "charged", stripeStatus: pi.status });
       } else {
