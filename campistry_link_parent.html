@@ -356,6 +356,9 @@
             <input type="number" id="canteenCustomAmt" min="1" max="500" step="1" placeholder="Custom amount" oninput="selCustomAmt(this)" style="width:130px;padding:8px 10px;border-radius:8px;border:1px solid rgba(255,255,255,.4);background:rgba(255,255,255,.15);color:inherit;font-size:.85rem;text-align:center;">
         </div>
         <div style="display:flex;gap:8px;justify-content:center;"><button class="btn btn-primary" id="canteenAddBtn" onclick="addFunds()">Add Funds</button><button class="btn btn-secondary" onclick="document.getElementById('autoReloadCard').scrollIntoView({behavior:'smooth',block:'start'})">Auto-Reload</button></div>
+        <div id="canteenChargeSavedRow" style="display:none;margin-top:10px;">
+            <button class="btn btn-secondary" type="button" style="width:100%;" onclick="_lkCanteenChargeSaved()">Charge <span id="canteenChargeSavedLabel"></span> instead</button>
+        </div>
     </div>
     <div class="lk-card"><div class="lk-card-head"><h2>Spending Controls</h2></div>
         <div class="lk-field"><label>Daily Spending Limit</label>
@@ -1003,6 +1006,20 @@ async function _lkCallEdge(fnName,body){
     var resp=await fetch(s.url+'/functions/v1/'+fnName,{method:'POST',headers:{'Content-Type':'application/json','Authorization':'Bearer '+(s.anonKey||''),'apikey':s.anonKey||''},body:JSON.stringify(body)});
     var data=await resp.json(); if(!resp.ok||!data.success) throw new Error(data.error||('Could not reach '+fnName)); return data;
 }
+// Real-session variant of _lkCallEdge — used only by charge-saved-card,
+// which moves real money with no hosted-checkout page in the loop at all,
+// so it needs the caller's actual JWT (same pattern _lkPhotoUrls already
+// uses for get-photo-urls), not just the anon key.
+async function _lkCallEdgeAuthed(fnName,body){
+    var s=_lkSupa(); if(!s.url) throw new Error('Payments are not set up for this camp yet.');
+    var db=window._parentDB; if(!db) throw new Error('Please sign in again.');
+    var sessRes=await db.auth.getSession();
+    var token=sessRes&&sessRes.data&&sessRes.data.session&&sessRes.data.session.access_token;
+    if(!token) throw new Error('Please sign in again to use your saved card.');
+    var resp=await fetch(s.url+'/functions/v1/'+fnName,{method:'POST',headers:{'Content-Type':'application/json','Authorization':'Bearer '+token,'apikey':s.anonKey||''},body:JSON.stringify(body)});
+    var data=await resp.json(); if(!resp.ok||!data.success) throw new Error(data.error||('Could not reach '+fnName)); return data;
+}
+var _lkChargeBusy=false; // guards both tuition + canteen "charge saved card" actions from a concurrent double-fire
 // Every Stripe Checkout redirect (billing, canteen, Link Photos, tips) goes
 // through here rather than a bare window.location.href assignment.
 // campistry_link_capacitor.js already routes payment-handoff <a href> CLICKS
@@ -1378,10 +1395,41 @@ function payNow(cid){
     _lkPayCid=cid;
     var sub=document.getElementById('lkPaySub'); if(sub) sub.textContent='Balance due: '+_lkMoney(bal);
     var inp=document.getElementById('lkPayAmountInput'); if(inp) inp.value=bal.toFixed(2);
+    // get_my_balance's chargeable/cardLabel (migration 137) — a saved card
+    // (from a prior payment or autopay setup) can be charged directly
+    // instead of always being sent through a brand-new checkout page.
+    var row=document.getElementById('lkPayChargeSavedRow'), lbl=document.getElementById('lkPayChargeSavedLabel');
+    if(row){
+        if(d.chargeable){ row.style.display=''; if(lbl) lbl.textContent=d.cardLabel||'your card on file'; }
+        else row.style.display='none';
+    }
     var ov=document.getElementById('lkPayOverlay'); if(ov) ov.classList.add('open');
     setTimeout(function(){ if(inp) inp.focus(); },100);
 }
 function lkPayClose(){ var ov=document.getElementById('lkPayOverlay'); if(ov) ov.classList.remove('open'); _lkPayCid=null; }
+function _lkPayChargeSaved(){
+    if(_lkChargeBusy) return;
+    var cid=_lkPayCid; var d=cid&&_balByCamp[cid]; if(!d||!d.chargeable){toast('No card on file');return;}
+    var inp=document.getElementById('lkPayAmountInput');
+    var amt=parseFloat(inp&&inp.value)||0; if(amt<0.5){toast('Enter at least $0.50');return;}
+    // No checkout page sits between this button and a real charge, so an
+    // explicit in-app confirm step is required — window.confirm() is NOT
+    // reliable here (see the comment above payNow's own definition on why
+    // this file stopped trusting native prompt()/confirm() in the
+    // Capacitor WebView). lkChargeConfirm is the money-specific sibling of
+    // lkConfirmDelete — same overlay shape, deliberately no opt-out.
+    lkChargeConfirm('Charge '+_lkMoney(amt)+' to '+(d.cardLabel||'your card on file')+' now?', async function(){
+        lkPayClose();
+        _lkChargeBusy=true;
+        try{
+            toast('Charging your card…');
+            var res=await _lkCallEdgeAuthed('charge-saved-card',{campId:cid,kind:'tuition_charge',amount:amt,idempotencyKey:'tui_'+cid+'_'+Date.now()+'_'+Math.random().toString(36).slice(2,8)});
+            toast('Charged '+_lkMoney(res.amount)+' — thank you!');
+            loadPayments();
+        }catch(err){ console.error('[Parent] charge saved card error:',err); toast('Could not charge your card: '+(err&&err.message||'error')); }
+        finally{ _lkChargeBusy=false; }
+    });
+}
 async function _lkPayConfirm(){
     var cid=_lkPayCid; var d=cid&&_balByCamp[cid]; if(!d){toast('Balance not loaded yet');return;}
     var inp=document.getElementById('lkPayAmountInput');
@@ -1990,6 +2038,48 @@ function _applyCanteenStripeGate(connected){
     btn.style.opacity=connected?'':'0.5';
 }
 
+// "Charge card on file" for canteen — same family-level chargeable/cardLabel
+// data get_my_balance already returns for tuition (_balByCamp[campId], see
+// payNow()'s identical use of it), since a family's saved card is shared
+// across tuition and canteen. _balByCamp is populated by loadPayments()'s
+// pre-warm call at boot, but a parent can land on Canteen before that
+// resolves — this lazily fetches it itself rather than leaving the row
+// stuck hidden, mirroring _getCampProcessorInfo's on-demand-fetch shape.
+function _applyCanteenChargeSavedGate(c){
+    var d=_balByCamp[c.campId];
+    if(d!==undefined){ _renderCanteenChargeSavedRow(d); return; }
+    var db=window._parentDB; if(!db) return;
+    var call=window._pRpc?window._pRpc('get_my_balance',{},c.campId):db.rpc('get_my_balance',{p_camp_id:c.campId});
+    Promise.resolve(call).then(function(res){
+        var dd=(res&&res.data)?res.data:null;
+        if(dd&&dd.success) _balByCamp[c.campId]=dd;
+        var active=_activeCanteenChild();
+        if(active&&active.campId===c.campId) _renderCanteenChargeSavedRow(_balByCamp[c.campId]);
+    }).catch(function(){});
+}
+function _renderCanteenChargeSavedRow(d){
+    var row=document.getElementById('canteenChargeSavedRow'), lbl=document.getElementById('canteenChargeSavedLabel');
+    if(!row) return;
+    if(d&&d.chargeable){ row.style.display=''; if(lbl) lbl.textContent=d.cardLabel||'your card on file'; }
+    else row.style.display='none';
+}
+function _lkCanteenChargeSaved(){
+    if(_lkChargeBusy) return;
+    var c=_activeCanteenChild(); if(!c){toast('No canteen account yet');return;}
+    var d=_balByCamp[c.campId]; if(!d||!d.chargeable){toast('No card on file');return;}
+    var amt=_selAmt||25; if(!(amt>0.5)){toast('Enter at least $0.50');return;}
+    lkChargeConfirm('Charge '+_lkMoney(amt)+' to '+(d.cardLabel||'your card on file')+" for "+c.name.split(' ')[0]+"'s canteen account now?", async function(){
+        _lkChargeBusy=true;
+        try{
+            toast('Charging your card…');
+            var res=await _lkCallEdgeAuthed('charge-saved-card',{campId:c.campId,kind:'canteen_deposit',camperName:c.name,amount:amt,idempotencyKey:'can_'+c.campId+'_'+c.id+'_'+Date.now()+'_'+Math.random().toString(36).slice(2,8)});
+            toast('Charged '+_lkMoney(res.amount)+' — thank you!');
+            _syncCanteenFromCloud(children, c.campId);
+        }catch(err){ console.error('[Parent] charge saved card (canteen) error:',err); toast('Could not charge your card: '+(err&&err.message||'error')); }
+        finally{ _lkChargeBusy=false; }
+    });
+}
+
 function saveSpendingControls(){
     var c=_activeCanteenChild();if(!c){toast('No canteen account yet');return;}
     var lim=parseFloat((document.getElementById('limRange')||{}).value||'5');
@@ -2390,6 +2480,7 @@ function switchCanteen(id){
     var cn=document.getElementById('canteenChildName'); if(cn) cn.textContent=c.name;
     var ab=document.getElementById('canteenAddBtn'); if(ab && !ab.disabled) ab.textContent='Add Funds for '+c.name.split(' ')[0];
     _checkCanteenStripeStatus(c.campId);
+    _applyCanteenChargeSavedGate(c);
     var walletCard=document.querySelector('.canteen-bal');if(walletCard)walletCard.setAttribute('data-accent',childAccent(id));
     // Sync spending-control sliders with real Snacks values
     var lim=c.dailyLimit!=null?c.dailyLimit:5, credit=c.creditLimit||0, floor=c.balanceFloor||0;
@@ -3790,6 +3881,29 @@ function lkConfirmClose(){ var ov=document.getElementById('lkConfirmOverlay'); i
         });
         if(ov)ov.addEventListener('click',function(e){ if(e.target===ov) lkConfirmClose(); });
         document.addEventListener('keydown',function(e){ if(e.key==='Escape') lkConfirmClose(); });
+    }
+    if(document.readyState==='loading') document.addEventListener('DOMContentLoaded',wire); else wire();
+})();
+
+// Money-specific sibling of lkConfirmDelete above — same in-app-overlay
+// shape (native confirm() isn't reliable in the Capacitor WebView, see the
+// comment above payNow()), but deliberately NO "don't ask again" opt-out:
+// a real-money action with no checkout page in front of it should never be
+// skippable just because the user once turned off delete-confirmations for
+// something unrelated.
+var _lkChargeConfirmCb=null;
+function lkChargeConfirm(message,onYes){
+    var m=document.getElementById('lkChargeConfirmMsg'); if(m)m.textContent=message||'';
+    _lkChargeConfirmCb=onYes;
+    var ov=document.getElementById('lkChargeConfirmOverlay'); if(ov)ov.classList.add('open');
+}
+function lkChargeConfirmClose(){ var ov=document.getElementById('lkChargeConfirmOverlay'); if(ov)ov.classList.remove('open'); _lkChargeConfirmCb=null; }
+(function _wireChargeConfirm(){
+    function wire(){
+        var yes=document.getElementById('lkChargeConfirmYes');
+        var ov=document.getElementById('lkChargeConfirmOverlay');
+        if(yes)yes.addEventListener('click',function(){ var cb=_lkChargeConfirmCb; lkChargeConfirmClose(); if(cb)cb(); });
+        if(ov)ov.addEventListener('click',function(e){ if(e.target===ov) lkChargeConfirmClose(); });
     }
     if(document.readyState==='loading') document.addEventListener('DOMContentLoaded',wire); else wire();
 })();
@@ -5878,6 +5992,19 @@ if (window.pdfjsLib) { window.pdfjsLib.GlobalWorkerOptions.workerSrc = 'pdfjs-di
     </div>
 </div>
 
+<!-- Money-specific confirm — see lkChargeConfirm() for why this is separate
+     from lkConfirmOverlay above (no "don't ask again" for a real charge). -->
+<div class="lk-confirm-overlay" id="lkChargeConfirmOverlay">
+    <div class="lk-confirm-card">
+        <h3>Charge your card?</h3>
+        <p id="lkChargeConfirmMsg"></p>
+        <div class="lk-confirm-foot">
+            <button class="btn btn-ghost" type="button" onclick="lkChargeConfirmClose()">Cancel</button>
+            <button class="btn btn-primary" type="button" id="lkChargeConfirmYes">Charge</button>
+        </div>
+    </div>
+</div>
+
 <!-- In-app "how much would you like to pay" (replaces the browser prompt() popup) -->
 <div class="lk-confirm-overlay" id="lkPayOverlay">
     <div class="lk-confirm-card">
@@ -5889,6 +6016,9 @@ if (window.pdfjsLib) { window.pdfjsLib.GlobalWorkerOptions.workerSrc = 'pdfjs-di
                 <span style="position:absolute;left:14px;top:50%;transform:translateY(-50%);color:var(--slate-500);font-weight:600;">$</span>
                 <input type="number" id="lkPayAmountInput" class="lk-input" style="padding-left:26px;" step="0.01" min="0.5" inputmode="decimal" onkeydown="if(event.key==='Enter')_lkPayConfirm()">
             </div>
+        </div>
+        <div id="lkPayChargeSavedRow" style="display:none;margin-bottom:14px;">
+            <button class="btn btn-secondary" type="button" style="width:100%;" onclick="_lkPayChargeSaved()">Charge <span id="lkPayChargeSavedLabel"></span> instead</button>
         </div>
         <div class="lk-confirm-foot">
             <button class="btn btn-ghost" type="button" onclick="lkPayClose()">Cancel</button>
