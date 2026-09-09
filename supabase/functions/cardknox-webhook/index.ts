@@ -71,6 +71,48 @@ function verifySignature(rawBody: string, pin: string, signature: string): boole
   return computed.toLowerCase() === signature.toLowerCase().trim();
 }
 
+// Turns the xToken Sola returns on a hosted-checkout transaction into a
+// long-lived vault token we can charge later (autopay installments, via
+// charge-due-installments). Uses cc:save for the same reason
+// cardknox_adapter.saveMethod() does: a transaction-scoped token isn't
+// guaranteed to outlive the checkout it came from, and a card-on-file that
+// silently stops working months later is worse than not storing one.
+// Best-effort by design — a failure here must never fail the webhook or
+// block crediting money that was genuinely collected.
+async function vaultCardknoxToken(
+  service: ReturnType<typeof createClient>,
+  campId: string,
+  rawToken: string,
+): Promise<string | null> {
+  try {
+    const { data: credResult } = await service.rpc("_admin_get_processor_credential", { p_camp_id: campId });
+    const apiKey = credResult?.success ? credResult.credentials?.apiKey : null;
+    if (!apiKey) return null;
+    const resp = await fetch("https://x1.cardknox.com/gateway", {
+      method: "POST",
+      headers: { "Content-Type": "application/x-www-form-urlencoded" },
+      body: new URLSearchParams({
+        xKey: apiKey,
+        xVersion: "4.5.9",
+        xSoftwareName: "Campistry",
+        xSoftwareVersion: "1.0",
+        xCommand: "cc:save",
+        xToken: rawToken,
+      }).toString(),
+    });
+    const parsed: Record<string, string> = {};
+    new URLSearchParams(await resp.text()).forEach((v, k) => { parsed[k] = v; });
+    if (parsed.xResult !== "A" || !parsed.xToken) {
+      console.warn(`[cardknox-webhook] Could not vault card token for camp ${campId}: ${parsed.xError || parsed.xResult || "unknown"} — autopay won't be available for this family until a card is saved another way`);
+      return null;
+    }
+    return parsed.xToken;
+  } catch (err) {
+    console.warn(`[cardknox-webhook] Vaulting card token threw for camp ${campId}: ${(err as Error).message}`);
+    return null;
+  }
+}
+
 serve(async (req) => {
   if (req.method !== "POST") return text("Method not allowed", 405);
 
@@ -106,6 +148,7 @@ serve(async (req) => {
     const xRefNum = fields.get("xRefNum") || fields.get("xrefnum") || "";
     const xResult = fields.get("xResponseResult") || fields.get("xresponseresult") || "";
     const xAmount = fields.get("xAmount") || fields.get("xamount") || "";
+    const xToken = fields.get("xToken") || fields.get("xtoken") || "";
 
     type IntentMatch = { success: boolean; campId?: string; kind?: string; familyKey?: string; familyName?: string; camperName?: string; amountCents?: number; status?: string };
     let intent: IntentMatch | null = null;
@@ -215,6 +258,18 @@ serve(async (req) => {
 
         f.byopProcessor = "cardknox";
         f.cardOnFile = true;
+        // Sola's webhook hands back an xToken for the card that was just
+        // used (confirmed live in a real payload). Vaulting it as this
+        // family's byopCustomerRef is what lets charge-due-installments
+        // actually charge an autopay plan later — without it, a family who
+        // paid through hosted checkout has cardOnFile:true but nothing
+        // chargeable behind it, and their payment plan silently never runs.
+        // Only set on the FIRST capture: never overwrite a token the office
+        // saved deliberately through campistry_card_setup.html.
+        if (xToken && !f.byopCustomerRef) {
+          const vaulted = await vaultCardknoxToken(service, campId, xToken);
+          if (vaulted) f.byopCustomerRef = vaulted;
+        }
 
         if (!me.finance) me.finance = {};
         if (!Array.isArray(me.finance.payments)) me.finance.payments = [];

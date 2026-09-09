@@ -7,11 +7,21 @@
 //     a family can have MULTIPLE plans, e.g. one per enrolled camper; see
 //     migrations/116_multi_payment_plans.sql. A pre-116 family with only the
 //     legacy singular f.plan is read the same way, one-plan-in-a-list.)
-//   - a saved card                              (f.cardOnFile + f.stripeCustomerId)
+//   - a saved card — either Stripe (f.cardOnFile + f.stripeCustomerId) or a
+//     BYOP processor's vaulted token (f.cardOnFile + f.byopCustomerRef; see
+//     BYOP_SETUP.md and _shared/adapters/*)
 //   - at least one installment due today/overdue (status 'pending', dueDate<=today)
-// and charges each due installment off-session via Stripe, marks it paid, and
-// appends a payment to finance.payments so it shows up in Billing. A failed
-// charge marks that installment 'failed' and moves on (office can retry).
+// and charges each due installment off-session — via Stripe for a Stripe camp,
+// or via that camp's own processor adapter for a BYOP camp (Cardknox/Sola,
+// Banquest) — marks it paid, and appends a payment to finance.payments so it
+// shows up in Billing. A failed charge marks that installment 'failed' and
+// moves on (office can retry).
+//
+// Which path a camp takes is decided ONLY by camps.payment_processor_key: a
+// camp on 'stripe' (the default, every existing camp) behaves exactly as it
+// always has. This is what closes the gap BYOP_SETUP.md flagged — "a BYOP
+// family's autopay schedule still has nowhere to charge" — so a payment plan
+// built by a parent or the office now actually charges on a Cardknox camp too.
 //
 // Auth: requires header  x-cron-secret: <INSTALLMENT_CRON_SECRET>  so only the
 // scheduler can trigger it.
@@ -27,6 +37,7 @@
 // =============================================================================
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
+import { getAdapter } from "../_shared/processor_adapter.ts";
 
 const STRIPE_SECRET = Deno.env.get("STRIPE_SECRET_KEY");
 const STRIPE_API = "https://api.stripe.com/v1";
@@ -162,6 +173,31 @@ serve(async (req) => {
     if (c.stripe_account_id) campDestinations.set(c.id, c.stripe_account_id);
   }
 
+  // Which camps are on a non-Stripe processor. Fetched once up front (same
+  // reasoning as campDestinations above — this loop can iterate thousands of
+  // installments), but the CREDENTIALS themselves are pulled lazily below,
+  // only for a camp that actually has something due: they're Vault-backed
+  // secrets, so there's no reason to decrypt every BYOP camp's key on a run
+  // where most camps have nothing to charge.
+  const { data: byopCamps } = await supabase
+    .from("camps")
+    .select("id, payment_processor_key")
+    .not("payment_processor_key", "is", null)
+    .neq("payment_processor_key", "stripe");
+  const campProcessors = new Map<string, string>();
+  for (const c of (byopCamps || [])) {
+    if (c.payment_processor_key) campProcessors.set(c.id, c.payment_processor_key);
+  }
+  const credCache = new Map<string, Record<string, string> | null>();
+  async function byopCredentials(campId: string): Promise<Record<string, string> | null> {
+    if (credCache.has(campId)) return credCache.get(campId) || null;
+    const { data: credResult } = await supabase.rpc("_admin_get_processor_credential", { p_camp_id: campId });
+    const creds = credResult?.success ? (credResult.credentials as Record<string, string>) : null;
+    if (!creds) console.warn(`[autopay] camp ${campId} is on a BYOP processor but has no verified credential — skipping its autopay`);
+    credCache.set(campId, creds);
+    return creds;
+  }
+
   for (const row of (rows || [])) {
     const me = (row.value && typeof row.value === "object") ? row.value as Record<string, any> : null;
     if (!me || !me.families) continue;
@@ -169,9 +205,14 @@ serve(async (req) => {
     if (!Array.isArray(me.finance.payments)) me.finance.payments = [];
     let dirty = false;
 
+    // A BYOP camp charges its families' vaulted processor tokens instead of
+    // Stripe customers — same plan/installment data, different rail.
+    const processorKey = campProcessors.get(String(row.camp_id)) || null;
+
     for (const [famKey, fRaw] of Object.entries(me.families)) {
       const f = fRaw as Record<string, any>;
-      if (!f.cardOnFile || !f.stripeCustomerId) continue;
+      if (!f.cardOnFile) continue;
+      if (processorKey ? !f.byopCustomerRef : !f.stripeCustomerId) continue;
       // A family can have MULTIPLE plans (migration 116) — normalize the
       // legacy singular f.plan into a one-item list so a pre-116 family
       // charges exactly as it always did.
@@ -210,6 +251,65 @@ serve(async (req) => {
           // original installment amount once the real balance is lower.
           const amount = Math.min(scheduledAmount, remainingBalance);
           const camperName = (Array.isArray(f.camperIds) && f.camperIds[0]) ? f.camperIds[0] : (f.name || "");
+
+          // ── BYOP camp: charge the family's vaulted processor token ──────
+          // Everything above this point (which installments are due, the
+          // paid-ahead waiver, the balance cap) is processor-agnostic and
+          // already ran — only the actual charge call and how the result is
+          // recorded differ. Kept as its own branch that returns early so
+          // the Stripe path below stays byte-for-byte what it always was.
+          if (processorKey) {
+            const adapter = getAdapter(processorKey);
+            const creds = adapter ? await byopCredentials(String(row.camp_id)) : null;
+            if (!adapter || !creds) {
+              // Not a decline and not the family's fault — leave the
+              // installment 'pending' so it retries on the next run once the
+              // camp's processor is connected properly, rather than burning
+              // it as 'failed' and making the office re-create it by hand.
+              details.push({ camp: row.camp_id, family: f.name, amount, result: "skipped_no_processor" });
+              continue;
+            }
+            const res = await adapter.charge(
+              creds, Math.round(amount * 100), String(f.byopCustomerRef),
+              `Autopay installment — ${f.name || famKey}`,
+            );
+            if (!res.success || !res.externalTransactionId) {
+              inst.status = "failed";
+              inst.failReason = res.error || "Declined";
+              failed++;
+              details.push({ camp: row.camp_id, family: f.name, amount, result: "failed", reason: inst.failReason });
+            } else {
+              inst.status = "paid";
+              inst.paidDate = today;
+              inst.byopTransactionId = res.externalTransactionId;
+              if (amount < scheduledAmount) inst.amount = amount; // reflect what was actually charged
+              // Same payment shape payments-charge/cardknox-webhook already
+              // write, incl. byopTransactionId — that's what makes Billing's
+              // existing "Direct Refund" action work on an autopay charge too.
+              me.finance.payments.push({
+                id: "auto_byop_" + res.externalTransactionId, family: camperName, familyKey: famKey,
+                amount: amount, date: today, method: "Autopay (card)",
+                reference: res.externalTransactionId, notes: "Autopay installment",
+                byopTransactionId: res.externalTransactionId, byopProcessor: processorKey,
+                status: "succeeded", timestamp: Date.now(),
+              });
+              await supabase.rpc("record_processor_transaction", {
+                p_camp_id: row.camp_id,
+                p_processor_key: processorKey,
+                p_external_transaction_id: res.externalTransactionId,
+                p_kind: "charge",
+                p_amount_cents: Math.round(amount * 100),
+                p_status: res.status || "unknown",
+                p_raw_response: res.raw ? JSON.parse(JSON.stringify(res.raw)) : null,
+              });
+              charged++;
+              remainingBalance -= amount;
+              details.push({ camp: row.camp_id, family: f.name, amount, result: "charged" });
+            }
+            dirty = true;
+            continue;
+          }
+
           const pi = await stripeCharge(
             f.stripeCustomerId, f.stripePaymentMethodId || null, amount,
             `Autopay installment — ${f.name || famKey}`,
