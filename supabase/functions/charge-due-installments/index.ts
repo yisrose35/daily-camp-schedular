@@ -37,7 +37,6 @@
 // =============================================================================
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
-import { getAdapter } from "../_shared/processor_adapter.ts";
 
 const STRIPE_SECRET = Deno.env.get("STRIPE_SECRET_KEY");
 const STRIPE_API = "https://api.stripe.com/v1";
@@ -72,6 +71,41 @@ async function stripeCharge(customerId: string, pmId: string | null, amount: num
     body: new URLSearchParams(params).toString(),
   });
   return resp.json();
+}
+
+// Cardknox/Sola charge against a vaulted card token, inlined rather than
+// imported from _shared/adapters/cardknox_adapter.ts on purpose: this project
+// deploys edge functions by pasting ONE file into the Supabase Dashboard (no
+// CLI — see CLAUDE.md), so a `../_shared/` relative import fails to bundle at
+// deploy time. Same reasoning, and the same small-duplication-over-import
+// convention, cardknox-webhook already follows for its own gateway call.
+//
+// Keep in sync with cardknox_adapter.charge() — including the unique
+// per-charge xInvoice, which is load-bearing: Sola blocks a transaction whose
+// Key+Card+Amount+Invoice match another within 10 minutes, which is exactly
+// what two same-amount installments charged back to back would look like.
+const CARDKNOX_GATEWAY = "https://x1.cardknox.com/gateway";
+async function cardknoxCharge(apiKey: string, amountCents: number, cardToken: string) {
+  const resp = await fetch(CARDKNOX_GATEWAY, {
+    method: "POST",
+    headers: { "Content-Type": "application/x-www-form-urlencoded" },
+    body: new URLSearchParams({
+      xKey: apiKey,
+      xVersion: "4.5.9",
+      xSoftwareName: "Campistry",
+      xSoftwareVersion: "1.0",
+      xCommand: "cc:sale",
+      xAmount: (amountCents / 100).toFixed(2),
+      xToken: cardToken,
+      xInvoice: "CI-" + Date.now().toString(36) + Math.random().toString(36).slice(2, 6),
+    }).toString(),
+  });
+  const parsed: Record<string, string> = {};
+  new URLSearchParams(await resp.text()).forEach((v, k) => { parsed[k] = v; });
+  if (parsed.xResult !== "A") {
+    return { success: false, error: parsed.xError || "Declined", status: parsed.xStatus, raw: parsed };
+  }
+  return { success: true, externalTransactionId: parsed.xRefNum, status: parsed.xStatus, raw: parsed };
 }
 
 function todayISO() { return new Date().toISOString().split("T")[0]; }
@@ -259,20 +293,21 @@ serve(async (req) => {
           // recorded differ. Kept as its own branch that returns early so
           // the Stripe path below stays byte-for-byte what it always was.
           if (processorKey) {
-            const adapter = getAdapter(processorKey);
-            const creds = adapter ? await byopCredentials(String(row.camp_id)) : null;
-            if (!adapter || !creds) {
+            // Only Cardknox/Sola is wired for autopay so far. Banquest camps
+            // fall through to the same "leave it pending" path below rather
+            // than being silently charged wrong or silently skipped forever —
+            // flagged in BYOP_SETUP.md, not quietly dropped.
+            const creds = processorKey === "cardknox" ? await byopCredentials(String(row.camp_id)) : null;
+            const apiKey = creds?.apiKey || null;
+            if (!apiKey) {
               // Not a decline and not the family's fault — leave the
               // installment 'pending' so it retries on the next run once the
               // camp's processor is connected properly, rather than burning
               // it as 'failed' and making the office re-create it by hand.
-              details.push({ camp: row.camp_id, family: f.name, amount, result: "skipped_no_processor" });
+              details.push({ camp: row.camp_id, family: f.name, amount, result: "skipped_no_processor", processor: processorKey });
               continue;
             }
-            const res = await adapter.charge(
-              creds, Math.round(amount * 100), String(f.byopCustomerRef),
-              `Autopay installment — ${f.name || famKey}`,
-            );
+            const res = await cardknoxCharge(apiKey, Math.round(amount * 100), String(f.byopCustomerRef));
             if (!res.success || !res.externalTransactionId) {
               inst.status = "failed";
               inst.failReason = res.error || "Declined";
