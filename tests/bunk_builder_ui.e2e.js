@@ -6,11 +6,12 @@
 // loadGlobalSettings(), not through in-memory state), and that the completion
 // report renders what the office needs to see.
 //
-//   node tests/bunk_builder_ui.e2e.js          # exits 0 on pass
+//   npm run test:e2e                           # exits 0 on pass
 //
-// Playwright is not a dependency of this repo (the app has no build step and no
-// runtime deps). Install it only when you want to run this file:
-//   npm i -D playwright && npx playwright install chromium
+// Playwright is a devDependency (test tooling only — the app itself still has no
+// build step and no runtime deps). A fresh clone needs the browser binary too:
+//   npm i && npx playwright install chromium
+// Without it this file SKIPS with exit 0 rather than failing the suite.
 
 const http = require('node:http');
 const fs = require('node:fs');
@@ -24,7 +25,7 @@ try {
   ({ chromium } = require('playwright'));
 } catch (e) {
   console.log('SKIP — playwright is not installed.');
-  console.log('      npm i -D playwright && npx playwright install chromium');
+  console.log('      npm i && npx playwright install chromium');
   process.exit(0);
 }
 
@@ -124,7 +125,7 @@ function check(label, cond, detail) {
       null, { timeout: 20000 });
 
     // Land on the Bunk Builder and confirm the pool starts full.
-    await page.evaluate(() => window.CampistryMe.render('bunkbuilder'));
+    await page.evaluate(() => window.CampistryMe.nav('bunkbuilder'));
     await page.waitForSelector('.bb-pool-hd h3', { timeout: 10000 });
     const poolBefore = await page.textContent('.bb-pool-hd h3');
     check('pool starts with everyone unassigned', /\(42\)/.test(poolBefore), poolBefore.trim());
@@ -147,12 +148,15 @@ function check(label, cond, detail) {
     check('report names the request it could not match',
       /Yankel Nobody/.test(reportText), 'unmatched-request section');
 
-    await page.click('#dynModal .me-modal-x, #dynModal button:has-text("Close")').catch(() => {});
     await page.evaluate(() => window.CampistryMe.closeModal('dynModal'));
 
-    // Assert against what was SAVED, through the app's own loader.
+    // Assert against what was SAVED, through the app's own loader — NOT by
+    // reading campGlobalSettings_v1 directly. save() runs the state through
+    // CampistrySections.preserveOnSave(), which for a session with no signed-in
+    // user scrubs app1.camperRoster out of the raw localStorage copy entirely.
+    // loadGlobalSettings() is the IDB-backed cache the app itself reads back.
     const saved = await page.evaluate(() => {
-      const g = JSON.parse(localStorage.getItem('campGlobalSettings_v1') || '{}');
+      const g = window.loadGlobalSettings();
       const r = (g.app1 && g.app1.camperRoster) || {};
       const sizes = {};
       Object.keys(r).forEach((n) => { if (r[n].bunk) sizes[r[n].bunk] = (sizes[r[n].bunk] || 0) + 1; });
@@ -184,7 +188,7 @@ function check(label, cond, detail) {
     check('no bunk is under the minimum of 6', sizes.every((v) => v >= 6), JSON.stringify(saved.sizes));
 
     // The board reflects the saved state, and J3 reads as full.
-    await page.evaluate(() => window.CampistryMe.render('bunkbuilder'));
+    await page.evaluate(() => window.CampistryMe.nav('bunkbuilder'));
     const poolAfter = await page.textContent('.bb-pool-hd h3');
     check('pool is empty afterwards', /\(0\)/.test(poolAfter), poolAfter.trim());
     const capAfter = await page.evaluate(() => {

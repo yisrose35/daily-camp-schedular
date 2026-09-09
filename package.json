@@ -4,6 +4,10 @@
   "private": true,
   "description": "Browser-based camp scheduler (no build step).",
   "scripts": {
-    "test": "node --test tests/"
+    "test": "node --test tests/",
+    "test:e2e": "node tests/bunk_builder_ui.e2e.js"
+  },
+  "devDependencies": {
+    "playwright": "^1.63.0"
   }
 }
