@@ -4278,7 +4278,13 @@ function renderBB(){
             var dispCount=(mCt!=null)?mCt:ids.length;
             var staff=bunkStaff[bk.name]||[];
             h+='<div class="bb-bunk" ondragover="event.preventDefault();this.classList.add(\'dragover\')" ondragleave="this.classList.remove(\'dragover\')" ondrop="CampistryMe.bbDrop(\''+je(bk.name)+'\',event);this.classList.remove(\'dragover\')">';
-            h+='<div class="bb-bunk-hd"><span class="bb-bunk-nm">'+esc(bk.name)+'</span><span class="bb-bunk-ct"'+(mCt!=null?' style="color:var(--me)" title="Manual count"':' title="Roster count"')+'>'+dispCount+'</span></div>';
+            // Capacity belongs where it bites — a bunk showing 9 / 9 explains
+            // why Auto-Generate stopped filling it without opening any modal.
+            var capCt=(bunkCapacity||{})[bk.name];
+            var ctLabel=(capCt?dispCount+' / '+capCt:String(dispCount));
+            var ctTitle=capCt?('Capacity '+capCt+' — set in Camp Structure'):(mCt!=null?'Manual count':'Roster count');
+            var ctFull=capCt&&ids.length>=capCt;
+            h+='<div class="bb-bunk-hd"><span class="bb-bunk-nm">'+esc(bk.name)+'</span><span class="bb-bunk-ct"'+(ctFull?' style="color:var(--err)"':(mCt!=null?' style="color:var(--me)"':''))+' title="'+esc(ctTitle)+'">'+esc(ctLabel)+'</span></div>';
             h+='<div class="bb-staff" style="padding:2px 0 8px;cursor:pointer" onclick="CampistryMe.openBunkStaffModal(\''+je(bk.name)+'\')" title="Manage staff for this bunk">';
             if(staff.length)h+=staff.map(function(s){return '<span style="display:inline-block;background:var(--s100);border-radius:var(--r);padding:2px 8px;margin:0 4px 4px 0;font-size:.68rem;font-weight:600;color:var(--s600)">'+esc(s.name)+' · '+esc(s.role||'Staff')+'</span>'}).join('');
             else h+='<span style="font-size:.72rem;color:var(--me);font-weight:600;cursor:pointer">+ Add staff</span>';
@@ -4335,23 +4341,11 @@ function bbDrop(t,e){
     }
     save();renderBB();
 }
-function autoAssign(){
-    var allB=[];Object.entries(structure).forEach(function([div,d]){Object.entries(d.grades||{}).forEach(function([gr,g]){(g.bunks||[]).forEach(function(b){allB.push({name:b,gr:gr,div:div})})})});
-    var counts={};allB.forEach(function(b){counts[b.name]=0});
-    var campers=Object.entries(roster);
-    campers.sort(function(a,b){return(a[1].grade||'').localeCompare(b[1].grade||'')});
-    campers.forEach(function([n,d]){
-        var el=allB.filter(function(b){return b.gr===d.grade});
-        if(!el.length)el=allB.filter(function(b){return b.div===d.division});
-        if(!el.length)el=allB;
-        if(!el.length)return;
-        el.sort(function(a,b){return counts[a.name]-counts[b.name]});
-        var chosen=el[0];
-        d.bunk=chosen.name;d.division=chosen.div;d.grade=chosen.gr;
-        counts[chosen.name]++;
-    });
-    save();renderBB();toast('Auto-assigned')
-}
+// Kept only because it is still on the public CampistryMe surface. The old
+// body was a grade-blind headcount balancer that ignored friend requests,
+// do-not-bunk requests, school-grade mapping and per-bunk capacity, so any
+// stale caller would silently build worse bunks than the button in the UI.
+function autoAssign(){ return autoGenerateBunks(); }
 async function clearBunks(){var ok=await confirmDialog({title:'Clear All Bunk Assignments?',message:'Every camper will be unassigned from their bunk.',confirmLabel:'Clear All',danger:true});if(!ok)return;Object.values(roster).forEach(function(c){c.bunk=''});save();renderBB();toast('Cleared')}
 
 // ═══ BUNK GENERATOR SETTINGS ════════════════════════════════════
@@ -4571,7 +4565,7 @@ function _criterionMatch(key,d1,d2){
 function _splitAvoidConflicts(group,reqMap){
     if(group.length<2)return[group];
     var groups=[group.slice()],guard=0,changed=true;
-    while(changed&&guard++<50){
+    while(changed&&guard++<500){
         changed=false;
         for(var gi=0;gi<groups.length;gi++){
             var g=groups[gi],pair=null;
@@ -4593,13 +4587,411 @@ function _splitAvoidConflicts(group,reqMap){
     }
     return groups.filter(function(g){return g.length>0;});
 }
-function _capGroupSize(groups,maxSize){
-    var out=[];
+// A friend cluster that outgrew a bunk has to be cut somewhere. Cutting in
+// array order (the old _capGroupSize) could split the one pair that actually
+// asked for each other while keeping strangers together, so each sub-group
+// instead grows outward from the most-connected camper along real request
+// edges — a mutual request counts double, so it survives a cut before a
+// one-way one does.
+function _splitOversizeCluster(group,reqMap,maxSize){
+    if(group.length<=maxSize)return[group];
+    var linked=function(a,b){
+        var fa=((reqMap[a]&&reqMap[a].friends)||[]).indexOf(b)>=0;
+        var fb=((reqMap[b]&&reqMap[b].friends)||[]).indexOf(a)>=0;
+        return (fa&&fb)?2:(fa||fb)?1:0;
+    };
+    var remaining=group.slice(),out=[],guard=0;
+    while(remaining.length&&guard++<group.length+500){
+        if(remaining.length<=maxSize){out.push(remaining);remaining=[];break;}
+        var seed=remaining[0],best=-1;
+        remaining.forEach(function(n){
+            var deg=0;remaining.forEach(function(m){if(m!==n)deg+=linked(n,m);});
+            if(deg>best){best=deg;seed=n;}
+        });
+        var grp=[seed];
+        remaining=remaining.filter(function(x){return x!==seed;});
+        while(grp.length<maxSize&&remaining.length){
+            var pick=null,pickScore=0;
+            remaining.forEach(function(n){
+                var s=0;grp.forEach(function(m){s+=linked(n,m);});
+                if(s>pickScore){pickScore=s;pick=n;}
+            });
+            if(!pick)break;
+            grp.push(pick);
+            remaining=remaining.filter(function(x){return x!==pick;});
+        }
+        out.push(grp);
+    }
+    // Belt and braces: whatever the guard leaves over still has to obey
+    // maxSize, because every caller treats a returned group as "this fits in
+    // one bunk".
+    if(remaining.length){
+        if(remaining.length<=maxSize)out.push(remaining);
+        else for(var i=0;i<remaining.length;i+=maxSize)out.push(remaining.slice(i,i+maxSize));
+    }
+    return out.filter(function(g){return g.length;});
+}
+// The real ceiling for one bunk: the camp's per-bunk capacity when it set one
+// (Camp Structure → the bunk's count pill → Capacity), otherwise the camp-wide
+// maximum from Bunk Settings.
+function _effBunkMax(bunkName,cfg){
+    var globalMax=Math.max(1,parseInt(cfg.maxBunkSize,10)||1);
+    var cap=parseInt((bunkCapacity||{})[bunkName],10);
+    if(!isNaN(cap)&&cap>0)return cap;
+    return globalMax;
+}
+// How many campers each bunk in a cohort SHOULD end up with. Without this the
+// placement loop just feeds whichever bunk scores best until it hits the max,
+// which is how a 36-camper grade came out 15/15/3/3. Two camp-realistic rules
+// shape it: never open a bunk you can't fill to the minimum (20 kids with a
+// minimum of 8 is two bunks of 10, not four of 5), and never strand campers
+// already sitting in a bunk from a manual placement or an earlier run.
+function _bunkTargets(bunks,bunkState,poolCount,cfg){
+    var caps={},existing={},total=poolCount;
+    bunks.forEach(function(b){
+        caps[b.name]=_effBunkMax(b.name,cfg);
+        existing[b.name]=bunkState[b.name].occupants.length;
+        total+=existing[b.name];
+    });
+    var order=bunks.slice().sort(function(a,b){
+        return (existing[b.name]-existing[a.name])||(caps[b.name]-caps[a.name])||String(a.name).localeCompare(String(b.name));
+    });
+    // smallest number of bunks that can physically hold everyone
+    var needCount=0,acc=0;
+    for(var i=0;i<order.length&&acc<total;i++){acc+=caps[order[i].name];needCount++;}
+    if(needCount<1)needCount=Math.min(1,order.length);
+    // most bunks we could fill to the camp minimum
+    var minSize=Math.max(0,parseInt(cfg.minBunkSize,10)||0);
+    var fillable=minSize>0?Math.floor(total/minSize):order.length;
+    // bunks that already have someone in them must stay in play
+    var occupied=order.filter(function(b){return existing[b.name]>0;}).length;
+    var use=Math.max(needCount,Math.min(fillable,order.length),occupied);
+    use=Math.min(Math.max(use,1),order.length);
+    var used=order.slice(0,use);
+    // water-fill: repeatedly grow the smallest target
+    var targets={};
+    bunks.forEach(function(b){targets[b.name]=existing[b.name];});
+    var left=poolCount,guard=0;
+    while(left>0&&guard++<100000){
+        var pick=null;
+        used.forEach(function(b){
+            if(targets[b.name]>=caps[b.name])return;
+            if(!pick||targets[b.name]<targets[pick])pick=b.name;
+        });
+        if(!pick)break;   // everything at capacity; the placement loop reports it
+        targets[pick]++;left--;
+    }
+    return {targets:targets,caps:caps,used:used.map(function(b){return b.name;})};
+}
+function _critValue(key,d){
+    if(key==='school')return String(d.school||'').trim().toLowerCase()||'~';
+    if(key==='area')return String(d.city||d.zip||'').trim().toLowerCase()||'~';
+    if(key==='age'){var a=age(d.dob);return a===''?'~':String(100+a);}
+    return '~';
+}
+function _critSignature(names,cfg,depth){
+    if(!names||!names.length)return '';
+    var crit=(cfg.criteria||[]).filter(function(c){return c.enabled!==false;});
+    if(depth!=null)crit=crit.slice(0,depth);
+    var d=roster[names[0]]||{};
+    return crit.map(function(c){return _critValue(c.key,d);}).join('|');
+}
+function _avoidBetween(a,b,reqMap){
+    for(var i=0;i<a.length;i++)for(var j=0;j<b.length;j++){
+        var ra=reqMap[a[i]],rb=reqMap[b[j]];
+        if(ra&&(ra.avoid||[]).indexOf(b[j])>=0)return true;
+        if(rb&&(rb.avoid||[]).indexOf(a[i])>=0)return true;
+    }
+    return false;
+}
+// Turns the camp's ranked criteria (school / area / age) into actual blocks
+// BEFORE placement, so a block moves into a bunk as a unit — which is what a
+// head counselor actually does ("put the Darchei Torah kids together").
+// Scoring each camper as they trickle in can't do this: early on every bunk is
+// empty, so similarity is 0 for all of them and the first placements are
+// arbitrary, and no amount of later scoring recovers from a random start.
+function _mergeByCriteria(groups,reqMap,cap,cfg){
+    var crit=(cfg.criteria||[]).filter(function(c){return c.enabled!==false;});
+    if(!crit.length||cap<2)return groups;
+    // Bucket on the TOP criterion only, then sub-sort inside the bucket by the
+    // full signature. Bucketing on every enabled criterion at once (school ×
+    // area × age) carves a grade into dozens of one-camper buckets that can
+    // never merge, and the criteria stay just as dead as they were before.
+    var buckets={},order=[];
     groups.forEach(function(g){
-        if(g.length<=maxSize){out.push(g);return;}
-        for(var i=0;i<g.length;i+=maxSize)out.push(g.slice(i,i+maxSize));
+        var k=_critSignature(g,cfg,1);
+        if(!buckets[k]){buckets[k]=[];order.push(k);}
+        buckets[k].push(g);
+    });
+    order.sort(function(a,b){   // biggest cohorts claim bunks first
+        var ca=buckets[a].reduce(function(t,g){return t+g.length;},0);
+        var cb=buckets[b].reduce(function(t,g){return t+g.length;},0);
+        return (cb-ca)||(a<b?-1:a>b?1:0);
+    });
+    var out=[];
+    order.forEach(function(k){
+        var list=buckets[k].slice().sort(function(a,b){
+            if(b.length!==a.length)return b.length-a.length;
+            var sa=_critSignature(a,cfg),sb=_critSignature(b,cfg);
+            return sa<sb?-1:sa>sb?1:0;
+        });
+        var cur=[];
+        list.forEach(function(g){
+            if(g.length>=cap){out.push(g);return;}
+            if(cur.length&&cur.length+g.length<=cap&&!_avoidBetween(cur,g,reqMap)){
+                cur=cur.concat(g);
+            }else{
+                if(cur.length)out.push(cur);
+                cur=g.slice();
+            }
+            if(cur.length>=cap){out.push(cur);cur=[];}
+        });
+        if(cur.length)out.push(cur);
     });
     return out;
+}
+// Post-placement clean-up, run to a fixed point (max 5 rounds). The placement
+// loop moves whole affinity blocks, and blocks sized to ~70% of a bunk never
+// tile exactly into the targets — three blocks of 7 into four bunks of 9 comes
+// out 12/7/7/10 — so the sizes have to be evened out afterwards:
+//   1. even out    — a bunk below its target pulls one camper from a bunk over
+//                    its target, choosing the camper who fits the destination
+//                    best on the camp's criteria and their current bunk worst,
+//                    so balancing doesn't undo the school/area grouping.
+//   2. top up      — a non-empty bunk below its effective minimum pulls one
+//                    camper from a bunk that is over target, skipping anyone a
+//                    friend request is holding in place, anyone who'd land
+//                    next to a do-not-bunk, and anyone the office placed by
+//                    hand before this run.
+//   3. consolidate — a bunk under the minimum that CAN'T be topped up is worse
+//                    than no bunk at all (a camp with a minimum of 8 does not
+//                    want a bunk of 2 beside a bunk of 9), so it empties back
+//                    into the others: whole-bunk in one move where possible so
+//                    friend requests survive intact, otherwise a per-camper
+//                    plan that is only applied if EVERY camper has somewhere
+//                    legal to land — a partial move strands a kid, which is
+//                    worse than the bunk you started with.
+// Neither pass will break a friend request or a separation to satisfy a size
+// minimum: the minimum is a preference, the requests are what parents actually
+// asked for, and _showBunkGenReport explains any shortfall that survives.
+function _rebalanceCohort(bunks,bunkState,reqMap,targets,caps,cfg,locked){
+    var names=bunks.map(function(b){return b.name;});
+    var minSize=Math.max(0,parseInt(cfg.minBunkSize,10)||0);
+    locked=locked||{};
+    // A bunk capped below the camp minimum can never reach it — holding it to
+    // the camp number would empty out every deliberately-small bunk.
+    function effMin(bn){return Math.min(minSize,caps[bn]);}
+    function conflictsWith(camper,list){
+        var av=(reqMap[camper]&&reqMap[camper].avoid)||[];
+        for(var i=0;i<list.length;i++){
+            if(list[i]===camper)continue;
+            if(av.indexOf(list[i])>=0)return true;
+            var r=reqMap[list[i]];
+            if(r&&(r.avoid||[]).indexOf(camper)>=0)return true;
+        }
+        return false;
+    }
+    function heldByFriend(camper,bn){
+        var occ=bunkState[bn].occupants,mine=(reqMap[camper]&&reqMap[camper].friends)||[];
+        for(var i=0;i<occ.length;i++){
+            if(occ[i]===camper)continue;
+            if(mine.indexOf(occ[i])>=0)return true;
+            var r=reqMap[occ[i]];
+            if(r&&(r.friends||[]).indexOf(camper)>=0)return true;
+        }
+        return false;
+    }
+    function friendsAt(camper,bn,plan){
+        var mine=(reqMap[camper]&&reqMap[camper].friends)||[],n=0;
+        function count(o){
+            if(o===camper)return;
+            if(mine.indexOf(o)>=0){n++;return;}
+            var r=reqMap[o];
+            if(r&&(r.friends||[]).indexOf(camper)>=0)n++;
+        }
+        bunkState[bn].occupants.forEach(count);
+        Object.keys(plan||{}).forEach(function(o){if(plan[o]===bn)count(o);});
+        return n;
+    }
+    function move(n,from,to){
+        var f=bunkState[from].occupants,i=f.indexOf(n);
+        if(i>=0)f.splice(i,1);
+        bunkState[to].occupants.push(n);
+        roster[n].bunk=to;roster[n].division=bunkState[to].div;roster[n].grade=bunkState[to].gr;
+    }
+    // Average criterion match between one camper and a bunk's occupants —
+    // the same measure the placement loop sorts on, reused here so evening
+    // out the sizes moves whoever is the loosest fit where they are.
+    function affinity(camper,bn){
+        var crit=(cfg.criteria||[]).filter(function(c){return c.enabled!==false;});
+        if(!crit.length)return 0;
+        var occ=bunkState[bn].occupants,cd=roster[camper]||{},score=0,n=0;
+        occ.forEach(function(o){
+            if(o===camper)return;
+            var od=roster[o]||{};
+            crit.forEach(function(c,idx){if(_criterionMatch(c.key,cd,od))score+=(crit.length-idx);});
+            n++;
+        });
+        return n?score/n:0;
+    }
+    function movable(c,src,dest){
+        if(locked[c])return false;
+        if(heldByFriend(c,src))return false;
+        if(bunkState[dest].occupants.length+1>caps[dest])return false;
+        return !conflictsWith(c,bunkState[dest].occupants);
+    }
+    // Every move here strictly cuts the total distance from target by 2, so
+    // this converges; the guard is only belt and braces.
+    function evenOut(){
+        var moved=false,progress=true,guard=0;
+        while(progress&&guard++<2000){
+            progress=false;
+            var unders=names.filter(function(bn){
+                return bunkState[bn].occupants.length<targets[bn];
+            }).sort(function(a,b){
+                return ((targets[b]-bunkState[b].occupants.length)-(targets[a]-bunkState[a].occupants.length))||(a<b?-1:a>b?1:0);
+            });
+            for(var u=0;u<unders.length&&!progress;u++){
+                var dest=unders[u];
+                var overs=names.filter(function(bn){
+                    return bn!==dest&&bunkState[bn].occupants.length>targets[bn];
+                }).sort(function(a,b){
+                    return ((bunkState[b].occupants.length-targets[b])-(bunkState[a].occupants.length-targets[a]))||(a<b?-1:a>b?1:0);
+                });
+                for(var o=0;o<overs.length&&!progress;o++){
+                    var src=overs[o],best=null,bestGain=null;
+                    bunkState[src].occupants.forEach(function(c){
+                        if(!movable(c,src,dest))return;
+                        var gain=affinity(c,dest)-affinity(c,src);
+                        if(bestGain===null||gain>bestGain){bestGain=gain;best=c;}
+                    });
+                    if(best){move(best,src,dest);moved=true;progress=true;}
+                }
+            }
+        }
+        return moved;
+    }
+    // A greedy pass can paint itself into a corner: the bunk that still has
+    // room is the one holding a do-not-bunk, because the safe bunk filled up
+    // earlier. Once every group is placed the sizes are known, so a conflict a
+    // single move can undo should be undone — a broken separation is the one
+    // outcome a camp genuinely cannot live with.
+    function repairConflicts(){
+        var moved=false;
+        names.forEach(function(bn){
+            var guard=0;
+            while(guard++<200){
+                var occ=bunkState[bn].occupants,bad=null;
+                for(var i=0;i<occ.length&&!bad;i++){
+                    if(locked[occ[i]])continue;
+                    if(conflictsWith(occ[i],occ))bad=occ[i];
+                }
+                if(!bad)break;
+                var dest=names.filter(function(d){
+                    if(d===bn)return false;
+                    if(bunkState[d].occupants.length+1>caps[d])return false;
+                    return !conflictsWith(bad,bunkState[d].occupants);
+                }).sort(function(a,b){
+                    return (bunkState[a].occupants.length-bunkState[b].occupants.length)||(a<b?-1:a>b?1:0);
+                });
+                if(!dest.length)break;   // genuinely nowhere legal — reported
+                move(bad,bn,dest[0]);
+                moved=true;
+            }
+        });
+        return moved;
+    }
+    function topUp(){
+        var moved=false;
+        names.forEach(function(dest){
+            var guard=0;
+            // An EMPTY bunk is not "short", it is unused — topping it up would
+            // undo a deliberate _bunkTargets decision (or a consolidation).
+            while(bunkState[dest].occupants.length>0&&bunkState[dest].occupants.length<effMin(dest)&&guard++<500){
+                var donors=names.filter(function(src){
+                    return src!==dest
+                        &&bunkState[src].occupants.length>targets[src]
+                        &&bunkState[src].occupants.length-1>=effMin(src);
+                }).sort(function(a,b){
+                    return (bunkState[b].occupants.length-bunkState[a].occupants.length)||(a<b?-1:a>b?1:0);
+                });
+                var pick=null;
+                donors.forEach(function(src){
+                    if(pick)return;
+                    bunkState[src].occupants.forEach(function(c){
+                        if(pick||locked[c])return;
+                        if(heldByFriend(c,src))return;
+                        if(bunkState[dest].occupants.length+1>caps[dest])return;
+                        if(conflictsWith(c,bunkState[dest].occupants))return;
+                        pick={src:src,camper:c};
+                    });
+                });
+                if(!pick)break;
+                move(pick.camper,pick.src,dest);
+                moved=true;
+            }
+        });
+        return moved;
+    }
+    function consolidate(){
+        var moved=false;
+        var needy=names.filter(function(bn){
+            var occ=bunkState[bn].occupants;
+            if(!occ.length||occ.length>=effMin(bn))return false;
+            return !occ.some(function(c){return locked[c];});
+        }).sort(function(a,b){
+            return (bunkState[a].occupants.length-bunkState[b].occupants.length)||(a<b?-1:a>b?1:0);
+        });
+        needy.forEach(function(src){
+            var occ=bunkState[src].occupants.slice();
+            if(!occ.length||occ.length>=effMin(src))return;
+            if(occ.some(function(c){return locked[c];}))return;
+            // (a) the whole bunk into one destination — friend requests survive
+            var whole=names.filter(function(d){
+                if(d===src||!bunkState[d].occupants.length)return false;
+                if(bunkState[d].occupants.length+occ.length>caps[d])return false;
+                return !occ.some(function(c){return conflictsWith(c,bunkState[d].occupants);});
+            }).sort(function(a,b){
+                return (bunkState[a].occupants.length-bunkState[b].occupants.length)||(a<b?-1:a>b?1:0);
+            });
+            if(whole.length){
+                occ.forEach(function(c){move(c,src,whole[0]);});
+                targets[src]=0;   // deliberately empty now — nothing may refill it
+                moved=true;return;
+            }
+            // (b) per-camper relocation — planned in full, applied only if
+            // every single camper has somewhere legal to land
+            var plan={},load={},ok=true;
+            names.forEach(function(d){load[d]=bunkState[d].occupants.length;});
+            occ.forEach(function(c){
+                if(!ok)return;
+                var dests=names.filter(function(d){
+                    if(d===src||!bunkState[d].occupants.length)return false;
+                    if(load[d]+1>caps[d])return false;
+                    if(conflictsWith(c,bunkState[d].occupants))return false;
+                    var alsoGoing=Object.keys(plan).filter(function(x){return plan[x]===d;});
+                    return !conflictsWith(c,alsoGoing);
+                });
+                if(!dests.length){ok=false;return;}
+                dests.sort(function(a,b){
+                    var fa=friendsAt(c,a,plan),fb=friendsAt(c,b,plan);
+                    if(fa!==fb)return fb-fa;
+                    return (load[a]-load[b])||(a<b?-1:a>b?1:0);
+                });
+                plan[c]=dests[0];load[dests[0]]++;
+            });
+            if(!ok)return;
+            occ.forEach(function(c){move(c,src,plan[c]);});
+            targets[src]=0;   // deliberately empty now — nothing may refill it
+            moved=true;
+        });
+        return moved;
+    }
+    for(var round=0;round<5;round++){
+        var didFix=repairConflicts(),didEven=evenOut(),didTop=topUp(),didCons=consolidate();
+        if(!didFix&&!didEven&&!didTop&&!didCons)break;
+    }
+    repairConflicts();   // the size passes are conflict-aware, but never end on one
 }
 function _placeGroupInBunk(group,bunkName,bunkState){
     var bk=bunkState[bunkName];
@@ -4636,20 +5028,53 @@ function _resolveCohortBySchoolGrade(schoolGrade){
     return multiple?null:hit;
 }
 function _bunkGenForGrade(poolNames,bunks,cfg,report){
-    // Anyone in THIS pool is being placed into THIS grade's bunks, so they're
+    // Anyone in THIS pool is being placed into THIS cohort's bunks, so they're
     // valid friend-request candidates even before roster[n].grade is set —
     // relying on .grade alone here would miss every camper whose grade was
-    // just resolved by schoolGrade mapping rather than pre-assigned.
-    var gradeCandidates=Object.keys(roster).filter(function(n){return roster[n].grade===bunks[0].gr;});
-    poolNames.forEach(function(n){ if(gradeCandidates.indexOf(n)<0) gradeCandidates.push(n); });
-    var reqMap={};
-    poolNames.forEach(function(n){
-        var r=_camperBunkRequests(n);
-        var friends=r.friends.slice(0,cfg.honoredRequests).map(function(f){return _resolveCamperName(f,gradeCandidates);}).filter(Boolean);
-        var avoid=r.avoid.map(function(a){return _resolveCamperName(a,gradeCandidates);}).filter(Boolean);
-        reqMap[n]={friends:friends,avoid:avoid};
-        report.requestsTotal+=friends.length;
+    // just resolved by schoolGrade mapping rather than pre-assigned. Campers
+    // ALREADY sitting in these bunks belong on the list too: a do-not-bunk
+    // naming one of them is free text ("Yaakov C"), and free text never
+    // matches a roster key on its own, so without resolving it here the
+    // request is dropped without a trace.
+    var gradeCandidates=Object.keys(roster).filter(function(n){
+        return roster[n].grade===bunks[0].gr&&roster[n].division===bunks[0].div;
     });
+    bunks.forEach(function(bk){
+        Object.keys(roster).forEach(function(n){
+            if(roster[n].bunk===bk.name&&gradeCandidates.indexOf(n)<0)gradeCandidates.push(n);
+        });
+    });
+    poolNames.forEach(function(n){if(gradeCandidates.indexOf(n)<0)gradeCandidates.push(n);});
+
+    var reqMap={};
+    // A request that resolves to nobody is not a request that doesn't exist —
+    // it's a sibling in another division, a kid who never enrolled, or a typo,
+    // and the office needs to see it rather than have it vanish. A partial
+    // that resolves back to the requester themselves is genuinely nothing.
+    function resolveFor(n){
+        var r=_camperBunkRequests(n);
+        var friends=[],unmatched=[];
+        r.friends.slice(0,cfg.honoredRequests).forEach(function(f){
+            var hit=_resolveCamperName(f,gradeCandidates);
+            if(hit&&hit!==n)friends.push(hit);
+            else if(!hit)unmatched.push(f);
+        });
+        var avoid=[],avoidUnmatched=[];
+        r.avoid.forEach(function(a){
+            var hit=_resolveCamperName(a,gradeCandidates);
+            if(hit&&hit!==n)avoid.push(hit);
+            else if(!hit)avoidUnmatched.push(a);
+        });
+        return {friends:friends,avoid:avoid,unmatched:unmatched,avoidUnmatched:avoidUnmatched};
+    }
+    poolNames.forEach(function(n){
+        var res=resolveFor(n);
+        reqMap[n]=res;
+        report.requestsTotal+=res.friends.length+res.unmatched.length;
+        res.unmatched.forEach(function(f){report.unresolved.push({camper:n,requested:f,kind:'friend'});});
+        res.avoidUnmatched.forEach(function(f){report.unresolved.push({camper:n,requested:f,kind:'avoid'});});
+    });
+    gradeCandidates.forEach(function(n){if(!reqMap[n])reqMap[n]=resolveFor(n);});
 
     var parent={};poolNames.forEach(function(n){parent[n]=n;});
     function find(x){while(parent[x]!==x){parent[x]=parent[parent[x]];x=parent[x];}return x;}
@@ -4659,15 +5084,35 @@ function _bunkGenForGrade(poolNames,bunks,cfg,report){
     poolNames.forEach(function(n){var r=find(n);(clusterMap[r]=clusterMap[r]||[]).push(n);});
     var groups=Object.keys(clusterMap).map(function(k){return clusterMap[k];});
 
-    var split=[];
-    groups.forEach(function(g){split=split.concat(_splitAvoidConflicts(g,reqMap));});
-    split=_capGroupSize(split,cfg.maxBunkSize);
-    split.sort(function(a,b){return b.length-a.length;});
-
-    var bunkState={};
+    // Whoever is already in these bunks stays exactly where they are — this
+    // run only places the pool, and the rebalance passes below must not
+    // undo a manual placement.
+    var bunkState={},locked={};
     bunks.forEach(function(bk){
         var already=Object.keys(roster).filter(function(n){return roster[n].bunk===bk.name;});
+        already.forEach(function(n){locked[n]=true;});
         bunkState[bk.name]={occupants:already.slice(),div:bk.div,gr:bk.gr};
+    });
+
+    var plan=_bunkTargets(bunks,bunkState,poolNames.length,cfg);
+    var targets=plan.targets,caps=plan.caps;
+    // Cap a friend cluster at the balanced target rather than the raw maximum,
+    // so one long chain of requests can't monopolise a bunk.
+    var biggestTarget=Math.max.apply(null,plan.used.map(function(bn){return targets[bn];}).concat([1]));
+    var hardMax=Math.max.apply(null,bunks.map(function(b){return caps[b.name];}).concat([1]));
+    var clusterCap=Math.max(1,Math.min(hardMax,biggestTarget));
+
+    var split=[];
+    groups.forEach(function(g){split=split.concat(_splitAvoidConflicts(g,reqMap));});
+    var capped=[];
+    split.forEach(function(g){capped=capped.concat(_splitOversizeCluster(g,reqMap,clusterCap));});
+    // Blocks are sized at ~70% of a bunk, not 100%: blocks that pack a bunk
+    // perfectly on paper leave nowhere legal to put the next do-not-bunk case.
+    split=_mergeByCriteria(capped,reqMap,Math.max(2,Math.ceil(clusterCap*0.7)),cfg);
+    split.sort(function(a,b){
+        if(b.length!==a.length)return b.length-a.length;          // hardest to place first
+        var sa=_critSignature(a,cfg),sb=_critSignature(b,cfg);
+        return sa<sb?-1:sa>sb?1:0;                                // similar blocks back to back
     });
 
     function violatesAvoid(bunkName,names){
@@ -4676,16 +5121,20 @@ function _bunkGenForGrade(poolNames,bunks,cfg,report){
             var av=(reqMap[names[i]]&&reqMap[names[i]].avoid)||[];
             for(var j=0;j<av.length;j++)if(occ.indexOf(av[j])>=0)return true;
             for(var k=0;k<occ.length;k++){
-                var occReq=reqMap[occ[k]]||_camperBunkRequests(occ[k]);
-                if((occReq.avoid||[]).indexOf(names[i])>=0)return true;
+                var occReq=reqMap[occ[k]];
+                if(occReq&&(occReq.avoid||[]).indexOf(names[i])>=0)return true;
             }
         }
         return false;
     }
+    // Average match strength, not a sum: summing over every occupant pair
+    // makes the score grow with the bunk's population, so a bunk with 12 kids
+    // in it always out-scored an emptier one and the sort just fed it.
     function similarity(bunkName,names){
         var occ=bunkState[bunkName].occupants;
-        if(!occ.length)return 0;
+        if(!occ.length||!names.length)return 0;
         var crit=(cfg.criteria||[]).filter(function(c){return c.enabled!==false;});
+        if(!crit.length)return 0;
         var score=0;
         names.forEach(function(cn){
             var cd=roster[cn]||{};
@@ -4694,7 +5143,7 @@ function _bunkGenForGrade(poolNames,bunks,cfg,report){
                 crit.forEach(function(c,idx){if(_criterionMatch(c.key,cd,od))score+=(crit.length-idx);});
             });
         });
-        return score;
+        return score/(occ.length*names.length);
     }
     function pullWeight(names){
         var pull={};
@@ -4702,33 +5151,67 @@ function _bunkGenForGrade(poolNames,bunks,cfg,report){
             (reqMap[n].friends||[]).forEach(function(f){
                 if(poolNames.indexOf(f)>=0)return;
                 var bn=roster[f]&&roster[f].bunk;
-                if(bn)pull[bn]=(pull[bn]||0)+1;
+                if(bn&&bunkState[bn])pull[bn]=(pull[bn]||0)+1;   // ignore a friend outside this cohort
             });
         });
         return pull;
     }
 
-    split.forEach(function(group){
+    // A worklist, not a single pass: a group with no legal home gets split
+    // along its weakest request links and re-queued rather than force-placed
+    // into a conflict. Splitting always shrinks the group, so it bottoms out
+    // at singletons and the guard is only belt and braces.
+    var queue=split.slice(),guard=0,forced=[];
+    while(queue.length&&guard++<20000){
+        var group=queue.shift();
         var candidates=bunks.map(function(b){return b.name;}).filter(function(bn){
-            return (bunkState[bn].occupants.length+group.length)<=cfg.maxBunkSize;
+            return (bunkState[bn].occupants.length+group.length)<=caps[bn];
         });
+        var safeNow=candidates.filter(function(bn){return !violatesAvoid(bn,group);});
+        if((!candidates.length||!safeNow.length)&&group.length>1){
+            var halves=_splitOversizeCluster(group,reqMap,Math.max(1,Math.floor(group.length/2)));
+            if(halves.length>1){queue=halves.concat(queue);continue;}
+        }
         if(!candidates.length){
-            report.warnings.push('No room for '+group.join(', ')+' — every bunk in this grade is at capacity.');
-            return;
+            report.warnings.push('No room for '+group.join(', ')+' — every bunk in this group is at capacity.');
+            continue;
         }
         var pull=pullWeight(group);
-        var safe=candidates.filter(function(bn){return !violatesAvoid(bn,group);});
-        var use=safe.length?safe:candidates;
-        if(!safe.length){
-            report.avoidViolations+=group.length;
-            report.warnings.push('Could not avoid a do-not-bunk conflict for '+group.join(', ')+' — no bunk had room without one.');
-        }
+        var use=safeNow.length?safeNow:candidates;
+        // Held, not reported yet: _rebalanceCohort's repair pass often undoes
+        // this once every group is down and the sizes are known, and telling
+        // the office about a conflict that no longer exists is worse than
+        // useless. Whatever is STILL broken after the rebalance is reported.
+        if(!safeNow.length)forced.push(group.slice());
+        var meta={};
+        use.forEach(function(bn){
+            var after=bunkState[bn].occupants.length+group.length;
+            meta[bn]={pull:pull[bn]||0,fits:after<=targets[bn]?1:0,room:targets[bn]-after,sim:similarity(bn,group)};
+        });
         use.sort(function(a,b){
-            var sa=(pull[a]||0)*1000+similarity(a,group)*10-bunkState[a].occupants.length;
-            var sb=(pull[b]||0)*1000+similarity(b,group)*10-bunkState[b].occupants.length;
-            return sb-sa;
+            var A=meta[a],B=meta[b];
+            if(A.pull!==B.pull)return B.pull-A.pull;              // follow an already-placed friend
+            if(A.fits!==B.fits)return B.fits-A.fits;              // balance is the hard preference
+            if(A.fits){
+                if(Math.abs(A.sim-B.sim)>1e-9)return B.sim-A.sim; // then cohesion
+                return B.room-A.room;
+            }
+            if(A.room!==B.room)return B.room-A.room;              // both overflow → least overflow
+            return B.sim-A.sim;
         });
         _placeGroupInBunk(group,use[0],bunkState);
+    }
+
+    _rebalanceCohort(bunks,bunkState,reqMap,targets,caps,cfg,locked);
+
+    forced.forEach(function(group){
+        var still=group.filter(function(n){
+            var bn=roster[n].bunk;
+            return bn&&bunkState[bn]&&violatesAvoid(bn,[n]);
+        });
+        if(!still.length)return;
+        report.avoidViolations+=still.length;
+        report.warnings.push('Could not avoid a do-not-bunk conflict for '+still.join(', ')+' — no bunk had room without one.');
     });
 
     poolNames.forEach(function(n){
@@ -4737,9 +5220,13 @@ function _bunkGenForGrade(poolNames,bunks,cfg,report){
             if(myBunk&&roster[f]&&roster[f].bunk===myBunk)report.requestsHonored++;
         });
     });
+    var minSize=Math.max(0,parseInt(cfg.minBunkSize,10)||0);
     bunks.forEach(function(bk){
         var ct=bunkState[bk.name].occupants.length;
-        if(ct>0&&ct<cfg.minBunkSize)report.underMin.push({bunk:bk.name,count:ct});
+        var eff=Math.min(minSize,caps[bk.name]);
+        if(ct>0&&ct<eff)report.underMin.push({bunk:bk.name,count:ct,min:eff});
+        // An empty bunk reads as a miss unless the report says it was a choice.
+        if(ct===0)report.leftEmpty.push(bk.name);
     });
 }
 // Campers whose grade never matched a real bunk group (missing/mismatched
@@ -4747,17 +5234,45 @@ function _bunkGenForGrade(poolNames,bunks,cfg,report){
 // to scope requests/criteria to. Same degraded-fallback shape as the old
 // autoAssign() cascade (grade → division → any bunk).
 function _bunkGenFallback(names,allBunks,cfg,report){
-    var counts={};allBunks.forEach(function(b){counts[b.name]=Object.keys(roster).filter(function(n){return roster[n].bunk===b.name;}).length;});
+    var counts={},caps={};
+    allBunks.forEach(function(b){
+        caps[b.name]=_effBunkMax(b.name,cfg);
+        counts[b.name]=Object.keys(roster).filter(function(n){return roster[n].bunk===b.name;}).length;
+    });
+    // A bunk group mapped to school grades takes ONLY those grades. Dropping a
+    // camper with no grade match into one is exactly the "bunked with the
+    // wrong grade" mistake the mapping exists to prevent — an unmapped group
+    // is the only legal home for them.
+    function gradeOk(b,d){
+        var mapped=_cohortSchoolGrades(b.div,b.gr);
+        if(!mapped.length)return true;
+        var sg=String(d.schoolGrade||'').trim().toLowerCase();
+        if(!sg)return false;
+        return mapped.some(function(x){return String(x).trim().toLowerCase()===sg;});
+    }
+    function avoidsAt(b,n){
+        var occ=Object.keys(roster).filter(function(x){return roster[x].bunk===b.name;});
+        if(!occ.length)return false;
+        var r=_camperBunkRequests(n);
+        return r.avoid.some(function(a){return !!_resolveCamperName(a,occ);});
+    }
     names.forEach(function(n){
         var d=roster[n];
-        var el=allBunks.filter(function(b){return b.div===d.division;});
-        if(!el.length)el=allBunks;
-        el=el.filter(function(b){return counts[b.name]<cfg.maxBunkSize;});
-        if(!el.length){report.warnings.push(n+' could not be placed — every bunk is full.');return;}
+        var eligible=allBunks.filter(function(b){return gradeOk(b,d);});
+        var el=eligible.filter(function(b){return b.div===d.division;});
+        if(!el.length)el=eligible;
+        el=el.filter(function(b){return counts[b.name]<caps[b.name];});
+        if(!el.length){
+            report.warnings.push(n+' could not be placed — no bunk group takes their school grade with room left. Check the grade on their camper record, or the "School grade(s)" mapping in Camp Structure.');
+            return;
+        }
+        var safe=el.filter(function(b){return !avoidsAt(b,n);});
+        if(safe.length)el=safe;else report.avoidViolations++;
         el.sort(function(a,b){return counts[a.name]-counts[b.name];});
         var chosen=el[0];
-        d.bunk=chosen.name;d.division=chosen.div;
+        d.bunk=chosen.name;d.division=chosen.div;d.grade=chosen.gr;
         counts[chosen.name]++;
+        report.fallbackPlaced.push(n);
     });
 }
 function autoGenerateBunks(){
@@ -4770,7 +5285,7 @@ function autoGenerateBunks(){
     });
     if(!allBunksFlat.length){toast('Create divisions and bunks first','error');return;}
 
-    var report={requestsTotal:0,requestsHonored:0,avoidViolations:0,placed:0,warnings:[],underMin:[]};
+    var report={requestsTotal:0,requestsHonored:0,avoidViolations:0,placed:0,warnings:[],underMin:[],unresolved:[],fallbackPlaced:[],leftEmpty:[],unplaced:[]};
 
     // Real school grade → the one bunk group configured for it. A camp that
     // never set up school-grade mapping just gets an empty table here, and
@@ -4797,8 +5312,15 @@ function autoGenerateBunks(){
         report.warnings.push('"'+key+'" is set as the school grade for more than one bunk group in Camp Structure — campers with that school grade were skipped so no one gets bunked with the wrong grade by mistake. Fix the overlap and re-run.');
     });
 
-    var byGrade={};
-    allBunksFlat.forEach(function(b){(byGrade[b.gr]=byGrade[b.gr]||[]).push(b);});
+    // Keyed by division AND bunk-group name. Keying on the group name alone
+    // merges a camp's "Junior A" in Boys with its "Junior A" in Girls into one
+    // pool and then places from it using whichever division happened to sort
+    // first — campers land in the other division's bunks.
+    var byCohort={};
+    allBunksFlat.forEach(function(b){
+        var key=b.div+' › '+b.gr;
+        (byCohort[key]=byCohort[key]||{div:b.div,gr:b.gr,bunks:[]}).bunks.push(b);
+    });
 
     // Campers with an ambiguously-mapped school grade must never fall
     // through to the grade-blind fallback below — that fallback just
@@ -4814,40 +5336,65 @@ function autoGenerateBunks(){
     });
 
     var handled={};
-    Object.keys(byGrade).forEach(function(gr){
-        var bunksForGrade=byGrade[gr];
-        var div=bunksForGrade[0].div;
+    Object.keys(byCohort).forEach(function(key){
+        var cohort=byCohort[key],div=cohort.div,gr=cohort.gr;
         var mapped=_cohortSchoolGrades(div,gr).length>0;
         var pool=Object.keys(roster).filter(function(n){
             var c=roster[n];
-            if(c.bunk||c.unenrolled)return false;
+            if(c.bunk||c.unenrolled||ambiguousSkipped[n])return false;
             if(mapped){
                 var resolved=sgToCohort[String(c.schoolGrade||'').trim().toLowerCase()];
-                return resolved&&resolved.div===div&&resolved.gr===gr;
+                return !!(resolved&&resolved.div===div&&resolved.gr===gr);
             }
-            return c.grade===gr;
+            return c.grade===gr&&(!c.division||c.division===div);
         });
         if(!pool.length)return;
-        _bunkGenForGrade(pool,bunksForGrade,cfg,report);
+        _bunkGenForGrade(pool,cohort.bunks,cfg,report);
         pool.forEach(function(n){if(roster[n].bunk)handled[n]=true;});
     });
 
     var leftover=Object.keys(roster).filter(function(n){return !roster[n].bunk&&!roster[n].unenrolled&&!handled[n]&&!ambiguousSkipped[n];});
     if(leftover.length)_bunkGenFallback(leftover,allBunksFlat,cfg,report);
 
+    report.unplaced=Object.keys(roster).filter(function(n){return !roster[n].bunk&&!roster[n].unenrolled;});
     report.placed=Object.keys(roster).filter(function(n){return roster[n].bunk;}).length;
     save();
     renderBB();
     _showBunkGenReport(report);
 }
+function _bgNote(t){return '<div style="font-size:.76rem;color:var(--s500);padding:4px 0 2px;line-height:1.45">'+esc(t)+'</div>';}
+function _bgNames(list,cap){
+    var shown=list.slice(0,cap).join(', ');
+    return '<div style="font-size:.8rem;color:var(--s600);padding:3px 0">'+esc(shown)+(list.length>cap?' <span style="color:var(--s400)">+ '+(list.length-cap)+' more</span>':'')+'</div>';
+}
 function _showBunkGenReport(report){
     var h='<div style="display:flex;flex-direction:column;gap:2px">';
     h+=cvR('Campers placed',String(report.placed));
+    if((report.unplaced||[]).length)h+=cvR('Still unplaced','<span class="cv-warn">'+report.unplaced.length+'</span>');
     if(bunkGenConfig.requestsEnabled!==false)h+=cvR('Friend requests honored',report.requestsHonored+' of '+report.requestsTotal);
     if(bunkGenConfig.doNotBunkEnabled!==false&&report.avoidViolations)h+=cvR('Do-not-bunk conflicts forced','<span class="cv-warn">'+report.avoidViolations+'</span>');
     if(report.underMin.length){
         h+='<div class="cv-sec">Under Minimum Size</div>';
-        report.underMin.forEach(function(u){h+=cvR(u.bunk,u.count+' / min '+bunkGenConfig.minBunkSize);});
+        report.underMin.forEach(function(u){h+=cvR(u.bunk,u.count+' / min '+(u.min!=null?u.min:bunkGenConfig.minBunkSize));});
+        h+=_bgNote('Almost always a do-not-bunk request forcing a split, or too few campers in that group to fill another bunk. Everyone here still respects every request — drag a camper if you would rather override one.');
+    }
+    if((report.unresolved||[]).length){
+        h+='<div class="cv-sec">Requests We Could Not Match</div>';
+        report.unresolved.slice(0,12).forEach(function(u){
+            h+='<div style="font-size:.8rem;color:var(--s600);padding:3px 0">• '+esc(u.camper)+' — asked '+(u.kind==='avoid'?'not to be with':'for')+' "'+esc(u.requested)+'" — nobody by that name in their bunk group</div>';
+        });
+        if(report.unresolved.length>12)h+='<div style="font-size:.78rem;color:var(--s400);padding:3px 0">+ '+(report.unresolved.length-12)+' more</div>';
+        h+=_bgNote('Usually a sibling or friend in a different bunk group, a kid who never enrolled, or a spelling that does not match the roster. Nothing was placed on these — fix the name on the camper record and re-run if it matters.');
+    }
+    if((report.leftEmpty||[]).length){
+        h+='<div class="cv-sec">Left Empty On Purpose</div>';
+        h+=_bgNames(report.leftEmpty,12);
+        h+=_bgNote('Filling these would have pushed the other bunks in their group below the minimum of '+(bunkGenConfig.minBunkSize||0)+'. Lower the minimum in Bunk Settings if you want every bunk used.');
+    }
+    if((report.fallbackPlaced||[]).length){
+        h+='<div class="cv-sec">Placed Without A Grade Match</div>';
+        h+=_bgNames(report.fallbackPlaced,12);
+        h+=_bgNote('Their school grade did not match any bunk group, so they were placed by headcount instead of by grade. Fix the grade on the camper record, or the "School grade(s)" mapping in Camp Structure, and re-run.');
     }
     if(report.warnings.length){
         h+='<div class="cv-sec">Notes</div>';
@@ -5404,14 +5951,30 @@ function openBunkCountModal(bunkName){
     var clearBtn=isOverride
         ?'<button class="me-btn me-btn--ghost me-btn--sm" onclick="CampistryMe._clearBunkCount(\''+je(bunkName)+'\');CampistryMe.closeModal(\'dynModal\');" style="margin-right:auto">Clear override</button>'
         :'';
+    // Capacity is a different thing from the headcount override above: the
+    // override tells the SCHEDULER how many kids to plan for, capacity tells
+    // the bunk GENERATOR how many it may ever put here.
+    var capVal=(bunkCapacity||{})[bunkName];
     var body=rosterNote
-        +'<input type="number" id="bunkCtInput" min="0" max="999" value="'+inputVal+'" style="width:100%;font-size:1.4rem;padding:10px 14px;border:1.5px solid var(--s200);border-radius:var(--r);text-align:center;box-sizing:border-box">';
+        +'<input type="number" id="bunkCtInput" min="0" max="999" value="'+inputVal+'" style="width:100%;font-size:1.4rem;padding:10px 14px;border:1.5px solid var(--s200);border-radius:var(--r);text-align:center;box-sizing:border-box">'
+        +'<div class="fsec" style="margin-top:14px">Capacity</div>'
+        +'<p style="margin:0 0 8px;font-size:.78rem;color:var(--s500)">How many campers this bunk can hold. Auto-Generate will never put more than this in it. Leave blank to use the camp-wide maximum of '+(bunkGenConfig.maxBunkSize||'—')+' from Bunk Settings.</p>'
+        +'<input type="number" id="bunkCapInput" min="0" max="999" placeholder="No limit set" value="'+(capVal!=null&&capVal!==''?esc(String(capVal)):'')+'" class="fi" style="width:100%;box-sizing:border-box">';
     showModal('Kids in '+bunkName,body,function(){
+        var rawCap=((document.getElementById('bunkCapInput')||{}).value||'').trim();
+        var cap=parseInt(rawCap,10);
+        if(rawCap===''||isNaN(cap)||cap<=0)delete bunkCapacity[bunkName];
+        else bunkCapacity[bunkName]=cap;
         var val=parseInt((document.getElementById('bunkCtInput')||{}).value||'0',10);
-        setBunkCount(bunkName,val);
+        // Don't invent a headcount override for someone who only came here to
+        // set Capacity: the count box is pre-filled with the roster count, so
+        // saving it untouched would pin a number that used to track the roster.
+        var touchedCount=isOverride||val!==inputVal;
+        if(touchedCount)setBunkCount(bunkName,val);
+        else save();
         closeModal('dynModal');
         render(curPage);
-        toast('Set to '+Math.max(0,val)+' kids');
+        toast(touchedCount?('Set to '+Math.max(0,val)+' kids'):'Saved');
     });
     // Inject clear button into footer
     setTimeout(function(){
