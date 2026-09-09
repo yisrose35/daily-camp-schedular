@@ -1940,7 +1940,10 @@ async function addFunds(){
     var c=_activeCanteenChild();if(!c){toast('No canteen account yet');return;}
     var amt=_selAmt||25;
     if(!(amt>0)){toast('Enter an amount first');return;}
-    var status=_campPayStatusByCamp[c.campId];
+    // Awaited, not read straight from the cache — see the identical
+    // reasoning in startCanteenAutoReloadSetup() below: a not-yet-resolved
+    // or previously-failed lookup silently fell back to 'stripe' here too.
+    var status=await _getCampProcessorInfo(c.campId);
     var processorKey=(status&&status.processorKey)||'stripe';
     if(processorKey==='cardknox'){
         var addBtn=document.getElementById('canteenAddBtn');
@@ -2322,7 +2325,16 @@ function _saveAutoReloadConfig(c,cfg,promptCardIfMissing){
 }
 async function startCanteenAutoReloadSetup(){
     var c=_activeCanteenChild(); if(!c){toast('No canteen account yet');return;}
-    var status=_campPayStatusByCamp[c.campId];
+    // Awaited rather than read straight from _campPayStatusByCamp: that
+    // cache is populated by a fire-and-forget call in switchCanteen(), and
+    // a prior failed fetch deliberately isn't cached (see
+    // _getCampProcessorInfo's own comment) — reading it synchronously here
+    // silently fell back to 'stripe' whenever it hadn't resolved yet,
+    // sending a BYOP camp's parent to Stripe Checkout instead of their
+    // connected processor. Awaiting it (safe even when already cached —
+    // _getCampProcessorInfo short-circuits to the cached value) guarantees
+    // this decision is always made from a real answer, not a race.
+    var status=await _getCampProcessorInfo(c.campId);
     var processorKey=(status&&status.processorKey)||'stripe';
     // Cardknox camps save the card on Sola's own hosted cc:save page (same
     // flow addFunds()/requestCardSetup() already use) instead of Stripe's
