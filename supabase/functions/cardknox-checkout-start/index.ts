@@ -72,21 +72,24 @@ serve(async (req) => {
 
   try {
     const { campId, kind, familyKey, familyName, camperName, amount, description } = await req.json();
-    if (!campId || !kind || !amount) {
+    // card_save carries no amount — it's Sola's cc:save, which tokenizes a
+    // card without charging (migration 135). Everything else must have one.
+    const isCardSave = kind === "card_save";
+    if (!campId || !kind || (!amount && !isCardSave)) {
       return json({ success: false, error: "campId, kind, and amount are required" }, 400);
     }
-    if (kind !== "tuition_charge" && kind !== "canteen_deposit") {
-      return json({ success: false, error: "kind must be tuition_charge or canteen_deposit" }, 400);
+    if (kind !== "tuition_charge" && kind !== "canteen_deposit" && !isCardSave) {
+      return json({ success: false, error: "kind must be tuition_charge, canteen_deposit, or card_save" }, 400);
     }
-    const amountCents = Math.round(Number(amount) * 100);
-    if (!Number.isFinite(amountCents) || amountCents < 50) {
+    const amountCents = isCardSave ? 0 : Math.round(Number(amount) * 100);
+    if (!isCardSave && (!Number.isFinite(amountCents) || amountCents < 50)) {
       return json({ success: false, error: "Enter an amount of at least $0.50" }, 400);
     }
 
     const service = createClient(SUPABASE_URL, SUPABASE_SERVICE_KEY);
 
-    if (kind === "tuition_charge") {
-      if (!familyKey) return json({ success: false, error: "familyKey is required for a tuition charge" }, 400);
+    if (kind === "tuition_charge" || isCardSave) {
+      if (!familyKey) return json({ success: false, error: "familyKey is required" }, 400);
       if (!(await campOwnsFamily(service, campId, familyKey))) {
         return json({ success: false, error: "Family not found for this camp" }, 400);
       }
@@ -130,17 +133,25 @@ serve(async (req) => {
       p_family_name: familyName || null,
       p_camper_name: camperName || null,
       p_amount_cents: amountCents,
-      p_description: description || (kind === "canteen_deposit" ? ("Canteen funds — " + camperName) : "Camp payment"),
+      p_description: description || (isCardSave ? ("Save a card — " + (familyName || familyKey))
+        : kind === "canteen_deposit" ? ("Canteen funds — " + camperName) : "Camp payment"),
     });
     if (intentErr || !intentResult?.success) {
       return json({ success: false, error: intentResult?.error || "Could not start checkout — try again." }, 500);
     }
 
+    // xCommand=cc:save is what turns Sola's hosted page into a tokenize-only
+    // form with no amount — taken from the link Sola's own Send Payment
+    // Request screen generates with TRANSACTION TYPE set to "save", not
+    // guessed. Sending xAmount alongside it would put a charge back on the
+    // page, so the two are deliberately exclusive.
     const url = "https://secure.cardknox.com/" + encodeURIComponent(checkoutSlug) +
-      "?xAmount=" + encodeURIComponent((amountCents / 100).toFixed(2)) +
+      (isCardSave
+        ? "?xCommand=" + encodeURIComponent("cc:save")
+        : "?xAmount=" + encodeURIComponent((amountCents / 100).toFixed(2))) +
       "&xInvoice=" + encodeURIComponent(reference);
 
-    console.log(`[cardknox-checkout-start] ${kind} intent ${reference}: $${amount}, camp ${campId}`);
+    console.log(`[cardknox-checkout-start] ${kind} intent ${reference}: ${isCardSave ? "card save" : "$" + amount}, camp ${campId}`);
     return json({ success: true, url, reference });
   } catch (err) {
     console.error("[cardknox-checkout-start] Error:", (err as Error).message);

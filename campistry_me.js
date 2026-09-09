@@ -12753,10 +12753,31 @@ async function requestCardSetup(famKey){
 
     var processorKey=await _getCampPaymentProcessorKey();
 
-    // BYOP camps have no hosted-checkout equivalent — they get a
-    // Campistry-hosted page embedding that processor's own client-side
-    // tokenizer instead (campistry_card_setup.html; NMI Collect.js for
-    // Banquest today, see BYOP_SETUP.md for what's still not built).
+    // Cardknox/Sola: send them to Sola's OWN hosted page in save mode
+    // (?xCommand=cc:save — tokenize, no charge), not Campistry's iFields
+    // page. Same page the family already sees for payments, and the card
+    // lands via the same webhook path, so there's one card-entry experience
+    // on this processor instead of two that look nothing alike.
+    if(processorKey==='cardknox'){
+        toast('Opening secure card setup for '+f.name+'…');
+        try{
+            var cs=await callEdgeFunction('cardknox-checkout-start',{
+                campId:getCampId(), kind:'card_save',
+                familyKey:famKey, familyName:f.name||''
+            });
+            if(!cs||!cs.url) throw new Error(cs&&cs.error||'No card-setup link returned');
+            window.open(cs.url,'_blank');
+            toast('Opened in a new tab — once '+f.name+' saves a card there, it shows up here.');
+        }catch(e){
+            toast('Could not open card setup: '+e.message,'error');
+        }
+        return;
+    }
+
+    // Other BYOP processors (Banquest) have no hosted-checkout equivalent —
+    // they get a Campistry-hosted page embedding that processor's own
+    // client-side tokenizer instead (campistry_card_setup.html; NMI
+    // Collect.js, see BYOP_SETUP.md for what's still not built).
     if(processorKey&&processorKey!=='stripe'){
         toast('Opening secure card setup for '+f.name+'…');
         var url='campistry_card_setup.html?campId='+encodeURIComponent(getCampId())+

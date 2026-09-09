@@ -211,6 +211,52 @@ serve(async (req) => {
       console.log(`[cardknox-webhook] Intent ${xInvoice} not approved (xResponseResult=${xResult}) — no credit issued`);
       return text("ok", 200);
     }
+
+    // A card save (Sola's cc:save — migration 135) moves no money, so it
+    // skips everything below: no processor_transactions row, no ledger
+    // write, and no xRefNum requirement, since the token is the entire
+    // point of the transaction rather than an amount to record idempotently.
+    if (intent.kind === "card_save") {
+      if (!xToken) {
+        console.error(`[cardknox-webhook] card_save ${xInvoice} approved but carried no xToken — nothing to save`);
+        await service.rpc("mark_cardknox_checkout_intent_status", { p_reference: xInvoice, p_status: "failed", p_xref_num: xRefNum || null });
+        return text("ok", 200);
+      }
+      const vaulted = await vaultCardknoxToken(service, campId, xToken);
+      if (!vaulted) {
+        console.error(`[cardknox-webhook] card_save ${xInvoice}: could not vault token`);
+        return text("Vault failed", 500); // worth a retry from Sola's side
+      }
+      let savedCard = false;
+      for (let attempt = 0; attempt < 4 && !savedCard; attempt++) {
+        const cur = await service.from("camp_state_kv").select("value")
+          .eq("camp_id", campId).eq("key", "campistryMe").maybeSingle();
+        const me: Record<string, any> = (cur.data && cur.data.value && typeof cur.data.value === "object") ? cur.data.value : {};
+        if (!me.families || typeof me.families !== "object") me.families = {};
+        const fam = intent.familyKey ? me.families[intent.familyKey] : null;
+        if (!fam) {
+          console.error(`[cardknox-webhook] card_save ${xInvoice}: family ${intent.familyKey} gone for camp ${campId}`);
+          break;
+        }
+        fam.byopProcessor = "cardknox";
+        fam.byopCustomerRef = vaulted;
+        fam.cardOnFile = true;
+        fam.cardSavedDate = new Date().toISOString();
+        const up = await service.from("camp_state_kv").upsert(
+          { camp_id: campId, key: "campistryMe", value: me, updated_at: new Date().toISOString() },
+          { onConflict: "camp_id,key" },
+        );
+        if (!up.error) savedCard = true;
+      }
+      if (!savedCard) {
+        console.error(`[cardknox-webhook] card_save ${xInvoice}: could not record token for camp ${campId}`);
+        return text("Record failed", 500);
+      }
+      await service.rpc("mark_cardknox_checkout_intent_status", { p_reference: xInvoice, p_status: "completed", p_xref_num: xRefNum || null });
+      console.log(`[cardknox-webhook] Saved card for family ${intent.familyKey}, camp ${campId} (${xInvoice})`);
+      return text("ok", 200);
+    }
+
     if (!xRefNum) {
       console.error(`[cardknox-webhook] Approved webhook for ${xInvoice} has no xRefNum — cannot record idempotently, refusing to credit`);
       return text("ok", 200);
