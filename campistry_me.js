@@ -10802,6 +10802,7 @@ function fmtIIFDate(d){if(!d)return'';var p=d.split('-');return p[1]+'/'+p[2]+'/
 //   5. Add charges (tuition, add-ons, fees), record payments, issue credits
 // ═══════════════════════════════════════════════════════════════
 var _billFilter='all'; // all, outstanding, paid, overdue
+var _billSearchTerm=''; // free-text filter over family/camper name, set by the search box in renderBilling()
 var _billUnmatchedPays=[]; // set by renderBilling(); read by openUnmatchedPaymentsModal()
 
 function buildFamilyLedgers(){
@@ -12006,15 +12007,12 @@ function renderBilling(){
     var ledgers=buildFamilyLedgers();
     var famList=Object.values(ledgers).sort(function(a,b){return(a.family.name||'').localeCompare(b.family.name||'')});
 
-    // Totals
-    var totalCharged=0,totalCollected=0,totalOutstanding=0,overdueCount=0;
-    famList.forEach(function(l){
-        totalCharged+=l.totalCharges;
-        totalCollected+=l.totalPayments;
-        totalOutstanding+=Math.max(0,l.balance);
-        if(l.status==='overdue') overdueCount++;
-    });
-    var rate=totalCharged>0?Math.round(totalCollected/totalCharged*100):0;
+    // The full charged/collected/collection-rate breakdown that used to
+    // headline this page as a 6-tile stat row now lives on Analytics,
+    // which already owns camp-wide financial reporting — Billing only
+    // needs the two numbers that describe THIS list: how many accounts
+    // have a balance, and how many are overdue.
+    var overdueCount=famList.filter(function(l){return l.status==='overdue'}).length;
     var famWithBalance=famList.filter(function(l){return l.balance>0}).length;
 
     // ★ #5: payments not linked to any family are summed into Analytics revenue but
@@ -12025,8 +12023,8 @@ function renderBilling(){
     famList.forEach(function(l){(l.entries||[]).forEach(function(en){if(en.type==='payment'&&en.ref!=null)_matchedPayIds[String(en.ref)]=1})});
     var _unmatchedPays=finPayments.filter(function(p){return !_matchedPayIds[String(p.id)]});
     var _unmatchedTotal=_unmatchedPays.reduce(function(s,p){return s+(Number(p.amount)||0)},0);
-    // Stashed so openUnmatchedPaymentsModal() (triggered by clicking the tile
-    // below) doesn't need to recompute the match against every family's
+    // Stashed so openUnmatchedPaymentsModal() (triggered by clicking the
+    // banner below) doesn't need to recompute the match against every family's
     // ledger a second time — this money should never be a dead end a user
     // can see a total for but never actually click into.
     _billUnmatchedPays=_unmatchedPays;
@@ -12052,27 +12050,41 @@ function renderBilling(){
     // couldn't safely decide on its own.
     h+=_famSuggestionsBannerHtml();
 
-    // Stats — same shared stat-tile Analytics and Finance use, so Billing
-    // reads as one visual system with the rest of the app instead of its
-    // own one-off "plain bordered box" styling.
-    h+=statRow(
-        statTile('Total Charged',fm(totalCharged))+
-        statTile('Collected',fm(totalCollected),'','var(--ok)')+
-        statTile('Outstanding',fm(totalOutstanding),'','var(--err)')+
-        statTile('Collection Rate',rate+'%')+
-        statTile('Overdue',String(overdueCount),'',overdueCount>0?'var(--err)':undefined)+
-        (_unmatchedTotal>0?statTile('Unmatched ('+_unmatchedPays.length+')',fm(_unmatchedTotal),'Included in Analytics revenue — click to see which payments','var(--me)','CampistryMe.openUnmatchedPaymentsModal()'):'')
-    );
+    // Unmatched revenue still needs a way in — it used to be one of six
+    // stat tiles at the top of the page (removed below, per feedback that
+    // the whole row was overwhelming and nobody read it as a dashboard).
+    // A payment that can't be tied to a family is a real reconciliation
+    // problem though, so it stays visible as a single plain-text banner
+    // instead of disappearing.
+    if(_unmatchedTotal>0){
+        h+='<div style="background:#FFFBEB;border:1px solid #FDE68A;padding:9px 12px;border-radius:var(--r);margin-bottom:12px;font-size:.82rem;color:#92400E;cursor:pointer" onclick="CampistryMe.openUnmatchedPaymentsModal()">'+fm(_unmatchedTotal)+' in payments ('+_unmatchedPays.length+') isn\'t linked to any family — included in Analytics revenue. Click to review.</div>';
+    }
 
-    // Filter tabs — same underline tab strip used throughout Finance/Reports.
-    var filters=[['all','All Accounts',famList.length],['outstanding','Outstanding',famWithBalance],['overdue','Overdue',overdueCount],['paid','Paid In Full',famList.filter(function(l){return l.status==='paid'}).length]];
-    h+=tabStrip(filters.map(function(f){return{k:f[0],l:f[1]+' ('+f[2]+')'}}),_billFilter,'CampistryMe.setBillFilter');
+    // One plain search box + one plain status dropdown, replacing the old
+    // 6-tile stat row and the 4-button count-labeled tab strip. Same data
+    // underneath (nothing here is a new metric), just far fewer things
+    // competing for attention above the actual account list.
+    var _statusOptions=[['all','All statuses'],['outstanding','Outstanding'],['overdue','Overdue'],['paid','Paid in full']];
+    h+='<div style="display:flex;gap:10px;margin-bottom:14px;flex-wrap:wrap">'
+        +'<input type="text" class="me-input" placeholder="Search family or camper…" value="'+esc(_billSearchTerm)+'" oninput="CampistryMe.setBillSearch(this.value)" style="flex:1;min-width:200px;max-width:360px">'
+        +'<select class="me-input" onchange="CampistryMe.setBillFilter(this.value)" style="width:auto">'
+        +_statusOptions.map(function(o){return'<option value="'+o[0]+'"'+(_billFilter===o[0]?' selected':'')+'>'+esc(o[1])+'</option>'}).join('')
+        +'</select>'
+        +'<span style="align-self:center;font-size:.8rem;color:var(--s400)">'+famList.length+' account'+(famList.length!==1?'s':'')+(famWithBalance?' · '+famWithBalance+' with a balance':'')+(overdueCount?' · '+overdueCount+' overdue':'')+'</span>'
+        +'</div>';
 
     // Family accounts
     var filtered=famList;
-    if(_billFilter==='outstanding') filtered=famList.filter(function(l){return l.balance>0});
-    else if(_billFilter==='overdue') filtered=famList.filter(function(l){return l.status==='overdue'});
-    else if(_billFilter==='paid') filtered=famList.filter(function(l){return l.status==='paid'});
+    if(_billFilter==='outstanding') filtered=filtered.filter(function(l){return l.balance>0});
+    else if(_billFilter==='overdue') filtered=filtered.filter(function(l){return l.status==='overdue'});
+    else if(_billFilter==='paid') filtered=filtered.filter(function(l){return l.status==='paid'});
+    if(_billSearchTerm){
+        var _q=_billSearchTerm.toLowerCase();
+        filtered=filtered.filter(function(l){
+            var camperNames=(l.family.camperIds||[]).concat(l.pendingCamperIds||[]).join(' ').toLowerCase();
+            return(l.family.name||'').toLowerCase().indexOf(_q)>-1||camperNames.indexOf(_q)>-1;
+        });
+    }
 
     if(!filtered.length){
         h+='<div class="me-empty"><h3>No accounts match this filter</h3></div>';
@@ -12091,20 +12103,16 @@ function renderBilling(){
             // installment plan — so a plan's shape is scannable from the
             // list without opening the family, same as the family-detail
             // page's Payment Plan card.
-            var planTag='';
-            var famPlans=_famPlans(families[l.famKey]||{}).filter(function(p){return p.installments&&p.installments.length>1});
-            if(famPlans.length){
-                var pInsts=famPlans[0].installments;
-                var pAmts=pInsts.map(function(i){return Math.round((Number(i.amount)||0)*100)});
-                if(pAmts.every(function(a){return a===pAmts[0]})&&pAmts[0]>0){
-                    planTag='<span style="font-size:.72rem;color:var(--s400)">'+pInsts.length+' &times; '+fm(pAmts[0]/100)+'</span>';
-                }
-            }
-
+            // One clean row: name + campers + status on the left (status
+            // folded into the descriptive line instead of its own pill),
+            // balance + a chevron on the right. The plan's "N x $amount"
+            // shape used to also live here — dropped from the list view,
+            // it's still on the family's own Payment Plan card, this row
+            // only needs to answer "who, and how much."
             h+='<div class="me-card" id="billfam-'+je(l.famKey)+'" style="margin-bottom:10px;cursor:pointer" onclick="CampistryMe.viewFamily(\''+je(l.famKey)+'\')">';
             h+='<div style="display:flex;align-items:center;gap:12px">';
-            h+='<div style="flex:1;min-width:0"><h3 style="margin:0;font-size:.95rem;font-weight:700;color:var(--s800)">'+esc(l.family.name||'')+'</h3><span style="font-size:.75rem;color:var(--s400)">'+esc(camperNames)+'</span>'+(l.pendingEnrollment?' · '+_flatStatus('Accepted — pending enrollment','warn'):'')+'</div>';
-            h+='<div style="display:flex;align-items:center;gap:10px;flex-shrink:0">'+planTag+statusBadge;
+            h+='<div style="flex:1;min-width:0"><h3 style="margin:0;font-size:.95rem;font-weight:700;color:var(--s800)">'+esc(l.family.name||'')+'</h3><span style="font-size:.75rem;color:var(--s400)">'+esc(camperNames)+'</span> · '+statusBadge+(l.pendingEnrollment?' · '+_flatStatus('Accepted — pending enrollment','warn'):'')+'</div>';
+            h+='<div style="display:flex;align-items:center;gap:10px;flex-shrink:0">';
             h+='<span style="font-size:1rem;font-weight:800;color:'+(l.balance>0?'var(--err)':'var(--ok)')+'">'+fm(l.balance)+'</span>';
             h+='<span style="font-size:1rem;color:var(--s300)">›</span></div>';
             h+='</div></div>';
@@ -12278,6 +12286,14 @@ function _installmentTableHtml(items,fontSize){
 }
 
 function setBillFilter(f){_billFilter=f;_billingPage=1;renderBilling()}
+function setBillSearch(q){
+    _billSearchTerm=q||'';_billingPage=1;renderBilling();
+    // The search box gets rebuilt along with the rest of the page on every
+    // keystroke (same as Report Builder's field search) — put focus (and
+    // the cursor position) back so typing isn't interrupted.
+    var el=document.querySelector('#page-billing input[placeholder^="Search"]');
+    if(el){ el.focus(); var p=el.value.length; el.setSelectionRange(p,p); }
+}
 
 function openPaymentModal(){openPaymentForFamily(null)}
 
@@ -16275,7 +16291,7 @@ window.CampistryMe={
     addCharge:addCharge,addChargeForFamily:addChargeForFamily,
     issueCredit:issueCredit,issueCreditForFamily:issueCreditForFamily,
     _crFamChanged:_crFamChanged,_crToggleType:_crToggleType,_crPaymentChanged:_crPaymentChanged,_crUpdateBalancePreview:_crUpdateBalancePreview,
-    setBillFilter:setBillFilter,printStatement:printStatement,
+    setBillFilter:setBillFilter,setBillSearch:setBillSearch,printStatement:printStatement,
     requestCardSetup:requestCardSetup,chargeStoredCard:chargeStoredCard,batchCharge:batchCharge,
     // Broadcasts
     openBroadcastModal:openBroadcastModal,viewBroadcast:viewBroadcast,removeBroadcast:removeBroadcast,
