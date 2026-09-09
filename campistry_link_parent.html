@@ -2325,6 +2325,55 @@ function _saveAutoReloadConfig(c,cfg,promptCardIfMissing){
 }
 async function startCanteenAutoReloadSetup(){
     var c=_activeCanteenChild(); if(!c){toast('No canteen account yet');return;}
+    // If the family already has a card on file — the same source Pay Now /
+    // charge-saved-card reuse (migration 137) — ask before sending the
+    // parent through a brand-new card-entry page for a card they've
+    // already saved, rather than always assuming they need to add one.
+    // _balByCamp is populated by loadPayments()'s pre-warm call at boot, but
+    // a parent can reach Canteen before that resolves, so this fetches it
+    // directly rather than trusting a maybe-still-empty cache (same
+    // reasoning as _applyCanteenChargeSavedGate's lazy fetch above).
+    var bal=_balByCamp[c.campId];
+    if(bal===undefined){
+        var db0=window._parentDB;
+        if(db0){
+            var call0=window._pRpc?window._pRpc('get_my_balance',{},c.campId):db0.rpc('get_my_balance',{p_camp_id:c.campId});
+            try{ var res0=await call0; if(res0&&res0.data&&res0.data.success){ bal=res0.data; _balByCamp[c.campId]=bal; } }catch(e0){}
+        }
+    }
+    if(bal&&bal.chargeable){
+        arCardChoice(bal.cardLabel,
+            function(){ _useFamilyCardForAutoReload(c); },
+            function(){ _startCanteenAutoReloadCheckout(c); }
+        );
+        return;
+    }
+    _startCanteenAutoReloadCheckout(c);
+}
+// Copies the family's already-saved card (Pay Now/charge-saved-card's own
+// token) into this camper's canteen auto-reload slot server-side (migration
+// 138) — the two have always been separate token slots even though they can
+// point at the same physical card, since auto-reload's card lives per-CAMPER
+// (campistrySnacks.accounts[camperName].autoReload) while the family's card
+// lives on families[famKey]. No card-entry page involved at all.
+async function _useFamilyCardForAutoReload(c){
+    toast('Linking your card…');
+    try{
+        var db=window._parentDB; if(!db) throw new Error('Please sign in again.');
+        var call=window._pRpc?window._pRpc('use_family_card_for_canteen_auto_reload',{p_camper_name:c.name},c.campId)
+                              :db.rpc('use_family_card_for_canteen_auto_reload',{p_camp_id:c.campId,p_camper_name:c.name});
+        var res=await call;
+        if(res.error||!res.data||!res.data.success){
+            var errKey=res.error?res.error.message:((res.data||{}).error||'error');
+            if(errKey==='no_card_on_file'){ toast('No card on file for this family yet — add one instead.'); _startCanteenAutoReloadCheckout(c); return; }
+            throw new Error(errKey);
+        }
+        c.autoReload=res.data.autoReload||c.autoReload;
+        _renderAutoReload(c);
+        toast('Using your card on file for '+c.name.split(' ')[0]+"'s auto-reload");
+    }catch(err){ console.error('[Parent] use family card for auto-reload error:',err); toast('Could not link your card: '+(err&&err.message||'error')); }
+}
+async function _startCanteenAutoReloadCheckout(c){
     // Awaited rather than read straight from _campPayStatusByCamp: that
     // cache is populated by a fire-and-forget call in switchCanteen(), and
     // a prior failed fetch deliberately isn't cached (see
@@ -3925,6 +3974,33 @@ function lkChargeConfirmClose(){ var ov=document.getElementById('lkChargeConfirm
         var ov=document.getElementById('lkChargeConfirmOverlay');
         if(yes)yes.addEventListener('click',function(){ var cb=_lkChargeConfirmCb; lkChargeConfirmClose(); if(cb)cb(); });
         if(ov)ov.addEventListener('click',function(e){ if(e.target===ov) lkChargeConfirmClose(); });
+    }
+    if(document.readyState==='loading') document.addEventListener('DOMContentLoaded',wire); else wire();
+})();
+
+// Canteen auto-reload: when the family already has a card on file (from
+// tuition/one-off charge-saved-card use — migration 137), offer to reuse it
+// instead of always sending the parent through a brand-new card-entry page
+// for a card they've already saved. Same in-app-overlay reasoning as
+// lkChargeConfirm above (native confirm()/prompt() isn't reliable in the
+// Capacitor WebView), but a real two-way CHOICE rather than a yes/no, so it
+// gets its own pair of callbacks instead of reusing lkChargeConfirm's shape.
+var _arCardChoiceUseCb=null, _arCardChoiceNewCb=null;
+function arCardChoice(cardLabel,onUseExisting,onAddNew){
+    var m=document.getElementById('arCardChoiceMsg');
+    if(m)m.textContent='You already have '+(cardLabel||'a card')+' on file. Use it for auto-reload, or add a different card?';
+    _arCardChoiceUseCb=onUseExisting; _arCardChoiceNewCb=onAddNew;
+    var ov=document.getElementById('arCardChoiceOverlay'); if(ov)ov.classList.add('open');
+}
+function arCardChoiceClose(){ var ov=document.getElementById('arCardChoiceOverlay'); if(ov)ov.classList.remove('open'); _arCardChoiceUseCb=null; _arCardChoiceNewCb=null; }
+(function _wireArCardChoice(){
+    function wire(){
+        var useBtn=document.getElementById('arCardChoiceUseBtn');
+        var newBtn=document.getElementById('arCardChoiceNewBtn');
+        var ov=document.getElementById('arCardChoiceOverlay');
+        if(useBtn)useBtn.addEventListener('click',function(){ var cb=_arCardChoiceUseCb; arCardChoiceClose(); if(cb)cb(); });
+        if(newBtn)newBtn.addEventListener('click',function(){ var cb=_arCardChoiceNewCb; arCardChoiceClose(); if(cb)cb(); });
+        if(ov)ov.addEventListener('click',function(e){ if(e.target===ov) arCardChoiceClose(); });
     }
     if(document.readyState==='loading') document.addEventListener('DOMContentLoaded',wire); else wire();
 })();
@@ -6027,6 +6103,20 @@ if (window.pdfjsLib) { window.pdfjsLib.GlobalWorkerOptions.workerSrc = 'pdfjs-di
         <div class="lk-confirm-foot">
             <button class="btn btn-ghost" type="button" onclick="lkChargeConfirmClose()">Cancel</button>
             <button class="btn btn-primary" type="button" id="lkChargeConfirmYes">Charge</button>
+        </div>
+    </div>
+</div>
+
+<!-- Canteen auto-reload: offer to reuse the family's already-saved card
+     instead of always sending the parent through a new card-entry page. -->
+<div class="lk-confirm-overlay" id="arCardChoiceOverlay">
+    <div class="lk-confirm-card">
+        <h3>Use your card on file?</h3>
+        <p id="arCardChoiceMsg"></p>
+        <div class="lk-confirm-foot" style="flex-direction:column;gap:8px;">
+            <button class="btn btn-primary" type="button" style="width:100%;" id="arCardChoiceUseBtn">Use this card</button>
+            <button class="btn btn-secondary" type="button" style="width:100%;" id="arCardChoiceNewBtn">Add a different card</button>
+            <button class="btn btn-ghost" type="button" style="width:100%;" onclick="arCardChoiceClose()">Cancel</button>
         </div>
     </div>
 </div>
