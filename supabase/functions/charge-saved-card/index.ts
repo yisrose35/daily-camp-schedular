@@ -102,7 +102,7 @@ serve(async (req) => {
     const jwt = authHeader.replace(/^Bearer\s+/i, "");
     if (!jwt) return json({ success: false, error: "Sign in required." }, 401);
 
-    const { campId, kind, camperName, amount, idempotencyKey } = await req.json();
+    const { campId, kind, camperName, amount, idempotencyKey, paymentMethodId } = await req.json();
     if (!campId || !kind || !amount || !idempotencyKey) {
       return json({ success: false, error: "campId, kind, amount, and idempotencyKey are required" }, 400);
     }
@@ -191,16 +191,39 @@ serve(async (req) => {
       return json(result, 400);
     }
 
+    // Migration 139: a family can now have several saved methods, not just
+    // one. When the caller picked a specific one (paymentMethodId), resolve
+    // ITS token/processor from savedPaymentMethods[] — verified to actually
+    // belong to this family, never trusted from the request beyond the id
+    // itself. No paymentMethodId (every pre-existing caller) falls back to
+    // the legacy single-slot fields exactly as before, which get_my_balance's
+    // processorKey/chargeable already describe.
+    let chargeProcessorKey = processorKey;
+    let chargeToken: string | undefined = processorKey === "cardknox" ? fam.byopCustomerRef : fam.stripePaymentMethodId;
+    let chargeStripeCustomerId: string | undefined = fam.stripeCustomerId;
+    if (paymentMethodId) {
+      const methods: any[] = Array.isArray(fam.savedPaymentMethods) ? fam.savedPaymentMethods : [];
+      const picked = methods.find((m) => m && m.id === paymentMethodId);
+      if (!picked) {
+        const result = { success: false, error: "That saved card could not be found." };
+        await finishLock("failed", result);
+        return json(result, 400);
+      }
+      chargeProcessorKey = picked.processor;
+      chargeToken = picked.token;
+      if (picked.processor === "stripe") chargeStripeCustomerId = picked.stripeCustomerId;
+    }
+
     let externalTransactionId: string;
-    if (processorKey === "cardknox") {
+    if (chargeProcessorKey === "cardknox") {
       const { data: credResult } = await service.rpc("_admin_get_processor_credential", { p_camp_id: campId });
       const apiKey = credResult?.success ? credResult.credentials?.apiKey : null;
-      if (!apiKey || !fam.byopCustomerRef) {
+      if (!apiKey || !chargeToken) {
         const result = { success: false, error: "This camp's processor isn't connected right now." };
         await finishLock("failed", result);
         return json(result, 400);
       }
-      const res = await cardknoxCharge(apiKey, amountCents, String(fam.byopCustomerRef), "CSC-" + idempotencyKey);
+      const res = await cardknoxCharge(apiKey, amountCents, String(chargeToken), "CSC-" + idempotencyKey);
       if (!res.success || !res.externalTransactionId) {
         const result = { success: false, error: res.error || "Card declined." };
         await finishLock("failed", result);
@@ -208,7 +231,7 @@ serve(async (req) => {
       }
       externalTransactionId = res.externalTransactionId;
     } else {
-      if (!STRIPE_SECRET || !fam.stripeCustomerId) {
+      if (!STRIPE_SECRET || !chargeStripeCustomerId) {
         const result = { success: false, error: "This camp's processor isn't connected right now." };
         await finishLock("failed", result);
         return json(result, 400);
@@ -216,7 +239,7 @@ serve(async (req) => {
       const { data: camp } = await service.from("camps").select("stripe_account_id, stripe_charges_enabled").eq("id", campId).maybeSingle();
       const destinationAccountId = (camp?.stripe_account_id && camp?.stripe_charges_enabled) ? camp.stripe_account_id : null;
       const pi = await stripeCharge(
-        fam.stripeCustomerId, fam.stripePaymentMethodId || null, amountCents,
+        chargeStripeCustomerId, chargeToken || null, amountCents,
         (kind === "canteen_deposit" ? "Canteen funds — " + camperName : "Camp payment"),
         { campId: String(campId), familyKey, kind, idempotencyKey },
         destinationAccountId,
@@ -231,7 +254,7 @@ serve(async (req) => {
 
     await service.rpc("record_processor_transaction", {
       p_camp_id: campId,
-      p_processor_key: processorKey,
+      p_processor_key: chargeProcessorKey,
       p_external_transaction_id: externalTransactionId,
       p_kind: "charge",
       p_amount_cents: amountCents,
@@ -244,7 +267,7 @@ serve(async (req) => {
         p_camp_id: campId,
         p_camper_name: camperName,
         p_amount: amountCents / 100,
-        p_processor_key: processorKey,
+        p_processor_key: chargeProcessorKey,
         p_external_transaction_id: externalTransactionId,
       });
     } else {
@@ -260,14 +283,14 @@ serve(async (req) => {
         const pays: Record<string, any>[] = cur_me.finance.payments;
         if (!pays.find((p) => p.byopTransactionId === externalTransactionId || p.stripePaymentIntentId === externalTransactionId)) {
           pays.push({
-            id: (processorKey === "cardknox" ? "byop_" : "stripe_") + externalTransactionId,
+            id: (chargeProcessorKey === "cardknox" ? "byop_" : "stripe_") + externalTransactionId,
             family: fam.name || familyKey, familyKey,
             amount: amountCents / 100,
             date: new Date().toISOString().split("T")[0],
-            method: processorKey === "cardknox" ? "Card on file (Sola)" : "Card on file (Stripe)",
+            method: chargeProcessorKey === "cardknox" ? "Card on file (Sola)" : "Card on file (Stripe)",
             reference: externalTransactionId,
             notes: "Charged card on file",
-            ...(processorKey === "cardknox" ? { byopTransactionId: externalTransactionId, byopProcessor: "cardknox" } : { stripePaymentIntentId: externalTransactionId }),
+            ...(chargeProcessorKey === "cardknox" ? { byopTransactionId: externalTransactionId, byopProcessor: "cardknox" } : { stripePaymentIntentId: externalTransactionId }),
             status: "succeeded", timestamp: Date.now(),
           });
         }
@@ -282,7 +305,7 @@ serve(async (req) => {
       }
     }
 
-    const result = { success: true, amount: amountCents / 100, processorKey };
+    const result = { success: true, amount: amountCents / 100, processorKey: chargeProcessorKey };
     await finishLock("succeeded", result);
     console.log(`[charge-saved-card] ${kind} ${externalTransactionId}: $${amountCents / 100}, camp ${campId}, family ${familyKey}`);
     return json(result);
