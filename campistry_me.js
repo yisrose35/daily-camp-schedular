@@ -1005,7 +1005,13 @@ function showModal(title,bodyHtml,onSave,opts){
     // opts.maxHeight lets a content-heavy modal (the payment plan editor —
     // generate + a full row-by-row schedule) use most of the viewport
     // instead of the cramped default — same overlay/footer, just bigger.
-    overlay.innerHTML='<div style="background:#fff;border-radius:12px;max-width:'+(opts.maxWidth||560)+'px;width:95%;max-height:'+(opts.maxHeight||'85vh')+';display:flex;flex-direction:column;overflow:hidden;box-shadow:0 20px 60px rgba(0,0,0,.25)"><div style="display:flex;justify-content:space-between;align-items:center;padding:16px 20px;border-bottom:1px solid var(--s100);flex-shrink:0"><h3 style="margin:0;font-size:1.05rem;font-weight:700">'+esc(title)+'</h3><button style="background:none;border:none;font-size:1.5rem;cursor:pointer;color:var(--s400)" onclick="CampistryMe.closeModal(\'dynModal\')">&times;</button></div><div style="padding:18px 22px;overflow:auto;flex:1">'+bodyHtml+'</div>'+footer+'</div>';
+    // opts.minHeight pairs with it for a modal that should visually fill
+    // most of the screen even when the CURRENT tab's content is short (the
+    // Generate tab is a handful of fields; without a floor the modal would
+    // shrink back down to fit just that, then jump taller once Edit Payments
+    // fills back in) — max-height alone only caps growth, it doesn't hold
+    // a minimum.
+    overlay.innerHTML='<div style="background:#fff;border-radius:12px;max-width:'+(opts.maxWidth||560)+'px;width:95%;max-height:'+(opts.maxHeight||'85vh')+(opts.minHeight?';min-height:'+opts.minHeight:'')+';display:flex;flex-direction:column;overflow:hidden;box-shadow:0 20px 60px rgba(0,0,0,.25)"><div style="display:flex;justify-content:space-between;align-items:center;padding:16px 20px;border-bottom:1px solid var(--s100);flex-shrink:0"><h3 style="margin:0;font-size:1.05rem;font-weight:700">'+esc(title)+'</h3><button style="background:none;border:none;font-size:1.5rem;cursor:pointer;color:var(--s400)" onclick="CampistryMe.closeModal(\'dynModal\')">&times;</button></div><div style="padding:18px 22px;overflow:auto;flex:1">'+bodyHtml+'</div>'+footer+'</div>';
     document.body.appendChild(overlay);
     overlay.addEventListener('mousedown',function(e){if(e.target===overlay)closeModal('dynModal')});
     _dynModalCb=onSave||null;
@@ -13224,7 +13230,7 @@ function monthlyPlan(famKey,planId){
         else{ plans.push(newPlan); }
         save();closeModal('dynModal');if(curPage==='familydetail')renderFamilyDetailPage();else renderBilling();
         toast('Payment plan saved — '+insts.length+' payment'+(insts.length>1?'s':'')+(auto?', autopay on':''));
-    },{maxWidth:920,maxHeight:'92vh'});
+    },{maxWidth:920,maxHeight:'94vh',minHeight:'80vh'});
     _mpSwitchTab(startTab);
 }
 function _mpSwitchTab(tab){
@@ -16273,7 +16279,7 @@ window.CampistryMe={
     finAddPayment:finAddPayment,finRemovePayment:finRemovePayment,
     sendPayLink:sendPayLink,copyPayLink:copyPayLink,toggleBillingAccess:toggleBillingAccess,
     monthlyPlan:monthlyPlan,toggleFamilyAutopay:toggleFamilyAutopay,cancelMonthlyPlan:cancelMonthlyPlan,
-    _mpGenerate:_mpGenerate,_mpAddRow:_mpAddRow,_mpUpdateTotal:_mpUpdateTotal,
+    _mpGenerate:_mpGenerate,_mpAddRow:_mpAddRow,_mpUpdateTotal:_mpUpdateTotal,_mpSwitchTab:_mpSwitchTab,
     viewStaffApp:viewStaffApp,setStaffStatus:setStaffStatus,saveStaffNotes:saveStaffNotes,openAssignPositionModal:openAssignPositionModal,
     openStaffContractModal:openStaffContractModal,saveStaffContract:saveStaffContract,scPayTypeHint:scPayTypeHint,scFillFromSession:scFillFromSession,copyStaffContractLink:copyStaffContractLink,
     toggleOnboard:toggleOnboard,cycleRef:cycleRef,deleteStaffApp:deleteStaffApp,addStaffApp:addStaffApp,
