@@ -3,18 +3,42 @@
 These are Node-based regression tests for the audit-hardened code paths.
 They use Node's built-in test runner (`node --test`); no extra deps.
 
+Only `*.test.js` files are runnable suites. The other ~90 `.js` files in here
+are helpers, fixtures and hand-run simulations (`*_sim.js`), and the
+`*.console.js` files are quality reports that print numbers rather than
+pass/fail — none of them are meant for the test runner.
+
 ## Running
 
 ```bash
 # All tests
 npm test
 
-# Or directly
-node --test tests/
+# Or directly — note the *.test.js glob, NOT the bare directory:
+# `node --test tests/` makes Node treat `tests` as a single module path and it
+# dies with "Cannot find module", running zero tests while looking like a
+# failure. The glob is expanded by the shell on macOS/Linux and by Node itself
+# on Windows (Node 21+).
+node --test tests/*.test.js
 
 # A specific test file
 node --test tests/auto_rules_check.test.js
 ```
+
+`npm test` does NOT include the browser test — that one needs a real Chromium:
+
+```bash
+npm i && npx playwright install chromium   # once
+npm run test:e2e                           # tests/bunk_builder_ui.e2e.js
+```
+
+Without the browser binary it skips with exit 0 rather than failing.
+
+### Known failures
+
+`auto_full_day.test.js` has 14 pre-existing failures (layer floors / Main
+Activity counts). They are unrelated to the rest of the suite — verify against
+a clean tree before chasing one.
 
 ## What's covered
 
