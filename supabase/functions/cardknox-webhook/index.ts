@@ -239,10 +239,34 @@ serve(async (req) => {
           console.error(`[cardknox-webhook] card_save ${xInvoice}: family ${intent.familyKey} gone for camp ${campId}`);
           break;
         }
-        fam.byopProcessor = "cardknox";
-        fam.byopCustomerRef = vaulted;
-        fam.cardOnFile = true;
-        fam.cardSavedDate = new Date().toISOString();
+        // Migration 139: savedPaymentMethods is now a real LIST, not a single
+        // slot. The first-ever card for a family becomes the default (and
+        // still syncs the legacy single-slot fields below exactly as
+        // before, so autopay/every other existing charge path that reads
+        // those directly keeps working unchanged); an ADDITIONAL card just
+        // appends as non-default, leaving whatever the family's current
+        // default is already used for completely alone.
+        const last4 = (xMaskedCardNumber || "").replace(/[^0-9]/g, "").slice(-4);
+        const existingMethods: any[] = Array.isArray(fam.savedPaymentMethods) ? fam.savedPaymentMethods : [];
+        const isFirstMethod = existingMethods.length === 0;
+        const newMethod = {
+          id: "pm_" + crypto.randomUUID().replace(/-/g, ""),
+          type: "card",
+          processor: "cardknox",
+          token: vaulted,
+          last4,
+          label: last4 ? `Card ···· ${last4}` : "Card on file",
+          addedDate: new Date().toISOString(),
+          isDefault: isFirstMethod,
+        };
+        fam.savedPaymentMethods = [...existingMethods, newMethod];
+
+        if (isFirstMethod) {
+          fam.byopProcessor = "cardknox";
+          fam.byopCustomerRef = vaulted;
+          fam.cardOnFile = true;
+          fam.cardSavedDate = new Date().toISOString();
+        }
         const up = await service.from("camp_state_kv").upsert(
           { camp_id: campId, key: "campistryMe", value: me, updated_at: new Date().toISOString() },
           { onConflict: "camp_id,key" },

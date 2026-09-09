@@ -312,12 +312,35 @@ async function handleAutopaySetup(
       return;
     }
 
-    f.stripeCustomerId = customerId;
-    f.stripePaymentMethodId = paymentMethodId;
-    f.cardOnFile = true;
-    f.paymentMethodType = pmType;
-    if (pmLabel) f.paymentMethodLabel = pmLabel;
-    f.cardSavedDate = new Date().toISOString();
+    // Migration 139: savedPaymentMethods is a real LIST now, not a single
+    // slot — same reasoning as cardknox-webhook's mirrored change. First
+    // card ever for this family becomes the default (syncing the legacy
+    // single-slot fields below exactly as before, so nothing regresses for
+    // any existing charge path that reads those directly); an ADDITIONAL
+    // card just appends as non-default.
+    const existingMethods: any[] = Array.isArray(f.savedPaymentMethods) ? f.savedPaymentMethods : [];
+    const isFirstMethod = existingMethods.length === 0;
+    const newMethod = {
+      id: "pm_" + crypto.randomUUID().replace(/-/g, ""),
+      type: pmType,
+      processor: "stripe",
+      token: paymentMethodId,
+      stripeCustomerId: customerId,
+      last4: (pmLabel.match(/(\d{4})\s*$/) || [])[1] || "",
+      label: pmLabel || (pmType === "us_bank_account" ? "Bank account" : "Card on file"),
+      addedDate: new Date().toISOString(),
+      isDefault: isFirstMethod,
+    };
+    f.savedPaymentMethods = [...existingMethods, newMethod];
+
+    if (isFirstMethod) {
+      f.stripeCustomerId = customerId;
+      f.stripePaymentMethodId = paymentMethodId;
+      f.cardOnFile = true;
+      f.paymentMethodType = pmType;
+      if (pmLabel) f.paymentMethodLabel = pmLabel;
+      f.cardSavedDate = new Date().toISOString();
+    }
 
     const up = await supabase.from("camp_state_kv").upsert(
       { camp_id: campId, key: "campistryMe", value: me, updated_at: new Date().toISOString() },

@@ -141,6 +141,7 @@
         <div class="lk-nav-divider"></div>
         <div class="lk-nav-label">Financial</div>
         <button class="lk-nav-item" data-page="payments" onclick="nav('payments')"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="1" y="4" width="22" height="16" rx="2"/><line x1="1" y1="10" x2="23" y2="10"/></svg> Payments</button>
+        <button class="lk-nav-item" data-page="cards" onclick="nav('cards')"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="2" y="5" width="20" height="14" rx="2"/><line x1="2" y1="10" x2="22" y2="10"/><line x1="6" y1="15" x2="10" y2="15"/></svg> Cards</button>
         <button class="lk-nav-item" data-page="canteen" onclick="nav('canteen')"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M18 8h1a4 4 0 0 1 0 8h-1"/><path d="M2 8h16v9a4 4 0 0 1-4 4H6a4 4 0 0 1-4-4V8z"/></svg> Canteen</button>
         <button class="lk-nav-item" data-page="shop" onclick="nav('shop')"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M6 2L3 6v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2V6l-3-4z"/><line x1="3" y1="6" x2="21" y2="6"/><path d="M16 10a4 4 0 0 1-8 0"/></svg> Camp Shop</button>
         <button class="lk-nav-item" data-page="tips" onclick="nav('tips')"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><path d="M16 8h-6a2 2 0 1 0 0 4h4a2 2 0 1 1 0 4H8"/><line x1="12" y1="6" x2="12" y2="8"/><line x1="12" y1="16" x2="12" y2="18"/></svg> Tips</button>
@@ -338,6 +339,16 @@
     <div class="lk-card"><div class="lk-card-head"><h2>Payment History</h2></div>
         <table class="lk-table"><thead><tr><th>Date</th><th>Description</th><th>Amount</th><th>Status</th></tr></thead><tbody id="payTable"></tbody></table>
     </div>
+</div>
+
+<!-- CARDS -->
+<div class="lk-page" id="page-cards">
+    <div class="lk-page-hero">
+    <div class="lk-page-hero-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="2" y="5" width="20" height="14" rx="2"/><line x1="2" y1="10" x2="22" y2="10"/><line x1="6" y1="15" x2="10" y2="15"/></svg></div>
+    <div><h1>Cards</h1><p>Saved cards for tuition and canteen — pick which one to use wherever you pay</p></div>
+</div>
+    <div id="cardsCampTabs"></div>
+    <div id="cardsList"></div>
 </div>
 
 <!-- CANTEEN -->
@@ -1143,6 +1154,106 @@ function _showPaymentsCamp(cid){
     var pt=document.getElementById('payTable');
     if(pt) _renderPayHistory(pt,(d&&d.payments)||[]);
 }
+
+// ── Cards (migration 139) ────────────────────────────────────────────────
+// A real list of saved payment methods per family instead of a single slot —
+// this page lets a parent save several cards and pick a default; the actual
+// per-action pickers (Pay Now, canteen Add Funds, auto-reload) read from the
+// same get_my_saved_payment_methods data.
+var _cardsByCamp={}, _cardsActiveCid=null;
+function renderCardsPage(){
+    var ids=Object.keys(_payCamps||{});
+    if(!ids.length && parent && parent.campId){ ids=[parent.campId]; if(!_payCamps[parent.campId]) _payCamps[parent.campId]={name:'',isCurrent:true}; }
+    var tabsHost=document.getElementById('cardsCampTabs');
+    if(!ids.length){ var host0=document.getElementById('cardsList'); if(host0) host0.innerHTML=''; if(tabsHost) tabsHost.innerHTML=''; return; }
+    var activeCid=_cardsActiveCid&&ids.indexOf(_cardsActiveCid)>=0?_cardsActiveCid:ids[0];
+    if(ids.length>1){
+        _renderCampSwitch('cardsCampTabs', ids.map(function(id){ return {id:id,name:(_payCamps[id]||{}).name||'Camp'}; }), function(c){ _showCardsCamp(c.id); }, activeCid);
+    } else if(tabsHost){ tabsHost.innerHTML=''; }
+    _showCardsCamp(activeCid);
+}
+function _showCardsCamp(cid){
+    _cardsActiveCid=cid;
+    var host=document.getElementById('cardsList'); if(!host||!cid) return;
+    host.innerHTML='<div class="lk-card" style="padding:18px;text-align:center;color:var(--text-muted);">Loading your saved cards…</div>';
+    var db=window._parentDB; if(!db) return;
+    var call=window._pRpc?window._pRpc('get_my_saved_payment_methods',{},cid):db.rpc('get_my_saved_payment_methods',{p_camp_id:cid});
+    Promise.resolve(call).then(function(res){
+        if(res.error||!res.data||!res.data.success){ host.innerHTML='<div class="lk-card" style="padding:20px;text-align:center;color:var(--text-muted);">Could not load your saved cards.</div>'; return; }
+        _cardsByCamp[cid]=res.data;
+        _renderCardsList(cid);
+    }).catch(function(){ host.innerHTML='<div class="lk-card" style="padding:20px;text-align:center;color:var(--text-muted);">Could not load your saved cards.</div>'; });
+}
+function _renderCardsList(cid){
+    var host=document.getElementById('cardsList'); if(!host) return;
+    var d=_cardsByCamp[cid]; var methods=(d&&d.methods)||[];
+    var addBtn='<button class="btn btn-secondary" type="button" style="width:100%;'+(methods.length?'margin-top:10px;':'')+'" onclick="_addSavedCard(\''+cid+'\')">+ Add '+(methods.length?'another':'a')+' card</button>';
+    if(!methods.length){
+        host.innerHTML='<div class="lk-card" style="padding:24px;text-align:center;">'+
+            '<p style="color:var(--text-muted);margin:0 0 14px;">No saved cards yet — add one to skip re-entering your card for tuition and canteen.</p>'+
+            addBtn+'</div>';
+        return;
+    }
+    var rows=methods.map(function(m){
+        return '<div class="lk-card" style="padding:16px;display:flex;align-items:center;justify-content:space-between;gap:10px;flex-wrap:wrap;margin-bottom:10px;">'+
+            '<div><div style="font-weight:600;">'+_escHtml(m.label||'Card on file')+(m.isDefault?' <span class="badge badge-info" style="font-size:.62rem;">Default</span>':'')+'</div>'+
+            '<div style="font-size:.75rem;color:var(--text-muted);">Added '+_escHtml((m.addedDate||'').slice(0,10))+'</div></div>'+
+            '<div style="display:flex;gap:6px;">'+
+            (m.isDefault?'':'<button class="btn btn-ghost btn-sm" type="button" onclick="_setDefaultCard(\''+cid+'\',\''+m.id+'\')">Set default</button>')+
+            '<button class="btn btn-ghost btn-sm" type="button" style="color:#B91C1C;" onclick="_removeSavedCard(\''+cid+'\',\''+m.id+'\')">Remove</button>'+
+            '</div></div>';
+    }).join('');
+    host.innerHTML=rows+addBtn;
+}
+async function _addSavedCard(cid){
+    var d=_balByCamp[cid];
+    if(!d||!d.familyKey){
+        // _balByCamp may not have resolved for this camp yet (Cards can be
+        // opened before Payments ever loads) — fetch it directly rather
+        // than blocking on a page the parent hasn't visited.
+        var db=window._parentDB; if(!db){ toast('Please sign in again.'); return; }
+        var call=window._pRpc?window._pRpc('get_my_balance',{},cid):db.rpc('get_my_balance',{p_camp_id:cid});
+        try{ var res=await call; if(res&&res.data&&res.data.success){ d=res.data; _balByCamp[cid]=d; } }catch(e){}
+    }
+    if(!d||!d.familyKey){ toast('Could not find your family record — contact the camp office.'); return; }
+    var status=await _getCampProcessorInfo(cid);
+    var processorKey=(status&&status.processorKey)||'stripe';
+    if(processorKey!=='cardknox'){ toast("Online card saving isn't set up for this camp yet — contact the office."); return; }
+    try{
+        toast('Opening secure checkout…');
+        var ckRes=await _lkCallEdge('cardknox-checkout-start',{campId:cid,kind:'card_save',familyKey:d.familyKey,familyName:d.familyName||'',description:'Save a card'+(d.familyName?' — '+d.familyName:'')});
+        _lkGoToCheckout(ckRes.url);
+    }catch(err){ console.error('[Parent] add saved card error:',err); toast('Could not start setup: '+(err&&err.message||'error')); }
+}
+async function _setDefaultCard(cid,methodId){
+    var db=window._parentDB; if(!db) return;
+    try{
+        var call=window._pRpc?window._pRpc('set_default_payment_method',{p_method_id:methodId},cid):db.rpc('set_default_payment_method',{p_camp_id:cid,p_method_id:methodId});
+        var res=await call;
+        if(res.error||!res.data||!res.data.success){ toast('Could not set default: '+(res.error?res.error.message:((res.data||{}).error||'error'))); return; }
+        toast('Default card updated');
+        delete _balByCamp[cid]; // the family's default token changed — force a fresh read next time it's needed
+        _showCardsCamp(cid);
+    }catch(err){ console.error('[Parent] set default card error:',err); toast('Could not set default card'); }
+}
+function _removeSavedCard(cid,methodId){
+    var m=(((_cardsByCamp[cid]||{}).methods)||[]).find(function(x){return x.id===methodId;});
+    lkConfirmDelete('Remove '+(m&&m.label||'this card')+'?', 'You can add it again anytime — this only removes it from Campistry, not from your bank.', function(){
+        _doRemoveSavedCard(cid,methodId);
+    });
+}
+async function _doRemoveSavedCard(cid,methodId){
+    var db=window._parentDB; if(!db) return;
+    try{
+        var call=window._pRpc?window._pRpc('remove_payment_method',{p_method_id:methodId},cid):db.rpc('remove_payment_method',{p_camp_id:cid,p_method_id:methodId});
+        var res=await call;
+        if(res.error||!res.data||!res.data.success){ toast('Could not remove card: '+(res.error?res.error.message:((res.data||{}).error||'error'))); return; }
+        toast('Card removed');
+        delete _balByCamp[cid];
+        _showCardsCamp(cid);
+    }catch(err){ console.error('[Parent] remove saved card error:',err); toast('Could not remove card'); }
+}
+
 // Sums outstanding balance across every camp already fetched this session —
 // runs after loadPayments()'s own fetch, and also opportunistically once at
 // boot (see the pre-warm call in init()) so the Home tile isn't stuck on its
@@ -1493,6 +1604,7 @@ function nav(p){
     if(p==='mail')renderCamperMail();
     if(p==='shop')renderShopPage();
     if(p==='payments')loadPayments();
+    if(p==='cards')renderCardsPage();
     if(_navHistory[_navHistory.length-1]!==p)_navHistory.push(p);
     window.scrollTo(0,0);
 }
