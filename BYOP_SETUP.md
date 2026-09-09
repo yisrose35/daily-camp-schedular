@@ -242,6 +242,57 @@ Authorization header.
   actually connected, and the cron had no Cardknox branch at all. Fixed
   together since neither half is useful without the other.
 
+## "Charge my card on file" — one-off tuition/canteen shortcut
+
+Neither tuition's Pay Now nor canteen's Add Funds ever reused a saved card
+for a manual, one-off payment before this — only the fully-automatic paths
+above (autopay installments, canteen auto-reload) did. A parent who already
+has a card on file (Stripe or BYOP) still had to re-enter payment details
+through hosted Checkout every time they wanted to pay something themselves.
+
+- **Migration `137_saved_card_charge.sql`** — re-extends `get_my_balance`
+  (originally migration 118) with three new fields: `chargeable` (mirrors
+  the office-side `_famChargeable(f)` check in `campistry_me.js` —
+  `byopCustomerRef` truthy, OR `stripeCustomerId` + `cardOnFile`),
+  `processorKey`, and `cardLabel`. Also adds `saved_card_charge_locks` (an
+  idempotency-lock table keyed on a client-supplied `idempotency_key`,
+  pruned by `_prune_saved_card_charge_locks`, service-role only).
+- **Edge function `supabase/functions/charge-saved-card/index.ts`** — the
+  one function both surfaces call. Unlike every anon-key checkout-starting
+  function elsewhere in this codebase, this one **requires the caller's
+  real session JWT** (same `asUser` pattern as `get-photo-urls`) since it
+  moves money with no hosted checkout page in front of it at all. Verifies
+  ownership via `get_my_balance`, takes the idempotency lock, re-reads the
+  family's actual saved-card fields from `camp_state_kv`, branches on
+  `processorKey` (Cardknox direct `cc:sale` vs. Stripe off-session charge),
+  then records the result via `record_processor_transaction` (canteen: also
+  `credit_canteen_balance_from_processor`; tuition: appends into
+  `me.finance.payments` with an optimistic-retry upsert loop).
+- **`campistry_link_parent.html`** — a "Charge {card label} instead" row
+  appears next to tuition's Pay Now amount field (`#lkPayChargeSavedRow`)
+  and canteen's Add Funds buttons (`#canteenChargeSavedRow`), only when
+  `get_my_balance`'s `chargeable` flag is true for that family. Both go
+  through a dedicated in-app confirm overlay (`lkChargeConfirm` —
+  deliberately separate from the existing delete-confirm overlay, with no
+  "don't ask again" opt-out, since this moves real money) rather than
+  `window.confirm()`, which this app's Capacitor WebView doesn't reliably
+  support (see the comment above `payNow()`). Canteen reuses the exact
+  same `_balByCamp[campId]` data tuition already fetches — a family's saved
+  card is shared across both, so no separate RPC call was needed there.
+- **Deploy steps (manual, per this project's no-CLI rule)**: paste migration
+  137 into the SQL Editor, then deploy `charge-saved-card` as a new Edge
+  Function via the Dashboard (Edge Functions → Deploy → paste the file's
+  full contents — same env vars as every other Stripe/Cardknox function:
+  `STRIPE_SECRET_KEY`, `SUPABASE_URL`, `SUPABASE_ANON_KEY`,
+  `SUPABASE_SERVICE_ROLE_KEY`). Leave **JWT verification ON** (the default,
+  same as `payments-charge`/`payments-refund` above) — do NOT add it to the
+  JWT-off list in the section above; this function deliberately requires
+  the caller's real identity, unlike every anon-key checkout-starting
+  function elsewhere in this doc. Untested against a live account in this
+  environment (no Cardknox/Stripe test credentials here) — run one real
+  test charge against a sandbox card on file before relying on it for a
+  live camp.
+
 ## What's deliberately NOT built yet (flagged, not silently skipped)
 
 - **Accept Blue adapter** — the catalog/framework supports it the moment
