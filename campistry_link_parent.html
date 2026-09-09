@@ -1425,7 +1425,11 @@ function _lkPayChargeSaved(){
             toast('Charging your card…');
             var res=await _lkCallEdgeAuthed('charge-saved-card',{campId:cid,kind:'tuition_charge',amount:amt,idempotencyKey:'tui_'+cid+'_'+Date.now()+'_'+Math.random().toString(36).slice(2,8)});
             toast('Charged '+_lkMoney(res.amount)+' — thank you!');
-            loadPayments();
+            // Refreshing the balance is best-effort — the charge already
+            // succeeded and was toasted above, so a failure here must never
+            // be reported as a charge failure (same reasoning as the
+            // canteen post-charge refresh below).
+            try{ loadPayments(); }catch(refreshErr){ console.error('[Parent] post-charge balance refresh failed:',refreshErr); }
         }catch(err){ console.error('[Parent] charge saved card error:',err); toast('Could not charge your card: '+(err&&err.message||'error')); }
         finally{ _lkChargeBusy=false; }
     });
@@ -2074,7 +2078,12 @@ function _lkCanteenChargeSaved(){
             toast('Charging your card…');
             var res=await _lkCallEdgeAuthed('charge-saved-card',{campId:c.campId,kind:'canteen_deposit',camperName:c.name,amount:amt,idempotencyKey:'can_'+c.campId+'_'+c.id+'_'+Date.now()+'_'+Math.random().toString(36).slice(2,8)});
             toast('Charged '+_lkMoney(res.amount)+' — thank you!');
-            _syncCanteenFromCloud(children, c.campId);
+            // Refreshing the on-screen balance is best-effort — the charge
+            // already succeeded and was toasted above, so a failure here
+            // (e.g. this function not yet loaded) must never be reported as
+            // a charge failure.
+            try{ if(typeof window._syncCanteenFromCloud==='function') window._syncCanteenFromCloud(children, c.campId); }
+            catch(syncErr){ console.error('[Parent] canteen post-charge refresh failed:',syncErr); }
         }catch(err){ console.error('[Parent] charge saved card (canteen) error:',err); toast('Could not charge your card: '+(err&&err.message||'error')); }
         finally{ _lkChargeBusy=false; }
     });
@@ -4802,6 +4811,11 @@ if (window.pdfjsLib) { window.pdfjsLib.GlobalWorkerOptions.workerSrc = 'pdfjs-di
             }
         });
     }
+    // Exposed on window — this function lives inside this file's Auth-layer
+    // IIFE, but _lkCanteenChargeSaved() (a different <script> block, no
+    // shared scope) needs to call it after a successful charge to pull the
+    // freshly-credited balance back down.
+    window._syncCanteenFromCloud = _syncCanteenFromCloud;
 
     // ── Apply real data ───────────────────────────────────────────────────────
     function _applyData(d) {
