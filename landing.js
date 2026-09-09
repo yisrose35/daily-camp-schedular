@@ -1089,30 +1089,44 @@ document.querySelectorAll('a[href^="#"]').forEach(anchor => {
 function initVideoPlaylist() {
     const iframe = document.getElementById('vimeo-player');
     const playlistItems = document.querySelectorAll('.playlist-item');
-    
-    // Ensure the Vimeo API and elements exist before running
-    if (!iframe || playlistItems.length === 0 || typeof Vimeo === 'undefined') return;
+    if (!iframe || playlistItems.length === 0) return;
 
-    const player = new Vimeo.Player(iframe);
     let currentIndex = 0;
+    let player = null;
+
+    // Auto-play the next video when the current one ends. Rebound on a fresh
+    // Player instance after every switch rather than reused, since swapping
+    // iframe.src (below) invalidates whatever the previous instance was
+    // listening to.
+    function bindEndedHandler() {
+        if (typeof Vimeo === 'undefined') return;
+        player = new Vimeo.Player(iframe);
+        player.on('ended', function() {
+            const nextIndex = currentIndex + 1;
+            if (nextIndex < playlistItems.length) loadVideo(nextIndex);
+        });
+    }
 
     // Function to load a specific video by index
     function loadVideo(index) {
         if (index < 0 || index >= playlistItems.length) return;
-        
+
         // Update active class on buttons
         playlistItems.forEach(item => item.classList.remove('active'));
         playlistItems[index].classList.add('active');
-        
-        // Get the new Vimeo ID and load it
+
+        // Swap the iframe's src directly instead of Vimeo.Player.loadVideo() —
+        // loadVideo(id) only works for a fully public video with no privacy
+        // hash requirement, and fails silently into a rejected promise for
+        // anything else (a freshly-shared/unlisted video, for instance). A
+        // plain src navigation works the same way the very first video on
+        // page load already does, and shows Vimeo's own "not available"
+        // message directly in the frame if something really is wrong with
+        // that specific video, instead of just doing nothing.
         const newVideoId = playlistItems[index].getAttribute('data-vimeo-id');
-        player.loadVideo(newVideoId).then(function() {
-            player.play();
-        }).catch(function(error) {
-            console.error('Error loading video:', error);
-        });
-        
+        iframe.src = 'https://player.vimeo.com/video/' + newVideoId + '?autoplay=1';
         currentIndex = index;
+        bindEndedHandler();
     }
 
     // Handle clicks on playlist items
@@ -1124,17 +1138,7 @@ function initVideoPlaylist() {
         });
     });
 
-    // Auto-play the next video when the current one ends
-    player.on('ended', function() {
-        const nextIndex = currentIndex + 1;
-        // If there is a next video, load it. Otherwise, loop back to start (optional)
-        if (nextIndex < playlistItems.length) {
-            loadVideo(nextIndex);
-        } else {
-            // Optional: loop back to the first video
-            // loadVideo(0); 
-        }
-    });
+    bindEndedHandler();
 }
 
 // Initialize the playlist logic
