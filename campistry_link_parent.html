@@ -5028,6 +5028,13 @@ if (window.pdfjsLib) { window.pdfjsLib.GlobalWorkerOptions.workerSrc = 'pdfjs-di
                 if (a && a.dailyLimit != null) c.dailyLimit = a.dailyLimit;
                 if (a && a.creditLimit != null) c.creditLimit = a.creditLimit;
                 if (a && a.balanceFloor != null) c.balanceFloor = a.balanceFloor;
+                // Was missing entirely — every OTHER field above got refreshed
+                // from the live cloud read, but autoReload never did, so the
+                // config a parent had just saved (still correctly sitting in
+                // camp_state_kv the whole time) looked like it vanished the
+                // moment this sync ran on the next page load/reload, purely
+                // because this one field was never copied over.
+                c.autoReload = (a && a.autoReload) || null;
                 var childTx = txs.filter(function(t){ return t.camper === c.name; });
                 canteenTxByChild[c.id] = childTx.map(function(t) {
                     var credit = t.type === 'credit';
