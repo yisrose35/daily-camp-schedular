@@ -241,6 +241,16 @@ Authorization header.
   silently routed to Stripe's setup page regardless of what the camp
   actually connected, and the cron had no Cardknox branch at all. Fixed
   together since neither half is useful without the other.
+  **⚠️ Requires `cardknox-checkout-start` to be redeployed** if the version
+  live on Supabase predates this feature — its `canteen_autoreload_setup`
+  kind (exempt from the "amount required" check, since saving a card
+  charges nothing) was added in the same commit as this section. Live-hit
+  symptom, straight from a phone: routing correctly goes to Cardknox now,
+  but saving still fails with **"Could not start setup: campId, kind, and
+  amount are required"** — that exact message means the deployed function
+  is stale, not that anything in this repo is broken. Redeploy the current
+  `supabase/functions/cardknox-checkout-start/index.ts` via the Dashboard
+  to fix it; no code change needed.
 
 ## "Charge my card on file" — one-off tuition/canteen shortcut
 
