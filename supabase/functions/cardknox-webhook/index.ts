@@ -38,11 +38,14 @@
 // kind, unlike what Sola's Direct API docs describe. get_cardknox_checkout_
 // intent-by-reference is still tried first (in case a future integration
 // path DOES carry it through), but the real path in production is the
-// amount-fallback below: match the single still-pending intent for this
-// camp (from ?campId=) with the same dollar amount, within a bounded
-// lookback window. Two pending intents at the same amount is the one case
-// this can't resolve — it's left alone rather than guessed at, since a
-// wrong guess means crediting the wrong family's payment.
+// fallback below: match the single still-pending intent for this camp
+// (from ?campId=) within a bounded lookback window, on dollar amount for a
+// real charge (tuition_charge/canteen_deposit) or, since a card-save (Sola's
+// cc:save) carries no amount at all, on zero-amount + kind for a card_save/
+// canteen_autoreload_setup intent instead. More than one candidate at the
+// same key is the one case this can't resolve — it's left alone rather than
+// guessed at, since a wrong guess means crediting the wrong family's
+// payment (or vaulting a card onto the wrong family).
 //
 // Response: always 200 unless the signature itself fails to verify — Sola
 // has no reason to retry a webhook we understood and (correctly) did
@@ -170,27 +173,39 @@ serve(async (req) => {
       // bounded lookback window. Ambiguous (more than one pending intent at
       // the same amount) is deliberately left alone rather than guessed —
       // guessing wrong here means crediting the wrong family's payment.
+      //
+      // card_save/canteen_autoreload_setup carry NO amount (Sola's cc:save
+      // has nothing to charge), so xAmount is always "0.00"/empty for these
+      // — a bare `amountCents > 0` gate skipped this branch entirely for
+      // every card save, so the webhook could never resolve back to its
+      // intent and silently dropped it (confirmed live: Sola showed the
+      // card saved on its own side, but nothing ever reached
+      // savedPaymentMethods). Zero-amount callbacks are resolved the same
+      // way, just narrowed to the zero-amount, tokenize-only kinds instead
+      // of matching on amount — a real charge can never land here since
+      // tuition_charge/canteen_deposit intents always have amount_cents > 0.
       const amountCents = Math.round(parseFloat(xAmount || "0") * 100);
-      if (amountCents > 0) {
-        const cutoff = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000).toISOString();
-        const { data: candidates } = await service.from("cardknox_checkout_intents")
-          .select("*")
-          .eq("camp_id", campId)
-          .eq("status", "pending")
-          .eq("amount_cents", amountCents)
-          .gte("created_at", cutoff);
-        if (candidates && candidates.length === 1) {
-          const row = candidates[0];
-          xInvoice = row.reference;
-          intent = {
-            success: true, campId: row.camp_id, kind: row.kind, familyKey: row.family_key,
-            familyName: row.family_name, camperName: row.camper_name, amountCents: row.amount_cents,
-            status: row.status,
-          };
-        } else if (candidates && candidates.length > 1) {
-          console.error(`[cardknox-webhook] Ambiguous amount match for camp ${campId}: ${candidates.length} pending intents at $${xAmount}, xRefNum=${xRefNum} — refusing to guess, needs manual reconciliation`);
-          return text("ok", 200);
-        }
+      const cutoff = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000).toISOString();
+      let candidateQuery = service.from("cardknox_checkout_intents")
+        .select("*")
+        .eq("camp_id", campId)
+        .eq("status", "pending")
+        .gte("created_at", cutoff);
+      candidateQuery = amountCents > 0
+        ? candidateQuery.eq("amount_cents", amountCents)
+        : candidateQuery.eq("amount_cents", 0).in("kind", ["card_save", "canteen_autoreload_setup"]);
+      const { data: candidates } = await candidateQuery;
+      if (candidates && candidates.length === 1) {
+        const row = candidates[0];
+        xInvoice = row.reference;
+        intent = {
+          success: true, campId: row.camp_id, kind: row.kind, familyKey: row.family_key,
+          familyName: row.family_name, camperName: row.camper_name, amountCents: row.amount_cents,
+          status: row.status,
+        };
+      } else if (candidates && candidates.length > 1) {
+        console.error(`[cardknox-webhook] Ambiguous match for camp ${campId}: ${candidates.length} pending intents at $${xAmount}, xRefNum=${xRefNum} — refusing to guess, needs manual reconciliation`);
+        return text("ok", 200);
       }
     }
 
