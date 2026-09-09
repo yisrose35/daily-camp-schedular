@@ -24,7 +24,39 @@
 // =============================================================================
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
-import { getAdapter } from "./_shared/processor_adapter.ts";
+// Cardknox/Sola cc:save, inlined rather than imported from
+// _shared/adapters/cardknox_adapter.ts on purpose: this project deploys edge
+// functions by pasting ONE file into the Supabase Dashboard (no CLI — see
+// CLAUDE.md), and only that file is deployed, so ANY relative import fails to
+// bundle. Same reasoning cardknox-webhook and charge-due-installments already
+// follow for their own gateway calls.
+//
+// Keep in sync with cardknox_adapter.saveMethod(). An iFields-issued token is
+// often already reusable per Cardknox's own model, but cc:save explicitly
+// converts it into a long-lived vault token — the safer, explicit choice, so
+// nothing here depends on a temporary token outliving its expiry between
+// "save" and some later charge.
+const CARDKNOX_GATEWAY = "https://x1.cardknox.com/gateway";
+async function cardknoxSaveMethod(apiKey: string, token: string) {
+  const resp = await fetch(CARDKNOX_GATEWAY, {
+    method: "POST",
+    headers: { "Content-Type": "application/x-www-form-urlencoded" },
+    body: new URLSearchParams({
+      xKey: apiKey,
+      xVersion: "4.5.9",
+      xSoftwareName: "Campistry",
+      xSoftwareVersion: "1.0",
+      xCommand: "cc:save",
+      xToken: token,
+    }).toString(),
+  });
+  const parsed: Record<string, string> = {};
+  new URLSearchParams(await resp.text()).forEach((v, k) => { parsed[k] = v; });
+  if (parsed.xResult !== "A" || !parsed.xToken) {
+    return { success: false, error: parsed.xError || "Could not save payment method", raw: parsed };
+  }
+  return { success: true, customerRef: parsed.xToken, raw: parsed };
+}
 
 const SUPABASE_URL = Deno.env.get("SUPABASE_URL") || "";
 const SUPABASE_SERVICE_KEY = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY") || "";
@@ -71,15 +103,22 @@ serve(async (req) => {
       return json({ success: false, error: "This camp is on Stripe — use the Stripe card-setup flow instead." }, 400);
     }
 
-    const adapter = getAdapter(processorKey);
-    if (!adapter) return json({ success: false, error: `No adapter implemented for processor '${processorKey}'` }, 500);
+    // Only Cardknox/Sola is inlined here. A Banquest camp gets a clear error
+    // rather than a silent no-op — flagged in BYOP_SETUP.md, not pretended.
+    if (processorKey !== "cardknox") {
+      return json({ success: false, error: `Saving a card isn't wired for processor '${processorKey}' yet.` }, 400);
+    }
 
     const { data: credResult } = await service.rpc("_admin_get_processor_credential", { p_camp_id: campId });
     if (!credResult?.success) {
       return json({ success: false, error: credResult?.error || "This camp's processor isn't connected/verified yet." }, 400);
     }
+    const apiKey = credResult.credentials?.apiKey;
+    if (!apiKey) {
+      return json({ success: false, error: "This camp's processor credential is missing its API key." }, 400);
+    }
 
-    const saveResult = await adapter.saveMethod(credResult.credentials, String(token));
+    const saveResult = await cardknoxSaveMethod(String(apiKey), String(token));
     if (!saveResult.success || !saveResult.customerRef) {
       return json({ success: false, error: saveResult.error || "Could not save payment method" }, 200);
     }
