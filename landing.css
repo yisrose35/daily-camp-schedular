@@ -939,6 +939,12 @@ ul {
     width: 100%;
     height: 100%;
 }
+.wt-video {
+    display: none;
+}
+.wt-video.active {
+    display: block;
+}
 
 /* Walkthrough Playlist */
 .walkthrough-playlist {

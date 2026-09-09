@@ -1087,65 +1087,46 @@ document.querySelectorAll('a[href^="#"]').forEach(anchor => {
 // WALKTHROUGH PLAYLIST LOGIC
 // ========================================
 function initVideoPlaylist() {
-    const iframe = document.getElementById('vimeo-player');
+    // Static iframes, one per video, src set once in the HTML and never
+    // rewritten — swapping a shared iframe's src via JS proved unreliable
+    // with Vimeo's embed checks even after fixing the Player-instance-
+    // stacking bug (confirmed live: both videos started failing with a
+    // "content is blocked" message). Switching videos now just toggles
+    // which already-loaded iframe is visible, and each iframe gets exactly
+    // one permanently-bound Vimeo.Player instance controlled only via
+    // .play()/.pause() — never touching .src again.
+    const videoEls = document.querySelectorAll('.wt-video');
     const playlistItems = document.querySelectorAll('.playlist-item');
-    if (!iframe || playlistItems.length === 0) return;
+    if (!videoEls.length || !playlistItems.length) return;
 
     let currentIndex = 0;
+    const players = [];
 
-    // Function to load a specific video by index
-    function loadVideo(index) {
-        if (index < 0 || index >= playlistItems.length) return;
-
-        // Update active class on buttons
-        playlistItems.forEach(item => item.classList.remove('active'));
-        playlistItems[index].classList.add('active');
-
-        // Swap the iframe's src directly instead of Vimeo.Player.loadVideo() —
-        // loadVideo(id) only works for a fully public video with no privacy
-        // hash requirement, and fails silently into a rejected promise for
-        // anything else (an unlisted video, for instance). A plain src
-        // navigation works the same way the very first video on page load
-        // already does, and shows Vimeo's own "not available" message
-        // directly in the frame if something really is wrong with that
-        // specific video, instead of just doing nothing.
-        //
-        // An unlisted video's embed URL needs its privacy hash appended
-        // (?h=...) or Vimeo refuses to serve it at all — confirmed live:
-        // the "Campistry Me" video 404'd silently until this was added.
-        // Set data-vimeo-hash="<hash>" on any playlist item whose video
-        // isn't fully public (get it from that video's own Vimeo embed
-        // code, the h= value in the iframe src Vimeo gives you).
-        const newVideoId = playlistItems[index].getAttribute('data-vimeo-id');
-        const newVideoHash = playlistItems[index].getAttribute('data-vimeo-hash');
-        iframe.src = 'https://player.vimeo.com/video/' + newVideoId
-            + (newVideoHash ? '?h=' + newVideoHash + '&autoplay=1' : '?autoplay=1');
+    function showVideo(index, autoplay) {
+        videoEls.forEach((el, i) => el.classList.toggle('active', i === index));
+        playlistItems.forEach((item, i) => item.classList.toggle('active', i === index));
         currentIndex = index;
+        if (autoplay && players[index]) {
+            players[index].play().catch(function() {});
+        }
     }
 
-    // Handle clicks on playlist items
     playlistItems.forEach((item, index) => {
         item.addEventListener('click', () => {
-            if (currentIndex !== index) {
-                loadVideo(index);
-            }
+            if (currentIndex === index) return;
+            if (players[currentIndex]) players[currentIndex].pause().catch(function() {});
+            showVideo(index, true);
         });
     });
 
-    // ONE Player instance for the whole page, created once. Vimeo's Player.js
-    // re-syncs itself against whatever is currently loaded every time the
-    // iframe navigates (each src swap above triggers a fresh 'ready'
-    // handshake it picks up on its own) — it does NOT need to be recreated
-    // per video. Recreating it on every switch, as an earlier version of
-    // this did, wraps the same iframe with multiple competing Player
-    // instances/postMessage listeners at once, which corrupts the frame's
-    // connection outright: confirmed live, switching to a second video and
-    // back left even the FIRST (previously working) video broken too.
     if (typeof Vimeo !== 'undefined') {
-        const player = new Vimeo.Player(iframe);
-        player.on('ended', function() {
-            const nextIndex = currentIndex + 1;
-            if (nextIndex < playlistItems.length) loadVideo(nextIndex);
+        videoEls.forEach((el, index) => {
+            const p = new Vimeo.Player(el);
+            players[index] = p;
+            p.on('ended', function() {
+                const nextIndex = index + 1;
+                if (nextIndex < videoEls.length) showVideo(nextIndex, true);
+            });
         });
     }
 }

@@ -13,8 +13,8 @@
         html:not(.css-ready) body { opacity: 0; }
         html.css-ready body { transition: opacity 0.15s ease; }
     </style>
-    <link rel="stylesheet" href="landing.css?v=20260909-02" onload="document.documentElement.classList.add('css-ready')">
-<link rel="stylesheet" href="mobile-responsive.css?v=20260909-02">
+    <link rel="stylesheet" href="landing.css?v=20260909-04" onload="document.documentElement.classList.add('css-ready')">
+<link rel="stylesheet" href="mobile-responsive.css?v=20260909-04">
     <noscript><style>html body { opacity: 1 !important; }</style></noscript>
 </head>
 <body>
@@ -426,11 +426,12 @@
                         <div class="browser-bar"><span>app.campistry.org</span></div>
                     </div>
                     <div class="video-wrapper">
-                        <iframe id="vimeo-player" src="https://player.vimeo.com/video/1150915483" frameborder="0" referrerpolicy="strict-origin-when-cross-origin" allow="autoplay; fullscreen; picture-in-picture; clipboard-write; encrypted-media; web-share" allowfullscreen title="Campistry Walkthrough"></iframe>
+                        <iframe class="wt-video active" data-video-index="0" src="https://player.vimeo.com/video/1150915483" frameborder="0" referrerpolicy="strict-origin-when-cross-origin" allow="autoplay; fullscreen; picture-in-picture; clipboard-write; encrypted-media; web-share" allowfullscreen title="Campistry Flow walkthrough"></iframe>
+                        <iframe class="wt-video" data-video-index="1" src="https://player.vimeo.com/video/1225357935?h=bf7ec83b8c" frameborder="0" referrerpolicy="strict-origin-when-cross-origin" allow="autoplay; fullscreen; picture-in-picture; clipboard-write; encrypted-media; web-share" allowfullscreen title="Campistry Me walkthrough"></iframe>
                     </div>
                 </div>
                 <div class="walkthrough-playlist">
-                    <div class="playlist-item active" data-vimeo-id="1150915483" role="button" tabindex="0">
+                    <div class="playlist-item active" data-video-index="0" role="button" tabindex="0">
                         <span class="playlist-item-icon">
                             <svg viewBox="0 0 24 24" fill="currentColor"><polygon points="6 4 20 12 6 20 6 4"/></svg>
                         </span>
@@ -439,7 +440,7 @@
                             <span>The smart scheduling engine — build, manage, and distribute your camp's daily schedule in minutes</span>
                         </span>
                     </div>
-                    <div class="playlist-item" data-vimeo-id="1225357935" data-vimeo-hash="bf7ec83b8c" role="button" tabindex="0">
+                    <div class="playlist-item" data-video-index="1" role="button" tabindex="0">
                         <span class="playlist-item-icon">
                             <svg viewBox="0 0 24 24" fill="currentColor"><polygon points="6 4 20 12 6 20 6 4"/></svg>
                         </span>
@@ -741,7 +742,7 @@ if (window.location.protocol === 'file:') {
     <script src="campistry_utils.js"></script>
     <script src="campistry_security.js"></script>
     <script src="https://player.vimeo.com/api/player.js"></script>
-    <script src="landing.js?v=20260909-03"></script>
+    <script src="landing.js?v=20260909-04"></script>
     <script>setTimeout(function(){ document.documentElement.classList.add('css-ready'); }, 3000);</script>
     <script>
   window.va = window.va || function () { (window.vaq = window.vaq || []).push(arguments); };
