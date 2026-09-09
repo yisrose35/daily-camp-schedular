@@ -149,7 +149,14 @@ serve(async (req) => {
     // Idempotency lock — first line of defense against a double-click or a
     // retried request. A conflict means this exact idempotencyKey was
     // already handled: replay its stored result rather than charging again.
-    await service.rpc("_prune_saved_card_charge_locks").catch(() => {});
+    // Best-effort cleanup only — supabase-js's query builder is a thenable,
+    // not a real Promise (no .catch()/.finally()), so a plain try/await is
+    // required here rather than chaining .catch() directly onto the call.
+    try {
+      await service.rpc("_prune_saved_card_charge_locks");
+    } catch (_pruneErr) {
+      // never block a real charge on best-effort lock cleanup
+    }
     const { data: lockRow, error: lockErr } = await service
       .from("saved_card_charge_locks")
       .insert({ idempotency_key: idempotencyKey, camp_id: campId, status: "pending" })
