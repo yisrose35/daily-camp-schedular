@@ -178,6 +178,7 @@
 </div>
     <div class="lk-bnav-sheet" id="lkBnavSheet">
         <button class="lk-bsheet-item" data-page="payments" onclick="lkNavFromSheet('payments')"><span class="lk-bsheet-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="1" y="4" width="22" height="16" rx="2"/><line x1="1" y1="10" x2="23" y2="10"/></svg></span><span>Payments</span></button>
+        <button class="lk-bsheet-item" data-page="cards" onclick="lkNavFromSheet('cards')"><span class="lk-bsheet-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="2" y="5" width="20" height="14" rx="2"/><line x1="2" y1="10" x2="22" y2="10"/><line x1="6" y1="15" x2="10" y2="15"/></svg></span><span>Cards</span></button>
         <button class="lk-bsheet-item" data-page="canteen" onclick="lkNavFromSheet('canteen')"><span class="lk-bsheet-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M18 8h1a4 4 0 0 1 0 8h-1"/><path d="M2 8h16v9a4 4 0 0 1-4 4H6a4 4 0 0 1-4-4V8z"/></svg></span><span>Canteen</span></button>
         <button class="lk-bsheet-item" data-page="shop" onclick="lkNavFromSheet('shop')"><span class="lk-bsheet-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M6 2L3 6v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2V6l-3-4z"/><line x1="3" y1="6" x2="21" y2="6"/><path d="M16 10a4 4 0 0 1-8 0"/></svg></span><span>Camp Shop</span></button>
         <button class="lk-bsheet-item" data-page="tips" onclick="lkNavFromSheet('tips')"><span class="lk-bsheet-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><path d="M16 8h-6a2 2 0 1 0 0 4h4a2 2 0 1 1 0 4H8"/><line x1="12" y1="6" x2="12" y2="8"/><line x1="12" y1="16" x2="12" y2="18"/></svg></span><span>Tips</span></button>
@@ -1372,6 +1373,20 @@ function _autopaySectionHtml(cid,d,plan){
 }
 async function startAutopaySetup(cid){
     var d=_balByCamp[cid]; if(!d||!d.familyKey){toast('Plan not loaded yet');return;}
+    // Same BYOP-vs-Stripe branch every other card-save flow needs (Add
+    // Funds, canteen auto-reload) — this one was missed when those were
+    // fixed, so a BYOP camp's "Update payment method" button always sent
+    // the parent to Stripe regardless of the camp's actual processor.
+    var status=await _getCampProcessorInfo(cid);
+    var processorKey=(status&&status.processorKey)||'stripe';
+    if(processorKey==='cardknox'){
+        try{
+            toast('Opening secure checkout…');
+            var ckRes=await _lkCallEdge('cardknox-checkout-start',{campId:cid,kind:'card_save',familyKey:d.familyKey,familyName:d.familyName||'',description:'Save a card'+(d.familyName?' — '+d.familyName:'')});
+            _lkGoToCheckout(ckRes.url);
+        }catch(err){ console.error('[Parent] autopay setup (cardknox) error:',err); toast('Could not start setup: '+(err&&err.message||'error')); }
+        return;
+    }
     try{
         toast('Opening secure Stripe page…');
         var s=_lkSupa(); if(!s.url) throw new Error('Payments are not set up for this camp yet.');
