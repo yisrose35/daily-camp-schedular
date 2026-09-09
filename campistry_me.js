@@ -12028,7 +12028,7 @@ function renderBilling(){
     // can see a total for but never actually click into.
     _billUnmatchedPays=_unmatchedPays;
 
-    var cardsOnFile=famList.filter(function(l){return families[l.famKey]?.cardOnFile}).length;
+    var cardsOnFile=famList.filter(function(l){return _famChargeable(families[l.famKey])}).length;
     var billMoreId='billHdMoreMenu';
     var h='<div class="sec-hd"><div><h2 class="sec-title">Billing & Payments</h2><p class="sec-desc">'+famList.length+' account'+(famList.length!==1?'s':'')+' · '+cardsOnFile+' card'+(cardsOnFile!==1?'s':'')+' on file · '+finPayments.length+' payment'+(finPayments.length!==1?'s':'')+'</p></div><div class="sec-actions">'
         +'<button class="me-btn me-btn--pri" onclick="CampistryMe.openPaymentModal()">Record Payment</button>'
@@ -12130,7 +12130,7 @@ function renderFamilyDetailPage(){
     }
     var statusBadge=l.status==='unbilled'?_flatStatus('Not Billed'):l.status==='paid'?_flatStatus('Paid','ok'):l.status==='overdue'?_flatStatus('Overdue','err'):l.status==='partial'?_flatStatus('Partial','warn'):_flatStatus('Pending','warn');
     var camperNames=(l.family.camperIds||[]).concat((l.pendingCamperIds||[]).map(function(n){return n+' (pending)'})).join(', ');
-    var hasCard=families[l.famKey]?.cardOnFile;
+    var hasCard=_famChargeable(families[l.famKey]);
     var _fam=families[l.famKey];
     var moreId='famDetailMoreMenu';
 
@@ -12638,7 +12638,7 @@ async function printStatement(famKey){
         var _plan=(_famPlans(l.family)||[])[0];
         var _autopayOn=!!(_plan&&_plan.autopay);
         if(_autopayOn){
-            var _hasCard=!!l.family.cardOnFile;
+            var _hasCard=_famChargeable(l.family);
             h+='<div style="background:'+(_hasCard?'#F0FDF4':'#FFFBEB')+';border:1px solid '+(_hasCard?'#BBF7D0':'#FDE68A')+';padding:9px 12px;border-radius:4px;margin-bottom:8px;font-size:9pt;color:'+(_hasCard?'#166534':'#92400E')+'">'+(_hasCard?'Autopay is ON — these installments will be charged automatically to the card on file on each due date.':'Autopay is ON, but no card is on file yet — installments will not be charged automatically until a card is added.')+'</div>';
         }
         h+='<h2>Payment Schedule</h2><table><thead><tr><th>Installment</th><th>Due Date</th><th class="right">Amount</th><th>Status</th><th>Autopay</th></tr></thead><tbody>';
@@ -12717,6 +12717,21 @@ async function callEdgeFunctionAuthed(fnName,body){
 // error so a BYOP-lookup hiccup never blocks the existing, working Stripe
 // flow for camps that never touched BYOP.
 var _campPaymentProcessorKey=null;
+// "Can this family actually be auto-charged right now?" — the one question
+// every autopay/charge affordance should ask, instead of reading cardOnFile
+// on its own. cardOnFile gets set the moment a family pays online, including
+// through Cardknox/Sola's hosted checkout, which for a long time stored no
+// reusable token at all — so on a BYOP camp it can be true with nothing
+// chargeable behind it. That's exactly the state that had a plan promising to
+// "auto-charge the card on file" while charge-due-installments had nothing to
+// charge and skipped the family.
+// Reads the stored evidence rather than the camp's configured processor, so
+// it stays correct for a camp mid-switch and needs no async lookup to render.
+function _famChargeable(f){
+    if(!f) return false;
+    if(f.byopCustomerRef) return true;             // BYOP: real vaulted token
+    return !!(f.stripeCustomerId && f.cardOnFile); // Stripe: saved customer + card
+}
 async function _getCampPaymentProcessorKey(){
     if(_campPaymentProcessorKey) return _campPaymentProcessorKey;
     try{
@@ -12781,7 +12796,7 @@ async function chargeStoredCard(famKey,amount,description){
         var balance=ledgers[famKey]?.balance||0;
         var h='<div class="me-modal-form">';
         h+='<p style="font-size:.85rem;color:var(--s600);margin-bottom:12px">Charge the card on file for <strong>'+esc(f.name)+'</strong></p>';
-        h+='<div style="background:var(--s50);padding:10px 14px;border-radius:var(--r);margin-bottom:14px;font-size:.85rem">Balance due: <strong style="color:var(--err)">'+fm(balance)+'</strong>'+(f.cardOnFile?' · Card on file ✓':'')+'</div>';
+        h+='<div style="background:var(--s50);padding:10px 14px;border-radius:var(--r);margin-bottom:14px;font-size:.85rem">Balance due: <strong style="color:var(--err)">'+fm(balance)+'</strong>'+(_famChargeable(f)?' · Card on file ✓':'')+'</div>';
         h+='<div class="me-field"><label>Amount to Charge ($)</label><input type="number" id="chargeAmt" class="me-input" value="'+balance.toFixed(2)+'" step="0.01" min="0.50"></div>';
         h+='<div class="me-field"><label>Description</label><input type="text" id="chargeDesc" class="me-input" value="Campistry payment — '+esc(f.name)+'" placeholder="Payment description"></div>';
         h+='</div>';
@@ -12858,7 +12873,7 @@ async function chargeStoredCard(famKey,amount,description){
 async function batchCharge(){
     var ledgers=buildFamilyLedgers();
     var eligible=Object.entries(ledgers).filter(function([fk,l]){
-        return l.balance>0&&families[fk]?.stripeCustomerId&&families[fk]?.cardOnFile;
+        return l.balance>0&&_famChargeable(families[fk]);
     });
     if(!eligible.length){toast('No families with card on file and outstanding balance','error');return}
 
@@ -13096,7 +13111,7 @@ function monthlyPlan(famKey,planId){
     var plans=_famPlans(f);
     if(!planId&&plans.length) planId=plans[0].id;
     var existingPlan=planId?plans.filter(function(p){return p.id===planId})[0]:null;
-    var hasCard=!!f.cardOnFile;
+    var hasCard=_famChargeable(f);
     var curBalance=(buildFamilyLedgers()[famKey]||{}).balance||0;
     var targetTotal=existingPlan?existingPlan.total:curBalance;
     var d=new Date(); var defStart=new Date(d.getFullYear(),d.getMonth()+1,1).toISOString().split('T')[0];
@@ -13153,7 +13168,7 @@ function toggleFamilyAutopay(famKey,planId){
     var plans=_famPlans(f);
     var plan=planId?plans.filter(function(p){return p.id===planId})[0]:plans[0];
     if(!plan)return;
-    if(!f.cardOnFile&&!plan.autopay){toast('Save a card on file first','error');return}
+    if(!_famChargeable(f)&&!plan.autopay){toast('Save a card on file first','error');return}
     plan.autopay=!plan.autopay; save();if(curPage==='familydetail')renderFamilyDetailPage();else renderBilling();
     toast('Autopay '+(plan.autopay?'ON':'off')+' for '+f.name);
 }
@@ -13189,8 +13204,13 @@ function _planCardHtml(l){
                 summaryLine='<div style="font-size:.8rem;color:var(--s500);margin-bottom:6px">'+plan.installments.length+' payments of '+fm(amts[0]/100)+' each</div>';
             }
         }
+        // Autopay with nothing chargeable behind it is the one state worth
+        // making actionable rather than just warning about — the office
+        // otherwise has to know to go find "Get Card" elsewhere on the page.
+        var _canCharge=_famChargeable(f);
+        var _saveCardBtn=' <button class="me-btn me-btn--sm" style="margin-left:8px;padding:2px 10px;font-size:.74rem" onclick="CampistryMe.requestCardSetup(\''+je(l.famKey)+'\')">Save a card</button>';
         var nextLine=next
-            ?'<div style="font-size:.92rem;color:var(--s700);margin-bottom:14px">Next payment <strong style="font-size:1.05rem;color:var(--s900)">'+fm(next.amount)+'</strong> on '+esc(next.dueDate)+(plan.autopay&&f.cardOnFile?' <span style="color:var(--ok);font-weight:600">— auto-charges the card on file</span>':(plan.autopay?' <span style="color:var(--warn);font-weight:600">— autopay on, no card on file yet</span>':''))+'</div>'
+            ?'<div style="font-size:.92rem;color:var(--s700);margin-bottom:14px">Next payment <strong style="font-size:1.05rem;color:var(--s900)">'+fm(next.amount)+'</strong> on '+esc(next.dueDate)+(plan.autopay&&_canCharge?' <span style="color:var(--ok);font-weight:600">— auto-charges the card on file</span>':(plan.autopay?' <span style="color:var(--warn);font-weight:600">— autopay on, no card on file yet</span>'+_saveCardBtn:''))+'</div>'
             :'<div style="font-size:.95rem;color:var(--ok);font-weight:700;margin-bottom:14px">✓ All installments paid</div>';
         // The autopay status IS the toggle — a single pill you click — rather
         // than a colored label plus a separate "Turn on/off" button sitting
