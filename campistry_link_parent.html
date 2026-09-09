@@ -2145,29 +2145,40 @@ async function _getCampProcessorInfo(campId){
     if(!campId)return null;
     if(_campPayStatusByCamp[campId]!==undefined) return _campPayStatusByCamp[campId];
     var db=window._parentDB; if(!db)return null;
-    try{
-        var res=await (window._pRpc?window._pRpc('get_camp_canteen_stripe_status',{p_camp_id:campId},campId):db.rpc('get_camp_canteen_stripe_status',{p_camp_id:campId}));
-        var d=res&&res.data;
-        if(res&&res.error){
-            // Most common cause: the relevant migration was never pasted into
-            // the SQL Editor, so this RPC doesn't exist yet or doesn't know
-            // about BYOP — this used to fail completely silently, leaving
-            // "Add Funds" grey with no clue why. Don't cache a transient/setup
-            // failure as permanently disconnected — retry on the next call.
-            console.error('[Parent] get_camp_canteen_stripe_status RPC error (is migration 132 applied?):',res.error.message||res.error);
-            return null;
+    // A single failed attempt used to fall straight through to null, and
+    // every caller's `||'stripe'` fallback then silently opened Stripe
+    // Checkout for a BYOP camp on nothing more than one dropped request —
+    // wrong-processor with no error shown, worse than just retrying. One
+    // extra attempt after a short pause costs nothing on the (normal)
+    // success path and closes most of that window; a still-failing RPC after
+    // two tries is a real setup/migration gap, not a network blip, and stays
+    // null so callers keep their existing (documented) fallback behavior.
+    for(var attempt=0;attempt<2;attempt++){
+        if(attempt>0) await new Promise(function(r){setTimeout(r,500);});
+        try{
+            var res=await (window._pRpc?window._pRpc('get_camp_canteen_stripe_status',{p_camp_id:campId},campId):db.rpc('get_camp_canteen_stripe_status',{p_camp_id:campId}));
+            var d=res&&res.data;
+            if(res&&res.error){
+                // Most common cause: the relevant migration was never pasted into
+                // the SQL Editor, so this RPC doesn't exist yet or doesn't know
+                // about BYOP — this used to fail completely silently, leaving
+                // "Add Funds" grey with no clue why. Don't cache a transient/setup
+                // failure as permanently disconnected — retry on the next call.
+                console.error('[Parent] get_camp_canteen_stripe_status RPC error (is migration 132 applied?):',res.error.message||res.error);
+                continue;
+            }
+            if(!d||!d.success){
+                console.warn('[Parent] get_camp_canteen_stripe_status returned failure:',d&&d.error);
+                continue;
+            }
+            var info={connected:!!(d.connected&&d.charges_enabled),processorKey:d.processorKey||'stripe'};
+            _campPayStatusByCamp[campId]=info; // only cache a definitive answer
+            return info;
+        }catch(e){
+            console.error('[Parent] get_camp_canteen_stripe_status threw:',e&&e.message);
         }
-        if(!d||!d.success){
-            console.warn('[Parent] get_camp_canteen_stripe_status returned failure:',d&&d.error);
-            return null;
-        }
-        var info={connected:!!(d.connected&&d.charges_enabled),processorKey:d.processorKey||'stripe'};
-        _campPayStatusByCamp[campId]=info; // only cache a definitive answer
-        return info;
-    }catch(e){
-        console.error('[Parent] get_camp_canteen_stripe_status threw:',e&&e.message);
-        return null;
     }
+    return null;
 }
 async function _checkCanteenStripeStatus(campId){
     var info=await _getCampProcessorInfo(campId);
