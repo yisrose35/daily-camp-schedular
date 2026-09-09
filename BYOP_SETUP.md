@@ -193,6 +193,16 @@ create/deploy screen instead):
 - `cardknox-webhook` (Cardknox's own servers call this directly with no
   Supabase auth at all — PIN verification inside the function is the real
   security check here, same shape as `telnyx-sms-webhook`)
+- `charge-due-installments` (not BYOP-specific — the shared daily autopay
+  runner, Stripe and BYOP alike — but hit live this session: pg_cron's
+  `net.http_post` call only ever sends the `x-cron-secret` header per
+  `BILLING_PAYMENTS_SETUP.md`, never a Supabase `Authorization` header, so
+  with JWT verification on, the gateway 401s it before the function's own
+  secret check runs at all — same failure mode as `pos-pin-login`, just
+  discovered from the cron side instead of a browser CORS error. If this
+  was ever on, the daily autopay job has likely been silently 401'ing since
+  it was built; check for a run of successful invocations in this
+  function's own Logs tab after fixing it, not just the next one)
 
 Leave JWT verification **ON (the default)** for everything else in this
 feature — `payments-charge`, `payments-refund`, and
