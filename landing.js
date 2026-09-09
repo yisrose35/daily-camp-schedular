@@ -1092,20 +1092,6 @@ function initVideoPlaylist() {
     if (!iframe || playlistItems.length === 0) return;
 
     let currentIndex = 0;
-    let player = null;
-
-    // Auto-play the next video when the current one ends. Rebound on a fresh
-    // Player instance after every switch rather than reused, since swapping
-    // iframe.src (below) invalidates whatever the previous instance was
-    // listening to.
-    function bindEndedHandler() {
-        if (typeof Vimeo === 'undefined') return;
-        player = new Vimeo.Player(iframe);
-        player.on('ended', function() {
-            const nextIndex = currentIndex + 1;
-            if (nextIndex < playlistItems.length) loadVideo(nextIndex);
-        });
-    }
 
     // Function to load a specific video by index
     function loadVideo(index) {
@@ -1135,7 +1121,6 @@ function initVideoPlaylist() {
         iframe.src = 'https://player.vimeo.com/video/' + newVideoId
             + (newVideoHash ? '?h=' + newVideoHash + '&autoplay=1' : '?autoplay=1');
         currentIndex = index;
-        bindEndedHandler();
     }
 
     // Handle clicks on playlist items
@@ -1147,7 +1132,22 @@ function initVideoPlaylist() {
         });
     });
 
-    bindEndedHandler();
+    // ONE Player instance for the whole page, created once. Vimeo's Player.js
+    // re-syncs itself against whatever is currently loaded every time the
+    // iframe navigates (each src swap above triggers a fresh 'ready'
+    // handshake it picks up on its own) — it does NOT need to be recreated
+    // per video. Recreating it on every switch, as an earlier version of
+    // this did, wraps the same iframe with multiple competing Player
+    // instances/postMessage listeners at once, which corrupts the frame's
+    // connection outright: confirmed live, switching to a second video and
+    // back left even the FIRST (previously working) video broken too.
+    if (typeof Vimeo !== 'undefined') {
+        const player = new Vimeo.Player(iframe);
+        player.on('ended', function() {
+            const nextIndex = currentIndex + 1;
+            if (nextIndex < playlistItems.length) loadVideo(nextIndex);
+        });
+    }
 }
 
 // Initialize the playlist logic
