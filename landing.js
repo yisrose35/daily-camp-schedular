@@ -1082,3 +1082,63 @@ document.querySelectorAll('a[href^="#"]').forEach(anchor => {
         }
     });
 });
+
+// ========================================
+// WALKTHROUGH PLAYLIST LOGIC
+// ========================================
+function initVideoPlaylist() {
+    const iframe = document.getElementById('vimeo-player');
+    const playlistItems = document.querySelectorAll('.playlist-item');
+    
+    // Ensure the Vimeo API and elements exist before running
+    if (!iframe || playlistItems.length === 0 || typeof Vimeo === 'undefined') return;
+
+    const player = new Vimeo.Player(iframe);
+    let currentIndex = 0;
+
+    // Function to load a specific video by index
+    function loadVideo(index) {
+        if (index < 0 || index >= playlistItems.length) return;
+        
+        // Update active class on buttons
+        playlistItems.forEach(item => item.classList.remove('active'));
+        playlistItems[index].classList.add('active');
+        
+        // Get the new Vimeo ID and load it
+        const newVideoId = playlistItems[index].getAttribute('data-vimeo-id');
+        player.loadVideo(newVideoId).then(function() {
+            player.play();
+        }).catch(function(error) {
+            console.error('Error loading video:', error);
+        });
+        
+        currentIndex = index;
+    }
+
+    // Handle clicks on playlist items
+    playlistItems.forEach((item, index) => {
+        item.addEventListener('click', () => {
+            if (currentIndex !== index) {
+                loadVideo(index);
+            }
+        });
+    });
+
+    // Auto-play the next video when the current one ends
+    player.on('ended', function() {
+        const nextIndex = currentIndex + 1;
+        // If there is a next video, load it. Otherwise, loop back to start (optional)
+        if (nextIndex < playlistItems.length) {
+            loadVideo(nextIndex);
+        } else {
+            // Optional: loop back to the first video
+            // loadVideo(0); 
+        }
+    });
+}
+
+// Initialize the playlist logic
+document.addEventListener('DOMContentLoaded', function() {
+    // Wait a brief moment to ensure the iframe is fully parsed
+    setTimeout(initVideoPlaylist, 200);
+});

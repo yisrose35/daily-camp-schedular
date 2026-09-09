@@ -867,22 +867,29 @@ ul {
 }
 
 /* ============================================= */
-/* DEMO SECTION */
+/* WALKTHROUGHS SECTION */
 /* ============================================= */
-.demo {
+.walkthroughs {
     padding: var(--section-padding) 24px;
     background: var(--slate-50);
 }
-.demo-container {
-    max-width: 1000px;
+.walkthroughs-container {
+    max-width: 1100px;
     margin: 0 auto;
 }
-.demo-video {
+.walkthrough-layout {
+    display: grid;
+    grid-template-columns: 2.5fr 1fr;
+    gap: 24px;
+    align-items: start;
+}
+.walkthrough-player {
     position: relative;
-    margin-bottom: 48px;
+    box-shadow: 0 16px 48px rgba(0, 0, 0, 0.15);
+    border-radius: 12px;
 }
 
-/* Browser chrome wrapper */
+/* Browser chrome wrapper (Kept from Demo) */
 .browser-chrome {
     background: var(--slate-800);
     border-radius: 12px 12px 0 0;
@@ -932,80 +939,87 @@ ul {
     width: 100%;
     height: 100%;
 }
-.video-placeholder {
-    position: absolute;
-    inset: 0;
+
+/* Walkthrough Playlist */
+.walkthrough-playlist {
     display: flex;
     flex-direction: column;
-    align-items: center;
-    justify-content: center;
-    gap: 16px;
-    color: white;
-    background: linear-gradient(135deg, var(--slate-800) 0%, var(--slate-900) 100%);
+    gap: 12px;
+    background: white;
+    padding: 16px;
+    border-radius: 12px;
+    border: 1px solid var(--slate-200);
+    box-shadow: 0 4px 12px rgba(0,0,0,0.03);
+    max-height: 100%;
+    overflow-y: auto;
 }
-.play-button {
-    width: 72px;
-    height: 72px;
+.playlist-item {
     display: flex;
     align-items: center;
-    justify-content: center;
-    background: white;
-    color: var(--camp-green);
-    border-radius: 50%;
-    transition: transform 0.2s ease, box-shadow 0.2s ease;
+    gap: 14px;
+    padding: 14px;
+    background: var(--slate-50);
+    border: 1.5px solid transparent;
+    border-radius: var(--radius-md);
+    text-align: left;
+    transition: all 0.2s ease;
     cursor: pointer;
 }
-.play-button:hover {
-    transform: scale(1.06);
-    box-shadow: 0 4px 16px rgba(255, 255, 255, 0.2);
-}
-.play-button svg { margin-left: 3px; }
-.video-placeholder p {
-    font-size: 1rem;
-    font-weight: 600;
-}
-.video-hint {
-    font-size: 0.85rem;
-    color: var(--slate-400);
-}
-
-.demo-features {
-    display: grid;
-    grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
-    gap: 20px;
-}
-.demo-feature {
-    display: flex;
-    gap: 14px;
-    padding: 20px;
+.playlist-item:hover {
     background: white;
-    border-radius: var(--radius-lg);
-    border: 1px solid var(--slate-200);
+    border-color: var(--slate-300);
 }
-.demo-feature-icon {
+.playlist-item.active {
+    background: white;
+    border-color: var(--camp-green);
+    box-shadow: 0 4px 12px rgba(20, 125, 145, 0.1);
+}
+.playlist-item-icon {
     width: 36px;
     height: 36px;
     display: flex;
     align-items: center;
     justify-content: center;
+    background: var(--slate-200);
+    color: var(--slate-500);
+    border-radius: 50%;
     flex-shrink: 0;
-    color: var(--camp-green);
+    transition: all 0.2s ease;
 }
-.demo-feature-icon svg {
-    width: 22px;
-    height: 22px;
+.playlist-item.active .playlist-item-icon {
+    background: var(--camp-green);
+    color: white;
 }
-.demo-feature strong {
+.playlist-item-icon svg {
+    width: 16px;
+    height: 16px;
+    margin-left: 2px;
+}
+.playlist-item-text strong {
     display: block;
     font-size: 0.95rem;
+    color: var(--slate-900);
     margin-bottom: 2px;
-    color: var(--slate-800);
 }
-.demo-feature p {
-    font-size: 0.85rem;
+.playlist-item-text span {
+    display: block;
+    font-size: 0.8rem;
     color: var(--slate-500);
-    margin: 0;
-    line-height: 1.5;
+    line-height: 1.3;
+}
+
+@media (max-width: 860px) {
+    .walkthrough-layout {
+        grid-template-columns: 1fr;
+    }
+    .walkthrough-playlist {
+        flex-direction: row;
+        overflow-x: auto;
+        padding: 12px;
+    }
+    .playlist-item {
+        min-width: 260px;
+    }
 }
 
 /* ============================================= */
