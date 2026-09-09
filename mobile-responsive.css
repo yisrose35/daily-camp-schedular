@@ -194,9 +194,8 @@ html, body {
   .feature-card { padding: 20px 18px !important; border-radius: 14px !important; }
   .feature-icon { width: 44px !important; height: 44px !important; margin-bottom: 12px !important; }
 
-  /* DEMO */
-  .demo { padding: 48px 16px !important; }
-  .demo-features { grid-template-columns: 1fr !important; gap: 10px !important; }
+  /* WALKTHROUGHS */
+  .walkthroughs { padding: 48px 16px !important; }
 
   /* PRICING */
   .pricing { padding: 48px 16px !important; }

@@ -35,7 +35,7 @@
             <div class="nav-links">
                 <a href="#products">Products</a>
                 <a href="#features">Features</a>
-                <a href="#demo">Demo</a>
+                <a href="#walkthroughs">Walkthroughs</a>
                 <a href="#pricing">Pricing</a>
             </div>
             <!-- Logged Out State -->
@@ -61,7 +61,7 @@
     <div class="mobile-drawer" id="mobileDrawer">
         <a href="#products" onclick="toggleMobileMenu()">Products</a>
         <a href="#features" onclick="toggleMobileMenu()">Features</a>
-        <a href="#demo" onclick="toggleMobileMenu()">Demo</a>
+        <a href="#walkthroughs" onclick="toggleMobileMenu()">Walkthroughs</a>
         <a href="#pricing" onclick="toggleMobileMenu()">Pricing</a>
         <button class="btn-ghost" onclick="toggleMobileMenu(); openAuthModal('login')">Sign In</button>
         <button class="drawer-cta" onclick="toggleMobileMenu(); openAuthModal('signup')">Get Started</button>
@@ -90,11 +90,11 @@
                         <path d="M5 12h14M12 5l7 7-7 7"/>
                     </svg>
                 </button>
-                <a href="#demo" class="btn-hero-ghost">
+                <a href="#walkthroughs" class="btn-hero-ghost">
                     <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
                         <polygon points="5 3 19 12 5 21 5 3"></polygon>
                     </svg>
-                    Watch Demo
+                    Watch Walkthroughs
                 </a>
             </div>
             <div class="hero-stats">
@@ -407,53 +407,46 @@
     </section>
 
     <!-- ========================================= -->
-    <!-- DEMO VIDEO SECTION -->
+    <!-- WALKTHROUGHS VIDEO SECTION -->
     <!-- ========================================= -->
-    <section id="demo" class="demo reveal">
+    <section id="walkthroughs" class="walkthroughs reveal">
         <div class="section-header">
             <span class="section-eyebrow">See It In Action</span>
             <h2 class="section-title">Watch Campistry Flow</h2>
-            <p class="section-sub">See how easy camp scheduling can be</p>
+            <p class="section-sub">Browse real walkthroughs and see exactly how camp scheduling works</p>
         </div>
-        <div class="demo-container">
-            <div class="demo-video">
-                <!-- Browser chrome wrapper -->
-                <div class="browser-chrome">
-                    <div class="browser-dot"></div>
-                    <div class="browser-dot"></div>
-                    <div class="browser-dot"></div>
-                    <div class="browser-bar"><span>app.campistry.org</span></div>
-                </div>
-                <div class="video-wrapper">
-                    <iframe src="https://player.vimeo.com/video/1150915483" frameborder="0" allow="autoplay; fullscreen; picture-in-picture" allowfullscreen title="Campistry Demo"></iframe>
-                </div>
-            </div>
-            <div class="demo-features">
-                <div class="demo-feature">
-                    <span class="demo-feature-icon">
-                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"/></svg>
-                    </span>
-                    <div>
-                        <strong>Quick Setup</strong>
-                        <p>Get your camp configured in under 30 minutes</p>
+        <div class="walkthroughs-container">
+            <div class="walkthrough-layout">
+                <div class="walkthrough-player">
+                    <!-- Browser chrome wrapper -->
+                    <div class="browser-chrome">
+                        <div class="browser-dot"></div>
+                        <div class="browser-dot"></div>
+                        <div class="browser-dot"></div>
+                        <div class="browser-bar"><span>app.campistry.org</span></div>
+                    </div>
+                    <div class="video-wrapper">
+                        <iframe id="vimeo-player" src="https://player.vimeo.com/video/1150915483" frameborder="0" allow="autoplay; fullscreen; picture-in-picture" allowfullscreen title="Campistry Walkthrough"></iframe>
                     </div>
                 </div>
-                <div class="demo-feature">
-                    <span class="demo-feature-icon">
-                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><circle cx="12" cy="12" r="6"/><circle cx="12" cy="12" r="2"/></svg>
-                    </span>
-                    <div>
-                        <strong>Intuitive Interface</strong>
-                        <p>No training needed — if you can drag, you can schedule</p>
+                <div class="walkthrough-playlist">
+                    <div class="playlist-item active" data-vimeo-id="1150915483" role="button" tabindex="0">
+                        <span class="playlist-item-icon">
+                            <svg viewBox="0 0 24 24" fill="currentColor"><polygon points="6 4 20 12 6 20 6 4"/></svg>
+                        </span>
+                        <span class="playlist-item-text">
+                            <strong>Platform Overview</strong>
+                            <span>See how easy camp scheduling can be, start to finish</span>
+                        </span>
                     </div>
-                </div>
-                <div class="demo-feature">
-                    <span class="demo-feature-icon">
-                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>
-                    </span>
-                    <div>
-                        <strong>Direct Support</strong>
-                        <p>Chat directly with the developer to customize your experience</p>
+                    <div class="playlist-item" data-vimeo-id="1225357935" role="button" tabindex="0">
+                        <span class="playlist-item-icon">
+                            <svg viewBox="0 0 24 24" fill="currentColor"><polygon points="6 4 20 12 6 20 6 4"/></svg>
+                        </span>
+                        <span class="playlist-item-text">
+                            <strong>What's New</strong>
+                            <span>The latest features added to Campistry</span>
+                        </span>
                     </div>
                 </div>
             </div>
@@ -542,7 +535,7 @@
                 <h4>Product</h4>
                 <a href="#products">Products</a>
                 <a href="#features">Features</a>
-                <a href="#demo">Demo</a>
+                <a href="#walkthroughs">Walkthroughs</a>
                 <a href="#pricing">Pricing</a>
             </div>
             <div class="footer-col">
@@ -747,6 +740,7 @@ if (window.location.protocol === 'file:') {
     <script src="supabase_client.js"></script>
     <script src="campistry_utils.js"></script>
     <script src="campistry_security.js"></script>
+    <script src="https://player.vimeo.com/api/player.js"></script>
     <script src="landing.js"></script>
     <script>setTimeout(function(){ document.documentElement.classList.add('css-ready'); }, 3000);</script>
     <script>
