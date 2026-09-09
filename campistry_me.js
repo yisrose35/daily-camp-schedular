@@ -1002,7 +1002,10 @@ function showModal(title,bodyHtml,onSave,opts){
             +'<div style="display:flex;gap:8px">'+(onSave?'<button class="me-btn me-btn--sec" onclick="CampistryMe.closeModal(\'dynModal\')">Cancel</button><button class="me-btn me-btn--pri" id="dynModalSave">Save</button>':'<button class="me-btn me-btn--sec" onclick="CampistryMe.closeModal(\'dynModal\')">Close</button>')+'</div>'
             +'</div>';
     }
-    overlay.innerHTML='<div style="background:#fff;border-radius:12px;max-width:'+(opts.maxWidth||560)+'px;width:95%;max-height:85vh;overflow:auto;box-shadow:0 20px 60px rgba(0,0,0,.25)"><div style="display:flex;justify-content:space-between;align-items:center;padding:16px 20px;border-bottom:1px solid var(--s100)"><h3 style="margin:0;font-size:1.05rem;font-weight:700">'+esc(title)+'</h3><button style="background:none;border:none;font-size:1.5rem;cursor:pointer;color:var(--s400)" onclick="CampistryMe.closeModal(\'dynModal\')">&times;</button></div><div style="padding:18px 22px">'+bodyHtml+'</div>'+footer+'</div>';
+    // opts.maxHeight lets a content-heavy modal (the payment plan editor —
+    // generate + a full row-by-row schedule) use most of the viewport
+    // instead of the cramped default — same overlay/footer, just bigger.
+    overlay.innerHTML='<div style="background:#fff;border-radius:12px;max-width:'+(opts.maxWidth||560)+'px;width:95%;max-height:'+(opts.maxHeight||'85vh')+';display:flex;flex-direction:column;overflow:hidden;box-shadow:0 20px 60px rgba(0,0,0,.25)"><div style="display:flex;justify-content:space-between;align-items:center;padding:16px 20px;border-bottom:1px solid var(--s100);flex-shrink:0"><h3 style="margin:0;font-size:1.05rem;font-weight:700">'+esc(title)+'</h3><button style="background:none;border:none;font-size:1.5rem;cursor:pointer;color:var(--s400)" onclick="CampistryMe.closeModal(\'dynModal\')">&times;</button></div><div style="padding:18px 22px;overflow:auto;flex:1">'+bodyHtml+'</div>'+footer+'</div>';
     document.body.appendChild(overlay);
     overlay.addEventListener('mousedown',function(e){if(e.target===overlay)closeModal('dynModal')});
     _dynModalCb=onSave||null;
@@ -13102,6 +13105,7 @@ function _mpGenerate(){
     var body=document.getElementById('mpRowsBody'); if(!body)return;
     body.innerHTML=_mpRowsHtml(_mpGenRows(total,count,start,cadence));
     _mpUpdateTotal();
+    _mpSwitchTab('edit');
 }
 function _mpUpdateTotal(){
     var sum=0;
@@ -13141,25 +13145,47 @@ function monthlyPlan(famKey,planId){
     // otherwise a 3-monthly scaffold from the current balance.
     var startRows=existingPlan?existingPlan.installments.map(function(i){return{amount:i.amount,dueDate:i.dueDate}}):_mpGenRows(targetTotal||1,3,defStart,'monthly');
 
+    // Two tabs instead of one long scroll: "Generate" only ever produces
+    // rows and drops you into "Edit" to review them — it never saves
+    // anything itself. That's the fix for edits silently not taking effect:
+    // previously Save always read whatever was sitting in the row list
+    // regardless of which fields you'd last touched, so changing the
+    // Cadence/Total/Count fields and hitting the modal's Save button (instead
+    // of first clicking "Generate schedule") saved the OLD rows with your
+    // new totals never applied. Now there is exactly one place editable
+    // rows live, and Generate is the only thing that ever writes to it.
+    var startTab=existingPlan?'edit':'generate';
     var h='<div class="me-modal-form">';
     if(existingPlan) h+='<div style="background:#FFFBEB;border:1px solid #FDE68A;padding:9px 12px;border-radius:var(--r);margin-bottom:12px;font-size:.8rem;color:#92400E">Editing this plan replaces its schedule. Current balance: '+fm(curBalance)+(Math.abs(curBalance-existingPlan.total)>0.05?' — this has changed since the plan was set up.':'.')+'</div>';
     else h+='<div style="background:var(--s50);padding:10px 14px;border-radius:var(--r);margin-bottom:14px;font-size:.85rem">Balance to schedule: <strong style="color:var(--err)">'+fm(curBalance)+'</strong>'+(hasCard?' · <span style="color:var(--ok)">payment method on file</span>':'')+'</div>';
 
-    h+='<div style="font-size:.7rem;font-weight:700;color:var(--s500);text-transform:uppercase;letter-spacing:.05em;margin-bottom:6px">Generate a schedule</div>';
+    h+='<div style="display:flex;gap:4px;border-bottom:1px solid var(--s200);margin-bottom:16px">'
+        +'<button type="button" class="mp-tab-btn" data-tab="generate" onclick="CampistryMe._mpSwitchTab(\'generate\')" style="padding:9px 16px;border:none;background:none;font-size:.85rem;font-weight:600;cursor:pointer;border-bottom:2px solid transparent">Generate Schedule</button>'
+        +'<button type="button" class="mp-tab-btn" data-tab="edit" onclick="CampistryMe._mpSwitchTab(\'edit\')" style="padding:9px 16px;border:none;background:none;font-size:.85rem;font-weight:600;cursor:pointer;border-bottom:2px solid transparent">Edit Payments</button>'
+        +'</div>';
+
+    h+='<div id="mpTabGenerate">';
     h+='<div style="display:grid;grid-template-columns:1fr 1fr;gap:10px">';
     h+='<div class="me-field"><label>Cadence</label><select id="mpCadence" class="me-input"><option value="weekly">Weekly</option><option value="biweekly">Biweekly</option><option value="monthly" selected>Monthly</option><option value="custom">Custom (blank rows)</option></select></div>';
     h+='<div class="me-field"><label># of payments</label><input type="number" id="mpCount" class="me-input" value="3" min="1" max="60"></div>';
     h+='<div class="me-field"><label>Total to schedule ($)</label><input type="number" id="mpTotal" class="me-input" value="'+(targetTotal>0?targetTotal.toFixed(2):'')+'" step="0.01" min="0.50"></div>';
     h+='<div class="me-field"><label>First payment date</label><input type="date" id="mpStart" class="me-input" value="'+defStart+'"></div>';
     h+='</div>';
-    h+='<button type="button" class="me-btn me-btn--sec me-btn--sm" onclick="CampistryMe._mpGenerate()" style="margin-bottom:14px">Generate schedule</button>';
+    h+='<button type="button" class="me-btn me-btn--pri" onclick="CampistryMe._mpGenerate()" style="margin-top:6px">Generate schedule →</button>';
+    h+='<p style="font-size:.75rem;color:var(--s400);margin:8px 0 0">This replaces whatever is currently in Edit Payments — you\'ll land there next to review before saving.</p>';
+    h+='</div>';
 
+    h+='<div id="mpTabEdit" style="display:none">';
     h+='<div style="font-size:.7rem;font-weight:700;color:var(--s500);text-transform:uppercase;letter-spacing:.05em;margin-bottom:6px">Payments — edit any date or amount, add or remove rows freely</div>';
     h+='<div id="mpRowsBody" style="margin-bottom:8px">'+_mpRowsHtml(startRows)+'</div>';
     h+='<button type="button" class="me-btn me-btn--ghost me-btn--sm" onclick="CampistryMe._mpAddRow()">+ Add payment</button>';
     h+='<div style="text-align:right;font-size:.8rem;color:var(--s500);margin:8px 0 14px">Total scheduled: <strong id="mpRunningTotal" style="color:var(--s800)">'+fm(startRows.reduce(function(s,r){return s+(Number(r.amount)||0)},0))+'</strong></div>';
+    h+='</div>';
 
-    if(hasCard) h+='<label style="display:flex;align-items:center;gap:8px;font-size:.85rem"><input type="checkbox" id="mpAuto" '+((!existingPlan||existingPlan.autopay)?'checked':'')+'> Auto-charge the payment method on file on each due date</label>';
+    // Checked by default regardless of an existing plan's stored value —
+    // autopay-on is the common case the office wants, not the exception to
+    // opt into each time an existing plan is reopened for a tweak.
+    if(hasCard) h+='<label style="display:flex;align-items:center;gap:8px;font-size:.85rem;margin-top:4px"><input type="checkbox" id="mpAuto" checked> Auto-charge the payment method on file on each due date</label>';
     else h+='<div style="font-size:.75rem;color:var(--me)">No payment method on file yet — the parent can set up autopay themselves from their Link portal (card or bank transfer), or use "Set Up in Stripe" above for this family. You can still create the schedule now; until then, the parent can pay each installment from their portal manually.</div>';
     h+='</div>';
     showModal(existingPlan?'Edit Payment Plan':'Set Up Payment Plan',h,function(){
@@ -13182,6 +13208,18 @@ function monthlyPlan(famKey,planId){
         else{ plans.push(newPlan); }
         save();closeModal('dynModal');if(curPage==='familydetail')renderFamilyDetailPage();else renderBilling();
         toast('Payment plan saved — '+insts.length+' payment'+(insts.length>1?'s':'')+(auto?', autopay on':''));
+    },{maxWidth:920,maxHeight:'92vh'});
+    _mpSwitchTab(startTab);
+}
+function _mpSwitchTab(tab){
+    var gen=document.getElementById('mpTabGenerate'), edit=document.getElementById('mpTabEdit');
+    if(!gen||!edit)return;
+    gen.style.display=tab==='generate'?'':'none';
+    edit.style.display=tab==='edit'?'':'none';
+    document.querySelectorAll('.mp-tab-btn').forEach(function(btn){
+        var active=btn.dataset.tab===tab;
+        btn.style.color=active?'var(--me)':'var(--s500)';
+        btn.style.borderBottomColor=active?'var(--me)':'transparent';
     });
 }
 function toggleFamilyAutopay(famKey,planId){
