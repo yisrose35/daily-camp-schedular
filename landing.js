@@ -1118,13 +1118,22 @@ function initVideoPlaylist() {
         // Swap the iframe's src directly instead of Vimeo.Player.loadVideo() —
         // loadVideo(id) only works for a fully public video with no privacy
         // hash requirement, and fails silently into a rejected promise for
-        // anything else (a freshly-shared/unlisted video, for instance). A
-        // plain src navigation works the same way the very first video on
-        // page load already does, and shows Vimeo's own "not available"
-        // message directly in the frame if something really is wrong with
-        // that specific video, instead of just doing nothing.
+        // anything else (an unlisted video, for instance). A plain src
+        // navigation works the same way the very first video on page load
+        // already does, and shows Vimeo's own "not available" message
+        // directly in the frame if something really is wrong with that
+        // specific video, instead of just doing nothing.
+        //
+        // An unlisted video's embed URL needs its privacy hash appended
+        // (?h=...) or Vimeo refuses to serve it at all — confirmed live:
+        // the "Campistry Me" video 404'd silently until this was added.
+        // Set data-vimeo-hash="<hash>" on any playlist item whose video
+        // isn't fully public (get it from that video's own Vimeo embed
+        // code, the h= value in the iframe src Vimeo gives you).
         const newVideoId = playlistItems[index].getAttribute('data-vimeo-id');
-        iframe.src = 'https://player.vimeo.com/video/' + newVideoId + '?autoplay=1';
+        const newVideoHash = playlistItems[index].getAttribute('data-vimeo-hash');
+        iframe.src = 'https://player.vimeo.com/video/' + newVideoId
+            + (newVideoHash ? '?h=' + newVideoHash + '&autoplay=1' : '?autoplay=1');
         currentIndex = index;
         bindEndedHandler();
     }
