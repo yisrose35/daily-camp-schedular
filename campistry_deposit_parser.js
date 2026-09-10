@@ -11,7 +11,8 @@
 // dependency-free so the exact same code runs in three places:
 //   • the browser  (CSV/statement import in Me -> Billing)
 //   • Node          (tests/deposit_parser.test.js)
-//   • Deno          (supabase/functions/deposit-inbox, via _shared/)
+//   • Deno          (supabase/functions/deposit-inbox, inlined by
+//                   tools/build_deposit_inbox.js)
 //
 // ─────────────────────────────────────────────────────────────────────────────
 // THE RULE THAT MATTERS MOST: never book an outgoing payment as income.
@@ -499,7 +500,8 @@
 
     // globalThis (not just window) so the exact same file runs unmodified in
     // Deno inside the deposit-inbox edge function -- see
-    // tools/build_deposit_core.js, which bundles these two files verbatim.
+    // tools/build_deposit_inbox.js, which inlines this file verbatim into the
+    // single self-contained index.ts that gets deployed.
     if (typeof globalThis !== 'undefined') globalThis.CampistryDepositParser = P;
     if (typeof window !== 'undefined') window.CampistryDepositParser = P;
     if (typeof module !== 'undefined' && module.exports) module.exports = P;

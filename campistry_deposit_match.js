@@ -470,7 +470,8 @@
 
     // globalThis (not just window) so the exact same file runs unmodified in
     // Deno inside the deposit-inbox edge function -- see
-    // tools/build_deposit_core.js, which bundles these two files verbatim.
+    // tools/build_deposit_inbox.js, which inlines this file verbatim into the
+    // single self-contained index.ts that gets deployed.
     if (typeof globalThis !== 'undefined') globalThis.CampistryDepositMatch = M;
     if (typeof window !== 'undefined') window.CampistryDepositMatch = M;
     if (typeof module !== 'undefined' && module.exports) module.exports = M;

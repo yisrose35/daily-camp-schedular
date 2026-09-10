@@ -77,18 +77,29 @@ Supabase Dashboard → **Edge Functions** → **Deploy a new function**.
 - Verify JWT: **OFF** — Resend is not a Supabase caller. The function
   authenticates the request itself (three separate checks, below).
 
-It needs two files:
+**One file, no imports.** Paste the entire contents of
+`supabase/functions/deposit-inbox/index.ts` as `index.ts`. That's the whole
+function — there is nothing else to add.
 
-| Path in the function | Source file in this repo |
-|---|---|
-| `index.ts` | `supabase/functions/deposit-inbox/index.ts` |
-| `../_shared/deposit_core.ts` | `supabase/functions/_shared/deposit_core.ts` |
-
-> `_shared/deposit_core.ts` is **generated** from `campistry_deposit_parser.js`
-> and `campistry_deposit_match.js` — do not hand-edit it. Change the root files
-> and run `node tools/build_deposit_core.js`. `tests/deposit_core_sync.test.js`
-> fails if the copy goes stale, which is what stops the server from silently
-> enforcing different matching rules than the browser shows.
+> **Why it's one big file.** The Dashboard flattens a function to
+> `source/index.ts`, so a relative import of a sibling module resolves outside
+> the bundle and the deploy fails with `Module not found ".../_shared/...".`
+> Since there's no Supabase CLI here, the Dashboard is the deploy path, so the
+> artifact has to be self-contained.
+>
+> It is **generated** — don't edit it. The authored sources are
+> `campistry_deposit_parser.js`, `campistry_deposit_match.js` (both also run in
+> the browser and the tests) and `tools/deposit_inbox_handler.ts`. After
+> changing any of them:
+>
+> ```
+> node tools/build_deposit_inbox.js
+> ```
+>
+> `tests/deposit_inbox_bundle.test.js` fails if the bundle goes stale or if a
+> local import ever creeps back in — the first stops the server enforcing
+> different matching rules than Billing previews, the second stops the next
+> deploy breaking the same way this one did.
 
 ### 3. Set the secrets
 
