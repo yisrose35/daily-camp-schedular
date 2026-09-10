@@ -46,12 +46,15 @@ It only ever touches the parent-editable trigger fields; card/attempt bookkeepin
 (`cardOnFile`, `lastChargedDate`, `consecutiveFailures`, ...) is written
 exclusively by the webhook/cron below.
 
-Then paste and run `migrations/140_canteen_instant_autoreload_flag.sql` —
-this is what enables the instant-trigger feature above. It's a
-`CREATE OR REPLACE` of `submit_canteen_purchase` (already applied via
-migration 026) that adds one extra field, `needsReloadCheck`, to its
-response — everything else about that function is unchanged, so it's safe
-to re-run even on a camp already taking live POS sales.
+Then paste and run `migrations/140_canteen_instant_autoreload_flag.sql`,
+followed by `migrations/141_canteen_instant_autoreload_utc_fix.sql` — 140
+enables the instant-trigger feature above, 141 fixes a same-day timezone
+bug in it (the client's local date vs. the UTC date `lastChargedDate` is
+actually written in — confirmed live, it silently made the pre-check think
+"already charged today" a few hours early/late depending on the POS's local
+timezone). If you already ran 140 before 141 existed, just run 141 on top —
+both are `CREATE OR REPLACE` of the same function, safe to re-run even on a
+camp already taking live POS sales.
 
 ### 2. Create the two new Edge Functions
 
