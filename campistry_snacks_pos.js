@@ -455,6 +455,17 @@ window.charge = function() {
                 }
                 a.balance = Number(d.balance); a.spentToday = Number(d.spentToday); a.lastSpendDate = todayStr();
                 finish();
+                // Instant auto-reload check — fire-and-forget, never blocks the
+                // register. submit_canteen_purchase (migration 140) only sets
+                // needsReloadCheck when this sale just pushed the camper under
+                // their configured threshold; canteen-auto-reload is still the
+                // sole authority on whether anything actually gets charged, so
+                // a spurious call here just no-ops. Without this, a low balance
+                // would otherwise sit unresolved until the next 30-min cron
+                // tick (CANTEEN_AUTORELOAD_SETUP.md).
+                if (d.needsReloadCheck && client.functions && client.functions.invoke) {
+                    client.functions.invoke('canteen-auto-reload', { body: { campId: campId, camperName: camperName } }).catch(() => {});
+                }
             }, e => { toast('Charge failed — connection error', true); });
         return;
     }

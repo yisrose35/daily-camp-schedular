@@ -20,6 +20,15 @@ charge). A card that fails 3 times in a row auto-disables auto-reload so it
 doesn't keep retrying a dead card — the parent portal shows "Auto-reload
 paused" and offers to update the card.
 
+**Instant trigger (migration 140):** the recurring `pg_cron` job below is
+still the only *scheduled* check, but the POS register (`campistry_snacks_pos.js`)
+now also fires an immediate, single-camper check the moment a sale pushes a
+balance under threshold — no more waiting up to 30 minutes for the next cron
+tick. This needs BOTH the new migration below and a redeploy of
+`canteen-auto-reload` with its current code (step 2) — without the redeploy,
+the instant call is simply rejected as unauthorized and the cron remains the
+only path (same safe fallback either way, just slower).
+
 ## One-time setup (all via the Supabase Dashboard — no CLI needed)
 
 ### 1. Run the migration
@@ -36,6 +45,13 @@ window) onto `camp_state_kv.campistrySnacks.accounts[camperName].autoReload`.
 It only ever touches the parent-editable trigger fields; card/attempt bookkeeping
 (`cardOnFile`, `lastChargedDate`, `consecutiveFailures`, ...) is written
 exclusively by the webhook/cron below.
+
+Then paste and run `migrations/140_canteen_instant_autoreload_flag.sql` —
+this is what enables the instant-trigger feature above. It's a
+`CREATE OR REPLACE` of `submit_canteen_purchase` (already applied via
+migration 026) that adds one extra field, `needsReloadCheck`, to its
+response — everything else about that function is unchanged, so it's safe
+to re-run even on a camp already taking live POS sales.
 
 ### 2. Create the two new Edge Functions
 

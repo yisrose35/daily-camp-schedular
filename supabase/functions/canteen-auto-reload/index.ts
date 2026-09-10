@@ -47,6 +47,19 @@
 // a separate secret from charge-due-installments' INSTALLMENT_CRON_SECRET so
 // the two recurring jobs can be rotated/disabled independently.
 //
+// INSTANT TRIGGER (no cron secret): a POS sale that pushes a camper under
+// their threshold shouldn't have to wait for the next 30-min cron tick.
+// campistry_snacks_pos.js fires a scoped, session-authenticated call right
+// after such a sale — POST { campId, camperName } with the POS's own Bearer
+// JWT (no x-cron-secret). That path is authorized separately (the caller
+// must be real staff — owner or any camp_users row — of exactly that camp,
+// same bar submit_canteen_purchase itself already requires) and is HARD
+// restricted to that one camp_id/camperName — it can never trigger the
+// unscoped, every-camp scan the cron secret gates. Whether anything is
+// actually due is still decided the same way either path: dueAmount() below
+// is the sole authority, so a spurious instant call (e.g. the client's own
+// cheap pre-check in migration 140 was a false positive) just no-ops.
+//
 // Response: { ok, charged, failed, details[] }
 // =============================================================================
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
@@ -55,6 +68,7 @@ import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 const STRIPE_SECRET = Deno.env.get("STRIPE_SECRET_KEY");
 const STRIPE_API = "https://api.stripe.com/v1";
 const SUPABASE_URL = Deno.env.get("SUPABASE_URL") || "";
+const SUPABASE_ANON_KEY = Deno.env.get("SUPABASE_ANON_KEY") || "";
 const SUPABASE_SERVICE_KEY = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY") || "";
 const CRON_SECRET = Deno.env.get("CANTEEN_AUTORELOAD_CRON_SECRET") || "";
 
@@ -163,13 +177,48 @@ function markSuccess(ar: Record<string, any>, today: string, amount: number) {
   delete ar.lastFailureReason;
 }
 
+// Same authorization bar submit_canteen_purchase (migration 026) itself
+// requires: the caller must be the camp's owner or any camp_users row for
+// this exact camp — counselors running the POS included. Resolved from the
+// caller's own JWT via the anon-key client, never trusted from the request
+// body.
+async function callerIsStaffOfCamp(req: Request, campId: string): Promise<boolean> {
+  const jwt = (req.headers.get("Authorization") || "").replace(/^Bearer\s+/i, "");
+  if (!jwt || !SUPABASE_URL || !SUPABASE_ANON_KEY || !campId) return false;
+  const asUser = createClient(SUPABASE_URL, SUPABASE_ANON_KEY, {
+    global: { headers: { Authorization: `Bearer ${jwt}` } },
+    auth: { persistSession: false, autoRefreshToken: false },
+  });
+  const { data: userData } = await asUser.auth.getUser();
+  const uid = userData?.user?.id;
+  if (!uid) return false;
+  const { data: owned } = await asUser.from("camps").select("id").eq("id", campId).eq("owner", uid).maybeSingle();
+  if (owned?.id) return true;
+  const { data: membership } = await asUser.from("camp_users").select("camp_id").eq("camp_id", campId).eq("user_id", uid).maybeSingle();
+  return !!membership;
+}
+
 serve(async (req) => {
   if (req.method === "OPTIONS") return new Response("ok", { headers: corsHeaders });
 
-  if (!CRON_SECRET || req.headers.get("x-cron-secret") !== CRON_SECRET) {
-    return new Response(JSON.stringify({ error: "unauthorized" }), {
-      status: 401, headers: { ...corsHeaders, "Content-Type": "application/json" },
-    });
+  const isCron = !!CRON_SECRET && req.headers.get("x-cron-secret") === CRON_SECRET;
+
+  // Not the cron → this must be an instant, single-camper check triggered
+  // right after a POS sale. Require an explicit camp+camper AND a real
+  // staff session for exactly that camp — never allow an unscoped scan
+  // without the cron secret.
+  let scopeCampId: string | null = null;
+  let scopeCamperName: string | null = null;
+  if (!isCron) {
+    let body: Record<string, unknown> = {};
+    try { body = await req.json(); } catch { /* no/invalid body */ }
+    scopeCampId = typeof body.campId === "string" ? body.campId : null;
+    scopeCamperName = typeof body.camperName === "string" ? body.camperName : null;
+    if (!scopeCampId || !scopeCamperName || !(await callerIsStaffOfCamp(req, scopeCampId))) {
+      return new Response(JSON.stringify({ error: "unauthorized" }), {
+        status: 401, headers: { ...corsHeaders, "Content-Type": "application/json" },
+      });
+    }
   }
 
   const supabase = createClient(SUPABASE_URL, SUPABASE_SERVICE_KEY);
@@ -177,8 +226,9 @@ serve(async (req) => {
   let charged = 0, failed = 0;
   const details: Record<string, unknown>[] = [];
 
-  const { data: rows, error } = await supabase.from("camp_state_kv")
-    .select("camp_id, value").eq("key", "campistrySnacks");
+  let kvQuery = supabase.from("camp_state_kv").select("camp_id, value").eq("key", "campistrySnacks");
+  if (scopeCampId) kvQuery = kvQuery.eq("camp_id", scopeCampId);
+  const { data: rows, error } = await kvQuery;
   if (error) {
     return new Response(JSON.stringify({ error: error.message }), {
       status: 500, headers: { ...corsHeaders, "Content-Type": "application/json" },
@@ -220,6 +270,7 @@ serve(async (req) => {
     let dirty = false;
 
     for (const [camperName, acctRaw] of Object.entries(snacks.accounts)) {
+      if (scopeCamperName && camperName !== scopeCamperName) continue;
       const acct = acctRaw as Record<string, any>;
       const ar = acct.autoReload;
       if (!ar || !ar.enabled || !ar.cardOnFile) continue;
