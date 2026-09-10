@@ -1,0 +1,1841 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+<title>Campistry Snacks — Offline POS</title>
+<style>
+/* =============================================================================
+   Campistry Snacks Offline POS — Complete Inline Styles
+   White-card-on-gray POS layout matching the online Selling Console.
+   ============================================================================= */
+
+:root {
+    --snacks: #EA580C;
+    --snacks-dark: #C2410C;
+    --snacks-darker: #9A3412;
+    --snacks-light: #F97316;
+    --snacks-50: #FFF7ED;
+    --snacks-100: #FFEDD5;
+    --snacks-200: #FED7AA;
+    --snacks-glow: rgba(234,88,12,.16);
+
+    --bg: #F1F5F9;
+    --bg-panel: #FFFFFF;
+    --bg-card: #FFFFFF;
+    --bg-card-hover: #FFF7ED;
+    --border: #E2E8F0;
+    --border-strong: #CBD5E1;
+    --text: #0F172A;
+    --text-dim: #475569;
+    --text-muted: #94A3B8;
+    --red: #DC2626;
+    --red-bg: #FEF2F2;
+    --amber: #D97706;
+    --green: #16A34A;
+
+    --radius: 12px;
+    --radius-sm: 8px;
+    --radius-lg: 16px;
+    --radius-full: 999px;
+    --ease: cubic-bezier(.16, 1, .3, 1);
+    --shadow-sm: 0 1px 2px rgba(15,23,42,.05);
+    --shadow-md: 0 6px 16px rgba(15,23,42,.08), 0 1px 3px rgba(15,23,42,.06);
+}
+
+*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+html, body { height: 100%; overflow: hidden; }
+body {
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, sans-serif;
+    background: var(--bg); color: var(--text); font-size: 15px;
+    -webkit-font-smoothing: antialiased;
+}
+button { font-family: inherit; cursor: pointer; border: none; background: none; color: inherit; }
+input, select, textarea { font-family: inherit; }
+
+/* ── Overlays (PIN / Setup / Expiry / Settings) ──────────────────────── */
+
+.overlay {
+    position: fixed; inset: 0; z-index: 999;
+    display: flex; align-items: center; justify-content: center;
+    padding: 24px;
+}
+.overlay[hidden] { display: none !important; }
+
+.overlay-dark {
+    background: linear-gradient(180deg, #0F172A, #1E293B);
+}
+.overlay-dim {
+    background: rgba(2,6,23,.55);
+    backdrop-filter: blur(4px);
+}
+
+.overlay-card {
+    width: 100%; max-width: 420px; background: #fff; border-radius: 20px;
+    box-shadow: 0 20px 60px rgba(0,0,0,.35); padding: 34px 30px 30px;
+}
+.overlay-card.wide { max-width: 520px; }
+
+.overlay-brand {
+    display: flex; flex-direction: column; align-items: center; gap: 8px;
+    margin-bottom: 22px; text-align: center;
+}
+.overlay-brand-icon { font-size: 2.2rem; }
+.overlay-brand-title { font-size: 1.1rem; font-weight: 700; color: var(--text); }
+.overlay-brand-sub { font-size: .82rem; color: var(--text-muted); }
+
+.field { margin-bottom: 14px; }
+.field label {
+    display: block; font-size: .74rem; font-weight: 600; color: var(--text-dim);
+    margin-bottom: 6px; letter-spacing: .02em; text-transform: uppercase;
+}
+.field input, .field select {
+    width: 100%; padding: 12px 14px; border: 2px solid var(--border);
+    border-radius: var(--radius); font-size: 1rem; font-weight: 600;
+    color: var(--text); background: #F8FAFC;
+}
+.field input:focus, .field select:focus {
+    outline: none; border-color: var(--snacks); background: #fff;
+}
+.field input.pin-input {
+    letter-spacing: .4rem; text-align: center; font-size: 1.3rem;
+    font-variant-numeric: tabular-nums;
+}
+
+.btn-primary {
+    width: 100%; margin-top: 18px; padding: 14px; border: none; border-radius: var(--radius);
+    background: var(--snacks); color: #fff; font-size: 1rem; font-weight: 700;
+    cursor: pointer; transition: background .15s;
+}
+.btn-primary:hover:not(:disabled) { background: var(--snacks-dark); }
+.btn-primary:disabled { opacity: .55; cursor: default; }
+.btn-secondary {
+    width: 100%; margin-top: 10px; padding: 12px; border: 2px solid var(--border);
+    border-radius: var(--radius); background: #fff; color: var(--text);
+    font-size: .9rem; font-weight: 600; cursor: pointer; transition: all .15s;
+}
+.btn-secondary:hover { border-color: var(--snacks-200); background: var(--snacks-50); }
+.btn-danger {
+    width: 100%; margin-top: 10px; padding: 12px; border: 2px solid var(--red);
+    border-radius: var(--radius); background: var(--red-bg); color: var(--red);
+    font-size: .9rem; font-weight: 600; cursor: pointer; transition: all .15s;
+}
+.btn-danger:hover { background: var(--red); color: #fff; }
+
+.err-box {
+    display: none; margin-top: 14px; padding: 10px 12px; border-radius: 10px;
+    background: var(--red-bg); color: var(--red); font-size: .85rem;
+    line-height: 1.4; text-align: center;
+}
+.err-box.show { display: block; }
+
+.foot-note {
+    margin-top: 18px; text-align: center; font-size: .75rem; color: var(--text-muted);
+}
+
+/* ── Expiry overlay ──────────────────────────────────────────────────── */
+#expiryOverlay .overlay-card {
+    text-align: center;
+}
+#expiryOverlay .expiry-icon { font-size: 3rem; margin-bottom: 12px; }
+#expiryOverlay h2 { font-size: 1.15rem; color: var(--red); margin-bottom: 8px; }
+#expiryOverlay p { font-size: .85rem; color: var(--text-dim); line-height: 1.5; }
+
+/* ── Settings modal ──────────────────────────────────────────────────── */
+.settings-body { max-height: 70vh; overflow-y: auto; }
+.settings-section {
+    padding: 16px 0; border-bottom: 1px solid var(--border);
+}
+.settings-section:last-child { border-bottom: none; }
+.settings-section h4 {
+    font-size: .7rem; font-weight: 700; text-transform: uppercase;
+    letter-spacing: .08em; color: var(--text-muted); margin-bottom: 10px;
+}
+.settings-row {
+    display: flex; align-items: center; justify-content: space-between;
+    gap: 12px; margin-bottom: 8px; font-size: .85rem;
+}
+.settings-row .label { color: var(--text-dim); }
+.settings-row .value { font-weight: 600; color: var(--text); text-align: right; }
+.settings-row .value.warn { color: var(--amber); }
+.settings-actions { display: flex; flex-direction: column; gap: 8px; margin-top: 12px; }
+.settings-actions button { margin-top: 0; }
+
+/* ── Main App Layout ─────────────────────────────────────────────────── */
+.app { display: grid; grid-template-columns: 280px 1fr 340px; grid-template-rows: auto 1fr; height: 100vh; }
+.app[hidden] { display: none !important; }
+
+/* === TOPBAR === */
+.topbar {
+    grid-column: 1/-1; display: flex; align-items: center;
+    justify-content: space-between; padding: 0 1.25rem; height: 56px;
+    background: rgba(255,255,255,.92); border-bottom: 1px solid var(--border);
+    backdrop-filter: blur(12px); box-shadow: var(--shadow-sm); z-index: 10;
+}
+.topbar-left { display: flex; align-items: center; gap: 12px; }
+.topbar-logo { font-size: 1.4rem; line-height: 1; }
+.topbar-title { font-size: .95rem; font-weight: 700; color: var(--text); white-space: nowrap; }
+.topbar-badge {
+    padding: 3px 10px; font-size: .65rem; font-weight: 700;
+    text-transform: uppercase; letter-spacing: .06em;
+    background: var(--snacks); color: white; border-radius: var(--radius-full);
+    white-space: nowrap;
+}
+.topbar-badge.offline {
+    background: #F59E0B; color: #78350F;
+}
+.topbar-badge.expiry {
+    background: transparent; border: 1.5px solid var(--border-strong);
+    color: var(--text-dim); font-size: .6rem;
+}
+.topbar-badge.expiry.warn { border-color: var(--amber); color: var(--amber); }
+.topbar-badge.expiry.danger { border-color: var(--red); color: var(--red); }
+.topbar-right { display: flex; align-items: center; gap: 10px; }
+.topbar-time {
+    font-size: .8rem; color: var(--text-dim); font-variant-numeric: tabular-nums;
+    font-family: ui-monospace, 'SFMono-Regular', Menlo, monospace;
+    white-space: nowrap;
+}
+.topbar-btn {
+    display: flex; align-items: center; justify-content: center;
+    width: 36px; height: 36px; border-radius: var(--radius-sm);
+    border: 1px solid var(--border); background: #fff; color: var(--text-dim);
+    flex-shrink: 0; cursor: pointer;
+}
+.topbar-btn:hover { border-color: var(--snacks); color: var(--snacks-dark); background: var(--snacks-50); }
+
+/* Camper panel toggle (tablet/phone) */
+.camper-toggle-btn { display: none; }
+.camper-backdrop { display: none; position: fixed; inset: 0; top: 56px; background: rgba(2,6,23,.35); z-index: 55; }
+body.camper-open .camper-backdrop { display: block; }
+
+/* === LEFT: Camper Selector === */
+.camper-panel { grid-row: 2; display: flex; flex-direction: column; border-right: 1px solid var(--border); background: var(--bg-panel); }
+.camper-search { padding: .75rem; border-bottom: 1px solid var(--border); }
+.camper-search input {
+    width: 100%; padding: .6rem .75rem; background: var(--bg);
+    border: 1px solid var(--border); border-radius: var(--radius-sm);
+    color: var(--text); font-size: .875rem; outline: none; transition: border-color .15s;
+}
+.camper-search input:focus { border-color: var(--snacks); background: #fff; }
+.camper-search input::placeholder { color: var(--text-muted); }
+
+.bunk-filter { position: relative; padding: 0 .75rem .5rem; border-bottom: 1px solid var(--border); }
+.bunk-filter-btn {
+    width: 100%; display: flex; align-items: center; justify-content: space-between;
+    gap: 6px; padding: .5rem .7rem; background: var(--bg); border: 1px solid var(--border);
+    border-radius: var(--radius-sm); color: var(--text-dim); font-size: .8rem; font-weight: 600;
+    cursor: pointer;
+}
+.bunk-filter-btn:hover { border-color: var(--snacks-200); background: var(--snacks-50); color: var(--snacks-dark); }
+.bunk-filter-menu {
+    position: absolute; left: .75rem; right: .75rem; top: 100%; z-index: 40;
+    margin-top: 2px; max-height: 300px; overflow-y: auto; background: #fff;
+    border: 1px solid var(--border-strong); border-radius: var(--radius-sm);
+    box-shadow: var(--shadow-md); padding: .35rem;
+}
+.bunk-filter-menu[hidden] { display: none !important; }
+.bunk-filter-row {
+    display: flex; align-items: center; gap: .55rem; padding: .5rem .55rem;
+    border-radius: var(--radius-sm); cursor: pointer; font-size: .8rem; color: var(--text);
+}
+.bunk-filter-row:hover { background: var(--snacks-50); }
+.bunk-filter-row input { accent-color: var(--snacks); width: 16px; height: 16px; flex-shrink: 0; }
+.bunk-filter-row.all { font-weight: 700; }
+.bunk-filter-div { margin-left: auto; font-size: .65rem; color: var(--text-muted); }
+.bunk-filter-divider { height: 1px; background: var(--border); margin: .3rem 0; }
+
+.camper-list { flex: 1; min-height: 0; overflow-y: auto; -webkit-overflow-scrolling: touch; padding: .5rem; }
+.camper-item {
+    display: flex; align-items: center; gap: .75rem; padding: .65rem .75rem;
+    border-radius: var(--radius); cursor: pointer; transition: all .12s; margin-bottom: 2px;
+}
+.camper-item:hover { background: var(--bg-card-hover); }
+.camper-item.selected { background: var(--snacks); color: white; box-shadow: var(--shadow-sm); }
+.camper-item.selected .camper-meta { color: rgba(255,255,255,.75); }
+.camper-item.selected .camper-balance { color: white; }
+.camper-item.limit-hit { opacity: .55; }
+.camper-avatar {
+    width: 36px; height: 36px; border-radius: var(--radius-full);
+    background: var(--snacks-50); display: flex; align-items: center;
+    justify-content: center; font-size: .7rem; font-weight: 700;
+    color: var(--snacks-dark); flex-shrink: 0;
+}
+.camper-item.selected .camper-avatar { background: rgba(255,255,255,.25); color: white; }
+.camper-info { flex: 1; min-width: 0; }
+.camper-name { font-size: .8125rem; font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.camper-meta { font-size: .65rem; color: var(--text-muted); }
+.camper-balance { font-size: .875rem; font-weight: 700; color: var(--text); white-space: nowrap; }
+.camper-balance.low { color: var(--amber); }
+.camper-balance.empty { color: var(--red); }
+
+/* === CENTER: Item Grid === */
+.items-panel { grid-row: 2; display: flex; flex-direction: column; overflow: hidden; background: var(--bg); }
+.items-toolbar {
+    display: flex; align-items: center; flex-wrap: wrap; gap: .5rem;
+    padding: .75rem 1rem; background: var(--bg-panel); border-bottom: 1px solid var(--border);
+}
+.items-toolbar input {
+    flex: 1 1 140px; min-width: 100px; padding: .55rem .75rem;
+    background: var(--bg); border: 1px solid var(--border); border-radius: var(--radius-sm);
+    color: var(--text); font-size: .8125rem; outline: none;
+}
+.items-toolbar input:focus { border-color: var(--snacks); background: #fff; }
+.cat-btns { display: flex; align-items: center; flex-wrap: wrap; gap: .5rem; }
+.cat-btn {
+    padding: .4rem .8rem; border-radius: var(--radius-full); font-size: .7rem;
+    font-weight: 600; background: var(--bg); color: var(--text-dim);
+    border: 1px solid var(--border); transition: all .12s; white-space: nowrap; cursor: pointer;
+}
+.cat-btn:hover { background: var(--snacks-50); border-color: var(--snacks-200); color: var(--snacks-dark); }
+.cat-btn.active { background: var(--snacks); color: white; border-color: var(--snacks); }
+.items-scroll { flex: 1; overflow-y: auto; padding: 1rem; }
+.section-label {
+    font-size: .65rem; font-weight: 700; text-transform: uppercase;
+    letter-spacing: .1em; color: var(--text-muted); margin-bottom: .6rem;
+    display: flex; align-items: center; gap: 5px;
+}
+
+.quick-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(110px, 1fr)); gap: .6rem; margin-bottom: 1.5rem; }
+.item-tile {
+    background: var(--bg-card); border: 1px solid var(--border); border-radius: var(--radius);
+    padding: 1rem .6rem; text-align: center; cursor: pointer; transition: all .15s var(--ease);
+    position: relative; user-select: none; box-shadow: var(--shadow-sm);
+    display: flex; flex-direction: column; align-items: center; justify-content: center;
+    min-height: 64px;
+}
+.item-tile:hover { border-color: var(--snacks-200); background: var(--bg-card-hover); transform: translateY(-2px); box-shadow: var(--shadow-md); }
+.item-tile:active { transform: scale(.96) translateY(0); }
+.item-tile.out { opacity: .35; pointer-events: none; }
+.item-tile.hot {
+    grid-column: span 2; grid-row: span 2; padding: 1.25rem;
+    border-color: var(--snacks-200); background: linear-gradient(135deg, var(--bg-card) 55%, var(--snacks-50));
+}
+.item-tile.hot .tile-name { font-size: 1.05rem; }
+.item-tile.hot .tile-price { font-size: .9rem; }
+.item-tile.warm { grid-column: span 2; padding: 1rem; border-color: var(--snacks-100); }
+.item-tile.warm .tile-name { font-size: .9rem; }
+.tile-name { font-size: .8rem; font-weight: 600; line-height: 1.25; margin-bottom: .25rem; color: var(--text); }
+.tile-price { font-size: .72rem; color: var(--snacks-dark); font-weight: 700; }
+.tile-stock { font-size: .58rem; color: var(--text-muted); margin-top: .15rem; }
+.tile-rank {
+    position: absolute; top: 4px; right: 4px; background: var(--snacks);
+    color: white; font-size: .5rem; font-weight: 800; padding: 1px 5px;
+    border-radius: var(--radius-full); line-height: 1.4;
+}
+
+.all-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(100px, 1fr)); gap: .5rem; }
+.all-grid .item-tile { padding: .7rem .5rem; min-height: 48px; }
+.all-grid .tile-name { font-size: .72rem; }
+.all-grid .tile-price { font-size: .65rem; }
+
+/* === RIGHT: Cart === */
+.cart-panel { grid-row: 2; display: flex; flex-direction: column; border-left: 1px solid var(--border); background: var(--bg-panel); }
+.cart-header {
+    padding: 1rem 1.25rem; border-bottom: 1px solid var(--border);
+    display: flex; align-items: center; justify-content: space-between;
+}
+.cart-header h3 { font-size: .9375rem; font-weight: 700; }
+.cart-clear { font-size: .7rem; color: var(--text-muted); cursor: pointer; transition: color .15s; }
+.cart-clear:hover { color: var(--red); }
+.cart-camper-bar {
+    padding: .75rem 1rem; border-bottom: 1px solid var(--border);
+    display: flex; align-items: center; gap: .5rem; background: var(--snacks-50);
+    min-height: 52px;
+}
+.cart-camper-name { font-size: .8125rem; font-weight: 700; flex: 1; color: var(--text); }
+.cart-camper-bal { font-size: .8125rem; font-weight: 700; color: var(--snacks-dark); }
+.cart-camper-empty { font-size: .75rem; color: var(--text-muted); font-style: italic; }
+.cart-body { flex: 1; min-height: 0; overflow-y: auto; -webkit-overflow-scrolling: touch; padding: .75rem 1rem; }
+.cart-empty { text-align: center; padding: 2.5rem 1rem; color: var(--text-muted); font-size: .8rem; }
+.cart-line {
+    display: flex; align-items: center; gap: .6rem; padding: .6rem 0;
+    border-bottom: 1px solid var(--border); font-size: .8125rem;
+}
+.cart-line:last-child { border-bottom: none; }
+.cart-line-info { flex: 1; }
+.cart-line-name { font-weight: 600; color: var(--text); }
+.cart-line-sub { font-size: .7rem; color: var(--text-muted); }
+.cart-line-qty { display: flex; align-items: center; gap: 4px; }
+.cart-line-qty button {
+    width: 24px; height: 24px; border-radius: 6px; border: 1px solid var(--border);
+    display: flex; align-items: center; justify-content: center;
+    font-size: .75rem; font-weight: 700; color: var(--text-dim);
+    transition: all .12s; cursor: pointer; background: #fff;
+}
+.cart-line-qty button:hover { border-color: var(--snacks); background: var(--snacks-50); color: var(--snacks-dark); }
+.cart-line-qty span { min-width: 18px; text-align: center; font-weight: 700; font-size: .8rem; }
+.cart-line-total { font-weight: 700; min-width: 48px; text-align: right; color: var(--text); }
+.cart-footer {
+    flex-shrink: 0; border-top: 1px solid var(--border);
+    padding: 1rem 1.25rem; background: var(--bg);
+}
+.cart-total-row {
+    display: flex; justify-content: space-between; align-items: baseline;
+    font-size: 1rem; font-weight: 600; color: var(--text-dim); margin-bottom: .25rem;
+}
+.cart-total-row .val {
+    color: var(--text); font-size: 1.5rem; font-weight: 800;
+    font-family: ui-monospace, 'SFMono-Regular', Menlo, monospace;
+}
+.cart-remaining { font-size: .7rem; color: var(--text-muted); margin-bottom: .85rem; text-align: right; }
+.charge-btn {
+    width: 100%; padding: .9rem; font-size: 1rem; font-weight: 700; color: white;
+    background: var(--snacks); border: none; border-radius: var(--radius); cursor: pointer;
+    transition: all .15s; letter-spacing: .01em; box-shadow: 0 2px 8px var(--snacks-glow);
+}
+.charge-btn:hover:not(:disabled) { background: var(--snacks-dark); box-shadow: 0 6px 20px var(--snacks-glow); transform: translateY(-1px); }
+.charge-btn:disabled { opacity: .35; cursor: not-allowed; box-shadow: none; }
+.charge-btn:active:not(:disabled) { transform: scale(.98); }
+
+/* Toast */
+.toast {
+    position: fixed; bottom: 20px; left: 50%; transform: translateX(-50%) translateY(60px);
+    background: var(--snacks-darker); color: white; padding: .7rem 1.5rem;
+    border-radius: var(--radius-full); font-size: .8rem; font-weight: 600;
+    box-shadow: 0 12px 28px rgba(15,23,42,.25); z-index: 300; opacity: 0;
+    transition: all .3s var(--ease); pointer-events: none; white-space: nowrap;
+    max-width: 90vw; overflow: hidden; text-overflow: ellipsis;
+}
+.toast.show { opacity: 1; transform: translateX(-50%) translateY(0); }
+.toast.err { background: var(--red); }
+
+/* Success flash */
+@keyframes successFlash { 0% { background: var(--snacks-50); } 100% { background: transparent; } }
+.flash { animation: successFlash .6s var(--ease); }
+
+/* ── Setup wizard step indicators ────────────────────────────────────── */
+.setup-steps {
+    display: flex; align-items: center; justify-content: center;
+    gap: 8px; margin-bottom: 20px;
+}
+.setup-step {
+    width: 32px; height: 32px; border-radius: 50%; display: flex;
+    align-items: center; justify-content: center; font-size: .75rem;
+    font-weight: 700; border: 2px solid var(--border); color: var(--text-muted);
+    transition: all .2s;
+}
+.setup-step.active { border-color: var(--snacks); background: var(--snacks); color: #fff; }
+.setup-step.done { border-color: var(--green); background: var(--green); color: #fff; }
+.setup-step-line { width: 24px; height: 2px; background: var(--border); }
+
+/* ── Responsive ──────────────────────────────────────────────────────── */
+
+@media (max-width: 1180px) {
+    .app { grid-template-columns: 210px 1fr 290px; }
+}
+@media (max-width: 900px) {
+    .app { grid-template-columns: 200px 1fr 240px; }
+}
+@media (max-width: 700px) {
+    .app { grid-template-columns: 1fr 250px; }
+    .camper-toggle-btn { display: flex; align-items: center; justify-content: center; width: 36px; height: 36px; border-radius: var(--radius-sm); border: 1px solid var(--border); background: #fff; color: var(--text-dim); flex-shrink: 0; cursor: pointer; }
+    .camper-toggle-btn:hover { border-color: var(--snacks); color: var(--snacks-dark); background: var(--snacks-50); }
+    .camper-panel {
+        position: fixed; top: 56px; left: 0; bottom: 0; width: 300px;
+        z-index: 60; box-shadow: var(--shadow-md);
+        transform: translateX(-100%); transition: transform .25s var(--ease);
+    }
+    body.camper-open .camper-panel { transform: translateX(0); }
+}
+@media (max-width: 620px) {
+    .app { grid-template-columns: 1fr; grid-template-rows: auto 1fr auto; }
+    .items-panel { grid-row: 2; grid-column: 1; }
+    .cart-panel { grid-row: 3; grid-column: 1; max-height: 42vh; border-left: none; border-top: 1px solid var(--border); }
+    .topbar { padding: 0 .75rem; }
+    .topbar-left { gap: 8px; }
+    .topbar-title { font-size: .85rem; }
+    .topbar-badge { padding: 2px 8px; font-size: .6rem; }
+    .topbar-time { font-size: .7rem; }
+}
+@media (pointer: coarse) {
+    .camper-item { padding: .8rem .85rem; }
+    .cat-btn { padding: .55rem 1rem; font-size: .78rem; }
+    .item-tile { padding: .85rem .6rem; }
+    .cart-line { padding: .75rem 0; }
+    .cart-line-qty button { width: 34px; height: 34px; font-size: .85rem; border-radius: 8px; }
+    .cart-line-qty span { min-width: 24px; }
+    .charge-btn { padding: 1.05rem; font-size: 1.05rem; }
+    .camper-toggle-btn { width: 40px; height: 40px; }
+}
+</style>
+</head>
+<body>
+
+<!-- ═══════════════════════════════════════════════════════════════════════
+     PIN OVERLAY — shown on every page load until the correct PIN is entered
+     ═══════════════════════════════════════════════════════════════════════ -->
+<div class="overlay overlay-dark" id="pinOverlay" hidden>
+    <div class="overlay-card">
+        <div class="overlay-brand">
+            <div class="overlay-brand-icon">🍿</div>
+            <div class="overlay-brand-title">Snacks — Offline Register</div>
+            <div class="overlay-brand-sub" id="pinCampName"></div>
+        </div>
+        <div class="field">
+            <label for="pinInput">Register PIN</label>
+            <input type="password" inputmode="numeric" pattern="[0-9]*" maxlength="8"
+                   id="pinInput" class="pin-input" placeholder="····">
+        </div>
+        <div class="err-box" id="pinErr"></div>
+        <button class="btn-primary" id="pinSubmitBtn">Unlock Register</button>
+        <div class="foot-note">Offline POS — all data stored locally</div>
+    </div>
+</div>
+
+<!-- ═══════════════════════════════════════════════════════════════════════
+     SETUP WIZARD — shown on first run when no data exists in IndexedDB
+     ═══════════════════════════════════════════════════════════════════════ -->
+<div class="overlay overlay-dark" id="setupOverlay" hidden>
+    <div class="overlay-card wide">
+        <div class="overlay-brand">
+            <div class="overlay-brand-icon">🍿</div>
+            <div class="overlay-brand-title">Offline POS Setup</div>
+            <div class="overlay-brand-sub">Set up this register for offline use</div>
+        </div>
+        <div class="setup-steps" id="setupSteps">
+            <div class="setup-step active" data-step="1">1</div>
+            <div class="setup-step-line"></div>
+            <div class="setup-step" data-step="2">2</div>
+            <div class="setup-step-line"></div>
+            <div class="setup-step" data-step="3">3</div>
+            <div class="setup-step-line"></div>
+            <div class="setup-step" data-step="4">4</div>
+        </div>
+
+        <!-- Step 1: Camp Name -->
+        <div id="setupStep1">
+            <div class="field">
+                <label for="setupCampName">Camp Name</label>
+                <input type="text" id="setupCampName" placeholder="Camp Sunshine">
+            </div>
+            <button class="btn-primary" onclick="POS.setupNext(1)">Next</button>
+        </div>
+
+        <!-- Step 2: Set PIN -->
+        <div id="setupStep2" hidden>
+            <div class="field">
+                <label for="setupPin">Register PIN (4–8 digits)</label>
+                <input type="password" inputmode="numeric" pattern="[0-9]*" maxlength="8"
+                       id="setupPin" class="pin-input" placeholder="····">
+            </div>
+            <div class="field">
+                <label for="setupPinConfirm">Confirm PIN</label>
+                <input type="password" inputmode="numeric" pattern="[0-9]*" maxlength="8"
+                       id="setupPinConfirm" class="pin-input" placeholder="····">
+            </div>
+            <div class="err-box" id="setupPinErr"></div>
+            <button class="btn-primary" onclick="POS.setupNext(2)">Next</button>
+        </div>
+
+        <!-- Step 3: License Expiry -->
+        <div id="setupStep3" hidden>
+            <div class="field">
+                <label for="setupExpiry">License Expiry Date</label>
+                <input type="date" id="setupExpiry">
+            </div>
+            <p style="font-size:.78rem;color:var(--text-muted);margin-top:4px">
+                The register will lock after this date. Default: 30 days from today.
+            </p>
+            <button class="btn-primary" onclick="POS.setupNext(3)">Next</button>
+        </div>
+
+        <!-- Step 4: Import Data -->
+        <div id="setupStep4" hidden>
+            <p style="font-size:.85rem;color:var(--text-dim);margin-bottom:16px;text-align:center">
+                Import the data file from your camp office to load camper accounts
+                and inventory items.
+            </p>
+            <button class="btn-secondary" onclick="POS.triggerImport('setup')">
+                Choose JSON File...
+            </button>
+            <div class="err-box" id="setupImportErr"></div>
+            <div id="setupImportStatus" style="font-size:.8rem;color:var(--green);margin-top:10px;text-align:center" hidden></div>
+            <button class="btn-primary" id="setupFinishBtn" onclick="POS.setupFinish()" disabled>
+                Finish Setup
+            </button>
+            <button class="btn-secondary" onclick="POS.setupFinish()" style="font-size:.78rem;color:var(--text-muted)">
+                Skip — start with empty data
+            </button>
+        </div>
+    </div>
+</div>
+
+<!-- ═══════════════════════════════════════════════════════════════════════
+     EXPIRY OVERLAY — locks the entire POS when the license has expired
+     ═══════════════════════════════════════════════════════════════════════ -->
+<div class="overlay overlay-dim" id="expiryOverlay" hidden>
+    <div class="overlay-card" style="text-align:center">
+        <div class="expiry-icon">🔒</div>
+        <h2>License Expired</h2>
+        <p>Connect to the internet and re-sync with the online system to continue using this register.</p>
+        <p style="margin-top:12px;font-size:.78rem;color:var(--text-muted)">
+            If you have a new data export, you can re-import to extend the license.
+        </p>
+        <button class="btn-secondary" onclick="POS.triggerImport('expiry')" style="margin-top:16px">
+            Import New Data File
+        </button>
+    </div>
+</div>
+
+<!-- ═══════════════════════════════════════════════════════════════════════
+     SETTINGS MODAL
+     ═══════════════════════════════════════════════════════════════════════ -->
+<div class="overlay overlay-dim" id="settingsOverlay" hidden>
+    <div class="overlay-card wide">
+        <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:16px">
+            <h3 style="font-size:1rem;font-weight:700">Settings</h3>
+            <button class="topbar-btn" onclick="POS.closeSettings()" style="width:30px;height:30px;font-size:.9rem">✕</button>
+        </div>
+        <div class="settings-body" id="settingsBody"></div>
+    </div>
+</div>
+
+<!-- Hidden file input for imports -->
+<input type="file" id="fileInput" accept=".json,application/json" hidden>
+
+<!-- ═══════════════════════════════════════════════════════════════════════
+     MAIN POS APP
+     ═══════════════════════════════════════════════════════════════════════ -->
+<div class="app" id="mainApp" hidden>
+
+<div class="topbar">
+    <div class="topbar-left">
+        <button class="camper-toggle-btn" id="camperToggleBtn" onclick="POS.toggleCamperPanel()">
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 0 0-3-3.87M16 3.13a4 4 0 0 1 0 7.75"/></svg>
+        </button>
+        <span class="topbar-logo">🍿</span>
+        <span class="topbar-title" id="topbarTitle">Snacks</span>
+        <span class="topbar-badge offline">Offline POS</span>
+    </div>
+    <div class="topbar-right">
+        <span class="topbar-badge expiry" id="expiryBadge"></span>
+        <span class="topbar-time" id="clock"></span>
+        <button class="topbar-btn" onclick="POS.openSettings()" title="Settings">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.32 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>
+        </button>
+        <button class="topbar-btn" onclick="POS.lockRegister()" title="Lock register">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="11" width="18" height="11" rx="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg>
+        </button>
+    </div>
+</div>
+
+<div class="camper-backdrop" id="camperBackdrop" onclick="POS.toggleCamperPanel()"></div>
+
+<!-- LEFT: Camper Selector -->
+<div class="camper-panel" id="camperPanel">
+    <div class="camper-search">
+        <input type="text" placeholder="Search camper..." id="camperSearch" oninput="POS.renderCampers()">
+    </div>
+    <div class="bunk-filter" id="bunkFilterWrap" hidden>
+        <button class="bunk-filter-btn" id="bunkFilterBtn" type="button" onclick="POS.toggleBunkFilter()">
+            All bunks <span>&#9662;</span>
+        </button>
+        <div class="bunk-filter-menu" id="bunkFilterMenu" hidden></div>
+    </div>
+    <div class="camper-list" id="camperList"></div>
+</div>
+
+<!-- CENTER: Items -->
+<div class="items-panel">
+    <div class="items-toolbar">
+        <input type="text" placeholder="Search items..." id="itemSearch" oninput="POS.renderItems()">
+        <div class="cat-btns" id="catBtns"></div>
+    </div>
+    <div class="items-scroll">
+        <div class="section-label">&#9889; Quick Push &mdash; Top Sellers</div>
+        <div class="quick-grid" id="quickGrid"></div>
+        <div class="section-label">&#9776; All Items</div>
+        <div class="all-grid" id="allGrid"></div>
+    </div>
+</div>
+
+<!-- RIGHT: Cart -->
+<div class="cart-panel">
+    <div class="cart-header">
+        <h3>Cart</h3>
+        <span class="cart-clear" onclick="POS.clearCart()">Clear All</span>
+    </div>
+    <div class="cart-camper-bar" id="cartCamperBar">
+        <span class="cart-camper-empty">&larr; Select a camper</span>
+    </div>
+    <div class="cart-body" id="cartBody">
+        <div class="cart-empty">Tap items to start</div>
+    </div>
+    <div class="cart-footer">
+        <div class="cart-total-row">
+            <span>Total</span>
+            <span class="val" id="cartTotal">$0.00</span>
+        </div>
+        <div class="cart-remaining" id="cartRemaining"></div>
+        <button class="charge-btn" id="chargeBtn" disabled>Charge</button>
+    </div>
+</div>
+
+</div><!-- /.app -->
+
+<div class="toast" id="toast"></div>
+
+<script>
+// =============================================================================
+// Campistry Snacks — Offline POS
+// Self-contained IIFE: IndexedDB storage, PIN auth, license check,
+// import/export, full POS logic, barcode scanner.
+// =============================================================================
+
+(function() {
+'use strict';
+
+// ─── Globals ────────────────────────────────────────────────────────────
+var DB_NAME = 'CampistryOfflinePOS';
+var DB_VERSION = 1;
+var db = null; // IndexedDB handle
+
+// In-memory state (mirrors IndexedDB, kept in sync)
+var accounts = {};     // { camperName: { balance, dailyLimit, spentToday, lastSpendDate, balanceFloor, creditLimit } }
+var inventory = [];    // [ { id, name, cat, price, cost, stock, soldToday, totalSold, barcode } ]
+var transactions = []; // [ { id, time, camper, items, amount, type, date, timestamp, exported } ]
+var meta = {};         // { pin, campName, expiryDate, lastImport, ... }
+var sel = null;        // selected camper name
+var cart = [];         // [ { id, qty } ]
+var cat = 'all';       // active category filter
+var selectedBunks = new Set();
+var pinUnlocked = false;
+var importContext = null; // 'setup' | 'settings' | 'expiry'
+
+// ─── Utility ────────────────────────────────────────────────────────────
+
+function esc(s) {
+    if (!s) return '';
+    var d = document.createElement('div');
+    d.textContent = s;
+    return d.innerHTML;
+}
+
+function toast(msg, isErr) {
+    var el = document.getElementById('toast');
+    el.textContent = msg;
+    el.className = 'toast show' + (isErr ? ' err' : '');
+    setTimeout(function() { el.className = 'toast'; }, 2500);
+}
+
+function todayStr() {
+    var d = new Date();
+    return d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0') + '-' + String(d.getDate()).padStart(2, '0');
+}
+
+function generateId() {
+    return Date.now().toString(36) + Math.random().toString(36).substr(2, 6);
+}
+
+async function sha256(str) {
+    var buf = new TextEncoder().encode(str);
+    var hash = await crypto.subtle.digest('SHA-256', buf);
+    return Array.from(new Uint8Array(hash)).map(function(b) { return b.toString(16).padStart(2, '0'); }).join('');
+}
+
+// ─── IndexedDB Layer ────────────────────────────────────────────────────
+
+function openDB() {
+    return new Promise(function(resolve, reject) {
+        var req = indexedDB.open(DB_NAME, DB_VERSION);
+        req.onupgradeneeded = function(e) {
+            var d = e.target.result;
+            if (!d.objectStoreNames.contains('accounts')) d.createObjectStore('accounts', { keyPath: 'name' });
+            if (!d.objectStoreNames.contains('inventory')) d.createObjectStore('inventory', { keyPath: 'id' });
+            if (!d.objectStoreNames.contains('transactions')) d.createObjectStore('transactions', { keyPath: 'id' });
+            if (!d.objectStoreNames.contains('meta')) d.createObjectStore('meta', { keyPath: 'key' });
+        };
+        req.onsuccess = function(e) { db = e.target.result; resolve(db); };
+        req.onerror = function(e) { reject(e.target.error); };
+    });
+}
+
+function idbPut(store, data) {
+    return new Promise(function(resolve, reject) {
+        var tx = db.transaction(store, 'readwrite');
+        var s = tx.objectStore(store);
+        if (Array.isArray(data)) { data.forEach(function(item) { s.put(item); }); }
+        else { s.put(data); }
+        tx.oncomplete = function() { resolve(); };
+        tx.onerror = function(e) { reject(e.target.error); };
+    });
+}
+
+function idbGetAll(store) {
+    return new Promise(function(resolve, reject) {
+        var tx = db.transaction(store, 'readonly');
+        var req = tx.objectStore(store).getAll();
+        req.onsuccess = function() { resolve(req.result || []); };
+        req.onerror = function(e) { reject(e.target.error); };
+    });
+}
+
+function idbGet(store, key) {
+    return new Promise(function(resolve, reject) {
+        var tx = db.transaction(store, 'readonly');
+        var req = tx.objectStore(store).get(key);
+        req.onsuccess = function() { resolve(req.result || null); };
+        req.onerror = function(e) { reject(e.target.error); };
+    });
+}
+
+function idbClear(store) {
+    return new Promise(function(resolve, reject) {
+        var tx = db.transaction(store, 'readwrite');
+        tx.objectStore(store).clear();
+        tx.oncomplete = function() { resolve(); };
+        tx.onerror = function(e) { reject(e.target.error); };
+    });
+}
+
+function idbDelete(store, key) {
+    return new Promise(function(resolve, reject) {
+        var tx = db.transaction(store, 'readwrite');
+        tx.objectStore(store).delete(key);
+        tx.oncomplete = function() { resolve(); };
+        tx.onerror = function(e) { reject(e.target.error); };
+    });
+}
+
+// Save a single meta key-value
+async function saveMeta(key, value) {
+    await idbPut('meta', { key: key, value: value });
+    meta[key] = value;
+}
+
+// Load all meta into the meta object
+async function loadAllMeta() {
+    var rows = await idbGetAll('meta');
+    meta = {};
+    rows.forEach(function(r) { meta[r.key] = r.value; });
+}
+
+// Load all accounts into the accounts object
+async function loadAccounts() {
+    var rows = await idbGetAll('accounts');
+    accounts = {};
+    rows.forEach(function(r) { accounts[r.name] = r; });
+}
+
+// Load all inventory
+async function loadInventory() {
+    inventory = await idbGetAll('inventory');
+}
+
+// Load all transactions
+async function loadTransactions() {
+    transactions = await idbGetAll('transactions');
+    transactions.sort(function(a, b) { return (b.timestamp || 0) - (a.timestamp || 0); });
+}
+
+// Save a single account
+async function saveAccount(name) {
+    var a = accounts[name];
+    if (!a) return;
+    a.name = name; // ensure keyPath
+    await idbPut('accounts', a);
+}
+
+// Save a single inventory item
+async function saveInventoryItem(item) {
+    await idbPut('inventory', item);
+}
+
+// Save a single transaction
+async function saveTransaction(tx) {
+    await idbPut('transactions', tx);
+}
+
+// ─── PIN / Auth Module ──────────────────────────────────────────────────
+
+var failedAttempts = 0;
+var lockoutUntil = 0;
+
+async function checkPin(pin) {
+    var stored = meta.pinHash;
+    if (!stored) return false;
+    var hash = await sha256(pin);
+    return hash === stored;
+}
+
+function showPinOverlay() {
+    var overlay = document.getElementById('pinOverlay');
+    overlay.hidden = false;
+    document.getElementById('mainApp').hidden = true;
+    var campName = meta.campName || '';
+    var subEl = document.getElementById('pinCampName');
+    subEl.textContent = campName ? campName : 'Enter the register PIN to unlock';
+    var inp = document.getElementById('pinInput');
+    inp.value = '';
+    inp.focus();
+    // Check lockout
+    var lockMeta = meta.lockoutUntil || 0;
+    if (lockMeta > Date.now()) {
+        lockoutUntil = lockMeta;
+    }
+    updatePinLockout();
+}
+
+function updatePinLockout() {
+    var btn = document.getElementById('pinSubmitBtn');
+    var err = document.getElementById('pinErr');
+    if (lockoutUntil > Date.now()) {
+        var remaining = Math.ceil((lockoutUntil - Date.now()) / 1000);
+        btn.disabled = true;
+        btn.textContent = 'Locked (' + remaining + 's)';
+        err.textContent = 'Too many failed attempts. Wait ' + remaining + ' seconds.';
+        err.classList.add('show');
+        setTimeout(updatePinLockout, 1000);
+    } else {
+        btn.disabled = false;
+        btn.textContent = 'Unlock Register';
+        if (failedAttempts === 0) {
+            err.classList.remove('show');
+        }
+    }
+}
+
+async function submitPin() {
+    if (lockoutUntil > Date.now()) return;
+    var pin = document.getElementById('pinInput').value.replace(/[^0-9]/g, '');
+    var err = document.getElementById('pinErr');
+    if (pin.length < 4) {
+        err.textContent = 'Enter at least 4 digits.';
+        err.classList.add('show');
+        return;
+    }
+    var ok = await checkPin(pin);
+    if (ok) {
+        failedAttempts = 0;
+        lockoutUntil = 0;
+        pinUnlocked = true;
+        document.getElementById('pinOverlay').hidden = true;
+        showMainApp();
+    } else {
+        failedAttempts++;
+        document.getElementById('pinInput').value = '';
+        if (failedAttempts >= 5) {
+            lockoutUntil = Date.now() + 5 * 60 * 1000;
+            await saveMeta('lockoutUntil', lockoutUntil);
+            updatePinLockout();
+        } else {
+            err.textContent = 'Wrong PIN. ' + (5 - failedAttempts) + ' attempts remaining.';
+            err.classList.add('show');
+        }
+    }
+}
+
+// Wire up PIN overlay events
+document.getElementById('pinSubmitBtn').addEventListener('click', submitPin);
+document.getElementById('pinInput').addEventListener('keydown', function(e) {
+    if (e.key === 'Enter') submitPin();
+});
+document.getElementById('pinInput').addEventListener('input', function() {
+    this.value = this.value.replace(/[^0-9]/g, '').slice(0, 8);
+    document.getElementById('pinErr').classList.remove('show');
+});
+
+// ─── License / Expiry Module ────────────────────────────────────────────
+
+function checkExpiry() {
+    var expiry = meta.expiryDate;
+    if (!expiry) return false; // no expiry set = not expired
+    var now = new Date();
+    var exp = new Date(expiry + 'T23:59:59');
+    return now > exp;
+}
+
+function daysRemaining() {
+    var expiry = meta.expiryDate;
+    if (!expiry) return Infinity;
+    var now = new Date();
+    now.setHours(0,0,0,0);
+    var exp = new Date(expiry + 'T00:00:00');
+    var diff = Math.ceil((exp - now) / (1000 * 60 * 60 * 24));
+    return diff;
+}
+
+function updateExpiryBadge() {
+    var badge = document.getElementById('expiryBadge');
+    if (!badge) return;
+    var days = daysRemaining();
+    if (days === Infinity) {
+        badge.textContent = 'No expiry';
+        badge.className = 'topbar-badge expiry';
+    } else if (days <= 0) {
+        badge.textContent = 'EXPIRED';
+        badge.className = 'topbar-badge expiry danger';
+    } else if (days <= 7) {
+        badge.textContent = days + 'd left';
+        badge.className = 'topbar-badge expiry danger';
+    } else if (days <= 14) {
+        badge.textContent = days + 'd left';
+        badge.className = 'topbar-badge expiry warn';
+    } else {
+        badge.textContent = days + 'd left';
+        badge.className = 'topbar-badge expiry';
+    }
+}
+
+function enforceExpiry() {
+    if (checkExpiry()) {
+        document.getElementById('expiryOverlay').hidden = false;
+        document.getElementById('mainApp').hidden = true;
+        return true;
+    }
+    document.getElementById('expiryOverlay').hidden = true;
+    return false;
+}
+
+// Check expiry every 60 seconds
+setInterval(function() {
+    if (pinUnlocked && document.getElementById('setupOverlay').hidden) {
+        if (enforceExpiry()) return;
+        updateExpiryBadge();
+    }
+}, 60000);
+
+// ─── Setup Wizard ───────────────────────────────────────────────────────
+
+var setupStep = 1;
+
+function showSetupStep(n) {
+    setupStep = n;
+    for (var i = 1; i <= 4; i++) {
+        var el = document.getElementById('setupStep' + i);
+        if (el) el.hidden = (i !== n);
+    }
+    // Update step indicators
+    document.querySelectorAll('.setup-step').forEach(function(el) {
+        var s = parseInt(el.getAttribute('data-step'));
+        el.classList.remove('active', 'done');
+        if (s === n) el.classList.add('active');
+        else if (s < n) el.classList.add('done');
+    });
+
+    // Focus appropriate input
+    if (n === 1) { var el = document.getElementById('setupCampName'); if (el) el.focus(); }
+    if (n === 2) { var el = document.getElementById('setupPin'); if (el) el.focus(); }
+    if (n === 3) {
+        // Set default expiry to 30 days from now
+        var el = document.getElementById('setupExpiry');
+        if (el && !el.value) {
+            var d = new Date();
+            d.setDate(d.getDate() + 30);
+            el.value = d.toISOString().split('T')[0];
+        }
+    }
+}
+
+window.POS = window.POS || {};
+
+POS.setupNext = async function(fromStep) {
+    if (fromStep === 1) {
+        var name = document.getElementById('setupCampName').value.trim();
+        if (!name) { toast('Enter a camp name', true); return; }
+        await saveMeta('campName', name);
+        showSetupStep(2);
+    } else if (fromStep === 2) {
+        var pin = document.getElementById('setupPin').value.replace(/[^0-9]/g, '');
+        var confirm = document.getElementById('setupPinConfirm').value.replace(/[^0-9]/g, '');
+        var err = document.getElementById('setupPinErr');
+        if (pin.length < 4 || pin.length > 8) {
+            err.textContent = 'PIN must be 4-8 digits.'; err.classList.add('show'); return;
+        }
+        if (pin !== confirm) {
+            err.textContent = 'PINs do not match.'; err.classList.add('show'); return;
+        }
+        err.classList.remove('show');
+        var hash = await sha256(pin);
+        await saveMeta('pinHash', hash);
+        showSetupStep(3);
+    } else if (fromStep === 3) {
+        var expiry = document.getElementById('setupExpiry').value;
+        if (!expiry) {
+            var d = new Date(); d.setDate(d.getDate() + 30);
+            expiry = d.toISOString().split('T')[0];
+        }
+        await saveMeta('expiryDate', expiry);
+        showSetupStep(4);
+    }
+};
+
+// Filter numeric input for setup PIN fields
+['setupPin', 'setupPinConfirm'].forEach(function(id) {
+    var el = document.getElementById(id);
+    if (el) {
+        el.addEventListener('input', function() {
+            this.value = this.value.replace(/[^0-9]/g, '').slice(0, 8);
+            document.getElementById('setupPinErr').classList.remove('show');
+        });
+    }
+});
+
+POS.setupFinish = async function() {
+    await saveMeta('setupComplete', true);
+    document.getElementById('setupOverlay').hidden = true;
+    pinUnlocked = true;
+    showMainApp();
+};
+
+// ─── Data Import / Export ───────────────────────────────────────────────
+
+POS.triggerImport = function(context) {
+    importContext = context || 'settings';
+    var inp = document.getElementById('fileInput');
+    inp.value = '';
+    inp.click();
+};
+
+document.getElementById('fileInput').addEventListener('change', async function(e) {
+    var file = e.target.files && e.target.files[0];
+    if (!file) return;
+    try {
+        var text = await file.text();
+        var data = JSON.parse(text);
+        await performImport(data);
+        toast('Data imported successfully');
+        if (importContext === 'setup') {
+            document.getElementById('setupImportStatus').textContent =
+                'Imported ' + Object.keys(accounts).length + ' accounts, ' + inventory.length + ' items';
+            document.getElementById('setupImportStatus').hidden = false;
+            document.getElementById('setupFinishBtn').disabled = false;
+        } else if (importContext === 'expiry') {
+            // Re-check expiry with potentially new date
+            if (!enforceExpiry()) {
+                pinUnlocked = true;
+                showMainApp();
+            }
+        } else if (importContext === 'settings') {
+            POS.closeSettings();
+            renderAll();
+        }
+    } catch (err) {
+        toast('Import failed: ' + (err.message || 'Invalid file'), true);
+        if (importContext === 'setup') {
+            var errEl = document.getElementById('setupImportErr');
+            errEl.textContent = 'Failed: ' + (err.message || 'Invalid JSON');
+            errEl.classList.add('show');
+        }
+    }
+});
+
+async function performImport(data) {
+    // data shape: { accounts: {name: {...}}, inventory: [...], settings: {...} }
+    // Replace accounts
+    if (data.accounts && typeof data.accounts === 'object') {
+        await idbClear('accounts');
+        accounts = {};
+        var isArray = Array.isArray(data.accounts);
+        if (isArray) {
+            for (var i = 0; i < data.accounts.length; i++) {
+                var a = data.accounts[i];
+                if (!a.name) continue;
+                accounts[a.name] = a;
+                await idbPut('accounts', a);
+            }
+        } else {
+            var names = Object.keys(data.accounts);
+            for (var i = 0; i < names.length; i++) {
+                var name = names[i];
+                var a = Object.assign({}, data.accounts[name], { name: name });
+                if (a.balance === undefined) a.balance = 0;
+                if (a.dailyLimit === undefined) a.dailyLimit = 10;
+                if (a.spentToday === undefined) a.spentToday = 0;
+                accounts[name] = a;
+                await idbPut('accounts', a);
+            }
+        }
+    }
+
+    // Replace inventory
+    if (Array.isArray(data.inventory)) {
+        await idbClear('inventory');
+        inventory = [];
+        for (var i = 0; i < data.inventory.length; i++) {
+            var item = data.inventory[i];
+            if (!item.id) item.id = i + 1;
+            if (item.soldToday === undefined) item.soldToday = 0;
+            if (item.totalSold === undefined) item.totalSold = 0;
+            inventory.push(item);
+            await idbPut('inventory', item);
+        }
+    }
+
+    // Settings
+    if (data.settings) {
+        if (data.settings.campName) await saveMeta('campName', data.settings.campName);
+        if (data.settings.expiryDate) await saveMeta('expiryDate', data.settings.expiryDate);
+    }
+
+    // Record import timestamp
+    await saveMeta('lastImport', new Date().toISOString());
+
+    // Note: un-synced transactions are preserved (not cleared)
+}
+
+POS.exportTransactions = function() {
+    var unsynced = transactions.filter(function(t) { return !t.exported; });
+    var exportData = {
+        exportedAt: new Date().toISOString(),
+        campName: meta.campName || '',
+        transactionCount: unsynced.length,
+        transactions: unsynced
+    };
+    var blob = new Blob([JSON.stringify(exportData, null, 2)], { type: 'application/json' });
+    var url = URL.createObjectURL(blob);
+    var a = document.createElement('a');
+    a.href = url;
+    a.download = 'campistry-pos-export-' + todayStr() + '.json';
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    URL.revokeObjectURL(url);
+
+    // Mark as exported
+    unsynced.forEach(async function(t) {
+        t.exported = true;
+        await saveTransaction(t);
+    });
+
+    toast('Exported ' + unsynced.length + ' transactions');
+};
+
+// ─── Settings UI ────────────────────────────────────────────────────────
+
+POS.openSettings = function() {
+    renderSettingsBody();
+    document.getElementById('settingsOverlay').hidden = false;
+};
+
+POS.closeSettings = function() {
+    document.getElementById('settingsOverlay').hidden = true;
+};
+
+function renderSettingsBody() {
+    var body = document.getElementById('settingsBody');
+    var unsyncedCount = transactions.filter(function(t) { return !t.exported; }).length;
+    var exportedCount = transactions.filter(function(t) { return t.exported; }).length;
+    var lastImport = meta.lastImport ? new Date(meta.lastImport).toLocaleString() : 'Never';
+    var days = daysRemaining();
+    var expiryDisplay = meta.expiryDate || 'Not set';
+    if (days !== Infinity && days <= 7) expiryDisplay += ' (' + days + ' days left)';
+
+    body.innerHTML =
+        '<div class="settings-section">' +
+            '<h4>Camp</h4>' +
+            '<div class="settings-row"><span class="label">Camp Name</span>' +
+            '<input type="text" id="settingsCampName" value="' + esc(meta.campName || '') + '" ' +
+            'style="width:180px;padding:8px 10px;border:1px solid var(--border);border-radius:8px;font-size:.85rem;text-align:right" ' +
+            'onchange="POS.updateCampName(this.value)"></div>' +
+        '</div>' +
+        '<div class="settings-section">' +
+            '<h4>Security</h4>' +
+            '<div class="settings-actions">' +
+                '<button class="btn-secondary" onclick="POS.changePinPrompt()">Change PIN</button>' +
+            '</div>' +
+        '</div>' +
+        '<div class="settings-section">' +
+            '<h4>License</h4>' +
+            '<div class="settings-row"><span class="label">Expiry Date</span><span class="value' + (days <= 7 ? ' warn' : '') + '">' + esc(expiryDisplay) + '</span></div>' +
+        '</div>' +
+        '<div class="settings-section">' +
+            '<h4>Sync Status</h4>' +
+            '<div class="settings-row"><span class="label">Last Import</span><span class="value">' + esc(lastImport) + '</span></div>' +
+            '<div class="settings-row"><span class="label">Total Transactions</span><span class="value">' + transactions.length + '</span></div>' +
+            '<div class="settings-row"><span class="label">Un-synced</span><span class="value' + (unsyncedCount > 0 ? ' warn' : '') + '">' + unsyncedCount + '</span></div>' +
+            '<div class="settings-row"><span class="label">Exported</span><span class="value">' + exportedCount + '</span></div>' +
+        '</div>' +
+        '<div class="settings-section">' +
+            '<h4>Data</h4>' +
+            '<div class="settings-actions">' +
+                '<button class="btn-secondary" onclick="POS.triggerImport(\'settings\')">Import Fresh Data</button>' +
+                '<button class="btn-secondary" onclick="POS.exportTransactions()">Export Transactions</button>' +
+                '<button class="btn-danger" onclick="POS.clearAllDataPrompt()">Clear All Data</button>' +
+            '</div>' +
+        '</div>';
+}
+
+POS.updateCampName = async function(name) {
+    await saveMeta('campName', name.trim());
+    document.getElementById('topbarTitle').textContent = name.trim() || 'Snacks';
+    toast('Camp name updated');
+};
+
+POS.changePinPrompt = function() {
+    var body = document.getElementById('settingsBody');
+    body.innerHTML =
+        '<div style="padding:8px 0">' +
+            '<div class="field"><label>Current PIN</label>' +
+            '<input type="password" inputmode="numeric" pattern="[0-9]*" maxlength="8" id="chgPinCurrent" class="pin-input"></div>' +
+            '<div class="field"><label>New PIN (4-8 digits)</label>' +
+            '<input type="password" inputmode="numeric" pattern="[0-9]*" maxlength="8" id="chgPinNew" class="pin-input"></div>' +
+            '<div class="field"><label>Confirm New PIN</label>' +
+            '<input type="password" inputmode="numeric" pattern="[0-9]*" maxlength="8" id="chgPinConfirm" class="pin-input"></div>' +
+            '<div class="err-box" id="chgPinErr"></div>' +
+            '<button class="btn-primary" onclick="POS.changePinSubmit()">Change PIN</button>' +
+            '<button class="btn-secondary" onclick="POS.openSettings()">Cancel</button>' +
+        '</div>';
+    document.getElementById('chgPinCurrent').focus();
+    // Filter inputs
+    ['chgPinCurrent','chgPinNew','chgPinConfirm'].forEach(function(id) {
+        var el = document.getElementById(id);
+        if (el) el.addEventListener('input', function() { this.value = this.value.replace(/[^0-9]/g, '').slice(0, 8); });
+    });
+};
+
+POS.changePinSubmit = async function() {
+    var current = document.getElementById('chgPinCurrent').value.replace(/[^0-9]/g, '');
+    var newPin = document.getElementById('chgPinNew').value.replace(/[^0-9]/g, '');
+    var confirm = document.getElementById('chgPinConfirm').value.replace(/[^0-9]/g, '');
+    var err = document.getElementById('chgPinErr');
+
+    var ok = await checkPin(current);
+    if (!ok) { err.textContent = 'Current PIN is incorrect.'; err.classList.add('show'); return; }
+    if (newPin.length < 4 || newPin.length > 8) { err.textContent = 'New PIN must be 4-8 digits.'; err.classList.add('show'); return; }
+    if (newPin !== confirm) { err.textContent = 'New PINs do not match.'; err.classList.add('show'); return; }
+
+    var hash = await sha256(newPin);
+    await saveMeta('pinHash', hash);
+    toast('PIN changed successfully');
+    POS.openSettings();
+};
+
+POS.clearAllDataPrompt = function() {
+    var body = document.getElementById('settingsBody');
+    body.innerHTML =
+        '<div style="padding:16px 0;text-align:center">' +
+            '<div style="font-size:2rem;margin-bottom:12px">&#9888;&#65039;</div>' +
+            '<h3 style="font-size:1rem;margin-bottom:8px;color:var(--red)">Clear All Data?</h3>' +
+            '<p style="font-size:.85rem;color:var(--text-dim);margin-bottom:16px">This will delete all accounts, inventory, transactions, and settings. This cannot be undone.</p>' +
+            '<div class="field"><label>Enter PIN to confirm</label>' +
+            '<input type="password" inputmode="numeric" pattern="[0-9]*" maxlength="8" id="clearPinInput" class="pin-input"></div>' +
+            '<div class="err-box" id="clearPinErr"></div>' +
+            '<button class="btn-danger" onclick="POS.clearAllDataConfirm()">Yes, Clear Everything</button>' +
+            '<button class="btn-secondary" onclick="POS.openSettings()">Cancel</button>' +
+        '</div>';
+    document.getElementById('clearPinInput').focus();
+    document.getElementById('clearPinInput').addEventListener('input', function() {
+        this.value = this.value.replace(/[^0-9]/g, '').slice(0, 8);
+    });
+};
+
+POS.clearAllDataConfirm = async function() {
+    var pin = document.getElementById('clearPinInput').value.replace(/[^0-9]/g, '');
+    var err = document.getElementById('clearPinErr');
+    var ok = await checkPin(pin);
+    if (!ok) { err.textContent = 'Incorrect PIN.'; err.classList.add('show'); return; }
+
+    await idbClear('accounts');
+    await idbClear('inventory');
+    await idbClear('transactions');
+    await idbClear('meta');
+    accounts = {};
+    inventory = [];
+    transactions = [];
+    meta = {};
+
+    POS.closeSettings();
+    document.getElementById('mainApp').hidden = true;
+    pinUnlocked = false;
+    showSetup();
+};
+
+// ─── POS Logic ──────────────────────────────────────────────────────────
+
+function getAccount(name) {
+    if (!accounts[name]) {
+        accounts[name] = { name: name, balance: 0, dailyLimit: 10, spentToday: 0, lastSpendDate: '', balanceFloor: 0, creditLimit: 0 };
+    }
+    var a = accounts[name];
+    // Daily spend resets at midnight
+    if (a.lastSpendDate !== todayStr()) {
+        a.spentToday = 0;
+        a.lastSpendDate = todayStr();
+    }
+    return a;
+}
+
+function getCamperList() {
+    var list = Object.keys(accounts).map(function(name) {
+        var a = accounts[name];
+        return {
+            name: name,
+            division: a.division || '',
+            bunk: a.bunk || ''
+        };
+    });
+    return list.sort(function(a, b) { return a.name.localeCompare(b.name); });
+}
+
+function getBunkList() {
+    var campers = getCamperList();
+    var seen = {};
+    var out = [];
+    campers.forEach(function(c) {
+        if (c.bunk && !seen[c.bunk]) {
+            seen[c.bunk] = 1;
+            out.push({ bunk: c.bunk, division: c.division || '' });
+        }
+    });
+    // Prune stale bunk selections
+    var valid = {};
+    out.forEach(function(b) { valid[b.bunk] = 1; });
+    Array.from(selectedBunks).forEach(function(b) { if (!valid[b]) selectedBunks.delete(b); });
+    return out.sort(function(a, b) { return (a.division + a.bunk).localeCompare(b.division + b.bunk); });
+}
+
+// ── Camper Panel ────────────────────────────────────────────────────────
+
+POS.renderCampers = function() {
+    var q = (document.getElementById('camperSearch').value || '').toLowerCase();
+    var campers = getCamperList();
+    var list = campers.filter(function(c) {
+        return c.name.toLowerCase().includes(q) &&
+            (selectedBunks.size === 0 || (c.bunk && selectedBunks.has(c.bunk)));
+    });
+
+    var html = list.map(function(c) {
+        var a = getAccount(c.name);
+        var rem = a.dailyLimit - a.spentToday;
+        var limitHit = a.dailyLimit > 0 && rem <= 0 && a.balance > 0;
+        var cls = a.balance <= 0 ? 'empty' : a.balance <= 5 ? 'low' : '';
+        var initials = c.name.split(' ').map(function(w) { return w[0] || ''; }).join('').toUpperCase();
+        return '<div class="camper-item' + (sel === c.name ? ' selected' : '') + (limitHit ? ' limit-hit' : '') +
+            '" onclick="POS.pickCamper(\'' + esc(c.name).replace(/'/g, "\\'") + '\')">' +
+            '<div class="camper-avatar">' + esc(initials) + '</div>' +
+            '<div class="camper-info"><div class="camper-name">' + esc(c.name) + '</div>' +
+            '<div class="camper-meta">' + (c.division ? esc(c.division) + ' · ' : '') + esc(c.bunk) + (limitHit ? ' · Limit hit' : '') + '</div></div>' +
+            '<div class="camper-balance ' + cls + '">$' + a.balance.toFixed(2) + '</div></div>';
+    }).join('');
+
+    document.getElementById('camperList').innerHTML = html ||
+        '<div style="text-align:center;padding:2rem 1rem;color:var(--text-muted);font-size:.8rem">No campers found.</div>';
+};
+
+POS.pickCamper = function(name) {
+    sel = name;
+    POS.renderCampers();
+    updateCamperBar();
+    updateChargeBtn();
+    document.body.classList.remove('camper-open');
+};
+
+POS.toggleCamperPanel = function() {
+    document.body.classList.toggle('camper-open');
+};
+
+// ── Bunk Filter ─────────────────────────────────────────────────────────
+
+POS.renderBunkFilter = function() {
+    var bunks = getBunkList();
+    var wrap = document.getElementById('bunkFilterWrap');
+    var btn = document.getElementById('bunkFilterBtn');
+    var menu = document.getElementById('bunkFilterMenu');
+    if (!bunks.length) { wrap.hidden = true; return; }
+    wrap.hidden = false;
+
+    var label = selectedBunks.size === 0 ? 'All bunks' :
+                selectedBunks.size === 1 ? Array.from(selectedBunks)[0] :
+                selectedBunks.size + ' bunks';
+    btn.innerHTML = esc(label) + ' <span>&#9662;</span>';
+
+    var rows = bunks.map(function(b) {
+        var checked = selectedBunks.has(b.bunk) ? ' checked' : '';
+        var divLabel = b.division ? '<span class="bunk-filter-div">' + esc(b.division) + '</span>' : '';
+        return '<label class="bunk-filter-row"><input type="checkbox" value="' + esc(b.bunk).replace(/"/g, '&quot;') + '"' + checked +
+               ' onchange="POS.onBunkToggle(this)"><span>' + esc(b.bunk) + '</span>' + divLabel + '</label>';
+    }).join('');
+
+    menu.innerHTML =
+        '<label class="bunk-filter-row all"><input type="checkbox"' + (selectedBunks.size === 0 ? ' checked' : '') +
+        ' onchange="POS.onBunkAll(this)"><span>All bunks</span></label>' +
+        '<div class="bunk-filter-divider"></div>' + rows;
+};
+
+POS.toggleBunkFilter = function() {
+    var menu = document.getElementById('bunkFilterMenu');
+    menu.hidden = !menu.hidden;
+};
+
+POS.onBunkAll = function(cb) {
+    if (cb.checked) { selectedBunks.clear(); POS.renderBunkFilter(); POS.renderCampers(); }
+    else { cb.checked = true; }
+};
+
+POS.onBunkToggle = function(cb) {
+    if (cb.checked) selectedBunks.add(cb.value);
+    else selectedBunks.delete(cb.value);
+    POS.renderBunkFilter();
+    POS.renderCampers();
+};
+
+// Close bunk menu on outside click
+document.addEventListener('click', function(e) {
+    var wrap = document.getElementById('bunkFilterWrap');
+    var menu = document.getElementById('bunkFilterMenu');
+    if (!wrap || menu.hidden) return;
+    if (!wrap.contains(e.target)) menu.hidden = true;
+});
+
+// ── Camper Bar ──────────────────────────────────────────────────────────
+
+function updateCamperBar() {
+    var bar = document.getElementById('cartCamperBar');
+    if (!sel) { bar.innerHTML = '<span class="cart-camper-empty">&larr; Select a camper</span>'; return; }
+    var a = getAccount(sel);
+    var initials = sel.split(' ').map(function(w) { return w[0] || ''; }).join('').toUpperCase();
+    bar.innerHTML = '<div class="camper-avatar" style="width:28px;height:28px;font-size:.6rem;background:var(--snacks);color:white">' +
+        esc(initials) + '</div><div class="cart-camper-name">' + esc(sel) + '</div><div class="cart-camper-bal">$' + a.balance.toFixed(2) + '</div>';
+}
+
+// ── Item Grid ───────────────────────────────────────────────────────────
+
+function renderCatButtons() {
+    var cats = [];
+    var seen = {};
+    inventory.forEach(function(i) {
+        if (i.cat && !seen[i.cat]) { seen[i.cat] = 1; cats.push(i.cat); }
+    });
+    cats.sort();
+    var html = '<button class="cat-btn' + (cat === 'all' ? ' active' : '') + '" onclick="POS.setCat(this,\'all\')">All</button>';
+    cats.forEach(function(c) {
+        html += '<button class="cat-btn' + (cat === c ? ' active' : '') +
+                '" onclick="POS.setCat(this,\'' + c.replace(/'/g, "\\'") + '\')">' + esc(c) + '</button>';
+    });
+    document.getElementById('catBtns').innerHTML = html;
+}
+
+POS.setCat = function(btn, c) {
+    cat = c;
+    document.querySelectorAll('.cat-btn').forEach(function(b) { b.classList.remove('active'); });
+    btn.classList.add('active');
+    POS.renderItems();
+};
+
+POS.renderItems = function() {
+    if (!inventory.length) {
+        document.getElementById('quickGrid').innerHTML =
+            '<div style="text-align:center;padding:2rem;color:var(--text-muted);font-size:.8rem;grid-column:1/-1">No inventory items.<br>Import data to get started.</div>';
+        document.getElementById('allGrid').innerHTML = '';
+        return;
+    }
+
+    var q = (document.getElementById('itemSearch').value || '').toLowerCase();
+    var fil = inventory.filter(function(i) {
+        return (cat === 'all' || i.cat === cat) && i.name.toLowerCase().includes(q);
+    });
+    var sorted = fil.slice().sort(function(a, b) { return (b.totalSold || 0) - (a.totalSold || 0); });
+    var maxT = Math.max.apply(null, inventory.map(function(i) { return i.totalSold || 0; }).concat([1]));
+
+    // Quick push: top 5 in stock
+    var quick = sorted.filter(function(i) { return i.stock == null || i.stock > 0; }).slice(0, 5);
+    document.getElementById('quickGrid').innerHTML = quick.map(function(i, idx) {
+        var tier = '';
+        if (idx === 0) tier = 'hot';
+        else if ((i.totalSold || 0) / maxT > .4) tier = 'warm';
+        var rank = idx < 3 ? '<div class="tile-rank">#' + (idx + 1) + '</div>' : '';
+        var stockHtml = i.stock == null ? '' : '<div class="tile-stock">' + (i.stock === 0 ? 'OUT' : i.stock + ' left') + '</div>';
+        return '<div class="item-tile ' + tier + (i.stock === 0 ? ' out' : '') + '" onclick="POS.addItem(' + i.id + ')">' +
+            rank + '<div class="tile-name">' + esc(i.name) +
+            '</div><div class="tile-price">$' + (i.price || 0).toFixed(2) + '</div>' + stockHtml + '</div>';
+    }).join('') || '<div style="text-align:center;padding:1rem;color:var(--text-muted);font-size:.75rem;grid-column:1/-1">No items in stock</div>';
+
+    // All items
+    document.getElementById('allGrid').innerHTML = sorted.map(function(i) {
+        return '<div class="item-tile ' + (i.stock === 0 ? 'out' : '') + '" onclick="POS.addItem(' + i.id + ')">' +
+            '<div class="tile-name">' + esc(i.name) +
+            '</div><div class="tile-price">$' + (i.price || 0).toFixed(2) + '</div></div>';
+    }).join('');
+};
+
+POS.addItem = function(id) {
+    var item = inventory.find(function(i) { return i.id === id; });
+    if (!item || item.stock === 0) return;
+    var ex = cart.find(function(c) { return c.id === id; });
+    if (ex) {
+        if (item.stock != null && ex.qty >= item.stock) return;
+        ex.qty++;
+    } else {
+        cart.push({ id: id, qty: 1 });
+    }
+    renderCart();
+};
+
+// ── Cart ────────────────────────────────────────────────────────────────
+
+POS.clearCart = function() { cart = []; renderCart(); };
+
+POS.changeQty = function(id, d) {
+    var ci = cart.find(function(c) { return c.id === id; });
+    if (!ci) return;
+    ci.qty += d;
+    if (ci.qty <= 0) cart = cart.filter(function(c) { return c.id !== id; });
+    renderCart();
+};
+
+function renderCart() {
+    var body = document.getElementById('cartBody');
+    var totalEl = document.getElementById('cartTotal');
+    var remEl = document.getElementById('cartRemaining');
+    if (!cart.length) {
+        body.innerHTML = '<div class="cart-empty">Tap items to start</div>';
+        totalEl.textContent = '$0.00';
+        remEl.textContent = '';
+        updateChargeBtn();
+        return;
+    }
+    var total = 0;
+    body.innerHTML = cart.map(function(ci) {
+        var item = inventory.find(function(i) { return i.id === ci.id; });
+        if (!item) return '';
+        var lt = (item.price || 0) * ci.qty;
+        total += lt;
+        return '<div class="cart-line"><div class="cart-line-info"><div class="cart-line-name">' + esc(item.name) +
+            '</div><div class="cart-line-sub">$' + (item.price || 0).toFixed(2) + ' ea</div></div>' +
+            '<div class="cart-line-qty"><button onclick="POS.changeQty(' + ci.id + ',-1)">&minus;</button><span>' + ci.qty +
+            '</span><button onclick="POS.changeQty(' + ci.id + ',1)">+</button></div>' +
+            '<div class="cart-line-total">$' + lt.toFixed(2) + '</div></div>';
+    }).join('');
+    totalEl.textContent = '$' + total.toFixed(2);
+    if (sel) {
+        var a = getAccount(sel);
+        var rem = a.dailyLimit > 0 ? a.dailyLimit - a.spentToday : Infinity;
+        var remText = a.dailyLimit > 0 ? 'Daily remaining: $' + Math.max(rem, 0).toFixed(2) + ' · ' : '';
+        remEl.textContent = remText + 'Balance: $' + a.balance.toFixed(2);
+    } else {
+        remEl.textContent = '';
+    }
+    updateChargeBtn();
+}
+
+function updateChargeBtn() {
+    var btn = document.getElementById('chargeBtn');
+    var total = cart.reduce(function(s, ci) {
+        var item = inventory.find(function(i) { return i.id === ci.id; });
+        return s + (item ? (item.price || 0) * ci.qty : 0);
+    }, 0);
+    if (!sel) { btn.disabled = true; btn.textContent = 'Select a camper'; return; }
+    if (!cart.length || total === 0) { btn.disabled = true; btn.textContent = 'Add items to charge'; return; }
+    btn.disabled = false;
+    btn.textContent = 'Charge $' + total.toFixed(2) + ' → ' + sel.split(' ')[0];
+}
+
+// ── Charge ──────────────────────────────────────────────────────────────
+
+POS.charge = async function() {
+    if (!sel || !cart.length) return;
+    var a = getAccount(sel);
+    var total = Math.round(cart.reduce(function(s, ci) {
+        var item = inventory.find(function(i) { return i.id === ci.id; });
+        return s + (item ? (item.price || 0) * ci.qty : 0);
+    }, 0) * 100) / 100;
+
+    var itemNames = cart.map(function(ci) {
+        var item = inventory.find(function(i) { return i.id === ci.id; });
+        if (!item) return '';
+        return ci.qty > 1 ? item.name + ' x' + ci.qty : item.name;
+    }).filter(Boolean).join(', ');
+
+    // Enforce daily limit
+    var rem = a.dailyLimit > 0 ? a.dailyLimit - a.spentToday : Infinity;
+    if (a.dailyLimit > 0 && total > rem) {
+        toast('Exceeds daily limit ($' + Math.max(rem, 0).toFixed(2) + ' left)', true);
+        return;
+    }
+
+    // Enforce balance
+    var spendable = a.balance - (a.balanceFloor || 0) + (a.creditLimit || 0);
+    if (total > spendable) {
+        toast('Insufficient balance ($' + spendable.toFixed(2) + ' spendable)', true);
+        return;
+    }
+
+    // Deduct balance
+    a.balance = Math.round((a.balance - total) * 100) / 100;
+    a.spentToday = Math.round((a.spentToday + total) * 100) / 100;
+    a.lastSpendDate = todayStr();
+    await saveAccount(sel);
+
+    // Decrement stock, update sold counts
+    for (var ci of cart) {
+        var item = inventory.find(function(i) { return i.id === ci.id; });
+        if (item) {
+            if (item.stock != null) item.stock -= ci.qty;
+            item.soldToday = (item.soldToday || 0) + ci.qty;
+            item.totalSold = (item.totalSold || 0) + ci.qty;
+            await saveInventoryItem(item);
+        }
+    }
+
+    // Log transaction
+    var tx = {
+        id: generateId(),
+        time: new Date().toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' }),
+        camper: sel,
+        items: itemNames,
+        amount: total,
+        type: 'debit',
+        date: todayStr(),
+        timestamp: Date.now(),
+        exported: false
+    };
+    transactions.unshift(tx);
+    await saveTransaction(tx);
+
+    // Visual feedback
+    var cp = document.querySelector('.cart-panel');
+    if (cp) { cp.classList.add('flash'); setTimeout(function() { cp.classList.remove('flash'); }, 600); }
+    toast('Charged $' + total.toFixed(2) + ' to ' + sel);
+
+    // Reset
+    cart = [];
+    sel = null;
+    POS.renderCampers();
+    POS.renderItems();
+    renderCart();
+    updateCamperBar();
+    var cs = document.getElementById('camperSearch');
+    if (cs) { cs.value = ''; cs.focus(); }
+};
+
+document.getElementById('chargeBtn').addEventListener('click', function() { POS.charge(); });
+
+// ─── Barcode Scanner ────────────────────────────────────────────────────
+
+(function() {
+    var buf = '';
+    var lastAt = 0;
+    var MAX_GAP_MS = 50;
+    var MIN_LEN = 3;
+
+    document.addEventListener('keydown', function(e) {
+        // Don't intercept in overlays
+        if (!pinUnlocked) return;
+        if (!document.getElementById('mainApp') || document.getElementById('mainApp').hidden) return;
+
+        var now = Date.now();
+        if (e.key === 'Enter') {
+            var code = buf;
+            var looksScanned = code.length >= MIN_LEN && (now - lastAt) <= MAX_GAP_MS;
+            buf = '';
+            if (looksScanned) {
+                var t = e.target;
+                if (t && (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA') && t.value.slice(-code.length) === code) {
+                    t.value = t.value.slice(0, -code.length);
+                    if (t.id === 'itemSearch') POS.renderItems();
+                    if (t.id === 'camperSearch') POS.renderCampers();
+                }
+                e.preventDefault();
+                scanBarcode(code);
+            }
+            lastAt = now;
+            return;
+        }
+        if (e.key.length === 1 && /[a-zA-Z0-9]/.test(e.key)) {
+            if (now - lastAt > MAX_GAP_MS) buf = '';
+            buf += e.key;
+            lastAt = now;
+        } else if (e.key !== 'Shift') {
+            buf = '';
+        }
+    });
+})();
+
+function scanBarcode(code) {
+    var item = inventory.find(function(i) { return i.barcode && i.barcode === code; });
+    if (!item) { toast('Unrecognized barcode: ' + code, true); return; }
+    if (item.stock === 0) { toast(item.name + ' is out of stock', true); return; }
+    POS.addItem(item.id);
+    toast('Scanned ' + item.name);
+}
+
+// ─── Lock Register ──────────────────────────────────────────────────────
+
+POS.lockRegister = function() {
+    pinUnlocked = false;
+    sel = null;
+    cart = [];
+    document.getElementById('mainApp').hidden = true;
+    showPinOverlay();
+};
+
+// ─── Clock ──────────────────────────────────────────────────────────────
+
+function tick() {
+    var el = document.getElementById('clock');
+    if (el) el.textContent = new Date().toLocaleTimeString([], { hour: 'numeric', minute: '2-digit', second: '2-digit' });
+}
+setInterval(tick, 1000);
+tick();
+
+// ─── Render All ─────────────────────────────────────────────────────────
+
+function renderAll() {
+    renderCatButtons();
+    POS.renderBunkFilter();
+    POS.renderCampers();
+    POS.renderItems();
+    renderCart();
+    updateCamperBar();
+    updateExpiryBadge();
+    var title = document.getElementById('topbarTitle');
+    if (title && meta.campName) title.textContent = meta.campName;
+}
+
+function showMainApp() {
+    if (enforceExpiry()) return;
+    document.getElementById('mainApp').hidden = false;
+    updateExpiryBadge();
+    renderAll();
+    // Auto-open camper drawer on phone
+    try {
+        if (window.matchMedia && window.matchMedia('(max-width: 700px)').matches && !sel && Object.keys(accounts).length) {
+            document.body.classList.add('camper-open');
+        }
+    } catch (_) {}
+}
+
+function showSetup() {
+    document.getElementById('setupOverlay').hidden = false;
+    showSetupStep(1);
+}
+
+// ─── Init ───────────────────────────────────────────────────────────────
+
+async function init() {
+    try {
+        await openDB();
+        await loadAllMeta();
+        await loadAccounts();
+        await loadInventory();
+        await loadTransactions();
+    } catch (e) {
+        console.error('[Offline POS] IndexedDB init failed:', e);
+        toast('Storage error - check browser settings', true);
+        return;
+    }
+
+    // First run?
+    if (!meta.setupComplete) {
+        showSetup();
+        return;
+    }
+
+    // PIN lock
+    if (meta.pinHash) {
+        showPinOverlay();
+    } else {
+        // No PIN set (shouldn't happen after setup, but handle gracefully)
+        pinUnlocked = true;
+        showMainApp();
+    }
+}
+
+init();
+
+})();
+</script>
+</body>
+</html>
