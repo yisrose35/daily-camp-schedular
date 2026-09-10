@@ -30,7 +30,35 @@
 // =============================================================================
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
-import { getAdapter } from "./_shared/processor_adapter.ts";
+// Cardknox/Sola refund, inlined so this function is self-contained and
+// Dashboard-deployable (no CLI / ../_shared bundling). Mirrors
+// _shared/adapters/cardknox_adapter.ts's refund().
+const CARDKNOX_GATEWAY = "https://x1.cardknox.com/gateway";
+async function cardknoxRefund(
+  credentials: Record<string, string>,
+  externalTransactionId: string,
+  amountCents: number,
+): Promise<{ success: boolean; externalTransactionId?: string; status?: string; error?: string; raw?: unknown }> {
+  const apiKey = credentials.apiKey;
+  if (!apiKey) return { success: false, error: "Missing apiKey" };
+  try {
+    const resp = await fetch(CARDKNOX_GATEWAY, {
+      method: "POST",
+      headers: { "Content-Type": "application/x-www-form-urlencoded" },
+      body: new URLSearchParams({
+        xKey: apiKey, xVersion: "4.5.9", xSoftwareName: "Campistry", xSoftwareVersion: "1.0",
+        xCommand: "cc:refund", xRefNum: externalTransactionId, xAmount: (amountCents / 100).toFixed(2),
+      }).toString(),
+    });
+    const text = await resp.text();
+    const r: Record<string, string> = {};
+    new URLSearchParams(text).forEach((v, k) => { r[k] = v; });
+    if (r.xResult !== "A") return { success: false, status: r.xStatus, error: r.xError || "Refund failed", raw: r };
+    return { success: true, externalTransactionId: r.xRefNum, status: r.xStatus, raw: r };
+  } catch (err) {
+    return { success: false, error: (err as Error).message };
+  }
+}
 
 const SUPABASE_URL = Deno.env.get("SUPABASE_URL") || "";
 const SUPABASE_ANON_KEY = Deno.env.get("SUPABASE_ANON_KEY") || "";
@@ -98,8 +126,7 @@ serve(async (req) => {
       return json({ error: "This camp is on Stripe — use stripe-canteen-refund instead." }, 400);
     }
 
-    const adapter = getAdapter(processorKey);
-    if (!adapter) return json({ error: `No adapter implemented for processor '${processorKey}'` }, 500);
+    if (processorKey !== "cardknox") return json({ error: `Refunds aren't supported yet for processor '${processorKey}'.` }, 400);
 
     const { data: credResult } = await service.rpc("_admin_get_processor_credential", { p_camp_id: authedCampId });
     if (!credResult?.success) return json({ error: credResult?.error || "This camp's processor isn't connected/verified yet." }, 400);
@@ -159,7 +186,7 @@ serve(async (req) => {
 
       try {
         const chunkCents = Math.round(chunk * 100);
-        const refundResult = await adapter.refund(credResult.credentials, dep.externalTransactionId, chunkCents);
+        const refundResult = await cardknoxRefund(credResult.credentials, dep.externalTransactionId, chunkCents);
         if (!refundResult.success) throw new Error(refundResult.error || "Refund failed");
 
         await service.rpc("record_processor_transaction", {
