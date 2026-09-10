@@ -214,15 +214,16 @@
      hands camps an address that silently receives nothing. If you're piloting
      on a Resend managed address, use its <id>.resend.app host. -->
 <script>
-  // The Resend Inbound domain that actually receives mail. This is a managed
-  // Resend address, so it needed no DNS — every <anything>@ local part is
-  // accepted and routed to the deposit-inbox webhook.
-  window.CAMPISTRY_INBOUND_DOMAIN = 'saeesteupi.resend.app';
-  // Empty prefix = the camp's token IS the local part. Plus-addressing works at
-  // most providers but isn't guaranteed on a managed address, and a dropped '+'
-  // would make a camp's bank alerts disappear with no error to trace. Set this
-  // to 'deposits+' if you move to a custom inbound domain.
-  window.CAMPISTRY_INBOUND_PREFIX = '';
+  // The Resend Inbound domain that actually receives mail. A custom domain, so
+  // it needs an MX record on the `inbound` subdomain — the exact value comes
+  // from Resend when the domain is added there. Get this wrong and every camp
+  // is handed an address that silently receives nothing.
+  window.CAMPISTRY_INBOUND_DOMAIN = 'inbound.campistry.org';
+  // On our own domain the readable prefix is worth having: the address is read
+  // out to camps and pasted into bank alert settings, and 'deposits+' says what
+  // it is. It also leaves room to route other purposes (replies, forms) on the
+  // same domain later. The edge function accepts this and the bare-token form.
+  window.CAMPISTRY_INBOUND_PREFIX = 'deposits+';
 </script>
 <script src="campistry_deposit_parser.js?v=20260910-01"></script>
 <script src="campistry_deposit_match.js?v=20260910-01"></script>

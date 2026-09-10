@@ -105,10 +105,13 @@ function — there is nothing else to add.
 
 Resend Dashboard → **Inbound**. Pick one:
 
-- **Managed address** — Resend gives you `<alias>@<id>.resend.app`. **No DNS at
-  all.** Fastest way to pilot, and the right choice for the first camp.
-- **Your own domain** — add one **MX record on a subdomain**, e.g.
-  `inbound.campistry.com`. Nicer to read out to a camp, but it's a DNS change.
+- **Your own domain (what we use)** — add the domain in Resend, then add the
+  **MX record Resend shows you** on the `inbound` subdomain at your DNS
+  provider. Resend won't accept mail until it verifies. Currently
+  `inbound.campistry.org`.
+- **Managed address** — `<alias>@<id>.resend.app`, no DNS at all. Useful for a
+  quick pilot; set `CAMPISTRY_INBOUND_PREFIX` to `''` if you use one, since
+  plus-addressing isn't guaranteed on a managed address.
 
 **Write down the domain half of whatever address Resend gives you** — it goes
 into the app in step 6.
@@ -150,8 +153,8 @@ Two constants near the top of `campistry_me.html`:
 
 ```html
 <script>
-  window.CAMPISTRY_INBOUND_DOMAIN = 'saeesteupi.resend.app';
-  window.CAMPISTRY_INBOUND_PREFIX = '';
+  window.CAMPISTRY_INBOUND_DOMAIN = 'inbound.campistry.org';
+  window.CAMPISTRY_INBOUND_PREFIX = 'deposits+';
 </script>
 ```
 
