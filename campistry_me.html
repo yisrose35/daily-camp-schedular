@@ -214,16 +214,31 @@
      hands camps an address that silently receives nothing. If you're piloting
      on a Resend managed address, use its <id>.resend.app host. -->
 <script>
-  // The Resend Inbound domain that actually receives mail. A custom domain, so
-  // it needs an MX record on the `inbound` subdomain — the exact value comes
-  // from Resend when the domain is added there. Get this wrong and every camp
-  // is handed an address that silently receives nothing.
-  window.CAMPISTRY_INBOUND_DOMAIN = 'inbound.campistry.org';
-  // On our own domain the readable prefix is worth having: the address is read
-  // out to camps and pasted into bank alert settings, and 'deposits+' says what
-  // it is. It also leaves room to route other purposes (replies, forms) on the
-  // same domain later. The edge function accepts this and the bare-token form.
-  window.CAMPISTRY_INBOUND_PREFIX = 'deposits+';
+  // ── PILOT: Resend managed address ──────────────────────────────────────
+  // Currently the Resend MANAGED inbound host, not our own domain.
+  //
+  // Resend gates inbound on a custom domain behind that domain being Verified
+  // for sending (its Inbound page sends you to Domains, where
+  // inbound.campistry.org sits at Pending). The managed <id>.resend.app host
+  // needs no DNS at all and accepts any local part, so it receives today.
+  //
+  // The switch back is these two lines and nothing else -- the edge function
+  // reads the token from either address shape (tokenFromAddresses), so no
+  // already-minted token or stored deposit is affected. Do it once
+  // inbound.campistry.org shows Verified:
+  //
+  //     window.CAMPISTRY_INBOUND_DOMAIN = 'inbound.campistry.org';
+  //     window.CAMPISTRY_INBOUND_PREFIX = 'deposits+';
+  //
+  // Get this wrong and every camp is handed an address that silently
+  // receives nothing, so it must match what Resend is really receiving on.
+  window.CAMPISTRY_INBOUND_DOMAIN = 'saeesteupi.resend.app';
+  // Empty, deliberately. Plus-addressing is accepted by most providers but is
+  // not guaranteed on a managed host, and a silently-dropped '+' means a
+  // camp's bank alerts vanish with no error anywhere. The bare token as the
+  // whole local part always routes. The readable 'deposits+' prefix comes
+  // back with the custom domain.
+  window.CAMPISTRY_INBOUND_PREFIX = '';
 </script>
 <script src="campistry_deposit_parser.js?v=20260910-01"></script>
 <script src="campistry_deposit_match.js?v=20260910-01"></script>
