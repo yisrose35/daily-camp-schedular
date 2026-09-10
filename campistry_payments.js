@@ -52,6 +52,12 @@
         // who picks it there must have a matching option when staff record
         // the payment in Billing's ledger.
         { id: 'zelle',   label: 'Zelle',            contexts: ['tuition', 'canteen', 'shop', 'luggage'], default: true },
+        // default:false — a wire is rare enough that it doesn't belong in the
+        // Record Payment picker unless a camp turns it on. It's in the
+        // catalogue at all so label() resolves it: automatic deposit capture
+        // classifies incoming wires as kind 'wire', and without an entry here
+        // the family ledger renders the raw id ("wire") as the category.
+        { id: 'wire',    label: 'Wire transfer',    contexts: ['tuition'],                                default: false },
         { id: 'paypal',  label: 'PayPal',           contexts: ['tuition'],                                default: false },
         { id: 'plan',    label: 'Payment plan',     contexts: ['tuition'],                                default: true },
         { id: 'canteen', label: 'Charge to canteen account', contexts: ['shop'],                          default: false },

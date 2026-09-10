@@ -38,7 +38,12 @@ const resend = new Resend(Deno.env.get("RESEND_API_KEY"));
 const TELNYX_API_KEY = Deno.env.get("TELNYX_API_KEY");
 const TELNYX_FROM = Deno.env.get("TELNYX_FROM_NUMBER");
 const TELNYX_PROFILE = Deno.env.get("TELNYX_MESSAGING_PROFILE_ID");
-const FROM_EMAIL = Deno.env.get("FROM_EMAIL") || "Campistry <noreply@campistry.com>";
+// campistry.org — the app's actual domain (link./snacks.campistry.org).
+// The old default said campistry.com, which Campistry does not own: with
+// FROM_EMAIL unset that sends from an unverified domain, so Resend rejects
+// it or the mail fails DKIM/SPF alignment and lands in spam. Set FROM_EMAIL
+// explicitly in Edge Function secrets; this default is only a safety net.
+const FROM_EMAIL = Deno.env.get("FROM_EMAIL") || "Campistry <noreply@campistry.org>";
 const EMAIL_UNSUB_SECRET = Deno.env.get("EMAIL_UNSUB_SECRET");
 const SENDER_ROLES = ["owner", "admin", "scheduler"];
 

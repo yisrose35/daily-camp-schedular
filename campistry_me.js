@@ -10964,6 +10964,38 @@ function buildFamilyLedgers(){
         }
     });
 
+    // 3b. Zelle/ACH deposits captured automatically from the bank's alerts.
+    // These are real payments that deliberately live in the `bank_deposits`
+    // table instead of in finPayments — the campistryMe blob has exactly one
+    // writer (this browser, which rewrites the whole object on save), so a
+    // webhook appending to it would have its payments silently overwritten by
+    // any tab that loaded the page minutes earlier. Migration 145's header has
+    // the full reasoning. They join the ledger here, at read time, so every
+    // consumer (balance, statements, Analytics, CSV export) counts them
+    // exactly like any other payment.
+    if(window.CampistryDeposits){
+        Object.keys(ledgers).forEach(function(fk){
+            (window.CampistryDeposits.creditsFor(fk)||[]).forEach(function(dep){
+                var amt=Number(dep.amount)||0;
+                if(!amt) return;
+                // A return/NSF arrives as a NEGATIVE amount and has to be
+                // bookkept exactly like a refund — netted out of collected and
+                // tracked in totalRefunds — not added to gross payments. Getting
+                // this wrong makes a family whose ACH bounced read as paid.
+                var isReturn=amt<0;
+                ledgers[fk].entries.push({
+                    type:'payment',
+                    category:isReturn?'Returned':(_payLabel(dep.method)||'Payment'),
+                    desc:dep.notes||'Bank deposit',
+                    amount:amt,date:dep.date||'',ref:dep.id||'',status:''
+                });
+                ledgers[fk].totalPayments+=amt;
+                if(isReturn) ledgers[fk].totalRefunds+=Math.abs(amt);
+                else ledgers[fk].totalGrossPayments+=amt;
+            });
+        });
+    }
+
     // 4. Compute balances and sort entries
     Object.values(ledgers).forEach(function(l){
         l.balance=l.totalCharges-l.totalPayments-l.totalCredits;
@@ -12009,9 +12041,46 @@ function _flatStatus(label,type){
     var col=type==='ok'?'var(--ok)':type==='err'?'var(--err)':type==='warn'?'var(--warn)':'var(--s500)';
     return '<span style="font-size:.78rem;font-weight:700;color:'+col+'">'+esc(label)+'</span>';
 }
+// Wires the deposits module to Me's own modal/toast/escaping kit rather than
+// letting it carry a second copy — a duplicated escaper is a security bug, not
+// a styling one. Idempotent; called on every Billing render.
+var _depWired=false;
+function _wireDeposits(){
+    if(!window.CampistryDeposits) return null;
+    if(!_depWired){
+        window.CampistryDeposits.init({
+            showModal:showModal, closeModal:closeModal, toast:toast, esc:esc, jesc:je, fm:fm,
+            client:function(){return window.CampistryDB&&window.CampistryDB.getClient?window.CampistryDB.getClient():window.supabase},
+            campId:getCampId,
+            families:function(){return families},
+            // A resolved deposit changes a family balance, so the page behind
+            // the modal has to catch up.
+            onChange:function(){ if(curPage==='familydetail')renderFamilyDetailPage(); else if(curPage==='billing')renderBilling(); }
+        });
+        _depWired=true;
+        // First load populates the ledger union; re-render once it lands so
+        // balances aren't briefly wrong on a cold page load.
+        window.CampistryDeposits.refresh().then(function(){
+            if(curPage==='billing')renderBilling(); else if(curPage==='familydetail')renderFamilyDetailPage();
+        });
+    }
+    return window.CampistryDeposits;
+}
+
+function openDepositInbox(){
+    var D=_wireDeposits();
+    if(!D){toast('Deposit capture isn\'t available in this build','error');return}
+    D.openInbox();
+}
+
 function renderBilling(){
     var c=document.getElementById('page-billing');
+    var _dep=_wireDeposits();
     var ledgers=buildFamilyLedgers();
+    // Publishes what buildFamilyLedgers() just computed so the server-side
+    // overpay guardrail has a balance to check against (it can't run this
+    // function itself). Debounced inside the module.
+    if(_dep) _dep.publishBalances(ledgers);
     var famList=Object.values(ledgers).sort(function(a,b){return(a.family.name||'').localeCompare(b.family.name||'')});
 
     // The full charged/collected/collection-rate breakdown that used to
@@ -12037,10 +12106,13 @@ function renderBilling(){
     _billUnmatchedPays=_unmatchedPays;
 
     var cardsOnFile=famList.filter(function(l){return _famChargeable(families[l.famKey])}).length;
+    var _depPending=_dep?_dep.totalPending():0;
+    var _depPendingAmt=_dep?_dep.pendingAmount():0;
     var billMoreId='billHdMoreMenu';
     var h='<div class="sec-hd"><div><h2 class="sec-title">Billing & Payments</h2><p class="sec-desc">'+famList.length+' account'+(famList.length!==1?'s':'')+' · '+cardsOnFile+' card'+(cardsOnFile!==1?'s':'')+' on file · '+finPayments.length+' payment'+(finPayments.length!==1?'s':'')+'</p></div><div class="sec-actions">'
         +'<button class="me-btn me-btn--pri" onclick="CampistryMe.openPaymentModal()">Record Payment</button>'
         +(cardsOnFile>0?'<button class="me-btn me-btn--sec" onclick="CampistryMe.batchCharge()">Batch Charge</button>':'')
+        +'<button class="me-btn me-btn--sec" onclick="CampistryMe.openDepositInbox()">Bank Deposits'+(_depPending>0?' ('+_depPending+')':'')+'</button>'
         +'<div class="me-more-wrap"><button class="me-btn me-btn--sec me-btn--sm" onclick="CampistryMe._toggleMenu(\''+billMoreId+'\')">⋯</button>'
         +'<div class="me-more-menu" id="'+billMoreId+'">'
         +'<button onclick="CampistryMe.addFamily()">Add Household</button>'
@@ -12065,6 +12137,15 @@ function renderBilling(){
     // instead of disappearing.
     if(_unmatchedTotal>0){
         h+='<div style="background:#FFFBEB;border:1px solid #FDE68A;padding:9px 12px;border-radius:var(--r);margin-bottom:12px;font-size:.82rem;color:#92400E;cursor:pointer" onclick="CampistryMe.openUnmatchedPaymentsModal()">'+fm(_unmatchedTotal)+' in payments ('+_unmatchedPays.length+') isn\'t linked to any family — included in Analytics revenue. Click to review.</div>';
+    }
+
+    // Zelle/ACH money that arrived in the bank account but hasn't been tied to
+    // a family yet. Separate from the banner above on purpose: that one is
+    // about payments already in the ledger with a bad name, this one is about
+    // money that isn't in anyone's ledger at all until somebody clicks.
+    if(_depPending>0){
+        h+='<div style="background:#EFF6FF;border:1px solid #BFDBFE;padding:9px 12px;border-radius:var(--r);margin-bottom:12px;font-size:.82rem;color:#1E40AF;cursor:pointer" onclick="CampistryMe.openDepositInbox()">'
+            +fm(_depPendingAmt)+' in bank deposits ('+_depPending+') arrived but '+(_depPending===1?'hasn\'t':'haven\'t')+' been matched to a family yet. Click to review.</div>';
     }
 
     // One plain search box + one plain status dropdown, replacing the old
@@ -12165,7 +12246,21 @@ function renderFamilyDetailPage(){
     // easily at a glance, not need squinting.
     h+='<div style="display:flex;justify-content:space-between;align-items:flex-start;gap:16px;flex-wrap:wrap;margin-bottom:16px">';
     h+='<div><h2 style="font-size:1.4rem;font-weight:800;color:var(--s800);margin:0 0 4px">'+esc(l.family.name||'')+'</h2>';
-    h+='<p style="font-size:.88rem;color:var(--s500);margin:0">'+esc(camperNames)+' · '+statusBadge+(l.pendingEnrollment?' · '+_flatStatus('Accepted — pending enrollment','warn'):'')+'</p></div>';
+    h+='<p style="font-size:.88rem;color:var(--s500);margin:0">'+esc(camperNames)+' · '+statusBadge+(l.pendingEnrollment?' · '+_flatStatus('Accepted — pending enrollment','warn'):'')+'</p>';
+    // The Zelle/bank memo code. This is the one signal that survives a payer
+    // name that doesn't match the household — a business account, a maiden
+    // name, a grandparent — because the parent controls it and it names the
+    // family directly. Shown here so the office can read it to a parent on the
+    // phone. Pending/synthesized ledgers have no stable family key, so no code.
+    if(window.CampistryDeposits&&!l.pendingEnrollment){
+        var _memo=window.CampistryDeposits.memoCode(l.famKey,l.family.name);
+        if(_memo){
+            h+='<p style="font-size:.78rem;color:var(--s500);margin:6px 0 0">Zelle / bank memo code: '
+                +'<code style="background:var(--s50);padding:2px 7px;border-radius:4px;font-weight:700;color:var(--s700)">'+esc(_memo)+'</code>'
+                +' <span style="opacity:.8">— a payment carrying this in the memo is credited here automatically.</span></p>';
+        }
+    }
+    h+='</div>';
     h+='<div style="text-align:right"><div style="font-size:.72rem;font-weight:700;color:var(--s400);text-transform:uppercase;letter-spacing:.05em">Balance</div>'
         +'<div style="font-size:2rem;font-weight:800;line-height:1.1;color:'+(l.balance>0?'var(--err)':'var(--ok)')+'">'+fm(l.balance)+'</div></div>';
     h+='</div>';
@@ -16250,6 +16345,7 @@ window.CampistryMe={
     acceptFamilySuggestion:acceptFamilySuggestion,dismissFamilySuggestion:dismissFamilySuggestion,acceptAddToFamily:acceptAddToFamily,
     mergeFamilies:mergeFamilies,dismissMergeFamilies:dismissMergeFamilies,openMergeFamiliesTool:openMergeFamiliesTool,
     openUnmatchedPaymentsModal:openUnmatchedPaymentsModal,
+    openDepositInbox:openDepositInbox,
     _bcRefreshPreview:_bcRefreshPreview,
     _colResizeStart:_colResizeStart,_colHeaderDragStart:_colHeaderDragStart,_colHeaderDragOver:_colHeaderDragOver,_colHeaderDrop:_colHeaderDrop,_colHeaderDragEnd:_colHeaderDragEnd,
     addSectionTextBlock:addSectionTextBlock,_richTextExec:_richTextExec,

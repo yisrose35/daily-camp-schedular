@@ -14,7 +14,12 @@ import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
 import { Resend } from "npm:resend@2.0.0";
 
 const resend = new Resend(Deno.env.get("RESEND_API_KEY"));
-const FROM_EMAIL = Deno.env.get("FROM_EMAIL") || "Campistry <noreply@campistry.com>";
+// campistry.org — the app's actual domain (link./snacks.campistry.org).
+// The old default said campistry.com, which Campistry does not own: with
+// FROM_EMAIL unset that sends from an unverified domain, so Resend rejects
+// it or the mail fails DKIM/SPF alignment and lands in spam. Set FROM_EMAIL
+// explicitly in Edge Function secrets; this default is only a safety net.
+const FROM_EMAIL = Deno.env.get("FROM_EMAIL") || "Campistry <noreply@campistry.org>";
 
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",

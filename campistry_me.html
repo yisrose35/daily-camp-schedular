@@ -201,6 +201,33 @@
 <!-- Reads Campistry Go's saved bus routes for the print-sheet bus columns. -->
 <script src="campistry_bus_routes.js?v=20260903-03"></script>
 <script src="campistry_payments.js?v=20260904-01"></script>
+<!-- Zelle/ACH deposit capture. The parser and matcher are pure and shared with
+     the deposit-inbox edge function (via the generated
+     supabase/functions/_shared/deposit_core.ts) so the server can never enforce
+     different matching rules than Billing previews. The UI module must load
+     after both. All three fail soft: if the migration isn't applied, Billing
+     renders exactly as it did before. -->
+<!-- ⚠️ SET THIS to the domain Resend Inbound is actually receiving on before
+     onboarding any camp. It's the domain half of every camp's deposit address
+     (deposits+<token>@<this>), shown in Me → Billing → Bank Deposits →
+     Deposit Settings and read out to camps during setup. A wrong value here
+     hands camps an address that silently receives nothing. If you're piloting
+     on a Resend managed address, use its <id>.resend.app host. -->
+<script>
+  // The Resend Inbound domain that actually receives mail. A custom domain, so
+  // it needs an MX record on the `inbound` subdomain — the exact value comes
+  // from Resend when the domain is added there. Get this wrong and every camp
+  // is handed an address that silently receives nothing.
+  window.CAMPISTRY_INBOUND_DOMAIN = 'inbound.campistry.org';
+  // On our own domain the readable prefix is worth having: the address is read
+  // out to camps and pasted into bank alert settings, and 'deposits+' says what
+  // it is. It also leaves room to route other purposes (replies, forms) on the
+  // same domain later. The edge function accepts this and the bare-token form.
+  window.CAMPISTRY_INBOUND_PREFIX = 'deposits+';
+</script>
+<script src="campistry_deposit_parser.js?v=20260910-01"></script>
+<script src="campistry_deposit_match.js?v=20260910-01"></script>
+<script src="campistry_deposits_ui.js?v=20260910-01"></script>
 <script src="campistry_payroll_core.js?v=20260907-01"></script>
 <!-- Shared catalogue of what counselors may see. Loaded by Me (where the
      policy is set) and by Lite (where it's enforced) — one list, so a field
