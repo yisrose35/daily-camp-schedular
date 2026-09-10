@@ -172,15 +172,19 @@ serve(async (req) => {
 
   // Gate: only the scheduler (holding the secret) may run this.
   if (!CRON_SECRET || req.headers.get("x-cron-secret") !== CRON_SECRET) {
+    console.warn("[autopay] unauthorized — x-cron-secret header missing or does not match INSTALLMENT_CRON_SECRET");
     return new Response(JSON.stringify({ error: "unauthorized" }), {
       status: 401, headers: { ...corsHeaders, "Content-Type": "application/json" },
     });
   }
-  if (!STRIPE_SECRET) {
-    return new Response(JSON.stringify({ error: "Stripe not configured" }), {
-      status: 500, headers: { ...corsHeaders, "Content-Type": "application/json" },
-    });
-  }
+  // No hard requirement on STRIPE_SECRET: a BYOP-only deployment (Cardknox/
+  // Sola) charges through its own processor and may legitimately have no
+  // Stripe key. The Stripe charge branch below guards on STRIPE_SECRET itself,
+  // so a missing key skips (and logs) only the Stripe families instead of
+  // silently returning 500 and blocking EVERY camp's autopay — including BYOP —
+  // with no log line, which is exactly what made "my autopay never ran"
+  // impossible to see in the logs.
+  if (!STRIPE_SECRET) console.warn("[autopay] STRIPE_SECRET not set — Stripe-camp autopay will be skipped; BYOP camps still run");
 
   const supabase = createClient(SUPABASE_URL, SUPABASE_SERVICE_KEY);
   const today = todayISO();
@@ -245,8 +249,6 @@ serve(async (req) => {
 
     for (const [famKey, fRaw] of Object.entries(me.families)) {
       const f = fRaw as Record<string, any>;
-      if (!f.cardOnFile) continue;
-      if (processorKey ? !f.byopCustomerRef : !f.stripeCustomerId) continue;
       // A family can have MULTIPLE plans (migration 116) — normalize the
       // legacy singular f.plan into a one-item list so a pre-116 family
       // charges exactly as it always did.
@@ -254,6 +256,18 @@ serve(async (req) => {
         ? f.plans
         : (f.plan && Array.isArray(f.plan.installments) ? [f.plan] : []);
       if (!plans.some((p) => p && p.autopay && Array.isArray(p.installments))) continue;
+      // This family WANTS autopay — so if it has nothing chargeable behind it,
+      // that's a real misconfiguration (a plan was set up but the card/token
+      // never got saved), worth a log line instead of the two silent `continue`s
+      // that used to sit above the plan check and made "my autopay didn't run"
+      // impossible to diagnose from the logs.
+      if (!f.cardOnFile || (processorKey ? !f.byopCustomerRef : !f.stripeCustomerId)) {
+        const why = !f.cardOnFile ? "no card on file"
+          : (processorKey ? "no vaulted card token (byopCustomerRef) — the card was never saved to the processor" : "no Stripe customer");
+        console.warn(`[autopay] camp ${row.camp_id} family "${f.name}": autopay is on but ${why} — cannot charge`);
+        details.push({ camp: row.camp_id, family: f.name, result: "skipped_no_chargeable_card", reason: why, processor: processorKey || "stripe" });
+        continue;
+      }
 
       // One balance check per family per run, decremented as installments
       // get charged in this same run (several can be due the same day across
@@ -345,6 +359,14 @@ serve(async (req) => {
             continue;
           }
 
+          // Stripe path needs the platform Stripe key. A BYOP-only deployment
+          // may not have one — skip (and log) just this family instead of the
+          // old top-of-run 500 that blocked everyone.
+          if (!STRIPE_SECRET) {
+            console.warn(`[autopay] camp ${row.camp_id} family "${f.name}": Stripe camp but STRIPE_SECRET not set — skipping`);
+            details.push({ camp: row.camp_id, family: f.name, amount, result: "skipped_no_stripe_key" });
+            continue;
+          }
           const pi = await stripeCharge(
             f.stripeCustomerId, f.stripePaymentMethodId || null, amount,
             `Autopay installment — ${f.name || famKey}`,
@@ -389,7 +411,7 @@ serve(async (req) => {
     }
   }
 
-  console.log(`[autopay] done — charged ${charged}, failed ${failed}`);
+  console.log(`[autopay] done — charged ${charged}, failed ${failed}` + (details.length ? `; details=${JSON.stringify(details)}` : "; nothing due"));
   return new Response(
     JSON.stringify({ ok: true, charged, failed, details }),
     { status: 200, headers: { ...corsHeaders, "Content-Type": "application/json" } }
