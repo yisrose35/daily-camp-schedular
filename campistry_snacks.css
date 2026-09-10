@@ -423,3 +423,15 @@ body.sidebar-open .sidebar { transform: translateX(0); }
     .stats-grid { grid-template-columns: 1fr; }
     .metric-row { grid-template-columns: 1fr; }
 }
+
+/* Account transaction-history modal (opened from the Accounts tab) */
+.acct-name-link { color: var(--text-primary); text-decoration: none; border-bottom: 1px dashed var(--border, #cbd5e1); cursor: pointer; }
+.acct-name-link:hover { color: var(--snacks, #EA580C); border-bottom-color: currentColor; }
+.hist-summary { font-size: .85rem; color: var(--text-muted); margin-bottom: 12px; }
+.hist-summary strong { color: var(--text-primary); font-size: 1rem; }
+.hist-row { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 10px 0; border-bottom: 1px solid var(--border, #e2e8f0); }
+.hist-row:last-child { border-bottom: none; }
+.hist-label { font-weight: 600; font-size: .85rem; color: var(--text-primary); }
+.hist-when { font-size: .7rem; color: var(--text-muted); margin-top: 2px; }
+.hist-amt { font-variant-numeric: tabular-nums; white-space: nowrap; }
+.hist-tag { display: inline-block; margin-left: 6px; padding: 1px 7px; border-radius: 999px; font-size: .58rem; font-weight: 800; letter-spacing: .03em; text-transform: uppercase; background: var(--snacks, #EA580C); color: #fff; vertical-align: middle; }

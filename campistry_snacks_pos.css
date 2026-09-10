@@ -69,6 +69,19 @@ body.camper-open .camper-backdrop { display: block; }
 .camper-search input { width: 100%; padding: .6rem .75rem; background: var(--bg); border: 1px solid var(--border); border-radius: var(--radius-sm); color: var(--text); font-size: .875rem; outline: none; transition: border-color .15s; }
 .camper-search input:focus { border-color: var(--snacks); background: #fff; }
 .camper-search input::placeholder { color: var(--text-muted); }
+/* Bunk filter — "which bunks are at the canteen right now" */
+.bunk-filter { position: relative; padding: 0 .75rem .5rem; border-bottom: 1px solid var(--border); }
+.bunk-filter-btn { width: 100%; display: flex; align-items: center; justify-content: space-between; gap: 6px; padding: .5rem .7rem; background: var(--bg); border: 1px solid var(--border); border-radius: var(--radius-sm); color: var(--text-dim); font-size: .8rem; font-weight: 600; }
+.bunk-filter-btn:hover { border-color: var(--snacks-200); background: var(--snacks-50); color: var(--snacks-dark); }
+.bunk-filter-caret { font-size: .7rem; color: var(--text-muted); }
+.bunk-filter-menu { position: absolute; left: .75rem; right: .75rem; top: 100%; z-index: 40; margin-top: 2px; max-height: 300px; overflow-y: auto; background: #fff; border: 1px solid var(--border-strong); border-radius: var(--radius-sm); box-shadow: var(--shadow-md); padding: .35rem; }
+.bunk-filter-row { display: flex; align-items: center; gap: .55rem; padding: .5rem .55rem; border-radius: var(--radius-sm); cursor: pointer; font-size: .8rem; color: var(--text); }
+.bunk-filter-row:hover { background: var(--snacks-50); }
+.bunk-filter-row input { accent-color: var(--snacks); width: 16px; height: 16px; flex-shrink: 0; }
+.bunk-filter-row.bunk-filter-all { font-weight: 700; }
+.bunk-filter-div { margin-left: auto; font-size: .65rem; color: var(--text-muted); }
+.bunk-filter-divider { height: 1px; background: var(--border); margin: .3rem 0; }
+
 .camper-list { flex: 1; min-height: 0; overflow-y: auto; -webkit-overflow-scrolling: touch; padding: .5rem; }
 .camper-item { display: flex; align-items: center; gap: .75rem; padding: .65rem .75rem; border-radius: var(--radius); cursor: pointer; transition: all .12s; margin-bottom: 2px; }
 .camper-item:hover { background: var(--bg-card-hover); }

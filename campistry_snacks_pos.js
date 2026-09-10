@@ -179,6 +179,18 @@ let campers = [];
 let sel = null; // selected camper name
 let cart = [];
 let cat = 'all';
+// Which bunks are "at the canteen right now". Empty set = show everyone.
+// Persisted per register device so it survives reloads during a session.
+let selectedBunks = loadSelectedBunks();
+
+const BUNKS_LOCAL_KEY = 'campistry_pos_bunks';
+function loadSelectedBunks() {
+    try { const raw = localStorage.getItem(BUNKS_LOCAL_KEY); if (raw) return new Set(JSON.parse(raw) || []); } catch (_) {}
+    return new Set();
+}
+function saveSelectedBunks() {
+    try { localStorage.setItem(BUNKS_LOCAL_KEY, JSON.stringify(Array.from(selectedBunks))); } catch (_) {}
+}
 
 function getAccount(name) {
     if (!snacks.accounts) snacks.accounts = {};
@@ -205,6 +217,7 @@ function init() {
     });
 
     renderCatButtons();
+    renderBunkFilter();
     renderCampers();
     renderItems();
     renderCart();
@@ -227,6 +240,9 @@ function init() {
 // Clock
 function tick() { document.getElementById('clock').textContent = new Date().toLocaleTimeString([], { hour: 'numeric', minute: '2-digit', second: '2-digit' }); }
 setInterval(tick, 1000); tick();
+// Keep balances/limits fresh on a long-running register without a reload
+// (a parent raising a limit or adding funds mid-day shows up within ~45s).
+setInterval(function() { if (typeof refreshAccountsFromCloud === 'function') refreshAccountsFromCloud(); }, 45000);
 
 // ==========================================================================
 // CAMPER PANEL
@@ -234,7 +250,10 @@ setInterval(tick, 1000); tick();
 
 window.renderCampers = function() {
     const q = (document.getElementById('camperSearch').value || '').toLowerCase();
-    const list = campers.filter(c => c.name.toLowerCase().includes(q));
+    const list = campers.filter(c =>
+        c.name.toLowerCase().includes(q) &&
+        (selectedBunks.size === 0 || (c.bunk && selectedBunks.has(c.bunk)))
+    );
     document.getElementById('camperList').innerHTML = list.map(c => {
         const a = getAccount(c.name);
         const rem = a.dailyLimit - a.spentToday;
@@ -252,6 +271,10 @@ window.renderCampers = function() {
 
 window.pickCamper = function(name) {
     sel = name;
+    // Pull this camper's current limit/balance from the cloud so a limit the
+    // parent just raised (or a fresh deposit) is reflected immediately — fixes
+    // a stale "Limit hit" sticking around after the parent changed it.
+    refreshAccountsFromCloud();
     renderCampers();
     updateCamperBar();
     updateChargeBtn();
@@ -286,6 +309,112 @@ function _autoOpenCamperDrawerIfNeeded() {
             document.body.classList.add('camper-open');
         }
     } catch (_) {}
+}
+
+// ==========================================================================
+// BUNK FILTER — "which bunks are at the canteen right now"
+// A register serving one bunk at a time only wants to see that bunk's
+// campers. This narrows the camper list to the selected bunk(s); empty
+// selection = everyone (default). The choice persists on the device.
+// ==========================================================================
+
+function getBunkList() {
+    var seen = {};
+    var out = [];
+    campers.forEach(function(c) {
+        if (c.bunk && !seen[c.bunk]) { seen[c.bunk] = 1; out.push({ bunk: c.bunk, division: c.division || '' }); }
+    });
+    // Drop any persisted bunk that no longer exists in the roster so a stale
+    // selection can't hide the whole list.
+    var valid = {}; out.forEach(function(b){ valid[b.bunk] = 1; });
+    Array.from(selectedBunks).forEach(function(b){ if (!valid[b]) selectedBunks.delete(b); });
+    return out.sort(function(a, b) { return (a.division + a.bunk).localeCompare(b.division + b.bunk); });
+}
+
+function _bunkFilterLabel() {
+    if (selectedBunks.size === 0) return 'All bunks';
+    if (selectedBunks.size === 1) return Array.from(selectedBunks)[0];
+    return selectedBunks.size + ' bunks';
+}
+
+window.renderBunkFilter = function() {
+    var btn = document.getElementById('bunkFilterBtn');
+    var menu = document.getElementById('bunkFilterMenu');
+    if (!btn || !menu) return;
+    var bunks = getBunkList();
+    if (!bunks.length) { document.getElementById('bunkFilterWrap').style.display = 'none'; return; }
+    document.getElementById('bunkFilterWrap').style.display = '';
+    btn.innerHTML = esc(_bunkFilterLabel()) + ' <span class="bunk-filter-caret">▾</span>';
+    var rows = bunks.map(function(b) {
+        var checked = selectedBunks.has(b.bunk) ? ' checked' : '';
+        var meta = b.division ? '<span class="bunk-filter-div">' + esc(b.division) + '</span>' : '';
+        return '<label class="bunk-filter-row"><input type="checkbox" value="' + esc(b.bunk).replace(/"/g, '&quot;') + '"' + checked + ' onchange="onBunkToggle(this)">' +
+               '<span>' + esc(b.bunk) + '</span>' + meta + '</label>';
+    }).join('');
+    menu.innerHTML =
+        '<label class="bunk-filter-row bunk-filter-all"><input type="checkbox"' + (selectedBunks.size === 0 ? ' checked' : '') + ' onchange="onBunkAll(this)"><span>All bunks</span></label>' +
+        '<div class="bunk-filter-divider"></div>' + rows;
+};
+
+window.toggleBunkFilter = function() {
+    var menu = document.getElementById('bunkFilterMenu');
+    if (!menu) return;
+    menu.style.display = menu.style.display === 'none' ? 'block' : 'none';
+};
+
+window.onBunkAll = function(cb) {
+    if (cb.checked) { selectedBunks.clear(); saveSelectedBunks(); renderBunkFilter(); renderCampers(); }
+    else { cb.checked = true; } // "All" can't be unchecked directly — pick a specific bunk instead
+};
+
+window.onBunkToggle = function(cb) {
+    if (cb.checked) selectedBunks.add(cb.value); else selectedBunks.delete(cb.value);
+    saveSelectedBunks();
+    renderBunkFilter();
+    renderCampers();
+};
+
+// Close the bunk menu on any outside click.
+document.addEventListener('click', function(e) {
+    var wrap = document.getElementById('bunkFilterWrap');
+    var menu = document.getElementById('bunkFilterMenu');
+    if (!wrap || !menu || menu.style.display === 'none') return;
+    if (!wrap.contains(e.target)) menu.style.display = 'none';
+});
+
+// ==========================================================================
+// LIMIT / BALANCE FRESHNESS — a register can run all day without a reload.
+// When a parent raises a daily limit (or a deposit lands) mid-session, the
+// POS's cached account was stale and kept showing "Limit hit" / an old
+// balance. get_canteen_accounts is the authoritative cloud read; merge its
+// limits + balances back in (never clobbering autoReload) so the camper list
+// badge and the client pre-check use current numbers. The server RPC is
+// still the real authority on any charge — this just keeps the UI honest.
+// ==========================================================================
+function refreshAccountsFromCloud(cb) {
+    var db = window.CampistryDB;
+    var client = db && db.getClient && db.getClient();
+    var campId = db && db.getCampId && db.getCampId();
+    if (!client || !campId || !client.rpc) { if (cb) cb(); return; }
+    client.rpc('get_canteen_accounts', { p_camp_id: campId }).then(function(res) {
+        var d = res && res.data;
+        if (res.error || !d || !d.success || !d.accounts) { if (cb) cb(); return; }
+        if (!snacks.accounts) snacks.accounts = {};
+        Object.keys(d.accounts).forEach(function(name) {
+            var cloud = d.accounts[name] || {};
+            var local = snacks.accounts[name] || {};
+            // Overwrite the money/limit fields from the authoritative cloud copy;
+            // keep the locally-held autoReload snapshot untouched (owned by the
+            // parent/edge, same reasoning as cloudSaveSnacks).
+            ['balance', 'dailyLimit', 'spentToday', 'lastSpendDate', 'creditLimit', 'balanceFloor'].forEach(function(k) {
+                if (cloud[k] !== undefined) local[k] = cloud[k];
+            });
+            snacks.accounts[name] = local;
+        });
+        renderCampers();
+        if (sel) { updateCamperBar(); renderCart(); }
+        if (cb) cb();
+    }, function() { if (cb) cb(); });
 }
 
 function updateCamperBar() {

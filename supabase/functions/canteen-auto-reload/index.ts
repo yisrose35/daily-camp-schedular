@@ -358,6 +358,10 @@ serve(async (req) => {
           p_amount: due.amount,
           p_processor_key: "cardknox",
           p_external_transaction_id: res.externalTransactionId,
+          // Marks the ledger row kind:'autoreload' so the parent portal shows
+          // an "Auto-Pay" tag on it (migration 145). Harmless before 145 is
+          // applied — the old 5-arg function ignores the extra key.
+          p_source: "autoreload",
         });
         if (creditRes.error || !creditRes.data?.success) {
           // Money was captured but the credit write failed — worth loud

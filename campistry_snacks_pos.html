@@ -150,6 +150,12 @@ document.documentElement.classList.add('pos-locked');
 <!-- LEFT: Camper Selector -->
 <div class="camper-panel" id="camperPanel">
 <div class="camper-search"><input type="text" placeholder="Search camper…" id="camperSearch" oninput="renderCampers()" autofocus></div>
+<!-- "Which bunks are at the canteen right now" — filters the list to just
+     those bunks so a runner serving one bunk sees only its campers. -->
+<div class="bunk-filter" id="bunkFilterWrap" style="display:none;">
+<button class="bunk-filter-btn" id="bunkFilterBtn" type="button" onclick="toggleBunkFilter()">All bunks <span class="bunk-filter-caret">▾</span></button>
+<div class="bunk-filter-menu" id="bunkFilterMenu" style="display:none;"></div>
+</div>
 <div class="camper-list" id="camperList"></div>
 </div>
 

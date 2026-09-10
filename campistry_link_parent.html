@@ -17,7 +17,7 @@
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link href="https://fonts.googleapis.com/css2?family=Roboto:wght@400;500;700;900&family=Roboto+Flex:opsz,wght@8..144,400;8..144,500;8..144,700;8..144,900&display=swap" rel="stylesheet">
     <link rel="stylesheet" href="campistry-unified.css?v=20260909-01">
-    <link rel="stylesheet" href="campistry_link.css?v=20260910-01">
+    <link rel="stylesheet" href="campistry_link.css?v=20260910-06">
     <!-- Splash screen — inline so it appears before any external CSS -->
     <style>
         #link-splash {
@@ -378,7 +378,7 @@
         </div>
         <div style="display:flex;gap:8px;justify-content:center;flex-wrap:wrap;"><button class="btn btn-primary" id="canteenAddBtn" onclick="addFunds()">Add Funds</button><button class="btn btn-secondary" onclick="document.getElementById('autoReloadCard').scrollIntoView({behavior:'smooth',block:'start'})">Auto-Reload</button><button class="btn" id="canteenChargeSavedRow" type="button" style="display:none;background:#fff;color:var(--link-color);font-weight:700;" onclick="_lkCanteenChargeSaved()">Charge <span id="canteenChargeSavedLabel"></span></button></div>
     </div>
-    <div class="lk-card"><div class="lk-card-head"><h2>Spending Controls</h2></div>
+    <div class="lk-card" id="spendControlsCard"><div class="lk-card-head"><h2>Spending Controls</h2><span class="ar-saved-hint" id="spendSavedHint">Saved &#10003;</span></div>
         <div class="lk-field"><label>Daily Spending Limit</label>
             <div style="display:flex;align-items:center;gap:14px;"><input type="range" id="limRange" min="1" max="20" value="5" style="flex:1;accent-color:var(--link-color);" oninput="document.getElementById('limVal').textContent='$'+this.value+'.00'"><span style="font-weight:700;min-width:55px;" id="limVal">$5.00</span></div>
             <label style="display:flex;align-items:center;gap:6px;margin-top:8px;font-size:.8rem;font-weight:600;cursor:pointer;"><input type="checkbox" id="limNoCap" onchange="_limToggleNoCap(this.checked)"> No daily limit</label>
@@ -392,9 +392,9 @@
             <div style="display:flex;align-items:center;gap:14px;"><input type="range" id="floorRange" min="0" max="20" value="0" style="flex:1;accent-color:var(--blue-500);" oninput="document.getElementById('floorVal').textContent='$'+this.value+'.00'"><span style="font-weight:700;min-width:55px;" id="floorVal">$0.00</span></div>
             <div style="font-size:.72rem;color:var(--text-muted);margin-top:4px;">Stop spending when balance drops below this amount</div>
         </div>
-        <button class="btn btn-primary btn-sm" style="margin-top:6px;" onclick="saveSpendingControls()">Save Controls</button>
+        <div class="ar-autosave-note">Changes save automatically.</div>
     </div>
-    <div class="lk-card" id="autoReloadCard"><div class="lk-card-head"><h2>Auto-Reload</h2></div>
+    <div class="lk-card" id="autoReloadCard"><div class="lk-card-head"><h2>Auto-Reload</h2><span class="ar-saved-hint" id="arSavedHint">Saved &#10003;</span></div>
         <div id="arStatusMsg" class="ar-status off"><span class="ar-status-dot"></span><span>Auto-reload is off.</span></div>
         <div class="ar-option" id="arThOption">
             <label class="ar-option-head">
@@ -474,8 +474,8 @@
                 <p class="ar-hint">Default is once per day. E.g. 2 reloads every 1 day = twice a day; 3 reloads every 14 days = up to 3 times every 2 weeks.</p>
             </div>
         </div>
+        <div class="ar-autosave-note">Changes save automatically — just switch on a trigger above.</div>
         <div class="ar-actions">
-            <button class="btn btn-primary btn-sm" onclick="saveAutoReload()">Save Auto-Reload</button>
             <button class="btn btn-secondary btn-sm" id="arCardBtn" onclick="startCanteenAutoReloadSetup()" style="display:none;">Update card</button>
             <button class="btn btn-ghost btn-sm" id="arOffBtn" onclick="turnOffAutoReload()" style="display:none;">Turn off</button>
         </div>
@@ -1001,6 +1001,26 @@ var messages = [];
 var payments = [];
 var canteenTxByChild = {};
 var schedule = [];
+
+// Maps one raw canteen transaction (from get_canteen_accounts / the local
+// snacks blob) into the shape the Recent Transactions list renders. Credits
+// (deposits, auto-reloads) show +$; debits (purchases at the register) show
+// −$ with the item names. An auto-reload deposit is tagged "Auto-Pay" so a
+// parent can tell an automatic top-up from one they added themselves — it's
+// flagged either by the server marking kind:'autoreload' (migration 145) or,
+// as a fallback for rows written before that, by the label text itself.
+function _mapCanteenTx(t){
+    var credit = t.type === 'credit';
+    var auto = credit && (t.kind === 'autoreload' || /auto[- ]?(reload|pay)/i.test(t.items || ''));
+    var name = auto ? 'Auto-reload top-up'
+                    : (t.items || (credit ? 'Funds added' : 'Purchase'));
+    return {
+        name: name,
+        date: (t.time || '') + (t.date ? ' · ' + t.date : ''),
+        amt: credit ? Math.abs(t.amount || 0) : -Math.abs(t.amount || 0),
+        auto: auto
+    };
+}
 
 // Per-camper identity color (Life360-style) — same accent follows a child
 // everywhere: hero chips, My Children, Canteen wallet card, message avatars.
@@ -2257,8 +2277,8 @@ function _limToggleNoCap(checked){
     if(lr) lr.disabled=checked;
     if(lv) lv.textContent = checked ? 'No limit' : '$'+(lr?lr.value:'5')+'.00';
 }
-function saveSpendingControls(){
-    var c=_activeCanteenChild();if(!c){toast('No canteen account yet');return;}
+function saveSpendingControls(silent){
+    var c=_activeCanteenChild();if(!c){if(!silent)toast('No canteen account yet');return;}
     // dailyLimit:0 is the backend's existing "no cap" convention
     // (submit_canteen_purchase only enforces the cap when > 0) — this
     // checkbox is what makes picking that state an explicit, readable
@@ -2286,13 +2306,28 @@ function saveSpendingControls(){
             if(res.error||!res.data||!res.data.success){
                 console.warn('[Parent] set_canteen_limits failed:',res.error?res.error.message:(res.data||{}).error);
                 toast('Saved on this device — reconnect to sync your spending limits',true);
-            } else {
+            } else if(!silent){
                 toast('Spending controls saved for '+c.name.split(' ')[0]);
+            } else {
+                _flashSavedHint('spendSavedHint');
             }
         });
-    } else {
+    } else if(!silent){
         toast('Spending controls saved for '+c.name.split(' ')[0]);
     }
+}
+// Small "Saved ✓" flash for auto-save flows — reassures without a toast on
+// every slider nudge or field blur.
+function _flashSavedHint(id){
+    var el=document.getElementById(id); if(!el) return;
+    el.classList.add('show');
+    clearTimeout(el._t); el._t=setTimeout(function(){ el.classList.remove('show'); }, 1600);
+}
+// Debounced auto-save for the Spending Controls card — no Save button needed.
+var _spendSaveTimer=null;
+function _autoSaveSpendingControls(){
+    clearTimeout(_spendSaveTimer);
+    _spendSaveTimer=setTimeout(function(){ saveSpendingControls(true); }, 500);
 }
 
 // ── AUTO-RELOAD ──────────────────────────────────────────────────────────
@@ -2389,16 +2424,23 @@ function _arApplySessionPreset(){
 }
 function _renderAutoReload(c){
     var ar=(c&&c.autoReload)||{};
+    // Every field is set to THIS camper's value OR its default — never left at
+    // the previously-viewed camper's value. Before this, number fields were
+    // only assigned "if present", so switching from a configured sibling to an
+    // unconfigured one left that sibling's amounts/dates sitting in the form,
+    // making it look like the second child was already set up (they weren't —
+    // the toggles were off and nothing was saved, but the stale numbers read
+    // as configured). Each camper's auto-reload is independent.
     var thE=document.getElementById('arThEnabled');
     if(thE){ thE.checked=!!ar.thresholdEnabled; _arToggleOption('arThOption','arThFields',ar.thresholdEnabled); }
-    var thReload=document.getElementById('arThReload'); if(thReload && ar.thresholdReloadAmount!=null) thReload.value=ar.thresholdReloadAmount;
-    var thAmt=document.getElementById('arThAmount'); if(thAmt && ar.thresholdAmount!=null) thAmt.value=ar.thresholdAmount;
+    var thReload=document.getElementById('arThReload'); if(thReload) thReload.value=ar.thresholdReloadAmount!=null?ar.thresholdReloadAmount:20;
+    var thAmt=document.getElementById('arThAmount'); if(thAmt) thAmt.value=ar.thresholdAmount!=null?ar.thresholdAmount:5;
     var scE=document.getElementById('arScEnabled');
     if(scE){ scE.checked=!!ar.scheduleEnabled; _arToggleOption('arScOption','arScFields',ar.scheduleEnabled); }
     var scFreq=document.getElementById('arScFreq'); if(scFreq) scFreq.value=ar.scheduleFrequency||'weekly';
     _arRenderDayOptions();
-    var scDay=document.getElementById('arScDay'); if(scDay && ar.scheduleDay!=null) scDay.value=ar.scheduleDay;
-    var scReload=document.getElementById('arScReload'); if(scReload && ar.scheduleReloadAmount!=null) scReload.value=ar.scheduleReloadAmount;
+    var scDay=document.getElementById('arScDay'); if(scDay) scDay.value=ar.scheduleDay!=null?ar.scheduleDay:(scDay.options[0]?scDay.options[0].value:'0');
+    var scReload=document.getElementById('arScReload'); if(scReload) scReload.value=ar.scheduleReloadAmount!=null?ar.scheduleReloadAmount:25;
     var stD=document.getElementById('arStartDate'); if(stD) stD.value=ar.startDate||'';
     var spD=document.getElementById('arStopDate'); if(spD) spD.value=ar.stopDate||'';
     var mxR=document.getElementById('arMaxReloads'); if(mxR) mxR.value=ar.maxReloadsPerPeriod!=null?ar.maxReloadsPerPeriod:1;
@@ -2482,14 +2524,14 @@ function turnOffAutoReload(){
     };
     _saveAutoReloadConfig(c,cfg,false);
 }
-function _saveAutoReloadConfig(c,cfg,promptCardIfMissing){
+function _saveAutoReloadConfig(c,cfg,promptCardIfMissing,silent){
     var db=window._parentDB;
-    if(!db||!db.rpc){ toast('Not connected — try again once online',1); return; }
+    if(!db||!db.rpc){ if(!silent)toast('Not connected — try again once online',1); return; }
     var send = window._pRpc ? window._pRpc('set_canteen_auto_reload',{p_camper_name:c.name,p_config:cfg},c.campId)
                             : db.rpc('set_canteen_auto_reload',{p_camp_id:c.campId||(parent&&parent.campId)||null,p_camper_name:c.name,p_config:cfg});
     send.then(function(res){
         if(res.error||!res.data||!res.data.success){
-            toast('Could not save auto-reload: '+(res.error?res.error.message:((res.data||{}).error||'error')),1);
+            if(!silent)toast('Could not save auto-reload: '+(res.error?res.error.message:((res.data||{}).error||'error')),1);
             return;
         }
         c.autoReload=res.data.autoReload||cfg;
@@ -2497,11 +2539,62 @@ function _saveAutoReloadConfig(c,cfg,promptCardIfMissing){
         if(cfg.enabled && !res.data.cardOnFile && promptCardIfMissing){
             toast('Saved — now add a card to activate auto-reload');
             startCanteenAutoReloadSetup();
+        } else if(silent){
+            _flashSavedHint('arSavedHint');
         } else {
             toast(cfg.enabled?('Auto-reload saved for '+c.name.split(' ')[0]):('Auto-reload turned off for '+c.name.split(' ')[0]));
         }
     });
 }
+// Debounced auto-save for the whole Auto-Reload card — every field (triggers,
+// amounts, active dates, frequency cap) persists on change with no Save
+// button. If neither trigger is on there is nothing to enable, so we skip
+// silently (the parent uses "Turn off" to disable an existing setup). A brand
+// new enable saves as enabled-but-no-card; the status line then shows "Almost
+// there — add a card" with the Add-a-card button, so we never auto-launch the
+// card page mid-edit.
+var _arSaveTimer=null;
+function _arAutoSave(){
+    clearTimeout(_arSaveTimer);
+    _arSaveTimer=setTimeout(function(){
+        var c=_activeCanteenChild(); if(!c) return;
+        var thEnabled=!!(document.getElementById('arThEnabled')||{}).checked;
+        var scEnabled=!!(document.getElementById('arScEnabled')||{}).checked;
+        if(!thEnabled && !scEnabled) return; // nothing to turn on — leave as-is
+        var startDate=(document.getElementById('arStartDate')||{}).value||null;
+        var stopDate=(document.getElementById('arStopDate')||{}).value||null;
+        if(startDate && stopDate && startDate>stopDate) return; // invalid window — wait
+        var maxReloads=parseInt((document.getElementById('arMaxReloads')||{}).value||'1',10);
+        var periodDays=parseInt((document.getElementById('arPeriodDays')||{}).value||'1',10);
+        if(!(maxReloads>=1)) maxReloads=1;
+        if(!(periodDays>=1)) periodDays=1;
+        var cfg={
+            enabled:true,
+            thresholdEnabled:thEnabled,
+            thresholdAmount:parseFloat((document.getElementById('arThAmount')||{}).value||'0'),
+            thresholdReloadAmount:parseFloat((document.getElementById('arThReload')||{}).value||'0'),
+            scheduleEnabled:scEnabled,
+            scheduleFrequency:(document.getElementById('arScFreq')||{}).value||'weekly',
+            scheduleDay:parseInt((document.getElementById('arScDay')||{}).value||'0',10),
+            scheduleReloadAmount:parseFloat((document.getElementById('arScReload')||{}).value||'0'),
+            startDate:startDate, stopDate:stopDate,
+            maxReloadsPerPeriod:maxReloads, reloadPeriodDays:periodDays
+        };
+        _saveAutoReloadConfig(c,cfg,false,true);
+    }, 500);
+}
+// Wire auto-save once — bubbled 'change' catches every input/select/checkbox
+// inside each card. Programmatic field updates in _renderAutoReload don't fire
+// 'change', so switching campers never triggers a spurious save.
+(function _wireCanteenAutoSave(){
+    function attach(){
+        var arCard=document.getElementById('autoReloadCard');
+        if(arCard && !arCard._autoSaveWired){ arCard._autoSaveWired=1; arCard.addEventListener('change', _arAutoSave); }
+        var spendCard=document.getElementById('spendControlsCard');
+        if(spendCard && !spendCard._autoSaveWired){ spendCard._autoSaveWired=1; spendCard.addEventListener('change', _autoSaveSpendingControls); }
+    }
+    if(document.readyState==='loading') document.addEventListener('DOMContentLoaded',attach); else attach();
+})();
 async function startCanteenAutoReloadSetup(){
     var c=_activeCanteenChild(); if(!c){toast('No canteen account yet');return;}
     // If the family already has a card on file — the same source Pay Now /
@@ -2745,7 +2838,7 @@ function switchCanteen(id){
     var tl=document.getElementById('txList');tl.innerHTML='';
     var txs=canteenTxByChild[id]||[];
     if(!txs.length){tl.innerHTML='<div class="lk-empty" style="padding:24px 0;"><h3>No transactions yet</h3><p style="font-size:.8rem;color:var(--text-muted);">Purchases at the canteen will appear here.</p></div>';return;}
-    txs.forEach(function(t){var d=t.amt<0;tl.innerHTML+='<div class="lk-tx-item"><div class="lk-tx-left"><div class="lk-tx-icon '+(d?'debit':'credit')+'">'+(d?txSvgDebit:txSvgCredit)+'</div><div><div class="lk-tx-name">'+t.name+'</div><div class="lk-tx-date">'+t.date+'</div></div></div><div class="lk-tx-amt '+(d?'debit':'credit')+'">'+(d?'−$'+Math.abs(t.amt).toFixed(2):'+$'+t.amt.toFixed(2))+'</div></div>';});
+    txs.forEach(function(t){var d=t.amt<0;var tag=t.auto?'<span class="lk-tx-tag">Auto-Pay</span>':'';tl.innerHTML+='<div class="lk-tx-item"><div class="lk-tx-left"><div class="lk-tx-icon '+(d?'debit':'credit')+'">'+(d?txSvgDebit:txSvgCredit)+'</div><div><div class="lk-tx-name">'+t.name+tag+'</div><div class="lk-tx-date">'+t.date+'</div></div></div><div class="lk-tx-amt '+(d?'debit':'credit')+'">'+(d?'−$'+Math.abs(t.amt).toFixed(2):'+$'+t.amt.toFixed(2))+'</div></div>';});
 }
 
 function downloadBlankForm(id){
@@ -4345,10 +4438,7 @@ function _loadSnacksData(childrenList){
         if(a.balanceFloor!=null)c.balanceFloor=a.balanceFloor;
         c.autoReload=a.autoReload||null;
         var childTx=txs.filter(function(t){return t.camper===c.name;});
-        canteenTxByChild[c.id]=childTx.map(function(t){
-            var credit=t.type==='credit';
-            return{name:t.items||'Purchase',date:(t.time||'')+(t.date?' · '+t.date:''),amt:credit?Math.abs(t.amount||0):-Math.abs(t.amount||0)};
-        });
+        canteenTxByChild[c.id]=childTx.map(_mapCanteenTx);
     });
 }
 function selPickup(type, btn) {
@@ -5070,10 +5160,7 @@ if (window.pdfjsLib) { window.pdfjsLib.GlobalWorkerOptions.workerSrc = 'pdfjs-di
                 // because this one field was never copied over.
                 c.autoReload = (a && a.autoReload) || null;
                 var childTx = txs.filter(function(t){ return t.camper === c.name; });
-                canteenTxByChild[c.id] = childTx.map(function(t) {
-                    var credit = t.type === 'credit';
-                    return { name: t.items || 'Purchase', date: (t.time||'') + (t.date?' · '+t.date:''), amt: credit ? Math.abs(t.amount||0) : -Math.abs(t.amount||0) };
-                });
+                canteenTxByChild[c.id] = childTx.map(_mapCanteenTx);
             });
             // Refresh whatever's currently on screen with the live numbers.
             if (typeof _activeCanteenChild === 'function') {

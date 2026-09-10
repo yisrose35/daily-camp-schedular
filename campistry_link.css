@@ -1043,6 +1043,12 @@ body {
 .ar-actions { display: flex; gap: 8px; flex-wrap: wrap; }
 .ar-freq-row { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; font-size: 0.85rem; color: var(--slate-700); }
 .ar-freq-row input { text-align: center; }
+/* Auto-save affordances — no Save button, a quiet note + a brief "Saved ✓". */
+.ar-autosave-note { font-size: 0.72rem; color: var(--text-muted); margin-top: 10px; }
+.ar-saved-hint { margin-left: auto; font-size: 0.72rem; font-weight: 700; color: var(--green-600, #16A34A); opacity: 0; transform: translateY(-2px); transition: opacity .2s ease, transform .2s ease; }
+.ar-saved-hint.show { opacity: 1; transform: translateY(0); }
+/* Auto-pay tag on a Recent Transactions row that came from auto-reload. */
+.lk-tx-tag { display: inline-block; margin-left: 6px; padding: 1px 7px; border-radius: 999px; font-size: 0.6rem; font-weight: 800; letter-spacing: .03em; text-transform: uppercase; background: var(--link-color, #2563EB); color: #fff; vertical-align: middle; }
 
 /* State banner — carries the whole state in one line at the top of the card:
    a colored dot plus text, tinted to match. Replaces four different inline
