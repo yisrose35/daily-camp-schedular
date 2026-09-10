@@ -101,36 +101,63 @@ function — there is nothing else to add.
 > different matching rules than Billing previews, the second stops the next
 > deploy breaking the same way this one did.
 
-### 3. Set the secrets
+### 3. Turn on inbound email in Resend
 
-Supabase Dashboard → **Edge Functions → Secrets**:
+Resend Dashboard → **Inbound**. Pick one:
 
-| Secret | Value |
-|---|---|
-| `RESEND_API_KEY` | your existing Resend key (already used by `send-invite-email`) |
-| `RESEND_WEBHOOK_SECRET` | the `whsec_…` from step 5 below |
-| `RESEND_RECEIVING_URL` | *optional* — only if step 6 shows a different endpoint |
+- **Managed address** — Resend gives you `<alias>@<id>.resend.app`. **No DNS at
+  all.** Fastest way to pilot, and the right choice for the first camp.
+- **Your own domain** — add one **MX record on a subdomain**, e.g.
+  `inbound.campistry.com`. Nicer to read out to a camp, but it's a DNS change.
 
-`SUPABASE_URL` and `SUPABASE_SERVICE_ROLE_KEY` are injected automatically.
+**Write down the domain half of whatever address Resend gives you** — it goes
+into the app in step 6.
 
-### 4. Turn on inbound email in Resend
+### 4. Register the webhook (this is where the signing secret comes from)
 
-Resend Dashboard → **Inbound**. Two options:
+The webhook needs the function's URL, which only exists after step 2.
 
-- **Managed address** — `<alias>@<id>.resend.app`, needs **no DNS at all**.
-  Fastest way to pilot this.
-- **Your own domain** — add a single **MX record on the `inbound` subdomain**
-  (e.g. `inbound.campistry.com`). Nicer to hand to a camp.
-
-### 5. Register the webhook
-
-Resend Dashboard → **Webhooks** → add an endpoint:
+Resend Dashboard → **Webhooks** → **Add endpoint**:
 
 - URL: `https://<your-project>.supabase.co/functions/v1/deposit-inbox`
 - Event: **`email.received`**
-- Copy the signing secret (`whsec_…`) into `RESEND_WEBHOOK_SECRET` (step 3).
 
-### 6. ⚠️ Confirm the payload shape with one live delivery
+When you save it, Resend shows a **signing secret starting `whsec_`**. That is
+*not* your API key — it's a separate value, issued per webhook endpoint, and
+it's the only way the function can prove a delivery really came from Resend.
+Copy it now; some dashboards only show it once.
+
+### 5. Set the secrets
+
+Supabase Dashboard → **Edge Functions → Secrets**:
+
+| Secret | Value | Where it comes from |
+|---|---|---|
+| `RESEND_API_KEY` | your existing Resend key | already used by `send-invite-email` |
+| `RESEND_WEBHOOK_SECRET` | the `whsec_…` | step 4 above |
+| `RESEND_RECEIVING_URL` | *optional* | only if step 7 shows a different endpoint |
+
+`SUPABASE_URL` and `SUPABASE_SERVICE_ROLE_KEY` are injected automatically.
+
+> **The function refuses every request while `RESEND_WEBHOOK_SECRET` is unset.**
+> That's deliberate — an endpoint that creates money must never accept
+> unverifiable mail — but it does mean nothing will work until this is set, and
+> the logs will say `RESEND_WEBHOOK_SECRET is not set — refusing`.
+
+### 6. Point the app at the inbound domain
+
+Open `campistry_me.html` and set the constant near the top of the script block
+to the domain from step 3:
+
+```html
+<script>window.CAMPISTRY_INBOUND_DOMAIN = 'inbound.campistry.com';</script>
+```
+
+This is the domain half of every camp's deposit address, shown in Me → Billing →
+Bank Deposits → Deposit Settings. Get it wrong and you'll hand camps an address
+that silently receives nothing.
+
+### 7. ⚠️ Confirm the payload shape with one live delivery
 
 **Do this before letting any camp rely on it.** Resend's `email.received`
 payload carries **metadata only** — the body is fetched separately — and its
