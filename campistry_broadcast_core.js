@@ -165,6 +165,58 @@
         }
     }
 
+    /**
+     * Who actually receives a broadcast, per channel.
+     *
+     * Email and SMS used to reach ONLY parents without a Link account, and
+     * silently: a camp selected SMS, saw "sent", and believed every parent got
+     * a text, while Link adopters got an in-app notification they might not
+     * open for hours. For "pickup has moved" that is the failure that matters.
+     * Coverage is now computed up front and shown before sending.
+     *
+     * Counts PARENTS, not campers. A family with three children is one email
+     * and one text; counting campers overstates reach — and, for SMS, cost —
+     * by the sibling factor.
+     *
+     * @param targets  [{parentName, parentEmail, parentPhone, smsEmailConsent}]
+     * @param claimed  Set of lowercased parent emails with a claimed Link account
+     * @param opts     { skipAppUsers: boolean }
+     */
+    function computeReach(targets, claimed, opts) {
+        var skipApp = !!(opts && opts.skipAppUsers);
+        var has = function (e) {
+            if (!claimed) return false;
+            var k = String(e || '').toLowerCase();
+            return typeof claimed.has === 'function' ? claimed.has(k) : !!claimed[k];
+        };
+
+        var byParent = {};
+        (targets || []).forEach(function (t) {
+            if (!t) return;
+            // Fall back to the name only when there is no address to key on --
+            // two different parents with no email must not collapse into one.
+            var key = String(t.parentEmail || '').toLowerCase() || ('name:' + (t.parentName || ''));
+            if (!byParent[key]) byParent[key] = t;
+        });
+        var parents = Object.keys(byParent).map(function (k) { return byParent[k]; });
+
+        var adopters = parents.filter(function (t) { return has(t.parentEmail); });
+        var pool = skipApp ? parents.filter(function (t) { return !has(t.parentEmail); }) : parents;
+
+        var emailable = pool.filter(function (t) { return t.parentEmail && t.smsEmailConsent; });
+        var textable  = pool.filter(function (t) { return t.parentPhone && t.smsEmailConsent; });
+
+        return {
+            parents: parents.length,
+            app: adopters.length,
+            email: emailable.length,
+            sms: textable.length,
+            noEmail: pool.length - emailable.length,
+            noSms: pool.length - textable.length,
+            skippedApp: skipApp ? adopters.length : 0
+        };
+    }
+
     return {
         validateScheduleTime: validateScheduleTime,
         selectDue: selectDue,
@@ -172,6 +224,7 @@
         applyMergeTags: applyMergeTags,
         summarizeRecipients: summarizeRecipients,
         classifyEnrollmentStatus: classifyEnrollmentStatus,
-        matchesAudience: matchesAudience
+        matchesAudience: matchesAudience,
+        computeReach: computeReach
     };
 });

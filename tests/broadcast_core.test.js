@@ -160,3 +160,68 @@ describe('summarizeRecipients', () => {
         assert.equal(core.summarizeRecipients('bunk', [], 3), 'Selected bunks · 3 recipients');
     });
 });
+
+describe('computeReach', () => {
+    // Two parents; the Kleins have three children, the Weisses one. Shimon has
+    // a Link account, Rivka does not.
+    const targets = [
+        { camperName: 'Yossi Klein',  parentName: 'Shimon Klein', parentEmail: 'shimon@x.com', parentPhone: '8455550142', smsEmailConsent: true },
+        { camperName: 'Sara Klein',   parentName: 'Shimon Klein', parentEmail: 'shimon@x.com', parentPhone: '8455550142', smsEmailConsent: true },
+        { camperName: 'Dovid Klein',  parentName: 'Shimon Klein', parentEmail: 'shimon@x.com', parentPhone: '8455550142', smsEmailConsent: true },
+        { camperName: 'Miriam Weiss', parentName: 'Rivka Weiss',  parentEmail: 'rivka@x.com',  parentPhone: '8455559911', smsEmailConsent: true }
+    ];
+    const claimed = new Set(['shimon@x.com']);
+
+    it('counts parents, not campers', () => {
+        // Three Klein children are ONE email and ONE text. Counting campers
+        // would overstate reach — and SMS cost — by the sibling factor.
+        const r = core.computeReach(targets, claimed, {});
+        assert.equal(r.parents, 2);
+        assert.equal(r.email, 2);
+        assert.equal(r.sms, 2);
+    });
+
+    it('an explicitly chosen channel reaches Link users too', () => {
+        // The bug this replaced: SMS silently skipped every Link adopter, so
+        // "the bus is delayed" reached a fraction of the list.
+        const r = core.computeReach(targets, claimed, {});
+        assert.equal(r.sms, 2, 'the Link adopter must still be texted');
+        assert.equal(r.skippedApp, 0);
+    });
+
+    it('skipAppUsers restores the old dedupe behaviour, opt-in', () => {
+        const r = core.computeReach(targets, claimed, { skipAppUsers: true });
+        assert.equal(r.email, 1);
+        assert.equal(r.sms, 1);
+        assert.equal(r.skippedApp, 1);
+        assert.equal(r.app, 1);
+    });
+
+    it('reports the gap when contact details or consent are missing', () => {
+        const partial = [
+            { parentName: 'A', parentEmail: 'a@x.com', parentPhone: '8455550001', smsEmailConsent: true },
+            { parentName: 'B', parentEmail: 'b@x.com', parentPhone: '',           smsEmailConsent: true },
+            { parentName: 'C', parentEmail: 'c@x.com', parentPhone: '8455550003', smsEmailConsent: false }
+        ];
+        const r = core.computeReach(partial, new Set(), {});
+        assert.equal(r.parents, 3);
+        assert.equal(r.email, 2, 'C has no consent');
+        assert.equal(r.sms, 1, 'B has no mobile, C has no consent');
+        assert.equal(r.noSms, 2);
+    });
+
+    it('does not collapse distinct parents who share a missing email', () => {
+        // Keying purely on email would merge every address-less parent into one.
+        const noEmail = [
+            { parentName: 'Parent One', parentEmail: '', parentPhone: '8455550001', smsEmailConsent: true },
+            { parentName: 'Parent Two', parentEmail: '', parentPhone: '8455550002', smsEmailConsent: true }
+        ];
+        assert.equal(core.computeReach(noEmail, new Set(), {}).parents, 2);
+    });
+
+    it('survives empty input', () => {
+        const r = core.computeReach([], new Set(), {});
+        assert.equal(r.parents, 0);
+        assert.equal(r.sms, 0);
+    });
+});

@@ -158,6 +158,14 @@
         .channel-btns { display:flex; gap:6px; flex-wrap:wrap; }
         .channel-btn { display:inline-flex; align-items:center; gap:6px; padding:7px 13px; font-size:.78rem; font-weight:600; border:1.5px solid var(--slate-200); border-radius:var(--radius-sm); background:#fff; color:var(--slate-600); cursor:pointer; font-family:var(--font-body); transition:all .2s; }
         .channel-btn.selected { border-color:var(--link-color); background:var(--link-tint); color:var(--link-color); }
+        .reach-bar { margin:10px 0 0; padding:11px 13px; border:1px solid var(--border-light); border-radius:var(--radius-md); background:var(--slate-50); }
+        .reach-row { display:flex; align-items:center; gap:9px; font-size:.79rem; color:var(--slate-700); padding:3px 0; }
+        .reach-row .rch-ch { font-weight:700; min-width:62px; }
+        .reach-row .rch-n  { font-variant-numeric:tabular-nums; font-weight:600; }
+        .reach-row .rch-gap { color:var(--text-muted); font-size:.74rem; }
+        .reach-warn { color:#92400E; }
+        .reach-foot { margin-top:8px; padding-top:8px; border-top:1px solid var(--border-light); display:flex; align-items:flex-start; gap:7px; font-size:.75rem; color:var(--slate-600); }
+        .reach-foot input { margin-top:2px; flex-shrink:0; }
 
         /* Progress bar */
         .progress { width:100%; height:8px; background:var(--slate-100); border-radius:var(--radius-full); overflow:hidden; }
@@ -597,6 +605,13 @@
             <div id="cPreview" style="background:var(--slate-50);border:1px solid var(--border-light);border-radius:var(--radius-md);padding:11px 13px;font-size:.81rem;white-space:pre-wrap;color:var(--slate-700);max-height:120px;overflow-y:auto;"></div>
         </div>
 
+        <!-- Reach bar — who actually receives this, per channel, before you send.
+             Replaces a one-line grey caption that nobody read. Silent partial
+             delivery on "the bus is two hours late" is the failure that
+             matters, so coverage is stated up front rather than discovered
+             from the after-the-fact toast. -->
+        <div id="cReachBar" class="reach-bar" style="display:none;"></div>
+
         <!-- Bottom bar -->
         <div style="display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:8px;padding-top:10px;border-top:1px solid var(--border-light);">
             <div class="channel-btns" id="cChannelBtns">
@@ -612,7 +627,6 @@
                     <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="14" height="14"><path d="M22 16.92v3a2 2 0 0 1-2.18 2 19.79 19.79 0 0 1-8.63-3.07 19.5 19.5 0 0 1-6-6 19.79 19.79 0 0 1-3.07-8.67A2 2 0 0 1 4.11 2h3"/></svg>
                     SMS
                 </button>
-                <span style="font-size:.7rem;color:var(--text-muted);align-self:center;">Email/SMS reach only parents without a Link account (with consent on file) — everyone else sees it in-app.</span>
             </div>
             <div style="display:flex;gap:8px;flex-wrap:wrap;">
                 <button class="btn btn-secondary btn-sm" onclick="openComposePreview()" title="See exactly what lands in the inbox / app">
@@ -1836,6 +1850,81 @@ function _splitByAdoption(targets, claimed) {
     return { adopters: adopters, nonAdopters: nonAdopters };
 }
 
+// ─── REACH ───────────────────────────────────────────────────────────────────
+// Email and SMS used to reach ONLY parents without a Link account, silently.
+// A camp selected SMS, saw "sent", and believed every parent got a text — when
+// in fact the Link adopters got an in-app notification they might not open for
+// hours. For "pickup has moved" or "the bus is delayed" that is the failure
+// that matters, and it was invisible.
+//
+// Now an explicitly chosen channel means what it says: everyone in the audience
+// who has that contact method and consent. Skipping app users is still
+// available, because nobody wants a duplicate text about photos being up — but
+// it is an opt-in choice shown on screen, not a hidden rule.
+var compDedupeApp = false;
+
+function toggleCompDedupe(el) {
+    compDedupeApp = !!(el && el.checked);
+    _renderReachBar();
+}
+
+// Delegates to campistry_broadcast_core.js so the reach math has one
+// implementation with tests behind it, rather than a copy living in a script
+// tag. Falls back to counting raw targets only if the core failed to load, so
+// the composer still functions rather than throwing.
+function _computeReach(targets, claimed) {
+    var core = window.CampistryBroadcastCore;
+    if (core && core.computeReach) {
+        return core.computeReach(targets, claimed, { skipAppUsers: compDedupeApp });
+    }
+    var n = (targets || []).length;
+    return { parents: n, app: 0, email: n, sms: n, noEmail: 0, noSms: 0, skippedApp: 0 };
+}
+
+function _reachRow(label, n, total, gapText) {
+    var warn = (n < total) ? ' reach-warn' : '';
+    return '<div class="reach-row"><span class="rch-ch">' + label + '</span>' +
+           '<span class="rch-n' + warn + '">' + n + '</span>' +
+           '<span class="rch-gap">of ' + total + ' parent' + (total === 1 ? '' : 's') +
+           (gapText ? ' · ' + gapText : '') + '</span></div>';
+}
+
+async function _renderReachBar() {
+    var bar = document.getElementById('cReachBar');
+    if (!bar) return;
+    var targets = _getComposeTargets();
+    if (!targets.length) { bar.style.display = 'none'; return; }
+
+    var claimed = await _fetchLinkAdoption();
+    var r = _computeReach(targets, claimed);
+    var h = '';
+
+    if (compChannels.indexOf('app') >= 0) {
+        h += _reachRow('In-App', r.app, r.parents,
+                       r.app < r.parents ? (r.parents - r.app) + ' have no Link account yet' : '');
+    }
+    if (compChannels.indexOf('email') >= 0) {
+        h += _reachRow('Email', r.email, r.parents,
+                       r.noEmail ? r.noEmail + ' with no address or no consent' : '');
+    }
+    if (compChannels.indexOf('sms') >= 0) {
+        h += _reachRow('SMS', r.sms, r.parents,
+                       r.noSms ? r.noSms + ' with no mobile or no consent' : '');
+    }
+    if (r.skippedApp) {
+        h += '<div class="reach-row rch-gap">Skipping ' + r.skippedApp +
+             ' parent' + (r.skippedApp === 1 ? '' : 's') + ' who will see this in Link.</div>';
+    }
+
+    h += '<label class="reach-foot"><input type="checkbox" id="cDedupeApp"' +
+         (compDedupeApp ? ' checked' : '') + ' onchange="toggleCompDedupe(this)">' +
+         '<span>Skip parents who will see this in Link — avoids a duplicate email or text ' +
+         'for routine news. Leave off for anything urgent.</span></label>';
+
+    bar.innerHTML = h;
+    bar.style.display = '';
+}
+
 // Sends the Email/SMS fallback to the non-adopter subset via the hardened
 // send-broadcast edge function. Returns its result summary (or null on
 // failure) — never throws, a fallback failure shouldn't block the in-app
@@ -2463,6 +2552,7 @@ function _updateScopeCount() {
         el.textContent = targets.length + ' child' + (targets.length === 1 ? '' : 'ren') + ' included';
     }
     if (btn) btn.style.display = (targets.length > 1) ? '' : 'none';
+    _renderReachBar();
 }
 
 function updateComposePreview() {
@@ -2612,6 +2702,7 @@ function toggleCompCh(btn) {
     if (!compChannels.length) { btn.classList.add('selected'); compChannels = [btn.dataset.ch]; }
     // The preview mirrors the selected channel, so it has to follow this.
     updateComposePreview();
+    _renderReachBar();
 }
 
 function showComposePreviewAll() {
@@ -2682,21 +2773,35 @@ async function sendCompose() {
     });
     toast(targets.length + ' message' + (targets.length === 1 ? '' : 's') + ' sent!');
 
-    // Non-adopter SMS/email fallback — only when Email/SMS are among the
-    // selected channels, and only for parents who never claimed Link.
-    // Runs after the toast above so the in-app send always feels instant;
-    // this part can take a moment and shouldn't block the UI reset below.
+    // Email / SMS send. Choosing a channel means that channel reaches EVERYONE
+    // in the audience (consent permitting) — it is no longer silently limited
+    // to parents without a Link account. See the REACH section above for why:
+    // a camp that clicks SMS for "the bus is delayed" must not have it quietly
+    // delivered to a third of the list as an in-app notification.
+    //
+    // The old behaviour is still available, as the opt-in "skip parents who
+    // will see this in Link" checkbox, which is what compDedupeApp carries.
     if (compChannels.indexOf('email') >= 0 || compChannels.indexOf('sms') >= 0) {
         var claimed = await _fetchLinkAdoption();
         var split = _splitByAdoption(targets, claimed);
-        if (split.nonAdopters.length) {
+        var directTargets = compDedupeApp ? split.nonAdopters : targets;
+        if (directTargets.length) {
             var campName = cl.data.getCampName ? cl.data.getCampName() : '';
             var eventKey = 'compose:' + Date.now();
-            _sendNonAdopterFallback(split.nonAdopters, subj, body, compChannels, campName, eventKey, busMap).then(function(res) {
+            // send-broadcast dedupes on eventKey+address, so siblings sharing a
+            // parent email collapse to one message rather than one per child.
+            _sendNonAdopterFallback(directTargets, subj, body, compChannels, campName, eventKey, busMap).then(function(res) {
                 if (!res) return;
-                var noConsent = split.nonAdopters.filter(function(t) { return !t.smsEmailConsent; }).length;
-                toast(split.adopters.length + ' saw it in Link, ' + (res.smsSent || 0) + ' by SMS, ' + (res.emailSent || 0) + ' by email' + (noConsent ? ', ' + noConsent + ' skipped (no consent on file)' : ''));
+                var noConsent = directTargets.filter(function(t) { return !t.smsEmailConsent; }).length;
+                var parts = [];
+                if (res.smsSent)   parts.push(res.smsSent + ' by SMS');
+                if (res.emailSent) parts.push(res.emailSent + ' by email');
+                if (compDedupeApp && split.adopters.length) parts.push(split.adopters.length + ' saw it in Link instead');
+                if (noConsent) parts.push(noConsent + ' skipped (no consent on file)');
+                toast(parts.length ? parts.join(', ') : 'Nothing to send on those channels');
             });
+        } else {
+            toast('No one to email or text — every recipient was skipped');
         }
     }
 
@@ -2706,6 +2811,7 @@ async function sendCompose() {
     document.getElementById('cPreviewAll').style.display    = 'none';
     document.getElementById('cScopeCount').textContent      = '';
     document.getElementById('cPreviewAllBtn').style.display = 'none';
+    var _rb = document.getElementById('cReachBar'); if (_rb) _rb.style.display = 'none';
     document.getElementById('cIndivChips').innerHTML        = '';
     closeComposeDrawer();
     if (currentMsgTab === 'outbox') renderSentList();
