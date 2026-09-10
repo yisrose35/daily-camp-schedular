@@ -56,6 +56,13 @@ timezone). If you already ran 140 before 141 existed, just run 141 on top —
 both are `CREATE OR REPLACE` of the same function, safe to re-run even on a
 camp already taking live POS sales.
 
+Also run `migrations/143_canteen_auto_reload_frequency_cap.sql` (parent
+"up to N reloads every M days" cap) and `migrations/144_canteen_autoreload_state_atomic.sql`.
+144 is REQUIRED for Cardknox auto-reload to credit at all — without it, the
+edge function's own end-of-run blob write erased the balance credit it had
+just committed (the money left the card, the deposit never appeared in the
+camper's balance). Redeploy `canteen-auto-reload` (step 2) after running 144.
+
 ### 2. Create the two new Edge Functions
 
 If you already deployed `canteen-auto-reload` before (pre-135), just

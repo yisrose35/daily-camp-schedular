@@ -296,10 +296,24 @@ serve(async (req) => {
     return creds;
   }
 
+  // Persist ONE camper's autoReload bookkeeping (lastChargedDate/reloadHistory/
+  // consecutiveFailures/enabled) atomically, without touching balance or
+  // transactions. Must be used instead of re-upserting the whole campistrySnacks
+  // blob: on the Cardknox path credit_canteen_balance_from_processor has
+  // already committed the balance+deposit to this row, and a full-blob upsert
+  // of the pre-credit in-memory snapshot would erase it (confirmed live).
+  async function persistAr(campId: string, camperName: string, ar: Record<string, any>) {
+    const res = await supabase.rpc("update_canteen_autoreload_state", {
+      p_camp_id: campId, p_camper_name: camperName, p_autoreload: ar,
+    });
+    if (res.error || !res.data?.success) {
+      console.warn(`[canteen-auto-reload] autoReload-state write failed for ${campId}/${camperName}: ${res.error?.message || res.data?.error}`);
+    }
+  }
+
   for (const row of (rows || [])) {
     const snacks = (row.value && typeof row.value === "object") ? row.value as Record<string, any> : null;
     if (!snacks || !snacks.accounts) continue;
-    let dirty = false;
 
     for (const [camperName, acctRaw] of Object.entries(snacks.accounts)) {
       if (scopeCamperName && camperName !== scopeCamperName) continue;
@@ -335,7 +349,7 @@ serve(async (req) => {
           markFailure(ar, today, res.error || "Declined");
           failed++;
           details.push({ camp: row.camp_id, camper: camperName, amount: due.amount, kind: due.kind, result: "failed", reason: res.error || "Declined" });
-          dirty = true;
+          await persistAr(String(row.camp_id), camperName, ar);
           continue;
         }
         const creditRes = await supabase.rpc("credit_canteen_balance_from_processor", {
@@ -356,7 +370,9 @@ serve(async (req) => {
         markSuccess(ar, today, due.amount);
         charged++;
         details.push({ camp: row.camp_id, camper: camperName, amount: due.amount, kind: due.kind, result: "charged", processor: "cardknox" });
-        dirty = true;
+        // persist autoReload bookkeeping ONLY — the balance/deposit was
+        // already committed by credit_canteen_balance_from_processor above.
+        await persistAr(String(row.camp_id), camperName, ar);
         continue;
       }
 
@@ -377,6 +393,7 @@ serve(async (req) => {
         markFailure(ar, today, reason);
         failed++;
         details.push({ camp: row.camp_id, camper: camperName, amount: due.amount, kind: due.kind, result: "failed", reason });
+        await persistAr(String(row.camp_id), camperName, ar);
       } else if (pi.status === "succeeded" || pi.status === "processing") {
         // Balance crediting happens asynchronously via stripe-webhook's
         // handleCanteenDeposit once Stripe confirms payment_intent.succeeded
@@ -384,18 +401,10 @@ serve(async (req) => {
         markSuccess(ar, today, due.amount);
         charged++;
         details.push({ camp: row.camp_id, camper: camperName, amount: due.amount, kind: due.kind, result: "charged", stripeStatus: pi.status });
+        await persistAr(String(row.camp_id), camperName, ar);
       } else {
         details.push({ camp: row.camp_id, camper: camperName, amount: due.amount, kind: due.kind, result: pi.status });
       }
-      dirty = true;
-    }
-
-    if (dirty) {
-      const up = await supabase.from("camp_state_kv").upsert(
-        { camp_id: row.camp_id, key: "campistrySnacks", value: snacks, updated_at: new Date().toISOString() },
-        { onConflict: "camp_id,key" },
-      );
-      if (up.error) console.warn(`[canteen-auto-reload] write failed for camp ${row.camp_id}: ${up.error.message}`);
     }
   }
 
