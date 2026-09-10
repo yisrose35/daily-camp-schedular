@@ -165,3 +165,36 @@ test('every candidate carries the reason it was chosen', () => {
     assert.ok(r.candidates[0].reasons.some(x => /balance exactly/.test(x)));
     assert.strictEqual(r.candidates[0].familyName, 'Klein Family');
 });
+
+// ── the real family shape ────────────────────────────────────────────────────
+
+test('parents are read from households[].parents[], the shape Me actually stores', () => {
+    // Campistry keeps contacts nested under households; reading only a flat
+    // `parents` array would silently disable handle matching for every real
+    // family in the app.
+    const nested = {
+        fam_brand: {
+            name: 'Brand Family',
+            households: [{ label: 'Primary', parents: [
+                { name: 'Yossi Brand', email: 'yossi@brandco.com', phone: '845-555-7788' }
+            ], address: '' }]
+        }
+    };
+    assert.strictEqual(M.parentsOf(nested.fam_brand).length, 1);
+
+    const r = M.decide(
+        { amount: 900, payerName: 'BRAND CONSTRUCTION LLC', payerHandle: 'yossi@brandco.com', kind: 'zelle' },
+        { families: nested, ledgers: {}, aliases: [] }
+    );
+    assert.strictEqual(r.decision, 'auto');
+    assert.strictEqual(r.familyKey, 'fam_brand');
+});
+
+test('with no known balance the overpay guardrail simply does not fire', () => {
+    // The edge function has no way to run buildFamilyLedgers(), so it may pass
+    // no balance at all. That must not block auto-posting outright.
+    const fams = { fam_a: { name: 'Adler Family', households: [{ parents: [{ name: 'Leah Adler', email: 'leah@x.com' }] }] } };
+    const r = M.decide({ amount: 99999, payerName: 'X', payerHandle: 'leah@x.com' },
+                       { families: fams, ledgers: {}, aliases: [] });
+    assert.strictEqual(r.decision, 'auto');
+});

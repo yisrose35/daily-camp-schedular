@@ -145,6 +145,26 @@
             .map(function (t) { return NICKNAMES[t] || t; });
     };
 
+    /**
+     * Every parent on a family record, whatever shape it is stored in.
+     *
+     * Campistry keeps contacts at families[k].households[].parents[] -- the
+     * flat `parents` array only exists on synthesized/pending ledger families
+     * and in test fixtures. Reading just one of the two silently loses every
+     * real contact email and phone, which would disable the entire
+     * handle-matching tier (a parent's own Zelle email is one of the strongest
+     * signals available), so both are flattened here.
+     */
+    M.parentsOf = function (f) {
+        var fam = f || {};
+        var out = [];
+        (fam.households || []).forEach(function (hh) {
+            ((hh || {}).parents || []).forEach(function (p) { if (p) out.push(p); });
+        });
+        (fam.parents || fam.guardians || []).forEach(function (p) { if (p) out.push(p); });
+        return out;
+    };
+
     /** A phone/email handle reduced to a comparable key. */
     M.normalizeHandle = function (raw) {
         var s = String(raw || '').trim().toLowerCase();
@@ -302,7 +322,7 @@
         // 3 & 4. Contact handles and names already on the family record.
         Object.keys(families).forEach(function (fk) {
             var f = families[fk] || {};
-            var parents = f.parents || f.guardians || [];
+            var parents = M.parentsOf(f);
 
             for (var p = 0; p < parents.length; p++) {
                 var par = parents[p] || {};
@@ -448,6 +468,10 @@
         };
     };
 
+    // globalThis (not just window) so the exact same file runs unmodified in
+    // Deno inside the deposit-inbox edge function -- see
+    // tools/build_deposit_core.js, which bundles these two files verbatim.
+    if (typeof globalThis !== 'undefined') globalThis.CampistryDepositMatch = M;
     if (typeof window !== 'undefined') window.CampistryDepositMatch = M;
     if (typeof module !== 'undefined' && module.exports) module.exports = M;
 })();
