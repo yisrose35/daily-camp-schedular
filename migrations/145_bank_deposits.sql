@@ -740,7 +740,7 @@ END;
 $$;
 
 
--- ─── 12. grants ──────────────────────────────────────────────────────────────
+-- ─── 13. grants ──────────────────────────────────────────────────────────────
 -- Every one of these re-checks _deposit_can_admin internally; the grant only
 -- lets a signed-in user attempt the call.
 GRANT EXECUTE ON FUNCTION public.get_camp_deposit_settings(uuid) TO authenticated;
