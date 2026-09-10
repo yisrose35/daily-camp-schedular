@@ -281,6 +281,12 @@ serve(async (req) => {
           fam.byopCustomerRef = vaulted;
           fam.cardOnFile = true;
           fam.cardSavedDate = new Date().toISOString();
+          // Legacy single-slot fields get_my_balance reads for the autopay
+          // card display (v_fam->>'paymentMethodLabel'). Without this the
+          // parent portal only ever shows a generic "a card" instead of the
+          // last four — the actual number the office/parent expects to see.
+          fam.paymentMethodType = "card";
+          fam.paymentMethodLabel = last4 ? `Card ···· ${last4}` : "Card on file";
         }
         const up = await service.from("camp_state_kv").upsert(
           { camp_id: campId, key: "campistryMe", value: me, updated_at: new Date().toISOString() },
@@ -411,6 +417,19 @@ serve(async (req) => {
         if (xToken && !f.byopCustomerRef) {
           const vaulted = await vaultCardknoxToken(service, campId, xToken);
           if (vaulted) f.byopCustomerRef = vaulted;
+        }
+        // Record the card's last four so the parent-portal autopay display
+        // (get_my_balance's paymentMethodLabel) shows the real number instead
+        // of a generic "a card". A hosted-checkout capture carries
+        // xMaskedCardNumber; backfill only when we don't already have a label,
+        // so a deliberately-saved card's label is never clobbered by a later
+        // one-off payment on a different card.
+        {
+          const last4 = (xMaskedCardNumber || "").replace(/[^0-9]/g, "").slice(-4);
+          if (last4 && !f.paymentMethodLabel) {
+            f.paymentMethodType = f.paymentMethodType || "card";
+            f.paymentMethodLabel = `Card ···· ${last4}`;
+          }
         }
 
         if (!me.finance) me.finance = {};
