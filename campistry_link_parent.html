@@ -376,10 +376,7 @@
             <span style="font-size:.82rem;font-weight:600;opacity:.85;">$</span>
             <input type="number" id="canteenCustomAmt" min="1" max="500" step="1" placeholder="Custom amount" oninput="selCustomAmt(this)" style="width:130px;padding:8px 10px;border-radius:8px;border:1px solid rgba(255,255,255,.4);background:rgba(255,255,255,.15);color:inherit;font-size:.85rem;text-align:center;">
         </div>
-        <div style="display:flex;gap:8px;justify-content:center;"><button class="btn btn-primary" id="canteenAddBtn" onclick="addFunds()">Add Funds</button><button class="btn btn-secondary" onclick="document.getElementById('autoReloadCard').scrollIntoView({behavior:'smooth',block:'start'})">Auto-Reload</button></div>
-        <div id="canteenChargeSavedRow" style="display:none;margin-top:10px;">
-            <button class="btn btn-secondary" type="button" style="width:100%;" onclick="_lkCanteenChargeSaved()">Charge <span id="canteenChargeSavedLabel"></span> instead</button>
-        </div>
+        <div style="display:flex;gap:8px;justify-content:center;flex-wrap:wrap;"><button class="btn btn-primary" id="canteenAddBtn" onclick="addFunds()">Add Funds</button><button class="btn btn-secondary" onclick="document.getElementById('autoReloadCard').scrollIntoView({behavior:'smooth',block:'start'})">Auto-Reload</button><button class="btn" id="canteenChargeSavedRow" type="button" style="display:none;background:#fff;color:var(--link-color);font-weight:700;" onclick="_lkCanteenChargeSaved()">Charge <span id="canteenChargeSavedLabel"></span></button></div>
     </div>
     <div class="lk-card"><div class="lk-card-head"><h2>Spending Controls</h2></div>
         <div class="lk-field"><label>Daily Spending Limit</label>
