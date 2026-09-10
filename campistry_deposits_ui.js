@@ -496,7 +496,7 @@
         }
         state.settings = res.data;
         var s = res.data;
-        var domain = (W.CAMPISTRY_INBOUND_DOMAIN || 'inbound.campistry.com');
+        var domain = (W.CAMPISTRY_INBOUND_DOMAIN || 'inbound.campistry.org');
         // On a Resend MANAGED address (<anything>@<id>.resend.app) the safe form
         // is the bare token as the local part: plus-addressing is accepted by
         // most providers but not guaranteed, and a silently-dropped '+' means a
