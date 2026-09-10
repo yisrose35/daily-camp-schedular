@@ -213,6 +213,58 @@ import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
     // ── payer name ───────────────────────────────────────────────────────────
 
     // Trailing noise banks append after the name.
+    // ── forwarded-mail headers ───────────────────────────────────────────────
+    //
+    // Forwarding is a first-class setup path: a camp that already gets alerts
+    // in an existing mailbox is told to forward them here rather than re-do
+    // their bank alert settings. Every mail client wraps the original in a
+    // header block when it does that:
+    //
+    //     ---------- Forwarded message ---------
+    //     From: Chase <no.reply.alerts@chase.com>
+    //     Date: Tue, Jul 8, 2026
+    //     To: office@camp.org
+    //
+    // The generic `from:` payer rule reads that `From:` line and books the
+    // BANK as the payer on every forwarded alert -- worse than no name, since
+    // a wrong name is what the matcher then scores against. So the envelope
+    // headers are removed before any payer rule runs.
+    //
+    // Subject: is deliberately kept (as a bare line): banks put the amount and
+    // often the payer in it, and it is the original subject, not the "Fwd:"
+    // one. Only the addressing headers go.
+    var FWD_MARKER_RE = /^\s*(?:-{2,}\s*forwarded message\s*-{2,}|begin forwarded message:|-{2,}\s*original message\s*-{2,}|_{5,})\s*$/i;
+    var FWD_HEADER_RE = /^\s*(?:from|to|cc|bcc|sent|date|reply-to|return-path|envelope-to)\s*:/i;
+
+    P.stripForwardHeaders = function (text) {
+        var lines = String(text || '').split('\n');
+        var out = [];
+        var inBlock = false;
+        for (var i = 0; i < lines.length; i++) {
+            var ln = lines[i];
+            if (FWD_MARKER_RE.test(ln)) { inBlock = true; continue; }
+            if (inBlock) {
+                if (FWD_HEADER_RE.test(ln)) continue;
+                // Keep the original subject's text, minus the label.
+                if (/^\s*subject\s*:/i.test(ln)) {
+                    out.push(ln.replace(/^\s*subject\s*:\s*/i, ''));
+                    continue;
+                }
+                // A blank line ends the header block; anything else means the
+                // block was shorter than expected and the body has started.
+                if (!ln.trim()) { inBlock = false; continue; }
+                inBlock = false;
+            }
+            // Outside a marked block, a From:/To: line carrying an actual
+            // address is still a header, not bank copy -- some clients forward
+            // without a marker at all. A bank body line like "From: JOHN SMITH"
+            // has no address in it and is kept.
+            if (FWD_HEADER_RE.test(ln) && /\S+@\S+/.test(ln)) continue;
+            out.push(ln);
+        }
+        return out.join('\n').trim();
+    };
+
     var NAME_TAIL_RE = /\s+(?:sent|has\s+sent|paid|via|with|using|on|to|for|through|and)\b[\s\S]*$/i;
 
     P.cleanName = function (raw) {
@@ -224,11 +276,31 @@ import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
             .replace(NAME_TAIL_RE, '')
             .replace(/[.,;:]+$/, '')
             .trim();
+        // An email address is never a payer name. It reaches here from a mail
+        // header a forwarding rule dragged in -- `Chase <no.reply@chase.com>`
+        // -- so keep the display name and drop the address. A bare address
+        // with no display name leaves nothing, which is the right answer:
+        // better an unnamed deposit a human names than the bank booked as the
+        // payer.
+        if (s.indexOf('@') >= 0) {
+            s = s.replace(/<[^>]*@[^>]*>?/g, ' ')
+                 .replace(/\S+@\S+/g, ' ')
+                 .replace(/\s+/g, ' ')
+                 .replace(/^["'<(\[]+|["'>)\]]+$/g, '')
+                 .trim();
+        }
         // A bank that hides the name gives us asterisks -- that is not a name.
         if (!s || /^\*+$/.test(s)) return '';
         if (s.length > 80) s = s.slice(0, 80).trim();
         return s;
     };
+
+    // The payer capture is `(?:[^\n.]|\.(?=\S)){2,80}` throughout: any character
+    // except a newline, plus a period ONLY when the next character is not a
+    // space. That keeps a period that lives inside a token ("ABC CO.LTD") while
+    // still stopping dead at a sentence end -- "from JOHN SMITH. View your
+    // account online" must yield "JOHN SMITH", never the sentence after it,
+    // because a wrong name is what the matcher scores against.
 
     // ── per-bank email rules ─────────────────────────────────────────────────
     //
@@ -242,7 +314,7 @@ import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
             test: /chase/i,
             // "JOHN SMITH sent you $50.00" / "You received $50.00 from JOHN SMITH"
             payer: [
-                /you\s+received\s+\$?[0-9,.]*\s*from\s+([^\n.]{2,80})/i,
+                /you\s+received\s+\$?[0-9,.]*\s*from\s+((?:[^\n.]|\.(?=\S)){2,80})/i,
                 /^\s*([^\n]{2,80}?)\s+sent\s+you\s+\$/im
             ]
         },
@@ -250,7 +322,7 @@ import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
             bank: 'bofa',
             test: /bank\s*of\s*america|bofa/i,
             payer: [
-                /(?:received\s+(?:money|a\s+payment|\$[0-9,.]+)\s+from|from)\s*[:\-]?\s*([^\n.]{2,80})/i,
+                /(?:received\s+(?:money|a\s+payment|\$[0-9,.]+)\s+from|from)\s*[:\-]?\s*((?:[^\n.]|\.(?=\S)){2,80})/i,
                 /^\s*([^\n]{2,80}?)\s+sent\s+you\s+\$/im
             ]
         },
@@ -258,28 +330,28 @@ import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
             bank: 'wellsfargo',
             test: /wells\s*fargo/i,
             payer: [
-                /you\s+received\s+\$?[0-9,.]*\s*from\s+([^\n.]{2,80})/i,
-                /money\s+from\s+([^\n.]{2,80})/i
+                /you\s+received\s+\$?[0-9,.]*\s*from\s+((?:[^\n.]|\.(?=\S)){2,80})/i,
+                /money\s+from\s+((?:[^\n.]|\.(?=\S)){2,80})/i
             ]
         },
         {
             bank: 'citi',
             test: /\bciti(?:bank)?\b/i,
-            payer: [/you\s+received\s+\$?[0-9,.]*\s*from\s+([^\n.]{2,80})/i]
+            payer: [/you\s+received\s+\$?[0-9,.]*\s*from\s+((?:[^\n.]|\.(?=\S)){2,80})/i]
         },
         {
             bank: 'capitalone',
             test: /capital\s*one/i,
             payer: [
                 /^\s*([^\n]{2,80}?)\s+sent\s+you\s+\$/im,
-                /you\s+received\s+\$?[0-9,.]*\s*from\s+([^\n.]{2,80})/i
+                /you\s+received\s+\$?[0-9,.]*\s*from\s+((?:[^\n.]|\.(?=\S)){2,80})/i
             ]
         },
         {
             bank: 'zelle',
             test: /zelle/i,
             payer: [
-                /you\s+received\s+\$?[0-9,.]*\s*from\s+([^\n.]{2,80})/i,
+                /you\s+received\s+\$?[0-9,.]*\s*from\s+((?:[^\n.]|\.(?=\S)){2,80})/i,
                 /^\s*([^\n]{2,80}?)\s+sent\s+you\s+\$/im
             ]
         },
@@ -287,10 +359,10 @@ import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
             bank: 'generic',
             test: /./,
             payer: [
-                /(?:received|deposit(?:ed)?)\s+(?:of\s+)?\$?[0-9,.]*\s*from\s+([^\n.]{2,80})/i,
+                /(?:received|deposit(?:ed)?)\s+(?:of\s+)?\$?[0-9,.]*\s*from\s+((?:[^\n.]|\.(?=\S)){2,80})/i,
                 /^\s*([^\n]{2,80}?)\s+sent\s+you\s+\$/im,
-                /from\s*[:\-]\s*([^\n.]{2,80})/i,
-                /(?:sender|payer|originator)\s*[:\-]\s*([^\n.]{2,80})/i
+                /from\s*[:\-]\s*((?:[^\n.]|\.(?=\S)){2,80})/i,
+                /(?:sender|payer|originator)\s*[:\-]\s*((?:[^\n.]|\.(?=\S)){2,80})/i
             ]
         }
     ];
@@ -431,7 +503,7 @@ import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
         var m = msg || {};
         var subject = String(m.subject || '');
         var body = m.text ? String(m.text) : P.htmlToText(m.html || '');
-        var full = (subject + '\n' + body).trim();
+        var full = P.stripForwardHeaders((subject + '\n' + body).trim());
 
         if (!full) return { ok: false, reason: 'empty_message' };
 

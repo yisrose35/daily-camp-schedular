@@ -180,3 +180,59 @@ test('ORIG ID is never mistaken for the trace number', () => {
         P.fingerprint({ date: '2026-07-08', amount: 500, payerName: b.payerName, traceId: b.traceId })
     );
 });
+
+test('a forwarded alert names the payer, not the bank in the From: header', () => {
+    // Forwarding is a first-class setup path -- a camp already receiving alerts
+    // in another mailbox is told to forward them here. Every client wraps the
+    // original in a header block, and the generic `from:` payer rule reads that
+    // header: before this was fixed, a forwarded Chase alert booked
+    // "Chase <no.reply.alerts@chase.com>" as the payer of every deposit. A
+    // wrong name is worse than none, because the matcher scores against it.
+    const r = P.parseEmail({
+        subject: 'Fwd: Chase Alert',
+        text: '---------- Forwarded message ---------\n' +
+              'From: Chase <no.reply.alerts@chase.com>\n' +
+              'Date: Tue, Jul 8, 2026\n' +
+              'To: office@camp.org\n\n' +
+              "You received $850.00 from SHIMON'S HARDWARE LLC"
+    });
+    assert.ok(r.ok, r.reason);
+    assert.strictEqual(r.deposit.amount, 850);
+    assert.strictEqual(r.deposit.payerName, "SHIMON'S HARDWARE LLC");
+});
+
+test('the Outlook forward shape is handled too, and keeps the original subject', () => {
+    const r = P.parseEmail({
+        subject: 'FW: Deposit',
+        text: '________________________________\n' +
+              'From: Wells Fargo <alerts@wellsfargo.com>\n' +
+              'Sent: Monday, July 8, 2026\n' +
+              'To: Office\n' +
+              'Subject: You received money\n\n' +
+              'You received $425.00 from GOLDSTEIN DENTAL PC'
+    });
+    assert.ok(r.ok, r.reason);
+    assert.strictEqual(r.deposit.payerName, 'GOLDSTEIN DENTAL PC');
+});
+
+test('an email address is never accepted as a payer name', () => {
+    // The last line of defence, for a client that forwards with no marker at
+    // all. A bare address leaves nothing, which is the right answer: an unnamed
+    // deposit waits for a human, a misnamed one gets matched to a stranger.
+    assert.strictEqual(P.cleanName('yisrael rosenfeld <yisrose35@gmail.com>'), 'yisrael rosenfeld');
+    assert.strictEqual(P.cleanName('no.reply.alerts@chase.com'), '');
+});
+
+test('a payer name keeps an intra-token period but stops at a sentence end', () => {
+    // The capture used to exclude every '.', which truncated "gmail.com" mid
+    // address -- the symptom that exposed the header bug. It must still stop
+    // dead at a sentence boundary, or the name runs into the marketing copy.
+    const bleed = P.parseEmail({
+        subject: 'Chase alert',
+        text: 'You received $50.00 from JOHN SMITH. View your account online at chase.com'
+    });
+    assert.strictEqual(bleed.deposit.payerName, 'JOHN SMITH');
+
+    const inner = P.parseEmail({ subject: 'Chase Alert', text: 'You received $300.00 from ABC CO.LTD' });
+    assert.strictEqual(inner.deposit.payerName, 'ABC CO.LTD');
+});
