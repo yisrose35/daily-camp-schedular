@@ -207,6 +207,13 @@
      different matching rules than Billing previews. The UI module must load
      after both. All three fail soft: if the migration isn't applied, Billing
      renders exactly as it did before. -->
+<!-- ⚠️ SET THIS to the domain Resend Inbound is actually receiving on before
+     onboarding any camp. It's the domain half of every camp's deposit address
+     (deposits+<token>@<this>), shown in Me → Billing → Bank Deposits →
+     Deposit Settings and read out to camps during setup. A wrong value here
+     hands camps an address that silently receives nothing. If you're piloting
+     on a Resend managed address, use its <id>.resend.app host. -->
+<script>window.CAMPISTRY_INBOUND_DOMAIN = 'inbound.campistry.com';</script>
 <script src="campistry_deposit_parser.js?v=20260910-01"></script>
 <script src="campistry_deposit_match.js?v=20260910-01"></script>
 <script src="campistry_deposits_ui.js?v=20260910-01"></script>

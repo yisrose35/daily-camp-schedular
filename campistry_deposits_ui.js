@@ -320,6 +320,7 @@
         h += '<div style="display:flex;gap:8px;margin-bottom:14px;flex-wrap:wrap">' +
              '<button class="me-btn me-btn--sec me-btn--sm" onclick="CampistryDeposits.openSettings()">Deposit Settings</button>' +
              '<button class="me-btn me-btn--sec me-btn--sm" onclick="CampistryDeposits.openAliases()">Known Payers (' + state.aliases.length + ')</button>' +
+             '<button class="me-btn me-btn--sec me-btn--sm" onclick="CampistryDeposits.openAddAlias()">+ Add a payer</button>' +
              '</div>';
 
         h += '<h4 style="margin:0 0 8px;font-size:.9rem">Needs you (' + pending.length + ')</h4>';
@@ -389,6 +390,72 @@
 
     // ── aliases ──────────────────────────────────────────────────────────────
 
+    /**
+     * Teach a payer BEFORE any money arrives.
+     *
+     * The learned-alias loop only fires once a deposit has already landed and
+     * been resolved, which means a camp's first week is spent resolving payers
+     * they could have told us about on day one. Onboarding asks the camp
+     * "which families pay from a business account, or under a different name?"
+     * -- this is where those answers go, so those deposits match on arrival
+     * instead of sitting in the inbox.
+     */
+    D.openAddAlias = function (prefillName) {
+        if (!host.showModal) return;
+        var fams = host.families() || {};
+        var opts = ['<option value="">— pick a family —</option>'].concat(
+            Object.keys(fams)
+                .sort(function (a, b) { return (fams[a].name || '').localeCompare(fams[b].name || ''); })
+                .map(function (k) {
+                    return '<option value="' + host.esc(k) + '">' + host.esc(fams[k].name || k) + '</option>';
+                })
+        ).join('');
+
+        var h = '<div class="me-modal-form">';
+        h += '<p style="margin:0 0 16px;color:var(--s500);font-size:.85rem">' +
+             'Tell Campistry that a payer belongs to a family before they ever pay. ' +
+             'Payments from this name or handle are then credited to that family automatically.</p>';
+        h += '<div class="me-field"><label>Family</label>' +
+             '<select id="alFam" class="me-input">' + opts + '</select></div>';
+        h += '<div class="me-field"><label>Name the money arrives under</label>' +
+             '<input type="text" id="alName" class="me-input" placeholder="e.g. SHIMON\'S HARDWARE LLC" value="' +
+             host.esc(prefillName || '') + '"></div>';
+        h += '<div class="me-field"><label>Zelle email or phone (optional)</label>' +
+             '<input type="text" id="alHandle" class="me-input" placeholder="office@example.com or 845-555-0142"></div>';
+        h += '<div class="me-field"><label>Note (optional)</label>' +
+             '<input type="text" id="alNote" class="me-input" placeholder="e.g. Father\'s business"></div>';
+        h += '</div>';
+
+        host.showModal('Add a Known Payer', h, function () {
+            var client = db(), cid = campId();
+            var fk = (document.getElementById('alFam') || {}).value;
+            var name = ((document.getElementById('alName') || {}).value || '').trim();
+            var handle = ((document.getElementById('alHandle') || {}).value || '').trim();
+            if (!fk) { if (host.toast) host.toast('Pick a family', 'error'); return; }
+            if (!name && !handle) { if (host.toast) host.toast('Enter a name or a handle', 'error'); return; }
+
+            var M = Match();
+            client.rpc('add_payer_alias', {
+                p_camp_id: cid,
+                p_family_key: fk,
+                p_display_name: name,
+                // Normalized here, by the same function the matcher uses, so a
+                // hand-typed payer compares identically to a learned one.
+                p_normalized: (name && M) ? M.normalize(name) : '',
+                p_handle: (handle && M) ? M.normalizeHandle(handle) : handle,
+                p_kind: 'zelle',
+                p_source: 'confirmed',
+                p_note: ((document.getElementById('alNote') || {}).value || '').trim()
+            }).then(function (r) {
+                if (r.error) { if (host.toast) host.toast('Failed: ' + r.error.message, 'error'); return; }
+                if (r.data && r.data.duplicate) { if (host.toast) host.toast('Already known — nothing to add'); }
+                else if (host.toast) host.toast('Payer added');
+                if (host.closeModal) host.closeModal('dynModal');
+                D.refresh().then(function () { host.onChange(); });
+            });
+        });
+    };
+
     D.openAliases = function () {
         var rows = state.aliases.map(function (a) {
             return '<tr>' +
@@ -411,7 +478,8 @@
                   '<th style="padding:6px 8px 6px 0">Pays as</th><th style="padding:6px 8px">Family</th>' +
                   '<th style="padding:6px 8px">Handle</th><th style="padding:6px 8px">Learned</th><th></th>' +
                   '</tr></thead><tbody>' + rows + '</tbody></table>'
-                : '<p style="color:var(--s400)">Nothing learned yet. Resolve a deposit in the inbox and the payer is remembered from then on.</p>');
+                : '<p style="color:var(--s400)">Nothing known yet. Add the payers the camp already knows about, or resolve a deposit in the inbox and it is remembered from then on.</p>') +
+            '<div style="margin-top:18px"><button class="me-btn me-btn--pri me-btn--sm" onclick="CampistryDeposits.openAddAlias()">+ Add a payer</button></div>';
 
         host.showModal('Known Payers', body, null, { maxWidth: 760 });
     };

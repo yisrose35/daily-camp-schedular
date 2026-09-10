@@ -450,12 +450,23 @@ BEGIN
                jsonb_agg(jsonb_build_object(
                    'id', 'dep_' || id::text,
                    'depositId', id,
-                   'amount', round(amount_cents::numeric / 100, 2),
+                   -- A return/NSF is money moving OUT of the ledger. amount_cents
+                   -- is stored positive (the table CHECKs it), so the sign has to
+                   -- be applied here -- without this a bounced ACH would CREDIT
+                   -- the family for the payment that just failed, and the account
+                   -- would read as paid.
+                   'amount', CASE WHEN is_reversal THEN -1 ELSE 1 END
+                             * round(amount_cents::numeric / 100, 2),
+                   'isReversal', is_reversal,
                    'date', deposit_date,
                    'method', kind,
                    'reference', COALESCE(NULLIF(trace_id, ''), memo_code),
                    'payerName', payer_name,
-                   'notes', CASE WHEN payer_name <> '' AND memo_code <> ''
+                   'notes', CASE WHEN is_reversal AND payer_name <> ''
+                                 THEN 'Returned / NSF — ' || payer_name
+                                 WHEN is_reversal
+                                 THEN 'Returned / NSF'
+                                 WHEN payer_name <> '' AND memo_code <> ''
                                  THEN 'Received from ' || payer_name || ' (memo ' || memo_code || ')'
                                  WHEN payer_name <> ''
                                  THEN 'Received from ' || payer_name

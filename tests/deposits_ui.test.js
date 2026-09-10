@@ -78,3 +78,27 @@ test('pending counts drive the Billing banner and exclude posted deposits', () =
     assert.strictEqual(D.totalPending(), 2);
     assert.strictEqual(D.pendingAmount(), 750);
 });
+
+test('a return/NSF stays negative so the ledger can debit it', () => {
+    // bank_deposits stores amount_cents positive and flags is_reversal; the
+    // sign is applied by get_camp_deposit_credits. If a reversal ever arrives
+    // here positive, a family whose ACH bounced reads as paid.
+    D.state().credits = {
+        fam_klein: [
+            { id: 'dep_1', amount: 850, date: '2026-07-08', method: 'ach' },
+            { id: 'dep_2', amount: -850, date: '2026-07-11', method: 'ach', isReversal: true }
+        ]
+    };
+    const rows = D.creditsFor('fam_klein');
+    assert.strictEqual(rows.reduce((s, d) => s + d.amount, 0), 0);
+    assert.ok(rows.some(d => d.amount < 0), 'the reversal must carry a negative amount');
+});
+
+test('deposit kinds all resolve to a real payment label', () => {
+    // The family ledger labels a deposit with the shared payment catalogue.
+    // A kind missing from it renders the raw id ("wire") as the category.
+    const P = require('../campistry_payments.js');
+    ['zelle', 'ach', 'wire', 'other'].forEach(k => {
+        assert.notStrictEqual(P.label(k), k, k + ' has no catalogue label');
+    });
+});

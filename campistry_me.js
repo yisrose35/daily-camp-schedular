@@ -10977,14 +10977,20 @@ function buildFamilyLedgers(){
             (window.CampistryDeposits.creditsFor(fk)||[]).forEach(function(dep){
                 var amt=Number(dep.amount)||0;
                 if(!amt) return;
+                // A return/NSF arrives as a NEGATIVE amount and has to be
+                // bookkept exactly like a refund — netted out of collected and
+                // tracked in totalRefunds — not added to gross payments. Getting
+                // this wrong makes a family whose ACH bounced read as paid.
+                var isReturn=amt<0;
                 ledgers[fk].entries.push({
                     type:'payment',
-                    category:_payLabel(dep.method)||'Payment',
+                    category:isReturn?'Returned':(_payLabel(dep.method)||'Payment'),
                     desc:dep.notes||'Bank deposit',
                     amount:amt,date:dep.date||'',ref:dep.id||'',status:''
                 });
                 ledgers[fk].totalPayments+=amt;
-                ledgers[fk].totalGrossPayments+=amt;
+                if(isReturn) ledgers[fk].totalRefunds+=Math.abs(amt);
+                else ledgers[fk].totalGrossPayments+=amt;
             });
         });
     }
