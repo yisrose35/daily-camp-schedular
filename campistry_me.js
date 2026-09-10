@@ -12404,62 +12404,71 @@ function _famRefundablePayments(f){
         return Math.round((p.amount-priorRefunded)*100)/100>0;
     });
 }
-function _crPaymentOptionsHtml(famKey){
-    var f=families[famKey];
-    if(!f) return '<option value="">— Select a family first —</option>';
-    var pays=_famRefundablePayments(f);
-    if(!pays.length) return '<option value="">No refundable payments for this family</option>';
-    return pays.map(function(p){
-        return '<option value="'+esc(String(p.id))+'">'+fm(p.amount)+' · '+esc(_payLabel(p.method)||p.method||'')+(p.date?' · '+esc(p.date):'')+'</option>';
-    }).join('');
+// The family's refundable ONLINE charges (Stripe or BYOP), each with the
+// dollar amount still unrefunded on it, oldest-first — the pool an
+// amount-only gateway refund draws from. The office no longer picks a
+// specific charge (mirrors payments-canteen-refund's oldest-first draw for
+// canteen): they enter one amount and this apportions it across charges.
+function _famRefundableOnline(f){
+    return _famRefundablePayments(f)
+        .filter(function(p){return !!p.stripePaymentIntentId || !!p.byopTransactionId})
+        .map(function(p){
+            var priorRefunded=finPayments.filter(function(x){return x.refundOf!=null&&String(x.refundOf)===String(p.id)}).reduce(function(s,x){return s+Math.abs(x.amount||0)},0);
+            return {p:p,remaining:Math.round((p.amount-priorRefunded)*100)/100};
+        })
+        .filter(function(d){return d.remaining>0})
+        .sort(function(a,b){
+            var ta=a.p.timestamp||Date.parse(a.p.date||'')||0, tb=b.p.timestamp||Date.parse(b.p.date||'')||0;
+            return ta-tb;
+        });
 }
-function _crFamChanged(){
-    var sel=document.getElementById('crPaymentId');
-    if(sel) sel.innerHTML=_crPaymentOptionsHtml(document.getElementById('crFamKey').value);
-    _crPaymentChanged();
-}
+function _crFamChanged(){ _crUpdateRefundSummary(); }
 // Three named refund/credit types (mirrors the standard camp-billing
 // vocabulary: gateway refund / ledger credit / offline refund). "Partial or
-// fee-adjusted" isn't a fourth type of its own — it's just entering an
-// amount less than the original on either refund type, which both already
-// support; the live "new balance" preview below is what makes that visible
-// instead of implicit.
+// fee-adjusted" isn't a fourth type of its own — it's just entering a smaller
+// amount; the live "new balance" preview below is what makes that visible.
 function _crToggleType(){
     var type=document.getElementById('crType').value;
     document.getElementById('crCreditFields').style.display=type==='credit'?'':'none';
     document.getElementById('crRefundFields').style.display=type!=='credit'?'':'none';
-    if(type!=='credit') _crPaymentChanged();
+    if(type!=='credit') _crUpdateRefundSummary();
 }
-function _crPaymentChanged(){
-    var sel=document.getElementById('crPaymentId');
-    var p=sel?finPayments.find(function(x){return String(x.id)===String(sel.value)}):null;
-    var type=document.getElementById('crType').value;
-    var infoEl=document.getElementById('crPaymentInfo');
+// Amount-only refund: no charge picker. Shows how much of THIS family is
+// refundable to card/bank (gateway) and pre-fills that amount; for an offline
+// refund any amount is allowed since it's just a ledger entry.
+function _crUpdateRefundSummary(){
+    var fk=(document.getElementById('crFamKey')||{}).value;
+    var f=families[fk];
+    var type=(document.getElementById('crType')||{}).value;
+    var sumEl=document.getElementById('crRefundSummary');
     var amtEl=document.getElementById('crRefundAmount');
     var noteEl=document.getElementById('crStripeOptWrap');
-    var fk=document.getElementById('crFamKey').value;
-    var f=families[fk];
-    if(!p){
-        if(infoEl) infoEl.textContent='';
+    if(!f){
+        if(sumEl) sumEl.textContent='Select a family to refund.';
         if(amtEl){amtEl.value='';amtEl.removeAttribute('max')}
         if(noteEl) noteEl.innerHTML='';
         _crUpdateBalancePreview();
         return;
     }
-    var priorRefunded=finPayments.filter(function(x){return x.refundOf!=null&&String(x.refundOf)===String(p.id)}).reduce(function(s,x){return s+Math.abs(x.amount||0)},0);
-    var maxRefund=Math.round((p.amount-priorRefunded)*100)/100;
-    if(infoEl) infoEl.innerHTML='Original: <strong>'+fm(p.amount)+'</strong> · '+esc(p.method||'')+(p.date?' · '+esc(p.date):'')+(priorRefunded>0?' · Already refunded: <strong>'+fm(priorRefunded)+'</strong>':'');
-    if(amtEl){amtEl.value=maxRefund.toFixed(2);amtEl.setAttribute('max',maxRefund)}
-    if(noteEl){
-        if(type==='refund_gateway'){
-            noteEl.innerHTML=p.stripePaymentIntentId
-                ?'<div style="font-size:.72rem;color:var(--s400);margin-top:4px">Sends the money back to the original card/bank through Stripe. Enter less than the full amount to keep a deposit or cover a processing fee — the family\'s balance updates automatically either way.</div>'
-                :p.byopTransactionId
-                ?'<div style="font-size:.72rem;color:var(--s400);margin-top:4px">Sends the money back to the original card through '+esc(p.byopProcessor==='cardknox'?'Sola':(p.byopProcessor||'the connected processor'))+'. Enter less than the full amount to keep a deposit or cover a processing fee — the family\'s balance updates automatically either way.</div>'
-                :'<div style="font-size:.78rem;color:#DC2626;margin-top:4px">This payment has no online charge on record, so it can\'t be refunded through the gateway — use <strong>Offline Refund</strong> instead.</div>';
-        } else {
-            noteEl.innerHTML='<div style="font-size:.72rem;color:var(--s400);margin-top:4px">Records that money was sent back outside Campistry (check, cash, or a card that\'s since expired) — no gateway call is made, this only balances the ledger.</div>';
-        }
+    if(type==='refund_offline'){
+        if(sumEl) sumEl.innerHTML='Records money returned outside Campistry (check, cash, or an expired card) — no gateway call is made, this only balances the ledger.';
+        if(amtEl) amtEl.removeAttribute('max');
+        if(noteEl) noteEl.innerHTML='';
+        _crUpdateBalancePreview();
+        return;
+    }
+    var online=_famRefundableOnline(f);
+    var onlineTotal=Math.round(online.reduce(function(s,d){return s+d.remaining},0)*100)/100;
+    if(onlineTotal>0){
+        var procs={};
+        online.forEach(function(d){procs[d.p.stripePaymentIntentId?'Stripe':(d.p.byopProcessor==='cardknox'?'Sola':(d.p.byopProcessor||'card'))]=1});
+        if(sumEl) sumEl.innerHTML='<strong>'+fm(onlineTotal)+'</strong> refundable to card/bank across '+online.length+' online payment'+(online.length!==1?'s':'')+'. Enter any amount up to that — it draws from the oldest charges first automatically.';
+        if(amtEl){amtEl.setAttribute('max',onlineTotal); if(!amtEl.value) amtEl.value=onlineTotal.toFixed(2);}
+        if(noteEl) noteEl.innerHTML='<div style="font-size:.72rem;color:var(--s400);margin-top:4px">Sends money back to the original card/bank through '+esc(Object.keys(procs).join(' & '))+' — you don\'t pick a charge, Campistry applies it oldest-first. For anything beyond '+fm(onlineTotal)+', use Offline Refund.</div>';
+    } else {
+        if(sumEl) sumEl.innerHTML='<span style="color:#DC2626">No online charges on record for this family.</span> Use <strong>Offline Refund</strong> to record a check/cash refund.';
+        if(amtEl){amtEl.value='';amtEl.removeAttribute('max')}
+        if(noteEl) noteEl.innerHTML='';
     }
     _crUpdateBalancePreview();
 }
@@ -12534,11 +12543,10 @@ function issueCreditForFamily(famKey){
     h+='<div class="me-field"><label>Amount ($)</label><input type="number" id="crAmount" class="me-input" placeholder="0.00" step="0.01" min="0"></div>';
     h+='</div></div>';
     h+='<div id="crRefundFields" style="display:none">';
-    h+='<div class="me-field"><label>Payment to refund</label><select id="crPaymentId" class="me-input" onchange="CampistryMe._crPaymentChanged()">'+(famKey?_crPaymentOptionsHtml(famKey):'<option value="">— Select a family first —</option>')+'</select></div>';
-    h+='<div id="crPaymentInfo" style="font-size:.78rem;color:var(--s500);margin:-4px 0 8px"></div>';
+    h+='<div id="crRefundSummary" style="font-size:.82rem;color:var(--s600);background:var(--s50);padding:10px 14px;border-radius:var(--r);margin-bottom:12px"></div>';
     h+='<div style="display:grid;grid-template-columns:2fr 1fr;gap:10px">';
     h+='<div class="me-field"><label>Reason</label><select id="crRefundReason" class="me-input"><option value="requested_by_customer">Requested by customer</option><option value="cancellation">Cancellation / withdrawal</option><option value="adjustment">Billing adjustment</option><option value="duplicate">Duplicate charge</option><option value="fraudulent">Fraudulent</option></select></div>';
-    h+='<div class="me-field"><label>Amount ($) — partial is fine</label><input type="number" id="crRefundAmount" class="me-input" step="0.01" min="0.01" oninput="CampistryMe._crUpdateBalancePreview()"></div>';
+    h+='<div class="me-field"><label>Amount ($)</label><input type="number" id="crRefundAmount" class="me-input" step="0.01" min="0.01" oninput="CampistryMe._crUpdateBalancePreview()"></div>';
     h+='</div><div id="crStripeOptWrap"></div><div id="crBalancePreview" style="font-size:.78rem;color:var(--s600);margin-top:8px"></div></div>';
     h+='</div>';
     showModal('Issue Credit/Refund',h,async function(){
@@ -12546,62 +12554,86 @@ function issueCreditForFamily(famKey){
         var f=families[fk];
         if(!fk||!f){toast('Select a family','error');return}
         var type=document.getElementById('crType').value;
-        if(type==='refund_gateway'||type==='refund_offline'){
-            var p=finPayments.find(function(x){return String(x.id)===String(document.getElementById('crPaymentId').value)});
-            if(!p){toast('Select a payment to refund','error');return}
-            var priorRefunded=finPayments.filter(function(x){return x.refundOf!=null&&String(x.refundOf)===String(p.id)}).reduce(function(s,x){return s+Math.abs(x.amount||0)},0);
-            var maxRefund=Math.round((p.amount-priorRefunded)*100)/100;
-            if(maxRefund<=0){toast('This payment is already fully refunded','error');return}
-            var refundAmt=parseFloat(document.getElementById('crRefundAmount').value)||0;
-            if(refundAmt<=0||refundAmt>maxRefund+0.001){toast('Enter an amount up to '+fm(maxRefund),'error');return}
+        var _reasonLabels={requested_by_customer:'Requested by customer',cancellation:'Cancellation / withdrawal',adjustment:'Billing adjustment',duplicate:'Duplicate charge',fraudulent:'Fraudulent'};
+        if(type==='refund_gateway'){
+            var refundAmt=Math.round((parseFloat(document.getElementById('crRefundAmount').value)||0)*100)/100;
+            if(refundAmt<=0){toast('Enter an amount to refund','error');return}
+            var chunks=_famRefundableOnline(f);
+            var onlineTotal=Math.round(chunks.reduce(function(s,d){return s+d.remaining},0)*100)/100;
+            if(onlineTotal<=0){toast('No online charges on record for this family — use Offline Refund instead','error');return}
+            if(refundAmt>onlineTotal+0.001){toast('Only '+fm(onlineTotal)+' is refundable to card/bank — lower the amount or use Offline Refund for the rest','error');return}
             var reasonSel=document.getElementById('crRefundReason').value;
-            var doStripe=type==='refund_gateway'&&!!p.stripePaymentIntentId;
-            var doBYOP=type==='refund_gateway'&&!p.stripePaymentIntentId&&!!p.byopTransactionId;
-            if(type==='refund_gateway'&&!p.stripePaymentIntentId&&!p.byopTransactionId){toast('No online charge on record for this payment — use Offline Refund instead','error');return}
-            var stripeRefundId=null;
-            if(doStripe){
-                var stripeReason=(reasonSel==='requested_by_customer'||reasonSel==='duplicate'||reasonSel==='fraudulent')?reasonSel:'requested_by_customer';
-                toast('Processing Stripe refund…');
+            var reasonLabel=_reasonLabels[reasonSel]||reasonSel;
+            // Draw oldest-first across the family's online charges, one gateway
+            // call + one ledger entry per charge. If a chunk fails partway, the
+            // chunks before it already moved real money — keep and report them
+            // rather than rolling back (same reasoning as payments-canteen-refund).
+            var remaining=refundAmt, done=0, failMsg=null;
+            toast('Processing refund…');
+            for(var ci=0; ci<chunks.length && remaining>0.001; ci++){
+                var p=chunks[ci].p;
+                var chunk=Math.round(Math.min(chunks[ci].remaining,remaining)*100)/100;
+                if(chunk<=0) continue;
+                var isStripe=!!p.stripePaymentIntentId;
+                var refId=null;
                 try{
-                    var res=await callEdgeFunction('stripe-refund',{paymentIntentId:p.stripePaymentIntentId,amount:refundAmt,reason:stripeReason,metadata:{campId:getCampId(),family:p.family||''}});
-                    stripeRefundId=res.refundId;
+                    if(isStripe){
+                        var stripeReason=(reasonSel==='requested_by_customer'||reasonSel==='duplicate'||reasonSel==='fraudulent')?reasonSel:'requested_by_customer';
+                        var res=await callEdgeFunction('stripe-refund',{paymentIntentId:p.stripePaymentIntentId,amount:chunk,reason:stripeReason,metadata:{campId:getCampId(),family:p.family||''}});
+                        refId=res.refundId;
+                    } else {
+                        var byopRes=await callEdgeFunctionAuthed('payments-refund',{externalTransactionId:p.byopTransactionId,amount:chunk});
+                        refId=byopRes.externalTransactionId;
+                    }
                 }catch(err){
-                    console.error('[Me] Stripe refund error:',err);
-                    toast('Stripe refund failed: '+err.message,'error');
-                    return;
+                    console.error('[Me] refund chunk error:',err);
+                    failMsg=err.message;
+                    break;
                 }
-            } else if(doBYOP){
-                toast('Processing refund through '+(p.byopProcessor==='cardknox'?'Sola':(p.byopProcessor||'the connected processor'))+'…');
-                try{
-                    var byopRes=await callEdgeFunctionAuthed('payments-refund',{externalTransactionId:p.byopTransactionId,amount:refundAmt});
-                    stripeRefundId=byopRes.externalTransactionId;
-                }catch(err){
-                    console.error('[Me] BYOP refund error:',err);
-                    toast('Refund failed: '+err.message,'error');
-                    return;
-                }
+                var procNote=isStripe?' (Stripe)':' ('+(p.byopProcessor==='cardknox'?'Sola':(p.byopProcessor||'BYOP'))+')';
+                finPayments.push({
+                    id:'ref_'+Date.now()+'_'+ci,
+                    family:p.family,familyKey:fk,enrollmentId:p.enrollmentId||null,
+                    amount:-chunk,date:today(),method:'Refund',
+                    reference:refId||'',notes:'Refund — '+reasonLabel+procNote,
+                    reason:reasonSel,refundOf:p.id,stripeRefundId:isStripe?refId:null,byopProcessor:isStripe?null:p.byopProcessor,offline:false,timestamp:Date.now()
+                });
+                f.totalPaid=Math.max(0,(f.totalPaid||0)-chunk);f.balance=(f.balance||0)+chunk;
+                done=Math.round((done+chunk)*100)/100;
+                remaining=Math.round((remaining-chunk)*100)/100;
             }
-            var reasonLabel={requested_by_customer:'Requested by customer',cancellation:'Cancellation / withdrawal',adjustment:'Billing adjustment',duplicate:'Duplicate charge',fraudulent:'Fraudulent'}[reasonSel]||reasonSel;
-            var refundEntry={
-                id:'ref_'+Date.now(),
-                family:p.family,familyKey:fk,enrollmentId:p.enrollmentId||null,
-                amount:-refundAmt,date:today(),method:'Refund',
-                reference:stripeRefundId||'',notes:'Refund — '+reasonLabel+(doStripe?' (Stripe)':doBYOP?' ('+(p.byopProcessor==='cardknox'?'Sola':(p.byopProcessor||'BYOP'))+')':' (Offline — check/cash)'),
-                reason:reasonSel,refundOf:p.id,stripeRefundId:stripeRefundId,byopProcessor:doBYOP?p.byopProcessor:null,offline:!doStripe&&!doBYOP,timestamp:Date.now()
-            };
-            finPayments.push(refundEntry);
-            f.totalPaid=Math.max(0,(f.totalPaid||0)-refundAmt);f.balance=(f.balance||0)+refundAmt;
+            if(done<=0){toast('Refund failed'+(failMsg?': '+failMsg:''),'error');return}
             save();closeModal('dynModal');
-            // The refund itself (finPayments push + save) is already done at this
-            // point — a rendering failure below must never look like the refund
-            // silently vanished, so surface it loudly instead of swallowing it.
+            // The refunds (finPayments pushes + save) are already done here — a
+            // rendering failure below must never look like the refund vanished.
             try{renderFinance()}catch(e){console.error('[Me] renderFinance after refund failed:',e)}
             try{if(curPage==='familydetail')renderFamilyDetailPage();else renderBilling()}
             catch(e){
                 console.error('[Me] Re-render after refund failed:',e);
                 toast('Refund recorded, but the page failed to refresh (see console) — reload to see it.','error');
             }
-            toast('Refunded '+fm(refundAmt)+(doStripe?' to card':' (offline)')+' for '+(p.family||'family'));
+            if(failMsg){ toast('Refunded '+fm(done)+' before an error stopped the rest: '+failMsg,'error'); }
+            else { toast('Refunded '+fm(done)+' to card/bank for '+(f.name||'family')); }
+            return;
+        }
+        if(type==='refund_offline'){
+            var offAmt=Math.round((parseFloat(document.getElementById('crRefundAmount').value)||0)*100)/100;
+            if(offAmt<=0){toast('Enter an amount to refund','error');return}
+            var reasonSel2=document.getElementById('crRefundReason').value;
+            var reasonLabel2=_reasonLabels[reasonSel2]||reasonSel2;
+            finPayments.push({
+                id:'ref_'+Date.now(),
+                family:f.name,familyKey:fk,enrollmentId:null,
+                amount:-offAmt,date:today(),method:'Refund',
+                reference:'',notes:'Refund — '+reasonLabel2+' (Offline — check/cash)',
+                reason:reasonSel2,refundOf:null,stripeRefundId:null,byopProcessor:null,offline:true,timestamp:Date.now()
+            });
+            f.totalPaid=Math.max(0,(f.totalPaid||0)-offAmt);f.balance=(f.balance||0)+offAmt;
+            save();closeModal('dynModal');
+            try{renderFinance()}catch(e){console.error('[Me] renderFinance after refund failed:',e)}
+            try{if(curPage==='familydetail')renderFamilyDetailPage();else renderBilling()}
+            catch(e){console.error('[Me] Re-render after refund failed:',e);}
+            toast('Recorded offline refund of '+fm(offAmt)+' for '+(f.name||'family'));
             return;
         }
         var amt=parseFloat(document.getElementById('crAmount').value)||0;
@@ -12611,7 +12643,7 @@ function issueCreditForFamily(famKey){
         f.balance=Math.max(0,(f.balance||0)-amt);
         save();closeModal('dynModal');if(curPage==='familydetail')renderFamilyDetailPage();else renderBilling();toast('Credit of '+fm(amt)+' issued to '+f.name);
     });
-    if(famKey) _crPaymentChanged();
+    if(famKey) _crUpdateRefundSummary();
 }
 
 async function printStatement(famKey){
@@ -16298,7 +16330,7 @@ window.CampistryMe={
     openPaymentModal:openPaymentModal,openPaymentForFamily:openPaymentForFamily,removePayment:removePayment,
     addCharge:addCharge,addChargeForFamily:addChargeForFamily,
     issueCredit:issueCredit,issueCreditForFamily:issueCreditForFamily,
-    _crFamChanged:_crFamChanged,_crToggleType:_crToggleType,_crPaymentChanged:_crPaymentChanged,_crUpdateBalancePreview:_crUpdateBalancePreview,
+    _crFamChanged:_crFamChanged,_crToggleType:_crToggleType,_crUpdateRefundSummary:_crUpdateRefundSummary,_crUpdateBalancePreview:_crUpdateBalancePreview,
     setBillFilter:setBillFilter,setBillSearch:setBillSearch,printStatement:printStatement,
     requestCardSetup:requestCardSetup,chargeStoredCard:chargeStoredCard,batchCharge:batchCharge,
     // Broadcasts
