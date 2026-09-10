@@ -1041,6 +1041,8 @@ body {
 .ar-dollar-field input { padding-left: 22px; }
 .ar-hint { font-size: 0.72rem; color: var(--text-muted); }
 .ar-actions { display: flex; gap: 8px; flex-wrap: wrap; }
+.ar-freq-row { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; font-size: 0.85rem; color: var(--slate-700); }
+.ar-freq-row input { text-align: center; }
 
 /* State banner — carries the whole state in one line at the top of the card:
    a colored dot plus text, tinted to match. Replaces four different inline

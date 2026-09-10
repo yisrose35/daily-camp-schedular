@@ -139,11 +139,37 @@ function inActiveWindow(ar: Record<string, any>, today: string): boolean {
   return true;
 }
 
+// N-days-ago cutoff (UTC, YYYY-MM-DD), inclusive of `today` — a 1-day
+// window means "just today", a 14-day window means today plus the
+// preceding 13 days.
+function daysAgoISO(days: number, today: string): string {
+  const d = new Date(today + "T00:00:00Z");
+  d.setUTCDate(d.getUTCDate() - (days - 1));
+  return d.toISOString().split("T")[0];
+}
+
+// Configurable "at most N reloads within a rolling M-day window" cap
+// (migration 143) — replaces the old hardcoded "once per calendar day".
+// maxReloadsPerPeriod=1/reloadPeriodDays=1 (the default when unset)
+// reproduces that exact prior behavior. reloadHistory is a plain array of
+// ISO dates, one appended per successful charge by markSuccess; an account
+// saved before this migration has no reloadHistory yet, so fall back to
+// treating lastChargedDate as a single-entry history.
+function reloadsWithinCap(ar: Record<string, any>, today: string): boolean {
+  const max = Number(ar.maxReloadsPerPeriod) || 1;
+  const periodDays = Number(ar.reloadPeriodDays) || 1;
+  const cutoff = daysAgoISO(periodDays, today);
+  const history: string[] = Array.isArray(ar.reloadHistory) ? ar.reloadHistory
+    : (ar.lastChargedDate ? [ar.lastChargedDate] : []);
+  const countInWindow = history.filter((d) => typeof d === "string" && d >= cutoff && d <= today).length;
+  return countInWindow < max;
+}
+
 // Whichever trigger is due, using UTC day-of-week/day-of-month — matches
 // submit_canteen_purchase's own `(now() AT TIME ZONE 'utc')::date` day
 // boundary, so "today" means the same thing everywhere in the canteen system.
 function dueAmount(ar: Record<string, any>, balance: number, today: string): { amount: number; kind: string } | null {
-  if (ar.lastChargedDate === today) return null; // already reloaded today
+  if (!reloadsWithinCap(ar, today)) return null; // frequency cap already hit for this window
   if (!inActiveWindow(ar, today)) return null; // outside the parent's chosen date range
   if (ar.thresholdEnabled && typeof ar.thresholdAmount === "number" && balance < ar.thresholdAmount) {
     return { amount: Number(ar.thresholdReloadAmount) || 0, kind: "threshold" };
@@ -175,6 +201,12 @@ function markSuccess(ar: Record<string, any>, today: string, amount: number) {
   ar.consecutiveFailures = 0;
   delete ar.lastFailureDate;
   delete ar.lastFailureReason;
+  if (!Array.isArray(ar.reloadHistory)) ar.reloadHistory = [];
+  ar.reloadHistory.push(today);
+  // Bound growth — far more than any realistic reloadPeriodDays (max 90) x
+  // maxReloadsPerPeriod (max 20) combination would ever need to look back
+  // through, so trimming here never affects reloadsWithinCap's count.
+  if (ar.reloadHistory.length > 200) ar.reloadHistory = ar.reloadHistory.slice(-200);
 }
 
 // Same authorization bar submit_canteen_purchase (migration 026) itself

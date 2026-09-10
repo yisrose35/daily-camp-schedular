@@ -1202,13 +1202,17 @@ window.setLimit = function() {
     if (!_secEdit('accounts', 'Changing a spending limit')) return;
     const name = document.getElementById('limCamper').value;
     const amt = parseFloat(document.getElementById('limAmt').value);
-    if (!name || !amt) { toast('Enter valid info', 1); return; }
+    // 0 is a valid, meaningful value here (submit_canteen_purchase's existing
+    // convention: dailyLimit <= 0 means no daily cap at all) — !amt used to
+    // reject it as if it were blank/invalid, silently blocking the office
+    // from ever setting "no limit" for a camper.
+    if (!name || amt == null || isNaN(amt) || amt < 0) { toast('Enter valid info', 1); return; }
     if (!snacks.accounts[name]) snacks.accounts[name] = { balance: 0, dailyLimit: getSettings().defaultDailyLimit, spentToday: 0 };
     snacks.accounts[name].dailyLimit = amt;
     saveSnacksData(snacks);
     closeM('limit');
     rAccounts();
-    toast('Limit set to $' + amt.toFixed(2) + ' for ' + name);
+    toast(amt === 0 ? 'No daily limit set for ' + name : 'Limit set to $' + amt.toFixed(2) + ' for ' + name);
 };
 
 // _editingItemId is null while the modal is in "Add Item" mode, or the id
