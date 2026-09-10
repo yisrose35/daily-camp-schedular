@@ -236,3 +236,69 @@ test('a payer name keeps an intra-token period but stops at a sentence end', () 
     const inner = P.parseEmail({ subject: 'Chase Alert', text: 'You received $300.00 from ABC CO.LTD' });
     assert.strictEqual(inner.deposit.payerName, 'ABC CO.LTD');
 });
+
+test('the real Capital One Zelle alert parses completely', () => {
+    // Transcribed from an actual Capital One alert. Every earlier fixture was
+    // written from how I imagined banks word these; this one is ground truth,
+    // and it broke three separate assumptions at once:
+    //   * "has just" sits between the name and "sent", and the amount is a
+    //     clause away — so `X sent you $` matched nothing and the deposit was
+    //     recorded with no payer at all.
+    //   * The Zelle memo is prose, "Here's the message from <PAYER>: <memo>",
+    //     where the colon follows the payer rather than the word "message".
+    //   * The bank's own name is only in the logo image, so "Capital One"
+    //     never survives htmlToText. Only "Zelle" does.
+    const text = [
+        'Sign In',
+        '',
+        'Good news: Someone sent you money with Zelle®.',
+        '',
+        'YISRAEL ROSENFELD has just sent you money with Zelle® in the amount of $5.00.',
+        '',
+        "Here's the message from YISRAEL ROSENFELD: KLE-1234",
+        '',
+        'The money has already been deposited in your account, so you don\'t need',
+        'to do anything—just sit back and enjoy that money-in-the-bank feeling.',
+        '',
+        'Thanks for using Zelle®, and enjoy the money well sent.'
+    ].join('\n');
+
+    const r = P.parseEmail({ subject: 'Someone sent you money with Zelle', text });
+    assert.ok(r.ok, r.reason);
+    assert.strictEqual(r.deposit.amount, 5);
+    assert.strictEqual(r.deposit.payerName, 'YISRAEL ROSENFELD');
+    assert.strictEqual(r.deposit.memo, 'KLE-1234');
+    assert.strictEqual(r.deposit.memoCode, 'KLE-1234');
+    assert.strictEqual(r.deposit.kind, 'zelle');
+});
+
+test('the Capital One headline never becomes the payer', () => {
+    // "Good news: Someone sent you money with Zelle." sits ABOVE the real line
+    // and matches any loose "sent you money" rule first. Two independent
+    // defences: the pattern requires a '$' on the same line (the headline has
+    // none), and cleanName refuses the placeholder outright.
+    assert.strictEqual(P.cleanName('Someone'), '');
+    assert.strictEqual(P.cleanName('a friend'), '');
+
+    const r = P.parseEmail({
+        subject: 'Zelle',
+        text: 'Good news: Someone sent you money with Zelle.\n\n' +
+              'SARA LEVI has just sent you money with Zelle in the amount of $250.00.'
+    });
+    assert.ok(r.ok, r.reason);
+    assert.strictEqual(r.deposit.payerName, 'SARA LEVI');
+});
+
+test("'money well sent' in the footer does not trip the outbound gate", () => {
+    // The direction gate runs before anything else and throws away whatever
+    // looks outbound. Capital One's sign-off is "enjoy the money well sent" —
+    // close enough to the deny-list to be worth pinning, because a false
+    // positive here silently drops a real deposit.
+    const r = P.parseEmail({
+        subject: 'Zelle',
+        text: 'SARA LEVI has just sent you money with Zelle in the amount of $250.00.\n' +
+              'Thanks for using Zelle, and enjoy the money well sent.'
+    });
+    assert.ok(r.ok, r.reason);
+    assert.strictEqual(r.deposit.amount, 250);
+});

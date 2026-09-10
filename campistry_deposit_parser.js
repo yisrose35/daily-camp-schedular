@@ -169,17 +169,27 @@
     // field AND scan the raw text for a bare code -- some banks drop the label
     // and leave the note inline.
 
-    var MEMO_FIELD_RE = /\b(?:memo|note|message|comment|description|for)\s*[:\-]\s*["']?([^\n"'<]{1,120})/i;
+    // Ordered: the labelled-field form is unambiguous, so it wins. Capital One
+    // writes the Zelle memo as prose -- "Here's the message from YISRAEL
+    // ROSENFELD: tst 1234" -- where the colon follows the PAYER, not the word
+    // "message", so the generic `message:` rule never fires on it.
+    var MEMO_RES = [
+        /\b(?:memo|note|message|comment|description|for)\s*[:\-]\s*["']?([^\n"'<]{1,120})/i,
+        /here'?s\s+the\s+message\s+from\s+[^\n:]{2,80}\s*:\s*([^\n]{1,120})/i,
+        /\bmessage\s+from\s+[^\n:]{2,80}\s*:\s*([^\n]{1,120})/i
+    ];
 
     /** A Campistry family memo code: three letters, a dash, four digits. */
     P.MEMO_CODE_RE = /\b([A-Za-z]{3})[-\s]?([0-9]{4})\b/;
 
     P.parseMemo = function (text) {
         var s = String(text || '');
-        var m = s.match(MEMO_FIELD_RE);
-        if (m && m[1]) {
-            var memo = m[1].trim().replace(/\s+/g, ' ');
-            if (memo && !/^https?:/i.test(memo)) return memo;
+        for (var i = 0; i < MEMO_RES.length; i++) {
+            var m = s.match(MEMO_RES[i]);
+            if (m && m[1]) {
+                var memo = m[1].trim().replace(/\s+/g, ' ');
+                if (memo && !/^https?:/i.test(memo)) return memo;
+            }
         }
         return '';
     };
@@ -274,9 +284,40 @@
         }
         // A bank that hides the name gives us asterisks -- that is not a name.
         if (!s || /^\*+$/.test(s)) return '';
+        // Nor is marketing copy. Capital One's headline is "Good news: Someone
+        // sent you money with Zelle" -- a payer rule that reaches it captures
+        // the word "Someone", which would then be matched against families.
+        if (/^(?:someone|a\s+friend|a\s+customer|sender|unknown|name\s+withheld)$/i.test(s)) return '';
         if (s.length > 80) s = s.slice(0, 80).trim();
         return s;
     };
+
+    // Capital One's Zelle alert, which is the shape confirmed against a real
+    // one, reads:
+    //
+    //     Good news: Someone sent you money with Zelle(R).
+    //     YISRAEL ROSENFELD has just sent you money with Zelle(R) in the
+    //     amount of $5.00.
+    //     Here's the message from YISRAEL ROSENFELD: tst 1234
+    //
+    // Three things that shape the patterns below:
+    //
+    //  * "has just" sits between the name and "sent", and the amount is a
+    //    clause away -- so the old `X sent you $` pattern matched nothing and
+    //    the deposit arrived with no payer at all.
+    //  * The HEADLINE matches any loose "sent you money" rule first and yields
+    //    the word "Someone". Requiring a `$` on the same line excludes it,
+    //    since the headline carries no amount. cleanName rejects "Someone"
+    //    too, belt and braces.
+    //  * "Here's the message from <PAYER>:" names the payer a second time, in
+    //    a form with no marketing copy anywhere near it, so it is the most
+    //    reliable of the three and is tried first.
+    var SENT_YOU_MONEY = [
+        /here'?s\s+the\s+message\s+from\s+([^\n:]{2,80}?)\s*:/i,
+        /^\s*([^\n]{2,80}?)\s+(?:has\s+)?(?:just\s+)?sent\s+you\s+money\b[^\n]*\$/im,
+        /^\s*([^\n]{2,80}?)\s+(?:has\s+)?(?:just\s+)?sent\s+you\s+\$/im,
+        /you\s+received\s+\$?[0-9,.]*\s*from\s+((?:[^\n.]|\.(?=\S)){2,80})/i
+    ];
 
     // The payer capture is `(?:[^\n.]|\.(?=\S)){2,80}` throughout: any character
     // except a newline, plus a period ONLY when the next character is not a
@@ -325,18 +366,15 @@
         {
             bank: 'capitalone',
             test: /capital\s*one/i,
-            payer: [
-                /^\s*([^\n]{2,80}?)\s+sent\s+you\s+\$/im,
-                /you\s+received\s+\$?[0-9,.]*\s*from\s+((?:[^\n.]|\.(?=\S)){2,80})/i
-            ]
+            payer: SENT_YOU_MONEY
         },
         {
+            // Also the fallback for any Zelle alert whose bank we can't name:
+            // the logo is usually an <img>, so the bank's own name may not
+            // survive htmlToText at all, while the word "Zelle" always does.
             bank: 'zelle',
             test: /zelle/i,
-            payer: [
-                /you\s+received\s+\$?[0-9,.]*\s*from\s+((?:[^\n.]|\.(?=\S)){2,80})/i,
-                /^\s*([^\n]{2,80}?)\s+sent\s+you\s+\$/im
-            ]
+            payer: SENT_YOU_MONEY
         },
         {
             bank: 'generic',
