@@ -3,6 +3,15 @@ import { Resend } from "npm:resend@2.0.0";
 
 const resend = new Resend(Deno.env.get("RESEND_API_KEY"));
 
+// Same FROM_EMAIL secret send-broadcast and auto-notify read, so Campistry has
+// ONE sender identity instead of three that drift.
+//
+// This previously hardcoded "Campistry <onboarding@resend.dev>" — Resend's
+// shared test sender, which only ever delivers to the Resend account owner's
+// own address. Every staff invite sent to an actual camp was being accepted by
+// the API and silently never delivered.
+const FROM_EMAIL = Deno.env.get("FROM_EMAIL") || "Campistry <noreply@campistry.org>";
+
 serve(async (req) => {
   // Handle CORS (allows your website to call this function)
   if (req.method === 'OPTIONS') {
@@ -18,7 +27,7 @@ serve(async (req) => {
     const { email, inviteUrl, role, invitedBy } = await req.json();
 
     const { data, error } = await resend.emails.send({
-      from: "Campistry <onboarding@resend.dev>", // Update this if you verified a domain
+      from: FROM_EMAIL,
       to: [email],
       subject: "You've been invited to join Campistry",
       html: `
