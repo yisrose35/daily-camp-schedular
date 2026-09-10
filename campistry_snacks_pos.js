@@ -419,13 +419,38 @@ window.charge = function() {
     const _cdb = window.CampistryDB;
     const client = _cdb && _cdb.getClient && _cdb.getClient();
     const campId = _cdb && _cdb.getCampId && _cdb.getCampId();
-    const finish = () => {
-        // Inventory + activity are POS-local; the RPC already logged the debit
-        // transaction and the new balance, so we do NOT add a transaction here.
+    const finish = (viaRpc) => {
+        const hr = new Date().getHours();
+        const itemDeltas = cart.map(ci => ({ id: ci.id, qty: ci.qty }));
         cart.forEach(ci => { const item = snacks.inventory.find(i => i.id === ci.id); if (item) { if (item.stock != null) item.stock -= ci.qty; item.soldToday = (item.soldToday || 0) + ci.qty; item.totalSold = (item.totalSold || 0) + ci.qty; } });
         if (!snacks.hourlyActivity) snacks.hourlyActivity = {};
-        const hr = new Date().getHours(); snacks.hourlyActivity[hr] = (snacks.hourlyActivity[hr] || 0) + 1;
-        saveSnacksData(snacks); // fetch-merges: pulls the RPC's debit into the ledger, reconciles balance
+        snacks.hourlyActivity[hr] = (snacks.hourlyActivity[hr] || 0) + 1;
+        if (viaRpc && client && campId && client.rpc) {
+            // submit_canteen_purchase already wrote the debit transaction and the
+            // new balance atomically under its own row lock — this path must
+            // NEVER touch accounts/transactions again. cloudSaveSnacks's
+            // select-then-blind-upsert cycle has no lock/version check, so if it
+            // ran here it could silently overwrite a concurrent server-side
+            // credit (e.g. an instant canteen-auto-reload charge landing in the
+            // gap between its own SELECT and UPSERT) — confirmed live via the
+            // camp's real Cardknox log: real charges vanished from the ledger
+            // entirely this way. record_canteen_sale_inventory (migration 142)
+            // only ever touches inventory/hourlyActivity, so it can't race with
+            // anything money-related no matter the timing.
+            client.rpc('record_canteen_sale_inventory', { p_camp_id: campId, p_items: itemDeltas, p_hour: hr })
+                .then(function() {}, function(e) { _dbg('record_canteen_sale_inventory failed:', e); });
+            try {
+                var g = JSON.parse(localStorage.getItem(STORE_KEY) || '{}');
+                g.campistrySnacks = snacks;
+                localStorage.setItem(STORE_KEY, JSON.stringify(g));
+                localStorage.setItem(SNACKS_LOCAL_KEY, JSON.stringify(snacks));
+            } catch (_) {}
+        } else {
+            // Local/offline fallback path — the client itself is the only
+            // record of this debit, so it still needs the full fetch-merge
+            // save to get the transaction and balance into the cloud.
+            saveSnacksData(snacks);
+        }
         const cp = document.querySelector('.cart-panel'); if (cp) { cp.classList.add('flash'); setTimeout(() => cp.classList.remove('flash'), 600); }
         toast('✓ $' + total.toFixed(2) + ' charged to ' + sel);
         cart = []; sel = null;
@@ -449,7 +474,7 @@ window.charge = function() {
         a.lastSpendDate = todayStr();
         if (!snacks.transactions) snacks.transactions = [];
         snacks.transactions.unshift({ time: new Date().toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' }), camper: sel, items: itemNames, amount: total, type: 'debit', date: todayStr() });
-        finish();
+        finish(false);
     };
 
     if (client && campId && client.rpc) {
@@ -471,7 +496,7 @@ window.charge = function() {
                     return;
                 }
                 a.balance = Number(d.balance); a.spentToday = Number(d.spentToday); a.lastSpendDate = todayStr();
-                finish();
+                finish(true);
                 // Instant auto-reload check — fire-and-forget, never blocks the
                 // register. submit_canteen_purchase (migration 140) only sets
                 // needsReloadCheck when this sale just pushed the camper under
