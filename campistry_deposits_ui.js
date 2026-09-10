@@ -497,7 +497,16 @@
         state.settings = res.data;
         var s = res.data;
         var domain = (W.CAMPISTRY_INBOUND_DOMAIN || 'inbound.campistry.com');
-        var address = 'deposits+' + s.inboundToken + '@' + domain;
+        // On a Resend MANAGED address (<anything>@<id>.resend.app) the safe form
+        // is the bare token as the local part: plus-addressing is accepted by
+        // most providers but not guaranteed, and a silently-dropped '+' means a
+        // camp's bank alerts vanish with no error anywhere. On a custom domain a
+        // readable prefix is nicer (and leaves room to route other purposes on
+        // the same domain later), so it's a constant rather than a hard choice.
+        // The edge function accepts both shapes.
+        var prefix = (typeof W.CAMPISTRY_INBOUND_PREFIX === 'string')
+            ? W.CAMPISTRY_INBOUND_PREFIX : 'deposits+';
+        var address = prefix + s.inboundToken + '@' + domain;
 
         var h = '<div class="me-modal-form">';
         h += '<div class="me-field"><label>Send the bank\'s deposit alerts here</label>' +

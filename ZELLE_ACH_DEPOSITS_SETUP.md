@@ -146,16 +146,29 @@ Supabase Dashboard → **Edge Functions → Secrets**:
 
 ### 6. Point the app at the inbound domain
 
-Open `campistry_me.html` and set the constant near the top of the script block
-to the domain from step 3:
+Two constants near the top of `campistry_me.html`:
 
 ```html
-<script>window.CAMPISTRY_INBOUND_DOMAIN = 'inbound.campistry.com';</script>
+<script>
+  window.CAMPISTRY_INBOUND_DOMAIN = 'saeesteupi.resend.app';
+  window.CAMPISTRY_INBOUND_PREFIX = '';
+</script>
 ```
 
-This is the domain half of every camp's deposit address, shown in Me → Billing →
-Bank Deposits → Deposit Settings. Get it wrong and you'll hand camps an address
-that silently receives nothing.
+`CAMPISTRY_INBOUND_DOMAIN` is the domain half of every camp's deposit address,
+from step 3.
+
+`CAMPISTRY_INBOUND_PREFIX` decides the shape of the local part:
+
+| Prefix | Address a camp gets | Use when |
+|---|---|---|
+| `''` | `a3f9…c2e1@domain` | **A Resend managed address.** The token IS the local part. |
+| `'deposits+'` | `deposits+a3f9…c2e1@domain` | A custom inbound domain. |
+
+The edge function accepts both. The empty prefix is the safe default on a
+managed `<anything>@` address: plus-addressing works at most providers but
+isn't guaranteed, and a silently-dropped `+` makes a camp's bank alerts vanish
+with no error anywhere to trace it.
 
 ### 7. ⚠️ Confirm the payload shape with one live delivery
 
