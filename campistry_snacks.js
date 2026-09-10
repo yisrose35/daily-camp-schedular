@@ -391,7 +391,7 @@ window.rAccounts = function(filter) {
         const rem = a.dailyLimit - a.spentToday;
         let st;
         if (a.balance <= 0) st = '<span class="badge badge-red">No Funds</span>';
-        else if (rem <= 0) st = '<span class="badge badge-amber">Limit Hit</span>';
+        else if (a.dailyLimit > 0 && rem <= 0) st = '<span class="badge badge-amber">Limit Hit</span>';
         else st = '<span class="badge badge-green">Active</span>';
         const jsName = esc(c.name).replace(/'/g, '&#39;');
         // Camper name is clickable → opens that camper's full transaction history.
@@ -408,45 +408,79 @@ window.rAccounts = function(filter) {
 };
 
 // Full transaction history for one camper — every deposit, auto-reload,
-// purchase, cash-out and refund on their canteen account, newest first.
-// Opened by clicking a camper's name (or the History button) in Accounts.
+// purchase, cash-out and refund on their canteen account, newest first, with
+// an In/Out filter. Opened by clicking a camper's name (or History) in Accounts.
+var _histCamper = null;
+var _histFilter = 'all'; // 'all' | 'in' | 'out'
+
+// Reliable time order even for older rows that predate the `timestamp` field:
+// fall back to parsing the stored date + time.
+function _histSortKey(t) {
+    if (t && t.timestamp) { const n = Number(t.timestamp); if (!isNaN(n)) return n; }
+    const dt = new Date(((t && t.date) || '') + ' ' + ((t && t.time) || ''));
+    const n = dt.getTime();
+    return isNaN(n) ? 0 : n;
+}
+
 window.viewAccountHistory = function(name) {
+    _histCamper = name;
+    _histFilter = 'all';
     const a = getAccount(name);
-    const txs = (snacks.transactions || [])
-        .filter(t => t && t.camper === name)
-        .slice()
-        .sort((x, y) => (Number(y.timestamp) || 0) - (Number(x.timestamp) || 0)); // newest first; falls back to insertion order (already newest-first via unshift)
     const titleEl = document.getElementById('histTitle');
     if (titleEl) titleEl.textContent = name + ' — History';
     const balEl = document.getElementById('histBalance');
     if (balEl) balEl.textContent = '$' + (a.balance || 0).toFixed(2);
-    const body = document.getElementById('histBody');
-    if (body) {
-        if (!txs.length) {
-            body.innerHTML = '<div style="text-align:center;padding:2rem;color:var(--text-muted);font-size:.85rem">No transactions yet.</div>';
-        } else {
-            body.innerHTML = txs.map(t => {
-                const credit = t.type === 'credit';
-                const auto = credit && (t.kind === 'autoreload' || /auto[- ]?(reload|pay)/i.test(t.items || ''));
-                const isRefund = t.kind === 'refund';
-                const isCashOut = t.kind === 'cash_out';
-                let label = t.items || (credit ? 'Deposit' : 'Purchase');
-                if (auto) label = 'Auto-reload top-up';
-                else if (isRefund) label = 'Refund';
-                else if (isCashOut) label = 'Cash out';
-                const tag = auto ? '<span class="hist-tag">Auto-Pay</span>' : '';
-                const when = (t.date || '') + (t.time ? ' · ' + t.time : '');
-                const amt = Number(t.amount) || 0;
-                const amtHtml = credit
-                    ? '<span style="color:var(--green-600);font-weight:700">+$' + amt.toFixed(2) + '</span>'
-                    : '<span style="color:var(--red-600);font-weight:700">−$' + amt.toFixed(2) + '</span>';
-                return '<div class="hist-row"><div class="hist-main"><div class="hist-label">' + esc(label) + tag +
-                    '</div><div class="hist-when">' + esc(when) + '</div></div><div class="hist-amt">' + amtHtml + '</div></div>';
-            }).join('');
-        }
-    }
+    _renderHistoryFilter();
+    _renderHistoryBody();
     openM('history');
 };
+
+window.setHistoryFilter = function(f) {
+    _histFilter = f;
+    _renderHistoryFilter();
+    _renderHistoryBody();
+};
+
+function _renderHistoryFilter() {
+    const el = document.getElementById('histFilter');
+    if (!el) return;
+    const tabs = [['all', 'All'], ['in', 'Money In'], ['out', 'Money Out']];
+    el.innerHTML = tabs.map(([k, lbl]) =>
+        '<button class="hist-filter-btn' + (_histFilter === k ? ' active' : '') + '" onclick="setHistoryFilter(\'' + k + '\')">' + lbl + '</button>'
+    ).join('');
+}
+
+function _renderHistoryBody() {
+    const body = document.getElementById('histBody');
+    if (!body) return;
+    let txs = (snacks.transactions || []).filter(t => t && t.camper === _histCamper);
+    if (_histFilter === 'in') txs = txs.filter(t => t.type === 'credit');
+    else if (_histFilter === 'out') txs = txs.filter(t => t.type !== 'credit');
+    txs = txs.slice().sort((x, y) => _histSortKey(y) - _histSortKey(x)); // newest first
+    if (!txs.length) {
+        body.innerHTML = '<div style="text-align:center;padding:2.5rem 1rem;color:var(--text-muted);font-size:.85rem">No ' +
+            (_histFilter === 'in' ? 'incoming funds' : _histFilter === 'out' ? 'spending' : 'transactions') + ' yet.</div>';
+        return;
+    }
+    body.innerHTML = txs.map(t => {
+        const credit = t.type === 'credit';
+        const auto = credit && (t.kind === 'autoreload' || /auto[- ]?(reload|pay)/i.test(t.items || ''));
+        const isRefund = t.kind === 'refund';
+        const isCashOut = t.kind === 'cash_out';
+        let label = t.items || (credit ? 'Deposit' : 'Purchase');
+        if (auto) label = 'Auto-reload top-up';
+        else if (isRefund) label = 'Refund';
+        else if (isCashOut) label = 'Cash out';
+        const tag = auto ? '<span class="hist-tag">Auto-Pay</span>' : '';
+        const when = (t.date || '') + (t.time ? ' · ' + t.time : '');
+        const amt = Number(t.amount) || 0;
+        const amtHtml = credit
+            ? '<span style="color:var(--green-600);font-weight:700">+$' + amt.toFixed(2) + '</span>'
+            : '<span style="color:var(--red-600);font-weight:700">−$' + amt.toFixed(2) + '</span>';
+        return '<div class="hist-row"><div class="hist-main"><div class="hist-label">' + esc(label) + tag +
+            '</div><div class="hist-when">' + esc(when) + '</div></div><div class="hist-amt">' + amtHtml + '</div></div>';
+    }).join('');
+}
 
 /** Open a modal with its camper select pre-filled (and its dependent UI refreshed). */
 window.openMFor = function(modal, selectId, name) {

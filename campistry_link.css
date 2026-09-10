@@ -1701,3 +1701,17 @@ body {
 @media (max-width: 768px) {
     .lk-bnav-grab { display: block; }
 }
+
+/* Collapsible canteen cards — default closed, tap header to expand */
+.lk-card-toggle { cursor: pointer; user-select: none; }
+.lk-card-toggle h2 { margin-right: auto; }
+.lk-card-chevron { color: var(--text-muted); font-size: .8rem; transition: transform .18s ease; flex-shrink: 0; }
+.lk-collapsible:not(.collapsed) .lk-card-chevron { transform: rotate(180deg); }
+.lk-collapsible.collapsed .lk-card-head { margin-bottom: 0; border-bottom: none; padding-bottom: 0; }
+.lk-collapsible.collapsed > *:not(.lk-card-head) { display: none !important; }
+
+/* Auto-reload "card on file" line */
+.ar-cardonfile { display: flex; align-items: center; gap: 8px; margin-top: 12px; padding: 10px 12px; border: 1px solid var(--slate-100, #e2e8f0); border-radius: 12px; background: var(--slate-50, #f8fafc); font-size: .82rem; color: var(--slate-700, #334155); }
+.ar-cardonfile-icon { font-size: 1rem; }
+.ar-cardonfile-label { font-weight: 700; }
+.ar-cardonfile-none { color: var(--text-muted); }

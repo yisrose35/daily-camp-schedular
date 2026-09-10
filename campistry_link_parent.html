@@ -376,9 +376,9 @@
             <span style="font-size:.82rem;font-weight:600;opacity:.85;">$</span>
             <input type="number" id="canteenCustomAmt" min="1" max="500" step="1" placeholder="Custom amount" oninput="selCustomAmt(this)" style="width:130px;padding:8px 10px;border-radius:8px;border:1px solid rgba(255,255,255,.4);background:rgba(255,255,255,.15);color:inherit;font-size:.85rem;text-align:center;">
         </div>
-        <div style="display:flex;gap:8px;justify-content:center;flex-wrap:wrap;"><button class="btn btn-primary" id="canteenAddBtn" onclick="addFunds()">Add Funds</button><button class="btn btn-secondary" onclick="document.getElementById('autoReloadCard').scrollIntoView({behavior:'smooth',block:'start'})">Auto-Reload</button><button class="btn" id="canteenChargeSavedRow" type="button" style="display:none;background:#fff;color:var(--link-color);font-weight:700;" onclick="_lkCanteenChargeSaved()">Charge <span id="canteenChargeSavedLabel"></span></button></div>
+        <div style="display:flex;gap:8px;justify-content:center;flex-wrap:wrap;"><button class="btn btn-primary" id="canteenAddBtn" onclick="addFunds()">Add Funds</button><button class="btn" id="canteenChargeSavedRow" type="button" style="display:none;background:#fff;color:var(--link-color);font-weight:700;" onclick="_lkCanteenChargeSaved()">Charge <span id="canteenChargeSavedLabel"></span></button></div>
     </div>
-    <div class="lk-card" id="spendControlsCard"><div class="lk-card-head"><h2>Spending Controls</h2><span class="ar-saved-hint" id="spendSavedHint">Saved &#10003;</span></div>
+    <div class="lk-card lk-collapsible collapsed" id="spendControlsCard"><div class="lk-card-head lk-card-toggle" onclick="_lkToggleCard(this)"><h2>Spending Controls</h2><span class="ar-saved-hint" id="spendSavedHint">Saved &#10003;</span><span class="lk-card-chevron">&#9662;</span></div>
         <div class="lk-field"><label>Daily Spending Limit</label>
             <div style="display:flex;align-items:center;gap:14px;"><input type="range" id="limRange" min="1" max="20" value="5" style="flex:1;accent-color:var(--link-color);" oninput="document.getElementById('limVal').textContent='$'+this.value+'.00'"><span style="font-weight:700;min-width:55px;" id="limVal">$5.00</span></div>
             <label style="display:flex;align-items:center;gap:6px;margin-top:8px;font-size:.8rem;font-weight:600;cursor:pointer;"><input type="checkbox" id="limNoCap" onchange="_limToggleNoCap(this.checked)"> No daily limit</label>
@@ -394,8 +394,9 @@
         </div>
         <div class="ar-autosave-note">Changes save automatically.</div>
     </div>
-    <div class="lk-card" id="autoReloadCard"><div class="lk-card-head"><h2>Auto-Reload</h2><span class="ar-saved-hint" id="arSavedHint">Saved &#10003;</span></div>
+    <div class="lk-card lk-collapsible collapsed" id="autoReloadCard"><div class="lk-card-head lk-card-toggle" onclick="_lkToggleCard(this)"><h2>Auto-Reload</h2><span class="ar-saved-hint" id="arSavedHint">Saved &#10003;</span><span class="lk-card-chevron">&#9662;</span></div>
         <div id="arStatusMsg" class="ar-status off"><span class="ar-status-dot"></span><span>Auto-reload is off.</span></div>
+        <div id="arCardOnFile" class="ar-cardonfile" style="display:none;"></div>
         <div class="ar-option" id="arThOption">
             <label class="ar-option-head">
                 <input type="checkbox" id="arThEnabled" onchange="_arToggleOption('arThOption','arThFields',this.checked)">
@@ -480,7 +481,7 @@
             <button class="btn btn-ghost btn-sm" id="arOffBtn" onclick="turnOffAutoReload()" style="display:none;">Turn off</button>
         </div>
     </div>
-    <div class="lk-card"><div class="lk-card-head"><h2>Recent Transactions</h2></div><div id="txList"></div></div>
+    <div class="lk-card lk-collapsible collapsed"><div class="lk-card-head lk-card-toggle" onclick="_lkToggleCard(this)"><h2>Recent Transactions</h2><span class="lk-card-chevron">&#9662;</span></div><div id="txList"></div></div>
 </div>
 
 <!-- CAMP SHOP -->
@@ -2329,6 +2330,13 @@ function _autoSaveSpendingControls(){
     clearTimeout(_spendSaveTimer);
     _spendSaveTimer=setTimeout(function(){ saveSpendingControls(true); }, 500);
 }
+// Collapsible canteen cards (Spending Controls / Auto-Reload / Recent
+// Transactions) — default closed, expand on header tap. Toggling the head is
+// a click, not a change, so it never triggers the cards' auto-save listeners.
+function _lkToggleCard(headEl){
+    var card = headEl && headEl.closest ? headEl.closest('.lk-collapsible') : null;
+    if (card) card.classList.toggle('collapsed');
+}
 
 // ── AUTO-RELOAD ──────────────────────────────────────────────────────────
 // Reload the canteen balance automatically — when it drops below a
@@ -2483,6 +2491,20 @@ function _renderAutoReload(c){
         _arStatus('off','Auto-reload is off.');
         cardBtn.style.display='none';
         offBtn.style.display='none';
+    }
+    // Which card is on file for THIS camper's auto-reload (its own token slot,
+    // separate from the family's Pay-Now card even if it's the same physical
+    // card). Shown so a parent can confirm what will be charged.
+    var cof=document.getElementById('arCardOnFile');
+    if(cof){
+        if(ar.cardOnFile){
+            var lbl=ar.paymentMethodLabel || (ar.paymentMethodType==='us_bank_account'?'Bank account on file':'Card on file');
+            cof.style.display='';
+            cof.innerHTML='<span class="ar-cardonfile-icon">&#128179;</span><span><span class="ar-cardonfile-label">Charging:</span> '+_escHtml(lbl)+'</span>';
+        } else {
+            cof.style.display='';
+            cof.innerHTML='<span class="ar-cardonfile-icon">&#128179;</span><span class="ar-cardonfile-none">No card on file yet — add one to activate auto-reload.</span>';
+        }
     }
 }
 function saveAutoReload(){

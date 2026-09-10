@@ -435,3 +435,11 @@ body.sidebar-open .sidebar { transform: translateX(0); }
 .hist-when { font-size: .7rem; color: var(--text-muted); margin-top: 2px; }
 .hist-amt { font-variant-numeric: tabular-nums; white-space: nowrap; }
 .hist-tag { display: inline-block; margin-left: 6px; padding: 1px 7px; border-radius: 999px; font-size: .58rem; font-weight: 800; letter-spacing: .03em; text-transform: uppercase; background: var(--snacks, #EA580C); color: #fff; vertical-align: middle; }
+
+/* Bigger transaction-history modal + In/Out filter */
+.hist-modal { max-width: 680px; width: 92vw; }
+.hist-scroll { max-height: 60vh; overflow-y: auto; -webkit-overflow-scrolling: touch; }
+.hist-filter { display: flex; gap: 6px; margin-bottom: 14px; }
+.hist-filter-btn { flex: 1; padding: 9px 10px; border-radius: 10px; border: 1px solid var(--border, #e2e8f0); background: var(--bg, #f8fafc); color: var(--text-muted); font-size: .8rem; font-weight: 700; cursor: pointer; transition: all .12s; }
+.hist-filter-btn:hover { border-color: var(--snacks, #EA580C); color: var(--snacks-dark, #C2410C); }
+.hist-filter-btn.active { background: var(--snacks, #EA580C); border-color: var(--snacks, #EA580C); color: #fff; }

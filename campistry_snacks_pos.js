@@ -257,7 +257,9 @@ window.renderCampers = function() {
     document.getElementById('camperList').innerHTML = list.map(c => {
         const a = getAccount(c.name);
         const rem = a.dailyLimit - a.spentToday;
-        const limitHit = rem <= 0 && a.balance > 0;
+        // Only a REAL daily limit (>0) can be "hit". dailyLimit 0 = no limit,
+        // so rem going negative there must never read as Limit Hit.
+        const limitHit = a.dailyLimit > 0 && rem <= 0 && a.balance > 0;
         const cls = a.balance <= 0 ? 'empty' : a.balance <= 5 ? 'low' : '';
         const initials = c.name.split(' ').map(w => w[0]).join('');
         return '<div class="camper-item' + (sel === c.name ? ' selected' : '') + (limitHit ? ' limit-hit' : '') +
@@ -533,7 +535,11 @@ function updateChargeBtn() {
         const item = snacks.inventory.find(i => i.id === ci.id);
         return s + (item ? item.price * ci.qty : 0);
     }, 0);
-    if (!sel || !cart.length || total === 0) { btn.disabled = true; btn.textContent = 'Charge'; return; }
+    // Always a visible, clearly-labeled button — never a bare disabled
+    // "Charge" that reads as "no button here". The label states exactly what
+    // the register operator still needs to do.
+    if (!sel) { btn.disabled = true; btn.textContent = 'Select a camper'; return; }
+    if (!cart.length || total === 0) { btn.disabled = true; btn.textContent = 'Add items to charge'; return; }
     btn.disabled = false;
     btn.textContent = 'Charge $' + total.toFixed(2) + ' → ' + sel.split(' ')[0];
 }
