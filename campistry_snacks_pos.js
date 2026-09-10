@@ -114,6 +114,23 @@ function cloudSaveSnacks(data) {
                     (data.transactions || []).concat(cloud.transactions || []).forEach(function(t) { var s = _txSig(t); if (seen[s]) return; seen[s] = 1; tx.push(t); });
                     merged = Object.assign({}, cloud, data);
                     merged.accounts = Object.assign({}, cloud.accounts || {}, data.accounts || {});
+                    // autoReload is never something the POS itself sets — it's
+                    // owned exclusively by set_canteen_auto_reload (parent) and
+                    // canteen-auto-reload/credit_canteen_balance_from_processor
+                    // (server). The POS keeps ONE long-lived in-memory `snacks`
+                    // object for the whole register session, so the whole-object
+                    // merge above lets that stale in-memory autoReload snapshot
+                    // (from whenever this page last hydrated) win over the
+                    // fresher cloud copy on every single sale. Confirmed live:
+                    // that silently reverted autoReload.lastChargedDate back to
+                    // a stale value right after a successful instant-triggered
+                    // reload, making the account look "not charged today" again
+                    // and letting it fire — and get charged — repeatedly. Always
+                    // keep the just-fetched cloud's autoReload, never the POS's.
+                    Object.keys(merged.accounts).forEach(function(name) {
+                        var cloudAr = cloud.accounts && cloud.accounts[name] && cloud.accounts[name].autoReload;
+                        if (cloudAr !== undefined) merged.accounts[name].autoReload = cloudAr;
+                    });
                     merged.transactions = tx;
                     _reconcileBalances(merged);
                 }
