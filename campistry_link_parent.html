@@ -378,7 +378,7 @@
         </div>
         <div style="display:flex;gap:8px;justify-content:center;flex-wrap:wrap;"><button class="btn btn-primary" id="canteenAddBtn" onclick="addFunds()">Add Funds</button><button class="btn" id="canteenChargeSavedRow" type="button" style="display:none;background:#fff;color:var(--link-color);font-weight:700;" onclick="_lkCanteenChargeSaved()">Charge <span id="canteenChargeSavedLabel"></span></button></div>
     </div>
-    <div class="lk-card lk-collapsible collapsed" id="spendControlsCard"><div class="lk-card-head lk-card-toggle" onclick="_lkToggleCard(this)"><h2>Spending Controls</h2><span class="ar-saved-hint" id="spendSavedHint">Saved &#10003;</span><span class="lk-card-chevron">&#9662;</span></div>
+    <div class="lk-card lk-collapsible collapsed" id="spendControlsCard"><div class="lk-card-head lk-card-toggle" onclick="_lkToggleCard(this)"><div class="lk-head-main"><h2>Spending Controls</h2><div class="lk-card-summary" id="spendSummary"></div></div><span class="ar-saved-hint" id="spendSavedHint">Saved &#10003;</span><span class="lk-card-chevron">&#9662;</span></div>
         <div class="lk-field"><label>Daily Spending Limit</label>
             <div style="display:flex;align-items:center;gap:14px;"><input type="range" id="limRange" min="1" max="20" value="5" style="flex:1;accent-color:var(--link-color);" oninput="document.getElementById('limVal').textContent='$'+this.value+'.00'"><span style="font-weight:700;min-width:55px;" id="limVal">$5.00</span></div>
             <label style="display:flex;align-items:center;gap:6px;margin-top:8px;font-size:.8rem;font-weight:600;cursor:pointer;"><input type="checkbox" id="limNoCap" onchange="_limToggleNoCap(this.checked)"> No daily limit</label>
@@ -394,7 +394,7 @@
         </div>
         <div class="ar-autosave-note">Changes save automatically.</div>
     </div>
-    <div class="lk-card lk-collapsible collapsed" id="autoReloadCard"><div class="lk-card-head lk-card-toggle" onclick="_lkToggleCard(this)"><h2>Auto-Reload</h2><span class="ar-saved-hint" id="arSavedHint">Saved &#10003;</span><span class="lk-card-chevron">&#9662;</span></div>
+    <div class="lk-card lk-collapsible collapsed" id="autoReloadCard"><div class="lk-card-head lk-card-toggle" onclick="_lkToggleCard(this)"><div class="lk-head-main"><h2>Auto-Reload</h2><div class="lk-card-summary" id="arSummary"></div></div><span class="ar-saved-hint" id="arSavedHint">Saved &#10003;</span><span class="lk-card-chevron">&#9662;</span></div>
         <div id="arStatusMsg" class="ar-status off"><span class="ar-status-dot"></span><span>Auto-reload is off.</span></div>
         <div id="arCardOnFile" class="ar-cardonfile" style="display:none;"></div>
         <div class="ar-option" id="arThOption">
@@ -481,7 +481,7 @@
             <button class="btn btn-ghost btn-sm" id="arOffBtn" onclick="turnOffAutoReload()" style="display:none;">Turn off</button>
         </div>
     </div>
-    <div class="lk-card lk-collapsible collapsed"><div class="lk-card-head lk-card-toggle" onclick="_lkToggleCard(this)"><h2>Recent Transactions</h2><span class="lk-card-chevron">&#9662;</span></div><div id="txList"></div></div>
+    <div class="lk-card lk-collapsible collapsed"><div class="lk-card-head lk-card-toggle" onclick="_lkToggleCard(this)"><div class="lk-head-main"><h2>Recent Transactions</h2><div class="lk-card-summary" id="txSummary"></div></div><span class="lk-card-chevron">&#9662;</span></div><div id="txList"></div></div>
 </div>
 
 <!-- CAMP SHOP -->
@@ -2296,6 +2296,7 @@ function saveSpendingControls(silent){
     });
     _loadSnacksData(children);
     c.dailyLimit=lim;c.creditLimit=credit;c.balanceFloor=floor;
+    _updateSpendSummary(c);
     // Persist to the cloud so the caps actually reach the register/POS. Without
     // this the parent's daily limit / overdraft never leaves this device and is
     // never enforced when the camp charges a purchase.
@@ -2336,6 +2337,15 @@ function _autoSaveSpendingControls(){
 function _lkToggleCard(headEl){
     var card = headEl && headEl.closest ? headEl.closest('.lk-collapsible') : null;
     if (card) card.classList.toggle('collapsed');
+}
+// One-line summary shown in the collapsed Spending Controls header.
+function _updateSpendSummary(c){
+    var el=document.getElementById('spendSummary'); if(!el||!c) return;
+    var lim=c.dailyLimit!=null?c.dailyLimit:5, credit=c.creditLimit||0, floor=c.balanceFloor||0;
+    var parts=[ lim===0?'No daily limit':('$'+Number(lim).toFixed(0)+'/day') ];
+    if(credit>0) parts.push('$'+Number(credit).toFixed(0)+' credit');
+    if(floor>0) parts.push('$'+Number(floor).toFixed(0)+' floor');
+    el.textContent=parts.join(' · ');
 }
 
 // ── AUTO-RELOAD ──────────────────────────────────────────────────────────
@@ -2496,15 +2506,34 @@ function _renderAutoReload(c){
     // separate from the family's Pay-Now card even if it's the same physical
     // card). Shown so a parent can confirm what will be charged.
     var cof=document.getElementById('arCardOnFile');
+    var cardLbl=ar.paymentMethodLabel || (ar.paymentMethodType==='us_bank_account'?'Bank account on file':'Card on file');
     if(cof){
         if(ar.cardOnFile){
-            var lbl=ar.paymentMethodLabel || (ar.paymentMethodType==='us_bank_account'?'Bank account on file':'Card on file');
             cof.style.display='';
-            cof.innerHTML='<span class="ar-cardonfile-icon">&#128179;</span><span><span class="ar-cardonfile-label">Charging:</span> '+_escHtml(lbl)+'</span>';
+            cof.innerHTML='<span class="ar-cardonfile-icon">&#128179;</span><span><span class="ar-cardonfile-label">Charging:</span> '+_escHtml(cardLbl)+'</span>';
         } else {
             cof.style.display='';
             cof.innerHTML='<span class="ar-cardonfile-icon">&#128179;</span><span class="ar-cardonfile-none">No card on file yet — add one to activate auto-reload.</span>';
         }
+    }
+    // Collapsed-header summary — state + the card being charged, so a parent
+    // can see at a glance without expanding.
+    var arSum=document.getElementById('arSummary');
+    if(arSum){
+        var s;
+        if(ar.enabled && ar.cardOnFile){
+            var trig=[];
+            if(ar.thresholdEnabled) trig.push('$'+Number(ar.thresholdReloadAmount||0).toFixed(0)+' when below $'+Number(ar.thresholdAmount||0).toFixed(0));
+            if(ar.scheduleEnabled) trig.push('$'+Number(ar.scheduleReloadAmount||0).toFixed(0)+' '+(ar.scheduleFrequency||'weekly'));
+            s='On · '+(trig.join(' + ')||'reloading')+' · '+cardLbl;
+        } else if(ar.enabled && !ar.cardOnFile){
+            s='On — add a card to activate';
+        } else if((Number(ar.consecutiveFailures)||0)>=3){
+            s='Paused — card declined';
+        } else {
+            s='Off';
+        }
+        arSum.textContent=s;
     }
 }
 function saveAutoReload(){
@@ -2859,6 +2888,9 @@ function switchCanteen(id){
     _renderAutoReload(c);
     var tl=document.getElementById('txList');tl.innerHTML='';
     var txs=canteenTxByChild[id]||[];
+    _updateSpendSummary(c);
+    var txSum=document.getElementById('txSummary');
+    if(txSum) txSum.textContent = txs.length ? ('Balance $'+(c.canteenBalance||0).toFixed(2)+' · '+txs.length+' transaction'+(txs.length===1?'':'s')) : 'No transactions yet';
     if(!txs.length){tl.innerHTML='<div class="lk-empty" style="padding:24px 0;"><h3>No transactions yet</h3><p style="font-size:.8rem;color:var(--text-muted);">Purchases at the canteen will appear here.</p></div>';return;}
     txs.forEach(function(t){var d=t.amt<0;var tag=t.auto?'<span class="lk-tx-tag">Auto-Pay</span>':'';tl.innerHTML+='<div class="lk-tx-item"><div class="lk-tx-left"><div class="lk-tx-icon '+(d?'debit':'credit')+'">'+(d?txSvgDebit:txSvgCredit)+'</div><div><div class="lk-tx-name">'+t.name+tag+'</div><div class="lk-tx-date">'+t.date+'</div></div></div><div class="lk-tx-amt '+(d?'debit':'credit')+'">'+(d?'−$'+Math.abs(t.amt).toFixed(2):'+$'+t.amt.toFixed(2))+'</div></div>';});
 }
