@@ -37,6 +37,14 @@
 -- Per-camp configuration for the automatic path, including the routing token
 -- that appears in the camp's inbound email address.
 --
+-- The token is 32 hex chars from gen_random_uuid(), which is core Postgres.
+-- It was gen_random_bytes(16) -- but that is pgcrypto, which Supabase installs
+-- into the `extensions` schema, and every function here pins
+-- `search_path = public, pg_catalog`. So the call raised "function
+-- gen_random_bytes(integer) does not exist" at runtime: the table and the
+-- functions all created cleanly, and only settings blew up the first time a
+-- camp opened it. Same 128 bits either way, no extension to depend on.
+--
 -- inbound_token is a bearer secret: anyone who knows the address can post an
 -- email at the inbox. It is therefore random, per-camp, rotatable, and the
 -- edge function ALSO verifies the Resend webhook signature and the sending
@@ -205,7 +213,7 @@ BEGIN
     END IF;
 
     INSERT INTO camp_deposit_settings (camp_id, inbound_token)
-    VALUES (p_camp_id, encode(gen_random_bytes(16), 'hex'))
+    VALUES (p_camp_id, replace(gen_random_uuid()::text, '-', ''))
     ON CONFLICT (camp_id) DO NOTHING;
 
     SELECT * INTO v_row FROM camp_deposit_settings WHERE camp_id = p_camp_id;
@@ -244,7 +252,7 @@ BEGIN
     END IF;
 
     INSERT INTO camp_deposit_settings (camp_id, inbound_token)
-    VALUES (p_camp_id, encode(gen_random_bytes(16), 'hex'))
+    VALUES (p_camp_id, replace(gen_random_uuid()::text, '-', ''))
     ON CONFLICT (camp_id) DO NOTHING;
 
     UPDATE camp_deposit_settings SET
@@ -255,7 +263,7 @@ BEGIN
         ambiguous_gap    = COALESCE(p_ambiguous_gap, ambiguous_gap),
         sender_allowlist = COALESCE(p_sender_allowlist, sender_allowlist),
         inbound_token    = CASE WHEN p_rotate_token
-                                THEN encode(gen_random_bytes(16), 'hex')
+                                THEN replace(gen_random_uuid()::text, '-', '')
                                 ELSE inbound_token END,
         updated_at       = now()
      WHERE camp_id = p_camp_id;
