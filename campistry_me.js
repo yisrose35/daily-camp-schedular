@@ -3303,12 +3303,13 @@ function _layoutTabsHtml(active){
 // view-only by design, me.printsheets supports full edit, and roles split
 // them differently: e.g. Office gets both, Bookkeeper gets reports but not
 // printsheets), so each keeps its own #page-* pane and capability check.
-function _reportsTabsHtml(active){
-    var tabs=[{k:'reports',l:'Reports'},{k:'printsheets',l:'Print Sheets'}];
-    return '<div style="display:flex;gap:0;border-bottom:1px solid var(--s200);margin-bottom:14px">'+tabs.map(function(t){
-        return '<button class="me-btn me-btn--ghost" data-page="'+t.k+'" style="padding:8px 16px;font-size:.8rem;font-weight:600;border-bottom:2px solid '+(active===t.k?'var(--me)':'transparent')+';color:'+(active===t.k?'var(--me)':'var(--s400)')+';border-radius:0" onclick="CampistryMe.nav(\''+t.k+'\')">'+t.l+'</button>';
-    }).join('')+'</div>';
-}
+// Reports and Print Sheets were merged into one "Reports" tool (they built
+// the same kind of column-picked table over the same people). Print Sheets'
+// own page still exists in code but is no longer linked anywhere, so this
+// sub-tab strip is now a no-op — Reports stands alone with its own Print
+// button. Kept as a function so both renderReports/renderPrintSheets callers
+// stay valid without edits.
+function _reportsTabsHtml(active){ return ''; }
 
 function renderStructure(){
     var c=document.getElementById('page-structure'),divs=_sortedDivisions();
@@ -14038,7 +14039,8 @@ function _reportSources(){
                 {key:'allergies',label:'Allergies',group:'Medical'},{key:'medications',label:'Medications',group:'Medical'},{key:'dietary',label:'Dietary',group:'Medical'},{key:'medicalNotes',label:'Medical Notes',group:'Medical'},
                 {key:'physician',label:'Physician',group:'Medical'},{key:'insuranceProvider',label:'Insurance',group:'Medical'},
                 {key:'emergencyName',label:'Emergency Contact',group:'Contact'},{key:'emergencyPhone',label:'Emergency Phone',group:'Contact'},
-                {key:'parent1Name',label:'Parent',group:'Contact'},{key:'parent1Phone',label:'Parent Phone',group:'Contact'},{key:'parent1Email',label:'Parent Email',group:'Contact'},
+                {key:'parentName',label:'Parent — Full Name',group:'Parent / Guardian'},{key:'parentFirstName',label:'Parent — First Name',group:'Parent / Guardian'},{key:'parentLastName',label:'Parent — Last Name',group:'Parent / Guardian'},{key:'parentPhone',label:'Parent — Phone',group:'Parent / Guardian'},{key:'parentEmail',label:'Parent — Email',group:'Parent / Guardian'},
+                {key:'parent2Name',label:'2nd Parent — Full Name',group:'Parent / Guardian'},{key:'parent2FirstName',label:'2nd Parent — First Name',group:'Parent / Guardian'},{key:'parent2LastName',label:'2nd Parent — Last Name',group:'Parent / Guardian'},{key:'parent2Phone',label:'2nd Parent — Phone',group:'Parent / Guardian'},{key:'parent2Email',label:'2nd Parent — Email',group:'Parent / Guardian'},
                 {key:'altFirstName',label:'Alt. First Name',group:'Contact'},{key:'altLastName',label:'Alt. Last Name',group:'Contact'},
                 {key:'street',label:'Street',group:'Address'},{key:'city',label:'City',group:'Address'},{key:'state',label:'State',group:'Address'},{key:'zip',label:'ZIP',group:'Address'}
             ].concat(cfFields),
@@ -14053,7 +14055,8 @@ function _reportSources(){
                         camperType:c.camperType||'',swimLevel:c.swimLevel||'',shirtSize:c.shirtSize||'',
                         bunkmateRequest:c.bunkmateRequest||'',separateFrom:c.separateFrom||'',
                         emergencyName:c.emergencyName||'',emergencyPhone:c.emergencyPhone||'',
-                        parent1Name:c.parent1Name||'',parent1Phone:c.parent1Phone||'',parent1Email:c.parent1Email||'',
+                        parentName:c.parentName||'',parentFirstName:c.parentFirst||_rbSplitName(c.parentName||'').first,parentLastName:c.parentLast||_rbSplitName(c.parentName||'').last,parentPhone:c.parentPhone||'',parentEmail:c.parentEmail||'',
+                        parent2Name:c.parent2Name||'',parent2FirstName:c.parent2First||_rbSplitName(c.parent2Name||'').first,parent2LastName:c.parent2Last||_rbSplitName(c.parent2Name||'').last,parent2Phone:c.parent2Phone||'',parent2Email:c.parent2Email||'',
                         altFirstName:c.altFirstName||'',altLastName:c.altLastName||'',
                         street:c.street||'',city:c.city||'',state:c.state||'',zip:c.zip||''};
                     cf.forEach(function(f){ row['cf_'+f.id]=c['cf_'+f.id]||''; });
@@ -14175,7 +14178,7 @@ var _rbColPrefs=null; // {order,widths} loaded from getUiPref() for _rbColPrefKe
 // engine's AND-only filters, so this template ships unfiltered instead.
 var _rbQuickTemplates={
     roster:{ name:'Camper Roster', source:'campers',
-        fields:['name','altFirstName','altLastName','camperId','division','grade','bunk','dob','gender','school','parent1Name','parent1Phone','parent1Email','street','city','state','zip','allergies','medications','dietary'] },
+        fields:['name','camperId','division','grade','bunk','dob','gender','school','parentName','parentPhone','parentEmail','parent2Name','parent2Phone','parent2Email','street','city','state','zip','allergies','medications','dietary'] },
     familyDirectory:{ name:'Family Directory', source:'families',
         fields:['name','campers','camperCount','parent','phone','email','address','totalPaid','balance','status'] },
     enrollmentPipeline:{ name:'Enrollment Pipeline', source:'enrollments',
@@ -14203,9 +14206,10 @@ function openReportBuilder(existingId,templateKey){
             fields:tmpl.fields.slice(),filters:(tmpl.filters||[]).map(function(f){return Object.assign({},f);}),
             groupBy:tmpl.groupBy||'',mode:'live',schedule:{freq:'off',recipients:''}};
     }else{
-        var first=sources.campers;
+        // Empty by default — a fresh report starts blank so the user builds it
+        // from scratch instead of clearing pre-filled columns first.
         _rbDraft={id:null,name:'',source:'campers',
-            fields:first.fields.slice(0,6).map(function(f){return f.key;}),
+            fields:[],
             filters:[],groupBy:'',mode:'live',schedule:{freq:'off',recipients:''}};
     }
     _rbEditing=true;
@@ -14265,34 +14269,32 @@ function _rbInner(){
     var src=sources[_rbDraft.source]||sources.campers;
     var h='';
     h+='<div class="fg"><label class="fl">Report name</label><input class="fi" id="rbName" value="'+esc(_rbDraft.name||'')+'" placeholder="e.g. Unpaid Seniors, Bunk B3 medical"></div>';
-    // Source
-    h+='<div class="fg"><label class="fl">Data source</label><select class="fi" id="rbSource" onchange="CampistryMe.rbSourceChange(this.value)">';
-    Object.keys(sources).forEach(function(k){ h+='<option value="'+k+'"'+(_rbDraft.source===k?' selected':'')+'>'+esc(sources[k].label)+'</option>'; });
-    h+='</select></div>';
-    // Fields — click to add, drag to reorder in Selected
-    h+='<div class="fg"><label class="fl">Fields <span style="font-weight:400;color:var(--s400);font-size:.7rem">(click to add, drag to reorder — this is the column order on the report)</span></label>';
+    // No data-source step — the builder goes straight to the columns. Every
+    // available field is shown in one big always-visible picker.
+    h+='<div class="fg"><label class="fl">Columns <span style="font-weight:400;color:var(--s400);font-size:.7rem">(click to add · drag to reorder)</span></label>';
     h+='<div class="rb-fields-split" id="rbFieldsSplit">'+_rbFieldsSplitHtml()+'</div></div>';
-    // Filters
-    h+='<div class="fg"><label class="fl">Filters <span style="font-weight:400;color:var(--s400);font-size:.7rem">(all must match)</span></label><div id="rbFilters">';
+    // Filters — plain-language, optional
+    h+='<div class="fg"><label class="fl">Filters <span style="font-weight:400;color:var(--s400);font-size:.7rem">(optional · only show rows matching all of these)</span></label><div id="rbFilters">';
     (_rbDraft.filters||[]).forEach(function(f,i){ h+=_rbFilterRow(f,i); });
-    h+='</div><button class="me-btn me-btn--sec me-btn--sm" style="margin-top:6px" onclick="CampistryMe.rbAddFilter()">+ Add Filter</button></div>';
+    h+='</div><button class="me-btn me-btn--sec me-btn--sm" style="margin-top:6px" onclick="CampistryMe.rbAddFilter()">+ Add a filter</button></div>';
     // Group by
-    h+='<div class="fg"><label class="fl">Group by <span style="font-weight:400;color:var(--s400);font-size:.7rem">(splits the report into a separate table per value, e.g. one table per bunk)</span></label>'
-        +'<select class="fi" id="rbGroup"><option value="">— No grouping —</option>'
+    h+='<div class="fg"><label class="fl">Group by <span style="font-weight:400;color:var(--s400);font-size:.7rem">(optional · a separate table per value, e.g. one per bunk)</span></label>'
+        +'<select class="fi" id="rbGroup"><option value="">Don\'t group</option>'
         +_rbFieldOptionsHtml(src.fields,_rbDraft.groupBy)+'</select></div>';
-    // Mode
+    // Advanced options — live/snapshot + scheduled email, folded away so the
+    // main builder is just name · columns · filters · group.
+    var sch=_rbDraft.schedule||{freq:'off',recipients:''};
+    h+='<details class="rb-advanced"'+((_rbDraft.mode==='snapshot'||sch.freq!=='off')?' open':'')+'><summary>Advanced options</summary><div style="padding-top:10px">';
     h+='<div class="fg"><label class="fl">Save as</label><div style="display:flex;gap:14px;flex-wrap:wrap">'
         +'<label style="display:flex;align-items:center;gap:6px;font-size:.82rem"><input type="radio" name="rbMode" value="live"'+(_rbDraft.mode!=='snapshot'?' checked':'')+' style="accent-color:var(--me)"> <span><strong>Live</strong> — re-runs on fresh data each time</span></label>'
         +'<label style="display:flex;align-items:center;gap:6px;font-size:.82rem"><input type="radio" name="rbMode" value="snapshot"'+(_rbDraft.mode==='snapshot'?' checked':'')+' style="accent-color:var(--me)"> <span><strong>Snapshot</strong> — freezes the records as they are now</span></label>'
     +'</div></div>';
-    // Scheduled delivery
-    var sch=_rbDraft.schedule||{freq:'off',recipients:''};
     h+='<div class="fg"><label class="fl">Email this report <span style="font-weight:400;color:var(--s400);font-size:.7rem">(sends a link to open it in Me — not an attachment)</span></label>';
     h+='<select class="fi" id="rbSchedFreq" onchange="document.getElementById(\'rbSchedRecipWrap\').style.display=this.value===\'off\'?\'none\':\'block\'">';
     [['off','Off'],['weekly','Weekly'],['monthly','Monthly']].forEach(function(o){ h+='<option value="'+o[0]+'"'+(sch.freq===o[0]?' selected':'')+'>'+o[1]+'</option>'; });
     h+='</select>';
     h+='<div id="rbSchedRecipWrap" style="margin-top:6px;'+(sch.freq==='off'?'display:none':'')+'"><input class="fi" id="rbSchedRecipients" value="'+esc(sch.recipients||'')+'" placeholder="Recipient emails, comma-separated"></div>';
-    h+='</div>';
+    h+='</div></div></details>';
     return h;
 }
 
