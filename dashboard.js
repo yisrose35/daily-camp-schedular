@@ -430,6 +430,8 @@
         
         // Also update the campNameDisplay if it exists
         if (campNameDisplay) {
+            campNameDisplay.classList.remove('dash-skel', 'dash-skel--name');
+            campNameDisplay.removeAttribute('aria-label');
             campNameDisplay.textContent = displayCamp;
         }
     }
@@ -1028,16 +1030,14 @@
                     });
                 }
 
-                // ★ Team/Staff: same definition Me's own Analytics tab uses
-                // (hiredStaff() — staffApplications entries with
-                // status==='hired') so this tile and Analytics' "Staff" tile
-                // can never silently disagree. This tile previously had NO
-                // data wired to it at all — #statStaff was declared in the
-                // HTML but never referenced anywhere in this file, so it
-                // permanently showed the placeholder "—" regardless of how
-                // many staff the camp actually had.
-                const staffApps = state.campistryMe?.staffApplications || {};
-                const staffCount = Object.values(staffApps).filter(a => a?.status === 'hired').length;
+                // ★ Team/Staff: same definition Me's Roster and Analytics use
+                // — buildStaffRoster(), the join across hired applications,
+                // payroll.staff and bunkStaff, de-duplicated on email-or-name.
+                // Counting hired applications alone (what this did before)
+                // silently omitted anyone the office put straight onto a bunk
+                // or into Payroll, so this tile read lower than the Roster's
+                // own staff count for the same camp.
+                const staffCount = _dashCountStaff(state.campistryMe || {});
 
                 // Update UI
                 if (statDivisions) statDivisions.textContent = divisionCount || '—';
@@ -1047,7 +1047,58 @@
             }
         } catch (e) {
             console.warn('Could not load stats:', e);
+        } finally {
+            // Whatever happened, the tiles are no longer "still loading" — a
+            // shimmer that never resolves is worse than an honest "—".
+            _dashClearStatSkeletons();
         }
+    }
+
+    // Safety net: a shimmer that never resolves is the worst outcome of all, so
+    // if any load path throws or never returns, every remaining skeleton falls
+    // back to a plain placeholder. Mirrors the 8s fallback the sessions
+    // hydration gate uses for the same reason.
+    setTimeout(function () {
+        document.querySelectorAll('.dash-skel').forEach(el => {
+            const isName = el.id === 'campNameDisplay';
+            el.classList.remove('dash-skel', 'dash-skel--name');
+            el.removeAttribute('aria-label');
+            if (!el.textContent.trim()) el.textContent = isName ? 'Your Camp' : '—';
+        });
+    }, 8000);
+
+    // The four tiles start as shimmer skeletons (see dashboard.html) so a slow
+    // camp_state_kv read doesn't render as a fully unconfigured camp. Anything
+    // still empty when the read finishes falls back to the "—" placeholder.
+    function _dashClearStatSkeletons() {
+        ['statDivisions', 'statBunks', 'statCampers', 'statStaff'].forEach(id => {
+            const el = document.getElementById(id);
+            if (!el) return;
+            el.classList.remove('dash-skel');
+            if (!el.textContent.trim()) el.textContent = '—';
+        });
+    }
+
+    // Mirrors campistry_me.js's _staffJoinKey()/buildStaffRoster() de-dup rule:
+    // one row per real person, identified by email when there is one and by
+    // name otherwise, across all three stores that hold staff.
+    function _dashCountStaff(me) {
+        const keys = new Set();
+        const add = (email, name) => {
+            const e = String(email || '').trim().toLowerCase();
+            if (e) { keys.add('e:' + e); return; }
+            const n = String(name || '').trim().toLowerCase();
+            if (n) keys.add('n:' + n);
+        };
+        Object.values(me.staffApplications || {}).forEach(a => {
+            if (!a || a.status !== 'hired') return;
+            add(a.email, a.name || [a.first, a.last].filter(Boolean).join(' '));
+        });
+        ((me.payroll || {}).staff || []).forEach(p => { if (p && p.name) add(p.email, p.name); });
+        Object.values(me.bunkStaff || {}).forEach(list => {
+            (list || []).forEach(p => { if (p && p.name) add(p.email, p.name); });
+        });
+        return keys.size;
     }
 
     // ========================================

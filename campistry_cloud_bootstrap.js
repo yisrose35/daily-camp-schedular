@@ -26,6 +26,17 @@
     // Guard: only one successful cloud hydration per page load
     var _hydrated = false;
 
+    // Pages that load this bootstrap (Live, Health, Snacks, Link admin) do NOT
+    // load global_authority.js/supabase_sync.js, which are the only other
+    // places this flag was ever initialised to false. So until signalReady()
+    // ran it was `undefined`, and every `=== false` "still loading" guard in
+    // those pages silently failed — Campistry Live rendered its pessimistic
+    // "No campers loaded yet — try reloading this page" empty state during
+    // normal hydration, on a camp with a perfectly good roster.
+    if (typeof window.__CAMPISTRY_CLOUD_READY__ === 'undefined') {
+        window.__CAMPISTRY_CLOUD_READY__ = false;
+    }
+
     function readLocal() {
         try { return JSON.parse(localStorage.getItem(STORAGE_KEY) || '{}'); } catch (_) { return {}; }
     }

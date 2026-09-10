@@ -245,7 +245,7 @@
 <script src="config.js?v=20260903-03"></script>
 <script src="supabase-js@2.js?v=20260903-03"></script>
 <script src="supabase_client.js?v=20260903-03"></script>
-<script src="campistry_notes.js?v=20260903-03"></script>
+<script src="campistry_notes.js?v=20260910-05"></script>
 <script>
 // Grid/list toggle
 function setView(grid, btn) {
@@ -299,8 +299,35 @@ function createAndOpen() {
             var local=readLocal();
             var merged=mergeById(cloudNotes, local);
             if(content(merged)!==content(local)){ writeLocal(merged); if(typeof renderGrid==='function'){ try{ renderGrid(); }catch(e){} } }
-            // Push my owned notes that the cloud doesn't have or that are older there.
-            merged.forEach(function(n){
+            // Cloud has had its say. Only NOW is it safe to decide whether this
+            // camp has notes: seeding before this point is what created the
+            // duplicate starter notes (one set from here, one from another
+            // device, each with its own random id). dedupeSeededNotes() clears
+            // up the pairs an earlier build already left behind.
+            var changed=false;
+            if(typeof dedupeSeededNotes==='function'){
+                var dropped=[];
+                try{ dropped=dedupeSeededNotes()||[]; }catch(e){}
+                changed=dropped.length>0;
+                // Delete the rows too — a purely local drop would be undone by
+                // the very next pull. RLS only allows deleting my own rows, so
+                // a starter note shared to me by someone else is left alone.
+                dropped.forEach(function(n){
+                    if(n.ownerId && n.ownerId!==cn.uid) return;
+                    cn.c.from('campistry_notes').delete().eq('id',n.id).eq('owner_id',cn.uid)
+                        .then(function(r){ if(r && r.error) console.warn('[Notes] dedupe delete:', r.error.message); });
+                });
+            }
+            if(window.__notesSeedPending && typeof seedDemoNotesIfEmpty==='function'){
+                try{ changed=seedDemoNotesIfEmpty()||changed; }catch(e){}
+            }
+            if(changed && typeof renderGrid==='function'){ try{ renderGrid(); if(typeof updateCounts==='function')updateCounts(); }catch(e){} }
+            // Push my owned notes that the cloud doesn't have or that are older
+            // there. Re-read rather than reusing `merged` — the dedupe above may
+            // have dropped notes from it (pushing those would resurrect the
+            // duplicates we just deleted) and the seed may have added new ones
+            // that still need their first upload.
+            readLocal().forEach(function(n){
                 if(n.ownerId && n.ownerId!==cn.uid) return;   // shared-to-me → don't push
                 var cr=cloudById[n.id];
                 if(cr && ms(cr.updated_at) >= (n.updatedAt||0)) return;
@@ -312,6 +339,13 @@ function createAndOpen() {
     function start(){ sync(); setInterval(sync, 12000); }
     if(window.CampistryDB && window.CampistryDB.ready && window.CampistryDB.ready.then){ window.CampistryDB.ready.then(function(){ setTimeout(start, 500); }); }
     else { setTimeout(start, 1400); }
+    // Signed out, no camp, or the sync never gets off the ground — the starter
+    // notes still have to appear, so release the deferred seed on a timer.
+    setTimeout(function(){
+        if(window.__notesSeedPending && typeof seedDemoNotesIfEmpty==='function'){
+            try{ if(seedDemoNotesIfEmpty() && typeof renderGrid==='function'){ renderGrid(); if(typeof updateCounts==='function')updateCounts(); } }catch(e){}
+        }
+    }, 4000);
     document.addEventListener('visibilitychange', function(){ if(!document.hidden) sync(); });
 })();
 </script>

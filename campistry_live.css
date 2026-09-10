@@ -218,6 +218,13 @@ body.sidebar-open .sidebar{transform:translateX(0)}
 
 /* ══ EMPTY STATE ═════════════════════════════════════════════ */
 .empty-state{text-align:center;padding:2rem;color:var(--s400);font-size:.875rem}
+/* Roll call while camp data is still coming down from the cloud. The empty
+   state used to be indistinguishable from "there is genuinely nothing here",
+   which sent counselors off to reload a page that was working fine. */
+.rc-loading{display:flex;align-items:center;justify-content:center;gap:.55rem;color:var(--s400);font-size:.875rem}
+.rc-spinner{width:14px;height:14px;flex:0 0 auto;border-radius:50%;border:2px solid var(--s200,#e2e8f0);border-top-color:var(--s400,#94a3b8);animation:rcSpin .8s linear infinite}
+@keyframes rcSpin{to{transform:rotate(360deg)}}
+@media (prefers-reduced-motion:reduce){.rc-spinner{animation:none}}
 
 /* ══ BOTTOM NAV ══════════════════════════════════════════════ */
 .cs-bnav{display:none;position:fixed;bottom:0;left:0;right:0;height:62px;background:rgba(255,255,255,.97);backdrop-filter:blur(16px);-webkit-backdrop-filter:blur(16px);border-top:1px solid var(--s200);z-index:100;padding:0 4px}

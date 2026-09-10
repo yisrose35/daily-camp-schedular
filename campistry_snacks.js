@@ -334,6 +334,11 @@ function init() {
     if (!snacks.hourlyActivity) snacks.hourlyActivity = {};
     if (!snacks.weeklyRevenue) snacks.weeklyRevenue = [];
     if (!snacks.settings) snacks.settings = Object.assign({}, DEFAULT_SNACKS_SETTINGS);
+    // Same _hydratedOnce gate ensureAccountsForRoster() uses: rolling the
+    // counters is a real mutation, and persisting it against a stale
+    // pre-hydration snapshot is exactly how the earlier "pre-hydration save
+    // wiped the POS's inventory counters" bug happened.
+    if (rollDailyCounters() && _hydratedOnce) saveSnacksData(snacks);
 
     renderStats();
     rAccounts();
@@ -377,6 +382,36 @@ function renderStats() {
 function todayStr() {
     const d = new Date();
     return d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0') + '-' + String(d.getDate()).padStart(2, '0');
+}
+
+// ── DAILY COUNTER ROLLOVER ────────────────────────────────────────────────
+// item.soldToday and hourlyActivity are "today" counters that nothing ever
+// reset — unlike account.spentToday, which has always rolled over off its own
+// lastSpendDate stamp. So Menu Items' "Sold Today" column just accumulated
+// forever, while the dashboard's Revenue Today (correctly filtered to
+// transactions where t.date === todayStr()) reported the real figure. The two
+// disagreed by however many days the counters had been running: the live
+// symptom was a dashboard reading $8.00 / 3 txns above a Menu Items table
+// whose own per-item counts added up to $31.75.
+//
+// countersDay stamps which day the counters belong to. It's stored in the
+// shared campistrySnacks blob, so the POS register and this manager agree on
+// it, and the server does the same rollover atomically inside
+// record_canteen_sale_inventory (migration 145) — a register selling at 8am
+// must not add today's units on top of yesterday's server-side total.
+function rollDailyCounters(data) {
+    const d = data || snacks;
+    if (!d) return false;
+    const today = todayStr();
+    if (d.countersDay === today) return false;
+    // First run after this shipped: there's no stamp to compare against, so
+    // claim today rather than wiping counters that may well be from today.
+    if (d.countersDay) {
+        (d.inventory || []).forEach(i => { if (i) i.soldToday = 0; });
+        d.hourlyActivity = {};
+    }
+    d.countersDay = today;
+    return true;
 }
 
 // ==========================================================================

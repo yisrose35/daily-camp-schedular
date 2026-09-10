@@ -150,7 +150,7 @@ function applyFieldConfig(fields,sectionsDisabled){
         FIELD_ENABLED_STATE[fid]=enabled;
         if(!enabled){ if(fg)fg.style.display='none'; return; }
         if(fg)fg.style.display='';
-        var required=cfg?!!cfg.required:false;
+        var required=(cfg&&cfg.required!=null)?!!cfg.required:false;
         FIELD_REQUIRED_STATE[fid]=required;
         var label=fg&&fg.querySelector('.fl');
         if(label){
@@ -168,7 +168,7 @@ function applyFieldConfig(fields,sectionsDisabled){
         FIELD_ENABLED_STATE[fid]=enabled;
         if(row)row.style.display=enabled?'':'none';
         if(!enabled)return;
-        var required=cfg?!!cfg.required:false;
+        var required=(cfg&&cfg.required!=null)?!!cfg.required:false;
         FIELD_REQUIRED_STATE[fid]=required;
         var labelEl=row&&row.querySelector('label');
         if(labelEl)labelEl.textContent=(cfg&&cfg.label)||FIELD_DEFAULT_LABEL[fid];

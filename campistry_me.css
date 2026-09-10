@@ -149,6 +149,7 @@ body.sidebar-open .sidebar{transform:translateX(0)}
 .chart-legend-pct{color:var(--s400);width:36px;text-align:right}
 .chart-line{display:block;max-width:100%;width:100%;height:auto}
 .chart-line-axis{font-size:10px;fill:var(--s500)}
+.chart-line-grid{stroke:var(--s200,#e2e8f0);stroke-width:1;shape-rendering:crispEdges}
 
 /* ── TABLES ─────────────────────────── */
 .me-tw{overflow-x:auto}

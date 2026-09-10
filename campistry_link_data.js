@@ -595,6 +595,14 @@
         var families = data.getFamilies();
         var directory = []; // [{ parentName, parentEmail, parentPhone, children: [...], familyId, familyName }]
         var seen = {};
+        // Every camper already accounted for by a family record, by roster key.
+        // Pass 2 used to decide "is this camper already covered?" purely from
+        // the parent email-or-name key, which fails the moment a family's
+        // primary parent carries an email the camper record doesn't (or vice
+        // versa) — the camper then got a SECOND, implied family of their own.
+        // That's what made Link report one more family than Billing did for
+        // the same camp. Membership is the fact that actually settles it.
+        var claimedCampers = {};
 
         // First pass: families
         Object.entries(families).forEach(function(entry) {
@@ -614,6 +622,15 @@
             var key = (primary.email || primary.name || '').toLowerCase();
             if (seen[key]) return;
             seen[key] = true;
+            // Register every alias this family could be recognised by later —
+            // each parent's email AND name, not just the primary's preferred
+            // one — so a camper whose parent1Email matches the SECOND parent,
+            // or whose record has only the name, still resolves to this family.
+            parents.forEach(function(p) {
+                if (p.email) seen[String(p.email).trim().toLowerCase()] = true;
+                if (p.name) seen[String(p.name).trim().toLowerCase()] = true;
+            });
+            (fam.camperIds || []).forEach(function(cid) { claimedCampers[cid] = true; });
             directory.push({
                 parentName: primary.name,
                 parentEmail: primary.email || '',
@@ -633,7 +650,8 @@
         Object.entries(roster).forEach(function(entry) {
             var name = entry[0], c = entry[1];
             if (!c.parent1Name) return;
-            var key = (c.parent1Email || c.parent1Name || '').toLowerCase();
+            if (claimedCampers[name]) return; // this camper IS in a family record
+            var key = String(c.parent1Email || c.parent1Name || '').trim().toLowerCase();
             if (seen[key]) return; // already captured by a proper family record
             if (!impliedFamilies[key]) {
                 impliedFamilies[key] = {

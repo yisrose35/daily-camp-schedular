@@ -383,7 +383,15 @@ function applyFieldConfig(fields,sectionsDisabled){
         FIELD_ENABLED_STATE[fid]=enabled;
         if(!enabled){ if(fg)fg.style.display='none'; return; }
         if(fg)fg.style.display='';
-        var required=cfg?!!cfg.required:!!FIELD_REQUIRED_DEFAULT[fid];
+        // A saved config that doesn't mention `required` at all must fall back
+        // to the field's catalog default, not to false. Any camp that had ever
+        // touched a field (even just to relabel it) stored a cfg without that
+        // key — which silently dropped the field's red asterisk AND its
+        // required-ness here, while Campistry Me's own Manual Entry form (which
+        // already used this `!= null` rule) still treated it as required. That
+        // split is what made Emergency Contact Name/Phone read as required
+        // everywhere except on the form parents actually fill in.
+        var required=(cfg&&cfg.required!=null)?!!cfg.required:!!FIELD_REQUIRED_DEFAULT[fid];
         FIELD_REQUIRED_STATE[fid]=required;
         var label=fg&&fg.querySelector('.fl');
         if(label){

@@ -170,6 +170,28 @@ function todayStr() {
     return d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0') + '-' + String(d.getDate()).padStart(2, '0');
 }
 
+// Mirrors rollDailyCounters() in campistry_snacks.js — item.soldToday and
+// hourlyActivity are "today" counters that nothing used to reset, so they just
+// accumulated across days and stopped agreeing with the date-filtered revenue
+// figures. countersDay stamps which day they belong to. The register only rolls
+// its LOCAL copy here; the authoritative rollover happens server-side inside
+// record_canteen_sale_inventory (migration 145), under the same row lock that
+// applies the sale, so a register selling at 8am can never add today's units on
+// top of yesterday's server-side total.
+function rollDailyCounters() {
+    if (!snacks) return false;
+    const today = todayStr();
+    if (snacks.countersDay === today) return false;
+    // No stamp yet (first run after this shipped) — claim today rather than
+    // wiping counters that may well be from today.
+    if (snacks.countersDay) {
+        (snacks.inventory || []).forEach(i => { if (i) i.soldToday = 0; });
+        snacks.hourlyActivity = {};
+    }
+    snacks.countersDay = today;
+    return true;
+}
+
 // ==========================================================================
 // STATE
 // ==========================================================================
@@ -421,6 +443,10 @@ window.charge = function() {
     const campId = _cdb && _cdb.getCampId && _cdb.getCampId();
     const finish = (viaRpc) => {
         const hr = new Date().getHours();
+        const saleDay = todayStr();
+        // Roll BEFORE applying the sale, so today's units land on a zeroed
+        // base rather than on top of yesterday's running total.
+        rollDailyCounters();
         const itemDeltas = cart.map(ci => ({ id: ci.id, qty: ci.qty }));
         cart.forEach(ci => { const item = snacks.inventory.find(i => i.id === ci.id); if (item) { if (item.stock != null) item.stock -= ci.qty; item.soldToday = (item.soldToday || 0) + ci.qty; item.totalSold = (item.totalSold || 0) + ci.qty; } });
         if (!snacks.hourlyActivity) snacks.hourlyActivity = {};
@@ -437,8 +463,17 @@ window.charge = function() {
             // entirely this way. record_canteen_sale_inventory (migration 142)
             // only ever touches inventory/hourlyActivity, so it can't race with
             // anything money-related no matter the timing.
-            client.rpc('record_canteen_sale_inventory', { p_camp_id: campId, p_items: itemDeltas, p_hour: hr })
-                .then(function() {}, function(e) { _dbg('record_canteen_sale_inventory failed:', e); });
+            // p_day makes the server roll the day's counters inside the same
+            // locked transaction that applies these deltas (migration 145).
+            // Retry without it if the camp hasn't applied that migration yet —
+            // an unknown argument would otherwise mean the sale's inventory
+            // delta is silently never recorded at all.
+            client.rpc('record_canteen_sale_inventory', { p_camp_id: campId, p_items: itemDeltas, p_hour: hr, p_day: saleDay })
+                .then(function() {}, function(e) {
+                    _dbg('record_canteen_sale_inventory (with p_day) failed:', e);
+                    client.rpc('record_canteen_sale_inventory', { p_camp_id: campId, p_items: itemDeltas, p_hour: hr })
+                        .then(function() {}, function(e2) { _dbg('record_canteen_sale_inventory failed:', e2); });
+                });
             try {
                 var g = JSON.parse(localStorage.getItem(STORE_KEY) || '{}');
                 g.campistrySnacks = snacks;
@@ -614,6 +649,7 @@ window.CampistrySnacksPOS = {
 window.addEventListener('campistry-cloud-hydrated', function() {
     console.log('[Snacks POS] Cloud hydrated — reloading roster + snacks data');
     snacks = loadSnacksData();
+    rollDailyCounters();
     _hydratePosRoster().then(init, init);
 });
 

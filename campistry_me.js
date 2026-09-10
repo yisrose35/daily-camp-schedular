@@ -761,12 +761,18 @@ function chartDonut(slices,opts){
  * tooltip marker for the exact value on hover. points:[{label,value}]
  * opts:{money,emptyText}
  */
+// A line chart with NO y-axis at all reads as a trend but can't be read as a
+// quantity — the Finance revenue chart showed a steep decline with no scale
+// anywhere, directly under a "Collected: $0" tile, and there was no way to tell
+// from the picture whether it was falling from $50k or from $50. It now draws
+// gridlines with value labels at the bottom, middle and top of the range.
 function chartLine(points,opts){
     opts=opts||{};
     points=(points||[]).filter(function(p){return p&&isFinite(p.value)});
     if(points.length<2)return'<div class="chart-empty">'+esc(opts.emptyText||'Not enough data yet')+'</div>';
     var fmtV=opts.money?fm:function(n){return Number(n||0).toLocaleString()};
-    var W=560,H=160,padL=8,padR=8,padT=12,padB=22;
+    // padL now has to hold a money label ("$12,500") rather than nothing.
+    var W=560,H=170,padL=62,padR=10,padT=12,padB=22;
     var vals=points.map(function(p){return p.value});
     var min=Math.min(0,Math.min.apply(null,vals)),max=Math.max.apply(null,vals)||1;
     if(max===min)max=min+1;
@@ -775,6 +781,13 @@ function chartLine(points,opts){
     var linePts=points.map(function(p,i){return x(i)+','+y(p.value)}).join(' ');
     var areaPts=linePts+' '+x(points.length-1)+','+y(min)+' '+x(0)+','+y(min);
     var col=chartColor(0);
+    // Three ticks — floor, midpoint, ceiling. Enough to read a value off the
+    // chart without turning it into a spreadsheet.
+    var ticks=[min,(min+max)/2,max].map(function(v){
+        var yy=y(v);
+        return'<line x1="'+padL+'" y1="'+yy+'" x2="'+(W-padR)+'" y2="'+yy+'" class="chart-line-grid"></line>'+
+            '<text x="'+(padL-7)+'" y="'+(yy+3.5)+'" text-anchor="end" class="chart-line-axis">'+esc(fmtV(v))+'</text>';
+    }).join('');
     var dots=points.map(function(p,i){
         return'<circle cx="'+x(i)+'" cy="'+y(p.value)+'" r="3.5" fill="'+col+'" stroke="#fff" stroke-width="1.5">'+
             '<title>'+esc(p.label)+': '+esc(fmtV(p.value))+'</title></circle>';
@@ -785,6 +798,7 @@ function chartLine(points,opts){
         return'<text x="'+x(i)+'" y="'+(H-6)+'" text-anchor="middle" class="chart-line-axis">'+esc(p.label)+'</text>';
     }).join('');
     return'<svg viewBox="0 0 '+W+' '+H+'" class="chart-line">'+
+        ticks+
         '<polygon points="'+areaPts+'" fill="'+col+'" opacity=".08"></polygon>'+
         '<polyline points="'+linePts+'" fill="none" stroke="'+col+'" stroke-width="2" stroke-linejoin="round" stroke-linecap="round"></polyline>'+
         dots+labels+
@@ -1877,10 +1891,27 @@ function openEditStaffModal(key){
             +(core?core.PAY_TYPES.map(function(p){return '<option value="'+esc(p.id)+'"'+((row.payType||'hourly')===p.id?' selected':'')+'>'+esc(p.label)+'</option>';}).join(''):'')
             +'</select></div><div class="fg"><label class="fl">Rate</label><input type="number" min="0" step="0.01" id="esPayRate" class="fi" value="'+(row.payRate||'')+'"></div></div>';
     }
-    showModal('Edit '+(row.name||'Staff Member'),h,function(){ saveStaffMember(key); },
-        row.appId!=null?{onDelete:function(){
+    // The footer's destructive action used to appear ONLY for someone with a
+    // hiring application — a staff member typed straight onto a bunk or into
+    // Payroll had no delete/remove anywhere in the app, so a mistyped or test
+    // record could never be taken off the roster. Both cases get an action now;
+    // they just mean different things, so they're labelled differently:
+    // "Delete" wipes the application outright, "Remove" only takes the person
+    // off the roster's live assignments.
+    var canEdit=_pplCanEdit('me.staffing');
+    var delOpts={};
+    if(canEdit&&row.appId!=null){
+        delOpts={onDelete:function(){
             deleteStaffApp(row.appId).then(function(){ if(!staffApplications[row.appId])closeModal('dynModal'); });
-        }}:{});
+        }};
+    }else if(canEdit){
+        delOpts={deleteLabel:'Remove from roster',onDelete:function(){
+            removeStaffMember(key).then(function(){
+                if(!buildStaffRoster().some(function(r){return r._key===key;}))closeModal('dynModal');
+            });
+        }};
+    }
+    showModal('Edit '+(row.name||'Staff Member'),h,function(){ saveStaffMember(key); },delOpts);
 }
 // Writes to whichever of {payroll.staff, staffApplications} this person
 // actually has a record in, THEN pushes the same identity fields onto every
@@ -1920,12 +1951,81 @@ function saveStaffMember(key){
         });
         if(touched)_syncInvitesForBunk(bunkName);
     });
+    // Division Head slots are the fourth place a person's identity is stored,
+    // and they were the one this function skipped — so an email/name edit here
+    // left the Division Head entry on the OLD key, splitting one person into
+    // two rows the next time buildStaffRoster() ran.
+    Object.keys(divisionHeads||{}).forEach(function(divName){
+        (divisionHeads[divName]||[]).forEach(function(s){
+            if(_staffJoinKey(s.email,s.name)!==key)return;
+            s.name=name;s.email=email;s.phone=phone;s.role=role||s.role;
+        });
+    });
 
     save();
     closeModal('dynModal');
     _staffDetailKey=_staffJoinKey(email,name);
     if(curPage==='staffdetail')renderStaffDetailPage();else render(curPage);
     toast('Saved');
+}
+// Staff rows had Edit but no way to take anyone OFF the roster — campers have
+// had Unenroll on the row and Delete in the edit modal all along. A staff
+// record that never came through Hiring (typed straight onto a bunk, or added
+// in Payroll) had NO removal path anywhere in the app, so a mistyped or test
+// entry was stuck on the roster permanently.
+//
+// "Remove" means the same offboard Unhire already performs — off every bunk,
+// Division Head slot and Payroll record — and, for someone who does have a
+// hiring application, that application is kept and marked Declined for the
+// audit trail rather than destroyed (deleting it outright stays where it was,
+// on the application itself in Registration & Hiring).
+async function removeStaffMember(key){
+    if(!_pplCanEdit('me.staffing'))return;
+    var row=buildStaffRoster().filter(function(r){return r._key===key;})[0];
+    if(!row)return;
+    var nm=row.name||'This staff member';
+    var app=row.appId!=null?staffApplications[row.appId]:null;
+
+    // Tell them exactly what's about to go, the way deleteCamper/Unhire do —
+    // a bare "are you sure?" is what makes a destructive action feel unsafe.
+    var willLose=[];
+    if(row.bunks&&row.bunks.length)willLose.push('taken off '+row.bunks.map(function(b){return '<strong>'+esc(b)+'</strong>'}).join(', '));
+    var divs=Object.keys(divisionHeads||{}).filter(function(d){
+        return (divisionHeads[d]||[]).some(function(s){return _staffJoinKey(s.email,s.name)===key});
+    });
+    if(divs.length)willLose.push('removed as Division Head for '+divs.map(function(d){return '<strong>'+esc(d)+'</strong>'}).join(', '));
+    if(row.payrollId!=null)willLose.push('removed from <strong>Payroll</strong>, along with their timesheets');
+    var msg='<strong>'+esc(nm)+'</strong> will be '+(willLose.length?willLose.join(', ')+'.':'removed from the roster.');
+    if(app)msg+=' Their application stays in Registration &amp; Hiring marked <strong>Declined</strong> for the audit trail.';
+    if(row.payrollId!=null)msg+=' Any pay run they already appear on keeps their line, marked as removed — a committed run is a financial record.';
+    // Tip Payments is the one staff store this can't safely unwind on its own:
+    // the account can be holding money a parent already paid, and ptRemove()
+    // rightly refuses to delete one with a balance. Say so instead of quietly
+    // leaving them listed there — that silent leftover is exactly how the four
+    // staff lists drift apart. _ptAccounts is only populated once the Tips tab
+    // has been opened, so this is best-effort by design.
+    var tip=(_ptAccounts||[]).filter(function(x){
+        return _staffJoinKey(x.email,x.staff_name)===key||String(x.staff_name||'').trim().toLowerCase()===String(nm).trim().toLowerCase();
+    })[0];
+    if(tip){
+        var tipBal=parseFloat(tip.balance)||0;
+        msg+=' They also have a <strong>Tip Payments</strong> account'+(tipBal>0?' holding <strong>'+fm(tipBal)+'</strong>':'')+
+            ' — that one is not removed here'+(tipBal>0?', since the balance has to be paid out first':'')+'. Remove it from Payroll → Tip Payments when you\'re ready.';
+    }
+
+    var ok=await confirmDialog({title:'Remove '+esc(nm)+'?',message:msg,confirmLabel:'Remove',danger:true});
+    if(!ok)return;
+
+    var prevStatus=app?app.status:null;
+    var cap=_cascadeStaffOffboardByKey(key);
+    if(app)app.status='declined';
+    save();
+    if(curPage==='staffdetail')nav('campers');else render(curPage);
+    toast(nm+' removed from the roster','ok',{actionLabel:'Undo',onAction:function(){
+        _restoreStaffOffboard(cap);
+        if(app)app.status=prevStatus;
+        save();render(curPage);toast(nm+' restored');
+    }});
 }
 function setPplStaffSubTab(t){pplStaffSubTab=t;renderHiringPage()}
 // Everyone still being decided on: applications that haven't become a camper
@@ -2171,6 +2271,9 @@ function renderCampers(filter){
     // to anyone with plain me.campers access would leak it to roles that were
     // never granted either (Division Head, Nurse, Canteen, Bus Coordinator…).
     var canStaff=_secCan('me.staffing')||_secCan('me.payroll');
+    // Viewing the staff rows and being allowed to take someone off the roster
+    // are separate grants — Payroll-only roles can see the list, not edit it.
+    var canEditStaff=canStaff&&_pplCanEdit('me.staffing');
     var allCamperEntries=Object.entries(roster);
     var enrolledEntries=allCamperEntries.filter(function(pair){return !pair[1].unenrolled;});
     var unenrolledEntries=allCamperEntries.filter(function(pair){return pair[1].unenrolled;});
@@ -2248,7 +2351,7 @@ function renderCampers(filter){
                 var details2=(r.role||(r.positions||[]).join(', ')||'<span style="color:var(--s300)">—</span>')+(pay?' <span style="color:var(--s400);font-size:.78rem">· '+esc(pay)+'</span>':'');
                 var placement2=(grade?'<span style="font-size:.8rem">'+esc(grade)+'</span>':'<span style="color:var(--s300)">—</span>')+(r.bunks.length?' '+r.bunks.map(function(b){return bdg(b,'gray')}).join(' '):'');
                 var contact2=((r.email?'<div style="font-size:.78rem;color:var(--s500)">'+esc(r.email)+'</div>':'')+(r.phone?'<div style="font-size:.75rem;color:var(--s400)">'+esc(r.phone)+'</div>':''))||'<span style="color:var(--s300)">—</span>';
-                h+='<tr class="click" onclick="CampistryMe.viewStaffMember(\''+je(r._key)+'\')"><td>'+_typeBadge('staff')+'</td><td class="bold">'+esc(r.name)+'</td><td style="font-size:.8rem">'+details2+'</td><td>'+placement2+'</td><td>'+contact2+'</td><td style="text-align:right" onclick="event.stopPropagation()"><button class="me-btn me-btn--ghost me-btn--sm" onclick="CampistryMe.openEditStaffModal(\''+je(r._key)+'\')">Edit</button></td></tr>';
+                h+='<tr class="click" onclick="CampistryMe.viewStaffMember(\''+je(r._key)+'\')"><td>'+_typeBadge('staff')+'</td><td class="bold">'+esc(r.name)+'</td><td style="font-size:.8rem">'+details2+'</td><td>'+placement2+'</td><td>'+contact2+'</td><td style="text-align:right;white-space:nowrap" onclick="event.stopPropagation()"><button class="me-btn me-btn--ghost me-btn--sm" onclick="CampistryMe.openEditStaffModal(\''+je(r._key)+'\')">Edit</button>'+(canEditStaff?' <button class="me-btn me-btn--ghost me-btn--sm" onclick="CampistryMe.removeStaffMember(\''+je(r._key)+'\')" title="Take them off every bunk, Division Head slot and Payroll">Remove</button>':'')+'</td></tr>';
             }
         });
         h+='</tbody></table></div>'+_pagerHtml(combined.length,PAGE_SIZE,_rosterPage,'setRosterPage')+'</div>';
@@ -2731,6 +2834,13 @@ function editCamper(n){
     h+='<div class="fr">'+ff('Shirt Size','ceShirt',d.shirtSize||'','select',['','YS','YM','YL','AS','AM','AL','AXL','AXXL'])+ff('Bunkmate Request','ceBunkmate',d.bunkmateRequest||'')+'</div>';
     h+=ff('Do Not Bunk With','ceSeparate',d.separateFrom||'');
 
+    // Custom Fields — Roster → ⚙ Custom Fields promises these "appear on every
+    // camper profile", and the profile page (renderCamperDetailPage) and Reports
+    // both already read them, but this form never rendered an input for them, so
+    // there was no way to ever put a value IN one. Defining a field did nothing
+    // visible anywhere, which read as the whole feature being broken.
+    h+=_ceCustomFieldsHtml(d);
+
     var ceBodyEl=document.getElementById('ceBody');
     if(ceBodyEl)ceBodyEl.innerHTML=h;
     // Cascade
@@ -2769,6 +2879,43 @@ function ceMaritalChanged(){
 function ceToggleOtherParentSummer(){
     var on=document.getElementById('ceOpSummerSame'), b=document.getElementById('ceOpSummerBlock');
     if(b)b.style.display=(on&&on.checked)?'none':'';
+}
+// The roster record key a custom field's value lives under. _addCustomField
+// already mints ids as 'cf_<timestamp>', so the stored key is 'cf_cf_…' —
+// ugly, but it's what the camper profile card and the Reports field list have
+// always read, so it stays exactly as is rather than orphaning saved values.
+function _cfKey(cf){ return 'cf_'+cf.id; }
+// A checkbox is stored as the display string the profile card renders
+// verbatim ('Yes'), not a boolean, since cvR() prints the raw value and an
+// empty string is what makes it fall back to the "—" placeholder.
+function _ceCustomFieldsHtml(d){
+    loadCustomFields();
+    if(!customFields.length)return '';
+    d=d||{};
+    var h='<div class="fsec">Custom Fields</div>';
+    var rows=customFields.map(function(cf){
+        var id='ceCf_'+cf.id, cur=d[_cfKey(cf)]||'';
+        if(cf.type==='select')return ff(cf.label,id,cur,'select',[''].concat(cf.options||[]));
+        if(cf.type==='number')return ff(cf.label,id,cur,'number');
+        if(cf.type==='checkbox')return '<div class="fg"><label class="fl" style="display:flex;align-items:center;gap:7px;cursor:pointer">'+
+            '<input type="checkbox" id="'+id+'"'+(cur?' checked':'')+'> '+esc(cf.label)+'</label></div>';
+        return ff(cf.label,id,cur);
+    });
+    for(var i=0;i<rows.length;i+=2) h+=rows[i+1]?('<div class="fr">'+rows[i]+rows[i+1]+'</div>'):rows[i];
+    return h;
+}
+// Returns { 'cf_<id>': value } for every currently-defined field, including
+// the ones the user cleared — an omitted key would be silently preserved by
+// saveCamper's merge onto the old record, making a field impossible to blank.
+function _ceReadCustomFields(){
+    loadCustomFields();
+    var out={};
+    customFields.forEach(function(cf){
+        var el=document.getElementById('ceCf_'+cf.id);
+        if(!el)return;
+        out[_cfKey(cf)]=(cf.type==='checkbox')?(el.checked?'Yes':''):(el.value||'').trim();
+    });
+    return out;
 }
 function saveCamper(){
     var first=(document.getElementById('ceFirst').value||'').trim(),last=(document.getElementById('ceLast').value||'').trim();
@@ -2839,8 +2986,11 @@ function saveCamper(){
         camperType:_v('ceType'),swimLevel:_v('ceSwim'),shirtSize:_v('ceShirt'),
         bunkmateRequest:_v('ceBunkmate'),separateFrom:_v('ceSeparate')
     };
-    // Merge onto the old record so notes, documents, custom fields, scholarships,
-    // and history are preserved through an edit (they aren't on this form).
+    // Custom fields ARE on this form now, so their values (blanks included)
+    // come through _core rather than being preserved from the old record.
+    Object.assign(_core,_ceReadCustomFields());
+    // Merge onto the old record so notes, documents, scholarships, and history
+    // are preserved through an edit (they aren't on this form).
     roster[full]=Object.assign({},_oldRec,_core);
     // Change log: diff the tracked fields old→new and append a history entry.
     var _changes=_diffCamperFields(_oldRec,_core);
@@ -6642,37 +6792,79 @@ function _syncAcceptedContractsToPayroll(){
 // active (bug: Decline didn't clean up what a hard Delete already did).
 // Returns what it removed so a caller can offer Undo.
 function _cascadeStaffOffboard(a){
-    var out={bunks:[],divisions:[],payrollStaff:[],payrollTimesheets:[]};
-    var delEmail=String((a&&a.email)||'').trim().toLowerCase();
-    if(!delEmail)return out;
-    bunksForStaffEmail(delEmail).forEach(function(b){
-        var before=(bunkStaff[b]||[]).slice();
-        var after=before.filter(function(s){return staffKey(s)!==delEmail});
-        if(after.length!==before.length)out.bunks.push({bunk:b,entries:before});
+    return _cascadeStaffOffboardByKey(_staffJoinKey(a&&a.email,a&&a.name));
+}
+// Everything here matches on the SAME join key buildStaffRoster() uses
+// (_staffJoinKey: email if there is one, else name). It used to match on the
+// raw email and bail entirely when there wasn't one — so unhiring someone the
+// office had entered without an email left them sitting on their bunk, their
+// Division Head slot and Payroll with nothing cleaned up at all, which is the
+// exact case the Roster's "unplaced staff" banner already warns about.
+function _cascadeStaffOffboardByKey(key){
+    var out={bunks:[],divisions:[],payrollStaff:[],payrollTimesheets:[],payRunLines:[]};
+    if(!key)return out;
+    function matches(s){ return _staffJoinKey(s&&s.email,s&&s.name)===key; }
+
+    Object.keys(bunkStaff||{}).forEach(function(b){
+        var before=(bunkStaff[b]||[]);
+        var after=before.filter(function(s){return !matches(s)});
+        if(after.length===before.length)return;
+        out.bunks.push({bunk:b,entries:before.slice()});
         if(after.length)bunkStaff[b]=after;else delete bunkStaff[b];
     });
-    divisionsForStaffEmail(delEmail).forEach(function(d){
-        var idx=(divisionHeads[d]||[]).findIndex(function(s){return staffKey(s)===delEmail});
-        if(idx>=0){ out.divisions.push({div:d,idx:idx,entry:divisionHeads[d][idx]}); removeDivisionHead(d,idx); }
-    });
-    var pkey=_staffJoinKey(a.email,a.name);
-    if(pkey){
-        var removed=(payroll.staff||[]).filter(function(s){return _staffJoinKey(s.email,s.name)===pkey});
-        if(removed.length){
-            var removedIds=removed.map(function(s){return String(s.id)});
-            payroll.staff=(payroll.staff||[]).filter(function(s){return _staffJoinKey(s.email,s.name)!==pkey});
-            var removedTs=(payroll.timesheets||[]).filter(function(t){return removedIds.indexOf(String(t.staffId))>=0});
-            payroll.timesheets=(payroll.timesheets||[]).filter(function(t){return removedIds.indexOf(String(t.staffId))<0});
-            out.payrollStaff=removed;out.payrollTimesheets=removedTs;
+    // Walk each division's list back-to-front so removing one head can't shift
+    // the index of another match still to be removed — and capture every match,
+    // not just the first, since the same person can be listed twice.
+    Object.keys(divisionHeads||{}).forEach(function(d){
+        var list=divisionHeads[d]||[];
+        for(var i=list.length-1;i>=0;i--){
+            if(!matches(list[i]))continue;
+            out.divisions.push({div:d,idx:i,entry:list[i]});
+            list.splice(i,1);
         }
+    });
+
+    var removed=(payroll.staff||[]).filter(matches);
+    if(removed.length){
+        var removedIds=removed.map(function(s){return String(s.id)});
+        payroll.staff=(payroll.staff||[]).filter(function(s){return !matches(s)});
+        var removedTs=(payroll.timesheets||[]).filter(function(t){return removedIds.indexOf(String(t.staffId))>=0});
+        payroll.timesheets=(payroll.timesheets||[]).filter(function(t){return removedIds.indexOf(String(t.staffId))<0});
+        out.payrollStaff=removed;out.payrollTimesheets=removedTs;
+        out.payRunLines=_prFlagRemovedStaffLines(removedIds);
     }
     return out;
 }
+// A committed pay run is a financial record — deleting its line would quietly
+// change what the run says the camp owed that period. So the line stays and is
+// STAMPED instead, and the Runs tab renders the stamp, rather than leaving a
+// row that silently points at a staff record that no longer exists.
+// Returns the stamped lines so an Undo can un-stamp exactly those.
+function _prFlagRemovedStaffLines(removedIds){
+    var touched=[];
+    var ids=(removedIds||[]).map(String);
+    (payroll.payRuns||[]).forEach(function(run){
+        (run.lines||[]).forEach(function(l){
+            if(ids.indexOf(String(l.staffId))<0)return;
+            if(l.staffRemoved)return;
+            l.staffRemoved=true;
+            l.staffRemovedAt=new Date().toISOString();
+            touched.push(l);
+        });
+    });
+    return touched;
+}
 function _restoreStaffOffboard(cap){
     (cap.bunks||[]).forEach(function(x){bunkStaff[x.bunk]=x.entries;});
-    (cap.divisions||[]).forEach(function(x){ if(!divisionHeads[x.div])divisionHeads[x.div]=[]; divisionHeads[x.div].splice(x.idx,0,x.entry); });
+    // Re-insert lowest index first so each entry lands back at the position it
+    // was captured from (the removal pass walked back-to-front).
+    (cap.divisions||[]).slice().sort(function(a,b){return a.idx-b.idx}).forEach(function(x){
+        if(!divisionHeads[x.div])divisionHeads[x.div]=[];
+        divisionHeads[x.div].splice(x.idx,0,x.entry);
+    });
     if((cap.payrollStaff||[]).length)payroll.staff=(payroll.staff||[]).concat(cap.payrollStaff);
     if((cap.payrollTimesheets||[]).length)payroll.timesheets=(payroll.timesheets||[]).concat(cap.payrollTimesheets);
+    (cap.payRunLines||[]).forEach(function(l){ delete l.staffRemoved; delete l.staffRemovedAt; });
 }
 // Leaving "hired" (Decline being the one real-world way this happens) is
 // destructive to live assignments now, so it gets its own confirm+cascade
@@ -6783,9 +6975,8 @@ async function deleteStaffApp(id){
     if(!ok)return;
     var wasOnDetailPage=curPage==='staffdetail';
     // A hired staff member can also be on a bunk, a Division Head slot, and
-    // in Payroll — do this before the delete below since bunksForStaffEmail
-    // etc. don't need the record, but removeDivisionHead's confirm-free
-    // splice is safest run while `a` (used for name/email) is still around.
+    // in Payroll — run this before the delete below, while `a` still supplies
+    // the email/name the cascade derives its join key from.
     _cascadeStaffOffboard(a);
     delete staffApplications[id];
     save();
@@ -10121,7 +10312,12 @@ function renderAnalytics(){
 
     h+=statRow(
         statTile('Campers on Roster',String(roster?Object.keys(roster).length:0))+
-        statTile('Staff',String(hiredStaff().length))+
+        // The Roster's own staff count is buildStaffRoster() — the join across
+        // hired applications, payroll.staff and bunkStaff. Counting only hired
+        // applications here made Analytics disagree with the page right next
+        // to it for every staff member the office added straight to a bunk or
+        // to Payroll without an application.
+        statTile('Staff',String(buildStaffRoster().length))+
         statTile('Divisions',String(divisions.length))+
         statTile('Bunks',String(bunkCount))
     );
@@ -10279,8 +10475,17 @@ function renderFinance(){
         // Revenue trend — real payments (positive amounts, not pending/failed)
         // bucketed by the ISO week they landed, so the office can see whether
         // collections are picking up or stalling, not just a single total.
+        //
+        // The Collected tile above and this chart count DIFFERENT things, and
+        // that used to be invisible: the tile sums each auto-invoice's `paid`
+        // (so only payments tied to a camper's invoice), while the chart sums
+        // every recorded payment. A camp whose payments hadn't been matched to
+        // an invoice therefore saw "Collected: $0" sitting directly above a
+        // chart full of money — the exact contradiction Billing already
+        // surfaces with its unmatched-payments banner. Reconcile it here too:
+        // invoice-matched + unmatched = every payment on the books.
         (function(){
-            var byWeek={};
+            var byWeek={},recorded=0;
             finPayments.forEach(function(p){
                 if(!p||!p.date||(p.amount||0)<=0)return;
                 if(p.status==='pending'||p.status==='failed')return;
@@ -10289,13 +10494,21 @@ function renderFinance(){
                 var wk=new Date(d);wk.setDate(d.getDate()-d.getDay());
                 var key=wk.toISOString().slice(0,10);
                 byWeek[key]=(byWeek[key]||0)+p.amount;
+                recorded+=p.amount;
             });
+            var unmatched=Math.round((recorded-totalCollected)*100)/100;
+            if(unmatched>0){
+                h+='<div style="background:#FFFBEB;border:1px solid #FDE68A;padding:9px 12px;border-radius:var(--r);margin-bottom:12px;font-size:.82rem;color:#92400E;cursor:pointer" onclick="CampistryMe.nav(\'billing\')">'
+                    +fm(recorded)+' in payments has been recorded, but only '+fm(totalCollected)+' of it is matched to a camper\'s tuition invoice — so <strong>'+fm(unmatched)+'</strong> counts in the chart below and not in Collected above. Review it in Billing &amp; Payments.</div>';
+            }
             var weeks=Object.keys(byWeek).sort();
             if(weeks.length>=2){
                 var pts=weeks.slice(-10).map(function(k){
                     return{label:new Date(k+'T12:00:00').toLocaleDateString('en-US',{month:'short',day:'numeric'}),value:byWeek[k]};
                 });
-                h+='<div class="me-card" style="margin-bottom:14px;padding:16px"><h4 style="font-size:.85rem;font-weight:700;color:var(--s700);margin:0 0 10px">Revenue Collected by Week</h4>';
+                h+='<div class="me-card" style="margin-bottom:14px;padding:16px"><div style="display:flex;justify-content:space-between;align-items:baseline;margin:0 0 10px;gap:8px;flex-wrap:wrap">'
+                    +'<h4 style="font-size:.85rem;font-weight:700;color:var(--s700);margin:0">Revenue Collected by Week</h4>'
+                    +'<span style="font-size:.72rem;color:var(--s400)">All recorded payments · '+fm(recorded)+' total</span></div>';
                 h+=chartLine(pts,{money:true});
                 h+='</div>';
             }
@@ -11527,6 +11740,52 @@ function _prReadAddr(prefix){
     return{street:v(prefix+'Street'),city:v(prefix+'City'),state:v(prefix+'State'),zip:v(prefix+'Zip')};
 }
 
+// People the rest of the app already knows about who have no payroll record
+// yet — the joined roster (hired applications + bunk staff), minus anyone
+// already in payroll.staff, matched on the same join key buildStaffRoster()
+// itself uses so "already there" means the same thing everywhere.
+function _prImportCandidates(){
+    var inPayroll={};
+    (payroll.staff||[]).forEach(function(s){ var k=_staffJoinKey(s.email,s.name); if(k)inPayroll[k]=true; });
+    return buildStaffRoster().filter(function(r){ return r.name&&!inPayroll[r._key]; });
+}
+function _prImportPickerHtml(){
+    var cands=_prImportCandidates();
+    if(!cands.length)return '';
+    return '<div style="background:var(--s50,#F8FAFC);border:1px solid var(--s200);border-radius:var(--r);padding:10px 12px;margin-bottom:12px">'
+        +'<label class="fl" style="margin-bottom:4px">Start from someone already on staff</label>'
+        +'<select id="prImportFrom" class="fs" onchange="CampistryMe.prImportStaff()">'
+        +'<option value="">— Enter a new person manually —</option>'
+        +cands.map(function(r){
+            var sub=[r.role||(r.positions||[]).join(', '),r.bunks.join(', '),r.email].filter(Boolean).join(' · ');
+            return '<option value="'+esc(r._key)+'">'+esc(r.name)+(sub?' — '+esc(sub):'')+'</option>';
+        }).join('')
+        +'</select>'
+        +'<p style="font-size:.68rem;color:var(--s400);margin:4px 0 0">Fills in their name, contact details and bunk from Hiring and the Roster. Pay is still yours to set below.</p></div>';
+}
+// Only ever WRITES into empty inputs plus the identity fields the picker is
+// for — so picking a second time after typing a rate doesn't wipe the rate,
+// and switching back to "enter manually" doesn't blank what's already typed.
+function prImportStaff(){
+    var sel=document.getElementById('prImportFrom');
+    if(!sel||!sel.value)return;
+    var row=buildStaffRoster().filter(function(r){return r._key===sel.value;})[0];
+    if(!row)return;
+    var app=row.appId!=null?(staffApplications[row.appId]||{}):{};
+    function set(id,val){ var e=document.getElementById(id); if(e&&val)e.value=val; }
+    set('prName',row.name);
+    set('prRole',row.role||(row.positions||[]).join(', '));
+    set('prPhone',row.phone||app.phone);
+    set('prEmail',row.email||app.email);
+    set('prDob',app.dob);
+    set('prHomeStreet',app.street);set('prHomeCity',app.city);set('prHomeState',app.state);set('prHomeZip',app.zip);
+    // The bunk select only accepts a name that's actually an option — a stale
+    // bunk from an old assignment would otherwise silently select nothing.
+    var bunkEl=document.getElementById('prBunk');
+    var bunk=(row.bunks||[])[0];
+    if(bunkEl&&bunk&&Array.prototype.some.call(bunkEl.options,function(o){return o.value===bunk;}))bunkEl.value=bunk;
+    toast('Filled in from '+(row.appId!=null?'Hiring':'the Roster'));
+}
 function prEditStaff(id){
     var core=PC(); if(!core) return;
     var editing=(id!=null);
@@ -11534,7 +11793,15 @@ function prEditStaff(id){
     var yc=s.youthCorps||{};
     var today=_prToday();
 
-    var h='<div class="fsec">Person</div>';
+    var h='';
+    // Adding to Payroll used to be a blank form even for someone already
+    // hired and sitting on the roster — every field had to be retyped, and a
+    // typo in the name or email split that one person into two rows
+    // (buildStaffRoster joins on email-or-name). Offer the existing people
+    // first so the payroll record starts from the same identity the rest of
+    // the app already has.
+    if(!editing)h+=_prImportPickerHtml();
+    h+='<div class="fsec">Person</div>';
     h+='<div class="fr">'+ff('Full Name','prName',s.name||'')+ff('Role / Title','prRole',s.role||'')+'</div>';
     h+='<div class="fr">'+ff('Date of Birth','prDob',s.dob||'','date')+ff('Department','prDept',s.department||'')+'</div>';
     h+='<div class="fr">'+ff('Phone','prPhone',s.phone||'','tel')+ff('Email','prEmail',s.email||'','email')+'</div>';
@@ -11659,11 +11926,32 @@ function prPayTypeHint(){
 }
 async function prRemoveStaff(id){
     var s=_prStaffById(id); if(!s)return;
-    var ok=await confirmDialog({title:'Remove from Payroll?',message:'<strong>'+esc(s.name||'This person')+'</strong> will be removed from payroll. Their timesheets are removed too.',confirmLabel:'Remove',danger:true});
+    // The confirm used to promise only "their timesheets are removed too" while
+    // silently leaving every pay-run line that references this staffId behind,
+    // with nothing on it to say the person no longer exists — a run could still
+    // be read, exported or paid out against a record that had been deleted.
+    // The lines stay (a committed run is a financial record of what was owed
+    // that period, and rewriting it would be worse), but they get stamped and
+    // rendered as removed, and the confirm now says so.
+    var runsAffected=(payroll.payRuns||[]).filter(function(r){
+        return (r.lines||[]).some(function(l){return String(l.staffId)===String(id)&&!l.staffRemoved});
+    }).length;
+    var msg='<strong>'+esc(s.name||'This person')+'</strong> will be removed from payroll. Their timesheets are removed too.';
+    if(runsAffected)msg+=' They already appear on <strong>'+runsAffected+' pay run'+(runsAffected!==1?'s':'')+'</strong> — those lines are kept as a record of what was owed and marked <strong>removed</strong>.';
+    var ok=await confirmDialog({title:'Remove from Payroll?',message:msg,confirmLabel:'Remove',danger:true});
     if(!ok)return;
+    var captured=payroll.staff.filter(function(x){return String(x.id)===String(id)});
+    var capturedTs=payroll.timesheets.filter(function(t){return String(t.staffId)===String(id)});
     payroll.staff=payroll.staff.filter(function(x){return String(x.id)!==String(id)});
     payroll.timesheets=payroll.timesheets.filter(function(t){return String(t.staffId)!==String(id)});
-    save(); renderPayroll(); toast('Removed from payroll');
+    var capturedLines=_prFlagRemovedStaffLines([id]);
+    save(); renderPayroll();
+    toast('Removed from payroll','ok',{actionLabel:'Undo',onAction:function(){
+        payroll.staff=payroll.staff.concat(captured);
+        payroll.timesheets=payroll.timesheets.concat(capturedTs);
+        capturedLines.forEach(function(l){ delete l.staffRemoved; delete l.staffRemovedAt; });
+        save(); renderPayroll(); toast((s.name||'They')+' restored to payroll');
+    }});
 }
 
 function _prChecklistHtml(res){
@@ -11906,9 +12194,11 @@ function _prRunsTab(){
         h+='<div class="me-tw"><table class="me-t"><thead><tr><th>Name</th><th>Pay type</th><th>Hours</th><th>Gross</th><th>Method</th><th>Flags</th></tr></thead><tbody>';
         (run.lines||[]).forEach(function(l){
             var flags=[];
+            if(l.staffRemoved)flags.push('staff record removed');
             if(l.unsigned)flags.push(l.unsigned+' unsigned');
             if(l.unsubmitted)flags.push(l.unsubmitted+' not submitted');
-            h+='<tr><td class="bold">'+esc(l.name)+'</td>'+
+            h+='<tr'+(l.staffRemoved?' style="background:rgba(239,68,68,.04)"':'')+'><td class="bold">'+esc(l.name)+
+               (l.staffRemoved?' <span style="font-weight:600;font-size:.68rem;color:var(--err);background:#FEF2F2;border:1px solid #FECACA;border-radius:999px;padding:1px 7px;white-space:nowrap" title="This person is no longer on payroll — the line is kept as a record of what this run owed">removed</span>':'')+'</td>'+
                '<td style="font-size:.78rem">'+esc((core.PAY_TYPES.filter(function(p){return p.id===l.payType})[0]||{}).label||l.payType)+'</td>'+
                '<td>'+l.hours+'</td>'+
                '<td style="font-weight:700">'+(l.paidByProgram?'<span style="color:var(--s400);font-weight:500">Paid by program</span>':fm(l.gross))+'</td>'+
@@ -14940,6 +15230,18 @@ function _diffCamperFields(oldR,newR){
         var b=newR[k]==null?'':String(newR[k]);
         if(a!==b) out.push({field:k,label:_CAMPER_FIELD_LABELS[k],from:a,to:b});
     });
+    // Custom fields aren't in _CAMPER_FIELD_LABELS (they're camp-defined at
+    // runtime), but they're edited on the same form — so they belong in the
+    // same change log rather than being the one kind of edit that silently
+    // leaves no audit trail.
+    loadCustomFields();
+    (customFields||[]).forEach(function(cf){
+        var k=_cfKey(cf);
+        if(!(k in newR))return;
+        var a=oldR[k]==null?'':String(oldR[k]);
+        var b=newR[k]==null?'':String(newR[k]);
+        if(a!==b) out.push({field:k,label:cf.label,from:a,to:b});
+    });
     return out;
 }
 function renderCamperHistory(camperName){
@@ -16212,7 +16514,7 @@ window.CampistryMe={
     nav:nav,closeModal:closeModal,
     viewCamper:viewCamper,editCamper:editCamper,deleteCamper:deleteCamper,unenrollCamper:unenrollCamper,reenrollCamper:reenrollCamper,ceToggleSummer:ceToggleSummer,ceMaritalChanged:ceMaritalChanged,ceToggleOtherParentSummer:ceToggleOtherParentSummer,
     addFamily:function(){openFamilyForm(null)},editFamily:function(id){openFamilyForm(id)},deleteFamily:deleteFamily,removeCamperFromFamily:removeCamperFromFamily,
-    setPplStaffSubTab:setPplStaffSubTab,viewStaffMember:viewStaffMember,openEditStaffModal:openEditStaffModal,saveStaffMember:saveStaffMember,
+    setPplStaffSubTab:setPplStaffSubTab,viewStaffMember:viewStaffMember,openEditStaffModal:openEditStaffModal,saveStaffMember:saveStaffMember,removeStaffMember:removeStaffMember,
     acceptFamilySuggestion:acceptFamilySuggestion,dismissFamilySuggestion:dismissFamilySuggestion,acceptAddToFamily:acceptAddToFamily,
     mergeFamilies:mergeFamilies,dismissMergeFamilies:dismissMergeFamilies,openMergeFamiliesTool:openMergeFamiliesTool,
     openUnmatchedPaymentsModal:openUnmatchedPaymentsModal,
@@ -16266,7 +16568,7 @@ window.CampistryMe={
     copyLinkText:copyLinkText,showLinkQR:showLinkQR,
     openSendLinkModal:openSendLinkModal,openSendRegLinkModal:openSendRegLinkModal,openSendStaffLinkModal:openSendStaffLinkModal,
     // Payroll
-    prSetTab:prSetTab,prEditStaff:prEditStaff,prRemoveStaff:prRemoveStaff,openPayrollStaff:openPayrollStaff,
+    prSetTab:prSetTab,prEditStaff:prEditStaff,prRemoveStaff:prRemoveStaff,prImportStaff:prImportStaff,openPayrollStaff:openPayrollStaff,
     prToggleSummer:prToggleSummer,prToggleYc:prToggleYc,prPayTypeHint:prPayTypeHint,
     prWeekStep:prWeekStep,prWeekToday:prWeekToday,
     prSetHours:prSetHours,prSetSigned:prSetSigned,prSetSheetStatus:prSetSheetStatus,

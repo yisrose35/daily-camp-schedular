@@ -246,7 +246,7 @@ function applyFieldConfig(fields,sectionsDisabled){
         FIELD_ENABLED_STATE[fid]=enabled;
         if(!enabled){ if(fg)fg.style.display='none'; return; }
         if(fg)fg.style.display='';
-        var required=cfg?!!cfg.required:!!FIELD_REQUIRED_DEFAULT[fid];
+        var required=(cfg&&cfg.required!=null)?!!cfg.required:!!FIELD_REQUIRED_DEFAULT[fid];
         FIELD_REQUIRED_STATE[fid]=required;
         var label=fg&&fg.querySelector('.fl');
         if(label){

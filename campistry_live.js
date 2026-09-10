@@ -98,6 +98,17 @@ function esc(s) { if (s == null) return ''; var d = document.createElement('div'
     }
     function rcIsPresent(name, today) { return rcState(name, today) === 'present'; }
 
+    // Cloud hydration hasn't finished. Deliberately "not yet TRUE" rather than
+    // "=== false": on a page whose bootstrap hasn't run at all the flag is
+    // undefined, and reading that as "done loading" is what made roll call
+    // show its dead-end "No campers loaded yet — try reloading" message on a
+    // camp that had a full roster. renderRollCall() re-runs on the
+    // campistry-cloud-hydrated event, so this state resolves on its own.
+    function _rcCloudPending() { return window.__CAMPISTRY_CLOUD_READY__ !== true; }
+    function _rcLoadingHtml(label) {
+        return '<div class="rc-loading"><span class="rc-spinner" aria-hidden="true"></span>' + esc(label) + '</div>';
+    }
+
     function rcInitials(name) {
         return String(name).split(' ').map(p => p[0] || '').join('').slice(0, 2).toUpperCase();
     }
@@ -114,7 +125,8 @@ function esc(s) { if (s == null) return ''; var d = document.createElement('div'
         const reasonBadge = absence
             ? '<div class="rc-detail" style="color:var(--live);font-weight:600;">' + esc(RC_REASON_LABEL[absence.reason] || absence.reason || 'Absent') + (absence.time ? ' — ' + esc(absence.time) : '') + '</div>'
             : (state === 'unmarked' ? '<div class="rc-detail rc-unmarked-tag">Not marked yet</div>' : '');
-        return '<div class="rc-row ' + state + '" data-camper="' + esc(name) + '" onclick="CampistryLive.toggleByEl(this)">' +
+        const nextLabel = state === 'unmarked' ? 'present' : state === 'present' ? 'absent' : 'not marked';
+        return '<div class="rc-row ' + state + '" data-camper="' + esc(name) + '" title="Tap to mark ' + nextLabel + '" onclick="CampistryLive.toggleByEl(this)">' +
             '<div class="rc-avatar">' + esc(rcInitials(name)) + '</div>' +
             '<div class="rc-info">' +
             '<div class="rc-name">' + esc(name) + '</div>' +
@@ -157,7 +169,7 @@ function esc(s) { if (s == null) return ''; var d = document.createElement('div'
         } else {
             const divEntries = Object.entries(struct);
             if (!divEntries.length) {
-                html += '<div class="empty-state">' + (window.__CAMPISTRY_CLOUD_READY__ === false ? 'Camp data is still loading…' : 'No divisions configured. Set up camp structure in Campistry Me.') + '</div>';
+                html += '<div class="empty-state">' + (_rcCloudPending() ? _rcLoadingHtml('Loading camp structure…') : 'No divisions configured. Set up camp structure in Campistry Me.') + '</div>';
             }
 
             let matchedAny = false;
@@ -213,7 +225,7 @@ function esc(s) { if (s == null) return ''; var d = document.createElement('div'
             if (divEntries.length && !matchedAny) {
                 const rosterCount = Object.keys(roster).length;
                 if (!rosterCount) {
-                    html += '<div class="empty-state">' + (window.__CAMPISTRY_CLOUD_READY__ === false ? 'Camp data is still loading…' : 'No campers loaded yet — if campers exist in Campistry Me, try reloading this page.') + '</div>';
+                    html += '<div class="empty-state">' + (_rcCloudPending() ? _rcLoadingHtml('Loading campers…') : 'No campers loaded yet — if campers exist in Campistry Me, try reloading this page.') + '</div>';
                 } else {
                     html += '<div class="empty-state">' + rosterCount + ' camper(s) loaded, but none match a current division — a division may have been renamed in Campistry Me since they were assigned. Re-check their division there.</div>';
                 }
@@ -233,14 +245,21 @@ function esc(s) { if (s == null) return ''; var d = document.createElement('div'
         const today = getTodayData();
         const cur = rcState(name, today);
         today.absences = today.absences.filter(a => a.name !== name);
-        // unmarked/absent -> present; present -> absent. Always an explicit
-        // true/false — never delete the key, since a missing key now means
-        // "not marked" rather than "present".
-        today.attendance[name] = (cur === 'present') ? false : true;
+        // Three states, cycled: not marked → present → absent → not marked.
+        // It used to flip only between present and absent, so the very first
+        // tap — including a mis-tap on the wrong camper — was irreversible:
+        // there was no way back to "not marked", and the division header's
+        // "N not marked" count could never go back up. Clearing DELETES the
+        // key rather than storing a value, because rcState() reads a missing
+        // key as unmarked and an explicit false as absent.
+        let next;
+        if (cur === 'unmarked') { today.attendance[name] = true; next = ' marked present'; }
+        else if (cur === 'present') { today.attendance[name] = false; next = ' marked absent'; }
+        else { delete today.attendance[name]; next = ' cleared — not marked'; }
         saveTodayData(today);
         renderRollCall();
         renderDashboard();
-        toast(name + (today.attendance[name] === true ? ' marked present' : ' marked absent'));
+        toast(name + next);
     }
 
     function markAllPresent() {

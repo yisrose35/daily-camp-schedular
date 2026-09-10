@@ -9,6 +9,18 @@
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link href="https://fonts.googleapis.com/css2?family=DM+Sans:opsz,wght@9..40,300;9..40,400;9..40,500;9..40,600;9..40,700;9..40,800&family=Fraunces:opsz,wght@9..144,400;9..144,500;9..144,600;9..144,700&display=swap" rel="stylesheet">
     <style>html:not(.css-ready) body { opacity: 0; } html.css-ready body { transition: opacity 0.15s ease; }</style>
+    <!-- Loading skeletons. The camp name and the four stat tiles are filled in
+         from a Supabase read, so until that resolves they used to show a
+         hardcoded "Your Camp" and four "—" placeholders — which reads as a
+         brand-new, unconfigured camp rather than as data still arriving. -->
+    <style>
+      .dash-skel{display:inline-block;vertical-align:middle;min-width:2.2em;height:.85em;border-radius:6px;
+        background:linear-gradient(90deg,rgba(148,163,184,.22) 25%,rgba(148,163,184,.38) 37%,rgba(148,163,184,.22) 63%);
+        background-size:400% 100%;animation:dashSkel 1.3s ease-in-out infinite}
+      .dash-skel--name{min-width:7em}
+      @keyframes dashSkel{0%{background-position:100% 50%}100%{background-position:0 50%}}
+      @media (prefers-reduced-motion:reduce){.dash-skel{animation:none}}
+    </style>
     <link rel="stylesheet" href="dashboard.css?v=20260903-03" onload="document.documentElement.classList.add('css-ready')">
     <link rel="stylesheet" href="mobile-responsive.css?v=20260903-03">
     <noscript><style>html body { opacity: 1 !important; }</style></noscript>
@@ -46,7 +58,7 @@
         <header class="dash-hero">
             <div class="dash-hero-left">
                 <p class="dash-greeting" id="dashGreeting">Good morning,</p>
-                <h1 class="welcome-title">Welcome back, <span id="campNameDisplay">Your Camp</span>!</h1>
+                <h1 class="welcome-title">Welcome back, <span id="campNameDisplay" class="dash-skel dash-skel--name" aria-label="Loading camp name"></span>!</h1>
                 <p class="welcome-sub" id="welcomeSubtitle">Here's what's happening at camp today.</p>
             </div>
             <!-- Earned achievement medals (populated by badges.js) -->
@@ -197,7 +209,7 @@
                     <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="7" height="7"/><rect x="14" y="3" width="7" height="7"/><rect x="14" y="14" width="7" height="7"/><rect x="3" y="14" width="7" height="7"/></svg>
                 </div>
                 <div class="dash-stat-content">
-                    <span class="dash-stat-value" id="statDivisions">—</span>
+                    <span class="dash-stat-value dash-skel" id="statDivisions"></span>
                     <span class="dash-stat-label">Divisions</span>
                 </div>
             </div>
@@ -206,7 +218,7 @@
                     <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 9l9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/><polyline points="9 22 9 12 15 12 15 22"/></svg>
                 </div>
                 <div class="dash-stat-content">
-                    <span class="dash-stat-value" id="statBunks">—</span>
+                    <span class="dash-stat-value dash-skel" id="statBunks"></span>
                     <span class="dash-stat-label">Bunks</span>
                 </div>
             </div>
@@ -215,7 +227,7 @@
                     <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/></svg>
                 </div>
                 <div class="dash-stat-content">
-                    <span class="dash-stat-value" id="statCampers">—</span>
+                    <span class="dash-stat-value dash-skel" id="statCampers"></span>
                     <span class="dash-stat-label">Campers</span>
                 </div>
             </div>
@@ -224,7 +236,7 @@
                     <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M16 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="8.5" cy="7" r="4"/><polyline points="17 11 19 13 23 9"/></svg>
                 </div>
                 <div class="dash-stat-content">
-                    <span class="dash-stat-value" id="statStaff">—</span>
+                    <span class="dash-stat-value dash-skel" id="statStaff"></span>
                     <span class="dash-stat-label">Team</span>
                 </div>
             </div>
@@ -808,7 +820,7 @@ if (window.location.protocol === 'file:') {
     <script src="local_cache_idb.js?v=20260903-03"></script>
     <script src="integration_hooks.js?v=20260904-03"></script>
     <script src="cloud_sync_helpers.js?v=20260903-03"></script>
-    <script src="dashboard.js?v=20260908-05"></script>
+    <script src="dashboard.js?v=20260910-05"></script>
     <script src="campistry_birthdays.js?v=20260903-03"></script>
     <script src="badges.js?v=20260903-03"></script>
     <script src="access_control.js?v=20260903-03"></script>

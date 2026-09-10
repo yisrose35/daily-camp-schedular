@@ -142,6 +142,11 @@ function createNote(opts) {
     opts = opts || {};
     var note = {
         id:        newId(),
+        // Set only on the three demo notes seeded on first run. It's what lets
+        // the cloud merge recognise "this is the same seeded note as the one
+        // that came down from another device" — ids are random per device, so
+        // without it the copies were indistinguishable and simply piled up.
+        seedKey:   opts.seedKey || undefined,
         title:     opts.title || '',
         body:      opts.body  || '',
         color:     opts.color || 'yellow',
@@ -158,6 +163,51 @@ function createNote(opts) {
     notes.unshift(note);
     setNotes(notes);
     return note;
+}
+
+// The three starter notes, seeded exactly once — after the cloud sync has had
+// its say, so a camp that already has notes (on this account, from any device)
+// never gets them again. Safe to call repeatedly.
+var DEMO_NOTES = [
+    { seedKey:'welcome',      title:'Welcome to Campistry Notes', body:'Press Shift+N anywhere to jot something down instantly.\n\nUse the sidebar to pin, share, or set reminders on your notes.', color:'yellow' },
+    { seedKey:'staff-meeting',title:'Staff meeting — June 10',    body:'- Review daily schedule\n- Rainy day backup plan\n- Bunk assignment updates', color:'blue' },
+    { seedKey:'supply-list',  title:'Supply list',                body:'Bug spray ✓\nSunscreen\nFirst aid restock\nCraft supplies — need more paint', color:'green' }
+];
+function seedDemoNotesIfEmpty() {
+    window.__notesSeedPending = false;
+    var s = loadStore();
+    // seededAt is the durable "we already did this" marker. Without it, a user
+    // who trashes all three starter notes would have them re-seeded on the next
+    // visit that starts from an empty-looking store.
+    if (s.seededAt) return false;
+    if ((s.notes || []).length) { s.seededAt = Date.now(); saveStore(s); return false; }
+    DEMO_NOTES.forEach(function(d){ createNote(d); });
+    s = loadStore(); s.seededAt = Date.now(); saveStore(s);
+    return true;
+}
+// Collapses the duplicate seeded notes an earlier build already created: same
+// seedKey, or (for notes seeded before seedKey existed) the exact same title
+// AND body as another note that has never been edited since it was created.
+// Only ever touches notes that still match a DEMO_NOTES entry verbatim, so a
+// real note the user wrote can never be swept up by it.
+function dedupeSeededNotes() {
+    var notes = getNotes();
+    var isDemo = {};
+    DEMO_NOTES.forEach(function(d){ isDemo[d.title + '\u0000' + d.body] = d.seedKey; });
+    var keptKey = {}, out = [], dropped = [];
+    notes.forEach(function(n){
+        var key = n && (n.seedKey || isDemo[(n.title || '') + '\u0000' + (n.body || '')]);
+        // Not a pristine starter note (or edited since) → always kept.
+        if (!key || (n.updatedAt && n.createdAt && n.updatedAt - n.createdAt > 1000)) { out.push(n); return; }
+        if (keptKey[key]) { dropped.push(n); return; }
+        keptKey[key] = true;
+        out.push(n);
+    });
+    if (dropped.length) setNotes(out);
+    // Returned, not just counted, so the cloud bridge can delete the same rows
+    // — dropping them locally alone would just let the next sync pull them
+    // straight back down.
+    return dropped;
 }
 
 // ─── EDITOR ──────────────────────────────────────────────────────────────────
@@ -559,13 +609,14 @@ function toast(msg) {
         if (s) { s.classList.add('hide'); setTimeout(function(){ s.style.display='none'; }, 500); }
     }, 2000);
 
-    // Seed demo notes if empty
-    var notes = getNotes();
-    if (!notes.length) {
-        createNote({ title:'Welcome to Campistry Notes', body:'Press Shift+N anywhere to jot something down instantly.\n\nUse the sidebar to pin, share, or set reminders on your notes.', color:'yellow' });
-        createNote({ title:'Staff meeting — June 10', body:'- Review daily schedule\n- Rainy day backup plan\n- Bunk assignment updates', color:'blue' });
-        createNote({ title:'Supply list', body:'Bug spray ✓\nSunscreen\nFirst aid restock\nCraft supplies — need more paint', color:'green' });
-    }
+    // Seeding is DEFERRED — see seedDemoNotesIfEmpty() below. Seeding here, on
+    // a synchronously-empty localStorage, is what produced the duplicate
+    // "Welcome…"/"Staff meeting"/"Supply list" pairs: notes sync from the
+    // campistry_notes table a moment later, and the copies seeded on a previous
+    // device came down alongside the ones just created here, each with its own
+    // random id, so the merge kept both.
+    if (window.CampistryDB && window.CampistryDB.ready) window.__notesSeedPending = true;
+    else seedDemoNotesIfEmpty();
 
     renderGrid();
     updateCounts();
