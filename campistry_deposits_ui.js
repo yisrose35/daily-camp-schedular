@@ -198,6 +198,35 @@
             : '';
     };
 
+    /**
+     * Turn an RPC failure into something the person reading it can act on.
+     *
+     * This used to say "Deposit capture isn't set up for this camp yet" for
+     * every possible cause -- migration missing, permissions, a stale API
+     * schema cache -- which is the same silent-failure pattern this whole
+     * feature exists to avoid. The three causes need three different fixes,
+     * so name them.
+     */
+    D.explainError = function (err) {
+        var e = String(err || '');
+        if (/not_authorized/i.test(e)) {
+            return 'You need owner or admin access on this camp to see bank deposits. ' +
+                   'A scheduler or staff login cannot open them.';
+        }
+        if (/schema cache/i.test(e)) {
+            return 'The database has the deposit functions but the API hasn\'t picked them up yet. ' +
+                   'In Supabase go to Settings → API → Reload schema, then refresh this page.';
+        }
+        if (/does not exist|could not find the function|42883/i.test(e)) {
+            return 'Migration 145 hasn\'t been applied to this Supabase project yet. ' +
+                   'Paste migrations/145_bank_deposits.sql into the SQL Editor and run it.';
+        }
+        if (/JWT|not_authenticated|401/i.test(e)) {
+            return 'Your session expired — sign out and back in, then try again.';
+        }
+        return e || 'Unknown error.';
+    };
+
     // ── the reconcile inbox ──────────────────────────────────────────────────
 
     var BODY_ID = 'depInboxBody';
@@ -300,8 +329,9 @@
         if (!el) return;
 
         if (state.error && !state.deposits.length) {
-            el.innerHTML = '<p style="color:var(--s500);font-size:.85rem">Deposit capture isn\'t set up for this camp yet. ' +
-                'See ZELLE_ACH_DEPOSITS_SETUP.md — the migration and the deposit-inbox function need to be deployed first.</p>';
+            el.innerHTML = '<p style="color:var(--s600);font-size:.88rem;margin:0 0 10px"><strong>Bank deposits aren\'t available yet.</strong></p>' +
+                '<p style="color:var(--s500);font-size:.85rem;margin:0 0 12px">' + host.esc(D.explainError(state.error)) + '</p>' +
+                '<p style="color:var(--s400);font-size:.76rem;margin:0">Details: <code>' + host.esc(state.error) + '</code></p>';
             return;
         }
 
@@ -491,7 +521,9 @@
         if (!client || !cid) return;
         var res = await client.rpc('get_camp_deposit_settings', { p_camp_id: cid });
         if (res.error || !res.data || res.data.success === false) {
-            if (host.toast) host.toast('Deposit capture isn\'t deployed for this camp yet', 'error');
+            var why = (res.error && res.error.message) || (res.data && res.data.error) || 'unknown';
+            console.warn('[Deposits] get_camp_deposit_settings failed:', why);
+            if (host.toast) host.toast(D.explainError(why), 'error');
             return;
         }
         state.settings = res.data;

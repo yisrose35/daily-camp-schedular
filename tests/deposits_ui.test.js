@@ -102,3 +102,17 @@ test('deposit kinds all resolve to a real payment label', () => {
         assert.notStrictEqual(P.label(k), k, k + ' has no catalogue label');
     });
 });
+
+test('an RPC failure names the actual cause and its fix', () => {
+    // One vague "isn't set up yet" for three unrelated causes is the same
+    // silent-failure pattern this feature exists to avoid — each needs a
+    // different fix, so each has to be named.
+    assert.match(D.explainError('not_authorized'), /owner or admin/i);
+    assert.match(D.explainError('Could not find the function public.get_bank_deposits in the schema cache'),
+                 /Reload schema/i);
+    assert.match(D.explainError('function public.get_bank_deposits(uuid) does not exist'),
+                 /Migration 145/i);
+    assert.match(D.explainError('JWT expired'), /sign out/i);
+    // Anything unrecognised is passed through rather than swallowed.
+    assert.strictEqual(D.explainError('some novel failure'), 'some novel failure');
+});
