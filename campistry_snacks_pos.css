@@ -183,15 +183,26 @@ body.camper-open .camper-backdrop { display: block; }
    still 3 columns, just narrower side panels so more of the item grid
    is visible. */
 @media (max-width: 1180px) {
-    .app { grid-template-columns: 230px 1fr 300px; }
+    .app { grid-template-columns: 210px 1fr 290px; }
 }
 
-/* Tablet portrait (iPad portrait is 768-1024px) and phones — the camper
-   panel no longer fits as a fixed column, so it becomes a slide-in
-   drawer (same open/close pattern as the Manager Dashboard's sidebar)
-   instead of just disappearing with no way to select a camper. */
+/* Tablet portrait (iPad portrait is 768px) — KEEP the camper list as a
+   visible fixed column rather than hiding it in a drawer. The register's
+   primary device is a tablet, and a counselor should always be able to
+   see and tap a camper without first opening a drawer. The side columns
+   are tightened so all three zones (campers · items · cart) still fit;
+   the item grid stays usable at 1-2 tiles wide down to ~700px. */
 @media (max-width: 900px) {
-    .app { grid-template-columns: 1fr 300px; }
+    .app { grid-template-columns: 200px 1fr 240px; }
+}
+
+/* Only true phone widths fall back to the slide-in drawer — below ~700px
+   there genuinely isn't room for three columns, so the camper panel
+   becomes a drawer (same open/close pattern as the Manager Dashboard's
+   sidebar). campistry_snacks_pos.js auto-opens it on load when no camper
+   is selected, so the list is still immediately clickable. */
+@media (max-width: 700px) {
+    .app { grid-template-columns: 1fr 250px; }
     .camper-toggle-btn { display: flex; }
     .camper-panel {
         position: fixed; top: 56px; left: 0; bottom: 0; width: 300px;

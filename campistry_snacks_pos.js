@@ -208,6 +208,7 @@ function init() {
     renderCampers();
     renderItems();
     renderCart();
+    _autoOpenCamperDrawerIfNeeded();
     console.log('[Snacks POS] Ready —', campers.length, 'campers,', snacks.inventory.length, 'items');
 
     // Show empty state if no campers
@@ -268,6 +269,24 @@ window.pickCamper = function(name) {
 window.toggleCamperPanel = function() {
     document.body.classList.toggle('camper-open');
 };
+
+// On true phone widths the camper panel is a slide-in drawer that starts
+// closed — which meant a counselor opening the register saw items + cart
+// but no camper list, and had to discover the toggle before they could
+// pick anyone (they'd reach for the search box, hence "I have to search
+// before I can click a camper"). At the start of a sale (no camper picked
+// yet, empty cart) auto-open the drawer so the list is right there and
+// tappable. `pickCamper` already closes it once a camper is chosen, so
+// this never fights the user mid-sale. No-op above the drawer breakpoint,
+// where the panel is a permanent column and this class does nothing.
+function _autoOpenCamperDrawerIfNeeded() {
+    try {
+        var isDrawer = window.matchMedia && window.matchMedia('(max-width: 700px)').matches;
+        if (isDrawer && !sel && campers.length) {
+            document.body.classList.add('camper-open');
+        }
+    } catch (_) {}
+}
 
 function updateCamperBar() {
     const bar = document.getElementById('cartCamperBar');
