@@ -504,3 +504,30 @@ test('a fractional Time Per Stop is honoured by the dwell model and the polish',
     const quick = P.polishDistricts([A, Bb], [48, 48], CAMP, { avgStopMin: 0.5, polishMaxPasses: 0 });
     assert.ok(Math.abs((slow.fleetBefore - quick.fleetBefore) - 6 * 1.5) < 1e-6, 'six stops x 1.5 min less dwell');
 });
+
+test('road legs answer by coordinates too: a fresh depot object equal by position gets the street time', () => {
+    const net = P.buildRoadNet(riverGrid(), { avgSpeedMph: 25 });
+    const west = { lat: CAMP.lat + 1.0 * MI_LAT, lng: CAMP.lng + 0 * MI_LNG };
+    const east = { lat: CAMP.lat + 1.0 * MI_LAT, lng: CAMP.lng + 0.5 * MI_LNG };
+    const L = net.legMinutesFor([west, east, CAMP]);
+    const sameSpot = { lat: west.lat, lng: west.lng };
+    assert.ok(Math.abs(L(sameSpot, east) - L(west, east)) < 1e-9, 'a copy of a known point resolves to its row');
+    const campCopy = { lat: CAMP.lat, lng: CAMP.lng };
+    assert.ok(Math.abs(L(campCopy, east) - L(CAMP, east)) < 1e-9, 'the depot is usually a fresh object');
+});
+
+test('polish on road legs: a stop across the river moves to the bus on its own bank even though it is nearer as the crow flies', () => {
+    const net = P.buildRoadNet(riverGrid(), { avgSpeedMph: 25 });
+    // West-bank bus A, east-bank bus B. X sits on the EAST bank, 0.5mi straight
+    // across the river from A's stops — but by road it is a long way from A.
+    const A = [1, 2, 4].map(r => at(0.5 + r * 0.5, 0, 3));
+    const Bb = [1, 2, 4].map(r => at(0.5 + r * 0.5, 0.5, 3));
+    const X = at(0.5 + 3 * 0.5, 0.5, 3); A.push(X);
+    const legs = net.legMinutesFor([CAMP].concat(A, Bb));
+    const straight = P.polishDistricts([A, Bb], [48, 48], CAMP, { polishRideBudgetMin: 0 });
+    const road = P.polishDistricts([A, Bb], [48, 48], CAMP, { polishRideBudgetMin: 0, legMinutes: legs });
+    assert.strictEqual(road.buckets[1].includes(X), true, 'on street times X rides the east-bank bus');
+    assert.ok(road.fleetAfter < road.fleetBefore - 1, 'fleet minutes on the road fell: ' + road.fleetBefore.toFixed(1) + ' -> ' + road.fleetAfter.toFixed(1));
+    assert.strictEqual(road.buckets.flat().length, 7, 'every atom once');
+    assert.ok(straight.buckets.flat().length === 7, 'straight-line run is still valid');
+});

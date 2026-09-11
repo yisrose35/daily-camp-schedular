@@ -125,12 +125,25 @@ test('a wider walk allowance yields fewer, fuller stops', () => {
         wide.stops.length + ' vs ' + tight.stops.length);
 });
 
-test('no stop exceeds the 15-child cap', () => {
+test('no stop exceeds the 20-child cap (the camp\'s own biggest corner)', () => {
     for (const m of ['corner-stops', 'optimized-stops']) {
         run(m, 0.5).stops.forEach(s =>
-            assert.ok((s.campers || []).length <= 15, m + ' stop over cap'));
+            assert.ok((s.campers || []).length <= 20, m + ' stop over cap'));
     }
 });
+
+test('a corner stop with no intersection in reach is named by street and house number, not "corner" twice', () => {
+    const snapper = NH.cornerSnapper({ nodes: {} }, 0.05); // no intersections at all
+    const a = { campers: [{ name: 'k1' }], _homes: [{ lat: 40.1, lng: -74.2, street: 'Leesville Road', houseNum: '12', addr: '12 Leesville Road' }] };
+    const b = { campers: [{ name: 'k2' }], _homes: [{ lat: 40.12, lng: -74.2, street: 'Leesville Road', houseNum: '80', addr: '80 Leesville Road' }] };
+    snapper.snap(a); snapper.snap(b);
+    assert.notStrictEqual(a.address, b.address, 'two stops on one road get different names');
+    assert.match(a.address, /Leesville Road near 12/);
+    const c = { campers: [{ name: 'k3' }], _homes: [{ lat: 40.1, lng: -74.2, street: '', houseNum: '23', addr: '23 Brittany Ln' }] };
+    snapper.snap(c);
+    assert.strictEqual(c.address, '23 Brittany Ln', 'no street name: the home address, not "Stop corner"');
+});
+
 
 test('a corner gathers children from different streets when they are within the walk allowance', () => {
     // Oak St and Elm St are 0.004° (~0.28mi) apart in the fixture; with a
