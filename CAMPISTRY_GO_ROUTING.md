@@ -198,5 +198,14 @@ model; jsprit and VROOM documentation on ruin/recreate and regret insertion.
 * The soft riding budget in sweep/polish is 60 min, not *Max Ride Time*.
 * Return-to-camp minutes are counted on the last shift, not on shifts that
   precede another one.
-* Sandbox runs have no road graph, so they use straight-line times and the
-  k-means districting path.
+* **Sandbox mode blocks paid providers and mocks geocoding; it does not block
+  the road graph.** It used to: the guard treated free OpenStreetMap data as
+  "network", so every camp in sandbox mode (the default) silently lost the
+  road-graph engine and every real intersection. Tests that must run offline
+  set `campistry_go_no_network`.
+* **Map data is downloaded in tiles** (~7 x 7 miles each, cached per tile in
+  IndexedDB for 90 days) through the Supabase proxy, the same-origin proxy,
+  then the public mirrors, with one console line per failed attempt
+  (`[Go-NH] Map tile 400:-594 via overpass-api.de: HTTP 429`). One whole-area
+  query used to outlive the mirrors' 25 s limit and fail as a unit. The
+  corner-stop builder takes its intersections from the same graph.
