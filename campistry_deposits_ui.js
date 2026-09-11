@@ -136,14 +136,22 @@
         return state.credits[famKey] || [];
     };
 
+    // 'unparsed' counts as pending: it is a message that mentioned money and
+    // that nothing in the parser understood. It is the item most likely to be
+    // a real deposit nobody knows about, so it must never sit below the fold.
+    D.isPending = function (d) {
+        return d.status === 'review' || d.status === 'unmatched' || d.status === 'unparsed';
+    };
+
     D.totalPending = function () {
-        return state.deposits.filter(function (d) {
-            return d.status === 'review' || d.status === 'unmatched';
-        }).length;
+        return state.deposits.filter(D.isPending).length;
     };
 
     D.pendingAmount = function () {
         return state.deposits.reduce(function (sum, d) {
+            // Deliberately excludes 'unparsed': its amount is unknown and
+            // stored as 0, so adding it would understate nothing but imply we
+            // know a total we do not.
             return (d.status === 'review' || d.status === 'unmatched')
                 ? sum + (d.amount_cents || 0) / 100 : sum;
         }, 0);
@@ -242,7 +250,8 @@
             posted:    ['#065F46', '#D1FAE5', 'Posted'],
             review:    ['#92400E', '#FEF3C7', 'Needs review'],
             unmatched: ['#991B1B', '#FEE2E2', 'Unmatched'],
-            ignored:   ['#374151', '#F3F4F6', 'Not tuition']
+            ignored:   ['#374151', '#F3F4F6', 'Not tuition'],
+            unparsed:  ['#5B21B6', '#EDE9FE', 'Couldn\'t read']
         };
         var m = map[d.status] || map.unmatched;
         return '<span style="background:' + m[1] + ';color:' + m[0] +
@@ -284,7 +293,33 @@
                opts + '</select>';
     }
 
+    // A message that mentioned money and that the parser could not read at all.
+    // It is shown with the text that actually arrived, because that text is the
+    // only way anyone can tell whether it was a real deposit -- and the only
+    // way a bank we have never seen becomes visible rather than invisible.
+    function unparsedRow(d) {
+        var when = (d.created_at || '').slice(0, 10) || '—';
+        var body = (d.raw_excerpt || '').slice(0, 1200);
+        return '<div style="border:1px solid #DDD6FE;background:#FAF5FF;border-radius:var(--r);padding:12px 14px;margin-bottom:10px">' +
+            '<div style="display:flex;justify-content:space-between;gap:12px;align-items:baseline;flex-wrap:wrap">' +
+            '<strong style="font-size:.95rem">An email we could not read</strong>' +
+            '<div style="font-size:.75rem;color:var(--s500)">' + host.esc(when) + ' ' + statusPill(d) + '</div></div>' +
+            '<div style="font-size:.8rem;color:var(--s600);margin-top:6px">' +
+            'It mentions money, so it is kept here rather than discarded — but nothing about it has been counted anywhere. ' +
+            'If it is a real payment, add it to the family by hand; if it is not, dismiss it.</div>' +
+            (d.raw_subject ? '<div style="font-size:.78rem;color:var(--s500);margin-top:6px">Subject: ' + host.esc(d.raw_subject) + '</div>' : '') +
+            (body ? '<pre style="white-space:pre-wrap;word-break:break-word;background:#fff;border:1px solid var(--s100);border-radius:var(--r);padding:8px 10px;margin:8px 0 0;font-size:.74rem;max-height:190px;overflow:auto">' + host.esc(body) + '</pre>' : '') +
+            '<div style="margin-top:8px;display:flex;gap:8px;flex-wrap:wrap">' +
+            '<button class="me-btn me-btn--ghost me-btn--sm" onclick="CampistryDeposits.ignore(\'' + host.jesc(d.id) + '\')">Dismiss</button>' +
+            '</div>' +
+            '<div style="font-size:.72rem;color:var(--s400);margin-top:8px">' +
+            'Seeing these often means this bank words its alerts in a way Campistry does not recognise yet. ' +
+            'Send one to support and it gets handled for every camp.</div>' +
+            '</div>';
+    }
+
     function depositRow(d) {
+        if (d.status === 'unparsed') return unparsedRow(d);
         var amt = (d.amount_cents || 0) / 100;
         var when = d.deposit_date || (d.created_at || '').slice(0, 10) || '—';
         var payer = d.payer_name || '(payer not readable)';
@@ -335,7 +370,7 @@
             return;
         }
 
-        var pending = state.deposits.filter(function (d) { return d.status === 'review' || d.status === 'unmatched'; });
+        var pending = state.deposits.filter(D.isPending);
         var posted = state.deposits.filter(function (d) { return d.status === 'posted'; }).slice(0, 25);
 
         var dry = state.settings && state.settings.dryRun;

@@ -23,14 +23,28 @@ test('an outbound payment alert is never a deposit', () => {
     });
 });
 
-test('requests, reminders and failures are not deposits', () => {
+test('requests, reminders and failures are positively identified, not merely unrecognised', () => {
+    // These must come back 'non_event', never 'unclear'. The difference decides
+    // whether the message is discarded or kept for a human: 'non_event' means
+    // we read it and it is not income, 'unclear' means we understood nothing
+    // and something real may be hiding in it. Collapsing the two either buries
+    // the office in newsletters or loses a deposit — the original code returned
+    // 'none' for both, and lost deposits.
     [
         'John Smith is requesting $500.00 from you',
         'Reminder: your payment is due',
         'Your Zelle payment did not go through',
         'The transfer was returned',
         'You have been enrolled in Zelle'
-    ].forEach(s => assert.strictEqual(P.direction(s), 'none', s));
+    ].forEach(s => {
+        assert.strictEqual(P.direction(s), 'non_event', s);
+        assert.strictEqual(P.parseEmail({ subject: s, text: s }).ok, false, s);
+    });
+});
+
+test('wording we recognise nothing in is reported as unclear', () => {
+    assert.strictEqual(P.direction('ORIG CO NAME:ACME TRACE#:0210000298765'), 'unclear');
+    assert.strictEqual(P.direction(''), 'unclear');
 });
 
 test('an outbound alert that also says "received" is still rejected', () => {

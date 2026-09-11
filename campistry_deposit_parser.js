@@ -26,7 +26,10 @@
 // credit is a family that stops paying tuition.
 // ─────────────────────────────────────────────────────────────────────────────
 //
-// Adding a bank = adding an entry to EMAIL_RULES. Nothing else changes.
+// There are NO per-bank parsing rules. One ordered, bank-agnostic pattern
+// list runs on every message (see PAYER_RES); the bank name is only a label.
+// Adding support for a bank means adding a real fixture to the test corpus,
+// not a rule -- and usually finding nothing needs changing at all.
 //
 // Exposed as window.CampistryDepositParser (browser) and module.exports (Node).
 // =============================================================================
@@ -50,19 +53,36 @@
         'debit(?:ed)?\\s+(?:from|to)',
         'was\\s+debited',
         'transfer\\s+to',
-        'has\\s+been\\s+sent'
+        'has\\s+been\\s+sent',
+        // Admitted by the widened INBOUND list above and genuinely outbound:
+        // "a payment from your checking account to ACME" is money leaving.
+        'from\\s+your\\s+(?:account|checking|savings|card)\\b[^\\n]{0,40}\\bto\\b',
+        'you\\s+(?:have\\s+)?authorized'
     ].join('|'), 'i');
 
+    // Widened from a real corpus. Every phrasing below was a message that this
+    // gate REJECTED as "not a deposit" -- Navy Federal's "were credited",
+    // Schwab's "Credit:", Amex's "has paid you". A rejection here is the worst
+    // outcome in the whole pipeline: the money is real, and nothing is stored,
+    // logged durably, or shown to anyone. Banks agree on far less wording than
+    // you would hope, so this list is generous -- and safe to be, because
+    // OUTBOUND_RE is checked FIRST and wins every tie.
     var INBOUND_RE = new RegExp([
         'you\\s+(?:have\\s+)?received',
         'sent\\s+you',
         'you\\s+got',
+        'paid\\s+you',
         'deposit(?:ed)?\\b',
-        'credit(?:ed)?\\s+to\\s+your',
-        'was\\s+credited',
-        'incoming\\s+(?:transfer|payment|wire)',
+        'credit(?:ed)?\\s+(?:to|into)\\s+your',
+        '(?:was|were|been)\\s+credited',
+        '^\\s*credit\\s*[:\\-]',
+        'amount\\s+credited',
+        'received\\s+from',
+        '\\bremitter\\b',
+        '(?:payment|transfer|funds|money)\\s+from',
+        'incoming\\s+(?:transfer|payment|wire|ach)',
         'money\\s+(?:has\\s+)?arrived'
-    ].join('|'), 'i');
+    ].join('|'), 'im');
 
     // Alerts that are ABOUT a payment without being one: requests, reminders,
     // failures, reversals-in-progress. Booking any of these as cash means the
@@ -85,13 +105,30 @@
      * 'in' | 'out' | 'none'. Exported because the edge function logs the reason
      * a message was dropped -- a silent drop on a money path is undebuggable.
      */
+    /**
+     * 'in' | 'out' | 'non_event' | 'unclear'.
+     *
+     * 'non_event' and 'unclear' both mean "do not book this", but they are NOT
+     * the same and must not be collapsed:
+     *
+     *   non_event  a request, a decline, a reminder, an enrolment notice. We
+     *              recognised it and it is definitely not money arriving.
+     *              Discarding it is correct and silent.
+     *   unclear    no direction wording we recognise, either way. On a bank we
+     *              have never seen that is indistinguishable from a real
+     *              deposit, so it must NOT be discarded silently -- the caller
+     *              keeps it for a human when it carries an amount.
+     *
+     * The old code returned 'none' for both, which is why an unrecognised
+     * bank's deposit disappeared with nothing stored anywhere.
+     */
     P.direction = function (text) {
         var s = String(text || '');
-        if (!s.trim()) return 'none';
-        if (NON_EVENT_RE.test(s)) return 'none';
+        if (!s.trim()) return 'unclear';
+        if (NON_EVENT_RE.test(s)) return 'non_event';
         if (OUTBOUND_RE.test(s)) return 'out';
         if (INBOUND_RE.test(s)) return 'in';
-        return 'none';
+        return 'unclear';
     };
 
     // ── text prep ────────────────────────────────────────────────────────────
@@ -258,7 +295,24 @@
         return out.join('\n').trim();
     };
 
-    var NAME_TAIL_RE = /\s+(?:sent|has\s+sent|paid|via|with|using|on|to|for|through|and)\b[\s\S]*$/i;
+    // Everything a bank appends after the name. Each entry below came from a
+    // real miss in the corpus: "GOLDSTEIN DENTAL PC was posted", "RACHEL FEIN
+    // of $180.00 was received", "ARYEH LANDAU has been credited". A trailing
+    // clause is not fatal on its own, but it changes the string the matcher
+    // scores and defeats an exact alias hit, so it has to go.
+    var NAME_TAIL_RE = new RegExp(
+        '\\s+(?:' + [
+            'sent', 'has\\s+sent', 'paid', 'via', 'with', 'using', 'on', 'to',
+            'for', 'through', 'and',
+            'was', 'were', 'has', 'have', 'had', 'is', 'are', 'will',
+            'in\\s+the\\s+amount', 'of\\s+\\$', 'amount', 'ref', 'reference',
+            'conf(?:irmation)?', 'trace', 'account', 'ending'
+        ].join('|') + ')\\b[\\s\\S]*$', 'i');
+
+    // "TD Bank: MIRIAM COHEN sent you $150.00" -- the bank labels its own line,
+    // and the label rides along on the capture. A real payer name never
+    // contains a colon, so a short leading "Label:" is always noise.
+    var NAME_LEAD_RE = /^[A-Za-z][A-Za-z .&'-]{0,24}:\s*/;
 
     P.cleanName = function (raw) {
         var s = String(raw || '')
@@ -266,6 +320,7 @@
             .replace(/\s+/g, ' ')
             .trim()
             .replace(/^["'(\[]+|["')\]]+$/g, '')
+            .replace(NAME_LEAD_RE, '')
             .replace(NAME_TAIL_RE, '')
             .replace(/[.,;:]+$/, '')
             .trim();
@@ -292,31 +347,57 @@
         return s;
     };
 
-    // Capital One's Zelle alert, which is the shape confirmed against a real
-    // one, reads:
+    // ── payer name: bank-agnostic, ordered by specificity ────────────────────
     //
-    //     Good news: Someone sent you money with Zelle(R).
-    //     YISRAEL ROSENFELD has just sent you money with Zelle(R) in the
-    //     amount of $5.00.
-    //     Here's the message from YISRAEL ROSENFELD: tst 1234
+    // WHY THERE ARE NO PER-BANK RULES HERE ANY MORE.
     //
-    // Three things that shape the patterns below:
+    // This used to be a list of rules each gated by `test: /chase/i`,
+    // `/capital\s*one/i` and so on, with one loose GENERIC rule at the end for
+    // everything else. That is backwards: coverage was WEAKEST for the banks
+    // we had never seen, which is every bank a new camp brings. Worse, the gate
+    // could fail on a bank we HAD written a rule for -- Capital One puts its
+    // name only in the logo image, so "Capital One" never survives
+    // htmlToText and its rule could not fire even in principle.
     //
-    //  * "has just" sits between the name and "sent", and the amount is a
-    //    clause away -- so the old `X sent you $` pattern matched nothing and
-    //    the deposit arrived with no payer at all.
-    //  * The HEADLINE matches any loose "sent you money" rule first and yields
-    //    the word "Someone". Requiring a `$` on the same line excludes it,
-    //    since the headline carries no amount. cleanName rejects "Someone"
-    //    too, belt and braces.
-    //  * "Here's the message from <PAYER>:" names the payer a second time, in
-    //    a form with no marketing copy anywhere near it, so it is the most
-    //    reliable of the three and is tried first.
-    var SENT_YOU_MONEY = [
-        /here'?s\s+the\s+message\s+from\s+([^\n:]{2,80}?)\s*:/i,
-        /^\s*([^\n]{2,80}?)\s+(?:has\s+)?(?:just\s+)?sent\s+you\s+money\b[^\n]*\$/im,
-        /^\s*([^\n]{2,80}?)\s+(?:has\s+)?(?:just\s+)?sent\s+you\s+\$/im,
-        /you\s+received\s+\$?[0-9,.]*\s*from\s+((?:[^\n.]|\.(?=\S)){2,80})/i
+    // Banks differ in wording, not in grammar. There are only so many ways to
+    // say that money arrived, and they are all some arrangement of a name, a
+    // verb, and a direction word. So: ONE ordered list, applied to EVERY email
+    // regardless of sender, most specific first. A bank we have never seen gets
+    // exactly the same treatment as one we have.
+    //
+    // `bank` is now only a LABEL for the office to read, never a gate.
+    //
+    // Ordering rule: a pattern that anchors on an amount or a colon is more
+    // specific than a bare "from X", so it goes first. The loosest patterns
+    // must stay last or they will strip a name off marketing copy.
+    var PAYER_RES = [
+        // "Here's the message from JOHN SMITH: <memo>" -- names the payer with
+        // no marketing copy nearby, so it is the most reliable form there is.
+        /(?:here'?s\s+the\s+)?message\s+from\s+([^\n:]{2,80}?)\s*:/i,
+
+        // "You received $50.00 from JOHN SMITH" and its many rewordings.
+        /you(?:'ve|\s+have)?\s+(?:just\s+)?(?:received|got)\s+\$?[0-9,.]*\s*(?:money\s+|a\s+payment\s+)?from\s+((?:[^\n.]|\.(?=\S)){2,80})/i,
+
+        // "JOHN SMITH has just sent you money ... $50.00" (Capital One's shape).
+        // The '$' on the same line is load-bearing: it excludes the headline
+        // "Good news: Someone sent you money with Zelle", which carries no
+        // amount and would otherwise yield the payer "Someone".
+        /^\s*([^\n]{2,80}?)\s+(?:has\s+|had\s+)?(?:just\s+)?sent\s+you\s+money\b[^\n]*\$/im,
+        /^\s*([^\n]{2,80}?)\s+(?:has\s+|had\s+)?(?:just\s+)?sent\s+you\s+\$/im,
+        /^\s*([^\n]{2,80}?)\s+(?:has\s+|had\s+)?(?:just\s+)?paid\s+you\b[^\n]*\$/im,
+
+        // Labelled fields, as used by statement-style and business alerts.
+        /(?:sender|payer|originator|received\s+from|paid\s+by|remitter)\s*[:\-]\s*((?:[^\n.]|\.(?=\S)){2,80})/i,
+
+        // "payment/deposit/transfer/credit from JOHN SMITH"
+        /(?:payment|deposit|transfer|credit|funds|money)\s+(?:of\s+\$?[0-9,.]+\s+)?from\s+((?:[^\n.]|\.(?=\S)){2,80})/i,
+
+        // "received ... from X" / "deposited ... from X" in any other phrasing.
+        /(?:received|deposit(?:ed)?|credited)\b[^\n]{0,40}?\s+from\s+((?:[^\n.]|\.(?=\S)){2,80})/i,
+
+        // Loosest: a bare labelled "From: X". Kept last, and stripForwardHeaders
+        // has already removed the mail headers that would otherwise match it.
+        /\bfrom\s*[:\-]\s*((?:[^\n.]|\.(?=\S)){2,80})/i
     ];
 
     // The payer capture is `(?:[^\n.]|\.(?=\S)){2,80}` throughout: any character
@@ -326,67 +407,86 @@
     // account online" must yield "JOHN SMITH", never the sentence after it,
     // because a wrong name is what the matcher scores against.
 
-    // ── per-bank email rules ─────────────────────────────────────────────────
-    //
-    // Ordered: the first rule that yields a payer name wins. Each is scoped by
-    // a `test` so an unrelated bank's wording can't be misread by another
-    // bank's pattern. GENERIC is last and intentionally loose.
-
-    var EMAIL_RULES = [
-        {
-            bank: 'chase',
-            test: /chase/i,
-            // "JOHN SMITH sent you $50.00" / "You received $50.00 from JOHN SMITH"
-            payer: [
-                /you\s+received\s+\$?[0-9,.]*\s*from\s+((?:[^\n.]|\.(?=\S)){2,80})/i,
-                /^\s*([^\n]{2,80}?)\s+sent\s+you\s+\$/im
-            ]
-        },
-        {
-            bank: 'bofa',
-            test: /bank\s*of\s*america|bofa/i,
-            payer: [
-                /(?:received\s+(?:money|a\s+payment|\$[0-9,.]+)\s+from|from)\s*[:\-]?\s*((?:[^\n.]|\.(?=\S)){2,80})/i,
-                /^\s*([^\n]{2,80}?)\s+sent\s+you\s+\$/im
-            ]
-        },
-        {
-            bank: 'wellsfargo',
-            test: /wells\s*fargo/i,
-            payer: [
-                /you\s+received\s+\$?[0-9,.]*\s*from\s+((?:[^\n.]|\.(?=\S)){2,80})/i,
-                /money\s+from\s+((?:[^\n.]|\.(?=\S)){2,80})/i
-            ]
-        },
-        {
-            bank: 'citi',
-            test: /\bciti(?:bank)?\b/i,
-            payer: [/you\s+received\s+\$?[0-9,.]*\s*from\s+((?:[^\n.]|\.(?=\S)){2,80})/i]
-        },
-        {
-            bank: 'capitalone',
-            test: /capital\s*one/i,
-            payer: SENT_YOU_MONEY
-        },
-        {
-            // Also the fallback for any Zelle alert whose bank we can't name:
-            // the logo is usually an <img>, so the bank's own name may not
-            // survive htmlToText at all, while the word "Zelle" always does.
-            bank: 'zelle',
-            test: /zelle/i,
-            payer: SENT_YOU_MONEY
-        },
-        {
-            bank: 'generic',
-            test: /./,
-            payer: [
-                /(?:received|deposit(?:ed)?)\s+(?:of\s+)?\$?[0-9,.]*\s*from\s+((?:[^\n.]|\.(?=\S)){2,80})/i,
-                /^\s*([^\n]{2,80}?)\s+sent\s+you\s+\$/im,
-                /from\s*[:\-]\s*((?:[^\n.]|\.(?=\S)){2,80})/i,
-                /(?:sender|payer|originator)\s*[:\-]\s*((?:[^\n.]|\.(?=\S)){2,80})/i
-            ]
-        }
+    // Bank label only -- never gates which patterns run. Purely so the office
+    // can see at a glance where a deposit came from.
+    var BANK_LABELS = [
+        ['chase',       /\bchase\b/i],
+        ['bofa',        /bank\s*of\s*america|\bbofa\b/i],
+        ['wellsfargo',  /wells\s*fargo/i],
+        ['citi',        /\bciti(?:bank)?\b/i],
+        ['capitalone',  /capital\s*one/i],
+        ['usbank',      /\bu\.?s\.?\s*bank\b/i],
+        ['pnc',         /\bpnc\b/i],
+        ['truist',      /\btruist\b/i],
+        ['tdbank',      /\btd\s*bank\b/i],
+        ['amex',        /american\s*express|\bamex\b/i],
+        ['ally',        /\bally\s*bank\b/i],
+        ['discover',    /\bdiscover\s*bank\b/i],
+        ['schwab',      /\bschwab\b/i],
+        ['navyfederal', /navy\s*federal/i],
+        ['zelle',       /\bzelle\b/i]
     ];
+
+    P.detectBank = function (text) {
+        var s = String(text || '');
+        for (var i = 0; i < BANK_LABELS.length; i++) {
+            if (BANK_LABELS[i][1].test(s)) return BANK_LABELS[i][0];
+        }
+        return '';
+    };
+
+    /**
+     * The payer name, or '' when nothing trustworthy is found.
+     *
+     * '' is a legitimate, common answer and never an error: the deposit is
+     * still recorded, and lands in the inbox for a human to name. Guessing
+     * would be worse -- a wrong name is what the matcher scores against.
+     */
+    P.parsePayer = function (text) {
+        var s = String(text || '');
+        for (var i = 0; i < PAYER_RES.length; i++) {
+            var hit = s.match(PAYER_RES[i]);
+            if (!hit || !hit[1]) continue;
+            var nm = P.cleanName(hit[1]);
+            if (nm && P.looksLikeName(nm)) return nm;
+        }
+        return '';
+    };
+
+    // Words that mean the capture ran into boilerplate rather than a name. A
+    // loose pattern on an unknown bank's wording WILL sometimes grab a clause;
+    // this is what stops that clause reaching the matcher.
+    var NOT_NAME_RE = new RegExp([
+        '\\bzelle\\b', '\\bwww\\.', 'http', '\\baccount\\b', '\\bbalance\\b',
+        '\\bavailable\\b', '\\bsign\\s*in\\b', '\\block\\b', '\\bfraud\\b',
+        '\\bcustomer\\s*service\\b', '\\bdo\\s*not\\s*reply\\b', '\\bclick\\b',
+        '\\bunsubscribe\\b', '\\bmember\\s*fdic\\b', '\\bterms\\b', '\\bprivacy\\b',
+        '\\byour\\s+(?:account|bank|card)\\b', '\\bending\\s+in\\b'
+    ].join('|'), 'i');
+
+    /**
+     * A sanity gate on a candidate payer name.
+     *
+     * The point of the loose patterns above is coverage on banks we have never
+     * seen; the cost is that they sometimes capture a fragment of a sentence.
+     * A name has a shape -- a few words, mostly letters, no URLs, no banking
+     * vocabulary -- and anything that fails it is dropped rather than passed to
+     * the matcher. Dropping costs a human ten seconds; a wrong name pointed at
+     * the wrong family costs a family's trust.
+     */
+    P.looksLikeName = function (s) {
+        var v = String(s || '').trim();
+        if (v.length < 2 || v.length > 80) return false;
+        if (NOT_NAME_RE.test(v)) return false;
+        if (!/[A-Za-z]{2}/.test(v)) return false;           // must have letters
+        if (/^[0-9\W]+$/.test(v)) return false;             // digits/punctuation only
+        var words = v.split(/\s+/);
+        if (words.length > 6) return false;                 // a clause, not a name
+        // Mostly letters. A business name carries &, ., -, ' and digits, but a
+        // capture that is half punctuation is boilerplate.
+        var letters = (v.match(/[A-Za-z]/g) || []).length;
+        return letters >= Math.ceil(v.replace(/\s/g, '').length * 0.5);
+    };
 
     // ── ACH statement descriptors ────────────────────────────────────────────
     //
@@ -528,29 +628,27 @@
 
         if (!full) return { ok: false, reason: 'empty_message' };
 
-        var dir = P.direction(full);
-        if (dir === 'out')  return { ok: false, reason: 'outbound_payment' };
-        if (dir !== 'in')   return { ok: false, reason: 'not_a_deposit' };
-
+        // `amount` is reported even on failure. A message we could not classify
+        // but which mentions money is the signature of a bank we have never
+        // seen, and the caller keeps those rather than dropping them.
         var amount = P.parseAmountFromText(full);
-        if (!amount) return { ok: false, reason: 'no_amount' };
+
+        var dir = P.direction(full);
+        if (dir === 'out')       return { ok: false, reason: 'outbound_payment', amount: amount };
+        if (dir === 'non_event') return { ok: false, reason: 'non_event', amount: amount };
+        if (dir === 'unclear')   return { ok: false, reason: 'unclear_direction', amount: amount };
+
+        if (!amount) return { ok: false, reason: 'no_amount', amount: null };
 
         // Bank rules first; the descriptor parser is the fallback for alerts
         // that simply paste the statement line into the body.
-        var payerName = '', bank = '';
-        for (var i = 0; i < EMAIL_RULES.length; i++) {
-            var rule = EMAIL_RULES[i];
-            if (!rule.test.test(full)) continue;
-            for (var j = 0; j < rule.payer.length; j++) {
-                var hit = full.match(rule.payer[j]);
-                if (hit && hit[1]) {
-                    var nm = P.cleanName(hit[1]);
-                    if (nm) { payerName = nm; bank = rule.bank; break; }
-                }
-            }
-            if (payerName) break;
-        }
+        // One ordered pattern list, applied whatever the sender: see PAYER_RES.
+        var payerName = P.parsePayer(full);
+        var bank = P.detectBank(full);
 
+        // A statement descriptor pasted into the alert body is far more regular
+        // than the prose around it, so it is a genuine second opinion rather
+        // than a fallback of last resort.
         var desc = P.parseDescriptor(full);
         if (!payerName && desc.payerName) { payerName = desc.payerName; bank = bank || 'descriptor'; }
 

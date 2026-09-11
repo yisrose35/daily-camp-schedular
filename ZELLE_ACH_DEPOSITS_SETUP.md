@@ -101,6 +101,21 @@ function — there is nothing else to add.
 > different matching rules than Billing previews, the second stops the next
 > deploy breaking the same way this one did.
 
+### 2b. Apply migrations 145a and 146
+
+`145a` fixes token minting (see its header). `146` is what makes the reader
+safe across banks you have never seen:
+
+- Adds `raw_excerpt` so every deposit keeps the message it came from. A payer
+  name read off unfamiliar prose can be wrong in ways only a human comparing it
+  to the original can spot.
+- Adds the `unparsed` status. A message that mentions money and that the parser
+  could not classify is now **recorded and shown**, not discarded. Before this,
+  a real deposit from an unfamiliar bank vanished leaving only a log line that
+  ages out in days.
+
+Both are small enough to paste from a phone.
+
 ### 3. Turn on inbound email in Resend
 
 Resend Dashboard → **Inbound**. Pick one:
@@ -223,6 +238,18 @@ are the ones that carry the memo.
 
 | Bank | Where |
 |---|---|
+> **On bank coverage.** There are no per-bank parsing rules. One ordered,
+> bank-agnostic pattern list runs on every message, so a bank nobody has ever
+> configured gets the same treatment as Chase. Two things follow from that:
+>
+> * A payer name that cannot be read is normal and harmless — the deposit still
+>   lands in the inbox for a human. A name alone never auto-posts anyway (the
+>   highest a name scores is 88, below the 90 threshold), so misreading prose
+>   can cost a miss but never a wrong credit.
+> * A run of "An email we could not read" items means that bank words its
+>   alerts in a shape we have not seen. Forward one to support: it is added to
+>   `tests/deposit_bank_corpus.test.js` and fixed for every camp at once.
+
 | Chase | Profile & settings → Alerts → Accounts → *Deposit posted* / *Zelle payment received* |
 | Bank of America | Alerts → Account activity → *Deposits and credits* |
 | Wells Fargo | Alerts → Balance & activity → *Deposit posted* |

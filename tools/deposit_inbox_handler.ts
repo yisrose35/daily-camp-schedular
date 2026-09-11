@@ -308,13 +308,65 @@ serve(async (req) => {
   });
 
   if (!parsed.ok) {
-    // Not an error: most mail reaching this address is an outbound-payment
-    // notice, a marketing email, or a balance summary. Logged, not stored.
-    console.log(`[deposit-inbox] camp ${campId}: skipped (${parsed.reason}) "${subject}"`);
-    return json({ ok: true, skipped: parsed.reason });
+    // Two very different failures hide behind "could not parse", and treating
+    // them the same is how money goes missing.
+    //
+    //  * outbound_payment / non_event / no_amount -- we RECOGNISED the message
+    //    and it is not income: a payment we sent, a money request, a decline,
+    //    a marketing blast. Dropping these is correct; most mail reaching this
+    //    address is exactly this, and storing it would bury the real items.
+    //
+    //  * unclear_direction WITH an amount -- we recognised nothing at all, yet
+    //    the message talks about money. On a bank whose wording we have never
+    //    seen, that is indistinguishable from a genuine deposit. This used to
+    //    be dropped too, which meant a real deposit from an unfamiliar bank
+    //    vanished leaving only a log line that ages out in days, and nobody
+    //    found out until a family said they had paid.
+    //
+    // So the ambiguous ones are recorded as 'unparsed': never counted in any
+    // balance, always visible in the inbox, with the message text attached so
+    // the office can read what actually arrived and fix it by hand.
+    const keepForHuman = parsed.reason === "unclear_direction" && !!parsed.amount;
+    if (!keepForHuman) {
+      console.log(`[deposit-inbox] camp ${campId}: skipped (${parsed.reason}) "${subject}"`);
+      return json({ ok: true, skipped: parsed.reason });
+    }
+
+    const bodyText = (text || Parser.htmlToText(html || "")).slice(0, 4000);
+    const unparsed = await service.rpc("_deposit_record_unparsed", {
+      p_camp_id: campId,
+      // No parsed fields to fingerprint on, so the message itself is the
+      // identity. That still collapses a Resend retry of the same email onto
+      // one row, which is what this needs to do.
+      p_fingerprint: "raw_" + Parser.fingerprint({
+        date: pick(data, "created_at", "createdAt", "received_at").slice(0, 10),
+        amount: parsed.amount || 0,
+        payerName: subject,
+        traceId: emailId || bodyText.slice(0, 120),
+      }),
+      p_raw_subject: subject,
+      p_raw_excerpt: bodyText,
+      p_reason: parsed.reason,
+    });
+
+    if (unparsed.error) {
+      // Same reasoning as a failed record below: the money may be real and we
+      // could not store it, so let Resend retry.
+      console.error("[deposit-inbox] unparsed record failed", unparsed.error.message);
+      return json({ error: "record_failed" }, 500);
+    }
+
+    console.log(
+      `[deposit-inbox] camp ${campId}: UNPARSED ($${parsed.amount}) kept for review "${subject}"`,
+    );
+    return json({ ok: true, unparsed: true, duplicate: unparsed.data?.duplicate ?? false });
   }
 
   const deposit = parsed.deposit;
+  // Kept on the row so a payer name read off unfamiliar prose can be checked
+  // against what actually arrived. Without it, "is this name right?" has no
+  // answer anyone can look up.
+  deposit.rawExcerpt = (text || Parser.htmlToText(html || "")).slice(0, 4000);
   const ctx = await loadContext(service, campId);
   const decision = Matcher.decide(deposit, ctx, {
     autoPostAt: camp.autoPostAt,
