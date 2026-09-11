@@ -2001,6 +2001,45 @@ window.CampistryGoNeighborhoods = (function () {
             }
         }
 
+        // --- 2e. Polish: trade segments between buses to cut fleet minutes ---
+        // Districting decided the areas; this decides the edges. Priced on
+        // each bus's own tour, under seats + containment, never a straddle.
+        {
+            const post = (typeof window !== 'undefined') && window.CampistryGoRoutePost;
+            if (post && post.polishDistricts && depot) {
+                const segPiece = {};
+                for (const nh of workNhs) for (const sid of nh.segmentIds) segPiece[sid] = nh.id;
+                const homeless = assignments.map(b => b.segmentIds.filter(sid => !_segPt[sid]));
+                const buckets = assignments.map(b => b.segmentIds
+                    .map(sid => { const p = _segPt[sid]; return p ? { sid, count: p.count, lat: p.lat, lng: p.lng } : null; })
+                    .filter(Boolean));
+                let res = null;
+                try {
+                    res = post.polishDistricts(buckets, assignments.map(b => b.capacity), depot, {
+                        avgSpeedMph: rideSpeedMph, avgStopMin: rideStopMin,
+                        polishRideBudgetMin: maxChildRideMin > 0 ? maxChildRideMin : 0,
+                    });
+                } catch (e) { console.warn('[Go-NH] Polish skipped: ' + e.message); }
+                if (res && res.moves) {
+                    assignments.forEach((bus, i) => {
+                        const atoms = res.buckets[i];
+                        bus.segmentIds = atoms.map(a => a.sid).concat(homeless[i]);
+                        bus.camperCount = atoms.reduce((a, x) => a + x.count, 0);
+                        const ids = [];
+                        for (const sid of bus.segmentIds) {
+                            const id = segPiece[sid] || (_segIndex[sid] && _segIndex[sid].neighborhoodId);
+                            if (id && !ids.includes(id)) ids.push(id);
+                        }
+                        bus.neighborhoodIds = ids;
+                        bus._centroidSum = { lat: 0, lng: 0, w: 0 };
+                        for (const a of atoms) { bus._centroidSum.lat += a.lat * a.count; bus._centroidSum.lng += a.lng * a.count; bus._centroidSum.w += a.count; }
+                    });
+                    console.log('[Go-NH] Polish: ' + res.moves + ' segment move(s), est. fleet ' +
+                        Math.round(res.before) + ' → ' + Math.round(res.after) + ' min');
+                }
+            }
+        }
+
         // --- 3. Within-bus ordering: group segments by NH, order NHs via NN from depot ---
         const segById = Object.fromEntries(result.segments.map(s => [s.id, s]));
         for (const bus of assignments) {

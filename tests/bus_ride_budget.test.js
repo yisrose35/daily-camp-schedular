@@ -151,11 +151,14 @@ test('every camper is placed and no bus is over capacity, budget on or off', () 
     }
 });
 
-test('a fleet with no spare bus cannot split the far district (documents the limit)', () => {
-    // Not a defect: with 18 buses the core and mid ring consume every vehicle, so
-    // the township has nowhere to split to. This is the measurement behind the
-    // advice to add a bus rather than to keep tuning the packer.
+test('a fleet with no spare bus still shares the far district — the sweep makes the room', () => {
+    // This used to document a limit: with 18 buses the greedy packer had no
+    // spare vehicle to split the township to, and its last children rode ~80
+    // minutes. The capacity-aware sweep cuts the ring where it must, so the
+    // township is shared even on the tight fleet and the worst ride comes
+    // down to about an hour. Without a budget it is still one bus at ~80.
     const r = pack(18, 60);
-    assert.strictEqual(r.farBuses, 1);
-    assert.ok(r.worstRide > 75, 'got ' + Math.round(r.worstRide));
+    assert.strictEqual(r.farBuses, 2, 'the far township is shared by two buses');
+    assert.ok(r.worstRide < 70, 'got ' + Math.round(r.worstRide));
+    assert.ok(pack(18, 0).worstRide > 75, 'no budget: one bus takes the lot');
 });

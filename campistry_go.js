@@ -5309,6 +5309,37 @@ async function _trySpatialSortPipeline({
         }
     }
 
+    // ── F3. Polish: trade atoms between buses to cut fleet minutes ──
+    // Same pass the neighbourhood packer runs: priced on each bus's own
+    // tour, under seats + containment.
+    {
+        const post = window.CampistryGoRoutePost;
+        const depot = { lat: campLat, lng: campLng };
+        const caps = busBuckets.map((b, i) => {
+            const v = bucketVehicles[i] || shiftVehicles[i] || shiftVehicles[0];
+            return Math.max(0, (v.capacity || 0) - (reserveSeats || 0));
+        });
+        let res = null;
+        try {
+            res = post.polishDistricts(
+                busBuckets.map(b => b.map(a => ({ atom: a, count: a.size, lat: a.lat, lng: a.lng }))),
+                caps, depot, { avgSpeedMph: D.setup.avgSpeed || 25, avgStopMin: D.setup.avgStopTime || 2, polishRideBudgetMin: 60 });
+        } catch (e) { console.warn('[Go v6] Polish skipped: ' + e.message); }
+        if (res && res.moves) {
+            const pairs = [];
+            res.buckets.forEach((b, i) => { if (b.length) pairs.push({ bucket: b.map(x => x.atom), vehicle: bucketVehicles[i] || shiftVehicles[i] || shiftVehicles[0] }); });
+            busBuckets = pairs.map(p => p.bucket);
+            bucketVehicles = pairs.map(p => p.vehicle);
+            clusterMeta = busBuckets.map((bucket, idx) => {
+                const cent = bucketCentroid(bucket);
+                return { idx, cent, distSec: drivingDist(campLat, campLng, cent.lat, cent.lng), estTime: estTime(idx) };
+            });
+            clusterMeta.sort((a, b) => b.distSec - a.distSec);
+            console.log('[Go v6] Polish: ' + res.moves + ' atom move(s), est. fleet ' +
+                Math.round(res.before) + ' → ' + Math.round(res.after) + ' min');
+        }
+    }
+
     // ── G. Log final cluster results ──
     console.log('[Go v6] ═══════════════════════════════════════');
     console.log('[Go v6] FINAL CLUSTERS');
@@ -6203,128 +6234,44 @@ function findAnchorStop(campers, intersections, walkMi = 0.2) {
     // =========================================================================
     async function reOptimizeBus(busId, shiftIdx) {
         if (!_generatedRoutes || !D.savedRoutes) { toast('Generate routes first', 'error'); return; }
-        const sr = D.savedRoutes[shiftIdx ?? 0]; if (!sr) { toast('Shift not found', 'error'); return; }
+        const si = shiftIdx ?? 0;
+        const sr = D.savedRoutes[si]; if (!sr) { toast('Shift not found', 'error'); return; }
         const route = sr.routes.find(r => r.busId === busId);
         if (!route || route.stops.length < 2) { toast('Bus has < 2 stops', 'error'); return; }
 
         const isArrival = D.activeMode === 'arrival';
-        const hasShifts = D.shifts.length > 1;
-        const isLastShift = (shiftIdx ?? 0) === (D.savedRoutes?.length || 1) - 1;
-        const reoptNeedsReturn = hasShifts && !isLastShift;
         const campLat = D.setup.campLat || _campCoordsCache?.lat;
         const campLng = D.setup.campLng || _campCoordsCache?.lng;
         if (!campLat || !campLng) { toast('No camp coordinates', 'error'); return; }
 
         toast('Re-optimizing ' + route.busName + '...');
-        // Counselor stops with real coordinates ARE included in TSP so they get
-        // properly placed in the sequence. Monitor-only stops have no location
-        // and remain as tail-end metadata.
-        const stops = route.stops.filter(s => !s.isMonitor && s.lat && s.lng);
-        const specialStops = route.stops.filter(s => s.isMonitor || !s.lat || !s.lng);
-        const nn = stops.length; if (nn < 2) { toast('Not enough stops'); return; }
-
-        // ── Route optimization: local TSP with directional bias ──
-        let optimizedOrder = null;
-        let matrix = null;
-
-        // ── Local TSP solver ──
-        if (!optimizedOrder) {
-            const coordsArr = [{ lat: campLat, lng: campLng }];
-            stops.forEach(s => coordsArr.push({ lat: s.lat, lng: s.lng }));
-            matrix = await fetchDistanceMatrix(coordsArr, campLat, campLng);
-            // ★★★ CB-118: stamp each stop's matrix index (coordsArr = [camp, ...stops],
-            // so stops[i] → matrix row i+1). The ETA helpers driveMin/campToStopMin
-            // read matrix[a._matrixIdx]/matrix[0][s._matrixIdx], but _matrixIdx was
-            // NEVER assigned, so those guards were always false and every ETA fell
-            // back to haversine — ignoring the road matrix just fetched. (Cleaned up
-            // by the existing `delete s._matrixIdx` at the end of this function.)
-            stops.forEach(function (s, i) { s._matrixIdx = i + 1; });
-
-            const startsAtCamp = !isArrival;
-            const endsAtCamp = isArrival || reoptNeedsReturn;
-            const DPEN = 1.5;
-            function dist(i, j) {
-                if (matrix && matrix[i]?.[j] != null && matrix[i][j] >= 0) return matrix[i][j];
-                const a = i === 0 ? { lat: campLat, lng: campLng } : stops[i - 1];
-                const b = j === 0 ? { lat: campLat, lng: campLng } : stops[j - 1];
-                return drivingDist(a.lat, a.lng, b.lat, b.lng);
-            }
-            const campDists = []; for (let i = 0; i < nn; i++) campDists[i] = drivingDist(campLat, campLng, stops[i].lat, stops[i].lng);
-            function tourCost(tour) {
-                let c = 0; if (startsAtCamp) c += dist(0, tour[0] + 1);
-                for (let i = 0; i < tour.length - 1; i++) {
-                    c += dist(tour[i] + 1, tour[i + 1] + 1);
-                    const dC = campDists[tour[i]], dN = campDists[tour[i + 1]];
-                    if (isArrival && dN > dC * 1.05) c += (dN - dC) * DPEN;
-                    else if (!isArrival && dN < dC * 0.95) c += (dC - dN) * DPEN;
-                }
-                if (endsAtCamp) c += dist(tour[tour.length - 1] + 1, 0); return c;
-            }
-            function nearestNeighbor(si) { const t = [si]; const v = new Set([si]); while (t.length < nn) { const l = t[t.length-1]; let bi=-1,bd=Infinity; for(let i=0;i<nn;i++){if(v.has(i))continue;const d=dist(l+1,i+1);if(d<bd){bd=d;bi=i;}} if(bi<0)break;t.push(bi);v.add(bi);} return t; }
-            function twoOpt(tour) { const t=[...tour];let imp=true,it=0;while(imp&&it<Math.min(nn*nn*4,3000)){imp=false;it++;for(let i=0;i<t.length-1;i++)for(let j=i+2;j<t.length;j++){const p=i===0?0:t[i-1]+1,a=t[i]+1,b=t[j]+1,x=j+1<t.length?t[j+1]+1:-1;if(dist(p,b)+(x>=0?dist(a,x):0)<dist(p,a)+(x>=0?dist(b,x):0)-0.1){const s=t.slice(i,j+1).reverse();for(let k=0;k<s.length;k++)t[i+k]=s[k];imp=true;}}}return t; }
-            function orOpt(tour) { const t=[...tour];let imp=true,it=0;while(imp&&it<500){imp=false;it++;for(let i=0;i<t.length;i++){const p=i===0?0:t[i-1]+1,c=t[i]+1,nx=i+1<t.length?t[i+1]+1:-1;const sv=(dist(p,c)+(nx>=0?dist(c,nx):0))-(nx>=0?dist(p,nx):0);let bj=-1,bg=0;for(let j=0;j<t.length;j++){if(j===i||j===i-1)continue;const a=j===0?0:t[j-1]+1,b=t[j]+1;const g=sv-(dist(a,c)+dist(c,b)-dist(a,b));if(g>bg+0.1){bg=g;bj=j;}}if(bj>=0){const si=t.splice(i,1)[0];t.splice(bj>i?bj-1:bj,0,si);imp=true;break;}}}return t; }
-            function doubleBridge(tour) { if(tour.length<8)return[...tour];const l=tour.length,ps=new Set();while(ps.size<3)ps.add(1+Math.floor(Math.random()*(l-2)));const c=[0,...[...ps].sort((a,b)=>a-b),l];return[...tour.slice(c[0],c[1]),...tour.slice(c[2],c[3]),...tour.slice(c[1],c[2]),...tour.slice(c[3],c[4])]; }
-            function fullImprove(t) { t=[...t];let pc=tourCost(t);for(let c=0;c<5;c++){t=twoOpt(t);t=orOpt(t);t=twoOpt(t);const nc=tourCost(t);if(nc>=pc-0.5)break;pc=nc;}return t; }
-
-            let bestTour = null, bestCost = Infinity;
-            { const t = fullImprove(Array.from({length:nn},(_,i)=>i)); const c = tourCost(t); if (c < bestCost) { bestCost = c; bestTour = t; } }
-            for (let s = 0; s < nn; s++) { let t = fullImprove(nearestNeighbor(s)); const c = tourCost(t); if (c < bestCost) { bestCost = c; bestTour = t; } }
-            const byDist = campDists.map((d,i) => ({d,i})).sort((a,b) => a.d - b.d).map(x => x.i);
-            [isArrival ? [...byDist].reverse() : [...byDist], isArrival ? [...byDist] : [...byDist].reverse()].forEach(seed => { const t = fullImprove(seed); const c = tourCost(t); if (c < bestCost) { bestCost = c; bestTour = t; } });
-            if (nn >= 6 && bestTour) { for (let p = 0; p < Math.min(nn, 25) * 3; p++) { const t = fullImprove(doubleBridge(bestTour)); const c = tourCost(t); if (c < bestCost) { bestCost = c; bestTour = t; } } }
-
-            optimizedOrder = bestTour;
-            console.log('[Go] Re-optimize via local TSP (' + (matrix ? 'road-matrix' : 'haversine') + ')');
-        }
-
-        if (optimizedOrder && optimizedOrder.length === nn) {
-            const newStops = optimizedOrder.map(i => stops[i]);
-
-            // Orient: reverse if pointing wrong direction
-            if (newStops.length >= 2) {
-                const fd = drivingDist(campLat, campLng, newStops[0].lat, newStops[0].lng);
-                const ld = drivingDist(campLat, campLng, newStops[newStops.length - 1].lat, newStops[newStops.length - 1].lng);
-                if (isArrival && fd < ld) newStops.reverse();
-                if (!isArrival && fd > ld) newStops.reverse();
-            }
-
-            route.stops = [...newStops, ...specialStops];
-        }
-
+        // Same ordering the generator uses (children-minutes objective, local
+        // 2-opt/or-opt on a leg matrix), so a re-optimize can only match or
+        // improve what generation produced — and the same ETA pass, so the
+        // minutes shown agree with the rest of the sheet. The previous version
+        // called a distance-matrix helper that no longer exists and threw.
+        // Counselor stops with coordinates ride in the sequence; monitor-only
+        // stops (no location) stay as tail metadata.
+        const before = route.totalDuration;
+        route.stops = _localTspOrder(route.stops, campLat, campLng, isArrival);
         route.stops.forEach((s, i) => { s.stopNum = i + 1; });
-        route._osrmMatrix = matrix;
-        route.camperCount = route.stops.reduce((s, st) => s + st.campers.length, 0);
+        route.camperCount = route.stops.reduce((s, st) =>
+            s + (st.isMonitor || st.isCounselor ? 0 : (st.campers || []).length), 0);
+        delete route._tspLegTimes;
+        _applyETAsAndAudits([route], {
+            shift: sr.shift, isArrival, campLat, campLng,
+            avgStopMin: D.setup.avgStopTime || 2,
+            shiftNeedsReturn: si === (D.savedRoutes.length - 1) && !isArrival
+        });
 
-        const avgStopMin = D.setup.avgStopTime || 2;
-        const avgSpeedMph = D.setup.avgSpeed || 25;
-        const timeMin = parseTime(sr.shift.departureTime || (isArrival ? '08:00' : '16:00'));
-        function driveMin(a, b) { if (matrix && a._matrixIdx != null && b._matrixIdx != null) { const v = matrix[a._matrixIdx]?.[b._matrixIdx]; if (v != null && v >= 0) return v / 60; } if (a.lat && b.lat) return drivingDist(a.lat, a.lng, b.lat, b.lng) / 60; return 3; }
-        function campToStopMin(s) { if (matrix && s._matrixIdx != null) { const v = matrix[0]?.[s._matrixIdx]; if (v != null && v >= 0) return v / 60; } if (s.lat) return drivingDist(campLat, campLng, s.lat, s.lng) / 60; return 15; }
-
-        const rStops = route.stops.filter(s => !s.isMonitor && !s.isCounselor);
-        if (isArrival) {
-            let totalDur = 0;
-            for (let i = 0; i < rStops.length; i++) { totalDur += (i === 0 ? campToStopMin(rStops[0]) : driveMin(rStops[i-1], rStops[i])) + avgStopMin; }
-            totalDur += campToStopMin(rStops[rStops.length - 1]);
-            let cum = timeMin - totalDur;
-            rStops.forEach((s, i) => { cum += (i === 0 ? campToStopMin(s) : driveMin(rStops[i-1], s)) + avgStopMin; s.estimatedTime = formatTime(cum); s.estimatedMin = cum; });
-            route.totalDuration = Math.round(totalDur);
-        } else {
-            let cum = timeMin;
-            rStops.forEach((s, i) => { cum += (i === 0 ? campToStopMin(s) : driveMin(rStops[i-1], s)) + avgStopMin; s.estimatedTime = formatTime(cum); s.estimatedMin = cum; });
-            route.totalDuration = Math.round(cum - timeMin);
-            if (reoptNeedsReturn) route.totalDuration += Math.round(campToStopMin(rStops[rStops.length - 1]));
-        }
-
-        route.stops.forEach(s => { delete s._matrixIdx; }); delete route._osrmMatrix;
         // ★★★ CB-119: evict this route's cached road polyline — the stop order just
         // changed, but the map render reads _routeGeomCache FIRST, so the old
         // polyline would be drawn over the new stop sequence until a full regen /
         // mode switch. delete route._roadPts too so it's rebuilt on next render.
-        try { delete _routeGeomCache[route.busId + '_' + route.shiftIdx]; delete route._roadPts; } catch (_) {}
+        try { delete _routeGeomCache[route.busId + '_' + si]; delete route._roadPts; delete route._encodedPolyline; } catch (_) {}
         _generatedRoutes = D.savedRoutes; save();
         renderRouteResults(D.savedRoutes);
-        console.log('[Go] Re-optimized ' + route.busName + ': ~' + Math.round(bestCost / 60) + ' min (' + (matrix ? 'road-matrix' : 'haversine') + ')');
+        console.log('[Go] Re-optimized ' + route.busName + ': ' + (before || '?') + ' → ' + route.totalDuration + ' min');
         toast(route.busName + ' re-optimized!');
     }
 

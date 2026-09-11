@@ -53,6 +53,15 @@ window.CampistryGoRoutePost = (function () {
         sweepBusOverheadMin: 5,    // cost of using a bus at all
         sweepGroupCutMin: 6,       // cost of splitting one group (neighbourhood) between two buses
         sweepMaxRideMin: 60,       // soft riding budget per bus (0 = off)
+        // District polish (relocate / swap atoms between buses)
+        polishMaxPasses: 12,
+        polishTimeBudgetMs: 1500,
+        polishRideBudgetMin: 60,   // soft riding budget per bus (0 = off)
+        polishMinGainMin: 0.05,
+        polishReachMi: 5.0,        // only consider a bus whose nearest atom is within this of the moving atom
+        polishReachOverBudgetX: 2.5, // ...unless the source bus is over its ride budget: reach this much further
+        // Stop ordering
+        tspUnfairWeight: 2,        // weight on minutes a child rides beyond their allowance
     };
     function opts(o) { return Object.assign({}, DEFAULTS, o || {}); }
 
@@ -177,7 +186,7 @@ window.CampistryGoRoutePost = (function () {
                 if (ride > allow[idx]) unfair += k * (ride - allow[idx]);
             }
             // tour is kept in seconds to preserve the original weighting
-            return total + unfair * 2 + (tour * 60) * Math.max(1, head / 40);
+            return total + unfair * o.tspUnfairWeight + (tour * 60) * Math.max(1, head / 40);
         }
         const identity = (t) => (p) => t[p];
 
@@ -262,17 +271,37 @@ window.CampistryGoRoutePost = (function () {
             return t;
         }
 
-        // Seeds: the stop nearest camp, index 0, and a spread of others. Fewer
+        // Seeds: the stops nearest and farthest from camp, plus a spread of
+        // stops evenly spaced by bearing around camp. Chosen by GEOMETRY, not
+        // by array position, so the result depends only on the set of stops —
+        // generation and a later re-optimize land on the same order. Fewer
         // for big routes — the distance 2-opt already lands close.
-        const seeds = new Set([0]);
-        let nearIdx = 0, nearD = Infinity;
-        for (let i = 0; i < n; i++) if (C[i] < nearD) { nearD = C[i]; nearIdx = i; }
-        seeds.add(nearIdx);
+        const seeds = new Set();
+        let nearIdx = 0, nearD = Infinity, farIdx = 0, farD = -Infinity;
+        for (let i = 0; i < n; i++) { if (C[i] < nearD) { nearD = C[i]; nearIdx = i; } if (C[i] > farD) { farD = C[i]; farIdx = i; } }
+        seeds.add(nearIdx); seeds.add(farIdx);
         const seedCount = n > 30 ? 3 : n > 20 ? 4 : 6;
+        const byBearing = movable.map((s, i) => ({ i, b: Math.atan2(s.lng - depot.lng, s.lat - depot.lat) }))
+            .sort((a, b) => a.b - b.b || a.i - b.i);
         const step = Math.max(1, Math.floor(n / seedCount));
-        for (let i = 0; i < n; i += step) seeds.add(i);
+        for (let k = 0; k < n; k += step) seeds.add(byBearing[k].i);
 
-        let best = null, bestCost = Infinity;
+        // The order we were handed is a candidate too: polishing it makes
+        // re-optimizing an already-ordered route idempotent, and guarantees
+        // the result is never worse than what the caller had.
+        const identityOrder = []; for (let i = 0; i < n; i++) identityOrder.push(i);
+        let best = identityOrder.slice(), bestCost = costOf(identity(identityOrder));
+        {
+            let t = identityOrder.slice(), prev = bestCost;
+            for (let round = 0; round < 4; round++) {
+                t = orOpt(twoOpt(t));
+                const c = costOf(identity(t));
+                if (c >= prev - 1e-6) break;
+                prev = c;
+            }
+            const c = costOf(identity(t));
+            if (c < bestCost - 1e-9) { bestCost = c; best = t.slice(); }
+        }
         for (const s of seeds) {
             let t = distTwoOpt(nearestFrom(s));
             let prev = Infinity;
@@ -283,7 +312,7 @@ window.CampistryGoRoutePost = (function () {
                 prev = c;
             }
             const c = costOf(identity(t));
-            if (c < bestCost) { bestCost = c; best = t.slice(); }
+            if (c < bestCost - 1e-9) { bestCost = c; best = t.slice(); }
         }
         if (!best) return all.slice();
         return best.map(i => movable[i]).concat(tail);
@@ -646,6 +675,209 @@ window.CampistryGoRoutePost = (function () {
         return best;
     }
 
+    // ---- district polish ----------------------------------------------------
+    // Local search on the districting itself. Once buses have their areas
+    // (from the packer or the sweep), move single atoms — road segments or
+    // sibling groups, {count, lat, lng} — between buses, or swap two, whenever
+    // that lowers the fleet's total estimated minutes. Each bus is priced by a
+    // nearest-neighbour + 2-opt tour through its atoms from camp, so a move
+    // is judged by what it really does to the two routes involved rather
+    // than by distance to a centroid. Hard rules: seats, and containment (a
+    // bus may not widen its wedge around camp past the limit). Soft rule: a
+    // per-bus riding budget, priced like the sweep does. Returns
+    // { buckets, moves, before, after } with buckets in visiting order.
+    function polishDistricts(buckets, caps, depot, o) {
+        o = opts(o);
+        const t0 = Date.now();
+        const speed = Math.max(1, o.avgSpeedMph), stopMin = o.avgStopMin, budget = o.polishRideBudgetMin;
+        const leg = (a, b) => (haversineMi(a.lat, a.lng, b.lat, b.lng) * o.roadFactor / speed) * 60;
+        // Riders per atom: an explicit count, else the campers list, else one.
+        const cnt = x => Number.isFinite(x.count) ? x.count : (riders(x) || 1);
+        const B = (buckets || []).map((atoms, i) => ({
+            atoms: atoms.slice(), cap: Number.isFinite(caps && caps[i]) ? caps[i] : Infinity,
+            count: atoms.reduce((a, x) => a + cnt(x), 0), tour: [], len: 0, wedge: 0,
+        }));
+        const N = B.length;
+        if (N < 2 || !depot) return { buckets: buckets.slice(), moves: 0, before: 0, after: 0 };
+
+        function tourLen(atoms, tour) {
+            let t = 0, prev = depot;
+            for (const i of tour) { t += leg(prev, atoms[i]) + stopMin; prev = atoms[i]; }
+            return t;
+        }
+        function buildTour(b) {
+            const n = b.atoms.length;
+            if (!n) { b.tour = []; b.len = 0; b.wedge = 0; return; }
+            const rem = []; for (let i = 0; i < n; i++) rem.push(i);
+            const t = []; let cur = depot;
+            while (rem.length) {
+                let bi = 0, bd = Infinity;
+                for (let k = 0; k < rem.length; k++) { const d = leg(cur, b.atoms[rem[k]]); if (d < bd) { bd = d; bi = k; } }
+                t.push(rem.splice(bi, 1)[0]); cur = b.atoms[t[t.length - 1]];
+            }
+            // open-path 2-opt on distance
+            let improved = true, guard = 0;
+            while (improved && guard++ < 100) {
+                improved = false;
+                for (let i = 0; i < n - 1 && !improved; i++) {
+                    const a = i === 0 ? depot : b.atoms[t[i - 1]], x = b.atoms[t[i]];
+                    for (let j = i + 1; j < n; j++) {
+                        const y = b.atoms[t[j]], d = j + 1 < n ? b.atoms[t[j + 1]] : null;
+                        const before = leg(a, x) + (d ? leg(y, d) : 0);
+                        const after = leg(a, y) + (d ? leg(x, d) : 0);
+                        if (after < before - 1e-9) {
+                            for (let p = i, q = j; p < q; p++, q--) { const tmp = t[p]; t[p] = t[q]; t[q] = tmp; }
+                            improved = true; break;
+                        }
+                    }
+                }
+            }
+            b.tour = t; b.len = tourLen(b.atoms, t); b.wedge = arcDeg(b.atoms, depot, o);
+        }
+        const busCost = len => len + (budget > 0 ? 2 * Math.max(0, len - budget) : 0);
+        const objective = () => B.reduce((a, b) => a + busCost(b.len), 0);
+        // Saving from removing tour position `pos` from bus b.
+        function removalSaving(b, pos) {
+            const t = b.tour, cur = b.atoms[t[pos]];
+            const prev = pos > 0 ? b.atoms[t[pos - 1]] : depot;
+            if (pos + 1 < t.length) { const next = b.atoms[t[pos + 1]]; return leg(prev, cur) + leg(cur, next) - leg(prev, next) + stopMin; }
+            return leg(prev, cur) + stopMin;
+        }
+        // Cheapest insertion of `atom` into bus b's tour, optionally treating
+        // position `excludePos` as already removed. Returns { cost, at } where
+        // `at` is the position in the tour WITHOUT the excluded stop.
+        function cheapestInsert(b, atom, excludePos) {
+            const t = b.tour;
+            let best = Infinity, at = 0, j = 0, prev = depot;
+            for (let i = 0; i <= t.length; i++) {
+                if (i === excludePos) continue;
+                const next = i < t.length ? b.atoms[t[i]] : null;
+                const c = next ? leg(prev, atom) + leg(atom, next) - leg(prev, next) : leg(prev, atom);
+                if (c < best) { best = c; at = j; }
+                if (!next) break;
+                prev = next; j++;
+            }
+            return { cost: best + stopMin, at };
+        }
+        // Nearest distance (mi) from an atom to any atom of bus b — cheap
+        // pruning so we never price a move onto a bus that is nowhere near.
+        function reachMi(b, atom) {
+            let d = Infinity;
+            for (const x of b.atoms) { const m = haversineMi(atom.lat, atom.lng, x.lat, x.lng); if (m < d) d = m; }
+            return d;
+        }
+        const outOfTime = () => Date.now() - t0 > o.polishTimeBudgetMs;
+        function wedgeOk(b, adding, removingIdx) {
+            const pts = [];
+            for (let i = 0; i < b.atoms.length; i++) if (i !== removingIdx) pts.push(b.atoms[i]);
+            for (const a of adding) pts.push(a);
+            const w = arcDeg(pts, depot, o);
+            return w <= o.maxDistrictArcDeg || w <= b.wedge + 1e-9;
+        }
+        function removeAt(b, pos) {
+            const idx = b.tour[pos];
+            const atom = b.atoms[idx];
+            b.atoms.splice(idx, 1);
+            b.tour.splice(pos, 1);
+            for (let i = 0; i < b.tour.length; i++) if (b.tour[i] > idx) b.tour[i]--;
+            b.count -= cnt(atom);
+            return atom;
+        }
+        function insertAt(b, atom, at) {
+            b.atoms.push(atom);
+            b.tour.splice(at, 0, b.atoms.length - 1);
+            b.count += cnt(atom);
+        }
+        function refresh(b) { b.len = tourLen(b.atoms, b.tour); b.wedge = arcDeg(b.atoms, depot, o); }
+
+        for (const b of B) buildTour(b);
+        const before = objective();
+        let moves = 0;
+        const EPS = o.polishMinGainMin;
+
+        let stop = false;
+        for (let pass = 0; pass < o.polishMaxPasses && !stop; pass++) {
+            if (outOfTime()) break;
+            let improved = false;
+            // ── relocate ──
+            for (let ai = 0; ai < N && !stop; ai++) {
+                const A = B[ai];
+                // A bus over its riding budget may hand work to a bus further
+                // away — a remote township's relief IS a longer hand-off.
+                const reach = (budget > 0 && A.len > budget) ? o.polishReachMi * o.polishReachOverBudgetX : o.polishReachMi;
+                for (let pos = 0; pos < A.tour.length; pos++) {
+                    if ((pos & 15) === 0 && outOfTime()) { stop = true; break; }
+                    const atom = A.atoms[A.tour[pos]];
+                    const saving = removalSaving(A, pos);
+                    const lenA2 = A.len - saving;
+                    let best = null;
+                    for (let bi = 0; bi < N; bi++) {
+                        if (bi === ai) continue;
+                        const Bb = B[bi];
+                        if (Bb.count + cnt(atom) > Bb.cap) continue;
+                        if (Bb.atoms.length && reachMi(Bb, atom) > reach) continue;
+                        const ins = cheapestInsert(Bb, atom, -1);
+                        const lenB2 = Bb.len + ins.cost;
+                        const delta = busCost(lenA2) + busCost(lenB2) - busCost(A.len) - busCost(Bb.len);
+                        if (delta < -EPS && (!best || delta < best.delta)) {
+                            if (!wedgeOk(Bb, [atom], -1)) continue;
+                            best = { delta, bi, at: ins.at };
+                        }
+                    }
+                    if (best) {
+                        const moved = removeAt(A, pos);
+                        insertAt(B[best.bi], moved, best.at);
+                        refresh(A); refresh(B[best.bi]);
+                        moves++; improved = true;
+                        pos--; // re-examine this position (a new atom sits there now)
+                    }
+                }
+            }
+            // ── swap ──
+            for (let ai = 0; ai < N && !stop; ai++) for (let bi = ai + 1; bi < N && !stop; bi++) {
+                const A = B[ai], Bb = B[bi];
+                if (!A.tour.length || !Bb.tour.length) continue;
+                if (outOfTime()) { stop = true; break; }
+                // Only atoms that could plausibly ride the other bus.
+                const aNear = A.tour.map(i => reachMi(Bb, A.atoms[i]) <= o.polishReachMi);
+                if (!aNear.some(Boolean)) continue;
+                const bNear = Bb.tour.map(i => reachMi(A, Bb.atoms[i]) <= o.polishReachMi);
+                if (!bNear.some(Boolean)) continue;
+                let best = null;
+                for (let pa = 0; pa < A.tour.length; pa++) {
+                    if (!aNear[pa]) continue;
+                    const a = A.atoms[A.tour[pa]];
+                    const sA = removalSaving(A, pa);
+                    for (let pb = 0; pb < Bb.tour.length; pb++) {
+                        if (!bNear[pb]) continue;
+                        const b = Bb.atoms[Bb.tour[pb]];
+                        if (A.count - cnt(a) + cnt(b) > A.cap) continue;
+                        if (Bb.count - cnt(b) + cnt(a) > Bb.cap) continue;
+                        const sB = removalSaving(Bb, pb);
+                        const iA = cheapestInsert(A, b, pa), iB = cheapestInsert(Bb, a, pb);
+                        const lenA2 = A.len - sA + iA.cost, lenB2 = Bb.len - sB + iB.cost;
+                        const delta = busCost(lenA2) + busCost(lenB2) - busCost(A.len) - busCost(Bb.len);
+                        if (delta < -EPS && (!best || delta < best.delta)) {
+                            if (!wedgeOk(A, [b], A.tour[pa]) || !wedgeOk(Bb, [a], Bb.tour[pb])) continue;
+                            best = { delta, pa, pb, atA: iA.at, atB: iB.at };
+                        }
+                    }
+                }
+                if (best) {
+                    const a = removeAt(A, best.pa), b = removeAt(Bb, best.pb);
+                    insertAt(A, b, best.atA); insertAt(Bb, a, best.atB);
+                    refresh(A); refresh(Bb);
+                    moves++; improved = true;
+                }
+            }
+            // keep the tour proxy honest after a round of edits
+            for (const b of B) buildTour(b);
+            if (!improved) break;
+        }
+        const after = objective();
+        return { buckets: B.map(b => b.tour.map(i => b.atoms[i])), moves, before, after };
+    }
+
     // ---- audit --------------------------------------------------------------
     function containmentReport(routes, depot, o) {
         o = opts(o);
@@ -664,6 +896,6 @@ window.CampistryGoRoutePost = (function () {
         DEFAULTS, haversineMi, driveMin, arcDeg, spreadMi, nearestStopMi, stopFitsRoute,
         localTspOrder, routeLastDropMin, orderRoutes,
         relieveLongRoutes, splitOverlongRoutes, rebalanceBusLoads, enforceCapacity,
-        sweepPartition, containmentReport,
+        sweepPartition, polishDistricts, containmentReport,
     };
 })();

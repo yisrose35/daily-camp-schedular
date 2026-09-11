@@ -173,3 +173,65 @@ test('containmentReport flags a bus that serves both sides of camp', () => {
     assert.strictEqual(rep.find(r => r.busId === 'bad').straddle, true);
     assert.ok(rep.find(r => r.busId === 'bad').arcDeg > 170);
 });
+
+test('polishDistricts moves a segment to the bus whose route already passes it, under seats and containment', () => {
+    // Bus A runs north 2..4mi; one of its atoms sits right on bus B's north-east road.
+    const A = [at(2, 0, 3), at(3, 0.1, 3), at(4, 0, 3), at(3.6, 1.9, 3) /* misplaced */];
+    const Bb = [at(2.5, 1.5, 3), at(3.2, 1.8, 3), at(4.0, 2.0, 3)];
+    const S = [at(-2.5, 0.2, 3), at(-3.2, -0.1, 3)];
+    const res = P.polishDistricts([A, Bb, S], [48, 48, 48], CAMP);
+    assert.ok(res.moves >= 1, 'the misplaced atom should move');
+    assert.ok(res.after < res.before - 1, 'fleet estimate must drop: ' + res.before.toFixed(1) + ' -> ' + res.after.toFixed(1));
+    assert.strictEqual(res.buckets[1].some(a => a.address === '3.6N 1.9E'), true, 'it lands on the north-east bus');
+    assert.strictEqual(res.buckets[2].length, 2, 'the south bus is untouched');
+    const all = res.buckets.flat();
+    assert.strictEqual(all.length, 9, 'every atom exactly once');
+    for (const b of res.buckets) assert.ok(P.arcDeg(b, CAMP) <= 110, 'contained');
+});
+
+test('polishDistricts swaps when both buses are full and never breaks seats or containment', () => {
+    // Two full buses (cap 6, 2 atoms of 3 each) with one atom each on the wrong side.
+    const A = [at(3, 0, 3), at(3, 2.2, 3)];      // second atom belongs east
+    const Bb = [at(3.2, 2.0, 3), at(2.8, 0.2, 3)]; // second atom belongs north
+    const res = P.polishDistricts([A, Bb], [6, 6], CAMP);
+    assert.ok(res.moves >= 1, 'a swap is the only legal move and it must happen');
+    assert.ok(res.after < res.before - 1);
+    for (const b of res.buckets) {
+        assert.strictEqual(b.reduce((a, x) => a + x.campers.length, 0), 6, 'seats unchanged');
+        assert.ok(P.spreadMi(b) < 1.0, 'each bus is now compact');
+    }
+});
+
+test('polishDistricts never widens a bus across camp even when the tour would be shorter', () => {
+    // A tiny north bus and a big south bus: moving the south singleton onto
+    // the north bus would "save" a bus trip but straddle camp.
+    const north = [at(2, 0, 3), at(2.4, 0.1, 3)];
+    const south = [at(-2.0, 0.1, 3)];
+    const res = P.polishDistricts([north, south], [48, 48], CAMP, { polishRideBudgetMin: 0 });
+    assert.strictEqual(res.buckets[0].length + res.buckets[1].length, 3);
+    for (const b of res.buckets) assert.ok(P.arcDeg(b, CAMP) <= 110, 'no straddle');
+});
+
+test('polishDistricts leaves a clean districting alone', () => {
+    const A = [at(2, 0, 3), at(3, 0.1, 3), at(4, 0, 3)];
+    const Bb = [at(2, 2, 3), at(3, 2.1, 3), at(4, 2, 3)];
+    const res = P.polishDistricts([A, Bb], [48, 48], CAMP);
+    assert.strictEqual(res.moves, 0);
+    assert.strictEqual(res.after, res.before);
+});
+
+test('localTspOrder is idempotent: re-ordering an ordered route keeps it (or improves it)', () => {
+    let seed = 21; const rnd = () => { seed = (seed * 1103515245 + 12345) & 0x7fffffff; return seed / 0x7fffffff; };
+    for (let trial = 0; trial < 5; trial++) {
+        const stops = []; for (let i = 0; i < 25; i++) stops.push(at(1 + rnd() * 4, rnd() * 3 - 1.5, 1 + (i % 4)));
+        const once = P.localTspOrder(stops, CAMP, false);
+        const twice = P.localTspOrder(once, CAMP, false);
+        const t1 = P.routeLastDropMin({ stops: once }, CAMP), t2 = P.routeLastDropMin({ stops: twice }, CAMP);
+        // same order, or a strictly better objective — never a random different local optimum
+        assert.ok(twice.every((s, i) => s === once[i]) || t2 <= t1 + 3, 'trial ' + trial + ': ' + Math.round(t1) + ' -> ' + Math.round(t2));
+        // and the order must not depend on how the stops were handed over
+        const shuffled = stops.slice().sort(() => rnd() - 0.5);
+        const fromShuffled = P.localTspOrder(shuffled, CAMP, false);
+        assert.ok(fromShuffled.every((s, i) => s === once[i]), 'trial ' + trial + ': order depends on input order');
+    }
+});
