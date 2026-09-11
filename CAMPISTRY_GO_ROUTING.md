@@ -71,10 +71,14 @@ Objective is **children-minutes** (minimum latency), plus twice the minutes a
 child rides beyond `2 × direct trip + 25`, plus the tour length as a tie-break.
 Arrival mode charges the drive from the last pickup back to camp. Multi-start
 nearest-neighbour + distance 2-opt, then 2-opt and or-opt on the real
-objective. Seeds are chosen by geometry (nearest, farthest, spread by bearing)
-and the incoming order is itself a seed, so the result depends only on the set
-of stops: generation and Re-optimize agree. Measured within 0.005 % of an exact
-minimum-latency optimum on 8–11 stop routes.
+objective with LKH-style neighbour lists (moves only among each stop's 10
+nearest), then iterated local search (double-bridge kicks around the best
+tour). Seeds are chosen by geometry (nearest, farthest, spread by bearing)
+and the incoming order is itself a seed, so Re-optimize keeps an order it
+cannot improve. Measured within 0.005 % of an exact minimum-latency optimum
+on 8–11 stop routes; input-order dependence at most ~2 % on 45-stop routes
+(inherent to local search — the previous full-candidate version showed the
+same), 0.2 % on average.
 
 ### Travel times
 

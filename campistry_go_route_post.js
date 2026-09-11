@@ -77,6 +77,7 @@ window.CampistryGoRoutePost = (function () {
         // Stop ordering
         tspUnfairWeight: 2,        // weight on minutes a child rides beyond their allowance
         tspNeighborK: 10,          // candidate moves only among each stop's K nearest (LKH-style neighbour lists)
+        tspKicks: null,            // iterated-local-search kicks around the best tour (null = 4 + n/8, max 12)
     };
     function opts(o) { return Object.assign({}, DEFAULTS, o || {}); }
 
@@ -359,19 +360,43 @@ window.CampistryGoRoutePost = (function () {
             const c = costOf(identity(t));
             if (c < bestCost - 1e-9) { bestCost = c; best = t.slice(); }
         }
-        for (const s of seeds) {
-            let t = distTwoOpt(nearestFrom(s));
-            let prev = Infinity;
+        function improve(t0) {
+            let t = t0, prev = Infinity;
             for (let round = 0; round < 4; round++) {
                 t = orOpt(twoOpt(t));
                 const c = costOf(identity(t));
                 if (c >= prev - 1e-6) break;
                 prev = c;
             }
+            return t;
+        }
+        for (const s of seeds) {
+            const t = improve(distTwoOpt(nearestFrom(s)));
             const c = costOf(identity(t));
             if (c < bestCost - 1e-9) { bestCost = c; best = t.slice(); }
         }
         if (!best) return all.slice();
+
+        // Iterated local search: perturb the best tour with a double-bridge
+        // kick (swap two inner blocks), re-polish, keep if better. Neighbour-
+        // list moves settle in shallow optima; kicks make the result depend
+        // on the stops, not on the order they were handed over in. The RNG is
+        // seeded from the stop set, so re-runs reproduce themselves.
+        const kicks = Number.isFinite(o.tspKicks) ? o.tspKicks : (n < 8 ? 0 : Math.min(12, 4 + (n >> 3)));
+        if (kicks > 0 && n >= 8) {
+            let seed = (n * 7919 + Math.round(C.reduce((a, b) => a + b, 0) * 100)) & 0x7fffffff;
+            const rnd = () => { seed = (seed * 1103515245 + 12345) & 0x7fffffff; return seed / 0x7fffffff; };
+            for (let k = 0; k < kicks; k++) {
+                const a = 1 + Math.floor(rnd() * (n - 6));
+                const b = a + 1 + Math.floor(rnd() * (n - a - 4));
+                const c = b + 1 + Math.floor(rnd() * (n - b - 2));
+                const kicked = best.slice(0, a).concat(best.slice(b, c), best.slice(a, b), best.slice(c));
+                const t = improve(kicked);
+                const cost = costOf(identity(t));
+                if (cost < bestCost - 1e-9) { bestCost = cost; best = t.slice(); }
+            }
+        }
+
         return best.map(i => movable[i]).concat(tail);
     }
 
