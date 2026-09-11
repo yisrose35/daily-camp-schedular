@@ -55,6 +55,7 @@ import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 // and campistry_deposit_match.js above this point and binds them off globalThis.
 declare const Parser: any;
 declare const Matcher: any;
+declare const Template: any;
 
 const CORS = {
   "Access-Control-Allow-Origin": "*",
@@ -165,6 +166,78 @@ function tokenFromAddresses(addrs: string[]): string {
 function domainOf(addr: string): string {
   const m = String(addr).toLowerCase().match(/@([^>\s]+)$/);
   return m ? m[1] : "";
+}
+
+/**
+ * Read the deposit again with a learned template, where one exists.
+ *
+ * Precedence is deliberate: the camp's own template beats a shared one. The
+ * camp that owns the mailbox is the authority on what its own mail looks like,
+ * and a shared template is only ever a good guess made by other people.
+ *
+ * A value is taken from the template ONLY when it is plausible for its field.
+ * When the two rules inside a template disagree, the value is dropped rather
+ * than picked between, and the disagreement is counted — that is the earliest
+ * signal a bank has changed its layout, and it is far better to fall back to
+ * the generic parser for one email than to post a confidently wrong payer.
+ */
+async function applyLearnedTemplate(
+  service: any,
+  campId: string,
+  fromAddress: string,
+  body: string,
+  deposit: Record<string, unknown>,
+): Promise<{ used: boolean; outcome: string; signature: string } | null> {
+  const signature = Template.signature(fromAddress);
+  if (!signature || !body) return null;
+
+  const { data, error } = await service.rpc("get_bank_templates", { p_camp_id: campId });
+  if (error || !data?.success) return null;
+
+  const rows = (data.templates || []).filter((t: any) => t.bank_signature === signature);
+  // Own template first; shared only as a fallback.
+  const row = rows.find((t: any) => t.scope === "camp") || rows.find((t: any) => t.scope === "shared");
+  if (!row?.template) return null;
+
+  const read = Template.read(row.template, body);
+  const fields = Object.keys(read);
+  if (!fields.length) return { used: false, outcome: "miss", signature };
+
+  let applied = 0;
+  let conflicted = false;
+
+  for (const field of fields) {
+    const r = read[field];
+    if (r.byAnchor && r.byLine && !r.agree) { conflicted = true; continue; }
+    if (!r.value || !Template.plausible(field, r.value)) continue;
+
+    if (field === "amount") {
+      const v = Parser.parseAmount(r.value);
+      // A template pointed at the wrong number is the one case here that could
+      // move money, so the amount is the one field checked against the prose
+      // reading as well: they must agree, or the parser's value stands.
+      if (v && Math.abs(v - Number(deposit.amount || 0)) < 0.005) applied++;
+      continue;
+    }
+    if (field === "payerName" && r.value !== deposit.payerName) {
+      deposit.payerName = r.value;
+      applied++;
+    }
+    if (field === "memo" && r.value !== deposit.memo) {
+      deposit.memo = r.value;
+      deposit.memoCode = Parser.parseMemoCode(r.value) || deposit.memoCode || "";
+      applied++;
+    }
+  }
+
+  const outcome = conflicted ? "conflict" : (applied ? "hit" : "miss");
+  await service.rpc("_bank_template_result", {
+    p_camp_id: campId,
+    p_bank_signature: signature,
+    p_outcome: outcome,
+  }).catch(() => {});
+
+  return { used: applied > 0, outcome, signature };
 }
 
 /** Fetch the message body Resend held back from the webhook payload. */
@@ -307,6 +380,19 @@ serve(async (req) => {
     receivedAt: pick(data, "created_at", "createdAt", "received_at") || new Date().toISOString(),
   });
 
+  // ── learned layout ─────────────────────────────────────────────────────────
+  //
+  // If this camp (or enough other camps) have taught us this bank's alert
+  // layout, those rules beat reading the prose. The generic parser stays in
+  // charge of everything a template does not cover -- direction, the deposit
+  // kind, the trace number, and any field the template has lost -- so a
+  // template is an improvement on the answer, never a replacement for the
+  // pipeline.
+  const bodyForTemplate = text || Parser.htmlToText(html || "");
+  const templateOutcome = parsed.ok
+    ? await applyLearnedTemplate(service, campId, fromAddrs[0] || "", bodyForTemplate, parsed.deposit)
+    : null;
+
   if (!parsed.ok) {
     // Two very different failures hide behind "could not parse", and treating
     // them the same is how money goes missing.
@@ -400,7 +486,8 @@ serve(async (req) => {
   console.log(
     `[deposit-inbox] camp ${campId}: $${deposit.amount} from "${deposit.payerName}" ` +
     `-> ${record.data?.duplicate ? "duplicate" : decision.decision}` +
-    (decision.guardrail ? ` (${decision.guardrail})` : ""),
+    (decision.guardrail ? ` (${decision.guardrail})` : "") +
+    (templateOutcome ? ` [template ${templateOutcome.signature}: ${templateOutcome.outcome}]` : ""),
   );
 
   return json({

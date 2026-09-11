@@ -35,8 +35,11 @@ test('the bundle has no local imports the Dashboard cannot resolve', () => {
         'every import must be a remote URL — a relative one fails at deploy time');
 });
 
-test('the bundle carries the parser, the matcher and the handler', () => {
+test('the bundle carries the parser, the matcher, the templates and the handler', () => {
     const src = fs.readFileSync(OUT, 'utf8');
+    assert.ok(src.includes('CampistryDepositTemplate'), 'template engine missing');
+    assert.ok(src.includes('const Template = globalThis.CampistryDepositTemplate'),
+        'the handler is written against `Template` and needs it bound');
     assert.ok(src.includes('CampistryDepositParser'), 'parser missing');
     assert.ok(src.includes('CampistryDepositMatch'), 'matcher missing');
     assert.ok(src.includes('serve(async (req)'), 'handler missing');

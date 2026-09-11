@@ -61,6 +61,8 @@
         aliases: [],
         credits: {},        // famKey -> [ledger entries]
         settings: null,
+        templates: [],      // learned bank layouts: this camp's + shared
+        teach: null,        // in-progress teaching session
         error: ''
     };
 
@@ -100,14 +102,19 @@
             var res = await Promise.all([
                 client.rpc('get_bank_deposits', { p_camp_id: cid, p_limit: 300 }),
                 client.rpc('get_payer_aliases', { p_camp_id: cid }),
-                client.rpc('get_camp_deposit_credits', { p_camp_id: cid })
+                client.rpc('get_camp_deposit_credits', { p_camp_id: cid }),
+                // Tolerated separately: migration 147 may not be applied yet,
+                // and a missing template table must not blank the inbox.
+                client.rpc('get_bank_templates', { p_camp_id: cid })
+                      .then(function (r) { return r; }, function () { return { data: null }; })
             ]);
-            var deps = res[0], als = res[1], crd = res[2];
+            var deps = res[0], als = res[1], crd = res[2], tpl = res[3];
 
             if (deps.error) throw deps.error;
             state.deposits = (deps.data && deps.data.deposits) || [];
             state.aliases = (als.data && als.data.aliases) || [];
             state.credits = (crd.data && crd.data.credits) || {};
+            state.templates = (tpl && tpl.data && tpl.data.templates) || [];
             state.error = '';
             state.loaded = true;
         } catch (e) {
@@ -310,11 +317,12 @@
             (d.raw_subject ? '<div style="font-size:.78rem;color:var(--s500);margin-top:6px">Subject: ' + host.esc(d.raw_subject) + '</div>' : '') +
             (body ? '<pre style="white-space:pre-wrap;word-break:break-word;background:#fff;border:1px solid var(--s100);border-radius:var(--r);padding:8px 10px;margin:8px 0 0;font-size:.74rem;max-height:190px;overflow:auto">' + host.esc(body) + '</pre>' : '') +
             '<div style="margin-top:8px;display:flex;gap:8px;flex-wrap:wrap">' +
+            // Teaching from the email that just failed is the shortest path
+            // there is: it is already on screen and it is the exact layout that
+            // needs handling.
+            '<button class="me-btn me-btn--pri me-btn--sm" onclick="CampistryDeposits.teachFromDeposit(\'' + host.jesc(d.id) + '\')">Show Campistry how to read this</button>' +
             '<button class="me-btn me-btn--ghost me-btn--sm" onclick="CampistryDeposits.ignore(\'' + host.jesc(d.id) + '\')">Dismiss</button>' +
             '</div>' +
-            '<div style="font-size:.72rem;color:var(--s400);margin-top:8px">' +
-            'Seeing these often means this bank words its alerts in a way Campistry does not recognise yet. ' +
-            'Send one to support and it gets handled for every camp.</div>' +
             '</div>';
     }
 
@@ -402,6 +410,8 @@
              '<button class="me-btn me-btn--sec me-btn--sm" onclick="CampistryDeposits.openSettings()">Deposit Settings</button>' +
              '<button class="me-btn me-btn--sec me-btn--sm" onclick="CampistryDeposits.openAliases()">Known Payers (' + state.aliases.length + ')</button>' +
              '<button class="me-btn me-btn--sec me-btn--sm" onclick="CampistryDeposits.openAddAlias()">+ Add a payer</button>' +
+             '<button class="me-btn me-btn--sec me-btn--sm" onclick="CampistryDeposits.openTemplates()">Bank layouts (' +
+             state.templates.filter(function (x) { return x.scope === 'camp'; }).length + ')</button>' +
              '</div>';
 
         h += '<h4 style="margin:0 0 8px;font-size:.9rem">Needs you (' + pending.length + ')</h4>';
@@ -635,6 +645,279 @@
                 D.refresh().then(function () { renderInbox(); host.onChange(); });
             });
         });
+    };
+
+
+    // ── teaching Campistry a bank's layout ───────────────────────────────────
+    //
+    // A camp pastes one of its own alert emails, selects the sender's name, the
+    // amount and the memo, and campistry_deposit_template.js turns each
+    // selection into two rules. Every payment that bank sends afterwards is
+    // read by those rules instead of by guessing at prose.
+    //
+    // A <textarea> is used deliberately. selectionStart/selectionEnd give exact
+    // character offsets with no DOM walking, no contenteditable quirks, and it
+    // works on a phone -- which is where a head counselor actually is.
+    //
+    // Nothing is saved until the rules have been replayed against the pasted
+    // email and shown to reproduce what was highlighted. A template that cannot
+    // do that will not do better on mail nobody has checked.
+
+    function Tpl() { return W.CampistryDepositTemplate || null; }
+
+    var TEACH_LABELS = {
+        payerName: ['Who sent it', 'the person or business name'],
+        amount:    ['How much', 'the dollar amount'],
+        memo:      ['The memo', 'the note the sender typed, if there is one']
+    };
+
+    D.openTeach = function (prefillText, prefillFrom) {
+        var T = Tpl();
+        if (!T) { if (host.toast) host.toast('The template engine did not load.', 'error'); return; }
+
+        state.teach = {
+            text: prefillText || '',
+            from: prefillFrom || '',
+            label: '',
+            marks: {},
+            result: null
+        };
+        renderTeach();
+    };
+
+    /** Rebuild the modal in place; the textarea's value and caret are preserved. */
+    function renderTeach() {
+        var t = state.teach;
+        var h = '<div class="me-modal-form">';
+
+        h += '<p style="font-size:.84rem;color:var(--s600);margin:0 0 12px">' +
+             'Paste one of your bank\'s deposit alerts below, then highlight each piece and press its button. ' +
+             'Campistry learns where those pieces live and reads every future alert from this bank the same way.</p>';
+
+        h += '<div style="display:grid;grid-template-columns:1fr 1fr;gap:10px">' +
+             '<div class="me-field"><label>The bank\'s email address</label>' +
+             '<input type="text" id="tchFrom" class="me-input" placeholder="alerts@capitalone.com" value="' +
+             host.esc(t.from) + '" oninput="CampistryDeposits.teachSet(\'from\', this.value)">' +
+             '<div style="font-size:.72rem;color:var(--s500);margin-top:4px">Who the alert comes FROM. This is how the layout is recognised later.</div></div>' +
+             '<div class="me-field"><label>Bank name <span style="color:var(--s400);font-weight:400">(optional)</span></label>' +
+             '<input type="text" id="tchLabel" class="me-input" placeholder="Capital One" value="' +
+             host.esc(t.label) + '" oninput="CampistryDeposits.teachSet(\'label\', this.value)"></div>' +
+             '</div>';
+
+        h += '<div class="me-field"><label>The email</label>' +
+             '<textarea id="tchText" class="me-input" rows="9" spellcheck="false" ' +
+             'style="font-family:ui-monospace,Menlo,Consolas,monospace;font-size:.78rem;line-height:1.5" ' +
+             'placeholder="Paste the whole email here…" ' +
+             'oninput="CampistryDeposits.teachText(this.value)">' + host.esc(t.text) + '</textarea></div>';
+
+        h += '<div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:6px">';
+        Object.keys(TEACH_LABELS).forEach(function (f) {
+            var got = t.marks[f];
+            h += '<button class="me-btn ' + (got ? 'me-btn--pri' : 'me-btn--sec') + ' me-btn--sm" ' +
+                 'onclick="CampistryDeposits.teachMark(\'' + f + '\')">' +
+                 (got ? '✓ ' : '') + host.esc(TEACH_LABELS[f][0]) + '</button>';
+        });
+        h += '</div>';
+        h += '<div style="font-size:.74rem;color:var(--s500);margin-bottom:12px">' +
+             'Select the text in the box above, then press the matching button.</div>';
+
+        h += '<div id="tchPreview">' + teachPreview() + '</div>';
+        h += '</div>';
+
+        host.showModal('Teach Campistry your bank\'s emails', h, function () { D.teachSave(); }, 'Test and save');
+
+        // Restore the textarea contents after the modal re-renders.
+        setTimeout(function () {
+            var ta = document.getElementById('tchText');
+            if (ta && ta.value !== t.text) ta.value = t.text;
+        }, 0);
+    }
+
+    /** Re-render only the preview, so typing in the textarea is never interrupted. */
+    function refreshPreview() {
+        var el = document.getElementById('tchPreview');
+        if (el) el.innerHTML = teachPreview();
+        // Keep the mark buttons' ticks honest without rebuilding the textarea.
+        var t = state.teach;
+        Object.keys(TEACH_LABELS).forEach(function (f) {
+            var btn = document.querySelector('[onclick*="teachMark(\'' + f + '\')"]');
+            if (!btn) return;
+            var got = !!t.marks[f];
+            btn.className = 'me-btn ' + (got ? 'me-btn--pri' : 'me-btn--sec') + ' me-btn--sm';
+            btn.textContent = (got ? '✓ ' : '') + TEACH_LABELS[f][0];
+        });
+    }
+
+    function teachPreview() {
+        var t = state.teach, T = Tpl();
+        var marked = Object.keys(t.marks);
+        if (!t.text.trim()) {
+            return '<div style="font-size:.8rem;color:var(--s500)">Paste an email to begin.</div>';
+        }
+        if (!marked.length) {
+            return '<div style="font-size:.8rem;color:var(--s500)">Now highlight the sender\'s name and press <strong>Who sent it</strong>.</div>';
+        }
+
+        var h = '<div style="background:var(--s50);border-radius:var(--r);padding:10px 12px">';
+        h += '<div style="font-size:.74rem;color:var(--s500);margin-bottom:6px">You highlighted</div>';
+        marked.forEach(function (f) {
+            h += '<div style="font-size:.82rem;margin-bottom:3px"><strong>' + host.esc(TEACH_LABELS[f][0]) +
+                 ':</strong> ' + host.esc(t.text.slice(t.marks[f].start, t.marks[f].end)) + '</div>';
+        });
+
+        // Learn as they go, so a rule that cannot be built is reported at the
+        // moment it fails rather than after they press save.
+        var res = T.learn(t.text, t.marks, {});
+        var tpl = res.template;
+        if (tpl && Object.keys(tpl.fields).length) {
+            var back = T.read(tpl, t.text);
+            h += '<div style="font-size:.74rem;color:var(--s500);margin:10px 0 6px">Reading it back</div>';
+            Object.keys(tpl.fields).forEach(function (f) {
+                var r = back[f];
+                var okMark = r && r.value === t.text.slice(t.marks[f].start, t.marks[f].end).trim();
+                h += '<div style="font-size:.82rem;margin-bottom:3px">' +
+                     (okMark ? '<span style="color:#065F46">✓</span> ' : '<span style="color:#991B1B">✗</span> ') +
+                     host.esc(TEACH_LABELS[f][0]) + ': ' + host.esc((r && r.value) || '(nothing)') +
+                     (r && r.agree ? ' <span style="color:var(--s400);font-size:.72rem">· both rules agree</span>' : '') +
+                     '</div>';
+            });
+        }
+        if (res.errors && res.errors.length) {
+            h += '<div style="background:#FFFBEB;border:1px solid #FDE68A;color:#92400E;padding:6px 9px;' +
+                 'border-radius:var(--r);font-size:.76rem;margin-top:8px">' +
+                 res.errors.map(function (e) { return host.esc(e); }).join('<br>') + '</div>';
+        }
+        h += '</div>';
+        return h;
+    }
+
+    D.teachText = function (v) {
+        var t = state.teach; if (!t) return;
+        // Any highlight describes offsets into the OLD text, so editing the
+        // email invalidates them. Silently keeping them would learn rules from
+        // positions that no longer point at anything.
+        if (v !== t.text) t.marks = {};
+        t.text = v;
+        refreshPreview();
+    };
+
+    D.teachSet = function (k, v) { if (state.teach) state.teach[k] = v; };
+
+    D.teachMark = function (field) {
+        var t = state.teach; if (!t) return;
+        var ta = document.getElementById('tchText');
+        if (!ta) return;
+        var start = ta.selectionStart, end = ta.selectionEnd;
+        if (start == null || end == null || end <= start) {
+            if (host.toast) host.toast('Select the ' + TEACH_LABELS[field][1] + ' in the email first.', 'error');
+            return;
+        }
+        t.text = ta.value;
+        t.marks[field] = { start: start, end: end };
+        refreshPreview();
+    };
+
+    D.teachSave = async function () {
+        var t = state.teach, T = Tpl();
+        if (!t || !T) return;
+        var client = db(), cid = campId();
+
+        var sig = T.signature(t.from);
+        if (!sig) { if (host.toast) host.toast('Enter the address the bank sends from.', 'error'); return; }
+        if (!Object.keys(t.marks).length) { if (host.toast) host.toast('Highlight at least the sender\'s name.', 'error'); return; }
+
+        var res = T.learn(t.text, t.marks, { bank: t.label });
+        if (!res.ok) {
+            if (host.toast) host.toast(res.errors[0], 'error');
+            refreshPreview();
+            return;
+        }
+
+        var r = await client.rpc('save_bank_template', {
+            p_camp_id: cid,
+            p_bank_signature: sig,
+            p_bank_label: t.label || sig,
+            p_template: res.template,
+            p_template_hash: T.hash(res.template),
+            p_is_shareable: T.isShareable(res.template)
+        });
+        if (r.error) { if (host.toast) host.toast(D.explainError(r.error.message), 'error'); return; }
+        if (r.data && r.data.success === false) { if (host.toast) host.toast(D.explainError(r.data.error), 'error'); return; }
+
+        state.teach = null;
+        if (host.closeModal) host.closeModal('dynModal');
+        if (host.toast) host.toast('Saved. Future alerts from ' + sig + ' will be read this way.');
+        await D.refresh();
+        renderInbox();
+        host.onChange();
+    };
+
+    /** Teach from the email that failed — it is already on screen. */
+    D.teachFromDeposit = function (id) {
+        var d = null;
+        for (var i = 0; i < state.deposits.length; i++) {
+            if (state.deposits[i].id === id) { d = state.deposits[i]; break; }
+        }
+        if (!d) return;
+        // raw_subject often carries the sender; the office can correct it.
+        D.openTeach(d.raw_excerpt || '', '');
+    };
+
+    D.openTemplates = function () {
+        var mine = state.templates.filter(function (x) { return x.scope === 'camp'; });
+        var shared = state.templates.filter(function (x) { return x.scope === 'shared'; });
+
+        var h = '<div class="me-modal-form">';
+        h += '<p style="font-size:.84rem;color:var(--s600);margin:0 0 12px">' +
+             'Campistry reads every bank\'s alerts on its own. Teaching it yours makes that exact, ' +
+             'and is worth doing if anything is coming through wrong.</p>';
+        h += '<button class="me-btn me-btn--pri me-btn--sm" style="margin-bottom:14px" ' +
+             'onclick="CampistryDeposits.openTeach()">Teach a bank\'s layout</button>';
+
+        h += '<h4 style="margin:0 0 6px;font-size:.86rem">Yours (' + mine.length + ')</h4>';
+        h += mine.length ? mine.map(templateRow).join('')
+            : '<p style="color:var(--s500);font-size:.82rem;margin:0 0 14px">None yet.</p>';
+
+        if (shared.length) {
+            h += '<h4 style="margin:14px 0 6px;font-size:.86rem">From other camps (' + shared.length + ')</h4>';
+            h += '<p style="font-size:.74rem;color:var(--s500);margin:0 0 8px">' +
+                 'Layouts several camps taught independently and that all agreed on. Used only where you have not taught your own.</p>';
+            h += shared.map(templateRow).join('');
+        }
+        h += '</div>';
+        host.showModal('Bank layouts', h, null);
+    };
+
+    function templateRow(t) {
+        var total = (t.hits || 0) + (t.misses || 0);
+        var rate = total ? Math.round((t.hits || 0) * 100 / total) : null;
+        // A template that has stopped fitting must show as a number, not as a
+        // quietly wrong answer. Conflicts -- the two rules disagreeing -- are
+        // the earliest signal that the bank changed its layout.
+        var warn = (t.conflicts || 0) > 0 || (rate !== null && rate < 80);
+        return '<div style="border:1px solid ' + (warn ? '#FDE68A' : 'var(--s100)') +
+            ';border-radius:var(--r);padding:9px 12px;margin-bottom:8px">' +
+            '<div style="display:flex;justify-content:space-between;gap:10px;flex-wrap:wrap;align-items:baseline">' +
+            '<strong style="font-size:.88rem">' + host.esc(t.bank_label || t.bank_signature) + '</strong>' +
+            '<span style="font-size:.72rem;color:var(--s500)">' + host.esc(t.bank_signature) + '</span></div>' +
+            '<div style="font-size:.74rem;color:var(--s500);margin-top:4px">' +
+            (total ? (rate + '% read cleanly over ' + total + ' email' + (total === 1 ? '' : 's')) : 'Not used yet') +
+            ((t.conflicts || 0) ? ' · <span style="color:#92400E">' + t.conflicts + ' disagreed — this bank may have changed its layout</span>' : '') +
+            '</div>' +
+            (t.scope === 'camp'
+                ? '<div style="margin-top:6px;display:flex;gap:8px">' +
+                  '<button class="me-btn me-btn--ghost me-btn--sm" onclick="CampistryDeposits.openTeach(\'\', \'' + host.jesc(t.bank_signature) + '\')">Re-teach</button>' +
+                  '<button class="me-btn me-btn--ghost me-btn--sm" style="color:var(--err)" onclick="CampistryDeposits.forgetTemplate(\'' + host.jesc(t.bank_signature) + '\')">Forget</button></div>'
+                : '') +
+            '</div>';
+    }
+
+    D.forgetTemplate = async function (sig) {
+        var client = db(), cid = campId();
+        var r = await client.rpc('delete_bank_template', { p_camp_id: cid, p_bank_signature: sig });
+        if (r.error) { if (host.toast) host.toast(r.error.message, 'error'); return; }
+        await D.refresh();
+        D.openTemplates();
     };
 
     if (typeof window !== 'undefined') window.CampistryDeposits = D;

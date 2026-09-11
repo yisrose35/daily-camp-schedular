@@ -215,3 +215,54 @@ test('a template that no longer fits reports nothing rather than guessing', () =
     // Falling back to the generic parser is the right answer here, and silence
     // is what tells the caller to do that.
 });
+
+// ── cross-camp corroboration ─────────────────────────────────────────────────
+
+test('two camps teaching the same layout produce the same hash', () => {
+    // This is what promotion is counted over, so it must be identical when two
+    // camps independently teach the same bank — with entirely different
+    // families, amounts and memos — and different the moment the rules differ.
+    const other = [
+        'Good news: Someone sent you money with Zelle®.',
+        '',
+        'MIRIAM WEISSBERGER has just sent you money with Zelle® in the amount of $920.00.',
+        '',
+        "Here's the message from MIRIAM WEISSBERGER: ABC-9876",
+        '',
+        'The money has already been deposited in your account.'
+    ].join('\n');
+
+    const a = T.learn(SAMPLE, {
+        payerName: mark(SAMPLE, 'YISRAEL ROSENFELD'),
+        amount: mark(SAMPLE, '$5.00'),
+        memo: mark(SAMPLE, 'tst 1234')
+    }, { bank: 'Capital One' });
+    const b = T.learn(other, {
+        payerName: mark(other, 'MIRIAM WEISSBERGER'),
+        amount: mark(other, '$920.00'),
+        memo: mark(other, 'ABC-9876')
+    }, { bank: 'capital one bank' });   // typed differently on purpose
+
+    assert.ok(a.ok && b.ok);
+    assert.strictEqual(T.hash(a.template), T.hash(b.template));
+});
+
+test('the hash ignores what the camp typed and follows only the rules', () => {
+    const a = teachFull(SAMPLE);
+    const b = JSON.parse(JSON.stringify(a));
+    b.meta = { bank: 'something else entirely', taughtAt: '2026-09-11' };
+    assert.strictEqual(T.hash(a), T.hash(b), 'meta must not affect corroboration');
+
+    b.fields.payerName.suffix = ' XX';
+    assert.notStrictEqual(T.hash(a), T.hash(b), 'a real rule change must change the hash');
+});
+
+test('a contaminated anchor cannot reach the sharing threshold', () => {
+    // The structural defence behind promotion: correct templates converge on
+    // one hash because boilerplate is identical everywhere, while anything
+    // carrying a family name or an account number is unique to the camp that
+    // produced it and can never be corroborated by two others.
+    const contaminated = { fields: { memo: { prefix: ['from YISRAEL ROSENFELD: '], suffix: '\n', line: null } } };
+    assert.strictEqual(T.isShareable(contaminated), false);
+    assert.notStrictEqual(T.hash(contaminated), T.hash(teachFull(SAMPLE)));
+});

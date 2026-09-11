@@ -543,6 +543,39 @@
     };
 
     /**
+     * A stable fingerprint of the RULES, and nothing else.
+     *
+     * This is what corroboration is counted over, so it must come out
+     * identical when two camps independently teach the same layout -- and
+     * different the moment anything real differs. Field order is sorted
+     * because object key order is not a promise, and meta (the bank label the
+     * camp typed, when it was taught) is deliberately excluded: it varies
+     * between camps that learned exactly the same thing.
+     *
+     * FNV-1a, same as the deposit fingerprint. A dedupe key, never a security
+     * boundary -- nothing is trusted because its hash matches, only counted.
+     */
+    T.hash = function (template) {
+        var fields = (template && template.fields) || {};
+        var basis = Object.keys(fields).sort().map(function (f) {
+            var r = fields[f] || {};
+            var prefix = (r.prefix || []).map(function (p) {
+                return p === ANY ? ' ANY ' : String(p);
+            }).join('');
+            var line = r.line ? String(r.line.re) : '';
+            return [f, prefix, String(r.suffix || ''), line].join('');
+        }).join('');
+
+        var h = 0x811c9dc5;
+        for (var i = 0; i < basis.length; i++) {
+            h ^= basis.charCodeAt(i);
+            h = (h + ((h << 1) + (h << 4) + (h << 7) + (h << 8) + (h << 24))) >>> 0;
+        }
+        return 'tpl_' + ('00000000' + h.toString(16)).slice(-8) +
+               '_' + ('0000' + (basis.length % 65536).toString(16)).slice(-4);
+    };
+
+    /**
      * How a template identifies the bank it belongs to.
      *
      * NOT the name a camp types -- "Chase", "chase bank", "JPM Chase" are the

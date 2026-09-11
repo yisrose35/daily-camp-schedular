@@ -116,6 +116,33 @@ safe across banks you have never seen:
 
 Both are small enough to paste from a phone.
 
+### 2c. Apply migration 147 — learned bank layouts
+
+Optional but worth doing before onboarding camps. It adds `bank_templates`,
+which lets a camp teach Campistry its own bank's email layout once instead of
+relying on generic prose parsing forever.
+
+A camp has ONE bank account, so every payment it receives all season arrives in
+the same layout. In Billing → Bank Deposits → **Bank layouts → Teach a bank's
+layout**, the camp pastes one of its own alerts, highlights the name, the
+amount and the memo, and Campistry stores two independent rules per field: a
+text anchor ("find this phrase, read what follows") and a line shape ("the
+value is on the line shaped like this"). The two break under different
+conditions, so when they agree the reading is trustworthy, and when they
+disagree the email goes to a human instead of being guessed at.
+
+Nothing is saved until the rules have been replayed against the pasted email
+and shown to reproduce what was highlighted.
+
+**Cross-camp sharing.** A layout that **three different camps** teach
+independently, arriving at identical rules, is promoted and offered to every
+camp that later connects the same bank — so the tenth camp on Capital One gets
+a working reader before it sends its first email. Corroboration is the real
+safeguard, not just a quality bar: correct templates converge on one hash
+because boilerplate is identical everywhere, while anything contaminated with a
+family name or an account number is unique to the camp that produced it and can
+never be corroborated. A camp's own template always beats a shared one.
+
 ### 3. Turn on inbound email in Resend
 
 Resend Dashboard → **Inbound**. Pick one:

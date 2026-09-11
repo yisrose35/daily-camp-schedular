@@ -38,7 +38,7 @@ const fs = require('fs');
 const path = require('path');
 
 const ROOT = path.join(__dirname, '..');
-const CORE = ['campistry_deposit_parser.js', 'campistry_deposit_match.js'];
+const CORE = ['campistry_deposit_parser.js', 'campistry_deposit_match.js', 'campistry_deposit_template.js'];
 const HANDLER = path.join(ROOT, 'tools', 'deposit_inbox_handler.ts');
 const OUT = path.join(ROOT, 'supabase', 'functions', 'deposit-inbox', 'index.ts');
 
@@ -56,7 +56,7 @@ function build() {
             // The handler declares Parser/Matcher so it reads correctly on its
             // own; here they become real bindings, so the declarations would be
             // duplicate identifiers.
-            if (/^declare const (Parser|Matcher):/.test(line)) return false;
+            if (/^declare const (Parser|Matcher|Template):/.test(line)) return false;
             return true;
         })
         .join('\n')
@@ -85,10 +85,11 @@ function build() {
         '',
         core.join('\n\n'),
         '',
-        '// The two modules above register themselves on globalThis; bind them for the',
-        '// handler, which is written against these two names.',
+        '// The modules above register themselves on globalThis; bind them for the',
+        '// handler, which is written against these names.',
         'const Parser = globalThis.CampistryDepositParser;',
         'const Matcher = globalThis.CampistryDepositMatch;',
+        'const Template = globalThis.CampistryDepositTemplate;',
         '',
         body.trimStart(),
         ''
