@@ -1885,6 +1885,76 @@ import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
     };
 
     /**
+     * Derive rules from a correction a human already made — no highlighting.
+     *
+     * ─────────────────────────────────────────────────────────────────────────
+     * Every time staff fix a deposit in the inbox they produce a labelled
+     * example without knowing it: the message text is stored on the row
+     * (raw_excerpt), and the value they confirmed is the answer. Finding that
+     * value inside that text yields exactly the { start, end } a highlight
+     * would have produced, so the same learner runs on it.
+     *
+     * A camp that never opens the teaching screen therefore still ends up with
+     * a template, built out of the corrections it was making anyway.
+     *
+     * The amount needs a little care: the row stores a number (1250) while the
+     * message says "$1,250.00", so the plausible renderings are tried in turn.
+     *
+     * Returns learn()'s own result, so a derived template is validated exactly
+     * as a taught one is -- replayed against the message it came from, and
+     * discarded if it cannot reproduce the answer it was derived from.
+     */
+    T.deriveFromCorrection = function (rawText, values, meta) {
+        var text = T.normalize(rawText);
+        if (!text.trim()) return { ok: false, errors: ['no message text stored'] };
+
+        var marks = {};
+        var missed = [];
+
+        T.FIELDS.forEach(function (field) {
+            var raw = values && values[field];
+            if (raw == null || raw === '') return;
+
+            var candidates = (field === 'amount')
+                ? amountRenderings(raw)
+                : [T.normalize(String(raw)).trim()];
+
+            for (var i = 0; i < candidates.length; i++) {
+                var needle = candidates[i];
+                if (!needle) continue;
+                var at = text.indexOf(needle);
+                if (at >= 0) { marks[field] = { start: at, end: at + needle.length }; return; }
+            }
+            missed.push(field);
+        });
+
+        if (!Object.keys(marks).length) {
+            // Ordinary and not an error: a camp that types "Klein Family" where
+            // the bank said "SHIMON'S HARDWARE LLC" has taught an alias, which
+            // is useful, but nothing about where anything lives.
+            return { ok: false, errors: ['none of the corrected values appear in the message'] };
+        }
+        var res = T.learn(text, marks, meta || {});
+        if (missed.length && res.errors) res.errors = res.errors.concat(missed.map(function (f) {
+            return f + ': not found in the message';
+        }));
+        return res;
+    };
+
+    /** "$1,250.00", "1,250.00", "$1250.00", … for a stored number like 1250. */
+    function amountRenderings(v) {
+        var n = Number(String(v).replace(/[^0-9.\-]/g, ''));
+        if (!isFinite(n) || !n) return [String(v).trim()];
+        var abs = Math.abs(n);
+        var fixed = abs.toFixed(2);
+        var grouped = fixed.replace(/\B(?=(\d{3})+(?!\d))/g, ',');
+        var whole = String(Math.round(abs));
+        var wholeGrouped = whole.replace(/\B(?=(\d{3})+(?!\d))/g, ',');
+        return ['$' + grouped, '$' + fixed, grouped, fixed,
+                '$' + wholeGrouped, '$' + whole, wholeGrouped, whole];
+    }
+
+    /**
      * A stable fingerprint of the RULES, and nothing else.
      *
      * This is what corroboration is counted over, so it must come out
@@ -2415,6 +2485,10 @@ serve(async (req) => {
   // against what actually arrived. Without it, "is this name right?" has no
   // answer anyone can look up.
   deposit.rawExcerpt = (text || Parser.htmlToText(html || "")).slice(0, 4000);
+  // Which bank sent it. Needed later: when staff correct this deposit, the
+  // browser derives layout rules from the correction and has to say which
+  // bank's layout they belong to.
+  deposit.fromAddress = fromAddrs[0] || "";
   const ctx = await loadContext(service, campId);
   const decision = Matcher.decide(deposit, ctx, {
     autoPostAt: camp.autoPostAt,

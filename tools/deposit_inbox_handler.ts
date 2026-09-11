@@ -453,6 +453,10 @@ serve(async (req) => {
   // against what actually arrived. Without it, "is this name right?" has no
   // answer anyone can look up.
   deposit.rawExcerpt = (text || Parser.htmlToText(html || "")).slice(0, 4000);
+  // Which bank sent it. Needed later: when staff correct this deposit, the
+  // browser derives layout rules from the correction and has to say which
+  // bank's layout they belong to.
+  deposit.fromAddress = fromAddrs[0] || "";
   const ctx = await loadContext(service, campId);
   const decision = Matcher.decide(deposit, ctx, {
     autoPostAt: camp.autoPostAt,

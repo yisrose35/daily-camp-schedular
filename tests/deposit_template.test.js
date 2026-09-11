@@ -266,3 +266,102 @@ test('a contaminated anchor cannot reach the sharing threshold', () => {
     assert.strictEqual(T.isShareable(contaminated), false);
     assert.notStrictEqual(T.hash(contaminated), T.hash(teachFull(SAMPLE)));
 });
+
+// ── learning from a correction, with no highlighting ─────────────────────────
+//
+// Every time staff fix a deposit they produce a labelled example without
+// meaning to: the message is on the row and the value they confirmed is the
+// answer. Finding one inside the other gives the same offsets a highlight
+// would have — so a camp that never opens the teaching screen still ends up
+// with a template, built out of corrections it was making anyway.
+
+const RAW_ON_ROW = [
+    'Good news: Someone sent you money with Zelle.',
+    '',
+    'MIRIAM WEISSBERGER has just sent you money with Zelle in the amount of $1,250.00.',
+    '',
+    "Here's the message from MIRIAM WEISSBERGER: KLE-1234 tuition",
+    '',
+    'The money has already been deposited in your account.'
+].join('\n');
+
+test('a correction alone produces working rules', () => {
+    const res = T.deriveFromCorrection(RAW_ON_ROW, {
+        payerName: 'MIRIAM WEISSBERGER',
+        amount: 1250,
+        memo: 'KLE-1234 tuition'
+    });
+    assert.ok(res.ok, 'derive failed: ' + JSON.stringify(res.errors));
+
+    const unseen = [
+        'Good news: Someone sent you money with Zelle.',
+        '',
+        "SHIMON'S HARDWARE LLC has just sent you money with Zelle in the amount of $840.00.",
+        '',
+        "Here's the message from SHIMON'S HARDWARE LLC: GOL-5678",
+        '',
+        'The money has already been deposited in your account.'
+    ].join('\n');
+    assert.deepStrictEqual(T.apply(res.template, unseen), {
+        payerName: "SHIMON'S HARDWARE LLC",
+        amount: '$840.00',
+        memo: 'GOL-5678'
+    });
+});
+
+test('the stored amount is matched against how the bank writes it', () => {
+    // The row holds a number (1250); the message says "$1,250.00". Without
+    // trying the plausible renderings, the amount is never located and the one
+    // field that most needs pinning down is the one that goes unlearned.
+    const res = T.deriveFromCorrection(RAW_ON_ROW, { payerName: 'MIRIAM WEISSBERGER', amount: 1250 });
+    assert.ok(res.template.fields.amount, 'the amount should have been located');
+    assert.strictEqual(T.apply(res.template, RAW_ON_ROW).amount, '$1,250.00');
+
+    // A whole-dollar amount written without cents must be found too.
+    const plain = 'You received $75 from SARA LEVI today.';
+    const r2 = T.deriveFromCorrection(plain, { payerName: 'SARA LEVI', amount: 75 });
+    assert.ok(r2.ok, JSON.stringify(r2.errors));
+});
+
+test('a correction that names something not in the message teaches nothing', () => {
+    // Staff typing "Klein Family" where the bank said "SHIMON'S HARDWARE LLC"
+    // have taught an alias, which is useful — but there is nothing in the text
+    // to locate, and inventing a position would be worse than declining.
+    const res = T.deriveFromCorrection(RAW_ON_ROW, { payerName: 'Klein Family' });
+    assert.strictEqual(res.ok, false);
+    assert.match(res.errors[0], /none of the corrected values appear/i);
+});
+
+test('derived rules are validated exactly as taught ones are', () => {
+    // deriveFromCorrection ends in learn(), so a rule that cannot replay
+    // against the message it came from is discarded rather than stored.
+    const res = T.deriveFromCorrection('', { payerName: 'ANYONE' });
+    assert.strictEqual(res.ok, false);
+});
+
+test('two correct corrections converge on one hash; a bad one does not', () => {
+    // This is what promotion counts. Two deposits read correctly produce
+    // identical rules; a mistake produces rules unique to itself and can never
+    // reach the threshold, which is the whole defence against learning a typo.
+    const second = [
+        'Good news: Someone sent you money with Zelle.',
+        '',
+        'AVI SCHWARTZ has just sent you money with Zelle in the amount of $300.00.',
+        '',
+        "Here's the message from AVI SCHWARTZ: RIV-2244",
+        '',
+        'The money has already been deposited in your account.'
+    ].join('\n');
+
+    const a = T.deriveFromCorrection(RAW_ON_ROW, { payerName: 'MIRIAM WEISSBERGER', amount: 1250, memo: 'KLE-1234 tuition' });
+    const b = T.deriveFromCorrection(second, { payerName: 'AVI SCHWARTZ', amount: 300, memo: 'RIV-2244' });
+    assert.ok(a.ok && b.ok);
+    assert.strictEqual(T.hash(a.template), T.hash(b.template));
+
+    // A staff member who selected one word too few teaches a different rule.
+    const sloppy = T.deriveFromCorrection(RAW_ON_ROW, { payerName: 'WEISSBERGER', amount: 1250 });
+    if (sloppy.ok) {
+        assert.notStrictEqual(T.hash(sloppy.template), T.hash(a.template),
+            'a mis-scoped correction must not be counted as corroboration');
+    }
+});

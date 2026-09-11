@@ -58,7 +58,7 @@
     // in the Bank layouts footer. Twice now a fix has been live on the server
     // while the browser ran an older copy, and there was no way to tell from
     // the screen which one was which -- so the screen says.
-    D.BUILD = '20260911-04';
+    D.BUILD = '20260911-05';
 
     var state = {
         loaded: false,
@@ -470,8 +470,60 @@
             p_family_key: familyKey,
             p_create_alias: true,
             p_alias_normalized: normalized
-        }, 'Posted to ' + famName(familyKey) + (normalized ? ' — future payments from this payer will match automatically' : ''));
+        }, 'Posted to ' + famName(familyKey) + (normalized ? ' — future payments from this payer will match automatically' : ''))
+            .then(function (r) { learnFromCorrection(d); return r; });
     };
+
+    /**
+     * Learn WHERE the values live from a correction somebody just made.
+     *
+     * Resolving a deposit already teaches WHO the payer is (an alias). This
+     * teaches where that payer's name sits in the message, which is the part
+     * that helps the next deposit from a family nobody has seen before.
+     *
+     * It costs the office nothing: the message is on the row, the confirmed
+     * values are on the row, and finding one inside the other gives exactly
+     * what a highlight would have. A camp that never opens the teaching screen
+     * still ends up with a template, built out of corrections it was making
+     * anyway.
+     *
+     * Silent by design, including its failures. Most corrections teach nothing
+     * about location -- the confirmed name often does not appear verbatim in
+     * the message -- and that is ordinary, not something to report. The rules
+     * are also not used until two independent deposits produce identical ones.
+     */
+    function learnFromCorrection(d) {
+        var T = Tpl();
+        if (!T || !d || !d.raw_excerpt || !d.from_address) return;
+        var sig = T.signature(d.from_address);
+        if (!sig) return;
+
+        var res = T.deriveFromCorrection(d.raw_excerpt, {
+            payerName: d.payer_name,
+            amount: (d.amount_cents || 0) / 100,
+            memo: d.memo
+        }, { bank: d.bank || sig, source: 'correction' });
+        if (!res.ok) return;
+
+        var client = db(), cid = campId();
+        if (!client || !cid) return;
+        client.rpc('learn_template_from_correction', {
+            p_camp_id: cid,
+            p_bank_signature: sig,
+            p_template: res.template,
+            p_template_hash: T.hash(res.template),
+            p_is_shareable: T.isShareable(res.template)
+        }).then(function (r) {
+            var out = r && r.data;
+            // Worth one line only when it actually starts working, since that
+            // is the moment the office's own corrections change what the inbox
+            // does on its own.
+            if (out && out.promoted && host.toast) {
+                host.toast('Campistry has learned how ' + sig + ' writes its alerts — future deposits should read cleanly.');
+            }
+            if (out && out.learned) D.refresh().then(function () { renderInbox(); });
+        }, function () { /* migration 148 not applied yet; nothing to do */ });
+    }
 
     D.ignore = function (depositId) {
         return call('ignore_bank_deposit', { p_deposit_id: depositId, p_note: 'Marked not tuition' },

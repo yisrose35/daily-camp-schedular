@@ -151,6 +151,23 @@ because boilerplate is identical everywhere, while anything contaminated with a
 family name or an account number is unique to the camp that produced it and can
 never be corroborated. A camp's own template always beats a shared one.
 
+### 2d. Apply migration 148 — learning from corrections
+
+The camp does not have to teach anything. Every time staff fix a deposit in the
+inbox they produce a labelled example without meaning to: the message is stored
+on the row and the value they confirmed is the answer. Finding one inside the
+other gives exactly what a highlight would have, so the rules build themselves
+out of corrections the office was making anyway.
+
+Two independent deposits must produce **identical** rules before those rules are
+used. A typo or a mis-scoped correction yields rules unique to itself and can
+never reach that, which is the whole defence against learning a mistake. A
+layout a camp taught on purpose is never displaced by one inferred this way.
+
+Nothing here lets money move more easily: a payer name still scores 88, below
+the 90 auto-post line, and the amount is only ever confirmed against the generic
+parser, never overridden. This widens coverage, not permission.
+
 ### 3. Turn on inbound email in Resend
 
 Resend Dashboard → **Inbound**. Pick one:
