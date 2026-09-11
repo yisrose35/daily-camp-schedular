@@ -425,11 +425,15 @@ window.CampistryGoNeighborhoods = (function () {
                 rawNodes[fromId].wayIds.add(wayId);
                 rawNodes[toId].wayIds.add(wayId);
 
-                // Length = sum of sub-segment haversines along intermediate nodes
+                // Length = sum of sub-segment haversines along intermediate nodes;
+                // keep the intermediate coordinates so a route can be drawn along
+                // the street's real curve, not corner to corner.
                 let lenMi = 0;
+                const pts = [];
                 for (let i = i0; i < i1; i++) {
                     const a = rawNodes[n[i]], b = rawNodes[n[i + 1]];
                     if (a && b) lenMi += haversineMi(a.lat, a.lng, b.lat, b.lng);
+                    if (i > i0 && a) pts.push([a.lat, a.lng]);
                 }
 
                 // Stable segment ID: wayId + sorted endpoint node IDs
@@ -443,6 +447,7 @@ window.CampistryGoNeighborhoods = (function () {
                     id: segId,
                     fromNodeId: fromId, toNodeId: toId,
                     wayId, hwClass, name, lenMi, oneway,
+                    pts, // interior shape points, from -> to (endpoints excluded)
                     rank: classRank(hwClass),
                 });
             }
@@ -1001,7 +1006,7 @@ window.CampistryGoNeighborhoods = (function () {
             // The whole street graph (not just streets with homes), so travel
             // times can be measured on the road network downstream.
             roadEdges: graph.edges.map(e => ({ id: e.id, fromNodeId: e.fromNodeId, toNodeId: e.toNodeId,
-                                              lenMi: e.lenMi, hwClass: e.hwClass, oneway: e.oneway })),
+                                              lenMi: e.lenMi, hwClass: e.hwClass, oneway: e.oneway, pts: e.pts })),
             homes,
             unattachedCampers,
             stats,

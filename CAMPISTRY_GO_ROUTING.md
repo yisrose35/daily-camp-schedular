@@ -89,6 +89,17 @@ camp's *Avg Speed*), one-way streets, ~3 s per edge for intersections. Rivers,
 highways and cul-de-sacs are therefore real. Without a graph: straight-line
 × 1.35. ETAs are computed on the same legs the ordering used.
 
+### Map
+
+Route lines follow the streets: the road engine records the shortest path
+for every leg (`stampRoadPath`, with each edge's interior shape points), so
+the map draws the run along the roads rather than corner to corner. Without a
+road graph the lines are straight segments. When the fleet outgrows the
+15-colour palette, `assignRouteColors` gives every bus its own colour, ordered
+by bearing from camp with a golden-angle hue step so neighbouring districts
+never look alike; the colour is saved on the bus so list, legend, map and
+print sheets agree. A per-bus summary table is logged after every generation.
+
 ### Dwell
 
 `Time Per Stop` + `Extra Seconds Per Child` × children at the stop. Studies of
