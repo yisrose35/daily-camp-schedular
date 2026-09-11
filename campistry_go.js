@@ -3989,7 +3989,14 @@ async function generateRoutes() {
                     r.stops, { lat: campLat, lng: campLng }, isArrival, _routePostOpts({ legMinutes: legs }));
                 r.stops.forEach((s, i) => s.stopNum = i + 1);
                 window.CampistryGoRoutePost.stampLegTimes(r, { lat: campLat, lng: campLng }, legs);
+                window.CampistryGoRoutePost.stampRoadPath(r, { lat: campLat, lng: campLng }, legs, isArrival, false);
                 if (r.stops.map(s => s.address).join('|') !== before) roadOrdered++;
+            }
+            // Street geometry for any bus that still lacks it (e.g. a 2-stop bus)
+            for (const r of routes) {
+                if (!r.stops || !r.stops.length || (r._roadPts && r._roadPts.length)) continue;
+                const legs = _roadLegsFor(r.stops, campLat, campLng);
+                if (legs) window.CampistryGoRoutePost.stampRoadPath(r, { lat: campLat, lng: campLng }, legs, isArrival, false);
             }
             _applyETAsAndAudits(routes, {
                 shift, isArrival, campLat, campLng,
@@ -4054,6 +4061,41 @@ async function generateRoutes() {
                 '; heaviest: ' + active.find(r => r.camperCount === max).busName);
         }
     });
+
+    // ── Distinct bus colours ──────────────────────────────────────────────
+    // The bus palette has 15 entries; a camp with more buses had several
+    // sharing a colour, which made the map unreadable. Give every bus its own
+    // colour, neighbours on the map far apart on the wheel, and save it on the
+    // bus so the list, legend, map and print sheets agree.
+    {
+        const allRoutes = allShiftResults.flatMap(sr => sr.routes.filter(r => r.stops && r.stops.length));
+        const colorMap = window.CampistryGoRoutePost.assignRouteColors(allRoutes, { lat: campLat, lng: campLng });
+        let recolored = 0;
+        for (const r of allRoutes) {
+            const c = colorMap.get(r.busId);
+            if (!c || c === r.busColor) continue;
+            r.busColor = c; recolored++;
+            const bus = D.buses.find(b => b.id === r.busId); if (bus) bus.color = c;
+            const v = vehicles.find(x => x.busId === r.busId); if (v) v.color = c;
+        }
+        if (recolored) console.log('[Go] Colours: ' + recolored + ' bus(es) re-coloured so every bus is distinct on the map');
+    }
+
+    // ── Per-bus summary (paste this back when reporting a route problem) ──
+    try {
+        const rows = [];
+        allShiftResults.forEach((sr, si) => sr.routes.forEach(r => {
+            if (!r.stops || !r.stops.length) return;
+            const c = r._containment || {};
+            let miles = 0;
+            if (r._tspLegTimes) miles = null; // road legs are in minutes only
+            rows.push({ shift: sr.shift.label || ('Shift ' + (si + 1)), bus: r.busName, kids: r.camperCount, seats: r._cap,
+                        stops: r.stops.length, minutes: r.totalDuration, wedgeDeg: c.arcDeg, spreadMi: c.spreadMi,
+                        straddle: !!c.straddle, source: r._source });
+        }));
+        console.log('[Go] Route summary (' + rows.length + ' buses):');
+        if (console.table) console.table(rows);
+    } catch (_) { /* diagnostics only */ }
 
     // Cache road geometry (unchanged from v4)
     let geomCached = 0;
@@ -4409,7 +4451,10 @@ async function _tryNeighborhoodPipeline({
             r.stops = window.CampistryGoRoutePost.localTspOrder(
                 r.stops, { lat: campLat, lng: campLng }, isArrival, _routePostOpts({ legMinutes: legs }));
             r.stops.forEach((s, i) => s.stopNum = i + 1);
-            if (legs) window.CampistryGoRoutePost.stampLegTimes(r, { lat: campLat, lng: campLng }, legs);
+            if (legs) {
+                window.CampistryGoRoutePost.stampLegTimes(r, { lat: campLat, lng: campLng }, legs);
+                window.CampistryGoRoutePost.stampRoadPath(r, { lat: campLat, lng: campLng }, legs, isArrival, false);
+            }
             improvedBuses++;
         }
         console.log('[Go v5] Local TSP ordered stops on ' + improvedBuses + ' bus(es)' +
@@ -6352,7 +6397,11 @@ function findAnchorStop(campers, intersections, walkMi = 0.2) {
         route.stops = window.CampistryGoRoutePost.localTspOrder(
             route.stops, { lat: campLat, lng: campLng }, isArrival, _routePostOpts({ legMinutes: legs }));
         route.stops.forEach((s, i) => { s.stopNum = i + 1; });
-        if (legs) window.CampistryGoRoutePost.stampLegTimes(route, { lat: campLat, lng: campLng }, legs);
+        if (legs) {
+            window.CampistryGoRoutePost.stampLegTimes(route, { lat: campLat, lng: campLng }, legs);
+            window.CampistryGoRoutePost.stampRoadPath(route, { lat: campLat, lng: campLng }, legs, isArrival, false);
+            try { _routeGeomCache[route.busId + '_' + si] = route._roadPts; } catch (_) {}
+        }
         route.camperCount = route.stops.reduce((s, st) =>
             s + (st.isMonitor || st.isCounselor ? 0 : (st.campers || []).length), 0);
         delete route._tspLegTimes;

@@ -433,6 +433,65 @@ window.CampistryGoRoutePost = (function () {
         }
         return t;
     }
+    // Street geometry of the whole run in its current order, for the map.
+    // Falls back to straight segments for any leg the network cannot trace.
+    function stampRoadPath(route, depot, L, isArrival, needsReturn) {
+        if (!route || typeof L !== 'function' || typeof L.pathFor !== 'function') return null;
+        const stops = ((route && route.stops) || []).filter(s => hasPos(s) && !isStaff(s));
+        if (!stops.length) { delete route._roadPts; return null; }
+        const seq = [depot].concat(stops);
+        if (isArrival || needsReturn) seq.push(depot);
+        const out = [];
+        for (let i = 0; i + 1 < seq.length; i++) {
+            const a = seq[i], b = seq[i + 1];
+            const p = L.pathFor(a, b) || [[a.lat, a.lng], [b.lat, b.lng]];
+            for (let k = (out.length ? 1 : 0); k < p.length; k++) out.push(p[k]);
+        }
+        route._roadPts = out;
+        return out;
+    }
+
+    // ---- bus colours ---------------------------------------------------------
+    // `n` well-separated colours: hues spread around the wheel with a golden-
+    // angle step (so consecutive picks are far apart), alternating lightness.
+    function distinctColors(n) {
+        const out = [];
+        const hsl = (h, s, l) => {
+            const a = s * Math.min(l, 1 - l);
+            const f = k => { const x = (k + h / 30) % 12; return l - a * Math.max(-1, Math.min(x - 3, 9 - x, 1)); };
+            const hex = v => Math.round(v * 255).toString(16).padStart(2, '0');
+            return '#' + hex(f(0)) + hex(f(8)) + hex(f(4));
+        };
+        for (let i = 0; i < n; i++) {
+            const hue = (i * 137.508) % 360;
+            const light = [0.45, 0.58, 0.36][i % 3], sat = [0.78, 0.68, 0.85][i % 3];
+            out.push(hsl(hue, sat, light));
+        }
+        return out;
+    }
+    // When two buses share a colour (fleet bigger than the palette), give every
+    // bus of the run its own. Buses are ordered by the bearing of their route
+    // from camp, and neighbours on the map are handed colours far apart on the
+    // wheel, so adjacent districts never look alike. Returns Map(busId -> colour).
+    function assignRouteColors(routes, depot, o) {
+        const byBus = new Map();
+        for (const r of (routes || [])) if (r && r.busId && !byBus.has(r.busId)) byBus.set(r.busId, r);
+        const buses = Array.from(byBus.values());
+        const colors = buses.map(r => String(r.busColor || '').toLowerCase());
+        const dup = colors.some((c, i) => !c || colors.indexOf(c) !== i);
+        if (!dup) return new Map(buses.map(r => [r.busId, r.busColor]));
+        const withBearing = buses.map(r => {
+            const pts = (r.stops || []).filter(hasPos);
+            if (!pts.length || !depot) return { r, b: 0 };
+            const la = pts.reduce((a, s) => a + s.lat, 0) / pts.length, lo = pts.reduce((a, s) => a + s.lng, 0) / pts.length;
+            return { r, b: Math.atan2(lo - depot.lng, la - depot.lat) };
+        }).sort((x, y) => x.b - y.b);
+        const palette = distinctColors(withBearing.length);
+        const out = new Map();
+        withBearing.forEach((x, i) => out.set(x.r.busId, palette[i]));
+        return out;
+    }
+
     // Per-leg seconds along the route's current order (index i = leg INTO stop
     // i, last entry = leg back to camp), the shape the ETA pass consumes.
     function stampLegTimes(route, depot, L) {
@@ -739,22 +798,23 @@ window.CampistryGoRoutePost = (function () {
         ids.forEach((id, i) => { idx.set(String(id), i); lat[i] = graph.nodes[id].lat; lng[i] = graph.nodes[id].lng; });
         // The camp's Avg Speed setting calibrates the whole table (25 = as listed).
         const scale = Math.max(0.2, (o.avgSpeedMph || 25) / 25);
-        const arcs = [];
-        for (const e of graph.edges) {
+        const arcs = []; // a, b, minutes, edgeIndex, reversed(0/1)
+        graph.edges.forEach((e, ei) => {
             const a = idx.get(String(e.fromNodeId)), b = idx.get(String(e.toNodeId));
-            if (a == null || b == null || a === b) continue;
+            if (a == null || b == null || a === b) return;
             const mph = (CLASS_MPH[e.hwClass] || 20) * scale;
             const min = (Number(e.lenMi) || 0) / mph * 60 + o.roadEdgePenaltyMin;
             const ow = e.oneway;
-            if (ow !== -1 && ow !== 'reverse') arcs.push(a, b, min);
-            if (!ow || ow === -1 || ow === 'reverse' || ow === false) arcs.push(b, a, min);
-        }
+            if (ow !== -1 && ow !== 'reverse') arcs.push(a, b, min, ei, 0);
+            if (!ow || ow === -1 || ow === 'reverse' || ow === false) arcs.push(b, a, min, ei, 1);
+        });
         // CSR adjacency
         const head = new Int32Array(N + 1);
-        for (let k = 0; k < arcs.length; k += 3) head[arcs[k] + 1]++;
+        for (let k = 0; k < arcs.length; k += 5) head[arcs[k] + 1]++;
         for (let i = 0; i < N; i++) head[i + 1] += head[i];
-        const to = new Int32Array(arcs.length / 3), w = new Float64Array(arcs.length / 3), fill = head.slice(0, N);
-        for (let k = 0; k < arcs.length; k += 3) { const a = arcs[k]; to[fill[a]] = arcs[k + 1]; w[fill[a]] = arcs[k + 2]; fill[a]++; }
+        const M = arcs.length / 5;
+        const to = new Int32Array(M), w = new Float64Array(M), arcEdge = new Int32Array(M), arcRev = new Uint8Array(M), fill = head.slice(0, N);
+        for (let k = 0; k < arcs.length; k += 5) { const a = arcs[k]; const f = fill[a]++; to[f] = arcs[k + 1]; w[f] = arcs[k + 2]; arcEdge[f] = arcs[k + 3]; arcRev[f] = arcs[k + 4]; }
         // spatial grid for nearest-node lookup
         const CELL = 0.005;
         const grid = new Map();
@@ -775,8 +835,9 @@ window.CampistryGoRoutePost = (function () {
             return best < 0 ? null : { i: best, offMi: bestD };
         }
         // Binary-heap Dijkstra from `src`, stopping once every node in `targets`
-        // is settled. Returns a sparse Map(node -> minutes).
-        function dijkstra(src, targets) {
+        // is settled. Returns a sparse Map(node -> minutes); with `pred` given,
+        // fills it with node -> arc index used to reach it (for path recovery).
+        function dijkstra(src, targets, pred) {
             const dist = new Map(); dist.set(src, 0);
             const settled = new Set();
             let want = 0; for (const t of targets) if (!settled.has(t)) want++;
@@ -791,10 +852,38 @@ window.CampistryGoRoutePost = (function () {
                 for (let k = head[n]; k < head[n + 1]; k++) {
                     const m = to[k], nd = d + w[k];
                     const cur = dist.get(m);
-                    if (cur == null || nd < cur) { dist.set(m, nd); push(nd, m); }
+                    if (cur == null || nd < cur) { dist.set(m, nd); if (pred) pred.set(m, k); push(nd, m); }
                 }
             }
             return dist;
+        }
+        // Street coordinates of the shortest path from node `src` to node `dst`
+        // given the predecessor map of a Dijkstra run from `src`.
+        function pathCoords(src, dst, pred) {
+            if (src === dst) return [[lat[src], lng[src]]];
+            const arcsBack = [];
+            let cur = dst, guard = 0;
+            while (cur !== src && guard++ < 200000) {
+                const k = pred.get(cur);
+                if (k == null) return null;
+                arcsBack.push(k);
+                cur = to[k] === cur ? (function () { // arc k goes from ? -> cur; find its tail
+                    // tail is the node whose adjacency range contains k
+                    let lo = 0, hi = N - 1;
+                    while (lo < hi) { const mid = (lo + hi + 1) >> 1; if (head[mid] <= k) lo = mid; else hi = mid - 1; }
+                    return lo;
+                })() : cur;
+            }
+            if (cur !== src) return null;
+            const out = [[lat[src], lng[src]]];
+            for (let i = arcsBack.length - 1; i >= 0; i--) {
+                const k = arcsBack[i];
+                const e = graph.edges[arcEdge[k]];
+                const shape = (e && Array.isArray(e.pts)) ? (arcRev[k] ? e.pts.slice().reverse() : e.pts) : [];
+                for (const q of shape) out.push([q[0], q[1]]);
+                out.push([lat[to[k]], lng[to[k]]]);
+            }
+            return out;
         }
         const snapCache = new WeakMap();
         const rowCache = new Map(); // "srcNode|targetsKey" -> Map(targetNode -> minutes)
@@ -814,6 +903,7 @@ window.CampistryGoRoutePost = (function () {
             const targets = new Set(snaps.filter(Boolean).map(x => x.i));
             const targetsKey = Array.from(targets).sort((a, b) => a - b).join(',');
             const bySrc = new Map(); // node -> Map(node -> min)
+            const predBySrc = new Map(); // node -> pred map (this call only; for path recovery)
             const table = new Map(); // point -> Map(point -> min)
             for (let i = 0; i < pts.length; i++) {
                 const si = snaps[i]; if (!si) continue;
@@ -822,7 +912,9 @@ window.CampistryGoRoutePost = (function () {
                     const key = si.i + '|' + targetsKey;
                     dist = rowCache.get(key);
                     if (!dist) {
-                        const full = dijkstra(si.i, targets);
+                        const pred = new Map();
+                        const full = dijkstra(si.i, targets, pred);
+                        predBySrc.set(si.i, pred);
                         dist = new Map();
                         for (const t of targets) { const d = full.get(t); if (d != null) dist.set(t, d); }
                         if (rowCache.size > 4000) rowCache.clear();
@@ -839,11 +931,23 @@ window.CampistryGoRoutePost = (function () {
                 }
                 table.set(pts[i], row);
             }
-            return function legMinutes(a, b) {
+            const legMinutes = function (a, b) {
                 const row = table.get(a);
                 const v = row && row.get(b);
                 return v != null ? v : driveMin(a, b, o);
             };
+            // Street path between two known points: [[lat,lng],...] from a to b
+            // through the network, or null when either is off the network.
+            legMinutes.pathFor = function (a, b) {
+                const sa = snap(a), sb = snap(b);
+                if (!sa || !sb) return null;
+                let pred = predBySrc.get(sa.i);
+                if (!pred) { pred = new Map(); dijkstra(sa.i, new Set([sb.i]), pred); predBySrc.set(sa.i, pred); }
+                const p = pathCoords(sa.i, sb.i, pred);
+                if (!p) return null;
+                return [[a.lat, a.lng]].concat(p, [[b.lat, b.lng]]);
+            };
+            return legMinutes;
         }
         return { nodeCount: N, arcCount: to.length, snap, legMinutesFor, dijkstra, _nearest: nearest };
     }
@@ -1266,6 +1370,7 @@ window.CampistryGoRoutePost = (function () {
         localTspOrder, routeLastDropMin, orderRoutes,
         relieveLongRoutes, splitOverlongRoutes, rebalanceBusLoads, enforceCapacity,
         sweepPartition, polishDistricts, containmentReport,
-        stopDwellMin, rideRatioViolations, passBys, buildRoadNet, stampLegTimes, routeObjective,
+        stopDwellMin, rideRatioViolations, passBys, buildRoadNet, stampLegTimes, stampRoadPath, routeObjective,
+        distinctColors, assignRouteColors,
     };
 })();

@@ -378,3 +378,45 @@ test('polish keeps every invariant on a scattered instance and never worsens the
     const again = P.polishDistricts(buckets, [48, 48, 48, 48], CAMP, { polishTimeBudgetMs: 3000 });
     assert.strictEqual(Math.round(again.after), Math.round(res.after));
 });
+
+test('road network paths follow the streets and cross the river only at the bridge', () => {
+    const g = riverGrid();
+    // give the bridge edge a curve so we can see interior shape points come through
+    const bridge = g.edges.find(e => e.fromNodeId === 'n3_3' && e.toNodeId === 'n3_4');
+    bridge.pts = [[CAMP.lat + (0.5 + 3 * 0.5 + 0.05) * MI_LAT, CAMP.lng + 0.25 * MI_LNG]];
+    const net = P.buildRoadNet(g, { avgSpeedMph: 25 });
+    const west = { lat: CAMP.lat + 1.0 * MI_LAT, lng: CAMP.lng }, east = { lat: CAMP.lat + 1.0 * MI_LAT, lng: CAMP.lng + 0.5 * MI_LNG };
+    const L = net.legMinutesFor([west, east]);
+    const path = L.pathFor(west, east);
+    assert.ok(path && path.length >= 6, 'path should run up to the bridge and back down');
+    assert.deepStrictEqual(path[0], [west.lat, west.lng]);
+    assert.deepStrictEqual(path[path.length - 1], [east.lat, east.lng]);
+    const bridgeRowLat = CAMP.lat + (0.5 + 3 * 0.5) * MI_LAT;
+    assert.ok(path.some(q => Math.abs(q[0] - bridgeRowLat) < 1e-9), 'must pass through the bridge row');
+    assert.ok(path.some(q => Math.abs(q[1] - (CAMP.lng + 0.25 * MI_LNG)) < 1e-9), 'bridge shape point kept');
+    const route = { stops: [west, east].map((p, i) => Object.assign({ campers: [{ name: 'k' + i }], address: 'x' + i }, p)) };
+    const pts = P.stampRoadPath(route, CAMP, L, false, false);
+    assert.ok(pts.length > path.length, 'whole run: camp -> west -> east');
+    assert.deepStrictEqual(route._roadPts[0], [CAMP.lat, CAMP.lng]);
+});
+
+test('every bus gets its own colour when the fleet outgrows the palette, neighbours far apart', () => {
+    const routes = [];
+    for (let i = 0; i < 20; i++) {
+        const ang = i * 18 * Math.PI / 180;
+        routes.push({ busId: 'b' + i, busColor: ['#3b82f6', '#ef4444', '#22c55e'][i % 3], stops: [at(3 * Math.cos(ang), 3 * Math.sin(ang), 3)] });
+    }
+    const map = P.assignRouteColors(routes, CAMP);
+    const cols = Array.from(map.values());
+    assert.strictEqual(new Set(cols).size, 20, 'all distinct');
+    assert.ok(cols.every(c => /^#[0-9a-f]{6}$/.test(c)));
+    // neighbouring wedges (b0,b1) should not share a hue family: measure hue distance
+    const hue = hex => { const r = parseInt(hex.slice(1, 3), 16) / 255, g = parseInt(hex.slice(3, 5), 16) / 255, b = parseInt(hex.slice(5, 7), 16) / 255; const mx = Math.max(r, g, b), mn = Math.min(r, g, b); if (mx === mn) return 0; let h = mx === r ? (g - b) / (mx - mn) : mx === g ? 2 + (b - r) / (mx - mn) : 4 + (r - g) / (mx - mn); return ((h * 60) + 360) % 360; };
+    for (let i = 0; i < 20; i++) {
+        const d = Math.abs(hue(map.get('b' + i)) - hue(map.get('b' + ((i + 1) % 20)))); const dd = Math.min(d, 360 - d);
+        assert.ok(dd > 60, 'neighbours b' + i + ' and next differ by ' + dd.toFixed(0) + ' degrees of hue');
+    }
+    // unique colours are left alone
+    const ok = [{ busId: 'x', busColor: '#111111', stops: [] }, { busId: 'y', busColor: '#222222', stops: [] }];
+    assert.deepStrictEqual(Array.from(P.assignRouteColors(ok, CAMP).values()), ['#111111', '#222222']);
+});
