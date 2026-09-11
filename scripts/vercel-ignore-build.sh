@@ -29,7 +29,7 @@ env="${VERCEL_ENV:-}"
 # The repo carries 46 branches but only two are live. Without this, pushing any
 # old experiment builds a preview on BOTH projects. Production is never gated
 # here -- whatever a project calls its production branch always builds.
-PREVIEW_BRANCHES="New-Features main"
+PREVIEW_BRANCHES="New-Features main Go"
 if [ "$env" = "preview" ] && [ -n "$ref" ]; then
     case " $PREVIEW_BRANCHES " in
         *" $ref "*) : ;;   # an active branch, keep checking below
