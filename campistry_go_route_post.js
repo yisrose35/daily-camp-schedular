@@ -424,6 +424,113 @@ window.CampistryGoRoutePost = (function () {
         return best.map(i => movable[i]).concat(tail);
     }
 
+    // ── Stop consolidation (one bus) ──────────────────────────────────────
+    // Merge a bus's stops into shared stops nobody walks too far to: same
+    // street within the wider radius, anything within the walk allowance.
+    // Pulled out of campistry_go.js so the door-to-door rule is unit-tested.
+    function consolidateStops(stops, o) {
+        // Honour the camp's "Max Walk (ft)" setting (o.walkMi). Districts
+        // consolidate stops to a quarter- to half-mile walk, and this camp's own
+        // historical routes were 100% corner stops at 3.14 children each, which
+        // needs a real walk allowance. People walk further ALONG their own street
+        // than across to a different one, so the same-street radius is the wider.
+        // Door-to-door merges nothing but stops at the same house (siblings, a
+        // duplex): the bus goes to the door, nobody walks a quarter mile.
+        o = o || {};
+        stops = Array.isArray(stops) ? stops : [];
+        const _walkMi = Number.isFinite(o.walkMi) && o.walkMi > 0 ? o.walkMi : 500 / 5280;
+        const DOOR = o.dropoffMode === 'door-to-door';
+        const SAME_HOUSE_MI = 0.006; // ~30 ft: the same address geocoded twice
+        const ANY_RADIUS_MI = DOOR ? SAME_HOUSE_MI : Math.max(0.05, _walkMi);
+        const SEG_RADIUS_MI = Math.max(0.25, _walkMi * 2.5);
+        const MAX_STOP_CAP = Number.isFinite(o.maxStopCap) ? o.maxStopCap : 15;
+
+        function manhDist(la1, lo1, la2, lo2) {
+            return Math.abs(la1 - la2) * 69 + Math.abs(lo1 - lo2) * 54.6;
+        }
+        // Extract street name tokens from "Brewers Bridge Rd corner" or
+        // "Brewers Bridge Rd & Bridge Ct" or "12 Brewers Bridge Rd".
+        function streetsOf(addr) {
+            if (!addr) return [];
+            // Only the street part: a full address ("12 Elm St, Lakewood, NJ, 08701")
+            // used to contribute "lakewood", "nj" and "08701" as street names, so
+            // ANY two homes in the same town matched the same-street rule and
+            // merged within a quarter mile — door-to-door was quietly a corner mode.
+            return String(addr).split(',')[0]
+                .split(/\s*[&@]\s*/)
+                .map(p => p
+                    .replace(/^\d[\d\s\-]*/, '')
+                    .replace(/\bcorner\b/i, '')
+                    .replace(/\bnear\b.*$/i, '')          // "Elm St near 40"
+                    .replace(/\s*[\u2014-]+\s*shared stop.*$/i, '') // "Elm St — shared stop (3)"
+                    .replace(/\([^)]*\)/g, '')
+                    .trim()
+                    .toLowerCase())
+                .filter(Boolean);
+        }
+        // The streets a stop serves: from the homes behind it when it carries
+        // them (a corner stop's name is its intersection, not its homes'
+        // street), else parsed from its name.
+        function streetsOfStop(s) {
+            if (Array.isArray(s._homes) && s._homes.length) {
+                const out = new Set();
+                for (const h of s._homes) { const k = String(h.street || '').toLowerCase().trim(); if (k) out.add(k); }
+                if (out.size) return [...out];
+            }
+            return streetsOf(s.address);
+        }
+        function camperCount(s) {
+            return Array.isArray(s.campers) ? s.campers.length : 0;
+        }
+
+        function runMerge(radiusMi, requireSameStreet) {
+            let merged = true;
+            while (merged) {
+                merged = false;
+                outer: for (let i = stops.length - 1; i >= 0; i--) {
+                    const cntI = camperCount(stops[i]);
+                    if (cntI === 0) continue;
+                    const sA = requireSameStreet ? streetsOfStop(stops[i]) : null;
+                    if (requireSameStreet && !sA.length) continue;
+                    let bestJ = -1, bestDist = radiusMi;
+                    for (let j = 0; j < stops.length; j++) {
+                        if (j === i) continue;
+                        const cntJ = camperCount(stops[j]);
+                        if (cntJ + cntI > MAX_STOP_CAP) continue;
+                        if (requireSameStreet) {
+                            const sB = streetsOfStop(stops[j]);
+                            if (!sA.some(n => sB.includes(n))) continue;
+                        }
+                        // A corner stop stands at an intersection; the walk that
+                        // matters is from the homes behind it, so measure between
+                        // the two groups' home centres when we have them.
+                        const ai = stops[i]._cLat != null ? stops[i] : null, aj = stops[j]._cLat != null ? stops[j] : null;
+                        const d = manhDist(ai ? ai._cLat : stops[i].lat, ai ? ai._cLng : stops[i].lng,
+                                           aj ? aj._cLat : stops[j].lat, aj ? aj._cLng : stops[j].lng);
+                        if (d < bestDist) { bestDist = d; bestJ = j; }
+                    }
+                    if (bestJ >= 0) {
+                        stops[bestJ].campers = (stops[bestJ].campers || []).concat(stops[i].campers || []);
+                        if (stops[bestJ]._homes || stops[i]._homes) {
+                            stops[bestJ]._homes = (stops[bestJ]._homes || []).concat(stops[i]._homes || []);
+                            const hs = stops[bestJ]._homes;
+                            stops[bestJ]._cLat = hs.reduce((a, h) => a + h.lat, 0) / hs.length;
+                            stops[bestJ]._cLng = hs.reduce((a, h) => a + h.lng, 0) / hs.length;
+                        }
+                        stops.splice(i, 1);
+                        merged = true;
+                        break outer;
+                    }
+                }
+            }
+        }
+
+        if (!DOOR) runMerge(SEG_RADIUS_MI, true); // same-street, wider radius
+        runMerge(ANY_RADIUS_MI, false);           // any-street, tight radius (door: same house only)
+
+        return stops;
+    }
+
     // The ordering objective of a given order (children-minutes + fairness +
     // tour tie-break), for tests and diagnostics.
     function routeObjective(stops, depot, isArrival, o) {
@@ -1561,6 +1668,6 @@ window.CampistryGoRoutePost = (function () {
         relieveLongRoutes, splitOverlongRoutes, rebalanceBusLoads, enforceCapacity,
         sweepPartition, polishDistricts, containmentReport,
         stopDwellMin, rideRatioViolations, passBys, buildRoadNet, stampLegTimes, stampRoadPath, routeObjective,
-        distinctColors, assignRouteColors,
+        consolidateStops, distinctColors, assignRouteColors,
     };
 })();

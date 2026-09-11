@@ -608,3 +608,23 @@ test('polish on road legs: a stop across the river moves to the bus on its own b
     assert.strictEqual(road.buckets.flat().length, 7, 'every atom once');
     assert.ok(straight.buckets.flat().length === 7, 'straight-line run is still valid');
 });
+
+// ── stop consolidation ───────────────────────────────────────────────────────
+
+test('consolidateStops: door-to-door merges only stops at the same house; corner mode merges the street', () => {
+    const mk = (miN, miE, addr, n) => Object.assign(at(miN, miE, n || 1), { address: addr });
+    const stops = () => [
+        mk(1.00, 0.00, '12 Elm St, Lakewood, NJ', 1),
+        mk(1.00, 0.00, '12 Elm St, Lakewood, NJ', 1),          // sibling, same house
+        mk(1.00, 0.10, '40 Elm St, Lakewood, NJ', 1),          // 0.1mi down the street
+        mk(1.02, 0.02, '7 Oak Ct, Lakewood, NJ', 1),           // next street, ~0.04mi away
+    ];
+    const door = P.consolidateStops(stops(), { walkMi: 500 / 5280, dropoffMode: 'door-to-door' });
+    assert.strictEqual(door.length, 3, 'door-to-door: the siblings share one stop, everyone else gets their own door');
+    assert.strictEqual(door.reduce((a, s) => a + s.campers.length, 0), 4);
+    const corner = P.consolidateStops(stops(), { walkMi: 500 / 5280, dropoffMode: 'corner-stops' });
+    assert.strictEqual(corner.length, 1, 'corner mode: one shared stop within the walk allowance');
+    assert.strictEqual(corner[0].campers.length, 4);
+    // an empty walk setting still behaves
+    assert.strictEqual(P.consolidateStops(stops(), { dropoffMode: 'door-to-door' }).length, 3);
+});

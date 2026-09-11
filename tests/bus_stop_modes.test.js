@@ -141,7 +141,7 @@ test('a corner stop with no intersection in reach is named by street and house n
     assert.match(a.address, /Leesville Road near 12/);
     const c = { campers: [{ name: 'k3' }], _homes: [{ lat: 40.1, lng: -74.2, street: '', houseNum: '23', addr: '23 Brittany Ln' }] };
     snapper.snap(c);
-    assert.strictEqual(c.address, '23 Brittany Ln', 'no street name: the home address, not "Stop corner"');
+    assert.strictEqual(c.address, 'Brittany Ln near 23', 'no map street name: the street from the home address, not "Stop corner"');
 });
 
 
@@ -194,4 +194,30 @@ test('corner stops carry their homes, and a merged stop re-snaps to the corner n
     const reachable = Object.values(result.nodes).filter(n => window.CampistryGoRoutePost.haversineMi(merged._cLat, merged._cLng, n.lat, n.lng) <= 0.30);
     const best = Math.min(...reachable.map(tot));
     assert.ok(tot(chosen) <= best + 0.05, 'chosen corner walk ' + tot(chosen).toFixed(3) + ' vs best ' + best.toFixed(3));
+});
+
+test('a home on a road the map leaves unnamed is still named by the street in its own address', () => {
+    // Same grid, but every road segment is nameless in the map data.
+    const nameless = { ...result, segments: result.segments.map(s => ({ ...s, name: '' })) };
+    const out = NH.expandToPhysicalStops({ assignment, result: nameless, dropoffMode: 'corner-stops', maxWalkMi: 0.1 });
+    const stops = out[0].stops;
+    assert.ok(stops.length > 0);
+    for (const s of stops) {
+        assert.doesNotMatch(s.address, /^Stop corner$/, 'never a bare "Stop corner"');
+        assert.match(s.address, /Oak St|Elm St|Pine St/, 'named by the street in the address: ' + s.address);
+        for (const h of s._homes) assert.match(h.street, /Oak St|Elm St|Pine St/, 'the home record carries the street too');
+    }
+    // and with no intersections in reach it says where on the street
+    const snapper = NH.cornerSnapper({ nodes: {} }, 0.05);
+    assert.strictEqual(snapper.nameFor(null, 'Elm St', [{ houseNum: '40' }]), 'Elm St near 40');
+    assert.strictEqual(snapper.nameFor(null, '', [{ houseNum: '40', addr: '40 Elm St' }]), '40 Elm St');
+    assert.strictEqual(snapper.nameFor(null, '', []), 'Stop corner');
+});
+
+test('parseStreetName strips the house number and a unit, keeps the street', () => {
+    assert.strictEqual(NH.parseStreetName('12A Elm St Apt 3, Lakewood, NJ'), 'Elm St');
+    assert.strictEqual(NH.parseStreetName('13 Hickory Hill Rd'), 'Hickory Hill Rd');
+    assert.strictEqual(NH.parseStreetName('100-102 Ocean Ave #4'), 'Ocean Ave');
+    assert.strictEqual(NH.parseStreetName('Brewers Bridge Rd'), 'Brewers Bridge Rd');
+    assert.strictEqual(NH.parseStreetName(''), '');
 });

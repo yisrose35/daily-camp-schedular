@@ -4391,8 +4391,41 @@ async function _tryNeighborhoodPipeline({
             for (const g of Object.values(byGid)) groups.push(g);
         }
         const _post = window.CampistryGoRoutePost;
+        // Shared-stop modes: a home record per child so the stop can be
+        // re-snapped to a corner and named like every other stop.
+        const _shared = dropoffMode !== 'door-to-door';
+        const _walkMi = ((D.setup && D.setup.maxWalkDistance) || 500) / 5280;
+        const _homeRec = x => ({ lat: x.lat, lng: x.lng,
+            street: parseAddress(String(x.address || '').split(',')[0]).street || '',
+            houseNum: String((String(x.address || '').match(/^\s*(\d+)/) || [])[1] || ''), addr: x.address || '' });
+        let joined = 0;
         for (const group of groups) {
             const c = group[0];
+            // A shared stop within walking distance on a bus with seats: join it.
+            // Consolidation only merges within one bus, so a door-drop appended
+            // to the nearest bus stayed a door-drop even with a corner stop on
+            // another bus across the street.
+            if (_shared) {
+                let bestStop = null, bestStopBus = null, bestD = _walkMi;
+                for (const bus of nhPhysical) {
+                    if (!bus.stops?.length || _headOf(bus) + group.length > _capOf(bus)) continue;
+                    for (const s of bus.stops) {
+                        if (!s._homes || (s.campers || []).length + group.length > 20) continue;
+                        const d = Math.abs(c.lat - (s._cLat != null ? s._cLat : s.lat)) * 69 +
+                                  Math.abs(c.lng - (s._cLng != null ? s._cLng : s.lng)) * 54.6;
+                        if (d < bestD) { bestD = d; bestStop = s; bestStopBus = bus; }
+                    }
+                }
+                if (bestStop) {
+                    bestStop.campers = (bestStop.campers || []).concat(group.map(x => ({ name: x.name, division: x.division, bunk: x.bunk })));
+                    bestStop._homes = bestStop._homes.concat(group.map(_homeRec));
+                    bestStop._cLat = bestStop._homes.reduce((a, h) => a + h.lat, 0) / bestStop._homes.length;
+                    bestStop._cLng = bestStop._homes.reduce((a, h) => a + h.lng, 0) / bestStop._homes.length;
+                    bestStopBus.camperCount = (bestStopBus.camperCount || 0) + group.length;
+                    joined++;
+                    continue;
+                }
+            }
             let bestBus = null, bestDist = Infinity;
             let fullestFallback = null, fallbackHead = Infinity;
             for (const bus of nhPhysical) {
@@ -4413,14 +4446,17 @@ async function _tryNeighborhoodPipeline({
                 bestBus = fullestFallback;
             }
             if (bestBus) {
-                bestBus.stops.push({
+                const stop = {
                     lat: c.lat, lng: c.lng,
                     address: c.address,
                     campers: group.map(x => ({ name: x.name, division: x.division, bunk: x.bunk }))
-                });
+                };
+                if (_shared) { stop._homes = group.map(_homeRec); stop._cLat = c.lat; stop._cLng = c.lng; }
+                bestBus.stops.push(stop);
                 bestBus.camperCount = (bestBus.camperCount || 0) + group.length;
             }
         }
+        if (joined) console.log('[Go v5] ' + joined + ' un-snapped group(s) joined a shared stop within walking distance');
     }
 
     // ── Stop consolidation per bus ──────────────────────────────────────
@@ -4435,7 +4471,7 @@ async function _tryNeighborhoodPipeline({
     for (const bus of nhPhysical) {
         if (!bus.stops?.length || bus.stops.length < 2) continue;
         const before = bus.stops.length;
-        bus.stops = _consolidateBusStops(bus.stops);
+        bus.stops = _consolidateBusStops(bus.stops, dropoffMode);
         const removed = before - bus.stops.length;
         if (removed > 0) {
             consolidationStats.busesAffected++;
@@ -6048,90 +6084,13 @@ function _estimateFallbackTimeWindows(stops, vehicles, campLat, campLng,
 // max). Self-contained distance fn (degree → miles approximation, fine at
 // our scale).
 // =============================================================================
-function _consolidateBusStops(stops) {
-    // Honour the camp's "Max Walk (ft)" setting. These were hardcoded, so the
-    // control on the Setup screen did nothing: changing it from 500ft to 1320ft
-    // produced byte-identical routes. Districts consolidate stops to a quarter-
-    // to-half-mile walk, and this camp's own historical routes were 100% corner
-    // stops at 3.14 children each, which needs a real walk allowance.
-    // People walk further ALONG their own street than across to a different one,
-    // so the same-street radius stays the wider of the two.
-    const _walkMi = ((D.setup && D.setup.maxWalkDistance) || 500) / 5280;
-    const ANY_RADIUS_MI = Math.max(0.05, _walkMi);
-    const SEG_RADIUS_MI = Math.max(0.25, _walkMi * 2.5);
-    const MAX_STOP_CAP = 15;
-
-    function manhDist(la1, lo1, la2, lo2) {
-        return Math.abs(la1 - la2) * 69 + Math.abs(lo1 - lo2) * 54.6;
-    }
-    // Extract street name tokens from "Brewers Bridge Rd corner" or
-    // "Brewers Bridge Rd & Bridge Ct" or "12 Brewers Bridge Rd".
-    function streetsOf(addr) {
-        if (!addr) return [];
-        // Only the street part: a full address ("12 Elm St, Lakewood, NJ, 08701")
-        // used to contribute "lakewood", "nj" and "08701" as street names, so
-        // ANY two homes in the same town matched the same-street rule and
-        // merged within a quarter mile — door-to-door was quietly a corner mode.
-        return String(addr).split(',')[0]
-            .split(/\s*[&@]\s*/)
-            .map(p => p
-                .replace(/^\d[\d\s\-]*/, '')
-                .replace(/\bcorner\b/i, '')
-                .replace(/\([^)]*\)/g, '')
-                .trim()
-                .toLowerCase())
-            .filter(Boolean);
-    }
-    function camperCount(s) {
-        return Array.isArray(s.campers) ? s.campers.length : 0;
-    }
-
-    function runMerge(radiusMi, requireSameStreet) {
-        let merged = true;
-        while (merged) {
-            merged = false;
-            outer: for (let i = stops.length - 1; i >= 0; i--) {
-                const cntI = camperCount(stops[i]);
-                if (cntI === 0) continue;
-                const sA = requireSameStreet ? streetsOf(stops[i].address) : null;
-                if (requireSameStreet && !sA.length) continue;
-                let bestJ = -1, bestDist = radiusMi;
-                for (let j = 0; j < stops.length; j++) {
-                    if (j === i) continue;
-                    const cntJ = camperCount(stops[j]);
-                    if (cntJ + cntI > MAX_STOP_CAP) continue;
-                    if (requireSameStreet) {
-                        const sB = streetsOf(stops[j].address);
-                        if (!sA.some(n => sB.includes(n))) continue;
-                    }
-                    // A corner stop stands at an intersection; the walk that
-                    // matters is from the homes behind it, so measure between
-                    // the two groups' home centres when we have them.
-                    const ai = stops[i]._cLat != null ? stops[i] : null, aj = stops[j]._cLat != null ? stops[j] : null;
-                    const d = manhDist(ai ? ai._cLat : stops[i].lat, ai ? ai._cLng : stops[i].lng,
-                                       aj ? aj._cLat : stops[j].lat, aj ? aj._cLng : stops[j].lng);
-                    if (d < bestDist) { bestDist = d; bestJ = j; }
-                }
-                if (bestJ >= 0) {
-                    stops[bestJ].campers = (stops[bestJ].campers || []).concat(stops[i].campers || []);
-                    if (stops[bestJ]._homes || stops[i]._homes) {
-                        stops[bestJ]._homes = (stops[bestJ]._homes || []).concat(stops[i]._homes || []);
-                        const hs = stops[bestJ]._homes;
-                        stops[bestJ]._cLat = hs.reduce((a, h) => a + h.lat, 0) / hs.length;
-                        stops[bestJ]._cLng = hs.reduce((a, h) => a + h.lng, 0) / hs.length;
-                    }
-                    stops.splice(i, 1);
-                    merged = true;
-                    break outer;
-                }
-            }
-        }
-    }
-
-    runMerge(SEG_RADIUS_MI, true);   // same-street, wider radius
-    runMerge(ANY_RADIUS_MI, false);  // any-street, tight radius
-
-    return stops;
+function _consolidateBusStops(stops, dropoffMode) {
+    // Implementation lives in campistry_go_route_post.js (pure, unit-tested).
+    // Door-to-door merges only stops at the same house.
+    return window.CampistryGoRoutePost.consolidateStops(stops, {
+        walkMi: ((D.setup && D.setup.maxWalkDistance) || 500) / 5280,
+        dropoffMode: dropoffMode || (D.setup && D.setup.dropoffMode) || 'door-to-door'
+    });
 }
 
 
