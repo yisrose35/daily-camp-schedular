@@ -131,3 +131,54 @@ test('no stop exceeds the 15-child cap', () => {
             assert.ok((s.campers || []).length <= 15, m + ' stop over cap'));
     }
 });
+
+test('a corner gathers children from different streets when they are within the walk allowance', () => {
+    // Oak St and Elm St are 0.004° (~0.28mi) apart in the fixture; with a
+    // 0.30mi walk the two streets' homes near the same cross avenue share a
+    // corner. Grouping by street first could never do this.
+    const corner = run('corner-stops', 0.30);
+    const mixed = corner.stops.filter(s => {
+        const streets = new Set((s.campers || []).map(c => String(c.name)).map(n => {
+            const h = result.homes.find(x => x.camperName === n); return h && h.address.replace(/^\d+\s+/, '');
+        }));
+        return streets.size > 1;
+    });
+    assert.ok(mixed.length > 0, 'expected at least one corner shared by two streets, got: ' +
+        corner.stops.map(s => s.address + ' x' + (s.campers || []).length).join(' | '));
+    const opt = run('optimized-stops', 0.30);
+    assert.ok(corner.stops.length <= opt.stops.length + 1,
+        'corner mode should not need more stops than walk groups: ' + corner.stops.length + ' vs ' + opt.stops.length);
+});
+
+test('walk groups are compact: every child within the allowance of the stop centre', () => {
+    for (const m of ['corner-stops', 'optimized-stops']) for (const walk of [0.05, 0.15, 0.30]) {
+        run(m, walk).stops.forEach(s => {
+            const hs = (s.campers || []).map(c => result.homes.find(x => x.camperName === c.name));
+            const cLat = hs.reduce((a, h) => a + h.lat, 0) / hs.length, cLng = hs.reduce((a, h) => a + h.lng, 0) / hs.length;
+            for (const h of hs) assert.ok(window.CampistryGoRoutePost.haversineMi(cLat, cLng, h.lat, h.lng) <= walk + 1e-9,
+                m + ' walk ' + walk + ': a child is further than the allowance from the group centre');
+        });
+    }
+});
+
+test('corner stops carry their homes, and a merged stop re-snaps to the corner nearest all of them', () => {
+    const corner = run('corner-stops', 0.05);
+    for (const st of corner.stops) {
+        assert.ok(Array.isArray(st._homes) && st._homes.length === (st.campers || []).length, 'every corner stop carries one home per child');
+        assert.ok(Number.isFinite(st._cLat) && Number.isFinite(st._cLng), 'and the centre of those homes');
+    }
+    // merge two stops the way the pipeline's consolidation does, then re-snap
+    const a = corner.stops[0], b = corner.stops.find(s => s !== a && s.address !== a.address) || corner.stops[1];
+    const merged = { campers: a.campers.concat(b.campers), _homes: a._homes.concat(b._homes) };
+    const snapper = NH.cornerSnapper(result, 0.30);
+    snapper.snap(merged);
+    const interKeys = new Set(Object.values(result.nodes).map(n => n.lat.toFixed(5) + ',' + n.lng.toFixed(5)));
+    assert.ok(interKeys.has(merged.lat.toFixed(5) + ',' + merged.lng.toFixed(5)), 'the merged stop sits on a real intersection');
+    assert.ok(/ @ | corner$/.test(merged.address), 'and is named as a corner: ' + merged.address);
+    // the corner chosen minimises the children's total walk among corners within reach
+    const tot = n => merged._homes.reduce((s, h) => s + window.CampistryGoRoutePost.haversineMi(h.lat, h.lng, n.lat, n.lng), 0);
+    const chosen = Object.values(result.nodes).find(n => n.lat.toFixed(5) === merged.lat.toFixed(5) && n.lng.toFixed(5) === merged.lng.toFixed(5));
+    const reachable = Object.values(result.nodes).filter(n => window.CampistryGoRoutePost.haversineMi(merged._cLat, merged._cLng, n.lat, n.lng) <= 0.30);
+    const best = Math.min(...reachable.map(tot));
+    assert.ok(tot(chosen) <= best + 0.05, 'chosen corner walk ' + tot(chosen).toFixed(3) + ' vs best ' + best.toFixed(3));
+});

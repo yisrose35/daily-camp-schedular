@@ -179,7 +179,22 @@ model; jsprit and VROOM documentation on ruin/recreate and regret insertion.
 
 ## Known limits
 
-* Door-to-door on the road-graph path still merges homes within *Max Walk*.
+* Door-to-door on the road-graph path still merges homes within *Max Walk*
+  (and same-street homes within a quarter mile). It used to merge ANY two
+  homes in the same town within a quarter mile — the street parser read the
+  city, state and ZIP of a full address as street names — which made
+  door-to-door a corner mode in disguise.
+* **Corner stops on the road-graph path** gather a bus's homes by walking
+  distance across streets (densest corner first), stand each group at the
+  intersection that minimises the children's total walk, and let the
+  consolidation pass measure walks from the homes behind a corner rather
+  than the corner itself, re-snapping merged stops. Before this, corner mode
+  grouped by street first and produced one stop per street — about twice the
+  camp's 263.
+* **Routing Engine** is now a Route Settings control. A camp was found on the
+  older spatial-sort engine with no way to see or change it; the console's
+  Route summary `source` column says which engine produced a run
+  (`neighborhood`, or `spatial-sort-secondary` when the map download failed).
 * The soft riding budget in sweep/polish is 60 min, not *Max Ride Time*.
 * Return-to-camp minutes are counted on the last shift, not on shifts that
   precede another one.
