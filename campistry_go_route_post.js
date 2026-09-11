@@ -74,6 +74,21 @@ window.CampistryGoRoutePost = (function () {
         polishLnsRuinMax: 12,
         polishReachMi: 5.0,        // only consider a bus whose nearest atom is within this of the moving atom
         polishReachOverBudgetX: 2.5, // ...unless the source bus is over its ride budget: reach this much further
+        polishChildMinuteWeight: 0, // bus-minute equivalents per child-minute aboard (0 = bus minutes only).
+                                   // 0.03 would mean a stop that keeps 33 children a minute longer costs one
+                                   // bus minute. Off by default: on camp-shaped maps every weight tried
+                                   // (0.01–0.05) made the FINAL routes longer for buses and children alike —
+                                   // the proxy tour cannot see the road-time ordering that runs afterwards,
+                                   // which already minimises children's minutes within each bus.
+        polishStreetSplitMin: 0,   // penalty (bus-minute equivalents) per extra bus serving the same street.
+                                   // Off by default: measured on camp-shaped maps it traded real minutes for
+                                   // a tidier map without cutting split streets; merge-aware dwell (below)
+                                   // is what actually keeps a street on one bus.
+        polishMergeSameStreetMi: 0, // stops on the same street within this of a same-bus stop share it (no
+                                    // base dwell) — mirror the stop consolidation the pipeline runs later
+        polishMergeAnyMi: 0,        // ...and any two stops within this share regardless of street
+        polishMsPerAtom: 5,        // time budget grows with the camp: max(polishTimeBudgetMs, this x atoms)
+        isArrival: false,          // arrival: a bus's minutes run until it is back at camp, a child's from pickup
         // Stop ordering
         tspUnfairWeight: 2,        // weight on minutes a child rides beyond their allowance
         tspNeighborK: 10,          // candidate moves only among each stop's K nearest (LKH-style neighbour lists)
@@ -1045,25 +1060,119 @@ window.CampistryGoRoutePost = (function () {
         o = opts(o);
         const t0 = Date.now();
         const speed = Math.max(1, o.avgSpeedMph), budget = o.polishRideBudgetMin, OVERHEAD = o.busOverheadMin;
+        const LAMBDA = Math.max(0, o.polishChildMinuteWeight || 0);
+        const SPLIT = Math.max(0, o.polishStreetSplitMin || 0);
+        const ARR = !!o.isArrival;
+        const MERGE_SAME = Math.max(0, o.polishMergeSameStreetMi || 0), MERGE_ANY = Math.max(0, o.polishMergeAnyMi || 0);
         const leg = (a, b) => (haversineMi(a.lat, a.lng, b.lat, b.lng) * o.roadFactor / speed) * 60;
         // Riders per atom: an explicit count, else the campers list, else one.
         const cnt = x => Number.isFinite(x.count) ? x.count : (riders(x) || 1);
-        const dwellOf = x => o.avgStopMin + (o.secPerRider > 0 ? cnt(x) * o.secPerRider / 60 : 0);
+        const perRider = x => o.secPerRider > 0 ? cnt(x) * o.secPerRider / 60 : 0;
+        const dwellOf = x => o.avgStopMin + perRider(x);
+        // Street an atom sits on (for coherence). Empty = unknown, never penalised.
+        const streetOf = x => {
+            const k = x.streetKey != null ? x.streetKey : x.street;
+            return k == null ? '' : String(k).toLowerCase().trim();
+        };
+        // Would x share a stop with y on the same bus? Mirrors the pipeline's
+        // stop consolidation (same street within one radius, anything within
+        // a tighter one). A shared stop costs no base dwell of its own.
+        const mergeable = (x, y) => {
+            if (!MERGE_SAME && !MERGE_ANY) return false;
+            // Manhattan miles, as the consolidation pass measures walks.
+            const d = Math.abs(x.lat - y.lat) * 69 + Math.abs(x.lng - y.lng) * 54.6;
+            if (MERGE_ANY && d <= MERGE_ANY) return true;
+            if (MERGE_SAME && d <= MERGE_SAME) { const k = streetOf(x); return !!k && k === streetOf(y); }
+            return false;
+        };
         const B = (buckets || []).map((atoms, i) => ({
             atoms: atoms.slice(), cap: Number.isFinite(caps && caps[i]) ? caps[i] : Infinity,
-            count: atoms.reduce((a, x) => a + cnt(x), 0), tour: [], len: 0, wedge: 0,
+            count: atoms.reduce((a, x) => a + cnt(x), 0), tour: [], len: 0, childMin: 0, wedge: 0,
+            arr: [], dep: [], suf: [], pre: [], dw: [], streets: new Map(),
         }));
         const N = B.length;
-        if (N < 2 || !depot) return { buckets: buckets.slice(), moves: 0, before: 0, after: 0 };
+        if (N < 2 || !depot) return { buckets: buckets.slice(), moves: 0, before: 0, after: 0,
+                                       fleetBefore: 0, fleetAfter: 0, childMinBefore: 0, childMinAfter: 0 };
+        const totalAtoms = B.reduce((a, b) => a + b.atoms.length, 0);
+        const timeBudgetMs = Math.max(o.polishTimeBudgetMs, (o.polishMsPerAtom || 0) * totalAtoms);
 
-        function tourLen(atoms, tour) {
-            let t = 0, prev = depot;
-            for (const i of tour) { t += leg(prev, atoms[i]) + dwellOf(atoms[i]); prev = atoms[i]; }
-            return t;
+        // ── street coherence bookkeeping ──
+        // streetBuses[k] = how many buses currently serve street k. The fleet
+        // pays SPLIT for every bus beyond the first on the same street.
+        const streetBuses = new Map();
+        function addStreet(b, atom) {
+            const k = streetOf(atom); if (!k) return;
+            const c = (b.streets.get(k) || 0) + 1; b.streets.set(k, c);
+            if (c === 1) streetBuses.set(k, (streetBuses.get(k) || 0) + 1);
+        }
+        function delStreet(b, atom) {
+            const k = streetOf(atom); if (!k) return;
+            const c = (b.streets.get(k) || 0) - 1;
+            if (c <= 0) { b.streets.delete(k); streetBuses.set(k, (streetBuses.get(k) || 0) - 1); }
+            else b.streets.set(k, c);
+        }
+        // Change in the split penalty when `atom` leaves `from` for `to`.
+        function streetDelta(from, to, atom) {
+            if (!SPLIT) return 0;
+            const k = streetOf(atom); if (!k) return 0;
+            let n = streetBuses.get(k) || 0, d = 0;
+            if (from.streets.get(k) === 1) { if (n >= 2) d -= SPLIT; n--; }
+            if (!to.streets.has(k)) { if (n >= 1) d += SPLIT; }
+            return d;
+        }
+        function streetPenalty() {
+            let p = 0; for (const n of streetBuses.values()) if (n > 1) p += (n - 1) * SPLIT; return p;
+        }
+        for (const b of B) for (const a of b.atoms) addStreet(b, a);
+
+        // ── tour pricing ──
+        // Walk a tour once: bus minutes (dismissal: to the last drop; arrival:
+        // back to camp) and child-minutes (each rider x their time aboard).
+        // Also fills the per-position arrays used for O(1) move pricing.
+        function evalTour(atoms, tour, out) {
+            let t = 0, prev = depot, cm = 0, wsum = 0;
+            const arr = out ? out.arr : null, dep = out ? out.dep : null, dwv = out ? out.dw : null;
+            if (arr) { arr.length = 0; dep.length = 0; dwv.length = 0; }
+            // Shared stops: atoms linked by mergeable pairs (transitively, as the
+            // consolidation pass chains them) form one stop; its first atom in
+            // tour order carries the base dwell.
+            let charged = null;
+            if (MERGE_SAME || MERGE_ANY) {
+                const n = tour.length, parent = new Int32Array(n);
+                for (let i = 0; i < n; i++) parent[i] = i;
+                const find = x => { while (parent[x] !== x) { parent[x] = parent[parent[x]]; x = parent[x]; } return x; };
+                for (let i = 0; i < n; i++) for (let j = i + 1; j < n; j++) {
+                    if (mergeable(atoms[tour[i]], atoms[tour[j]])) { const a = find(i), b = find(j); if (a !== b) parent[a] = b; }
+                }
+                charged = new Uint8Array(n); const seen = new Set();
+                for (let i = 0; i < n; i++) { const r = find(i); if (!seen.has(r)) { seen.add(r); charged[i] = 1; } }
+            }
+            let pos = 0, tot = 0;
+            for (const i of tour) {
+                const a = atoms[i];
+                t += leg(prev, a);
+                if (arr) arr.push(t);
+                const k = cnt(a); tot += k;
+                if (ARR) wsum += k * t; else cm += k * t;
+                const dw = perRider(a) + ((!charged || charged[pos]) ? o.avgStopMin : 0);
+                pos++;
+                t += dw;
+                if (dep) { dep.push(t); dwv.push(dw); }
+                prev = a;
+            }
+            if (ARR) { if (tour.length) t += leg(prev, depot); cm = t * tot - wsum; } // each child: camp arrival minus pickup
+            if (out) {
+                const n = tour.length, suf = out.suf, pre = out.pre;
+                suf.length = n + 1; pre.length = n + 1;
+                suf[n] = 0; for (let i = n - 1; i >= 0; i--) suf[i] = suf[i + 1] + cnt(atoms[tour[i]]);
+                pre[0] = 0; for (let i = 0; i < n; i++) pre[i + 1] = pre[i] + cnt(atoms[tour[i]]);
+                out.len = t; out.childMin = cm;
+            }
+            return { len: t, childMin: cm };
         }
         function buildTour(b) {
             const n = b.atoms.length;
-            if (!n) { b.tour = []; b.len = 0; b.wedge = 0; return; }
+            if (!n) { b.tour = []; b.len = 0; b.childMin = 0; b.wedge = 0; b.arr = []; b.dep = []; b.dw = []; b.suf = [0]; b.pre = [0]; return; }
             const rem = []; for (let i = 0; i < n; i++) rem.push(i);
             const t = []; let cur = depot;
             while (rem.length) {
@@ -1078,7 +1187,7 @@ window.CampistryGoRoutePost = (function () {
                 for (let i = 0; i < n - 1 && !improved; i++) {
                     const a = i === 0 ? depot : b.atoms[t[i - 1]], x = b.atoms[t[i]];
                     for (let j = i + 1; j < n; j++) {
-                        const y = b.atoms[t[j]], d = j + 1 < n ? b.atoms[t[j + 1]] : null;
+                        const y = b.atoms[t[j]], d = j + 1 < n ? b.atoms[t[j + 1]] : (ARR ? depot : null);
                         const before = leg(a, x) + (d ? leg(y, d) : 0);
                         const after = leg(a, y) + (d ? leg(x, d) : 0);
                         if (after < before - 1e-9) {
@@ -1088,32 +1197,57 @@ window.CampistryGoRoutePost = (function () {
                     }
                 }
             }
-            b.tour = t; b.len = tourLen(b.atoms, t); b.wedge = arcDeg(b.atoms, depot, o);
+            b.tour = t; refresh(b);
         }
-        const busCost = len => len <= 0 ? 0 : len + OVERHEAD + (budget > 0 ? 2 * Math.max(0, len - budget) : 0);
-        const objective = () => B.reduce((a, b) => a + busCost(b.len), 0);
-        // Saving from removing tour position `pos` from bus b.
-        function removalSaving(b, pos) {
-            const t = b.tour, cur = b.atoms[t[pos]];
+        function refresh(b) { evalTour(b.atoms, b.tour, b); b.wedge = arcDeg(b.atoms, depot, o); }
+        // Cost of one bus: its minutes, the cost of running it at all, a
+        // penalty for exceeding the riding budget, and the children's minutes.
+        const busCost = (len, cm) => len <= 0 ? 0 : len + OVERHEAD + (budget > 0 ? 2 * Math.max(0, len - budget) : 0) + LAMBDA * cm;
+        const objective = () => B.reduce((a, b) => a + busCost(b.len, b.childMin), 0) + streetPenalty();
+        const fleetMin = () => B.reduce((a, b) => a + b.len, 0);
+        const childMin = () => B.reduce((a, b) => a + b.childMin, 0);
+
+        // Removing tour position `pos` from bus b: { dLen, dCm } (both ≤ 0).
+        function removalDelta(b, pos) {
+            const t = b.tour, cur = b.atoms[t[pos]], k = cnt(cur);
             const prev = pos > 0 ? b.atoms[t[pos - 1]] : depot;
-            if (pos + 1 < t.length) { const next = b.atoms[t[pos + 1]]; return leg(prev, cur) + leg(cur, next) - leg(prev, next) + dwellOf(cur); }
-            return leg(prev, cur) + dwellOf(cur);
+            const next = pos + 1 < t.length ? b.atoms[t[pos + 1]] : (ARR ? depot : null);
+            const dw = b.dw[pos] != null ? b.dw[pos] : dwellOf(cur); // the dwell this stop is actually charged
+            const S = next ? leg(prev, cur) + leg(cur, next) - leg(prev, next) + dw : leg(prev, cur) + dw;
+            const dCm = ARR ? -(S * b.pre[pos] + k * (b.len - b.arr[pos]))
+                            : -(S * b.suf[pos + 1] + k * b.arr[pos]);
+            return { dLen: -S, dCm };
         }
-        // Cheapest insertion of `atom` into bus b's tour, optionally treating
-        // position `excludePos` as already removed. Returns { cost, at } where
-        // `at` is the position in the tour WITHOUT the excluded stop.
-        function cheapestInsert(b, atom, excludePos) {
-            const t = b.tour;
-            let best = Infinity, at = 0, j = 0, prev = depot;
+        // Best insertion of `atom` into bus b's tour under the full bus cost,
+        // optionally treating tour position `excludePos` as already removed
+        // (child-minutes are then approximate; callers re-price on apply).
+        // Returns { at, dLen, dCm, delta } with `at` the position in the tour
+        // WITHOUT the excluded stop.
+        function bestInsert(b, atom, excludePos) {
+            const t = b.tour, k = cnt(atom);
+            // Joining a stop the bus already makes costs only the per-child time.
+            let dw = dwellOf(atom);
+            if (MERGE_SAME || MERGE_ANY) {
+                const ex = excludePos >= 0 ? t[excludePos] : -1;
+                for (let i = 0; i < b.atoms.length; i++) if (i !== ex && mergeable(atom, b.atoms[i])) { dw = perRider(atom); break; }
+            }
+            const base = busCost(b.len, b.childMin);
+            let best = null, j = 0, prev = depot;
             for (let i = 0; i <= t.length; i++) {
-                if (i === excludePos) continue;
-                const next = i < t.length ? b.atoms[t[i]] : null;
-                const c = next ? leg(prev, atom) + leg(atom, next) - leg(prev, next) : leg(prev, atom);
-                if (c < best) { best = c; at = j; }
-                if (!next) break;
+                if (i === excludePos) continue; // the gap: prev stays the stop before it
+                const next = i < t.length ? b.atoms[t[i]] : (ARR ? depot : null);
+                const lp = leg(prev, atom);
+                const D = (next ? lp + leg(atom, next) - leg(prev, next) : lp) + dw;
+                const pi = i - 1 === excludePos ? i - 2 : i - 1;
+                const arrX = (pi >= 0 ? b.dep[pi] : 0) + lp;
+                const dCm = ARR ? D * b.pre[i] + k * (b.len + D - arrX)
+                                : D * b.suf[i] + k * arrX;
+                const delta = busCost(b.len + D, b.childMin + dCm) - base;
+                if (!best || delta < best.delta) best = { at: j, dLen: D, dCm, delta };
+                if (!next || i >= t.length) break;
                 prev = next; j++;
             }
-            return { cost: best + dwellOf(atom), at };
+            return best;
         }
         // Nearest distance (mi) from an atom to any atom of bus b — cheap
         // pruning so we never price a move onto a bus that is nowhere near.
@@ -1122,7 +1256,7 @@ window.CampistryGoRoutePost = (function () {
             for (const x of b.atoms) { const m = haversineMi(atom.lat, atom.lng, x.lat, x.lng); if (m < d) d = m; }
             return d;
         }
-        const outOfTime = () => Date.now() - t0 > o.polishTimeBudgetMs;
+        const outOfTime = () => Date.now() - t0 > timeBudgetMs;
         function wedgeOk(b, adding, removingIdx) {
             const pts = [];
             for (let i = 0; i < b.atoms.length; i++) if (i !== removingIdx) pts.push(b.atoms[i]);
@@ -1137,17 +1271,24 @@ window.CampistryGoRoutePost = (function () {
             b.tour.splice(pos, 1);
             for (let i = 0; i < b.tour.length; i++) if (b.tour[i] > idx) b.tour[i]--;
             b.count -= cnt(atom);
+            delStreet(b, atom);
             return atom;
         }
         function insertAt(b, atom, at) {
             b.atoms.push(atom);
             b.tour.splice(at, 0, b.atoms.length - 1);
             b.count += cnt(atom);
+            addStreet(b, atom);
         }
-        function refresh(b) { b.len = tourLen(b.atoms, b.tour); b.wedge = arcDeg(b.atoms, depot, o); }
+        const snap = b => ({ atoms: b.atoms.slice(), tour: b.tour.slice(), count: b.count, streets: new Map(b.streets) });
+        function restore(b, s) {
+            for (const [k, c] of b.streets) if (c > 0 && !(s.streets.get(k) > 0)) streetBuses.set(k, (streetBuses.get(k) || 0) - 1);
+            for (const [k, c] of s.streets) if (c > 0 && !(b.streets.get(k) > 0)) streetBuses.set(k, (streetBuses.get(k) || 0) + 1);
+            b.atoms = s.atoms; b.tour = s.tour; b.count = s.count; b.streets = s.streets; refresh(b);
+        }
 
         for (const b of B) buildTour(b);
-        const before = objective();
+        const before = objective(), fleetBefore = fleetMin(), childMinBefore = childMin();
         let moves = 0;
         const EPS = o.polishMinGainMin;
 
@@ -1165,28 +1306,31 @@ window.CampistryGoRoutePost = (function () {
                 for (let pos = 0; pos < A.tour.length; pos++) {
                     if ((pos & 15) === 0 && outOfTime()) { stop = true; break; }
                     const atom = A.atoms[A.tour[pos]];
-                    const saving = removalSaving(A, pos);
-                    const lenA2 = A.len - saving;
+                    const rem = removalDelta(A, pos);
+                    const dA = busCost(A.len + rem.dLen, A.childMin + rem.dCm) - busCost(A.len, A.childMin);
                     let best = null;
                     for (let bi = 0; bi < N; bi++) {
                         if (bi === ai) continue;
                         const Bb = B[bi];
                         if (Bb.count + cnt(atom) > Bb.cap) continue;
                         if (Bb.atoms.length && reachMi(Bb, atom) > reach) continue;
-                        const ins = cheapestInsert(Bb, atom, -1);
-                        const lenB2 = Bb.len + ins.cost;
-                        const delta = busCost(lenA2) + busCost(lenB2) - busCost(A.len) - busCost(Bb.len);
+                        const ins = bestInsert(Bb, atom, -1);
+                        const delta = dA + ins.delta + streetDelta(A, Bb, atom);
                         if (delta < -EPS && (!best || delta < best.delta)) {
                             if (!wedgeOk(Bb, [atom], -1)) continue;
                             best = { delta, bi, at: ins.at };
                         }
                     }
                     if (best) {
+                        // Priced with O(1) deltas; apply, re-price exactly, keep only a real gain.
+                        const Bb = B[best.bi], sA = snap(A), sB = snap(Bb), objBefore = objective();
                         const moved = removeAt(A, pos);
-                        insertAt(B[best.bi], moved, best.at);
-                        refresh(A); refresh(B[best.bi]);
-                        moves++; improved = true;
-                        pos--; // re-examine this position (a new atom sits there now)
+                        insertAt(Bb, moved, best.at);
+                        refresh(A); refresh(Bb);
+                        if (objective() < objBefore - EPS / 2) {
+                            moves++; improved = true;
+                            pos--; // re-examine this position (a new atom sits there now)
+                        } else { restore(A, sA); restore(Bb, sB); }
                     }
                 }
             }
@@ -1201,19 +1345,22 @@ window.CampistryGoRoutePost = (function () {
                 const bNear = Bb.tour.map(i => reachMi(A, Bb.atoms[i]) <= o.polishReachMi);
                 if (!bNear.some(Boolean)) continue;
                 let best = null;
+                const baseA = busCost(A.len, A.childMin), baseB = busCost(Bb.len, Bb.childMin);
                 for (let pa = 0; pa < A.tour.length; pa++) {
                     if (!aNear[pa]) continue;
                     const a = A.atoms[A.tour[pa]];
-                    const sA = removalSaving(A, pa);
+                    const rA = removalDelta(A, pa);
                     for (let pb = 0; pb < Bb.tour.length; pb++) {
                         if (!bNear[pb]) continue;
                         const b = Bb.atoms[Bb.tour[pb]];
                         if (A.count - cnt(a) + cnt(b) > A.cap) continue;
                         if (Bb.count - cnt(b) + cnt(a) > Bb.cap) continue;
-                        const sB = removalSaving(Bb, pb);
-                        const iA = cheapestInsert(A, b, pa), iB = cheapestInsert(Bb, a, pb);
-                        const lenA2 = A.len - sA + iA.cost, lenB2 = Bb.len - sB + iB.cost;
-                        const delta = busCost(lenA2) + busCost(lenB2) - busCost(A.len) - busCost(Bb.len);
+                        const rB = removalDelta(Bb, pb);
+                        const iA = bestInsert(A, b, pa), iB = bestInsert(Bb, a, pb);
+                        const dA = busCost(A.len + rA.dLen + iA.dLen, A.childMin + rA.dCm + iA.dCm) - baseA;
+                        const dB = busCost(Bb.len + rB.dLen + iB.dLen, Bb.childMin + rB.dCm + iB.dCm) - baseB;
+                        const dS = streetOf(a) === streetOf(b) ? 0 : streetDelta(A, Bb, a) + streetDelta(Bb, A, b);
+                        const delta = dA + dB + dS;
                         if (delta < -EPS && (!best || delta < best.delta)) {
                             if (!wedgeOk(A, [b], A.tour[pa]) || !wedgeOk(Bb, [a], Bb.tour[pb])) continue;
                             best = { delta, pa, pb, atA: iA.at, atB: iB.at };
@@ -1221,10 +1368,14 @@ window.CampistryGoRoutePost = (function () {
                     }
                 }
                 if (best) {
+                    // The swap was priced approximately; apply, re-price
+                    // exactly, and keep it only if the fleet really gained.
+                    const sA = snap(A), sB = snap(Bb), objBefore = objective();
                     const a = removeAt(A, best.pa), b = removeAt(Bb, best.pb);
                     insertAt(A, b, best.atA); insertAt(Bb, a, best.atB);
                     refresh(A); refresh(Bb);
-                    moves++; improved = true;
+                    if (objective() < objBefore - EPS / 2) { moves++; improved = true; }
+                    else { restore(A, sA); restore(Bb, sB); }
                 }
             }
             // keep the tour proxy honest after a round of edits
@@ -1252,7 +1403,7 @@ window.CampistryGoRoutePost = (function () {
                 const seedAtom = pool[Math.floor(rnd() * pool.length)].a;
                 pool.sort((x, y) => haversineMi(seedAtom.lat, seedAtom.lng, x.a.lat, x.a.lng) - haversineMi(seedAtom.lat, seedAtom.lng, y.a.lat, y.a.lng));
                 const removed = pool.slice(0, k);
-                const snapshot = B.map(b => ({ atoms: b.atoms.slice(), tour: b.tour.slice(), count: b.count, len: b.len, wedge: b.wedge }));
+                const snapshot = B.map(snap);
                 const objBefore = objective();
                 const touched = new Set();
                 for (const { a, bi } of removed) {
@@ -1272,8 +1423,8 @@ window.CampistryGoRoutePost = (function () {
                         const Bb = B[bi];
                         if (Bb.count + cnt(a) > Bb.cap) continue;
                         if (Bb.atoms.length && reachMi(Bb, a) > o.polishReachMi) continue;
-                        const ins = cheapestInsert(Bb, a, -1);
-                        const c = busCost(Bb.len + ins.cost) - busCost(Bb.len);
+                        const ins = bestInsert(Bb, a, -1);
+                        const c = ins.delta + (SPLIT && streetOf(a) && !Bb.streets.has(streetOf(a)) && (streetBuses.get(streetOf(a)) || 0) >= 1 ? SPLIT : 0);
                         if (!best || c < best.c) { if (!wedgeOk(Bb, [a], -1)) continue; best = { c, bi, at: ins.at }; }
                     }
                     if (!best) { ok = false; break; }
@@ -1281,7 +1432,7 @@ window.CampistryGoRoutePost = (function () {
                 }
                 if (ok) for (const b of B) buildTour(b);
                 if (!ok || objective() > objBefore - EPS) {
-                    B.forEach((b, i) => { const sn = snapshot[i]; b.atoms = sn.atoms; b.tour = sn.tour; b.count = sn.count; b.len = sn.len; b.wedge = sn.wedge; });
+                    B.forEach((b, i) => restore(b, snapshot[i]));
                 } else { accepted++; moves++; }
             }
             return accepted;
@@ -1293,7 +1444,8 @@ window.CampistryGoRoutePost = (function () {
             localSearch();
         }
         const after = objective();
-        return { buckets: B.map(b => b.tour.map(i => b.atoms[i])), moves, before, after };
+        return { buckets: B.map(b => b.tour.map(i => b.atoms[i])), moves, before, after,
+                 fleetBefore, fleetAfter: fleetMin(), childMinBefore, childMinAfter: childMin() };
     }
 
     // ---- audit --------------------------------------------------------------

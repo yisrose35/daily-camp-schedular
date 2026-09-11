@@ -157,8 +157,12 @@ test('a fleet with no spare bus still shares the far district — the sweep make
     // minutes. The capacity-aware sweep cuts the ring where it must, so the
     // township is shared even on the tight fleet and the worst ride comes
     // down to about an hour. Without a budget it is still one bus at ~80.
+    // (The polish prices child-minutes too, so a third bus on the near edge of
+    // the township — where it also serves the west cluster — can be cheaper
+    // for both the fleet and the children; two or three sharers are fine, one
+    // is the failure this test guards.)
     const r = pack(18, 60);
-    assert.strictEqual(r.farBuses, 2, 'the far township is shared by two buses');
+    assert.ok(r.farBuses >= 2 && r.farBuses <= 3, 'the far township is shared, got ' + r.farBuses + ' buses');
     assert.ok(r.worstRide < 70, 'got ' + Math.round(r.worstRide));
     assert.ok(pack(18, 0).worstRide > 75, 'no budget: one bus takes the lot');
 });

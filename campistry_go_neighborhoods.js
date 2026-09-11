@@ -1031,7 +1031,8 @@ window.CampistryGoNeighborhoods = (function () {
     // -------------------------------------------------------------------------
     function packIntoBuses({ result, buses, priorAssignments = {}, siblingGroups = {}, depot = null, maxRideMin = 45, avgStopMin = 2, paceMinPerMi = 6,
                              rideSpeedMph = 25, rideStopMin = 1, maxChildRideMin = 0,
-                             busOverheadMin = 5, secPerRider = 0 }) {
+                             busOverheadMin = 5, secPerRider = 0, isArrival = false,
+                             mergeSameStreetMi = 0, mergeAnyMi = 0 }) {
         if (!result || !result.neighborhoods.length) return [];
 
         // Input audit: any duplicate nhIds in result.neighborhoods, or duplicate
@@ -1123,7 +1124,9 @@ window.CampistryGoNeighborhoods = (function () {
             for (const h of (s.homes || [])) {
                 if (Number.isFinite(h.lat) && Number.isFinite(h.lng)) { la += h.lat; lo += h.lng; n++; }
             }
-            _segPt[s.id] = n ? { lat: la / n, lng: lo / n, count: (s.homes || []).length } : null;
+            // `street`: the way's name, so the polish can keep one street on one bus.
+            _segPt[s.id] = n ? { lat: la / n, lng: lo / n, count: (s.homes || []).length,
+                                 street: String(s.name || '').toLowerCase().trim() } : null;
         }
 
         // Split `items` into exactly `k` geographically-compact groups of roughly
@@ -2024,13 +2027,14 @@ window.CampistryGoNeighborhoods = (function () {
                 for (const nh of workNhs) for (const sid of nh.segmentIds) segPiece[sid] = nh.id;
                 const homeless = assignments.map(b => b.segmentIds.filter(sid => !_segPt[sid]));
                 const buckets = assignments.map(b => b.segmentIds
-                    .map(sid => { const p = _segPt[sid]; return p ? { sid, count: p.count, lat: p.lat, lng: p.lng } : null; })
+                    .map(sid => { const p = _segPt[sid]; return p ? { sid, count: p.count, lat: p.lat, lng: p.lng, streetKey: p.street } : null; })
                     .filter(Boolean));
                 let res = null;
                 try {
                     res = post.polishDistricts(buckets, assignments.map(b => b.capacity), depot, {
-                        avgSpeedMph: rideSpeedMph, avgStopMin: rideStopMin, secPerRider, busOverheadMin,
+                        avgSpeedMph: rideSpeedMph, avgStopMin: rideStopMin, secPerRider, busOverheadMin, isArrival,
                         polishRideBudgetMin: maxChildRideMin > 0 ? maxChildRideMin : 0,
+                        polishMergeSameStreetMi: mergeSameStreetMi, polishMergeAnyMi: mergeAnyMi,
                     });
                 } catch (e) { console.warn('[Go-NH] Polish skipped: ' + e.message); }
                 if (res && res.moves) {
@@ -2048,7 +2052,8 @@ window.CampistryGoNeighborhoods = (function () {
                         for (const a of atoms) { bus._centroidSum.lat += a.lat * a.count; bus._centroidSum.lng += a.lng * a.count; bus._centroidSum.w += a.count; }
                     });
                     console.log('[Go-NH] Polish: ' + res.moves + ' segment move(s), est. fleet ' +
-                        Math.round(res.before) + ' → ' + Math.round(res.after) + ' min');
+                        Math.round(res.fleetBefore) + ' → ' + Math.round(res.fleetAfter) + ' min, child-minutes ' +
+                        Math.round(res.childMinBefore) + ' → ' + Math.round(res.childMinAfter));
                 }
             }
         }
