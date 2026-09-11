@@ -1138,7 +1138,7 @@ window.CampistryGoNeighborhoods = (function () {
     // -------------------------------------------------------------------------
     function packIntoBuses({ result, buses, priorAssignments = {}, siblingGroups = {}, depot = null, maxRideMin = 45, avgStopMin = 2, paceMinPerMi = 6,
                              rideSpeedMph = 25, rideStopMin = 1, maxChildRideMin = 0,
-                             busOverheadMin = 5, secPerRider = 0, isArrival = false,
+                             busOverheadMin = 5, secPerRider = 0, isArrival = false, returnToDepot = false,
                              mergeSameStreetMi = 0, mergeAnyMi = 0 }) {
         if (!result || !result.neighborhoods.length) return [];
 
@@ -2139,7 +2139,7 @@ window.CampistryGoNeighborhoods = (function () {
                 let res = null;
                 try {
                     res = post.polishDistricts(buckets, assignments.map(b => b.capacity), depot, {
-                        avgSpeedMph: rideSpeedMph, avgStopMin: rideStopMin, secPerRider, busOverheadMin, isArrival,
+                        avgSpeedMph: rideSpeedMph, avgStopMin: rideStopMin, secPerRider, busOverheadMin, isArrival, returnToDepot,
                         polishRideBudgetMin: maxChildRideMin > 0 ? maxChildRideMin : 0,
                         polishMergeSameStreetMi: mergeSameStreetMi, polishMergeAnyMi: mergeAnyMi,
                     });

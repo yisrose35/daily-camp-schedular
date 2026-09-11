@@ -84,7 +84,20 @@ addresses ─ geocode ─┬─ road graph (OpenStreetMap) ─ neighbourhoods �
   Duration* as the soft budget, and re-sequences the buses that changed. The
   districting above prices distance as the crow flies, which on the camp's
   first road-graph run left one Jackson bus at 137 minutes while another
-  carried 13 children.
+  carried 13 children. Ruin-and-recreate is on here (40 attempts inside the
+  time budget) so stops can move in chains when every bus is near its seat
+  count. The soft budget is judged on the **last drop** (dismissal) or camp
+  arrival (arrival), never on an empty ride home.
+
+* **The ride home** (`returnToDepot`): the last dismissal shift drives back
+  to camp after its final drop. That leg is real bus time, so the districting
+  polish, the road-time polish and the stop ordering all price it for that
+  shift (arrival already rides back to camp with everyone aboard). Before
+  this the polish reported a 40-minute fleet gain that the finished routes
+  did not show: it was ending routes wherever the last drop fell and leaving
+  the drive home out of the sum. On the 751-child camp-shaped harness the
+  change cut fleet minutes including returns from 1455 to 1423 and the
+  longest bus from 122 to 115 minutes, with the average ride unchanged.
 
 ### Containment
 
@@ -98,7 +111,10 @@ receiver's wedge past the limit.
 
 Objective is **children-minutes** (minimum latency), plus twice the minutes a
 child rides beyond `2 × direct trip + 25`, plus the tour length as a tie-break.
-Arrival mode charges the drive from the last pickup back to camp. Multi-start
+Arrival mode charges the drive from the last pickup back to camp; a dismissal
+shift that returns to camp charges the empty ride home as bus time only, so
+a run ends nearer camp when that saves more than it costs the children.
+Multi-start
 nearest-neighbour + distance 2-opt, then 2-opt and or-opt on the real
 objective with LKH-style neighbour lists (moves only among each stop's 10
 nearest), then iterated local search (double-bridge kicks around the best
