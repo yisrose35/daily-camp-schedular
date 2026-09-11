@@ -499,8 +499,6 @@ body.camper-open .camper-backdrop { display: block; }
             <div class="setup-step" data-step="2">2</div>
             <div class="setup-step-line"></div>
             <div class="setup-step" data-step="3">3</div>
-            <div class="setup-step-line"></div>
-            <div class="setup-step" data-step="4">4</div>
         </div>
 
         <!-- Step 1: Camp Name -->
@@ -528,20 +526,8 @@ body.camper-open .camper-backdrop { display: block; }
             <button class="btn-primary" onclick="POS.setupNext(2)">Next</button>
         </div>
 
-        <!-- Step 3: License Expiry -->
+        <!-- Step 3: Import Data -->
         <div id="setupStep3" hidden>
-            <div class="field">
-                <label for="setupExpiry">License Expiry Date</label>
-                <input type="date" id="setupExpiry">
-            </div>
-            <p style="font-size:.78rem;color:var(--text-muted);margin-top:4px">
-                The register will lock after this date. Default: 30 days from today. Maximum: 8 months.
-            </p>
-            <button class="btn-primary" onclick="POS.setupNext(3)">Next</button>
-        </div>
-
-        <!-- Step 4: Import Data -->
-        <div id="setupStep4" hidden>
             <p style="font-size:.85rem;color:var(--text-dim);margin-bottom:16px;text-align:center">
                 Import the data file from your camp office to load camper accounts
                 and inventory items.
@@ -1046,11 +1032,10 @@ var setupStep = 1;
 
 function showSetupStep(n) {
     setupStep = n;
-    for (var i = 1; i <= 4; i++) {
+    for (var i = 1; i <= 3; i++) {
         var el = document.getElementById('setupStep' + i);
         if (el) el.hidden = (i !== n);
     }
-    // Update step indicators
     document.querySelectorAll('.setup-step').forEach(function(el) {
         var s = parseInt(el.getAttribute('data-step'));
         el.classList.remove('active', 'done');
@@ -1058,27 +1043,13 @@ function showSetupStep(n) {
         else if (s < n) el.classList.add('done');
     });
 
-    // Focus appropriate input
     if (n === 1) { var el = document.getElementById('setupCampName'); if (el) el.focus(); }
     if (n === 2) { var el = document.getElementById('setupPin'); if (el) el.focus(); }
-    if (n === 3) {
-        var el = document.getElementById('setupExpiry');
-        if (el) {
-            // Cap date picker to MAX_LICENSE_MONTHS from today
-            var maxDate = new Date();
-            maxDate.setMonth(maxDate.getMonth() + MAX_LICENSE_MONTHS);
-            el.max = maxDate.toISOString().split('T')[0];
-            el.min = new Date().toISOString().split('T')[0];
-            if (!el.value) {
-                var d = new Date();
-                d.setDate(d.getDate() + 30);
-                el.value = d.toISOString().split('T')[0];
-            }
-        }
-    }
 }
 
 window.POS = window.POS || {};
+
+var DEFAULT_LICENSE_DAYS = 180;
 
 POS.setupNext = async function(fromStep) {
     if (fromStep === 1) {
@@ -1100,19 +1071,6 @@ POS.setupNext = async function(fromStep) {
         var hash = await sha256(pin);
         await saveMeta('pinHash', hash);
         showSetupStep(3);
-    } else if (fromStep === 3) {
-        var expiry = document.getElementById('setupExpiry').value;
-        if (!expiry) {
-            var d = new Date(); d.setDate(d.getDate() + 30);
-            expiry = d.toISOString().split('T')[0];
-        }
-        // Enforce hard cap: expiry cannot exceed MAX_LICENSE_MONTHS from today
-        var maxDate = new Date();
-        maxDate.setMonth(maxDate.getMonth() + MAX_LICENSE_MONTHS);
-        var maxStr = maxDate.toISOString().split('T')[0];
-        if (expiry > maxStr) expiry = maxStr;
-        await saveMeta('expiryDate', expiry);
-        showSetupStep(4);
     }
 };
 
@@ -1133,6 +1091,12 @@ POS.setupFinish = async function() {
         await saveMeta('firstActivated', now);
         meta.firstActivated = now;
     }
+    // Auto-set expiry to 180 days, capped by the 8-month hard limit
+    var d = new Date();
+    d.setDate(d.getDate() + DEFAULT_LICENSE_DAYS);
+    var expiry = capExpiryDate(d.toISOString().split('T')[0]);
+    await saveMeta('expiryDate', expiry);
+    meta.expiryDate = expiry;
     await saveMeta('setupComplete', true);
     document.getElementById('setupOverlay').hidden = true;
     pinUnlocked = true;
@@ -1223,14 +1187,9 @@ async function performImport(data) {
         }
     }
 
-    // Settings
+    // Settings — expiry is fixed at 180 days from activation, not importable
     if (data.settings) {
         if (data.settings.campName) await saveMeta('campName', data.settings.campName);
-        if (data.settings.expiryDate) {
-            var importedExpiry = capExpiryDate(data.settings.expiryDate);
-            await saveMeta('expiryDate', importedExpiry);
-            meta.expiryDate = importedExpiry;
-        }
     }
 
     // Record import timestamp
