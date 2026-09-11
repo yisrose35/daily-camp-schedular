@@ -235,3 +235,16 @@ test('localTspOrder is idempotent: re-ordering an ordered route keeps it (or imp
         assert.ok(fromShuffled.every((s, i) => s === once[i]), 'trial ' + trial + ': order depends on input order');
     }
 });
+
+test('arrival ordering pays for the drive back to camp: the last pickup is near camp, not five miles out', () => {
+    // Two branches north of camp: a big group 5mi out west, singles along the east branch.
+    const stops = [at(1, 0.3, 2), at(2, 0.4, 2), at(3, 0.5, 2), at(4, 0.6, 2), at(5, -1.5, 9), at(4, -1.4, 1), at(3, -1.3, 1), at(2, -1.2, 1)];
+    const ord = P.localTspOrder(stops, CAMP, true);
+    const last = ord[ord.length - 1];
+    assert.ok(P.haversineMi(CAMP.lat, CAMP.lng, last.lat, last.lng) < 2.5, 'last pickup should be close to camp, got ' + last.address);
+    let t = 0, prev = CAMP; const arr = [];
+    for (const s of ord) { t += P.driveMin(prev, s) + 2; arr.push(t); prev = s; }
+    const back = P.driveMin(prev, CAMP);
+    let kidMin = 0, kids = 0; ord.forEach((s, i) => { kids += s.campers.length; kidMin += s.campers.length * (t + back - arr[i]); });
+    assert.ok(kidMin / kids < 26, 'average child ride should be under 26 min, got ' + (kidMin / kids).toFixed(1));
+});

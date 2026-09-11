@@ -4174,31 +4174,46 @@ async function _tryNeighborhoodPipeline({
             return v && Number.isFinite(v.capacity) ? v.capacity : Infinity;
         };
         const _headOf = (bus) => (bus.stops || []).reduce((a, s) => a + ((s.campers || []).length), 0);
-        for (const c of leftover) {
+        // Siblings (same family, same address) ride together: place a family
+        // as one group at one stop, never one child per bus.
+        const groups = [];
+        {
+            const byGid = {};
+            for (const c of leftover) {
+                const gid = sibMap[c.name];
+                if (gid) { (byGid[gid] || (byGid[gid] = [])).push(c); } else groups.push([c]);
+            }
+            for (const g of Object.values(byGid)) groups.push(g);
+        }
+        const _post = window.CampistryGoRoutePost;
+        for (const group of groups) {
+            const c = group[0];
             let bestBus = null, bestDist = Infinity;
             let fullestFallback = null, fallbackHead = Infinity;
             for (const bus of nhPhysical) {
                 if (!bus.stops?.length) continue;
                 const head = _headOf(bus);
                 if (head < fallbackHead) { fallbackHead = head; fullestFallback = bus; }
-                if (head + 1 > _capOf(bus)) continue; // no seat
+                if (head + group.length > _capOf(bus)) continue; // no seats for the whole family
+                // Prefer a bus that stays on its side of camp with this stop added.
+                const fit = _post ? _post.stopFitsRoute(c, bus.stops, { lat: campLat, lng: campLng }, _routePostOpts(), Infinity) : { ok: true };
                 for (const s of bus.stops) {
-                    const d = haversineMi(c.lat, c.lng, s.lat, s.lng);
+                    const d = haversineMi(c.lat, c.lng, s.lat, s.lng) + (fit.ok ? 0 : 50);
                     if (d < bestDist) { bestDist = d; bestBus = bus; }
                 }
             }
             if (!bestBus && fullestFallback) {
-                console.warn('[Go v5] No bus with a free seat for un-snapped camper ' +
-                    c.name + ' — placing on the least-full bus');
+                console.warn('[Go v5] No bus with ' + group.length + ' free seat(s) for un-snapped ' +
+                    group.map(x => x.name).join(', ') + ' — placing on the least-full bus');
                 bestBus = fullestFallback;
             }
             if (bestBus) {
                 bestBus.stops.push({
                     lat: c.lat, lng: c.lng,
                     address: c.address,
-                    campers: [{ name: c.name, division: c.division, bunk: c.bunk }]
+                    campers: group.map(x => ({ name: x.name, division: x.division, bunk: x.bunk }))
                 });
-                bestBus.camperCount = (bestBus.camperCount || 0) + 1;
+                bestBus.camperCount = (bestBus.camperCount || 0) + group.length;
             }
         }
     }
@@ -5066,7 +5081,16 @@ async function _trySpatialSortPipeline({
 
     let moves = 0;
     let blockedBySpread = 0;
+    // Time-boxed: on a 600-camper camp each pass scans every atom against
+    // every receiver, and 500 passes ran for several seconds. The sweep and
+    // the polish that follow refine the districts anyway.
+    const _hillStart = Date.now();
+    const HILL_CLIMB_BUDGET_MS = 2500;
     for (let pass = 0; pass < 500; pass++) {
+        if (Date.now() - _hillStart > HILL_CLIMB_BUDGET_MS) {
+            console.log('[Go v6] Hill climb: time budget reached after ' + pass + ' passes');
+            break;
+        }
         // Snapshot all current times for fast sum-delta calculations
         const allTimes = busBuckets.map((_, i) => estTime(i));
         const currentSum = allTimes.reduce((s, t) => s + t, 0);

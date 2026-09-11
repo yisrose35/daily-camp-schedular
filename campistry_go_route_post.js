@@ -77,6 +77,7 @@ window.CampistryGoRoutePost = (function () {
     function riders(s) { return Array.isArray(s && s.campers) ? s.campers.length : 0; }
     function headcount(stops) { let n = 0; for (const s of (stops || [])) if (!isStaff(s)) n += riders(s); return n; }
     function driveMin(a, b, o) {
+        if (!o || !Number.isFinite(o.roadFactor)) o = opts(o);
         if (!hasPos(a) || !hasPos(b)) return 3;
         if (Math.abs(a.lat - b.lat) < 1e-5 && Math.abs(a.lng - b.lng) < 1e-5) return 0;
         return (haversineMi(a.lat, a.lng, b.lat, b.lng) * o.roadFactor / Math.max(1, o.avgSpeedMph)) * 60;
@@ -178,6 +179,10 @@ window.CampistryGoRoutePost = (function () {
                 const leg = prev < 0 ? C[idx] : M[prev][idx];
                 time += leg + stopMin; tour += leg; arr[p] = time; prev = idx;
             }
+            // Arrival: everyone aboard still rides from the last pickup back to
+            // camp. Leaving that leg out let the search end a route five miles
+            // out and hand every child the drive back.
+            if (isArrival) { const back = C[prev]; time += back; tour += back; }
             let total = 0, head = 0, unfair = 0;
             for (let p = 0; p < n; p++) {
                 const idx = at(p), k = cnt[idx];
