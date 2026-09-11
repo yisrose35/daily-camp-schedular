@@ -2157,6 +2157,57 @@ window.CampistryGoNeighborhoods = (function () {
     //   ONE stop at the mean home location, with every camper on that segment
     //   bundled into its `campers` array. Mirrors createCornerStops() shape.
     // -------------------------------------------------------------------------
+    // Corner placement shared by expandToPhysicalStops and the pipeline's
+    // post-consolidation re-snap: given a stop that carries its homes
+    // (`_homes`), stand it at the real intersection that minimises the
+    // children's total walk, preferring a corner on the street most of them
+    // live on. Returns { snap(stop) }.
+    function cornerSnapper(result, maxWalkMi) {
+        const WALK = Math.max(0.03, maxWalkMi);
+        const interNodes = [];
+        for (const id in (result.nodes || {})) {
+            const n = result.nodes[id];
+            if (n && n.degree >= 3 && Number.isFinite(n.lat)) interNodes.push(n);
+        }
+        function nearestCorner(cLat, cLng, streetName, homesArr) {
+            let best = null, bestScore = Infinity, bestNamed = null, bestNamedScore = Infinity;
+            const want = String(streetName || '').toLowerCase().trim();
+            for (const n of interNodes) {
+                const d = haversineMi(cLat, cLng, n.lat, n.lng);
+                if (d > WALK) continue;
+                let tot = 0;
+                for (const h of homesArr) tot += haversineMi(h.lat, h.lng, n.lat, n.lng);
+                if (tot < bestScore) { bestScore = tot; best = n; }
+                if (want && (n.streets || []).some(x => String(x).toLowerCase().trim() === want)) {
+                    if (tot < bestNamedScore) { bestNamedScore = tot; bestNamed = n; }
+                }
+            }
+            return bestNamed || best;
+        }
+        function cornerName(node, streetName) {
+            const main = streetName || (node && (node.streets || [])[0]) || 'Stop';
+            if (!node) return main + ' corner';
+            const cross = (node.streets || []).find(x =>
+                String(x).toLowerCase().trim() !== String(main).toLowerCase().trim());
+            return cross ? (main + ' @ ' + cross) : (main + ' corner');
+        }
+        function snap(stop) {
+            const hs = stop._homes || [];
+            if (!hs.length) return stop;
+            const cLat = hs.reduce((a, h) => a + h.lat, 0) / hs.length;
+            const cLng = hs.reduce((a, h) => a + h.lng, 0) / hs.length;
+            const tally = {};
+            for (const h of hs) { const k = h.street || ''; if (k) tally[k] = (tally[k] || 0) + 1; }
+            const streetName = Object.keys(tally).sort((a, b) => tally[b] - tally[a])[0] || '';
+            const node = nearestCorner(cLat, cLng, streetName, hs);
+            stop._cLat = cLat; stop._cLng = cLng;
+            stop.lat = node ? node.lat : cLat; stop.lng = node ? node.lng : cLng;
+            stop.address = cornerName(node, streetName);
+            return stop;
+        }
+        return { snap, nearestCorner, cornerName, WALK };
+    }
+
     function expandToPhysicalStops({ assignment, result, isArrival = false, dropoffMode = 'door-to-door', maxWalkMi = 0.25 }) {
         // Three real modes. 'optimized-stops' previously fell through to the
         // door-to-door branch, so picking it in the UI changed nothing at all.
@@ -2170,48 +2221,42 @@ window.CampistryGoNeighborhoods = (function () {
         // Real intersections from the road graph. A node joining 3+ edges is a
         // corner a child can actually be told to wait at; the camp's own
         // historical stops are all named this way ("Lehigh Blvd@Drexel Dr").
-        const interNodes = [];
-        for (const id in (result.nodes || {})) {
-            const n = result.nodes[id];
-            if (n && n.degree >= 3 && Number.isFinite(n.lat)) interNodes.push(n);
-        }
-        function nearestCorner(cLat, cLng, streetName, homesArr) {
-            let best = null, bestScore = Infinity, bestNamed = null, bestNamedScore = Infinity;
-            const want = String(streetName || '').toLowerCase().trim();
-            for (const n of interNodes) {
-                const d = haversineMi(cLat, cLng, n.lat, n.lng);
-                if (d > WALK) continue;
-                // total walk from every child in the group, not just the centre
-                let tot = 0;
-                for (const h of homesArr) tot += haversineMi(h.lat, h.lng, n.lat, n.lng);
-                if (tot < bestScore) { bestScore = tot; best = n; }
-                if (want && (n.streets || []).some(x => String(x).toLowerCase().trim() === want)) {
-                    if (tot < bestNamedScore) { bestNamedScore = tot; bestNamed = n; }
-                }
-            }
-            // Prefer a corner that is actually ON the children's own street.
-            return bestNamed || best;
-        }
-        function cornerName(node, streetName) {
-            const main = streetName || (node && (node.streets || [])[0]) || 'Stop';
-            if (!node) return main + ' corner';
-            const cross = (node.streets || []).find(x =>
-                String(x).toLowerCase().trim() !== String(main).toLowerCase().trim());
-            return cross ? (main + ' @ ' + cross) : (main + ' corner');
-        }
+        const snapper = cornerSnapper(result, maxWalkMi);
         // Split a list of homes into groups nobody has to walk too far within.
+        // Group a bus's homes into shared stops: every child within WALK of
+        // the stop's centre, at most MAX_PER_STOP per stop. Densest first —
+        // the home with the most neighbours within walking distance seeds a
+        // stop and gathers the nearest of them, then the next densest, and so
+        // on. (The old pass sorted homes by latitude and grouped runs of that
+        // list, which split homes that were neighbours across the street and
+        // produced ~1.9 stops per shared corner on the camp's map.)
         function walkGroups(homesArr) {
-            const sorted = [...homesArr].sort((a, b) => (a.lat - b.lat) || (a.lng - b.lng));
+            const rem = homesArr.slice();
             const out = [];
-            let cur = [];
-            for (const h of sorted) {
-                if (!cur.length) { cur.push(h); continue; }
-                const anchor = cur[0];
-                if (cur.length >= MAX_PER_STOP || haversineMi(anchor.lat, anchor.lng, h.lat, h.lng) > WALK) {
-                    out.push(cur); cur = [h];
-                } else cur.push(h);
+            const d = (a, b) => haversineMi(a.lat, a.lng, b.lat, b.lng);
+            while (rem.length) {
+                let seed = 0, seedN = -1;
+                for (let i = 0; i < rem.length; i++) {
+                    let n = 0;
+                    for (let j = 0; j < rem.length; j++) if (i !== j && d(rem[i], rem[j]) <= WALK) n++;
+                    if (n > seedN) { seedN = n; seed = i; }
+                }
+                const near = rem.map((h, i) => ({ h, i, dist: d(rem[seed], h) }))
+                    .filter(x => x.dist <= WALK).sort((a, b) => a.dist - b.dist).slice(0, MAX_PER_STOP);
+                // tighten: every member within WALK of the group's own centre
+                let members = near.map(x => x.h);
+                for (let guard = 0; guard < MAX_PER_STOP && members.length > 1; guard++) {
+                    const cLat = members.reduce((a, h) => a + h.lat, 0) / members.length;
+                    const cLng = members.reduce((a, h) => a + h.lng, 0) / members.length;
+                    let far = -1, farD = WALK;
+                    members.forEach((h, k) => { const x = haversineMi(cLat, cLng, h.lat, h.lng); if (x > farD) { farD = x; far = k; } });
+                    if (far < 0) break;
+                    members.splice(far, 1);
+                }
+                const taken = new Set(members);
+                out.push(members);
+                for (let i = rem.length - 1; i >= 0; i--) if (taken.has(rem[i])) rem.splice(i, 1);
             }
-            if (cur.length) out.push(cur);
             return out;
         }
         // Diagnostic: detect homes attached to segments that appear on more
@@ -2275,10 +2320,12 @@ window.CampistryGoNeighborhoods = (function () {
                 for (const sid of orderedSegIds) {
                     const seg = segById[sid];
                     if (!seg || seg.homes.length === 0) continue;
-                    // corner: one bucket per street name (segments rejoin).
-                    // optimized: one bucket for the whole bus -- walk distance is
-                    // the only thing that matters, streets do not constrain it.
-                    const key = corner ? ('st:' + String(seg.name || sid).toLowerCase().trim()) : 'all';
+                    // One bucket for the whole bus in both modes: a corner gathers
+                    // children from every street that meets there (the camp's own
+                    // stops are "Sussex Pl@Knightsbridge Pl" with homes on three
+                    // streets). Grouping corner mode by street first produced one
+                    // stop per street — twice the camp's stop count.
+                    const key = 'all';
                     (groupsOf[key] || (groupsOf[key] = { seg, homes: [] })).homes.push(
                         ...seg.homes.map(h => ({ ...h, _segId: sid, _segName: seg.name, _nbId: seg.neighborhoodId })));
                 }
@@ -2287,12 +2334,19 @@ window.CampistryGoNeighborhoods = (function () {
                     for (const grp of walkGroups(g.homes)) {
                         const cLat = grp.reduce((a, h) => a + h.lat, 0) / grp.length;
                         const cLng = grp.reduce((a, h) => a + h.lng, 0) / grp.length;
-                        const streetName = grp[0]._segName || g.seg.name || '';
+                        // The group's main street: the one most of its homes are on.
+                        const tally = {};
+                        for (const h of grp) { const k = h._segName || ''; if (k) tally[k] = (tally[k] || 0) + 1; }
+                        const streetName = Object.keys(tally).sort((a, b) => tally[b] - tally[a])[0] || g.seg.name || '';
                         let lat = cLat, lng = cLng, address;
+                        // The homes behind the stop travel with it, so the
+                        // pipeline's consolidation can measure walks from the
+                        // homes (not the snapped corner) and re-snap a merged stop.
+                        const homesOut = grp.map(h => ({ lat: h.lat, lng: h.lng, street: h._segName || '' }));
                         if (corner) {
-                            const node = nearestCorner(cLat, cLng, streetName, grp);
+                            const node = snapper.nearestCorner(cLat, cLng, streetName, grp);
                             if (node) { lat = node.lat; lng = node.lng; }
-                            address = cornerName(node, streetName);
+                            address = snapper.cornerName(node, streetName);
                         } else {
                             // Optimized: stand where the total walk is smallest.
                             // The centroid can land off-road, so snap to whichever
@@ -2307,6 +2361,7 @@ window.CampistryGoNeighborhoods = (function () {
                         }
                         stops.push({
                             lat, lng, address,
+                            _homes: homesOut, _cLat: cLat, _cLng: cLng,
                             segmentId: grp[0]._segId,
                             neighborhoodId: grp[0]._nbId,
                             campers: grp.map(h => ({ name: h.camperName, division: h.division, bunk: h.bunk })),
@@ -2329,6 +2384,7 @@ window.CampistryGoNeighborhoods = (function () {
         buildNeighborhoods,
         packIntoBuses,
         expandToPhysicalStops,
+        cornerSnapper,
         // Exposed for testing / debug
         _internal: { buildGraph, detectNeighborhoods, spineOrder, hash, fetchRoadGraph },
     };

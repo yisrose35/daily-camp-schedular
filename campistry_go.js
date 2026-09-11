@@ -991,6 +991,16 @@ let _toastTimer = null;
                 console.log('[Go] Upgraded routing pipeline: spatial-sort → neighborhood ' +
                     '(road-graph aware). Set routingPipeline back to spatial-sort to revert.');
             }
+            // Second pass: a camp was found routing on 'spatial-sort' with the v1
+            // flag already set, and until now there was no control to choose an
+            // engine, so that value was never a choice. Move it to the road-graph
+            // engine unless the camp picked spatial-sort in Route Settings.
+            if (D.setup && D.setup.routingPipeline === 'spatial-sort' &&
+                !D.setup._pipelineUserChosen && !D.setup._pipelineMigrated_v2) {
+                D.setup.routingPipeline = 'neighborhood';
+                D.setup._pipelineMigrated_v2 = true;
+                console.log('[Go] Routing engine set to road-graph neighbourhoods; pick "Spatial sort" in Route Settings to go back.');
+            }
             // One-time migration: maxRouteDuration 60 → 90. The 60-min cap was
             // too tight for hard geographic clusters (camp's MAROON runs 71min
             // with 24mi distance), causing the solver to drop stops via
@@ -1505,6 +1515,7 @@ let _toastTimer = null;
         if (document.getElementById('equalizeBusLoads')) document.getElementById('equalizeBusLoads').value = s.equalizeBusLoads === true ? 'on' : 'off';
         if (document.getElementById('secPerRider')) document.getElementById('secPerRider').value = s.secPerRider ?? 0;
         if (document.getElementById('fleetUse')) document.getElementById('fleetUse').value = s.fleetUse === 'fewer' ? 'fewer' : 'as-needed';
+        if (document.getElementById('routingPipeline')) document.getElementById('routingPipeline').value = s.routingPipeline === 'spatial-sort' ? 'spatial-sort' : 'neighborhood';
         window._GoSetup = () => D.setup;
         if (document.getElementById('standaloneToggle')) document.getElementById('standaloneToggle').checked = !!s.standaloneMode;
     }
@@ -1539,6 +1550,10 @@ let _toastTimer = null;
         D.setup.equalizeBusLoads = el('equalizeBusLoads')?.value === 'on';
         D.setup.secPerRider = Math.max(0, parseFloat(el('secPerRider')?.value) || 0);
         D.setup.fleetUse = el('fleetUse')?.value === 'fewer' ? 'fewer' : 'as-needed';
+        if (el('routingPipeline')) {
+            D.setup.routingPipeline = el('routingPipeline').value === 'spatial-sort' ? 'spatial-sort' : 'neighborhood';
+            D.setup._pipelineUserChosen = true; // an explicit choice; migrations leave it alone
+        }
         window._GoSetup = () => D.setup;
         save(); toast('Setup saved');
     }
@@ -4361,6 +4376,20 @@ async function _tryNeighborhoodPipeline({
             consolidationStats.totalRemoved + ' stops merged across ' +
             consolidationStats.busesAffected + ' bus(es)');
     }
+    // Corner stops: a merged stop now serves more homes, so stand it at the
+    // intersection that minimises THEIR total walk (and name it after the
+    // street most of them live on).
+    if (dropoffMode === 'corner-stops' && window.CampistryGoNeighborhoods.cornerSnapper) {
+        const snapper = window.CampistryGoNeighborhoods.cornerSnapper(nhResult, ((D.setup && D.setup.maxWalkDistance) || 500) / 5280);
+        let resnapped = 0;
+        for (const bus of nhPhysical) for (const s of (bus.stops || [])) {
+            if (!s._homes || !s._homes.length) continue;
+            const before = s.lat + ',' + s.lng;
+            snapper.snap(s);
+            if (s.lat + ',' + s.lng !== before) resnapped++;
+        }
+        if (resnapped) console.log('[Go v5] Corner stops: ' + resnapped + ' merged stop(s) moved to the corner nearest their homes');
+    }
 
     // ── Build route objects (still in NH-spine order — will be TSP'd next) ──
     const nhNameById = {};
@@ -5473,9 +5502,19 @@ async function _trySpatialSortPipeline({
             // streetKey: the street of the home (first sibling), so the polish
             // can keep one street on one bus instead of two buses on the same road.
             const streetOf = a => { const m = a.members && a.members[0]; return m && m.address ? parseAddress(m.address).street.toLowerCase().trim() : ''; };
+            // Corner / optimized stops: homes within the walk radius share a
+            // corner, so a home next to its street-mates costs no extra stop.
+            // Without this every home was priced as its own 2-minute stop, every
+            // bus looked over the riding budget, and the polish balanced home
+            // counts instead of shortening routes. Door-to-door keeps one stop
+            // per home, which is the truth there.
+            const _walkMi = ((D.setup.maxWalkDistance || 500) / 5280);
+            const _shared = dropoffMode !== 'door-to-door';
             res = post.polishDistricts(
                 busBuckets.map(b => b.map(a => ({ atom: a, count: a.size, lat: a.lat, lng: a.lng, streetKey: streetOf(a) }))),
-                caps, depot, _routePostOpts({ polishRideBudgetMin: 60, isArrival: !!isArrival }));
+                caps, depot, _routePostOpts({ polishRideBudgetMin: 60, isArrival: !!isArrival,
+                    polishMergeSameStreetMi: _shared ? Math.max(0.25, _walkMi * 2.5) : 0,
+                    polishMergeAnyMi: _shared ? Math.max(0.05, _walkMi) : 0 }));
         } catch (e) { console.warn('[Go v6] Polish skipped: ' + e.message); }
         if (res && res.moves) {
             const pairs = [];
@@ -5937,8 +5976,12 @@ function _consolidateBusStops(stops) {
     // "Brewers Bridge Rd & Bridge Ct" or "12 Brewers Bridge Rd".
     function streetsOf(addr) {
         if (!addr) return [];
-        return String(addr)
-            .split(/\s*[&@,]\s*/)
+        // Only the street part: a full address ("12 Elm St, Lakewood, NJ, 08701")
+        // used to contribute "lakewood", "nj" and "08701" as street names, so
+        // ANY two homes in the same town matched the same-street rule and
+        // merged within a quarter mile — door-to-door was quietly a corner mode.
+        return String(addr).split(',')[0]
+            .split(/\s*[&@]\s*/)
             .map(p => p
                 .replace(/^\d[\d\s\-]*/, '')
                 .replace(/\bcorner\b/i, '')
@@ -5969,11 +6012,22 @@ function _consolidateBusStops(stops) {
                         const sB = streetsOf(stops[j].address);
                         if (!sA.some(n => sB.includes(n))) continue;
                     }
-                    const d = manhDist(stops[i].lat, stops[i].lng, stops[j].lat, stops[j].lng);
+                    // A corner stop stands at an intersection; the walk that
+                    // matters is from the homes behind it, so measure between
+                    // the two groups' home centres when we have them.
+                    const ai = stops[i]._cLat != null ? stops[i] : null, aj = stops[j]._cLat != null ? stops[j] : null;
+                    const d = manhDist(ai ? ai._cLat : stops[i].lat, ai ? ai._cLng : stops[i].lng,
+                                       aj ? aj._cLat : stops[j].lat, aj ? aj._cLng : stops[j].lng);
                     if (d < bestDist) { bestDist = d; bestJ = j; }
                 }
                 if (bestJ >= 0) {
                     stops[bestJ].campers = (stops[bestJ].campers || []).concat(stops[i].campers || []);
+                    if (stops[bestJ]._homes || stops[i]._homes) {
+                        stops[bestJ]._homes = (stops[bestJ]._homes || []).concat(stops[i]._homes || []);
+                        const hs = stops[bestJ]._homes;
+                        stops[bestJ]._cLat = hs.reduce((a, h) => a + h.lat, 0) / hs.length;
+                        stops[bestJ]._cLng = hs.reduce((a, h) => a + h.lng, 0) / hs.length;
+                    }
                     stops.splice(i, 1);
                     merged = true;
                     break outer;
