@@ -1,4 +1,3 @@
-
 // Native biometrics bridge, shared by Campistry Lite and Campistry Link.
 //
 // campistry_lite_biometric.js implements the feature with WebAuthn platform
