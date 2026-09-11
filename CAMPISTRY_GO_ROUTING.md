@@ -51,11 +51,31 @@ addresses ─ geocode ─┬─ road graph (OpenStreetMap) ─ neighbourhoods �
   has a bus on both sides of camp.
 * **Polish** (`polishDistricts`): local search that moves single atoms between
   buses or swaps two, priced on each bus's own tour, under seats and
-  containment. A **ruin-and-recreate** phase (remove a radial cluster of
+  containment. Every move is applied, re-priced exactly and kept only if the
+  fleet really gained. A **ruin-and-recreate** phase (remove a radial cluster of
   atoms, re-insert cheapest-first, keep if better — the large-neighbourhood
   step used by jsprit and VROOM) is implemented but off by default
   (`polishLnsIters`): measured on camp-shaped layouts it added nothing over
   relocate/swap and spent the whole time budget.
+  * **Shared stops** (`polishMergeSameStreetMi` / `polishMergeAnyMi`): the
+    stop consolidation that runs later merges homes on one street within a
+    quarter mile (and anything within *Max Walk*) into one stop. The polish
+    prices the same rule: an atom that would share a stop with a same-bus
+    neighbour costs no base dwell of its own, only its per-child seconds.
+    That is what keeps a street on one bus — a straggler next to its
+    street-mates is a free stop there and a full stop anywhere else. On the
+    road-graph path the radii come from *Max Walk*; house stops on the
+    k-means path never merge, so it gets none.
+  * Priced but **off by default**, both measured on camp-shaped maps
+    (751 children, 18 buses, three map seeds) against the final routes:
+    `polishChildMinuteWeight` (children's minutes aboard, weighted into the
+    objective — every weight from 0.01 to 0.05 made the final routes longer
+    for buses *and* children, because the road-time ordering that runs
+    afterwards already minimises children's minutes within each bus and the
+    proxy tour cannot see it) and `polishStreetSplitMin` (a flat penalty per
+    extra bus on a street — traded real minutes for a tidier map without
+    cutting the number of split streets). Arrival mode (`isArrival`) prices
+    a bus to its return at camp and a child from pickup to camp.
 
 ### Containment
 
@@ -104,7 +124,14 @@ print sheets agree. A per-bus summary table is logged after every generation.
 
 `Time Per Stop` + `Extra Seconds Per Child` × children at the stop. Studies of
 school buses measure about 19 s + 2.6 s per student (Braca et al. 1997);
-camps set their own. Default is the flat per-stop time.
+camps set their own. Default is the flat per-stop time. *Time Per Stop* takes
+quarter minutes: on a door-to-door run of 750 children and 18 buses the dwell
+at 2 min a stop is longer than the driving, and 0.5 min + 5 s per child cut
+the measured fleet by a quarter and the average ride from 28 to 21 min.
+
+The console's *Route summary* table (printed after every generation) carries
+each bus's minutes, seats, stops, wedge, and the average and longest child
+ride, so a route problem can be reported with numbers.
 
 ### Exceptions the dashboard reports
 
@@ -138,7 +165,9 @@ model; jsprit and VROOM documentation on ruin/recreate and regret insertion.
 ## Settings that matter
 
 * **Avg Speed** — calibrates road-class speeds (25 = as listed).
-* **Time Per Stop / Extra Seconds Per Child** — dwell.
+* **Time Per Stop / Extra Seconds Per Child** — dwell. Door-to-door: about
+  0.5 min plus 5 s per child; corner stops: 1–2 min. The stock 2 min per stop
+  is the single biggest cause of long routes on a door-to-door camp.
 * **Max Walk** — stop consolidation radius.
 * **Fleet Use** — *as-needed* (default) or *fewer buses*.
 * **Balance Bus Loads** — off by default.

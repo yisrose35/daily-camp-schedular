@@ -420,3 +420,87 @@ test('every bus gets its own colour when the fleet outgrows the palette, neighbo
     const ok = [{ busId: 'x', busColor: '#111111', stops: [] }, { busId: 'y', busColor: '#222222', stops: [] }];
     assert.deepStrictEqual(Array.from(P.assignRouteColors(ok, CAMP).values()), ['#111111', '#222222']);
 });
+
+// ── polish objective: child-minutes and street coherence ────────────────────
+
+test('polish prices child-minutes: a stop the fleet is indifferent about goes to the bus that reaches it sooner', () => {
+    // Bus A is a long run north (1..6mi); bus B a short one to the east.
+    // The stop X sits exactly between the two columns: the detour to serve
+    // it is the same 0.62mi on either bus, so bus minutes alone leave it
+    // where it is. On A it is dropped mid-run (~21 min) and delays six later
+    // stops; on B it is dropped at ~16 min and delays one.
+    const A = []; for (let n = 1; n <= 6; n += 0.5) A.push(at(n, 0, 4));
+    const X = at(3.0, 0.45, 4); A.push(X);
+    const Bb = [at(2.5, 0.9, 4), at(3.0, 0.9, 4), at(3.5, 0.9, 4)];
+    const flat = P.polishDistricts([A, Bb], [48, 48], CAMP, { polishChildMinuteWeight: 0, polishStreetSplitMin: 0 });
+    assert.strictEqual(flat.buckets[1].includes(X), false, 'bus minutes alone: X stays on the long bus');
+    const res = P.polishDistricts([A, Bb], [48, 48], CAMP, { polishStreetSplitMin: 0, polishChildMinuteWeight: 0.03 });
+    assert.strictEqual(res.buckets[1].includes(X), true, 'with child-minutes priced, X rides the short bus');
+    assert.ok(res.childMinAfter < res.childMinBefore - 100, 'children ride less: ' + res.childMinBefore.toFixed(0) + ' -> ' + res.childMinAfter.toFixed(0));
+    assert.ok(res.fleetAfter < res.fleetBefore + 2, 'for at most a couple of fleet minutes');
+    assert.strictEqual(res.buckets.flat().length, A.length + Bb.length, 'every atom exactly once');
+    for (const b of res.buckets) assert.ok(P.arcDeg(b, CAMP) <= 110, 'contained');
+});
+
+test('polish keeps one street on one bus: a split street is consolidated even at a small cost in minutes', () => {
+    // "Forest Cir" runs east from 0.4E to 0.7E at 2N. One of its stops is on
+    // bus A (column at 0.3E, so it is cheap there); the other two are on bus
+    // B (column at 0.9E). Fleet minutes prefer the split; the street penalty
+    // puts the whole street on one bus.
+    const A = []; for (let n = 1; n <= 3; n += 0.5) A.push(at(n, 0.3, 3));
+    A.push(at(2, 0.4, 3, { streetKey: 'Forest Cir' }));
+    const Bb = []; for (let n = 1; n <= 3; n += 0.5) Bb.push(at(n, 0.9, 3));
+    Bb.push(at(2, 0.6, 3, { streetKey: 'forest cir' }), at(2, 0.7, 3, { streetKey: 'FOREST CIR ' }));
+    const onStreet = b => b.filter(x => x.streetKey).length;
+    const flat = P.polishDistricts([A, Bb], [48, 48], CAMP, { polishStreetSplitMin: 0, polishChildMinuteWeight: 0 });
+    assert.ok(flat.buckets.every(b => onStreet(b) > 0), 'without the penalty the street stays split');
+    // (a) the explicit street-split penalty
+    const res = P.polishDistricts([A, Bb], [48, 48], CAMP, { polishStreetSplitMin: 4 });
+    assert.strictEqual(res.buckets.filter(b => onStreet(b) > 0).length, 1, 'the street is served by one bus');
+    assert.strictEqual(res.buckets.filter(b => onStreet(b) === 3).length, 1, 'all three of its stops together');
+    assert.ok(res.after < res.before, 'objective fell');
+    assert.strictEqual(res.buckets.flat().length, A.length + Bb.length, 'every atom exactly once');
+    // (b) the default: merge-aware dwell. Stops on one street within a quarter
+    // mile of a same-bus stop share it, so the bus that already stops on
+    // Forest Cir serves the third home for no extra stop time.
+    const merged = P.polishDistricts([A, Bb], [48, 48], CAMP, { polishMergeSameStreetMi: 0.25, polishMergeAnyMi: 0.095 });
+    assert.strictEqual(merged.buckets.filter(b => onStreet(b) > 0).length, 1, 'shared stop: the street is served by one bus');
+    assert.ok(merged.fleetAfter < merged.fleetBefore, 'and the fleet gets shorter: ' + merged.fleetBefore.toFixed(1) + ' -> ' + merged.fleetAfter.toFixed(1));
+    assert.strictEqual(merged.buckets.flat().length, A.length + Bb.length, 'every atom exactly once');
+});
+
+test('merge-aware dwell: homes that will share a stop are not each charged a stop', () => {
+    const A = [at(2, 0, 3, { streetKey: 'Elm St' }), at(2.05, 0.02, 3, { streetKey: 'Elm St' }), at(3, 0, 3)];
+    const plain = P.polishDistricts([A, []], [48, 48], CAMP, { polishMaxPasses: 0 });
+    const shared = P.polishDistricts([A, []], [48, 48], CAMP, { polishMaxPasses: 0, polishMergeSameStreetMi: 0.25 });
+    assert.ok(Math.abs((plain.fleetBefore - shared.fleetBefore) - 2) < 1e-6, 'one 2-minute stop saved: ' + plain.fleetBefore.toFixed(2) + ' vs ' + shared.fleetBefore.toFixed(2));
+    // per-child seconds are still paid at a shared stop
+    const sec = P.polishDistricts([A, []], [48, 48], CAMP, { polishMaxPasses: 0, polishMergeSameStreetMi: 0.25, secPerRider: 20 });
+    assert.ok(Math.abs((sec.fleetBefore - shared.fleetBefore) - 9 * 20 / 60) < 1e-6, 'nine children x 20s');
+});
+
+test('polish in arrival mode prices the ride to camp and the return leg, and keeps every invariant', () => {
+    const A = [at(2, 0, 3), at(3, 0.1, 3), at(4, 0, 3), at(3.6, 1.9, 3) /* misplaced */];
+    const Bb = [at(2.5, 1.5, 3), at(3.2, 1.8, 3), at(4.0, 2.0, 3)];
+    const S = [at(-2.5, 0.2, 3), at(-3.2, -0.1, 3)];
+    const res = P.polishDistricts([A, Bb, S], [48, 48, 48], CAMP, { isArrival: true, polishChildMinuteWeight: 0.03 });
+    assert.ok(res.moves >= 1);
+    assert.strictEqual(res.buckets[1].some(a => a.address === '3.6N 1.9E'), true, 'the misplaced pickup joins the north-east bus');
+    assert.ok(res.fleetAfter < res.fleetBefore, 'fleet minutes (to camp) fell');
+    assert.ok(res.childMinAfter < res.childMinBefore, 'child-minutes (from pickup to camp) fell');
+    assert.strictEqual(res.buckets.flat().length, 9, 'every atom exactly once');
+    for (const b of res.buckets) assert.ok(P.arcDeg(b, CAMP) <= 110, 'contained');
+    // arrival minutes include the return leg, so they exceed the dismissal figure for the same buckets
+    const dis = P.polishDistricts([A, Bb, S], [48, 48, 48], CAMP, { polishMaxPasses: 0 });
+    assert.ok(res.fleetBefore > dis.fleetBefore, 'arrival counts the drive back to camp');
+});
+
+test('a fractional Time Per Stop is honoured by the dwell model and the polish', () => {
+    assert.strictEqual(P.stopDwellMin(at(1, 0, 4), { avgStopMin: 0.5, secPerRider: 0 }), 0.5);
+    assert.ok(Math.abs(P.stopDwellMin(at(1, 0, 4), { avgStopMin: 0.5, secPerRider: 15 }) - 1.5) < 1e-9, '0.5 + 4 x 15s');
+    const A = [at(2, 0, 3), at(3, 0.1, 3), at(4, 0, 3)];
+    const Bb = [at(2, 2, 3), at(3, 2.1, 3), at(4, 2, 3)];
+    const slow = P.polishDistricts([A, Bb], [48, 48], CAMP, { avgStopMin: 2, polishMaxPasses: 0 });
+    const quick = P.polishDistricts([A, Bb], [48, 48], CAMP, { avgStopMin: 0.5, polishMaxPasses: 0 });
+    assert.ok(Math.abs((slow.fleetBefore - quick.fleetBefore) - 6 * 1.5) < 1e-6, 'six stops x 1.5 min less dwell');
+});

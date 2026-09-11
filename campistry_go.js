@@ -1529,7 +1529,8 @@ let _toastTimer = null;
         D.setup.avgSpeed = parseInt(el('avgSpeed')?.value) || 25;
         D.setup.reserveSeats = parseInt(el('reserveSeats')?.value) || 0;
         D.setup.dropoffMode = el('dropoffMode')?.value || 'door-to-door';
-        D.setup.avgStopTime = parseInt(el('avgStopTime')?.value) || 2;
+        // Fractional minutes allowed (0.5 = 30s): door-to-door stops are short.
+        D.setup.avgStopTime = Math.max(0.25, parseFloat(el('avgStopTime')?.value) || 2);
         D.setup.maxWalkDistance = parseInt(el('maxWalkDistance')?.value) || 375;
         D.setup.clusterSoftCapPct = parseInt(el('clusterSoftCapPct')?.value) || 112;
         D.setup.clusterDissolvePct = parseInt(el('clusterDissolvePct')?.value) || 55;
@@ -4089,9 +4090,17 @@ async function generateRoutes() {
             const c = r._containment || {};
             let miles = 0;
             if (r._tspLegTimes) miles = null; // road legs are in minutes only
+            // Child ride: each stop's ride minutes weighted by the children at it.
+            let rideSum = 0, rideKids = 0, rideMax = 0;
+            for (const s of r.stops) {
+                const k = (s.campers || []).length, m = s._rideTimeMin;
+                if (!k || !Number.isFinite(m)) continue;
+                rideSum += k * m; rideKids += k; if (m > rideMax) rideMax = m;
+            }
             rows.push({ shift: sr.shift.label || ('Shift ' + (si + 1)), bus: r.busName, kids: r.camperCount, seats: r._cap,
-                        stops: r.stops.length, minutes: r.totalDuration, wedgeDeg: c.arcDeg, spreadMi: c.spreadMi,
-                        straddle: !!c.straddle, source: r._source });
+                        stops: r.stops.length, minutes: r.totalDuration,
+                        avgKidMin: rideKids ? Math.round(rideSum / rideKids) : null, maxKidMin: rideKids ? rideMax : null,
+                        wedgeDeg: c.arcDeg, spreadMi: c.spreadMi, straddle: !!c.straddle, source: r._source });
         }));
         console.log('[Go] Route summary (' + rows.length + ' buses):');
         if (console.table) console.table(rows);
@@ -4244,7 +4253,12 @@ async function _tryNeighborhoodPipeline({
         rideStopMin: D.setup.avgStopTime || 1,
         maxChildRideMin: 60,
         secPerRider: Math.max(0, parseFloat(D.setup.secPerRider) || 0),
-        busOverheadMin: _busOverheadMin()
+        busOverheadMin: _busOverheadMin(),
+        isArrival: !!isArrival,
+        // The same radii _consolidateBusStops merges with, so districting
+        // knows a home next to its street-mates costs no extra stop.
+        mergeSameStreetMi: Math.max(0.25, ((D.setup.maxWalkDistance || 500) / 5280) * 2.5),
+        mergeAnyMi: Math.max(0.05, (D.setup.maxWalkDistance || 500) / 5280)
     });
 
     showProgress(shiftLabel + ': generating per-zone stops...', pctBase + 40);
@@ -5456,9 +5470,12 @@ async function _trySpatialSortPipeline({
         });
         let res = null;
         try {
+            // streetKey: the street of the home (first sibling), so the polish
+            // can keep one street on one bus instead of two buses on the same road.
+            const streetOf = a => { const m = a.members && a.members[0]; return m && m.address ? parseAddress(m.address).street.toLowerCase().trim() : ''; };
             res = post.polishDistricts(
-                busBuckets.map(b => b.map(a => ({ atom: a, count: a.size, lat: a.lat, lng: a.lng }))),
-                caps, depot, _routePostOpts({ polishRideBudgetMin: 60 }));
+                busBuckets.map(b => b.map(a => ({ atom: a, count: a.size, lat: a.lat, lng: a.lng, streetKey: streetOf(a) }))),
+                caps, depot, _routePostOpts({ polishRideBudgetMin: 60, isArrival: !!isArrival }));
         } catch (e) { console.warn('[Go v6] Polish skipped: ' + e.message); }
         if (res && res.moves) {
             const pairs = [];
@@ -5471,7 +5488,8 @@ async function _trySpatialSortPipeline({
             });
             clusterMeta.sort((a, b) => b.distSec - a.distSec);
             console.log('[Go v6] Polish: ' + res.moves + ' atom move(s), est. fleet ' +
-                Math.round(res.before) + ' → ' + Math.round(res.after) + ' min');
+                Math.round(res.fleetBefore) + ' → ' + Math.round(res.fleetAfter) + ' min, child-minutes ' +
+                Math.round(res.childMinBefore) + ' → ' + Math.round(res.childMinAfter));
         }
     }
 
