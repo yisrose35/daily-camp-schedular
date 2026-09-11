@@ -245,10 +245,120 @@ window.CampistryGoNeighborhoods = (function () {
     // Overpass fetch — road graph for the bbox of all campers.
     // Reuses the same mirror + timeout strategy as campistry_go.js fetchIntersections().
     // -------------------------------------------------------------------------
+    // ---- tiled download -----------------------------------------------------
+    // One Overpass query for a whole camp (Lakewood + Jackson + Toms River is
+    // ~0.3° x 0.35°) returns tens of megabytes and routinely outlives the
+    // mirrors' 25s query timeout, so it failed more often than it worked.
+    // The area is cut into tiles of ~7 x 7 miles; each is a small, quick
+    // query, cached on its own in IndexedDB (roads do not change), so the
+    // next run — or a roster change — downloads only what is missing, and one
+    // slow mirror costs one tile, not the whole map.
+    const TILE_LAT = 0.1, TILE_LNG = 0.125, TILE_VER = 'v1';
+    const TILE_TTL_MS = 90 * 24 * 60 * 60 * 1000;
+    const TILE_CLASSES = '^(motorway|trunk|primary|secondary|tertiary|unclassified|residential|living_street)$';
+    function tilesFor(minLat, minLng, maxLat, maxLng) {
+        const i0 = Math.floor(minLat / TILE_LAT), i1 = Math.floor(maxLat / TILE_LAT);
+        const j0 = Math.floor(minLng / TILE_LNG), j1 = Math.floor(maxLng / TILE_LNG);
+        const out = [];
+        for (let i = i0; i <= i1; i++) for (let j = j0; j <= j1; j++) {
+            out.push({ i, j, key: 'tile:' + TILE_VER + ':' + i + ':' + j,
+                       bbox: [i * TILE_LAT, j * TILE_LNG, (i + 1) * TILE_LAT, (j + 1) * TILE_LNG] });
+        }
+        return out;
+    }
+    // Overpass returns a way for every tile that holds one of its nodes, so
+    // tiles overlap on ways and their nodes: keep each element once.
+    function mergeTiles(datas) {
+        const seen = new Set(), elements = [];
+        for (const d of datas) for (const el of ((d && d.elements) || [])) {
+            const k = el.type + ':' + el.id;
+            if (seen.has(k)) continue;
+            seen.add(k); elements.push(el);
+        }
+        return { elements };
+    }
+    function _hostOf(url) { return url.startsWith('/') ? 'same-origin proxy' : url.split('//')[1].split('/')[0]; }
+    async function fetchTile(tile, options) {
+        const query = '[out:json][timeout:60];' +
+            'way["highway"~"' + TILE_CLASSES + '"](' + tile.bbox.join(',') + ');' +
+            'out body;>;out skel qt;';
+        const label = '[Go-NH] Map tile ' + tile.i + ':' + tile.j;
+        // 1. Supabase edge proxy (server-side, dodges browser CORS on error replies)
+        const viaProxy = await fetchOverpassViaProxy(query, Object.assign({}, options, { verbose: false, label }));
+        if (viaProxy && Array.isArray(viaProxy.elements)) return _compactOverpass(viaProxy);
+        // 2. Same-origin Vercel proxy, then the public mirrors (GET, no preflight)
+        const endpoints = ['/api/overpass',
+            'https://overpass-api.de/api/interpreter',
+            'https://overpass.kumi.systems/api/interpreter',
+            'https://maps.mail.ru/osm/tools/overpass/api/interpreter'];
+        for (const url of endpoints) {
+            const controller = new AbortController();
+            const timer = setTimeout(() => controller.abort(), 75000);
+            try {
+                const resp = await fetch(url + '?data=' + encodeURIComponent(query), { signal: controller.signal });
+                clearTimeout(timer);
+                if (!resp.ok) { console.warn(label + ' via ' + _hostOf(url) + ': HTTP ' + resp.status); continue; }
+                const data = await resp.json();
+                if (!data || !Array.isArray(data.elements)) { console.warn(label + ' via ' + _hostOf(url) + ': no elements in reply'); continue; }
+                return _compactOverpass(data);
+            } catch (e) {
+                clearTimeout(timer);
+                const why = e && e.name === 'AbortError' ? 'timed out after 75s'
+                    : (/Failed to fetch|NetworkError|Load failed/.test(String(e && e.message)) ? 'blocked by the browser (CORS or network)' : String(e && e.message));
+                console.warn(label + ' via ' + _hostOf(url) + ': ' + why);
+            }
+        }
+        return null;
+    }
+    async function fetchRoadGraphTiled(minLat, minLng, maxLat, maxLng, options) {
+        const tiles = tilesFor(minLat, minLng, maxLat, maxLng);
+        if (tiles.length > 64) {
+            console.warn('[Go-NH] Map data: ' + tiles.length + ' tiles would be needed — the roster spans too large an area');
+            return null;
+        }
+        const got = new Map();
+        for (const t of tiles) {
+            const e = await _idbGet(t.key);
+            if (e && e.data && (Date.now() - (e.savedAt || 0)) <= TILE_TTL_MS) got.set(t.key, e.data);
+        }
+        const todo = tiles.filter(t => !got.has(t.key));
+        console.log('[Go-NH] Map data: ' + tiles.length + ' tile(s), ' + got.size + ' cached, ' + todo.length + ' to download');
+        const total = todo.length;
+        let done = 0;
+        const report = () => { if (typeof options.onProgress === 'function') { try { options.onProgress(done, total); } catch (_) {} } };
+        report();
+        for (let round = 0; round < 2 && todo.length; round++) {
+            const queue = todo.splice(0, todo.length);
+            const failed = [];
+            const worker = async () => {
+                while (queue.length) {
+                    const t = queue.shift();
+                    const d = await fetchTile(t, options);
+                    if (d) { got.set(t.key, d); await _idbSet(t.key, { savedAt: Date.now(), data: d }); done++; report(); }
+                    else failed.push(t);
+                }
+            };
+            await Promise.all([worker(), worker()]);
+            if (failed.length) {
+                console.warn('[Go-NH] Map data: ' + failed.length + ' tile(s) failed' + (round === 0 ? ' — retrying once' : ''));
+                todo.push(...failed);
+            }
+        }
+        if (todo.length) {
+            console.warn('[Go-NH] Map data: ' + todo.length + ' of ' + tiles.length + ' tile(s) could not be downloaded from any mirror; ' +
+                'the road-graph engine cannot run this time. The tiles that did arrive are cached, so the next attempt has less to fetch.');
+            return null;
+        }
+        const merged = mergeTiles(tiles.map(t => got.get(t.key)));
+        console.log('[Go-NH] Map data: ' + merged.elements.length + ' elements from ' + tiles.length + ' tile(s)');
+        return merged;
+    }
+
     async function fetchRoadGraph(campers, options) {
-        // Sandbox: no Overpass/OSM network call — the router falls back to its
-        // haversine road-distance approximation, no road graph fetched.
-        if (window.CampistryGoSandbox && window.CampistryGoSandbox.isSandbox()) return null;
+        options = options || {};
+        // Tests that run with no network say so explicitly; sandbox mode does
+        // NOT block this — OpenStreetMap data is free.
+        if (window.CampistryGoSandbox && typeof window.CampistryGoSandbox.noNetwork === 'function' && window.CampistryGoSandbox.noNetwork()) return null;
         const lats = campers.map(c => c.lat).filter(Number.isFinite).sort((a, b) => a - b);
         const lngs = campers.map(c => c.lng).filter(Number.isFinite).sort((a, b) => a - b);
         if (lats.length < 4 || lngs.length < 4) return null;
@@ -285,50 +395,46 @@ window.CampistryGoNeighborhoods = (function () {
             return cached;
         }
 
-        const query = '[out:json][timeout:25];' +
-            'way["highway"~"^(motorway|trunk|primary|secondary|tertiary|unclassified|residential|living_street)$"](' + bbox + ');' +
-            'out body;>;out skel qt;';
-
-        // 2. Try the Supabase edge proxy (dodges browser CORS + retries mirrors
-        //    server-side). Cache and return on success.
-        const data = await fetchOverpassViaProxy(query, options);
+        // 2. Download the area tile by tile (each tile cached on its own) and
+        //    keep the merged graph under the whole-bbox key too, so a second
+        //    run with the same roster is one IndexedDB read.
+        const data = await fetchRoadGraphTiled(minLat, minLng, maxLat, maxLng, options);
         if (data) {
             await _saveRoadGraphCacheAsync(cacheKey, data);
             return data;
         }
+        return null;
+    }
 
-        // 3. Fall through to direct mirrors. Cache on first success.
-        const endpoints = [
-            'https://overpass-api.de/api/interpreter',
-            'https://overpass.kumi.systems/api/interpreter',
-            'https://maps.mail.ru/osm/tools/overpass/api/interpreter'
-        ];
-        // Overpass under load answers in 30-60s. Aborting at 20s and calling it a
-        // failure is right when we already hold a cached graph — but with no cache
-        // the alternative isn't "slightly slower", it's silently routing the whole
-        // camp on the much worse fallback path. Wait properly in that case.
-        // We only get here after the cache missed for this bbox, so there is no
-        // fallback to fail fast to: the alternative to waiting is routing the
-        // whole camp on the much worse path. Overpass under load answers in
-        // 30-60s, and a 20s abort was being reported as "all mirrors failed".
-        const DIRECT_TIMEOUT_MS = 60000;
-        for (const url of endpoints) {
-            try {
-                const controller = new AbortController();
-                const timeoutId = setTimeout(() => controller.abort(), DIRECT_TIMEOUT_MS);
-                const resp = await fetch(url + '?data=' + encodeURIComponent(query), { signal: controller.signal });
-                clearTimeout(timeoutId);
-                if (!resp.ok) continue;
-                const direct = await resp.json();
-                if (options.verbose) console.log('[Go-NH] Overpass (direct): ' + (direct.elements?.length || 0) + ' elements from ' + url);
-                await _saveRoadGraphCacheAsync(cacheKey, direct);
-                return direct;
-            } catch (e) {
-                if (options.verbose) console.warn('[Go-NH] Overpass error at ' + url + ':', e.message);
+    // Street intersections and major-road segments straight from a road
+    // graph, for the corner-stop builder: an intersection is a node where two
+    // differently named streets meet. Saves the k-means path its own two
+    // Overpass queries (which failed as often as the graph download did).
+    function intersectionsFromGraph(data) {
+        const nodes = {}, nodeStreets = {}, majorSegments = [];
+        for (const el of ((data && data.elements) || [])) {
+            if (el.type === 'node' && el.lat != null && el.lon != null) nodes[el.id] = { lat: el.lat, lng: el.lon };
+        }
+        for (const el of ((data && data.elements) || [])) {
+            if (el.type !== 'way' || !el.nodes || el.nodes.length < 2) continue;
+            const hw = el.tags && el.tags.highway, name = el.tags && el.tags.name;
+            if (name) for (const nid of el.nodes) (nodeStreets[nid] || (nodeStreets[nid] = new Set())).add(name);
+            if (hw === 'primary' || hw === 'secondary' || hw === 'trunk') {
+                for (let i = 0; i < el.nodes.length - 1; i++) {
+                    const a = nodes[el.nodes[i]], b = nodes[el.nodes[i + 1]];
+                    if (a && b) majorSegments.push({ lat1: a.lat, lng1: a.lng, lat2: b.lat, lng2: b.lng, name: name || '' });
+                }
             }
         }
-        console.warn('[Go-NH] All Overpass routes failed (proxy + direct) and no cache available — neighborhood mode unavailable this run');
-        return null;
+        const intersections = [];
+        for (const nid of Object.keys(nodeStreets)) {
+            const streets = nodeStreets[nid];
+            if (streets.size < 2) continue;
+            const node = nodes[nid]; if (!node) continue;
+            const arr = [...streets].sort();
+            intersections.push({ lat: node.lat, lng: node.lng, name: arr[0] + ' & ' + arr[1], streets: arr });
+        }
+        return { intersections, majorSegments };
     }
 
     async function fetchOverpassViaProxy(query, options) {
@@ -355,7 +461,8 @@ window.CampistryGoNeighborhoods = (function () {
             });
             clearTimeout(timeoutId);
             if (!resp.ok) {
-                if (options.verbose) console.warn('[Go-NH] Overpass proxy HTTP ' + resp.status);
+                console.warn((options.label || '[Go-NH] Overpass') + ' via Supabase proxy: HTTP ' + resp.status +
+                    (resp.status === 404 ? ' (the overpass-proxy edge function is not deployed)' : ''));
                 return null;
             }
             const data = await resp.json();
@@ -365,7 +472,7 @@ window.CampistryGoNeighborhoods = (function () {
             }
             return data;
         } catch (e) {
-            if (options.verbose) console.warn('[Go-NH] Overpass proxy error:', e.message);
+            console.warn((options.label || '[Go-NH] Overpass') + ' via Supabase proxy: ' + (e && e.name === 'AbortError' ? 'timed out' : (e && e.message)));
             return null;
         }
     }
@@ -2385,7 +2492,9 @@ window.CampistryGoNeighborhoods = (function () {
         packIntoBuses,
         expandToPhysicalStops,
         cornerSnapper,
+        loadRoadGraph: fetchRoadGraph,
+        intersectionsFromGraph,
         // Exposed for testing / debug
-        _internal: { buildGraph, detectNeighborhoods, spineOrder, hash, fetchRoadGraph },
+        _internal: { buildGraph, detectNeighborhoods, spineOrder, hash, fetchRoadGraph, tilesFor, mergeTiles },
     };
 })();

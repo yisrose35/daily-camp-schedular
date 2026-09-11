@@ -3879,6 +3879,7 @@ async function generateRoutes() {
                     }
                 } else {
                     console.warn('[Go] Primary neighborhood failed — trying spatial-sort as secondary fallback');
+                    toast('Map data unavailable — routing with the fallback engine. See the console lines starting with [Go-NH] for why.', 'warning');
                     try {
                         routes = await _trySpatialSortPipeline(_pipelineArgs);
                         if (routes) routeSource = 'spatial-sort-secondary';
@@ -4214,7 +4215,8 @@ async function _tryNeighborhoodPipeline({
     // ── Run neighborhood detection ──
     const nhResult = await window.CampistryGoNeighborhoods.buildNeighborhoods({
         campers: nhCampers,
-        options: { verbose: true, siblingGroups }
+        options: { verbose: true, siblingGroups,
+            onProgress: (done, total) => { if (total) showProgress(shiftLabel + ': downloading map data (' + done + '/' + total + ' tiles)...', pctBase + 5); } }
     });
 
     if (!nhResult || !nhResult.neighborhoods?.length) {
@@ -7012,9 +7014,25 @@ function findAnchorStop(campers, intersections, walkMi = 0.2) {
     //   Q1: Major roads only (primary/secondary/trunk) — small, fast, for crossing detection
     //   Q2: All named roads but nodes-only via `out center` — for intersection finding
     async function fetchIntersections(campers) {
-        // Sandbox: no Overpass/OSM network call — degrade to approximate
-        // intersections (nearest-kid coords), same as an Overpass miss.
-        if (window.CampistryGoSandbox && CampistryGoSandbox.isSandbox()) return null;
+        // No-network test runs degrade to approximate intersections (nearest
+        // house). Sandbox mode does NOT block this: OpenStreetMap data is free.
+        if (window.CampistryGoSandbox && typeof CampistryGoSandbox.noNetwork === 'function' && CampistryGoSandbox.noNetwork()) return null;
+        // The road graph (tiled, cached) already holds every street and
+        // intersection; derive them from it instead of two more Overpass calls.
+        try {
+            const NH = window.CampistryGoNeighborhoods;
+            if (NH && NH.loadRoadGraph && NH.intersectionsFromGraph) {
+                const graph = await NH.loadRoadGraph(campers, {
+                    onProgress: (done, total) => { if (total) showProgress('Downloading map data (' + done + '/' + total + ' tiles)...', 5); }
+                });
+                if (graph) {
+                    const derived = NH.intersectionsFromGraph(graph);
+                    _majorRoadSegments = derived.majorSegments;
+                    console.log('[Go] Intersections from the road graph: ' + derived.intersections.length + ' corners, ' + derived.majorSegments.length + ' major-road segments');
+                    if (derived.intersections.length) return derived.intersections;
+                }
+            }
+        } catch (e) { console.warn('[Go] Road-graph intersections unavailable: ' + (e && e.message)); }
         // Use IQR-based outlier removal to build a tight bbox
         const lats = campers.map(c => c.lat).filter(Boolean).sort((a, b) => a - b);
         const lngs = campers.map(c => c.lng).filter(Boolean).sort((a, b) => a - b);

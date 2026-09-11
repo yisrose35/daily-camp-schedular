@@ -46,6 +46,14 @@ window.CampistryGoSandbox = (function () {
         return _get(LS_ALLOWPAID) === '1';
     }
     function setAllowPaid(on) { _put(LS_ALLOWPAID, on ? '1' : '0'); }
+    // Sandbox blocks PAID providers and mocks geocoding. Free OpenStreetMap
+    // data (the road graph and street intersections) costs nothing and stays
+    // on — without it the router loses its street-aware engine and every
+    // real intersection. Tests that run with no network set this flag.
+    function noNetwork() {
+        if (window.__CAMPISTRY_GO_NO_NETWORK__ === true) return true;
+        return _get('campistry_go_no_network') === '1';
+    }
 
     // --- Sandbox: ON until explicitly turned off ------------------------------
     function isSandbox() {
@@ -119,6 +127,7 @@ window.CampistryGoSandbox = (function () {
         setAllowPaid: setAllowPaid,
         isSandbox: isSandbox,
         setSandbox: setSandbox,
+        noNetwork: noNetwork,
         mockGeocode: mockGeocode,
         mockCampGeocode: mockCampGeocode
     };
