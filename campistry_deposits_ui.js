@@ -324,14 +324,28 @@
         var when = d.deposit_date || (d.created_at || '').slice(0, 10) || '—';
         var payer = d.payer_name || '(payer not readable)';
 
+        // A return reads as a payment unless it is labelled loudly. The ledger
+        // gets the sign right on its own (get_camp_deposit_credits applies it
+        // from is_reversal), but the row is what a human acts on, and "$400
+        // from DAVID KLEIN" invites someone to match it as income when it is
+        // money the bank has already taken back.
+        var rev = !!d.is_reversal;
         var head = '<div style="display:flex;justify-content:space-between;gap:12px;align-items:baseline;flex-wrap:wrap">' +
-            '<div><strong style="font-size:1.02rem">' + host.fm(amt) + '</strong>' +
-            ' <span style="color:var(--s600)">from ' + host.esc(payer) + '</span>' +
+            '<div><strong style="font-size:1.02rem' + (rev ? ';color:#991B1B' : '') + '">' +
+            (rev ? '\u2212' : '') + host.fm(amt) + '</strong>' +
+            ' <span style="color:var(--s600)">' + (rev ? 'returned by ' : 'from ') + host.esc(payer) + '</span>' +
             (d.memo_code ? ' <code style="background:var(--s50);padding:1px 5px;border-radius:4px;font-size:.72rem">' + host.esc(d.memo_code) + '</code>' : '') +
             '</div>' +
             '<div style="font-size:.75rem;color:var(--s500)">' + host.esc(when) + ' · ' +
             host.esc((d.kind || '').toUpperCase()) + (d.bank ? ' · ' + host.esc(d.bank) : '') + ' ' + statusPill(d) + '</div>' +
             '</div>';
+
+        var revBanner = rev
+            ? '<div style="background:#FEF2F2;border:1px solid #FECACA;color:#991B1B;padding:7px 11px;border-radius:var(--r);font-size:.78rem;margin:8px 0">' +
+              '<strong>This payment was returned.</strong> The money is not in the account. ' +
+              'Matching it to a family <strong>subtracts</strong> it from their balance — do that for the family whose ' +
+              'original payment bounced, then chase them for it.</div>'
+            : '';
 
         var why = d.guardrail
             ? '<div style="background:#FFFBEB;border:1px solid #FDE68A;color:#92400E;padding:6px 10px;border-radius:var(--r);font-size:.76rem;margin:8px 0">' +
@@ -355,8 +369,10 @@
                 '</div></div>';
         }
 
-        return '<div style="border:1px solid var(--s100);border-radius:var(--r);padding:12px 14px;margin-bottom:10px">' +
-               head + memoLine + why + actions + '</div>';
+        return '<div style="border:1px solid ' + (rev ? '#FECACA' : 'var(--s100)') +
+               ';border-radius:var(--r);padding:12px 14px;margin-bottom:10px' +
+               (rev ? ';background:#FFFBFB' : '') + '">' +
+               head + memoLine + revBanner + why + actions + '</div>';
     }
 
     function renderInbox() {

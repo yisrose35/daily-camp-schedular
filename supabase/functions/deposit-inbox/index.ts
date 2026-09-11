@@ -101,6 +101,47 @@ import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
         'money\\s+(?:has\\s+)?arrived'
     ].join('|'), 'im');
 
+    // ── returns / NSF ────────────────────────────────────────────────────────
+    //
+    // An ACH or Zelle credit that already landed can be pulled back days later:
+    // insufficient funds, a closed account, a disputed transfer. The bank sends
+    // a second email, and it is the single most consequential message in this
+    // whole feature -- the family currently reads as PAID when the money is
+    // gone. Until now "was returned" matched NON_EVENT_RE and the message was
+    // discarded, so the original credit just stayed on the ledger.
+    //
+    // Two conditions, both required, because the word "returned" alone is far
+    // too common: a return word AND something identifying the item as money
+    // that came IN. "Your payment to Con Ed was returned" is our own outgoing
+    // payment bouncing back and is deliberately NOT handled here -- it is a
+    // credit, but an unpredictable one, and guessing at it would invent money.
+    var RETURN_WORD_RE = new RegExp([
+        '(?:was|has\\s+been|were|have\\s+been)\\s+(?:returned|reversed)',
+        'return(?:ed)?\\s+(?:item|deposit|payment|transfer|ach|entry)',
+        '\\breturned\\s+unpaid\\b',
+        'reversal\\s+of',
+        'insufficient\\s+funds',
+        '\\bNSF\\b',
+        'charge(?:d)?\\s*back',
+        '\\bchargeback\\b'
+    ].join('|'), 'i');
+
+    var INCOMING_ITEM_RE = new RegExp([
+        '\\bdeposit\\b', '\\bcredit(?:ed)?\\b', '\\breceived\\b',
+        '\\bzelle\\b', '\\bach\\b', '\\bincoming\\b', '\\bfrom\\b'
+    ].join('|'), 'i');
+
+    // "Your payment to X was returned" -- our money coming back, not a family's
+    // payment failing. Excluded so it is never booked as a family's debit.
+    var OUR_PAYMENT_RETURN_RE = /\b(?:your|our)\s+payment\s+to\b|\bpayment\s+to\s+[^\n]{1,60}\s+(?:was|has\s+been)\s+(?:returned|reversed)/i;
+
+    P.isReturn = function (text) {
+        var s = String(text || '');
+        if (!RETURN_WORD_RE.test(s)) return false;
+        if (OUR_PAYMENT_RETURN_RE.test(s)) return false;
+        return INCOMING_ITEM_RE.test(s);
+    };
+
     // Alerts that are ABOUT a payment without being one: requests, reminders,
     // failures, reversals-in-progress. Booking any of these as cash means the
     // ledger says paid when nothing settled.
@@ -142,6 +183,9 @@ import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
     P.direction = function (text) {
         var s = String(text || '');
         if (!s.trim()) return 'unclear';
+        // Before NON_EVENT: "was returned" appears in both, and a genuine
+        // return of an incoming deposit must never be discarded as noise.
+        if (P.isReturn(s)) return 'reversal';
         if (NON_EVENT_RE.test(s)) return 'non_event';
         if (OUTBOUND_RE.test(s)) return 'out';
         if (INBOUND_RE.test(s)) return 'in';
@@ -323,13 +367,20 @@ import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
             'for', 'through', 'and',
             'was', 'were', 'has', 'have', 'had', 'is', 'are', 'will',
             'in\\s+the\\s+amount', 'of\\s+\\$', 'amount', 'ref', 'reference',
-            'conf(?:irmation)?', 'trace', 'account', 'ending'
+            'conf(?:irmation)?', 'trace', 'account', 'ending',
+            // Return notices append the reason to the payer's own line.
+            'nsf', 'returned', 'reversed', 'due', 'insufficient', 'because'
         ].join('|') + ')\\b[\\s\\S]*$', 'i');
 
     // "TD Bank: MIRIAM COHEN sent you $150.00" -- the bank labels its own line,
     // and the label rides along on the capture. A real payer name never
     // contains a colon, so a short leading "Label:" is always noise.
     var NAME_LEAD_RE = /^[A-Za-z][A-Za-z .&'-]{0,24}:\s*/;
+
+    // A SPACED dash always separates a name from a trailing clause -- "SARA
+    // LEVI - NSF, returned unpaid". An unspaced one is part of the name and
+    // must survive, so "SMITH-JONES" is untouched.
+    var NAME_DASH_TAIL_RE = /\s+[\u2014\u2013-]\s+[\s\S]*$/;
 
     P.cleanName = function (raw) {
         var s = String(raw || '')
@@ -338,6 +389,7 @@ import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
             .trim()
             .replace(/^["'(\[]+|["')\]]+$/g, '')
             .replace(NAME_LEAD_RE, '')
+            .replace(NAME_DASH_TAIL_RE, '')
             .replace(NAME_TAIL_RE, '')
             .replace(/[.,;:]+$/, '')
             .trim();
@@ -617,7 +669,13 @@ import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
             d.date || '',
             (P.parseAmount(d.amount) || 0).toFixed(2),
             P.normalizeForKey(d.payerName),
-            P.normalizeForKey(d.traceId)
+            P.normalizeForKey(d.traceId),
+            // Without this a same-day return of a deposit that carries no trace
+            // number is identical to the deposit itself, and ON CONFLICT DO
+            // NOTHING silently swallows it -- the family keeps a credit for
+            // money the bank has already taken back. The one case where
+            // collapsing two rows loses money rather than saving it.
+            d.isReversal ? 'rev' : ''
         ].join('|');
         var h = 0x811c9dc5;
         for (var i = 0; i < basis.length; i++) {
@@ -651,9 +709,12 @@ import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
         var amount = P.parseAmountFromText(full);
 
         var dir = P.direction(full);
+        var isReversal = (dir === 'reversal');
+        if (isReversal && !amount) return { ok: false, reason: 'return_no_amount', amount: null };
         if (dir === 'out')       return { ok: false, reason: 'outbound_payment', amount: amount };
         if (dir === 'non_event') return { ok: false, reason: 'non_event', amount: amount };
         if (dir === 'unclear')   return { ok: false, reason: 'unclear_direction', amount: amount };
+        // 'reversal' falls through: it IS a real event and must be recorded.
 
         if (!amount) return { ok: false, reason: 'no_amount', amount: null };
 
@@ -677,6 +738,9 @@ import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
             ok: true,
             deposit: {
                 amount: amount,
+                // The row stores a POSITIVE amount and this flag; the sign is
+                // applied by get_camp_deposit_credits, so one place decides it.
+                isReversal: isReversal,
                 payerName: payerName,
                 memo: memo,
                 memoCode: P.parseMemoCode(memo) || P.parseMemoCode(full),

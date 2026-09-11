@@ -81,6 +81,9 @@ test('a trailing clause never rides along on the payer name', () => {
 
 // The asymmetric half. Widening the inbound gate for coverage is exactly what
 // puts these at risk, so they are checked in the same file, right next to it.
+// NOTE: a RETURNED incoming deposit deliberately does not belong here. It is
+// not "not income" -- it is negative income, and it has to be recorded so the
+// family can be debited. See the reversal tests at the foot of this file.
 const NOT_INCOME = [
     ['you sent',             'You sent $50.00 to JOHN SMITH with Zelle.'],
     ['you paid',             'You paid $120.00 to ACME CAMP SUPPLY.'],
@@ -92,7 +95,6 @@ const NOT_INCOME = [
     ['withdrawal',           'ATM withdrawal of $100.00.'],
     ['money request',        'SARA LEVI is requesting $200.00 from you.'],
     ['declined',             'Your payment of $60.00 was declined.'],
-    ['returned deposit',     'A deposit of $400.00 from DAVID KLEIN was returned.'],
     ['due reminder',         'Reminder: your payment of $150.00 is due.'],
     ['zelle enrollment',     'You have enrolled in Zelle.'],
     ['card payment out',     'A payment from your card ending in 4321 to ACME was posted.']
@@ -141,4 +143,64 @@ test('ordinary marketing mail does not become an inbox item', () => {
     const r = P.parseEmail({ subject: 'Your July statement is ready', text: 'View your statement online. Manage alerts.' });
     assert.strictEqual(r.ok, false);
     assert.ok(!r.amount, 'no amount, so nothing is kept for review');
+});
+
+// ── returns / NSF ────────────────────────────────────────────────────────────
+//
+// A credit that already landed can be pulled back days later. This is the most
+// consequential message in the feature: until it is handled, the family reads
+// as PAID when the money is gone, and nobody finds out until the season ends.
+
+test('a returned incoming deposit is recorded as a reversal', () => {
+    const cases = [
+        'A deposit of $400.00 from DAVID KLEIN was returned due to insufficient funds.',
+        'Zelle payment of $250.00 from SARA LEVI — NSF, returned unpaid.',
+        'Reversal of a credit of $120.00 received from ACME DENTAL.'
+    ];
+    for (const text of cases) {
+        const r = P.parseEmail({ subject: 'Alert', text });
+        assert.ok(r.ok, `${text} -> ${r.reason}`);
+        assert.strictEqual(r.deposit.isReversal, true, text);
+        assert.ok(r.deposit.amount > 0, 'the amount stays positive; the sign is applied on read');
+        assert.ok(r.deposit.payerName, 'the payer must survive so the return can find its family');
+    }
+});
+
+test('the return reason never rides along on the payer name', () => {
+    // "SARA LEVI — NSF, returned unpaid" is a different string from "SARA LEVI"
+    // and would not find the alias that matched the original deposit, so the
+    // return would fail to reach the family it needs to debit.
+    const r = P.parseEmail({ subject: 'Alert', text: 'Zelle payment of $250.00 from SARA LEVI — NSF, returned unpaid.' });
+    assert.strictEqual(r.deposit.payerName, 'SARA LEVI');
+    // A dash INSIDE a name is not a separator and must survive.
+    const hy = P.parseEmail({ subject: 'Alert', text: 'You received $100.00 from SMITH-JONES LLC' });
+    assert.strictEqual(hy.deposit.payerName, 'SMITH-JONES LLC');
+});
+
+test('our own outgoing payment bouncing back is not a family debit', () => {
+    // Money does come back to the camp here, but it is not a family's payment
+    // failing. Booking it against a family would debit someone at random.
+    const r = P.parseEmail({ subject: 'Alert', text: 'Your payment to CON ED of $300.00 was returned.' });
+    assert.strictEqual(r.ok, false);
+});
+
+test('a reversal never auto-posts, even with a valid memo code', () => {
+    const M = require('../campistry_deposit_match.js');
+    const r = P.parseEmail({ subject: 'Alert', text: 'A deposit of $400.00 from DAVID KLEIN was returned due to insufficient funds.' });
+    const deposit = Object.assign({}, r.deposit, { memoCode: M.memoCode('fam_klein', 'Klein Family') });
+    const decision = M.decide(deposit, { families: { fam_klein: { name: 'Klein Family' } }, aliases: [], balances: {} }, {});
+    assert.strictEqual(decision.decision, 'review');
+    assert.match(decision.guardrail, /return|reversal/i);
+});
+
+test('a return is never swallowed as a duplicate of the deposit it reverses', () => {
+    // Same day, same amount, same payer, no trace number — which is ordinary
+    // for a Zelle return. Without the reversal flag in the fingerprint these
+    // collide, ON CONFLICT DO NOTHING drops the return, and the family keeps a
+    // credit for money the bank has already taken back.
+    const base = { date: '2026-07-08', amount: 400, payerName: 'DAVID KLEIN', traceId: '' };
+    assert.notStrictEqual(
+        P.fingerprint(base),
+        P.fingerprint(Object.assign({}, base, { isReversal: true }))
+    );
 });
