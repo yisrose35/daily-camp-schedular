@@ -195,6 +195,9 @@ let _toastTimer = null;
         try { return _activeRoadNet.legMinutesFor([{ lat: campLat, lng: campLng }].concat(stops || [])); }
         catch (e) { console.warn('[Go] Road-network legs unavailable: ' + e.message); return null; }
     }
+    // Set per shift by the generator (and re-optimize): the last dismissal
+    // shift drives back to camp, so its ordering and polish price that leg.
+    let _shiftReturnsToCamp = false;
     function _routePostOpts(extra) {
         return Object.assign({
             avgSpeedMph: D.setup.avgSpeed || 25,
@@ -202,7 +205,8 @@ let _toastTimer = null;
             secPerRider: Math.max(0, parseFloat(D.setup.secPerRider) || 0),
             roadFactor: ROAD_FACTOR,
             busOverheadMin: _busOverheadMin(),
-            equalizeLoads: D.setup.equalizeBusLoads === true
+            equalizeLoads: D.setup.equalizeBusLoads === true,
+            returnToDepot: _shiftReturnsToCamp
         }, extra || {});
     }
 
@@ -3594,7 +3598,7 @@ function _capByIdOf(shiftVehicles) {
 // minutes — under seats, containment and the route cap — and re-sequence the
 // buses that changed. This is what catches a bus the straight-line proxy
 // thought was 70 minutes and the roads make 137.
-function _roadPolishRoutes(routes, shiftVehicles, campLat, campLng, isArrival, maxRouteMin) {
+function _roadPolishRoutes(routes, shiftVehicles, campLat, campLng, isArrival, maxRouteMin, needsReturn) {
     const P = window.CampistryGoRoutePost;
     const live = routes.filter(r => r.stops && r.stops.length);
     if (!_activeRoadNet || live.length < 2) return { moves: 0 };
@@ -3613,9 +3617,14 @@ function _roadPolishRoutes(routes, shiftVehicles, campLat, campLng, isArrival, m
     const caps = live.map(r => Math.max(0, (capById[r.busId] || r._cap || 0) - reserve));
     let res;
     try {
+        // The last dismissal shift drives back to camp: that leg is real bus
+        // time, so the polish prices it (the ride cap still applies to the
+        // last drop). Ruin-and-recreate lets stops move in chains when the
+        // seats are tight — a single relocate can't free a seat first.
         res = P.polishDistricts(buckets, caps, depot, _routePostOpts({
-            legMinutes: legs, isArrival: !!isArrival, polishRideBudgetMin: maxRouteMin || 90,
-            polishReachMi: 5, polishTimeBudgetMs: 3000, polishMergeSameStreetMi: 0, polishMergeAnyMi: 0 }));
+            legMinutes: legs, isArrival: !!isArrival, returnToDepot: !!needsReturn,
+            polishRideBudgetMin: maxRouteMin || 90, polishReachMi: 5, polishTimeBudgetMs: 3000,
+            polishLnsIters: 40, polishMergeSameStreetMi: 0, polishMergeAnyMi: 0 }));
     } catch (e) { console.warn('[Go] Road polish skipped: ' + e.message); return { moves: 0 }; }
     if (!res || !res.moves) return res || { moves: 0 };
     let changed = 0;
@@ -3806,6 +3815,9 @@ async function generateRoutes() {
         const pctPerShift = 100 / shifts.length;
         const pctBase = si * pctPerShift;
         const shiftLabel = shift.label || 'Shift ' + (si + 1);
+        // The last dismissal shift drives back to camp: ordering and polish
+        // price that leg (see _routePostOpts).
+        _shiftReturnsToCamp = si === shifts.length - 1 && !isArrival;
 
         // ── Bus set for this shift ──
         let shiftBusIds = shift.assignedBuses?.length
@@ -4011,7 +4023,8 @@ async function generateRoutes() {
 
         // With the street network, re-trade stops on real driving minutes.
         if (_activeRoadNet) {
-            const _rp = _roadPolishRoutes(routes, shiftVehicles, campLat, campLng, isArrival, D.setup.maxRouteDuration || 90);
+            const _rp = _roadPolishRoutes(routes, shiftVehicles, campLat, campLng, isArrival, D.setup.maxRouteDuration || 90,
+                si === shifts.length - 1 && !isArrival);
             if (_rp && _rp.moves) console.log('[Go] Road polish: ' + _rp.moves + ' stop move(s) on street times across ' + _rp.changedBuses +
                 ' bus(es), est. fleet ' + Math.round(_rp.fleetBefore) + ' → ' + Math.round(_rp.fleetAfter) + ' min');
         }
@@ -4327,6 +4340,7 @@ async function _tryNeighborhoodPipeline({
         secPerRider: Math.max(0, parseFloat(D.setup.secPerRider) || 0),
         busOverheadMin: _busOverheadMin(),
         isArrival: !!isArrival,
+        returnToDepot: _shiftReturnsToCamp,
         // The same radii _consolidateBusStops merges with, so districting
         // knows a home next to its street-mates costs no extra stop.
         mergeSameStreetMi: Math.max(0.25, ((D.setup.maxWalkDistance || 500) / 5280) * 2.5),
@@ -6533,6 +6547,7 @@ function findAnchorStop(campers, intersections, walkMi = 0.2) {
         const campLat = D.setup.campLat || _campCoordsCache?.lat;
         const campLng = D.setup.campLng || _campCoordsCache?.lng;
         if (!campLat || !campLng) { toast('No camp coordinates', 'error'); return; }
+        _shiftReturnsToCamp = si === (D.savedRoutes.length - 1) && !isArrival;
 
         toast('Re-optimizing ' + route.busName + '...');
         // Same ordering the generator uses (children-minutes objective, local
@@ -8924,5 +8939,7 @@ async function renderDispatcherDashboard(allShifts) {
         getAddresses:  () => D.addresses,
         getRoster:     () => _goStandaloneRoster,
         getD:          () => D,
+        getRoadNet:    () => _activeRoadNet,
+        routePostOpts: (extra) => _routePostOpts(extra),
     };
 })();

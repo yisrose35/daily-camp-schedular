@@ -495,6 +495,83 @@ test('polish in arrival mode prices the ride to camp and the return leg, and kee
     assert.ok(res.fleetBefore > dis.fleetBefore, 'arrival counts the drive back to camp');
 });
 
+test('polish with a return to camp prices the ride home: the last stop goes to the bus whose way home it is on', () => {
+    // Bus A runs due north to 5mi; bus B runs north-east to (4N, 2E). The
+    // stop X at (5.5N, 1.6E) is a touch nearer B's last stop, so without a
+    // return it is cheaper on B. When the buses drive back to camp, ending
+    // A at X lengthens A's ride home by less than it lengthens B's.
+    const A = [at(2, 0, 3), at(3, 0, 3), at(4, 0, 3), at(5, 0, 3)];
+    const Bb = [at(2, 2, 3), at(3, 2, 3), at(4, 2, 3), at(5.5, 1.6, 3)];
+    const XonB = [A, Bb], XonA = [A.concat([Bb[3]]), Bb.slice(0, 3)];
+    const cost = (bk, ret) => P.polishDistricts(bk, [48, 48], CAMP, { polishRideBudgetMin: 0, polishMaxPasses: 0, returnToDepot: ret }).before;
+    assert.ok(cost(XonB, false) < cost(XonA, false), 'no return: X is cheaper on B');
+    assert.ok(cost(XonA, true) < cost(XonB, true) - 1, 'with the ride home X is cheaper on A');
+    assert.ok(cost(XonB, true) > cost(XonB, false) + 20, 'two rides home from ~5mi out are counted');
+    // The search sees it too, and keeps every invariant while it reshapes the pair.
+    const noRet = P.polishDistricts(XonB, [15, 15], CAMP, { polishRideBudgetMin: 0 });
+    assert.strictEqual(noRet.moves, 0, 'no return: nothing to gain');
+    const ret = P.polishDistricts(XonB, [15, 15], CAMP, { polishRideBudgetMin: 0, returnToDepot: true });
+    assert.ok(ret.moves >= 1, 'with the return leg the split changes');
+    assert.ok(ret.after < ret.before - 1, 'fleet minutes including the ride home fell');
+    assert.strictEqual(ret.buckets.flat().length, 8);
+    for (const b of ret.buckets) {
+        assert.ok(b.reduce((a, x) => a + x.campers.length, 0) <= 15, 'seats');
+        assert.ok(P.arcDeg(b, CAMP) <= 110, 'contained');
+    }
+});
+
+test('stop ordering with a return to camp ends the run nearer camp when that saves more than it costs the children', () => {
+    // Three drops: a pair 3mi north either side of the road, one 5mi out.
+    // Open path: nearest-first ends 5mi out. With the ride home counted the
+    // shorter loop drops the far stop second and ends 3mi out.
+    const stops = [at(3, -1, 1), at(3, 1, 1), at(5, 0, 1)];
+    const open = P.localTspOrder(stops, CAMP, false, {});
+    assert.strictEqual(open[open.length - 1].address, '5N 0E', 'no return: the run ends at the farthest drop');
+    const ret = P.localTspOrder(stops, CAMP, false, { returnToDepot: true });
+    assert.notStrictEqual(ret[ret.length - 1].address, '5N 0E', 'with the ride home the run ends nearer camp');
+    assert.ok(P.routeObjective(ret, CAMP, false, { returnToDepot: true }) < P.routeObjective(open, CAMP, false, { returnToDepot: true }) - 1,
+        'the return-aware objective prefers it');
+    assert.ok(P.routeObjective(open, CAMP, false, {}) < P.routeObjective(ret, CAMP, false, {}), 'and the open objective prefers the other');
+    // arrival already rides back to camp; the flag changes nothing there
+    const a1 = P.localTspOrder(stops, CAMP, true, {}), a2 = P.localTspOrder(stops, CAMP, true, { returnToDepot: true });
+    assert.deepStrictEqual(a1.map(s => s.address), a2.map(s => s.address));
+});
+
+test('with a return to camp the ride cap is judged on the last drop, not on the empty ride home', () => {
+    const A = [at(2, 0, 3), at(4, 0, 3), at(6, 0, 3), at(8, 0, 3)];
+    const solo = o => P.polishDistricts([A, []], [48, 48], CAMP, Object.assign({ polishMaxPasses: 0, busOverheadMin: 0 }, o));
+    const lastDrop = solo({ polishRideBudgetMin: 0 }).fleetBefore - P.stopDwellMin(A[3], {});
+    const withRet = solo({ polishRideBudgetMin: 0, returnToDepot: true }).fleetBefore;
+    assert.ok(withRet > lastDrop + 15, 'the ride home from 8mi out is counted: ' + lastDrop.toFixed(1) + ' -> ' + withRet.toFixed(1));
+    const mid = (lastDrop + withRet) / 2;
+    const unpenalised = solo({ polishRideBudgetMin: mid, returnToDepot: true }).before;
+    assert.ok(Math.abs(unpenalised - withRet) < 1e-6, 'a cap between the last drop and the return is not breached');
+    const tight = solo({ polishRideBudgetMin: lastDrop - 5, returnToDepot: true }).before;
+    assert.ok(Math.abs(tight - (withRet + 10)) < 1e-6, 'breaching the cap by 5 min at the last drop costs 10: ' + (tight - withRet).toFixed(2));
+});
+
+test('polish with a return keeps every invariant on a scattered instance and never worsens the objective', () => {
+    let seed = 7; const rnd = () => { seed = (seed * 1103515245 + 12345) & 0x7fffffff; return seed / 0x7fffffff; };
+    const buckets = [[], [], [], []];
+    for (let i = 0; i < 80; i++) {
+        const wedge = i % 4, ang = (wedge * 90 + 10 + rnd() * 70) * Math.PI / 180, r = 1.6 + rnd() * 3;
+        const atom = at(r * Math.cos(ang), r * Math.sin(ang), 1 + (i % 3));
+        atom.count = atom.campers.length;
+        buckets[(i % 9 === 0) ? (wedge + 1) % 4 : wedge].push(atom);
+    }
+    const inWedge = buckets.map(b => P.arcDeg(b, CAMP));
+    for (const lns of [0, 30]) {
+        const res = P.polishDistricts(buckets, [48, 48, 48, 48], CAMP, { polishTimeBudgetMs: 3000, returnToDepot: true, polishLnsIters: lns });
+        assert.ok(res.after <= res.before + 1e-9);
+        assert.ok(res.moves >= 1, 'the misplaced atoms move');
+        assert.strictEqual(res.buckets.flat().length, 80, 'every atom exactly once');
+        res.buckets.forEach((b, i) => {
+            assert.ok(b.reduce((a, x) => a + x.count, 0) <= 48);
+            assert.ok(P.arcDeg(b, CAMP) <= Math.max(110, inWedge[i]) + 1e-9, 'never widened past the limit');
+        });
+    }
+});
+
 test('a fractional Time Per Stop is honoured by the dwell model and the polish', () => {
     assert.strictEqual(P.stopDwellMin(at(1, 0, 4), { avgStopMin: 0.5, secPerRider: 0 }), 0.5);
     assert.ok(Math.abs(P.stopDwellMin(at(1, 0, 4), { avgStopMin: 0.5, secPerRider: 15 }) - 1.5) < 1e-9, '0.5 + 4 x 15s');
