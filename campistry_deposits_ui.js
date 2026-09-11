@@ -58,7 +58,7 @@
     // in the Bank layouts footer. Twice now a fix has been live on the server
     // while the browser ran an older copy, and there was no way to tell from
     // the screen which one was which -- so the screen says.
-    D.BUILD = '20260911-03';
+    D.BUILD = '20260911-04';
 
     var state = {
         loaded: false,
@@ -881,44 +881,61 @@
         renderTeachPdf();
     };
 
+    // Step numbers are explicit and the panel is always on screen, because the
+    // camp doing this has never seen it before and will do it exactly once. At
+    // every moment it should be obvious which question is being asked, what has
+    // already been captured, and that the answers are being kept.
+    var MARK_COLORS = {
+        payerName: 'rgba(37,99,235,.28)',
+        amount:    'rgba(16,185,129,.30)',
+        memo:      'rgba(217,119,6,.28)'
+    };
+
+    var TEACH_STEP_NAMES = { payerName: 'Who sent it', amount: 'How much', memo: 'The memo' };
+
     function renderTeachPdf() {
         var t = state.teachPdf;
         var h = '<div class="me-modal-form">';
 
         if (!t.doc) {
-            h += '<p style="font-size:.85rem;color:var(--s600);margin:0 0 14px">' +
+            h += '<div style="max-width:560px">';
+            h += '<p style="font-size:.92rem;color:var(--s600);margin:0 0 16px;line-height:1.55">' +
                  'Open one of your bank\'s deposit alert emails, print it, and choose ' +
                  '<strong>Save as PDF</strong>. Upload that file here and Campistry will ask you to point at ' +
                  'three things on it.</p>';
             h += '<div class="me-field"><label>The bank\'s email address</label>' +
                  '<input type="text" id="tpFrom" class="me-input" placeholder="alerts@capitalone.com" value="' +
                  host.esc(t.from) + '" oninput="CampistryDeposits.teachPdfSet(\'from\', this.value)">' +
-                 '<div style="font-size:.72rem;color:var(--s500);margin-top:4px">Who the alert comes FROM. This is how the layout is recognised later.</div></div>';
+                 '<div style="font-size:.76rem;color:var(--s500);margin-top:4px">Who the alert comes FROM. This is how the layout is recognised later.</div></div>';
             h += '<div class="me-field"><label>Bank name <span style="color:var(--s400);font-weight:400">(optional)</span></label>' +
                  '<input type="text" id="tpLabel" class="me-input" placeholder="Capital One" value="' +
                  host.esc(t.label) + '" oninput="CampistryDeposits.teachPdfSet(\'label\', this.value)"></div>';
             h += '<div class="me-field"><label>The printed email</label>' +
                  '<input type="file" id="tpFile" accept="application/pdf" class="me-input" ' +
                  'onchange="CampistryDeposits.teachPdfLoad(this.files && this.files[0])"></div>';
-            h += '<div id="tpStatus" style="font-size:.8rem;color:var(--s500)"></div>';
-            h += '</div>';
-            host.showModal('Teach Campistry your bank\'s emails', h, null);
+            h += '<div id="tpStatus" style="font-size:.85rem;color:var(--s500)"></div>';
+            h += '</div></div>';
+            host.showModal('Teach Campistry your bank\'s emails', h, null, { maxWidth: 700 });
             return;
         }
 
-        // ── the walkthrough ──
-        var field = P_FIELD(t.step);
-        var pdfP = Pdf();
-        h += '<div id="tpPrompt" style="background:#EFF6FF;border:1px solid #BFDBFE;color:#1E40AF;' +
-             'padding:10px 13px;border-radius:var(--r);margin-bottom:10px">' + teachPdfPrompt() + '</div>';
-        h += '<div id="tpPage" style="border:1px solid var(--s100);border-radius:var(--r);overflow:auto;' +
-             'max-height:52vh;background:#fff;position:relative"></div>';
-        h += '<div style="font-size:.74rem;color:var(--s500);margin-top:8px">' +
-             'Drag across the words on the page above, then press the button.</div>';
+        h += '<div id="tpPrompt">' + teachPdfPrompt() + '</div>';
+        // The page gets the room; the panel rides alongside it and collapses
+        // underneath on a narrow screen.
+        h += '<div style="display:grid;grid-template-columns:minmax(0,1fr) 330px;gap:16px;align-items:start" id="tpGrid">' +
+             '<div id="tpPage" style="border:1px solid var(--s100);border-radius:var(--r);overflow:auto;' +
+             'height:62vh;background:#fff;position:relative"></div>' +
+             '<div id="tpPanel">' + teachPdfPanel() + '</div>' +
+             '</div>';
         h += '</div>';
 
-        host.showModal('Teach Campistry your bank\'s emails', h, null);
-        setTimeout(function () { paintPdfPage(); }, 0);
+        host.showModal('Teach Campistry your bank\'s emails', h, null,
+                       { maxWidth: 1240, maxHeight: '94vh', minHeight: '90vh' });
+        setTimeout(function () {
+            var g = document.getElementById('tpGrid');
+            if (g && g.clientWidth < 820) g.style.gridTemplateColumns = 'minmax(0,1fr)';
+            paintPdfPage();
+        }, 0);
     }
 
     function P_FIELD(step) {
@@ -926,54 +943,177 @@
         return (P && step >= 0 && step < P.FIELD_ORDER.length) ? P.FIELD_ORDER[step] : null;
     }
 
+    /** The question being asked right now, across the top. */
     function teachPdfPrompt() {
         var t = state.teachPdf, P = Pdf();
         var field = P_FIELD(t.step);
+        var total = P.FIELD_ORDER.length;
 
         if (!field) {
-            // All three asked. Show what was learned before anything is saved.
-            var T = Tpl();
-            var res = T.learn(t.text, t.marks, { bank: t.label, source: 'pdf' });
-            var h = '<strong>That is everything.</strong><div style="font-size:.82rem;margin-top:6px">';
-            if (res.ok) {
-                var back = T.read(res.template, t.text);
-                Object.keys(res.template.fields).forEach(function (f) {
-                    h += '<div>' + host.esc(P.PROMPTS[f].title.replace('Highlight ', '')) + ': <strong>' +
-                         host.esc((back[f] && back[f].value) || '—') + '</strong></div>';
-                });
-                h += '</div><button class="me-btn me-btn--pri me-btn--sm" style="margin-top:10px" ' +
-                     'onclick="CampistryDeposits.teachPdfSave()">Save this layout</button>';
-            } else {
-                h += host.esc(res.errors[0]) + '</div>' +
-                     '<button class="me-btn me-btn--sec me-btn--sm" style="margin-top:10px" ' +
-                     'onclick="CampistryDeposits.teachPdfStep(0)">Start over</button>';
-            }
-            return h;
+            return '<div style="background:#ECFDF5;border:1px solid #A7F3D0;color:#065F46;' +
+                   'padding:14px 18px;border-radius:var(--r);margin-bottom:14px">' +
+                   '<div style="font-size:1.05rem;font-weight:700">All three captured</div>' +
+                   '<div style="font-size:.88rem;margin-top:4px">Check the panel on the right, then save.</div>' +
+                   '</div>';
         }
 
         var got = t.marks[field];
         var prompt = P.PROMPTS[field];
-        return '<strong>' + host.esc(prompt.title) + '</strong>' +
-            '<div style="font-size:.8rem;margin-top:4px">' + host.esc(prompt.help) + '</div>' +
-            (got ? '<div style="font-size:.82rem;margin-top:6px">You highlighted: <strong>' +
-                   host.esc(t.text.slice(got.start, got.end).trim()) + '</strong></div>' : '') +
-            '<div style="margin-top:9px;display:flex;gap:8px;flex-wrap:wrap">' +
-            '<button class="me-btn me-btn--pri me-btn--sm" onclick="CampistryDeposits.teachPdfTake()">' +
-            (got ? 'Re-highlight' : 'Use what I highlighted') + '</button>' +
-            (got ? '<button class="me-btn me-btn--sec me-btn--sm" onclick="CampistryDeposits.teachPdfStep(' +
-                   (t.step + 1) + ')">Done</button>' : '') +
-            (field === 'memo' ? '<button class="me-btn me-btn--ghost me-btn--sm" ' +
+
+        // A dot per step, so "how far through am I" needs no reading.
+        var dots = '';
+        for (var i = 0; i < total; i++) {
+            var done = !!t.marks[P.FIELD_ORDER[i]];
+            var here = i === t.step;
+            dots += '<span style="display:inline-block;width:' + (here ? '26px' : '10px') + ';height:10px;' +
+                    'border-radius:999px;margin-right:5px;background:' +
+                    (here ? '#2563EB' : done ? '#10B981' : '#CBD5E1') + '"></span>';
+        }
+
+        return '<div style="background:#EFF6FF;border:1px solid #BFDBFE;color:#1E3A8A;' +
+            'padding:14px 18px;border-radius:var(--r);margin-bottom:14px">' +
+            '<div style="display:flex;align-items:center;gap:12px;flex-wrap:wrap">' +
+            '<div>' + dots + '</div>' +
+            '<div style="font-size:.78rem;font-weight:700;letter-spacing:.04em;text-transform:uppercase;opacity:.75">' +
+            'Step ' + (t.step + 1) + ' of ' + total + '</div></div>' +
+            '<div style="font-size:1.15rem;font-weight:700;margin-top:8px">' + host.esc(prompt.title) + '</div>' +
+            '<div style="font-size:.9rem;margin-top:4px;line-height:1.5">' + host.esc(prompt.help) + '</div>' +
+            (got
+                ? '<div style="background:#fff;border:1px solid #BFDBFE;border-radius:var(--r);padding:8px 12px;margin-top:10px">' +
+                  '<span style="font-size:.76rem;color:var(--s500)">You highlighted</span><br>' +
+                  '<strong style="font-size:1rem">' + host.esc(t.text.slice(got.start, got.end).trim()) + '</strong></div>'
+                : '') +
+            '<div style="margin-top:12px;display:flex;gap:8px;flex-wrap:wrap">' +
+            '<button class="me-btn ' + (got ? 'me-btn--sec' : 'me-btn--pri') + ' me-btn--sm" ' +
+            'onclick="CampistryDeposits.teachPdfTake()">' +
+            (got ? 'Highlight it again' : 'Use what I highlighted') + '</button>' +
+            (got ? '<button class="me-btn me-btn--pri me-btn--sm" onclick="CampistryDeposits.teachPdfStep(' +
+                   (t.step + 1) + ')">' + (t.step + 1 < total ? 'Next step →' : 'Finish →') + '</button>' : '') +
+            (field === 'memo' && !got ? '<button class="me-btn me-btn--ghost me-btn--sm" ' +
                    'onclick="CampistryDeposits.teachPdfStep(' + (t.step + 1) + ')">This bank has no memo</button>' : '') +
-            '</div>';
+            (t.step > 0 ? '<button class="me-btn me-btn--ghost me-btn--sm" onclick="CampistryDeposits.teachPdfStep(' +
+                   (t.step - 1) + ')">← Back</button>' : '') +
+            '</div></div>';
     }
 
     /**
-     * Render the page image with an invisible, selectable text layer on top.
+     * The panel: what has been captured, and what the rules read back.
      *
-     * The canvas is what the camp reads; the spans are what a drag actually
-     * selects. They are positioned from the same viewport transform, so the
-     * words a camp drags across are the words whose offsets get recorded.
+     * The read-back is the point. A camp has no reason to believe a highlight
+     * was kept, still less that anything was learned from it -- so the rules
+     * are built and re-run on the spot, and the panel shows the value they
+     * return rather than the value that was highlighted. When those match, the
+     * learning is visibly real.
      */
+    function teachPdfPanel() {
+        var t = state.teachPdf, P = Pdf(), T = Tpl();
+        var marked = Object.keys(t.marks);
+
+        var h = '<div style="border:1px solid var(--s100);border-radius:var(--r);padding:14px 16px;background:var(--s50)">';
+        h += '<div style="font-size:.78rem;font-weight:700;letter-spacing:.04em;text-transform:uppercase;' +
+             'color:var(--s500);margin-bottom:10px">What Campistry has learned</div>';
+
+        var read = null, res = null;
+        if (marked.length) {
+            res = T.learn(t.text, t.marks, { bank: t.label, source: 'pdf' });
+            if (res.template && Object.keys(res.template.fields).length) {
+                read = T.read(res.template, t.text);
+            }
+        }
+
+        P.FIELD_ORDER.forEach(function (f, i) {
+            var got = t.marks[f];
+            var here = P_FIELD(t.step) === f;
+            var r = read && read[f];
+            var highlighted = got ? t.text.slice(got.start, got.end).trim() : '';
+            var matches = r && r.value === highlighted;
+
+            h += '<div style="padding:9px 0;border-top:' + (i ? '1px solid var(--s100)' : 'none') + '">' +
+                 '<div style="display:flex;align-items:center;gap:8px">' +
+                 '<span style="width:20px;height:20px;border-radius:999px;flex-shrink:0;display:inline-flex;' +
+                 'align-items:center;justify-content:center;font-size:.7rem;font-weight:700;color:#fff;background:' +
+                 (got ? '#10B981' : here ? '#2563EB' : '#CBD5E1') + '">' + (got ? '✓' : (i + 1)) + '</span>' +
+                 // The same colour this field is highlighted in on the page, so
+                 // the panel and the document read as one thing.
+                 '<span style="width:10px;height:10px;border-radius:2px;flex-shrink:0;background:' +
+                 (MARK_COLORS[f] || '#CBD5E1').replace(/[\d.]+\)$/, '1)') + '"></span>' +
+                 '<strong style="font-size:.86rem">' + host.esc(TEACH_STEP_NAMES[f]) + '</strong>' +
+                 (here && !got ? '<span style="font-size:.72rem;color:#2563EB;font-weight:600">← now</span>' : '') +
+                 '</div>';
+
+            if (got) {
+                h += '<div style="font-size:.9rem;margin:5px 0 0 28px;word-break:break-word">' +
+                     host.esc(highlighted) + '</div>';
+                h += '<div style="font-size:.74rem;margin:3px 0 0 28px;color:' +
+                     (matches ? 'var(--s500)' : '#92400E') + '">' +
+                     (matches
+                        ? 'Rule reads this back correctly' + (r && r.agree ? ' · both rules agree' : '')
+                        : 'Rule reads back: ' + host.esc((r && r.value) || 'nothing') + ' — try highlighting a bit differently') +
+                     '</div>';
+            } else {
+                h += '<div style="font-size:.8rem;margin:5px 0 0 28px;color:var(--s400)">Not captured yet</div>';
+            }
+            h += '</div>';
+        });
+
+        h += '</div>';
+
+        if (!P_FIELD(t.step)) {
+            var ok = res && res.ok;
+            h += '<div style="margin-top:14px">';
+            if (ok) {
+                h += '<button class="me-btn me-btn--pri" style="width:100%" ' +
+                     'onclick="CampistryDeposits.teachPdfSave()">Save this layout</button>' +
+                     '<div style="font-size:.74rem;color:var(--s500);margin-top:8px;line-height:1.5">' +
+                     'Every future alert from this bank will be read this way. You can re-teach it any time.</div>';
+            } else {
+                h += '<div style="background:#FFFBEB;border:1px solid #FDE68A;color:#92400E;padding:9px 12px;' +
+                     'border-radius:var(--r);font-size:.8rem">' +
+                     host.esc((res && res.errors && res.errors[0]) || 'Nothing has been highlighted yet.') + '</div>' +
+                     '<button class="me-btn me-btn--sec me-btn--sm" style="width:100%;margin-top:8px" ' +
+                     'onclick="CampistryDeposits.teachPdfStep(0)">Start over</button>';
+            }
+            h += '</div>';
+        }
+        return h;
+    }
+
+    /** Redraw the saved highlights over the rendered page. */
+    function paintMarks() {
+        var t = state.teachPdf;
+        var layer = document.getElementById('tpMarks');
+        if (!t || !layer || !t.viewport) return;
+        layer.innerHTML = '';
+        var pageNo = t.pageNo || 1;
+        var vp = t.viewport;
+
+        Object.keys(t.marks).forEach(function (f) {
+            var m = t.marks[f];
+            t.items.forEach(function (it) {
+                if (it.page !== pageNo) return;
+                if (it.end <= m.start || it.start >= m.end) return;
+                var box = document.createElement('div');
+                box.style.cssText = 'position:absolute;border-radius:3px;background:' +
+                    (MARK_COLORS[f] || 'rgba(0,0,0,.2)') + ';' +
+                    'left:' + (it.x * vp.scale) + 'px;' +
+                    'top:' + (vp.height - (it.y * vp.scale) - (it.h * vp.scale * 1.05)) + 'px;' +
+                    'width:' + (it.w * vp.scale) + 'px;' +
+                    'height:' + (it.h * vp.scale * 1.25) + 'px;';
+                layer.appendChild(box);
+            });
+        });
+    }
+
+    /** Repaint the question and the panel without touching the rendered page. */
+    function refreshTeachPdf() {
+        var a = document.getElementById('tpPrompt');
+        var b = document.getElementById('tpPanel');
+        if (a) a.innerHTML = teachPdfPrompt();
+        if (b) b.innerHTML = teachPdfPanel();
+        paintMarks();
+    }
+
+
     async function paintPdfPage() {
         var t = state.teachPdf;
         var host_el = document.getElementById('tpPage');
@@ -1001,6 +1141,17 @@
         host_el.appendChild(frame);
 
         await page.render({ canvasContext: canvas.getContext('2d'), viewport: viewport }).promise;
+        t.frame = frame;
+
+        // Persisted highlights, drawn back onto the page. A camp has no reason
+        // to trust that a selection was kept unless it can still see it -- and
+        // seeing all three at once is what makes the last step obviously right.
+        var marksLayer = document.createElement('div');
+        marksLayer.id = 'tpMarks';
+        marksLayer.style.cssText = 'position:absolute;inset:0;pointer-events:none';
+        frame.insertBefore(marksLayer, layer);
+        t.viewport = viewport;
+        paintMarks();
 
         t.items.filter(function (it) { return it.page === pageNo; }).forEach(function (it) {
             var sp = document.createElement('span');
@@ -1074,8 +1225,7 @@
             return;
         }
         t.marks[field] = { start: off.start, end: off.end };
-        var el = document.getElementById('tpPrompt');
-        if (el) el.innerHTML = teachPdfPrompt();
+        refreshTeachPdf();
     };
 
     D.teachPdfStep = function (n) {
@@ -1083,8 +1233,7 @@
         if (!t) return;
         if (n === 0) t.marks = {};
         t.step = n;
-        var el = document.getElementById('tpPrompt');
-        if (el) el.innerHTML = teachPdfPrompt();
+        refreshTeachPdf();
     };
 
     D.teachPdfSave = async function () {
