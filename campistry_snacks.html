@@ -123,6 +123,7 @@
         <span class="sidebar-dot"></span> POS Terminal
         <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="margin-left:auto;opacity:.4"><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"/><polyline points="15 3 21 3 21 9"/><line x1="10" y1="14" x2="21" y2="3"/></svg>
     </a>
+    <button class="sidebar-item" data-page="offline-pos"><span class="sidebar-dot"></span> Offline POS</button>
 </aside>
 
 <!-- MAIN CONTENT -->
@@ -361,40 +362,6 @@
         <div class="card-body" id="cashDrawerBox"></div>
     </div>
 
-    <div class="card">
-        <div class="card-header"><h2>Offline POS</h2></div>
-        <div class="card-body">
-            <p style="font-size:.82rem;color:var(--text-muted);margin:0 0 .9rem;line-height:1.6">
-                Download the offline register, then export your data so it can
-                be imported into the downloaded file. The offline POS stores
-                everything locally and works without internet — staff re-import
-                periodically to keep balances and stock current.
-            </p>
-
-            <div style="margin-bottom:1rem">
-                <p style="font-size:.72rem;font-weight:600;color:var(--text-dim);text-transform:uppercase;letter-spacing:.03em;margin-bottom:.4rem">Step 1 — Download</p>
-                <a href="campistry_snacks_pos_offline.html" download="Campistry_Offline_POS.html"
-                   class="btn btn-primary" style="display:inline-flex;align-items:center;gap:.35rem;text-decoration:none">
-                    &#8615; Download Offline POS
-                </a>
-                <p style="font-size:.72rem;color:var(--text-muted);margin-top:.35rem;line-height:1.5">
-                    Save the HTML file anywhere on the register device. Open it
-                    in any browser — no install needed. License: 180 days.
-                </p>
-            </div>
-
-            <div style="margin-bottom:.2rem">
-                <p style="font-size:.72rem;font-weight:600;color:var(--text-dim);text-transform:uppercase;letter-spacing:.03em;margin-bottom:.4rem">Step 2 — Sync Data</p>
-                <div style="display:flex;gap:.5rem;flex-wrap:wrap">
-                    <button class="btn btn-primary" onclick="exportForOfflinePOS()">Export Data for Offline POS</button>
-                    <button class="btn" onclick="importOfflinePOSTransactions()">Import Offline Transactions</button>
-                </div>
-            </div>
-            <div id="offlinePosStatus" style="font-size:.82rem;color:var(--text-muted);margin-top:.75rem"></div>
-            <input type="file" id="offlineTxImportInput" accept=".json,application/json" hidden>
-        </div>
-    </div>
-
     <div style="display:flex;justify-content:flex-end;gap:.5rem;margin-bottom:2rem">
         <button class="btn btn-primary" onclick="saveSettingsForm()">Save Settings</button>
     </div>
@@ -407,6 +374,53 @@
 <!--  inventory, camper accounts, POS and a ledger.        -->
 <!-- ═══════════════════════════════════════════════════ -->
 <div id="page-shop" class="snacks-page"></div>
+
+<!-- ═══════════════════════════════════════════════════ -->
+<!--  OFFLINE POS — download, export data, import txns  -->
+<!-- ═══════════════════════════════════════════════════ -->
+<div id="page-offline-pos" class="snacks-page">
+    <div class="snacks-page-hero">
+        <div class="snacks-page-hero-icon">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="22" height="22"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
+        </div>
+        <div>
+            <h1>Offline POS</h1>
+            <p>Download a register that works without internet</p>
+        </div>
+    </div>
+
+    <div class="card">
+        <div class="card-header"><h2>Download</h2></div>
+        <div class="card-body">
+            <p style="font-size:.85rem;color:var(--text-dim);margin:0 0 1rem;line-height:1.6">
+                Download a self-contained register that runs entirely offline.
+                Save the file to any device and open it in a browser — no install needed.
+                The license is valid for 180 days.
+            </p>
+            <a href="campistry_snacks_pos_offline.html" download="Campistry_Offline_POS.html"
+               class="btn btn-primary" style="display:inline-flex;align-items:center;gap:.4rem;text-decoration:none">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="16" height="16"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
+                Download Offline POS
+            </a>
+        </div>
+    </div>
+
+    <div class="card">
+        <div class="card-header"><h2>Sync Data</h2></div>
+        <div class="card-body">
+            <p style="font-size:.85rem;color:var(--text-dim);margin:0 0 1rem;line-height:1.6">
+                Export camper accounts and inventory for the offline register,
+                or import transactions recorded offline back into the system.
+            </p>
+            <div style="display:flex;gap:.5rem;flex-wrap:wrap">
+                <button class="btn btn-primary" onclick="exportForOfflinePOS()">Export Data for Offline POS</button>
+                <button class="btn" onclick="importOfflinePOSTransactions()">Import Offline Transactions</button>
+            </div>
+            <div id="offlinePosStatus" style="font-size:.82rem;color:var(--text-muted);margin-top:.75rem"></div>
+            <input type="file" id="offlineTxImportInput" accept=".json,application/json" hidden>
+        </div>
+    </div>
+</div>
 
 </div><!-- /app-content -->
 
