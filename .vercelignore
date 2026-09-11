@@ -14,11 +14,15 @@ mobile
 # Server-side / build-time only — never served as static assets by Vercel.
 # NOTE: scripts/ is deliberately NOT excluded — vercel.json's ignoreCommand
 # runs scripts/vercel-ignore-build.sh, so it must stay available at build time.
+# NOTE: ota/ is deliberately NOT excluded — api/ota.js require()s
+# ota/link.json and ota/lite.json AT RUNTIME to tell each app the newest
+# bundle. Excluding it made /api/ota crash (the manifests weren't in the
+# function bundle), so no phone could ever discover an OTA update. The dir is
+# only two tiny JSON manifests + the RELEASE stamp, so it costs nothing to keep.
 supabase
 migrations
 tests
 models
-ota
 
 # Docs and planning notes.
 docs
