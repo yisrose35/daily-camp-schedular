@@ -76,6 +76,7 @@ When the user says **"day X"** or **"let's do day X"**:
 | Luggage — lives **inside Go** | `campistry_luggage_core.js`, `campistry_go_luggage.js`, `#tab-luggage` in `campistry_go.html` |
 | Shop/Luggage shared UI kit | `campistry_ops.css` (`.ops-*` namespace only — safe inside a host page) |
 | Bus routes outside Go | `campistry_bus_routes.js` — reads Go's saved routes for Me's print sheets |
+| Campistry Go — bus routing | `campistry_go.js` (`generateRoutes`, both pipelines), `campistry_go_neighborhoods.js` (road-graph districting `packIntoBuses`), `campistry_go_route_post.js` (pure: stop ordering, capacity, containment gate, DP sweep — tests in `tests/bus_*.test.js`) |
 | Message/email branding + watermark | `campistry_link_branding.js` |
 | Birthday reminders | `campistry_birthdays.js` (dashboard card + notifications) |
 

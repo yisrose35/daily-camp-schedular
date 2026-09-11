@@ -207,6 +207,7 @@
                         <div class="form-group"><label class="form-label">Dissolve Threshold (%)</label><input type="number" class="form-input" id="clusterDissolvePct" value="55" min="0" max="100" step="1"><span class="form-hint">Clusters under this size get merged into neighbor</span></div>
                         <div class="form-group"><label class="form-label">Cascade Floor (%)</label><input type="number" class="form-input" id="clusterFloorPct" value="30" min="0" max="100" step="1"><span class="form-hint">Time-balancer can shrink clusters down to this</span></div>
                         <div class="form-group"><label class="form-label">Spread Cap (% of median)</label><input type="number" class="form-input" id="clusterSpreadRatio" value="150" min="100" max="400" step="10"><span class="form-hint">No cluster spreads beyond this × camp's median spread. 150 = +50%</span></div>
+                        <div class="form-group"><label class="form-label">Balance Bus Loads</label><select class="form-input" id="equalizeBusLoads"><option value="off">Off — efficient, contained routes (recommended)</option><option value="on">On — even out head-counts across buses</option></select><span class="form-hint">Off keeps every bus in one area. On trades that for equal numbers per bus.</span></div>
                     </div>
                 </div>
                 <div class="setup-card">
@@ -567,10 +568,11 @@
 <script src="campistry_go_google.js?v=20260907-01"></script>
 <script src="campistry_go_geoapify.js?v=20260907-01"></script>
 <script src="campistry_go_ors_optimizer.js?v=20260903-04"></script>
-<script src="campistry_go_neighborhoods.js?v=20260907-01"></script>
+<script src="campistry_go_neighborhoods.js?v=20260911-01"></script>
+<script src="campistry_go_route_post.js?v=20260911-01"></script>
 <script src="campistry_go_persistence.js?v=20260903-04"></script>
 <script src="campistry_go_stop_master.js?v=20260903-04"></script>
-<script src="campistry_go.js?v=20260907-01"></script>
+<script src="campistry_go.js?v=20260911-01"></script>
 <script src="campistry_luggage_core.js?v=20260903-04"></script>
 <script src="campistry_go_luggage.js?v=20260903-04"></script>
     <script src="campistry_go_map_editor.js?v=20260903-04"></script>

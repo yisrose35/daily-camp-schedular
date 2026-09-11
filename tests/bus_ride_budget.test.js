@@ -20,6 +20,7 @@ const path = require('path');
 
 // The module publishes itself on `window`.
 global.window = global.window || {};
+eval(fs.readFileSync(path.join(__dirname, '..', 'campistry_go_route_post.js'), 'utf8'));
 eval(fs.readFileSync(path.join(__dirname, '..', 'campistry_go_neighborhoods.js'), 'utf8'));
 const NH = global.window.CampistryGoNeighborhoods;
 
