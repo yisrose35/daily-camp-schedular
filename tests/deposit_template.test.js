@@ -127,3 +127,91 @@ test('an anchor carrying personal data is never offered to another camp', () => 
     assert.strictEqual(T.isShareable({ fields: { memo: { prefix: ['from YISRAEL ROSENFELD: '], suffix: '' } } }), false);
     assert.strictEqual(T.isShareable({ fields: { memo: { prefix: ['to office@camp.org '], suffix: '' } } }), false);
 });
+
+// ── two rules, different failure modes ───────────────────────────────────────
+//
+// A template stores two independent ways to find each value:
+//
+//   the ANCHOR    "find this phrase, read what follows"
+//   the LINE RULE "the value is on the line shaped like this, in this slot"
+//
+// Character offsets would be useless — a longer name shifts everything after
+// it — but the SHAPE of a line is fixed, because the bank generates it from a
+// template. The two break under different conditions, which is the entire
+// reason for keeping both.
+
+function teachFull(text) {
+    return T.learn(text, {
+        payerName: mark(text, 'YISRAEL ROSENFELD'),
+        amount: mark(text, '$5.00'),
+        memo: mark(text, 'tst 1234')
+    }).template;
+}
+
+test('both methods are learned, and they agree on an unchanged layout', () => {
+    const read = T.read(teachFull(SAMPLE), LATER);
+    for (const field of ['payerName', 'amount', 'memo']) {
+        assert.ok(read[field], field + ' was not read at all');
+        assert.strictEqual(read[field].agree, true, field + ': the two methods disagreed');
+    }
+});
+
+test('the line rule survives a bank inserting a banner above', () => {
+    // Line NUMBERS shift; the line's SHAPE does not. Banks add marketing at the
+    // top constantly, so a rule that counted lines from the top would break
+    // every season.
+    const read = T.read(teachFull(SAMPLE), 'LIMITED TIME: 3% APY on savings!\n\n' + LATER);
+    assert.strictEqual(read.payerName.value, 'MIRIAM T. WEISSBERGER');
+    assert.strictEqual(read.payerName.agree, true);
+});
+
+test('the line rule covers for an anchor the bank has reworded', () => {
+    // This is the case the anchor alone cannot survive: its phrase is gone.
+    // The payer's own line is untouched, so the line rule still finds it.
+    const reworded = LATER.replace('Good news: Someone sent you money with Zelle®.', 'You have money waiting.');
+    const read = T.read(teachFull(SAMPLE), reworded);
+    assert.strictEqual(read.payerName.byAnchor, null, 'the anchor should be gone');
+    assert.strictEqual(read.payerName.byLine, 'MIRIAM T. WEISSBERGER');
+    assert.strictEqual(read.payerName.value, 'MIRIAM T. WEISSBERGER');
+});
+
+test('a value never runs past the end of its line', () => {
+    // With the line restructured, the anchor still matches but its suffix is
+    // missing from that line — and indexOf happily found the next occurrence
+    // hundreds of characters later, returning a "payer name" containing three
+    // paragraphs of the email.
+    const restructured = LATER.replace(
+        'MIRIAM T. WEISSBERGER has just sent you money with Zelle® in the amount of $1,250.00.',
+        'You got $1,250.00 from MIRIAM T. WEISSBERGER via Zelle®.');
+    const read = T.read(teachFull(SAMPLE), restructured);
+    const got = read.payerName ? read.payerName.value : '';
+    assert.ok(!got.includes('\n'), 'a field value must never span lines');
+});
+
+test('a lone surviving rule still has to produce something plausible', () => {
+    // When one method dies the other answers alone, with no second opinion.
+    // Extraction cannot tell it has matched in the wrong place — only knowing
+    // the shape of a payer name can.
+    assert.strictEqual(T.plausible('payerName', 'You got $1,250.00 from MIRIAM T. WEISSBERGER via Zelle®.'), false);
+    assert.strictEqual(T.plausible('payerName', 'MIRIAM T. WEISSBERGER'), true);
+    assert.strictEqual(T.plausible('payerName', "SHIMON'S HARDWARE LLC"), true);
+    assert.strictEqual(T.plausible('amount', '$1,250.00'), true);
+    assert.strictEqual(T.plausible('amount', 'MIRIAM T. WEISSBERGER'), false);
+
+    const restructured = LATER.replace(
+        'MIRIAM T. WEISSBERGER has just sent you money with Zelle® in the amount of $1,250.00.',
+        'You got $1,250.00 from MIRIAM T. WEISSBERGER via Zelle®.');
+    const read = T.read(teachFull(SAMPLE), restructured);
+    assert.ok(!read.payerName, 'an implausible lone answer is dropped, not reported');
+    // The memo line is untouched, so it still reads — fields stay independent.
+    assert.strictEqual(read.memo.value, 'KLE-1234 tuition');
+});
+
+test('a template that no longer fits reports nothing rather than guessing', () => {
+    const rewritten = 'Promo!\n\nYou got $1,250.00 from MIRIAM T. WEISSBERGER via Zelle®.\n\nNote from MIRIAM T. WEISSBERGER: KLE-1234 tuition';
+    const read = T.read(teachFull(SAMPLE), rewritten);
+    assert.ok(!read.payerName);
+    assert.ok(!read.amount);
+    // Falling back to the generic parser is the right answer here, and silence
+    // is what tells the caller to do that.
+});

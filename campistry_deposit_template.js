@@ -65,7 +65,10 @@
     T.FIELDS = ['payerName', 'amount', 'memo'];
 
     var MAX_PREFIX = 90;   // how far left we will look for a distinctive anchor
-    var MAX_SUFFIX = 24;   // how far right; a value's terminator is always near
+    var MAX_SUFFIX = 24;
+    // No payer name, amount or memo is longer than this. A longer capture is
+    // always a rule that has come loose, never a real value.
+    var MAX_VALUE = 120;   // how far right; a value's terminator is always near
 
     /**
      * Collapse runs of spaces and tabs, keep newlines.
@@ -192,16 +195,24 @@
         var m = anchorRe(parts, '').exec(text);
         if (!m) return null;
         var from = m.index + m[0].length;
+        var eol = text.indexOf('\n', from);
+        if (eol < 0) eol = text.length;
+
         var to;
-        if (rule.suffix) {
+        if (rule.suffix && rule.suffix !== '\n') {
             to = text.indexOf(rule.suffix, from);
-            if (to < 0) to = text.indexOf('\n', from);
+            // NEVER past the end of the line. When a bank restructures the
+            // line, the suffix is missing from it and indexOf happily finds the
+            // next occurrence hundreds of characters away -- this returned a
+            // "payer name" containing three paragraphs of the email. Every
+            // field here lives on one line, so the line end is a hard stop.
+            if (to < 0 || to > eol) to = eol;
         } else {
-            to = text.indexOf('\n', from);
+            to = eol;
         }
-        if (to < 0) to = text.length;
         var value = text.slice(from, to).trim();
-        return value || null;
+        if (!value || value.length > MAX_VALUE) return null;
+        return value;
     }
 
     /**
@@ -240,6 +251,113 @@
         return '';
     }
 
+    // ── the line rule: where to look ─────────────────────────────────────────
+    //
+    // The anchor above says "find this phrase, read what follows". This says
+    // something different and complementary: the value lives ON THIS LINE, in
+    // THIS SLOT, and here is what the rest of that line looks like.
+    //
+    // The two fail in different ways, which is the whole reason for having
+    // both:
+    //
+    //   anchor     survives lines being inserted or removed above it;
+    //              breaks if the bank rewords that one phrase.
+    //   line rule  survives rewording elsewhere and a promo banner appearing
+    //              at the top; breaks if the bank restructures that line.
+    //
+    // Character offsets would be useless -- a longer name shifts everything
+    // after it -- but the SHAPE of the line is fixed, because the bank
+    // generates it from a template. So the line is stored as a pattern with
+    // the value as a capture, digits generalised, and spacing loosened:
+    //
+    //   "YISRAEL ROSENFELD has just sent you money ... of $5.00."
+    //     -> ^(.+?)\s+has\s+just\s+sent\s+you\s+money\s+...\s+of\s+\$\d+\.\d+\.$
+    //
+    // which reads MIRIAM T. WEISSBERGER and $1,250.00 just as happily.
+    var MAX_LINE_RULE = 400;
+
+    function lineBounds(text, at) {
+        var start = text.lastIndexOf('\n', at - 1) + 1;
+        var end = text.indexOf('\n', at);
+        if (end < 0) end = text.length;
+        return { start: start, end: end };
+    }
+
+    /** One literal chunk of a line, generalised so ordinary variation survives. */
+    function literalToPattern(chunk) {
+        return escapeRe(chunk)
+            .replace(/[0-9]+/g, '\\d+')     // amounts, dates, account digits
+            .replace(/[  ]+/g, '\\s+'); // re-wrapping, double spaces
+    }
+
+    /**
+     * Build the line rule for a value, masking the value as a capture and any
+     * OTHER marked value on the same line as a wildcard.
+     */
+    function buildLineRule(text, me, holes, lineNo, totalLines) {
+        var b = lineBounds(text, me.start);
+        var line = text.slice(b.start, b.end);
+        if (!line.trim() || line.length > MAX_LINE_RULE) return null;
+
+        // Everything on this line that is not fixed: this value (captured) and
+        // any other marked value (wildcarded).
+        var spans = [{ start: me.start, end: me.end, capture: true }];
+        holes.forEach(function (h) {
+            if (h.start >= b.start && h.end <= b.end) spans.push({ start: h.start, end: h.end, capture: false });
+        });
+        spans.sort(function (a, c) { return a.start - c.start; });
+
+        var src = '^', cursor = b.start;
+        for (var i = 0; i < spans.length; i++) {
+            var sp = spans[i];
+            if (sp.start < cursor) continue;                 // overlapping marks
+            src += literalToPattern(text.slice(cursor, sp.start));
+            src += sp.capture ? '(.+?)' : '.+?';
+            cursor = sp.end;
+        }
+        src += literalToPattern(text.slice(cursor, b.end)) + '$';
+
+        return {
+            re: src,
+            // Kept as a tiebreak only. Counted from BOTH ends because banks add
+            // marketing at the top far more often than at the bottom, so the
+            // distance from the end is usually the steadier of the two.
+            fromTop: lineNo,
+            fromBottom: totalLines - 1 - lineNo
+        };
+    }
+
+    /**
+     * Read a value using the line rule.
+     *
+     * When several lines match the shape -- two payments summarised in one
+     * email, say -- the remembered position decides between them rather than
+     * the first one silently winning.
+     */
+    function extractByLine(text, rule) {
+        if (!rule || !rule.re) return null;
+        var re;
+        try { re = new RegExp(rule.re); } catch (e) { return null; }
+        var lines = text.split('\n');
+        var hits = [];
+        for (var i = 0; i < lines.length; i++) {
+            var m = re.exec(lines[i]);
+            if (m && m[1] && m[1].trim()) hits.push({ line: i, value: m[1].trim() });
+        }
+        if (!hits.length) return null;
+        if (hits.length === 1) return hits[0].value;
+
+        var best = hits[0], bestCost = Infinity;
+        for (var j = 0; j < hits.length; j++) {
+            var cost = Math.min(
+                Math.abs(hits[j].line - rule.fromTop),
+                Math.abs((lines.length - 1 - hits[j].line) - rule.fromBottom)
+            );
+            if (cost < bestCost) { bestCost = cost; best = hits[j]; }
+        }
+        return best.value;
+    }
+
     /**
      * Turn one set of highlights into a reusable rule.
      *
@@ -252,6 +370,7 @@
      */
     T.learn = function (sample, marks, meta) {
         var text = T.normalize(sample);
+        var totalLines = text.split('\n').length;
         var out = { fields: {}, meta: meta || {} };
         var errors = [];
 
@@ -287,10 +406,17 @@
             holes.sort(function (a, b) { return a.start - b.start; });
 
             var prefix = buildPrefix(text, spans[field].start, holes);
-            if (!prefix) { errors.push(field + ': the surrounding text is not distinctive enough'); return; }
+            var lineNo = text.slice(0, spans[field].start).split('\n').length - 1;
+            var line = buildLineRule(text, spans[field], holes, lineNo, totalLines);
+
+            if (!prefix && !line) {
+                errors.push(field + ': the surrounding text is not distinctive enough');
+                return;
+            }
             out.fields[field] = {
-                prefix: prefix,
-                suffix: suffixFor(text, spans[field].start, spans[field].end, holes, prefix)
+                prefix: prefix || null,
+                suffix: prefix ? suffixFor(text, spans[field].start, spans[field].end, holes, prefix) : '',
+                line: line
             };
         });
 
@@ -300,10 +426,19 @@
 
         // Replay against the very sample it was taught on. A rule that cannot
         // reproduce a known answer will not do better on mail nobody checked.
-        var replay = T.apply(out, sample);
+        // Replay BOTH methods against the sample and keep only what works. A
+        // rule that cannot reproduce the answer it was just given will not do
+        // better on mail nobody has checked, and a half-right template is
+        // worse than none: it looks like it is working.
+        var replay = T.read(out, sample);
         Object.keys(spans).forEach(function (field) {
-            if (!out.fields[field]) return;
-            if (replay[field] !== spans[field].value) {
+            var f = out.fields[field];
+            if (!f) return;
+            var want = spans[field].value;
+            var got = replay[field] || {};
+            if (f.prefix && got.byAnchor !== want) { f.prefix = null; f.suffix = ''; }
+            if (f.line && got.byLine !== want) { f.line = null; }
+            if (!f.prefix && !f.line) {
                 errors.push(field + ': the rule did not reproduce what you highlighted');
                 delete out.fields[field];
             }
@@ -321,16 +456,90 @@
      * omits the payer, rather than failing wholesale. The caller then falls
      * back to the generic parser for that field alone.
      */
-    T.apply = function (template, emailText) {
+    /**
+     * Is this value even the right SHAPE for this field?
+     *
+     * When one of the two methods dies, the survivor answers alone and with no
+     * second opinion. A restructured line leaves the anchor matching in the
+     * wrong place, and it returns "You got $1,250.00 from MIRIAM T.
+     * WEISSBERGER via Zelle®." as the payer -- confidently, one line, right
+     * length. Nothing about the extraction can tell it is wrong; only knowing
+     * what a payer name looks like can.
+     *
+     * Deliberately loose. This rejects obvious nonsense, not unusual names.
+     */
+    T.plausible = function (field, value) {
+        var v = String(value || '').trim();
+        if (!v || v.length > MAX_VALUE) return false;
+
+        if (field === 'amount') {
+            return /[0-9]/.test(v) && /^[^A-Za-z]*[$€£]?\s?[0-9][0-9,]*(?:\.[0-9]{1,2})?[^A-Za-z]*$/.test(v);
+        }
+        if (field === 'payerName') {
+            if (!/[A-Za-z]{2}/.test(v)) return false;
+            if (/[$€£]/.test(v)) return false;              // an amount, not a name
+            if (v.split(/\s+/).length > 6) return false;    // a sentence, not a name
+            return true;
+        }
+        // memo: anything short and non-empty; the family code is found inside it
+        return v.length <= MAX_VALUE;
+    };
+
+    /**
+     * Read an email with both methods and report what each one said.
+     *
+     * { field: { value, byAnchor, byLine, agree } }
+     *
+     * `agree` is the useful part. Two independent rules, learned from the same
+     * highlight but breaking under different conditions, arriving at the same
+     * answer is real evidence the template still fits the mail this bank is
+     * sending today. Disagreement means the layout moved under us, and the
+     * honest response is to hand it to a person rather than pick a winner.
+     */
+    T.read = function (template, emailText) {
         var text = T.normalize(emailText);
         var fields = (template && template.fields) || {};
         var out = {};
 
         Object.keys(fields).forEach(function (field) {
-            var value = extract(text, fields[field] || {});
-            if (value) out[field] = value;
+            var rule = fields[field] || {};
+            var byAnchor = rule.prefix ? extract(text, rule) : null;
+            var byLine = rule.line ? extractByLine(text, rule.line) : null;
+            if (byAnchor && !T.plausible(field, byAnchor)) byAnchor = null;
+            if (byLine && !T.plausible(field, byLine)) byLine = null;
+            if (!byAnchor && !byLine) return;
+            out[field] = {
+                byAnchor: byAnchor,
+                byLine: byLine,
+                // Where only one method survives, use it: a partially intact
+                // template still beats falling back to generic prose parsing.
+                value: (byAnchor && byLine)
+                    ? (byAnchor === byLine ? byAnchor : byAnchor)
+                    : (byAnchor || byLine),
+                agree: !!(byAnchor && byLine && byAnchor === byLine)
+            };
         });
         return out;
+    };
+
+    /** The values alone, for callers that do not care how they were found. */
+    T.apply = function (template, emailText) {
+        var read = T.read(template, emailText);
+        var out = {};
+        Object.keys(read).forEach(function (f) { out[f] = read[f].value; });
+        return out;
+    };
+
+    /**
+     * Fields where the two methods disagreed — the template is drifting and
+     * this bank's layout has changed. The caller routes these to a human and
+     * flags the template for re-teaching.
+     */
+    T.conflicts = function (template, emailText) {
+        var read = T.read(template, emailText);
+        return Object.keys(read).filter(function (f) {
+            return read[f].byAnchor && read[f].byLine && !read[f].agree;
+        });
     };
 
     /**
