@@ -19,6 +19,7 @@ const fs2 = require('fs');
 const path = require('path');
 
 global.window = global.window || {};
+eval(fs2.readFileSync(path.join(__dirname, '..', 'campistry_go_route_post.js'), 'utf8'));
 eval(fs2.readFileSync(path.join(__dirname, '..', 'campistry_go_neighborhoods.js'), 'utf8'));
 const NH = global.window.CampistryGoNeighborhoods;
 

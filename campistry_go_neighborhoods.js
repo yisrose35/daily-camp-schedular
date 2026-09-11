@@ -436,10 +436,13 @@ window.CampistryGoNeighborhoods = (function () {
                 const [lo, hi] = fromId < toId ? [fromId, toId] : [toId, fromId];
                 const segId = 'seg_' + hash(wayId + ':' + lo + ':' + hi);
 
+                const owTag = String(w.tags.oneway || '').toLowerCase();
+                const oneway = (owTag === 'yes' || owTag === '1' || owTag === 'true') ? true
+                             : (owTag === '-1' || owTag === 'reverse') ? -1 : false;
                 edges.push({
                     id: segId,
                     fromNodeId: fromId, toNodeId: toId,
-                    wayId, hwClass, name, lenMi,
+                    wayId, hwClass, name, lenMi, oneway,
                     rank: classRank(hwClass),
                 });
             }
@@ -995,6 +998,10 @@ window.CampistryGoNeighborhoods = (function () {
             neighborhoods,
             segments,
             nodes: graph.nodes,
+            // The whole street graph (not just streets with homes), so travel
+            // times can be measured on the road network downstream.
+            roadEdges: graph.edges.map(e => ({ id: e.id, fromNodeId: e.fromNodeId, toNodeId: e.toNodeId,
+                                              lenMi: e.lenMi, hwClass: e.hwClass, oneway: e.oneway })),
             homes,
             unattachedCampers,
             stats,
@@ -1018,7 +1025,8 @@ window.CampistryGoNeighborhoods = (function () {
     //      silently dropping the neighborhood's campers.
     // -------------------------------------------------------------------------
     function packIntoBuses({ result, buses, priorAssignments = {}, siblingGroups = {}, depot = null, maxRideMin = 45, avgStopMin = 2, paceMinPerMi = 6,
-                             rideSpeedMph = 25, rideStopMin = 1, maxChildRideMin = 0 }) {
+                             rideSpeedMph = 25, rideStopMin = 1, maxChildRideMin = 0,
+                             busOverheadMin = 5, secPerRider = 0 }) {
         if (!result || !result.neighborhoods.length) return [];
 
         // Input audit: any duplicate nhIds in result.neighborhoods, or duplicate
@@ -1101,6 +1109,17 @@ window.CampistryGoNeighborhoods = (function () {
         // fits a bus. That yields compact, bus-sized blocks.
         const _segIndex = {};
         for (const s of result.segments) _segIndex[s.id] = s;
+        // One point per segment (mean of its homes) — the geometry every
+        // containment test below is measured on. Neighbourhood centroids are
+        // too coarse once a neighbourhood is shared between buses.
+        const _segPt = {};
+        for (const s of result.segments) {
+            let la = 0, lo = 0, n = 0;
+            for (const h of (s.homes || [])) {
+                if (Number.isFinite(h.lat) && Number.isFinite(h.lng)) { la += h.lat; lo += h.lng; n++; }
+            }
+            _segPt[s.id] = n ? { lat: la / n, lng: lo / n, count: (s.homes || []).length } : null;
+        }
 
         // Split `items` into exactly `k` geographically-compact groups of roughly
         // equal camper load. Splitting by "halve until it fits" instead overshoots
@@ -1352,18 +1371,51 @@ window.CampistryGoNeighborhoods = (function () {
                 if (depot && haversineMi(depot.lat, depot.lng, c.lat, c.lng) < MIN_ARC_RADIUS_MI) continue;
                 bearings.push(b);
             }
+            return coveringWedge(bearings); // radians, 0..2π
+        }
+        // Smallest wedge (from the depot) that contains every bearing:
+        // 2π minus the largest empty gap. Unlike the widest PAIRWISE angle,
+        // this sees a bus that surrounds camp on three sides (0°,120°,240°
+        // is a 240° wedge, not a 120° pair) and tells two contiguous halves
+        // apart from interleaved quarters.
+        function coveringWedge(bearings) {
             if (bearings.length < 2) return 0;
-            let max = 0;
-            for (let i = 0; i < bearings.length; i++)
-                for (let j = i + 1; j < bearings.length; j++) {
-                    const d = angDiff(bearings[i], bearings[j]);
-                    if (d > max) max = d;
-                }
-            return max; // radians, 0..π
+            const bs = bearings.slice().sort((a, b) => a - b);
+            let gap = bs[0] + 2 * Math.PI - bs[bs.length - 1];
+            for (let i = 1; i < bs.length; i++) gap = Math.max(gap, bs[i] - bs[i - 1]);
+            return 2 * Math.PI - gap;
         }
         // Straddle cost in effective miles for putting nh on bus.
         function straddleCost(bus, nhId) {
             return STRADDLE_PENALTY_MI * (busAngularSpan(bus, nhId) / Math.PI);
+        }
+        // Beyond this arc a bus is on BOTH sides of camp: it drives out one
+        // way, turns around and drives back through camp the other way. Same
+        // threshold as the post-routing containment gate.
+        const MAX_DISTRICT_ARC = 110 * Math.PI / 180;
+        const STRADDLE_TIER_MI = 50; // effective miles: a last resort before spilling
+        // Arc / spread measured on a bus's actual SEGMENTS (not NH centroids),
+        // so a neighbourhood shared between two buses is scored where each
+        // bus really drives.
+        function busSegArc(bus) {
+            const bearings = [];
+            for (const sid of bus.segmentIds) {
+                const p = _segPt[sid]; if (!p || !depot) continue;
+                if (haversineMi(depot.lat, depot.lng, p.lat, p.lng) < MIN_ARC_RADIUS_MI) continue;
+                bearings.push(bearingFromDepot(p));
+            }
+            return coveringWedge(bearings);
+        }
+        function busSegSpread(bus) {
+            const pts = [];
+            for (const sid of bus.segmentIds) { const p = _segPt[sid]; if (p) pts.push(p); }
+            let max = 0;
+            for (let i = 0; i < pts.length; i++)
+                for (let j = i + 1; j < pts.length; j++) {
+                    const d = haversineMi(pts[i].lat, pts[i].lng, pts[j].lat, pts[j].lng);
+                    if (d > max) max = d;
+                }
+            return max;
         }
 
         // --- 2a. Pass 1: prior-year preference (size-DESC for priority) ---
@@ -1468,7 +1520,12 @@ window.CampistryGoNeighborhoods = (function () {
                 // the segment-wise spill, which scatters their segments across
                 // whichever buses have room and shreds the districts. A bus a few
                 // minutes over budget beats a shredded neighbourhood.
-                const fbCost = newSpread + straddleCost(bus, nh.id) + rideOver * 0.25;
+                // A bus that would end up on both sides of camp is a LAST
+                // resort: price it as a tier above every contained option, but
+                // keep it ahead of the segment-wise spill (which shreds NHs).
+                const straddleTier = (bus.neighborhoodIds.length &&
+                    busAngularSpan(bus, nh.id) > MAX_DISTRICT_ARC) ? STRADDLE_TIER_MI : 0;
+                const fbCost = newSpread + straddleCost(bus, nh.id) + rideOver * 0.25 + straddleTier;
                 if (fbCost < fallbackScore) {
                     fallbackScore = fbCost; fallbackTarget = bus;
                 }
@@ -1687,6 +1744,26 @@ window.CampistryGoNeighborhoods = (function () {
             // NH that contributes most to spread = one with max mean-distance
             // to other NHs on the bus. Falls back to farthest-from-depot.
             const ids = bus.neighborhoodIds; if (ids.length < 2) return ids[0];
+            // A straddling bus is fixed by peeling off the NH that sits at the
+            // widest ANGLE from the others, not merely the farthest one.
+            if (depot && busAngularSpan(bus, null) > MAX_DISTRICT_ARC) {
+                let angId = null, angMean = -1;
+                for (const id of ids) {
+                    const ci = nhCentroids[id]; if (!ci) continue;
+                    if (haversineMi(depot.lat, depot.lng, ci.lat, ci.lng) < MIN_ARC_RADIUS_MI) continue;
+                    const bi = bearingFromDepot(ci);
+                    let sum = 0, n = 0;
+                    for (const other of ids) {
+                        if (other === id) continue;
+                        const co = nhCentroids[other]; if (!co) continue;
+                        if (haversineMi(depot.lat, depot.lng, co.lat, co.lng) < MIN_ARC_RADIUS_MI) continue;
+                        sum += angDiff(bi, bearingFromDepot(co)); n++;
+                    }
+                    const mean = n ? sum / n : 0;
+                    if (mean > angMean) { angMean = mean; angId = id; }
+                }
+                if (angId) return angId;
+            }
             let worstId = null, worstMean = -1;
             for (const id of ids) {
                 const ci = nhCentroids[id]; if (!ci) continue;
@@ -1718,7 +1795,8 @@ window.CampistryGoNeighborhoods = (function () {
             let rebalanceMoves = 0;
             const isOverloaded = (b) => b.neighborhoodIds.length >= 2 && (
                 busMaxSpreadMi(b) > MAX_BUS_SPREAD_MI ||
-                estimateBusRideMin(b) > maxRideMin
+                estimateBusRideMin(b) > maxRideMin ||
+                busAngularSpan(b, null) > MAX_DISTRICT_ARC
             );
             for (let pass = 0; pass < 8; pass++) {
                 let moved = false;
@@ -1743,6 +1821,8 @@ window.CampistryGoNeighborhoods = (function () {
                     for (const dst of assignments) {
                         if (dst === src) continue;
                         if (dst.camperCount + workNh.camperCount > dst.capacity) continue;
+                        // Never cure one straddle by creating another.
+                        if (dst.neighborhoodIds.length && busAngularSpan(dst, nhId) > MAX_DISTRICT_ARC) continue;
                         const spreadBlocked = wouldSpreadExceed(dst, workNh, MAX_BUS_SPREAD_MI);
                         if (spreadBlocked && !srcOverRide) continue;
                         if (spreadBlocked &&
@@ -1792,74 +1872,178 @@ window.CampistryGoNeighborhoods = (function () {
         function districtScore(cands) {
             let worstArc = 0, worstSpread = 0;
             for (const bus of cands) {
-                if (!bus || bus.neighborhoodIds.length < 2) continue;
-                const arc = busAngularSpan(bus, null);
+                if (!bus || bus.segmentIds.length < 2) continue;
+                const arc = busSegArc(bus);
                 if (arc > worstArc) worstArc = arc;
-                const sp = busMaxSpreadMi(bus);
+                const sp = busSegSpread(bus);
                 if (sp > worstSpread) worstSpread = sp;
             }
             // arc is radians (0..PI); weight it so a half-turn straddle (~9.4)
             // outweighs a few extra miles of spread.
             return worstArc * 3 + worstSpread;
         }
+        function anyStraddle(cands) {
+            return cands.some(b => b && b.segmentIds.length >= 2 && busSegArc(b) > MAX_DISTRICT_ARC);
+        }
+        function worstArc(cands) {
+            let w = 0;
+            for (const b of cands) if (b && b.segmentIds.length >= 2) w = Math.max(w, busSegArc(b));
+            return w;
+        }
 
+        // Sweep candidate, done properly.
+        //
+        // Walk the camp's segments in bearing order around camp (neighbourhood
+        // by neighbourhood, so a neighbourhood's segments stay together) and
+        // cut the ring into at most one contiguous arc per bus. The cuts are
+        // chosen by dynamic programming: minimise the fleet's total estimated
+        // riding minutes subject to every arc fitting its bus's seats. Each
+        // arc is one wedge of the map, so no bus can be on both sides of camp
+        // — and because the cuts may fall INSIDE a neighbourhood (at a price),
+        // it never fails on a tight fleet the way filling neighbourhood-sized
+        // pieces in order did: 43-child pieces on 48-seat buses left 5 seats
+        // idle on every bus and the last pieces homeless.
         function buildSweepCandidate() {
             if (!depot || !vehicles.length) return null;
-            const ordered = workNhs
+            const post = (typeof window !== 'undefined') && window.CampistryGoRoutePost;
+            if (!post || !post.sweepPartition) {
+                console.warn('[Go-NH] campistry_go_route_post.js not loaded — no sweep candidate');
+                return null;
+            }
+            const rel = (b, b0) => { let d = (b - b0) % (2 * Math.PI); if (d > Math.PI) d -= 2 * Math.PI; if (d <= -Math.PI) d += 2 * Math.PI; return d; };
+
+            // Ring of atoms: NHs by centroid bearing, segments by bearing within.
+            const nhOrder = workNhs
                 .map(nh => ({ nh, b: bearingFromDepot(nhCentroids[nh.id]) }))
                 .filter(x => x.b != null)
-                .sort((a, b) => a.b - b.b)
-                .map(x => x.nh);
-            // If any NH lacks a centroid we can't sweep reliably — skip.
-            if (ordered.length !== workNhs.length) return null;
-
-            const totalC = workNhs.reduce((s, n) => s + n.camperCount, 0);
-            const target = Math.ceil(totalC / vehicles.length);
-            // Try rotations of the starting bearing (where we "cut" the circle).
-            // Cap the number tried so a big camp stays fast.
-            const N = ordered.length;
-            const stride = Math.max(1, Math.ceil(N / 60));
-            let best = null;
-
-            for (let start = 0; start < N; start += stride) {
-                const order = ordered.slice(start).concat(ordered.slice(0, start));
-                const cand = vehicles.map(v => ({
-                    busId: v.busId, name: v.name, capacity: v.capacity,
-                    neighborhoodIds: [], segmentIds: [], camperCount: 0,
-                    _centroidSum: { lat: 0, lng: 0, w: 0 },
-                }));
-                let bi = 0, ok = true;
-                for (const nh of order) {
-                    // Move on once this bus has its fair share, so the final bus
-                    // doesn't get a tiny scrap arc.
-                    while (bi < cand.length - 1 && cand[bi].camperCount >= target) bi++;
-                    while (bi < cand.length &&
-                           cand[bi].camperCount + nh.camperCount > cand[bi].capacity) bi++;
-                    if (bi >= cand.length) { ok = false; break; }
-                    assignToBus(nh, cand[bi]);
+                .sort((a, b) => a.b - b.b);
+            if (nhOrder.length !== workNhs.length) return null;
+            const ring = [];
+            for (const { nh, b } of nhOrder) {
+                const atoms = [];
+                for (const sid of nh.segmentIds) {
+                    const p = _segPt[sid]; if (!p || !p.count) continue;
+                    atoms.push({ sid, pieceId: nh.id,
+                                 // Cut penalties key on the PARENT neighbourhood, so a
+                                 // town split into ride-budget pieces still costs to divide.
+                                 groupId: nh.parentId || nh.id,
+                                 count: p.count, lat: p.lat, lng: p.lng,
+                                 rb: rel(bearingFromDepot(p), b) });
                 }
-                if (!ok) continue; // this rotation didn't fit the fleet
-                const score = districtScore(cand);
-                if (!best || score < best.score) best = { score, cand };
+                atoms.sort((x, y) => x.rb - y.rb);
+                ring.push(...atoms);
             }
-            return best;
+            if (ring.length < 2) return null;
+
+            const byCapDesc = vehicles.slice().sort((a, b) => b.capacity - a.capacity);
+            const best = post.sweepPartition(ring, byCapDesc.map(v => v.capacity), depot, {
+                avgSpeedMph: rideSpeedMph, avgStopMin: rideStopMin, secPerRider, busOverheadMin,
+                sweepMaxRideMin: maxChildRideMin > 0 ? maxChildRideMin : 0,
+            });
+            if (!best) return null;
+
+            const cand = byCapDesc.map(v => ({
+                busId: v.busId, name: v.name, capacity: v.capacity,
+                neighborhoodIds: [], segmentIds: [], camperCount: 0,
+                _centroidSum: { lat: 0, lng: 0, w: 0 },
+            }));
+            best.arcs.forEach((arc, k) => {
+                if (!arc) return;
+                const bus = cand[k];
+                for (const a of arc) {
+                    bus.segmentIds.push(a.sid);
+                    bus.camperCount += a.count;
+                    if (!bus.neighborhoodIds.includes(a.pieceId)) bus.neighborhoodIds.push(a.pieceId);
+                    bus._centroidSum.lat += a.lat * a.count;
+                    bus._centroidSum.lng += a.lng * a.count;
+                    bus._centroidSum.w += a.count;
+                }
+            });
+            return { score: districtScore(cand), cand, rideMin: best.cost };
         }
 
         {
             const greedyScore = districtScore(assignments);
-            const sweep = buildSweepCandidate();
+            const greedyStraddles = anyStraddle(assignments);
+            let sweep = null;
+            try { sweep = buildSweepCandidate(); }
+            catch (e) { console.warn('[Go-NH] Sweep candidate failed: ' + e.message); }
             if (sweep) {
-                // Only switch on a clear win. The greedy pass carries the
-                // prior-year bus mapping (route stability year to year), so we
-                // don't churn it for a marginal gain.
-                if (sweep.score < greedyScore * 0.85) {
+                const sweepStraddles = anyStraddle(sweep.cand);
+                // A greedy result that puts a bus on both sides of camp loses
+                // outright to a sweep that doesn't — or, when the fleet is so
+                // small that every bus must cover a wide wedge (two buses for
+                // the whole camp), to a sweep whose widest wedge is narrower.
+                // Otherwise only switch on a clear win: the greedy pass carries
+                // the prior-year bus mapping (route stability year to year), so
+                // we don't churn it for a marginal gain.
+                const fixesStraddle = greedyStraddles && (!sweepStraddles ||
+                    worstArc(sweep.cand) < worstArc(assignments) - 5 * Math.PI / 180);
+                if (fixesStraddle || sweep.score < greedyScore * 0.85) {
                     console.log('[Go-NH] Districting: SWEEP wins (score ' +
                         sweep.score.toFixed(2) + ' vs greedy ' + greedyScore.toFixed(2) +
+                        (fixesStraddle ? ', greedy had a bus on both sides of camp' : '') +
                         ') — using contiguous bearing arcs');
                     assignments = sweep.cand;
                 } else {
                     console.log('[Go-NH] Districting: greedy kept (score ' +
                         greedyScore.toFixed(2) + ' vs sweep ' + sweep.score.toFixed(2) + ')');
+                }
+            } else if (greedyStraddles) {
+                console.warn('[Go-NH] Districting: greedy has a bus on both sides of camp and no sweep candidate fit the fleet');
+            }
+            // Report what the camp will actually see.
+            const worst = assignments
+                .filter(b => b.segmentIds.length >= 2)
+                .map(b => ({ bus: b.busId, arc: Math.round(busSegArc(b) * 180 / Math.PI), spread: +busSegSpread(b).toFixed(2) }))
+                .sort((a, b) => b.arc - a.arc);
+            const straddlers = worst.filter(x => x.arc > 110);
+            if (straddlers.length) {
+                console.warn('[Go-NH] ' + straddlers.length + ' bus(es) still serve both sides of camp: ' +
+                    straddlers.map(x => x.bus + '=' + x.arc + '°/' + x.spread + 'mi').join(' ') +
+                    (vehicles.length <= 3
+                        ? ' — with so few buses each one must cover a wide wedge'
+                        : ' — the fleet cannot seat everyone in narrower wedges; add a bus or seats'));
+            } else if (worst.length) {
+                console.log('[Go-NH] Containment OK: widest bus arc ' + worst[0].arc + '°');
+            }
+        }
+
+        // --- 2e. Polish: trade segments between buses to cut fleet minutes ---
+        // Districting decided the areas; this decides the edges. Priced on
+        // each bus's own tour, under seats + containment, never a straddle.
+        {
+            const post = (typeof window !== 'undefined') && window.CampistryGoRoutePost;
+            if (post && post.polishDistricts && depot) {
+                const segPiece = {};
+                for (const nh of workNhs) for (const sid of nh.segmentIds) segPiece[sid] = nh.id;
+                const homeless = assignments.map(b => b.segmentIds.filter(sid => !_segPt[sid]));
+                const buckets = assignments.map(b => b.segmentIds
+                    .map(sid => { const p = _segPt[sid]; return p ? { sid, count: p.count, lat: p.lat, lng: p.lng } : null; })
+                    .filter(Boolean));
+                let res = null;
+                try {
+                    res = post.polishDistricts(buckets, assignments.map(b => b.capacity), depot, {
+                        avgSpeedMph: rideSpeedMph, avgStopMin: rideStopMin, secPerRider, busOverheadMin,
+                        polishRideBudgetMin: maxChildRideMin > 0 ? maxChildRideMin : 0,
+                    });
+                } catch (e) { console.warn('[Go-NH] Polish skipped: ' + e.message); }
+                if (res && res.moves) {
+                    assignments.forEach((bus, i) => {
+                        const atoms = res.buckets[i];
+                        bus.segmentIds = atoms.map(a => a.sid).concat(homeless[i]);
+                        bus.camperCount = atoms.reduce((a, x) => a + x.count, 0);
+                        const ids = [];
+                        for (const sid of bus.segmentIds) {
+                            const id = segPiece[sid] || (_segIndex[sid] && _segIndex[sid].neighborhoodId);
+                            if (id && !ids.includes(id)) ids.push(id);
+                        }
+                        bus.neighborhoodIds = ids;
+                        bus._centroidSum = { lat: 0, lng: 0, w: 0 };
+                        for (const a of atoms) { bus._centroidSum.lat += a.lat * a.count; bus._centroidSum.lng += a.lng * a.count; bus._centroidSum.w += a.count; }
+                    });
+                    console.log('[Go-NH] Polish: ' + res.moves + ' segment move(s), est. fleet ' +
+                        Math.round(res.before) + ' → ' + Math.round(res.after) + ' min');
                 }
             }
         }
