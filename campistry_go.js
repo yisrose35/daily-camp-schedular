@@ -62,7 +62,7 @@
         setup: {
             campAddress: '', campName: '', avgSpeed: 25,
             reserveSeats: 2, dropoffMode: 'door-to-door',
-            avgStopTime: 2, maxWalkDistance: 375, maxRouteDuration: 90, maxRideTime: 45,
+            avgStopTime: 1, maxWalkDistance: 375, maxRouteDuration: 90, maxRideTime: 45,
             googleMapsKey: '', googleProjectId: '',
             geoapifyKey: '',
             campLat: null, campLng: null,
@@ -198,7 +198,7 @@ let _toastTimer = null;
     function _routePostOpts(extra) {
         return Object.assign({
             avgSpeedMph: D.setup.avgSpeed || 25,
-            avgStopMin: D.setup.avgStopTime || 2,
+            avgStopMin: D.setup.avgStopTime || 1,
             secPerRider: Math.max(0, parseFloat(D.setup.secPerRider) || 0),
             roadFactor: ROAD_FACTOR,
             busOverheadMin: _busOverheadMin(),
@@ -1214,7 +1214,7 @@ let _toastTimer = null;
     }
 
     function merge(d) {
-        const def = { setup: { campAddress:'',campName:'',avgSpeed:25,reserveSeats:2,dropoffMode:'door-to-door',avgStopTime:2,maxWalkDistance:375,googleMapsKey:'',googleProjectId:'',geoapifyKey:'',campLat:null,campLng:null,standaloneMode:false }, activeMode:'dismissal', buses:[], shifts:[], monitors:[], counselors:[], addresses:{}, savedRoutes:null, dismissal:null, arrival:null };
+        const def = { setup: { campAddress:'',campName:'',avgSpeed:25,reserveSeats:2,dropoffMode:'door-to-door',avgStopTime:1,maxWalkDistance:375,googleMapsKey:'',googleProjectId:'',geoapifyKey:'',campLat:null,campLng:null,standaloneMode:false }, activeMode:'dismissal', buses:[], shifts:[], monitors:[], counselors:[], addresses:{}, savedRoutes:null, dismissal:null, arrival:null };
         const result = { setup: { ...def.setup, ...(d.setup || {}) }, activeMode: d.activeMode || 'dismissal', buses: d.buses || [], shifts: d.shifts || [], monitors: d.monitors || [], counselors: d.counselors || [], addresses: d.addresses || {}, savedRoutes: d.savedRoutes || null, dismissal: d.dismissal || null, arrival: d.arrival || null };
         if (!result.dismissal && result.buses.length) { result.dismissal = { buses: [...result.buses], shifts: [...result.shifts], monitors: [...result.monitors], counselors: [...result.counselors], savedRoutes: result.savedRoutes }; }
         if (!result.arrival) { result.arrival = { buses: [], shifts: [], monitors: [], counselors: [], savedRoutes: null }; }
@@ -1496,7 +1496,7 @@ let _toastTimer = null;
         document.getElementById('avgSpeed').value = s.avgSpeed ?? 25;
         document.getElementById('reserveSeats').value = s.reserveSeats ?? 2;
         if (document.getElementById('dropoffMode')) document.getElementById('dropoffMode').value = s.dropoffMode || 'door-to-door';
-        document.getElementById('avgStopTime').value = s.avgStopTime ?? 2;
+        document.getElementById('avgStopTime').value = s.avgStopTime ?? 1;
         document.getElementById('maxWalkDistance').value = s.maxWalkDistance ?? 375;
         if (document.getElementById('clusterSoftCapPct')) document.getElementById('clusterSoftCapPct').value = s.clusterSoftCapPct ?? 112;
         if (document.getElementById('clusterDissolvePct')) document.getElementById('clusterDissolvePct').value = s.clusterDissolvePct ?? 55;
@@ -1530,7 +1530,7 @@ let _toastTimer = null;
         D.setup.reserveSeats = parseInt(el('reserveSeats')?.value) || 0;
         D.setup.dropoffMode = el('dropoffMode')?.value || 'door-to-door';
         // Fractional minutes allowed (0.5 = 30s): door-to-door stops are short.
-        D.setup.avgStopTime = Math.max(0.25, parseFloat(el('avgStopTime')?.value) || 2);
+        D.setup.avgStopTime = Math.max(0.25, parseFloat(el('avgStopTime')?.value) || 1);
         D.setup.maxWalkDistance = parseInt(el('maxWalkDistance')?.value) || 375;
         D.setup.clusterSoftCapPct = parseInt(el('clusterSoftCapPct')?.value) || 112;
         D.setup.clusterDissolvePct = parseInt(el('clusterDissolvePct')?.value) || 55;
@@ -3558,14 +3558,14 @@ function _routeLastDropMin(r, campLat, campLng, avgSpeedMph, avgStopMin) {
     return window.CampistryGoRoutePost.routeLastDropMin(
         r, { lat: campLat, lng: campLng },
         _routePostOpts({ avgSpeedMph: avgSpeedMph || D.setup.avgSpeed || 25,
-                         avgStopMin: avgStopMin || D.setup.avgStopTime || 2 }));
+                         avgStopMin: avgStopMin || D.setup.avgStopTime || 1 }));
 }
 
 function _relieveLongRoutes(routes, campLat, campLng, isArrival, avgSpeedMph, avgStopMin) {
     return window.CampistryGoRoutePost.relieveLongRoutes(
         routes, { lat: campLat, lng: campLng }, !!isArrival,
         _routePostOpts({ avgSpeedMph: avgSpeedMph || D.setup.avgSpeed || 25,
-                         avgStopMin: avgStopMin || D.setup.avgStopTime || 2 }));
+                         avgStopMin: avgStopMin || D.setup.avgStopTime || 1 }));
 }
 
 function _capByIdOf(shiftVehicles) {
@@ -3601,7 +3601,7 @@ async function generateRoutes() {
 
     const roster = getRoster();
     const reserveSeats = parseInt(document.getElementById('routeReserveSeats')?.value) || 0;
-    const avgStopMin = D.setup.avgStopTime || 2;
+    const avgStopMin = D.setup.avgStopTime || 1;
     const avgSpeedMph = D.setup.avgSpeed || 25;
     const isArrival = D.activeMode === 'arrival';
     const mode = document.getElementById('routeMode')?.value || 'corner-stops';
@@ -4482,7 +4482,7 @@ async function _tryNeighborhoodPipeline({
     if (routes.length > 1) {
         try {
             const relieved = _relieveLongRoutes(routes, campLat, campLng, isArrival,
-                                                D.setup.avgSpeed || 25, D.setup.avgStopTime || 2);
+                                                D.setup.avgSpeed || 25, D.setup.avgStopTime || 1);
             if (relieved) console.log('[Go v5] Ride-time relief: moved ' + relieved +
                 ' late-drop stop(s) to a nearer bus with seats');
         } catch (e) {
@@ -5698,7 +5698,7 @@ async function _perBusGoogleTSP({
     }];
 
     const avgSpeedMph = D.setup.avgSpeed || 25;
-    const avgStopMin  = D.setup.avgStopTime || 2;
+    const avgStopMin  = D.setup.avgStopTime || 1;
 
     const shiftTarget = shift.departureTime || (isArrival ? '08:00' : '16:00');
     const zw = computeZoneTimeWindow(
@@ -5819,7 +5819,7 @@ async function _fallbackGoogleGlobal({
     // for the purpose of back-solving time windows.  The real assignment
     // happens inside Google; this is just an estimate.
     const avgSpeedMph = D.setup.avgSpeed || 25;
-    const avgStopMin  = D.setup.avgStopTime || 2;
+    const avgStopMin  = D.setup.avgStopTime || 1;
     const vehicleTimeWindows = _estimateFallbackTimeWindows(
         dedupStops, shiftVehicles, campLat, campLng,
         isArrival, shift.departureTime, avgSpeedMph, avgStopMin
@@ -6425,7 +6425,7 @@ function findAnchorStop(campers, intersections, walkMi = 0.2) {
         delete route._tspLegTimes;
         _applyETAsAndAudits([route], {
             shift: sr.shift, isArrival, campLat, campLng,
-            avgStopMin: D.setup.avgStopTime || 2,
+            avgStopMin: D.setup.avgStopTime || 1,
             shiftNeedsReturn: si === (D.savedRoutes.length - 1) && !isArrival
         });
 
