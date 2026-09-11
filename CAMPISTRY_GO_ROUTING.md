@@ -165,9 +165,13 @@ model; jsprit and VROOM documentation on ruin/recreate and regret insertion.
 ## Settings that matter
 
 * **Avg Speed** — calibrates road-class speeds (25 = as listed).
-* **Time Per Stop / Extra Seconds Per Child** — dwell. Door-to-door: about
-  0.5 min plus 5 s per child; corner stops: 1–2 min. The stock 2 min per stop
-  is the single biggest cause of long routes on a door-to-door camp.
+* **Time Per Stop / Extra Seconds Per Child** — dwell. The default is 1 min.
+  The camp's own routes (`historical_route_stops.json`, 263 corner pickups)
+  run a median 1–2 min from one stop to the next *including* the drive, and a
+  stop of eight children takes no longer than a stop of one — the children are
+  waiting at the corner. So: 1 for corner stops, 0.5 for door-to-door, and 0 s
+  per child unless the camp knows otherwise. 2 min per stop, the old stock
+  value, doubled every route.
 * **Max Walk** — stop consolidation radius.
 * **Fleet Use** — *as-needed* (default) or *fewer buses*.
 * **Balance Bus Loads** — off by default.
