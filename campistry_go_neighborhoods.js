@@ -87,6 +87,16 @@ window.CampistryGoNeighborhoods = (function () {
         const m = address.match(/^\s*(\d+)/);
         return m ? parseInt(m[1], 10) : 0;
     }
+    // Street name from a postal address: the part before the first comma
+    // without the house number or a unit ("12A Elm St Apt 3, Lakewood" ->
+    // "Elm St"). Used when the road a home snapped to has no name in the map.
+    function parseStreetName(address) {
+        if (!address) return '';
+        let s = String(address).split(',')[0].trim();
+        s = s.replace(/^\s*\d+[A-Za-z]?(?:\s*[-\u2013]\s*\d+[A-Za-z]?)?\s+/, '');
+        s = s.replace(/\s+(?:apt|apartment|unit|suite|ste|#)\.?\s*\S*$/i, '').trim();
+        return s;
+    }
 
     // -------------------------------------------------------------------------
     // Road class tiers. Edges of class ≤ trunkTier are "trunks" and are the
@@ -2298,28 +2308,32 @@ window.CampistryGoNeighborhoods = (function () {
                 String(x).toLowerCase().trim() !== String(main).toLowerCase().trim());
             return cross ? (main + ' @ ' + cross) : (main + ' corner');
         }
+        // What a stop is called: "Main @ Cross" at an intersection; with none
+        // in reach, where on the street ("Main near 12", so two such stops on
+        // one road read differently); with no street name at all, the first
+        // home's own address. Never a bare "Stop corner" when a home is known.
+        function nameFor(node, streetName, homes) {
+            if (node) return cornerName(node, streetName);
+            const hs = homes || [];
+            const num = (hs.find(h => h.houseNum) || {}).houseNum;
+            if (streetName) return streetName + (num ? ' near ' + num : ' corner');
+            return (hs.find(h => h.addr) || {}).addr || 'Stop corner';
+        }
         function snap(stop) {
             const hs = stop._homes || [];
             if (!hs.length) return stop;
             const cLat = hs.reduce((a, h) => a + h.lat, 0) / hs.length;
             const cLng = hs.reduce((a, h) => a + h.lng, 0) / hs.length;
             const tally = {};
-            for (const h of hs) { const k = h.street || ''; if (k) tally[k] = (tally[k] || 0) + 1; }
+            for (const h of hs) { const k = h.street || parseStreetName(h.addr); if (k) tally[k] = (tally[k] || 0) + 1; }
             const streetName = Object.keys(tally).sort((a, b) => tally[b] - tally[a])[0] || '';
             const node = nearestCorner(cLat, cLng, streetName, hs);
             stop._cLat = cLat; stop._cLng = cLng;
             stop.lat = node ? node.lat : cLat; stop.lng = node ? node.lng : cLng;
-            if (node) stop.address = cornerName(node, streetName);
-            else {
-                // No intersection within walking reach: say where on the street,
-                // so two such stops on one road do not both read "X corner".
-                const num = (hs.find(h => h.houseNum) || {}).houseNum;
-                stop.address = streetName ? (streetName + (num ? ' near ' + num : ' corner'))
-                    : ((hs.find(h => h.addr) || {}).addr || 'Stop corner');
-            }
+            stop.address = nameFor(node, streetName, hs);
             return stop;
         }
-        return { snap, nearestCorner, cornerName, WALK };
+        return { snap, nearestCorner, cornerName, nameFor, WALK };
     }
 
     function expandToPhysicalStops({ assignment, result, isArrival = false, dropoffMode = 'door-to-door', maxWalkMi = 0.25 }) {
@@ -2448,19 +2462,22 @@ window.CampistryGoNeighborhoods = (function () {
                     for (const grp of walkGroups(g.homes)) {
                         const cLat = grp.reduce((a, h) => a + h.lat, 0) / grp.length;
                         const cLng = grp.reduce((a, h) => a + h.lng, 0) / grp.length;
-                        // The group's main street: the one most of its homes are on.
+                        // The group's main street: the one most of its homes are
+                        // on — the road's map name, or the street in the child's
+                        // own address when the map leaves the road unnamed.
+                        const streetOfHome = h => h._segName || parseStreetName(h.address);
                         const tally = {};
-                        for (const h of grp) { const k = h._segName || ''; if (k) tally[k] = (tally[k] || 0) + 1; }
+                        for (const h of grp) { const k = streetOfHome(h); if (k) tally[k] = (tally[k] || 0) + 1; }
                         const streetName = Object.keys(tally).sort((a, b) => tally[b] - tally[a])[0] || g.seg.name || '';
                         let lat = cLat, lng = cLng, address;
                         // The homes behind the stop travel with it, so the
                         // pipeline's consolidation can measure walks from the
                         // homes (not the snapped corner) and re-snap a merged stop.
-                        const homesOut = grp.map(h => ({ lat: h.lat, lng: h.lng, street: h._segName || '', houseNum: h.houseNum || '', addr: h.address || '' }));
+                        const homesOut = grp.map(h => ({ lat: h.lat, lng: h.lng, street: streetOfHome(h), houseNum: h.houseNum || '', addr: h.address || '' }));
                         if (corner) {
                             const node = snapper.nearestCorner(cLat, cLng, streetName, grp);
                             if (node) { lat = node.lat; lng = node.lng; }
-                            address = snapper.cornerName(node, streetName);
+                            address = snapper.nameFor(node, streetName, homesOut);
                         } else {
                             // Optimized: stand where the total walk is smallest.
                             // The centroid can land off-road, so snap to whichever
@@ -2499,6 +2516,7 @@ window.CampistryGoNeighborhoods = (function () {
         packIntoBuses,
         expandToPhysicalStops,
         cornerSnapper,
+        parseStreetName,
         loadRoadGraph: fetchRoadGraph,
         intersectionsFromGraph,
         // Exposed for testing / debug

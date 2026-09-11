@@ -204,18 +204,30 @@ model; jsprit and VROOM documentation on ruin/recreate and regret insertion.
 
 ## Known limits
 
-* Door-to-door on the road-graph path still merges homes within *Max Walk*
-  (and same-street homes within a quarter mile). It used to merge ANY two
-  homes in the same town within a quarter mile — the street parser read the
-  city, state and ZIP of a full address as street names — which made
-  door-to-door a corner mode in disguise.
+* **Door-to-door is door-to-door.** The consolidation pass
+  (`consolidateStops`, unit-tested) merges only stops at the same house in
+  that mode — siblings, a duplex — never homes a quarter mile apart on one
+  street. It used to run the corner-mode merges in every mode (and before
+  that read a full address's town and ZIP as street names), so door-to-door
+  was a corner mode in disguise: on the 751-child harness it reported 488
+  stops and 1419 fleet minutes; the honest figures are 749 stops and about
+  1810 minutes, with the average ride 47 minutes instead of 34. That is the
+  real price of stopping at every door, and the reason the camp's own routes
+  are corner stops.
 * **Corner stops on the road-graph path** gather a bus's homes by walking
   distance across streets (densest corner first), stand each group at the
   intersection that minimises the children's total walk, and let the
   consolidation pass measure walks from the homes behind a corner rather
   than the corner itself, re-snapping merged stops. Before this, corner mode
   grouped by street first and produced one stop per street — about twice the
-  camp's 263.
+  camp's 263. A stop's street comes from the map's road name, or from the
+  child's own address when the map leaves the road unnamed, so a stop with
+  no intersection in reach reads "Hickory Hill Rd near 13" rather than
+  "Stop corner"; consolidation matches streets from the homes behind a stop,
+  not from its name. A child the map could not attach to any neighbourhood
+  joins a shared stop within walking distance on any bus with seats before
+  falling back to a door-drop on the nearest bus (the door-drop carries a
+  home record too, so it is snapped and named like every other corner).
 * **Routing Engine** is now a Route Settings control. A camp was found on the
   older spatial-sort engine with no way to see or change it; the console's
   Route summary `source` column says which engine produced a run
