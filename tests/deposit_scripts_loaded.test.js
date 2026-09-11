@@ -25,8 +25,14 @@ const REQUIRED = [
     'campistry_deposit_parser.js',
     'campistry_deposit_match.js',
     'campistry_deposit_template.js',
+    'campistry_deposit_teach_pdf.js',
     'campistry_deposits_ui.js'
 ];
+
+// Teaching from a printed email needs PDF.js. It is vendored in the repo
+// rather than fetched from a CDN, and its worker path has to be set before any
+// document is opened or getDocument() hangs with no error anyone can see.
+const PDFJS = 'pdfjs-dist@3.11.174.min.js';
 
 function tags(html) {
     const out = {};
@@ -41,6 +47,18 @@ test('every deposit module the browser needs has a script tag', () => {
     const missing = REQUIRED.filter(f => !(f in found));
     assert.deepStrictEqual(missing, [],
         'missing from campistry_me.html: ' + missing.join(', '));
+});
+
+test('PDF.js is loaded and its worker is configured', () => {
+    const html = fs.readFileSync(PAGE, 'utf8');
+    assert.ok(html.includes('src="' + PDFJS), 'the vendored PDF.js build must be loaded');
+    assert.ok(/GlobalWorkerOptions\.workerSrc\s*=/.test(html),
+        'workerSrc must be set, or opening a PDF hangs silently');
+    assert.ok(html.indexOf('src="' + PDFJS) < html.indexOf('src="campistry_deposit_teach_pdf.js'),
+        'PDF.js must load before the module that uses it');
+    for (const f of [PDFJS, 'pdfjs-dist@3.11.174.worker.min.js']) {
+        assert.ok(fs.existsSync(path.join(ROOT, f)), f + ' is referenced but not vendored');
+    }
 });
 
 test('the UI loads after the modules it reads off window', () => {

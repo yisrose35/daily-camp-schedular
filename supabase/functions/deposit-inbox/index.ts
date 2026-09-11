@@ -1358,7 +1358,70 @@ import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
      * only thing terminating a value on its own line.
      */
     T.normalize = function (s) {
-        return String(s == null ? '' : s).replace(/\r\n?/g, '\n').replace(/[ \t ]+/g, ' ');
+        return T.unwrap(String(s == null ? '' : s)
+            .replace(/\r\n?/g, '\n')
+            .replace(/[ \t ]+/g, ' ')
+        );
+    };
+
+    /**
+     * Join hard-wrapped lines back into logical ones.
+     *
+     * THE REASON THIS EXISTS. The same alert wraps in different places
+     * depending on where you read it: an email client wraps at its own width,
+     * a forwarded copy re-wraps, and a print-to-PDF wraps at the page margin.
+     * So
+     *
+     *     YISRAEL ROSENFELD has just sent you money with Zelle in the
+     *     amount of $5.00.
+     *
+     * and that same sentence on one line are the SAME line as far as the bank
+     * is concerned -- but a line rule learned from one matches neither the
+     * other nor anything in between. Teaching from a printed PDF would then
+     * produce rules that never fire on the live email, which is worse than
+     * useless because it looks like it worked.
+     *
+     * A wrap point is a line break with no sentence-ending punctuation before
+     * it. Labelled fields ("Amount: $600.00") and list items begin something
+     * new and are left alone, as are blank lines, which always end a block.
+     */
+    // "Amount:" is a field label. "ROSENFELD:" is the tail of a wrapped name
+    // that happens to be followed by a colon, and gluing it back on matters --
+    // it is where the memo lives. The lookahead rejects a leading ALL-CAPS
+    // word, since labels are written like words and names in bank alerts are
+    // usually shouted.
+    var LABEL_LINE_RE = /^\s*(?![A-Z]{2,}\b)[A-Za-z][A-Za-z /&'-]{0,20}\s*:/;
+    var LIST_LINE_RE  = /^\s*(?:[-*\u2022\u00b7]|\d+[.)])\s/;
+
+    T.unwrap = function (text) {
+        var lines = String(text == null ? '' : text).split('\n');
+
+        // The real signal for a hard wrap is that the line RAN OUT OF ROOM, so
+        // the wrap width is inferred from the text rather than assumed: a line
+        // near the longest one in the document was probably cut off, a short
+        // one was broken deliberately. Without this, "Amount: $600.00" swallows
+        // the sentence beneath it and the labelled-field layouts that several
+        // banks use stop parsing entirely.
+        var longest = 0;
+        for (var j = 0; j < lines.length; j++) {
+            longest = Math.max(longest, lines[j].trim().length);
+        }
+        var wrapAt = Math.max(24, Math.round(longest * 0.6));
+
+        var out = [];
+        for (var i = 0; i < lines.length; i++) {
+            var cur = lines[i];
+            var prev = out.length ? out[out.length - 1] : null;
+            if (prev !== null && prev.trim() && cur.trim() &&
+                prev.trim().length >= wrapAt &&
+                !/[.!?:;]\s*$/.test(prev) &&
+                !LABEL_LINE_RE.test(cur) && !LIST_LINE_RE.test(cur)) {
+                out[out.length - 1] = prev.replace(/\s+$/, '') + ' ' + cur.replace(/^\s+/, '');
+                continue;
+            }
+            out.push(cur);
+        }
+        return out.join('\n');
     };
 
     function escapeRe(s) {

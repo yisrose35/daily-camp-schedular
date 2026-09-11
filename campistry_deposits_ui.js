@@ -62,7 +62,8 @@
         credits: {},        // famKey -> [ledger entries]
         settings: null,
         templates: [],      // learned bank layouts: this camp's + shared
-        teach: null,        // in-progress teaching session
+        teach: null,        // in-progress teaching session (pasted text)
+        teachPdf: null,     // in-progress teaching session (printed PDF)
         error: ''
     };
 
@@ -853,6 +854,263 @@
     };
 
     /** Teach from the email that failed — it is already on screen. */
+
+    // ── teaching from a printed PDF ──────────────────────────────────────────
+    //
+    // The paste-an-email path above works, but it asks an office to find raw
+    // email text, which is not a thing most people know how to produce. Every
+    // mail client can print to PDF, and everybody already knows how.
+    //
+    // One question at a time, in order, with the page on screen: highlight the
+    // sender, Done; highlight the amount, Done; highlight the memo, Done.
+
+    function Pdf() { return W.CampistryDepositTeachPdf || null; }
+
+    D.openTeachPdf = function () {
+        if (!Pdf() || !W.pdfjsLib) {
+            if (host.toast) host.toast('PDF support did not load. Use "Paste the email" instead.', 'error');
+            return;
+        }
+        state.teachPdf = { step: -1, from: '', label: '', marks: {}, doc: null, text: '' };
+        renderTeachPdf();
+    };
+
+    function renderTeachPdf() {
+        var t = state.teachPdf;
+        var h = '<div class="me-modal-form">';
+
+        if (!t.doc) {
+            h += '<p style="font-size:.85rem;color:var(--s600);margin:0 0 14px">' +
+                 'Open one of your bank\'s deposit alert emails, print it, and choose ' +
+                 '<strong>Save as PDF</strong>. Upload that file here and Campistry will ask you to point at ' +
+                 'three things on it.</p>';
+            h += '<div class="me-field"><label>The bank\'s email address</label>' +
+                 '<input type="text" id="tpFrom" class="me-input" placeholder="alerts@capitalone.com" value="' +
+                 host.esc(t.from) + '" oninput="CampistryDeposits.teachPdfSet(\'from\', this.value)">' +
+                 '<div style="font-size:.72rem;color:var(--s500);margin-top:4px">Who the alert comes FROM. This is how the layout is recognised later.</div></div>';
+            h += '<div class="me-field"><label>Bank name <span style="color:var(--s400);font-weight:400">(optional)</span></label>' +
+                 '<input type="text" id="tpLabel" class="me-input" placeholder="Capital One" value="' +
+                 host.esc(t.label) + '" oninput="CampistryDeposits.teachPdfSet(\'label\', this.value)"></div>';
+            h += '<div class="me-field"><label>The printed email</label>' +
+                 '<input type="file" id="tpFile" accept="application/pdf" class="me-input" ' +
+                 'onchange="CampistryDeposits.teachPdfLoad(this.files && this.files[0])"></div>';
+            h += '<div id="tpStatus" style="font-size:.8rem;color:var(--s500)"></div>';
+            h += '</div>';
+            host.showModal('Teach Campistry your bank\'s emails', h, null);
+            return;
+        }
+
+        // ── the walkthrough ──
+        var field = P_FIELD(t.step);
+        var pdfP = Pdf();
+        h += '<div id="tpPrompt" style="background:#EFF6FF;border:1px solid #BFDBFE;color:#1E40AF;' +
+             'padding:10px 13px;border-radius:var(--r);margin-bottom:10px">' + teachPdfPrompt() + '</div>';
+        h += '<div id="tpPage" style="border:1px solid var(--s100);border-radius:var(--r);overflow:auto;' +
+             'max-height:52vh;background:#fff;position:relative"></div>';
+        h += '<div style="font-size:.74rem;color:var(--s500);margin-top:8px">' +
+             'Drag across the words on the page above, then press the button.</div>';
+        h += '</div>';
+
+        host.showModal('Teach Campistry your bank\'s emails', h, null);
+        setTimeout(function () { paintPdfPage(); }, 0);
+    }
+
+    function P_FIELD(step) {
+        var P = Pdf();
+        return (P && step >= 0 && step < P.FIELD_ORDER.length) ? P.FIELD_ORDER[step] : null;
+    }
+
+    function teachPdfPrompt() {
+        var t = state.teachPdf, P = Pdf();
+        var field = P_FIELD(t.step);
+
+        if (!field) {
+            // All three asked. Show what was learned before anything is saved.
+            var T = Tpl();
+            var res = T.learn(t.text, t.marks, { bank: t.label, source: 'pdf' });
+            var h = '<strong>That is everything.</strong><div style="font-size:.82rem;margin-top:6px">';
+            if (res.ok) {
+                var back = T.read(res.template, t.text);
+                Object.keys(res.template.fields).forEach(function (f) {
+                    h += '<div>' + host.esc(P.PROMPTS[f].title.replace('Highlight ', '')) + ': <strong>' +
+                         host.esc((back[f] && back[f].value) || '—') + '</strong></div>';
+                });
+                h += '</div><button class="me-btn me-btn--pri me-btn--sm" style="margin-top:10px" ' +
+                     'onclick="CampistryDeposits.teachPdfSave()">Save this layout</button>';
+            } else {
+                h += host.esc(res.errors[0]) + '</div>' +
+                     '<button class="me-btn me-btn--sec me-btn--sm" style="margin-top:10px" ' +
+                     'onclick="CampistryDeposits.teachPdfStep(0)">Start over</button>';
+            }
+            return h;
+        }
+
+        var got = t.marks[field];
+        var prompt = P.PROMPTS[field];
+        return '<strong>' + host.esc(prompt.title) + '</strong>' +
+            '<div style="font-size:.8rem;margin-top:4px">' + host.esc(prompt.help) + '</div>' +
+            (got ? '<div style="font-size:.82rem;margin-top:6px">You highlighted: <strong>' +
+                   host.esc(t.text.slice(got.start, got.end).trim()) + '</strong></div>' : '') +
+            '<div style="margin-top:9px;display:flex;gap:8px;flex-wrap:wrap">' +
+            '<button class="me-btn me-btn--pri me-btn--sm" onclick="CampistryDeposits.teachPdfTake()">' +
+            (got ? 'Re-highlight' : 'Use what I highlighted') + '</button>' +
+            (got ? '<button class="me-btn me-btn--sec me-btn--sm" onclick="CampistryDeposits.teachPdfStep(' +
+                   (t.step + 1) + ')">Done</button>' : '') +
+            (field === 'memo' ? '<button class="me-btn me-btn--ghost me-btn--sm" ' +
+                   'onclick="CampistryDeposits.teachPdfStep(' + (t.step + 1) + ')">This bank has no memo</button>' : '') +
+            '</div>';
+    }
+
+    /**
+     * Render the page image with an invisible, selectable text layer on top.
+     *
+     * The canvas is what the camp reads; the spans are what a drag actually
+     * selects. They are positioned from the same viewport transform, so the
+     * words a camp drags across are the words whose offsets get recorded.
+     */
+    async function paintPdfPage() {
+        var t = state.teachPdf;
+        var host_el = document.getElementById('tpPage');
+        if (!host_el || !t.doc) return;
+
+        var pageNo = t.pageNo || 1;
+        var page = await t.doc.getPage(pageNo);
+        var wrapW = Math.max(320, host_el.clientWidth - 4);
+        var base = page.getViewport({ scale: 1 });
+        var viewport = page.getViewport({ scale: wrapW / base.width });
+
+        var canvas = document.createElement('canvas');
+        canvas.width = viewport.width; canvas.height = viewport.height;
+        canvas.style.display = 'block';
+        var layer = document.createElement('div');
+        layer.id = 'tpLayer';
+        layer.style.cssText = 'position:absolute;inset:0;color:transparent;' +
+            'line-height:1;transform-origin:0 0;user-select:text;-webkit-user-select:text';
+
+        host_el.innerHTML = '';
+        var frame = document.createElement('div');
+        frame.style.cssText = 'position:relative;width:' + viewport.width + 'px';
+        frame.appendChild(canvas);
+        frame.appendChild(layer);
+        host_el.appendChild(frame);
+
+        await page.render({ canvasContext: canvas.getContext('2d'), viewport: viewport }).promise;
+
+        t.items.filter(function (it) { return it.page === pageNo; }).forEach(function (it) {
+            var sp = document.createElement('span');
+            sp.textContent = it.str;
+            sp.setAttribute('data-start', String(it.start));
+            var left = it.x * viewport.scale;
+            var top = viewport.height - (it.y * viewport.scale) - (it.h * viewport.scale);
+            sp.style.cssText = 'position:absolute;white-space:pre;transform-origin:0 0;' +
+                'left:' + left + 'px;top:' + top + 'px;' +
+                'font-size:' + (it.h * viewport.scale) + 'px;';
+            layer.appendChild(sp);
+        });
+
+        if (t.doc.numPages > 1) {
+            var nav = document.createElement('div');
+            nav.style.cssText = 'position:sticky;bottom:0;background:var(--s50);padding:6px;text-align:center;font-size:.76rem';
+            nav.innerHTML = 'Page ' + pageNo + ' of ' + t.doc.numPages + ' ' +
+                '<button class="me-btn me-btn--ghost me-btn--sm" onclick="CampistryDeposits.teachPdfPage(' + (pageNo - 1) + ')">Prev</button> ' +
+                '<button class="me-btn me-btn--ghost me-btn--sm" onclick="CampistryDeposits.teachPdfPage(' + (pageNo + 1) + ')">Next</button>';
+            host_el.appendChild(nav);
+        }
+    }
+
+    D.teachPdfSet = function (k, v) { if (state.teachPdf) state.teachPdf[k] = v; };
+
+    D.teachPdfPage = function (n) {
+        var t = state.teachPdf;
+        if (!t || !t.doc || n < 1 || n > t.doc.numPages) return;
+        t.pageNo = n;
+        paintPdfPage();
+    };
+
+    D.teachPdfLoad = async function (file) {
+        var t = state.teachPdf, P = Pdf();
+        if (!file || !t || !P) return;
+        var el = document.getElementById('tpStatus');
+        if (el) el.textContent = 'Reading the PDF…';
+        try {
+            var buf = await file.arrayBuffer();
+            var read = await P.readPdf(buf, W.pdfjsLib);
+
+            // Strip print chrome BEFORE the offsets are used, so what the camp
+            // highlights and what the rules are learned from are the same text.
+            var own = [];
+            try {
+                var u = W.CampistryAuth && W.CampistryAuth.user && W.CampistryAuth.user();
+                if (u && u.email) own.push(u.email);
+            } catch (e) { /* best effort */ }
+
+            t.doc = read.doc;
+            t.items = read.items;
+            t.text = read.text;
+            t.ownAddresses = own;
+            t.pageNo = 1;
+            t.step = 0;
+            renderTeachPdf();
+        } catch (e) {
+            if (el) el.textContent = '';
+            if (host.toast) host.toast('That PDF could not be read: ' + ((e && e.message) || e), 'error');
+        }
+    };
+
+    D.teachPdfTake = function () {
+        var t = state.teachPdf, P = Pdf();
+        var field = P_FIELD(t.step);
+        if (!field) return;
+        var layer = document.getElementById('tpLayer');
+        var off = layer && P.offsetsFromSelection(layer);
+        if (!off) {
+            if (host.toast) host.toast('Drag across the words on the page first.', 'error');
+            return;
+        }
+        t.marks[field] = { start: off.start, end: off.end };
+        var el = document.getElementById('tpPrompt');
+        if (el) el.innerHTML = teachPdfPrompt();
+    };
+
+    D.teachPdfStep = function (n) {
+        var t = state.teachPdf;
+        if (!t) return;
+        if (n === 0) t.marks = {};
+        t.step = n;
+        var el = document.getElementById('tpPrompt');
+        if (el) el.innerHTML = teachPdfPrompt();
+    };
+
+    D.teachPdfSave = async function () {
+        var t = state.teachPdf, T = Tpl(), P = Pdf();
+        if (!t || !T || !P) return;
+        var client = db(), cid = campId();
+
+        var sig = T.signature(t.from);
+        if (!sig) { if (host.toast) host.toast('Enter the address the bank sends from.', 'error'); return; }
+
+        var res = T.learn(t.text, t.marks, { bank: t.label, source: 'pdf' });
+        if (!res.ok) { if (host.toast) host.toast(res.errors[0], 'error'); return; }
+
+        var r = await client.rpc('save_bank_template', {
+            p_camp_id: cid,
+            p_bank_signature: sig,
+            p_bank_label: t.label || sig,
+            p_template: res.template,
+            p_template_hash: T.hash(res.template),
+            p_is_shareable: T.isShareable(res.template)
+        });
+        if (r.error) { if (host.toast) host.toast(D.explainError(r.error.message), 'error'); return; }
+        if (r.data && r.data.success === false) { if (host.toast) host.toast(D.explainError(r.data.error), 'error'); return; }
+
+        state.teachPdf = null;
+        if (host.closeModal) host.closeModal('dynModal');
+        if (host.toast) host.toast('Saved. Future alerts from ' + sig + ' will be read this way.');
+        await D.refresh();
+        renderInbox();
+        host.onChange();
+    };
+
     D.teachFromDeposit = function (id) {
         var d = null;
         for (var i = 0; i < state.deposits.length; i++) {
@@ -871,8 +1129,11 @@
         h += '<p style="font-size:.84rem;color:var(--s600);margin:0 0 12px">' +
              'Campistry reads every bank\'s alerts on its own. Teaching it yours makes that exact, ' +
              'and is worth doing if anything is coming through wrong.</p>';
-        h += '<button class="me-btn me-btn--pri me-btn--sm" style="margin-bottom:14px" ' +
-             'onclick="CampistryDeposits.openTeach()">Teach a bank\'s layout</button>';
+        h += '<div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:14px">' +
+             '<button class="me-btn me-btn--pri me-btn--sm" onclick="CampistryDeposits.openTeachPdf()">' +
+             'Upload a printed email</button>' +
+             '<button class="me-btn me-btn--sec me-btn--sm" onclick="CampistryDeposits.openTeach()">' +
+             'Paste the email text</button></div>';
 
         h += '<h4 style="margin:0 0 6px;font-size:.86rem">Yours (' + mine.length + ')</h4>';
         h += mine.length ? mine.map(templateRow).join('')

@@ -123,9 +123,17 @@ which lets a camp teach Campistry its own bank's email layout once instead of
 relying on generic prose parsing forever.
 
 A camp has ONE bank account, so every payment it receives all season arrives in
-the same layout. In Billing → Bank Deposits → **Bank layouts → Teach a bank's
-layout**, the camp pastes one of its own alerts, highlights the name, the
-amount and the memo, and Campistry stores two independent rules per field: a
+the same layout. In Billing → Bank Deposits → **Bank layouts**, there are two ways in:
+
+**Upload a printed email** (the one to tell camps about). Open a deposit alert,
+print it, Save as PDF, upload. The page renders and Campistry asks for one
+thing at a time — highlight the sender, Done; highlight the amount, Done;
+highlight the memo, Done. Every office knows how to print an email; almost
+nobody knows how to produce "the raw email text".
+
+**Paste the email text**, for when someone already has it.
+
+Either way the camp points at the name, the amount and the memo, and Campistry stores two independent rules per field: a
 text anchor ("find this phrase, read what follows") and a line shape ("the
 value is on the line shaped like this"). The two break under different
 conditions, so when they agree the reading is trustworthy, and when they

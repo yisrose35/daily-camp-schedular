@@ -240,13 +240,21 @@
   // back with the custom domain.
   window.CAMPISTRY_INBOUND_PREFIX = '';
 </script>
-<script src="campistry_deposit_parser.js?v=20260911-01"></script>
-<script src="campistry_deposit_match.js?v=20260911-01"></script>
+<script src="campistry_deposit_parser.js?v=20260911-02"></script>
+<script src="campistry_deposit_match.js?v=20260911-02"></script>
 <!-- Learned per-bank layouts. Must load BEFORE the UI, which offers to teach
      one. tests/deposit_scripts_loaded.test.js fails the build if a deposit
      module ever ships without a tag here. -->
-<script src="campistry_deposit_template.js?v=20260911-01"></script>
-<script src="campistry_deposits_ui.js?v=20260911-01"></script>
+<script src="campistry_deposit_template.js?v=20260911-02"></script>
+<!-- Teaching a layout from a printed email. PDF.js is already vendored here
+     (campistry_link_parent.html uses it too), so nothing is fetched from a CDN
+     and the worker path must be set before any document is opened. -->
+<script src="pdfjs-dist@3.11.174.min.js?v=20260911-02"></script>
+<script>
+if (window.pdfjsLib) { window.pdfjsLib.GlobalWorkerOptions.workerSrc = 'pdfjs-dist@3.11.174.worker.min.js?v=20260911-02'; }
+</script>
+<script src="campistry_deposit_teach_pdf.js?v=20260911-02"></script>
+<script src="campistry_deposits_ui.js?v=20260911-02"></script>
 <script src="campistry_payroll_core.js?v=20260907-01"></script>
 <!-- Shared catalogue of what counselors may see. Loaded by Me (where the
      policy is set) and by Lite (where it's enforced) — one list, so a field
