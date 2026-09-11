@@ -361,6 +361,40 @@
         <div class="card-body" id="cashDrawerBox"></div>
     </div>
 
+    <div class="card">
+        <div class="card-header"><h2>Offline POS</h2></div>
+        <div class="card-body">
+            <p style="font-size:.82rem;color:var(--text-muted);margin:0 0 .9rem;line-height:1.6">
+                Download the offline register, then export your data so it can
+                be imported into the downloaded file. The offline POS stores
+                everything locally and works without internet — staff re-import
+                periodically to keep balances and stock current.
+            </p>
+
+            <div style="margin-bottom:1rem">
+                <p style="font-size:.72rem;font-weight:600;color:var(--text-dim);text-transform:uppercase;letter-spacing:.03em;margin-bottom:.4rem">Step 1 — Download</p>
+                <a href="campistry_snacks_pos_offline.html" download="Campistry_Offline_POS.html"
+                   class="btn btn-primary" style="display:inline-flex;align-items:center;gap:.35rem;text-decoration:none">
+                    &#8615; Download Offline POS
+                </a>
+                <p style="font-size:.72rem;color:var(--text-muted);margin-top:.35rem;line-height:1.5">
+                    Save the HTML file anywhere on the register device. Open it
+                    in any browser — no install needed. License: 180 days.
+                </p>
+            </div>
+
+            <div style="margin-bottom:.2rem">
+                <p style="font-size:.72rem;font-weight:600;color:var(--text-dim);text-transform:uppercase;letter-spacing:.03em;margin-bottom:.4rem">Step 2 — Sync Data</p>
+                <div style="display:flex;gap:.5rem;flex-wrap:wrap">
+                    <button class="btn btn-primary" onclick="exportForOfflinePOS()">Export Data for Offline POS</button>
+                    <button class="btn" onclick="importOfflinePOSTransactions()">Import Offline Transactions</button>
+                </div>
+            </div>
+            <div id="offlinePosStatus" style="font-size:.82rem;color:var(--text-muted);margin-top:.75rem"></div>
+            <input type="file" id="offlineTxImportInput" accept=".json,application/json" hidden>
+        </div>
+    </div>
+
     <div style="display:flex;justify-content:flex-end;gap:.5rem;margin-bottom:2rem">
         <button class="btn btn-primary" onclick="saveSettingsForm()">Save Settings</button>
     </div>

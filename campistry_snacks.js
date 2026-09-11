@@ -858,6 +858,120 @@ window.savePosPin = function() {
 };
 
 // ==========================================================================
+// OFFLINE POS — export data for the standalone offline register, and import
+// transactions that were recorded offline back into the main ledger.
+// ==========================================================================
+
+window.exportForOfflinePOS = function() {
+    var data = loadSnacksData();
+    var roster = getRoster();
+    var exportAccounts = {};
+    Object.keys(data.accounts || {}).forEach(function(name) {
+        var a = data.accounts[name];
+        var camper = roster[name] || {};
+        exportAccounts[name] = {
+            balance: a.balance || 0,
+            dailyLimit: a.dailyLimit || 10,
+            spentToday: a.spentToday || 0,
+            lastSpendDate: a.lastSpendDate || '',
+            balanceFloor: a.balanceFloor || 0,
+            creditLimit: a.creditLimit || 0,
+            division: camper.division || '',
+            bunk: camper.bunk || ''
+        };
+    });
+    // Also include roster campers who don't have an account yet
+    Object.keys(roster).forEach(function(name) {
+        if (!exportAccounts[name]) {
+            var c = roster[name];
+            exportAccounts[name] = {
+                balance: 0, dailyLimit: 10, spentToday: 0, lastSpendDate: '',
+                balanceFloor: 0, creditLimit: 0,
+                division: c.division || '', bunk: c.bunk || ''
+            };
+        }
+    });
+
+    var exportData = {
+        exportedAt: new Date().toISOString(),
+        accounts: exportAccounts,
+        inventory: (data.inventory || []).map(function(item) {
+            return {
+                id: item.id, name: item.name, cat: item.cat || '',
+                price: item.price || 0, cost: item.cost || null,
+                stock: item.stock, soldToday: item.soldToday || 0,
+                totalSold: item.totalSold || 0, barcode: item.barcode || ''
+            };
+        }),
+        settings: {
+            defaultDailyLimit: ((data.settings || {}).defaultDailyLimit) || 10
+        }
+    };
+
+    var blob = new Blob([JSON.stringify(exportData, null, 2)], { type: 'application/json' });
+    var url = URL.createObjectURL(blob);
+    var a = document.createElement('a');
+    a.href = url;
+    a.download = 'campistry-offline-pos-data-' + todayStr() + '.json';
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    URL.revokeObjectURL(url);
+
+    var el = document.getElementById('offlinePosStatus');
+    if (el) el.textContent = 'Exported ' + Object.keys(exportAccounts).length + ' accounts, ' + (data.inventory || []).length + ' items at ' + new Date().toLocaleTimeString();
+    toast('Offline POS data exported');
+};
+
+window.importOfflinePOSTransactions = function() {
+    var inp = document.getElementById('offlineTxImportInput');
+    if (!inp) return;
+    inp.value = '';
+    inp.onclick = null;
+    inp.onchange = function() {
+        var file = inp.files && inp.files[0];
+        if (!file) return;
+        file.text().then(function(text) {
+            try {
+                var data = JSON.parse(text);
+                if (!data.transactions || !Array.isArray(data.transactions)) {
+                    toast('No transactions found in file', 1);
+                    return;
+                }
+                var txs = data.transactions;
+                var existing = snacks.transactions || [];
+                var existingSigs = {};
+                existing.forEach(function(t) {
+                    existingSigs[[t.date, t.time, t.camper, t.type, t.amount, t.items].join('|')] = 1;
+                });
+                var added = 0;
+                txs.forEach(function(t) {
+                    var sig = [t.date, t.time, t.camper, t.type, t.amount, t.items].join('|');
+                    if (existingSigs[sig]) return;
+                    existing.unshift(t);
+                    existingSigs[sig] = 1;
+                    added++;
+                    // Apply balance changes
+                    if (t.camper && t.type === 'debit') {
+                        if (!snacks.accounts[t.camper]) snacks.accounts[t.camper] = { balance: 0, dailyLimit: 10, spentToday: 0 };
+                        snacks.accounts[t.camper].balance = Math.round((snacks.accounts[t.camper].balance - (parseFloat(t.amount) || 0)) * 100) / 100;
+                    }
+                });
+                snacks.transactions = existing;
+                saveSnacksData(snacks);
+                var el = document.getElementById('offlinePosStatus');
+                if (el) el.textContent = 'Imported ' + added + ' new transactions (' + (txs.length - added) + ' duplicates skipped)';
+                toast('Imported ' + added + ' offline transactions');
+                init();
+            } catch (e) {
+                toast('Import failed: ' + (e.message || 'Invalid file'), 1);
+            }
+        });
+    };
+    inp.click();
+};
+
+// ==========================================================================
 // MODALS & ACTIONS
 // ==========================================================================
 
